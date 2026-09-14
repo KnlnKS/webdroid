@@ -8,7 +8,6 @@ type Mode = "unmodifiable" | "synchronized";
 
 class JWrapper extends JObj {
   delegate: unknown = null;
-  kind: Kind = "collection";
   mode: Mode = "unmodifiable";
   mutex: object = this;
   entries = false;
@@ -47,27 +46,23 @@ const names: Record<Mode, Record<Kind, string>> = {
 
 function wrap(value: unknown, mode: Mode, kind: Kind, mutex?: object, entries = false): JWrapper {
   if (value === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-  const wrapper = rt.make(names[mode][kind]);
-  if (!(wrapper instanceof JWrapper)) throw new Error("invalid collection wrapper registration");
+  const wrapper: JWrapper = rt.make(names[mode][kind]);
   wrapper.delegate = value;
   wrapper.mode = mode;
-  wrapper.kind = kind;
   wrapper.mutex = mutex ?? wrapper;
   wrapper.entries = entries;
   return wrapper;
 }
 
 function readOnlyIterator(iterator: unknown, entries: boolean): JReadOnlyIterator {
-  const out = rt.make("webdroid/UnmodifiableIterator");
-  if (!(out instanceof JReadOnlyIterator)) throw new Error("invalid iterator wrapper registration");
+  const out: JReadOnlyIterator = rt.make("webdroid/UnmodifiableIterator");
   out.delegate = iterator;
   out.entries = entries;
   return out;
 }
 
 function readOnlyEntry(entry: unknown): JReadOnlyEntry {
-  const out = rt.make("webdroid/UnmodifiableEntry");
-  if (!(out instanceof JReadOnlyEntry)) throw new Error("invalid entry wrapper registration");
+  const out: JReadOnlyEntry = rt.make("webdroid/UnmodifiableEntry");
   out.delegate = entry;
   return out;
 }

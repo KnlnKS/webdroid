@@ -329,7 +329,7 @@ const vaMethods: NativeSpec["methods"] = {
     return a;
   },
   "clone()Landroid/animation/ValueAnimator;": function (this: JValueAnimator) {
-    const c = new (this.constructor as any)() as JValueAnimator;
+    const c = new (this.constructor as new () => JValueAnimator)();
     Object.assign(c, this, { running: false, paused: false, updateLs: [...this.updateLs], animLs: [...this.animLs], holders: [...this.holders] });
     return c;
   },

@@ -810,7 +810,7 @@ function installElements(target: object, info: ClassInfo, anno: EncAnnotation, r
   for (const [name, val] of Object.entries(anno.elements)) {
     const key = mangleMethod(name, elementDesc(info, name));
     const resolved = resolveEncVal(val, anno.dex, runtime);
-    (target as any)[key] = () => resolved;
+    Reflect.set(target, key, () => resolved);
   }
 }
 function buildAnnoProto(type: string, info: ClassInfo): object {

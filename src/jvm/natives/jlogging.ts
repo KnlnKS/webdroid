@@ -16,6 +16,12 @@ rt.register({
     "setUseParentHandlers(Z)V": () => {},
   },
 });
-rt.register({ name: "java/util/logging/Level", ctor: class extends JObj {},
-  clinit: () => { const c = rt.link("java/util/logging/Level").ctor as any; for (const n of ["OFF","SEVERE","WARNING","INFO","CONFIG","FINE","FINER","FINEST","ALL"]) c["s$"+n] = new c(); } });
+class JLevel extends JObj {}
+rt.register({
+  name: "java/util/logging/Level", ctor: JLevel,
+  clinit: () => {
+    for (const name of ["OFF", "SEVERE", "WARNING", "INFO", "CONFIG", "FINE", "FINER", "FINEST", "ALL"])
+      Reflect.set(JLevel, "s$" + name, new JLevel());
+  },
+});
 rt.markers("java/util/logging/Handler");

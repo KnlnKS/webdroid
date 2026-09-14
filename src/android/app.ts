@@ -105,7 +105,6 @@ rt.register({
   methods: Object.fromEntries(["Created", "Started", "Resumed", "Paused", "Stopped", "SaveInstanceState", "Destroyed"].flatMap((phase) => ["Pre", "Post"].map((when) =>
     [`onActivity${when}${phase}(Landroid/app/Activity;${phase === "Created" || phase === "SaveInstanceState" ? "Landroid/os/Bundle;" : ""})V`, () => {}]))),
 });
-/** Activity (API 29+) and Application both keep their own ActivityLifecycleCallbacks list */
 export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...contextMethods,
   "<init>()V": function (this: JActivity) { this.window.activity = this; },

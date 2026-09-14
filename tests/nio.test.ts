@@ -65,10 +65,10 @@ test("Files.newOutputStream honors default, append, and delete-on-close options"
   await vcall(output, "close", "()V");
   expect([...vfs.read("/tmp/nio-output.bin")!]).toEqual([3]);
 
-  const options = rt.link("java/nio/file/StandardOpenOption").ctor as any;
+  const options = rt.link("java/nio/file/StandardOpenOption").ctor;
   output = await scall("java/nio/file/Files", "newOutputStream",
     "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;", path,
-    jarray([options.s$APPEND, options.s$DELETE_ON_CLOSE], "Ljava/nio/file/OpenOption;"));
+    jarray([Reflect.get(options, "s$APPEND"), Reflect.get(options, "s$DELETE_ON_CLOSE")], "Ljava/nio/file/OpenOption;"));
   await vcall(output, "write", "(I)V", 4);
   await vcall(output, "close", "()V");
   expect(vfs.exists("/tmp/nio-output.bin")).toBe(false);

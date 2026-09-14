@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
-import { mangleMethod } from "../src/jvm/abi";
+import { newObj, vcall, vcallMaybe } from "../src/jvm/natives/jlang";
 rt.linkNatives();
 
+const scall = (cls: string, name: string, desc: string, ...args: unknown[]) =>
+  vcallMaybe(rt.link(cls).ctor, name, desc, ...args);
 const set = (cls: string, ...items: unknown[]) => newObj(cls).then(async (s) => {
   for (const v of items) await vcall(s, "add", "(Ljava/lang/Object;)Z", v);
   return s;
@@ -36,7 +37,7 @@ test("a set is a value key in a HashMap", async () => {
 });
 
 test("Set.of rejects null and duplicates and stays immutable", async () => {
-  const of = (rt.link("java/util/Set").ctor as any)[mangleMethod("of", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;")];
+  const of = (...values: unknown[]) => scall("java/util/Set", "of", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;", ...values);
   const immutable = await of("a", "b");
   expect(await vcall(immutable, "contains", "(Ljava/lang/Object;)Z", "a")).toBe(1);
   await expect(vcall(immutable, "add", "(Ljava/lang/Object;)Z", "c"))
@@ -54,7 +55,8 @@ test("Collection.stream exposes collection contents to stream operations", async
 });
 
 test("Map.of rejects null and duplicate keys and stays immutable", async () => {
-  const of = (rt.link("java/util/Map").ctor as any)[mangleMethod("of", "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map;")];
+  const of = (...values: unknown[]) => scall("java/util/Map", "of",
+    "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map;", ...values);
   const immutable = await of("a", 1, "b", 2);
   expect(await vcall(immutable, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "b")).toBe(2);
   await expect(vcall(immutable, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "c", 3))
@@ -75,17 +77,16 @@ test("Map.of rejects null and duplicate keys and stays immutable", async () => {
 });
 
 test("Collections.disjoint uses value equality", async () => {
-  const collections = rt.link("java/util/Collections").ctor as any;
-  const disjoint = collections[mangleMethod("disjoint", "(Ljava/util/Collection;Ljava/util/Collection;)Z")];
+  const disjoint = (...values: unknown[]) => scall("java/util/Collections", "disjoint",
+    "(Ljava/util/Collection;Ljava/util/Collection;)Z", ...values);
   expect(await disjoint(await set("java/util/HashSet", "a"), await set("java/util/HashSet", "b"))).toBe(1);
   expect(await disjoint(await set("java/util/HashSet", "a"), await set("java/util/LinkedHashSet", "a"))).toBe(0);
 });
 
 test("Collections wrappers stay live without exposing unmodifiable mutations", async () => {
-  const collections = rt.link("java/util/Collections").ctor as any;
   const list = await newObj("java/util/ArrayList");
   await vcall(list, "add", "(Ljava/lang/Object;)Z", "a");
-  const readOnly = await collections[mangleMethod("unmodifiableList", "(Ljava/util/List;)Ljava/util/List;")](list);
+  const readOnly = await scall("java/util/Collections", "unmodifiableList", "(Ljava/util/List;)Ljava/util/List;", list);
   expect(readOnly).not.toBe(list);
   await expect(vcall(readOnly, "add", "(Ljava/lang/Object;)Z", "blocked"))
     .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
@@ -96,14 +97,14 @@ test("Collections wrappers stay live without exposing unmodifiable mutations", a
   await vcall(list, "add", "(Ljava/lang/Object;)Z", "b");
   expect(await vcall(readOnly, "size", "()I")).toBe(2);
 
-  const synchronized = await collections[mangleMethod("synchronizedList", "(Ljava/util/List;)Ljava/util/List;")](list);
+  const synchronized = await scall("java/util/Collections", "synchronizedList", "(Ljava/util/List;)Ljava/util/List;", list);
   expect(synchronized).not.toBe(list);
   await vcall(synchronized, "add", "(Ljava/lang/Object;)Z", "c");
   expect(await vcall(list, "size", "()I")).toBe(3);
 });
 
 test("List.of rejects null and stays immutable", async () => {
-  const of = (rt.link("java/util/List").ctor as any)[mangleMethod("of", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")];
+  const of = (...values: unknown[]) => scall("java/util/List", "of", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;", ...values);
   const immutable = await of("a", "b");
   expect(await vcall(immutable, "get", "(I)Ljava/lang/Object;", 1)).toBe("b");
   await expect(vcall(immutable, "add", "(Ljava/lang/Object;)Z", "c"))

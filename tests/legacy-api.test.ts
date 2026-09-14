@@ -60,15 +60,24 @@ rt.register({
 });
 rt.linkNatives();
 
+function lifecycleActivity(application: JApplication): JActivity {
+  const activity = new JActivity();
+  Reflect.set(activity, "$host", { application });
+  return activity;
+}
+function useCurrentActivity(activity: JActivity): void {
+  Reflect.set(activity.$host, "currentActivity", () => activity);
+  setAppHost(activity.$host);
+}
+
 test("a lifecycle observer registered on main waits for the next real event", async () => {
   const calls: string[] = [];
   const app = new JApplication();
-  const activity = new JActivity();
-  (activity as any).$host = { application: app };
+  const activity = lifecycleActivity(app);
   const key = mangleMethod("onActivityResumed", "(Landroid/app/Activity;)V");
   const observer = { [key]: () => { calls.push("resumed"); } };
   const previousHost = appHost;
-  setAppHost({ currentActivity: () => activity } as any);
+  useCurrentActivity(activity);
   try {
     await vcall(app, "registerActivityLifecycleCallbacks", "(Landroid/app/Application$ActivityLifecycleCallbacks;)V", observer);
     activity.resumed = true;
@@ -82,8 +91,7 @@ test("a lifecycle observer registered on main waits for the next real event", as
 test("activity callbacks registered during pre-create receive later create stages", async () => {
   const calls: string[] = [];
   const app = new JApplication();
-  const activity = new JActivity();
-  (activity as any).$host = { application: app };
+  const activity = lifecycleActivity(app);
   const activityObserver = {
     [mangleMethod("onActivityCreated", "(Landroid/app/Activity;Landroid/os/Bundle;)V")]: () => { calls.push("created"); },
     [mangleMethod("onActivityPostCreated", "(Landroid/app/Activity;Landroid/os/Bundle;)V")]: () => { calls.push("post"); },
@@ -100,9 +108,8 @@ test("activity callbacks registered during pre-create receive later create stage
 test("background lifecycle registration catches up to the current activity", async () => {
   const calls: string[] = [];
   const app = new JApplication();
-  const activity = new JActivity();
+  const activity = lifecycleActivity(app);
   activity.resumed = true;
-  (activity as any).$host = { application: app };
   const observer = {
     [mangleMethod("onActivityCreated", "(Landroid/app/Activity;Landroid/os/Bundle;)V")]: () => { calls.push("created"); },
     [mangleMethod("onActivityStarted", "(Landroid/app/Activity;)V")]: () => { calls.push("started"); },
@@ -110,7 +117,7 @@ test("background lifecycle registration catches up to the current activity", asy
   };
   const previousHost = appHost;
   const previousThread = curThread;
-  setAppHost({ currentActivity: () => activity } as any);
+  useCurrentActivity(activity);
   try {
     setCurThread(new JThread());
     await vcall(app, "registerActivityLifecycleCallbacks", "(Landroid/app/Application$ActivityLifecycleCallbacks;)V", observer);
@@ -167,7 +174,7 @@ test("finite number checks and stream flattening preserve Java semantics", async
 });
 
 test("Collectors use the Java Collector protocol and CharSequence text", async () => {
-  const text = (value: string) => Object.assign(rt.make("test/CharSequenceValue") as CharSequenceValue, { value });
+  const text = (value: string) => Object.assign(new CharSequenceValue(), { value });
   const values = Object.assign([text("a"), text("b")], { $t: "Ljava/lang/Object;" });
   const stream = await scall("java/util/stream/Stream", "of", "([Ljava/lang/Object;)Ljava/util/stream/Stream;", values);
   const joining = await scall("java/util/stream/Collectors", "joining",
@@ -415,10 +422,11 @@ test("concrete maps, EnumSet factories, and primitive streams preserve Java disp
   expect(await vcall(map, "putIfAbsent", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "key", "second")).toBe("first");
   expect(await vcall(map, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "key")).toBe("first");
 
-  const units = rt.link("java/util/concurrent/TimeUnit").ctor as any;
+  const units = rt.link("java/util/concurrent/TimeUnit").ctor;
   const enumSet = await scall("java/util/EnumSet", "of",
     "(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;",
-    units.s$NANOSECONDS, units.s$MICROSECONDS, units.s$MILLISECONDS, units.s$SECONDS);
+    Reflect.get(units, "s$NANOSECONDS"), Reflect.get(units, "s$MICROSECONDS"),
+    Reflect.get(units, "s$MILLISECONDS"), Reflect.get(units, "s$SECONDS"));
   expect(await vcall(enumSet, "size", "()I")).toBe(4);
 
   const source = await scall("java/util/stream/Stream", "of", "([Ljava/lang/Object;)Ljava/util/stream/Stream;",

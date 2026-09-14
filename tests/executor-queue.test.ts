@@ -29,7 +29,7 @@ rt.register({
 });
 rt.linkNatives();
 
-const seconds = () => (rt.link("java/util/concurrent/TimeUnit").ctor as any).s$SECONDS;
+const seconds = () => Reflect.get(rt.link("java/util/concurrent/TimeUnit").ctor, "s$SECONDS");
 const pool = (queue: unknown) => newObj("java/util/concurrent/ThreadPoolExecutor",
   "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V", 1, 1, 0n, seconds(), queue);
 
@@ -46,10 +46,10 @@ test("a pool executor runs tasks through a bytecode BlockingQueue", async () => 
 test("a native queue still mirrors pending tasks", async () => {
   const queue = await newObj("java/util/concurrent/LinkedBlockingQueue");
   const ex = await pool(queue);
-  const blocker = rt.make("test/BlockingRunnable") as BlockingRunnable;
+  const blocker = new BlockingRunnable();
   const blocked = await vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", blocker);
   await Promise.resolve();
-  const task = rt.make("test/QueueRunnable") as RecordingRunnable;
+  const task = new RecordingRunnable();
   const future = await vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", task);
   expect(await vcall(queue, "size", "()I")).toBe(1);
   blocker.release();
@@ -61,7 +61,7 @@ test("a native queue still mirrors pending tasks", async () => {
 
 test("submit(Runnable, result) completes with the supplied result", async () => {
   const ex = await pool(await newObj("java/util/concurrent/LinkedBlockingQueue"));
-  const task = rt.make("test/QueueRunnable") as RecordingRunnable;
+  const task = new RecordingRunnable();
   const future = await vcall(ex, "submit", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;", task, "done");
   expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("done");
   expect(task.runs).toBe(1);
@@ -69,7 +69,7 @@ test("submit(Runnable, result) completes with the supplied result", async () => 
 
 test("CompletableFuture supplyAsync runs on the supplied executor", async () => {
   const ex = await pool(await newObj("java/util/concurrent/LinkedBlockingQueue"));
-  const supplier = rt.make("test/ValueSupplier");
+  const supplier = new ValueSupplier();
   const future = await vcall(rt.link("java/util/concurrent/CompletableFuture").ctor, "supplyAsync",
     "(Ljava/util/function/Supplier;Ljava/util/concurrent/Executor;)Ljava/util/concurrent/CompletableFuture;", supplier, ex);
   expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("supplied");
@@ -77,7 +77,7 @@ test("CompletableFuture supplyAsync runs on the supplied executor", async () => 
 
 test("executor work is eligible at the next cooperative turn", async () => {
   const ex = await pool(await newObj("java/util/concurrent/LinkedBlockingQueue"));
-  const task = rt.make("test/QueueRunnable") as RecordingRunnable;
+  const task = new RecordingRunnable();
   await vcall(ex, "execute", "(Ljava/lang/Runnable;)V", task);
   await Promise.resolve();
   await Promise.resolve();
@@ -86,10 +86,10 @@ test("executor work is eligible at the next cooperative turn", async () => {
 
 test("executor backlogs yield to the browser event loop", async () => {
   const ex = await pool(await newObj("java/util/concurrent/LinkedBlockingQueue"));
-  const blocker = rt.make("test/BlockingRunnable") as BlockingRunnable;
+  const blocker = new BlockingRunnable();
   await vcall(ex, "execute", "(Ljava/lang/Runnable;)V", blocker);
   await Promise.resolve();
-  const task = rt.make("test/QueueRunnable") as RecordingRunnable;
+  const task = new RecordingRunnable();
   const submissions: Promise<unknown>[] = [];
   for (let i = 0; i < 200; i++) submissions.push(vcall(ex, "execute", "(Ljava/lang/Runnable;)V", task));
   await Promise.all(submissions);

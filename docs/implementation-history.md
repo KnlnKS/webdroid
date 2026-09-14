@@ -1763,20 +1763,17 @@ shopping WebView remains functional. Hardcoding the treatment or forging a pin s
 accepted as a visual fix. Vendor-only `amazon.os` and Amazon system-service probes remain
 unsupported optional capabilities.
 
-The subsequent maintainability audit replaced several permissive shortcuts with reusable
-platform contracts. JDK immutable maps now reject mutation through their maps, entries, views
-and iterators; `Collections` protected and synchronized wrappers remain live while enforcing
-their own mutation and monitor rules. Stream collection now invokes the public `Collector`
-protocol for both framework and foreign collectors, including `CharSequence` conversion.
-Wi-Fi locks track reference counts and under-locking, and executor draining periodically yields
-to the event loop instead of sustaining an unbounded microtask chain. These implementations live
-in focused owner modules rather than adding more branches to the already large utility files.
+JDK immutable maps reject mutation through their maps, entries, views and iterators;
+`Collections` protected and synchronized wrappers remain live while enforcing their mutation
+and monitor rules. Stream collection invokes the public `Collector` protocol for framework and
+foreign collectors, including `CharSequence` conversion. Wi-Fi locks track reference counts and
+under-locking, and executor draining periodically yields to the event loop instead of sustaining
+an unbounded microtask chain.
 
-The same audit separated the Thumb-16 and Thumb-32 decoder paths. Re-running Amazon exposed the
-previously unreachable `UMULL` instruction in MMKV, so the long multiply family now executes in
-the interpreter and unknown wide instructions fall back atomically from compiled regions. One
-proposed cleanup was rejected by live evidence: deleting late lifecycle delivery left Amazon on
-a blank activity because its background startup task registered `LifecycleListeners` after the
-cooperative main-queue transition. That bounded, deduplicated catch-up remains isolated in the
-lifecycle policy; normal dispatch now takes a fresh callback snapshot at each pre/plain/post
-stage, matching Android's separate dispatch passes.
+The Thumb-16 and Thumb-32 decoder paths are separate. Re-running Amazon exposed `UMULL` in MMKV,
+so the long multiply family executes in the interpreter and unknown wide instructions fall back
+atomically from compiled regions. Removing late lifecycle delivery left Amazon on a blank
+activity because its background startup task registered `LifecycleListeners` after the
+cooperative main-queue transition. The bounded, deduplicated catch-up remains in the lifecycle
+policy; normal dispatch takes a fresh callback snapshot at each pre/plain/post stage, matching
+Android's separate dispatch passes.
