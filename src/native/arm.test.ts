@@ -52,6 +52,25 @@ describe("arm decoder", () => {
     expect(c.w[8]).toBe(0x11220004);
   });
 
+  test("far Thumb branches take precedence over overlapping data prefixes", () => {
+    const at = mem.reserve(0x400000, 0x1000), pc = at + 2;
+    for (const h of [0xf3c0, 0xf240, 0xf2c0, 0xf200, 0xf2a0]) {
+      for (const h2 of [0xf800, 0xe800, 0xb800]) {
+        const target = (pc + 4 + ((h & 0x3ff) << 12)) & (h2 === 0xe800 ? ~3 : ~1);
+        mem.st16(pc, h); mem.st16(pc + 2, h2);
+        if (h2 === 0xe800) mem.st32(target, 0xe12fff1c);
+        else mem.st16(target, 0x4760);
+        const c = sweep((entry, setup) => execute(entry | 1, setup), pc, (cpu) => {
+          for (let i = 0; i < 13; i++) cpu.w[2 * i] = 0x11220000 + i;
+          for (let i = 0; i < cpu.si.length; i++) cpu.si[i] = 0x33440000 + i;
+          cpu.w[24] = RET_SENTINEL;
+          cpu.cpsr = 0x28000000; cpu.fpcr = 0x400000; cpu.fpsr = 0x8000010; cpu.excl = 0x2000;
+        });
+        expect(c.w[28] >>> 0).toBe(h2 === 0xb800 ? RET_SENTINEL : pc + 5);
+      }
+    }
+  });
+
   test("DSP halfword multiplication and saturating arithmetic preserve architectural state", () => {
     const c = run([0xe1053281, 0xe1476281, 0xe1680281, 0xe10b905a, BXLR], (cpu) => {
       for (let i = 0; i < 13; i++) cpu.w[2 * i] = 0x11220000 + i;

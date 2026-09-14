@@ -772,6 +772,7 @@ fn execThumb(c: *Cpu, pc: u32) Status {
 }
 
 inline fn execThumb32(c: *Cpu, h: u32, second: u32, pc: u32) ?Status {
+    if (execThumb32Branches(c, h, second, pc)) |status| return status;
         const cp = (second >> 8) & 15;
         if (cp == 10 or cp == 11) {
             if (vfp(c, h << 16 | second, pc -% 4)) |status| {
@@ -781,7 +782,6 @@ inline fn execThumb32(c: *Cpu, h: u32, second: u32, pc: u32) ?Status {
         }
     if (execThumb32Data(c, h, pc)) |status| return status;
     if (execThumb32Transfers(c, h, pc)) |status| return status;
-    if (execThumb32Branches(c, h, pc)) |status| return status;
     return execThumb32Late(c, h, pc);
 }
 
@@ -1013,9 +1013,8 @@ inline fn execThumb32Transfers(c: *Cpu, h: u32, pc: u32) ?Status {
     return null;
 }
 
-inline fn execThumb32Branches(c: *Cpu, h: u32, pc: u32) ?Status {
+inline fn execThumb32Branches(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
     if ((h & 0xf800) == 0xf000) {
-        const h2: u32 = ld(u16, pc + 2);
         const cc = (h >> 6) & 15;
         if ((h2 & 0xd000) == 0x8000 and cc < 14) {
             c.pc = pc + 4;
@@ -1024,13 +1023,17 @@ inline fn execThumb32Branches(c: *Cpu, h: u32, pc: u32) ?Status {
             if (cond(c, cc)) return jump(c, pc +% 4 +% off);
             return .next;
         }
-        if ((h2 & 0xd000) == 0x9000) {
+        if ((h2 & 0xd000) == 0x9000 or (h2 & 0xc000) == 0xc000) {
             c.pc = pc + 4;
             const Sb = (h >> 10) & 1;
             const I1 = 1 - (((h2 >> 13) & 1) ^ Sb);
             const I2 = 1 - (((h2 >> 11) & 1) ^ Sb);
             const raw = (Sb << 24) | (I1 << 23) | (I2 << 22) | ((h & 0x3ff) << 12) | ((h2 & 0x7ff) << 1);
             const off: u32 = @bitCast(@as(i32, @bitCast(raw << 7)) >> 7);
+            if ((h2 & 0xc000) == 0xc000) {
+                set(c, 14, pc +% 5);
+                if (h2 & 0x1000 == 0) return bx(c, ((pc +% 4) & ~@as(u32, 3)) +% (off & ~@as(u32, 3)));
+            }
             return jump(c, pc +% 4 +% off);
         }
     }
@@ -1301,23 +1304,7 @@ inline fn execThumb16(c: *Cpu, h: u32, pc: u32, currentIt: u32) Status {
             const off: u32 = @bitCast(@as(i32, @bitCast(h << 21)) >> 20);
             return jump(c, pc +% 4 +% off);
         },
-        else => {
-            if ((h & 0xf800) != 0xf000) return fault(c, .unimplemented, h, pc);
-            const h2: u32 = ld(u16, pc + 2);
-            if ((h2 & 0xc000) != 0xc000) return fault(c, .unimplemented, h2, pc);
-            const Sb = (h >> 10) & 1;
-            const imm10 = h & 0x3ff;
-            const J1 = (h2 >> 13) & 1;
-            const J2 = (h2 >> 11) & 1;
-            const imm11 = h2 & 0x7ff;
-            const I1 = 1 - (J1 ^ Sb);
-            const I2 = 1 - (J2 ^ Sb);
-            const raw = (Sb << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 12) | (imm11 << 1);
-            const off: u32 = @bitCast(@as(i32, @bitCast(raw << 7)) >> 7);
-            set(c, 14, pc +% 5);
-            if (h2 & 0x1000 != 0) return jump(c, pc +% 4 +% off);
-            return bx(c, ((pc +% 4) & ~@as(u32, 3)) +% (off & ~@as(u32, 3)));
-        },
+        else => return fault(c, .unimplemented, h, pc),
     }
     return .next;
 }
