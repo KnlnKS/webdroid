@@ -232,10 +232,10 @@ export function themeAccent(v: JView): number {
 }
 
 /** TextView.onDraw with the text column starting at `padL` (compound widgets draw their indicator in the gap). */
-function drawTextInset(tv: JTextView, cv: JCanvas, padL: number) {
+async function drawTextInset(tv: JTextView, cv: JCanvas, padL: number) {
   const saved = tv.padL;
   tv.padL = padL;
-  try { (textViewMethods!["onDraw(Landroid/graphics/Canvas;)V"] as (cv: JCanvas) => void).call(tv, cv); }
+  try { await callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", tv, cv); }
   finally { tv.padL = saved; }
 }
 
@@ -341,20 +341,21 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
     this.measuredW = resolveSizeAndState(this.measuredW + this.buttonW, wSpec);
     this.measuredH = Math.max(this.measuredH, device.dp(48));
   },
-  "onDraw(Landroid/graphics/Canvas;)V": function (this: JCompoundButton, cv: JCanvas) {
+  "onDraw(Landroid/graphics/Canvas;)V": async function (this: JCompoundButton, cv: JCanvas) {
+    const thread = curThread;
     if (!this.buttonW) return (textViewMethods["onDraw(Landroid/graphics/Canvas;)V"] as (cv: JCanvas) => void).call(this, cv);
     const ctx = cv.ctx;
     const accent = themeAccent(this);
     const cy = this.height() / 2;
     const indX = kind === "switch" ? this.width() - this.padR - device.dp(44) : this.padL + device.dp(4);
-    if (this.buttonD && this.buttonD.intrinsicW() > 0) {
-      const w = this.buttonD.intrinsicW(), h = this.buttonD.intrinsicH();
+    const w = this.buttonD ? await drawableSize(this.buttonD, false, thread) : -1;
+    if (this.buttonD && w > 0) {
+      const h = await drawableSize(this.buttonD, true, thread);
       const b = this.buttonD.bounds;
       b.left = indX; b.top = cy - h / 2; b.right = indX + w; b.bottom = cy + h / 2;
       this.buttonD.stateSet = this.drawableState();
-      this.buttonD.paint(cv);
-      drawTextInset(this, cv, kind !== "switch" ? indX + this.buttonW - device.dp(4) : this.padL);
-      return;
+      await drawChild(this.buttonD, cv, thread);
+      return drawTextInset(this, cv, kind !== "switch" ? indX + this.buttonW - device.dp(4) : this.padL);
     }
     if (kind === "check") {
       const s = device.dp(18);
@@ -404,7 +405,7 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
       ctx.fill();
       ctx.stroke();
     }
-    drawTextInset(this, cv, kind !== "switch" ? indX + this.buttonW - device.dp(4) : this.padL);
+    return drawTextInset(this, cv, kind !== "switch" ? indX + this.buttonW - device.dp(4) : this.padL);
   },
   };
 };

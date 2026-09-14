@@ -1,9 +1,9 @@
 import { AID } from "./res";
 import { JViewGroup, specSize, JView, invalidate, requestLayout } from "./view";
-import { type JDrawable, loadDrawable, loadDrawableRV } from "./drawable";
+import { type JDrawable, loadDrawable, loadDrawableRV, drawChild } from "./drawable";
 import { type JCanvas, tfMedium } from "./graphics";
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, curThread } from "../jvm/natives/jlang";
 import { showPopupMenu } from "./popup";
 import { appHost, type AppHost } from "./apphost";
 import { reportUncaught } from "./os";
@@ -48,7 +48,8 @@ export class JActionBarView extends JViewGroup {
     const overflow = vis.filter((m) => !chosen.has(m));
     return { action, overflow, slots: action.length + (overflow.length ? 1 : 0) };
   }
-  onDrawSelf(cv: JCanvas) {
+  async onDrawSelf(cv: JCanvas) {
+    const thread = curThread;
     const ctx = cv.ctx;
     const h = this.height();
     let x = 27;
@@ -56,12 +57,12 @@ export class JActionBarView extends JViewGroup {
       const d = this.upDrawable;
       d.bounds.left = 2; d.bounds.top = h / 2 - 24;
       d.bounds.right = 50; d.bounds.bottom = h / 2 + 24;
-      d.paint(cv);
+      const pending = drawChild(d, cv, thread); if (pending instanceof Promise) await pending;
     }
     if (this.icon) {
       this.icon.bounds.left = x; this.icon.bounds.top = h / 2 - 30;
       this.icon.bounds.right = x + 60; this.icon.bounds.bottom = h / 2 + 30;
-      this.icon.paint(cv);
+      const pending = drawChild(this.icon, cv, thread); if (pending instanceof Promise) await pending;
       x += 72;
     }
     const { action: shown, overflow, slots } = this.layoutMenu();
@@ -105,7 +106,7 @@ export class JActionBarView extends JViewGroup {
         item.icon.tint = -1;
         item.icon.bounds.left = cx - 24; item.icon.bounds.top = h / 2 - 24;
         item.icon.bounds.right = cx + 24; item.icon.bounds.bottom = h / 2 + 24;
-        item.icon.paint(cv);
+        const pending = drawChild(item.icon, cv, thread); if (pending instanceof Promise) await pending;
       } else {
         ctx.font = "26px Roboto";
         ctx.textAlign = "center";
@@ -132,7 +133,7 @@ rt.register({
       this.measuredW = specSize(wSpec);
       this.measuredH = this.barH;
     },
-    "onDraw(Landroid/graphics/Canvas;)V": function (this: JActionBarView, cv: JCanvas) { this.onDrawSelf(cv); },
+    "onDraw(Landroid/graphics/Canvas;)V": function (this: JActionBarView, cv: JCanvas) { return this.onDrawSelf(cv); },
     "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JActionBarView, ev: any) {
       if ((ev.action & 0xff) === 1) {
         if (this.showUp && ev.x < 80) {

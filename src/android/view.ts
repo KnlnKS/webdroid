@@ -3,7 +3,7 @@ import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JMatrix, JOutline, matMul, rotM, type JPoint } from "./graphics";
 import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallOn, vcallMaybe, after, idHash, box, JFloat, curThread } from "../jvm/natives/jlang";
-import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor } from "./drawable";
+import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
@@ -1028,17 +1028,19 @@ const viewMethods: NativeSpec["methods"] = {
   },
   "measure(II)V": function (this: JView, w: number, h: number) { return measureView(this, w, h); },
   "onMeasure(II)V": function (this: JView, wSpec: number, hSpec: number) {
-    const bw = Math.max(this.minW, this.background?.intrinsicW() ?? 0);
-    const bh = Math.max(this.minH, this.background?.intrinsicH() ?? 0);
-    const cw = Math.max(bw, this.padL + this.padR);
-    const ch = Math.max(bh, this.padT + this.padB);
-    // Android's getDefaultSize makes a wrap_content plain View fill AT_MOST — a well-known quirk
-    // that real layouts avoid. For an exact plain android.view.View (a divider/spacer, no custom
-    // onDraw content), respect the wrap_content LP so it collapses instead of filling. Custom
-    // View subclasses keep Android semantics (they may render content sized by getDefaultSize).
-    const plain = (this.constructor as any)?.$i?.name === "android/view/View";
-    this.measuredW = plain && this.lp && this.lp.width === WRAP_CONTENT ? resolveSizeAndState(cw, wSpec) : defaultSize(cw, wSpec);
-    this.measuredH = plain && this.lp && this.lp.height === WRAP_CONTENT ? resolveSizeAndState(ch, hSpec) : defaultSize(ch, hSpec);
+    const thread = curThread, bg = this.background;
+    return after(bg ? drawableSize(bg, false, thread) : 0, w => after(bg ? drawableSize(bg, true, thread) : 0, h => {
+      const bw = Math.max(this.minW, w), bh = Math.max(this.minH, h);
+      const cw = Math.max(bw, this.padL + this.padR);
+      const ch = Math.max(bh, this.padT + this.padB);
+      // Android's getDefaultSize makes a wrap_content plain View fill AT_MOST — a well-known quirk
+      // that real layouts avoid. For an exact plain android.view.View (a divider/spacer, no custom
+      // onDraw content), respect the wrap_content LP so it collapses instead of filling. Custom
+      // View subclasses keep Android semantics (they may render content sized by getDefaultSize).
+      const plain = (this.constructor as any)?.$i?.name === "android/view/View";
+      this.measuredW = plain && this.lp && this.lp.width === WRAP_CONTENT ? resolveSizeAndState(cw, wSpec) : defaultSize(cw, wSpec);
+      this.measuredH = plain && this.lp && this.lp.height === WRAP_CONTENT ? resolveSizeAndState(ch, hSpec) : defaultSize(ch, hSpec);
+    }));
   },
   "setMeasuredDimension(II)V": function (this: JView, w: number, h: number) {
     this.measuredW = w & 0xffffff; this.measuredH = h & 0xffffff;

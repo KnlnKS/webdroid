@@ -3,7 +3,7 @@ import { JView, initViewFromCtx, requestLayout, invalidate, resolveSizeAndState,
 import {
   type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, cslColor, drawableSize
 } from "./drawable";
-import { curThread, vcallOn, mkEnumSet, newObj, after } from "../jvm/natives/jlang";
+import { curThread, callOn, vcallOn, mkEnumSet, newObj, after } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, noops } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
 import { JMatrix, type JBitmap, type JCanvas } from "./graphics";
@@ -12,12 +12,15 @@ export class JImageView extends JView {
   private dr: JDrawable | null = null;
   get drawable(): JDrawable | null { return this.dr; }
   setDrawable(d: JDrawable | null) {
+    const thread = curThread;
     if (this.dr) this.dr.callback = null;
     this.dr = d;
-    this.drawableW = d?.intrinsicW() ?? -1; this.drawableH = d?.intrinsicH() ?? -1;
     if (d) d.callback = this;
     invalidate(this);
-    return this.applyColorFilter();
+    return after(d ? drawableSize(d, false, thread) : -1, w => after(d ? drawableSize(d, true, thread) : -1, h => {
+      this.drawableW = w; this.drawableH = h;
+      return callOn(thread, () => this.applyColorFilter());
+    }));
   }
   drawableW = -1; drawableH = -1;
   scaleType = 3; // FIT_CENTER

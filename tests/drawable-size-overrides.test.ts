@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
-import { newObj, vcall, vcallOn, curThread, JThread } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallOn, vcallMaybe, curThread, JThread } from "../src/jvm/natives/jlang";
 import { JView, JViewGroup, measureView, makeSpec, MS_AT_MOST } from "../src/android/view";
 
 rt.linkNatives();
@@ -125,4 +125,22 @@ test("layer gravity uses virtual intrinsic size on non-fill axes", async () => {
   const bounds = await vcall(d, "getBounds", "()Landroid/graphics/Rect;");
   expect([bounds.left, bounds.top, bounds.right, bounds.bottom]).toEqual([0, 6, 100, 54]);
   expect(threads).toEqual([thread]);
+});
+
+
+test("nested drawable containers share virtual size and draw dispatch", async () => {
+  const { d } = drawable();
+  const layer = await newObj("android/graphics/drawable/LayerDrawable", "([Landroid/graphics/drawable/Drawable;)V", [d]);
+  for (const name of ["RotateDrawable", "ScaleDrawable", "DrawableWrapper"]) {
+    const wrapper = await newObj("android/graphics/drawable/" + name, null);
+    await vcall(wrapper, "setDrawable", "(Landroid/graphics/drawable/Drawable;)V", layer);
+    expect(await vcall(wrapper, "getIntrinsicWidth", "()I")).toBe(84);
+    expect(await vcall(wrapper, "getIntrinsicHeight", "()I")).toBe(48);
+  }
+  let draws = 0;
+  Object.assign(d, { [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: () => { draws++; } });
+  expect(vcallMaybe(layer, "draw", "(Landroid/graphics/Canvas;)V", null)).toBeUndefined();
+  expect(draws).toBe(1);
+  await vcall(layer, "setLayerSize", "(III)V", 0, 100, 60);
+  expect(vcallMaybe(layer, "getIntrinsicWidth", "()I")).toBe(100);
 });
