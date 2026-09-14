@@ -41,7 +41,7 @@ function vfile(c: Cpu): number[] {
   }
   return si;
 }
-const state = (c: Cpu) => [Array.from(c.w), vfile(c), c.cpsr];
+const state = (c: Cpu) => [Array.from(c.w), vfile(c), c.pc, c.cpsr, c.fpcr, c.fpsr, c.excl];
 /** The program's first run, the one the test's expectations describe. A program whose second
  *  run reproduces the first (no time, no memory it rewrites) then runs to the JIT, which must
  *  agree; memory is put back so the test sees the first run's. */

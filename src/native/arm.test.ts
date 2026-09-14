@@ -9,7 +9,7 @@ import { RET_SENTINEL } from "./abi";
 let shared: Cpu | null = null;
 function execute(at: number, setup: (c: Cpu) => void): Cpu {
   const c = (shared ??= new Cpu(mainThread, "test"));
-  c.w.fill(0); c.cpsr = 0;
+  c.w.fill(0); c.si.fill(0); c.cpsr = 0; c.fpcr = 0; c.fpsr = 0; c.excl = 0;
   c.ensureStack();
   c.w[26] = c.stackTop;
   setup(c);
@@ -35,6 +35,17 @@ const BXLR = 0xe12fff1e;
 beforeAll(() => setA64(false));
 
 describe("arm decoder", () => {
+  test("DSP halfword multiplication and saturating arithmetic preserve architectural state", () => {
+    const c = run([0xe1053281, 0xe1476281, 0xe1680281, 0xe10b905a, BXLR], (cpu) => {
+      for (let i = 0; i < 13; i++) cpu.w[2 * i] = 0x11220000 + i;
+      cpu.w[2] = 3; cpu.w[4] = 4; cpu.w[6] = 9;
+      cpu.w[12] = -8; cpu.w[14] = 5; cpu.w[20] = 0x7fffffff; cpu.w[22] = 1;
+      cpu.cpsr = 0x20000000;
+    });
+    expect([c.w[10], c.w[12], c.w[14], c.w[16], c.w[18]]).toEqual([21, 4, 6, 12, 0x7fffffff]);
+    expect(c.cpsr & 0x28000000).toBe(0x28000000);
+  });
+
   test("mov/add/sub immediates and flags", () => {
     const c = run([
       0xe3a00005,   // mov r0, #5

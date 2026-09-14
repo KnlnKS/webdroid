@@ -28,6 +28,10 @@ pub const Scan = struct { len: u32, ends: bool };
 const FN = jit.FN;
 const FZ = jit.FZ;
 
+fn armMisc(w: u32) bool {
+    return (w & 0x0ff000f0) == 0x01200070 or (w & 0x0f900090) == 0x01000080 or (w & 0x0f9000f0) == 0x01000050;
+}
+
 pub fn rwArm(w: u32) jit.RW {
     var rw = jit.ALL32;
     rw.fr = 0;
@@ -49,7 +53,7 @@ pub fn rwArm(w: u32) jit.RW {
             if (top == 0 and (w & 0x0e000090) == 0x00000090) return rw;
             if ((w & 0x0d900000) == 0x01000000) {
                 if ((w & 0x0fbf0fff) == 0x010f0000) rw.fr = 15;
-                if ((w & 0x0db0f000) == 0x0120f000 and w & (1 << 19) != 0) rw.fw = 15;
+                if ((w & 0x0db0f000) == 0x0120f000 and (top == 1 or w & 0xf0 == 0) and w & (1 << 19) != 0) rw.fw = 15;
                 return rw;
             }
             const o = bits(w, 21, 4);
@@ -467,8 +471,12 @@ fn dataProcessing(e: *Emit, w: u32, pc: u32, k: u32, top: u32, rn: u32, rd: u32,
             }
             return false;
         }
+        if (armMisc(w)) {
+            e.fallback(pc, k);
+            return false;
+        }
         if ((w & 0x0e000090) == 0x00000090) {
-            if ((w & 0x0f0000f0) == 0x00000090 or (w & 0x0f900090) == 0x01000080 or (w & 0x0f9000f0) == 0x01000050) {
+            if ((w & 0x0f0000f0) == 0x00000090) {
                 e.fallback(pc, k);
                 return false;
             }
