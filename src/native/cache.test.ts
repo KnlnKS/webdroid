@@ -10,6 +10,31 @@ beforeAll(() => setA64(true));
 afterAll(() => setA64(false));
 
 describe("the decode cache", () => {
+  test("host writes invalidate every executed word they overlap in both tiers", () => {
+    const writes: ((a: number, bytes: Uint8Array) => void)[] = [
+      (a, b) => mem.st16(a, new DataView(b.buffer).getUint16(0, true)),
+      (a, b) => mem.st32(a, new DataView(b.buffer).getInt32(0, true)),
+      (a, b) => mem.stf32(a, new DataView(b.buffer).getFloat32(0, true)),
+      (a, b) => mem.st64(a, new DataView(b.buffer).getBigInt64(0, true)),
+      (a, b) => mem.stf64(a, new DataView(b.buffer).getFloat64(0, true)),
+      (a, b) => mem.write(a, b),
+      (a, b) => { const src = mem.malloc(b.length); mem.write(src, b); mem.memmove(a, src, b.length); mem.free(src); },
+    ];
+    const sizes = [2, 4, 4, 8, 8, 8, 8];
+    const c = run([RET]);
+    const execute = (at: number) => { c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ } return c.w[0]; };
+    for (const hot of [false, true]) for (const offset of [0, 4]) for (const [i, write] of writes.entries()) {
+      const at = mem.reserve(0x3000, 0x1000) + 0x1000 + offset;
+      mem.u32[at >>> 2] = movW0(1); mem.u32[(at >>> 2) + 1] = RET;
+      for (let j = 0; j < (hot ? JIT_HEAT + 2 : 1); j++) expect(execute(at)).toBe(1);
+      const size = sizes[i], start = at - (size === 8 ? 4 : 1);
+      const bytes = mem.bytes(start, size).slice();
+      bytes[at - start] = movW0(2) & 255;
+      write(start, bytes);
+      expect(execute(at)).toBe(2);
+    }
+  });
+
   test("a store into an executed word drops the page and the new code runs", () => {
     const at = mem.reserve(0x1000, 0x1000);
     mem.u32[at >>> 2] = movW0(1); mem.u32[(at >>> 2) + 1] = RET;
@@ -35,6 +60,26 @@ describe("the decode cache", () => {
     mem.st32(at + 0x800, 0x12345678);
     expect(codeStats.invalidated).toBe(before);
     expect(mem.ld32(at + 0x800)).toBe(0x12345678);
+  });
+
+  test("guest wide stores invalidate a later executed word across a page boundary", () => {
+    const c = run([RET]), writer = mem.reserve(0x1000, 0x1000);
+    mem.u32[writer >>> 2] = 0xf9000120; // str x0, [x9]
+    mem.u32[(writer >>> 2) + 1] = RET;
+    const execute = (at: number) => { c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ } };
+    for (const hot of [false, true]) {
+      const at = mem.reserve(0x3000, 0x1000) + 0x1000;
+      mem.u32[at >>> 2] = movW0(1); mem.u32[(at >>> 2) + 1] = RET;
+      if (hot) {
+        c.w[18] = at - 16;
+        for (let i = 0; i <= JIT_HEAT; i++) execute(writer);
+      }
+      execute(at);
+      expect(c.w[0]).toBe(1);
+      c.w[0] = 0; c.w[1] = movW0(2); c.w[18] = at - 4;
+      execute(writer); execute(at);
+      expect(c.w[0]).toBe(2);
+    }
   });
 
   test("an evicted region re-heats and comes back", () => {

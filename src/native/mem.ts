@@ -13,6 +13,11 @@ const enc = new TextEncoder(), dec = new TextDecoder();
 function checkAddr(a: number, n: number): void {
   if (((a >>> 0) - LOW) >>> 0 > SPAN - n) badAddr(a);
 }
+function wrote(a: number, n: number): void {
+  if (n <= 0) return;
+  const end = ((a >>> 0) + n - 1) >>> PAGE_SHIFT;
+  for (let pg = a >>> PAGE_SHIFT; pg <= end; pg++) if (codePages[pg] & 1) { core.code_write(a >>> 0, n); return; }
+}
 function badAddr(a: number): never {
   throw new NativeFault(`[native] bad address 0x${(a >>> 0).toString(16)}`);
 }
@@ -59,24 +64,24 @@ export const mem = {
   st32(a: number, v: number): void {
     if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) badAddr(a);
     if ((a & 3) === 0) i32[a >>> 2] = v; else dv.setInt32(a >>> 0, v, true);
-    if (codePages[a >>> PAGE_SHIFT] & 1) core.code_write(a >>> 0);
+    wrote(a, 4);
   },
   st16(a: number, v: number): void {
     if (((a >>> 0) - LOW) >>> 0 > SPAN - 2) badAddr(a);
     if ((a & 1) === 0) u16[a >>> 1] = v; else dv.setUint16(a >>> 0, v, true);
-    if (codePages[a >>> PAGE_SHIFT] & 1) core.code_write(a >>> 0);
+    wrote(a, 2);
   },
   st8(a: number, v: number): void {
     if (((a >>> 0) - LOW) >>> 0 > SPAN - 1) badAddr(a);
     u8[a >>> 0] = v;
-    if (codePages[a >>> PAGE_SHIFT] & 1) core.code_write(a >>> 0);
+    wrote(a, 1);
   },
   ldf32(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) badAddr(a); return (a & 3) === 0 ? f32[a >>> 2] : dv.getFloat32(a >>> 0, true); },
-  stf32(a: number, v: number): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) badAddr(a); if ((a & 3) === 0) f32[a >>> 2] = v; else dv.setFloat32(a >>> 0, v, true); },
+  stf32(a: number, v: number): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 4) badAddr(a); if ((a & 3) === 0) f32[a >>> 2] = v; else dv.setFloat32(a >>> 0, v, true); wrote(a, 4); },
   ldf64(a: number): number { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); return (a & 7) === 0 ? f64[a >>> 3] : dv.getFloat64(a >>> 0, true); },
-  stf64(a: number, v: number): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); if ((a & 7) === 0) f64[a >>> 3] = v; else dv.setFloat64(a >>> 0, v, true); },
+  stf64(a: number, v: number): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); if ((a & 7) === 0) f64[a >>> 3] = v; else dv.setFloat64(a >>> 0, v, true); wrote(a, 8); },
   ld64(a: number): bigint { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); return dv.getBigInt64(a >>> 0, true); },
-  st64(a: number, v: bigint): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); dv.setBigInt64(a >>> 0, v, true); },
+  st64(a: number, v: bigint): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); dv.setBigInt64(a >>> 0, v, true); wrote(a, 8); },
 
   malloc: (n: number): number => core.malloc(n >>> 0) >>> 0,
   free(p: number): void { if (p && !core.free(p >>> 0)) badAddr(p); },
@@ -166,6 +171,7 @@ export const mem = {
     checkAddr(a, n + 1);
     u8.set(b.subarray(0, n), a >>> 0);
     u8[(a >>> 0) + n] = 0;
+    wrote(a, n + 1);
     return n;
   },
   strlen(a: number): number {
@@ -175,9 +181,9 @@ export const mem = {
     return e - (a >>> 0);
   },
   bytes(a: number, n: number): Uint8Array { checkAddr(a, n); return u8.subarray(a >>> 0, (a >>> 0) + n); },
-  write(a: number, src: Uint8Array | ArrayLike<number>): void { checkAddr(a, src.length); u8.set(src, a >>> 0); },
-  memmove(d: number, s: number, n: number): void { if (n <= 0) return; checkAddr(d, n); checkAddr(s, n); u8.copyWithin(d >>> 0, s >>> 0, (s >>> 0) + n); },
-  memset(d: number, v: number, n: number): void { if (n <= 0) return; checkAddr(d, n); u8.fill(v & 0xff, d >>> 0, (d >>> 0) + n); },
+  write(a: number, src: Uint8Array | ArrayLike<number>): void { checkAddr(a, src.length); u8.set(src, a >>> 0); wrote(a, src.length); },
+  memmove(d: number, s: number, n: number): void { if (n <= 0) return; checkAddr(d, n); checkAddr(s, n); u8.copyWithin(d >>> 0, s >>> 0, (s >>> 0) + n); wrote(d, n); },
+  memset(d: number, v: number, n: number): void { if (n <= 0) return; checkAddr(d, n); u8.fill(v & 0xff, d >>> 0, (d >>> 0) + n); wrote(d, n); },
   strdup(s: string): number {
     const b = enc.encode(s);
     const p = mem.malloc(b.length + 1);

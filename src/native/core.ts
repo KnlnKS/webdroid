@@ -42,7 +42,7 @@ interface Core {
   cpu_alloc(tid: number, a64: number): number;
   cpu_free(p: number): void;
   run_slice(cpu: number, budget: number): number;
-  code_write(addr: number): number;
+  code_write(addr: number, size: number): number;
   invalidate_range(addr: number, size: number): void;
   invalidate_all(): void;
   cpu_stat(i: number): number;
@@ -51,7 +51,7 @@ interface Core {
   host_bypass(on: number): void;
   libc_call(cpu: number, id: number): number;
   exec_word(cpu: number, word: number, pc: number): number;
-  on_store(cpu: number, addr: number): number;
+  on_store(cpu: number, addr: number, size: number): number;
   jit_pending(): number;
   jit_emit(out: number, cap: number): number;
   jit_count(): number;

@@ -599,7 +599,7 @@ fn emitVlane(e: *Emit, w: u32) bool {
         vget(e, rt);
         b.emit(.{ vm(S.load8_lane + @as(u8, @intCast(esz)), 0), @as(u8, @intCast(idx)), vm(S.store, voff(rt)) });
     } else {
-        e.storeCheck(0, false);
+        e.storeCheck(0, @as(u32, 1) << @intCast(esz));
         b.get(L_A);
         vget(e, rt);
         b.emit(.{ vm(S.store8_lane + @as(u8, @intCast(esz)), 0), @as(u8, @intCast(idx)) });
@@ -620,7 +620,7 @@ fn vload(e: *Emit, t: u8, off: u32, sz: u32) void {
     b.memop(O.i64_store, voff(t) + 8);
 }
 fn vstore(e: *Emit, t: u8, off: u32, sz: u32) void {
-    e.storeCheck(off, sz == 4);
+    e.storeCheck(off, @as(u32, 1) << @intCast(sz));
     e.b.emit(.{ get(L_A), get(L_CPU), mo(O.i64_load, voff(t)), mo(jit.ST[@min(sz, 3)], off) });
     if (sz == 4) e.b.emit(.{ get(L_A), get(L_CPU), mo(O.i64_load, voff(t) + 8), mo(O.i64_store, off + 8) });
 }

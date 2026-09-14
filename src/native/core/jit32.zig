@@ -307,7 +307,7 @@ fn load(e: *Emit, o: u8, off: u32) void {
 }
 fn store(e: *Emit, o: u8, off: u32) void {
     e.b.set(L_R);
-    e.storeCheck(off, false);
+    e.storeCheck(off, switch (o) { O.i32_store8 => 1, O.i32_store16 => 2, else => 4 });
     e.b.emit(.{ get(L_A), get(L_R), mo(o, off) });
 }
 

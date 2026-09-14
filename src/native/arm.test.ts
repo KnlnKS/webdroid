@@ -668,6 +668,6 @@ describe("arm block coverage", () => {
     for (let i = 0; i < 4; i++) mem.u32[((at + 0xff0) >>> 2) + i] = nop;
     mem.u32[(at + 0x1000) >>> 2] = bxLr;
     execute(at + 0xff0, () => {});
-    expect(core.code_write(at + 0xff0)).toBe(1);
+    expect(core.code_write(at + 0xff0, 4)).toBe(1);
   });
 });

@@ -214,25 +214,20 @@ pub inline fn setPc32(c: *Cpu, target: u32) void {
     c.pc = target & ~@as(u32, 1);
 }
 pub inline fn st(comptime T: type, c: *Cpu, a: u32, v: T) bool {
-    const f = mem.page_flags[a >> abi.PAGE_SHIFT];
-    if (f != 0) {
-        if (f & 2 != 0) {
-            c.fault_addr = a;
-            return false;
-        }
-        _ = code_write(a);
-    }
+    const n = @sizeOf(T);
+    if ((mem.page_flags[a >> abi.PAGE_SHIFT] | mem.page_flags[(a +% (n - 1)) >> abi.PAGE_SHIFT]) != 0 and on_store(@intFromPtr(c), a, n) != 0) return false;
     mem.ptr(T, a).* = v;
     return true;
 }
-export fn on_store(cp: u32, a: u32) u32 {
+export fn on_store(cp: u32, a: u32, n: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
-    if (mem.page_flags[a >> abi.PAGE_SHIFT] & 2 != 0) {
-        c.fault_addr = a;
+    const last = a +% (n - 1);
+    for ([_]u32{ a, last }) |at| if (mem.page_flags[at >> abi.PAGE_SHIFT] & 2 != 0) {
+        c.fault_addr = at;
         _ = raise(c, .bad_address, 0);
         return 1;
-    }
-    _ = code_write(a);
+    };
+    _ = code_write(a, n);
     return 0;
 }
 fn dropPage(pg: u32) void {
@@ -246,19 +241,32 @@ fn dropPage(pg: u32) void {
     }
     stats.invalidated += 1;
 }
-pub export fn code_write(addr: u32) u32 {
-    const pg = addr >> abi.PAGE_SHIFT;
-    const p = decoded[pg];
-    if (p == 0) return 0;
-    const page: *Page = @ptrFromInt(p);
-    const i = (addr & (abi.PAGE_SIZE - 1)) >> 2;
-    if (page.cov[i >> 3] & (@as(u8, 1) << @intCast(i & 7)) == 0) return 0;
-    dropPage(pg);
-    return 1;
+pub export fn code_write(addr: u32, size: u32) u32 {
+    if (size == 0) return 0;
+    const last: u32 = @intCast(@min(@as(u64, addr) + size, 0x1_0000_0000) - 1);
+    var dropped: u32 = 0;
+    for (addr >> abi.PAGE_SHIFT..(last >> abi.PAGE_SHIFT) + 1) |pg| {
+        const page = decodedPage(@intCast(pg)) orelse continue;
+        const lo = @max(addr, pg * abi.PAGE_SIZE) & (abi.PAGE_SIZE - 1);
+        const hi = @min(last, (pg * abi.PAGE_SIZE) | (abi.PAGE_SIZE - 1)) & (abi.PAGE_SIZE - 1);
+        var i = lo >> 2;
+        const end = hi >> 2;
+        while (i <= end) : (i = (i | 7) + 1) {
+            const high: u4 = @intCast(@min(end - (i & ~@as(usize, 7)), 7));
+            const mask: u8 = @truncate((@as(u16, 0xff) >> (7 - high)) & (@as(u16, 0xff) << @as(u4, @intCast(i & 7))));
+            if (page.cov[i >> 3] & mask != 0) {
+                dropPage(@intCast(pg));
+                dropped += 1;
+                break;
+            }
+        }
+    }
+    return dropped;
 }
 pub export fn invalidate_range(addr: u32, size: u32) void {
+    if (size == 0) return;
     var pg = addr >> abi.PAGE_SHIFT;
-    const end = (addr +% size -% 1) >> abi.PAGE_SHIFT;
+    const end: u32 = @intCast((@min(@as(u64, addr) + size, 0x1_0000_0000) - 1) >> abi.PAGE_SHIFT);
     while (pg <= end) : (pg += 1) dropPage(pg);
 }
 export fn invalidate_all() void {

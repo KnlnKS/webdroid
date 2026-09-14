@@ -533,21 +533,17 @@ pub fn Emit(comptime wide: bool) type {
             e.nest -= 1;
             b.set(L_A);
         }
-        pub fn storeCheck(e: *Self, off: u32, two: bool) void {
+        pub fn storeCheck(e: *Self, off: u32, size: u32) void {
             const b = e.b;
             const a: u32 = if (off != 0) L_NEXT else L_A;
             if (off != 0) b.emit(.{ get(L_A), c32(@bitCast(off)), O.i32_add, set(L_NEXT) });
             b.emit(.{ get(a), c32(abi.PAGE_SHIFT), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE) });
-            if (two) b.emit(.{ get(a), c32(8), O.i32_add, c32(abi.PAGE_SHIFT), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE), O.i32_or });
+            if (size > 1) b.emit(.{ get(a), c32(@intCast(size - 1)), O.i32_add, c32(abi.PAGE_SHIFT), O.i32_shr_u, mo(O.i32_load8_u, FLAGS_BASE), O.i32_or });
             e.ifv();
-            for (0..@as(u32, 1) + @intFromBool(two)) |h| {
-                b.emit(.{ get(L_CPU), get(a) });
-                if (h == 1) b.emit(.{ c32(8), O.i32_add });
-                b.emit(.{call(F_STORE)});
-                e.ifv();
-                e.faultExit();
-                e.endif();
-            }
+            b.emit(.{ get(L_CPU), get(a), c32(@intCast(size)), call(F_STORE) });
+            e.ifv();
+            e.faultExit();
+            e.endif();
             e.endif();
         }
         pub fn cond(e: *Self, cc: u8) void {
@@ -790,19 +786,15 @@ pub fn Emit(comptime wide: bool) type {
                     }
                     const sz: u32 = if (opc == 2) 3 else 2;
                     const load = o.a & 4 != 0;
-                    // A 64-bit pair writes exactly the two words storeCheck's paired form tests, so
-                    // both halves cost one page lookup and one branch instead of two. jitfp.vstore
-                    // already stores 16 bytes this way. The 32-bit pair is 4 bytes apart, which the
-                    // paired form does not describe, so it keeps a check per half.
                     const paired = !load and sz == 3;
-                    if (paired) e.storeCheck(0, true);
+                    if (paired) e.storeCheck(0, 16);
                     for ([_]u8{ o.rd, o.rm }, 0..) |t, i| {
                         const off = (@as(u32, 1) << @intCast(sz)) * @as(u32, @intCast(i));
                         if (load) {
                             b.emit(.{ get(L_A), mo(LD[sz][@intFromBool(opc == 1)], off) });
                             e.setX(t);
                         } else {
-                            if (!paired) e.storeCheck(off, false);
+                            if (!paired) e.storeCheck(off, @as(u32, 1) << @intCast(sz));
                             b.get(L_A);
                             e.getX(t);
                             b.memop(ST[sz], off);
@@ -839,7 +831,7 @@ pub fn Emit(comptime wide: bool) type {
                         e.setSP(o.rn);
                     }
                     if (opc == 0 or (size == 3 and opc == 2)) {
-                        e.storeCheck(0, false);
+                        e.storeCheck(0, @as(u32, 1) << size);
                         b.get(L_A);
                         e.getX(o.rd);
                         b.memop(ST[size], 0);
@@ -902,7 +894,7 @@ pub fn Emit(comptime wide: bool) type {
                         if (size < 3) b.emit(.{ c64(@bitCast((@as(u64, 1) << (@as(u6, 8) << size)) - 1)), O.i64_and });
                         b.byte(O.i64_eq);
                         e.ifv();
-                        e.storeCheck(0, false);
+                        e.storeCheck(0, @as(u32, 1) << size);
                         b.get(L_A);
                         e.getX(o.rd);
                         b.memop(ST[size], 0);
@@ -914,7 +906,7 @@ pub fn Emit(comptime wide: bool) type {
                         b.emit(.{ get(L_A), mo(LD[size][0], 0) });
                         e.setX(o.rd);
                     } else {
-                        e.storeCheck(0, false);
+                        e.storeCheck(0, @as(u32, 1) << size);
                         b.get(L_A);
                         e.getX(o.rd);
                         b.memop(ST[size], 0);
@@ -1228,7 +1220,7 @@ export fn jit_emit(out: u32, cap: u32) u32 {
     b.bytes("__indirect_function_table");
     b.bytes(&[_]u8{ 0x01, 0x70, 0x00, 0 });
     importFn(&b, "exec", 1);
-    importFn(&b, "store", 0);
+    importFn(&b, "store", 1);
     importFn(&b, "exec32", 0);
     inline for ([_][]const u8{ "32", "64" }, 2..) |sfx, ty| inline for (FP_NAMES) |nm| importFn(&b, nm ++ sfx, ty);
     importFn(&b, "fma64", 4);

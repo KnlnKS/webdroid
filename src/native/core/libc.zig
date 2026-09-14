@@ -86,14 +86,7 @@ inline fn va(p: u32) u64 {
     return mem.va(p);
 }
 fn wrote(d: u32, n: u32) void {
-    assert(n != 0);
-    assert(@as(u64, d) + n <= 0x1_0000_0000);
-    // Every page the write covers, not just its ends: a copy of three pages or more can land on
-    // executed code in the middle of its range and leave the ends untouched. One byte read per
-    // 4 KiB written is nothing against the copy itself.
-    const first = d >> abi.PAGE_SHIFT;
-    const last = (d + n - 1) >> abi.PAGE_SHIFT;
-    for (mem.page_flags[first .. last + 1]) |f| if (f != 0) return cpu.invalidate_range(d, n);
+    _ = cpu.code_write(d, n);
 }
 fn stp(c: *Cpu, a: u32, v: u64) bool {
     return if (c.a64 != 0) cpu.st(u64, c, a, v) else cpu.st(u32, c, a, @truncate(v));
