@@ -150,6 +150,10 @@ rt.register({
     },
   },
 });
+Object.defineProperty(Object.prototype, mangleMethod("getClass", "()Ljava/lang/Class;"), {
+  value: function (this: unknown) { return rt.classFor(jclsName(this)); },
+  writable: true, configurable: true, enumerable: false,
+});
 
 function monWait(obj: object, ms: number): Promise<void> {
   if (ms < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout");
