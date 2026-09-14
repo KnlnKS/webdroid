@@ -1,5 +1,5 @@
 import { JObj, rt } from "../runtime";
-import { newArrayList, toJsArray, sortInPlace, type JList } from "./jutil";
+import { JList, newArrayList, toJsArray, sortInPlace } from "./jutil";
 import { vcall } from "./jlang";
 import { csText } from "./jchars";
 
@@ -32,6 +32,14 @@ class JHostFunction extends JObj { call: HostCall = () => null; }
 const hostSupplier = (call: HostCall) => Object.assign(new JHostSupplier(), { call });
 const hostBiFunction = (call: HostCall) => Object.assign(new JHostBiFunction(), { call });
 const hostFunction = (call: HostCall) => Object.assign(new JHostFunction(), { call });
+function listBox(value: unknown): JList {
+  if (!(value instanceof JList)) throw new Error("collector expected a list accumulator");
+  return value;
+}
+function stringBox(value: unknown): unknown[] {
+  if (!Array.isArray(value)) throw new Error("collector expected a string accumulator");
+  return value;
+}
 function collector(supplier: unknown, accumulator: unknown, combiner: unknown, finisher: unknown): JCollector {
   return Object.assign(new JCollector(), { supplier, accumulator, combiner, finisher });
 }
@@ -233,8 +241,8 @@ rt.register({
   name: "java/util/stream/Collectors", ctor: class extends JObj {},
   methods: {
     "static toList()Ljava/util/stream/Collector;": () => mkCollector(
-      () => newArrayList([]), (box, x) => { (box as JList).a.push(x); },
-      (left, right) => { (left as JList).a.push(...(right as JList).a); return left; }),
+      () => newArrayList([]), (box, x) => { listBox(box).a.push(x); },
+      (left, right) => { listBox(left).a.push(...listBox(right).a); return left; }),
     "static toSet()Ljava/util/stream/Collector;": () => mkCollector(
       () => rt.make("java/util/HashSet"),
       (box, x) => vcall(box, "add", "(Ljava/lang/Object;)Z", x),
@@ -251,15 +259,15 @@ rt.register({
         hostFunction(async (box) => apply1(finish, await apply1(await vcall(downstream, "finisher", "()Ljava/util/function/Function;"), box)))),
     "static joining(Ljava/lang/CharSequence;)Ljava/util/stream/Collector;": async (delimiter: unknown) => {
       const separator = await csText(delimiter);
-      return mkCollector(() => [] as string[], async (box, x) => { (box as string[]).push(await csText(x)); },
-        (left, right) => { (left as string[]).push(...(right as string[])); return left; }, (box) => (box as string[]).join(separator));
+      return mkCollector(() => [], async (box, x) => { stringBox(box).push(await csText(x)); },
+        (left, right) => { stringBox(left).push(...stringBox(right)); return left; }, (box) => stringBox(box).join(separator));
     },
     "static joining(Ljava/lang/CharSequence;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/util/stream/Collector;":
       async (delimiter: unknown, prefix: unknown, suffix: unknown) => {
         const [separator, before, after] = await Promise.all([csText(delimiter), csText(prefix), csText(suffix)]);
-        return mkCollector(() => [] as string[], async (box, x) => { (box as string[]).push(await csText(x)); },
-          (left, right) => { (left as string[]).push(...(right as string[])); return left; },
-          (box) => before + (box as string[]).join(separator) + after);
+        return mkCollector(() => [], async (box, x) => { stringBox(box).push(await csText(x)); },
+          (left, right) => { stringBox(left).push(...stringBox(right)); return left; },
+          (box) => before + stringBox(box).join(separator) + after);
       },
   },
 });

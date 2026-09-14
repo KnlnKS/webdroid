@@ -47,7 +47,8 @@ const names: Record<Mode, Record<Kind, string>> = {
 
 function wrap(value: unknown, mode: Mode, kind: Kind, mutex?: object, entries = false): JWrapper {
   if (value === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-  const wrapper = rt.make(names[mode][kind]) as JWrapper;
+  const wrapper = rt.make(names[mode][kind]);
+  if (!(wrapper instanceof JWrapper)) throw new Error("invalid collection wrapper registration");
   wrapper.delegate = value;
   wrapper.mode = mode;
   wrapper.kind = kind;
@@ -57,14 +58,16 @@ function wrap(value: unknown, mode: Mode, kind: Kind, mutex?: object, entries = 
 }
 
 function readOnlyIterator(iterator: unknown, entries: boolean): JReadOnlyIterator {
-  const out = rt.make("webdroid/UnmodifiableIterator") as JReadOnlyIterator;
+  const out = rt.make("webdroid/UnmodifiableIterator");
+  if (!(out instanceof JReadOnlyIterator)) throw new Error("invalid iterator wrapper registration");
   out.delegate = iterator;
   out.entries = entries;
   return out;
 }
 
 function readOnlyEntry(entry: unknown): JReadOnlyEntry {
-  const out = rt.make("webdroid/UnmodifiableEntry") as JReadOnlyEntry;
+  const out = rt.make("webdroid/UnmodifiableEntry");
+  if (!(out instanceof JReadOnlyEntry)) throw new Error("invalid entry wrapper registration");
   out.delegate = entry;
   return out;
 }
