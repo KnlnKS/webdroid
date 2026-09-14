@@ -9,7 +9,7 @@ import { OPS, FMT_LEN, insnLen, type Fmt } from "./opcodes";
 import { mangleMethod, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble, PRIM_ARRAYS, type PrimElem } from "./abi";
 import { ACC, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
-import { coldOp, runCold, type ColdMethod } from "./cold";
+import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
 import { jvmProfiler } from "./profile";
 
 const s4 = (v: number) => (v << 28) >> 28;
@@ -154,7 +154,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unkno
   const info = C.$i, rec = info.lazy![i], dex = info.dex!;
   const profileName = `${info.name}.${rec.name}${rec.desc}`;
   const target = rec.isStatic ? C : C.prototype;
-  const source = (prepared?: MethodCompiler) => emitMethod(R, dex, info, rec.m, !cold, prepared) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
+  const source = (prepared?: MethodCompiler, resumable = false) => emitMethod(R, dex, info, rec.m, !cold, prepared, resumable) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
   const compile = (src = source()) => {
     const started = jvmProfiler.enabled ? performance.now() : 0;
     new Function("C", "D", "R", "S", src)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined);
@@ -167,8 +167,39 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unkno
   if (jvmProfiler.tier === "js") return compile();
   // Captured direct/interface entries keep this cell; new virtual calls find the hot body.
   let calls = 0, hot: Function | undefined;
+  let osrCapable = false;
   let owner = R;
   while (owner.parent) owner = owner.parent;
+  const promote = (resumable: boolean): Function | undefined => {
+    if (hot) return !resumable || osrCapable ? hot : undefined;
+    // Rebuild preparation only for methods that actually promote. Retaining decoded CFGs for
+    // every cold async method costs substantially more heap than the saved promotion work.
+    const start = performance.now(), src = source(undefined, resumable);
+    jvmProfiler.bytes(profileName, src.length);
+    if (owner.hotSourceBytes + src.length > 32 * 1024 * 1024) {
+      calls = -Infinity;
+      cold!.promote = undefined;
+      perf.compileMs += performance.now() - start;
+      return undefined;
+    }
+    const compiled = compile(src);
+    owner.hotSourceBytes += src.length;
+    perf.compileMs += performance.now() - start;
+    if (typeof compiled !== "function") throw new Error("invalid compiled method");
+    hot = compiled; osrCapable = resumable; perf.hotMethods++; jvmProfiler.promoted(profileName);
+    cold = null;
+    return compiled;
+  };
+  if (jvmProfiler.tier !== "cold") {
+    cold.promote = (frame: ColdFrame, receiver: unknown, args: unknown[]) => {
+      const compiled = promote(true);
+      if (!compiled) return null;
+      perf.osrMethods++;
+      const osrArgs = args.slice();
+      osrArgs.push(frame);
+      return { kind: "osr", value: compiled.apply(receiver, osrArgs) };
+    };
+  }
   return target[rec.mangled] = function(this: unknown, ...args: unknown[]) {
     jvmProfiler.entry(profileName);
     if (hot) {
@@ -178,19 +209,9 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unkno
       return result;
     }
     if (++calls < 32 || jvmProfiler.tier === "cold") return runCold(cold!, this, args);
-    const start = performance.now(), src = source();
-    jvmProfiler.bytes(profileName, src.length);
-    if (owner.hotSourceBytes + src.length > 32 * 1024 * 1024) {
-      calls = -Infinity;
-      perf.compileMs += performance.now() - start;
-      return runCold(cold!, this, args);
-    }
-    const compiled = compile(src);
-    owner.hotSourceBytes += src.length;
-    perf.compileMs += performance.now() - start;
-    if (typeof compiled !== "function") throw new Error("invalid compiled method");
-    hot = compiled; cold = null; perf.hotMethods++; jvmProfiler.promoted(profileName);
-    return hot.apply(this, args);
+    const compiled = promote(false);
+    if (!compiled) return runCold(cold!, this, args);
+    return compiled.apply(this, args);
   };
 }
 
@@ -212,12 +233,12 @@ function emitNativeStub(dex: DexFile, info: ClassInfo, m: EncodedMethod): string
     `return ${v}.call(this${ps ? "," + ps : ""})};`;
 }
 
-function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, count = true, prepared?: MethodCompiler): string {
+function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, count = true, prepared?: MethodCompiler, resumable = false): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const code = dex.code(m.codeOff);
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   try {
-    const body = (prepared ?? new MethodCompiler(R, dex, info, code, isStatic, desc, name)).compile(count);
+    const body = (prepared ?? new MethodCompiler(R, dex, info, code, isStatic, desc, name)).compile(count, resumable);
     return `${holder(isStatic)}.${mangled} = ${body};`;
   } catch (e) {
     const msg = `compile error ${info.name}.${name}${desc}: ${e}`;
@@ -312,13 +333,16 @@ class MethodCompiler {
     if (jvmProfiler.enabled) jvmProfiler.add(profileName, "coldBuild", performance.now() - started);
     return { name: profileName, R: this.R, D: this.R.dexLink(this.dex), S: this.info.superInfo?.ctor,
       regs: this.code.regs, first: this.code.regs - this.code.ins, instance: !this.isStatic,
+      hotness: 0, profiledInstructions: 0,
       widths: parseMethodDesc(this.desc).params.map((p) => isWide(p) ? 2 : 1), ops,
       catches: this.code.tries.map((t) => ({ start: t.start, end: t.end, all: t.catchAllAddr,
         handlers: t.handlers.map(([type, pc]) => [descToName(this.dex.type(type)), pc]) })) };
   }
 
-  compile(count = true): string {
+  compile(count = true, resumable = false): string {
     this.prepare();
+    this.cold = false;
+    this.resumes = 0;
     const started = jvmProfiler.enabled ? performance.now() : 0;
     if (count) { if (this.sync) perf.syncMethods++; else perf.asyncMethods++; }
     const blocks: string[] = [];
@@ -337,21 +361,30 @@ class MethodCompiler {
     let reg = regs - ins;
     const jsParams: string[] = [];
     const paramInit: string[] = [];
+    const paramAssign: string[] = [];
     const paramRegs = new Set<number>();
-    if (!this.isStatic) { paramInit.push(`let v${reg}=this;`); paramRegs.add(reg); reg++; }
+    if (!this.isStatic) { paramInit.push(`let v${reg}=this;`); paramAssign.push(`v${reg}=this;`); paramRegs.add(reg); reg++; }
     for (let i = 0; i < params.length; i++) {
       jsParams.push(`p${i}`);
       paramInit.push(`let v${reg}=p${i};`);
+      paramAssign.push(`v${reg}=p${i};`);
       paramRegs.add(reg);
       reg += isWide(params[i]) ? 2 : 1;
     }
     const decls: string[] = [];
     for (let i = 0; i < regs; i++) if (!paramRegs.has(i)) decls.push(`v${i}`);
     const declStr = decls.length ? `let ${decls.join(",")};` : "";
+    const resumeDecls = [...Array.from({ length: regs }, (_, i) => `v${i}`), "$t", "$u", "$ex", "$fu", "pc", "$th", "$s=0", "$resume=0", "$p"].join(",");
+    const resumeRegs = Array.from({ length: regs }, (_, i) => `v${i}=$F.v[${i}];`).join("");
+    const init = resumable ? `let ${resumeDecls};` +
+      `if(arguments.length>${jsParams.length}){const $F=arguments[${jsParams.length}];${resumeRegs}` +
+      `$t=$F.$t;$u=$F.$u;$ex=$F.$ex;$fu=$F.$fu;pc=$F.next;$th=$F.$th;$s=$F.$osrS;}` +
+      `else{${paramAssign.join("")}pc=0;$th=R.th();}` :
+      `${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0;${this.sync ? "" : "const $th=R.th();let $s=0,$resume=0,$p;"}`;
 
     const catchBody = this.hasTries ? this.emitCatch() : this.leave() + "throw $e;";
     const source = `${this.sync ? "function" : "async function"}(${jsParams.join(",")}){
-${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0;${this.sync ? "" : "const $th=R.th();let $s=0,$resume=0,$p;"}
+${init}
 for(;;){
 try{${this.sync ? "switch(pc)" : "$dispatch:switch($resume>0?-$resume:pc)"}{
 ${blocks.join("\n")}

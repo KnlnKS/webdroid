@@ -3,6 +3,7 @@ import { Runtime, JObj } from "../src/jvm/runtime";
 import { DexFile } from "../src/jvm/dex";
 import { mangleMethod, descToName } from "../src/jvm/abi";
 import { setLazyMethods } from "../src/jvm/compiler";
+import { perf } from "../src/perf";
 
 const bytes = new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/JvmTierProbe.dex").arrayBuffer());
 const modes = ["hot", "cold", "promoted", "denied"] as const;
@@ -135,4 +136,14 @@ test("DEX backedges yield and captured direct/interface entries follow promotion
       expect(await direct.call(instance, i)).toBe(i * 2);
     }
   }
+});
+
+test("DEX promotes a long-running cold activation at a yielded backedge", async () => {
+  const f = await fixture("cold"), loop = f.fn("loop", "(I)I");
+  const before = perf.osrMethods;
+  f.R.fuel = 0;
+  f.R.refuel = () => { f.R.fuel = 128; return Promise.resolve(); };
+  expect(await loop(2000)).toBe(1_999_000);
+  expect(perf.osrMethods).toBe(before + 1);
+  expect(await loop(9)).toBe(36);
 });

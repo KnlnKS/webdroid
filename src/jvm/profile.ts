@@ -25,12 +25,13 @@ export interface JvmMethodProfile {
   suspendMs: number;
 }
 
-const MAX_METHODS = 512;
+const MAX_METHODS = 8192;
 const records = new Map<string, JvmMethodProfile>();
 const dropped = new Set<string>();
 let enabled = false;
 let requestedTier: JvmTier = "auto";
 let tier: Exclude<JvmTier, "wasm"> = "auto";
+let hotThreshold = 4096;
 
 const phaseCounter = {
   decode: "jvmDecodeMs",
@@ -80,10 +81,11 @@ function record(name: string): JvmMethodProfile | undefined {
   return value;
 }
 
-export function configureJvm(options: { profile: boolean; tier: JvmTier }): void {
+export function configureJvm(options: { profile: boolean; tier: JvmTier; hotThreshold?: number }): void {
   enabled = options.profile;
   requestedTier = options.tier;
   tier = options.tier === "wasm" ? "auto" : options.tier;
+  hotThreshold = options.hotThreshold ?? 4096;
 }
 
 export function parseJvmTier(value: string | null): JvmTier {
@@ -97,6 +99,7 @@ export function parseJvmTier(value: string | null): JvmTier {
 export const jvmProfiler = {
   get enabled(): boolean { return enabled; },
   get tier(): Exclude<JvmTier, "wasm"> { return tier; },
+  get hotThreshold(): number { return hotThreshold; },
   entry(name: string): void { const r = record(name); if (r) r.entries++; },
   backedge(name: string, instructions: number): void {
     const r = record(name);

@@ -18,8 +18,9 @@ const { values } = parseArgs({ options: {
   out: { type: "string" }, gpu: { type: "string", default: "software" }, probe: { type: "boolean", default: false },
   ms: { type: "string", default: "15000" }, warmup: { type: "string", default: "3000" },
   "align-presentation": { type: "boolean", default: false },
-  "jvm-profile": { type: "boolean", default: false }, "jvm-tier": { type: "string", default: "auto" },
+  "jvm-profile": { type: "boolean", default: false }, "jvm-tier": { type: "string", default: "auto" }, "jvm-hotness": { type: "string", default: "4096" },
   interval: { type: "string" }, "exercise-once": { type: "boolean", default: false }, "setup-shots": { type: "boolean", default: false },
+  "setup-settle-cap": { type: "string" },
 } });
 const flow = FLOWS.find((f) => f.app === values.flow);
 if (!flow || !values.after || !values.out) throw new Error("Required: --flow <flow> --after <step> --out <file.json>");
@@ -33,7 +34,10 @@ if (after < 0) throw new Error("Unknown setup step");
 const gpu = values.gpu;
 if (gpu !== "software" && gpu !== "hardware") throw new Error("--gpu must be software or hardware");
 if (!values["jvm-tier"] || !["auto", "cold", "js", "wasm"].includes(values["jvm-tier"])) throw new Error("--jvm-tier must be auto, cold, js or wasm");
+if (!values["jvm-hotness"] || !["1024", "4096", "16384"].includes(values["jvm-hotness"])) throw new Error("--jvm-hotness must be 1024, 4096 or 16384");
 const ms = Number(values.ms), warmup = Number(values.warmup);
+const setupSettleCap = values["setup-settle-cap"] === undefined ? undefined : Number(values["setup-settle-cap"]);
+if (setupSettleCap !== undefined && (!Number.isFinite(setupSettleCap) || setupSettleCap < 0 || setupSettleCap > 60000)) throw new Error("Invalid setup settle cap");
 const interval = values.interval === undefined ? undefined : Number(values.interval);
 if (interval !== undefined && !(interval > 0 && interval <= 60000)) throw new Error("Invalid input interval");
 if (!(ms > 0 && ms <= 60000 && warmup >= 0 && warmup <= 60000)) throw new Error("Invalid measurement duration");
@@ -74,6 +78,7 @@ try {
   url.searchParams.set("screen", screenParam(screen));
   if (values["jvm-profile"]) url.searchParams.set("jvmProfile", "1");
   if (values["jvm-tier"] !== "auto") url.searchParams.set("jvmTier", values["jvm-tier"]);
+  if (values["jvm-hotness"] !== "4096") url.searchParams.set("jvmHotness", values["jvm-hotness"]);
   await page.goto(url.href, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => !!globalThis.wd);
   await page.evaluate(() => document.fonts.ready);
@@ -84,7 +89,7 @@ try {
     const started = performance.now();
     const hit = await page.evaluate(performAction, { a: actOf(flow, step, rec), screen, deadlineMs: 60000 });
     const actionMs = performance.now() - started;
-    await page.waitForTimeout(step.settleDelayMs ?? 500);
+    await page.waitForTimeout(setupSettleCap === undefined ? step.settleDelayMs ?? 500 : Math.min(step.settleDelayMs ?? 500, setupSettleCap));
     const setupMs = performance.now() - started;
     const perf = values["setup-shots"] ? await page.evaluate(() => ({ ...globalThis.wd.perf })) : undefined;
     setup.push({ step: step.id, ms: setupMs, actionMs, hit, ...(perf ? { perf } : {}) });
@@ -271,7 +276,7 @@ try {
   await mkdir(dirname(values.out), { recursive: true });
   await page.screenshot({ path: values.out.replace(/\.json$/, "") + ".png" });
   const output = { flow: flow.app, after: values.after, exercise: values.exercise, url: url.href, browser: browser.version(),
-    gpu, gpuInfo: gpuInfo.gpu, probe: values.probe, screen, warmup, setup, result, alive, tree, metrics, heapBefore, heapAfter, processes, errors,
+    gpu, gpuInfo: gpuInfo.gpu, probe: values.probe, screen, warmup, setup, setupSettleCap, result, alive, tree, metrics, heapBefore, heapAfter, processes, errors,
     ...(jvmProfile ? { jvmProfile } : {}),
     stateBefore: startState === undefined ? stateBefore : result.stateBefore, stateAfter, inputOffsets, startExercise: values["start-exercise"], stateReader: values["state-reader"],
     ...(startState !== undefined ? { startState, stateWaitMs: result.stateWaitMs } : {}),

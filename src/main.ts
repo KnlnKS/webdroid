@@ -30,7 +30,9 @@ import { provisionPackages, provisionServices } from "./shell/provision";
 import { connectProcess, registerForegroundProcess, processPresentation, processBroker } from "./shell/processes";
 
 const params = new URLSearchParams(location.search);
-configureJvm({ profile: params.get("jvmProfile") === "1", tier: parseJvmTier(params.get("jvmTier")) });
+const hotThreshold = Number(params.get("jvmHotness") ?? 4096);
+if (![1024, 4096, 16384].includes(hotThreshold)) throw new Error(`invalid jvmHotness ${hotThreshold}`);
+configureJvm({ profile: params.get("jvmProfile") === "1", tier: parseJvmTier(params.get("jvmTier")), hotThreshold });
 const resetPerf = (): void => { perfReset(); jvmProfiler.reset(); };
 
 const root = document.getElementById("root")!;

@@ -3,14 +3,15 @@ import { perf } from "../perf";
 import { descToName } from "./abi";
 import { jvmProfiler } from "./profile";
 
-interface Frame {
+export interface ColdFrame {
   R: Runtime; D: ReturnType<Runtime["dexLink"]>; S: unknown;
   v: unknown[]; next: number; done: boolean; value: unknown;
-  $t: unknown; $u: unknown; $ex: unknown; $fu: unknown; $th: unknown; $s: number;
+  $t: unknown; $u: unknown; $ex: unknown; $fu: unknown; $th: unknown; $s: number; $osrS: number;
 }
-type Handler = { kind: "sync"; run: (frame: Frame, constants: unknown[]) => void } |
-  { kind: "suspend"; run: (frame: Frame, constants: unknown[]) => Generator<Promise<unknown>, void, unknown> };
+type Handler = { kind: "sync"; run: (frame: ColdFrame, constants: unknown[]) => void } |
+  { kind: "suspend"; run: (frame: ColdFrame, constants: unknown[]) => Generator<Promise<unknown>, void, unknown> };
 type ColdOp = Handler & { constants: unknown[]; next: number; method?: number };
+export interface OsrHandoff { kind: "osr"; value: unknown; }
 export interface ColdMethod {
   /** "pkg/Class.method(desc)": the frame an exception unwinding through here is noted under */
   name: string;
@@ -18,6 +19,9 @@ export interface ColdMethod {
   regs: number; first: number; instance: boolean; widths: number[];
   ops: Map<number, ColdOp>;
   catches: { start: number; end: number; handlers: [string, number][]; all: number }[];
+  hotness: number;
+  profiledInstructions: number;
+  promote?: (frame: ColdFrame, receiver: unknown, args: unknown[]) => OsrHandoff | null;
 }
 const handlers = new Map<string, Handler>();
 
@@ -55,8 +59,8 @@ export async function runCold(method: ColdMethod, receiver: unknown, args: unkno
   const profiled = jvmProfiler.enabled;
   const started = profiled ? performance.now() : 0;
   const { R, D, S } = method;
-  const f: Frame = { R, D, S, v: new Array(method.regs), next: 0, done: false, value: undefined,
-    $t: undefined, $u: undefined, $ex: undefined, $fu: undefined, $th: R.th(), $s: 0 };
+  const f: ColdFrame = { R, D, S, v: new Array(method.regs), next: 0, done: false, value: undefined,
+    $t: undefined, $u: undefined, $ex: undefined, $fu: undefined, $th: R.th(), $s: 0, $osrS: 0 };
   let reg = method.first;
   if (method.instance) f.v[reg++] = receiver;
   for (let i = 0; i < args.length; i++) { f.v[reg] = args[i]; reg += method.widths[i]; }
@@ -65,12 +69,14 @@ export async function runCold(method: ColdMethod, receiver: unknown, args: unkno
       const pc = f.next, op = method.ops.get(pc);
       if (!op) throw new Error("bad pc " + pc);
       f.next = op.next;
+      let yielded = false;
       try {
         if (op.kind === "sync") op.run(f, op.constants);
         else {
           const iterator = op.run(f, op.constants);
           let step = iterator.next();
           while (!step.done) {
+            yielded = true;
             R.su(f.$th); f.$s = 1;
             let value: unknown;
             const suspended = profiled ? performance.now() : 0;
@@ -100,6 +106,16 @@ export async function runCold(method: ColdMethod, receiver: unknown, args: unkno
         }
         if (handler < 0) { noteFrame(e, method.name); throw e; }
         f.$ex = e; f.next = handler;
+      }
+      method.hotness++;
+      if (f.next <= pc) {
+        jvmProfiler.backedge(method.name, method.hotness - method.profiledInstructions);
+        method.profiledInstructions = method.hotness;
+        if (yielded && method.hotness >= jvmProfiler.hotThreshold && method.promote) {
+          f.$osrS = f.$s;
+          const handoff = method.promote(f, receiver, args);
+          if (handoff) { f.$s = 0; return await handoff.value; }
+        }
       }
     }
     return f.value;
