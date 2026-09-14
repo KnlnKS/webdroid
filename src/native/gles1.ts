@@ -8,7 +8,7 @@
 import { mem } from "./mem";
 import { hostLib, calledMissing, cstr, type HostFn, type HostRet, type ArgReader, bitsf } from "./host";
 import type { Cpu } from "./cpu";
-import { glCommon, glProbe } from "./gles3";
+import { glCommon, glProbe, readGuestPixels } from "./gles3";
 import { gl } from "../android/gl";
 import { perf } from "../perf";
 import { activateEglCurrent } from "./egl-current";
@@ -463,10 +463,7 @@ export function gles1Init(): void {
     glGetBufferParameteriv: W("glGetBufferParameteriv", (c, a) => { const t = a.i(), pn = a.i(), out = a.p(); mem.st32(out, Number(c.gl.getBufferParameter(t, pn)) | 0); }),
     glReadPixels: W("glReadPixels", (c, a) => {
       const x = a.i(), y = a.i(), w = a.i(), h = a.i(), fmt = a.i(), type = a.i(), p = a.p();
-      const bpp = fmt === 0x1908 ? 4 : fmt === 0x1907 ? 3 : 1;
-      const n = w * h * (type === 0x1401 ? bpp : 2);
-      const view = type === 0x1401 ? mem.u8.subarray(p, p + n) : new Uint16Array(mem.buf, p, n >> 1);
-      c.gl.readPixels(x, y, w, h, fmt, type, view);
+      readGuestPixels(c.gl, x, y, w, h, fmt, type, p);
     }),
   };
   const I = (a: ArgReader) => a.i(), LD = (a: ArgReader) => mem.ld32(a.p());

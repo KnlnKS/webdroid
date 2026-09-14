@@ -4,6 +4,65 @@ import { mangleStaticField, mangleMethod } from "../../src/jvm/abi";
 import { JThread, setCurThread, mainThread, curThread, vcallMaybe, vcallOn } from "../../src/jvm/natives/jlang";
 import { gl, tables } from "../../src/android/gl";
 import { glSurfaces } from "../../src/native/egl-current";
+import { EglContext } from "../../src/android/glview";
+import { mem } from "../../src/native/mem";
+import { Cpu, setA64 } from "../../src/native/cpu";
+import { jitStats, JIT_HEAT } from "../../src/native/core";
+import { RET_SENTINEL } from "../../src/native/abi";
+import { gles1Init } from "../../src/native/gles1";
+import { gles3Init } from "../../src/native/gles3";
+import { hostFn, type ArgReader } from "../../src/native/host";
+
+function readback() {
+  setA64(false); gles1Init(); gles3Init();
+  const context = new EglContext();
+  context.makeCurrent({ view: null, width: 4, height: 4, present: null, frames: 0 });
+  const g = context.gl!, cpu = new Cpu(mainThread, "readback");
+  const base = mem.reserve(0x3000, 0x1000);
+  const execute = (at: number) => {
+    cpu.w.fill(0); cpu.cpsr = 0; cpu.w[28] = RET_SENTINEL; cpu.setPc(at);
+    for (let i = 0; i < 8; i++) if (cpu.runSlice(100) === 2) return cpu.w[0];
+    throw new Error("Readback code did not return");
+  };
+  const init = (at: number) => { mem.st32(at, 0xe3a00001); mem.st32(at + 4, 0xe12fff1e); };
+  const read = (lib: string, values: number[]) => {
+    let i = 0;
+    const next = () => values[i++] ?? 0;
+    const args: ArgReader = { i: next, p: next, u: next, va: () => BigInt(next()), l: () => BigInt(next()), ul: () => BigInt(next()),
+      f: next, d: next, vd: next, str: () => "", strAt: () => "" };
+    const fn = hostFn(lib, "glReadPixels");
+    if (!fn) throw new Error("Missing native glReadPixels");
+    fn(cpu, args);
+  };
+  const fbo = g.createFramebuffer(), rgba = g.createTexture();
+  g.bindTexture(g.TEXTURE_2D, rgba); g.texStorage2D(g.TEXTURE_2D, 1, g.RGBA8, 1, 2);
+  g.bindFramebuffer(g.FRAMEBUFFER, fbo);
+  g.framebufferTexture2D(g.FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, rgba, 0);
+  g.clearColor(2 / 255, 0, 160 / 255, 227 / 255); g.clear(g.COLOR_BUFFER_BIT);
+  const at = base + 4092;
+  init(at); init(at + 16);
+  const regions = jitStats.regions;
+  for (let i = 0; i <= JIT_HEAT; i++) { execute(at); execute(at + 16); }
+  const compiled = jitStats.regions >= regions + 2;
+  const before = [execute(at), execute(at + 16)];
+  g.pixelStorei(g.PACK_ROW_LENGTH, 4); g.pixelStorei(g.PACK_SKIP_ROWS, 1); g.pixelStorei(g.PACK_SKIP_PIXELS, 1);
+  read("libGLESv2.so", [0, 0, 1, 2, g.RGBA, g.UNSIGNED_BYTE, at - 20]);
+  const after = [execute(at), execute(at + 16)], error = g.getError();
+  g.pixelStorei(g.PACK_ROW_LENGTH, 0); g.pixelStorei(g.PACK_SKIP_ROWS, 0); g.pixelStorei(g.PACK_SKIP_PIXELS, 0);
+  g.pixelStorei(g.PACK_ALIGNMENT, 8);
+  init(base); init(base + 8);
+  for (let i = 0; i <= JIT_HEAT; i++) { execute(base); execute(base + 8); }
+  read("libGLESv1_CM.so", [0, 0, 1, 2, g.RGBA, g.UNSIGNED_BYTE, base]);
+  const es1 = [execute(base), execute(base + 8)], es1Error = g.getError();
+  const texture = g.createTexture(); g.bindTexture(g.TEXTURE_2D, texture);
+  g.texStorage2D(g.TEXTURE_2D, 1, g.R32UI, 1, 1);
+  g.framebufferTexture2D(g.FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, texture, 0);
+  g.clearBufferuiv(g.COLOR, 0, Uint32Array.of(0x12345678, 0, 0, 0));
+  read("libGLESv2.so", [0, 0, 1, 1, g.RED_INTEGER, g.UNSIGNED_INT, base + 33]);
+  const unaligned = mem.ld32(base + 33), integerError = g.getError();
+  g.deleteFramebuffer(fbo); g.deleteTexture(texture); g.deleteTexture(rgba); context.makeCurrent(null);
+  return { compiled, before, after, error, es1, es1Error, unaligned, integerError };
+}
 
 async function probe() {
   rt.linkNatives();
@@ -67,6 +126,6 @@ async function probe() {
   });
   await Reflect.apply(Reflect.get(view, "runFrame"), view, []);
   return { callbacks, bound10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
-    firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null };
+    firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null, readback: readback() };
 }
 Object.defineProperty(window, "eglThreadProbe", { value: probe() });

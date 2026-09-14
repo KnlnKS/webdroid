@@ -4,7 +4,7 @@
 // Java GLES20 bindings. Pointer arguments are guest memory, or offsets while a pixel or element
 // buffer is bound, as in GL.
 
-import { mem } from "./mem";
+import { mem, wrote } from "./mem";
 import { hostLib, cstr, PTR, ldp, stp, calledMissing, type HostFn, type ArgReader } from "./host";
 import { gl as current, tables as T, put } from "../android/gl";
 import { yieldToLoop } from "./cpu";
@@ -166,13 +166,37 @@ const i32 = (p: number, n: number) => view(Int32Array, p, n);
 const u32 = (p: number, n: number) => view(Uint32Array, p, n);
 const f32 = (p: number, n: number) => view(Float32Array, p, n);
 const u8 = (p: number, n: number) => mem.u8.subarray(p, p + n);
-/** the typed view GL's pixel `type` implies, from p to the end of guest memory: WebGL reads what
- *  the size, format and unpack state need and only checks that the view is at least that long */
-function pixels(type: number, p: number): ArrayBufferView {
-  const K: Ctor<ArrayBufferView> = type === 0x1406 ? Float32Array : type === 0x1404 ? Int32Array : type === 0x1402 ? Int16Array : type === 0x1400 ? Int8Array
+function pixelArray(type: number): Ctor<ArrayBufferView> {
+  return type === 0x1406 ? Float32Array : type === 0x1404 ? Int32Array : type === 0x1402 ? Int16Array : type === 0x1400 ? Int8Array
     : type === 0x1401 ? Uint8Array : (type === 0x1403 || type === 0x140b || type === 0x8d61 || type === 0x8033 || type === 0x8034 || type === 0x8363) ? Uint16Array : Uint32Array;
+}
+/** Uploads expose the remaining memory; WebGL checks the extent required by unpack state. */
+function pixels(type: number, p: number): ArrayBufferView {
+  const K = pixelArray(type);
   const n = Math.floor((mem.u8.length - p) / K.BYTES_PER_ELEMENT);
   return p % K.BYTES_PER_ELEMENT ? new K(mem.u8.slice(p, p + Math.min(n, 1 << 26) * K.BYTES_PER_ELEMENT).buffer) : new K(mem.buf, p, n);
+}
+export function readGuestPixels(gl: WebGLRenderingContext | WebGL2RenderingContext, x: number, y: number, w: number, h: number, format: number, type: number, p: number): void {
+  const K = pixelArray(type), element = K.BYTES_PER_ELEMENT;
+  const channels = format === 0x1908 || format === 0x8d99 ? 4 : format === 0x1907 || format === 0x8d98 ? 3
+    : format === 0x190a || format === 0x8227 || format === 0x8228 ? 2
+    : [0x1902, 0x1903, 0x1906, 0x1909, 0x8d94].includes(format) ? 1 : 0;
+  const packed = [0x8033, 0x8034, 0x8363].includes(type) ? 2
+    : [0x8368, 0x8c3b, 0x8c3e, 0x84fa].includes(type) ? 4 : type === 0x8dad ? 8 : 0;
+  const bytes = packed || channels * element;
+  if (!bytes || w <= 0 || h <= 0) { gl.readPixels(x, y, w, h, format, type, pixels(type, p)); return; }
+  const extended = "PACK_ROW_LENGTH" in gl;
+  const rowLength = extended ? Number(gl.getParameter(0x0d02)) || w : w;
+  const alignment = Number(gl.getParameter(gl.PACK_ALIGNMENT));
+  const stride = Math.ceil(rowLength * bytes / alignment) * alignment;
+  const skip = extended ? Number(gl.getParameter(0x0d03)) * stride + Number(gl.getParameter(0x0d04)) * bytes : 0;
+  const size = skip + (h - 1) * stride + w * bytes;
+  const data = view(K, p, Math.floor(Math.min(size, mem.u8.length - p) / element));
+  gl.readPixels(x, y, w, h, format, type, data);
+  // A short destination is rejected by WebGL. Padding and skipped pixels are never written.
+  if (size > data.byteLength) return;
+  if (data.buffer !== mem.buf) mem.u8.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), p);
+  for (let row = 0; row < h; row++) wrote(p + skip + row * stride, w * bytes);
 }
 const texData = (type: number, p: number): unknown => (unpackPbo ? p : p ? pixels(type, p) : null);
 /** GL's (bufsize, *length, char *buf) out-string */
@@ -601,7 +625,7 @@ export function gles3Init(): void {
     glReadBuffer: (_c, a) => g().readBuffer(a.i()),
     glReadPixels: (_c, a) => {
       const x = a.i(), y = a.i(), w = a.i(), h = a.i(), f = a.i(), ty = a.i(), p = a.p();
-      if (packPbo) { g().readPixels(x, y, w, h, f, ty, p); syncVertexBuffer(g().getParameter(0x88ed)); } else g().readPixels(x, y, w, h, f, ty, pixels(ty, p));
+      if (packPbo) { g().readPixels(x, y, w, h, f, ty, p); syncVertexBuffer(g().getParameter(0x88ed)); } else readGuestPixels(g(), x, y, w, h, f, ty, p);
     },
     glBindRenderbuffer: (_c, a) => g().bindRenderbuffer(a.i(), H(T().rbos, a.i())),
     glRenderbufferStorage: (_c, a) => g().renderbufferStorage(a.i(), a.i(), a.i(), a.i()),
