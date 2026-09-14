@@ -194,6 +194,10 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
         cpu.cover(page, pc, pc + 2);
         return .{ .len = 4, .ends = false };
     }
+    if ((h & 0xf800) >= 0xe800) {
+        cpu.cover(page, pc, pc + 2);
+        return .{ .len = 4, .ends = false };
+    }
     switch (h >> 12) {
         4 => if ((h & 0xfc00) == 0x4400) {
             const o = (h >> 8) & 3;
@@ -660,6 +664,10 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
     const wideAddress = h & 0xfbe0;
     const wideTransfer = (((h & 0xff80) == 0xf880 or (h & 0xff80) == 0xf800) and ((h >> 5) & 3) < 3);
     if (wideMove == 0xf240 or wideMove == 0xf2c0 or wideAddress == 0xf200 or wideAddress == 0xf2a0 or wideTransfer or (h & 0xfff0) == 0xf840 or (h & 0xfff0) == 0xf850) {
+        e.fallback(pc, k);
+        return false;
+    }
+    if ((h & 0xf800) >= 0xe800) {
         e.fallback(pc, k);
         return false;
     }

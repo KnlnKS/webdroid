@@ -862,6 +862,26 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
             return .next;
         }
     }
+    if ((h & 0xff80) == 0xfb80) {
+        const h2: u32 = ld(u16, pc + 2);
+        const op = (h >> 4) & 7;
+        if (op & 1 == 0 and h2 & 0x00f0 == 0) {
+            const lo = h2 >> 12;
+            const hi = (h2 >> 8) & 15;
+            const n = h & 15;
+            const m = h2 & 15;
+            if (lo == 15 or hi == 15 or lo == hi or n == 15 or m == 15) return fault(c, .undefined, h << 16 | h2, pc);
+            var product: u64 = if (op == 0 or op == 4)
+                @bitCast(@as(i64, @as(i32, @bitCast(r(c, n)))) *% @as(i64, @as(i32, @bitCast(r(c, m)))))
+            else
+                @as(u64, r(c, n)) *% @as(u64, r(c, m));
+            if (op >= 4) product +%= (@as(u64, r(c, hi)) << 32) | r(c, lo);
+            c.pc = pc + 4;
+            set(c, lo, @truncate(product));
+            set(c, hi, @intCast(product >> 32));
+            return .next;
+        }
+    }
     if ((h & 0xfe00) == 0xea00) {
         const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0x8000 != 0) return fault(c, .undefined, h << 16 | h2, pc);
