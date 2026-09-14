@@ -2691,3 +2691,9 @@ The API 35 SDK confirms the static signature and capability flags. With that que
 Maps' unchanged ExoPlayer selects tracks and presents hundreds of decoded video frames; a
 Chrome screenshot shows changing video content. The visible seek control still draws a
 spinner: the native SeekBar inherits indeterminate ProgressBar drawing and discards its thumb.
+
+The seek track resource contains ScaleDrawables. Their XML and platform constructor now
+size children from level, scale fractions and gravity, preserving virtual bounds/draw calls.
+A focused test covers zero/half/full levels, bottom/right positioning and suspended callbacks;
+typecheck passes. SeekBar still needs to load and draw this resource instead of its inherited
+indeterminate spinner.

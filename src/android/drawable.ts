@@ -8,6 +8,8 @@ import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { uptimeMillis } from "./os";
 import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV } from "./res";
+import { absGravity, gravityApply } from "./gravity";
+import { complexToFraction } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 
 export const ST = {
@@ -1000,6 +1002,40 @@ rt.register({
     ...stubs(null, "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;"),
   },
 });
+class JScaleDrawable extends JDrawableWrapper {
+  scaleWidth = -1; scaleHeight = -1; gravity = 3; useIntrinsicMinimum = false;
+  scaled = new JRect();
+  async layout() {
+    const child = this.dr;
+    if (!child) return;
+    const thread = curThread, b = this.bounds;
+    let w = b.right - b.left, h = b.bottom - b.top;
+    if (this.scaleWidth > 0) {
+      const min = this.useIntrinsicMinimum ? Number(await drawableSize(child, false, thread)) : 0;
+      w -= Math.trunc((w - min) * (10000 - this.level) * this.scaleWidth / 10000);
+    }
+    if (this.scaleHeight > 0) {
+      const min = this.useIntrinsicMinimum ? Number(await drawableSize(child, true, thread)) : 0;
+      h -= Math.trunc((h - min) * (10000 - this.level) * this.scaleHeight / 10000);
+    }
+    gravityApply(absGravity(this.gravity, this.layoutDir), w, h, b, 0, 0, this.scaled);
+    if (w > 0 && h > 0) await vcallOn(thread, child, "setBounds", "(IIII)V", this.scaled.left, this.scaled.top, this.scaled.right, this.scaled.bottom);
+  }
+}
+rt.register({ name: "android/graphics/drawable/ScaleDrawable", ctor: JScaleDrawable, sup: "android/graphics/drawable/DrawableWrapper", methods: {
+  "<init>(Landroid/graphics/drawable/Drawable;IFF)V": function (this: JScaleDrawable, d: JDrawable | null, gravity: number, w: number, h: number) {
+    this.gravity = gravity; this.scaleWidth = w; this.scaleHeight = h; wrapSet.call(this, d);
+    return this.layout();
+  },
+  "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JScaleDrawable) { return this.layout(); },
+  "onLevelChange(I)Z": async function (this: JScaleDrawable, level: number) {
+    if (this.dr) await vcall(this.dr, "setLevel", "(I)Z", level);
+    await this.layout(); invalidateSelf.call(this); return 1;
+  },
+  "draw(Landroid/graphics/Canvas;)V": function (this: JScaleDrawable, canvas: JCanvas) {
+    if (this.dr && this.dr.level !== 0) return drawChild(this.dr, canvas);
+  },
+} });
 // ── android.graphics.drawable.shapes + ShapeDrawable: a Shape is resized to the drawable's
 // bounds and painted with the drawable's own Paint (translated to the bounds origin, as AOSP).
 class JShape extends JObj {
@@ -1211,7 +1247,7 @@ const AT = attrTable(
   "endColor", "angle", "type", "gradientRadius", "src", "alpha", "tint", "viewportWidth",
   "viewportHeight", "pathData", "fillColor", "strokeColor", "strokeWidth", "fillAlpha", "fillType",
   "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
-  "gravity", "oneshot", "duration");
+  "gravity", "oneshot", "duration", "scaleWidth", "scaleHeight", "useIntrinsicSizeAsMinimum", "level");
 async function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): Promise<JDrawable> {
   const root = parseAXML(bytes);
   return inflateDrawableNode(res, root, theme);
@@ -1273,6 +1309,17 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
           d.padding.bottom = rvDimen(res, cg(AT.bottom), 0);
         }
       }
+      return d;
+    }
+    case "scale": {
+      const d = new JScaleDrawable();
+      const fraction = (v: RV | null) => v?.t === TV.FRACTION ? complexToFraction(v.d, 1, 1)
+        : v?.s?.endsWith("%") ? Number.parseFloat(v.s) / 100 : -1;
+      d.scaleWidth = fraction(get(AT.scaleWidth)); d.scaleHeight = fraction(get(AT.scaleHeight));
+      d.gravity = xmlInt(res, get(AT.gravity), 3);
+      d.useIntrinsicMinimum = !!xmlInt(res, get(AT.useIntrinsicSizeAsMinimum), 0);
+      d.level = xmlInt(res, get(AT.level), 0);
+      wrapSet.call(d, await itemDrawable(res, node, theme));
       return d;
     }
     case "selector": {
