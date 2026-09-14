@@ -2729,3 +2729,11 @@ its media controls by -258 pixels, so the reported bounds and named taps were di
 The shared walk now includes each ancestor's translation. A fresh named Pause tap reaches
 the visible control and changes it to Play. Scale/rotation-aware inspection bounds remain
 outside this change.
+
+A clean paused-media profile still showed a layout every frame. The existing layout tracer
+identified Maps' pre-draw callback repeatedly setting identical padding. View.setPadding now
+matches AOSP internalSetPadding's change check. In comparable fresh Chrome Pause captures,
+layout passes fell from 295 to 1 and layout time from 844 ms to 18 ms (2.42 s versus 2.38 s
+capture windows); frame drawing remains active because an app animator is still running.
+The measurement-cache test checks repeated unchanged padding and a real subsequent change;
+typecheck passes. The clean-source capture is chrome-video-padding-fixed.json.

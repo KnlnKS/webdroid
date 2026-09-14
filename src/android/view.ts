@@ -1542,6 +1542,7 @@ const viewMethods: NativeSpec["methods"] = {
 };
 
 function setPadding(this: JView, l: number, t: number, r: number, b: number) {
+  if (this.padL === l && this.padT === t && this.padR === r && this.padB === b) return;
   this.padL = l; this.padT = t; this.padR = r; this.padB = b;
   requestLayout(this);
 }

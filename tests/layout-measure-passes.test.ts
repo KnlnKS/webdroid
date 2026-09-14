@@ -3,7 +3,7 @@ import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
-import { JView, makeSpec, measureView, MS_AT_MOST, MS_EXACTLY, resolveSizeAndState } from "../src/android/view";
+import { JView, makeSpec, measureView, layoutView, MS_AT_MOST, MS_EXACTLY, resolveSizeAndState } from "../src/android/view";
 
 rt.linkNatives();
 const onMeasure = mangleMethod("onMeasure", "(II)V");
@@ -61,4 +61,25 @@ test("an all-match-parent linear layout retains the available cross dimension", 
   await add(row, child, "LinearLayout", 40, -1);
   await measureView(row, makeSpec(300, MS_AT_MOST), makeSpec(200, MS_AT_MOST));
   expect([row.measuredW, row.measuredH, child.measuredH]).toEqual([40, 200, 200]);
+});
+
+test("unchanged padding preserves measurement caches while changed padding remeasures", async () => {
+  const view = rt.make("android/widget/FrameLayout");
+  if (!(view instanceof JView)) throw new Error("Invalid view");
+  let calls = 0;
+  const base = rt.link("android/widget/FrameLayout").ctor.prototype[onMeasure];
+  Object.assign(view, { [onMeasure](w: number, h: number) { calls++; return base.call(this, w, h); } });
+  const spec = makeSpec(100, MS_EXACTLY);
+  await vcall(view, "setPadding", "(IIII)V", 1, 2, 3, 4);
+  await measureView(view, spec, spec);
+  await layoutView(view, 0, 0, 100, 100);
+  const measured = calls;
+  for (let i = 0; i < 10; i++) {
+    await vcall(view, "setPadding", "(IIII)V", 1, 2, 3, 4);
+    await measureView(view, spec, spec);
+  }
+  expect(calls).toBe(measured);
+  await vcall(view, "setPadding", "(IIII)V", 1, 2, 3, 5);
+  await measureView(view, spec, spec);
+  expect(calls).toBe(measured + 1);
 });
