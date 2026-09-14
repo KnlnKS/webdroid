@@ -59,9 +59,13 @@ tests and diagnostic loads pause during serialized performance windows.
   1.5–3.2% CPU savings. No compositor replacement meets retention.
 - Explicit JVM operands, bounded resumable blocks and synchronous-until-suspension stages
   pass core DEX checks. Seven component rounds show construction 53.9 -> 41.2 ms and cold
-  loop 52.3 -> 21.3 ms. Initial Mihon app windows are neutral on software and Metal; fresh
-  FitNotes/Resy interactions and matched repeats remain pending. Hot controls remain
-  unchanged, including restored sourceURL accounting in the existing admission budget.
-- Remaining: independent app measurements, stage decisions, combined checks, full E2E and
-  corpus, final implementation-history evidence. The independently measured native stage
-  clears retention; final combined results remain pending.
+  loop 52.3 -> 21.3 ms. App measurements do not clear the 15% gate for either block stage;
+  both are rejected. Retain explicit operands as a compiler simplification. Seven FitNotes
+  phase-decorrelated pairs give CPU +1.35%, median presentation-opportunity proxy +0.72%,
+  p95 +3.53%, retained heap -0.4%; no app-wide speedup is claimed. Promotion and hot-source
+  budgets stay unchanged, including restored sourceURL accounting.
+- Integrated typecheck, 1208 unit tests, eight executed framework exercises and eager/cold
+  smoke compilation of all six target APKs pass. Framework coverage gaps are documented.
+- Remaining: combined app guards, full E2E and corpus against matching pristine captures,
+  final implementation-history evidence. Independent stages have retention decisions;
+  combined measurements are running on frozen 39059ba.

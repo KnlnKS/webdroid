@@ -3627,7 +3627,7 @@ green was displayed, then transparent pixels after transfer consumed the produce
 The existing EGL fixture now verifies completed green before presentation and
 completed red afterward, without another framebuffer allocation.
 
-### JVM component evidence; application acceptance pending
+### JVM component evidence and application gates
 
 `ce84447` replaces cold generated-source reparsing with explicit operands in the
 shared opcode emitter and reuses method preparation for synchronous output.
@@ -3681,3 +3681,43 @@ prove actual list movement; its Compose host tree does not expose the item tree.
 The first four-stage software round and Metal baseline/synchronous pair are
 neutral in main-thread CPU despite roughly 10300 cold calls per window. These
 exploratory samples do not yet establish a final stage decision.
+
+Three matched FitNotes Metal rounds do not retain either resumable-block stage:
+main-thread CPU medians are 54.15/55.27/54.82/53.78 ms per second for pristine,
+operands, blocks and synchronous blocks. A first-round latency-proxy improvement
+reverses in subsequent rounds. Resy baseline/synchronous guards render all 13
+steps without observed missing APIs, native requirements or emulator errors;
+boot is 1025.9/992.9 ms, below the 15% gate. Live availability makes the roughly
+130-second full-flow time unsuitable as a performance comparison. Both larger
+JVM stages are rejected despite their substantial component-loop improvements.
+
+The FitNotes workload alternates History/Graph 14 times after two saved sets.
+Existing coordinate setup misfocuses the weight/repetition fields on both
+revisions, recording 10 kg/0 reps and 8 kg/0 reps. Screenshots establish tab
+construction and navigation, not populated-graph correctness. Action behavior
+matches b16d705; the setup limitation is not introduced by the harness refactor.
+
+Seven alternating pristine/operands pairs resolve an initial CPU outlier:
+median CPU 55.28 -> 54.13 ms/s, retained JS heap 172.55 -> 171.83 MB, boot
+151.5 -> 139.6 ms. The explicit-operands stage is considered for structural
+simplification, not an app-wide speedup. Its input-to-next-presentation proxy
+still worsens in five of seven pairs (median 6.8 -> 9.15 ms), so retention is
+held for a separate phase-decorrelated guard. Changing input spacing from 1000
+to 1003 ms walks through browser frame phases while preserving 14 inputs and
+the 15-second window; this is a controlled hypothesis test, not a latency waiver.
+
+Seven alternating 1003-ms pairs then give CPU 54.143 -> 54.873 ms/s (+1.35%),
+median proxy 6.95 -> 7.00 ms (+0.72%), median p95 10.635 -> 11.010 ms (+3.53%),
+and retained JS heap 172.539 -> 171.857 MB. All 14 windows deliver 14/14 inputs,
+with no in-flight action or observed emulator error and 2277 cold calls each.
+The small tail cost remains visible: five of seven pairs have higher p95, three
+exceed 5%; the aggregate guard stays below 5%. Retain portable operands ca19eb7
+(integration 386393a) for simplification and construction cost, with no claimed
+latency gain. Raw phase results live in `webdroid-shots/jvm/fitnotes-phase-1003/`
+in the JVM worktree. Combined app guards remain separate from this stage decision.
+
+At integrated 39059ba, typecheck passes, all 1208 unit tests pass (26438
+assertions), and all six target APKs compile in eager and cold modes with zero
+method failures. The eight executed framework exercises pass; Paint.measureText
+is skipped without a DOM. Declared framework coverage remains 295/363 entries,
+with 68 declared gaps. These checks precede the combined browser matrix.
