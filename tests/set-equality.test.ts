@@ -81,6 +81,27 @@ test("Collections.disjoint uses value equality", async () => {
   expect(await disjoint(await set("java/util/HashSet", "a"), await set("java/util/LinkedHashSet", "a"))).toBe(0);
 });
 
+test("Collections wrappers stay live without exposing unmodifiable mutations", async () => {
+  const collections = rt.link("java/util/Collections").ctor as any;
+  const list = await newObj("java/util/ArrayList");
+  await vcall(list, "add", "(Ljava/lang/Object;)Z", "a");
+  const readOnly = await collections[mangleMethod("unmodifiableList", "(Ljava/util/List;)Ljava/util/List;")](list);
+  expect(readOnly).not.toBe(list);
+  await expect(vcall(readOnly, "add", "(Ljava/lang/Object;)Z", "blocked"))
+    .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
+  const iterator = await vcall(readOnly, "iterator", "()Ljava/util/Iterator;");
+  await vcall(iterator, "next", "()Ljava/lang/Object;");
+  await expect(vcall(iterator, "remove", "()V"))
+    .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
+  await vcall(list, "add", "(Ljava/lang/Object;)Z", "b");
+  expect(await vcall(readOnly, "size", "()I")).toBe(2);
+
+  const synchronized = await collections[mangleMethod("synchronizedList", "(Ljava/util/List;)Ljava/util/List;")](list);
+  expect(synchronized).not.toBe(list);
+  await vcall(synchronized, "add", "(Ljava/lang/Object;)Z", "c");
+  expect(await vcall(list, "size", "()I")).toBe(3);
+});
+
 test("List.of rejects null and stays immutable", async () => {
   const of = (rt.link("java/util/List").ctor as any)[mangleMethod("of", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;")];
   const immutable = await of("a", "b");

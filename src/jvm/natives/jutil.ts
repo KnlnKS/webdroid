@@ -5,6 +5,10 @@ import {
   mkCmp, fmtDouble, bitCount32
 } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo } from "../runtime";
+import {
+  synchronizedCollection, synchronizedList, synchronizedMap, synchronizedSet,
+  unmodifiableCollection, unmodifiableList, unmodifiableMap, unmodifiableSet, unmodifiableSortedMap, unmodifiableSortedSet,
+} from "./jwrappers";
 
 /** Java toArray(T[]) contract: fill the GIVEN array when it fits (callers may
  * ignore the return value), null-terminating; else return a new one. */
@@ -2300,7 +2304,7 @@ rt.register({
       await vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, v);
       return m;
     },
-    "static unmodifiableList(Ljava/util/List;)Ljava/util/List;": (l: unknown) => l,
+    "static unmodifiableList(Ljava/util/List;)Ljava/util/List;": unmodifiableList,
     "static list(Ljava/util/Enumeration;)Ljava/util/ArrayList;": async (e: unknown) => {
       const out: unknown[] = [];
       while (await vcall(e, "hasMoreElements", "()Z")) out.push(await vcall(e, "nextElement", "()Ljava/lang/Object;"));
@@ -2308,15 +2312,15 @@ rt.register({
     },
     "static enumeration(Ljava/util/Collection;)Ljava/util/Enumeration;": async (c: unknown) => mkIter(await toJsArray(c)),
     "static newSetFromMap(Ljava/util/Map;)Ljava/util/Set;": () => rt.make("java/util/HashSet"),
-    "static unmodifiableMap(Ljava/util/Map;)Ljava/util/Map;": (m: unknown) => m,
-    "static unmodifiableSet(Ljava/util/Set;)Ljava/util/Set;": (s: unknown) => s,
-    "static unmodifiableSortedMap(Ljava/util/SortedMap;)Ljava/util/SortedMap;": (m: unknown) => m,
-    "static unmodifiableSortedSet(Ljava/util/SortedSet;)Ljava/util/SortedSet;": (s: unknown) => s,
-    "static unmodifiableCollection(Ljava/util/Collection;)Ljava/util/Collection;": (c: unknown) => c,
-    "static synchronizedCollection(Ljava/util/Collection;)Ljava/util/Collection;": (c: unknown) => c,
-    "static synchronizedList(Ljava/util/List;)Ljava/util/List;": (l: unknown) => l,
-    "static synchronizedMap(Ljava/util/Map;)Ljava/util/Map;": (m: unknown) => m,
-    "static synchronizedSet(Ljava/util/Set;)Ljava/util/Set;": (s: unknown) => s,
+    "static unmodifiableMap(Ljava/util/Map;)Ljava/util/Map;": unmodifiableMap,
+    "static unmodifiableSet(Ljava/util/Set;)Ljava/util/Set;": unmodifiableSet,
+    "static unmodifiableSortedMap(Ljava/util/SortedMap;)Ljava/util/SortedMap;": unmodifiableSortedMap,
+    "static unmodifiableSortedSet(Ljava/util/SortedSet;)Ljava/util/SortedSet;": unmodifiableSortedSet,
+    "static unmodifiableCollection(Ljava/util/Collection;)Ljava/util/Collection;": unmodifiableCollection,
+    "static synchronizedCollection(Ljava/util/Collection;)Ljava/util/Collection;": synchronizedCollection,
+    "static synchronizedList(Ljava/util/List;)Ljava/util/List;": synchronizedList,
+    "static synchronizedMap(Ljava/util/Map;)Ljava/util/Map;": synchronizedMap,
+    "static synchronizedSet(Ljava/util/Set;)Ljava/util/Set;": synchronizedSet,
     "static sort(Ljava/util/List;)V": (l: unknown) => vcallMaybe(l, "sort", "(Ljava/util/Comparator;)V", null),
     "static sort(Ljava/util/List;Ljava/util/Comparator;)V": (l: unknown, c: unknown) => vcallMaybe(l, "sort", "(Ljava/util/Comparator;)V", c),
     "static binarySearch(Ljava/util/List;Ljava/lang/Object;)I": (l: unknown, k: unknown) => listBinarySearch(l, k, null),
