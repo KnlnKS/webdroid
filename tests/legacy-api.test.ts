@@ -370,6 +370,8 @@ test("modern Java helpers preserve their public contracts", async () => {
   const encoded = await vcall(utf8, "encode", "(Ljava/lang/String;)Ljava/nio/ByteBuffer;", "A£");
   expect(await vcall(encoded, "remaining", "()I")).toBe(3);
   expect([...await vcall(encoded, "array", "()[B")]).toEqual([65, -62, -93]);
+  const gnssClock = await scall("android/os/SystemClock", "currentGnssTimeClock", "()Ljava/time/Clock;");
+  await expect(vcall(gnssClock, "millis", "()J")).rejects.toMatchObject({ msg: "Gnss based time is not available." });
 });
 
 test("concrete maps, EnumSet factories, and primitive streams preserve Java dispatch", async () => {
@@ -451,4 +453,11 @@ test("Wi-Fi locks expose their held state", async () => {
   expect(await vcall(lock, "isHeld", "()Z")).toBe(1);
   await vcall(lock, "release", "()V");
   expect(await vcall(lock, "isHeld", "()Z")).toBe(0);
+});
+
+test("the connected browser network is validated", async () => {
+  const manager = rt.make("android/net/ConnectivityManager");
+  const network = await vcall(manager, "getActiveNetwork", "()Landroid/net/Network;");
+  const capabilities = await vcall(manager, "getNetworkCapabilities", "(Landroid/net/Network;)Landroid/net/NetworkCapabilities;", network);
+  expect(await vcall(capabilities, "hasCapability", "(I)Z", 16)).toBe(1);
 });

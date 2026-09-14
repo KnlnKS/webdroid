@@ -20,6 +20,7 @@ import { yieldToLoop } from "../native/cpu";
 import { mkFile, JInputStream, JOutputStream, vfs, type JFileDescriptor } from "../jvm/natives/jio";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd } from "../native/stdio";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
+import { unavailableClock } from "../jvm/natives/jtime";
 
 rt.register({
   name: "android/os/SystemProperties", ctor: class extends JObj {},
@@ -243,6 +244,7 @@ rt.register({
     "static elapsedRealtime()J": () => BigInt(Math.floor(uptimeMillis())),
     "static elapsedRealtimeNanos()J": () => BigInt(Math.floor(uptimeMillis() * 1e6)),
     "static currentThreadTimeMillis()J": () => BigInt(Math.floor(performance.now())),
+    "static currentGnssTimeClock()Ljava/time/Clock;": () => unavailableClock("Gnss based time is not available."),
     "static sleep(J)V": (ms: bigint) => new Promise((r) => setTimeout(r, Number(ms))),
   },
 });

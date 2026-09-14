@@ -330,7 +330,7 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JNetwork) { return String(this.id); },
   },
 });
-const networkCapabilities = new Set([11, 12, 13, 14, 15, 18, 20, 21]);
+const networkCapabilities = new Set([11, 12, 13, 14, 15, 16, 18, 20, 21]);
 rt.register({
   name: "android/net/NetworkCapabilities", ctor: class extends JObj {},
   statics: {

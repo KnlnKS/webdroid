@@ -517,9 +517,14 @@ rt.register({
   },
 });
 /** java.time.Clock: the system clock in a zone, or a fixed instant */
-class JClock extends JObj { zone: JZoneId | null = null; fixed: number | null = null; }
+class JClock extends JObj { zone: JZoneId | null = null; fixed: number | null = null; unavailable: string | null = null; }
 const clockIn = (zone: JZoneId, fixed: number | null = null) => { const c = new JClock(); c.zone = zone; c.fixed = fixed; return c; };
 const zoneOf = (id: string) => { const z = new JZoneId(); z.id = id; return z; };
+export const unavailableClock = (message: string) => { const c = clockIn(zoneOf("UTC")); c.unavailable = message; return c; };
+const clockMillis = (clock: JClock) => {
+  if (clock.unavailable) throw rt.mkThrowable("java/time/DateTimeException", clock.unavailable);
+  return clock.fixed ?? Date.now();
+};
 rt.register({
   name: "java/time/Clock", ctor: JClock,
   methods: {
@@ -528,8 +533,8 @@ rt.register({
     "static system(Ljava/time/ZoneId;)Ljava/time/Clock;": (z: JZoneId) => clockIn(z),
     "static fixed(Ljava/time/Instant;Ljava/time/ZoneId;)Ljava/time/Clock;": (i: JInstant, z: JZoneId) => clockIn(z, i.ms),
     "static offset(Ljava/time/Clock;Ljava/time/Duration;)Ljava/time/Clock;": (c: JClock, d: { ms: number }) => clockIn(c.zone!, c.fixed === null ? null : c.fixed + d.ms),
-    "instant()Ljava/time/Instant;": function (this: JClock) { return mkInstant(this.fixed ?? Date.now()); },
-    "millis()J": function (this: JClock) { return BigInt(this.fixed ?? Date.now()); },
+    "instant()Ljava/time/Instant;": function (this: JClock) { return mkInstant(clockMillis(this)); },
+    "millis()J": function (this: JClock) { return BigInt(clockMillis(this)); },
     "getZone()Ljava/time/ZoneId;": function (this: JClock) { return this.zone; },
     "withZone(Ljava/time/ZoneId;)Ljava/time/Clock;": function (this: JClock, z: JZoneId) { return clockIn(z, this.fixed); },
   },
