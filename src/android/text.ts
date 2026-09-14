@@ -1,10 +1,11 @@
+import { JDrawable } from "./drawable";
 import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreator } from "./parcel";
 // android.text.* — TextPaint, TextUtils, Spannable/Editable (spans stored, minimally styled).
 
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { vcall, vcallOn, curThread, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import { type JDate, type JCalendar } from "../jvm/natives/jtime";
-import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances } from "./graphics";
+import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances, type JRect, type JBitmap } from "./graphics";
 import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
@@ -418,6 +419,87 @@ rt.register({
   },
 });
 
+class JDynamicDrawableSpan extends JReplacementSpan {
+  alignment = 0;
+  cachedDrawable: WeakRef<JDrawable> | null = null;
+}
+async function spanDrawable(span: JDynamicDrawableSpan): Promise<JDrawable> {
+  let drawable = span.cachedDrawable?.deref();
+  if (!drawable) {
+    drawable = await vcall(span, "getDrawable", "()Landroid/graphics/drawable/Drawable;");
+    if (!drawable) return rt.npe();
+    span.cachedDrawable = new WeakRef(drawable);
+  }
+  return drawable;
+}
+rt.register({ name: "android/text/style/DynamicDrawableSpan", ctor: JDynamicDrawableSpan, sup: "android/text/style/ReplacementSpan",
+  statics: { ALIGN_BOTTOM: 0, ALIGN_BASELINE: 1, ALIGN_CENTER: 2 }, fields: { mVerticalAlignment: "alignment" }, methods: {
+    "<init>()V": function (this: JDynamicDrawableSpan) { this.alignment = 0; },
+    "<init>(I)V": function (this: JDynamicDrawableSpan, alignment: number) { this.alignment = alignment; },
+    "getVerticalAlignment()I": function (this: JDynamicDrawableSpan) { return this.alignment; },
+    "getSize(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I": async function (this: JDynamicDrawableSpan, _paint: JPaint, _text: unknown, _start: number, _end: number, fm: { ascent: number; descent: number; top: number; bottom: number } | null) {
+      const bounds: JRect = await vcall(await spanDrawable(this), "getBounds", "()Landroid/graphics/Rect;");
+      if (fm) { fm.ascent = fm.top = -bounds.bottom; fm.descent = fm.bottom = 0; }
+      return bounds.right;
+    },
+    "draw(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V": async function (this: JDynamicDrawableSpan, canvas: JCanvas, _text: unknown, _start: number, _end: number, x: number, top: number, _y: number, bottom: number, paint: JPaint) {
+      const drawable = await spanDrawable(this), bounds: JRect = await vcall(drawable, "getBounds", "()Landroid/graphics/Rect;");
+      let y = bottom - bounds.bottom;
+      if (this.alignment === 1) y -= (await vcall(paint, "getFontMetricsInt", "()Landroid/graphics/Paint$FontMetricsInt;")).descent;
+      else if (this.alignment === 2) y = top + Math.trunc((bottom - top) / 2) - Math.trunc((bounds.bottom - bounds.top) / 2);
+      canvas.ctx.save(); canvas.ctx.translate(x, y);
+      try { await vcall(drawable, "draw", "(Landroid/graphics/Canvas;)V", canvas); } finally { canvas.ctx.restore(); }
+    },
+  },
+});
+type SpanImage = { kind: "drawable"; value: JDrawable } | { kind: "resource"; context: unknown; id: number } | { kind: "uri"; context: unknown; uri: unknown };
+class JImageSpan extends JDynamicDrawableSpan { image: SpanImage | null = null; source: string | null = null; }
+function imageDrawable(this: JImageSpan, drawable: JDrawable, alignment = 0) { this.image = { kind: "drawable", value: drawable }; this.alignment = alignment; }
+function imageResource(this: JImageSpan, context: unknown, id: number, alignment = 0) { this.image = { kind: "resource", context, id }; this.alignment = alignment; }
+async function imageUri(this: JImageSpan, context: unknown, uri: unknown, alignment = 0) {
+  this.image = { kind: "uri", context, uri }; this.alignment = alignment;
+  this.source = await vcall(uri, "toString", "()Ljava/lang/String;");
+}
+async function imageBitmap(this: JImageSpan, context: unknown, bitmap: JBitmap, alignment = 0) {
+  const resources = context ? await vcall(context, "getResources", "()Landroid/content/res/Resources;") : null;
+  const drawable: JDrawable = await newObj("android/graphics/drawable/BitmapDrawable", "(Landroid/content/res/Resources;Landroid/graphics/Bitmap;)V", resources, bitmap);
+  await vcall(drawable, "setBounds", "(IIII)V", 0, 0, Math.max(0, await vcall(drawable, "getIntrinsicWidth", "()I")), Math.max(0, await vcall(drawable, "getIntrinsicHeight", "()I")));
+  imageDrawable.call(this, drawable, alignment);
+}
+rt.register({ name: "android/text/style/ImageSpan", ctor: JImageSpan, sup: "android/text/style/DynamicDrawableSpan", methods: {
+  "<init>(Landroid/graphics/drawable/Drawable;)V": imageDrawable,
+  "<init>(Landroid/graphics/drawable/Drawable;I)V": imageDrawable,
+  "<init>(Landroid/graphics/drawable/Drawable;Ljava/lang/String;)V": function (this: JImageSpan, drawable: JDrawable, source: string) { imageDrawable.call(this, drawable); this.source = source; },
+  "<init>(Landroid/graphics/drawable/Drawable;Ljava/lang/String;I)V": function (this: JImageSpan, drawable: JDrawable, source: string, alignment: number) { imageDrawable.call(this, drawable, alignment); this.source = source; },
+  "<init>(Landroid/content/Context;I)V": imageResource,
+  "<init>(Landroid/content/Context;II)V": imageResource,
+  "<init>(Landroid/content/Context;Landroid/net/Uri;)V": imageUri,
+  "<init>(Landroid/content/Context;Landroid/net/Uri;I)V": imageUri,
+  "<init>(Landroid/content/Context;Landroid/graphics/Bitmap;)V": imageBitmap,
+  "<init>(Landroid/content/Context;Landroid/graphics/Bitmap;I)V": imageBitmap,
+  "<init>(Landroid/graphics/Bitmap;)V": function (this: JImageSpan, bitmap: JBitmap) { return imageBitmap.call(this, null, bitmap); },
+  "<init>(Landroid/graphics/Bitmap;I)V": function (this: JImageSpan, bitmap: JBitmap, alignment: number) { return imageBitmap.call(this, null, bitmap, alignment); },
+  "getSource()Ljava/lang/String;": function (this: JImageSpan) { return this.source; },
+  "getDrawable()Landroid/graphics/drawable/Drawable;": async function (this: JImageSpan) {
+    const image = this.image;
+    if (!image) return null;
+    if (image.kind === "drawable") return image.value;
+    const resources = await vcall(image.context, "getResources", "()Landroid/content/res/Resources;");
+    let drawable: JDrawable;
+    if (image.kind === "resource") drawable = await vcall(image.context, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", image.id);
+    else {
+      const resolver = await vcall(image.context, "getContentResolver", "()Landroid/content/ContentResolver;");
+      const stream = await vcall(resolver, "openInputStream", "(Landroid/net/Uri;)Ljava/io/InputStream;", image.uri);
+      let bitmap: JBitmap;
+      try { bitmap = await vcall(rt.link("android/graphics/BitmapFactory").ctor, "decodeStream", "(Ljava/io/InputStream;)Landroid/graphics/Bitmap;", stream); }
+      finally { await vcall(stream, "close", "()V"); }
+      drawable = await newObj("android/graphics/drawable/BitmapDrawable", "(Landroid/content/res/Resources;Landroid/graphics/Bitmap;)V", resources, bitmap);
+    }
+    await vcall(drawable, "setBounds", "(IIII)V", 0, 0, await vcall(drawable, "getIntrinsicWidth", "()I"), await vcall(drawable, "getIntrinsicHeight", "()I"));
+    return drawable;
+  },
+} });
+
 // span types (carriers) — wired into the CharacterStyle/MetricAffectingSpan hierarchy
 // above so instanceof/getSpans(SomeBase.class) filtering matches real Android.
 const spanHierarchy: Record<string, { sup?: string; ifaces?: string[] }> = {
@@ -429,9 +511,6 @@ const spanHierarchy: Record<string, { sup?: string; ifaces?: string[] }> = {
   "android/text/style/RelativeSizeSpan": { sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"] },
   "android/text/style/AbsoluteSizeSpan": { sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"] },
   "android/text/style/TypefaceSpan": { sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"] },
-  // Real AOSP interposes DynamicDrawableSpan between ImageSpan and ReplacementSpan;
-  // we don't implement drawable-based replacement drawing, so link straight through.
-  "android/text/style/ImageSpan": { sup: "android/text/style/ReplacementSpan" },
   "android/text/style/ClickableSpan": { sup: "android/text/style/CharacterStyle", ifaces: ["android/text/style/UpdateAppearance"] },
   "android/text/style/URLSpan": { sup: "android/text/style/ClickableSpan" },
 };
@@ -443,12 +522,10 @@ for (const [name] of [
   ["android/text/style/StrikethroughSpan", {}],
   ["android/text/style/RelativeSizeSpan", { size: 1 }],
   ["android/text/style/TypefaceSpan", {}],
-  ["android/text/style/ImageSpan", {}],
   ["android/text/style/ClickableSpan", {}],
   ["android/text/style/URLSpan", {}],
 ] as const) {
-  const Base = spanHierarchy[name].sup === "android/text/style/MetricAffectingSpan" ? JMetricAffectingSpan
-    : spanHierarchy[name].sup === "android/text/style/ReplacementSpan" ? JReplacementSpan : JCharacterStyle;
+  const Base = spanHierarchy[name].sup === "android/text/style/MetricAffectingSpan" ? JMetricAffectingSpan : JCharacterStyle;
   const c = class extends Base { color = 0; style = 0; size = 1; url = ""; };
   rt.register({
     name, ctor: c,
@@ -457,11 +534,7 @@ for (const [name] of [
       "<init>(I)V": function (this: any, v: number) { this.color = v; this.style = v; this.size = v; },
       "<init>(F)V": function (this: any, v: number) { this.size = v; },
       "<init>(Ljava/lang/String;)V": function (this: any, v: string) { this.url = v; },
-      // ImageSpan's drawable forms: nothing here draws a replacement image, but the span still
-      // has to construct or the text it decorates never gets built
-      "<init>(Landroid/content/Context;II)V": function () {},
-      ...noops("<init>()V", "<init>(Landroid/content/Context;I)V", "<init>(Landroid/graphics/drawable/Drawable;)V",
-        "<init>(Landroid/graphics/drawable/Drawable;I)V"),
+      "<init>()V": () => {},
       "getURL()Ljava/lang/String;": function (this: any) { return this.url; },
       "getForegroundColor()I": function (this: any) { return this.color; },
       ...(name === "android/text/style/ForegroundColorSpan" ? {

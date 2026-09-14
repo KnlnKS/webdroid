@@ -316,6 +316,7 @@ export class JPaint extends JObj {
   color = -16777216;
   style = 0;
   strokeWidth = 0;
+  shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
   textSize = device.dp(16); // AOSP defaults to 12px, but every view sets its own
   tf: JTypeface = tfDefault;
   antiAlias = true;
@@ -381,6 +382,15 @@ const paintMethods: NativeSpec["methods"] = {
       return runAdvances(this, charsToString(chars, 0, chars.length), start, end, offset, advances, advIdx);
     },
   "<init>(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { if (o) copyPaint(o, this); },
+  "setShadowLayer(FFFI)V": function (this: JPaint, radius: number, dx: number, dy: number, color: number) {
+    this.shadowRadius = radius; this.shadowDx = dx; this.shadowDy = dy; this.shadowColor = color;
+  },
+  "clearShadowLayer()V": function (this: JPaint) { this.shadowRadius = this.shadowDx = this.shadowDy = this.shadowColor = 0; },
+  "hasShadowLayer()Z": function (this: JPaint) { return +(this.shadowRadius > 0 && !!(this.shadowColor >>> 24)); },
+  "getShadowLayerRadius()F": function (this: JPaint) { return this.shadowRadius; },
+  "getShadowLayerDx()F": function (this: JPaint) { return this.shadowDx; },
+  "getShadowLayerDy()F": function (this: JPaint) { return this.shadowDy; },
+  "getShadowLayerColor()I": function (this: JPaint) { return this.shadowColor; },
   "set(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { copyPaint(o, this); },
   "setColor(I)V": function (this: JPaint, c: number) { this.color = c; },
   "setColor(J)V": function (this: JPaint, c: bigint) { this.color = Number(BigInt.asIntN(32, c >> 32n)); },
@@ -456,7 +466,7 @@ const paintMethods: NativeSpec["methods"] = {
     "setElegantTextHeight(Z)V", "setFontFeatureSettings(Ljava/lang/String;)V",
     "setTextScaleX(F)V", "setTextSkewX(F)V", "setStartHyphenEdit(I)V",
     "setEndHyphenEdit(I)V", "setWordSpacing(F)V", "setDither(Z)V", "setFilterBitmap(Z)V", "setStrokeMiter(F)V",
-    "setFlags(I)V", "setShadowLayer(FFFI)V", "clearShadowLayer()V"),
+    "setFlags(I)V"),
   ...stubs(1, "isFilterBitmap()Z", "getHinting()I", "setFontVariationSettings(Ljava/lang/String;)Z",
     "getTextScaleX()F", "getFlags()I"),
   ...stubs(0, "getWordSpacing()F", "getLetterSpacing()F", "isDither()Z"),
@@ -520,11 +530,22 @@ const paintMethods: NativeSpec["methods"] = {
     return i;
   },
 };
+export function beginPaintShadow(ctx: JCanvas["ctx"], p: JPaint): boolean {
+  if (!(p.shadowRadius > 0) || !(p.shadowColor >>> 24)) return false;
+  const m = ctx.getTransform();
+  ctx.save();
+  ctx.shadowColor = cssColor(p.shadowColor);
+  ctx.shadowBlur = p.shadowRadius * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
+  ctx.shadowOffsetX = m.a * p.shadowDx + m.c * p.shadowDy;
+  ctx.shadowOffsetY = m.b * p.shadowDx + m.d * p.shadowDy;
+  return true;
+}
 export function copyPaint(src: JPaint, dst: JPaint) {
   dst.color = src.color; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
   dst.textSize = src.textSize; dst.tf = src.tf; dst.antiAlias = src.antiAlias;
   dst.textAlignN = src.textAlignN; dst.shader = src.shader; dst.shaderObj = src.shaderObj; dst.dash = src.dash;
   dst.maskFilter = src.maskFilter;
+  dst.shadowRadius = src.shadowRadius; dst.shadowDx = src.shadowDx; dst.shadowDy = src.shadowDy; dst.shadowColor = src.shadowColor;
   dst.filterColor = src.filterColor; dst.filterMatrix = src.filterMatrix; dst.filterObj = src.filterObj; dst.underline = src.underline; dst.fakeBold = src.fakeBold;
   dst.letterSpacingEm = src.letterSpacingEm;
   dst.locales = src.locales; dst.language = src.language;
@@ -1298,6 +1319,7 @@ export class JCanvas extends JObj {
   drawShape(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke: (ctx: typeof this.ctx) => void) {
     // A blended paint owns the composite op only for its own ops — restore it straight after,
     // so a CLEAR fill can never leak into the next drawImage/drawText and erase it.
+    const shadow = beginPaintShadow(this.ctx, p);
     const prev = p.blend ? this.ctx.globalCompositeOperation : null;
     const filter = p.maskFilter ? this.ctx.filter : null;
     if (p.maskFilter) {
@@ -1320,6 +1342,7 @@ export class JCanvas extends JObj {
     } finally {
       if (prev) this.ctx.globalCompositeOperation = prev;
       if (filter !== null) this.ctx.filter = filter;
+      if (shadow) this.ctx.restore();
     }
   }
   private shaderCtx: (typeof this.ctx) | null = null;
@@ -1592,24 +1615,26 @@ const drawColorKey = mangleMethod("drawColor", "(I)V");
 export const CAPS = ["butt", "round", "square"] as const;
 export const JOINS = ["miter", "round", "bevel"] as const;
 function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
-  const ctx = cv.ctx;
-  ctx.font = p.font();
-  if ("lang" in ctx) ctx.lang = p.language;
-  ctx.fillStyle = p.fillStyle(ctx) as string;
-  ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
-  ctx.textBaseline = "alphabetic";
-  if (p.letterSpacingEm && "letterSpacing" in ctx) (ctx as any).letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
-  if (p.style !== 1) ctx.fillText(s, x, y);
-  if (p.style === 1 || p.style === 2) {
-    cv.prep(p, true);
-    ctx.strokeText(s, x, y);
-  }
-  if (p.letterSpacingEm && "letterSpacing" in ctx) (ctx as any).letterSpacing = "0px";
-  if (p.underline) {
-    const w = measureText(p, s);
-    const sx = p.textAlignN === 1 ? x - w / 2 : p.textAlignN === 2 ? x - w : x;
-    ctx.fillRect(sx, y + p.textSize * 0.08, w, Math.max(1, p.textSize / 16));
-  }
+  const ctx = cv.ctx, shadow = beginPaintShadow(cv.ctx, p);
+  try {
+    ctx.font = p.font();
+    if ("lang" in ctx) ctx.lang = p.language;
+    ctx.fillStyle = p.fillStyle(ctx) as string;
+    ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
+    ctx.textBaseline = "alphabetic";
+    if (p.letterSpacingEm && "letterSpacing" in ctx) (ctx as any).letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
+    if (p.style !== 1) ctx.fillText(s, x, y);
+    if (p.style === 1 || p.style === 2) {
+      cv.prep(p, true);
+      ctx.strokeText(s, x, y);
+    }
+    if (p.letterSpacingEm && "letterSpacing" in ctx) (ctx as any).letterSpacing = "0px";
+    if (p.underline) {
+      const w = measureText(p, s);
+      const sx = p.textAlignN === 1 ? x - w / 2 : p.textAlignN === 2 ? x - w : x;
+      ctx.fillRect(sx, y + p.textSize * 0.08, w, Math.max(1, p.textSize / 16));
+    }
+  } finally { if (shadow) ctx.restore(); }
 }
 const tintCache = new WeakMap<JBitmap, Map<number | string, OffscreenCanvas>>();
 /** `b` through a paint's colour filter — recoloured SRC_IN with `tint`, or every pixel through a

@@ -2592,3 +2592,14 @@ the viewer is not yet rendered successfully. Unsupported native serialized forms
 stream operations (persistent field declarations, protocol version 1, unshared objects and
 field accessors) remain outside this observed coverage. The diagnostic screenshots and their
 instrumentation do not establish performance parity.
+
+The photo viewer's first measure copied TextView shadow properties through absent getters,
+then encountered DynamicDrawableSpan. TextView now retains its shadow properties and forwards
+them to Paint; text and shape drawing apply the shadow only within their canvas save scope.
+Drawable spans use AOSP bottom/baseline/center alignment, drawable bounds for font metrics,
+weak drawable caching, virtual suspended drawing and guaranteed canvas restoration. ImageSpan
+now follows that hierarchy and obtains its drawable from the supplied drawable, bitmap,
+resource or URI. The browser checks cover span pixels/alignment/caching, shadow pixels and
+state restoration; existing replacement-span and text rendering checks still pass. Typecheck
+passes. Fresh Maps proceeds past these APIs but photo icon construction now reaches the
+explicitly unsupported OUTER blur-mask style; the viewer is still incomplete.

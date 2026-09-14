@@ -9,11 +9,11 @@ import { G, gravityV, gravityH } from "./gravity";
 import { device } from "../shell/config";
 import {
   fontDescent, fontAscent, fontTop, fontBottom, measureText, typefaceFor, JTypeface, tfDefault, type JRect,
-  type JCanvas, cssColor, tfMedium
+  type JCanvas, cssColor, tfMedium, beginPaintShadow
 } from "./graphics";
 import { vcall, vcallOn, curThread, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import {
-  attrTable, type Resources, resolveStyleValue, rvDimen, rvColor, rvInt, type RV, rvString, type JAttrSet,
+  attrTable, type Resources, resolveStyleValue, rvDimen, rvColor, rvInt, rvFloat, type RV, rvString, type JAttrSet,
   obtainStyled
 } from "./res";
 import { TV } from "./axml";
@@ -73,6 +73,7 @@ export class JTextView extends JView {
   rawText: unknown = "";       // original CharSequence (may be Spannable)
   hint = "";
   paintT = new JTextPaint();
+  shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
   colors: JColorStateList = mkCsl(-16777216);
   hintColors: JColorStateList | null = mkCsl(1627389952);
   gravityT = 48 | G.START;
@@ -247,7 +248,7 @@ const tvAttr = attrTable(
   "minLines", "lines", "singleLine", "ellipsize", "lineSpacingExtra", "lineSpacingMultiplier",
   "drawableLeft", "drawableTop", "drawableRight", "drawableBottom", "drawablePadding", "drawableStart",
   "drawableEnd", "fontFamily", "textAllCaps", "textColorHint", "inputType", "letterSpacing", "maxLength",
-  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth");
+  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth", "shadowColor", "shadowDx", "shadowDy", "shadowRadius");
 
 async function applyTextAppearance(tv: JTextView, res: Resources, styleId: number) {
   if (!styleId) return;
@@ -288,6 +289,7 @@ export async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyle
     tvAttr.inputType, tvAttr.lineSpacingExtra, tvAttr.lineSpacingMultiplier, tvAttr.lines,
     tvAttr.drawableStart, tvAttr.drawableEnd, tvAttr.minLines,
     tvAttr.ems, tvAttr.minEms, tvAttr.minWidth, tvAttr.includeFontPadding, tvAttr.imeOptions,
+    tvAttr.shadowColor, tvAttr.shadowDx, tvAttr.shadowDy, tvAttr.shadowRadius,
   ];
   const ta = obtainStyled(res, tv.theme, set, ids, defStyleAttr, 0);
   const g = (i: number) => ta.vals[i];
@@ -335,8 +337,13 @@ export async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyle
   if (g(28)) tv.includePad = !!rvInt(res, g(28), 1);
   // the action the IME key performs: a search field declares it here and nowhere else
   if (g(29)) tv.imeOptions = rvInt(res, g(29), 0);
+  if (g(30) || g(31) || g(32) || g(33)) await setTextShadow.call(tv, rvFloat(res, g(33), tv.shadowRadius), rvFloat(res, g(31), tv.shadowDx), rvFloat(res, g(32), tv.shadowDy), rvColor(res, g(30), tv.shadowColor));
   if (tv.styleBits & 1) tv.paintT.fakeBold = true;
   if (tv.styleBits & 2) tv.paintT.tf = (() => { const t = new JTypeface(); t.family = tv.paintT.tf.family; t.italic = true; t.weight = tv.paintT.tf.weight; return t; })();
+}
+async function setTextShadow(this: JTextView, radius: number, dx: number, dy: number, color: number) {
+  this.shadowRadius = radius; this.shadowDx = dx; this.shadowDy = dy; this.shadowColor = color;
+  await vcall(this.paintT, "setShadowLayer", "(FFFI)V", radius, dx, dy, color); invalidate(this);
 }
 function setTextAppearance(this: JTextView, id: number) {
   return this.jres ? applyTextAppearance(this, this.jres, id) : undefined;
@@ -589,12 +596,17 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     r.left = this.padL; r.right = Math.max(this.padL, w - this.padR); r.top = this.padT + i * lh; r.bottom = r.top + lh;
     return r.top + this.ascent();
   },
+  "setShadowLayer(FFFI)V": setTextShadow,
+  "getShadowRadius()F": function (this: JTextView) { return this.shadowRadius; },
+  "getShadowDx()F": function (this: JTextView) { return this.shadowDx; },
+  "getShadowDy()F": function (this: JTextView) { return this.shadowDy; },
+  "getShadowColor()I": function (this: JTextView) { return this.shadowColor; },
   "setMinWidth(I)V": function (this: JTextView, w: number) { this.minW = w; requestLayout(this); },
   ...noops("setCompoundDrawableTintMode(Landroid/graphics/PorterDuff$Mode;)V",
     "setTextLocales(Landroid/os/LocaleList;)V", "setImeHintLocales(Landroid/os/LocaleList;)V", "beginBatchEdit()V",
     "endBatchEdit()V", "setHighlightColor(I)V", "setHorizontallyScrolling(Z)V", "setMarqueeRepeatLimit(I)V",
     "setSelectAllOnFocus(Z)V", "setTextIsSelectable(Z)V", "setError(Ljava/lang/CharSequence;)V", "setAutoLinkMask(I)V",
-    "setLinkTextColor(I)V", "setMaxEms(I)V", "setShadowLayer(FFFI)V", "setMaxHeight(I)V"),
+    "setLinkTextColor(I)V", "setMaxEms(I)V", "setMaxHeight(I)V"),
   ...stubs(1, "getIncludeFontPadding()Z"),
   ...stubs(0, "isHorizontallyScrollable()Z"),
   ...stubs(-1, "getAutoSizeMinTextSize()I", "getAutoSizeMaxTextSize()I", "getAutoSizeStepGranularity()I"),
@@ -714,16 +726,19 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const hg = gravityH(this.gravityT);
     ctx.textAlign = hg === 1 ? "center" : hg === 5 ? "right" : "left";
     const x = hg === 1 ? (contentL + contentR) / 2 : hg === 5 ? contentR : contentL;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      ctx.fillText(line, x, y);
-      if (this.paintT.strikeThru && line) {
-        const w = widths[i];
-        const sx = hg === 1 ? x - w / 2 : hg === 5 ? x - w : x;
-        ctx.fillRect(sx, y - this.paintT.textSize * 0.3, w, Math.max(1, this.paintT.textSize / 14));
+    const shadow = beginPaintShadow(ctx, this.paintT);
+    try {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        ctx.fillText(line, x, y);
+        if (this.paintT.strikeThru && line) {
+          const w = widths[i];
+          const sx = hg === 1 ? x - w / 2 : hg === 5 ? x - w : x;
+          ctx.fillRect(sx, y - this.paintT.textSize * 0.3, w, Math.max(1, this.paintT.textSize / 14));
+        }
+        y += lh;
       }
-      y += lh;
-    }
+    } finally { if (shadow) ctx.restore(); }
     if (this.editable && this.focused && this.cursorVisible && Math.floor((performance.now() - this.blinkStart) / 500) % 2 === 0) {
       const cw = widths[lines.length - 1] ?? 0;
       const cx = (hg === 1 ? x + cw / 2 : hg === 5 ? x : x + cw) + 1;
