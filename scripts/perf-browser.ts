@@ -15,6 +15,7 @@ const { values } = parseArgs({ options: {
   url: { type: "string", default: process.env.WEBDROID_URL ?? "http://localhost:4080" },
   out: { type: "string" }, gpu: { type: "string", default: "software" }, probe: { type: "boolean", default: false },
   ms: { type: "string", default: "15000" }, warmup: { type: "string", default: "3000" },
+  interval: { type: "string" }, "exercise-once": { type: "boolean", default: false }, "setup-shots": { type: "boolean", default: false },
 } });
 const flow = FLOWS.find((f) => f.app === values.flow);
 if (!flow || !values.after || !values.out) throw new Error("Required: --flow <flow> --after <step> --out <file.json>");
@@ -28,6 +29,8 @@ if (after < 0) throw new Error("Unknown setup step");
 const gpu = values.gpu;
 if (gpu !== "software" && gpu !== "hardware") throw new Error("--gpu must be software or hardware");
 const ms = Number(values.ms), warmup = Number(values.warmup);
+const interval = values.interval === undefined ? undefined : Number(values.interval);
+if (interval !== undefined && !(interval > 0 && interval <= 60000)) throw new Error("Invalid input interval");
 if (!(ms > 0 && ms <= 60000 && warmup >= 0 && warmup <= 60000)) throw new Error("Invalid measurement duration");
 const manifest = await loadManifest(flow.app);
 const screen = screenOf(manifest, flow.screen);
@@ -49,13 +52,17 @@ try {
   await page.waitForFunction(() => !!globalThis.wd);
   await page.evaluate(() => document.fonts.ready);
   const setup: unknown[] = [];
+  if (values["setup-shots"]) await mkdir(dirname(values.out), { recursive: true });
   for (const step of flow.steps.slice(0, after + 1)) {
     const rec = manifest?.steps.find((s) => s.id === step.id);
     const started = performance.now();
     const hit = await page.evaluate(performAction, { a: actOf(flow, step, rec), screen, deadlineMs: 60000 });
     const actionMs = performance.now() - started;
     await page.waitForTimeout(step.settleDelayMs ?? 500);
-    setup.push({ step: step.id, ms: performance.now() - started, actionMs, hit });
+    const setupMs = performance.now() - started;
+    const perf = values["setup-shots"] ? await page.evaluate(() => ({ ...globalThis.wd.perf })) : undefined;
+    setup.push({ step: step.id, ms: setupMs, actionMs, hit, ...(perf ? { perf } : {}) });
+    if (values["setup-shots"]) await page.screenshot({ path: values.out.replace(/\.json$/, "") + `-setup-${step.id}.png` });
   }
   await page.waitForTimeout(warmup);
   let foreground: ReturnType<typeof page.mainFrame> | undefined;
@@ -78,7 +85,7 @@ try {
   const actions = exercises.map((exercise) => actOf(flow, exercise, manifest?.steps.find((s) => s.id === exercise.id)));
   // Repeated tap steps define one tap per interval; do not nest their original repeat loop.
   for (const action of actions) if (action.type === "tap") action.repeat = 1;
-  const measurement = foreground.evaluate(async ({ ms, actions, screen, actionSource }) => {
+  const measurement = foreground.evaluate(async ({ ms, actions, screen, actionSource, interval, once }) => {
     const act: typeof performAction = (0, eval)(`(${actionSource})`);
     const wd = globalThis.wd;
     const capacity = 8192;
@@ -114,8 +121,9 @@ try {
     let acting = false;
     const actionErrors: string[] = [];
     const firstAction = actions[0];
-    const intervalMs = firstAction?.type === "tap" ? firstAction.everyMs ?? 600 : 1000;
-    const plannedInputs = firstAction ? Math.max(0, Math.ceil(ms / intervalMs) - 1) : 0;
+    const intervalMs = interval ?? (firstAction?.type === "tap" ? firstAction.everyMs ?? 600 : 1000);
+    const availableInputs = firstAction ? Math.max(0, Math.ceil(ms / intervalMs) - 1) : 0;
+    const plannedInputs = once ? Math.min(actions.length, availableInputs) : availableInputs;
     const timer = !firstAction ? undefined : setInterval(() => {
       if (acting || inputs >= plannedInputs) return;
       const action = actions[inputs % actions.length];
@@ -135,7 +143,7 @@ try {
       inputToNextPresentProxy: Array.from(inputPresent.subarray(0, ni)),
       app: wd.app()?.host.pkg, 
     };
-  }, { ms, actions, screen, actionSource: performAction.toString() });
+  }, { ms, actions, screen, actionSource: performAction.toString(), interval, once: values["exercise-once"] });
   const result = await measurement;
   const afterMetrics = await session.send("Performance.getMetrics");
   await session.send("HeapProfiler.collectGarbage");
@@ -154,7 +162,8 @@ try {
   await mkdir(dirname(values.out), { recursive: true });
   await page.screenshot({ path: values.out.replace(/\.json$/, "") + ".png" });
   const output = { flow: flow.app, after: values.after, exercise: values.exercise, url: url.href, browser: browser.version(),
-    gpu, gpuInfo: gpuInfo.gpu, probe: values.probe, screen, warmup, setup, result, alive, tree, metrics, heapBefore, heapAfter, processes, errors };
+    gpu, gpuInfo: gpuInfo.gpu, probe: values.probe, screen, warmup, setup, result, alive, tree, metrics, heapBefore, heapAfter, processes, errors,
+    ...(interval !== undefined ? { interval } : {}), ...(values["exercise-once"] ? { exerciseOnce: true } : {}) };
   await Bun.write(values.out, JSON.stringify(output, null, 2));
   console.log(JSON.stringify({ output: values.out, glFps: result.perf.glFrames * 1000 / result.ms,
     presentFps: result.presentCount * 1000 / result.ms, ticks: result.ticks, hidden: result.hidden, alive, errors }));
