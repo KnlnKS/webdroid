@@ -2737,3 +2737,9 @@ layout passes fell from 295 to 1 and layout time from 844 ms to 18 ms (2.42 s ve
 capture windows); frame drawing remains active because an app animator is still running.
 The measurement-cache test checks repeated unchanged padding and a real subsequent change;
 typecheck passes. The clean-source capture is chrome-video-padding-fixed.json.
+
+RotateDrawable was the remaining unsupported drawable tag in Maps' observed media path.
+Its wrapper now draws the child around absolute or fractional pivots, updates rotation with
+level, and loads XML angles/pivots. The SDK and AOSP Android 15 implementation establish the
+API and angle-update behavior. Browser pixels cover half-level rotation, absolute pivots and
+canvas restoration; typecheck passes. No application resource names are used by the delegate.

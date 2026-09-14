@@ -1013,6 +1013,44 @@ rt.register({
     ...stubs(null, "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;"),
   },
 });
+class JRotateDrawable extends JDrawableWrapper {
+  fromDegrees = 0; toDegrees = 360; currentDegrees = 0;
+  pivotX = 0.5; pivotY = 0.5; pivotXRelative = true; pivotYRelative = true;
+  drawRotated(canvas: JCanvas): unknown {
+    if (!this.dr) return;
+    const b = this.dr.bounds, ctx = canvas.ctx;
+    const x = b.left + this.pivotX * (this.pivotXRelative ? b.right - b.left : 1);
+    const y = b.top + this.pivotY * (this.pivotYRelative ? b.bottom - b.top : 1);
+    ctx.save(); ctx.translate(x, y);
+    ctx.rotate(this.currentDegrees * Math.PI / 180);
+    ctx.translate(-x, -y);
+    try {
+      const result = drawChild(this.dr, canvas);
+      if (result instanceof Promise) return result.finally(() => ctx.restore());
+    } catch (e) { ctx.restore(); throw e; }
+    ctx.restore();
+  }
+  paint(canvas: JCanvas) { return this.drawRotated(canvas); }
+}
+rt.register({ name: "android/graphics/drawable/RotateDrawable", ctor: JRotateDrawable, sup: "android/graphics/drawable/DrawableWrapper", methods: {
+  "draw(Landroid/graphics/Canvas;)V": function (this: JRotateDrawable, canvas: JCanvas) { return this.drawRotated(canvas); },
+  "onLevelChange(I)Z": function (this: JRotateDrawable, level: number) {
+    return after(this.dr ? vcall(this.dr, "setLevel", "(I)Z", level) : undefined, () => {
+      this.currentDegrees = this.fromDegrees + (this.toDegrees - this.fromDegrees) * level / 10000;
+      invalidateSelf.call(this); return 1;
+    });
+  },
+  ...Object.fromEntries((["fromDegrees", "toDegrees", "pivotX", "pivotY", "pivotXRelative", "pivotYRelative"] as const).flatMap(key => {
+    const boolean = key.endsWith("Relative"), cap = key[0].toUpperCase() + key.slice(1), type = boolean ? "Z" : "F";
+    return [
+      [`${boolean ? "is" : "get"}${cap}()${type}`, function (this: JRotateDrawable) { return boolean ? +this[key] : this[key]; }],
+      [`set${cap}(${type})V`, function (this: JRotateDrawable, value: number) {
+        if (key === "pivotXRelative" || key === "pivotYRelative") this[key] = !!value; else this[key] = value;
+        invalidateSelf.call(this);
+      }],
+    ];
+  })),
+} });
 class JScaleDrawable extends JDrawableWrapper {
   scaleWidth = -1; scaleHeight = -1; gravity = 3; useIntrinsicMinimum = false;
   scaled = new JRect();
@@ -1260,7 +1298,7 @@ const AT = attrTable(
   "viewportHeight", "pathData", "fillColor", "strokeColor", "strokeWidth", "fillAlpha", "fillType",
   "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
   "gravity", "oneshot", "duration", "scaleWidth", "scaleHeight", "useIntrinsicSizeAsMinimum", "level",
-  "pivotX", "pivotY", "translateX", "translateY", "scaleX", "scaleY", "rotation");
+  "pivotX", "pivotY", "translateX", "translateY", "scaleX", "scaleY", "rotation", "fromDegrees", "toDegrees");
 async function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): Promise<JDrawable> {
   const root = parseAXML(bytes);
   return inflateDrawableNode(res, root, theme);
@@ -1334,6 +1372,21 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
           d.padding.bottom = dimen(cg(AT.bottom), 0);
         }
       }
+      return d;
+    }
+    case "rotate": {
+      const d = new JRotateDrawable();
+      d.fromDegrees = rvFloat(res, resolveStyleValue(res, theme, get(AT.fromDegrees)), 0);
+      d.toDegrees = rvFloat(res, resolveStyleValue(res, theme, get(AT.toDegrees)), 360);
+      d.currentDegrees = d.fromDegrees;
+      for (const axis of ["X", "Y"] as const) {
+        const value = resolveStyleValue(res, theme, get(axis === "X" ? AT.pivotX : AT.pivotY));
+        if (!value) continue;
+        const relative = value.t === TV.FRACTION;
+        d[`pivot${axis}Relative`] = relative;
+        d[`pivot${axis}`] = relative ? complexToFraction(value.d, 1, 1) : rvFloat(res, value);
+      }
+      wrapSet.call(d, await itemDrawable(res, node, theme));
       return d;
     }
     case "scale": {

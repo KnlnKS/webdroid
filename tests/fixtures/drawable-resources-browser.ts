@@ -1,6 +1,6 @@
 import "../../src/natives";
 import { rt } from "../../src/jvm/runtime";
-import { vcall } from "../../src/jvm/natives/jlang";
+import { vcall, newObj } from "../../src/jvm/natives/jlang";
 import { zipTree } from "../../src/jvm/natives/jzip";
 import { Arsc } from "../../src/android/arsc";
 import { Resources, JTheme, setFramework } from "../../src/android/res";
@@ -30,6 +30,20 @@ async function probe() {
   await vcall(thumb, "setState", "([I)Z", Int32Array.of(ST.enabled));
   await vcall(thumb, "draw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 300, 54));
   const center = pixel(27, 27), outside = pixel(2, 2);
-  return { heights, before, after, above, center, outside, restored: ctx.getTransform().isIdentity };
+  ctx.globalAlpha = 1; ctx.clearRect(0, 0, 300, 54);
+  const rotate = await newObj("android/graphics/drawable/RotateDrawable", "()V");
+  const fill = await newObj("android/graphics/drawable/ColorDrawable", "(I)V", 0xffff0000);
+  await vcall(rotate, "setDrawable", "(Landroid/graphics/drawable/Drawable;)V", fill);
+  await vcall(rotate, "setBounds", "(IIII)V", 10, 20, 50, 40);
+  await vcall(rotate, "setToDegrees", "(F)V", 180);
+  await vcall(rotate, "setLevel", "(I)Z", 5000);
+  await vcall(rotate, "draw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 300, 54));
+  const rotated = [pixel(30, 12), pixel(12, 30)];
+  ctx.clearRect(0, 0, 300, 54);
+  await vcall(rotate, "setPivotXRelative", "(Z)V", 0);
+  await vcall(rotate, "setPivotX", "(F)V", 5);
+  await vcall(rotate, "setLevel", "(I)Z", 10000);
+  await vcall(rotate, "draw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 300, 54));
+  return { heights, before, after, above, center, outside, rotated, absolute: [pixel(0, 30), pixel(30, 30)], restored: ctx.getTransform().isIdentity };
 }
 Object.defineProperty(window, "drawableResourcesProbe", { value: probe() });
