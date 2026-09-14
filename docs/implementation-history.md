@@ -3857,3 +3857,45 @@ remains unverified, separately from the measured completed-title startup gain.
 Screenshots and all-process diagnostics are saved in the native worktree under
 `webdroid-shots/native-stages/doodle-options/`; observed main/browser diagnostics
 are clean, with child log/performance/queue channels still unavailable.
+
+### Final selected-build Flappy checks
+
+Production is frozen at `6cbce0b`; the final harness is `dc5d401`. Two bounded
+adaptive calibration attempts per backend sustain 15 seconds of real gameplay
+using ordinary taps, advancing scores 0 -> 3 on SwiftShader and 0 -> 9 on Metal.
+Their controller work excludes them from performance acceptance. An initial
+software fixed replay starts two physics updates earlier despite identical
+100 ms waits. The harness therefore gains a read-only exact start-state condition,
+using states recorded before comparison, without guest mutation or timing changes.
+It waits at most three seconds before in-page counters start; CDP CPU includes
+that setup wait and is explicitly wider than the gameplay window.
+
+The second software calibration and fresh baseline replay pass the exact state
+condition, but the final build does not reach a sampled exact match before the
+deadline. A single state-only diagnostic reproduces it with matching initial
+random state and pipe heights; this does not prove a different random seed or
+that the unsampled state never existed. Metal fixed baseline replay matches its
+starting state but dies at score three despite all 30 taps completing. Adaptive
+and replay runs each complete 900 GL callbacks; the first observed physics-state
+divergence is around 2.717 seconds with different bird velocity and matching
+pipes/random state. Timing sensitivity is observed, not causally isolated.
+No targets are retuned, no further adaptive attempts are made, and no formal
+gameplay performance comparison is claimed.
+
+Three alternating 15-second title pairs per backend remain valid. SwiftShader
+median presentations/s is 29.395689 -> 29.261010 (-0.458%), main TaskDuration
+0.239786 -> 0.240842 seconds (+0.440%), p95 interval 35.210 -> 35.800 ms and
+JS heap 161.151 -> 161.093 MB. Metal gives 60.064665 -> 59.994800/s (-0.116%),
+TaskDuration 1.713650 -> 1.726734 seconds (+0.764%), heap 161.489 -> 161.508 MB.
+Metal p95 is 24.700 -> 18.700 ms with variable baseline tails; no gain is claimed.
+All twelve windows have zero backing-store growth, correct title screenshots,
+visibility/liveness and advancing completed rendering. Observed main diagnostics
+and layout/draw/GL failure counters are clear; child GMS log/performance/queue
+channels remain unavailable. The browser status TypeError and Metal gmsg errors
+occur on both revisions. Full raw evidence and the gameplay proof failures are
+under `webdroid-shots/performance-stages/final-flappy/FINAL-REPORT.md`.
+
+After these captures, fourteen verified unused experiment servers are stopped;
+only the final root server on 4110 and pristine baseline on 4111 remain for
+selected-build native/app guards and the full matrix. Their worktrees and all
+stage evidence remain intact; the older baseline worktree is untouched.
