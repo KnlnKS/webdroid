@@ -393,7 +393,11 @@ export class JView extends JObj {
   elevationV = 0;
   outlineAmbientShadowColor = -16777216; outlineSpotShadowColor = -16777216;
   longPressTimer: ReturnType<typeof setTimeout> | null = null;
-  transientState = 0; textAlignment = 1;
+  transientState = 0; textAlignment = 0;
+  resolvedTextAlignment(): number {
+    for (let v: JView | null = this; v; v = v.parent) if (v.textAlignment) return v.textAlignment;
+    return 1;
+  }
   clipBounds: JRect | null = null; bgTint: JColorStateList | null = null;
   tooltip: unknown = null;
   win: unknown = null; // ViewRootImpl-ish owner
@@ -450,7 +454,7 @@ const AT = attrTable(
   "clickable", "enabled", "minWidth", "minHeight", "alpha", "focusable", "scaleType", "src",
   "contentDescription", "weightSum", "divider", "showDividers", "dividerPadding", "fillViewport",
   "scrollbars", "fadeScrollbars", "clipToPadding", "clipChildren", "descendantFocusability",
-  "foreground", "duplicateParentState", "baselineAligned", "autoHandwritingEnabled");
+  "foreground", "duplicateParentState", "baselineAligned", "autoHandwritingEnabled", "textAlignment");
 // ── ViewOverlay: a drawing layer over the host's content. AOSP keeps an internal ViewGroup for
 // it; ours holds the two lists the host's draw pass walks, which is all anything reads back.
 class JViewOverlay extends JObj {
@@ -509,7 +513,7 @@ async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0) 
   const ta = obtainStyled(res, v.theme, set, [
     AT.id, AT.background, AT.padding, AT.paddingLeft, AT.paddingTop, AT.paddingRight, AT.paddingBottom,
     AT.visibility, AT.clickable, AT.enabled, AT.minWidth, AT.minHeight, AT.alpha, AT.focusable,
-    AT.paddingStart, AT.paddingEnd, AT.tag, AT.contentDescription, AT.autoHandwritingEnabled,
+    AT.paddingStart, AT.paddingEnd, AT.tag, AT.contentDescription, AT.autoHandwritingEnabled, AT.textAlignment,
   ], defStyleAttr, 0);
   const g = (i: number) => ta.vals[i];
   // the id the reference names (getResourceId's answer): resolving @id/x lands on the entry's own
@@ -537,6 +541,7 @@ async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0) 
   if (g(16)) v.tag = rvString(res, g(16));
   if (g(17)) v.contentDesc = rvString(res, g(17));
   if (g(18)) v.autoHandwritingEnabled = !!rvInt(res, g(18), 1);
+  if (g(19)) v.textAlignment = rvInt(res, g(19), 0);
 }
 
 export function defaultSize(size: number, spec: number): number {
@@ -1447,8 +1452,13 @@ const viewMethods: NativeSpec["methods"] = {
   },
   "setTooltipText(Ljava/lang/CharSequence;)V": function (this: JView, t: unknown) { this.tooltip = t; },
   "getTooltipText()Ljava/lang/CharSequence;": function (this: JView) { return this.tooltip; },
-  "setTextAlignment(I)V": function (this: JView, a: number) { this.textAlignment = a; },
-  "getTextAlignment()I": function (this: JView) { return this.textAlignment; },
+  "setTextAlignment(I)V": function (this: JView, a: number) {
+    if (this.textAlignment === a) return;
+    this.textAlignment = a; requestLayout(this); invalidate(this);
+    const thread = curThread, direction = vcallOn(thread, this, "getLayoutDirection", "()I");
+    return after(direction, ld => vcallOn(thread, this, "onRtlPropertiesChanged", "(I)V", ld));
+  },
+  "getTextAlignment()I": function (this: JView) { return this.resolvedTextAlignment(); },
   "hasFocusable()Z": function (this: JView) { return this.visibility === 0 && (this.focusable || this.focusableInTouchMode) ? 1 : 0; },
   "computeHorizontalScrollExtent()I": function (this: JView) { return this.width(); },
   "computeHorizontalScrollOffset()I": function (this: JView) { return this.scrollX; },

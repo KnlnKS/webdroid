@@ -18,6 +18,11 @@ test("TextView measures and paints replacement spans with cached geometry and re
     expect(result.styles).toEqual([true, true, true]);
     expect(result.compound).toEqual({ drawsAt: [[2, 30], [51, 31], [24, 3], [23, 60]],
       retained: [[2, 3, 8, 11], [1, 2, 11, 8], [0, 0, 5, 7], [2, 1, 14, 6]], restored: true });
+    expect(result.alignment.centers[0]).toBeLessThan(20);
+    expect(result.alignment.centers[1]).toBeGreaterThan(45);
+    expect(result.alignment.centers[1]).toBeLessThan(55);
+    expect(result.alignment.centers[2]).toBeGreaterThan(80);
+    expect(result.alignment).toMatchObject({ own: 4, relative: [5, 3, 5, 3] });
     expect(errors).toEqual([]);
   } finally { await browser.close(); }
 }, 15000);

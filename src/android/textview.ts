@@ -6,6 +6,7 @@ import {
 } from "./drawable";
 import { JTextPaint, JEditable, JSpanned, JLayout, spannedString, mkStaticLayout, mkSpannedLayout, drawLayout } from "./text";
 import { G, gravityV, gravityH } from "./gravity";
+import { isRtl } from "./bidiformatter";
 import { device } from "../shell/config";
 import {
   fontDescent, fontAscent, fontTop, fontBottom, measureText, typefaceFor, JTypeface, tfDefault, type JRect,
@@ -115,6 +116,14 @@ export class JTextView extends JView {
     super();
     this.paintT.textSize = device.dp(14); // AOSP TextView default, 14sp
     this.paintT.color = -16777216;
+  }
+  horizontalGravity(text: string, alignment: number, layoutDirection: number): number {
+    if (alignment === 4) return 1;
+    if (alignment === 5 || alignment === 6) return (alignment === 5) !== !!layoutDirection ? 3 : 5;
+    const gravity = this.gravityT & 0x800007;
+    if (alignment === 1 && gravity !== G.START && gravity !== G.END) return gravityH(gravity);
+    const rtl = !!isRtl(text, 0, text.length, "firstLtr");
+    return (alignment === 3 || alignment === 1 && gravity === G.END) !== rtl ? 5 : 3;
   }
   private upperOf = ""; private upper = "";
   displayText(): string {
@@ -683,8 +692,13 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     this.layoutWidthFor = w;
   },
   "onDraw(Landroid/graphics/Canvas;)V": async function (this: JTextView, cv: JCanvas) {
-    const ctx = cv.ctx;
+    const thread = curThread, ctx = cv.ctx;
     const display = this.displayText();
+    const resolved = vcallOn(thread, this, "getTextAlignment", "()I");
+    const alignment = Number(resolved instanceof Promise ? await resolved : resolved);
+    const direction = alignment === 5 || alignment === 6 ? vcallOn(thread, this, "getLayoutDirection", "()I") : 0;
+    const layoutDirection = Number(direction instanceof Promise ? await direction : direction);
+    const hg = this.horizontalGravity(display || this.hint, alignment, layoutDirection);
     const showHint = !display && this.hint;
     const dlW = this.drawableL ? compoundWidth(this.drawableL) : 0;
     const drW = this.drawableR ? compoundWidth(this.drawableR) : 0;
@@ -716,7 +730,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       const y = vg === 16 ? (contentB - contentT - height) / 2 + contentT : vg === 80 ? contentB - height : contentT;
       this.paintT.color = cslColor(this.colors, this.drawableState());
       ctx.save(); ctx.translate(contentL, y);
-      return drawLayout.call(layout, cv, gravityH(this.gravityT)).finally(() => ctx.restore());
+      return drawLayout.call(layout, cv, hg).finally(() => ctx.restore());
     }
     const hintLay = showHint ? this.hintFor(avail) : null;
     const lines = hintLay ? hintLay.lines : this.lines, widths = hintLay ? hintLay.widths : this.lineWidths;
@@ -729,7 +743,6 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     ctx.font = this.paintT.font();
     ctx.fillStyle = cssColor(showHint ? cslColor(this.hintColors ?? this.colors, this.drawableState()) : cslColor(this.colors, this.drawableState()));
     ctx.textBaseline = "alphabetic";
-    const hg = gravityH(this.gravityT);
     ctx.textAlign = hg === 1 ? "center" : hg === 5 ? "right" : "left";
     const x = hg === 1 ? (contentL + contentR) / 2 : hg === 5 ? contentR : contentL;
     const shadow = beginPaintShadow(ctx, this.paintT);

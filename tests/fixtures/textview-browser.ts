@@ -4,7 +4,7 @@ import { mangleMethod } from "../../src/jvm/abi";
 import { newObj, vcall } from "../../src/jvm/natives/jlang";
 import { JTextView } from "../../src/android/textview";
 import { JCanvas, measureText, type JPaint } from "../../src/android/graphics";
-import { makeSpec, MS_EXACTLY, MS_AT_MOST } from "../../src/android/view";
+import { makeSpec, MS_EXACTLY, MS_AT_MOST, JViewGroup } from "../../src/android/view";
 
 async function probe() {
   rt.linkNatives();
@@ -54,6 +54,27 @@ async function probe() {
     const pixels = expected.getImageData(0, 0, 100, 60).data;
     styles.push(actual.getImageData(0, 0, 100, 60).data.every((v, i) => v === pixels[i]));
   }
+  const aligned = rt.make("android/widget/TextView");
+  if (!(aligned instanceof JTextView)) throw new Error("Invalid aligned TextView");
+  aligned.right = 100; aligned.bottom = 50; aligned.paintT.textSize = 20;
+  const parent = new JViewGroup(); aligned.parent = parent;
+  await vcall(aligned, "setText", "(Ljava/lang/CharSequence;)V", "Hi");
+  await vcall(aligned, "onMeasure", "(II)V", makeSpec(100, MS_EXACTLY), makeSpec(50, MS_EXACTLY));
+  const alignmentPixels: number[] = [];
+  for (const alignment of [2, 4, 3]) {
+    await vcall(parent, "setTextAlignment", "(I)V", alignment);
+    const ctx = new OffscreenCanvas(100, 50).getContext("2d")!;
+    await vcall(aligned, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 100, 50));
+    const pixels = ctx.getImageData(0, 0, 100, 50).data;
+    let lo = 100, hi = -1;
+    for (let y = 0; y < 50; y++) for (let x = 0; x < 100; x++) if (pixels[(y * 100 + x) * 4 + 3]) { lo = Math.min(lo, x); hi = Math.max(hi, x); }
+    alignmentPixels.push((lo + hi) / 2);
+  }
+  await vcall(aligned, "setTextAlignment", "(I)V", 4);
+  await vcall(parent, "setTextAlignment", "(I)V", 2);
+  const alignment = { centers: alignmentPixels, own: await vcall(aligned, "getTextAlignment", "()I"),
+    relative: [aligned.horizontalGravity("مرحبا", 2, 0), aligned.horizontalGravity("مرحبا", 3, 0),
+      aligned.horizontalGravity("Hi", 5, 1), aligned.horizontalGravity("Hi", 6, 1)] };
   view.paintT.textSize = 12;
   const compound = rt.make("android/widget/TextView");
   if (!(compound instanceof JTextView)) throw new Error("Invalid compound TextView");
@@ -75,7 +96,7 @@ async function probe() {
   const surface = new OffscreenCanvas(60, 70).getContext("2d")!;
   await vcall(compound, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(surface, 60, 70));
   const retained = await Promise.all(drawables.map(async d => { const b = await vcall(d, "getBounds", "()Landroid/graphics/Rect;"); return [b.left, b.top, b.right, b.bottom]; }));
-  return { ...result, styles, ellipsis: wrapped.lines, cached: wrapped === view.linesFor(width),
+  return { ...result, styles, alignment, ellipsis: wrapped.lines, cached: wrapped === view.linesFor(width),
     fitting: view.linesFor(measureText(view.paintT, view.text)).lines, cleared: view.spanLayout === null,
     compound: { drawsAt, retained, restored: surface.getTransform().isIdentity } };
 }

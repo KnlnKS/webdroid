@@ -8,7 +8,7 @@ type Heuristic = "ltr" | "rtl" | "firstLtr" | "firstRtl" | "anyRtl" | "locale";
 class JHeuristic extends JObj {
   constructor(readonly kind: Heuristic = "firstLtr") { super(); }
 }
-function isRtl(text: string, start: number, count: number, kind: Heuristic): number {
+export function isRtl(text: string, start: number, count: number, kind: Heuristic): number {
   if (start < 0 || count < 0 || start > text.length - count) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid text range");
   if (kind === "ltr" || kind === "rtl") return +(kind === "rtl");
   if (kind === "locale") return localeDirection(defaultLocale);

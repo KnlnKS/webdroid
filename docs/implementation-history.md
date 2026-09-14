@@ -2655,3 +2655,12 @@ MULTIPLY retains Android's multiplied alpha; tint caches invalidate on bitmap ge
 The pixel test checks ADD, SRC_IN, MULTIPLY and mutation (70 assertions with mask tests);
 typecheck passes. Fresh Chrome displays the media action icons without layout/draw errors.
 Other drawable subclasses and Paint's color-filter modes are not covered by this bitmap fix.
+
+Maps' account-prompt Chips set TEXT_ALIGNMENT_CENTER, but TextView previously drew only
+from gravity. Text alignment now resolves inherited View values, reads the XML attribute,
+requests layout/redraw on changes and notifies the virtual RTL-properties callback. TextView
+uses the resolved alignment for plain and replacement-span drawing, including text-relative
+first-strong direction and view-relative alignment through getLayoutDirection. A browser test
+checks left/center/right pixels, inheritance and relative direction; typecheck passes. This
+does not implement View's previously stubbed layout/text-direction setters or full per-paragraph
+bidi layout; those remain limitations.
