@@ -202,6 +202,10 @@ const intentMethods: NativeSpec["methods"] = {
     const resolved = await vcall(pm, "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", this, 0x10000);
     return resolved?.activityInfo ? mkComponentName(resolved.activityInfo.packageName, resolved.activityInfo.name) : null;
   },
+  "resolveActivityInfo(Landroid/content/pm/PackageManager;I)Landroid/content/pm/ActivityInfo;": async function (this: JIntent, pm: unknown, flags: number) {
+    const resolved = await vcall(pm, "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", this, flags | 0x10000);
+    return resolved?.activityInfo ?? null;
+  },
   "toString()Ljava/lang/String;": function (this: JIntent) {
     return `Intent{act=${this.action} cmp=${this.component}}`;
   },
