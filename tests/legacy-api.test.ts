@@ -6,7 +6,7 @@ import { mangleMethod } from "../src/jvm/abi";
 import { Resources } from "../src/android/res";
 import { JAssetManager, type JResources } from "../src/android/resnative";
 import { PROCESS_PID } from "../src/android/os";
-import { JActivity, JApplication } from "../src/android/app";
+import { fireActivityLifecycle, JActivity, JApplication } from "../src/android/app";
 import { appHost, setAppHost } from "../src/android/apphost";
 import { onMain } from "../src/android/mainloop";
 
@@ -79,7 +79,25 @@ test("a lifecycle observer registered on main waits for the next real event", as
   }
 });
 
-test("lifecycle registration never replays an already delivered event", async () => {
+test("activity callbacks registered during pre-create receive later create stages", async () => {
+  const calls: string[] = [];
+  const app = new JApplication();
+  const activity = new JActivity();
+  (activity as any).$host = { application: app };
+  const activityObserver = {
+    [mangleMethod("onActivityCreated", "(Landroid/app/Activity;Landroid/os/Bundle;)V")]: () => { calls.push("created"); },
+    [mangleMethod("onActivityPostCreated", "(Landroid/app/Activity;Landroid/os/Bundle;)V")]: () => { calls.push("post"); },
+  };
+  const appObserver = {
+    [mangleMethod("onActivityPreCreated", "(Landroid/app/Activity;Landroid/os/Bundle;)V")]: () =>
+      vcall(activity, "registerActivityLifecycleCallbacks", "(Landroid/app/Application$ActivityLifecycleCallbacks;)V", activityObserver),
+  };
+  await vcall(app, "registerActivityLifecycleCallbacks", "(Landroid/app/Application$ActivityLifecycleCallbacks;)V", appObserver);
+  await fireActivityLifecycle(activity, "Created");
+  expect(calls).toEqual(["created", "post"]);
+});
+
+test("background lifecycle registration catches up to the current activity", async () => {
   const calls: string[] = [];
   const app = new JApplication();
   const activity = new JActivity();
@@ -98,7 +116,7 @@ test("lifecycle registration never replays an already delivered event", async ()
     await vcall(app, "registerActivityLifecycleCallbacks", "(Landroid/app/Application$ActivityLifecycleCallbacks;)V", observer);
     await new Promise((resolve) => setTimeout(resolve, 0));
     await onMain(() => {});
-    expect(calls).toEqual([]);
+    expect(calls).toEqual(["resumed"]);
   } finally {
     setCurThread(previousThread);
     setAppHost(previousHost);

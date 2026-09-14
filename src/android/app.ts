@@ -5,7 +5,7 @@ import {
   type JComponentName
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
-import { mangleMethod, jarray } from "../jvm/abi";
+import { jarray } from "../jvm/abi";
 import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "./os";
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
@@ -30,6 +30,9 @@ import { JConfigurationInfo } from "./pm";
 import { deviceConfiguration } from "./resnative";
 import { transactionCaller } from "./binder";
 import { packages } from "./packages";
+import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
+
+export { fireActivityLifecycle } from "./lifecycle";
 
 class JTaskDescription extends JObj {
   label: string | null = null;
@@ -88,36 +91,13 @@ export class JActivity extends JContextWrapper {
   remoteId = 0;
   activityId = 0;
   taskId = 0;
-  lifecycleCbs: unknown[] | null = null;
+  lifecycleCbs: ActivityLifecycleCallback[] | null = null;
   fragMgr: JFragmentManager | null = null;
   // set while a configuration-change relaunch is tearing this instance down, so androidx keeps
   // the ViewModelStore alive; the retained object is handed to the replacement instance.
   changingConfigurations = false;
   lastNonConfig: unknown = null;
   requestedOrientation = -1;
-}
-/** Fire an ActivityLifecycleCallbacks event (both Pre/Post + the plain variant, API 29+ shapes).
- *  androidx ReportFragment.LifecycleCallbacks uses the Post* variants to advance the activity Lifecycle. */
-type LifecyclePhase = "Created" | "Started" | "Resumed" | "Paused" | "Stopped" | "Destroyed";
-export async function fireActivityLifecycle(act: JActivity, phase: LifecyclePhase, bundle: unknown = null) {
-  // process-wide callbacks (Application.registerActivityLifecycleCallbacks) then this
-  // activity's own (API 29 Activity.registerActivityLifecycleCallbacks) — one dispatch point.
-  const app = act.$host?.application as JApplication | null | undefined;
-  const cbs = [...(app?.lifecycleCbs ?? []), ...(act.lifecycleCbs ?? [])];
-  for (const cb of cbs) await fireActivityLifecycleCallback(cb, act, phase, bundle);
-}
-async function fireActivityLifecycleCallback(cb: unknown, act: JActivity, phase: LifecyclePhase, bundle: unknown = null) {
-  const withBundle = phase === "Created";
-  const sig = withBundle ? "(Landroid/app/Activity;Landroid/os/Bundle;)V" : "(Landroid/app/Activity;)V";
-  const args = withBundle ? [act, bundle] : [act];
-  for (const variant of [`onActivityPre${phase}`, `onActivity${phase}`, `onActivityPost${phase}`]) {
-    // only call variants the callback actually implements (androidx impls vary by API level)
-    const key = mangleMethod(variant, sig);
-    const fn = (cb as Record<string, unknown>)[key];
-    if (typeof fn !== "function") continue;
-    try { const r = (fn as (...a: unknown[]) => unknown).apply(cb, args); if (r instanceof Promise) await r; }
-    catch (e) { reportUncaught(e); }
-  }
 }
 // the API 29 Pre/Post hooks are interface defaults: an implementer's super call must find them
 rt.register({
@@ -126,14 +106,6 @@ rt.register({
     [`onActivity${when}${phase}(Landroid/app/Activity;${phase === "Created" || phase === "SaveInstanceState" ? "Landroid/os/Bundle;" : ""})V`, () => {}]))),
 });
 /** Activity (API 29+) and Application both keep their own ActivityLifecycleCallbacks list */
-const lifecycleCbMethods: NativeSpec["methods"] = {
-  "registerActivityLifecycleCallbacks(Landroid/app/Application$ActivityLifecycleCallbacks;)V": function (this: { lifecycleCbs: unknown[] | null }, cb: unknown) {
-    (this.lifecycleCbs ??= []).push(cb);
-  },
-  "unregisterActivityLifecycleCallbacks(Landroid/app/Application$ActivityLifecycleCallbacks;)V": function (this: { lifecycleCbs: unknown[] | null }, cb: unknown) {
-    if (this.lifecycleCbs) this.lifecycleCbs = this.lifecycleCbs.filter((c) => c !== cb);
-  },
-};
 export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...contextMethods,
   "<init>()V": function (this: JActivity) { this.window.activity = this; },
@@ -141,7 +113,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JActivity) { return this.window.backDispatcher(); },
   "getApplication()Landroid/app/Application;": function (this: JActivity) { return this.$host.application; },
   "setTaskDescription(Landroid/app/ActivityManager$TaskDescription;)V": function (this: JActivity, d: JTaskDescription | null) { this.taskDescription = d; },
-  ...lifecycleCbMethods,
+  ...lifecycleCallbackMethods,
   "getWindowManager()Landroid/view/WindowManager;": function (this: JActivity) { return systemService(this, "window"); },
   "getIntent()Landroid/content/Intent;": function (this: JActivity) { return this.intent ?? (this.intent = new JIntent()); },
   "getLayoutInflater()Landroid/view/LayoutInflater;": function (this: JActivity) { return getInflater(this); },
@@ -406,7 +378,7 @@ rt.markers("android/view/Window$Callback");
 rt.markers("android/view/Window$OnFrameMetricsAvailableListener");
 
 export class JApplication extends JContextWrapper {
-  lifecycleCbs: unknown[] | null = null;
+  lifecycleCbs: ActivityLifecycleCallback[] | null = null;
 }
 rt.register({
   name: "android/app/Application", ctor: JApplication, sup: "android/content/ContextWrapper",
@@ -416,7 +388,7 @@ rt.register({
     "static getProcessName()Ljava/lang/String;": () => PROCESS_NAME || appHost?.pkg || "app",
     ...noops("<init>()V", "onCreate()V", "onTerminate()V", "onLowMemory()V", "onTrimMemory(I)V",
       "onConfigurationChanged(Landroid/content/res/Configuration;)V"),
-    ...lifecycleCbMethods,
+    ...lifecycleCallbackMethods,
     "registerComponentCallbacks(Landroid/content/ComponentCallbacks;)V": () => {},
   },
 });
