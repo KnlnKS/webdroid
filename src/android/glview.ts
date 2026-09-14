@@ -100,7 +100,7 @@ rt.register({
         }
         return true;
       };
-      uiState.animHooks.add(this.hook);
+      if (this.attached) uiState.animHooks.add(this.hook);
       requestLayout(this);
     },
     "setRenderMode(I)V": function (this: JGLSurfaceView, m: number) { this.renderMode = m; },
@@ -132,7 +132,11 @@ rt.register({
         cv.ctx.drawImage(this.glCanvas, 0, 0, this.width(), this.height());
       }
     },
+    "onDetachedFromWindow()V": function (this: JGLSurfaceView) {
+      if (this.hook) uiState.animHooks.delete(this.hook);
+    },
     "onAttachedToWindow()V": function (this: JGLSurfaceView) {
+      if (this.hook) uiState.animHooks.add(this.hook);
       this.ensureCanvas(this.width() || device.width, this.height() || device.height - device.statusBar);
     },
   },

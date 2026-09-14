@@ -1,3 +1,4 @@
+import { dispatchAttached, dispatchDetached, uiState } from "../../src/android/view";
 import "../../src/natives";
 import { rt } from "../../src/jvm/runtime";
 import { mangleStaticField, mangleMethod } from "../../src/jvm/abi";
@@ -126,6 +127,33 @@ async function probe() {
   });
   await Reflect.apply(Reflect.get(view, "runFrame"), view, []);
   return { callbacks, bound10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
-    firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null, readback: readback() };
+    firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null,
+    lifecycle: await lifecycle(), readback: readback() };
+}
+async function lifecycle() {
+  const view = rt.make("android/opengl/GLSurfaceView"), renderer = rt.make("java/lang/Object");
+  Object.assign(view, { right: 4, bottom: 4 });
+  let drawn = 0;
+  Object.assign(renderer, {
+    [mangleMethod("onSurfaceCreated", "(Ljavax/microedition/khronos/opengles/GL10;Ljavax/microedition/khronos/egl/EGLConfig;)V")]: () => {},
+    [mangleMethod("onSurfaceChanged", "(Ljavax/microedition/khronos/opengles/GL10;II)V")]: () => {},
+    [mangleMethod("onDrawFrame", "(Ljavax/microedition/khronos/opengles/GL10;)V")]: () => { drawn++; },
+  });
+  await vcallMaybe(view, "setRenderer", "(Landroid/opengl/GLSurfaceView$Renderer;)V", renderer);
+  await vcallMaybe(view, "setRenderMode", "(I)V", 0);
+  const hook = Reflect.get(view, "hook") as () => boolean;
+  const unregistered = !uiState.animHooks.has(hook);
+  await dispatchAttached(view);
+  const registered = uiState.animHooks.has(hook);
+  await vcallMaybe(view, "onPause", "()V"); await dispatchDetached(view);
+  const released = !uiState.animHooks.has(hook);
+  await dispatchAttached(view); hook();
+  const paused = drawn === 0 && Reflect.get(view, "paused");
+  await vcallMaybe(view, "onResume", "()V"); hook();
+  while (Reflect.get(view, "inFlight")) await new Promise(resolve => setTimeout(resolve, 0));
+  hook();
+  const reattached = uiState.animHooks.has(hook) && drawn === 1 && Reflect.get(view, "renderMode") === 0;
+  await dispatchDetached(view);
+  return unregistered && registered && released && paused && reattached && !uiState.animHooks.has(hook);
 }
 Object.defineProperty(window, "eglThreadProbe", { value: probe() });
