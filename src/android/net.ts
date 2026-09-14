@@ -372,12 +372,19 @@ rt.register({
   fields: ["ipAddress", "gateway", "netmask", "dns1", "dns2", "serverAddress", "leaseDuration"],
   methods: { "<init>()V": function () {} },
 });
-class JWifiLock extends JObj { held = false; refCounted = true; }
+class JWifiLock extends JObj { held = false; refCounted = true; acquisitions = 0; }
 rt.register({
   name: "android/net/wifi/WifiManager$WifiLock", ctor: JWifiLock,
   methods: {
-    "acquire()V": function (this: JWifiLock) { this.held = true; },
-    "release()V": function (this: JWifiLock) { this.held = false; },
+    "acquire()V": function (this: JWifiLock) {
+      if (this.refCounted) this.acquisitions++;
+      this.held = true;
+    },
+    "release()V": function (this: JWifiLock) {
+      if (!this.held || this.refCounted && this.acquisitions === 0) throw rt.mkThrowable("java/lang/RuntimeException", "WifiLock under-locked");
+      if (this.refCounted) this.held = --this.acquisitions > 0;
+      else this.held = false;
+    },
     "isHeld()Z": function (this: JWifiLock) { return +this.held; },
     "setReferenceCounted(Z)V": function (this: JWifiLock, enabled: number) { this.refCounted = !!enabled; },
   },

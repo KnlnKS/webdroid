@@ -450,9 +450,13 @@ test("Wi-Fi locks expose their held state", async () => {
   const lock = await vcall(manager, "createWifiLock", "(ILjava/lang/String;)Landroid/net/wifi/WifiManager$WifiLock;", 1, "test");
   expect(await vcall(lock, "isHeld", "()Z")).toBe(0);
   await vcall(lock, "acquire", "()V");
+  await vcall(lock, "acquire", "()V");
+  await vcall(lock, "release", "()V");
   expect(await vcall(lock, "isHeld", "()Z")).toBe(1);
   await vcall(lock, "release", "()V");
   expect(await vcall(lock, "isHeld", "()Z")).toBe(0);
+  await expect(vcall(lock, "release", "()V"))
+    .rejects.toMatchObject({ constructor: rt.link("java/lang/RuntimeException").ctor });
 });
 
 test("the connected browser network is validated", async () => {
