@@ -766,14 +766,26 @@ fn execThumb(c: *Cpu, pc: u32) Status {
     }
     if ((h & 0xf800) >= 0xe800) {
         const h2: u32 = ld(u16, pc + 2);
-        const cp = (h2 >> 8) & 15;
+        if (execThumb32(c, h, h2, pc)) |status| return status;
+    }
+    return execThumb16(c, h, pc, currentIt);
+}
+
+inline fn execThumb32(c: *Cpu, h: u32, second: u32, pc: u32) ?Status {
+        const cp = (second >> 8) & 15;
         if (cp == 10 or cp == 11) {
-            if (vfp(c, h << 16 | h2, pc -% 4)) |status| {
+            if (vfp(c, h << 16 | second, pc -% 4)) |status| {
                 if (status != .fault) c.pc = pc + 4;
                 return status;
             }
         }
-    }
+    if (execThumb32Data(c, h, pc)) |status| return status;
+    if (execThumb32Transfers(c, h, pc)) |status| return status;
+    if (execThumb32Branches(c, h, pc)) |status| return status;
+    return execThumb32Late(c, h, pc);
+}
+
+inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
     if ((h & 0xefb0) == 0xef80) {
         const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0x10 == 0) return fault(c, .undefined, h << 16 | h2, pc);
@@ -886,6 +898,10 @@ fn execThumb(c: *Cpu, pc: u32) Status {
             return .next;
         }
     }
+    return null;
+}
+
+inline fn execThumb32Transfers(c: *Cpu, h: u32, pc: u32) ?Status {
     if ((h & 0xfff0) == 0xe8d0) {
         const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0xffe0 == 0xf000) {
@@ -974,6 +990,10 @@ fn execThumb(c: *Cpu, pc: u32) Status {
             return .next;
         }
     }
+    return null;
+}
+
+inline fn execThumb32Branches(c: *Cpu, h: u32, pc: u32) ?Status {
     if ((h & 0xf800) == 0xf000) {
         const h2: u32 = ld(u16, pc + 2);
         const cc = (h >> 6) & 15;
@@ -994,6 +1014,10 @@ fn execThumb(c: *Cpu, pc: u32) Status {
             return jump(c, pc +% 4 +% off);
         }
     }
+    return null;
+}
+
+inline fn execThumb32Late(c: *Cpu, h: u32, pc: u32) ?Status {
     if ((h & 0xff90) == 0xf900) {
         const h2: u32 = ld(u16, pc + 2);
         c.pc = pc + 4;
@@ -1104,6 +1128,10 @@ fn execThumb(c: *Cpu, pc: u32) Status {
         }
         return .next;
     }
+    return null;
+}
+
+inline fn execThumb16(c: *Cpu, h: u32, pc: u32, currentIt: u32) Status {
     const top = h >> 12;
     const rd = h & 7;
     const rn = (h >> 3) & 7;
