@@ -19,7 +19,7 @@ fn fill(a: u32, v: u8, n: u32) void {
     @memset(bytes(a)[0..n], v);
 }
 pub fn move(d: u32, s: u32, n: u32) void {
-    if (d <= s) std.mem.copyForwards(u8, bytes(d)[0..n], bytes(s)[0..n]) else std.mem.copyBackwards(u8, bytes(d)[0..n], bytes(s)[0..n]);
+    @memmove(bytes(d)[0..n], bytes(s)[0..n]);
 }
 
 const FREE = 0;

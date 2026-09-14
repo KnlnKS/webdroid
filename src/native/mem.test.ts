@@ -1,9 +1,41 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { setA64 } from "./cpu";
+import { core, CORE_LIBC } from "./core";
 import { mem } from "./mem";
 
 beforeAll(() => setA64(true));
 afterAll(() => setA64(false));
+
+test("core copies preserve overlap and invalidate executed pages across the copied range", () => {
+  const p = mem.memalign(0x1000, 0x4000), cp = core.cpu_alloc(1, 1);
+  const args = new BigUint64Array(mem.buf, cp, 3);
+  const copy = (d: number, s: number, n: number, id = CORE_LIBC.memmove) => {
+    args.set([BigInt(d), BigInt(s), BigInt(n)]);
+    expect(core.libc_call(cp, id)).toBe(0);
+    expect(args[0]).toBe(BigInt(d));
+  };
+  try {
+    for (const id of [CORE_LIBC.memcpy, CORE_LIBC.memmove]) {
+      for (const offset of [-33, -1, 0, 1, 33, 256]) {
+        const bytes = mem.bytes(p, 512);
+        bytes.set(Uint8Array.from({ length: 512 }, (_, i) => i));
+        const expected = bytes.slice();
+        expected.copyWithin(64 + offset, 64, 192);
+        copy(p + 64 + offset, p + 64, 128, id);
+        expect(bytes).toEqual(expected);
+      }
+      copy(0xffffffff, 0xffffffff, 0, id);
+    }
+    mem.st32(p + 0x1000, 0xd503201f); // A64 nop
+    expect(core.exec_word(cp, 0xd503201f, p + 0x1000)).toBe(0);
+    const before = core.cpu_stat(1);
+    copy(p, p + 0x1000, 0x3000);
+    expect(core.cpu_stat(1)).toBe(before + 1);
+  } finally {
+    core.cpu_free(cp);
+    mem.free(p);
+  }
+});
 
 test("A64 transient mappings stay out of the malloc arena", () => {
   const warmup = mem.malloc(16);
