@@ -4154,3 +4154,121 @@ unrelated servers are untouched. Final candidate actual/report copies are restor
 to the default E2E output directories while immutable matrix captures and prior
 outputs remain archived. The integration worktree contains only the requested
 committed changes; generated core blobs and experiment artifacts remain untracked.
+
+## DEX-to-JavaScript tier redesign
+
+Starting revision `5681101` was profiled again for a DEX-specific redesign. The
+new work is isolated on `codex/dex-performance-redesign`; raw measurements and
+Chrome CPU profiles remain under `/tmp` and are not production artifacts.
+
+Commit `4c3fc28` adds bounded, off-by-default JVM attribution. `?jvmProfile=1`
+records at most 8192 methods and attributes decode, CFG, reaching-definition
+typing, cold construction, hot emission, Function compilation, class linking,
+cold/hot execution and suspension. `wd.perf` owns aggregate counters;
+`wd.jvmProfile()` owns method records. `?jvmTier=auto|cold|js|wasm` and the
+perf-browser equivalents are diagnostic controls. A requested Wasm tier reports
+unavailable and runs auto; it does not fabricate a backend.
+
+Commit `1d4fd34` makes method preparation idempotent and reuses it for synchronous
+methods that proceed directly to JS. Seven FitNotes pairs were application-neutral;
+hot emission fell about 1.2 ms in the profile. It is retained as a neutral
+structural prerequisite.
+
+Commit `bb8abee` adds executed-instruction and backedge heat alongside entry-count
+promotion. Grid measurements at 1024, 4096 and 16384 instructions select 4096 as
+the lowest stable default. OSR happens only after a real cooperative yield at a
+backedge and transfers registers, PC, exception/invocation temporaries, thread and
+suspension state into the existing hot switch emitter. The first implementation
+retained decoded CFGs for every async method and raised Mihon heap about 5.5%; it
+was removed. The retained implementation rebuilds preparation only for methods
+that promote, returning heap to within about 0.5%. The real-DEX tier fixture adds
+one long single-activation promotion case and preserves captured entry behavior.
+
+Commit `aeae4d3` removes cold source-string regex rewriting. The shared emitter
+now emits cold registers, literals, properties, frame temporaries and generator
+yields directly. A profiled Mihon launch reduces cold construction from about
+428 to 217 ms and compile time from about 1004 to 772 ms. Three initial startup
+pairs give FitNotes 236.74 -> 226.66 ms (-4.3%) and Mihon 1179.82 -> 1079.84 ms
+(-8.5%), with lower heap.
+
+The current architecture changes the evidence that led the older operand version
+to be rolled back. Seven new 1003-ms FitNotes pairs against the preceding OSR
+stage give CPU 46.04 -> 40.04 ms/s (-13.0%), per-window median opportunity
+5.4 -> 6.5 ms, p95 10.7 -> 10.6 ms, heap 173.33 -> 172.59 MB, and equal
+presentation throughput. Three Mihon pairs give CPU 380.40 -> 381.28 ms/s
+(+0.23%), median opportunity 39.3 -> 38.7 ms, p95 57.2 -> 53.7 ms, and heap
+361.69 -> 356.93 MB. Every input completes and no observed error occurs. The
+unfavorable FitNotes central opportunity metric is retained as a limit; the
+declared p95 and CPU gates pass.
+
+Commit `80509af` extracts compact preparation into `src/jvm/prepared.ts`. One
+ordered instruction array carries decoded operands and finalized reaching-type
+annotations; block leaders use a byte array. Numeric opcode metadata replaces the
+hot name-regex classifications for termination, register writes, suspension and
+floating consumers. The compiler shrinks from 967 to 871 lines. Three pairs
+against direct operands alone improve FitNotes startup another 1.6% and Mihon
+2.9%, with flat heap. Instrumented Mihon phases change decode 29.0 -> 16.9 ms,
+CFG 22.1 -> 12.6 ms, type 249.6 -> 214.6 ms and total compile 790.5 ->
+715.3 ms. FitNotes and Mihon eager smoke compilation report zero method failures.
+
+Commit `8238980` extends the same runner with optional Chrome `.cpuprofile` output
+and records conservative primitive numeric-loop eligibility. FitNotes has one
+eligible 11-instruction method among 3696 recorded methods, but it never executes;
+Chrome samples only 18.6 ms / 0.12% generated DEX JS in the window. Mihon has no
+eligible method among the capped 8192 records. It samples 3478 ms / 22.4% DEX JS,
+but hot methods are object-heavy Compose, collections, property access and
+coroutine dispatch. The required 10% eligible share is 0%, so no Wasm backend or
+compiler worker is retained. `runCold` self samples are only about 6 ms FitNotes
+and 27 ms Mihon per 15 seconds, below the 15% dispatch threshold; prior fused
+blocks and new structured emission are not revived.
+
+The final audit finds that Wasm eligibility and several profiler callbacks still
+run while profiling is disabled. Commit `ae8b4be` guards that work at preparation,
+entry, suspension, backedge and promotion sites. The real-DEX tier fixture remains
+green. Because this changes production timing, the complete seven-pair performance
+matrix is discarded and repeated; only the corrected matrix below is final.
+
+Other bounded experiments are removed. A sparse array for cold PC dispatch makes
+a forced-cold Mihon component window about 12% faster but normal auto execution
+only about 0.5%, below the aggregate gate. Skipping apparently irrelevant type
+analysis reduces that phase 10–12% but regresses Mihon startup about 0.8%. A
+handwritten single-pass cold source pooler is slower (about 455 vs 428 ms).
+
+Final production is compared with `5681101` in seven serial alternating Chrome
+pairs per workload. Medians are:
+
+| Workload | Start | Final | Speedup |
+| --- | ---: | ---: | ---: |
+| FitNotes first usable state | 237.410 ms | 228.104 ms | 1.041x |
+| Mihon first usable state | 1180.594 ms | 1031.908 ms | 1.144x |
+| FitNotes History/Graph CPU | 50.466 ms/s | 50.337 ms/s | 1.003x |
+| Mihon Reader CPU | 377.110 ms/s | 376.654 ms/s | 1.001x |
+
+The four-workload geometric mean is 1.046x. This misses the 1.5x stretch target
+but clears the 3% aggregate retention gate. Neither interaction CPU workload
+regresses: FitNotes/Mihon improve 0.26%/0.12%. Their p95 opportunity latency
+changes +0.90%/+0.74%; interaction heap changes +0.14%/-0.66%. All 196
+scheduled inputs complete, rendering advances, and no page or harness error is
+observed. Full architecture, research links and evidence limits are in
+`docs/dex-performance-architecture.md`.
+
+The final verification runs after freezing production code. Typecheck and 1212
+tests / 26483 assertions pass. Twelve eager/cold smoke compilations across
+FitNotes, Mihon, Resy, Doodle, Flappy Bird and Lichess report zero failed methods.
+All eight runnable framework exercises pass; declared coverage remains 295/363,
+with Canvas text metrics skipped outside a browser. FitNotes text comparison is
+6/6. The serialized E2E run exits zero with 12 flows / 159 steps, including 39/39
+FitNotes and 17/17 Mihon app rendering. The 17-APK corpus renders a first frame for
+17/17 APKs; FitNotes and Mihon reach no missing APIs.
+
+The E2E performance rollup is descriptive because flow durations include settling,
+live content and native/rendering work. Against the starting runtime capture, its
+compiler counters still show the intended broad effect: FitNotes -21%, Mihon app
+-27%, Mihon onboarding -28%, Calculator -24%, Harmonic -26%, Reddit -27%, Resy
+-23%, YouTube -28%, TikTok -30%, Lichess -28%, Flappy -30% and Doodle -22%.
+No flow wedges. FitNotes and Mihon app have no new missing APIs, Java/page errors,
+native requirements, or layout/draw/GL errors. The remaining flows reproduce the
+recorded platform and app limitations: Window sidecar/extension gaps, YouTube
+Matrix/SAX/cursor failures and two control-settle timeouts, TikTok getGravity and
+native log failures, Lichess pthread/Stockfish faults, optional Reddit SDK gaps,
+and the existing status TypeError attributed to the following Flappy capture.
