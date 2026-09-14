@@ -2664,3 +2664,13 @@ first-strong direction and view-relative alignment through getLayoutDirection. A
 checks left/center/right pixels, inheritance and relative direction; typecheck passes. This
 does not implement View's previously stubbed layout/text-direction setters or full per-paragraph
 bidi layout; those remain limitations.
+
+Swiping Maps' photo viewer exposed ImageView.getImageMatrix in the zoom gesture handler.
+ImageView now reports and draws the same affine matrix, copies custom matrices, returns
+its actual ScaleType, and resets null matrices. Its shared scale calculation follows AOSP
+CENTER/CROP/INSIDE rounding and FIT_START/CENTER/END placement; FIT_XY uses drawable bounds
+and cropping follows cropToPadding. All eight scale modes, padding, copied/reset matrices,
+virtual drawing and canvas restoration pass browser checks; affected drawable checks pass
+(109 assertions), and typecheck passes. Fresh Chrome now swipes from the Jitesh Patil photo
+to the same Jorge Chacon video page as Android without the gesture exception. Playback is
+not yet functional: Chrome remains at 0:00 while Android plays the 22-second clip.
