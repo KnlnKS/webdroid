@@ -3777,5 +3777,31 @@ calls. Observed foreground/browser errors and reported missing/native sets are
 empty; child log/performance/queue telemetry remains unavailable. The predefined
 seven-pair guard passes, without a latency improvement claim. An exact combined
 minus-operands control was identified but is not run because the extended guard
-does not establish a repeatable >5% regression. Raw results remain in the JVM
+does not establish a repeatable >5% regression under that aggregation. Pooling
+all 98 inputs instead gives median 6.25 -> 6.90 ms (+10.4%) and p95
+11.215 -> 11.115 ms (-0.9%), with ranges 1.2–12.8/1.2–13.4 ms. The central-latency
+conclusion is sensitive to aggregation; the guard passing is not proof of zero
+latency cost. Raw results remain in the JVM
 worktree under `webdroid-shots/jvm/combined-apps/fitnotes/`.
+
+Combined Mihon Reader-settings swipes also extend from three to seven alternating
+pairs because the initial median proxy is +4.49% with mixed directions. The full
+seven give CPU 342.599 -> 343.647 ms/s (+0.31%), median proxy 45.70 -> 46.25 ms
+(+1.20%), median p95 52.61 -> 52.335 ms (-0.52%), retained JS heap
+359.725 -> 354.812 MB. All 14 windows complete 14 swipes without an in-flight
+action or observed failure. Median proxy worsens in five pairs and p95 in four;
+the aggregate remains within the predefined guard. This is Reader-settings
+navigation with verified list movement, not comic decoding or manga playback.
+Raw results are beside FitNotes under `combined-apps/mihon-app/`.
+
+Combined Resy Search/Back fails its extended seven-pair median-proxy guard:
+6.50 -> 7.70 ms (+18.46%), with all seven paired medians worse. Pooling all
+98 inputs also gives 6.75 -> 7.65 ms (+13.33%). Median CPU 204.592 -> 203.626
+ms/s, p95 10.985 -> 10.740 ms and heap 387.524 -> 383.522 MB do not override
+that failure. All windows complete their 14 inputs; the same upstream service
+errors occur on both builds. The next comparison isolates the operand change:
+`d2dacb7` has identical combined production source except `src/jvm/cold.ts` and
+`src/jvm/compiler.ts`, restored to their preceding implementation. Its server
+uses port 4126; root remains on 4110. Both HTML entry-point bundles are prewarmed
+before exclusive, alternating measurement. No retention decision is inferred
+from the better CPU, p95 or heap results.
