@@ -1,5 +1,7 @@
-import { dispatchAttached, dispatchDetached, uiState } from "../../src/android/view";
 import "../../src/natives";
+import { frame, present, setScreenCanvas } from "../../src/shell/device";
+import { JBitmap, JRect } from "../../src/android/graphics";
+import { dispatchAttached, dispatchDetached, uiState } from "../../src/android/view";
 import { rt } from "../../src/jvm/runtime";
 import { mangleStaticField, mangleMethod } from "../../src/jvm/abi";
 import { JThread, setCurThread, mainThread, curThread, vcallMaybe, vcallOn } from "../../src/jvm/natives/jlang";
@@ -128,7 +130,27 @@ async function probe() {
   await Reflect.apply(Reflect.get(view, "runFrame"), view, []);
   return { callbacks, bound10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
     firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null,
-    lifecycle: await lifecycle(), readback: readback() };
+    lifecycle: await lifecycle(), windowCopy: await windowCopy(), readback: readback() };
+}
+async function windowCopy() {
+  const screen = document.createElement("canvas"); screen.width = screen.height = 4;
+  setScreenCanvas(screen);
+  const copy = async () => {
+    const bitmap = new JBitmap(); bitmap.w = bitmap.h = 4;
+    const rect = new JRect(); rect.right = rect.bottom = 4;
+    const listener = rt.make("java/lang/Object");
+    let finish = (_code: number) => {};
+    const done = new Promise<number>(resolve => { finish = resolve; });
+    Object.assign(listener, { [mangleMethod("onPixelCopyFinished", "(I)V")]: finish });
+    const cls = rt.link("android/view/PixelCopy").ctor;
+    Reflect.apply(Reflect.get(cls, mangleMethod("request", "(Landroid/view/Window;Landroid/graphics/Rect;Landroid/graphics/Bitmap;Landroid/view/PixelCopy$OnPixelCopyFinishedListener;Landroid/os/Handler;)V")), cls, [null, rect, bitmap, listener, null]);
+    return { code: await done, pixel: [...bitmap.ctx.getImageData(0, 0, 1, 1).data] };
+  };
+  frame.fillStyle = "lime"; frame.fillRect(0, 0, 4, 4); present();
+  frame.fillStyle = "red"; frame.fillRect(0, 0, 4, 4);
+  const before = await copy();
+  present();
+  return { before, after: await copy() };
 }
 async function lifecycle() {
   const view = rt.make("android/opengl/GLSurfaceView"), renderer = rt.make("java/lang/Object");

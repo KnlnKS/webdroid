@@ -195,8 +195,8 @@ export class EglContext {
     return new Promise((r) => { const done = () => r(!this.gl?.isContextLost()); if (typeof requestAnimationFrame === "function" && !document.hidden) requestAnimationFrame(done); else setTimeout(done, 16); });
   }
 }
-let pixelCopyFrame: OffscreenCanvas | null = null;
-export function setPixelCopyFrame(frame: OffscreenCanvas): void { pixelCopyFrame = frame; }
+let pixelCopyFrame: OffscreenCanvas | HTMLCanvasElement | null = null;
+export function setPixelCopyFrame(frame: OffscreenCanvas | HTMLCanvasElement): void { pixelCopyFrame = frame; }
 // PixelCopy: the surface's last presented frame into a Bitmap, the listener told on its handler's looper
 rt.markers("android/view/PixelCopy$OnPixelCopyFinishedListener");
 const pixelCopy = async (s: GlSurface | null, bmp: JBitmap, listener: unknown): Promise<void> => {

@@ -44,10 +44,9 @@ export function setDisplayChangeHandler(handler: () => void): void { displayChan
 // The bitmap transfer is a zero-copy swap; a drawImage blit cost a software rasteriser ~10 ms
 // a frame. Read the screen back with toBlob: toDataURL on a transferred bitmap stalls.
 let fb = new OffscreenCanvas(SCREEN_W, SCREEN_H);
-setPixelCopyFrame(fb);
 export let frame = fb.getContext("2d")!;
 let screen: ImageBitmapRenderingContext | null = null;
-export function setScreenCanvas(c: HTMLCanvasElement): void { screen = c.getContext("bitmaprenderer"); }
+export function setScreenCanvas(c: HTMLCanvasElement): void { screen = c.getContext("bitmaprenderer"); setPixelCopyFrame(c); }
 export function present(): void {
   if (!screen) return;
   screen.transferFromImageBitmap(fb.transferToImageBitmap());
@@ -61,7 +60,6 @@ function applyOrientationRequest(request: number): boolean {
   SCREEN_W = device.width;
   SCREEN_H = device.height;
   fb = new OffscreenCanvas(SCREEN_W, SCREEN_H);
-  setPixelCopyFrame(fb);
   frame = fb.getContext("2d")!;
   syncDeviceOrientation();
   displayChanged();
