@@ -2,12 +2,12 @@
 
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { vcall, vcallOn, curThread, after, mkEnumSet, type JSimpleEnum } from "../jvm/natives/jlang";
-import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
-import { JCanvas, JRect, JRectF, JBitmap, JPaint, type JOutline, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
+import { mangleMethod, jmethod } from "../jvm/abi";
+import { JCanvas, JRect, JRectF, JBitmap, JPaint, matMul, rotM, type JMatrix, type JOutline, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { uptimeMillis } from "./os";
-import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV } from "./res";
+import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, normRV, resolveStyleValue } from "./res";
 import { absGravity, gravityApply } from "./gravity";
 import { complexToFraction } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
@@ -26,6 +26,7 @@ export class JDrawable extends JObj {
   stateSet: number[] = [];
   callback: unknown = null; // Drawable.Callback (usually a View)
   tint: number | null = null;
+  tintCsl: JColorStateList | null = null;
   tintMode: string | null = "SRC_IN";
   tintMatrix: Float32Array | null = null;
   autoMirrored = false;
@@ -95,7 +96,7 @@ const drawableMethods: NativeSpec["methods"] = {
   "clearColorFilter()V": function (this: JDrawable) { this.tint = null; this.tintMatrix = null; },
   "setTint(I)V": function (this: JDrawable, c: number) { this.tint = c; },
   "setTintList(Landroid/content/res/ColorStateList;)V": function (this: JDrawable, csl: JColorStateList | null) {
-    this.tint = csl ? cslColor(csl, this.stateSet) : null;
+    this.tintCsl = csl; this.tint = csl ? cslColor(csl, this.stateSet) : null;
   },
   "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JDrawable, mode: JSimpleEnum | null) {
     const name = mode?.ename ?? null;
@@ -108,7 +109,9 @@ const drawableMethods: NativeSpec["methods"] = {
     // AOSP: every onStateChange that reports a visual change invalidates (StateListDrawable's
     // selectDrawable, RippleDrawable's setRippleActive); the callback is how a Compose ripple
     // host learns to re-record its layer, so a silent state change leaves a pressed ripple stuck.
-    if (!await jmethod(this, M_onStateChange)!.call(this, st)) return 0;
+    const tint = this.tintCsl ? cslColor(this.tintCsl, this.stateSet) : this.tint;
+    const tintChanged = tint !== this.tint; this.tint = tint;
+    if (!await jmethod(this, M_onStateChange)!.call(this, st) && !tintChanged) return 0;
     invalidateSelf.call(this);
     return 1;
   },
@@ -133,7 +136,7 @@ const drawableMethods: NativeSpec["methods"] = {
   "unscheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;)V": function (this: JDrawable, _d: unknown, r: unknown) { unscheduleSelf.call(this, r); },
   "invalidateDrawable(Landroid/graphics/drawable/Drawable;)V": invalidateSelf,
   "mutate()Landroid/graphics/drawable/Drawable;": function (this: JDrawable) { return this; },
-  "isStateful()Z": function (this: JDrawable) { return this instanceof JStateListDrawable ? 1 : 0; },
+  "isStateful()Z": function (this: JDrawable) { return this instanceof JStateListDrawable || this.tintCsl || this instanceof JGradientDrawable && this.solidCsl ? 1 : 0; },
   "getPadding(Landroid/graphics/Rect;)Z": function (this: JDrawable, r: JRect) {
     const p = (this as any).padding as JRect | undefined;
     if (p) { r.left = p.left; r.top = p.top; r.right = p.right; r.bottom = p.bottom; return 1; }
@@ -378,7 +381,7 @@ class JGradientDrawable extends JDrawable {
     }
     if (this.shape !== 2) {
       let fill: string | CanvasGradient | null = null;
-      if (this.tint !== null) fill = cssColor(this.tint);
+      if (this.tint !== null) fill = cssColor(this.solid === null ? this.tint : (this.tint & 0xffffff) | (Math.round((this.tint >>> 24) * (this.solid >>> 24) / 255) << 24));
       else if (this.gradColors && this.gradColors.length > 1) {
         if (this.gradType === 1) {
           const g = ctx.createRadialGradient(left + w / 2, top + h / 2, 0, left + w / 2, top + h / 2, this.gradRadius || Math.max(w, h) / 2);
@@ -469,10 +472,6 @@ class JStateListDrawable extends JDrawable {
     return c;
   }
   paint(cv: JCanvas) { this.target()?.paint(cv); }
-  onStateChange(): boolean {
-    for (const it of this.items) it.d.stateSet = this.stateSet;
-    return true;
-  }
   intrinsicW(): number { return this.items.reduce((a, i) => Math.max(a, i.d.intrinsicW()), -1); }
   intrinsicH(): number { return this.items.reduce((a, i) => Math.max(a, i.d.intrinsicH()), -1); }
 }
@@ -528,6 +527,11 @@ rt.register({
 rt.register({
   name: "android/graphics/drawable/StateListDrawable", ctor: JStateListDrawable, sup: "android/graphics/drawable/Drawable",
   methods: {
+    "onStateChange([I)Z": async function (this: JStateListDrawable, state: Int32Array) {
+      const thread = curThread;
+      for (const item of this.items) await vcallOn(thread, item.d, "setState", "([I)Z", state);
+      return 1;
+    },
     "draw(Landroid/graphics/Canvas;)V": function (this: JStateListDrawable, cv: JCanvas) {
       const c = this.target();
       return c ? drawChild(c, cv) : undefined;
@@ -541,9 +545,11 @@ rt.register({
   },
 });
 
-class JLayerDrawable extends JDrawable {
+export class JLayerDrawable extends JDrawable {
   layers: { d: JDrawable; insets: [number, number, number, number]; w?: number; h?: number; gravity?: number }[] = [];
   ids: (number | null)[] = [];
+  private layerContainer = new JRect();
+  private layerBounds = new JRect();
   /** AOSP LayerDrawable.addLayer: a layer's invalidations and scheduling reach this drawable,
    *  and through its own callback the view it is drawn into */
   pushLayer(layer: JLayerDrawable["layers"][number]) { layer.d.callback = this; this.layers.push(layer); }
@@ -553,16 +559,19 @@ class JLayerDrawable extends JDrawable {
     const step = (i: number): unknown => {
       for (; i < this.layers.length; i++) {
         const l = this.layers[i];
-        let L = this.bounds.left + l.insets[0], T = this.bounds.top + l.insets[1];
-        let R = this.bounds.right - l.insets[2], B = this.bounds.bottom - l.insets[3];
-        const w = l.w !== undefined && l.w >= 0 ? l.w : -1, h = l.h !== undefined && l.h >= 0 ? l.h : -1;
-        if (w >= 0 || h >= 0) {
-          const g = l.gravity || (w >= 0 && h >= 0 ? 0x33 : w >= 0 ? 0x73 : 0x37);
-          if (w >= 0) { const hg = g & 7; L = hg === 1 ? ((L + R - w) >> 1) : hg === 5 ? R - w : L; R = L + w; }
-          if (h >= 0) { const vg = g & 0x70; T = vg === 16 ? ((T + B - h) >> 1) : vg === 80 ? B - h : T; B = T + h; }
-        }
-        const bounds = vcallOn(thread, l.d, "setBounds", "(IIII)V", L, T, R, B);
-        if (bounds instanceof Promise) return bounds.then(() => step(i + 1));
+        const place = (w: number, h: number) => {
+          const L = this.bounds.left + l.insets[0], T = this.bounds.top + l.insets[1];
+          const R = this.bounds.right - l.insets[2], B = this.bounds.bottom - l.insets[3];
+          const gravity = l.gravity || (w >= 0 && h >= 0 ? 0x33 : w >= 0 ? 0x73 : h >= 0 ? 0x37 : 0x77);
+          const container = this.layerContainer, bounds = this.layerBounds;
+          container.left = L; container.top = T; container.right = R; container.bottom = B;
+          gravityApply(gravity, w < 0 ? R - L : w, h < 0 ? B - T : h, container, 0, 0, bounds);
+          return vcallOn(thread, l.d, "setBounds", "(IIII)V", bounds.left, bounds.top, bounds.right, bounds.bottom);
+        };
+        const w = l.w !== undefined && l.w >= 0 ? l.w : l.gravity && (l.gravity & 7) !== 7 ? drawableSize(l.d, false, thread) : -1;
+        const height = () => l.h !== undefined && l.h >= 0 ? l.h : l.gravity && (l.gravity & 112) !== 112 ? drawableSize(l.d, true, thread) : -1;
+        const result = after(w, width => after(height(), h => place(width, h)));
+        if (result instanceof Promise) return result.then(() => step(i + 1));
       }
     };
     return step(0);
@@ -921,7 +930,7 @@ rt.register({
 class JVectorDrawable extends JDrawable {
   vw = 24; vh = 24; // dp size
   vpW = 24; vpH = 24;
-  paths: { p2d: Path2D; fill: number | null; stroke: number | null; strokeW: number; fillAlpha: number; evenOdd: boolean }[] = [];
+  paths: { p2d: Path2D; fill: number | null; stroke: number | null; strokeW: number; fillAlpha: number; evenOdd: boolean; transform: JMatrix["m"] | null }[] = [];
   vtint: number | null = null;
   paint(cv: JCanvas) {
     const { left, top, right, bottom } = this.bounds;
@@ -932,11 +941,12 @@ class JVectorDrawable extends JDrawable {
     ctx.globalAlpha *= this.alpha / 255;
     ctx.translate(left, top);
     ctx.scale(w / this.vpW, h / this.vpH);
-    const tint = this.tint ?? this.vtint;
+    const tint = this.tint ?? this.vtint, alpha = ctx.globalAlpha;
     for (const p of this.paths) {
+      if (p.transform) { ctx.save(); ctx.transform(...p.transform); }
       if (p.fill !== null && p.fill >>> 24) {
         ctx.fillStyle = cssColor(tint ?? p.fill);
-        ctx.globalAlpha = (this.alpha / 255) * p.fillAlpha;
+        ctx.globalAlpha = alpha * p.fillAlpha;
         ctx.fill(p.p2d, p.evenOdd ? "evenodd" : "nonzero");
       }
       if (p.stroke !== null && p.strokeW > 0) {
@@ -944,6 +954,7 @@ class JVectorDrawable extends JDrawable {
         ctx.lineWidth = p.strokeW;
         ctx.stroke(p.p2d);
       }
+      if (p.transform) ctx.restore();
     }
     ctx.restore();
   }
@@ -1005,10 +1016,10 @@ rt.register({
 class JScaleDrawable extends JDrawableWrapper {
   scaleWidth = -1; scaleHeight = -1; gravity = 3; useIntrinsicMinimum = false;
   scaled = new JRect();
-  async layout() {
+  async layout(thread = curThread) {
     const child = this.dr;
     if (!child) return;
-    const thread = curThread, b = this.bounds;
+    const b = this.bounds;
     let w = b.right - b.left, h = b.bottom - b.top;
     if (this.scaleWidth > 0) {
       const min = this.useIntrinsicMinimum ? Number(await drawableSize(child, false, thread)) : 0;
@@ -1029,8 +1040,9 @@ rt.register({ name: "android/graphics/drawable/ScaleDrawable", ctor: JScaleDrawa
   },
   "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JScaleDrawable) { return this.layout(); },
   "onLevelChange(I)Z": async function (this: JScaleDrawable, level: number) {
-    if (this.dr) await vcall(this.dr, "setLevel", "(I)Z", level);
-    await this.layout(); invalidateSelf.call(this); return 1;
+    const thread = curThread;
+    if (this.dr) await vcallOn(thread, this.dr, "setLevel", "(I)Z", level);
+    await this.layout(thread); invalidateSelf.call(this); return 1;
   },
   "draw(Landroid/graphics/Canvas;)V": function (this: JScaleDrawable, canvas: JCanvas) {
     if (this.dr && this.dr.level !== 0) return drawChild(this.dr, canvas);
@@ -1247,7 +1259,8 @@ const AT = attrTable(
   "endColor", "angle", "type", "gradientRadius", "src", "alpha", "tint", "viewportWidth",
   "viewportHeight", "pathData", "fillColor", "strokeColor", "strokeWidth", "fillAlpha", "fillType",
   "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
-  "gravity", "oneshot", "duration", "scaleWidth", "scaleHeight", "useIntrinsicSizeAsMinimum", "level");
+  "gravity", "oneshot", "duration", "scaleWidth", "scaleHeight", "useIntrinsicSizeAsMinimum", "level",
+  "pivotX", "pivotY", "translateX", "translateY", "scaleX", "scaleY", "rotation");
 async function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): Promise<JDrawable> {
   const root = parseAXML(bytes);
   return inflateDrawableNode(res, root, theme);
@@ -1260,6 +1273,7 @@ async function itemDrawable(res: Resources, node: XmlNode, theme: JTheme | null)
 }
 async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme | null): Promise<JDrawable> {
   const get = (id: number) => nodeAttr(res, node, id);
+  const dimen = (v: RV | null, fallback = 0) => rvDimen(res, resolveStyleValue(res, theme, v), fallback);
   const colorOf = (v: RV | null, d = 0) => {
     if (v && v.t === TV.ATTRIBUTE) v = theme?.lookup(v.d) ?? null;
     if (v && v.t === TV.REFERENCE) {
@@ -1273,23 +1287,34 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
     case "shape": {
       const d = new JGradientDrawable();
       d.shape = rvColor(res, get(AT.shape), 0) & 3;
+      const tint = resolveStyleValue(res, theme, get(AT.tint));
+      if (tint?.t === TV.REFERENCE) {
+        d.tintCsl = await loadColorStateList(res, tint.d, theme);
+        d.tint = cslColor(d.tintCsl, d.stateSet);
+      } else if (tint) d.tint = rvColor(res, tint);
       for (const c of node.children) {
         const cg = (id: number) => nodeAttr(res, c, id);
-        if (c.name === "solid") d.solid = colorOf(cg(AT.color), 0);
+        if (c.name === "solid") {
+          const value = resolveStyleValue(res, theme, cg(AT.color));
+          if (value?.t === TV.REFERENCE) {
+            d.solidCsl = await loadColorStateList(res, value.d, theme);
+            d.solid = cslColor(d.solidCsl, d.stateSet);
+          } else d.solid = rvColor(res, value, 0);
+        }
         else if (c.name === "corners") {
-          const r = rvDimen(res, cg(AT.radius), -1);
+          const r = dimen(cg(AT.radius), -1);
           if (r >= 0) d.radii = [r, r, r, r];
           d.radii = [
-            rvDimen(res, cg(AT.topLeftRadius), d.radii[0]),
-            rvDimen(res, cg(AT.topRightRadius), d.radii[1]),
-            rvDimen(res, cg(AT.bottomRightRadius), d.radii[2]),
-            rvDimen(res, cg(AT.bottomLeftRadius), d.radii[3]),
+            dimen(cg(AT.topLeftRadius), d.radii[0]),
+            dimen(cg(AT.topRightRadius), d.radii[1]),
+            dimen(cg(AT.bottomRightRadius), d.radii[2]),
+            dimen(cg(AT.bottomLeftRadius), d.radii[3]),
           ];
         } else if (c.name === "stroke") {
-          d.strokeW = rvDimen(res, cg(AT.width), 1);
+          d.strokeW = dimen(cg(AT.width), 1);
           d.strokeColor = colorOf(cg(AT.color), 0);
-          d.dashW = rvDimen(res, cg(AT.dashWidth), 0);
-          d.dashGap = rvDimen(res, cg(AT.dashGap), 0);
+          d.dashW = dimen(cg(AT.dashWidth), 0);
+          d.dashGap = dimen(cg(AT.dashGap), 0);
         } else if (c.name === "gradient") {
           const cols = [colorOf(cg(AT.startColor), 0)];
           const cc = cg(AT.centerColor);
@@ -1298,15 +1323,15 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
           d.gradColors = cols;
           d.gradAngle = xmlInt(res, cg(AT.angle), 0);
           d.gradType = xmlInt(res, cg(AT.type), 0);
-          d.gradRadius = rvDimen(res, cg(AT.gradientRadius), 0);
+          d.gradRadius = dimen(cg(AT.gradientRadius), 0);
         } else if (c.name === "size") {
-          d.sizeW = rvDimen(res, cg(AT.width), -1);
-          d.sizeH = rvDimen(res, cg(AT.height), -1);
+          d.sizeW = dimen(cg(AT.width), -1);
+          d.sizeH = dimen(cg(AT.height), -1);
         } else if (c.name === "padding") {
-          d.padding.left = rvDimen(res, cg(AT.left), 0);
-          d.padding.top = rvDimen(res, cg(AT.top), 0);
-          d.padding.right = rvDimen(res, cg(AT.right), 0);
-          d.padding.bottom = rvDimen(res, cg(AT.bottom), 0);
+          d.padding.left = dimen(cg(AT.left), 0);
+          d.padding.top = dimen(cg(AT.top), 0);
+          d.padding.right = dimen(cg(AT.right), 0);
+          d.padding.bottom = dimen(cg(AT.bottom), 0);
         }
       }
       return d;
@@ -1322,6 +1347,7 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
       wrapSet.call(d, await itemDrawable(res, node, theme));
       return d;
     }
+    case "animated-selector":
     case "selector": {
       const d = new JStateListDrawable();
       for (const c of node.children) {
@@ -1352,13 +1378,13 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
           d.pushLayer({
             d: child,
             insets: [
-              rvDimen(res, nodeAttr(res, c, AT.left), 0),
-              rvDimen(res, nodeAttr(res, c, AT.top), 0),
-              rvDimen(res, nodeAttr(res, c, AT.right), 0),
-              rvDimen(res, nodeAttr(res, c, AT.bottom), 0),
+              dimen(nodeAttr(res, c, AT.left), 0),
+              dimen(nodeAttr(res, c, AT.top), 0),
+              dimen(nodeAttr(res, c, AT.right), 0),
+              dimen(nodeAttr(res, c, AT.bottom), 0),
             ],
-            w: rvDimen(res, nodeAttr(res, c, AT.width), -1),
-            h: rvDimen(res, nodeAttr(res, c, AT.height), -1),
+            w: dimen(nodeAttr(res, c, AT.width), -1),
+            h: dimen(nodeAttr(res, c, AT.height), -1),
             gravity: nodeAttr(res, c, AT.gravity)?.d,
           });
           const idv = nodeAttr(res, c, AT.id);
@@ -1396,13 +1422,13 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
     case "inset": {
       const d = new JLayerDrawable();
       const child = await itemDrawable(res, node, theme);
-      const all = rvDimen(res, get(AT.inset), 0);
+      const all = dimen(get(AT.inset), 0);
       if (child) {
         d.pushLayer({
           d: child,
           insets: [
-            rvDimen(res, get(AT.insetLeft), all), rvDimen(res, get(AT.insetTop), all),
-            rvDimen(res, get(AT.insetRight), all), rvDimen(res, get(AT.insetBottom), all),
+            dimen(get(AT.insetLeft), all), dimen(get(AT.insetTop), all),
+            dimen(get(AT.insetRight), all), dimen(get(AT.insetBottom), all),
           ],
         });
         d.ids.push(null);
@@ -1418,20 +1444,20 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
     }
     case "vector": {
       const d = new JVectorDrawable();
-      d.vw = rvDimen(res, get(AT.width), 48) / res.dm.density;
-      d.vh = rvDimen(res, get(AT.height), 48) / res.dm.density;
+      d.vw = dimen(get(AT.width), 48) / res.dm.density;
+      d.vh = dimen(get(AT.height), 48) / res.dm.density;
       d.vpW = rvFloat(res, get(AT.viewportWidth), 24);
       d.vpH = rvFloat(res, get(AT.viewportHeight), 24);
       const tintV = get(AT.tint);
       if (tintV) d.vtint = colorOf(tintV, 0) || null;
-      const walk = (n: XmlNode) => {
+      const walk = (n: XmlNode, transform: JMatrix["m"] | null) => {
         for (const c of n.children) {
           if (c.name === "path") {
             const pd = nodeAttr(res, c, AT.pathData);
             if (pd?.s) {
               try {
                 d.paths.push({
-                  p2d: new Path2D(pd.s),
+                  p2d: new Path2D(pd.s), transform,
                   fill: (() => { const f = nodeAttr(res, c, AT.fillColor); return f ? colorOf(f, 0) : null; })(),
                   stroke: (() => { const f = nodeAttr(res, c, AT.strokeColor); return f ? colorOf(f, 0) : null; })(),
                   strokeW: rvFloat(res, nodeAttr(res, c, AT.strokeWidth), 0),
@@ -1440,11 +1466,17 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
                 });
               } catch { /* bad path data */ }
             }
-          } else if (c.name === "group") walk(c);
+          } else if (c.name === "group") {
+            const value = (id: number, fallback = 0) => rvFloat(res, nodeAttr(res, c, id), fallback);
+            const px = value(AT.pivotX), py = value(AT.pivotY), sx = value(AT.scaleX, 1), sy = value(AT.scaleY, 1);
+            const local = matMul(rotM(value(AT.rotation)), [sx, 0, 0, sy, -px * sx, -py * sy]);
+            local[4] += value(AT.translateX) + px; local[5] += value(AT.translateY) + py;
+            walk(c, transform ? matMul(transform, local) : local);
+          }
           else if (c.name === "clip-path") { /* ignore */ }
         }
       };
-      walk(node);
+      walk(node, null);
       return d;
     }
     case "color": {
@@ -1463,7 +1495,7 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
       }
       return d;
     }
-    case "animated-selector": case "transition": case "level-list": {
+    case "transition": case "level-list": {
       for (const c of node.children) {
         if (c.name === "item") {
           const da = nodeAttr(res, c, AT.drawable);
@@ -1590,10 +1622,10 @@ function parseCslXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): J
         if (v && v.t === TV.REFERENCE) v = res.resolveRefs(v);
         color = rvColor(res, v, -16777216);
       } else if (a.resId === AT.alpha) {
-        alphaMul = a.type === TV.FLOAT ? intBitsToFloat(a.data) : 1;
+        alphaMul = Math.max(0, Math.min(1, rvFloat(res, resolveStyleValue(res, theme, attrRV(res, a)), 1)));
       }
     }
-    if (alphaMul < 1) color = (((color >>> 24) * alphaMul) << 24 | (color & 0xffffff)) | 0;
+    if (alphaMul < 1) color = (Math.round((color >>> 24) * alphaMul) << 24 | (color & 0xffffff)) | 0;
     csl.items.push({ states, negStates: neg, color });
   }
   csl.defColor = csl.items.find((i) => !i.states.length && !i.negStates.length)?.color ?? csl.items[0]?.color ?? -16777216;

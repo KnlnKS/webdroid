@@ -116,3 +116,13 @@ test("layer bounds and drawing await each child on the dispatch thread", async (
   await vcallOn(thread, layer, "draw", "(Landroid/graphics/Canvas;)V", null);
   expect(events).toEqual(["bounds 0", "bounds 1", "draw 0", "draw 1"]);
 });
+
+test("layer gravity uses virtual intrinsic size on non-fill axes", async () => {
+  const { d, threads } = drawable(), thread = new JThread();
+  const layer = await newObj("android/graphics/drawable/LayerDrawable", "([Landroid/graphics/drawable/Drawable;)V", [d]);
+  await vcall(layer, "setLayerGravity", "(II)V", 0, 0x17);
+  await vcallOn(thread, layer, "setBounds", "(IIII)V", 0, 0, 100, 60);
+  const bounds = await vcall(d, "getBounds", "()Landroid/graphics/Rect;");
+  expect([bounds.left, bounds.top, bounds.right, bounds.bottom]).toEqual([0, 6, 100, 54]);
+  expect(threads).toEqual([thread]);
+});

@@ -2697,3 +2697,14 @@ size children from level, scale fractions and gravity, preserving virtual bounds
 A focused test covers zero/half/full levels, bottom/right positioning and suspended callbacks;
 typecheck passes. SeekBar still needs to load and draw this resource instead of its inherited
 indeterminate spinner.
+
+The framework seek resources exposed several shared drawable gaps: LayerDrawable ignored
+intrinsic dimensions under non-fill gravity; referenced XML dimensions stayed unresolved;
+state-list solid colors and theme alpha were dropped; and vector groups never transformed
+paths. These now resolve through the resource owner, preserve source alpha under tint, and
+apply nested group transforms. Selector children receive virtual state changes. Animated
+selectors select their state items, but animated transitions and vector clip paths remain
+unsupported. Tests draw the real paired framework resources and check dimensions, alpha,
+state, transforms and suspended child sizing; typecheck passes. Reused layer rectangles
+avoid per-layout rectangle allocation, and ScaleDrawable retains its dispatch thread after
+suspending child calls.
