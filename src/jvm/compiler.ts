@@ -152,14 +152,14 @@ export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> }
 export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unknown {
   const info = C.$i, rec = info.lazy![i], dex = info.dex!;
   const target = rec.isStatic ? C : C.prototype;
-  const source = (prepared?: MethodCompiler) => emitMethod(R, dex, info, rec.m, !cold, prepared) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
+  const source = () => emitMethod(R, dex, info, rec.m, !cold) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
   const compile = (src = source()) => {
     new Function("C", "D", "R", "S", src)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined);
     return target[rec.mangled];
   };
   const compiler = new MethodCompiler(R, dex, info, dex.code(rec.m.codeOff), rec.isStatic, rec.desc, rec.name);
   let cold = compiler.compileCold();
-  if (!cold) return compile(source(compiler));
+  if (!cold) return compile();
   // Captured direct/interface entries keep this cell; new virtual calls find the hot body.
   let calls = 0, hot: Function | undefined;
   let owner = R;
@@ -200,11 +200,12 @@ function emitNativeStub(dex: DexFile, info: ClassInfo, m: EncodedMethod): string
     `return ${v}.call(this${ps ? "," + ps : ""})};`;
 }
 
-function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, count = true, prepared?: MethodCompiler): string {
+function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, count = true): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
+  const code = dex.code(m.codeOff);
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   try {
-    const body = (prepared ?? new MethodCompiler(R, dex, info, dex.code(m.codeOff), isStatic, desc, name)).compile(count);
+    const body = new MethodCompiler(R, dex, info, code, isStatic, desc, name).compile(count);
     return `${holder(isStatic)}.${mangled} = ${body};`;
   } catch (e) {
     const msg = `compile error ${info.name}.${name}${desc}: ${e}`;
@@ -230,26 +231,8 @@ class MethodCompiler {
 
   private resumes = 0;
   private cold = false;
-  private prepared = false;
-  private constants: unknown[] = [];
-  private suspends = false;
-
-  private reg(index: number): string { return this.cold ? `F.v[${this.literal(index)}]` : `v${index}`; }
-  private literal(value: string | number | bigint): string {
-    if (!this.cold) return typeof value === "string" ? JSON.stringify(value) : typeof value === "bigint" ? `${value}n` : litOf(value);
-    const index = this.constants.length;
-    this.constants.push(value);
-    return `K[${index}]`;
-  }
-  private prop(name: string): string { return this.cold ? `[${this.literal(name)}]` : `.${name}`; }
-  private temp(name: string): string { return this.cold ? `F.$${name}` : `$${name}`; }
-  private get t(): string { return this.temp("t"); }
-  private get u(): string { return this.temp("u"); }
-  private get ex(): string { return this.temp("ex"); }
 
   private prepare(): void {
-    if (this.prepared) return;
-    this.prepared = true;
     const { code } = this;
     const insns = code.insns;
     let pc = 0;
@@ -295,9 +278,10 @@ class MethodCompiler {
     const ops = new Map<number, ReturnType<typeof coldOp>>();
     for (const pc of this.order) {
       const ins = this.ins.get(pc)!, out: string[] = [];
-      this.constants = []; this.suspends = false;
       this.emitIns(ins, out);
-      const op = coldOp(out.join("\n"), this.constants, pc + ins.len, this.suspends);
+      let source = out.join("\n");
+      if (ins.name.startsWith("return")) source = source === "return;" ? "F.done=true;" : source.replace("return ", "F.done=true;F.value=");
+      const op = coldOp(source, pc + ins.len);
       if (ins.name.startsWith("invoke") && !ins.name.startsWith("invoke-custom")) op.method = ins.b;
       ops.set(pc, op);
     }
@@ -576,21 +560,18 @@ ${catchBody}
 
   // inside <clinit>: pass own type idx so the runtime can detect clinit cycles
   private get fromArg(): string {
-    return this.mname === "<clinit>" && this.info.def ? `,${this.literal(this.info.def.typeIdx)}` : "";
+    return this.mname === "<clinit>" && this.info.def ? `,${this.info.def.typeIdx}` : "";
   }
 
   /** A call or class initialization: its value, awaited when it is a promise. Only async bodies
    *  reach here: a body holding any of these instructions never compiles sync. */
-  private guard(expr: string, out: string[], assignTo = this.t) {
+  private guard(expr: string, out: string[], assignTo = "$t") {
     out.push(`${assignTo}=${expr};${this.suspend(assignTo)}`);
   }
 
   // One await per hot method avoids repeating V8's register spills at every call site.
   private suspend(value: string): string {
-    if (this.cold) {
-      this.suspends = true;
-      return `if(${value} instanceof Promise){${value}=yield ${value};}`;
-    }
+    if (this.cold) return `if(${value} instanceof Promise){R.su($th);$s=1;${value}=await ${value};R.st($th);}`;
     const resume = ++this.resumes;
     return `if(${value} instanceof Promise){$p=${value};$resume=${resume};break $dispatch;}case -${resume}:if($resume){${value}=$p;$resume=0;}`;
   }
@@ -602,64 +583,65 @@ ${catchBody}
 
   private emitIns(i: Ins, out: string[]) {
     const { dex } = this;
+    const A = `v${i.a}`, B = `v${i.b}`, C = `v${i.c}`;
     switch (i.name) {
       case "nop": break;
       case "move": case "move/from16": case "move/16":
       case "move-wide": case "move-wide/from16": case "move-wide/16":
       case "move-object": case "move-object/from16": case "move-object/16":
-        out.push(`${this.reg(i.a)}=${this.reg(i.b)};`); break;
+        out.push(`${A}=${B};`); break;
       case "move-result": case "move-result-wide": case "move-result-object":
-        out.push(`${this.reg(i.a)}=${this.t};`); break;
-      case "move-exception": out.push(`${this.reg(i.a)}=${this.ex};`); break;
-      case "return-void": out.push(this.cold ? "F.done=true;" : this.leave() + "return;"); break;
-      case "return": case "return-wide": out.push(`${this.cold ? "F.done=true;F.value=" : this.leave() + "return "}${this.reg(i.a)};`); break;
-      case "return-object": out.push(`${this.cold ? "F.done=true;F.value=" : this.leave() + "return "}${ref(this.reg(i.a))};`); break;
+        out.push(`${A}=$t;`); break;
+      case "move-exception": out.push(`${A}=$ex;`); break;
+      case "return-void": out.push(this.leave() + "return;"); break;
+      case "return": case "return-wide": out.push(`${this.leave()}return ${A};`); break;
+      case "return-object": out.push(`${this.leave()}return ${ref(A)};`); break;
       case "const/4": case "const/16": case "const":
-        out.push(`${this.reg(i.a)}=${this.literal(i.constKind === "F" ? intBitsToFloat(i.b) : i.b)};`);
+        out.push(`${A}=${i.constKind === "F" ? f32bits(i.b) : i.b};`);
         break;
       case "const/high16":
-        out.push(`${this.reg(i.a)}=${this.literal(i.constKind === "F" ? intBitsToFloat(i.b << 16) : i.b << 16)};`);
+        out.push(`${A}=${i.constKind === "F" ? f32bits(i.b << 16) : i.b << 16};`);
         break;
       case "const-wide/16": case "const-wide/32":
-        out.push(`${this.reg(i.a)}=${this.literal(i.constKind === "D" ? longBitsToDouble(BigInt.asIntN(64, BigInt(i.b))) : BigInt(i.b))};`);
+        out.push(`${A}=${i.constKind === "D" ? f64bits(BigInt(i.b)) : `${i.b}n`};`);
         break;
       case "const-wide":
-        out.push(`${this.reg(i.a)}=${this.literal(i.constKind === "D" ? longBitsToDouble(BigInt.asIntN(64, i.wideLit)) : i.wideLit)};`);
+        out.push(`${A}=${i.constKind === "D" ? f64bits(i.wideLit) : `${i.wideLit}n`};`);
         break;
       case "const-wide/high16":
-        out.push(`${this.reg(i.a)}=${this.literal(i.constKind === "D" ? longBitsToDouble(BigInt.asIntN(64, BigInt(i.b) << 48n)) : BigInt(i.b) << 48n)};`);
+        out.push(`${A}=${i.constKind === "D" ? f64bits(BigInt(i.b) << 48n) : `${BigInt(i.b) << 48n}n`};`);
         break;
       case "const-string": case "const-string/jumbo":
-        out.push(`${this.reg(i.a)}=D.s[${this.literal(i.b)}]??D.gs(${this.literal(i.b)});`); break;
+        out.push(`${A}=D.s[${i.b}]??D.gs(${i.b});`); break;
       case "const-class":
-        out.push(`${this.reg(i.a)}=R.classForIdx(D,${this.literal(i.b)});`); break;
-      case "monitor-enter": this.guard(`R.me(${this.reg(i.a)})`, out); break;
-      case "monitor-exit": out.push(`R.mx(${this.reg(i.a)});`); break;
+        out.push(`${A}=R.classForIdx(D,${i.b});`); break;
+      case "monitor-enter": this.guard(`R.me(v${i.a})`, out); break;
+      case "monitor-exit": out.push(`R.mx(v${i.a});`); break;
       case "check-cast":
-        out.push(`R.cc(${this.reg(i.a)},${this.literal(descToName(dex.type(i.b)))});`); break;
+        out.push(`R.cc(${A},${JSON.stringify(descToName(dex.type(i.b)))});`); break;
       case "instance-of":
-        out.push(`${this.reg(i.a)}=R.iof(${this.reg(i.b)},${this.literal(descToName(dex.type(i.c)))});`); break;
-      case "array-length": out.push(`${this.reg(i.a)}=${this.reg(i.b)}.length;`); break;
+        out.push(`${A}=R.iof(${B},${JSON.stringify(descToName(dex.type(i.c)))});`); break;
+      case "array-length": out.push(`${A}=${B}.length;`); break;
       case "new-instance": {
         const tname = descToName(dex.type(i.b));
-        if (tname === "java/lang/String") { out.push(`${this.reg(i.a)}="";`); break; }
-        if (tname === this.info.name) out.push(`${this.u}=D.cl[${this.literal(i.b)}]??D.link(${this.literal(i.b)});`);
-        else this.guard(`D.ic[${this.literal(i.b)}]??D.init(${this.literal(i.b)}${this.fromArg})`, out, this.u);
-        out.push(`${this.reg(i.a)}=new ${this.u}();`);
+        if (tname === "java/lang/String") { out.push(`${A}="";`); break; }
+        if (tname === this.info.name) out.push(`$u=D.cl[${i.b}]??D.link(${i.b});`);
+        else this.guard(`D.ic[${i.b}]??D.init(${i.b}${this.fromArg})`, out, "$u");
+        out.push(`${A}=new $u();`);
         break;
       }
       case "new-array": {
         const elem = descToName(dex.type(i.c)).slice(1); // strip one [
-        out.push(`${this.reg(i.a)}=${isRef(elem) ? `R.oa(${this.reg(i.b)},${this.literal(elem)})` : `new ${typedArrayCtor(elem)}(${this.reg(i.b)})`};`);
+        out.push(`${A}=${newArrayExpr(elem, B)};`);
         break;
       }
       case "filled-new-array": case "filled-new-array/range": {
         const elem = dex.type(i.b).slice(1);
-        const vals = i.regs.map((r) => this.reg(r)).join(",");
+        const vals = i.regs.map((r) => `v${r}`).join(",");
         if (isRef(elem)) {
-          out.push(`${this.t}=R.oa(${this.literal(i.regs.length)},${this.literal(elem)});${i.regs.map((r, j) => `${this.t}[${this.literal(j)}]=${ref(this.reg(r))};`).join("")}`);
+          out.push(`$t=R.oa(${i.regs.length},${JSON.stringify(elem)});${i.regs.map((r, j) => `$t[${j}]=${ref("v" + r)};`).join("")}`);
         } else {
-          out.push(`${this.t}=${typedArrayCtor(elem)}.of(${vals});`);
+          out.push(`$t=${typedArrayCtor(elem)}.of(${vals});`);
         }
         break;
       }
@@ -676,29 +658,29 @@ ${catchBody}
         for (let j = 0; j < count; j++) {
           let v = 0n;
           for (let k = 0; k < width; k++) v |= BigInt(bytes[j * width + k]) << BigInt(k * 8);
-          if (width === 8) lits.push(this.literal(BigInt.asIntN(64, v)));
-          else lits.push(this.literal(Number(v))); // stored raw; typed array coerces on set
+          if (width === 8) lits.push(BigInt.asIntN(64, v).toString() + "n");
+          else lits.push(String(v)); // stored raw; typed array coerces on set
         }
-        out.push(`R.fad(${this.reg(i.a)},[${lits.join(",")}]);`);
+        out.push(`R.fad(${A},[${lits.join(",")}]);`);
         break;
       }
-      case "throw": out.push(`throw ${this.reg(i.a)};`); break;
+      case "throw": out.push(`throw ${A};`); break;
       case "goto": case "goto/16": case "goto/32": out.push(this.jumpStr(i.pc + i.a, i.pc)); break;
       case "packed-switch": case "sparse-switch":
-        out.push(`switch(${this.reg(i.a)}){${this.switchCases(i).map(([k, t]) => `case ${this.literal(k)}:${this.jumpStr(t, i.pc)}`).join("")}}`);
+        out.push(`switch(${A}){${this.switchCases(i).map(([k, t]) => `case ${k}:${this.jumpStr(t, i.pc)}`).join("")}}`);
         break;
       case "cmpl-float": case "cmpl-double":
-        out.push(`${this.reg(i.a)}=${this.reg(i.b)}<${this.reg(i.c)}?-1:${this.reg(i.b)}>${this.reg(i.c)}?1:${this.reg(i.b)}===${this.reg(i.c)}?0:-1;`); break;
+        out.push(`${A}=${B}<${C}?-1:${B}>${C}?1:${B}===${C}?0:-1;`); break;
       case "cmpg-float": case "cmpg-double":
-        out.push(`${this.reg(i.a)}=${this.reg(i.b)}<${this.reg(i.c)}?-1:${this.reg(i.b)}>${this.reg(i.c)}?1:${this.reg(i.b)}===${this.reg(i.c)}?0:1;`); break;
+        out.push(`${A}=${B}<${C}?-1:${B}>${C}?1:${B}===${C}?0:1;`); break;
       case "cmp-long":
-        out.push(`${this.reg(i.a)}=${this.reg(i.b)}<${this.reg(i.c)}?-1:${this.reg(i.b)}>${this.reg(i.c)}?1:0;`); break;
-      case "if-eq": this.emitIf(`(${this.reg(i.a)}===${this.reg(i.b)}||(${nz(this.reg(i.a))}&&${nz(this.reg(i.b))}))`, i, out); break;
-      case "if-ne": this.emitIf(`!(${this.reg(i.a)}===${this.reg(i.b)}||(${nz(this.reg(i.a))}&&${nz(this.reg(i.b))}))`, i, out); break;
-      case "if-eqz": this.emitIf(nz(this.reg(i.a)), i, out); break;
-      case "if-nez": this.emitIf(`!${nz(this.reg(i.a))}`, i, out); break;
-      case "if-lt": case "if-ge": case "if-gt": case "if-le": this.emitIf(`${this.reg(i.a)}${REL[i.name.slice(3)]}${this.reg(i.b)}`, i, out); break;
-      case "if-ltz": case "if-gez": case "if-gtz": case "if-lez": this.emitIf(`${this.reg(i.a)}${REL[i.name.slice(3, 5)]}0`, i, out); break;
+        out.push(`${A}=${B}<${C}?-1:${B}>${C}?1:0;`); break;
+      case "if-eq": this.emitIf(`(${A}===${B}||(${nz(A)}&&${nz(B)}))`, i, out); break;
+      case "if-ne": this.emitIf(`!(${A}===${B}||(${nz(A)}&&${nz(B)}))`, i, out); break;
+      case "if-eqz": this.emitIf(nz(A), i, out); break;
+      case "if-nez": this.emitIf(`!${nz(A)}`, i, out); break;
+      case "if-lt": case "if-ge": case "if-gt": case "if-le": this.emitIf(`${A}${REL[i.name.slice(3)]}${B}`, i, out); break;
+      case "if-ltz": case "if-gez": case "if-gtz": case "if-lez": this.emitIf(`${A}${REL[i.name.slice(3, 5)]}0`, i, out); break;
       case "const-method-handle": case "const-method-type":
         out.push(this.unsupported(`${i.name} #${i.b}`));
         break;
@@ -706,14 +688,14 @@ ${catchBody}
         // before the prefix matching below, which would read a quickened offset as a field index
         if (i.name.endsWith("-quick")) { out.push(this.unsupported(`${i.name}: this dex is odexed`)); break; }
         if (i.name.startsWith("aget")) {
-          out.push(`if((${this.reg(i.c)}>>>0)>=${this.reg(i.b)}.length)R.aio(${this.reg(i.c)},${this.reg(i.b)}.length);${this.reg(i.a)}=${this.reg(i.b)}[${this.reg(i.c)}];`);
+          out.push(`if((${C}>>>0)>=${B}.length)R.aio(${C},${B}.length);${A}=${B}[${C}];`);
         } else if (i.name.startsWith("aput")) {
-          const val = i.name === "aput-object" ? ref(this.reg(i.a)) : this.reg(i.a);
-          out.push(`if((${this.reg(i.c)}>>>0)>=${this.reg(i.b)}.length)R.aio(${this.reg(i.c)},${this.reg(i.b)}.length);${this.reg(i.b)}[${this.reg(i.c)}]=${val};`);
+          const val = i.name === "aput-object" ? ref(A) : A;
+          out.push(`if((${C}>>>0)>=${B}.length)R.aio(${C},${B}.length);${B}[${C}]=${val};`);
         } else if (i.name.startsWith("iget")) {
-          out.push(`${this.reg(i.a)}=${this.reg(i.b)}${this.prop(this.fieldProp(i.c))};`);
+          out.push(`${A}=${B}.${this.fieldProp(i.c)};`);
         } else if (i.name.startsWith("iput")) {
-          out.push(`${this.reg(i.b)}${this.prop(this.fieldProp(i.c))}=${isRef(this.dex.type(this.dex.field(i.c).type)) ? ref(this.reg(i.a)) : this.reg(i.a)};`);
+          out.push(`${B}.${this.fieldProp(i.c)}=${isRef(this.dex.type(this.dex.field(i.c).type)) ? ref(A) : A};`);
         } else if (i.name.startsWith("sget")) {
           this.emitStaticField(i, out, true);
         } else if (i.name.startsWith("sput")) {
@@ -727,13 +709,9 @@ ${catchBody}
   }
 
   private jumpStr(target: number, from: number): string {
-    if (this.cold) {
-      const fuel = target <= from ? `if(--R.fuel<0){F.$fu=R.refuel();if(F.$fu)yield F.$fu;}` : "";
-      if (fuel) this.suspends = true;
-      return `${fuel}F.next=${this.literal(target)};return;`;
-    }
-    const fuel = !this.sync && target <= from ? `if(--R.fuel<0){$fu=R.refuel();if($fu){$p=$fu;$resume=${-target-1};break $dispatch;}}` : "";
-    return `${fuel}pc=${target};continue;`;
+    const suspend = this.cold ? "R.su($th);$s=1;await $fu;R.st($th);" : `$p=$fu;$resume=${-target-1};break $dispatch;`;
+    const fuel = !this.sync && target <= from ? `if(--R.fuel<0){$fu=R.refuel();if($fu){${suspend}}}` : "";
+    return `${fuel}pc=${target};${this.cold ? "return" : "continue"};`;
   }
 
   private emitIf(cond: string, i: Ins, out: string[]) {
@@ -743,18 +721,19 @@ ${catchBody}
   private emitStaticField(i: Ins, out: string[], isGet: boolean) {
     const { prop, typeIdx } = this.R.resolveStaticField(this.dex, i.b);
     if (typeIdx >= 0 && descToName(this.dex.type(typeIdx)) === this.info.name) {
-      out.push(`${this.u}=D.cl[${this.literal(typeIdx)}]??D.link(${this.literal(typeIdx)});`);
+      out.push(`$u=D.cl[${typeIdx}]??D.link(${typeIdx});`);
     } else if (typeIdx >= 0) {
-      this.guard(`D.ic[${this.literal(typeIdx)}]??D.init(${this.literal(typeIdx)}${this.fromArg})`, out, this.u);
+      this.guard(`D.ic[${typeIdx}]??D.init(${typeIdx}${this.fromArg})`, out, "$u");
     } else {
-      this.guard(`D.fs[${this.literal(i.b)}]??D.rsf(${this.literal(i.b)}${this.fromArg})`, out, this.u);
+      this.guard(`D.fs[${i.b}]??D.rsf(${i.b}${this.fromArg})`, out, "$u");
     }
-    out.push(isGet ? `${this.reg(i.a)}=${this.u}${this.prop(prop)};` : `${this.u}${this.prop(prop)}=${isRef(this.dex.type(this.dex.field(i.b).type)) ? ref(this.reg(i.a)) : this.reg(i.a)};`);
+    const A = `v${i.a}`;
+    out.push(isGet ? `${A}=$u.${prop};` : `$u.${prop}=${isRef(this.dex.type(this.dex.field(i.b).type)) ? ref(A) : A};`);
   }
 
   /** an instruction we cannot compile: throw here, so the rest of the method still runs */
   private unsupported(what: string): string {
-    return `throw R.unimplemented(${this.literal(`${this.info.name} ${what}`)});`;
+    return `throw R.unimplemented(${JSON.stringify(`${this.info.name} ${what}`)});`;
   }
 
   private emitInvoke(i: Ins, out: string[]) {
@@ -776,46 +755,46 @@ ${catchBody}
     const args: string[] = [];
     let ri = isInstance ? 1 : 0;
     for (const p of dex.protoParamTypes(mref.proto)) {
-      const r = this.reg(i.regs[ri]);
+      const r = `v${i.regs[ri]}`;
       args.push(isRef(p) ? ref(r) : r);
       ri += isWide(p) ? 2 : 1;
     }
-    const recv = isInstance ? (i.nullRecv ? ref(this.reg(i.regs[0])) : this.reg(i.regs[0])) : "";
+    const recv = isInstance ? (i.nullRecv ? ref(`v${i.regs[0]}`) : `v${i.regs[0]}`) : "";
     const argStr = args.join(",");
 
     if (clsName[0] === "[") {
       // methods on array types (clone/getClass/…)
-      out.push(`${this.t}=R.arrCall(${recv},${this.literal(mref.name)});`);
+      out.push(`$t=R.arrCall(${recv},${JSON.stringify(mref.name)});`);
       return;
     }
     switch (kind) {
       case "invoke-virtual": case "invoke-interface":
-        this.guard(`${recv}${this.prop(mangled)}(${argStr})`, out);
+        this.guard(`${recv}.${mangled}(${argStr})`, out);
         break;
       case "invoke-super": {
         // resolve against the superclass prototype; an interface-default super call
         // (Iface.super.m()) instead resolves on the declared interface's prototype
-        out.push(`${this.t}=(S.prototype${this.prop(mangled)}??(D.cl[${this.literal(mref.cls)}]??D.link(${this.literal(mref.cls)})).prototype${this.prop(mangled)}??R.nsm(${this.literal(clsName + "." + mref.name + desc + " (super)")})).call(${recv}${argStr ? "," + argStr : ""});`);
-        out.push(this.suspend(this.t));
+        out.push(`$t=(S.prototype.${mangled}??(D.cl[${mref.cls}]??D.link(${mref.cls})).prototype.${mangled}??R.nsm(${JSON.stringify(clsName + "." + mref.name + desc + " (super)")})).call(${recv}${argStr ? "," + argStr : ""});`);
+        out.push(this.suspend("$t"));
         break;
       }
       case "invoke-direct": {
         if (clsName === "java/lang/String" && mref.name === "<init>") {
-          out.push(`${recv}=R.newStr(${this.literal(desc)},[${argStr}]);`);
+          out.push(`${recv}=R.newStr(${JSON.stringify(desc)},[${argStr}]);`);
           break;
         }
         // same-class: entry into this class's code implies inited (or initing in
         // this chain — JVM reentrancy); skip init to avoid clinit self-deadlock
-        if (clsName === this.info.name) out.push(`${this.u}=D.dp[${this.literal(i.b)}]??D.rdp0(${this.literal(i.b)});`);
-        else this.guard(`D.dp[${this.literal(i.b)}]??D.rdp(${this.literal(i.b)}${this.fromArg})`, out, this.u);
-        this.guard(`${this.u}.call(${recv}${argStr ? "," + argStr : ""})`, out);
+        if (clsName === this.info.name) out.push(`$u=D.dp[${i.b}]??D.rdp0(${i.b});`);
+        else this.guard(`D.dp[${i.b}]??D.rdp(${i.b}${this.fromArg})`, out, "$u");
+        this.guard(`$u.call(${recv}${argStr ? "," + argStr : ""})`, out);
         break;
       }
       case "invoke-static": {
-        if (clsName === this.info.name) out.push(`${this.u}=D.cl[${this.literal(mref.cls)}]??D.link(${this.literal(mref.cls)});`);
-        else this.guard(`D.ic[${this.literal(mref.cls)}]??D.init(${this.literal(mref.cls)}${this.fromArg})`, out, this.u);
+        if (clsName === this.info.name) out.push(`$u=D.cl[${mref.cls}]??D.link(${mref.cls});`);
+        else this.guard(`D.ic[${mref.cls}]??D.init(${mref.cls}${this.fromArg})`, out, "$u");
         const args = this.R.natives.get(clsName)?.callerSensitive?.includes(mref.name + desc) ? argStr + (argStr ? ",R" : "R") : argStr;
-        this.guard(`${this.u}${this.prop(mangled)}(${args})`, out);
+        this.guard(`$u.${mangled}(${args})`, out);
         break;
       }
       // invoke-polymorphic (MethodHandle.invoke/invokeExact) lands here
@@ -824,31 +803,32 @@ ${catchBody}
   }
 
   private emitArith(i: Ins, out: string[]) {
+    const A = `v${i.a}`, B = `v${i.b}`, C = `v${i.c}`;
     const n = i.name;
     switch (n) {
-      case "neg-int": out.push(`${this.reg(i.a)}=(-${this.reg(i.b)})|0;`); return;
-      case "not-int": out.push(`${this.reg(i.a)}=~${this.reg(i.b)};`); return;
-      case "neg-long": out.push(`${this.reg(i.a)}=BigInt.asIntN(64,-${this.reg(i.b)});`); return;
-      case "not-long": out.push(`${this.reg(i.a)}=BigInt.asIntN(64,~${this.reg(i.b)});`); return;
-      case "neg-float": case "neg-double": out.push(`${this.reg(i.a)}=-${this.reg(i.b)};`); return;
-      case "int-to-long": out.push(`${this.reg(i.a)}=BigInt(${this.reg(i.b)});`); return;
-      case "int-to-float": out.push(`${this.reg(i.a)}=Math.fround(${this.reg(i.b)});`); return;
-      case "int-to-double": out.push(`${this.reg(i.a)}=${this.reg(i.b)};`); return;
-      case "long-to-int": out.push(`${this.reg(i.a)}=Number(BigInt.asIntN(32,${this.reg(i.b)}));`); return;
-      case "long-to-float": out.push(`${this.reg(i.a)}=Math.fround(Number(${this.reg(i.b)}));`); return;
-      case "long-to-double": out.push(`${this.reg(i.a)}=Number(${this.reg(i.b)});`); return;
-      case "float-to-int": case "double-to-int": out.push(`${this.reg(i.a)}=R.f2i(${this.reg(i.b)});`); return;
-      case "float-to-long": case "double-to-long": out.push(`${this.reg(i.a)}=R.f2l(${this.reg(i.b)});`); return;
-      case "float-to-double": out.push(`${this.reg(i.a)}=${this.reg(i.b)};`); return;
-      case "double-to-float": out.push(`${this.reg(i.a)}=Math.fround(${this.reg(i.b)});`); return;
-      case "int-to-byte": out.push(`${this.reg(i.a)}=(${this.reg(i.b)}<<24)>>24;`); return;
-      case "int-to-char": out.push(`${this.reg(i.a)}=${this.reg(i.b)}&0xffff;`); return;
-      case "int-to-short": out.push(`${this.reg(i.a)}=(${this.reg(i.b)}<<16)>>16;`); return;
+      case "neg-int": out.push(`${A}=(-${B})|0;`); return;
+      case "not-int": out.push(`${A}=~${B};`); return;
+      case "neg-long": out.push(`${A}=BigInt.asIntN(64,-${B});`); return;
+      case "not-long": out.push(`${A}=BigInt.asIntN(64,~${B});`); return;
+      case "neg-float": case "neg-double": out.push(`${A}=-${B};`); return;
+      case "int-to-long": out.push(`${A}=BigInt(${B});`); return;
+      case "int-to-float": out.push(`${A}=Math.fround(${B});`); return;
+      case "int-to-double": out.push(`${A}=${B};`); return;
+      case "long-to-int": out.push(`${A}=Number(BigInt.asIntN(32,${B}));`); return;
+      case "long-to-float": out.push(`${A}=Math.fround(Number(${B}));`); return;
+      case "long-to-double": out.push(`${A}=Number(${B});`); return;
+      case "float-to-int": case "double-to-int": out.push(`${A}=R.f2i(${B});`); return;
+      case "float-to-long": case "double-to-long": out.push(`${A}=R.f2l(${B});`); return;
+      case "float-to-double": out.push(`${A}=${B};`); return;
+      case "double-to-float": out.push(`${A}=Math.fround(${B});`); return;
+      case "int-to-byte": out.push(`${A}=(${B}<<24)>>24;`); return;
+      case "int-to-char": out.push(`${A}=${B}&0xffff;`); return;
+      case "int-to-short": out.push(`${A}=(${B}<<16)>>16;`); return;
     }
     const two = n.endsWith("/2addr");
     const lit = n.includes("/lit") || n === "rsub-int"; // 0xd1 is 22s (literal) despite the bare name
     const base = n.replace("/2addr", "").replace("/lit16", "").replace("/lit8", "");
-    const [x, y] = two ? [this.reg(i.a), this.reg(i.b)] : lit ? [this.reg(i.b), this.literal(i.c)] : [this.reg(i.b), this.reg(i.c)];
+    const [x, y] = two ? [A, B] : lit ? [B, String(i.c)] : [B, C];
     const litVal = i.c;
     let expr: string;
     switch (base) {
@@ -893,16 +873,23 @@ ${catchBody}
       case "rem-double": expr = `${x}%${y}`; break;
       default: throw new Error("arith? " + n);
     }
-    out.push(`${this.reg(i.a)}=${expr};`);
+    out.push(`${A}=${expr};`);
   }
 }
 
 function nz(v: string): string { return `(${v}===null||${v}===0)`; }
 
 const litOf = (v: number) => Object.is(v, -0) ? "-0" : Number.isFinite(v) ? String(v) : v !== v ? "NaN" : v > 0 ? "Infinity" : "-Infinity";
+const f32bits = (bits: number) => litOf(intBitsToFloat(bits));
+const f64bits = (bits: bigint) => litOf(longBitsToDouble(BigInt.asIntN(64, bits)));
 
 function typedArrayCtor(elem: string): string {
   const c = PRIM_ARRAYS[elem as PrimElem];
   if (!c) throw new Error("elem " + elem);
   return c.name;
+}
+
+function newArrayExpr(elem: string, lenExpr: string): string {
+  if (isRef(elem)) return `R.oa(${lenExpr},${JSON.stringify(elem)})`;
+  return `new ${typedArrayCtor(elem)}(${lenExpr})`;
 }

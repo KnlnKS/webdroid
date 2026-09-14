@@ -21,11 +21,20 @@ export interface ColdMethod {
 const handlers = new Map<string, Handler>();
 
 // Pool compiler-owned literals and register operands so cold DEX instructions share V8 code.
-export function coldOp(body: string, constants: unknown[], next: number, suspends: boolean): ColdOp {
+export function coldOp(source: string, next: number): ColdOp {
+  const constants: unknown[] = [];
+  const body = source.replace(/"(?:\\.|[^"\\])*"|\bv\d+\b|\$(?:t|u|ex|fu|th|s)\b|\bpc\b|\.((?:m|i|f|s)\$[\w$]+)|(?<![\w$])\d+(?:\.\d+)?(?:e[+-]?\d+)?n?(?![\w$])/gi, (literal, prop: string | undefined) => {
+    if (literal === "pc") return "F.next";
+    if (literal[0] === "$") return "F." + literal;
+    const reg = /^v\d+$/.test(literal), i = constants.length;
+    constants.push(prop ?? (reg ? Number(literal.slice(1)) : literal[0] === '"' ? JSON.parse(literal) : literal.endsWith("n") ? BigInt(literal.slice(0, -1)) : Number(literal)));
+    return reg ? `F.v[K[${i}]]` : prop ? `[K[${i}]]` : `K[${i}]`;
+  });
   let handler = handlers.get(body);
   if (!handler) {
     // An async helper would suspend even when every native returned synchronously.
-    const run = new Function(`return function${suspends ? "*" : ""}(F,K){const R=F.R,D=F.D,S=F.S;${body}}`)();
+    const suspends = body.includes("await ");
+    const run = new Function(`return function${suspends ? "*" : ""}(F,K){const R=F.R,D=F.D,S=F.S;${body.replaceAll("await ", "yield ")}}`)();
     handler = suspends ? { kind: "suspend", run } : { kind: "sync", run };
     handlers.set(body, handler); perf.coldHandlers++;
   }
