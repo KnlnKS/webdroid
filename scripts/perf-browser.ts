@@ -114,19 +114,21 @@ try {
     let acting = false;
     const actionErrors: string[] = [];
     const firstAction = actions[0];
+    const intervalMs = firstAction?.type === "tap" ? firstAction.everyMs ?? 600 : 1000;
+    const plannedInputs = firstAction ? Math.max(0, Math.ceil(ms / intervalMs) - 1) : 0;
     const timer = !firstAction ? undefined : setInterval(() => {
-      if (acting) return;
+      if (acting || inputs >= plannedInputs) return;
       const action = actions[inputs % actions.length];
       acting = true; inputs++; awaitingInput = performance.now();
       void act({ a: action, screen, deadlineMs: 5000 }).catch((e) => actionErrors.push(String(e))).finally(() => { acting = false; });
-    }, firstAction.type === "tap" ? firstAction.everyMs ?? 600 : 1000);
+    }, intervalMs);
     await new Promise<void>((resolve) => setTimeout(resolve, ms));
     const elapsed = performance.now() - t0;
     const end: Record<string, number> = { ...wd.perf };
     running = false; cancelAnimationFrame(rafId); clearInterval(timer);
     ImageBitmapRenderingContext.prototype.transferFromImageBitmap = raw;
     const perf = Object.fromEntries(Object.entries(end).map(([k, v]) => [k, v - (start[k] ?? 0)]));
-    return { ms: elapsed, perf, ticks: wd.ticks - ticks, hidden, queued, depth, phases, inputs, actionErrors,
+    return { ms: elapsed, perf, ticks: wd.ticks - ticks, hidden, queued, depth, phases, inputs, plannedInputs, actionInFlight: acting, actionErrors,
       rafCount: nr, presentCount: np, droppedSamples: Math.max(0, nr - capacity) + Math.max(0, np - capacity),
       rafIntervals: Array.from(raf.subarray(0, Math.min(nr, capacity))),
       presentIntervals: Array.from(presents.subarray(0, Math.min(np, capacity))),

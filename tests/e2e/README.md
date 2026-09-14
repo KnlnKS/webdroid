@@ -64,6 +64,8 @@ ordinary tracking wrappers. `--gpu hardware` uses full bundled Chromium, removes
 software-rendering flags and disables the automatic SwiftShader fallback. The report's
 actual GPU information must confirm acceleration; selecting this mode alone does not.
 The output records the actual GPU, since the browser may still fall back to software.
+Inputs stop one interval before the window ends. Require matching `plannedInputs`/`inputs`
+and `actionInFlight: false` for complete interaction windows; blocked actions are reported.
 Heap samples follow explicit garbage collection; CDP CPU counters cover a slightly wider
 interval than the in-page window. Input-to-next-presentation is an opportunity proxy,
 not proof that the input changed those pixels. Screenshots and process diagnostics follow
