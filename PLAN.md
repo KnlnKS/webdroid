@@ -54,8 +54,9 @@ tests and diagnostic loads pause during serialized performance windows.
 - Snapshot-only publication measured neutral in three Flappy pairs. CPU Canvas2D backing
   rejected for near-continuous main-thread blocking despite higher FPS. Combined snapshot
   candidate also rejected for blocking; Metal remains near 60/s on both revisions. Separate
-  composition works and reuses the UI plane, but first software sample regresses 30.6 ->
-  24.4/s. Coverage scissoring is a separate follow-up; confirmation and Metal checks remain.
+  composition and narrower UI coverage also rejected in three 15-second comparisons:
+  29.67 -> 23.53/24.66 presentations/s and worse intervals. Metal stays 60/s with only
+  1.5–3.2% CPU savings. No compositor replacement meets retention.
 - Explicit JVM operands, bounded resumable blocks and synchronous-until-suspension stages
   pass core DEX checks. Seven component rounds show construction 53.9 -> 41.2 ms and cold
   loop 52.3 -> 21.3 ms. Initial Mihon app windows are neutral on software and Metal; fresh

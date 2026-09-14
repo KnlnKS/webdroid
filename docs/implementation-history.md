@@ -3498,6 +3498,40 @@ This evidence triggers the planned separate-compositor prototype.
 Raw rendering reports live in `webdroid-shots/performance-stages/{rendering,canvas,combo}`;
 the renderer worktree retains `webdroid-shots/diagnostic-*` and trace scripts.
 
+The subsequent separate compositor uses an opaque GL surface plus transparent
+software UI plane at the existing atomic transfer boundary. It records drawing
+operations for fallback without re-invoking guest drawing, leases completed images
+through asynchronous draws, checks owner generations and reuses the UI texture on
+surface-only updates. Unsupported drawing state, clips, multiple surfaces and
+transforms fall back to software. Six existing surface/EGL checks (16 assertions)
+and typecheck pass, including callback suspension, retained images and pixel equality.
+
+Initial software results exposed expensive full-screen transparent UI blending.
+A successor restricts that pass to disjoint outside strips plus conservatively
+covered overlays inside the surface. Review caught fractional post-surface clips:
+coverage must round outward before integer GL scissors or lose partially covered
+edge pixels. The corrected successor is 56a8f0d. Flappy's measured UI coverage is
+77760 pixels per presentation versus 2332800 previously, a 96.7% reduction; the
+window performs zero guest redraws and reuses the cached plane throughout.
+
+Three alternating 15-second software triplets after warmup still reject both
+variants. Five-second diagnostics are excluded from these medians:
+
+| Flappy title | Presentations/s | Change from baseline |
+| --- | ---: | ---: |
+| Pristine b16d705 | 29.666 | — |
+| Separate compositor 630005a | 23.532 | -20.68% |
+| UI coverage 56a8f0d | 24.664 | -16.86% |
+
+Their p95 presentation interval worsens to about 69 ms from 35 ms. A separate
+Metal sanity triplet gives 59.996/59.999/59.999 presentations/s; TaskDuration is
+1.838/1.811/1.780 seconds (only 1.5%/3.2% less), and p50/p95 intervals remain
+16.7/~18.6 ms. Retained JS heaps are 161.497/161.544/161.588 MB with no backing-store
+growth. There is no large hardware benefit to justify a conditional compositor
+trial. All windows stay visible/alive without emulator rendering failures;
+external AdMob errors recur on baseline too. Neither replacement is integrated.
+The software path, guest timers and main-queue ordering remain unchanged.
+
 ### Native correctness before optimization
 
 An unaligned host halfword write across a page boundary left the second page's
