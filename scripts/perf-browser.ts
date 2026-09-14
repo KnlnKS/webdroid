@@ -18,6 +18,7 @@ const { values } = parseArgs({ options: {
   out: { type: "string" }, gpu: { type: "string", default: "software" }, probe: { type: "boolean", default: false },
   ms: { type: "string", default: "15000" }, warmup: { type: "string", default: "3000" },
   "align-presentation": { type: "boolean", default: false },
+  "cpu-profile": { type: "boolean", default: false },
   "jvm-profile": { type: "boolean", default: false }, "jvm-tier": { type: "string", default: "auto" }, "jvm-hotness": { type: "string", default: "4096" },
   interval: { type: "string" }, "exercise-once": { type: "boolean", default: false }, "setup-shots": { type: "boolean", default: false },
   "setup-settle-cap": { type: "string" },
@@ -131,6 +132,10 @@ try {
   const actions = exercises.map((exercise) => actOf(flow, exercise, manifest?.steps.find((s) => s.id === exercise.id)));
   // Repeated tap steps define one tap per interval; do not nest their original repeat loop.
   for (const action of actions) if (action.type === "tap") action.repeat = 1;
+  if (values["cpu-profile"]) {
+    await session.send("Profiler.enable");
+    await session.send("Profiler.start");
+  }
   const measurement = foreground.evaluate(async ({ ms, actions, screen, actionSource, interval, once, offsets, alignPresentation, startState, stateReader }) => {
     const act: typeof performAction = (0, eval)(`(${actionSource})`);
     let matchedState: unknown, stateWaitMs = 0;
@@ -264,6 +269,7 @@ try {
     };
   }, { ms, actions, screen, actionSource: performAction.toString(), interval, once: values["exercise-once"], offsets: inputOffsets, alignPresentation: values["align-presentation"], startState, stateReader });
   const result = await measurement;
+  const cpuProfile = values["cpu-profile"] ? (await session.send("Profiler.stop")).profile : undefined;
   const afterMetrics = await session.send("Performance.getMetrics");
   const stateAfter = await readState();
   await session.send("HeapProfiler.collectGarbage");
@@ -274,10 +280,13 @@ try {
   const processes = await readProcesses(page);
   const jvmProfile = values["jvm-profile"] ? await foreground.evaluate(() => globalThis.wd.jvmProfile()) : undefined;
   await mkdir(dirname(values.out), { recursive: true });
+  const cpuProfilePath = cpuProfile ? values.out.replace(/\.json$/, ".cpuprofile") : undefined;
+  if (cpuProfile && cpuProfilePath) await Bun.write(cpuProfilePath, JSON.stringify(cpuProfile));
   await page.screenshot({ path: values.out.replace(/\.json$/, "") + ".png" });
   const output = { flow: flow.app, after: values.after, exercise: values.exercise, url: url.href, browser: browser.version(),
     gpu, gpuInfo: gpuInfo.gpu, probe: values.probe, screen, warmup, setup, setupSettleCap, result, alive, tree, metrics, heapBefore, heapAfter, processes, errors,
     ...(jvmProfile ? { jvmProfile } : {}),
+    ...(cpuProfilePath ? { cpuProfilePath } : {}),
     stateBefore: startState === undefined ? stateBefore : result.stateBefore, stateAfter, inputOffsets, startExercise: values["start-exercise"], stateReader: values["state-reader"],
     ...(startState !== undefined ? { startState, stateWaitMs: result.stateWaitMs } : {}),
     ...(values["align-presentation"] ? { alignPresentation: true } : {}), ...(interval !== undefined ? { interval } : {}), ...(values["exercise-once"] ? { exerciseOnce: true } : {}) };

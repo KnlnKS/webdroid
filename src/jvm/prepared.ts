@@ -121,3 +121,13 @@ export function floatingOperands(op: number): { kind: "F" | "D"; unary: boolean 
   if (op === 0x80 || (op >= 0x8a && op <= 0x8c)) return { kind: "D", unary: true };
   return null;
 }
+
+export function isWasmNumericOpcode(op: number): boolean {
+  return (op >= 0x2d && op <= 0x31) || (op >= 0x7b && op <= 0xe2);
+}
+
+export function isWasmRegionOpcode(op: number): boolean {
+  return op === 0 || (op >= 0x01 && op <= 0x09) || (op >= 0x0e && op <= 0x19) ||
+    (op >= 0x28 && op <= 0x2a) || (op >= 0x2d && op <= 0x3d) ||
+    (op >= 0x7b && op <= 0xe2);
+}

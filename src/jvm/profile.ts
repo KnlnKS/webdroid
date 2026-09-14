@@ -13,6 +13,8 @@ export interface JvmMethodProfile {
   suspensions: number;
   coldToHot: number;
   generatedBytes: number;
+  decodedInstructions: number;
+  wasmEligible: boolean;
   decodeMs: number;
   cfgMs: number;
   typeMs: number;
@@ -61,7 +63,7 @@ const phaseField = {
 function makeRecord(name: string): JvmMethodProfile {
   return {
     name, entries: 0, backedges: 0, instructions: 0, suspensions: 0,
-    coldToHot: 0, generatedBytes: 0,
+    coldToHot: 0, generatedBytes: 0, decodedInstructions: 0, wasmEligible: false,
     decodeMs: 0, cfgMs: 0, typeMs: 0, coldBuildMs: 0, hotEmitMs: 0,
     jsCompileMs: 0, classLinkMs: 0, coldRunMs: 0, hotRunMs: 0, suspendMs: 0,
   };
@@ -108,17 +110,35 @@ export const jvmProfiler = {
   suspension(name: string): void { const r = record(name); if (r) r.suspensions++; },
   promoted(name: string): void { const r = record(name); if (r) r.coldToHot++; },
   bytes(name: string, value: number): void { const r = record(name); if (r) r.generatedBytes += value; },
+  eligibility(name: string, instructions: number, wasmEligible: boolean): void {
+    const r = record(name);
+    if (r) { r.decodedInstructions = instructions; r.wasmEligible = wasmEligible; }
+  },
   add(name: string, phase: JvmProfilePhase, ms: number): void {
     if (!enabled) return;
     perf[phaseCounter[phase]] += ms;
     const r = record(name);
     if (r) r[phaseField[phase]] += ms;
   },
-  snapshot(): { enabled: boolean; requestedTier: JvmTier; tier: Exclude<JvmTier, "wasm">; wasmAvailable: false; droppedMethods: number; methods: JvmMethodProfile[] } {
+  snapshot() {
     const methods = [...records.values()].sort((a, b) =>
       (b.coldRunMs + b.hotRunMs + b.decodeMs + b.cfgMs + b.typeMs + b.coldBuildMs + b.hotEmitMs + b.jsCompileMs + b.classLinkMs) -
       (a.coldRunMs + a.hotRunMs + a.decodeMs + a.cfgMs + a.typeMs + a.coldBuildMs + a.hotEmitMs + a.jsCompileMs + a.classLinkMs));
-    return { enabled, requestedTier, tier, wasmAvailable: false, droppedMethods: perf.jvmProfileDroppedMethods, methods };
+    const eligible = methods.filter((method) => method.wasmEligible);
+    const activeMs = (method: JvmMethodProfile) => Math.max(0, method.coldRunMs - method.suspendMs) + method.hotRunMs;
+    const dexActiveMs = methods.reduce((sum, method) => sum + activeMs(method), 0);
+    const eligibleDexActiveMs = eligible.reduce((sum, method) => sum + activeMs(method), 0);
+    return { enabled, requestedTier, tier, wasmAvailable: false, droppedMethods: perf.jvmProfileDroppedMethods,
+      wasmEligibility: {
+        recordedMethods: methods.length,
+        eligibleMethods: eligible.length,
+        decodedInstructions: methods.reduce((sum, method) => sum + method.decodedInstructions, 0),
+        eligibleInstructions: eligible.reduce((sum, method) => sum + method.decodedInstructions, 0),
+        executedInstructions: methods.reduce((sum, method) => sum + method.instructions, 0),
+        eligibleExecutedInstructions: eligible.reduce((sum, method) => sum + method.instructions, 0),
+        dexActiveMs, eligibleDexActiveMs,
+        observedCpuShare: dexActiveMs > 0 ? eligibleDexActiveMs / dexActiveMs : 0,
+      }, methods };
   },
   reset(): void { records.clear(); dropped.clear(); perf.jvmProfileDroppedMethods = 0; },
 };

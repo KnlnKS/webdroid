@@ -10,7 +10,7 @@ import { ACC, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
 import { jvmProfiler } from "./profile";
-import { decodeInstructions, endsBlock, floatingOperands, maySuspend, writesRegister,
+import { decodeInstructions, endsBlock, floatingOperands, isWasmNumericOpcode, isWasmRegionOpcode, maySuspend, writesRegister,
   type PreparedInstruction as Ins, type PreparedMethod } from "./prepared";
 
 const REL: Record<string, string> = { lt: "<", ge: ">=", gt: ">", le: "<=" };
@@ -232,6 +232,12 @@ class MethodCompiler {
         break;
       }
     }
+    const signature = parseMethodDesc(this.desc);
+    const primitiveSignature = signature.params.every((type) => type.length === 1) && signature.ret.length === 1;
+    const hasBackedge = this.instructions.some((ins) => this.branchTargets(ins).some((target) => target <= ins.pc));
+    const wasmEligible = !this.hasTries && primitiveSignature && hasBackedge &&
+      this.instructions.some((ins) => isWasmNumericOpcode(ins.op)) && this.instructions.every((ins) => isWasmRegionOpcode(ins.op));
+    jvmProfiler.eligibility(profileName, this.instructions.length, wasmEligible);
     this.prepared = { instructions: this.instructions, leaders: this.leaders, sync: this.sync };
   }
 
