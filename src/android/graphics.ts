@@ -747,6 +747,24 @@ rt.register({
   },
 });
 class JColorMatrixColorFilter extends JObj { matrix = identityMatrix(); }
+class JLightingColorFilter extends JObj {
+  mul = 0; add = 0; matrix = identityMatrix();
+  update() {
+    const m = this.matrix;
+    m[0] = ((this.mul >>> 16) & 255) / 255; m[6] = ((this.mul >>> 8) & 255) / 255; m[12] = (this.mul & 255) / 255;
+    m[4] = (this.add >>> 16) & 255; m[9] = (this.add >>> 8) & 255; m[14] = this.add & 255;
+  }
+}
+rt.register({
+  name: "android/graphics/LightingColorFilter", ctor: JLightingColorFilter, sup: "android/graphics/ColorFilter",
+  methods: {
+    "<init>(II)V": function (this: JLightingColorFilter, mul: number, add: number) { this.mul = mul; this.add = add; this.update(); },
+    "getColorMultiply()I": function (this: JLightingColorFilter) { return this.mul; },
+    "getColorAdd()I": function (this: JLightingColorFilter) { return this.add; },
+    "setColorMultiply(I)V": function (this: JLightingColorFilter, mul: number) { this.mul = mul; this.update(); },
+    "setColorAdd(I)V": function (this: JLightingColorFilter, add: number) { this.add = add; this.update(); },
+  },
+});
 rt.register({
   name: "android/graphics/ColorMatrixColorFilter", ctor: JColorMatrixColorFilter, sup: "android/graphics/ColorFilter",
   methods: {

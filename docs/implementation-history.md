@@ -2620,3 +2620,8 @@ Alpha masks take color/shaders from the drawing Paint, and pixel buffers expose 
 byte per pixel. Browser checks and bitmap Parcel checks pass (63 assertions); typecheck
 passes. Fresh Maps advances to LightingColorFilter during photo-page construction. Blur
 pixel kernels still use Canvas2D; exact Skia pixel equality is not established.
+
+LightingColorFilter now supplies its RGB multiply/add transform through the existing color
+matrix path, retaining alpha and supporting updates to attached paints. Its focused API
+check and typecheck pass. A fresh Maps media page lays out reaction/share/save and close
+controls; image processing and captions next expose Canvas.drawPaint and TextAppearanceSpan.
