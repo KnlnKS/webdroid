@@ -2,7 +2,7 @@
 // bun scripts/perf-browser.ts --flow flappybird --after play --exercise flaps --out /tmp/flappy.json
 import { parseArgs } from "node:util";
 import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join, parse } from "node:path";
 import { FLOWS } from "../tests/e2e/flows";
 import { actOf, loadManifest, prefsStorage } from "../tests/e2e/capture-webdroid";
 import { CONTEXT_OPTS, launchBrowser } from "../tests/e2e/drivers/webdroid";
@@ -25,6 +25,8 @@ const { values } = parseArgs({ options: {
 } });
 const flow = FLOWS.find((f) => f.app === values.flow);
 if (!flow || !values.after || !values.out) throw new Error("Required: --flow <flow> --after <step> --out <file.json>");
+const outParts = parse(values.out);
+const artifactPath = (suffix: string) => join(outParts.dir, outParts.name + suffix);
 const after = flow.steps.findIndex((s) => s.id === values.after);
 const exercises = (values.exercise?.split(",") ?? []).map((id) => {
   const step = flow.steps.find((s) => s.id === id);
@@ -94,7 +96,7 @@ try {
     const setupMs = performance.now() - started;
     const perf = values["setup-shots"] ? await page.evaluate(() => ({ ...globalThis.wd.perf })) : undefined;
     setup.push({ step: step.id, ms: setupMs, actionMs, hit, ...(perf ? { perf } : {}) });
-    if (values["setup-shots"]) await page.screenshot({ path: values.out.replace(/\.json$/, "") + `-setup-${step.id}.png` });
+    if (values["setup-shots"]) await page.screenshot({ path: artifactPath(`-setup-${step.id}.png`) });
   }
   await page.waitForTimeout(warmup);
   let foreground: ReturnType<typeof page.mainFrame> | undefined;
@@ -280,9 +282,9 @@ try {
   const processes = await readProcesses(page);
   const jvmProfile = values["jvm-profile"] ? await foreground.evaluate(() => globalThis.wd.jvmProfile()) : undefined;
   await mkdir(dirname(values.out), { recursive: true });
-  const cpuProfilePath = cpuProfile ? values.out.replace(/\.json$/, ".cpuprofile") : undefined;
+  const cpuProfilePath = cpuProfile ? artifactPath(".cpuprofile") : undefined;
   if (cpuProfile && cpuProfilePath) await Bun.write(cpuProfilePath, JSON.stringify(cpuProfile));
-  await page.screenshot({ path: values.out.replace(/\.json$/, "") + ".png" });
+  await page.screenshot({ path: artifactPath(".png") });
   const output = { flow: flow.app, after: values.after, exercise: values.exercise, url: url.href, browser: browser.version(),
     gpu, gpuInfo: gpuInfo.gpu, probe: values.probe, screen, warmup, setup, setupSettleCap, result, alive, tree, metrics, heapBefore, heapAfter, processes, errors,
     ...(jvmProfile ? { jvmProfile } : {}),
