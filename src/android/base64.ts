@@ -1,10 +1,5 @@
 // android.util.Base64. Not java.util.Base64: the flag word, the trailing newline and the
 // 76-char wrapping are AOSP-specific and apps round-trip against them.
-//
-// The value model is the whole difficulty here. A Java byte[] is an Int8Array (values
-// -128..127) and a Java String is a JS string primitive, so btoa/atob are useless — btoa
-// throws on any code unit above 0xff and atob hands back a string whose chars must still be
-// re-signed. Everything below works on numbers and masks with 0xff.
 
 import { rt, JObj } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
@@ -21,35 +16,40 @@ const WEB = STD.slice(0, 62) + "-_";
 const DEC = new Int8Array(256).fill(-1);
 for (let i = 0; i < 64; i++) { DEC[STD.charCodeAt(i)] = i; DEC[WEB.charCodeAt(i)] = i; }
 
-function enc(input: Int8Array, off: number, len: number, flags: number): number[] {
+function enc(input: Int8Array, off: number, len: number, flags: number): Int8Array {
   const tab = flags & URL_SAFE ? WEB : STD;
   const pad = !(flags & NO_PADDING), wrap = !(flags & NO_WRAP), crlf = (flags & CRLF) !== 0;
-  const out: number[] = [];
-  let col = 0;
-  const nl = () => { if (crlf) out.push(13); out.push(10); col = 0; };
-  const emit = (s: string) => {
-    for (let i = 0; i < s.length; i++) {
-      out.push(s.charCodeAt(i));
-      // AOSP wraps every 19 three-byte groups, i.e. every 76 output characters.
-      if (wrap && ++col === 76) nl();
-    }
-  };
-  let i = off;
+  if (len <= 0) return new Int8Array(0);
+  const rem = len % 3;
+  const size = Math.ceil(len / 3) * 4 - (!pad && rem ? 3 - rem : 0);
+  const out = new Int8Array(size + (wrap ? Math.ceil(len / 57) * (crlf ? 2 : 1) : 0));
+  let at = 0, groups = 0, i = off;
   const end = off + len;
   for (; i + 2 < end; i += 3) {
     const w = ((input[i] & 0xff) << 16) | ((input[i + 1] & 0xff) << 8) | (input[i + 2] & 0xff);
-    emit(tab[(w >> 18) & 63] + tab[(w >> 12) & 63] + tab[(w >> 6) & 63] + tab[w & 63]);
+    out[at++] = tab.charCodeAt((w >> 18) & 63);
+    out[at++] = tab.charCodeAt((w >> 12) & 63);
+    out[at++] = tab.charCodeAt((w >> 6) & 63);
+    out[at++] = tab.charCodeAt(w & 63);
+    // AOSP wraps every 19 three-byte groups, i.e. every 76 output characters.
+    if (wrap && ++groups === 19) {
+      if (crlf) out[at++] = 13;
+      out[at++] = 10; groups = 0;
+    }
   }
-  const rem = end - i;
-  if (rem === 1) {
-    const w = (input[i] & 0xff) << 16;
-    emit(tab[(w >> 18) & 63] + tab[(w >> 12) & 63] + (pad ? "==" : ""));
-  } else if (rem === 2) {
-    const w = ((input[i] & 0xff) << 16) | ((input[i + 1] & 0xff) << 8);
-    emit(tab[(w >> 18) & 63] + tab[(w >> 12) & 63] + tab[(w >> 6) & 63] + (pad ? "=" : ""));
+  if (rem) {
+    const w = ((input[i] & 0xff) << 16) | (rem === 2 ? (input[i + 1] & 0xff) << 8 : 0);
+    out[at++] = tab.charCodeAt((w >> 18) & 63);
+    out[at++] = tab.charCodeAt((w >> 12) & 63);
+    if (rem === 2) out[at++] = tab.charCodeAt((w >> 6) & 63);
+    else if (pad) out[at++] = 61;
+    if (pad) out[at++] = 61;
   }
-  // AOSP terminates a wrapped encoding with a line separator even when the last line is short.
-  if (wrap && len > 0 && col !== 0) nl();
+  // AOSP also terminates a nonempty final line with the selected line separator.
+  if (wrap && (groups || rem)) {
+    if (crlf) out[at++] = 13;
+    out[at] = 10;
+  }
   return out;
 }
 
@@ -73,23 +73,18 @@ const strCodes = (s: string): number[] => {
   for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
   return a;
 };
-const toStr = (codes: number[]) => {
-  let s = "";                                             // spread would overflow the stack on big blobs
-  for (let i = 0; i < codes.length; i += 8192) s += String.fromCharCode(...codes.slice(i, i + 8192));
-  return s;
-};
-const toBytes = (codes: number[]) => Int8Array.from(codes);
+const ascii = new TextDecoder();
 
 rt.register({
   name: "android/util/Base64",
   ctor: class extends JObj {},
   statics: { DEFAULT, NO_PADDING, NO_WRAP, CRLF, URL_SAFE, NO_CLOSE },
   methods: {
-    "static encode([BI)[B": (b: Int8Array, f: number) => toBytes(enc(b, 0, b.length, f)),
-    "static encode([BIII)[B": (b: Int8Array, o: number, l: number, f: number) => toBytes(enc(b, o, l, f)),
-    "static encodeToString([BI)Ljava/lang/String;": (b: Int8Array, f: number) => toStr(enc(b, 0, b.length, f)),
+    "static encode([BI)[B": (b: Int8Array, f: number) => enc(b, 0, b.length, f),
+    "static encode([BIII)[B": (b: Int8Array, o: number, l: number, f: number) => enc(b, o, l, f),
+    "static encodeToString([BI)Ljava/lang/String;": (b: Int8Array, f: number) => ascii.decode(enc(b, 0, b.length, f)),
     "static encodeToString([BIII)Ljava/lang/String;":
-      (b: Int8Array, o: number, l: number, f: number) => toStr(enc(b, o, l, f)),
+      (b: Int8Array, o: number, l: number, f: number) => ascii.decode(enc(b, o, l, f)),
     "static decode(Ljava/lang/String;I)[B": (s: string) => { const c = strCodes(s); return dec(c, 0, c.length); },
     "static decode([BI)[B": (b: Int8Array) => dec(b, 0, b.length),
     "static decode([BIII)[B": (b: Int8Array, o: number, l: number) => dec(b, o, l),
@@ -110,7 +105,7 @@ rt.register({
     },
     "flush()V": function (this: JB64OS) { return this.out ? vcall(this.out, "flush", "()V") : undefined; },
     "close()V": async function (this: JB64OS) {
-      const body = toBytes(enc(Int8Array.from(this.chunks), 0, this.chunks.length, this.flags));
+      const body = enc(Int8Array.from(this.chunks), 0, this.chunks.length, this.flags);
       this.chunks.length = 0;
       if (!this.out) return;
       await vcall(this.out, "write", "([BII)V", body, 0, body.length);
@@ -137,8 +132,8 @@ rt.register({
 rt.register({
   name: "java/util/Base64$Encoder", ctor: JB64Codec,
   methods: {
-    "encodeToString([B)Ljava/lang/String;": function (this: JB64Codec, b: Int8Array) { return toStr(enc(b, 0, b.length, this.flags)); },
-    "encode([B)[B": function (this: JB64Codec, b: Int8Array) { return toBytes(enc(b, 0, b.length, this.flags)); },
+    "encodeToString([B)Ljava/lang/String;": function (this: JB64Codec, b: Int8Array) { return ascii.decode(enc(b, 0, b.length, this.flags)); },
+    "encode([B)[B": function (this: JB64Codec, b: Int8Array) { return enc(b, 0, b.length, this.flags); },
     "withoutPadding()Ljava/util/Base64$Encoder;": function (this: JB64Codec) { return codec(this.flags | NO_PADDING); },
   },
 });
