@@ -32,10 +32,11 @@ export async function apkCertificates(bytes: Uint8Array, zip: Record<string, Uin
       return certificate.slice();
     });
   }
-  const entries = Object.entries(zip).filter(([name]) => /^META-INF\/[^/]+\.(RSA|DSA|EC)$/i.test(name));
+  const entries = Object.keys(zip).filter((name) => /^META-INF\/[^/]+\.(RSA|DSA|EC)$/i.test(name));
   if (!entries.length) return [];
   const forge = (await import("node-forge")).default;
-  return entries.flatMap(([, block]) => {
+  return entries.flatMap((name) => {
+    const block = zip[name];
     let binary = "";
     for (const byte of block) binary += String.fromCharCode(byte);
     const message = forge.pkcs7.messageFromAsn1(forge.asn1.fromDer(binary));
