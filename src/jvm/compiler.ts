@@ -154,7 +154,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unkno
   const info = C.$i, rec = info.lazy![i], dex = info.dex!;
   const profileName = `${info.name}.${rec.name}${rec.desc}`;
   const target = rec.isStatic ? C : C.prototype;
-  const source = () => emitMethod(R, dex, info, rec.m, !cold) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
+  const source = (prepared?: MethodCompiler) => emitMethod(R, dex, info, rec.m, !cold, prepared) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
   const compile = (src = source()) => {
     const started = jvmProfiler.enabled ? performance.now() : 0;
     new Function("C", "D", "R", "S", src)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined);
@@ -163,7 +163,8 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unkno
   };
   const compiler = new MethodCompiler(R, dex, info, dex.code(rec.m.codeOff), rec.isStatic, rec.desc, rec.name);
   let cold = compiler.compileCold();
-  if (!cold || jvmProfiler.tier === "js") return compile();
+  if (!cold) return compile(source(compiler));
+  if (jvmProfiler.tier === "js") return compile();
   // Captured direct/interface entries keep this cell; new virtual calls find the hot body.
   let calls = 0, hot: Function | undefined;
   let owner = R;
@@ -211,12 +212,12 @@ function emitNativeStub(dex: DexFile, info: ClassInfo, m: EncodedMethod): string
     `return ${v}.call(this${ps ? "," + ps : ""})};`;
 }
 
-function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, count = true): string {
+function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, count = true, prepared?: MethodCompiler): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const code = dex.code(m.codeOff);
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   try {
-    const body = new MethodCompiler(R, dex, info, code, isStatic, desc, name).compile(count);
+    const body = (prepared ?? new MethodCompiler(R, dex, info, code, isStatic, desc, name)).compile(count);
     return `${holder(isStatic)}.${mangled} = ${body};`;
   } catch (e) {
     const msg = `compile error ${info.name}.${name}${desc}: ${e}`;
@@ -242,8 +243,11 @@ class MethodCompiler {
 
   private resumes = 0;
   private cold = false;
+  private prepared = false;
 
   private prepare(): void {
+    if (this.prepared) return;
+    this.prepared = true;
     const { code } = this;
     const profileName = `${this.info.name}.${this.mname}${this.desc}`;
     const profiled = jvmProfiler.enabled;
