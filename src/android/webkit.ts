@@ -270,6 +270,7 @@ export class JWebView extends JViewGroup {
   frame(): HTMLIFrameElement | null {
     if (this.el || !layer) return this.el;
     const el = this.el = document.createElement("iframe");
+    el.referrerPolicy = "no-referrer";
     el.style.cssText = "position:absolute;border:0;pointer-events:auto";
     el.hidden = true;
     (el as unknown as { __wdIfaces: unknown }).__wdIfaces = this.ifaces;
