@@ -608,7 +608,7 @@ const drawText = (h: bigint, s: string, x: number, y: number, pt: bigint) =>
 delegate("android/graphics/BaseCanvas", {
   "nDrawColor(JII)V": (h: bigint, c: number) => on("drawColor(I)V")(h, c),
   "nDrawColor(JJJI)V": (h: bigint, _cs: bigint, c: bigint) => on("drawColor(I)V")(h, argbOfColorLong(c)),
-  "nDrawPaint(JJ)V": (h: bigint, p: bigint) => on("drawColor(I)V")(h, paint(p).color),
+  "nDrawPaint(JJ)V": (h: bigint, p: bigint) => on("drawPaint(Landroid/graphics/Paint;)V")(h, paint(p)),
   "nDrawRect(JFFFFJ)V": withPaint("drawRect(FFFFLandroid/graphics/Paint;)V", 4),
   "nDrawRoundRect(JFFFFFFJ)V": withPaint("drawRoundRect(FFFFFFLandroid/graphics/Paint;)V", 6),
   "nDrawCircle(JFFFJ)V": withPaint("drawCircle(FFFLandroid/graphics/Paint;)V", 3),

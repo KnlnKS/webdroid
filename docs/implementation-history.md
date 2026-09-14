@@ -2625,3 +2625,8 @@ LightingColorFilter now supplies its RGB multiply/add transform through the exis
 matrix path, retaining alpha and supporting updates to attached paints. Its focused API
 check and typecheck pass. A fresh Maps media page lays out reaction/share/save and close
 controls; image processing and captions next expose Canvas.drawPaint and TextAppearanceSpan.
+
+Canvas.drawPaint now fills the current clip with the Paint under its transform, including
+shader/filter/blend behavior, while ignoring stroke style and mask filters as Android does.
+The framework nDrawPaint delegate uses the same method. A rotated clipping/alpha browser
+check passes alongside the alpha-mask tests; typecheck passes.

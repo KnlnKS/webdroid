@@ -62,6 +62,11 @@ async function probe() {
   await vcall(alpha, "copyPixelsFromBuffer", "(Ljava/nio/Buffer;)V", buffer);
   const copiedAlpha = (await vcall(alpha, "getPixel", "(II)I", 0, 0)) >>> 24;
   const originalAlpha = (await vcall(source, "getPixel", "(II)I", 0, 0)) >>> 24;
-  return { results, extracted, shaded, position, copiedAlpha, originalAlpha };
+  ctx.clearRect(0, 0, 40, 40); ctx.translate(20, 20); ctx.rotate(Math.PI / 4);
+  ctx.beginPath(); ctx.rect(-8, -8, 16, 16); ctx.clip();
+  const before = ctx.getTransform().toString();
+  await vcall(JCanvas.wrap(ctx, 40, 40), "drawPaint", "(Landroid/graphics/Paint;)V", paint);
+  const plane = { inside: Array.from(ctx.getImageData(20, 20, 1, 1).data), outside: Array.from(ctx.getImageData(0, 0, 1, 1).data), restored: ctx.getTransform().toString() === before };
+  return { results, extracted, shaded, position, copiedAlpha, originalAlpha, plane };
 }
 Object.defineProperty(window, "blurMaskProbe", { value: probe() });

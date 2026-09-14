@@ -1532,6 +1532,15 @@ function drawBitmapRect(this: JCanvas, b: JBitmap, src: JRect | null, dst: JRect
     dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top));
 }
 const defaultBitmapPaint = new JPaint();
+function drawPaint(this: JCanvas, paint: JPaint) {
+  const ctx = this.ctx, inverse = ctx.getTransform().inverse();
+  const points = [[0, 0], [ctx.canvas.width, 0], [0, ctx.canvas.height], [ctx.canvas.width, ctx.canvas.height]]
+    .map(([x, y]) => inverse.transformPoint({ x, y }));
+  if (!points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) return;
+  const l = Math.min(...points.map(p => p.x)), t = Math.min(...points.map(p => p.y));
+  const p = new JPaint(); copyPaint(paint, p); p.style = 0; p.maskFilter = null;
+  this.drawShape(p, c => c.fillRect(l, t, Math.max(...points.map(p => p.x)) - l, Math.max(...points.map(p => p.y)) - t), () => {});
+}
 function drawBitmap(canvas: JCanvas, b: JBitmap, paint: JPaint | null, draw: (ctx: Ctx2D, image: OffscreenCanvas) => void) {
   if (b.config === 1) {
     const mask = (ctx: Ctx2D) => draw(ctx, b.canvas);
@@ -1549,6 +1558,7 @@ function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m:
 /** Exported so AOSP's own Canvas bytecode reaches the same bodies through its nDraw*
  *  delegates (src/android/delegates.ts) rather than a second copy of each. */
 export const canvasMethods: NativeSpec["methods"] = {
+  "drawPaint(Landroid/graphics/Paint;)V": drawPaint,
   "<init>(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
   "getWidth()I": function (this: JCanvas) { return this.w; },
   "getHeight()I": function (this: JCanvas) { return this.h; },
