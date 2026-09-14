@@ -83,3 +83,20 @@ test("executor work is eligible at the next cooperative turn", async () => {
   await Promise.resolve();
   expect(task.runs).toBe(1);
 });
+
+test("executor backlogs yield to the browser event loop", async () => {
+  const ex = await pool(await newObj("java/util/concurrent/LinkedBlockingQueue"));
+  const blocker = rt.make("test/BlockingRunnable") as BlockingRunnable;
+  await vcall(ex, "execute", "(Ljava/lang/Runnable;)V", blocker);
+  await Promise.resolve();
+  const task = rt.make("test/QueueRunnable") as RecordingRunnable;
+  const submissions: Promise<unknown>[] = [];
+  for (let i = 0; i < 200; i++) submissions.push(vcall(ex, "execute", "(Ljava/lang/Runnable;)V", task));
+  await Promise.all(submissions);
+  const browserTurn = new Promise<void>((resolve) => setTimeout(resolve, 0));
+  blocker.release();
+  await browserTurn;
+  expect(task.runs).toBeGreaterThan(0);
+  expect(task.runs).toBeLessThan(200);
+  while (task.runs < 200) await new Promise((resolve) => setTimeout(resolve, 0));
+});

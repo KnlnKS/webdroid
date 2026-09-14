@@ -177,6 +177,8 @@ class JExecutor extends JObj {
   workers: { thread: JThread | null; busy: boolean }[] = [];
   jobs = new Map<JFuture, unknown>();
   tasks: { task: unknown; f: JFuture; method: string; desc: string; finish: () => void }[] = [];
+  drainScheduled = false;
+  consecutiveDrains = 0;
 }
 // a queue implemented in bytecode is only handed back by getQueue(); the executor's own task
 // list stays the source of truth and native queues mirror it for size()/isEmpty()
@@ -193,6 +195,13 @@ function drainExecutor(ex: JExecutor) {
     worker.busy = true;
     void runTask(ex, worker, task);
   }
+}
+function scheduleDrain(ex: JExecutor) {
+  if (ex.drainScheduled) return;
+  ex.drainScheduled = true;
+  const run = () => { ex.drainScheduled = false; drainExecutor(ex); };
+  if (++ex.consecutiveDrains < 64) queueMicrotask(run);
+  else { ex.consecutiveDrains = 0; setTimeout(run, 0); }
 }
 async function runTask(ex: JExecutor, worker: JExecutor["workers"][number], entry: JExecutor["tasks"][number]) {
   const { task, f, method, desc } = entry;
@@ -218,8 +227,11 @@ async function runTask(ex: JExecutor, worker: JExecutor["workers"][number], entr
     ex.pending--; ex.jobs.delete(f); worker.busy = false;
     f.done = 1; f.thread = null;
     entry.finish();
-    if (ex.tasks.length) queueMicrotask(() => drainExecutor(ex));
-    else if (ex.shut) for (const w of ex.workers) if (!w.busy && w.thread) w.thread.alive = 0;
+    if (ex.tasks.length) scheduleDrain(ex);
+    else {
+      ex.consecutiveDrains = 0;
+      if (ex.shut) for (const w of ex.workers) if (!w.busy && w.thread) w.thread.alive = 0;
+    }
   }
 }
 class JFuture extends JObj {
@@ -276,7 +288,7 @@ function submit(ex: JExecutor, task: unknown, method: string, desc: string, dela
     let timer: ReturnType<typeof setTimeout> | undefined;
     const enqueue = () => {
       timer = undefined; ex.tasks.push(entry); mirror(ex)?.push(task);
-      queueMicrotask(() => drainExecutor(ex));
+      scheduleDrain(ex);
     };
     if (delay > 0) timer = setTimeout(enqueue, delay); else enqueue();
     f.cancel = () => {
