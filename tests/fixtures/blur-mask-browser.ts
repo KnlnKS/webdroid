@@ -1,7 +1,7 @@
 import "../../src/natives";
 import { rt } from "../../src/jvm/runtime";
 import { newObj, vcall, linkInit } from "../../src/jvm/natives/jlang";
-import { JCanvas, JPaint } from "../../src/android/graphics";
+import { JBitmap, JCanvas, JPaint } from "../../src/android/graphics";
 
 async function probe() {
   rt.linkNatives();
@@ -33,6 +33,35 @@ async function probe() {
       restored: m.a === 2 && m.d === 2 && m.e === 8 && m.f === 4 && ctx.filter === "none" && ctx.globalCompositeOperation === "source-over",
       repeated: first.every((v, i) => v === second[i]) });
   }
-  return results;
+  const source = JBitmap.create(20, 20);
+  source.density = 480;
+  source.ctx.fillStyle = "#ff000080"; source.ctx.fillRect(5, 5, 10, 10);
+  const paint = new JPaint(); paint.color = 0x4000ff00;
+  const extracted = [];
+  for (const radius of [0, 1, 2, 3, 5, 10]) for (const style of ["NORMAL", "SOLID", "OUTER", "INNER"]) {
+    const value = await vcall(enums, "valueOf", "(Ljava/lang/String;)Landroid/graphics/BlurMaskFilter$Blur;", style);
+    const filter = radius ? await newObj("android/graphics/BlurMaskFilter", "(FLandroid/graphics/BlurMaskFilter$Blur;)V", radius, value) : null;
+    await vcall(paint, "setMaskFilter", "(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;", filter);
+    const offsets = new Int32Array([99, 99]);
+    const alpha = await vcall(source, "extractAlpha", "(Landroid/graphics/Paint;[I)Landroid/graphics/Bitmap;", paint, offsets);
+    if (!(alpha instanceof JBitmap)) throw new Error("Invalid alpha bitmap");
+    const pixel = await vcall(alpha, "getPixel", "(II)I", 10 - offsets[0], 10 - offsets[1]);
+    extracted.push({ radius, style, width: alpha.w, height: alpha.h, offsets: Array.from(offsets), alpha: pixel >>> 24, rgb: pixel & 0xffffff,
+      config: alpha.config, density: alpha.density, rowBytes: await vcall(alpha, "getRowBytes", "()I"), distinct: alpha !== source });
+  }
+  const alpha = await vcall(source, "extractAlpha", "()Landroid/graphics/Bitmap;");
+  const ctx = new OffscreenCanvas(40, 40).getContext("2d")!;
+  paint.maskFilter = null; paint.color = 0x8000ff00; paint.style = 2;
+  await vcall(JCanvas.wrap(ctx, 40, 40), "drawBitmap", "(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V", alpha, 4, 6, paint);
+  const shaded = Array.from(ctx.getImageData(14, 16, 1, 1).data);
+  const buffer = await vcall((await linkInit("java/nio/ByteBuffer")).ctor, "allocate", "(I)Ljava/nio/ByteBuffer;", 400);
+  await vcall(alpha, "copyPixelsToBuffer", "(Ljava/nio/Buffer;)V", buffer);
+  const position = await vcall(buffer, "position", "()I");
+  await vcall(buffer, "rewind", "()Ljava/nio/Buffer;");
+  await vcall(buffer, "put", "(IB)Ljava/nio/ByteBuffer;", 0, 127);
+  await vcall(alpha, "copyPixelsFromBuffer", "(Ljava/nio/Buffer;)V", buffer);
+  const copiedAlpha = (await vcall(alpha, "getPixel", "(II)I", 0, 0)) >>> 24;
+  const originalAlpha = (await vcall(source, "getPixel", "(II)I", 0, 0)) >>> 24;
+  return { results, extracted, shaded, position, copiedAlpha, originalAlpha };
 }
 Object.defineProperty(window, "blurMaskProbe", { value: probe() });

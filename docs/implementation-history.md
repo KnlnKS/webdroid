@@ -2611,3 +2611,12 @@ transformed clipping and repeated draws without leaking canvas state (25 asserti
 typecheck passes. Fresh Maps gets past filter construction and now exposes the missing
 Bitmap.extractAlpha(Paint, offsets) overload. The photo viewer remains incomplete. Browser
 blur kernels are not established as pixel-identical to Skia.
+
+Bitmap.extractAlpha now returns a distinct ALPHA_8 bitmap, preserves density, applies mask
+filters and returns their expanded offsets. AVD app_process probes established dimensions
+for radii 0/1/2/3/5/10 and all styles, including INNER's original bounds; Paint color alpha
+is ignored by extraction. Both framework JNI and direct APIs use the same implementation.
+Alpha masks take color/shaders from the drawing Paint, and pixel buffers expose one alpha
+byte per pixel. Browser checks and bitmap Parcel checks pass (63 assertions); typecheck
+passes. Fresh Maps advances to LightingColorFilter during photo-page construction. Blur
+pixel kernels still use Canvas2D; exact Skia pixel equality is not established.

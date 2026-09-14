@@ -808,7 +808,37 @@ rt.markers("android/graphics/PathEffect");
 rt.register({ name: "android/graphics/CornerPathEffect", ctor: class extends JObj {}, sup: "android/graphics/PathEffect",
   methods: { "<init>(F)V": function () {} } });
 mkEnumSet("android/graphics/BlurMaskFilter$Blur", ["NORMAL", "SOLID", "OUTER", "INNER"]);
-class JBlurMaskFilter extends JObj { sigma = 0; style = 0; }
+class JBlurMaskFilter extends JObj {
+  sigma = 0; style = 0;
+  border() {
+    const sigma = Math.min(this.sigma, 135);
+    if (sigma >= 2) {
+      const window = Math.max(1, Math.floor(sigma * 3 * Math.sqrt(2 * Math.PI) / 4 + 0.5));
+      return window % 2 ? 3 * (window - 1) / 2 : 3 * window / 2 - 1;
+    }
+    const variance = sigma * sigma, q = variance * variance / 4;
+    const bessel = (n: number) => {
+      let term = n ? variance / 2 : 1, sum = term;
+      for (let k = 1; term > 1e-6; k++) { term *= q / (k * (k + n)); sum += term; }
+      return sum;
+    };
+    let previous = bessel(0), current = bessel(1), n = 1;
+    while (current / Math.exp(variance) > 0.01) {
+      const next = previous - 2 * n / variance * current;
+      previous = current; current = next; n++;
+    }
+    return n - 1;
+  }
+}
+function blurMask(ctx: Ctx2D, source: CanvasImageSource, filter: JBlurMaskFilter | null, x = 0, y = 0, scale = 1) {
+  if (filter) ctx.filter = `blur(${Math.min(filter.sigma * scale, 135)}px)`;
+  ctx.drawImage(source, x, y); ctx.filter = "none";
+  if (filter?.style) {
+    ctx.globalCompositeOperation = filter.style === 2 ? "destination-out" : filter.style === 3 ? "destination-in" : "source-over";
+    ctx.drawImage(source, x, y);
+    ctx.globalCompositeOperation = "source-over";
+  }
+}
 rt.markers("android/graphics/MaskFilter");
 rt.register({
   name: "android/graphics/BlurMaskFilter", ctor: JBlurMaskFilter, sup: "android/graphics/MaskFilter",
@@ -1105,11 +1135,11 @@ export class JBitmap extends JObj {
   w = 0; h = 0;
   density = device.densityDpi;
   recycled = false;
-  /** AOSP's NATIVE config numbering (ALPHA_8=1 … ARGB_8888=5, RGBA_F16=6, HARDWARE=7), which is
-   *  not Bitmap.Config's ordinal. Everything we back is 8888. */
+  /** AOSP's native config numbering, not Bitmap.Config's ordinal. */
   config = 5;
   hasAlpha = true; premultiplied = true; immutable = false; mipmap = false;
   genId = 0;
+  get rowBytes() { return this.w * (this.config === 1 ? 1 : 4); }
   private cv: OffscreenCanvas | null = null;
   private cx: OffscreenCanvasRenderingContext2D | null = null;
   private drawingCtx: OffscreenCanvasRenderingContext2D | null = null;
@@ -1182,18 +1212,41 @@ export class JBitmap extends JObj {
     return b;
   }
 }
+export function extractBitmapAlpha(src: JBitmap, paint: JPaint | null, offsets: Int32Array | null): JBitmap {
+  if (src.recycled) throw rt.mkThrowable("java/lang/IllegalStateException", "Can't extractAlpha on a recycled bitmap");
+  const filter = paint?.maskFilter ?? null, border = filter && filter.style !== 3 ? filter.border() : 0;
+  const b = JBitmap.create(src.w + 2 * border, src.h + 2 * border);
+  b.config = 1; b.density = src.density;
+  if (filter) {
+    const ctx = b.ctx;
+    blurMask(ctx, src.canvas, filter, border, border);
+    ctx.globalCompositeOperation = "source-in"; ctx.fillStyle = "#000"; ctx.fillRect(0, 0, b.w, b.h);
+    ctx.globalCompositeOperation = "source-over";
+  } else {
+    const source = src.pixels(), target = b.pixels();
+    for (let i = 3; i < target.length; i += 4) target[i] = source[i];
+  }
+  if (offsets && offsets.length >= 2) { offsets[0] = -border; offsets[1] = -border; }
+  return b;
+}
 function bitmapBuffer(bitmap: JBitmap, buffer: JBuffer, from: boolean): void {
   if (bitmap.recycled || bitmap.config === 7) throw rt.mkThrowable("java/lang/IllegalStateException", "Bitmap pixels unavailable");
   if (!buffer) rt.npe();
   if (!["ByteBuffer", "ShortBuffer", "IntBuffer"].some((name) => rt.iof(buffer, "java/nio/" + name)))
     throw rt.mkThrowable("java/lang/RuntimeException", "unsupported Buffer subclass");
-  const length = bitmap.w * bitmap.h * 4;
+  const length = bitmap.rowBytes * bitmap.h;
   if ((buffer.lim - buffer.pos) * 2 ** buffer.elemShift < length)
     throw rt.mkThrowable("java/lang/RuntimeException", "Buffer not large enough for pixels");
   const view = buffer.dv, bytes = u8(view, buffer.pos * 2 ** buffer.elemShift, length);
   const pixels = bitmap.pixels(), alpha = !bitmap.hasAlpha ? 1 : bitmap.premultiplied ? 0 : 2;
-  if (from) { copyBitmapPixels(bytes, pixels, alpha, true); bitmap.commit(0, 0, bitmap.w, bitmap.h); }
+  if (bitmap.config === 1) {
+    for (let i = 0; i < length; i++) {
+      if (from) pixels[i * 4 + 3] = bytes[i];
+      else bytes[i] = pixels[i * 4 + 3];
+    }
+  } else if (from) copyBitmapPixels(bytes, pixels, alpha, true);
   else copyBitmapPixels(pixels, bytes, alpha, false);
+  if (from) bitmap.commit(0, 0, bitmap.w, bitmap.h);
   buffer.pos += length >> buffer.elemShift;
 }
 
@@ -1249,20 +1302,21 @@ export const bitmapMethods: NativeSpec["methods"] = {
       for (let i = 0; i < d.length; i += 4) putArgb(d, i, c);
       this.commit(0, 0, this.w, this.h);
     },
-    "extractAlpha()Landroid/graphics/Bitmap;": function (this: JBitmap) { return this; },
+    "extractAlpha()Landroid/graphics/Bitmap;": function (this: JBitmap) { return extractBitmapAlpha(this, null, null); },
+    "extractAlpha(Landroid/graphics/Paint;[I)Landroid/graphics/Bitmap;": function (this: JBitmap, paint: JPaint | null, offsets: Int32Array | null) { return extractBitmapAlpha(this, paint, offsets); },
     "copy(Landroid/graphics/Bitmap$Config;Z)Landroid/graphics/Bitmap;": function (this: JBitmap) {
       const b = JBitmap.create(this.w, this.h);
       b.ctx.drawImage(this.canvas, 0, 0);
       return b;
     },
-    "getConfig()Landroid/graphics/Bitmap$Config;": () => bitmapConfigs[3],
+    "getConfig()Landroid/graphics/Bitmap$Config;": function (this: JBitmap) { return bitmapConfigs[this.config === 1 ? 0 : 3]; },
     "hasAlpha()Z": function (this: JBitmap) { return this.hasAlpha ? 1 : 0; },
     "setHasAlpha(Z)V": function (this: JBitmap, v: number) { this.hasAlpha = !!v; },
     "setPremultiplied(Z)V": function (this: JBitmap, v: number) { this.premultiplied = !!v; },
     "isMutable()Z": function (this: JBitmap) { return this.immutable ? 0 : 1; },
-    "getByteCount()I": function (this: JBitmap) { return this.w * this.h * 4; },
-    "getAllocationByteCount()I": function (this: JBitmap) { return this.w * this.h * 4; },
-    "getRowBytes()I": function (this: JBitmap) { return this.w * 4; },
+    "getByteCount()I": function (this: JBitmap) { return this.rowBytes * this.h; },
+    "getAllocationByteCount()I": function (this: JBitmap) { return this.rowBytes * this.h; },
+    "getRowBytes()I": function (this: JBitmap) { return this.rowBytes; },
     "compress(Landroid/graphics/Bitmap$CompressFormat;ILjava/io/OutputStream;)Z": async function (this: JBitmap, fmt: unknown, q: number, out: unknown) {
       const blob = await this.canvas.convertToBlob({ type: "image/png" });
       const bytes = new Int8Array(await blob.arrayBuffer());
@@ -1317,7 +1371,7 @@ export class JCanvas extends JObj {
     }
   }
   private blurLayer: { source: JCanvas; target: OffscreenCanvasRenderingContext2D; paint: JPaint } | null = null;
-  private drawBlurMask(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke: (ctx: typeof this.ctx) => void) {
+  drawMask(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke?: (ctx: typeof this.ctx) => void) {
     const ctx = this.ctx, w = ctx.canvas.width, h = ctx.canvas.height, m = ctx.getTransform();
     const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
     if (!w || !h || !scale) return;
@@ -1326,17 +1380,15 @@ export class JCanvas extends JObj {
       const source = new OffscreenCanvas(w, h).getContext("2d")!;
       layer = this.blurLayer = { source: JCanvas.wrap(source, w, h), target: new OffscreenCanvas(w, h).getContext("2d")!, paint: new JPaint() };
     }
-    const source = layer.source.ctx, target = layer.target, filter = p.maskFilter!;
+    const source = layer.source.ctx, target = layer.target;
     source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
     copyPaint(p, layer.paint);
     layer.paint.maskFilter = null; layer.paint.blend = null; layer.paint.shadowRadius = 0;
     layer.paint.color = -1; layer.paint.shader = layer.paint.shaderObj = null; layer.paint.filterColor = null; layer.paint.filterMatrix = null;
-    layer.source.drawShape(layer.paint, fill, stroke);
+    if (stroke) layer.source.drawShape(layer.paint, fill, stroke);
+    else fill(source);
     target.clearRect(0, 0, w, h);
-    target.filter = `blur(${filter.sigma * scale}px)`;
-    target.drawImage(source.canvas, 0, 0); target.filter = "none";
-    target.globalCompositeOperation = filter.style === 2 ? "destination-out" : filter.style === 3 ? "destination-in" : "source-over";
-    target.drawImage(source.canvas, 0, 0);
+    blurMask(target, source.canvas, p.maskFilter, 0, 0, scale);
     target.globalCompositeOperation = "source-in";
     try {
       if (p.shader || p.shaderObj) {
@@ -1361,7 +1413,7 @@ export class JCanvas extends JObj {
     } finally { if (shadow) ctx.restore(); ctx.restore(); }
   }
   drawShape(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke: (ctx: typeof this.ctx) => void) {
-    if (p.maskFilter?.style) return this.drawBlurMask(p, fill, stroke);
+    if (p.maskFilter?.style) return this.drawMask(p, fill, stroke);
     // A blended paint owns the composite op only for its own ops — restore it straight after,
     // so a CLEAR fill can never leak into the next drawImage/drawText and erase it.
     const shadow = beginPaintShadow(this.ctx, p);
@@ -1458,8 +1510,15 @@ function drawRoundRect(this: JCanvas, l: number, t: number, r: number, b: number
 }
 function drawBitmapRect(this: JCanvas, b: JBitmap, src: JRect | null, dst: JRect | JRectF, p: JPaint | null) {
   const s = src ?? { left: 0, top: 0, right: b.w, bottom: b.h };
-  this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null, p?.filterMatrix ?? null), s.left, s.top, s.right - s.left, s.bottom - s.top,
-    dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top);
+  drawBitmap(this, b, p, (ctx, image) => ctx.drawImage(image, s.left, s.top, s.right - s.left, s.bottom - s.top,
+    dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top));
+}
+const defaultBitmapPaint = new JPaint();
+function drawBitmap(canvas: JCanvas, b: JBitmap, paint: JPaint | null, draw: (ctx: Ctx2D, image: OffscreenCanvas) => void) {
+  if (b.config === 1) {
+    const mask = (ctx: Ctx2D) => draw(ctx, b.canvas);
+    canvas.drawMask(paint ?? defaultBitmapPaint, mask);
+  } else draw(canvas.ctx, tintedBmp(b, paint?.filterColor ?? null, paint?.filterMatrix ?? null));
 }
 /** the (x, y, w, h) region of `src` as a new bitmap, through `m` when given */
 function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m: JMatrix | null = null) {
@@ -1628,7 +1687,7 @@ export const canvasMethods: NativeSpec["methods"] = {
     drawTextImpl(this, charsToString(c, off, n), x, y, p);
   },
   "drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V": function (this: JCanvas, b: JBitmap, x: number, y: number, p: JPaint | null) {
-    this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null, p?.filterMatrix ?? null), x, y);
+    drawBitmap(this, b, p, (ctx, image) => ctx.drawImage(image, x, y));
   },
   "drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/Rect;Landroid/graphics/Paint;)V": drawBitmapRect,
   "drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V": drawBitmapRect,
@@ -1636,8 +1695,8 @@ export const canvasMethods: NativeSpec["methods"] = {
     function (this: JCanvas, b: JBitmap, m: JMatrix, p: JPaint | null) {
       this.ctx.save();
       if (m) this.ctx.transform(...m.m);
-      this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null, p?.filterMatrix ?? null), 0, 0);
-      this.ctx.restore();
+      try { drawBitmap(this, b, p, (ctx, image) => ctx.drawImage(image, 0, 0)); }
+      finally { this.ctx.restore(); }
     },
   "drawPicture(Landroid/graphics/Picture;)V": function (this: JCanvas, picture: JPicture) { drawPicture(this, picture); },
   "drawPicture(Landroid/graphics/Picture;Landroid/graphics/RectF;)V": function (this: JCanvas, picture: JPicture, dst: JRect) { drawPicture(this, picture, dst); },
