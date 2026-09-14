@@ -70,7 +70,8 @@ tests and diagnostic loads pause during serialized performance windows.
   minus-operands control also had an unresolved executor failure; an aligned seven-pair
   comparison passed nominally but did not justify retaining the operand replacement.
   Full evidence, including unfavorable pairs and aggregation sensitivity, remains in the
-  history. Final production is frozen at `6cbce0b`, with harness `dc5d401`.
+  history. The selected application guards cover production `6cbce0b`, with harness
+  `dc5d401`; the later native synchronization guard covers the final native change.
 - Final selected-build typecheck, all 1208 tests, framework exercises and twelve target
   APK smoke compilations pass. A subsequent fixture audit adds one required native-to-Java
   re-entry case; all five DEX tier cases/442 assertions and typecheck pass against unchanged
@@ -94,10 +95,12 @@ tests and diagnostic loads pause during serialized performance windows.
   code-page store drops future dispatch entries but does not stop the current JIT region.
   A valid A64 cache-maintenance/ISB sequence returns stale code in both pristine and selected
   builds. Isolated `436ba5e` ends regions at ISB across all three ISAs, preserving the ordinary
-  store path. Typecheck and 654 native tests pass; three-stage native measurements are running
-  before integration. Unsynchronized code mutation is not given a stronger visibility promise.
-- Remaining: the active-region reproduction/correction and affected native
-  measurements, then the serialized pristine/final full E2E and
-  17-APK corpus matrix. Expected E2E coverage is 12 flows/159 steps, including four scored
+  store path. Typecheck and 654 native tests pass. Seven Doodle rotations retain 22.6% faster
+  completed-title startup versus pristine, with +1.87% incremental CPU and stable presentations;
+  three Lichess rotations pass with +1.19% incremental CPU and +1.76% lower-empirical p95.
+  Fresh untimed Editor/Back screenshots verify both destinations. Retained as `ca2effd`;
+  unsynchronized code mutation is not given a stronger visibility promise.
+- Final integrated typecheck and all 1211 tests/26480 assertions pass.
+- Remaining: the serialized pristine/final full E2E and 17-APK corpus matrix. Expected E2E coverage is 12 flows/159 steps, including four scored
   flows; capture completion alone is not a correctness verdict. Inspect all diagnostics,
   visual differences and missing telemetry before the final retention report.

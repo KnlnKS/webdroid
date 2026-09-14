@@ -3992,3 +3992,60 @@ The fast/safe Wasm cores grow by 44/51 bytes. Unsynchronized self-modification i
 not promised immediate instruction visibility, and this adds no model of
 concurrently executing CPU cores. Evidence is under
 `.worktrees/perf-active-invalidation/webdroid-shots/active-invalidation/`.
+
+Doodle compares pristine, the preceding selection and ISB in alternating
+three-stage rotations, extending from three to seven because the initial CPU
+aggregate conflicts across pairs. Complete medians in that order are title
+12.9813 / 10.0727 / 10.0514 seconds; main-window CPU
+2.537648 / 2.342727 / 2.386454 seconds; JS heap
+180.244 / 180.220 / 180.216 MB. ISB startup is -0.21% incrementally and -22.57%
+versus pristine (about 1.29x). CPU is +1.87% incrementally and -5.96% versus
+pristine. The seven incremental CPU changes are +1.839%, +8.621%, -0.583%,
+-6.683%, -1.173%, +1.867%, -0.115%; the early slowdown is not repeatable.
+Actual presentation p95 is 9.2 / 9.1 / 9.1 ms with roughly 120 completed GL
+callbacks and atomic presentations per second. Secondary rAF p95 is
+10.1 / 10.3 / 10.5 ms. All 21 cases complete 24 inputs with valid rendering
+and observed diagnostics; score-zero tutorial limitations and every proxy value
+remain recorded. No conditional-ISB successor is implemented because this guard
+does not justify another replacement.
+
+During the Lichess follow-up, review catches a summary-only percentile mismatch:
+the new helper used `floor(n * .95)`, whereas the preceding native reports used
+the lower empirical quantile `floor((n - 1) * .95)`. With 14 inputs these select
+the maximum and second-largest sample respectively. The apparent jump from
+roughly 163 to 262 ms was therefore not established as a session slowdown: the
+earlier raw baseline already contained a 264.6 ms first input. Raw captures are
+unchanged, the incorrect derived summary is preserved, and primary comparisons
+are recomputed with the original rule. Interpolated p95 and maxima are added as
+small-sample sensitivity measures. No acceptance decision uses the changed rule.
+
+Lichess completes three alternating pristine/preceding-selection/ISB rotations.
+Main CPU medians are 6.675 / 6.688 / 6.767 seconds; opportunity-proxy medians
+105.90 / 108.40 / 107.95 ms; lower empirical p95 166.0 / 165.1 / 168.0 ms;
+retained JS heap 194.565 / 194.322 / 194.480 MB. Incremental CPU is +1.19%,
+median proxy -0.42%, p95 +1.76% and heap +0.081%; combined CPU is +1.39%,
+median +1.94% and p95 +1.20%. Linear p95 and maximum sensitivity also pass.
+All 14 inputs stay in the primary comparison, including the slower first Editor
+entry; the report separately records Editor and Back distributions. Background
+native instruction counts differ, so no engine-throughput result is inferred.
+A fresh untimed candidate capture visibly shows Board editor and the subsequent
+Tools screen after ordinary Back. Existing pthread/Sidecar diagnostics remain
+visible. All 30 formal native captures finish with valid windows and no new
+observed diagnostic family; unavailable child channels remain explicitly null.
+
+Retain `436ba5e` as integration `ca2effd`: a reproduced synchronization correctness
+fix with passing incremental guards and no ordinary-store check. The earlier
+FitNotes/Mihon/Resy/Flappy windows describe `6cbce0b`, not this later Zig delta;
+those foreground FitNotes/Mihon/Resy windows execute no native instructions,
+without establishing zero child native work. Final full-suite/E2E/corpus checks
+follow on the integrated source. Commands, raw captures, all proxy values and
+quantile definitions remain in the isolated `active-invalidation/REPORT.md`.
+
+Final integrated typecheck passes with fast/safe cores 292182/305332 bytes.
+The complete unit suite passes 1211 tests, zero failures, 26480 assertions across
+211 files (47.14 seconds), including the re-entry and ISB fixtures added after
+the earlier 1208-test checkpoint. Logs: `webdroid-shots/performance-stages/`
+`final-isb-typecheck.log` and `final-isb-unit.log`. Both served main/process
+bundles are rebuilt/prewarmed before the final matrix; exact HTML/bundle hashes
+are in `final-isb-prewarm.json`. The earlier eight executed framework exercises
+and twelve eager/cold APK smoke compilations cover unchanged JVM/framework code.
