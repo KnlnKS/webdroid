@@ -6,12 +6,11 @@ import { jvmProfiler } from "./profile";
 export interface ColdFrame {
   R: Runtime; D: ReturnType<Runtime["dexLink"]>; S: unknown;
   v: unknown[]; next: number; done: boolean; value: unknown;
-  $t: unknown; $u: unknown; $ex: unknown; $fu: unknown; $th: unknown; $s: number; $osrS: number;
+  $t: unknown; $u: unknown; $ex: unknown; $fu: unknown; $th: unknown; $s: number;
 }
 type Handler = { kind: "sync"; run: (frame: ColdFrame, constants: unknown[]) => void } |
   { kind: "suspend"; run: (frame: ColdFrame, constants: unknown[]) => Generator<Promise<unknown>, void, unknown> };
 type ColdOp = Handler & { constants: unknown[]; next: number; method?: number };
-export interface OsrHandoff { kind: "osr"; value: unknown; }
 export interface ColdMethod {
   /** "pkg/Class.method(desc)": the frame an exception unwinding through here is noted under */
   name: string;
@@ -21,7 +20,7 @@ export interface ColdMethod {
   catches: { start: number; end: number; handlers: [string, number][]; all: number }[];
   hotness: number;
   profiledInstructions: number;
-  promote?: (frame: ColdFrame, receiver: unknown, args: unknown[]) => OsrHandoff | null;
+  promote?: (frame: ColdFrame, receiver: unknown) => Promise<unknown> | null;
 }
 const handlers = new Map<string, Handler>();
 
@@ -51,7 +50,7 @@ export async function runCold(method: ColdMethod, receiver: unknown, args: unkno
   const started = profiled ? performance.now() : 0;
   const { R, D, S } = method;
   const f: ColdFrame = { R, D, S, v: new Array(method.regs), next: 0, done: false, value: undefined,
-    $t: undefined, $u: undefined, $ex: undefined, $fu: undefined, $th: R.th(), $s: 0, $osrS: 0 };
+    $t: undefined, $u: undefined, $ex: undefined, $fu: undefined, $th: R.th(), $s: 0 };
   let reg = method.first;
   if (method.instance) f.v[reg++] = receiver;
   for (let i = 0; i < args.length; i++) { f.v[reg] = args[i]; reg += method.widths[i]; }
@@ -105,9 +104,8 @@ export async function runCold(method: ColdMethod, receiver: unknown, args: unkno
           method.profiledInstructions = method.hotness;
         }
         if (yielded && method.hotness >= jvmProfiler.hotThreshold && method.promote) {
-          f.$osrS = f.$s;
-          const handoff = method.promote(f, receiver, args);
-          if (handoff) { f.$s = 0; return await handoff.value; }
+          const handoff = method.promote(f, receiver);
+          if (handoff) { f.$s = 0; return await handoff; }
         }
       }
     }

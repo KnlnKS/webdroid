@@ -10,8 +10,7 @@ import { ACC, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
 import { jvmProfiler } from "./profile";
-import { decodeInstructions, endsBlock, floatingOperands, isWasmNumericOpcode, isWasmRegionOpcode, maySuspend, writesRegister,
-  type PreparedInstruction as Ins, type PreparedMethod } from "./prepared";
+import { ifTarget, prepareMethod, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "./prepared";
 
 const REL: Record<string, string> = { lt: "<", ge: ">=", gt: ">", le: "<=" };
 const holder = (isStatic: boolean) => (isStatic ? "C" : "C.prototype");
@@ -26,13 +25,33 @@ const ref = (r: string) => `(${r}===0?null:${r})`;
 let lazyMethods = true;
 export function setLazyMethods(v: boolean) { lazyMethods = v; }
 
+function prepareDexMethod(
+  dex: DexFile,
+  code: CodeItem,
+  desc: string,
+  isStatic: boolean,
+  profileName: string,
+): PreparedMethod {
+  const observe = jvmProfiler.enabled
+    ? (phase: "decode" | "cfg" | "type", ms: number) => jvmProfiler.add(profileName, phase, ms)
+    : undefined;
+  const prepared = prepareMethod(dex, code, desc, isStatic, observe);
+  if (jvmProfiler.enabled) {
+    jvmProfiler.eligibility(profileName, prepared.instructions.length, prepared.wasmEligible);
+  }
+  return prepared;
+}
+
 export function compileClassSource(R: Runtime, dex: DexFile, info: ClassInfo): string {
   const def = info.def!;
   const out: string[] = [];
   info.lazy = lazyMethods ? [] : undefined;
   for (const list of [def.directMethods, def.virtualMethods]) {
     for (const m of list) {
-      if (m.codeOff) out.push(info.lazy ? emitLazy(dex, info, m) : emitMethod(R, dex, info, m));
+      if (m.codeOff) {
+        if (info.lazy) out.push(emitLazy(dex, info, m));
+        else out.push(emitEagerMethod(R, dex, info, m));
+      }
       else if (m.flags & ACC.NATIVE) out.push(emitNativeStub(dex, info, m));
     }
   }
@@ -69,31 +88,48 @@ function emitLazy(dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
 
 /** Compile one lazily-emitted method and install it. */
 export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> } & Record<string, unknown>;
+type JvmFunction = (this: unknown, ...args: unknown[]) => unknown;
+interface CompiledMethod {
+  invoke: JvmFunction;
+  resume?: (frame: ColdFrame, receiver: unknown) => Promise<unknown>;
+}
+
 export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unknown {
   const info = C.$i, rec = info.lazy![i], dex = info.dex!;
   const profileName = `${info.name}.${rec.name}${rec.desc}`;
   const target = rec.isStatic ? C : C.prototype;
-  const source = (prepared?: MethodCompiler, resumable = false) => emitMethod(R, dex, info, rec.m, !cold, prepared, resumable) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
-  const compile = (src = source()) => {
+  const code = dex.code(rec.m.codeOff);
+  const prepare = () => prepareDexMethod(dex, code, rec.desc, rec.isStatic, profileName);
+  const source = (prepared: PreparedMethod, resumable: boolean, count: boolean) =>
+    emitMethod(R, dex, info, rec.m, prepared, count, resumable) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
+  const compile = (src: string, resumable: boolean, paramCount = 0): CompiledMethod => {
     const started = jvmProfiler.enabled ? performance.now() : 0;
-    new Function("C", "D", "R", "S", src)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined);
+    new Function("C", "D", "R", "S", "P", src)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler);
     if (jvmProfiler.enabled) jvmProfiler.add(profileName, "jsCompile", performance.now() - started);
-    return target[rec.mangled];
+    const installed = target[rec.mangled];
+    if (typeof installed !== "function") throw new Error("invalid compiled method");
+    const invoke = installed as JvmFunction;
+    if (!resumable) return { invoke };
+    return { invoke, resume: (frame, receiver) => {
+      const args = new Array<unknown>(paramCount + 1);
+      args[paramCount] = frame;
+      return Promise.resolve(invoke.apply(receiver, args));
+    } };
   };
-  const compiler = new MethodCompiler(R, dex, info, dex.code(rec.m.codeOff), rec.isStatic, rec.desc, rec.name);
-  let cold = compiler.compileCold();
-  if (!cold) return compile(source(compiler));
-  if (jvmProfiler.tier === "js") return compile();
+  const prepared = prepare();
+  const paramCount = prepared.params.length;
+  let cold = emitColdMethod(R, dex, info, code, rec.isStatic, rec.desc, rec.name, prepared);
+  if (!cold) return compile(source(prepared, false, true), false).invoke;
+  if (jvmProfiler.tier === "js") return compile(source(prepared, false, false), false).invoke;
   // Captured direct/interface entries keep this cell; new virtual calls find the hot body.
-  let calls = 0, hot: Function | undefined;
-  let osrCapable = false;
+  let calls = 0, hot: CompiledMethod | undefined;
   let owner = R;
   while (owner.parent) owner = owner.parent;
-  const promote = (resumable: boolean): Function | undefined => {
-    if (hot) return !resumable || osrCapable ? hot : undefined;
+  const promote = (resumable: boolean): CompiledMethod | undefined => {
+    if (hot) return !resumable || hot.resume ? hot : undefined;
     // Rebuild preparation only for methods that actually promote. Retaining decoded CFGs for
     // every cold async method costs substantially more heap than the saved promotion work.
-    const start = performance.now(), src = source(undefined, resumable);
+    const start = performance.now(), src = source(prepare(), resumable, false);
     if (jvmProfiler.enabled) jvmProfiler.bytes(profileName, src.length);
     if (owner.hotSourceBytes + src.length > 32 * 1024 * 1024) {
       calls = -Infinity;
@@ -101,37 +137,32 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unkno
       perf.compileMs += performance.now() - start;
       return undefined;
     }
-    const compiled = compile(src);
+    const compiled = compile(src, resumable, paramCount);
     owner.hotSourceBytes += src.length;
     perf.compileMs += performance.now() - start;
-    if (typeof compiled !== "function") throw new Error("invalid compiled method");
-    hot = compiled; osrCapable = resumable; perf.hotMethods++;
+    hot = compiled; perf.hotMethods++;
     if (jvmProfiler.enabled) jvmProfiler.promoted(profileName);
     cold = null;
     return compiled;
   };
   if (jvmProfiler.tier !== "cold") {
-    cold.promote = (frame: ColdFrame, receiver: unknown, args: unknown[]) => {
+    cold.promote = (frame: ColdFrame, receiver: unknown) => {
       const compiled = promote(true);
-      if (!compiled) return null;
+      if (!compiled?.resume) return null;
       perf.osrMethods++;
-      const osrArgs = args.slice();
-      osrArgs.push(frame);
-      return { kind: "osr", value: compiled.apply(receiver, osrArgs) };
+      return compiled.resume(frame, receiver);
     };
   }
   return target[rec.mangled] = function(this: unknown, ...args: unknown[]) {
-    if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
-    if (hot) {
-      if (!jvmProfiler.enabled) return hot.apply(this, args);
-      const started = performance.now(), result = hot.apply(this, args);
-      jvmProfiler.add(profileName, "hotRun", performance.now() - started);
-      return result;
+    if (hot) return hot.invoke.apply(this, args);
+    if (++calls < 32 || jvmProfiler.tier === "cold") {
+      if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
+      return runCold(cold!, this, args);
     }
-    if (++calls < 32 || jvmProfiler.tier === "cold") return runCold(cold!, this, args);
     const compiled = promote(false);
-    if (!compiled) return runCold(cold!, this, args);
-    return compiled.apply(this, args);
+    if (compiled) return compiled.invoke.apply(this, args);
+    if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
+    return runCold(cold!, this, args);
   };
 }
 
@@ -153,12 +184,20 @@ function emitNativeStub(dex: DexFile, info: ClassInfo, m: EncodedMethod): string
     `return ${v}.call(this${ps ? "," + ps : ""})};`;
 }
 
-function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, count = true, prepared?: MethodCompiler, resumable = false): string {
+function emitMethod(
+  R: Runtime,
+  dex: DexFile,
+  info: ClassInfo,
+  m: EncodedMethod,
+  prepared: PreparedMethod,
+  count = true,
+  resumable = false,
+): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const code = dex.code(m.codeOff);
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   try {
-    const body = (prepared ?? new MethodCompiler(R, dex, info, code, isStatic, desc, name)).compile(count, resumable);
+    const body = new MethodEmitter(R, dex, info, code, isStatic, desc, name, prepared, "hot").compile(count, resumable);
     return `${holder(isStatic)}.${mangled} = ${body};`;
   } catch (e) {
     const msg = `compile error ${info.name}.${name}${desc}: ${e}`;
@@ -167,25 +206,52 @@ function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod,
   }
 }
 
-class MethodCompiler {
-  private instructions: Ins[] = [];
-  private leaders = new Uint8Array();
-  private prepared?: PreparedMethod;
-  hasTries: boolean;
-  sync = true;
+function emitEagerMethod(R: Runtime, dex: DexFile, info: ClassInfo, method: EncodedMethod): string {
+  const { name, desc, mangled } = methodKey(dex, method.methodIdx);
+  const isStatic = (method.flags & ACC.STATIC) !== 0;
+  try {
+    const prepared = prepareDexMethod(dex, dex.code(method.codeOff), desc, isStatic, `${info.name}.${name}${desc}`);
+    return emitMethod(R, dex, info, method, prepared);
+  } catch (error) {
+    const message = `compile error ${info.name}.${name}${desc}: ${error}`;
+    console.warn(message);
+    return `${holder(isStatic)}.${mangled} = function(){ throw R.unimplemented(${JSON.stringify(message)}); };`;
+  }
+}
+
+function emitColdMethod(
+  R: Runtime,
+  dex: DexFile,
+  info: ClassInfo,
+  code: CodeItem,
+  isStatic: boolean,
+  desc: string,
+  name: string,
+  prepared: PreparedMethod,
+): ColdMethod | null {
+  if (prepared.sync) return null;
+  return new MethodEmitter(R, dex, info, code, isStatic, desc, name, prepared, "cold").compileCold();
+}
+
+type EmitBackend = "cold" | "hot";
+
+class MethodEmitter {
+  private readonly hasTries: boolean;
 
   constructor(
     private R: Runtime, private dex: DexFile, private info: ClassInfo,
     private code: CodeItem, private isStatic: boolean, private desc: string,
-    private mname = "?",
+    private mname: string, private prepared: PreparedMethod, private backend: EmitBackend,
   ) {
     this.hasTries = code.tries.length > 0;
   }
 
   private resumes = 0;
-  private cold = false;
   private constants: unknown[] = [];
   private suspends = false;
+
+  private get cold(): boolean { return this.backend === "cold"; }
+  private get sync(): boolean { return this.prepared.sync; }
 
   private reg(index: number): string { return this.cold ? `F.v[${this.literal(index)}]` : `v${index}`; }
   private literal(value: string | number | bigint): string {
@@ -200,59 +266,12 @@ class MethodCompiler {
   private get u(): string { return this.temp("u"); }
   private get ex(): string { return this.temp("ex"); }
 
-  private prepare(): void {
-    if (this.prepared) return;
-    const { code } = this;
-    const profileName = `${this.info.name}.${this.mname}${this.desc}`;
-    const profiled = jvmProfiler.enabled;
-    let started = profiled ? performance.now() : 0;
-    this.instructions = decodeInstructions(code.insns);
-    if (profiled) jvmProfiler.add(profileName, "decode", performance.now() - started);
-    started = profiled ? performance.now() : 0;
-    this.leaders = new Uint8Array(code.insns.length + 1);
-    this.leaders[0] = 1;
-    for (const i of this.instructions) {
-      const t = this.branchTargets(i);
-      for (const target of t) this.leaders[target] = 1;
-      if (t.length || endsBlock(i.op)) this.leaders[i.pc + i.len] = 1;
-    }
-    for (const t of code.tries) {
-      this.leaders[t.start] = 1; this.leaders[t.end] = 1;
-      for (const [, addr] of t.handlers) this.leaders[addr] = 1;
-      if (t.catchAllAddr >= 0) this.leaders[t.catchAllAddr] = 1;
-    }
-    if (profiled) jvmProfiler.add(profileName, "cfg", performance.now() - started);
-    started = profiled ? performance.now() : 0;
-    this.typeConsts();
-    if (profiled) jvmProfiler.add(profileName, "type", performance.now() - started);
-    // A body with no call, static access, monitor or allocation cannot suspend, so it compiles
-    // without `async`.
-    for (const i of this.instructions) {
-      if (maySuspend(i.op)) {
-        this.sync = false;
-        break;
-      }
-    }
-    if (profiled) {
-      const signature = parseMethodDesc(this.desc);
-      const primitiveSignature = signature.params.every((type) => type.length === 1) && signature.ret.length === 1;
-      const hasBackedge = this.instructions.some((ins) => this.branchTargets(ins).some((target) => target <= ins.pc));
-      const wasmEligible = !this.hasTries && primitiveSignature && hasBackedge &&
-        this.instructions.some((ins) => isWasmNumericOpcode(ins.op)) && this.instructions.every((ins) => isWasmRegionOpcode(ins.op));
-      jvmProfiler.eligibility(profileName, this.instructions.length, wasmEligible);
-    }
-    this.prepared = { instructions: this.instructions, leaders: this.leaders, sync: this.sync };
-  }
-
-  compileCold(): ColdMethod | null {
-    this.prepare();
-    if (this.sync) return null;
+  compileCold(): ColdMethod {
     perf.asyncMethods++;
-    this.cold = true;
     const profileName = `${this.info.name}.${this.mname}${this.desc}`;
     const started = jvmProfiler.enabled ? performance.now() : 0;
     const ops = new Map<number, ReturnType<typeof coldOp>>();
-    for (const ins of this.prepared!.instructions) {
+    for (const ins of this.prepared.instructions) {
       const out: string[] = [];
       this.constants = []; this.suspends = false;
       this.emitIns(ins, out);
@@ -264,29 +283,27 @@ class MethodCompiler {
     return { name: profileName, R: this.R, D: this.R.dexLink(this.dex), S: this.info.superInfo?.ctor,
       regs: this.code.regs, first: this.code.regs - this.code.ins, instance: !this.isStatic,
       hotness: 0, profiledInstructions: 0,
-      widths: parseMethodDesc(this.desc).params.map((p) => isWide(p) ? 2 : 1), ops,
+      widths: [...this.prepared.widths], ops,
       catches: this.code.tries.map((t) => ({ start: t.start, end: t.end, all: t.catchAllAddr,
         handlers: t.handlers.map(([type, pc]) => [descToName(this.dex.type(type)), pc]) })) };
   }
 
   compile(count = true, resumable = false): string {
-    this.prepare();
-    this.cold = false;
-    this.resumes = 0;
     const started = jvmProfiler.enabled ? performance.now() : 0;
     if (count) { if (this.sync) perf.syncMethods++; else perf.asyncMethods++; }
     const blocks: string[] = [];
     let cur: string[] | null = null;
-    for (const ins of this.prepared!.instructions) {
-      if (this.prepared!.leaders[ins.pc]) {
+    for (const ins of this.prepared.instructions) {
+      if (this.prepared.leaders[ins.pc]) {
         if (cur) blocks.push(cur.join("\n"));
         cur = [`case ${ins.pc}:${this.hasTries ? `pc=${ins.pc};` : ""}`];
       }
-      this.emitIns(ins, cur!);
+      if (!cur) throw new Error(`instruction ${ins.pc} has no emitted block`);
+      this.emitIns(ins, cur);
     }
     if (cur) blocks.push(cur.join("\n"));
 
-    const { params } = parseMethodDesc(this.desc);
+    const params = this.prepared.params;
     const regs = this.code.regs, ins = this.code.ins;
     let reg = regs - ins;
     const jsParams: string[] = [];
@@ -299,7 +316,7 @@ class MethodCompiler {
       paramInit.push(`let v${reg}=p${i};`);
       paramAssign.push(`v${reg}=p${i};`);
       paramRegs.add(reg);
-      reg += isWide(params[i]) ? 2 : 1;
+      reg += this.prepared.widths[i];
     }
     const decls: string[] = [];
     for (let i = 0; i < regs; i++) if (!paramRegs.has(i)) decls.push(`v${i}`);
@@ -307,25 +324,37 @@ class MethodCompiler {
     const resumeDecls = [...Array.from({ length: regs }, (_, i) => `v${i}`), "$t", "$u", "$ex", "$fu", "pc", "$th", "$s=0", "$resume=0", "$p"].join(",");
     const resumeRegs = Array.from({ length: regs }, (_, i) => `v${i}=$F.v[${i}];`).join("");
     const init = resumable ? `let ${resumeDecls};` +
-      `if(arguments.length>${jsParams.length}){const $F=arguments[${jsParams.length}];${resumeRegs}` +
-      `$t=$F.$t;$u=$F.$u;$ex=$F.$ex;$fu=$F.$fu;pc=$F.next;$th=$F.$th;$s=$F.$osrS;}` +
+      `if($F!==undefined){${resumeRegs}` +
+      `$t=$F.$t;$u=$F.$u;$ex=$F.$ex;$fu=$F.$fu;pc=$F.next;$th=$F.$th;$s=$F.$s;}` +
       `else{${paramAssign.join("")}pc=0;$th=R.th();}` :
       `${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0;${this.sync ? "" : "const $th=R.th();let $s=0,$resume=0,$p;"}`;
 
     const catchBody = this.hasTries ? this.emitCatch() : this.leave() + "throw $e;";
-    const source = `${this.sync ? "function" : "async function"}(${jsParams.join(",")}){
+    const profileName = `${this.info.name}.${this.mname}${this.desc}`;
+    const profiled = jvmProfiler.enabled;
+    const profileStart = profiled
+      ? `const $pn=${JSON.stringify(profileName)},$pt=performance.now();${resumable ? "if($F===undefined)" : ""}P.entry($pn);try{`
+      : "";
+    const profileEnd = profiled ? `}finally{P.add($pn,"hotRun",performance.now()-$pt);}` : "";
+    const awaitPending = this.sync ? "" : profiled
+      ? `R.su($th);$s=1;P.suspension($pn);const $ps=performance.now();try{$p=await $p;}finally{P.add($pn,"suspend",performance.now()-$ps);}R.st($th);if($resume<0){pc=-$resume-1;$resume=0;}`
+      : `R.su($th);$s=1;$p=await $p;R.st($th);if($resume<0){pc=-$resume-1;$resume=0;}`;
+    const formalParams = resumable ? [...jsParams, "$F"] : jsParams;
+    const source = `${this.sync ? "function" : "async function"}(${formalParams.join(",")}){
+${profileStart}
 ${init}
 for(;;){
 try{${this.sync ? "switch(pc)" : "$dispatch:switch($resume>0?-$resume:pc)"}{
 ${blocks.join("\n")}
 default: throw new Error("bad pc "+pc);
 }
-${this.sync ? "" : "R.su($th);$s=1;$p=await $p;R.st($th);if($resume<0){pc=-$resume-1;$resume=0;}"}
+${awaitPending}
 }catch($e){
 ${this.sync ? "" : "R.st($th);$resume=0;"}$e=R.jx($e);
 ${catchBody}
 }
 }
+${profileEnd}
 }`;
     if (jvmProfiler.enabled) jvmProfiler.add(`${this.info.name}.${this.mname}${this.desc}`, "hotEmit", performance.now() - started);
     return source;
@@ -336,180 +365,6 @@ ${catchBody}
    *  the main thread. Leaving curThread on this method's thread would hand the caller's next
    *  synchronous work (a Thread.currentThread check, a fresh vcall) the wrong identity. */
   private leave(): string { return this.sync || this.cold ? "" : "if($s)R.su($th);"; }
-
-  /**
-   * Reaching definitions over the block CFG: type the const instructions whose value is
-   * consumed as float/double (Dalvik registers are untyped, and `const/high16 0x4100` is the
-   * BITS of 8.0f, not the integer 1090519040).
-   *
-   * This has to be a real dataflow, not a linear pc-order scan. R8 merges dozens of lambda
-   * bodies into one method behind a packed-switch with a shared const preamble; in pc order a
-   * write to the register inside a mutually exclusive arm looks like it kills the preamble's
-   * const, even though on every real path from the switch to the use nothing writes it. That
-   * miss is what left Compose holding `Dp(1090519040)` and blew a padding up to 2^26.
-   *
-   * Def sets only grow and array kinds only shrink, so the fixpoint terminates.
-   */
-  private typeConsts() {
-    const { dex } = this;
-    // Transfer changes register bindings; only joins create larger definition sets.
-    type Defs = Map<number, ReadonlySet<Ins>>;
-    type Arrs = Map<number, "F" | "D">;
-
-    // ── block CFG (leaders are already computed by compile())
-    const leaders = this.instructions.filter((ins) => this.leaders[ins.pc]).map((ins) => ins.pc);
-    const body = new Map<number, Ins[]>();
-    let cur = -1;
-    for (const ins of this.instructions) {
-      if (this.leaders[ins.pc]) body.set((cur = ins.pc), []);
-      body.get(cur)!.push(ins);
-    }
-    const succ = new Map<number, number[]>();
-    for (const [lead, instructions] of body) {
-      const last = instructions[instructions.length - 1];
-      const out = new Set(this.branchTargets(last).filter((t) => body.has(t)));
-      // fall-through, unless the block ends in an unconditional transfer
-      if (!endsBlock(last.op)) {
-        const next = last.pc + last.len;
-        if (body.has(next)) out.add(next);
-      }
-      succ.set(lead, [...out]);
-    }
-    // an exception can leave any instruction in a try range, so every block that overlaps the
-    // range reaches the handlers.
-    for (const t of this.code.tries) {
-      const hs = t.handlers.map(([, a]) => a).concat(t.catchAllAddr >= 0 ? [t.catchAllAddr] : []);
-      for (const [lead, instructions] of body) {
-        if (instructions[instructions.length - 1].pc < t.start || lead >= t.end) continue;
-        const out = succ.get(lead)!;
-        for (const h of hs) if (body.has(h) && !out.includes(h)) out.push(h);
-      }
-    }
-
-    // ── transfer: apply one block to a state, optionally marking consumers
-    const retType = parseMethodDesc(this.desc).ret;
-    let liveDefs: Defs | null = null;
-    const mark = (reg: number, kind: "F" | "D") => {
-      const ds = liveDefs?.get(reg);
-      if (ds) for (const w of ds) if (!w.constKind) w.constKind = kind;
-    };
-    const run = (lead: number, defs: Defs, arr: Arrs, doMark: boolean) => {
-      let lastRet = "";
-      liveDefs = doMark ? defs : null;
-      for (const i of body.get(lead)!) {
-        const n = i.name;
-        const operand = floatingOperands(i.op);
-        if (operand) {
-          const k = operand.kind;
-          if (n.endsWith("/2addr")) { mark(i.a, k); mark(i.b, k); }
-          else if (operand.unary) mark(i.b, k);
-          else { mark(i.b, k); mark(i.c, k); }
-        } else if (n === "aput" || n === "aput-wide") {
-          const k = arr.get(i.b);
-          if (k) mark(i.a, k);
-        } else if (n.startsWith("iput") || n.startsWith("sput")) {
-          const ft = dex.type(dex.field(n.startsWith("iput") ? i.c : i.b).type);
-          if (ft === "F") mark(i.a, "F");
-          else if (ft === "D") mark(i.a, "D");
-        } else if (n.startsWith("invoke") && !n.startsWith("invoke-custom")) {
-          const isInstance = !n.startsWith("invoke-static");
-          // a const reaching an object receiver is the null constant: the call must NPE, not
-          // fall through to 0's (absent) method
-          if (isInstance && liveDefs?.get(i.regs[0])?.size) i.nullRecv = true;
-          let ri = isInstance ? 1 : 0;
-          for (const pt of dex.protoParamTypes(dex.method(i.b).proto)) {
-            if (pt === "F") mark(i.regs[ri], "F");
-            else if (pt === "D") mark(i.regs[ri], "D");
-            ri += isWide(pt) ? 2 : 1;
-          }
-        } else if (n === "return" && retType === "F") mark(i.a, "F");
-        else if (n === "return-wide" && retType === "D") mark(i.a, "D");
-
-        // float/double array registers so aput types its value const: from new-array, a field or
-        // a call's declared type, a check-cast, or a copy of one. `aput` alone cannot tell [F from
-        // [I, and 1.0f stored raw into a Float32Array is 1065353216 (Compose's 4x4 matrix
-        // m[3][3], which then inverted every hit-test position into nonsense).
-        const setArr = (reg: number, t: string) => {
-          if (t === "[F") arr.set(reg, "F");
-          else if (t === "[D") arr.set(reg, "D");
-          else arr.delete(reg);
-        };
-        if (n === "new-array") setArr(i.a, dex.type(i.c));
-        else if (n === "check-cast") setArr(i.a, dex.type(i.b));
-        else if (n === "iget-object") setArr(i.a, dex.type(dex.field(i.c).type));
-        else if (n === "sget-object") setArr(i.a, dex.type(dex.field(i.b).type));
-        else if (n === "move-result-object") setArr(i.a, lastRet);
-        else if (n === "move-object" || n === "move-object/from16" || n === "move-object/16") {
-          const k = arr.get(i.b);
-          if (k) arr.set(i.a, k); else arr.delete(i.a);
-        } else { const w = this.writtenReg(i); if (w >= 0) arr.delete(w); }
-        if (n.startsWith("invoke") && !n.startsWith("invoke-custom")) lastRet = dex.type(dex.proto(dex.method(i.b).proto).ret);
-        else if (n !== "move-result-object") lastRet = "";
-
-        // defs: a const kills whatever reached this register; a move copies the source's set
-        if (n.startsWith("const/") || n === "const" || n.startsWith("const-wide")) {
-          defs.set(i.a, new Set([i]));
-        } else if (n === "move" || n === "move/from16" || n === "move/16" || n === "move-wide" || n === "move-wide/from16" || n === "move-wide/16"
-          || n === "move-object" || n === "move-object/from16" || n === "move-object/16") {
-          const src = defs.get(i.b);
-          if (src) defs.set(i.a, src); else defs.delete(i.a);
-        } else {
-          const w = this.writtenReg(i);
-          if (w >= 0) defs.delete(w);
-        }
-      }
-      return { defs, arr };
-    };
-
-    // parameters of type [F/[D arrive typed
-    const paramArrs: Arrs = new Map();
-    {
-      const params = parseMethodDesc(this.desc).params;
-      let reg = this.code.regs - this.code.ins + (this.isStatic ? 0 : 1);
-      for (const pt of params) {
-        if (pt === "[F" || pt === "[D") paramArrs.set(reg, pt[1] as "F" | "D");
-        reg += isWide(pt) ? 2 : 1;
-      }
-    }
-
-    // A single-block method has no merges: one pass IS the fixpoint.
-    if (leaders.length === 1) { run(leaders[0], new Map(), new Map(paramArrs), true); return; }
-
-    // ── fixpoint on block entry states. `null` array-kinds = no predecessor seen yet, which
-    // is what lets the meet be an intersection without swallowing the first contribution.
-    const inDefs = new Map<number, Defs>(leaders.map((l) => [l, new Map()] as const));
-    const inArrs = new Map<number, Arrs | null>(leaders.map((l) => [l, null] as const));
-    inArrs.set(leaders[0], new Map(paramArrs));
-    const work = [...leaders];
-    const queued = new Set(leaders);
-    for (let wi = 0; wi < work.length; wi++) {
-      const lead = work[wi];
-      queued.delete(lead);
-      const st = run(lead, new Map(inDefs.get(lead)!), new Map(inArrs.get(lead) ?? []), false);
-      for (const t of succ.get(lead)!) {
-        let changed = false;
-        const dst = inDefs.get(t)!;
-        for (const [reg, set] of st.defs) {
-          const d = dst.get(reg);
-          if (!d) { dst.set(reg, set); changed = true; continue; }
-          if (d === set) continue;
-          let merged: Set<Ins> | undefined;
-          for (const x of set) if (!d.has(x)) (merged ??= new Set(d)).add(x);
-          if (merged) { dst.set(reg, merged); changed = true; }
-        }
-        const da = inArrs.get(t);
-        if (da === null || da === undefined) { inArrs.set(t, new Map(st.arr)); changed = true; }
-        else for (const [k, v] of [...da]) if (st.arr.get(k) !== v) { da.delete(k); changed = true; }
-        if (changed && !queued.has(t)) { queued.add(t); work.push(t); }
-      }
-    }
-
-    // ── one marking pass per block, from its settled entry state
-    for (const l of leaders) run(l, new Map(inDefs.get(l)!), new Map(inArrs.get(l) ?? []), true);
-  }
-  private writtenReg(i: Ins): number {
-    return writesRegister(i.op) ? i.a : -1;
-  }
 
   private emitCatch(): string {
     const parts: string[] = ["$ex=$e;"];
@@ -525,25 +380,6 @@ ${catchBody}
     }
     parts.push(this.leave() + "throw $e;");
     return parts.join("\n");
-  }
-
-  private branchTargets(i: Ins): number[] {
-    switch (i.name) {
-      case "goto": case "goto/16": case "goto/32": return [i.pc + i.a];
-      case "packed-switch": case "sparse-switch": return this.switchCases(i).map(([, t]) => t);
-      default: return i.name.startsWith("if-") ? [this.ifTarget(i)] : [];
-    }
-  }
-  private ifTarget(i: Ins): number { return i.pc + (i.fmt === "22t" ? i.c : i.b); }
-  /** a switch's [key, target] pairs out of its packed or sparse payload */
-  private switchCases(i: Ins): [number, number][] {
-    const insns = this.code.insns, payload = i.pc + i.b, size = insns[payload + 1], out: [number, number][] = [];
-    const word = (at: number) => insns[at] | (insns[at + 1] << 16);
-    for (let j = 0; j < size; j++) {
-      if (i.name === "packed-switch") out.push([word(payload + 2) + j, i.pc + word(payload + 4 + j * 2)]);
-      else out.push([word(payload + 2 + j * 2), i.pc + word(payload + 2 + size * 2 + j * 2)]);
-    }
-    return out;
   }
 
   // inside <clinit>: pass own type idx so the runtime can detect clinit cycles
@@ -657,7 +493,7 @@ ${catchBody}
       case "throw": out.push(`throw ${this.reg(i.a)};`); break;
       case "goto": case "goto/16": case "goto/32": out.push(this.jumpStr(i.pc + i.a, i.pc)); break;
       case "packed-switch": case "sparse-switch":
-        out.push(`switch(${this.reg(i.a)}){${this.switchCases(i).map(([k, t]) => `case ${this.literal(k)}:${this.jumpStr(t, i.pc)}`).join("")}}`);
+        out.push(`switch(${this.reg(i.a)}){${switchCases(this.code, i).map(([k, t]) => `case ${this.literal(k)}:${this.jumpStr(t, i.pc)}`).join("")}}`);
         break;
       case "cmpl-float": case "cmpl-double":
         out.push(`${this.reg(i.a)}=${this.reg(i.b)}<${this.reg(i.c)}?-1:${this.reg(i.b)}>${this.reg(i.c)}?1:${this.reg(i.b)}===${this.reg(i.c)}?0:-1;`); break;
@@ -709,7 +545,7 @@ ${catchBody}
   }
 
   private emitIf(cond: string, i: Ins, out: string[]) {
-    out.push(`if(${cond}){${this.jumpStr(this.ifTarget(i), i.pc)}}`);
+    out.push(`if(${cond}){${this.jumpStr(ifTarget(i), i.pc)}}`);
   }
 
   private emitStaticField(i: Ins, out: string[], isGet: boolean) {

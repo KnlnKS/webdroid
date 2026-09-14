@@ -606,9 +606,9 @@ export class Runtime {
     const src = compileClassSource(this, dex, info) + `\n//# sourceURL=wd/${info.name}.js`;
     try {
       const linkStarted = jvmProfiler.enabled ? performance.now() : 0;
-      const mk = new Function("C", "D", "R", "S", src);
-      mk(info.ctor, D, this, info.superInfo?.ctor ?? JObj);
-      if (jvmProfiler.enabled) jvmProfiler.add(`class:${info.name}`, "classLink", performance.now() - linkStarted);
+      const mk = new Function("C", "D", "R", "S", "P", src);
+      mk(info.ctor, D, this, info.superInfo?.ctor ?? JObj, jvmProfiler);
+      if (jvmProfiler.enabled) jvmProfiler.addAggregate("classLink", performance.now() - linkStarted);
     } catch (e) {
       console.error("compile failed for", info.name, e, src.slice(0, 2000));
       throw e;

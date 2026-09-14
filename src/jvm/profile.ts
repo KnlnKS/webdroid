@@ -4,6 +4,7 @@ export type JvmTier = "auto" | "cold" | "js" | "wasm";
 export type JvmProfilePhase =
   "decode" | "cfg" | "type" | "coldBuild" | "hotEmit" | "jsCompile" | "classLink" |
   "coldRun" | "hotRun" | "suspend";
+export type JvmMethodProfilePhase = Exclude<JvmProfilePhase, "classLink">;
 
 export interface JvmMethodProfile {
   name: string;
@@ -21,7 +22,6 @@ export interface JvmMethodProfile {
   coldBuildMs: number;
   hotEmitMs: number;
   jsCompileMs: number;
-  classLinkMs: number;
   coldRunMs: number;
   hotRunMs: number;
   suspendMs: number;
@@ -54,18 +54,17 @@ const phaseField = {
   coldBuild: "coldBuildMs",
   hotEmit: "hotEmitMs",
   jsCompile: "jsCompileMs",
-  classLink: "classLinkMs",
   coldRun: "coldRunMs",
   hotRun: "hotRunMs",
   suspend: "suspendMs",
-} as const satisfies Record<JvmProfilePhase, keyof JvmMethodProfile>;
+} as const satisfies Record<JvmMethodProfilePhase, keyof JvmMethodProfile>;
 
 function makeRecord(name: string): JvmMethodProfile {
   return {
     name, entries: 0, backedges: 0, instructions: 0, suspensions: 0,
     coldToHot: 0, generatedBytes: 0, decodedInstructions: 0, wasmEligible: false,
     decodeMs: 0, cfgMs: 0, typeMs: 0, coldBuildMs: 0, hotEmitMs: 0,
-    jsCompileMs: 0, classLinkMs: 0, coldRunMs: 0, hotRunMs: 0, suspendMs: 0,
+    jsCompileMs: 0, coldRunMs: 0, hotRunMs: 0, suspendMs: 0,
   };
 }
 
@@ -114,18 +113,21 @@ export const jvmProfiler = {
     const r = record(name);
     if (r) { r.decodedInstructions = instructions; r.wasmEligible = wasmEligible; }
   },
-  add(name: string, phase: JvmProfilePhase, ms: number): void {
+  add(name: string, phase: JvmMethodProfilePhase, ms: number): void {
     if (!enabled) return;
     perf[phaseCounter[phase]] += ms;
     const r = record(name);
     if (r) r[phaseField[phase]] += ms;
   },
+  addAggregate(phase: JvmProfilePhase, ms: number): void {
+    if (enabled) perf[phaseCounter[phase]] += ms;
+  },
   snapshot() {
     const methods = [...records.values()].sort((a, b) =>
-      (b.coldRunMs + b.hotRunMs + b.decodeMs + b.cfgMs + b.typeMs + b.coldBuildMs + b.hotEmitMs + b.jsCompileMs + b.classLinkMs) -
-      (a.coldRunMs + a.hotRunMs + a.decodeMs + a.cfgMs + a.typeMs + a.coldBuildMs + a.hotEmitMs + a.jsCompileMs + a.classLinkMs));
+      (b.coldRunMs + b.hotRunMs + b.decodeMs + b.cfgMs + b.typeMs + b.coldBuildMs + b.hotEmitMs + b.jsCompileMs) -
+      (a.coldRunMs + a.hotRunMs + a.decodeMs + a.cfgMs + a.typeMs + a.coldBuildMs + a.hotEmitMs + a.jsCompileMs));
     const eligible = methods.filter((method) => method.wasmEligible);
-    const activeMs = (method: JvmMethodProfile) => Math.max(0, method.coldRunMs - method.suspendMs) + method.hotRunMs;
+    const activeMs = (method: JvmMethodProfile) => Math.max(0, method.coldRunMs + method.hotRunMs - method.suspendMs);
     const dexActiveMs = methods.reduce((sum, method) => sum + activeMs(method), 0);
     const eligibleDexActiveMs = eligible.reduce((sum, method) => sum + activeMs(method), 0);
     return { enabled, requestedTier, tier, wasmAvailable: false, droppedMethods: perf.jvmProfileDroppedMethods,

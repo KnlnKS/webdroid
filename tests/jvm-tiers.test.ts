@@ -4,6 +4,7 @@ import { DexFile } from "../src/jvm/dex";
 import { mangleMethod, descToName } from "../src/jvm/abi";
 import { setLazyMethods } from "../src/jvm/compiler";
 import { perf } from "../src/perf";
+import { configureJvm, jvmProfiler } from "../src/jvm/profile";
 
 const bytes = new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/JvmTierProbe.dex").arrayBuffer());
 const modes = ["hot", "cold", "promoted", "denied"] as const;
@@ -146,4 +147,32 @@ test("DEX promotes a long-running cold activation at a yielded backedge", async 
   expect(await loop(2000)).toBe(1_999_000);
   expect(perf.osrMethods).toBe(before + 1);
   expect(await loop(9)).toBe(36);
+});
+
+test("JVM profiling follows installed hot methods through suspension", async () => {
+  configureJvm({ profile: true, tier: "js" });
+  try {
+    const f = await fixture("cold");
+    f.park();
+
+    const lazy = f.fn("suspended", "(II)I");
+    const first = lazy(1, 7);
+    (await f.next()).resolve(7);
+    expect(await first).toBe(8);
+
+    jvmProfiler.reset();
+    const installed = f.fn("suspended", "(II)I");
+    const result = installed(1, 7);
+    (await f.next()).resolve(7);
+    expect(await result).toBe(8);
+
+    const method = jvmProfiler.snapshot().methods.find((entry) => entry.name === "JvmTierProbe.suspended(II)I");
+    expect(method).toBeDefined();
+    expect(method!.entries).toBe(1);
+    expect(method!.suspensions).toBe(1);
+    expect(method!.hotRunMs).toBeGreaterThanOrEqual(method!.suspendMs);
+  } finally {
+    configureJvm({ profile: false, tier: "auto" });
+    jvmProfiler.reset();
+  }
 });
