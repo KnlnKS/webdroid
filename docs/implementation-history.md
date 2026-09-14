@@ -2708,3 +2708,11 @@ unsupported. Tests draw the real paired framework resources and check dimensions
 state, transforms and suspended child sizing; typecheck passes. Reused layer rectangles
 avoid per-layout rectangle allocation, and ScaleDrawable retains its dispatch thread after
 suspending child calls.
+
+SeekBar now loads its styled track and thumb, draws primary/secondary levels, positions the
+thumb, and handles drag progress and start/stop/change callbacks on the originating thread.
+Drawable replacement keeps callback ownership and state. Its previous indeterminate spinner
+is gone. The browser test checks track/thumb pixels and suspended touch callbacks. Fresh
+full Chrome plays the unchanged 22-second Maps clip; Pause changes to Play and seeking
+changes the position and resumes decoded frames. Keyboard/RTL seek handling and animated
+thumb transitions are not covered by this implementation.

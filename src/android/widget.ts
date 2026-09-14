@@ -1,14 +1,15 @@
 import { AID } from "./res";
-import { JView, initViewFromCtx, invalidate, resolveSizeAndState, uiState, JViewGroup } from "./view";
-import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild } from "./drawable";
+import { JView, initViewFromCtx, invalidate, requestLayout, resolveSizeAndState, uiState, JViewGroup } from "./view";
+import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild, drawableSize, JLayerDrawable } from "./drawable";
 import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, flagSetters } from "../jvm/runtime";
-import { type JAttrSet, rvColor, obtainStyled, rvInt } from "./res";
+import { type JAttrSet, rvColor, obtainStyled, rvInt, rvDimen } from "./res";
 import { TV } from "./axml";
 import { type JCanvas, cssColor } from "./graphics";
 import { JTextView, textViewMethods, JButton, applyTvStyle } from "./textview";
 import { G } from "./gravity";
 import { device } from "../shell/config";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread } from "../jvm/natives/jlang";
+import { type JMotionEvent } from "./motionevent";
 import { JLinearLayout, linearMethods } from "./layouts";
 
 class JProgressBar extends JView {
@@ -92,21 +93,122 @@ rt.register({
     },
   },
 });
-/**
- * AbsSeekBar/SeekBar/RatingBar over ProgressBar's state. A rating is a progress in steps, which
- * is how AOSP stores it; the stars themselves come from a progressDrawable this does not build,
- * so the widget holds and reports its rating without painting one.
- */
+/** RatingBar reports progress in steps; its star drawable is not implemented. */
 class JRatingBar extends JProgressBar { stars = 5; step = 0.5; ratingL: unknown = null; }
 const seekBarMethods: NativeSpec["methods"] = {
   "setKeyProgressIncrement(I)V": () => {},
   "setThumb(Landroid/graphics/drawable/Drawable;)V": () => {},
   "setOnSeekBarChangeListener(Landroid/widget/SeekBar$OnSeekBarChangeListener;)V": function (this: JRatingBar, l: unknown) { this.ratingL = l; },
 };
-for (const [name, sup] of [["android/widget/AbsSeekBar", "android/widget/ProgressBar"],
-  ["android/widget/SeekBar", "android/widget/AbsSeekBar"]] as const) {
-  rt.register({ name, ctor: class extends JRatingBar {}, sup, methods: seekBarMethods });
+rt.register({ name: "android/widget/AbsSeekBar", ctor: class extends JRatingBar {}, sup: "android/widget/ProgressBar", methods: seekBarMethods });
+class JSeekBar extends JProgressBar {
+  thumb: JDrawable | null = null;
+  thumbW = 0; thumbH = 0; thumbOffset = 0;
+  secondary = 0;
+  changeListener: unknown = null;
+  constructor() { super(); this.horizontal = true; this.indeterminate = false; }
+  async setTrack(d: JDrawable | null, thread = curThread) {
+    if (this.progressD) this.progressD.callback = null;
+    this.progressD = d;
+    if (d) { d.callback = this; await vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())); }
+    requestLayout(this); invalidate(this);
+  }
+  async setThumb(d: JDrawable | null, thread = curThread) {
+    if (this.thumb) this.thumb.callback = null;
+    this.thumb = d;
+    this.thumbW = d ? Math.max(0, Number(await drawableSize(d, false, thread))) : 0;
+    this.thumbH = d ? Math.max(0, Number(await drawableSize(d, true, thread))) : 0;
+    this.thumbOffset = Math.trunc(this.thumbW / 2);
+    if (d) { d.callback = this; await vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())); }
+    requestLayout(this); invalidate(this);
+  }
+  async updateProgress(value: number, fromUser = false, thread = curThread) {
+    const progress = Math.max(this.min, Math.min(this.max, Math.round(value)));
+    if (this.progress === progress) return;
+    this.progress = progress; invalidate(this);
+    if (this.changeListener) await vcallOn(thread, this.changeListener, "onProgressChanged", "(Landroid/widget/SeekBar;IZ)V", this, progress, +fromUser);
+  }
 }
+async function initSeekBar(this: JSeekBar, c: unknown, attrs: JAttrSet | null = null, style = AID("seekBarStyle"), def = 0) {
+  const thread = curThread;
+  await initViewFromCtx(this, c, attrs, style);
+  if (!this.jres) return;
+  const a = obtainStyled(this.jres, this.theme, attrs, ["progressDrawable", "thumb", "thumbOffset", "min", "max", "progress", "secondaryProgress"].map(AID), style, def);
+  this.min = rvInt(this.jres, a.vals[3], 0); this.max = Math.max(this.min, rvInt(this.jres, a.vals[4], 100));
+  this.progress = Math.max(this.min, Math.min(this.max, rvInt(this.jres, a.vals[5], 0)));
+  this.secondary = rvInt(this.jres, a.vals[6], 0);
+  if (a.vals[0]) await this.setTrack(await loadDrawableRV(this.jres, a.vals[0], this.theme), thread);
+  if (a.vals[1]) await this.setThumb(await loadDrawableRV(this.jres, a.vals[1], this.theme), thread);
+  if (a.vals[2]) this.thumbOffset = Math.trunc(rvDimen(this.jres, a.vals[2], this.thumbOffset));
+}
+rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widget/AbsSeekBar", methods: {
+  "<init>(Landroid/content/Context;)V": initSeekBar,
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initSeekBar,
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": initSeekBar,
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": initSeekBar,
+  "setThumb(Landroid/graphics/drawable/Drawable;)V": function (this: JSeekBar, d: JDrawable | null) { return this.setThumb(d); },
+  "setProgressDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JSeekBar, d: JDrawable | null) { return this.setTrack(d); },
+  "getThumb()Landroid/graphics/drawable/Drawable;": function (this: JSeekBar) { return this.thumb; },
+  "getThumbOffset()I": function (this: JSeekBar) { return this.thumbOffset; },
+  "setThumbOffset(I)V": function (this: JSeekBar, offset: number) { this.thumbOffset = offset; invalidate(this); },
+  "setOnSeekBarChangeListener(Landroid/widget/SeekBar$OnSeekBarChangeListener;)V": function (this: JSeekBar, listener: unknown) { this.changeListener = listener; },
+  "setProgress(I)V": function (this: JSeekBar, value: number) { return this.updateProgress(value); },
+  "setProgress(IZ)V": function (this: JSeekBar, value: number) { return this.updateProgress(value); },
+  "setSecondaryProgress(I)V": function (this: JSeekBar, value: number) { this.secondary = Math.max(this.min, Math.min(this.max, value)); invalidate(this); },
+  "getSecondaryProgress()I": function (this: JSeekBar) { return this.secondary; },
+  "drawableStateChanged()V": async function (this: JSeekBar) {
+    const thread = curThread, state = Int32Array.from(this.drawableState());
+    for (const d of [this.progressD, this.thumb]) if (d) await vcallOn(thread, d, "setState", "([I)Z", state);
+  },
+  "onMeasure(II)V": async function (this: JSeekBar, ws: number, hs: number) {
+    const thread = curThread, d = this.progressD;
+    const w = d ? Math.max(0, Number(await drawableSize(d, false, thread))) : 0;
+    const h = d ? Math.max(0, Number(await drawableSize(d, true, thread))) : 0;
+    this.measuredW = resolveSizeAndState(Math.max(this.minW, w + this.padL + this.padR), ws);
+    this.measuredH = resolveSizeAndState(Math.max(this.minH, Math.max(h, this.thumbH) + this.padT + this.padB), hs);
+  },
+  "onDraw(Landroid/graphics/Canvas;)V": async function (this: JSeekBar, canvas: JCanvas) {
+    const thread = curThread, ctx = canvas.ctx, d = this.progressD;
+    const w = this.width() - this.padL - this.padR, h = this.height() - this.padT - this.padB;
+    const fraction = (v: number) => this.max === this.min ? 0 : (v - this.min) / (this.max - this.min);
+    ctx.save(); ctx.translate(this.padL, this.padT);
+    try {
+      if (d) {
+        await vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, w, h);
+        const level = async (id: number, value: number) => {
+          const target = d instanceof JLayerDrawable ? await vcallOn(thread, d, "findDrawableByLayerId", "(I)Landroid/graphics/drawable/Drawable;", id) : d;
+          if (target) await vcallOn(thread, target, "setLevel", "(I)Z", Math.trunc(fraction(value) * 10000));
+        };
+        await level(0x0102000f, this.secondary); await level(0x0102000d, this.progress);
+        await drawChild(d, canvas);
+      }
+      if (this.thumb) {
+        const x = Math.round(fraction(this.progress) * (w - this.thumbW + this.thumbOffset * 2)) - this.thumbOffset;
+        const y = Math.trunc((h - this.thumbH) / 2);
+        await vcallOn(thread, this.thumb, "setBounds", "(IIII)V", x, y, x + this.thumbW, y + this.thumbH);
+        await drawChild(this.thumb, canvas);
+      }
+    } finally { ctx.restore(); }
+  },
+  "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JSeekBar, event: JMotionEvent) {
+    if (!this.enabled) return 0;
+    const thread = curThread, action = event.action & 255;
+    if (action === 0) {
+      await vcallOn(thread, this, "setPressed", "(Z)V", 1);
+      if (this.parent) await vcallOn(thread, this.parent, "requestDisallowInterceptTouchEvent", "(Z)V", 1);
+      if (this.changeListener) await vcallOn(thread, this.changeListener, "onStartTrackingTouch", "(Landroid/widget/SeekBar;)V", this);
+    }
+    if (action === 0 || action === 1 || action === 2) {
+      const width = this.width() - this.padL - this.padR;
+      await this.updateProgress(this.min + (this.max - this.min) * Math.max(0, Math.min(1, width > 0 ? (event.x - this.padL) / width : 0)), true, thread);
+    }
+    if (action === 1 || action === 3) {
+      await vcallOn(thread, this, "setPressed", "(Z)V", 0);
+      if (this.changeListener) await vcallOn(thread, this.changeListener, "onStopTrackingTouch", "(Landroid/widget/SeekBar;)V", this);
+    }
+    return 1;
+  },
+} });
 rt.markers("android/widget/SeekBar$OnSeekBarChangeListener", "android/widget/RatingBar$OnRatingBarChangeListener");
 rt.register({
   name: "android/widget/RatingBar", ctor: JRatingBar, sup: "android/widget/AbsSeekBar",
