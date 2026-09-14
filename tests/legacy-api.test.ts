@@ -74,7 +74,7 @@ test("a lifecycle observer registered on main waits for the next real event", as
   }
 });
 
-test("an observer registered from cooperative background work catches the visible activity", async () => {
+test("lifecycle registration never replays an already delivered event", async () => {
   const calls: string[] = [];
   const app = new JApplication();
   const activity = new JActivity();
@@ -93,7 +93,7 @@ test("an observer registered from cooperative background work catches the visibl
     await vcall(app, "registerActivityLifecycleCallbacks", "(Landroid/app/Application$ActivityLifecycleCallbacks;)V", observer);
     await new Promise((resolve) => setTimeout(resolve, 0));
     await onMain(() => {});
-    expect(calls).toEqual(["resumed"]);
+    expect(calls).toEqual([]);
   } finally {
     setCurThread(previousThread);
     setAppHost(previousHost);

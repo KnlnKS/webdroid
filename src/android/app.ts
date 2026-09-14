@@ -12,7 +12,7 @@ import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, attachView, findById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragmentManager } from "./fragment";
-import { curThread, mainThread, vcall } from "../jvm/natives/jlang";
+import { vcall } from "../jvm/natives/jlang";
 import { appHost, jclsNameOf } from "./apphost";
 import { resString } from "./res";
 import { onMain } from "./mainloop";
@@ -99,18 +99,6 @@ export class JActivity extends JContextWrapper {
 /** Fire an ActivityLifecycleCallbacks event (both Pre/Post + the plain variant, API 29+ shapes).
  *  androidx ReportFragment.LifecycleCallbacks uses the Post* variants to advance the activity Lifecycle. */
 type LifecyclePhase = "Created" | "Started" | "Resumed" | "Paused" | "Stopped" | "Destroyed";
-const lifecyclePhaseBit: Record<LifecyclePhase, number> = { Created: 1, Started: 2, Resumed: 4, Paused: 8, Stopped: 16, Destroyed: 32 };
-const lifecycleDeliveries = new WeakMap<object, WeakMap<JActivity, number>>();
-function lifecycleDelivered(cb: unknown, act: JActivity, phase: LifecyclePhase): boolean {
-  return cb !== null && (typeof cb === "object" || typeof cb === "function") &&
-    !!((lifecycleDeliveries.get(cb as object)?.get(act) ?? 0) & lifecyclePhaseBit[phase]);
-}
-function markLifecycleDelivered(cb: unknown, act: JActivity, phase: LifecyclePhase): void {
-  if (cb === null || (typeof cb !== "object" && typeof cb !== "function")) return;
-  let activities = lifecycleDeliveries.get(cb as object);
-  if (!activities) lifecycleDeliveries.set(cb as object, activities = new WeakMap());
-  activities.set(act, (activities.get(act) ?? 0) | lifecyclePhaseBit[phase]);
-}
 export async function fireActivityLifecycle(act: JActivity, phase: LifecyclePhase, bundle: unknown = null) {
   // process-wide callbacks (Application.registerActivityLifecycleCallbacks) then this
   // activity's own (API 29 Activity.registerActivityLifecycleCallbacks) — one dispatch point.
@@ -119,7 +107,6 @@ export async function fireActivityLifecycle(act: JActivity, phase: LifecyclePhas
   for (const cb of cbs) await fireActivityLifecycleCallback(cb, act, phase, bundle);
 }
 async function fireActivityLifecycleCallback(cb: unknown, act: JActivity, phase: LifecyclePhase, bundle: unknown = null) {
-  markLifecycleDelivered(cb, act, phase);
   const withBundle = phase === "Created";
   const sig = withBundle ? "(Landroid/app/Activity;Landroid/os/Bundle;)V" : "(Landroid/app/Activity;)V";
   const args = withBundle ? [act, bundle] : [act];
@@ -142,14 +129,6 @@ rt.register({
 const lifecycleCbMethods: NativeSpec["methods"] = {
   "registerActivityLifecycleCallbacks(Landroid/app/Application$ActivityLifecycleCallbacks;)V": function (this: { lifecycleCbs: unknown[] | null }, cb: unknown) {
     (this.lifecycleCbs ??= []).push(cb);
-    const activity = appHost?.currentActivity();
-    if (activity && curThread !== mainThread && (activity.resumed || activity.started)) {
-      void onMain(async () => {
-        if (activity !== appHost?.currentActivity() || !this.lifecycleCbs?.includes(cb)) return;
-        const phase: LifecyclePhase = activity.resumed ? "Resumed" : "Started";
-        if (!lifecycleDelivered(cb, activity, phase)) await fireActivityLifecycleCallback(cb, activity, phase);
-      }).catch(reportUncaught);
-    }
   },
   "unregisterActivityLifecycleCallbacks(Landroid/app/Application$ActivityLifecycleCallbacks;)V": function (this: { lifecycleCbs: unknown[] | null }, cb: unknown) {
     if (this.lifecycleCbs) this.lifecycleCbs = this.lifecycleCbs.filter((c) => c !== cb);
