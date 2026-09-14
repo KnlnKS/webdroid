@@ -50,6 +50,23 @@ burst of taps as one step, and `Flow.minFps` flags an animated step as `SLOW` â€
 `run.json` records the `jobs` a run used. A partial run replaces `report/index.html` with only
 the flows it ran, and says so.
 
+`fps` retains its historical meaning of shell ticks per second. `glFps` counts completed
+GL callbacks/swaps, and `presentFps` counts completed framebuffer transfers when the served
+revision exposes that counter. Counters and elapsed time are sampled together before PNG
+encoding. These capture windows still include settling and its pixel readbacks.
+
+For isolated performance comparisons, use `bun scripts/perf-browser.ts --flow flappybird
+--after title --url http://localhost:4090 --out webdroid-shots/title.json`. This runs a fresh
+browser, follows the flow through the named step, warms for 3 seconds, then samples for
+15 seconds without readback. `--exercise <step>` repeats that step's action in the window;
+repeated game inputs do not guarantee the game remains in play. `--probe` installs the
+ordinary tracking wrappers, and `--gpu hardware` drops forced software-rendering flags.
+The output records the actual GPU, since the browser may still fall back to software.
+Heap samples follow explicit garbage collection; CDP CPU counters cover a slightly wider
+interval than the in-page window. Input-to-next-presentation is an opportunity proxy,
+not proof that the input changed those pixels. Screenshots and process diagnostics follow
+the timed window. Alternate revisions, serialize runs, and keep their code stable.
+
 `--shots [dir]` records every distinct frame webdroid *presented* during each step, not just
 the settled one that gets diffed â€” what you need when a step goes wrong (what was drawn on
 the way, and whether anything was drawn at all). The directory is wiped per run and gitignored.

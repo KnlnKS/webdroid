@@ -365,7 +365,7 @@ function doTick() {
   wd.ticks++;
   lastTick = performance.now();
   perf.frames++;
-  void tick().then(() => { perf.frameMs += performance.now() - lastTick; }).finally(() => { ticking = false; });
+  void tick().then(() => { perf.completedFrames++; perf.frameMs += performance.now() - lastTick; }).finally(() => { ticking = false; });
 }
 function loop(time: number) {
   recordVsync(time);

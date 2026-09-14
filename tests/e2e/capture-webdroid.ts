@@ -32,8 +32,10 @@ export type StepRun = {
   /** Wall-clock ms this step took to settle, and the perf counters it burned getting there. */
   ms?: number;
   perf?: Record<string, number>;
-  /** Shell frames per second over the step — the number that matters for an animated step. */
+  /** Shell ticks per second over the step; not completed GL frames or presentations. */
   fps?: number;
+  glFps?: number;
+  presentFps?: number;
   slow?: boolean;
   /** Uncaught throwables and frame-phase errors this step was the first to log. */
   newErrors?: string[];
@@ -64,7 +66,7 @@ export async function loadManifest(app: string): Promise<Manifest | undefined> {
  * as JSON under `wd:prefs:<pkg>:<name>` (see JSharedPrefs.persist), so parse rather than
  * duplicate the data in a second format.
  */
-function prefsStorage(pkg: string, xml: string): [string, string] {
+export function prefsStorage(pkg: string, xml: string): [string, string] {
   const map: Record<string, unknown> = {};
   for (const m of xml.matchAll(/<(string|boolean|int|long|float)\s+name="([^"]+)"(?:\s+value="([^"]*)")?\s*(?:\/>|>([\s\S]*?)<\/\1>)/g)) {
     const [, kind, name, attr, text] = m;
@@ -88,7 +90,7 @@ export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = fa
 }
 
 /** The probe action for a step, with the recorded coordinate as the tapText fallback. */
-function actOf(flow: Flow, step: Step, rec?: RecordedStep): Act {
+export function actOf(flow: Flow, step: Step, rec?: RecordedStep): Act {
   const a = step.action;
   switch (a.type) {
     case "launch": return { type: "boot", apk: flow.apk };
@@ -125,7 +127,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, { jobs = 1, s
     const file = rec?.file ?? `${String(i).padStart(2, "0")}-${step.id}.png`;
     const r = await runStep(drv, flow, step, rec);
     const stepMs = Math.round(r.ms);
-    const fps = stepMs ? (r.perf.frames ?? 0) * 1000 / stepMs : 0;
+    const fps = r.ms ? (r.perf.frames ?? 0) * 1000 / r.ms : 0;
     // the launch step's window is mostly boot + lazy compilation, not the app's frame loop; and
     // a frame rate measured beside other flows' browsers measures the host, not the app
     const slow = !!(step.animated && step.action.type !== "launch" && flow.minFps && fps < flow.minFps && jobs === 1);
@@ -141,7 +143,10 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, { jobs = 1, s
     runs.push({ id: step.id, index: i, file, semanticHit: r.semanticHit, settled: r.settled.how, settleMs: Math.round(r.settled.ms),
                 busy: Object.keys(r.settled.busy).length ? r.settled.busy : undefined,
                 settleTimedOut: r.settled.how === "timeout", mainLoopWedged: r.wedged, frames,
-                ms: stepMs, perf: r.perf, fps: step.animated ? Math.round(fps) : undefined, slow: slow || undefined,
+                ms: stepMs, perf: r.perf, fps: step.animated ? Math.round(fps) : undefined,
+                glFps: step.animated && r.ms ? (r.perf.glFrames ?? 0) * 1000 / r.ms : undefined,
+                presentFps: step.animated && r.ms && r.perf.presentations !== undefined ? r.perf.presentations * 1000 / r.ms : undefined,
+                slow: slow || undefined,
                 newMissing: r.newMissing.length ? r.newMissing : undefined,
                 nativeRequired: r.nativeRequired.length ? r.nativeRequired : undefined,
                 unreadAttrs: r.unreadAttrs.length ? r.unreadAttrs : undefined,

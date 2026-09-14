@@ -1,7 +1,7 @@
 // Cheap always-on counters. Increments only — no strings, no timers in the hot path
 // beyond the three performance.now() pairs the frame loop already needs.
 export const perf = {
-  frames: 0, frameMs: 0,
+  frames: 0, completedFrames: 0, presentations: 0, frameMs: 0,
   layoutPasses: 0, layoutMs: 0,
   draws: 0, drawMs: 0,
   measureText: 0, measureTextMiss: 0,

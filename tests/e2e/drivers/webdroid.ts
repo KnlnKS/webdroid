@@ -26,10 +26,8 @@ function pageUrl(screen: Screen): string {
 
 const LAUNCH_ARGS = [
   "--site-per-process",
-  "--use-gl=angle", "--use-angle=swiftshader",
   "--font-render-hinting=none", "--disable-lcd-text",
   "--force-device-scale-factor=1", "--hide-scrollbars",
-  "--disable-partial-raster", "--disable-skia-runtime-opts",
   ...(process.env.WEBDROID_JS_FLAGS ? [`--js-flags=${process.env.WEBDROID_JS_FLAGS}`] : []),
 ];
 export const CONTEXT_OPTS = {
@@ -42,7 +40,11 @@ export const CONTEXT_OPTS = {
   geolocation: { latitude: 37.422, longitude: -122.084, accuracy: 20 },
   permissions: ["geolocation"],
 };
-export const launchBrowser = () => chromium.launch({ headless: true, args: LAUNCH_ARGS, ignoreDefaultArgs: ["--disable-features=IsolateOrigins,site-per-process"] });
+export const launchBrowser = (gpu: "software" | "hardware" = "software") => chromium.launch({
+  headless: true,
+  args: [...LAUNCH_ARGS, ...(gpu === "software" ? ["--use-gl=angle", "--use-angle=swiftshader", "--disable-partial-raster", "--disable-skia-runtime-opts"] : [])],
+  ignoreDefaultArgs: ["--disable-features=IsolateOrigins,site-per-process"],
+});
 
 type LaunchOpts = {
   screen?: Screen;

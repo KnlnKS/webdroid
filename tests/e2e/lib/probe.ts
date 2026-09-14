@@ -2,6 +2,7 @@
 // any page script runs; `installProbe` is serialised into it, so it must stay self-contained and
 // reach the runtime only through `globalThis.wd`.
 import { stableFrame } from "./settle";
+import { environmentScript, performAction } from "./actions";
 import type { Screen, UiNode } from "../types";
 
 type ProbeConfig = {
@@ -71,18 +72,6 @@ declare global {
 function installProbe(cfg: ProbeConfig): void {
   if (self !== top) return;
   const g = globalThis as any;
-  if (cfg.fixedMs !== null) {
-    const RealDate = g.Date, fixed = cfg.fixedMs;
-    const Pinned = function (this: unknown, ...a: unknown[]) {
-      if (!new.target) return new RealDate(fixed).toString();
-      return a.length ? new (RealDate as any)(...a) : new RealDate(fixed);
-    } as any;
-    Object.setPrototypeOf(Pinned, RealDate);
-    Pinned.prototype = RealDate.prototype;
-    Pinned.now = () => fixed;
-    g.Date = Pinned;
-  }
-  for (const [k, v] of cfg.storage) if (localStorage.getItem(k) === null) localStorage.setItem(k, v);
 
   const rawSetTimeout = g.setTimeout.bind(g), rawClearTimeout = g.clearTimeout.bind(g);
   const timers = new Map<number, number>();
@@ -243,44 +232,7 @@ function installProbe(cfg: ProbeConfig): void {
   };
   const capture = () => captured ? encode(captured) : screenPng();
 
-  const withDeadline = <T>(p: Promise<T>, ms: number, what: string): Promise<T> =>
-    Promise.race([p, sleep(ms).then(() => { throw new Error(`${what} did not complete within ${ms}ms`); })]);
-  const act = async (a: Act, s: Screen, deadlineMs: number): Promise<boolean | undefined> => {
-    const wd = g.wd;
-    const run = (p: Promise<unknown>) => withDeadline(p, deadlineMs, a.type);
-    switch (a.type) {
-      case "boot": await run(wd.boot(a.apk)); return;
-      case "tapText": {
-        const hit = wd.locateText(a.text) as { x: number; y: number } | null;
-        if (hit) await run(wd.tap(hit.x, hit.y));
-        else if (a.fallback) await run(wd.tap(a.fallback.x * s.width, a.fallback.y * s.height));
-        return !!hit;
-      }
-      case "tap":
-        for (let i = 0; i < (a.repeat ?? 1); i++) {
-          if (i) await sleep(a.everyMs ?? 500);
-          await run(wd.tap(a.x * s.width, a.y * s.height));
-        }
-        return;
-      case "type":
-        if (a.x !== undefined && a.y !== undefined) { await run(wd.tap(a.x * s.width, a.y * s.height)); await sleep(250); }
-        await run(wd.type(a.text));
-        return;
-      case "back": await run(wd.back()); return;
-      case "enter": await run(wd.enter()); return;
-      case "background": await run(wd.background(a.ms)); return;
-      case "swipe": {
-        const count = a.maxSwipes ?? 1;
-        for (let i = 0; i < count; i++) {
-          if (a.untilText && await Promise.resolve(wd.locateText(a.untilText))) return;
-          await run(wd.swipe(a.from[0] * s.width, a.from[1] * s.height, a.to[0] * s.width, a.to[1] * s.height, a.ms));
-          if (a.untilText) await sleep(500);
-        }
-        return;
-      }
-      case "none": return;
-    }
-  };
+  const act = (a: Act, screen: Screen, deadlineMs: number) => performAction({ a, screen, deadlineMs });
 
   const seen = { missing: new Set<string>(), native: new Set<string>(), attrs: new Set<string>(), errors: new Set<string>() };
   const fresh = (key: keyof typeof seen, all: string[]): string[] => {
@@ -303,12 +255,13 @@ function installProbe(cfg: ProbeConfig): void {
     const wedged = !(await wd.alive(spec.aliveMs));
     shooting = false;
     const ms = performance.now() - t0;
+    const counters = { ...wd.perf };
     const png = await capture();
     const frames: string[] = [];
     for (const f of shots) frames.push(await encode(f));
     return {
       png, settled, semanticHit, wedged, error, ms,
-      perf: { ...wd.perf },
+      perf: counters,
       newMissing: fresh("missing", [...wd.rt.missing]),
       nativeRequired: fresh("native", [...wd.rt.nativeRequired].map(([l, a]: [string, string]) => l + " (" + a + ")")),
       unreadAttrs: fresh("attrs", wd.unreadAttrs()),
@@ -323,4 +276,4 @@ function installProbe(cfg: ProbeConfig): void {
 
 /** The init script: the stability rule and the probe, installed with the flow's configuration. */
 export const probeScript = (cfg: ProbeConfig): string =>
-  `(() => { ${stableFrame.toString()}; (${installProbe.toString()})(${JSON.stringify(cfg)}); })();`;
+  `${environmentScript(cfg)}; (() => { ${stableFrame.toString()}; ${performAction.toString()}; (${installProbe.toString()})(${JSON.stringify(cfg)}); })();`;

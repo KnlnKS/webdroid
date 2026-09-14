@@ -48,7 +48,11 @@ setPixelCopyFrame(fb);
 export let frame = fb.getContext("2d")!;
 let screen: ImageBitmapRenderingContext | null = null;
 export function setScreenCanvas(c: HTMLCanvasElement): void { screen = c.getContext("bitmaprenderer"); }
-export function present(): void { screen?.transferFromImageBitmap(fb.transferToImageBitmap()); }
+export function present(): void {
+  if (!screen) return;
+  screen.transferFromImageBitmap(fb.transferToImageBitmap());
+  perf.presentations++;
+}
 
 /** Apply one of ActivityInfo's fixed orientations; all other requests retain the current axes. */
 function applyOrientationRequest(request: number): boolean {

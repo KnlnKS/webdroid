@@ -17,8 +17,8 @@ async function rollup(dir: string) {
       const p = s.perf ?? {};
       t.ms += s.ms ?? 0;
       for (const k of KEYS) {
-        // boot and the compile counters are cumulative gauges; the rest are per-step deltas
-        if (k === "bootMs" || k === "classesCompiled" || k === "compileMs") t[k] = Math.max(t[k] ?? 0, p[k] ?? 0);
+        // perfReset preserves only bootMs; compilation counters are per-step deltas too.
+        if (k === "bootMs") t[k] = Math.max(t[k] ?? 0, p[k] ?? 0);
         else t[k] = (t[k] ?? 0) + (p[k] ?? 0);
       }
     }
