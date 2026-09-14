@@ -71,7 +71,7 @@ export async function runCold(method: ColdMethod, receiver: unknown, args: unkno
             R.su(f.$th); f.$s = 1;
             let value: unknown;
             const suspended = profiled ? performance.now() : 0;
-            jvmProfiler.suspension(method.name);
+            if (profiled) jvmProfiler.suspension(method.name);
             try { value = await step.value; }
             catch (e) { R.st(f.$th); step = iterator.throw(e); continue; }
             finally { if (profiled) jvmProfiler.add(method.name, "suspend", performance.now() - suspended); }
@@ -100,8 +100,10 @@ export async function runCold(method: ColdMethod, receiver: unknown, args: unkno
       }
       method.hotness++;
       if (f.next <= pc) {
-        jvmProfiler.backedge(method.name, method.hotness - method.profiledInstructions);
-        method.profiledInstructions = method.hotness;
+        if (profiled) {
+          jvmProfiler.backedge(method.name, method.hotness - method.profiledInstructions);
+          method.profiledInstructions = method.hotness;
+        }
         if (yielded && method.hotness >= jvmProfiler.hotThreshold && method.promote) {
           f.$osrS = f.$s;
           const handoff = method.promote(f, receiver, args);

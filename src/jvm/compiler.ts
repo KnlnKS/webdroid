@@ -94,7 +94,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unkno
     // Rebuild preparation only for methods that actually promote. Retaining decoded CFGs for
     // every cold async method costs substantially more heap than the saved promotion work.
     const start = performance.now(), src = source(undefined, resumable);
-    jvmProfiler.bytes(profileName, src.length);
+    if (jvmProfiler.enabled) jvmProfiler.bytes(profileName, src.length);
     if (owner.hotSourceBytes + src.length > 32 * 1024 * 1024) {
       calls = -Infinity;
       cold!.promote = undefined;
@@ -105,7 +105,8 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unkno
     owner.hotSourceBytes += src.length;
     perf.compileMs += performance.now() - start;
     if (typeof compiled !== "function") throw new Error("invalid compiled method");
-    hot = compiled; osrCapable = resumable; perf.hotMethods++; jvmProfiler.promoted(profileName);
+    hot = compiled; osrCapable = resumable; perf.hotMethods++;
+    if (jvmProfiler.enabled) jvmProfiler.promoted(profileName);
     cold = null;
     return compiled;
   };
@@ -120,7 +121,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unkno
     };
   }
   return target[rec.mangled] = function(this: unknown, ...args: unknown[]) {
-    jvmProfiler.entry(profileName);
+    if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
     if (hot) {
       if (!jvmProfiler.enabled) return hot.apply(this, args);
       const started = performance.now(), result = hot.apply(this, args);
@@ -232,12 +233,14 @@ class MethodCompiler {
         break;
       }
     }
-    const signature = parseMethodDesc(this.desc);
-    const primitiveSignature = signature.params.every((type) => type.length === 1) && signature.ret.length === 1;
-    const hasBackedge = this.instructions.some((ins) => this.branchTargets(ins).some((target) => target <= ins.pc));
-    const wasmEligible = !this.hasTries && primitiveSignature && hasBackedge &&
-      this.instructions.some((ins) => isWasmNumericOpcode(ins.op)) && this.instructions.every((ins) => isWasmRegionOpcode(ins.op));
-    jvmProfiler.eligibility(profileName, this.instructions.length, wasmEligible);
+    if (profiled) {
+      const signature = parseMethodDesc(this.desc);
+      const primitiveSignature = signature.params.every((type) => type.length === 1) && signature.ret.length === 1;
+      const hasBackedge = this.instructions.some((ins) => this.branchTargets(ins).some((target) => target <= ins.pc));
+      const wasmEligible = !this.hasTries && primitiveSignature && hasBackedge &&
+        this.instructions.some((ins) => isWasmNumericOpcode(ins.op)) && this.instructions.every((ins) => isWasmRegionOpcode(ins.op));
+      jvmProfiler.eligibility(profileName, this.instructions.length, wasmEligible);
+    }
     this.prepared = { instructions: this.instructions, leaders: this.leaders, sync: this.sync };
   }
 
