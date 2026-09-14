@@ -3766,3 +3766,16 @@ child-process bootstrap/compiler/activity failures that call `console.error`
 inside a catch and therefore do not trigger `pageerror`. It supplements bounded
 process snapshots without relabeling unavailable child logs or counters as empty.
 Harness typecheck passes; production code remains frozen at 39059ba.
+
+Combined FitNotes initially crosses the latency guard in three pairs (median
+proxy +5.56%, median p95 +9.07%), so it is extended to seven before retention.
+The full seven give CPU 54.895 -> 53.614 ms/s (-2.33%), per-window median proxy
+6.45 -> 6.70 ms (+3.88%), median p95 10.935 -> 11.035 ms (+0.91%), retained JS
+heap 172.557 -> 171.853 MB. Median proxy worsens in four pairs, p95 in three;
+all 14 windows deliver 14 inputs/proxies with no in-flight action and 2277 cold
+calls. Observed foreground/browser errors and reported missing/native sets are
+empty; child log/performance/queue telemetry remains unavailable. The predefined
+seven-pair guard passes, without a latency improvement claim. An exact combined
+minus-operands control was identified but is not run because the extended guard
+does not establish a repeatable >5% regression. Raw results remain in the JVM
+worktree under `webdroid-shots/jvm/combined-apps/fitnotes/`.

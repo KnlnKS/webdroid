@@ -75,8 +75,9 @@ not proof that the input changed those pixels. Screenshots and process diagnosti
 the timed window. Alternate revisions, serialize runs, and keep their code stable.
 
 E2E steps and corpus rows also retain snapshots from every reachable frame's emulator
-runtime. Missing telemetry is recorded as null, and failed inspection is explicit; neither
-means an empty error list. E2E captures retain browser errors separately from runtime logs.
+runtime. Unavailable log, performance and queue snapshots are null; failed inspection is
+explicit. Neither means an empty error list. Browser exceptions and console errors are
+retained separately from runtime logs, including caught failures in child processes.
 
 `--shots [dir]` records every distinct frame webdroid *presented* during each step, not just
 the settled one that gets diffed — what you need when a step goes wrong (what was drawn on
