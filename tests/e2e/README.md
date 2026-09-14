@@ -64,12 +64,19 @@ ordinary tracking wrappers. `--gpu hardware` uses full bundled Chromium, removes
 software-rendering flags and disables the automatic SwiftShader fallback. The report's
 actual GPU information must confirm acceleration; selecting this mode alone does not.
 The output records the actual GPU, since the browser may still fall back to software.
-Inputs stop one interval before the window ends. Require matching `plannedInputs`/`inputs`
+Inputs start strictly before the window ends. `--interval <ms>` overrides their spacing;
+`--exercise-once` runs each listed action once, for sequences such as legal chess moves.
+`--setup-shots` records setup screenshots and counter snapshots outside the timing window.
+Require matching `plannedInputs`/`inputs`
 and `actionInFlight: false` for complete interaction windows; blocked actions are reported.
 Heap samples follow explicit garbage collection; CDP CPU counters cover a slightly wider
 interval than the in-page window. Input-to-next-presentation is an opportunity proxy,
 not proof that the input changed those pixels. Screenshots and process diagnostics follow
 the timed window. Alternate revisions, serialize runs, and keep their code stable.
+
+E2E steps and corpus rows also retain snapshots from every reachable frame's emulator
+runtime. Missing telemetry is recorded as null, and failed inspection is explicit; neither
+means an empty error list. E2E captures retain browser errors separately from runtime logs.
 
 `--shots [dir]` records every distinct frame webdroid *presented* during each step, not just
 the settled one that gets diffed — what you need when a step goes wrong (what was drawn on

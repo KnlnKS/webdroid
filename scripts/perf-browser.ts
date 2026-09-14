@@ -7,6 +7,7 @@ import { FLOWS } from "../tests/e2e/flows";
 import { actOf, loadManifest, prefsStorage } from "../tests/e2e/capture-webdroid";
 import { CONTEXT_OPTS, launchBrowser } from "../tests/e2e/drivers/webdroid";
 import { environmentScript, performAction } from "../tests/e2e/lib/actions";
+import { readProcesses } from "../tests/e2e/lib/processes";
 import { probeScript } from "../tests/e2e/lib/probe";
 import { PINNED_CLOCK_MS, screenOf, screenParam } from "../tests/e2e/types";
 
@@ -151,14 +152,7 @@ try {
   const metrics = Object.fromEntries(afterMetrics.metrics.map(({ name, value }) => [name, value - (before.metrics.find((m) => m.name === name)?.value ?? 0)]));
   const alive = await foreground.evaluate(() => globalThis.wd.alive());
   const tree = await foreground.evaluate(() => globalThis.wd.tree());
-  const processes = await Promise.all(page.frames().map(async (frame) => ({ url: frame.url(),
-    diagnostics: await frame.evaluate(() => {
-      const wd = globalThis.wd;
-      return wd ? { pkg: wd.app()?.host.pkg, ticks: wd.ticks, missing: [...wd.rt.missing], native: [...wd.rt.nativeRequired],
-        errors: wd.logs?.filter((l: string) => /^(error:|window.error:|unhandledrejection:)/.test(l)), perf: wd.perf ? { ...wd.perf } : null,
-        compositor: Reflect.get(wd, "compositorStatus") ?? null } : null;
-    }).catch((e) => ({ failure: String(e) })),
-  })));
+  const processes = await readProcesses(page);
   await mkdir(dirname(values.out), { recursive: true });
   await page.screenshot({ path: values.out.replace(/\.json$/, "") + ".png" });
   const output = { flow: flow.app, after: values.after, exercise: values.exercise, url: url.href, browser: browser.version(),

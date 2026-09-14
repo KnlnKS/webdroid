@@ -5,6 +5,7 @@ import { readdirSync } from "node:fs";
 import { argv } from "./args";
 import { BASE_URL } from "../tests/e2e/lib/util";
 import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
+import { readProcesses, type ProcessSnapshot } from "../tests/e2e/lib/processes";
 
 const args = process.argv.slice(2);
 const { opt, positional } = argv(args, ["--json", "--wait"]);
@@ -21,6 +22,8 @@ interface Row {
   missing: string[];
   errors: string[];
   note: string;
+  processes?: ProcessSnapshot[];
+  browserErrors?: string[];
 }
 
 const browser = await launchBrowser();
@@ -29,7 +32,7 @@ const rows: Row[] = [];
 async function boot(page: Page, apk: string): Promise<Row> {
   const row: Row = { apk, ok: false, ticks: 0, drew: false, bootMs: 0, classes: 0, missing: [], errors: [], note: "" };
   const errors: string[] = [];
-  page.on("pageerror", (e) => errors.push(String(e).slice(0, 200)));
+  page.on("pageerror", (e) => errors.push(String(e)));
   try {
     await page.goto(`${BASE_URL}/?apk=${encodeURIComponent(apk)}`, { waitUntil: "load", timeout: 60000 });
     // a frame having been drawn is the only evidence that matters; ticks alone can spin on a
@@ -48,6 +51,8 @@ async function boot(page: Page, apk: string): Promise<Row> {
     row.note = String(e).split("\n")[0].slice(0, 160);
     row.errors = errors.slice(0, 6);
   }
+  row.processes = await readProcesses(page);
+  row.browserErrors = [...errors];
   return row;
 }
 

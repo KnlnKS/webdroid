@@ -8,6 +8,7 @@ import { E2E_DIR } from "./lib/util";
 import { PINNED_CLOCK_MS, screenOf, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step } from "./types";
 import { parseScreen } from "../../src/shell/config";
 import type { Act, Settled, StepResult } from "./lib/probe";
+import { readProcesses, type ProcessSnapshot } from "./lib/processes";
 
 export type StepRun = {
   id: string; index: number; file: string;
@@ -42,10 +43,11 @@ export type StepRun = {
   /** WebView frames on screen at the end of the step — the only evidence a page loaded. */
   web?: { url: string | null; title: string; loaded: boolean }[];
   error?: string;
+  processes?: ProcessSnapshot[];
 };
 
 /** What `actual/<flow>/run.json` holds: the steps plus how the run was driven. */
-export type FlowRun = { jobs: number; screen: string; steps: StepRun[] };
+export type FlowRun = { jobs: number; screen: string; steps: StepRun[]; browserErrors?: string[] };
 
 /** Wipe the frame-recorder directory. Call once per run, before any flow. */
 export async function prepareShots(dir: string): Promise<void> {
@@ -150,7 +152,8 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, { jobs = 1, s
                 newMissing: r.newMissing.length ? r.newMissing : undefined,
                 nativeRequired: r.nativeRequired.length ? r.nativeRequired : undefined,
                 unreadAttrs: r.unreadAttrs.length ? r.unreadAttrs : undefined,
-                newErrors: r.newErrors.length ? r.newErrors : undefined, web: r.web.length ? r.web : undefined, error: r.error });
+                newErrors: r.newErrors.length ? r.newErrors : undefined, web: r.web.length ? r.web : undefined, error: r.error,
+                processes: await readProcesses(drv.page) });
     const p = r.perf;
     const flags = [
       r.semanticHit === false && !(step.action.type === "tapText" && step.action.optional) ? "coord-fallback" : "",
@@ -176,7 +179,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, { jobs = 1, s
   // Persist the per-step run flags next to the frames so `bun run e2e:diff` can apply the same
   // scoring rules as `bun run e2e` — without this, a standalone diff has no idea the app hung
   // and would quietly report a better number for the same pixels.
-  const run: FlowRun = { jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, steps: runs };
+  const run: FlowRun = { jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, steps: runs, browserErrors: [...drv.errors] };
   await Bun.write(`${outDir}/run.json`, JSON.stringify(run, null, 2));
   return runs;
 }

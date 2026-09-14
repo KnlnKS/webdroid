@@ -60,6 +60,7 @@ type LaunchOpts = {
 const SETTLE_DEFAULTS: SettleOpts = { ...DEFAULT_SETTLE, horizonMs: 0, animated: false };
 
 export class WebdroidDriver {
+  readonly errors: string[] = [];
   constructor(private browser: Browser, public page: Page, public screen: Screen) {}
 
   static async launch(opts: LaunchOpts = {}): Promise<WebdroidDriver> {
@@ -68,8 +69,8 @@ export class WebdroidDriver {
     const ctx = await browser.newContext(CONTEXT_OPTS);
     await ctx.addInitScript({ content: probeScript({ fixedMs: opts.fixedMs === undefined ? PINNED_CLOCK_MS : opts.fixedMs, storage: opts.storage ?? [], shots: !!opts.shots }) });
     const page = await ctx.newPage();
-    page.on("pageerror", (e) => console.error("  [page error]", String(e).slice(0, 200)));
     const drv = new WebdroidDriver(browser, page, screen);
+    page.on("pageerror", (e) => { drv.errors.push(String(e)); console.error("  [page error]", String(e).slice(0, 200)); });
     await drv.open(screen);
     return drv;
   }
