@@ -23,6 +23,11 @@ test("TextView measures and paints replacement spans with cached geometry and re
     expect(result.alignment.centers[1]).toBeLessThan(55);
     expect(result.alignment.centers[2]).toBeGreaterThan(80);
     expect(result.alignment).toMatchObject({ own: 4, relative: [5, 3, 5, 3] });
+    expect(result.combined).toMatchObject({ span: [5, 16], original: "a ß replacement trailing words", same: true, pixels: true });
+    expect(result.combined.line).toStartWith("A SS REPLACEMENT");
+    expect(result.combined.line).toEndWith("…");
+    expect(result.combined.width).toBeLessThanOrEqual(80);
+    expect(result.combined.ellipsis).toBeGreaterThan(0);
     expect(errors).toEqual([]);
   } finally { await browser.close(); }
 }, 15000);

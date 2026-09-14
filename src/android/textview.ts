@@ -4,15 +4,15 @@ import {
   type JColorStateList, mkCsl, type JDrawable, loadColorStateList, loadDrawableRV, cslColor, loadDrawable,
   drawChild, drawableSize
 } from "./drawable";
-import { JTextPaint, JEditable, JSpanned, JLayout, spannedString, mkStaticLayout, mkSpannedLayout, drawLayout } from "./text";
+import { JTextPaint, JEditable, JSpanned, JLayout, spannedString } from "./text";
 import { G, gravityV, gravityH } from "./gravity";
 import { isRtl } from "./bidiformatter";
 import { device } from "../shell/config";
 import {
   fontDescent, fontAscent, fontTop, fontBottom, measureText, typefaceFor, JTypeface, tfDefault, type JRect,
-  type JCanvas, cssColor, tfMedium, beginPaintShadow
+  type JCanvas, cssColor, tfMedium
 } from "./graphics";
-import { vcall, vcallOn, curThread, mkEnumSet, newObj } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, curThread, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import {
   attrTable, type Resources, resolveStyleValue, rvDimen, rvColor, rvInt, rvFloat, type RV, rvString, type JAttrSet,
   obtainStyled
@@ -22,39 +22,7 @@ import { fontResource } from "./fonts";
 import { type NativeSpec, callSelf, rt, JObj, stubs, noops } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { usLocale } from "../jvm/natives/jvalues";
-import { perf } from "../perf";
-
-/** one wrap result: the lines, each line's width, and the widest */
-export type Wrapped = { lines: string[]; widths: number[]; maxW: number };
-const NO_LINES: Wrapped = { lines: [], widths: [], maxW: 0 };
-/**
- * Line breaking memo. Every input the breaker reads is part of the key, so any change that alters
- * the lines misses and nothing has to invalidate it; letter spacing is keyed on its own because
- * font() leaves it out. Two widths are kept because onMeasure wraps at the space it is offered
- * and then at the width it settles on.
- */
-class WrapMemo {
-  text = ""; font = ""; ls = NaN; max = NaN; single = false; ell = false;
-  a0 = NaN; w0 = NO_LINES; a1 = NaN; w1 = NO_LINES;
-  get(tv: JTextView, text: string, avail: number): Wrapped {
-    const p = tv.paintT, font = p.font();
-    if (text === this.text && font === this.font && p.letterSpacingEm === this.ls && tv.maxLinesV === this.max &&
-        tv.singleLine === this.single && tv.ellipsizeEnd === this.ell) {
-      if (avail === this.a0) { perf.wrapHits++; return this.w0; }
-      if (avail === this.a1) { perf.wrapHits++; return this.w1; }
-    } else {
-      this.text = text; this.font = font; this.ls = p.letterSpacingEm; this.max = tv.maxLinesV;
-      this.single = tv.singleLine; this.ell = tv.ellipsizeEnd;
-      this.a0 = this.a1 = NaN;
-    }
-    const lines = tv.breakLines(text, avail), widths = new Array<number>(lines.length);
-    let maxW = 0;
-    for (let i = 0; i < lines.length; i++) { const w = measureText(p, lines[i]); widths[i] = w; if (w > maxW) maxW = w; }
-    this.a1 = this.a0; this.w1 = this.w0;
-    this.a0 = avail;
-    return (this.w0 = { lines, widths, maxW });
-  }
-}
+import { TextViewLayouts, drawTextViewLayout, layoutHeight } from "./textview-layout";
 
 export class JTextView extends JView {
   fallbackLineSpacing = true;
@@ -67,9 +35,6 @@ export class JTextView extends JView {
   imeOptions = 0; breakStrategy = 0; hyphenation = 0; autoSizeType = 0;
   linksClickable = true; fontVariation: string | null = null;
   maxW = Infinity;
-  /** getLayout's StaticLayout and the inputs it was built from */
-  layoutObj: unknown = null;
-  layoutText = ""; layoutW = NaN; layoutFont = ""; layoutMax = NaN; layoutLS = NaN; layoutMult = NaN; layoutExtra = NaN;
   text = "";
   rawText: unknown = "";       // original CharSequence (may be Spannable)
   hint = "";
@@ -102,13 +67,9 @@ export class JTextView extends JView {
   cursorVisible = true;
   /** when the caret last restarted its blink: focus and every edit, as AOSP's Editor.Blink does */
   blinkStart = 0;
-  /** the lines this view laid out and draws, with each line's width */
-  lines: string[] = [];
-  lineWidths: number[] = [];
-  wrapMemo: WrapMemo | null = null; hintMemo: WrapMemo | null = null;
+  layout: JLayout | null = null;
+  textLayouts: TextViewLayouts | null = null; hintLayouts: TextViewLayouts | null = null;
   layoutWidthFor = -1;
-  spanLayout: JLayout | null = null;
-  spanFont = ""; spanLS = NaN; spanMax = NaN;
   inputTypeV = 1;
   styleBits = 0;
   includePad = true;
@@ -146,64 +107,6 @@ export class JTextView extends JView {
   bottomPad(): number { return this.includePad ? Math.round(fontBottom(this.paintT) - fontDescent(this.paintT)) : 0; }
   textHeight(lines: number): number { return lines * this.lineHeight() + this.topPad() + this.bottomPad(); }
   ascent(): number { return Math.round(-fontAscent(this.paintT)) + this.topPad(); }
-  /** line breaking of `text` at `avail`: a pure function of its arguments, the paint and the
-   *  flags WrapMemo keys on. Callers go through linesFor/hintFor. */
-  breakLines(text: string, avail: number): string[] {
-    perf.wraps++;
-    if (avail <= 0) return text ? [text] : [];
-    // measureText memoises on (font, string) and applies letter spacing; ctx.measureText did
-    // neither, so every probe of the break search went to the browser and no line accounted for
-    // android:letterSpacing that android.text.* has always honoured.
-    const mw = (t: string) => measureText(this.paintT, t);
-    const out: string[] = [];
-    for (const hard of text.split("\n")) {
-      if (this.singleLine || this.maxLinesV === 1) { out.push(hard); break; }
-      if (mw(hard) <= avail) { out.push(hard); continue; }
-      // a word wider than the line is hard-broken; emit full lines and return what is left over
-      const breakWide = (l: string) => {
-        while (mw(l) > avail && l.length > 1) {
-          let lo = 1, hi = l.length;
-          while (lo < hi) {
-            const mid = (lo + hi + 1) >> 1;
-            if (mw(l.slice(0, mid)) <= avail) lo = mid;
-            else hi = mid - 1;
-          }
-          out.push(l.slice(0, lo));
-          l = l.slice(lo);
-        }
-        return l;
-      };
-      let line = "";
-      for (const word of hard.split(/(\s+)/)) {
-        if (!word) continue;
-        if (mw(line + word) <= avail || !line) line = breakWide(line + word);
-        else {
-          // the pending line can itself be one over-long word, parked here by an earlier break
-          const rest = breakWide(line.trimEnd());
-          if (rest) out.push(rest);
-          line = word.trimStart();
-        }
-      }
-      if (line) { const rest = breakWide(line.trimEnd()); if (rest) out.push(rest); }
-    }
-    while (out.length > this.maxLinesV) out.pop();
-    if (out.length && this.ellipsizeEnd) {
-      const last = out[out.length - 1];
-      let shown = out.length - 1;
-      for (const l of out) shown += l.length;
-      if (shown < text.length || mw(last) > avail) {
-        let lo = 0, hi = last.length;
-        while (lo < hi) {
-          const mid = (lo + hi + 1) >> 1;
-          if (mw(last.slice(0, mid) + "…") <= avail) lo = mid;
-          else hi = mid - 1;
-        }
-        if (lo && last.charCodeAt(lo - 1) >= 0xd800 && last.charCodeAt(lo - 1) <= 0xdbff) lo--;
-        out[out.length - 1] = last.slice(0, lo) + "…";
-      }
-    }
-    return out;
-  }
   async notifyWatchers() {
     for (const w of this.watchers) {
       try {
@@ -218,45 +121,10 @@ export class JTextView extends JView {
     this.editObj.text = this.text;
     return this.editObj;
   }
-  /** the text's lines at `avail` */
-  linesFor(avail: number): Wrapped { return (this.wrapMemo ??= new WrapMemo()).get(this, this.displayText(), avail); }
-  measuredLines(avail: number): Wrapped | Promise<Wrapped> {
-    const cs = this.rawText;
-    if (!(cs instanceof JSpanned) || !cs.spans.some(s => rt.iof(s.span, "android/text/style/ReplacementSpan"))) {
-      this.spanLayout = null; return this.linesFor(avail);
-    }
-    return this.spannedLines(cs, avail);
+  measuredLines(avail: number): JLayout | Promise<JLayout> {
+    return (this.textLayouts ??= new TextViewLayouts()).get(this, this.rawText instanceof JSpanned ? this.rawText : this.text, avail);
   }
-  private async spannedLines(cs: JSpanned, avail: number): Promise<Wrapped> {
-    const p = this.paintT, font = p.font(), max = this.singleLine ? 1 : this.maxLinesV;
-    let layout = this.spanLayout;
-    if (!layout || layout.src !== cs || font !== this.spanFont || p.letterSpacingEm !== this.spanLS) {
-      layout = await mkSpannedLayout(cs, p, avail, this.lineSpacingMult, this.lineSpacingExtra, max, this.includePad);
-      this.spanLayout = layout; this.spanFont = font; this.spanLS = p.letterSpacingEm;
-    } else if (layout.width !== avail || this.spanMax !== max || layout.spacingMult !== this.lineSpacingMult ||
-        layout.spacingAdd !== this.lineSpacingExtra || layout.includePad !== this.includePad) {
-      layout.width = Math.max(0, avail); layout.spacingMult = this.lineSpacingMult; layout.spacingAdd = this.lineSpacingExtra;
-      layout.includePad = this.includePad;
-      layout.layoutLines(max);
-      await layout.applyLineHeightSpans();
-    }
-    this.spanMax = max;
-    const lines: string[] = [], widths: number[] = [];
-    let maxW = 0;
-    for (const l of layout.lines) { lines.push(l.text); widths.push(l.width); maxW = Math.max(maxW, l.width); }
-    return { lines, widths, maxW };
-  }
-  /** an empty field draws its hint every frame, so the hint keeps a memo of its own */
-  private hintUpperOf = ""; private hintUpper = "";
-  hintFor(avail: number): Wrapped {
-    let hint = this.hint;
-    if (this.allCaps) {
-      if (this.hintUpperOf !== hint) { this.hintUpperOf = hint; this.hintUpper = hint.toUpperCase(); }
-      hint = this.hintUpper;
-    }
-    return (this.hintMemo ??= new WrapMemo()).get(this, hint, avail);
-  }
-  useLines(w: Wrapped) { this.lines = w.lines; this.lineWidths = w.widths; }
+
 }
 const tvAttr = attrTable(
   "text", "textSize", "textColor", "textStyle", "textAppearance", "hint", "gravity", "maxLines",
@@ -438,7 +306,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setText(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": async function (this: JTextView, cs: unknown) {
     const changedSpans = cs instanceof JSpanned || this.rawText instanceof JSpanned;
     this.rawText = cs;
-    if (changedSpans) this.spanLayout = null;
+    if (changedSpans) this.textLayouts = null;
     const t = spannedString(cs);
     if (t !== this.text || changedSpans) {
       this.text = t;
@@ -617,19 +485,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getMaxWidth()I": function (this: JTextView) { return Number.isFinite(this.maxW) ? this.maxW : 0x7fffffff; },
   // AOSP: null until the first measure; afterwards the Layout over the measured text width
   "getLayout()Landroid/text/Layout;": function (this: JTextView) {
-    if (this.layoutWidthFor < 0) return null;
-    if (this.spanLayout) return this.spanLayout;
-    const dlW = this.drawableL ? compoundWidth(this.drawableL) + this.drawablePad : 0;
-    const drW = this.drawableR ? compoundWidth(this.drawableR) + this.drawablePad : 0;
-    const w = this.layoutWidthFor - this.padL - this.padR - dlW - drW;
-    const p = this.paintT, text = this.displayText(), font = p.font();
-    if (text !== this.layoutText || w !== this.layoutW || font !== this.layoutFont || this.maxLinesV !== this.layoutMax ||
-        p.letterSpacingEm !== this.layoutLS || this.lineSpacingMult !== this.layoutMult || this.lineSpacingExtra !== this.layoutExtra) {
-      this.layoutText = text; this.layoutW = w; this.layoutFont = font; this.layoutMax = this.maxLinesV;
-      this.layoutLS = p.letterSpacingEm; this.layoutMult = this.lineSpacingMult; this.layoutExtra = this.lineSpacingExtra;
-      this.layoutObj = mkStaticLayout(text, p, w, this.lineSpacingMult, this.lineSpacingExtra, Number.isFinite(this.maxLinesV) ? this.maxLinesV : undefined);
-    }
-    return this.layoutObj;
+    return this.layoutWidthFor < 0 ? null : this.layout;
   },
   "getLineBounds(ILandroid/graphics/Rect;)I": function (this: JTextView, i: number, r: JRect) {
     const lh = this.lineHeight(), w = this.layoutWidthFor >= 0 ? this.layoutWidthFor : this.width();
@@ -661,7 +517,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     return (this.paintT.strikeThru ? 16 : 0) | (this.paintT.underline ? 8 : 0) | 1;
   },
   "getLineHeight()I": function (this: JTextView) { return this.lineHeight(); },
-  "getLineCount()I": function (this: JTextView) { return this.lines.length; },
+  "getLineCount()I": function (this: JTextView) { return this.layout?.lines.length ?? 0; },
   "getBaseline()I": function (this: JTextView) { return this.padT + this.ascent(); },
   "getEditableText()Landroid/text/Editable;": function (this: JTextView) { return this.getEditable(); },
   "setEnabled(Z)V": function (this: JTextView, e: number) { this.enabled = !!e; void this.refreshDrawableState(); },
@@ -678,11 +534,12 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (wMode === MS_EXACTLY) {
       w = wSize;
       const measured = this.measuredLines(w - this.padL - this.padR - dlW);
-      this.useLines(measured instanceof Promise ? await measured : measured);
+      this.layout = measured instanceof Promise ? await measured : measured;
     } else {
       const measured = this.measuredLines(availText);
       let lay = measured instanceof Promise ? await measured : measured;
-      let tw = lay.maxW;
+      let tw = 0;
+      for (const line of lay.lines) tw = Math.max(tw, line.width);
       if (!display && this.hint) tw = Math.max(tw, measureText(this.paintT, this.hint));
       w = Math.max(Math.ceil(tw) + dlW, compoundWidth(this.drawableT), compoundWidth(this.drawableB)) + this.padL + this.padR;
       const min = vcallOn(thread, this, "getSuggestedMinimumWidth", "()I");
@@ -696,12 +553,12 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
         const measured = this.measuredLines(finalAvail);
         lay = measured instanceof Promise ? await measured : measured;
       }
-      this.useLines(lay);
+      this.layout = lay;
     }
-    const lineCount = Math.max(this.lines.length, display || this.hint ? 1 : 0, this.minLinesV);
+    const lineCount = Math.max(this.layout?.lines.length ?? 0, display || this.hint ? 1 : 0, this.minLinesV);
     const vPad = this.padT + this.padB;
     let h = this.textHeight(lineCount) + vPad + dtH;
-    if (this.spanLayout) h = Math.max(h, this.spanLayout.lineTop(this.spanLayout.lines.length) + (this.spanLayout.tops ? 0 : this.spanLayout.padBottom) + vPad + dtH);
+    if (this.layout) h = Math.max(h, layoutHeight(this.layout) + vPad + dtH);
     h = Math.max(h, this.minH, (this.drawableL ? compoundHeight(this.drawableL) : 0) + vPad, (this.drawableR ? compoundHeight(this.drawableR) : 0) + vPad);
     if (specMode(hSpec) !== MS_EXACTLY) {
       const min = vcallOn(thread, this, "getSuggestedMinimumHeight", "()I");
@@ -728,10 +585,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (this.layoutWidthFor !== this.width()) {
       const measured = this.measuredLines(avail);
       if (measured instanceof Promise) return measured.then(lay => {
-        this.useLines(lay); this.layoutWidthFor = this.width();
+        this.layout = lay; this.layoutWidthFor = this.width();
         return callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", this, cv);
       });
-      this.useLines(measured); this.layoutWidthFor = this.width();
+      this.layout = measured; this.layoutWidthFor = this.width();
     }
     const contentT = compoundPadT.call(this), contentB = this.height() - compoundPadB.call(this);
     const draw = async (d: JDrawable | null, x: number, y: number) => {
@@ -744,46 +601,23 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (this.drawableR) await draw(this.drawableR, this.width() - this.padR - drW, contentT + (contentB - contentT - compoundHeight(this.drawableR)) / 2);
     if (this.drawableT) await draw(this.drawableT, contentL + (avail - compoundWidth(this.drawableT)) / 2, this.padT);
     if (this.drawableB) await draw(this.drawableB, contentL + (avail - compoundWidth(this.drawableB)) / 2, this.height() - this.padB - compoundHeight(this.drawableB));
-    if (!showHint && this.spanLayout) {
-      const layout = this.spanLayout, vg = gravityV(this.gravityT);
-      const height = layout.lineTop(layout.lines.length) + (layout.tops ? 0 : layout.padBottom);
-      const y = vg === 16 ? (contentB - contentT - height) / 2 + contentT : vg === 80 ? contentB - height : contentT;
-      this.paintT.color = cslColor(this.colors, this.drawableState());
-      ctx.save(); ctx.translate(contentL, y);
-      return drawLayout.call(layout, cv, hg).finally(() => ctx.restore());
-    }
-    const hintLay = showHint ? this.hintFor(avail) : null;
-    const lines = hintLay ? hintLay.lines : this.lines, widths = hintLay ? hintLay.widths : this.lineWidths;
-    if (!lines.length && !this.editable) return;
-    const lh = this.lineHeight();
-    const totalH = this.textHeight(Math.max(1, lines.length));
-    const vg = gravityV(this.gravityT);
-    let y = (vg === 16 ? (contentB - contentT - totalH) / 2 + contentT
-      : vg === 80 ? contentB - totalH : contentT) + this.ascent();
-    ctx.font = this.paintT.font();
-    ctx.fillStyle = cssColor(showHint ? cslColor(this.hintColors ?? this.colors, this.drawableState()) : cslColor(this.colors, this.drawableState()));
-    ctx.textBaseline = "alphabetic";
-    ctx.textAlign = hg === 1 ? "center" : hg === 5 ? "right" : "left";
-    const x = hg === 1 ? (contentL + contentR) / 2 : hg === 5 ? contentR : contentL;
-    const shadow = beginPaintShadow(ctx, this.paintT);
+    const pending = showHint ? (this.hintLayouts ??= new TextViewLayouts()).get(this, this.hint, avail) : this.layout;
+    const layout = pending instanceof Promise ? await pending : pending;
+    if (!layout) return;
+    const vg = gravityV(this.gravityT), height = Math.max(layoutHeight(layout), this.textHeight(1));
+    const y = vg === 16 ? (contentB - contentT - height) / 2 + contentT : vg === 80 ? contentB - height : contentT;
+    this.paintT.color = cslColor(showHint ? this.hintColors ?? this.colors : this.colors, this.drawableState());
+    ctx.save(); ctx.translate(contentL, y);
     try {
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        ctx.fillText(line, x, y);
-        if (this.paintT.strikeThru && line) {
-          const w = widths[i];
-          const sx = hg === 1 ? x - w / 2 : hg === 5 ? x - w : x;
-          ctx.fillRect(sx, y - this.paintT.textSize * 0.3, w, Math.max(1, this.paintT.textSize / 14));
-        }
-        y += lh;
-      }
-    } finally { if (shadow) ctx.restore(); }
+      const drawn = callOn(thread, () => drawTextViewLayout(layout, cv, hg));
+      if (drawn instanceof Promise) await drawn;
+    } finally { ctx.restore(); }
     if (this.editable && this.focused && this.cursorVisible && Math.floor((performance.now() - this.blinkStart) / 500) % 2 === 0) {
-      const cw = widths[lines.length - 1] ?? 0;
-      const cx = (hg === 1 ? x + cw / 2 : hg === 5 ? x : x + cw) + 1;
-      const cy = y - lh;
+      const cw = layout.lines.at(-1)?.width ?? 0;
+      const cx = contentL + (hg === 1 ? (avail + cw) / 2 : hg === 5 ? avail : cw) + 1;
+      const cy = y + layout.baseline(Math.max(0, layout.lines.length - 1));
       ctx.fillStyle = cssColor(cslColor(this.colors, []));
-      ctx.fillRect(cx, cy - this.ascent(), 3, lh);
+      ctx.fillRect(cx, cy - this.ascent(), 3, this.lineHeight());
     }
   },
 };

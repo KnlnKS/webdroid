@@ -34,12 +34,12 @@ async function probe() {
   view.right = 100; view.bottom = view.measuredH;
   const canvas = new OffscreenCanvas(100, view.measuredH), ctx = canvas.getContext("2d")!;
   await vcall(view, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 100, view.measuredH));
-  const result = { measures, draws, width: view.lineWidths[0], height: view.measuredH,
+  const result = { measures, draws, width: view.layout?.lines[0].width, height: view.measuredH,
     center: [...ctx.getImageData(50, 16, 1, 1).data], outside: [...ctx.getImageData(10, 16, 1, 1).data],
-    layout: await vcall(view, "getLayout", "()Landroid/text/Layout;") === view.spanLayout };
+    layout: await vcall(view, "getLayout", "()Landroid/text/Layout;") === view.layout };
   await vcall(view, "setText", "(Ljava/lang/CharSequence;)V", "A long title with a location");
   view.singleLine = view.ellipsizeEnd = true;
-  const width = measureText(view.paintT, "A long title…"), wrapped = view.linesFor(width);
+  const width = measureText(view.paintT, "A long title…"), wrapped = await view.measuredLines(width);
   const styles: boolean[] = [];
   for (const style of [0, 1, 2]) {
     const actual = new OffscreenCanvas(100, 60).getContext("2d")!;
@@ -96,8 +96,26 @@ async function probe() {
   const surface = new OffscreenCanvas(60, 70).getContext("2d")!;
   await vcall(compound, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(surface, 60, 70));
   const retained = await Promise.all(drawables.map(async d => { const b = await vcall(d, "getBounds", "()Landroid/graphics/Rect;"); return [b.left, b.top, b.right, b.bottom]; }));
-  return { ...result, styles, alignment, ellipsis: wrapped.lines, cached: wrapped === view.linesFor(width),
-    fitting: view.linesFor(measureText(view.paintT, view.text)).lines, cleared: view.spanLayout === null,
+  const mixed = rt.make("android/widget/TextView");
+  if (!(mixed instanceof JTextView)) throw new Error("Invalid mixed TextView");
+  mixed.paintT.textSize = 12; mixed.singleLine = mixed.ellipsizeEnd = mixed.allCaps = true;
+  const mixedText = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "a ß replacement trailing words");
+  await vcall(mixedText, "setSpan", "(Ljava/lang/Object;III)V", span, 4, 15, 33);
+  await vcall(mixed, "setText", "(Ljava/lang/CharSequence;)V", mixedText);
+  await vcall(mixed, "onMeasure", "(II)V", makeSpec(80, MS_EXACTLY), makeSpec(60, MS_EXACTLY));
+  mixed.right = 80; mixed.bottom = 60;
+  const mixedLayout = await vcall(mixed, "getLayout", "()Landroid/text/Layout;");
+  const mixedCanvas = new OffscreenCanvas(80, 60).getContext("2d")!;
+  const directCanvas = new OffscreenCanvas(80, 60).getContext("2d")!;
+  await vcall(mixed, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(mixedCanvas, 80, 60));
+  await vcall(mixedLayout, "draw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(directCanvas, 80, 60));
+  const directPixels = directCanvas.getImageData(0, 0, 80, 60).data;
+  const combined = { line: mixedLayout.lines[0].text, width: await vcall(mixedLayout, "getLineWidth", "(I)F", 0),
+    ellipsis: await vcall(mixedLayout, "getEllipsisCount", "(I)I", 0),
+    span: [mixedLayout.replacements[0].start, mixedLayout.replacements[0].end], original: mixedText.text,
+    same: mixedLayout === mixed.layout, pixels: mixedCanvas.getImageData(0, 0, 80, 60).data.every((v, i) => v === directPixels[i]) };
+  return { ...result, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
+    fitting: (await view.measuredLines(measureText(view.paintT, view.text))).lines.map(l => l.text), cleared: (await view.measuredLines(width)).replacements.length === 0,
     compound: { drawsAt, retained, restored: surface.getTransform().isIdentity } };
 }
 Object.defineProperty(window, "textViewProbe", { value: probe() });
