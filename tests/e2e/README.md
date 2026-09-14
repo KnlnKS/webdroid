@@ -69,8 +69,24 @@ Inputs start strictly before the window ends. `--interval <ms>` overrides their 
 `--setup-shots` records setup screenshots and counter snapshots outside the timing window.
 Require matching `plannedInputs`/`inputs`
 and `actionInFlight: false` for complete interaction windows; blocked actions are reported.
+`--input-offsets <file.json>` supplies strictly increasing millisecond offsets within the
+window, one ordinary action per offset, cycling the exercise list (or once per action with
+`--exercise-once`). It replaces `--interval`; skipped or unfinished actions invalidate an
+interaction comparison. Outputs retain requested offsets and actual issuance times.
+`--start-exercise <step>` runs one ordinary action after warmup and initial GC, then waits
+100 ms before the measured window; repeated tap steps become one tap.
+`--state-reader <file.js>` loads a trusted, read-only function expression returning JSON
+serializable data. It runs before initial metric sampling and after final metric sampling,
+never inside the timed window. State readers must not write guest fields, invoke guest
+methods, replace clocks, or initiate work. Reader failures are explicit diagnostic objects.
+`--align-presentation` starts a supplemental window after the next successful screen bitmap
+transfer. It waits at most 3 seconds, failing explicitly if no presentation occurs. The
+anchor frame and pre-start rAF samples are excluded; counters, clock and interval origins
+start together after the presenting call unwinds. `anchorWaitMs` and `anchorToStartMs`
+record that boundary. Both revisions must use the same mode. This controls initial frame
+phase; the input proxy still does not establish completed input or changed pixels.
 Heap samples follow explicit garbage collection; CDP CPU counters cover a slightly wider
-interval than the in-page window. Input-to-next-presentation is an opportunity proxy,
+interval than the in-page window, including any presentation-anchor wait. Input-to-next-presentation is an opportunity proxy,
 not proof that the input changed those pixels. Screenshots and process diagnostics follow
 the timed window. Alternate revisions, serialize runs, and keep their code stable.
 
