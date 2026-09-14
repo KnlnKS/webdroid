@@ -3944,7 +3944,7 @@ not comic decoding. Raw evidence is alongside FitNotes in `mihon-app/`.
 
 Final selected-build Resy extends to seven after its third pair reverses both
 opportunity-proxy directions. All samples remain included, including pair five's
-CPU outlier (+7.20%). Complete medians are CPU 201.392 -> 204.222 ms/s (+1.41%),
+CPU outlier (+7.20%). Complete medians are CPU 201.392 -> 204.222 ms/s (+1.40%),
 per-window median proxy 7.05 -> 6.65 ms (-5.67%), p95 11.25 -> 10.505 ms (-6.62%)
 and JS heap 386.983 -> 386.888 MB. Pooled 98-input median is 7.15 -> 6.65 ms,
 p95 12.115 -> 10.615 ms and ranges 1.7–16.6 -> 0.9–13.7 ms. All 14 windows
@@ -3962,3 +3962,33 @@ Mihon and Resy captures. This does not establish zero child-process native work,
 whose performance channels remain unavailable. These results describe the
 production `6cbce0b` selection; a subsequent native synchronization review is
 recorded separately.
+
+### Instruction synchronization after active-region invalidation
+
+Final static review finds a gap beyond byte-range coverage: `code_write` removes
+decoded pages and region entries, but a currently executing JIT region can keep
+using embedded instructions. Installation epoch checks and later dispatch protect
+future entry, not the active region. Existing ARM cacheflush syscall/host exits
+already redispatch; inline barriers did not consistently do so.
+
+A compact A64 fixture writes `MOV w0, #2` over a compiled successor, then performs
+`DC CVAU; DSB ISH; IC IVAU; DSB ISH; ISB`. This follows
+[Arm's cache-maintenance guidance](https://developer.arm.com/community/arm-community-blogs/b/architectures-and-processors-blog/posts/caches-self-modifying-code-implementing-clear-cache):
+instruction synchronization must discard previously fetched successor instructions.
+The modified line is in the same active region. Both pristine `b16d705` and
+selected `1d35eff` reproduce memory containing the new instruction while the JIT
+returns 1 and the interpreter returns 2. Both execute eight instructions; the
+architectural snapshots differ only in the result register. Clang/llvm-objdump
+verifies the encodings. This is experimentally confirmed pre-existing behavior,
+not an earlier documented accepted limitation or a regression from range writes.
+
+Isolated candidate `436ba5e` makes ISB a region-discovery endpoint in A64, ARM
+and Thumb. The existing exit path finishes the instruction, spills architectural
+state and consults current decoded pages before continuing. It adds no checks to
+ordinary stores and no mid-instruction writeback exit. The A64 failure passes,
+along with compact ARM/Thumb writeback, flags and IT-state companions. Typecheck
+and 654 native tests/22192 assertions pass, including the SIMD hardware oracle.
+The fast/safe Wasm cores grow by 44/51 bytes. Unsynchronized self-modification is
+not promised immediate instruction visibility, and this adds no model of
+concurrently executing CPU cores. Evidence is under
+`.worktrees/perf-active-invalidation/webdroid-shots/active-invalidation/`.

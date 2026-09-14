@@ -86,14 +86,16 @@ tests and diagnostic loads pause during serialized performance windows.
   cost. This exercises the existing empty Graph, not populated chart rendering.
 - Final Mihon seven-pair Reader-settings scrolling guard passes: CPU -0.58%, median
   opportunity proxy -0.21%, p95 -1.22%, heap unchanged. This does not measure comic decoding.
-- Final Resy seven-pair aligned navigation guard passes: CPU +1.41%, median opportunity
+- Final Resy seven-pair aligned navigation guard passes: CPU +1.40%, median opportunity
   proxy -5.67%, p95 -6.62%, heap unchanged. Matching live content changes at pair five;
   all samples remain included. None of these three foreground windows executes native code;
   child native-performance telemetry remains unavailable.
 - Final static review identifies a pre-existing active-region invalidation gap: a successful
   code-page store drops future dispatch entries but does not stop the current JIT region.
-  Inline cache barriers do not universally enforce an exit. A focused reproduction and
-  minimal correction are being prepared in an isolated worktree; no runtime verdict yet.
+  A valid A64 cache-maintenance/ISB sequence returns stale code in both pristine and selected
+  builds. Isolated `436ba5e` ends regions at ISB across all three ISAs, preserving the ordinary
+  store path. Typecheck and 654 native tests pass; three-stage native measurements are running
+  before integration. Unsynchronized code mutation is not given a stronger visibility promise.
 - Remaining: the active-region reproduction/correction and affected native
   measurements, then the serialized pristine/final full E2E and
   17-APK corpus matrix. Expected E2E coverage is 12 flows/159 steps, including four scored
