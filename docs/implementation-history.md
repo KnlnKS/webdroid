@@ -1,6 +1,6 @@
 # Engineering constraints and investigation results
 
-Retained findings through 2026-09-11, organized by engineering problem.
+Retained findings through 2026-09-14, organized by engineering problem.
 [PLAN.md](../PLAN.md) owns active work; [AGENTS.md](../AGENTS.md) owns implementation and
 verification rules. This document preserves failure mechanisms, constraints, negative results
 and evidence limits, not a complete API-coverage claim. Older source comments naming AGENTS
@@ -3919,3 +3919,16 @@ case reuses the real DEX fixture across all four tiers, checking nested prefix/
 finally ordering, returned values and initiating-thread restoration. No new
 DEX or mock suite is introduced. All five tier cases/442 assertions and
 typecheck pass after this test-only change; production remains `6cbce0b`.
+
+Final selected-build FitNotes extends to seven alternating pairs because the
+initial tail-latency direction conflicts with later pairs. Median CPU is
+55.106 -> 57.307 ms/s (+3.99%), per-window median opportunity proxy
+6.65 -> 6.35 ms (-4.51%), p95 10.84 -> 11.10 ms (+2.40%) and JS heap
+172.546 -> 172.557 MB. CPU is higher in six of seven pairs, with two individual
+pairs above 5%; the aggregate passes but that near-threshold cost remains.
+Pooling all 98 inputs gives median 6.65 -> 6.60 ms and p95 11.10 -> 11.10 ms,
+with ranges 3.1–12.2 -> 2.8–13.4 ms. All 14 windows complete every input and
+have no new observed diagnostics. The existing fixture's saved workouts leave
+an empty Graph, so this measures tab navigation rather than populated charts.
+Raw pairs and source/harness hashes are in the JVM worktree under
+`webdroid-shots/jvm/final-no-operands/fitnotes/`.

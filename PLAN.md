@@ -66,20 +66,25 @@ tests and diagnostic loads pause during serialized performance windows.
   fixture remain. Promotion and hot-source budgets stay unchanged.
 - Integrated typecheck, 1208 unit tests, eight executed framework exercises and eager/cold
   smoke compilation of all six target APKs pass. Framework coverage gaps are documented.
-- Remaining: combined app guards, full E2E and corpus against matching pristine captures,
-  final implementation-history evidence. Independent stages have retention decisions;
-  combined measurements use production code frozen at 39059ba. Three Doodle pairs retain
-  21–23% faster completed-title startup; three fixed Lichess navigation pairs pass guards.
-  Real Lichess engine replies are verified on both revisions, with differing search work
-  and existing pthread failures explicitly excluded from throughput claims. FitNotes and
-  Mihon pass extended seven-pair window guards, with pooled FitNotes sensitivity disclosed.
-  Resy fails its original median opportunity-proxy guard. A seven-pair exact minus-operands
-  control has an unresolved executor failure; an aligned seven-pair control passes nominally
-  but remains sensitive near the pooled guard. Final selection conservatively drops operands.
-  Typecheck, all 1208 tests, framework exercises and twelve target APK smoke compilations
-  pass again. A final fixture audit adds one required native-to-Java re-entry case; all
-  five DEX tier cases/442 assertions and typecheck pass. Production stays at `6cbce0b`,
-  with harness `dc5d401`. Final Doodle startup is 21.5% faster with stable completed
-  presentations; Lichess navigation passes. Flappy title guards pass on both backends,
-  while bounded frozen gameplay replay fails proof and remains explicitly unverified.
-  Final FitNotes/Mihon/Resy guards and the serialized full E2E/corpus matrix remain.
+- Earlier combined guards at `39059ba` exposed Resy latency sensitivity. An exact
+  minus-operands control also had an unresolved executor failure; an aligned seven-pair
+  comparison passed nominally but did not justify retaining the operand replacement.
+  Full evidence, including unfavorable pairs and aggregation sensitivity, remains in the
+  history. Final production is frozen at `6cbce0b`, with harness `dc5d401`.
+- Final selected-build typecheck, all 1208 tests, framework exercises and twelve target
+  APK smoke compilations pass. A subsequent fixture audit adds one required native-to-Java
+  re-entry case; all five DEX tier cases/442 assertions and typecheck pass against unchanged
+  production. This is not a second full-suite run after that test-only addition.
+- Final Doodle completed-title startup is 21.5% faster with stable completed presentations;
+  secondary rAF p95 rises 4.95%. Lichess navigation passes. Real engine replies are observed
+  on both revisions, but differing search work and existing pthread failures prevent an
+  engine-throughput claim. Doodle's unimplemented accelerometer prevents a verified sustained
+  gameplay workload. Flappy title guards pass on both backends; bounded frozen gameplay
+  replay fails proof and remains explicitly unverified.
+- Final FitNotes seven-pair navigation guard passes: CPU +3.99%, median opportunity proxy
+  -4.51%, p95 +2.40%, heap unchanged. CPU is worse in six pairs, a retained near-threshold
+  cost. This exercises the existing empty Graph, not populated chart rendering.
+- Remaining: final Mihon/Resy guards, then the serialized pristine/final full E2E and
+  17-APK corpus matrix. Expected E2E coverage is 12 flows/159 steps, including four scored
+  flows; capture completion alone is not a correctness verdict. Inspect all diagnostics,
+  visual differences and missing telemetry before the final retention report.
