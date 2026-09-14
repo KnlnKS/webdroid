@@ -71,5 +71,8 @@ tests and diagnostic loads pause during serialized performance windows.
   combined measurements use production code frozen at 39059ba. Three Doodle pairs retain
   21–23% faster completed-title startup; three fixed Lichess navigation pairs pass guards.
   Real Lichess engine replies are verified on both revisions, with differing search work
-  and existing pthread failures explicitly excluded from throughput claims. FitNotes,
-  Mihon, Resy and Flappy combined checks remain before the full matrix.
+  and existing pthread failures explicitly excluded from throughput claims. FitNotes and
+  Mihon pass extended seven-pair window guards, with pooled FitNotes sensitivity disclosed.
+  Resy fails its original median opportunity-proxy guard; a seven-pair exact minus-operands
+  control and a presentation-phase control investigate attribution before retention.
+  Flappy replay verification and the full matrix follow the final source decision.

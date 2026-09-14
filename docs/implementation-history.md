@@ -3805,3 +3805,25 @@ errors occur on both builds. The next comparison isolates the operand change:
 uses port 4126; root remains on 4110. Both HTML entry-point bundles are prewarmed
 before exclusive, alternating measurement. No retention decision is inferred
 from the better CPU, p95 or heap results.
+
+The seven-pair minus-operands/current isolation does not establish a clean
+acceptance result. Inclusive medians are CPU 203.966 -> 204.516 ms/s, input
+opportunity proxy 7.10 -> 7.15 ms and p95 10.580 -> 11.105 ms (+4.96%);
+pooled p95 is 10.815 -> 11.790 ms (+9.02%). Control round seven reports an Okio
+PriorityQueue index -2 and two Kotlin executor NPEs while processing HTTP/2;
+the paired current build has no matching failures. Both still complete inputs
+and display the list, which does not excuse those diagnostics. A model-capacity
+interruption also separates rounds three and four by 2h29; the live venue slots
+advance across that gap. Raw pairs and failures remain in
+`.worktrees/perf-jvm/webdroid-shots/jvm/resy-isolation/`.
+
+The ordinary tap helper sends DOWN, waits 60 ms, then sends UP. A 6–8 ms
+input-to-next-presentation sample therefore precedes click completion and may
+reflect pressed-state feedback or unrelated frame pacing. A supplemental
+`--align-presentation` mode waits for a successful screen transfer, then snapshots
+counters and time after the presenting call unwinds. It excludes the anchor,
+fails after three seconds without a presentation, and changes no guest timing.
+It controls initial phase without turning the opportunity proxy into causal
+destination latency. Earlier measurements and guard failures remain recorded.
+The harness also accepts fixed input offsets and read-only endpoint inspection
+for calibrated gameplay; typecheck passes after these harness-only additions.
