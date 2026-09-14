@@ -8,6 +8,19 @@ at port 4126 with `webdroid_maps_ref`, emulator-5588, API 35 Play Store,
 1080×2424 @480 dpi. Preserve visual goldens. Focus tests on Maps and affected
 platform contracts; run the full serialized E2E suite at the end.
 
+## Review follow-up
+
+All five maintainability findings are implemented: serialization thread ownership, shared
+hierarchy mutations, one drawable dispatch path, one TextView layout result, and removal
+of the legacy Binder object codec. Live Maps directions also exposed and prompted a fix
+for InsetDrawable child replacement. The final matrix exposed a dialog renderer bypassing
+the child-bounds callback; canonical setBounds dispatch fixes it. Typecheck, 903 unit tests,
+Maps compilation and the added dialog pixel regression pass. The repeated final E2E at
+6cb3226 completes 134 steps across 11 flows in 690.7 seconds, with no layout/draw errors,
+nativeRequired entries or main-loop wedges. Visual difference is 36.02%, versus 35.95%
+before the refactors. TikTok's intermittent native fault recurs, so this is not a clean
+regression verdict. Evidence is in the history and `webdroid-shots/maps/quality-*` artifacts.
+
 ## Checkpoint
 
 - Full installed Chrome runs the unchanged APK at port 4126 with JIT enabled.
@@ -81,10 +94,11 @@ platform contracts; run the full serialized E2E suite at the end.
 2. microG returns Roboto for font requests. Vector clip paths and animated-selector
    transitions remain unsupported; SeekBar keyboard/RTL behavior is not covered.
    Optional service/class probes still appear in Maps diagnostics.
-3. Investigate the earlier intermittent TikTok native fault before claiming no regressions.
-   It was absent from the latest run, which has 110 errors and 18 missing APIs versus
-   baseline 81/19. Lichess has 53 errors versus baseline 13, with the same pthread families;
-   an earlier branch run had only 10. Performance and visual comparisons are retained under
+3. Investigate the intermittent TikTok native fault before claiming no regressions.
+   It recurred at 6cb3226: 119 errors and 19 missing APIs, including vsnprintf and
+   FileOutputStream(FileDescriptor), versus the pre-refactor capture's 110/18. It was also
+   observed before the review. Lichess has 28 errors, with the same pthread families;
+   recent runs range from 10 to 53. Performance and visual comparisons are retained under
    `webdroid-shots/maps/` and `tests/e2e/report/`; visual goldens are unchanged.
 4. Work remains isolated on `codex/maps-parity`. Temporary diagnostic source files were
    removed; the comparison worktree at f3fefda is retained and its server is stopped.

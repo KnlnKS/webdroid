@@ -2850,3 +2850,72 @@ change. These results do not justify a clean regression verdict. The prior 3dcc2
 retained as webdroid-shots/maps/e2e-3dcc2d2.log; final-e2e.log, final-e2e-summary.json and
 regression-performance.txt describe a3bf33e. comparison.html pairs the raw Maps previews.
 The source remained frozen during capture, goldens are unchanged, and work is not merged.
+
+
+## Maps maintainability review follow-up
+
+The review at 72547c3 reproduced worker ObjectOutputStream callbacks on the main thread,
+a native detach followed by Java reattachment ending with an attached-parent/detached-child
+mismatch, and a rotated LayerDrawable losing an overridden intrinsic width. The fixes
+carry the operation thread through recursive serialization and short stream reads, share
+awaited hierarchy mutations between Java and native callers, and consolidate drawable
+container painting and sizing. Synchronous native construction is explicitly limited to
+unattached trees. Activity/dialog content replacement and picker/list rebuilds now await
+removal instead of dropping child arrays or queuing stale lifecycle callbacks.
+
+Binder Parcel side tables now transport Binder handles only. Serializable values already
+use ObjectStream bytes; the unused graph codec and its protocol branch are removed.
+TextView uses a single two-width layout cache for measurement, drawing and getLayout,
+with one line array and shared replacement-span measurement. The ordinary text draw path
+remains synchronous. Uppercase expansion remaps span offsets; ellipsis respects replacement
+boundaries and is reported through Layout. A browser regression combines all-caps,
+replacement spans and ellipsis and compares TextView pixels with its returned Layout.
+
+A live City Hall to Ferry Building directions check additionally exposed the missing
+InsetDrawable.setDrawable API, producing repeated layout errors. InsetDrawable now uses
+DrawableWrapper rather than LayerDrawable, including replacement callbacks, bounds,
+padding, pixel/fractional inset sizes and opacity. Android 35 SDK InsetDrawable.java and
+DrawableWrapper.java supplied the platform evidence; focused tests cover both inset units.
+
+Fresh full Chrome captures reach Ferry Building details, City Hall directions and two
+preview maneuvers. Street geometry eventually settles, with 554 GL frames and zero
+layout/draw/GL errors at the first preview capture. Initial tile preparation is still slow;
+the observed 33-second boot was recorded with interactive diagnostics and competing local
+work, so it is not a controlled performance comparison. The Android reference renders the
+same first maneuver. `quality-comparison.html` pairs the screenshots; the place and
+directions images precede settled tiles, while `chrome-quality-preview.png` includes them.
+Fonts, shadows and system bars still differ. No exact parity claim is warranted.
+
+Typecheck and all 903 unit tests (23,052 assertions) passed, and Maps compiled 72,887
+classes with zero method failures. The first final matrix at 4e0ca33 completed 134 steps
+in 686.4 seconds without layout/draw errors or main-loop wedges, but visual inspection
+caught a real regression: Harmonic's dialog card was transparent. DialogRoot assigned the
+background's bounds fields directly, bypassing InsetDrawable's child-bounds callback.
+Using the canonical virtual setBounds fixes it without adding another drawable path. A
+browser pixel regression fails before this change (transparent center) and passes after
+(opaque red center). Typecheck passes again. The first matrix is retained in
+`quality-e2e-before-dialog-fix.log`; the final matrix is repeated at 6cb3226.
+
+The repeated matrix completes all 134 steps across 11 flows in 690.7 seconds with one
+job and exit code zero. Every run.json is fresh, records advancing frames, and has no
+main-loop wedge, layout/draw error, step error or nativeRequired entry. Resy's venue photo
+renders and all 12 steps have zero missing APIs/errors. Harmonic's opaque rounded dialog
+is restored in its actual APK capture. Content differences are Mihon app 57.45%, FitNotes
+40.71%, Harmonic 28.36% and onboarding 17.56%: mean 36.02%, versus 35.95% before review.
+Mihon's changing empty-state faces and Harmonic's live story content account for observed
+capture differences; unchanged settings screens retain their prior scores.
+
+TikTok again hits the previously recorded libttmplayer vsnprintf bad-address fault and
+missing FileOutputStream(FileDescriptor), totaling 119 errors/19 missing APIs versus
+110/18 in the saved pre-refactor run. The preceding 4e0ca33 matrix matched that saved
+run's normalized error families exactly. This establishes recurrence, not the fault's
+cause or resolution. Lichess logs 28 errors from the existing pthread families (53 in
+the saved capture, 10 in the preceding matrix). No clean regression verdict is claimed.
+
+Chrome Maps was idle and the owned AVD paused for the repeated matrix; no competing
+E2E process was observed. Flappy Bird's minimum was 27 fps versus 29 in the saved run.
+The performance rollup is retained in quality-performance.txt. FitNotes layout passes
+fall from 68 to 55 while wrapping remains 374; timing changes are mixed, and the saved
+baseline had competing work, so these runs do not establish a general speed improvement.
+Both the emulator and full Chrome Maps session are restored after capture. Source stayed
+frozen during each matrix, visual goldens are unchanged, and the branch is not merged.
