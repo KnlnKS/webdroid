@@ -1,17 +1,20 @@
-import { JDrawable } from "./drawable";
+import { JDrawable, JColorStateList } from "./drawable";
 import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreator } from "./parcel";
 // android.text.* — TextPaint, TextUtils, Spannable/Editable (spans stored, minimally styled).
 
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { vcall, vcallOn, curThread, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import { type JDate, type JCalendar } from "../jvm/natives/jtime";
-import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances, type JRect, type JBitmap } from "./graphics";
+import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances, type JRect, type JBitmap, JTypeface } from "./graphics";
+import { AID, JTypedArray } from "./res";
+import { TV } from "./axml";
+import { fontResource } from "./fonts";
 import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
 import { localeDirection } from "../jvm/natives/jvalues";
 import { JPersistableBundle, bundleBox } from "./os";
-import { type JLocaleList, readLocaleList } from "./resnative";
+import { JLocaleList, readLocaleList } from "./resnative";
 import type { JLocale } from "../jvm/natives/jvalues";
 
 class JAnnotation extends JObj { key: string | null = null; value: string | null = null; }
@@ -393,6 +396,104 @@ rt.register({
   },
 });
 class JReplacementSpan extends JMetricAffectingSpan {}
+class JTextAppearanceSpan extends JMetricAffectingSpan {
+  family: string | null = null; style = 0; size = -1; color: JColorStateList | null = null; linkColor: JColorStateList | null = null;
+  typeface: JTypeface | null = null; weight = -1; locales: JLocaleList | null = null;
+  shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
+  elegant: number | null = null; spacing: number | null = null; features: string | null = null; variations: string | null = null;
+}
+const appearanceAttrs = ["textColor", "textColorLink", "textSize", "textStyle", "fontFamily", "typeface", "textFontWeight", "textLocale",
+  "shadowRadius", "shadowDx", "shadowDy", "shadowColor", "elegantTextHeight", "letterSpacing", "fontFeatureSettings", "fontVariationSettings"];
+async function appearanceInit(this: JTextAppearanceSpan, context: JObj, style: number) {
+  const thread = curThread, a = await vcallOn(thread, context, "obtainStyledAttributes", "(I[I)Landroid/content/res/TypedArray;", style, new Int32Array(appearanceAttrs.map(AID)));
+  if (!(a instanceof JTypedArray)) throw new Error("Invalid appearance attributes");
+  const get = (method: string, desc: string, ...args: unknown[]) => vcallOn(thread, a, method, desc, ...args);
+  const string = async (index: number) => { const value = await get("getString", "(I)Ljava/lang/String;", index); return typeof value === "string" ? value : null; };
+  const color = async (index: number) => { const value = await get("getColorStateList", "(I)Landroid/content/res/ColorStateList;", index); return value instanceof JColorStateList ? value : null; };
+  try {
+    this.color = await color(0);
+    this.linkColor = await color(1);
+    this.size = Number(await get("getDimensionPixelSize", "(II)I", 2, -1));
+    this.style = Number(await get("getInt", "(II)I", 3, 0));
+    const font = a.vals[4];
+    if (font?.t === TV.REFERENCE && !await vcallOn(thread, context, "isRestricted", "()Z")) this.typeface = await fontResource(a.res, font.d);
+    if (!this.typeface) this.family = await string(4) ?? [null, "sans", "serif", "monospace"][Number(await get("getInt", "(II)I", 5, 0))] ?? null;
+    this.weight = Number(await get("getInt", "(II)I", 6, -1));
+    const locale = await string(7);
+    if (locale) {
+      const locales = await vcallOn(thread, rt.link("android/os/LocaleList").ctor, "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", locale);
+      if (locales instanceof JLocaleList && locales.values.length) this.locales = locales;
+    }
+    this.shadowRadius = Number(await get("getFloat", "(IF)F", 8, 0));
+    this.shadowDx = Number(await get("getFloat", "(IF)F", 9, 0));
+    this.shadowDy = Number(await get("getFloat", "(IF)F", 10, 0));
+    this.shadowColor = Number(await get("getColor", "(II)I", 11, 0));
+    if (await get("hasValue", "(I)Z", 12)) this.elegant = Number(await get("getBoolean", "(IZ)Z", 12, 0));
+    if (await get("hasValue", "(I)Z", 13)) this.spacing = Number(await get("getFloat", "(IF)F", 13, 0));
+    this.features = await string(14);
+    this.variations = await string(15);
+  } finally { await get("recycle", "()V"); }
+}
+async function appearanceMeasure(this: JTextAppearanceSpan, paint: JTextPaint) {
+  const thread = curThread, call = (method: string, desc: string, ...args: unknown[]) => vcallOn(thread, paint, method, desc, ...args);
+  const fonts = rt.link("android/graphics/Typeface").ctor;
+  const create = async (desc: string, ...args: unknown[]) => {
+    const value = await vcallOn(thread, fonts, "create", desc, ...args);
+    if (!(value instanceof JTypeface)) throw new Error("Invalid appearance typeface");
+    return value;
+  };
+  let tf = this.typeface, style = this.style;
+  if (tf || this.family !== null || style) {
+    if (!tf) style |= paint.tf.style();
+    tf = this.family !== null && !tf
+      ? await create("(Ljava/lang/String;I)Landroid/graphics/Typeface;", this.family, style)
+      : await create("(Landroid/graphics/Typeface;I)Landroid/graphics/Typeface;", tf ?? paint.tf, style);
+    if (this.weight >= 0) tf = await create("(Landroid/graphics/Typeface;IZ)Landroid/graphics/Typeface;", tf, Math.min(1000, this.weight), (style & 2) !== 0 ? 1 : 0);
+    if (tf) {
+      const fake = style & ~tf.style();
+      if (fake & 1) await call("setFakeBoldText", "(Z)V", 1);
+      if (fake & 2) await call("setTextSkewX", "(F)V", -0.25);
+      await call("setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;", tf);
+    }
+  }
+  if (this.size > 0) await call("setTextSize", "(F)V", this.size);
+  if (this.locales) await call("setTextLocales", "(Landroid/os/LocaleList;)V", this.locales);
+  if (this.elegant !== null) await call("setElegantTextHeight", "(Z)V", this.elegant);
+  if (this.spacing !== null) await call("setLetterSpacing", "(F)V", this.spacing);
+  if (this.features !== null) await call("setFontFeatureSettings", "(Ljava/lang/String;)V", this.features);
+  if (this.variations !== null) await call("setFontVariationSettings", "(Ljava/lang/String;)Z", this.variations);
+}
+rt.register({ name: "android/text/style/TextAppearanceSpan", ctor: JTextAppearanceSpan, sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"], methods: {
+  "<init>(Landroid/content/Context;I)V": appearanceInit,
+  "<init>(Ljava/lang/String;IILandroid/content/res/ColorStateList;Landroid/content/res/ColorStateList;)V": function (this: JTextAppearanceSpan, family: string | null, style: number, size: number, color: JColorStateList | null, link: JColorStateList | null) {
+    this.family = family; this.style = style; this.size = size; this.color = color; this.linkColor = link;
+  },
+  "getFamily()Ljava/lang/String;": function (this: JTextAppearanceSpan) { return this.family; },
+  "getTextSize()I": function (this: JTextAppearanceSpan) { return this.size; },
+  "getTextStyle()I": function (this: JTextAppearanceSpan) { return this.style; },
+  "getTextColor()Landroid/content/res/ColorStateList;": function (this: JTextAppearanceSpan) { return this.color; },
+  "getLinkTextColor()Landroid/content/res/ColorStateList;": function (this: JTextAppearanceSpan) { return this.linkColor; },
+  "getTypeface()Landroid/graphics/Typeface;": function (this: JTextAppearanceSpan) { return this.typeface; },
+  "getTextFontWeight()I": function (this: JTextAppearanceSpan) { return this.weight; },
+  "getTextLocales()Landroid/os/LocaleList;": function (this: JTextAppearanceSpan) { return this.locales; },
+  "getShadowColor()I": function (this: JTextAppearanceSpan) { return this.shadowColor; },
+  "getShadowRadius()F": function (this: JTextAppearanceSpan) { return this.shadowRadius; },
+  "getShadowDx()F": function (this: JTextAppearanceSpan) { return this.shadowDx; },
+  "getShadowDy()F": function (this: JTextAppearanceSpan) { return this.shadowDy; },
+  "getLetterSpacing()F": function (this: JTextAppearanceSpan) { return this.spacing ?? 0; },
+  "isElegantTextHeight()Z": function (this: JTextAppearanceSpan) { return this.elegant ?? 0; },
+  "getFontFeatureSettings()Ljava/lang/String;": function (this: JTextAppearanceSpan) { return this.features; },
+  "getFontVariationSettings()Ljava/lang/String;": function (this: JTextAppearanceSpan) { return this.variations; },
+  "getSpanTypeId()I": () => 17, "getSpanTypeIdInternal()I": () => 17, "describeContents()I": () => 0,
+  "updateMeasureState(Landroid/text/TextPaint;)V": appearanceMeasure,
+  "updateDrawState(Landroid/text/TextPaint;)V": async function (this: JTextAppearanceSpan, paint: JTextPaint) {
+    const thread = curThread;
+    await vcallOn(thread, this, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
+    if (this.color) await vcallOn(thread, paint, "setColor", "(I)V", await vcallOn(thread, this.color, "getColorForState", "([II)I", paint.drawableState, 0));
+    if (this.linkColor) paint.linkColor = Number(await vcallOn(thread, this.linkColor, "getColorForState", "([II)I", paint.drawableState, 0));
+    if (this.shadowColor) await vcallOn(thread, paint, "setShadowLayer", "(FFFI)V", this.shadowRadius, this.shadowDx, this.shadowDy, this.shadowColor);
+  },
+} });
 class JLocaleSpan extends JMetricAffectingSpan { locales!: JLocaleList; }
 function localeState(this: JLocaleSpan, paint: JTextPaint) { return vcall(paint, "setTextLocales", "(Landroid/os/LocaleList;)V", this.locales); }
 function writeLocaleSpan(this: JLocaleSpan, parcel: JParcel, flags: number) { return vcall(this.locales, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags); }

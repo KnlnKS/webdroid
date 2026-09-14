@@ -2630,3 +2630,12 @@ Canvas.drawPaint now fills the current clip with the Paint under its transform, 
 shader/filter/blend behavior, while ignoring stroke style and mask filters as Android does.
 The framework nDrawPaint delegate uses the same method. A rotated clipping/alpha browser
 check passes alongside the alpha-mask tests; typecheck passes.
+
+TextAppearanceSpan now reads the requested style's font, size, colors, locale, shadow and
+spacing values, and applies draw state after virtual measurement. Maps' bcfx subclass can
+therefore run its own font/spacing override. Direct span tests cover combined style, colors
+and suspended overrides; typecheck passes. Fresh Chrome now displays the same Golden Gate
+Bridge photo and Jitesh Patil/219-reaction caption as the AVD. The right-hand action icons
+remain absent despite nonzero view bounds; font/geometry and system insets still differ.
+The observed constructors are covered; the Parcel and alternate theme-color constructors
+are not yet implemented.
