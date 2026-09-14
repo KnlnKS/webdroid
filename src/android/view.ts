@@ -809,7 +809,6 @@ async function drawContent(v: JView, cv: JCanvas) {
   } else if (v.surfaceLayer) {
     drawSurface(v, ctx);
   }
-  else if (v.surfaceLayer) ctx.drawImage(v.surfaceLayer, 0, 0, v.width(), v.height());
   else if (v.background) {
     // through setBounds, not the fields: AOSP's onBoundsChange is where wrapper/shape drawables
     // (and app subclasses) rebuild their geometry, and it only fires on a real change
