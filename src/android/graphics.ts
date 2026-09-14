@@ -1754,13 +1754,13 @@ function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
     ctx.fillStyle = p.fillStyle(ctx) as string;
     ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
     ctx.textBaseline = "alphabetic";
-    if (p.letterSpacingEm && "letterSpacing" in ctx) (ctx as any).letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
+    if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
     if (p.style !== 1) ctx.fillText(s, x, y);
     if (p.style === 1 || p.style === 2) {
       cv.prep(p, true);
       ctx.strokeText(s, x, y);
     }
-    if (p.letterSpacingEm && "letterSpacing" in ctx) (ctx as any).letterSpacing = "0px";
+    if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = "0px";
     if (p.underline) {
       const w = measureText(p, s);
       const sx = p.textAlignN === 1 ? x - w / 2 : p.textAlignN === 2 ? x - w : x;

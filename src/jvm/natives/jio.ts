@@ -221,6 +221,7 @@ export class JInputStream extends JObj {
   source: FileSource | null = null;
   wrapped: unknown = null;   // a bytecode InputStream this one reads through
   pos = 0;
+  declare markPos?: number;
 }
 /** a plain InputStream over bytes already in hand */
 export function streamOf(bytes: Uint8Array): JInputStream {
@@ -276,8 +277,8 @@ const inputStreamMethods: NativeSpec["methods"] = {
     return BigInt(k);
   },
   "close()V": function (this: JInputStream) { if (this.wrapped) return vcallMaybe(this.wrapped, "close", "()V"); },
-  "mark(I)V": function (this: JInputStream, limit: number) { if (this.wrapped) return vcallMaybe(this.wrapped, "mark", "(I)V", limit); (this as any).markPos = this.pos; },
-  "reset()V": function (this: JInputStream) { if (this.wrapped) return vcallMaybe(this.wrapped, "reset", "()V"); this.pos = (this as any).markPos ?? 0; },
+  "mark(I)V": function (this: JInputStream, limit: number) { if (this.wrapped) return vcallMaybe(this.wrapped, "mark", "(I)V", limit); this.markPos = this.pos; },
+  "reset()V": function (this: JInputStream) { if (this.wrapped) return vcallMaybe(this.wrapped, "reset", "()V"); this.pos = this.markPos ?? 0; },
   "markSupported()Z": function (this: JInputStream) { return this.wrapped ? vcallMaybe(this.wrapped, "markSupported", "()Z") : 1; },
 };
 const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII)I");

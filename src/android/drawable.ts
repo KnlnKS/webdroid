@@ -688,11 +688,6 @@ const RADIUS_AUTO = -1;
 // fading in, and on release finishes growing while fading out.
 const RIPPLE_ENTER_MS = 225, RIPPLE_ENTER_ALPHA_MS = 75, RIPPLE_EXIT_MS = 150;
 const decel = (t: number) => 1 - (1 - t) * (1 - t);
-/**
- * AdaptiveIconDrawable: two 108dp layers behind a 72dp viewport, clipped to the device mask.
- * Every `@mipmap/ic_launcher` on a modern app is one, and without it an app's own icon — the
- * one it puts in its about screen and its first-run dialog — is a blank square.
- */
 class JTransitionDrawable extends JLayerDrawable {
   transition = 0;
   crossFade = false;
@@ -759,6 +754,7 @@ rt.register({ name: "android/graphics/drawable/TransitionDrawable", ctor: JTrans
   "isCrossFadeEnabled()Z": function (this: JTransitionDrawable) { return +this.crossFade; },
 } });
 
+/** Two 108dp layers behind a 72dp viewport, clipped to the device mask. */
 class JAdaptiveIconDrawable extends JLayerDrawable {
   /** AOSP getFullBounds: each layer is the viewport grown by 25% on every side */
   async layout() {
@@ -796,7 +792,6 @@ rt.register({
       },
     "getBackground()Landroid/graphics/drawable/Drawable;": function (this: JAdaptiveIconDrawable) { return this.layers[0]?.d ?? null; },
     "getForeground()Landroid/graphics/drawable/Drawable;": function (this: JAdaptiveIconDrawable) { return this.layers[1]?.d ?? null; },
-
   },
 });
 
@@ -882,7 +877,6 @@ class JRippleDrawable extends JLayerDrawable {
 rt.register({
   name: "android/graphics/drawable/RippleDrawable", ctor: JRippleDrawable, sup: "android/graphics/drawable/LayerDrawable",
   methods: {
-
     "<init>(Landroid/content/res/ColorStateList;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V":
       function (this: JRippleDrawable, csl: JColorStateList | null, content: JDrawable | null) {
         if (content) this.pushLayer({ d: content, insets: [0, 0, 0, 0] });

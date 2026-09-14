@@ -18,8 +18,8 @@ function uppercase(source: string | JSpanned): string | JSpanned {
   return result;
 }
 
-/** Retain the offered and final widths; span measurement is independent of either width. */
 type PreparedText = Pick<JLayout, "text" | "replacements"> & { src: string | JSpanned };
+/** Cache offered and final widths while sharing span measurements. */
 export class TextViewLayouts {
   private source: string | JSpanned | null = null;
   private font = ""; private ls = NaN; private caps = false;
