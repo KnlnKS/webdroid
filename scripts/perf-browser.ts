@@ -147,7 +147,8 @@ try {
     diagnostics: await frame.evaluate(() => {
       const wd = globalThis.wd;
       return wd ? { pkg: wd.app()?.host.pkg, ticks: wd.ticks, missing: [...wd.rt.missing], native: [...wd.rt.nativeRequired],
-        errors: wd.logs?.filter((l: string) => /^(error:|window.error:|unhandledrejection:)/.test(l)), perf: wd.perf ? { ...wd.perf } : null } : null;
+        errors: wd.logs?.filter((l: string) => /^(error:|window.error:|unhandledrejection:)/.test(l)), perf: wd.perf ? { ...wd.perf } : null,
+        compositor: Reflect.get(wd, "compositorStatus") ?? null } : null;
     }).catch((e) => ({ failure: String(e) })),
   })));
   await mkdir(dirname(values.out), { recursive: true });
