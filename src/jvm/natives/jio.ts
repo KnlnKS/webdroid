@@ -469,7 +469,7 @@ rt.register({
 function dataRead(length: number, decode: (b: Uint8Array) => unknown) {
   return function (this: JInputStream) { return after(dataBytes(this, length), decode); };
 }
-export function dataBytes(stream: JInputStream, length: number): Uint8Array | Promise<Uint8Array> {
+export function dataBytes(stream: JInputStream, length: number, thread = curThread): Uint8Array | Promise<Uint8Array> {
   checkFileOpen(stream);
   const take = (bytes: Uint8Array) => {
     if (bytes.length !== length) throw rt.mkThrowable("java/io/EOFException", null);
@@ -478,20 +478,20 @@ export function dataBytes(stream: JInputStream, length: number): Uint8Array | Pr
   };
   if (stream.wrapped) {
     const source = stream.wrapped;
-    if (usesReads(source)) return after(dataBytes(source, length), take);
+    if (usesReads(source)) return after(dataBytes(source, length, thread), take);
     if (source instanceof JBufferedIn && usesReads(source, JBufferedIn.prototype) && source.count - source.pos >= length) {
       source.check(); const bytes = source.buf.subarray(source.pos, source.pos + length); source.pos += length; return take(bytes);
     }
-    return wrappedBytes(stream, length).then(take);
+    return wrappedBytes(stream, length, thread).then(take);
   }
   return stream.source ? readFully(stream.source, stream.pos, length).then(take) : take(stream.buf.subarray(stream.pos, stream.pos + length));
 }
 /** as many of `length` bytes as the wrapped stream has, one virtual read at a time */
-async function wrappedBytes(stream: JInputStream, length: number): Promise<Uint8Array> {
+async function wrappedBytes(stream: JInputStream, length: number, thread: typeof curThread): Promise<Uint8Array> {
   const out = new Int8Array(length);
   let got = 0;
   while (got < length) {
-    const n: number = await vcall(stream.wrapped, "read", "([BII)I", out, got, length - got);
+    const n = Number(await vcallOn(thread, stream.wrapped, "read", "([BII)I", out, got, length - got));
     if (n <= 0) break;
     got += n;
   }

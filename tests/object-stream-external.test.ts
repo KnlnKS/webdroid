@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
-import { rt } from "../src/jvm/runtime";
+import { rt, JObj } from "../src/jvm/runtime";
+import { exportParcel, importParcel } from "../src/android/binder";
 import { DexFile } from "../src/jvm/dex";
 import { hexBytes, i8 } from "../src/jvm/abi";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallOn, callOn, curThread, JThread } from "../src/jvm/natives/jlang";
 
 rt.loadDex(new DexFile(new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/SerializationProbe.dex").arrayBuffer())));
 rt.linkNatives();
@@ -37,7 +38,15 @@ test("Serializable survives Parcel marshalling without object side tables", asyn
   const parcel = await newObj("android/os/Parcel");
   await vcall(parcel, "writeSerializable", "(Ljava/io/Serializable;)V", await makeValue());
   await vcall(parcel, "writeValue", "(Ljava/lang/Object;)V", await makeValue());
-  const bytes = await vcall(parcel, "marshall", "()[B");
+  const binder = await newObj("android/os/Binder");
+  const wire = exportParcel(parcel);
+  expect(wire.objects).toEqual([]);
+  await vcall(parcel, "writeStrongBinder", "(Landroid/os/IBinder;)V", binder);
+  const transported = importParcel(structuredClone(exportParcel(parcel)));
+  checkValue(await vcall(transported, "readSerializable", "()Ljava/io/Serializable;"));
+  checkValue(await vcall(transported, "readValue", "(Ljava/lang/ClassLoader;)Ljava/lang/Object;", null));
+  expect(await vcall(transported, "readStrongBinder", "()Landroid/os/IBinder;")).toBe(binder);
+  const bytes = wire.bytes;
   const copy = await newObj("android/os/Parcel");
   await vcall(copy, "unmarshall", "([BII)V", bytes, 0, bytes.length);
   await vcall(copy, "setDataPosition", "(I)V", 0);
@@ -101,4 +110,42 @@ test("primitive arrays retain their Java element types and values", async () => 
     expect(actual).toBeInstanceOf(value.constructor);
     for (let i = 0; i < value.length; i++) expect(Object.is(actual[i], value[i])).toBe(true);
   }
+});
+
+
+test("serialization retains the caller through nested objects and suspended short reads", async () => {
+  const worker = new JThread(), ambient = curThread, calls: string[] = [];
+  const record = (name: string) => { expect(curThread).toBe(worker); calls.push(name); };
+  rt.register({ name: "test/ThreadExternal", ctor: class extends JObj {}, ifaces: ["java/io/Externalizable"], statics: { serialVersionUID: 1n }, methods: {
+    "<init>()V": () => record("init"),
+    "writeExternal(Ljava/io/ObjectOutput;)V": async (out: unknown) => {
+      record("write"); await Promise.resolve();
+      await vcallOn(worker, out, "writeUTF", "(Ljava/lang/String;)V", "\0🚀".repeat(800));
+    },
+    "readExternal(Ljava/io/ObjectInput;)V": async (input: unknown) => {
+      record("read");
+      expect(await vcallOn(worker, input, "readUTF", "()Ljava/lang/String;")).toBe("\0🚀".repeat(800));
+    },
+    "readResolve()Ljava/lang/Object;": function () { record("resolve"); return this; },
+  } });
+  class ShortInput extends JObj { bytes = new Int8Array(); pos = 0; }
+  rt.register({ name: "test/ShortObjectInput", ctor: ShortInput, sup: "java/io/InputStream", methods: {
+    "read([BII)I": async function (this: ShortInput, out: Int8Array, offset: number, length: number) {
+      expect(curThread).toBe(worker); await Promise.resolve();
+      const n = Math.min(length, 17, this.bytes.length - this.pos);
+      out.set(this.bytes.subarray(this.pos, this.pos + n), offset); this.pos += n; return n || -1;
+    },
+  } });
+  rt.linkNatives();
+  const values = [await callOn(worker, () => newObj("test/ThreadExternal")), await callOn(worker, () => newObj("test/ThreadExternal"))];
+  calls.length = 0;
+  const buffer = await newObj("java/io/ByteArrayOutputStream");
+  const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", buffer);
+  await vcallOn(worker, output, "writeObject", "(Ljava/lang/Object;)V", values);
+  await vcallOn(worker, output, "close", "()V");
+  const source = new ShortInput(); source.bytes = await vcall(buffer, "toByteArray", "()[B");
+  const stream = await callOn(worker, () => newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source));
+  expect(await vcallOn(worker, stream, "readObject", "()Ljava/lang/Object;")).toHaveLength(2);
+  expect(calls).toEqual(["write", "write", "init", "read", "resolve", "init", "read", "resolve"]);
+  expect(curThread).toBe(ambient);
 });

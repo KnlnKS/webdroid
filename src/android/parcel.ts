@@ -3,7 +3,7 @@
 // form here — a binder — rides in a side table keyed by its position.
 import { JObj, rt } from "../jvm/runtime";
 import { dotName, slashName, jarray, mangleStaticField, utf8, u8 } from "../jvm/abi";
-import { newObj, vcall, JInt, JLong, JFloat, JDouble, JBool, JByte, JShort, JChar, box, defineException } from "../jvm/natives/jlang";
+import { newObj, vcall, JInt, JLong, JFloat, JDouble, JBool, JByte, JShort, JChar, box, defineException, callOn, curThread, vcallOn } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, type JList } from "../jvm/natives/jutil";
 import { JBundle, JBaseBundle, JPersistableBundle } from "./os";
 import { csText } from "./text";
@@ -114,20 +114,22 @@ function readBytes(p: JParcel): Int8Array | null {
 function writeObject(p: JParcel, o: unknown) { p.objects.set(p.pos, o); writeInt(p, 0); }
 function readObject(p: JParcel) { const at = p.pos; readInt(p); return p.objects.get(at) ?? null; }
 async function writeSerializable(p: JParcel, o: unknown): Promise<void> {
+  const thread = curThread;
   if (o === null) return writeString(p, null);
   writeString(p, typeof o === "string" ? "java.lang.String" : className(o as JObj));
-  const target = await newObj("java/io/ByteArrayOutputStream");
-  const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", target);
-  await vcall(output, "writeObject", "(Ljava/lang/Object;)V", o);
-  await vcall(output, "close", "()V");
-  writeBytes(p, await vcall(target, "toByteArray", "()[B"));
+  const target = await callOn(thread, () => newObj("java/io/ByteArrayOutputStream"));
+  const output = await callOn(thread, () => newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", target));
+  await vcallOn(thread, output, "writeObject", "(Ljava/lang/Object;)V", o);
+  await vcallOn(thread, output, "close", "()V");
+  writeBytes(p, await vcallOn(thread, target, "toByteArray", "()[B") as Int8Array);
 }
 async function readSerializable(p: JParcel): Promise<unknown> {
+  const thread = curThread;
   if (readString(p) === null) return null;
   const bytes = readBytes(p);
-  const source = await newObj("java/io/ByteArrayInputStream", "([B)V", bytes);
-  const input = await newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source);
-  return vcall(input, "readObject", "()Ljava/lang/Object;");
+  const source = await callOn(thread, () => newObj("java/io/ByteArrayInputStream", "([B)V", bytes));
+  const input = await callOn(thread, () => newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source));
+  return vcallOn(thread, input, "readObject", "()Ljava/lang/Object;");
 }
 
 const className = (o: JObj) => dotName((o.constructor as { $i?: { name: string } }).$i?.name ?? "java/lang/Object");

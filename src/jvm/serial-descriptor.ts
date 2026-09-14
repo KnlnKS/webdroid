@@ -1,4 +1,5 @@
 import { rt, type ClassInfo } from "./runtime";
+import { callOn, curThread, type JThread } from "./natives/jlang";
 import { mangleMethod, mangleStaticField } from "./abi";
 import { encodeModifiedUtf8 } from "./charset";
 
@@ -6,15 +7,15 @@ export type StreamField = { name: string; desc: string; prop: string };
 export type StreamClass = { name: string; uid: bigint; flags: number; fields: StreamField[]; parent: StreamClass | null; info: ClassInfo | null };
 const cache = new Map<ClassInfo | string, Promise<StreamClass>>();
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
-export function streamClass(type: ClassInfo | string): Promise<StreamClass> {
+export function streamClass(type: ClassInfo | string, thread = curThread): Promise<StreamClass> {
   let found = cache.get(type);
-  if (!found) { found = descriptor(type); cache.set(type, found); }
+  if (!found) { found = descriptor(type, thread); cache.set(type, found); }
   return found;
 }
-async function descriptor(type: ClassInfo | string): Promise<StreamClass> {
+async function descriptor(type: ClassInfo | string, thread: JThread): Promise<StreamClass> {
   if (typeof type === "string") return { name: type.replaceAll("/", "."), uid: await computedUid(type), flags: 2, fields: [], parent: null, info: null };
   const info = type;
-  await rt.initClass(info);
+  await callOn(thread, () => rt.initClass(info));
   if (!info.types.has("java/io/Serializable")) throw rt.mkThrowable("java/io/NotSerializableException", info.name);
   const external = info.types.has("java/io/Externalizable"), isEnum = info.types.has("java/lang/Enum");
   const native = rt.natives.get(info.name)?.serialization;
@@ -28,7 +29,7 @@ async function descriptor(type: ClassInfo | string): Promise<StreamClass> {
   const uid = native?.uid ?? (Object.hasOwn(info.ctor, uidProp) ? info.ctor[uidProp] : undefined);
   return { name: info.name.replaceAll("/", "."), uid: isEnum ? 0n : typeof uid === "bigint" ? uid : await computedUid(info),
     flags: isEnum ? 18 : external ? 12 : Object.hasOwn(info.ctor.prototype, mangleMethod("writeObject", "(Ljava/io/ObjectOutputStream;)V")) ? 3 : 2,
-    fields, parent: info.superInfo?.types.has("java/io/Serializable") ? await streamClass(info.superInfo) : null, info };
+    fields, parent: info.superInfo?.types.has("java/io/Serializable") ? await streamClass(info.superInfo, thread) : null, info };
 }
 async function computedUid(type: ClassInfo | string): Promise<bigint> {
   const bytes: number[] = [];
