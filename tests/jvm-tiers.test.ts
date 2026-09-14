@@ -13,6 +13,7 @@ async function fixture(mode: Mode) {
   const seen: [number, unknown][] = [];
   const pending: { resolve: (value: number) => void; reject: (error: unknown) => void }[] = [];
   let park = false;
+  let callback: ((value: number) => unknown) | undefined;
   R.th = () => thread; R.st = (value) => { thread = value; }; R.su = () => { thread = main; };
   R.register({ name: "java/lang/Object", ctor: class extends JObj {}, methods: { "<init>()V"() {} } });
   R.register({ name: "java/lang/Throwable", ctor: class extends JObj {} });
@@ -22,6 +23,7 @@ async function fixture(mode: Mode) {
   R.register({ name: "JvmTierProbe$Host", ctor: class extends JObj {}, methods: {
     "static call(II)I"(which: number, value: number) {
       seen.push([value, thread]);
+      if (which && callback) return callback(value);
       return park && which ? new Promise<number>((resolve, reject) => pending.push({ resolve, reject })) : value;
     },
   } });
@@ -51,7 +53,8 @@ async function fixture(mode: Mode) {
     if (!value) throw new Error("fixture did not suspend");
     return value;
   };
-  return { R, worker, main, seen, fn, warm, next, thread: () => thread, park: () => { park = true; } };
+  return { R, worker, main, seen, fn, warm, next, thread: () => thread, park: () => { park = true; },
+    reenter: (call: (value: number) => unknown) => { callback = call; } };
 }
 
 test("DEX tiers preserve constants, CFG joins, wide values and nulls", async () => {
@@ -80,6 +83,23 @@ test("DEX tiers retain synchronous prefixes, catch/finally and thread identity a
     if (reject) pending.reject(f.R.mkThrowable("java/lang/RuntimeException", "probe")); else pending.resolve(7);
     expect(await result).toBe(reject ? -1 : 8);
     expect(f.seen.map(([value]) => value)).toEqual([-1, 7, reject ? 3 : 2, 4]);
+    expect(f.seen.every(([, thread]) => thread === f.worker)).toBe(true);
+    expect(f.thread()).toBe(f.main);
+  }
+});
+
+test("DEX tiers preserve native callbacks that re-enter the active Java method", async () => {
+  for (const mode of modes) {
+    const f = await fixture(mode), call = await f.warm("suspended", "(II)I", [0, 7]);
+    f.reenter((value) => {
+      expect(f.thread()).toBe(f.worker);
+      return call(0, value);
+    });
+    const result = call(1, 7);
+    expect(f.seen.map(([value]) => value)).toEqual([-1, 7, -1, 7, 2, 4]);
+    expect(f.thread()).toBe(f.main);
+    expect(await result).toBe(9);
+    expect(f.seen.map(([value]) => value)).toEqual([-1, 7, -1, 7, 2, 4, 2, 4]);
     expect(f.seen.every(([, thread]) => thread === f.worker)).toBe(true);
     expect(f.thread()).toBe(f.main);
   }
