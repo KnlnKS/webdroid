@@ -808,14 +808,14 @@ rt.markers("android/graphics/PathEffect");
 rt.register({ name: "android/graphics/CornerPathEffect", ctor: class extends JObj {}, sup: "android/graphics/PathEffect",
   methods: { "<init>(F)V": function () {} } });
 mkEnumSet("android/graphics/BlurMaskFilter$Blur", ["NORMAL", "SOLID", "OUTER", "INNER"]);
-class JBlurMaskFilter extends JObj { sigma = 0; }
+class JBlurMaskFilter extends JObj { sigma = 0; style = 0; }
 rt.markers("android/graphics/MaskFilter");
 rt.register({
   name: "android/graphics/BlurMaskFilter", ctor: JBlurMaskFilter, sup: "android/graphics/MaskFilter",
   methods: {
     "<init>(FLandroid/graphics/BlurMaskFilter$Blur;)V": function (this: JBlurMaskFilter, radius: number, style: JSimpleEnum) {
       if (!(radius > 0)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "radius must be > 0");
-      if (style.ename !== "NORMAL") throw rt.mkThrowable("java/lang/UnsupportedOperationException", "unsupported blur mask style " + style.ename);
+      this.style = style.ord;
       this.sigma = radius * 0.57735 + 0.5;
     },
   },
@@ -1316,7 +1316,52 @@ export class JCanvas extends JObj {
       ctx.fillStyle = p.fillStyle(ctx) as string;
     }
   }
+  private blurLayer: { source: JCanvas; target: OffscreenCanvasRenderingContext2D; paint: JPaint } | null = null;
+  private drawBlurMask(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke: (ctx: typeof this.ctx) => void) {
+    const ctx = this.ctx, w = ctx.canvas.width, h = ctx.canvas.height, m = ctx.getTransform();
+    const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
+    if (!w || !h || !scale) return;
+    let layer = this.blurLayer;
+    if (!layer || layer.source.w !== w || layer.source.h !== h) {
+      const source = new OffscreenCanvas(w, h).getContext("2d")!;
+      layer = this.blurLayer = { source: JCanvas.wrap(source, w, h), target: new OffscreenCanvas(w, h).getContext("2d")!, paint: new JPaint() };
+    }
+    const source = layer.source.ctx, target = layer.target, filter = p.maskFilter!;
+    source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
+    copyPaint(p, layer.paint);
+    layer.paint.maskFilter = null; layer.paint.blend = null; layer.paint.shadowRadius = 0;
+    layer.paint.color = -1; layer.paint.shader = layer.paint.shaderObj = null; layer.paint.filterColor = null; layer.paint.filterMatrix = null;
+    layer.source.drawShape(layer.paint, fill, stroke);
+    target.clearRect(0, 0, w, h);
+    target.filter = `blur(${filter.sigma * scale}px)`;
+    target.drawImage(source.canvas, 0, 0); target.filter = "none";
+    target.globalCompositeOperation = filter.style === 2 ? "destination-out" : filter.style === 3 ? "destination-in" : "source-over";
+    target.drawImage(source.canvas, 0, 0);
+    target.globalCompositeOperation = "source-in";
+    try {
+      if (p.shader || p.shaderObj) {
+        source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
+        copyPaint(p, layer.paint);
+        layer.paint.maskFilter = null; layer.paint.blend = null; layer.paint.shadowRadius = 0; layer.paint.style = 0;
+        const inverse = m.inverse();
+        const corners = [[0, 0], [w, 0], [0, h], [w, h]].map(([x, y]) => inverse.transformPoint({ x, y }));
+        const left = Math.min(...corners.map(p => p.x)), top = Math.min(...corners.map(p => p.y));
+        layer.source.drawShape(layer.paint, c => c.fillRect(left, top, Math.max(...corners.map(p => p.x)) - left, Math.max(...corners.map(p => p.y)) - top), () => {});
+        target.drawImage(source.canvas, 0, 0);
+      } else {
+        target.fillStyle = p.fillStyle(target);
+        target.fillRect(0, 0, w, h);
+      }
+    } finally { target.globalCompositeOperation = "source-over"; }
+    ctx.save();
+    const shadow = beginPaintShadow(ctx, p);
+    try {
+      if (p.blend) ctx.globalCompositeOperation = p.blend;
+      ctx.resetTransform(); ctx.drawImage(target.canvas, 0, 0);
+    } finally { if (shadow) ctx.restore(); ctx.restore(); }
+  }
   drawShape(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke: (ctx: typeof this.ctx) => void) {
+    if (p.maskFilter?.style) return this.drawBlurMask(p, fill, stroke);
     // A blended paint owns the composite op only for its own ops — restore it straight after,
     // so a CLEAR fill can never leak into the next drawImage/drawText and erase it.
     const shadow = beginPaintShadow(this.ctx, p);

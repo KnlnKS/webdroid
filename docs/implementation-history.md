@@ -2603,3 +2603,11 @@ resource or URI. The browser checks cover span pixels/alignment/caching, shadow 
 state restoration; existing replacement-span and text rendering checks still pass. Typecheck
 passes. Fresh Maps proceeds past these APIs but photo icon construction now reaches the
 explicitly unsupported OUTER blur-mask style; the viewer is still incomplete.
+
+BlurMaskFilter now retains SOLID, OUTER and INNER styles. Shape rendering combines the
+opaque geometry and blurred alpha before applying Paint color/shader, reusing two scratch
+surfaces per canvas. The focused browser test checks all four styles, fractional Paint alpha,
+transformed clipping and repeated draws without leaking canvas state (25 assertions);
+typecheck passes. Fresh Maps gets past filter construction and now exposes the missing
+Bitmap.extractAlpha(Paint, offsets) overload. The photo viewer remains incomplete. Browser
+blur kernels are not established as pixel-identical to Skia.
