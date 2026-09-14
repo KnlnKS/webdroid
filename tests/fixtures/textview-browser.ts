@@ -55,7 +55,28 @@ async function probe() {
     styles.push(actual.getImageData(0, 0, 100, 60).data.every((v, i) => v === pixels[i]));
   }
   view.paintT.textSize = 12;
+  const compound = rt.make("android/widget/TextView");
+  if (!(compound instanceof JTextView)) throw new Error("Invalid compound TextView");
+  compound.right = 60; compound.bottom = 70;
+  compound.padL = 2; compound.padT = 3; compound.padR = 4; compound.padB = 5; compound.drawablePad = 2;
+  const bounds = [[2, 3, 8, 11], [1, 2, 11, 8], [0, 0, 5, 7], [2, 1, 14, 6]];
+  const drawsAt: number[][] = [], drawables = [];
+  for (const bound of bounds) {
+    const d = await newObj("android/graphics/drawable/ColorDrawable", "(I)V", 0xff00ff00);
+    await vcall(d, "setBounds", "(IIII)V", ...bound);
+    Object.assign(d, { [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: async (canvas: JCanvas) => {
+      await Promise.resolve(); const m = canvas.ctx.getTransform(); drawsAt.push([m.e, m.f]);
+      canvas.ctx.fillStyle = "#00ff00"; canvas.ctx.fillRect(bound[0], bound[1], bound[2] - bound[0], bound[3] - bound[1]);
+    } });
+    drawables.push(d);
+  }
+  await vcall(compound, "setCompoundDrawables", "(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V", ...drawables);
+  await vcall(compound, "onMeasure", "(II)V", makeSpec(60, MS_EXACTLY), makeSpec(70, MS_EXACTLY));
+  const surface = new OffscreenCanvas(60, 70).getContext("2d")!;
+  await vcall(compound, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(surface, 60, 70));
+  const retained = await Promise.all(drawables.map(async d => { const b = await vcall(d, "getBounds", "()Landroid/graphics/Rect;"); return [b.left, b.top, b.right, b.bottom]; }));
   return { ...result, styles, ellipsis: wrapped.lines, cached: wrapped === view.linesFor(width),
-    fitting: view.linesFor(measureText(view.paintT, view.text)).lines, cleared: view.spanLayout === null };
+    fitting: view.linesFor(measureText(view.paintT, view.text)).lines, cleared: view.spanLayout === null,
+    compound: { drawsAt, retained, restored: surface.getTransform().isIdentity } };
 }
 Object.defineProperty(window, "textViewProbe", { value: probe() });

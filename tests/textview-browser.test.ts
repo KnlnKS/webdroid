@@ -16,6 +16,8 @@ test("TextView measures and paints replacement spans with cached geometry and re
       ellipsis: ["A long title…"], cached: true, fitting: ["A long title with a location"], cleared: true });
     expect(result.height).toBeGreaterThanOrEqual(32);
     expect(result.styles).toEqual([true, true, true]);
+    expect(result.compound).toEqual({ drawsAt: [[2, 30], [51, 31], [24, 3], [23, 60]],
+      retained: [[2, 3, 8, 11], [1, 2, 11, 8], [0, 0, 5, 7], [2, 1, 14, 6]], restored: true });
     expect(errors).toEqual([]);
   } finally { await browser.close(); }
 }, 15000);

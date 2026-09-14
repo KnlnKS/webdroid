@@ -2639,3 +2639,11 @@ Bridge photo and Jitesh Patil/219-reaction caption as the AVD. The right-hand ac
 remain absent despite nonzero view bounds; font/geometry and system insets still differ.
 The observed constructors are covered; the Parcel and alternate theme-color constructors
 are not yet implemented.
+
+TextView now draws top/bottom compound drawables as well as left/right, preserving their
+explicit bounds and translating the canvas to Android's compound-padding positions. Intrinsic
+bound overloads initialize bounds through virtual size/bounds calls; measurement and text
+placement use those dimensions. A browser test covers all four positions, suspended draw
+callbacks and unchanged bounds; existing replacement-span/ellipsis checks and typecheck pass.
+Maps' media controls also reveal a separate cause: their transparent tint uses PorterDuff ADD,
+while BitmapDrawable currently applies every tint as SRC_IN.

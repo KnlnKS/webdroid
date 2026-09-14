@@ -2,7 +2,7 @@ import { AID, resString } from "./res";
 import { JView, requestLayout, initViewFromCtx, guardCall, invalidate, specMode, specSize, MS_UNSPEC, MS_EXACTLY, MS_AT_MOST, resolveSizeAndState, setFocusHook, removeFrom } from "./view";
 import {
   type JColorStateList, mkCsl, type JDrawable, loadColorStateList, loadDrawableRV, cslColor, loadDrawable,
-  drawChild
+  drawChild, drawableSize
 } from "./drawable";
 import { JTextPaint, JEditable, JSpanned, JLayout, spannedString, mkStaticLayout, mkSpannedLayout, drawLayout } from "./text";
 import { G, gravityV, gravityH } from "./gravity";
@@ -324,6 +324,7 @@ export async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyle
   if (dt) tv.drawableT = await loadDrawableRV(res, dt, tv.theme);
   if (dr) tv.drawableR = await loadDrawableRV(res, dr, tv.theme);
   if (db) tv.drawableB = await loadDrawableRV(res, db, tv.theme);
+  if (dl || dt || dr || db) await setIntrinsicDrawables.call(tv, tv.drawableL, tv.drawableT, tv.drawableR, tv.drawableB);
   if (g(14)) tv.drawablePad = Math.round(rvDimen(res, g(14), 0));
   await applyFontFamily(tv, res, g(15));
   if (g(16)) { tv.allCaps = !!rvInt(res, g(16), 0); tv.capsSet = true; }
@@ -350,8 +351,18 @@ function setTextAppearance(this: JTextView, id: number) {
 }
 function setCompoundDrawables(this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null) {
   this.drawableL = l; this.drawableT = t; this.drawableR = r; this.drawableB = b;
-  requestLayout(this);
+  invalidate(this); requestLayout(this);
 }
+async function setIntrinsicDrawables(this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null) {
+  const thread = curThread;
+  for (const d of [l, t, r, b]) if (d) {
+    const width = await drawableSize(d, false, thread), height = await drawableSize(d, true, thread);
+    await vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, width, height);
+  }
+  setCompoundDrawables.call(this, l, t, r, b);
+}
+const compoundWidth = (d: JDrawable | null) => d ? Math.max(0, d.bounds.right - d.bounds.left) : 0;
+const compoundHeight = (d: JDrawable | null) => d ? Math.max(0, d.bounds.bottom - d.bounds.top) : 0;
 /** the (Context) / (Context, AttributeSet) / (Context, AttributeSet, defStyleAttr) constructor trio of a
  *  TextView subclass: attach to the context, apply the widget's default style (or the caller's), then `then` */
 export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v: T) => unknown): NativeSpec["methods"] {
@@ -383,10 +394,10 @@ function applyTypeface(tv: JTextView, tf: JTypeface, fakeBold: boolean) {
 function compoundDrawables(this: JTextView) {
   return jarray([this.drawableL, this.drawableT, this.drawableR, this.drawableB], "Landroid/graphics/drawable/Drawable;");
 }
-function compoundPadL(this: JTextView) { return this.padL + (this.drawableL ? this.drawableL.intrinsicW() + this.drawablePad : 0); }
-function compoundPadR(this: JTextView) { return this.padR + (this.drawableR ? this.drawableR.intrinsicW() + this.drawablePad : 0); }
-function compoundPadT(this: JTextView) { return this.padT + (this.drawableT ? this.drawableT.intrinsicH() + this.drawablePad : 0); }
-function compoundPadB(this: JTextView) { return this.padB + (this.drawableB ? this.drawableB.intrinsicH() + this.drawablePad : 0); }
+function compoundPadL(this: JTextView) { return this.padL + (this.drawableL ? compoundWidth(this.drawableL) + this.drawablePad : 0); }
+function compoundPadR(this: JTextView) { return this.padR + (this.drawableR ? compoundWidth(this.drawableR) + this.drawablePad : 0); }
+function compoundPadT(this: JTextView) { return this.padT + (this.drawableT ? compoundHeight(this.drawableT) + this.drawablePad : 0); }
+function compoundPadB(this: JTextView) { return this.padB + (this.drawableB ? compoundHeight(this.drawableB) + this.drawablePad : 0); }
 export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   ...textViewCtors("textViewStyle"),
   // AOSP routes every setText through the two-arg form, and that is the one apps override:
@@ -478,9 +489,9 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setCompoundDrawablesWithIntrinsicBounds(IIII)V": async function (this: JTextView, l: number, t: number, r: number, b: number) {
     const res = this.jres!;
     const [dl, dt, dr, db] = await Promise.all([l, t, r, b].map((id) => (id ? loadDrawable(res, id, this.theme) : null)));
-    setCompoundDrawables.call(this, dl, dt, dr, db);
+    return setIntrinsicDrawables.call(this, dl, dt, dr, db);
   },
-  "setCompoundDrawablesWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
+  "setCompoundDrawablesWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setIntrinsicDrawables,
   "setCompoundDrawables(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
   "getCompoundDrawables()[Landroid/graphics/drawable/Drawable;": compoundDrawables,
   "setCompoundDrawablePadding(I)V": function (this: JTextView, p: number) { this.drawablePad = p; requestLayout(this); },
@@ -507,7 +518,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getMovementMethod()Landroid/text/method/MovementMethod;": function (this: JTextView) { return this.movementMethod; },
   "getCompoundDrawablesRelative()[Landroid/graphics/drawable/Drawable;": compoundDrawables,
   "setCompoundDrawablesRelative(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
-  "setCompoundDrawablesRelativeWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
+  "setCompoundDrawablesRelativeWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setIntrinsicDrawables,
   "setCompoundDrawablesRelativeWithIntrinsicBounds(IIII)V": function (this: JTextView, l: number, t: number, r: number, b: number) {
     return callSelf(textViewMethods, "setCompoundDrawablesWithIntrinsicBounds(IIII)V", this, l, t, r, b);
   },
@@ -579,8 +590,8 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getLayout()Landroid/text/Layout;": function (this: JTextView) {
     if (this.layoutWidthFor < 0) return null;
     if (this.spanLayout) return this.spanLayout;
-    const dlW = this.drawableL ? Math.max(0, this.drawableL.intrinsicW()) + this.drawablePad : 0;
-    const drW = this.drawableR ? Math.max(0, this.drawableR.intrinsicW()) + this.drawablePad : 0;
+    const dlW = this.drawableL ? compoundWidth(this.drawableL) + this.drawablePad : 0;
+    const drW = this.drawableR ? compoundWidth(this.drawableR) + this.drawablePad : 0;
     const w = this.layoutWidthFor - this.padL - this.padR - dlW - drW;
     const p = this.paintT, text = this.displayText(), font = p.font();
     if (text !== this.layoutText || w !== this.layoutW || font !== this.layoutFont || this.maxLinesV !== this.layoutMax ||
@@ -628,10 +639,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "onMeasure(II)V": async function (this: JTextView, wSpec: number, hSpec: number) {
     const thread = curThread;
     const wMode = specMode(wSpec), wSize = specSize(wSpec);
-    const dlW = (this.drawableL ? Math.max(0, this.drawableL.intrinsicW()) + this.drawablePad : 0)
-      + (this.drawableR ? Math.max(0, this.drawableR.intrinsicW()) + this.drawablePad : 0);
-    const dtH = (this.drawableT ? Math.max(0, this.drawableT.intrinsicH()) + this.drawablePad : 0)
-      + (this.drawableB ? Math.max(0, this.drawableB.intrinsicH()) + this.drawablePad : 0);
+    const dlW = (this.drawableL ? compoundWidth(this.drawableL) + this.drawablePad : 0)
+      + (this.drawableR ? compoundWidth(this.drawableR) + this.drawablePad : 0);
+    const dtH = (this.drawableT ? compoundHeight(this.drawableT) + this.drawablePad : 0)
+      + (this.drawableB ? compoundHeight(this.drawableB) + this.drawablePad : 0);
     const availText = Math.min(wMode === MS_UNSPEC ? 100000 : wSize, this.maxW) - this.padL - this.padR - dlW;
     let w: number;
     const display = this.displayText() || "";
@@ -644,7 +655,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       let lay = measured instanceof Promise ? await measured : measured;
       let tw = lay.maxW;
       if (!display && this.hint) tw = Math.max(tw, measureText(this.paintT, this.hint));
-      w = Math.ceil(tw) + this.padL + this.padR + dlW;
+      w = Math.max(Math.ceil(tw) + dlW, compoundWidth(this.drawableT), compoundWidth(this.drawableB)) + this.padL + this.padR;
       const min = vcallOn(thread, this, "getSuggestedMinimumWidth", "()I");
       w = Math.max(Math.min(Math.max(w, this.minW), this.maxW), Number(min instanceof Promise ? await min : min));
       if (wMode === MS_AT_MOST) w = Math.min(w, wSize);
@@ -662,7 +673,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const vPad = this.padT + this.padB;
     let h = this.textHeight(lineCount) + vPad + dtH;
     if (this.spanLayout) h = Math.max(h, this.spanLayout.lineTop(this.spanLayout.lines.length) + (this.spanLayout.tops ? 0 : this.spanLayout.padBottom) + vPad + dtH);
-    h = Math.max(h, this.minH, (this.drawableL ? this.drawableL.intrinsicH() : 0) + vPad, (this.drawableR ? this.drawableR.intrinsicH() : 0) + vPad);
+    h = Math.max(h, this.minH, (this.drawableL ? compoundHeight(this.drawableL) : 0) + vPad, (this.drawableR ? compoundHeight(this.drawableR) : 0) + vPad);
     if (specMode(hSpec) !== MS_EXACTLY) {
       const min = vcallOn(thread, this, "getSuggestedMinimumHeight", "()I");
       h = Math.max(h, Number(min instanceof Promise ? await min : min));
@@ -671,12 +682,12 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     this.measuredH = resolveSizeAndState(h, hSpec);
     this.layoutWidthFor = w;
   },
-  "onDraw(Landroid/graphics/Canvas;)V": function (this: JTextView, cv: JCanvas) {
+  "onDraw(Landroid/graphics/Canvas;)V": async function (this: JTextView, cv: JCanvas) {
     const ctx = cv.ctx;
     const display = this.displayText();
     const showHint = !display && this.hint;
-    const dlW = this.drawableL ? Math.max(0, this.drawableL.intrinsicW()) : 0;
-    const drW = this.drawableR ? Math.max(0, this.drawableR.intrinsicW()) : 0;
+    const dlW = this.drawableL ? compoundWidth(this.drawableL) : 0;
+    const drW = this.drawableR ? compoundWidth(this.drawableR) : 0;
     const contentL = this.padL + (dlW ? dlW + this.drawablePad : 0);
     const contentR = this.width() - this.padR - (drW ? drW + this.drawablePad : 0);
     const avail = contentR - contentL;
@@ -688,26 +699,21 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       });
       this.useLines(measured); this.layoutWidthFor = this.width();
     }
-    if (this.drawableL) {
-      const dh = Math.max(0, this.drawableL.intrinsicH());
-      this.drawableL.bounds.left = this.padL;
-      this.drawableL.bounds.top = (this.height() - dh) >> 1;
-      this.drawableL.bounds.right = this.padL + dlW;
-      this.drawableL.bounds.bottom = ((this.height() - dh) >> 1) + dh;
-      drawChild(this.drawableL, cv);
-    }
-    if (this.drawableR) {
-      const dh = Math.max(0, this.drawableR.intrinsicH());
-      this.drawableR.bounds.left = this.width() - this.padR - drW;
-      this.drawableR.bounds.top = (this.height() - dh) >> 1;
-      this.drawableR.bounds.right = this.width() - this.padR;
-      this.drawableR.bounds.bottom = ((this.height() - dh) >> 1) + dh;
-      drawChild(this.drawableR, cv);
-    }
+    const contentT = compoundPadT.call(this), contentB = this.height() - compoundPadB.call(this);
+    const draw = async (d: JDrawable | null, x: number, y: number) => {
+      if (!d) return;
+      ctx.save(); ctx.translate(Math.trunc(x), Math.trunc(y));
+      try { const result = drawChild(d, cv); if (result instanceof Promise) await result; }
+      finally { ctx.restore(); }
+    };
+    if (this.drawableL) await draw(this.drawableL, this.padL, contentT + (contentB - contentT - compoundHeight(this.drawableL)) / 2);
+    if (this.drawableR) await draw(this.drawableR, this.width() - this.padR - drW, contentT + (contentB - contentT - compoundHeight(this.drawableR)) / 2);
+    if (this.drawableT) await draw(this.drawableT, contentL + (avail - compoundWidth(this.drawableT)) / 2, this.padT);
+    if (this.drawableB) await draw(this.drawableB, contentL + (avail - compoundWidth(this.drawableB)) / 2, this.height() - this.padB - compoundHeight(this.drawableB));
     if (!showHint && this.spanLayout) {
       const layout = this.spanLayout, vg = gravityV(this.gravityT);
       const height = layout.lineTop(layout.lines.length) + (layout.tops ? 0 : layout.padBottom);
-      const y = vg === 16 ? (this.height() - this.padT - this.padB - height) / 2 + this.padT : vg === 80 ? this.height() - this.padB - height : this.padT;
+      const y = vg === 16 ? (contentB - contentT - height) / 2 + contentT : vg === 80 ? contentB - height : contentT;
       this.paintT.color = cslColor(this.colors, this.drawableState());
       ctx.save(); ctx.translate(contentL, y);
       return drawLayout.call(layout, cv, gravityH(this.gravityT)).finally(() => ctx.restore());
@@ -718,8 +724,8 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const lh = this.lineHeight();
     const totalH = this.textHeight(Math.max(1, lines.length));
     const vg = gravityV(this.gravityT);
-    let y = (vg === 16 ? (this.height() - this.padT - this.padB - totalH) / 2 + this.padT
-      : vg === 80 ? this.height() - this.padB - totalH : this.padT) + this.ascent();
+    let y = (vg === 16 ? (contentB - contentT - totalH) / 2 + contentT
+      : vg === 80 ? contentB - totalH : contentT) + this.ascent();
     ctx.font = this.paintT.font();
     ctx.fillStyle = cssColor(showHint ? cslColor(this.hintColors ?? this.colors, this.drawableState()) : cslColor(this.colors, this.drawableState()));
     ctx.textBaseline = "alphabetic";
