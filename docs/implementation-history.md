@@ -3713,7 +3713,10 @@ with no in-flight action or observed emulator error and 2277 cold calls each.
 The small tail cost remains visible: five of seven pairs have higher p95, three
 exceed 5%; the aggregate guard stays below 5%. Retain portable operands ca19eb7
 (integration 386393a) for simplification and construction cost, with no claimed
-latency gain. Raw phase results live in `webdroid-shots/jvm/fitnotes-phase-1003/`
+latency gain. Pooling all 98 inputs instead of the predefined per-window medians
+gives median 6.80 -> 7.20 ms (+5.9%) and p95 10.73 -> 11.215 ms (+4.5%);
+this alternative aggregation does not establish zero cost or replace the declared
+guard. Raw phase results live in `webdroid-shots/jvm/fitnotes-phase-1003/`
 in the JVM worktree. Combined app guards remain separate from this stage decision.
 
 At integrated 39059ba, typecheck passes, all 1208 unit tests pass (26438
