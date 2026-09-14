@@ -8,8 +8,7 @@ import { JLinearLayout } from "../src/android/layouts";
 
 class Divider extends JDrawable {
   drawn: number[][] = [];
-  intrinsicW() { return 2; }
-  intrinsicH() { return 2; }
+  size() { return 2; }
   paint() { const b = this.bounds; this.drawn.push([b.left, b.top, b.right, b.bottom]); }
 }
 rt.register({ name: "test/LinearDivider", ctor: Divider, sup: "android/graphics/drawable/Drawable" });
