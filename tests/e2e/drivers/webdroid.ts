@@ -71,6 +71,7 @@ export class WebdroidDriver {
     const page = await ctx.newPage();
     const drv = new WebdroidDriver(browser, page, screen);
     page.on("pageerror", (e) => { drv.errors.push(String(e)); console.error("  [page error]", String(e).slice(0, 200)); });
+    page.on("console", (message) => { if (message.type() === "error") drv.errors.push(`${message.location().url}: ${message.text()}`); });
     await drv.open(screen);
     return drv;
   }

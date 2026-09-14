@@ -33,6 +33,7 @@ async function boot(page: Page, apk: string): Promise<Row> {
   const row: Row = { apk, ok: false, ticks: 0, drew: false, bootMs: 0, classes: 0, missing: [], errors: [], note: "" };
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (message) => { if (message.type() === "error") errors.push(`${message.location().url}: ${message.text()}`); });
   try {
     await page.goto(`${BASE_URL}/?apk=${encodeURIComponent(apk)}`, { waitUntil: "load", timeout: 60000 });
     // a frame having been drawn is the only evidence that matters; ticks alone can spin on a
