@@ -4049,3 +4049,108 @@ the earlier 1208-test checkpoint. Logs: `webdroid-shots/performance-stages/`
 bundles are rebuilt/prewarmed before the final matrix; exact HTML/bundle hashes
 are in `final-isb-prewarm.json`. The earlier eight executed framework exercises
 and twelve eager/cold APK smoke compilations cover unchanged JVM/framework code.
+
+### Final pristine/integrated matrix and retained outcome
+
+The final production selection is `ca2effd` on `codex/perf-integration`;
+`4a27d71` adds documentation only, and both full passes use harness `dc5d401`.
+Pristine `b16d705` on port 4111 and candidate on 4110 each complete the serialized
+12-flow / 159-step E2E inventory, including four scored flows. Capture durations
+are 836.4 and 832.5 seconds; these are not isolated performance measurements.
+Both 17-APK corpus passes observe a first shell draw in every row. The comparator
+verifies the exact inventories and records 75 items for review rather than
+silently calling differences regressions or accepting them. All 318 PNGs have
+valid signatures/chunk CRCs, expected geometry and matching readable JSON trees.
+Served main/process HTML and asset hashes are unchanged from prewarm through the
+final captures. No goldens or production sources change during the matrix.
+
+Evidence is under `webdroid-shots/final-matrix/`: original baseline/candidate
+captures and reports, `comparison.json`, `file-integrity.json`, perfsum rollups,
+and component review reports. The exact runner is
+`.worktrees/perf-rendering/webdroid-shots/final-comparison/final-matrix.sh`.
+It runs `WEBDROID_URL=http://localhost:4111 bun tests/e2e/run.ts --jobs 1`,
+archives actual/report, runs `bun scripts/corpus.ts --wait 12000 --json ...`,
+then repeats against port 4110. Prior output directories remain in `preexisting/`.
+Perfsum is run on both saved actual directories with the pristine rollup as the
+candidate's comparison argument; its capture-window counters are descriptive.
+
+FitNotes' 39 screenshots/trees and Mihon onboarding's five are byte-identical.
+FitNotes still fails the recorded reps input: y531 misses the actual y441–526
+field, so typing overwrites the weight and creates zero-rep sets/empty graphs.
+Mihon app has identical trees and 15/17 identical images; the remaining images
+vary only in the empty-library mascot. Dark selection still leaves the page light
+on both. Harmonic reaches the same story/settings/comments/Back paths with changed
+live article ordering and counts. Mean golden content differences are
+FitNotes 40.1164 → 40.1164%, Mihon app 62.9733 → 63.5324%, onboarding
+17.6914 → 17.6914%, Harmonic 28.6448 → 27.0104%. These compare each capture to
+Android goldens, not directly to each other; live-content changes and lower scores
+do not establish a rendering improvement.
+
+Reddit's trees and welcome screen match, but neither capture proves the intended
+signup/login sheets: all postlaunch steps have zero new draws despite advancing
+ticks. YouTube repeats SAX namespace-prefixes/RxJava, cursor-cast and ImageView
+mapRect failures, two control-step timeouts, and a loading spinner over the video
+poster. Its extra unqualified missing-mapRect signature names the same overload;
+unchanged cold/runtime error normalization explains the alternate spelling.
+TikTok repeats the getGravity layout failure and black Following screen; different
+offscreen video subtrees/metadata prevent full-state or video-performance parity
+claims. No new observed fault family is found in those full flows.
+
+Lichess visibly executes editor/pawn/Back operations and legal games with engine
+replies on both revisions. Pristine additionally faults at address zero in
+FairyStockfish `RootMove::extract_ponder_from_tt+0x280`. Its absence in the
+candidate's different game does not establish repair or engine throughput.
+Doodle remains in the score-zero tilt tutorial. Flappy reaches flight/collision/
+Game Over, but the short flow's restart/second-game labels overstate its screenshots.
+Both retain the status TypeError, and neither executes native CPU instructions.
+
+Ambiguous visual differences received matching-input follow-ups. Calculator's
+apparent button-outline difference was disproved by raw RGBA comparison: only
+1–4 edge pixels on the result digits vary across original and repeated pairs,
+which all compute 14 with empty observed diagnostics. Resy initially has one
+candidate-only duplicate SVG node and offscreen map y5552 versus pristine y4170.
+The frozen venue-plus-eight-swipes follow-up puts the map at y5552–5912 on both
+revisions, with one SVG per icon. Both scroll-2 steps time out without wedging;
+scrolls 3–8 have identical complete trees and map y1398–1758. Screenshots show
+the same gray map grid/marker/address, not street tiles. The original duplicate
+node does not recur; its cause remains unresolved without a visible effect.
+Inputs, failed/timeout observations and raw results remain in `reproductions/`.
+
+Corpus review distinguishes capped row errors from uncapped browser errors and
+all available process snapshots. Twitch's original candidate-only getLayoutMap
+permission-policy SecurityError occurs naturally in both extended follow-ups;
+no keyboard API call was inserted to manufacture parity. Maps starts with zero
+completed GL frames in both follow-ups and reaches one by the additional
+three-second snapshot. Amazon has five frames in both original rows: the apparent
+missing frame is a wrapper URL versus the same target's resolved URL. Neither
+fresh follow-up reaches a WebView by the bounded additional six-second snapshot,
+so later document-loading parity remains unverified rather than assumed.
+The readiness script records actual snapshot times, raw URLs, document/WebView
+state, counters, uncapped errors and screenshots in `readiness/`.
+
+All 17 corpus rows are early observed-path coverage, not healthy initialization.
+Among Us, Doodle and Lichess stop before completed GL. ChatGPT repeats existing
+Sentry DSN, Character.toTitleCase, pointer-size and URI failures. Amazon retains
+its existing libcapture/ARM32 native requirement. Child missing/native channels
+are read, but null logs/performance/queue and null external-frame diagnostics
+remain unavailable. No absence-of-error claim extends to those channels.
+
+The staged work is complete with the measured selections and rejections recorded
+above. The universal 1.5x target and sustained-gameplay proof were not achieved;
+the strongest retained application result is Doodle's 22.57% faster completed-title
+startup, about 1.29x. The native correctness changes, small rendering fixes,
+signed-zero correction and corrected measurement harness remain. Rejected JVM,
+snapshot/compositor/backing and precise-ARM effects implementations are absent
+from production. The existing GLSurfaceView generation race is not claimed fixed.
+All isolated experiment evidence and the pre-existing baseline worktree remain
+available. No additional tests are run solely for this final documentation update.
+
+Follow-up artifact checks validate another 72 PNGs, for 390 original/follow-up
+images. All six readiness browsers and both Resy/Calculator pairs exit normally;
+no diagnostic read times out. `review-resolutions.json` links all 75 comparator
+items to reviewed evidence and explicit limits. The task's final servers on
+4110/4111 are stopped (4112 and older experiment servers were already stopped);
+unrelated servers are untouched. Final candidate actual/report copies are restored
+to the default E2E output directories while immutable matrix captures and prior
+outputs remain archived. The integration worktree contains only the requested
+committed changes; generated core blobs and experiment artifacts remain untracked.
