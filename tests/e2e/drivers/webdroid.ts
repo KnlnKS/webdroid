@@ -42,8 +42,9 @@ export const CONTEXT_OPTS = {
 };
 export const launchBrowser = (gpu: "software" | "hardware" = "software") => chromium.launch({
   headless: true,
+  channel: gpu === "hardware" ? "chromium" : undefined,
   args: [...LAUNCH_ARGS, ...(gpu === "software" ? ["--use-gl=angle", "--use-angle=swiftshader", "--disable-partial-raster", "--disable-skia-runtime-opts"] : [])],
-  ignoreDefaultArgs: ["--disable-features=IsolateOrigins,site-per-process"],
+  ignoreDefaultArgs: ["--disable-features=IsolateOrigins,site-per-process", ...(gpu === "hardware" ? ["--enable-unsafe-swiftshader"] : [])],
 });
 
 type LaunchOpts = {

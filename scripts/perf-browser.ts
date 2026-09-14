@@ -19,8 +19,12 @@ const { values } = parseArgs({ options: {
 const flow = FLOWS.find((f) => f.app === values.flow);
 if (!flow || !values.after || !values.out) throw new Error("Required: --flow <flow> --after <step> --out <file.json>");
 const after = flow.steps.findIndex((s) => s.id === values.after);
-const exercise = flow.steps.find((s) => s.id === values.exercise);
-if (after < 0 || values.exercise && !exercise) throw new Error("Unknown setup/exercise step");
+const exercises = (values.exercise?.split(",") ?? []).map((id) => {
+  const step = flow.steps.find((s) => s.id === id);
+  if (!step) throw new Error("Unknown exercise step: " + id);
+  return step;
+});
+if (after < 0) throw new Error("Unknown setup step");
 const gpu = values.gpu;
 if (gpu !== "software" && gpu !== "hardware") throw new Error("--gpu must be software or hardware");
 const ms = Number(values.ms), warmup = Number(values.warmup);
@@ -49,8 +53,9 @@ try {
     const rec = manifest?.steps.find((s) => s.id === step.id);
     const started = performance.now();
     const hit = await page.evaluate(performAction, { a: actOf(flow, step, rec), screen, deadlineMs: 60000 });
+    const actionMs = performance.now() - started;
     await page.waitForTimeout(step.settleDelayMs ?? 500);
-    setup.push({ step: step.id, ms: performance.now() - started, hit });
+    setup.push({ step: step.id, ms: performance.now() - started, actionMs, hit });
   }
   await page.waitForTimeout(warmup);
   let foreground: ReturnType<typeof page.mainFrame> | undefined;
@@ -70,10 +75,10 @@ try {
   await session.send("HeapProfiler.collectGarbage");
   const before = await session.send("Performance.getMetrics");
   const heapBefore = await session.send("Runtime.getHeapUsage");
-  const action = exercise ? actOf(flow, exercise, manifest?.steps.find((s) => s.id === exercise.id)) : { type: "none" as const };
+  const actions = exercises.map((exercise) => actOf(flow, exercise, manifest?.steps.find((s) => s.id === exercise.id)));
   // Repeated tap steps define one tap per interval; do not nest their original repeat loop.
-  if (action.type === "tap") action.repeat = 1;
-  const measurement = foreground.evaluate(async ({ ms, action, screen, actionSource }) => {
+  for (const action of actions) if (action.type === "tap") action.repeat = 1;
+  const measurement = foreground.evaluate(async ({ ms, actions, screen, actionSource }) => {
     const act: typeof performAction = (0, eval)(`(${actionSource})`);
     const wd = globalThis.wd;
     const capacity = 8192;
@@ -108,11 +113,13 @@ try {
     const ticks = wd.ticks, t0 = performance.now();
     let acting = false;
     const actionErrors: string[] = [];
-    const timer = action.type === "none" ? undefined : setInterval(() => {
+    const firstAction = actions[0];
+    const timer = !firstAction ? undefined : setInterval(() => {
       if (acting) return;
+      const action = actions[inputs % actions.length];
       acting = true; inputs++; awaitingInput = performance.now();
       void act({ a: action, screen, deadlineMs: 5000 }).catch((e) => actionErrors.push(String(e))).finally(() => { acting = false; });
-    }, action.type === "tap" ? action.everyMs ?? 600 : 1000);
+    }, firstAction.type === "tap" ? firstAction.everyMs ?? 600 : 1000);
     await new Promise<void>((resolve) => setTimeout(resolve, ms));
     const elapsed = performance.now() - t0;
     const end: Record<string, number> = { ...wd.perf };
@@ -126,7 +133,7 @@ try {
       inputToNextPresentProxy: Array.from(inputPresent.subarray(0, ni)),
       app: wd.app()?.host.pkg, 
     };
-  }, { ms, action, screen, actionSource: performAction.toString() });
+  }, { ms, actions, screen, actionSource: performAction.toString() });
   const result = await measurement;
   const afterMetrics = await session.send("Performance.getMetrics");
   await session.send("HeapProfiler.collectGarbage");
