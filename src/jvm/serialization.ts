@@ -1,9 +1,6 @@
+import "./natives/jlang";
 import { rt, JObj, type ClassInfo } from "./runtime";
 import { jarray, PRIM_ARRAYS, primElem, type PrimElem } from "./abi";
-import { defineException } from "./natives/jlang";
-defineException("java/io/ObjectStreamException", "java/io/IOException");
-defineException("java/io/NotSerializableException", "java/io/ObjectStreamException");
-defineException("java/io/InvalidClassException", "java/io/ObjectStreamException");
 
 type Value = null | string | number | bigint | { ref: number };
 type Node = { kind: "object"; type: string; fields: [string, string, string, Value][] }

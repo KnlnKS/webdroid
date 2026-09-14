@@ -14,6 +14,7 @@ import "./jvm/natives/jstream";
 import "./jvm/natives/jjson";
 import "./jvm/natives/jmath";
 import "./jvm/natives/jio";
+import "./jvm/natives/jobjectstream";
 import "./jvm/natives/jdex";
 import "./jvm/natives/jconc";
 import "./jvm/natives/jtime";

@@ -29,6 +29,7 @@ export interface NativeSpec {
   /** "name(Ldesc;)V" or "static name(...)..." or "<init>(...)V" → impl fn (this = receiver) or alias to prototype prop */
   methods?: Record<string, ((...a: never[]) => unknown) | string>;
   statics?: Record<string, unknown>;
+  serialization?: { uid: bigint; fields: { name: string; desc: string; prop: string }[] };
   /** java-visible public instance fields: java name → JS property name on the TS class */
   fields?: Record<string, string> | string[];
   /** run once at init — for expensive static setup */

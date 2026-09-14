@@ -231,6 +231,11 @@ function ioobe(i: number, n: number): never {
 // ── ArrayList (also backs LinkedList/Vector/Stack behaviour)
 export class JList extends JObj {
   a: unknown[] = [];
+  get serialSize() { return this.a.length; }
+  set serialSize(size: number) {
+    if (size < 0) throw rt.mkThrowable("java/io/InvalidObjectException", "Invalid size: " + size);
+    this.a.length = size;
+  }
   removeAt(i: number) { this.a.splice(i, 1); }
 }
 
@@ -567,6 +572,20 @@ const stackMethods: Methods = {
   },
 };
 const listExtras: Record<string, (base: Methods) => Methods> = {
+  "java/util/ArrayList": () => ({
+    "writeObject(Ljava/io/ObjectOutputStream;)V": async function (this: JList, stream: unknown) {
+      const count = this.a.length;
+      await vcall(stream, "defaultWriteObject", "()V");
+      await vcall(stream, "writeInt", "(I)V", count);
+      for (let i = 0; i < count; i++) await vcall(stream, "writeObject", "(Ljava/lang/Object;)V", this.a[i]);
+      if (this.a.length !== count) throw rt.mkThrowable("java/util/ConcurrentModificationException", null);
+    },
+    "readObject(Ljava/io/ObjectInputStream;)V": async function (this: JList, stream: unknown) {
+      await vcall(stream, "defaultReadObject", "()V");
+      await vcall(stream, "readInt", "()I");
+      for (let i = 0; i < this.a.length; i++) this.a[i] = await vcall(stream, "readObject", "()Ljava/lang/Object;");
+    },
+  }),
   "java/util/Vector": vectorMethods,
   "java/util/Stack": (base) => ({ ...vectorMethods(base), ...stackMethods }),
 };
@@ -574,6 +593,7 @@ for (const n of ["java/util/ArrayList", "java/util/LinkedList", "java/util/Vecto
   const base = listMethods();
   rt.register({
     name: n, ctor: class extends JList {}, typeVars: "E",
+    serialization: n === "java/util/ArrayList" ? { uid: 8683452581122892189n, fields: [{ name: "size", desc: "I", prop: "serialSize" }] } : undefined,
     sup: n === "java/util/Stack" ? "java/util/Vector" : n === "java/util/ArrayDeque" ? "java/util/AbstractCollection" : "java/util/AbstractList",
     ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"],
     methods: { ...base, ...listExtras[n]?.(base) },
@@ -959,14 +979,33 @@ function addToSet(s: JSet, v: unknown): number | Promise<number> {
   return slowFind(s.slow, v).then((i) => (i >= 0 ? 0 : (s.slow.push({ k: v, v }), 1)));
 }
 rt.register({ name: "webdroid/BaseSet", ctor: JSet, typeVars: "E", ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: setMethods() });
+const setSerialization: Methods = {
+  "writeObject(Ljava/io/ObjectOutputStream;)V": async function (this: JSet, stream: unknown) {
+    const items = setItems(this);
+    await vcall(stream, "defaultWriteObject", "()V");
+    await vcall(stream, "writeInt", "(I)V", Math.min(1 << 30, 2 ** Math.ceil(Math.log2(Math.max(16, items.length / 0.75)))));
+    await vcall(stream, "writeFloat", "(F)V", 0.75);
+    await vcall(stream, "writeInt", "(I)V", items.length);
+    for (const item of items) await vcall(stream, "writeObject", "(Ljava/lang/Object;)V", item);
+  },
+  "readObject(Ljava/io/ObjectInputStream;)V": async function (this: JSet, stream: unknown) {
+    await vcall(stream, "defaultReadObject", "()V");
+    const capacity = await vcall(stream, "readInt", "()I"), factor = await vcall(stream, "readFloat", "()F"), count = await vcall(stream, "readInt", "()I");
+    if (capacity < 0 || !(factor > 0) || count < 0) throw rt.mkThrowable("java/io/InvalidObjectException", "Invalid set capacity, load factor or size");
+    this.m.clear(); this.slow = [];
+    for (let i = 0; i < count; i++) await addToSet(this, await vcall(stream, "readObject", "()Ljava/lang/Object;"));
+  },
+};
 class JEnumSet extends JSet {}
 for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
   "java/util/concurrent/CopyOnWriteArraySet", "java/util/EnumSet", "java/util/concurrent/ConcurrentHashMap$KeySetView"]) {
   rt.register({
     name: n, ctor: n === "java/util/EnumSet" ? JEnumSet : class extends JSet {}, typeVars: "E",
+    serialization: n === "java/util/HashSet" ? { uid: -5024744406713321676n, fields: [] }
+      : n === "java/util/LinkedHashSet" ? { uid: -2851667679971038690n, fields: [] } : undefined,
     sup: n === "java/util/LinkedHashSet" ? "java/util/HashSet" : "java/util/AbstractSet",
     ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
-    methods: n === "java/util/EnumSet" ? { ...setMethods(), ...enumSetStatics() } : setMethods(),
+    methods: n === "java/util/EnumSet" ? { ...setMethods(), ...enumSetStatics() } : { ...setMethods(), ...(n === "java/util/HashSet" ? setSerialization : {}) },
   });
 }
 function enumSetStatics() {

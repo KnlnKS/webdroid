@@ -1,13 +1,12 @@
 // android.os.Parcel: AOSP's wire layout (4-byte cells, UTF-16 strings, BNDL bundles) so
 // dataSize/dataPosition agree with what an app measured on a device. What has no byte
-// form here — a Serializable, a binder — rides in a side table keyed by its position.
+// form here — a binder — rides in a side table keyed by its position.
 import { JObj, rt } from "../jvm/runtime";
 import { dotName, slashName, jarray, mangleStaticField, utf8, u8 } from "../jvm/abi";
 import { newObj, vcall, JInt, JLong, JFloat, JDouble, JBool, JByte, JShort, JChar, box, defineException } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, type JList } from "../jvm/natives/jutil";
 import { JBundle, JBaseBundle, JPersistableBundle } from "./os";
 import { csText } from "./text";
-import { deserialize, type Serialized } from "../jvm/serialization";
 
 const enum V { NULL = -1, STRING = 0, INTEGER = 1, MAP = 2, BUNDLE = 3, PARCELABLE = 4, SHORT = 5, LONG = 6, FLOAT = 7, DOUBLE = 8, BOOLEAN = 9,
   CHARSEQUENCE = 10, LIST = 11, BYTEARRAY = 13, STRINGARRAY = 14, IBINDER = 15, PARCELABLEARRAY = 16, OBJECTARRAY = 17, INTARRAY = 18, LONGARRAY = 19,
@@ -114,10 +113,21 @@ function readBytes(p: JParcel): Int8Array | null {
 /** an opaque object: its slot holds a tag, the side table holds the value */
 function writeObject(p: JParcel, o: unknown) { p.objects.set(p.pos, o); writeInt(p, 0); }
 function readObject(p: JParcel) { const at = p.pos; readInt(p); return p.objects.get(at) ?? null; }
+async function writeSerializable(p: JParcel, o: unknown): Promise<void> {
+  if (o === null) return writeString(p, null);
+  writeString(p, typeof o === "string" ? "java.lang.String" : className(o as JObj));
+  const target = await newObj("java/io/ByteArrayOutputStream");
+  const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", target);
+  await vcall(output, "writeObject", "(Ljava/lang/Object;)V", o);
+  await vcall(output, "close", "()V");
+  writeBytes(p, await vcall(target, "toByteArray", "()[B"));
+}
 async function readSerializable(p: JParcel): Promise<unknown> {
   if (readString(p) === null) return null;
-  const object = readObject(p);
-  return object && typeof object === "object" && "serialized" in object ? deserialize(object as Serialized) : object;
+  const bytes = readBytes(p);
+  const source = await newObj("java/io/ByteArrayInputStream", "([B)V", bytes);
+  const input = await newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source);
+  return vcall(input, "readObject", "()Ljava/lang/Object;");
 }
 
 const className = (o: JObj) => dotName((o.constructor as { $i?: { name: string } }).$i?.name ?? "java/lang/Object");
@@ -244,7 +254,7 @@ async function writeValue(p: JParcel, v: unknown) {
   if (rt.iof(v, "java/util/List")) { tag(V.LIST); return writeList(p, v); }
   if (rt.iof(v, "java/lang/CharSequence")) { tag(V.CHARSEQUENCE); return writeString(p, await csText(v)); }
   if (rt.iof(v, "android/os/IBinder")) { tag(V.IBINDER); return writeObject(p, v); }
-  if (rt.iof(v, "java/io/Serializable")) { tag(V.SERIALIZABLE); writeString(p, className(v as JObj)); return writeObject(p, v); }
+  if (rt.iof(v, "java/io/Serializable")) { tag(V.SERIALIZABLE); return writeSerializable(p, v); }
   throw rt.mkThrowable("java/lang/RuntimeException", "Parcel: unable to marshal value " + className(v as JObj));
 }
 async function readValue(p: JParcel, loader: unknown): Promise<unknown> {
@@ -345,7 +355,7 @@ rt.register({
     "writeTypedList(Ljava/util/List;I)V": async function (this: JParcel, l: unknown, flags: number) { return writeTyped(this, l === null ? null : await toJsArray(l), flags); },
     "writeTypedArray([Landroid/os/Parcelable;I)V": function (this: JParcel, a: unknown[] | null, flags: number) { return writeTyped(this, a, flags); },
     "writeTypedObject(Landroid/os/Parcelable;I)V": async function (this: JParcel, o: unknown, flags: number) { if (o === null) writeInt(this, 0); else { writeInt(this, 1); await vcall(o, "writeToParcel", `(${P}I)V`, this, flags); } },
-    "writeSerializable(Ljava/io/Serializable;)V": function (this: JParcel, o: unknown) { if (o === null) return writeString(this, null); writeString(this, className(o as JObj)); writeObject(this, o); },
+    "writeSerializable(Ljava/io/Serializable;)V": function (this: JParcel, o: unknown) { return writeSerializable(this, o); },
     "writeStrongBinder(Landroid/os/IBinder;)V": function (this: JParcel, b: unknown) { writeObject(this, b); },
     "writeStrongInterface(Landroid/os/IInterface;)V": async function (this: JParcel, value: unknown) { writeObject(this, value ? await vcall(value, "asBinder", "()Landroid/os/IBinder;") : null); },
     [`writeInterfaceToken(${S})V`]: function (this: JParcel, s: string) { writeString(this, s); },

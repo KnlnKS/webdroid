@@ -55,3 +55,25 @@ export function decodeString(bytes: Int8Array | Uint8Array, charset: unknown): s
   const text = charsToString(chars, 0, chars.length);
   return wide ? text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\ufffd") : text;
 }
+
+export function encodeModifiedUtf8(str: string): Uint8Array {
+  const bytes: number[] = [];
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    if (c > 0 && c < 128) bytes.push(c);
+    else if (c < 2048) bytes.push(0xc0 | c >> 6, 0x80 | c & 63);
+    else bytes.push(0xe0 | c >> 12, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+  }
+  return Uint8Array.from(bytes);
+}
+/** modified UTF-8: NUL is two bytes and a supplementary character is two three-byte halves */
+export function decodeModifiedUtf8(b: Uint8Array): string {
+  let out = "";
+  for (let i = 0; i < b.length;) {
+    const c = b[i++];
+    if (c < 0x80) out += String.fromCharCode(c);
+    else if ((c & 0xe0) === 0xc0) out += String.fromCharCode(((c & 0x1f) << 6) | (b[i++] & 0x3f));
+    else out += String.fromCharCode(((c & 0x0f) << 12) | ((b[i++] & 0x3f) << 6) | (b[i++] & 0x3f));
+  }
+  return out;
+}

@@ -28,7 +28,9 @@ platform contracts; run the full serialized E2E suite at the end.
   additional observed failures. Image invalidation, outline clipping and foreground drawing
   restore the rounded place thumbnail with its border. Search titles ellipsize; concatenated
   replacement spans render rating stars. Virtual image-filter dispatch restores preview arrow
-  colors. Text, preview imagery, map-marker size and map-label outlines still differ.
+  colors. Resource density now corrects map-marker size; Canvas stroke draws the map-label outlines.
+  Fonts, wrapping and shadows still differ. Fresh-data Android also omits the first preview
+  thumbnail, so its absence alone does not establish a runtime defect.
 - The startup LoginPromoTutorialController trace-span mismatch was traced to FutureTask
   invoking completion on the ambient main thread after worker suspension. The callback now
   retains its executing thread; a fresh Chrome startup reaches the sign-in tutorial without it.
@@ -42,7 +44,9 @@ platform contracts; run the full serialized E2E suite at the end.
 
 ## Next
 
-1. Diagnose remaining preview imagery, fonts/wrapping, marker size and map-label outlines. Continue
+1. Complete the photo viewer: Serializable values now survive Parcel marshalling and reach
+   media layout, which exposes TextView shadow getters and DynamicDrawableSpan. Diagnose
+   remaining fonts/wrapping and shadows. Continue
    checking startup thread/span ordering and remaining API failures against
    Android/bytecode evidence.
 2. Exercise matching Maps search, place, directions and preview interactions in Chrome

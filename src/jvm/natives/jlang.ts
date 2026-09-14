@@ -497,6 +497,11 @@ for (const [sup, names] of [
   for (const n of names.split(" ")) defineException(lang(n), lang(sup));
 }
 
+defineException("java/io/ObjectStreamException", "java/io/IOException");
+for (const name of ["NotSerializableException", "InvalidClassException", "InvalidObjectException", "NotActiveException", "StreamCorruptedException"])
+  defineException("java/io/" + name, "java/io/ObjectStreamException");
+defineException("java/io/UTFDataFormatException", "java/io/IOException");
+
 class JAssertionError extends JThrowable {}
 rt.register({ name: "java/lang/AssertionError", ctor: JAssertionError, sup: "java/lang/Error", methods: {
   "<init>(Ljava/lang/Object;)V": async function (this: JAssertionError, detail: unknown) {

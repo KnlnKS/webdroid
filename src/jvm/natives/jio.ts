@@ -300,9 +300,9 @@ const PRIMS: [string, string, number, Get, Put][] = [
   ["Double", "D", 8, (v) => v.getFloat64(0), (v, x: number) => v.setFloat64(0, x)],
 ];
 const READS: [string, string, number, Get, Put?][] = [...PRIMS, ["UnsignedShort", "I", 2, (v) => v.getUint16(0)], ["UnsignedByte", "I", 1, (v) => v.getUint8(0)]];
-const readers = (read: (n: number, get: Get) => unknown) =>
+export const readers = (read: (n: number, get: Get) => unknown) =>
   Object.fromEntries(READS.map(([name, d, n, get]) => [`read${name}()${d}`, read(n, get)])) as NonNullable<NativeSpec["methods"]>;
-const writers = (write: (n: number, put: Put) => unknown) =>
+export const writers = (write: (n: number, put: Put) => unknown) =>
   Object.fromEntries(PRIMS.map(([name, d, n, , put]) => [`write${name}(${"SBC".includes(d) ? "I" : d})V`, write(n, put)])) as NonNullable<NativeSpec["methods"]>;
 /** every byte an InputStream has left: in place when its reads are ours, else through its virtual read */
 export async function readStreamFully(s: unknown): Promise<Uint8Array> {
@@ -459,7 +459,7 @@ rt.register({
 function dataRead(length: number, decode: (b: Uint8Array) => unknown) {
   return function (this: JInputStream) { return after(dataBytes(this, length), decode); };
 }
-function dataBytes(stream: JInputStream, length: number): Uint8Array | Promise<Uint8Array> {
+export function dataBytes(stream: JInputStream, length: number): Uint8Array | Promise<Uint8Array> {
   checkFileOpen(stream);
   const take = (bytes: Uint8Array) => {
     if (bytes.length !== length) throw rt.mkThrowable("java/io/EOFException", null);
@@ -511,114 +511,6 @@ rt.register({
     "close()V": function () {},
   },
 });
-// ── java.io.Object{Input,Output}Stream, over the serialization stream's BLOCK-DATA layer only.
-// A primitive written outside writeObject travels in TC_BLOCKDATA records, which is the whole
-// protocol Externalizable bodies use. An object graph needs
-// the class-descriptor and back-reference machinery, which is not modelled: readObject says so.
-const STREAM_MAGIC = 0xaced, STREAM_VERSION = 5, TC_BLOCKDATA = 0x77, TC_BLOCKDATALONG = 0x7a;
-class JObjectIn extends JInputStream { blockEnd = 0; }
-/** `n` bytes of block data, crossing record boundaries the way a long writeUTF body does */
-async function blockBytes(s: JObjectIn, n: number): Promise<Uint8Array> {
-  const out = new Uint8Array(n);
-  for (let got = 0; got < n;) {
-    while (s.blockEnd <= s.pos) {
-      const tag = (await dataBytes(s, 1))[0];
-      if (tag === TC_BLOCKDATA) { const length = (await dataBytes(s, 1))[0]; s.blockEnd = s.pos + length; }
-      else if (tag === TC_BLOCKDATALONG) {
-        const len = await dataBytes(s, 4);
-        s.blockEnd = s.pos + new DataView(len.buffer, len.byteOffset, 4).getUint32(0);
-      }
-      else throw rt.mkThrowable("java/io/StreamCorruptedException", "unsupported serialization tag 0x" + tag.toString(16));
-    }
-    const take = Math.min(n - got, s.blockEnd - s.pos);
-    out.set(await dataBytes(s, take), got);
-    got += take;
-  }
-  return out;
-}
-const blockRead = (n: number, decode: (v: DataView) => unknown) =>
-  async function (this: JObjectIn) {
-    const b = await blockBytes(this, n);
-    return decode(new DataView(b.buffer, b.byteOffset, n));
-  };
-/** modified UTF-8: NUL is two bytes and a supplementary character is two three-byte halves */
-function modifiedUtf8(b: Uint8Array): string {
-  let out = "";
-  for (let i = 0; i < b.length;) {
-    const c = b[i++];
-    if (c < 0x80) out += String.fromCharCode(c);
-    else if ((c & 0xe0) === 0xc0) out += String.fromCharCode(((c & 0x1f) << 6) | (b[i++] & 0x3f));
-    else out += String.fromCharCode(((c & 0x0f) << 12) | ((b[i++] & 0x3f) << 6) | (b[i++] & 0x3f));
-  }
-  return out;
-}
-defineException("java/io/StreamCorruptedException", "java/io/IOException");
-const noGraph = (): never => { throw rt.mkThrowable("java/io/StreamCorruptedException", "object graph serialization is not available"); };
-rt.register({
-  name: "java/io/ObjectInputStream", ctor: JObjectIn, sup: "java/io/InputStream",
-  ifaces: ["java/io/ObjectInput", "java/io/DataInput"],
-  methods: {
-    "<init>(Ljava/io/InputStream;)V": async function (this: JObjectIn, src: JInputStream) {
-      adoptStream.call(this, src);
-      const head = await dataBytes(this, 4);
-      const magic = (head[0] << 8) | head[1], version = (head[2] << 8) | head[3];
-      if (magic !== STREAM_MAGIC || version !== STREAM_VERSION) {
-        throw rt.mkThrowable("java/io/StreamCorruptedException", "invalid stream header");
-      }
-    },
-    ...readers(blockRead),
-    "readUTF()Ljava/lang/String;": async function (this: JObjectIn) {
-      const head = await blockBytes(this, 2);
-      return modifiedUtf8(await blockBytes(this, (head[0] << 8) | head[1]));
-    },
-    "readFully([B)V": async function (this: JObjectIn, out: Int8Array) {
-      const b = await blockBytes(this, out.length);
-      out.set(i8(b));
-    },
-    "readObject()Ljava/lang/Object;": noGraph,
-    "defaultReadObject()V": noGraph,
-    "close()V": function () {},
-  },
-});
-class JObjectOut extends JOutputStream { target: unknown = null; }
-/** every primitive write is its own TC_BLOCKDATA record, which reads back identically */
-function blockWrite(o: JObjectOut, bytes: Uint8Array): void {
-  o.chunks.push(TC_BLOCKDATA, bytes.length);
-  for (const b of bytes) o.chunks.push(b);
-}
-const blockPut = (n: number, encode: (v: DataView, x: never) => void) =>
-  function (this: JObjectOut, x: never) {
-    const b = new Uint8Array(n);
-    encode(new DataView(b.buffer), x);
-    blockWrite(this, b);
-  };
-rt.register({
-  name: "java/io/ObjectOutputStream", ctor: JObjectOut, sup: "java/io/OutputStream",
-  ifaces: ["java/io/ObjectOutput", "java/io/DataOutput"],
-  methods: {
-    "<init>(Ljava/io/OutputStream;)V": function (this: JObjectOut, out: JOutputStream) {
-      this.target = out;
-      this.chunks.push(STREAM_MAGIC >> 8, STREAM_MAGIC & 0xff, 0, STREAM_VERSION);
-    },
-    ...writers(blockPut),
-    "writeUTF(Ljava/lang/String;)V": function (this: JObjectOut, str: string) {
-      const body = utf8.enc.encode(str);
-      const b = new Uint8Array(body.length + 2);
-      b[0] = body.length >> 8; b[1] = body.length & 0xff;
-      b.set(body, 2);
-      blockWrite(this, b);
-    },
-    "writeObject(Ljava/lang/Object;)V": noGraph,
-    "flush()V": function (this: JObjectOut) {
-      const target = this.target;
-      const bytes = Int8Array.from(this.chunks);
-      this.chunks = [];
-      return target ? vcall(target, "write", "([BII)V", bytes, 0, bytes.length) : undefined;
-    },
-    "close()V": function (this: JObjectOut) { return vcall(this, "flush", "()V"); },
-  },
-});
-
 // ByteArrayOutputStream keeps AOSP's protected `buf`/`count` as real fields: subclasses (pooled
 // buffers, size probes) swap the array and read the count directly, so the bytes live in the
 // Int8Array itself rather than in the base stream's chunk list.
