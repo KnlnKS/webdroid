@@ -2684,3 +2684,10 @@ HTTP stream test covers incremental bytes, partial reads, timeout/retry, skip, E
 the upload regression check and typecheck pass. Fresh Maps reads the clip and reports its
 22-second duration, but no video frames reach the surface yet. A missing direct-audio-support
 query interrupts track selection and is the next observed platform failure.
+
+AudioManager.getDirectPlaybackSupport now reports DIRECT_PLAYBACK_NOT_SUPPORTED for the
+Web Audio output path, consistent with its existing lack of hardware offload/passthrough.
+The API 35 SDK confirms the static signature and capability flags. With that query supplied,
+Maps' unchanged ExoPlayer selects tracks and presents hundreds of decoded video frames; a
+Chrome screenshot shows changing video content. The visible seek control still draws a
+spinner: the native SeekBar inherits indeterminate ProgressBar drawing and discards its thumb.

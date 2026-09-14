@@ -553,6 +553,10 @@ for (const [name, methods, statics] of [
     "getDevices(I)[Landroid/media/AudioDeviceInfo;": () => jarray([], "Landroid/media/AudioDeviceInfo;"),
     "getAudioDevicesForAttributes(Landroid/media/AudioAttributes;)Ljava/util/List;": () => newArrayList(),
     "getDirectProfilesForAttributes(Landroid/media/AudioAttributes;)Ljava/util/List;": () => newArrayList(),
+    "static getDirectPlaybackSupport(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)I": (format: unknown, attrs: unknown) => {
+      if (format == null || attrs == null) return rt.npe();
+      return 0;
+    },
     ...noops("setStreamVolume(III)V",
       "registerAudioDeviceCallback(Landroid/media/AudioDeviceCallback;Landroid/os/Handler;)V",
       "unregisterAudioDeviceCallback(Landroid/media/AudioDeviceCallback;)V"),
@@ -564,6 +568,8 @@ for (const [name, methods, statics] of [
     ...stubs("", "getParameters(Ljava/lang/String;)Ljava/lang/String;"),
   }, {
     MODE_NORMAL: 0, MODE_RINGTONE: 1, MODE_IN_CALL: 2, MODE_IN_COMMUNICATION: 3,
+    DIRECT_PLAYBACK_NOT_SUPPORTED: 0, DIRECT_PLAYBACK_OFFLOAD_SUPPORTED: 1,
+    DIRECT_PLAYBACK_OFFLOAD_GAPLESS_SUPPORTED: 3, DIRECT_PLAYBACK_BITSTREAM_SUPPORTED: 4,
     RINGER_MODE_SILENT: 0, RINGER_MODE_VIBRATE: 1, RINGER_MODE_NORMAL: 2,
     GET_DEVICES_INPUTS: 1, GET_DEVICES_OUTPUTS: 2, GET_DEVICES_ALL: 3,
     PROPERTY_OUTPUT_SAMPLE_RATE: "android.media.property.OUTPUT_SAMPLE_RATE", PROPERTY_OUTPUT_FRAMES_PER_BUFFER: "android.media.property.OUTPUT_FRAMES_PER_BUFFER",
