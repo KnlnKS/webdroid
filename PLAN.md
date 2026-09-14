@@ -60,10 +60,10 @@ tests and diagnostic loads pause during serialized performance windows.
 - Explicit JVM operands, bounded resumable blocks and synchronous-until-suspension stages
   pass core DEX checks. Seven component rounds show construction 53.9 -> 41.2 ms and cold
   loop 52.3 -> 21.3 ms. App measurements do not clear the 15% gate for either block stage;
-  both are rejected. Retain explicit operands as a compiler simplification. Seven FitNotes
-  phase-decorrelated pairs give CPU +1.35%, median presentation-opportunity proxy +0.72%,
-  p95 +3.53%, retained heap -0.4%; no app-wide speedup is claimed. Promotion and hot-source
-  budgets stay unchanged, including restored sourceURL accounting.
+  both are rejected. Explicit operands are also rejected after combined latency guards
+  remain sensitive to phase and aggregation without an application speedup. The original
+  cold handlers are restored; the independent signed-zero correction and real DEX tier
+  fixture remain. Promotion and hot-source budgets stay unchanged.
 - Integrated typecheck, 1208 unit tests, eight executed framework exercises and eager/cold
   smoke compilation of all six target APKs pass. Framework coverage gaps are documented.
 - Remaining: combined app guards, full E2E and corpus against matching pristine captures,
@@ -73,6 +73,8 @@ tests and diagnostic loads pause during serialized performance windows.
   Real Lichess engine replies are verified on both revisions, with differing search work
   and existing pthread failures explicitly excluded from throughput claims. FitNotes and
   Mihon pass extended seven-pair window guards, with pooled FitNotes sensitivity disclosed.
-  Resy fails its original median opportunity-proxy guard; a seven-pair exact minus-operands
-  control and a presentation-phase control investigate attribution before retention.
-  Flappy replay verification and the full matrix follow the final source decision.
+  Resy fails its original median opportunity-proxy guard. A seven-pair exact minus-operands
+  control has an unresolved executor failure; an aligned seven-pair control passes nominally
+  but remains sensitive near the pooled guard. Final selection conservatively drops operands.
+  Typecheck, all 1208 tests, framework exercises and twelve target APK smoke compilations
+  pass again. Final selected-build app guards, Flappy replay and the full matrix remain.

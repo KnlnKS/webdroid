@@ -3827,3 +3827,33 @@ It controls initial phase without turning the opportunity proxy into causal
 destination latency. Earlier measurements and guard failures remain recorded.
 The harness also accepts fixed input offsets and read-only endpoint inspection
 for calibrated gameplay; typecheck passes after these harness-only additions.
+
+The aligned seven-pair Resy control completes with all 14 windows healthy and
+matching independent/current presentation counts. Baseline/current medians are
+CPU 209.505 -> 209.363 ms/s, opportunity proxy 7.30 -> 7.50 ms (+2.74%), p95
+11.070 -> 11.320 ms (+2.26%) and JS heap 386.972 -> 383.441 MB. Pooled medians
+are 7.20 -> 7.55 ms (+4.86%), p95 11.030 -> 11.505 ms (+4.31%); both per-window
+latency measures worsen in five pairs. Anchor waits are 1.0–6.8 ms and the
+post-transfer snapshot starts within 0–0.1 ms. This nominal guard passes; it
+does not erase the earlier failure, invalid isolation pair or pooled sensitivity.
+
+Final decision: reject explicit operands as well as the block stages. The
+construction-only benefit and compiler simplification do not justify uncertain
+application latency cost. This is a conservative selection, not a claim that the
+aligned guard failed or that operand emission was proven to cause every earlier
+regression. Restore `cold.ts` and `compiler.ts` to the preceding implementation,
+retaining the independent `litOf(-0)` correction and real DEX tier fixture.
+Typecheck, all 1208 tests/26438 assertions, the eight executed framework exercises
+and eager/cold compilation of all six APKs pass again. Logs are
+`webdroid-shots/performance-stages/final-selected-*`; two initial smoke commands
+used the nonexistent `Mihon.apk` filename and were corrected to
+`mihon-v0.20.4.apk`, which has zero method failures in both modes.
+
+A separate baseline Doodle Options inspection finds shooting, sound, snow and
+tilt calibration controls, with no touch movement mode. The instruction scene
+requires tilt; Java and native sensor APIs currently expose no accelerometer
+events. No guest state is changed to bypass it. Sustained score-advancing gameplay
+remains unverified, separately from the measured completed-title startup gain.
+Screenshots and all-process diagnostics are saved in the native worktree under
+`webdroid-shots/native-stages/doodle-options/`; observed main/browser diagnostics
+are clean, with child log/performance/queue channels still unavailable.
