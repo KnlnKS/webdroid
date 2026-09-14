@@ -11,8 +11,8 @@ import { rt, JObj, type NativeSpec } from "../runtime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
 import { JThrowable, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
-import { jarray, strArray, dotName, utf8, i8, u8 } from "../abi";
-import { vfs, type JInputStream, type JOutputStream } from "./jio";
+import { jarray, strArray, dotName, i8, u8 } from "../abi";
+import { vfs, type JOutputStream } from "./jio";
 import { Relay, syntheticAddress, syntheticHost, nameExists, ipv4Text, type Ipv4 } from "../../shell/relay";
 
 rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager", "javax/net/ssl/KeyManager",
@@ -639,7 +639,63 @@ rt.register({
   },
 });
 
-type HttpRes = { status: number; msg: string; hdrs: [string, string][]; body: Uint8Array };
+class JHttpInputStream extends JObj {
+  reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  timeout: () => number = () => 0;
+  bytes: Uint8Array = new Uint8Array(0); offset = 0;
+  closed = false; ended = false;
+  pending: Promise<void> | null = null;
+  async fill(): Promise<boolean> {
+    if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
+    if (this.offset < this.bytes.length) return true;
+    if (this.ended || !this.reader) return false;
+    this.pending ??= this.reader.read().then(result => {
+      this.ended = !!result.done; this.bytes = result.value ?? new Uint8Array(0); this.offset = 0;
+    }).catch(e => { throw rt.mkThrowable("java/io/IOException", String(e)); }).finally(() => { this.pending = null; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = this.timeout();
+    try {
+      if (timeout > 0) await Promise.race([this.pending, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(rt.mkThrowable("java/net/SocketTimeoutException", "Read timed out")), timeout);
+      })]);
+      else await this.pending;
+    } finally { clearTimeout(timer); }
+    return this.fill();
+  }
+  async read(out: Int8Array | null, offset: number, count: number): Promise<number> {
+    if (!out) return rt.npe();
+    if (offset < 0 || count < 0 || offset > out.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+    if (!count) return 0;
+    if (!await this.fill()) return -1;
+    const n = Math.min(count, this.bytes.length - this.offset);
+    out.set(this.bytes.subarray(this.offset, this.offset + n), offset); this.offset += n;
+    return n;
+  }
+  close(): void {
+    if (this.closed) return;
+    this.closed = true; this.bytes = new Uint8Array(0); this.offset = 0;
+    void this.reader?.cancel().catch(() => {});
+  }
+}
+rt.register({ name: "webdroid/HttpInputStream", ctor: JHttpInputStream, sup: "java/io/InputStream", methods: {
+  "read()I": async function (this: JHttpInputStream) { return await this.fill() ? this.bytes[this.offset++] : -1; },
+  "read([B)I": function (this: JHttpInputStream, out: Int8Array | null) { return this.read(out, 0, out?.length ?? 0); },
+  "read([BII)I": function (this: JHttpInputStream, out: Int8Array | null, off: number, len: number) { return this.read(out, off, len); },
+  "available()I": function (this: JHttpInputStream) { return this.bytes.length - this.offset; },
+  "skip(J)J": async function (this: JHttpInputStream, count: bigint) {
+    let left = count;
+    while (left > 0n && await this.fill()) {
+      const n = Number(left < BigInt(this.bytes.length - this.offset) ? left : BigInt(this.bytes.length - this.offset));
+      this.offset += n; left -= BigInt(n);
+    }
+    return count > 0n ? count - left : 0n;
+  },
+  "close()V": function (this: JHttpInputStream) { this.close(); },
+  "markSupported()Z": () => 0,
+  "mark(I)V": () => {},
+  "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+} });
+type HttpRes = { status: number; msg: string; hdrs: [string, string][]; stream: JHttpInputStream };
 const statusLine = (r: HttpRes) => "HTTP/1.1 " + r.status + (r.msg ? " " + r.msg : "");
 const PUT = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 /** Map<String, List<String>> as URLConnection and CookieHandler hand headers out (a null key is legal: the status line) */
@@ -662,13 +718,9 @@ class JURLConnection extends JObj {
   cto = 0; rto = 0; ifMod = 0n;
   req: [string, string][] = [];
   out: JOutputStream | null = null;
-  inStream: JInputStream | null = null;
   ac: AbortController | null = null;
   res: HttpRes | null = null;
   pending: Promise<HttpRes> | null = null;
-  /** The one fetch. Everything that needs the response funnels through here, which is what makes
-   *  the connection lazy the way AOSP's is. The whole body is awaited: the VM can suspend, a
-   *  Java read() cannot fail half-way, and the proxy has already removed the framing. */
   connect(): Promise<HttpRes> {
     if (this.res) return Promise.resolve(this.res);
     return this.pending ??= this.fetchResponse().finally(() => { this.pending = null; });
@@ -677,7 +729,6 @@ class JURLConnection extends JObj {
     this.connected = 1;
     const ac = (this.ac = new AbortController());
     let timer: ReturnType<typeof setTimeout> | undefined, timedOut = "";
-    // fetch resolves once the head is in, so the connect timeout runs until then and the read timeout after
     const arm = (ms: number, what: string) => {
       clearTimeout(timer);
       if (ms > 0) timer = setTimeout(() => { timedOut = what; ac.abort(); }, ms);
@@ -686,26 +737,26 @@ class JURLConnection extends JObj {
     for (const [k, v] of this.req) headers.append("x-wd-" + k, v);
     if (this.ifMod) headers.set("x-wd-if-modified-since", new Date(Number(this.ifMod)).toUTCString());
     const hasBody = this.out && this.method !== "GET" && this.method !== "HEAD";
-    let r: Response, body: Uint8Array;
+    let r: Response;
     arm(this.cto, "connect timed out");
     try {
       r = await fetch("/proxy?url=" + encodeURIComponent(this.url.spec), {
         method: this.method, headers, signal: ac.signal, body: hasBody ? new Uint8Array(this.out!.chunks) : undefined,
       });
-      arm(this.rto, "Read timed out");
-      body = new Uint8Array(await r.arrayBuffer());
     } catch (e) {
       if (timedOut) throw rt.mkThrowable("java/net/SocketTimeoutException", timedOut);
       if (ac.signal.aborted) throw rt.mkThrowable("java/net/SocketException", "Socket closed");
       throw rt.mkThrowable("java/io/IOException", String(e));
-    } finally { clearTimeout(timer); this.ac = null; }
+    } finally { clearTimeout(timer); }
     const final = r.headers.get("x-wd-final-url");
     // the proxy's own failure answer carries no final URL; a genuine upstream 502 does
-    if (r.status === 502 && !final) throw rt.mkThrowable("java/net/UnknownHostException", utf8.dec.decode(body));
+    if (r.status === 502 && !final) throw rt.mkThrowable("java/net/UnknownHostException", await r.text());
     if (final && final !== this.url.u.href) this.url = mkURL(final);   // getURL() reports where a redirect landed
     const hdrs: [string, string][] = [];
     r.headers.forEach((v, k) => { if (k !== "x-wd-final-url") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]); });
-    return (this.res = { status: r.status, msg: r.statusText, hdrs, body });
+    const stream = new JHttpInputStream();
+    stream.reader = r.body?.getReader() ?? null; stream.timeout = () => this.rto;
+    return (this.res = { status: r.status, msg: r.statusText, hdrs, stream });
   }
   /** case-insensitive; the last value wins, as URLConnection documents */
   hdr(name: string | null): string | null {
@@ -716,13 +767,7 @@ class JURLConnection extends JObj {
     for (const [hk, hv] of r.hdrs) if (hk === k) v = hv;
     return v;
   }
-  stream(): JInputStream {
-    if (!this.inStream) {
-      this.inStream = rt.make("java/io/ByteArrayInputStream") as JInputStream;
-      this.inStream.buf = this.res!.body;
-    }
-    return this.inStream;
-  }
+  stream(): JHttpInputStream { return this.res!.stream; }
 }
 /** an accessor that needs the response: connect first */
 function withRes<A extends unknown[]>(f: (this: JURLConnection, r: HttpRes, ...a: A) => unknown) {
@@ -814,9 +859,8 @@ rt.register({
     }),
     "getContentType()Ljava/lang/String;": withRes(function () { return this.hdr("content-type"); }),
     "getContentEncoding()Ljava/lang/String;": withRes(function () { return this.hdr("content-encoding"); }),
-    // the proxy strips content-length; the byte count is exact once the body is in hand, and HEAD has none to count
-    "getContentLength()I": withRes(function (r) { return this.method === "HEAD" ? -1 : r.body.length; }),
-    "getContentLengthLong()J": withRes(function (r) { return BigInt(this.method === "HEAD" ? -1 : r.body.length); }),
+    "getContentLength()I": withRes(function () { const n = asLong(this.hdr("content-length"), -1n); return n > 0x7fffffffn ? -1 : Number(n); }),
+    "getContentLengthLong()J": withRes(function () { return asLong(this.hdr("content-length"), -1n); }),
     "toString()Ljava/lang/String;": function (this: JURLConnection) {
       return dotName((this.constructor as typeof JObj).$i.name) + ":" + this.url.spec;
     },
@@ -858,8 +902,7 @@ rt.register({
       // AOSP connects here too, and answers null for any failure rather than throwing
       try { return (await this.connect()).status >= 400 ? this.stream() : null; } catch { return null; }
     },
-    // a response already in hand stays readable, as it does on AOSP; only an in-flight fetch is cut
-    "disconnect()V": function (this: JHttpURLConnection) { this.ac?.abort(); },
+    "disconnect()V": function (this: JHttpURLConnection) { this.res?.stream.close(); this.ac?.abort(); this.ac = null; },
     "usingProxy()Z": () => 0,
   },
 });

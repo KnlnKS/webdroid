@@ -2674,3 +2674,13 @@ virtual drawing and canvas restoration pass browser checks; affected drawable ch
 (109 assertions), and typecheck passes. Fresh Chrome now swipes from the Jitesh Patil photo
 to the same Jorge Chacon video page as Android without the gesture exception. Playback is
 not yet functional: Chrome remains at 0:00 while Android plays the 22-second clip.
+
+The video source's HTTP headers arrive in about 150 ms and the body delivers continuous
+16 KB chunks, but URLConnection buffered the entire file under a single eight-second read
+timeout. Response accessors now stop at headers and expose one incremental InputStream,
+with per-wait timeouts and a retained pending read so timeout/retry cannot lose bytes.
+Disconnect cancels the response, and unknown content lengths remain unknown. A real local
+HTTP stream test covers incremental bytes, partial reads, timeout/retry, skip, EOF and close;
+the upload regression check and typecheck pass. Fresh Maps reads the clip and reports its
+22-second duration, but no video frames reach the surface yet. A missing direct-audio-support
+query interrupts track selection and is the next observed platform failure.
