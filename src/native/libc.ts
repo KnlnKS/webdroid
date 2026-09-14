@@ -2,7 +2,7 @@
 // honestly. Struct layouts live in LAYOUT, chosen by the process ABI. stdio is in stdio.ts,
 // printf/scanf in printf.ts.
 
-import { mem, NativeFault, guestAt } from "./mem";
+import { mem, NativeFault, guestAt, wrote } from "./mem";
 import { hostLib, hostData, hostFn, NORET, ARG0, SERVED, ptr, vaList, type HostFn, type HostRet, type ArgReader, retF, retD, PTR, stp, ldp, calledMissing } from "./host";
 import { E, ERRSTR } from "./abi";
 import { invalidateRange, markProcessExited, setRawSyscall, type Cpu } from "./cpu";
@@ -221,7 +221,7 @@ function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promise<HostR
   if (nr === (PTR === 8 ? 135 : 175)) { const how = a.i(), set = a.p(), old = a.p(), size = a.u(); const e = size === 8 ? cpu.sigmask(how, set, old, 8) : E.INVAL; return e ? fail(cpu, e) : 0; }
   if (nr === (PTR === 8 ? 178 : 224)) return 4242 + cpu.tid;              // gettid
   if (nr === (PTR === 8 ? 172 : 20)) return 4242;                          // getpid
-  if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); if (n) crypto.getRandomValues(mem.bytes(buf, n)); return n; } // getrandom
+  if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); if (n) { crypto.getRandomValues(mem.bytes(buf, n)); wrote(buf, n); } return n; } // getrandom
   if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin
   if (nr === (PTR === 8 ? 179 : 116)) { fillSysinfo(a.p()); return 0; }    // sysinfo
   // the numbers whose wrapper takes the syscall's own arguments: the argument cursor sits
@@ -386,13 +386,14 @@ export function libcInit(): void {
       let i = 0;
       for (; i < n && mem.u8[s + i]; i++) mem.u8[d + dl + i] = mem.u8[s + i];
       mem.u8[d + dl + i] = 0;
+      wrote(d + dl, i + 1);
       return ARG0;
     },
     strcmp: SERVED, strncmp: SERVED,
     strcasecmp: (_c, a) => strcmpAt(a.p(), a.p(), 0x7fffffff, true),
     strncasecmp: (_c, a) => strcmpAt(a.p(), a.p(), a.u(), true),
     strcoll: (_c, a) => strcmpAt(a.p(), a.p(), 0x7fffffff, false),
-    strxfrm: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const l = mem.strlen(s); if (n) { const k = Math.min(l, n - 1); mem.memmove(d, s, k); mem.u8[d + k] = 0; } return l; },
+    strxfrm: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const l = mem.strlen(s); if (n) { const k = Math.min(l, n - 1); mem.memmove(d, s, k); mem.st8(d + k, 0); } return l; },
     strchr: (_c, a) => { const p = a.p(), c = a.i() & 255; for (let i = p; ; i++) { if (mem.u8[i] === c) return ptr(i); if (!mem.u8[i]) return 0; } },
     strrchr: (_c, a) => { const p = a.p(), c = a.i() & 255; let r = 0; for (let i = p; ; i++) { if (mem.u8[i] === c) r = i; if (!mem.u8[i]) return ptr(r); } },
     strstr: (_c, a) => { const i = strstrAt(a.p(), a.p(), false); return i ? ptr(i) : 0; },
@@ -462,9 +463,9 @@ export function libcInit(): void {
       if (pwc) mem.st32(pwc, cp);
       return b0 === 0 ? 0 : len;
     },
-    wcrtomb: (_c, a) => { const d = a.p(), wc = a.i(); const b = utf8(String.fromCodePoint(wc >>> 0 > 0x10ffff ? 0xfffd : wc >>> 0)); if (d) mem.u8.set(b, d); return b.length; },
+    wcrtomb: (_c, a) => { const d = a.p(), wc = a.i(); const b = utf8(String.fromCodePoint(wc >>> 0 > 0x10ffff ? 0xfffd : wc >>> 0)); if (d) mem.write(d, b); return b.length; },
     mbstowcs: (_c, a) => { const d = a.p(), s = mem.cstr(a.p()), n = a.u(); const cps = [...s].map((c) => c.codePointAt(0)!); if (!d) return cps.length; const k = Math.min(cps.length, n); for (let i = 0; i < k; i++) mem.st32(d + i * 4, cps[i]); if (k < n) mem.st32(d + k * 4, 0); return k; },
-    wcstombs: (_c, a) => { const d = a.p(), s = wstr(a.p()), n = a.u(); const b = utf8(s); if (!d) return b.length; const k = Math.min(b.length, n); mem.u8.set(b.subarray(0, k), d); if (k < n) mem.u8[d + k] = 0; return k; },
+    wcstombs: (_c, a) => { const d = a.p(), s = wstr(a.p()), n = a.u(); const b = utf8(s); if (!d) return b.length; const k = Math.min(b.length, n); mem.write(d, b.subarray(0, k)); if (k < n) mem.st8(d + k, 0); return k; },
     mblen: (_c, a) => { const s = a.p(); if (!s) return 0; const b0 = mem.u8[s]; return b0 === 0 ? 0 : b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : 2; },
     __ctype_get_mb_cur_max: () => 4,
 
@@ -494,7 +495,7 @@ export function libcInit(): void {
     gmtime: (_c, a) => { const t = mem.ld32(a.p()); fillTm(tmBuf, new Date(t * 1000), true); return tmBuf; },
     mktime: (_c, a) => Math.floor(mktime(a.p()) / 1000),
     timegm: (_c, a) => { const [sec, min, hour, mday, mon, year] = readTm(a.p()); return Math.floor(Date.UTC(year + 1900, mon, mday, hour, min, sec) / 1000); },
-    strftime: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(), tm = a.p(); const s = utf8(strftime(f, tm)); if (s.length >= n) return 0; mem.u8.set(s, d); mem.u8[d + s.length] = 0; return s.length; },
+    strftime: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(), tm = a.p(); const s = utf8(strftime(f, tm)); if (s.length >= n) return 0; mem.write(d, s); mem.st8(d + s.length, 0); return s.length; },
     tzset: () => {},
     difftime: (c, a) => retD(c, a.i() - a.i()),
 
@@ -524,7 +525,7 @@ export function libcInit(): void {
     gethostbyname: () => 0,
     gethostbyaddr: () => 0,
     gethostname: (_c, a) => { const b = a.p(), n = a.u(); mem.putCstr(b, "localhost", n); return 0; },
-    inet_aton: (_c, a) => { const s = a.str(), out = a.p(); const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s); if (!m) return 0; for (let i = 0; i < 4; i++) mem.u8[out + i] = +m[i + 1]; return 1; },
+    inet_aton: (_c, a) => { const s = a.str(), out = a.p(); const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s); if (!m) return 0; for (let i = 0; i < 4; i++) mem.st8(out + i, +m[i + 1]); return 1; },
     inet_addr: (_c, a) => { const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(a.str()); if (!m) return -1; return (+m[1]) | (+m[2] << 8) | (+m[3] << 16) | (+m[4] << 24); },
     inet_ntoa: (_c, a) => { const v = a.u(); mem.putCstr(inetBuf, `${v & 255}.${(v >>> 8) & 255}.${(v >>> 16) & 255}.${v >>> 24}`, 20); return inetBuf; },
     htons: (_c, a) => { const v = a.i() & 0xffff; return ((v & 255) << 8) | (v >>> 8); }, ntohs: (_c, a) => { const v = a.i() & 0xffff; return ((v & 255) << 8) | (v >>> 8); },
@@ -567,10 +568,11 @@ export function strncpy(d: number, s: number, n: number): void {
   let i = 0;
   for (; i < n && mem.u8[s + i]; i++) mem.u8[d + i] = mem.u8[s + i];
   for (; i < n; i++) mem.u8[d + i] = 0;
+  wrote(d, n);
 }
 export function snprintfInto(d: number, n: number, s: string): number {
   const b = utf8(s);
-  if (n > 0) { const k = Math.min(b.length, n - 1); mem.u8.set(b.subarray(0, k), d); mem.u8[d + k] = 0; }
+  if (n > 0) { const k = Math.min(b.length, n - 1); mem.write(d, b.subarray(0, k)); mem.st8(d + k, 0); }
   return b.length;
 }
 function strstrAt(h: number, n: number, ci: boolean): number {
@@ -631,7 +633,7 @@ function strtokAt(s: number, delim: number): { tok: number; next: number } {
   if (!u8[p]) return { tok: 0, next: p };
   const tok = p;
   while (u8[p] && !set[u8[p]]) p++;
-  if (u8[p]) { u8[p] = 0; p++; }
+  if (u8[p]) { mem.st8(p, 0); p++; }
   return { tok, next: p };
 }
 export function scanSink(a: { p(): number }) {

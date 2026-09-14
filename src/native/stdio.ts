@@ -1,7 +1,7 @@
 // stdio + the fd table over the JVM vfs: FILE structs live in guest memory (bionic __sFILE layout)
 // so the getc/putc macros and __srget refills work; /proc/cpuinfo and /proc/meminfo are synthesized.
 
-import { mem, guestAt } from "./mem";
+import { mem, guestAt, wrote } from "./mem";
 import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
@@ -263,7 +263,7 @@ function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): number | Pro
     if (f.event) { const c = f.event.count; f.event.count = 0; mem.st64(p, BigInt(c)); return 8; }
     const q = f.rpipe!.q;
     let k = 0;
-    while (k < n && q.length) { const c = q[0], take = Math.min(n - k, c.length); mem.u8.set(c.subarray(0, take), p + k); k += take; if (take === c.length) q.shift(); else q[0] = c.subarray(take); }
+    while (k < n && q.length) { const c = q[0], take = Math.min(n - k, c.length); mem.write(p + k, c.subarray(0, take)); k += take; if (take === c.length) q.shift(); else q[0] = c.subarray(take); }
     return k;
   }
   if (f.source) {
@@ -803,6 +803,7 @@ export function stdioInit(): void {
       const pending = pushback.get(fp);
       let used = 0;
       while (used < total && pending?.length) mem.u8[p + used++] = pending.pop()!;
+      wrote(p, used);
       if (!pending?.length) pushback.delete(fp);
       if (used === total) return n;
       const fin = (r: number) => { if (r < 0) setFlag(fp, F_ERR); else if (r + used < total) setFlag(fp, F_EOF); return Math.floor((used + Math.max(0, r)) / sz); };
@@ -838,11 +839,11 @@ export function stdioInit(): void {
       while (i < n - 1) {
         const c = await fgetc(cpu, fp);
         if (c < 0) break;
-        mem.u8[buf + i++] = c;
+        mem.st8(buf + i++, c);
         if (c === 10) break;
       }
       if (i === 0) return 0;
-      mem.u8[buf + i] = 0;
+      mem.st8(buf + i, 0);
       return ARG0;
     },
     fputc: (cpu, a) => { const c = a.i() & 255, fp = a.p(); mem.u8[scratch] = c; return fwriteBytes(cpu, fp, scratch, 1) === 1 ? c : -1; },

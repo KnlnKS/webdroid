@@ -2,7 +2,7 @@
 // token, uselocale keeps one per thread, and every *_l variant is its base function with the
 // trailing locale_t unread.
 
-import { mem } from "./mem";
+import { wrote, mem } from "./mem";
 import { hostLib, type HostFn, retF, retD, PTR, stp, ldp, ARG0, ptr, vaList } from "./host";
 import { utf8, wlen, wstr, mbLen, WCTEST } from "./libc";
 import { format } from "./printf";
@@ -107,6 +107,7 @@ function wcsToMbs(dst: number, srcp: number, nwc: number, len: number): number {
   if (!dst) return b.length;
   let k = 0, i = 0;
   for (const ch of s) { const e = enc.encode(ch); if (k + e.length > len) break; mem.u8.set(e, dst + k); k += e.length; i++; }
-  if (k < len && i === [...s].length) { mem.u8[dst + k] = 0; stp(srcp, 0); } else stp(srcp, src + 4 * i);
+  wrote(dst, k);
+  if (k < len && i === [...s].length) { mem.st8(dst + k, 0); stp(srcp, 0); } else stp(srcp, src + 4 * i);
   return k;
 }

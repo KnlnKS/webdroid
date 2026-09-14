@@ -3,7 +3,7 @@
 // and the calls a sandboxed app process cannot make (fork, exec, ptrace), which fail as they
 // would on a device.
 
-import { mem } from "./mem";
+import { wrote, mem } from "./mem";
 import { hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import { type Cpu, cpuByTid, sigHandlers } from "./cpu";
@@ -170,6 +170,7 @@ export function procInit(): void {
       const base = mem.txVa(vbase);
       const copy = mem.u8.slice(base, base + n * size);
       for (let i = 0; i < n; i++) mem.u8.set(copy.subarray(idx[i] * size, (idx[i] + 1) * size), base + i * size);
+      wrote(base, n * size);
     },
     bsearch: async (cpu, a) => {
       const keyp = a.va(), base = a.va(), n = a.u(), size = a.u(), cmp = a.p();
@@ -182,8 +183,8 @@ export function procInit(): void {
       }
       return 0;
     },
-    strlcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const l = mem.strlen(s); if (n) { const k = Math.min(l, n - 1); mem.memmove(d, s, k); u8[d + k] = 0; } return l; },
-    strlcat: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const dl = Math.min(mem.strlen(d), n), l = mem.strlen(s); if (dl < n) { const k = Math.min(l, n - dl - 1); mem.memmove(d + dl, s, k); u8[d + dl + k] = 0; } return dl + l; },
+    strlcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const l = mem.strlen(s); if (n) { const k = Math.min(l, n - 1); mem.memmove(d, s, k); mem.st8(d + k, 0); } return l; },
+    strlcat: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); const dl = Math.min(mem.strlen(d), n), l = mem.strlen(s); if (dl < n) { const k = Math.min(l, n - dl - 1); mem.memmove(d + dl, s, k); mem.st8(d + dl + k, 0); } return dl + l; },
     basename: (_c, a) => { const p = a.p(); const s = mem.cstr(p).replace(/\/+$/, ""); const i = s.lastIndexOf("/"); return mem.hostStr(s === "" ? "/" : s.slice(i + 1)); },
     dirname: (_c, a) => { const s = mem.cstr(a.p()).replace(/\/+$/, ""); const i = s.lastIndexOf("/"); return mem.hostStr(i < 0 ? "." : i === 0 ? "/" : s.slice(0, i)); },
     fnmatch: (_c, a) => {
@@ -203,15 +204,15 @@ export function procInit(): void {
     __strncpy_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); strncpy(d, s, n); return ARG0; },
     __strncpy_chk2: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); chk(n, a.u(), cpu); a.u(); strncpy(d, s, n); return ARG0; },
     __strcat_chk: (cpu, a) => { const d = a.p(), s = a.p(); const dl = mem.strlen(d), n = mem.strlen(s) + 1; chk(dl + n, a.u(), cpu); mem.memmove(d + dl, s, n); return ARG0; },
-    __strncat_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); const dl = mem.strlen(d); let i = 0; for (; i < n && u8[s + i]; i++) u8[d + dl + i] = u8[s + i]; u8[d + dl + i] = 0; chk(dl + i + 1, a.u(), cpu); return ARG0; },
+    __strncat_chk: (cpu, a) => { const d = a.p(), s = a.p(), n = a.u(); const dl = mem.strlen(d); let i = 0; for (; i < n && u8[s + i]; i++) u8[d + dl + i] = u8[s + i]; u8[d + dl + i] = 0; wrote(d + dl, i + 1); chk(dl + i + 1, a.u(), cpu); return ARG0; },
     __strlen_chk: (cpu, a) => { const s = a.p(); const n = mem.strlen(s); chk(n + 1, a.u(), cpu); return n; },
     __vsnprintf_chk: (cpu, a) => { const d = a.p(), n = a.u(); a.i(); chk(n, a.u(), cpu); const f = a.str(); return snprintfInto(d, n, format(f, vaList(a.p()))); },
     __snprintf_chk: (cpu, a) => { const d = a.p(), n = a.u(); a.i(); chk(n, a.u(), cpu); const f = a.str(); return snprintfInto(d, n, format(f, a)); },
     __vsprintf_chk: (_c, a) => { const d = a.p(); a.i(); a.u(); const f = a.str(); return mem.putCstr(d, format(f, vaList(a.p()))); },
     __sprintf_chk: (_c, a) => { const d = a.p(); a.i(); a.u(); const f = a.str(); return mem.putCstr(d, format(f, a)); },
     __umask_chk: () => 0o22,
-    __FD_SET_chk: (_c, a) => { const fd = a.i(), set = a.p(); u8[set + (fd >> 3)] |= 1 << (fd & 7); },
-    __FD_CLR_chk: (_c, a) => { const fd = a.i(), set = a.p(); u8[set + (fd >> 3)] &= ~(1 << (fd & 7)); },
+    __FD_SET_chk: (_c, a) => { const fd = a.i(), set = a.p(); mem.st8(set + (fd >> 3), u8[set + (fd >> 3)] | (1 << (fd & 7))); },
+    __FD_CLR_chk: (_c, a) => { const fd = a.i(), set = a.p(); mem.st8(set + (fd >> 3), u8[set + (fd >> 3)] & ~(1 << (fd & 7))); },
     __FD_ISSET_chk: (_c, a) => { const fd = a.i(), set = a.p(); return (u8[set + (fd >> 3)] >> (fd & 7)) & 1; },
   };
   for (const n of ["fork", "vfork", "execl", "execlp", "execv", "execve", "execvp", "waitpid", "wait"]) M[n] = (cpu) => fail(cpu, E.NOSYS);
@@ -223,7 +224,7 @@ export function procInit(): void {
       if (n < 0 || n >= (suffix ? 8 : PTR) * 8) return fail(cpu, E.INVAL);
       const at = p + (n >> 3), bit = 1 << (n & 7);
       if (op === "ismember") return mem.u8[at] & bit ? 1 : 0;
-      if (op === "add") mem.u8[at] |= bit; else mem.u8[at] &= ~bit;
+      mem.st8(at, op === "add" ? mem.u8[at] | bit : mem.u8[at] & ~bit);
       return 0;
     };
   }

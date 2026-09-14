@@ -334,7 +334,7 @@ function putSockaddr(endpoint: Ipv4Endpoint, address: number, length: number, ca
   sockaddr[2] = endpoint.port >>> 8;
   sockaddr[3] = endpoint.port & 255;
   sockaddr.set(endpoint.address, 4);
-  if (capacity > 0) mem.u8.set(sockaddr.subarray(0, Math.min(capacity, 16)), address);
+  if (capacity > 0) mem.write(address, sockaddr.subarray(0, Math.min(capacity, 16)));
   mem.st32(length, 16);
 }
 
@@ -513,7 +513,7 @@ export function nativePoll(_cpu: Cpu, pollfds: number, count: number, timeout: n
 
 const FD_SETSIZE = 1024;
 const fdIsSet = (set: number, fd: number): boolean => !!set && !!(mem.u8[set + (fd >>> 3)] & (1 << (fd & 7)));
-const setFd = (set: number, fd: number): void => { mem.u8[set + (fd >>> 3)] |= 1 << (fd & 7); };
+const setFd = (set: number, fd: number): void => { mem.st8(set + (fd >>> 3), mem.u8[set + (fd >>> 3)] | (1 << (fd & 7))); };
 
 /** Bionic select(2), sharing readiness and wakeups with poll(2). */
 function nativeSelect(cpu: Cpu, count: number, readSet: number, writeSet: number, exceptSet: number, timeout: number): number | Promise<number> {
@@ -613,8 +613,8 @@ function copyText(text: string, destination: number, capacity: number): boolean 
   const bytes = enc.encode(text);
   if (!destination) return capacity === 0;
   if (bytes.length + 1 > capacity) return false;
-  mem.u8.set(bytes, destination);
-  mem.u8[destination + bytes.length] = 0;
+  mem.write(destination, bytes);
+  mem.st8(destination + bytes.length, 0);
   return true;
 }
 
@@ -692,7 +692,7 @@ export function netInit(): void {
     freeaddrinfo: (_cpu, args) => nativeFreeaddrinfo(args.p()),
     gai_strerror: (_cpu, args) => ptr(gaiStrerror(args.i())),
     getnameinfo: (_cpu, args) => nativeGetnameinfo(args.p(), args.u(), args.p(), args.u(), args.p(), args.u(), args.i()),
-    inet_pton: (_cpu, args) => { const family = args.i(), text = args.str(), out = args.p(); const bytes = parseIpv4(text); if (family !== AF_INET) return -1; if (!bytes) return 0; mem.u8.set(bytes, out); return 1; },
+    inet_pton: (_cpu, args) => { const family = args.i(), text = args.str(), out = args.p(); const bytes = parseIpv4(text); if (family !== AF_INET) return -1; if (!bytes) return 0; mem.write(out, bytes); return 1; },
     inet_ntop: (_cpu, args) => { const family = args.i(), source = args.p(), destination = args.p(), length = args.u(); if (family !== AF_INET || !copyText(ipv4Text(mem.u8.subarray(source, source + 4)), destination, length)) return 0; return ptr(destination); },
     poll: (cpu, args) => nativePoll(cpu, args.p(), args.u(), args.i()),
     select: (cpu, args) => nativeSelect(cpu, args.i(), args.p(), args.p(), args.p(), args.p()),

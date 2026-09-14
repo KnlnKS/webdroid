@@ -207,7 +207,7 @@ function drain(s: { out: Uint8Array[] }, strm: number): number {
   let avail = mem.ld32(strm + Z.AVOUT) >>> 0, out = ldp(strm + Z.OUT), wrote = 0;
   while (avail && s.out.length) {
     const chunk = s.out[0], take = Math.min(avail, chunk.length);
-    mem.u8.set(chunk.subarray(0, take), out);
+    mem.write(out, chunk.subarray(0, take));
     out += take; avail -= take; wrote += take;
     if (take === chunk.length) s.out.shift(); else s.out[0] = chunk.subarray(take);
   }
@@ -329,7 +329,7 @@ export function zlibInit(): void {
       const out = decodeZlib(mem.u8.slice(src, src + length));
       if (!out) return Z_DATA_ERROR;
       if (out.length > loadUlong(dstLen)) return Z_BUF_ERROR;
-      mem.u8.set(out, dst); storeUlong(dstLen, out.length);
+      mem.write(dst, out); storeUlong(dstLen, out.length);
       return Z_OK;
     },
   };

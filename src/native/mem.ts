@@ -13,7 +13,8 @@ const enc = new TextEncoder(), dec = new TextDecoder();
 function checkAddr(a: number, n: number): void {
   if (((a >>> 0) - LOW) >>> 0 > SPAN - n) badAddr(a);
 }
-function wrote(a: number, n: number): void {
+/** Notify after a host writes directly into a guest-provided buffer. */
+export function wrote(a: number, n: number): void {
   if (n <= 0) return;
   const end = ((a >>> 0) + n - 1) >>> PAGE_SHIFT;
   for (let pg = a >>> PAGE_SHIFT; pg <= end; pg++) if (codePages[pg] & 1) { core.code_write(a >>> 0, n); return; }
