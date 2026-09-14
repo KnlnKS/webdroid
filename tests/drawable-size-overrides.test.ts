@@ -144,3 +144,22 @@ test("nested drawable containers share virtual size and draw dispatch", async ()
   await vcall(layer, "setLayerSize", "(III)V", 0, 100, 60);
   expect(vcallMaybe(layer, "getIntrinsicWidth", "()I")).toBe(100);
 });
+
+
+test("InsetDrawable replaces its child through the wrapper and retains pixel or fractional insets", async () => {
+  for (const [type, inset, expected] of [["I", 3, 90], ["F", 0.25, 168]] as const) {
+    const first = drawable().d, next = drawable().d;
+    const wrapped = await newObj("android/graphics/drawable/InsetDrawable", `(Landroid/graphics/drawable/Drawable;${type})V`, first, inset);
+    expect(rt.iof(wrapped, "android/graphics/drawable/DrawableWrapper")).toBe(1);
+    await vcall(wrapped, "setDrawable", "(Landroid/graphics/drawable/Drawable;)V", next);
+    expect(first.callback).toBeNull(); expect(next.callback).toBe(wrapped);
+    expect(await vcall(wrapped, "getDrawable", "()Landroid/graphics/drawable/Drawable;")).toBe(next);
+    expect(await vcall(wrapped, "getIntrinsicWidth", "()I")).toBe(expected);
+    await vcall(wrapped, "setBounds", "(IIII)V", 0, 0, 100, 80);
+    const b = next.bounds, x = type === "I" ? 3 : 25, y = type === "I" ? 3 : 20;
+    expect([b.left, b.top, b.right, b.bottom]).toEqual([x, y, 100 - x, 80 - y]);
+    const padding = await newObj("android/graphics/Rect");
+    expect(await vcall(wrapped, "getPadding", "(Landroid/graphics/Rect;)Z", padding)).toBe(1);
+    expect([padding.left, padding.top, padding.right, padding.bottom]).toEqual([x, y, x, y]);
+  }
+});

@@ -900,19 +900,6 @@ rt.register({
     "getRadius()I": function (this: JRippleDrawable) { return this.explicitRadius; },
   },
 });
-rt.register({
-  name: "android/graphics/drawable/InsetDrawable", ctor: class extends JLayerDrawable {}, sup: "android/graphics/drawable/LayerDrawable",
-  methods: {
-    "<init>(Landroid/graphics/drawable/Drawable;I)V": function (this: JLayerDrawable, d: JDrawable, i: number) {
-      this.pushLayer({ d, insets: [i, i, i, i] });
-    },
-    "<init>(Landroid/graphics/drawable/Drawable;IIII)V": function (this: JLayerDrawable, d: JDrawable, l: number, t: number, r: number, b: number) {
-      this.pushLayer({ d, insets: [l, t, r, b] });
-    },
-    "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JLayerDrawable) { return this.layers[0]?.d ?? null; },
-  },
-});
-
 class JVectorDrawable extends JDrawable {
   vw = 24; vh = 24; // dp size
   vpW = 24; vpH = 24;
@@ -955,21 +942,26 @@ class JDrawableWrapper extends JDrawable {
   size(vertical: boolean) { return this.dr ? drawableSize(this.dr, vertical) : -1; }
   onStateChange(): boolean { return this.dr ? this.dr.onStateChange() : false; }
 }
-function wrapSet(this: JDrawableWrapper, d: JDrawable | null) {
+async function wrapSet(this: JDrawableWrapper, d: JDrawable | null) {
+  const thread = curThread;
   if (this.dr) this.dr.callback = null;
   this.dr = d;
   if (d) {
     d.callback = this;
-    d.stateSet = this.stateSet; d.level = this.level;
-    setBounds.call(d, this.bounds.left, this.bounds.top, this.bounds.right, this.bounds.bottom);
+    await vcallOn(thread, d, "setVisible", "(ZZ)Z", +this.visible, 1);
+    await vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.stateSet));
+    await vcallOn(thread, d, "setLevel", "(I)Z", this.level);
+    await vcallOn(thread, d, "setBounds", "(IIII)V", this.bounds.left, this.bounds.top, this.bounds.right, this.bounds.bottom);
+    await vcallOn(thread, d, "setLayoutDirection", "(I)Z", this.layoutDir);
   }
+  invalidateSelf.call(this);
 }
 rt.register({
   name: "android/graphics/drawable/DrawableWrapper", ctor: JDrawableWrapper, sup: "android/graphics/drawable/Drawable",
   ifaces: ["android/graphics/drawable/Drawable$Callback"],
   methods: {
     "<init>(Landroid/graphics/drawable/Drawable;)V": wrapSet,
-    "setDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JDrawableWrapper, d: JDrawable | null) { wrapSet.call(this, d); invalidateSelf.call(this); },
+    "setDrawable(Landroid/graphics/drawable/Drawable;)V": wrapSet,
     "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableWrapper) { return this.dr; },
     "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JDrawableWrapper, r: JRect) { if (this.dr) return setBounds.call(this.dr, r.left, r.top, r.right, r.bottom); },
     "onStateChange([I)Z": function (this: JDrawableWrapper, st: Int32Array) { return this.dr ? vcall(this.dr, "setState", "([I)Z", st) : 0; },
@@ -996,6 +988,44 @@ rt.register({
     ...stubs(null, "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;"),
   },
 });
+class JInsetDrawable extends JDrawableWrapper {
+  insets: [number, number, number, number] = [0, 0, 0, 0];
+  fractions: [number, number, number, number] = [0, 0, 0, 0];
+  inset(edge: number): number {
+    const b = this.bounds, length = edge % 2 ? b.bottom - b.top : b.right - b.left;
+    return this.insets[edge] + Math.trunc(this.fractions[edge] * length);
+  }
+  size(vertical: boolean) {
+    const edge = vertical ? 1 : 0, fraction = this.fractions[edge] + this.fractions[edge + 2];
+    return after(super.size(vertical), n => n < 0 || fraction >= 1 ? -1 : Math.trunc(n / (1 - fraction)) + this.insets[edge] + this.insets[edge + 2]);
+  }
+}
+const insetInit = (fraction: boolean) => function (this: JInsetDrawable, d: JDrawable | null, l: number, t = l, r = l, b = l) {
+  if (fraction) this.fractions = [l, t, r, b]; else this.insets = [l, t, r, b];
+  return wrapSet.call(this, d);
+};
+rt.register({ name: "android/graphics/drawable/InsetDrawable", ctor: JInsetDrawable, sup: "android/graphics/drawable/DrawableWrapper", methods: {
+  "<init>(Landroid/graphics/drawable/Drawable;I)V": insetInit(false),
+  "<init>(Landroid/graphics/drawable/Drawable;IIII)V": insetInit(false),
+  "<init>(Landroid/graphics/drawable/Drawable;F)V": insetInit(true),
+  "<init>(Landroid/graphics/drawable/Drawable;FFFF)V": insetInit(true),
+  "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JInsetDrawable, b: JRect) {
+    if (this.dr) return vcallOn(curThread, this.dr, "setBounds", "(IIII)V", b.left + this.inset(0), b.top + this.inset(1), b.right - this.inset(2), b.bottom - this.inset(3));
+  },
+  "getOpacity()I": function (this: JInsetDrawable) {
+    return after(this.dr ? vcallOn(curThread, this.dr, "getOpacity", "()I") : -2, opacity =>
+      opacity === -1 && [0, 1, 2, 3].some(edge => this.inset(edge) > 0) ? -3 : opacity);
+  },
+  "getPadding(Landroid/graphics/Rect;)Z": function (this: JInsetDrawable, r: JRect) {
+    r.left = r.top = r.right = r.bottom = 0;
+    return after(this.dr ? vcallOn(curThread, this.dr, "getPadding", "(Landroid/graphics/Rect;)Z", r) : 0, pad => {
+      const l = this.inset(0), t = this.inset(1), right = this.inset(2), b = this.inset(3);
+      r.left += l; r.top += t; r.right += right; r.bottom += b;
+      return +(!!pad || !!(l | t | right | b));
+    });
+  },
+} });
+
 class JRotateDrawable extends JDrawableWrapper {
   fromDegrees = 0; toDegrees = 360; currentDegrees = 0;
   pivotX = 0.5; pivotY = 0.5; pivotXRelative = true; pivotYRelative = true;
@@ -1054,9 +1084,10 @@ class JScaleDrawable extends JDrawableWrapper {
   }
 }
 rt.register({ name: "android/graphics/drawable/ScaleDrawable", ctor: JScaleDrawable, sup: "android/graphics/drawable/DrawableWrapper", methods: {
-  "<init>(Landroid/graphics/drawable/Drawable;IFF)V": function (this: JScaleDrawable, d: JDrawable | null, gravity: number, w: number, h: number) {
-    this.gravity = gravity; this.scaleWidth = w; this.scaleHeight = h; wrapSet.call(this, d);
-    return this.layout();
+  "<init>(Landroid/graphics/drawable/Drawable;IFF)V": async function (this: JScaleDrawable, d: JDrawable | null, gravity: number, w: number, h: number) {
+    const thread = curThread;
+    this.gravity = gravity; this.scaleWidth = w; this.scaleHeight = h; await wrapSet.call(this, d);
+    return this.layout(thread);
   },
   "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JScaleDrawable) { return this.layout(); },
   "onLevelChange(I)Z": async function (this: JScaleDrawable, level: number) {
@@ -1364,7 +1395,7 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
         d[`pivot${axis}Relative`] = relative;
         d[`pivot${axis}`] = relative ? complexToFraction(value.d, 1, 1) : rvFloat(res, value);
       }
-      wrapSet.call(d, await itemDrawable(res, node, theme));
+      await wrapSet.call(d, await itemDrawable(res, node, theme));
       return d;
     }
     case "scale": {
@@ -1375,7 +1406,7 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
       d.gravity = xmlInt(res, get(AT.gravity), 3);
       d.useIntrinsicMinimum = !!xmlInt(res, get(AT.useIntrinsicSizeAsMinimum), 0);
       d.level = xmlInt(res, get(AT.level), 0);
-      wrapSet.call(d, await itemDrawable(res, node, theme));
+      await wrapSet.call(d, await itemDrawable(res, node, theme));
       return d;
     }
     case "animated-selector":
@@ -1451,19 +1482,13 @@ async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme 
       return d;
     }
     case "inset": {
-      const d = new JLayerDrawable();
-      const child = await itemDrawable(res, node, theme);
-      const all = dimen(get(AT.inset), 0);
-      if (child) {
-        d.pushLayer({
-          d: child,
-          insets: [
-            dimen(get(AT.insetLeft), all), dimen(get(AT.insetTop), all),
-            dimen(get(AT.insetRight), all), dimen(get(AT.insetBottom), all),
-          ],
-        });
-        d.ids.push(null);
+      const d = new JInsetDrawable(), all = get(AT.inset);
+      for (const [i, attr] of [AT.insetLeft, AT.insetTop, AT.insetRight, AT.insetBottom].entries()) {
+        const value = get(attr) ?? all;
+        if (value?.t === TV.FRACTION) d.fractions[i] = complexToFraction(value.d, 1, 1);
+        else d.insets[i] = dimen(value, 0);
       }
+      await wrapSet.call(d, await itemDrawable(res, node, theme));
       return d;
     }
     // Both wrap a bitmap named by android:src; the .9.png's own npTc chunk is what makes it
