@@ -35,6 +35,31 @@ const BXLR = 0xe12fff1e;
 beforeAll(() => setA64(false));
 
 describe("arm decoder", () => {
+  test("instruction synchronization preserves writeback, flags and Thumb IT state", () => {
+    const data = mem.reserve(0x1000, 0x1000);
+    const setup = (cpu: Cpu) => {
+      cpu.w[0] = -1; cpu.w[2] = data; cpu.w[4] = 0x12345678;
+      cpu.si.fill(0x33445566); cpu.fpcr = 0x400000; cpu.fpsr = 0x8000010;
+    };
+    const arm = run([
+      0xe2900001, // adds r0, r0, #1
+      0xe4812004, // str r2, [r1], #4
+      0xf57ff06f, // isb
+      0xe2a03000, // adc r3, r0, #0
+      BXLR,
+    ], setup);
+    expect([arm.w[0], arm.w[2], arm.w[6], mem.ld32(data)]).toEqual([0, data + 4, 1, 0x12345678]);
+    const thumb = runThumb([
+      0x3001, 0xbf08, // adds r0, #1; it eq
+      0xf841, 0x2b04, // streq.w r2, [r1], #4
+      0xf3bf, 0x8f6f, // isb
+      0xbf28, 0x2307, // it cs; movcs r3, #7
+      0x4770,
+    ], setup);
+    expect([thumb.w[0], thumb.w[2], thumb.w[6], mem.ld32(data)]).toEqual([0, data + 4, 7, 0x12345678]);
+    expect(thumb.cpsr & 0x0600fc00).toBe(0);
+  });
+
   test("Thumb BL and BLX preserve state across Thumb and ARM callees", () => {
     const c = runThumb([
       0xb510, 0x4604, // push {r4, lr}; mov r4, r0

@@ -136,7 +136,7 @@ pub fn scanArm(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
     const cc = w >> 28;
     const next = pc + 4;
     const b = &r.blocks[i];
-    if (cc == 15) return .{ .len = 4, .ends = (w & 0x0e000000) == 0x0a000000 };
+    if (cc == 15) return .{ .len = 4, .ends = (w & 0x0e000000) == 0x0a000000 or w & 0xfffffff0 == 0xf57ff060 };
     const top = bits(w, 25, 3);
     const rd = bits(w, 12, 4);
     var ends = false;
@@ -174,7 +174,7 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
     if (h >= 0xe800) {
         const h2: u32 = mem.ld(u16, pc + 2);
         cpu.cover(page, pc, pc + 2);
-        return .{ .len = 4, .ends = thumbCall(h, h2) or thumbBranch(h, h2) };
+        return .{ .len = 4, .ends = thumbCall(h, h2) or thumbBranch(h, h2) or (h == 0xf3bf and h2 & 0xfff0 == 0x8f60) };
     }
     switch (h >> 12) {
         4 => if ((h & 0xfc00) == 0x4400) {

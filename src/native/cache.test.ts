@@ -3,6 +3,7 @@ import { codeStats, invalidateRange, setA64 } from "./cpu";
 import { mem } from "./mem";
 import { RET, run } from "./a64.testkit";
 import { JIT_HEAT, jitEvict, jitStats } from "./core";
+import { RET_SENTINEL } from "./abi";
 
 const movW0 = (v: number) => 0x52800000 | (v << 5);
 
@@ -112,6 +113,42 @@ describe("the decode cache", () => {
       execute(writer); execute(at);
       expect(c.w[0]).toBe(2);
     }
+  });
+
+  test("instruction synchronization observes a store to the active region's successor", () => {
+    const c = run([RET]), at = mem.reserve(0x1000, 0x1000), target = at + 24;
+    const words = [
+      0xb900012a, // str w10, [x9]
+      0xd50b7b29, // dc cvau, x9
+      0xd5033b9f, // dsb ish
+      0xd50b7529, // ic ivau, x9
+      0xd5033b9f, // dsb ish
+      0xd5033fdf, // isb
+      movW0(1), RET,
+    ];
+    mem.u32.set(words, at >>> 2);
+    const execute = (destination: number) => {
+      c.w.fill(0); c.si.fill(0x12345678);
+      c.cpsr = 0xa0000000; c.fpcr = 0x400000; c.fpsr = 0x10; c.excl = 0;
+      c.w[18] = destination; c.w[20] = movW0(2); c.w[60] = RET_SENTINEL;
+      c.setPc(at);
+      const start = c.ic;
+      for (let i = 0; i < 16; i++) {
+        if (c.runSlice(1000) === 2) return { regs: [...c.w], vectors: [...c.si], pc: c.pc,
+          cpsr: c.cpsr, fpcr: c.fpcr, fpsr: c.fpsr, excl: c.excl, instructions: c.ic - start };
+      }
+      throw new Error("self-modifying region did not return");
+    };
+    const expected = execute(target);
+    expect(c.w[0]).toBe(2);
+    expect(expected.instructions).toBe(words.length);
+    mem.st32(target, movW0(1));
+    const compiled = jitStats.regions;
+    for (let i = 0; i <= JIT_HEAT; i++) execute(at + 0x800);
+    expect(jitStats.regions).toBeGreaterThan(compiled);
+    const actual = execute(target);
+    expect(mem.ld32(target)).toBe(movW0(2));
+    expect(actual).toEqual(expected);
   });
 
   test("an evicted region re-heats and comes back", () => {

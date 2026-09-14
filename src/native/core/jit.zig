@@ -207,6 +207,8 @@ fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
     const o = opAt(page, pc);
     const next = pc + 4;
     const ends = switch (o.kind) {
+        // ISB must redispatch after a store invalidates the active region's source page.
+        .nop => mem.ld(u32, pc) & 0xfffff0ff == 0xd50330df,
         .b => blk: {
             if (o.a == 0) r.blocks[i].taken = blockFor(r, @truncate(o.imm));
             break :blk true;
