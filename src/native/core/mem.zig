@@ -1,5 +1,6 @@
 const std = @import("std");
 const abi = @import("abi.zig");
+const cpu = @import("cpu.zig");
 const assert = std.debug.assert;
 
 const PAGE_SHIFT = abi.PAGE_SHIFT;
@@ -133,6 +134,7 @@ pub export fn malloc(n: u32) u32 {
         if (p == 0) return 0;
         p += HDR;
     }
+    _ = cpu.code_write(p - HDR, cs + HDR);
     ptr(u32, p - 8).* = 0;
     ptr(u32, p - 4).* = cs;
     blocks += 1;
@@ -156,6 +158,7 @@ pub export fn free(p_in: u32) u32 {
     blocks -= 1;
     used -= cs;
     const head = headFor(cs);
+    _ = cpu.code_write(p, 4);
     ptr(u32, p).* = head.*;
     head.* = p;
     return 1;
@@ -207,6 +210,7 @@ pub export fn map_pages(n_in: u32, rsv: u32, alignment: u32) u32 {
     if (p == 0) return 0;
     const a = pageOf(p);
     const b = @min(a + np, pageOf(module_bot));
+    cpu.invalidate_range(p, (b - a) * PAGE_SIZE);
     @memset(pages[a..b], if (rsv != 0) RESERVED else USED);
     if (rsv == 0) fill(p, 0, n);
     return p;
@@ -216,7 +220,10 @@ pub export fn unmap_pages(addr: u32, n_in: u32) u32 {
     if (addr & (PAGE_SIZE - 1) != 0 or n == 0 or addr < abi.ARENA_BASE) return 0;
     const a = pageOf(addr);
     const b = @min(a + (n >> PAGE_SHIFT), pageOf(module_bot));
-    if (b > a) @memset(pages[a..b], FREE);
+    if (b > a) {
+        cpu.invalidate_range(addr, (b - a) * PAGE_SIZE);
+        @memset(pages[a..b], FREE);
+    }
     return 1;
 }
 export fn commit_pages(addr: u32, n: u32) u32 {
@@ -226,6 +233,7 @@ export fn commit_pages(addr: u32, n: u32) u32 {
     if (b > pageOf(module_bot)) return 0;
     for (a..b) |i| if (pages[i] == FREE) return 0;
     for (a..b) |i| if (pages[i] == RESERVED) {
+        cpu.invalidate_range(@intCast(i * PAGE_SIZE), PAGE_SIZE);
         pages[i] = USED;
         fill(@intCast(i * PAGE_SIZE), 0, PAGE_SIZE);
     };
@@ -236,6 +244,7 @@ export fn decommit_pages(addr: u32, n: u32) void {
     const b = @min(pageOf(addr +% n +% (PAGE_SIZE - 1)), pageOf(module_bot));
     var i = a;
     while (i < b) : (i += 1) if (pages[i] == USED) {
+        cpu.invalidate_range(@intCast(i * PAGE_SIZE), PAGE_SIZE);
         pages[i] = RESERVED;
     };
 }
@@ -506,6 +515,7 @@ export fn alloc_stack(size: u32) u32 {
         const base = free_stacks[i][0];
         free_stack_count -= 1;
         free_stacks[i] = free_stacks[free_stack_count];
+        cpu.invalidate_range(base, size);
         return base;
     };
     const base = stack_top +% abi.STACK_GUARD;
