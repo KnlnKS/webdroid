@@ -13,14 +13,16 @@ describe("the decode cache", () => {
   test("reused allocations and mappings discard code from their previous lifetime", () => {
     const c = run([RET]);
     const execute = (at: number) => { c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ } return c.w[0]; };
-    for (const hot of [false, true]) for (const kind of ["malloc", "calloc", "realloc", "mapping", "commit"] as const) {
-      const mapped = kind === "mapping" || kind === "commit";
+    for (const hot of [false, true]) for (const kind of ["malloc", "calloc", "realloc", "mapping", "commit", "discard"] as const) {
+      const mapped = kind === "mapping" || kind === "commit" || kind === "discard";
       const source = kind === "realloc" ? mem.malloc(64) : 0;
       const base = mapped ? mem.mapPages(4096) : mem.malloc(128), at = base + 16;
       mem.u32[at >>> 2] = movW0(1); mem.u32[(at >>> 2) + 1] = RET;
       for (let i = 0; i < (hot ? JIT_HEAT + 2 : 1); i++) expect(execute(at)).toBe(1);
       let reused: number;
-      if (kind === "commit") {
+      if (kind === "discard") {
+        mem.dropVa(BigInt(base), 4096); reused = base;
+      } else if (kind === "commit") {
         mem.decommitPages(base, 4096); expect(mem.commitPages(base, 4096)).toBe(true); reused = base;
       } else if (kind === "mapping") {
         expect(mem.unmapPages(base, 4096)).toBe(true); reused = mem.mapPages(4096);

@@ -433,11 +433,16 @@ export fn drop_va(v: u64, n: u64) u32 {
     const l = lo(v);
     if (h == 0) {
         if (l < abi.ARENA_BASE or @as(u64, l) + n > (if (pool_base != 0) pool_base else module_bot)) return 0;
+        _ = cpu.code_write(l, @intCast(n));
         fill(l, 0, @intCast(n));
         return 1;
     }
     const off = l - L[h];
-    if (off < S[h]) fill(P[h] + off, 0, @intCast(@min(S[h], off + n) - off));
+    if (off < S[h]) {
+        const size: u32 = @intCast(@min(S[h], off + n) - off);
+        _ = cpu.code_write(P[h] + off, size);
+        fill(P[h] + off, 0, size);
+    }
     return 1;
 }
 export fn decommit_va(v: u64, n: u64) void {
