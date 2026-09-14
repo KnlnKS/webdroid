@@ -13,7 +13,7 @@ import { PINNED_CLOCK_MS, screenOf, screenParam } from "../tests/e2e/types";
 
 const { values } = parseArgs({ options: {
   flow: { type: "string" }, after: { type: "string" }, exercise: { type: "string" },
-  "input-offsets": { type: "string" }, "start-exercise": { type: "string" }, "state-reader": { type: "string" },
+  "input-offsets": { type: "string" }, "start-exercise": { type: "string" }, "state-reader": { type: "string" }, "start-state": { type: "string" },
   url: { type: "string", default: process.env.WEBDROID_URL ?? "http://localhost:4080" },
   out: { type: "string" }, gpu: { type: "string", default: "software" }, probe: { type: "boolean", default: false },
   ms: { type: "string", default: "15000" }, warmup: { type: "string", default: "3000" },
@@ -52,6 +52,8 @@ if (values["input-offsets"]) {
 const startStep = values["start-exercise"] ? flow.steps.find((step) => step.id === values["start-exercise"]) : undefined;
 if (values["start-exercise"] && !startStep) throw new Error("Unknown start exercise");
 const stateReader = values["state-reader"] ? await Bun.file(values["state-reader"]).text() : undefined;
+const startState: unknown = values["start-state"] ? await Bun.file(values["start-state"]).json() : undefined;
+if (startState !== undefined && (!stateReader || values["align-presentation"])) throw new Error("start-state requires state-reader and cannot align-presentation");
 const manifest = await loadManifest(flow.app);
 const screen = screenOf(manifest, flow.screen);
 const browser = await launchBrowser(gpu);
@@ -104,7 +106,7 @@ try {
     const a = actOf(flow, startStep, manifest?.steps.find((step) => step.id === startStep.id));
     if (a.type === "tap") a.repeat = 1;
     await foreground.evaluate(performAction, { a, screen, deadlineMs: 5000 });
-    await page.waitForTimeout(100);
+    if (startState === undefined) await page.waitForTimeout(100);
   }
   const inspectedFrame = foreground;
   const readState = () => stateReader === undefined ? Promise.resolve(undefined) : inspectedFrame.evaluate(async (source) => {
@@ -114,14 +116,47 @@ try {
       return await read();
     } catch (error) { return { failure: String(error) }; }
   }, stateReader);
-  const stateBefore = await readState();
+  const stateBefore = startState === undefined ? await readState() : undefined;
   const before = await session.send("Performance.getMetrics");
   const heapBefore = await session.send("Runtime.getHeapUsage");
   const actions = exercises.map((exercise) => actOf(flow, exercise, manifest?.steps.find((s) => s.id === exercise.id)));
   // Repeated tap steps define one tap per interval; do not nest their original repeat loop.
   for (const action of actions) if (action.type === "tap") action.repeat = 1;
-  const measurement = foreground.evaluate(async ({ ms, actions, screen, actionSource, interval, once, offsets, alignPresentation }) => {
+  const measurement = foreground.evaluate(async ({ ms, actions, screen, actionSource, interval, once, offsets, alignPresentation, startState, stateReader }) => {
     const act: typeof performAction = (0, eval)(`(${actionSource})`);
+    let matchedState: unknown, stateWaitMs = 0;
+    if (startState !== undefined) {
+      const read: unknown = (0, eval)(stateReader ?? "");
+      if (typeof read !== "function") throw new Error("State reader must evaluate to a function");
+      const canonical = (value: unknown) => JSON.stringify(value, (_key, item: unknown) => {
+        if (item === undefined || typeof item === "function" || typeof item === "symbol" || typeof item === "bigint" || (typeof item === "number" && !Number.isFinite(item))) throw new Error("State must contain only JSON values");
+        return item && typeof item === "object" && !Array.isArray(item)
+          ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, Reflect.get(item, key)])) : item;
+      });
+      const sampleState = (): unknown => {
+        const value: unknown = read();
+        if (value && (typeof value === "object" || typeof value === "function") && typeof Reflect.get(value, "then") === "function") throw new Error("Start-state reader must be synchronous");
+        return value;
+      };
+      const expected = canonical(startState), waiting = performance.now();
+      await new Promise<void>((resolve, reject) => {
+        let frame = 0;
+        const cleanup = () => { cancelAnimationFrame(frame); clearTimeout(timeout); };
+        const timeout = setTimeout(() => { cleanup(); reject(new Error("Start state not reached within 3000ms")); }, 3000);
+        const check = () => {
+          try {
+            const actual = canonical(sampleState());
+            if (performance.now() - waiting >= 3000) throw new Error("Start state not reached within 3000ms");
+            if (actual === expected) { cleanup(); resolve(); }
+            else frame = requestAnimationFrame(check);
+          } catch (error) { cleanup(); reject(error); }
+        };
+        check();
+      });
+      matchedState = sampleState();
+      if (canonical(matchedState) !== expected) throw new Error("Start state changed before measurement could begin");
+      stateWaitMs = performance.now() - waiting;
+    }
     const wd = globalThis.wd;
     const capacity = 8192;
     const raf = new Float64Array(capacity), presents = new Float64Array(capacity), inputPresent = new Float64Array(capacity);
@@ -210,6 +245,7 @@ try {
     ImageBitmapRenderingContext.prototype.transferFromImageBitmap = raw;
     const perf = Object.fromEntries(Object.entries(end).map(([k, v]) => [k, v - (start[k] ?? 0)]));
     return { ms: elapsed, perf, ticks: wd.ticks - ticks, hidden, queued, depth, phases, inputs, plannedInputs, issuedOffsets, actionInFlight: acting, actionErrors,
+      ...(startState !== undefined ? { stateBefore: matchedState, stateWaitMs } : {}),
       ...(alignPresentation ? { anchorWaitMs: t0 - anchorStarted, anchorToStartMs: t0 - anchorTime } : {}),
       rafCount: nr, presentCount: np, droppedSamples: Math.max(0, nr - capacity) + Math.max(0, np - capacity),
       rafIntervals: Array.from(raf.subarray(0, Math.min(nr, capacity))),
@@ -217,7 +253,7 @@ try {
       inputToNextPresentProxy: Array.from(inputPresent.subarray(0, ni)),
       app: wd.app()?.host.pkg, 
     };
-  }, { ms, actions, screen, actionSource: performAction.toString(), interval, once: values["exercise-once"], offsets: inputOffsets, alignPresentation: values["align-presentation"] });
+  }, { ms, actions, screen, actionSource: performAction.toString(), interval, once: values["exercise-once"], offsets: inputOffsets, alignPresentation: values["align-presentation"], startState, stateReader });
   const result = await measurement;
   const afterMetrics = await session.send("Performance.getMetrics");
   const stateAfter = await readState();
@@ -231,7 +267,8 @@ try {
   await page.screenshot({ path: values.out.replace(/\.json$/, "") + ".png" });
   const output = { flow: flow.app, after: values.after, exercise: values.exercise, url: url.href, browser: browser.version(),
     gpu, gpuInfo: gpuInfo.gpu, probe: values.probe, screen, warmup, setup, result, alive, tree, metrics, heapBefore, heapAfter, processes, errors,
-    stateBefore, stateAfter, inputOffsets, startExercise: values["start-exercise"], stateReader: values["state-reader"],
+    stateBefore: startState === undefined ? stateBefore : result.stateBefore, stateAfter, inputOffsets, startExercise: values["start-exercise"], stateReader: values["state-reader"],
+    ...(startState !== undefined ? { startState, stateWaitMs: result.stateWaitMs } : {}),
     ...(values["align-presentation"] ? { alignPresentation: true } : {}), ...(interval !== undefined ? { interval } : {}), ...(values["exercise-once"] ? { exerciseOnce: true } : {}) };
   await Bun.write(values.out, JSON.stringify(output, null, 2));
   console.log(JSON.stringify({ output: values.out, glFps: result.perf.glFrames * 1000 / result.ms,

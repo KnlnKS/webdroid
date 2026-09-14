@@ -79,6 +79,15 @@ interaction comparison. Outputs retain requested offsets and actual issuance tim
 serializable data. It runs before initial metric sampling and after final metric sampling,
 never inside the timed window. State readers must not write guest fields, invoke guest
 methods, replace clocks, or initiate work. Reader failures are explicit diagnostic objects.
+`--start-state <file.json>` requires a synchronous `--state-reader` and cannot be combined
+with `--align-presentation`. After any ordinary start action it skips the fixed 100 ms wait.
+Inside the measurement evaluation, before installing observers or starting counters, it
+waits up to 3 seconds for the preselected JSON state using read-only rAF sampling. Object
+keys are sorted for exact comparison; arrays retain order. Promise readers, timeouts and
+state drift before the counter boundary fail explicitly. It never changes guest fields,
+clocks or timers. Record the desired state before comparisons, without searching for a
+favorable run. Actual `stateBefore` and `stateWaitMs` are retained in the result and output.
+The CDP CPU interval includes this pre-window wait; in-page counters exclude it.
 `--align-presentation` starts a supplemental window after the next successful screen bitmap
 transfer. It waits at most 3 seconds, failing explicitly if no presentation occurs. The
 anchor frame and pre-start rAF samples are excluded; counters, clock and interval origins
