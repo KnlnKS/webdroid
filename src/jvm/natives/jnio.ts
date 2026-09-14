@@ -431,6 +431,9 @@ rt.register({
     "hashCode()I": function (this: JCharset) { return this.cname.length; },
     "newEncoder()Ljava/nio/charset/CharsetEncoder;": function (this: JCharset) { return mkCoder("CharsetEncoder", this); },
     "newDecoder()Ljava/nio/charset/CharsetDecoder;": function (this: JCharset) { return mkCoder("CharsetDecoder", this); },
+    "encode(Ljava/lang/String;)Ljava/nio/ByteBuffer;": function (this: JCharset, text: string) {
+      return wrapArray(JByteBuffer, encodeString(text, this), 0);
+    },
     "decode(Ljava/nio/ByteBuffer;)Ljava/nio/CharBuffer;": function (this: JCharset, b: JBuffer) {
       const text = decodeString(new Uint8Array(b.ab, b.dv.byteOffset + b.pos, b.lim - b.pos), this);
       b.pos = b.lim;

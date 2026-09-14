@@ -3,7 +3,7 @@ import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
 import { vfs } from "../src/jvm/natives/jio";
-import { mangleMethod } from "../src/jvm/abi";
+import { jarray, mangleMethod } from "../src/jvm/abi";
 
 const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => (rt.link(cls).ctor as any)[mangleMethod(name, desc)](...args);
 
@@ -53,6 +53,25 @@ test("Channels adapt input and output streams without copying their state", asyn
   expect(Array.from(await vcall(output, "toByteArray", "()[B"))).toEqual([1, 2, 3]);
   await vcall(writable, "close", "()V");
   expect(await vcall(writable, "isOpen", "()Z")).toBe(0);
+});
+
+test("Files.newOutputStream honors default, append, and delete-on-close options", async () => {
+  const path = await scall("java/nio/file/Paths", "get", "(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;",
+    "/tmp/nio-output.bin", jarray([], "Ljava/lang/String;"));
+  vfs.write("/tmp/nio-output.bin", new Uint8Array([1, 2]));
+  let output = await scall("java/nio/file/Files", "newOutputStream",
+    "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;", path, jarray([], "Ljava/nio/file/OpenOption;"));
+  await vcall(output, "write", "(I)V", 3);
+  await vcall(output, "close", "()V");
+  expect([...vfs.read("/tmp/nio-output.bin")!]).toEqual([3]);
+
+  const options = rt.link("java/nio/file/StandardOpenOption").ctor as any;
+  output = await scall("java/nio/file/Files", "newOutputStream",
+    "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;", path,
+    jarray([options.s$APPEND, options.s$DELETE_ON_CLOSE], "Ljava/nio/file/OpenOption;"));
+  await vcall(output, "write", "(I)V", 4);
+  await vcall(output, "close", "()V");
+  expect(vfs.exists("/tmp/nio-output.bin")).toBe(false);
 });
 
 test("FloatBuffer bulk get honours offsets, lengths and underflow", async () => {
