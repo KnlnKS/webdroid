@@ -12,6 +12,7 @@ import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, d
 import { compileClassSource, compileLazyMethod, methodKey, type CompiledCtor } from "./compiler";
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
+import { jvmProfiler } from "./profile";
 import { Monitors } from "./monitor";
 
 export const ACC = { STATIC: 0x8, NATIVE: 0x100, INTERFACE: 0x200 } as const;
@@ -604,8 +605,10 @@ export class Runtime {
     // sourceURL names the class in stack traces — the compiled body is otherwise anonymous.
     const src = compileClassSource(this, dex, info) + `\n//# sourceURL=wd/${info.name}.js`;
     try {
+      const linkStarted = jvmProfiler.enabled ? performance.now() : 0;
       const mk = new Function("C", "D", "R", "S", src);
       mk(info.ctor, D, this, info.superInfo?.ctor ?? JObj);
+      if (jvmProfiler.enabled) jvmProfiler.add(`class:${info.name}`, "classLink", performance.now() - linkStarted);
     } catch (e) {
       console.error("compile failed for", info.name, e, src.slice(0, 2000));
       throw e;

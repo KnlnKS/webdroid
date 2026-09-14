@@ -10,6 +10,7 @@ import { mangleMethod, parseMethodDesc, isWide, descToName, intBitsToFloat, long
 import { ACC, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 import { coldOp, runCold, type ColdMethod } from "./cold";
+import { jvmProfiler } from "./profile";
 
 const s4 = (v: number) => (v << 28) >> 28;
 const s8 = (v: number) => (v << 24) >> 24;
@@ -151,23 +152,33 @@ function emitLazy(dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
 export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> } & Record<string, unknown>;
 export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unknown {
   const info = C.$i, rec = info.lazy![i], dex = info.dex!;
+  const profileName = `${info.name}.${rec.name}${rec.desc}`;
   const target = rec.isStatic ? C : C.prototype;
   const source = () => emitMethod(R, dex, info, rec.m, !cold) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
   const compile = (src = source()) => {
+    const started = jvmProfiler.enabled ? performance.now() : 0;
     new Function("C", "D", "R", "S", src)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined);
+    if (jvmProfiler.enabled) jvmProfiler.add(profileName, "jsCompile", performance.now() - started);
     return target[rec.mangled];
   };
   const compiler = new MethodCompiler(R, dex, info, dex.code(rec.m.codeOff), rec.isStatic, rec.desc, rec.name);
   let cold = compiler.compileCold();
-  if (!cold) return compile();
+  if (!cold || jvmProfiler.tier === "js") return compile();
   // Captured direct/interface entries keep this cell; new virtual calls find the hot body.
   let calls = 0, hot: Function | undefined;
   let owner = R;
   while (owner.parent) owner = owner.parent;
   return target[rec.mangled] = function(this: unknown, ...args: unknown[]) {
-    if (hot) return hot.apply(this, args);
-    if (++calls < 32) return runCold(cold!, this, args);
+    jvmProfiler.entry(profileName);
+    if (hot) {
+      if (!jvmProfiler.enabled) return hot.apply(this, args);
+      const started = performance.now(), result = hot.apply(this, args);
+      jvmProfiler.add(profileName, "hotRun", performance.now() - started);
+      return result;
+    }
+    if (++calls < 32 || jvmProfiler.tier === "cold") return runCold(cold!, this, args);
     const start = performance.now(), src = source();
+    jvmProfiler.bytes(profileName, src.length);
     if (owner.hotSourceBytes + src.length > 32 * 1024 * 1024) {
       calls = -Infinity;
       perf.compileMs += performance.now() - start;
@@ -177,7 +188,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unkno
     owner.hotSourceBytes += src.length;
     perf.compileMs += performance.now() - start;
     if (typeof compiled !== "function") throw new Error("invalid compiled method");
-    hot = compiled; cold = null; perf.hotMethods++;
+    hot = compiled; cold = null; perf.hotMethods++; jvmProfiler.promoted(profileName);
     return hot.apply(this, args);
   };
 }
@@ -234,6 +245,9 @@ class MethodCompiler {
 
   private prepare(): void {
     const { code } = this;
+    const profileName = `${this.info.name}.${this.mname}${this.desc}`;
+    const profiled = jvmProfiler.enabled;
+    let started = profiled ? performance.now() : 0;
     const insns = code.insns;
     let pc = 0;
     while (pc < insns.length) {
@@ -244,6 +258,8 @@ class MethodCompiler {
       this.order.push(pc);
       pc += ins.len;
     }
+    if (profiled) jvmProfiler.add(profileName, "decode", performance.now() - started);
+    started = profiled ? performance.now() : 0;
     this.leaders.add(0);
     for (const pc2 of this.order) {
       const i = this.ins.get(pc2)!;
@@ -256,8 +272,10 @@ class MethodCompiler {
       for (const [, addr] of t.handlers) this.leaders.add(addr);
       if (t.catchAllAddr >= 0) this.leaders.add(t.catchAllAddr);
     }
-
+    if (profiled) jvmProfiler.add(profileName, "cfg", performance.now() - started);
+    started = profiled ? performance.now() : 0;
     this.typeConsts();
+    if (profiled) jvmProfiler.add(profileName, "type", performance.now() - started);
     // A body with no call, static access, monitor or allocation cannot suspend, so it compiles
     // without `async`.
     for (const pc2 of this.order) {
@@ -275,6 +293,8 @@ class MethodCompiler {
     if (this.sync) return null;
     perf.asyncMethods++;
     this.cold = true;
+    const profileName = `${this.info.name}.${this.mname}${this.desc}`;
+    const started = jvmProfiler.enabled ? performance.now() : 0;
     const ops = new Map<number, ReturnType<typeof coldOp>>();
     for (const pc of this.order) {
       const ins = this.ins.get(pc)!, out: string[] = [];
@@ -285,7 +305,8 @@ class MethodCompiler {
       if (ins.name.startsWith("invoke") && !ins.name.startsWith("invoke-custom")) op.method = ins.b;
       ops.set(pc, op);
     }
-    return { name: `${this.info.name}.${this.mname}${this.desc}`, R: this.R, D: this.R.dexLink(this.dex), S: this.info.superInfo?.ctor,
+    if (jvmProfiler.enabled) jvmProfiler.add(profileName, "coldBuild", performance.now() - started);
+    return { name: profileName, R: this.R, D: this.R.dexLink(this.dex), S: this.info.superInfo?.ctor,
       regs: this.code.regs, first: this.code.regs - this.code.ins, instance: !this.isStatic,
       widths: parseMethodDesc(this.desc).params.map((p) => isWide(p) ? 2 : 1), ops,
       catches: this.code.tries.map((t) => ({ start: t.start, end: t.end, all: t.catchAllAddr,
@@ -294,6 +315,7 @@ class MethodCompiler {
 
   compile(count = true): string {
     this.prepare();
+    const started = jvmProfiler.enabled ? performance.now() : 0;
     if (count) { if (this.sync) perf.syncMethods++; else perf.asyncMethods++; }
     const blocks: string[] = [];
     let cur: string[] | null = null;
@@ -324,7 +346,7 @@ class MethodCompiler {
     const declStr = decls.length ? `let ${decls.join(",")};` : "";
 
     const catchBody = this.hasTries ? this.emitCatch() : this.leave() + "throw $e;";
-    return `${this.sync ? "function" : "async function"}(${jsParams.join(",")}){
+    const source = `${this.sync ? "function" : "async function"}(${jsParams.join(",")}){
 ${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0;${this.sync ? "" : "const $th=R.th();let $s=0,$resume=0,$p;"}
 for(;;){
 try{${this.sync ? "switch(pc)" : "$dispatch:switch($resume>0?-$resume:pc)"}{
@@ -338,6 +360,8 @@ ${catchBody}
 }
 }
 }`;
+    if (jvmProfiler.enabled) jvmProfiler.add(`${this.info.name}.${this.mname}${this.desc}`, "hotEmit", performance.now() - started);
+    return source;
   }
 
   /** A method that suspended can only return or throw into an asynchronous resumption of its

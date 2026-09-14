@@ -1,6 +1,7 @@
 import type { Runtime } from "./runtime";
 import { perf } from "../perf";
 import { descToName } from "./abi";
+import { jvmProfiler } from "./profile";
 
 interface Frame {
   R: Runtime; D: ReturnType<Runtime["dexLink"]>; S: unknown;
@@ -51,6 +52,8 @@ function noteFrame(e: unknown, name: string): void {
 }
 export async function runCold(method: ColdMethod, receiver: unknown, args: unknown[]): Promise<unknown> {
   perf.coldCalls++;
+  const profiled = jvmProfiler.enabled;
+  const started = profiled ? performance.now() : 0;
   const { R, D, S } = method;
   const f: Frame = { R, D, S, v: new Array(method.regs), next: 0, done: false, value: undefined,
     $t: undefined, $u: undefined, $ex: undefined, $fu: undefined, $th: R.th(), $s: 0 };
@@ -70,8 +73,11 @@ export async function runCold(method: ColdMethod, receiver: unknown, args: unkno
           while (!step.done) {
             R.su(f.$th); f.$s = 1;
             let value: unknown;
+            const suspended = profiled ? performance.now() : 0;
+            jvmProfiler.suspension(method.name);
             try { value = await step.value; }
             catch (e) { R.st(f.$th); step = iterator.throw(e); continue; }
+            finally { if (profiled) jvmProfiler.add(method.name, "suspend", performance.now() - suspended); }
             R.st(f.$th); step = iterator.next(value);
           }
         }
@@ -99,5 +105,6 @@ export async function runCold(method: ColdMethod, receiver: unknown, args: unkno
     return f.value;
   } finally {
     if (f.$s) R.su(f.$th);
+    if (profiled) jvmProfiler.add(method.name, "coldRun", performance.now() - started);
   }
 }

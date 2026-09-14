@@ -26,6 +26,10 @@ export const perf = {
   // against those that can suspend. A sync call is ~24x cheaper in the shape we emit.
   syncMethods: 0, asyncMethods: 0,
   coldCalls: 0, coldHandlers: 0, hotMethods: 0,
+  // Detailed JVM attribution is populated only under ?jvmProfile=1.
+  jvmDecodeMs: 0, jvmCfgMs: 0, jvmTypeMs: 0, jvmColdBuildMs: 0, jvmHotEmitMs: 0,
+  jvmJsCompileMs: 0, jvmClassLinkMs: 0, jvmColdRunMs: 0, jvmHotRunMs: 0, jvmSuspendMs: 0,
+  jvmProfileDroppedMethods: 0,
   // GL surfaces: Renderer frames and their wall time; glSkipped = ticks where the previous
   // GL frame was still in flight (a renderer that awaits its engine spans ticks).
   glFrames: 0, glFrameMs: 0, glSkipped: 0,

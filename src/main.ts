@@ -14,6 +14,7 @@ import { bootApk, tick, dispatchPointer, pressBack, currentApp, SCREEN_W, SCREEN
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { perf, perfReset } from "./perf";
+import { configureJvm, jvmProfiler, parseJvmTier } from "./jvm/profile";
 import { uiState } from "./android/view";
 import { onMain, mainDbg } from "./android/mainloop";
 import { imeInput, imeAction } from "./android/ime";
@@ -29,6 +30,8 @@ import { provisionPackages, provisionServices } from "./shell/provision";
 import { connectProcess, registerForegroundProcess, processPresentation, processBroker } from "./shell/processes";
 
 const params = new URLSearchParams(location.search);
+configureJvm({ profile: params.get("jvmProfile") === "1", tier: parseJvmTier(params.get("jvmTier")) });
+const resetPerf = (): void => { perfReset(); jvmProfiler.reset(); };
 
 const root = document.getElementById("root")!;
 
@@ -225,7 +228,7 @@ jitStats.on = params.get("jit") !== "0";
 
 /** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
 const wd = {
-  rt, uiState, perf, perfReset, mainDbg, yields: yieldStats, timedParks, logs: logBuf, ticks: 0, native,
+  rt, uiState, perf, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), mainDbg, yields: yieldStats, timedParks, logs: logBuf, ticks: 0, native,
   layoutTrace: (on?: boolean) => { if (on !== undefined) uiState.layoutTrace = on ? { cls: {}, site: {} } : null; return uiState.layoutTrace; },
   // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed
   newObj, vcall,

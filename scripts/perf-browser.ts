@@ -18,6 +18,7 @@ const { values } = parseArgs({ options: {
   out: { type: "string" }, gpu: { type: "string", default: "software" }, probe: { type: "boolean", default: false },
   ms: { type: "string", default: "15000" }, warmup: { type: "string", default: "3000" },
   "align-presentation": { type: "boolean", default: false },
+  "jvm-profile": { type: "boolean", default: false }, "jvm-tier": { type: "string", default: "auto" },
   interval: { type: "string" }, "exercise-once": { type: "boolean", default: false }, "setup-shots": { type: "boolean", default: false },
 } });
 const flow = FLOWS.find((f) => f.app === values.flow);
@@ -31,6 +32,7 @@ const exercises = (values.exercise?.split(",") ?? []).map((id) => {
 if (after < 0) throw new Error("Unknown setup step");
 const gpu = values.gpu;
 if (gpu !== "software" && gpu !== "hardware") throw new Error("--gpu must be software or hardware");
+if (!values["jvm-tier"] || !["auto", "cold", "js", "wasm"].includes(values["jvm-tier"])) throw new Error("--jvm-tier must be auto, cold, js or wasm");
 const ms = Number(values.ms), warmup = Number(values.warmup);
 const interval = values.interval === undefined ? undefined : Number(values.interval);
 if (interval !== undefined && !(interval > 0 && interval <= 60000)) throw new Error("Invalid input interval");
@@ -70,6 +72,8 @@ try {
   const gpuInfo = await browserSession.send("SystemInfo.getInfo");
   const url = new URL(values.url);
   url.searchParams.set("screen", screenParam(screen));
+  if (values["jvm-profile"]) url.searchParams.set("jvmProfile", "1");
+  if (values["jvm-tier"] !== "auto") url.searchParams.set("jvmTier", values["jvm-tier"]);
   await page.goto(url.href, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => !!globalThis.wd);
   await page.evaluate(() => document.fonts.ready);
@@ -263,10 +267,12 @@ try {
   const alive = await foreground.evaluate(() => globalThis.wd.alive());
   const tree = await foreground.evaluate(() => globalThis.wd.tree());
   const processes = await readProcesses(page);
+  const jvmProfile = values["jvm-profile"] ? await foreground.evaluate(() => globalThis.wd.jvmProfile()) : undefined;
   await mkdir(dirname(values.out), { recursive: true });
   await page.screenshot({ path: values.out.replace(/\.json$/, "") + ".png" });
   const output = { flow: flow.app, after: values.after, exercise: values.exercise, url: url.href, browser: browser.version(),
     gpu, gpuInfo: gpuInfo.gpu, probe: values.probe, screen, warmup, setup, result, alive, tree, metrics, heapBefore, heapAfter, processes, errors,
+    ...(jvmProfile ? { jvmProfile } : {}),
     stateBefore: startState === undefined ? stateBefore : result.stateBefore, stateAfter, inputOffsets, startExercise: values["start-exercise"], stateReader: values["state-reader"],
     ...(startState !== undefined ? { startState, stateWaitMs: result.stateWaitMs } : {}),
     ...(values["align-presentation"] ? { alignPresentation: true } : {}), ...(interval !== undefined ? { interval } : {}), ...(values["exercise-once"] ? { exerciseOnce: true } : {}) };
