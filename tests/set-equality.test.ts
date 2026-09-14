@@ -59,6 +59,17 @@ test("Map.of rejects null and duplicate keys and stays immutable", async () => {
   expect(await vcall(immutable, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "b")).toBe(2);
   await expect(vcall(immutable, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "c", 3))
     .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
+  const entries = await vcall(immutable, "entrySet", "()Ljava/util/Set;");
+  const entryIterator = await vcall(entries, "iterator", "()Ljava/util/Iterator;");
+  const entry = await vcall(entryIterator, "next", "()Ljava/lang/Object;");
+  await expect(vcall(entry, "setValue", "(Ljava/lang/Object;)Ljava/lang/Object;", 3))
+    .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
+  const keys = await vcall(immutable, "keySet", "()Ljava/util/Set;");
+  await expect(vcall(keys, "clear", "()V"))
+    .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
+  await expect(vcall(entryIterator, "remove", "()V"))
+    .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
+  expect(await vcall(immutable, "size", "()I")).toBe(2);
   await expect(of("a", 1, "a", 2)).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
   await expect(of("a", 1, "b", null)).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
 });

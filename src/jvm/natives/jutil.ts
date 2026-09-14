@@ -61,7 +61,7 @@ function mapKey(k: unknown): unknown {
 
 interface Ent { k: unknown; v: unknown; }
 class JMapEntry extends JObj {
-  constructor(public e: Ent) { super(); }
+  constructor(public e: Ent, public mutable = true) { super(); }
 }
 rt.register({
   name: "java/util/Map$Entry", ctor: class extends JObj {},
@@ -82,7 +82,10 @@ rt.register({
   methods: {
     "getKey()Ljava/lang/Object;": function (this: JMapEntry) { return this.e.k; },
     "getValue()Ljava/lang/Object;": function (this: JMapEntry) { return this.e.v; },
-    "setValue(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMapEntry, v: unknown) { const o = this.e.v; this.e.v = v; return o; },
+    "setValue(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMapEntry, v: unknown) {
+      if (!this.mutable) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      const o = this.e.v; this.e.v = v; return o;
+    },
     "hashCode()I": function (this: JMapEntry) { return idHash(this.e.k); },
   },
 });
@@ -659,6 +662,10 @@ export class JMap extends JObj {
   slow: Ent[] = [];                  // custom-equals keys (linear; rare)
   slowVersion = 0;
   access = false;                    // LinkedHashMap accessOrder
+  mutable = true;
+}
+function ensureMapMutable(map: JMap): void {
+  if (!map.mutable) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
 }
 async function slowFind(list: Ent[], k: unknown): Promise<number> {
   for (let i = 0; i < list.length; i++) {
@@ -709,6 +716,7 @@ function mapMethods(): Methods {
       for (const e of [...allEnts(this)]) await vcall(fn, "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V", e.k, e.v);
     },
     "replaceAll(Ljava/util/function/BiFunction;)V": async function (this: JMap, fn: unknown) {
+      ensureMapMutable(this);
       for (const e of allEnts(this)) e.v = await vcall(fn, "apply", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", e.k, e.v);
     },
     "containsValue(Ljava/lang/Object;)Z": async function (this: JMap, v: unknown) {
@@ -719,6 +727,7 @@ function mapMethods(): Methods {
       return 0;
     },
     "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown, v: unknown) {
+      ensureMapMutable(this);
       const mk = mapKey(k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
@@ -733,6 +742,7 @@ function mapMethods(): Methods {
       });
     },
     "putIfAbsent(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown, v: unknown) {
+      ensureMapMutable(this);
       const mk = mapKey(k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
@@ -747,6 +757,7 @@ function mapMethods(): Methods {
       });
     },
     "remove(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown) {
+      ensureMapMutable(this);
       const mk = mapKey(k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
@@ -757,6 +768,7 @@ function mapMethods(): Methods {
       return slowFind(this.slow, k).then((i) => (i >= 0 ? this.slow.splice(i, 1)[0].v : null));
     },
     "remove(Ljava/lang/Object;Ljava/lang/Object;)Z": function (this: JMap, k: unknown, value: unknown) {
+      ensureMapMutable(this);
       const key = mapKey(k);
       const remove = (entry: Ent | undefined) => {
         if (!entry) return 0;
@@ -776,8 +788,8 @@ function mapMethods(): Methods {
       const entries = this.slow.slice();
       return slowFind(entries, k).then((index) => remove(entries[index]));
     },
-    "clear()V": function (this: JMap) { this.m.clear(); this.slow.length = 0; this.slowVersion++; },
-    "putAll(Ljava/util/Map;)V": async function (this: JMap, src: unknown) { if (src) await copyMapInto(src, this); },
+    "clear()V": function (this: JMap) { ensureMapMutable(this); this.m.clear(); this.slow.length = 0; this.slowVersion++; },
+    "putAll(Ljava/util/Map;)V": async function (this: JMap, src: unknown) { ensureMapMutable(this); if (src) await copyMapInto(src, this); },
     "keySet()Ljava/util/Set;": function (this: JMap) { return new JSetView(this, "k"); },
     "values()Ljava/util/Collection;": function (this: JMap) { return new JSetView(this, "v"); },
     "entrySet()Ljava/util/Set;": function (this: JMap) { return new JSetView(this, "e"); },
@@ -809,7 +821,7 @@ async function copyMapInto(src: unknown, dst: JMap) {
   }
 }
 
-class JImmutableMap extends JMap {}
+class JImmutableMap extends JMap { mutable = false; }
 async function addImmutableMapping(map: JImmutableMap, key: unknown, value: unknown): Promise<void> {
   if (key === null || value === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   const bucket = mapKey(key);
@@ -826,18 +838,9 @@ async function immutableMap(entries: readonly (readonly [unknown, unknown])[]): 
   for (const [key, value] of entries) await addImmutableMapping(map, key, value);
   return map;
 }
-const immutableMapMethods = mapMethods();
-for (const method of [
-  "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "remove(Ljava/lang/Object;)Ljava/lang/Object;",
-  "remove(Ljava/lang/Object;Ljava/lang/Object;)Z", "clear()V", "putAll(Ljava/util/Map;)V",
-  "replaceAll(Ljava/util/function/BiFunction;)V", "putIfAbsent(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
-  "replace(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "replace(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Z",
-  "compute(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;", "computeIfAbsent(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;",
-  "computeIfPresent(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;", "merge(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;",
-]) immutableMapMethods[method] = () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
 rt.register({
   name: "webdroid/ImmutableMap", ctor: JImmutableMap, sup: "java/util/AbstractMap", typeVars: "K,V",
-  ifaces: ["java/util/Map", "java/io/Serializable"], methods: immutableMapMethods,
+  ifaces: ["java/util/Map", "java/io/Serializable"], methods: mapMethods(),
 });
 
 const mapFactories: Methods = {
@@ -882,7 +885,7 @@ class JSetView extends JObj {
   constructor(public map: JMap, public kind: "k" | "v" | "e") { super(); }
   snapshot(entries: Iterable<Ent> = allEnts(this.map)): unknown[] {
     const out: unknown[] = [];
-    for (const e of entries) out.push(this.kind === "k" ? e.k : this.kind === "v" ? e.v : new JMapEntry(e));
+    for (const e of entries) out.push(this.kind === "k" ? e.k : this.kind === "v" ? e.v : new JMapEntry(e, this.map.mutable));
     return out;
   }
 }
@@ -894,7 +897,7 @@ rt.register({
     "isEmpty()Z": function (this: JSetView) { return this.map.m.size + this.map.slow.length ? 0 : 1; },
     "iterator()Ljava/util/Iterator;": function (this: JSetView) {
       const entries = [...allEnts(this.map)], values = this.snapshot(entries);
-      return mkIter(values, { removeAt: (i) => {
+      const iterator = mkIter(values, { removeAt: (i) => {
         const entry = entries[i], key = mapKey(entry.k);
         if (key !== SLOW) {
           if (this.map.m.get(key) === entry) this.map.m.delete(key);
@@ -904,6 +907,8 @@ rt.register({
         }
         entries.splice(i, 1); values.splice(i, 1);
       } });
+      iterator.readOnly = !this.map.mutable;
+      return iterator;
     },
     "forEach(Ljava/util/function/Consumer;)V": async function (this: JSetView, c: unknown) {
       for (const v of this.snapshot()) await vcall(c, "accept", "(Ljava/lang/Object;)V", v);
@@ -954,7 +959,7 @@ rt.register({
       for (const v of await toJsArray(c)) if ((await indexIn(snap, v)) < 0) return 0;
       return 1;
     },
-    "clear()V": function (this: JSetView) { this.map.m.clear(); this.map.slow.length = 0; this.map.slowVersion++; },
+    "clear()V": function (this: JSetView) { ensureMapMutable(this.map); this.map.m.clear(); this.map.slow.length = 0; this.map.slowVersion++; },
     "toString()Ljava/lang/String;": function (this: JSetView) { return "[" + this.snapshot().join(", ") + "]"; },
   },
 });
