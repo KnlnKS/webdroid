@@ -1,3 +1,4 @@
+import { readClipData } from "./clipdata";
 import { JObj, type NativeSpec, rt, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { JBundle, bundlePrimitive, bundleBox, reportUncaught, PROCESS_NAME } from "./os";
 import { appHost, type AppHost } from "./apphost";
@@ -39,36 +40,6 @@ export class JIntent extends JObj {
     }
   }
 }
-class JClipDescription extends JObj {
-  constructor(readonly label: unknown, readonly mimeTypes: string[]) { super(); }
-}
-class JClipItem extends JObj {
-  constructor(readonly intent: JIntent | null = null) { super(); }
-}
-class JClipData extends JObj {
-  description: JClipDescription | null = null;
-  items: JClipItem[] = [];
-}
-rt.register({ name: "android/content/ClipDescription", ctor: JClipDescription, methods: {
-  "getLabel()Ljava/lang/CharSequence;": function (this: JClipDescription) { return this.label; },
-  "getMimeTypeCount()I": function (this: JClipDescription) { return this.mimeTypes.length; },
-  "getMimeType(I)Ljava/lang/String;": function (this: JClipDescription, index: number) { return this.mimeTypes[index]; },
-} });
-rt.register({ name: "android/content/ClipData$Item", ctor: JClipItem, methods: {
-  "<init>(Landroid/content/Intent;)V": function (this: JClipItem, intent: JIntent) { Reflect.set(this, "intent", intent); },
-  "getIntent()Landroid/content/Intent;": function (this: JClipItem) { return this.intent; },
-} });
-rt.register({ name: "android/content/ClipData", ctor: JClipData, ifaces: ["android/os/Parcelable"], methods: {
-  "static newIntent(Ljava/lang/CharSequence;Landroid/content/Intent;)Landroid/content/ClipData;": (label: unknown, intent: JIntent) => {
-    const clip = new JClipData();
-    clip.description = new JClipDescription(label, ["text/vnd.android.intent"]);
-    clip.items.push(new JClipItem(intent));
-    return clip;
-  },
-  "getDescription()Landroid/content/ClipDescription;": function (this: JClipData) { return this.description; },
-  "getItemCount()I": function (this: JClipData) { return this.items.length; },
-  "getItemAt(I)Landroid/content/ClipData$Item;": function (this: JClipData, index: number) { return this.items[index]; },
-} });
 function copyBounds(rect: JRect): JRect {
   rt.link("android/graphics/Rect");
   return Object.assign(new JRect(), { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
@@ -88,8 +59,7 @@ async function readIntent(p: JParcel, intent = new JIntent()): Promise<JIntent> 
   if (count > (p.size - p.pos) / 4) throw rt.mkThrowable("android/os/BadParcelableException", "Invalid category count");
   for (let i = 0; i < count; i++) { const category = readString8(p); if (category !== null) intent.categories.add(category); }
   intent.selector = readInt(p) ? await readIntent(p) : null;
-  if (readInt(p)) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "ClipData parcel");
-  intent.clipData = null; intent.contentUserHint = readInt(p);
+  intent.clipData = readInt(p) ? await readClipData(p) : null; intent.contentUserHint = readInt(p);
   intent.extras = await vcall(p, "readBundle", "()Landroid/os/Bundle;") ?? new JBundle();
   intent.originalIntent = readInt(p) ? await readIntent(p) : null;
   return intent;
@@ -243,7 +213,7 @@ const intentMethods: NativeSpec["methods"] = {
 for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I", 0], ["Long", "J", 0n],
   ["Boolean", "Z", 0], ["Float", "F", 0], ["Double", "D", 0], ["CharSequence", "Ljava/lang/CharSequence;", null],
   ["Parcelable", "Landroid/os/Parcelable;", null], ["Serializable", "Ljava/io/Serializable;", null],
-  ["Bundle", "Landroid/os/Bundle;", null], ["StringArrayList", "Ljava/util/ArrayList;", null],
+  ["Bundle", "Landroid/os/Bundle;", null],
   ["IntArray", "[I", null], ["ByteArray", "[B", null], ["StringArray", "[Ljava/lang/String;", null]] as const) {
   intentMethods[`putExtra(Ljava/lang/String;${d})Landroid/content/Intent;`] = function (this: JIntent, k: string, v: unknown) {
     this.extras.map.set(k, bundleBox(v, d));
@@ -264,6 +234,10 @@ for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I",
       return this.extras.map.get(k) ?? null;
     };
   }
+}
+for (const type of ["String", "Integer", "CharSequence", "Parcelable"]) {
+  intentMethods[`put${type}ArrayListExtra(Ljava/lang/String;Ljava/util/ArrayList;)Landroid/content/Intent;`] = function (this: JIntent, key: string, value: unknown) { this.extras.map.set(key, value); return this; };
+  intentMethods[`get${type}ArrayListExtra(Ljava/lang/String;)Ljava/util/ArrayList;`] = function (this: JIntent, key: string) { return this.extras.map.get(key) ?? null; };
 }
 class JShortcutIconResource extends JObj { packageName = ""; resourceName = ""; }
 rt.register({

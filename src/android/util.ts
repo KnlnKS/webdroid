@@ -35,100 +35,45 @@ rt.register({
     ])),
     "static w(Ljava/lang/String;Ljava/lang/Throwable;)I": (tag: string, tr: unknown) => logFn("W")(tag, String((tr as any)?.msg ?? tr)),
     "static wtf(Ljava/lang/String;Ljava/lang/String;)I": logFn("WTF"),
-    "static isLoggable(Ljava/lang/String;I)Z": () => 0,
+    "static isLoggable(Ljava/lang/String;I)Z": (_tag: string, level: number) => level >= 4 ? 1 : 0,
     "static getStackTraceString(Ljava/lang/Throwable;)Ljava/lang/String;": (t: unknown) => String((t as any)?.msg ?? t ?? ""),
     "static println(ILjava/lang/String;Ljava/lang/String;)I": (p: number, tag: string, msg: string) => logFn("P")(tag, msg),
   },
 });
 
-class JStatsEvent extends JObj { atomId = 0; values: unknown[] = []; }
-class JStatsEventBuilder extends JObj { event = new JStatsEvent(); }
-rt.register({ name: "android/util/StatsEvent", ctor: JStatsEvent, methods: {
-  "static newBuilder()Landroid/util/StatsEvent$Builder;": () => new JStatsEventBuilder(),
-} });
-rt.register({ name: "android/util/StatsEvent$Builder", ctor: JStatsEventBuilder, methods: {
-  "setAtomId(I)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, id: number) { this.event.atomId = id; return this; },
-  "writeInt(I)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, value: number) { this.event.values.push(value); return this; },
-  "writeLong(J)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, value: bigint) { this.event.values.push(value); return this; },
-  "writeLongArray([J)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, value: BigInt64Array) { this.event.values.push(value); return this; },
-  "writeBoolean(Z)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, value: number) { this.event.values.push(!!value); return this; },
-  "writeString(Ljava/lang/String;)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, value: string) { this.event.values.push(value); return this; },
-  "writeByteArray([B)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder, value: Int8Array) { this.event.values.push(value); return this; },
-  "addBooleanAnnotation(BZ)Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder) { return this; },
-  "usePooledBuffer()Landroid/util/StatsEvent$Builder;": function (this: JStatsEventBuilder) { return this; },
-  "build()Landroid/util/StatsEvent;": function (this: JStatsEventBuilder) { return this.event; },
-} });
-rt.register({ name: "android/util/StatsLog", ctor: class extends JObj {}, methods: { "static write(Landroid/util/StatsEvent;)V": () => {} } });
-
-class JRange extends JObj { lower: unknown = null; upper: unknown = null; }
-rt.register({ name: "android/util/Range", ctor: JRange, methods: {
-  "<init>(Ljava/lang/Comparable;Ljava/lang/Comparable;)V": async function (this: JRange, lower: unknown, upper: unknown) {
-    if (lower === null || upper === null) throw rt.mkThrowable("java/lang/NullPointerException", "lower and upper must not be null");
-    if (await vcall(lower, "compareTo", "(Ljava/lang/Object;)I", upper) > 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "lower must be less than or equal to upper");
-    this.lower = lower; this.upper = upper;
-  },
-  "getLower()Ljava/lang/Comparable;": function (this: JRange) { return this.lower; },
-  "getUpper()Ljava/lang/Comparable;": function (this: JRange) { return this.upper; },
-  "contains(Ljava/lang/Comparable;)Z": async function (this: JRange, value: unknown) {
-    return (await vcall(this.lower, "compareTo", "(Ljava/lang/Object;)I", value)) <= 0 &&
-      (await vcall(this.upper, "compareTo", "(Ljava/lang/Object;)I", value)) >= 0 ? 1 : 0;
-  },
-  "clamp(Ljava/lang/Comparable;)Ljava/lang/Comparable;": async function (this: JRange, value: unknown) {
-    if (await vcall(this.lower, "compareTo", "(Ljava/lang/Object;)I", value) > 0) return this.lower;
-    if (await vcall(this.upper, "compareTo", "(Ljava/lang/Object;)I", value) < 0) return this.upper;
-    return value;
-  },
-} });
-
 class JSparseArray extends JObj {
-  m = new Map<number, unknown>();
-  sorted: number[] | null = null;
+  m = new Map<number | bigint, unknown>();
+  sorted: (number | bigint)[] | null = null;
   /** keys in index order (Android keeps them sorted ascending) */
-  keys(): number[] { return this.sorted ??= [...this.m.keys()].sort((a, b) => a - b); }
-  set(k: number, v: unknown) { if (!this.m.has(k)) this.sorted = null; this.m.set(k, v); }
-  del(k: number) { if (this.m.delete(k)) this.sorted = null; }
+  keys(): (number | bigint)[] { return this.sorted ??= [...this.m.keys()].sort((a, b) => a < b ? -1 : a > b ? 1 : 0); }
+  set(k: number | bigint, v: unknown) { if (!this.m.has(k)) this.sorted = null; this.m.set(k, v); }
+  del(k: number | bigint) { if (this.m.delete(k)) this.sorted = null; }
   reset() { this.m.clear(); this.sorted = null; }
 }
-const sparseMethods = (valDesc: string, dflt: unknown, cls = "android/util/SparseArray"): NativeSpec["methods"] => ({
+const sparseMethods = (valDesc: string, dflt: unknown, cls = "android/util/SparseArray", key = "I"): NativeSpec["methods"] => ({
   "<init>()V": function () {},
   [`clone()L${cls};`]: function (this: JSparseArray) { const c = new (this.constructor as new () => JSparseArray)(); for (const [k, v] of this.m) c.set(k, v); return c; },
   "<init>(I)V": function () {},
-  [`get(I)${valDesc}`]: function (this: JSparseArray, k: number) { return this.m.get(k) ?? dflt; },
-  [`get(I${valDesc})${valDesc}`]: function (this: JSparseArray, k: number, d: unknown) { return this.m.has(k) ? this.m.get(k) : d; },
-  [`put(I${valDesc})V`]: function (this: JSparseArray, k: number, v: unknown) { this.set(k, v); },
-  [`append(I${valDesc})V`]: function (this: JSparseArray, k: number, v: unknown) { this.set(k, v); },
+  [`get(${key})${valDesc}`]: function (this: JSparseArray, k: number | bigint) { return this.m.get(k) ?? dflt; },
+  [`get(${key}${valDesc})${valDesc}`]: function (this: JSparseArray, k: number | bigint, d: unknown) { return this.m.has(k) ? this.m.get(k) : d; },
+  [`put(${key}${valDesc})V`]: function (this: JSparseArray, k: number | bigint, v: unknown) { this.set(k, v); },
+  [`append(${key}${valDesc})V`]: function (this: JSparseArray, k: number | bigint, v: unknown) { this.set(k, v); },
   "size()I": function (this: JSparseArray) { return this.m.size; },
-  "keyAt(I)I": function (this: JSparseArray, i: number) { return this.keys()[i]; },
+  [`keyAt(I)${key}`]: function (this: JSparseArray, i: number) { return this.keys()[i]; },
   [`valueAt(I)${valDesc}`]: function (this: JSparseArray, i: number) { return this.m.get(this.keys()[i]) ?? dflt; },
-  "delete(I)V": function (this: JSparseArray, k: number) { this.del(k); },
-  "remove(I)V": function (this: JSparseArray, k: number) { this.del(k); },
+  [`delete(${key})V`]: function (this: JSparseArray, k: number | bigint) { this.del(k); },
+  [`remove(${key})V`]: function (this: JSparseArray, k: number | bigint) { this.del(k); },
   "removeAt(I)V": function (this: JSparseArray, i: number) { this.del(this.keys()[i]); },
   "clear()V": function (this: JSparseArray) { this.reset(); },
-  "indexOfKey(I)I": function (this: JSparseArray, k: number) { return this.keys().indexOf(k); },
-  [`indexOfValue(${valDesc})I`]: function (this: JSparseArray, v: unknown) { return [...this.m.values()].indexOf(v); },
+  [`indexOfKey(${key})I`]: function (this: JSparseArray, k: number | bigint) { const keys = this.keys(); let lo = 0, hi = keys.length; while (lo < hi) { const mid = (lo + hi) >>> 1; if (keys[mid] < k) lo = mid + 1; else hi = mid; } return keys[lo] === k ? lo : ~lo; },
+  [`indexOfValue(${valDesc})I`]: function (this: JSparseArray, v: unknown) { return this.keys().findIndex(k => this.m.get(k) === v); },
 });
 rt.register({ name: "android/util/SparseArray", ctor: JSparseArray, methods: sparseMethods("Ljava/lang/Object;", null) });
 rt.register({ name: "android/util/SparseIntArray", ctor: class extends JSparseArray {}, methods: sparseMethods("I", 0, "android/util/SparseIntArray") });
 rt.register({ name: "android/util/SparseBooleanArray", ctor: class extends JSparseArray {}, methods: sparseMethods("Z", 0, "android/util/SparseBooleanArray") });
 rt.register({ name: "android/util/SparseLongArray", ctor: class extends JSparseArray {}, methods: sparseMethods("J", 0n, "android/util/SparseLongArray") });
-class JLongSparseArray extends JObj {
-  m = new Map<bigint, unknown>();
-  keys(): bigint[] { return [...this.m.keys()].sort((a, b) => a < b ? -1 : a > b ? 1 : 0); }
-}
-rt.register({ name: "android/util/LongSparseArray", ctor: JLongSparseArray,
-  methods: {
-    "<init>()V": function () {},
-    "<init>(I)V": function () {},
-    "get(J)Ljava/lang/Object;": function (this: JLongSparseArray, k: bigint) { return this.m.get(k) ?? null; },
-    "put(JLjava/lang/Object;)V": function (this: JLongSparseArray, k: bigint, v: unknown) { this.m.set(k, v); },
-    "size()I": function (this: JLongSparseArray) { return this.m.size; },
-    "delete(J)V": function (this: JLongSparseArray, k: bigint) { this.m.delete(k); },
-    "remove(J)V": function (this: JLongSparseArray, k: bigint) { this.m.delete(k); },
-    "keyAt(I)J": function (this: JLongSparseArray, i: number) { return this.keys()[i]; },
-    "valueAt(I)Ljava/lang/Object;": function (this: JLongSparseArray, i: number) { return this.m.get(this.keys()[i]) ?? null; },
-    "removeAt(I)V": function (this: JLongSparseArray, i: number) { this.m.delete(this.keys()[i]); },
-    "clear()V": function (this: JLongSparseArray) { this.m.clear(); },
-  } });
+rt.register({ name: "android/util/LongSparseArray", ctor: class extends JSparseArray {},
+  methods: sparseMethods("Ljava/lang/Object;", null, "android/util/LongSparseArray", "J") });
 
 // android.util.StateSet: a spec lists the state ids a drawable/color entry needs (negative =
 // must be absent), 0 terminates either array; both wildcards are answered by the constants.
@@ -170,6 +115,55 @@ rt.register({
 });
 
 class JPair extends JObj { first: unknown = null; second: unknown = null; }
+class JRange extends JObj { lower: unknown = null; upper: unknown = null; }
+async function initRange(this: JRange, lower: unknown, upper: unknown) {
+  if (lower === null || upper === null) return rt.npe();
+  if (await vcall(lower, "compareTo", "(Ljava/lang/Object;)I", upper) > 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "lower must be less than or equal to upper");
+  this.lower = lower; this.upper = upper;
+}
+async function createRange(lower: unknown, upper: unknown): Promise<JRange> {
+  const range = new JRange(); await initRange.call(range, lower, upper); return range;
+}
+async function combineRange(this: JRange, lower: unknown, upper: unknown, extend: boolean, other?: JRange) {
+  if (lower === null || upper === null) return rt.npe();
+  const lo = await vcall(lower, "compareTo", "(Ljava/lang/Object;)I", this.lower);
+  const hi = await vcall(upper, "compareTo", "(Ljava/lang/Object;)I", this.upper);
+  if (lo <= 0 && hi >= 0) return extend ? other ?? createRange(lower, upper) : this;
+  if (lo >= 0 && hi <= 0) return extend ? this : other ?? createRange(lower, upper);
+  return createRange((extend ? lo >= 0 : lo <= 0) ? this.lower : lower, (extend ? hi <= 0 : hi >= 0) ? this.upper : upper);
+}
+rt.register({ name: "android/util/Range", ctor: JRange, typeVars: "T", methods: {
+  "<init>(Ljava/lang/Comparable;Ljava/lang/Comparable;)V": initRange,
+  "static create(Ljava/lang/Comparable;Ljava/lang/Comparable;)Landroid/util/Range;": createRange,
+  "getLower()Ljava/lang/Comparable;": function (this: JRange) { return this.lower; },
+  "getUpper()Ljava/lang/Comparable;": function (this: JRange) { return this.upper; },
+  "contains(Ljava/lang/Comparable;)Z": async function (this: JRange, value: unknown) {
+    if (value === null) return rt.npe();
+    return +(await vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.lower) >= 0 && await vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.upper) <= 0);
+  },
+  "contains(Landroid/util/Range;)Z": async function (this: JRange, range: JRange | null) {
+    if (!range) return rt.npe();
+    return +(await vcall(range.lower, "compareTo", "(Ljava/lang/Object;)I", this.lower) >= 0 && await vcall(range.upper, "compareTo", "(Ljava/lang/Object;)I", this.upper) <= 0);
+  },
+  "clamp(Ljava/lang/Comparable;)Ljava/lang/Comparable;": async function (this: JRange, value: unknown) {
+    if (value === null) return rt.npe();
+    if (await vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.lower) < 0) return this.lower;
+    return await vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.upper) > 0 ? this.upper : value;
+  },
+  ...Object.fromEntries(["intersect", "extend"].flatMap(name => [
+    [`${name}(Landroid/util/Range;)Landroid/util/Range;`, function (this: JRange, range: JRange | null) {
+      if (!range) return rt.npe();
+      return combineRange.call(this, range.lower, range.upper, name === "extend", range);
+    }],
+    [`${name}(Ljava/lang/Comparable;Ljava/lang/Comparable;)Landroid/util/Range;`, function (this: JRange, lower: unknown, upper: unknown) { return combineRange.call(this, lower, upper, name === "extend"); }],
+  ])),
+  "extend(Ljava/lang/Comparable;)Landroid/util/Range;": function (this: JRange, value: unknown) { return combineRange.call(this, value, value, true); },
+  "equals(Ljava/lang/Object;)Z": async function (this: JRange, other: unknown) {
+    return +(other instanceof JRange && (this === other || await vcall(this.lower, "equals", "(Ljava/lang/Object;)Z", other.lower) && await vcall(this.upper, "equals", "(Ljava/lang/Object;)Z", other.upper)));
+  },
+  "hashCode()I": async function (this: JRange) { return (Math.imul(31, 31 + await vcall(this.lower, "hashCode", "()I")) + await vcall(this.upper, "hashCode", "()I")) | 0; },
+  "toString()Ljava/lang/String;": async function (this: JRange) { return `[${await vcall(this.lower, "toString", "()Ljava/lang/String;")}, ${await vcall(this.upper, "toString", "()Ljava/lang/String;")}]`; },
+} });
 rt.register({
   name: "android/util/Pair", ctor: JPair,
   fields: ["first", "second"],
@@ -183,7 +177,7 @@ rt.register({
 
 // ── android.util.Property / IntProperty / FloatProperty: abstract get/set handles that
 // ObjectAnimator drives. The primitive subclasses unbox into the app's setValue override.
-class JProperty extends JObj { type: unknown = null; name = ""; }
+export class JProperty extends JObj { type: unknown = null; name = ""; }
 rt.register({
   name: "android/util/Property", ctor: JProperty,
   methods: {
@@ -288,7 +282,9 @@ rt.register({
     "static complexToDimensionPixelSize(ILandroid/util/DisplayMetrics;)I": (data: number, dm: JDisplayMetrics) => {
       return Math.round(complexToPx(data, dm));
     },
+    "getComplexUnit()I": function (this: JTypedValue) { return this.data & 15; },
     "static complexToDimension(ILandroid/util/DisplayMetrics;)F": (data: number, dm: JDisplayMetrics) => complexToPx(data, dm),
+    "static complexToDimensionPixelOffset(ILandroid/util/DisplayMetrics;)I": (data: number, dm: JDisplayMetrics) => rt.f2i(complexToPx(data, dm)),
     "static applyDimension(IFLandroid/util/DisplayMetrics;)F": (unit: number, v: number, dm: JDisplayMetrics) => {
       switch (unit) {
         case 1: return v * dm.density;
@@ -356,6 +352,70 @@ for (const [n, num] of [["Size", (v: number) => v | 0], ["SizeF", (v: number) =>
     },
   });
 }
+
+class JRational extends JObj {
+  n = 0; d = 1;
+  constructor(n = 0, d = 1) { super(); this.init(n, d); }
+  init(n: number, d: number) {
+    if (d < 0) { n = -n | 0; d = -d | 0; }
+    if (!d) { this.n = Math.sign(n); this.d = 0; }
+    else if (!n) { this.n = 0; this.d = 1; }
+    else { const g = rationalGcd(n, d); this.n = n / g | 0; this.d = d / g | 0; }
+  }
+  intValue() { return this.d ? this.n / this.d | 0 : this.n > 0 ? 0x7fffffff : this.n < 0 ? -0x80000000 : 0; }
+}
+function rationalGcd(a: number, b: number): number {
+  while (b) [a, b] = [b, a % b];
+  return Math.abs(a) | 0;
+}
+function rationalCompare(this: JRational, other: JRational): number {
+  if (other == null) rt.npe();
+  if (!(other instanceof JRational)) throw rt.mkThrowable("java/lang/ClassCastException", "Expected Rational");
+  if (this.n === other.n && this.d === other.d) return 0;
+  if (!this.d && !this.n) return 1;
+  if (!other.d && !other.n) return -1;
+  if (!this.d && this.n > 0 || !other.d && other.n < 0) return 1;
+  if (!this.d && this.n < 0 || !other.d && other.n > 0) return -1;
+  const a = this.n * other.d, b = other.n * this.d;
+  if (Number.isSafeInteger(a) && Number.isSafeInteger(b)) return a < b ? -1 : a > b ? 1 : 0;
+  const aa = BigInt(this.n) * BigInt(other.d), bb = BigInt(other.n) * BigInt(this.d);
+  return aa < bb ? -1 : aa > bb ? 1 : 0;
+}
+const rationalNaN = new JRational(0, 0), rationalInf = new JRational(1, 0), rationalNegInf = new JRational(-1, 0);
+rt.register({ name: "android/util/Rational", ctor: JRational, sup: "java/lang/Number", ifaces: ["java/lang/Comparable"],
+  statics: { NaN: rationalNaN, POSITIVE_INFINITY: rationalInf, NEGATIVE_INFINITY: rationalNegInf, ZERO: new JRational() },
+  methods: {
+    "<init>(II)V": JRational.prototype.init,
+    "getNumerator()I": function (this: JRational) { return this.n; },
+    "getDenominator()I": function (this: JRational) { return this.d; },
+    "isNaN()Z": function (this: JRational) { return !this.n && !this.d ? 1 : 0; },
+    "isInfinite()Z": function (this: JRational) { return this.n && !this.d ? 1 : 0; },
+    "isFinite()Z": function (this: JRational) { return this.d ? 1 : 0; },
+    "isZero()Z": function (this: JRational) { return !this.n && this.d ? 1 : 0; },
+    "doubleValue()D": function (this: JRational) { return this.n / this.d; },
+    "floatValue()F": function (this: JRational) { return Math.fround(Math.fround(this.n) / Math.fround(this.d)); },
+    "intValue()I": JRational.prototype.intValue,
+    "longValue()J": function (this: JRational) { return this.d || !this.n ? BigInt(this.intValue()) : this.n > 0 ? 0x7fffffffffffffffn : -0x8000000000000000n; },
+    "shortValue()S": function (this: JRational) { return this.intValue() << 16 >> 16; },
+    "byteValue()B": function (this: JRational) { return this.intValue() << 24 >> 24; },
+    "equals(Ljava/lang/Object;)Z": function (this: JRational, other: unknown) { return other instanceof JRational && this.n === other.n && this.d === other.d ? 1 : 0; },
+    "hashCode()I": function (this: JRational) { return this.d ^ (this.n << 16 | this.n >>> 16); },
+    "toString()Ljava/lang/String;": function (this: JRational) { return this.d ? `${this.n}/${this.d}` : this.n > 0 ? "Infinity" : this.n < 0 ? "-Infinity" : "NaN"; },
+    "compareTo(Landroid/util/Rational;)I": rationalCompare,
+    "compareTo(Ljava/lang/Object;)I": rationalCompare,
+    "static gcd(II)I": rationalGcd,
+    "static parseRational(Ljava/lang/String;)Landroid/util/Rational;": async (s: string) => {
+      if (s == null) rt.npe();
+      if (s === "NaN") return rationalNaN;
+      if (s === "Infinity") return rationalInf;
+      if (s === "-Infinity") return rationalNegInf;
+      const sep = s.includes(":") ? s.indexOf(":") : s.indexOf("/");
+      if (sep < 0) throw rt.mkThrowable("java/lang/NumberFormatException", "Invalid Rational: " + s);
+      const cls = rt.link("java/lang/Integer").ctor;
+      return new JRational(await vcall(cls, "parseInt", "(Ljava/lang/String;)I", s.slice(0, sep)), await vcall(cls, "parseInt", "(Ljava/lang/String;)I", s.slice(sep + 1)));
+    },
+  },
+});
 
 // ── android.util.FloatMath — deprecated, but older game loops still link it
 const fm1 = (fn: (x: number) => number) => (x: number) => Math.fround(fn(x));

@@ -29,4 +29,14 @@ TikTok work starts from the existing TikTok worktree. Each app is investigated i
 
 ## Completion
 
-The requested implementation and verification are complete. Fast-forward `main` to the accepted integration branch and keep the Chrome tabs and server available.
+The TikTok/Resy/YouTube implementation was integrated before the Maps merge. Current verification limits are recorded in the implementation history.
+
+## Maps integration
+
+The Maps platform work is integrated with current main, retaining both sets of regression
+tests. Typecheck and unit tests pass; Maps, Amazon and TikTok compile without method failures.
+The full 159-step matrix and focused starting-main comparisons are recorded in
+[the implementation history](docs/implementation-history.md), including the pre-existing
+TikTok failure and the inconclusive YouTube playback comparison. The previous Maps scope and
+evidence are archived in [the Maps branch plan](docs/maps-parity-plan.md). Screenshots and
+reports are retained under `webdroid-shots/maps-merge/` for worktree cleanup.

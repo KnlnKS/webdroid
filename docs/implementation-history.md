@@ -2095,3 +2095,1245 @@ activity because its background startup task registered `LifecycleListeners` aft
 cooperative main-queue transition. The bounded, deduplicated catch-up remains in the lifecycle
 policy; normal dispatch takes a fresh callback snapshot at each pre/plain/post stage, matching
 Android's separate dispatch passes.
+## Google Maps: packed native relocations (2026-09-13)
+
+The unchanged Google Maps 26.37.05.977222275 APK initially fails at
+Process.isApplicationUid on f3fefda. After passing that call, NativeLibLoader throws
+`libgmm-jni.so: DT_ANDROID_RELA relocations are not decoded`. APS2 decoding reveals
+another loader gap: the libraries use Android's older RELR tags (0x6fffe000/1/3),
+which were silently ignored, leaving constructor entries unrelocated and jumping
+to 0x131c4. Decode both APS2 and the standard/Android RELR tables through the owning
+ELF loader. Relocate before collecting init-array entries. No APK edits or JNI
+substitutes are involved.
+
+Reference: Android 13 bionic [packed relocation iterator](https://github.com/aosp-mirror/platform_bionic/blob/android13-release/linker/linker_reloc_iterators.h).
+Focused tests cover grouped/individual offsets, info and addends, negative deltas,
+malformed streams, and ELF32/ELF64 RELR bitmaps including their highest bit and
+constructor collection. Chrome progresses past the earlier native fault; full Maps
+operation is not yet established. Smoke compilation reports 72,887 classes with
+zero method failures. Android reference uses a dedicated API 35 Play Store image;
+the older Google APIs reference contains a differently signed system Maps build
+and rejects the Google-signed update. The unchanged APK installs on the Play Store
+image and renders real tiles and search results.
+
+### Executor task factories
+
+Maps' Guava `byvz` subclasses AbstractExecutorService, overrides both newTaskFor
+methods to return its own ListenableFuture, and casts the result of super.submit
+back to that interface. Native submit instead manufactured webdroid/Future and
+bypassed both newTaskFor and execute, producing a ClassCastException. Submit now
+uses both virtual entry points, including when callbacks suspend, and supplies the
+Runnable/result overload. Default FutureTask now runs once and supports cancellation
+so this path retains cancellation behavior. The one-argument Executors.callable
+uses the existing adapter and rejects null. Focused tests cover overridden factories,
+execute, overload results, repeated run, cancellation, and existing executor queues.
+
+Maps then stalled waiting for its native-loading ListenableFuture despite successful
+JNI initialization. Its Guava FutureTask subclass releases listeners from `done()`;
+the native FutureTask never invoked that virtual callback. Dispatch it once after
+publishing success, failure or cancellation, allowing callbacks to suspend. A test
+checks completion is visible inside the callback and repeated run cannot notify twice.
+
+### Matrix inversion
+
+Maps reaches `Matrix.invertM([FI[FI)Z` while constructing its map camera. The delegate
+was registered with a void return and computed only four cofactors, replacing a
+singular matrix with identity. Correct the signature and compute the complete inverse
+without temporary arrays. Singular input returns false without modifying output.
+A perspective-transform test multiplies the result back to identity and exercises
+overlapping input/output offsets and singular input.
+
+### Maps reference queues and main-loop progress
+
+Maps' weak-reference cleanup thread reached ReferenceQueue.remove; the earlier delegate had
+no blocking queue semantics. References now distinguish active/enqueued/dequeued state,
+explicit enqueue clears the referent, and queue removal parks with interruption/timeout
+handling. Weak and phantom references register for host collection without retaining the
+Java referent. Java strings use the runtime's primitive representation and remain readable.
+`tests/reference-queue.test.ts`: 2 passing tests, 12 assertions. Host GC timing is not asserted.
+
+MessageQueue now belongs to its Looper and tracks due messages through dispatch and
+cancellation. IdleHandler callbacks honor retention/removal, rather than firing once after
+an arbitrary 50 ms delay. The focused Handler tests cover cancellation behind a busy looper,
+reposting, cleanup, due versus future messages, and repeated idle transitions. A slow Maps
+native startup was initially suspected to be a queue stall; it subsequently completed with
+no initializing classes or native fault. That observation is not a performance measurement.
+
+### Maps UI and provider dispatch
+
+The reference AVD (`webdroid_maps_ref`, emulator-5588) runs the unchanged Google-signed
+Maps APK. Home, Golden Gate Bridge place details, and a Ferry Building-to-bridge driving
+route render real tiles and results; screenshots are under `webdroid-shots/maps/` (ignored).
+Chrome at 4126 has reached the search bar but not map parity. Its first search tap exposed
+IntentFilter.addDataPath, after earlier checked-state binding failures.
+
+A remote provider call decoded arguments after establishing Binder calling identity. The
+suspending decode let dispatch inherit a different Java thread, making microG's concurrent
+GmsService initialization appear reentrant and exposing null enum values. Decode before
+entering the identity scope; provider invocation now starts in that scope's synchronous
+prefix. Subsequent Maps reloads did not reproduce that exception. This is observed-path
+coverage, not proof for every cross-process initialization schedule.
+
+EGL10 constructed a JEGLConfig while registering the Java EGLConfig name to an unrelated
+constructor. Register the actual class. CompoundButton omitted Checkable, so Maps' general
+property binder rejected CHECKED on AppCompatRadioButton. Focused class-identity and tint
+checks pass. Canvas.drawPicture previously discarded recordings; replay its display list
+inside saved state and apply destination translation/scaling, following AOSP Canvas.java.
+
+### Maps XML, parcels and telemetry
+
+SAX uses the existing XML pull parser's DOM parse and emits namespace, element and text
+callbacks through suspendable Java dispatch. The Android 35 probe reports factory namespace
+awareness false but an unconfigured reader true; explicit configuration overrides that.
+A Chrome probe parsed an SVG namespace, path attribute and `A&amp;B` text through asynchronous
+callbacks. InputSource stream/reader inputs work; system-id-only fetch is not implemented.
+
+ClipData uses Android 15's field order, including nested Intent/IntentSender/Uri slots;
+Intent no longer rejects all non-null ClipData on read. Plain TextUtils CharSequence parcels
+and PersistableBundle parcel entry points use canonical owners. Spanned-text parcel payloads
+remain explicitly unsupported. A nested-intent round trip consumes the entire Parcel.
+StatsEvent encodes real little-endian typed fields, annotations and error masks. StatsLog
+has no statsd socket and drops fire-and-forget telemetry, as Android's service-absent path
+allows; it does not report a fabricated upload. Cronet previously threw constructing StatsEvent.
+
+References: Android 15 [ClipData](https://android.googlesource.com/platform/frameworks/base/+/android-15.0.0_r1/core/java/android/content/ClipData.java),
+[TextUtils](https://android.googlesource.com/platform/frameworks/base/+/android-15.0.0_r1/core/java/android/text/TextUtils.java),
+and API 35 [StatsEvent](https://android.googlesource.com/platform/prebuilts/fullsdk/sources/+/refs/heads/androidx-metrics-release/android-35/android/util/StatsEvent.java).
+
+
+### Maps networking and file transfer
+
+microG's unchanged FontsProvider opens a read-only system font. Provider IPC previously
+omitted openFile; read-only file snapshots now cross the boundary and lazily obtain a
+native descriptor, allowing JNI file reads and mappings. ParcelFileDescriptor loads lazy
+file sources, duplicates native descriptors, and closes descriptors owned by AutoClose
+streams. This does not implement shared writable descriptors or pipes across processes.
+Focused descriptor tests cover shared duplicate offsets, independent close lifetime and
+lazy bytes. Chrome no longer reports the font-provider openFile failure.
+
+ObjectInputStream computed the end of TC_BLOCKDATA using the position before reading the
+one-byte length. That shortened every small block by one byte and made its final payload
+byte look like a serialization tag. A two-block regression test now consumes both values.
+
+Maps' bundled gRPC platform selection reached missing SSLContext provider operations.
+The relay now accepts ALPN offers and returns Bun's actual negotiated protocol. Java
+SSLParameters and SSLSocket retain copied offers and report no selection before handshake.
+Both a WebSocket relay probe and a Java SSLSocket probe negotiated h2 with www.google.com.
+This verifies the transport handshake, not Maps request success. SSLEngine's pre-handshake
+ALPN query is supported; engine wrap/unwrap are not implemented. Existing relay certificate
+representation and other TLS configuration limits remain.
+
+The gRPC resolver constructs a scheme-less URI such as //host:443. Delegating this to
+JavaScript URL rejected valid hosts and discarded explicit default ports. Java URI now
+parses components directly. CharBuffer.wrap(CharSequence) preserves a live read-only view;
+one-shot CharsetEncoder encoding consumes UTF-16 input and reports malformed/unmappable
+input according to the selected action. Existing incremental coder limitations remain.
+Missing Collections.shuffle(List, Random) and InetSocketAddress.getHostString were the next
+address-selection failures. Focused tests pass; Maps still shows no tiles or search results.
+
+IntentFilter moved into its canonical matching module. Its Android 15 parcel layout includes
+static/dynamic MIME types, scheme-specific patterns, authority/path patterns and metadata.
+PatternMatcher retains its parsed pattern payload. URI-relative groups and advanced-glob
+matching remain explicit unsupported cases. Wearable AddListenerRequest previously failed
+writing its IntentFilter array. A parcel round trip preserves matching and consumes all data.
+
+
+### Maps stream, property and reflection failures
+
+The GL-Map thread stopped at ShortBuffer.put(short[], offset, length). Range writes now
+validate bounds and remaining capacity, copying aligned native-order arrays in bulk and
+using DataView for other byte orders. Signed-value and bounds checks pass. Missing
+SequenceInputStream and Channels blocked stream composition; the adapters preserve stream
+close ownership, ByteBuffer ranges, and native-memory view refresh across suspension.
+Sequence exhaustion/close and channel round-trip tests pass.
+
+The scale bar's ObjectAnimator used inherited View.ALPHA, which was absent. Its null
+property reached an empty setter name and a JavaScript toUpperCase exception. The property
+now dispatches through virtual getAlpha/setAlpha; a one-value animator starts at the
+view's current value. ViewGroup.getClipChildren returns its existing clipping state.
+Locale.Category supports independent display/format defaults. Locale-dependent formatter
+default propagation elsewhere remains incomplete.
+
+Guava's Finalizer reflected finalizeReferent on an abstract interface in Maps' DEX.
+Reflection had dropped every declaration without a JavaScript function. Method metadata
+now survives without a body; a probe on the unchanged bvss interface finds public abstract
+flags and invokes a test implementation through Method.invoke. AssertionError constructors
+now retain object details and throwable causes, exposing that underlying failure. Source-
+qualified logger parameter overloads support indexed substitution; they do not implement
+full MessageFormat patterns or handler dispatch.
+
+The next Chrome run had no earlier main-thread/GL exceptions but still no map geometry or
+working search. It completed roughly 152,000 measure calls during startup; this is a
+performance investigation, not a passing timing measurement. A diagnostic object-graph
+walk stalled the tab and was terminated, then the tab reloaded. Use narrow object paths
+or explicit counters instead of heap-wide queries. A microG process reached missing
+Intent.getParcelableArrayListExtra; named list-extra getters/setters now preserve the
+canonical extras map. All process realms must be checked again after reload.
+
+ObjectOutputStream.enableReplaceObject is a newly observed cache-path failure. Existing
+object graph serialization is explicitly unsupported; adding a switch alone would not
+make that cache work. Investigate independently of map network/rendering progress.
+Full E2E remains deferred until the Maps development pass is complete.
+
+
+Maps' `/glm/mmap` POSTs reached Google with **zero bytes** and returned HTTP 400.
+The unchanged `btew.call` body gets its output stream at DEX pc395, calls connect at399,
+then writes at462. URLConnection.connect had already submitted and cached the empty
+request. For buffered uploads, explicit connect now fixes connection configuration while
+response access submits the completed body. Concurrent response accessors share one fetch.
+The focused test preserves bytes written after connect and rejects requesting output after
+response reading starts. Transport errors for an output connection remain deferred until
+response access because this implementation buffers the entire upload. This is an explicit
+limit, not evidence that connect has opened a remote socket. See OpenJDK's
+[HttpURLConnection input/output ordering](https://github.com/openjdk/jdk/blob/master/src/java.base/share/classes/sun/net/www/protocol/http/HttpURLConnection.java).
+The live Maps run after this fix still needs inspection; do not infer HTTP or visual success.
+
+### Maps wrapped input and remaining rendering (2026-09-13)
+
+The HTTP upload ordering fix produces successful `/glm/mmap` responses (125,549 and
+523,306 bytes observed) and successful tile responses. Buffered/DataInput wrappers
+previously copied native input bytes and cursors, bypassing subclass reads such as
+SequenceInputStream and leaving the original cursor unchanged. Wrappers now retain
+and read the source, with buffered mark/reset and fast primitive reads from buffered
+bytes. Five affected stream tests pass (24 assertions); typecheck passes.
+
+The subsequent Chrome run parsed 52 zoom tables and built 50 lookup entries. It
+still rendered only the map background/search bar: seven GL frames after a pan,
+zero geometry draws, and empty base-tile bins. Tapping search creates and resumes
+`axfd`, but its root view remains unattached. A prior panel transition remains in
+`net.e`, delaying the new panel. These are active failures, not parity. The cache
+writer also reaches unsupported ObjectOutputStream.enableReplaceObject; object
+serialization remains unsupported. Child microG processes had no observed missing
+APIs at this checkpoint. Full E2E has not run.
+
+
+### Maps home transition diagnostics (2026-09-13)
+
+Fresh headless/Chrome startup reached onboarding, not home. Early diagnostic taps passed
+pixel coordinates to a harness that expects fractions; their apparent idle success did
+not exercise Skip. A real Skip action reproduced the transition stall. The bounded
+exception collector exposed `belc.as()I`: an API outline read the absent
+`Build.VERSION.MEDIA_PERFORMANCE_CLASS`, and int-to-long conversion failed on undefined.
+The field now reports the documented zero (no declared performance class). The transition
+then completes and constructs bottom navigation/home content, but repeated layout passes
+fail on TableLayout.setColumnShrinkable. Column shrinking and reversible stretch/shrink
+selection are implemented in the existing table owner; the affected tests and typecheck pass.
+
+Separately, View.layout suppressed layout listeners when a required layout kept the same
+bounds, contrary to AOSP. Listeners now run in the same branch as onLayout, preserving the
+unchanged/no-layout fast path; an async-listener regression test covers both cases. This
+alone did not remove the Maps transition failure. The native disk-cache error is 65551
+wrapped as SQLite code 15 (SQLITE_PROTOCOL); its root cause remains unproven. Maps has not
+drawn map geometry or achieved parity, and the final full E2E remains deferred.
+
+
+Maps home measurement then multiplied through nested FrameLayout and LinearLayout wrappers.
+A single main-queue measure job reached millions of onMeasure calls. A bounded per-view
+counter found successive wrappers doubling the calls (one Compose child measured 103,884
+times while an outer wrapper measured 1,082 times during the sample). FrameLayout now
+performs its second pass only for multiple matching children under a non-exact parent
+specification, and LinearLayout only forces uniform cross-axis size under a non-exact
+cross-axis specification, matching AOSP. Focused tests cover a nested chain (one leaf
+measure) and final sizing of multiple matching children. After this fix the Maps main queue
+drains; the inspected run had 18,330 onMeasures and further real layout/draw API failures.
+This is evidence that the pathological pass is removed, not a benchmark of working Maps.
+
+Subsequent fixes provide natural-order Arrays.sort subranges (with checked bounds and
+suspending Comparable calls), View context-clickable state, and Path.set. Path copies
+retain contour cursors/fill rule and own their mutable operation arrays. The first transient
+Compose attachment error remains a separate ordering limitation; attachment is queued by
+the current platform implementation. Native cache SQLITE_PROTOCOL and zero map geometry
+remain unresolved, and full E2E has not run.
+
+Maps now constructs home content and performs live place autocomplete in full Chrome.
+The tested path required Path.addPath with Matrix, accessibility-service state listeners,
+SpannableString.valueOf, the public minimum scaling span, Space constructors, outline
+shadow-color properties, child drawable-state aggregation, Character.offsetByCodePoints
+and CharacterStyle.wrap. Span wrappers retain distinct identities and forward draw and
+measurement behavior. SHA-384/SHA-512 MessageDigest uses WebCrypto; the earlier SHA-512
+lookup and invalid response-signature exceptions no longer occurred in the inspected run.
+Place selection next reached missing BidiFormatter; its implementation includes directional
+heuristics, embeddings/isolation and preservation of span ranges. Focused checks pass.
+
+An isolated call to the unchanged NativeSqliteDiskCacheImpl reproduced error 65551
+(SQLITE_PROTOCOL). Its trace repeatedly opened map_cache.db-shm and issued F_GETLK. The
+query returned zero but left l_type=F_WRLCK, which SQLite interprets as another process
+holding an exclusive DMS lock. Returning F_UNLCK for the current process-local descriptor
+model made the same native open/destroy probe succeed (handle 91048944). This does not add
+cross-process record locks or fix shared mmap coherence. It is no longer appropriate to
+attribute this reproduced cache-open failure to those unproven alternatives.
+
+A subsequent home run had one layout error (the transient unattached Compose view), zero
+draw errors, 4,412 onMeasure calls, and no missing methods on that observed path. Three
+microG process frames each reported an empty missing set. Their exception streams were not
+captured by the main-realm throwable collector, so this is only missing-API coverage.
+The capture headless-home-cache-fixed.png contains Local vibe cards but a blank map.
+Full Chrome autocomplete returns Golden Gate Bridge suggestions with incorrect black
+placeholder icons. Map geometry is still zero; parity and full regression verification
+remain incomplete. Timing varied with concurrent Chrome/headless load and is not a benchmark.
+
+The native SQLite cache then failed with 65537 on fresh paths and 66058 (short read) on
+reopen. Host tracing showed one descriptor writing WAL bytes while another descriptor read
+zero bytes at the same offset. Native descriptors now share live VFS file contents; writes
+publish immediately, rename preserves open-file identity, and unlink does not resurrect a
+pathname on close. The unchanged native open/hasResource(empty key)/destroy probe now
+returns false without errors. Focused descriptor, AtomicFile and ParcelFileDescriptor checks
+pass. Cross-process record locks and complete cross-realm open-file rename semantics remain
+outside the demonstrated coverage.
+
+Tile RPCs succeeded but preparation waited indefinitely for styles. The app's own debug
+output reported ten tile responses, zero preparations and pending style futures. Its Cronet
+fallback enumerates HttpURLConnection header keys from index zero and stops at null; our
+implementation incorrectly reserved index zero for the status line. Matching Android's
+indexed-header behavior lets the unchanged response handler see Content-Type. Later debug
+output reported four style resources received, zero network failures, eight current tiles,
+142 completed preparations and 1,736,178 bytes of GL data. The string-null status-line query
+remains intact. The focused HTTP test passes.
+
+EGL10's current-context query fabricated an object while no context was bound. Maps skipped
+creating its offscreen capability context and cached zero vertex-texture units. Returning
+the non-null EGL_NO_CONTEXT sentinel and preserving live context identity lets Maps query
+32 vertex-texture units and 8192 maximum texture size in headless Chrome. Its unchanged
+vertex-texture shader then compiled. Missing GLES20 uniforms, framebuffer operations and
+buffer-offset drawing were added; integer queries now report actual scalar/array/object
+bindings. A browser probe attached a texture to a framebuffer, cleared it, read
+[255,128,0,255] into a positioned Java buffer without advancing position, and verified the
+binding reset after deletion, with GL error zero. Map geometry and labels now appear in
+headless-home-tiles-prepared.png, but colors/polygons are wrong. Recent full-Chrome runs still
+showed a blank map; neither path establishes parity. The native-only glDraws counter does
+not count these Java GLES calls.
+
+Place construction successively reached Collections.disjoint, Rational, TtsSpan,
+ScaleGestureDetector, LocaleSpan and LinearLayout divider APIs. Focused checks cover
+suspending collection comparisons, rational normalization, TTS span parcels, double-tap
+scale state (including rejected updates), locale order through paint copies/parcels, and
+visible-child divider spacing/drawing/weights. Text locales reach Canvas2D language selection
+and participate in width-cache identity. Locale lists retain all locales; Canvas2D uses the
+first language. Scale recognition follows AOSP focus/span and anchored-scale rules; the
+existing MotionEvent/input pipeline still only supplies one pointer, so this is not evidence
+of browser multi-touch support. Full-Chrome place construction next failed in pcx.onMeasure
+on getShowDividers; divider support requires another app pass.
+
+A focused suspended-thread test reproduced ambient Java thread identity leaking into
+unrelated host work. Thread.start and non-main Looper.run now restore that ambient identity
+as soon as invocation yields, while their promises preserve lifecycle and queue ordering.
+The tests cover live-thread enumeration and serialized looper jobs. One subsequent Maps run
+had no VTO 'resume must be called on the main thread' errors, but the startup trace-span
+mismatch and transient unattached Compose view still occurred. Other concurrent checkout
+captures consume substantial CPU; no performance numbers from this diagnostic period are
+accepted as benchmarks. The AVD Golden Gate Bridge place screenshot/XML was refreshed.
+Typecheck and affected checks pass; the final full E2E suite has not run.
+
+Subsequent Maps place interaction reached TextureView transforms, TransitionDrawable,
+Arrays.deepToString, TouchDelegate, SpannableStringBuilder.clearSpans and Range. Focused
+commits implement those platform contracts. Unordered set metadata incorrectly included
+SortedSet, sending unchanged app bytecode into a comparator call; that interface was removed.
+Place photos now appear in full Chrome, although the map remained blank with black label
+backgrounds. Headless place content stayed below the screen: the app's pcl.computeScroll
+reads the current offset only when computeScrollOffset returns true. Our scroller returned
+false while producing its final offset. It now delivers that final update before returning
+false on the following call, covered for Scroller and OverScroller.
+
+Full-Chrome GL tracing exposed glEnable/disable receiving 83420592, the JNI environment
+pointer, and glStencilFunc receiving environment/class before the actual enum. DEX method
+annotations mark ten RendererJni methods CriticalNative. Registration now caches that
+annotation and omits JNI handles and the local-reference frame for critical calls. ARM32
+and A64 tests cover mixed integer, long, float and double arguments, double returns, and
+the ordinary FastNative convention. Both tests and typecheck pass. The host crashed before
+app verification of this fix and the scroller change; committed work survived. The server
+and reference AVD were restarted, with full Chrome alone to reduce diagnostic resource use.
+Rendering parity, all-process diagnostics, and the final full E2E remain unverified.
+
+After restart, full Chrome confirms the CriticalNative fix: a bounded 118-draw trace has
+zero WebGL errors and black label rectangles disappear. The scroller fix brings the place
+card into view with photos. The map remains mostly beige in full Chrome; a headless run
+with the native JIT disabled draws geometry but retains white water and incorrect polygons.
+Palette textures contain blue, uniforms and integer-offset attributes bind correctly, and
+a sampled white-ocean pixel is painted by the base fill without later water coverage. These
+observations narrow the investigation but do not identify its cause. Chrome debugging became
+unreliable; that diagnostic tab was closed. Headless timing under these conditions is not a
+performance comparison. The AVD place reference was refreshed.
+
+A later Maps bjuo request worker fails at ArrayBlockingQueue.drainTo before processing its
+batch. Both drain overloads now use one shared queue implementation, including destination
+validation, bounded FIFO/priority transfers and virtual collection adds. The batch is detached
+once, avoiding repeated array shifts. Destination exceptions propagate; Java permits partial
+transfer on failure. Eight focused queue/executor checks (58 assertions) and typecheck pass.
+App verification of this queue change is pending. The ActivityManager test-harness query is
+also implemented, but its place-video path still requires verification. Main-thread trace
+identity, transient Compose attachment, serialization and rendering issues remain open.
+
+The white-water cause is the Java GLES extension query, not triangulation. Unchanged native
+tessellation probes return correct areas for a square, reversed winding, a hole and separate
+polygons. GPU-buffer inspection finds a blue-row triangle covering a sampled white-ocean
+pixel. Transform feedback then shows the shader rejecting that row: Maps allocated a padded
+32×16 palette while its shader used reciprocal logical dimensions 1/29 and 1/10. Empty Java
+GL_EXTENSIONS selects the app's power-of-two fallback; native GLES already reports WebGL 2's
+non-power-of-two support. Java now reuses the native capability list for a WebGL 2 context.
+No app data, shader, geometry or texture dimensions are changed. A fresh JIT-disabled Maps
+run renders blue oceans/lakes and expected land colors (headless-npot-fixed-home.png), with
+GL error zero and advancing frames. Typecheck passes. Full Chrome and detailed place/route
+comparison remain to be repeated. UI attachment, trace identity and visual differences remain.
+
+Full Chrome subsequently reports CONTEXT_LOST_WEBGL. Three stale diagnostic Maps tabs were
+closed, but context loss recurred with a single Maps tab: transferToImageBitmap throws and
+terminates GL-Map. EglContext now returns failure when a context is lost during make-current
+or swap, and Java EGL10/EGL14 plus native EGL expose EGL_CONTEXT_LOST. Other transfer errors
+still propagate. A real WebGL_lose_context probe verifies both Java swap APIs return false,
+getError reports 0x300e then clears, and a newly created context presents successfully. The
+existing framebuffer/readPixels probe still returns [255,128,0,255] without advancing buffer
+position or raising GL errors. Typecheck and six platform construction tests pass. The
+browser loss trigger and app recovery still need investigation; no parity claim follows
+from this contract check. AVD Ferry Building-to-Golden Gate Bridge route was captured again.
+
+### Maps attachment ordering after restart (2026-09-13)
+
+Java ViewGroup.addView and addViewInLayout now await the child's window attachment, then
+onViewAdded and the hierarchy listener. AOSP ViewGroup.addViewInner dispatches in that order;
+queuing attachment until after the current main job let Maps measure GmmComposeView while
+unattached. Synchronous native widget construction retains its deferred helper. Two suspended
+callback tests verify ordering and no later duplicate dispatch; five focused view tests and
+typecheck pass. Fresh full-Chrome and headless Maps runs report zero layout errors; the
+headless run renders corrected water colors and live Golden Gate Bridge autocomplete.
+The startup trace-span mismatch persists. Full Chrome again lost its WebGL context and later
+crashed with error 11; a JIT-disabled comparison kept a live context but had not drawn map
+geometry when checked. Neither the crash cause nor parity is established.
+
+Attachment callback dispatch now retains its initiating thread across awaited callbacks,
+including child trees and Java addView layout-parameter work. A scoped vcallOn helper starts
+Java under that identity and immediately restores the ambient thread. A suspension test
+checks callback identity without pinning the ambient thread during the wait. In the next
+headless Maps place run, the earlier attachment listener's main-thread `propagate` failure
+was absent. The independent startup span mismatch remains.
+
+Directions text preparation reached java.text.Bidi.requiresBidi from xxn's constructor.
+The static query now checks the requested UTF-16 range against the existing Unicode
+bidirectional properties (R, AL, AN, RLE, RLO), including supplementary code points and range
+validation. The remaining Bidi object-analysis API is not implemented. Focused tests cover
+Latin/CJK, Hebrew/Arabic, directional controls, Adlam surrogate pairs, slices and invalid ranges.
+
+Maps' directions fragment also reached missing ViewAnimator through olc. The new FrameLayout
+subclass selects/wraps children, preserves selection on insertion/removal, and uses the
+existing view-animation APIs. FrameLayout now honors measureAllChildren, enabled by default
+for ViewAnimator and configurable from attributes. Focused switching/removal and hidden-child
+measurement checks pass, as does typecheck. Route-result parity is still pending: selecting
+the start suggestion currently leaves a blank content area without the earlier missing-class
+error. A temporary-profile window of installed full Chrome renders the home map with native
+JIT disabled (chrome-isolated-home.png, boot 3683 ms under concurrent diagnostic load), while
+the reused Browser Use session remained blank and much slower. Profile, instrumentation and
+saved state differ; this comparison does not isolate a cause or constitute a benchmark.
+
+Submitting Ferry Building with the IME action reaches route construction in both full Chrome
+and headless Maps. The subsequent missing ViewSwitcher is implemented as a two-child
+ViewAnimator with factory creation, next-view lookup and reset. The comparator overload of
+Arrays.binarySearch now reuses its existing binary-search implementation. Focused tests verify
+a suspended comparator and insertion points, plus ViewSwitcher factory/limit/reset behavior;
+typecheck passes. The app pass for these additions remains pending.
+
+The visible UI probe now excludes INVISIBLE ancestors as well as GONE ancestors. Maps hid its
+autocomplete container while leaving individual suggestion children VISIBLE; uiTree and
+locateText previously reported these invisible suggestions. A fresh Chrome route-entry probe
+now reports only the visible search controls. The full diagnostic tree retains hidden nodes.
+
+AOSP retains mAttachInfo through onDetachedFromWindow and attach-state listeners. Webdroid
+cleared its attached flag before either callback, causing Maps' AndroidViewHolder to reject
+its own detach-time read observation. Detachment now clears attachment after the callbacks
+and retains the dispatch thread through child and listener awaits. A suspended child/parent
+ordering test and typecheck pass; app verification follows the next server restart.
+
+The next full-Chrome JIT-enabled run survives search, place construction and route selection
+for eight minutes, with 11,851 regions/1,006 modules and advancing main ticks. The prior
+renderer crash remains intermittent; JIT enablement alone is not established as its cause.
+ViewSwitcher and comparator binary search now reach live route estimates. DateUtils date-range
+formatting then blocks route construction. Its new implementation maps Android's flags to
+bounded cached Intl formatters, handles zones and exclusive midnight ends, and appends through
+the supplied Java Formatter. Ten cases match a real Android 35 app_process probe after
+normalizing ICU-version whitespace differences; 15 focused tests and typecheck pass. After
+restart, Maps no longer reports the detach-time AndroidViewHolder error or DateUtils failure;
+route construction next reaches missing android.icu.text.NumberFormat. The route still does
+not finish rendering and geometry differs from the AVD.
+
+The fuel-saving card reaches ICU NumberFormat.getPercentInstance/format. ICU and Java
+percentage factories now share locale-aware cached formatting with half-even rounding;
+fraction digit setters preserve their min/max invariant and long formatting avoids Number
+precision loss. Three focused tests match Android 35 percentage, locale, rounding and long
+probes; typecheck passes. Maps advances to route-map construction, where double-array binary
+search is missing. The detailed route cards and controls still have layout defects.
+
+Maps bwep.a checks instanceof SortedMap before calling comparator(). The hash-map family
+incorrectly advertised SortedMap and ConcurrentMap on every implementation. Registrations
+now expose ConcurrentMap only on ConcurrentHashMap, and no hash map claims SortedMap;
+WeakHashMap and ArrayMap also no longer claim unsupported clone/serialization interfaces.
+Focused type checks preserve TreeMap's SortedMap contract. App verification follows restart.
+
+Route-map setup reaches Arrays.binarySearch(double[], double). Float/double whole-array and
+range searches now use the shared floating comparator. Float/Double.compare also distinguishes
+negative from positive zero; NaN sorts last. Tests cover infinities, signed zero, NaN, insertion
+points and invalid ranges. Four focused collection/array tests and typecheck pass; app
+verification follows restart.
+
+### Handler callback thread retention
+
+Logged dispatch awaited string conversion and Printer callbacks before invoking the
+Handler with ambient thread identity. A background-looper regression test observed
+the main thread in all four callbacks. Preserve the dispatch thread through each
+virtual call, including Handler.Callback falling through to handleMessage after
+suspension. Logged and unlogged dispatch tests pass. A fresh headed Chrome Maps run
+still reports the LoginPromoTutorialController trace-span mismatch, so this corrects
+a platform contract without establishing the cause of that remaining app failure.
+
+### Complete Java view removal before returning
+
+The route had an unattached subtree beneath the attached MainLayout: native removal
+queued dispatchDetached after Java had re-added the same view. That late detachment
+also excluded surviving layout requests from replay. Java remove methods now await
+detachment and the onViewRemoved/hierarchy callbacks, preserving thread identity and
+Android's parent-link ordering. Range removal remains linear. Temporary detachment
+still preserves window attachment until removeDetachedView.
+
+A focused removal/re-add test reproduced premature returns across all seven removal
+entry points; those tests and temporary-detachment coverage now pass. A fresh headed
+Maps run has no detached children beneath attached parents and renders route estimates,
+distance, traffic text and Preview without diagnostic layout requests. The map remains
+hidden, and the progressing renderer now reports missing Matrix.perspectiveM. Startup
+trace mismatch, small icons and other geometry differences remain unresolved.
+
+### Perspective and camera matrices
+
+Route rendering reached missing android.opengl.Matrix.perspectiveM after attachment
+recovery. Implement the field-of-view projection, preserving the output offset and
+Android float intermediates. Replace the adjacent setLookAtM identity placeholder
+with camera orientation and translation. Frustum near/far projection and camera-basis
+tests pass; typecheck passes. Fresh headed Maps no longer reports perspectiveM missing,
+but its map container still remains invisible. This does not establish map parity.
+
+### Picture recording dimensions
+
+Picture reused RenderNode recording but never stored the requested width/height:
+a headed Chrome probe recorded a 32x48 canvas and got 0x0 from Picture. Maps route
+preview uses Picture aspect ratios to size maneuver icons; the zero dimensions reached
+its width-positive precondition and repeatedly aborted layout. Store Picture dimensions
+when recording starts, independently of RenderNode's positioned bounds. The same fresh
+Chrome probe now returns 32x48 and typecheck passes. Full preview verification follows;
+this change alone does not fix drawable sizing or hidden map visibility.
+
+### Dispatch drawable size overrides during widget measurement
+
+Maps' Options drawable reported 96px through Java getIntrinsicWidth but -1 through
+its native base helper; a custom image drawable similarly reported 84 versus -1.
+LayerDrawable now dispatches child intrinsic-size overrides and honors explicit layer
+sizes. Drawable minimum sizes, View suggested minimums and TextView measurement use
+the public size contract. ImageView retains measured drawable dimensions for drawing.
+The thread-scoped virtual-call helper preserves synchronous returns to avoid allocating
+promises for native size queries; asynchronous overrides retain the caller thread.
+
+The 18 focused drawable, Handler and attachment tests pass (91 assertions), as does
+typecheck. Fresh headed Maps shows Save/Share/Close with 96px widths instead of zero.
+One run crashed soon after startup; a repeat reached the sign-in tutorial without the
+usual trace error and continued through search/place. Neither observation resolves the
+intermittent crash or startup race. The capture also exposes existing drawing-order
+failures: ImageView mutates bounds without notifying its drawable and drops an async
+draw result; container bounds callbacks are not awaited. A Chrome probe observes only
+`draw`, missing `onBoundsChange`, for a resized custom drawable. These remain next.
+
+### Await drawable geometry and image drawing
+
+ImageView changed drawable bounds fields directly and dropped the virtual draw result.
+LayerDrawable also discarded asynchronous child bounds callbacks. Route/place captures
+showed misplaced icons and clipped paint. Preserve callback ordering through bounds
+changes and layer drawing, including caller thread identity. ImageView scales its canvas
+around intrinsic drawable bounds and restores it only after drawing finishes.
+
+Focused layer/transition tests pass. A real Chrome Canvas2D probe now observes bounds
+then draw, with a 20x10 drawable filling the expected centered 100x50 area of a 100x100
+view; the center is red, the upper margin transparent, and the canvas transform is
+restored. The preceding build skipped the bounds callback. Full Maps visual verification
+continues alongside an independent bitmap-shader GPU allocation investigation.
+
+### Share immutable bitmap shader tiles
+
+Headed Chrome failed GPU IOSurface allocation even for 1x1 tiles while the host had
+57% memory free. A software Canvas2D diagnostic stayed alive and traced 902,254
+OffscreenCanvas constructions in about three minutes; over 99% came from bitmap
+shader tiles. Fresh shader instances repeatedly copied the same bitmaps (54 bitmap
+objects served 230,142 sampled shader draws), defeating the per-instance cache.
+
+Cache tiles weakly by bitmap and pixel generation, including mirror dimensions in
+the key, and use the original canvas for uncropped, unmirrored tiles. A real Chrome
+pixel probe checks 2,048 pixels across all 16 tile-mode combinations, repeated shader
+instances, and mutation invalidation, with no failures. The fresh hardware-accelerated
+Chrome Maps run reached search/place/start selection without GPU allocation errors;
+only 127 shader tile canvases were allocated at the place checkpoint, including the
+probe. This removes the measured allocation explosion, not the separate startup
+trace mismatch, missing route map, or clipped chip geometry. Typecheck passes.
+
+### AnimatorSet start notification restores map visibility
+
+The Maps route map stayed INVISIBLE because MainLayout.aB retained its full-screen
+content flag. Bytecode shows oam.onAnimationStart makes the incoming search container
+visible, and nfi skips outgoing cleanup when that container is already invisible.
+AnimatorSet.start never notified its listeners, so both full-screen containers stayed
+invisible and cleanup never cleared the flag. Notify start listeners before children,
+retaining the caller thread across asynchronous listeners and child starts.
+
+Six focused animator tests pass (17 assertions) and typecheck passes. Fresh full
+Chrome now displays start-location suggestions and, after selecting a start and
+swapping endpoints, Ferry Building to Golden Gate Bridge route lines and map controls.
+MainLayout's full-screen flag clears and the MapViewContainer is VISIBLE without
+manual state changes. Preview renders the maneuver icon. Base map tiles, chip geometry
+and new Math.log1p / ICU ListFormatter failures remain; parity is not established.
+
+### Newly reachable Maps math and list formatting
+
+After AnimatorSet start callbacks made full-screen content visible, layout reached
+missing Math.log1p. Register the host's precision-preserving log1p implementation;
+focused checks cover tiny inputs, signed zero, infinity and the domain boundary.
+Typecheck passes. Fresh Maps layout verification follows.
+
+Ferry Building details invoke android.icu.text.ListFormatter.getInstance(Locale)
+and format(Collection). Implement default/Locale factories and collection/array
+formatting through Intl.ListFormat, preserving Java toString dispatch, caller thread
+and null failures. Android 15 ICU ListFormatter source specifies per-element toString
+and the AND/WIDE default. Focused tests cover empty/single lists, English punctuation,
+Spanish contextual conjunctions, German conjunctions, asynchronous objects and nulls.
+All three math/list tests pass (16 assertions); typecheck passes. App verification
+continues in the rebuilt Chrome session.
+
+### Retain thread identity while constructing native objects
+
+newObj awaited class initialization before constructing the host object and invoking
+its Java constructor. A controlled background-thread test observed the main thread in
+both constructors. Capture the caller thread before initialization and restore it for
+both construction stages, without retaining global thread state across the wait. The
+construction and Handler tests pass (six assertions), as does typecheck. Fresh headed
+Maps still reports the startup trace-span mismatch, so that separate race remains.
+
+### Await inherited text measurement in compound widgets
+
+The visible Directions chip measured 354px inside a 144px FrameLayout. A live measure
+trace found the parent had observed a zero-width chip; CompoundButton discarded the
+promise from TextView.onMeasure, so its measurement finished later. CheckedTextView
+had the same call pattern. Await both inherited measurements before adding indicator
+space or applying height constraints.
+
+A real Chrome Canvas2D probe with delayed suggested minimums reproduced both widgets
+returning zero dimensions before the callback finished. The rebuilt browser reports
+354px for each child and parent. Fresh Maps now lays out Directions at [48,1536,402,1680]
+with non-overlapping Tickets and Share, replacing the clipped negative-left chip.
+Typecheck passes. The fresh Android reference also wraps the place title onto two
+lines; that observed wrapping is not a parity defect. Base map tiles, rating decoration,
+preview control geometry and the startup trace error remain unresolved.
+A Maps route-preview row measured 2,328 pixels tall: its match-parent divider supplied the
+available height to a wrap-content LinearLayout. Android excludes that child's measured
+cross dimension when siblings determine the wrapping size, then measures it against the
+resolved size. LinearLayout now follows that rule in both orientations, including weighted
+remeasurement, while preserving the all-match-parent case. A focused test reproduced
+300 instead of 48 pixels before the fix; five layout/divider checks (15 assertions) and
+typecheck pass. Fresh full Chrome places the previous/next controls at the bottom in a
+180-pixel overlay instead of the previous full-screen white strip. Captured in
+chrome-preview-cross-measure-fixed.png. This JIT-disabled preview also renders water and
+roads; an earlier place capture was still waiting on map content. A matching JIT-enabled
+comparison remains necessary before attributing the inconsistent base map to either tier.
+
+A later map-label preparation reaches Character.UnicodeBlock through bvun's unchanged
+initializer. The missing class aborts that executor path. Subset and UnicodeBlock now expose
+Android 15's constants, singleton identities, aliases, gap handling and binary range lookup.
+The data is extracted from the paired AOSP Character source. An AVD Dalvik probe scanned all
+1,114,112 code points: its 362 range transitions exactly match the table. Two focused checks
+(43 assertions) and typecheck pass. Fresh Chrome initializes bvun successfully with no
+UnicodeBlock misses. This does not establish complete map-label or base-map rendering.
+
+Native-tier comparisons remain inconclusive. Full JIT initially produced beige maps while
+JIT-disabled and several partial-JIT runs rendered water/streets. However, disjoint excluded
+ranges both worked, one initially blank capture became correct later, and a fresh full-JIT
+run rendered base geometry as well. These observations do not isolate a miscompiled instruction.
+A palette probe observed matching logical/actual dimensions (29x16 and 29x14), then incorrectly
+queried a uniform absent from a different shader and terminated GL-Map; captures after that
+probe failure are invalid. The probe was removed before rebuilding for UnicodeBlock.
+
+Maps' Glide fallback reaches BitmapFactory.decodeFileDescriptor through krl/kra/kqi.
+Both public overloads now decode through the shared native descriptor table. Regular and
+lazy files read from the current offset without moving it; pipe/socket reads consume the
+stream without closing the caller's descriptor. The regular-file path avoids guest-memory
+copies. Failed decodes reset output dimensions/configuration instead of retaining stale
+results. An Android 15 AVD probe verified full/bounds/sampled decoding at offset 3,
+unchanged padding for null results, invalid/empty descriptors and an open pipe after decode.
+A real Chrome pixel probe matches those dimensions, offsets and padding, including opaque
+red decoded pixels. Five descriptor tests (41 assertions) and typecheck pass. A fresh Maps
+place/directions/preview run no longer reports this missing API and renders base-map water,
+roads and labels. This does not prove every place image succeeds; AbstractSequentialList
+still aborts a separate asynchronous place-data path.
+
+A place-data callback failed while bwge.l constructed bwfx, whose superclass is
+AbstractSequentialList. Its unchanged bytecode provides size() and listIterator(int).
+The platform superclass now implements indexed access/mutation, bulk insertion and iterator
+traversal through those overrides, translating only NoSuchElementException to index errors.
+AbstractList.listIterator() now dispatches its indexed overload, as Android does, so sequential
+subclasses retain their iterator and traversal complexity. Three focused checks (20 assertions)
+cover suspension, live mutation, a single destination iterator for bulk insertion, exception
+identity and caller-thread retention across iterator callbacks. Typecheck passes; a fresh Maps search/place/directions run has no
+AbstractSequentialList or decodeFileDescriptor missing entries. The startup span mismatch
+persists and is being traced independently.
+
+AnimatorSet completion used an independent timeout that launched all end listeners as
+floating promises. A focused main-queue gate test reproduces both callbacks beginning before
+the current job finishes, and the second listener starting before the first returns. The
+completion now runs as one main-looper job, awaiting listeners and chained startup in order.
+Seven animator checks (19 assertions) and typecheck pass; the new check fails on the prior
+implementation. Fresh Maps renders the home map and local-content cards. Startup still
+reports the LoginPromoTutorialController span mismatch. An instrumented run reached the
+sign-in tutorial without that error but hit a separate transition-span mismatch, so the
+absence in that run cannot establish a startup fix. The temporary flow also waited for
+Search here as text while the Compose omnibox exposes it as a description; that timeout
+was a harness lookup failure, not a blank Maps home screen.
+
+A lightweight span-write probe reproduced the startup mismatch without changing app bytecode:
+FutureTask.run awaited its Callable on a worker, then invoked done() with the ambient main
+thread. Guava's direct completion listener consequently installed ClientParametersManagerImpl's
+trace over LoginPromoTutorialController.isSignedOut on the UI thread. Capturing the executing
+thread and dispatching done() with vcallOn fixes this boundary. The focused success/failure
+completion check fails on the preceding code (observing main instead of the worker); six
+executor checks (30 assertions) and typecheck pass. Fresh full Chrome without the span/canvas
+instrumentation reaches the sign-in tutorial with no trace-end errors.
+
+The blank Street View thumbnail contained a decoded 270x162 bitmap with real pixels.
+Its ImageView was hosted under Compose's AndroidViewHolder. Calling the public invalidate()
+made the thumbnail visible immediately: image replacement requested layout but did not notify
+ancestor recordings, while appearance setters only dirtied the global frame. ImageView's
+shared drawable setter and appearance changes now invalidate the view through the existing
+ancestor callback. Five drawable checks (20 assertions), including nested ancestor notification
+for image replacement/filter changes, and typecheck pass. This addresses stale image content;
+rounded clipping is a separate remaining visual difference.
+
+View.clipToOutline was an acknowledged no-op even when MaterialCardView enabled it. View
+traversal now clips through the existing Outline renderer, caching provider output until
+size, background or outline invalidation changes. Null providers disable clipping; the default
+provider asks the background for its geometry. LayerDrawable (also backing InsetDrawable)
+forwards the first nonempty child outline, preserving Maps' Material shape radius of 48 pixels.
+BOUNDS/PADDED_BOUNDS and Android 15's path-capable canClip contract match AOSP. A real Chrome
+pixel probe confirms transparent corners/opaque center, one provider call over two draws,
+refresh after invalidateOutline and no clipping with a null provider. Provider/background/inset
+checks and typecheck pass. Fresh place imagery appears without manually invalidating it.
+
+MaterialCardView's white thumbnail stroke lived in a foreground drawable that View stored
+but never drew. View now dispatches onDrawForeground after content/children/overlay, retaining
+virtual overrides, foreground state/callbacks and cached gravity bounds. The common fill case
+avoids intrinsic-size queries; views without a foreground or override skip the extra callback.
+Focused checks cover suspended bounds callbacks, executing-thread retention, centered versus
+fill bounds and callback removal. Typecheck passes. A real Chrome bitmap probe paints green
+foreground over red background, then reveals red after removing the foreground.
+
+While tracing Maps' Roboto title, AppCompat was observed resetting its typeface to null during
+setTextAppearance. Explicit Context/Theme.obtainStyledAttributes(style, attrs) duplicated
+resource resolution and exposed @null as a present reference instead of masking it. Both now
+reuse resolveStyleValue. A resource-bag test covers explicit null, a theme reference to null,
+index enumeration and retaining a nonnull family; its 12 assertions pass and its first
+hasValue assertion fails against the preceding code. Typecheck passes. Maps still selects
+Roboto after this change, so it does not establish the cause of the remaining font mismatch.
+
+The place search title requested END ellipsis but kept all 1,407 pixels of text in an
+801-pixel line. TextView's breaker only considered omitted logical characters, missing
+single-line width overflow. It now checks both, using a bounded binary search instead of
+measuring successively shorter prefixes and avoiding a split surrogate pair. Real Chrome
+checks cover fitting and overflowing text, widening, cached layouts, last-line truncation,
+sub-ellipsis widths and supplementary characters. Typecheck passes; a fresh Maps place
+capture shows the requested ellipsis. This does not address other font/layout differences.
+
+Maps' basi.Q builds the rating from a number and a SpannableString containing a replacement
+span over the word "stars". TextUtils.concat discarded that span, including on the subsequent
+concatenation with the review count. Concatenation now preserves span identity, offsets,
+endpoint behavior and immutable SpannedString results, with a plain-string fast path.
+Three checks (14 assertions) cover nested image spans, snapshot isolation, null/single-input
+semantics, duplicate/NoCopySpan ownership and inclusive endpoints. TextView's independent
+plain-text drawing path remains to be connected to the existing span-aware Layout renderer.
+
+TextView now measures and draws replacement spans through that Layout implementation,
+retaining measured span geometry across width changes and repeated measures. Ordinary text
+keeps its synchronous cached path. A Chrome fixture exercises a suspending replacement
+callback, pixel output, centered positioning, height, reuse, getLayout and switching back to
+plain text; it fails against the preceding TextView (zero callbacks and transparent pixels).
+The fixed browser fixture, concatenation checks and typecheck pass. A fresh unchanged Maps
+place renders its gold rating stars, and search/directions/preview remain reachable. General
+character styling and all span mutation/ellipsis cases are not established by these checks.
+
+Preview's red navigation arrows were app picture drawables. ImageView.setColorFilter wrote
+native tint fields instead of calling the drawable's virtual setColorFilter, so its bitmap
+paint never received the requested filter. ImageView now owns the filter, applies it after
+drawable mutation, forwards the public overloads and reapplies it to replacement images.
+The existing search icon assignment awaits the same path. Six drawable checks (27 assertions)
+cover asynchronous mutation, callback thread, filters set before an image, replacement and
+clearing; typecheck passes. Fresh Maps preview now has a disabled gray previous arrow and a
+dark next arrow, using the app's actual filter colors. The marker size, font/wrapping,
+Street View preview thumbnail and map-label outlines still differ from Android.
+
+Canvas.drawText ignored Paint.Style and always filled glyphs. Maps' scale bar explicitly
+requests a five-pixel white stroke before its dark text. The common text draw helper now
+honors FILL, STROKE and FILL_AND_STROKE, sharing stroke setup with other Canvas primitives.
+The real-browser fixture compares all pixels for each style against the corresponding
+Canvas2D operations; STROKE and FILL_AND_STROKE fail with the preceding helper. Typecheck
+passes. This observed scale-bar fix does not yet prove the cause of missing native map-label
+outlines, which were not seen in the bounded Java drawText trace.
+
+Maps' preview Glide path reached the missing FileInputStream(FileDescriptor) constructor.
+FileInputStream now uses the shared descriptor table for path and descriptor opens, retaining
+native offsets, getFD identity, lazy-file read ordering and channel mappings through rename
+and unlink. Android's public descriptor constructor borrows ownership; the hidden ownership
+constructor and path opens close their descriptor. In-memory reads copy directly into the Java
+array, while special descriptors use the existing native read implementation. Eighteen focused
+stream, descriptor, channel and atomic-file checks (121 assertions) and typecheck pass. Fresh
+Chrome reaches preview without the missing constructor. Its thumbnail still fails: a relative
+query-shaped image path and empty/undecodable input precede the MediaMetadataRetriever fallback;
+implementing the constructor alone does not establish image loading parity.
+
+A fresh Maps route run logged "Not on the main thread" from a preference listener. The
+notification loop entered onMain but dispatched subsequent callbacks through ambient thread
+state after awaits. Each callback now uses the explicit main thread. A suspending listener
+check observes [main, worker] on the preceding implementation and [main, main] after the fix;
+both focused preference checks (7 assertions) and typecheck pass.
+
+Resources.getValue discarded the selected configuration's density and the source resource ID.
+A Maps marker resource queried through getValue reported density 0, while openRawResource and
+an Android API 35 app_process oracle both reported 480 for the same res/9J0.png entry.
+Value lookup now carries selected density through resolved references and preserves unresolved
+references when requested. Four assertions cover selection, aliases and reused TypedValues;
+the preceding implementation fails. Fresh Chrome matches the Android oracle's density, ID and
+path; typecheck passes. This metadata discrepancy alone has not established marker-size parity.
+
+The next settled Chrome preview shows the origin marker reduced by about threefold after the
+resource-value fix, and the earlier Canvas stroke fix now renders white map-label outlines.
+A provider audit also found that pinned microG's FontsProvider returns Roboto for every request
+(its unchanged v0.3.16.252432 source and a live provider query agree), so Google Sans availability
+differs from the Play Store AVD. No APK-specific font substitution was added.
+
+The malformed thumbnail URL then exposed ContentResolver.openFileDescriptor returning empty
+storage for a nonexistent file. File URIs now use the canonical decoded URI path and delegate
+to ParcelFileDescriptor.open, which rejects missing reads. Parcel descriptor mode parsing also
+now preserves read-write access and rejects unsupported mode strings. Eight focused resolver,
+parcel and file-stream tests (61 assertions) and typecheck pass; the new resolver tests fail
+against the preceding code. An early fresh Maps preview did not report empty decode inputs or the
+MediaMetadataRetriever fallback error, but empty decode warnings recurred as later work completed. The original thumbnail URL is still incomplete, so
+this fixes false file-open success rather than restoring the image.
+
+Back input used global main-job activity to decide whether it could run inline. An external
+Back arriving while a main job was suspended therefore interleaved two main-thread flows;
+Maps reported conflicting TripDetails initialization and network callback trace spans and
+its preview could no longer close. All Back entry points are external input, so Back now
+always joins the main queue. A browser fixture holds a real main job across suspension and
+checks top-window callback ordering: the preceding implementation dispatches Back before
+the job ends; the fix waits. The focused browser check and typecheck pass.
+
+A fresh-data Android Maps route preview also omits the Street View thumbnail. Chrome's
+URL builder receives an empty template from an initial client-parameter cache, although
+later parameters contain seven templates. Both parameter updates complete without throwing;
+the signed-out cache key remains `unknown@`. No app-specific template fallback was added.
+The matched first-run Android screenshot is `android-preview-fresh-config.png`.
+
+Opening a place photo then exposed Parcel Serializable values living only in its object
+side table: marshall/unmarshall discarded the duration in InitialItemOptions. Object streams
+now carry Java wire descriptors, declared/computed serialVersionUIDs, default fields, arrays,
+enums, references, replacement/resolution hooks, custom callbacks and Externalizable bodies.
+Parcel's Serializable and writeValue paths use those stream bytes. Native ArrayList and
+HashSet forms are declared by their owner; LinkedHashSet retains its superclass's form.
+Primitive arrays transfer in bulk rather than suspending and allocating per element.
+Object-stream exception registration also now precedes subclasses that need those parents.
+
+The Java fixture runs unchanged as DEX and its Java-generated bytes exercise cycles, shared
+arrays, primitive fields, non-serializable superclass initialization, unread external data,
+custom callbacks and native collections. Java 21 also reads webdroid's output successfully.
+The unchanged Maps j$/time/Duration survives marshalling with -17 seconds and 123456789 nanos.
+Twelve focused object-stream, bitmap and descriptor tests pass (74 assertions); typecheck
+passes. Fixture regeneration uses javac --release 17, d8 --min-api 28, and the fixture's
+`graph` argument to emit its Java reference stream. Full E2E has not run.
+
+A fresh Chrome photo tap now reaches the media viewer's layout rather than losing its stored
+objects. That layout exposes missing TextView shadow getters and DynamicDrawableSpan;
+the viewer is not yet rendered successfully. Unsupported native serialized forms and advanced
+stream operations (persistent field declarations, protocol version 1, unshared objects and
+field accessors) remain outside this observed coverage. The diagnostic screenshots and their
+instrumentation do not establish performance parity.
+
+The photo viewer's first measure copied TextView shadow properties through absent getters,
+then encountered DynamicDrawableSpan. TextView now retains its shadow properties and forwards
+them to Paint; text and shape drawing apply the shadow only within their canvas save scope.
+Drawable spans use AOSP bottom/baseline/center alignment, drawable bounds for font metrics,
+weak drawable caching, virtual suspended drawing and guaranteed canvas restoration. ImageSpan
+now follows that hierarchy and obtains its drawable from the supplied drawable, bitmap,
+resource or URI. The browser checks cover span pixels/alignment/caching, shadow pixels and
+state restoration; existing replacement-span and text rendering checks still pass. Typecheck
+passes. Fresh Maps proceeds past these APIs but photo icon construction now reaches the
+explicitly unsupported OUTER blur-mask style; the viewer is still incomplete.
+
+BlurMaskFilter now retains SOLID, OUTER and INNER styles. Shape rendering combines the
+opaque geometry and blurred alpha before applying Paint color/shader, reusing two scratch
+surfaces per canvas. The focused browser test checks all four styles, fractional Paint alpha,
+transformed clipping and repeated draws without leaking canvas state (25 assertions);
+typecheck passes. Fresh Maps gets past filter construction and now exposes the missing
+Bitmap.extractAlpha(Paint, offsets) overload. The photo viewer remains incomplete. Browser
+blur kernels are not established as pixel-identical to Skia.
+
+Bitmap.extractAlpha now returns a distinct ALPHA_8 bitmap, preserves density, applies mask
+filters and returns their expanded offsets. AVD app_process probes established dimensions
+for radii 0/1/2/3/5/10 and all styles, including INNER's original bounds; Paint color alpha
+is ignored by extraction. Both framework JNI and direct APIs use the same implementation.
+Alpha masks take color/shaders from the drawing Paint, and pixel buffers expose one alpha
+byte per pixel. Browser checks and bitmap Parcel checks pass (63 assertions); typecheck
+passes. Fresh Maps advances to LightingColorFilter during photo-page construction. Blur
+pixel kernels still use Canvas2D; exact Skia pixel equality is not established.
+
+LightingColorFilter now supplies its RGB multiply/add transform through the existing color
+matrix path, retaining alpha and supporting updates to attached paints. Its focused API
+check and typecheck pass. A fresh Maps media page lays out reaction/share/save and close
+controls; image processing and captions next expose Canvas.drawPaint and TextAppearanceSpan.
+
+Canvas.drawPaint now fills the current clip with the Paint under its transform, including
+shader/filter/blend behavior, while ignoring stroke style and mask filters as Android does.
+The framework nDrawPaint delegate uses the same method. A rotated clipping/alpha browser
+check passes alongside the alpha-mask tests; typecheck passes.
+
+TextAppearanceSpan now reads the requested style's font, size, colors, locale, shadow and
+spacing values, and applies draw state after virtual measurement. Maps' bcfx subclass can
+therefore run its own font/spacing override. Direct span tests cover combined style, colors
+and suspended overrides; typecheck passes. Fresh Chrome now displays the same Golden Gate
+Bridge photo and Jitesh Patil/219-reaction caption as the AVD. The right-hand action icons
+remain absent despite nonzero view bounds; font/geometry and system insets still differ.
+The observed constructors are covered; the Parcel and alternate theme-color constructors
+are not yet implemented.
+
+TextView now draws top/bottom compound drawables as well as left/right, preserving their
+explicit bounds and translating the canvas to Android's compound-padding positions. Intrinsic
+bound overloads initialize bounds through virtual size/bounds calls; measurement and text
+placement use those dimensions. A browser test covers all four positions, suspended draw
+callbacks and unchanged bounds; existing replacement-span/ellipsis checks and typecheck pass.
+Maps' media controls also reveal a separate cause: their transparent tint uses PorterDuff ADD,
+while BitmapDrawable currently applies every tint as SRC_IN.
+
+Maps intentionally applies transparent ADD tint to media icons. BitmapDrawable/NinePatch
+now retain tint mode; cached bitmap tinting applies its composite operation instead of
+unconditionally using SRC_IN. Transparent ADD returns the original surface directly.
+MULTIPLY retains Android's multiplied alpha; tint caches invalidate on bitmap generation.
+The pixel test checks ADD, SRC_IN, MULTIPLY and mutation (70 assertions with mask tests);
+typecheck passes. Fresh Chrome displays the media action icons without layout/draw errors.
+Other drawable subclasses and Paint's color-filter modes are not covered by this bitmap fix.
+
+Maps' account-prompt Chips set TEXT_ALIGNMENT_CENTER, but TextView previously drew only
+from gravity. Text alignment now resolves inherited View values, reads the XML attribute,
+requests layout/redraw on changes and notifies the virtual RTL-properties callback. TextView
+uses the resolved alignment for plain and replacement-span drawing, including text-relative
+first-strong direction and view-relative alignment through getLayoutDirection. A browser test
+checks left/center/right pixels, inheritance and relative direction; typecheck passes. This
+does not implement View's previously stubbed layout/text-direction setters or full per-paragraph
+bidi layout; those remain limitations.
+
+Swiping Maps' photo viewer exposed ImageView.getImageMatrix in the zoom gesture handler.
+ImageView now reports and draws the same affine matrix, copies custom matrices, returns
+its actual ScaleType, and resets null matrices. Its shared scale calculation follows AOSP
+CENTER/CROP/INSIDE rounding and FIT_START/CENTER/END placement; FIT_XY uses drawable bounds
+and cropping follows cropToPadding. All eight scale modes, padding, copied/reset matrices,
+virtual drawing and canvas restoration pass browser checks; affected drawable checks pass
+(109 assertions), and typecheck passes. Fresh Chrome now swipes from the Jitesh Patil photo
+to the same Jorge Chacon video page as Android without the gesture exception. Playback is
+not yet functional: Chrome remains at 0:00 while Android plays the 22-second clip.
+
+The video source's HTTP headers arrive in about 150 ms and the body delivers continuous
+16 KB chunks, but URLConnection buffered the entire file under a single eight-second read
+timeout. Response accessors now stop at headers and expose one incremental InputStream,
+with per-wait timeouts and a retained pending read so timeout/retry cannot lose bytes.
+Disconnect cancels the response, and unknown content lengths remain unknown. A real local
+HTTP stream test covers incremental bytes, partial reads, timeout/retry, skip, EOF and close;
+the upload regression check and typecheck pass. Fresh Maps reads the clip and reports its
+22-second duration, but no video frames reach the surface yet. A missing direct-audio-support
+query interrupts track selection and is the next observed platform failure.
+
+AudioManager.getDirectPlaybackSupport now reports DIRECT_PLAYBACK_NOT_SUPPORTED for the
+Web Audio output path, consistent with its existing lack of hardware offload/passthrough.
+The API 35 SDK confirms the static signature and capability flags. With that query supplied,
+Maps' unchanged ExoPlayer selects tracks and presents hundreds of decoded video frames; a
+Chrome screenshot shows changing video content. The visible seek control still draws a
+spinner: the native SeekBar inherits indeterminate ProgressBar drawing and discards its thumb.
+
+The seek track resource contains ScaleDrawables. Their XML and platform constructor now
+size children from level, scale fractions and gravity, preserving virtual bounds/draw calls.
+A focused test covers zero/half/full levels, bottom/right positioning and suspended callbacks;
+typecheck passes. SeekBar still needs to load and draw this resource instead of its inherited
+indeterminate spinner.
+
+The framework seek resources exposed several shared drawable gaps: LayerDrawable ignored
+intrinsic dimensions under non-fill gravity; referenced XML dimensions stayed unresolved;
+state-list solid colors and theme alpha were dropped; and vector groups never transformed
+paths. These now resolve through the resource owner, preserve source alpha under tint, and
+apply nested group transforms. Selector children receive virtual state changes. Animated
+selectors select their state items, but animated transitions and vector clip paths remain
+unsupported. Tests draw the real paired framework resources and check dimensions, alpha,
+state, transforms and suspended child sizing; typecheck passes. Reused layer rectangles
+avoid per-layout rectangle allocation, and ScaleDrawable retains its dispatch thread after
+suspending child calls.
+
+SeekBar now loads its styled track and thumb, draws primary/secondary levels, positions the
+thumb, and handles drag progress and start/stop/change callbacks on the originating thread.
+Drawable replacement keeps callback ownership and state. Its previous indeterminate spinner
+is gone. The browser test checks track/thumb pixels and suspended touch callbacks. Fresh
+full Chrome plays the unchanged 22-second Maps clip; Pause changes to Play and seeking
+changes the position and resumes decoded frames. Keyboard/RTL seek handling and animated
+thumb transitions are not covered by this implementation.
+
+Maps' pause button was below the video because RelativeLayout measured its MATCH_PARENT
+overlay child with AT_MOST, then shrank around the centered button. AOSP RelativeLayout's
+getChildMeasureSpec uses the available span exactly for MATCH_PARENT when the parent size
+is known. Applying that rule restores the full overlay and centers its controls. The focused
+layout checks pass; fresh Chrome places the pause button at y=957..1137 versus Android's
+952..1132. This does not implement the remaining RelativeLayout rule subset.
+
+The shell's uiTree/locateText walk subtracted scrolling but omitted translations. Maps moves
+its media controls by -258 pixels, so the reported bounds and named taps were displaced.
+The shared walk now includes each ancestor's translation. A fresh named Pause tap reaches
+the visible control and changes it to Play. Scale/rotation-aware inspection bounds remain
+outside this change.
+
+A clean paused-media profile still showed a layout every frame. The existing layout tracer
+identified Maps' pre-draw callback repeatedly setting identical padding. View.setPadding now
+matches AOSP internalSetPadding's change check. In comparable fresh Chrome Pause captures,
+layout passes fell from 295 to 1 and layout time from 844 ms to 18 ms (2.42 s versus 2.38 s
+capture windows); frame drawing remains active because an app animator is still running.
+The measurement-cache test checks repeated unchanged padding and a real subsequent change;
+typecheck passes. The clean-source capture is chrome-video-padding-fixed.json.
+
+RotateDrawable was the remaining unsupported drawable tag in Maps' observed media path.
+Its wrapper now draws the child around absolute or fractional pivots, updates rotation with
+level, and loads XML angles/pivots. The SDK and AOSP Android 15 implementation establish the
+API and angle-update behavior. Browser pixels cover half-level rotation, absolute pivots and
+canvas restoration; typecheck passes. No application resource names are used by the delegate.
+
+Fresh route verification exposed intermittent blank maps: EGL10 swapped 32–37 frames, then
+returned EGL_BAD_SURFACE. A binding trace showed another worker making an EGL14 context
+current and releasing it, overwriting the map worker's process-global binding. The same
+failure reproduced at cf076e2, before the padding optimization. EGL bindings and error state
+now belong to their calling thread; Java and native EGL share that owner. Cooperative thread
+switches restore GL dispatch and object tables, avoiding a thread lookup on each GL call.
+GLSurfaceView renderer callbacks also retain the GL thread across suspended lifecycle calls.
+Khronos eglMakeCurrent/eglReleaseThread specify this thread-local behavior. The browser test
+uses two real WebGL contexts, suspended swapping, separate errors, worker release, restored
+pixels/object tables, and suspending GLSurfaceView callbacks. Typecheck and this test pass.
+With tracing removed, full Chrome with native JIT enabled keeps the Maps surface valid and
+renders water, roads and the route: the first preview capture records 77 GL frames in 10.14 s,
+with no layout/draw errors. This restores rendering, not screenshot parity or complete EGL
+conformance; shared contexts still share WebGL state, and deferred destruction and conflicting
+cross-thread context binding remain incomplete.
+
+The final serialized matrix exposed a real Resy image regression: its venue photo decoded
+at f3fefda but disappeared on the Maps branch when ExifInterface reached the absent
+DataInputStream.skipBytes. The delegate now repeatedly skips the remaining count on the
+wrapped stream, stops on non-progress, and preserves its calling thread across suspension.
+It follows OpenJDK DataInputStream's contained-stream contract, without app-specific behavior.
+The focused checks cover cursor sharing, short skips, EOF, non-positive counts, suspended
+virtual calls and exception identity. Typecheck and all 895 tests (22,160 assertions) pass.
+A fresh 12-step Resy rerun restores the actual venue photo with zero missing APIs, errors,
+wedges or layout/draw errors. Before/after captures are in webdroid-shots/maps/resy-before-skip
+and tests/e2e/actual/resy. The full matrix was repeated at this committed code; results follow.
+
+
+The final serialized matrix at 3dcc2d2 completed all 134 captures across 11 flows in
+684.7 seconds. Every step had zero main-loop wedges, layout/draw errors and nativeRequired
+entries. Resy again had zero missing APIs/errors and its venue photo rendered. Typecheck
+and the EGL browser fixture also pass after correcting the fixture to retrieve the declared
+EGL_NO_CONTEXT static field. Maps and Resy smoke compilation report zero method failures;
+all 895 unit tests pass (22,160 assertions). Framework exercises pass with 295/363 declared
+natives registered; Paint.measureText is skipped without a DOM.
+
+A separate f3fefda worktree ran the same full matrix with one job. Its scored content mean
+was 36.29%, versus 36.02% on the final branch (lower is better); these large differences
+from goldens remain, and neither value establishes visual parity. TikTok stays on its
+post-consent splash in both, and Lichess has the same pthread abort families (35, 3, 22).
+Their log counts vary: final Lichess has 43 errors versus baseline 13 and the earlier branch
+run 10. Final TikTok has 119 versus baseline 81; new observations include a vsnprintf bad
+address in libttmplayer and the absent FileOutputStream(FileDescriptor) constructor, plus
+native benchmark/proc diagnostics. These differences are unresolved, not regression waivers.
+Flappy Bird gameplay remains 28–29 fps versus baseline 28–29 fps. The performance rollup
+also records variable waits and extra native work; it does not support a general speedup.
+The matched Maps padding measurement above is the narrower supported improvement.
+
+Exact Maps parity remains open after the EGL fix. Roads/water/routes and media render,
+but fine base-map detail, font wrapping and shadows differ. The font provider in the
+unchanged bundled microG returns Roboto. Although Chrome and the AVD both use 1080×2424
+at 480 dpi, webdroid reports API 33 and 24 dp system bars, whereas the API 35 reference
+has different cutout/system-bar geometry. No app-specific font, tile or layout substitutes
+were added. Good current captures include chrome-egl-thread-preview.png,
+chrome-egl-thread-next-verified.png, chrome-media-final-full.png and their Android
+references in webdroid-shots/maps. The E2E report and baseline/current logs are retained;
+goldens were not modified. Work stays on codex/maps-parity and is not merged to main.
+
+The post-crash recovery run reached another Maps place-sheet path: the missing
+TextView.setLinkTextColor(ColorStateList) caused a repeated layout failure, and then
+SuperscriptSpan failed resolution. TextView now retains stateful link colors, resolves
+textColorLink from styles, and updates its paint without requesting layout. SuperscriptSpan
+applies Android's truncated half-ascent shift through the virtual Paint entry point.
+Both APIs have focused checks. A fresh Ferry Building run has zero layout errors and no
+RecyclerView attachment failure; these fixes do not by themselves restore base-map geometry.
+
+A bounded full-Chrome WebGL trace narrowed absent base-map geometry to a matrix whose
+last row was zero, despite successful draw calls and no GL errors. The upload originated
+at libgoogle3.so +0x1047668. Disassembly shows its bridge accepts sixteen floats: s0–s7
+and eight stack slots. Cpu.call instead moved overflowing FP arguments into available
+integer registers, so a call with two integer parameters lost six matrix values before
+reaching the stack. Floating overflow now goes directly to the stack, preserving the
+independent AAPCS64 register banks. Two tests cover sixteen floats with integer overflow
+and interleaved float/double spills with available integer registers; both fail on the
+previous code and pass with this two-line change. Typecheck passes. No APK or shader
+substitution is involved. Fresh full-Chrome place, directions and preview captures now
+render water, roads and building outlines. The settled first preview matches the reference
+road/coastline/route geometry and maneuver; successive maneuvers also render. The long-lived
+Chrome session recorded 3,055 GL frames with zero layout/draw errors and only the two Cordz
+startup messages. Its native missing set contains syscall 267; earlier diagnostic sessions
+also observed powl and pthread_getname_np, so absence in this session is not coverage of
+those symbols. Raw captures and telemetry use the chrome-arm64-spill prefix, paired with
+android-arm64-spill captures; chrome-arm64-spill-full.png includes the installed Chrome UI.
+All 899 unit tests (22,174 assertions), typecheck and Maps compilation pass; the latter
+compiles 72,887 classes with zero method failures. Fonts, shadows and device system bars
+remain different. The final serialized matrix is repeated after these corrections.
+
+
+The final matrix at a3bf33e completed all 134 steps across 11 flows in 699.3 seconds,
+with one job. Every run.json was checked for freshness against this run's start. No step
+recorded a main-loop wedge, layout/draw error or nativeRequired entry. Resy's 12 steps
+again have no missing APIs/errors, and its venue photo was visually verified. Scored
+content differences are Mihon app 57.56%, FitNotes 40.71%, Harmonic 27.97%, onboarding
+17.56%; the 35.95% mean compares with baseline f3fefda's 36.29% and is not visual parity.
+
+TikTok still shows the same post-consent splash as baseline. This run has 110 logged
+errors and 18 missing APIs (baseline 81/19), mostly shared startup logs plus extra native
+benchmark/proc diagnostics. The earlier vsnprintf exception and file-descriptor constructor
+miss are absent, not proven fixed. Lichess has 53 errors (baseline 13), comprising the same
+pthread 35/3/22 families plus its DNS warning. Flappy Bird's minimum observed rate is
+29 fps, still near baseline. Another worktree ran its own E2E concurrently during part of
+this matrix; the retained performance rollup therefore cannot establish an isolated speed
+change. These results do not justify a clean regression verdict. The prior 3dcc2d2 log is
+retained as webdroid-shots/maps/e2e-3dcc2d2.log; final-e2e.log, final-e2e-summary.json and
+regression-performance.txt describe a3bf33e. comparison.html pairs the raw Maps previews.
+The source remained frozen during capture, goldens are unchanged, and work is not merged.
+
+
+## Maps maintainability review follow-up
+
+The review at 72547c3 reproduced worker ObjectOutputStream callbacks on the main thread,
+a native detach followed by Java reattachment ending with an attached-parent/detached-child
+mismatch, and a rotated LayerDrawable losing an overridden intrinsic width. The fixes
+carry the operation thread through recursive serialization and short stream reads, share
+awaited hierarchy mutations between Java and native callers, and consolidate drawable
+container painting and sizing. Synchronous native construction is explicitly limited to
+unattached trees. Activity/dialog content replacement and picker/list rebuilds now await
+removal instead of dropping child arrays or queuing stale lifecycle callbacks.
+
+Binder Parcel side tables now transport Binder handles only. Serializable values already
+use ObjectStream bytes; the unused graph codec and its protocol branch are removed.
+TextView uses a single two-width layout cache for measurement, drawing and getLayout,
+with one line array and shared replacement-span measurement. The ordinary text draw path
+remains synchronous. Uppercase expansion remaps span offsets; ellipsis respects replacement
+boundaries and is reported through Layout. A browser regression combines all-caps,
+replacement spans and ellipsis and compares TextView pixels with its returned Layout.
+
+A live City Hall to Ferry Building directions check additionally exposed the missing
+InsetDrawable.setDrawable API, producing repeated layout errors. InsetDrawable now uses
+DrawableWrapper rather than LayerDrawable, including replacement callbacks, bounds,
+padding, pixel/fractional inset sizes and opacity. Android 35 SDK InsetDrawable.java and
+DrawableWrapper.java supplied the platform evidence; focused tests cover both inset units.
+
+Fresh full Chrome captures reach Ferry Building details, City Hall directions and two
+preview maneuvers. Street geometry eventually settles, with 554 GL frames and zero
+layout/draw/GL errors at the first preview capture. Initial tile preparation is still slow;
+the observed 33-second boot was recorded with interactive diagnostics and competing local
+work, so it is not a controlled performance comparison. The Android reference renders the
+same first maneuver. `quality-comparison.html` pairs the screenshots; the place and
+directions images precede settled tiles, while `chrome-quality-preview.png` includes them.
+Fonts, shadows and system bars still differ. No exact parity claim is warranted.
+
+Typecheck and all 903 unit tests (23,052 assertions) passed, and Maps compiled 72,887
+classes with zero method failures. The first final matrix at 4e0ca33 completed 134 steps
+in 686.4 seconds without layout/draw errors or main-loop wedges, but visual inspection
+caught a real regression: Harmonic's dialog card was transparent. DialogRoot assigned the
+background's bounds fields directly, bypassing InsetDrawable's child-bounds callback.
+Using the canonical virtual setBounds fixes it without adding another drawable path. A
+browser pixel regression fails before this change (transparent center) and passes after
+(opaque red center). Typecheck passes again. The first matrix is retained in
+`quality-e2e-before-dialog-fix.log`; the final matrix is repeated at 6cb3226.
+
+The repeated matrix completes all 134 steps across 11 flows in 690.7 seconds with one
+job and exit code zero. Every run.json is fresh, records advancing frames, and has no
+main-loop wedge, layout/draw error, step error or nativeRequired entry. Resy's venue photo
+renders and all 12 steps have zero missing APIs/errors. Harmonic's opaque rounded dialog
+is restored in its actual APK capture. Content differences are Mihon app 57.45%, FitNotes
+40.71%, Harmonic 28.36% and onboarding 17.56%: mean 36.02%, versus 35.95% before review.
+Mihon's changing empty-state faces and Harmonic's live story content account for observed
+capture differences; unchanged settings screens retain their prior scores.
+
+TikTok again hits the previously recorded libttmplayer vsnprintf bad-address fault and
+missing FileOutputStream(FileDescriptor), totaling 119 errors/19 missing APIs versus
+110/18 in the saved pre-refactor run. The preceding 4e0ca33 matrix matched that saved
+run's normalized error families exactly. This establishes recurrence, not the fault's
+cause or resolution. Lichess logs 28 errors from the existing pthread families (53 in
+the saved capture, 10 in the preceding matrix). No clean regression verdict is claimed.
+
+Chrome Maps was idle and the owned AVD paused for the repeated matrix; no competing
+E2E process was observed. Flappy Bird's minimum was 27 fps versus 29 in the saved run.
+The performance rollup is retained in quality-performance.txt. FitNotes layout passes
+fall from 68 to 55 while wrapping remains 374; timing changes are mixed, and the saved
+baseline had competing work, so these runs do not establish a general speed improvement.
+Both the emulator and full Chrome Maps session are restored after capture. Source stayed
+frozen during each matrix, visual goldens are unchanged, and the branch is not merged.
+
+## Maps integration with concurrent main work (2026-09-14)
+
+The user authorized merging `codex/maps-parity` at a040643 into main after the Maps review
+and cleanup. Main was 398728a, including Amazon and TikTok/Resy/YouTube work; integration
+was resolved separately on `codex/maps-integration`. Both parents' regression tests remain.
+
+The overlapping registrations for ClipData, scale gestures, text direction, SAX, StatsEvent,
+Range and AbstractSequentialList now use their owning implementations. The provider file
+writeback capability checks and native ELF/TLS validation from main remain; provider argument
+decoding precedes caller-identity dispatch. Executor submission retains the synchronous native
+queue path while awaiting virtual task factories and execute overrides on the captured thread.
+EGL Java and native calls share per-thread context ownership; selecting a native context does
+not overwrite the ambient Java thread's binding. Drawable drawing retains Android canvas save
+accounting and awaits virtual bounds/draw callbacks. TextView uses the shared layout cache.
+
+Main's StatsEvent long-array entry point now writes the repeated-field encoding through the
+Maps builder rather than replacing it with the old placeholder registration. Encoding follows
+[Android's StatsEvent builder](https://android.googlesource.com/platform/prebuilts/fullsdk/sources/+/refs/heads/androidx-metrics-release/android-35/android/util/StatsEvent.java).
+Its regression test checks the wire header and signed 64-bit payload. Test fixtures were updated
+for required context/listener objects, directional animator callbacks, real EGL thread owners,
+virtual drawable sizing and Canvas transforms. The hierarchy test now expects Android's reverse
+removeAllViews notification order, already covered by the Maps attachment tests.
+
+Typecheck passes. The combined unit run passed 1,194 tests and 24,475 assertions; the final
+focused run passed 10 tests, including the additional StatsEvent regression. Smoke compilation
+reported zero method failures for Maps (72,887 classes), Amazon (73,100) and TikTok (462,058).
+Full Chrome rendered the guest Maps screen and opened directions at the built-in 1080x2160
+geometry. These are interaction smoke captures, not a new pixel-parity claim against the taller
+Maps AVD. The observed optional missing APIs remain visible in the diagnostic panel.
+
+Screenshots, logs and the earlier Maps worktree artifacts are preserved under
+`webdroid-shots/maps-merge/`; the archived original branch plan is `docs/maps-parity-plan.md`.
+The full serialized E2E matrix completed in 840.4 seconds: 159 captured steps across 12 flows,
+no main-loop wedges, and a 36.66% aggregate content difference across the four scored flows.
+Goldens were unchanged. Maps is covered by the separate Chrome smoke captures, not this matrix.
+TikTok had 4,579 layout errors and an empty feed; YouTube had 10 draw errors and two settling
+timeouts. All other flows had zero layout/draw errors. Lichess retained 31 logged errors and
+Reddit one; these counts include existing app/platform diagnostics and are not assertions.
+
+The same harness then ran TikTok against unmodified main 398728a, with one browser and the
+same screen/APK settings. It reproduced the empty feed and missing RelativeLayout copy
+constructor/getGravity calls (4,260 layout errors, 233 logged errors, versus 97 logged errors
+in integration). Different live content and frame counts limit numeric comparisons, but the
+failure mechanisms and empty-feed state are present before this merge. The earlier historical
+claim that TikTok's live feed works does not describe the current starting main capture.
+
+YouTube's main comparison captured 16 steps in 148.1 seconds with no draw errors or timeouts,
+but screenshots show it remained on the home screen when the script labeled steps as video
+playback. Integration actually reached the Big Buck Bunny player and kept presenting frames
+while the show-controls/pause probes timed out; pause had no semantic hit. The comparison
+therefore does not validate playback parity or clear those two integration timeouts. The
+Matrix.mapRect(RectF, RectF) and CaptionStyle gaps are also absent from the starting main
+implementation. No clean full-E2E regression verdict or performance improvement is claimed.
+Both complete runs and per-step telemetry are retained separately under `integration/` and
+`baseline-main/` in the merge artifact directory. The baseline pair completed in 340.6 seconds.
+
+Integration preserves both parent histories. The user-requested cleanup removes the Maps
+parity, Maps baseline and temporary Maps integration worktrees; the unrelated baseline stays.

@@ -18,7 +18,7 @@ import { handle, deref, replace, release } from "./handles";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
-  JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, colorLongOfArgb, affineFromPoints, CAPS, JOINS,
+  JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, extractBitmapAlpha, colorLongOfArgb, affineFromPoints, CAPS, JOINS,
 } from "./graphics";
 import { newObj } from "../jvm/natives/jlang";
 import { charsToString, floatToIntBits, i8, u8 } from "../jvm/abi";
@@ -608,7 +608,7 @@ const drawText = (h: bigint, s: string, x: number, y: number, pt: bigint) =>
 delegate("android/graphics/BaseCanvas", {
   "nDrawColor(JII)V": (h: bigint, c: number) => on("drawColor(I)V")(h, c),
   "nDrawColor(JJJI)V": (h: bigint, _cs: bigint, c: bigint) => on("drawColor(I)V")(h, argbOfColorLong(c)),
-  "nDrawPaint(JJ)V": (h: bigint, p: bigint) => on("drawColor(I)V")(h, paint(p).color),
+  "nDrawPaint(JJ)V": (h: bigint, p: bigint) => on("drawPaint(Landroid/graphics/Paint;)V")(h, paint(p)),
   "nDrawRect(JFFFFJ)V": withPaint("drawRect(FFFFLandroid/graphics/Paint;)V", 4),
   "nDrawRoundRect(JFFFFFFJ)V": withPaint("drawRoundRect(FFFFFFLandroid/graphics/Paint;)V", 6),
   "nDrawCircle(JFFFJ)V": withPaint("drawCircle(FFFLandroid/graphics/Paint;)V", 3),
@@ -799,10 +799,7 @@ delegate("android/os/SystemProperties", {
 // handle, so they construct AOSP's own Bitmap through its (nativePtr, w, h, density, mutable,
 // ninePatchChunk, insets) constructor — which makes them async.
 //
-// Everything here is ARGB_8888: that is what a Canvas2D raster is, and reporting anything else
-// would have callers allocate for a depth we do not have. AOSP's NATIVE config numbering is
-// not Bitmap.Config's ordinal (ALPHA_8=1 … ARGB_8888=5), and JBitmap.config carries the native
-// one because that is what nativeConfig hands back.
+// JBitmap.config uses AOSP's native config numbering, not Bitmap.Config's ordinal.
 const bmp = (h: bigint) => deref<JBitmap>(h);
 type BitmapFn = (this: JBitmap, ...a: never[]) => unknown;
 function bmf(desc: string): BitmapFn {
@@ -816,7 +813,7 @@ const wrap = (b: JBitmap) =>
     handle(b), b.w, b.h, b.density, b.immutable ? 0 : 1, null, null);
 const copyOf = (src: JBitmap) => {
   const b = JBitmap.create(src.w, src.h);
-  b.density = src.density; b.hasAlpha = src.hasAlpha; b.premultiplied = src.premultiplied;
+  b.density = src.density; b.hasAlpha = src.hasAlpha; b.premultiplied = src.premultiplied; b.config = src.config;
   b.pixels().set(src.pixels());
   return b;
 };
@@ -837,22 +834,15 @@ delegate("android/graphics/Bitmap", {
   // ashmem is a device allocator, not a pixel format: a copy is what the caller asked for
   "nativeCopyAshmem(J)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyOf(bmp(h))),
   "nativeCopyAshmemConfig(JI)Landroid/graphics/Bitmap;": (h: bigint) => wrap(copyOf(bmp(h))),
-  // the shadow mask: AOSP returns an ALPHA_8 bitmap, and the nearest thing a Canvas2D raster
-  // has is black with the source alpha, which composites identically
-  "nativeExtractAlpha(JJ[I)Landroid/graphics/Bitmap;": (h: bigint, _paint: bigint, offsetXY: Int32Array | null) => {
-    const src = bmp(h), b = JBitmap.create(src.w, src.h);
-    const s = src.pixels(), d = b.pixels();
-    for (let i = 0; i < d.length; i += 4) d[i + 3] = s[i + 3];
-    if (offsetXY) { offsetXY[0] = 0; offsetXY[1] = 0; }
-    return wrap(b);
-  },
+  "nativeExtractAlpha(JJ[I)Landroid/graphics/Bitmap;": (h: bigint, paint: bigint, offsetXY: Int32Array | null) =>
+    wrap(extractBitmapAlpha(bmp(h), paint ? deref<JPaint>(paint) : null, offsetXY)),
 
   "nativeRecycle(J)V": (h: bigint) => { bmp(h).recycled = true; },
   "nativeGetNativeFinalizer()J": () => FINALIZER,
   "nativeGenerationId(J)I": (h: bigint) => bmp(h).genId,
   "nativeConfig(J)I": (h: bigint) => bmp(h).config,
-  "nativeRowBytes(J)I": (h: bigint) => bmp(h).w * 4,
-  "nativeGetAllocationByteCount(J)I": (h: bigint) => bmp(h).w * bmp(h).h * 4,
+  "nativeRowBytes(J)I": (h: bigint) => bmp(h).rowBytes,
+  "nativeGetAllocationByteCount(J)I": (h: bigint) => bmp(h).rowBytes * bmp(h).h,
   "nativeReconfigure(JIIIZ)V": (h: bigint, w: number, ht: number, _cfg: number, premul: number) => {
     const b = bmp(h);
     b.w = Math.max(1, w | 0); b.h = Math.max(1, ht | 0); b.premultiplied = !!premul;

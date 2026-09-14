@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { vcall } from "../src/jvm/natives/jlang";
+import { JThread, curThread, mainThread, setCurThread, vcall } from "../src/jvm/natives/jlang";
 import { newStringSet, toJsArray } from "../src/jvm/natives/jutil";
 import { getPrefs, movePrefs } from "../src/android/sharedprefs";
 
@@ -34,4 +34,30 @@ test("preference files move between context packages and leave no source file", 
   expect(await vcall(getPrefs("test.preferences.target", "account"), "getString", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "token", null)).toBe("value");
   expect(await vcall(getPrefs("test.preferences.source", "account"), "contains", "(Ljava/lang/String;)Z", "token")).toBe(0);
   expect(movePrefs("test.preferences.missing", "test.preferences.target", "missing")).toBe(true);
+});
+
+test("preference notifications retain the main thread after a suspending listener", async () => {
+  const { mangleMethod } = await import("../src/jvm/abi");
+  const { onMain } = await import("../src/android/mainloop");
+  const prefs = getPrefs("test.preferences", "listener-thread"), worker = new JThread();
+  const observed: boolean[] = [];
+  const listener = {
+    [mangleMethod("onSharedPreferenceChanged", "(Landroid/content/SharedPreferences;Ljava/lang/String;)V")]: async () => {
+      observed.push(curThread === mainThread);
+      await Promise.resolve();
+      setCurThread(worker);
+    },
+  };
+  await vcall(prefs, "registerOnSharedPreferenceChangeListener", "(Landroid/content/SharedPreferences$OnSharedPreferenceChangeListener;)V", listener);
+  const editor = await vcall(prefs, "edit", "()Landroid/content/SharedPreferences$Editor;");
+  await vcall(editor, "putString", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;", "first", "1");
+  await vcall(editor, "putString", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;", "second", "2");
+  try {
+    await vcall(editor, "commit", "()Z");
+    await onMain(() => {});
+    expect(observed).toEqual([true, true]);
+  } finally {
+    setCurThread(mainThread);
+    await vcall(prefs, "unregisterOnSharedPreferenceChangeListener", "(Landroid/content/SharedPreferences$OnSharedPreferenceChangeListener;)V", listener);
+  }
 });

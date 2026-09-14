@@ -2,10 +2,9 @@ import { JObj, rt, stubs, noops } from "../jvm/runtime";
 import { curThread, JThread, setCurThread, vcall } from "../jvm/natives/jlang";
 import { PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { JParcel } from "./parcel";
-import { serialize, type Serialized } from "../jvm/serialization";
 
 export type BinderHandle = { pid: number; id: number };
-export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | Serialized | null][] };
+export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | null][] };
 export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData };
 export type TransactionReply = { handled: number; data: ParcelData };
 export type Caller = { pid: number; uid: number };
@@ -49,12 +48,12 @@ export function importBinder(handle: BinderHandle | null): JObj | null {
   return proxy;
 }
 export function exportParcel(parcel: JParcel): ParcelData {
-  return { bytes: parcel.buf.slice(0, parcel.size), objects: [...parcel.objects].map(([at, o]) => [at, rt.iof(o, "java/io/Serializable") ? serialize(o) : exportBinder(o)]) };
+  return { bytes: parcel.buf.slice(0, parcel.size), objects: [...parcel.objects].map(([at, o]) => [at, exportBinder(o)]) };
 }
 export function importParcel(data: ParcelData, parcel = new JParcel()): JParcel {
   parcel.buf = new Uint8Array(data.bytes); parcel.view = new DataView(parcel.buf.buffer);
   parcel.pos = 0; parcel.size = parcel.buf.length;
-  parcel.objects = new Map(data.objects.map(([at, handle]) => [at, handle && "serialized" in handle ? handle : importBinder(handle)]));
+  parcel.objects = new Map(data.objects.map(([at, handle]) => [at, importBinder(handle)]));
   return parcel;
 }
 

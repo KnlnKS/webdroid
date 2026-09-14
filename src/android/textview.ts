@@ -2,18 +2,19 @@ import { AID, resString } from "./res";
 import { JView, requestLayout, initViewFromCtx, guardCall, invalidate, specMode, specSize, MS_UNSPEC, MS_EXACTLY, MS_AT_MOST, resolveSizeAndState, setFocusHook, removeFrom } from "./view";
 import {
   type JColorStateList, mkCsl, type JDrawable, loadColorStateList, loadDrawableRV, cslColor, loadDrawable,
-  drawChild
+  drawChild, drawableSize
 } from "./drawable";
-import { JTextPaint, JEditable, JSpanned, spannedString, mkStaticLayout, drawStyledText } from "./text";
+import { JTextPaint, JEditable, JSpanned, JLayout, spannedString } from "./text";
 import { G, gravityV, gravityH } from "./gravity";
+import { isRtl } from "./bidiformatter";
 import { device } from "../shell/config";
 import {
   fontDescent, fontAscent, fontTop, fontBottom, measureText, typefaceFor, JTypeface, tfDefault, type JRect,
   type JCanvas, cssColor, tfMedium
 } from "./graphics";
-import { vcall, mkEnumSet, newObj } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, curThread, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import {
-  attrTable, type Resources, resolveStyleValue, rvDimen, rvColor, rvInt, type RV, rvString, type JAttrSet,
+  attrTable, type Resources, resolveStyleValue, rvDimen, rvColor, rvInt, rvFloat, type RV, rvString, type JAttrSet,
   obtainStyled
 } from "./res";
 import { TV } from "./axml";
@@ -21,39 +22,7 @@ import { fontResource } from "./fonts";
 import { type NativeSpec, callSelf, rt, JObj, stubs, noops } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { usLocale } from "../jvm/natives/jvalues";
-import { perf } from "../perf";
-
-/** one wrap result: the lines, each line's width, and the widest */
-export type Wrapped = { lines: string[]; widths: number[]; maxW: number };
-const NO_LINES: Wrapped = { lines: [], widths: [], maxW: 0 };
-/**
- * Line breaking memo. Every input the breaker reads is part of the key, so any change that alters
- * the lines misses and nothing has to invalidate it; letter spacing is keyed on its own because
- * font() leaves it out. Two widths are kept because onMeasure wraps at the space it is offered
- * and then at the width it settles on.
- */
-class WrapMemo {
-  text = ""; font = ""; ls = NaN; max = NaN; single = false; ell = false;
-  a0 = NaN; w0 = NO_LINES; a1 = NaN; w1 = NO_LINES;
-  get(tv: JTextView, text: string, avail: number): Wrapped {
-    const p = tv.paintT, font = p.font();
-    if (text === this.text && font === this.font && p.letterSpacingEm === this.ls && tv.maxLinesV === this.max &&
-        tv.singleLine === this.single && tv.ellipsizeEnd === this.ell) {
-      if (avail === this.a0) { perf.wrapHits++; return this.w0; }
-      if (avail === this.a1) { perf.wrapHits++; return this.w1; }
-    } else {
-      this.text = text; this.font = font; this.ls = p.letterSpacingEm; this.max = tv.maxLinesV;
-      this.single = tv.singleLine; this.ell = tv.ellipsizeEnd;
-      this.a0 = this.a1 = NaN;
-    }
-    const lines = tv.breakLines(text, avail), widths = new Array<number>(lines.length);
-    let maxW = 0;
-    for (let i = 0; i < lines.length; i++) { const w = measureText(p, lines[i]); widths[i] = w; if (w > maxW) maxW = w; }
-    this.a1 = this.a0; this.w1 = this.w0;
-    this.a0 = avail;
-    return (this.w0 = { lines, widths, maxW });
-  }
-}
+import { TextViewLayouts, drawTextViewLayout, layoutHeight } from "./textview-layout";
 
 export class JTextView extends JView {
   fallbackLineSpacing = true;
@@ -66,15 +35,14 @@ export class JTextView extends JView {
   imeOptions = 0; privateImeOptions: string | null = null; breakStrategy = 0; hyphenation = 0; autoSizeType = 0;
   linksClickable = true; fontVariation: string | null = null;
   maxW = Infinity;
-  /** getLayout's StaticLayout and the inputs it was built from */
-  layoutObj: ReturnType<typeof mkStaticLayout> | null = null;
-  layoutText = ""; layoutW = NaN; layoutFont = ""; layoutMax = NaN; layoutLS = NaN; layoutMult = NaN; layoutExtra = NaN;
   text = "";
   rawText: unknown = "";       // original CharSequence (may be Spannable)
   hint = "";
   paintT = new JTextPaint();
+  shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
   colors: JColorStateList = mkCsl(-16777216);
-  hintColors: JColorStateList = mkCsl(1627389952);
+  hintColors: JColorStateList | null = mkCsl(1627389952);
+  linkColors: JColorStateList | null = null;
   gravityT = 48 | G.START;
   maxLinesV = Infinity;
   minLinesV = 1;
@@ -99,20 +67,30 @@ export class JTextView extends JView {
   cursorVisible = true;
   /** when the caret last restarted its blink: focus and every edit, as AOSP's Editor.Blink does */
   blinkStart = 0;
-  /** the lines this view laid out and draws, with each line's width */
-  lines: string[] = [];
-  lineWidths: number[] = [];
-  wrapMemo: WrapMemo | null = null; hintMemo: WrapMemo | null = null;
+  layout: JLayout | null = null;
+  textLayouts: TextViewLayouts | null = null; hintLayouts: TextViewLayouts | null = null;
   layoutWidthFor = -1;
   inputTypeV = 1;
   styleBits = 0;
   includePad = true;
-  shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
 
   constructor() {
     super();
     this.paintT.textSize = device.dp(14); // AOSP TextView default, 14sp
     this.paintT.color = -16777216;
+  }
+  updateLinkColor() {
+    if (!this.linkColors) return;
+    const color = cslColor(this.linkColors, this.drawableState());
+    if (this.paintT.linkColor !== color) { this.paintT.linkColor = color; invalidate(this); }
+  }
+  horizontalGravity(text: string, alignment: number, layoutDirection: number): number {
+    if (alignment === 4) return 1;
+    if (alignment === 5 || alignment === 6) return (alignment === 5) !== !!layoutDirection ? 3 : 5;
+    const gravity = this.gravityT & 0x800007;
+    if (alignment === 1 && gravity !== G.START && gravity !== G.END) return gravityH(gravity);
+    const rtl = !!isRtl(text, 0, text.length, "firstLtr");
+    return (alignment === 3 || alignment === 1 && gravity === G.END) !== rtl ? 5 : 3;
   }
   private upperOf = ""; private upper = "";
   displayText(): string {
@@ -130,59 +108,6 @@ export class JTextView extends JView {
   bottomPad(): number { return this.includePad ? Math.ceil(fontBottom(this.paintT)) - Math.round(fontDescent(this.paintT)) : 0; }
   textHeight(lines: number): number { return lines * this.lineHeight() + this.topPad() + this.bottomPad(); }
   ascent(): number { return Math.round(-fontAscent(this.paintT)) + this.topPad(); }
-  /** line breaking of `text` at `avail`: a pure function of its arguments, the paint and the
-   *  flags WrapMemo keys on. Callers go through linesFor/hintFor. */
-  breakLines(text: string, avail: number): string[] {
-    perf.wraps++;
-    if (avail <= 0) return text ? [text] : [];
-    // measureText memoises on (font, string) and applies letter spacing; ctx.measureText did
-    // neither, so every probe of the break search went to the browser and no line accounted for
-    // android:letterSpacing that android.text.* has always honoured.
-    const mw = (t: string) => measureText(this.paintT, t);
-    const out: string[] = [];
-    for (const hard of text.split("\n")) {
-      if (this.singleLine || this.maxLinesV === 1) { out.push(hard); break; }
-      if (mw(hard) <= avail) { out.push(hard); continue; }
-      // a word wider than the line is hard-broken; emit full lines and return what is left over
-      const breakWide = (l: string) => {
-        while (mw(l) > avail && l.length > 1) {
-          let lo = 1, hi = l.length;
-          while (lo < hi) {
-            const mid = (lo + hi + 1) >> 1;
-            if (mw(l.slice(0, mid)) <= avail) lo = mid;
-            else hi = mid - 1;
-          }
-          out.push(l.slice(0, lo));
-          l = l.slice(lo);
-        }
-        return l;
-      };
-      let line = "";
-      for (const word of hard.split(/(\s+)/)) {
-        if (!word) continue;
-        if (mw(line + word) <= avail || !line) line = breakWide(line + word);
-        else {
-          // the pending line can itself be one over-long word, parked here by an earlier break
-          const rest = breakWide(line.trimEnd());
-          if (rest) out.push(rest);
-          line = word.trimStart();
-        }
-      }
-      if (line) { const rest = breakWide(line.trimEnd()); if (rest) out.push(rest); }
-    }
-    while (out.length > this.maxLinesV) out.pop();
-    if (out.length && this.ellipsizeEnd) {
-      const last = out[out.length - 1];
-      let shown = out.length - 1;
-      for (const l of out) shown += l.length;
-      if (shown < text.length && mw(last) > 0) {
-        let l = last;
-        while (l.length && mw(l + "…") > avail) l = l.slice(0, -1);
-        out[out.length - 1] = l + "…";
-      }
-    }
-    return out;
-  }
   async notifyWatchers() {
     for (const w of this.watchers) {
       try {
@@ -197,26 +122,17 @@ export class JTextView extends JView {
     this.editObj.text = this.text;
     return this.editObj;
   }
-  /** the text's lines at `avail` */
-  linesFor(avail: number): Wrapped { return (this.wrapMemo ??= new WrapMemo()).get(this, this.displayText(), avail); }
-  /** an empty field draws its hint every frame, so the hint keeps a memo of its own */
-  private hintUpperOf = ""; private hintUpper = "";
-  hintFor(avail: number): Wrapped {
-    let hint = this.hint;
-    if (this.allCaps) {
-      if (this.hintUpperOf !== hint) { this.hintUpperOf = hint; this.hintUpper = hint.toUpperCase(); }
-      hint = this.hintUpper;
-    }
-    return (this.hintMemo ??= new WrapMemo()).get(this, hint, avail);
+  measuredLines(avail: number): JLayout | Promise<JLayout> {
+    return (this.textLayouts ??= new TextViewLayouts()).get(this, this.rawText instanceof JSpanned ? this.rawText : this.text, avail);
   }
-  useLines(w: Wrapped) { this.lines = w.lines; this.lineWidths = w.widths; }
+
 }
 const tvAttr = attrTable(
   "text", "textSize", "textColor", "textStyle", "textAppearance", "hint", "gravity", "maxLines",
   "minLines", "lines", "singleLine", "ellipsize", "lineSpacingExtra", "lineSpacingMultiplier",
   "drawableLeft", "drawableTop", "drawableRight", "drawableBottom", "drawablePadding", "drawableStart",
   "drawableEnd", "fontFamily", "textAllCaps", "textColorHint", "inputType", "letterSpacing", "maxLength",
-  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth");
+  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth", "shadowColor", "shadowDx", "shadowDy", "shadowRadius", "textColorLink");
 
 async function applyTextAppearance(tv: JTextView, res: Resources, styleId: number) {
   if (!styleId) return;
@@ -227,6 +143,11 @@ async function applyTextAppearance(tv: JTextView, res: Resources, styleId: numbe
   if (tc) {
     if (tc.t === TV.REFERENCE) tv.colors = await loadColorStateList(res, tc.d, tv.theme);
     else tv.colors = mkCsl(rvColor(res, tc, -16777216));
+  }
+  const link = look("textColorLink");
+  if (link) {
+    tv.linkColors = link.t === TV.REFERENCE ? await loadColorStateList(res, link.d, tv.theme) : mkCsl(rvColor(res, link, tv.paintT.linkColor));
+    tv.updateLinkColor();
   }
   const st = look("textStyle");
   if (st) tv.styleBits = rvInt(res, st, 0);
@@ -257,6 +178,7 @@ export async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyle
     tvAttr.inputType, tvAttr.lineSpacingExtra, tvAttr.lineSpacingMultiplier, tvAttr.lines,
     tvAttr.drawableStart, tvAttr.drawableEnd, tvAttr.minLines,
     tvAttr.ems, tvAttr.minEms, tvAttr.minWidth, tvAttr.includeFontPadding, tvAttr.imeOptions,
+    tvAttr.shadowColor, tvAttr.shadowDx, tvAttr.shadowDy, tvAttr.shadowRadius, tvAttr.textColorLink,
   ];
   const ta = obtainStyled(res, tv.theme, set, ids, defStyleAttr, 0);
   const g = (i: number) => ta.vals[i];
@@ -291,6 +213,7 @@ export async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyle
   if (dt) tv.drawableT = await loadDrawableRV(res, dt, tv.theme);
   if (dr) tv.drawableR = await loadDrawableRV(res, dr, tv.theme);
   if (db) tv.drawableB = await loadDrawableRV(res, db, tv.theme);
+  if (dl || dt || dr || db) await setIntrinsicDrawables.call(tv, tv.drawableL, tv.drawableT, tv.drawableR, tv.drawableB);
   if (g(14)) tv.drawablePad = Math.round(rvDimen(res, g(14), 0));
   await applyFontFamily(tv, res, g(15));
   if (g(16)) { tv.allCaps = !!rvInt(res, g(16), 0); tv.capsSet = true; }
@@ -304,16 +227,36 @@ export async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyle
   if (g(28)) tv.includePad = !!rvInt(res, g(28), 1);
   // the action the IME key performs: a search field declares it here and nowhere else
   if (g(29)) tv.imeOptions = rvInt(res, g(29), 0);
+  if (g(30) || g(31) || g(32) || g(33)) await setTextShadow.call(tv, rvFloat(res, g(33), tv.shadowRadius), rvFloat(res, g(31), tv.shadowDx), rvFloat(res, g(32), tv.shadowDy), rvColor(res, g(30), tv.shadowColor));
+  const link = g(34);
+  if (link) {
+    tv.linkColors = link.t === TV.REFERENCE ? await loadColorStateList(res, link.d, tv.theme) : mkCsl(rvColor(res, link, tv.paintT.linkColor));
+    tv.updateLinkColor();
+  }
   if (tv.styleBits & 1) tv.paintT.fakeBold = true;
   if (tv.styleBits & 2) tv.paintT.tf = (() => { const t = new JTypeface(); t.family = tv.paintT.tf.family; t.italic = true; t.weight = tv.paintT.tf.weight; return t; })();
+}
+async function setTextShadow(this: JTextView, radius: number, dx: number, dy: number, color: number) {
+  this.shadowRadius = radius; this.shadowDx = dx; this.shadowDy = dy; this.shadowColor = color;
+  await vcall(this.paintT, "setShadowLayer", "(FFFI)V", radius, dx, dy, color); invalidate(this);
 }
 function setTextAppearance(this: JTextView, id: number) {
   return this.jres ? applyTextAppearance(this, this.jres, id) : undefined;
 }
 function setCompoundDrawables(this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null) {
   this.drawableL = l; this.drawableT = t; this.drawableR = r; this.drawableB = b;
-  requestLayout(this);
+  invalidate(this); requestLayout(this);
 }
+async function setIntrinsicDrawables(this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null) {
+  const thread = curThread;
+  for (const d of [l, t, r, b]) if (d) {
+    const width = await drawableSize(d, false, thread), height = await drawableSize(d, true, thread);
+    await vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, width, height);
+  }
+  setCompoundDrawables.call(this, l, t, r, b);
+}
+const compoundWidth = (d: JDrawable | null) => d ? Math.max(0, d.bounds.right - d.bounds.left) : 0;
+const compoundHeight = (d: JDrawable | null) => d ? Math.max(0, d.bounds.bottom - d.bounds.top) : 0;
 /** the (Context) / (Context, AttributeSet) / (Context, AttributeSet, defStyleAttr) constructor trio of a
  *  TextView subclass: attach to the context, apply the widget's default style (or the caller's), then `then` */
 export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v: T) => unknown): NativeSpec["methods"] {
@@ -345,10 +288,10 @@ function applyTypeface(tv: JTextView, tf: JTypeface, fakeBold: boolean) {
 function compoundDrawables(this: JTextView) {
   return jarray([this.drawableL, this.drawableT, this.drawableR, this.drawableB], "Landroid/graphics/drawable/Drawable;");
 }
-function compoundPadL(this: JTextView) { return this.padL + (this.drawableL ? this.drawableL.intrinsicW() + this.drawablePad : 0); }
-function compoundPadR(this: JTextView) { return this.padR + (this.drawableR ? this.drawableR.intrinsicW() + this.drawablePad : 0); }
-function compoundPadT(this: JTextView) { return this.padT + (this.drawableT ? this.drawableT.intrinsicH() + this.drawablePad : 0); }
-function compoundPadB(this: JTextView) { return this.padB + (this.drawableB ? this.drawableB.intrinsicH() + this.drawablePad : 0); }
+function compoundPadL(this: JTextView) { return this.padL + (this.drawableL ? compoundWidth(this.drawableL) + this.drawablePad : 0); }
+function compoundPadR(this: JTextView) { return this.padR + (this.drawableR ? compoundWidth(this.drawableR) + this.drawablePad : 0); }
+function compoundPadT(this: JTextView) { return this.padT + (this.drawableT ? compoundHeight(this.drawableT) + this.drawablePad : 0); }
+function compoundPadB(this: JTextView) { return this.padB + (this.drawableB ? compoundHeight(this.drawableB) + this.drawablePad : 0); }
 export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   ...textViewCtors("textViewStyle"),
   // AOSP routes every setText through the two-arg form, and that is the one apps override:
@@ -362,10 +305,12 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     await guardCall(this, mangleMethod("setText", "(Ljava/lang/CharSequence;)V"), s);
   },
   "setText(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": async function (this: JTextView, cs: unknown) {
+    const changedSpans = cs instanceof JSpanned || this.rawText instanceof JSpanned;
     this.rawText = cs;
     invalidate(this);
+    if (changedSpans) this.textLayouts = null;
     const t = spannedString(cs);
-    if (t !== this.text) {
+    if (t !== this.text || changedSpans) {
       this.text = t;
       this.layoutWidthFor = -1;
       requestLayout(this);
@@ -393,8 +338,13 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (c) this.colors = c;
     invalidate();
   },
+  "setLinkTextColor(I)V": function (this: JTextView, color: number) { this.linkColors = mkCsl(color); this.updateLinkColor(); },
+  "setLinkTextColor(Landroid/content/res/ColorStateList;)V": function (this: JTextView, colors: JColorStateList | null) { this.linkColors = colors; this.updateLinkColor(); },
+  "getLinkTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.linkColors; },
+  "drawableStateChanged()V": function (this: JTextView) { this.updateLinkColor(); },
   "getTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.colors; },
   "getCurrentTextColor()I": function (this: JTextView) { return cslColor(this.colors, this.drawableState()); },
+  "setHintTextColor(Landroid/content/res/ColorStateList;)V": function (this: JTextView, c: JColorStateList | null) { this.hintColors = c; invalidate(this); },
   "setHintTextColor(I)V": function (this: JTextView, c: number) { this.hintColors = mkCsl(c); invalidate(this); },
   "setGravity(I)V": function (this: JTextView, g: number) { this.gravityT = g; invalidate(); },
   "getGravity()I": function (this: JTextView) { return this.gravityT; },
@@ -406,15 +356,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getTypeface()Landroid/graphics/Typeface;": function (this: JTextView) { return this.paintT.tf; },
   "getPaint()Landroid/text/TextPaint;": function (this: JTextView) { return this.paintT; },
-  "setShadowLayer(FFFI)V": function (this: JTextView, radius: number, dx: number, dy: number, color: number) {
-    this.shadowRadius = radius; this.shadowDx = dx; this.shadowDy = dy; this.shadowColor = color;
-    this.paintT.shadowRadius = radius; this.paintT.shadowDx = dx; this.paintT.shadowDy = dy; this.paintT.shadowColor = color;
-    invalidate(this);
-  },
-  "getShadowRadius()F": function (this: JTextView) { return this.shadowRadius; },
-  "getShadowDx()F": function (this: JTextView) { return this.shadowDx; },
-  "getShadowDy()F": function (this: JTextView) { return this.shadowDy; },
-  "getShadowColor()I": function (this: JTextView) { return this.shadowColor; },
+
   "setSingleLine()V": function (this: JTextView) { this.singleLine = true; requestLayout(this); },
   "setSingleLine(Z)V": function (this: JTextView, v: number) { this.singleLine = !!v; requestLayout(this); },
   "setMaxLines(I)V": function (this: JTextView, n: number) { this.maxLinesV = n || Infinity; requestLayout(this); },
@@ -447,9 +389,9 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setCompoundDrawablesWithIntrinsicBounds(IIII)V": async function (this: JTextView, l: number, t: number, r: number, b: number) {
     const res = this.jres!;
     const [dl, dt, dr, db] = await Promise.all([l, t, r, b].map((id) => (id ? loadDrawable(res, id, this.theme) : null)));
-    setCompoundDrawables.call(this, dl, dt, dr, db);
+    return setIntrinsicDrawables.call(this, dl, dt, dr, db);
   },
-  "setCompoundDrawablesWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
+  "setCompoundDrawablesWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setIntrinsicDrawables,
   "setCompoundDrawables(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
   "getCompoundDrawables()[Landroid/graphics/drawable/Drawable;": compoundDrawables,
   "setCompoundDrawablePadding(I)V": function (this: JTextView, p: number) { this.drawablePad = p; requestLayout(this); },
@@ -479,7 +421,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getDefaultMovementMethod()Landroid/text/method/MovementMethod;": () => null,
   "getCompoundDrawablesRelative()[Landroid/graphics/drawable/Drawable;": compoundDrawables,
   "setCompoundDrawablesRelative(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
-  "setCompoundDrawablesRelativeWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setCompoundDrawables,
+  "setCompoundDrawablesRelativeWithIntrinsicBounds(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V": setIntrinsicDrawables,
   "setCompoundDrawablesRelativeWithIntrinsicBounds(IIII)V": function (this: JTextView, l: number, t: number, r: number, b: number) {
     return callSelf(textViewMethods, "setCompoundDrawablesWithIntrinsicBounds(IIII)V", this, l, t, r, b);
   },
@@ -549,31 +491,24 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getMaxWidth()I": function (this: JTextView) { return Number.isFinite(this.maxW) ? this.maxW : 0x7fffffff; },
   // AOSP: null until the first measure; afterwards the Layout over the measured text width
   "getLayout()Landroid/text/Layout;": function (this: JTextView) {
-    if (this.layoutWidthFor < 0) return null;
-    const dlW = this.drawableL ? Math.max(0, this.drawableL.intrinsicW()) + this.drawablePad : 0;
-    const drW = this.drawableR ? Math.max(0, this.drawableR.intrinsicW()) + this.drawablePad : 0;
-    const w = this.layoutWidthFor - this.padL - this.padR - dlW - drW;
-    const p = this.paintT, text = this.displayText(), font = p.font();
-    if (text !== this.layoutText || w !== this.layoutW || font !== this.layoutFont || this.maxLinesV !== this.layoutMax ||
-        p.letterSpacingEm !== this.layoutLS || this.lineSpacingMult !== this.layoutMult || this.lineSpacingExtra !== this.layoutExtra) {
-      this.layoutText = text; this.layoutW = w; this.layoutFont = font; this.layoutMax = this.maxLinesV;
-      this.layoutLS = p.letterSpacingEm; this.layoutMult = this.lineSpacingMult; this.layoutExtra = this.lineSpacingExtra;
-      this.layoutObj = mkStaticLayout(text, p, w, this.lineSpacingMult, this.lineSpacingExtra, Number.isFinite(this.maxLinesV) ? this.maxLinesV : undefined);
-    }
-    if (this.layoutObj) this.layoutObj.src = this.rawText;
-    return this.layoutObj;
+    return this.layoutWidthFor < 0 ? null : this.layout;
   },
   "getLineBounds(ILandroid/graphics/Rect;)I": function (this: JTextView, i: number, r: JRect) {
     const lh = this.lineHeight(), w = this.layoutWidthFor >= 0 ? this.layoutWidthFor : this.width();
     r.left = this.padL; r.right = Math.max(this.padL, w - this.padR); r.top = this.padT + i * lh; r.bottom = r.top + lh;
     return r.top + this.ascent();
   },
+  "setShadowLayer(FFFI)V": setTextShadow,
+  "getShadowRadius()F": function (this: JTextView) { return this.shadowRadius; },
+  "getShadowDx()F": function (this: JTextView) { return this.shadowDx; },
+  "getShadowDy()F": function (this: JTextView) { return this.shadowDy; },
+  "getShadowColor()I": function (this: JTextView) { return this.shadowColor; },
   "setMinWidth(I)V": function (this: JTextView, w: number) { this.minW = w; requestLayout(this); },
   ...noops("setCompoundDrawableTintMode(Landroid/graphics/PorterDuff$Mode;)V",
     "setTextLocales(Landroid/os/LocaleList;)V", "setImeHintLocales(Landroid/os/LocaleList;)V", "beginBatchEdit()V",
     "endBatchEdit()V", "setHighlightColor(I)V", "setHorizontallyScrolling(Z)V", "setMarqueeRepeatLimit(I)V",
     "setSelectAllOnFocus(Z)V", "setTextIsSelectable(Z)V", "setError(Ljava/lang/CharSequence;)V", "setAutoLinkMask(I)V",
-    "setLinkTextColor(I)V", "setMaxEms(I)V", "setMaxHeight(I)V"),
+    "setMaxEms(I)V", "setMaxHeight(I)V"),
   ...stubs(1, "getIncludeFontPadding()Z"),
   ...stubs(0, "isHorizontallyScrollable()Z"),
   ...stubs(-1, "getAutoSizeMinTextSize()I", "getAutoSizeMaxTextSize()I", "getAutoSizeStepGranularity()I"),
@@ -588,116 +523,107 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     return (this.paintT.strikeThru ? 16 : 0) | (this.paintT.underline ? 8 : 0) | 1;
   },
   "getLineHeight()I": function (this: JTextView) { return this.lineHeight(); },
-  "getLineCount()I": function (this: JTextView) { return this.lines.length; },
+  "getLineCount()I": function (this: JTextView) { return this.layout?.lines.length ?? 0; },
   "getBaseline()I": function (this: JTextView) { return this.padT + this.ascent(); },
   "getEditableText()Landroid/text/Editable;": function (this: JTextView) { return this.getEditable(); },
   "setEnabled(Z)V": function (this: JTextView, e: number) { this.enabled = !!e; void this.refreshDrawableState(); },
-  "onMeasure(II)V": function (this: JTextView, wSpec: number, hSpec: number) {
+  "onMeasure(II)V": async function (this: JTextView, wSpec: number, hSpec: number) {
+    const thread = curThread;
     const wMode = specMode(wSpec), wSize = specSize(wSpec);
-    const dlW = (this.drawableL ? Math.max(0, this.drawableL.intrinsicW()) + this.drawablePad : 0)
-      + (this.drawableR ? Math.max(0, this.drawableR.intrinsicW()) + this.drawablePad : 0);
-    const dtH = (this.drawableT ? Math.max(0, this.drawableT.intrinsicH()) + this.drawablePad : 0)
-      + (this.drawableB ? Math.max(0, this.drawableB.intrinsicH()) + this.drawablePad : 0);
+    const dlW = (this.drawableL ? compoundWidth(this.drawableL) + this.drawablePad : 0)
+      + (this.drawableR ? compoundWidth(this.drawableR) + this.drawablePad : 0);
+    const dtH = (this.drawableT ? compoundHeight(this.drawableT) + this.drawablePad : 0)
+      + (this.drawableB ? compoundHeight(this.drawableB) + this.drawablePad : 0);
     const availText = Math.min(wMode === MS_UNSPEC ? 100000 : wSize, this.maxW) - this.padL - this.padR - dlW;
     let w: number;
     const display = this.displayText() || "";
     if (wMode === MS_EXACTLY) {
       w = wSize;
-      this.useLines(this.linesFor(w - this.padL - this.padR - dlW));
+      const measured = this.measuredLines(w - this.padL - this.padR - dlW);
+      this.layout = measured instanceof Promise ? await measured : measured;
     } else {
-      let lay = this.linesFor(availText);
-      let tw = lay.maxW;
+      const measured = this.measuredLines(availText);
+      let lay = measured instanceof Promise ? await measured : measured;
+      let tw = 0;
+      for (const line of lay.lines) tw = Math.max(tw, line.width);
       if (!display && this.hint) tw = Math.max(tw, measureText(this.paintT, this.hint));
-      w = Math.ceil(tw) + this.padL + this.padR + dlW;
-      w = Math.min(Math.max(w, this.minW), this.maxW);
+      w = Math.max(Math.ceil(tw) + dlW, compoundWidth(this.drawableT), compoundWidth(this.drawableB)) + this.padL + this.padR;
+      const min = vcallOn(thread, this, "getSuggestedMinimumWidth", "()I");
+      w = Math.max(Math.min(Math.max(w, this.minW), this.maxW), Number(min instanceof Promise ? await min : min));
       if (wMode === MS_AT_MOST) w = Math.min(w, wSize);
       // AOSP rebuilds the layout at the width the view actually got. Without this the lines
       // stay wrapped for the desired width, so a clamp leaves both the height (too few lines)
       // and the draw (a line wider than the view, silently clipped) wrong.
       const finalAvail = w - this.padL - this.padR - dlW;
-      if (finalAvail < availText) lay = this.linesFor(finalAvail);
-      this.useLines(lay);
+      if (finalAvail !== availText) {
+        const measured = this.measuredLines(finalAvail);
+        lay = measured instanceof Promise ? await measured : measured;
+      }
+      this.layout = lay;
     }
-    const lineCount = Math.max(this.lines.length, display || this.hint ? 1 : 0, this.minLinesV);
+    const lineCount = Math.max(this.layout?.lines.length ?? 0, display || this.hint ? 1 : 0, this.minLinesV);
     const vPad = this.padT + this.padB;
     let h = this.textHeight(lineCount) + vPad + dtH;
-    h = Math.max(h, this.minH, (this.drawableL ? this.drawableL.intrinsicH() : 0) + vPad, (this.drawableR ? this.drawableR.intrinsicH() : 0) + vPad);
+    if (this.layout) h = Math.max(h, layoutHeight(this.layout) + vPad + dtH);
+    h = Math.max(h, this.minH, (this.drawableL ? compoundHeight(this.drawableL) : 0) + vPad, (this.drawableR ? compoundHeight(this.drawableR) : 0) + vPad);
+    if (specMode(hSpec) !== MS_EXACTLY) {
+      const min = vcallOn(thread, this, "getSuggestedMinimumHeight", "()I");
+      h = Math.max(h, Number(min instanceof Promise ? await min : min));
+    }
     this.measuredW = w;
     this.measuredH = resolveSizeAndState(h, hSpec);
     this.layoutWidthFor = w;
   },
   "onDraw(Landroid/graphics/Canvas;)V": async function (this: JTextView, cv: JCanvas) {
-    const ctx = cv.ctx;
+    const thread = curThread, ctx = cv.ctx;
     const display = this.displayText();
+    const resolved = vcallOn(thread, this, "getTextAlignment", "()I");
+    const alignment = Number(resolved instanceof Promise ? await resolved : resolved);
+    const direction = alignment === 5 || alignment === 6 ? vcallOn(thread, this, "getLayoutDirection", "()I") : 0;
+    const layoutDirection = Number(direction instanceof Promise ? await direction : direction);
+    const hg = this.horizontalGravity(display || this.hint, alignment, layoutDirection);
     const showHint = !display && this.hint;
-    const dlW = this.drawableL ? Math.max(0, this.drawableL.intrinsicW()) : 0;
-    const drW = this.drawableR ? Math.max(0, this.drawableR.intrinsicW()) : 0;
+    const dlW = this.drawableL ? compoundWidth(this.drawableL) : 0;
+    const drW = this.drawableR ? compoundWidth(this.drawableR) : 0;
     const contentL = this.padL + (dlW ? dlW + this.drawablePad : 0);
     const contentR = this.width() - this.padR - (drW ? drW + this.drawablePad : 0);
-    if (this.drawableL) {
-      const dh = Math.max(0, this.drawableL.intrinsicH());
-      this.drawableL.bounds.left = this.padL;
-      this.drawableL.bounds.top = (this.height() - dh) >> 1;
-      this.drawableL.bounds.right = this.padL + dlW;
-      this.drawableL.bounds.bottom = ((this.height() - dh) >> 1) + dh;
-      drawChild(this.drawableL, cv);
-    }
-    if (this.drawableR) {
-      const dh = Math.max(0, this.drawableR.intrinsicH());
-      this.drawableR.bounds.left = this.width() - this.padR - drW;
-      this.drawableR.bounds.top = (this.height() - dh) >> 1;
-      this.drawableR.bounds.right = this.width() - this.padR;
-      this.drawableR.bounds.bottom = ((this.height() - dh) >> 1) + dh;
-      drawChild(this.drawableR, cv);
-    }
     const avail = contentR - contentL;
     if (this.layoutWidthFor !== this.width()) {
-      this.useLines(this.linesFor(avail));
-      this.layoutWidthFor = this.width();
+      const measured = this.measuredLines(avail);
+      if (measured instanceof Promise) return measured.then(lay => {
+        this.layout = lay; this.layoutWidthFor = this.width();
+        return callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", this, cv);
+      });
+      this.layout = measured; this.layoutWidthFor = this.width();
     }
-    const hintLay = showHint ? this.hintFor(avail) : null;
-    const lines = hintLay ? hintLay.lines : this.lines, widths = hintLay ? hintLay.widths : this.lineWidths;
-    if (!lines.length && !this.editable) return;
-    const lh = this.lineHeight();
-    const totalH = this.textHeight(Math.max(1, lines.length));
-    const vg = gravityV(this.gravityT);
-    let y = (vg === 16 ? (this.height() - this.padT - this.padB - totalH) / 2 + this.padT
-      : vg === 80 ? this.height() - this.padB - totalH : this.padT) + this.ascent();
-    ctx.font = this.paintT.font();
-    const color = showHint ? cslColor(this.hintColors, this.drawableState()) : cslColor(this.colors, this.drawableState());
-    ctx.fillStyle = cssColor(color);
-    ctx.shadowBlur = this.shadowRadius;
-    ctx.shadowOffsetX = this.shadowDx;
-    ctx.shadowOffsetY = this.shadowDy;
-    ctx.shadowColor = this.shadowRadius ? cssColor(this.shadowColor) : "rgba(0,0,0,0)";
-    ctx.textBaseline = "alphabetic";
-    const hg = gravityH(this.gravityT);
-    ctx.textAlign = hg === 1 ? "center" : hg === 5 ? "right" : "left";
-    const x = hg === 1 ? (contentL + contentR) / 2 : hg === 5 ? contentR : contentL;
-    const styledSource = !showHint && this.rawText instanceof JSpanned && this.rawText.spans.length ? this.rawText : null;
-    let offset = 0;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      cv.recordText(line, x, y, this.paintT.textSize, hg === 1 ? 1 : hg === 5 ? 2 : 0);
-      const start = styledSource ? display.indexOf(line, offset) : -1;
-      const styled = styledSource && start >= 0 && drawStyledText(styledSource, line, start, cv, this.paintT,
-        hg === 1 ? x - widths[i] / 2 : hg === 5 ? x - widths[i] : x, y, color);
-      if (styled) await styled;
-      else ctx.fillText(line, x, y);
-      offset = Math.max(offset, start + line.length);
-      if (this.paintT.strikeThru && line) {
-        const w = widths[i];
-        const sx = hg === 1 ? x - w / 2 : hg === 5 ? x - w : x;
-        ctx.fillRect(sx, y - this.paintT.textSize * 0.3, w, Math.max(1, this.paintT.textSize / 14));
-      }
-      y += lh;
-    }
+    const contentT = compoundPadT.call(this), contentB = this.height() - compoundPadB.call(this);
+    const draw = async (d: JDrawable | null, x: number, y: number) => {
+      if (!d) return;
+      ctx.save(); ctx.translate(Math.trunc(x), Math.trunc(y));
+      try { const result = drawChild(d, cv); if (result instanceof Promise) await result; }
+      finally { ctx.restore(); }
+    };
+    if (this.drawableL) await draw(this.drawableL, this.padL, contentT + (contentB - contentT - compoundHeight(this.drawableL)) / 2);
+    if (this.drawableR) await draw(this.drawableR, this.width() - this.padR - drW, contentT + (contentB - contentT - compoundHeight(this.drawableR)) / 2);
+    if (this.drawableT) await draw(this.drawableT, contentL + (avail - compoundWidth(this.drawableT)) / 2, this.padT);
+    if (this.drawableB) await draw(this.drawableB, contentL + (avail - compoundWidth(this.drawableB)) / 2, this.height() - this.padB - compoundHeight(this.drawableB));
+    const pending = showHint ? (this.hintLayouts ??= new TextViewLayouts()).get(this, this.hint, avail) : this.layout;
+    const layout = pending instanceof Promise ? await pending : pending;
+    if (!layout) return;
+    const vg = gravityV(this.gravityT), height = Math.max(layoutHeight(layout), this.textHeight(1));
+    const y = vg === 16 ? (contentB - contentT - height) / 2 + contentT : vg === 80 ? contentB - height : contentT;
+    this.paintT.color = cslColor(showHint ? this.hintColors ?? this.colors : this.colors, this.drawableState());
+    ctx.save(); ctx.translate(contentL, y);
+    try {
+      const drawn = callOn(thread, () => drawTextViewLayout(layout, cv, hg));
+      if (drawn instanceof Promise) await drawn;
+    } finally { ctx.restore(); }
     if (this.editable && this.focused && this.cursorVisible && Math.floor((performance.now() - this.blinkStart) / 500) % 2 === 0) {
-      const cw = widths[lines.length - 1] ?? 0;
-      const cx = (hg === 1 ? x + cw / 2 : hg === 5 ? x : x + cw) + 1;
-      const cy = y - lh;
+      const cw = layout.lines.at(-1)?.width ?? 0;
+      const cx = contentL + (hg === 1 ? (avail + cw) / 2 : hg === 5 ? avail : cw) + 1;
+      const cy = y + layout.baseline(Math.max(0, layout.lines.length - 1));
       ctx.fillStyle = cssColor(cslColor(this.colors, []));
-      ctx.fillRect(cx, cy - this.ascent(), 3, lh);
+      ctx.fillRect(cx, cy - this.ascent(), 3, this.lineHeight());
     }
   },
 };

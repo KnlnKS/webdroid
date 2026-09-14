@@ -1,0 +1,44 @@
+import { expect, test } from "bun:test";
+import "../src/natives";
+import { rt } from "../src/jvm/runtime";
+import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { JPath } from "../src/android/path";
+import { JMatrix } from "../src/android/graphics";
+
+rt.linkNatives();
+test("path copies retain contours and fill rules without sharing mutable geometry", async () => {
+  const source = rt.make("android/graphics/Path") as JPath;
+  await vcall(source, "moveTo", "(FF)V", 10, 20);
+  await vcall(source, "lineTo", "(FF)V", 30, 40);
+  source.fillRule = "evenodd";
+  const copy = await newObj("android/graphics/Path", "(Landroid/graphics/Path;)V", source) as JPath;
+  const target = rt.make("android/graphics/Path") as JPath;
+  await vcall(target, "set", "(Landroid/graphics/Path;)V", copy);
+  await vcall(target, "set", "(Landroid/graphics/Path;)V", target);
+  await vcall(target, "rLineTo", "(FF)V", 5, 6);
+  expect(target.ops.at(-1)).toEqual(["l", 35, 46]);
+  await vcall(target, "close", "()V");
+  expect([target.curX, target.curY, target.fillRule]).toEqual([10, 20, "evenodd"]);
+  await vcall(copy, "offset", "(FF)V", 100, 200);
+  expect(source.ops).toEqual([["m", 10, 20], ["l", 30, 40]]);
+  expect(target.ops.slice(0, 2)).toEqual(source.ops);
+});
+
+test("appending a transformed path preserves independent geometry and its current contour", async () => {
+  const source = rt.make("android/graphics/Path") as JPath;
+  await vcall(source, "moveTo", "(FF)V", 1, 2);
+  await vcall(source, "lineTo", "(FF)V", 3, 4);
+  const target = rt.make("android/graphics/Path") as JPath;
+  const matrix = rt.make("android/graphics/Matrix") as JMatrix;
+  matrix.m = [0, 1, -1, 0, 10, 20];
+  await vcall(target, "addPath", "(Landroid/graphics/Path;Landroid/graphics/Matrix;)V", source, matrix);
+  await vcall(target, "rLineTo", "(FF)V", 5, 6);
+  expect(target.ops).toEqual([["m", 8, 21], ["l", 6, 23], ["l", 11, 29]]);
+  await vcall(target, "close", "()V");
+  expect([target.curX, target.curY]).toEqual([8, 21]);
+  await vcall(target, "addPath", "(Landroid/graphics/Path;)V", target);
+  expect(target.ops.length).toBe(8);
+  await vcall(target, "offset", "(FF)V", 1, 1);
+  expect(target.ops[0]).toEqual(["m", 9, 22]);
+  expect(source.ops).toEqual([["m", 1, 2], ["l", 3, 4]]);
+});

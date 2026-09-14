@@ -601,7 +601,7 @@ async function apkChecksums(pkg: string, includeSplits: boolean, required: numbe
     if (!bytes) continue;
     for (const [type, algorithm] of wholeChecksumAlgorithms) {
       if (!(required & type)) continue;
-      const value = digestBytes(algorithm, bytes);
+      const value = await digestBytes(algorithm, bytes);
       if (value) result.a.push(Object.assign(new JApkChecksum(), { splitName, type, value: new Int8Array(value) }));
     }
     if (required & 16) {

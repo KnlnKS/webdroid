@@ -1,12 +1,15 @@
 // android.graphics.drawable.* — Drawable hierarchy, XML inflation, 9-patch, vectors.
 
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
-import { vcall, newObj, mkEnumSet, defineException } from "../jvm/natives/jlang";
-import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
-import { JCanvas, JRect, JRectF, JBitmap, JPaint, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
+import { vcall, vcallOn, curThread, callOn, after, newObj, defineException, mkEnumSet, type JSimpleEnum } from "../jvm/natives/jlang";
+import { mangleMethod, jmethod } from "../jvm/abi";
+import { JCanvas, JRect, JRectF, JBitmap, JPaint, matMul, rotM, type JMatrix, type JOutline, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
-import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, rvInt, rvString, normRV, resolveStyleValue, xmlParserAtNode } from "./res";
+import { uptimeMillis } from "./os";
+import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, xmlParserAtNode, normRV, resolveStyleValue } from "./res";
+import { absGravity, gravityApply } from "./gravity";
+import { complexToFraction } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 
 export const ST = {
@@ -23,18 +26,22 @@ export class JDrawable extends JObj {
   stateSet: number[] = [];
   callback: unknown = null; // Drawable.Callback (usually a View)
   tint: number | null = null;
+  tintCsl: JColorStateList | null = null;
+  tintMode: string | null = "SRC_IN";
   tintMatrix: Float32Array | null = null;
   autoMirrored = false;
   layoutDir = 0;
   visible = true;
 
   /** TS-side paint. Subclasses override. */
-  paint(cv: JCanvas) {}
-  intrinsicW(): number { return -1; }
-  intrinsicH(): number { return -1; }
+  paint(cv: JCanvas): unknown { return undefined; }
+  size(vertical: boolean): number | Promise<number> { return -1; }
   onStateChange(): boolean { return false; }
 }
 
+export function drawableSize(d: JDrawable, vertical: boolean, thread = curThread): number | Promise<number> {
+  return after(vcallOn(thread, d, vertical ? "getIntrinsicHeight" : "getIntrinsicWidth", "()I"), Number);
+}
 const M_onBoundsChange = mangleMethod("onBoundsChange", "(Landroid/graphics/Rect;)V");
 const M_onStateChange = mangleMethod("onStateChange", "([I)Z");
 const M_onLevelChange = mangleMethod("onLevelChange", "(I)Z");
@@ -46,9 +53,9 @@ const M_drawD = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
  * the base class's empty one and the child silently draws nothing. Returns whatever the child
  * returns, so a compiled override that suspends is awaitable by a caller that can.
  */
-export function drawChild(d: JDrawable, cv: JCanvas): unknown {
+export function drawChild(d: JDrawable, cv: JCanvas, thread = curThread): unknown {
   const f = (d as unknown as Record<string, (cv: JCanvas) => unknown>)[M_drawD];
-  return f ? f.call(d, cv) : d.paint(cv);
+  return callOn(thread, () => f ? f.call(d, cv) : d.paint(cv));
 }
 /** AOSP setBounds: only a real change reaches onBoundsChange, dispatched virtually so an app
  *  subclass's override (shape caches, wrapped children) sees it */
@@ -70,17 +77,17 @@ function invalidateSelf(this: JDrawable) {
   if (this.callback) void vcall(this.callback, "invalidateDrawable", "(Landroid/graphics/drawable/Drawable;)V", this);
 }
 const drawableMethods: NativeSpec["methods"] = {
-  "draw(Landroid/graphics/Canvas;)V": function (this: JDrawable, cv: JCanvas) { this.paint(cv); },
+  "draw(Landroid/graphics/Canvas;)V": function (this: JDrawable, cv: JCanvas) { return this.paint(cv); },
   "setBounds(IIII)V": setBounds,
   "setBounds(Landroid/graphics/Rect;)V": function (this: JDrawable, r: JRect) { setBounds.call(this, r.left, r.top, r.right, r.bottom); },
   "getBounds()Landroid/graphics/Rect;": function (this: JDrawable) { return this.bounds; },
   "copyBounds(Landroid/graphics/Rect;)V": function (this: JDrawable, r: JRect) {
     r.left = this.bounds.left; r.top = this.bounds.top; r.right = this.bounds.right; r.bottom = this.bounds.bottom;
   },
-  "getIntrinsicWidth()I": function (this: JDrawable) { return this.intrinsicW(); },
-  "getIntrinsicHeight()I": function (this: JDrawable) { return this.intrinsicH(); },
-  "getMinimumWidth()I": function (this: JDrawable) { return Math.max(0, this.intrinsicW()); },
-  "getMinimumHeight()I": function (this: JDrawable) { return Math.max(0, this.intrinsicH()); },
+  "getIntrinsicWidth()I": function (this: JDrawable) { return this.size(false); },
+  "getIntrinsicHeight()I": function (this: JDrawable) { return this.size(true); },
+  "getMinimumWidth()I": function (this: JDrawable) { return after(drawableSize(this, false), n => Math.max(0, n)); },
+  "getMinimumHeight()I": function (this: JDrawable) { return after(drawableSize(this, true), n => Math.max(0, n)); },
   "setAlpha(I)V": function (this: JDrawable, a: number) { this.alpha = a; },
   "getAlpha()I": function (this: JDrawable) { return this.alpha; },
   "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JDrawable, f: any) { this.tint = f?.tint ?? null; this.tintMatrix = f?.matrix ?? null; },
@@ -88,9 +95,12 @@ const drawableMethods: NativeSpec["methods"] = {
   "clearColorFilter()V": function (this: JDrawable) { this.tint = null; this.tintMatrix = null; },
   "setTint(I)V": function (this: JDrawable, c: number) { this.tint = c; },
   "setTintList(Landroid/content/res/ColorStateList;)V": function (this: JDrawable, csl: JColorStateList | null) {
-    this.tint = csl ? cslColor(csl, this.stateSet) : null;
+    this.tintCsl = csl; this.tint = csl ? cslColor(csl, this.stateSet) : null;
   },
-  "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": function () {},
+  "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JDrawable, mode: JSimpleEnum | null) {
+    const name = mode?.ename ?? null;
+    if (this.tintMode !== name) { this.tintMode = name; invalidateSelf.call(this); }
+  },
   "setState([I)Z": async function (this: JDrawable, st: Int32Array) {
     const cur = this.stateSet;
     if (cur.length === st.length && cur.every((v, i) => v === st[i])) return 0;
@@ -98,12 +108,14 @@ const drawableMethods: NativeSpec["methods"] = {
     // AOSP: every onStateChange that reports a visual change invalidates (StateListDrawable's
     // selectDrawable, RippleDrawable's setRippleActive); the callback is how a Compose ripple
     // host learns to re-record its layer, so a silent state change leaves a pressed ripple stuck.
-    if (!await jmethod(this, M_onStateChange)!.call(this, st)) return 0;
+    const tint = this.tintCsl ? cslColor(this.tintCsl, this.stateSet) : this.tint;
+    const tintChanged = tint !== this.tint; this.tint = tint;
+    if (!await jmethod(this, M_onStateChange)!.call(this, st) && !tintChanged) return 0;
     invalidateSelf.call(this);
     return 1;
   },
   "onStateChange([I)Z": function (this: JDrawable) { return this.onStateChange() ? 1 : 0; },
-  "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JDrawable) { onBoundsChangeAll(this); },
+  "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JDrawable) { return onBoundsChangeAll(this); },
   "onLevelChange(I)Z": () => 0,
   "getState()[I": function (this: JDrawable) { return Int32Array.from(this.stateSet); },
   "setLevel(I)Z": function (this: JDrawable, l: number) {
@@ -123,7 +135,7 @@ const drawableMethods: NativeSpec["methods"] = {
   "unscheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;)V": function (this: JDrawable, _d: unknown, r: unknown) { unscheduleSelf.call(this, r); },
   "invalidateDrawable(Landroid/graphics/drawable/Drawable;)V": invalidateSelf,
   "mutate()Landroid/graphics/drawable/Drawable;": function (this: JDrawable) { return this; },
-  "isStateful()Z": function (this: JDrawable) { return this instanceof JStateListDrawable ? 1 : 0; },
+  "isStateful()Z": function (this: JDrawable) { return this instanceof JStateListDrawable || this.tintCsl || this instanceof JGradientDrawable && this.solidCsl ? 1 : 0; },
   "getPadding(Landroid/graphics/Rect;)Z": function (this: JDrawable, r: JRect) {
     const p = (this as any).padding as JRect | undefined;
     if (p) { r.left = p.left; r.top = p.top; r.right = p.right; r.bottom = p.bottom; return 1; }
@@ -163,7 +175,7 @@ const drawableMethods: NativeSpec["methods"] = {
   ...stubs(0, "getChangingConfigurations()I", "isProjected()Z", "canApplyTheme()Z", "onLayoutDirectionChanged(I)Z"),
 };
 function onBoundsChangeAll(d: JDrawable) {
-  if (d instanceof JLayerDrawable) d.layout();
+  if (d instanceof JLayerDrawable) return d.layout();
   if (d instanceof JStateListDrawable) { const c = d.current(); if (c) copyBounds(d, c); }
 }
 function copyBounds(from: JDrawable, to: JDrawable) {
@@ -230,13 +242,12 @@ export class JBitmapDrawable extends JDrawable {
     const ctx = cv.ctx;
     ctx.save();
     ctx.globalAlpha *= this.alpha / 255;
-    const src = tintedBmp(this.bmp, this.tint, this.tintMatrix);
+    const src = tintedBmp(this.bmp, this.tintMode ? this.tint : null, this.tintMatrix, this.tintMode ?? "SRC_IN");
     ctx.drawImage(src, this.bounds.left, this.bounds.top,
       Math.max(1, this.bounds.right - this.bounds.left), Math.max(1, this.bounds.bottom - this.bounds.top));
     ctx.restore();
   }
-  intrinsicW(): number { return this.bmp ? Math.round(this.bmp.w * device.densityDpi / this.bmp.density) : -1; }
-  intrinsicH(): number { return this.bmp ? Math.round(this.bmp.h * device.densityDpi / this.bmp.density) : -1; }
+  size(vertical: boolean): number { return this.bmp ? Math.round((vertical ? this.bmp.h : this.bmp.w) * device.densityDpi / this.bmp.density) : -1; }
 }
 rt.register({
   name: "android/graphics/drawable/BitmapDrawable", ctor: JBitmapDrawable, sup: "android/graphics/drawable/Drawable",
@@ -262,11 +273,10 @@ class JNinePatchDrawable extends JDrawable {
     const ctx = cv.ctx;
     ctx.save();
     ctx.globalAlpha *= this.alpha / 255;
-    drawNinePatch(ctx, tintedBmp(this.bmp, this.tint, this.tintMatrix), this.bmp.w, this.bmp.h, this.xDivs, this.yDivs, left, top, dw, dh);
+    drawNinePatch(ctx, tintedBmp(this.bmp, this.tintMode ? this.tint : null, this.tintMatrix, this.tintMode ?? "SRC_IN"), this.bmp.w, this.bmp.h, this.xDivs, this.yDivs, left, top, dw, dh);
     ctx.restore();
   }
-  intrinsicW(): number { return this.bmp ? Math.round(this.bmp.w * this.srcDensityScale) : -1; }
-  intrinsicH(): number { return this.bmp ? Math.round(this.bmp.h * this.srcDensityScale) : -1; }
+  size(vertical: boolean): number { return this.bmp ? Math.round((vertical ? this.bmp.h : this.bmp.w) * this.srcDensityScale) : -1; }
 }
 rt.register({ name: "android/graphics/drawable/NinePatchDrawable", ctor: JNinePatchDrawable, sup: "android/graphics/drawable/Drawable" });
 function drawNinePatch(
@@ -378,7 +388,7 @@ class JGradientDrawable extends JDrawable {
     }
     if (this.shape !== 2) {
       let fill: string | CanvasGradient | null = null;
-      if (this.tint !== null) fill = cssColor(this.tint);
+      if (this.tint !== null) fill = cssColor(this.solid === null ? this.tint : (this.tint & 0xffffff) | (Math.round((this.tint >>> 24) * (this.solid >>> 24) / 255) << 24));
       else if (this.gradColors && this.gradColors.length > 1) {
         if (this.gradType === 1) {
           const g = ctx.createRadialGradient(left + w / 2, top + h / 2, 0, left + w / 2, top + h / 2, this.gradRadius || Math.max(w, h) / 2);
@@ -407,8 +417,7 @@ class JGradientDrawable extends JDrawable {
     }
     ctx.restore();
   }
-  intrinsicW(): number { return this.sizeW; }
-  intrinsicH(): number { return this.sizeH; }
+  size(vertical: boolean): number { return vertical ? this.sizeH : this.sizeW; }
 }
 rt.register({
   name: "android/graphics/drawable/GradientDrawable", ctor: JGradientDrawable, sup: "android/graphics/drawable/Drawable",
@@ -458,6 +467,20 @@ class JDrawableContainer extends JDrawable {
   enterFadeDuration = 0;
   exitFadeDuration = 0;
 }
+function containerSize(children: { d: JDrawable }[], vertical: boolean): number | Promise<number> {
+  const thread = curThread;
+  let size = -1;
+  const step = (i: number): number | Promise<number> => {
+    for (; i < children.length; i++) {
+      const value = drawableSize(children[i].d, vertical, thread);
+      if (value instanceof Promise) return value.then(n => { size = Math.max(size, n); return step(i + 1); });
+      size = Math.max(size, value);
+    }
+    return size;
+  };
+  return step(0);
+}
+
 class JStateListDrawable extends JDrawableContainer {
   items: { states: number[]; negStates: number[]; d: JDrawable }[] = [];
   current(): JDrawable | null {
@@ -472,13 +495,8 @@ class JStateListDrawable extends JDrawableContainer {
     c.tint = c.tint ?? this.tint;
     return c;
   }
-  paint(cv: JCanvas) { this.target()?.paint(cv); }
-  onStateChange(): boolean {
-    for (const it of this.items) it.d.stateSet = this.stateSet;
-    return true;
-  }
-  intrinsicW(): number { return this.items.reduce((a, i) => Math.max(a, i.d.intrinsicW()), -1); }
-  intrinsicH(): number { return this.items.reduce((a, i) => Math.max(a, i.d.intrinsicH()), -1); }
+  paint(cv: JCanvas) { const child = this.target(); return child ? drawChild(child, cv) : undefined; }
+  size(vertical: boolean) { return containerSize(this.items, vertical); }
 }
 class JAnimationDrawable extends JDrawableContainer {
   frames: { d: JDrawable; ms: number }[] = [];
@@ -488,9 +506,8 @@ class JAnimationDrawable extends JDrawableContainer {
     if (c) { copyBounds(this, c); c.alpha = this.alpha; c.tint = c.tint ?? this.tint; }
     return c;
   }
-  paint(cv: JCanvas) { this.target()?.paint(cv); }
-  intrinsicW(): number { return this.frames.reduce((a, f) => Math.max(a, f.d.intrinsicW()), -1); }
-  intrinsicH(): number { return this.frames.reduce((a, f) => Math.max(a, f.d.intrinsicH()), -1); }
+  paint(cv: JCanvas) { const child = this.target(); return child ? drawChild(child, cv) : undefined; }
+  size(vertical: boolean) { return containerSize(this.frames, vertical); }
   /** AOSP schedules each frame on the looper for its duration; the run token cancels a stale timer */
   start() {
     if (this.running || !this.frames.length) return;
@@ -522,7 +539,6 @@ rt.register({
   ifaces: ["android/graphics/drawable/Animatable", "java/lang/Runnable"],
   methods: {
     "<init>()V": function () {},
-    "draw(Landroid/graphics/Canvas;)V": function (this: JAnimationDrawable, cv: JCanvas) { const c = this.target(); return c ? drawChild(c, cv) : undefined; },
     "addFrame(Landroid/graphics/drawable/Drawable;I)V": function (this: JAnimationDrawable, d: JDrawable, ms: number) { this.frames.push({ d, ms }); },
     "getNumberOfFrames()I": function (this: JAnimationDrawable) { return this.frames.length; },
     "getFrame(I)Landroid/graphics/drawable/Drawable;": function (this: JAnimationDrawable, i: number) { return this.frames[i]?.d ?? null; },
@@ -539,9 +555,10 @@ rt.register({
 rt.register({
   name: "android/graphics/drawable/StateListDrawable", ctor: JStateListDrawable, sup: "android/graphics/drawable/DrawableContainer",
   methods: {
-    "draw(Landroid/graphics/Canvas;)V": function (this: JStateListDrawable, cv: JCanvas) {
-      const c = this.target();
-      return c ? drawChild(c, cv) : undefined;
+    "onStateChange([I)Z": async function (this: JStateListDrawable, state: Int32Array) {
+      const thread = curThread;
+      for (const item of this.items) await vcallOn(thread, item.d, "setState", "([I)Z", state);
+      return 1;
     },
     "<init>()V": function () {},
     "addState([ILandroid/graphics/drawable/Drawable;)V": function (this: JStateListDrawable, st: Int32Array, d: JDrawable) {
@@ -552,49 +569,78 @@ rt.register({
   },
 });
 
-class JLayerDrawable extends JDrawable {
+export class JLayerDrawable extends JDrawable {
   layers: { d: JDrawable; insets: [number, number, number, number]; w?: number; h?: number; gravity?: number }[] = [];
   ids: (number | null)[] = [];
+  private layerContainer = new JRect();
+  private layerBounds = new JRect();
   /** AOSP LayerDrawable.addLayer: a layer's invalidations and scheduling reach this drawable,
    *  and through its own callback the view it is drawn into */
   pushLayer(layer: JLayerDrawable["layers"][number]) { layer.d.callback = this; this.layers.push(layer); }
   /** AOSP updateLayerBounds: insets, then an explicit layer size placed by its gravity */
-  layout() {
-    for (const l of this.layers) {
-      let L = this.bounds.left + l.insets[0], T = this.bounds.top + l.insets[1];
-      let R = this.bounds.right - l.insets[2], B = this.bounds.bottom - l.insets[3];
-      const w = l.w !== undefined && l.w >= 0 ? l.w : -1, h = l.h !== undefined && l.h >= 0 ? l.h : -1;
-      if (w >= 0 || h >= 0) {
-        const g = l.gravity || (w >= 0 && h >= 0 ? 0x33 : w >= 0 ? 0x73 : 0x37);
-        if (w >= 0) { const hg = g & 7; L = hg === 1 ? ((L + R - w) >> 1) : hg === 5 ? R - w : L; R = L + w; }
-        if (h >= 0) { const vg = g & 0x70; T = vg === 16 ? ((T + B - h) >> 1) : vg === 80 ? B - h : T; B = T + h; }
-      }
-      setBounds.call(l.d, L, T, R, B);
-    }
-  }
-  paint(cv: JCanvas) {
-    this.layout();
-    for (const l of this.layers) l.d.paint(cv);
-  }
-  /** Every layer through its virtual draw. Stays synchronous — no promise allocated — unless a
-   *  compiled child actually suspends, in which case the rest follow it in order. */
-  drawLayers(cv: JCanvas): unknown {
-    this.layout();
+  layout(): unknown {
+    const thread = curThread;
     const step = (i: number): unknown => {
       for (; i < this.layers.length; i++) {
-        const r = drawChild(this.layers[i].d, cv);
-        if (r instanceof Promise) return r.then(() => step(i + 1));
+        const l = this.layers[i];
+        const place = (w: number, h: number) => {
+          const L = this.bounds.left + l.insets[0], T = this.bounds.top + l.insets[1];
+          const R = this.bounds.right - l.insets[2], B = this.bounds.bottom - l.insets[3];
+          const gravity = l.gravity || (w >= 0 && h >= 0 ? 0x33 : w >= 0 ? 0x73 : h >= 0 ? 0x37 : 0x77);
+          const container = this.layerContainer, bounds = this.layerBounds;
+          container.left = L; container.top = T; container.right = R; container.bottom = B;
+          gravityApply(gravity, w < 0 ? R - L : w, h < 0 ? B - T : h, container, 0, 0, bounds);
+          return vcallOn(thread, l.d, "setBounds", "(IIII)V", bounds.left, bounds.top, bounds.right, bounds.bottom);
+        };
+        const w = l.w !== undefined && l.w >= 0 ? l.w : l.gravity && (l.gravity & 7) !== 7 ? drawableSize(l.d, false, thread) : -1;
+        const height = () => l.h !== undefined && l.h >= 0 ? l.h : l.gravity && (l.gravity & 112) !== 112 ? drawableSize(l.d, true, thread) : -1;
+        const result = after(w, width => after(height(), h => place(width, h)));
+        if (result instanceof Promise) return result.then(() => step(i + 1));
       }
     };
     return step(0);
   }
-  intrinsicW(): number { return this.layers.reduce((a, l) => Math.max(a, l.d.intrinsicW() + l.insets[0] + l.insets[2]), -1); }
-  intrinsicH(): number { return this.layers.reduce((a, l) => Math.max(a, l.d.intrinsicH() + l.insets[1] + l.insets[3]), -1); }
+  /** Every layer through its virtual draw. Stays synchronous — no promise allocated — unless a
+   *  compiled child actually suspends, in which case the rest follow it in order. */
+  paint(cv: JCanvas): unknown {
+    const thread = curThread;
+    const step = (i: number): unknown => {
+      for (; i < this.layers.length; i++) {
+        const r = vcallOn(thread, this.layers[i].d, "draw", "(Landroid/graphics/Canvas;)V", cv);
+        if (r instanceof Promise) return r.then(() => step(i + 1));
+      }
+    };
+    return after(this.layout(), () => step(0));
+  }
+  size(vertical: boolean): number | Promise<number> {
+    const thread = curThread, edge = vertical ? 1 : 0;
+    let size = -1;
+    const step = (i: number): number | Promise<number> => {
+      for (; i < this.layers.length; i++) {
+        const l = this.layers[i], explicit = vertical ? l.h : l.w;
+        const n = explicit !== undefined && explicit >= 0 ? explicit : drawableSize(l.d, vertical, thread);
+        const inset = l.insets[edge] + l.insets[edge + 2];
+        if (n instanceof Promise) return n.then(value => {
+          if (value >= 0) size = Math.max(size, value + inset);
+          return step(i + 1);
+        });
+        if (n >= 0) size = Math.max(size, n + inset);
+      }
+      return size;
+    };
+    return step(0);
+  }
 }
 rt.register({
   name: "android/graphics/drawable/LayerDrawable", ctor: JLayerDrawable, sup: "android/graphics/drawable/Drawable",
   methods: {
-    "draw(Landroid/graphics/Canvas;)V": function (this: JLayerDrawable, cv: JCanvas) { return this.drawLayers(cv); },
+    "getOutline(Landroid/graphics/Outline;)V": async function (this: JLayerDrawable, outline: JOutline) {
+      const thread = curThread;
+      for (const { d } of this.layers) {
+        await vcallOn(thread, d, "getOutline", "(Landroid/graphics/Outline;)V", outline);
+        if (outline.kind) return;
+      }
+    },
     // AOSP: each layer's inset plus that layer's own padding, the widest of each edge. This is
     // what an InsetDrawable used as a window background reports, and what tells the window how
     // far inside itself the content has to sit.
@@ -663,17 +709,80 @@ const RADIUS_AUTO = -1;
 // fading in, and on release finishes growing while fading out.
 const RIPPLE_ENTER_MS = 225, RIPPLE_ENTER_ALPHA_MS = 75, RIPPLE_EXIT_MS = 150;
 const decel = (t: number) => 1 - (1 - t) * (1 - t);
-/**
- * AdaptiveIconDrawable: two 108dp layers behind a 72dp viewport, clipped to the device mask.
- * Every `@mipmap/ic_launcher` on a modern app is one, and without it an app's own icon — the
- * one it puts in its about screen and its first-run dialog — is a blank square.
- */
+class JTransitionDrawable extends JLayerDrawable {
+  transition = 0;
+  crossFade = false;
+  reverse = false;
+  startTime = 0;
+  duration = 0;
+  originalDuration = 0;
+  from = 0;
+  to = 0;
+  mix = 0;
+  paint(cv: JCanvas): unknown {
+    const thread = curThread;
+    let done = true;
+    if (this.transition === 1) {
+      this.startTime = uptimeMillis(); this.transition = 2; done = false;
+    } else if (this.transition === 2) {
+      const fraction = Math.min((uptimeMillis() - this.startTime) / this.duration, 1);
+      done = fraction >= 1;
+      this.mix = (this.from + (this.to - this.from) * fraction) | 0;
+    }
+    return after(this.layout(), () => {
+      const first = this.layers[0].d, second = this.layers[1].d, alpha = this.mix;
+      if (done) {
+        const result = !this.crossFade || alpha === 0 ? drawChild(first, cv, thread) : undefined;
+        const next = () => alpha === 255 ? drawChild(second, cv, thread) : undefined;
+        return result instanceof Promise ? result.then(next) : next();
+      }
+      return (async () => {
+        if (this.crossFade) await vcallOn(thread, first, "setAlpha", "(I)V", 255 - alpha);
+        await drawChild(first, cv, thread);
+        if (this.crossFade) await vcallOn(thread, first, "setAlpha", "(I)V", 255);
+        if (alpha > 0) {
+          await vcallOn(thread, second, "setAlpha", "(I)V", alpha);
+          await drawChild(second, cv, thread);
+          await vcallOn(thread, second, "setAlpha", "(I)V", 255);
+        }
+        invalidateSelf.call(this);
+      })();
+    });
+  }
+}
+rt.register({ name: "android/graphics/drawable/TransitionDrawable", ctor: JTransitionDrawable, sup: "android/graphics/drawable/LayerDrawable", methods: {
+  "<init>([Landroid/graphics/drawable/Drawable;)V": function (this: JTransitionDrawable, ds: JDrawable[]) {
+    for (const d of ds) this.pushLayer({ d, insets: [0, 0, 0, 0] });
+  },
+  "startTransition(I)V": function (this: JTransitionDrawable, duration: number) {
+    this.from = this.mix = 0; this.to = 255; this.reverse = false;
+    this.duration = this.originalDuration = duration; this.transition = 1;
+    invalidateSelf.call(this);
+  },
+  "resetTransition()V": function (this: JTransitionDrawable) { this.mix = this.transition = 0; invalidateSelf.call(this); },
+  "reverseTransition(I)V": function (this: JTransitionDrawable, duration: number) {
+    const elapsed = uptimeMillis() - this.startTime;
+    if (elapsed > this.duration) {
+      this.reverse = this.to !== 0; this.from = this.mix = this.reverse ? 255 : 0; this.to = 255 - this.from;
+      this.duration = this.originalDuration = duration;
+      this.transition = 1; invalidateSelf.call(this);
+    } else {
+      this.reverse = !this.reverse; this.from = this.mix; this.to = this.reverse ? 0 : 255;
+      this.duration = Math.trunc(this.reverse ? elapsed : this.originalDuration - elapsed); this.transition = 1;
+    }
+  },
+  "setCrossFadeEnabled(Z)V": function (this: JTransitionDrawable, enabled: number) { this.crossFade = !!enabled; },
+  "isCrossFadeEnabled()Z": function (this: JTransitionDrawable) { return +this.crossFade; },
+} });
+
+/** Two 108dp layers behind a 72dp viewport, clipped to the device mask. */
 class JAdaptiveIconDrawable extends JLayerDrawable {
   /** AOSP getFullBounds: each layer is the viewport grown by 25% on every side */
-  layout() {
+  async layout() {
+    const thread = curThread;
     const { left, top, right, bottom } = this.bounds;
     const dx = (right - left) / 4, dy = (bottom - top) / 4;
-    for (const l of this.layers) setBounds.call(l.d, left - dx, top - dy, right + dx, bottom + dy);
+    for (const l of this.layers) await vcallOn(thread, l.d, "setBounds", "(IIII)V", left - dx, top - dy, right + dx, bottom + dy);
   }
   clip(cv: JCanvas) {
     const { left, top, right, bottom } = this.bounds;
@@ -684,12 +793,15 @@ class JAdaptiveIconDrawable extends JLayerDrawable {
   paint(cv: JCanvas) {
     cv.ctx.save();
     this.clip(cv);
-    super.paint(cv);
+    try {
+      const result = super.paint(cv);
+      if (result instanceof Promise) return result.finally(() => cv.ctx.restore());
+    } catch (error) { cv.ctx.restore(); throw error; }
     cv.ctx.restore();
   }
-  // the viewport, not the 108dp layers the children actually are
-  intrinsicW(): number { const w = super.intrinsicW(); return w < 0 ? w : Math.round(w * 2 / 3); }
-  intrinsicH(): number { const h = super.intrinsicH(); return h < 0 ? h : Math.round(h * 2 / 3); }
+  size(vertical: boolean): number | Promise<number> {
+    return after(super.size(vertical), n => n < 0 ? n : Math.round(n * 2 / 3));
+  }
 }
 rt.register({
   name: "android/graphics/drawable/AdaptiveIconDrawable", ctor: JAdaptiveIconDrawable,
@@ -701,12 +813,6 @@ rt.register({
       },
     "getBackground()Landroid/graphics/drawable/Drawable;": function (this: JAdaptiveIconDrawable) { return this.layers[0]?.d ?? null; },
     "getForeground()Landroid/graphics/drawable/Drawable;": function (this: JAdaptiveIconDrawable) { return this.layers[1]?.d ?? null; },
-    "draw(Landroid/graphics/Canvas;)V": function (this: JAdaptiveIconDrawable, cv: JCanvas) {
-      cv.ctx.save();
-      this.clip(cv);
-      const r = this.drawLayers(cv);
-      return r instanceof Promise ? r.finally(() => cv.ctx.restore()) : cv.ctx.restore();
-    },
   },
 });
 
@@ -742,8 +848,7 @@ class JRippleDrawable extends JLayerDrawable {
     this.rippleColor = (c >>> 24) > 0x80 ? ((c & 0xffffff) | 0x80000000) | 0 : c;
   }
   paint(cv: JCanvas) {
-    super.paint(cv);
-    this.ripple(cv);
+    return after(super.paint(cv), () => this.ripple(cv));
   }
   ripple(cv: JCanvas) {
     const now = performance.now();
@@ -813,10 +918,6 @@ function cloneDrawable(d: JDrawable): JDrawable {
 rt.register({
   name: "android/graphics/drawable/RippleDrawable", ctor: JRippleDrawable, sup: "android/graphics/drawable/LayerDrawable",
   methods: {
-    "draw(Landroid/graphics/Canvas;)V": function (this: JRippleDrawable, cv: JCanvas) {
-      const r = this.drawLayers(cv);
-      return r instanceof Promise ? r.then(() => this.ripple(cv)) : this.ripple(cv);
-    },
     "<init>(Landroid/content/res/ColorStateList;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V":
       function (this: JRippleDrawable, csl: JColorStateList | null, content: JDrawable | null) {
         if (content) this.pushLayer({ d: content, insets: [0, 0, 0, 0] });
@@ -843,23 +944,10 @@ rt.register({
 rt.register({ name: "android/graphics/drawable/RippleDrawable$RippleState", ctor: JDrawableState, sup: "android/graphics/drawable/Drawable$ConstantState", methods: {
   "newDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableState) { return this.create(); },
 } });
-rt.register({
-  name: "android/graphics/drawable/InsetDrawable", ctor: class extends JLayerDrawable {}, sup: "android/graphics/drawable/LayerDrawable",
-  methods: {
-    "<init>(Landroid/graphics/drawable/Drawable;I)V": function (this: JLayerDrawable, d: JDrawable, i: number) {
-      this.pushLayer({ d, insets: [i, i, i, i] });
-    },
-    "<init>(Landroid/graphics/drawable/Drawable;IIII)V": function (this: JLayerDrawable, d: JDrawable, l: number, t: number, r: number, b: number) {
-      this.pushLayer({ d, insets: [l, t, r, b] });
-    },
-    "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JLayerDrawable) { return this.layers[0]?.d ?? null; },
-  },
-});
-
 class JVectorDrawable extends JDrawable {
   vw = 24; vh = 24; // dp size
   vpW = 24; vpH = 24;
-  paths: { p2d: Path2D; fill: number | null; stroke: number | null; strokeW: number; fillAlpha: number; evenOdd: boolean }[] = [];
+  paths: { p2d: Path2D; fill: number | null; stroke: number | null; strokeW: number; fillAlpha: number; evenOdd: boolean; transform: JMatrix["m"] | null }[] = [];
   vtint: number | null = null;
   paint(cv: JCanvas) {
     const { left, top, right, bottom } = this.bounds;
@@ -870,11 +958,12 @@ class JVectorDrawable extends JDrawable {
     ctx.globalAlpha *= this.alpha / 255;
     ctx.translate(left, top);
     ctx.scale(w / this.vpW, h / this.vpH);
-    const tint = this.tint ?? this.vtint;
+    const tint = this.tint ?? this.vtint, alpha = ctx.globalAlpha;
     for (const p of this.paths) {
+      if (p.transform) { ctx.save(); ctx.transform(...p.transform); }
       if (p.fill !== null && p.fill >>> 24) {
         ctx.fillStyle = cssColor(tint ?? p.fill);
-        ctx.globalAlpha = (this.alpha / 255) * p.fillAlpha;
+        ctx.globalAlpha = alpha * p.fillAlpha;
         ctx.fill(p.p2d, p.evenOdd ? "evenodd" : "nonzero");
       }
       if (p.stroke !== null && p.strokeW > 0) {
@@ -882,11 +971,11 @@ class JVectorDrawable extends JDrawable {
         ctx.lineWidth = p.strokeW;
         ctx.stroke(p.p2d);
       }
+      if (p.transform) ctx.restore();
     }
     ctx.restore();
   }
-  intrinsicW(): number { return this.vw * device.density; }
-  intrinsicH(): number { return this.vh * device.density; }
+  size(vertical: boolean): number { return (vertical ? this.vh : this.vw) * device.density; }
 }
 class JAnimatedVectorDrawable extends JVectorDrawable {}
 // ── DrawableWrapper: one child, everything forwarded (AOSP's base for Clip/Scale/Inset and any
@@ -894,80 +983,31 @@ class JAnimatedVectorDrawable extends JVectorDrawable {}
 // own virtual hooks; draw() dispatches virtually so a compiled child subclass paints itself.
 class JDrawableWrapper extends JDrawable {
   dr: JDrawable | null = null;
-  paint(cv: JCanvas) { if (this.dr) drawChild(this.dr, cv); }
-  intrinsicW(): number { return this.dr ? this.dr.intrinsicW() : -1; }
-  intrinsicH(): number { return this.dr ? this.dr.intrinsicH() : -1; }
+  paint(cv: JCanvas): unknown { if (this.dr) return drawChild(this.dr, cv); }
+  size(vertical: boolean) { return this.dr ? drawableSize(this.dr, vertical) : -1; }
   onStateChange(): boolean { return this.dr ? this.dr.onStateChange() : false; }
 }
-class JScaleDrawable extends JDrawableWrapper {
-  scaleW = -1;
-  scaleH = -1;
-  scaleGravity = 3 | 48;
-  useIntrinsicMin = false;
-}
-function wrapSet(this: JDrawableWrapper, d: JDrawable | null) {
+async function wrapSet(this: JDrawableWrapper, d: JDrawable | null) {
+  const thread = curThread;
   if (this.dr) this.dr.callback = null;
   this.dr = d;
   if (d) {
     d.callback = this;
-    d.stateSet = this.stateSet; d.level = this.level;
-    setBounds.call(d, this.bounds.left, this.bounds.top, this.bounds.right, this.bounds.bottom);
+    await vcallOn(thread, d, "setVisible", "(ZZ)Z", +this.visible, 1);
+    await vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.stateSet));
+    await vcallOn(thread, d, "setLevel", "(I)Z", this.level);
+    await vcallOn(thread, d, "setBounds", "(IIII)V", this.bounds.left, this.bounds.top, this.bounds.right, this.bounds.bottom);
+    await vcallOn(thread, d, "setLayoutDirection", "(I)Z", this.layoutDir);
   }
+  invalidateSelf.call(this);
 }
-function scaleBounds(d: JScaleDrawable, bounds: JRect): void {
-  const child = d.dr;
-  if (!child) return;
-  let width = bounds.right - bounds.left;
-  let height = bounds.bottom - bounds.top;
-  if (d.scaleW > 0) {
-    const minimum = d.useIntrinsicMin ? Math.max(0, child.intrinsicW()) : 0;
-    width -= Math.trunc((width - minimum) * (10000 - d.level) * d.scaleW / 10000);
-  }
-  if (d.scaleH > 0) {
-    const minimum = d.useIntrinsicMin ? Math.max(0, child.intrinsicH()) : 0;
-    height -= Math.trunc((height - minimum) * (10000 - d.level) * d.scaleH / 10000);
-  }
-  const horizontal = d.scaleGravity & 7;
-  const vertical = d.scaleGravity & 0x70;
-  const left = horizontal === 1 ? bounds.left + ((bounds.right - bounds.left - width) >> 1)
-    : horizontal === 5 ? bounds.right - width : bounds.left;
-  const top = vertical === 0x10 ? bounds.top + ((bounds.bottom - bounds.top - height) >> 1)
-    : vertical === 0x50 ? bounds.bottom - height : bounds.top;
-  void setBounds.call(child, left, top, left + width, top + height);
-}
-rt.register({
-  name: "android/graphics/drawable/ScaleDrawable",
-  ctor: JScaleDrawable,
-  sup: "android/graphics/drawable/DrawableWrapper",
-  methods: {
-    "<init>(Landroid/graphics/drawable/Drawable;IFF)V": function (this: JScaleDrawable, drawable: JDrawable | null, gravity: number, width: number, height: number) {
-      wrapSet.call(this, drawable);
-      this.scaleGravity = gravity;
-      this.scaleW = width;
-      this.scaleH = height;
-    },
-    "draw(Landroid/graphics/Canvas;)V": function (this: JScaleDrawable, canvas: JCanvas) {
-      if (this.dr && this.dr.level !== 0) return jmethod(this.dr, M_drawD)!.call(this.dr, canvas);
-    },
-    "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JScaleDrawable, bounds: JRect) {
-      scaleBounds(this, bounds);
-    },
-    "onLevelChange(I)Z": async function (this: JScaleDrawable, level: number) {
-      if (this.dr) await vcall(this.dr, "setLevel", "(I)Z", level);
-      scaleBounds(this, this.bounds);
-      invalidateSelf.call(this);
-      return 1;
-    },
-  },
-});
 rt.register({
   name: "android/graphics/drawable/DrawableWrapper", ctor: JDrawableWrapper, sup: "android/graphics/drawable/Drawable",
   ifaces: ["android/graphics/drawable/Drawable$Callback"],
   methods: {
     "<init>(Landroid/graphics/drawable/Drawable;)V": wrapSet,
-    "setDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JDrawableWrapper, d: JDrawable | null) { wrapSet.call(this, d); invalidateSelf.call(this); },
+    "setDrawable(Landroid/graphics/drawable/Drawable;)V": wrapSet,
     "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableWrapper) { return this.dr; },
-    "draw(Landroid/graphics/Canvas;)V": function (this: JDrawableWrapper, cv: JCanvas) { if (this.dr) return jmethod(this.dr, M_drawD)!.call(this.dr, cv); },
     "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JDrawableWrapper, r: JRect) { if (this.dr) return setBounds.call(this.dr, r.left, r.top, r.right, r.bottom); },
     "onStateChange([I)Z": function (this: JDrawableWrapper, st: Int32Array) { return this.dr ? vcall(this.dr, "setState", "([I)Z", st) : 0; },
     "onLevelChange(I)Z": function (this: JDrawableWrapper, l: number) { return this.dr ? vcall(this.dr, "setLevel", "(I)Z", l) : 0; },
@@ -993,6 +1033,114 @@ rt.register({
     ...stubs(null, "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;"),
   },
 });
+class JInsetDrawable extends JDrawableWrapper {
+  insets: [number, number, number, number] = [0, 0, 0, 0];
+  fractions: [number, number, number, number] = [0, 0, 0, 0];
+  inset(edge: number): number {
+    const b = this.bounds, length = edge % 2 ? b.bottom - b.top : b.right - b.left;
+    return this.insets[edge] + Math.trunc(this.fractions[edge] * length);
+  }
+  size(vertical: boolean) {
+    const edge = vertical ? 1 : 0, fraction = this.fractions[edge] + this.fractions[edge + 2];
+    return after(super.size(vertical), n => n < 0 || fraction >= 1 ? -1 : Math.trunc(n / (1 - fraction)) + this.insets[edge] + this.insets[edge + 2]);
+  }
+}
+const insetInit = (fraction: boolean) => function (this: JInsetDrawable, d: JDrawable | null, l: number, t = l, r = l, b = l) {
+  if (fraction) this.fractions = [l, t, r, b]; else this.insets = [l, t, r, b];
+  return wrapSet.call(this, d);
+};
+rt.register({ name: "android/graphics/drawable/InsetDrawable", ctor: JInsetDrawable, sup: "android/graphics/drawable/DrawableWrapper", methods: {
+  "<init>(Landroid/graphics/drawable/Drawable;I)V": insetInit(false),
+  "<init>(Landroid/graphics/drawable/Drawable;IIII)V": insetInit(false),
+  "<init>(Landroid/graphics/drawable/Drawable;F)V": insetInit(true),
+  "<init>(Landroid/graphics/drawable/Drawable;FFFF)V": insetInit(true),
+  "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JInsetDrawable, b: JRect) {
+    if (this.dr) return vcallOn(curThread, this.dr, "setBounds", "(IIII)V", b.left + this.inset(0), b.top + this.inset(1), b.right - this.inset(2), b.bottom - this.inset(3));
+  },
+  "getOpacity()I": function (this: JInsetDrawable) {
+    return after(this.dr ? vcallOn(curThread, this.dr, "getOpacity", "()I") : -2, opacity =>
+      opacity === -1 && [0, 1, 2, 3].some(edge => this.inset(edge) > 0) ? -3 : opacity);
+  },
+  "getPadding(Landroid/graphics/Rect;)Z": function (this: JInsetDrawable, r: JRect) {
+    r.left = r.top = r.right = r.bottom = 0;
+    return after(this.dr ? vcallOn(curThread, this.dr, "getPadding", "(Landroid/graphics/Rect;)Z", r) : 0, pad => {
+      const l = this.inset(0), t = this.inset(1), right = this.inset(2), b = this.inset(3);
+      r.left += l; r.top += t; r.right += right; r.bottom += b;
+      return +(!!pad || !!(l | t | right | b));
+    });
+  },
+} });
+
+class JRotateDrawable extends JDrawableWrapper {
+  fromDegrees = 0; toDegrees = 360; currentDegrees = 0;
+  pivotX = 0.5; pivotY = 0.5; pivotXRelative = true; pivotYRelative = true;
+  paint(canvas: JCanvas): unknown {
+    if (!this.dr) return;
+    const b = this.dr.bounds, ctx = canvas.ctx;
+    const x = b.left + this.pivotX * (this.pivotXRelative ? b.right - b.left : 1);
+    const y = b.top + this.pivotY * (this.pivotYRelative ? b.bottom - b.top : 1);
+    ctx.save(); ctx.translate(x, y);
+    ctx.rotate(this.currentDegrees * Math.PI / 180);
+    ctx.translate(-x, -y);
+    try {
+      const result = drawChild(this.dr, canvas);
+      if (result instanceof Promise) return result.finally(() => ctx.restore());
+    } catch (e) { ctx.restore(); throw e; }
+    ctx.restore();
+  }
+}
+rt.register({ name: "android/graphics/drawable/RotateDrawable", ctor: JRotateDrawable, sup: "android/graphics/drawable/DrawableWrapper", methods: {
+  "onLevelChange(I)Z": function (this: JRotateDrawable, level: number) {
+    return after(this.dr ? vcall(this.dr, "setLevel", "(I)Z", level) : undefined, () => {
+      this.currentDegrees = this.fromDegrees + (this.toDegrees - this.fromDegrees) * level / 10000;
+      invalidateSelf.call(this); return 1;
+    });
+  },
+  ...Object.fromEntries((["fromDegrees", "toDegrees", "pivotX", "pivotY", "pivotXRelative", "pivotYRelative"] as const).flatMap(key => {
+    const boolean = key.endsWith("Relative"), cap = key[0].toUpperCase() + key.slice(1), type = boolean ? "Z" : "F";
+    return [
+      [`${boolean ? "is" : "get"}${cap}()${type}`, function (this: JRotateDrawable) { return boolean ? +this[key] : this[key]; }],
+      [`set${cap}(${type})V`, function (this: JRotateDrawable, value: number) {
+        if (key === "pivotXRelative" || key === "pivotYRelative") this[key] = !!value; else this[key] = value;
+        invalidateSelf.call(this);
+      }],
+    ];
+  })),
+} });
+class JScaleDrawable extends JDrawableWrapper {
+  scaleWidth = -1; scaleHeight = -1; gravity = 3; useIntrinsicMinimum = false;
+  scaled = new JRect();
+  paint(canvas: JCanvas) { if (this.dr && this.dr.level !== 0) return drawChild(this.dr, canvas); }
+  async layout(thread = curThread) {
+    const child = this.dr;
+    if (!child) return;
+    const b = this.bounds;
+    let w = b.right - b.left, h = b.bottom - b.top;
+    if (this.scaleWidth > 0) {
+      const min = this.useIntrinsicMinimum ? Number(await drawableSize(child, false, thread)) : 0;
+      w -= Math.trunc((w - min) * (10000 - this.level) * this.scaleWidth / 10000);
+    }
+    if (this.scaleHeight > 0) {
+      const min = this.useIntrinsicMinimum ? Number(await drawableSize(child, true, thread)) : 0;
+      h -= Math.trunc((h - min) * (10000 - this.level) * this.scaleHeight / 10000);
+    }
+    gravityApply(absGravity(this.gravity, this.layoutDir), w, h, b, 0, 0, this.scaled);
+    if (w > 0 && h > 0) await vcallOn(thread, child, "setBounds", "(IIII)V", this.scaled.left, this.scaled.top, this.scaled.right, this.scaled.bottom);
+  }
+}
+rt.register({ name: "android/graphics/drawable/ScaleDrawable", ctor: JScaleDrawable, sup: "android/graphics/drawable/DrawableWrapper", methods: {
+  "<init>(Landroid/graphics/drawable/Drawable;IFF)V": async function (this: JScaleDrawable, d: JDrawable | null, gravity: number, w: number, h: number) {
+    const thread = curThread;
+    this.gravity = gravity; this.scaleWidth = w; this.scaleHeight = h; await wrapSet.call(this, d);
+    return this.layout(thread);
+  },
+  "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JScaleDrawable) { return this.layout(); },
+  "onLevelChange(I)Z": async function (this: JScaleDrawable, level: number) {
+    const thread = curThread;
+    if (this.dr) await vcallOn(thread, this.dr, "setLevel", "(I)Z", level);
+    await this.layout(thread); invalidateSelf.call(this); return 1;
+  },
+} });
 // ── android.graphics.drawable.shapes + ShapeDrawable: a Shape is resized to the drawable's
 // bounds and painted with the drawable's own Paint (translated to the bounds origin, as AOSP).
 class JShape extends JObj {
@@ -1076,8 +1224,7 @@ class JShapeDrawable extends JDrawable {
     callSelf(shapeMethods, "draw(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V", sh, cv, this.effPaint());
     ctx.restore();
   }
-  intrinsicW(): number { return this.iw; }
-  intrinsicH(): number { return this.ih; }
+  size(vertical: boolean): number { return vertical ? this.ih : this.iw; }
 }
 class JPaintDrawable extends JShapeDrawable {
   setCornerRadii(radii: Float32Array | null) {
@@ -1251,7 +1398,8 @@ const AT = attrTable(
   "endColor", "angle", "type", "gradientRadius", "src", "alpha", "tint", "viewportWidth",
   "viewportHeight", "pathData", "fillColor", "strokeColor", "strokeWidth", "fillAlpha", "fillType",
   "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
-  "gravity", "oneshot", "duration", "scaleWidth", "scaleHeight", "scaleGravity", "level", "useIntrinsicSizeAsMinimum");
+  "scaleGravity", "gravity", "oneshot", "duration", "scaleWidth", "scaleHeight", "useIntrinsicSizeAsMinimum", "level",
+  "pivotX", "pivotY", "translateX", "translateY", "scaleX", "scaleY", "rotation", "fromDegrees", "toDegrees");
 async function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): Promise<JDrawable> {
   const root = parseAXML(bytes);
   return inflateDrawableNode(res, root, theme);
@@ -1264,6 +1412,7 @@ async function itemDrawable(res: Resources, node: XmlNode, theme: JTheme | null)
 }
 export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme | null): Promise<JDrawable> {
   const get = (id: number, from = node) => resolveStyleValue(res, theme, nodeAttr(res, from, id));
+  const dimen = (v: RV | null, fallback = 0) => rvDimen(res, resolveStyleValue(res, theme, v), fallback);
   const colorOf = (v: RV | null, d = 0) => {
     if (v && v.t === TV.ATTRIBUTE) v = theme?.lookup(v.d) ?? null;
     if (v && v.t === TV.REFERENCE) {
@@ -1277,23 +1426,34 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
     case "shape": {
       const d = new JGradientDrawable();
       d.shape = rvColor(res, get(AT.shape), 0) & 3;
+      const tint = resolveStyleValue(res, theme, get(AT.tint));
+      if (tint?.t === TV.REFERENCE) {
+        d.tintCsl = await loadColorStateList(res, tint.d, theme);
+        d.tint = cslColor(d.tintCsl, d.stateSet);
+      } else if (tint) d.tint = rvColor(res, tint);
       for (const c of node.children) {
         const cg = (id: number) => get(id, c);
-        if (c.name === "solid") d.solid = colorOf(cg(AT.color), 0);
+        if (c.name === "solid") {
+          const value = resolveStyleValue(res, theme, cg(AT.color));
+          if (value?.t === TV.REFERENCE) {
+            d.solidCsl = await loadColorStateList(res, value.d, theme);
+            d.solid = cslColor(d.solidCsl, d.stateSet);
+          } else d.solid = rvColor(res, value, 0);
+        }
         else if (c.name === "corners") {
-          const r = rvDimen(res, cg(AT.radius), -1);
+          const r = dimen(cg(AT.radius), -1);
           if (r >= 0) d.radii = [r, r, r, r];
           d.radii = [
-            rvDimen(res, cg(AT.topLeftRadius), d.radii[0]),
-            rvDimen(res, cg(AT.topRightRadius), d.radii[1]),
-            rvDimen(res, cg(AT.bottomRightRadius), d.radii[2]),
-            rvDimen(res, cg(AT.bottomLeftRadius), d.radii[3]),
+            dimen(cg(AT.topLeftRadius), d.radii[0]),
+            dimen(cg(AT.topRightRadius), d.radii[1]),
+            dimen(cg(AT.bottomRightRadius), d.radii[2]),
+            dimen(cg(AT.bottomLeftRadius), d.radii[3]),
           ];
         } else if (c.name === "stroke") {
-          d.strokeW = rvDimen(res, cg(AT.width), 1);
+          d.strokeW = dimen(cg(AT.width), 1);
           d.strokeColor = colorOf(cg(AT.color), 0);
-          d.dashW = rvDimen(res, cg(AT.dashWidth), 0);
-          d.dashGap = rvDimen(res, cg(AT.dashGap), 0);
+          d.dashW = dimen(cg(AT.dashWidth), 0);
+          d.dashGap = dimen(cg(AT.dashGap), 0);
         } else if (c.name === "gradient") {
           const cols = [colorOf(cg(AT.startColor), 0)];
           const cc = cg(AT.centerColor);
@@ -1302,19 +1462,46 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
           d.gradColors = cols;
           d.gradAngle = xmlInt(res, cg(AT.angle), 0);
           d.gradType = xmlInt(res, cg(AT.type), 0);
-          d.gradRadius = rvDimen(res, cg(AT.gradientRadius), 0);
+          d.gradRadius = dimen(cg(AT.gradientRadius), 0);
         } else if (c.name === "size") {
-          d.sizeW = rvDimen(res, cg(AT.width), -1);
-          d.sizeH = rvDimen(res, cg(AT.height), -1);
+          d.sizeW = dimen(cg(AT.width), -1);
+          d.sizeH = dimen(cg(AT.height), -1);
         } else if (c.name === "padding") {
-          d.padding.left = rvDimen(res, cg(AT.left), 0);
-          d.padding.top = rvDimen(res, cg(AT.top), 0);
-          d.padding.right = rvDimen(res, cg(AT.right), 0);
-          d.padding.bottom = rvDimen(res, cg(AT.bottom), 0);
+          d.padding.left = dimen(cg(AT.left), 0);
+          d.padding.top = dimen(cg(AT.top), 0);
+          d.padding.right = dimen(cg(AT.right), 0);
+          d.padding.bottom = dimen(cg(AT.bottom), 0);
         }
       }
       return d;
     }
+    case "rotate": {
+      const d = new JRotateDrawable();
+      d.fromDegrees = rvFloat(res, resolveStyleValue(res, theme, get(AT.fromDegrees)), 0);
+      d.toDegrees = rvFloat(res, resolveStyleValue(res, theme, get(AT.toDegrees)), 360);
+      d.currentDegrees = d.fromDegrees;
+      for (const axis of ["X", "Y"] as const) {
+        const value = resolveStyleValue(res, theme, get(axis === "X" ? AT.pivotX : AT.pivotY));
+        if (!value) continue;
+        const relative = value.t === TV.FRACTION;
+        d[`pivot${axis}Relative`] = relative;
+        d[`pivot${axis}`] = relative ? complexToFraction(value.d, 1, 1) : rvFloat(res, value);
+      }
+      await wrapSet.call(d, await itemDrawable(res, node, theme));
+      return d;
+    }
+    case "scale": {
+      const d = new JScaleDrawable();
+      const fraction = (v: RV | null) => v?.t === TV.FRACTION ? complexToFraction(v.d, 1, 1)
+        : v?.s?.endsWith("%") ? Number.parseFloat(v.s) / 100 : -1;
+      d.scaleWidth = fraction(get(AT.scaleWidth)); d.scaleHeight = fraction(get(AT.scaleHeight));
+      d.gravity = xmlInt(res, get(AT.scaleGravity), 3);
+      d.useIntrinsicMinimum = !!xmlInt(res, get(AT.useIntrinsicSizeAsMinimum), 0);
+      d.level = xmlInt(res, get(AT.level), 0);
+      await wrapSet.call(d, await itemDrawable(res, node, theme));
+      return d;
+    }
+    case "animated-selector":
     case "selector": {
       const d = new JStateListDrawable();
       for (const c of node.children) {
@@ -1386,39 +1573,14 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
       }
       return d;
     }
-    case "scale": {
-      const drawable = new JScaleDrawable();
-      const child = await itemDrawable(res, node, theme);
-      const percent = (value: RV | null) => {
-        const text = value ? rvString(res, value) : "";
-        const number = Number.parseFloat(text ?? "");
-        return text?.endsWith("%") && Number.isFinite(number) ? number / 100 : -1;
-      };
-      drawable.scaleW = percent(get(AT.scaleWidth));
-      drawable.scaleH = percent(get(AT.scaleHeight));
-      drawable.scaleGravity = rvInt(res, get(AT.scaleGravity), 3 | 48);
-      drawable.useIntrinsicMin = !!rvInt(res, get(AT.useIntrinsicSizeAsMinimum), 0);
-      drawable.level = rvInt(res, get(AT.level), 0);
-      if (child) {
-        wrapSet.call(drawable, child);
-        child.level = drawable.level;
-      }
-      return drawable;
-    }
     case "inset": {
-      const d = new JLayerDrawable();
-      const child = await itemDrawable(res, node, theme);
-      const all = rvDimen(res, get(AT.inset), 0);
-      if (child) {
-        d.pushLayer({
-          d: child,
-          insets: [
-            rvDimen(res, get(AT.insetLeft), all), rvDimen(res, get(AT.insetTop), all),
-            rvDimen(res, get(AT.insetRight), all), rvDimen(res, get(AT.insetBottom), all),
-          ],
-        });
-        d.ids.push(null);
+      const d = new JInsetDrawable(), all = get(AT.inset);
+      for (const [i, attr] of [AT.insetLeft, AT.insetTop, AT.insetRight, AT.insetBottom].entries()) {
+        const value = get(attr) ?? all;
+        if (value?.t === TV.FRACTION) d.fractions[i] = complexToFraction(value.d, 1, 1);
+        else d.insets[i] = dimen(value, 0);
       }
+      await wrapSet.call(d, await itemDrawable(res, node, theme));
       return d;
     }
     // Both wrap a bitmap named by android:src; the .9.png's own npTc chunk is what makes it
@@ -1430,20 +1592,20 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
     }
     case "vector": {
       const d = new JVectorDrawable();
-      d.vw = rvDimen(res, get(AT.width), 48) / res.dm.density;
-      d.vh = rvDimen(res, get(AT.height), 48) / res.dm.density;
+      d.vw = dimen(get(AT.width), 48) / res.dm.density;
+      d.vh = dimen(get(AT.height), 48) / res.dm.density;
       d.vpW = rvFloat(res, get(AT.viewportWidth), 24);
       d.vpH = rvFloat(res, get(AT.viewportHeight), 24);
       const tintV = get(AT.tint);
       if (tintV) d.vtint = colorOf(tintV, 0) || null;
-      const walk = (n: XmlNode) => {
+      const walk = (n: XmlNode, transform: JMatrix["m"] | null) => {
         for (const c of n.children) {
           if (c.name === "path") {
             const pd = nodeAttr(res, c, AT.pathData);
             if (pd?.s) {
               try {
                 d.paths.push({
-                  p2d: new Path2D(pd.s),
+                  p2d: new Path2D(pd.s), transform,
                   fill: (() => { const f = nodeAttr(res, c, AT.fillColor); return f ? colorOf(f, 0) : null; })(),
                   stroke: (() => { const f = nodeAttr(res, c, AT.strokeColor); return f ? colorOf(f, 0) : null; })(),
                   strokeW: rvFloat(res, nodeAttr(res, c, AT.strokeWidth), 0),
@@ -1452,11 +1614,17 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
                 });
               } catch { /* bad path data */ }
             }
-          } else if (c.name === "group") walk(c);
+          } else if (c.name === "group") {
+            const value = (id: number, fallback = 0) => rvFloat(res, nodeAttr(res, c, id), fallback);
+            const px = value(AT.pivotX), py = value(AT.pivotY), sx = value(AT.scaleX, 1), sy = value(AT.scaleY, 1);
+            const local = matMul(rotM(value(AT.rotation)), [sx, 0, 0, sy, -px * sx, -py * sy]);
+            local[4] += value(AT.translateX) + px; local[5] += value(AT.translateY) + py;
+            walk(c, transform ? matMul(transform, local) : local);
+          }
           else if (c.name === "clip-path") { /* ignore */ }
         }
       };
-      walk(node);
+      walk(node, null);
       return d;
     }
     case "animated-vector": {
@@ -1482,7 +1650,7 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
       }
       return d;
     }
-    case "animated-selector": case "transition": case "level-list": {
+    case "transition": case "level-list": {
       for (const c of node.children) {
         if (c.name === "item") {
           const da = nodeAttr(res, c, AT.drawable);
@@ -1624,10 +1792,10 @@ function parseCslXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): J
         if (v && v.t === TV.REFERENCE) v = res.resolveRefs(v);
         color = rvColor(res, v, -16777216);
       } else if (a.resId === AT.alpha) {
-        alphaMul = a.type === TV.FLOAT ? intBitsToFloat(a.data) : 1;
+        alphaMul = Math.max(0, Math.min(1, rvFloat(res, resolveStyleValue(res, theme, attrRV(res, a)), 1)));
       }
     }
-    if (alphaMul < 1) color = (((color >>> 24) * alphaMul) << 24 | (color & 0xffffff)) | 0;
+    if (alphaMul < 1) color = (Math.round((color >>> 24) * alphaMul) << 24 | (color & 0xffffff)) | 0;
     csl.items.push({ states, negStates: neg, color });
   }
   csl.defColor = csl.items.find((i) => !i.states.length && !i.negStates.length)?.color ?? csl.items[0]?.color ?? -16777216;

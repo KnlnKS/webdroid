@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, noops, rt } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jutil";
 import { vcall } from "../jvm/natives/jlang";
 import { JFnRunnable, mainLooper, reportUncaught, bootTime, uptimeMillis } from "./os";
@@ -12,6 +12,10 @@ export const locationTransport = {
   remove: (_id: number) => {},
 };
 const providers = () => locationTransport.available() ? ["gps", "network", "passive"] : [];
+rt.markers("android/location/GpsStatus$Listener");
+rt.register({ name: "android/location/GnssStatus$Callback", ctor: class extends JObj {}, methods: {
+  ...noops("<init>()V", "onStarted()V", "onStopped()V", "onFirstFix(I)V", "onSatelliteStatusChanged(Landroid/location/GnssStatus;)V"),
+} });
 function location(fix: LocationFix, provider: string): JLocation {
   rt.link("android/location/Location");
   const value = new JLocation(); value.provider = provider === "passive" ? fix.highAccuracy ? "gps" : "network" : provider;
@@ -89,6 +93,10 @@ rt.register({ name: "android/location/LocationProvider", ctor: JLocationProvider
 rt.register({ name: "android/location/LocationManager", ctor: class extends JObj {},
   statics: { GPS_PROVIDER: "gps", NETWORK_PROVIDER: "network", PASSIVE_PROVIDER: "passive", FUSED_PROVIDER: "fused" }, methods: {
     "isLocationEnabled()Z": () => +locationTransport.enabled(),
+    "registerGnssStatusCallback(Landroid/location/GnssStatus$Callback;Landroid/os/Handler;)Z": () => 0,
+    "registerGnssStatusCallback(Landroid/location/GnssStatus$Callback;)Z": () => 0,
+    "registerGnssStatusCallback(Ljava/util/concurrent/Executor;Landroid/location/GnssStatus$Callback;)Z": () => 0,
+    "unregisterGnssStatusCallback(Landroid/location/GnssStatus$Callback;)V": () => {},
     "hasProvider(Ljava/lang/String;)Z": (provider: string) => +providers().includes(provider),
     "isProviderEnabled(Ljava/lang/String;)Z": (provider: string) => +(providers().includes(provider) && locationTransport.enabled()),
     "getProvider(Ljava/lang/String;)Landroid/location/LocationProvider;": (name: string) => {

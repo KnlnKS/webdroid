@@ -4,7 +4,7 @@ import { rt, JObj, stubs } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 
-interface Ev { t: number; name: string; ns: string; prefix: string | null; attrs: Attr[]; text: string; depth: number; empty: boolean }
+interface Ev { bindings?: Attr[]; t: number; name: string; ns: string; prefix: string | null; attrs: Attr[]; text: string; depth: number; empty: boolean }
 const START_DOCUMENT = 0, END_DOCUMENT = 1, START_TAG = 2, END_TAG = 3, TEXT = 4;
 const ev = (t: number, depth: number, p: Partial<Ev> = {}): Ev => ({ t, name: "", ns: "", prefix: null, attrs: [], text: "", depth, empty: false, ...p });
 
@@ -21,11 +21,13 @@ class JXmlPull extends JObj {
     const walk = (n: Node, depth: number) => {
       if (n.nodeType === 1) {
         const e = n as Element;
-        const attrs = [...e.attributes].filter((a) => !this.nsAware || (a.name !== "xmlns" && !a.name.startsWith("xmlns:")));
-        const start = ev(START_TAG, depth + 1, { name: this.nsAware ? e.localName : e.tagName, ns: this.nsAware ? e.namespaceURI ?? "" : "", prefix: e.prefix, attrs, empty: !e.childNodes.length });
+        const all = [...e.attributes];
+        const bindings = this.nsAware ? all.filter(a => a.name === "xmlns" || a.prefix === "xmlns") : [];
+        const attrs = this.nsAware ? all.filter(a => a.name !== "xmlns" && a.prefix !== "xmlns") : all;
+        const start = ev(START_TAG, depth + 1, { name: this.nsAware ? e.localName : e.tagName, ns: this.nsAware ? e.namespaceURI ?? "" : "", prefix: e.prefix, attrs, bindings, empty: !e.childNodes.length });
         out.push(start);
         for (const c of e.childNodes) walk(c, depth + 1);
-        out.push(ev(END_TAG, depth + 1, { name: start.name, ns: start.ns, prefix: start.prefix }));
+        out.push(ev(END_TAG, depth + 1, { name: start.name, ns: start.ns, prefix: start.prefix, bindings }));
       } else if (n.nodeType === 3 || n.nodeType === 4) {
         const last = out[out.length - 1];
         if (last.t === TEXT) last.text += n.nodeValue ?? "";   // adjacent text and CDATA are one TEXT event
@@ -40,7 +42,7 @@ class JXmlPull extends JObj {
 }
 const attrOf = (p: JXmlPull, i: number) => p.cur.attrs[i] ?? (() => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(i)); })();
 const notFound = (p: JXmlPull) => rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "expected START_TAG, got " + p.cur.t);
-async function readerText(r: unknown): Promise<string> {
+export async function readerText(r: unknown): Promise<string> {
   const own = r as { s?: string; pos?: number; src?: unknown };
   // one of our string-backed readers, with nothing left to decode into it
   if (typeof own.s === "string" && !own.src) { const s = own.s.slice(own.pos ?? 0); own.pos = own.s.length; return s; }

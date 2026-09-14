@@ -4,13 +4,13 @@ import { AID, bagStrings } from "./res";
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, curThread, after } from "../jvm/natives/jlang";
 import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom } from "./view";
 import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
 import { JAttrSet, obtainStyled, rvDimen, rvInt, rvString, type Resources } from "./res";
 import { attr } from "./axml";
 import { JCanvas } from "./graphics";
-import { JDrawable, loadDrawableRV } from "./drawable";
+import { JDrawable, loadDrawableRV, drawableSize, drawChild } from "./drawable";
 import { reportUncaught } from "./os";
 import { onMain } from "./mainloop";
 import { toJsArray } from "../jvm/natives/jutil";
@@ -411,7 +411,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
       // an explicit @null reads like an absent attribute; only the latter takes the theme's listDivider
       else if (!(set.node && attr(set.node, "divider"))) await themeDivider(this);
       if (ta.vals[1]) this.divH = Math.round(rvDimen(this.jres, ta.vals[1], this.divH));
-      else if (this.divDraw && this.divDraw.intrinsicH() > 0) this.divH = this.divDraw.intrinsicH();
+      else if (this.divDraw) { const h = await drawableSize(this.divDraw, true); if (h > 0) this.divH = h; }
       if (ta.vals[2]) this.choiceMode = rvInt(this.jres, ta.vals[2], 0);
     }
   },
@@ -451,8 +451,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getFooterViewsCount()I": function (this: JListView) { return this.footers.length; },
   "setDivider(Landroid/graphics/drawable/Drawable;)V": function (this: JListView, d: JDrawable | null) {
     this.divDraw = d;
-    this.divH = d ? Math.max(0, d.intrinsicH()) : 0;
-    requestLayout(this);
+    return after(d ? drawableSize(d, true) : 0, h => { this.divH = Math.max(0, h); requestLayout(this); });
   },
   "setDividerHeight(I)V": function (this: JListView, h: number) { this.divH = h; requestLayout(this); },
   "setChoiceMode(I)V": async function (this: JListView, m: number) {
@@ -566,8 +565,8 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     }
     this.finishLayout();
   },
-  "onDraw(Landroid/graphics/Canvas;)V": function (this: JListView, cv: JCanvas) {
-    const d = this.divDraw;
+  "onDraw(Landroid/graphics/Canvas;)V": async function (this: JListView, cv: JCanvas) {
+    const d = this.divDraw, thread = curThread;
     if (!d || this.divH <= 0) return;
     const vs = this.allViews();
     for (let i = 0; i < vs.length - 1; i++) {
@@ -575,7 +574,8 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
       d.bounds.top = vs[i].bottom;
       d.bounds.right = this.width() - this.padR;
       d.bounds.bottom = vs[i].bottom + this.divH;
-      d.paint(cv);
+      const pending = drawChild(d, cv, thread);
+      if (pending instanceof Promise) await pending;
     }
   },
   "onInterceptTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JListView, ev: JMotionEvent) {

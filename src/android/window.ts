@@ -1,3 +1,4 @@
+import { AID, rvInt, themeOf } from "./res";
 import { rt, JObj, callSelf, stubs, noops } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import type { JFrameLayout } from "./layouts";
@@ -78,6 +79,10 @@ rt.register({
       // setContentView); dialog windows materialize a bare one so insets helpers can operate
       if (!this.decor && this.activity instanceof JActivity) await ensureDecor(this.activity);
       return this.decor ??= await newObj("android/widget/FrameLayout", "(Landroid/content/Context;)V", this.activity);
+    },
+    "isFloating()Z": function (this: JWindow) {
+      const theme = this.decor?.theme ?? themeOf(this.activity);
+      return theme ? +!!rvInt(theme.res, theme.lookup(AID("windowIsFloating")), 0) : 0;
     },
     "peekDecorView()Landroid/view/View;": function (this: JWindow) { return this.decor; },
     "findViewById(I)Landroid/view/View;": function (this: JWindow, id: number) {

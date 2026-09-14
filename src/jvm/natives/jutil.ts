@@ -1,8 +1,8 @@
 import { readStreamFully } from "./jio";
 import { jarray, mangleMethod, charsToString, dotName } from "../abi";
 import {
-  vcall, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException,
-  mkCmp, fmtDouble, bitCount32
+  vcall, vcallOn, curThread, type JThread, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException,
+  mkCmp, fmtDouble, bitCount32, cmpFloat
 } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo } from "../runtime";
 import {
@@ -257,6 +257,11 @@ function ioobe(i: number, n: number): never {
 // ── ArrayList (also backs LinkedList/Vector/Stack behaviour)
 export class JList extends JObj {
   a: unknown[] = [];
+  get serialSize() { return this.a.length; }
+  set serialSize(size: number) {
+    if (size < 0) throw rt.mkThrowable("java/io/InvalidObjectException", "Invalid size: " + size);
+    this.a.length = size;
+  }
   removeAt(i: number) { this.a.splice(i, 1); }
 }
 
@@ -508,6 +513,8 @@ function hashSeq(a: unknown[], h = 1, from = 0): number | Promise<number> {
 const primCmp = (x: any, y: any) => (x < y ? -1 : x > y ? 1 : 0);
 /** sort `a` where it lives: a subList view (and Arrays.sort's caller) must see the writes */
 export function sortInPlace(a: unknown[], cmp: unknown, from = 0, to = a.length): void | Promise<void> {
+  if (from > to) throw rt.mkThrowable("java/lang/IllegalArgumentException", `fromIndex(${from}) > toIndex(${to})`);
+  if (from < 0 || to > a.length) rt.aio(from < 0 ? from : to, a.length);
   if (to - from <= 1) return;
   if (!cmp) {
     const t = typeof a[from];
@@ -651,6 +658,20 @@ const stackMethods: Methods = {
   },
 };
 const listExtras: Record<string, (base: Methods) => Methods> = {
+  "java/util/ArrayList": () => ({
+    "writeObject(Ljava/io/ObjectOutputStream;)V": async function (this: JList, stream: unknown) {
+      const count = this.a.length;
+      await vcall(stream, "defaultWriteObject", "()V");
+      await vcall(stream, "writeInt", "(I)V", count);
+      for (let i = 0; i < count; i++) await vcall(stream, "writeObject", "(Ljava/lang/Object;)V", this.a[i]);
+      if (this.a.length !== count) throw rt.mkThrowable("java/util/ConcurrentModificationException", null);
+    },
+    "readObject(Ljava/io/ObjectInputStream;)V": async function (this: JList, stream: unknown) {
+      await vcall(stream, "defaultReadObject", "()V");
+      await vcall(stream, "readInt", "()I");
+      for (let i = 0; i < this.a.length; i++) this.a[i] = await vcall(stream, "readObject", "()Ljava/lang/Object;");
+    },
+  }),
   "java/util/Vector": vectorMethods,
   "java/util/Stack": (base) => ({ ...vectorMethods(base), ...stackMethods }),
 };
@@ -658,6 +679,7 @@ for (const n of ["java/util/ArrayList", "java/util/LinkedList", "java/util/Vecto
   const base = listMethods();
   rt.register({
     name: n, ctor: class extends JList {}, typeVars: "E",
+    serialization: n === "java/util/ArrayList" ? { uid: 8683452581122892189n, fields: [{ name: "size", desc: "I", prop: "serialSize" }] } : undefined,
     sup: n === "java/util/Stack" ? "java/util/Vector" : n === "java/util/ArrayDeque" ? "java/util/AbstractCollection"
       : n === "java/util/LinkedList" ? "java/util/AbstractSequentialList" : "java/util/AbstractList",
     ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"],
@@ -1056,7 +1078,8 @@ for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/conc
   rt.register({
     name: n, ctor: class extends JMap {}, typeVars: "K,V",
     sup: n === "java/util/LinkedHashMap" ? "java/util/HashMap" : n === "android/util/ArrayMap" ? "java/lang/Object" : "java/util/AbstractMap",
-    ifaces: ["java/util/Map", "java/util/concurrent/ConcurrentMap", "java/util/SortedMap", "java/lang/Cloneable", "java/io/Serializable"],
+    ifaces: ["java/util/Map", ...(n === "java/util/concurrent/ConcurrentHashMap" ? ["java/util/concurrent/ConcurrentMap"] : []),
+      ...(["java/util/WeakHashMap", "android/util/ArrayMap"].includes(n) ? [] : ["java/lang/Cloneable", "java/io/Serializable"])],
     methods,
   });
 }
@@ -1188,6 +1211,23 @@ function addToSet(s: JSet, v: unknown): number | Promise<number> {
   return slowFind(s.slow, v).then((i) => (i >= 0 ? 0 : (s.slow.push({ k: v, v }), 1)));
 }
 rt.register({ name: "webdroid/BaseSet", ctor: JSet, typeVars: "E", ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: setMethods() });
+const setSerialization: Methods = {
+  "writeObject(Ljava/io/ObjectOutputStream;)V": async function (this: JSet, stream: unknown) {
+    const items = setItems(this);
+    await vcall(stream, "defaultWriteObject", "()V");
+    await vcall(stream, "writeInt", "(I)V", Math.min(1 << 30, 2 ** Math.ceil(Math.log2(Math.max(16, items.length / 0.75)))));
+    await vcall(stream, "writeFloat", "(F)V", 0.75);
+    await vcall(stream, "writeInt", "(I)V", items.length);
+    for (const item of items) await vcall(stream, "writeObject", "(Ljava/lang/Object;)V", item);
+  },
+  "readObject(Ljava/io/ObjectInputStream;)V": async function (this: JSet, stream: unknown) {
+    await vcall(stream, "defaultReadObject", "()V");
+    const capacity = await vcall(stream, "readInt", "()I"), factor = await vcall(stream, "readFloat", "()F"), count = await vcall(stream, "readInt", "()I");
+    if (capacity < 0 || !(factor > 0) || count < 0) throw rt.mkThrowable("java/io/InvalidObjectException", "Invalid set capacity, load factor or size");
+    this.m.clear(); this.slow = [];
+    for (let i = 0; i < count; i++) await addToSet(this, await vcall(stream, "readObject", "()Ljava/lang/Object;"));
+  },
+};
 
 class JImmutableSet extends JSet {}
 async function immutableSet(items: unknown[]): Promise<JImmutableSet> {
@@ -1223,9 +1263,11 @@ for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
   "java/util/concurrent/CopyOnWriteArraySet", "java/util/EnumSet", "java/util/concurrent/ConcurrentHashMap$KeySetView"]) {
   rt.register({
     name: n, ctor: n === "java/util/EnumSet" ? class extends JEnumSet {} : class extends JSet {}, typeVars: "E",
+    serialization: n === "java/util/HashSet" ? { uid: -5024744406713321676n, fields: [] }
+      : n === "java/util/LinkedHashSet" ? { uid: -2851667679971038690n, fields: [] } : undefined,
     sup: n === "java/util/LinkedHashSet" ? "java/util/HashSet" : "java/util/AbstractSet",
     ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
-    methods: n === "java/util/EnumSet" ? { ...setMethods(), ...enumSetStatics() } : setMethods(),
+    methods: n === "java/util/EnumSet" ? { ...setMethods(), ...enumSetStatics() } : { ...setMethods(), ...(n === "java/util/HashSet" ? setSerialization : {}) },
   });
 }
 function enumSetStatics() {
@@ -1874,7 +1916,7 @@ const absList: Methods = {
     return -1;
   },
   "iterator()Ljava/util/Iterator;": function (this: JAbstractList) { return new JAbsListIter(this, 0); },
-  "listIterator()Ljava/util/ListIterator;": function (this: JAbstractList) { return new JAbsListIter(this, 0); },
+  "listIterator()Ljava/util/ListIterator;": function (this: JAbstractList) { return vcall(this, "listIterator", "(I)Ljava/util/ListIterator;", 0); },
   "listIterator(I)Ljava/util/ListIterator;": async function (this: JAbstractList, at: number) {
     const n = await size(this);
     if (at < 0 || at > n) ioobe(at, n);
@@ -1999,29 +2041,50 @@ rt.register({
   name: "java/util/AbstractList", ctor: JAbstractList, sup: "java/util/AbstractCollection", typeVars: "E",
   ifaces: ["java/util/List"], fields: { modCount: "modCount" }, methods: absList,
 });
+async function sequentialAt(list: JAbstractList, index: number, operation: (iterator: unknown, thread: JThread) => unknown): Promise<unknown> {
+  const thread = curThread;
+  try { return await operation(await vcall(list, "listIterator", "(I)Ljava/util/ListIterator;", index), thread); }
+  catch (error) {
+    if (rt.iof(error, "java/util/NoSuchElementException")) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "Index: " + index);
+    throw error;
+  }
+}
 rt.register({
   name: "java/util/AbstractSequentialList", ctor: JAbstractSequentialList, sup: "java/util/AbstractList", typeVars: "E",
-  ifaces: ["java/util/List"],
   methods: {
     "<init>()V": function () {},
-    "get(I)Ljava/lang/Object;": async function (this: JAbstractSequentialList, at: number) {
-      return vcall(await vcall(this, "listIterator", "(I)Ljava/util/ListIterator;", at), "next", "()Ljava/lang/Object;");
+    "get(I)Ljava/lang/Object;": function (this: JAbstractList, index: number) {
+      return sequentialAt(this, index, (it, thread) => vcallOn(thread, it, "next", "()Ljava/lang/Object;"));
     },
-    "set(ILjava/lang/Object;)Ljava/lang/Object;": async function (this: JAbstractSequentialList, at: number, value: unknown) {
-      const it = await vcall(this, "listIterator", "(I)Ljava/util/ListIterator;", at);
-      const old = await vcall(it, "next", "()Ljava/lang/Object;");
-      await vcall(it, "set", "(Ljava/lang/Object;)V", value);
-      return old;
+    "set(ILjava/lang/Object;)Ljava/lang/Object;": function (this: JAbstractList, index: number, value: unknown) {
+      return sequentialAt(this, index, async (it, thread) => {
+        const old = await vcallOn(thread, it, "next", "()Ljava/lang/Object;");
+        await vcallOn(thread, it, "set", "(Ljava/lang/Object;)V", value);
+        return old;
+      });
     },
-    "add(ILjava/lang/Object;)V": async function (this: JAbstractSequentialList, at: number, value: unknown) {
-      await vcall(await vcall(this, "listIterator", "(I)Ljava/util/ListIterator;", at), "add", "(Ljava/lang/Object;)V", value);
+    "add(ILjava/lang/Object;)V": function (this: JAbstractList, index: number, value: unknown) {
+      return sequentialAt(this, index, (it, thread) => vcallOn(thread, it, "add", "(Ljava/lang/Object;)V", value));
     },
-    "remove(I)Ljava/lang/Object;": async function (this: JAbstractSequentialList, at: number) {
-      const it = await vcall(this, "listIterator", "(I)Ljava/util/ListIterator;", at);
-      const old = await vcall(it, "next", "()Ljava/lang/Object;");
-      await vcall(it, "remove", "()V");
-      return old;
+    "remove(I)Ljava/lang/Object;": function (this: JAbstractList, index: number) {
+      return sequentialAt(this, index, async (it, thread) => {
+        const old = await vcallOn(thread, it, "next", "()Ljava/lang/Object;");
+        await vcallOn(thread, it, "remove", "()V");
+        return old;
+      });
     },
+    "addAll(ILjava/util/Collection;)Z": function (this: JAbstractList, index: number, collection: unknown) {
+      return sequentialAt(this, index, async (it, thread) => {
+        const source = await vcallOn(thread, collection, "iterator", "()Ljava/util/Iterator;");
+        let changed = 0;
+        while (await vcallOn(thread, source, "hasNext", "()Z")) {
+          await vcallOn(thread, it, "add", "(Ljava/lang/Object;)V", await vcallOn(thread, source, "next", "()Ljava/lang/Object;"));
+          changed = 1;
+        }
+        return changed;
+      });
+    },
+    "iterator()Ljava/util/Iterator;": function (this: JAbstractList) { return vcall(this, "listIterator", "()Ljava/util/ListIterator;"); },
   },
 });
 rt.register({
@@ -2209,6 +2272,48 @@ type Fillable = { fill(v: unknown, s?: number, e?: number): unknown };
 const fill = (a: Fillable, v: unknown) => a.fill(v);
 const fillRange = (a: Fillable, f: number, t: number, v: unknown) => a.fill(v, f, t);
 class JArrays extends JObj {}
+async function deepToString(a: unknown[] | null, ancestors = new Set<unknown[]>): Promise<string> {
+  if (a === null) return "null";
+  if (ancestors.has(a)) return "[...]";
+  ancestors.add(a);
+  const parts: string[] = [];
+  for (const x of a) {
+    if (Array.isArray(x)) parts.push(await deepToString(x, ancestors));
+    else if (x instanceof Uint8Array) parts.push("[" + Array.from(x, v => v ? "true" : "false").join(", ") + "]");
+    else if (x instanceof Uint16Array) parts.push("[" + Array.from(x, v => String.fromCharCode(v)).join(", ") + "]");
+    else if (x instanceof Float32Array || x instanceof Float64Array) parts.push("[" + Array.from(x, fmtDouble).join(", ") + "]");
+    else if (x instanceof Int8Array || x instanceof Int16Array || x instanceof Int32Array || x instanceof BigInt64Array) parts.push("[" + x.join(", ") + "]");
+    else parts.push(x === null ? "null" : await vcall(x, "toString", "()Ljava/lang/String;"));
+  }
+  ancestors.delete(a);
+  return "[" + parts.join(", ") + "]";
+}
+function deepEquals(a: unknown, b: unknown): number | Promise<number> {
+  if (a === b) return 1;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return 0;
+    return deepArrayEquals(a, b, 0);
+  }
+  if (ArrayBuffer.isView(a) && ArrayBuffer.isView(b)) {
+    if (a.constructor !== b.constructor || a.byteLength !== b.byteLength) return 0;
+    if (a instanceof Float32Array && b instanceof Float32Array || a instanceof Float64Array && b instanceof Float64Array) {
+      for (let i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) return 0;
+      return 1;
+    }
+    const x = new Uint8Array(a.buffer, a.byteOffset, a.byteLength), y = new Uint8Array(b.buffer, b.byteOffset, b.byteLength);
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return 0;
+    return 1;
+  }
+  return jeq(a, b);
+}
+function deepArrayEquals(a: unknown[], b: unknown[], start: number): number | Promise<number> {
+  for (let i = start; i < a.length; i++) {
+    const equal = deepEquals(a[i], b[i]);
+    if (equal instanceof Promise) return equal.then(ok => ok ? deepArrayEquals(a, b, i + 1) : 0);
+    if (!equal) return 0;
+  }
+  return 1;
+}
 class JArraysList extends JList {}
 rt.register({
   name: "webdroid/ArraysList", ctor: JArraysList,
@@ -2260,6 +2365,8 @@ rt.register({
     "static toString([J)Ljava/lang/String;": (a: BigInt64Array) => (a ? "[" + Array.from(a).join(", ") + "]" : "null"),
     "static toString([Z)Ljava/lang/String;": (a: Uint8Array) => (a ? "[" + Array.from(a, (v) => (v ? "true" : "false")).join(", ") + "]" : "null"),
     "static deepHashCode([Ljava/lang/Object;)I": (a: unknown[] | null) => (a ? hashSeq(a) : 0),
+    "static deepEquals([Ljava/lang/Object;[Ljava/lang/Object;)Z": deepEquals,
+    "static deepToString([Ljava/lang/Object;)Ljava/lang/String;": (a: unknown[] | null) => deepToString(a),
     "static equals([Ljava/lang/Object;[Ljava/lang/Object;)Z": async (a: unknown[], b: unknown[]) => {
       if (a === b) return 1;
       if (!a || !b || a.length !== b.length) return 0;
@@ -2275,11 +2382,17 @@ rt.register({
     // library that builds a character class out of a key set depends on it
     "static toString([Ljava/lang/Object;)Ljava/lang/String;": async (a: unknown[]) =>
       a ? "[" + (await Promise.all(a.map((x) => (x === null ? "null" : vcall(x, "toString", "()Ljava/lang/String;"))))).join(", ") + "]" : "null",
+    "static binarySearch([BB)I": taBinarySearch,
+    "static binarySearch([SS)I": taBinarySearch,
     "static binarySearch([II)I": taBinarySearch,
     "static binarySearch([CC)I": taBinarySearch,
     "static binarySearch([JJ)I": taBinarySearch,
     "static binarySearch([FF)I": floatBinarySearch,
+    "static binarySearch([DD)I": floatBinarySearch,
+    "static binarySearch([FIIF)I": floatBinarySearchRange,
+    "static binarySearch([DIID)I": floatBinarySearchRange,
     "static binarySearch([Ljava/lang/Object;Ljava/lang/Object;)I": (a: unknown[], k: unknown) => arrBinarySearch(a, k, null),
+    "static binarySearch([Ljava/lang/Object;Ljava/lang/Object;Ljava/util/Comparator;)I": arrBinarySearch,
   },
 });
 // The typed-array Arrays statics: one body per operation serves every element type, because
@@ -2327,26 +2440,20 @@ function taBinarySearch(a: TA, k: number | bigint): number {
   }
   return -(lo + 1);
 }
-const floatBits = new Int32Array(1), floatValue = new Float32Array(floatBits.buffer);
-function floatCompare(a: number, b: number): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  floatValue[0] = a;
-  const ai = Number.isNaN(a) ? 0x7fc00000 : floatBits[0];
-  floatValue[0] = b;
-  const bi = Number.isNaN(b) ? 0x7fc00000 : floatBits[0];
-  return ai === bi ? 0 : ai < bi ? -1 : 1;
-}
-function floatBinarySearch(a: Float32Array, k: number): number {
-  let lo = 0, hi = a.length - 1;
+function floatBinarySearchRange(a: Float32Array | Float64Array, from: number, to: number, key: number): number {
+  rangeCheck(a.length, from, to);
+  if (to > a.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(to));
+  let lo = from, hi = to - 1;
   while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    const c = floatCompare(a[mid], k);
-    if (c < 0) lo = mid + 1;
-    else if (c > 0) hi = mid - 1;
+    const mid = (lo + hi) >>> 1, order = cmpFloat(a[mid], key);
+    if (order < 0) lo = mid + 1;
+    else if (order > 0) hi = mid - 1;
     else return mid;
   }
   return -(lo + 1);
+}
+function floatBinarySearch(a: Float32Array | Float64Array, key: number): number {
+  return floatBinarySearchRange(a, 0, a.length, key);
 }
 function taEq(a: TA | null, b: TA | null): number {
   if (a === b) return 1;
@@ -2362,6 +2469,15 @@ function objCopyOf(a: unknown[], n: number, elem?: string): unknown[] {
   return jarray(c, elem);
 }
 
+async function shuffle(list: unknown, random?: unknown): Promise<void> {
+  const values = [...await toJsArray(list)];
+  for (let i = values.length; i > 1; i--) {
+    const j = random === undefined ? Math.floor(Math.random() * i) : await vcall(random, "nextInt", "(I)I", i);
+    [values[i - 1], values[j]] = [values[j], values[i - 1]];
+  }
+  const iterator = await vcall(list, "listIterator", "()Ljava/util/ListIterator;");
+  for (const value of values) { await vcall(iterator, "next", "()Ljava/lang/Object;"); await vcall(iterator, "set", "(Ljava/lang/Object;)V", value); }
+}
 class JCollections extends JObj {}
 const extreme = (sign: number) => async (c: unknown, cmp: unknown = null) => {
   const a = await toJsArray(c);
@@ -2418,29 +2534,28 @@ rt.register({
       ? mkCmp((a, b) => vcall(b, "compareTo", "(Ljava/lang/Object;)I", a))
       : mkCmp((a, b) => vcall(c, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", b, a)),
     "static reverse(Ljava/util/List;)V": (l: JList) => l.a.reverse(),
-    "static shuffle(Ljava/util/List;)V": (l: JList) => {
-      for (let i = l.a.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [l.a[i], l.a[j]] = [l.a[j], l.a[i]];
+    "static shuffle(Ljava/util/List;)V": shuffle,
+    "static shuffle(Ljava/util/List;Ljava/util/Random;)V": shuffle,
+    "static disjoint(Ljava/util/Collection;Ljava/util/Collection;)Z": async (a: unknown, b: unknown) => {
+      if (a == null || b == null) rt.npe();
+      if (rt.iof(a, "java/util/Set")) [a, b] = [b, a];
+      else if (!rt.iof(b, "java/util/Set")) {
+        const na = await vcall(a, "size", "()I"), nb = await vcall(b, "size", "()I");
+        if (!na || !nb) return 1;
+        if (na > nb) [a, b] = [b, a];
       }
-    },
-    "static shuffle(Ljava/util/List;Ljava/util/Random;)V": async (l: JList, random: unknown) => {
-      for (let i = l.a.length - 1; i > 0; i--) {
-        const j = await vcall(random, "nextInt", "(I)I", i + 1);
-        [l.a[i], l.a[j]] = [l.a[j], l.a[i]];
+      const it = await vcall(a, "iterator", "()Ljava/util/Iterator;");
+      while (await vcall(it, "hasNext", "()Z")) {
+        if (await vcall(b, "contains", "(Ljava/lang/Object;)Z", await vcall(it, "next", "()Ljava/lang/Object;"))) return 0;
       }
+      return 1;
     },
+
     "static addAll(Ljava/util/Collection;[Ljava/lang/Object;)Z": async (c: unknown, arr: unknown[]) => {
       for (const v of arr) await vcall(c, "add", "(Ljava/lang/Object;)Z", v);
       return arr.length ? 1 : 0;
     },
-    "static disjoint(Ljava/util/Collection;Ljava/util/Collection;)Z": async (a: unknown, b: unknown) => {
-      if (a === null || b === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      const left = await toJsArray(a), right = await toJsArray(b);
-      const [smaller, larger] = left.length <= right.length ? [left, right] : [right, left];
-      for (const value of smaller) if ((await indexIn(larger, value)) >= 0) return 0;
-      return 1;
-    },
+
     "static nCopies(ILjava/lang/Object;)Ljava/util/List;": (n: number, v: unknown) => {
       const l = new JList(); l.a = new Array(n).fill(v); return l;
     },
@@ -2525,7 +2640,7 @@ async function streamProperties(stream: unknown): Promise<Map<string, string>> {
   const bytes = await readStreamFully(stream);
   return propertyText(charsToString(bytes, 0, bytes.length));
 }
-class JProps extends JMap {}
+export class JProps extends JMap {}
 const setProperties = (props: JProps, entries: Map<string, string>) => { for (const [k, v] of entries) props.m.set(k, { k, v }); };
 rt.register({
   name: "java/util/Properties", ctor: JProps, sup: "java/util/HashMap",

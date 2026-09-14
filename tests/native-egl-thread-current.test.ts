@@ -37,7 +37,7 @@ test("unbinding one EGL thread does not clear another thread's GLES context", ()
   if (!activeTexture) throw new Error("GLES host is not registered");
   activeTexture(cpuB as Cpu, args([0x84c1]));
 
-  expect(glSurfaces.current).toBe(contextB);
+  expect(boundEglCurrent(cpuB.jthread)).toBe(contextB);
   expect(gl).toBe(contextB.gl);
   expect(calls).toEqual([0x84c1]);
 });
@@ -46,7 +46,7 @@ test("Java EGL current state is visible to native GLES on the same thread", asyn
   gles3Init();
   const original = Object.getOwnPropertyDescriptor(globalThis, "OffscreenCanvas");
   const calls: number[] = [];
-  const context = { activeTexture: (texture: number) => calls.push(texture), getParameter: () => 0x84c0 };
+  const context = { isContextLost: () => false, activeTexture: (texture: number) => calls.push(texture), getParameter: () => 0x84c0 };
   Object.defineProperty(globalThis, "OffscreenCanvas", { configurable: true, value: class {
     width: number; height: number;
     constructor(width: number, height: number) { this.width = width; this.height = height; }

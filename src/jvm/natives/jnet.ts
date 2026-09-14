@@ -10,10 +10,10 @@
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { mimeFromFilename } from "../../mime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
-import { stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
+import { JThrowable, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
-import { jarray, strArray, dotName, utf8, i8, u8 } from "../abi";
-import { vfs, type JInputStream, type JOutputStream } from "./jio";
+import { jarray, strArray, dotName, i8, u8 } from "../abi";
+import { vfs, type JOutputStream } from "./jio";
 import { Relay, syntheticAddress, syntheticHost, nameExists, ipv4Text, type Ipv4 } from "../../shell/relay";
 
 rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager", "javax/net/ssl/KeyManager",
@@ -36,6 +36,7 @@ rt.register({
     "static getDefault()Ljavax/net/SocketFactory;": () => socketFactory,
     "createSocket()Ljava/net/Socket;": async () => newObj("java/net/Socket", null),
     "createSocket(Ljava/lang/String;I)Ljava/net/Socket;": (h: string, p: number) => dial("java/net/Socket", h, p),
+    "createSocket(Ljava/net/InetAddress;I)Ljava/net/Socket;": (address: JInetAddress, port: number) => dial("java/net/Socket", address?.host ?? "localhost", port),
   },
 });
 class JSSLSocketFactory extends JSocketFactory {}
@@ -54,7 +55,9 @@ rt.register({
         if (autoClose && plain) { plain.relay?.close(); plain.relay = null; plain.closed = 1; }
         return s;
       },
+    "createSocket()Ljava/net/Socket;": () => newObj("javax/net/ssl/SSLSocket"),
     "createSocket(Ljava/lang/String;I)Ljava/net/Socket;": (h: string, p: number) => dial("javax/net/ssl/SSLSocket", h, p),
+    "createSocket(Ljava/net/InetAddress;I)Ljava/net/Socket;": (address: JInetAddress, port: number) => dial("javax/net/ssl/SSLSocket", address?.host ?? "localhost", port),
     "getDefaultCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
     "getSupportedCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
   },
@@ -104,7 +107,12 @@ rt.register({
 });
 rt.markers("java/net/Authenticator$RequestorType");
 
-class JSSLContext extends JObj {}
+class JSSLContext extends JObj { protocol = "TLS"; provider: unknown = null; }
+function sslContext(protocol: string | null, provider: unknown = null): JSSLContext {
+  if (protocol === null) throw rt.mkThrowable("java/lang/NullPointerException", "protocol");
+  if (!["Default", "TLS", "TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3", "SSL"].includes(protocol)) throw rt.mkThrowable("java/security/NoSuchAlgorithmException", protocol);
+  return Object.assign(new JSSLContext(), { protocol, provider });
+}
 let defaultSSLContext: JSSLContext | null = null;
 rt.register({
   name: "javax/net/ssl/SSLContext", ctor: JSSLContext,
@@ -114,8 +122,15 @@ rt.register({
       if (!context) throw rt.mkThrowable("java/lang/NullPointerException", "context");
       defaultSSLContext = context;
     },
-    "static getInstance(Ljava/lang/String;)Ljavax/net/ssl/SSLContext;": () => new JSSLContext(),
+    "static getInstance(Ljava/lang/String;)Ljavax/net/ssl/SSLContext;": sslContext,
+    "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljavax/net/ssl/SSLContext;": (protocol: string, provider: unknown) => {
+      if (!provider) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Missing provider");
+      return sslContext(protocol, provider);
+    },
+    "getProtocol()Ljava/lang/String;": function (this: JSSLContext) { return this.protocol; },
+    "createSSLEngine()Ljavax/net/ssl/SSLEngine;": () => rt.make("javax/net/ssl/SSLEngine"),
     "init([Ljavax/net/ssl/KeyManager;[Ljavax/net/ssl/TrustManager;Ljava/security/SecureRandom;)V": () => {},
+    "getProvider()Ljava/security/Provider;": function (this: JSSLContext) { return this.provider ?? vcall(rt.link("java/security/Security").ctor, "getProvider", "(Ljava/lang/String;)Ljava/security/Provider;", "AndroidOpenSSL"); },
     "getSocketFactory()Ljavax/net/ssl/SSLSocketFactory;": () => rt.make("javax/net/ssl/SSLSocketFactory"),
   },
 });
@@ -218,6 +233,7 @@ rt.register({
     "<init>(Ljava/lang/String;I)V": function (this: JInetSocketAddress, h: string, p2: number) { this.host = h ?? ""; this.port = p2; },
     "<init>(Ljava/net/InetAddress;I)V": function (this: JInetSocketAddress, a: JInetAddress, p2: number) { this.addr = a; this.host = a?.host ?? ""; this.port = p2; },
     "static createUnresolved(Ljava/lang/String;I)Ljava/net/InetSocketAddress;": inetSock,
+    "getHostString()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host; },
     "getHostName()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host; },
     "getPort()I": function (this: JInetSocketAddress) { return this.port; },
     "getAddress()Ljava/net/InetAddress;": async function (this: JInetSocketAddress) {
@@ -263,7 +279,7 @@ rt.register({
   },
 });
 class JSocket extends JObj {
-  host = ""; port = 0; tls = false; relay: Relay | null = null; closed = 0; soTimeout = 0;
+  host = ""; port = 0; tls = false; alpn: string[] = []; relay: Relay | null = null; closed = 0; soTimeout = 0;
   private opening: Promise<void> | null = null;
   /** Opening is deferred so an SSLSocket wrapping a plain one can take the target over and
    *  connect with TLS instead -- which is exactly how OkHttp builds an HTTPS connection. */
@@ -271,7 +287,7 @@ class JSocket extends JObj {
     if (this.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
     if (this.opening) return this.opening;
     if (this.relay) return Promise.resolve();
-    const r = this.relay = new Relay(this.host, this.port, this.tls);
+    const r = this.relay = new Relay(this.host, this.port, this.tls, this.alpn);
     return this.opening = r.ready.catch(() => {
       r.close();
       if (this.relay === r) this.relay = null;
@@ -323,7 +339,10 @@ const socketMethods: NativeSpec["methods"] = {
   "shutdownInput()V": () => {},
   "shutdownOutput()V": () => {},
   "getPort()I": function (this: JSocket) { return this.port; },
-  "getLocalPort()I": () => 0,
+  "getLocalPort()I": function (this: JSocket) { return this.relay?.localEndpoint?.port ?? -1; },
+  "getLocalSocketAddress()Ljava/net/SocketAddress;": function (this: JSocket) {
+    const local = this.relay?.localEndpoint; return local ? inetSock(local.address, local.port) : null;
+  },
   "getInetAddress()Ljava/net/InetAddress;": function (this: JSocket) { return inetAddr(this.host); },
   "getRemoteSocketAddress()Ljava/net/SocketAddress;": function (this: JSocket) { return inetSock(this.host, this.port); },
   "setTcpNoDelay(Z)V": () => {}, "setKeepAlive(Z)V": () => {},
@@ -396,20 +415,27 @@ rt.register({
     "getSupportedCipherSuites()[Ljava/lang/String;": () => strArray(CIPHERS),
     "setHandshakeTimeout(I)V": () => {},
     "addHandshakeCompletedListener(Ljavax/net/ssl/HandshakeCompletedListener;)V": () => {},
-    "getSSLParameters()Ljavax/net/ssl/SSLParameters;": () => rt.make("javax/net/ssl/SSLParameters"),
-    "setSSLParameters(Ljavax/net/ssl/SSLParameters;)V": () => {},
-    // The relay opens TLS without ALPN, so the server answers as HTTP/1.1. Saying so is
-    // load-bearing: a client told "h2" would send an HTTP/2 preface down an HTTP/1.1 connection.
-    "getApplicationProtocol()Ljava/lang/String;": () => "http/1.1",
-    "getHandshakeApplicationProtocol()Ljava/lang/String;": () => "http/1.1",
+    "getSSLParameters()Ljavax/net/ssl/SSLParameters;": function (this: JSSLSocket) {
+      rt.link("javax/net/ssl/SSLParameters"); return Object.assign(new JSSLParameters(), { protocols: [...this.alpn] });
+    },
+    "setSSLParameters(Ljavax/net/ssl/SSLParameters;)V": function (this: JSSLSocket, p: JSSLParameters | null) {
+      if (!p) throw rt.mkThrowable("java/lang/IllegalArgumentException", "parameters == null");
+      this.alpn = [...p.protocols];
+    },
+    "getApplicationProtocol()Ljava/lang/String;": function (this: JSSLSocket) { return this.relay?.applicationProtocol ?? null; },
+    "getHandshakeApplicationProtocol()Ljava/lang/String;": () => null,
   },
 });
+rt.register({ name: "javax/net/ssl/SSLEngine", ctor: class extends JObj {}, methods: {
+  "getApplicationProtocol()Ljava/lang/String;": () => null,
+  "getHandshakeApplicationProtocol()Ljava/lang/String;": () => null,
+} });
 class JSSLParameters extends JObj { protocols: string[] = []; }
 rt.register({
   name: "javax/net/ssl/SSLParameters", ctor: JSSLParameters,
   methods: {
     "<init>()V": function () {},
-    "setApplicationProtocols([Ljava/lang/String;)V": function (this: JSSLParameters, v: string[]) { this.protocols = [...(v ?? [])]; },
+    "setApplicationProtocols([Ljava/lang/String;)V": function (this: JSSLParameters, v: string[]) { if (!v || v.some(p => !p)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid application protocols"); this.protocols = [...v]; },
     "getApplicationProtocols()[Ljava/lang/String;": function (this: JSSLParameters) { return strArray(this.protocols); },
     "setProtocols([Ljava/lang/String;)V": () => {},
     "getProtocols()[Ljava/lang/String;": () => strArray(PROTOCOLS),
@@ -420,9 +446,6 @@ rt.register({
     "setUseCipherSuitesOrder(Z)V": () => {},
   },
 });
-// OkHttp's Android platform asks these before configuring ALPN/session tickets on a socket.
-// Our sockets are relay-backed, so there is nothing to configure -- but the answer has to be
-// "yes, that is one of ours", or it falls back to a reflection path that is not there either.
 rt.register({
   name: "android/net/ssl/SSLSockets", ctor: class extends JObj {},
   methods: {
@@ -459,21 +482,39 @@ rt.register({
 
 class JURI extends JObj {
   u = "";
-  private parsed?: URL | null;
-  url(): URL | null {
-    if (this.parsed === undefined) { try { this.parsed = new URL(this.u); } catch { this.parsed = null; } }
-    return this.parsed;
+  private parsed: ReturnType<typeof parseURI> | null = null;
+  parts(): ReturnType<typeof parseURI> { return this.parsed ??= parseURI(this.u); }
+}
+function parseURI(uri: string) {
+  const match = /^(?:([A-Za-z][A-Za-z0-9+.-]*):)?(?:\/\/([^/?#]*))?([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/.exec(uri)!;
+  const scheme = match[1] ?? null, authority = match[2] || null;
+  const opaque = scheme !== null && !uri.slice(scheme.length + 1).startsWith("/");
+  const server = authority ? /^(?:([^@]*)@)?(\[[^\]]+\]|[^:]+)(?::([0-9]*))?$/.exec(authority) : null;
+  const candidate = server?.[2] ?? null;
+  let host: string | null = null;
+  if (candidate?.startsWith("[")) { try { new URL("http://" + candidate.replace(/%[^\]]+/, "")); host = candidate; } catch {} }
+  else if (candidate && /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.?$/.test(candidate)) host = candidate;
+  const port = host && server?.[3] ? Number(server[3]) : -1;
+  return { scheme, authority, host, port, userInfo: host ? server?.[1] ?? null : null,
+    path: opaque ? null : match[3], query: opaque ? null : match[4] ?? null, fragment: match[5] ?? null,
+    ssp: uri.slice(scheme ? scheme.length + 1 : 0).split("#", 1)[0] };
+}
+const decodeUriPart = (part: string | null): string | null => part === null ? null : decodeURIComponent(part);
+function quoteUriPart(value: string, delimiters: string): string {
+  let result = "";
+  for (const c of value) result += /[A-Za-z0-9_.!~*'()-]/.test(c) || delimiters.includes(c) || c.charCodeAt(0) > 159 && !/\s/u.test(c) ? c : encodeURIComponent(c);
+  return result;
+}
+function hierarchicalURI(scheme: string | null, authority: string | null, path: string | null, query: string | null, fragment: string | null): string {
+  const uri = (scheme === null ? "" : scheme + ":") + (authority === null ? "" : "//" + quoteUriPart(authority, ";:@&=+$,[]")) +
+    quoteUriPart(path ?? "", ";:@&=+$,/") + (query === null ? "" : "?" + quoteUriPart(query, ";/?:@&=+$,[]")) +
+    (fragment === null ? "" : "#" + quoteUriPart(fragment, ";/?:@&=+$,[]"));
+  if (scheme !== null && !/^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme) || (scheme !== null || authority !== null) && path && !path.startsWith("/")) {
+    rt.link("java/net/URISyntaxException"); const error = new JURISyntaxException(); uriSyntax.call(error, uri, "Invalid scheme or relative path"); throw error;
   }
+  return uri;
 }
 const mkURI = (u: string | null) => Object.assign(new JURI(), { u: u ?? "" });
-function rawUriQuery(uri: string): string | null {
-  const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:/.exec(uri);
-  if (scheme && uri[scheme[0].length] !== "/") return null;
-  const query = uri.indexOf("?");
-  const fragment = uri.indexOf("#");
-  return query < 0 || (fragment >= 0 && query > fragment) ? null : uri.slice(query + 1, fragment < 0 ? undefined : fragment);
-}
-const rawAuthority = (u: string): string | null => /^([^:/?#]+:)?\/\/([^/?#]*)/.exec(u)?.[2] || null;
 // URLEncoder/URLDecoder: application/x-www-form-urlencoded, which is encodeURIComponent plus
 // "+" for a space and the extra unreserved set Java leaves alone.
 const formEncode = (s: string) =>
@@ -497,19 +538,17 @@ rt.register({
   name: "java/net/URI", ctor: JURI, ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   methods: {
     "<init>(Ljava/lang/String;)V": function (this: JURI, s: string) { this.u = s ?? ""; },
-    // (scheme, userInfo, host, port, path, query, fragment): how a URL is rebuilt from parts
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V":
-      function (this: JURI, sch: string | null, ui: string | null, host: string | null, port: number, path: string | null, q: string | null, f: string | null) {
-        this.u = (sch ? sch + ":" : "") + (host ? "//" + (ui ? ui + "@" : "") + host + (port === -1 ? "" : ":" + port) : "") +
-          (path ?? "") + (q ? "?" + q : "") + (f ? "#" + f : "");
+      function (this: JURI, scheme: string | null, user: string | null, host: string | null, port: number, path: string | null, query: string | null, fragment: string | null) {
+        const authority = host === null ? null : (user === null ? "" : user + "@") + (host.includes(":") && !host.startsWith("[") ? "[" + host + "]" : host) + (port === -1 ? "" : ":" + port);
+        this.u = hierarchicalURI(scheme, authority, path, query, fragment);
       },
-    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JURI, sch: string | null, host: string | null, path: string | null, f: string | null) {
-      this.u = (sch ? sch + ":" : "") + (host ? "//" + host : "") + (path ?? "") + (f ? "#" + f : "");
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V":
+      function (this: JURI, scheme: string | null, authority: string | null, path: string | null, query: string | null, fragment: string | null) { this.u = hierarchicalURI(scheme, authority, path, query, fragment); },
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JURI, scheme: string | null, host: string | null, path: string | null, fragment: string | null) {
+      this.u = hierarchicalURI(scheme, host?.includes(":") && !host.startsWith("[") ? "[" + host + "]" : host, path, null, fragment);
     },
-    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JURI, sch: string | null, authority: string | null, path: string | null, q: string | null, f: string | null) {
-      this.u = (sch ? sch + ":" : "") + (authority !== null ? "//" + authority : "") +
-        (path ?? "") + (q !== null ? "?" + q : "") + (f !== null ? "#" + f : "");
-    },
+
     "static create(Ljava/lang/String;)Ljava/net/URI;": mkURI,
     "toString()Ljava/lang/String;": function (this: JURI) { return this.u; },
     // RFC 2396 path normalisation: "." and ".." segments resolved, the rest of the URI untouched
@@ -524,20 +563,20 @@ rt.register({
       return mkURI((m[1] ?? "") + (m[2] ?? "") + out.join("/") + m[4]);
     },
     "toASCIIString()Ljava/lang/String;": function (this: JURI) { return this.u; },
-    "getScheme()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf(":"); return i > 0 ? this.u.slice(0, i) : null; },
-    "getAuthority()Ljava/lang/String;": function (this: JURI) { const a = rawAuthority(this.u); if (a === null) return null; try { return decodeURIComponent(a); } catch { return a; } },
-    "getRawAuthority()Ljava/lang/String;": function (this: JURI) { return rawAuthority(this.u); },
-    "getHost()Ljava/lang/String;": function (this: JURI) { return this.url()?.hostname ?? null; },
-    "getPath()Ljava/lang/String;": function (this: JURI) { return this.url()?.pathname ?? this.u.replace(/^[a-z]+:/i, ""); },
+    "getScheme()Ljava/lang/String;": function (this: JURI) { return this.parts().scheme; },
+    "getHost()Ljava/lang/String;": function (this: JURI) { return this.parts().host; },
+    "getAuthority()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().authority); },
+    "getRawAuthority()Ljava/lang/String;": function (this: JURI) { return this.parts().authority; },
+    "getPath()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().path); },
     "toURL()Ljava/net/URL;": function (this: JURI) { const u = new JURL(); urlInit(u, this.u); return u; },
-    "getUserInfo()Ljava/lang/String;": function (this: JURI) { const m = /^[^:/?#]+:\/\/([^@/?#]*)@/.exec(this.u); return m ? decodeURIComponent(m[1]) : null; },
-    "getPort()I": function (this: JURI) { return Number(this.url()?.port) || -1; },
-    "getRawQuery()Ljava/lang/String;": function (this: JURI) { return rawUriQuery(this.u); },
-    "getQuery()Ljava/lang/String;": function (this: JURI) { const q = this.url()?.search; return q ? q.slice(1) : null; },
+    "getUserInfo()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().userInfo); },
+    "getPort()I": function (this: JURI) { return this.parts().port; },
+    "getQuery()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().query); },
+    "getRawQuery()Ljava/lang/String;": function (this: JURI) { return this.parts().query; },
+    "getFragment()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().fragment); },
     "getRawFragment()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf("#"); return i < 0 ? null : this.u.slice(i + 1); },
-    "getFragment()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf("#"); return i < 0 ? null : this.u.slice(i + 1); },
-    "getRawPath()Ljava/lang/String;": function (this: JURI) { return this.url()?.pathname ?? null; },
-    "getSchemeSpecificPart()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf(":"); return i < 0 ? this.u : this.u.slice(i + 1); },
+    "getRawPath()Ljava/lang/String;": function (this: JURI) { return this.parts().path; },
+    "getSchemeSpecificPart()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().ssp); },
     "resolve(Ljava/lang/String;)Ljava/net/URI;": function (this: JURI, o: string) { try { return mkURI(new URL(o, this.u).href); } catch { return mkURI(o); } },
     "equals(Ljava/lang/Object;)Z": function (this: JURI, o: unknown) { return o instanceof JURI && o.u === this.u ? 1 : 0; },
     "hashCode()I": function (this: JURI) { return stringHash(this.u); },
@@ -556,7 +595,20 @@ defineException("javax/net/ssl/SSLHandshakeException", "javax/net/ssl/SSLExcepti
 defineException("javax/net/ssl/SSLPeerUnverifiedException", "javax/net/ssl/SSLException");
 defineException("javax/net/ssl/SSLProtocolException", "javax/net/ssl/SSLException");
 defineException("javax/net/ssl/SSLKeyException", "javax/net/ssl/SSLException");
-defineException("java/net/URISyntaxException", "java/lang/Exception");
+class JURISyntaxException extends JThrowable { input = ""; reason = ""; index = -1; }
+function uriSyntax(this: JURISyntaxException, input: string | null, reason: string | null, index = -1): void {
+  if (input === null || reason === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (index < -1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "index < -1");
+  this.input = input; this.reason = reason; this.index = index;
+  this.msg = reason + (index >= 0 ? " at index " + index : "") + ": " + input;
+}
+rt.register({ name: "java/net/URISyntaxException", ctor: JURISyntaxException, sup: "java/lang/Exception", methods: {
+  "<init>(Ljava/lang/String;Ljava/lang/String;)V": uriSyntax,
+  "<init>(Ljava/lang/String;Ljava/lang/String;I)V": uriSyntax,
+  "getInput()Ljava/lang/String;": function (this: JURISyntaxException) { return this.input; },
+  "getReason()Ljava/lang/String;": function (this: JURISyntaxException) { return this.reason; },
+  "getIndex()I": function (this: JURISyntaxException) { return this.index; },
+} });
 
 const SCHEMES = /^(https?|ftp|file|jar):$/;       // what Android's URL has a handler for
 const DEFAULT_PORT: Record<string, number> = { "http:": 80, "https:": 443, "ftp:": 21 };
@@ -654,7 +706,63 @@ rt.register({
   },
 });
 
-type HttpRes = { status: number; msg: string; hdrs: [string, string][]; body: Uint8Array };
+class JHttpInputStream extends JObj {
+  reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  timeout: () => number = () => 0;
+  bytes: Uint8Array = new Uint8Array(0); offset = 0;
+  closed = false; ended = false;
+  pending: Promise<void> | null = null;
+  async fill(): Promise<boolean> {
+    if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
+    if (this.offset < this.bytes.length) return true;
+    if (this.ended || !this.reader) return false;
+    this.pending ??= this.reader.read().then(result => {
+      this.ended = !!result.done; this.bytes = result.value ?? new Uint8Array(0); this.offset = 0;
+    }).catch(e => { throw rt.mkThrowable("java/io/IOException", String(e)); }).finally(() => { this.pending = null; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = this.timeout();
+    try {
+      if (timeout > 0) await Promise.race([this.pending, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(rt.mkThrowable("java/net/SocketTimeoutException", "Read timed out")), timeout);
+      })]);
+      else await this.pending;
+    } finally { clearTimeout(timer); }
+    return this.fill();
+  }
+  async read(out: Int8Array | null, offset: number, count: number): Promise<number> {
+    if (!out) return rt.npe();
+    if (offset < 0 || count < 0 || offset > out.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+    if (!count) return 0;
+    if (!await this.fill()) return -1;
+    const n = Math.min(count, this.bytes.length - this.offset);
+    out.set(this.bytes.subarray(this.offset, this.offset + n), offset); this.offset += n;
+    return n;
+  }
+  close(): void {
+    if (this.closed) return;
+    this.closed = true; this.bytes = new Uint8Array(0); this.offset = 0;
+    void this.reader?.cancel().catch(() => {});
+  }
+}
+rt.register({ name: "webdroid/HttpInputStream", ctor: JHttpInputStream, sup: "java/io/InputStream", methods: {
+  "read()I": async function (this: JHttpInputStream) { return await this.fill() ? this.bytes[this.offset++] : -1; },
+  "read([B)I": function (this: JHttpInputStream, out: Int8Array | null) { return this.read(out, 0, out?.length ?? 0); },
+  "read([BII)I": function (this: JHttpInputStream, out: Int8Array | null, off: number, len: number) { return this.read(out, off, len); },
+  "available()I": function (this: JHttpInputStream) { return this.bytes.length - this.offset; },
+  "skip(J)J": async function (this: JHttpInputStream, count: bigint) {
+    let left = count;
+    while (left > 0n && await this.fill()) {
+      const n = Number(left < BigInt(this.bytes.length - this.offset) ? left : BigInt(this.bytes.length - this.offset));
+      this.offset += n; left -= BigInt(n);
+    }
+    return count > 0n ? count - left : 0n;
+  },
+  "close()V": function (this: JHttpInputStream) { this.close(); },
+  "markSupported()Z": () => 0,
+  "mark(I)V": () => {},
+  "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+} });
+type HttpRes = { status: number; msg: string; hdrs: [string, string][]; stream: JHttpInputStream };
 const statusLine = (r: HttpRes) => "HTTP/1.1 " + r.status + (r.msg ? " " + r.msg : "");
 const PUT = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 /** Map<String, List<String>> as URLConnection and CookieHandler hand headers out (a null key is legal: the status line) */
@@ -678,17 +786,17 @@ class JURLConnection extends JObj {
   cto = 0; rto = 0; ifMod = 0n;
   req: [string, string][] = [];
   out: JOutputStream | null = null;
-  inStream: JInputStream | null = null;
   ac: AbortController | null = null;
   res: HttpRes | null = null;
-  /** The one fetch. Everything that needs the response funnels through here, which is what makes
-   *  the connection lazy the way AOSP's is. The whole body is awaited: the VM can suspend, a
-   *  Java read() cannot fail half-way, and the proxy has already removed the framing. */
-  async connect(): Promise<HttpRes> {
-    if (this.res) return this.res;
+  pending: Promise<HttpRes> | null = null;
+  connect(): Promise<HttpRes> {
+    if (this.res) return Promise.resolve(this.res);
+    return this.pending ??= this.fetchResponse().finally(() => { this.pending = null; });
+  }
+  private async fetchResponse(): Promise<HttpRes> {
+    this.connected = 1;
     const ac = (this.ac = new AbortController());
     let timer: ReturnType<typeof setTimeout> | undefined, timedOut = "";
-    // fetch resolves once the head is in, so the connect timeout runs until then and the read timeout after
     const arm = (ms: number, what: string) => {
       clearTimeout(timer);
       if (ms > 0) timer = setTimeout(() => { timedOut = what; ac.abort(); }, ms);
@@ -697,26 +805,26 @@ class JURLConnection extends JObj {
     for (const [k, v] of this.req) headers.append("x-wd-" + k, v);
     if (this.ifMod) headers.set("x-wd-if-modified-since", new Date(Number(this.ifMod)).toUTCString());
     const hasBody = this.out && this.method !== "GET" && this.method !== "HEAD";
-    let r: Response, body: Uint8Array;
+    let r: Response;
     arm(this.cto, "connect timed out");
     try {
       r = await fetch("/proxy?url=" + encodeURIComponent(this.url.spec), {
         method: this.method, headers, signal: ac.signal, body: hasBody ? new Uint8Array(this.out!.chunks) : undefined,
       });
-      arm(this.rto, "Read timed out");
-      body = new Uint8Array(await r.arrayBuffer());
     } catch (e) {
       if (timedOut) throw rt.mkThrowable("java/net/SocketTimeoutException", timedOut);
       if (ac.signal.aborted) throw rt.mkThrowable("java/net/SocketException", "Socket closed");
       throw rt.mkThrowable("java/io/IOException", String(e));
-    } finally { clearTimeout(timer); this.ac = null; }
+    } finally { clearTimeout(timer); }
     const final = r.headers.get("x-wd-final-url");
     // the proxy's own failure answer carries no final URL; a genuine upstream 502 does
-    if (r.status === 502 && !final) throw rt.mkThrowable("java/net/UnknownHostException", utf8.dec.decode(body));
+    if (r.status === 502 && !final) throw rt.mkThrowable("java/net/UnknownHostException", await r.text());
     if (final && final !== this.url.u.href) this.url = mkURL(final);   // getURL() reports where a redirect landed
     const hdrs: [string, string][] = [];
     r.headers.forEach((v, k) => { if (k !== "x-wd-final-url") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]); });
-    return (this.res = { status: r.status, msg: r.statusText, hdrs, body });
+    const stream = new JHttpInputStream();
+    stream.reader = r.body?.getReader() ?? null; stream.timeout = () => this.rto;
+    return (this.res = { status: r.status, msg: r.statusText, hdrs, stream });
   }
   /** case-insensitive; the last value wins, as URLConnection documents */
   hdr(name: string | null): string | null {
@@ -727,13 +835,7 @@ class JURLConnection extends JObj {
     for (const [hk, hv] of r.hdrs) if (hk === k) v = hv;
     return v;
   }
-  stream(): JInputStream {
-    if (!this.inStream) {
-      this.inStream = rt.make("java/io/ByteArrayInputStream") as JInputStream;
-      this.inStream.buf = this.res!.body;
-    }
-    return this.inStream;
-  }
+  stream(): JHttpInputStream { return this.res!.stream; }
 }
 /** an accessor that needs the response: connect first */
 function withRes<A extends unknown[]>(f: (this: JURLConnection, r: HttpRes, ...a: A) => unknown) {
@@ -758,7 +860,11 @@ rt.register({
   methods: {
     "static guessContentTypeFromName(Ljava/lang/String;)Ljava/lang/String;": (name: string | null) => mimeFromFilename(name ?? rt.npe()),
     "<init>(Ljava/net/URL;)V": function (this: JURLConnection, u: JURL) { this.url = u; },
-    "connect()V": async function (this: JURLConnection) { await this.connect(); },
+    "connect()V": async function (this: JURLConnection) {
+      this.connected = 1;
+      // Fetch buffers uploads: connecting must leave the output stream writable until a response is requested.
+      if (!this.doOut) await this.connect();
+    },
     "getURL()Ljava/net/URL;": function (this: JURLConnection) { return this.url; },
     "getInputStream()Ljava/io/InputStream;": withRes(function (r) {
       if (!this.doIn) throw rt.mkThrowable("java/net/ProtocolException", "Cannot read from URLConnection if doInput=false (call setDoInput(true))");
@@ -769,15 +875,19 @@ rt.register({
     }),
     "getOutputStream()Ljava/io/OutputStream;": function (this: JURLConnection) {
       if (!this.doOut) throw rt.mkThrowable("java/net/ProtocolException", "cannot write to a URLConnection if doOutput=false - call setDoOutput(true)");
+      if (this.res || this.pending) throw rt.mkThrowable("java/net/ProtocolException", "Cannot write output after reading input");
       if (this.method === "GET") this.method = "POST";   // a GET that writes a body becomes a POST (OpenJDK and AOSP alike)
+      this.connected = 1;
       return this.out ??= rt.make("java/io/OutputStream") as JOutputStream;
     },
     "setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JURLConnection, k: string | null, v: string) {
+      if (this.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");
       if (k === null) throw rt.mkThrowable("java/lang/NullPointerException", "key is null");
       this.req = this.req.filter(([n]) => n.toLowerCase() !== k.toLowerCase());
       this.req.push([k, v]);
     },
     "addRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JURLConnection, k: string | null, v: string) {
+      if (this.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");
       if (k === null) throw rt.mkThrowable("java/lang/NullPointerException", "key is null");
       this.req.push([k, v]);
     },
@@ -805,8 +915,8 @@ rt.register({
     "getIfModifiedSince()J": function (this: JURLConnection) { return this.ifMod; },
     "getHeaderField(Ljava/lang/String;)Ljava/lang/String;": withRes(function (_r, k: string | null) { return this.hdr(k); }),
     // index 0 is the status line under a null key; past the end both are null, which is how a caller finds the end
-    "getHeaderField(I)Ljava/lang/String;": withRes((r, i: number) => i === 0 ? statusLine(r) : r.hdrs[i - 1]?.[1] ?? null),
-    "getHeaderFieldKey(I)Ljava/lang/String;": withRes((r, i: number) => r.hdrs[i - 1]?.[0] ?? null),
+    "getHeaderField(I)Ljava/lang/String;": withRes((r, i: number) => r.hdrs[i]?.[1] ?? null),
+    "getHeaderFieldKey(I)Ljava/lang/String;": withRes((r, i: number) => r.hdrs[i]?.[0] ?? null),
     "getHeaderFields()Ljava/util/Map;": withRes((r) => headerMap(group([[null, statusLine(r)], ...r.hdrs]))),
     "getHeaderFieldInt(Ljava/lang/String;I)I": withRes(function (_r, k: string, d: number) {
       const n = parseInt(this.hdr(k) ?? "", 10);
@@ -819,9 +929,8 @@ rt.register({
     }),
     "getContentType()Ljava/lang/String;": withRes(function () { return this.hdr("content-type"); }),
     "getContentEncoding()Ljava/lang/String;": withRes(function () { return this.hdr("content-encoding"); }),
-    // the proxy strips content-length; the byte count is exact once the body is in hand, and HEAD has none to count
-    "getContentLength()I": withRes(function (r) { return this.method === "HEAD" ? -1 : r.body.length; }),
-    "getContentLengthLong()J": withRes(function (r) { return BigInt(this.method === "HEAD" ? -1 : r.body.length); }),
+    "getContentLength()I": withRes(function () { const n = asLong(this.hdr("content-length"), -1n); return n > 0x7fffffffn ? -1 : Number(n); }),
+    "getContentLengthLong()J": withRes(function () { return asLong(this.hdr("content-length"), -1n); }),
     "toString()Ljava/lang/String;": function (this: JURLConnection) {
       return dotName((this.constructor as typeof JObj).$i.name) + ":" + this.url.spec;
     },
@@ -844,7 +953,7 @@ rt.register({
   },
   methods: {
     "setRequestMethod(Ljava/lang/String;)V": function (this: JHttpURLConnection, m: string) {
-      if (this.res || this.ac) throw rt.mkThrowable("java/net/ProtocolException", "Can't reset method: already connected");
+      if (this.connected) throw rt.mkThrowable("java/net/ProtocolException", "Can't reset method: already connected");
       if (!HTTP_METHODS.has(m)) throw rt.mkThrowable("java/net/ProtocolException", "Invalid HTTP method: " + m);
       this.method = m;
     },
@@ -863,8 +972,7 @@ rt.register({
       // AOSP connects here too, and answers null for any failure rather than throwing
       try { return (await this.connect()).status >= 400 ? this.stream() : null; } catch { return null; }
     },
-    // a response already in hand stays readable, as it does on AOSP; only an in-flight fetch is cut
-    "disconnect()V": function (this: JHttpURLConnection) { this.ac?.abort(); },
+    "disconnect()V": function (this: JHttpURLConnection) { this.res?.stream.close(); this.ac?.abort(); this.ac = null; },
     "usingProxy()Z": () => 0,
   },
 });

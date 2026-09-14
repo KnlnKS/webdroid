@@ -116,3 +116,38 @@ test("a callback can repost itself while being dispatched", async () => {
   expect(runnable.runs).toBe(2);
   expect(handler.pending.size).toBe(0);
 });
+
+class IdleHandler extends JObj { calls = 0; keep = true; wake: (() => void) | null = null; }
+rt.register({ name: "test/QueueIdleHandler", ctor: IdleHandler, ifaces: ["android/os/MessageQueue$IdleHandler"], methods: {
+  "queueIdle()Z": function (this: IdleHandler) { this.calls++; this.wake?.(); return +this.keep; },
+} });
+rt.link("test/QueueIdleHandler");
+test("queue idle state excludes future messages and removes cancelled due work", async () => {
+  const handler = new RecordingHandler();
+  const queue = await vcall(handler.looper, "getQueue", "()Landroid/os/MessageQueue;");
+  await onMain(async () => {
+    handler.send(message(1, 0), 10000);
+    expect(await vcall(queue, "isIdle", "()Z")).toBe(1);
+    handler.send(message(2, 0), 0);
+    expect(await vcall(queue, "isIdle", "()Z")).toBe(0);
+    handler.cancel(2);
+    expect(await vcall(queue, "isIdle", "()Z")).toBe(1);
+    handler.cancel(1);
+  });
+});
+test("idle handlers run once per idle transition and can be removed", async () => {
+  const handler = new RecordingHandler(), idle = new IdleHandler();
+  const queue = await vcall(handler.looper, "getQueue", "()Landroid/os/MessageQueue;");
+  let notified = new Promise<void>(resolve => { idle.wake = resolve; });
+  await vcall(queue, "addIdleHandler", "(Landroid/os/MessageQueue$IdleHandler;)V", idle);
+  await notified;
+  expect(idle.calls).toBe(1);
+  notified = new Promise<void>(resolve => { idle.wake = resolve; });
+  handler.send(message(1, 2), 0);
+  await notified;
+  expect(idle.calls).toBe(2);
+  await vcall(queue, "removeIdleHandler", "(Landroid/os/MessageQueue$IdleHandler;)V", idle);
+  handler.send(message(1, 3), 0);
+  await onMain(() => {});
+  expect(idle.calls).toBe(2);
+});

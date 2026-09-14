@@ -87,7 +87,11 @@ test("View accepts a generic motion listener", async () => {
 });
 
 test("ScaleGestureDetector consumes single-pointer input and retains feature flags", async () => {
-  const detector = await newObj("android/view/ScaleGestureDetector", "(Landroid/content/Context;Landroid/view/ScaleGestureDetector$OnScaleGestureListener;)V", null, null);
+  const context = Object.assign(new JObj(), {
+    [mangleMethod("getApplicationInfo", "()Landroid/content/pm/ApplicationInfo;")]: () => rt.make("android/content/pm/ApplicationInfo"),
+  });
+  const listener = await newObj("android/view/ScaleGestureDetector$SimpleOnScaleGestureListener");
+  const detector = await newObj("android/view/ScaleGestureDetector", "(Landroid/content/Context;Landroid/view/ScaleGestureDetector$OnScaleGestureListener;)V", context, listener);
   await vcall(detector, "setQuickScaleEnabled", "(Z)V", 1);
   await vcall(detector, "setStylusScaleEnabled", "(Z)V", 1);
   expect(await vcall(detector, "isQuickScaleEnabled", "()Z")).toBe(1);

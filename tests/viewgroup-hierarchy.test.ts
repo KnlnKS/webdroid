@@ -30,7 +30,7 @@ test("view mutations await overrides before hierarchy listeners, including in-la
   await vcall(parent, "addView", "(Landroid/view/View;)V", first);
   await vcall(parent, "addViewInLayout", "(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)Z", second, -1, new JLayoutParams());
   await vcall(parent, "removeAllViews", "()V");
-  expect(parent.events).toEqual(["added:1", "listener-added:1", "added:2", "listener-added:2", "removed:1", "listener-removed:1", "removed:2", "listener-removed:2"]);
+  expect(parent.events).toEqual(["added:1", "listener-added:1", "added:2", "listener-added:2", "removed:2", "listener-removed:2", "removed:1", "listener-removed:1"]);
   expect(parent.children).toEqual([]);
 });
 

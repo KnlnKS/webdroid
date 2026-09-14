@@ -3,7 +3,7 @@ import { rt, JObj } from "../runtime";
 import { vcall, defineException } from "./jlang";
 import { jarray, concat, u8 } from "../abi";
 import { JRandom, randomSeed } from "./jrandom";
-import { JMap } from "./jutil";
+import { JProps } from "./jutil";
 
 const SHA256_K = new Uint32Array([0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -139,13 +139,16 @@ rt.register({
   },
 });
 
-type Digest = (data: Uint8Array) => Uint8Array;
+type Digest = (data: Uint8Array) => Uint8Array | Promise<Uint8Array>;
+const webDigest = (algorithm: string): Digest => async data => new Uint8Array(await crypto.subtle.digest(algorithm, data.slice().buffer));
 // Standard names plus the aliases Android's providers accept (case-insensitive); anything else is
 // honestly NoSuchAlgorithmException, which the SDKs that ask for e.g. MD5 catch and fall back from.
 const DIGESTS = new Map<string, [Digest, number]>([
+  ["SHA-384", [webDigest("SHA-384"), 48]], ["SHA384", [webDigest("SHA-384"), 48]],
+  ["SHA-512", [webDigest("SHA-512"), 64]], ["SHA512", [webDigest("SHA-512"), 64]],
   ["MD5", [md5, 16]], ["SHA-1", [sha1, 20]], ["SHA1", [sha1, 20]], ["SHA", [sha1, 20]], ["SHA-256", [sha256, 32]], ["SHA256", [sha256, 32]],
 ]);
-export function digestBytes(algorithm: string, data: Uint8Array): Uint8Array | null {
+export function digestBytes(algorithm: string, data: Uint8Array): Uint8Array | Promise<Uint8Array> | null {
   return DIGESTS.get(algorithm.toUpperCase())?.[0](data) ?? null;
 }
 class JMessageDigest extends JObj {
@@ -157,11 +160,12 @@ class JMessageDigest extends JObj {
 function mdUpdate(md: JMessageDigest, b: Int8Array, off = 0, len = b.length) {
   md.parts.push(u8(b, off, len).slice());
 }
-function mdDigest(md: JMessageDigest): Int8Array {
+function mdDigest(md: JMessageDigest): Int8Array | Promise<Int8Array> {
   const all = concat(md.parts);
   md.parts = [];
   const a = md.fn(all);
-  return new Int8Array(a.buffer, 0, a.length);
+  const result = (bytes: Uint8Array) => new Int8Array(bytes.buffer, bytes.byteOffset, bytes.length);
+  return a instanceof Promise ? a.then(result) : result(a);
 }
 rt.register({
   name: "java/security/MessageDigest", ctor: JMessageDigest,
@@ -205,7 +209,7 @@ rt.register({
 // reached through Cipher.getInstance with no provider, so a Provider here carries no service
 // of its own. The list is still the platform's, in the platform's order: an empty one is not a
 // state any device is in, and callers index it (`getProviders()[0].getName()`) unguarded.
-class JProvider extends JMap { pname = ""; version = 0; info = ""; }
+class JProvider extends JProps { pname = ""; version = 0; info = ""; }
 rt.register({
   name: "java/security/Provider", ctor: JProvider, sup: "java/util/Properties",
   methods: {
@@ -237,7 +241,7 @@ rt.register({
 });
 
 // java.util.Random's generator seeded from the CSPRNG; nextBytes itself stays crypto-backed.
-class JSecureRandom extends JRandom { algo = "SHA1PRNG"; }
+class JSecureRandom extends JRandom { algo = "SHA1PRNG"; provider: JProvider | null = null; }
 const secureRandom = (algo: string) => { rt.link("java/security/SecureRandom"); const r = new JSecureRandom(); r.algo = algo; r.setSeed(randomSeed()); return r; };
 rt.register({
   name: "java/security/SecureRandom", ctor: JSecureRandom, sup: "java/util/Random",
@@ -250,6 +254,12 @@ rt.register({
       return secureRandom(algo);
     },
     "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/SecureRandom;": (algo: string) => secureRandom(algo),
+    "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljava/security/SecureRandom;": (algo: string, provider: JProvider | null) => {
+      if (algo === null) throw rt.mkThrowable("java/lang/NullPointerException", "algorithm == null");
+      if (!provider) throw rt.mkThrowable("java/lang/IllegalArgumentException", "missing provider");
+      const random = secureRandom(algo); random.provider = provider; return random;
+    },
+    "getProvider()Ljava/security/Provider;": function (this: JSecureRandom) { return this.provider ?? providers[0]; },
     "static getInstanceStrong()Ljava/security/SecureRandom;": () => secureRandom("SHA1PRNG"),
     "getAlgorithm()Ljava/lang/String;": function (this: JSecureRandom) { return this.algo; },
     "nextBytes([B)V": (b: Int8Array) => crypto.getRandomValues(u8(b)),

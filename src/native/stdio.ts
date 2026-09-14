@@ -7,9 +7,10 @@ import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { LAYOUT, fail, utf8, logLine, offArg, readTs, writeTs, clockTime, scanSink } from "./libc";
 import { format, scan } from "./printf";
-import { vfs } from "../jvm/natives/jio";
+import { vfs, type VfsFile } from "../jvm/natives/jio";
 import { procText } from "../shell/procfs";
-import type { FileSource } from "../shell/lazyfile";
+import { readFully, type FileSource } from "../shell/lazyfile";
+import { concat } from "../jvm/abi";
 import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd } from "./net";
 import { allocateFd, releaseFd, reserveFd } from "./fd";
 const dec = new TextDecoder();
@@ -23,7 +24,7 @@ interface Timer { clock: number; next: number; interval: number; timeout?: Retur
 interface EpollEntry { events: number; data: bigint; pending: number; disabled: boolean; cancel: () => void }
 interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
 interface Fd {
-  path: string; data: Uint8Array; len: number; pos: number; write: boolean; dirty: boolean; dir: boolean; append: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
+  path: string; content: VfsFile; pos: number; write: boolean; dir: boolean; append: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
   timer?: Timer; source?: FileSource; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll;
 }
 const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000, EAGAIN = E.AGAIN;
@@ -32,7 +33,7 @@ const ready = (f: Fd): boolean => !!f.random || !!(f.rpipe && (f.rpipe.q.length 
 function wakeAll(p: { wake: (() => void)[] }): void { for (const w of p.wake.splice(0)) w(); }
 /** the fd's interest in being woken: pipe readers and epoll waiters both park here */
 function waitOn(f: Fd, w: () => void): void { if (f.rpipe) f.rpipe.wake.push(w); else if (f.event) f.event.wake.push(w); }
-const fdBase = (path: string): Fd => ({ path, data: new Uint8Array(0), len: 0, pos: 0, write: false, dirty: false, dir: false, append: false, statusFlags: 0, references: 1 });
+const fdBase = (path: string): Fd => ({ path, content: { path: null, data: new Uint8Array(0), len: 0 }, pos: 0, write: false, dir: false, append: false, statusFlags: 0, references: 1 });
 const fds = new Map<number, Fd>();
 const files = new Map<number, number>();       // FILE* → fd
 const pushback = new Map<number, number[]>();
@@ -83,7 +84,7 @@ export function renamePath(cpu: Cpu | null, fromPath: string, toPath: string): n
     }
     const prefix = from + "/";
     for (const m of [vfs.files, vfs.lazyFiles]) {
-      for (const k of [...m.keys()]) if (k.startsWith(prefix)) { const v = m.get(k)!; m.delete(k); m.set(to + k.slice(from.length), v as never); }
+      for (const k of [...m.keys()]) if (k.startsWith(prefix)) vfs.rename(k, to + k.slice(from.length));
     }
     for (const d of [...vfs.dirs]) if (d === from || d.startsWith(prefix)) { vfs.dirs.delete(d); vfs.dirs.add(to + d.slice(from.length)); }
     vfs.dirs.add(to);
@@ -93,9 +94,7 @@ export function renamePath(cpu: Cpu | null, fromPath: string, toPath: string): n
   const source = vfs.source(from);
   if (!source) return fail(cpu, E.NOENT);
   if (vfs.isDir(to)) return fail(cpu, E.ISDIR);
-  const bytes = vfs.read(from);
-  if (bytes) vfs.write(to, bytes); else vfs.mount(to, source);
-  vfs.delete(from);
+  vfs.rename(from, to);
   return 0;
 }
 function accessPath(cpu: Cpu, path: string, mode: number): number {
@@ -118,7 +117,7 @@ function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
     return put({ ...fdBase(path), random: true });
   }
   const s = procText(path);
-  if (s !== null) { const b = utf8(s); return put({ ...fdBase(path), data: b, len: b.length, synthetic: true }); }
+  if (s !== null) { const b = utf8(s); return put({ ...fdBase(path), content: { path: null, data: b, len: b.length }, synthetic: true }); }
   if (vfs.isDir(path)) {
     if (acc !== 0) return fail(cpu, E.ISDIR);
     return put({ ...fdBase(path), dir: true });
@@ -135,22 +134,73 @@ function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
     vfs.write(path, data);
   } else if (flags & O_CREAT && flags & O_EXCL) return fail(cpu, E.EXIST);
   if (flags & O_TRUNC && acc !== 0) { data = new Uint8Array(0); vfs.write(path, data); }
-  return put({ ...fdBase(path), data: data ?? new Uint8Array(0), source: data ? undefined : found?.source, len: data?.length ?? found?.size ?? 0, write: acc !== 0, append: !!(flags & O_APPEND), nonblock: !!(flags & O_NONBLOCK), statusFlags: flags & (O_ACCMODE | O_APPEND | O_NONBLOCK) });
+  return put({ ...fdBase(path), content: vfs.open(path) ?? { path: null, data: new Uint8Array(0), len: found?.size ?? 0 }, source: data ? undefined : found?.source, write: acc !== 0, append: !!(flags & O_APPEND), nonblock: !!(flags & O_NONBLOCK), statusFlags: flags & (O_ACCMODE | O_APPEND | O_NONBLOCK) });
 }
 function put(f: Fd): number { const fd = allocateFd(); fds.set(fd, f); return fd; }
 /** a Java-side open into the same descriptor table native code reads, so a fd handed across JNI is live */
+export const javaBytesFd = (bytes: Uint8Array): number => put({ ...fdBase(""), content: { path: null, data: bytes, len: bytes.length }, synthetic: true });
 export const javaOpenFd = (path: string, flags: number): number => fdOpen(null, path, flags);
 export const javaCloseFd = (fd: number): void => { fdClose(null, fd); };
 export const javaSeekFd = (fd: number, off: number, whence: number): number => fdSeek(null, fd, off, whence);
-/** a read-only descriptor over bytes that exist only in memory (an archive entry, a document) */
-export const javaBytesFd = (name: string, bytes: Uint8Array): number => put({ ...fdBase(name), data: bytes, len: bytes.length, synthetic: true });
 export const javaDupFd = (fd: number): number => { const f = fds.get(fd); if (!f) return -1; f.references++; return put(f); };
+export function javaFdSource(fd: number): FileSource | null {
+  const f = fds.get(fd);
+  if (!f || f.dir || f.random || f.rpipe || f.wpipe || f.event || f.timer || f.epoll) return null;
+  return {
+    get size() { return f.content.len; },
+    read(offset, length) {
+      if (fds.get(fd) !== f || (f.statusFlags & O_ACCMODE) === 1) throw new Error("Bad file descriptor");
+      return f.source ? f.source.read(offset, length) : f.content.data.subarray(offset, Math.min(f.content.len, offset + length));
+    },
+  };
+}
+export function javaAvailableFd(fd: number): number {
+  const f = fds.get(fd);
+  if (!f || f.dir || (f.statusFlags & O_ACCMODE) === 1) return -1;
+  return f.rpipe ? f.rpipe.q.reduce((n, b) => n + b.length, 0) : Math.max(0, f.content.len - f.pos);
+}
+export function javaReadFd(fd: number, target: Uint8Array): number | Promise<number> {
+  const f = fds.get(fd);
+  if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return -1;
+  if (f && !f.source && !f.random && !f.rpipe && !f.event && !f.timer && !f.epoll) {
+    const n = Math.max(0, Math.min(target.length, f.content.len - f.pos));
+    target.set(f.content.data.subarray(f.pos, f.pos + n)); f.pos += n;
+    return n;
+  }
+  const address = mem.va(mem.malloc(target.length));
+  const done = (n: number) => { if (n > 0) target.set(mem.bytes(guestAt(address), n)); return n; };
+  let n: number | Promise<number>;
+  try { n = fdRead(null, fd, guestAt(address), target.length); }
+  catch (e) { mem.free(guestAt(address)); throw e; }
+  if (n instanceof Promise) return n.then(done).finally(() => mem.free(guestAt(address)));
+  try { return done(n); } finally { mem.free(guestAt(address)); }
+}
+
+/** Read from the current offset without moving seekable descriptors; streams are consumed. */
+export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
+  const f = fds.get(fd);
+  if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return null;
+  if (f && !f.random && !f.rpipe && !f.wpipe && !f.event && !f.timer && !f.epoll) {
+    try { return f.source ? await readFully(f.source, f.pos) : f.content.data.subarray(f.pos, f.content.len); }
+    catch { return null; }
+  }
+  if (!f && !isNativeSocket(fd)) return null;
+  const buffer = mem.malloc(65536), target = mem.va(buffer), chunks: Uint8Array[] = [];
+  try {
+    for (;;) {
+      const n = await fdRead(null, fd, guestAt(target), 65536);
+      if (n < 0) return null;
+      if (!n) return concat(chunks);
+      chunks.push(mem.u8.slice(guestAt(target), guestAt(target) + n));
+    }
+  } finally { mem.free(guestAt(target)); }
+}
 
 function grow(f: Fd, need: number): void {
-  if (need <= f.data.length) return;
-  const n = new Uint8Array(Math.max(need, f.data.length * 2, 4096));
-  n.set(f.data.subarray(0, f.len));
-  f.data = n;
+  if (need <= f.content.data.length) return;
+  const n = new Uint8Array(Math.max(need, f.content.data.length * 2, 4096));
+  n.set(f.content.data.subarray(0, f.content.len));
+  f.content.data = n;
 }
 function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   if (isNativeSocket(fd)) return nativeSocketWrite(cpu, fd, p, n);
@@ -167,15 +217,16 @@ function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   if (f.timer) return fail(cpu, E.INVAL);
   if (f.event) { f.event.count += mem.ld32(p); wakeAll(f.event); return 8; }
   if (!f.write) return fail(cpu, E.BADF);
-  if (f.append) f.pos = f.len;
+  if (f.append) f.pos = f.content.len;
   grow(f, f.pos + n);
-  f.data.set(mem.u8.subarray(p, p + n), f.pos);
+  if (f.pos > f.content.len) f.content.data.fill(0, f.content.len, f.pos);
+  f.content.data.set(mem.u8.subarray(p, p + n), f.pos);
   f.pos += n;
-  if (f.pos > f.len) f.len = f.pos;
-  f.dirty = true;
+  if (f.pos > f.content.len) f.content.len = f.pos;
+  vfs.publish(f.content);
   return n;
 }
-function fdReadAt(cpu: Cpu, f: Fd, p: number, n: number, off: number): number | Promise<number> {
+function fdReadAt(cpu: Cpu | null, f: Fd, p: number, n: number, off: number): number | Promise<number> {
   if (!n) return 0;
   if (f.random) {
     let done = 0;
@@ -186,9 +237,9 @@ function fdReadAt(cpu: Cpu, f: Fd, p: number, n: number, off: number): number | 
     }
     return n;
   }
-  const k = Math.max(0, Math.min(n, f.len - off));
+  const k = Math.max(0, Math.min(n, f.content.len - off));
   if (!k) return 0;
-  if (!f.source) { mem.write(p, f.data.subarray(off, off + k)); return k; }
+  if (!f.source) { mem.write(p, f.content.data.subarray(off, off + k)); return k; }
   let value: Uint8Array | Promise<Uint8Array>;
   const dst = mem.va(p);
   try { value = f.source.read(off, k); }
@@ -196,7 +247,7 @@ function fdReadAt(cpu: Cpu, f: Fd, p: number, n: number, off: number): number | 
   const done = (bytes: Uint8Array) => { mem.write(guestAt(dst), bytes); return bytes.length; };
   return value instanceof Promise ? value.then(done, () => fail(cpu, E.IO)) : done(value);
 }
-function fdRead(cpu: Cpu, fd: number, p: number, n: number): number | Promise<number> {
+function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): number | Promise<number> {
   if (isNativeSocket(fd)) return nativeSocketRead(cpu, fd, p, n);
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
@@ -248,27 +299,15 @@ export function readInto(cpu: Cpu, fd: number, off: number, dst: number, n: numb
   if (!f) return fail(cpu, E.BADF);
   return f.source ? readLoop(dst, n, (q, k, done) => fdReadAt(cpu, f, q, k, off + done)) : fdReadAt(cpu, f, dst, n, off);
 }
-function flushFd(f: Fd): void {
-  if (f.dirty && !f.synthetic) { vfs.write(f.path, f.data.slice(0, f.len)); f.dirty = false; }
-}
-/** A MAP_SHARED file mapping's write-back: bytes land in the open description while it lasts (and reach
- *  the file at once, as page-cache stores would) and in the file itself once the descriptor is closed,
- *  since the mapping outlives it. Null for descriptors that are not plain files. */
 export function fdWriteBack(fd: number): ((off: number, bytes: Uint8Array) => void) | null {
   const f = fds.get(fd);
   if (!f || f.synthetic || f.random || f.dir || f.rpipe || f.wpipe || f.event || f.timer || f.epoll) return null;
   return (off, bytes) => {
-    if (f.references > 0) {
-      grow(f, off + bytes.length);
-      if (off > f.len) f.data.fill(0, f.len, off);
-      f.data.set(bytes, off); f.len = Math.max(f.len, off + bytes.length); f.dirty = true; flushFd(f);
-      return;
-    }
-    const current = vfs.read(f.path) ?? new Uint8Array(0), end = off + bytes.length;
-    const data = current.length >= end ? current : new Uint8Array(end);
-    if (data !== current) data.set(current);
-    data.set(bytes, off);
-    vfs.write(f.path, data);
+    grow(f, off + bytes.length);
+    if (off > f.content.len) f.content.data.fill(0, f.content.len, off);
+    f.content.data.set(bytes, off);
+    f.content.len = Math.max(f.content.len, off + bytes.length);
+    vfs.publish(f.content);
   };
 }
 function fdClose(cpu: Cpu | null, fd: number): number {
@@ -277,7 +316,6 @@ function fdClose(cpu: Cpu | null, fd: number): number {
   if (!f) return fail(cpu, E.BADF);
   fds.delete(fd); releaseFd(fd);
   if (--f.references > 0) return 0;
-  flushFd(f);
   if (f.timer) clearTimeout(f.timer.timeout);
   if (f.epoll) { for (const e of f.epoll.entries.values()) e.cancel(); for (const wake of f.epoll.wake) wake(); }
   if (f.wpipe) { f.wpipe.closed = true; wakeAll(f.wpipe); }
@@ -301,7 +339,7 @@ function fdSeek(cpu: Cpu | null, fd: number, off: number, whence: number): numbe
   if (!f) return fail(cpu, E.BADF);
   if (f.random || f.rpipe || f.wpipe) return fail(cpu, E.SPIPE);
   if (whence < 0 || whence > 2) return fail(cpu, E.INVAL);
-  const np = whence === 0 ? off : whence === 1 ? f.pos + off : f.len + off;
+  const np = whence === 0 ? off : whence === 1 ? f.pos + off : f.content.len + off;
   if (np < 0) return fail(cpu, E.INVAL);
   f.pos = np;
   return np;
@@ -418,7 +456,7 @@ function statPath(cpu: Cpu, path: string, buf: number): number {
 function statFd(cpu: Cpu, fd: number, buf: number): number {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
-  fillStat(buf, f.dir, f.len, Date.now(), f.path);
+  fillStat(buf, f.dir, f.content.len, Date.now(), f.path);
   return 0;
 }
 
@@ -496,7 +534,7 @@ function pwrite(cpu: Cpu, fd: number, p: number, n: number, off: number): number
 }
 function truncateFd(cpu: Cpu, f: Fd | undefined, n: number): number {
   if (!f) return fail(cpu, E.BADF);
-  grow(f, n); if (n > f.len) f.data.fill(0, f.len, n); f.len = n; f.dirty = true; return 0;
+  grow(f, n); if (n > f.content.len) f.content.data.fill(0, f.content.len, n); f.content.len = n; vfs.publish(f.content); return 0;
 }
 const chk = (cpu: Cpu, n: number, size: number, what: string) => { if (n > size) cpu.fault(`fortify: ${what} past the buffer`); };
 function openDir(path: string): number {
@@ -588,12 +626,19 @@ export function stdioInit(): void {
     ftruncate64: (cpu, a) => truncateFd(cpu, fds.get(a.i()), Number(a.l())),
     truncate: (cpu, a) => { const p = vfs.norm(a.str()), n = offArg(a); const d = vfs.read(p); if (!d) return fail(cpu, E.NOENT); const nd = new Uint8Array(n); nd.set(d.subarray(0, Math.min(n, d.length))); vfs.write(p, nd); return 0; },
     fcntl: (cpu, a) => {
-      const fd = a.i(), cmd = a.i(), value = a.i();
-      if (isNativeSocket(fd)) return nativeSocketFcntl(cpu, fd, cmd, value);
+      const fd = a.i(), cmd = a.i();
+      if (isNativeSocket(fd)) return nativeSocketFcntl(cpu, fd, cmd, a.i());
       const f = fds.get(fd);
       if (!f) return fail(cpu, E.BADF);
+      if (cmd === 5 || cmd === 12) {
+        const lock = a.p();
+        if (mem.ld16u(lock) > 2) return fail(cpu, E.INVAL);
+        mem.st16(lock, 2);
+        return 0;
+      }
       if (cmd === 3) return f.statusFlags;
       if (cmd === 4) {
+        const value = a.i();
         f.statusFlags = (f.statusFlags & ~(O_APPEND | O_NONBLOCK)) | (value & (O_APPEND | O_NONBLOCK));
         f.append = !!(f.statusFlags & O_APPEND);
         f.nonblock = !!(f.statusFlags & O_NONBLOCK);
@@ -750,7 +795,7 @@ export function stdioInit(): void {
     freopen: (cpu, a) => { const path = a.str(), mode = a.str(), fp = a.p(); const { o, f } = modeFlags(mode); pushback.delete(fp); fdClose(cpu, fileFd(fp)); const fd = fdOpen(cpu, path, o); if (fd < 0) return 0; files.set(fp, fd); mem.st16(fp + LAYOUT.F_FILE, fd); mem.st16(fp + LAYOUT.F_FLAGS, f); return fp; },
     tmpfile: (cpu) => { const fd = fdOpen(cpu, `/data/local/tmp/tmp${Date.now()}_${Math.floor(Math.random() * 1e6)}`, 2 | O_CREAT | O_TRUNC); return fd < 0 ? 0 : newFile(fd, F_RW); },
     fclose: (cpu, a) => { const fp = a.p(); pushback.delete(fp); const fd = fileFd(fp); const r = fdClose(cpu, fd); if (fp >= 0 && !isStd(fp)) { files.delete(fp); mem.free(fp); } return r; },
-    fflush: (_c, a) => { const fp = a.p(); if (!fp) { for (const f of fds.values()) flushFd(f); return 0; } const f = fds.get(fileFd(fp)); if (f) flushFd(f); return 0; },
+    fflush: (cpu, a) => { const fp = a.p(); return !fp || fds.has(fileFd(fp)) ? 0 : fail(cpu, E.BADF); },
     fread: (cpu, a) => {
       const p = a.p(), sz = a.u(), n = a.u(), fp = a.p();
       const total = sz * n;
@@ -814,7 +859,7 @@ export function stdioInit(): void {
       if (!fo) return -1;
       // scan the rest of the file as text, then advance by how much the conversions consumed
       const pending = pushback.get(fp);
-      let data = fo.data.subarray(fo.pos, Math.min(fo.len, fo.pos + 65536));
+      let data = fo.content.data.subarray(fo.pos, Math.min(fo.content.len, fo.pos + 65536));
       if (pending?.length) {
         const combined = new Uint8Array(pending.length + data.length);
         for (let i = 0; i < pending.length; i++) combined[i] = pending[pending.length - i - 1];

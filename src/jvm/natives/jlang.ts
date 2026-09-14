@@ -18,6 +18,14 @@ export async function vcall(obj: any, name: string, desc: string, ...args: unkno
   const r = findMethod(obj, name, desc).apply(obj, args);
   return r instanceof Promise ? await r : r;
 }
+export function vcallOn(thread: JThread, obj: unknown, name: string, desc: string, ...args: unknown[]): unknown {
+  return callOn(thread, () => vcallMaybe(obj, name, desc, ...args));
+}
+export function callOn<T>(thread: JThread, call: () => T): T {
+  const previous = curThread;
+  setCurThread(thread);
+  try { return call(); } finally { setCurThread(previous); }
+}
 export function vcallMaybe(obj: any, name: string, desc: string, ...args: unknown[]): any {
   return findMethod(obj, name, desc).apply(obj, args);
 }
@@ -35,8 +43,11 @@ export async function linkInit(cls: string): Promise<ClassInfo> {
 }
 /** `new Cls(args)` from native code: init the class, construct, run the Java constructor `desc` (none when null) */
 export async function newObj(cls: string, desc: string | null = "()V", ...args: unknown[]): Promise<any> {
-  const o = new (await linkInit(cls)).ctor();
-  if (desc !== null) await vcall(o, "<init>", desc, ...args);
+  const thread = curThread, info = await linkInit(cls), previous = curThread;
+  let o;
+  setCurThread(thread);
+  try { o = new info.ctor(); } finally { setCurThread(previous); }
+  if (desc !== null) await vcallOn(thread, o, "<init>", desc, ...args);
   return o;
 }
 /** a boxed primitive (Integer, Long, Float …) — every box class keeps its value in `v` */
@@ -484,7 +495,7 @@ for (const [sup, names] of [
     "java/util/ConcurrentModificationException"],
   ["ReflectiveOperationException", "ClassNotFoundException NoSuchMethodException NoSuchFieldException InstantiationException IllegalAccessException"],
   ["IllegalArgumentException", "IllegalThreadStateException"],
-  ["Error", "StackOverflowError OutOfMemoryError AssertionError LinkageError InternalError"],
+  ["Error", "StackOverflowError OutOfMemoryError LinkageError InternalError"],
   ["LinkageError", "NoClassDefFoundError NoSuchMethodError NoSuchFieldError UnsatisfiedLinkError AbstractMethodError ExceptionInInitializerError"],
   ["java/io/IOException", "java/io/FileNotFoundException java/io/EOFException java/io/UnsupportedEncodingException java/net/SocketException " +
     "java/net/SocketTimeoutException java/net/UnknownHostException java/io/InterruptedIOException"],
@@ -493,6 +504,22 @@ for (const [sup, names] of [
   if (sup === "java/io/IOException") defineException(sup, "java/lang/Exception", ["()V", "(Ljava/lang/String;)V", "(Ljava/lang/Throwable;)V", "(Ljava/lang/String;Ljava/lang/Throwable;)V"]);
   for (const n of names.split(" ")) defineException(lang(n), lang(sup));
 }
+
+defineException("java/io/ObjectStreamException", "java/io/IOException");
+for (const name of ["NotSerializableException", "InvalidClassException", "InvalidObjectException", "NotActiveException", "StreamCorruptedException"])
+  defineException("java/io/" + name, "java/io/ObjectStreamException");
+defineException("java/io/UTFDataFormatException", "java/io/IOException");
+
+class JAssertionError extends JThrowable {}
+rt.register({ name: "java/lang/AssertionError", ctor: JAssertionError, sup: "java/lang/Error", methods: {
+  "<init>(Ljava/lang/Object;)V": async function (this: JAssertionError, detail: unknown) {
+    this.msg = detail === null ? "null" : typeof detail === "string" ? detail : await vcall(detail, "toString", "()Ljava/lang/String;");
+    if (detail instanceof JThrowable) this.cause = detail;
+  },
+  ...Object.fromEntries(["Z", "C", "I", "J", "F", "D"].map(type => ["<init>(" + type + ")V", async function (this: JAssertionError, detail: unknown) {
+    this.msg = await vcall(rt.link("java/lang/String").ctor, "valueOf", "(" + type + ")Ljava/lang/String;", detail);
+  }])),
+} });
 
 rt.mkThrowable = (cls: string, msg: string | null) => {
   let ctor = excCtors.get(cls);
@@ -651,7 +678,7 @@ sm("regionMatches(ZILjava/lang/String;II)Z", function (ignore: number, toff: num
 });
 sm("contentEquals(Ljava/lang/CharSequence;)Z", function (o: unknown) { return (this as string) === jToString(o) ? 1 : 0; });
 sm("codePointCount(II)I", function (a: number, b: number) { return b - a; });
-sm("offsetByCodePoints(II)I", function (i: number, n: number) { return i + n; });
+sm("offsetByCodePoints(II)I", function (i: number, n: number) { return offsetCodePoints(String(this), i, n); });
 sm("chars()Ljava/util/stream/IntStream;", function () { throw rt.unimplemented("String.chars"); });
 sm("getClass()Ljava/lang/Class;", function () { return rt.classFor("java/lang/String"); });
 sm("matches(Ljava/lang/String;)Z", function (p: string) { return javaMatches(p, this as string); });
@@ -1131,7 +1158,7 @@ function parseFloatJ(s: string): number {
 const isNaNZ = (v: number) => (v !== v ? 1 : 0);
 const isInfZ = (v: number) => (v === Infinity || v === -Infinity ? 1 : 0);
 /** Float/Double.compare: NaN sorts above everything, including itself equal */
-const cmpFloat = (a: number, b: number) => (a < b ? -1 : a > b ? 1 : a === b ? 0 : a !== a ? (b !== b ? 0 : 1) : -1);
+export const cmpFloat = (a: number, b: number) => a < b ? -1 : a > b ? 1 : Object.is(a, b) ? 0 : a === b ? Object.is(a, -0) ? -1 : 1 : a !== a ? 1 : -1;
 rt.register({
   name: "java/lang/Float", ctor: JFloat, sup: "java/lang/Number",
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
@@ -1219,11 +1246,38 @@ rt.register({
     "static logicalXor(ZZ)Z": (a: number, b: number) => ((a ? 1 : 0) ^ (b ? 1 : 0)),
   },
 });
+function offsetCodePoints(text: string, index: number, offset: number): number {
+  if (index < 0 || index > text.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(index));
+  while (offset > 0 && index < text.length) {
+    const c = text.charCodeAt(index++);
+    if (c >= 0xd800 && c <= 0xdbff && index < text.length) {
+      const next = text.charCodeAt(index);
+      if (next >= 0xdc00 && next <= 0xdfff) index++;
+    }
+    offset--;
+  }
+  while (offset < 0 && index > 0) {
+    const c = text.charCodeAt(--index);
+    if (c >= 0xdc00 && c <= 0xdfff && index > 0) {
+      const previous = text.charCodeAt(index - 1);
+      if (previous >= 0xd800 && previous <= 0xdbff) index--;
+    }
+    offset++;
+  }
+  if (offset !== 0) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(offset));
+  return index;
+}
+const isISOControl = (c: number) => +((c >= 0 && c <= 0x1f) || (c >= 0x7f && c <= 0x9f));
 rt.register({
   name: "java/lang/Character", ctor: JChar,
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   statics: { MAX_VALUE: 0xffff, MIN_VALUE: 0, get TYPE() { return rt.classFor("char"); } },
   methods: {
+    "static offsetByCodePoints(Ljava/lang/CharSequence;II)I": (cs: unknown, index: number, offset: number) => {
+      if (cs == null) return rt.npe();
+      if (typeof cs === "string") return offsetCodePoints(cs, index, offset);
+      return vcall(cs, "toString", "()Ljava/lang/String;").then(text => offsetCodePoints(text, index, offset));
+    },
     "static charCount(I)I": (cp: number) => (cp >= 0x10000 ? 2 : 1),
     "static getDirectionality(C)B": directionality,
     "static getDirectionality(I)B": directionality,
@@ -1235,7 +1289,8 @@ rt.register({
     "static isSurrogatePair(CC)Z": (high: number, low: number) => +(high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff),
     "static isSurrogate(C)Z": (c: number) => (c >= 0xd800 && c <= 0xdfff ? 1 : 0),
     "static toCodePoint(CC)I": (h: number, l: number) => ((h - 0xd800) << 10) + (l - 0xdc00) + 0x10000,
-    "static isISOControl(I)Z": (c: number) => ((c >= 0 && c <= 0x1f) || (c >= 0x7f && c <= 0x9f) ? 1 : 0),
+    "static isISOControl(I)Z": isISOControl,
+    "static isISOControl(C)Z": isISOControl,
     "static isDefined(I)Z": () => 1,
     "<init>(C)V": function (this: JChar, v: number) { this.v = v; },
     "charValue()C": function (this: JChar) { return this.v; },
@@ -1273,7 +1328,7 @@ for (const t of ["I", "J", "F", "D"]) {
   mm[`static max(${t}${t})${t}`] = t === "J" ? (a: bigint, b: bigint) => (a > b ? a : b) : (a: number, b: number) => Math.max(a, b);
   mm[`static min(${t}${t})${t}`] = t === "J" ? (a: bigint, b: bigint) => (a < b ? a : b) : (a: number, b: number) => Math.min(a, b);
 }
-for (const f of ["sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "log10", "cbrt", "sinh", "cosh", "tanh", "floor", "ceil"] as const) {
+for (const f of ["sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "log1p", "log10", "cbrt", "sinh", "cosh", "tanh", "floor", "ceil"] as const) {
   mm[`static ${f}(D)D`] = (v: number) => Math[f](v);
 }
 rt.register({
@@ -1301,6 +1356,8 @@ rt.register({
       doubleToLongBits(magnitude) & 0x7fffffffffffffffn | doubleToLongBits(sign) & -0x8000000000000000n),
     "static copySign(FF)F": (magnitude: number, sign: number) => intBitsToFloat(
       floatToIntBits(magnitude) & 0x7fffffff | floatToIntBits(sign) & 0x80000000),
+    "static getExponent(D)I": (v: number) => Number((doubleToLongBits(v) >> 52n) & 0x7ffn) - 1023,
+    "static getExponent(F)I": (v: number) => ((floatToIntBits(v) >>> 23) & 0xff) - 127,
     "static scalb(DI)D": (v: number, n: number) => v * Math.pow(2, n),
     "static scalb(FI)F": (v: number, n: number) => Math.fround(v * Math.pow(2, n)),
     "static random()D": () => Math.random(),
@@ -1449,6 +1506,7 @@ rt.register({
 
 /** the native tier releases a finished thread's Cpu and stack through this */
 export const threadExit = { hook: null as ((t: JThread) => void) | null };
+const liveThreads = new Set<JThread>();
 export class JThread extends JObj {
   jname = "Thread";
   daemon = 0;
@@ -1456,7 +1514,7 @@ export class JThread extends JObj {
   started = false;
   parked = 0;
   get alive() { return this.live; }
-  set alive(value: number) { this.live = value; if (value) this.started = true; }
+  set alive(value: number) { this.live = value; if (value) { this.started = true; liveThreads.add(this); } else liveThreads.delete(this); }
   prio = 5;
   target: unknown = null;   // Runnable
   locals = inheritedLocals();
@@ -1477,10 +1535,9 @@ export let curThread: JThread = null as never;
 export const mainThread = curThread = new JThread();
 mainThread.jname = "main";
 mainThread.alive = 1;
-const liveThreads = new Set<JThread>([mainThread]);
 rt.th = () => curThread;
-rt.st = (t) => { curThread = t as JThread; };
-rt.su = () => { curThread = mainThread; };
+rt.st = (t) => setCurThread(t as JThread);
+rt.su = () => setCurThread(mainThread);
 class JDefaultUEH extends JObj {}
 rt.register({
   name: "webdroid/DefaultUEH", ctor: JDefaultUEH, ifaces: ["java/lang/Thread$UncaughtExceptionHandler"],
@@ -1492,7 +1549,12 @@ rt.register({
   },
 });
 let defaultUEH: unknown = new JDefaultUEH();
-export function setCurThread(t: JThread) { curThread = t; }
+export const threadSwitch = { hook: null as ((t: JThread) => void) | null };
+export function setCurThread(t: JThread) {
+  if (t === curThread) return;
+  curThread = t;
+  threadSwitch.hook?.(t);
+}
 let threadCounter = 0;
 const nextThreadName = () => "Thread-" + threadCounter++;
 
@@ -1524,7 +1586,6 @@ function join(t: JThread, ms: number): Promise<void> | undefined {
     return () => { pending = false; };
   }, ms > 0 ? ms : undefined).then(() => {});
 }
-
 
 rt.register({
   name: "java/lang/Thread", ctor: JThread,
@@ -1560,10 +1621,14 @@ rt.register({
       this.done = new Promise((resolve) => {
         queueMicrotask(async () => {
           const prev = curThread;
-          curThread = this;
-          try { await vcall(this, "run", "()V"); }
+          setCurThread(this);
+          try {
+            let running: Promise<unknown>;
+            try { running = vcall(this, "run", "()V"); } finally { setCurThread(prev); }
+            await running;
+          }
           catch (e) { console.error("[thread " + this.jname + "]", e); }
-          finally { this.alive = 0; liveThreads.delete(this); curThread = prev; threadExit.hook?.(this); resolve(); }
+          finally { this.alive = 0; threadExit.hook?.(this); resolve(); }
         });
       });
     },
@@ -1579,6 +1644,7 @@ rt.register({
     "getStackTrace()[Ljava/lang/StackTraceElement;": () => jsStackTrace(new Error().stack),
     "static currentThread()Ljava/lang/Thread;": () => curThread,
     "static activeCount()I": () => liveThreads.size,
+    "static enumerate([Ljava/lang/Thread;)I": enumerateThreads,
     "static getAllStackTraces()Ljava/util/Map;": async () => {
       const m = await newObj("java/util/HashMap");
       await vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", curThread, jsStackTrace(new Error().stack));
@@ -1595,6 +1661,11 @@ rt.register({
   },
 });
 
+function enumerateThreads(threads: unknown[]): number {
+  let count = 0;
+  for (const thread of liveThreads) { if (count === threads.length) break; threads[count++] = thread; }
+  return count;
+}
 // One ThreadGroup for the process: crash handlers and thread factories walk up to it, and its
 // parent chain ends here (ART's "main" group under "system").
 class JThreadGroup extends JObj { gname = "main"; }
@@ -1607,14 +1678,7 @@ rt.register({
     "getName()Ljava/lang/String;": function (this: JThreadGroup) { return this.gname; },
     "getParent()Ljava/lang/ThreadGroup;": function (this: JThreadGroup) { return this === mainGroup ? null : mainGroup; },
     "activeCount()I": () => liveThreads.size,
-    "enumerate([Ljava/lang/Thread;)I": (a: unknown[]) => {
-      let i = 0;
-      for (const thread of liveThreads) {
-        if (i >= a.length) break;
-        a[i++] = thread;
-      }
-      return i;
-    },
+    "enumerate([Ljava/lang/Thread;)I": enumerateThreads,
     "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": (_t: unknown, e: unknown) => { console.error("[uncaught]", e); },
     "toString()Ljava/lang/String;": function (this: JThreadGroup) { return `java.lang.ThreadGroup[name=${this.gname},maxpri=10]`; },
   },
@@ -1753,12 +1817,45 @@ const scriptEnums = mkEnumSet("java/lang/Character$UnicodeScript", SCRIPT_NAMES,
   },
 });
 
-class JRef extends JObj { referent: unknown = null; }
+class JRef extends JObj { referent: unknown = null; queue: JRefQueue | null = null; state = 0; }
+class JRefQueue extends JObj { items: JRef[] = []; waiters = new Set<() => void>(); }
+function enqueueReference(ref: JRef): number {
+  if (!ref.queue || ref.state) return 0;
+  collectedReferences.unregister(ref);
+  ref.referent = null;
+  if (ref instanceof JWeakRef) ref.wr = null;
+  ref.state = 1; ref.queue.items.push(ref);
+  for (const wake of ref.queue.waiters) wake();
+  ref.queue.waiters.clear();
+  return 1;
+}
+const collectedReferences = new FinalizationRegistry<WeakRef<JRef>>(ref => { const value = ref.deref(); if (value) enqueueReference(value); });
+function watchReference(ref: JRef, value: unknown, queue: JRefQueue | null): void {
+  ref.queue = queue;
+  if (queue && value && (typeof value === "object" || typeof value === "function")) collectedReferences.register(value, new WeakRef(ref), ref);
+}
+function pollReference(queue: JRefQueue): JRef | null {
+  const ref = queue.items.shift(); if (!ref) return null;
+  ref.state = 2; return ref;
+}
+async function removeReference(this: JRefQueue, ms = 0n): Promise<JRef | null> {
+  if (ms < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Negative timeout");
+  const thread = curThread, start = performance.now();
+  for (;;) {
+    if (thread.interrupted) { thread.interrupted = 0; throw rt.mkThrowable("java/lang/InterruptedException", null); }
+    const ref = pollReference(this); if (ref) return ref;
+    const remaining = Number(ms) - (performance.now() - start);
+    if (ms > 0n && remaining <= 0) return null;
+    await park(thread, wake => { this.waiters.add(wake); return () => this.waiters.delete(wake); }, ms === 0n ? undefined : remaining);
+  }
+}
 rt.register({
   name: "java/lang/ref/Reference", ctor: JRef,
   methods: {
     "get()Ljava/lang/Object;": function (this: JRef) { return this.referent; },
-    "clear()V": function (this: JRef) { this.referent = null; },
+    "clear()V": function (this: JRef) { this.referent = null; collectedReferences.unregister(this); },
+    "isEnqueued()Z": function (this: JRef) { return +(this.state === 1); },
+    "enqueue()Z": function (this: JRef) { return enqueueReference(this); },
     "static reachabilityFence(Ljava/lang/Object;)V": () => {},
   },
 });
@@ -1766,31 +1863,36 @@ class JWeakRef extends JRef { wr: WeakRef<object> | null = null; }
 rt.register({
   name: "java/lang/ref/WeakReference", ctor: JWeakRef, sup: "java/lang/ref/Reference",
   methods: {
-    "<init>(Ljava/lang/Object;)V": function (this: JWeakRef, o: object) { this.wr = o ? new WeakRef(o) : null; },
-    "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": function (this: JWeakRef, o: object) { this.wr = o ? new WeakRef(o) : null; },
-    "get()Ljava/lang/Object;": function (this: JWeakRef) { return this.wr?.deref() ?? null; },
-    "clear()V": function (this: JWeakRef) { this.wr = null; },
+    "<init>(Ljava/lang/Object;)V": initWeakReference,
+    "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": initWeakReference,
+    "get()Ljava/lang/Object;": function (this: JWeakRef) { return this.wr?.deref() ?? this.referent; },
+    "clear()V": function (this: JWeakRef) { this.wr = null; this.referent = null; collectedReferences.unregister(this); },
   },
 });
 rt.register({
   name: "java/lang/ref/SoftReference", ctor: class extends JRef {}, sup: "java/lang/ref/Reference",
   methods: {
     "<init>(Ljava/lang/Object;)V": function (this: JRef, o: unknown) { this.referent = o; },
-    "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": function (this: JRef, o: unknown) { this.referent = o; },
+    "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": function (this: JRef, o: unknown, queue: JRefQueue | null) { this.referent = o; this.queue = queue; },
   },
 });
 rt.register({
   name: "java/lang/ref/PhantomReference", ctor: class extends JRef {}, sup: "java/lang/ref/Reference",
   methods: {
-    "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": function () {},
+    "<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V": function (this: JRef, o: unknown, queue: JRefQueue | null) { watchReference(this, o, queue); },
     "get()Ljava/lang/Object;": () => null,
   },
 });
-rt.register({ name: "java/lang/ref/ReferenceQueue", ctor: class extends JObj {}, methods: {
+function initWeakReference(this: JWeakRef, value: unknown, queue: JRefQueue | null = null): void {
+  if (value && (typeof value === "object" || typeof value === "function")) this.wr = new WeakRef(value);
+  else this.referent = value;
+  watchReference(this, value, queue);
+}
+rt.register({ name: "java/lang/ref/ReferenceQueue", ctor: JRefQueue, methods: {
   "<init>()V": function () {},
-  "poll()Ljava/lang/ref/Reference;": () => null,
-  "remove()Ljava/lang/ref/Reference;": () => park(curThread, () => () => {}).then(() => null),
-  "remove(J)Ljava/lang/ref/Reference;": (ms: bigint) => park(curThread, () => () => {}, Number(ms)).then(() => null),
+  "poll()Ljava/lang/ref/Reference;": function (this: JRefQueue) { return pollReference(this); },
+  "remove()Ljava/lang/ref/Reference;": removeReference,
+  "remove(J)Ljava/lang/ref/Reference;": removeReference,
 } });
 
 rt.register({

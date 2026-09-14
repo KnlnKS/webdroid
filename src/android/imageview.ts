@@ -1,36 +1,68 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, requestLayout, invalidate, resolveSizeAndState, specMode, MS_EXACTLY } from "./view";
 import {
-  type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, cslColor, drawChild
+  type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, cslColor, drawableSize
 } from "./drawable";
-import { mkEnumSet } from "../jvm/natives/jlang";
-import { type NativeSpec, rt, stubs, noops } from "../jvm/runtime";
+import { curThread, callOn, vcallOn, mkEnumSet, newObj, after } from "../jvm/natives/jlang";
+import { type NativeSpec, rt, noops } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
-import { restoreCanvasToCount, saveCanvas, type JBitmap, type JCanvas } from "./graphics";
+import { JMatrix, restoreCanvasToCount, saveCanvas, type JBitmap, type JCanvas } from "./graphics";
 
 export class JImageView extends JView {
   private dr: JDrawable | null = null;
   get drawable(): JDrawable | null { return this.dr; }
-  set drawable(d: JDrawable | null) {
+  setDrawable(d: JDrawable | null) {
+    const thread = curThread;
     if (this.dr) this.dr.callback = null;
     this.dr = d;
     if (d) d.callback = this;
+    invalidate(this);
+    return after(d ? drawableSize(d, false, thread) : -1, w => after(d ? drawableSize(d, true, thread) : -1, h => {
+      this.drawableW = w; this.drawableH = h;
+      return callOn(thread, () => this.applyColorFilter());
+    }));
   }
+  drawableW = -1; drawableH = -1;
   scaleType = 3; // FIT_CENTER
   adjustBounds = false;
+  cropToPadding = false;
+  imageMatrix = new JMatrix();
+  drawMatrix(): JMatrix | null {
+    const dw = this.drawableW, dh = this.drawableH, st = this.scaleType;
+    if (!this.drawable || !this.width() || !this.height() || dw <= 0 || dh <= 0 || st === 1) return null;
+    const m = this.imageMatrix.m;
+    if (st === 0) return m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0 ? null : this.imageMatrix;
+    const aw = this.width() - this.padL - this.padR, ah = this.height() - this.padT - this.padB;
+    if (aw === dw && ah === dh) return null;
+    let scale = st === 5 ? 1 : st === 6 ? Math.max(aw / dw, ah / dh) : Math.min(aw / dw, ah / dh);
+    if (st === 7) scale = Math.min(1, scale);
+    const fraction = st === 2 ? 0 : st === 4 ? 1 : 0.5;
+    let dx = (aw - dw * scale) * fraction, dy = (ah - dh * scale) * fraction;
+    if (st >= 5) { dx = Math.round(dx); dy = Math.round(dy); }
+    m[0] = m[3] = scale; m[1] = m[2] = 0; m[4] = dx; m[5] = dy;
+    return this.imageMatrix;
+  }
   tintCsl: JColorStateList | null = null;
+  colorFilter: unknown = null;
+  hasColorFilter = false;
+  applyColorFilter(): unknown {
+    const d = this.dr, thread = curThread;
+    if (d && this.hasColorFilter) return after(vcallOn(thread, d, "mutate", "()Landroid/graphics/drawable/Drawable;"),
+      () => vcallOn(thread, d, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", this.colorFilter));
+  }
   /** AOSP only applies these when adjustViewBounds is on */
   maxW = Infinity; maxH = Infinity;
 }
-mkEnumSet("android/widget/ImageView$ScaleType", ["MATRIX", "FIT_XY", "FIT_START", "FIT_CENTER", "FIT_END", "CENTER", "CENTER_CROP", "CENTER_INSIDE"]);
+const scaleTypes = mkEnumSet("android/widget/ImageView$ScaleType", ["MATRIX", "FIT_XY", "FIT_START", "FIT_CENTER", "FIT_END", "CENTER", "CENTER_CROP", "CENTER_INSIDE"]);
 const imageViewMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JImageView, c: unknown, set: JAttrSet | null) {
     await initViewFromCtx(this, c, set);
     if (set && this.jres) {
-      const ta = obtainStyled(this.jres, this.theme, set, [AID("src"), AID("scaleType"), AID("adjustViewBounds"), AID("tint")], 0, 0);
-      if (ta.vals[0]) this.drawable = await loadDrawableRV(this.jres, ta.vals[0], this.theme);
+      const ta = obtainStyled(this.jres, this.theme, set, [AID("src"), AID("scaleType"), AID("adjustViewBounds"), AID("tint"), AID("cropToPadding")], 0, 0);
+      if (ta.vals[0]) await this.setDrawable(await loadDrawableRV(this.jres, ta.vals[0], this.theme));
       if (ta.vals[1]) this.scaleType = rvInt(this.jres, ta.vals[1], 3);
       if (ta.vals[2]) this.adjustBounds = !!rvInt(this.jres, ta.vals[2], 0);
+      if (ta.vals[4]) this.cropToPadding = !!rvInt(this.jres, ta.vals[4], 0);
       if (ta.vals[3]) {
         const tint = rvColor(this.jres, ta.vals[3], 0);
         if (this.drawable && tint) this.drawable.tint = tint;
@@ -38,12 +70,13 @@ const imageViewMethods: NativeSpec["methods"] = {
     }
   },
   "setImageDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JImageView, d: JDrawable | null) {
-    this.drawable = d;
+    const pending = this.setDrawable(d);
     this.layoutRequested = true;
     requestLayout(this);
+    return pending;
   },
   "setImageResource(I)V": async function (this: JImageView, id: number) {
-    this.drawable = id && this.jres ? await loadDrawable(this.jres, id, this.theme) : null;
+    await this.setDrawable(id && this.jres ? await loadDrawable(this.jres, id, this.theme) : null);
     this.layoutRequested = true;
     requestLayout(this);
   },
@@ -51,43 +84,64 @@ const imageViewMethods: NativeSpec["methods"] = {
     if (b) {
       const d = new JBitmapDrawable();
       d.bmp = b;
-      this.drawable = d;
-    } else this.drawable = null;
+      await this.setDrawable(d);
+    } else await this.setDrawable(null);
     this.layoutRequested = true;
     requestLayout(this);
   },
   "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JImageView) { return this.drawable; },
-  "setScaleType(Landroid/widget/ImageView$ScaleType;)V": function (this: JImageView, st: { ord: number }) {
-    this.scaleType = st?.ord ?? 3;
-    invalidate();
+  "setScaleType(Landroid/widget/ImageView$ScaleType;)V": function (this: JImageView, st: { ord: number } | null) {
+    if (!st) return rt.npe();
+    if (this.scaleType === st.ord) return;
+    this.scaleType = st.ord; requestLayout(this); invalidate(this);
   },
   "setAdjustViewBounds(Z)V": function (this: JImageView, v: number) { this.adjustBounds = !!v; },
   "setMaxWidth(I)V": function (this: JImageView, v: number) { this.maxW = v; requestLayout(this); },
   "setMaxHeight(I)V": function (this: JImageView, v: number) { this.maxH = v; requestLayout(this); },
   "getMaxWidth()I": function (this: JImageView) { return Number.isFinite(this.maxW) ? this.maxW : 0x7fffffff; },
   "getMaxHeight()I": function (this: JImageView) { return Number.isFinite(this.maxH) ? this.maxH : 0x7fffffff; },
-  "setColorFilter(I)V": function (this: JImageView, c: number) { if (this.drawable) this.drawable.tint = c; invalidate(); },
-  "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JImageView, c: number) {
-    if (this.drawable) this.drawable.tint = c;
-    invalidate();
+  "setColorFilter(I)V": function (this: JImageView, c: number) {
+    return vcallOn(curThread, this, "setColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, rt.link("android/graphics/PorterDuff$Mode").ctor.s$SRC_ATOP);
   },
-  "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JImageView, f: any) {
-    if (this.drawable) { this.drawable.tint = f?.tint ?? null; this.drawable.tintMatrix = f?.matrix ?? null; }
-    invalidate();
+  "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": async function (this: JImageView, c: number, mode: unknown) {
+    const thread = curThread;
+    const f = await newObj("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, mode);
+    return vcallOn(thread, this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", f);
   },
-  "clearColorFilter()V": function (this: JImageView) { if (this.drawable) { this.drawable.tint = null; this.drawable.tintMatrix = null; } },
+  "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JImageView, f: unknown) {
+    if (this.colorFilter === f) return;
+    this.colorFilter = f; this.hasColorFilter = true;
+    invalidate(this);
+    return this.applyColorFilter();
+  },
+  "clearColorFilter()V": function (this: JImageView) { return vcallOn(curThread, this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", null); },
+  "getColorFilter()Landroid/graphics/ColorFilter;": function (this: JImageView) { return this.colorFilter; },
   "getImageTintList()Landroid/content/res/ColorStateList;": function (this: JImageView) { return this.tintCsl; },
   "setImageTintList(Landroid/content/res/ColorStateList;)V": function (this: JImageView, csl: JColorStateList | null) {
     this.tintCsl = csl;
     if (this.drawable && csl) this.drawable.tint = cslColor(csl, this.drawableState());
-    invalidate();
+    invalidate(this);
   },
   "setImageLevel(I)V": function (this: JImageView, l: number) { if (this.drawable) this.drawable.level = l; },
-  ...stubs(null, "getScaleType()Landroid/widget/ImageView$ScaleType;"),
-  ...noops("setImageMatrix(Landroid/graphics/Matrix;)V", "setImageURI(Landroid/net/Uri;)V"),
-  "onMeasure(II)V": function (this: JImageView, wSpec: number, hSpec: number) {
-    const dw = Math.max(0, this.drawable?.intrinsicW() ?? 0);
-    const dh = Math.max(0, this.drawable?.intrinsicH() ?? 0);
+  "getScaleType()Landroid/widget/ImageView$ScaleType;": function (this: JImageView) { return scaleTypes[this.scaleType]; },
+  "getImageMatrix()Landroid/graphics/Matrix;": function (this: JImageView) { return this.drawMatrix() ?? new JMatrix(); },
+  "setImageMatrix(Landroid/graphics/Matrix;)V": function (this: JImageView, matrix: JMatrix | null) {
+    const src = matrix?.m ?? [1, 0, 0, 1, 0, 0], dst = this.imageMatrix.m;
+    let changed = false;
+    for (let i = 0; i < 6; i++) if (dst[i] !== src[i]) { dst[i] = src[i]; changed = true; }
+    if (changed) { this.drawMatrix(); invalidate(this); }
+  },
+  "setCropToPadding(Z)V": function (this: JImageView, crop: number) { this.cropToPadding = !!crop; invalidate(this); },
+  "getCropToPadding()Z": function (this: JImageView) { return +this.cropToPadding; },
+  ...noops("setImageURI(Landroid/net/Uri;)V"),
+  "onMeasure(II)V": async function (this: JImageView, wSpec: number, hSpec: number) {
+    if (this.drawable) {
+      const thread = curThread, w = drawableSize(this.drawable, false, thread);
+      this.drawableW = w instanceof Promise ? await w : w;
+      const h = drawableSize(this.drawable, true, thread);
+      this.drawableH = h instanceof Promise ? await h : h;
+    }
+    const dw = Math.max(0, this.drawableW), dh = Math.max(0, this.drawableH);
     let w = dw + this.padL + this.padR;
     let h = dh + this.padT + this.padB;
     w = Math.max(w, this.minW); h = Math.max(h, this.minH);
@@ -101,45 +155,29 @@ const imageViewMethods: NativeSpec["methods"] = {
       }
     }
   },
-  "onDraw(Landroid/graphics/Canvas;)V": function (this: JImageView, cv: JCanvas): unknown {
+  "onDraw(Landroid/graphics/Canvas;)V": async function (this: JImageView, cv: JCanvas) {
     const d = this.drawable;
     if (!d) return;
-    const dw = Math.max(1, d.intrinsicW()), dh = Math.max(1, d.intrinsicH());
+    const thread = curThread;
     const aw = this.width() - this.padL - this.padR, ah = this.height() - this.padT - this.padB;
-    let l = this.padL, t = this.padT, w = aw, h = ah;
-    const st = this.scaleType;
-    if (st === 5) { // CENTER
-      w = dw; h = dh;
-      l = this.padL + ((aw - dw) >> 1); t = this.padT + ((ah - dh) >> 1);
-    } else if (st === 3 || st === 7 || st === 2 || st === 4) { // FIT_CENTER-ish / CENTER_INSIDE
-      let s = Math.min(aw / dw, ah / dh);
-      if (st === 7) s = Math.min(1, s);
-      w = Math.round(dw * s); h = Math.round(dh * s);
-      l = this.padL + ((aw - w) >> 1);
-      t = this.padT + ((ah - h) >> 1);
-      if (st === 2) { l = this.padL; t = this.padT; }
-    } else if (st === 6) { // CENTER_CROP
-      const s = Math.max(aw / dw, ah / dh);
-      w = Math.round(dw * s); h = Math.round(dh * s);
-      l = this.padL + ((aw - w) >> 1); t = this.padT + ((ah - h) >> 1);
-      const ctx = cv.ctx;
-      const saveCount = saveCanvas(cv);
-      ctx.beginPath();
-      ctx.rect(this.padL, this.padT, aw, ah);
-      ctx.clip();
-      d.bounds.left = l; d.bounds.top = t; d.bounds.right = l + w; d.bounds.bottom = t + h;
-      try {
-        const result = drawChild(d, cv);
-        if (result instanceof Promise) return result.finally(() => restoreCanvasToCount(cv, saveCount));
-      } catch (error) {
-        restoreCanvasToCount(cv, saveCount);
-        throw error;
+    if (aw <= 0 || ah <= 0) return;
+    if (this.drawableW === 0 || this.drawableH === 0) return;
+    const stretch = this.scaleType === 1 || this.drawableW <= 0 || this.drawableH <= 0;
+    const dw = stretch ? aw : this.drawableW, dh = stretch ? ah : this.drawableH;
+    const matrix = this.drawMatrix();
+    const ctx = cv.ctx;
+    const saveCount = saveCanvas(cv);
+    try {
+      if (this.cropToPadding) {
+        ctx.beginPath(); ctx.rect(this.padL, this.padT, aw, ah); ctx.clip();
       }
-      restoreCanvasToCount(cv, saveCount);
-      return undefined;
-    }
-    d.bounds.left = l; d.bounds.top = t; d.bounds.right = l + w; d.bounds.bottom = t + h;
-    return drawChild(d, cv);
+      ctx.translate(this.padL, this.padT);
+      if (matrix) ctx.transform(...matrix.m);
+      const bounds = vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, dw, dh);
+      if (bounds instanceof Promise) await bounds;
+      const draw = vcallOn(thread, d, "draw", "(Landroid/graphics/Canvas;)V", cv);
+      if (draw instanceof Promise) await draw;
+    } finally { restoreCanvasToCount(cv, saveCount); }
   },
 };
 rt.register({ name: "android/widget/ImageView", ctor: JImageView, sup: "android/view/View", methods: imageViewMethods });

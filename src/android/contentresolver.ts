@@ -1,13 +1,13 @@
 import { services, type JContext } from "./context";
 import { rt, type NativeSpec, JObj, stubs, noops } from "../jvm/runtime";
 import { appHost, type AppHost } from "./apphost";
-import { type JUri, mkUri } from "./net";
+import { type JUri, mkUri, uriParts, uriDecode } from "./net";
 import {
   isDocsUri, documentId, docRead, docWrite, docInputStream, docOutputStream, docRow, isChildrenUri, docChildren,
   DOC_COLUMNS, docCells, docDelete
 } from "./documents";
 import { mkPfd } from "./os";
-import { vfs } from "../jvm/natives/jio";
+import { mkFile } from "../jvm/natives/jio";
 import { mkAssetFd } from "./resnative";
 import { newObj, defineException, vcall } from "../jvm/natives/jlang";
 import { mkCursor } from "./sqlite";
@@ -15,7 +15,7 @@ import { newArrayList } from "../jvm/natives/jutil";
 import { getPM } from "./pm";
 import { locationTransport } from "./locationmanager";
 import { inMainJob, onMain } from "./mainloop";
-import { PROCESS_NAME } from "./os";
+import { PROCESS_NAME, PROCESS_UID } from "./os";
 
 type ProviderInfo = { name: string; authority: string; packageName: string; processName?: string };
 export const providerTransport: { acquire: (info: ProviderInfo) => Promise<unknown> } = { acquire: async () => null };
@@ -50,13 +50,14 @@ async function contentProvider(uri: JUri): Promise<unknown> {
 }
 
 export const providerOperations = {
+  openFile: "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;",
   query: "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
   insert: "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;",
   update: "(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I",
   delete: "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I",
   getType: "(Landroid/net/Uri;)Ljava/lang/String;",
   call: "(Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;",
-  openFile: "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;",
+
 };
 class JProviderClient extends JObj { provider: unknown = null; closed = false; }
 function releaseClient(this: JProviderClient): number {
@@ -70,6 +71,11 @@ async function acquireClient(uri: JUri): Promise<JProviderClient | null> {
   const client = new JProviderClient(); client.provider = provider; return client;
 }
 rt.register({ name: "android/content/ContentProviderClient", ctor: JProviderClient, ifaces: ["java/lang/AutoCloseable"], methods: {
+  "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
+    async function (this: JProviderClient, u: JUri, projection: unknown, selection: unknown, args: unknown, sort: unknown, cancellation: unknown) {
+      if (cancellation) await vcall(cancellation, "throwIfCanceled", "()V");
+      return vcall(this, "query", providerOperations.query, u, projection, selection, args, sort);
+    },
   "release()Z": releaseClient,
   "close()V": function (this: JProviderClient) { releaseClient.call(this); },
   "getLocalContentProvider()Landroid/content/ContentProvider;": function (this: JProviderClient) {
@@ -81,11 +87,7 @@ rt.register({ name: "android/content/ContentProviderClient", ctor: JProviderClie
       return vcall(this.provider, name, desc, ...args);
     },
   ])),
-  "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
-    async function (this: JProviderClient, ...args: unknown[]) {
-      if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "ContentProviderClient is closed");
-      return vcall(this.provider, "query", providerOperations.query, ...args.slice(0, 5));
-    },
+
 } });
 
 export function contentResolver(): unknown {
@@ -103,15 +105,23 @@ const uriGrants = {
   all(): string[] { try { return JSON.parse(globalThis.localStorage?.getItem(this.key()) ?? "[]"); } catch { return []; } },
   set(v: string[]) { try { globalThis.localStorage?.setItem(this.key(), JSON.stringify(v)); } catch { /* private mode */ } },
 };
-const fileOf = (u: JUri) => u.uri.replace(/^file:\/\//, "");
+export function checkUriPermission(u: JUri, _pid: number, uid: number, modes: number): number {
+  return uid === 0 || uid === PROCESS_UID && (modes & 3) !== 0 && uriGrants.all().includes(u.uri) ? 0 : -1;
+}
+function fileOf(u: JUri): string {
+  const parts = uriParts(u);
+  if (parts.scheme !== "file") throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);
+  return uriDecode(parts.path) ?? "";
+}
 /** A descriptor carries the document's current bytes and writes them back when it is closed. */
 async function openPfd(u: JUri, mode: string) {
   if (!isDocsUri(u)) {
     const provider = await contentProvider(u);
     if (provider) return vcall(provider, "openFile", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", u, mode);
     if (u.uri.startsWith("content:")) throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);
-    const write = (mode ?? "r").includes("w");
-    return Object.assign(mkPfd(vfs.read(fileOf(u)) ?? new Uint8Array(0), (b) => vfs.write(fileOf(u), b)), { path: fileOf(u), flags: write ? 0x42 : 0 });
+    const cls = rt.link("android/os/ParcelFileDescriptor").ctor;
+    return vcall(cls, "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;", mkFile(fileOf(u)),
+      await vcall(cls, "parseMode", "(Ljava/lang/String;)I", mode));
   }
   const id = documentId(u, true);
   const write = (mode ?? "r").includes("w");

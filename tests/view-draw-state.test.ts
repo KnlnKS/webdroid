@@ -12,6 +12,7 @@ test("view traversal exposes the child draw save to Android canvas code", async 
     save() { depth++; },
     restore() { depth--; },
     translate() {},
+    transform() {},
     beginPath() {},
     rect() {},
     clip() {},
@@ -49,7 +50,7 @@ test("canvas root state rejects unmatched restores", () => {
 });
 
 test.each([
-  ["fit-center", 3, 1],
+  ["fit-center", 3, 2],
   ["center-crop", 6, 2],
 ] as const)("image view retains its %s draw state until a suspending drawable completes", async (_name, scaleType, pendingDepth) => {
   rt.link("android/widget/ImageView");
@@ -58,6 +59,7 @@ test.each([
     save() { depth++; },
     restore() { depth--; },
     translate() {},
+    transform() {},
     beginPath() {},
     rect() {},
     clip() {},
@@ -66,21 +68,24 @@ test.each([
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   let completed = false;
+  let started!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
   class SuspendedDrawable extends JDrawable {
-    intrinsicW() { return 20; }
-    intrinsicH() { return 20; }
+    [mangleMethod("getIntrinsicWidth", "()I")]() { return 20; }
+    [mangleMethod("getIntrinsicHeight", "()I")]() { return 20; }
     async [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]() {
+      started();
       await gate;
       completed = true;
     }
   }
   const view = new JImageView();
-  view.drawable = new SuspendedDrawable();
+  await view.setDrawable(new SuspendedDrawable());
   view.scaleType = scaleType;
   view.right = view.bottom = 100;
 
   const drawing = drawView(view, canvas);
-  await Promise.resolve();
+  await entered;
   expect(completed).toBeFalse();
   expect(depth).toBe(pendingDepth);
 

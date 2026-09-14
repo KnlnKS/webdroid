@@ -5,7 +5,7 @@ import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtim
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import {
-  JView, JFrameLP, JLinearLP, attachView, detachView, requestLayout, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST,
+  JView, JFrameLP, JLinearLP, attachView, addUnattachedView, detachView, requestLayout, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST,
   specSize, findById, guardCall, dispatchAttached, dispatchDetached
 } from "./view";
 import { JFrameLayout, JLinearLayout } from "./layouts";
@@ -24,6 +24,7 @@ import type { JWindow } from "./window";
 import { complexToFraction } from "./util";
 
 const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
+const M_setBounds = mangleMethod("setBounds", "(IIII)V");
 const M_onCreate = mangleMethod("onCreate", "(Landroid/os/Bundle;)V");
 const M_getPadding = mangleMethod("getPadding", "(Landroid/graphics/Rect;)Z");
 
@@ -86,7 +87,7 @@ class DialogRoot extends JFrameLayout {
    *  children into a sub-decor and swaps the ids, exactly as it does to an activity window */
   content!: JFrameLayout;
   async setContent(v: JView | null) {
-    for (const child of [...this.content.children]) await detachView(this.content, child, false);
+    for (const child of [...this.content.children]) await detachView(this.content, child);
     if (v) await attachView(this.content, v);
   }
   /** the dialog window's own background, from its theme — not a hardcoded white card */
@@ -154,9 +155,7 @@ rt.register({
         ctx.beginPath();
         ctx.roundRect(0, 0, this.width(), this.height(), r);
         ctx.clip();
-        const b = bg.bounds;
-        b.left = b.top = 0;
-        b.right = this.width(); b.bottom = this.height();
+        await guardCall(bg, M_setBounds, 0, 0, this.width(), this.height());
         await guardCall(bg, M_drawableDraw, cv);
         ctx.restore();
       }
@@ -213,7 +212,7 @@ class JDialog extends JObj {
       c.ctx = r.ctx; c.jres = r.jres; c.theme = r.theme;
       c.idNum = 0x01020002;
       const lp = new JFrameLP(); lp.width = -1; lp.height = -2; c.lp = lp;
-      void attachView(r, c);
+      addUnattachedView(r, c);
     }
     return this.root;
   }
@@ -264,11 +263,11 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
-    await callSelf(dialogMethods, "setContentView(Landroid/view/View;)V", this, v);
+    return callSelf(dialogMethods, "setContentView(Landroid/view/View;)V", this, v);
   },
   "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
-    await attachView(this.ensureRoot().content, v);
+    return attachView(this.ensureRoot().content, v);
   },
   "show()V": async function (this: JDialog) {
     // AOSP: showing again after hide() only makes the decor visible again
@@ -397,7 +396,7 @@ async function buildAlertContent(d: JAlertDialog) {
     t.colors.defColor = -13421773;
     t.padL = t.padR = device.dp(24); t.padT = device.dp(22); t.padB = device.dp(4);
     t.lp = lpFill();
-    await attachView(col, t);
+    addUnattachedView(col, t);
   }
   if (d.message) {
     const t = new JTextView();
@@ -407,7 +406,7 @@ async function buildAlertContent(d: JAlertDialog) {
     t.colors.defColor = -10066330;
     t.padL = t.padR = device.dp(24); t.padT = device.dp(d.titleStr ? 8 : 22); t.padB = device.dp(10);
     t.lp = lpFill(1);
-    await attachView(col, t);
+    addUnattachedView(col, t);
   }
   if (d.customView) {
     d.customView.lp = lpFill(1);
@@ -431,7 +430,7 @@ async function buildAlertContent(d: JAlertDialog) {
           await d.dismissImpl();
         },
       };
-      await attachView(col, t);
+      addUnattachedView(col, t);
     }
   }
   if (d.posText || d.negText || d.neutText) {
@@ -441,7 +440,7 @@ async function buildAlertContent(d: JAlertDialog) {
     row.ctx = d.jctx; row.jres = col.jres; row.theme = col.theme;
     row.padL = row.padR = device.dp(12); row.padT = row.padB = device.dp(4);
     row.lp = lpFill();
-    const mkBtn = async (text: string, which: number, l: unknown) => {
+    const mkBtn = (text: string, which: number, l: unknown) => {
       const b = new JTextView();
       b.ctx = d.jctx; b.jres = col.jres; b.theme = col.theme;
       b.text = text.toUpperCase();
@@ -459,12 +458,12 @@ async function buildAlertContent(d: JAlertDialog) {
           await d.dismissImpl();
         },
       };
-      await attachView(row, b);
+      addUnattachedView(row, b);
     };
-    if (d.neutText) await mkBtn(d.neutText, -3, d.neutL);
-    if (d.negText) await mkBtn(d.negText, -2, d.negL);
-    if (d.posText) await mkBtn(d.posText, -1, d.posL);
-    await attachView(col, row);
+    if (d.neutText) mkBtn(d.neutText, -3, d.neutL);
+    if (d.negText) mkBtn(d.negText, -2, d.negL);
+    if (d.posText) mkBtn(d.posText, -1, d.posL);
+    addUnattachedView(col, row);
   }
   col.lp = new JFrameLP();
   (col.lp as JFrameLP).width = -1;

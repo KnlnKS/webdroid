@@ -10,6 +10,7 @@ import { onMain, inMainJob } from "./mainloop";
 import { newArrayList } from "../jvm/natives/jutil";
 import { device } from "../shell/config";
 import { reportUncaught } from "./os";
+import { currentResources, rvDimen } from "./res";
 
 // ── Scroller/OverScroller: time-based interpolated scroll values
 class JScroller extends JObj {
@@ -25,7 +26,7 @@ class JScroller extends JObj {
     this.curY = Math.round(this.startY + (this.finalY - this.startY) * e);
     if (t >= 1) { this.finished = true; this.curX = this.finalX; this.curY = this.finalY; }
     invalidate();
-    return !this.finished || this.curX !== this.finalX || this.curY !== this.finalY || t < 1;
+    return true;
   }
 }
 const scrollerMethods: NativeSpec["methods"] = {
@@ -33,14 +34,14 @@ const scrollerMethods: NativeSpec["methods"] = {
     this.startX = sx; this.startY = sy; this.finalX = sx + dx; this.finalY = sy + dy;
     this.startT = performance.now(); this.duration = 250;
     this.curX = sx; this.curY = sy;
-    this.finished = dx === 0 && dy === 0;
+    this.finished = false;
     invalidate();
   },
   "startScroll(IIIII)V": function (this: JScroller, sx: number, sy: number, dx: number, dy: number, dur: number) {
     this.startX = sx; this.startY = sy; this.finalX = sx + dx; this.finalY = sy + dy;
     this.startT = performance.now(); this.duration = Math.max(1, dur);
     this.curX = sx; this.curY = sy;
-    this.finished = dx === 0 && dy === 0;
+    this.finished = false;
     invalidate();
   },
   "fling(IIIIIIII)V": function (this: JScroller, sx: number, sy: number, vx: number, vy: number, minX: number, maxX: number, minY: number, maxY: number) {
@@ -127,6 +128,11 @@ rt.register({
   },
 });
 
+export function minimumScalingSpan(): number {
+  const res = currentResources();
+  const id = res?.idFor("dimen", "config_minScalingSpan", "android");
+  return Math.round(res && id ? rvDimen(res, res.ref(id)) : 27 * device.densityDpi / 25.4);
+}
 class JViewConfiguration extends JObj {}
 const vc = new JViewConfiguration();
 rt.register({
@@ -144,8 +150,8 @@ rt.register({
     "getScaledVerticalScrollFactor()F": () => device.scrollUnit,
     "getScaledHoverSlop()I": () => Math.round(device.dp(4)),
     "getScaledFadingEdgeLength()I": () => Math.round(device.dp(12)),
-    "getScaledMinScalingSpan()I": () => Math.round(device.dp(27)),
-    "getScaledMinimumScalingSpan()I": () => Math.round(device.dp(27)),
+    "getScaledMinScalingSpan()I": minimumScalingSpan,
+    "getScaledMinimumScalingSpan()I": minimumScalingSpan,
     "static getAmbiguousGestureMultiplier()F": () => 2,
     "static getMinimumFlingVelocity()I": () => 50,
     "static getMaximumFlingVelocity()I": () => 8000,
@@ -508,7 +514,7 @@ rt.markers("android/view/animation/Animation$AnimationListener");
 
 const DOUBLE_TAP_TIMEOUT = 300, DOUBLE_TAP_MIN_TIME = 40, LONG_PRESS_TIMEOUT = 450;
 type PendingTap = { down: JMotionEvent; up: JMotionEvent | null; deferred: boolean; cancelled: boolean; timer: ReturnType<typeof setTimeout> };
-class JGestureDetector extends JObj {
+export class JGestureDetector extends JObj {
   l: unknown = null;
   doubleListener: unknown = null;
   down: JMotionEvent | null = null;
@@ -609,8 +615,9 @@ rt.register({
     "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JGestureDetector, event: JMotionEvent) { return inMainJob() ? this.touch(event) : onMain(() => this.touch(event)); },
   },
 });
+export class JSimpleGestureListener extends JObj {}
 rt.register({
-  name: "android/view/GestureDetector$SimpleOnGestureListener", ctor: class extends JObj {},
+  name: "android/view/GestureDetector$SimpleOnGestureListener", ctor: JSimpleGestureListener,
   ifaces: ["android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener"],
   methods: {
     ...noops("<init>()V", "onLongPress(Landroid/view/MotionEvent;)V", "onShowPress(Landroid/view/MotionEvent;)V"),
@@ -622,51 +629,6 @@ rt.register({
   },
 });
 rt.markers("android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener", "android/view/ScaleGestureDetector$OnScaleGestureListener");
-
-class JScaleGestureDetector extends JObj {
-  listener: unknown = null;
-  focusX = 0;
-  focusY = 0;
-  eventTime = 0;
-  quickScale = 0;
-  stylusScale = 0;
-}
-rt.register({
-  name: "android/view/ScaleGestureDetector", ctor: JScaleGestureDetector,
-  methods: {
-    "<init>(Landroid/content/Context;Landroid/view/ScaleGestureDetector$OnScaleGestureListener;)V":
-      function (this: JScaleGestureDetector, _context: unknown, listener: unknown) { this.listener = listener; },
-    "<init>(Landroid/content/Context;Landroid/view/ScaleGestureDetector$OnScaleGestureListener;Landroid/os/Handler;)V":
-      function (this: JScaleGestureDetector, _context: unknown, listener: unknown) { this.listener = listener; },
-    "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JScaleGestureDetector, event: JMotionEvent) {
-      this.focusX = event.x;
-      this.focusY = event.y;
-      this.eventTime = event.eventTime;
-      return 1;
-    },
-    "getFocusX()F": function (this: JScaleGestureDetector) { return this.focusX; },
-    "getFocusY()F": function (this: JScaleGestureDetector) { return this.focusY; },
-    "getEventTime()J": function (this: JScaleGestureDetector) { return BigInt(Math.round(this.eventTime)); },
-    ...stubs(0, "isInProgress()Z", "getCurrentSpan()F",
-      "getCurrentSpanX()F", "getCurrentSpanY()F", "getPreviousSpan()F", "getPreviousSpanX()F",
-      "getPreviousSpanY()F", "getTimeDelta()J"),
-    ...stubs(1, "getScaleFactor()F"),
-    "setQuickScaleEnabled(Z)V": function (this: JScaleGestureDetector, enabled: number) { this.quickScale = enabled; },
-    "isQuickScaleEnabled()Z": function (this: JScaleGestureDetector) { return this.quickScale; },
-    "setStylusScaleEnabled(Z)V": function (this: JScaleGestureDetector, enabled: number) { this.stylusScale = enabled; },
-    "isStylusScaleEnabled()Z": function (this: JScaleGestureDetector) { return this.stylusScale; },
-  },
-});
-rt.register({
-  name: "android/view/ScaleGestureDetector$SimpleOnScaleGestureListener", ctor: class extends JObj {},
-  ifaces: ["android/view/ScaleGestureDetector$OnScaleGestureListener"],
-  methods: {
-    ...noops("<init>()V", "onScaleEnd(Landroid/view/ScaleGestureDetector;)V"),
-    ...stubs(0, "onScale(Landroid/view/ScaleGestureDetector;)Z"),
-    ...stubs(1, "onScaleBegin(Landroid/view/ScaleGestureDetector;)Z"),
-  },
-});
-rt.markers("android/view/ScaleGestureDetector$OnScaleGestureListener");
 
 // ── GestureStore/GestureLibrary — stubbed (legacy, sometimes touched by old ad SDKs)
 rt.register({

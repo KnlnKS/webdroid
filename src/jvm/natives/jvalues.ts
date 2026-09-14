@@ -1,3 +1,4 @@
+import type { JSimpleEnum } from "./jlang";
 import { JObj, rt } from "../runtime";
 import { jarray } from "../abi";
 import { mkEnumSet, stringHash, vcallMaybe } from "./jlang";
@@ -69,6 +70,9 @@ export function localeDirection(locale: JLocale | null): number {
 }
 /** the one locale the device speaks; also the default */
 export const usLocale = Object.assign(new JLocale(), { lang: "en", country: "US" });
+mkEnumSet("java/util/Locale$Category", ["DISPLAY", "FORMAT"]);
+export let defaultLocale = usLocale;
+const categoryLocales = new Map<string, JLocale>();
 const localeNames = new Map<string, Intl.DisplayNames>();
 function displayPart(value: string, type: "language" | "script" | "region", tag: string): string {
   if (!value) return "";
@@ -115,8 +119,19 @@ rt.register({
     "<init>(Ljava/lang/String;)V": function (this: JLocale, l: string) { this.lang = l.toLowerCase(); },
     "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JLocale, l: string, c: string) { this.lang = l.toLowerCase(); this.country = c.toUpperCase(); },
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JLocale, l: string, c: string, v: string) { this.lang = l.toLowerCase(); this.country = c.toUpperCase(); this.variant = v; },
-    "static getDefault()Ljava/util/Locale;": () => usLocale,
-    "static setDefault(Ljava/util/Locale;)V": () => {},
+    "static getDefault()Ljava/util/Locale;": () => defaultLocale,
+    "static getDefault(Ljava/util/Locale$Category;)Ljava/util/Locale;": (category: JSimpleEnum) => {
+      if (!category) throw rt.mkThrowable("java/lang/NullPointerException", "category");
+      return categoryLocales.get(category.ename) ?? defaultLocale;
+    },
+    "static setDefault(Ljava/util/Locale;)V": (locale: JLocale) => {
+      if (!locale) throw rt.mkThrowable("java/lang/NullPointerException", "locale");
+      defaultLocale = locale; categoryLocales.clear();
+    },
+    "static setDefault(Ljava/util/Locale$Category;Ljava/util/Locale;)V": (category: JSimpleEnum, locale: JLocale) => {
+      if (!category || !locale) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      categoryLocales.set(category.ename, locale);
+    },
     "getDisplayName()Ljava/lang/String;": function (this: JLocale) { return displayName.call(this, usLocale); },
     "getDisplayName(Ljava/util/Locale;)Ljava/lang/String;": displayName,
     "getDisplayLanguage()Ljava/lang/String;": function (this: JLocale) { return displayPart(this.lang, "language", localeTag(usLocale)); },

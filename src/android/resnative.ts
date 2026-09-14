@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newXmlPullParser } from "./xmlpull";
-import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, JXmlParser, obtainStyled, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
+import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, JXmlParser, obtainStyled, resolveStyleValue, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
@@ -14,6 +14,8 @@ import { streamOf, streamOfSource } from "../jvm/natives/jio";
 import { mkPfd } from "./os";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 import { fontResource } from "./fonts";
+import { type JParcel, readString, writeString } from "./parcel";
+import { parcelCreator } from "./parcelable";
 
 export class JResources extends JObj {
   host!: Resources;
@@ -42,7 +44,7 @@ export function mkJResources(host: Resources, system = true): JResources {
   if (system) systemRes = r;
   return r;
 }
-class JLocaleList extends JObj { values: JLocale[] = []; }
+export class JLocaleList extends JObj { values: JLocale[] = []; }
 const emptyLocaleList = new JLocaleList();
 const localeList = Object.assign(new JLocaleList(), { values: [usLocale] });
 const sameLocale = (a: JLocale | null, b: JLocale | null) => a === b || !!a && !!b &&
@@ -127,7 +129,8 @@ rt.register({
   },
 });
 rt.register({
-  name: "android/os/LocaleList", ctor: JLocaleList,
+  name: "android/os/LocaleList", ctor: JLocaleList, ifaces: ["android/os/Parcelable"],
+  statics: { get CREATOR() { return parcelCreator("android/os/LocaleList", readLocaleList); } },
   methods: {
     "<init>([Ljava/util/Locale;)V": function (this: JLocaleList, locales: JLocale[]) {
       if (!locales || locales.some(l => !l)) throw rt.mkThrowable("java/lang/NullPointerException", "locales");
@@ -145,8 +148,13 @@ rt.register({
     "size()I": function (this: JLocaleList) { return this.values.length; },
     "isEmpty()Z": function (this: JLocaleList) { return this.values.length === 0 ? 1 : 0; },
     "toLanguageTags()Ljava/lang/String;": function (this: JLocaleList) { return this.values.map(localeTag).join(","); },
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JLocaleList, parcel: JParcel) { writeString(parcel, this.values.map(localeTag).join(",")); },
   },
 });
+export function readLocaleList(parcel: JParcel): Promise<JLocaleList> {
+  return vcall(rt.link("android/os/LocaleList").ctor, "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", readString(parcel));
+}
 
 /**
  * The one device Configuration every Resources reports. Night mode is device state, not an app
@@ -354,9 +362,15 @@ const resMethods: NativeSpec["methods"] = {
     return ta;
   },
   "getValue(ILandroid/util/TypedValue;Z)V": function (this: JResources, id: number, tv: JTypedValue, resolve: number) {
-    let v = this.host.value(id);
-    if (resolve) v = this.host.resolveRefs(v);
-    fillTypedValue(this.host, v, tv);
+    tv.density = 0;
+    let v = this.host.value(id, tv);
+    for (let depth = 0; resolve && v.t === TV.REFERENCE && v.d && depth < 20; depth++) {
+      id = v.d;
+      v = this.host.value(id, tv);
+    }
+    if (!resolve && v.t === TV.REFERENCE) { tv.type = v.t; tv.data = v.d; tv.assetCookie = 1; }
+    else fillTypedValue(this.host, v, tv);
+    tv.resourceId = id;
   },
   "getResourceName(I)Ljava/lang/String;": function (this: JResources, id: number) {
     return (id >>> 24 === 1 ? "android" : this.host.arsc?.pkgName ?? "app") + ":" + this.host.idType(id) + "/" + this.host.idName(id);
@@ -418,7 +432,6 @@ const resMethods: NativeSpec["methods"] = {
 };
 rt.register({ name: "android/content/res/Resources", ctor: JResources, methods: resMethods });
 
-
 function xmlParser(this: JResources, id: number) { return mkXmlParser(this.host, id); }
 function arrayValues(res: Resources, id: number): RV[] {
   const bag = res.bag(id);
@@ -452,11 +465,7 @@ rt.register({
       ta.res = this.res;
       ta.theme = this;
       ta.attrIds = attrs;
-      ta.vals = [...attrs].map((a) => {
-        let v = this.res.styleLookup(styleId, a);
-        if (v && v.t === TV.ATTRIBUTE) v = this.lookup(v.d);
-        return v ? this.res.resolveRefs(v) : null;
-      });
+      ta.vals = [...attrs].map(a => resolveStyleValue(this.res, this, this.res.styleLookup(styleId, a)));
       return ta;
     },
     "obtainStyledAttributes(Landroid/util/AttributeSet;[III)Landroid/content/res/TypedArray;":

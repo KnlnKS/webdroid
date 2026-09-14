@@ -1,3 +1,4 @@
+import { readFully } from "../shell/lazyfile";
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
 import { JMessage, obtain } from "./messenger";
@@ -11,7 +12,7 @@ import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
@@ -32,9 +33,34 @@ rt.register({
   },
 });
 
+class JMessageQueue extends JObj {
+  owner: JLooper | null = null;
+  messages = new Map<JMessage, number>();
+  handlers = new Set<unknown>();
+  scheduled = false;
+  isIdle(): boolean {
+    const now = uptimeMillis();
+    for (const when of this.messages.values()) if (when <= now) return false;
+    return true;
+  }
+  checkIdle() {
+    if (!this.owner || this.scheduled || !this.handlers.size || !this.isIdle()) return;
+    this.scheduled = true;
+    setTimeout(() => void this.owner!.run(async () => {
+      this.scheduled = false;
+      if (!this.isIdle()) return;
+      for (const handler of [...this.handlers]) {
+        if (!this.handlers.has(handler)) continue;
+        try { if (!await vcall(handler, "queueIdle", "()Z")) this.handlers.delete(handler); }
+        catch (error) { this.handlers.delete(handler); reportUncaught(error); }
+      }
+    }), 0);
+  }
+}
 export class JLooper extends JObj {
   thread: JThread;
   q: Promise<unknown> = Promise.resolve();
+  queue = Object.assign(new JMessageQueue(), { owner: this });
   printer: unknown = null;   // Looper.setMessageLogging
   constructor(thread?: JThread) { super(); this.thread = thread ?? curThread; }
   /** Messages run serialized on the looper's thread. The main looper is the shell's queue; any
@@ -47,7 +73,7 @@ export class JLooper extends JObj {
       await this.thread.untilIdle();                                             // a thread blocked in native code runs no message, as on a device
       const prev = curThread;
       setCurThread(this.thread);
-      try { return await job(); } finally { setCurThread(prev); }
+      try { return job(); } finally { setCurThread(prev); }
     });
     this.q = p.catch(() => { /* a failed message must not poison the queue */ });
     return p;
@@ -55,11 +81,12 @@ export class JLooper extends JObj {
 }
 /** Looper.loop with a Printer installed: the two lines around each dispatch that block-detectors time */
 async function dispatchLogged(handler: JHandler, msg: JMessage, printer: unknown): Promise<void> {
-  const str = async (o: unknown) => o === null ? "null" : String(await vcall(o, "toString", "()Ljava/lang/String;"));
+  const thread = curThread;
+  const str = async (o: unknown) => o === null ? "null" : String(await vcallOn(thread, o, "toString", "()Ljava/lang/String;"));
   try {
-    await vcall(printer, "println", "(Ljava/lang/String;)V", `>>>>> Dispatching to ${await str(handler)} ${await str(msg.callback)}: ${msg.what}`);
-    await vcall(handler, "dispatchMessage", "(Landroid/os/Message;)V", msg);
-    await vcall(printer, "println", "(Ljava/lang/String;)V", `<<<<< Finished to ${await str(handler)} ${await str(msg.callback)}`);
+    await vcallOn(thread, printer, "println", "(Ljava/lang/String;)V", `>>>>> Dispatching to ${await str(handler)} ${await str(msg.callback)}: ${msg.what}`);
+    await vcallOn(thread, handler, "dispatchMessage", "(Landroid/os/Message;)V", msg);
+    await vcallOn(thread, printer, "println", "(Ljava/lang/String;)V", `<<<<< Finished to ${await str(handler)} ${await str(msg.callback)}`);
   } catch (e) { reportUncaught(e); }
 }
 rt.markers("android/util/Printer");
@@ -76,25 +103,23 @@ rt.register({
     "getThread()Ljava/lang/Thread;": function (this: JLooper) { return this.thread; },
     "isCurrentThread()Z": function (this: JLooper) { return curThread === this.thread ? 1 : 0; },
     ...noops("static prepareMainLooper()V", "quit()V", "quitSafely()V"),
-    "getQueue()Landroid/os/MessageQueue;": () => mainQueue,
+    "getQueue()Landroid/os/MessageQueue;": function (this: JLooper) { return this.queue; },
     "setMessageLogging(Landroid/util/Printer;)V": function (this: JLooper, printer: unknown) { this.printer = printer; },
     "static myQueue()Landroid/os/MessageQueue;": () => {
       if (!curThread.looper) throw rt.mkThrowable("java/lang/IllegalStateException", "No Looper; Looper.prepare() wasn't called on this thread.");
-      return mainQueue;
+      return (curThread.looper as JLooper).queue;
     },
   },
 });
-class JMessageQueue extends JObj {}
-const mainQueue = new JMessageQueue();
 rt.register({
   name: "android/os/MessageQueue", ctor: JMessageQueue,
   methods: {
-    "addIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": (h: unknown) => {
-      setTimeout(() => void onMain(async () => {
-        try { await vcall(h, "queueIdle", "()Z"); } catch (e) { console.error("[idle]", e); }
-      }), 50);
+    "isIdle()Z": function (this: JMessageQueue) { return +this.isIdle(); },
+    "addIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": function (this: JMessageQueue, h: unknown) {
+      if (!h) throw rt.mkThrowable("java/lang/NullPointerException", "handler");
+      this.handlers.add(h); this.checkIdle();
     },
-    "removeIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": () => {},
+    "removeIdleHandler(Landroid/os/MessageQueue$IdleHandler;)V": function (this: JMessageQueue, h: unknown) { this.handlers.delete(h); },
   },
 });
 // A callback interface an app implements has to be registered or its class cannot link, and
@@ -123,13 +148,18 @@ export class JHandler extends JObj {
     let set = this.pending.get(key);
     if (!set) this.pending.set(key, (set = new Set()));
     set.add(msg);
+    const queue = this.looper.queue;
+    queue.messages.set(msg, uptimeMillis() + Math.max(0, delay));
     // still pending until it runs, so a removeMessages/hasMessages in between sees it
-    const go = () => this.looper.run(() => {
+    const go = () => this.looper.run(async () => {
+      queue.messages.delete(msg);
       if (!set.delete(msg)) return;
       if (!set.size) this.pending.delete(key);
       const printer = this.looper.printer;
-      if (printer) return dispatchLogged(this, msg, printer);
-      return vcall(this, "dispatchMessage", "(Landroid/os/Message;)V", msg).catch(reportUncaught);
+      try {
+        if (printer) await dispatchLogged(this, msg, printer);
+        else await vcall(this, "dispatchMessage", "(Landroid/os/Message;)V", msg).catch(reportUncaught);
+      } finally { queue.checkIdle(); }
     });
     if (delay > 0) msg.timer = setTimeout(() => void go(), delay); else void go();
     return 1;
@@ -138,9 +168,10 @@ export class JHandler extends JObj {
   cancel(key: unknown): void {
     const messages = this.pending.get(key);
     if (!messages) return;
-    for (const m of messages) clearTimeout(m.timer);
+    for (const m of messages) { clearTimeout(m.timer); this.looper.queue.messages.delete(m); }
     messages.clear();
     this.pending.delete(key);
+    this.looper.queue.checkIdle();
   }
 }
 /** The window's handler, which View.post/postDelayed/scheduleDrawable enqueue on. Lazy so it
@@ -181,9 +212,10 @@ rt.register({
     },
     "handleMessage(Landroid/os/Message;)V": function () {},
     "dispatchMessage(Landroid/os/Message;)V": async function (this: JHandler, msg: JMessage) {
+      const thread = curThread;
       if (msg.callback) await vcall(msg.callback, "run", "()V");
-      else if (!this.cb || !await vcall(this.cb, "handleMessage", "(Landroid/os/Message;)Z", msg))
-        await vcall(this, "handleMessage", "(Landroid/os/Message;)V", msg);
+      else if (!this.cb || !await vcallOn(thread, this.cb, "handleMessage", "(Landroid/os/Message;)Z", msg))
+        await vcallOn(thread, this, "handleMessage", "(Landroid/os/Message;)V", msg);
     },
     "post(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.post(r, 0); },
     "postDelayed(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, d: bigint) { return this.post(r, Number(d)); },
@@ -296,7 +328,7 @@ rt.register({
 class JBuildVersion extends JObj {}
 rt.register({
   name: "android/os/Build$VERSION", ctor: JBuildVersion,
-  statics: { SDK_INT: device.sdk, RELEASE: device.release, CODENAME: "REL", INCREMENTAL: "1", SECURITY_PATCH: "2023-01-01", SDK: String(device.sdk), BASE_OS: "", PREVIEW_SDK_INT: 0 },
+  statics: { SDK_INT: device.sdk, RELEASE: device.release, CODENAME: "REL", INCREMENTAL: "1", SECURITY_PATCH: "2023-01-01", SDK: String(device.sdk), BASE_OS: "", PREVIEW_SDK_INT: 0, MEDIA_PERFORMANCE_CLASS: 0 },
 });
 rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {},
   statics: Object.fromEntries([
@@ -371,7 +403,8 @@ rt.register({
   methods: {
     "getTotalPss()I": function (this: { dalvikPss: number; nativePss: number; otherPss: number }) { return this.dalvikPss + this.nativePss + this.otherPss; },
     ...noops("<init>()V"),
-    ...stubs(0, "getTotalPrivateDirty()I", "getTotalSharedDirty()I"),
+    "getTotalPrivateDirty()I": function (this: { dalvikPrivateDirty: number; nativePrivateDirty: number; otherPrivateDirty: number }) { return this.dalvikPrivateDirty + this.nativePrivateDirty + this.otherPrivateDirty; },
+    "getTotalSharedDirty()I": function (this: { dalvikSharedDirty: number; nativeSharedDirty: number; otherSharedDirty: number }) { return this.dalvikSharedDirty + this.nativeSharedDirty + this.otherSharedDirty; },
     "getMemoryStat(Ljava/lang/String;)Ljava/lang/String;": () => "0",
   },
 });
@@ -446,10 +479,11 @@ rt.register({
   });
 }
 
-class JBaseBundle extends JObj {
+export class JBaseBundle extends JObj {
   map = new Map<string, unknown>();
   loader: unknown = null;
 }
+export class JPersistableBundle extends JBaseBundle {}
 export class JBundle extends JBaseBundle {
   constructor() { super(); rt.link("android/os/Bundle"); }
 }
@@ -535,7 +569,7 @@ for (const [t, d] of [["Parcelable", "Ljava/lang/Object;"], ["Serializable", "Lj
 rt.register({ name: "android/os/BaseBundle", ctor: JBaseBundle, methods: bundleMethods });
 rt.register({ name: "android/os/Bundle", ctor: JBundle, sup: "android/os/BaseBundle",
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], statics: { get EMPTY() { return new JBundle(); }, get CREATOR() { return parcelCreator("android/os/Bundle", (p) => vcall(p, "readBundle", "()Landroid/os/Bundle;")); } }, methods: bundleMethods });
-rt.register({ name: "android/os/PersistableBundle", ctor: class extends JBaseBundle {}, sup: "android/os/BaseBundle",
+rt.register({ name: "android/os/PersistableBundle", ctor: JPersistableBundle, sup: "android/os/BaseBundle",
   ifaces: ["android/os/Parcelable", "java/lang/Cloneable"], methods: bundleMethods });
 
 export const PARCELABLE = {
@@ -590,23 +624,20 @@ rt.register({
   },
 });
 
-/**
- * A file descriptor an app can pass around and read or write through. There are no real fds
- * here, so one carries the bytes it was opened over plus where they go on close — which is all
- * AutoClose{In,Out}putStream, the only way a Java caller can touch it, ever needs.
- */
-class JParcelFileDescriptor extends JObj {
+export class JParcelFileDescriptor extends JObj {
   bytes: Uint8Array = new Uint8Array(0);
   sink: ((b: Uint8Array, closed?: boolean) => unknown) | null = null;
   path = "";
   flags = 0;
   fd = -1;
+  closed = false;
 }
 /** the native descriptor, opened on first request: only a fd that crosses JNI needs one. A
  *  read-only descriptor over bytes with no file behind them reads those bytes. */
 function pfdFd(p: JParcelFileDescriptor): number {
+  if (p.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "Already closed");
   if (p.fd < 0 && p.path) p.fd = javaOpenFd(p.path, p.flags);
-  else if (p.fd < 0 && !p.sink) p.fd = javaBytesFd("pfd", p.bytes);
+  else if (p.fd < 0 && !p.sink) p.fd = javaBytesFd(p.bytes);
   return p.fd;
 }
 /** a java.io stream's descriptor opens its file into the native table when first asked (O_TRUNC
@@ -637,19 +668,27 @@ rt.register({
     MODE_CREATE: 0x08000000, MODE_TRUNCATE: 0x04000000, MODE_APPEND: 0x02000000,
   },
   methods: {
-    "static open(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;": (f: { path: string }, mode: number) => {
+    "static open(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;": async (f: { path: string }, mode: number) => {
       const path = f?.path ?? "";
       if (!vfs.exists(path) && !(mode & 0x08000000)) throw rt.mkThrowable("java/io/FileNotFoundException", path);
       if (mode & 0x04000000) vfs.write(path, new Uint8Array(0));
-      const p = mkPfd(vfs.read(path) ?? new Uint8Array(0), (b) => vfs.write(path, b));
+      const source = vfs.source(path);
+      const p = mkPfd(source ? await readFully(source) : new Uint8Array(0), mode & 0x20000000 ? (b) => vfs.write(path, b) : null);
       p.path = path;
       // MODE_* bits → O_* flags: the access mode, then create/truncate/append
       p.flags = ((mode >>> 28) & 3) - 1 + (mode & 0x08000000 ? 0x40 : 0) + (mode & 0x04000000 ? 0x200 : 0) + (mode & 0x02000000 ? 0x400 : 0);
       return p;
     },
-    "static parseMode(Ljava/lang/String;)I": (m: string) =>
-      (m?.includes("w") ? 0x28000000 : 0x10000000) | (m?.includes("t") || m === "w" ? 0x04000000 : 0)
-      | (m?.includes("a") ? 0x02000000 : 0),
+    "static parseMode(Ljava/lang/String;)I": (m: string) => {
+      switch (m) {
+        case "r": return 0x10000000;
+        case "w": case "wt": return 0x2c000000;
+        case "wa": return 0x2a000000;
+        case "rw": return 0x38000000;
+        case "rwt": return 0x3c000000;
+        default: throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bad mode: " + m);
+      }
+    },
     "getFileDescriptor()Ljava/io/FileDescriptor;": function (this: JParcelFileDescriptor) {
       const d = rt.make("java/io/FileDescriptor") as JFileDescriptor;
       d.fd = pfdFd(this);
@@ -657,7 +696,7 @@ rt.register({
     },
     "getFd()I": function (this: JParcelFileDescriptor) { return pfdFd(this); },
     "static adoptFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd }),
-    "static fromFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd }),
+    "static fromFd(I)Landroid/os/ParcelFileDescriptor;": (fd: number) => Object.assign(new JParcelFileDescriptor(), { fd: javaDupFd(fd) }),
     // AOSP dup(FileDescriptor): a new descriptor on the same open file description
     "static dup(Ljava/io/FileDescriptor;)Landroid/os/ParcelFileDescriptor;": (d: JFileDescriptor | null) => {
       if (!d || descriptorFd(d) < 0) throw rt.mkThrowable("java/io/IOException", "Invalid file descriptor");
@@ -665,18 +704,19 @@ rt.register({
       if (fd < 0) throw rt.mkThrowable("java/io/IOException", "dup failed: EBADF (Bad file descriptor)");
       return Object.assign(new JParcelFileDescriptor(), { fd });
     },
-    "detachFd()I": function (this: JParcelFileDescriptor) { const fd = pfdFd(this); this.fd = -1; return fd; },
-    "dup()Landroid/os/ParcelFileDescriptor;": function (this: JParcelFileDescriptor) { return Object.assign(mkPfd(this.bytes, this.sink), { path: this.path, flags: this.flags }); },
+    "detachFd()I": function (this: JParcelFileDescriptor) { const fd = pfdFd(this); this.fd = -1; this.closed = true; return fd; },
+    "dup()Landroid/os/ParcelFileDescriptor;": function (this: JParcelFileDescriptor) { return Object.assign(mkPfd(this.bytes, this.sink), { path: this.path, flags: this.flags, fd: javaDupFd(pfdFd(this)) }); },
     "getStatSize()J": function (this: JParcelFileDescriptor) { return BigInt(this.bytes.length); },
-    "close()V": function (this: JParcelFileDescriptor) { if (this.fd >= 0) javaCloseFd(this.fd); this.fd = -1; },
+    "close()V": function (this: JParcelFileDescriptor) { if (this.fd >= 0) javaCloseFd(this.fd); this.fd = -1; this.closed = true; },
     "checkError()V": () => {},
   },
 });
-class JPfdIn extends JInputStream {}
+class JPfdIn extends JInputStream { pfd: JParcelFileDescriptor | null = null; }
 rt.register({
   name: "android/os/ParcelFileDescriptor$AutoCloseInputStream", ctor: JPfdIn, sup: "java/io/InputStream",
   methods: {
-    "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JPfdIn, p: JParcelFileDescriptor) { this.buf = p?.bytes ?? new Uint8Array(0); },
+    "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JPfdIn, p: JParcelFileDescriptor) { this.buf = p.bytes; this.pfd = p; },
+    "close()V": function (this: JPfdIn) { const pfd = this.pfd; this.pfd = null; if (pfd) return vcall(pfd, "close", "()V"); },
   },
 });
 class JPfdOut extends JOutputStream { pfd: JParcelFileDescriptor | null = null; }
@@ -686,7 +726,7 @@ rt.register({
   methods: {
     "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JPfdOut, p: JParcelFileDescriptor) { this.pfd = p; },
     "flush()V": pfdFlush,
-    "close()V": function (this: JPfdOut) { return pfdFlush.call(this, true); },
+    "close()V": async function (this: JPfdOut) { await pfdFlush.call(this, true); const pfd = this.pfd; this.pfd = null; if (pfd) await vcall(pfd, "close", "()V"); },
   },
 });
 

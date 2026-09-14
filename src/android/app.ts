@@ -10,7 +10,7 @@ import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
-import { requestLayout, type JView, attachView, findById, dispatchConfigurationChanged, invalidate } from "./view";
+import { requestLayout, type JView, attachView, detachView, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragmentManager } from "./fragment";
 import { vcall } from "../jvm/natives/jlang";
 import { appHost, jclsNameOf } from "./apphost";
@@ -19,8 +19,7 @@ import { onMain } from "./mainloop";
 import { getPrefs } from "./sharedprefs";
 import { csText, spannedString } from "./text";
 import { showToast } from "./popup";
-import { newArrayList, mkIter, toJsArray } from "../jvm/natives/jutil";
-import type { JUri } from "./net";
+import { newArrayList } from "../jvm/natives/jutil";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { JService, runningServices, svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate, JSpatializer } from "./media";
@@ -130,13 +129,13 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setContentView(I)V": async function (this: JActivity, layoutId: number) {
     await ensureDecor(this);
-    this.window.contentParent!.children.length = 0;
+    for (const child of [...this.window.contentParent!.children]) await detachView(this.window.contentParent!, child);
     await inflateLayout(this, layoutId, this.window.contentParent, true);
     requestLayout(this.window.contentParent!);
   },
   "setContentView(Landroid/view/View;)V": async function (this: JActivity, v: JView) {
     await ensureDecor(this);
-    this.window.contentParent!.children.length = 0;
+    for (const child of [...this.window.contentParent!.children]) await detachView(this.window.contentParent!, child);
     if (!v.lp) {
       const lp = rt.make("android/widget/FrameLayout$LayoutParams");
       lp.width = -1; lp.height = -1;
@@ -157,6 +156,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "findViewById(I)Landroid/view/View;": function (this: JActivity, id: number) {
     return this.window.decor ? findById(this.window.decor, id) : null;
   },
+  "requireViewById(I)Landroid/view/View;": requireViewById,
   "onStart()V": async function (this: JActivity) { this.started = true; return dispatchFragLifecycle(this, "onStart"); },
   "onResume()V": async function (this: JActivity) { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); },
   "onPause()V": function (this: JActivity) { this.resumed = false; return dispatchFragLifecycle(this, "onPause"); },
@@ -507,6 +507,9 @@ rt.register({
 });
 for (const [name, methods, statics] of [
   ["android/app/ActivityManager", {
+    "static isUserAMonkey()Z": () => 0,
+    "static isRunningInTestHarness()Z": () => 0,
+    "static isRunningInUserTestHarness()Z": () => 0,
     "getMemoryClass()I": () => 256,
     "getLargeMemoryClass()I": () => 512,
     "isLowRamDevice()Z": () => 0,
@@ -531,9 +534,10 @@ for (const [name, methods, statics] of [
     "static getMyMemoryState(Landroid/app/ActivityManager$RunningAppProcessInfo;)V": (info: JRunningAppProcessInfo) => {
       if (info) fillProc(info);
     },
-    "static isRunningInTestHarness()Z": () => 0,
+
   }],
   ["android/os/PowerManager", {
+    "getLocationPowerSaveMode()I": () => 0,
     "newWakeLock(ILjava/lang/String;)Landroid/os/PowerManager$WakeLock;": () => {
       const info = rt.link("android/os/PowerManager$WakeLock");
       return new info.ctor();
@@ -583,6 +587,10 @@ for (const [name, methods, statics] of [
     "getDevices(I)[Landroid/media/AudioDeviceInfo;": () => jarray([], "Landroid/media/AudioDeviceInfo;"),
     "getAudioDevicesForAttributes(Landroid/media/AudioAttributes;)Ljava/util/List;": () => newArrayList(),
     "getDirectProfilesForAttributes(Landroid/media/AudioAttributes;)Ljava/util/List;": () => newArrayList(),
+    "static getDirectPlaybackSupport(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)I": (format: unknown, attrs: unknown) => {
+      if (format == null || attrs == null) return rt.npe();
+      return 0;
+    },
     ...noops("setStreamVolume(III)V",
       "registerAudioDeviceCallback(Landroid/media/AudioDeviceCallback;Landroid/os/Handler;)V",
       "unregisterAudioDeviceCallback(Landroid/media/AudioDeviceCallback;)V"),
@@ -597,6 +605,8 @@ for (const [name, methods, statics] of [
     ...stubs("", "getParameters(Ljava/lang/String;)Ljava/lang/String;"),
   }, {
     MODE_NORMAL: 0, MODE_RINGTONE: 1, MODE_IN_CALL: 2, MODE_IN_COMMUNICATION: 3,
+    DIRECT_PLAYBACK_NOT_SUPPORTED: 0, DIRECT_PLAYBACK_OFFLOAD_SUPPORTED: 1,
+    DIRECT_PLAYBACK_OFFLOAD_GAPLESS_SUPPORTED: 3, DIRECT_PLAYBACK_BITSTREAM_SUPPORTED: 4,
     RINGER_MODE_SILENT: 0, RINGER_MODE_VIBRATE: 1, RINGER_MODE_NORMAL: 2,
     GET_DEVICES_INPUTS: 1, GET_DEVICES_OUTPUTS: 2, GET_DEVICES_ALL: 3,
     PROPERTY_OUTPUT_SAMPLE_RATE: "android.media.property.OUTPUT_SAMPLE_RATE", PROPERTY_OUTPUT_FRAMES_PER_BUFFER: "android.media.property.OUTPUT_FRAMES_PER_BUFFER",
@@ -714,28 +724,6 @@ for (const [name, methods, statics] of [
       return jarray([...uids].map(uidHealthSnapshot), "Landroid/os/health/HealthStats;");
     },
   }],
-  ["android/view/accessibility/AccessibilityManager", {
-    // No real accessibility service runs here — a device with accessibility off reports
-    // both flags false. Listeners register (so `implements` links) but never fire, which
-    // IS the correct behavior for this state, not a stub shortcut.
-    "isEnabled()Z": () => 0,
-    "isTouchExplorationEnabled()Z": () => 0,
-    "isAudioDescriptionRequested()Z": () => 0,
-    "getRecommendedTimeoutMillis(II)I": (orig: number) => orig,
-    "addAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": () => 1,
-    "removeAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": () => 1,
-    "addTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": () => 1,
-    "removeTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": () => 1,
-    "addAccessibilityServicesStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)V": () => {},
-    "removeAccessibilityServicesStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)Z": () => 1,
-    "getEnabledAccessibilityServiceList(I)Ljava/util/List;": () => newArrayList(),
-    "getInstalledAccessibilityServiceList()Ljava/util/List;": () => newArrayList(),
-    ...noops("sendAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V",
-      "addAccessibilityServicesStateChangeListener(Ljava/util/concurrent/Executor;Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)V",
-      "addAudioDescriptionRequestedChangeListener(Ljava/util/concurrent/Executor;Landroid/view/accessibility/AccessibilityManager$AudioDescriptionRequestedChangeListener;)V"),
-    ...stubs(1, "removeAccessibilityServicesStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)Z",
-      "removeAudioDescriptionRequestedChangeListener(Landroid/view/accessibility/AccessibilityManager$AudioDescriptionRequestedChangeListener;)Z"),
-  }],
   ["android/view/accessibility/CaptioningManager", {
     "isEnabled()Z": () => 0,
     "getFontScale()F": () => 1,
@@ -761,6 +749,7 @@ for (const [name, methods, statics] of [
   }],
   ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0, "isDeviceSecure()Z": () => 0 }],
   ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "getSensorList(I)Ljava/util/List;": () => newArrayList(), "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z": () => 0,
+    "static getAltitude(FF)F": (p0: number, p: number) => Math.fround(44330 * Math.fround(1 - Math.fround(Math.pow(Math.fround(p / p0), Math.fround(1 / Math.fround(5.255)))))),
     "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z": () => 0,
     "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z": () => 0,
     "static getRotationMatrix([F[F[F[F)Z": (r: Float32Array | null, inclination: Float32Array | null, gravity: Float32Array, geomagnetic: Float32Array) => {
@@ -834,8 +823,33 @@ rt.register({
 });
 // apps `implements` this to track refresh-rate / display changes; it must link even though it never fires here
 rt.markers("android/hardware/display/DisplayManager$DisplayListener", "android/app/AppOpsManager$OnOpChangedListener", "android/app/AppOpsManager$OnOpActiveChangedListener");
-// AccessibilityManager callback interfaces — apps `implements` these to watch for a
-// screen reader turning on; must link even though it never fires here (see above).
+class JAccessibilityManager extends JObj {
+  stateListeners = new Set<unknown>();
+  touchListeners = new Set<unknown>();
+  servicesListeners = new Set<unknown>();
+  audioListeners = new Set<unknown>();
+}
+rt.register({
+  name: "android/view/accessibility/AccessibilityManager", ctor: JAccessibilityManager,
+  methods: {
+    "isEnabled()Z": () => 0,
+    "isAudioDescriptionRequested()Z": () => 0,
+    "sendAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V": () => {},
+    "addAccessibilityServicesStateChangeListener(Ljava/util/concurrent/Executor;Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)V": function (this: JAccessibilityManager, _executor: unknown, listener: unknown) { this.servicesListeners.add(listener); },
+    "addAudioDescriptionRequestedChangeListener(Ljava/util/concurrent/Executor;Landroid/view/accessibility/AccessibilityManager$AudioDescriptionRequestedChangeListener;)V": function (this: JAccessibilityManager, _executor: unknown, listener: unknown) { this.audioListeners.add(listener); },
+    "removeAudioDescriptionRequestedChangeListener(Landroid/view/accessibility/AccessibilityManager$AudioDescriptionRequestedChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { return +this.audioListeners.delete(listener); },
+    "isTouchExplorationEnabled()Z": () => 0,
+    "getRecommendedTimeoutMillis(II)I": (orig: number) => orig,
+    "addAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { this.stateListeners.add(listener); return 1; },
+    "removeAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { return +this.stateListeners.delete(listener); },
+    "addTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { this.touchListeners.add(listener); return 1; },
+    "removeTouchExplorationStateChangeListener(Landroid/view/accessibility/AccessibilityManager$TouchExplorationStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { return +this.touchListeners.delete(listener); },
+    "addAccessibilityServicesStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)V": function (this: JAccessibilityManager, listener: unknown) { this.servicesListeners.add(listener); },
+    "removeAccessibilityServicesStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)Z": function (this: JAccessibilityManager, listener: unknown) { return +this.servicesListeners.delete(listener); },
+    "getEnabledAccessibilityServiceList(I)Ljava/util/List;": () => newArrayList(),
+    "getInstalledAccessibilityServiceList()Ljava/util/List;": () => newArrayList(),
+  },
+});
 for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChangeListener", "AccessibilityServicesStateChangeListener", "AudioDescriptionRequestedChangeListener"]) {
   rt.register({ name: "android/view/accessibility/AccessibilityManager$" + n, ctor: class extends JObj {} });
 }
@@ -964,63 +978,6 @@ rt.register({
   },
 });
 
-class JIntentFilter extends JObj {
-  actions: string[] = []; schemes: string[] = []; types: string[] = []; categories: string[] = [];
-  /** AOSP's matchData, without authorities and paths: a type matches its own wildcard forms */
-  matchData(type: string | null, scheme: string | null, data: JUri | null): number {
-    if (!this.types.length && !this.schemes.length) return type === null && data === null ? 0x100000 + 0x8000 : -2;
-    let match = 0x100000;
-    if (this.schemes.length) {
-      if (scheme === null || !this.schemes.includes(scheme)) return -2;
-      match = 0x200000;
-    } else if (scheme !== null && scheme !== "" && scheme !== "content" && scheme !== "file") return -2;
-    if (this.types.length) {
-      if (type === null) return -1;
-      const slash = type.indexOf("/"), base = slash < 0 ? type : type.slice(0, slash);
-      if (!this.types.some((t) => t === type || t === "*/*" || t === base + "/*" || t === base)) return -1;
-      return 0x600000 + 0x8000;
-    }
-    return type !== null ? -1 : match + 0x8000;
-  }
-}
-rt.register({
-  name: "android/content/IntentFilter", ctor: JIntentFilter,
-  statics: { MATCH_CATEGORY_MASK: 0xfff0000, MATCH_ADJUSTMENT_MASK: 0xffff, MATCH_ADJUSTMENT_NORMAL: 0x8000, MATCH_CATEGORY_EMPTY: 0x100000, MATCH_CATEGORY_SCHEME: 0x200000,
-    MATCH_CATEGORY_TYPE: 0x600000, NO_MATCH_TYPE: -1, NO_MATCH_DATA: -2, NO_MATCH_ACTION: -3, NO_MATCH_CATEGORY: -4 },
-  methods: {
-    "<init>()V": function () {},
-    "<init>(Ljava/lang/String;)V": function (this: any, a: string) { this.actions.push(a); },
-    "addAction(Ljava/lang/String;)V": function (this: any, a: string) { this.actions.push(a); },
-    "countActions()I": function (this: any) { return this.actions.length; },
-    "getAction(I)Ljava/lang/String;": function (this: any, i: number) { return this.actions[i] ?? null; },
-    "hasAction(Ljava/lang/String;)Z": function (this: any, a: string) { return this.actions.includes(a) ? 1 : 0; },
-    "actionsIterator()Ljava/util/Iterator;": function (this: any) { return mkIter(this.actions.slice()); },
-    "addCategory(Ljava/lang/String;)V": function (this: JIntentFilter, c: string) { this.categories.push(c); },
-    "hasCategory(Ljava/lang/String;)Z": function (this: JIntentFilter, c: string) { return this.categories.includes(c) ? 1 : 0; },
-    "countCategories()I": function (this: JIntentFilter) { return this.categories.length; },
-    "countDataSchemes()I": function (this: JIntentFilter) { return this.schemes.length; },
-    "countDataTypes()I": function (this: JIntentFilter) { return this.types.length; },
-    "matchAction(Ljava/lang/String;)Z": function (this: JIntentFilter, a: string | null) { return a !== null && this.actions.includes(a) ? 1 : 0; },
-    "matchCategories(Ljava/util/Set;)Ljava/lang/String;": async function (this: JIntentFilter, cats: unknown) {
-      for (const c of cats ? await toJsArray(cats) as string[] : []) if (!this.categories.includes(c)) return c;
-      return null;
-    },
-    "matchData(Ljava/lang/String;Ljava/lang/String;Landroid/net/Uri;)I": function (this: JIntentFilter, type: string | null, scheme: string | null, data: JUri | null) {
-      return this.matchData(type, scheme, data);
-    },
-    "match(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/net/Uri;Ljava/util/Set;Ljava/lang/String;)I":
-    async function (this: JIntentFilter, action: string | null, type: string | null, scheme: string | null, data: JUri | null, cats: unknown) {
-      if (action !== null && !this.actions.includes(action)) return -3;
-      const r = this.matchData(type, scheme, data);
-      if (r < 0) return r;
-      for (const c of cats ? await toJsArray(cats) as string[] : []) if (!this.categories.includes(c)) return -4;
-      return r;
-    },
-    "addDataScheme(Ljava/lang/String;)V": function (this: { schemes: string[] }, scheme: string) { this.schemes.push(scheme); },
-    "addDataType(Ljava/lang/String;)V": function (this: { types: string[] }, type: string) { this.types.push(type); },
-    "hasDataType(Ljava/lang/String;)Z": function (this: { types: string[] }, type: string) { return this.types.includes(type) ? 1 : 0; },
-  },
-});
 rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content/ContextWrapper",
   ifaces: ["android/content/ComponentCallbacks2", "android/content/ComponentCallbacks"],
   methods: {

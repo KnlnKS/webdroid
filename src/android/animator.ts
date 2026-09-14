@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
 import { mangleMethod, jarray } from "../jvm/abi";
-import { vcall, vcallMaybe, boxInt, box, JFloat } from "../jvm/natives/jlang";
+import { vcall, vcallMaybe, vcallOn, curThread, boxInt, box, JFloat } from "../jvm/natives/jlang";
 import { toJsArray, newArrayList } from "../jvm/natives/jutil";
 import { uiState, invalidate, JView, guardCall } from "./view";
 import { reportUncaught } from "./os";
@@ -96,7 +96,17 @@ class JPathEvaluator extends JObj {
 const accelDecel = (t: number) => Math.cos((t + 1) * Math.PI) / 2 + 0.5;
 async function animTick(a: JValueAnimator): Promise<boolean> {
   if (a.paused) return true;
-  const el = performance.now() - a.startT - a.delayMs;
+  const now = performance.now(), el = now - a.startT - a.delayMs;
+  if (a instanceof JTimeAnimator) {
+    if (el < 0) return true;
+    if (!a.timeStarted) { a.startT = now - a.delayMs; a.timeStarted = true; }
+    if (a.timeListener) {
+      const total = Math.floor(now - a.startT - a.delayMs), delta = a.lastTime < 0 ? 0 : total - a.lastTime;
+      a.lastTime = total;
+      await vcall(a.timeListener, "onTimeUpdate", "(Landroid/animation/TimeAnimator;JJ)V", a, BigInt(total), BigInt(delta));
+    }
+    return a.running;
+  }
   let t: number, done = false;
   if (el < 0) t = 0;
   else if (a.durationMs <= 0) { t = 1; done = true; }
@@ -425,6 +435,7 @@ const vaMethods: NativeSpec["methods"] = {
     this.reversed = this.startReversed;
     this.startReversed = false;
     this.startT = performance.now();
+    if (this instanceof JTimeAnimator) { this.lastTime = -1; this.timeStarted = false; }
     this.running = true;
     // AOSP's start() animates fraction 0 at once, so getAnimatedValue() read from a start
     // listener or before the first frame is the first key, not whatever was there before.
@@ -465,6 +476,12 @@ const vaMethods: NativeSpec["methods"] = {
 };
 rt.register({ name: "android/animation/Animator", ctor: class extends JValueAnimator {}, methods: vaMethods });
 rt.register({ name: "android/animation/ValueAnimator", ctor: JValueAnimator, sup: "android/animation/Animator", methods: vaMethods });
+class JTimeAnimator extends JValueAnimator { timeListener: unknown = null; lastTime = -1; timeStarted = false; }
+rt.markers("android/animation/TimeAnimator$TimeListener");
+rt.register({ name: "android/animation/TimeAnimator", ctor: JTimeAnimator, sup: "android/animation/ValueAnimator", methods: {
+  "<init>()V": function () {},
+  "setTimeListener(Landroid/animation/TimeAnimator$TimeListener;)V": function (this: JTimeAnimator, listener: unknown) { this.timeListener = listener; },
+} });
 rt.register({
   name: "android/animation/ObjectAnimator", ctor: class extends JValueAnimator {}, sup: "android/animation/ValueAnimator",
   methods: {
@@ -511,17 +528,25 @@ rt.register({
     "playSequentially(Ljava/util/List;)V": async function (this: JAnimatorSet, c: unknown) { this.anims = [...await toJsArray(c)] as JValueAnimator[]; this.sequential = true; },
     "getChildAnimations()Ljava/util/ArrayList;": function (this: JAnimatorSet) { return newArrayList([...this.anims]); },
     "start()V": async function (this: JAnimatorSet) {
+      const thread = curThread;
       this.running = true;
+      for (const l of [...this.animLs]) {
+        try { await vcallOn(thread, l, "onAnimationStart", "(Landroid/animation/Animator;)V", this); } catch (e) { reportUncaught(e); }
+      }
       if (this.sequential) {
         for (let i = 0; i + 1 < this.anims.length; i++) this.anims[i].next = this.anims[i + 1];
-        if (this.anims.length) await guardCall(this.anims[0], M_start);
-      } else for (const a of this.anims) await guardCall(a, M_start);
+        if (this.anims.length) await vcallOn(thread, this.anims[0], "start", "()V");
+      } else for (const a of this.anims) await vcallOn(thread, a, "start", "()V");
       const total = this.sequential ? this.anims.reduce((s, a) => s + a.delayMs + a.durationMs, 0)
         : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
       setTimeout(() => {
-        this.running = false;
-        for (const l of [...this.animLs]) void vcall(l, "onAnimationEnd", "(Landroid/animation/Animator;Z)V", this, this.reversed ? 1 : 0).catch(reportUncaught);
-        if (this.next) void guardCall(this.next, M_start);
+        void onMain(async () => {
+          this.running = false;
+          for (const l of [...this.animLs]) {
+            try { await vcall(l, "onAnimationEnd", "(Landroid/animation/Animator;Z)V", this, this.reversed ? 1 : 0); } catch (e) { reportUncaught(e); }
+          }
+          if (this.next) await guardCall(this.next, M_start);
+        }).catch(reportUncaught);
       }, total);
     },
     "cancel()V": async function (this: JAnimatorSet) { this.running = false; for (const a of this.anims) await guardCall(a, M_cancel); },

@@ -2,10 +2,60 @@
 // CharacterIterator, BreakIterator, Normalizer. Formatting is en-only and pattern-driven.
 
 import { rt, JObj, type NativeSpec } from "../runtime";
-import { vcall, vcallMaybe, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble } from "./jlang";
+import { vcall, vcallMaybe, vcallOn, curThread, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble } from "./jlang";
 import { strArray, jarray, utf8, slashName, dotName } from "../abi";
-import { mkIter } from "./jutil";
+import { mkIter, toJsArray } from "./jutil";
 import { JDate, JCalendar, localTz, MONTHS, DAYS, pad } from "./jtime";
+import { directionality } from "../bidi";
+import { defaultLocale, localeTag, type JLocale } from "./jvalues";
+
+class JListFormatter extends JObj {
+  formatter: Intl.ListFormat;
+  constructor(locale: JLocale = defaultLocale) {
+    super();
+    if (!locale) rt.npe();
+    this.formatter = new Intl.ListFormat(localeTag(locale));
+  }
+  async format(items: unknown[] | Promise<unknown[]>) {
+    const thread = curThread, strings: string[] = [];
+    for (const item of await items) {
+      if (item === null || item === undefined) rt.npe();
+      strings.push(typeof item === "string" ? item : String(await vcallOn(thread, item, "toString", "()Ljava/lang/String;")));
+    }
+    return this.formatter.format(strings);
+  }
+}
+rt.register({ name: "android/icu/text/ListFormatter", ctor: JListFormatter, methods: {
+  "static getInstance()Landroid/icu/text/ListFormatter;": () => new JListFormatter(),
+  "static getInstance(Ljava/util/Locale;)Landroid/icu/text/ListFormatter;": (locale: JLocale) => new JListFormatter(locale),
+  "format([Ljava/lang/Object;)Ljava/lang/String;": function (this: JListFormatter, items: unknown[] | null) {
+    if (!items) return rt.npe();
+    return this.format(items);
+  },
+  "format(Ljava/util/Collection;)Ljava/lang/String;": function (this: JListFormatter, items: unknown) {
+    if (!items) return rt.npe();
+    return this.format(toJsArray(items));
+  },
+} });
+
+rt.register({
+  name: "java/text/Bidi", ctor: class extends JObj {},
+  methods: {
+    "static requiresBidi([CII)Z": (text: Uint16Array | null, start: number, limit: number) => {
+      if (!text) throw rt.mkThrowable("java/lang/NullPointerException", "text");
+      if (start < 0 || start > limit || limit > text.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid text range");
+      for (let i = start; i < limit; i++) {
+        let cp = text[i];
+        if (cp >= 0xd800 && cp <= 0xdbff && i + 1 < limit && text[i + 1] >= 0xdc00 && text[i + 1] <= 0xdfff) {
+          cp = 0x10000 + ((cp - 0xd800) << 10) + text[++i] - 0xdc00;
+        }
+        const dir = directionality(cp);
+        if (dir === 1 || dir === 2 || dir === 6 || dir === 16 || dir === 17) return 1;
+      }
+      return 0;
+    },
+  },
+});
 
 export function formatDate(pattern: string, t: number): string {
   const d = new Date(t);
@@ -168,15 +218,25 @@ rt.register({
 
 class JNumberFormat extends JObj {
   maxFrac = 3; minFrac = 0; grouping = true; pattern: string | null = null;
-  fmt(v: number): string {
-    return v.toLocaleString("en-US", { minimumFractionDigits: this.minFrac, maximumFractionDigits: this.maxFrac, useGrouping: this.grouping });
+  locale = localeTag(defaultLocale);
+  style: "decimal" | "percent" = "decimal";
+  private cached: Intl.NumberFormat | null = null;
+  private key = "";
+  fmt(v: number | bigint): string {
+    const key = `${this.locale}/${this.style}/${this.minFrac}/${this.maxFrac}/${this.grouping}`;
+    if (!this.cached || key !== this.key) {
+      const options = { style: this.style, minimumFractionDigits: this.minFrac, maximumFractionDigits: this.maxFrac, useGrouping: this.grouping, roundingMode: "halfEven" } satisfies Intl.NumberFormatOptions & { roundingMode: "halfEven" };
+      this.cached = new Intl.NumberFormat(this.locale, options);
+      this.key = key;
+    }
+    return this.cached.format(v);
   }
 }
 const nfMethods: NativeSpec["methods"] = {
   "format(D)Ljava/lang/String;": function (this: JNumberFormat, v: number) { return this.fmt(v); },
-  "format(J)Ljava/lang/String;": function (this: JNumberFormat, v: bigint) { return this.fmt(Number(v)); },
+  "format(J)Ljava/lang/String;": function (this: JNumberFormat, v: bigint) { return this.fmt(v); },
   "format(Ljava/lang/Object;)Ljava/lang/String;": function (this: JNumberFormat, o: unknown) {
-    if (typeof o === "number" || typeof o === "bigint") return this.fmt(Number(o));
+    if (typeof o === "number" || typeof o === "bigint") return this.fmt(o);
     if (!rt.iof(o, "java/lang/Number")) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Cannot format given Object as a Number");
     const n = vcallMaybe(o, "doubleValue", "()D");
     return n instanceof Promise ? n.then((v: number) => this.fmt(v)) : this.fmt(n);
@@ -186,15 +246,17 @@ const nfMethods: NativeSpec["methods"] = {
     if (Number.isNaN(v)) throw rt.mkThrowable("java/text/ParseException", "Unparseable number: " + s);
     return box(JDouble, v);
   },
-  "setMaximumFractionDigits(I)V": function (this: JNumberFormat, n: number) { this.maxFrac = Math.min(20, Math.max(0, n)); },
-  "setMinimumFractionDigits(I)V": function (this: JNumberFormat, n: number) { this.minFrac = Math.min(20, Math.max(0, n)); },
+  "setMaximumFractionDigits(I)V": function (this: JNumberFormat, n: number) { this.maxFrac = Math.min(20, Math.max(0, n)); this.minFrac = Math.min(this.minFrac, this.maxFrac); },
+  "setMinimumFractionDigits(I)V": function (this: JNumberFormat, n: number) { this.minFrac = Math.min(20, Math.max(0, n)); this.maxFrac = Math.max(this.minFrac, this.maxFrac); },
+  "getMinimumFractionDigits()I": function (this: JNumberFormat) { return this.minFrac; },
   "getMaximumFractionDigits()I": function (this: JNumberFormat) { return this.maxFrac; },
   "setGroupingUsed(Z)V": function (this: JNumberFormat, g: number) { this.grouping = !!g; },
   "setRoundingMode(Ljava/math/RoundingMode;)V": () => {},
   "setMinimumIntegerDigits(I)V": () => {},
   "setParseIntegerOnly(Z)V": () => {},
 };
-const nfInstance = () => new JNumberFormat();
+const nfInstance = (locale = defaultLocale) => Object.assign(new JNumberFormat(), { locale: localeTag(locale) });
+const percentInstance = (locale = defaultLocale) => Object.assign(nfInstance(locale), { style: "percent", maxFrac: 0 });
 rt.register({
   name: "java/text/NumberFormat", ctor: JNumberFormat, sup: "java/text/Format", ifaces: ["java/lang/Cloneable"],
   methods: {
@@ -204,8 +266,20 @@ rt.register({
     "static getNumberInstance()Ljava/text/NumberFormat;": nfInstance,
     "static getNumberInstance(Ljava/util/Locale;)Ljava/text/NumberFormat;": nfInstance,
     "static getIntegerInstance()Ljava/text/NumberFormat;": () => { const f = new JNumberFormat(); f.maxFrac = 0; return f; },
-    "static getPercentInstance()Ljava/text/NumberFormat;": nfInstance,
+    "static getPercentInstance()Ljava/text/NumberFormat;": percentInstance,
+    "static getPercentInstance(Ljava/util/Locale;)Ljava/text/NumberFormat;": percentInstance,
     "static getCurrencyInstance()Ljava/text/NumberFormat;": nfInstance,
+  },
+});
+class JIcuNumberFormat extends JNumberFormat {}
+const icuPercent = (locale: JLocale = defaultLocale) => Object.assign(new JIcuNumberFormat(), { locale: localeTag(locale), style: "percent", maxFrac: 0 });
+rt.register({ name: "android/icu/text/UFormat", ctor: class extends JObj {}, sup: "java/text/Format" });
+rt.register({
+  name: "android/icu/text/NumberFormat", ctor: JIcuNumberFormat, sup: "android/icu/text/UFormat",
+  methods: {
+    ...nfMethods,
+    "static getPercentInstance()Landroid/icu/text/NumberFormat;": icuPercent,
+    "static getPercentInstance(Ljava/util/Locale;)Landroid/icu/text/NumberFormat;": icuPercent,
   },
 });
 rt.register({

@@ -190,10 +190,10 @@ export class Resources {
   }
 
   /** simple value for resId (no bag). */
-  value(resId: number): RV {
+  value(resId: number, selected?: { density: number }): RV {
     if (!resId) return NULL_RV;
     const a = this.tbl(resId);
-    const e = a?.entry(resId);
+    const e = a?.entry(resId, selected);
     if (!e?.value) return NULL_RV;
     const v: RV = { t: e.value.type, d: e.value.data };
     if (v.t === TV.STRING) v.s = a!.values.get(e.value.data);

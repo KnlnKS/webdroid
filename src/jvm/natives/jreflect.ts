@@ -36,6 +36,9 @@ function classAnno(info: ClassInfo): ClassAnno {
   annoCache.set(info, a);
   return a;
 }
+export function methodAnnotations(info: ClassInfo, name: string, desc: string): EncAnnotation[] {
+  return classAnno(info).methodsByRef.get(name + desc) ?? [];
+}
 
 /** a descriptor as Java spells the type: int, java.lang.String, byte[] */
 function javaTypeName(d: string): string {
@@ -61,7 +64,7 @@ export class JMethod extends JAccessibleObject {
   mods = 0;   // access flags when the declaration is known (a dex method); else public [static]
   fn: ((...a: unknown[]) => unknown) | null = null;
 }
-export function mkMethod(owner: ClassInfo, name: string, desc: string, isStatic: boolean, fn: (...a: unknown[]) => unknown, mods = 0): JMethod {
+export function mkMethod(owner: ClassInfo, name: string, desc: string, isStatic: boolean, fn: ((...a: unknown[]) => unknown) | null, mods = 0): JMethod {
   const m = new JMethod();
   m.owner = owner; m.name = name; m.desc = desc; m.isStatic = isStatic; m.fn = fn; m.mods = mods;
   return m;
@@ -596,7 +599,7 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
       seen.add(key);
       const mangled = mangleMethod(mr.name, desc);
       const fn = isStatic ? ci.ctor[mangled] : ci.ctor.prototype[mangled];
-      if (typeof fn === "function") out.push(mkMethod(ci, mr.name, desc, isStatic, fn, m.flags));
+      out.push(mkMethod(ci, mr.name, desc, isStatic, typeof fn === "function" ? fn : null, m.flags));
     }
   };
   collect(info);
@@ -642,7 +645,7 @@ rt.register({
       const val = r instanceof Promise ? await r : r;
       return boxReturn(parseMethodDesc(this.desc).ret, val);
     },
-    ...annotatedElement(function (this: JMethod) { return classAnno(this.owner).methodsByRef.get(this.name + this.desc) ?? []; }),
+    ...annotatedElement(function (this: JMethod) { return methodAnnotations(this.owner, this.name, this.desc); }),
     "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JMethod) { return paramAnnotations(this.owner, this.name, this.desc); },
     "getGenericReturnType()Ljava/lang/reflect/Type;": function (this: JMethod) { return genericMethodTypes(this.owner, this.name, this.desc).ret; },
     // Java's own spelling, which a JNI caller parses for the name and parameter types

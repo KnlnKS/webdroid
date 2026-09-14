@@ -5,7 +5,7 @@
 // what was set — androidx's NotificationCompat writes and re-reads `n.flags`, `n.when`,
 // `n.extras` and friends directly rather than through getters.
 
-import { newArrayList } from "../jvm/natives/jutil";
+import { newArrayList, toJsArray } from "../jvm/natives/jutil";
 import { rt, JObj, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { mkUri } from "./net";
@@ -13,6 +13,9 @@ import { PARCELABLE } from "./os";
 import type { JBundle } from "./os";
 import type { JBitmap } from "./graphics";
 import { JBitmapDrawable } from "./drawable";
+import { preferenceStore } from "./sharedprefs";
+import { appHost } from "./apphost";
+import { csText } from "./text";
 
 type Impl = (...a: never[]) => unknown;
 const mkBundle = () => new (rt.link("android/os/Bundle").ctor as new () => JBundle)();
@@ -428,25 +431,55 @@ rt.register({
       "setLockscreenVisibility(I)V", "setLightColor(I)V", "setVibrationPattern([J)V"),
   },
 });
+class JNotificationGroup extends JObj { id = ""; name: unknown = null; description: string | null = null; }
+const groupStoreName = () => "android:notification-groups:" + (appHost?.pkg ?? "");
+function notificationGroups(): JNotificationGroup[] {
+  rt.link("android/app/NotificationChannelGroup");
+  const groups: JNotificationGroup[] = [];
+  for (const [id, fields] of preferenceStore.open(groupStoreName())) if (Array.isArray(fields)) {
+    const group = new JNotificationGroup(); group.id = id; group.name = fields[0]; group.description = fields[1] ?? null;
+    groups.push(group);
+  }
+  return groups;
+}
+async function createGroup(group: JNotificationGroup): Promise<void> {
+  if (!group) throw rt.mkThrowable("java/lang/NullPointerException", "group");
+  const name = await csText(group.name);
+  if (!group.id || !name) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Group id and name must not be empty");
+  const key = groupStoreName(), groups = preferenceStore.open(key);
+  groups.set(group.id, group.description === null ? [name] : [name, group.description]); preferenceStore.persist(key, groups);
+}
 rt.register({
-  name: "android/app/NotificationChannelGroup", ctor: class extends JObj {},
+  name: "android/app/NotificationChannelGroup", ctor: JNotificationGroup,
   methods: {
-    "<init>(Ljava/lang/String;Ljava/lang/CharSequence;)V": function () {},
-    "setDescription(Ljava/lang/String;)V": () => {},
+    "<init>(Ljava/lang/String;Ljava/lang/CharSequence;)V": function (this: JNotificationGroup, id: string, name: unknown) { this.id = id; this.name = name; },
+    "setDescription(Ljava/lang/String;)V": function (this: JNotificationGroup, description: string | null) { this.description = description; },
+    ...fieldGetters({ "getId()Ljava/lang/String;": "id", "getName()Ljava/lang/CharSequence;": "name", "getDescription()Ljava/lang/String;": "description" }),
+    "isBlocked()Z": () => 0,
   },
 });
 rt.register({
   name: "android/app/NotificationManager", ctor: class extends JObj {},
   methods: {
     "getNotificationChannels()Ljava/util/List;": () => newArrayList(),
+    "getNotificationChannelGroups()Ljava/util/List;": () => newArrayList(notificationGroups()),
+    "getNotificationChannelGroup(Ljava/lang/String;)Landroid/app/NotificationChannelGroup;": (id: string) => notificationGroups().find(group => group.id === id) ?? null,
+    "createNotificationChannelGroup(Landroid/app/NotificationChannelGroup;)V": createGroup,
+    "createNotificationChannelGroups(Ljava/util/List;)V": async (groups: unknown) => {
+      for (const group of await toJsArray(groups)) {
+        if (!(group instanceof JNotificationGroup)) throw rt.mkThrowable("java/lang/ClassCastException", "Expected NotificationChannelGroup");
+        await createGroup(group);
+      }
+    },
+    "deleteNotificationChannelGroup(Ljava/lang/String;)V": (id: string) => {
+      const key = groupStoreName(), groups = preferenceStore.open(key); groups.delete(id); preferenceStore.persist(key, groups);
+    },
     "getActiveNotifications()[Landroid/service/notification/StatusBarNotification;":
       () => Object.assign([] as unknown[], { $t: "Landroid/service/notification/StatusBarNotification;" }),
     ...noops("notify(ILandroid/app/Notification;)V", "notify(Ljava/lang/String;ILandroid/app/Notification;)V",
       "cancel(I)V", "cancel(Ljava/lang/String;I)V", "cancelAll()V", "setNotificationDelegate(Ljava/lang/String;)V",
       "createNotificationChannel(Landroid/app/NotificationChannel;)V", "createNotificationChannels(Ljava/util/List;)V",
-      "createNotificationChannelGroup(Landroid/app/NotificationChannelGroup;)V",
-      "createNotificationChannelGroups(Ljava/util/List;)V", "deleteNotificationChannel(Ljava/lang/String;)V",
-      "deleteNotificationChannelGroup(Ljava/lang/String;)V"),
+      "deleteNotificationChannel(Ljava/lang/String;)V"),
     ...stubs(null, "getNotificationDelegate()Ljava/lang/String;",
       "getNotificationChannel(Ljava/lang/String;)Landroid/app/NotificationChannel;"),
     ...stubs(1, "areNotificationsEnabled()Z"),

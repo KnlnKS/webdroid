@@ -719,23 +719,34 @@ rt.register({ name: "android/media/PlaybackParams", ctor: JPlaybackParams, metho
 class JRouteInfo extends JObj { tag: unknown = null; }
 class JRouteCategory extends JObj { name: unknown = ""; groupable = false; }
 const theRoute = new JRouteInfo();
+let routeAudio: JObj | null = null;
+function routeVolume(method: string): Promise<unknown> {
+  routeAudio ??= new (rt.link("android/media/AudioManager").ctor)();
+  return vcall(routeAudio, method, "(I)I", 3);
+}
 rt.register({
   name: "android/media/MediaRouter", ctor: class extends JObj {},
   statics: { ROUTE_TYPE_LIVE_AUDIO: 1, ROUTE_TYPE_LIVE_VIDEO: 2, ROUTE_TYPE_USER: 0x800000, CALLBACK_FLAG_PERFORM_ACTIVE_SCAN: 1, CALLBACK_FLAG_UNFILTERED_EVENTS: 2 },
   methods: {
+    "createRouteCategory(Ljava/lang/CharSequence;Z)Landroid/media/MediaRouter$RouteCategory;": (name: unknown, groupable: number) => {
+      rt.link("android/media/MediaRouter$RouteCategory");
+      const category = new JRouteCategory(); category.name = name; category.groupable = !!groupable; return category;
+    },
     "getSelectedRoute(I)Landroid/media/MediaRouter$RouteInfo;": () => theRoute,
     "getDefaultRoute()Landroid/media/MediaRouter$RouteInfo;": () => theRoute,
     "getRouteAt(I)Landroid/media/MediaRouter$RouteInfo;": (i: number) => (i === 0 ? theRoute : null),
-    "createRouteCategory(Ljava/lang/CharSequence;Z)Landroid/media/MediaRouter$RouteCategory;": (name: unknown, groupable: number) => Object.assign(new JRouteCategory(), { name, groupable: !!groupable }),
+
     ...stubs(1, "getRouteCount()I"),
     ...noops("addCallback(ILandroid/media/MediaRouter$Callback;)V",
       "addCallback(ILandroid/media/MediaRouter$Callback;I)V", "removeCallback(Landroid/media/MediaRouter$Callback;)V"),
   },
 });
-rt.markers("android/media/MediaRouter$Callback", "android/media/MediaRouter$VolumeCallback");
+rt.markers("android/media/MediaRouter$Callback");
+rt.register({ name: "android/media/MediaRouter$VolumeCallback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 rt.register({ name: "android/media/MediaRouter$RouteCategory", ctor: JRouteCategory, methods: {
   "getName()Ljava/lang/CharSequence;": function (this: JRouteCategory) { return this.name; },
   "getName(Landroid/content/Context;)Ljava/lang/CharSequence;": function (this: JRouteCategory) { return this.name; },
+  "getSupportedTypes()I": () => 0x800000,
   "isGroupable()Z": function (this: JRouteCategory) { return this.groupable ? 1 : 0; },
 } });
 class JCaptionStyle extends JObj {
@@ -768,21 +779,22 @@ rt.markers("android/view/accessibility/CaptioningManager$CaptioningChangeListene
 rt.register({
   name: "android/media/MediaRouter$RouteInfo", ctor: JRouteInfo,
   methods: {
+    "getTag()Ljava/lang/Object;": function (this: JRouteInfo) { return this.tag; },
+    "setTag(Ljava/lang/Object;)V": function (this: JRouteInfo, tag: unknown) { this.tag = tag; },
     "getPresentationDisplay()Landroid/view/Display;": () => null,
     "getName()Ljava/lang/CharSequence;": () => "Phone",
     "getName(Landroid/content/Context;)Ljava/lang/CharSequence;": () => "Phone",
     "getSupportedTypes()I": () => 3,
     "getPlaybackType()I": () => 0,
-    "getDeviceType()I": () => 0,
     "getPlaybackStream()I": () => 3,
-    "getVolume()I": () => 15,
-    "getVolumeMax()I": () => 15,
-    "getVolumeHandling()I": () => 0,
+    "getVolume()I": () => routeVolume("getStreamVolume"),
+    "getVolumeMax()I": () => routeVolume("getStreamMaxVolume"),
+    "getVolumeHandling()I": () => 1,
     "isConnecting()Z": () => 0,
     "getDescription()Ljava/lang/CharSequence;": () => null,
+    "getDeviceType()I": () => 0,
     "isEnabled()Z": () => 1,
-    "getTag()Ljava/lang/Object;": function (this: JRouteInfo) { return this.tag; },
-    "setTag(Ljava/lang/Object;)V": function (this: JRouteInfo, tag: unknown) { this.tag = tag; },
+
   },
 });
 

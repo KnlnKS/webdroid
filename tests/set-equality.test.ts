@@ -111,3 +111,12 @@ test("List.of rejects null and stays immutable", async () => {
     .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
   await expect(Promise.resolve().then(() => of("a", null))).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
 });
+
+test("unordered and insertion-ordered sets do not implement SortedSet", () => {
+  for (const name of ["HashSet", "LinkedHashSet", "EnumSet", "concurrent/CopyOnWriteArraySet", "concurrent/ConcurrentHashMap$KeySetView"]) {
+    const set = rt.make("java/util/" + name);
+    expect(rt.iof(set, "java/util/Set")).toBe(1);
+    expect(rt.iof(set, "java/util/SortedSet")).toBe(0);
+  }
+  expect(rt.iof(rt.make("java/util/TreeSet"), "java/util/SortedSet")).toBe(1);
+});

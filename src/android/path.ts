@@ -442,12 +442,30 @@ function pathOp(dst: JPath, pa: JPath, pb: JPath, mode: number): number {
   return 1;
 }
 
+function copyPath(this: JPath, source: JPath) {
+  if (this === source) return;
+  this.ops = source.ops.map(op => op.slice() as PathOp);
+  this.curX = source.curX; this.curY = source.curY;
+  this.startX = source.startX; this.startY = source.startY;
+  this.fillRule = source.fillRule;
+  this.dirty = true;
+}
+function appendPath(target: JPath, source: JPath, matrix?: ArrayLike<number>) {
+  if (!source.ops.length) return;
+  const copy = new JPath();
+  copyPath.call(copy, source);
+  if (matrix) pathTransform(copy, matrix);
+  target.ops.push(...copy.ops);
+  target.curX = copy.curX; target.curY = copy.curY;
+  target.startX = copy.startX; target.startY = copy.startY;
+  target.dirty = true;
+}
 rt.register({
   name: "android/graphics/Path", ctor: JPath,
   methods: {
     "<init>()V": function () {},
-    "<init>(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { if (o) copyPath(this, o); },
-    "set(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { copyPath(this, o); },
+    "<init>(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { if (o) copyPath.call(this, o); },
+    "set(Landroid/graphics/Path;)V": copyPath,
     "reset()V": function (this: JPath) { this.ops.length = 0; this.dirty = true; },
     "rewind()V": function (this: JPath) { this.ops.length = 0; this.dirty = true; },
     "moveTo(FF)V": function (this: JPath, x: number, y: number) { this.add(["m", x, y]); this.curX = this.startX = x; this.curY = this.startY = y; },
@@ -507,17 +525,14 @@ rt.register({
     "addCircle(FFFLandroid/graphics/Path$Direction;)V": function (this: JPath, x: number, y: number, r: number, d: { ord: number } | null) {
       this.add(["circle", x, y, r, d?.ord ?? 0]);
     },
-    "addPath(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { this.ops.push(...o.ops); this.dirty = true; },
+    "addPath(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { appendPath(this, o); },
     "addPath(Landroid/graphics/Path;FF)V": function (this: JPath, o: JPath, dx: number, dy: number) {
-      const t = new JPath(); t.ops = o.ops.map((op) => op.slice() as typeof op);
-      pathTransform(t, [1, 0, 0, 1, dx, dy]);
-      this.ops.push(...t.ops); this.dirty = true;
+      appendPath(this, o, [1, 0, 0, 1, dx, dy]);
     },
     "addPath(Landroid/graphics/Path;Landroid/graphics/Matrix;)V": function (this: JPath, o: JPath, matrix: JMatrix) {
-      const t = new JPath(); t.ops = o.ops.map((op) => op.slice() as typeof op);
-      pathTransform(t, matrix.m);
-      this.ops.push(...t.ops); this.dirty = true;
+      appendPath(this, o, matrix.m);
     },
+
     "arcTo(Landroid/graphics/RectF;FF)V": function (this: JPath, r: JRectF, start: number, sweep: number) {
       this.add(["arc", r.left, r.top, r.right, r.bottom, start, sweep, 0]);
     },
@@ -545,15 +560,6 @@ rt.register({
   },
 });
 
-function copyPath(dst: JPath, src: JPath): void {
-  dst.ops = src.ops.map((op) => op.slice() as PathOp);
-  dst.curX = src.curX; dst.curY = src.curY;
-  dst.startX = src.startX; dst.startY = src.startY;
-  dst.fillRule = src.fillRule;
-  dst.p2d = null;
-  dst.dirty = true;
-}
-
 // These three walk coordinates only: an op's trailing scalars are radii and angles, and moving
 // or bounding a path must not touch them. Exported because AOSP's own Path bytecode reaches
 // the same three through nComputeBounds/nOffset/nTransform (src/android/delegates.ts).
@@ -569,6 +575,7 @@ export function pathBounds(p: JPath, r: { left: number; top: number; right: numb
   else { r.left = l; r.top = t; r.right = rr; r.bottom = b; }
 }
 export function pathOffset(p: JPath, dx: number, dy: number) {
+  p.curX += dx; p.curY += dy; p.startX += dx; p.startY += dy;
   for (const op of p.ops) {
     for (let i = 1, n = opPairs[op[0]] ?? 0; n--; i += 2) {
       (op[i] as number) += dx; (op[i + 1] as number) += dy;
@@ -593,6 +600,11 @@ export function pathTransform(p: JPath, m: ArrayLike<number>) {
     const rad = opRadii[op[0]];
     if (rad) for (let i = rad[0]; i < rad[1] && i < op.length; i++) (op[i] as number) *= (i - rad[0]) % 2 ? sy : sx;
   }
+  const { curX, curY, startX, startY } = p;
+  p.curX = m[0] * curX + m[2] * curY + m[4];
+  p.curY = m[1] * curX + m[3] * curY + m[5];
+  p.startX = m[0] * startX + m[2] * startY + m[4];
+  p.startY = m[1] * startX + m[3] * startY + m[5];
   p.dirty = true;
 }
 mkEnumSet("android/graphics/Path$Direction", ["CW", "CCW"]);

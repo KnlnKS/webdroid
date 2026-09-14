@@ -96,3 +96,35 @@ for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 t
     }
   });
 });
+
+
+test("A64 floating arguments spill independently of available integer registers", async () => {
+  setA64(true);
+  const cpu = new Cpu(new JThread(), "float-arguments");
+  const floats = Array.from({ length: 16 }, (_, i) => i + 0.25);
+  const integers = Array.from({ length: 9 }, (_, i) => i + 100);
+  let actual: { floats: number[]; integers: number[] } | undefined;
+  const address = defineHost("test.arguments.float-spill", (_cpu, args) => {
+    const first = [args.i(), args.i()];
+    actual = { floats: floats.map(() => args.f()), integers: [...first, ...integers.slice(2).map(() => args.i())] };
+    return 0;
+  });
+  try {
+    await cpu.call(address, [...integers.slice(0, 2), ...floats.map(f => ({ f })), ...integers.slice(2)]);
+    expect(actual).toEqual({ floats, integers });
+  } finally { cpu.dispose(); setA64(false); }
+});
+
+test("A64 mixed floating spills retain eight-byte slots and leave integer registers available", async () => {
+  setA64(true);
+  const cpu = new Cpu(new JThread(), "mixed-arguments");
+  let actual: number[] = [];
+  const address = defineHost("test.arguments.mixed-spill", (_cpu, args) => {
+    actual = [args.i(), ...Array.from({ length: 8 }, () => args.d()), args.f(), args.i(), args.d(), args.f()];
+    return 0;
+  });
+  try {
+    await cpu.call(address, [12, ...Array.from({ length: 8 }, (_, i) => ({ d: i + 0.125 })), { f: -2.5 }, 23, { d: Math.PI }, { f: 4.75 }]);
+    expect(actual).toEqual([12, ...Array.from({ length: 8 }, (_, i) => i + 0.125), -2.5, 23, Math.PI, 4.75]);
+  } finally { cpu.dispose(); setA64(false); }
+});

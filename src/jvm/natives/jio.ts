@@ -2,10 +2,11 @@
 
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i8, u8 } from "../abi";
-import { vcall, vcallMaybe, after, stringHash, stringCompare, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
+import { vcall, vcallMaybe, vcallOn, curThread, after, stringHash, stringCompare, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
 import { procText } from "../../shell/procfs";
 import { mappedBuffer, mappedReadOnlyBuffer, type JBuffer } from "./jnio";
+import { javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd } from "../../native/stdio";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
@@ -13,6 +14,8 @@ export const apkPath = (split?: string) => split ? `/data/app/split_${split}.apk
 
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
 
+export interface VfsFile { path: string | null; data: Uint8Array; len: number }
+const openFiles = new Map<string, VfsFile>();
 // ── VFS: path → bytes. Directories implicit.
 const procBytes = (path: string): Uint8Array | null => {
   const text = procText(path);
@@ -51,15 +54,32 @@ export const vfs = {
     const source = this.source(p);
     return source ? { size: source.size, source } : null;
   },
-  write(p: string, data: Uint8Array) {
+  open(p: string): VfsFile | null {
+    const path = this.norm(p), data = this.files.get(path);
+    if (!data) return null;
+    let file = openFiles.get(path);
+    if (!file) { file = { path, data, len: data.length }; openFiles.set(path, file); }
+    return file;
+  },
+  publish(file: VfsFile) {
+    if (file.path === null || openFiles.get(file.path) !== file) return;
+    this.files.set(file.path, file.data.subarray(0, file.len));
+    this.onWrite(file.path);
+  },
+  write(p: string, data: Uint8Array, notify = true) {
     const path = this.norm(p);
     this.lazyFiles.delete(path);
     this.files.set(path, data);
-    this.onWrite(path);
+    const file = openFiles.get(path);
+    if (file) {
+      if (file.data.buffer !== data.buffer || file.data.byteOffset !== data.byteOffset) file.data = data;
+      file.len = data.length;
+    }
+    if (notify) this.onWrite(path);
   },
   mount(p: string, source: FileSource) {
     const path = this.norm(p);
-    this.files.delete(path);
+    this.delete(path, false);
     this.lazyFiles.set(path, source);
   },
   lazy() {
@@ -78,11 +98,27 @@ export const vfs = {
     p = this.norm(p);
     return !this.files.has(p) && !this.lazyFiles.has(p) && this.under(p);
   },
-  delete(p: string): boolean {
+  delete(p: string, notify = true): boolean {
     const path = this.norm(p);
+    const file = openFiles.get(path);
+    if (file) { file.path = null; openFiles.delete(path); }
     const removed = this.files.delete(path) || this.lazyFiles.delete(path);
-    if (removed) this.onWrite(path);
+    if (removed && notify) this.onWrite(path);
     return removed;
+  },
+  rename(from: string, to: string): boolean {
+    from = this.norm(from); to = this.norm(to);
+    if (!this.files.has(from) && !this.lazyFiles.has(from)) return false;
+    if (from === to) return true;
+    this.delete(to, false);
+    for (const files of [this.files, this.lazyFiles]) {
+      const value = files.get(from);
+      if (value) { files.delete(from); files.set(to, value as never); }
+    }
+    const file = openFiles.get(from);
+    if (file) { openFiles.delete(from); file.path = to; openFiles.set(to, file); }
+    this.onWrite(from); this.onWrite(to);
+    return true;
   },
   mkdir(p: string) { const path = this.norm(p); if (!this.dirs.has(path)) { this.dirs.add(path); this.onWrite(path); } },
   rmdir(p: string): boolean { const path = this.norm(p), removed = this.dirs.delete(path); if (removed) this.onWrite(path); return removed; },
@@ -155,11 +191,7 @@ rt.register({
     "delete()Z": function (this: JFile) { return vfs.delete(this.path) ? 1 : 0; },
     "deleteOnExit()V": function () {},
     "renameTo(Ljava/io/File;)Z": function (this: JFile, dst: JFile) {
-      const data = vfs.read(this.path);
-      if (!data) return 0;
-      vfs.write(dst.path, data);
-      vfs.delete(this.path);
-      return 1;
+      return vfs.rename(this.path, dst.path) ? 1 : 0;
     },
     "list()[Ljava/lang/String;": function (this: JFile) {
       return jarray(vfs.list(this.path), "Ljava/lang/String;");
@@ -202,6 +234,7 @@ export class JInputStream extends JObj {
   source: FileSource | null = null;
   wrapped: unknown = null;   // a bytecode InputStream this one reads through
   pos = 0;
+  declare markPos?: number;
 }
 /** a plain InputStream over bytes already in hand */
 export function streamOf(bytes: Uint8Array): JInputStream {
@@ -249,8 +282,9 @@ const inputStreamMethods: NativeSpec["methods"] = {
     this.pos += n;
     return n;
   },
-  "available()I": function (this: JInputStream) { return (this.source?.size ?? this.buf.length) - this.pos; },
+  "available()I": function (this: JInputStream) { return this.wrapped ? vcallMaybe(this.wrapped, "available", "()I") : (this.source?.size ?? this.buf.length) - this.pos; },
   "skip(J)J": function (this: JInputStream, n: bigint) {
+    if (this.wrapped) return vcallMaybe(this.wrapped, "skip", "(J)J", n);
     if (n <= 0n) return 0n;
     const ownRead = (JInputStream.prototype as unknown as Record<string, unknown>)[readBII];
     if ((this as unknown as Record<string, unknown>)[readBII] !== ownRead) return skipThroughRead(this, n);
@@ -258,10 +292,10 @@ const inputStreamMethods: NativeSpec["methods"] = {
     this.pos += k;
     return BigInt(k);
   },
-  "close()V": function () {},
-  "mark(I)V": function (this: JInputStream) { (this as any).markPos = this.pos; },
-  "reset()V": function (this: JInputStream) { this.pos = (this as any).markPos ?? 0; },
-  "markSupported()Z": () => 1,
+  "close()V": function (this: JInputStream) { if (this.wrapped) return vcallMaybe(this.wrapped, "close", "()V"); },
+  "mark(I)V": function (this: JInputStream, limit: number) { if (this.wrapped) return vcallMaybe(this.wrapped, "mark", "(I)V", limit); this.markPos = this.pos; },
+  "reset()V": function (this: JInputStream) { if (this.wrapped) return vcallMaybe(this.wrapped, "reset", "()V"); this.pos = this.markPos ?? 0; },
+  "markSupported()Z": function (this: JInputStream) { return this.wrapped ? vcallMaybe(this.wrapped, "markSupported", "()Z") : 1; },
 };
 const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII)I");
 const writeBII = mangleMethod("write", "([BII)V");
@@ -275,6 +309,10 @@ async function skipThroughRead(stream: JInputStream, count: bigint): Promise<big
     remaining -= BigInt(read);
   }
   return count - remaining;
+}
+function usesReads(stream: unknown, prototype = JInputStream.prototype): stream is JInputStream {
+  const s = stream as Record<string, unknown> | null, p = prototype as unknown as Record<string, unknown>;
+  return stream instanceof JInputStream && s![readI] === p[readI] && s![readBII] === p[readBII];
 }
 // the DataInput/DataOutput primitives, big-endian as the JDK reads and writes them
 type Get = (v: DataView) => unknown;
@@ -290,14 +328,13 @@ const PRIMS: [string, string, number, Get, Put][] = [
   ["Double", "D", 8, (v) => v.getFloat64(0), (v, x: number) => v.setFloat64(0, x)],
 ];
 const READS: [string, string, number, Get, Put?][] = [...PRIMS, ["UnsignedShort", "I", 2, (v) => v.getUint16(0)], ["UnsignedByte", "I", 1, (v) => v.getUint8(0)]];
-const readers = (read: (n: number, get: Get) => unknown) =>
+export const readers = (read: (n: number, get: Get) => unknown) =>
   Object.fromEntries(READS.map(([name, d, n, get]) => [`read${name}()${d}`, read(n, get)])) as NonNullable<NativeSpec["methods"]>;
-const writers = (write: (n: number, put: Put) => unknown) =>
+export const writers = (write: (n: number, put: Put) => unknown) =>
   Object.fromEntries(PRIMS.map(([name, d, n, , put]) => [`write${name}(${"SBC".includes(d) ? "I" : d})V`, write(n, put)])) as NonNullable<NativeSpec["methods"]>;
 /** every byte an InputStream has left: in place when its reads are ours, else through its virtual read */
 export async function readStreamFully(s: unknown): Promise<Uint8Array> {
-  const base = JInputStream.prototype as any;
-  if (s instanceof JInputStream && !s.wrapped && (s as any)[readI] === base[readI] && (s as any)[readBII] === base[readBII]) {
+  if (usesReads(s) && !s.wrapped) {
     checkFileOpen(s);
     const out = s.source ? await readFully(s.source, s.pos) : s.buf.subarray(s.pos);
     s.pos += out.length;
@@ -322,37 +359,114 @@ rt.register({
     },
   },
 });
-function openRead(this: JInputStream, p: string) {
-  inputPaths.set(this, vfs.norm(p));
-  const bytes = vfs.read(p);
-  if (bytes) this.buf = bytes;
-  else {
-    const source = vfs.source(p);
-    if (!source) throw rt.mkThrowable("java/io/FileNotFoundException", p);
-    this.source = source;
-  }
+class JFileInputStream extends JInputStream { fd = new JFileDescriptor(); ownsFd = false; }
+function adoptFd(this: JFileInputStream, fd: JFileDescriptor | null, owner = 0) {
+  if (!fd) return rt.npe();
+  this.fd = fd; this.ownsFd = !!owner;
+  this.source = javaFdSource(fd.fd);
+  Object.defineProperty(this, "pos", {
+    get: () => checkedFdResult(javaSeekFd(fd.fd, 0, 1)),
+    set: (position: number) => { checkedFdResult(javaSeekFd(fd.fd, position, 0)); },
+    configurable: true,
+  });
+}
+function checkedFdResult(n: number): number {
+  if (n < 0) throw rt.mkThrowable("java/io/IOException", "Invalid file descriptor operation");
+  return n;
+}
+function openRead(this: JFileInputStream, p: string) {
+  if (p == null) return rt.npe();
+  if (vfs.isDir(p)) throw rt.mkThrowable("java/io/FileNotFoundException", p);
+  const fd = javaOpenFd(p, 0);
+  if (fd < 0) throw rt.mkThrowable("java/io/FileNotFoundException", p);
+  this.fd.fd = fd;
+  adoptFd.call(this, this.fd, 1);
+}
+function readFile(this: JFileInputStream, out: Int8Array, off: number, len: number) {
+  checkFileOpen(this);
+  if (!out) return rt.npe();
+  if (off < 0 || len < 0 || off > out.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  if (!len) return 0;
+  return after(javaReadFd(this.fd.fd, u8(out, off, len)), n => checkedFdResult(n) || -1);
 }
 rt.register({
-  name: "java/io/FileInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
+  name: "java/io/FileInputStream", ctor: JFileInputStream, sup: "java/io/InputStream",
   methods: {
-    "getFD()Ljava/io/FileDescriptor;": function (this: JInputStream) { return descriptorOf(this, inputPaths.get(this) ?? "", 0); },
+    "getFD()Ljava/io/FileDescriptor;": function (this: JFileInputStream) { return this.fd; },
     "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
-    "<init>(Ljava/io/File;)V": function (this: JInputStream, f: JFile) { openRead.call(this, f.path); },
+    "<init>(Ljava/io/File;)V": function (this: JFileInputStream, f: JFile) { if (!f) return rt.npe(); openRead.call(this, f.path); },
     "<init>(Ljava/lang/String;)V": openRead,
-    "close()V": function (this: JInputStream) { closeFile(this); },
+    "<init>(Ljava/io/FileDescriptor;)V": adoptFd,
+    "<init>(Ljava/io/FileDescriptor;Z)V": adoptFd,
+    "read()I": function (this: JFileInputStream) { const b = new Int8Array(1); return after(readFile.call(this, b, 0, 1), n => n < 0 ? -1 : b[0] & 255); },
+    "read([B)I": function (this: JFileInputStream, out: Int8Array) { if (!out) return rt.npe(); return readFile.call(this, out, 0, out.length); },
+    "read([BII)I": readFile,
+    "available()I": function (this: JFileInputStream) { checkFileOpen(this); return Math.min(0x7fffffff, checkedFdResult(javaAvailableFd(this.fd.fd))); },
+    "skip(J)J": function (this: JFileInputStream, n: bigint) {
+      checkFileOpen(this);
+      const before = this.pos, next = checkedFdResult(javaSeekFd(this.fd.fd, Number(n), 1));
+      return BigInt(next - before);
+    },
+    "markSupported()Z": () => 0,
+    "mark(I)V": () => {},
+    "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+    "close()V": function (this: JFileInputStream) {
+      if (closedFiles.has(this)) return;
+      closeFile(this);
+      if (this.ownsFd) { javaCloseFd(this.fd.fd); this.fd.fd = -1; }
+    },
   },
 });
-/** a wrapping stream shares the source's bytes and cursor, or — when the source is an app's own
- *  stream — reads through the source's virtual read, which is the only way in */
 function adoptStream(this: JInputStream, src: JInputStream) {
-  if (src instanceof JInputStream) { this.buf = src.buf; this.source = src.source; this.pos = src.pos; }
-  else this.wrapped = src;
+  this.wrapped = src;
+}
+class JBufferedIn extends JInputStream {
+  count = 0; marked = -1; markLimit = 0; closed = false;
+  check() { if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed"); }
+  async fill(): Promise<void> {
+    if (this.marked < 0) this.pos = 0;
+    else if (this.pos >= this.buf.length) {
+      if (this.marked > 0) { this.buf.copyWithin(0, this.marked, this.pos); this.pos -= this.marked; this.marked = 0; }
+      else if (this.buf.length >= this.markLimit) { this.marked = -1; this.pos = 0; }
+      else { const bytes = new Uint8Array(Math.min(this.buf.length * 2, this.markLimit)); bytes.set(this.buf); this.buf = bytes; }
+    }
+    this.count = this.pos;
+    const n = await vcall(this.wrapped, "read", "([BII)I", i8(this.buf), this.pos, this.buf.length - this.pos);
+    if (n > 0) this.count = this.pos + n;
+  }
+}
+function bufferedIn(this: JBufferedIn, source: unknown, size = 8192): void {
+  if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer size <= 0");
+  this.wrapped = source; this.buf = new Uint8Array(size);
 }
 rt.register({
-  name: "java/io/BufferedInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
+  name: "java/io/BufferedInputStream", ctor: JBufferedIn, sup: "java/io/InputStream",
   methods: {
-    "<init>(Ljava/io/InputStream;)V": adoptStream,
-    "<init>(Ljava/io/InputStream;I)V": adoptStream,
+    "<init>(Ljava/io/InputStream;)V": bufferedIn,
+    "<init>(Ljava/io/InputStream;I)V": bufferedIn,
+    "read()I": async function (this: JBufferedIn) { this.check(); if (this.pos >= this.count) await this.fill(); return this.pos < this.count ? this.buf[this.pos++] : -1; },
+    "read([BII)I": async function (this: JBufferedIn, out: Int8Array, offset: number, count: number) {
+      this.check();
+      if (!out) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      if (offset < 0 || count < 0 || offset > out.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      if (!count) return 0;
+      if (this.pos >= this.count) {
+        if (count >= this.buf.length && this.marked < 0) return vcall(this.wrapped, "read", "([BII)I", out, offset, count);
+        await this.fill(); if (this.pos >= this.count) return -1;
+      }
+      const n = Math.min(count, this.count - this.pos);
+      out.set(i8(this.buf, this.pos, n), offset); this.pos += n; return n;
+    },
+    "available()I": function (this: JBufferedIn) { this.check(); return after(vcallMaybe(this.wrapped, "available", "()I"), n => Math.min(2147483647, this.count - this.pos + n)); },
+    "skip(J)J": async function (this: JBufferedIn, count: bigint) {
+      this.check(); if (count <= 0n) return 0n;
+      if (this.pos >= this.count) { if (this.marked < 0) return vcall(this.wrapped, "skip", "(J)J", count); await this.fill(); }
+      const n = Math.min(Number(count), this.count - this.pos); this.pos += n; return BigInt(n);
+    },
+    "mark(I)V": function (this: JBufferedIn, limit: number) { this.marked = this.pos; this.markLimit = limit; },
+    "reset()V": function (this: JBufferedIn) { this.check(); if (this.marked < 0) throw rt.mkThrowable("java/io/IOException", "Resetting to invalid mark"); this.pos = this.marked; },
+    "markSupported()Z": () => 1,
+    "close()V": function (this: JBufferedIn) { if (!this.closed) { this.closed = true; this.buf = new Uint8Array(0); return vcall(this.wrapped, "close", "()V"); } },
   },
 });
 rt.register({
@@ -364,6 +478,16 @@ rt.register({
     "readFully([B)V": function (this: JInputStream, out: Int8Array) {
       return after(dataBytes(this, out.length), (bytes) => { out.set(i8(bytes)); });
     },
+    "skipBytes(I)I": async function (this: JInputStream, n: number) {
+      const thread = curThread;
+      let total = 0;
+      while (total < n) {
+        const skipped = Number(await vcallOn(thread, this.wrapped, "skip", "(J)J", BigInt(n - total)));
+        if (skipped <= 0) break;
+        total += skipped;
+      }
+      return total;
+    },
     "readUTF()Ljava/lang/String;": async function (this: JInputStream) {
       const head = await dataBytes(this, 2);
       return utf8.dec.decode(await dataBytes(this, (head[0] << 8) | head[1]));
@@ -373,21 +497,29 @@ rt.register({
 function dataRead(length: number, decode: (b: Uint8Array) => unknown) {
   return function (this: JInputStream) { return after(dataBytes(this, length), decode); };
 }
-function dataBytes(stream: JInputStream, length: number): Uint8Array | Promise<Uint8Array> {
+export function dataBytes(stream: JInputStream, length: number, thread = curThread): Uint8Array | Promise<Uint8Array> {
+  checkFileOpen(stream);
   const take = (bytes: Uint8Array) => {
     if (bytes.length !== length) throw rt.mkThrowable("java/io/EOFException", null);
     stream.pos += length;
     return bytes;
   };
-  if (stream.wrapped) return wrappedBytes(stream, length).then(take);
+  if (stream.wrapped) {
+    const source = stream.wrapped;
+    if (usesReads(source)) return after(dataBytes(source, length, thread), take);
+    if (source instanceof JBufferedIn && usesReads(source, JBufferedIn.prototype) && source.count - source.pos >= length) {
+      source.check(); const bytes = source.buf.subarray(source.pos, source.pos + length); source.pos += length; return take(bytes);
+    }
+    return wrappedBytes(stream, length, thread).then(take);
+  }
   return stream.source ? readFully(stream.source, stream.pos, length).then(take) : take(stream.buf.subarray(stream.pos, stream.pos + length));
 }
 /** as many of `length` bytes as the wrapped stream has, one virtual read at a time */
-async function wrappedBytes(stream: JInputStream, length: number): Promise<Uint8Array> {
+async function wrappedBytes(stream: JInputStream, length: number, thread: typeof curThread): Promise<Uint8Array> {
   const out = new Int8Array(length);
   let got = 0;
   while (got < length) {
-    const n: number = await vcall(stream.wrapped, "read", "([BII)I", out, got, length - got);
+    const n = Number(await vcallOn(thread, stream.wrapped, "read", "([BII)I", out, got, length - got));
     if (n <= 0) break;
     got += n;
   }
@@ -399,7 +531,6 @@ async function wrappedBytes(stream: JInputStream, length: number): Promise<Uint8
  *  RandomAccessFile's is kept so streams built on it write at its shared file pointer. */
 export class JFileDescriptor extends JObj { fd = -1; path = ""; flags = 0; owner: JObj | null = null; }
 const descriptors = new WeakMap<JObj, JFileDescriptor>();
-const inputPaths = new WeakMap<JObj, string>();
 function descriptorOf(owner: JObj, path: string, flags: number): JFileDescriptor {
   let d = descriptors.get(owner);
   if (!d) { d = new JFileDescriptor(); d.path = path; d.flags = flags; d.owner = owner; descriptors.set(owner, d); }
@@ -430,185 +561,6 @@ rt.register({
     "close()V": function () {},
   },
 });
-
-class JStreamChannel extends JObj {
-  stream: unknown = null;
-  open = true;
-}
-function closeStreamChannel(this: JStreamChannel) {
-  if (!this.open) return;
-  this.open = false;
-  return vcall(this.stream, "close", "()V");
-}
-const streamChannelMethods: NativeSpec["methods"] = {
-  "isOpen()Z": function (this: JStreamChannel) { return this.open ? 1 : 0; },
-  "close()V": closeStreamChannel,
-};
-rt.markers("java/nio/channels/ReadableByteChannel", "java/nio/channels/WritableByteChannel",
-  "java/nio/channels/ByteChannel", "java/nio/channels/Channel");
-rt.register({
-  name: "webdroid/ReadableStreamChannel", ctor: JStreamChannel,
-  ifaces: ["java/nio/channels/ReadableByteChannel"],
-  methods: {
-    ...streamChannelMethods,
-    "read(Ljava/nio/ByteBuffer;)I": function (this: JStreamChannel, dst: JBuffer) {
-      if (!this.open) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
-      const len = dst.lim - dst.pos;
-      if (len === 0) return 0;
-      dst.clampPut(0);
-      const out = new Int8Array(dst.ab, dst.dv.byteOffset + dst.pos, len);
-      return after(vcall(this.stream, "read", "([BII)I", out, 0, len), (n: number) => {
-        if (n > 0) dst.pos += n;
-        return n;
-      });
-    },
-  },
-});
-rt.register({
-  name: "webdroid/WritableStreamChannel", ctor: JStreamChannel,
-  ifaces: ["java/nio/channels/WritableByteChannel"],
-  methods: {
-    ...streamChannelMethods,
-    "write(Ljava/nio/ByteBuffer;)I": function (this: JStreamChannel, src: JBuffer) {
-      if (!this.open) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
-      const len = src.lim - src.pos;
-      if (len === 0) return 0;
-      const bytes = new Int8Array(src.ab, src.dv.byteOffset + src.pos, len);
-      return after(vcall(this.stream, "write", "([BII)V", bytes, 0, len), () => {
-        src.pos += len;
-        return len;
-      });
-    },
-  },
-});
-rt.register({
-  name: "java/nio/channels/Channels", ctor: class extends JObj {},
-  methods: {
-    "static newChannel(Ljava/io/InputStream;)Ljava/nio/channels/ReadableByteChannel;": (stream: unknown) => {
-      if (!stream) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      const channel = rt.make("webdroid/ReadableStreamChannel") as JStreamChannel;
-      channel.stream = stream;
-      return channel;
-    },
-    "static newChannel(Ljava/io/OutputStream;)Ljava/nio/channels/WritableByteChannel;": (stream: unknown) => {
-      if (!stream) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      const channel = rt.make("webdroid/WritableStreamChannel") as JStreamChannel;
-      channel.stream = stream;
-      return channel;
-    },
-  },
-});
-// ── java.io.Object{Input,Output}Stream, over the serialization stream's BLOCK-DATA layer only.
-// A primitive written outside writeObject travels in TC_BLOCKDATA records, which is the whole
-// protocol Externalizable bodies use. An object graph needs
-// the class-descriptor and back-reference machinery, which is not modelled: readObject says so.
-const STREAM_MAGIC = 0xaced, STREAM_VERSION = 5, TC_BLOCKDATA = 0x77, TC_BLOCKDATALONG = 0x7a;
-class JObjectIn extends JInputStream { blockEnd = 0; }
-/** `n` bytes of block data, crossing record boundaries the way a long writeUTF body does */
-async function blockBytes(s: JObjectIn, n: number): Promise<Uint8Array> {
-  const out = new Uint8Array(n);
-  for (let got = 0; got < n;) {
-    while (s.blockEnd <= s.pos) {
-      const tag = (await dataBytes(s, 1))[0];
-      if (tag === TC_BLOCKDATA) {
-        const length = (await dataBytes(s, 1))[0];
-        s.blockEnd = s.pos + length;
-      }
-      else if (tag === TC_BLOCKDATALONG) {
-        const len = await dataBytes(s, 4);
-        s.blockEnd = s.pos + new DataView(len.buffer, len.byteOffset, 4).getUint32(0);
-      }
-      else throw rt.mkThrowable("java/io/StreamCorruptedException", "unsupported serialization tag 0x" + tag.toString(16));
-    }
-    const take = Math.min(n - got, s.blockEnd - s.pos);
-    out.set(await dataBytes(s, take), got);
-    got += take;
-  }
-  return out;
-}
-const blockRead = (n: number, decode: (v: DataView) => unknown) =>
-  async function (this: JObjectIn) {
-    const b = await blockBytes(this, n);
-    return decode(new DataView(b.buffer, b.byteOffset, n));
-  };
-/** modified UTF-8: NUL is two bytes and a supplementary character is two three-byte halves */
-function modifiedUtf8(b: Uint8Array): string {
-  let out = "";
-  for (let i = 0; i < b.length;) {
-    const c = b[i++];
-    if (c < 0x80) out += String.fromCharCode(c);
-    else if ((c & 0xe0) === 0xc0) out += String.fromCharCode(((c & 0x1f) << 6) | (b[i++] & 0x3f));
-    else out += String.fromCharCode(((c & 0x0f) << 12) | ((b[i++] & 0x3f) << 6) | (b[i++] & 0x3f));
-  }
-  return out;
-}
-defineException("java/io/StreamCorruptedException", "java/io/IOException");
-const noGraph = (): never => { throw rt.mkThrowable("java/io/StreamCorruptedException", "object graph serialization is not available"); };
-rt.register({
-  name: "java/io/ObjectInputStream", ctor: JObjectIn, sup: "java/io/InputStream",
-  ifaces: ["java/io/ObjectInput", "java/io/DataInput"],
-  methods: {
-    "<init>(Ljava/io/InputStream;)V": async function (this: JObjectIn, src: JInputStream) {
-      adoptStream.call(this, src);
-      const head = await dataBytes(this, 4);
-      const magic = (head[0] << 8) | head[1], version = (head[2] << 8) | head[3];
-      if (magic !== STREAM_MAGIC || version !== STREAM_VERSION) {
-        throw rt.mkThrowable("java/io/StreamCorruptedException", "invalid stream header");
-      }
-    },
-    ...readers(blockRead),
-    "readUTF()Ljava/lang/String;": async function (this: JObjectIn) {
-      const head = await blockBytes(this, 2);
-      return modifiedUtf8(await blockBytes(this, (head[0] << 8) | head[1]));
-    },
-    "readFully([B)V": async function (this: JObjectIn, out: Int8Array) {
-      const b = await blockBytes(this, out.length);
-      out.set(i8(b));
-    },
-    "readObject()Ljava/lang/Object;": noGraph,
-    "defaultReadObject()V": noGraph,
-    "close()V": function () {},
-  },
-});
-class JObjectOut extends JOutputStream { target: unknown = null; }
-/** every primitive write is its own TC_BLOCKDATA record, which reads back identically */
-function blockWrite(o: JObjectOut, bytes: Uint8Array): void {
-  o.chunks.push(TC_BLOCKDATA, bytes.length);
-  for (const b of bytes) o.chunks.push(b);
-}
-const blockPut = (n: number, encode: (v: DataView, x: never) => void) =>
-  function (this: JObjectOut, x: never) {
-    const b = new Uint8Array(n);
-    encode(new DataView(b.buffer), x);
-    blockWrite(this, b);
-  };
-rt.register({
-  name: "java/io/ObjectOutputStream", ctor: JObjectOut, sup: "java/io/OutputStream",
-  ifaces: ["java/io/ObjectOutput", "java/io/DataOutput"],
-  methods: {
-    "<init>(Ljava/io/OutputStream;)V": function (this: JObjectOut, out: JOutputStream) {
-      this.target = out;
-      this.chunks.push(STREAM_MAGIC >> 8, STREAM_MAGIC & 0xff, 0, STREAM_VERSION);
-    },
-    ...writers(blockPut),
-    "writeUTF(Ljava/lang/String;)V": function (this: JObjectOut, str: string) {
-      const body = utf8.enc.encode(str);
-      const b = new Uint8Array(body.length + 2);
-      b[0] = body.length >> 8; b[1] = body.length & 0xff;
-      b.set(body, 2);
-      blockWrite(this, b);
-    },
-    "writeObject(Ljava/lang/Object;)V": noGraph,
-    "flush()V": function (this: JObjectOut) {
-      const target = this.target;
-      const bytes = Int8Array.from(this.chunks);
-      this.chunks = [];
-      return target ? vcall(target, "write", "([BII)V", bytes, 0, bytes.length) : undefined;
-    },
-    "close()V": function (this: JObjectOut) { return vcall(this, "flush", "()V"); },
-  },
-});
-
 // ByteArrayOutputStream keeps AOSP's protected `buf`/`count` as real fields: subclasses (pooled
 // buffers, size probes) swap the array and read the count directly, so the bytes live in the
 // Int8Array itself rather than in the base stream's chunk list.
@@ -851,6 +803,51 @@ rt.register({
     "close()V": function (this: any) { return this.out ? vcallMaybe(this.out, "close", "()V") : undefined; },
   },
 });
+export async function skipStream(this: unknown, count: bigint): Promise<bigint> {
+  if (count <= 0n) return 0n;
+  const bytes = new Int8Array(Number(count > 2048n ? 2048n : count)); let remaining = count;
+  while (remaining > 0n) {
+    let n = await vcall(this, "read", "([BII)I", bytes, 0, Number(remaining > BigInt(bytes.length) ? BigInt(bytes.length) : remaining));
+    if (n < 0) break;
+    if (!n) { if (await vcall(this, "read", "()I") < 0) break; n = 1; }
+    remaining -= BigInt(n);
+  }
+  return count - remaining;
+}
+class JSequenceInputStream extends JInputStream {
+  enumeration: unknown = null; streams: unknown[] = []; current: unknown = null;
+  async advance(): Promise<void> {
+    if (this.current) await vcall(this.current, "close", "()V");
+    this.current = null;
+    if (this.enumeration ? await vcall(this.enumeration, "hasMoreElements", "()Z") : this.streams.length) {
+      this.current = this.enumeration ? await vcall(this.enumeration, "nextElement", "()Ljava/lang/Object;") : this.streams.shift();
+      if (!this.current) throw rt.mkThrowable("java/lang/NullPointerException", "stream");
+    }
+  }
+}
+rt.register({ name: "java/io/SequenceInputStream", ctor: JSequenceInputStream, sup: "java/io/InputStream", methods: {
+  "<init>(Ljava/io/InputStream;Ljava/io/InputStream;)V": async function (this: JSequenceInputStream, first: unknown, second: unknown) { this.streams = [first, second]; await this.advance(); },
+  "<init>(Ljava/util/Enumeration;)V": async function (this: JSequenceInputStream, enumeration: unknown) {
+    if (!enumeration) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    this.enumeration = enumeration; await this.advance();
+  },
+  "read()I": async function (this: JSequenceInputStream) {
+    while (this.current) { const value = await vcall(this.current, "read", "()I"); if (value >= 0) return value; await this.advance(); } return -1;
+  },
+  "read([BII)I": async function (this: JSequenceInputStream, out: Int8Array, offset: number, count: number) {
+    if (!out) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if (offset < 0 || count < 0 || offset > out.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+    if (!count) return 0;
+    while (this.current) { const n = await vcall(this.current, "read", "([BII)I", out, offset, count); if (n > 0) return n; await this.advance(); } return -1;
+  },
+  "available()I": function (this: JSequenceInputStream) { return this.current ? vcall(this.current, "available", "()I") : 0; },
+  "close()V": async function (this: JSequenceInputStream) { while (this.current) await this.advance(); },
+  "markSupported()Z": () => 0,
+  "mark(I)V": () => {},
+  "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+  "skip(J)J": skipStream,
+} });
+
 // every method forwards to the wrapped stream, as the JDK's does: a Java subclass's super.read()
 // reaches the stream it wrapped, whether that is one of ours or app code over a socket
 class JFilterInputStream extends JInputStream { in_: unknown = null; }

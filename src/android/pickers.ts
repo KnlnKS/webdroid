@@ -9,7 +9,7 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall, boxInt } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
 import { JAlertDialog } from "./dialog";
-import { JLinearLP, attachView, detachView, requestLayout, invalidate, initViewFromCtx, inheritContext } from "./view";
+import { JLinearLP, attachView, addUnattachedView, detachView, requestLayout, invalidate, initViewFromCtx, inheritContext } from "./view";
 import { tfMedium } from "./graphics";
 import { JAttrSet } from "./res";
 import { JLinearLayout } from "./layouts";
@@ -108,9 +108,9 @@ function mkColumn(tp: JTimePicker, up: () => void, down: () => void): { col: JLi
   inheritContext(col, tp);
   col.lp = stepperLP();
   const text = mkValueText(tp);
-  void attachView(col, mkArrow(tp, "▲", up));
-  void attachView(col, text);
-  void attachView(col, mkArrow(tp, "▼", down));
+  addUnattachedView(col, mkArrow(tp, "▲", up));
+  addUnattachedView(col, text);
+  addUnattachedView(col, mkArrow(tp, "▼", down));
   return { col, text };
 }
 
@@ -163,8 +163,8 @@ async function buildPicker(tp: JTimePicker) {
     col.lp = stepperLP();
     tp.amText = mkAmPmText(tp, "AM", () => { tp.hourVal = tp.hourVal % 12; onChanged(tp); });
     tp.pmText = mkAmPmText(tp, "PM", () => { tp.hourVal = (tp.hourVal % 12) + 12; onChanged(tp); });
-    await attachView(col, tp.amText);
-    await attachView(col, tp.pmText);
+    addUnattachedView(col, tp.amText);
+    addUnattachedView(col, tp.pmText);
     await attachView(tp, col);
   } else {
     tp.amText = null;

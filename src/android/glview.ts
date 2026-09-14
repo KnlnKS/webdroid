@@ -3,18 +3,15 @@
 import { rt, JObj, stubs, noops } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { mangleMethod } from "../jvm/abi";
-import { vcall, JThread, setCurThread, curThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, JThread, setCurThread, curThread } from "../jvm/natives/jlang";
 import { JView, JViewGroup, guardCall, initViewFromCtx, invalidate, uiState, requestLayout, specSize, defaultSize } from "./view";
 import { onMain } from "./mainloop";
-import { JCanvas, JBitmap, type JRect } from "./graphics";
+import { JCanvas, JBitmap, JMatrix, type JRect } from "./graphics";
 import { setGL, gl, tables } from "./gl";
 import { reportUncaught, mainLooper, mainHandler } from "./os";
 import { perf } from "../perf";
-import { activateEglCurrent, bindEglCurrent, boundEglCurrent, glSurfaces } from "../native/egl-current";
+import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../native/egl-current";
 
-const M_onSurfaceCreated = mangleMethod("onSurfaceCreated", "(Ljavax/microedition/khronos/opengles/GL10;Ljavax/microedition/khronos/egl/EGLConfig;)V");
-const M_onSurfaceChanged = mangleMethod("onSurfaceChanged", "(Ljavax/microedition/khronos/opengles/GL10;II)V");
-const M_onDrawFrame = mangleMethod("onDrawFrame", "(Ljavax/microedition/khronos/opengles/GL10;)V");
 const D_chooseConfig = "(Ljavax/microedition/khronos/egl/EGL10;Ljavax/microedition/khronos/egl/EGLDisplay;)Ljavax/microedition/khronos/egl/EGLConfig;";
 
 class JGLSurfaceView extends JViewGroup {
@@ -47,9 +44,10 @@ class JGLSurfaceView extends JViewGroup {
   }
   async runFrame() {
     if (!this.ctx || !this.renderer) return;
-    setGL(this.ctx);
     const prev = curThread;
     setCurThread(this.glThread);
+    setGL(this.ctx);
+    setCurThread(prev);
     try {
       if (!this.fakeGL10) { const info = rt.link("webdroid/GL10"); this.fakeGL10 = new info.ctor(); }
       if (!this.surfaceCreated) {
@@ -58,19 +56,17 @@ class JGLSurfaceView extends JViewGroup {
         // and renderers read back through it what the chooser recorded.
         if (!this.eglConfig) {
           this.eglConfig = this.configChooser
-            ? (await vcall(this.configChooser, "chooseConfig", D_chooseConfig,
+            ? (await vcallOn(this.glThread, this.configChooser, "chooseConfig", D_chooseConfig,
                 rt.make("javax/microedition/khronos/egl/EGL10"),
                 rt.make("javax/microedition/khronos/egl/EGLDisplay"))) ?? theConfig
             : theConfig;
         }
-        await guardCall(this.renderer, M_onSurfaceCreated, this.fakeGL10, this.eglConfig);
-        await guardCall(this.renderer, M_onSurfaceChanged, this.fakeGL10, this.lastW, this.lastH);
+        await vcallOn(this.glThread, this.renderer, "onSurfaceCreated", "(Ljavax/microedition/khronos/opengles/GL10;Ljavax/microedition/khronos/egl/EGLConfig;)V", this.fakeGL10, this.eglConfig);
+        await vcallOn(this.glThread, this.renderer, "onSurfaceChanged", "(Ljavax/microedition/khronos/opengles/GL10;II)V", this.fakeGL10, this.lastW, this.lastH);
       }
-      await guardCall(this.renderer, M_onDrawFrame, this.fakeGL10);
+      await vcallOn(this.glThread, this.renderer, "onDrawFrame", "(Ljavax/microedition/khronos/opengles/GL10;)V", this.fakeGL10);
     } catch (e) {
       reportUncaught(e);
-    } finally {
-      setCurThread(prev);
     }
   }
 }
@@ -112,8 +108,7 @@ rt.register({
     "requestRender()V": function (this: JGLSurfaceView) { this.dirty = true; invalidate(); },
     "queueEvent(Ljava/lang/Runnable;)V": function (this: JGLSurfaceView, r: unknown) {
       setTimeout(() => {
-        const prev = curThread; setCurThread(this.glThread);
-        void Promise.resolve(vcall(r, "run", "()V")).catch(reportUncaught).finally(() => setCurThread(prev));
+        try { void Promise.resolve(vcallOn(this.glThread, r, "run", "()V")).catch(reportUncaught); } catch (e) { reportUncaught(e); }
       }, 0);
     },
     // GLThread stops rendering while paused; the WebGL context is kept across it, which is the
@@ -175,24 +170,25 @@ export class EglContext {
   target: GlSurface | null = null;
   major = 2;
   constructor(share?: EglContext | null) { this.canvas = share?.canvas ?? new OffscreenCanvas(1, 1); }
-  makeCurrent(s: GlSurface | null): boolean {
+  makeCurrent(s: GlSurface | null, thread = curThread): boolean {
     this.gl ??= this.canvas.getContext("webgl2", { alpha: false, antialias: false, depth: true, stencil: true, preserveDrawingBuffer: false, powerPreference: "high-performance" });
-    if (!this.gl) return false;
+    if (!this.gl || this.gl.isContextLost()) return false;
     if (s && (this.canvas.width !== s.width || this.canvas.height !== s.height)) { this.canvas.width = s.width; this.canvas.height = s.height; }
     this.target = s;
-    glSurfaces.current = this;
-    setGL(this.gl);
+    bindEglCurrent(thread, this);
     return true;
   }
   /** present: the frame goes to the surface, the view recomposes, and the caller waits for the
    *  next display frame (eglSwapBuffers blocks for vsync) */
-  swap(): Promise<void> {
+  swap(): Promise<boolean> {
     const s = this.target;
-    if (!s) return Promise.resolve();
-    const bmp = this.canvas.transferToImageBitmap();
+    if (!s || this.gl?.isContextLost()) return Promise.resolve(false);
+    let bmp: ImageBitmap;
+    try { bmp = this.canvas.transferToImageBitmap(); }
+    catch (e) { if (this.gl?.isContextLost()) return Promise.resolve(false); throw e; }
     presentSurface(s, bmp);
     perf.glFrames++;
-    return new Promise((r) => { if (typeof requestAnimationFrame === "function" && !document.hidden) requestAnimationFrame(() => r()); else setTimeout(r, 16); });
+    return new Promise((r) => { const done = () => r(!this.gl?.isContextLost()); if (typeof requestAnimationFrame === "function" && !document.hidden) requestAnimationFrame(done); else setTimeout(done, 16); });
   }
 }
 let pixelCopyFrame: OffscreenCanvas | null = null;
@@ -410,6 +406,15 @@ rt.register({
     "isAvailable()Z": function (this: JTextureView) { return +(this.texture !== null); },
     "setOpaque(Z)V": function (this: JTextureView, opaque: number) { this.opaque = !!opaque; },
     "isOpaque()Z": function (this: JTextureView) { return +this.opaque; },
+    "setTransform(Landroid/graphics/Matrix;)V": function (this: JTextureView, matrix: JMatrix | null) {
+      this.surfaceTransform = matrix ? [...matrix.m] : null;
+      invalidate(this);
+    },
+    "getTransform(Landroid/graphics/Matrix;)Landroid/graphics/Matrix;": function (this: JTextureView, matrix: JMatrix | null) {
+      matrix ??= new JMatrix();
+      matrix.m = this.surfaceTransform ? [...this.surfaceTransform] : [1, 0, 0, 1, 0, 0];
+      return matrix;
+    },
     "onLayout(ZIIII)V": function (this: JTextureView) { this.ensureSurface(); },
     "onAttachedToWindow()V": function (this: JTextureView) { this.ensureSurface(); },
     "onDetachedFromWindow()V": function (this: JTextureView) { this.destroySurface(); },
@@ -466,7 +471,7 @@ rt.register({ name: "webdroid/GL10", ctor: class extends JObj {}, ifaces: ["java
   methods: { "glViewport(IIII)V": (x: number, y: number, w: number, h: number) => gl?.viewport(x, y, w, h) },
 });
 for (const i of ["javax/microedition/khronos/opengles/GL", "javax/microedition/khronos/opengles/GL10",
-  "javax/microedition/khronos/opengles/GL11", "javax/microedition/khronos/egl/EGLConfig",
+  "javax/microedition/khronos/opengles/GL11",
   "javax/microedition/khronos/egl/EGLDisplay", "javax/microedition/khronos/egl/EGL"]) {
   rt.register({ name: i, ctor: class extends JObj {} });
 }
@@ -480,11 +485,15 @@ rt.register({
 
 // ── EGL10: configs answer from the live context; window surfaces are the SurfaceView's
 class JEGLConfig extends JObj {}
+rt.register({ name: "javax/microedition/khronos/egl/EGLConfig", ctor: JEGLConfig });
 const theConfig = new JEGLConfig();
 class JEGLSurface extends JObj { surf: GlSurface | null = null; }
 const egl10Current = new WeakMap<object, JEGLContext>();
 const attrVal = (a: Int32Array | null, k: number): number => { if (a) for (let i = 0; i + 1 < a.length && a[i] !== 0x3038; i += 2) if (a[i] === k) return a[i + 1]; return 0; };
 rt.register({ name: "javax/microedition/khronos/egl/EGLSurface", ctor: JEGLSurface });
+const noEglContext = new JEGLContext(), noEglSurface = new JEGLSurface();
+const noEglDisplay = rt.make("javax/microedition/khronos/egl/EGLDisplay");
+const eglContexts = new WeakMap<EglContext, JEGLContext>();
 const surfaceOf = (win: unknown): GlSurface | null =>
   win instanceof JSurface ? win.surf : win instanceof JSurfaceTexture ? (win.released ? null : win.surface) : win instanceof JSurfaceHolder ? win.surface : win instanceof JView ? getHolder(win).surface : null;
 rt.register({
@@ -492,7 +501,7 @@ rt.register({
   statics: {
     EGL_RED_SIZE: 0x3024, EGL_GREEN_SIZE: 0x3023, EGL_BLUE_SIZE: 0x3022, EGL_ALPHA_SIZE: 0x3021,
     EGL_DEPTH_SIZE: 0x3025, EGL_STENCIL_SIZE: 0x3026, EGL_RENDERABLE_TYPE: 0x3040, EGL_NONE: 0x3038,
-    EGL_DEFAULT_DISPLAY: null, EGL_NO_CONTEXT: null, EGL_NO_DISPLAY: null, EGL_NO_SURFACE: null,
+    EGL_DEFAULT_DISPLAY: null, EGL_NO_CONTEXT: noEglContext, EGL_NO_DISPLAY: noEglDisplay, EGL_NO_SURFACE: noEglSurface,
     EGL_SUCCESS: 0x3000, EGL_CONFIG_CAVEAT: 0x3027, EGL_SAMPLES: 0x3031, EGL_SAMPLE_BUFFERS: 0x3032,
     EGL_BUFFER_SIZE: 0x3020, EGL_SURFACE_TYPE: 0x3033, EGL_WINDOW_BIT: 4, EGL_PBUFFER_BIT: 1, EGL_CONFIG_ID: 0x3028,
     EGL_WIDTH: 0x3057, EGL_HEIGHT: 0x3056, EGL_BAD_ALLOC: 0x3003, EGL_BAD_NATIVE_WINDOW: 0x300b, EGL_CONTEXT_LOST: 0x300e,
@@ -510,7 +519,7 @@ rt.register({
         out[0] = eglConfigAttrib(attr);
         return 1;
       },
-    "eglGetError()I": () => 0x3000,
+    "eglGetError()I": takeEglError,
     "eglGetConfigs(Ljavax/microedition/khronos/egl/EGLDisplay;[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z":
       (_d: unknown, configs: unknown[] | null, n: number, num: Int32Array | null) => {
         if (configs && n > 0) configs[0] = theConfig;
@@ -525,7 +534,10 @@ rt.register({
     },
     "eglQueryString(Ljavax/microedition/khronos/egl/EGLDisplay;I)Ljava/lang/String;": (_d: unknown, n: number) => n === 0x3053 ? "webdroid" : n === 0x3054 ? "1.4" : "",
     "eglCreateContext(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;Ljavax/microedition/khronos/egl/EGLContext;[I)Ljavax/microedition/khronos/egl/EGLContext;":
-      (_d: unknown, _c: unknown, share: JEGLContext | null) => { const c = new JEGLContext(); c.egl = new EglContext(share?.egl); return c; },
+      (_d: unknown, _c: unknown, share: JEGLContext | null, at: Int32Array | null) => {
+        const c = new JEGLContext(); c.egl = new EglContext(share?.egl); c.egl.major = attrVal(at, 0x3098) || 1;
+        eglContexts.set(c.egl, c); return c;
+      },
     "eglCreatePbufferSurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;[I)Ljavax/microedition/khronos/egl/EGLSurface;":
       (_d: unknown, _c: unknown, at: Int32Array | null) => {
         const e = new JEGLSurface(); e.surf = { view: null, width: attrVal(at, 0x3057) || 1, height: attrVal(at, 0x3056) || 1, present: null, frames: 0 }; return e;
@@ -534,19 +546,17 @@ rt.register({
       (_d: unknown, _c: unknown, win: unknown) => {
         const s = surfaceOf(win);
         // no surface yet (the view has no size): EGL_NO_SURFACE, as a real EGL answers a dead ANativeWindow
-        if (!s) return null;
+        if (!s) return noEglSurface;
         const e = new JEGLSurface(); e.surf = s; return e;
       },
     "eglMakeCurrent(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z":
       (_d: unknown, draw: JEGLSurface | null, _r: unknown, ctx: JEGLContext | null) => {
-        if (!ctx) { egl10Current.delete(curThread); bindEglCurrent(curThread, null); return 1; }
-        if (!ctx.egl.makeCurrent(draw?.surf ?? null)) return 0;
-        egl10Current.set(curThread, ctx);
-        bindEglCurrent(curThread, ctx.egl);
-        return 1;
+        if (!ctx || ctx === noEglContext) { egl10Current.delete(curThread); bindEglCurrent(curThread, null); return 1; }
+        if (!ctx.egl.makeCurrent(draw?.surf ?? null)) return eglFailure(ctx.egl.gl?.isContextLost() ? 0x300e : 0x3006, 0);
+        egl10Current.set(curThread, ctx); bindEglCurrent(curThread, ctx.egl); return 1;
       },
     "eglSwapBuffers(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;)Z":
-      async (_d: unknown, s: JEGLSurface | null) => { const c = activateEglCurrent(curThread); if (!s?.surf || c?.target !== s.surf) return 0; await c.swap(); return 1; },
+      async (_d: unknown, s: JEGLSurface | null) => { const thread = curThread, c = glSurfaces.current; if (!s?.surf || c?.target !== s.surf) return eglFailure(0x300d, 0); return await c.swap() ? 1 : eglFailure(0x300e, 0, thread); },
     "eglQuerySurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;I[I)Z":
       (_d: unknown, s: JEGLSurface | null, attr: number, out: Int32Array) => { out[0] = attr === 0x3057 ? s?.surf?.width ?? 0 : attr === 0x3056 ? s?.surf?.height ?? 0 : 0; return 1; },
     "eglDestroyContext(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLContext;)Z": (_d: unknown, ctx: JEGLContext | null) => {
@@ -558,8 +568,11 @@ rt.register({
       "eglTerminate(Ljavax/microedition/khronos/egl/EGLDisplay;)Z", "eglWaitGL()Z",
       "eglWaitNative(ILjava/lang/Object;)Z"),
     "eglGetCurrentContext()Ljavax/microedition/khronos/egl/EGLContext;": () => {
-      const context = egl10Current.get(curThread);
-      return context?.egl === boundEglCurrent(curThread) ? context : null;
+      const current = glSurfaces.current;
+      if (!current) return noEglContext;
+      let c = eglContexts.get(current);
+      if (!c) { c = new JEGLContext(); c.egl = current; eglContexts.set(current, c); }
+      return c;
     },
   },
 });
@@ -581,14 +594,16 @@ for (const [name, ctor] of [["EGLDisplay", JEGL14Display], ["EGLConfig", JEGL14C
 }
 const noDisplay = new JEGL14Display(), noContext = new JEGL14Context(), noSurface = new JEGL14Surface();
 const defaultDisplay = new JEGL14Display(1), defaultConfig = new JEGL14Config(1);
-const egl14Current = new WeakMap<object, JEGL14Context>();
-let eglHandle = 2, eglError = 0x3000;
+let eglHandle = 2;
+const egl14Contexts = new WeakMap<EglContext, JEGL14Context>();
+const eglErrors = new WeakMap<JThread, number>();
 function eglOut(array: Int32Array | null, offset: number, value: number): void {
   if (!array) return;
   if (offset < 0 || offset >= array.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid EGL result offset");
   array[offset] = value;
 }
-function eglFailure<T>(error: number, result: T): T { eglError = error; return result; }
+export function eglFailure<T>(error: number, result: T, thread = curThread): T { eglErrors.set(thread, error); return result; }
+export function takeEglError(thread = curThread): number { const error = eglErrors.get(thread) ?? 0x3000; eglErrors.delete(thread); return error; }
 rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics: {
   EGL_NO_DISPLAY: noDisplay, EGL_NO_CONTEXT: noContext, EGL_NO_SURFACE: noSurface, EGL_DEFAULT_DISPLAY: 0,
   EGL_NONE: 0x3038, EGL_SUCCESS: 0x3000, EGL_WIDTH: 0x3057, EGL_HEIGHT: 0x3056, EGL_CONTEXT_CLIENT_VERSION: 0x3098,
@@ -642,13 +657,16 @@ rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics
   },
   "static eglMakeCurrent(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;Landroid/opengl/EGLSurface;Landroid/opengl/EGLContext;)Z": (display: JEGL14Display, draw: JEGL14Surface, _read: JEGL14Surface, context: JEGL14Context) => {
     if (display !== defaultDisplay) return eglFailure(0x3008, 0);
-    if (context === noContext) { egl14Current.delete(curThread); bindEglCurrent(curThread, null); return 1; }
-    if (!context?.egl || !context.egl.makeCurrent(draw?.surf ?? null)) return eglFailure(0x3006, 0);
-    egl14Current.set(curThread, context); bindEglCurrent(curThread, context.egl); return 1;
+    if (context === noContext) { glSurfaces.current = null; return 1; }
+    if (!context?.egl || !context.egl.makeCurrent(draw?.surf ?? null)) return eglFailure(context?.egl?.gl?.isContextLost() ? 0x300e : 0x3006, 0);
+    egl14Contexts.set(context.egl, context); return 1;
   },
   "static eglGetCurrentContext()Landroid/opengl/EGLContext;": () => {
-    const context = egl14Current.get(curThread);
-    return context?.egl === boundEglCurrent(curThread) ? context : noContext;
+    const current = glSurfaces.current;
+    if (!current) return noContext;
+    let context = egl14Contexts.get(current);
+    if (!context) { context = new JEGL14Context(eglHandle++); context.egl = current; egl14Contexts.set(current, context); }
+    return context;
   },
   "static eglQueryContext(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;I[II)Z":
     (display: JEGL14Display, context: JEGL14Context, attribute: number, out: Int32Array, offset: number) => {
@@ -664,9 +682,9 @@ rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics
       return 1;
   },
   "static eglSwapBuffers(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": async (_display: JEGL14Display, surface: JEGL14Surface) => {
-    const context = activateEglCurrent(curThread);
+    const thread = curThread, context = glSurfaces.current;
     if (!surface?.surf || context?.target !== surface.surf) return eglFailure(0x300d, 0);
-    await context.swap(); return 1;
+    return await context.swap() ? 1 : eglFailure(0x300e, 0, thread);
   },
   "static eglDestroySurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": (_display: JEGL14Display, surface: JEGL14Surface) => {
     if (!surface?.surf) return eglFailure(0x300d, 0);
@@ -675,11 +693,10 @@ rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics
   },
   "static eglDestroyContext(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;)Z": (_display: JEGL14Display, context: JEGL14Context) => {
     if (!context?.egl) return eglFailure(0x3006, 0);
-    if (boundEglCurrent(curThread) === context.egl) bindEglCurrent(curThread, null);
-    if (egl14Current.get(curThread) === context) egl14Current.delete(curThread);
+    if (glSurfaces.current === context.egl) { glSurfaces.current = null; }
     context.egl = null; return 1;
   },
-  "static eglReleaseThread()Z": () => { egl14Current.delete(curThread); bindEglCurrent(curThread, null); return 1; },
+  "static eglReleaseThread()Z": () => { glSurfaces.current = null; takeEglError(); return 1; },
   "static eglTerminate(Landroid/opengl/EGLDisplay;)Z": (display: JEGL14Display) => display === defaultDisplay ? 1 : eglFailure(0x3008, 0),
-  "static eglGetError()I": () => { const error = eglError; eglError = 0x3000; return error; },
+  "static eglGetError()I": takeEglError,
 } });

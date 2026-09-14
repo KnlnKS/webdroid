@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
-import { vcall, newObj, JThread, JEnum, enumValueOf, setCurThread, curThread, park, defineException } from "./jlang";
+import { after, vcall, vcallOn, newObj, JThread, JEnum, enumValueOf, setCurThread, curThread, park, defineException } from "./jlang";
 import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods, toJsArray } from "./jutil";
 import { JRandom, randomSeed } from "./jrandom";
 import { mangleMethod, splitSig, jarray } from "../abi";
@@ -326,37 +326,14 @@ function removeQueued(this: JExecutor, task: unknown): number {
   entry.finish();
   return 1;
 }
-const D_TASK_FOR_CALLABLE = "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;";
-const D_TASK_FOR_RUNNABLE = "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;";
-const K_EXECUTE = mangleMethod("execute", "(Ljava/lang/Runnable;)V");
-function taskForCallable(c: unknown) { const t = rt.make("java/util/concurrent/FutureTask") as JFutureTask; armTask(t, c); return t; }
-function taskForRunnable(r: unknown, value: unknown) { const t = taskForCallable({ runnable: r }); t.value = value; return t; }
-function submitVia(self: JExecutor, desc: string, native: (...args: never[]) => unknown, args: unknown[]) {
-  if (args[0] == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-  const own = self as unknown as Record<string, unknown>;
-  if (own[K_EXECUTE] === execute && own[mangleMethod("newTaskFor", desc)] === native) {
-    const task = native(...args as never[]) as JFutureTask;
-    execute.call(self, task);
-    return task;
-  }
-  return vcall(self, "newTaskFor", desc, ...args).then(async (task) => {
-    await vcall(self, "execute", "(Ljava/lang/Runnable;)V", task);
-    return task;
-  });
-}
 const executorMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "execute(Ljava/lang/Runnable;)V": execute,
-  "newTaskFor(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;": taskForCallable,
-  "newTaskFor(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;": taskForRunnable,
   "submit(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown) {
-    return submitVia(this, D_TASK_FOR_RUNNABLE, taskForRunnable, [r, null]);
-  },
-  "submit(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown, value: unknown) {
-    return submitVia(this, D_TASK_FOR_RUNNABLE, taskForRunnable, [r, value]);
+    return submitTask(this, "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;", r, null);
   },
   "submit(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;": function (this: JExecutor, c: unknown) {
-    return submitVia(this, D_TASK_FOR_CALLABLE, taskForCallable, [c]);
+    return submitTask(this, "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;", c);
   },
   "invokeAll(Ljava/util/Collection;)Ljava/util/List;": async function (this: JExecutor, tasks: JList) {
     if (tasks == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
@@ -383,6 +360,13 @@ const executorMethods: NativeSpec["methods"] = {
     }
     return futures;
   },
+  "submit(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;": function (this: JExecutor, r: unknown, result: unknown) {
+    return submitTask(this, "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;", r, result);
+  },
+  "newTaskFor(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/RunnableFuture;": (r: unknown, result: unknown) =>
+    taskForCallable(runnableCallable(r, result)),
+  "newTaskFor(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;": (c: unknown) =>
+    taskForCallable(c),
   "shutdown()V": function (this: JExecutor) { this.shut = true; },
   "shutdownNow()Ljava/util/List;": function (this: JExecutor) {
     this.shut = true;
@@ -407,6 +391,16 @@ const executorMethods: NativeSpec["methods"] = {
   ...repeating("scheduleAtFixedRate", true),
   ...repeating("scheduleWithFixedDelay", false),
 };
+function taskForCallable(callable: unknown): JFutureTask {
+  rt.link("java/util/concurrent/FutureTask");
+  const task = new JFutureTask(); armTask(task, callable); return task;
+}
+function submitTask(ex: JExecutor, desc: string, task: unknown, ...args: unknown[]): unknown {
+  if (task == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  const thread = curThread;
+  return after(vcallOn(thread, ex, "newTaskFor", desc, task, ...args), future =>
+    after(vcallOn(thread, ex, "execute", "(Ljava/lang/Runnable;)V", future), () => future));
+}
 /** The two periodic schedules differ only in where the next run is measured from: a rate keeps
  *  the period's grid, a delay starts counting when the previous run finished. */
 function repeating(name: string, fixedRate: boolean): NativeSpec["methods"] {
@@ -596,6 +590,13 @@ function mkScheduled(count = 1, factory: unknown = null): JExecutor {
 // Executors.defaultThreadFactory()/callable() must hand back REAL objects: callers wrap them and
 // invoke newThread()/call() themselves, so the auto-stubbed interfaces are not enough.
 class JRunnableCallable extends JObj { r: unknown = null; result: unknown = null; }
+function runnableCallable(r: unknown, result: unknown = null): JRunnableCallable {
+  if (r == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  rt.link("webdroid/RunnableCallable");
+  const c = new JRunnableCallable();
+  c.r = r; c.result = result;
+  return c;
+}
 rt.register({
   name: "webdroid/RunnableCallable", ctor: JRunnableCallable, ifaces: ["java/util/concurrent/Callable"],
   methods: {
@@ -621,17 +622,8 @@ rt.register({
   methods: {
     "static defaultThreadFactory()Ljava/util/concurrent/ThreadFactory;":
       () => rt.make("webdroid/DefaultThreadFactory"),
-    "static callable(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Callable;":
-      (r: unknown, result: unknown) => {
-        const c = new (rt.link("webdroid/RunnableCallable").ctor as typeof JRunnableCallable)();
-        c.r = r; c.result = result;
-        return c;
-      },
-    "static callable(Ljava/lang/Runnable;)Ljava/util/concurrent/Callable;": (r: unknown) => {
-      const c = new (rt.link("webdroid/RunnableCallable").ctor as typeof JRunnableCallable)();
-      c.r = r;
-      return c;
-    },
+    "static callable(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Callable;": runnableCallable,
+    "static callable(Ljava/lang/Runnable;)Ljava/util/concurrent/Callable;": runnableCallable,
     "static newSingleThreadExecutor()Ljava/util/concurrent/ExecutorService;": mkExecutor,
     "static newSingleThreadExecutor(Ljava/util/concurrent/ThreadFactory;)Ljava/util/concurrent/ExecutorService;": (factory: unknown) => mkExecutor(1, factory),
     "static newFixedThreadPool(I)Ljava/util/concurrent/ExecutorService;": mkExecutor,
@@ -696,6 +688,68 @@ rt.register({
   },
 });
 
+type BarrierGeneration = { broken: boolean; waiters: Set<() => void> };
+class JCyclicBarrier extends JObj {
+  parties = 0; remaining = 0; action: unknown = null;
+  generation: BarrierGeneration = { broken: false, waiters: new Set() };
+  tripping: Promise<void> | null = null;
+  tripThread: JThread | null = null;
+  breakGeneration(): void {
+    this.generation.broken = true; this.remaining = this.parties;
+    for (const wake of this.generation.waiters) wake(); this.generation.waiters.clear();
+  }
+  advance(): void {
+    const previous = this.generation;
+    this.generation = { broken: false, waiters: new Set() }; this.remaining = this.parties;
+    for (const wake of previous.waiters) wake(); previous.waiters.clear();
+  }
+  async await(thread: JThread, timeout?: number): Promise<number> {
+    if (this.tripping && this.tripThread !== thread) await this.tripping.catch(() => {});
+    const generation = this.generation;
+    if (generation.broken) throw rt.mkThrowable("java/util/concurrent/BrokenBarrierException", null);
+    if (thread.interrupted) { thread.interrupted = 0; this.breakGeneration(); throw rt.mkThrowable("java/lang/InterruptedException", null); }
+    const index = --this.remaining;
+    if (index === 0) {
+      try {
+        if (this.action) { this.tripThread = thread; this.tripping = vcall(this.action, "run", "()V"); await this.tripping; }
+        this.advance(); return 0;
+      } catch (error) { this.breakGeneration(); throw error; }
+      finally { this.tripping = null; this.tripThread = null; }
+    }
+    if (timeout !== undefined && timeout <= 0) { this.breakGeneration(); throw rt.mkThrowable("java/util/concurrent/TimeoutException", null); }
+    let signalled: boolean;
+    try {
+      signalled = await park(thread, wake => { generation.waiters.add(wake); return () => { generation.waiters.delete(wake); }; }, timeout);
+    } catch (error) {
+      if (this.tripping) await this.tripping.catch(() => {});
+      if (generation === this.generation && !generation.broken) { this.breakGeneration(); throw error; }
+      thread.interrupted = 1;
+      if (generation.broken) throw rt.mkThrowable("java/util/concurrent/BrokenBarrierException", null);
+      return index;
+    }
+    if (this.tripping) await this.tripping.catch(() => {});
+    if (generation.broken) throw rt.mkThrowable("java/util/concurrent/BrokenBarrierException", null);
+    if (generation !== this.generation) return index;
+    if (!signalled) { this.breakGeneration(); throw rt.mkThrowable("java/util/concurrent/TimeoutException", null); }
+    throw rt.mkThrowable("java/lang/IllegalStateException", "Barrier woke without advancing");
+  }
+}
+function initBarrier(this: JCyclicBarrier, parties: number, action: unknown = null): void {
+  if (parties <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "parties <= 0");
+  this.parties = this.remaining = parties; this.action = action;
+}
+rt.register({ name: "java/util/concurrent/CyclicBarrier", ctor: JCyclicBarrier, methods: {
+  "<init>(I)V": initBarrier,
+  "<init>(ILjava/lang/Runnable;)V": initBarrier,
+  "getParties()I": function (this: JCyclicBarrier) { return this.parties; },
+  "getNumberWaiting()I": function (this: JCyclicBarrier) { return this.parties - this.remaining; },
+  "isBroken()Z": function (this: JCyclicBarrier) { return +this.generation.broken; },
+  "await()I": function (this: JCyclicBarrier) { return this.await(curThread); },
+  "await(JLjava/util/concurrent/TimeUnit;)I": function (this: JCyclicBarrier, duration: bigint, unit: JTimeUnit) { return this.await(curThread, Math.max(0, Number(duration) * unit.ms)); },
+  "reset()V": async function (this: JCyclicBarrier) { if (this.tripping && this.tripThread !== curThread) await this.tripping.catch(() => {}); this.breakGeneration(); this.advance(); },
+} });
+defineException("java/util/concurrent/BrokenBarrierException", "java/lang/Exception");
+
 class JCountDownLatch extends JObj {
   n = 0;
   waiters: (() => void)[] = [];
@@ -727,6 +781,18 @@ rt.register({
 });
 
 type WaitingQueue = { a: unknown[]; takers: ((value: unknown) => void)[] };
+
+async function drainQueue(this: WaitingQueue, c: unknown, max = 0x7fffffff): Promise<number> {
+  if (c == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (c === this) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Cannot drain a queue to itself");
+  const batch = this.a.splice(0, Math.max(0, max));
+  for (const value of batch) await vcall(c, "add", "(Ljava/lang/Object;)Z", value);
+  return batch.length;
+}
+const drainMethods = {
+  "drainTo(Ljava/util/Collection;)I": drainQueue,
+  "drainTo(Ljava/util/Collection;I)I": drainQueue,
+};
 
 const takeFirst = function (this: WaitingQueue): unknown {
   return this.a.length ? this.a.shift() : new Promise((resolve) => this.takers.push(resolve));
@@ -799,6 +865,7 @@ const mkBlockingQueue = (name: string, deque = false) => rt.register({
     : ["java/util/concurrent/BlockingQueue", "java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
   methods: {
     ...(deque ? dequeMethods() : {}),
+    ...drainMethods,
     ...Object.fromEntries(Object.entries(listMethods() ?? {}).filter(([k]) => !k.startsWith("<init>"))),
     "<init>()V": function () {},
     "<init>(I)V": function () {},
@@ -838,11 +905,7 @@ rt.register({
     "take()Ljava/lang/Object;": takeFirst,
     "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": timedPoll,
     "remainingCapacity()I": () => 0x7fffffff,
-    "drainTo(Ljava/util/Collection;)I": async function (this: JPriorityBlockingQueue, c: unknown) {
-      const n = this.a.length;
-      for (const v of this.a.splice(0)) await vcall(c, "add", "(Ljava/lang/Object;)Z", v);
-      return n;
-    },
+    ...drainMethods,
   },
 });
 
@@ -886,6 +949,8 @@ rt.register({
 for (const [i, ...ifaces] of [["java/util/concurrent/Executor"], ["java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"],
   ["java/util/concurrent/ScheduledExecutorService", "java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"], ["java/util/concurrent/Future"],
   ["java/util/concurrent/ScheduledFuture", "java/util/concurrent/Future"], ["java/util/concurrent/Callable"], ["java/util/concurrent/ThreadFactory"],
+  ["java/util/concurrent/RunnableFuture", "java/lang/Runnable", "java/util/concurrent/Future"],
+  ["java/util/concurrent/RunnableScheduledFuture", "java/util/concurrent/RunnableFuture", "java/util/concurrent/ScheduledFuture"],
   ["java/util/concurrent/RejectedExecutionHandler"]]) {
   rt.register({ name: i, ctor: class extends JObj {}, ifaces });
 }
@@ -1310,6 +1375,7 @@ class JFutureTask extends JFuture {
   wake: (v: unknown) => void = () => {};
 }
 function armTask(t: JFutureTask, callable: unknown) {
+  if (callable == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   t.callable = callable;
   t.promise = new Promise((r) => (t.wake = r));
 }
@@ -1319,28 +1385,31 @@ rt.register({
   methods: {
     "<init>(Ljava/util/concurrent/Callable;)V": function (this: JFutureTask, c: unknown) { armTask(this, c); },
     "<init>(Ljava/lang/Runnable;Ljava/lang/Object;)V": function (this: JFutureTask, r: unknown, v: unknown) {
-      armTask(this, { runnable: r });
-      this.value = v;
+      armTask(this, runnableCallable(r, v));
     },
     "run()V": async function (this: JFutureTask) {
+      if (this.done || this.thread) return;
+      const thread = this.thread = curThread;
       try {
-        const c = this.callable as any;
-        if (c?.runnable) await vcall(c.runnable, "run", "()V");
-        else if (c) this.value = await vcall(c, "call", "()Ljava/lang/Object;");
+        const value = await vcall(this.callable, "call", "()Ljava/lang/Object;");
+        if (!this.cancelled) this.value = value;
       } catch (e) { this.error = rt.jx(e); } // surfaces from get(), as AOSP's setException
-      this.done = 1;
+      this.done = 1; this.thread = null;
       this.wake(null);
+      if (!this.cancelled) await vcallOn(thread, this, "done", "()V");
     },
+    "done()V": function () {},
     "get()Ljava/lang/Object;": function (this: JFutureTask) { return futureGet(this); },
     "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFutureTask, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
     "isDone()Z": function (this: JFutureTask) { return this.done; },
-    "isCancelled()Z": () => 0,
-    "cancel(Z)Z": () => 0,
+    "isCancelled()Z": function (this: JFutureTask) { return this.cancelled; },
+    "cancel(Z)Z": async function (this: JFutureTask, interrupt: number) {
+      if (this.done) return 0;
+      cancelFuture(this, interrupt); this.wake(null);
+      await vcall(this, "done", "()V");
+      return 1;
+    },
   },
-});
-rt.register({
-  name: "java/util/concurrent/RunnableFuture", ctor: class extends JObj {},
-  ifaces: ["java/lang/Runnable", "java/util/concurrent/Future"],
 });
 
 // ── AbstractQueuedSynchronizer: the state word, its CAS, and FIFO waiting in exclusive and shared

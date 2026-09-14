@@ -1,7 +1,11 @@
-import { gl, setGL } from "../android/gl";
+import { curThread } from "../jvm/natives/jlang";
+import { gl, setGL, selectGL } from "../android/gl";
 import type { EglContext } from "../android/glview";
 
-export const glSurfaces = { current: null as EglContext | null };
+export const glSurfaces = {
+  get current(): EglContext | null { return contexts.get(curThread) ?? null; },
+  set current(context: EglContext | null) { bindEglCurrent(curThread, context); },
+};
 
 const contexts = new WeakMap<object, EglContext>();
 let activeOwner: object | null = null;
@@ -12,17 +16,15 @@ export function bindEglCurrent(owner: object, context: EglContext | null): void 
   else contexts.delete(owner);
   activeOwner = owner;
   activeContext = context;
-  glSurfaces.current = context;
-  setGL(context?.gl ?? null);
+  setGL(context?.gl ?? null, owner);
 }
 
 export function activateEglCurrent(owner: object): EglContext | null {
-  if (activeOwner === owner && glSurfaces.current === activeContext && gl === (activeContext?.gl ?? null)) return activeContext;
+  if (activeOwner === owner && gl === (activeContext?.gl ?? null)) return activeContext;
   const context = contexts.get(owner) ?? null;
   activeOwner = owner;
   activeContext = context;
-  glSurfaces.current = context;
-  setGL(context?.gl ?? null);
+  selectGL(context?.gl ?? null);
   return context;
 }
 

@@ -452,6 +452,7 @@ rt.markers("android/net/NetworkSpecifier");
 rt.register({
   name: "android/net/NetworkRequest", ctor: JNetworkRequest,
   methods: {
+
     "hasCapability(I)Z": function (this: JNetworkRequest, c: number) { return this.caps.includes(c) ? 1 : 0; },
     "hasTransport(I)Z": function (this: JNetworkRequest, t: number) { return this.transports.includes(t) ? 1 : 0; },
     "getCapabilities()[I": function (this: JNetworkRequest) { return Int32Array.from(this.caps).sort(); },
@@ -484,7 +485,7 @@ rt.register({
     },
     "build()Landroid/net/NetworkRequest;": function (this: JNetworkRequestBuilder) {
       const r = new JNetworkRequest();
-      r.caps = this.r.caps.slice(); r.transports = this.r.transports.slice(); r.includeOtherUidNetworks = this.r.includeOtherUidNetworks;
+      r.caps = this.r.caps.slice().sort((a, b) => a - b); r.transports = this.r.transports.slice().sort((a, b) => a - b); r.includeOtherUidNetworks = this.r.includeOtherUidNetworks;
       r.networkSpecifier = this.r.networkSpecifier;
       return r;
     },

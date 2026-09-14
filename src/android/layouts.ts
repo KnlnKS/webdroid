@@ -2,10 +2,12 @@ import { AID } from "./res";
 import {
   JMarginLP, type JLayoutParams, JViewGroup, JFrameLP, MATCH_PARENT, lpFromAttrs, lpAttrs, measureChildWithMargins,
   resolveSizeAndState, makeSpec, MS_EXACTLY, childMeasureSpec, measureView, layoutView, initViewFromCtx,
-  requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState
+  requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState, viewConstructors
 } from "./view";
 import { JObj, type NativeSpec, rt, callSelf, noops } from "../jvm/runtime";
-import { type JAttrSet, type Resources, obtainStyled, rvInt, rvFloat, onFramework } from "./res";
+import { type JAttrSet, type Resources, obtainStyled, rvInt, rvFloat, rvDimen, onFramework } from "./res";
+import { type JDrawable, loadDrawableRV, drawChild } from "./drawable";
+import type { JCanvas } from "./graphics";
 import { gravityH, gravityV, G } from "./gravity";
 import { type JMotionEvent, trackVelocity, restVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
 import { device } from "../shell/config";
@@ -22,7 +24,7 @@ function adoptLp<T extends JMarginLP>(Ctor: new () => T, lp: JLayoutParams | nul
   return n;
 }
 
-export class JFrameLayout extends JViewGroup {}
+export class JFrameLayout extends JViewGroup { measureAllChildren = false; }
 /** Layout subclasses expose the covariant descriptors declared by the Android SDK in addition
  *  to ViewGroup's erased descriptor. */
 function covariantLayoutParams(methods: NativeSpec["methods"], lp: string): void {
@@ -31,6 +33,7 @@ function covariantLayoutParams(methods: NativeSpec["methods"], lp: string): void
   m[`generateDefaultLayoutParams()L${lp};`] ??= m["generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;"];
 }
 const frameMethods: NativeSpec["methods"] = {
+  ...viewConstructors,
   "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function (this: JFrameLayout) {
     return vcallMaybe(this, "generateDefaultLayoutParams", "()Landroid/widget/FrameLayout$LayoutParams;");
   },
@@ -45,19 +48,20 @@ const frameMethods: NativeSpec["methods"] = {
   "generateLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;": (lp: JLayoutParams) => adoptLp(JFrameLP, lp),
   "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": (lp: unknown) => +(lp instanceof JFrameLP),
   "onMeasure(II)V": async function (this: JFrameLayout, wSpec: number, hSpec: number) {
-    let mw = 0, mh = 0;
+    let mw = 0, mh = 0, matchCount = 0;
     for (const c of this.children) {
-      if (c.visibility === 8) continue;
+      if (c.visibility === 8 && !this.measureAllChildren) continue;
       await measureChildWithMargins(this, c, wSpec, 0, hSpec, 0);
       const lp = c.lp instanceof JMarginLP ? c.lp : null;
       mw = Math.max(mw, c.measuredW + (lp ? lp.marginL + lp.marginR : 0));
       mh = Math.max(mh, c.measuredH + (lp ? lp.marginT + lp.marginB : 0));
+      if (c.lp?.width === MATCH_PARENT || c.lp?.height === MATCH_PARENT) matchCount++;
     }
     this.measuredW = resolveSizeAndState(Math.max(mw + this.padL + this.padR, this.minW), wSpec);
     this.measuredH = resolveSizeAndState(Math.max(mh + this.padT + this.padB, this.minH), hSpec);
-    // match_parent children re-measure at final size
+    if (matchCount <= 1 || (specMode(wSpec) === MS_EXACTLY && specMode(hSpec) === MS_EXACTLY)) return;
     for (const c of this.children) {
-      if (c.visibility === 8) continue;
+      if (c.visibility === 8 && !this.measureAllChildren) continue;
       const lp = c.lp;
       if (lp && (lp.width === MATCH_PARENT || lp.height === MATCH_PARENT)) {
         const ml = lp instanceof JMarginLP ? lp.marginL + lp.marginR : 0;
@@ -90,7 +94,8 @@ const frameMethods: NativeSpec["methods"] = {
     }
   },
   "setForegroundGravity(I)V": () => {},
-  "setMeasureAllChildren(Z)V": () => {},
+  "setMeasureAllChildren(Z)V": function (this: JFrameLayout, all: number) { this.measureAllChildren = !!all; },
+  "getMeasureAllChildren()Z": function (this: JFrameLayout) { return +this.measureAllChildren; },
 };
 covariantLayoutParams(frameMethods, "android/widget/FrameLayout$LayoutParams");
 rt.register({
@@ -118,6 +123,13 @@ export class JLinearLayout extends JViewGroup {
   gravity = 48 | G.START;
   weightSum = 0;
   baselineAlignedChildIndex = -1;
+  showDividers = 0; dividerPadding = 0;
+  divider: JDrawable | null = null;
+  dividerW = 0; dividerH = 0;
+  dividerBefore(index: number): boolean { return !!(this.showDividers & (index === 0 ? 1 : 2)); }
+  dividerSpace(count: number): number {
+    return count ? ((this.showDividers & 1 ? 1 : 0) + (this.showDividers & 2 ? count - 1 : 0) + (this.showDividers & 4 ? 1 : 0)) * (this.orientation === 1 ? this.dividerH : this.dividerW) : 0;
+  }
 }
 function mainMargin(c: JView, vertical: boolean): number {
   const m = c.lp instanceof JMarginLP ? c.lp : null;
@@ -131,10 +143,13 @@ export const linearMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JLinearLayout, c: unknown, set: JAttrSet | null) {
     await initViewFromCtx(this, c, set);
     if (set && this.jres) {
-      const ta = obtainStyled(this.jres, this.theme, set, [AID("orientation"), AID("gravity"), AID("weightSum")], 0, 0);
+      const ta = obtainStyled(this.jres, this.theme, set, [AID("orientation"), AID("gravity"), AID("weightSum"), AID("showDividers"), AID("dividerPadding"), AID("divider")], 0, 0);
       if (ta.vals[0]) this.orientation = rvInt(this.jres, ta.vals[0], 0);
       if (ta.vals[1]) this.gravity = rvInt(this.jres, ta.vals[1], this.gravity);
       if (ta.vals[2]) this.weightSum = rvFloat(this.jres, ta.vals[2], 0);
+      if (ta.vals[3]) this.showDividers = rvInt(this.jres, ta.vals[3], 0);
+      if (ta.vals[4]) this.dividerPadding = Math.round(rvDimen(this.jres, ta.vals[4]));
+      if (ta.vals[5]) await callSelf(linearMethods, "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V", this, await loadDrawableRV(this.jres, ta.vals[5], this.theme));
     }
   },
   "setOrientation(I)V": function (this: JLinearLayout, o: number) { this.orientation = o; requestLayout(this); },
@@ -147,8 +162,24 @@ export const linearMethods: NativeSpec["methods"] = {
     this.baselineAlignedChildIndex = index;
   },
   "getBaselineAlignedChildIndex()I": function (this: JLinearLayout) { return this.baselineAlignedChildIndex; },
-  ...noops("setShowDividers(I)V", "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V",
-    "setBaselineAligned(Z)V"),
+  "setShowDividers(I)V": function (this: JLinearLayout, flags: number) { if (this.showDividers !== flags) { this.showDividers = flags; requestLayout(this); } },
+  "getShowDividers()I": function (this: JLinearLayout) { return this.showDividers; },
+  "setDividerPadding(I)V": function (this: JLinearLayout, padding: number) { this.dividerPadding = padding; invalidate(this); },
+  "getDividerPadding()I": function (this: JLinearLayout) { return this.dividerPadding; },
+  "getDividerDrawable()Landroid/graphics/drawable/Drawable;": function (this: JLinearLayout) { return this.divider; },
+  "getDividerWidth()I": function (this: JLinearLayout) { return this.dividerW; },
+  "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V": async function (this: JLinearLayout, divider: JDrawable | null) {
+    if (this.divider === divider) return;
+    this.divider = divider;
+    this.dividerW = divider ? await vcall(divider, "getIntrinsicWidth", "()I") : 0;
+    this.dividerH = divider ? await vcall(divider, "getIntrinsicHeight", "()I") : 0;
+    requestLayout(this);
+  },
+  "hasDividerBeforeChildAt(I)Z": function (this: JLinearLayout, index: number) {
+    if (index === this.children.length) return +(!!(this.showDividers & 4));
+    return +this.dividerBefore(this.children.slice(0, index).filter(c => c.visibility !== 8).length);
+  },
+  ...noops("setBaselineAligned(Z)V"),
   "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": function (this: JLinearLayout) {
     const lp = new JLinearLP();
     if (this.orientation === 1) { lp.width = MATCH_PARENT; lp.height = WRAP_CONTENT; }
@@ -167,8 +198,13 @@ export const linearMethods: NativeSpec["methods"] = {
     const mainPad = vertical ? this.padT + this.padB : this.padL + this.padR;
     const crossPad = vertical ? this.padL + this.padR : this.padT + this.padB;
     const kids = this.children.filter((c) => c.visibility !== 8);
+    const wrapCross = specMode(vertical ? wSpec : hSpec) !== MS_EXACTLY
+      && kids.some(c => (vertical ? c.lp?.width : c.lp?.height) !== MATCH_PARENT);
+    const dividerSize = vertical ? this.dividerH : this.dividerW;
     let totalMain = 0, maxCross = 0, totalWeight = 0, consumed = 0, skipped = false;
-    for (const c of kids) {
+    for (let i = 0; i < kids.length; i++) {
+      const c = kids[i];
+      if (this.dividerBefore(i)) totalMain += dividerSize;
       const mMain = mainMargin(c, vertical), mCross = crossMargin(c, vertical);
       const weight = c.lp instanceof JLinearLP ? c.lp.weight : 0;
       const excessOnly = weight > 0 && (vertical ? c.lp!.height : c.lp!.width) === 0;
@@ -182,13 +218,16 @@ export const linearMethods: NativeSpec["methods"] = {
       await measureChildWithMargins(this, c, wSpec, vertical ? 0 : used, hSpec, vertical ? used : 0);
       if (excessOnly) { if (vertical) c.lp!.height = 0; else c.lp!.width = 0; consumed += vertical ? c.measuredH : c.measuredW; }
       totalMain += (vertical ? c.measuredH : c.measuredW) + mMain;
-      maxCross = Math.max(maxCross, (vertical ? c.measuredW : c.measuredH) + mCross);
+      const matchCross = wrapCross && (vertical ? c.lp?.width : c.lp?.height) === MATCH_PARENT;
+      maxCross = Math.max(maxCross, (matchCross ? 0 : vertical ? c.measuredW : c.measuredH) + mCross);
     }
+    if (kids.length && this.showDividers & 4) totalMain += dividerSize;
     const size = resolveSizeAndState(totalMain + mainPad, mainSpec);
     let excess = size - totalMain - mainPad + consumed;
     if (skipped || (excess !== 0 && totalWeight > 0)) {
       let wsum = this.weightSum > 0 ? this.weightSum : totalWeight;
-      totalMain = 0;
+      totalMain = this.dividerSpace(kids.length);
+      maxCross = 0;
       for (const c of kids) {
         const mMain = mainMargin(c, vertical), mCross = crossMargin(c, vertical);
         const weight = c.lp instanceof JLinearLP ? c.lp.weight : 0;
@@ -201,7 +240,8 @@ export const linearMethods: NativeSpec["methods"] = {
           await measureView(c, vertical ? crossSpec : makeSpec(target, MS_EXACTLY), vertical ? makeSpec(target, MS_EXACTLY) : crossSpec);
         }
         totalMain += (vertical ? c.measuredH : c.measuredW) + mMain;
-        maxCross = Math.max(maxCross, (vertical ? c.measuredW : c.measuredH) + mCross);
+        const matchCross = wrapCross && (vertical ? c.lp?.width : c.lp?.height) === MATCH_PARENT;
+        maxCross = Math.max(maxCross, (matchCross ? 0 : vertical ? c.measuredW : c.measuredH) + mCross);
       }
     }
     const finalCross = resolveSizeAndState(Math.max(maxCross + crossPad, vertical ? this.minW : this.minH), vertical ? wSpec : hSpec);
@@ -209,7 +249,7 @@ export const linearMethods: NativeSpec["methods"] = {
     this.measuredH = vertical ? size : finalCross;
     for (const c of kids) {
       const crossDim = vertical ? c.lp?.width ?? WRAP_CONTENT : c.lp?.height ?? WRAP_CONTENT;
-      if (crossDim === MATCH_PARENT) {
+      if (crossDim === MATCH_PARENT && specMode(vertical ? wSpec : hSpec) !== MS_EXACTLY) {
         const mCross = crossMargin(c, vertical);
         const cw = Math.max(0, (vertical ? this.measuredW : this.measuredH) - crossPad - mCross);
         await measureView(c,
@@ -221,7 +261,7 @@ export const linearMethods: NativeSpec["methods"] = {
   "onLayout(ZIIII)V": async function (this: JLinearLayout) {
     const vertical = this.orientation === 1;
     const kids = this.children.filter((c) => c.visibility !== 8);
-    let used = 0;
+    let used = this.dividerSpace(kids.length);
     for (const c of kids) used += (vertical ? c.measuredH : c.measuredW) + mainMargin(c, vertical);
     const gm = this.gravity;
     let pos = vertical
@@ -229,7 +269,9 @@ export const linearMethods: NativeSpec["methods"] = {
         : gravityV(gm) === 80 ? this.height() - this.padB - used : this.padT)
       : (gravityH(gm) === 1 ? this.padL + ((this.width() - this.padL - this.padR - used) >> 1)
         : gravityH(gm) === 5 ? this.width() - this.padR - used : this.padL);
-    for (const c of kids) {
+    for (let i = 0; i < kids.length; i++) {
+      const c = kids[i];
+      if (this.dividerBefore(i)) pos += vertical ? this.dividerH : this.dividerW;
       const lp = c.lp instanceof JLinearLP ? c.lp : null;
       const mlp = c.lp instanceof JMarginLP ? c.lp : null;
       const g = lp && lp.gravity !== -1 ? lp.gravity : this.gravity;
@@ -251,12 +293,33 @@ export const linearMethods: NativeSpec["methods"] = {
       }
     }
   },
+  "onDraw(Landroid/graphics/Canvas;)V": async function (this: JLinearLayout, canvas: JCanvas) {
+    if (!this.divider || !this.showDividers) return;
+    const vertical = this.orientation === 1, kids = this.children.filter(c => c.visibility !== 8);
+    const size = vertical ? this.dividerH : this.dividerW, d = this.divider;
+    const draw = async (position: number) => {
+      await vcall(d, "setBounds", "(IIII)V", vertical ? this.padL + this.dividerPadding : position,
+        vertical ? position : this.padT + this.dividerPadding,
+        vertical ? this.width() - this.padR - this.dividerPadding : position + size,
+        vertical ? position + size : this.height() - this.padB - this.dividerPadding);
+      await drawChild(d, canvas);
+    };
+    for (let i = 0; i < kids.length; i++) if (this.dividerBefore(i)) {
+      const c = kids[i], lp = c.lp instanceof JMarginLP ? c.lp : null;
+      await draw(vertical ? c.top - (lp?.marginT ?? 0) - size : c.left - (lp?.marginL ?? 0) - size);
+    }
+    if (this.showDividers & 4) {
+      const c = kids.at(-1), lp = c?.lp instanceof JMarginLP ? c.lp : null;
+      await draw(c ? vertical ? c.bottom + (lp?.marginB ?? 0) : c.right + (lp?.marginR ?? 0)
+        : vertical ? this.height() - this.padB - size : this.width() - this.padR - size);
+    }
+  },
 };
 covariantLayoutParams(linearMethods, "android/widget/LinearLayout$LayoutParams");
 rt.register({
   name: "android/widget/LinearLayout", ctor: JLinearLayout, sup: "android/view/ViewGroup",
   clinit: () => { rt.link("android/widget/LinearLayout$LayoutParams"); },
-  statics: { HORIZONTAL: 0, VERTICAL: 1, SHOW_DIVIDER_NONE: 0, SHOW_DIVIDER_MIDDLE: 2 },
+  statics: { HORIZONTAL: 0, VERTICAL: 1, SHOW_DIVIDER_NONE: 0, SHOW_DIVIDER_BEGINNING: 1, SHOW_DIVIDER_MIDDLE: 2, SHOW_DIVIDER_END: 4 },
   methods: linearMethods,
 });
 rt.register({
@@ -505,7 +568,10 @@ rt.register({
 // TableLayout pre-computes per-column widths (natural max across rows, stretch columns
 // absorb leftover) and hands them to each row; rows then measure cells to exact columns.
 class JTableLayout extends JLinearLayout {
-  stretchCols = "";
+  stretchCols = new Set<number>();
+  shrinkCols = new Set<number>();
+  stretchAll = false;
+  shrinkAll = false;
   constructor() { super(); this.orientation = 1; }
 }
 class JTableRow extends JLinearLayout {
@@ -518,13 +584,26 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JTableLayout, c: unknown, set: JAttrSet | null) {
       await callSelf(linearMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
       this.orientation = 1;
-      const scId = AID("stretchColumns");
-      const sc = scId ? set?.node?.attrs.find((a) => a.resId === scId) : undefined;
-      if (sc) this.stretchCols = sc.str ?? String(sc.data);
+      for (const [attr, cols, all] of [["stretchColumns", "stretchCols", "stretchAll"], ["shrinkColumns", "shrinkCols", "shrinkAll"]] as const) {
+        const value = set?.node?.attrs.find(a => a.resId === AID(attr));
+        const text = value?.str ?? (value ? String(value.data) : "");
+        this[all] = text.startsWith("*");
+        for (const part of text.split(",")) if (/^\s*\d+\s*$/.test(part)) this[cols].add(Number(part));
+      }
     },
-    "setStretchAllColumns(Z)V": function (this: JTableLayout, v: number) { this.stretchCols = v ? "*" : ""; requestLayout(this); },
+    "setStretchAllColumns(Z)V": function (this: JTableLayout, v: number) { this.stretchAll = !!v; },
+    "setShrinkAllColumns(Z)V": function (this: JTableLayout, v: number) { this.shrinkAll = !!v; },
+    "isStretchAllColumns()Z": function (this: JTableLayout) { return +this.stretchAll; },
+    "isShrinkAllColumns()Z": function (this: JTableLayout) { return +this.shrinkAll; },
+    "isColumnStretchable(I)Z": function (this: JTableLayout, i: number) { return +(this.stretchAll || this.stretchCols.has(i)); },
+    "isColumnShrinkable(I)Z": function (this: JTableLayout, i: number) { return +(this.shrinkAll || this.shrinkCols.has(i)); },
     "setColumnStretchable(IZ)V": function (this: JTableLayout, i: number, v: number) {
-      if (v) this.stretchCols = this.stretchCols ? this.stretchCols + "," + i : String(i);
+      if (v) this.stretchCols.add(i); else this.stretchCols.delete(i);
+      for (const row of this.children) requestLayout(row);
+    },
+    "setColumnShrinkable(IZ)V": function (this: JTableLayout, i: number, v: number) {
+      if (v) this.shrinkCols.add(i); else this.shrinkCols.delete(i);
+      for (const row of this.children) requestLayout(row);
     },
     "onMeasure(II)V": async function (this: JTableLayout, wSpec: number, hSpec: number) {
       const rows = this.children.filter((c): c is JTableRow => c.visibility !== 8 && c instanceof JTableRow);
@@ -539,10 +618,14 @@ rt.register({
       }
       const avail = specSize(wSpec) - this.padL - this.padR;
       const total = colW.reduce((a, b) => a + b, 0);
-      if (this.stretchCols && avail > total && colW.length) {
-        const idxs = this.stretchCols === "*" ? colW.map((_, i) => i)
-          : this.stretchCols.split(",").map(Number).filter((i) => i >= 0 && i < colW.length);
-        if (idxs.length) { const extra = Math.floor((avail - total) / idxs.length); for (const i of idxs) colW[i] += extra; }
+      if (avail !== total && colW.length && specMode(wSpec) !== MS_UNSPEC) {
+        const all = avail > total ? this.stretchAll : this.shrinkAll;
+        const cols = avail > total ? this.stretchCols : this.shrinkCols;
+        const indices = all ? colW.map((_, i) => i) : [...cols].filter(i => i >= 0 && i < colW.length);
+        if (indices.length) {
+          const delta = Math.trunc((avail - total) / indices.length);
+          for (const i of indices) colW[i] = Math.max(0, colW[i] + delta);
+        }
       }
       for (const row of rows) row.colWidths = colW;
       await linearOnMeasure.call(this, wSpec, hSpec);
@@ -739,7 +822,7 @@ rt.register({ name: "android/widget/HorizontalScrollView", ctor: class extends J
 
 // ── RelativeLayout (common-rule subset)
 class JRelativeLP extends JMarginLP {
-  rules = new Map<number, number>(); // verb → anchor id or boolean(-1 true)
+  rules = new Int32Array(22);
   alignWithParent = false;           // layout_alignWithParentIfMissing, a public field on AOSP
 }
 const RL = {
@@ -783,8 +866,8 @@ const relativeMethods: NativeSpec["methods"] = {
       for (const a of set.node.attrs) {
         for (const [aid, verb] of rlAttrIds) {
           if (aid && a.resId === aid) {
-            lp.rules.set(verb, a.type === TV.BOOLEAN || a.type >= TV.INT_DEC ? (a.data ? (a.type === TV.REFERENCE ? a.data : (a.data > 1 ? a.data : -1)) : 0) : a.data);
-            if (a.type === TV.REFERENCE) lp.rules.set(verb, a.data);
+            lp.rules[verb] = a.type === TV.BOOLEAN || a.type >= TV.INT_DEC ? (a.data ? (a.type === TV.REFERENCE ? a.data : (a.data > 1 ? a.data : -1)) : 0) : a.data;
+            if (a.type === TV.REFERENCE) lp.rules[verb] = a.data;
           }
         }
       }
@@ -799,8 +882,11 @@ const relativeMethods: NativeSpec["methods"] = {
   "onMeasure(II)V": async function (this: JRelativeLayout, wSpec: number, hSpec: number) {
     const availW = specSize(wSpec), availH = specSize(hSpec);
     const kids = this.children.filter((c) => c.visibility !== 8);
-    // measure all children first (simple pass)
-    for (const c of kids) await measureChildWithMargins(this, c, wSpec, 0, hSpec, 0);
+    for (const c of kids) {
+      const w = c.lp?.width === MATCH_PARENT && specMode(wSpec) !== MS_UNSPEC ? makeSpec(availW, MS_EXACTLY) : wSpec;
+      const h = c.lp?.height === MATCH_PARENT && specMode(hSpec) !== MS_UNSPEC ? makeSpec(availH, MS_EXACTLY) : hSpec;
+      await measureChildWithMargins(this, c, w, 0, h, 0);
+    }
     const pos = this.rlPos;
     pos.clear();
     const byId = new Map<number, JView>();
@@ -826,13 +912,13 @@ const relativeMethods: NativeSpec["methods"] = {
         let t = this.padT + m.marginT;
         if (lp) {
           const anchor = (verb: number): JView | null => {
-            const id = lp.rules.get(verb);
+            const id = lp.rules[verb];
             return id && id > 0 ? byId.get(id) ?? null : null;
           };
-          if (lp.rules.get(RL.ALIGN_PARENT_RIGHT)) l = availW - this.padR - c.measuredW - m.marginR;
-          if (lp.rules.get(RL.CENTER_HORIZONTAL) || lp.rules.get(RL.CENTER_IN_PARENT)) l = (availW - c.measuredW) >> 1;
-          if (lp.rules.get(RL.ALIGN_PARENT_BOTTOM)) t = availH - this.padB - c.measuredH - m.marginB;
-          if (lp.rules.get(RL.CENTER_VERTICAL) || lp.rules.get(RL.CENTER_IN_PARENT)) t = (availH - c.measuredH) >> 1;
+          if (lp.rules[RL.ALIGN_PARENT_RIGHT]) l = availW - this.padR - c.measuredW - m.marginR;
+          if (lp.rules[RL.CENTER_HORIZONTAL] || lp.rules[RL.CENTER_IN_PARENT]) l = (availW - c.measuredW) >> 1;
+          if (lp.rules[RL.ALIGN_PARENT_BOTTOM]) t = availH - this.padB - c.measuredH - m.marginB;
+          if (lp.rules[RL.CENTER_VERTICAL] || lp.rules[RL.CENTER_IN_PARENT]) t = (availH - c.measuredH) >> 1;
           const rOf = anchor(RL.RIGHT_OF);
           if (rOf) l = anchorPos(rOf).l + rOf.measuredW + m.marginL;
           const lOf = anchor(RL.LEFT_OF);
@@ -854,10 +940,10 @@ const relativeMethods: NativeSpec["methods"] = {
           // AOSP getChildMeasureSpec: rules that fix both edges measure the child EXACTLY to the
           // span between them, whatever its layout_width/height (a later rule overrides an
           // earlier one, as in applyHorizontalSizeRules)
-          const lE = lp.rules.get(RL.ALIGN_PARENT_LEFT) ? this.padL + m.marginL : aL ? anchorPos(aL).l : rOf ? anchorPos(rOf).l + rOf.measuredW + m.marginL : NaN;
-          const rE = lp.rules.get(RL.ALIGN_PARENT_RIGHT) ? availW - this.padR - m.marginR : aR ? anchorPos(aR).l + aR.measuredW : lOf ? anchorPos(lOf).l - m.marginR : NaN;
-          const tE = lp.rules.get(RL.ALIGN_PARENT_TOP) ? this.padT + m.marginT : aT ? anchorPos(aT).t : below ? anchorPos(below).t + below.measuredH + m.marginT : NaN;
-          const bE = lp.rules.get(RL.ALIGN_PARENT_BOTTOM) ? availH - this.padB - m.marginB : aB ? anchorPos(aB).t + aB.measuredH : above ? anchorPos(above).t - m.marginB : NaN;
+          const lE = lp.rules[RL.ALIGN_PARENT_LEFT] ? this.padL + m.marginL : aL ? anchorPos(aL).l : rOf ? anchorPos(rOf).l + rOf.measuredW + m.marginL : NaN;
+          const rE = lp.rules[RL.ALIGN_PARENT_RIGHT] ? availW - this.padR - m.marginR : aR ? anchorPos(aR).l + aR.measuredW : lOf ? anchorPos(lOf).l - m.marginR : NaN;
+          const tE = lp.rules[RL.ALIGN_PARENT_TOP] ? this.padT + m.marginT : aT ? anchorPos(aT).t : below ? anchorPos(below).t + below.measuredH + m.marginT : NaN;
+          const bE = lp.rules[RL.ALIGN_PARENT_BOTTOM] ? availH - this.padB - m.marginB : aB ? anchorPos(aB).t + aB.measuredH : above ? anchorPos(above).t - m.marginB : NaN;
           const spanW = rE - lE, spanH = bE - tE;
           if (spanW === spanW || spanH === spanH) {
             if (spanW === spanW) l = lE;
@@ -909,14 +995,11 @@ rt.register({
     "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JRelativeLP, o: JLayoutParams) {
       if (o) { this.width = o.width; this.height = o.height; }
     },
-    "addRule(I)V": function (this: JRelativeLP, verb: number) { this.rules.set(verb, -1); },
-    "addRule(II)V": function (this: JRelativeLP, verb: number, anchor: number) { this.rules.set(verb, anchor); },
-    "removeRule(I)V": function (this: JRelativeLP, verb: number) { this.rules.delete(verb); },
-    "getRules()[I": function (this: JRelativeLP) {
-      const rules = new Int32Array(22);
-      for (const [verb, anchor] of this.rules) if (verb >= 0 && verb < rules.length) rules[verb] = anchor;
-      return rules;
-    },
+    "getRules()[I": function (this: JRelativeLP) { return this.rules; },
+    "getRule(I)I": function (this: JRelativeLP, verb: number) { return this.rules[verb]; },
+    "addRule(I)V": function (this: JRelativeLP, verb: number) { this.rules[verb] = -1; },
+    "addRule(II)V": function (this: JRelativeLP, verb: number, anchor: number) { this.rules[verb] = anchor; },
+    "removeRule(I)V": function (this: JRelativeLP, verb: number) { this.rules[verb] = 0; },
   },
 });
 

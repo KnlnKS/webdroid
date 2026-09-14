@@ -5,14 +5,13 @@
 
 import { mem } from "./mem";
 import { hostLib, lookupHost, defineHost, probed, cstr, type HostFn } from "./host";
-import { EglContext, eglConfigAttrib, type GlSurface } from "../android/glview";
+import { EglContext, eglConfigAttrib, eglFailure, takeEglError, type GlSurface } from "../android/glview";
 import { windowOf } from "./libandroid";
 import { gles1Procs } from "./gles1";
 import { gles3Procs } from "./gles3";
 import { activateEglCurrent, bindEglCurrent, boundEglCurrent } from "./egl-current";
 
-const EGL_SUCCESS = 0x3000, EGL_BAD_ALLOC = 0x3003, EGL_BAD_CONTEXT = 0x3006, EGL_BAD_MATCH = 0x3009, EGL_BAD_NATIVE_WINDOW = 0x300b, EGL_BAD_SURFACE = 0x300d;
-let err = EGL_SUCCESS;
+const EGL_BAD_ALLOC = 0x3003, EGL_BAD_CONTEXT = 0x3006, EGL_BAD_MATCH = 0x3009, EGL_BAD_NATIVE_WINDOW = 0x300b, EGL_BAD_SURFACE = 0x300d;
 const surfaces: (GlSurface | null)[] = [null], contexts: (EglContext | null)[] = [null];
 const procs = new Map<string, number>();
 const handle = <T>(tbl: (T | null)[], o: T): number => { const i = tbl.indexOf(o); if (i > 0) return i; tbl.push(o); return tbl.length - 1; };
@@ -27,8 +26,8 @@ export function eglInit(): void {
   const E: Record<string, HostFn> = {
     eglGetDisplay: () => 1, eglGetPlatformDisplay: () => 1,
     eglInitialize: (_c, a) => { a.i(); const ma = a.p(), mi = a.p(); if (ma) mem.st32(ma, 1); if (mi) mem.st32(mi, 5); return 1; },
-    eglTerminate: () => 1, eglReleaseThread: (cpu) => { bindEglCurrent(cpu.jthread, null); return 1; },
-    eglGetError: () => { const e = err; err = EGL_SUCCESS; return e; },
+    eglTerminate: () => 1, eglReleaseThread: (cpu) => { bindEglCurrent(cpu.jthread, null); takeEglError(cpu.jthread); return 1; },
+    eglGetError: (cpu) => takeEglError(cpu.jthread),
     eglBindAPI: () => 1, eglQueryAPI: () => 0x30a0,
     eglQueryString: (_c, a) => {
       a.i(); const n = a.i();
@@ -44,43 +43,43 @@ export function eglInit(): void {
       return 1;
     },
     eglGetConfigAttrib: (_c, a) => { a.i(); a.i(); const attr = a.i(), out = a.p(); mem.st32(out, eglConfigAttrib(attr)); return 1; },
-    eglCreateContext: (_c, a) => {
+    eglCreateContext: (cpu, a) => {
       a.i(); a.i(); const share = contexts[a.i()], at = attrs(a.p());
       const major = at.get(0x3098) ?? 1, minor = at.get(0x30fb) ?? 0;
-      if (major > 3 || (major === 3 && minor > 0)) { err = EGL_BAD_MATCH; return 0; }
+      if (major > 3 || (major === 3 && minor > 0)) { return eglFailure(EGL_BAD_MATCH, 0, cpu.jthread); }
       const c = new EglContext(share); c.major = major;
       return handle(contexts, c);
     },
     eglDestroyContext: (cpu, a) => {
       a.i(); const h = a.i(), context = contexts[h];
-      if (!context) { err = EGL_BAD_CONTEXT; return 0; }
+      if (!context) { return eglFailure(EGL_BAD_CONTEXT, 0, cpu.jthread); }
       if (boundEglCurrent(cpu.jthread) === context) bindEglCurrent(cpu.jthread, null);
       contexts[h] = null;
       return 1;
     },
-    eglCreateWindowSurface: (_c, a) => { a.i(); a.i(); const s = windowOf(a.p()); if (!s) { err = EGL_BAD_NATIVE_WINDOW; return 0; } return handle(surfaces, s); },
+    eglCreateWindowSurface: (cpu, a) => { a.i(); a.i(); const s = windowOf(a.p()); if (!s) { return eglFailure(EGL_BAD_NATIVE_WINDOW, 0, cpu.jthread); } return handle(surfaces, s); },
     eglCreatePbufferSurface: (_c, a) => {
       a.i(); a.i(); const at = attrs(a.p());
       return handle(surfaces, { view: null, width: at.get(0x3057) || 1, height: at.get(0x3056) || 1, present: null, frames: 0 });
     },
-    eglCreatePixmapSurface: () => { err = EGL_BAD_ALLOC; return 0; },
-    eglDestroySurface: (_c, a) => {
+    eglCreatePixmapSurface: (cpu) => eglFailure(EGL_BAD_ALLOC, 0, cpu.jthread),
+    eglDestroySurface: (cpu, a) => {
       a.i(); const h = a.i(), s = surfaces[h];
-      if (!s) { err = EGL_BAD_SURFACE; return 0; }
+      if (!s) { return eglFailure(EGL_BAD_SURFACE, 0, cpu.jthread); }
       if (!s.view) s.present?.close();
       surfaces[h] = null;
       return 1;
     },
     eglSurfaceAttrib: () => 1, eglSwapInterval: () => 1,
-    eglQuerySurface: (_c, a) => {
+    eglQuerySurface: (cpu, a) => {
       a.i(); const s = surfaces[a.i()], attr = a.i(), out = a.p();
-      if (!s) { err = EGL_BAD_SURFACE; return 0; }
+      if (!s) { return eglFailure(EGL_BAD_SURFACE, 0, cpu.jthread); }
       mem.st32(out, attr === 0x3057 ? s.width : attr === 0x3056 ? s.height : attr === 0x3093 ? 0x3095 : attr === 0x3028 ? 1 : 0); // SWAP_BEHAVIOR: BUFFER_DESTROYED
       return 1;
     },
-    eglQueryContext: (_c, a) => {
+    eglQueryContext: (cpu, a) => {
       a.i(); const c = contexts[a.i()], attr = a.i(), out = a.p();
-      if (!c) { err = EGL_BAD_CONTEXT; return 0; }
+      if (!c) { return eglFailure(EGL_BAD_CONTEXT, 0, cpu.jthread); }
       mem.st32(out, attr === 0x3028 ? 1 : attr === 0x3098 ? c.major : attr === 0x3097 ? 0x30a0 : attr === 0x3086 ? 0x3038 : 0);
       return 1;
     },
@@ -88,19 +87,19 @@ export function eglInit(): void {
       a.i(); const draw = surfaces[a.i()]; a.i(); const contextHandle = a.i();
       if (!contextHandle) { bindEglCurrent(cpu.jthread, null); return 1; }
       const c = contexts[contextHandle];
-      if (!c) { err = EGL_BAD_CONTEXT; return 0; }
-      if (!c.makeCurrent(draw ?? null)) { err = EGL_BAD_ALLOC; return 0; }
+      if (!c) { return eglFailure(EGL_BAD_CONTEXT, 0, cpu.jthread); }
+      if (!c.makeCurrent(draw ?? null, cpu.jthread)) { return eglFailure(EGL_BAD_ALLOC, 0, cpu.jthread); }
       bindEglCurrent(cpu.jthread, c);
       return 1;
     },
     eglSwapBuffers: (cpu, a) => {
       a.i(); const s = surfaces[a.i()], c = activateEglCurrent(cpu.jthread);
-      if (!s || !c || c.target !== s) { err = EGL_BAD_SURFACE; return 0; }
-      return c.swap().then(() => 1);
+      if (!s || !c || c.target !== s) { return eglFailure(EGL_BAD_SURFACE, 0, cpu.jthread); }
+      return c.swap().then(ok => ok ? 1 : eglFailure(0x300e, 0, cpu.jthread));
     },
-    eglPresentationTimeANDROID: (_c, a) => {
+    eglPresentationTimeANDROID: (cpu, a) => {
       a.i(); const s = surfaces[a.i()], time = a.l();
-      if (!s) { err = EGL_BAD_SURFACE; return 0; }
+      if (!s) { return eglFailure(EGL_BAD_SURFACE, 0, cpu.jthread); }
       s.presentationTimeNanos = time;
       return 1;
     },
@@ -108,7 +107,7 @@ export function eglInit(): void {
     eglGetCurrentDisplay: () => 1,
     eglGetCurrentSurface: (cpu) => { const s = boundEglCurrent(cpu.jthread)?.target; return s ? Math.max(0, surfaces.indexOf(s)) : 0; },
     eglWaitGL: () => 1, eglWaitNative: () => 1, eglWaitClient: () => 1,
-    eglCopyBuffers: () => { err = EGL_BAD_ALLOC; return 0; },
+    eglCopyBuffers: (cpu) => eglFailure(EGL_BAD_ALLOC, 0, cpu.jthread),
     eglBindTexImage: () => 0, eglReleaseTexImage: () => 0,
     eglGetProcAddress: (_c, a) => {
       const n = a.str();
@@ -123,7 +122,5 @@ export function eglInit(): void {
       probed.add("eglGetProcAddress!" + n); return 0;
     },
   };
-  // eglGetError reports the last call: every entry point starts with a clean slate, as EGL does
-  for (const [k, f] of Object.entries(E)) if (k !== "eglGetError") E[k] = (c, a) => { err = EGL_SUCCESS; return f(c, a); };
   hostLib("libEGL.so", E, { closed: true });
 }

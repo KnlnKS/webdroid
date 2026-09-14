@@ -5,8 +5,10 @@ import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
 import { vcall, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
-import { usLocale } from "../jvm/natives/jvalues";
-import { readStreamFully, vfs } from "../jvm/natives/jio";
+import { type JLocale, localeTag, usLocale } from "../jvm/natives/jvalues";
+import type { JLocaleList } from "./resnative";
+import { readStreamFully, vfs, type JFileDescriptor } from "../jvm/natives/jio";
+import { javaFdBytes } from "../native/stdio";
 import { jclsNameOf } from "./apphost";
 import { JBuffer } from "../jvm/natives/jnio";
 import { JPath } from "./path";
@@ -317,6 +319,7 @@ export class JPaint extends JObj {
   color = -16777216;
   style = 0;
   strokeWidth = 0;
+  shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
   textSize = device.dp(16); // AOSP defaults to 12px, but every view sets its own
   tf: JTypeface = tfDefault;
   antiAlias = true;
@@ -339,8 +342,9 @@ export class JPaint extends JObj {
   textSkewX = 0;
   fontFeatureSettings: string | null = null;
   fontVariationSettings: string | null = null;
+  locales: JLocaleList | null = null;
+  language = localeTag(usLocale);
   underline = false; strikeThru = false; fakeBold = false;
-  shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
 
   // font() is called per text op and per measure; the result is a pure function of
   // (typeface identity, textSize, fakeBold), so cache it and rebuild only when one changes.
@@ -386,12 +390,29 @@ const paintMethods: NativeSpec["methods"] = {
     },
   "<init>(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { if (o) copyPaint(o, this); },
   "reset()V": function (this: JPaint) { resetPaint(this); },
+  "setShadowLayer(FFFI)V": function (this: JPaint, radius: number, dx: number, dy: number, color: number) {
+    this.shadowRadius = radius; this.shadowDx = dx; this.shadowDy = dy; this.shadowColor = color;
+  },
+  "clearShadowLayer()V": function (this: JPaint) { this.shadowRadius = this.shadowDx = this.shadowDy = this.shadowColor = 0; },
+  "hasShadowLayer()Z": function (this: JPaint) { return +(this.shadowRadius > 0 && !!(this.shadowColor >>> 24)); },
+  "getShadowLayerRadius()F": function (this: JPaint) { return this.shadowRadius; },
+  "getShadowLayerDx()F": function (this: JPaint) { return this.shadowDx; },
+  "getShadowLayerDy()F": function (this: JPaint) { return this.shadowDy; },
+  "getShadowLayerColor()I": function (this: JPaint) { return this.shadowColor; },
   "set(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { copyPaint(o, this); },
   "setColor(I)V": function (this: JPaint, c: number) { this.color = c; },
   "setColor(J)V": function (this: JPaint, c: bigint) { this.color = Number(BigInt.asIntN(32, c >> 32n)); },
   "getColorLong()J": function (this: JPaint) { return BigInt(this.color >>> 0) << 32n; },
-  "getTextLocale()Ljava/util/Locale;": () => usLocale,
-  "getTextLocales()Landroid/os/LocaleList;": async () => vcall((await linkInit("android/os/LocaleList")).ctor, "getDefault", "()Landroid/os/LocaleList;"),
+  "getTextLocale()Ljava/util/Locale;": function (this: JPaint) { return this.locales?.values[0] ?? usLocale; },
+  "getTextLocales()Landroid/os/LocaleList;": async function (this: JPaint) { return this.locales ??= await vcall((await linkInit("android/os/LocaleList")).ctor, "getDefault", "()Landroid/os/LocaleList;"); },
+  "setTextLocale(Ljava/util/Locale;)V": function (this: JPaint, locale: JLocale) {
+    if (!locale) throw rt.mkThrowable("java/lang/IllegalArgumentException", "locale cannot be null");
+    this.locales = Object.assign(rt.make("android/os/LocaleList"), { values: [locale] }); this.language = localeTag(locale);
+  },
+  "setTextLocales(Landroid/os/LocaleList;)V": function (this: JPaint, locales: JLocaleList) {
+    if (!locales?.values.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "locales cannot be null or empty");
+    this.locales = locales; this.language = localeTag(locales.values[0]);
+  },
   "getShader()Landroid/graphics/Shader;": function (this: JPaint) { return this.shaderObj; },
   "getStrokeMiter()F": () => 4,
   "getXfermode()Landroid/graphics/Xfermode;": function (this: JPaint) { return this.xfermode; },
@@ -460,15 +481,9 @@ const paintMethods: NativeSpec["methods"] = {
   "getTextScaleX()F": function (this: JPaint) { return this.textScaleX; },
   "setTextSkewX(F)V": function (this: JPaint, v: number) { this.textSkewX = v; },
   "getTextSkewX()F": function (this: JPaint) { return this.textSkewX; },
-  "setShadowLayer(FFFI)V": function (this: JPaint, radius: number, dx: number, dy: number, color: number) {
-    this.shadowRadius = radius; this.shadowDx = dx; this.shadowDy = dy; this.shadowColor = color;
-  },
-  "clearShadowLayer()V": function (this: JPaint) {
-    this.shadowRadius = this.shadowDx = this.shadowDy = this.shadowColor = 0;
-  },
+
   ...noops("<init>()V", "<init>(I)V", "setHinting(I)V", "setSubpixelText(Z)V", "setLinearText(Z)V",
-    "setElegantTextHeight(Z)V", "setTextLocale(Ljava/util/Locale;)V",
-    "setTextLocales(Landroid/os/LocaleList;)V", "setStartHyphenEdit(I)V",
+    "setElegantTextHeight(Z)V", "setStartHyphenEdit(I)V",
     "setEndHyphenEdit(I)V", "setWordSpacing(F)V", "setDither(Z)V", "setFilterBitmap(Z)V", "setStrokeMiter(F)V",
     "setFlags(I)V"),
   ...stubs(1, "isFilterBitmap()Z", "getHinting()I",
@@ -491,7 +506,7 @@ const paintMethods: NativeSpec["methods"] = {
     return vcall(this, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", str, a, b, r);
   },
   "getTextBounds(Ljava/lang/String;IILandroid/graphics/Rect;)V": function (this: JPaint, s: string, a: number, b: number, r: JRect) {
-    const ctx = measureCtx(this.font());
+    const ctx = measureCtx(this.font(), this.language);
     const m = ctx.measureText(s.slice(a, b));
     r.left = Math.floor(-(m.actualBoundingBoxLeft ?? 0));
     r.right = Math.ceil(m.actualBoundingBoxRight ?? m.width);
@@ -518,12 +533,12 @@ const paintMethods: NativeSpec["methods"] = {
   "ascent()F": function (this: JPaint) { return fontAscent(this); },
   "descent()F": function (this: JPaint) { return fontDescent(this); },
   "getTextWidths(Ljava/lang/String;[F)I": function (this: JPaint, s: string, w: Float32Array) {
-    const ctx = measureCtx(this.font());
+    const ctx = measureCtx(this.font(), this.language);
     for (let i = 0; i < s.length; i++) w[i] = ctx.measureText(s[i]).width;
     return s.length;
   },
   "breakText(Ljava/lang/String;ZF[F)I": function (this: JPaint, s: string, fwd: number, max: number, out: Float32Array | null) {
-    const ctx = measureCtx(this.font());
+    const ctx = measureCtx(this.font(), this.language);
     let acc = 0, i = 0;
     for (; i < s.length; i++) {
       const w = ctx.measureText(s[i]).width;
@@ -546,6 +561,17 @@ function resetPaint(paint: JPaint): void {
   paint.fontVariationSettings = null;
   paint.underline = false; paint.strikeThru = false; paint.fakeBold = false;
   paint.shadowRadius = paint.shadowDx = paint.shadowDy = paint.shadowColor = 0;
+  paint.locales = null; paint.language = localeTag(usLocale);
+}
+export function beginPaintShadow(ctx: JCanvas["ctx"], p: JPaint): boolean {
+  if (!(p.shadowRadius > 0) || !(p.shadowColor >>> 24)) return false;
+  const m = ctx.getTransform();
+  ctx.save();
+  ctx.shadowColor = cssColor(p.shadowColor);
+  ctx.shadowBlur = p.shadowRadius * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
+  ctx.shadowOffsetX = m.a * p.shadowDx + m.c * p.shadowDy;
+  ctx.shadowOffsetY = m.b * p.shadowDx + m.d * p.shadowDy;
+  return true;
 }
 export function copyPaint(src: JPaint, dst: JPaint) {
   dst.color = src.color; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
@@ -557,6 +583,7 @@ export function copyPaint(src: JPaint, dst: JPaint) {
   dst.letterSpacingEm = src.letterSpacingEm; dst.textScaleX = src.textScaleX; dst.textSkewX = src.textSkewX;
   dst.fontFeatureSettings = src.fontFeatureSettings;
   dst.fontVariationSettings = src.fontVariationSettings;
+  dst.locales = src.locales; dst.language = src.language;
   dst.blend = src.blend; dst.xfermode = src.xfermode; dst.blendMode = src.blendMode;
   dst.shadowRadius = src.shadowRadius; dst.shadowDx = src.shadowDx; dst.shadowDy = src.shadowDy; dst.shadowColor = src.shadowColor;
 }
@@ -579,12 +606,13 @@ let _measureCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | 
  * assigns ctx.font itself leaves that memo naming a font the context no longer has — and the
  * next cache miss then measures with the wrong one.
  */
-export function measureCtx(font?: string): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
+export function measureCtx(font?: string, language = "en-US"): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
   if (!_measureCtx) {
     const c = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : (document.createElement("canvas"));
     _measureCtx = c.getContext("2d") as CanvasRenderingContext2D;
   }
   if (font !== undefined) setFont(_measureCtx, font);
+  if ("lang" in _measureCtx && _measureCtx.lang !== language) _measureCtx.lang = language;
   return _measureCtx;
 }
 // Browser text measurement is the hot path of every layout AND every draw (a TextView
@@ -599,14 +627,15 @@ let lastFont = "";
 function setFont(ctx: { font: string }, f: string): void {
   if (f !== lastFont) { ctx.font = f; lastFont = f; }
 }
-function rawWidth(f: string, s: string): number {
-  let byFont = widthCache.get(f);
-  if (byFont === undefined) widthCache.set(f, byFont = new Map());
+function rawWidth(f: string, s: string, language: string): number {
+  const key = language === "en-US" ? f : f + "\0" + language;
+  let byFont = widthCache.get(key);
+  if (byFont === undefined) widthCache.set(key, byFont = new Map());
   const hit = byFont.get(s);
   if (hit !== undefined) return hit;
   perf.measureTextMiss++;
-  const w = measureCtx(f).measureText(s).width;
-  if (++widthCount > WIDTH_CACHE_MAX) { widthCache = new Map([[f, byFont = new Map()]]); widthCount = 1; }
+  const w = measureCtx(f, language).measureText(s).width;
+  if (++widthCount > WIDTH_CACHE_MAX) { widthCache = new Map([[key, byFont = new Map()]]); widthCount = 1; }
   byFont.set(s, w);
   return w;
 }
@@ -627,7 +656,7 @@ export function runAdvances(p: JPaint, text: string, start: number, end: number,
 
 export function measureText(p: JPaint, s: string): number {
   perf.measureText++;
-  return Math.fround(rawWidth(p.font(), s) + p.letterSpacingEm * p.textSize * s.length);
+  return Math.fround(rawWidth(p.font(), s, p.language) + p.letterSpacingEm * p.textSize * s.length);
 }
 /**
  * The device font's vertical metrics, in em units: AOSP's Roboto build reports hhea
@@ -724,27 +753,6 @@ function setMatrix(dst: Float32Array, src: Float32Array): void {
   if (src.length < 20) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(src.length));
   dst.set(src.subarray(0, 20));
 }
-class JLightingColorFilter extends JObj {
-  multiply = 0;
-  add = 0;
-  matrix = identityMatrix();
-}
-rt.register({
-  name: "android/graphics/LightingColorFilter", ctor: JLightingColorFilter, sup: "android/graphics/ColorFilter",
-  methods: {
-    "<init>(II)V": function (this: JLightingColorFilter, multiply: number, add: number) {
-      this.multiply = multiply; this.add = add;
-      this.matrix[0] = (multiply >>> 16 & 255) / 255;
-      this.matrix[6] = (multiply >>> 8 & 255) / 255;
-      this.matrix[12] = (multiply & 255) / 255;
-      this.matrix[4] = add >>> 16 & 255;
-      this.matrix[9] = add >>> 8 & 255;
-      this.matrix[14] = add & 255;
-    },
-    "getColorMultiply()I": function (this: JLightingColorFilter) { return this.multiply; },
-    "getColorAdd()I": function (this: JLightingColorFilter) { return this.add; },
-  },
-});
 function concat(a: Float32Array, b: Float32Array): Float32Array {
   const out = new Float32Array(20);
   for (let j = 0; j < 20; j += 5) {
@@ -781,6 +789,24 @@ rt.register({
   },
 });
 class JColorMatrixColorFilter extends JObj { matrix = identityMatrix(); }
+class JLightingColorFilter extends JObj {
+  mul = 0; add = 0; matrix = identityMatrix();
+  update() {
+    const m = this.matrix;
+    m[0] = ((this.mul >>> 16) & 255) / 255; m[6] = ((this.mul >>> 8) & 255) / 255; m[12] = (this.mul & 255) / 255;
+    m[4] = (this.add >>> 16) & 255; m[9] = (this.add >>> 8) & 255; m[14] = this.add & 255;
+  }
+}
+rt.register({
+  name: "android/graphics/LightingColorFilter", ctor: JLightingColorFilter, sup: "android/graphics/ColorFilter",
+  methods: {
+    "<init>(II)V": function (this: JLightingColorFilter, mul: number, add: number) { this.mul = mul; this.add = add; this.update(); },
+    "getColorMultiply()I": function (this: JLightingColorFilter) { return this.mul; },
+    "getColorAdd()I": function (this: JLightingColorFilter) { return this.add; },
+    "setColorMultiply(I)V": function (this: JLightingColorFilter, mul: number) { this.mul = mul; this.update(); },
+    "setColorAdd(I)V": function (this: JLightingColorFilter, add: number) { this.add = add; this.update(); },
+  },
+});
 rt.register({
   name: "android/graphics/ColorMatrixColorFilter", ctor: JColorMatrixColorFilter, sup: "android/graphics/ColorFilter",
   methods: {
@@ -842,14 +868,44 @@ rt.markers("android/graphics/PathEffect");
 rt.register({ name: "android/graphics/CornerPathEffect", ctor: class extends JObj {}, sup: "android/graphics/PathEffect",
   methods: { "<init>(F)V": function () {} } });
 mkEnumSet("android/graphics/BlurMaskFilter$Blur", ["NORMAL", "SOLID", "OUTER", "INNER"]);
-class JBlurMaskFilter extends JObj { sigma = 0; }
+class JBlurMaskFilter extends JObj {
+  sigma = 0; style = 0;
+  border() {
+    const sigma = Math.min(this.sigma, 135);
+    if (sigma >= 2) {
+      const window = Math.max(1, Math.floor(sigma * 3 * Math.sqrt(2 * Math.PI) / 4 + 0.5));
+      return window % 2 ? 3 * (window - 1) / 2 : 3 * window / 2 - 1;
+    }
+    const variance = sigma * sigma, q = variance * variance / 4;
+    const bessel = (n: number) => {
+      let term = n ? variance / 2 : 1, sum = term;
+      for (let k = 1; term > 1e-6; k++) { term *= q / (k * (k + n)); sum += term; }
+      return sum;
+    };
+    let previous = bessel(0), current = bessel(1), n = 1;
+    while (current / Math.exp(variance) > 0.01) {
+      const next = previous - 2 * n / variance * current;
+      previous = current; current = next; n++;
+    }
+    return n - 1;
+  }
+}
+function blurMask(ctx: Ctx2D, source: CanvasImageSource, filter: JBlurMaskFilter | null, x = 0, y = 0, scale = 1) {
+  if (filter) ctx.filter = `blur(${Math.min(filter.sigma * scale, 135)}px)`;
+  ctx.drawImage(source, x, y); ctx.filter = "none";
+  if (filter?.style) {
+    ctx.globalCompositeOperation = filter.style === 2 ? "destination-out" : filter.style === 3 ? "destination-in" : "source-over";
+    ctx.drawImage(source, x, y);
+    ctx.globalCompositeOperation = "source-over";
+  }
+}
 rt.markers("android/graphics/MaskFilter");
 rt.register({
   name: "android/graphics/BlurMaskFilter", ctor: JBlurMaskFilter, sup: "android/graphics/MaskFilter",
   methods: {
     "<init>(FLandroid/graphics/BlurMaskFilter$Blur;)V": function (this: JBlurMaskFilter, radius: number, style: JSimpleEnum) {
       if (!(radius > 0)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "radius must be > 0");
-      if (style.ename !== "NORMAL") throw rt.mkThrowable("java/lang/UnsupportedOperationException", "unsupported blur mask style " + style.ename);
+      this.style = style.ord;
       this.sigma = radius * 0.57735 + 0.5;
     },
   },
@@ -877,16 +933,19 @@ rt.register({
   },
 });
 mkEnumSet("android/graphics/Shader$TileMode", ["CLAMP", "REPEAT", "MIRROR", "DECAL"]);
+const bitmapShaderTiles = new WeakMap<JBitmap, { generation: number; tiles: Map<string, CanvasPattern> }>();
 class JBitmapShader extends JShader {
   bitmap!: JBitmap;
   tileX = 0; tileY = 0;
-  private generation = -1;
-  private tiles = new Map<string, CanvasPattern>();
   private cached: CanvasPattern | null = null;
   private cacheKey = "";
   draw(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): void {
     const bitmap = this.bitmap;
-    if (this.generation !== bitmap.genId) { this.generation = bitmap.genId; this.tiles.clear(); this.cached = null; }
+    let cache = bitmapShaderTiles.get(bitmap);
+    if (!cache || cache.generation !== bitmap.genId) {
+      cache = { generation: bitmap.genId, tiles: new Map() };
+      bitmapShaderTiles.set(bitmap, cache);
+    }
     const inverse = ctx.getTransform().inverse();
     const corners = [[0, 0], [ctx.canvas.width, 0], [0, ctx.canvas.height], [ctx.canvas.width, ctx.canvas.height]]
       .map(([x, y]) => inverse.transformPoint({ x, y }));
@@ -901,17 +960,21 @@ class JBitmapShader extends JShader {
     const ys = segments(this.tileY, bitmap.h, Math.min(...corners.map(p => p.y)), Math.max(...corners.map(p => p.y)));
     for (const [x0, x1, sx, sw] of xs) for (const [y0, y1, sy, sh] of ys) {
       if (x1 <= x0 || y1 <= y0) continue;
-      const key = `${sx},${sy},${sw},${sh}`;
-      let pattern = this.tiles.get(key);
+      const nx = this.tileX === 2 ? 2 : 1, ny = this.tileY === 2 ? 2 : 1;
+      const key = `${sx},${sy},${sw},${sh},${nx},${ny}`;
+      let pattern = cache.tiles.get(key);
       if (!pattern) {
-        const nx = this.tileX === 2 ? 2 : 1, ny = this.tileY === 2 ? 2 : 1;
-        const tile = new OffscreenCanvas(sw * nx, sh * ny), c = tile.getContext("2d")!;
-        for (let x = 0; x < nx; x++) for (let y = 0; y < ny; y++) {
-          c.setTransform(x ? -1 : 1, 0, 0, y ? -1 : 1, x ? sw * 2 : 0, y ? sh * 2 : 0);
-          c.drawImage(bitmap.canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+        let tile = bitmap.canvas;
+        if (sx !== 0 || sy !== 0 || sw !== bitmap.w || sh !== bitmap.h || nx !== 1 || ny !== 1) {
+          tile = new OffscreenCanvas(sw * nx, sh * ny);
+          const c = tile.getContext("2d")!;
+          for (let x = 0; x < nx; x++) for (let y = 0; y < ny; y++) {
+            c.setTransform(x ? -1 : 1, 0, 0, y ? -1 : 1, x ? sw * 2 : 0, y ? sh * 2 : 0);
+            c.drawImage(bitmap.canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+          }
         }
         pattern = ctx.createPattern(tile, "repeat")!;
-        this.tiles.set(key, pattern);
+        cache.tiles.set(key, pattern);
       }
       ctx.fillStyle = pattern;
       ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
@@ -1132,11 +1195,11 @@ export class JBitmap extends JObj {
   w = 0; h = 0;
   density = device.densityDpi;
   recycled = false;
-  /** AOSP's NATIVE config numbering (ALPHA_8=1 … ARGB_8888=5, RGBA_F16=6, HARDWARE=7), which is
-   *  not Bitmap.Config's ordinal. Everything we back is 8888. */
+  /** AOSP's native config numbering, not Bitmap.Config's ordinal. */
   config = 5;
   hasAlpha = true; premultiplied = true; immutable = false; mipmap = false;
   genId = 0;
+  get rowBytes() { return this.w * (this.config === 1 ? 1 : 4); }
   private cv: OffscreenCanvas | null = null;
   private cx: OffscreenCanvasRenderingContext2D | null = null;
   private drawingCtx: OffscreenCanvasRenderingContext2D | null = null;
@@ -1209,18 +1272,41 @@ export class JBitmap extends JObj {
     return b;
   }
 }
+export function extractBitmapAlpha(src: JBitmap, paint: JPaint | null, offsets: Int32Array | null): JBitmap {
+  if (src.recycled) throw rt.mkThrowable("java/lang/IllegalStateException", "Can't extractAlpha on a recycled bitmap");
+  const filter = paint?.maskFilter ?? null, border = filter && filter.style !== 3 ? filter.border() : 0;
+  const b = JBitmap.create(src.w + 2 * border, src.h + 2 * border);
+  b.config = 1; b.density = src.density;
+  if (filter) {
+    const ctx = b.ctx;
+    blurMask(ctx, src.canvas, filter, border, border);
+    ctx.globalCompositeOperation = "source-in"; ctx.fillStyle = "#000"; ctx.fillRect(0, 0, b.w, b.h);
+    ctx.globalCompositeOperation = "source-over";
+  } else {
+    const source = src.pixels(), target = b.pixels();
+    for (let i = 3; i < target.length; i += 4) target[i] = source[i];
+  }
+  if (offsets && offsets.length >= 2) { offsets[0] = -border; offsets[1] = -border; }
+  return b;
+}
 function bitmapBuffer(bitmap: JBitmap, buffer: JBuffer, from: boolean): void {
   if (bitmap.recycled || bitmap.config === 7) throw rt.mkThrowable("java/lang/IllegalStateException", "Bitmap pixels unavailable");
   if (!buffer) rt.npe();
   if (!["ByteBuffer", "ShortBuffer", "IntBuffer"].some((name) => rt.iof(buffer, "java/nio/" + name)))
     throw rt.mkThrowable("java/lang/RuntimeException", "unsupported Buffer subclass");
-  const length = bitmap.w * bitmap.h * 4;
+  const length = bitmap.rowBytes * bitmap.h;
   if ((buffer.lim - buffer.pos) * 2 ** buffer.elemShift < length)
     throw rt.mkThrowable("java/lang/RuntimeException", "Buffer not large enough for pixels");
   const view = buffer.dv, bytes = u8(view, buffer.pos * 2 ** buffer.elemShift, length);
   const pixels = bitmap.pixels(), alpha = !bitmap.hasAlpha ? 1 : bitmap.premultiplied ? 0 : 2;
-  if (from) { copyBitmapPixels(bytes, pixels, alpha, true); bitmap.commit(0, 0, bitmap.w, bitmap.h); }
+  if (bitmap.config === 1) {
+    for (let i = 0; i < length; i++) {
+      if (from) pixels[i * 4 + 3] = bytes[i];
+      else bytes[i] = pixels[i * 4 + 3];
+    }
+  } else if (from) copyBitmapPixels(bytes, pixels, alpha, true);
   else copyBitmapPixels(pixels, bytes, alpha, false);
+  if (from) bitmap.commit(0, 0, bitmap.w, bitmap.h);
   buffer.pos += length >> buffer.elemShift;
 }
 
@@ -1285,20 +1371,21 @@ export const bitmapMethods: NativeSpec["methods"] = {
       for (let i = 0; i < d.length; i += 4) putArgb(d, i, c);
       this.commit(0, 0, this.w, this.h);
     },
-    "extractAlpha()Landroid/graphics/Bitmap;": function (this: JBitmap) { return this; },
+    "extractAlpha()Landroid/graphics/Bitmap;": function (this: JBitmap) { return extractBitmapAlpha(this, null, null); },
+    "extractAlpha(Landroid/graphics/Paint;[I)Landroid/graphics/Bitmap;": function (this: JBitmap, paint: JPaint | null, offsets: Int32Array | null) { return extractBitmapAlpha(this, paint, offsets); },
     "copy(Landroid/graphics/Bitmap$Config;Z)Landroid/graphics/Bitmap;": function (this: JBitmap) {
       const b = JBitmap.create(this.w, this.h);
       b.ctx.drawImage(this.canvas, 0, 0);
       return b;
     },
-    "getConfig()Landroid/graphics/Bitmap$Config;": () => bitmapConfigs[3],
+    "getConfig()Landroid/graphics/Bitmap$Config;": function (this: JBitmap) { return bitmapConfigs[this.config === 1 ? 0 : 3]; },
     "hasAlpha()Z": function (this: JBitmap) { return this.hasAlpha ? 1 : 0; },
     "setHasAlpha(Z)V": function (this: JBitmap, v: number) { this.hasAlpha = !!v; },
     "setPremultiplied(Z)V": function (this: JBitmap, v: number) { this.premultiplied = !!v; },
     "isMutable()Z": function (this: JBitmap) { return this.immutable ? 0 : 1; },
-    "getByteCount()I": function (this: JBitmap) { return this.w * this.h * 4; },
-    "getAllocationByteCount()I": function (this: JBitmap) { return this.w * this.h * 4; },
-    "getRowBytes()I": function (this: JBitmap) { return this.w * 4; },
+    "getByteCount()I": function (this: JBitmap) { return this.rowBytes * this.h; },
+    "getAllocationByteCount()I": function (this: JBitmap) { return this.rowBytes * this.h; },
+    "getRowBytes()I": function (this: JBitmap) { return this.rowBytes; },
     "compress(Landroid/graphics/Bitmap$CompressFormat;ILjava/io/OutputStream;)Z": async function (this: JBitmap, fmt: unknown, q: number, out: unknown) {
       const blob = await this.canvas.convertToBlob({ type: "image/png" });
       const bytes = new Int8Array(await blob.arrayBuffer());
@@ -1382,9 +1469,53 @@ export class JCanvas extends JObj {
       ctx.fillStyle = p.fillStyle(ctx) as string;
     }
   }
+  private blurLayer: { source: JCanvas; target: OffscreenCanvasRenderingContext2D; paint: JPaint } | null = null;
+  drawMask(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke?: (ctx: typeof this.ctx) => void) {
+    const ctx = this.ctx, w = ctx.canvas.width, h = ctx.canvas.height, m = ctx.getTransform();
+    const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
+    if (!w || !h || !scale) return;
+    let layer = this.blurLayer;
+    if (!layer || layer.source.w !== w || layer.source.h !== h) {
+      const source = new OffscreenCanvas(w, h).getContext("2d")!;
+      layer = this.blurLayer = { source: JCanvas.wrap(source, w, h), target: new OffscreenCanvas(w, h).getContext("2d")!, paint: new JPaint() };
+    }
+    const source = layer.source.ctx, target = layer.target;
+    source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
+    copyPaint(p, layer.paint);
+    layer.paint.maskFilter = null; layer.paint.blend = null; layer.paint.shadowRadius = 0;
+    layer.paint.color = -1; layer.paint.shader = layer.paint.shaderObj = null; layer.paint.filterColor = null; layer.paint.filterMatrix = null;
+    if (stroke) layer.source.drawShape(layer.paint, fill, stroke);
+    else fill(source);
+    target.clearRect(0, 0, w, h);
+    blurMask(target, source.canvas, p.maskFilter, 0, 0, scale);
+    target.globalCompositeOperation = "source-in";
+    try {
+      if (p.shader || p.shaderObj) {
+        source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
+        copyPaint(p, layer.paint);
+        layer.paint.maskFilter = null; layer.paint.blend = null; layer.paint.shadowRadius = 0; layer.paint.style = 0;
+        const inverse = m.inverse();
+        const corners = [[0, 0], [w, 0], [0, h], [w, h]].map(([x, y]) => inverse.transformPoint({ x, y }));
+        const left = Math.min(...corners.map(p => p.x)), top = Math.min(...corners.map(p => p.y));
+        layer.source.drawShape(layer.paint, c => c.fillRect(left, top, Math.max(...corners.map(p => p.x)) - left, Math.max(...corners.map(p => p.y)) - top), () => {});
+        target.drawImage(source.canvas, 0, 0);
+      } else {
+        target.fillStyle = p.fillStyle(target);
+        target.fillRect(0, 0, w, h);
+      }
+    } finally { target.globalCompositeOperation = "source-over"; }
+    ctx.save();
+    const shadow = beginPaintShadow(ctx, p);
+    try {
+      if (p.blend) ctx.globalCompositeOperation = p.blend;
+      ctx.resetTransform(); ctx.drawImage(target.canvas, 0, 0);
+    } finally { if (shadow) ctx.restore(); ctx.restore(); }
+  }
   drawShape(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke: (ctx: typeof this.ctx) => void) {
+    if (p.maskFilter?.style) return this.drawMask(p, fill, stroke);
     // A blended paint owns the composite op only for its own ops — restore it straight after,
     // so a CLEAR fill can never leak into the next drawImage/drawText and erase it.
+    const shadow = beginPaintShadow(this.ctx, p);
     const prev = p.blend ? this.ctx.globalCompositeOperation : null;
     const filter = p.maskFilter ? this.ctx.filter : null;
     if (p.maskFilter) {
@@ -1407,6 +1538,7 @@ export class JCanvas extends JObj {
     } finally {
       if (prev) this.ctx.globalCompositeOperation = prev;
       if (filter !== null) this.ctx.filter = filter;
+      if (shadow) this.ctx.restore();
     }
   }
   private shaderCtx: (typeof this.ctx) | null = null;
@@ -1528,8 +1660,24 @@ function drawRoundRect(this: JCanvas, l: number, t: number, r: number, b: number
 }
 function drawBitmapRect(this: JCanvas, b: JBitmap, src: JRect | null, dst: JRect | JRectF, p: JPaint | null) {
   const s = src ?? { left: 0, top: 0, right: b.w, bottom: b.h };
-  this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null, p?.filterMatrix ?? null), s.left, s.top, s.right - s.left, s.bottom - s.top,
-    dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top);
+  drawBitmap(this, b, p, (ctx, image) => ctx.drawImage(image, s.left, s.top, s.right - s.left, s.bottom - s.top,
+    dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top));
+}
+const defaultBitmapPaint = new JPaint();
+function drawPaint(this: JCanvas, paint: JPaint) {
+  const ctx = this.ctx, inverse = ctx.getTransform().inverse();
+  const points = [[0, 0], [ctx.canvas.width, 0], [0, ctx.canvas.height], [ctx.canvas.width, ctx.canvas.height]]
+    .map(([x, y]) => inverse.transformPoint({ x, y }));
+  if (!points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) return;
+  const l = Math.min(...points.map(p => p.x)), t = Math.min(...points.map(p => p.y));
+  const p = new JPaint(); copyPaint(paint, p); p.style = 0; p.maskFilter = null;
+  this.drawShape(p, c => c.fillRect(l, t, Math.max(...points.map(p => p.x)) - l, Math.max(...points.map(p => p.y)) - t), () => {});
+}
+function drawBitmap(canvas: JCanvas, b: JBitmap, paint: JPaint | null, draw: (ctx: Ctx2D, image: OffscreenCanvas) => void) {
+  if (b.config === 1) {
+    const mask = (ctx: Ctx2D) => draw(ctx, b.canvas);
+    canvas.drawMask(paint ?? defaultBitmapPaint, mask);
+  } else draw(canvas.ctx, tintedBmp(b, paint?.filterColor ?? null, paint?.filterMatrix ?? null));
 }
 /** the (x, y, w, h) region of `src` as a new bitmap, through `m` when given */
 function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m: JMatrix | null = null) {
@@ -1542,6 +1690,7 @@ function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m:
 /** Exported so AOSP's own Canvas bytecode reaches the same bodies through its nDraw*
  *  delegates (src/android/delegates.ts) rather than a second copy of each. */
 export const canvasMethods: NativeSpec["methods"] = {
+  "drawPaint(Landroid/graphics/Paint;)V": drawPaint,
   "<init>(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
   "getWidth()I": function (this: JCanvas) { return this.w; },
   "getHeight()I": function (this: JCanvas) { return this.h; },
@@ -1701,7 +1850,7 @@ export const canvasMethods: NativeSpec["methods"] = {
     drawTextImpl(this, charsToString(c, off, n), x, y, p);
   },
   "drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V": function (this: JCanvas, b: JBitmap, x: number, y: number, p: JPaint | null) {
-    this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null, p?.filterMatrix ?? null), x, y);
+    drawBitmap(this, b, p, (ctx, image) => ctx.drawImage(image, x, y));
   },
   "drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/Rect;Landroid/graphics/Paint;)V": drawBitmapRect,
   "drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V": drawBitmapRect,
@@ -1709,10 +1858,13 @@ export const canvasMethods: NativeSpec["methods"] = {
     function (this: JCanvas, b: JBitmap, m: JMatrix, p: JPaint | null) {
       this.ctx.save();
       if (m) this.ctx.transform(...m.m);
-      this.ctx.drawImage(tintedBmp(b, p?.filterColor ?? null, p?.filterMatrix ?? null), 0, 0);
-      this.ctx.restore();
+      try { drawBitmap(this, b, p, (ctx, image) => ctx.drawImage(image, 0, 0)); }
+      finally { this.ctx.restore(); }
     },
-  ...noops("<init>()V", "enableZ()V", "disableZ()V", "drawPicture(Landroid/graphics/Picture;)V",
+  "drawPicture(Landroid/graphics/Picture;)V": function (this: JCanvas, picture: JPicture) { drawPicture(this, picture); },
+  "drawPicture(Landroid/graphics/Picture;Landroid/graphics/RectF;)V": function (this: JCanvas, picture: JPicture, dst: JRect) { drawPicture(this, picture, dst); },
+  "drawPicture(Landroid/graphics/Picture;Landroid/graphics/Rect;)V": function (this: JCanvas, picture: JPicture, dst: JRect) { drawPicture(this, picture, dst); },
+  ...noops("<init>()V", "enableZ()V", "disableZ()V",
     "setDrawFilter(Landroid/graphics/DrawFilter;)V"),
   ...stubs(1, "clipOutRect(FFFF)Z", "clipOutRect(IIII)Z", "clipOutRect(Landroid/graphics/Rect;)Z",
     "clipOutPath(Landroid/graphics/Path;)Z", "isHardwareAccelerated()Z"),
@@ -1731,28 +1883,35 @@ export const CAPS = ["butt", "round", "square"] as const;
 export const JOINS = ["miter", "round", "bevel"] as const;
 function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
   cv.recordText(s, x, y, p.textSize, p.textAlignN);
-  const ctx = cv.ctx;
-  ctx.font = p.font();
-  ctx.fillStyle = p.fillStyle(ctx) as string;
-  ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
-  ctx.textBaseline = "alphabetic";
-  if (p.letterSpacingEm && "letterSpacing" in ctx) (ctx as any).letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
-  ctx.fillText(s, x, y);
-  if (p.letterSpacingEm && "letterSpacing" in ctx) (ctx as any).letterSpacing = "0px";
-  if (p.underline) {
-    const w = measureText(p, s);
-    const sx = p.textAlignN === 1 ? x - w / 2 : p.textAlignN === 2 ? x - w : x;
-    ctx.fillRect(sx, y + p.textSize * 0.08, w, Math.max(1, p.textSize / 16));
-  }
+  const ctx = cv.ctx, shadow = beginPaintShadow(cv.ctx, p);
+  try {
+    ctx.font = p.font();
+    if ("lang" in ctx) ctx.lang = p.language;
+    ctx.fillStyle = p.fillStyle(ctx) as string;
+    ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
+    ctx.textBaseline = "alphabetic";
+    if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
+    if (p.style !== 1) ctx.fillText(s, x, y);
+    if (p.style === 1 || p.style === 2) {
+      cv.prep(p, true);
+      ctx.strokeText(s, x, y);
+    }
+    if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = "0px";
+    if (p.underline) {
+      const w = measureText(p, s);
+      const sx = p.textAlignN === 1 ? x - w / 2 : p.textAlignN === 2 ? x - w : x;
+      ctx.fillRect(sx, y + p.textSize * 0.08, w, Math.max(1, p.textSize / 16));
+    }
+  } finally { if (shadow) ctx.restore(); }
 }
-const tintCache = new WeakMap<JBitmap, Map<number | string, OffscreenCanvas>>();
+const tintCache = new WeakMap<JBitmap, { generation: number; images: Map<number | string, OffscreenCanvas> }>();
 /** `b` through a paint's colour filter — recoloured SRC_IN with `tint`, or every pixel through a
  *  4x5 colour `matrix` — cached per (bitmap, filter); the bitmap itself when there is none */
-export function tintedBmp(b: JBitmap, tint: number | null, matrix: Float32Array | null = null): OffscreenCanvas {
-  if (tint === null && matrix === null) return b.canvas;
-  let m = tintCache.get(b);
-  if (!m) tintCache.set(b, (m = new Map()));
-  const key = matrix ? matrix.join(",") : tint!;
+export function tintedBmp(b: JBitmap, tint: number | null, matrix: Float32Array | null = null, mode = "SRC_IN"): OffscreenCanvas {
+  if (matrix === null && (tint === null || mode === "DST" || mode === "ADD" && !(tint >>> 24))) return b.canvas;
+  let cache = tintCache.get(b);
+  if (!cache || cache.generation !== b.genId) tintCache.set(b, cache = { generation: b.genId, images: new Map() });
+  const m = cache.images, key = matrix ? matrix.join(",") : `${mode}:${tint}`;
   let t = m.get(key);
   if (!t) {
     t = new OffscreenCanvas(b.w, b.h);
@@ -1768,8 +1927,16 @@ export function tintedBmp(b: JBitmap, tint: number | null, matrix: Float32Array 
         d[i + 3] = k[15] * r + k[16] * g + k[17] * bl + k[18] * a + k[19];
       }
       c.putImageData(img, 0, 0);
+    } else if (mode === "CLEAR") c.clearRect(0, 0, b.w, b.h);
+    else if (mode === "MULTIPLY") {
+      const img = c.getImageData(0, 0, b.w, b.h), d = img.data;
+      const r = (tint! >>> 16 & 255) / 255, g = (tint! >>> 8 & 255) / 255, blue = (tint! & 255) / 255, alpha = (tint! >>> 24) / 255;
+      for (let i = 0; i < d.length; i += 4) { d[i] *= r; d[i + 1] *= g; d[i + 2] *= blue; d[i + 3] *= alpha; }
+      c.putImageData(img, 0, 0);
     } else {
-      c.globalCompositeOperation = "source-in";
+      const composite = COMPOSITE[mode];
+      if (!composite) throw rt.mkThrowable("java/lang/UnsupportedOperationException", `bitmap tint mode ${mode}`);
+      c.globalCompositeOperation = composite;
       c.fillStyle = cssColor(tint!);
       c.fillRect(0, 0, b.w, b.h);
     }
@@ -1787,7 +1954,7 @@ export function matrixColor(k: Float32Array, color: number): number {
 rt.register({ name: "android/graphics/Canvas", ctor: JCanvas, methods: canvasMethods });
 // android.graphics.Outline: the shape a RenderNode clips to (clipToOutline) — Compose's
 // Modifier.clip(shape) is exactly this, so a round button's ripple and children stay inside it.
-class JOutline extends JObj {
+export class JOutline extends JObj {
   kind: 0 | 1 | 2 | 3 = 0;   // empty | rect/roundRect | oval | path
   l = 0; t = 0; r = 0; b = 0; rad = 0; alpha = 1;
   path: JPath | null = null;
@@ -1816,7 +1983,7 @@ rt.register({
     "setConvexPath(Landroid/graphics/Path;)V": function (this: JOutline, p: JPath) { this.kind = 3; this.path = p; },
     "setEmpty()V": function (this: JOutline) { this.kind = 0; this.path = null; },
     "offset(II)V": function (this: JOutline, dx: number, dy: number) { this.l += dx; this.r += dx; this.t += dy; this.b += dy; },
-    "canClip()Z": function (this: JOutline) { return this.kind === 3 ? 0 : 1; },
+    "canClip()Z": () => 1,
     "isEmpty()Z": function (this: JOutline) { return this.kind === 0 ? 1 : 0; },
     "getAlpha()F": function (this: JOutline) { return this.alpha; },
     "setAlpha(F)V": function (this: JOutline, a: number) { this.alpha = asF(a); },
@@ -1888,6 +2055,7 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "beginRecording(II)Landroid/graphics/Canvas;": function (this: JPicture, w: number, h: number) {
+      this.node.w = w; this.node.h = h;
       return vcall(this.node, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", w, h);
     },
     "endRecording()V": function (this: JPicture) { return vcall(this.node, "endRecording", "()V"); },
@@ -1898,6 +2066,18 @@ rt.register({
     },
   },
 });
+function drawPicture(canvas: JCanvas, picture: JPicture, dst?: JRect) {
+  const ctx = canvas.ctx, node = picture.node;
+  node.hasDL = true;
+  ctx.save();
+  try {
+    if (dst) {
+      ctx.translate(dst.left, dst.top);
+      if (node.w > 0 && node.h > 0) ctx.scale((dst.right - dst.left) / node.w, (dst.bottom - dst.top) / node.h);
+    }
+    if (node.hasDL) for (const op of node.ops) op(ctx);
+  } finally { ctx.restore(); }
+}
 function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
   if (!n.hasDL) return;
   ctx.save();
@@ -2129,6 +2309,7 @@ async function streamBytes(s: unknown): Promise<Uint8Array> {
 }
 export async function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null,
   onHeader?: (width: number, height: number) => Promise<readonly [number, number]>): Promise<JBitmap | null> {
+  if (opts) { opts.outWidth = opts.outHeight = -1; opts.outMimeType = null; opts.outConfig = opts.outColorSpace = null; }
   let img: ImageBitmap | undefined;
   try {
     const blob = new Blob([bytes as BlobPart]);
@@ -2161,6 +2342,14 @@ export async function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null,
 }
 async function decodeStream(stream: unknown, pad: JRect | null = null, opts: JBFOptions | null = null) {
   const bitmap = stream ? await decodeBytes(await streamBytes(stream), opts) : null;
+  if (bitmap && pad) pad.left = pad.top = pad.right = pad.bottom = -1;
+  return bitmap;
+}
+async function decodeFileDescriptor(fd: JFileDescriptor | null, pad: JRect | null = null, opts: JBFOptions | null = null) {
+  if (!fd) throw rt.mkThrowable("java/lang/NullPointerException", "fd");
+  const bytes = await javaFdBytes(fd.fd);
+  const bitmap = await decodeBytes(bytes ?? new Uint8Array(0), opts);
+  if (!bitmap && opts?.inBitmap) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Problem decoding into existing bitmap");
   if (bitmap && pad) pad.left = pad.top = pad.right = pad.bottom = -1;
   return bitmap;
 }
@@ -2198,6 +2387,8 @@ rt.register({
         decodeBytes(u8(b, off, len), o),
     "static decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;": decodeStream,
     "static decodeStream(Ljava/io/InputStream;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeStream,
+    "static decodeFileDescriptor(Ljava/io/FileDescriptor;)Landroid/graphics/Bitmap;": decodeFileDescriptor,
+    "static decodeFileDescriptor(Ljava/io/FileDescriptor;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeFileDescriptor,
     "static decodeResource(Landroid/content/res/Resources;I)Landroid/graphics/Bitmap;": decodeResource,
     "static decodeResource(Landroid/content/res/Resources;ILandroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeResource,
     "static decodeResourceStream(Landroid/content/res/Resources;Landroid/util/TypedValue;Ljava/io/InputStream;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeResourceStream,

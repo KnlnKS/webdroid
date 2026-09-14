@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { eglInit } from "../src/native/egl";
 import { hostFn, type ArgReader } from "../src/native/host";
+import { curThread } from "../src/jvm/natives/jlang";
 import type { Cpu } from "../src/native/cpu";
 
 eglInit();
@@ -16,7 +17,7 @@ function args(ints: number[] = [], longs: bigint[] = [], strings: string[] = [])
   };
 }
 
-const cpu = null as unknown as Cpu;
+const cpu = { jthread: curThread } as Cpu;
 
 test("EGL advertises and resolves presentation timestamps", () => {
   const query = hostFn("libEGL.so", "eglQueryString");

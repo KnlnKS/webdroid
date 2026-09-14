@@ -50,7 +50,7 @@ async function buildSearchView(sv: JSearchView, set: JAttrSet | null) {
 
   for (const [part, attr] of SEARCH_ICONS) {
     const v = byName(part), d = val(attr);
-    if (v instanceof JImageView && d) v.drawable = await loadDrawableRV(res, d, sv.theme);
+    if (v instanceof JImageView && d) await v.setDrawable(await loadDrawableRV(res, d, sv.theme));
   }
   for (const [part, attr] of SEARCH_BACKGROUNDS) {
     const v = byName(part), d = val(attr);

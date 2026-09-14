@@ -41,7 +41,7 @@ rt.register({
   },
 });
 /** AOSP Gravity.getAbsoluteGravity: START/END resolve by layout direction, the relative bit drops */
-function absGravity(g: number, ld = 0): number {
+export function absGravity(g: number, ld = 0): number {
   if (g & 0x00800000) {
     const rtl = ld === 1;
     if ((g & G.START) === G.START) g = (g & ~G.START) | (rtl ? 5 : 3);
@@ -52,7 +52,7 @@ function absGravity(g: number, ld = 0): number {
 }
 /** AOSP Gravity.apply: per axis AXIS_PULL_BEFORE(2)/AXIS_PULL_AFTER(4) select the edge, both
  *  mean FILL, neither means centre; AXIS_CLIP(8) clips the result to the container */
-function gravityApply(g: number, w: number, h: number, c: JRect, xAdj: number, yAdj: number, out: JRect) {
+export function gravityApply(g: number, w: number, h: number, c: JRect, xAdj: number, yAdj: number, out: JRect) {
   const axis = (bits: number, dim: number, lo: number, hi: number, adj: number): [number, number] => {
     const pull = bits & 6, clip = bits & 8;
     if (pull === 6) return [lo + adj, hi + adj];
