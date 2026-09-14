@@ -3,7 +3,7 @@ import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
 import { newObj, vcall, curThread, mainThread, setCurThread, JThread } from "../src/jvm/natives/jlang";
-import { JView, dispatchAttached, dispatchDetached } from "../src/android/view";
+import { JView, JViewGroup, attachView, detachView, addUnattachedView, dispatchAttached, dispatchDetached } from "../src/android/view";
 import { onMain } from "../src/android/mainloop";
 
 rt.linkNatives();
@@ -156,4 +156,28 @@ test("removeDetachedView finishes window removal after temporary parent detachme
     await vcall(parent, "addView", "(Landroid/view/View;)V", child);
   });
   await onMain(() => expect(child.attached).toBe(true));
+});
+
+
+test("native mutations finish the same lifecycle before Java reattachment", async () => {
+  const parent = rt.make("android/widget/FrameLayout"), child = rt.make("android/view/View");
+  const other = rt.make("android/widget/FrameLayout");
+  if (!(parent instanceof JViewGroup) || !(other instanceof JViewGroup) || !(child instanceof JView)) throw new Error("Invalid view delegates");
+  addUnattachedView(parent, child);
+  const events: string[] = [];
+  Object.assign(child, {
+    [mangleMethod("onDetachedFromWindow", "()V")]: async () => { await Promise.resolve(); events.push("detach"); },
+    [mangleMethod("onAttachedToWindow", "()V")]: async () => { await Promise.resolve(); events.push("attach"); },
+  });
+  await onMain(async () => {
+    await dispatchAttached(parent); await dispatchAttached(other); events.length = 0;
+    await detachView(parent, child);
+    await vcall(parent, "addView", "(Landroid/view/View;)V", child);
+    expect(events).toEqual(["detach", "attach"]);
+    await attachView(other, child);
+    expect(parent.children).toEqual([]);
+    expect(other.children).toEqual([child]);
+    expect(events).toEqual(["detach", "attach", "detach", "attach"]);
+  });
+  await onMain(() => { expect(child.attached).toBe(true); expect(child.parent).toBe(other); });
 });

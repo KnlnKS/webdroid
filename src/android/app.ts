@@ -10,7 +10,7 @@ import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
-import { requestLayout, type JView, attachView, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
+import { requestLayout, type JView, attachView, detachView, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragmentManager } from "./fragment";
 import { vcall } from "../jvm/natives/jlang";
 import { appHost, jclsNameOf } from "./apphost";
@@ -150,19 +150,19 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setContentView(I)V": async function (this: JActivity, layoutId: number) {
     await ensureDecor(this);
-    this.window.contentParent!.children.length = 0;
+    for (const child of [...this.window.contentParent!.children]) await detachView(this.window.contentParent!, child);
     await inflateLayout(this, layoutId, this.window.contentParent, true);
     requestLayout(this.window.contentParent!);
   },
   "setContentView(Landroid/view/View;)V": async function (this: JActivity, v: JView) {
     await ensureDecor(this);
-    this.window.contentParent!.children.length = 0;
+    for (const child of [...this.window.contentParent!.children]) await detachView(this.window.contentParent!, child);
     if (!v.lp) {
       const lp = rt.make("android/widget/FrameLayout$LayoutParams");
       lp.width = -1; lp.height = -1;
       v.lp = lp;
     }
-    attachView(this.window.contentParent!, v);
+    await attachView(this.window.contentParent!, v);
     requestLayout(this.window.contentParent!);
   },
   "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async function (this: JActivity, v: JView, lp: any) {
@@ -172,7 +172,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async function (this: JActivity, v: JView, lp: any) {
     await ensureDecor(this);
     v.lp = lp;
-    attachView(this.window.contentParent!, v);
+    await attachView(this.window.contentParent!, v);
   },
   "findViewById(I)Landroid/view/View;": function (this: JActivity, id: number) {
     return this.window.decor ? findById(this.window.decor, id) : null;

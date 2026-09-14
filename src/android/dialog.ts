@@ -5,7 +5,7 @@ import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtim
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import {
-  JView, JFrameLP, JLinearLP, attachView, requestLayout, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST,
+  JView, JFrameLP, JLinearLP, attachView, addUnattachedView, detachView, requestLayout, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST,
   specSize, findById, guardCall, dispatchAttached, dispatchDetached
 } from "./view";
 import { JFrameLayout, JLinearLayout } from "./layouts";
@@ -85,9 +85,9 @@ class DialogRoot extends JFrameLayout {
   /** the window's android.R.id.content FrameLayout — appcompat finds it by id, reparents its
    *  children into a sub-decor and swaps the ids, exactly as it does to an activity window */
   content!: JFrameLayout;
-  setContent(v: JView | null) {
-    this.content.children.length = 0;
-    if (v) attachView(this.content, v);
+  async setContent(v: JView | null) {
+    for (const child of [...this.content.children]) await detachView(this.content, child);
+    if (v) await attachView(this.content, v);
   }
   /** the dialog window's own background, from its theme — not a hardcoded white card */
   cardBg: JDrawable | null = null;
@@ -213,7 +213,7 @@ class JDialog extends JObj {
       c.ctx = r.ctx; c.jres = r.jres; c.theme = r.theme;
       c.idNum = 0x01020002;
       const lp = new JFrameLP(); lp.width = -1; lp.height = -2; c.lp = lp;
-      attachView(r, c);
+      addUnattachedView(r, c);
     }
     return this.root;
   }
@@ -248,27 +248,27 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "getContext()Landroid/content/Context;": function (this: JDialog) { return this.jctx; },
   "setContentView(I)V": async function (this: JDialog, layoutId: number) {
     const root = this.ensureRoot();
-    root.setContent(null);
+    await root.setContent(null);
     await inflateLayout(this.jctx, layoutId, root.content, true);
     requestLayout(root.content);
   },
-  "setContentView(Landroid/view/View;)V": function (this: JDialog, v: JView) {
+  "setContentView(Landroid/view/View;)V": async function (this: JDialog, v: JView) {
     const root = this.ensureRoot();
     if (!v.lp) {
       const lp = new JFrameLP();
       lp.width = -1; lp.height = -1;
       v.lp = lp;
     }
-    root.setContent(v);
+    await root.setContent(v);
     requestLayout(root.content);
   },
   "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
-    callSelf(dialogMethods, "setContentView(Landroid/view/View;)V", this, v);
+    return callSelf(dialogMethods, "setContentView(Landroid/view/View;)V", this, v);
   },
   "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
-    attachView(this.ensureRoot().content, v);
+    return attachView(this.ensureRoot().content, v);
   },
   "show()V": async function (this: JDialog) {
     // AOSP: showing again after hide() only makes the decor visible again
@@ -397,7 +397,7 @@ async function buildAlertContent(d: JAlertDialog) {
     t.colors.defColor = -13421773;
     t.padL = t.padR = device.dp(24); t.padT = device.dp(22); t.padB = device.dp(4);
     t.lp = lpFill();
-    attachView(col, t);
+    addUnattachedView(col, t);
   }
   if (d.message) {
     const t = new JTextView();
@@ -407,11 +407,11 @@ async function buildAlertContent(d: JAlertDialog) {
     t.colors.defColor = -10066330;
     t.padL = t.padR = device.dp(24); t.padT = device.dp(d.titleStr ? 8 : 22); t.padB = device.dp(10);
     t.lp = lpFill(1);
-    attachView(col, t);
+    addUnattachedView(col, t);
   }
   if (d.customView) {
     d.customView.lp = lpFill(1);
-    attachView(col, d.customView);
+    await attachView(col, d.customView);
   }
   if (d.items) {
     for (let i = 0; i < d.items.length; i++) {
@@ -431,7 +431,7 @@ async function buildAlertContent(d: JAlertDialog) {
           await d.dismissImpl();
         },
       };
-      attachView(col, t);
+      addUnattachedView(col, t);
     }
   }
   if (d.posText || d.negText || d.neutText) {
@@ -459,17 +459,17 @@ async function buildAlertContent(d: JAlertDialog) {
           await d.dismissImpl();
         },
       };
-      attachView(row, b);
+      addUnattachedView(row, b);
     };
     if (d.neutText) mkBtn(d.neutText, -3, d.neutL);
     if (d.negText) mkBtn(d.negText, -2, d.negL);
     if (d.posText) mkBtn(d.posText, -1, d.posL);
-    attachView(col, row);
+    addUnattachedView(col, row);
   }
   col.lp = new JFrameLP();
   (col.lp as JFrameLP).width = -1;
   (col.lp as JFrameLP).height = -2;
-  d.ensureRoot().setContent(col);
+  await d.ensureRoot().setContent(col);
 }
 const alertMethods: NativeSpec["methods"] = {
   ...dialogMethods,

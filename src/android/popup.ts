@@ -296,7 +296,7 @@ async function pwShow(this: JPopupWindow, x: number, y: number) {
   lp.width = MATCH;
   lp.height = this.content.lp?.height === WRAP ? WRAP : MATCH;
   this.content.lp = lp;
-  attachView(d, this.content);
+  await attachView(d, this.content);
   const dismiss = () => vcall(this, "dismiss", "()V");
   // a focusable popup takes Back and outside touches; an outsideTouchable one only the touches
   addOverlay(d, x, y, this.focusable || this.outsideTouchable, this.focusable ? dismiss : undefined, dismiss);
@@ -354,7 +354,7 @@ async function pwDismiss(this: JPopupWindow) {
   if (d) {
     removeOverlay(d);
     await dispatchDetached(d);
-    if (this.content) detachView(d, this.content);
+    if (this.content) await detachView(d, this.content);
   }
   if (this.dismissL) {
     try { await vcall(this.dismissL, "onDismiss", "()V"); } catch (e) { reportUncaught(e); }

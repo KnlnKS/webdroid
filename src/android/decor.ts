@@ -2,7 +2,7 @@ import { AID } from "./res";
 import type { AppHost } from "./apphost";
 import { JTheme, rvInt, themeOf, themeByName, rvDimen, rvColor } from "./res";
 import { type JDrawable, loadDrawableRV, JColorDrawable } from "./drawable";
-import { JView, JMarginLP, attachView, requestLayout } from "./view";
+import { JView, JMarginLP, addUnattachedView, requestLayout } from "./view";
 import { manifestActivityTheme } from "./pm";
 import { device } from "../shell/config";
 import type { JActivity } from "./app";
@@ -121,7 +121,7 @@ export async function ensureDecor(act: JActivity) {
     const lp = rt.make("android/widget/LinearLayout$LayoutParams");
     lp.width = -1; lp.height = -2;
     bar.lp = lp;
-    attachView(root, bar);
+    addUnattachedView(root, bar);
     act.window.actionBarView = bar;
   } else {
     const sbc = theme.lookup(AID("statusBarColor"));
@@ -138,13 +138,13 @@ export async function ensureDecor(act: JActivity) {
     (lp as any).weight = 1;
     content.lp = lp;
   }
-  attachView(root, content);
+  addUnattachedView(root, content);
   {
     const lp2 = rt.make("android/widget/FrameLayout$LayoutParams");
     lp2.width = -1; lp2.height = -1;
     root.lp = lp2;
   }
-  attachView(decor, root);
+  addUnattachedView(decor, root);
   act.window.decor = decor;
   decor.windowOwner = act.window;
   act.window.contentParent = content;
