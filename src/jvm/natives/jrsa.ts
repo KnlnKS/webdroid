@@ -5,7 +5,7 @@ import { vcall } from "./jlang";
 import { mkBI } from "./jmath";
 import { JKeyGenSpec } from "../../android/security";
 
-export const forge = () => import("node-forge").then((m) => m.default);
+export const forge = () => import("../../forge").then((m) => m.default);
 export const binary = (b: Uint8Array) => { let s = ""; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return s; };
 export const array = (s: string) => Uint8Array.from(s, (c) => c.charCodeAt(0));
 

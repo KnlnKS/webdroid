@@ -34,7 +34,7 @@ export async function apkCertificates(bytes: Uint8Array, zip: Record<string, Uin
   }
   const entries = Object.keys(zip).filter((name) => /^META-INF\/[^/]+\.(RSA|DSA|EC)$/i.test(name));
   if (!entries.length) return [];
-  const forge = (await import("node-forge")).default;
+  const forge = (await import("../forge")).default;
   return entries.flatMap((name) => {
     const block = zip[name];
     let binary = "";
