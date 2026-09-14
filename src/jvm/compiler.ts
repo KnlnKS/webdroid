@@ -219,9 +219,7 @@ class MethodCompiler {
   order: number[] = [];
   leaders = new Set<number>();
   hasTries: boolean;
-  hasBackEdge = false;
   sync = true;
-  src: string[] = [];
 
   constructor(
     private R: Runtime, private dex: DexFile, private info: ClassInfo,
@@ -363,7 +361,8 @@ ${catchBody}
    */
   private typeConsts() {
     const { dex } = this;
-    type Defs = Map<number, Set<Ins>>;
+    // Transfer changes register bindings; only joins create larger definition sets.
+    type Defs = Map<number, ReadonlySet<Ins>>;
     type Arrs = Map<number, "F" | "D">;
 
     // ── block CFG (leaders are already computed by compile())
@@ -463,7 +462,7 @@ ${catchBody}
         } else if (n === "move" || n === "move/from16" || n === "move/16" || n === "move-wide" || n === "move-wide/from16" || n === "move-wide/16"
           || n === "move-object" || n === "move-object/from16" || n === "move-object/16") {
           const src = defs.get(i.b);
-          if (src) defs.set(i.a, new Set(src)); else defs.delete(i.a);
+          if (src) defs.set(i.a, src); else defs.delete(i.a);
         } else {
           const w = this.writtenReg(i);
           if (w >= 0) defs.delete(w);
@@ -496,14 +495,17 @@ ${catchBody}
     for (let wi = 0; wi < work.length; wi++) {
       const lead = work[wi];
       queued.delete(lead);
-      const st = run(lead, clone(inDefs.get(lead)!), new Map(inArrs.get(lead) ?? []), false);
+      const st = run(lead, new Map(inDefs.get(lead)!), new Map(inArrs.get(lead) ?? []), false);
       for (const t of succ.get(lead)!) {
         let changed = false;
         const dst = inDefs.get(t)!;
         for (const [reg, set] of st.defs) {
           const d = dst.get(reg);
-          if (!d) { dst.set(reg, new Set(set)); changed = true; continue; }
-          for (const x of set) if (!d.has(x)) { d.add(x); changed = true; }
+          if (!d) { dst.set(reg, set); changed = true; continue; }
+          if (d === set) continue;
+          let merged: Set<Ins> | undefined;
+          for (const x of set) if (!d.has(x)) (merged ??= new Set(d)).add(x);
+          if (merged) { dst.set(reg, merged); changed = true; }
         }
         const da = inArrs.get(t);
         if (da === null || da === undefined) { inArrs.set(t, new Map(st.arr)); changed = true; }
@@ -513,13 +515,7 @@ ${catchBody}
     }
 
     // ── one marking pass per block, from its settled entry state
-    for (const l of leaders) run(l, clone(inDefs.get(l)!), new Map(inArrs.get(l) ?? []), true);
-
-    function clone(d: Defs): Defs {
-      const o: Defs = new Map();
-      for (const [k, v] of d) o.set(k, new Set(v));
-      return o;
-    }
+    for (const l of leaders) run(l, new Map(inDefs.get(l)!), new Map(inArrs.get(l) ?? []), true);
   }
   private writtenReg(i: Ins): number {
     const n = i.name;
@@ -713,7 +709,6 @@ ${catchBody}
   }
 
   private jumpStr(target: number, from: number): string {
-    if (target <= from) this.hasBackEdge = true;
     const suspend = this.cold ? "R.su($th);$s=1;await $fu;R.st($th);" : `$p=$fu;$resume=${-target-1};break $dispatch;`;
     const fuel = !this.sync && target <= from ? `if(--R.fuel<0){$fu=R.refuel();if($fu){${suspend}}}` : "";
     return `${fuel}pc=${target};${this.cold ? "return" : "continue"};`;
