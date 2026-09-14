@@ -3410,3 +3410,181 @@ All raw logs, per-step JSON, screenshots and runnable benchmark snapshots are re
 under `webdroid-shots/performance-audit/`, including separate original and repeat
 Flappy Bird comparisons. Temporary baseline checkout and owned test servers are cleaned
 up after evidence preservation.
+
+## September 14, 2026: staged runtime and presentation replacements
+
+This investigation starts at `b16d705` on `codex/perf-integration`. Independent
+`codex/perf-*` worktrees preserve each candidate; `.worktrees/baseline` from the
+earlier investigation is untouched. Performance windows run exclusively: other
+agents pause builds, tests and browsers while continuing source review. The gate
+for a large replacement is a reproducible 15% application metric improvement,
+with no repeatable >5% responsiveness/startup or >10% retained-memory regression.
+Component benchmarks establish mechanisms, not application gains.
+
+### Measurement corrections and backend attribution
+
+The E2E probe now captures counters and elapsed time before PNG encoding. Its
+historical `fps` field remains shell ticks/s; `glFps` and `presentFps` distinguish
+GL callback/swap completion and atomic framebuffer transfers. The latter counter
+is unavailable on older served revisions. `perfsum` sums reset compilation
+counters instead of treating them as monotonic gauges.
+
+`scripts/perf-browser.ts` measures fresh contexts after the existing flow setup
+and a three-second warmup. A single in-page operation brackets the 15-second
+counter window, samples frame intervals and queue state, and optionally cycles
+existing input actions. Screenshot encoding, explicit GC and process inspection
+remain outside it. The default omits expensive E2E tracking wrappers. CDP CPU
+counters cover a slightly wider interval. Post-GC heap/backing-store samples do
+not measure all GPU or operating-system memory. Input-to-next-presentation is
+explicitly an opportunity proxy; it cannot prove the input changed those pixels.
+Bitmap transfers record the application's atomic publication boundary, not a
+physical display timestamp. Child runtimes expose missing/native requirements,
+but some do not expose logs, queues or performance counters.
+
+The historical software flags force SwiftShader with GraphiteDawnVulkan. Merely
+dropping those flags still leaves Playwright's headless shell on SwiftShader;
+that diagnostic is not hardware evidence. Full bundled Chromium 151.0.7922.34,
+`channel: "chromium"`, with `--enable-unsafe-swiftshader` removed from default
+arguments, verifies Apple M4 Pro / ANGLE Metal in both browser SystemInfo and DOM
+and Offscreen WebGL1/2, with correct pixel readback. It uses GraphiteDawnMetal.
+The runner's `--gpu hardware` selects this configuration and reports the actual
+backend. Results across these backends are kept separate.
+
+### Rendering experiments rejected before separate composition
+
+Canonical snapshot publication uses nondestructive `createImageBitmap` for the
+retained GLSurfaceView buffer. A generation guards suspended callbacks against
+resize, pause and detach; the owner closes replaced images. Destroyed EGL buffers
+retain transfer semantics. `transferToImageBitmap` clears the producer even when
+`preserveDrawingBuffer` is true, as specified by the
+[HTML canvas standard](https://html.spec.whatwg.org/multipage/canvas.html#dom-offscreencanvas-transfertoimagebitmap).
+[EGL preservation rules](https://registry.khronos.org/EGL/specs/EGLTechNote0001.html)
+distinguish preserved color buffers from destroyed ones; ancillary preservation
+cannot be inferred from that setting.
+
+Three alternating Flappy title pairs under the historical software configuration
+measured median presentation rate 27.13 -> 27.80/s for snapshot-only publication
+(`6cb9423`). Its p95 interval worsened from roughly 38 ms to 52 ms. The experiment
+does not pass the performance gate. Its initial virtual onDraw placement also
+changed subclass drawing order; later snapshot candidates correct that defect.
+
+Three additional pairs evaluated CPU Canvas2D backing (`8d5fa73`): 28.60 ->
+32.87/s, but main-thread TaskDuration rose from 0.266 to 15.13 seconds in a
+15-second window. Drawing consumed nearly the entire window. This is a
+responsiveness regression, despite the apparent FPS gain, so the trial is rejected.
+
+Combining nondestructive snapshots and CPU backing with corrected virtual draw
+order (`aa3d8cb`) retained the same failure mechanism. The first software title
+pair measured 30.19 -> 32.28/s while main-thread time rose 0.244 -> 15.087 s.
+A fixed-input window measured 30.19 -> 32.39/s, with input-next-presentation proxy
+median 22.2 -> 30.7 ms. Repeating seven pairs cannot rescue this independently
+reproduced blocking mechanism; further software title pairs were stopped.
+On verified Metal, title and fixed-input windows remained near 60/s on both
+revisions, without a meaningful FPS gain. All eight completed captures are
+visible and alive with advancing ticks and no foreground draw/layout errors.
+Their final gameplay images show Game Over on both revisions, so these are fixed
+input/health windows, not proof of sustained live gameplay. The shared external
+AdMob `status` TypeError is preserved in raw reports; Metal also reports rejected
+`gmsg:` URLs. Emulator missing/native requirements remain empty in the observed
+main and GMS realms. No goldens were changed.
+
+Separate five-second traces attribute substantial software-renderer time to
+transfer/composition: baseline WebGL thread 2054.8 ms and RendererMainThread
+2863.4 ms, including 1694.3 ms nested EndRaster work. Snapshot-only does not remove
+it (1953.5, 2952.8 and 1735.8 ms respectively). Nested durations must not be
+summed. Trace runs are attribution only and excluded from performance claims.
+This evidence triggers the planned separate-compositor prototype.
+
+Raw rendering reports live in `webdroid-shots/performance-stages/{rendering,canvas,combo}`;
+the renderer worktree retains `webdroid-shots/diagnostic-*` and trace scripts.
+
+### Native correctness before optimization
+
+An unaligned host halfword write across a page boundary left the second page's
+executed instruction stale. The canonical byte-range notification now tests every
+overlapped executed word/page, retaining the data-only fast path and source-page
+epoch checks. Scalar, floating, wide, bulk and string writes share this coverage.
+Host libc, stdio, networking, locale and compression writes notify their actual
+destination ranges. GLES readPixels remains an explicit gap: its exact footprint
+depends on pack alignment, row length, skips, format and type; invalidating the
+entire remaining-memory view would be incorrect and disproportionately expensive.
+
+The follow-up allocator audit reproduced stale code after malloc reused an
+executed allocation. Allocation reuse, freelist writes, mapping replacement,
+commit/decommit, stack reuse and MADV_DONTNEED discards now invalidate affected
+code. This covers synchronous initialization of freshly allocated guest objects;
+monotonic module and host allocations have distinct ownership.
+
+Independent review of precise ARM effects exposed pre-existing DSP/QADD/BKPT
+misrouting into generic ALU emission. These encodings now reach interpreter
+fallback before the overlapping halfword-transfer test. An overbroad MSR mask
+also classified BX LR as a flag write and lost carry; it now matches the actual
+instruction decoder. A compact fixture compares full architectural state across
+normal interpreter/JIT execution. Both failures were reproduced before correction.
+The integrated correctness-only revision passes typecheck and the full unit suite:
+1202 tests, zero failures, 25975 assertions. Broad browser verification remains
+part of final integration acceptance.
+
+Seven alternating rounds of ordinary-store component tests found a small host
+notification cost (about 0.4–1 ns/store). Tiny JIT loops showed larger percentages
+on subnanosecond operations and only 2–3 ms samples; these do not establish app
+regressions or gains. Their snapshots predate the allocator/ARM corrections and
+must not be used for final-stage attribution. Corrected app candidates share all
+correctness fixes before comparing precise register effects and Thumb call exits.
+Native evidence and runnable snapshots are under the native worktree's
+`webdroid-shots/native-stages/`.
+
+### JVM component evidence; application acceptance pending
+
+`ce84447` replaces cold generated-source reparsing with explicit operands in the
+shared opcode emitter and reuses method preparation for synchronous output.
+`b5f81bf` uses dense resumable blocks, splitting at control flow, try boundaries
+and suspension and fusing at most eight instructions. Additional fusion is capped
+at 1024 templates / 1 MiB source per root runtime, with shared single-instruction
+fallback and no eviction. `61ac6b4` returns synchronously until real suspension.
+All retain entry-32 promotion and the 32 MiB hot-source admission limit.
+
+The real-DEX fixture covers numeric/null joins, negative zero, exceptions,
+multiple suspension points, rejection, thread restoration, reentry, cooperative
+backedges and captured entries across cold/hot/promoted/admission-denied tiers.
+Explicit constants exposed an existing negative-zero formatting bug, corrected
+in both outputs. Generated eager FitNotes/Resy output matches baseline apart
+from that intentional correction. Resy cold compilation succeeds for 30589
+classes; the fusion cache reaches its cap and correctly falls back. Stage 3
+passes 13 core tests / 1378 assertions, typecheck, and FitNotes 39/39 rendered
+steps with no observed new emulator diagnostics.
+
+Seven alternating Chromium component rounds, milliseconds:
+
+| Workload | Baseline | Operands | Blocks | Synchronous blocks |
+| --- | ---: | ---: | ---: | ---: |
+| Construct 2000 real FitNotes bodies | 53.9 | 41.2 | 48.1 | 48.2 |
+| Single long cold activation | 52.3 | 52.5 | 21.3 | 21.9 |
+| Hot admission denied | 51.2 | 52.9 | 21.3 | 21.9 |
+| Promoted control | 6.4 | 6.4 | 6.4 | 6.4 |
+| Eager control | 6.6 | 6.4 | 6.4 | 6.4 |
+
+All 140 samples return the same Java int-overflow result. Time-based cooperative
+yielding remains active: faster cold execution reaches fewer wall-time deadlines.
+Construction is 23.6% faster with explicit operands, and the cold loop is 59.3%
+faster with blocks; neither number establishes application responsiveness.
+The JVM worktree retains benchmark scripts, raw results and `STAGE-EVIDENCE.md`
+under `webdroid-shots/jvm/`. Application windows and final stage decisions follow.
+
+Subsequent review restores sourceURL suffix accounting in the unchanged hot-source
+budget (`0830193`, `818ebd9`, `7d60c0e`); the initial refactor had omitted it from
+admission while still appending it for Function construction. All four promoted
+fixture variants now account for exactly 869 source code units. Component controls
+were far below the cap; formal app comparisons use the corrected successors.
+
+The first interaction diagnostics also exposed an input starting exactly at the
+15-second boundary. The runner now caps inputs one interval earlier and reports
+planned/delivered counts and in-flight state. Formal windows require complete
+matching inputs and no in-flight action. Earlier JVM windows are archived as
+diagnostics; rendering title timings are unaffected, and its fixed-input windows
+remain health/rejection evidence. Revised Mihon Reader windows deliver all 14
+swipes with 14 presentation proxies. Separate before/forward/back screenshots
+prove actual list movement; its Compose host tree does not expose the item tree.
+The first four-stage software round and Metal baseline/synchronous pair are
+neutral in main-thread CPU despite roughly 10300 cold calls per window. These
+exploratory samples do not yet establish a final stage decision.

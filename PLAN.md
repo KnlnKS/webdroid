@@ -40,6 +40,22 @@ tests and diagnostic loads pause during serialized performance windows.
 ## Progress
 
 - Three isolated implementation branches and a clean task baseline created.
-- Harness counter/time boundary corrected; isolated browser runner under validation.
-- Rendering snapshot candidate and native invalidation correction await integration review.
-- JVM operand replacement and ARM32 effects implementation in progress.
+- Harness counter/time boundary corrected; isolated 15-second windows exclude screenshot
+  encoding and tracing, support alternating inputs and report actual GPU backend. Full
+  Chromium 151 verifies Apple M4 Pro / ANGLE Metal; original SwiftShader remains separate.
+- Native byte-range invalidation, host-buffer notifications, allocation/mapping lifetime
+  invalidation and ARM miscellaneous dispatch corrections integrated. Typecheck and all
+  1202 unit tests pass. First native app rotation shows Doodle title startup 12.89 ->
+  9.17 seconds with Thumb calls; standalone attribution and paired repeats remain pending.
+- Snapshot-only publication measured neutral in three Flappy pairs. CPU Canvas2D backing
+  rejected for near-continuous main-thread blocking despite higher FPS. Combined snapshot
+  candidate also rejected for blocking; Metal remains near 60/s on both revisions. Separate
+  composition works and reuses the UI plane, but first software sample regresses 30.6 ->
+  24.4/s. Coverage scissoring is a separate follow-up; confirmation and Metal checks remain.
+- Explicit JVM operands, bounded resumable blocks and synchronous-until-suspension stages
+  pass core DEX checks. Seven component rounds show construction 53.9 -> 41.2 ms and cold
+  loop 52.3 -> 21.3 ms. Initial Mihon app windows are neutral on software and Metal; fresh
+  FitNotes/Resy interactions and matched repeats remain pending. Hot controls remain
+  unchanged, including restored sourceURL accounting in the existing admission budget.
+- Remaining: independent app measurements, stage decisions, combined checks, full E2E and
+  corpus, final implementation-history evidence. No retained app speedup is established yet.
