@@ -648,6 +648,19 @@ for (const [name] of [
   });
 }
 
+async function superscriptState(this: unknown, paint: JTextPaint) {
+  paint.baselineShift += Math.trunc(Number(await vcall(paint, "ascent", "()F")) / 2);
+}
+rt.register({ name: "android/text/style/SuperscriptSpan", ctor: class extends JMetricAffectingSpan {},
+  sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"], methods: {
+    "<init>()V": () => {}, "<init>(Landroid/os/Parcel;)V": () => {},
+    "getSpanTypeId()I": () => 14, "getSpanTypeIdInternal()I": () => 14, "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": () => {}, "writeToParcelInternal(Landroid/os/Parcel;I)V": () => {},
+    "updateDrawState(Landroid/text/TextPaint;)V": superscriptState,
+    "updateMeasureState(Landroid/text/TextPaint;)V": superscriptState,
+  },
+});
+
 class JAbsoluteSizeSpan extends JMetricAffectingSpan { size = 0; dip = 0; }
 function absoluteSize(this: JAbsoluteSizeSpan, paint: JTextPaint) {
   return vcall(paint, "setTextSize", "(F)V", this.size * (this.dip ? paint.density : 1));
