@@ -3899,3 +3899,23 @@ After these captures, fourteen verified unused experiment servers are stopped;
 only the final root server on 4110 and pristine baseline on 4111 remain for
 selected-build native/app guards and the full matrix. Their worktrees and all
 stage evidence remain intact; the older baseline worktree is untouched.
+
+Final selected-build native checks repeat against pristine after the operand
+rollback. Three Doodle pairs give median completed-title startup 12.880 -> 10.113
+seconds (-21.5%), retained heap 180.31 -> 180.20 MB and completed GL/atomic
+presentation rate 119.994 -> 119.995/s. Actual presentation p95 remains 9.2 ms.
+Secondary rAF p95 is 10.1 -> 10.6 ms (+4.95%); this is retained as a timing limit,
+not hidden behind the startup gain. All tutorial input proxies are saved, but do
+not establish gameplay latency. Three actual Lichess editor/back pairs give CPU
+6.712 -> 6.762 seconds (+0.75%), median opportunity proxy 107.25 -> 106.15 ms,
+p95 162.9 -> 163.0 ms and heap 194.511 -> 194.415 MB. Inputs complete without
+an in-flight action; existing pthread/Sidecar families and unavailable child
+telemetry remain explicit. Evidence is in the native worktree's
+`webdroid-shots/native-stages/final-selected-results/REPORT.md`.
+
+A final audit finds that class-init suspension and Java dispatch tests do not
+actually exercise native-to-Java re-entry into an active method. One compact
+case reuses the real DEX fixture across all four tiers, checking nested prefix/
+finally ordering, returned values and initiating-thread restoration. No new
+DEX or mock suite is introduced. All five tier cases/442 assertions and
+typecheck pass after this test-only change; production remains `6cbce0b`.

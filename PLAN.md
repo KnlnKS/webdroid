@@ -77,4 +77,9 @@ tests and diagnostic loads pause during serialized performance windows.
   control has an unresolved executor failure; an aligned seven-pair control passes nominally
   but remains sensitive near the pooled guard. Final selection conservatively drops operands.
   Typecheck, all 1208 tests, framework exercises and twelve target APK smoke compilations
-  pass again. Final selected-build app guards, Flappy replay and the full matrix remain.
+  pass again. A final fixture audit adds one required native-to-Java re-entry case; all
+  five DEX tier cases/442 assertions and typecheck pass. Production stays at `6cbce0b`,
+  with harness `dc5d401`. Final Doodle startup is 21.5% faster with stable completed
+  presentations; Lichess navigation passes. Flappy title guards pass on both backends,
+  while bounded frozen gameplay replay fails proof and remains explicitly unverified.
+  Final FitNotes/Mihon/Resy guards and the serialized full E2E/corpus matrix remain.
