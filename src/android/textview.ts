@@ -77,6 +77,7 @@ export class JTextView extends JView {
   shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
   colors: JColorStateList = mkCsl(-16777216);
   hintColors: JColorStateList | null = mkCsl(1627389952);
+  linkColors: JColorStateList | null = null;
   gravityT = 48 | G.START;
   maxLinesV = Infinity;
   minLinesV = 1;
@@ -116,6 +117,11 @@ export class JTextView extends JView {
     super();
     this.paintT.textSize = device.dp(14); // AOSP TextView default, 14sp
     this.paintT.color = -16777216;
+  }
+  updateLinkColor() {
+    if (!this.linkColors) return;
+    const color = cslColor(this.linkColors, this.drawableState());
+    if (this.paintT.linkColor !== color) { this.paintT.linkColor = color; invalidate(this); }
   }
   horizontalGravity(text: string, alignment: number, layoutDirection: number): number {
     if (alignment === 4) return 1;
@@ -257,7 +263,7 @@ const tvAttr = attrTable(
   "minLines", "lines", "singleLine", "ellipsize", "lineSpacingExtra", "lineSpacingMultiplier",
   "drawableLeft", "drawableTop", "drawableRight", "drawableBottom", "drawablePadding", "drawableStart",
   "drawableEnd", "fontFamily", "textAllCaps", "textColorHint", "inputType", "letterSpacing", "maxLength",
-  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth", "shadowColor", "shadowDx", "shadowDy", "shadowRadius");
+  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth", "shadowColor", "shadowDx", "shadowDy", "shadowRadius", "textColorLink");
 
 async function applyTextAppearance(tv: JTextView, res: Resources, styleId: number) {
   if (!styleId) return;
@@ -268,6 +274,11 @@ async function applyTextAppearance(tv: JTextView, res: Resources, styleId: numbe
   if (tc) {
     if (tc.t === TV.REFERENCE) tv.colors = await loadColorStateList(res, tc.d, tv.theme);
     else tv.colors = mkCsl(rvColor(res, tc, -16777216));
+  }
+  const link = look("textColorLink");
+  if (link) {
+    tv.linkColors = link.t === TV.REFERENCE ? await loadColorStateList(res, link.d, tv.theme) : mkCsl(rvColor(res, link, tv.paintT.linkColor));
+    tv.updateLinkColor();
   }
   const st = look("textStyle");
   if (st) tv.styleBits = rvInt(res, st, 0);
@@ -298,7 +309,7 @@ export async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyle
     tvAttr.inputType, tvAttr.lineSpacingExtra, tvAttr.lineSpacingMultiplier, tvAttr.lines,
     tvAttr.drawableStart, tvAttr.drawableEnd, tvAttr.minLines,
     tvAttr.ems, tvAttr.minEms, tvAttr.minWidth, tvAttr.includeFontPadding, tvAttr.imeOptions,
-    tvAttr.shadowColor, tvAttr.shadowDx, tvAttr.shadowDy, tvAttr.shadowRadius,
+    tvAttr.shadowColor, tvAttr.shadowDx, tvAttr.shadowDy, tvAttr.shadowRadius, tvAttr.textColorLink,
   ];
   const ta = obtainStyled(res, tv.theme, set, ids, defStyleAttr, 0);
   const g = (i: number) => ta.vals[i];
@@ -348,6 +359,11 @@ export async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyle
   // the action the IME key performs: a search field declares it here and nowhere else
   if (g(29)) tv.imeOptions = rvInt(res, g(29), 0);
   if (g(30) || g(31) || g(32) || g(33)) await setTextShadow.call(tv, rvFloat(res, g(33), tv.shadowRadius), rvFloat(res, g(31), tv.shadowDx), rvFloat(res, g(32), tv.shadowDy), rvColor(res, g(30), tv.shadowColor));
+  const link = g(34);
+  if (link) {
+    tv.linkColors = link.t === TV.REFERENCE ? await loadColorStateList(res, link.d, tv.theme) : mkCsl(rvColor(res, link, tv.paintT.linkColor));
+    tv.updateLinkColor();
+  }
   if (tv.styleBits & 1) tv.paintT.fakeBold = true;
   if (tv.styleBits & 2) tv.paintT.tf = (() => { const t = new JTypeface(); t.family = tv.paintT.tf.family; t.italic = true; t.weight = tv.paintT.tf.weight; return t; })();
 }
@@ -452,6 +468,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (c) this.colors = c;
     invalidate();
   },
+  "setLinkTextColor(I)V": function (this: JTextView, color: number) { this.linkColors = mkCsl(color); this.updateLinkColor(); },
+  "setLinkTextColor(Landroid/content/res/ColorStateList;)V": function (this: JTextView, colors: JColorStateList | null) { this.linkColors = colors; this.updateLinkColor(); },
+  "getLinkTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.linkColors; },
+  "drawableStateChanged()V": function (this: JTextView) { this.updateLinkColor(); },
   "getTextColors()Landroid/content/res/ColorStateList;": function (this: JTextView) { return this.colors; },
   "getCurrentTextColor()I": function (this: JTextView) { return cslColor(this.colors, this.drawableState()); },
   "setHintTextColor(Landroid/content/res/ColorStateList;)V": function (this: JTextView, c: JColorStateList | null) { this.hintColors = c; invalidate(this); },
@@ -626,7 +646,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     "setTextLocales(Landroid/os/LocaleList;)V", "setImeHintLocales(Landroid/os/LocaleList;)V", "beginBatchEdit()V",
     "endBatchEdit()V", "setHighlightColor(I)V", "setHorizontallyScrolling(Z)V", "setMarqueeRepeatLimit(I)V",
     "setSelectAllOnFocus(Z)V", "setTextIsSelectable(Z)V", "setError(Ljava/lang/CharSequence;)V", "setAutoLinkMask(I)V",
-    "setLinkTextColor(I)V", "setMaxEms(I)V", "setMaxHeight(I)V"),
+    "setMaxEms(I)V", "setMaxHeight(I)V"),
   ...stubs(1, "getIncludeFontPadding()Z"),
   ...stubs(0, "isHorizontallyScrollable()Z"),
   ...stubs(-1, "getAutoSizeMinTextSize()I", "getAutoSizeMaxTextSize()I", "getAutoSizeStepGranularity()I"),
