@@ -1,37 +1,45 @@
-# Maintainability and performance audit
+# Staged performance replacements
 
-## Scope
+Starting revision: `b16d705`. Target sustained responsiveness across Flappy Bird,
+Doodle Jump, FitNotes, Resy, Mihon and Lichess. Aim for >=1.5x representative app
+improvements and 55–60 completed frames/s; retain large replacements only for
+>=15% reproducible app gains, rejecting >5% responsiveness/startup or >10% retained
+memory regressions. Smaller correctness and structural improvements may stand alone.
+Guest bytecode, platform semantics and visual goldens remain unchanged.
 
-Audit compiler/JVM, native CPU/JIT/Wasm, browser/platform runtime and dependencies.
-Use parallel component audits to select small, general improvements with measured
-performance or clear structural benefits. Preserve Android/DEX/native semantics and
-run bundled APK bytecode unchanged. Record each coherent change in a focused commit.
+## Workstreams
 
-The preceding app-parity and Maps integration work is complete; its results and
-remaining verification limits are in [the implementation history](docs/implementation-history.md).
+- Coordinator: matched browser measurement, harness timing boundaries, integration,
+  documentation and final regression matrix on `codex/perf-integration`.
+- Rendering: canonical completed-frame publication, then a separate compositor only
+  if >=15% of frame cost is attributable to surface transfer/repeated composition.
+- JVM: explicit cold operands/reused preparation, then bounded resumable blocks;
+  preserve initial promotion and hot-source budgets while comparing stages.
+- Native: reproduce and repair code-write invalidation, then precise ARM32 effects;
+  indexed eviction only if >=5% native CPU or repeated frame-budget overruns justify it.
+
+Implementation agents use isolated `.worktrees/perf-*` checkouts and focused commits.
+The existing `.worktrees/baseline` is preserved; a separate `perf-baseline` points to
+this task's starting revision. Correctness work can run in parallel, but all builds,
+tests and diagnostic loads pause during serialized performance windows.
 
 ## Acceptance
 
-- Review hot paths, duplication and dependencies against current code and primary OSS sources.
-- Retain optimizations only with correctness evidence and reproducible, serialized measurements.
-- Prefer existing core tests; add coverage only for a core contract exposed by the change.
-- Run typecheck, relevant unit/framework tests and affected APK smoke compilation.
-- Exercise affected browser behavior with a serialized capture where applicable, inspect
-  run.json telemetry and leave visual goldens unchanged.
-- Record measurements, rejected alternatives and unresolved limits in the implementation history.
+- Three alternating baseline/candidate pairs; seven when near thresholds or inconsistent.
+- Fixed inputs, geometry, browser, app state and warmup; separate SwiftShader and verified
+  hardware acceleration. No screenshot readback or profiling during timed windows.
+- Distinguish shell ticks, completed GL frames and actual presentations. Verify visibility,
+  advancing ticks and per-process diagnostics. Trace only in separate attribution runs.
+- One compact real-DEX tier fixture plus focused extensions of existing native/surface
+  contracts. Typecheck, existing unit suite, affected framework tests and APK smoke.
+- Broad runtime replacements require corpus and serialized full E2E. Reproduce ambiguous
+  differences against the starting revision. Keep goldens unchanged.
+- Record retained/rejected stages, measurements and limits in implementation history.
+  Completion means replacement stages were measured and accepted/rejected with evidence.
 
-## Completion
+## Progress
 
-- Five focused implementation commits cover immutable compiler dataflow, native bulk
-  copies, direct Base64 output, lazy certificate lookup and a smaller Forge entry point.
-- Typecheck passes; the full suite passes 1,198 tests / 24,884 assertions. Framework
-  exercises pass, with Canvas2D text measurement explicitly skipped in headless Bun.
-- FitNotes, Resy, Flappy Bird and Doodle Jump compile with zero method failures.
-- The serialized four-flow capture renders all 65 steps with clean foreground telemetry.
-  All app and child runtimes in a separate boot diagnostic expose empty missing/native
-  requirements; Resy's browser console records upstream analytics HTTP rejections.
-- Flappy Bird remains below its 55 fps target on both the starting and changed revisions;
-  repeated captures overlap at 25–28 fps minimum. No app-wide speedup is claimed.
-- [Audit report](docs/performance-audit-2026-09.md) records measurements, OSS references,
-  library decisions and deferred opportunities. The implementation history records final
-  verification limits; raw evidence remains in `webdroid-shots/performance-audit/`.
+- Three isolated implementation branches and a clean task baseline created.
+- Harness counter/time boundary corrected; isolated browser runner under validation.
+- Rendering snapshot candidate and native invalidation correction await integration review.
+- JVM operand replacement and ARM32 effects implementation in progress.
