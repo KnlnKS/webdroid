@@ -3337,3 +3337,76 @@ Both complete runs and per-step telemetry are retained separately under `integra
 
 Integration preserves both parent histories. The user-requested cleanup removes the Maps
 parity, Maps baseline and temporary Maps integration worktrees; the unrelated baseline stays.
+
+
+## Maintainability and performance audit (2026-09-14)
+
+The user requested parallel component audits, OSS comparison, focused cleanup and
+measured performance improvements. Starting point was d018ea9. Five focused commits
+retain general changes without altering guest bytecode or adding dependencies:
+
+- 2573390 shares read-only compiler definition sets and copies only growing joins,
+  removing deep cloning and dead compiler fields. FitNotes/Resy generated source is
+  byte-identical across 34,802 classes / 199,464 declared methods; isolated source
+  generation medians improve 3.8% / 7.1%.
+- e5ebe84 uses Zig @memmove, emitting Wasm memory.copy. Chromium libc-copy medians
+  improve 12–16× at 4–64 KiB, with 16-byte copies neutral. ReleaseFast Wasm shrinks
+  1,412 bytes. Overlap, zero-length invalid pointers and code-page invalidation are
+  covered by a baseline/current matrix and one core regression.
+- 4724039 writes Base64 directly into a sized Int8Array and uses TextDecoder for
+  ASCII Strings. Chromium 64-KiB/1-MiB encoding is 5–6× faster; 49,632 differential
+  cases match. One core regression covers signed bytes, slices, flags and line ends.
+- 4bcddf9 filters v1 APK signature names before reading lazy ZIP properties. Doodle
+  Jump certificate lookup falls from 43.11 to 0.240 ms and reads one signature entry
+  instead of materializing 505 entries. Of 31.7 MB content, 3.3 MB is deflated and
+  the rest stored views; 31.7 MB is not an allocation saving. Certificate hashes
+  remain identical, with one core lazy-accessor regression.
+- be346bb selects Forge's PKCS#7/RSA/X.509 dependency graph and digest modules through
+  a shared lazy entry. Standalone minified browser dependency size falls 93,075 bytes
+  (24,366 bytes gzipped). Fresh Bun/Chromium checks pass 16 OAEP digest/MGF pairs and
+  certificate signing/parsing/verification. The real v1 APK test exercises PKCS#7.
+
+The [audit report](performance-audit-2026-09.md) contains measurements, primary OSS
+references, dependency alternatives and deferred opportunities. fflate, sql.js,
+tough-cookie and TypeScript remain: no measured replacement justified their API and
+platform compatibility costs. The stale Doodle Jump comment claiming native execution
+was unimplemented is removed. Only three core test functions were added; existing tests
+were retained. Timing runs were serialized and comparison artifacts preserve the starting
+sources and Wasm. These are component-level gains, not app-wide performance claims.
+
+Final typecheck passes. The full unpaused suite passes 1,198 tests and 24,884 assertions
+across 210 files in 66.78 seconds. All executed fwtest exercises pass; Paint.measureText
+is explicitly skipped because headless Bun lacks Canvas2D. Its declaration scan reports
+295/363 native bindings, not complete framework coverage. FitNotes, Resy, Flappy Bird and
+Doodle Jump smoke compilation reports zero method failures.
+
+The targeted serialized E2E run at be346bb completed in 218.0 seconds: FitNotes 39/39,
+Resy 13/13, Flappy Bird 7/7 and Doodle Jump 6/6 steps rendered. Every step advances
+foreground frame counters; all 65 steps have zero newMissing, newErrors, nativeRequired,
+layout/draw errors, step errors, main-loop wedges and settle timeouts. Visual inspection
+confirms the Carbone venue image, native game/tutorial content and Flappy Bird gameplay.
+FitNotes' content mismatch is 40.12%; this is existing-golden comparison, not newly
+established parity. Goldens are unchanged. The entire 12-flow matrix was not repeated.
+
+Foreground telemetry does not cover child runtimes automatically. A separate fresh-boot
+probe inspected every app/process frame and captured page/console errors across realms.
+FitNotes/Flappy Bird each expose three runtimes; Resy/Doodle Jump each expose four. All
+reported empty missing/native requirements and visible documents. Resy logs upstream
+Firebase/Facebook HTTP 400 and Mixpanel HTTP 410 responses. These are explicit service
+responses; this boot probe does not establish clean child-process telemetry throughout
+all interaction steps.
+
+Flappy Bird misses the 55-fps target on both revisions. Matching serialized captures on
+an isolated d018ea9 checkout measured minimum 28 then 25 fps, versus changed minimum
+25 then 26 fps. The ranges overlap; no app-FPS improvement or precise regression bound
+is established. A transient page TypeError reading `status` occurred in comparisons on
+both revisions; its origin remains unresolved and is not counted by the foreground
+newErrors field. Comparison logs preserve it. The initial four-flow changed run had no
+reported page exception. Doodle Jump's changed gameplay minimum is 37 fps. A follow-up Chromium tiny-copy
+benchmark finds less than 1 ns/call overhead at 4/12 bytes; other sizes below 16 bytes
+are neutral or faster. No special-case branch is justified by that result.
+
+All raw logs, per-step JSON, screenshots and runnable benchmark snapshots are retained
+under `webdroid-shots/performance-audit/`, including separate original and repeat
+Flappy Bird comparisons. Temporary baseline checkout and owned test servers are cleaned
+up after evidence preservation.

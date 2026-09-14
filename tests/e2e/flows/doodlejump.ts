@@ -1,10 +1,5 @@
-// Doodle Jump Christmas (Marmalade, 2013): the game is ARM32 native code (libdoodlejumpcs.so
-// running assets/DoodleJump.s3e), so until the native layer (src/native) lands this is an
-// HONEST-BOOT target — LoaderActivity.onCreate → System.loadLibrary → UnsatisfiedLinkError
-// with the shell's #native line, nothing wedges. Accepted newMissing until then: the
-// `[native]` entries for com/ideaworks3d/marmalade/LoaderThread (initNative, runNative, …).
-// Fullscreen theme (Theme.Black.NoTitleBar.Fullscreen): crop top 0. The game never settles,
-// so every step is `animated`; minFps 30 is the M3 (playable) gate.
+// Doodle Jump Christmas (Marmalade, 2013) exercises ARM32 native execution.
+// The fullscreen game loop never settles, so gameplay steps use animated captures.
 import type { Flow } from "../types";
 
 const N = (x: number, y: number) => ({ x: x / 720, y: y / 1280 });
