@@ -163,6 +163,29 @@ describe("arm decoder", () => {
     expect(c.w[6]).toBe(1); expect(c.w[8]).toBe(2); expect(c.w[10]).toBe(3);
     expect(c.w[12]).toBe(c.w[26]);
   });
+  test("NEON structure transfers work in ARM mode", () => {
+    const c = run([
+      0xf4610a0d,   // vld1.8 {d16,d17}, [r1]!
+      0xf4400a0d,   // vst1.8 {d16,d17}, [r0]!
+      BXLR,
+    ], (cpu) => {
+      cpu.w[0] = cpu.stackTop - 32;
+      cpu.w[2] = cpu.stackTop - 16;
+      mem.st32(cpu.w[2], 0x12345678);
+      mem.st32(cpu.w[2] + 4, 0x76543210);
+      mem.st32(cpu.w[2] + 8, 0x0badf00d);
+      mem.st32(cpu.w[2] + 12, 0x5eedface);
+    });
+    expect(Array.from(mem.u32.slice((c.w[0] - 16) >>> 2, c.w[0] >>> 2))).toEqual([0x12345678, 0x76543210, 0x0badf00d, 0x5eedface]);
+    expect(c.w[2]).toBe(c.stackTop);
+  });
+  test("NEON modified immediates select high quad registers in ARM mode", () => {
+    const c = run([
+      0xf2c00050,   // vmov.i32 q8, #0
+      BXLR,
+    ], (cpu) => { cpu.si.fill(-1, 32, 36); });
+    expect(Array.from(c.si.slice(32, 36))).toEqual([0, 0, 0, 0]);
+  });
   test("rsb/adc/sbc", () => {
     const c = run([
       0xe3a00005,   // mov r0, #5
@@ -183,6 +206,14 @@ describe("thumb decoder", () => {
       0x4770,         // bx lr
     ]);
     expect(Array.from(c.si.slice(12, 16))).toEqual([0x120000, 0x120000, 0x120000, 0x120000]);
+  });
+
+  test("NEON modified immediates select high quad registers", () => {
+    const c = runThumb([
+      0xefc0, 0x0050, // vmov.i32 q8, #0
+      0x4770,
+    ], (cpu) => { cpu.si.fill(-1, 32, 36); });
+    expect(Array.from(c.si.slice(32, 36))).toEqual([0, 0, 0, 0]);
   });
 
   test("NEON structure transfers preserve two D registers and write back", () => {
@@ -216,6 +247,22 @@ describe("thumb decoder", () => {
     expect(mem.ld32(c.w[0] + 4)).toBe(0x5eedface);
     expect(Array.from(c.si.slice(32, 34))).toEqual([0x12345678, 0x76543210]);
     expect(c.w[4]).toBe(c.stackTop - 16);
+  });
+
+  test("NEON immediates clear a stack buffer through consecutive structure stores", () => {
+    const c = runThumb([
+      0xb092,         // sub sp, #0x48
+      0xf10d, 0x0a08, // add.w r10, sp, #8
+      0xefc0, 0x0050, // vmov.i32 q8, #0
+      0x4656,         // mov r6, r10
+      0xf946, 0x0acd, // vst1.64 {d16,d17}, [r6]!
+      0xf946, 0x0acd, // vst1.64 {d16,d17}, [r6]!
+      0x4770,
+    ], (cpu) => {
+      mem.u8.fill(0xff, cpu.stackTop - 0x40, cpu.stackTop - 0x20);
+      cpu.si.fill(-1, 32, 36);
+    });
+    expect(Array.from(mem.u8.slice(c.w[26] + 8, c.w[26] + 40))).toEqual(Array(32).fill(0));
   });
 
   test("Thumb VFP loads and stores preserve double registers", () => {

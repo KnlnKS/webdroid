@@ -110,6 +110,47 @@ fn thumbExpandImm(c: *Cpu, imm12: u32) Shifted {
     const v = std.math.rotr(u32, 0x80 | (imm12 & 0x7f), rot);
     return .{ .v = v, .carry = v >> 31 };
 }
+
+fn neonStruct(c: *Cpu, w: u32, pc: u32) Status {
+    const count: u32 = switch (bits(w, 8, 4)) {
+        7 => 1,
+        10 => 2,
+        6 => 3,
+        2 => 4,
+        else => return fault(c, .unimplemented, w, pc),
+    };
+    const load = w & (1 << 21) != 0;
+    const n = bits(w, 16, 4);
+    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
+    const a = addr(c, r(c, n)) orelse return badAddr(c, w, pc);
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        if (load) vreg(u64, c, d + i).* = ld(u64, a + i * 8) else if (!st(u64, c, a + i * 8, vreg(u64, c, d + i).*)) return badAddr(c, w, pc);
+    }
+    const m = w & 15;
+    if (m != 15) set(c, n, r(c, n) +% (if (m == 13) count * 8 else r(c, m)));
+    return .next;
+}
+
+fn neonImmediate(c: *Cpu, w: u32, pc: u32, imm8: u32) Status {
+    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
+    const q = w & 0x40 != 0;
+    if (q and d & 1 != 0) return fault(c, .undefined, w, pc);
+    const ex = simd.expandImm(bits(w, 5, 1), bits(w, 8, 4), 0, imm8) orelse return fault(c, .undefined, w, pc);
+    const count: u32 = if (q) 2 else 1;
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        const dst = vreg(u64, c, d + i);
+        dst.* = switch (ex.kind) {
+            .movi, .fmov => ex.v,
+            .mvni => ~ex.v,
+            .orr => dst.* | ex.v,
+            .bic => dst.* & ~ex.v,
+        };
+    }
+    return .next;
+}
+
 fn op2(c: *Cpu, w: u32, pc: u32) Shifted {
     if (w & (1 << 25) != 0) {
         const rot = bits(w, 8, 4) * 2;
@@ -139,6 +180,8 @@ fn execArm(c: *Cpu, pc: u32) Status {
     const cc = w >> 28;
     c.pc = pc + 4;
     if (cc == 15) {
+        if (w & 0xff100000 == 0xf4000000) return neonStruct(c, w, pc);
+        if (w & 0xfeb00010 == 0xf2800010) return neonImmediate(c, w, pc, (bits(w, 24, 1) << 7) | (bits(w, 16, 3) << 4) | bits(w, 0, 4));
         if ((w & 0x0e000000) == 0x0a000000) {
             const off: u32 = @bitCast((@as(i32, @bitCast(w << 8)) >> 6) | @as(i32, @intCast((w >> 23) & 2)));
             set(c, 14, pc + 4);
@@ -735,23 +778,8 @@ fn execThumb(c: *Cpu, pc: u32) Status {
         const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0x10 == 0) return fault(c, .undefined, h << 16 | h2, pc);
         c.pc = pc + 4;
-        const d = (((h >> 6) & 1) << 4) | ((h2 >> 12) & 15);
-        const q = h2 & 0x40 != 0;
-        if (q and d & 1 != 0) return fault(c, .undefined, h << 16 | h2, pc);
         const imm8 = ((h >> 5) & 0x80) | ((h & 7) << 4) | (h2 & 15);
-        const ex = simd.expandImm((h2 >> 5) & 1, (h2 >> 8) & 15, 0, imm8) orelse return fault(c, .undefined, h << 16 | h2, pc);
-        const count: u32 = if (q) 2 else 1;
-        var i: u32 = 0;
-        while (i < count) : (i += 1) {
-            const dst = vreg(u64, c, d + i);
-            dst.* = switch (ex.kind) {
-                .movi, .fmov => ex.v,
-                .mvni => ~ex.v,
-                .orr => dst.* | ex.v,
-                .bic => dst.* & ~ex.v,
-            };
-        }
-        return .next;
+        return neonImmediate(c, h << 16 | h2, pc, imm8);
     }
     const wideMoveImm = h & 0xfbef;
     if (wideMoveImm == 0xf04f or wideMoveImm == 0xf06f) {
@@ -968,25 +996,8 @@ fn execThumb(c: *Cpu, pc: u32) Status {
     }
     if ((h & 0xff90) == 0xf900) {
         const h2: u32 = ld(u16, pc + 2);
-        const count: u32 = switch ((h2 >> 8) & 15) {
-            7 => 1,
-            10 => 2,
-            6 => 3,
-            2 => 4,
-            else => return fault(c, .unimplemented, h << 16 | h2, pc),
-        };
         c.pc = pc + 4;
-        const Ld = h & 0x20 != 0;
-        const n = h & 15;
-        const d = (((h >> 6) & 1) << 4) | (h2 >> 12);
-        const a = addr(c, r(c, n)) orelse return badAddr(c, h << 16 | h2, pc);
-        var i: u32 = 0;
-        while (i < count) : (i += 1) {
-            if (Ld) vreg(u64, c, d + i).* = ld(u64, a + i * 8) else if (!st(u64, c, a + i * 8, vreg(u64, c, d + i).*)) return badAddr(c, h << 16 | h2, pc);
-        }
-        const m = h2 & 15;
-        if (m != 15) set(c, n, r(c, n) +% (if (m == 13) count * 8 else r(c, m)));
-        return .next;
+        return neonStruct(c, h << 16 | h2, pc);
     }
     const wideMove = h & 0xfbf0;
     if (wideMove == 0xf240 or wideMove == 0xf2c0) {
