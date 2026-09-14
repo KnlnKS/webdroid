@@ -5,7 +5,7 @@ import {
   type JComponentName
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
-import { mangleMethod, jarray } from "../jvm/abi";
+import { jarray } from "../jvm/abi";
 import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "./os";
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
@@ -30,6 +30,9 @@ import { JConfigurationInfo } from "./pm";
 import { deviceConfiguration } from "./resnative";
 import { transactionCaller } from "./binder";
 import { packages } from "./packages";
+import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
+
+export { fireActivityLifecycle } from "./lifecycle";
 
 class JTaskDescription extends JObj {
   label: string | null = null;
@@ -92,7 +95,7 @@ export class JActivity extends JContextWrapper {
   remoteId = 0;
   activityId = 0;
   taskId = 0;
-  lifecycleCbs: unknown[] | null = null;
+  lifecycleCbs: ActivityLifecycleCallback[] | null = null;
   fragMgr: JFragmentManager | null = null;
   // set while a configuration-change relaunch is tearing this instance down, so androidx keeps
   // the ViewModelStore alive; the retained object is handed to the replacement instance.
@@ -101,43 +104,12 @@ export class JActivity extends JContextWrapper {
   requestedOrientation = -1;
   mediaController: unknown = null;
 }
-/** Fire an ActivityLifecycleCallbacks event (both Pre/Post + the plain variant, API 29+ shapes).
- *  androidx ReportFragment.LifecycleCallbacks uses the Post* variants to advance the activity Lifecycle. */
-export async function fireActivityLifecycle(act: JActivity, phase: "Created" | "Started" | "Resumed" | "Paused" | "Stopped" | "Destroyed", bundle: unknown = null) {
-  // process-wide callbacks (Application.registerActivityLifecycleCallbacks) then this
-  // activity's own (API 29 Activity.registerActivityLifecycleCallbacks) — one dispatch point.
-  const app = act.$host?.application as JApplication | null | undefined;
-  const cbs = [...(app?.lifecycleCbs ?? []), ...(act.lifecycleCbs ?? [])];
-  if (!cbs.length) return;
-  const withBundle = phase === "Created";
-  const sig = withBundle ? "(Landroid/app/Activity;Landroid/os/Bundle;)V" : "(Landroid/app/Activity;)V";
-  const args = withBundle ? [act, bundle] : [act];
-  for (const cb of cbs) {
-    for (const variant of [`onActivityPre${phase}`, `onActivity${phase}`, `onActivityPost${phase}`]) {
-      // only call variants the callback actually implements (androidx impls vary by API level)
-      const key = mangleMethod(variant, sig);
-      const fn = (cb as Record<string, unknown>)[key];
-      if (typeof fn !== "function") continue;
-      try { const r = (fn as (...a: unknown[]) => unknown).apply(cb, args); if (r instanceof Promise) await r; }
-      catch (e) { reportUncaught(e); }
-    }
-  }
-}
 // the API 29 Pre/Post hooks are interface defaults: an implementer's super call must find them
 rt.register({
   name: "android/app/Application$ActivityLifecycleCallbacks", ctor: class extends JObj {},
   methods: Object.fromEntries(["Created", "Started", "Resumed", "Paused", "Stopped", "SaveInstanceState", "Destroyed"].flatMap((phase) => ["Pre", "Post"].map((when) =>
     [`onActivity${when}${phase}(Landroid/app/Activity;${phase === "Created" || phase === "SaveInstanceState" ? "Landroid/os/Bundle;" : ""})V`, () => {}]))),
 });
-/** Activity (API 29+) and Application both keep their own ActivityLifecycleCallbacks list */
-const lifecycleCbMethods: NativeSpec["methods"] = {
-  "registerActivityLifecycleCallbacks(Landroid/app/Application$ActivityLifecycleCallbacks;)V": function (this: { lifecycleCbs: unknown[] | null }, cb: unknown) {
-    (this.lifecycleCbs ??= []).push(cb);
-  },
-  "unregisterActivityLifecycleCallbacks(Landroid/app/Application$ActivityLifecycleCallbacks;)V": function (this: { lifecycleCbs: unknown[] | null }, cb: unknown) {
-    if (this.lifecycleCbs) this.lifecycleCbs = this.lifecycleCbs.filter((c) => c !== cb);
-  },
-};
 export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...wrapperMethods,
   "<init>()V": function (this: JActivity) { this.window.activity = this; },
@@ -147,7 +119,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JActivity) { return this.window.backDispatcher(); },
   "getApplication()Landroid/app/Application;": function (this: JActivity) { return this.$host.application; },
   "setTaskDescription(Landroid/app/ActivityManager$TaskDescription;)V": function (this: JActivity, d: JTaskDescription | null) { this.taskDescription = d; },
-  ...lifecycleCbMethods,
+  ...lifecycleCallbackMethods,
   "getWindowManager()Landroid/view/WindowManager;": function (this: JActivity) { return systemService(this, "window"); },
   "getIntent()Landroid/content/Intent;": function (this: JActivity) { return this.intent ?? (this.intent = new JIntent()); },
   "getLayoutInflater()Landroid/view/LayoutInflater;": function (this: JActivity) { return getInflater(this); },
@@ -415,7 +387,7 @@ rt.markers("android/view/Window$Callback");
 rt.markers("android/view/Window$OnFrameMetricsAvailableListener");
 
 export class JApplication extends JContextWrapper {
-  lifecycleCbs: unknown[] | null = null;
+  lifecycleCbs: ActivityLifecycleCallback[] | null = null;
 }
 rt.register({
   name: "android/app/Application", ctor: JApplication, sup: "android/content/ContextWrapper",
@@ -425,7 +397,7 @@ rt.register({
     "static getProcessName()Ljava/lang/String;": () => PROCESS_NAME || appHost?.pkg || "app",
     ...noops("<init>()V", "onCreate()V", "onTerminate()V", "onLowMemory()V", "onTrimMemory(I)V",
       "onConfigurationChanged(Landroid/content/res/Configuration;)V"),
-    ...lifecycleCbMethods,
+    ...lifecycleCallbackMethods,
     "registerComponentCallbacks(Landroid/content/ComponentCallbacks;)V": () => {},
   },
 });
@@ -538,6 +510,7 @@ for (const [name, methods, statics] of [
     "getMemoryClass()I": () => 256,
     "getLargeMemoryClass()I": () => 512,
     "isLowRamDevice()Z": () => 0,
+    "isBackgroundRestricted()Z": () => 0,
     "getRunningAppProcesses()Ljava/util/List;": () => newArrayList([myProcess()]),
     "getProcessMemoryInfo([I)[Landroid/os/Debug$MemoryInfo;": (pids: Int32Array) => jarray(Array.from(pids, () => rt.make("android/os/Debug$MemoryInfo")), "Landroid/os/Debug$MemoryInfo;"),
     "getHistoricalProcessExitReasons(Ljava/lang/String;II)Ljava/util/List;": () => newArrayList(),
@@ -747,6 +720,7 @@ for (const [name, methods, statics] of [
     // IS the correct behavior for this state, not a stub shortcut.
     "isEnabled()Z": () => 0,
     "isTouchExplorationEnabled()Z": () => 0,
+    "isAudioDescriptionRequested()Z": () => 0,
     "getRecommendedTimeoutMillis(II)I": (orig: number) => orig,
     "addAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": () => 1,
     "removeAccessibilityStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityStateChangeListener;)Z": () => 1,
@@ -755,6 +729,20 @@ for (const [name, methods, statics] of [
     "addAccessibilityServicesStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)V": () => {},
     "removeAccessibilityServicesStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)Z": () => 1,
     "getEnabledAccessibilityServiceList(I)Ljava/util/List;": () => newArrayList(),
+    "getInstalledAccessibilityServiceList()Ljava/util/List;": () => newArrayList(),
+    ...noops("sendAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V",
+      "addAccessibilityServicesStateChangeListener(Ljava/util/concurrent/Executor;Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)V",
+      "addAudioDescriptionRequestedChangeListener(Ljava/util/concurrent/Executor;Landroid/view/accessibility/AccessibilityManager$AudioDescriptionRequestedChangeListener;)V"),
+    ...stubs(1, "removeAccessibilityServicesStateChangeListener(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)Z",
+      "removeAudioDescriptionRequestedChangeListener(Landroid/view/accessibility/AccessibilityManager$AudioDescriptionRequestedChangeListener;)Z"),
+  }],
+  ["android/view/accessibility/CaptioningManager", {
+    "isEnabled()Z": () => 0,
+    "getFontScale()F": () => 1,
+    "getLocale()Ljava/util/Locale;": () => null,
+    "getUserStyle()Landroid/view/accessibility/CaptioningManager$CaptionStyle;": () => rt.make("android/view/accessibility/CaptioningManager$CaptionStyle"),
+    ...noops("addCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V",
+      "removeCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V"),
   }],
   ["android/content/ClipboardManager", {
     "setPrimaryClip(Landroid/content/ClipData;)V": () => {},
@@ -848,9 +836,17 @@ rt.register({
 rt.markers("android/hardware/display/DisplayManager$DisplayListener", "android/app/AppOpsManager$OnOpChangedListener", "android/app/AppOpsManager$OnOpActiveChangedListener");
 // AccessibilityManager callback interfaces — apps `implements` these to watch for a
 // screen reader turning on; must link even though it never fires here (see above).
-for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChangeListener", "AccessibilityServicesStateChangeListener"]) {
+for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChangeListener", "AccessibilityServicesStateChangeListener", "AudioDescriptionRequestedChangeListener"]) {
   rt.register({ name: "android/view/accessibility/AccessibilityManager$" + n, ctor: class extends JObj {} });
 }
+rt.register({ name: "android/view/accessibility/CaptioningManager$CaptioningChangeListener", ctor: class extends JObj {} });
+rt.register({
+  name: "android/view/accessibility/CaptioningManager$CaptionStyle", ctor: class extends JObj {},
+  methods: {
+    "getTypeface()Landroid/graphics/Typeface;": () => null,
+    ...stubs(0, "hasBackgroundColor()Z", "hasEdgeColor()Z", "hasEdgeType()Z", "hasForegroundColor()Z", "hasWindowColor()Z"),
+  },
+});
 rt.register({
   name: "android/app/ActivityManager$MemoryInfo",
   ctor: class extends JObj { totalMem = 4n * 1024n ** 3n; availMem = 2n * 1024n ** 3n; lowMemory = 0; threshold = 128n * 1024n * 1024n; },
@@ -1046,6 +1042,17 @@ rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content
 rt.register({
   name: "android/media/MediaRoute2ProviderService", ctor: class extends JService {}, sup: "android/app/Service",
   methods: { ...wrapperMethods, "<init>()V": function () {} },
+});
+
+rt.register({
+  name: "android/service/quicksettings/TileService", ctor: class extends JService {}, sup: "android/app/Service",
+  methods: {
+    ...noops("<init>()V", "onClick()V", "onTileAdded()V", "onTileRemoved()V"),
+    "startActivityAndCollapse(Landroid/content/Intent;)V": function (this: JService, intent: JIntent) {
+      return vcall(this, "startActivity", "(Landroid/content/Intent;)V", intent);
+    },
+    "startActivityAndCollapse(Landroid/app/PendingIntent;)V": (intent: unknown) => vcall(intent, "send", "()V"),
+  },
 });
 
 // API-30 WindowInsetsAnimation: the APK ships desugar stubs whose <clinit> throws

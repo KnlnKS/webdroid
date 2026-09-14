@@ -196,7 +196,7 @@ export fn exec_word(cp: u32, w: u32, pc: u32) u32 {
 export fn exec_word32(cp: u32, pc: u32) u32 {
     const c: *Cpu = @ptrFromInt(cp);
     c.bpc = pc;
-    const len: u32 = if (c.cpsr & (1 << 5) != 0 and (mem.ptr(u16, pc).* & 0xf800) != 0xf000) 2 else 4;
+    const len: u32 = if (c.cpsr & (1 << 5) != 0 and (mem.ptr(u16, pc).* & 0xf800) < 0xe800) 2 else 4;
     return switch (arm.step(c, pc)) {
         .next => @intFromBool(@as(u32, @truncate(c.pc)) != pc +% len),
         .jump => 1,
@@ -328,7 +328,8 @@ export fn run_slice(cp: u32, budget: u32) u32 {
         };
         const i = (pc & (abi.PAGE_SIZE - 1)) >> 1;
         const s = page.slot[i];
-        if (s != 0) {
+        const thumbIt = c.a64 == 0 and c.cpsr & (1 << 5) != 0 and ((((c.cpsr >> 8) & 0xfc) | ((c.cpsr >> 25) & 3)) != 0);
+        if (s != 0 and !thumbIt) {
             const f: *const fn (u32, u32) callconv(.c) u32 = @ptrFromInt(s >> 8);
             const r = f(cp, s & 255);
             // A region returns either the pc to go on at or one of the statuses below. Telling them

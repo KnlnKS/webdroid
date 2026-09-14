@@ -3,6 +3,7 @@ import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
 import { JWebView } from "../src/android/webkit";
 import { onMain } from "../src/android/mainloop";
+import { vcall } from "../src/jvm/natives/jlang";
 
 class FragmentClient extends JObj {
   events: unknown[][] = [];
@@ -48,4 +49,13 @@ test("a queued page-start callback retains its URL when a fragment commits", asy
   await onMain(() => { view.loadUrl(url); view.fragmentNavigated(url + "#section"); });
   await onMain(() => {});
   expect(client.events).toEqual([["started", url], ["visited", url + "#section", 0, url + "#section"], ["finished", url + "#section"]]);
+});
+
+test("a WebView history copy is an independent snapshot", async () => {
+  const view = new JWebView();
+  view.go({ url: "https://example.org/one" });
+  view.go({ url: "https://example.org/two" });
+  const history = await vcall(view, "copyBackForwardList", "()Landroid/webkit/WebBackForwardList;");
+  await vcall(view, "clearHistory", "()V");
+  expect(await vcall(history, "getSize", "()I")).toBe(2);
 });

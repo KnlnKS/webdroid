@@ -5,6 +5,10 @@ import {
   mkCmp, fmtDouble, bitCount32
 } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo } from "../runtime";
+import {
+  synchronizedCollection, synchronizedList, synchronizedMap, synchronizedSet,
+  unmodifiableCollection, unmodifiableList, unmodifiableMap, unmodifiableSet, unmodifiableSortedMap, unmodifiableSortedSet,
+} from "./jwrappers";
 
 /** Java toArray(T[]) contract: fill the GIVEN array when it fits (callers may
  * ignore the return value), null-terminating; else return a new one. */
@@ -61,17 +65,31 @@ function mapKey(k: unknown): unknown {
 
 interface Ent { k: unknown; v: unknown; }
 class JMapEntry extends JObj {
-  constructor(public e: Ent) { super(); }
+  constructor(public e: Ent, public mutable = true) { super(); }
 }
 rt.register({
   name: "java/util/Map$Entry", ctor: class extends JObj {},
+  methods: {
+    "static comparingByKey()Ljava/util/Comparator;": () => entryComparator("getKey", null),
+    "static comparingByKey(Ljava/util/Comparator;)Ljava/util/Comparator;": (comparator: unknown) => entryComparator("getKey", comparator),
+    "static comparingByValue()Ljava/util/Comparator;": () => entryComparator("getValue", null),
+    "static comparingByValue(Ljava/util/Comparator;)Ljava/util/Comparator;": (comparator: unknown) => entryComparator("getValue", comparator),
+  },
 });
+function entryComparator(accessor: "getKey" | "getValue", comparator: unknown) {
+  return mkCmp(async (left, right) => jcmp(comparator,
+    await vcall(left, accessor, "()Ljava/lang/Object;"),
+    await vcall(right, accessor, "()Ljava/lang/Object;")));
+}
 rt.register({
   name: "webdroid/MapEntry", ctor: JMapEntry, ifaces: ["java/util/Map$Entry"],
   methods: {
     "getKey()Ljava/lang/Object;": function (this: JMapEntry) { return this.e.k; },
     "getValue()Ljava/lang/Object;": function (this: JMapEntry) { return this.e.v; },
-    "setValue(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMapEntry, v: unknown) { const o = this.e.v; this.e.v = v; return o; },
+    "setValue(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMapEntry, v: unknown) {
+      if (!this.mutable) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      const o = this.e.v; this.e.v = v; return o;
+    },
     "hashCode()I": function (this: JMapEntry) {
       const key = jhash(this.e.k);
       return after(key, (kh) => after(jhash(this.e.v), (vh) => (kh ^ vh) | 0));
@@ -154,6 +172,11 @@ rt.register({
     "next()Ljava/lang/Object;": iterNext,
     "hasMoreElements()Z": iterHasNext,
     "nextElement()Ljava/lang/Object;": iterNext,
+    "forEachRemaining(Ljava/util/function/Consumer;)V": async function (this: JIter, c: unknown) {
+      while (iterHasNext.call(this)) {
+        await vcall(c, "accept", "(Ljava/lang/Object;)V", iterNext.call(this));
+      }
+    },
     "remove()V": async function (this: JIter) {
       if (this.readOnly) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
       if (this.last < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
@@ -368,6 +391,17 @@ export function listMethods(): Methods {
       this.a = keep;
       return changed ? 1 : 0;
     },
+    "forEach(Ljava/util/function/Consumer;)V": async function (this: JList, c: unknown) {
+      for (const v of this.a) await vcall(c, "accept", "(Ljava/lang/Object;)V", v);
+    },
+    "stream()Ljava/util/stream/Stream;": function (this: JList) {
+      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
+      stream.a = this.a.slice(); return stream;
+    },
+    "parallelStream()Ljava/util/stream/Stream;": function (this: JList) {
+      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
+      stream.a = this.a.slice(); return stream;
+    },
     "clear()V": function (this: JList) { this.a.length = 0; },
     "iterator()Ljava/util/Iterator;": function (this: JList) { return mkIter(this.a, this); },
     "listIterator()Ljava/util/ListIterator;": function (this: JList) { return mkIter(this.a, this); },
@@ -444,6 +478,14 @@ export function listMethods(): Methods {
     "offerLast(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { this.a.push(v); return 1; },
     "push(Ljava/lang/Object;)V": function (this: JList, v: unknown) { this.a.unshift(v); },
     "pop()Ljava/lang/Object;": removeHead,
+    "removeFirstOccurrence(Ljava/lang/Object;)Z": function (this: JList, v: unknown) {
+      return after(indexIn(this.a, v), (i) => i < 0 ? 0 : (this.a.splice(i, 1), 1));
+    },
+    "removeLastOccurrence(Ljava/lang/Object;)Z": async function (this: JList, v: unknown) {
+      const i = await vcall(this, "lastIndexOf", "(Ljava/lang/Object;)I", v) as number;
+      if (i < 0) return 0;
+      this.a.splice(i, 1); return 1;
+    },
   };
 }
 function indexIn(arr: unknown[], v: unknown, from = 0): number | Promise<number> {
@@ -514,6 +556,47 @@ rt.register({
   ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque", "java/util/RandomAccess", "java/io/Serializable"],
   methods: listMethods(),
 });
+class JImmutableList extends JList {}
+function immutableList(items: unknown[]): JImmutableList {
+  if (items.some((item) => item === null)) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  const result = new JImmutableList();
+  result.a = items.slice();
+  return result;
+}
+const immutableListMethods = listMethods();
+for (const method of [
+  "set(ILjava/lang/Object;)Ljava/lang/Object;", "add(Ljava/lang/Object;)Z", "add(ILjava/lang/Object;)V",
+  "remove(I)Ljava/lang/Object;", "remove(Ljava/lang/Object;)Z", "removeIf(Ljava/util/function/Predicate;)Z", "clear()V",
+  "addAll(Ljava/util/Collection;)Z", "addAll(ILjava/util/Collection;)Z", "removeAll(Ljava/util/Collection;)Z",
+  "sort(Ljava/util/Comparator;)V", "replaceAll(Ljava/util/function/UnaryOperator;)V",
+]) immutableListMethods[method] = () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
+immutableListMethods["iterator()Ljava/util/Iterator;"] = function (this: JImmutableList) {
+  const iterator = mkIter(this.a.slice()); iterator.readOnly = true; return iterator;
+};
+immutableListMethods["listIterator()Ljava/util/ListIterator;"] = immutableListMethods["iterator()Ljava/util/Iterator;"];
+immutableListMethods["listIterator(I)Ljava/util/ListIterator;"] = function (this: JImmutableList, at: number) {
+  if (at < 0 || at > this.a.length) ioobe(at, this.a.length);
+  const iterator = mkIter(this.a.slice()); iterator.i = at; iterator.readOnly = true; return iterator;
+};
+immutableListMethods["subList(II)Ljava/util/List;"] = function (this: JImmutableList, from: number, to: number) {
+  if (from < 0 || to > this.a.length || from > to) ioobe(from < 0 ? from : to, this.a.length);
+  return immutableList(this.a.slice(from, to));
+};
+rt.register({
+  name: "webdroid/ImmutableList", ctor: JImmutableList, sup: "java/util/AbstractList", typeVars: "E",
+  ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/RandomAccess", "java/io/Serializable"], methods: immutableListMethods,
+});
+const listFactories: Methods = {
+  "static copyOf(Ljava/util/Collection;)Ljava/util/List;": async (collection: unknown) => {
+    if (collection === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    return immutableList(await toJsArray(collection));
+  },
+  "static of([Ljava/lang/Object;)Ljava/util/List;": (items: unknown[]) => immutableList(items),
+};
+for (let count = 0; count <= 10; count++) {
+  const descriptor = `(${"Ljava/lang/Object;".repeat(count)})Ljava/util/List;`;
+  listFactories[`static of${descriptor}`] = (...items: unknown[]) => immutableList(items);
+}
 // Vector's pre-Collections API, which Stack inherits.
 function vectorMethods(base: Methods): Methods {
   const edge = (i: number) => function (this: JList) {
@@ -587,6 +670,10 @@ export class JMap extends JObj {
   slow: Ent[] = [];                  // custom-equals keys (linear; rare)
   slowVersion = 0;
   access = false;                    // LinkedHashMap accessOrder
+  mutable = true;
+}
+function ensureMapMutable(map: JMap): void {
+  if (!map.mutable) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
 }
 async function slowFind(list: Ent[], k: unknown): Promise<number> {
   for (let i = 0; i < list.length; i++) {
@@ -595,7 +682,7 @@ async function slowFind(list: Ent[], k: unknown): Promise<number> {
   }
   return -1;
 }
-function mapMethods(): NativeSpec["methods"] {
+function mapMethods(): Methods {
   return {
     "<init>()V": function () {},
     "<init>(I)V": function () {},
@@ -637,6 +724,7 @@ function mapMethods(): NativeSpec["methods"] {
       for (const e of [...allEnts(this)]) await vcall(fn, "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V", e.k, e.v);
     },
     "replaceAll(Ljava/util/function/BiFunction;)V": async function (this: JMap, fn: unknown) {
+      ensureMapMutable(this);
       for (const e of allEnts(this)) e.v = await vcall(fn, "apply", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", e.k, e.v);
     },
     "containsValue(Ljava/lang/Object;)Z": async function (this: JMap, v: unknown) {
@@ -647,6 +735,7 @@ function mapMethods(): NativeSpec["methods"] {
       return 0;
     },
     "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown, v: unknown) {
+      ensureMapMutable(this);
       const mk = mapKey(k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
@@ -660,7 +749,23 @@ function mapMethods(): NativeSpec["methods"] {
         return null;
       });
     },
+    "putIfAbsent(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown, v: unknown) {
+      ensureMapMutable(this);
+      const mk = mapKey(k);
+      if (mk !== SLOW) {
+        const e = this.m.get(mk);
+        if (e?.v !== null && e?.v !== undefined) return e.v;
+        if (e) e.v = v; else this.m.set(mk, { k, v });
+        return null;
+      }
+      return slowFind(this.slow, k).then((i) => {
+        if (i >= 0 && this.slow[i].v !== null && this.slow[i].v !== undefined) return this.slow[i].v;
+        if (i >= 0) this.slow[i].v = v; else this.slow.push({ k, v });
+        return null;
+      });
+    },
     "remove(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown) {
+      ensureMapMutable(this);
       const mk = mapKey(k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
@@ -671,6 +776,7 @@ function mapMethods(): NativeSpec["methods"] {
       return slowFind(this.slow, k).then((i) => (i >= 0 ? this.slow.splice(i, 1)[0].v : null));
     },
     "remove(Ljava/lang/Object;Ljava/lang/Object;)Z": function (this: JMap, k: unknown, value: unknown) {
+      ensureMapMutable(this);
       const key = mapKey(k);
       const remove = (entry: Ent | undefined) => {
         if (!entry) return 0;
@@ -690,8 +796,8 @@ function mapMethods(): NativeSpec["methods"] {
       const entries = this.slow.slice();
       return slowFind(entries, k).then((index) => remove(entries[index]));
     },
-    "clear()V": function (this: JMap) { this.m.clear(); this.slow.length = 0; this.slowVersion++; },
-    "putAll(Ljava/util/Map;)V": async function (this: JMap, src: unknown) { if (src) await copyMapInto(src, this); },
+    "clear()V": function (this: JMap) { ensureMapMutable(this); this.m.clear(); this.slow.length = 0; this.slowVersion++; },
+    "putAll(Ljava/util/Map;)V": async function (this: JMap, src: unknown) { ensureMapMutable(this); if (src) await copyMapInto(src, this); },
     "keySet()Ljava/util/Set;": function (this: JMap) { return new JSetView(this, "k"); },
     "values()Ljava/util/Collection;": function (this: JMap) { return new JSetView(this, "v"); },
     "entrySet()Ljava/util/Set;": function (this: JMap) { return new JSetView(this, "e"); },
@@ -751,12 +857,71 @@ async function copyMapInto(src: unknown, dst: JMap) {
   }
 }
 
+class JImmutableMap extends JMap { mutable = false; }
+async function addImmutableMapping(map: JImmutableMap, key: unknown, value: unknown): Promise<void> {
+  if (key === null || value === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  const bucket = mapKey(key);
+  if (bucket !== SLOW) {
+    if (map.m.has(bucket)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate key: " + String(key));
+    map.m.set(bucket, { k: key, v: value });
+  } else {
+    if (await slowFind(map.slow, key) >= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate key: " + String(key));
+    map.slow.push({ k: key, v: value });
+  }
+}
+async function immutableMap(entries: readonly (readonly [unknown, unknown])[]): Promise<JImmutableMap> {
+  const map = new JImmutableMap();
+  for (const [key, value] of entries) await addImmutableMapping(map, key, value);
+  return map;
+}
+rt.register({
+  name: "webdroid/ImmutableMap", ctor: JImmutableMap, sup: "java/util/AbstractMap", typeVars: "K,V",
+  ifaces: ["java/util/Map", "java/io/Serializable"], methods: mapMethods(),
+});
+
+const mapFactories: Methods = {
+  "static entry(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map$Entry;": (key: unknown, value: unknown) => {
+    if (key === null || value === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    const entry = new JSimpleImmutableEntry();
+    entry.e = { k: key, v: value };
+    return entry;
+  },
+  "static copyOf(Ljava/util/Map;)Ljava/util/Map;": async (source: unknown) => {
+    if (source === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    const entries: [unknown, unknown][] = [];
+    if (source instanceof JMap) for (const entry of allEnts(source)) entries.push([entry.k, entry.v]);
+    else {
+      const entrySet = await vcall(source, "entrySet", "()Ljava/util/Set;");
+      for (const entry of await toJsArray(entrySet)) entries.push([
+        await vcall(entry, "getKey", "()Ljava/lang/Object;"), await vcall(entry, "getValue", "()Ljava/lang/Object;"),
+      ]);
+    }
+    return immutableMap(entries);
+  },
+  "static ofEntries([Ljava/util/Map$Entry;)Ljava/util/Map;": async (source: unknown[]) => {
+    if (source === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    const entries: [unknown, unknown][] = [];
+    for (const entry of source) entries.push([
+      await vcall(entry, "getKey", "()Ljava/lang/Object;"), await vcall(entry, "getValue", "()Ljava/lang/Object;"),
+    ]);
+    return immutableMap(entries);
+  },
+};
+for (let count = 0; count <= 10; count++) {
+  const descriptor = `(${"Ljava/lang/Object;".repeat(count * 2)})Ljava/util/Map;`;
+  mapFactories[`static of${descriptor}`] = (...values: unknown[]) => {
+    const entries: [unknown, unknown][] = [];
+    for (let i = 0; i < values.length; i += 2) entries.push([values[i], values[i + 1]]);
+    return immutableMap(entries);
+  };
+}
+
 /** live-ish view over a JMap for keySet/values/entrySet (iteration + size + contains + remove) */
 class JSetView extends JObj {
   constructor(public map: JMap, public kind: "k" | "v" | "e") { super(); }
   snapshot(entries: Iterable<Ent> = allEnts(this.map)): unknown[] {
     const out: unknown[] = [];
-    for (const e of entries) out.push(this.kind === "k" ? e.k : this.kind === "v" ? e.v : new JMapEntry(e));
+    for (const e of entries) out.push(this.kind === "k" ? e.k : this.kind === "v" ? e.v : new JMapEntry(e, this.map.mutable));
     return out;
   }
 }
@@ -768,7 +933,7 @@ rt.register({
     "isEmpty()Z": function (this: JSetView) { return this.map.m.size + this.map.slow.length ? 0 : 1; },
     "iterator()Ljava/util/Iterator;": function (this: JSetView) {
       const entries = [...allEnts(this.map)], values = this.snapshot(entries);
-      return mkIter(values, { removeAt: (i) => {
+      const iterator = mkIter(values, { removeAt: (i) => {
         const entry = entries[i], key = mapKey(entry.k);
         if (key !== SLOW) {
           if (this.map.m.get(key) === entry) this.map.m.delete(key);
@@ -778,6 +943,19 @@ rt.register({
         }
         entries.splice(i, 1); values.splice(i, 1);
       } });
+      iterator.readOnly = !this.map.mutable;
+      return iterator;
+    },
+    "forEach(Ljava/util/function/Consumer;)V": async function (this: JSetView, c: unknown) {
+      for (const v of this.snapshot()) await vcall(c, "accept", "(Ljava/lang/Object;)V", v);
+    },
+    "stream()Ljava/util/stream/Stream;": function (this: JSetView) {
+      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
+      stream.a = this.snapshot(); return stream;
+    },
+    "parallelStream()Ljava/util/stream/Stream;": function (this: JSetView) {
+      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
+      stream.a = this.snapshot(); return stream;
     },
     "contains(Ljava/lang/Object;)Z": function (this: JSetView, v: unknown) {
       if (this.kind === "k") return vcallMaybe(this.map, "containsKey", "(Ljava/lang/Object;)Z", v);
@@ -817,7 +995,7 @@ rt.register({
       for (const v of await toJsArray(c)) if ((await indexIn(snap, v)) < 0) return 0;
       return 1;
     },
-    "clear()V": function (this: JSetView) { this.map.m.clear(); this.map.slow.length = 0; this.map.slowVersion++; },
+    "clear()V": function (this: JSetView) { ensureMapMutable(this.map); this.map.m.clear(); this.map.slow.length = 0; this.map.slowVersion++; },
     "toString()Ljava/lang/String;": function (this: JSetView) { return "[" + this.snapshot().join(", ") + "]"; },
   },
 });
@@ -897,7 +1075,7 @@ function setItems(s: JSet): unknown[] {
   for (const e of s.slow) out.push(e.k);
   return out;
 }
-function setMethods(): NativeSpec["methods"] {
+function setMethods(): Methods {
   return {
     "<init>()V": function () {},
     "<init>(Ljava/util/Comparator;)V": function () {},
@@ -929,6 +1107,17 @@ function setMethods(): NativeSpec["methods"] {
       let changed = 0;
       for (const v of setItems(this)) if (await vcall(p, "test", "(Ljava/lang/Object;)Z", v)) { await vcall(this, "remove", "(Ljava/lang/Object;)Z", v); changed = 1; }
       return changed;
+    },
+    "forEach(Ljava/util/function/Consumer;)V": async function (this: JSet, c: unknown) {
+      for (const v of setItems(this)) await vcall(c, "accept", "(Ljava/lang/Object;)V", v);
+    },
+    "stream()Ljava/util/stream/Stream;": function (this: JSet) {
+      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
+      stream.a = setItems(this); return stream;
+    },
+    "parallelStream()Ljava/util/stream/Stream;": function (this: JSet) {
+      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
+      stream.a = setItems(this); return stream;
     },
     "remove(Ljava/lang/Object;)Z": function (this: JSet, v: unknown) {
       const mk = mapKey(v);
@@ -999,6 +1188,37 @@ function addToSet(s: JSet, v: unknown): number | Promise<number> {
   return slowFind(s.slow, v).then((i) => (i >= 0 ? 0 : (s.slow.push({ k: v, v }), 1)));
 }
 rt.register({ name: "webdroid/BaseSet", ctor: JSet, typeVars: "E", ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: setMethods() });
+
+class JImmutableSet extends JSet {}
+async function immutableSet(items: unknown[]): Promise<JImmutableSet> {
+  const result = new JImmutableSet();
+  for (const item of items) {
+    if (item === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if (!(await addToSet(result, item))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate element: " + String(item));
+  }
+  return result;
+}
+const immutableSetMethods = setMethods();
+for (const method of ["add(Ljava/lang/Object;)Z", "remove(Ljava/lang/Object;)Z", "clear()V", "addAll(Ljava/util/Collection;)Z", "removeAll(Ljava/util/Collection;)Z", "removeIf(Ljava/util/function/Predicate;)Z"])
+  immutableSetMethods[method] = () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
+immutableSetMethods["iterator()Ljava/util/Iterator;"] = function (this: JImmutableSet) {
+  const iterator = mkIter(setItems(this));
+  iterator.readOnly = true;
+  return iterator;
+};
+rt.register({
+  name: "webdroid/ImmutableSet", ctor: JImmutableSet, sup: "java/util/AbstractSet", typeVars: "E",
+  ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: immutableSetMethods,
+});
+
+const setFactories: Methods = {
+  "static copyOf(Ljava/util/Collection;)Ljava/util/Set;": async (collection: unknown) => immutableSet(await toJsArray(collection)),
+  "static of([Ljava/lang/Object;)Ljava/util/Set;": (items: unknown[]) => immutableSet(items),
+};
+for (let count = 0; count <= 10; count++) {
+  const descriptor = `(${"Ljava/lang/Object;".repeat(count)})Ljava/util/Set;`;
+  setFactories[`static of${descriptor}`] = (...items: unknown[]) => immutableSet(items);
+}
 for (const n of ["java/util/HashSet", "java/util/LinkedHashSet",
   "java/util/concurrent/CopyOnWriteArraySet", "java/util/EnumSet", "java/util/concurrent/ConcurrentHashMap$KeySetView"]) {
   rt.register({
@@ -1470,6 +1690,7 @@ rt.register({
 // native inheritance is JS inheritance: the bases below must extend each other's ctors
 class JAbstractCollection extends JObj {}
 class JAbstractList extends JAbstractCollection { modCount = 0; }
+class JAbstractSequentialList extends JAbstractList {}
 class JAbstractSet extends JAbstractCollection {}
 
 // JDK AbstractList.ListItr: every step is a virtual get/set/add/remove on the list, so an app's
@@ -1779,8 +2000,29 @@ rt.register({
   ifaces: ["java/util/List"], fields: { modCount: "modCount" }, methods: absList,
 });
 rt.register({
-  name: "java/util/AbstractSequentialList", ctor: class extends JAbstractList {}, sup: "java/util/AbstractList", typeVars: "E",
-  ifaces: ["java/util/List"], methods: absList,
+  name: "java/util/AbstractSequentialList", ctor: JAbstractSequentialList, sup: "java/util/AbstractList", typeVars: "E",
+  ifaces: ["java/util/List"],
+  methods: {
+    "<init>()V": function () {},
+    "get(I)Ljava/lang/Object;": async function (this: JAbstractSequentialList, at: number) {
+      return vcall(await vcall(this, "listIterator", "(I)Ljava/util/ListIterator;", at), "next", "()Ljava/lang/Object;");
+    },
+    "set(ILjava/lang/Object;)Ljava/lang/Object;": async function (this: JAbstractSequentialList, at: number, value: unknown) {
+      const it = await vcall(this, "listIterator", "(I)Ljava/util/ListIterator;", at);
+      const old = await vcall(it, "next", "()Ljava/lang/Object;");
+      await vcall(it, "set", "(Ljava/lang/Object;)V", value);
+      return old;
+    },
+    "add(ILjava/lang/Object;)V": async function (this: JAbstractSequentialList, at: number, value: unknown) {
+      await vcall(await vcall(this, "listIterator", "(I)Ljava/util/ListIterator;", at), "add", "(Ljava/lang/Object;)V", value);
+    },
+    "remove(I)Ljava/lang/Object;": async function (this: JAbstractSequentialList, at: number) {
+      const it = await vcall(this, "listIterator", "(I)Ljava/util/ListIterator;", at);
+      const old = await vcall(it, "next", "()Ljava/lang/Object;");
+      await vcall(it, "remove", "()V");
+      return old;
+    },
+  },
 });
 rt.register({
   name: "java/util/AbstractSet", ctor: JAbstractSet, sup: "java/util/AbstractCollection", typeVars: "E",
@@ -1854,6 +2096,21 @@ const mapDefaults: Methods = {
 const collDefaults: Methods = {
   "removeIf(Ljava/util/function/Predicate;)Z": absCollection["removeIf(Ljava/util/function/Predicate;)Z"],
   "toArray()[Ljava/lang/Object;": absCollection["toArray()[Ljava/lang/Object;"],
+  "stream()Ljava/util/stream/Stream;": async function (this: JObj) {
+    const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
+    stream.a = await toJsArray(this);
+    return stream;
+  },
+  "parallelStream()Ljava/util/stream/Stream;": async function (this: JObj) {
+    const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
+    stream.a = await toJsArray(this);
+    return stream;
+  },
+  "spliterator()Ljava/util/Spliterator;": async function (this: JObj) {
+    const spliterator = rt.make("java/util/Spliterator") as JObj & { a: unknown[] };
+    spliterator.a = await toJsArray(this);
+    return spliterator;
+  },
 };
 const listDefaults: Methods = {
   "sort(Ljava/util/Comparator;)V": async function (this: JObj, cmp: unknown) {
@@ -1867,8 +2124,8 @@ const listDefaults: Methods = {
   },
 };
 rt.register({ name: "java/util/Collection", ctor: class extends JObj {}, ifaces: ["java/lang/Iterable"], typeVars: "E", methods: collDefaults });
-rt.register({ name: "java/util/List", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E", methods: listDefaults });
-rt.register({ name: "java/util/Set", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E" });
+rt.register({ name: "java/util/List", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E", methods: { ...listDefaults, ...listFactories } });
+rt.register({ name: "java/util/Set", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E", methods: setFactories });
 rt.register({ name: "java/util/Queue", ctor: class extends JObj {}, ifaces: ["java/util/Collection"], typeVars: "E" });
 rt.register({ name: "java/util/Deque", ctor: class extends JObj {}, ifaces: ["java/util/Queue"], typeVars: "E" });
 rt.register({ name: "java/util/SortedSet", ctor: class extends JObj {}, ifaces: ["java/util/Set"], typeVars: "E" });
@@ -1877,7 +2134,7 @@ rt.register({ name: "java/util/SortedMap", ctor: class extends JObj {}, ifaces: 
 rt.register({ name: "java/util/NavigableMap", ctor: class extends JObj {}, ifaces: ["java/util/SortedMap"], typeVars: "K,V" });
 rt.register({ name: "java/util/concurrent/ConcurrentNavigableMap", ctor: class extends JObj {}, ifaces: ["java/util/NavigableMap", "java/util/concurrent/ConcurrentMap"], typeVars: "K,V" });
 rt.register({ name: "java/util/concurrent/ConcurrentMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"], typeVars: "K,V" });
-rt.register({ name: "java/util/Map", ctor: class extends JObj {}, typeVars: "K,V", methods: mapDefaults });
+rt.register({ name: "java/util/Map", ctor: class extends JObj {}, typeVars: "K,V", methods: { ...mapDefaults, ...mapFactories } });
 rt.register({
   name: "java/util/Iterator", ctor: class extends JObj {},
   methods: {
@@ -1943,7 +2200,8 @@ rt.register({ name: "java/util/ListIterator", ctor: class extends JObj {}, iface
 // vcall() the selector by name. Only the marker registration is needed.
 for (const f of ["Supplier", "Function", "BiFunction", "Consumer", "BiConsumer", "Predicate",
   "BiPredicate", "ToIntFunction", "ToLongFunction", "ToDoubleFunction", "IntFunction",
-  "UnaryOperator", "BinaryOperator", "IntUnaryOperator", "LongUnaryOperator", "IntBinaryOperator", "LongBinaryOperator"]) {
+  "UnaryOperator", "BinaryOperator", "IntPredicate", "IntConsumer", "IntSupplier", "IntUnaryOperator",
+  "LongUnaryOperator", "IntBinaryOperator", "LongBinaryOperator"]) {
   rt.register({ name: "java/util/function/" + f, ctor: class extends JObj {} });
 }
 
@@ -1963,6 +2221,11 @@ rt.register({
     "static asList([Ljava/lang/Object;)Ljava/util/List;": (arr: unknown[]) => {
       rt.link("webdroid/ArraysList");
       const l = new JArraysList(); l.a = arr; return l;
+    },
+    "static stream([Ljava/lang/Object;)Ljava/util/stream/Stream;": (arr: unknown[]) => {
+      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
+      stream.a = arr.slice();
+      return stream;
     },
     ...Object.fromEntries([..."BCSIJFD"].flatMap((t) => [[`static sort([${t})V`, taSort], [`static sort([${t}II)V`, taSort]])),
     "static toString([B)Ljava/lang/String;": (values: Int8Array | null) => values ? `[${Array.from(values).join(", ")}]` : "null",
@@ -2129,7 +2392,7 @@ rt.register({
       await vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, v);
       return m;
     },
-    "static unmodifiableList(Ljava/util/List;)Ljava/util/List;": (l: unknown) => l,
+    "static unmodifiableList(Ljava/util/List;)Ljava/util/List;": unmodifiableList,
     "static list(Ljava/util/Enumeration;)Ljava/util/ArrayList;": async (e: unknown) => {
       const out: unknown[] = [];
       while (await vcall(e, "hasMoreElements", "()Z")) out.push(await vcall(e, "nextElement", "()Ljava/lang/Object;"));
@@ -2137,12 +2400,15 @@ rt.register({
     },
     "static enumeration(Ljava/util/Collection;)Ljava/util/Enumeration;": async (c: unknown) => mkIter(await toJsArray(c)),
     "static newSetFromMap(Ljava/util/Map;)Ljava/util/Set;": () => rt.make("java/util/HashSet"),
-    "static unmodifiableMap(Ljava/util/Map;)Ljava/util/Map;": (m: unknown) => m,
-    "static unmodifiableSet(Ljava/util/Set;)Ljava/util/Set;": (s: unknown) => s,
-    "static unmodifiableCollection(Ljava/util/Collection;)Ljava/util/Collection;": (c: unknown) => c,
-    "static synchronizedList(Ljava/util/List;)Ljava/util/List;": (l: unknown) => l,
-    "static synchronizedMap(Ljava/util/Map;)Ljava/util/Map;": (m: unknown) => m,
-    "static synchronizedSet(Ljava/util/Set;)Ljava/util/Set;": (s: unknown) => s,
+    "static unmodifiableMap(Ljava/util/Map;)Ljava/util/Map;": unmodifiableMap,
+    "static unmodifiableSet(Ljava/util/Set;)Ljava/util/Set;": unmodifiableSet,
+    "static unmodifiableSortedMap(Ljava/util/SortedMap;)Ljava/util/SortedMap;": unmodifiableSortedMap,
+    "static unmodifiableSortedSet(Ljava/util/SortedSet;)Ljava/util/SortedSet;": unmodifiableSortedSet,
+    "static unmodifiableCollection(Ljava/util/Collection;)Ljava/util/Collection;": unmodifiableCollection,
+    "static synchronizedCollection(Ljava/util/Collection;)Ljava/util/Collection;": synchronizedCollection,
+    "static synchronizedList(Ljava/util/List;)Ljava/util/List;": synchronizedList,
+    "static synchronizedMap(Ljava/util/Map;)Ljava/util/Map;": synchronizedMap,
+    "static synchronizedSet(Ljava/util/Set;)Ljava/util/Set;": synchronizedSet,
     "static sort(Ljava/util/List;)V": (l: unknown) => vcallMaybe(l, "sort", "(Ljava/util/Comparator;)V", null),
     "static sort(Ljava/util/List;Ljava/util/Comparator;)V": (l: unknown, c: unknown) => vcallMaybe(l, "sort", "(Ljava/util/Comparator;)V", c),
     "static binarySearch(Ljava/util/List;Ljava/lang/Object;)I": (l: unknown, k: unknown) => listBinarySearch(l, k, null),
@@ -2168,6 +2434,13 @@ rt.register({
       for (const v of arr) await vcall(c, "add", "(Ljava/lang/Object;)Z", v);
       return arr.length ? 1 : 0;
     },
+    "static disjoint(Ljava/util/Collection;Ljava/util/Collection;)Z": async (a: unknown, b: unknown) => {
+      if (a === null || b === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const left = await toJsArray(a), right = await toJsArray(b);
+      const [smaller, larger] = left.length <= right.length ? [left, right] : [right, left];
+      for (const value of smaller) if ((await indexIn(larger, value)) >= 0) return 0;
+      return 1;
+    },
     "static nCopies(ILjava/lang/Object;)Ljava/util/List;": (n: number, v: unknown) => {
       const l = new JList(); l.a = new Array(n).fill(v); return l;
     },
@@ -2190,7 +2463,20 @@ rt.register({
       if (o === null) throw rt.mkThrowable("java/lang/NullPointerException", m);
       return o;
     },
+    "static requireNonNull(Ljava/lang/Object;Ljava/util/function/Supplier;)Ljava/lang/Object;": async (o: unknown, supplier: unknown) => {
+      if (o !== null) return o;
+      throw rt.mkThrowable("java/lang/NullPointerException", await vcall(supplier, "get", "()Ljava/lang/Object;") as string);
+    },
+    "static requireNonNullElse(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": (o: unknown, fallback: unknown) => {
+      if (o !== null) return o;
+      if (fallback === null) return rt.npe();
+      return fallback;
+    },
+    "static compare(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/Comparator;)I": (a: unknown, b: unknown, comparator: unknown) =>
+      (a === b ? 0 : vcall(comparator, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", a, b)),
     "static toString(Ljava/lang/Object;)Ljava/lang/String;": (o: unknown) => (o === null ? "null" : vcall(o, "toString", "()Ljava/lang/String;")),
+    "static toString(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/String;": (o: unknown, fallback: string) =>
+      (o === null ? fallback : vcall(o, "toString", "()Ljava/lang/String;")),
     "static isNull(Ljava/lang/Object;)Z": (o: unknown) => (o === null ? 1 : 0),
     "static nonNull(Ljava/lang/Object;)Z": (o: unknown) => (o !== null ? 1 : 0),
   },

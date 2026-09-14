@@ -150,6 +150,10 @@ rt.register({
     },
   },
 });
+Object.defineProperty(Object.prototype, mangleMethod("getClass", "()Ljava/lang/Class;"), {
+  value: function (this: unknown) { return rt.classFor(jclsName(this)); },
+  writable: true, configurable: true, enumerable: false,
+});
 
 function monWait(obj: object, ms: number): Promise<void> {
   if (ms < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout");
@@ -484,7 +488,7 @@ for (const [sup, names] of [
   ["LinkageError", "NoClassDefFoundError NoSuchMethodError NoSuchFieldError UnsatisfiedLinkError AbstractMethodError ExceptionInInitializerError"],
   ["java/io/IOException", "java/io/FileNotFoundException java/io/EOFException java/io/UnsupportedEncodingException java/net/SocketException " +
     "java/net/SocketTimeoutException java/net/UnknownHostException java/io/InterruptedIOException"],
-  ["java/net/SocketException", "java/net/ConnectException"],
+  ["java/net/SocketException", "java/net/ConnectException java/net/BindException"],
 ]) {
   if (sup === "java/io/IOException") defineException(sup, "java/lang/Exception", ["()V", "(Ljava/lang/String;)V", "(Ljava/lang/Throwable;)V", "(Ljava/lang/String;Ljava/lang/Throwable;)V"]);
   for (const n of names.split(" ")) defineException(lang(n), lang(sup));
@@ -511,6 +515,14 @@ rt.register({
     "forEach(Ljava/util/function/Consumer;)V": async function (this: JObj, c: unknown) {
       const it = await vcall(this, "iterator", "()Ljava/util/Iterator;");
       while (await vcall(it, "hasNext", "()Z")) await vcall(c, "accept", "(Ljava/lang/Object;)V", await vcall(it, "next", "()Ljava/lang/Object;"));
+    },
+    "spliterator()Ljava/util/Spliterator;": async function (this: JObj) {
+      const values: unknown[] = [];
+      const it = await vcall(this, "iterator", "()Ljava/util/Iterator;");
+      while (await vcall(it, "hasNext", "()Z")) values.push(await vcall(it, "next", "()Ljava/lang/Object;"));
+      const spliterator = rt.make("java/util/Spliterator") as JObj & { a: unknown[] };
+      spliterator.a = values;
+      return spliterator;
     },
   },
 });
@@ -651,7 +663,38 @@ sm("replaceFirst(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", funct
 });
 function javaSplit(s: string, pattern: string, limit: number): string[] {
   const plain = /^[^\\\[\](){}.*+?^$|]+$/.test(pattern);
-  const parts = plain ? s.split(pattern) : s.split(javaRegex(pattern, "su"));
+  if (limit === 1) return jarray([s], "Ljava/lang/String;");
+  const parts: string[] = [];
+  let end = 0, matched = false;
+  if (plain) {
+    for (;;) {
+      if (limit > 0 && parts.length === limit - 1) break;
+      const at = s.indexOf(pattern, end);
+      if (at < 0) break;
+      matched = true;
+      parts.push(s.slice(end, at));
+      end = at + pattern.length;
+    }
+  } else {
+    const regex = javaRegex(pattern, "gsu");
+    regex.lastIndex = 0;
+    for (;;) {
+      if (limit > 0 && parts.length === limit - 1) break;
+      const match = regex.exec(s);
+      if (!match) break;
+      if (match.index === 0 && match[0].length === 0 && end === 0) {
+        regex.lastIndex = 1;
+        continue;
+      }
+      matched = true;
+      parts.push(s.slice(end, match.index));
+      end = match.index + match[0].length;
+      if (!match[0].length) regex.lastIndex = match.index + 1;
+    }
+    regex.lastIndex = 0;
+  }
+  if (!matched) return jarray([s], "Ljava/lang/String;");
+  parts.push(s.slice(end));
   if (limit === 0) { while (parts.length > 1 && parts[parts.length - 1] === "") parts.pop(); }
   return jarray(parts, "Ljava/lang/String;");
 }
@@ -851,6 +894,7 @@ function sbSpec(name: string): NativeSpec {
       [`append([CII)${L}`]: function (this: JSB, v: Uint16Array, o: number, n: number) { this.s += charsToString(v, o, n); return this; },
       "toString()Ljava/lang/String;": function (this: JSB) { return this.s; },
       "length()I": function (this: JSB) { return this.s.length; },
+      "ensureCapacity(I)V": function () {},
       "charAt(I)C": function (this: JSB, i: number) { return this.s.charCodeAt(i); },
       [`appendCodePoint(I)L${name};`]: function (this: JSB, cp: number) { this.s += String.fromCodePoint(cp); return this; },
       [`replace(IILjava/lang/String;)L${name};`]: function (this: JSB, a: number, b: number, r: string) {
@@ -1043,6 +1087,7 @@ rt.register({
     ...numCommon("J", JLong),
     "static valueOf(J)Ljava/lang/Long;": (v: bigint) => box(JLong, v),
     "static valueOf(Ljava/lang/String;)Ljava/lang/Long;": (s: string) => box(JLong, parseLongJ(s)),
+    "static valueOf(Ljava/lang/String;I)Ljava/lang/Long;": (s: string, radix: number) => box(JLong, parseLongJ(s, radix)),
     "static parseLong(Ljava/lang/String;)J": parseLongJ,
     "static parseLong(Ljava/lang/String;I)J": parseLongJ,
     "static lowestOneBit(J)J": (v: bigint) => v & -v,
@@ -1562,7 +1607,14 @@ rt.register({
     "getName()Ljava/lang/String;": function (this: JThreadGroup) { return this.gname; },
     "getParent()Ljava/lang/ThreadGroup;": function (this: JThreadGroup) { return this === mainGroup ? null : mainGroup; },
     "activeCount()I": () => liveThreads.size,
-    "enumerate([Ljava/lang/Thread;)I": (a: unknown[]) => { if (a.length) a[0] = curThread; return a.length ? 1 : 0; },
+    "enumerate([Ljava/lang/Thread;)I": (a: unknown[]) => {
+      let i = 0;
+      for (const thread of liveThreads) {
+        if (i >= a.length) break;
+        a[i++] = thread;
+      }
+      return i;
+    },
     "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": (_t: unknown, e: unknown) => { console.error("[uncaught]", e); },
     "toString()Ljava/lang/String;": function (this: JThreadGroup) { return `java.lang.ThreadGroup[name=${this.gname},maxpri=10]`; },
   },

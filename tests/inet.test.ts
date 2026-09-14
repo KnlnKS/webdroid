@@ -25,3 +25,16 @@ test("InetAddress hands out the resolver's synthetic address, which dials the na
   expect(await vcall(literal, "isLoopbackAddress", "()Z")).toBe(1);
   expect(await vcall(literal, "getHostAddress", "()Ljava/lang/String;")).toBe("127.0.0.1");
 });
+
+test("the platform trust manager accepts relay-verified peers", async () => {
+  const socket = Object.assign(rt.make("javax/net/ssl/SSLSocket"), { host: "example.com" });
+  const session = await vcall(socket, "getSession", "()Ljavax/net/ssl/SSLSession;");
+  const chain = await vcall(session, "getPeerCertificates", "()[Ljava/security/cert/Certificate;");
+  const factory = await scall("javax/net/ssl/TrustManagerFactory", "getInstance",
+    "(Ljava/lang/String;)Ljavax/net/ssl/TrustManagerFactory;", "PKIX");
+  const managers = await vcall(factory, "getTrustManagers", "()[Ljavax/net/ssl/TrustManager;");
+  await expect(vcall(managers[0], "checkServerTrusted", "([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V", chain, "RSA")).resolves.toBeUndefined();
+  const verifier = await scall("javax/net/ssl/HttpsURLConnection", "getDefaultHostnameVerifier", "()Ljavax/net/ssl/HostnameVerifier;");
+  expect(await vcall(verifier, "verify", "(Ljava/lang/String;Ljavax/net/ssl/SSLSession;)Z", "EXAMPLE.COM.", session)).toBe(1);
+  expect(await vcall(verifier, "verify", "(Ljava/lang/String;Ljavax/net/ssl/SSLSession;)Z", "other.example", session)).toBe(0);
+});

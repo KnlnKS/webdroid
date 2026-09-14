@@ -21,6 +21,7 @@ import { yieldToLoop } from "../native/cpu";
 import { mkFile, JInputStream, JOutputStream, vfs, type JFileDescriptor } from "../jvm/natives/jio";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd } from "../native/stdio";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
+import { unavailableClock } from "../jvm/natives/jtime";
 
 rt.register({
   name: "android/os/SystemProperties", ctor: class extends JObj {},
@@ -246,6 +247,7 @@ rt.register({
     "static elapsedRealtime()J": () => BigInt(Math.floor(uptimeMillis())),
     "static elapsedRealtimeNanos()J": () => BigInt(Math.floor(uptimeMillis() * 1e6)),
     "static currentThreadTimeMillis()J": () => BigInt(Math.floor(performance.now())),
+    "static currentGnssTimeClock()Ljava/time/Clock;": () => unavailableClock("Gnss based time is not available."),
     "static sleep(J)V": (ms: bigint) => new Promise((r) => setTimeout(r, Number(ms))),
   },
 });
@@ -382,6 +384,8 @@ rt.register({
     "static getNativeHeapFreeSize()J": () => BigInt(Math.max(0, Math.round(mem.stats().peak - mem.stats().used))),
     ...stubs(0, "static isDebuggerConnected()Z", "static waitingForDebugger()Z"),
     "static threadCpuTimeNanos()J": () => BigInt(Math.round(performance.now() * 1e6)),
+    "static getThreadAllocCount()I": () => 0,
+    "static getThreadAllocSize()I": () => 0,
     "static getPss()J": () => BigInt((((performance as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1024) | 0),
     // ART's runtime counters: nothing here collects, blocks or compacts, so every stat is zero
     "static getRuntimeStat(Ljava/lang/String;)Ljava/lang/String;": (name: string) => RUNTIME_STATS.includes(name) ? "0" : null,

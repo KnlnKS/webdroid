@@ -2053,3 +2053,45 @@ from the affected port-4109 session did not reproduce the length lookup. The
 restored preferences also skip the optional MIUI probe, so that difference alone
 does not identify the failure. Temporary instrumentation was removed; diagnostic
 logs remain local under mobile-31. Authentication is still pending.
+
+### 2026-09-13 — Amazon Shopping launch and home
+
+Amazon Shopping 32.17.0.100 (`Amazon.xapk`) initially faulted in MMKV's libc++
+`unordered_map`. Compact Thumb arithmetic inside an IT block updated condition flags even
+though only the instruction's non-IT form may do so; the changed flags selected a wrong
+conditional path. JIT tail chaining also bypassed the dispatcher's active-IT guard. Preserving
+IT state across compiled regions and suppressing those flag writes makes the ARM interpreter
+and JIT agree and removes the native fault (`3618ec4`). Thumb table branches, shifted-register
+operations and the ARM SIMD operations reached by the same production libraries were filled
+from decoded instruction behavior rather than library-specific hooks.
+
+The app now launches its unchanged bytecode, shows sign-in, skips to the live Amazon home and
+loads the proxied web content. Supporting framework work includes launcher-intent semantics,
+modern collection/future/NIO APIs, ICU locale/currency bridges, validated-network capability,
+and unavailable-GNSS clock behavior. The TLS relay verifies the upstream peer; its synthetic
+peer certificate is accepted only by the default trust manager and is explicitly marked as a
+relay peer. The default HTTPS hostname verifier still checks the requested host, and app pinning
+continues to fail closed rather than receiving fabricated key material.
+
+On an API 35 AVD, Amazon's live Weblab service assigns the transparent-navigation treatment and
+the home uses bottom tabs. The Java-client FileStore/Redstone routes exhaust under webdroid
+because Amazon pins those endpoints and the relay cannot present the real peer certificate to
+guest Java. Consequently webdroid receives Amazon's fallback home experiment while the live
+shopping WebView remains functional. Hardcoding the treatment or forging a pin success was not
+accepted as a visual fix. Vendor-only `amazon.os` and Amazon system-service probes remain
+unsupported optional capabilities.
+
+JDK immutable maps reject mutation through their maps, entries, views and iterators;
+`Collections` protected and synchronized wrappers remain live while enforcing their mutation
+and monitor rules. Stream collection invokes the public `Collector` protocol for framework and
+foreign collectors, including `CharSequence` conversion. Wi-Fi locks track reference counts and
+under-locking, and executor draining periodically yields to the event loop instead of sustaining
+an unbounded microtask chain.
+
+The Thumb-16 and Thumb-32 decoder paths are separate. Re-running Amazon exposed `UMULL` in MMKV,
+so the long multiply family executes in the interpreter and unknown wide instructions fall back
+atomically from compiled regions. Removing late lifecycle delivery left Amazon on a blank
+activity because its background startup task registered `LifecycleListeners` after the
+cooperative main-queue transition. The bounded, deduplicated catch-up remains in the lifecycle
+policy; normal dispatch takes a fresh callback snapshot at each pre/plain/post stage, matching
+Android's separate dispatch passes.

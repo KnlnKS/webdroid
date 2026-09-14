@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
 import { vcall, newObj, JThread, JEnum, enumValueOf, setCurThread, curThread, park, defineException } from "./jlang";
-import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods } from "./jutil";
+import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods, toJsArray } from "./jutil";
 import { JRandom, randomSeed } from "./jrandom";
 import { mangleMethod, splitSig, jarray } from "../abi";
 
@@ -184,6 +184,8 @@ class JExecutor extends JObj {
   workers: { thread: JThread | null; busy: boolean }[] = [];
   jobs = new Map<JFuture, unknown>();
   tasks: { task: unknown; f: JFuture; method: string; desc: string; finish: () => void }[] = [];
+  drainScheduled = false;
+  consecutiveDrains = 0;
 }
 // a queue implemented in bytecode is only handed back by getQueue(); the executor's own task
 // list stays the source of truth and native queues mirror it for size()/isEmpty()
@@ -200,6 +202,13 @@ function drainExecutor(ex: JExecutor) {
     worker.busy = true;
     void runTask(ex, worker, task);
   }
+}
+function scheduleDrain(ex: JExecutor) {
+  if (ex.drainScheduled) return;
+  ex.drainScheduled = true;
+  const run = () => { ex.drainScheduled = false; drainExecutor(ex); };
+  if (++ex.consecutiveDrains < 64) queueMicrotask(() => queueMicrotask(run));
+  else { ex.consecutiveDrains = 0; setTimeout(run, 0); }
 }
 async function runTask(ex: JExecutor, worker: JExecutor["workers"][number], entry: JExecutor["tasks"][number]) {
   const { task, f, method, desc } = entry;
@@ -225,8 +234,11 @@ async function runTask(ex: JExecutor, worker: JExecutor["workers"][number], entr
     ex.pending--; ex.jobs.delete(f); worker.busy = false;
     f.done = 1; f.thread = null;
     entry.finish();
-    if (ex.tasks.length) setTimeout(() => drainExecutor(ex), 0);
-    else if (ex.shut) for (const w of ex.workers) if (!w.busy && w.thread) w.thread.alive = 0;
+    if (ex.tasks.length) scheduleDrain(ex);
+    else {
+      ex.consecutiveDrains = 0;
+      if (ex.shut) for (const w of ex.workers) if (!w.busy && w.thread) w.thread.alive = 0;
+    }
   }
 }
 class JFuture extends JObj {
@@ -284,7 +296,7 @@ function submit(ex: JExecutor, task: unknown, method: string, desc: string, dela
     let timer: ReturnType<typeof setTimeout> | undefined;
     const enqueue = () => {
       timer = undefined; ex.tasks.push(entry); mirror(ex)?.push(task);
-      setTimeout(() => drainExecutor(ex), 0);
+      scheduleDrain(ex);
     };
     if (delay > 0) timer = setTimeout(enqueue, delay); else enqueue();
     f.cancel = () => {
@@ -769,6 +781,16 @@ const dequeMethods = (): NonNullable<NativeSpec["methods"]> => ({
   "pollLast()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.a.length ? this.a.pop() : null; },
   "peekFirst()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.a[0] ?? null; },
   "peekLast()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.a[this.a.length - 1] ?? null; },
+  "removeFirstOccurrence(Ljava/lang/Object;)Z": async function (this: JBlockingQueue, v: unknown) {
+    const i = await vcall(this, "indexOf", "(Ljava/lang/Object;)I", v) as number;
+    if (i < 0) return 0;
+    this.a.splice(i, 1); return 1;
+  },
+  "removeLastOccurrence(Ljava/lang/Object;)Z": async function (this: JBlockingQueue, v: unknown) {
+    const i = await vcall(this, "lastIndexOf", "(Ljava/lang/Object;)I", v) as number;
+    if (i < 0) return 0;
+    this.a.splice(i, 1); return 1;
+  },
 });
 const mkBlockingQueue = (name: string, deque = false) => rt.register({
   name, ctor: class extends JBlockingQueue {},
@@ -780,6 +802,9 @@ const mkBlockingQueue = (name: string, deque = false) => rt.register({
     ...Object.fromEntries(Object.entries(listMethods() ?? {}).filter(([k]) => !k.startsWith("<init>"))),
     "<init>()V": function () {},
     "<init>(I)V": function () {},
+    "<init>(Ljava/util/Collection;)V": async function (this: JBlockingQueue, c: unknown) {
+      for (const v of await toJsArray(c)) this.enqueue(v);
+    },
     "put(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); },
     "offer(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
     "offer(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
@@ -1155,11 +1180,12 @@ rt.register({
   },
 });
 let completionExecutor: JExecutor | null = null;
-async function supplyAsync(supplier: unknown, executor: unknown) {
+function supplyAsync(supplier: unknown, executor: unknown) {
   if (supplier == null || executor == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   const future = completable();
   rt.link("webdroid/AsyncSupply");
-  await vcall(executor, "execute", "(Ljava/lang/Runnable;)V", new JAsyncSupply(future, supplier));
+  void vcall(executor, "execute", "(Ljava/lang/Runnable;)V", new JAsyncSupply(future, supplier))
+    .catch(async (error) => settleWith(future, null, await completionError(rt.jx(error))));
   return future;
 }
 const completionActions = {
@@ -1202,6 +1228,27 @@ for (const kind of Object.keys(completionActions) as CompletionAction[]) {
   for (const result of ["CompletableFuture", "CompletionStage"])
     completionMethods[`${kind}(L${completionActions[kind][0]};)Ljava/util/concurrent/${result};`] = method;
 }
+class JCompletionRunnable extends JObj { task: () => Promise<void> = async () => {}; }
+rt.register({
+  name: "webdroid/CompletionRunnable", ctor: JCompletionRunnable, ifaces: ["java/lang/Runnable"],
+  methods: { "run()V": function (this: JCompletionRunnable) { return this.task(); } },
+});
+function dispatchCompletion(target: JCompletable, action: () => Promise<unknown>, executor: unknown): void {
+  const task = new JCompletionRunnable();
+  task.task = async () => {
+    try { settleWith(target, await action(), null); }
+    catch (error) { settleWith(target, null, await completionError(rt.jx(error))); }
+  };
+  void vcall(executor, "execute", "(Ljava/lang/Runnable;)V", task)
+    .catch(async (error) => settleWith(target, null, await completionError(rt.jx(error))));
+}
+function asyncDependent(source: JCompletable, action: (value: unknown, error: unknown) => Promise<unknown>, executor: unknown): JCompletable {
+  const target = completable();
+  const run = () => dispatchCompletion(target, () => action(source.value, source.error), executor);
+  if (source.done) run(); else source.dependents.push(run);
+  return target;
+}
+const commonCompletionExecutor = () => completionExecutor ??= mkExecutor(Math.max(2, (globalThis.navigator?.hardwareConcurrency ?? 4) - 1));
 rt.register({
   name: "java/util/concurrent/CompletableFuture", ctor: JCompletable, sup: "webdroid/Future",
   ifaces: ["java/util/concurrent/Future", "java/util/concurrent/CompletionStage"],
@@ -1210,8 +1257,27 @@ rt.register({
     "<init>()V": function (this: JCompletable) { this.promise = new Promise<void>((r) => { this.settle = r; }); },
     "static completedFuture(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;": (v: unknown) => { const f = completable(); settleWith(f, v, null); return f; },
     "static supplyAsync(Ljava/util/function/Supplier;)Ljava/util/concurrent/CompletableFuture;": (supplier: unknown) =>
-      supplyAsync(supplier, completionExecutor ??= mkExecutor(Math.max(2, (globalThis.navigator?.hardwareConcurrency ?? 4) - 1))),
+      supplyAsync(supplier, commonCompletionExecutor()),
     "static supplyAsync(Ljava/util/function/Supplier;Ljava/util/concurrent/Executor;)Ljava/util/concurrent/CompletableFuture;": supplyAsync,
+    "static runAsync(Ljava/lang/Runnable;)Ljava/util/concurrent/CompletableFuture;": (runnable: unknown) => {
+      if (runnable == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const f = completable(); dispatchCompletion(f, async () => { await vcall(runnable, "run", "()V"); return null; }, commonCompletionExecutor()); return f;
+    },
+    "static runAsync(Ljava/lang/Runnable;Ljava/util/concurrent/Executor;)Ljava/util/concurrent/CompletableFuture;": (runnable: unknown, executor: unknown) => {
+      if (runnable == null || executor == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const f = completable(); dispatchCompletion(f, async () => { await vcall(runnable, "run", "()V"); return null; }, executor); return f;
+    },
+    "static allOf([Ljava/util/concurrent/CompletableFuture;)Ljava/util/concurrent/CompletableFuture;": (futures: JCompletable[]) => {
+      if (!futures) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const result = completable();
+      void Promise.all(futures.map(async (future) => {
+        if (!future) throw rt.mkThrowable("java/lang/NullPointerException", null);
+        await future.promise;
+        if (future.cancelled) throw rt.mkThrowable("java/util/concurrent/CancellationException", null);
+        if (future.error) throw future.error;
+      })).then(() => settleWith(result, null, null), async (error) => settleWith(result, null, await completionError(rt.jx(error))));
+      return result;
+    },
     "complete(Ljava/lang/Object;)Z": function (this: JCompletable, v: unknown) { return settleWith(this, v, null); },
     "completeExceptionally(Ljava/lang/Throwable;)Z": function (this: JCompletable, t: unknown) { if (t == null) throw rt.mkThrowable("java/lang/NullPointerException", null); return settleWith(this, null, t); },
     "join()Ljava/lang/Object;": async function (this: JCompletable) { if (!this.done) await this.promise; return completableValue(this, true); },
@@ -1219,6 +1285,22 @@ rt.register({
     "isCompletedExceptionally()Z": function (this: JCompletable) { return this.done && this.error ? 1 : 0; },
     "toCompletableFuture()Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable) { return this; },
     "cancel(Z)Z": function (this: JCompletable) { return settleWith(this, null, rt.mkThrowable("java/util/concurrent/CancellationException", null)) || this.cancelled; },
+    "thenApplyAsync(Ljava/util/function/Function;)Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable, fn: unknown) {
+      if (fn == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      return asyncDependent(this, (value, error) => error ? Promise.reject(error) : vcall(fn, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", value), commonCompletionExecutor());
+    },
+    "thenApplyAsync(Ljava/util/function/Function;Ljava/util/concurrent/Executor;)Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable, fn: unknown, executor: unknown) {
+      if (fn == null || executor == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      return asyncDependent(this, (value, error) => error ? Promise.reject(error) : vcall(fn, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", value), executor);
+    },
+    "whenCompleteAsync(Ljava/util/function/BiConsumer;)Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable, fn: unknown) {
+      if (fn == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      return asyncDependent(this, async (value, error) => { await vcall(fn, "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V", value, error); if (error) throw error; return value; }, commonCompletionExecutor());
+    },
+    "whenCompleteAsync(Ljava/util/function/BiConsumer;Ljava/util/concurrent/Executor;)Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable, fn: unknown, executor: unknown) {
+      if (fn == null || executor == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      return asyncDependent(this, async (value, error) => { await vcall(fn, "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V", value, error); if (error) throw error; return value; }, executor);
+    },
   },
 });
 rt.markers("java/util/concurrent/CompletionStage", "java/util/concurrent/CompletableFuture$AsynchronousCompletionTask");

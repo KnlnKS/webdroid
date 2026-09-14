@@ -440,7 +440,7 @@ rt.register({
     "getPeerPort()I": function (this: JSSLSession) { return this.port; },
     "getPeerCertificates()[Ljava/security/cert/Certificate;": function (this: JSSLSession) {
       const c = rt.make("java/security/cert/X509Certificate") as JX509;
-      c.host = this.host;
+      c.host = this.host; c.relayPeer = true;
       return jarray([c], "Ljava/security/cert/Certificate;");
     },
     "getLocalCertificates()[Ljava/security/cert/Certificate;": () => null,
@@ -473,6 +473,7 @@ function rawUriQuery(uri: string): string | null {
   const fragment = uri.indexOf("#");
   return query < 0 || (fragment >= 0 && query > fragment) ? null : uri.slice(query + 1, fragment < 0 ? undefined : fragment);
 }
+const rawAuthority = (u: string): string | null => /^([^:/?#]+:)?\/\/([^/?#]*)/.exec(u)?.[2] || null;
 // URLEncoder/URLDecoder: application/x-www-form-urlencoded, which is encodeURIComponent plus
 // "+" for a space and the extra unreserved set Java leaves alone.
 const formEncode = (s: string) =>
@@ -505,6 +506,10 @@ rt.register({
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JURI, sch: string | null, host: string | null, path: string | null, f: string | null) {
       this.u = (sch ? sch + ":" : "") + (host ? "//" + host : "") + (path ?? "") + (f ? "#" + f : "");
     },
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JURI, sch: string | null, authority: string | null, path: string | null, q: string | null, f: string | null) {
+      this.u = (sch ? sch + ":" : "") + (authority !== null ? "//" + authority : "") +
+        (path ?? "") + (q !== null ? "?" + q : "") + (f !== null ? "#" + f : "");
+    },
     "static create(Ljava/lang/String;)Ljava/net/URI;": mkURI,
     "toString()Ljava/lang/String;": function (this: JURI) { return this.u; },
     // RFC 2396 path normalisation: "." and ".." segments resolved, the rest of the URI untouched
@@ -520,15 +525,8 @@ rt.register({
     },
     "toASCIIString()Ljava/lang/String;": function (this: JURI) { return this.u; },
     "getScheme()Ljava/lang/String;": function (this: JURI) { const i = this.u.indexOf(":"); return i > 0 ? this.u.slice(0, i) : null; },
-    "getRawAuthority()Ljava/lang/String;": function (this: JURI) {
-      const m = /^(?:[^:/?#]+:)?\/\/([^/?#]*)/.exec(this.u);
-      return m?.[1] || null;
-    },
-    "getAuthority()Ljava/lang/String;": function (this: JURI) {
-      const raw = /^(?:[^:/?#]+:)?\/\/([^/?#]*)/.exec(this.u)?.[1];
-      if (!raw) return null;
-      try { return decodeURIComponent(raw); } catch { return raw; }
-    },
+    "getAuthority()Ljava/lang/String;": function (this: JURI) { const a = rawAuthority(this.u); if (a === null) return null; try { return decodeURIComponent(a); } catch { return a; } },
+    "getRawAuthority()Ljava/lang/String;": function (this: JURI) { return rawAuthority(this.u); },
     "getHost()Ljava/lang/String;": function (this: JURI) { return this.url()?.hostname ?? null; },
     "getPath()Ljava/lang/String;": function (this: JURI) { return this.url()?.pathname ?? this.u.replace(/^[a-z]+:/i, ""); },
     "toURL()Ljava/net/URL;": function (this: JURI) { const u = new JURL(); urlInit(u, this.u); return u; },
@@ -573,6 +571,7 @@ class JURL extends JObj {
     if (!https && this.u.protocol !== "http:") throw rt.unimplemented("URL.openConnection " + this.u.protocol);
     const c = rt.make(https ? "javax/net/ssl/HttpsURLConnection" : "java/net/HttpURLConnection") as JURLConnection;
     c.url = this;
+    if (c instanceof JHttpsURLConnection) { c.sslFactory = defaultHttpsFactory; c.hostnameVerifier = defaultHostnameVerifier; }
     return c;
   }
 }
@@ -673,6 +672,7 @@ let followRedirects = 1, defaultUseCaches = 1;
 class JURLConnection extends JObj {
   url!: JURL;
   method = "GET"; follow = followRedirects; doOut = 0; doIn = 1; useCaches = defaultUseCaches;
+  allowUserInteraction = 0;
   /** the protected field a subclass implementing its own transport maintains; ours reads res */
   connected = 0;
   cto = 0; rto = 0; ifMod = 0n;
@@ -795,7 +795,8 @@ rt.register({
     "getUseCaches()Z": function (this: JURLConnection) { return this.useCaches; },
     "setDefaultUseCaches(Z)V": (b: number) => { defaultUseCaches = b; },
     "getDefaultUseCaches()Z": () => defaultUseCaches,
-    "setAllowUserInteraction(Z)V": () => {},
+    "setAllowUserInteraction(Z)V": function (this: JURLConnection, b: number) { this.allowUserInteraction = b ? 1 : 0; },
+    "getAllowUserInteraction()Z": function (this: JURLConnection) { return this.allowUserInteraction; },
     "setConnectTimeout(I)V": function (this: JURLConnection, ms: number) { this.cto = ms; },
     "getConnectTimeout()I": function (this: JURLConnection) { return this.cto; },
     "setReadTimeout(I)V": function (this: JURLConnection, ms: number) { this.rto = ms; },
@@ -867,14 +868,59 @@ rt.register({
     "usingProxy()Z": () => 0,
   },
 });
-// TLS ends at the proxy: there is no socket for a factory or verifier to attach to
+// TLS ends at the proxy, but the Java connection still preserves the configured factory and
+// verifier and exposes the relay's synthetic peer identity through the standard accessors.
+class JHttpsURLConnection extends JHttpURLConnection {
+  sslFactory: unknown = sslSocketFactory;
+  hostnameVerifier: unknown = null;
+}
+class JDefaultHostnameVerifier extends JObj {}
+const hostName = (host: string) => host.toLowerCase().replace(/\.$/, "");
+const platformHostnameVerifier = new JDefaultHostnameVerifier();
 rt.register({
-  name: "javax/net/ssl/HttpsURLConnection", ctor: class extends JHttpURLConnection {}, sup: "java/net/HttpURLConnection",
+  name: "webdroid/DefaultHostnameVerifier", ctor: JDefaultHostnameVerifier, ifaces: ["javax/net/ssl/HostnameVerifier"],
   methods: {
-    "setHostnameVerifier(Ljavax/net/ssl/HostnameVerifier;)V": () => {},
-    "setSSLSocketFactory(Ljavax/net/ssl/SSLSocketFactory;)V": () => {},
-    "static setDefaultHostnameVerifier(Ljavax/net/ssl/HostnameVerifier;)V": () => {},
-    "static setDefaultSSLSocketFactory(Ljavax/net/ssl/SSLSocketFactory;)V": () => {},
+    "verify(Ljava/lang/String;Ljavax/net/ssl/SSLSession;)Z": (host: string, session: JSSLSession) =>
+      hostName(host) === hostName(session?.host ?? "") ? 1 : 0,
+  },
+});
+let defaultHttpsFactory: unknown = sslSocketFactory;
+let defaultHostnameVerifier: unknown = platformHostnameVerifier;
+rt.register({
+  name: "javax/net/ssl/HttpsURLConnection", ctor: JHttpsURLConnection, sup: "java/net/HttpURLConnection",
+  methods: {
+    "<init>(Ljava/net/URL;)V": function (this: JHttpsURLConnection, url: JURL) {
+      this.url = url; this.sslFactory = defaultHttpsFactory; this.hostnameVerifier = defaultHostnameVerifier;
+    },
+    "setHostnameVerifier(Ljavax/net/ssl/HostnameVerifier;)V": function (this: JHttpsURLConnection, verifier: unknown) {
+      if (verifier === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "null HostnameVerifier");
+      this.hostnameVerifier = verifier;
+    },
+    "getHostnameVerifier()Ljavax/net/ssl/HostnameVerifier;": function (this: JHttpsURLConnection) { return this.hostnameVerifier; },
+    "setSSLSocketFactory(Ljavax/net/ssl/SSLSocketFactory;)V": function (this: JHttpsURLConnection, factory: unknown) {
+      if (factory === null) return rt.npe();
+      this.sslFactory = factory;
+    },
+    "getSSLSocketFactory()Ljavax/net/ssl/SSLSocketFactory;": function (this: JHttpsURLConnection) { return this.sslFactory; },
+    "static setDefaultHostnameVerifier(Ljavax/net/ssl/HostnameVerifier;)V": (verifier: unknown) => {
+      if (verifier === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "null HostnameVerifier");
+      defaultHostnameVerifier = verifier;
+    },
+    "static getDefaultHostnameVerifier()Ljavax/net/ssl/HostnameVerifier;": () => defaultHostnameVerifier,
+    "static setDefaultSSLSocketFactory(Ljavax/net/ssl/SSLSocketFactory;)V": (factory: unknown) => {
+      if (factory === null) return rt.npe();
+      defaultHttpsFactory = factory;
+    },
+    "static getDefaultSSLSocketFactory()Ljavax/net/ssl/SSLSocketFactory;": () => defaultHttpsFactory,
+    "getCipherSuite()Ljava/lang/String;": () => CIPHERS[0],
+    "getLocalCertificates()[Ljava/security/cert/Certificate;": () => null,
+    "getLocalPrincipal()Ljava/security/Principal;": () => null,
+    "getServerCertificates()[Ljava/security/cert/Certificate;": function (this: JHttpsURLConnection) {
+      const cert = rt.make("java/security/cert/X509Certificate") as JX509;
+      cert.host = this.url.u.hostname; cert.relayPeer = true;
+      return jarray([cert], "Ljava/security/cert/Certificate;");
+    },
+    "getPeerPrincipal()Ljava/security/Principal;": function (this: JHttpsURLConnection) { return mkPrincipal("CN=" + this.url.u.hostname); },
   },
 });
 

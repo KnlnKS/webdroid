@@ -23,12 +23,12 @@ rt.register({
 rt.register({
   name: "java/util/logging/Level", ctor: JLevel,
   clinit: () => {
-    const c = rt.link("java/util/logging/Level").ctor as typeof JLevel;
     for (const [name, value] of Object.entries({
       OFF: 0x7fffffff, SEVERE: 1000, WARNING: 900, INFO: 800, CONFIG: 700,
       FINE: 500, FINER: 400, FINEST: 300, ALL: -0x80000000,
     })) {
-      const level = new c(); level.lname = name; level.value = value; (c as any)["s$" + name] = level;
+      const level = new JLevel(); level.lname = name; level.value = value;
+      Reflect.set(JLevel, "s$" + name, level);
     }
   },
   methods: {

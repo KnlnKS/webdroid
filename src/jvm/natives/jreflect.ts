@@ -44,7 +44,16 @@ function javaTypeName(d: string): string {
   const base = d[dims] === "L" ? dotName(d.slice(dims + 1, -1)) : PRIM_NAME[d[dims]];
   return base + "[]".repeat(dims);
 }
-export class JMethod extends JObj {
+class JAccessibleObject extends JObj { accessible = 0; }
+const accessibleMethods: NonNullable<NativeSpec["methods"]> = {
+  "setAccessible(Z)V": function (this: JAccessibleObject, value: number) { this.accessible = value ? 1 : 0; },
+  "isAccessible()Z": function (this: JAccessibleObject) { return this.accessible; },
+  "trySetAccessible()Z": function (this: JAccessibleObject) { this.accessible = 1; return 1; },
+  "canAccess(Ljava/lang/Object;)Z": function (this: JAccessibleObject) { return this.accessible; },
+};
+rt.register({ name: "java/lang/reflect/AccessibleObject", ctor: JAccessibleObject, methods: accessibleMethods });
+
+export class JMethod extends JAccessibleObject {
   owner!: ClassInfo;
   name = "";
   desc = "";
@@ -84,8 +93,7 @@ function annotatedElement<T extends { owner: ClassInfo }>(annosOf: (this: T) => 
   };
 }
 
-export class JField extends JObj {
-  accessible = 0;
+export class JField extends JAccessibleObject {
   owner!: ClassInfo;
   fname = "";
   desc = "";
@@ -148,6 +156,7 @@ function classFields(info: ClassInfo, name?: string): JField[] {
 }
 rt.register({
   name: "java/lang/reflect/Field", ctor: JField,
+  sup: "java/lang/reflect/AccessibleObject",
   ifaces: ["java/lang/reflect/AnnotatedElement", "java/lang/reflect/Member"],
   methods: {
     "getName()Ljava/lang/String;": function (this: JField) { return this.fname; },
@@ -600,6 +609,7 @@ function collectMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
 
 rt.register({
   name: "java/lang/reflect/Method", ctor: JMethod,
+  sup: "java/lang/reflect/AccessibleObject",
   ifaces: ["java/lang/reflect/AnnotatedElement", "java/lang/reflect/Member", "java/lang/reflect/GenericDeclaration"],
   methods: {
     "getName()Ljava/lang/String;": function (this: JMethod) { return this.name; },
@@ -616,6 +626,7 @@ rt.register({
     "getReturnType()Ljava/lang/Class;": function (this: JMethod) {
       return classForDesc(parseMethodDesc(this.desc).ret, this.owner.owner);
     },
+    "getParameterCount()I": function (this: JMethod) { return parseMethodDesc(this.desc).params.length; },
     "getParameterTypes()[Ljava/lang/Class;": function (this: JMethod) { return paramClasses(this.desc, "Ljava/lang/Class;", this.owner.owner); },
     "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JMethod) { return types(genericMethodTypes(this.owner, this.name, this.desc).params); },
     "getDeclaringClass()Ljava/lang/Class;": function (this: JMethod) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
@@ -649,7 +660,7 @@ rt.register({
 });
 // ── reflect Constructor. <init> mangles to i$<hash(desc)> with NO class component, so a
 // ctor must always be invoked through the prototype of the class that DECLARES it.
-export class JCtor extends JObj {
+export class JCtor extends JAccessibleObject {
   owner!: ClassInfo;
   desc = "()V";
   flags = 1;
@@ -678,6 +689,7 @@ export function classCtors(info: ClassInfo): JCtor[] {
 }
 rt.register({
   name: "java/lang/reflect/Constructor", ctor: JCtor,
+  sup: "java/lang/reflect/AccessibleObject",
   ifaces: ["java/lang/reflect/AnnotatedElement", "java/lang/reflect/Member", "java/lang/reflect/GenericDeclaration"],
   methods: {
     "getName()Ljava/lang/String;": function (this: JCtor) { return dotName(this.owner.name); },
@@ -688,9 +700,11 @@ rt.register({
     "isAccessible()Z": () => 1,
     "isSynthetic()Z": () => 0,
     "isVarArgs()Z": function (this: JCtor) { return (this.flags & 0x80) ? 1 : 0; },
+    "getParameterCount()I": function (this: JCtor) { return parseMethodDesc(this.desc).params.length; },
     "getParameterTypes()[Ljava/lang/Class;": function (this: JCtor) { return paramClasses(this.desc, "Ljava/lang/Class;", this.owner.owner); },
     "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JCtor) { return types(genericMethodTypes(this.owner, "<init>", this.desc).params); },
     "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JCtor) { return paramAnnotations(this.owner, "<init>", this.desc); },
+    ...annotatedElement(function (this: JCtor) { return classAnno(this.owner).methodsByRef.get("<init>" + this.desc) ?? []; }),
     "newInstance([Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JCtor, args: unknown[] | null) {
       const info = this.owner;
       const p = rt.initClass(info); if (p) await p;
@@ -796,10 +810,10 @@ function installElements(target: object, info: ClassInfo, anno: EncAnnotation, r
   for (const [name, val] of Object.entries(anno.elements)) {
     const key = mangleMethod(name, elementDesc(info, name));
     let resolved: unknown, ready = false;
-    (target as any)[key] = () => {
+    Reflect.set(target, key, () => {
       if (!ready) { resolved = resolveEncVal(val, anno.dex, runtime); ready = true; }
       return resolved;
-    };
+    });
   }
 }
 function buildAnnoProto(type: string, info: ClassInfo): object {
@@ -881,6 +895,14 @@ rt.register({
 rt.register({
   name: "java/lang/annotation/Retention", ctor: class extends JObj {}, ifaces: ["java/lang/annotation/Annotation"],
   methods: { "value()Ljava/lang/annotation/RetentionPolicy;": () => retentionVals[2] },
+});
+rt.register({
+  name: "java/beans/Transient", ctor: class extends JObj {}, ifaces: ["java/lang/annotation/Annotation"],
+  methods: { "value()Z": () => 1 },
+});
+rt.register({
+  name: "java/beans/ConstructorProperties", ctor: class extends JObj {}, ifaces: ["java/lang/annotation/Annotation"],
+  methods: { "value()[Ljava/lang/String;": () => jarray([], "Ljava/lang/String;") },
 });
 rt.register({ name: "java/lang/annotation/Documented", ctor: class extends JObj {}, ifaces: ["java/lang/annotation/Annotation"] });
 rt.register({

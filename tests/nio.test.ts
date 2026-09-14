@@ -3,9 +3,9 @@ import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
 import { JInputStream, vfs } from "../src/jvm/natives/jio";
-import { mangleMethod } from "../src/jvm/abi";
+import { jarray, mangleMethod } from "../src/jvm/abi";
 
-const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => (rt.link(cls).ctor as any)[mangleMethod(name, desc)](...args);
+const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => vcall(rt.link(cls).ctor, name, desc, ...args);
 
 rt.linkNatives();
 
@@ -41,6 +41,13 @@ test("InputStream.skip reads through a bytecode-style subclass", async () => {
   expect(stream.offset).toBe(3);
   expect(await vcall(stream, "skip", "(J)J", 10n)).toBe(2n);
   expect(await vcall(stream, "skip", "(J)J", -1n)).toBe(0n);
+});
+
+test("File comparison orders normalized paths through both overloads", async () => {
+  const a = await newObj("java/io/File", "(Ljava/lang/String;)V", "/tmp/a");
+  const b = await newObj("java/io/File", "(Ljava/lang/String;)V", "/tmp/b");
+  expect(await vcall(a, "compareTo", "(Ljava/io/File;)I", b)).toBe(-1);
+  expect(await vcall(b, "compareTo", "(Ljava/lang/Object;)I", a)).toBe(1);
 });
 
 test("FileChannel.read fills a ByteBuffer from streams and random-access files", async () => {
@@ -79,6 +86,43 @@ test("FileChannel.write drains a ByteBuffer at the shared file position", async 
   await expect(vcall(readOnly, "write", "(Ljava/nio/ByteBuffer;)I", buffer)).rejects.toMatchObject({
     constructor: rt.link("java/nio/channels/NonWritableChannelException").ctor,
   });
+});
+
+test("Channels adapt input and output streams without copying their state", async () => {
+  const input = await newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array([1, 2, 3]));
+  const readable = await scall("java/nio/channels/Channels", "newChannel",
+    "(Ljava/io/InputStream;)Ljava/nio/channels/ReadableByteChannel;", input);
+  const dst = await scall("java/nio/ByteBuffer", "allocate", "(I)Ljava/nio/ByteBuffer;", 3);
+  expect(await vcall(readable, "read", "(Ljava/nio/ByteBuffer;)I", dst)).toBe(3);
+  expect(await vcall(dst, "position", "()I")).toBe(3);
+
+  const output = await newObj("java/io/ByteArrayOutputStream", "()V");
+  const writable = await scall("java/nio/channels/Channels", "newChannel",
+    "(Ljava/io/OutputStream;)Ljava/nio/channels/WritableByteChannel;", output);
+  await vcall(dst, "flip", "()Ljava/nio/Buffer;");
+  expect(await vcall(writable, "write", "(Ljava/nio/ByteBuffer;)I", dst)).toBe(3);
+  expect(Array.from(await vcall(output, "toByteArray", "()[B"))).toEqual([1, 2, 3]);
+  await vcall(writable, "close", "()V");
+  expect(await vcall(writable, "isOpen", "()Z")).toBe(0);
+});
+
+test("Files.newOutputStream honors default, append, and delete-on-close options", async () => {
+  const path = await scall("java/nio/file/Paths", "get", "(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;",
+    "/tmp/nio-output.bin", jarray([], "Ljava/lang/String;"));
+  vfs.write("/tmp/nio-output.bin", new Uint8Array([1, 2]));
+  let output = await scall("java/nio/file/Files", "newOutputStream",
+    "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;", path, jarray([], "Ljava/nio/file/OpenOption;"));
+  await vcall(output, "write", "(I)V", 3);
+  await vcall(output, "close", "()V");
+  expect([...vfs.read("/tmp/nio-output.bin")!]).toEqual([3]);
+
+  const options = rt.link("java/nio/file/StandardOpenOption").ctor;
+  output = await scall("java/nio/file/Files", "newOutputStream",
+    "(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;", path,
+    jarray([Reflect.get(options, "s$APPEND"), Reflect.get(options, "s$DELETE_ON_CLOSE")], "Ljava/nio/file/OpenOption;"));
+  await vcall(output, "write", "(I)V", 4);
+  await vcall(output, "close", "()V");
+  expect(vfs.exists("/tmp/nio-output.bin")).toBe(false);
 });
 
 test("FloatBuffer bulk get honours offsets, lengths and underflow", async () => {

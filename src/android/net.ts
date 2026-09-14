@@ -356,7 +356,7 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JNetwork) { return String(this.id); },
   },
 });
-const networkCapabilities = new Set([11, 12, 13, 14, 15, 18, 20, 21]);
+const networkCapabilities = new Set([11, 12, 13, 14, 15, 16, 18, 20, 21]);
 rt.register({
   name: "android/net/NetworkCapabilities", ctor: class extends JObj {},
   statics: {
@@ -389,6 +389,7 @@ rt.register({
     "getFrequency()I": () => -1,
     "getHiddenSSID()Z": () => 0,
     "describeContents()I": () => 0,
+    "toString()Ljava/lang/String;": () => "SSID: <unknown ssid>, BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00, RSSI: -127, Link speed: -1Mbps, Net ID: -1",
   },
 });
 class JDhcpInfo extends JObj { ipAddress = 0; gateway = 0; netmask = 0; dns1 = 0; dns2 = 0; serverAddress = 0; leaseDuration = 0; }
@@ -396,6 +397,23 @@ rt.register({
   name: "android/net/DhcpInfo", ctor: JDhcpInfo, ifaces: ["android/os/Parcelable"],
   fields: ["ipAddress", "gateway", "netmask", "dns1", "dns2", "serverAddress", "leaseDuration"],
   methods: { "<init>()V": function () {} },
+});
+class JWifiLock extends JObj { held = false; refCounted = true; acquisitions = 0; }
+rt.register({
+  name: "android/net/wifi/WifiManager$WifiLock", ctor: JWifiLock,
+  methods: {
+    "acquire()V": function (this: JWifiLock) {
+      if (this.refCounted) this.acquisitions++;
+      this.held = true;
+    },
+    "release()V": function (this: JWifiLock) {
+      if (!this.held || this.refCounted && this.acquisitions === 0) throw rt.mkThrowable("java/lang/RuntimeException", "WifiLock under-locked");
+      if (this.refCounted) this.held = --this.acquisitions > 0;
+      else this.held = false;
+    },
+    "isHeld()Z": function (this: JWifiLock) { return +this.held; },
+    "setReferenceCounted(Z)V": function (this: JWifiLock, enabled: number) { this.refCounted = !!enabled; },
+  },
 });
 rt.register({
   name: "android/net/wifi/WifiManager", ctor: class extends JObj {},
@@ -415,6 +433,8 @@ rt.register({
     "getDhcpInfo()Landroid/net/DhcpInfo;": () => new JDhcpInfo(),
     "getScanResults()Ljava/util/List;": () => newArrayList(),
     "getConfiguredNetworks()Ljava/util/List;": () => newArrayList(),
+    "createWifiLock(ILjava/lang/String;)Landroid/net/wifi/WifiManager$WifiLock;": () => new JWifiLock(),
+    "createWifiLock(Ljava/lang/String;)Landroid/net/wifi/WifiManager$WifiLock;": () => new JWifiLock(),
     "startScan()Z": () => 0,
     "isScanAlwaysAvailable()Z": () => 0,
     "is5GHzBandSupported()Z": () => 0,

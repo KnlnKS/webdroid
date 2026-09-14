@@ -1251,6 +1251,15 @@ export const bitmapMethods: NativeSpec["methods"] = {
     "getScaledHeight(I)I": function (this: JBitmap, td: number) { return Math.round(this.h * td / this.density); },
     "recycle()V": function (this: JBitmap) { this.recycled = true; },
     "isRecycled()Z": function (this: JBitmap) { return this.recycled ? 1 : 0; },
+    "sameAs(Landroid/graphics/Bitmap;)Z": function (this: JBitmap, other: JBitmap | null) {
+      if (this === other) return 1;
+      if (!other || this.w !== other.w || this.h !== other.h || this.config !== other.config) return 0;
+      const a = this.pixels(), b = other.pixels();
+      const aw = new Uint32Array(a.buffer, a.byteOffset, a.byteLength >>> 2);
+      const bw = new Uint32Array(b.buffer, b.byteOffset, b.byteLength >>> 2);
+      for (let i = 0; i < aw.length; i++) if (aw[i] !== bw[i]) return 0;
+      return 1;
+    },
     "getPixel(II)I": function (this: JBitmap, x: number, y: number) {
       return argbAt(this.pixels(), (y * this.w + x) * 4);
     },

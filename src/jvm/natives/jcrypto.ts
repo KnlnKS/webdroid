@@ -3,7 +3,7 @@
 import { rt, JObj } from "../runtime";
 import { defineException } from "./jlang";
 import { mkIter } from "./jutil";
-import { concat, i8, u8 } from "../abi";
+import { charsToString, concat, i8, u8, utf8 } from "../abi";
 import { JKeyGenSpec } from "../../android/security";
 import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt, binary } from "./jrsa";
 import { generateEc, isEcCurve, curveOfParams } from "./jec";
@@ -54,6 +54,49 @@ rt.register({
     "getAlgorithm()Ljava/lang/String;": function (this: JSecretKeySpec) { return this.algo; },
     "getEncoded()[B": function (this: JSecretKeySpec) { return new Int8Array(this.key); },
     "getFormat()Ljava/lang/String;": () => "RAW",
+  },
+});
+
+class JPBEKeySpec extends JObj {
+  password = new Uint16Array(0);
+  salt = new Uint8Array(0);
+  iterations = 0;
+  bits = 0;
+}
+rt.register({
+  name: "javax/crypto/spec/PBEKeySpec", ctor: JPBEKeySpec, ifaces: ["java/security/spec/KeySpec"],
+  methods: {
+    "<init>([C)V": function (this: JPBEKeySpec, password: Uint16Array) { this.password = password.slice(); },
+    "<init>([C[BII)V": function (this: JPBEKeySpec, password: Uint16Array, salt: Int8Array, iterations: number, bits: number) {
+      if (!salt.length || iterations <= 0 || bits <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid PBE parameters");
+      this.password = password.slice(); this.salt = bytes(salt); this.iterations = iterations; this.bits = bits;
+    },
+    "clearPassword()V": function (this: JPBEKeySpec) { this.password.fill(0); },
+    "getPassword()[C": function (this: JPBEKeySpec) { return this.password.slice(); },
+    "getSalt()[B": function (this: JPBEKeySpec) { return new Int8Array(this.salt); },
+    "getIterationCount()I": function (this: JPBEKeySpec) { return this.iterations; },
+    "getKeyLength()I": function (this: JPBEKeySpec) { return this.bits; },
+  },
+});
+
+class JSecretKeyFactory extends JObj { algorithm = ""; }
+function secretKeyFactory(algorithm: string): JSecretKeyFactory {
+  if (algorithm.toUpperCase() !== "PBKDF2WITHHMACSHA1") throw rt.mkThrowable("java/security/NoSuchAlgorithmException", algorithm);
+  const factory = new JSecretKeyFactory(); factory.algorithm = algorithm; return factory;
+}
+rt.register({
+  name: "javax/crypto/SecretKeyFactory", ctor: JSecretKeyFactory,
+  methods: {
+    "static getInstance(Ljava/lang/String;)Ljavax/crypto/SecretKeyFactory;": secretKeyFactory,
+    "getAlgorithm()Ljava/lang/String;": function (this: JSecretKeyFactory) { return this.algorithm; },
+    "generateSecret(Ljava/security/spec/KeySpec;)Ljavax/crypto/SecretKey;": async function (this: JSecretKeyFactory, spec: JPBEKeySpec) {
+      if (!(spec instanceof JPBEKeySpec) || !spec.salt.length || spec.iterations <= 0 || spec.bits <= 0) {
+        throw rt.mkThrowable("java/security/spec/InvalidKeySpecException", "PBEKeySpec required");
+      }
+      const material = await crypto.subtle.importKey("raw", utf8.enc.encode(charsToString(spec.password, 0, spec.password.length)), "PBKDF2", false, ["deriveBits"]);
+      const derived = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-1", salt: spec.salt, iterations: spec.iterations }, material, spec.bits);
+      return mkSecretKey(new Uint8Array(derived), this.algorithm);
+    },
   },
 });
 

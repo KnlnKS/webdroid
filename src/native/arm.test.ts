@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { mem } from "./mem";
 import { Cpu, setA64 } from "./cpu";
-import { core } from "./core";
+import { core, JIT_HEAT } from "./core";
 import { pattern, sweep } from "./a64.testkit";
 import { mainThread } from "../jvm/natives/jlang";
 import { RET_SENTINEL } from "./abi";
@@ -163,6 +163,29 @@ describe("arm decoder", () => {
     expect(c.w[6]).toBe(1); expect(c.w[8]).toBe(2); expect(c.w[10]).toBe(3);
     expect(c.w[12]).toBe(c.w[26]);
   });
+  test("NEON structure transfers work in ARM mode", () => {
+    const c = run([
+      0xf4610a0d,   // vld1.8 {d16,d17}, [r1]!
+      0xf4400a0d,   // vst1.8 {d16,d17}, [r0]!
+      BXLR,
+    ], (cpu) => {
+      cpu.w[0] = cpu.stackTop - 32;
+      cpu.w[2] = cpu.stackTop - 16;
+      mem.st32(cpu.w[2], 0x12345678);
+      mem.st32(cpu.w[2] + 4, 0x76543210);
+      mem.st32(cpu.w[2] + 8, 0x0badf00d);
+      mem.st32(cpu.w[2] + 12, 0x5eedface);
+    });
+    expect(Array.from(mem.u32.slice((c.w[0] - 16) >>> 2, c.w[0] >>> 2))).toEqual([0x12345678, 0x76543210, 0x0badf00d, 0x5eedface]);
+    expect(c.w[2]).toBe(c.stackTop);
+  });
+  test("NEON modified immediates select high quad registers in ARM mode", () => {
+    const c = run([
+      0xf2c00050,   // vmov.i32 q8, #0
+      BXLR,
+    ], (cpu) => { cpu.si.fill(-1, 32, 36); });
+    expect(Array.from(c.si.slice(32, 36))).toEqual([0, 0, 0, 0]);
+  });
   test("rsb/adc/sbc", () => {
     const c = run([
       0xe3a00005,   // mov r0, #5
@@ -177,6 +200,428 @@ describe("arm decoder", () => {
 });
 
 describe("thumb decoder", () => {
+  test("NEON modified immediates populate both halves of a quad register", () => {
+    const c = runThumb([
+      0xef81, 0x6452, // vmov.i32 q3, #0x120000
+      0x4770,         // bx lr
+    ]);
+    expect(Array.from(c.si.slice(12, 16))).toEqual([0x120000, 0x120000, 0x120000, 0x120000]);
+  });
+
+  test("NEON modified immediates select high quad registers", () => {
+    const c = runThumb([
+      0xefc0, 0x0050, // vmov.i32 q8, #0
+      0x4770,
+    ], (cpu) => { cpu.si.fill(-1, 32, 36); });
+    expect(Array.from(c.si.slice(32, 36))).toEqual([0, 0, 0, 0]);
+  });
+
+  test("NEON structure transfers preserve two D registers and write back", () => {
+    const c = runThumb([
+      0xf942, 0x0acd, // vst1.64 {d16,d17}, [r2]!
+      0x3a10,         // subs r2, #16
+      0xf922, 0x4acd, // vld1.64 {d4,d5}, [r2]!
+      0x4770,         // bx lr
+    ], (cpu) => {
+      cpu.w[4] = cpu.stackTop - 32;
+      cpu.si.set([1, 2, 3, 4], 32);
+    });
+    expect(Array.from(c.si.slice(8, 12))).toEqual([1, 2, 3, 4]);
+    expect(c.w[4]).toBe(c.stackTop - 16);
+  });
+
+  test("NEON structure transfers support single D registers without writeback", () => {
+    const c = runThumb([
+      0xf962, 0x070f, // vld1.8 {d16}, [r2]
+      0xf940, 0x170f, // vst1.8 {d17}, [r0]
+      0x4770,         // bx lr
+    ], (cpu) => {
+      cpu.w[0] = cpu.stackTop - 32;
+      cpu.w[4] = cpu.stackTop - 16;
+      mem.st32(cpu.w[4], 0x12345678);
+      mem.st32(cpu.w[4] + 4, 0x76543210);
+      cpu.si[34] = 0x0badf00d;
+      cpu.si[35] = 0x5eedface;
+    });
+    expect(mem.ld32(c.w[0])).toBe(0x0badf00d);
+    expect(mem.ld32(c.w[0] + 4)).toBe(0x5eedface);
+    expect(Array.from(c.si.slice(32, 34))).toEqual([0x12345678, 0x76543210]);
+    expect(c.w[4]).toBe(c.stackTop - 16);
+  });
+
+  test("NEON immediates clear a stack buffer through consecutive structure stores", () => {
+    const c = runThumb([
+      0xb092,         // sub sp, #0x48
+      0xf10d, 0x0a08, // add.w r10, sp, #8
+      0xefc0, 0x0050, // vmov.i32 q8, #0
+      0x4656,         // mov r6, r10
+      0xf946, 0x0acd, // vst1.64 {d16,d17}, [r6]!
+      0xf946, 0x0acd, // vst1.64 {d16,d17}, [r6]!
+      0x4770,
+    ], (cpu) => {
+      mem.u8.fill(0xff, cpu.stackTop - 0x40, cpu.stackTop - 0x20);
+      cpu.si.fill(-1, 32, 36);
+    });
+    expect(Array.from(mem.u8.slice(c.w[26] + 8, c.w[26] + 40))).toEqual(Array(32).fill(0));
+  });
+
+  test("Thumb VFP loads and stores preserve double registers", () => {
+    const c = runThumb([
+      0xeddd, 0x0b00, // vldr d16, [sp]
+      0xedcd, 0x0b02, // vstr d16, [sp, #8]
+      0x4770,         // bx lr
+    ], (cpu) => {
+      cpu.w[26] -= 32;
+      mem.st32(cpu.w[26], 0x12345678);
+      mem.st32(cpu.w[26] + 4, 0x76543210);
+    });
+    expect(mem.ld32(c.w[26] + 8)).toBe(0x12345678);
+    expect(mem.ld32(c.w[26] + 12)).toBe(0x76543210);
+  });
+
+  test("wide immediate moves assemble both halves of a register", () => {
+    const c = runThumb([
+      0xf241, 0x2034, // movw r0, #0x1234
+      0xf6ca, 0x50cd, // movt r0, #0xadcd
+      0xf04f, 0x31ff, // mov.w r1, #0xffffffff
+      0xf44f, 0x3280, // mov.w r2, #0x10000
+      0xf06f, 0x0304, // mvn r3, #4
+      0xf464, 0x0a0d, // orn r10, r4, #0x8d0000
+      0x4770,         // bx lr
+    ]);
+    expect(c.w[0] >>> 0).toBe(0xadcd1234);
+    expect(c.w[2]).toBe(-1);
+    expect(c.w[4]).toBe(0x10000);
+    expect(c.w[6]).toBe(-5);
+    expect(c.w[20]).toBe(~0x8d0000);
+  });
+
+  test("wide multiply and multiply-accumulate preserve flags", () => {
+    const c = runThumb([
+      0xfb01, 0xf505, // mul r5, r1, r5
+      0xfb02, 0x4100, // mla r1, r2, r0, r4
+      0xfb02, 0x4310, // mls r3, r2, r0, r4
+      0x4770,         // bx lr
+    ], (cpu) => {
+      cpu.w[0] = 11;
+      cpu.w[2] = 0x5bd1e995;
+      cpu.w[4] = 3;
+      cpu.w[8] = 40;
+      cpu.w[10] = 0x3a6d6f63;
+      cpu.cpsr = 0xa0000000;
+    });
+    expect(c.w[10] >>> 0).toBe(Math.imul(0x5bd1e995, 0x3a6d6f63) >>> 0);
+    expect(c.w[2]).toBe(73);
+    expect(c.w[6]).toBe(7);
+    expect(c.cpsr >>> 28).toBe(0xa);
+  });
+
+  test("wide long multiply and multiply-accumulate preserve both halves", () => {
+    const c = runThumb([
+      0xfbaa, 0x2308, // umull r2, r3, r10, r8
+      0xfb8a, 0x4508, // smull r4, r5, r10, r8
+      0xfbe1, 0x6708, // umlal r6, r7, r1, r8
+      0xfbca, 0xbc08, // smlal r11, r12, r10, r8
+      0x4770,         // bx lr
+    ], (cpu) => {
+      cpu.w[2] = 3;
+      cpu.w[12] = 5;
+      cpu.w[14] = 1;
+      cpu.w[16] = 2;
+      cpu.w[20] = -1;
+      cpu.w[22] = 5;
+      cpu.cpsr = 0xa0000000;
+    });
+    expect([c.w[4], c.w[6]]).toEqual([-2, 1]);
+    expect([c.w[8], c.w[10]]).toEqual([-2, -1]);
+    expect([c.w[12], c.w[14]]).toEqual([11, 1]);
+    expect([c.w[22], c.w[24]]).toEqual([3, 0]);
+    expect(c.cpsr >>> 28).toBe(0xa);
+  });
+
+  test("flags resume after a multi-instruction IT block", () => {
+    const c = runThumb([
+      0x2b00,         // cmp r3, #0
+      0xbf04,         // itt eq
+      0x1c48,         // addeq r0, r1, #1
+      0x085a,         // lsreq r2, r3, #1
+      0x2500,         // movs r5, #0
+      0x3501,         // adds r5, #1
+      0x2d10,         // cmp r5, #16
+      0xd1fc,         // bne -8
+      0x4770,         // bx lr
+    ]);
+    expect(c.w[10]).toBe(16);
+  });
+
+  test("wide doubleword transfers preserve register pairs", () => {
+    const c = runThumb([
+      0xe9cd, 0x3500, // strd r3, r5, [sp]
+      0xe9dd, 0x6700, // ldrd r6, r7, [sp]
+      0x4770,         // bx lr
+    ], (cpu) => {
+      cpu.w[6] = 0x12345678;
+      cpu.w[10] = 0x76543210;
+      cpu.w[26] -= 32;
+    });
+    expect(c.w[12]).toBe(0x12345678);
+    expect(c.w[14]).toBe(0x76543210);
+  });
+
+  test("wide exclusive transfers and memory barriers preserve atomic loops", () => {
+    const c = runThumb([
+      0xe850, 0x1f00, // ldrex r1, [r0]
+      0x3101,         // adds r1, #1
+      0xe840, 0x1200, // strex r2, r1, [r0]
+      0xf3bf, 0x8f5b, // dmb ish
+      0x4770,         // bx lr
+    ], (cpu) => {
+      cpu.w[0] = cpu.stackTop - 16;
+      mem.st32(cpu.w[0], 41);
+    });
+    expect(mem.ld32(c.w[0])).toBe(42);
+    expect(c.w[4]).toBe(0);
+  });
+
+  test("wide register lists preserve high registers", () => {
+    const c = runThumb([
+      0xe92d, 0x0f00, // push.w {r8,r9,r10,r11}
+      0xe8bd, 0x0f00, // pop.w {r8,r9,r10,r11}
+      0x4770,         // bx lr
+    ], (cpu) => {
+      cpu.w[16] = 1;
+      cpu.w[18] = 2;
+      cpu.w[20] = 3;
+      cpu.w[22] = 4;
+      cpu.w[26] -= 32;
+    });
+    expect(Array.from(c.w.slice(16, 24).filter((_, i) => i % 2 === 0))).toEqual([1, 2, 3, 4]);
+    expect(c.w[26]).toBe(c.stackTop - 32);
+  });
+
+  test("wide conditional branches preserve taken and fallthrough paths", () => {
+    const program = [
+      0x2800,         // cmp r0, #0
+      0xf300, 0x8001, // bgt.w +2
+      0x2101,         // movs r1, #1
+      0x4770,         // bx lr
+    ];
+    expect(runThumb(program, (cpu) => { cpu.w[0] = 1; }).w[2]).toBe(0);
+    expect(runThumb(program, (cpu) => { cpu.w[0] = -1; }).w[2]).toBe(1);
+    expect(runThumb([0xf000, 0xb801, 0x2001, 0x4770]).w[0]).toBe(0);
+    expect(runThumb([0x2800, 0xf47f, 0xaf08, 0x4770]).w[0]).toBe(0);
+  });
+
+  test("table branches load byte offsets relative to the Thumb PC", () => {
+    const program = [
+      0xe8df, 0xf000, // tbb [pc, r0]
+      0x0402, 0xbf00, // offsets 2, 4; padding
+      0x2101, 0xe001, // first: r1=1; branch to return
+      0x2102, 0xbf00, // second: r1=2; padding
+      0x4770,         // return
+    ];
+    expect(runThumb(program).w[2]).toBe(1);
+    expect(runThumb(program, (cpu) => { cpu.w[0] = 1; }).w[2]).toBe(2);
+  });
+
+  test("IT conditions survive a compiled function prologue", () => {
+    const c = runThumb([
+      0xb5d0,         // push {r4,r6,r7,lr}
+      0xaf02,         // add r7, sp, #8
+      0x4604,         // mov r4, r0
+      0x2801,         // cmp r0, #1
+      0xbf98,         // it ls
+      0x2401,         // movls r4, #1
+      0x4620,         // mov r0, r4
+      0xb900,         // cbnz r0, return
+      0x2000,         // movs r0, #0
+      0xbdd0,         // return: pop {r4,r6,r7,pc}
+    ], (cpu) => { cpu.w[0] = 20; });
+    expect(c.w[0]).toBe(20);
+  });
+
+  test("tail chaining preserves multi-instruction IT state and flags", () => {
+    const at = mem.reserve(0x1000, 0x1000);
+    mem.u16.set([
+      0x4285, // cmp r5, r0
+      0xbf3c, // itt lo
+      0x1913, // addlo r3, r2, r4
+      0x4631, // movlo r1, r6
+      0x4770, // bx lr
+    ], at >>> 1);
+    for (let i = 0; i <= JIT_HEAT; i++) execute((at + 4) | 1, (cpu) => { cpu.w[2] = 3; });
+    for (let i = 0; i <= JIT_HEAT; i++) {
+      const skipped = execute(at | 1, (cpu) => {
+        cpu.w[0] = 2;
+        cpu.w[2] = 11;
+        cpu.w[4] = 3;
+        cpu.w[6] = 24;
+        cpu.w[8] = ~1;
+        cpu.w[10] = 83;
+        cpu.w[12] = 19;
+      });
+      expect(skipped.w[2]).toBe(11);
+      expect(skipped.w[6]).toBe(24);
+      const taken = execute(at | 1, (cpu) => {
+        cpu.w[0] = 2;
+        cpu.w[2] = 11;
+        cpu.w[4] = 3;
+        cpu.w[6] = 24;
+        cpu.w[8] = ~1;
+        cpu.w[10] = 0;
+        cpu.w[12] = 19;
+      });
+      expect(taken.w[2]).toBe(19);
+      expect(taken.w[6]).toBe(1);
+    }
+    core.invalidate_all();
+  });
+
+  test("wide arithmetic immediates update values and comparison flags", () => {
+    const c = runThumb([
+      0xf107, 0x050c, // add.w r5, r7, #12
+      0xf025, 0x060f, // bic r6, r5, #15
+      0xf046, 0x0607, // orr r6, r6, #7
+      0xf1c5, 0x0138, // rsb.w r1, r5, #56
+      0xf1b5, 0x3fff, // cmp.w r5, #0xffffffff
+      0x4770,         // bx lr
+    ], (cpu) => { cpu.w[14] = 20; });
+    expect(c.w[10]).toBe(32);
+    expect(c.w[12]).toBe(39);
+    expect(c.w[2]).toBe(24);
+    expect(c.z).toBe(0);
+    expect(c.c).toBe(0);
+  });
+
+  test("wide add and subtract immediates preserve flags", () => {
+    const c = runThumb([
+      0xf204, 0x3085, // addw r0, r4, #0x385
+      0xf2a4, 0x3185, // subw r1, r4, #0x385
+      0x4770,
+    ], (cpu) => { cpu.w[8] = 0x400; cpu.cpsr = 0xa0000000; });
+    expect(c.w[0]).toBe(0x785);
+    expect(c.w[2]).toBe(0x7b);
+    expect(c.cpsr >>> 28).toBe(0xa);
+  });
+
+  test("wide carry arithmetic immediates consume and update carry", () => {
+    const c = runThumb([
+      0x2800,         // cmp r0, #0 (C=1)
+      0xf170, 0x0000, // sbcs r0, r0, #0
+      0xf151, 0x0305, // adcs r3, r1, #5
+      0x4770,         // bx lr
+    ], (cpu) => { cpu.w[2] = -1; });
+    expect(c.w[0]).toBe(0);
+    expect(c.w[6]).toBe(5);
+    expect(c.c).toBe(1);
+  });
+
+  test("IT conditions gate instructions and bitfield extraction", () => {
+    const program = [
+      0x2800,         // cmp r0, #0
+      0xbf08,         // it eq
+      0xf3c3, 0x0546, // ubfxeq r5, r3, #1, #7
+      0x4770,         // bx lr
+    ];
+    expect(runThumb(program, (cpu) => { cpu.w[0] = 0; cpu.w[6] = 0xfe; }).w[10]).toBe(0x7f);
+    expect(runThumb(program, (cpu) => { cpu.w[0] = 1; cpu.w[6] = 0xfe; }).w[10]).toBe(0);
+    const multiple = runThumb([
+      0x4280,             // cmp r0, r0
+      0xbf01,             // itttt eq
+      0x2001, 0x2102,     // moveq r0, #1; moveq r1, #2
+      0x2203, 0x2304,     // moveq r2, #3; moveq r3, #4
+      0x4770,
+    ]);
+    expect([multiple.w[0], multiple.w[2], multiple.w[4], multiple.w[6]]).toEqual([1, 2, 3, 4]);
+  });
+
+  test("wide shifted-register operations preserve shifts and high destinations", () => {
+    const c = runThumb([
+      0xea5f, 0x7bc6, // lsls.w r11, r6, #31
+      0xeb05, 0x0a01, // add.w r10, r5, r1
+      0x4770,         // bx lr
+    ], (cpu) => { cpu.w[12] = 3; cpu.w[10] = 8; cpu.w[2] = 4; });
+    expect(c.w[22]).toBe(-2147483648);
+    expect(c.c).toBe(1);
+    expect(c.w[20]).toBe(12);
+  });
+
+  test("wide register-controlled shifts support high registers", () => {
+    const c = runThumb([
+      0xfa0c, 0xf201, // lsl.w r2, r12, r1
+      0xfa2c, 0xf003, // lsr.w r0, r12, r3
+      0x4770,
+    ], (cpu) => { cpu.w[24] = 0x80000001; cpu.w[2] = 1; cpu.w[6] = 31; });
+    expect(c.w[4]).toBe(2);
+    expect(c.w[0]).toBe(1);
+  });
+
+  test("wide count-leading-zeros handles zero and populated words", () => {
+    const c = runThumb([
+      0xfab2, 0xf082, // clz r0, r2
+      0xfab3, 0xf183, // clz r1, r3
+      0x4770,         // bx lr
+    ], (cpu) => { cpu.w[4] = 0x0000ffff; cpu.w[6] = 0; });
+    expect(c.w[0]).toBe(16);
+    expect(c.w[2]).toBe(32);
+  });
+
+  test("wide word spills support pre-index and post-index writeback", () => {
+    const c = runThumb([
+      0xf84d, 0x8d04, // str r8, [sp, #-4]!
+      0xf85d, 0x9b04, // ldr r9, [sp], #4
+      0x4770,         // bx lr
+    ], (cpu) => {
+      cpu.w[16] = 0x12345678;
+      cpu.w[26] -= 64;
+    });
+    expect(c.w[18]).toBe(0x12345678);
+    expect(c.w[26]).toBe(c.stackTop - 64);
+  });
+
+  test("wide byte and halfword transfers support indexed writeback", () => {
+    const c = runThumb([
+      0xf810, 0x1f0c, // ldrb r1, [r0, #12]!
+      0xf820, 0x2d02, // strh r2, [r0, #-2]!
+      0xf830, 0x3b02, // ldrh r3, [r0], #2
+      0x4770,         // bx lr
+    ], (cpu) => {
+      cpu.w[0] = cpu.stackTop - 64;
+      cpu.w[4] = 0x12345678;
+      mem.u8[cpu.w[0] + 12] = 0xab;
+    });
+    expect(c.w[2]).toBe(0xab);
+    expect(c.w[6]).toBe(0x5678);
+    expect(c.w[0]).toBe(c.stackTop - 52);
+  });
+
+  test("wide word offsets address high registers and large fields", () => {
+    const c = runThumb([
+      0xf884, 0x8020, // strb.w r8, [r4, #0x20]
+      0xf894, 0xa020, // ldrb.w r10, [r4, #0x20]
+      0xf804, 0x800a, // strb.w r8, [r4, r10]
+      0xf814, 0xb00a, // ldrb.w r11, [r4, r10]
+      0xf8c4, 0x81c4, // str.w r8, [r4, #0x1c4]
+      0xf8d4, 0x91c4, // ldr.w r9, [r4, #0x1c4]
+      0x4770,         // bx lr
+    ], (cpu) => {
+      cpu.w[8] = cpu.stackTop - 0x400;
+      cpu.w[16] = 0x12345678;
+    });
+    expect(c.w[20]).toBe(0x78);
+    expect(c.w[22]).toBe(0x78);
+    expect(c.w[18]).toBe(0x12345678);
+  });
+
+  test("wide literal loads align the Thumb PC", () => {
+    const c = runThumb([
+      0xf8df, 0x0004, // ldr.w r0, [pc, #4]
+      0x4770, 0x0000, // bx lr; padding
+      0x5678, 0x1234,
+    ]);
+    expect(c.w[0]).toBe(0x12345678);
+  });
+
   test("the format-4 ALU ops, with flags", () => {
     const c = runThumb([
       0x43fb,       // mvns r3, r7       -> ~5, N=1

@@ -10,9 +10,11 @@ import { RET_SENTINEL, E } from "./abi";
 import { JThread, reportUncaught, threadExit } from "../jvm/natives/jlang";
 import { readTs, fail, clockTime } from "./libc";
 
-/** bionic's mutex word: bits 0-1 state (0 free, 1 held, 2 held with waiters), 2-13 recursion count, 14-15 type, 16-31 owner tid;
- *  the core takes and releases it uncontended (libc.zig), the host parks and hands it over */
+/** Bionic's LP32 mutex word: the low half is state/counter/shared/type and the high half is
+ *  owner tid for recursive/error-check mutexes. Normal mutexes deliberately have no owner. */
 const COUNT = 0x3ffc;
+const STATE = 0x3, SHARED = 0x2000, TYPE = 0xc000;
+const ERRORCHECK = 0x8000;
 const mutexWaiters = new AddrMap<(() => void)[]>();
 const conds = new AddrMap<((timedOut: boolean) => void)[]>();
 const sems = new AddrMap<{ count: number; waiters: (() => void)[] }>();
@@ -60,21 +62,39 @@ threadExit.hook = (t) => {
 const onceWaiters = new AddrMap<(() => void)[]>();
 const ETIMEDOUT = E.TIMEDOUT, EBUSY = E.BUSY;
 
-function lock(cpu: Cpu, a: number): number | Promise<number> {
+function lock(cpu: Cpu, a: number, tryOnly = false): number | Promise<number> {
   const w = mem.ld32(a);
-  if ((w & 3) === 0) { mem.st32(a, (w & 0xc000) | 1 | (cpu.tid << 16)); return 0; }
-  if ((w >>> 16) === cpu.tid) { if ((w & COUNT) === COUNT) return E.AGAIN; mem.st32(a, w + 4); return 0; }
-  mem.st32(a, w | 2);
+  const kind = w & TYPE, constants = w & (TYPE | SHARED);
+  if ((w & STATE) === 0) {
+    mem.st32(a, constants | 1 | (kind === 0 ? 0 : cpu.tid << 16));
+    return 0;
+  }
+  if (kind !== 0 && (w >>> 16) === cpu.tid) {
+    if (kind === ERRORCHECK) return tryOnly ? E.BUSY : E.DEADLK;
+    if ((w & COUNT) === COUNT) return E.AGAIN;
+    mem.st32(a, w + 4);
+    return 0;
+  }
+  if (tryOnly) return E.BUSY;
+  mem.st32(a, (w & ~STATE) | 2);
   let q = mutexWaiters.get(a);
   if (!q) mutexWaiters.set(a, (q = []));
   const Q = q;
-  return new Promise<number>((res) => Q.push(() => { mem.st32(a, (mem.ld32(a) & 0xc000) | (Q.length ? 2 : 1) | (cpu.tid << 16)); res(0); }));
+  return new Promise<number>((res) => Q.push(() => {
+    const current = mem.ld32(a), currentKind = current & TYPE;
+    mem.st32(a, (current & (TYPE | SHARED)) | (Q.length ? 2 : 1) | (currentKind === 0 ? 0 : cpu.tid << 16));
+    res(0);
+  }));
 }
-function unlock(a: number): void {
+function unlock(cpu: Cpu, a: number): number {
   const w = mem.ld32(a);
-  if (w & COUNT) { mem.st32(a, w - 4); return; }
+  const kind = w & TYPE;
+  if ((w & STATE) === 0) return E.PERM;
+  if (kind !== 0 && (w >>> 16) !== cpu.tid) return E.PERM;
+  if (kind !== 0 && w & COUNT) { mem.st32(a, w - 4); return 0; }
   const next = mutexWaiters.get(a)?.shift();
-  if (next) next(); else mem.st32(a, w & 0xc000);
+  if (next) next(); else mem.st32(a, w & (TYPE | SHARED));
+  return 0;
 }
 /** setTimeout past 2^31-1 ms fires at once; a wait that long is untimed */
 const timed = (ms: number | null): number | null => (ms !== null && ms < 0x7fffffff ? ms : null);
@@ -112,7 +132,7 @@ export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: numbe
 function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | null): Promise<number> {
   const count = mem.ld32(mutex) & COUNT;
   mem.st32(mutex, mem.ld32(mutex) & ~COUNT);
-  unlock(mutex);
+  unlock(cpu, mutex);
   let list = conds.get(cond);
   if (!list) conds.set(cond, (list = []));
   const L = list;
@@ -242,13 +262,34 @@ export function pthreadInit(): void {
     pthread_attr_getstacksize: (_c, a) => { a.p(); stp(a.p(), 0x100000); return 0; },
     pthread_attr_getstack: (cpu, a) => { a.p(); const base = a.p(), sz = a.p(); stp(base, cpu.stackBase); stp(sz, cpu.stackTop - cpu.stackBase); return 0; },
     pthread_getattr_np: () => 0,
-    pthread_mutex_init: (_c, a) => { mem.st32(a.p(), 0); return 0; },
-    pthread_mutex_destroy: (_c, a) => { mutexWaiters.delete(a.p()); return 0; },
+    pthread_mutex_init: (_c, a) => {
+      const mutex = a.p(), attr = a.p();
+      const av = attr ? mem.ld32(attr) : 0, type = av & 0xf;
+      if (type < 0 || type > 2) return E.INVAL;
+      mem.st32(mutex, (type << 14) | (av & 0x10 ? SHARED : 0));
+      return 0;
+    },
+    pthread_mutex_destroy: (_c, a) => {
+      const mutex = a.p(), w = mem.ld32(mutex);
+      if ((w & STATE) !== 0) return E.BUSY;
+      mutexWaiters.delete(mutex); mem.st32(mutex, 0xffff); return 0;
+    },
     pthread_mutex_lock: (cpu, a) => lock(cpu, a.p()),
-    pthread_mutex_trylock: (cpu, a) => { const m = a.p(), w = mem.ld32(m); return (w & 3) === 0 || (w >>> 16) === cpu.tid ? (lock(cpu, m) as number) : EBUSY; },
-    pthread_mutex_unlock: (_c, a) => { unlock(a.p()); return 0; },
+    pthread_mutex_trylock: (cpu, a) => lock(cpu, a.p(), true),
+    pthread_mutex_unlock: (cpu, a) => unlock(cpu, a.p()),
     pthread_mutex_timedlock: (cpu, a) => lock(cpu, a.p()),
-    pthread_mutexattr_init: () => 0, pthread_mutexattr_destroy: () => 0, pthread_mutexattr_settype: () => 0, pthread_mutexattr_setpshared: () => 0,
+    pthread_mutexattr_init: (_c, a) => { mem.st32(a.p(), 0); return 0; },
+    pthread_mutexattr_destroy: (_c, a) => { mem.st32(a.p(), -1); return 0; },
+    pthread_mutexattr_settype: (_c, a) => {
+      const attr = a.p(), type = a.i();
+      if (type < 0 || type > 2) return E.INVAL;
+      mem.st32(attr, (mem.ld32(attr) & ~0xf) | type); return 0;
+    },
+    pthread_mutexattr_setpshared: (_c, a) => {
+      const attr = a.p(), shared = a.i();
+      if (shared !== 0 && shared !== 1) return E.INVAL;
+      mem.st32(attr, (mem.ld32(attr) & ~0x10) | (shared ? 0x10 : 0)); return 0;
+    },
     pthread_cond_init: (_c, a) => { conds.set(a.p(), []); return 0; },
     pthread_cond_destroy: (_c, a) => { conds.delete(a.p()); return 0; },
     pthread_cond_wait: (cpu, a) => condWait(cpu, a.p(), a.p(), null),
@@ -270,7 +311,7 @@ export function pthreadInit(): void {
     pthread_rwlock_unlock: (cpu, a) => rwRelease(cpu, rwOf(a.p())),
     pthread_rwlockattr_init: () => 0, pthread_rwlockattr_destroy: () => 0, pthread_rwlockattr_setpshared: () => 0,
     pthread_atfork: () => 0,
-    pthread_mutexattr_gettype: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
+    pthread_mutexattr_gettype: (_c, a) => { const attr = a.p(); mem.st32(a.p(), mem.ld32(attr) & 0xf); return 0; },
     pthread_condattr_getclock: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
     pthread_cond_clockwait: (cpu, a) => { const c = a.p(), m = a.p(), clk = a.i(), ts = a.p(); return condWait(cpu, c, m, absMs(ts) - clockTime(clk)); },
     pthread_mutex_clocklock: (cpu, a) => lock(cpu, a.p()),

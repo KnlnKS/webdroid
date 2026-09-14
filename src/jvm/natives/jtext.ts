@@ -83,6 +83,47 @@ const dateFormatMethods: NativeSpec["methods"] = {
 // the abstract base DateFormat and NumberFormat share, so a cast through Format holds; each
 // concrete formatter carries its own format(Object)
 rt.register({ name: "java/text/Format", ctor: class extends JObj {}, ifaces: ["java/io/Serializable", "java/lang/Cloneable"], methods: { "<init>()V": function () {} } });
+
+class JMessageFormat extends JObj { pattern = ""; }
+async function messageFormat(pattern: string, args: unknown[]): Promise<string> {
+  const text = async (value: unknown): Promise<string> => {
+    if (value === null) return "null";
+    if (typeof value === "string" || typeof value === "number" || typeof value === "bigint") return String(value);
+    return String(await vcall(value, "toString", "()Ljava/lang/String;"));
+  };
+  let out = "", quoted = false;
+  for (let i = 0; i < pattern.length;) {
+    if (pattern[i] === "'") {
+      if (pattern[i + 1] === "'") { out += "'"; i += 2; continue; }
+      quoted = !quoted; i++; continue;
+    }
+    if (!quoted && pattern[i] === "{") {
+      const end = pattern.indexOf("}", i + 1);
+      if (end < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unmatched braces in the pattern.");
+      const token = pattern.slice(i + 1, end).split(",", 1)[0].trim();
+      if (!/^\d+$/.test(token)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "can't parse argument number: " + token);
+      const index = Number(token);
+      out += index < args.length ? await text(args[index]) : "{" + token + "}";
+      i = end + 1;
+      continue;
+    }
+    out += pattern[i++];
+  }
+  if (quoted) out += "'";
+  return out;
+}
+rt.register({
+  name: "java/text/MessageFormat", ctor: JMessageFormat, sup: "java/text/Format",
+  methods: {
+    "<init>(Ljava/lang/String;)V": function (this: JMessageFormat, pattern: string) { this.pattern = pattern; },
+    "<init>(Ljava/lang/String;Ljava/util/Locale;)V": function (this: JMessageFormat, pattern: string) { this.pattern = pattern; },
+    "static format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;": messageFormat,
+    "format([Ljava/lang/Object;)Ljava/lang/String;": function (this: JMessageFormat, args: unknown[]) { return messageFormat(this.pattern, args); },
+    "format(Ljava/lang/Object;)Ljava/lang/String;": function (this: JMessageFormat, args: unknown[]) { return messageFormat(this.pattern, args); },
+    "applyPattern(Ljava/lang/String;)V": function (this: JMessageFormat, pattern: string) { this.pattern = pattern; },
+    "toPattern()Ljava/lang/String;": function (this: JMessageFormat) { return this.pattern; },
+  },
+});
 rt.register({
   name: "java/text/DateFormat", ctor: JDateFormat, sup: "java/text/Format", ifaces: ["java/lang/Cloneable"],
   statics: { FULL: 0, LONG: 1, MEDIUM: 2, SHORT: 3 },

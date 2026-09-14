@@ -386,6 +386,16 @@ describe("a64 decoder: hints, atomics, the REV family and system registers", () 
 });
 
 describe("raw syscalls", () => {
+  test("zero-length getrandom does not dereference its buffer", async () => {
+    const { libcInit } = await import("./libc");
+    libcInit();
+    const c = run([
+      0xd28022c8,   // mov x8, #278 (getrandom)
+      0xd4000001,   // svc #0
+      RET], (c) => { c.w[0] = 1; c.w[2] = 0; });
+    expect([c.w[0], c.w[1]]).toEqual([0, 0]);
+  });
+
   test("an svc the core does not inline reaches libc's syscall table, and an unknown number answers -ENOSYS", async () => {
     const { libcInit } = await import("./libc");
     libcInit();

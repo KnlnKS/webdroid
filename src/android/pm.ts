@@ -172,6 +172,11 @@ rt.register({
   name: "android/content/pm/Signature", ctor: JSignature,
   methods: {
     "<init>([B)V": function (this: JSignature, bytes: Int8Array) { this.bytes = bytes.slice(); },
+    "<init>(Ljava/lang/String;)V": function (this: JSignature, text: string) {
+      if (text === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      if (text.length % 2 || !/^[0-9a-f]*$/i.test(text)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid hex signature");
+      this.bytes = Int8Array.from({ length: text.length / 2 }, (_, i) => parseInt(text.slice(i * 2, i * 2 + 2), 16));
+    },
     "toByteArray()[B": function (this: JSignature) { return this.bytes.slice(); },
     "toCharsString()Ljava/lang/String;": function (this: JSignature) { return [...this.bytes].map((b) => (b & 255).toString(16).padStart(2, "0")).join(""); },
     "hashCode()I": function (this: JSignature) { return this.bytes.reduce((hash, byte) => Math.imul(hash, 31) + byte | 0, 1); },

@@ -454,7 +454,11 @@ function matchesState(it: { states: number[]; negStates: number[] }, states: num
   return it.states.every((s) => states.includes(s)) && !it.negStates.some((s) => states.includes(s));
 }
 
-class JStateListDrawable extends JDrawable {
+class JDrawableContainer extends JDrawable {
+  enterFadeDuration = 0;
+  exitFadeDuration = 0;
+}
+class JStateListDrawable extends JDrawableContainer {
   items: { states: number[]; negStates: number[]; d: JDrawable }[] = [];
   current(): JDrawable | null {
     return (this.items.find((it) => matchesState(it, this.stateSet)) ?? this.items[this.items.length - 1])?.d ?? null;
@@ -476,7 +480,7 @@ class JStateListDrawable extends JDrawable {
   intrinsicW(): number { return this.items.reduce((a, i) => Math.max(a, i.d.intrinsicW()), -1); }
   intrinsicH(): number { return this.items.reduce((a, i) => Math.max(a, i.d.intrinsicH()), -1); }
 }
-class JAnimationDrawable extends JDrawable {
+class JAnimationDrawable extends JDrawableContainer {
   frames: { d: JDrawable; ms: number }[] = [];
   cur = 0; oneShot = false; running = false; run = 0;
   target(): JDrawable | null {
@@ -507,7 +511,14 @@ class JAnimationDrawable extends JDrawable {
   }
 }
 rt.register({
-  name: "android/graphics/drawable/AnimationDrawable", ctor: JAnimationDrawable, sup: "android/graphics/drawable/Drawable",
+  name: "android/graphics/drawable/DrawableContainer", ctor: JDrawableContainer, sup: "android/graphics/drawable/Drawable",
+  methods: {
+    "setEnterFadeDuration(I)V": function (this: JDrawableContainer, duration: number) { this.enterFadeDuration = Math.max(0, duration); },
+    "setExitFadeDuration(I)V": function (this: JDrawableContainer, duration: number) { this.exitFadeDuration = Math.max(0, duration); },
+  },
+});
+rt.register({
+  name: "android/graphics/drawable/AnimationDrawable", ctor: JAnimationDrawable, sup: "android/graphics/drawable/DrawableContainer",
   ifaces: ["android/graphics/drawable/Animatable", "java/lang/Runnable"],
   methods: {
     "<init>()V": function () {},
@@ -526,7 +537,7 @@ rt.register({
   },
 });
 rt.register({
-  name: "android/graphics/drawable/StateListDrawable", ctor: JStateListDrawable, sup: "android/graphics/drawable/Drawable",
+  name: "android/graphics/drawable/StateListDrawable", ctor: JStateListDrawable, sup: "android/graphics/drawable/DrawableContainer",
   methods: {
     "draw(Landroid/graphics/Canvas;)V": function (this: JStateListDrawable, cv: JCanvas) {
       const c = this.target();

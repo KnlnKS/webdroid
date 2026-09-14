@@ -430,6 +430,74 @@ rt.register({
     "close()V": function () {},
   },
 });
+
+class JStreamChannel extends JObj {
+  stream: unknown = null;
+  open = true;
+}
+function closeStreamChannel(this: JStreamChannel) {
+  if (!this.open) return;
+  this.open = false;
+  return vcall(this.stream, "close", "()V");
+}
+const streamChannelMethods: NativeSpec["methods"] = {
+  "isOpen()Z": function (this: JStreamChannel) { return this.open ? 1 : 0; },
+  "close()V": closeStreamChannel,
+};
+rt.markers("java/nio/channels/ReadableByteChannel", "java/nio/channels/WritableByteChannel",
+  "java/nio/channels/ByteChannel", "java/nio/channels/Channel");
+rt.register({
+  name: "webdroid/ReadableStreamChannel", ctor: JStreamChannel,
+  ifaces: ["java/nio/channels/ReadableByteChannel"],
+  methods: {
+    ...streamChannelMethods,
+    "read(Ljava/nio/ByteBuffer;)I": function (this: JStreamChannel, dst: JBuffer) {
+      if (!this.open) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
+      const len = dst.lim - dst.pos;
+      if (len === 0) return 0;
+      dst.clampPut(0);
+      const out = new Int8Array(dst.ab, dst.dv.byteOffset + dst.pos, len);
+      return after(vcall(this.stream, "read", "([BII)I", out, 0, len), (n: number) => {
+        if (n > 0) dst.pos += n;
+        return n;
+      });
+    },
+  },
+});
+rt.register({
+  name: "webdroid/WritableStreamChannel", ctor: JStreamChannel,
+  ifaces: ["java/nio/channels/WritableByteChannel"],
+  methods: {
+    ...streamChannelMethods,
+    "write(Ljava/nio/ByteBuffer;)I": function (this: JStreamChannel, src: JBuffer) {
+      if (!this.open) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
+      const len = src.lim - src.pos;
+      if (len === 0) return 0;
+      const bytes = new Int8Array(src.ab, src.dv.byteOffset + src.pos, len);
+      return after(vcall(this.stream, "write", "([BII)V", bytes, 0, len), () => {
+        src.pos += len;
+        return len;
+      });
+    },
+  },
+});
+rt.register({
+  name: "java/nio/channels/Channels", ctor: class extends JObj {},
+  methods: {
+    "static newChannel(Ljava/io/InputStream;)Ljava/nio/channels/ReadableByteChannel;": (stream: unknown) => {
+      if (!stream) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const channel = rt.make("webdroid/ReadableStreamChannel") as JStreamChannel;
+      channel.stream = stream;
+      return channel;
+    },
+    "static newChannel(Ljava/io/OutputStream;)Ljava/nio/channels/WritableByteChannel;": (stream: unknown) => {
+      if (!stream) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const channel = rt.make("webdroid/WritableStreamChannel") as JStreamChannel;
+      channel.stream = stream;
+      return channel;
+    },
+  },
+});
 // ── java.io.Object{Input,Output}Stream, over the serialization stream's BLOCK-DATA layer only.
 // A primitive written outside writeObject travels in TC_BLOCKDATA records, which is the whole
 // protocol Externalizable bodies use. An object graph needs
@@ -591,15 +659,20 @@ class JFOS extends JOutputStream {
   shared: JFileDescriptor | null = null;
   fpath = "";
   append = false;
+  deleteOnClose = false;
   offset = 0;
   get pos() { return (this.append && this.chunks.length ? vfs.read(this.fpath)?.length ?? 0 : this.offset) + this.chunks.length; }
   set pos(value: number) { flushFOS(this); this.offset = value; }
 }
-function openWrite(this: JFOS, path: string, append = 0) {
+function openWrite(this: JFOS, path: string, append = 0, truncate = true) {
   this.fpath = vfs.norm(path);
   this.append = !!append;
-  if (!this.append || !vfs.read(this.fpath)) vfs.write(this.fpath, new Uint8Array(0));
-  this.offset = this.append ? vfs.read(this.fpath)!.length : 0;
+  let bytes = vfs.read(this.fpath);
+  if (!bytes || (!this.append && truncate)) {
+    bytes = new Uint8Array(0);
+    vfs.write(this.fpath, bytes);
+  }
+  this.offset = this.append ? bytes.length : 0;
 }
 rt.register({
   name: "java/io/FileOutputStream", ctor: JFOS, sup: "java/io/OutputStream",
@@ -625,7 +698,12 @@ rt.register({
       if (this.shared) flushFOS(this);
     },
     "flush()V": function (this: JFOS) { checkFileOpen(this); flushFOS(this); },
-    "close()V": function (this: JFOS) { if (!closedFiles.has(this)) { flushFOS(this); closeFile(this); } },
+    "close()V": function (this: JFOS) {
+      if (closedFiles.has(this)) return;
+      flushFOS(this);
+      closeFile(this);
+      if (this.deleteOnClose) vfs.delete(this.fpath);
+    },
   },
 });
 function flushFOS(s: JFOS) {
@@ -748,6 +826,7 @@ function rafWrite(f: JRAF, b: Int8Array, off: number, len: number) {
 
 // serialPersistentFields is a static array a serializable class declares; nothing here
 // serializes, but the <clinit> that builds the array has to be able to construct one.
+rt.markers("java/io/ObjectStreamClass");
 class JObjectStreamField extends JObj { fname = ""; ftype: unknown = null; }
 rt.register({
   name: "java/io/ObjectStreamField", ctor: JObjectStreamField, ifaces: ["java/lang/Comparable"],
@@ -931,6 +1010,8 @@ class JReader extends JObj {
   src: unknown = null;
   srcChars = false;   // src reads chars (a Reader) rather than bytes (an InputStream)
   dec: TextDecoder | null = null;
+  markPos = -1;
+  markLimit = 0;
 }
 const READ_CHUNK = 8192;
 /**
@@ -940,7 +1021,11 @@ const READ_CHUNK = 8192;
 function fill(r: JReader): void | Promise<void> {
   const src = r.src;
   if (!src) return;
-  if (r.pos > 0) { r.s = r.s.slice(r.pos); r.pos = 0; }
+  if (r.pos > 0 && (r.markPos < 0 || r.pos - r.markPos > r.markLimit)) {
+    r.s = r.s.slice(r.pos);
+    r.pos = 0;
+    r.markPos = -1;
+  }
   if (r.srcChars) {
     const out = new Uint16Array(READ_CHUNK);
     return after(vcall(src, "read", "([CII)I", out, 0, READ_CHUNK), (n: number) => {
@@ -1003,6 +1088,27 @@ rt.register({
     "<init>(Ljava/lang/String;)V": function (this: JReader, s: string) { this.s = s; },
   },
 });
+rt.register({
+  name: "java/io/CharArrayReader", ctor: class extends JReader {}, sup: "java/io/Reader",
+  methods: {
+    "<init>([C)V": function (this: JReader, chars: Uint16Array) {
+      if (chars === null) return rt.npe();
+      this.s = charsToString(chars, 0, chars.length);
+      this.markPos = 0;
+      this.markLimit = chars.length;
+    },
+    "<init>([CII)V": function (this: JReader, chars: Uint16Array, off: number, len: number) {
+      if (chars === null) return rt.npe();
+      if (off < 0 || len < 0 || off > chars.length || off + len < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+      this.s = charsToString(chars, off, Math.min(len, chars.length - off));
+      this.markPos = 0;
+      this.markLimit = this.s.length;
+    },
+    "markSupported()Z": () => 1,
+    "mark(I)V": function (this: JReader) { this.markPos = this.pos; this.markLimit = this.s.length; },
+    "reset()V": function (this: JReader) { this.pos = this.markPos < 0 ? 0 : this.markPos; },
+  },
+});
 // UTF-8 whatever charset was asked for
 const decodeStream = function (this: JReader, s: unknown) { this.src = s; };
 rt.register({
@@ -1044,6 +1150,16 @@ rt.register({
         return line.endsWith("\r") ? line.slice(0, -1) : line;
       };
       return step();
+    },
+    "markSupported()Z": () => 1,
+    "mark(I)V": function (this: JReader, limit: number) {
+      if (limit < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Read-ahead limit < 0");
+      this.markPos = this.pos;
+      this.markLimit = limit;
+    },
+    "reset()V": function (this: JReader) {
+      if (this.markPos < 0 || this.pos - this.markPos > this.markLimit) throw rt.mkThrowable("java/io/IOException", "Mark invalid");
+      this.pos = this.markPos;
     },
   },
 });
@@ -1427,6 +1543,10 @@ rt.register({
     statics: { READ: opt("READ"), WRITE: opt("WRITE"), APPEND: opt("APPEND"), TRUNCATE_EXISTING: opt("TRUNCATE_EXISTING"), CREATE: opt("CREATE"), CREATE_NEW: opt("CREATE_NEW") },
   });
 }
+mkEnumSet("java/nio/file/StandardOpenOption", ["READ", "WRITE", "APPEND", "TRUNCATE_EXISTING", "CREATE", "CREATE_NEW", "DELETE_ON_CLOSE", "SPARSE", "SYNC", "DSYNC"], {}, ["java/nio/file/OpenOption"]);
+defineException("java/nio/file/FileSystemException", "java/io/IOException");
+defineException("java/nio/file/NoSuchFileException", "java/nio/file/FileSystemException");
+defineException("java/nio/file/FileAlreadyExistsException", "java/nio/file/FileSystemException");
 rt.register({
   name: "java/nio/file/Files", ctor: class extends JObj {},
   methods: {
@@ -1453,6 +1573,25 @@ rt.register({
     },
     "static isDirectory(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z": (p: JNioPath) => (vfs.isDir(p.p) ? 1 : 0),
     "static isRegularFile(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z": (p: JNioPath) => (vfs.stat(p.p) ? 1 : 0),
+    "static isSymbolicLink(Ljava/nio/file/Path;)Z": () => 0,
+    "static newOutputStream(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;": async (p: JNioPath, options: JSimpleEnum[] | null) => {
+      const names = new Set((options ?? []).map((option) => option.ename));
+      const defaults = names.size === 0;
+      if (names.has("READ") || names.has("APPEND") && names.has("TRUNCATE_EXISTING")) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+      const exists = vfs.exists(p.p);
+      if (names.has("CREATE_NEW") && exists) throw rt.mkThrowable("java/nio/file/FileAlreadyExistsException", p.p);
+      if (!exists && !defaults && !names.has("CREATE") && !names.has("CREATE_NEW")) throw rt.mkThrowable("java/nio/file/NoSuchFileException", p.p);
+      if (vfs.isDir(p.p)) throw rt.mkThrowable("java/nio/file/FileSystemException", p.p);
+      const truncate = defaults || names.has("TRUNCATE_EXISTING");
+      if (exists && !truncate && !vfs.read(p.p)) {
+        const bytes = await vfs.readFile(p.p);
+        if (bytes) vfs.write(p.p, bytes);
+      }
+      const stream = new JFOS();
+      openWrite.call(stream, p.p, names.has("APPEND") ? 1 : 0, truncate);
+      stream.deleteOnClose = names.has("DELETE_ON_CLOSE");
+      return stream;
+    },
     "static readAllBytes(Ljava/nio/file/Path;)[B": async (p: JNioPath) => {
       const bytes = await vfs.readFile(p.p) ?? new Uint8Array(0);
       return new Int8Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length));

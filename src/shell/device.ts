@@ -33,6 +33,7 @@ import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
 import { device, orientationForRequest, setDeviceOrientation } from "./config";
 import { restoreRoots } from "./hostfs";
+import { setPixelCopyFrame } from "../android/glview";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
 const STATUS_H = device.statusBar;
@@ -43,6 +44,7 @@ export function setDisplayChangeHandler(handler: () => void): void { displayChan
 // The bitmap transfer is a zero-copy swap; a drawImage blit cost a software rasteriser ~10 ms
 // a frame. Read the screen back with toBlob: toDataURL on a transferred bitmap stalls.
 let fb = new OffscreenCanvas(SCREEN_W, SCREEN_H);
+setPixelCopyFrame(fb);
 export let frame = fb.getContext("2d")!;
 let screen: ImageBitmapRenderingContext | null = null;
 export function setScreenCanvas(c: HTMLCanvasElement): void { screen = c.getContext("bitmaprenderer"); }
@@ -55,6 +57,7 @@ function applyOrientationRequest(request: number): boolean {
   SCREEN_W = device.width;
   SCREEN_H = device.height;
   fb = new OffscreenCanvas(SCREEN_W, SCREEN_H);
+  setPixelCopyFrame(fb);
   frame = fb.getContext("2d")!;
   syncDeviceOrientation();
   displayChanged();
@@ -244,7 +247,13 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     booted = { host, mainActivityCls: mainActivity ?? "", stack: [], label };
     if (!processName && mainActivity) {
       onStatus("launching " + mainActivity.split("/").pop());
-      await launchActivity(mainActivity, null);
+      const intent = new JIntent();
+      intent.action = "android.intent.action.MAIN";
+      intent.categories.add("android.intent.category.LAUNCHER");
+      intent.component = mainActivity.replaceAll("/", ".");
+      intent.componentPkg = pkg;
+      intent.flags = 0x10000000;
+      await launchActivity(mainActivity, intent);
     }
     return booted;
   });

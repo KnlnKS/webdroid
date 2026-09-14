@@ -2,12 +2,24 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
-import { mangleMethod } from "../src/jvm/abi";
 
 class RecordingRunnable extends JObj { runs = 0; }
+class BlockingRunnable extends JObj {
+  promise: Promise<void>;
+  release!: () => void;
+  constructor() {
+    super();
+    this.promise = new Promise((resolve) => { this.release = resolve; });
+  }
+}
+class ValueSupplier extends JObj { value = "supplied"; }
 rt.register({
   name: "test/QueueRunnable", ctor: RecordingRunnable, ifaces: ["java/lang/Runnable"],
   methods: { "run()V": function (this: RecordingRunnable) { this.runs++; } },
+});
+rt.register({
+  name: "test/ExecutorBlockingRunnable", ctor: BlockingRunnable, ifaces: ["java/lang/Runnable"],
+  methods: { "run()V": function (this: BlockingRunnable) { return this.promise; } },
 });
 // the shape of an app's own BlockingQueue: implements the interface, carries no native storage
 rt.register({ name: "test/AppQueue", ctor: class extends JObj {}, ifaces: ["java/util/concurrent/BlockingQueue"] });
@@ -27,9 +39,13 @@ rt.register({
 });
 rt.register({ name: "test/OwnTask", ctor: class extends (rt.link("java/util/concurrent/FutureTask").ctor as typeof JObj) {}, sup: "java/util/concurrent/FutureTask", methods: {} });
 rt.register({ name: "test/Answer", ctor: class extends JObj {}, ifaces: ["java/util/concurrent/Callable"], methods: { "call()Ljava/lang/Object;": () => "answer" } });
+rt.register({
+  name: "test/ValueSupplier", ctor: ValueSupplier, ifaces: ["java/util/function/Supplier"],
+  methods: { "get()Ljava/lang/Object;": function (this: ValueSupplier) { return this.value; } },
+});
 rt.linkNatives();
 
-const seconds = () => (rt.link("java/util/concurrent/TimeUnit").ctor as any).s$SECONDS;
+const seconds = () => Reflect.get(rt.link("java/util/concurrent/TimeUnit").ctor, "s$SECONDS");
 const pool = (queue: unknown) => newObj("java/util/concurrent/ThreadPoolExecutor",
   "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V", 1, 1, 0n, seconds(), queue);
 
@@ -46,9 +62,14 @@ test("a pool executor runs tasks through a bytecode BlockingQueue", async () => 
 test("a native queue still mirrors pending tasks", async () => {
   const queue = await newObj("java/util/concurrent/LinkedBlockingQueue");
   const ex = await pool(queue);
-  const task = rt.make("test/QueueRunnable") as RecordingRunnable;
+  const blocker = new BlockingRunnable();
+  const blocked = await vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", blocker);
+  await Promise.resolve();
+  const task = new RecordingRunnable();
   const future = await vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", task);
   expect(await vcall(queue, "size", "()I")).toBe(1);
+  blocker.release();
+  await vcall(blocked, "get", "()Ljava/lang/Object;");
   await vcall(future, "get", "()Ljava/lang/Object;");
   expect(await vcall(queue, "size", "()I")).toBe(0);
   expect(task.runs).toBe(1);
@@ -94,6 +115,48 @@ test("ForkJoinPool executes tasks and exposes their result", async () => {
   expect(await vcall(task, "getRawResult", "()Ljava/lang/Object;")).toBe("done");
   const submitted = await vcall(pool, "submit", "(Ljava/util/concurrent/ForkJoinTask;)Ljava/util/concurrent/ForkJoinTask;", rt.make("test/ConstTask"));
   expect(await vcall(submitted, "join", "()Ljava/lang/Object;")).toBe("done");
-  const common = (rt.link("java/util/concurrent/ForkJoinPool").ctor as any)[mangleMethod("commonPool", "()Ljava/util/concurrent/ForkJoinPool;")]();
-  expect(common).toBe((rt.link("java/util/concurrent/ForkJoinPool").ctor as any)[mangleMethod("commonPool", "()Ljava/util/concurrent/ForkJoinPool;")]());
+  const common = await vcall(rt.link("java/util/concurrent/ForkJoinPool").ctor, "commonPool", "()Ljava/util/concurrent/ForkJoinPool;");
+  expect(common).toBe(await vcall(rt.link("java/util/concurrent/ForkJoinPool").ctor, "commonPool", "()Ljava/util/concurrent/ForkJoinPool;"));
+});
+
+test("submit(Runnable, result) completes with the supplied result", async () => {
+  const ex = await pool(await newObj("java/util/concurrent/LinkedBlockingQueue"));
+  const task = new RecordingRunnable();
+  const future = await vcall(ex, "submit", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;", task, "done");
+  expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("done");
+  expect(task.runs).toBe(1);
+});
+
+test("CompletableFuture supplyAsync runs on the supplied executor", async () => {
+  const ex = await pool(await newObj("java/util/concurrent/LinkedBlockingQueue"));
+  const supplier = new ValueSupplier();
+  const future = await vcall(rt.link("java/util/concurrent/CompletableFuture").ctor, "supplyAsync",
+    "(Ljava/util/function/Supplier;Ljava/util/concurrent/Executor;)Ljava/util/concurrent/CompletableFuture;", supplier, ex);
+  expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("supplied");
+});
+
+test("executor work is eligible at the next cooperative turn", async () => {
+  const ex = await pool(await newObj("java/util/concurrent/LinkedBlockingQueue"));
+  const task = new RecordingRunnable();
+  await vcall(ex, "execute", "(Ljava/lang/Runnable;)V", task);
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(task.runs).toBe(1);
+});
+
+test("executor backlogs yield to the browser event loop", async () => {
+  const ex = await pool(await newObj("java/util/concurrent/LinkedBlockingQueue"));
+  const blocker = new BlockingRunnable();
+  await vcall(ex, "execute", "(Ljava/lang/Runnable;)V", blocker);
+  await Promise.resolve();
+  const task = new RecordingRunnable();
+  const submissions: Promise<unknown>[] = [];
+  for (let i = 0; i < 200; i++) submissions.push(vcall(ex, "execute", "(Ljava/lang/Runnable;)V", task));
+  await Promise.all(submissions);
+  const browserTurn = new Promise<void>((resolve) => setTimeout(resolve, 0));
+  blocker.release();
+  await browserTurn;
+  expect(task.runs).toBeGreaterThan(0);
+  expect(task.runs).toBeLessThan(200);
+  while (task.runs < 200) await new Promise((resolve) => setTimeout(resolve, 0));
 });
