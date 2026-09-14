@@ -2769,4 +2769,35 @@ The focused checks cover cursor sharing, short skips, EOF, non-positive counts, 
 virtual calls and exception identity. Typecheck and all 895 tests (22,160 assertions) pass.
 A fresh 12-step Resy rerun restores the actual venue photo with zero missing APIs, errors,
 wedges or layout/draw errors. Before/after captures are in webdroid-shots/maps/resy-before-skip
-and tests/e2e/actual/resy. The full matrix will be repeated at this committed code.
+and tests/e2e/actual/resy. The full matrix was repeated at this committed code; results follow.
+
+
+The final serialized matrix at 3dcc2d2 completed all 134 captures across 11 flows in
+684.7 seconds. Every step had zero main-loop wedges, layout/draw errors and nativeRequired
+entries. Resy again had zero missing APIs/errors and its venue photo rendered. Typecheck
+and the EGL browser fixture also pass after correcting the fixture to retrieve the declared
+EGL_NO_CONTEXT static field. Maps and Resy smoke compilation report zero method failures;
+all 895 unit tests pass (22,160 assertions). Framework exercises pass with 295/363 declared
+natives registered; Paint.measureText is skipped without a DOM.
+
+A separate f3fefda worktree ran the same full matrix with one job. Its scored content mean
+was 36.29%, versus 36.02% on the final branch (lower is better); these large differences
+from goldens remain, and neither value establishes visual parity. TikTok stays on its
+post-consent splash in both, and Lichess has the same pthread abort families (35, 3, 22).
+Their log counts vary: final Lichess has 43 errors versus baseline 13 and the earlier branch
+run 10. Final TikTok has 119 versus baseline 81; new observations include a vsnprintf bad
+address in libttmplayer and the absent FileOutputStream(FileDescriptor) constructor, plus
+native benchmark/proc diagnostics. These differences are unresolved, not regression waivers.
+Flappy Bird gameplay remains 28–29 fps versus baseline 28–29 fps. The performance rollup
+also records variable waits and extra native work; it does not support a general speedup.
+The matched Maps padding measurement above is the narrower supported improvement.
+
+Exact Maps parity remains open after the EGL fix. Roads/water/routes and media render,
+but fine base-map detail, font wrapping and shadows differ. The font provider in the
+unchanged bundled microG returns Roboto. Although Chrome and the AVD both use 1080×2424
+at 480 dpi, webdroid reports API 33 and 24 dp system bars, whereas the API 35 reference
+has different cutout/system-bar geometry. No app-specific font, tile or layout substitutes
+were added. Good current captures include chrome-egl-thread-preview.png,
+chrome-egl-thread-next-verified.png, chrome-media-final-full.png and their Android
+references in webdroid-shots/maps. The E2E report and baseline/current logs are retained;
+goldens were not modified. Work stays on codex/maps-parity and is not merged to main.

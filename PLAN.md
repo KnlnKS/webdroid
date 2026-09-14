@@ -35,23 +35,46 @@ platform contracts; run the full serialized E2E suite at the end.
   invoking completion on the ambient main thread after worker suspension. The callback now
   retains its executing thread; a fresh Chrome startup reaches the sign-in tutorial without it.
   The previously observed detached AndroidViewHolder error is absent in fresh runs.
-- Maps smoke at an earlier checkpoint: 72,887 classes, zero method failures. Focused
-  checks and typecheck pass after recent edits. Full E2E has not run yet.
+- Photo viewing, paging to video, reaction prompts, playback, pause, seeking and Close now
+  work on observed paths. Native SeekBar and framework drawable resources provide the track
+  and thumb; streaming HTTP and audio capability queries let the bundled player decode video.
+  Fresh Chrome screenshots and per-step telemetry are in `webdroid-shots/maps/`.
+- Unchanged pre-draw padding no longer requests layout: a fresh Pause check dropped from
+  295 layout passes to 1 (844 ms to 18 ms of layout time). Drawing remains active while the
+  app's animator runs. This is a matched interaction, not a general startup-speed claim.
+- Fresh Maps smoke: 72,887 classes, zero method failures; Resy smoke also has zero
+  method failures. Typecheck, the corrected EGL browser fixture and all 895 unit tests
+  (22,160 assertions) pass. Framework exercises pass, with 295/363 declared natives
+  registered and Paint.measureText skipped without a DOM.
+- Final serialized E2E at 3dcc2d2 completed 134 steps across 11 flows in 684.7 seconds.
+  No main-loop wedges, layout/draw errors or nativeRequired entries were recorded.
+  Resy's venue-photo regression is fixed and all its 12 steps have zero missing APIs/errors.
+  The original f3fefda matrix reproduces TikTok's splash failure, Lichess pthread aborts,
+  and Flappy Bird's slow gameplay. Current TikTok additionally reached a vsnprintf fault
+  and a missing FileOutputStream(FileDescriptor); their regression status is unresolved.
+  Capture completion is not a functional pass or a clean regression verdict.
+- EGL10 and EGL14 no longer overwrite another worker's binding. The map's bad-surface
+  failure is fixed by thread-local EGL/GL ownership, including native dispatch and error
+  state. Fresh native-JIT Chrome preview presents 77 GL frames in 10.14 s; successive
+  maneuvers have no new missing APIs or errors. Media decoding, seeking and Close also
+  pass fresh checks with 1,300+ decoded video frames. See implementation history for limits.
 - Bitmap shader tile caching removes repeated canvas allocation across shader
   instances (over 900,000 allocations in one earlier diagnostic run). Normal Chrome
   now survives repeated place/route interactions; this does not prove every crash
   resolved. Diagnostic instrumentation invalidates timing results.
 
-## Next
+## Remaining work
 
-1. Complete the photo viewer: Serializable values now survive Parcel marshalling and reach
-   media layout, which exposes TextView shadow getters and DynamicDrawableSpan. Diagnose
-   remaining fonts/wrapping and shadows. Continue
-   checking startup thread/span ordering and remaining API failures against
-   Android/bytecode evidence.
-2. Exercise matching Maps search, place, directions and preview interactions in Chrome
-   and Android. Capture fresh screenshots; fix geometry and behavior without app cases.
-3. Verify affected contracts and Maps compilation, measure functioning rendering with
-   instrumentation disabled, then run the full serialized E2E suite. Compare ambiguous
-   failures to starting commit `f3fefda` under matching settings; preserve goldens.
-4. Remove temporary diagnostics, finish focused commits, leave the worktree separate.
+1. Exact screenshot parity is not achieved. Missing base-map detail, font wrapping,
+   shadows and system-bar geometry need further causal investigation. Both captures use
+   1080×2424 @480 dpi, but webdroid reports API 33 with 24 dp system bars and the reference
+   uses API 35 with a display cutout; the device environments are not identical.
+2. microG returns Roboto for font requests. Vector clip paths and animated-selector
+   transitions remain unsupported; SeekBar keyboard/RTL behavior is not covered.
+   Optional service/class probes still appear in Maps diagnostics.
+3. Resolve the changed TikTok diagnostics before claiming no regressions. Lichess's same
+   pthread failure families recur more often in the final run; the earlier current run
+   had fewer than baseline. Performance and visual comparisons are retained under
+   `webdroid-shots/maps/` and `tests/e2e/report/`; visual goldens are unchanged.
+4. Work remains isolated on `codex/maps-parity`. Temporary diagnostic source files were
+   removed; the comparison worktree at f3fefda is retained and its server is stopped.
