@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i8, u8 } from "../abi";
-import { vcall, vcallMaybe, after, stringHash, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
+import { vcall, vcallMaybe, vcallOn, curThread, after, stringHash, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
 import { mappedBuffer, mappedReadOnlyBuffer, type JBuffer } from "./jnio";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd } from "../../native/stdio";
@@ -449,6 +449,16 @@ rt.register({
     ...readers((n, get) => dataRead(n, (b) => get(new DataView(b.buffer, b.byteOffset, n)))),
     "readFully([B)V": function (this: JInputStream, out: Int8Array) {
       return after(dataBytes(this, out.length), (bytes) => { out.set(i8(bytes)); });
+    },
+    "skipBytes(I)I": async function (this: JInputStream, n: number) {
+      const thread = curThread;
+      let total = 0;
+      while (total < n) {
+        const skipped = Number(await vcallOn(thread, this.wrapped, "skip", "(J)J", BigInt(n - total)));
+        if (skipped <= 0) break;
+        total += skipped;
+      }
+      return total;
     },
     "readUTF()Ljava/lang/String;": async function (this: JInputStream) {
       const head = await dataBytes(this, 2);

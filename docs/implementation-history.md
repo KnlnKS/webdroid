@@ -2759,3 +2759,14 @@ renders water, roads and the route: the first preview capture records 77 GL fram
 with no layout/draw errors. This restores rendering, not screenshot parity or complete EGL
 conformance; shared contexts still share WebGL state, and deferred destruction and conflicting
 cross-thread context binding remain incomplete.
+
+The final serialized matrix exposed a real Resy image regression: its venue photo decoded
+at f3fefda but disappeared on the Maps branch when ExifInterface reached the absent
+DataInputStream.skipBytes. The delegate now repeatedly skips the remaining count on the
+wrapped stream, stops on non-progress, and preserves its calling thread across suspension.
+It follows OpenJDK DataInputStream's contained-stream contract, without app-specific behavior.
+The focused checks cover cursor sharing, short skips, EOF, non-positive counts, suspended
+virtual calls and exception identity. Typecheck and all 895 tests (22,160 assertions) pass.
+A fresh 12-step Resy rerun restores the actual venue photo with zero missing APIs, errors,
+wedges or layout/draw errors. Before/after captures are in webdroid-shots/maps/resy-before-skip
+and tests/e2e/actual/resy. The full matrix will be repeated at this committed code.
