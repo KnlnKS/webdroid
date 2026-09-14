@@ -68,4 +68,8 @@ tests and diagnostic loads pause during serialized performance windows.
   smoke compilation of all six target APKs pass. Framework coverage gaps are documented.
 - Remaining: combined app guards, full E2E and corpus against matching pristine captures,
   final implementation-history evidence. Independent stages have retention decisions;
-  combined measurements are running on frozen 39059ba.
+  combined measurements use production code frozen at 39059ba. Three Doodle pairs retain
+  21–23% faster completed-title startup; three fixed Lichess navigation pairs pass guards.
+  Real Lichess engine replies are verified on both revisions, with differing search work
+  and existing pthread failures explicitly excluded from throughput claims. FitNotes,
+  Mihon, Resy and Flappy combined checks remain before the full matrix.

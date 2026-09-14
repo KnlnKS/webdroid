@@ -3724,3 +3724,45 @@ assertions), and all six target APKs compile in eager and cold modes with zero
 method failures. The eight executed framework exercises pass; Paint.measureText
 is skipped without a DOM. Declared framework coverage remains 295/363 entries,
 with 68 declared gaps. These checks precede the combined browser matrix.
+
+### Combined integration checks
+
+With production code frozen at 39059ba, three alternating Doodle Metal pairs
+retain the startup gain after all selected native, JVM and surface fixes:
+pristine 12.529/12.397/12.804 s, integrated 9.739/9.748/9.810 s. Paired reductions
+are 22.27%, 21.37%, 23.39%; the median is 12.529 -> 9.748 s (1.29x). Six follow-up
+15-second windows deliver 24/24 inputs at roughly 120 completed frames/s,
+without an in-flight action. Tutorial median main-thread CPU is 2.724 -> 2.542 s,
+retained JS heap 180.21 -> 179.50 MB. Screenshots confirm title completion and
+score-zero tutorial state; this still does not establish sustained gameplay.
+Main runtime/browser errors are absent. Child realms expose empty missing/native
+sets; logs/perf/queue are unavailable, not empty. Evidence and reproduction drivers
+are `webdroid-shots/native-stages/combined-results/` and `app-combined-rounds.ts`
+in the native worktree. Other combined app guards and the full matrix follow.
+
+The first Lichess engine pair completes all three legal moves and actual native
+Stockfish replies on both revisions, including verified editor pawn drags before
+game setup. Pristine plays `1.e4 d6 2.Nf3 e5 3.Nxe5 Nh6`; integration plays
+`1.e4 b6 2.Nf3 h5 3.Ne5 g6`. Native work is 1.52 versus 2.82 billion instructions,
+so CPU 4.36 versus 5.70 seconds is not an equivalent-work regression comparison.
+Both reproduce pthread error types 35/22/3 and the optional Sidecar missing API,
+with 91/88 browser-console error entries; neither run is error-free. The existing
+live-clock, level-one engine flow does not freeze search work. Further engine
+timing pairs are stopped in favor of a separate fixed Tools/editor navigation
+guard; engine screenshots and exact logs remain in `combined-results/lichess-*`.
+
+Three alternating Tools/editor pairs then complete 14/14 transitions per window,
+with no in-flight action and matching final Tools screens. Median main CPU is
+6.835 -> 6.712 seconds, per-window median input proxy 106.0 -> 106.4 ms (+0.38%),
+median p95 164.0 -> 165.1 ms (+0.67%), retained JS heap 193.65 -> 193.20 MB.
+No new diagnostic family appears beyond the reproduced pthread errors and DNS
+warning; Sidecar missing matches. Background native work still varies, so this
+supports the responsiveness guard, not a native throughput improvement claim.
+The native worktree retains `combined-results/lichess-tools-summary.json`,
+screenshots, complete diagnostic logs and reproduction commands.
+
+Full-matrix harness 8da8bc2 additionally retains page console errors. This catches
+child-process bootstrap/compiler/activity failures that call `console.error`
+inside a catch and therefore do not trigger `pageerror`. It supplements bounded
+process snapshots without relabeling unavailable child logs or counters as empty.
+Harness typecheck passes; production code remains frozen at 39059ba.
