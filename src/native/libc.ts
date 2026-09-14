@@ -221,7 +221,7 @@ function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promise<HostR
   if (nr === (PTR === 8 ? 135 : 175)) { const how = a.i(), set = a.p(), old = a.p(), size = a.u(); const e = size === 8 ? cpu.sigmask(how, set, old, 8) : E.INVAL; return e ? fail(cpu, e) : 0; }
   if (nr === (PTR === 8 ? 178 : 224)) return 4242 + cpu.tid;              // gettid
   if (nr === (PTR === 8 ? 172 : 20)) return 4242;                          // getpid
-  if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); crypto.getRandomValues(mem.bytes(buf, n)); return n; } // getrandom
+  if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); if (n) crypto.getRandomValues(mem.bytes(buf, n)); return n; } // getrandom
   if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin
   if (nr === (PTR === 8 ? 179 : 116)) { fillSysinfo(a.p()); return 0; }    // sysinfo
   // the numbers whose wrapper takes the syscall's own arguments: the argument cursor sits
