@@ -20,8 +20,8 @@ export async function vcall(obj: any, name: string, desc: string, ...args: unkno
 }
 export function vcallOn(thread: JThread, obj: unknown, name: string, desc: string, ...args: unknown[]): unknown {
   const previous = curThread;
-  curThread = thread;
-  try { return vcallMaybe(obj, name, desc, ...args); } finally { curThread = previous; }
+  setCurThread(thread);
+  try { return vcallMaybe(obj, name, desc, ...args); } finally { setCurThread(previous); }
 }
 export function vcallMaybe(obj: any, name: string, desc: string, ...args: unknown[]): any {
   return findMethod(obj, name, desc).apply(obj, args);
@@ -42,8 +42,8 @@ export async function linkInit(cls: string): Promise<ClassInfo> {
 export async function newObj(cls: string, desc: string | null = "()V", ...args: unknown[]): Promise<any> {
   const thread = curThread, info = await linkInit(cls), previous = curThread;
   let o;
-  curThread = thread;
-  try { o = new info.ctor(); } finally { curThread = previous; }
+  setCurThread(thread);
+  try { o = new info.ctor(); } finally { setCurThread(previous); }
   if (desc !== null) await vcallOn(thread, o, "<init>", desc, ...args);
   return o;
 }
@@ -1436,8 +1436,8 @@ export const mainThread = curThread = new JThread();
 mainThread.jname = "main";
 mainThread.alive = 1;
 rt.th = () => curThread;
-rt.st = (t) => { curThread = t as JThread; };
-rt.su = () => { curThread = mainThread; };
+rt.st = (t) => setCurThread(t as JThread);
+rt.su = () => setCurThread(mainThread);
 class JDefaultUEH extends JObj {}
 rt.register({
   name: "webdroid/DefaultUEH", ctor: JDefaultUEH, ifaces: ["java/lang/Thread$UncaughtExceptionHandler"],
@@ -1449,7 +1449,12 @@ rt.register({
   },
 });
 let defaultUEH: unknown = new JDefaultUEH();
-export function setCurThread(t: JThread) { curThread = t; }
+export const threadSwitch = { hook: null as ((t: JThread) => void) | null };
+export function setCurThread(t: JThread) {
+  if (t === curThread) return;
+  curThread = t;
+  threadSwitch.hook?.(t);
+}
 let threadCounter = 0;
 const nextThreadName = () => "Thread-" + threadCounter++;
 
@@ -1508,10 +1513,10 @@ rt.register({
       this.done = new Promise((resolve) => {
         queueMicrotask(async () => {
           const prev = curThread;
-          curThread = this;
+          setCurThread(this);
           try {
             let running: Promise<unknown>;
-            try { running = vcall(this, "run", "()V"); } finally { curThread = prev; }
+            try { running = vcall(this, "run", "()V"); } finally { setCurThread(prev); }
             await running;
           }
           catch (e) { console.error("[thread " + this.jname + "]", e); }

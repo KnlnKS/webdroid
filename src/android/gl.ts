@@ -1,12 +1,13 @@
 // android.opengl.* → WebGL2. GL int handles ↔ WebGL objects via id tables.
 
 import { rt, JObj } from "../jvm/runtime";
+import { curThread, JThread, threadSwitch } from "../jvm/natives/jlang";
 import { JBuffer, bufferView } from "../jvm/natives/jnio";
 import { JBitmap } from "./graphics";
 import { gles1String } from "../native/gles1";
 import { gles3Extensions } from "../native/gles3";
 
-// ── The active GL context (one GLSurfaceView at a time is typical)
+// GL dispatch follows the cooperative Java/native thread without a lookup on every GL call.
 type GL = WebGL2RenderingContext | WebGLRenderingContext;
 export let gl: GL | null = null;
 
@@ -26,7 +27,13 @@ const freshTables = (): Tables => ({ programs: [null], shaders: [null], buffers:
 const tablesOf = new WeakMap<GL, Tables>();
 let T: Tables = freshTables();
 export const tables = (): Tables => T;
+const threadGL = new WeakMap<JThread, GL>();
+threadSwitch.hook = (thread) => selectGL(threadGL.get(thread) ?? null);
 export function setGL(ctx: GL | null) {
+  if (ctx) threadGL.set(curThread, ctx); else threadGL.delete(curThread);
+  selectGL(ctx);
+}
+function selectGL(ctx: GL | null) {
   if (ctx === gl) return;
   gl = ctx;
   if (!ctx) return;

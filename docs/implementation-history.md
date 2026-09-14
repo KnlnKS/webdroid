@@ -2743,3 +2743,19 @@ Its wrapper now draws the child around absolute or fractional pivots, updates ro
 level, and loads XML angles/pivots. The SDK and AOSP Android 15 implementation establish the
 API and angle-update behavior. Browser pixels cover half-level rotation, absolute pivots and
 canvas restoration; typecheck passes. No application resource names are used by the delegate.
+
+Fresh route verification exposed intermittent blank maps: EGL10 swapped 32–37 frames, then
+returned EGL_BAD_SURFACE. A binding trace showed another worker making an EGL14 context
+current and releasing it, overwriting the map worker's process-global binding. The same
+failure reproduced at cf076e2, before the padding optimization. EGL bindings and error state
+now belong to their calling thread; Java and native EGL share that owner. Cooperative thread
+switches restore GL dispatch and object tables, avoiding a thread lookup on each GL call.
+GLSurfaceView renderer callbacks also retain the GL thread across suspended lifecycle calls.
+Khronos eglMakeCurrent/eglReleaseThread specify this thread-local behavior. The browser test
+uses two real WebGL contexts, suspended swapping, separate errors, worker release, restored
+pixels/object tables, and suspending GLSurfaceView callbacks. Typecheck and this test pass.
+With tracing removed, full Chrome with native JIT enabled keeps the Maps surface valid and
+renders water, roads and the route: the first preview capture records 77 GL frames in 10.14 s,
+with no layout/draw errors. This restores rendering, not screenshot parity or complete EGL
+conformance; shared contexts still share WebGL state, and deferred destruction and conflicting
+cross-thread context binding remain incomplete.

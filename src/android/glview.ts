@@ -3,7 +3,7 @@
 import { rt, JObj, stubs, noops } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { mangleMethod } from "../jvm/abi";
-import { vcall, JThread, setCurThread, curThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, JThread, setCurThread, curThread } from "../jvm/natives/jlang";
 import { JView, JViewGroup, guardCall, initViewFromCtx, invalidate, uiState, requestLayout, specSize, defaultSize } from "./view";
 import { onMain } from "./mainloop";
 import { JCanvas, JBitmap, JMatrix } from "./graphics";
@@ -11,9 +11,6 @@ import { setGL, gl, tables } from "./gl";
 import { reportUncaught, mainLooper, mainHandler } from "./os";
 import { perf } from "../perf";
 
-const M_onSurfaceCreated = mangleMethod("onSurfaceCreated", "(Ljavax/microedition/khronos/opengles/GL10;Ljavax/microedition/khronos/egl/EGLConfig;)V");
-const M_onSurfaceChanged = mangleMethod("onSurfaceChanged", "(Ljavax/microedition/khronos/opengles/GL10;II)V");
-const M_onDrawFrame = mangleMethod("onDrawFrame", "(Ljavax/microedition/khronos/opengles/GL10;)V");
 const D_chooseConfig = "(Ljavax/microedition/khronos/egl/EGL10;Ljavax/microedition/khronos/egl/EGLDisplay;)Ljavax/microedition/khronos/egl/EGLConfig;";
 
 class JGLSurfaceView extends JViewGroup {
@@ -46,9 +43,10 @@ class JGLSurfaceView extends JViewGroup {
   }
   async runFrame() {
     if (!this.ctx || !this.renderer) return;
-    setGL(this.ctx);
     const prev = curThread;
     setCurThread(this.glThread);
+    setGL(this.ctx);
+    setCurThread(prev);
     try {
       if (!this.fakeGL10) { const info = rt.link("webdroid/GL10"); this.fakeGL10 = new info.ctor(); }
       if (!this.surfaceCreated) {
@@ -57,19 +55,17 @@ class JGLSurfaceView extends JViewGroup {
         // and renderers read back through it what the chooser recorded.
         if (!this.eglConfig) {
           this.eglConfig = this.configChooser
-            ? (await vcall(this.configChooser, "chooseConfig", D_chooseConfig,
+            ? (await vcallOn(this.glThread, this.configChooser, "chooseConfig", D_chooseConfig,
                 rt.make("javax/microedition/khronos/egl/EGL10"),
                 rt.make("javax/microedition/khronos/egl/EGLDisplay"))) ?? theConfig
             : theConfig;
         }
-        await guardCall(this.renderer, M_onSurfaceCreated, this.fakeGL10, this.eglConfig);
-        await guardCall(this.renderer, M_onSurfaceChanged, this.fakeGL10, this.lastW, this.lastH);
+        await vcallOn(this.glThread, this.renderer, "onSurfaceCreated", "(Ljavax/microedition/khronos/opengles/GL10;Ljavax/microedition/khronos/egl/EGLConfig;)V", this.fakeGL10, this.eglConfig);
+        await vcallOn(this.glThread, this.renderer, "onSurfaceChanged", "(Ljavax/microedition/khronos/opengles/GL10;II)V", this.fakeGL10, this.lastW, this.lastH);
       }
-      await guardCall(this.renderer, M_onDrawFrame, this.fakeGL10);
+      await vcallOn(this.glThread, this.renderer, "onDrawFrame", "(Ljavax/microedition/khronos/opengles/GL10;)V", this.fakeGL10);
     } catch (e) {
       reportUncaught(e);
-    } finally {
-      setCurThread(prev);
     }
   }
 }
@@ -111,8 +107,7 @@ rt.register({
     "requestRender()V": function (this: JGLSurfaceView) { this.dirty = true; invalidate(); },
     "queueEvent(Ljava/lang/Runnable;)V": function (this: JGLSurfaceView, r: unknown) {
       setTimeout(() => {
-        const prev = curThread; setCurThread(this.glThread);
-        void Promise.resolve(vcall(r, "run", "()V")).catch(reportUncaught).finally(() => setCurThread(prev));
+        try { void Promise.resolve(vcallOn(this.glThread, r, "run", "()V")).catch(reportUncaught); } catch (e) { reportUncaught(e); }
       }, 0);
     },
     // GLThread stops rendering while paused; the WebGL context is kept across it, which is the
@@ -172,7 +167,6 @@ export class EglContext {
     if (s && (this.canvas.width !== s.width || this.canvas.height !== s.height)) { this.canvas.width = s.width; this.canvas.height = s.height; }
     this.target = s;
     glSurfaces.current = this;
-    setGL(this.gl);
     return true;
   }
   /** present: the frame goes to the surface, the view recomposes, and the caller waits for the
@@ -188,7 +182,14 @@ export class EglContext {
     return new Promise((r) => { const done = () => r(!this.gl?.isContextLost()); if (typeof requestAnimationFrame === "function" && !document.hidden) requestAnimationFrame(done); else setTimeout(done, 16); });
   }
 }
-export const glSurfaces = { current: null as EglContext | null };
+const eglBindings = new WeakMap<JThread, EglContext>();
+export const glSurfaces = {
+  get current(): EglContext | null { return eglBindings.get(curThread) ?? null; },
+  set current(value: EglContext | null) {
+    if (value) eglBindings.set(curThread, value); else eglBindings.delete(curThread);
+    setGL(value?.gl ?? null);
+  },
+};
 
 // PixelCopy: the surface's last presented frame into a Bitmap, the listener told on its handler's looper
 rt.markers("android/view/PixelCopy$OnPixelCopyFinishedListener");
@@ -532,11 +533,11 @@ rt.register({
       },
     "eglMakeCurrent(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z":
       (_d: unknown, draw: JEGLSurface | null, _r: unknown, ctx: JEGLContext | null) => {
-        if (!ctx || ctx === noEglContext) { glSurfaces.current = null; setGL(null); return 1; }
+        if (!ctx || ctx === noEglContext) { glSurfaces.current = null; return 1; }
         return ctx.egl.makeCurrent(draw?.surf ?? null) ? 1 : eglFailure(ctx.egl.gl?.isContextLost() ? 0x300e : 0x3006, 0);
       },
     "eglSwapBuffers(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;)Z":
-      async (_d: unknown, s: JEGLSurface | null) => { const c = glSurfaces.current; if (!s?.surf || c?.target !== s.surf) return eglFailure(0x300d, 0); return await c.swap() ? 1 : eglFailure(0x300e, 0); },
+      async (_d: unknown, s: JEGLSurface | null) => { const thread = curThread, c = glSurfaces.current; if (!s?.surf || c?.target !== s.surf) return eglFailure(0x300d, 0); return await c.swap() ? 1 : eglFailure(0x300e, 0, thread); },
     "eglQuerySurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;I[I)Z":
       (_d: unknown, s: JEGLSurface | null, attr: number, out: Int32Array) => { out[0] = attr === 0x3057 ? s?.surf?.width ?? 0 : attr === 0x3056 ? s?.surf?.height ?? 0 : 0; return 1; },
     ...stubs(1, "eglDestroySurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;)Z",
@@ -570,14 +571,16 @@ for (const [name, ctor] of [["EGLDisplay", JEGL14Display], ["EGLConfig", JEGL14C
 }
 const noDisplay = new JEGL14Display(), noContext = new JEGL14Context(), noSurface = new JEGL14Surface();
 const defaultDisplay = new JEGL14Display(1), defaultConfig = new JEGL14Config(1);
-let eglHandle = 2, eglError = 0x3000, currentContext = noContext;
+let eglHandle = 2;
+const egl14Contexts = new WeakMap<EglContext, JEGL14Context>();
+const eglErrors = new WeakMap<JThread, number>();
 function eglOut(array: Int32Array | null, offset: number, value: number): void {
   if (!array) return;
   if (offset < 0 || offset >= array.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid EGL result offset");
   array[offset] = value;
 }
-function eglFailure<T>(error: number, result: T): T { eglError = error; return result; }
-function takeEglError(): number { const error = eglError; eglError = 0x3000; return error; }
+export function eglFailure<T>(error: number, result: T, thread = curThread): T { eglErrors.set(thread, error); return result; }
+export function takeEglError(): number { const error = eglErrors.get(curThread) ?? 0x3000; eglErrors.delete(curThread); return error; }
 rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics: {
   EGL_NO_DISPLAY: noDisplay, EGL_NO_CONTEXT: noContext, EGL_NO_SURFACE: noSurface, EGL_DEFAULT_DISPLAY: 0,
   EGL_NONE: 0x3038, EGL_SUCCESS: 0x3000, EGL_WIDTH: 0x3057, EGL_HEIGHT: 0x3056, EGL_CONTEXT_CLIENT_VERSION: 0x3098,
@@ -629,15 +632,21 @@ rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics
   },
   "static eglMakeCurrent(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;Landroid/opengl/EGLSurface;Landroid/opengl/EGLContext;)Z": (display: JEGL14Display, draw: JEGL14Surface, _read: JEGL14Surface, context: JEGL14Context) => {
     if (display !== defaultDisplay) return eglFailure(0x3008, 0);
-    if (context === noContext) { currentContext = noContext; glSurfaces.current = null; setGL(null); return 1; }
+    if (context === noContext) { glSurfaces.current = null; return 1; }
     if (!context?.egl || !context.egl.makeCurrent(draw?.surf ?? null)) return eglFailure(context?.egl?.gl?.isContextLost() ? 0x300e : 0x3006, 0);
-    currentContext = context; return 1;
+    egl14Contexts.set(context.egl, context); return 1;
   },
-  "static eglGetCurrentContext()Landroid/opengl/EGLContext;": () => currentContext,
+  "static eglGetCurrentContext()Landroid/opengl/EGLContext;": () => {
+    const current = glSurfaces.current;
+    if (!current) return noContext;
+    let context = egl14Contexts.get(current);
+    if (!context) { context = new JEGL14Context(eglHandle++); context.egl = current; egl14Contexts.set(current, context); }
+    return context;
+  },
   "static eglSwapBuffers(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": async (_display: JEGL14Display, surface: JEGL14Surface) => {
-    const context = glSurfaces.current;
+    const thread = curThread, context = glSurfaces.current;
     if (!surface?.surf || context?.target !== surface.surf) return eglFailure(0x300d, 0);
-    return await context.swap() ? 1 : eglFailure(0x300e, 0);
+    return await context.swap() ? 1 : eglFailure(0x300e, 0, thread);
   },
   "static eglDestroySurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": (_display: JEGL14Display, surface: JEGL14Surface) => {
     if (!surface?.surf) return eglFailure(0x300d, 0);
@@ -646,10 +655,10 @@ rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics
   },
   "static eglDestroyContext(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLContext;)Z": (_display: JEGL14Display, context: JEGL14Context) => {
     if (!context?.egl) return eglFailure(0x3006, 0);
-    if (currentContext === context) { currentContext = noContext; glSurfaces.current = null; setGL(null); }
+    if (glSurfaces.current === context.egl) { glSurfaces.current = null; }
     context.egl = null; return 1;
   },
-  "static eglReleaseThread()Z": () => { currentContext = noContext; glSurfaces.current = null; setGL(null); return 1; },
+  "static eglReleaseThread()Z": () => { glSurfaces.current = null; takeEglError(); return 1; },
   "static eglTerminate(Landroid/opengl/EGLDisplay;)Z": (display: JEGL14Display) => display === defaultDisplay ? 1 : eglFailure(0x3008, 0),
   "static eglGetError()I": takeEglError,
 } });
