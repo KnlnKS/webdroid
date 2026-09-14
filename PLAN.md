@@ -45,8 +45,12 @@ tests and diagnostic loads pause during serialized performance windows.
   Chromium 151 verifies Apple M4 Pro / ANGLE Metal; original SwiftShader remains separate.
 - Native byte-range invalidation, host-buffer notifications, allocation/mapping lifetime
   invalidation and ARM miscellaneous dispatch corrections integrated. Typecheck and all
-  1202 unit tests pass. First native app rotation shows Doodle title startup 12.89 ->
-  9.17 seconds with Thumb calls; standalone attribution and paired repeats remain pending.
+  1202 unit tests pass at the correctness checkpoint. Three paired native rotations select
+  standalone Thumb calls: Doodle title startup 13.08 -> 9.77 seconds against correctness,
+  12.89 -> 9.77 against pristine. Reject precise ARM effects (only 6–9% incremental benefit).
+  Follow-up far-branch decoding and packed GPU readback fixes pass focused checks; combined
+  app/regression verification remains. Detached renderer hooks and completed Window PixelCopy
+  fixes are also integrated independently of the rendering experiments.
 - Snapshot-only publication measured neutral in three Flappy pairs. CPU Canvas2D backing
   rejected for near-continuous main-thread blocking despite higher FPS. Combined snapshot
   candidate also rejected for blocking; Metal remains near 60/s on both revisions. Separate
@@ -58,4 +62,5 @@ tests and diagnostic loads pause during serialized performance windows.
   FitNotes/Resy interactions and matched repeats remain pending. Hot controls remain
   unchanged, including restored sourceURL accounting in the existing admission budget.
 - Remaining: independent app measurements, stage decisions, combined checks, full E2E and
-  corpus, final implementation-history evidence. No retained app speedup is established yet.
+  corpus, final implementation-history evidence. The independently measured native stage
+  clears retention; final combined results remain pending.

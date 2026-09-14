@@ -3505,9 +3505,18 @@ executed instruction stale. The canonical byte-range notification now tests ever
 overlapped executed word/page, retaining the data-only fast path and source-page
 epoch checks. Scalar, floating, wide, bulk and string writes share this coverage.
 Host libc, stdio, networking, locale and compression writes notify their actual
-destination ranges. GLES readPixels remains an explicit gap: its exact footprint
-depends on pack alignment, row length, skips, format and type; invalidating the
-entire remaining-memory view would be incorrect and disproportionately expensive.
+destination ranges. A follow-up real-WebGL fixture reproduced the remaining GLES
+readback hole: two warmed JIT entries spanning a page boundary still returned 1
+after GPU readback replaced their MOV instructions with MOV #2. The shared GLES1/3
+readback path now computes the destination from pack alignment, row length, skips,
+format and type, and notifies each written row. It also fixes GLES1's too-short
+padded destination (INVALID_OPERATION on a 1x2 RGBA read with alignment 8) and the
+discarded output of unaligned integer reads. The old wrappers return `[1,1]`,
+error 1282 and integer zero; the corrected fixture returns `[2,2]`, no error and
+0x12345678. The comparison substitutes only the prior GLES wrappers in the same
+browser fixture/core, isolating the write path. Typecheck and the existing EGL
+browser fixture pass. Evidence: `performance-stages/readback-{compare,test}.log`;
+pack semantics follow the [WebGL2 specification](https://registry.khronos.org/webgl/specs/latest/2.0/).
 
 The follow-up allocator audit reproduced stale code after malloc reused an
 executed allocation. Allocation reuse, freelist writes, mapping replacement,
@@ -3533,6 +3542,56 @@ must not be used for final-stage attribution. Corrected app candidates share all
 correctness fixes before comparing precise register effects and Thumb call exits.
 Native evidence and runnable snapshots are under the native worktree's
 `webdroid-shots/native-stages/`.
+
+### Selected native stage and rejected register metadata
+
+Three alternating rotations compare pristine, correctness-only, precise effects,
+effects plus Thumb calls, and standalone Thumb calls. All use Chromium 151 / ANGLE
+Metal / Apple M4 Pro, 1080x2160@480, without probes or competing diagnostic loads.
+Startup ends at the second completed GL frame and next presentation: the first
+frame is an early splash while roughly nine billion further guest instructions
+execute. Screenshots confirm completed title artwork after this boundary.
+
+| Stage | Median title startup | Median native CPU to title | Median retained JS heap |
+| --- | ---: | ---: | ---: |
+| Pristine b16d705 | 12.887 s | 11.572 s | 180.231 MB |
+| Correctness 40b3756 | 13.084 s | 11.766 s | 180.272 MB |
+| ARM effects 90d1893 | 12.436 s | 11.128 s | 180.243 MB |
+| Effects + calls c74f464 | 9.105 s | 7.796 s | 180.178 MB |
+| Standalone calls f9e382a | 9.766 s | 8.447 s | 180.213 MB |
+
+Standalone calls reduce paired startup by 25.38%, 25.05%, 23.77% against correctness
+and 24.24%, 24.15%, 23.34% against pristine. This clears the application gate,
+although the roughly 1.34x startup / 1.39x native CPU gain misses the aspirational
+1.5x target. Effects alone improve paired startup by -2.35%, 4.96%, 5.10%; adding
+effects to standalone calls improves it by only 6.11%, 7.75%, 8.85%. The larger
+metadata replacement is rejected. The selected change makes existing Thumb BL/BLX
+emission reachable, terminates call regions and removes duplicate dead wide guards.
+
+All 15 windows deliver 24/24 inputs, remain visible/alive with advancing ticks and
+roughly 120 completed GL frames/presentations per second, and report no observed
+missing/native/error entries across four reachable realms. Guest instruction count
+to title stays near 10.883 billion. Follow-up windows show the tutorial at score zero,
+so they establish rendering health, not sustained gameplay. Raw evidence is
+`native-stages/app-results/{0,1,2}-{stage}/run.json`, with reproduction drivers
+`app-measure.ts` and `app-rounds.ts` beside it.
+
+Independent review caught a far-call interpreter overlap before final integration:
+valid f3c0/f800 BL was decoded as a data instruction and faulted. Successor 0824888
+decodes wide branches before overlapping data families, sharing offset decoding
+and removing the old unreachable call decoder. A sparse fixture covers five
+overlapping prefixes times BL/BLX/B.W, including halfword-offset PC alignment and
+full architectural state. Typecheck and 652 core tests / 22178 assertions pass,
+including the hardware SIMD oracle. Original timing variants stay immutable;
+combined measurements must include this correction.
+
+Two small rendering correctness fixes are retained independently of compositor
+experiments. Detached GLSurfaceViews release animation hooks and restore them on
+attachment, including pause/WHEN_DIRTY behavior. Window PixelCopy now reads the
+displayed canvas: previously it copied an unpresented red producer frame while
+green was displayed, then transparent pixels after transfer consumed the producer.
+The existing EGL fixture now verifies completed green before presentation and
+completed red afterward, without another framebuffer allocation.
 
 ### JVM component evidence; application acceptance pending
 
