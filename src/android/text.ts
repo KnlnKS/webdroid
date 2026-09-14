@@ -8,6 +8,7 @@ import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
 import { localeDirection } from "../jvm/natives/jvalues";
+import { csText as javaCsText } from "../jvm/natives/jchars";
 
 class JAnnotation extends JObj { key: string | null = null; value: string | null = null; }
 async function writeAnnotation(this: JAnnotation, parcel: JObj) {
@@ -156,10 +157,8 @@ rt.register({
 /** CharSequence → text. May be a JS string, a Spannable, or an app class (Compose
  *  AnnotatedString wrappers), so anything unrecognised answers through toString(). */
 export async function csText(cs: unknown): Promise<string> {
-  if (cs === null || cs === undefined) return "";
-  if (typeof cs === "string") return cs;
   if (cs instanceof JSpanned) return cs.text;
-  return String(await vcall(cs, "toString", "()Ljava/lang/String;"));
+  return javaCsText(cs);
 }
 const selectionStart = new JObj(), selectionEnd = new JObj();
 export async function textSelection(text: unknown): Promise<[number, number]> {

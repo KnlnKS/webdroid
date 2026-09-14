@@ -25,6 +25,11 @@ rt.register({
   methods: { "test(I)Z": (value: number) => value % 2 === 0 ? 1 : 0 },
 });
 class CollectorBox extends JObj { values: string[] = []; }
+class CharSequenceValue extends JObj { value = ""; }
+rt.register({
+  name: "test/CharSequenceValue", ctor: CharSequenceValue, ifaces: ["java/lang/CharSequence"],
+  methods: { "toString()Ljava/lang/String;": function (this: CharSequenceValue) { return this.value; } },
+});
 rt.register({ name: "test/CollectorBox", ctor: CollectorBox });
 rt.register({
   name: "test/CollectorSupplier", ctor: class extends JObj {}, ifaces: ["java/util/function/Supplier"],
@@ -141,6 +146,18 @@ test("finite number checks and stream flattening preserve Java semantics", async
   const flattened = await vcall(source, "flatMap", "(Ljava/util/function/Function;)Ljava/util/stream/Stream;", rt.make("test/DuplicateStream"));
   expect((await vcall(flattened, "toList", "()Ljava/util/List;")).a).toEqual(["a", "a", "b", "b"]);
   expect(rt.link("java/io/ObjectStreamClass").name).toBe("java/io/ObjectStreamClass");
+});
+
+test("Collectors use the Java Collector protocol and CharSequence text", async () => {
+  const text = (value: string) => Object.assign(rt.make("test/CharSequenceValue") as CharSequenceValue, { value });
+  const values = Object.assign([text("a"), text("b")], { $t: "Ljava/lang/Object;" });
+  const stream = await scall("java/util/stream/Stream", "of", "([Ljava/lang/Object;)Ljava/util/stream/Stream;", values);
+  const joining = await scall("java/util/stream/Collectors", "joining",
+    "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/util/stream/Collector;",
+    text(","), text("["), text("]"));
+  expect(await vcall(stream, "collect", "(Ljava/util/stream/Collector;)Ljava/lang/Object;", joining)).toBe("[a,b]");
+  expect(await vcall(joining, "supplier", "()Ljava/util/function/Supplier;")).not.toBeNull();
+  expect(await vcall(joining, "combiner", "()Ljava/util/function/BinaryOperator;")).not.toBeNull();
 });
 
 test("JSONObject copies only the named keys that exist", async () => {

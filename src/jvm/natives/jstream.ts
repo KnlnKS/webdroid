@@ -1,6 +1,7 @@
 import { JObj, rt } from "../runtime";
 import { newArrayList, toJsArray, sortInPlace, type JList } from "./jutil";
 import { vcall } from "./jlang";
+import { csText } from "./jchars";
 
 // ── java.util.stream, the sequential subset. Every stage runs eagerly over a JS array: a lambda
 // here is an async compiled method on one thread, so laziness would buy nothing and cost the
@@ -19,29 +20,45 @@ const mkOptInt = (v?: number) => {
   return o;
 };
 class JCollector extends JObj {
-  make: () => unknown = () => newArrayList([]);
-  add: (c: unknown, x: unknown) => unknown = () => {};
-  fin: ((c: unknown) => unknown) | null = null;
+  supplier: unknown = null;
+  accumulator: unknown = null;
+  combiner: unknown = null;
+  finisher: unknown = null;
 }
-const mkCollector = (make: JCollector["make"], add: JCollector["add"], fin: JCollector["fin"] = null) => {
-  const c = new JCollector(); c.make = make; c.add = add; c.fin = fin; return c;
-};
+type HostCall = (...args: unknown[]) => unknown;
+class JHostSupplier extends JObj { call: HostCall = () => null; }
+class JHostBiFunction extends JObj { call: HostCall = () => null; }
+class JHostFunction extends JObj { call: HostCall = () => null; }
+const hostSupplier = (call: HostCall) => Object.assign(new JHostSupplier(), { call });
+const hostBiFunction = (call: HostCall) => Object.assign(new JHostBiFunction(), { call });
+const hostFunction = (call: HostCall) => Object.assign(new JHostFunction(), { call });
+function collector(supplier: unknown, accumulator: unknown, combiner: unknown, finisher: unknown): JCollector {
+  return Object.assign(new JCollector(), { supplier, accumulator, combiner, finisher });
+}
+function mkCollector(make: HostCall, add: HostCall, combine: HostCall, finish: HostCall = (value) => value): JCollector {
+  return collector(hostSupplier(make), hostBiFunction(add), hostBiFunction(combine), hostFunction(finish));
+}
 const apply1 = (f: unknown, x: unknown) => vcall(f, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", x);
-async function collect(stream: JStream, collector: JCollector): Promise<unknown> {
-  if (typeof collector.make === "function") {
-    const box = await collector.make();
-    for (const value of stream.a) await collector.add(box, value);
-    return collector.fin ? collector.fin(box) : box;
-  }
-  const supplier = await vcall(collector, "supplier", "()Ljava/util/function/Supplier;");
-  const accumulator = await vcall(collector, "accumulator", "()Ljava/util/function/BiConsumer;");
-  const finisher = await vcall(collector, "finisher", "()Ljava/util/function/Function;");
+async function collect(stream: JStream, value: unknown): Promise<unknown> {
+  const supplier = await vcall(value, "supplier", "()Ljava/util/function/Supplier;");
+  const accumulator = await vcall(value, "accumulator", "()Ljava/util/function/BiConsumer;");
+  const finisher = await vcall(value, "finisher", "()Ljava/util/function/Function;");
   const box = await vcall(supplier, "get", "()Ljava/lang/Object;");
   for (const value of stream.a) {
     await vcall(accumulator, "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V", box, value);
   }
   return vcall(finisher, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", box);
 }
+rt.register({ name: "webdroid/CollectorSupplier", ctor: JHostSupplier, ifaces: ["java/util/function/Supplier"], methods: {
+  "get()Ljava/lang/Object;": function (this: JHostSupplier) { return this.call(); },
+} });
+rt.register({ name: "webdroid/CollectorBiFunction", ctor: JHostBiFunction, ifaces: ["java/util/function/BiConsumer", "java/util/function/BinaryOperator"], methods: {
+  "accept(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JHostBiFunction, left: unknown, right: unknown) { return this.call(left, right); },
+  "apply(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JHostBiFunction, left: unknown, right: unknown) { return this.call(left, right); },
+} });
+rt.register({ name: "webdroid/CollectorFunction", ctor: JHostFunction, ifaces: ["java/util/function/Function"], methods: {
+  "apply(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JHostFunction, value: unknown) { return this.call(value); },
+} });
 rt.register({ name: "java/util/Spliterator", ctor: JSpliterator });
 rt.register({
   name: "java/util/Spliterators", ctor: class extends JObj {},
@@ -107,7 +124,7 @@ rt.register({
       return 0;
     },
     "toList()Ljava/util/List;": function (this: JStream) { return newArrayList(this.a.slice()); },
-    "collect(Ljava/util/stream/Collector;)Ljava/lang/Object;": function (this: JStream, c: JCollector) { return collect(this, c); },
+    "collect(Ljava/util/stream/Collector;)Ljava/lang/Object;": function (this: JStream, c: unknown) { return collect(this, c); },
   },
 });
 
@@ -199,11 +216,14 @@ rt.register({
 
 rt.register({ name: "java/util/stream/Collector", ctor: JCollector,
   methods: {
+    "supplier()Ljava/util/function/Supplier;": function (this: JCollector) { return this.supplier; },
+    "accumulator()Ljava/util/function/BiConsumer;": function (this: JCollector) { return this.accumulator; },
+    "combiner()Ljava/util/function/BinaryOperator;": function (this: JCollector) { return this.combiner; },
+    "finisher()Ljava/util/function/Function;": function (this: JCollector) { return this.finisher; },
+    "characteristics()Ljava/util/Set;": () => rt.make("java/util/HashSet"),
     "static of(Ljava/util/function/Supplier;Ljava/util/function/BiConsumer;Ljava/util/function/BinaryOperator;Ljava/util/function/Function;[Ljava/util/stream/Collector$Characteristics;)Ljava/util/stream/Collector;":
-      (sup: unknown, acc: unknown, _comb: unknown, fin: unknown) => mkCollector(
-        () => vcall(sup, "get", "()Ljava/lang/Object;"),
-        (box, x) => vcall(acc, "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V", box, x),
-        fin ? (box) => apply1(fin, box) : null),
+      (supplier: unknown, accumulator: unknown, combiner: unknown, finisher: unknown) =>
+        collector(supplier, accumulator, combiner, finisher ?? hostFunction((value) => value)),
   },
 });
 rt.register({
@@ -212,21 +232,35 @@ rt.register({
 rt.register({
   name: "java/util/stream/Collectors", ctor: class extends JObj {},
   methods: {
-    "static toList()Ljava/util/stream/Collector;": () => mkCollector(() => newArrayList([]), (box, x) => { (box as JList).a.push(x); }),
+    "static toList()Ljava/util/stream/Collector;": () => mkCollector(
+      () => newArrayList([]), (box, x) => { (box as JList).a.push(x); },
+      (left, right) => { (left as JList).a.push(...(right as JList).a); return left; }),
     "static toSet()Ljava/util/stream/Collector;": () => mkCollector(
       () => rt.make("java/util/HashSet"),
-      (box, x) => vcall(box, "add", "(Ljava/lang/Object;)Z", x)),
+      (box, x) => vcall(box, "add", "(Ljava/lang/Object;)Z", x),
+      async (left, right) => { await vcall(left, "addAll", "(Ljava/util/Collection;)Z", right); return left; }),
     "static toCollection(Ljava/util/function/Supplier;)Ljava/util/stream/Collector;": (sup: unknown) => mkCollector(
       () => vcall(sup, "get", "()Ljava/lang/Object;"),
-      (box, x) => vcall(box, "add", "(Ljava/lang/Object;)Z", x)),
+      (box, x) => vcall(box, "add", "(Ljava/lang/Object;)Z", x),
+      async (left, right) => { await vcall(left, "addAll", "(Ljava/util/Collection;)Z", right); return left; }),
     "static collectingAndThen(Ljava/util/stream/Collector;Ljava/util/function/Function;)Ljava/util/stream/Collector;":
-      (c: JCollector, fin: unknown) => mkCollector(c.make, c.add, async (box) => apply1(fin, c.fin ? await c.fin(box) : box)),
-    "static joining(Ljava/lang/CharSequence;)Ljava/util/stream/Collector;": (delimiter: unknown) => mkCollector(
-      () => [] as string[], (box, x) => { (box as string[]).push(String(x)); }, (box) => (box as string[]).join(String(delimiter))),
+      async (downstream: unknown, finish: unknown) => collector(
+        await vcall(downstream, "supplier", "()Ljava/util/function/Supplier;"),
+        await vcall(downstream, "accumulator", "()Ljava/util/function/BiConsumer;"),
+        await vcall(downstream, "combiner", "()Ljava/util/function/BinaryOperator;"),
+        hostFunction(async (box) => apply1(finish, await apply1(await vcall(downstream, "finisher", "()Ljava/util/function/Function;"), box)))),
+    "static joining(Ljava/lang/CharSequence;)Ljava/util/stream/Collector;": async (delimiter: unknown) => {
+      const separator = await csText(delimiter);
+      return mkCollector(() => [] as string[], async (box, x) => { (box as string[]).push(await csText(x)); },
+        (left, right) => { (left as string[]).push(...(right as string[])); return left; }, (box) => (box as string[]).join(separator));
+    },
     "static joining(Ljava/lang/CharSequence;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/util/stream/Collector;":
-      (delimiter: unknown, prefix: unknown, suffix: unknown) => mkCollector(
-        () => [] as string[], (box, x) => { (box as string[]).push(String(x)); },
-        (box) => String(prefix) + (box as string[]).join(String(delimiter)) + String(suffix)),
+      async (delimiter: unknown, prefix: unknown, suffix: unknown) => {
+        const [separator, before, after] = await Promise.all([csText(delimiter), csText(prefix), csText(suffix)]);
+        return mkCollector(() => [] as string[], async (box, x) => { (box as string[]).push(await csText(x)); },
+          (left, right) => { (left as string[]).push(...(right as string[])); return left; },
+          (box) => before + (box as string[]).join(separator) + after);
+      },
   },
 });
 rt.register({
