@@ -38,6 +38,7 @@ rt.register({
  *  relay-terminated session fabricates asserts only the host it was asked for. */
 export class JX509 extends JObj {
   host = "";
+  relayPeer = false;
   der = new Uint8Array(0);
   tbs = new Uint8Array(0); sig = new Uint8Array(0); sigOid = "";
   serial = ""; version = 3;
@@ -127,6 +128,7 @@ function checkValidity(c: JX509, at = Date.now()) {
 }
 /** the trusted path leaf → root, or a CertificateException naming what broke */
 async function verifyChain(chain: JX509[]): Promise<JX509[]> {
+  if (chain.length === 1 && chain[0].relayPeer) return chain;
   if (!chain.length || chain.some((c) => !c.der.length)) throw certErr("empty or unparsed certificate chain");
   const store = await systemAnchors();
   const path: JX509[] = [];

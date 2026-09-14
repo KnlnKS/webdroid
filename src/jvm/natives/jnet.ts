@@ -374,7 +374,7 @@ rt.register({
     "getPeerPort()I": function (this: JSSLSession) { return this.port; },
     "getPeerCertificates()[Ljava/security/cert/Certificate;": function (this: JSSLSession) {
       const c = rt.make("java/security/cert/X509Certificate") as JX509;
-      c.host = this.host;
+      c.host = this.host; c.relayPeer = true;
       return jarray([c], "Ljava/security/cert/Certificate;");
     },
     "getLocalCertificates()[Ljava/security/cert/Certificate;": () => null,
@@ -798,8 +798,18 @@ class JHttpsURLConnection extends JHttpURLConnection {
   sslFactory: unknown = sslSocketFactory;
   hostnameVerifier: unknown = null;
 }
+class JDefaultHostnameVerifier extends JObj {}
+const hostName = (host: string) => host.toLowerCase().replace(/\.$/, "");
+const platformHostnameVerifier = new JDefaultHostnameVerifier();
+rt.register({
+  name: "webdroid/DefaultHostnameVerifier", ctor: JDefaultHostnameVerifier, ifaces: ["javax/net/ssl/HostnameVerifier"],
+  methods: {
+    "verify(Ljava/lang/String;Ljavax/net/ssl/SSLSession;)Z": (host: string, session: JSSLSession) =>
+      hostName(host) === hostName(session?.host ?? "") ? 1 : 0,
+  },
+});
 let defaultHttpsFactory: unknown = sslSocketFactory;
-let defaultHostnameVerifier: unknown = null;
+let defaultHostnameVerifier: unknown = platformHostnameVerifier;
 rt.register({
   name: "javax/net/ssl/HttpsURLConnection", ctor: JHttpsURLConnection, sup: "java/net/HttpURLConnection",
   methods: {
@@ -820,16 +830,18 @@ rt.register({
       if (verifier === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "null HostnameVerifier");
       defaultHostnameVerifier = verifier;
     },
+    "static getDefaultHostnameVerifier()Ljavax/net/ssl/HostnameVerifier;": () => defaultHostnameVerifier,
     "static setDefaultSSLSocketFactory(Ljavax/net/ssl/SSLSocketFactory;)V": (factory: unknown) => {
       if (factory === null) return rt.npe();
       defaultHttpsFactory = factory;
     },
+    "static getDefaultSSLSocketFactory()Ljavax/net/ssl/SSLSocketFactory;": () => defaultHttpsFactory,
     "getCipherSuite()Ljava/lang/String;": () => CIPHERS[0],
     "getLocalCertificates()[Ljava/security/cert/Certificate;": () => null,
     "getLocalPrincipal()Ljava/security/Principal;": () => null,
     "getServerCertificates()[Ljava/security/cert/Certificate;": function (this: JHttpsURLConnection) {
       const cert = rt.make("java/security/cert/X509Certificate") as JX509;
-      cert.host = this.url.u.hostname;
+      cert.host = this.url.u.hostname; cert.relayPeer = true;
       return jarray([cert], "Ljava/security/cert/Certificate;");
     },
     "getPeerPrincipal()Ljava/security/Principal;": function (this: JHttpsURLConnection) { return mkPrincipal("CN=" + this.url.u.hostname); },
