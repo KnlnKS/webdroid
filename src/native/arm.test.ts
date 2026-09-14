@@ -35,6 +35,23 @@ const BXLR = 0xe12fff1e;
 beforeAll(() => setA64(false));
 
 describe("arm decoder", () => {
+  test("Thumb BL and BLX preserve state across Thumb and ARM callees", () => {
+    const c = runThumb([
+      0xb510, 0x4604, // push {r4, lr}; mov r4, r0
+      0xf000, 0xf804, // bl Thumb callee
+      0xf000, 0xe804, // blx ARM callee
+      0x4420, 0xbd10, // add r0, r4; pop {r4, pc}
+      0x3005, 0x4770, // adds r0, #5; bx lr
+      0x0007, 0xe280, 0xff1e, 0xe12f, // ARM: add r0, #7; bx lr
+    ], (cpu) => {
+      for (let i = 0; i < 13; i++) cpu.w[2 * i] = 0x11220000 + i;
+      for (let i = 0; i < cpu.si.length; i++) cpu.si[i] = 0x33440000 + i;
+      cpu.fpcr = 0x400000; cpu.fpsr = 0x8000010; cpu.excl = 0x2000;
+    });
+    expect(c.w[0]).toBe(0x2244000c);
+    expect(c.w[8]).toBe(0x11220004);
+  });
+
   test("DSP halfword multiplication and saturating arithmetic preserve architectural state", () => {
     const c = run([0xe1053281, 0xe1476281, 0xe1680281, 0xe10b905a, BXLR], (cpu) => {
       for (let i = 0; i < 13; i++) cpu.w[2 * i] = 0x11220000 + i;

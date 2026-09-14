@@ -32,6 +32,13 @@ fn armMisc(w: u32) bool {
     return (w & 0x0ff000f0) == 0x01200070 or (w & 0x0f900090) == 0x01000080 or (w & 0x0f9000f0) == 0x01000050;
 }
 
+fn thumbCall(h: u32, h2: u32) bool {
+    return h & 0xf800 == 0xf000 and h2 & 0xc000 == 0xc000;
+}
+fn thumbBranch(h: u32, h2: u32) bool {
+    return (h & 0xfff0 == 0xe8d0 and h2 & 0xffe0 == 0xf000) or (h & 0xf800 == 0xf000 and h2 & 0xd000 == 0x9000);
+}
+
 pub fn rwArm(w: u32) jit.RW {
     var rw = jit.ALL32;
     rw.fr = 0;
@@ -164,43 +171,10 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
     const h: u32 = mem.ld(u16, pc);
     const b = &r.blocks[i];
     const next = pc + 2;
-    const wideMoveImm = h & 0xfbef;
-    const wideSecond: u32 = if ((h & 0xf800) >= 0xe800) mem.ld(u16, pc + 2) else 0;
-    const wideCp = (wideSecond >> 8) & 15;
-    const wideVfp = (h & 0xf800) >= 0xe800 and (wideCp == 10 or wideCp == 11);
-    const wideCond = (h & 0xf800) == 0xf000 and (wideSecond & 0xd000) == 0x8000 and ((h >> 6) & 15) < 14;
-    const wideBranch = (h & 0xf800) == 0xf000 and (wideSecond & 0xd000) == 0x9000;
-    const wideTableBranch = (h & 0xfff0) == 0xe8d0 and (wideSecond & 0xffe0) == 0xf000;
-    if (wideTableBranch) {
+    if (h >= 0xe800) {
+        const h2: u32 = mem.ld(u16, pc + 2);
         cpu.cover(page, pc, pc + 2);
-        return .{ .len = 4, .ends = true };
-    }
-    if (wideBranch) {
-        cpu.cover(page, pc, pc + 2);
-        return .{ .len = 4, .ends = true };
-    }
-    const dataImmOp = (h >> 5) & 15;
-    const dataImm = (h & 0xfa00) == 0xf000 and wideSecond & 0x8000 == 0 and (dataImmOp <= 4 or dataImmOp == 8 or dataImmOp == 10 or dataImmOp == 11 or dataImmOp == 13 or dataImmOp == 14);
-    const wideMulOp = (wideSecond >> 4) & 15;
-    const wideMul = (h & 0xfff0) == 0xfb00 and (wideMulOp == 0 or wideMulOp == 1);
-    if (wideVfp or (h & 0xefb0) == 0xef80 or wideMoveImm == 0xf04f or wideMoveImm == 0xf06f or dataImm or wideMul or h == 0xf3bf or (h & 0xfff0) == 0xf3c0 or (h & 0xfff0) == 0xfab0 or (h & 0xff80) == 0xfa00 or (h & 0xfe00) == 0xea00 or (h & 0xfe40) == 0xe840 or (h & 0xfe40) == 0xe800 or wideCond or (h & 0xff90) == 0xf900) {
-        cpu.cover(page, pc, pc + 2);
-        return .{ .len = 4, .ends = false };
-    }
-    const wideMove = h & 0xfbf0;
-    const wideAddress = h & 0xfbe0;
-    if (wideMove == 0xf240 or wideMove == 0xf2c0 or wideAddress == 0xf200 or wideAddress == 0xf2a0) {
-        cpu.cover(page, pc, pc + 2);
-        return .{ .len = 4, .ends = false };
-    }
-    const wideTransfer = (((h & 0xff80) == 0xf880 or (h & 0xff80) == 0xf800) and ((h >> 5) & 3) < 3);
-    if (wideTransfer or (h & 0xfff0) == 0xf840 or (h & 0xfff0) == 0xf850) {
-        cpu.cover(page, pc, pc + 2);
-        return .{ .len = 4, .ends = false };
-    }
-    if ((h & 0xf800) >= 0xe800) {
-        cpu.cover(page, pc, pc + 2);
-        return .{ .len = 4, .ends = false };
+        return .{ .len = 4, .ends = thumbCall(h, h2) or thumbBranch(h, h2) };
     }
     switch (h >> 12) {
         4 => if ((h & 0xfc00) == 0x4400) {
@@ -645,39 +619,20 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
         e.exitToInterpreter((pc + 2) | 1, k);
         return true;
     }
-    const wideMoveImm = h & 0xfbef;
-    const wideSecond: u32 = if ((h & 0xf800) >= 0xe800) mem.ld(u16, pc + 2) else 0;
-    const wideCp = (wideSecond >> 8) & 15;
-    const wideVfp = (h & 0xf800) >= 0xe800 and (wideCp == 10 or wideCp == 11);
-    const wideCond = (h & 0xf800) == 0xf000 and (wideSecond & 0xd000) == 0x8000 and ((h >> 6) & 15) < 14;
-    const wideBranch = (h & 0xf800) == 0xf000 and (wideSecond & 0xd000) == 0x9000;
-    const wideTableBranch = (h & 0xfff0) == 0xe8d0 and (wideSecond & 0xffe0) == 0xf000;
-    if (wideTableBranch) {
+    if (h >= 0xe800) {
+        const h2: u32 = mem.ld(u16, pc + 2);
+        if (thumbCall(h, h2)) {
+            const Sb = (h >> 10) & 1;
+            const I1 = 1 - (((h2 >> 13) & 1) ^ Sb);
+            const I2 = 1 - (((h2 >> 11) & 1) ^ Sb);
+            const raw = (Sb << 24) | (I1 << 23) | (I2 << 22) | ((h & 0x3ff) << 12) | ((h2 & 0x7ff) << 1);
+            const off: u32 = @bitCast(@as(i32, @bitCast(raw << 7)) >> 7);
+            b.emit(.{ c32(@bitCast(pc +% 5)), set(L_X + 14) });
+            if (h2 & 0x1000 != 0) e.transfer(-1, (pc +% 4 +% off) | 1, k) else e.transfer(-1, ((pc +% 4) & ~@as(u32, 3)) +% (off & ~@as(u32, 3)), k);
+            return true;
+        }
         e.fallback(pc, k);
-        return true;
-    }
-    if (wideBranch) {
-        e.fallback(pc, k);
-        return true;
-    }
-    const dataImmOp = (h >> 5) & 15;
-    const dataImm = (h & 0xfa00) == 0xf000 and wideSecond & 0x8000 == 0 and (dataImmOp <= 4 or dataImmOp == 8 or dataImmOp == 10 or dataImmOp == 11 or dataImmOp == 13 or dataImmOp == 14);
-    const wideMulOp = (wideSecond >> 4) & 15;
-    const wideMul = (h & 0xfff0) == 0xfb00 and (wideMulOp == 0 or wideMulOp == 1);
-    if (wideVfp or (h & 0xefb0) == 0xef80 or wideMoveImm == 0xf04f or wideMoveImm == 0xf06f or dataImm or wideMul or h == 0xf3bf or (h & 0xfff0) == 0xf3c0 or (h & 0xfff0) == 0xfab0 or (h & 0xff80) == 0xfa00 or (h & 0xfe00) == 0xea00 or (h & 0xfe40) == 0xe840 or (h & 0xfe40) == 0xe800 or wideCond or (h & 0xff90) == 0xf900) {
-        e.fallback(pc, k);
-        return false;
-    }
-    const wideMove = h & 0xfbf0;
-    const wideAddress = h & 0xfbe0;
-    const wideTransfer = (((h & 0xff80) == 0xf880 or (h & 0xff80) == 0xf800) and ((h >> 5) & 3) < 3);
-    if (wideMove == 0xf240 or wideMove == 0xf2c0 or wideAddress == 0xf200 or wideAddress == 0xf2a0 or wideTransfer or (h & 0xfff0) == 0xf840 or (h & 0xfff0) == 0xf850) {
-        e.fallback(pc, k);
-        return false;
-    }
-    if ((h & 0xf800) >= 0xe800) {
-        e.fallback(pc, k);
-        return false;
+        return thumbBranch(h, h2);
     }
     const top = h >> 12;
     const rd = h & 7;
@@ -894,21 +849,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             e.transfer(e.r.blocks[e.blk].taken, (pc +% 4 +% @as(u32, @bitCast(bt.sx(i32, h & 0x7ff, 11) * 2))) | 1, k);
             return true;
         },
-        else => {
-            const h2: u32 = mem.ld(u16, pc + 2);
-            if ((h & 0xf800) != 0xf000 or (h2 & 0xc000) != 0xc000) {
-                e.fallback(pc, k);
-                return true;
-            }
-            const Sb = (h >> 10) & 1;
-            const I1 = 1 - (((h2 >> 13) & 1) ^ Sb);
-            const I2 = 1 - (((h2 >> 11) & 1) ^ Sb);
-            const raw = (Sb << 24) | (I1 << 23) | (I2 << 22) | ((h & 0x3ff) << 12) | ((h2 & 0x7ff) << 1);
-            const off: u32 = @bitCast(@as(i32, @bitCast(raw << 7)) >> 7);
-            b.emit(.{ c32(@bitCast(pc +% 5)), set(L_X + 14) });
-            if (h2 & 0x1000 != 0) e.transfer(-1, (pc +% 4 +% off) | 1, k) else e.transfer(-1, ((pc +% 4) & ~@as(u32, 3)) +% (off & ~@as(u32, 3)), k);
-            return true;
-        },
+        else => unreachable,
     }
     return false;
 }
