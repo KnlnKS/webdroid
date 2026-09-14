@@ -2819,4 +2819,34 @@ reaching the stack. Floating overflow now goes directly to the stack, preserving
 independent AAPCS64 register banks. Two tests cover sixteen floats with integer overflow
 and interleaved float/double spills with available integer registers; both fail on the
 previous code and pass with this two-line change. Typecheck passes. No APK or shader
-substitution is involved. Full-Chrome rendering verification follows this correction.
+substitution is involved. Fresh full-Chrome place, directions and preview captures now
+render water, roads and building outlines. The settled first preview matches the reference
+road/coastline/route geometry and maneuver; successive maneuvers also render. The long-lived
+Chrome session recorded 3,055 GL frames with zero layout/draw errors and only the two Cordz
+startup messages. Its native missing set contains syscall 267; earlier diagnostic sessions
+also observed powl and pthread_getname_np, so absence in this session is not coverage of
+those symbols. Raw captures and telemetry use the chrome-arm64-spill prefix, paired with
+android-arm64-spill captures; chrome-arm64-spill-full.png includes the installed Chrome UI.
+All 899 unit tests (22,174 assertions), typecheck and Maps compilation pass; the latter
+compiles 72,887 classes with zero method failures. Fonts, shadows and device system bars
+remain different. The final serialized matrix is repeated after these corrections.
+
+
+The final matrix at a3bf33e completed all 134 steps across 11 flows in 699.3 seconds,
+with one job. Every run.json was checked for freshness against this run's start. No step
+recorded a main-loop wedge, layout/draw error or nativeRequired entry. Resy's 12 steps
+again have no missing APIs/errors, and its venue photo was visually verified. Scored
+content differences are Mihon app 57.56%, FitNotes 40.71%, Harmonic 27.97%, onboarding
+17.56%; the 35.95% mean compares with baseline f3fefda's 36.29% and is not visual parity.
+
+TikTok still shows the same post-consent splash as baseline. This run has 110 logged
+errors and 18 missing APIs (baseline 81/19), mostly shared startup logs plus extra native
+benchmark/proc diagnostics. The earlier vsnprintf exception and file-descriptor constructor
+miss are absent, not proven fixed. Lichess has 53 errors (baseline 13), comprising the same
+pthread 35/3/22 families plus its DNS warning. Flappy Bird's minimum observed rate is
+29 fps, still near baseline. Another worktree ran its own E2E concurrently during part of
+this matrix; the retained performance rollup therefore cannot establish an isolated speed
+change. These results do not justify a clean regression verdict. The prior 3dcc2d2 log is
+retained as webdroid-shots/maps/e2e-3dcc2d2.log; final-e2e.log, final-e2e-summary.json and
+regression-performance.txt describe a3bf33e. comparison.html pairs the raw Maps previews.
+The source remained frozen during capture, goldens are unchanged, and work is not merged.
