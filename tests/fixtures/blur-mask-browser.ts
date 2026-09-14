@@ -1,7 +1,7 @@
 import "../../src/natives";
 import { rt } from "../../src/jvm/runtime";
 import { newObj, vcall, linkInit } from "../../src/jvm/natives/jlang";
-import { JBitmap, JCanvas, JPaint } from "../../src/android/graphics";
+import { JBitmap, JCanvas, JPaint, tintedBmp } from "../../src/android/graphics";
 
 async function probe() {
   rt.linkNatives();
@@ -67,6 +67,13 @@ async function probe() {
   const before = ctx.getTransform().toString();
   await vcall(JCanvas.wrap(ctx, 40, 40), "drawPaint", "(Landroid/graphics/Paint;)V", paint);
   const plane = { inside: Array.from(ctx.getImageData(20, 20, 1, 1).data), outside: Array.from(ctx.getImageData(0, 0, 1, 1).data), restored: ctx.getTransform().toString() === before };
-  return { results, extracted, shaded, position, copiedAlpha, originalAlpha, plane };
+  const bitmap = JBitmap.create(1, 1);
+  bitmap.ctx.fillStyle = "#80402080"; bitmap.ctx.fillRect(0, 0, 1, 1);
+  const pixel = (mode: string, color: number) => Array.from(tintedBmp(bitmap, color, null, mode).getContext("2d")!.getImageData(0, 0, 1, 1).data);
+  const tints = { identity: tintedBmp(bitmap, 0, null, "ADD") === bitmap.canvas,
+    clear: pixel("SRC_IN", 0), add: pixel("ADD", 0x40102040), multiply: pixel("MULTIPLY", 0x8080ff00), before: pixel("SRC_IN", 0x80ff0000) };
+  bitmap.ctx.fillStyle = "#fff"; bitmap.ctx.fillRect(0, 0, 1, 1);
+  const changed = pixel("SRC_IN", 0x80ff0000);
+  return { results, extracted, shaded, position, copiedAlpha, originalAlpha, plane, tints, changed };
 }
 Object.defineProperty(window, "blurMaskProbe", { value: probe() });

@@ -2647,3 +2647,11 @@ placement use those dimensions. A browser test covers all four positions, suspen
 callbacks and unchanged bounds; existing replacement-span/ellipsis checks and typecheck pass.
 Maps' media controls also reveal a separate cause: their transparent tint uses PorterDuff ADD,
 while BitmapDrawable currently applies every tint as SRC_IN.
+
+Maps intentionally applies transparent ADD tint to media icons. BitmapDrawable/NinePatch
+now retain tint mode; cached bitmap tinting applies its composite operation instead of
+unconditionally using SRC_IN. Transparent ADD returns the original surface directly.
+MULTIPLY retains Android's multiplied alpha; tint caches invalidate on bitmap generation.
+The pixel test checks ADD, SRC_IN, MULTIPLY and mutation (70 assertions with mask tests);
+typecheck passes. Fresh Chrome displays the media action icons without layout/draw errors.
+Other drawable subclasses and Paint's color-filter modes are not covered by this bitmap fix.

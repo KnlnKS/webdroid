@@ -1768,14 +1768,14 @@ function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
     }
   } finally { if (shadow) ctx.restore(); }
 }
-const tintCache = new WeakMap<JBitmap, Map<number | string, OffscreenCanvas>>();
+const tintCache = new WeakMap<JBitmap, { generation: number; images: Map<number | string, OffscreenCanvas> }>();
 /** `b` through a paint's colour filter — recoloured SRC_IN with `tint`, or every pixel through a
  *  4x5 colour `matrix` — cached per (bitmap, filter); the bitmap itself when there is none */
-export function tintedBmp(b: JBitmap, tint: number | null, matrix: Float32Array | null = null): OffscreenCanvas {
-  if (tint === null && matrix === null) return b.canvas;
-  let m = tintCache.get(b);
-  if (!m) tintCache.set(b, (m = new Map()));
-  const key = matrix ? matrix.join(",") : tint!;
+export function tintedBmp(b: JBitmap, tint: number | null, matrix: Float32Array | null = null, mode = "SRC_IN"): OffscreenCanvas {
+  if (matrix === null && (tint === null || mode === "DST" || mode === "ADD" && !(tint >>> 24))) return b.canvas;
+  let cache = tintCache.get(b);
+  if (!cache || cache.generation !== b.genId) tintCache.set(b, cache = { generation: b.genId, images: new Map() });
+  const m = cache.images, key = matrix ? matrix.join(",") : `${mode}:${tint}`;
   let t = m.get(key);
   if (!t) {
     t = new OffscreenCanvas(b.w, b.h);
@@ -1791,8 +1791,16 @@ export function tintedBmp(b: JBitmap, tint: number | null, matrix: Float32Array 
         d[i + 3] = k[15] * r + k[16] * g + k[17] * bl + k[18] * a + k[19];
       }
       c.putImageData(img, 0, 0);
+    } else if (mode === "CLEAR") c.clearRect(0, 0, b.w, b.h);
+    else if (mode === "MULTIPLY") {
+      const img = c.getImageData(0, 0, b.w, b.h), d = img.data;
+      const r = (tint! >>> 16 & 255) / 255, g = (tint! >>> 8 & 255) / 255, blue = (tint! & 255) / 255, alpha = (tint! >>> 24) / 255;
+      for (let i = 0; i < d.length; i += 4) { d[i] *= r; d[i + 1] *= g; d[i + 2] *= blue; d[i + 3] *= alpha; }
+      c.putImageData(img, 0, 0);
     } else {
-      c.globalCompositeOperation = "source-in";
+      const composite = COMPOSITE[mode];
+      if (!composite) throw rt.mkThrowable("java/lang/UnsupportedOperationException", `bitmap tint mode ${mode}`);
+      c.globalCompositeOperation = composite;
       c.fillStyle = cssColor(tint!);
       c.fillRect(0, 0, b.w, b.h);
     }

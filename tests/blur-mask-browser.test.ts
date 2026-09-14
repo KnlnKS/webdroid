@@ -33,5 +33,11 @@ test("blur mask styles combine geometry before paint alpha and preserve canvas s
     expect(probe.copiedAlpha).toBe(127);
     expect(probe.originalAlpha).toBe(0);
     expect(probe.plane).toEqual({ inside: [0, 255, 0, 128], outside: [0, 0, 0, 0], restored: true });
+    expect(probe.tints.identity).toBe(true);
+    expect(probe.tints.clear).toEqual([0, 0, 0, 0]);
+    expect(probe.tints.before).toEqual([255, 0, 0, 64]);
+    expect(probe.changed).toEqual([255, 0, 0, 128]);
+    for (const [index, value] of [91, 53, 43, 192].entries()) expect(Math.abs(probe.tints.add[index] - value)).toBeLessThanOrEqual(2);
+    for (const [index, value] of [64, 64, 0, 64].entries()) expect(Math.abs(probe.tints.multiply[index] - value)).toBeLessThanOrEqual(2);
   } finally { await browser.close(); }
 }, 15000);

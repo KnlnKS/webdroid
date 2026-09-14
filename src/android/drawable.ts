@@ -1,7 +1,7 @@
 // android.graphics.drawable.* — Drawable hierarchy, XML inflation, 9-patch, vectors.
 
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
-import { vcall, vcallOn, curThread, after, mkEnumSet } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, after, mkEnumSet, type JSimpleEnum } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod, intBitsToFloat } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, type JOutline, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
 import { device } from "../shell/config";
@@ -24,6 +24,7 @@ export class JDrawable extends JObj {
   stateSet: number[] = [];
   callback: unknown = null; // Drawable.Callback (usually a View)
   tint: number | null = null;
+  tintMode: string | null = "SRC_IN";
   tintMatrix: Float32Array | null = null;
   autoMirrored = false;
   layoutDir = 0;
@@ -94,7 +95,10 @@ const drawableMethods: NativeSpec["methods"] = {
   "setTintList(Landroid/content/res/ColorStateList;)V": function (this: JDrawable, csl: JColorStateList | null) {
     this.tint = csl ? cslColor(csl, this.stateSet) : null;
   },
-  "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": function () {},
+  "setTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JDrawable, mode: JSimpleEnum | null) {
+    const name = mode?.ename ?? null;
+    if (this.tintMode !== name) { this.tintMode = name; invalidateSelf.call(this); }
+  },
   "setState([I)Z": async function (this: JDrawable, st: Int32Array) {
     const cur = this.stateSet;
     if (cur.length === st.length && cur.every((v, i) => v === st[i])) return 0;
@@ -224,7 +228,7 @@ export class JBitmapDrawable extends JDrawable {
     const ctx = cv.ctx;
     ctx.save();
     ctx.globalAlpha *= this.alpha / 255;
-    const src = tintedBmp(this.bmp, this.tint, this.tintMatrix);
+    const src = tintedBmp(this.bmp, this.tintMode ? this.tint : null, this.tintMatrix, this.tintMode ?? "SRC_IN");
     ctx.drawImage(src, this.bounds.left, this.bounds.top,
       Math.max(1, this.bounds.right - this.bounds.left), Math.max(1, this.bounds.bottom - this.bounds.top));
     ctx.restore();
@@ -256,7 +260,7 @@ class JNinePatchDrawable extends JDrawable {
     const ctx = cv.ctx;
     ctx.save();
     ctx.globalAlpha *= this.alpha / 255;
-    drawNinePatch(ctx, tintedBmp(this.bmp, this.tint, this.tintMatrix), this.bmp.w, this.bmp.h, this.xDivs, this.yDivs, left, top, dw, dh);
+    drawNinePatch(ctx, tintedBmp(this.bmp, this.tintMode ? this.tint : null, this.tintMatrix, this.tintMode ?? "SRC_IN"), this.bmp.w, this.bmp.h, this.xDivs, this.yDivs, left, top, dw, dh);
     ctx.restore();
   }
   intrinsicW(): number { return this.bmp ? Math.round(this.bmp.w * this.srcDensityScale) : -1; }
