@@ -1735,3 +1735,30 @@ Remaining optional gaps: `media_metrics`, MIUI referrer, AppSet and AppsFlyer LV
 classes, and Cronet's DnsConfig warning. microG keeps two activities resumed in its realm
 (`IdentityCredentialChooserActivity` under `AssistedSignInActivity`), unverified against
 Android.
+
+### 2026-09-13 — Amazon Shopping launch and home
+
+Amazon Shopping 32.17.0.100 (`Amazon.xapk`) initially faulted in MMKV's libc++
+`unordered_map`. Compact Thumb arithmetic inside an IT block updated condition flags even
+though only the instruction's non-IT form may do so; the changed flags selected a wrong
+conditional path. JIT tail chaining also bypassed the dispatcher's active-IT guard. Preserving
+IT state across compiled regions and suppressing those flag writes makes the ARM interpreter
+and JIT agree and removes the native fault (`3618ec4`). Thumb table branches, shifted-register
+operations and the ARM SIMD operations reached by the same production libraries were filled
+from decoded instruction behavior rather than library-specific hooks.
+
+The app now launches its unchanged bytecode, shows sign-in, skips to the live Amazon home and
+loads the proxied web content. Supporting framework work includes launcher-intent semantics,
+modern collection/future/NIO APIs, ICU locale/currency bridges, validated-network capability,
+and unavailable-GNSS clock behavior. The TLS relay verifies the upstream peer; its synthetic
+peer certificate is accepted only by the default trust manager and is explicitly marked as a
+relay peer. The default HTTPS hostname verifier still checks the requested host, and app pinning
+continues to fail closed rather than receiving fabricated key material.
+
+On an API 35 AVD, Amazon's live Weblab service assigns the transparent-navigation treatment and
+the home uses bottom tabs. The Java-client FileStore/Redstone routes exhaust under webdroid
+because Amazon pins those endpoints and the relay cannot present the real peer certificate to
+guest Java. Consequently webdroid receives Amazon's fallback home experiment while the live
+shopping WebView remains functional. Hardcoding the treatment or forging a pin success was not
+accepted as a visual fix. Vendor-only `amazon.os` and Amazon system-service probes remain
+unsupported optional capabilities.
