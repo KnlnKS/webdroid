@@ -5,100 +5,19 @@
 // `$t instanceof Promise ? await $t : $t`.
 
 import type { DexFile, CodeItem, EncodedMethod } from "./dex";
-import { OPS, FMT_LEN, insnLen, type Fmt } from "./opcodes";
 import { mangleMethod, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble, PRIM_ARRAYS, type PrimElem } from "./abi";
 import { ACC, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
 import { jvmProfiler } from "./profile";
+import { decodeInstructions, endsBlock, floatingOperands, maySuspend, writesRegister,
+  type PreparedInstruction as Ins, type PreparedMethod } from "./prepared";
 
-const s4 = (v: number) => (v << 28) >> 28;
-const s8 = (v: number) => (v << 24) >> 24;
-const s16 = (v: number) => (v << 16) >> 16;
-
-interface Ins {
-  pc: number; op: number; name: string; fmt: Fmt; len: number;
-  a: number; b: number; c: number;
-  regs: number[];       // 35c/3rc arg regs
-  wideLit: bigint;      // 51l
-  constKind?: "F" | "D"; // const reinterpreted as float/double (set by typeConsts)
-  nullRecv?: boolean;    // an instance invoke whose receiver may be the null constant 0 (set by typeConsts)
-}
-
-const NO_REGS: number[] = [];
-const ENDS_RE = /^(goto|return|throw)/;
-const NO_WRITE_RE = /^(if|goto|return|throw|nop|monitor|aput|iput|sput|invoke|packed|sparse|fill-array|check-cast)/;
-const OPERAND_KIND_RE = /^(?:(?:add|sub|mul|div|rem|neg|cmpl|cmpg)-(float|double)|(float|double)-to-)/;
 const REL: Record<string, string> = { lt: "<", ge: ">=", gt: ">", le: "<=" };
 const holder = (isStatic: boolean) => (isStatic ? "C" : "C.prototype");
 const paramList = (desc: string) => parseMethodDesc(desc).params.map((_, j) => "p" + j).join(",");
 const isRef = (desc: string) => desc[0] === "L" || desc[0] === "[";
 const ref = (r: string) => `(${r}===0?null:${r})`;
-function nibbleRegs(r: number, u: number, n: number): number[] {
-  const out = new Array<number>(n);
-  for (let i = 0; i < n; i++) out[i] = i === 4 ? (u >> 8) & 0xf : (r >> (i * 4)) & 0xf;
-  return out;
-}
-function rangeRegs(first: number, n: number): number[] {
-  const out = new Array<number>(n);
-  for (let i = 0; i < n; i++) out[i] = first + i;
-  return out;
-}
-function decode(insns: Uint16Array, pc: number): Ins {
-  const u = insns[pc];
-  const op = u & 0xff;
-  const entry = OPS[op];
-  if (!entry) throw new Error(`bad opcode 0x${op.toString(16)}`);
-  const [name, fmt] = entry;
-  const ins: Ins = { pc, op, name, fmt, len: FMT_LEN[fmt], a: 0, b: 0, c: 0, regs: NO_REGS, wideLit: 0n };
-  switch (fmt) {
-    case "10x": break;
-    case "12x": ins.a = (u >> 8) & 0xf; ins.b = u >> 12; break;
-    case "11n": ins.a = (u >> 8) & 0xf; ins.b = s4(u >> 12); break;
-    case "11x": ins.a = u >> 8; break;
-    case "10t": ins.a = s8(u >> 8); break;
-    case "20t": ins.a = s16(insns[pc + 1]); break;
-    case "22x": ins.a = u >> 8; ins.b = insns[pc + 1]; break;
-    case "21t": case "21s": case "21h": ins.a = u >> 8; ins.b = s16(insns[pc + 1]); break;
-    case "21c": ins.a = u >> 8; ins.b = insns[pc + 1]; break;
-    case "23x": ins.a = u >> 8; ins.b = insns[pc + 1] & 0xff; ins.c = insns[pc + 1] >> 8; break;
-    case "22b": ins.a = u >> 8; ins.b = insns[pc + 1] & 0xff; ins.c = s8(insns[pc + 1] >> 8); break;
-    case "22t": case "22s": ins.a = (u >> 8) & 0xf; ins.b = u >> 12; ins.c = s16(insns[pc + 1]); break;
-    case "22c": ins.a = (u >> 8) & 0xf; ins.b = u >> 12; ins.c = insns[pc + 1]; break;
-    case "30t": ins.a = insns[pc + 1] | (insns[pc + 2] << 16); break;
-    case "32x": ins.a = insns[pc + 1]; ins.b = insns[pc + 2]; break;
-    case "31i": case "31t": ins.a = u >> 8; ins.b = insns[pc + 1] | (insns[pc + 2] << 16); break;
-    case "31c": ins.a = u >> 8; ins.b = (insns[pc + 1] | (insns[pc + 2] << 16)) >>> 0; break;
-    case "35c": {
-      ins.a = u >> 12; ins.b = insns[pc + 1];
-      ins.regs = nibbleRegs(insns[pc + 2], u, ins.a);
-      break;
-    }
-    case "3rc": {
-      ins.a = u >> 8; ins.b = insns[pc + 1];
-      ins.regs = rangeRegs(insns[pc + 2], ins.a);
-      break;
-    }
-    case "45cc": {
-      ins.a = u >> 12; ins.b = insns[pc + 1]; ins.c = insns[pc + 3];  // c = proto idx
-      ins.regs = nibbleRegs(insns[pc + 2], u, ins.a);
-      break;
-    }
-    case "4rcc": {
-      ins.a = u >> 8; ins.b = insns[pc + 1]; ins.c = insns[pc + 3];
-      ins.regs = rangeRegs(insns[pc + 2], ins.a);
-      break;
-    }
-    case "51l": {
-      ins.a = u >> 8;
-      ins.wideLit = BigInt.asIntN(64,
-        BigInt(insns[pc + 1]) | (BigInt(insns[pc + 2]) << 16n) |
-        (BigInt(insns[pc + 3]) << 32n) | (BigInt(insns[pc + 4]) << 48n));
-      break;
-    }
-  }
-  return ins;
-}
 
 /** Generating a method's JS source costs ~4x what handing it to `new Function` does, and on
  *  a large app's boot only 31% of the methods of the classes we load are ever called. So a body is
@@ -248,9 +167,9 @@ function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod,
 }
 
 class MethodCompiler {
-  ins: Map<number, Ins> = new Map();
-  order: number[] = [];
-  leaders = new Set<number>();
+  private instructions: Ins[] = [];
+  private leaders = new Uint8Array();
+  private prepared?: PreparedMethod;
   hasTries: boolean;
   sync = true;
 
@@ -264,7 +183,6 @@ class MethodCompiler {
 
   private resumes = 0;
   private cold = false;
-  private prepared = false;
   private constants: unknown[] = [];
   private suspends = false;
 
@@ -283,34 +201,24 @@ class MethodCompiler {
 
   private prepare(): void {
     if (this.prepared) return;
-    this.prepared = true;
     const { code } = this;
     const profileName = `${this.info.name}.${this.mname}${this.desc}`;
     const profiled = jvmProfiler.enabled;
     let started = profiled ? performance.now() : 0;
-    const insns = code.insns;
-    let pc = 0;
-    while (pc < insns.length) {
-      const u = insns[pc];
-      if ((u & 0xff) === 0 && (u >> 8) !== 0) { pc += insnLen(insns, pc); continue; } // payload
-      const ins = decode(insns, pc);
-      this.ins.set(pc, ins);
-      this.order.push(pc);
-      pc += ins.len;
-    }
+    this.instructions = decodeInstructions(code.insns);
     if (profiled) jvmProfiler.add(profileName, "decode", performance.now() - started);
     started = profiled ? performance.now() : 0;
-    this.leaders.add(0);
-    for (const pc2 of this.order) {
-      const i = this.ins.get(pc2)!;
+    this.leaders = new Uint8Array(code.insns.length + 1);
+    this.leaders[0] = 1;
+    for (const i of this.instructions) {
       const t = this.branchTargets(i);
-      for (const x of t) this.leaders.add(x);
-      if (t.length || ENDS_RE.test(i.name)) this.leaders.add(pc2 + i.len);
+      for (const target of t) this.leaders[target] = 1;
+      if (t.length || endsBlock(i.op)) this.leaders[i.pc + i.len] = 1;
     }
     for (const t of code.tries) {
-      this.leaders.add(t.start); this.leaders.add(t.end);
-      for (const [, addr] of t.handlers) this.leaders.add(addr);
-      if (t.catchAllAddr >= 0) this.leaders.add(t.catchAllAddr);
+      this.leaders[t.start] = 1; this.leaders[t.end] = 1;
+      for (const [, addr] of t.handlers) this.leaders[addr] = 1;
+      if (t.catchAllAddr >= 0) this.leaders[t.catchAllAddr] = 1;
     }
     if (profiled) jvmProfiler.add(profileName, "cfg", performance.now() - started);
     started = profiled ? performance.now() : 0;
@@ -318,14 +226,13 @@ class MethodCompiler {
     if (profiled) jvmProfiler.add(profileName, "type", performance.now() - started);
     // A body with no call, static access, monitor or allocation cannot suspend, so it compiles
     // without `async`.
-    for (const pc2 of this.order) {
-      const i = this.ins.get(pc2)!;
-      if (i.name.startsWith("invoke") || i.name.startsWith("sget") || i.name.startsWith("sput") ||
-          i.name === "monitor-enter" || i.name === "new-instance" || i.name === "filled-new-array" || i.name === "filled-new-array/range") {
+    for (const i of this.instructions) {
+      if (maySuspend(i.op)) {
         this.sync = false;
         break;
       }
     }
+    this.prepared = { instructions: this.instructions, leaders: this.leaders, sync: this.sync };
   }
 
   compileCold(): ColdMethod | null {
@@ -336,13 +243,13 @@ class MethodCompiler {
     const profileName = `${this.info.name}.${this.mname}${this.desc}`;
     const started = jvmProfiler.enabled ? performance.now() : 0;
     const ops = new Map<number, ReturnType<typeof coldOp>>();
-    for (const pc of this.order) {
-      const ins = this.ins.get(pc)!, out: string[] = [];
+    for (const ins of this.prepared!.instructions) {
+      const out: string[] = [];
       this.constants = []; this.suspends = false;
       this.emitIns(ins, out);
-      const op = coldOp(out.join("\n"), this.constants, pc + ins.len, this.suspends);
+      const op = coldOp(out.join("\n"), this.constants, ins.pc + ins.len, this.suspends);
       if (ins.name.startsWith("invoke") && !ins.name.startsWith("invoke-custom")) op.method = ins.b;
-      ops.set(pc, op);
+      ops.set(ins.pc, op);
     }
     if (jvmProfiler.enabled) jvmProfiler.add(profileName, "coldBuild", performance.now() - started);
     return { name: profileName, R: this.R, D: this.R.dexLink(this.dex), S: this.info.superInfo?.ctor,
@@ -361,12 +268,12 @@ class MethodCompiler {
     if (count) { if (this.sync) perf.syncMethods++; else perf.asyncMethods++; }
     const blocks: string[] = [];
     let cur: string[] | null = null;
-    for (const pc2 of this.order) {
-      if (this.leaders.has(pc2)) {
+    for (const ins of this.prepared!.instructions) {
+      if (this.prepared!.leaders[ins.pc]) {
         if (cur) blocks.push(cur.join("\n"));
-        cur = [`case ${pc2}:${this.hasTries ? `pc=${pc2};` : ""}`];
+        cur = [`case ${ins.pc}:${this.hasTries ? `pc=${ins.pc};` : ""}`];
       }
-      this.emitIns(this.ins.get(pc2)!, cur!);
+      this.emitIns(ins, cur!);
     }
     if (cur) blocks.push(cur.join("\n"));
 
@@ -441,19 +348,19 @@ ${catchBody}
     type Arrs = Map<number, "F" | "D">;
 
     // ── block CFG (leaders are already computed by compile())
-    const leaders = this.order.filter((pc) => this.leaders.has(pc));
-    const body = new Map<number, number[]>();   // leader → its instruction pcs
+    const leaders = this.instructions.filter((ins) => this.leaders[ins.pc]).map((ins) => ins.pc);
+    const body = new Map<number, Ins[]>();
     let cur = -1;
-    for (const pc of this.order) {
-      if (this.leaders.has(pc)) body.set((cur = pc), []);
-      body.get(cur)!.push(pc);
+    for (const ins of this.instructions) {
+      if (this.leaders[ins.pc]) body.set((cur = ins.pc), []);
+      body.get(cur)!.push(ins);
     }
     const succ = new Map<number, number[]>();
-    for (const [lead, pcs] of body) {
-      const last = this.ins.get(pcs[pcs.length - 1])!;
+    for (const [lead, instructions] of body) {
+      const last = instructions[instructions.length - 1];
       const out = new Set(this.branchTargets(last).filter((t) => body.has(t)));
       // fall-through, unless the block ends in an unconditional transfer
-      if (!ENDS_RE.test(last.name)) {
+      if (!endsBlock(last.op)) {
         const next = last.pc + last.len;
         if (body.has(next)) out.add(next);
       }
@@ -463,8 +370,8 @@ ${catchBody}
     // range reaches the handlers.
     for (const t of this.code.tries) {
       const hs = t.handlers.map(([, a]) => a).concat(t.catchAllAddr >= 0 ? [t.catchAllAddr] : []);
-      for (const [lead, pcs] of body) {
-        if (pcs[pcs.length - 1] < t.start || lead >= t.end) continue;
+      for (const [lead, instructions] of body) {
+        if (instructions[instructions.length - 1].pc < t.start || lead >= t.end) continue;
         const out = succ.get(lead)!;
         for (const h of hs) if (body.has(h) && !out.includes(h)) out.push(h);
       }
@@ -480,14 +387,13 @@ ${catchBody}
     const run = (lead: number, defs: Defs, arr: Arrs, doMark: boolean) => {
       let lastRet = "";
       liveDefs = doMark ? defs : null;
-      for (const pc of body.get(lead)!) {
-        const i = this.ins.get(pc)!;
+      for (const i of body.get(lead)!) {
         const n = i.name;
-        const operand = OPERAND_KIND_RE.exec(n);
+        const operand = floatingOperands(i.op);
         if (operand) {
-          const k = (operand[1] ?? operand[2]) === "float" ? "F" : "D";
+          const k = operand.kind;
           if (n.endsWith("/2addr")) { mark(i.a, k); mark(i.b, k); }
-          else if (n.startsWith("neg") || operand[2]) mark(i.b, k);
+          else if (operand.unary) mark(i.b, k);
           else { mark(i.b, k); mark(i.c, k); }
         } else if (n === "aput" || n === "aput-wide") {
           const k = arr.get(i.b);
@@ -593,9 +499,7 @@ ${catchBody}
     for (const l of leaders) run(l, new Map(inDefs.get(l)!), new Map(inArrs.get(l) ?? []), true);
   }
   private writtenReg(i: Ins): number {
-    const n = i.name;
-    if (NO_WRITE_RE.test(n)) return -1;
-    return i.a;
+    return writesRegister(i.op) ? i.a : -1;
   }
 
   private emitCatch(): string {
