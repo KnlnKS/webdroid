@@ -2716,3 +2716,10 @@ is gone. The browser test checks track/thumb pixels and suspended touch callback
 full Chrome plays the unchanged 22-second Maps clip; Pause changes to Play and seeking
 changes the position and resumes decoded frames. Keyboard/RTL seek handling and animated
 thumb transitions are not covered by this implementation.
+
+Maps' pause button was below the video because RelativeLayout measured its MATCH_PARENT
+overlay child with AT_MOST, then shrank around the centered button. AOSP RelativeLayout's
+getChildMeasureSpec uses the available span exactly for MATCH_PARENT when the parent size
+is known. Applying that rule restores the full overlay and centers its controls. The focused
+layout checks pass; fresh Chrome places the pause button at y=957..1137 versus Android's
+952..1132. This does not implement the remaining RelativeLayout rule subset.

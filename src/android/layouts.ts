@@ -639,8 +639,11 @@ const relativeMethods: NativeSpec["methods"] = {
   "onMeasure(II)V": async function (this: JRelativeLayout, wSpec: number, hSpec: number) {
     const availW = specSize(wSpec), availH = specSize(hSpec);
     const kids = this.children.filter((c) => c.visibility !== 8);
-    // measure all children first (simple pass)
-    for (const c of kids) await measureChildWithMargins(this, c, wSpec, 0, hSpec, 0);
+    for (const c of kids) {
+      const w = c.lp?.width === MATCH_PARENT && specMode(wSpec) !== MS_UNSPEC ? makeSpec(availW, MS_EXACTLY) : wSpec;
+      const h = c.lp?.height === MATCH_PARENT && specMode(hSpec) !== MS_UNSPEC ? makeSpec(availH, MS_EXACTLY) : hSpec;
+      await measureChildWithMargins(this, c, w, 0, h, 0);
+    }
     const pos = this.rlPos;
     pos.clear();
     const byId = new Map<number, JView>();
