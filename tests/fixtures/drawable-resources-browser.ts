@@ -44,6 +44,11 @@ async function probe() {
   await vcall(rotate, "setPivotX", "(F)V", 5);
   await vcall(rotate, "setLevel", "(I)Z", 10000);
   await vcall(rotate, "draw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 300, 54));
-  return { heights, before, after, above, center, outside, rotated, absolute: [pixel(0, 30), pixel(30, 30)], restored: ctx.getTransform().isIdentity };
+  const absolute = [pixel(0, 30), pixel(30, 30)], restored = ctx.getTransform().isIdentity;
+  ctx.clearRect(0, 0, 300, 54);
+  const inset = await newObj("android/graphics/drawable/InsetDrawable", "(Landroid/graphics/drawable/Drawable;I)V", fill, 4);
+  const dialog = Object.assign(rt.make("webdroid/DialogRoot"), { cardBg: inset, right: 300, bottom: 54 });
+  await vcall(dialog, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 300, 54));
+  return { heights, before, after, above, center, outside, rotated, absolute, restored, dialogCenter: pixel(150, 27) };
 }
 Object.defineProperty(window, "drawableResourcesProbe", { value: probe() });

@@ -24,6 +24,7 @@ import type { JWindow } from "./window";
 import { complexToFraction } from "./util";
 
 const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
+const M_setBounds = mangleMethod("setBounds", "(IIII)V");
 const M_onCreate = mangleMethod("onCreate", "(Landroid/os/Bundle;)V");
 const M_getPadding = mangleMethod("getPadding", "(Landroid/graphics/Rect;)Z");
 
@@ -154,9 +155,7 @@ rt.register({
         ctx.beginPath();
         ctx.roundRect(0, 0, this.width(), this.height(), r);
         ctx.clip();
-        const b = bg.bounds;
-        b.left = b.top = 0;
-        b.right = this.width(); b.bottom = this.height();
+        await guardCall(bg, M_setBounds, 0, 0, this.width(), this.height());
         await guardCall(bg, M_drawableDraw, cv);
         ctx.restore();
       }

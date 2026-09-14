@@ -23,5 +23,6 @@ test("framework seek resources resolve dimensions, tint, enabled states and vect
     expect(result.rotated).toEqual([[255, 0, 0, 255], [0, 0, 0, 0]]);
     expect(result.absolute).toEqual([[255, 0, 0, 255], [0, 0, 0, 0]]);
     expect(result.restored).toBe(true);
+    expect(result.dialogCenter).toEqual([255, 0, 0, 255]);
   } finally { await browser.close(); server.stop(true); }
 }, 20000);
