@@ -1108,18 +1108,22 @@ fn execThumb(c: *Cpu, pc: u32) Status {
     const rd = h & 7;
     const rn = (h >> 3) & 7;
     const rm = (h >> 6) & 7;
+    const implicitFlags = currentIt == 0;
     switch (top) {
         0, 1 => {
             const o = (h >> 11) & 3;
             if (o == 3) {
                 const t: u32 = if (h & (1 << 10) != 0) rm else r(c, rm);
-                set(c, rd, if (h & (1 << 9) != 0) subFlags(c, r(c, rn), t, 1) else addFlags(c, r(c, rn), t, 0));
+                set(c, rd, if (h & (1 << 9) != 0)
+                    (if (implicitFlags) subFlags(c, r(c, rn), t, 1) else r(c, rn) -% t)
+                else
+                    (if (implicitFlags) addFlags(c, r(c, rn), t, 0) else r(c, rn) +% t));
             } else {
                 const nsh = (h >> 6) & 31;
                 const t = r(c, rn);
                 const s = if (o == 0 and nsh == 0) Shifted{ .v = t, .carry = cf(c) } else shiftReg(c, o, t, if (nsh == 0) 32 else nsh);
                 set(c, rd, s.v);
-                setNZC(c, s.v, s.carry);
+                if (implicitFlags) setNZC(c, s.v, s.carry);
             }
         },
         2, 3 => {
@@ -1145,21 +1149,21 @@ fn execThumb(c: *Cpu, pc: u32) Status {
                     0, 1, 8, 12, 14, 15 => {
                         const v = logic(o, R, Mv);
                         if (o != 8) set(c, rd, v);
-                        setNZ(c, v);
+                        if (o == 8 or implicitFlags) setNZ(c, v);
                     },
                     2, 3, 4, 7 => {
                         const s = shiftReg(c, if (o == 7) 3 else o - 2, R, Mv & 255);
                         set(c, rd, s.v);
-                        setNZC(c, s.v, s.carry);
+                        if (implicitFlags) setNZC(c, s.v, s.carry);
                     },
-                    5 => set(c, rd, addFlags(c, R, Mv, @intCast(cf(c)))),
-                    6 => set(c, rd, subFlags(c, R, Mv, @intCast(cf(c)))),
-                    9 => set(c, rd, subFlags(c, 0, Mv, 1)),
+                    5 => set(c, rd, if (implicitFlags) addFlags(c, R, Mv, @intCast(cf(c))) else R +% Mv +% cf(c)),
+                    6 => set(c, rd, if (implicitFlags) subFlags(c, R, Mv, @intCast(cf(c))) else R -% Mv -% (1 - cf(c))),
+                    9 => set(c, rd, if (implicitFlags) subFlags(c, 0, Mv, 1) else 0 -% Mv),
                     10 => _ = subFlags(c, R, Mv, 1),
                     11 => _ = addFlags(c, R, Mv, 0),
                     else => {
                         set(c, rd, R *% Mv);
-                        setNZ(c, R *% Mv);
+                        if (implicitFlags) setNZ(c, R *% Mv);
                     },
                 }
                 return .next;

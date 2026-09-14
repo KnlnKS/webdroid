@@ -473,6 +473,14 @@ pub fn Emit(comptime wide: bool) type {
             e.b.emit(.{ c32(@bitCast(pc)), set(L_RET) });
             e.exitRet();
         }
+        pub fn exitToInterpreter(e: *Self, pc: u32, k: u32) void {
+            e.settle(15);
+            e.spillRegs(e.wcur);
+            e.spillFlags();
+            e.countIc(k);
+            e.b.emit(.{ get(L_CPU), c64(pc & ~@as(u32, 1)), mo(O.i64_store, @offsetOf(cpu.Cpu, "pc")) });
+            e.exitStatus(1);
+        }
         pub fn exitStatus(e: *Self, s: u32) void {
             e.b.emit(.{ c32(@intCast(s)), set(L_RET) });
             e.exit();

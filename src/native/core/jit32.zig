@@ -630,7 +630,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
     const h: u32 = mem.ld(u16, pc);
     if ((h & 0xff00) == 0xbf00 and h & 15 != 0) {
         e.fallback(pc, k);
-        e.exitTo((pc + 2) | 1);
+        e.exitToInterpreter((pc + 2) | 1, k);
         return true;
     }
     const wideMoveImm = h & 0xfbef;

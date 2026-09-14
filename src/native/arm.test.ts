@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { mem } from "./mem";
 import { Cpu, setA64 } from "./cpu";
-import { core } from "./core";
+import { core, JIT_HEAT } from "./core";
 import { pattern, sweep } from "./a64.testkit";
 import { mainThread } from "../jvm/natives/jlang";
 import { RET_SENTINEL } from "./abi";
@@ -415,6 +415,43 @@ describe("thumb decoder", () => {
       0xbdd0,         // return: pop {r4,r6,r7,pc}
     ], (cpu) => { cpu.w[0] = 20; });
     expect(c.w[0]).toBe(20);
+  });
+
+  test("tail chaining preserves multi-instruction IT state and flags", () => {
+    const at = mem.reserve(0x1000, 0x1000);
+    mem.u16.set([
+      0x4285, // cmp r5, r0
+      0xbf3c, // itt lo
+      0x1913, // addlo r3, r2, r4
+      0x4631, // movlo r1, r6
+      0x4770, // bx lr
+    ], at >>> 1);
+    for (let i = 0; i <= JIT_HEAT; i++) execute((at + 4) | 1, (cpu) => { cpu.w[2] = 3; });
+    for (let i = 0; i <= JIT_HEAT; i++) {
+      const skipped = execute(at | 1, (cpu) => {
+        cpu.w[0] = 2;
+        cpu.w[2] = 11;
+        cpu.w[4] = 3;
+        cpu.w[6] = 24;
+        cpu.w[8] = ~1;
+        cpu.w[10] = 83;
+        cpu.w[12] = 19;
+      });
+      expect(skipped.w[2]).toBe(11);
+      expect(skipped.w[6]).toBe(24);
+      const taken = execute(at | 1, (cpu) => {
+        cpu.w[0] = 2;
+        cpu.w[2] = 11;
+        cpu.w[4] = 3;
+        cpu.w[6] = 24;
+        cpu.w[8] = ~1;
+        cpu.w[10] = 0;
+        cpu.w[12] = 19;
+      });
+      expect(taken.w[2]).toBe(19);
+      expect(taken.w[6]).toBe(1);
+    }
+    core.invalidate_all();
   });
 
   test("wide arithmetic immediates update values and comparison flags", () => {
