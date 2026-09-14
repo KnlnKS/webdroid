@@ -2801,3 +2801,22 @@ were added. Good current captures include chrome-egl-thread-preview.png,
 chrome-egl-thread-next-verified.png, chrome-media-final-full.png and their Android
 references in webdroid-shots/maps. The E2E report and baseline/current logs are retained;
 goldens were not modified. Work stays on codex/maps-parity and is not merged to main.
+
+The post-crash recovery run reached another Maps place-sheet path: the missing
+TextView.setLinkTextColor(ColorStateList) caused a repeated layout failure, and then
+SuperscriptSpan failed resolution. TextView now retains stateful link colors, resolves
+textColorLink from styles, and updates its paint without requesting layout. SuperscriptSpan
+applies Android's truncated half-ascent shift through the virtual Paint entry point.
+Both APIs have focused checks. A fresh Ferry Building run has zero layout errors and no
+RecyclerView attachment failure; these fixes do not by themselves restore base-map geometry.
+
+A bounded full-Chrome WebGL trace narrowed absent base-map geometry to a matrix whose
+last row was zero, despite successful draw calls and no GL errors. The upload originated
+at libgoogle3.so +0x1047668. Disassembly shows its bridge accepts sixteen floats: s0–s7
+and eight stack slots. Cpu.call instead moved overflowing FP arguments into available
+integer registers, so a call with two integer parameters lost six matrix values before
+reaching the stack. Floating overflow now goes directly to the stack, preserving the
+independent AAPCS64 register banks. Two tests cover sixteen floats with integer overflow
+and interleaved float/double spills with available integer registers; both fail on the
+previous code and pass with this two-line change. Typecheck passes. No APK or shader
+substitution is involved. Full-Chrome rendering verification follows this correction.

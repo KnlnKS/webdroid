@@ -299,7 +299,8 @@ export class Cpu {
         // AAPCS64 hard float: v0-v7, then 8-byte stack slots. softfp: the bits, as an integer
         if (this.a64) {
           if (nv < 8) { if ("f" in a) this.s[nv * 4] = a.f; else this.d[nv * 2] = a.d; nv++; continue; }
-          a = "f" in a ? fbits(a.f) : dbits(a.d);
+          stack.push("f" in a ? fbits(a.f) : dbits(a.d));
+          continue;
         } else a = "f" in a ? fbits(a.f) : dbits(a.d);
       }
       if (typeof a === "bigint") {
