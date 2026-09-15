@@ -21,6 +21,8 @@ Starting revision: `4ecee61`. Integration branch: `codex/android-api-fuzzing`.
 - [x] Add deterministic API and graphics generation, comparison, replay and minimization.
 - [x] Add opt-in JVM coverage and semantic UI fuzzing with complete process telemetry.
 - [x] Audit the full TypeScript/Zig tree and retain only evidenced simplifications.
+- [x] Resolve the strict post-implementation review findings for protocol ownership, atomic
+  evidence, failure clustering, UI target boundaries, and isolated campaign resources.
 - [x] Run the final typecheck, unit, smoke, framework, fuzz, text, E2E, corpus and performance
   matrix. Record measurements and evidence limits in the implementation history.
 

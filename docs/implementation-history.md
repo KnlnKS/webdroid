@@ -4423,3 +4423,36 @@ pthread faults, and the Mihon onboarding page error. They are reproducible compa
 not evidence that the harness failed. Exhaustive catalog classification therefore closes this task;
 exhaustive behavioral coverage continues to depend on adding safe, explicit recipes and running
 larger manual campaigns.
+
+## 2026-09-14: strict fuzz-harness maintainability follow-up
+
+The post-delivery thermo-nuclear review identified six harness defects rather than cosmetic nits.
+Commits `372210d` through `904071b` resolve them without changing Android compatibility semantics.
+
+Failure persistence is now atomic: original and minimized cases each own the exact pair of outputs
+that produced their failure, and every bundle includes two matching minimized observations. UI
+bundles retain the minimized run's telemetry and screenshots instead of attaching original-run
+evidence to a shorter action list. Replay validates these wire shapes before execution.
+
+Graphics operations are an exact discriminated union rather than an open string and primitive
+array. The validator enforces operation-specific arity, primitive types, and enum domains. An
+exhaustive operation manifest is checked against the Java probe switch. Failure comparison uses a
+stable reproduction key while retained fingerprints add differing state fields and the minimized
+operation shape, preventing unrelated graphics failures from collapsing into two global buckets.
+
+Executable API recipes now own the member list used by inventory classification. UI platform
+mechanics moved behind Android and webdroid targets, and the golden recorder and fuzzer share one
+hierarchy parser. Per-process diagnostics use tagged states, so an unavailable or timed-out child
+cannot masquerade as an empty successful result.
+
+Campaign resources are isolated. Case and dev servers select dynamic ports, staged APK filenames
+are unique and removed during cleanup, and each dev server privately rewrites the unchanged
+probe's loopback endpoint to its own case server. Two simultaneous webdroid probes completed on
+distinct origins. Differential campaigns install the probe once per oracle, reuse one webdroid
+session across batches, and execute the independent platform runs concurrently. A three-batch
+focused run reused one origin and returned the expected ordered result each time.
+
+Focused verification covered strict TypeScript, protocol/catalog/semantic tests, injected smoke
+and replay, a live one-step FitNotes UI campaign with three successful process snapshots, one live
+webdroid probe, two concurrent probes, and three sequential batches on a reused session. The full
+acceptance matrix follows after this implementation freeze.
