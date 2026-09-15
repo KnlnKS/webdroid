@@ -3,7 +3,7 @@ import { replayBundle, runCampaign } from "./fuzz/campaign";
 import { generateApiCases, generateGraphicsCases } from "./fuzz/generate";
 import { validateProbeCase } from "./fuzz/model";
 import { Random, randomSeed } from "./fuzz/random";
-import { runUi } from "./fuzz/ui";
+import { replayUiBundle, runUi } from "./fuzz/ui";
 import { generateUiAction } from "./fuzz/ui-model";
 
 const [command, ...args] = process.argv.slice(2);
@@ -77,8 +77,11 @@ switch (command) {
   case "replay": {
     const path = args.find((arg) => !arg.startsWith("-"));
     const oracle = value("--oracle");
-    if (!path || !oracle) throw new Error("usage: bun run fuzz replay <failure.json> --oracle <adb-serial>");
-    if (!(await replayBundle(path, oracle))) throw new Error("minimized failure did not reproduce twice");
+    if (!path) throw new Error("usage: bun run fuzz replay <failure.json> [--oracle <adb-serial>]");
+    const kind = (JSON.parse(await Bun.file(path).text()) as { kind?: unknown }).kind;
+    if (kind !== "ui" && !oracle) throw new Error("API and graphics replay require --oracle <adb-serial>");
+    const reproduced = kind === "ui" ? await replayUiBundle(path, oracle) : await replayBundle(path, oracle!);
+    if (!reproduced) throw new Error("minimized failure did not reproduce twice");
     console.log(`reproduced twice: ${path}`);
     break;
   }

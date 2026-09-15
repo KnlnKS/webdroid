@@ -12,6 +12,7 @@ import type { UiNode } from "../../tests/e2e/types";
 import { Random } from "./random";
 import { generateUiAction, matchIdentity, semanticKeys, type UiAction } from "./ui-model";
 import { startWebdroid } from "./webdroid-session";
+import type { Failure } from "./model";
 
 const STEP_DEADLINE_MS = 5_000;
 type Metadata = { apk: string; pkg: string; activity: string };
@@ -33,6 +34,16 @@ type UiStep = {
 };
 
 export type UiOptions = { apks: string[]; seed: number; steps: number; oracle?: string; out: string };
+export type UiFailureBundle = {
+  schemaVersion: 1;
+  kind: "ui";
+  seed: number;
+  app: Metadata;
+  input: UiAction[];
+  minimized: UiAction[];
+  failure: Failure;
+  environment: unknown;
+};
 
 async function command(argv: string[], deadlineMs = STEP_DEADLINE_MS): Promise<CommandResult> {
   const child = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
@@ -220,7 +231,7 @@ function compactDiagnostics(processes: Awaited<ReturnType<typeof readProcesses>>
   });
 }
 
-async function runApk(app: Metadata, options: UiOptions, apkIndex: number): Promise<{ steps: UiStep[]; environment: unknown }> {
+async function runApk(app: Metadata, options: UiOptions, apkIndex: number, fixedActions?: readonly UiAction[], retainArtifacts = true): Promise<{ steps: UiStep[]; environment: unknown }> {
   const random = new Random((options.seed ^ Math.imul(apkIndex + 1, 0x9e3779b1)) >>> 0);
   const session = await startWebdroid(app.apk, 4098 + apkIndex);
   const adb = options.oracle ? adbFor(options.oracle) : null;
@@ -232,16 +243,19 @@ async function runApk(app: Metadata, options: UiOptions, apkIndex: number): Prom
       const [sdk, fingerprint] = await Promise.all([adb("shell", "getprop", "ro.build.version.sdk"), adb("shell", "getprop", "ro.build.fingerprint")]);
       if (sdk.stdout.toString().trim() !== "33") throw new Error(`oracle ${options.oracle} is not API 33`);
       environment.android = { serial: options.oracle, fingerprint: fingerprint.stdout.toString().trim() };
+      await adb("uninstall", app.pkg).catch(() => undefined);
       await adb("install", "-r", "-t", app.apk);
       await adb("shell", "am", "force-stop", app.pkg);
       await adb("shell", "am", "start", "-W", "-n", `${app.pkg}/${app.activity}`);
     }
-    for (let index = 0; index < options.steps; index++) {
+    const stepCount = fixedActions?.length ?? options.steps;
+    for (let index = 0; index < stepCount; index++) {
       let androidNodes: UiNode[] | undefined;
       const webNodes = await session.page.evaluate(() => globalThis.wd.uiTree() as UiNode[]);
       if (adb) androidNodes = await androidTree(adb);
       const source = androidNodes ?? webNodes, sourceSize = screenSize(source), webSize = { width: 1080, height: 2160 };
-      const action = generateUiAction(random, source, sourceSize.width, sourceSize.height);
+      const action = fixedActions?.[index] ?? generateUiAction(random, source, sourceSize.width, sourceSize.height);
+      if (!action) break;
       const missingTarget = "target" in action && !matchIdentity(webNodes, action.target);
       const preDivergence = androidNodes ? treeDivergence(androidNodes, webNodes) : undefined;
       const structuralDivergence = missingTarget ? `target absent: ${stable(action.target)}` : preDivergence;
@@ -266,6 +280,7 @@ async function runApk(app: Metadata, options: UiOptions, apkIndex: number): Prom
       if (!relevant.length || relevant.some((process) => !process.diagnostics || "failure" in process.diagnostics))
         throw new Error(`missing process telemetry at UI step ${index}`);
       const signals = processSignals(relevant);
+      for (const error of session.errors) signals.push(`page-error:${error}`);
       if (!alive) signals.push("wedge:foreground");
       const currentCoverage = coverage(relevant);
       const coverageDelta = [...currentCoverage].filter((method) => !seenCoverage.has(method));
@@ -287,7 +302,7 @@ async function runApk(app: Metadata, options: UiOptions, apkIndex: number): Prom
         webdroidFrameHash: webFrameHash, structuralDivergence, pixel,
         diagnostics: { alive, errors: session.errors, processes: compactDiagnostics(relevant) },
         coverageDelta, signals };
-      if (novel) {
+      if (novel && retainArtifacts) {
         const prefix = `${options.out}/${basename(app.apk).replace(/\.[^.]+$/, "")}-${String(index).padStart(3, "0")}`;
         const artifacts: NonNullable<UiStep["artifacts"]> = { webdroid: `${prefix}-webdroid.png` };
         await Bun.write(artifacts.webdroid, webPng);
@@ -307,14 +322,98 @@ async function runApk(app: Metadata, options: UiOptions, apkIndex: number): Prom
   }
 }
 
+function uiFailure(steps: readonly UiStep[]): Failure | null {
+  for (const step of steps) {
+    if (step.structuralDivergence) return {
+      kind: step.structuralDivergence.includes("timed out") ? "timeout" : "harness-error",
+      fingerprint: step.structuralDivergence.includes("target absent") ? "ui:structure:target" :
+        step.structuralDivergence.includes("semantic overlap") ? "ui:structure:tree" : "ui:action",
+      detail: step.structuralDivergence,
+    };
+    const signal = step.signals.find((value) => /^(wedge|layout|draw|gl|error|page-error|timeout-or-error|harness):/.test(value));
+    if (!signal) continue;
+    const category = signal.slice(0, signal.indexOf(":"));
+    const kind = category === "wedge" ? "wedge" : category === "layout" ? "layout-error" :
+      category === "draw" ? "draw-error" : category === "gl" ? "gl-error" :
+      category === "timeout-or-error" ? "timeout" : "harness-error";
+    return { kind, fingerprint: `ui:${category}`, detail: signal };
+  }
+  return null;
+}
+
+function shrinkAction(action: UiAction): UiAction[] {
+  switch (action.type) {
+    case "type": return [
+      { ...action, text: "" },
+      { ...action, text: action.text.slice(0, 1) },
+      { ...action, at: { x: 0, y: 0 } },
+    ].filter((candidate) => stable(candidate) !== stable(action));
+    case "tap":
+    case "fallback-tap": return [{ ...action, at: { x: 0, y: 0 } }];
+    case "scroll": return [{ ...action, durationMs: 1 }, { ...action, from: { x: 0, y: 0 }, to: { x: 0, y: 0 } }];
+    case "background": return action.durationMs ? [{ ...action, durationMs: 0 }] : [];
+    case "configuration": return action.orientation === "landscape" ? [{ ...action, orientation: "portrait" }] : [];
+    case "back":
+    case "enter": return [];
+  }
+}
+
+async function minimizeActions(input: readonly UiAction[], reproduces: (candidate: UiAction[]) => Promise<boolean>): Promise<UiAction[]> {
+  let current = [...input], rounds = 0;
+  for (let chunk = Math.floor(current.length / 2); chunk >= 1 && rounds < 4; chunk = Math.floor(chunk / 2)) {
+    let changed = true;
+    while (changed && rounds < 4) {
+      changed = false;
+      for (let start = 0; start < current.length; start += chunk) {
+        const candidate = [...current.slice(0, start), ...current.slice(start + chunk)];
+        if (!candidate.length || !(await reproduces(candidate))) continue;
+        current = candidate; changed = true; rounds++; break;
+      }
+    }
+  }
+  for (let index = 0; index < current.length; index++) {
+    for (const shrunk of shrinkAction(current[index]!)) {
+      const candidate = current.map((action, at) => at === index ? shrunk : action);
+      if (await reproduces(candidate)) { current = candidate; break; }
+    }
+  }
+  return current;
+}
+
+async function reproduceUi(app: Metadata, actions: UiAction[], options: UiOptions, fingerprint: string): Promise<boolean> {
+  const result = await runApk(app, { ...options, steps: actions.length }, 0, actions, false);
+  return uiFailure(result.steps)?.fingerprint === fingerprint;
+}
+
 export async function runUi(options: UiOptions): Promise<void> {
   if (!options.apks.length) throw new Error("ui fuzzing requires at least one APK");
   if (!options.steps) throw new Error("--steps must be at least 1");
   mkdirSync(options.out, { recursive: true });
   const apps = options.apks.map(metadata), runs = [];
-  for (let index = 0; index < apps.length; index++) runs.push({ app: apps[index], ...(await runApk(apps[index]!, options, index)) });
+  for (let index = 0; index < apps.length; index++) {
+    const app = apps[index]!, run = await runApk(app, options, index);
+    runs.push({ app, ...run });
+    const failure = uiFailure(run.steps);
+    if (!failure) continue;
+    const input = run.steps.map((step) => step.action);
+    const reproduces = (actions: UiAction[]) => reproduceUi(app, actions, options, failure.fingerprint);
+    const minimized = await minimizeActions(input, reproduces);
+    if (!(await reproduces(minimized)) || !(await reproduces(minimized))) continue;
+    const bundle: UiFailureBundle = { schemaVersion: 1, kind: "ui", seed: options.seed, app, input, minimized, failure, environment: run.environment };
+    await Bun.write(`${options.out}/${basename(app.apk).replace(/\.[^.]+$/, "")}.failure.json`, JSON.stringify(bundle, null, 2) + "\n");
+  }
   await Bun.write(`${options.out}/ui-${options.seed}.campaign.json`, JSON.stringify({
     schemaVersion: 1, kind: "ui", seed: options.seed, requestedSteps: options.steps, runs,
   }, null, 2) + "\n");
   console.log(`UI fuzzed ${apps.length} APK(s); retained artifacts in ${options.out}`);
+}
+
+export async function replayUiBundle(path: string, oracle?: string): Promise<boolean> {
+  const bundle = JSON.parse(await Bun.file(path).text()) as UiFailureBundle;
+  if (bundle.schemaVersion !== 1 || bundle.kind !== "ui" || !Array.isArray(bundle.minimized) || !bundle.failure?.fingerprint)
+    throw new Error("invalid UI failure bundle");
+  const options: UiOptions = { apks: [bundle.app.apk], seed: bundle.seed, steps: bundle.minimized.length,
+    oracle, out: `${path}.replay` };
+  return await reproduceUi(bundle.app, bundle.minimized, options, bundle.failure.fingerprint) &&
+    await reproduceUi(bundle.app, bundle.minimized, options, bundle.failure.fingerprint);
 }
