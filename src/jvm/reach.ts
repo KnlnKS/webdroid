@@ -18,10 +18,12 @@ type MemberKey = string;
 
 interface ReachResult {
   methods: Set<MemberKey>;            // bodies the analysis walked
+  methodCalls: Map<MemberKey, number>; // every reachable invoke site, resolved or not
   instantiated: Set<string>;          // classes a reachable new-instance creates
   classes: Set<string>;               // classes touched at all
   unresolvedMethods: Map<MemberKey, number>;  // call sites that resolved to nothing
   unresolvedFields: Map<MemberKey, number>;
+  fieldAccesses: Map<MemberKey, number>; // every reachable field site, resolved or not
   nativeMethods: Map<MemberKey, number>;      // reachable and `native`: the JNI line
   absentClasses: Map<string, number>;         // named by a reachable instruction, defined nowhere
 }
@@ -164,6 +166,7 @@ function walkInsns(insns: Uint16Array, visit: (op: number, pc: number) => void) 
 export function reach(p: Program, roots: MemberKey[], rootClasses: string[] = []): ReachResult {
   const r: ReachResult = {
     methods: new Set(), instantiated: new Set(), classes: new Set(),
+    methodCalls: new Map(), fieldAccesses: new Map(),
     unresolvedMethods: new Map(), unresolvedFields: new Map(),
     nativeMethods: new Map(), absentClasses: new Map(),
   };
@@ -207,6 +210,7 @@ export function reach(p: Program, roots: MemberKey[], rootClasses: string[] = []
   }
 
   function noteDecl(cls: string, sig: string) {
+    bump(r.methodCalls, cls + "." + sig);
     const hit = p.resolve(cls, sig);
     if (!hit) { bump(r.unresolvedMethods, cls + "." + sig); return null; }
     if (!hit.m.codeOff && hit.m.flags & ACC.NATIVE) bump(r.nativeMethods, hit.cls + "." + sig);
@@ -257,6 +261,7 @@ export function reach(p: Program, roots: MemberKey[], rootClasses: string[] = []
         const f = dex.field(insns[pc + 1]);
         const owner = typeName(dex.type(f.cls));
         touchClass(owner);
+        if (owner) bump(r.fieldAccesses, owner + "." + f.name);
         if (owner && (!p.has(owner) || !p.hasField(owner, f.name))) bump(r.unresolvedFields, owner + "." + f.name);
       }
     });

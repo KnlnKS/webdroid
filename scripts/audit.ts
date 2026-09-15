@@ -12,15 +12,13 @@ import { rootsOf, reflectiveRoots } from "../src/jvm/roots";
 import { DexFile } from "../src/jvm/dex";
 import { rt } from "../src/jvm/runtime";
 import "../src/natives";
-import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
+import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, rankCalls } from "./native-surface";
 
 const args = process.argv.slice(2);
 const { flag, opt, positional } = argv(args, ["--limit", "--json"]);
 const apk = positional[0];
 if (!apk) throw new Error("usage: bun run audit <apk> [--framework] [--all] [--limit N] [--json out.json]");
 const limit = parseInt(opt("--limit", "40")!);
-
-const FRAMEWORK_RE = /^(android|java|javax|dalvik|sun|libcore|com\/android\/internal|org\/xmlpull|org\/json|org\/apache\/http)\//;
 
 const t0 = performance.now();
 const zip = await openApk(apk);
@@ -66,33 +64,12 @@ console.log(`reachable: ${r.methods.size} method bodies, ${r.instantiated.size} 
   `(load ${(t1 - t0).toFixed(0)}ms, closure ${(t2 - t1).toFixed(0)}ms)`);
 
 rt.linkNatives();
-const split = (key: string) => { const i = key.indexOf("."); return [key.slice(0, i), key.slice(i + 1)] as const; };
-const ctorOf = (cls: string) => (rt.natives.has(cls) ? rt.classes.get(cls)?.ctor : null) ?? null;
-
-/** does a native spec answer this call today? `in` walks the chain, so inherited counts */
-const registered = (key: string) => {
-  const [cls, rest] = split(key);
-  const ctor = ctorOf(cls);
-  const paren = rest.indexOf("(");
-  if (!ctor || paren < 0) return false;
-  const mangled = mangleMethod(rest.slice(0, paren), rest.slice(paren));
-  return mangled in ctor.prototype || mangled in ctor;
-};
-
-/** a static or instance field a native spec already carries */
-const registeredField = (key: string) => {
-  const [cls, name] = split(key);
-  const ctor = ctorOf(cls);
-  if (!ctor) return false;
-  const info = rt.classes.get(cls)!;
-  return mangleStaticField(name) in ctor || info.fieldTable.has(name);
-};
-
 const isFramework = (k: string) => FRAMEWORK_RE.test(k);
 /** a class we already answer for, so it is not work whatever the program says */
-const registeredClass = (k: string) => rt.natives.has(k.split(".")[0]);
-const rank = (m: Map<string, number>, keep: (k: string) => boolean) =>
-  [...m].filter(([k]) => keep(k)).sort((a, b) => b[1] - a[1]);
+const registeredClass = (k: string) => nativeClassSupport(rt, k.split(".")[0]) !== "missing";
+const registered = (k: string) => nativeMethodSupport(rt, k) !== "missing";
+const registeredField = (k: string) => nativeFieldSupport(rt, k) !== "missing";
+const rank = rankCalls;
 
 const show = (title: string, rows: [string, number][]) => {
   console.log(`\n=== ${title}: ${rows.length}`);
