@@ -31,10 +31,23 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
   };
   const { a, screen: s, deadlineMs } = input;
   const wd = globalThis.wd;
+  const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
   const sleep = input.controlled && wd.guestClock?.controlled
     ? async (ms: number) => { await wd.guestClock.advanceTo(wd.guestClock.now() + ms); }
     : (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-  const run = (p: Promise<unknown>) => withDeadline(p, deadlineMs, a.type);
+  const drive = async <T>(operation: Promise<T>): Promise<T> => {
+    if (!input.controlled || !wd.guestClock?.controlled) return operation;
+    const limit = wd.guestClock.now() + deadlineMs;
+    let finished = false;
+    void operation.finally(() => { finished = true; }).catch(() => {});
+    while (!finished) {
+      const next = wd.guestClock.nextDeadline();
+      if (next !== null && next <= limit) await wd.guestClock.advanceTo(next);
+      else await realSleep(0);
+    }
+    return operation;
+  };
+  const run = (p: Promise<unknown>) => withDeadline(drive(p), deadlineMs, a.type);
   switch (a.type) {
     case "boot": await run(wd.boot(a.apk)); return;
     case "tapText": {

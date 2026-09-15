@@ -7,6 +7,7 @@
     "dev": "bun run server.ts",
     "typecheck": "bun scripts/build-core.ts && tsc --noEmit -p tsconfig.json",
     "test": "bun test src tests",
+    "test:focused": "bun scripts/test-focused.ts",
     "inspect": "bun scripts/inspect.ts",
     "smoke": "bun scripts/smoke.ts",
     "audit": "bun scripts/audit.ts",
@@ -29,6 +30,7 @@
     "e2e:diff": "bun tests/e2e/score.ts",
     "e2e": "bun tests/e2e/run.ts",
     "e2e:fast": "bun tests/e2e/run-fast.ts",
+    "e2e:coverage": "bun tests/e2e/run-fast.ts --coverage",
     "textcmp": "bun scripts/textcmp.ts",
     "build:core": "bun scripts/build-core.ts"
   },

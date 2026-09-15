@@ -41,12 +41,14 @@ export const mihonOnboarding: Flow = {
   activity: ACTIVITY,
   apk: "mihon-v0.20.4.apk",
   crop: CROP,
-  clock: "controlled",
+  clock: "pinned",
   fastCheckpoints: ["storage-step"],
+  fastVisualLimits: { "storage-step": 29 },
   steps: [
     // Mihon shows a static splash for several seconds; without a floor here the settle
     // heuristic locks onto the splash and records THAT as the golden.
-    { id: "launch", label: "Launch — Welcome / theme picker", action: { type: "launch" }, wait: wait.quiescent(14000) },
+    { id: "launch", label: "Launch — Welcome / theme picker", action: { type: "launch" },
+      wait: wait.state({ kind: "perf", counter: "presentations", atLeast: 2 }, 0) },
     // Pin the theme explicitly: the default "Dynamic" derives Material You colours from the
     // wallpaper, which is not a thing webdroid can or should reproduce.
     { id: "theme-light", label: "Choose Light mode", action: { type: "tapText", text: "Light" }, wait: wait.quiescent(900) },
@@ -63,10 +65,12 @@ export const mihonApp: Flow = {
   apk: "mihon-v0.20.4.apk",
   crop: CROP,
   seedPrefs: SEED_PREFS,
-  clock: "controlled",
-  fastCheckpoints: ["back-out-2"],
+  clock: "pinned",
+  fastCheckpoints: ["appearance-light"],
+  fastVisualLimits: { "appearance-light": 14 },
   steps: [
-    { id: "library", label: "Library — empty state", action: { type: "launch" }, wait: wait.quiescent(14000) },
+    { id: "library", label: "Library — empty state", action: { type: "launch" },
+      wait: wait.state({ kind: "perf", counter: "presentations", atLeast: 3 }, 0) },
     { id: "nav-more", label: "More tab", action: { type: "tapText", text: "More" }, wait: wait.quiescent(1500) },
     // Settings sits below the fold on the More list — the scroll is load-bearing, not decorative.
     { id: "more-scroll", label: "Scroll the More list",

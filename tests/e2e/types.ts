@@ -35,12 +35,13 @@ type Action =
 export type StateCondition =
   | { kind: "activity"; component: string }
   | { kind: "text"; text: string }
-  | { kind: "text-absent"; text: string };
+  | { kind: "text-absent"; text: string }
+  | { kind: "perf"; counter: string; atLeast: number };
 
 export type WaitPolicy =
   | { kind: "state"; condition: StateCondition; maxVirtualMs: number; maxRealMs: number }
   | { kind: "quiescent"; maxVirtualMs: number; maxRealMs: number }
-  | { kind: "sample"; atVirtualMs: number; maxRealMs: number }
+  | { kind: "sample"; atVirtualMs: number; maxRealMs: number; minRealMs: number }
   | { kind: "live"; horizonMs: number; timeoutMs: number; sample: boolean };
 
 export type EvidencePolicy =
@@ -54,8 +55,8 @@ export const wait = {
     ({ kind: "state", condition, maxVirtualMs, maxRealMs }),
   quiescent: (maxVirtualMs = 0, maxRealMs = REAL_WAIT_MS): WaitPolicy =>
     ({ kind: "quiescent", maxVirtualMs, maxRealMs }),
-  sample: (atVirtualMs = 0, maxRealMs = REAL_WAIT_MS): WaitPolicy =>
-    ({ kind: "sample", atVirtualMs, maxRealMs }),
+  sample: (atVirtualMs = 0, maxRealMs = REAL_WAIT_MS, minRealMs = 0): WaitPolicy =>
+    ({ kind: "sample", atVirtualMs, maxRealMs, minRealMs }),
   live: (horizonMs = 0, timeoutMs = REAL_WAIT_MS): WaitPolicy =>
     ({ kind: "live", horizonMs, timeoutMs, sample: false }),
   liveSample: (horizonMs = 0, timeoutMs = REAL_WAIT_MS): WaitPolicy =>
@@ -89,9 +90,11 @@ export type Flow = {
   /** Frame-rate gate for motion checkpoints; a step below it is flagged SLOW. */
   minFps?: number;
   /** Controlled flows may advance Android-visible time in fast mode. Live flows never do. */
-  clock: "controlled" | "live";
+  clock: "controlled" | "pinned" | "live";
   /** Steps that retain pixels in fast mode. Every step still captures in the full visual lane. */
   fastCheckpoints: readonly string[];
+  /** Maximum golden content diff at fast checkpoints, retained from the starting revision. */
+  fastVisualLimits?: Readonly<Record<string, number>>;
   /** The geometry positional taps were measured at. A flow with no goldens runs at it, since a
    *  normalized coordinate only lands on the same view at the same size. */
   screen?: Screen;
@@ -132,6 +135,8 @@ export function validateFlow(flow: Flow): void {
   }
   for (const id of flow.fastCheckpoints)
     if (!ids.has(id)) throw new Error(`${flow.app}: unknown fast checkpoint "${id}"`);
+  for (const id of Object.keys(flow.fastVisualLimits ?? {}))
+    if (!flow.fastCheckpoints.includes(id)) throw new Error(`${flow.app}: visual limit is not a fast checkpoint "${id}"`);
 }
 
 /**

@@ -38,6 +38,7 @@ export const fitnotes: Flow = {
   crop: { top: 48, bottom: 48, left: 0, right: 0 },
   clock: "controlled",
   fastCheckpoints: ["home-final"],
+  fastVisualLimits: { "home-final": 22 },
   steps: [
     { id: "launch", label: "Launch — welcome dialog", action: { type: "launch" }, wait: wait.quiescent(1500) },
     { id: "unit-metric", label: "Choose Metric (kgs)", action: { type: "tapText", text: "Metric (kgs)" }, wait: wait.quiescent() },

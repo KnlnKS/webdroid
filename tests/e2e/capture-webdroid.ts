@@ -87,13 +87,14 @@ export function prefsStorage(pkg: string, xml: string): [string, string] {
 
 /** A browser prepared for one flow: the goldens' geometry (unless the run is pinned elsewhere
  *  to measure cost), the flow's clock, and its seed prefs already in storage. */
-export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = false, controlled = false): Promise<WebdroidDriver> {
+export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = false, controlled = false, coverage = false): Promise<WebdroidDriver> {
   return WebdroidDriver.launch({
     screen: parseScreen(ENV_SCREEN) ?? screenOf(manifest, flow.screen),
     fixedMs: flow.clock === "live" ? null : PINNED_CLOCK_MS,
     storage: flow.seedPrefs ? [prefsStorage(flow.pkg, flow.seedPrefs)] : [],
     shots,
     controlled,
+    coverage,
   });
 }
 
@@ -117,13 +118,18 @@ export function actOf(flow: Flow, step: Step, rec?: RecordedStep): Act {
 export function runStep(drv: WebdroidDriver, flow: Flow, step: Step, rec?: RecordedStep, mode: CaptureMode = "full"): Promise<StepResult> {
   const evidence = evidenceOf(flow, step);
   const capture = mode === "full" || evidence.kind !== "semantic";
+  const horizonMs = mode === "fast" && evidence.kind === "semantic" && step.wait.kind === "quiescent"
+    ? 0
+    : waitHorizonMs(step.wait);
   const semanticSettle = mode === "fast" && evidence.kind === "semantic"
     ? { stableMs: 50, intervalMs: 50, stableFrames: 2 }
     : {};
   return drv.step(actOf(flow, step, rec), {
-    horizonMs: waitHorizonMs(step.wait),
+    horizonMs,
     sample: isMotionWait(step.wait),
     timeoutMs: waitTimeoutMs(step.wait),
+    minRealMs: step.wait.kind === "sample" ? step.wait.minRealMs : 0,
+    condition: step.wait.kind === "state" ? step.wait.condition : undefined,
     ...semanticSettle,
   }, capture, mode === "fast" && flow.clock === "controlled");
 }

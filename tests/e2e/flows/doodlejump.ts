@@ -13,7 +13,7 @@ export const doodlejump: Flow = {
   apk: "DoodleJumpChrismas.apk",
   crop: { top: 0, bottom: 48, left: 0, right: 0 },
   minFps: 30,
-  clock: "controlled",
+  clock: "pinned",
   fastCheckpoints: ["title", "playing"],
   steps: [
     { id: "launch", label: "Launch — loader", action: { type: "launch" }, wait: wait.sample(3000) },
