@@ -3,7 +3,7 @@ import { androidTool } from "../android-sdk";
 import { readProcesses } from "../../tests/e2e/lib/processes";
 import { serveCases } from "./case-server";
 import type { ProbeCase, ProbeResult } from "./model";
-import { startWebdroid } from "./webdroid-session";
+import { isWebdroidProcessFrame, startWebdroid } from "./webdroid-session";
 
 const PROBE_APK = "fuzz-cache/WebdroidFuzzProbe.apk";
 const PROBE_PACKAGE = "org.webdroid.fuzz";
@@ -60,13 +60,13 @@ export async function runWebdroid(cases: readonly ProbeCase[], port = 4097): Pro
     const { origin, page, errors } = session;
     const results = await caseServer.results;
     let processes = await readProcesses(page);
-    let processFrames = processes.filter((process) => process.url.startsWith(`${origin}/?`) || process.url.startsWith(`${origin}/process`));
+    let processFrames = processes.filter((process) => isWebdroidProcessFrame(process.url, origin));
     let missingDiagnostics = processFrames.filter((process) => process.diagnostics === null ||
       (typeof process.diagnostics === "object" && process.diagnostics !== null && "failure" in process.diagnostics));
     for (let attempt = 0; missingDiagnostics.length && attempt < 10; attempt++) {
       await Bun.sleep(250);
       processes = await readProcesses(page);
-      processFrames = processes.filter((process) => process.url.startsWith(`${origin}/?`) || process.url.startsWith(`${origin}/process`));
+      processFrames = processes.filter((process) => isWebdroidProcessFrame(process.url, origin));
       missingDiagnostics = processFrames.filter((process) => process.diagnostics === null ||
         (typeof process.diagnostics === "object" && process.diagnostics !== null && "failure" in process.diagnostics));
     }

@@ -11,7 +11,7 @@ import { readProcesses } from "../../tests/e2e/lib/processes";
 import type { UiNode } from "../../tests/e2e/types";
 import { Random } from "./random";
 import { generateUiAction, matchIdentity, semanticKeys, type UiAction } from "./ui-model";
-import { startWebdroid } from "./webdroid-session";
+import { isWebdroidProcessFrame, startWebdroid } from "./webdroid-session";
 import type { Failure } from "./model";
 import { injectedUiFailure } from "./injected";
 
@@ -278,7 +278,7 @@ async function runApk(app: Metadata, options: UiOptions, apkIndex: number, fixed
         webScreenshot(session.page), readProcesses(session.page), session.page.evaluate(() => globalThis.wd.alive(2_000)),
         session.page.evaluate(() => globalThis.wd.uiTree() as UiNode[]),
       ]);
-      const relevant = processes.filter((process) => process.url.startsWith(session.origin));
+      const relevant = processes.filter((process) => isWebdroidProcessFrame(process.url, session.origin));
       if (!relevant.length || relevant.some((process) => !process.diagnostics || "failure" in process.diagnostics))
         throw new Error(`missing process telemetry at UI step ${index}`);
       const signals = processSignals(relevant);

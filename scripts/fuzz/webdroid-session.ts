@@ -9,6 +9,9 @@ export type WebdroidSession = {
   close(): Promise<void>;
 };
 
+export const isWebdroidProcessFrame = (url: string, origin: string): boolean =>
+  url.startsWith(`${origin}/?`) || url.startsWith(`${origin}/process`);
+
 async function waitForServer(url: string, child: ReturnType<typeof Bun.spawn>): Promise<void> {
   for (let attempt = 0; attempt < 1_200; attempt++) {
     if (child.exitCode !== null) throw new Error(`webdroid server exited with ${child.exitCode}`);
