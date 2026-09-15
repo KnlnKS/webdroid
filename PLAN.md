@@ -1,7 +1,7 @@
 # Trace-directed fast testing redesign — plan
 
 Starting revision: `e75c7c5`. Planning branch: `codex/trace-directed-testing-plan`.
-Status: implemented; final verification in progress.
+Status: complete.
 
 ## Objective
 
@@ -314,6 +314,32 @@ is frozen:
 Inspect every `run.json`, including child-process diagnostics, settle/completion reasons, advancing
 ticks, rendered state, new missing APIs, new errors, native requirements, and phase timings. Report
 network-content drift separately from deterministic regressions; it is not a waiver.
+
+### Result
+
+The frozen fast lane completed all 82 deterministic actions in 85.7, 85.8, and 86.2 seconds.
+Its 85.8-second median is 30.2% below the retained 123.0-second baseline and clears the 20%
+retention gate, though it does not reach the 45-second stretch target. Doodle Jump and Flappy Bird
+deliberately retain real scheduling because controlled scheduling changed their observed native
+game state; together they account for roughly 47 seconds. Default evidence fell from 64 MiB to
+6.0 MiB across 22 files. A representative SQLite change completed `test:focused` in 20.1 seconds.
+
+The final matrix passes typecheck and 1,232 tests with 26,589 assertions. Five affected APKs
+smoke-compile with zero method failures, all eight runnable framework exercises pass with 295/363
+declared natives covered, and FitNotes text comparison is 6/6. The serialized full browser matrix
+exits zero after all 159 steps in 812.1 seconds, with no wedged main loop or required native
+delegate and no golden changes. The two established YouTube settle timeouts and documented
+TikTok, YouTube, Lichess, and Mihon diagnostics remain visible. The corpus renders 20/20 APKs and
+retains 45 distinct compatibility gaps.
+
+Three alternating Calculator pairs at the established phase-decorrelated 1,003 ms input cadence
+compare the starting revision with the frozen candidate. Median launch action changes from 612.12
+to 605.62 ms (-1.06%), renderer task time from 90.21 to 89.69 ms/s (-0.57%), p95
+input-to-presentation opportunity from 14.5 to 14.4 ms (-0.69%), and post-GC heap from 207.83 to
+208.08 MiB (+0.12%). Every sample completes all inputs, stays visible and alive, advances
+rendering, and reports no error. A preliminary exact-1,000 ms cadence aliased with frame phase and
+produced an unstable 10.0 to 12.1 ms p95; it is retained as an evidence limit rather than mixed
+into the predefined phase-decorrelated comparison.
 
 ## Principal risks
 

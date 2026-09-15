@@ -4602,8 +4602,9 @@ Compose startup and the two native GL games did not preserve their observed scre
 time, so those flows deliberately keep fixed `Date` with real scheduling rather than accepting a
 faster but different state.
 
-The first serialized candidate run completes 82/82 actions in 85.7 seconds versus the retained
-123.0-second artifact (30.3% faster). It writes 6.0 MiB by default versus 64 MiB, with no new runtime
+Three frozen serialized candidate runs complete 82/82 actions in 85.7, 85.8, and 86.2 seconds.
+Their 85.8-second median is 30.2% below the retained 123.0-second artifact. The lane writes 6.0 MiB
+across 22 files by default versus 64 MiB, with no new runtime
 missing APIs, native requirements, errors, or wedges. The 45-second stretch target is not reached;
 the retained improvement clears the plan's 20% fallback gate, and native game sampling accounts for
 roughly 47 of the remaining seconds.
@@ -4616,3 +4617,28 @@ the complete deterministic lane for missing, partial, changed-fixture, uncovered
 inputs. V8 instrumentation starves Doodle Jump's long-running native main-loop job, so that flow is
 executed uninstrumented and recorded as unsupported; files without sound coverage widen safely.
 Coverage is absent from normal and performance runs.
+
+The committed index covers all six deterministic flows and maps 167 repository source files;
+Doodle Jump is explicitly unsupported by V8 instrumentation and therefore widens rather than
+claiming incomplete coverage. A representative `src/android/sqlite.ts` selection runs 262 owning
+unit tests and five selected fast flows in 20.1 seconds. Unknown, stale, generated, critical-root,
+and uninstrumented inputs select the complete deterministic lane.
+
+Final verification passes typecheck and 1,232 tests with 26,589 assertions. FitNotes, Mihon,
+Flappy Bird, Calculator, and Doodle Jump smoke-compile with zero method failures; all eight runnable
+framework exercises pass with 295/363 declared natives covered; and FitNotes text comparison is
+6/6. The real-time browser matrix completes all 12 flows and 159 steps in 812.1 seconds with no
+wedged main loop or required native delegate and no golden changes. It retains the two known
+YouTube settle timeouts and established TikTok, YouTube, Lichess, and Mihon findings. The corpus
+renders 20/20 APKs and retains 45 distinct gaps.
+
+Three serial alternating Calculator pairs compare starting revision `e75c7c5` with the frozen
+candidate using 15-second windows, a three-second warmup, and the established phase-decorrelated
+1,003 ms input cadence. Median launch action is 612.12 -> 605.62 ms (-1.06%), main renderer
+TaskDuration is 90.21 -> 89.69 ms/s (-0.57%), p95 input-to-next-presentation opportunity is 14.5
+-> 14.4 ms (-0.69%), and post-GC heap is 207.83 -> 208.08 MiB (+0.12%). All six windows complete
+14/14 inputs, remain visible and alive, advance ticks and presentations, and report no page or
+action error. An initial exact-1,000 ms triplet produced 10.0 -> 12.1 ms p95 because the inputs
+repeatedly sampled the same frame phase; it is not mixed into the phase-decorrelated acceptance
+series and remains an explicit sensitivity limit. Production mode carries neither controlled time
+nor precise-coverage collection.
