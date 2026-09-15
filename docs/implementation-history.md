@@ -4330,3 +4330,38 @@ diagnostic. The full matrix sees one historically observed Resy OkHttp timeout
 executor exception; matched baseline and candidate repeats both render 13/13
 without reproducing it, so it is retained as a live-network outlier rather than a
 regression waiver.
+
+## 2026-09-14: zlib checksums in the Wasm core
+
+Commit `d8fde0a` binds the existing `libz.so` `crc32` and `adler32` exports to the
+native core. Guest calls now read guest memory and update their incremental state
+inside the same Wasm invocation instead of exiting through the JavaScript host
+dispatcher. Null-buffer seed behavior remains compatible with the existing zlib
+delegates. Browser-side inflate/deflate still needs the JavaScript helpers, so
+those are not duplicate dead code. Doodle Jump contains an unresolved `crc32`
+import; its observed startup window did not call it, so that import is reachability
+evidence rather than an application-level performance measurement.
+
+The CRC uses a generated slicing-by-8 table. The Zig standard library's byte-at-a-
+time CRC was about 15% slower than the JavaScript delegate in a Chrome kernel
+benchmark and was discarded. Slicing-by-4 reduced the shipped core by about 4.2
+KiB but reduced large-buffer CRC speedup from about 3.5x to 2.5x, so it was also
+discarded. The retained ReleaseFast core is 302,133 bytes versus 292,182 bytes at
+the starting revision: +9,951 bytes (+3.4%).
+
+Headless Chrome medians include alternating order and warmup. Direct checksum
+kernel throughput at 4 KiB / 64 KiB / 1 MiB is about 3.50x / 3.51x / 3.52x the
+JavaScript CRC and 8.26x / 8.30x / 8.36x the JavaScript Adler implementation. A
+second benchmark drives the actual guest trampoline. Avoiding the Wasm-to-JS host
+exit is already faster for one-byte calls; at 4 KiB / 64 KiB / 1 MiB, CRC is
+2.91x / 3.49x / 3.67x faster and Adler is 5.82x / 8.41x / 8.81x faster. These are
+isolated checksum measurements, not whole-application speedups. Ignored benchmark
+sources and raw output remain under `webdroid-shots/checksum-wasm/`.
+
+Final verification after production code froze: typecheck; 1214 tests / 26494
+assertions; ARM32 Doodle Jump and ARM64 Lichess eager smoke compilation with zero
+method failures; and all eight runnable framework exercises. The serialized E2E
+run exits zero for 12 flows / 159 steps. All steps render, no main loop wedges and
+no native requirement or checksum fault is reported. Its two YouTube settle
+timeouts and the existing TikTok, YouTube, Lichess and window-extension
+diagnostics match the recorded platform limits rather than this dispatch change.
