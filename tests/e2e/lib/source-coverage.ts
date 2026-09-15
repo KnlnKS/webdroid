@@ -67,8 +67,8 @@ function lowerBound(points: MappingPoint[], offset: number): number {
 
 export function executedSources(points: MappingPoint[], functions: CoverageFunction[]): string[] {
   const files = new Set<string>();
-  for (const [index, fn] of functions.entries()) {
-    if (index === 0 && !fn.functionName) continue;
+  for (const fn of functions) {
+    if (!fn.functionName) continue;
     for (const range of fn.ranges) {
       if (!range.count) continue;
       for (let i = lowerBound(points, range.startOffset); i < points.length && points[i]!.offset < range.endOffset; i++) {
