@@ -14,7 +14,7 @@ function fail(msg: string, known: Flow[]): never {
  */
 function resolve(name: string, known: Flow[]): Flow[] {
   const n = name.trim();
-  if (!n) fail("empty flow name");
+  if (!n) fail("empty flow name", known);
   const exact = known.find((f) => f.app === n);
   if (exact) return [exact];
   const prefixed = known.filter((f) => f.app.startsWith(n));

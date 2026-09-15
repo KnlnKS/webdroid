@@ -138,7 +138,7 @@ function condWait(cpu: Cpu, cond: number, mutex: number, timeoutMs: number | nul
   if (!list) conds.set(cond, (list = []));
   const L = list;
   return new Promise<boolean>((res) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: ReturnType<typeof parkTimeout> | undefined;
     const wake = (timedOut: boolean) => { unparkTimeout(timer); res(timedOut); };
     L.push(wake);
     if (timed(timeoutMs) !== null) timer = parkTimeout(() => { const i = L.indexOf(wake); if (i >= 0) L.splice(i, 1); res(true); }, Math.max(0, timeoutMs!));

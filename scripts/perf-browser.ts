@@ -9,7 +9,7 @@ import { CONTEXT_OPTS, launchBrowser } from "../tests/e2e/drivers/webdroid";
 import { environmentScript, performAction } from "../tests/e2e/lib/actions";
 import { readProcesses } from "../tests/e2e/lib/processes";
 import { probeScript } from "../tests/e2e/lib/probe";
-import { PINNED_CLOCK_MS, screenOf, screenParam } from "../tests/e2e/types";
+import { PINNED_CLOCK_MS, screenOf, screenParam, waitHorizonMs } from "../tests/e2e/types";
 
 const { values } = parseArgs({ options: {
   flow: { type: "string" }, after: { type: "string" }, exercise: { type: "string" },
@@ -68,7 +68,7 @@ const screen = screenOf(manifest, flow.screen);
 const browser = await launchBrowser(gpu);
 try {
   const context = await browser.newContext(CONTEXT_OPTS);
-  const cfg = { fixedMs: flow.liveClock ? null : PINNED_CLOCK_MS,
+  const cfg = { fixedMs: flow.clock === "live" ? null : PINNED_CLOCK_MS,
     storage: flow.seedPrefs ? [prefsStorage(flow.pkg, flow.seedPrefs)] : [], shots: false };
   await context.addInitScript({ content: values.probe ? probeScript(cfg) : environmentScript(cfg) });
   const page = await context.newPage();
@@ -92,7 +92,8 @@ try {
     const started = performance.now();
     const hit = await page.evaluate(performAction, { a: actOf(flow, step, rec), screen, deadlineMs: 60000 });
     const actionMs = performance.now() - started;
-    await page.waitForTimeout(setupSettleCap === undefined ? step.settleDelayMs ?? 500 : Math.min(step.settleDelayMs ?? 500, setupSettleCap));
+    const horizonMs = waitHorizonMs(step.wait);
+    await page.waitForTimeout(setupSettleCap === undefined ? horizonMs : Math.min(horizonMs, setupSettleCap));
     const setupMs = performance.now() - started;
     const perf = values["setup-shots"] ? await page.evaluate(() => ({ ...globalThis.wd.perf })) : undefined;
     setup.push({ step: step.id, ms: setupMs, actionMs, hit, ...(perf ? { perf } : {}) });

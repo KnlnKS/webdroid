@@ -20,7 +20,7 @@ for (const [i, step] of flow.steps.entries()) {
   if (r.error) console.log("  ERR", r.error);
   const alive = !r.wedged;
   console.log(`${String(i).padStart(2, "0")} ${step.label}${r.semanticHit === false ? " [coord-fallback]" : ""} settle=${Math.round(r.settled.ms)}ms ${r.settled.how}${alive ? "" : "  *** WEDGED ***"}`);
-  await Bun.write(`${outDir}/${String(i).padStart(2, "0")}.png`, Buffer.from(r.png, "base64"));
+  if (r.png) await Bun.write(`${outDir}/${String(i).padStart(2, "0")}.png`, Buffer.from(r.png, "base64"));
   if (!alive) {
     const a0 = Date.now();
     const ok2 = await drv.alive(30000);
