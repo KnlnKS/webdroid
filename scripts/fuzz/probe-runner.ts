@@ -58,14 +58,8 @@ export async function runAndroid(cases: readonly ProbeCase[], serial: string): P
   }
 }
 
-export async function runWebdroid(cases: readonly ProbeCase[]): Promise<PlatformRun> {
-  requireProbe();
-  const caseServer = serveCases(cases);
-  let session: Awaited<ReturnType<typeof startWebdroid>> | undefined;
-  try {
-    session = await startWebdroid(PROBE_APK, { proxyProbeTo: caseServer.url });
+async function webdroidRun(session: Awaited<ReturnType<typeof startWebdroid>>, results: ProbeResult[]): Promise<PlatformRun> {
     const { origin, page, errors } = session;
-    const results = await caseServer.results;
     let processes = await readProcesses(page);
     let processFrames = processes.filter((process) => isWebdroidProcessFrame(process.url, origin));
     let missingDiagnostics = processFrames.filter((process) => process.diagnostics.status !== "ok");
@@ -83,8 +77,40 @@ export async function runWebdroid(cases: readonly ProbeCase[]): Promise<Platform
       environment: { origin, userAgent: await page.evaluate(() => navigator.userAgent) },
       diagnostics: { alive, errors, processes: processFrames },
     };
+}
+
+export class WebdroidProbeRunner {
+  private session?: Awaited<ReturnType<typeof startWebdroid>>;
+  private casePort?: number;
+
+  async run(cases: readonly ProbeCase[]): Promise<PlatformRun> {
+    requireProbe();
+    const caseServer = serveCases(cases, this.casePort ?? 0);
+    this.casePort = Number(new URL(caseServer.url).port);
+    try {
+      if (!this.session) this.session = await startWebdroid(PROBE_APK, { proxyProbeTo: caseServer.url });
+      else {
+        this.session.errors.length = 0;
+        await this.session.page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 });
+        await this.session.page.waitForFunction(() => Boolean(globalThis.wd?.app()), null, { timeout: 60_000 });
+      }
+      return await webdroidRun(this.session, await caseServer.results);
+    } finally {
+      caseServer.stop();
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.session?.close();
+    this.session = undefined;
+  }
+}
+
+export async function runWebdroid(cases: readonly ProbeCase[]): Promise<PlatformRun> {
+  const runner = new WebdroidProbeRunner();
+  try {
+    return await runner.run(cases);
   } finally {
-    caseServer.stop();
-    await session?.close();
+    await runner.close();
   }
 }

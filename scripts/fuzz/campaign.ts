@@ -3,7 +3,7 @@ import { compareResult } from "./compare";
 import { generateApiCases, generateGraphicsCases } from "./generate";
 import { minimizeCaseBatched, reproducesTwice } from "./minimize";
 import { sameFailure, validateFailure, validateProbeCase, validateProbeResult, type Failure, type ProbeCase, type ProbeResult } from "./model";
-import { runAndroid, runWebdroid, type PlatformRun } from "./probe-runner";
+import { runAndroid, runWebdroid, WebdroidProbeRunner, type PlatformRun } from "./probe-runner";
 import { injectedProbeFailure } from "./injected";
 
 export type ProbeObservation = {
@@ -26,27 +26,34 @@ export type FailureBundle = {
 
 type CampaignOptions = { kind: "api" | "graphics"; seed: number; cases: number; oracle: string; out: string };
 
-async function pair(cases: readonly ProbeCase[], serial: string): Promise<[PlatformRun, PlatformRun]> {
-  const oracle = await runAndroid(cases, serial);
-  const webdroid = await runWebdroid(cases);
-  return [oracle, webdroid];
+async function pair(cases: readonly ProbeCase[], serial: string, webRunner?: WebdroidProbeRunner): Promise<[PlatformRun, PlatformRun]> {
+  return Promise.all([runAndroid(cases, serial), webRunner ? webRunner.run(cases) : runWebdroid(cases)]);
 }
 
 function failureFor(input: ProbeCase, oracle: ProbeResult, webdroid: ProbeResult): Failure | null {
   return compareResult(input, oracle, webdroid);
 }
 
-async function replayFailure(input: ProbeCase, serial: string, expected: Failure): Promise<ProbeObservation | null> {
-  const [oracle, webdroid] = await pair([input], serial);
+async function replayFailure(input: ProbeCase, serial: string, expected: Failure, webRunner?: WebdroidProbeRunner): Promise<ProbeObservation | null> {
+  const [oracle, webdroid] = await pair([input], serial, webRunner);
   const failure = failureFor(input, oracle.results[0]!, webdroid.results[0]!);
   return sameFailure(expected, failure) ? { input, failure: failure!, oracle: oracle.results[0]!, webdroid: webdroid.results[0]! } : null;
 }
 
 export async function runCampaign(options: CampaignOptions): Promise<{ failures: number; bundles: string[] }> {
+  const webRunner = new WebdroidProbeRunner();
+  try {
+    return await runCampaignWithRunner(options, webRunner);
+  } finally {
+    await webRunner.close();
+  }
+}
+
+async function runCampaignWithRunner(options: CampaignOptions, webRunner: WebdroidProbeRunner): Promise<{ failures: number; bundles: string[] }> {
   const inputs = options.kind === "api"
     ? generateApiCases(options.seed, options.cases)
     : generateGraphicsCases(options.seed, options.cases);
-  const [oracle, webdroid] = await pair(inputs, options.oracle);
+  const [oracle, webdroid] = await pair(inputs, options.oracle, webRunner);
   const failures = inputs.flatMap((input, index) => {
     const failure = failureFor(input, oracle.results[index]!, webdroid.results[index]!);
     return failure ? [{ input, failure, oracle: oracle.results[index]!, webdroid: webdroid.results[index]! }] : [];
@@ -60,12 +67,12 @@ export async function runCampaign(options: CampaignOptions): Promise<{ failures:
     attempted.add(item.failure.fingerprint);
     const minimized = await minimizeCaseBatched(item.input, async (candidates) => {
       const uniquelyNamed = candidates.map((candidate, index) => ({ ...candidate, id: `${candidate.id}-min-${index}` }));
-      const [candidateOracle, candidateWebdroid] = await pair(uniquelyNamed, options.oracle);
+      const [candidateOracle, candidateWebdroid] = await pair(uniquelyNamed, options.oracle, webRunner);
       return uniquelyNamed.map((candidate, index) => sameFailure(item.failure,
         failureFor(candidate, candidateOracle.results[index]!, candidateWebdroid.results[index]!)));
     });
-    const first = await replayFailure(minimized, options.oracle, item.failure);
-    const second = await replayFailure(minimized, options.oracle, item.failure);
+    const first = await replayFailure(minimized, options.oracle, item.failure, webRunner);
+    const second = await replayFailure(minimized, options.oracle, item.failure, webRunner);
     if (!first || !second || first.failure.fingerprint !== second.failure.fingerprint) continue;
     if (seen.has(first.failure.fingerprint)) continue;
     seen.add(first.failure.fingerprint);
