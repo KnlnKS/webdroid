@@ -1,8 +1,8 @@
 {
-  "generatedAt": "2026-09-15T10:04:33.306Z",
+  "generatedAt": "2026-09-15T19:10:38.550Z",
   "complete": true,
-  "sourceRevision": "1d4ca262ee706434bec96a333057a7385152f97b",
-  "schemaHash": "5a3ec9e444d6f0aaf5b84790542259723e100221d0fa3d9fbfc2fc8df4ac4b7d",
+  "sourceRevision": "7c4b6c5ec0f99a40ca2021a8f998df9205da9e9e",
+  "schemaHash": "8f3102ab406d5140d90d95d7eadf4b71b1d78cb7160245488b13f6e2ee8962cc",
   "browser": "151.0.7922.34",
   "mode": "v8-precise-sourcemap",
   "apkHashes": {
@@ -14,8 +14,8 @@
     "doodlejump": "eb0c6ef4488322c9525a1e5a14579e0062e610adfd0a2486aa8169f3caad624b"
   },
   "screens": {
-    "mihon-onboarding": "720x1280@320",
     "fitnotes": "720x1280@320",
+    "mihon-onboarding": "720x1280@320",
     "mihon-app": "720x1280@320",
     "flappybird": "1080x2160@480",
     "calculatorm": "1080x2424@480",
@@ -25,6 +25,149 @@
     "doodlejump"
   ],
   "flows": {
+    "fitnotes": [
+      "src/android/accounts.ts",
+      "src/android/alarm.ts",
+      "src/android/apksignature.ts",
+      "src/android/app.ts",
+      "src/android/apphost.ts",
+      "src/android/arsc.ts",
+      "src/android/axml.ts",
+      "src/android/bidiformatter.ts",
+      "src/android/binder.ts",
+      "src/android/broadcast.ts",
+      "src/android/compat.ts",
+      "src/android/conscrypt.ts",
+      "src/android/contentresolver.ts",
+      "src/android/context.ts",
+      "src/android/cookies.ts",
+      "src/android/decor.ts",
+      "src/android/delegates.ts",
+      "src/android/dialog.ts",
+      "src/android/documents.ts",
+      "src/android/drawable.ts",
+      "src/android/fragment.ts",
+      "src/android/framework.ts",
+      "src/android/gl.ts",
+      "src/android/glview.ts",
+      "src/android/graphics.ts",
+      "src/android/gravity.ts",
+      "src/android/handles.ts",
+      "src/android/hardware.ts",
+      "src/android/imageview.ts",
+      "src/android/ime.ts",
+      "src/android/inflate.ts",
+      "src/android/intent-filter.ts",
+      "src/android/intent.ts",
+      "src/android/intentipc.ts",
+      "src/android/intentservice.ts",
+      "src/android/job.ts",
+      "src/android/layouts.ts",
+      "src/android/lifecycle.ts",
+      "src/android/listview.ts",
+      "src/android/mainloop.ts",
+      "src/android/media.ts",
+      "src/android/menu.ts",
+      "src/android/messenger.ts",
+      "src/android/motionevent.ts",
+      "src/android/net.ts",
+      "src/android/notification.ts",
+      "src/android/os.ts",
+      "src/android/packagearchive.ts",
+      "src/android/packages.ts",
+      "src/android/parcel.ts",
+      "src/android/path.ts",
+      "src/android/pendingintent.ts",
+      "src/android/pm.ts",
+      "src/android/popup.ts",
+      "src/android/preference.ts",
+      "src/android/provider.ts",
+      "src/android/provideripc.ts",
+      "src/android/res.ts",
+      "src/android/resnative.ts",
+      "src/android/runningservices.ts",
+      "src/android/searchview.ts",
+      "src/android/security.ts",
+      "src/android/sharedprefs.ts",
+      "src/android/sqlite.ts",
+      "src/android/text.ts",
+      "src/android/textview-layout.ts",
+      "src/android/textview.ts",
+      "src/android/util.ts",
+      "src/android/view.ts",
+      "src/android/webkit.ts",
+      "src/android/widget.ts",
+      "src/android/window.ts",
+      "src/android/windowinsets.ts",
+      "src/guest-clock.ts",
+      "src/jvm/abi.ts",
+      "src/jvm/bidi.ts",
+      "src/jvm/charset.ts",
+      "src/jvm/cold.ts",
+      "src/jvm/compiler.ts",
+      "src/jvm/coverage.ts",
+      "src/jvm/dex.ts",
+      "src/jvm/monitor.ts",
+      "src/jvm/natives/jchars.ts",
+      "src/jvm/natives/jconc.ts",
+      "src/jvm/natives/jec.ts",
+      "src/jvm/natives/jio.ts",
+      "src/jvm/natives/jjson.ts",
+      "src/jvm/natives/jlang.ts",
+      "src/jvm/natives/jlogging.ts",
+      "src/jvm/natives/jmath.ts",
+      "src/jvm/natives/jnet.ts",
+      "src/jvm/natives/jnio.ts",
+      "src/jvm/natives/jobjectstream.ts",
+      "src/jvm/natives/jrandom.ts",
+      "src/jvm/natives/jreflect.ts",
+      "src/jvm/natives/jrsa.ts",
+      "src/jvm/natives/jsec.ts",
+      "src/jvm/natives/jtext.ts",
+      "src/jvm/natives/jtime.ts",
+      "src/jvm/natives/junicode.ts",
+      "src/jvm/natives/jutil.ts",
+      "src/jvm/natives/jvalues.ts",
+      "src/jvm/natives/jwrappers.ts",
+      "src/jvm/natives/jzip.ts",
+      "src/jvm/opcodes.ts",
+      "src/jvm/prepared.ts",
+      "src/jvm/profile.ts",
+      "src/jvm/provenance.ts",
+      "src/jvm/runtime.ts",
+      "src/jvm/serial-descriptor.ts",
+      "src/jvm/yield.ts",
+      "src/main.ts",
+      "src/native/core.ts",
+      "src/native/cpu.ts",
+      "src/native/egl-current.ts",
+      "src/native/gles1.ts",
+      "src/native/mem.ts",
+      "src/native/net.ts",
+      "src/native/pthread.ts",
+      "src/perf.ts",
+      "src/process.ts",
+      "src/shell/accounts.ts",
+      "src/shell/activitytasks.ts",
+      "src/shell/alarms.ts",
+      "src/shell/cacerts.ts",
+      "src/shell/config.ts",
+      "src/shell/device.ts",
+      "src/shell/geolocation.ts",
+      "src/shell/hostfs.ts",
+      "src/shell/idb.ts",
+      "src/shell/input.ts",
+      "src/shell/install.ts",
+      "src/shell/lazyfile.ts",
+      "src/shell/packages.ts",
+      "src/shell/packedarchive.ts",
+      "src/shell/pendingintents.ts",
+      "src/shell/privatefiles.ts",
+      "src/shell/processes.ts",
+      "src/shell/procfs.ts",
+      "src/shell/provision.ts",
+      "src/shell/relay.ts"
+    ],
     "mihon-onboarding": [
       "src/android/accounts.ts",
       "src/android/alarm.ts",
@@ -183,149 +326,6 @@
       "src/shell/provision.ts",
       "src/shell/relay.ts",
       "src/shell/webcookies.ts"
-    ],
-    "fitnotes": [
-      "src/android/accounts.ts",
-      "src/android/alarm.ts",
-      "src/android/apksignature.ts",
-      "src/android/app.ts",
-      "src/android/apphost.ts",
-      "src/android/arsc.ts",
-      "src/android/axml.ts",
-      "src/android/bidiformatter.ts",
-      "src/android/binder.ts",
-      "src/android/broadcast.ts",
-      "src/android/compat.ts",
-      "src/android/conscrypt.ts",
-      "src/android/contentresolver.ts",
-      "src/android/context.ts",
-      "src/android/cookies.ts",
-      "src/android/decor.ts",
-      "src/android/delegates.ts",
-      "src/android/dialog.ts",
-      "src/android/documents.ts",
-      "src/android/drawable.ts",
-      "src/android/fragment.ts",
-      "src/android/framework.ts",
-      "src/android/gl.ts",
-      "src/android/glview.ts",
-      "src/android/graphics.ts",
-      "src/android/gravity.ts",
-      "src/android/handles.ts",
-      "src/android/hardware.ts",
-      "src/android/imageview.ts",
-      "src/android/ime.ts",
-      "src/android/inflate.ts",
-      "src/android/intent-filter.ts",
-      "src/android/intent.ts",
-      "src/android/intentipc.ts",
-      "src/android/intentservice.ts",
-      "src/android/job.ts",
-      "src/android/layouts.ts",
-      "src/android/lifecycle.ts",
-      "src/android/listview.ts",
-      "src/android/mainloop.ts",
-      "src/android/media.ts",
-      "src/android/menu.ts",
-      "src/android/messenger.ts",
-      "src/android/motionevent.ts",
-      "src/android/net.ts",
-      "src/android/notification.ts",
-      "src/android/os.ts",
-      "src/android/packagearchive.ts",
-      "src/android/packages.ts",
-      "src/android/parcel.ts",
-      "src/android/path.ts",
-      "src/android/pendingintent.ts",
-      "src/android/pm.ts",
-      "src/android/popup.ts",
-      "src/android/preference.ts",
-      "src/android/provider.ts",
-      "src/android/provideripc.ts",
-      "src/android/res.ts",
-      "src/android/resnative.ts",
-      "src/android/runningservices.ts",
-      "src/android/searchview.ts",
-      "src/android/security.ts",
-      "src/android/sharedprefs.ts",
-      "src/android/sqlite.ts",
-      "src/android/text.ts",
-      "src/android/textview-layout.ts",
-      "src/android/textview.ts",
-      "src/android/util.ts",
-      "src/android/view.ts",
-      "src/android/webkit.ts",
-      "src/android/widget.ts",
-      "src/android/window.ts",
-      "src/android/windowinsets.ts",
-      "src/guest-clock.ts",
-      "src/jvm/abi.ts",
-      "src/jvm/bidi.ts",
-      "src/jvm/charset.ts",
-      "src/jvm/cold.ts",
-      "src/jvm/compiler.ts",
-      "src/jvm/coverage.ts",
-      "src/jvm/dex.ts",
-      "src/jvm/monitor.ts",
-      "src/jvm/natives/jchars.ts",
-      "src/jvm/natives/jconc.ts",
-      "src/jvm/natives/jec.ts",
-      "src/jvm/natives/jio.ts",
-      "src/jvm/natives/jjson.ts",
-      "src/jvm/natives/jlang.ts",
-      "src/jvm/natives/jlogging.ts",
-      "src/jvm/natives/jmath.ts",
-      "src/jvm/natives/jnet.ts",
-      "src/jvm/natives/jnio.ts",
-      "src/jvm/natives/jobjectstream.ts",
-      "src/jvm/natives/jrandom.ts",
-      "src/jvm/natives/jreflect.ts",
-      "src/jvm/natives/jrsa.ts",
-      "src/jvm/natives/jsec.ts",
-      "src/jvm/natives/jtext.ts",
-      "src/jvm/natives/jtime.ts",
-      "src/jvm/natives/junicode.ts",
-      "src/jvm/natives/jutil.ts",
-      "src/jvm/natives/jvalues.ts",
-      "src/jvm/natives/jwrappers.ts",
-      "src/jvm/natives/jzip.ts",
-      "src/jvm/opcodes.ts",
-      "src/jvm/prepared.ts",
-      "src/jvm/profile.ts",
-      "src/jvm/provenance.ts",
-      "src/jvm/runtime.ts",
-      "src/jvm/serial-descriptor.ts",
-      "src/jvm/yield.ts",
-      "src/main.ts",
-      "src/native/core.ts",
-      "src/native/cpu.ts",
-      "src/native/egl-current.ts",
-      "src/native/gles1.ts",
-      "src/native/mem.ts",
-      "src/native/net.ts",
-      "src/native/pthread.ts",
-      "src/perf.ts",
-      "src/process.ts",
-      "src/shell/accounts.ts",
-      "src/shell/activitytasks.ts",
-      "src/shell/alarms.ts",
-      "src/shell/cacerts.ts",
-      "src/shell/config.ts",
-      "src/shell/device.ts",
-      "src/shell/geolocation.ts",
-      "src/shell/hostfs.ts",
-      "src/shell/idb.ts",
-      "src/shell/input.ts",
-      "src/shell/install.ts",
-      "src/shell/lazyfile.ts",
-      "src/shell/packages.ts",
-      "src/shell/packedarchive.ts",
-      "src/shell/pendingintents.ts",
-      "src/shell/privatefiles.ts",
-      "src/shell/processes.ts",
-      "src/shell/procfs.ts",
-      "src/shell/provision.ts",
-      "src/shell/relay.ts"
     ],
     "mihon-app": [
       "src/android/accounts.ts",
@@ -785,50 +785,957 @@
   },
   "files": {
     "src/android/accounts.ts": [
-      "mihon-onboarding",
       "fitnotes",
+      "mihon-onboarding",
       "mihon-app",
       "flappybird",
       "calculatorm"
     ],
     "src/android/alarm.ts": [
-      "mihon-onboarding",
       "fitnotes",
+      "mihon-onboarding",
       "mihon-app",
       "flappybird",
       "calculatorm"
     ],
     "src/android/apksignature.ts": [
-      "mihon-onboarding",
       "fitnotes",
+      "mihon-onboarding",
       "mihon-app",
       "flappybird",
       "calculatorm"
     ],
     "src/android/app.ts": [
-      "mihon-onboarding",
       "fitnotes",
+      "mihon-onboarding",
       "mihon-app",
       "flappybird",
       "calculatorm"
     ],
     "src/android/apphost.ts": [
-      "mihon-onboarding",
       "fitnotes",
+      "mihon-onboarding",
       "mihon-app",
       "flappybird",
       "calculatorm"
     ],
     "src/android/arsc.ts": [
-      "mihon-onboarding",
       "fitnotes",
+      "mihon-onboarding",
       "mihon-app",
       "flappybird",
       "calculatorm"
     ],
     "src/android/axml.ts": [
-      "mihon-onboarding",
       "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/bidiformatter.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/binder.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/broadcast.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/compat.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/conscrypt.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/contentresolver.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/context.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/cookies.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/decor.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/delegates.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/dialog.ts": [
+      "fitnotes",
+      "mihon-app"
+    ],
+    "src/android/documents.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/drawable.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/fragment.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/framework.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/gl.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/glview.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/graphics.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/gravity.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/handles.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/hardware.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/imageview.ts": [
+      "fitnotes",
+      "flappybird"
+    ],
+    "src/android/ime.ts": [
+      "fitnotes",
+      "calculatorm"
+    ],
+    "src/android/inflate.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/intent-filter.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/intent.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/intentipc.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/intentservice.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/job.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/layouts.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/lifecycle.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/listview.ts": [
+      "fitnotes"
+    ],
+    "src/android/mainloop.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/media.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/menu.ts": [
+      "fitnotes"
+    ],
+    "src/android/messenger.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/motionevent.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/net.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/notification.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/os.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/packagearchive.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/packages.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/parcel.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/path.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/pendingintent.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/pm.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/popup.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/preference.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/provider.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/provideripc.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/res.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/resnative.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/runningservices.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/searchview.ts": [
+      "fitnotes"
+    ],
+    "src/android/security.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/sharedprefs.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/sqlite.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/text.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/textview-layout.ts": [
+      "fitnotes"
+    ],
+    "src/android/textview.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/util.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/view.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/webkit.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/widget.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/window.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/android/windowinsets.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/guest-clock.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/abi.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/bidi.ts": [
+      "fitnotes"
+    ],
+    "src/jvm/charset.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/cold.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/compiler.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/coverage.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/dex.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/monitor.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jchars.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app"
+    ],
+    "src/jvm/natives/jconc.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jec.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jio.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jjson.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jlang.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jlogging.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jmath.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jnet.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jnio.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jobjectstream.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jrandom.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jreflect.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jrsa.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jsec.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jtext.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jtime.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/junicode.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jutil.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jvalues.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jwrappers.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/natives/jzip.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/opcodes.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/prepared.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/profile.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/provenance.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/runtime.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/serial-descriptor.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/jvm/yield.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/main.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/native/core.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/native/cpu.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/native/egl-current.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/native/gles1.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/native/mem.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/native/net.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/native/pthread.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/perf.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/process.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/accounts.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/activitytasks.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/alarms.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/cacerts.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/config.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/device.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/geolocation.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/hostfs.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/idb.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/input.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/install.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/lazyfile.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/packages.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/packedarchive.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/pendingintents.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/privatefiles.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/processes.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/procfs.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/provision.ts": [
+      "fitnotes",
+      "mihon-onboarding",
+      "mihon-app",
+      "flappybird",
+      "calculatorm"
+    ],
+    "src/shell/relay.ts": [
+      "fitnotes",
+      "mihon-onboarding",
       "mihon-app",
       "flappybird",
       "calculatorm"
@@ -837,704 +1744,27 @@
       "mihon-onboarding",
       "mihon-app"
     ],
-    "src/android/bidiformatter.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/binder.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/broadcast.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/compat.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/conscrypt.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/contentresolver.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/context.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/cookies.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/decor.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/delegates.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/documents.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/drawable.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/fragment.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/framework.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/gl.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/glview.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/graphics.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/gravity.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/handles.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/hardware.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/inflate.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/intent-filter.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/intent.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/intentipc.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/intentservice.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/job.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/layouts.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/lifecycle.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/mainloop.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/media.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/messenger.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/motionevent.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/net.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/notification.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/os.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/packagearchive.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/packages.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/parcel.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
     "src/android/parcelable.ts": [
       "mihon-onboarding",
       "mihon-app"
     ],
-    "src/android/path.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/pendingintent.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/pm.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/popup.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/preference.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/provider.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/provideripc.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/res.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/resnative.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/runningservices.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/security.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
     "src/android/service.ts": [
       "mihon-onboarding",
       "mihon-app"
-    ],
-    "src/android/sharedprefs.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/sqlite.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/text.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/textview.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/util.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/view.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/webkit.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/widget.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/window.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/android/windowinsets.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/guest-clock.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/abi.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/charset.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/cold.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/compiler.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/coverage.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/dex.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/monitor.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jchars.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app"
-    ],
-    "src/jvm/natives/jconc.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
     ],
     "src/jvm/natives/jdex.ts": [
       "mihon-onboarding",
       "mihon-app",
       "flappybird"
     ],
-    "src/jvm/natives/jec.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jio.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jjson.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jlang.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jlogging.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jmath.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jnet.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jnio.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jobjectstream.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jrandom.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jreflect.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jrsa.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jsec.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jtext.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jtime.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/junicode.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jutil.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jvalues.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/natives/jwrappers.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
     "src/jvm/natives/jx509.ts": [
       "mihon-onboarding",
       "mihon-app",
       "flappybird"
     ],
-    "src/jvm/natives/jzip.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/opcodes.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/prepared.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/profile.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/provenance.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
     "src/jvm/regex-sets.ts": [
       "mihon-onboarding",
       "mihon-app"
-    ],
-    "src/jvm/runtime.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/serial-descriptor.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/jvm/yield.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/main.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
     ],
     "src/native/abi.ts": [
       "mihon-onboarding",
@@ -1546,31 +1776,10 @@
       "mihon-app",
       "flappybird"
     ],
-    "src/native/core.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/native/cpu.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
     "src/native/dl.ts": [
       "mihon-onboarding",
       "mihon-app",
       "flappybird"
-    ],
-    "src/native/egl-current.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
     ],
     "src/native/egl.ts": [
       "mihon-onboarding",
@@ -1586,13 +1795,6 @@
       "mihon-onboarding",
       "mihon-app",
       "flappybird"
-    ],
-    "src/native/gles1.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
     ],
     "src/native/gles3.ts": [
       "mihon-onboarding",
@@ -1635,31 +1837,10 @@
       "mihon-app",
       "flappybird"
     ],
-    "src/native/mem.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/native/net.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
     "src/native/proc.ts": [
       "mihon-onboarding",
       "mihon-app",
       "flappybird"
-    ],
-    "src/native/pthread.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
     ],
     "src/native/stdio.ts": [
       "mihon-onboarding",
@@ -1672,191 +1853,10 @@
       "mihon-app",
       "flappybird"
     ],
-    "src/perf.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/process.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/accounts.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/activitytasks.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/alarms.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/cacerts.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/config.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/device.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/geolocation.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/hostfs.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/idb.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/input.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/install.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/lazyfile.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/packages.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/packedarchive.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/pendingintents.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/privatefiles.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/processes.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/procfs.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/provision.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
-    "src/shell/relay.ts": [
-      "mihon-onboarding",
-      "fitnotes",
-      "mihon-app",
-      "flappybird",
-      "calculatorm"
-    ],
     "src/shell/webcookies.ts": [
       "mihon-onboarding",
       "mihon-app",
       "flappybird"
-    ],
-    "src/android/dialog.ts": [
-      "fitnotes",
-      "mihon-app"
-    ],
-    "src/android/imageview.ts": [
-      "fitnotes",
-      "flappybird"
-    ],
-    "src/android/ime.ts": [
-      "fitnotes",
-      "calculatorm"
-    ],
-    "src/android/listview.ts": [
-      "fitnotes"
-    ],
-    "src/android/menu.ts": [
-      "fitnotes"
-    ],
-    "src/android/searchview.ts": [
-      "fitnotes"
-    ],
-    "src/android/textview-layout.ts": [
-      "fitnotes"
-    ],
-    "src/jvm/bidi.ts": [
-      "fitnotes"
     ],
     "src/jvm/natives/jcrypto.ts": [
       "flappybird"
