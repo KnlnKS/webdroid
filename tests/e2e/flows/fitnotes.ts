@@ -37,8 +37,6 @@ export const fitnotes: Flow = {
   // hierarchy dump (status bar [0,0][720,48], gesture bar [0,1232][720,1280]).
   crop: { top: 48, bottom: 48, left: 0, right: 0 },
   clock: "controlled",
-  fastCheckpoints: ["home-final"],
-  fastVisualLimits: { "home-final": 22 },
   steps: [
     { id: "launch", label: "Launch — welcome dialog", action: { type: "launch" }, wait: wait.quiescent(1500) },
     { id: "unit-metric", label: "Choose Metric (kgs)", action: { type: "tapText", text: "Metric (kgs)" }, wait: wait.quiescent() },
@@ -78,6 +76,7 @@ export const fitnotes: Flow = {
 
     { id: "back-1", label: "Back to exercise list", action: { type: "back" }, wait: wait.quiescent(700) },
     { id: "back-2", label: "Back to categories", action: { type: "back" }, wait: wait.quiescent(700) },
-    { id: "home-final", label: "Home — workout logged", action: { type: "back" }, wait: wait.quiescent(1200) },
+    { id: "home-final", label: "Home — workout logged", action: { type: "back" }, wait: wait.quiescent(1200),
+      fastEvidence: { kind: "visual", maxContentDiffPct: 22 } },
   ],
 };

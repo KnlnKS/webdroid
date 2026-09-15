@@ -1,4 +1,5 @@
 import { device } from "../../src/shell/config";
+import type { perf } from "../../src/perf";
 // Shared vocabulary for the visual E2E harness.
 //
 // A flow declares steps once, semantically. Two drivers interpret them: the emulator driver
@@ -36,17 +37,18 @@ export type StateCondition =
   | { kind: "activity"; component: string }
   | { kind: "text"; text: string }
   | { kind: "text-absent"; text: string }
-  | { kind: "perf"; counter: string; atLeast: number };
+  | { kind: "perf"; counter: keyof typeof perf; atLeast: number };
 
 export type WaitPolicy =
   | { kind: "state"; condition: StateCondition; maxVirtualMs: number; maxRealMs: number }
   | { kind: "quiescent"; maxVirtualMs: number; maxRealMs: number }
   | { kind: "sample"; atVirtualMs: number; maxRealMs: number; minRealMs: number }
-  | { kind: "live"; horizonMs: number; timeoutMs: number; sample: boolean };
+  | { kind: "live"; horizonMs: number; timeoutMs: number }
+  | { kind: "live-sample"; atRealMs: number; timeoutMs: number };
 
 export type EvidencePolicy =
   | { kind: "semantic" }
-  | { kind: "visual" }
+  | { kind: "visual"; maxContentDiffPct: number }
   | { kind: "motion"; minFps: number };
 
 const REAL_WAIT_MS = 20_000;
@@ -58,9 +60,9 @@ export const wait = {
   sample: (atVirtualMs = 0, maxRealMs = REAL_WAIT_MS, minRealMs = 0): WaitPolicy =>
     ({ kind: "sample", atVirtualMs, maxRealMs, minRealMs }),
   live: (horizonMs = 0, timeoutMs = REAL_WAIT_MS): WaitPolicy =>
-    ({ kind: "live", horizonMs, timeoutMs, sample: false }),
-  liveSample: (horizonMs = 0, timeoutMs = REAL_WAIT_MS): WaitPolicy =>
-    ({ kind: "live", horizonMs, timeoutMs, sample: true }),
+    ({ kind: "live", horizonMs, timeoutMs }),
+  liveSample: (atRealMs = 0, timeoutMs = REAL_WAIT_MS): WaitPolicy =>
+    ({ kind: "live-sample", atRealMs, timeoutMs }),
 };
 
 export type Step = {
@@ -71,9 +73,11 @@ export type Step = {
   /** Regions excluded from the diff (normalized). Escape hatch for non-deterministic pixels. */
   maskRects?: Rect[];
   wait: WaitPolicy;
+  /** Fast-lane assertion. Absence means semantic evidence only. */
+  fastEvidence?: Exclude<EvidencePolicy, { kind: "semantic" }>;
 };
 
-export type Flow = {
+type FlowBase = {
   app: string;
   pkg: string;
   activity: string;
@@ -89,26 +93,25 @@ export type Flow = {
   seedPrefs?: string;
   /** Frame-rate gate for motion checkpoints; a step below it is flagged SLOW. */
   minFps?: number;
-  /** Controlled flows may advance Android-visible time in fast mode. Live flows never do. */
-  clock: "controlled" | "pinned" | "live";
-  /** Steps that retain pixels in fast mode. Every step still captures in the full visual lane. */
-  fastCheckpoints: readonly string[];
-  /** Maximum golden content diff at fast checkpoints, retained from the starting revision. */
-  fastVisualLimits?: Readonly<Record<string, number>>;
-  /** V8 instrumentation can distort long-running native loops; absent means source coverage is safe. */
-  sourceCoverage?: "unsupported";
   /** The geometry positional taps were measured at. A flow with no goldens runs at it, since a
    *  normalized coordinate only lands on the same view at the same size. */
   screen?: Screen;
   steps: Step[];
 };
 
-export function evidenceOf(flow: Flow, step: Step): EvidencePolicy {
-  if (!flow.fastCheckpoints.includes(step.id)) return { kind: "semantic" };
-  if (step.wait.kind === "sample" || (step.wait.kind === "live" && step.wait.sample))
-    return { kind: "motion", minFps: flow.minFps ?? 0 };
-  return { kind: "visual" };
-}
+export type Flow = FlowBase & (
+  | { clock: "live"; sourceCoverage?: never; expectedBrowserErrors?: never }
+  | {
+      /** Controlled flows advance Android-visible time in fast mode; pinned flows retain real scheduling. */
+      clock: "controlled" | "pinned";
+      /** V8 instrumentation can distort long-running native loops; absent means source coverage is safe. */
+      sourceCoverage?: "unsupported";
+      /** Existing browser errors accepted by exact substring; every unmatched error fails the fast lane. */
+      expectedBrowserErrors?: readonly string[];
+    }
+);
+
+export const evidenceOf = (step: Step): EvidencePolicy => step.fastEvidence ?? { kind: "semantic" };
 
 export const waitHorizonMs = (policy: WaitPolicy): number => {
   switch (policy.kind) {
@@ -116,29 +119,34 @@ export const waitHorizonMs = (policy: WaitPolicy): number => {
     case "quiescent": return policy.maxVirtualMs;
     case "sample": return policy.atVirtualMs;
     case "live": return policy.horizonMs;
+    case "live-sample": return policy.atRealMs;
   }
 };
 
 export const waitTimeoutMs = (policy: WaitPolicy): number =>
-  policy.kind === "live" ? policy.timeoutMs : policy.maxRealMs;
+  policy.kind === "live" || policy.kind === "live-sample" ? policy.timeoutMs : policy.maxRealMs;
 
 export const isMotionWait = (policy: WaitPolicy): boolean =>
-  policy.kind === "sample" || (policy.kind === "live" && policy.sample);
+  policy.kind === "sample" || policy.kind === "live-sample";
 
 export function validateFlow(flow: Flow): void {
   const ids = new Set<string>();
   for (const step of flow.steps) {
     if (!step.id || ids.has(step.id)) throw new Error(`${flow.app}: duplicate or empty step id "${step.id}"`);
     ids.add(step.id);
-    if (flow.clock === "controlled" && step.wait.kind === "live")
+    if (flow.clock === "controlled" && (step.wait.kind === "live" || step.wait.kind === "live-sample"))
       throw new Error(`${flow.app}/${step.id}: controlled flow cannot use a live wait`);
-    if (flow.clock === "live" && step.wait.kind !== "live")
+    if (flow.clock === "live" && step.wait.kind !== "live" && step.wait.kind !== "live-sample")
       throw new Error(`${flow.app}/${step.id}: live flow requires a live wait`);
+    const evidence = step.fastEvidence;
+    if (flow.clock === "live" && evidence)
+      throw new Error(`${flow.app}/${step.id}: live flow cannot declare fast evidence`);
+    if (evidence?.kind === "visual" && !(evidence.maxContentDiffPct >= 0 && evidence.maxContentDiffPct <= 100))
+      throw new Error(`${flow.app}/${step.id}: invalid visual difference limit`);
+    const measuresMotion = isMotionWait(step.wait) || (step.wait.kind === "state" && step.wait.condition.kind === "perf");
+    if (evidence?.kind === "motion" && (!(evidence.minFps > 0) || !measuresMotion))
+      throw new Error(`${flow.app}/${step.id}: motion evidence requires a positive fps and a frame-producing wait`);
   }
-  for (const id of flow.fastCheckpoints)
-    if (!ids.has(id)) throw new Error(`${flow.app}: unknown fast checkpoint "${id}"`);
-  for (const id of Object.keys(flow.fastVisualLimits ?? {}))
-    if (!flow.fastCheckpoints.includes(id)) throw new Error(`${flow.app}: visual limit is not a fast checkpoint "${id}"`);
 }
 
 /**

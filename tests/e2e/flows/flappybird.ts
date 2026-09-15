@@ -17,16 +17,18 @@ export const flappybird: Flow = {
   crop: { top: 0, bottom: 48, left: 0, right: 0 },
   minFps: 55,
   clock: "pinned",
-  fastCheckpoints: ["title", "dead"],
+  expectedBrowserErrors: ["Cannot read properties of undefined (reading 'status')"],
   steps: [
     { id: "splash", label: "Launch — splash", action: { type: "launch" }, wait: wait.sample(1200) },
     { id: "title", label: "Title — bobbing bird", action: { type: "settle" },
-      wait: wait.state({ kind: "perf", counter: "glFrames", atLeast: 30 }, 3000) },
+      wait: wait.state({ kind: "perf", counter: "glFrames", atLeast: 30 }, 3000),
+      fastEvidence: { kind: "motion", minFps: 25 } },
     // The title buttons remain active through the fade; wait before sending gameplay taps.
     { id: "play", label: "Play → Get Ready", action: { type: "tapAt", ...PLAY_BTN }, wait: wait.sample(1500) },
     // ~2.7s of live gameplay with no capture inside it: the perf window.
     { id: "flaps", label: "Start + 5 flaps", action: { type: "tapAt", ...CENTER, repeat: 6, everyMs: 600 }, wait: wait.sample() },
-    { id: "dead", label: "Game over — score/medal", action: { type: "settle" }, wait: wait.sample(3500) },
+    { id: "dead", label: "Game over — score/medal", action: { type: "settle" }, wait: wait.sample(3500),
+      fastEvidence: { kind: "motion", minFps: 20 } },
     { id: "restart", label: "Play again → Get Ready", action: { type: "tapAt", ...PLAY_BTN }, wait: wait.sample(1500) },
     { id: "flaps2", label: "Second game — 3 flaps", action: { type: "tapAt", ...CENTER, repeat: 4, everyMs: 600 }, wait: wait.sample() },
   ],

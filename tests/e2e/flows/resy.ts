@@ -34,7 +34,6 @@ export const resy: Flow = {
   apk: "Resy.apk",
   // the Resy API is HTTPS on a live certificate chain
   clock: "live",
-  fastCheckpoints: ["venue"],
   screen: { width: W, height: H, densityDpi: 480 },
   crop: { top: 72, bottom: 72, left: 0, right: 0 },
   steps: [

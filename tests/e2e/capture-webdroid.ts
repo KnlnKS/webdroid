@@ -5,7 +5,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { ENV_SCREEN, WebdroidDriver } from "./drivers/webdroid";
 import { E2E_DIR } from "./lib/util";
-import { PINNED_CLOCK_MS, evidenceOf, isMotionWait, screenOf, uiFileFor, waitHorizonMs, waitTimeoutMs, type Flow, type Manifest, type RecordedStep, type Step } from "./types";
+import { PINNED_CLOCK_MS, evidenceOf, isMotionWait, screenOf, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step, type WaitPolicy } from "./types";
 import { parseScreen } from "../../src/shell/config";
 import type { Act, Settled, StepResult } from "./lib/probe";
 import { readProcesses, type ProcessSnapshot } from "./lib/processes";
@@ -116,22 +116,20 @@ export function actOf(flow: Flow, step: Step, rec?: RecordedStep): Act {
 
 /** Perform one step and settle it on the step's horizon. */
 export function runStep(drv: WebdroidDriver, flow: Flow, step: Step, rec?: RecordedStep, mode: CaptureMode = "full"): Promise<StepResult> {
-  const evidence = evidenceOf(flow, step);
+  const evidence = evidenceOf(step);
   const capture = mode === "full" || evidence.kind !== "semantic";
-  const horizonMs = mode === "fast" && evidence.kind === "semantic" && step.wait.kind === "quiescent"
-    ? 0
-    : waitHorizonMs(step.wait);
-  const semanticSettle = mode === "fast" && evidence.kind === "semantic"
+  const policy: WaitPolicy = mode === "fast" && evidence.kind === "semantic" && step.wait.kind === "quiescent"
+    ? { ...step.wait, maxVirtualMs: 0 }
+    : step.wait;
+  const quiescence = mode === "fast" && evidence.kind === "semantic"
     ? { stableMs: 50, intervalMs: 50, stableFrames: 2 }
-    : {};
+    : undefined;
   return drv.step(actOf(flow, step, rec), {
-    horizonMs,
-    sample: isMotionWait(step.wait),
-    timeoutMs: waitTimeoutMs(step.wait),
-    minRealMs: step.wait.kind === "sample" ? step.wait.minRealMs : 0,
-    condition: step.wait.kind === "state" ? step.wait.condition : undefined,
-    ...semanticSettle,
-  }, capture, mode === "fast" && flow.clock === "controlled");
+    wait: policy,
+    capture,
+    timing: mode === "fast" && flow.clock === "controlled" ? "controlled" : "real",
+    quiescence,
+  });
 }
 
 export async function captureFlow(flow: Flow, drv: WebdroidDriver, {
@@ -151,14 +149,16 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, {
     const rec = byId.get(step.id);
     if (!rec && manifest) throw new Error(`golden manifest has no step "${step.id}" — re-record ${flow.app}`);
     const file = rec?.file ?? `${String(i).padStart(2, "0")}-${step.id}.png`;
-    const evidence = mode === "full" ? "visual" : evidenceOf(flow, step).kind;
+    const fastEvidence = evidenceOf(step);
+    const evidence = mode === "full" ? "visual" : fastEvidence.kind;
     const r = await runStep(drv, flow, step, rec, mode);
     const stepMs = Math.round(r.ms);
     const fps = r.ms ? (r.perf.frames ?? 0) * 1000 / r.ms : 0;
     // the launch step's window is mostly boot + lazy compilation, not the app's frame loop; and
     // a frame rate measured beside other flows' browsers measures the host, not the app
-    const motion = isMotionWait(step.wait);
-    const slow = !!(motion && step.action.type !== "launch" && flow.minFps && fps < flow.minFps && jobs === 1);
+    const motion = mode === "fast" ? fastEvidence.kind === "motion" : isMotionWait(step.wait);
+    const minFps = mode === "fast" && fastEvidence.kind === "motion" ? fastEvidence.minFps : flow.minFps;
+    const slow = !!(motion && step.action.type !== "launch" && minFps && fps < minFps && jobs === 1);
     const writeAt = performance.now();
     if (r.png) {
       await Bun.write(`${outDir}/${file}`, Buffer.from(r.png, "base64"));

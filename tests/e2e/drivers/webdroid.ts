@@ -2,9 +2,9 @@
 // one page.evaluate against the probe in lib/probe.ts; nothing here polls the page.
 // Deliberately free of any Android/adb dependency: `bun run e2e` must run with no SDK present.
 import { chromium, type Browser, type Page } from "playwright";
-import { PINNED_CLOCK_MS, deviceScreen, screenParam, type Screen } from "../types";
+import { PINNED_CLOCK_MS, deviceScreen, screenParam, type Screen, type WaitPolicy } from "../types";
 import { BASE_URL } from "../lib/util";
-import { DEFAULT_SETTLE, probeScript, type Act, type SettleOpts, type StepResult, type StepSpec } from "../lib/probe";
+import { DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_QUIESCENCE, probeScript, type Act, type Quiescence, type StepResult, type StepSpec } from "../lib/probe";
 import { decodeMappings, executedSources, type CoverageFunction } from "../lib/source-coverage";
 
 // WEBDROID_BYTECODE=android/graphics/,android/content/res/ scores a provenance cut: the same
@@ -74,7 +74,12 @@ type LaunchOpts = {
   coverage?: boolean;
 };
 
-const SETTLE_DEFAULTS: SettleOpts = { ...DEFAULT_SETTLE, horizonMs: 0, sample: false };
+type StepOptions = {
+  wait: WaitPolicy;
+  capture?: boolean;
+  timing?: StepSpec["timing"];
+  quiescence?: Partial<Quiescence>;
+};
 
 export class WebdroidDriver {
   readonly errors: string[] = [];
@@ -109,14 +114,23 @@ export class WebdroidDriver {
   }
 
   /** One flow step, start to finish, in the page: action, settle, liveness, capture, telemetry. */
-  step(act: Act, settle: Partial<SettleOpts> = {}, capture = true, controlled = false): Promise<StepResult> {
-    const spec: StepSpec = { act, screen: this.screen, settle: { ...SETTLE_DEFAULTS, ...settle }, aliveMs: this.coverage ? 5000 : controlled ? 3500 : 1500, capture, controlled };
+  step(act: Act, options: StepOptions): Promise<StepResult> {
+    const timing = options.timing ?? "real";
+    const spec: StepSpec = {
+      act,
+      screen: this.screen,
+      wait: options.wait,
+      quiescence: { ...DEFAULT_QUIESCENCE, ...options.quiescence },
+      aliveMs: this.coverage ? 5000 : timing === "controlled" ? 3500 : 1500,
+      capture: options.capture ?? true,
+      timing,
+    };
     return this.page.evaluate((s) => globalThis.__wd.step(s), spec);
   }
 
   /** An action on its own, awaited to completion under the settle timeout. */
   act(act: Act): Promise<boolean | undefined> {
-    return this.page.evaluate(([a, s, ms]) => globalThis.__wd.act(a, s, ms), [act, this.screen, DEFAULT_SETTLE.timeoutMs] as const);
+    return this.page.evaluate(([a, s, ms]) => globalThis.__wd.act(a, s, ms), [act, this.screen, DEFAULT_ACTION_TIMEOUT_MS] as const);
   }
 
   boot(apk: string): Promise<unknown> { return this.act({ type: "boot", apk }); }

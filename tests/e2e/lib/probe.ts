@@ -3,7 +3,7 @@
 // reach the runtime only through `globalThis.wd`.
 import { stableFrame } from "./settle";
 import { environmentScript, performAction } from "./actions";
-import type { Screen, StateCondition, UiNode } from "../types";
+import type { Screen, StateCondition, UiNode, WaitPolicy } from "../types";
 
 type ProbeConfig = {
   /** the instant Date is pinned to; null runs on the wall clock */
@@ -25,21 +25,21 @@ export type Act =
   | { type: "swipe"; from: [number, number]; to: [number, number]; ms: number; untilText?: string; maxSwipes?: number }
   | { type: "none" };
 
-export type SettleOpts = {
-  /** scheduled work due within this many ms of the action is waited for, and pixel stability is
-   *  not trusted before it; the normalized wait policy horizon */
-  horizonMs: number;
-  /** capture once after the horizon instead of settling: a screen that never settles */
-  sample: boolean;
+export type Quiescence = {
   stableMs: number;
   intervalMs: number;
   stableFrames: number;
-  timeoutMs: number;
-  minRealMs: number;
-  condition?: StateCondition;
 };
 
-export type StepSpec = { act: Act; screen: Screen; settle: SettleOpts; aliveMs: number; capture: boolean; controlled: boolean };
+export type StepSpec = {
+  act: Act;
+  screen: Screen;
+  wait: WaitPolicy;
+  quiescence: Quiescence;
+  aliveMs: number;
+  capture: boolean;
+  timing: "controlled" | "real";
+};
 
 /** how the wait ended, how long it took, and how many polls each reason kept it waiting */
 export type Settled = { how: "idle" | "pixels" | "timeout" | "snapshot" | "state"; ms: number; busy: Record<string, number> };
@@ -70,7 +70,8 @@ export type StepResult = {
   };
 };
 
-export const DEFAULT_SETTLE: Omit<SettleOpts, "horizonMs" | "sample"> = { stableMs: 150, intervalMs: 250, stableFrames: 4, timeoutMs: 20_000, minRealMs: 0 };
+export const DEFAULT_QUIESCENCE: Quiescence = { stableMs: 150, intervalMs: 250, stableFrames: 4 };
+export const DEFAULT_ACTION_TIMEOUT_MS = 20_000;
 
 declare global {
   var wd: any;
@@ -204,17 +205,6 @@ function installProbe(cfg: ProbeConfig): void {
   };
 
   let captured: ImageData | null = null;
-  const driveGuest = async (horizonMs: number): Promise<void> => {
-    const clock = g.wd.guestClock;
-    if (!clock?.controlled) return;
-    const end = clock.now() + horizonMs;
-    for (;;) {
-      const next = clock.nextDeadline();
-      if (next === null || next > end) break;
-      await clock.advanceTo(next);
-    }
-    await clock.advanceTo(end);
-  };
   const stateMatches = (condition: StateCondition): boolean => {
     if (condition.kind === "perf") return (g.wd.perf[condition.counter] ?? 0) >= condition.atLeast;
     if (condition.kind === "activity") {
@@ -226,84 +216,86 @@ function installProbe(cfg: ProbeConfig): void {
       [node.text, node.desc].some((text) => text.replace(/\s+/g, " ").trim().toLowerCase().includes(want)));
     return condition.kind === "text" ? found : !found;
   };
-  const settle = async (o: SettleOpts, controlled: boolean): Promise<Settled> => {
+  const settle = async (policy: WaitPolicy, controlled: boolean, q: Quiescence): Promise<Settled> => {
     const t0 = performance.now();
     captured = null;
-    if (o.condition) {
-      const virtualEnd = (g.wd.guestClock?.now() ?? 0) + o.horizonMs;
-      while (!stateMatches(o.condition)) {
-        if (performance.now() - t0 >= o.timeoutMs) return { how: "timeout", ms: performance.now() - t0, busy: { state: 1 } };
+    const done = (how: Settled["how"], busy: Record<string, number> = {}): Settled => {
+      wantSample = false;
+      return { how, ms: performance.now() - t0, busy };
+    };
+    const samplePresentation = async (): Promise<boolean> => {
+      const before = presentation;
+      wantSample = true;
+      g.wd.uiState.needsDraw = true;
+      if (controlled) await g.wd.testFrame();
+      else if (!await nextPresent(500)) { wantSample = false; return false; }
+      captured = sampled.get(lastHash) ?? null;
+      wantSample = false;
+      return presentation > before;
+    };
+    if (policy.kind === "state") {
+      const virtualEnd = (g.wd.guestClock?.now() ?? 0) + policy.maxVirtualMs;
+      while (!stateMatches(policy.condition)) {
+        if (performance.now() - t0 >= policy.maxRealMs) return done("timeout", { state: 1 });
         const next = controlled ? g.wd.guestClock.nextDeadline() : null;
         if (controlled && g.wd.guestClock.now() < virtualEnd) {
           await g.wd.guestClock.advanceTo(Math.min(virtualEnd, next ?? g.wd.guestClock.now() + 16));
           await g.wd.testFrame();
         } else await sleep(10);
       }
-      await g.wd.alive(o.timeoutMs);
-      wantSample = true;
-      if (controlled) await g.wd.testFrame(); else await nextPresent(500);
-      captured = sampled.get(lastHash) ?? null;
-      wantSample = false;
-      return { how: "state", ms: performance.now() - t0, busy: {} };
+      const alive = controlled
+        ? await g.wd.guestClock.drive(g.wd.alive(policy.maxRealMs), policy.maxVirtualMs)
+        : await g.wd.alive(policy.maxRealMs);
+      if (!alive) return done("timeout", { queued: 1 });
+      return await samplePresentation() ? done("state") : done("timeout", { presentation: 1 });
     }
-    if (controlled) await driveGuest(o.horizonMs);
-    if (o.sample) {
-      if (controlled && o.minRealMs) await sleep(o.minRealMs);
+    if (policy.kind === "sample" || policy.kind === "live-sample") {
+      if (policy.kind === "sample" && controlled) {
+        await g.wd.guestClock.advanceBy(policy.atVirtualMs);
+        if (policy.minRealMs) await sleep(policy.minRealMs);
+      } else await sleep(policy.kind === "sample" ? policy.atVirtualMs : policy.atRealMs);
       wantSample = true;
       if (controlled) {
         await g.wd.testFrame();
         captured = sampled.get(lastHash) ?? null;
       } else {
-        await sleep(o.horizonMs);
         if (await nextPresent(500)) captured = sampled.get(lastHash) ?? null;
       }
-      wantSample = false;
-      return { how: "snapshot", ms: performance.now() - t0, busy: {} };
+      return done("snapshot");
     }
-    const horizonAt = t0 + (controlled ? 0 : o.horizonMs);
+    const horizonMs = policy.kind === "quiescent" ? policy.maxVirtualMs : policy.horizonMs;
+    const timeoutMs = policy.kind === "quiescent" ? policy.maxRealMs : policy.timeoutMs;
+    if (controlled) await g.wd.guestClock.advanceBy(horizonMs);
+    const horizonAt = t0 + (controlled ? 0 : horizonMs);
     // the pixel rule needs stableFrames + 1 samples past the horizon before it can settle, so
     // anything scheduled inside that window was always waited for: a toast timing out, a
     // snackbar dismissing. The fast path keeps that contract.
-    const dueBefore = horizonAt + (o.stableFrames + 1) * o.intervalMs;
+    const dueBefore = horizonAt + (q.stableFrames + 1) * q.intervalMs;
     // the pixel rule samples only past the horizon, as the recorder does past its dwell
     const hashes: number[] = [];
     const seen: Record<string, number> = {};
-    let lastSample = horizonAt - o.intervalMs;
+    let lastSample = horizonAt - q.intervalMs;
     lastHash = -1;
-    const done = (how: Settled["how"]): Settled => { wantSample = false; return { how, ms: performance.now() - t0, busy: seen }; };
     for (;;) {
       const now = performance.now();
-      if (now - lastSample >= o.intervalMs) {
+      if (now - lastSample >= q.intervalMs) {
         lastSample = now;
         if (now > horizonAt) hashes.push(lastHash);
-        if (hashes.length > o.stableFrames * 2) hashes.shift();
+        if (hashes.length > q.stableFrames * 2) hashes.shift();
         wantSample = true;
       }
-      const b = busy(dueBefore, o.stableMs);
-      if (!b.length) return done("idle");
+      const b = busy(dueBefore, q.stableMs);
+      if (!b.length) return done("idle", seen);
       for (const k of b) seen[k] = (seen[k] ?? 0) + 1;
-      const h = stableFrame(hashes, o.stableFrames);
-      if (h !== undefined) { captured = sampled.get(h) ?? null; return done("pixels"); }
-      if (now - t0 >= o.timeoutMs + (controlled ? 0 : o.horizonMs)) return done("timeout");
+      const h = stableFrame(hashes, q.stableFrames);
+      if (h !== undefined) { captured = sampled.get(h) ?? null; return done("pixels", seen); }
+      if (now - t0 >= timeoutMs + (controlled ? 0 : horizonMs)) return done("timeout", seen);
       await sleep(25);
     }
   };
   const capture = () => captured ? encode(captured) : screenPng();
 
   const act = (a: Act, screen: Screen, deadlineMs: number, controlled = false) => performAction({ a, screen, deadlineMs, controlled });
-  const driveControlled = async <T>(operation: Promise<T>, controlled: boolean): Promise<T> => {
-    const clock = g.wd.guestClock;
-    if (!controlled || !clock?.controlled) return operation;
-    let finished = false;
-    void operation.finally(() => { finished = true; }).catch(() => {});
-    while (!finished) {
-      const next = clock.nextDeadline();
-      if (next === null) await sleep(0);
-      else await clock.advanceTo(next);
-    }
-    return operation;
-  };
-
   const seen = { missing: new Set<string>(), native: new Set<string>(), attrs: new Set<string>(), errors: new Set<string>() };
   const fresh = (key: keyof typeof seen, all: string[]): string[] => {
     const out = all.filter((x) => !seen[key].has(x));
@@ -318,15 +310,19 @@ function installProbe(cfg: ProbeConfig): void {
     let semanticHit: boolean | undefined, error: string | undefined;
     const actionAt = performance.now();
     try {
-      const maxActionMs = spec.settle.timeoutMs + spec.settle.horizonMs;
-      semanticHit = await act(spec.act, spec.screen, maxActionMs, spec.controlled);
+      const maxActionMs = spec.wait.kind === "live" || spec.wait.kind === "live-sample"
+        ? spec.wait.timeoutMs
+        : spec.wait.maxRealMs;
+      semanticHit = await act(spec.act, spec.screen, maxActionMs, spec.timing === "controlled");
     } catch (e) {
       error = String((e as Error)?.message ?? e).slice(0, 300);
     }
     const actionMs = performance.now() - actionAt;
-    const settled = await settle(spec.settle, spec.controlled);
+    const controlled = spec.timing === "controlled";
+    const settled = await settle(spec.wait, controlled, spec.quiescence);
     const aliveAt = performance.now();
-    const wedged = !(await driveControlled(wd.alive(spec.aliveMs), spec.controlled));
+    const alive = wd.alive(spec.aliveMs);
+    const wedged = !(controlled ? await wd.guestClock.drive(alive, spec.aliveMs) : await alive);
     const livenessMs = performance.now() - aliveAt;
     shooting = false;
     const captureAt = performance.now();

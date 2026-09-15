@@ -25,7 +25,6 @@ export const calculatorm: Flow = {
   screen: SCREEN,
   crop: { top: 48, bottom: 48, left: 0, right: 0 },
   clock: "controlled",
-  fastCheckpoints: ["result"],
   steps: [
     { id: "launch", label: "Launch — keypad", action: { type: "launch" }, wait: wait.quiescent(5000) },
     { id: "keypad", label: "Keypad settled", action: { type: "settle" }, wait: wait.quiescent() },

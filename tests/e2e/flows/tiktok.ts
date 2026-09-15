@@ -16,7 +16,6 @@ export const tiktok: Flow = {
   screen: SCREEN,
   crop: { top: 0, bottom: 0, left: 0, right: 0 },
   clock: "live",
-  fastCheckpoints: ["feed"],
   steps: [
     { id: "launch", label: "Launch — splash to first-run gates", action: { type: "launch" }, wait: wait.liveSample(90000) },
     { id: "fullscreen", label: "Dismiss Android's full-screen notice", action: { type: "tapText", text: "Got it", optional: true }, wait: wait.liveSample(1500) },

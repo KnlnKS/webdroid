@@ -42,8 +42,6 @@ export const mihonOnboarding: Flow = {
   apk: "mihon-v0.20.4.apk",
   crop: CROP,
   clock: "pinned",
-  fastCheckpoints: ["storage-step"],
-  fastVisualLimits: { "storage-step": 29 },
   steps: [
     // Mihon shows a static splash for several seconds; without a floor here the settle
     // heuristic locks onto the splash and records THAT as the golden.
@@ -54,7 +52,8 @@ export const mihonOnboarding: Flow = {
     { id: "theme-light", label: "Choose Light mode", action: { type: "tapText", text: "Light" }, wait: wait.quiescent(900) },
     { id: "theme-default", label: "Choose Default theme", action: { type: "tapAt", ...N(177, 870) }, wait: wait.quiescent(900) },
     { id: "onboarding-next", label: "Next — storage step", action: { type: "tapText", text: "Next" }, wait: wait.quiescent(1200) },
-    { id: "storage-step", label: "Storage step (picker not entered)", action: { type: "settle" }, wait: wait.quiescent() },
+    { id: "storage-step", label: "Storage step (picker not entered)", action: { type: "settle" }, wait: wait.quiescent(),
+      fastEvidence: { kind: "visual", maxContentDiffPct: 29 } },
   ],
 };
 
@@ -66,8 +65,6 @@ export const mihonApp: Flow = {
   crop: CROP,
   seedPrefs: SEED_PREFS,
   clock: "pinned",
-  fastCheckpoints: ["appearance-light"],
-  fastVisualLimits: { "appearance-light": 14 },
   steps: [
     { id: "library", label: "Library — empty state", action: { type: "launch" },
       wait: wait.state({ kind: "perf", counter: "presentations", atLeast: 3 }, 0) },
@@ -95,7 +92,8 @@ export const mihonApp: Flow = {
     { id: "appearance-dark", label: "Switch to Dark theme (recomposition)",
       action: { type: "tapText", text: "Dark" }, wait: wait.quiescent(2500) },
     { id: "appearance-light", label: "Switch back to Light",
-      action: { type: "tapText", text: "Light" }, wait: wait.quiescent(2500) },
+      action: { type: "tapText", text: "Light" }, wait: wait.quiescent(2500),
+      fastEvidence: { kind: "visual", maxContentDiffPct: 14 } },
     { id: "appearance-scroll", label: "Scroll Appearance",
       action: { type: "swipe", from: [0.5, 0.82], to: [0.5, 0.4], ms: 400 }, wait: wait.quiescent(2500) },
     { id: "back-out", label: "Back out of Appearance", action: { type: "back" }, wait: wait.quiescent(2000) },

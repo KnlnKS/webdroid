@@ -25,6 +25,7 @@ function failures(runs: StepRun[]): string[] {
     if (step.mainLoopWedged) errors.push(`${prefix}: main loop wedged`);
     if (step.settleTimedOut) errors.push(`${prefix}: completion timed out`);
     if (step.error) errors.push(`${prefix}: ${step.error}`);
+    if (step.slow) errors.push(`${prefix}: motion fell below its retained frame-rate limit`);
     for (const item of step.newMissing ?? []) errors.push(`${prefix}: missing ${item}`);
     for (const item of step.nativeRequired ?? []) errors.push(`${prefix}: native code required ${item}`);
     for (const item of step.newErrors ?? []) errors.push(`${prefix}: ${item}`);
@@ -33,35 +34,52 @@ function failures(runs: StepRun[]): string[] {
 }
 
 async function visualFailures(flow: Flow): Promise<string[]> {
-  if (!flow.fastVisualLimits) return [];
+  const checks = flow.steps.filter((step) => step.fastEvidence?.kind === "visual");
+  if (!checks.length) return [];
   const manifest = await loadManifest(flow.app);
-  if (!manifest) return [];
+  if (!manifest) return [`visual evidence requires a golden manifest`];
   const errors: string[] = [];
-  for (const [id, limit] of Object.entries(flow.fastVisualLimits)) {
-    const step = flow.steps.find((item) => item.id === id)!;
-    const recorded = manifest.steps.find((item) => item.id === id)!;
-    const golden = await loadPng(`${E2E_DIR}golden/${flow.app}/${recorded.file}`);
-    const actual = await loadPng(`${E2E_DIR}actual-fast/${flow.app}/${recorded.file}`);
+  for (const step of checks) {
+    const evidence = step.fastEvidence;
+    if (evidence?.kind !== "visual") continue;
+    const recorded = manifest.steps.find((item) => item.id === step.id);
+    if (!recorded) { errors.push(`${step.id}: golden manifest has no matching step`); continue; }
+    const goldenPath = `${E2E_DIR}golden/${flow.app}/${recorded.file}`;
+    const actualPath = `${E2E_DIR}actual-fast/${flow.app}/${recorded.file}`;
+    if (!await Bun.file(goldenPath).exists()) { errors.push(`${step.id}: golden image is missing`); continue; }
+    if (!await Bun.file(actualPath).exists()) { errors.push(`${step.id}: fast capture is missing`); continue; }
+    const golden = await loadPng(goldenPath);
+    const actual = await loadPng(actualPath);
     const diff = diffImages(golden, actual, manifest.crop, step.maskRects ?? []).contentDiffPct;
-    if (diff > limit) errors.push(`${id}: visual diff ${diff.toFixed(2)}% exceeds retained ${limit.toFixed(2)}% limit`);
+    if (diff > evidence.maxContentDiffPct)
+      errors.push(`${step.id}: visual diff ${diff.toFixed(2)}% exceeds retained ${evidence.maxContentDiffPct.toFixed(2)}% limit`);
   }
   return errors;
 }
 
-async function runFlow(flow: Flow): Promise<Outcome> {
+function browserFailures(flow: Flow, errors: string[]): string[] {
+  const expected = flow.expectedBrowserErrors ?? [];
+  return errors.filter((error) => !expected.some((part) => error.includes(part)))
+    .map((error) => `browser: ${error.slice(0, 300)}`);
+}
+
+async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
   const manifest = await loadManifest(flow.app);
   const collectCoverage = coverage && flow.sourceCoverage !== "unsupported";
   const driver = await launchFor(flow, manifest, false, flow.clock === "controlled", collectCoverage);
   const started = performance.now();
   let runs: StepRun[] = [];
+  let sourceCoverage: string[] = [];
+  const browser = driver.browserVersion();
+  const screen = screenParam(driver.screen);
   try {
-    runs = await captureFlow(flow, driver, { jobs, mode: "fast" });
-    const sourceCoverage = collectCoverage ? await driver.takeSourceCoverage() : [];
-    return { flow, runs, errors: [...failures(runs), ...await visualFailures(flow)], ms: performance.now() - started,
-      coverage: sourceCoverage, browser: driver.browserVersion(), screen: screenParam(driver.screen) };
+    runs = await captureFlow(flow, driver, { jobs: effectiveJobs, mode: "fast" });
+    sourceCoverage = collectCoverage ? await driver.takeSourceCoverage() : [];
   } finally {
     await driver.close();
   }
+  return { flow, runs, errors: [...failures(runs), ...await visualFailures(flow), ...browserFailures(flow, driver.errors)], ms: performance.now() - started,
+    coverage: sourceCoverage, browser, screen };
 }
 
 async function retainFailure(outcome: Outcome): Promise<void> {
@@ -84,14 +102,25 @@ await rm(`${E2E_DIR}actual-fast/failures`, { recursive: true, force: true });
 const queue = [...flows];
 const outcomes: Outcome[] = [];
 const started = performance.now();
-await Promise.all(Array.from({ length: Math.min(jobs, queue.length) }, async () => {
-  for (let flow = queue.shift(); flow; flow = queue.shift()) {
-    const outcome = await runFlow(flow);
+const motion = queue.filter((flow) => flow.steps.some((step) => step.fastEvidence?.kind === "motion"));
+const ordinary = queue.filter((flow) => !motion.includes(flow));
+await Promise.all(Array.from({ length: Math.min(jobs, ordinary.length) }, async () => {
+  for (let flow = ordinary.shift(); flow; flow = ordinary.shift()) {
+    const outcome = await runFlow(flow, jobs);
     outcomes.push(outcome);
     console.log(`  ${flow.app}: ${flow.steps.length} steps, ${(outcome.ms / 1000).toFixed(1)}s` +
       (outcome.errors.length ? `, ${outcome.errors.length} failure(s)` : ""));
   }
 }));
+for (const flow of motion) {
+  const outcome = await runFlow(flow, 1);
+  outcomes.push(outcome);
+  console.log(`  ${flow.app}: ${flow.steps.length} steps, ${(outcome.ms / 1000).toFixed(1)}s` +
+    (outcome.errors.length ? `, ${outcome.errors.length} failure(s)` : ""));
+}
+
+const order = new Map(deterministic.map((flow, index) => [flow.app, index]));
+outcomes.sort((a, b) => (order.get(a.flow.app) ?? 0) - (order.get(b.flow.app) ?? 0));
 
 for (const outcome of outcomes.filter((item) => item.errors.length)) {
   console.error(`\n${outcome.flow.app} failed; retaining a full-evidence rerun:`);
@@ -104,6 +133,7 @@ if (coverage && !failed) {
   const byFile: Record<string, string[]> = {};
   for (const outcome of outcomes)
     for (const file of outcome.coverage) (byFile[file] ??= []).push(outcome.flow.app);
+  for (const coveredFlows of Object.values(byFile)) coveredFlows.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
   const index: CoverageIndex = {
     generatedAt: new Date().toISOString(),
     complete: outcomes.length === deterministic.length,

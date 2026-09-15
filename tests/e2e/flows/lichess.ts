@@ -18,7 +18,6 @@ export const lichess: Flow = {
   screen: SCREEN,
   crop: { top: 0, bottom: 48, left: 0, right: 0 },
   clock: "live",
-  fastCheckpoints: ["ne5"],
   steps: [
     { id: "launch", label: "Launch — Flutter home", action: { type: "launch" }, wait: wait.live(40000) },
     { id: "tools", label: "More — tools", action: tap(972, navY), wait: wait.live(2000) },

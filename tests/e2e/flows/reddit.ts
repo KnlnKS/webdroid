@@ -16,7 +16,6 @@ export const reddit: Flow = {
   screen: SCREEN,
   crop: { top: 0, bottom: 0, left: 0, right: 0 },
   clock: "live",
-  fastCheckpoints: ["login-back"],
   steps: [
     // the launch ends under microG's "Add Google account" sheet in its own process; the main
     // realm's welcome activity is stopped beneath it
