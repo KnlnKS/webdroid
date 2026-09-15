@@ -4676,3 +4676,12 @@ deterministic flows in 68.3 seconds and records 167 source files, all six screen
 as unsupported. The regenerated index points at the exact source commit and its complete schema
 hash. The known Flappy Bird page error remains an unresolved runtime defect outside this harness
 hardening; it is now visible and narrowly declared.
+
+The frozen final matrix passes typecheck and 1,235 tests with 26,596 assertions. FitNotes, Mihon,
+Flappy Bird, Calculator, and Doodle Jump smoke-compile with zero method failures; all eight runnable
+framework exercises pass at 295/363 declared natives, and text comparison remains 6/6. The
+serialized real-time E2E run completes all 12 flows and 159 steps in 804.7 seconds with no wedged
+main loop, required native delegate, or frame-completion lag. All 524 available process snapshots
+report `ok`; 12 excluded web-content frames report `unavailable`. It retains only the two known
+YouTube settle timeouts and the documented live-app errors. The corpus renders 20/20 APKs and
+reports 46 current compatibility gaps. No visual golden is changed.
