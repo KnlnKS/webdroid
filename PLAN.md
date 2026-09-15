@@ -1,6 +1,7 @@
 # Android API and graphics fuzzing
 
-Starting revision: `4ecee61`. Integration branch: `codex/android-api-fuzzing`.
+Starting revision: `4ecee61`. Integrated into `main` by `f6396b1`.
+Operator and finding-resolution guide: [`scripts/fuzz/README.md`](scripts/fuzz/README.md).
 
 ## Contract
 
