@@ -11,6 +11,13 @@ Starting revision: `d91679c`.
 - [x] Reach and interact with the age gate, loading screen, main menu, and live gameplay in Chrome.
 - [x] Complete the final typecheck, unit, smoke, framework, text, E2E, and corpus verification matrix.
 
+## Thermo-nuclear follow-up
+
+- [x] Confirm production compatibility logic contains no package- or app-specific checks.
+- [x] Replace repeated CPU ownership conditions and microtask polling with one base-availability invariant.
+- [x] Name and centralize the complete GLES3-core ETC2/EAC format policy.
+- [x] Repeat the final verification matrix after the structural cleanup.
+
 ## Scope
 
 The compatibility changes stay in the native CPU scheduler, pthread startup, and GLES3 bridge.

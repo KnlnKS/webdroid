@@ -4552,3 +4552,37 @@ and retains 46 distinct compatibility gaps. No visual golden changes are made.
 
 This evidence covers the exercised game path; it does not claim that unrelated optional Unity
 services or every compressed texture family are implemented.
+
+### Thermo-nuclear maintainability follow-up
+
+The strict branch review found no application package, class, asset, or behavior check in
+production source. Both fixes are platform policies: every CPU uses the same register-ownership
+rules, and every WebGL2 GLES3 context activates the complete core ETC2/EAC format range when that
+range is used. The game name remains only in task and evidence documentation.
+
+The first scheduler fix repeated the zero-loop/zero-depth predicate and bounced a pending base
+signal through `queueMicrotask` before waiting for it. A single `baseAvailable` invariant now owns
+that state, and `awaitIdleBase` directly takes and awaits a deliverable signal. Signal frame labels
+also use one predicate rather than scattered string-prefix checks. This removes the polling state
+without changing parked-handler delivery or slice-boundary delivery.
+
+The first graphics fix layered a pass-through context helper over an ETC2 activation helper and
+left the format bounds as unexplained literals. One `glForTextureFormat` policy now obtains the
+current context, recognizes the named GLES range, and performs the once-per-context activation.
+No generalized extension registry is added: ETC2/EAC is the GLES3-core compressed family, while
+ASTC, S3TC, PVRTC, and RGTC remain correctly governed by their extension contracts.
+
+No touched source file approaches the review's 1,000-line threshold: after the cleanup `cpu.ts`
+is 572 lines, `pthread.ts` 354, `gles3.ts` 766, and the focused CPU test file 179. No new cast,
+optional mode, app flag, dependency, or test is introduced. A fresh isolated Chrome context again
+rendered the age gate, accepted its original controls, and reached live gameplay with 3,340/3,340
+completed frames, 1,175 GL frames, zero GL/layout/draw errors, and no pending or active signal.
+
+The post-cleanup matrix passes: typecheck; 1,230 unit tests with 26,584 assertions; a 65,029-class
+Subway Surfers smoke compile with zero method failures; framework coverage at 295/363 declared
+natives with all eight runnable exercises passing; and 6/6 text-layout comparisons. The serialized
+12-flow browser suite finishes in 823.3 seconds, with no wedged step, required native delegate, GL
+error, or process whose completed-frame count trails its frame count. It retains the established
+TikTok layout delegate errors, YouTube's two settle timeouts and draw gap, Lichess's Flutter pthread
+limits, and Mihon's terminal onboarding page error. The corpus renders 20/20 APKs and reports 45
+distinct existing gaps. No visual golden is changed.
