@@ -70,16 +70,18 @@ function makeRecord(name: string): JvmMethodProfile {
 
 function record(name: string): JvmMethodProfile | undefined {
   if (!enabled) return undefined;
-  let value = records.get(name);
-  if (!value && records.size < MAX_METHODS) {
-    value = makeRecord(name);
+  const existing = records.get(name);
+  if (existing) return existing;
+  if (records.size < MAX_METHODS) {
+    const value = makeRecord(name);
     records.set(name, value);
+    return value;
   }
-  if (!value && dropped.size < MAX_METHODS && !dropped.has(name)) {
+  if (dropped.size < MAX_METHODS && !dropped.has(name)) {
     dropped.add(name);
     perf.jvmProfileDroppedMethods++;
   }
-  return value;
+  return undefined;
 }
 
 export function configureJvm(options: { profile: boolean; tier: JvmTier; hotThreshold?: number }): void {

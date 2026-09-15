@@ -10,7 +10,14 @@ import { ACC, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
 import { jvmProfiler } from "./profile";
-import { ifTarget, prepareMethod, switchCases, type PreparedInstruction as Ins, type PreparedMethod } from "./prepared";
+import {
+  ifTarget,
+  prepareMethod,
+  switchCases,
+  type PreparationPhase,
+  type PreparedInstruction as Ins,
+  type PreparedMethod,
+} from "./prepared";
 
 const REL: Record<string, string> = { lt: "<", ge: ">=", gt: ">", le: "<=" };
 const holder = (isStatic: boolean) => (isStatic ? "C" : "C.prototype");
@@ -33,7 +40,7 @@ function prepareDexMethod(
   profileName: string,
 ): PreparedMethod {
   const observe = jvmProfiler.enabled
-    ? (phase: "decode" | "cfg" | "type", ms: number) => jvmProfiler.add(profileName, phase, ms)
+    ? (phase: PreparationPhase, ms: number) => jvmProfiler.add(profileName, phase, ms)
     : undefined;
   const prepared = prepareMethod(dex, code, desc, isStatic, observe);
   if (jvmProfiler.enabled) {
@@ -402,7 +409,6 @@ ${profileEnd}
     const resume = ++this.resumes;
     return `if(${value} instanceof Promise){$p=${value};$resume=${resume};break $dispatch;}case -${resume}:if($resume){${value}=$p;$resume=0;}`;
   }
-
 
   private fieldProp(fieldIdx: number): string {
     return this.R.resolveInstanceField(this.dex, fieldIdx);
