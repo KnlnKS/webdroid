@@ -4642,3 +4642,37 @@ action error. An initial exact-1,000 ms triplet produced 10.0 -> 12.1 ms p95 bec
 repeatedly sampled the same frame phase; it is not mixed into the phase-decorrelated acceptance
 series and remains an explicit sensitivity limit. Production mode carries neither controlled time
 nor precise-coverage collection.
+
+### Thermo-nuclear testing follow-up
+
+The strict review found that the first fast lane recorded evidence it did not enforce. Fast visual
+assertions now live on their owning step and always carry a numeric limit; a missing manifest,
+manifest step, golden, or actual capture is a failure. Motion checkpoints run serially and fail
+below their declared rate. Unmatched page and console errors also fail the lane. Flappy Bird's
+existing `status` page error is retained as an explicit substring allowlist instead of being
+silently discarded. Calculator has no golden, so its former unscored checkpoint declaration was
+removed rather than represented as visual evidence.
+
+The page probe now receives the `WaitPolicy` union unchanged. Action, horizon, and liveness work
+share the guest clock's `advanceBy` and `drive` operations instead of maintaining three subtly
+different deadline loops. State completion requires its condition, a successful main-queue
+sentinel, and a newly presented frame; failure of any tier produces a timeout reason. Process
+realms cancel every owned one-shot and repeating guest timer on unload, including an interval
+whose callback is executing during disposal.
+
+Coverage fingerprints now include the complete canonical flow definition, including action
+payloads, conditions, timeouts, masks, screens, and evidence. The selector validates JSON at the
+boundary, APK hashes, resolved golden screens, unsupported-flow membership, and every relevant
+source change since the recorded revision. Bun's parser supplies static and literal dynamic import
+edges across runtime, test, script, and generated-vendor roots. Any incomplete graph or invalid
+index widens with a visible reason. Source changes also select every instrumentation-unsupported
+flow, which closes Doodle Jump's previous false-negative path. Git discovery uses the explicit
+`GIT` environment variable or normal executable lookup; no machine-private path remains.
+
+Focused verification passes typecheck and five ownership tests. The enforced visual lane passes
+FitNotes and both Mihon flows; isolated motion passes Flappy Bird at 46/28 fps and Doodle Jump at
+67/37 fps in the first focused run. A complete three-worker coverage refresh passes all six
+deterministic flows in 68.3 seconds and records 167 source files, all six screens, and Doodle Jump
+as unsupported. The regenerated index points at the exact source commit and its complete schema
+hash. The known Flappy Bird page error remains an unresolved runtime defect outside this harness
+hardening; it is now visible and narrowly declared.
