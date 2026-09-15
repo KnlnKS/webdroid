@@ -11,6 +11,9 @@ crossing any primary, p95-latency, heap, rendering, or diagnostic regression gat
   `wd.jvmProfile()`, with diagnostic tier and hotness controls.
 - Compact prepared methods with ordered decoded instructions, byte-array block
   leaders, reaching-type annotations, and numeric opcode metadata.
+- A pure preparation boundary consumed by separate cold and hot emitters. OSR
+  installs an explicit `{ invoke, resume }` artifact instead of overloading the
+  Java method call ABI through `arguments`.
 - Direct cold-operand emission instead of reparsing generated JavaScript with a
   source regex. Cold handlers remain pooled and source admission remains bounded.
 - Instruction/backedge heat in addition to entry counts. Long activations can OSR
@@ -18,6 +21,10 @@ crossing any primary, p95-latency, heap, rendering, or diagnostic regression gat
   emitter. The calibrated default threshold is 4096 instructions.
 - No runtime dependency, cross-origin isolation, executable cache, worker, or
   persistent profile is added.
+
+The final strict maintainability follow-up also makes class linking aggregate-only
+in the profiler, measures complete async hot executions (including already-installed
+entries), and derives result, screenshot, and CPU-profile paths independently.
 
 ## Measured result
 
@@ -52,7 +59,7 @@ time across every Java-heavy flow.
 ## Verification
 
 - `bun run typecheck`: pass.
-- `bun run test`: 1212 tests / 26483 assertions pass.
+- `bun run test`: 1213 tests / 26489 assertions pass.
 - Twelve eager/cold smoke compilations across FitNotes, Mihon, Resy, Doodle,
   Flappy Bird and Lichess: zero failed methods.
 - `bun run fwtest`: eight runnable exercises pass; declared coverage 295/363.
@@ -62,6 +69,13 @@ time across every Java-heavy flow.
 - Corpus: 17/17 APKs render a first frame; FitNotes and Mihon have zero reached gaps.
 - Full per-step/process diagnostics reproduce only recorded non-DEX limitations;
   no flow wedges and no new fault family appears.
+
+The review follow-up was isolated against `f32bb4f` with 15 FitNotes and seven
+Mihon alternating pairs. FitNotes startup changed -0.08%, its median p95 was
+unchanged, pooled p95 changed +0.93%, and heap changed +0.63%. Mihon startup
+changed +0.08%, CPU -1.04%, median p95 -1.02%, and heap +0.82%. FitNotes raw
+CPU medians changed +3.27% across a bimodal host-load shift, while the median
+paired change was +1.40%; both are within the global 5% guard.
 
 Architecture, external research, phase attribution, rejected measurements and
 evidence limits are in [docs/dex-performance-architecture.md](docs/dex-performance-architecture.md).

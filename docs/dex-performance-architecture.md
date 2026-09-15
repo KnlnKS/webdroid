@@ -74,20 +74,25 @@ committed trace format was introduced.
 The profiler distinguishes decode, CFG construction, reaching-definition/type
 analysis, cold-handler construction, hot emission, `new Function`, class linking,
 cold execution, hot execution, and suspension. Cold duration includes nested and
-suspended work, so `suspendMs` must be subtracted before treating it as active
-time. This is diagnostic attribution, not a replacement for Chrome CPU sampling.
+suspended work. Generated hot methods instrument their own outer async lifetime,
+so already-installed direct entries and time after suspension are included too.
+`suspendMs` is subtracted from both tiers before treating inclusive duration as
+active time. Class linking remains an aggregate counter and does not consume the
+bounded method-record budget. This is diagnostic attribution, not a replacement
+for Chrome CPU sampling.
 
 ## Compact preparation
 
-`src/jvm/prepared.ts` owns DEX instruction decoding and opcode metadata. Decoded
+`src/jvm/prepared.ts` owns the complete preparation boundary: instruction decoding,
+CFG construction, reaching-definition typing, and opcode metadata. Decoded
 instructions live in one ordered array; each record contains the PC, numeric
 opcode, decoded operands, argument-register list, wide literal, and the two
 reaching-definition annotations required for floating constants and null
 receivers. Block leaders use one byte per DEX code unit instead of a `Set` of
 boxed numbers.
 
-The preparation boundary removes decoder detail from the emitter and replaces
-the hottest name-regex classifications with numeric, total opcode metadata:
+The immutable TypeScript boundary removes decoder and analysis state from the
+emitter and replaces the hottest name-regex classifications with numeric, total opcode metadata:
 block termination, destination-register writes, potential suspension,
 float/double consumers, and conservative Wasm-region eligibility. The emitter's
 large opcode switch remains the semantic source of truth.
@@ -99,6 +104,12 @@ again: the first OSR prototype retained preparation for every cold method and
 raised Mihon retained heap by about 5.5%. Rebuilding only the small promoted set
 returned heap to within about 0.5% of baseline. This is an intentional exception
 to universal cross-tier reuse, selected by application memory evidence.
+
+The strict follow-up removes the remaining stateful compiler facade: cold and hot
+backends now receive `PreparedMethod` explicitly, and the compiler module falls
+from 880 to 715 lines. The first version captured the prepared object from every
+promotion closure and added about 5% FitNotes heap; retaining only its scalar
+parameter count reduced the measured change to +0.63%.
 
 ## Direct cold operands
 
@@ -145,6 +156,11 @@ exception value, invocation result temporaries, and pending fuel state. Promotio
 does not occur at arbitrary instructions. The existing fuel/refuel boundary is
 the safe point, so Java exception ranges, re-entrant native callbacks, class
 initialization, and Promise suspension keep their previous ordering.
+
+Compilation returns an internal `{ invoke, resume }` artifact. The generated
+resumable method has an explicit frame formal, and `resume` owns frame placement;
+ordinary Java calls no longer depend on `arguments.length` or a duplicate OSR
+suspension field to select a hidden second ABI.
 
 The fixed threshold grid was 1,024, 4,096, and 16,384 instructions. Startup was
 neutral across the grid; 4,096 was the lowest stable threshold without a retained

@@ -4272,3 +4272,61 @@ recorded platform and app limitations: Window sidecar/extension gaps, YouTube
 Matrix/SAX/cursor failures and two control-settle timeouts, TikTok getGravity and
 native log failures, Lichess pthread/Stockfish faults, optional Reddit SDK gaps,
 and the existing status TypeError attributed to the following Flappy capture.
+
+## 2026-09-14: strict DEX maintainability follow-up
+
+A thermo-nuclear review after the performance redesign found five structural or
+observability defects. Commit `542e575` derives sibling screenshot and CPU-profile
+paths with `node:path`, so an output name without a `.json` suffix cannot make the
+CPU profile overwrite the primary result. Commit `eb21f75` addresses the runtime
+findings:
+
+- `prepareMethod` now owns decode, CFG construction, reaching definitions, type
+  annotations, and eligibility as one explicit `PreparedMethod` boundary. Cold and
+  hot emitters consume it without a stateful compiler/preparation facade; the main
+  compiler shrinks from 880 to 715 lines.
+- OSR compilation returns a typed `{ invoke, resume }` artifact. Resumption uses an
+  explicit generated frame formal and one cold-frame suspension state, removing the
+  `arguments.length` protocol, untyped `Function` state, and duplicate `$osrS`.
+- Generated hot methods profile their complete async lifetime and installed direct
+  entries. Suspension count/time is recorded in the hot tier, active-time estimates
+  subtract suspension from both cold and hot duration, and class linking updates
+  only its aggregate counter instead of consuming the 8,192 method-record cap.
+
+The first boundary implementation retained each initial prepared method because
+the promotion closure read `prepared.params.length`. A three-pair FitNotes check
+showed about +5% retained heap. Capturing only the scalar parameter count removes
+that reachability; the discarded measurements are not used for acceptance.
+
+The frozen follow-up is compared with preceding production revision `f32bb4f` in
+serial alternating Metal runs. FitNotes extends from seven to fifteen pairs after
+its initial median p95 crossed the 5% guard; Mihon uses seven pairs. Every window
+completes 14/14 inputs, remains visible/alive, advances ticks and presentations,
+uses ANGLE Metal, and reports no app, process, or harness diagnostics.
+
+| Workload | Pre-follow-up | Follow-up | Change |
+| --- | ---: | ---: | ---: |
+| FitNotes launch action | 231.652 ms | 231.463 ms | -0.08% |
+| FitNotes interaction CPU | 51.989 ms/s | 53.687 ms/s | +3.27% |
+| FitNotes median window p95 | 10.735 ms | 10.735 ms | 0.00% |
+| FitNotes post-GC heap | 162.890 MB | 163.921 MB | +0.63% |
+| Mihon launch action | 996.918 ms | 997.709 ms | +0.08% |
+| Mihon interaction CPU | 348.749 ms/s | 345.115 ms/s | -1.04% |
+| Mihon median window p95 | 52.700 ms | 52.160 ms | -1.02% |
+| Mihon post-GC heap | 319.917 MB | 322.544 MB | +0.82% |
+
+FitNotes CPU crosses a bimodal host-load phase during the long series; its median
+paired change is +1.40%, while the declared raw-median change remains +3.27% and
+below the 5% global guard. Pooled p95 changes +0.93% for FitNotes and +0.06% for
+Mihon. All samples are retained in ignored output under
+`webdroid-shots/jvm-quality-followup/retained/`.
+
+Final checks run after production freezes: typecheck; 1213 tests / 26489
+assertions; 12 eager/cold compilations across FitNotes, Mihon, Resy, Doodle,
+Flappy Bird and Lichess with zero method failures; eight runnable framework
+exercises; FitNotes text parity 6/6; serialized E2E exit zero for 12 flows / 159
+steps; and corpus 17/17. FitNotes renders 39/39 and Mihon app 17/17 without a new
+diagnostic. The full matrix sees one historically observed Resy OkHttp timeout
+executor exception; matched baseline and candidate repeats both render 13/13
+without reproducing it, so it is retained as a live-network outlier rather than a
+regression waiver.
