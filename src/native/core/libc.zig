@@ -184,10 +184,10 @@ fn checksum(c: *Cpu, id: Fn) Result {
         return .done;
     }
     const p = ptr(c, 1) orelse return .fault;
-    const input = mem.bytes(p)[0..@as(u32, @truncate(arg(c, 2)))];
+    const n: u32 = @truncate(arg(c, 2));
+    const input = mem.bytes(p)[0..n];
     const initial: u32 = @truncate(arg(c, 0));
-    const value = if (id == .crc32) crc32(initial, input) else std.hash.Adler32.permute(initial, input);
-    ret(c, value);
+    ret(c, if (id == .crc32) crc32(initial, input) else std.hash.Adler32.permute(initial, input));
     return .done;
 }
 
