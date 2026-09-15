@@ -23,16 +23,15 @@ const mapped = new WeakMap<object, { ptr: number; off: number; len: number; acce
 
 const TEXTURE0 = 0x84c0, ACTIVE_TEXTURE = 0x84e0, CURRENT_PROGRAM = 0x8b8d;
 const IDENTITY_SWIZZLE = 0x688;
-const etc2Enabled = new WeakSet<GL>();
-function enableCoreCompressedFormat(gl: GL, format: number): void {
-  if (format < 0x9270 || format > 0x9279 || etc2Enabled.has(gl)) return;
-  // WebGL gates GLES3-core ETC2/EAC formats behind extension activation.
-  gl.getExtension("WEBGL_compressed_texture_etc");
-  etc2Enabled.add(gl);
-}
-function compressedGl(format: number): GL {
+const ETC2_EAC_FIRST = 0x9270, ETC2_EAC_LAST = 0x9279;
+const etc2Contexts = new WeakSet<GL>();
+function glForTextureFormat(format: number): GL {
   const gl = g();
-  enableCoreCompressedFormat(gl, format);
+  if (format >= ETC2_EAC_FIRST && format <= ETC2_EAC_LAST && !etc2Contexts.has(gl)) {
+    // WebGL gates GLES3-core ETC2/EAC formats behind extension activation.
+    gl.getExtension("WEBGL_compressed_texture_etc");
+    etc2Contexts.add(gl);
+  }
   return gl;
 }
 const shaderRecs = new WeakMap<WebGLShader, { original: string; rewrite: SwizzleRewrite }>();
@@ -603,30 +602,30 @@ export function gles3Init(): void {
     glTexSubImage3D: (_c, a) => { const t = a.i(), l = a.i(), x = a.i(), y = a.i(), z = a.i(), w = a.i(), h = a.i(), d = a.i(), fmt = a.i(), ty = a.i(); (g().texSubImage3D as Function)(t, l, x, y, z, w, h, d, fmt, ty, texData(ty, a.p())); },
     glCompressedTexImage2D: (_c, a) => {
       const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(); a.i(); const n = a.i(), p = a.p();
-      const gl = compressedGl(f);
+      const gl = glForTextureFormat(f);
       if (unpackPbo) gl.compressedTexImage2D(t, l, f, w, h, 0, n, p); else gl.compressedTexImage2D(t, l, f, w, h, 0, u8(p, n));
     },
     glCompressedTexSubImage2D: (_c, a) => {
       const t = a.i(), l = a.i(), x = a.i(), y = a.i(), w = a.i(), h = a.i(), f = a.i(), n = a.i(), p = a.p();
-      const gl = compressedGl(f);
+      const gl = glForTextureFormat(f);
       if (unpackPbo) gl.compressedTexSubImage2D(t, l, x, y, w, h, f, n, p); else gl.compressedTexSubImage2D(t, l, x, y, w, h, f, u8(p, n));
     },
     glCompressedTexImage3D: (_c, a) => {
       const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(), d = a.i(); a.i(); const n = a.i(), p = a.p();
-      const gl = compressedGl(f);
+      const gl = glForTextureFormat(f);
       if (unpackPbo) gl.compressedTexImage3D(t, l, f, w, h, d, 0, n, p); else gl.compressedTexImage3D(t, l, f, w, h, d, 0, u8(p, n));
     },
     glCompressedTexSubImage3D: (_c, a) => {
       const t = a.i(), l = a.i(), x = a.i(), y = a.i(), z = a.i(), w = a.i(), h = a.i(), d = a.i(), f = a.i(), n = a.i(), p = a.p();
-      const gl = compressedGl(f);
+      const gl = glForTextureFormat(f);
       if (unpackPbo) gl.compressedTexSubImage3D(t, l, x, y, z, w, h, d, f, n, p); else gl.compressedTexSubImage3D(t, l, x, y, z, w, h, d, f, u8(p, n));
     },
     glTexStorage2D: (_c, a) => {
-      const target = a.i(), levels = a.i(), format = a.i(), width = a.i(), height = a.i(), gl = compressedGl(format);
+      const target = a.i(), levels = a.i(), format = a.i(), width = a.i(), height = a.i(), gl = glForTextureFormat(format);
       gl.texStorage2D(target, levels, format, width, height);
     },
     glTexStorage3D: (_c, a) => {
-      const target = a.i(), levels = a.i(), format = a.i(), width = a.i(), height = a.i(), depth = a.i(), gl = compressedGl(format);
+      const target = a.i(), levels = a.i(), format = a.i(), width = a.i(), height = a.i(), depth = a.i(), gl = glForTextureFormat(format);
       gl.texStorage3D(target, levels, format, width, height, depth);
     },
     glCopyTexSubImage3D: (_c, a) => g().copyTexSubImage3D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
