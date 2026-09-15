@@ -14,6 +14,8 @@ export { NativeFault, yieldToLoop, yieldStats };
 
 const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2 }
 const enum CoreExit { Budget = 0, Host = 1, Ret = 2, Fault = 3, Syscall = 4 }
+const SIGNAL_FRAME = "signal ";
+const isSignalFrame = (label: string | undefined): boolean => label?.startsWith(SIGNAL_FRAME) ?? false;
 // ~5 ms of guest time per slice: coarse enough that the macrotask hop per slice is noise, fine
 // enough that a 60 Hz frame loop on the JS thread keeps its cadence
 const SLICE_INSTR = 3_000_000;
@@ -189,16 +191,14 @@ export class Cpu {
   }
   private takeSignal(): number {
     if (!this.signals.length) return 0;
-    const i = this.pendingSignalIndex();
+    const i = this.signals.findIndex((sig) => !(this.signalMask & 1n << BigInt(sig - 1)));
     return i < 0 ? 0 : this.signals.splice(i, 1)[0];
-  }
-  private pendingSignalIndex(): number {
-    return this.signals.findIndex((sig) => !(this.signalMask & 1n << BigInt(sig - 1)));
   }
   /** the depth of the run loop awaiting a host call's promise, -1 for none: the Cpu is parked only when that
    *  loop is the innermost one — a nested frame in its teardown, or a handler above, owns the register file */
   parkedAt = -1;
   get parked(): boolean { return this.parkedAt === this.depth; }
+  private get baseAvailable(): boolean { return this.loops === 0 && this.depth === 0; }
   loops = 0;                                        // run loops alive on this Cpu (0: a Java thread between native calls)
   state = "";                                       // which await the run loop is in (wd.native.regs)
   idle: (() => void)[] = [];                        // a run loop waiting for a handler stacked above it to finish
@@ -215,7 +215,11 @@ export class Cpu {
    *  a running loop takes its queue at its next slice boundary. A handler parked in its own host call
    *  (sigsuspend) is a parked frame like any other: the next signal runs on top of it. */
   pump(): void {
-    queueMicrotask(() => { if (!this.finished && (this.parked || (this.loops === 0 && this.depth === 0))) { const sig = this.takeSignal(); if (sig) void this.deliver(sig); } });
+    queueMicrotask(() => {
+      if (this.finished || (!this.parked && !this.baseAvailable)) return;
+      const sig = this.takeSignal();
+      if (sig) void this.deliver(sig);
+    });
   }
   sigLog: string[] = [];                           // wd.native.regs: what each thread was signalled and when it ran
   /** a handler running on an otherwise idle Cpu (a Java thread between native calls): the next
@@ -223,12 +227,16 @@ export class Cpu {
   baseBusy: Promise<void> | null = null;
   /** an entry from Java must not stack on a handler that owns the register file from the bottom */
   async awaitIdleBase(): Promise<void> {
-    while (this.baseBusy
-      || (this.loops > 0 && this.frames[0]?.startsWith("signal "))
-      || (this.loops === 0 && this.pendingSignalIndex() >= 0)) {
-      if (this.baseBusy) await this.baseBusy;
-      else if (this.loops > 0) await new Promise<void>((r) => this.idle.push(r));
-      else { this.pump(); await Promise.resolve(); }
+    for (;;) {
+      if (this.baseBusy) { await this.baseBusy; continue; }
+      if (this.loops > 0 && isSignalFrame(this.frames[0])) {
+        await new Promise<void>((r) => this.idle.push(r));
+        continue;
+      }
+      if (!this.baseAvailable) return;
+      const sig = this.takeSignal();
+      if (!sig) return;
+      await this.deliver(sig);
     }
   }
   async deliver(sig: number): Promise<void> {
@@ -237,8 +245,8 @@ export class Cpu {
     const mask = this.signalMask, handling = this.handling.has(sig);
     this.signalMask = (mask | (h?.mask ?? 0n) | (h && h.flags & 0x40000000 ? 0n : 1n << BigInt(sig - 1))) & 0xfffffffffffbfeffn;
     this.handling.add(sig);
-    const base = this.loops === 0 && this.depth === 0;
-    const p = (async () => { if (h) await this.call(h.fn, [sig, 0, 0], "signal " + sig); })();
+    const base = this.baseAvailable;
+    const p = (async () => { if (h) await this.call(h.fn, [sig, 0, 0], SIGNAL_FRAME + sig); })();
     if (base) this.baseBusy = p.catch(() => {}).finally(() => { this.baseBusy = null; });
     try { await p; }
     catch (e) { console.error(`[native] signal ${sig} handler on ${this.name}:`, e); throw e; }
@@ -302,7 +310,7 @@ export class Cpu {
     // host code calling back into the guest (a comparator, a JNI entry) while a signal handler owns the
     // register file above the frame it belongs to waits for that handler, as the kernel would hold the
     // thread; a handler's own delivery never waits
-    if (!label.startsWith("signal ")) while (this.frames.length && this.frames[this.frames.length - 1].startsWith("signal ")) await new Promise<void>((r) => this.idle.push(r));
+    if (!isSignalFrame(label)) while (isSignalFrame(this.frames.at(-1))) await new Promise<void>((r) => this.idle.push(r));
     this.frames.push(label);
     this.ensureStack();
     const w = this.w;
