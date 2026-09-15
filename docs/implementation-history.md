@@ -4427,7 +4427,9 @@ larger manual campaigns.
 ## 2026-09-14: strict fuzz-harness maintainability follow-up
 
 The post-delivery thermo-nuclear review identified six harness defects rather than cosmetic nits.
-Commits `372210d` through `904071b` resolve them without changing Android compatibility semantics.
+Implementation commits `372210d` through `e14d30a` resolve them without changing Android
+compatibility semantics. With fuzz routing disabled, the server returns before URL parsing, so the
+test-only endpoint rewrite adds no work to ordinary proxy requests.
 
 Failure persistence is now atomic: original and minimized cases each own the exact pair of outputs
 that produced their failure, and every bundle includes two matching minimized observations. UI
@@ -4454,5 +4456,21 @@ focused run reused one origin and returned the expected ordered result each time
 
 Focused verification covered strict TypeScript, protocol/catalog/semantic tests, injected smoke
 and replay, a live one-step FitNotes UI campaign with three successful process snapshots, one live
-webdroid probe, two concurrent probes, and three sequential batches on a reused session. The full
-acceptance matrix follows after this implementation freeze.
+webdroid probe, two concurrent probes, and three sequential batches on a reused session.
+
+The frozen follow-up passes typecheck and 1,225 tests with 26,572 assertions. FitNotes, Calculator,
+and the unchanged fuzz probe smoke-compile with zero method failures; all eight runnable framework
+exercises pass with 295/363 registered native methods covered. Fixed seed `1592594996` produces
+0/64 API differences and 23/24 graphics differences. The corrected retained identity separates the
+graphics results into 20 minimized clusters instead of the previous three coarse global buckets;
+the material pixel bundle reproduces twice through the public replay command.
+
+The API-33 Calculator UI differential finds the same missing semantic target on its original run,
+minimized run, both stored reproductions, and a fresh public replay. Its captured foreground and two
+child-process snapshots all report tagged `ok` diagnostics. FitNotes text comparison remains 6/6.
+Serialized E2E passes all 12 flows in 845.8 seconds, including FitNotes 39/39 and Mihon app 17/17,
+without golden changes. The full corpus renders 18/18 first frames and retains 44 compatibility
+gaps: 59 Android process snapshots report `ok`, four excluded Twitch web-content frames report
+`unavailable`, and none report a telemetry failure. The follow-up changes no production JVM,
+graphics, or generated call site, so the preceding five-pair +0.20% launch and -0.73% browser-task
+performance evidence remains the applicable 3% retention check.
