@@ -4330,3 +4330,56 @@ diagnostic. The full matrix sees one historically observed Resy OkHttp timeout
 executor exception; matched baseline and candidate repeats both render 13/13
 without reproducing it, so it is retained as a live-network outlier rather than a
 regression waiver.
+
+## 2026-09-14: Android API 33 and graphics fuzzing
+
+Commits `d8b9fff` through `0d777ea` add an API-33 compatibility oracle without replacing the
+repository's API-35 framework pair. The ignored `fuzz-cache/android-33` holds the matching platform
+artifacts and the `webdroid_api33_ref` AVD runs at 1080x2160, 480 dpi. One dependency-free probe APK
+targets SDK 33, fetches typed cases from a loopback service, and posts normalized results. Android
+reaches the service through `adb reverse`; webdroid routes the same `HttpURLConnection` request
+through its normal proxy. The APK is byte-for-byte unchanged between platforms.
+
+The public-only catalog contains 78,776 API-33 declarations: 5,782 classes, 44,370 methods, and
+28,624 fields. Classification reports 14,432 delegates, 960 explicit placeholders, 38,949 members
+available through matching framework bytecode, 21,253 missing members, and 3,182 declarations
+already absent at API 33. Twenty-three members are currently exercised by explicit safe recipes.
+The full corpus pass additionally records every reached hidden/internal class, method, and field;
+those entries are reachability evidence, not a private-framework compatibility promise.
+
+API and graphics cases carry `schemaVersion: 1`, a printed seed, typed arguments, and bounded
+command sequences. Results normalize primitive/object values, exception class names, arrays,
+state, and PNG pixels. Graphics covers Bitmap, Canvas, Paint, Path, Matrix, Drawable, RenderNode,
+text, blend modes, clipping, transforms, density, save/restore, and basic View layout. State is
+exact; pixels use the existing tolerant and content-aware metrics. Sequence deletion and argument
+shrinking are bounded, and a minimized failure is retained only after two matching replays.
+
+The oracle found three broad runtime defects. API 33 rejects `transparent` in `Color.parseColor`
+and accepts only Android's named colors plus six/eight digit hex. Paint stroke cap/join getters
+were placeholders rather than state. Canvas arc/round-rect and clip operations mishandled inverted
+bounds. Each correction is isolated in a graphics commit and subsequent fixed API cases agree.
+Remaining graphics state/pixel differences are retained as campaign findings rather than hidden or
+used to make the normal suite platform-antialiasing-sensitive.
+
+`?fuzzCoverage=1` instruments generated JVM methods at generation time, including child process
+realms. Disabled output has neither a probe nor a per-call condition. The semantic UI fuzzer derives
+enabled tap, edit, and scroll actions from Android hierarchy nodes, records stable identity and
+normalized coordinates, and stops when structural divergence invalidates replay. Back, enter,
+background/resume, configuration changes, and a recorded coordinate fallback cover non-node state.
+Every retained UI state includes tree/frame hashes, screenshots and tolerant diffs when an oracle
+is present, coverage delta, browser errors, unread attributes, missing/native APIs, queue state,
+compositor state, and layout/draw/GL counters from every reachable process. Missing child telemetry
+is a harness failure. A live Calculator campaign detected, minimized, persisted, and replayed an
+Android/webdroid semantic-target divergence twice.
+
+`bun run fuzz smoke` injects one deterministic mismatch into each API, graphics, and UI comparison
+layer. Each is found, minimized, written under ignored `fuzz-results/smoke`, and replayed twice; the
+public replay command can replay all three bundles. These injections test the harness only and are
+never present in a production or differential campaign.
+
+Evidence limits remain explicit. Exhaustive inventory is not exhaustive behavioral invocation;
+stateful APIs require recipes. Pixel clustering does not declare distinct rasterization correct.
+UI hierarchy identity depends on accessibility information exported by the application. Long
+1,000-case and full-corpus campaigns remain manual and bounded, while normal verification uses
+small deterministic seeds. The strict whole-tree maintainability findings and rejected churn are
+recorded in `docs/code-quality-audit-2026-09.md`.
