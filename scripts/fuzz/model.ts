@@ -59,6 +59,16 @@ export type GraphicsCommand =
   | { op: "renderNode"; args: [number, number, number, number, number, number, number] }
   | { op: "viewText"; args: [string, number, number, number, number] };
 
+export const GRAPHICS_OPERATIONS = [
+  "drawColor", "color", "alpha", "strokeWidth", "style", "textSize", "antiAlias", "strokeCap", "strokeJoin", "blendMode",
+  "drawRect", "drawCircle", "drawLine", "drawText", "drawOval", "drawRoundRect", "drawArc", "translate", "scale", "rotate", "skew",
+  "save", "restore", "clipRect", "pathReset", "pathMove", "pathLine", "pathQuad", "pathCubic", "pathAddCircle", "pathFill", "pathClose",
+  "drawPath", "matrixRotate", "matrixTranslate", "matrixScale", "matrixSkew", "matrixPostTranslate", "setMatrix", "bitmapDensity",
+  "drawable", "renderNode", "viewText",
+] as const satisfies readonly GraphicsCommand["op"][];
+const GRAPHICS_OPERATIONS_ARE_EXHAUSTIVE: Exclude<GraphicsCommand["op"], typeof GRAPHICS_OPERATIONS[number]> extends never ? true : never = true;
+void GRAPHICS_OPERATIONS_ARE_EXHAUSTIVE;
+
 export type GraphicsCase = {
   schemaVersion: typeof SCHEMA_VERSION;
   id: string;

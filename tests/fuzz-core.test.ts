@@ -3,7 +3,7 @@ import { serveCases } from "../scripts/fuzz/case-server";
 import { generateApiCases, generateGraphicsCases } from "../scripts/fuzz/generate";
 import { injectedProbeFailure } from "../scripts/fuzz/injected";
 import { minimizeCaseBatched, reproducesTwice } from "../scripts/fuzz/minimize";
-import { SCHEMA_VERSION, validateProbeCase, validateProbeResult, type GraphicsCase } from "../scripts/fuzz/model";
+import { GRAPHICS_OPERATIONS, SCHEMA_VERSION, validateProbeCase, validateProbeResult, type GraphicsCase } from "../scripts/fuzz/model";
 
 describe("fuzz campaign core", () => {
   test("fixed seeds generate identical typed cases", () => {
@@ -15,6 +15,13 @@ describe("fuzz campaign core", () => {
       commands: [{ op: "typo", args: [1] }] })).toThrow("unsupported graphics operation");
     expect(() => validateProbeCase({ schemaVersion: 1, id: "bad-args", kind: "graphics", width: 1, height: 1,
       commands: [{ op: "drawRect", args: [1, 2] }] })).toThrow("must contain 4 items");
+  });
+
+  test("probe and TypeScript graphics operations stay in lockstep", async () => {
+    const source = await Bun.file("tests/fuzz-probe/src/org/webdroid/fuzz/ProbeActivity.java").text();
+    const graphicsSwitch = source.slice(source.indexOf('switch (command.getString("op"))'), source.indexOf("default -> throw", source.indexOf('switch (command.getString("op"))')));
+    const javaOperations = [...graphicsSwitch.matchAll(/case "([^"]+)"/g)].map((match) => match[1]).sort();
+    expect(javaOperations).toEqual([...GRAPHICS_OPERATIONS].sort());
   });
 
   test("case protocol orders and validates results", async () => {

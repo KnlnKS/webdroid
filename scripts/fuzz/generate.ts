@@ -6,7 +6,8 @@ const f = (value: number): ProbeArgument => ({ kind: "float", value });
 const s = (value: string): ProbeArgument => ({ kind: "string", value });
 
 export type ApiRecipeMember = { kind: "class" | "method"; owner: string; signature: string };
-type ApiRecipe = { members: readonly ApiRecipeMember[]; generate: (random: Random, id: string) => ApiCase };
+type RecipeGenerator = (random: Random, id: string, rect: number[]) => ApiCase;
+type ApiRecipe = { members: readonly ApiRecipeMember[]; generate: RecipeGenerator };
 
 export const apiRecipeMemberId = (member: ApiRecipeMember): string => `${member.kind}:${member.owner}.${member.signature}`;
 
@@ -17,10 +18,7 @@ function randomApiRecipe(random: Random, id: string): ApiCase {
   return API_RECIPES[random.int(0, API_RECIPES.length - 1)]!.generate(random, id, rect);
 }
 
-type RecipeGenerator = (random: Random, id: string, rect: number[]) => ApiCase;
-type Recipe = Omit<ApiRecipe, "generate"> & { generate: RecipeGenerator };
-
-export const API_RECIPES: readonly Recipe[] = [
+export const API_RECIPES: readonly ApiRecipe[] = [
   {
     members: [member("class", "android/graphics/Color", "android/graphics/Color"), member("method", "android/graphics/Color", "rgb(III)I")],
     generate: (random, id) =>
