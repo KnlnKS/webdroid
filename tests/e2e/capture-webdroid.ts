@@ -44,6 +44,7 @@ export type StepRun = {
   web?: { url: string | null; title: string; loaded: boolean }[];
   error?: string;
   processes?: ProcessSnapshot[];
+  phases?: StepResult["phases"] & { hostWriteMs: number };
 };
 
 /** What `actual/<flow>/run.json` holds: the steps plus how the run was driven. */
@@ -133,6 +134,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, { jobs = 1, s
     // the launch step's window is mostly boot + lazy compilation, not the app's frame loop; and
     // a frame rate measured beside other flows' browsers measures the host, not the app
     const slow = !!(step.animated && step.action.type !== "launch" && flow.minFps && fps < flow.minFps && jobs === 1);
+    const writeAt = performance.now();
     await Bun.write(`${outDir}/${file}`, Buffer.from(r.png, "base64"));
     // the structural half of the comparison; score.ts reads it back off disk like the png
     await Bun.write(`${outDir}/${uiFileFor(file)}`, JSON.stringify(r.uiTree));
@@ -141,6 +143,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, { jobs = 1, s
       await mkdir(dir, { recursive: true });
       await Promise.all(r.frames.map((f, n) => Bun.write(`${dir}/f${String(n).padStart(3, "0")}.png`, Buffer.from(f, "base64"))));
     }
+    const hostWriteMs = performance.now() - writeAt;
     const frames = r.frames.length || undefined;
     runs.push({ id: step.id, index: i, file, semanticHit: r.semanticHit, settled: r.settled.how, settleMs: Math.round(r.settled.ms),
                 busy: Object.keys(r.settled.busy).length ? r.settled.busy : undefined,
@@ -153,7 +156,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, { jobs = 1, s
                 nativeRequired: r.nativeRequired.length ? r.nativeRequired : undefined,
                 unreadAttrs: r.unreadAttrs.length ? r.unreadAttrs : undefined,
                 newErrors: r.newErrors.length ? r.newErrors : undefined, web: r.web.length ? r.web : undefined, error: r.error,
-                processes: await readProcesses(drv.page) });
+                processes: await readProcesses(drv.page), phases: { ...r.phases, hostWriteMs } });
     const p = r.perf;
     const flags = [
       r.semanticHit === false && !(step.action.type === "tapText" && step.action.optional) ? "coord-fallback" : "",

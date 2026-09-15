@@ -57,6 +57,13 @@ export type StepResult = {
   web: { url: string | null; title: string; loaded: boolean }[];
   uiTree: UiNode[];
   frames: string[];
+  phases: {
+    actionMs: number;
+    settleMs: number;
+    livenessMs: number;
+    captureMs: number;
+    telemetryMs: number;
+  };
 };
 
 export const DEFAULT_SETTLE: Omit<SettleOpts, "horizonMs" | "animated"> = { stableMs: 150, intervalMs: 250, stableFrames: 4, timeoutMs: 20_000 };
@@ -246,21 +253,27 @@ function installProbe(cfg: ProbeConfig): void {
     shots.length = 0; shotHash = -1; shooting = cfg.shots;
     const t0 = performance.now();
     let semanticHit: boolean | undefined, error: string | undefined;
+    const actionAt = performance.now();
     try {
       semanticHit = await act(spec.act, spec.screen, spec.settle.timeoutMs + spec.settle.horizonMs);
     } catch (e) {
       error = String((e as Error)?.message ?? e).slice(0, 300);
     }
+    const actionMs = performance.now() - actionAt;
     const settled = await settle(spec.settle);
+    const aliveAt = performance.now();
     const wedged = !(await wd.alive(spec.aliveMs));
+    const livenessMs = performance.now() - aliveAt;
     shooting = false;
-    const ms = performance.now() - t0;
-    const counters = { ...wd.perf };
+    const captureAt = performance.now();
     const png = await capture();
     const frames: string[] = [];
     for (const f of shots) frames.push(await encode(f));
-    return {
-      png, settled, semanticHit, wedged, error, ms,
+    const captureMs = performance.now() - captureAt;
+    const telemetryAt = performance.now();
+    const counters = { ...wd.perf };
+    const result = {
+      png, settled, semanticHit, wedged, error,
       perf: counters,
       newMissing: fresh("missing", [...wd.rt.missing]),
       nativeRequired: fresh("native", [...wd.rt.nativeRequired].map(([l, a]: [string, string]) => l + " (" + a + ")")),
@@ -270,6 +283,9 @@ function installProbe(cfg: ProbeConfig): void {
       uiTree: wd.uiTree(),
       frames,
     };
+    const telemetryMs = performance.now() - telemetryAt;
+    return { ...result, ms: performance.now() - t0,
+      phases: { actionMs, settleMs: settled.ms, livenessMs, captureMs, telemetryMs } };
   };
   g.__wd = { step, act };
 }
