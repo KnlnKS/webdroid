@@ -26,7 +26,8 @@ async function treeDiffFor(goldenDir: string, actualDir: string, rec: RecordedSt
   if (rec.uiFile && existsSync(goldenDir + '/' + rec.uiFile)) {
     golden = await Bun.file(goldenDir + '/' + rec.uiFile).json();
   } else if (next?.rec.bounds && next.step.action.type === 'tapText') {
-    golden = [{ text: next.step.action.text, desc: '', cls: '', resId: '', bounds: next.rec.bounds, clickable: true }];
+    golden = [{ text: next.step.action.text, desc: '', cls: '', resId: '', bounds: next.rec.bounds,
+      clickable: true, enabled: true, editable: false, scrollable: false }];
   } else return undefined;
   return diffTrees(golden, await Bun.file(actualFile).json());
 }

@@ -244,6 +244,10 @@ const wd = {
   },
   boot, app: () => currentApp(), back,
   background: (ms = 1000) => processBroker().background(ms),
+  configuration: async (orientation: "portrait" | "landscape") => {
+    const activity = currentApp()?.stack.at(-1);
+    if (activity) await vcall(activity, "setRequestedOrientation", "(I)V", orientation === "landscape" ? 0 : 1);
+  },
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),
   // framework attributes a layout used that nothing here reads: a look that is wrong with a
@@ -278,6 +282,10 @@ const wd = {
           resId: id && !id.startsWith("0x") ? `${v.idNum >>> 24 === 1 ? "android" : app.host.pkg}:id/${id}` : "",
           bounds: [x, y, x + (v.right - v.left), y + (v.bottom - v.top)],
           clickable: !!v.clickable,
+          enabled: v.enabled !== false,
+          editable: !!v.editable,
+          scrollable: !!v.scrollable || Number(v.maxScrollY ?? 0) > 0 ||
+            /(?:ScrollView|ListView|RecyclerView)$/.test(clsName(v)),
         });
       }
     };

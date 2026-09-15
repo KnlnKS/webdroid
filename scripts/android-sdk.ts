@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 
 export const androidSdkRoot = (): string =>
   process.env.ANDROID_SDK_ROOT ?? process.env.ANDROID_HOME ?? `${process.env.HOME}/Library/Android/sdk`;
@@ -15,7 +15,8 @@ export function androidTool(name: string): string {
     const path = `${root}/platform-tools/adb`;
     if (existsSync(path)) return path;
   }
-  const versions = [...new Bun.Glob("*").scanSync(`${root}/build-tools`)].sort((a, b) =>
+  const buildTools = `${root}/build-tools`;
+  const versions = (existsSync(buildTools) ? readdirSync(buildTools) : []).sort((a, b) =>
     a.localeCompare(b, undefined, { numeric: true }));
   const path = versions.map((version) => `${root}/build-tools/${version}/${name}`).filter(existsSync).at(-1);
   if (!path) throw new Error(`No Android ${name} tool is installed under ${root}`);

@@ -1,9 +1,9 @@
-import { copyFileSync, existsSync } from "node:fs";
-import { chromium } from "playwright";
+import { existsSync } from "node:fs";
 import { androidTool } from "../android-sdk";
 import { readProcesses } from "../../tests/e2e/lib/processes";
 import { serveCases } from "./case-server";
 import type { ProbeCase, ProbeResult } from "./model";
+import { startWebdroid } from "./webdroid-session";
 
 const PROBE_APK = "fuzz-cache/WebdroidFuzzProbe.apk";
 const PROBE_PACKAGE = "org.webdroid.fuzz";
@@ -51,51 +51,22 @@ export async function runAndroid(cases: readonly ProbeCase[], serial: string): P
   }
 }
 
-async function waitForServer(url: string, child: ReturnType<typeof Bun.spawn>): Promise<void> {
-  for (let attempt = 0; attempt < 120; attempt++) {
-    if (child.exitCode !== null) throw new Error(`webdroid server exited with ${child.exitCode}`);
-    try {
-      const response = await fetch(url);
-      if (response.ok) return;
-    } catch { /* server is still starting */ }
-    await Bun.sleep(250);
-  }
-  throw new Error(`webdroid server did not start at ${url}`);
-}
-
 export async function runWebdroid(cases: readonly ProbeCase[], port = 4097): Promise<PlatformRun> {
   requireProbe();
-  if (!existsSync("apks")) throw new Error("missing apks directory");
-  copyFileSync(PROBE_APK, "apks/WebdroidFuzzProbe.apk");
   const caseServer = serveCases(cases);
-  const output: string[] = [];
-  const devServer = Bun.spawn(["bun", "run", "server.ts"], {
-    env: { ...process.env, PORT: String(port) }, stdout: "pipe", stderr: "pipe",
-  });
-  void new Response(devServer.stdout).text().then((value) => output.push(value));
-  void new Response(devServer.stderr).text().then((value) => output.push(value));
-  const origin = `http://127.0.0.1:${port}`;
-  const pageUrl = `${origin}/?apk=WebdroidFuzzProbe.apk&screen=1080x2160@480&fuzzCoverage=1`;
-  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  let session: Awaited<ReturnType<typeof startWebdroid>> | undefined;
   try {
-    await waitForServer(origin, devServer);
-    browser = await chromium.launch({ headless: true, args: ["--use-gl=angle", "--use-angle=swiftshader"] });
-    const context = await browser.newContext({ viewport: { width: 1400, height: 1500 }, locale: "en-US", timezoneId: "UTC" });
-    const page = await context.newPage();
-    const errors: string[] = [];
-    page.on("pageerror", (error) => errors.push(String(error)));
-    page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
-    await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    await page.waitForFunction(() => Boolean(globalThis.wd?.app()), null, { timeout: 60_000 });
+    session = await startWebdroid(PROBE_APK, port);
+    const { origin, page, errors } = session;
     const results = await caseServer.results;
     let processes = await readProcesses(page);
-    let processFrames = processes.filter((process) => process.url === pageUrl || process.url.startsWith(`${origin}/process`));
+    let processFrames = processes.filter((process) => process.url.startsWith(`${origin}/?`) || process.url.startsWith(`${origin}/process`));
     let missingDiagnostics = processFrames.filter((process) => process.diagnostics === null ||
       (typeof process.diagnostics === "object" && process.diagnostics !== null && "failure" in process.diagnostics));
     for (let attempt = 0; missingDiagnostics.length && attempt < 10; attempt++) {
       await Bun.sleep(250);
       processes = await readProcesses(page);
-      processFrames = processes.filter((process) => process.url === pageUrl || process.url.startsWith(`${origin}/process`));
+      processFrames = processes.filter((process) => process.url.startsWith(`${origin}/?`) || process.url.startsWith(`${origin}/process`));
       missingDiagnostics = processFrames.filter((process) => process.diagnostics === null ||
         (typeof process.diagnostics === "object" && process.diagnostics !== null && "failure" in process.diagnostics));
     }
@@ -109,8 +80,6 @@ export async function runWebdroid(cases: readonly ProbeCase[], port = 4097): Pro
     };
   } finally {
     caseServer.stop();
-    await browser?.close();
-    devServer.kill();
-    await devServer.exited;
+    await session?.close();
   }
 }

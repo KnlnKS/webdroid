@@ -90,6 +90,9 @@ export async function dumpUi(): Promise<UiNode[]> {
       resId: get("resource-id"),
       bounds: [+b[1], +b[2], +b[3], +b[4]],
       clickable: get("clickable") === "true",
+      enabled: get("enabled") !== "false",
+      editable: get("editable") === "true" || /EditText$/.test(get("class")),
+      scrollable: get("scrollable") === "true",
     });
   }
   return nodes;

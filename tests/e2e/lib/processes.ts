@@ -11,6 +11,7 @@ export async function readProcesses(page: Page) {
           perf: wd.perf ? { ...wd.perf } : null,
           queue: wd.mainDbg ? { queued: wd.mainDbg.queued, depth: wd.mainDbg.depth, phase: wd.mainDbg.phase } : null,
           compositor: Reflect.get(wd, "compositorStatus") ?? null,
+          unreadAttrs: wd.unreadAttrs?.() ?? null,
           coverage: wd.jvmCoverage?.snapshot?.() ?? null } : null;
       }).catch((error) => ({ failure: String(error) })),
       new Promise<{ failure: string }>((resolve) => {
