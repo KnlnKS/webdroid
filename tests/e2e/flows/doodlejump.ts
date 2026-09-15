@@ -16,13 +16,13 @@ export const doodlejump: Flow = {
   clock: "controlled",
   fastCheckpoints: ["title", "playing"],
   steps: [
-    { id: "launch", label: "Launch — loader", action: { type: "launch", wait: wait.sample(3000) },
+    { id: "launch", label: "Launch — loader", action: { type: "launch" }, wait: wait.sample(3000) },
     // the game decodes every texture at startup (~11G guest instructions): the title takes ~18s to appear
-    { id: "title", label: "Title screen", action: { type: "settle", wait: wait.sample(18000) },
-    { id: "play", label: "Title → play", action: { type: "tapAt", ...PLAY, wait: wait.sample(1500) },
+    { id: "title", label: "Title screen", action: { type: "settle" }, wait: wait.sample(18000) },
+    { id: "play", label: "Title → play", action: { type: "tapAt", ...PLAY }, wait: wait.sample(1500) },
     // ~3s of gameplay taps with no capture inside it: the perf window
-    { id: "taps", label: "5 taps in play", action: { type: "tapAt", ...CENTER, repeat: 5, everyMs: 600, wait: wait.sample() },
-    { id: "playing", label: "Gameplay frame", action: { type: "settle", wait: wait.sample(3000) },
+    { id: "taps", label: "5 taps in play", action: { type: "tapAt", ...CENTER, repeat: 5, everyMs: 600 }, wait: wait.sample() },
+    { id: "playing", label: "Gameplay frame", action: { type: "settle" }, wait: wait.sample(3000) },
     { id: "back", label: "Back", action: { type: "back" }, wait: wait.quiescent() },
   ],
 };

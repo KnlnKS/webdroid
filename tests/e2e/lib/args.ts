@@ -3,10 +3,8 @@ import { cpus } from "node:os";
 import { FLOWS } from "../flows";
 import type { Flow } from "../types";
 
-const KNOWN = () => FLOWS.map((f) => f.app);
-
-function fail(msg: string): never {
-  console.error(`${msg}\n\nknown flows: ${KNOWN().join(", ")}`);
+function fail(msg: string, known: Flow[]): never {
+  console.error(`${msg}\n\nknown flows: ${known.map((f) => f.app).join(", ")}`);
   process.exit(2);
 }
 
@@ -14,21 +12,21 @@ function fail(msg: string): never {
  * Resolve one name to flows. Exact match wins; otherwise it is treated as a prefix, so
  * `--test mihon` selects both mihon-onboarding and mihon-app.
  */
-function resolve(name: string): Flow[] {
+function resolve(name: string, known: Flow[]): Flow[] {
   const n = name.trim();
   if (!n) fail("empty flow name");
-  const exact = FLOWS.find((f) => f.app === n);
+  const exact = known.find((f) => f.app === n);
   if (exact) return [exact];
-  const prefixed = FLOWS.filter((f) => f.app.startsWith(n));
+  const prefixed = known.filter((f) => f.app.startsWith(n));
   if (prefixed.length) return prefixed;
-  fail(`unknown flow "${n}"`);
+  fail(`unknown flow "${n}"`, known);
 }
 
 const DEFAULT_SHOTS_DIR = "webdroid-shots";
 /** Half the machine: a flow's renderer, its SwiftShader process and Bun's own work each want a core. */
 const DEFAULT_JOBS = Math.max(1, Math.floor(cpus().length / 2));
 
-function printHelp(cmd: string, extra = ""): void {
+function printHelp(cmd: string, known: Flow[], extra = ""): void {
   console.log(`usage: ${cmd} [--test <flow>]... [--jobs N] [--shots [dir]]
 
   --test, -t <flow>   run only this flow. Repeatable, accepts a comma-separated list, and
@@ -42,7 +40,7 @@ function printHelp(cmd: string, extra = ""): void {
   --list              list the known flows and exit
   --help, -h          show this
 ${extra}
-known flows: ${KNOWN().join(", ")}`);
+known flows: ${known.map((f) => f.app).join(", ")}`);
 }
 
 /**
@@ -51,7 +49,7 @@ known flows: ${KNOWN().join(", ")}`);
  * each step, not just the settled one that gets diffed). Any flag this parser doesn't know
  * is an error rather than a silently ignored typo.
  */
-export function parseArgs(argv: string[], cmd: string): { flows: Flow[]; shots?: string; jobs: number } {
+export function parseArgs(argv: string[], cmd: string, known: Flow[] = FLOWS): { flows: Flow[]; shots?: string; jobs: number } {
   const picked: Flow[] = [];
   const unknownFlags: string[] = [];
   let shots: string | undefined;
@@ -69,31 +67,31 @@ export function parseArgs(argv: string[], cmd: string): { flows: Flow[]; shots?:
     if (a === "--jobs" || a === "-j" || a.startsWith("--jobs=")) {
       const v = a.includes("=") ? a.slice(a.indexOf("=") + 1) : argv[++i];
       jobs = Math.floor(Number(v));
-      if (!(jobs >= 1)) fail(`${a} needs a positive number`);
+      if (!(jobs >= 1)) fail(`${a} needs a positive number`, known);
       continue;
     }
-    if (a === "--help" || a === "-h") { printHelp(cmd); process.exit(0); }
-    if (a === "--list") { console.log(KNOWN().join("\n")); process.exit(0); }
+    if (a === "--help" || a === "-h") { printHelp(cmd, known); process.exit(0); }
+    if (a === "--list") { console.log(known.map((f) => f.app).join("\n")); process.exit(0); }
     if (a === "--test" || a === "-t") {
       const v = argv[++i];
-      if (!v || v.startsWith("-")) fail(`${a} needs a flow name`);
-      for (const part of v.split(",")) picked.push(...resolve(part));
+      if (!v || v.startsWith("-")) fail(`${a} needs a flow name`, known);
+      for (const part of v.split(",")) picked.push(...resolve(part, known));
     } else if (a.startsWith("--test=")) {
-      for (const part of a.slice("--test=".length).split(",")) picked.push(...resolve(part));
+      for (const part of a.slice("--test=".length).split(",")) picked.push(...resolve(part, known));
     } else if (a.startsWith("-")) {
       unknownFlags.push(a);
     } else {
-      picked.push(...resolve(a));
+      picked.push(...resolve(a, known));
     }
   }
 
   if (unknownFlags.length) {
     console.error(`unknown option: ${unknownFlags.join(" ")}`);
-    printHelp(cmd);
+    printHelp(cmd, known);
     process.exit(2);
   }
 
   // De-dupe so `--test mihon --test mihon-app` doesn't run mihon-app twice.
   const seen = new Set<string>();
-  return { flows: (picked.length ? picked : FLOWS).filter((f) => !seen.has(f.app) && seen.add(f.app)), shots, jobs };
+  return { flows: (picked.length ? picked : known).filter((f) => !seen.has(f.app) && seen.add(f.app)), shots, jobs };
 }

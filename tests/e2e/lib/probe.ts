@@ -37,13 +37,15 @@ export type SettleOpts = {
   timeoutMs: number;
 };
 
-export type StepSpec = { act: Act; screen: Screen; settle: SettleOpts; aliveMs: number };
+export type StepSpec = { act: Act; screen: Screen; settle: SettleOpts; aliveMs: number; capture: boolean; controlled: boolean };
 
 /** how the wait ended, how long it took, and how many polls each reason kept it waiting */
 export type Settled = { how: "idle" | "pixels" | "timeout" | "snapshot"; ms: number; busy: Record<string, number> };
 
 export type StepResult = {
-  png: string;
+  png: string | null;
+  frameHash: string | null;
+  presentation: number;
   settled: Settled;
   semanticHit?: boolean;
   wedged: boolean;
@@ -143,7 +145,7 @@ function installProbe(cfg: ProbeConfig): void {
     return btoa(s);
   };
 
-  let lastPresent = 0, wantSample = false, lastHash = -1;
+  let lastPresent = 0, presentation = 0, wantSample = false, lastHash = -1;
   const sampled = new Map<number, ImageData>();
   const shots: ImageData[] = [];
   let shotHash = -1, shooting = false;
@@ -151,6 +153,7 @@ function installProbe(cfg: ProbeConfig): void {
   const rawTransfer = ImageBitmapRenderingContext.prototype.transferFromImageBitmap;
   ImageBitmapRenderingContext.prototype.transferFromImageBitmap = function (bmp: ImageBitmap | null) {
     lastPresent = performance.now();
+    presentation++;
     if (bmp && this.canvas === screen() && (wantSample || shooting)) {
       const img = readBitmap(bmp);
       const h = hashOf(img);
@@ -266,14 +269,15 @@ function installProbe(cfg: ProbeConfig): void {
     const livenessMs = performance.now() - aliveAt;
     shooting = false;
     const captureAt = performance.now();
-    const png = await capture();
+    const png = spec.capture ? await capture() : null;
     const frames: string[] = [];
     for (const f of shots) frames.push(await encode(f));
     const captureMs = performance.now() - captureAt;
     const telemetryAt = performance.now();
     const counters = { ...wd.perf };
     const result = {
-      png, settled, semanticHit, wedged, error,
+      png, frameHash: lastHash < 0 ? null : lastHash.toString(16).padStart(8, "0"), presentation,
+      settled, semanticHit, wedged, error,
       perf: counters,
       newMissing: fresh("missing", [...wd.rt.missing]),
       nativeRequired: fresh("native", [...wd.rt.nativeRequired].map(([l, a]: [string, string]) => l + " (" + a + ")")),

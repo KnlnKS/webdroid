@@ -5,6 +5,7 @@ webdroid-shots/
 fuzz-cache/
 fuzz-results/
 tests/e2e/actual/
+tests/e2e/actual-fast/
 tests/e2e/report/
 .worktrees/
 vendor/aosp

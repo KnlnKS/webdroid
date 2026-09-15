@@ -17,10 +17,11 @@ export const ENV_SCREEN = process.env.WEBDROID_SCREEN;
 
 /** Compose the query rather than concatenating it: `?bytecode=x` + `?screen=y` silently drops
  *  the second parameter, and the run then measures the wrong geometry against the right pixels. */
-function pageUrl(screen: Screen): string {
+function pageUrl(screen: Screen, controlled: boolean): string {
   const u = new URL(BASE_URL);
   if (CUT) u.searchParams.set("bytecode", CUT);
   u.searchParams.set("screen", screenParam(screen));
+  if (controlled) u.searchParams.set("testClock", "controlled");
   return u.href;
 }
 
@@ -55,6 +56,7 @@ type LaunchOpts = {
   /** localStorage seeded before the page boots: a flow's shared_prefs, already in wd's format */
   storage?: [string, string][];
   shots?: boolean;
+  controlled?: boolean;
 };
 
 const SETTLE_DEFAULTS: SettleOpts = { ...DEFAULT_SETTLE, horizonMs: 0, sample: false };
@@ -72,13 +74,13 @@ export class WebdroidDriver {
     const drv = new WebdroidDriver(browser, page, screen);
     page.on("pageerror", (e) => { drv.errors.push(String(e)); console.error("  [page error]", String(e).slice(0, 200)); });
     page.on("console", (message) => { if (message.type() === "error") drv.errors.push(`${message.location().url}: ${message.text()}`); });
-    await drv.open(screen);
+    await drv.open(screen, !!opts.controlled);
     return drv;
   }
 
-  private async open(screen: Screen): Promise<void> {
+  private async open(screen: Screen, controlled = false): Promise<void> {
     this.screen = screen;
-    const resp = await this.page.goto(pageUrl(screen), { waitUntil: "domcontentloaded", timeout: 30_000 });
+    const resp = await this.page.goto(pageUrl(screen, controlled), { waitUntil: "domcontentloaded", timeout: 30_000 });
     if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL} — run \`bun run dev\``);
     await this.page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
     await this.page.evaluate(() => document.fonts.ready);
@@ -91,8 +93,8 @@ export class WebdroidDriver {
   }
 
   /** One flow step, start to finish, in the page: action, settle, liveness, capture, telemetry. */
-  step(act: Act, settle: Partial<SettleOpts> = {}): Promise<StepResult> {
-    const spec: StepSpec = { act, screen: this.screen, settle: { ...SETTLE_DEFAULTS, ...settle }, aliveMs: 1500 };
+  step(act: Act, settle: Partial<SettleOpts> = {}, capture = true, controlled = false): Promise<StepResult> {
+    const spec: StepSpec = { act, screen: this.screen, settle: { ...SETTLE_DEFAULTS, ...settle }, aliveMs: 1500, capture, controlled };
     return this.page.evaluate((s) => globalThis.__wd.step(s), spec);
   }
 

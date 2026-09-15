@@ -46,12 +46,12 @@ export const mihonOnboarding: Flow = {
   steps: [
     // Mihon shows a static splash for several seconds; without a floor here the settle
     // heuristic locks onto the splash and records THAT as the golden.
-    { id: "launch", label: "Launch — Welcome / theme picker", action: { type: "launch", wait: wait.quiescent(14000) },
+    { id: "launch", label: "Launch — Welcome / theme picker", action: { type: "launch" }, wait: wait.quiescent(14000) },
     // Pin the theme explicitly: the default "Dynamic" derives Material You colours from the
     // wallpaper, which is not a thing webdroid can or should reproduce.
-    { id: "theme-light", label: "Choose Light mode", action: { type: "tapText", text: "Light", wait: wait.quiescent(900) },
-    { id: "theme-default", label: "Choose Default theme", action: { type: "tapAt", ...N(177, 870), wait: wait.quiescent(900) },
-    { id: "onboarding-next", label: "Next — storage step", action: { type: "tapText", text: "Next", wait: wait.quiescent(1200) },
+    { id: "theme-light", label: "Choose Light mode", action: { type: "tapText", text: "Light" }, wait: wait.quiescent(900) },
+    { id: "theme-default", label: "Choose Default theme", action: { type: "tapAt", ...N(177, 870) }, wait: wait.quiescent(900) },
+    { id: "onboarding-next", label: "Next — storage step", action: { type: "tapText", text: "Next" }, wait: wait.quiescent(1200) },
     { id: "storage-step", label: "Storage step (picker not entered)", action: { type: "settle" }, wait: wait.quiescent() },
   ],
 };
@@ -66,35 +66,35 @@ export const mihonApp: Flow = {
   clock: "controlled",
   fastCheckpoints: ["back-out-2"],
   steps: [
-    { id: "library", label: "Library — empty state", action: { type: "launch", wait: wait.quiescent(14000) },
-    { id: "nav-more", label: "More tab", action: { type: "tapText", text: "More", wait: wait.quiescent(1500) },
+    { id: "library", label: "Library — empty state", action: { type: "launch" }, wait: wait.quiescent(14000) },
+    { id: "nav-more", label: "More tab", action: { type: "tapText", text: "More" }, wait: wait.quiescent(1500) },
     // Settings sits below the fold on the More list — the scroll is load-bearing, not decorative.
     { id: "more-scroll", label: "Scroll the More list",
-      action: { type: "swipe", from: [0.5, 0.703], to: [0.5, 0.39], ms: 400, wait: wait.quiescent(2500) },
-    { id: "settings", label: "Settings", action: { type: "tapText", text: "Settings", wait: wait.quiescent(1800) },
+      action: { type: "swipe", from: [0.5, 0.703], to: [0.5, 0.39], ms: 400 }, wait: wait.quiescent(2500) },
+    { id: "settings", label: "Settings", action: { type: "tapText", text: "Settings" }, wait: wait.quiescent(1800) },
     { id: "settings-scroll", label: "Scroll the settings list",
-      action: { type: "swipe", from: [0.5, 0.78], to: [0.5, 0.35], ms: 400, wait: wait.quiescent(2500) },
+      action: { type: "swipe", from: [0.5, 0.78], to: [0.5, 0.35], ms: 400 }, wait: wait.quiescent(2500) },
     { id: "settings-scroll-back", label: "Scroll back to the top",
-      action: { type: "swipe", from: [0.5, 0.35], to: [0.5, 0.78], ms: 400, wait: wait.quiescent(2500) },
+      action: { type: "swipe", from: [0.5, 0.35], to: [0.5, 0.78], ms: 400 }, wait: wait.quiescent(2500) },
 
-    { id: "reader", label: "Reader settings (long list)", action: { type: "tapText", text: "Reader", wait: wait.quiescent(1800) },
+    { id: "reader", label: "Reader settings (long list)", action: { type: "tapText", text: "Reader" }, wait: wait.quiescent(1800) },
     { id: "reader-scroll", label: "Scroll Reader settings",
-      action: { type: "swipe", from: [0.5, 0.82], to: [0.5, 0.35], ms: 400, wait: wait.quiescent(2500) },
+      action: { type: "swipe", from: [0.5, 0.82], to: [0.5, 0.35], ms: 400 }, wait: wait.quiescent(2500) },
     { id: "reader-rotation", label: "Open Default rotation dialog",
-      action: { type: "tapText", text: "Default rotation", wait: wait.quiescent(2000) },
-    { id: "dialog-dismiss", label: "Dismiss dialog", action: { type: "back", wait: wait.quiescent(1800) },
+      action: { type: "tapText", text: "Default rotation" }, wait: wait.quiescent(2000) },
+    { id: "dialog-dismiss", label: "Dismiss dialog", action: { type: "back" }, wait: wait.quiescent(1800) },
 
     // Sub-screens (Reader, Appearance) hide the bottom nav, so `back` is the only way out.
     // Empirically: Reader -> Settings -> More.
-    { id: "back-to-settings", label: "Back to Settings", action: { type: "back", wait: wait.quiescent(1800) },
-    { id: "appearance", label: "Appearance settings", action: { type: "tapText", text: "Appearance", wait: wait.quiescent(1800) },
+    { id: "back-to-settings", label: "Back to Settings", action: { type: "back" }, wait: wait.quiescent(1800) },
+    { id: "appearance", label: "Appearance settings", action: { type: "tapText", text: "Appearance" }, wait: wait.quiescent(1800) },
     { id: "appearance-dark", label: "Switch to Dark theme (recomposition)",
-      action: { type: "tapText", text: "Dark", wait: wait.quiescent(2500) },
+      action: { type: "tapText", text: "Dark" }, wait: wait.quiescent(2500) },
     { id: "appearance-light", label: "Switch back to Light",
-      action: { type: "tapText", text: "Light", wait: wait.quiescent(2500) },
+      action: { type: "tapText", text: "Light" }, wait: wait.quiescent(2500) },
     { id: "appearance-scroll", label: "Scroll Appearance",
-      action: { type: "swipe", from: [0.5, 0.82], to: [0.5, 0.4], ms: 400, wait: wait.quiescent(2500) },
-    { id: "back-out", label: "Back out of Appearance", action: { type: "back", wait: wait.quiescent(2000) },
-    { id: "back-out-2", label: "Back again", action: { type: "back", wait: wait.quiescent(2000) },
+      action: { type: "swipe", from: [0.5, 0.82], to: [0.5, 0.4], ms: 400 }, wait: wait.quiescent(2500) },
+    { id: "back-out", label: "Back out of Appearance", action: { type: "back" }, wait: wait.quiescent(2000) },
+    { id: "back-out-2", label: "Back again", action: { type: "back" }, wait: wait.quiescent(2000) },
   ],
 };
