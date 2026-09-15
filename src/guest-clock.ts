@@ -14,7 +14,7 @@ const before = (a: Scheduled, b: Scheduled): boolean =>
 
 export class ControlledGuestClock {
   private heap: Scheduled[] = [];
-  private live = new Set<number>();
+  private live = new Map<number, number>();
   private nextId = 1;
   private sequence = 0;
 
@@ -29,13 +29,26 @@ export class ControlledGuestClock {
       interval: Math.max(0, intervalMs),
       callback,
     };
-    this.live.add(task.id);
+    this.live.set(task.id, realm);
     this.push(task);
     return task.id;
   }
 
   cancel(id: number): void {
     this.live.delete(id);
+  }
+
+  cancelRealm(realm: number): number {
+    let cancelled = 0;
+    for (const [id, owner] of this.live) if (owner === realm) {
+      this.live.delete(id);
+      cancelled++;
+    }
+    if (!cancelled) return 0;
+    const keep = this.heap.filter((task) => task.realm !== realm);
+    this.heap = [];
+    for (const task of keep) this.push(task);
+    return cancelled;
   }
 
   pending(): number {
@@ -134,15 +147,38 @@ export const clearGuestInterval = clock
 export const guestSleep = (ms: number): Promise<void> => new Promise((resolve) => setGuestTimeout(resolve, ms));
 
 const hostYield = (): Promise<void> => new Promise((resolve) => realSetTimeout(resolve, 0));
+const advanceTo = async (targetMs: number): Promise<number> => {
+  if (!clock) return 0;
+  const ran = clock.advanceTo(Math.max(targetMs, clock.nowMs));
+  await hostYield();
+  return ran;
+};
 export const guestClockControl = {
   controlled: controlledGuestTime,
   now: guestNow,
   pending: () => clock?.pending() ?? 0,
   nextDeadline: () => clock?.nextDeadline() ?? null,
-  advanceTo: async (targetMs: number): Promise<number> => {
+  advanceTo,
+  advanceBy: async (durationMs: number): Promise<number> => {
     if (!clock) return 0;
-    const ran = clock.advanceTo(Math.max(targetMs, clock.nowMs));
-    await hostYield();
+    const end = clock.nowMs + Math.max(0, durationMs);
+    let ran = 0;
+    for (let next = clock.nextDeadline(); next !== null && next <= end; next = clock.nextDeadline())
+      ran += await advanceTo(next);
+    ran += await advanceTo(end);
     return ran;
   },
+  drive: async <T>(operation: Promise<T>, maxVirtualMs: number): Promise<T> => {
+    if (!clock) return operation;
+    const end = clock.nowMs + Math.max(0, maxVirtualMs);
+    let finished = false;
+    void operation.then(() => { finished = true; }, () => { finished = true; });
+    while (!finished) {
+      const next = clock.nextDeadline();
+      if (next !== null && next <= end) await advanceTo(next);
+      else await hostYield();
+    }
+    return operation;
+  },
+  dispose: (): number => clock?.cancelRealm(realm) ?? 0,
 };

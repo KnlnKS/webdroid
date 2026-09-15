@@ -16,4 +16,16 @@ describe("ControlledGuestClock", () => {
     expect(clock.pending()).toBe(0);
     expect(clock.nowMs).toBe(110);
   });
+
+  test("cancels every callback owned by a disposed realm", () => {
+    const clock = new ControlledGuestClock(0);
+    const calls: number[] = [];
+    clock.schedule(() => calls.push(1), 10, 1, 10);
+    clock.schedule(() => calls.push(2), 20, 2);
+
+    expect(clock.cancelRealm(1)).toBe(1);
+    expect(clock.advanceTo(30)).toBe(1);
+    expect(calls).toEqual([2]);
+    expect(clock.pending()).toBe(0);
+  });
 });
