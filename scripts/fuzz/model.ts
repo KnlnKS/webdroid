@@ -104,6 +104,25 @@ export function sameFailure(expected: Failure, actual: Failure | null): boolean 
   return actual !== null && (expected.matchKey ?? expected.fingerprint) === (actual.matchKey ?? actual.fingerprint);
 }
 
+export function validateFailure(value: unknown, label = "failure"): Failure {
+  const input = record(value, label);
+  const allowed: FailureKind[] = ["exception-mismatch", "value-mismatch", "pixel-mismatch", "missing-api", "native-required",
+    "layout-error", "draw-error", "gl-error", "wedge", "timeout", "harness-error"];
+  const kind = allowed.find((candidate) => candidate === input.kind);
+  if (!kind) throw new Error(`${label}.kind is invalid`);
+  const output: Failure = { kind, fingerprint: text(input.fingerprint, `${label}.fingerprint`), detail: text(input.detail, `${label}.detail`) };
+  if (input.matchKey !== undefined) output.matchKey = text(input.matchKey, `${label}.matchKey`);
+  if (input.pixel !== undefined) {
+    const pixel = record(input.pixel, `${label}.pixel`);
+    output.pixel = {
+      strictPct: number(pixel.strictPct, `${label}.pixel.strictPct`),
+      tolerantPct: number(pixel.tolerantPct, `${label}.pixel.tolerantPct`),
+      contentDiffPct: number(pixel.contentDiffPct, `${label}.pixel.contentDiffPct`),
+    };
+  }
+  return output;
+}
+
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
   return value as Record<string, unknown>;

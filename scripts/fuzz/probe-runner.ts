@@ -68,14 +68,12 @@ export async function runWebdroid(cases: readonly ProbeCase[]): Promise<Platform
     const results = await caseServer.results;
     let processes = await readProcesses(page);
     let processFrames = processes.filter((process) => isWebdroidProcessFrame(process.url, origin));
-    let missingDiagnostics = processFrames.filter((process) => process.diagnostics === null ||
-      (typeof process.diagnostics === "object" && process.diagnostics !== null && "failure" in process.diagnostics));
+    let missingDiagnostics = processFrames.filter((process) => process.diagnostics.status !== "ok");
     for (let attempt = 0; missingDiagnostics.length && attempt < 10; attempt++) {
       await Bun.sleep(250);
       processes = await readProcesses(page);
       processFrames = processes.filter((process) => isWebdroidProcessFrame(process.url, origin));
-      missingDiagnostics = processFrames.filter((process) => process.diagnostics === null ||
-        (typeof process.diagnostics === "object" && process.diagnostics !== null && "failure" in process.diagnostics));
+      missingDiagnostics = processFrames.filter((process) => process.diagnostics.status !== "ok");
     }
     if (!processFrames.length || missingDiagnostics.length)
       throw new Error(`missing process diagnostics: ${JSON.stringify(missingDiagnostics.length ? missingDiagnostics : processes)}`);

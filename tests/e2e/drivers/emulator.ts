@@ -5,6 +5,7 @@
 import { device } from "../../../src/shell/config";
 import { type UiNode } from "../types";
 import { sleep, settleOn } from "../lib/util";
+import { parseUiAutomator } from "../lib/uiautomator";
 
 const ADB = process.env.ADB ?? "adb";
 
@@ -75,32 +76,8 @@ export async function dumpUi(): Promise<UiNode[]> {
     await sleep(400 + attempt * 400);
   }
   if (!xml) throw new Error("uiautomator dump failed after 5 attempts");
-  const nodes: UiNode[] = [];
-  const re = /<node\b([^>]*)\/?>/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(xml))) {
-    const attrs = m[1];
-    const get = (k: string) => new RegExp(`${k}="([^"]*)"`).exec(attrs)?.[1] ?? "";
-    const b = /bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/.exec(attrs);
-    if (!b) continue;
-    nodes.push({
-      text: decode(get("text")),
-      desc: decode(get("content-desc")),
-      cls: get("class"),
-      resId: get("resource-id"),
-      bounds: [+b[1], +b[2], +b[3], +b[4]],
-      clickable: get("clickable") === "true",
-      enabled: get("enabled") !== "false",
-      editable: get("editable") === "true" || /EditText$/.test(get("class")),
-      scrollable: get("scrollable") === "true",
-    });
-  }
-  return nodes;
+  return parseUiAutomator(xml);
 }
-
-const decode = (s: string) =>
-  s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
-   .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d)).replace(/&amp;/g, "&");
 
 /**
  * Find the best node matching `text` against its text or content-description.

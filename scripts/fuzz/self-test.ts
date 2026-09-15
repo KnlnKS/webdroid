@@ -43,8 +43,12 @@ export async function runInjectedSmoke(): Promise<string[]> {
   const minimized = await minimizeUiActions(input, async (candidate) => injectedUiFailure(candidate)?.fingerprint === failure.fingerprint);
   const reproduces = async (candidate: UiAction[]) => injectedUiFailure(candidate)?.fingerprint === failure.fingerprint;
   if (!(await reproduces(minimized)) || !(await reproduces(minimized))) throw new Error("injected UI mismatch did not replay twice");
-  const bundle: Omit<UiFailureBundle, "app" | "environment"> & { injected: true } = {
-    schemaVersion: 1, kind: "ui", injected: true, seed: 0x5eed1234, input, minimized, failure,
+  const observation = (actions: UiAction[]) => ({ actions, failure: injectedUiFailure(actions)!, run: { steps: [], environment: { injected: true } } });
+  const minimizedObservation = observation(minimized);
+  const bundle: UiFailureBundle = {
+    schemaVersion: 1, kind: "ui", injected: true, seed: 0x5eed1234,
+    app: { apk: "injected.apk", pkg: "injected", activity: "injected.Activity" },
+    original: observation(input), minimized: minimizedObservation, reproductions: [minimizedObservation, minimizedObservation],
   };
   const uiPath = `${OUT}/ui.failure.json`;
   await Bun.write(uiPath, JSON.stringify(bundle, null, 2) + "\n");

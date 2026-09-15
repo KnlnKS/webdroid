@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { compareResult } from "./compare";
 import { generateApiCases, generateGraphicsCases } from "./generate";
 import { minimizeCaseBatched, reproducesTwice } from "./minimize";
-import { sameFailure, validateProbeCase, validateProbeResult, type Failure, type ProbeCase, type ProbeResult } from "./model";
+import { sameFailure, validateFailure, validateProbeCase, validateProbeResult, type Failure, type ProbeCase, type ProbeResult } from "./model";
 import { runAndroid, runWebdroid, type PlatformRun } from "./probe-runner";
 import { injectedProbeFailure } from "./injected";
 
@@ -100,35 +100,13 @@ function object(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function failure(value: unknown, label: string): Failure {
-  const input = object(value, label);
-  if (typeof input.kind !== "string" || typeof input.fingerprint !== "string" || typeof input.detail !== "string")
-    throw new Error(`${label} is invalid`);
-  const allowed: Failure["kind"][] = ["exception-mismatch", "value-mismatch", "pixel-mismatch", "missing-api", "native-required",
-    "layout-error", "draw-error", "gl-error", "wedge", "timeout", "harness-error"];
-  const kind = allowed.find((candidate) => candidate === input.kind);
-  if (!kind) throw new Error(`${label}.kind is invalid`);
-  const output: Failure = { kind, fingerprint: input.fingerprint, detail: input.detail };
-  if (input.matchKey !== undefined) {
-    if (typeof input.matchKey !== "string") throw new Error(`${label}.matchKey is invalid`);
-    output.matchKey = input.matchKey;
-  }
-  if (input.pixel !== undefined) {
-    const pixel = object(input.pixel, `${label}.pixel`);
-    if (typeof pixel.strictPct !== "number" || typeof pixel.tolerantPct !== "number" || typeof pixel.contentDiffPct !== "number")
-      throw new Error(`${label}.pixel is invalid`);
-    output.pixel = { strictPct: pixel.strictPct, tolerantPct: pixel.tolerantPct, contentDiffPct: pixel.contentDiffPct };
-  }
-  return output;
-}
-
 function observation(value: unknown, label: string): ProbeObservation {
   const input = object(value, label);
   const probe = validateProbeCase(input.input);
   const oracle = validateProbeResult(input.oracle), webdroid = validateProbeResult(input.webdroid);
   if (oracle.id !== probe.id || webdroid.id !== probe.id || oracle.kind !== probe.kind || webdroid.kind !== probe.kind)
     throw new Error(`${label} mixes results from different cases`);
-  return { input: probe, failure: failure(input.failure, `${label}.failure`), oracle, webdroid };
+  return { input: probe, failure: validateFailure(input.failure, `${label}.failure`), oracle, webdroid };
 }
 
 export function validateFailureBundle(value: unknown): FailureBundle {

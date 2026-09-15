@@ -20,6 +20,52 @@ export type UiAction =
   | { type: "configuration"; orientation: "portrait" | "landscape" }
   | { type: "fallback-tap"; at: Point };
 
+function object(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
+  return value as Record<string, unknown>;
+}
+
+function finite(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${label} must be a finite number`);
+  return value;
+}
+
+function point(value: unknown, label: string): Point {
+  const input = object(value, label);
+  return { x: finite(input.x, `${label}.x`), y: finite(input.y, `${label}.y`) };
+}
+
+function identity(value: unknown, label: string): SemanticIdentity {
+  const input = object(value, label);
+  if (typeof input.className !== "string" || typeof input.ordinal !== "number" || !Number.isInteger(input.ordinal) || input.ordinal < 0)
+    throw new Error(`${label} is invalid`);
+  const output: SemanticIdentity = { className: input.className, ordinal: input.ordinal };
+  if (typeof input.resourceId === "string") output.resourceId = input.resourceId;
+  if (typeof input.text === "string") output.text = input.text;
+  if (typeof input.description === "string") output.description = input.description;
+  return output;
+}
+
+export function validateUiAction(value: unknown, label = "action"): UiAction {
+  const input = object(value, label);
+  switch (input.type) {
+    case "tap": return { type: input.type, target: identity(input.target, `${label}.target`), at: point(input.at, `${label}.at`) };
+    case "type": {
+      if (typeof input.text !== "string") throw new Error(`${label}.text must be a string`);
+      return { type: input.type, target: identity(input.target, `${label}.target`), at: point(input.at, `${label}.at`), text: input.text };
+    }
+    case "scroll": return { type: input.type, target: identity(input.target, `${label}.target`), from: point(input.from, `${label}.from`),
+      to: point(input.to, `${label}.to`), durationMs: finite(input.durationMs, `${label}.durationMs`) };
+    case "back": case "enter": return { type: input.type };
+    case "background": return { type: input.type, durationMs: finite(input.durationMs, `${label}.durationMs`) };
+    case "configuration":
+      if (input.orientation !== "portrait" && input.orientation !== "landscape") throw new Error(`${label}.orientation is invalid`);
+      return { type: input.type, orientation: input.orientation };
+    case "fallback-tap": return { type: input.type, at: point(input.at, `${label}.at`) };
+    default: throw new Error(`${label}.type is invalid`);
+  }
+}
+
 const usable = (node: UiNode): boolean => node.enabled && node.bounds[2] > node.bounds[0] && node.bounds[3] > node.bounds[1];
 const normalized = (value: string): string => value.replace(/\s+/g, " ").trim();
 

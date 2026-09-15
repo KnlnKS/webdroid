@@ -9,7 +9,7 @@ export type WebdroidSession = {
   close(): Promise<void>;
 };
 
-type WebdroidOptions = { port?: number; coverage?: boolean; proxyProbeTo?: string };
+export type WebdroidOptions = { port?: number; coverage?: boolean; proxyProbeTo?: string };
 
 export const isWebdroidProcessFrame = (url: string, origin: string): boolean =>
   (() => {

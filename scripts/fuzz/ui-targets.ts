@@ -1,0 +1,155 @@
+import { existsSync } from "node:fs";
+import type { Page } from "playwright";
+import { androidTool } from "../android-sdk";
+import { performAction } from "../../tests/e2e/lib/actions";
+import type { Act } from "../../tests/e2e/lib/probe";
+import { parseUiAutomator } from "../../tests/e2e/lib/uiautomator";
+import type { UiNode } from "../../tests/e2e/types";
+import { matchIdentity, type UiAction } from "./ui-model";
+import { startWebdroid, type WebdroidSession } from "./webdroid-session";
+
+const STEP_DEADLINE_MS = 5_000;
+export type UiApp = { apk: string; pkg: string; activity: string };
+export type UiSize = { width: number; height: number };
+type CommandResult = { stdout: Buffer; stderr: string };
+
+async function command(argv: string[]): Promise<CommandResult> {
+  const child = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => child.kill(), STEP_DEADLINE_MS);
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).arrayBuffer(), new Response(child.stderr).text(), child.exited,
+  ]).finally(() => clearTimeout(timer));
+  if (code !== 0) throw new Error(`${argv.join(" ")} failed (${code}): ${stderr}`);
+  return { stdout: Buffer.from(stdout), stderr };
+}
+
+export function inspectUiApp(apkArg: string): UiApp {
+  const apk = existsSync(apkArg) ? apkArg : `apks/${apkArg}`;
+  if (!existsSync(apk)) throw new Error(`missing APK ${apkArg}`);
+  const result = Bun.spawnSync([androidTool("aapt2"), "dump", "badging", apk]);
+  if (result.exitCode !== 0) throw new Error(`aapt2 could not inspect ${apk}: ${result.stderr.toString()}`);
+  const out = result.stdout.toString();
+  const pkg = /^package: name='([^']+)'/m.exec(out)?.[1];
+  const activity = /^launchable-activity: name='([^']+)'/m.exec(out)?.[1];
+  if (!pkg || !activity) throw new Error(`${apk} has no launchable activity`);
+  return { apk, pkg, activity };
+}
+
+function pixels(point: { x: number; y: number }, size: UiSize): [string, string] {
+  return [String(Math.round(point.x * size.width)), String(Math.round(point.y * size.height))];
+}
+
+export class AndroidUiTarget {
+  readonly environment: { serial: string; fingerprint: string };
+  private constructor(private readonly adb: (...args: string[]) => Promise<CommandResult>, private readonly app: UiApp,
+    serial: string, fingerprint: string) {
+    this.environment = { serial, fingerprint };
+  }
+
+  static async open(serial: string, app: UiApp): Promise<AndroidUiTarget> {
+    const adbPath = androidTool("adb");
+    const adb = (...args: string[]) => command([adbPath, "-s", serial, ...args]);
+    const [sdk, fingerprint] = await Promise.all([
+      adb("shell", "getprop", "ro.build.version.sdk"), adb("shell", "getprop", "ro.build.fingerprint"),
+    ]);
+    if (sdk.stdout.toString().trim() !== "33") throw new Error(`oracle ${serial} is not API 33`);
+    await adb("uninstall", app.pkg).catch(() => undefined);
+    await adb("install", "-r", "-t", app.apk);
+    await adb("shell", "am", "force-stop", app.pkg);
+    await adb("shell", "am", "start", "-W", "-n", `${app.pkg}/${app.activity}`);
+    return new AndroidUiTarget(adb, app, serial, fingerprint.stdout.toString().trim());
+  }
+
+  async tree(): Promise<UiNode[]> {
+    await this.adb("shell", "uiautomator", "dump", "/sdcard/wd-fuzz-ui.xml");
+    return parseUiAutomator((await this.adb("shell", "cat", "/sdcard/wd-fuzz-ui.xml")).stdout.toString());
+  }
+
+  screenshot(): Promise<Buffer> {
+    return this.adb("exec-out", "screencap", "-p").then((result) => result.stdout);
+  }
+
+  async act(action: UiAction, size: UiSize): Promise<void> {
+    switch (action.type) {
+      case "tap": case "fallback-tap": await this.adb("shell", "input", "tap", ...pixels(action.at, size)); return;
+      case "type":
+        await this.adb("shell", "input", "tap", ...pixels(action.at, size));
+        await this.adb("shell", "input", "text", action.text.replace(/ /g, "%s")); return;
+      case "scroll": await this.adb("shell", "input", "swipe", ...pixels(action.from, size), ...pixels(action.to, size), String(action.durationMs)); return;
+      case "back": await this.adb("shell", "input", "keyevent", "4"); return;
+      case "enter": await this.adb("shell", "input", "keyevent", "66"); return;
+      case "background":
+        await this.adb("shell", "input", "keyevent", "3"); await Bun.sleep(action.durationMs);
+        await this.adb("shell", "am", "start", "-n", `${this.app.pkg}/${this.app.activity}`); return;
+      case "configuration":
+        await this.adb("shell", "settings", "put", "system", "accelerometer_rotation", "0");
+        await this.adb("shell", "settings", "put", "system", "user_rotation", action.orientation === "landscape" ? "1" : "0"); return;
+    }
+  }
+}
+
+function webAction(action: UiAction, nodes: readonly UiNode[], size: UiSize): Act | null {
+  const target = "target" in action ? matchIdentity(nodes, action.target) : null;
+  const at = target ? { x: ((target.bounds[0] + target.bounds[2]) / 2) / size.width,
+    y: ((target.bounds[1] + target.bounds[3]) / 2) / size.height } : "at" in action ? action.at : undefined;
+  switch (action.type) {
+    case "tap": return target && at ? { type: "tap", ...at } : null;
+    case "fallback-tap": return { type: "tap", ...action.at };
+    case "type": return target && at ? { type: "type", ...at, text: action.text } : null;
+    case "scroll": return target ? { type: "swipe", from: [action.from.x, action.from.y], to: [action.to.x, action.to.y], ms: action.durationMs } : null;
+    case "back": return { type: "back" };
+    case "enter": return { type: "enter" };
+    case "background": return { type: "background", ms: action.durationMs };
+    case "configuration": return null;
+  }
+}
+
+export class WebdroidUiTarget {
+  readonly page: Page;
+  readonly origin: string;
+  readonly errors: string[];
+  private constructor(private readonly session: WebdroidSession) {
+    this.page = session.page; this.origin = session.origin; this.errors = session.errors;
+  }
+
+  static async open(app: UiApp): Promise<WebdroidUiTarget> {
+    return new WebdroidUiTarget(await startWebdroid(app.apk));
+  }
+
+  tree(): Promise<UiNode[]> {
+    return this.page.evaluate(() => globalThis.wd!.uiTree());
+  }
+
+  async act(action: UiAction, nodes: readonly UiNode[], size: UiSize): Promise<void> {
+    if (action.type === "configuration") {
+      await this.page.evaluate((orientation) => globalThis.wd!.configuration(orientation), action.orientation);
+      return;
+    }
+    const act = webAction(action, nodes, size);
+    if (!act) throw new Error(`semantic target absent for ${action.type}`);
+    await this.page.evaluate(performAction, { a: act, screen: { ...size, densityDpi: 480 }, deadlineMs: STEP_DEADLINE_MS });
+  }
+
+  async screenshot(): Promise<Buffer> {
+    const url = await this.page.evaluate(() => {
+      const screen = document.getElementById("screen");
+      if (!(screen instanceof HTMLCanvasElement)) throw new Error("screen canvas is unavailable");
+      return screen.toDataURL("image/png");
+    });
+    return Buffer.from(url.slice(url.indexOf(",") + 1), "base64");
+  }
+
+  alive(): Promise<boolean> { return this.page.evaluate(() => globalThis.wd!.alive(2_000)); }
+  close(): Promise<void> { return this.session.close(); }
+}
+
+export async function openUiTargets(app: UiApp, oracle?: string): Promise<{ webdroid: WebdroidUiTarget; android?: AndroidUiTarget }> {
+  const webdroid = await WebdroidUiTarget.open(app);
+  try {
+    const android = oracle ? await AndroidUiTarget.open(oracle, app) : undefined;
+    return { webdroid, android };
+  } catch (error) {
+    await webdroid.close();
+    throw error;
+  }
+}
