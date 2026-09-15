@@ -4355,8 +4355,8 @@ JavaScript CRC and 8.26x / 8.30x / 8.36x the JavaScript Adler implementation. A
 second benchmark drives the actual guest trampoline. Avoiding the Wasm-to-JS host
 exit is already faster for one-byte calls; at 4 KiB / 64 KiB / 1 MiB, CRC is
 2.91x / 3.49x / 3.67x faster and Adler is 5.82x / 8.41x / 8.81x faster. These are
-isolated checksum measurements, not whole-application speedups. Ignored benchmark
-sources and raw output remain under `webdroid-shots/checksum-wasm/`.
+isolated checksum measurements, not whole-application speedups. The benchmark
+sources and raw output were temporary worktree artifacts and are not committed.
 
 Final verification after production code froze: typecheck; 1214 tests / 26494
 assertions; ARM32 Doodle Jump and ARM64 Lichess eager smoke compilation with zero
