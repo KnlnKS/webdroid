@@ -18,8 +18,9 @@ if (fuzzOrigin && !["127.0.0.1", "localhost"].includes(fuzzOrigin.hostname))
   throw new Error("WEBDROID_FUZZ_ORIGIN must use loopback");
 
 function proxyTarget(requested: string): string {
+  if (!fuzzOrigin) return requested;
   const url = new URL(requested);
-  if (!fuzzOrigin || url.origin !== "http://127.0.0.1:4876") return requested;
+  if (url.origin !== "http://127.0.0.1:4876") return requested;
   return new URL(`${url.pathname}${url.search}`, fuzzOrigin).href;
 }
 
