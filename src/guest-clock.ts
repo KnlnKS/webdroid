@@ -141,7 +141,7 @@ export const guestClockControl = {
   nextDeadline: () => clock?.nextDeadline() ?? null,
   advanceTo: async (targetMs: number): Promise<number> => {
     if (!clock) return 0;
-    const ran = clock.advanceTo(targetMs);
+    const ran = clock.advanceTo(Math.max(targetMs, clock.nowMs));
     await hostYield();
     return ran;
   },

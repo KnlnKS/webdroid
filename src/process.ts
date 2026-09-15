@@ -54,7 +54,7 @@ processPresentation.changed = (visible) => {
 };
 // the realm's share of the main page's `wd`: enough to see its stack and drive it from a probe
 (globalThis as { wd?: unknown }).wd = { rt, app: () => currentApp(), jvmCoverage, overlays, perf, mainDbg, logs, guestClock: guestClockControl,
-  get ticks() { return ticks; }, back: pressBack,
+  get ticks() { return ticks; }, back: pressBack, testFrame: () => processPresentation.visible ? tick() : Promise.resolve(),
   tap: async (x: number, y: number) => { await dispatchPointer(0, x, y); await dispatchPointer(1, x, y); } };
 window.addEventListener("pagehide", () => broker.fail(pid, "Process frame unloaded"), { once: true });
 try {

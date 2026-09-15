@@ -368,6 +368,14 @@ const wd = {
   },
   // the keyboard's action key on the focused field (Search, Go, Done…)
   enter: async () => "action " + (await imeAction() ? "handled" : "ignored"),
+  testFrame: async () => {
+    if (processPresentation.visible) await tick();
+    for (const frame of document.querySelectorAll("iframe")) {
+      if (new URL(frame.src, location.href).origin !== location.origin) continue;
+      const child = frame.contentWindow as unknown as { wd?: { testFrame?: () => Promise<void> } };
+      if (child.wd?.testFrame) await child.wd.testFrame();
+    }
+  },
 };
 (globalThis as any).wd = wd;
 
