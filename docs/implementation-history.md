@@ -4333,7 +4333,7 @@ regression waiver.
 
 ## 2026-09-14: Android API 33 and graphics fuzzing
 
-Commits `d8b9fff` through `0d777ea` add an API-33 compatibility oracle without replacing the
+Commits `d8b9fff` through `955d0ed` add an API-33 compatibility oracle without replacing the
 repository's API-35 framework pair. The ignored `fuzz-cache/android-33` holds the matching platform
 artifacts and the `webdroid_api33_ref` AVD runs at 1080x2160, 480 dpi. One dependency-free probe APK
 targets SDK 33, fetches typed cases from a loopback service, and posts normalized results. Android
@@ -4383,3 +4383,43 @@ UI hierarchy identity depends on accessibility information exported by the appli
 1,000-case and full-corpus campaigns remain manual and bounded, while normal verification uses
 small deterministic seeds. The strict whole-tree maintainability findings and rejected churn are
 recorded in `docs/code-quality-audit-2026-09.md`.
+
+The frozen full catalog contains 148,937 public and reached declarations: 19,488 delegates,
+1,596 explicit placeholders, 94,376 framework-bytecode candidates, 30,295 missing members, and
+3,182 API-33-absent members. The public subset remains the 78,776-member count above; the added
+70,161 entries are corpus/framework reachability evidence. Canonical support resolution also
+recognizes direct JNI registrations, restoring `fwtest` to 295/363 declared natives after an
+integration test exposed the omission. Corpus collection now identifies process frames by their
+webdroid URL contract, so third-party web-content frames are not mislabeled as missing Android
+telemetry.
+
+Final acceptance used seed `1592594996`. All 64 API cases agree. Of 24 graphics cases, 23 expose
+differences and minimize into three stable clusters: a state value mismatch, an exception mismatch,
+and a material pixel mismatch (2.51% tolerant full-frame difference and 50.74% content difference).
+All three retained bundles reproduce twice, including the pixel bundle through the public replay
+command. The live Calculator UI oracle also finds, minimizes, persists, and twice replays a missing
+semantic target. The injected API, graphics, and UI smoke failures are independently detected,
+minimized, and twice replayed.
+
+The unchanged probe APK and the affected FitNotes and Calculator APKs smoke-compile with zero method
+failures. Typecheck passes; 1,222 tests with 26,563 assertions pass; all eight runnable framework
+exercises pass; and FitNotes text comparison is 6/6. Serialized E2E exits zero after 12 flows and
+842.3 seconds, with FitNotes rendering 39/39 steps and Mihon app 17/17. No visual golden changes are
+made. The 18-APK corpus renders 18/18 first frames and ranks 44 distinct compatibility gaps. All 59
+actual main/child process frames have ticks, queue, performance, error, and coverage diagnostics;
+the four excluded Twitch descendants are web content rather than Android processes. FitNotes,
+Calculator, the fuzz probe, and Mihon report no missing APIs on their observed corpus paths.
+
+Five serial alternating Calculator pairs compare the starting commit with the frozen runtime.
+Median launch action changes from 572.462 ms to 573.625 ms (+0.20%), while browser task duration
+changes from 292.117 ms to 289.975 ms (-0.73%). Both declared primary metrics remain inside the 3%
+retention gate. Every sample remains visible and alive, completes input, advances rendering, and
+reports no errors. Single-counter input, compilation, frame, and draw timings remain descriptive;
+their small sample variance is not promoted into an additional acceptance gate.
+
+The full E2E and corpus runs retain known platform findings rather than concealing them: TikTok
+layout/log gaps, YouTube Matrix/captioning/SAX failures and two settle timeouts, Lichess native
+pthread faults, and the Mihon onboarding page error. They are reproducible compatibility backlog,
+not evidence that the harness failed. Exhaustive catalog classification therefore closes this task;
+exhaustive behavioral coverage continues to depend on adding safe, explicit recipes and running
+larger manual campaigns.
