@@ -41,8 +41,8 @@ async function inputs(args: string[]): Promise<string[]> {
 }
 
 const sourceFiles = [...new Set([
-  ...new Bun.Glob("{src,tests}/**/*.ts").scanSync({ cwd: root }),
-  ...new Bun.Glob("{src,tests}/**/*.tsx").scanSync({ cwd: root }),
+  ...new Bun.Glob("{src,tests,scripts,vendor}/**/*.ts").scanSync({ cwd: root }),
+  ...new Bun.Glob("{src,tests,scripts,vendor}/**/*.tsx").scanSync({ cwd: root }),
 ])];
 const sourceSet = new Set(sourceFiles);
 const reverse = new Map<string, string[]>();
@@ -89,7 +89,9 @@ const tests = [...affected].filter((file) => /\.test\.ts$/.test(file));
 
 const indexPath = resolve(root, "tests/e2e/coverage-index.json");
 let selected = new Set<string>();
-let widened = graphIncomplete || changed.some((file) => broad.some((prefix) => file === prefix || file.startsWith(prefix)));
+const broadChange = changed.find((file) => broad.some((prefix) => file === prefix || file.startsWith(prefix)));
+let widenedBecause = graphIncomplete ? "incomplete import graph" : broadChange ? `broad input ${broadChange}` : "";
+let widened = !!widenedBecause;
 if (!widened && existsSync(indexPath)) {
   try {
     const index = parseCoverageIndex(await Bun.file(indexPath).json());
@@ -107,22 +109,32 @@ if (!widened && existsSync(indexPath)) {
     if (!index.complete || index.schemaHash !== flowSchemaHash(deterministic) || sourceChanged || invalidFlow ||
         expectedUnsupported.join("\n") !== indexedUnsupported.join("\n") ||
         deterministic.some((flow) => !(flow.app in index.flows) || index.apkHashes[flow.app] !== currentApks[flow.app] ||
-          index.screens[flow.app] !== currentScreens[flow.app])) widened = true;
+          index.screens[flow.app] !== currentScreens[flow.app])) {
+      widened = true;
+      widenedBecause = "stale or invalid coverage index";
+    }
     else {
       for (const file of affected) for (const flow of index.files[file] ?? []) selected.add(flow);
       if (changed.some((file) => file.startsWith("src/")))
         for (const flow of index.unsupportedFlows) selected.add(flow);
     }
-  } catch {
+  } catch (error) {
     widened = true;
+    widenedBecause = `unusable coverage index: ${String((error as Error).message ?? error)}`;
   }
-} else widened = true;
-if (!selected.size) widened = true;
+} else if (!widened) {
+  widened = true;
+  widenedBecause = "coverage index missing";
+}
+if (!selected.size && !widened) {
+  widened = true;
+  widenedBecause = "changed code has no recorded flow";
+}
 if (widened) selected = new Set(allFlows);
 
 console.log(`changed: ${changed.join(", ")}`);
 console.log(`unit: ${tests.length ? tests.join(", ") : "none"}`);
-console.log(`fast e2e: ${[...selected].join(", ")}${widened ? " (conservative expansion)" : ""}`);
+console.log(`fast e2e: ${[...selected].join(", ")}${widened ? ` (conservative: ${widenedBecause})` : ""}`);
 
 if (tests.length) {
   const unit = Bun.spawn(["bun", "test", ...tests], { cwd: root, stdout: "inherit", stderr: "inherit" });
