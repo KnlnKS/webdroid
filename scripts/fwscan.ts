@@ -3,22 +3,25 @@
 import { ACC } from "../src/jvm/runtime";
 import { descToName } from "../src/jvm/abi";
 import { openDexes } from "./lib";
+import { frameworkSurface } from "./fuzz/catalog";
 
 const [jar = "vendor/aosp/framework.jar", prefix] = process.argv.slice(2);
 const dexes = await openDexes(jar);
 
-let classes = 0, methods = 0, bodies = 0, natives = 0, fields = 0;
+const surface = frameworkSurface(dexes);
+const selected = (owner: string) => !prefix || owner.startsWith(prefix);
+const classes = [...surface.classes].filter(selected).length;
+const methods = [...surface.methods].filter((key) => selected(key.slice(0, key.indexOf(".")))).length;
+const fields = [...surface.fields].filter((key) => selected(key.slice(0, key.indexOf(".")))).length;
+let bodies = 0, natives = 0;
 const nativesByPkg = new Map<string, number>();
 const nativeList: string[] = [];
 for (const dex of dexes) {
   for (let i = 0; i < dex.classDefCount; i++) {
     const name = descToName(dex.type(dex.classDef2Type(i)));
     if (prefix && !name.startsWith(prefix)) continue;
-    classes++;
     const def = dex.classDef(i);
-    fields += def.instanceFields.length + def.staticFields.length;
     for (const m of [...def.directMethods, ...def.virtualMethods]) {
-      methods++;
       if (m.codeOff) bodies++;
       else if (m.flags & ACC.NATIVE) {
         natives++;
@@ -34,4 +37,3 @@ console.log(`${jar}${prefix ? ` [${prefix}]` : ""}: ${dexes.length} dex, ${class
 console.log(`native methods: ${natives}`);
 if (nativeList.length) for (const n of nativeList.sort()) console.log("  " + n);
 else for (const [p, n] of [...nativesByPkg].sort((a, b) => b[1] - a[1]).slice(0, 30)) console.log(`  ${n}\t${p}`);
-

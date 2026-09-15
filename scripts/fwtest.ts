@@ -6,6 +6,7 @@
 // vendor/aosp/framework.jar, and what they reach that we do not answer for is reported.
 import { existsSync } from "node:fs";
 import { BYTECODE } from "../src/jvm/provenance";
+import { nativeMethodSupport } from "./native-surface";
 
 const CUTS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 BYTECODE.push(...(CUTS.length ? CUTS : [
@@ -41,9 +42,10 @@ for (const name of rt.dexIndex.keys()) {
 let have = 0, total = 0;
 const gaps: string[] = [];
 for (const [cls, sigs] of [...declared].sort()) {
-  const impl = sigs.filter((s) => rt.jniFn(cls, s));
+  const impl = sigs.filter((signature) => nativeMethodSupport(rt, `${cls}.${signature}`) !== "missing");
   have += impl.length; total += sigs.length;
-  if (impl.length < sigs.length) for (const s of sigs) if (!rt.jniFn(cls, s)) gaps.push(`${cls}.${s}`);
+  if (impl.length < sigs.length) for (const signature of sigs)
+    if (nativeMethodSupport(rt, `${cls}.${signature}`) === "missing") gaps.push(`${cls}.${signature}`);
   console.log(`  ${String(impl.length).padStart(3)}/${String(sigs.length).padEnd(3)} ${cls}`);
 }
 console.log(`\ncoverage ${have}/${total} declared natives (${((have / (total || 1)) * 100).toFixed(0)}%)`);

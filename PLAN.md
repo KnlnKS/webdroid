@@ -1,82 +1,36 @@
-# DEX-to-JavaScript performance redesign — completed
+# Android API and graphics fuzzing
 
-Starting revision: `5681101`. Integration branch: `codex/dex-performance-redesign`.
-The retained runtime improves the four-workload geometric mean by **1.046x**. This
-misses the 1.5x stretch goal but clears the 3% aggregate retention gate without
-crossing any primary, p95-latency, heap, rendering, or diagnostic regression gate.
+Starting revision: `4ecee61`. Integration branch: `codex/android-api-fuzzing`.
 
-## Retained design
+## Contract
 
-- Bounded, off-by-default JVM phase/method profiling exposed through `wd.perf` and
-  `wd.jvmProfile()`, with diagnostic tier and hotness controls.
-- Compact prepared methods with ordered decoded instructions, byte-array block
-  leaders, reaching-type annotations, and numeric opcode metadata.
-- A pure preparation boundary consumed by separate cold and hot emitters. OSR
-  installs an explicit `{ invoke, resume }` artifact instead of overloading the
-  Java method call ABI through `arguments`.
-- Direct cold-operand emission instead of reparsing generated JavaScript with a
-  source regex. Cold handlers remain pooled and source admission remains bounded.
-- Instruction/backedge heat in addition to entry counts. Long activations can OSR
-  at an actual cooperative-yield backedge into the existing verified hot switch
-  emitter. The calibrated default threshold is 4096 instructions.
-- No runtime dependency, cross-origin isolation, executable cache, worker, or
-  persistent profile is added.
+- API 33 is the behavioral contract. Inventory every public SDK member and add hidden or
+  internal members only when framework bytecode or the APK corpus reaches them.
+- Run one unchanged probe APK on Android and webdroid. Preserve seeds, normalized results and
+  minimized failures; never manufacture support or treat absent telemetry as success.
+- Keep fuzz-only coverage out of production-generated methods. Long campaigns are manual;
+  normal verification receives only deterministic smoke cases.
+- Fix harness blockers and broadly applicable compatibility faults. Record other reproducible
+  findings instead of making completion depend on eliminating the platform backlog.
 
-The final strict maintainability follow-up also makes class linking aggregate-only
-in the profiler, measures complete async hot executions (including already-installed
-entries), and derives result, screenshot, and CPU-profile paths independently.
+## Delivery phases
 
-## Measured result
+- [x] Provision an API-33 reference AVD and ignored oracle cache.
+- [x] Build the canonical API catalog and support classifier; migrate audit tools to it.
+- [x] Build and run the dependency-free differential probe APK.
+- [x] Add deterministic API and graphics generation, comparison, replay and minimization.
+- [x] Add opt-in JVM coverage and semantic UI fuzzing with complete process telemetry.
+- [x] Audit the full TypeScript/Zig tree and retain only evidenced simplifications.
+- [x] Resolve the strict post-implementation review findings for protocol ownership, atomic
+  evidence, failure clustering, UI target boundaries, and isolated campaign resources.
+- [x] Run the final typecheck, unit, smoke, framework, fuzz, text, E2E, corpus and performance
+  matrix. Record measurements and evidence limits in the implementation history.
 
-Seven serial alternating Chrome pairs compare the frozen candidate with the exact
-starting revision. Interaction windows run for 15 seconds after warmup, with all
-196 scheduled inputs completed and advancing rendering.
+## Retention gates
 
-| Workload | Start | Final | Speedup |
-| --- | ---: | ---: | ---: |
-| FitNotes first usable state | 237.410 ms | 228.104 ms | 1.041x |
-| Mihon first usable state | 1180.594 ms | 1031.908 ms | 1.144x |
-| FitNotes History/Graph CPU | 50.466 ms/s | 50.337 ms/s | 1.003x |
-| Mihon Reader CPU | 377.110 ms/s | 376.654 ms/s | 1.001x |
-
-FitNotes/Mihon interaction CPU improves 0.26%/0.12%; p95 opportunity latency
-changes +0.90%/+0.74%; heap changes +0.14%/-0.66%. Startup heap changes
-+0.12%/-0.91%. The final E2E rollup independently records 21–30% lower compiler
-time across every Java-heavy flow.
-
-## Rejected or deferred
-
-| Experiment | Decision |
-| --- | --- |
-| Sparse cold-PC array | About 12% in forced-cold Mihon, about 0.5% in normal auto tier; below the aggregate gate. |
-| Type-analysis skip | 10–12% phase reduction but about 0.8% slower Mihon startup. |
-| Handwritten cold source pooler | Slower than the starting regex path; direct operands supersede it. |
-| Retained async preparation | Raised Mihon retained heap about 5.5%; preparation is rebuilt only for promoted methods. |
-| Structured/fused control flow | Prior long-loop component win did not qualify at application level; current cold-dispatch samples are below the 15% gate. |
-| Numeric Wasm and compiler workers | Eligible observed DEX CPU is 0%, below the 10% feasibility gate. |
-| Shared JVM memory / JSPI | No 20% parallelizable bottleneck and no qualifying coarse Wasm transition; cross-origin compatibility is not put at risk. |
-
-## Verification
-
-- `bun run typecheck`: pass.
-- `bun run test`: 1213 tests / 26489 assertions pass.
-- Twelve eager/cold smoke compilations across FitNotes, Mihon, Resy, Doodle,
-  Flappy Bird and Lichess: zero failed methods.
-- `bun run fwtest`: eight runnable exercises pass; declared coverage 295/363.
-- FitNotes text comparison: 6/6.
-- Serialized E2E: exit zero, 12 flows / 159 steps; FitNotes 39/39 and Mihon app
-  17/17 rendered, with no diagnostics in either scored app.
-- Corpus: 17/17 APKs render a first frame; FitNotes and Mihon have zero reached gaps.
-- Full per-step/process diagnostics reproduce only recorded non-DEX limitations;
-  no flow wedges and no new fault family appears.
-
-The review follow-up was isolated against `f32bb4f` with 15 FitNotes and seven
-Mihon alternating pairs. FitNotes startup changed -0.08%, its median p95 was
-unchanged, pooled p95 changed +0.93%, and heap changed +0.63%. Mihon startup
-changed +0.08%, CPU -1.04%, median p95 -1.02%, and heap +0.82%. FitNotes raw
-CPU medians changed +3.27% across a bimodal host-load shift, while the median
-paired change was +1.40%; both are within the global 5% guard.
-
-Architecture, external research, phase attribution, rejected measurements and
-evidence limits are in [docs/dex-performance-architecture.md](docs/dex-performance-architecture.md).
-Historical mechanisms remain in [docs/implementation-history.md](docs/implementation-history.md).
+- Fixed seeds reproduce identical inputs and normalized results.
+- Every retained failure reproduces twice after minimization.
+- Missing child-process diagnostics are harness failures, not empty observations.
+- Existing visual goldens do not change without independent product evidence.
+- With fuzz coverage disabled, primary performance metrics remain within 3% over five serial
+  alternating baseline/candidate pairs.

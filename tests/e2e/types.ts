@@ -92,6 +92,9 @@ export type UiNode = {
   resId: string;
   bounds: [number, number, number, number];
   clickable: boolean;
+  enabled: boolean;
+  editable: boolean;
+  scrollable: boolean;
 };
 
 /** The hierarchy dump that sits beside a step's png, on both sides. */

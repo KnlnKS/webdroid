@@ -15,6 +15,7 @@ import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { perf, perfReset } from "./perf";
 import { configureJvm, jvmProfiler, parseJvmTier } from "./jvm/profile";
+import { configureJvmCoverage, jvmCoverage } from "./jvm/coverage";
 import { uiState } from "./android/view";
 import { onMain, mainDbg } from "./android/mainloop";
 import { imeInput, imeAction } from "./android/ime";
@@ -33,6 +34,7 @@ const params = new URLSearchParams(location.search);
 const hotThreshold = Number(params.get("jvmHotness") ?? 4096);
 if (![1024, 4096, 16384].includes(hotThreshold)) throw new Error(`invalid jvmHotness ${hotThreshold}`);
 configureJvm({ profile: params.get("jvmProfile") === "1", tier: parseJvmTier(params.get("jvmTier")), hotThreshold });
+configureJvmCoverage(params.get("fuzzCoverage") === "1");
 const resetPerf = (): void => { perfReset(); jvmProfiler.reset(); };
 
 const root = document.getElementById("root")!;
@@ -230,7 +232,7 @@ jitStats.on = params.get("jit") !== "0";
 
 /** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
 const wd = {
-  rt, uiState, perf, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), mainDbg, yields: yieldStats, timedParks, logs: logBuf, ticks: 0, native,
+  rt, uiState, perf, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), jvmCoverage, mainDbg, yields: yieldStats, timedParks, logs: logBuf, ticks: 0, native,
   layoutTrace: (on?: boolean) => { if (on !== undefined) uiState.layoutTrace = on ? { cls: {}, site: {} } : null; return uiState.layoutTrace; },
   // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed
   newObj, vcall,
@@ -242,6 +244,10 @@ const wd = {
   },
   boot, app: () => currentApp(), back,
   background: (ms = 1000) => processBroker().background(ms),
+  configuration: async (orientation: "portrait" | "landscape") => {
+    const activity = currentApp()?.stack.at(-1);
+    if (activity) await vcall(activity, "setRequestedOrientation", "(I)V", orientation === "landscape" ? 0 : 1);
+  },
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),
   // framework attributes a layout used that nothing here reads: a look that is wrong with a
@@ -276,6 +282,10 @@ const wd = {
           resId: id && !id.startsWith("0x") ? `${v.idNum >>> 24 === 1 ? "android" : app.host.pkg}:id/${id}` : "",
           bounds: [x, y, x + (v.right - v.left), y + (v.bottom - v.top)],
           clickable: !!v.clickable,
+          enabled: v.enabled !== false,
+          editable: !!v.editable,
+          scrollable: !!v.scrollable || Number(v.maxScrollY ?? 0) > 0 ||
+            /(?:ScrollView|ListView|RecyclerView)$/.test(clsName(v)),
         });
       }
     };

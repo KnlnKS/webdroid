@@ -6,6 +6,7 @@ import { argv } from "./args";
 import { BASE_URL } from "../tests/e2e/lib/util";
 import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
 import { readProcesses, type ProcessSnapshot } from "../tests/e2e/lib/processes";
+import { rankCalls } from "./native-surface";
 
 const args = process.argv.slice(2);
 const { opt, positional } = argv(args, ["--json", "--wait"]);
@@ -76,7 +77,8 @@ for (const r of rows) for (const m of r.missing) {
   l.push(r.apk);
   blocks.set(m, l);
 }
-const ranked = [...blocks].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+const ranked = rankCalls(new Map([...blocks].map(([key, apks]) => [key, apks.length])), () => true)
+  .map(([key]) => [key, blocks.get(key)!] as const);
 console.log(`\n=== ${ranked.length} distinct gaps, by how many apks reach them`);
 for (const [m, who] of ranked.slice(0, 40)) console.log(`  ${String(who.length).padStart(2)}/${rows.length}  ${m}`);
 

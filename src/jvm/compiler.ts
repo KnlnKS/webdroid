@@ -10,6 +10,7 @@ import { ACC, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
 import { jvmProfiler } from "./profile";
+import { coverageProbeSource, jvmCoverage } from "./coverage";
 import {
   ifTarget,
   prepareMethod,
@@ -160,7 +161,7 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unkno
       return compiled.resume(frame, receiver);
     };
   }
-  return target[rec.mangled] = function(this: unknown, ...args: unknown[]) {
+  const invoke = function(this: unknown, ...args: unknown[]) {
     if (hot) return hot.invoke.apply(this, args);
     if (++calls < 32 || jvmProfiler.tier === "cold") {
       if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
@@ -170,6 +171,11 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unkno
     if (compiled) return compiled.invoke.apply(this, args);
     if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
     return runCold(cold!, this, args);
+  };
+  if (!jvmCoverage.enabled) return target[rec.mangled] = invoke;
+  return target[rec.mangled] = function(this: unknown, ...args: unknown[]) {
+    jvmCoverage.hit(profileName);
+    return invoke.apply(this, args);
   };
 }
 
@@ -338,6 +344,7 @@ class MethodEmitter {
 
     const catchBody = this.hasTries ? this.emitCatch() : this.leave() + "throw $e;";
     const profileName = `${this.info.name}.${this.mname}${this.desc}`;
+    const coverageEntry = coverageProbeSource(profileName);
     const profiled = jvmProfiler.enabled;
     const profileStart = profiled
       ? `const $pn=${JSON.stringify(profileName)},$pt=performance.now();${resumable ? "if($F===undefined)" : ""}P.entry($pn);try{`
@@ -348,6 +355,7 @@ class MethodEmitter {
       : `R.su($th);$s=1;$p=await $p;R.st($th);if($resume<0){pc=-$resume-1;$resume=0;}`;
     const formalParams = resumable ? [...jsParams, "$F"] : jsParams;
     const source = `${this.sync ? "function" : "async function"}(${formalParams.join(",")}){
+${coverageEntry}
 ${profileStart}
 ${init}
 for(;;){

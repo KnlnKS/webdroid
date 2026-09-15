@@ -35,6 +35,14 @@ test("Paint retains text scale and skew state", async () => {
   expect(await vcall(copy, "getTextSkewX", "()F")).toBe(0);
 });
 
+test("Paint returns its stroke cap and join", async () => {
+  const paint = new JPaint();
+  await vcall(paint, "setStrokeCap", "(Landroid/graphics/Paint$Cap;)V", { ord: 1 });
+  await vcall(paint, "setStrokeJoin", "(Landroid/graphics/Paint$Join;)V", { ord: 2 });
+  expect((await vcall(paint, "getStrokeCap", "()Landroid/graphics/Paint$Cap;") as { ename: string }).ename).toBe("ROUND");
+  expect((await vcall(paint, "getStrokeJoin", "()Landroid/graphics/Paint$Join;") as { ename: string }).ename).toBe("BEVEL");
+});
+
 test("Paint retains font feature settings across copy and clears them on reset", async () => {
   const paint = new JPaint();
   expect(await vcall(paint, "getFontFeatureSettings", "()Ljava/lang/String;")).toBeNull();

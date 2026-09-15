@@ -14,19 +14,32 @@ import { installedPath, registerPackage } from "./android/pm";
 import { vfs } from "./jvm/natives/jio";
 import { mountSystemCertificates } from "./shell/cacerts";
 import { hexBytes, u8 } from "./jvm/abi";
+import { configureJvmCoverage, jvmCoverage } from "./jvm/coverage";
+import { perf } from "./perf";
+import { mainDbg } from "./android/mainloop";
 
 const params = new URLSearchParams(location.search), pid = Number(params.get("pid")), broker = processBroker();
 jitStats.on = params.get("jit") !== "0";
+configureJvmCoverage(params.get("fuzzCoverage") === "1");
+const logs: string[] = [];
+const consoleError = console.error.bind(console);
+console.error = (...args: unknown[]) => {
+  consoleError(...args);
+  logs.push(`error: ${args.map(String).join(" ")}`);
+};
+window.addEventListener("error", (event) => logs.push(`window.error: ${event.message}`));
+window.addEventListener("unhandledrejection", (event) => logs.push(`unhandledrejection: ${String(event.reason)}`));
 const canvas = document.getElementById("screen") as HTMLCanvasElement;
 canvas.width = SCREEN_W; canvas.height = SCREEN_H;
 setScreenCanvas(canvas);
 setWebLayer(document.getElementById("weblayer")!);
 attachIme(canvas, document.getElementById("kbd") as HTMLTextAreaElement);
 processPresentation.visible = false;
-let frameId = 0, ticking = false;
+let frameId = 0, ticking = false, ticks = 0;
 function frame(time: number): void {
   frameId = 0;
   if (!processPresentation.visible) return;
+  ticks++;
   recordVsync(time); drainInput();
   if (!ticking) {
     ticking = true;
@@ -39,7 +52,8 @@ processPresentation.changed = (visible) => {
   else if (!visible && frameId) { cancelAnimationFrame(frameId); frameId = 0; }
 };
 // the realm's share of the main page's `wd`: enough to see its stack and drive it from a probe
-(globalThis as { wd?: unknown }).wd = { rt, app: () => currentApp(), overlays, back: pressBack,
+(globalThis as { wd?: unknown }).wd = { rt, app: () => currentApp(), jvmCoverage, overlays, perf, mainDbg, logs,
+  get ticks() { return ticks; }, back: pressBack,
   tap: async (x: number, y: number) => { await dispatchPointer(0, x, y); await dispatchPointer(1, x, y); } };
 window.addEventListener("pagehide", () => broker.fail(pid, "Process frame unloaded"), { once: true });
 try {

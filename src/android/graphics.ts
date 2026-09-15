@@ -205,13 +205,15 @@ rt.register({
     "static green(I)I": (c: number) => (c >> 8) & 0xff,
     "static blue(I)I": (c: number) => c & 0xff,
     "static parseColor(Ljava/lang/String;)I": (s: string) => {
-      if (s[0] === "#") {
-        let h = s.slice(1);
-        if (h.length === 3) h = h.split("").map((c) => c + c).join("");
-        if (h.length === 6) h = "ff" + h;
-        return parseInt(h, 16) | 0;
-      }
-      const named: Record<string, number> = { black: -16777216, white: -1, red: -65536, green: -16711936, blue: -16776961, gray: -7829368, transparent: 0 };
+      const hex = /^#([\da-f]{6}|[\da-f]{8})$/i.exec(s)?.[1];
+      if (hex) return parseInt(hex.length === 6 ? `ff${hex}` : hex, 16) | 0;
+      const named: Record<string, number> = {
+        black: -16777216, darkgray: -12303292, gray: -7829368, lightgray: -3355444, white: -1,
+        red: -65536, green: -16711936, blue: -16776961, yellow: -256, cyan: -16711681,
+        magenta: -65281, aqua: -16711681, fuchsia: -65281, darkgrey: -12303292,
+        grey: -7829368, lightgrey: -3355444, lime: -16711936, maroon: -8388608,
+        navy: -16777088, olive: -8355840, purple: -8388480, silver: -4144960, teal: -16744320,
+      };
       const v = named[s.toLowerCase()];
       if (v === undefined) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown color " + s);
       return v;
@@ -445,6 +447,8 @@ const paintMethods: NativeSpec["methods"] = {
   "getTextAlign()Landroid/graphics/Paint$Align;": function (this: JPaint) { return paintAlignEnum[this.textAlignN]; },
   "setStrokeCap(Landroid/graphics/Paint$Cap;)V": function (this: JPaint, c: { ord: number }) { this.strokeCapN = CAPS[c?.ord ?? 0]; },
   "setStrokeJoin(Landroid/graphics/Paint$Join;)V": function (this: JPaint, j: { ord: number }) { this.strokeJoinN = JOINS[j?.ord ?? 0]; },
+  "getStrokeCap()Landroid/graphics/Paint$Cap;": function (this: JPaint) { return paintCapEnum[CAPS.indexOf(this.strokeCapN)]; },
+  "getStrokeJoin()Landroid/graphics/Paint$Join;": function (this: JPaint) { return paintJoinEnum[JOINS.indexOf(this.strokeJoinN)]; },
   "setShader(Landroid/graphics/Shader;)Landroid/graphics/Shader;": function (this: JPaint, s: JShader | null) {
     this.shader = s?.grad ?? null;
     this.shaderObj = s ?? null;
@@ -489,8 +493,7 @@ const paintMethods: NativeSpec["methods"] = {
   ...stubs(1, "isFilterBitmap()Z", "getHinting()I",
     "getFlags()I"),
   ...stubs(0, "getWordSpacing()F", "getLetterSpacing()F", "isDither()Z"),
-  ...stubs(null, "getStrokeCap()Landroid/graphics/Paint$Cap;", "getStrokeJoin()Landroid/graphics/Paint$Join;",
-    "getPathEffect()Landroid/graphics/PathEffect;"),
+  ...stubs(null, "getPathEffect()Landroid/graphics/PathEffect;"),
   "measureText(Ljava/lang/String;)F": function (this: JPaint, s: string) { return measureText(this, s ?? ""); },
   "measureText(Ljava/lang/CharSequence;II)F": function (this: JPaint, s: unknown, a: number, b: number) {
     return measureText(this, String(s).slice(a, b));
@@ -716,8 +719,8 @@ export function fillFontMetrics(p: JPaint, fm: { top: number; ascent: number; de
 
 const paintStyleEnum = mkEnumSet("android/graphics/Paint$Style", ["FILL", "STROKE", "FILL_AND_STROKE"]);
 const paintAlignEnum = mkEnumSet("android/graphics/Paint$Align", ["LEFT", "CENTER", "RIGHT"]);
-mkEnumSet("android/graphics/Paint$Cap", ["BUTT", "ROUND", "SQUARE"]);
-mkEnumSet("android/graphics/Paint$Join", ["MITER", "ROUND", "BEVEL"]);
+const paintCapEnum = mkEnumSet("android/graphics/Paint$Cap", ["BUTT", "ROUND", "SQUARE"]);
+const paintJoinEnum = mkEnumSet("android/graphics/Paint$Join", ["MITER", "ROUND", "BEVEL"]);
 /**
  * Xfermode/BlendMode → the Canvas2D composite operation with the same meaning. PorterDuff.Mode
  * and BlendMode spell the shared modes identically, so one table by name serves both; modes
@@ -1637,15 +1640,16 @@ function aboutPivot(ctx: JCanvas["ctx"], px: number, py: number, f: () => void) 
 function clipRect(this: JCanvas, l: number, t: number, r: number, b: number) {
   const ctx = this.ctx;
   ctx.beginPath();
-  ctx.rect(l, t, r - l, b - t);
+  ctx.rect(l, t, r > l && b > t ? r - l : 0, r > l && b > t ? b - t : 0);
   ctx.clip();
-  return 1;
+  return +(r > l && b > t);
 }
 function drawRect(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
   this.drawShape(p, (c) => c.fillRect(l, t, r - l, b - t), (c) => c.strokeRect(l, t, r - l, b - t));
 }
 /** ellipse arc in the box; a full sweep without the centre is drawOval */
 function drawArc(this: JCanvas, l: number, t: number, r: number, b: number, start: number, sweep: number, useCenter: number, p: JPaint) {
+  if (!(r > l && b > t)) return;
   const path = new Path2D();
   const cx = (l + r) / 2, cy = (t + b) / 2;
   if (useCenter) path.moveTo(cx, cy);
@@ -1654,6 +1658,7 @@ function drawArc(this: JCanvas, l: number, t: number, r: number, b: number, star
   this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
 }
 function drawRoundRect(this: JCanvas, l: number, t: number, r: number, b: number, rx: number, _ry: number, p: JPaint) {
+  if (!(r > l && b > t)) return;
   const path = new Path2D();
   path.roundRect(l, t, r - l, b - t, Math.min(rx, (r - l) / 2, (b - t) / 2));
   this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));

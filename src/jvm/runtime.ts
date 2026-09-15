@@ -13,6 +13,7 @@ import { compileClassSource, compileLazyMethod, methodKey, type CompiledCtor } f
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
 import { jvmProfiler } from "./profile";
+import { jvmCoverage } from "./coverage";
 import { Monitors } from "./monitor";
 
 export const ACC = { STATIC: 0x8, NATIVE: 0x100, INTERFACE: 0x200 } as const;
@@ -44,11 +45,16 @@ export interface NativeSpec {
   callerSensitive?: string[];
 }
 
+const placeholderMethods = new WeakSet<Function>();
+
 export function stubs(value: unknown, ...sigs: string[]): Record<string, () => unknown> {
   const fn = () => value;
+  placeholderMethods.add(fn);
   return Object.fromEntries(sigs.map((s) => [s, fn]));
 }
 export const noops = (...sigs: string[]) => stubs(undefined, ...sigs);
+export const isPlaceholderMethod = (value: unknown): boolean =>
+  typeof value === "function" && placeholderMethods.has(value);
 type Accessor = (this: any, v?: unknown) => unknown;
 const accessors = (t: Record<string, string>, make: (f: string) => Accessor) => Object.fromEntries(Object.entries(t).map(([s, f]) => [s, make(f)]));
 export const fieldGetters = (t: Record<string, string>) => accessors(t, (f) => function (this: any) { return this[f]; });
@@ -117,6 +123,7 @@ export class Runtime {
   natives = new Map<string, NativeSpec>();
   dexes: DexFile[] = [];
   dexIndex = new Map<string, [DexFile, number]>();
+  cv(method: string): void { jvmCoverage.hit(method); }
   private refCache = new Map<string, Map<string, string>>();
   /** every method the loaded dexes reference on class `cls`, name+desc → desc: the surface a
    *  framework interface has as far as this app is concerned, which is what a proxy over it or a

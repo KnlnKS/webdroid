@@ -4365,3 +4365,146 @@ run exits zero for 12 flows / 159 steps. All steps render, no main loop wedges a
 no native requirement or checksum fault is reported. Its two YouTube settle
 timeouts and the existing TikTok, YouTube, Lichess and window-extension
 diagnostics match the recorded platform limits rather than this dispatch change.
+## 2026-09-14: Android API 33 and graphics fuzzing
+
+Commits `d8b9fff` through `955d0ed` add an API-33 compatibility oracle without replacing the
+repository's API-35 framework pair. The ignored `fuzz-cache/android-33` holds the matching platform
+artifacts and the `webdroid_api33_ref` AVD runs at 1080x2160, 480 dpi. One dependency-free probe APK
+targets SDK 33, fetches typed cases from a loopback service, and posts normalized results. Android
+reaches the service through `adb reverse`; webdroid routes the same `HttpURLConnection` request
+through its normal proxy. The APK is byte-for-byte unchanged between platforms.
+
+The public-only catalog contains 78,776 API-33 declarations: 5,782 classes, 44,370 methods, and
+28,624 fields. Classification reports 14,432 delegates, 960 explicit placeholders, 38,949 members
+available through matching framework bytecode, 21,253 missing members, and 3,182 declarations
+already absent at API 33. Twenty-three members are currently exercised by explicit safe recipes.
+The full corpus pass additionally records every reached hidden/internal class, method, and field;
+those entries are reachability evidence, not a private-framework compatibility promise.
+
+API and graphics cases carry `schemaVersion: 1`, a printed seed, typed arguments, and bounded
+command sequences. Results normalize primitive/object values, exception class names, arrays,
+state, and PNG pixels. Graphics covers Bitmap, Canvas, Paint, Path, Matrix, Drawable, RenderNode,
+text, blend modes, clipping, transforms, density, save/restore, and basic View layout. State is
+exact; pixels use the existing tolerant and content-aware metrics. Sequence deletion and argument
+shrinking are bounded, and a minimized failure is retained only after two matching replays.
+
+The oracle found three broad runtime defects. API 33 rejects `transparent` in `Color.parseColor`
+and accepts only Android's named colors plus six/eight digit hex. Paint stroke cap/join getters
+were placeholders rather than state. Canvas arc/round-rect and clip operations mishandled inverted
+bounds. Each correction is isolated in a graphics commit and subsequent fixed API cases agree.
+Remaining graphics state/pixel differences are retained as campaign findings rather than hidden or
+used to make the normal suite platform-antialiasing-sensitive.
+
+`?fuzzCoverage=1` instruments generated JVM methods at generation time, including child process
+realms. Disabled output has neither a probe nor a per-call condition. The semantic UI fuzzer derives
+enabled tap, edit, and scroll actions from Android hierarchy nodes, records stable identity and
+normalized coordinates, and stops when structural divergence invalidates replay. Back, enter,
+background/resume, configuration changes, and a recorded coordinate fallback cover non-node state.
+Every retained UI state includes tree/frame hashes, screenshots and tolerant diffs when an oracle
+is present, coverage delta, browser errors, unread attributes, missing/native APIs, queue state,
+compositor state, and layout/draw/GL counters from every reachable process. Missing child telemetry
+is a harness failure. A live Calculator campaign detected, minimized, persisted, and replayed an
+Android/webdroid semantic-target divergence twice.
+
+`bun run fuzz smoke` injects one deterministic mismatch into each API, graphics, and UI comparison
+layer. Each is found, minimized, written under ignored `fuzz-results/smoke`, and replayed twice; the
+public replay command can replay all three bundles. These injections test the harness only and are
+never present in a production or differential campaign.
+
+Evidence limits remain explicit. Exhaustive inventory is not exhaustive behavioral invocation;
+stateful APIs require recipes. Pixel clustering does not declare distinct rasterization correct.
+UI hierarchy identity depends on accessibility information exported by the application. Long
+1,000-case and full-corpus campaigns remain manual and bounded, while normal verification uses
+small deterministic seeds. The strict whole-tree maintainability findings and rejected churn are
+recorded in `docs/code-quality-audit-2026-09.md`.
+
+The frozen full catalog contains 148,937 public and reached declarations: 19,488 delegates,
+1,596 explicit placeholders, 94,376 framework-bytecode candidates, 30,295 missing members, and
+3,182 API-33-absent members. The public subset remains the 78,776-member count above; the added
+70,161 entries are corpus/framework reachability evidence. Canonical support resolution also
+recognizes direct JNI registrations, restoring `fwtest` to 295/363 declared natives after an
+integration test exposed the omission. Corpus collection now identifies process frames by their
+webdroid URL contract, so third-party web-content frames are not mislabeled as missing Android
+telemetry.
+
+Final acceptance used seed `1592594996`. All 64 API cases agree. Of 24 graphics cases, 23 expose
+differences and minimize into three stable clusters: a state value mismatch, an exception mismatch,
+and a material pixel mismatch (2.51% tolerant full-frame difference and 50.74% content difference).
+All three retained bundles reproduce twice, including the pixel bundle through the public replay
+command. The live Calculator UI oracle also finds, minimizes, persists, and twice replays a missing
+semantic target. The injected API, graphics, and UI smoke failures are independently detected,
+minimized, and twice replayed.
+
+The unchanged probe APK and the affected FitNotes and Calculator APKs smoke-compile with zero method
+failures. Typecheck passes; 1,222 tests with 26,563 assertions pass; all eight runnable framework
+exercises pass; and FitNotes text comparison is 6/6. Serialized E2E exits zero after 12 flows and
+842.3 seconds, with FitNotes rendering 39/39 steps and Mihon app 17/17. No visual golden changes are
+made. The 18-APK corpus renders 18/18 first frames and ranks 44 distinct compatibility gaps. All 59
+actual main/child process frames have ticks, queue, performance, error, and coverage diagnostics;
+the four excluded Twitch descendants are web content rather than Android processes. FitNotes,
+Calculator, the fuzz probe, and Mihon report no missing APIs on their observed corpus paths.
+
+Five serial alternating Calculator pairs compare the starting commit with the frozen runtime.
+Median launch action changes from 572.462 ms to 573.625 ms (+0.20%), while browser task duration
+changes from 292.117 ms to 289.975 ms (-0.73%). Both declared primary metrics remain inside the 3%
+retention gate. Every sample remains visible and alive, completes input, advances rendering, and
+reports no errors. Single-counter input, compilation, frame, and draw timings remain descriptive;
+their small sample variance is not promoted into an additional acceptance gate.
+
+The full E2E and corpus runs retain known platform findings rather than concealing them: TikTok
+layout/log gaps, YouTube Matrix/captioning/SAX failures and two settle timeouts, Lichess native
+pthread faults, and the Mihon onboarding page error. They are reproducible compatibility backlog,
+not evidence that the harness failed. Exhaustive catalog classification therefore closes this task;
+exhaustive behavioral coverage continues to depend on adding safe, explicit recipes and running
+larger manual campaigns.
+
+## 2026-09-14: strict fuzz-harness maintainability follow-up
+
+The post-delivery thermo-nuclear review identified six harness defects rather than cosmetic nits.
+Implementation commits `372210d` through `e14d30a` resolve them without changing Android
+compatibility semantics. With fuzz routing disabled, the server returns before URL parsing, so the
+test-only endpoint rewrite adds no work to ordinary proxy requests.
+
+Failure persistence is now atomic: original and minimized cases each own the exact pair of outputs
+that produced their failure, and every bundle includes two matching minimized observations. UI
+bundles retain the minimized run's telemetry and screenshots instead of attaching original-run
+evidence to a shorter action list. Replay validates these wire shapes before execution.
+
+Graphics operations are an exact discriminated union rather than an open string and primitive
+array. The validator enforces operation-specific arity, primitive types, and enum domains. An
+exhaustive operation manifest is checked against the Java probe switch. Failure comparison uses a
+stable reproduction key while retained fingerprints add differing state fields and the minimized
+operation shape, preventing unrelated graphics failures from collapsing into two global buckets.
+
+Executable API recipes now own the member list used by inventory classification. UI platform
+mechanics moved behind Android and webdroid targets, and the golden recorder and fuzzer share one
+hierarchy parser. Per-process diagnostics use tagged states, so an unavailable or timed-out child
+cannot masquerade as an empty successful result.
+
+Campaign resources are isolated. Case and dev servers select dynamic ports, staged APK directories
+are private and removed during cleanup, and each dev server privately rewrites the unchanged
+probe's loopback endpoint to its own case server. Two simultaneous webdroid probes completed on
+distinct origins. Differential campaigns install the probe once per oracle, reuse one webdroid
+session across batches, and execute the independent platform runs concurrently. A three-batch
+focused run reused one origin and returned the expected ordered result each time.
+
+Focused verification covered strict TypeScript, protocol/catalog/semantic tests, injected smoke
+and replay, a live one-step FitNotes UI campaign with three successful process snapshots, one live
+webdroid probe, two concurrent probes, and three sequential batches on a reused session.
+
+The frozen follow-up passes typecheck and 1,225 tests with 26,572 assertions. FitNotes, Calculator,
+and the unchanged fuzz probe smoke-compile with zero method failures; all eight runnable framework
+exercises pass with 295/363 registered native methods covered. Fixed seed `1592594996` produces
+0/64 API differences and 23/24 graphics differences. The corrected retained identity separates the
+graphics results into 20 minimized clusters instead of the previous three coarse global buckets;
+the material pixel bundle reproduces twice through the public replay command.
+
+The API-33 Calculator UI differential finds the same missing semantic target on its original run,
+minimized run, both stored reproductions, and a fresh public replay. Its captured foreground and two
+child-process snapshots all report tagged `ok` diagnostics. FitNotes text comparison remains 6/6.
+Serialized E2E passes all 12 flows in 845.8 seconds, including FitNotes 39/39 and Mihon app 17/17,
+without golden changes. The full corpus renders 18/18 first frames and retains 44 compatibility
+gaps: 59 Android process snapshots report `ok`, four excluded Twitch web-content frames report
+`unavailable`, and none report a telemetry failure. The follow-up changes no production JVM,
+graphics, or generated call site, so the preceding five-pair +0.20% launch and -0.73% browser-task
+performance evidence remains the applicable 3% retention check.

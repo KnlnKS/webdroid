@@ -12,6 +12,17 @@ import dns from "node:dns/promises";
 
 await Promise.all([prepareSystemPackages(), ensureFrameworkRes()]);
 const webRelay = new WebRelay();
+const apkDirectory = process.env.WEBDROID_APK_DIR ?? "apks";
+const fuzzOrigin = process.env.WEBDROID_FUZZ_ORIGIN ? new URL(process.env.WEBDROID_FUZZ_ORIGIN) : null;
+if (fuzzOrigin && !["127.0.0.1", "localhost"].includes(fuzzOrigin.hostname))
+  throw new Error("WEBDROID_FUZZ_ORIGIN must use loopback");
+
+function proxyTarget(requested: string): string {
+  if (!fuzzOrigin) return requested;
+  const url = new URL(requested);
+  if (url.origin !== "http://127.0.0.1:4876") return requested;
+  return new URL(`${url.pathname}${url.search}`, fuzzOrigin).href;
+}
 
 type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; alpn: string[]; sock: import("bun").Socket | null; ready: boolean; pending: (Uint8Array | Buffer)[] };
 
@@ -36,7 +47,7 @@ const assetCache = new Map<string, Promise<Record<string, Uint8Array>>>();
 function apkAssets(apk: string): Promise<Record<string, Uint8Array>> {
   let pending = assetCache.get(apk);
   if (!pending) {
-    pending = Bun.file(`apks/${apk}`).arrayBuffer()
+    pending = Bun.file(`${apkDirectory}/${apk}`).arrayBuffer()
       .then((bytes) => openInstall(new Uint8Array(bytes)).zip)
       .catch((error: unknown) => { assetCache.delete(apk); throw error; });
     assetCache.set(apk, pending);
@@ -63,10 +74,11 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
     "/proxy": async (req) => {
       if (req.headers.get("service-worker") === "script") return new Response("invalid worker", { status: 403 });
       const q = new URL(req.url).searchParams;
-      const url = q.get("url");
+      const requestedUrl = q.get("url");
       const frame = q.get("frame") === "1", manual = q.get("manual") === "1";
       const isolated = q.get("webview") === "1";
-      if (!url || !/^https?:\/\//.test(url)) return new Response("bad url", { status: 400 });
+      if (!requestedUrl || !/^https?:\/\//.test(requestedUrl)) return new Response("bad url", { status: 400 });
+      const url = proxyTarget(requestedUrl);
       try {
         const headers = new Headers();
         // forward selected headers the app set (via x-wd-* prefix)
@@ -162,10 +174,10 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
     },
     "/apks": async () => {
       const names: string[] = [];
-      for await (const f of new Bun.Glob("*.{apk,xapk}").scan("apks")) names.push(f);
+      for await (const f of new Bun.Glob("*.{apk,xapk}").scan(apkDirectory)) names.push(f);
       return Response.json(names.sort());
     },
-    "/apks/:name": (req) => serveFile("apks", decodeURIComponent(req.params.name)),
+    "/apks/:name": (req) => serveFile(apkDirectory, decodeURIComponent(req.params.name)),
   },
   // Raw TCP over a WebSocket. A page cannot open a socket, but every Java networking stack
   // ultimately wants one, so the dev server lends it ours: one WS carries one TCP connection.
