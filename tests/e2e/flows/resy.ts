@@ -16,7 +16,7 @@
 // Accepted upstream log lines: the Firebase installations/FCM 400s, the Facebook GraphResponse
 // 400 and the two "Error parsing JSON" warnings Branch's session callback logs when there is no
 // deep link (the referring params carry none of the keys ResyActivity reads).
-import type { Flow } from "../types";
+import { wait, type Flow } from "../types";
 
 const W = 1080, H = 2160;
 const N = (x: number, y: number) => ({ x: x / W, y: y / H });
@@ -33,22 +33,23 @@ export const resy: Flow = {
   activity: "com.resy.android.ResyActivity",
   apk: "Resy.apk",
   // the Resy API is HTTPS on a live certificate chain
-  liveClock: true,
+  clock: "live",
+  fastCheckpoints: ["venue"],
   screen: { width: W, height: H, densityDpi: 480 },
   crop: { top: 72, bottom: 72, left: 0, right: 0 },
   steps: [
-    { id: "launch", label: "Launch — onboarding under the notification alert", action: { type: "launch" }, settleDelayMs: 15000 },
-    { id: "alert-ok", label: "Dismiss the upstream notification alert", action: { type: "tapText", text: "OK" }, settleDelayMs: 1500 },
-    { id: "onboarding-close", label: "Close onboarding", action: { type: "tapText", text: "close" }, settleDelayMs: 3000 },
-    { id: "location-permission", label: "Allow location when Android asks — nearby list loads", action: { type: "tapText", text: "While using the app", optional: true }, settleDelayMs: 25000 },
-    { id: "list", label: "Nearby list with live slots and the map", action: { type: "settle" }, settleDelayMs: 5000 },
-    { id: "sheet-close", label: "Close the announcement sheet", action: { type: "tapAt", ...SHEET_CLOSE }, settleDelayMs: 3000 },
-    { id: "search-open", label: "Open search from the action bar", action: { type: "tapAt", ...SEARCH_PILL }, settleDelayMs: 4000 },
-    { id: "search-type", label: 'Type "Carbone"', action: { type: "typeInto", ...KEYWORD_FIELD, text: "Carbone" }, settleDelayMs: 2000 },
-    { id: "search-go", label: "Search — the list shows the matches", action: { type: "enter" }, settleDelayMs: 15000 },
-    { id: "sheet-close-2", label: "Close the re-shown announcement sheet", action: { type: "tapAt", ...SHEET_CLOSE }, settleDelayMs: 3000 },
-    { id: "venue", label: "Open the first result — venue page", action: { type: "tapAt", ...FIRST_ROW }, settleDelayMs: 15000 },
-    { id: "venue-back", label: "Back to the list", action: { type: "back" }, settleDelayMs: 5000 },
-    { id: "near-me", label: "Near Me — the location search", action: { type: "tapAt", ...NEAR_ME }, settleDelayMs: 10000 },
+    { id: "launch", label: "Launch — onboarding under the notification alert", action: { type: "launch", wait: wait.live(15000) },
+    { id: "alert-ok", label: "Dismiss the upstream notification alert", action: { type: "tapText", text: "OK", wait: wait.live(1500) },
+    { id: "onboarding-close", label: "Close onboarding", action: { type: "tapText", text: "close", wait: wait.live(3000) },
+    { id: "location-permission", label: "Allow location when Android asks — nearby list loads", action: { type: "tapText", text: "While using the app", optional: true, wait: wait.live(25000) },
+    { id: "list", label: "Nearby list with live slots and the map", action: { type: "settle", wait: wait.live(5000) },
+    { id: "sheet-close", label: "Close the announcement sheet", action: { type: "tapAt", ...SHEET_CLOSE, wait: wait.live(3000) },
+    { id: "search-open", label: "Open search from the action bar", action: { type: "tapAt", ...SEARCH_PILL, wait: wait.live(4000) },
+    { id: "search-type", label: 'Type "Carbone"', action: { type: "typeInto", ...KEYWORD_FIELD, text: "Carbone", wait: wait.live(2000) },
+    { id: "search-go", label: "Search — the list shows the matches", action: { type: "enter", wait: wait.live(15000) },
+    { id: "sheet-close-2", label: "Close the re-shown announcement sheet", action: { type: "tapAt", ...SHEET_CLOSE, wait: wait.live(3000) },
+    { id: "venue", label: "Open the first result — venue page", action: { type: "tapAt", ...FIRST_ROW, wait: wait.live(15000) },
+    { id: "venue-back", label: "Back to the list", action: { type: "back", wait: wait.live(5000) },
+    { id: "near-me", label: "Near Me — the location search", action: { type: "tapAt", ...NEAR_ME, wait: wait.live(10000) },
   ],
 };

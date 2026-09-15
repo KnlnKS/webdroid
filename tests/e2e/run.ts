@@ -3,7 +3,7 @@
 // `--jobs` bounds how many at once, and each is scored as soon as it has captured.
 import { cpus } from "node:os";
 import { ENV_SCREEN } from "./drivers/webdroid";
-import { sameScreen, screenOf, screenParam } from "./types";
+import { sameScreen, screenOf, screenParam, waitHorizonMs } from "./types";
 import { parseScreen } from "../../src/shell/config";
 import { captureFlow, launchFor, loadManifest, prepareShots } from "./capture-webdroid";
 import { assembleReport, scoreFlow } from "./score";
@@ -47,7 +47,7 @@ async function runFlow(app: string): Promise<Outcome> {
 }
 
 // longest flows first, so the tail of the run is not one slow flow starting last
-const weight = (app: string) => FLOWS.find((f) => f.app === app)!.steps.reduce((a, s) => a + (s.settleDelayMs ?? 0) + 1000, 0);
+const weight = (app: string) => FLOWS.find((f) => f.app === app)!.steps.reduce((a, s) => a + waitHorizonMs(s.wait) + 1000, 0);
 const queue = flows.map((f) => f.app).sort((a, b) => weight(b) - weight(a));
 const outcomes: Outcome[] = [];
 const t0 = Date.now();

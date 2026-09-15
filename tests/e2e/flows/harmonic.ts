@@ -12,7 +12,7 @@
 // comment count); the overflow reaches Settings, which is offline and deterministic.
 // Accepted newMissing: `class androidx/window/extensions/WindowExtensionsProvider` — the
 // optional <uses-library> the foldable split layout wants, absent on most real devices too.
-import type { Flow } from "../types";
+import { wait, type Flow } from "../types";
 
 const N = (x: number, y: number) => ({ x: x / 720, y: y / 1280 });
 const P = (x: number, y: number): [number, number] => [x / 720, y / 1280];
@@ -34,25 +34,26 @@ export const harmonic: Flow = {
   apk: "harmonic.apk",
   // the HN API is HTTPS: a device pinned to a past instant rejects every current certificate
   // and the app records its "Loading failed" state instead of its real UI
-  liveClock: true,
+  clock: "live",
+  fastCheckpoints: ["settings"],
   // status bar [0,48) and gesture bar [1232,1280) — the split fitnotes verified on-device
   crop: { top: 48, bottom: 48, left: 0, right: 0 },
   steps: [
-    { id: "launch", label: "Launch — welcome dialog over the loading front page", action: { type: "launch" }, settleDelayMs: 6000, maskRects: AROUND_CARD },
-    { id: "welcome-scroll", label: "Scroll the welcome dialog to its button", action: { type: "swipe", from: P(360, 1000), to: P(360, 300) }, maskRects: AROUND_CARD },
-    { id: "preset-simple", label: "Pick the Simple UI preset", action: { type: "tapText", text: "Simple" }, maskRects: AROUND_CARD },
-    { id: "preset-expressive", label: "Back to the Expressive preset", action: { type: "tapText", text: "Expressive" }, maskRects: AROUND_CARD },
-    { id: "welcome-dismiss", label: "Get started → dismiss the welcome dialog", action: { type: "tapText", text: "Get started" }, settleDelayMs: 2000, maskRects: LIST },
-    { id: "front", label: "Front page — story rows", action: { type: "settle" }, settleDelayMs: 2000, maskRects: LIST },
-    { id: "overflow", label: "Open the overflow menu", action: { type: "tapText", text: "More options" } },
-    { id: "settings", label: "Settings", action: { type: "tapText", text: "Settings" }, settleDelayMs: 2000 },
-    { id: "settings-scroll", label: "Scroll the settings list", action: { type: "swipe", from: P(360, 1000), to: P(360, 500) } },
-    { id: "settings-back", label: "Back to the front page", action: { type: "back" }, settleDelayMs: 2000, maskRects: LIST },
+    { id: "launch", label: "Launch — welcome dialog over the loading front page", action: { type: "launch", wait: wait.live(6000), maskRects: AROUND_CARD },
+    { id: "welcome-scroll", label: "Scroll the welcome dialog to its button", action: { type: "swipe", from: P(360, 1000), to: P(360, 300) }, maskRects: AROUND_CARD, wait: wait.live() },
+    { id: "preset-simple", label: "Pick the Simple UI preset", action: { type: "tapText", text: "Simple" }, maskRects: AROUND_CARD, wait: wait.live() },
+    { id: "preset-expressive", label: "Back to the Expressive preset", action: { type: "tapText", text: "Expressive" }, maskRects: AROUND_CARD, wait: wait.live() },
+    { id: "welcome-dismiss", label: "Get started → dismiss the welcome dialog", action: { type: "tapText", text: "Get started", wait: wait.live(2000), maskRects: LIST },
+    { id: "front", label: "Front page — story rows", action: { type: "settle", wait: wait.live(2000), maskRects: LIST },
+    { id: "overflow", label: "Open the overflow menu", action: { type: "tapText", text: "More options" }, wait: wait.live() },
+    { id: "settings", label: "Settings", action: { type: "tapText", text: "Settings", wait: wait.live(2000) },
+    { id: "settings-scroll", label: "Scroll the settings list", action: { type: "swipe", from: P(360, 1000), to: P(360, 500) }, wait: wait.live() },
+    { id: "settings-back", label: "Back to the front page", action: { type: "back", wait: wait.live(2000), maskRects: LIST },
     // the comment count, not the title: tapping the title opens the article in a WebView, whose
     // pixels the canvas capture cannot see at all
-    { id: "comments", label: "Comment count → the comments screen", action: { type: "tapAt", ...N(645, 395) }, settleDelayMs: 5000, maskRects: COMMENTS },
-    { id: "back", label: "Back to the front page", action: { type: "back" }, settleDelayMs: 2000, maskRects: LIST },
-    { id: "scroll", label: "Scroll the front page", action: { type: "swipe", from: P(360, 1000), to: P(360, 400) }, maskRects: LIST },
-    { id: "scrolled", label: "Scrolled front page", action: { type: "settle" }, maskRects: LIST },
+    { id: "comments", label: "Comment count → the comments screen", action: { type: "tapAt", ...N(645, 395), wait: wait.live(5000), maskRects: COMMENTS },
+    { id: "back", label: "Back to the front page", action: { type: "back", wait: wait.live(2000), maskRects: LIST },
+    { id: "scroll", label: "Scroll the front page", action: { type: "swipe", from: P(360, 1000), to: P(360, 400) }, maskRects: LIST, wait: wait.live() },
+    { id: "scrolled", label: "Scrolled front page", action: { type: "settle" }, maskRects: LIST, wait: wait.live() },
   ],
 };

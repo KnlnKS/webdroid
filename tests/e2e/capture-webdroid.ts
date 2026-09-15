@@ -5,7 +5,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { ENV_SCREEN, WebdroidDriver } from "./drivers/webdroid";
 import { E2E_DIR } from "./lib/util";
-import { PINNED_CLOCK_MS, screenOf, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step } from "./types";
+import { PINNED_CLOCK_MS, isMotionWait, screenOf, uiFileFor, waitHorizonMs, waitTimeoutMs, type Flow, type Manifest, type RecordedStep, type Step } from "./types";
 import { parseScreen } from "../../src/shell/config";
 import type { Act, Settled, StepResult } from "./lib/probe";
 import { readProcesses, type ProcessSnapshot } from "./lib/processes";
@@ -86,7 +86,7 @@ export function prefsStorage(pkg: string, xml: string): [string, string] {
 export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = false): Promise<WebdroidDriver> {
   return WebdroidDriver.launch({
     screen: parseScreen(ENV_SCREEN) ?? screenOf(manifest, flow.screen),
-    fixedMs: flow.liveClock ? null : PINNED_CLOCK_MS,
+    fixedMs: flow.clock === "live" ? null : PINNED_CLOCK_MS,
     storage: flow.seedPrefs ? [prefsStorage(flow.pkg, flow.seedPrefs)] : [],
     shots,
   });
@@ -110,7 +110,11 @@ export function actOf(flow: Flow, step: Step, rec?: RecordedStep): Act {
 
 /** Perform one step and settle it on the step's horizon. */
 export function runStep(drv: WebdroidDriver, flow: Flow, step: Step, rec?: RecordedStep): Promise<StepResult> {
-  return drv.step(actOf(flow, step, rec), { horizonMs: step.settleDelayMs ?? 0, animated: !!step.animated });
+  return drv.step(actOf(flow, step, rec), {
+    horizonMs: waitHorizonMs(step.wait),
+    sample: isMotionWait(step.wait),
+    timeoutMs: waitTimeoutMs(step.wait),
+  });
 }
 
 export async function captureFlow(flow: Flow, drv: WebdroidDriver, { jobs = 1, shots, log = console.log }: { jobs?: number; shots?: string; log?: (s: string) => void } = {}): Promise<StepRun[]> {
@@ -133,7 +137,8 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, { jobs = 1, s
     const fps = r.ms ? (r.perf.frames ?? 0) * 1000 / r.ms : 0;
     // the launch step's window is mostly boot + lazy compilation, not the app's frame loop; and
     // a frame rate measured beside other flows' browsers measures the host, not the app
-    const slow = !!(step.animated && step.action.type !== "launch" && flow.minFps && fps < flow.minFps && jobs === 1);
+    const motion = isMotionWait(step.wait);
+    const slow = !!(motion && step.action.type !== "launch" && flow.minFps && fps < flow.minFps && jobs === 1);
     const writeAt = performance.now();
     await Bun.write(`${outDir}/${file}`, Buffer.from(r.png, "base64"));
     // the structural half of the comparison; score.ts reads it back off disk like the png
@@ -148,9 +153,9 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, { jobs = 1, s
     runs.push({ id: step.id, index: i, file, semanticHit: r.semanticHit, settled: r.settled.how, settleMs: Math.round(r.settled.ms),
                 busy: Object.keys(r.settled.busy).length ? r.settled.busy : undefined,
                 settleTimedOut: r.settled.how === "timeout", mainLoopWedged: r.wedged, frames,
-                ms: stepMs, perf: r.perf, fps: step.animated ? Math.round(fps) : undefined,
-                glFps: step.animated && r.ms ? (r.perf.glFrames ?? 0) * 1000 / r.ms : undefined,
-                presentFps: step.animated && r.ms && r.perf.presentations !== undefined ? r.perf.presentations * 1000 / r.ms : undefined,
+                ms: stepMs, perf: r.perf, fps: motion ? Math.round(fps) : undefined,
+                glFps: motion && r.ms ? (r.perf.glFrames ?? 0) * 1000 / r.ms : undefined,
+                presentFps: motion && r.ms && r.perf.presentations !== undefined ? r.perf.presentations * 1000 / r.ms : undefined,
                 slow: slow || undefined,
                 newMissing: r.newMissing.length ? r.newMissing : undefined,
                 nativeRequired: r.nativeRequired.length ? r.nativeRequired : undefined,
@@ -164,7 +169,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, { jobs = 1, s
       r.wedged ? "MAIN LOOP WEDGED" : "",
       frames ? `${frames} frame${frames === 1 ? "" : "s"}` : "",
       `${stepMs}ms`,
-      step.animated ? `${fps.toFixed(0)}fps${jobs > 1 ? ` (${jobs} jobs)` : ""}` : "",
+      motion ? `${fps.toFixed(0)}fps${jobs > 1 ? ` (${jobs} jobs)` : ""}` : "",
       p.glFrames ? `${p.glFrames} gl/${Math.round(p.glFrameMs)}ms${p.glSkipped ? " skipped " + p.glSkipped : ""}` : "",
       slow ? "SLOW" : "",
       p.layoutPasses ? `${p.layoutPasses} layout/${Math.round(p.layoutMs)}ms` : "",

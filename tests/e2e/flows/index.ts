@@ -1,4 +1,4 @@
-import type { Flow } from "../types";
+import { validateFlow, type Flow } from "../types";
 import { fitnotes } from "./fitnotes";
 import { mihonOnboarding, mihonApp } from "./mihon";
 import { flappybird } from "./flappybird";
@@ -12,3 +12,4 @@ import { tiktok } from "./tiktok";
 import { youtube } from "./youtube";
 
 export const FLOWS: Flow[] = [fitnotes, mihonOnboarding, mihonApp, flappybird, harmonic, calculatorm, lichess, doodlejump, resy, reddit, tiktok, youtube];
+for (const flow of FLOWS) validateFlow(flow);

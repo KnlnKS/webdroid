@@ -57,7 +57,7 @@ type LaunchOpts = {
   shots?: boolean;
 };
 
-const SETTLE_DEFAULTS: SettleOpts = { ...DEFAULT_SETTLE, horizonMs: 0, animated: false };
+const SETTLE_DEFAULTS: SettleOpts = { ...DEFAULT_SETTLE, horizonMs: 0, sample: false };
 
 export class WebdroidDriver {
   readonly errors: string[] = [];

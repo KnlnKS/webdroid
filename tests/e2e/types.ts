@@ -32,6 +32,36 @@ type Action =
   /** No input — just settle and capture (e.g. after an async screen load). */
   | { type: "settle" };
 
+export type StateCondition =
+  | { kind: "activity"; component: string }
+  | { kind: "text"; text: string }
+  | { kind: "text-absent"; text: string };
+
+export type WaitPolicy =
+  | { kind: "state"; condition: StateCondition; maxVirtualMs: number; maxRealMs: number }
+  | { kind: "quiescent"; maxVirtualMs: number; maxRealMs: number }
+  | { kind: "sample"; atVirtualMs: number; maxRealMs: number }
+  | { kind: "live"; horizonMs: number; timeoutMs: number; sample: boolean };
+
+export type EvidencePolicy =
+  | { kind: "semantic" }
+  | { kind: "visual" }
+  | { kind: "motion"; minFps: number };
+
+const REAL_WAIT_MS = 20_000;
+export const wait = {
+  state: (condition: StateCondition, maxVirtualMs = 20_000, maxRealMs = REAL_WAIT_MS): WaitPolicy =>
+    ({ kind: "state", condition, maxVirtualMs, maxRealMs }),
+  quiescent: (maxVirtualMs = 0, maxRealMs = REAL_WAIT_MS): WaitPolicy =>
+    ({ kind: "quiescent", maxVirtualMs, maxRealMs }),
+  sample: (atVirtualMs = 0, maxRealMs = REAL_WAIT_MS): WaitPolicy =>
+    ({ kind: "sample", atVirtualMs, maxRealMs }),
+  live: (horizonMs = 0, timeoutMs = REAL_WAIT_MS): WaitPolicy =>
+    ({ kind: "live", horizonMs, timeoutMs, sample: false }),
+  liveSample: (horizonMs = 0, timeoutMs = REAL_WAIT_MS): WaitPolicy =>
+    ({ kind: "live", horizonMs, timeoutMs, sample: true }),
+};
+
 export type Step = {
   /** Stable slug; names the PNG. Never renumber — the index is the file prefix. */
   id: string;
@@ -39,17 +69,7 @@ export type Step = {
   action: Action;
   /** Regions excluded from the diff (normalized). Escape hatch for non-deterministic pixels. */
   maskRects?: Rect[];
-  /**
-   * The step's horizon, ms. The emulator recorder sleeps it before settling. webdroid does not
-   * sleep: it waits for work the app scheduled inside the horizon (plus the stability window)
-   * and refuses to trust pixel stability before it, so a splash that holds still for a second
-   * is not mistaken for the screen behind it. Set it to how long the screen may legitimately
-   * keep changing after the action.
-   */
-  settleDelayMs?: number;
-  /** The screen keeps changing by design (a game loop): capture once after the dwell instead
-   *  of waiting for stability, which would never come. */
-  animated?: boolean;
+  wait: WaitPolicy;
 };
 
 export type Flow = {
@@ -66,20 +86,53 @@ export type Flow = {
    * different screens and the diff would be meaningless.
    */
   seedPrefs?: string;
-  /** Frame-rate gate for animated steps; a step below it is flagged SLOW. */
+  /** Frame-rate gate for motion checkpoints; a step below it is flagged SLOW. */
   minFps?: number;
-  /**
-   * Run this flow on the wall clock instead of PINNED_CLOCK_MS. The pin is in the past, so a
-   * device held there rejects every current TLS certificate: an app that fetches over HTTPS
-   * records a golden of its own error state. Both drivers honour it, or the two passes would
-   * disagree about what "now" is. Anything the flow renders from the clock must be masked.
-   */
-  liveClock?: boolean;
+  /** Controlled flows may advance Android-visible time in fast mode. Live flows never do. */
+  clock: "controlled" | "live";
+  /** Steps that retain pixels in fast mode. Every step still captures in the full visual lane. */
+  fastCheckpoints: readonly string[];
   /** The geometry positional taps were measured at. A flow with no goldens runs at it, since a
    *  normalized coordinate only lands on the same view at the same size. */
   screen?: Screen;
   steps: Step[];
 };
+
+export function evidenceOf(flow: Flow, step: Step): EvidencePolicy {
+  if (!flow.fastCheckpoints.includes(step.id)) return { kind: "semantic" };
+  if (step.wait.kind === "sample" || (step.wait.kind === "live" && step.wait.sample))
+    return { kind: "motion", minFps: flow.minFps ?? 0 };
+  return { kind: "visual" };
+}
+
+export const waitHorizonMs = (policy: WaitPolicy): number => {
+  switch (policy.kind) {
+    case "state":
+    case "quiescent": return policy.maxVirtualMs;
+    case "sample": return policy.atVirtualMs;
+    case "live": return policy.horizonMs;
+  }
+};
+
+export const waitTimeoutMs = (policy: WaitPolicy): number =>
+  policy.kind === "live" ? policy.timeoutMs : policy.maxRealMs;
+
+export const isMotionWait = (policy: WaitPolicy): boolean =>
+  policy.kind === "sample" || (policy.kind === "live" && policy.sample);
+
+export function validateFlow(flow: Flow): void {
+  const ids = new Set<string>();
+  for (const step of flow.steps) {
+    if (!step.id || ids.has(step.id)) throw new Error(`${flow.app}: duplicate or empty step id "${step.id}"`);
+    ids.add(step.id);
+    if (flow.clock === "controlled" && step.wait.kind === "live")
+      throw new Error(`${flow.app}/${step.id}: controlled flow cannot use a live wait`);
+    if (flow.clock === "live" && step.wait.kind !== "live")
+      throw new Error(`${flow.app}/${step.id}: live flow requires a live wait`);
+  }
+  for (const id of flow.fastCheckpoints)
+    if (!ids.has(id)) throw new Error(`${flow.app}: unknown fast checkpoint "${id}"`);
+}
 
 /**
  * One node of a view hierarchy, as `uiautomator dump` reports it and as webdroid emits it.

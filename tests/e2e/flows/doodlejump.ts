@@ -1,6 +1,6 @@
 // Doodle Jump Christmas (Marmalade, 2013) exercises ARM32 native execution.
 // The fullscreen game loop never settles, so gameplay steps use animated captures.
-import type { Flow } from "../types";
+import { wait, type Flow } from "../types";
 
 const N = (x: number, y: number) => ({ x: x / 720, y: y / 1280 });
 const PLAY = N(360, 560);      // the title screen's "play" button
@@ -13,14 +13,16 @@ export const doodlejump: Flow = {
   apk: "DoodleJumpChrismas.apk",
   crop: { top: 0, bottom: 48, left: 0, right: 0 },
   minFps: 30,
+  clock: "controlled",
+  fastCheckpoints: ["title", "playing"],
   steps: [
-    { id: "launch", label: "Launch — loader", action: { type: "launch" }, settleDelayMs: 3000, animated: true },
+    { id: "launch", label: "Launch — loader", action: { type: "launch", wait: wait.sample(3000) },
     // the game decodes every texture at startup (~11G guest instructions): the title takes ~18s to appear
-    { id: "title", label: "Title screen", action: { type: "settle" }, settleDelayMs: 18000, animated: true },
-    { id: "play", label: "Title → play", action: { type: "tapAt", ...PLAY }, settleDelayMs: 1500, animated: true },
+    { id: "title", label: "Title screen", action: { type: "settle", wait: wait.sample(18000) },
+    { id: "play", label: "Title → play", action: { type: "tapAt", ...PLAY, wait: wait.sample(1500) },
     // ~3s of gameplay taps with no capture inside it: the perf window
-    { id: "taps", label: "5 taps in play", action: { type: "tapAt", ...CENTER, repeat: 5, everyMs: 600 }, animated: true },
-    { id: "playing", label: "Gameplay frame", action: { type: "settle" }, settleDelayMs: 3000, animated: true },
-    { id: "back", label: "Back", action: { type: "back" } },
+    { id: "taps", label: "5 taps in play", action: { type: "tapAt", ...CENTER, repeat: 5, everyMs: 600, wait: wait.sample() },
+    { id: "playing", label: "Gameplay frame", action: { type: "settle", wait: wait.sample(3000) },
+    { id: "back", label: "Back", action: { type: "back" }, wait: wait.quiescent() },
   ],
 };

@@ -8,7 +8,7 @@
 import { mkdir, rm } from "node:fs/promises";
 import * as emu from "./drivers/emulator";
 import { parseArgs } from "./lib/args";
-import { PINNED_CLOCK_MS, uiFileFor, type Flow, type Manifest, type RecordedStep } from "./types";
+import { PINNED_CLOCK_MS, uiFileFor, waitHorizonMs, type Flow, type Manifest, type RecordedStep } from "./types";
 import { E2E_DIR, sleep } from "./lib/util";
 import { device as profile } from "../../src/shell/config";
 
@@ -46,7 +46,7 @@ async function seedPrefs(flow: Flow) {
 
 /** Point the device at the instant this flow wants, and report it. Needs root. */
 async function setDeviceClock(flow: Flow): Promise<number> {
-  const ms = flow.liveClock ? Date.now() : PINNED_CLOCK_MS;
+  const ms = flow.clock === "live" ? Date.now() : PINNED_CLOCK_MS;
   const d = new Date(ms);
   const p = (n: number) => String(n).padStart(2, "0");
   const stamp = `${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}` +
@@ -134,7 +134,8 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
         break;
     }
 
-    if (step.settleDelayMs) await sleep(step.settleDelayMs);
+    const horizonMs = waitHorizonMs(step.wait);
+    if (horizonMs) await sleep(horizonMs);
     // webdroid has no IME. A soft keyboard in a golden would floor that step's diff near 50%,
     // so it is closed before capture — but only when one is actually up, since the dismiss key
     // also closes dialogs.
@@ -168,7 +169,7 @@ const device = await ensureDevice();
 console.log(`device: ${device.width}x${device.height} @${device.densityDpi}dpi  sdk=${device.sdk}`);
 const clock = (await emu.shell("date -u +%s")).trim();
 const drift = Math.abs(+clock * 1000 - PINNED_CLOCK_MS);
-if (drift > 86_400_000 && flows.some((f) => !f.liveClock)) {
+if (drift > 86_400_000 && flows.some((f) => f.clock === "controlled")) {
   console.warn(`WARN: device clock is ${new Date(+clock * 1000).toISOString()}, not the pinned ` +
     `${new Date(PINNED_CLOCK_MS).toISOString()}. Re-run boot-emulator.sh or date-bearing screens will drift.`);
 }

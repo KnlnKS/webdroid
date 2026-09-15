@@ -9,7 +9,7 @@
 // are only right at that aspect ratio, and the flow pins it.
 // The app also bundles an arm64 on-device LLM (liblitertlm_jni.so) behind its camera/AI screen —
 // off this flow; when reached it must surface as nativeRequired (the app's own unavailable state).
-import type { Flow, Screen } from "../types";
+import { wait, type Flow, Screen } from "../types";
 
 const SCREEN: Screen = { width: 1080, height: 2424, densityDpi: 480 };
 const N = (x: number, y: number) => ({ x: x / SCREEN.width, y: y / SCREEN.height });
@@ -24,14 +24,16 @@ export const calculatorm: Flow = {
   apk: "calculatorm.apk",
   screen: SCREEN,
   crop: { top: 48, bottom: 48, left: 0, right: 0 },
+  clock: "controlled",
+  fastCheckpoints: ["result"],
   steps: [
-    { id: "launch", label: "Launch — keypad", action: { type: "launch" }, settleDelayMs: 5000 },
-    { id: "keypad", label: "Keypad settled", action: { type: "settle" } },
-    { id: "7", label: "Tap 7", action: { type: "tapAt", ...KEY_7 }, settleDelayMs: 400 },
-    { id: "plus", label: "Tap +", action: { type: "tapAt", ...KEY_PLUS }, settleDelayMs: 400 },
-    { id: "7b", label: "Tap 7 again", action: { type: "tapAt", ...KEY_7 }, settleDelayMs: 400 },
-    { id: "eq", label: "Tap = (expect 14)", action: { type: "tapAt", ...KEY_EQ }, settleDelayMs: 400 },
-    { id: "result", label: "Result shown", action: { type: "settle" } },
-    { id: "back", label: "Back", action: { type: "back" } },
+    { id: "launch", label: "Launch — keypad", action: { type: "launch", wait: wait.quiescent(5000) },
+    { id: "keypad", label: "Keypad settled", action: { type: "settle" }, wait: wait.quiescent() },
+    { id: "7", label: "Tap 7", action: { type: "tapAt", ...KEY_7, wait: wait.quiescent(400) },
+    { id: "plus", label: "Tap +", action: { type: "tapAt", ...KEY_PLUS, wait: wait.quiescent(400) },
+    { id: "7b", label: "Tap 7 again", action: { type: "tapAt", ...KEY_7, wait: wait.quiescent(400) },
+    { id: "eq", label: "Tap = (expect 14)", action: { type: "tapAt", ...KEY_EQ, wait: wait.quiescent(400) },
+    { id: "result", label: "Result shown", action: { type: "settle" }, wait: wait.quiescent() },
+    { id: "back", label: "Back", action: { type: "back" }, wait: wait.quiescent() },
   ],
 };

@@ -27,10 +27,10 @@ export type Act =
 
 export type SettleOpts = {
   /** scheduled work due within this many ms of the action is waited for, and pixel stability is
-   *  not trusted before it; the flow's settleDelayMs */
+   *  not trusted before it; the normalized wait policy horizon */
   horizonMs: number;
   /** capture once after the horizon instead of settling: a screen that never settles */
-  animated: boolean;
+  sample: boolean;
   stableMs: number;
   intervalMs: number;
   stableFrames: number;
@@ -66,7 +66,7 @@ export type StepResult = {
   };
 };
 
-export const DEFAULT_SETTLE: Omit<SettleOpts, "horizonMs" | "animated"> = { stableMs: 150, intervalMs: 250, stableFrames: 4, timeoutMs: 20_000 };
+export const DEFAULT_SETTLE: Omit<SettleOpts, "horizonMs" | "sample"> = { stableMs: 150, intervalMs: 250, stableFrames: 4, timeoutMs: 20_000 };
 
 declare global {
   var wd: any;
@@ -202,7 +202,7 @@ function installProbe(cfg: ProbeConfig): void {
   const settle = async (o: SettleOpts): Promise<Settled> => {
     const t0 = performance.now();
     captured = null;
-    if (o.animated) {
+    if (o.sample) {
       await sleep(o.horizonMs);
       wantSample = true;
       if (await nextPresent(500)) captured = sampled.get(lastHash) ?? null;
