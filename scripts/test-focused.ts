@@ -1,12 +1,12 @@
 import { existsSync } from "node:fs";
 import { resolve, dirname, relative, extname } from "node:path";
 import { FLOWS } from "../tests/e2e/flows";
-import { apkHashes, flowSchemaHash, gitExecutable, type CoverageIndex } from "../tests/e2e/coverage";
+import { apkHashes, expectedScreens, flowSchemaHash, gitExecutable, parseCoverageIndex } from "../tests/e2e/coverage";
 
 const root = resolve(import.meta.dir, "..");
 const deterministic = FLOWS.filter((flow) => flow.clock !== "live");
 const allFlows = deterministic.map((flow) => flow.app);
-const broad = ["src/native/", "src/jvm/", "src/shell/process", "src/main.ts", "src/process.ts", "src/natives.ts",
+const broad = ["src/native/", "src/jvm/", "src/guest-clock.ts", "src/shell/process", "src/main.ts", "src/process.ts", "src/natives.ts",
   "src/shell/config.ts", "tests/e2e/", "server.ts", "package.json", "tsconfig.json"];
 
 async function gitNames(args: string[]): Promise<string[]> {
@@ -46,16 +46,26 @@ const sourceFiles = [...new Set([
 ])];
 const sourceSet = new Set(sourceFiles);
 const reverse = new Map<string, string[]>();
-const importPattern = /(?:import|export)\s+(?:[\s\S]*?\s+from\s+)?["'](\.[^"']+)["']/g;
+const transpiler = new Bun.Transpiler({ loader: "ts" });
+let graphIncomplete = false;
 for (const file of sourceFiles) {
   const text = await Bun.file(resolve(root, file)).text();
-  for (const match of text.matchAll(importPattern)) {
-    const base = relative(root, resolve(root, dirname(file), match[1]));
-    const candidates = extname(base) ? [base] : [`${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`];
+  for (const imported of transpiler.scanImports(text)) {
+    if (!imported.path.startsWith(".")) continue;
+    const base = relative(root, resolve(root, dirname(file), imported.path));
+    const extension = extname(base);
+    const candidates = !extension
+      ? [`${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]
+      : extension === ".js"
+        ? [base, `${base.slice(0, -3)}.ts`, `${base.slice(0, -3)}.tsx`]
+        : [base];
     const dependency = candidates.find((candidate) => sourceSet.has(candidate));
-    if (!dependency) continue;
+    if (!dependency) {
+      if (!extension || extension === ".js" || extension === ".ts" || extension === ".tsx") graphIncomplete = true;
+      continue;
+    }
     const files = reverse.get(dependency) ?? [];
-    files.push(file);
+    if (!files.includes(file)) files.push(file);
     reverse.set(dependency, files);
   }
 }
@@ -79,14 +89,33 @@ const tests = [...affected].filter((file) => /\.test\.ts$/.test(file));
 
 const indexPath = resolve(root, "tests/e2e/coverage-index.json");
 let selected = new Set<string>();
-let widened = changed.some((file) => broad.some((prefix) => file === prefix || file.startsWith(prefix)));
+let widened = graphIncomplete || changed.some((file) => broad.some((prefix) => file === prefix || file.startsWith(prefix)));
 if (!widened && existsSync(indexPath)) {
-  const index = await Bun.file(indexPath).json() as CoverageIndex;
-  const currentApks = await apkHashes(deterministic);
-  if (!index.complete || index.schemaHash !== flowSchemaHash(deterministic) ||
-      index.mode !== "v8-precise-sourcemap" ||
-      deterministic.some((flow) => !(flow.app in index.flows) || index.apkHashes[flow.app] !== currentApks[flow.app])) widened = true;
-  else for (const file of affected) for (const flow of index.files[file] ?? []) selected.add(flow);
+  try {
+    const index = parseCoverageIndex(await Bun.file(indexPath).json());
+    const [currentApks, currentScreens, sinceIndex] = await Promise.all([
+      apkHashes(deterministic),
+      expectedScreens(deterministic),
+      gitNames(["diff", "--name-only", `${index.sourceRevision}..HEAD`]),
+    ]);
+    const expectedUnsupported = deterministic.filter((flow) => flow.sourceCoverage === "unsupported").map((flow) => flow.app).sort();
+    const indexedUnsupported = [...index.unsupportedFlows].sort();
+    const sourceChanged = sinceIndex.some((file) => file.startsWith("src/") ||
+      (file.startsWith("tests/e2e/") && file !== "tests/e2e/coverage-index.json") ||
+      file.startsWith("apks/") || file === "server.ts" || file === "package.json" || file === "tsconfig.json");
+    const invalidFlow = Object.values(index.files).flat().some((flow) => !allFlows.includes(flow));
+    if (!index.complete || index.schemaHash !== flowSchemaHash(deterministic) || sourceChanged || invalidFlow ||
+        expectedUnsupported.join("\n") !== indexedUnsupported.join("\n") ||
+        deterministic.some((flow) => !(flow.app in index.flows) || index.apkHashes[flow.app] !== currentApks[flow.app] ||
+          index.screens[flow.app] !== currentScreens[flow.app])) widened = true;
+    else {
+      for (const file of affected) for (const flow of index.files[file] ?? []) selected.add(flow);
+      if (changed.some((file) => file.startsWith("src/")))
+        for (const flow of index.unsupportedFlows) selected.add(flow);
+    }
+  } catch {
+    widened = true;
+  }
 } else widened = true;
 if (!selected.size) widened = true;
 if (widened) selected = new Set(allFlows);
