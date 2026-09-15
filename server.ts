@@ -12,6 +12,7 @@ import dns from "node:dns/promises";
 
 await Promise.all([prepareSystemPackages(), ensureFrameworkRes()]);
 const webRelay = new WebRelay();
+const apkDirectory = process.env.WEBDROID_APK_DIR ?? "apks";
 const fuzzOrigin = process.env.WEBDROID_FUZZ_ORIGIN ? new URL(process.env.WEBDROID_FUZZ_ORIGIN) : null;
 if (fuzzOrigin && !["127.0.0.1", "localhost"].includes(fuzzOrigin.hostname))
   throw new Error("WEBDROID_FUZZ_ORIGIN must use loopback");
@@ -45,7 +46,7 @@ const assetCache = new Map<string, Promise<Record<string, Uint8Array>>>();
 function apkAssets(apk: string): Promise<Record<string, Uint8Array>> {
   let pending = assetCache.get(apk);
   if (!pending) {
-    pending = Bun.file(`apks/${apk}`).arrayBuffer()
+    pending = Bun.file(`${apkDirectory}/${apk}`).arrayBuffer()
       .then((bytes) => openInstall(new Uint8Array(bytes)).zip)
       .catch((error: unknown) => { assetCache.delete(apk); throw error; });
     assetCache.set(apk, pending);
@@ -172,10 +173,10 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
     },
     "/apks": async () => {
       const names: string[] = [];
-      for await (const f of new Bun.Glob("*.{apk,xapk}").scan("apks")) names.push(f);
+      for await (const f of new Bun.Glob("*.{apk,xapk}").scan(apkDirectory)) names.push(f);
       return Response.json(names.sort());
     },
-    "/apks/:name": (req) => serveFile("apks", decodeURIComponent(req.params.name)),
+    "/apks/:name": (req) => serveFile(apkDirectory, decodeURIComponent(req.params.name)),
   },
   // Raw TCP over a WebSocket. A page cannot open a socket, but every Java networking stack
   // ultimately wants one, so the dev server lends it ours: one WS carries one TCP connection.

@@ -45,9 +45,9 @@ All six are resolved:
    The fuzz and golden-recording paths share one `uiautomator` parser, and process diagnostics use
    tagged success, unavailable, and failure states instead of casts and property probing.
 5. Case servers and webdroid servers use isolated dynamic ports. Each browser session receives a
-   unique staged APK that is removed on close; the dev proxy privately maps the probe's fixed
-   loopback contract to that campaign. Concurrent probe runs no longer contend for global ports
-   or shared filenames.
+   private temporary APK directory that is removed on close; the dev proxy privately maps the
+   probe's fixed loopback contract to that campaign. Concurrent probe runs no longer contend for
+   global ports or shared filenames.
 6. Executable API recipes own their member metadata, so generation and catalog `exercised`
    classification cannot diverge. Campaigns install the probe once per oracle, keep one browser
    session across minimization batches, and run independent Android/webdroid work concurrently.

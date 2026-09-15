@@ -1,5 +1,6 @@
-import { copyFileSync, existsSync, unlinkSync } from "node:fs";
-import { basename } from "node:path";
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 
 export type WebdroidSession = {
@@ -39,12 +40,14 @@ async function waitForServer(url: string, child: ReturnType<typeof Bun.spawn>): 
 
 export async function startWebdroid(apkPath: string, options: WebdroidOptions = {}): Promise<WebdroidSession> {
   if (!existsSync(apkPath)) throw new Error(`missing ${apkPath}`);
-  const apk = `fuzz-staged-${process.pid}-${crypto.randomUUID()}-${basename(apkPath)}`;
-  const servedPath = `apks/${apk}`;
+  const apk = basename(apkPath);
+  const stage = mkdtempSync(join(tmpdir(), "webdroid-fuzz-"));
+  const servedPath = join(stage, apk);
   copyFileSync(apkPath, servedPath);
   const port = options.port ?? freePort();
   const devServer = Bun.spawn(["bun", "run", "server.ts"], {
-    env: { ...process.env, PORT: String(port), ...(options.proxyProbeTo ? { WEBDROID_FUZZ_ORIGIN: options.proxyProbeTo } : {}) },
+    env: { ...process.env, PORT: String(port), WEBDROID_APK_DIR: stage,
+      ...(options.proxyProbeTo ? { WEBDROID_FUZZ_ORIGIN: options.proxyProbeTo } : {}) },
     stdout: "pipe", stderr: "pipe",
   });
   const serverOutput = Promise.all([new Response(devServer.stdout).text(), new Response(devServer.stderr).text()]);
@@ -68,7 +71,7 @@ export async function startWebdroid(apkPath: string, options: WebdroidOptions = 
         await browser?.close();
         devServer.kill();
         await devServer.exited;
-        unlinkSync(servedPath);
+        rmSync(stage, { recursive: true, force: true });
       },
     };
   } catch (error) {
@@ -76,7 +79,7 @@ export async function startWebdroid(apkPath: string, options: WebdroidOptions = 
     devServer.kill();
     await devServer.exited;
     const output = (await serverOutput).filter(Boolean).join("\n");
-    unlinkSync(servedPath);
+    rmSync(stage, { recursive: true, force: true });
     throw new Error(`${error instanceof Error ? error.message : String(error)}\npage errors: ${errors.join("\n")}\nserver: ${output}`);
   }
 }

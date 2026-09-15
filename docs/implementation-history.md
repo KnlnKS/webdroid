@@ -4445,8 +4445,8 @@ mechanics moved behind Android and webdroid targets, and the golden recorder and
 hierarchy parser. Per-process diagnostics use tagged states, so an unavailable or timed-out child
 cannot masquerade as an empty successful result.
 
-Campaign resources are isolated. Case and dev servers select dynamic ports, staged APK filenames
-are unique and removed during cleanup, and each dev server privately rewrites the unchanged
+Campaign resources are isolated. Case and dev servers select dynamic ports, staged APK directories
+are private and removed during cleanup, and each dev server privately rewrites the unchanged
 probe's loopback endpoint to its own case server. Two simultaneous webdroid probes completed on
 distinct origins. Differential campaigns install the probe once per oracle, reuse one webdroid
 session across batches, and execute the independent platform runs concurrently. A three-batch
