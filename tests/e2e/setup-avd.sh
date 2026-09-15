@@ -9,7 +9,8 @@ export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 export PATH="$JAVA_HOME/bin:$PATH"
 SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
 AVD_NAME="${AVD_NAME:-webdroid_ref}"
-IMAGE="system-images;android-35;google_apis;arm64-v8a"
+ANDROID_API="${ANDROID_API:-35}"
+IMAGE="system-images;android-${ANDROID_API};google_apis;arm64-v8a"
 AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
 
 # The profile is the only place the geometry is written down; ask it rather than restate it.
@@ -19,7 +20,7 @@ read -r LCD_W LCD_H LCD_DPI <<<"$(cd "$HERE" && bun -e \
 
 command -v avdmanager >/dev/null || { echo "avdmanager not on PATH"; exit 1; }
 
-if [ ! -d "$SDK/system-images/android-35/google_apis/arm64-v8a" ]; then
+if [ ! -d "$SDK/system-images/android-${ANDROID_API}/google_apis/arm64-v8a" ]; then
   echo "missing $IMAGE — install with: sdkmanager '$IMAGE'"; exit 1
 fi
 
