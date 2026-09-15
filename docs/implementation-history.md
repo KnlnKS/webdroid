@@ -4508,3 +4508,47 @@ gaps: 59 Android process snapshots report `ok`, four excluded Twitch web-content
 `unavailable`, and none report a telemetry failure. The follow-up changes no production JVM,
 graphics, or generated call site, so the preceding five-pair +0.20% launch and -0.73% browser-task
 performance evidence remains the applicable 3% retention check.
+
+## 2026-09-15: Subway Surfers signal and ETC2 compatibility
+
+Subway Surfers reached its Unity age gate, but the visible layers were black and the player loop
+eventually stopped consuming input. The unchanged IL2CPP runtime exposed two register-ownership
+races in GC stop-the-world signaling. A new pthread was signalable before its deferred start
+routine ran, so a signal handler could claim the base register file while the routine started on
+the same CPU. Separately, `Cpu.run()` decremented its loop count before `Cpu.call()` restored its
+saved frame; the signal pump treated that teardown interval as idle and could install a handler
+into registers that the exiting call then overwrote.
+
+Native entry now waits for a queued base signal, pthread startup observes the same ownership gate,
+and the pump requires both zero run loops and zero call depth before base delivery. Focused ARM32
+and A64 cases cover a signal queued before base entry and a signal arriving during call teardown.
+In the game, repeated IL2CPP suspend signal 30 and resume signal 24 sequences then completed with
+no handler left pending or parked, and rendering ticks continued advancing. The original Unity
+age slider changed value and Confirm advanced to loading, establishing real input consumption
+rather than a synthetic success path.
+
+The black layers were independent. Chrome rejected Unity's `0x9274` RGB8 ETC2 and `0x9278` RGBA8
+ETC2/EAC uploads, including immutable texture storage. OpenGL ES 3 exposes those formats as core,
+so Unity did not first query an extension. WebGL2 advertised the formats only after
+`WEBGL_compressed_texture_etc` was activated. The GLES3 bridge now activates that extension lazily
+once per context when an ETC2/EAC format reaches compressed upload or texture storage. The check
+does not touch ordinary texture calls and adds no draw-loop work.
+
+A fresh Chrome run rendered the complete age scene, Subway Surfers loading art, Buenos Aires main
+menu, and live 3D gameplay. Its 12,400 frames all completed, with 6,283 GL frames and zero GL,
+layout, or draw errors. UnityMain's log showed ten completed suspend/resume signal pairs, with no
+CPU left handling, waiting for, or holding a pending signal. The observed path required no missing
+native entry point. Optional shortcut, ad-loader, Firebase, analytics, billing, and other service
+lookups still report unavailable; the game tolerates them, and this change does not fabricate
+those capabilities.
+
+Final verification passes typecheck and 1,230 tests with 26,584 assertions. The unchanged Subway
+Surfers APK smoke-compiles 65,029 bodies-bearing classes with zero method failures. All eight
+runnable framework exercises pass with 295/363 declared native methods covered, and FitNotes text
+comparison remains 6/6. Serialized E2E completes all 12 flows in 818.9 seconds with no wedged main
+loop and no GL errors; it retains the two known YouTube settle timeouts and documented
+TikTok/YouTube/Lichess findings. The corpus renders 20/20 first frames, including Subway Surfers,
+and retains 46 distinct compatibility gaps. No visual golden changes are made.
+
+This evidence covers the exercised game path; it does not claim that unrelated optional Unity
+services or every compressed texture family are implemented.

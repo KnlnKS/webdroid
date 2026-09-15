@@ -1,37 +1,19 @@
-# Android API and graphics fuzzing
+# Subway Surfers compatibility
 
-Starting revision: `4ecee61`. Integrated into `main` by `f6396b1`.
-Operator and finding-resolution guide: [`scripts/fuzz/README.md`](scripts/fuzz/README.md).
+Starting revision: `d91679c`.
 
-## Contract
+## Acceptance
 
-- API 33 is the behavioral contract. Inventory every public SDK member and add hidden or
-  internal members only when framework bytecode or the APK corpus reaches them.
-- Run one unchanged probe APK on Android and webdroid. Preserve seeds, normalized results and
-  minimized failures; never manufacture support or treat absent telemetry as success.
-- Keep fuzz-only coverage out of production-generated methods. Long campaigns are manual;
-  normal verification receives only deterministic smoke cases.
-- Fix harness blockers and broadly applicable compatibility faults. Record other reproducible
-  findings instead of making completion depend on eliminating the platform backlog.
+- [x] Reproduce the black age screen and frozen Unity player with the unchanged Subway Surfers APK.
+- [x] Trace the input failure through native execution rather than substituting app behavior.
+- [x] Preserve CPU register ownership across pthread startup and asynchronous signal delivery.
+- [x] Render GLES3-core ETC2/EAC textures without requiring an earlier extension query from the app.
+- [x] Reach and interact with the age gate, loading screen, main menu, and live gameplay in Chrome.
+- [x] Complete the final typecheck, unit, smoke, framework, text, E2E, and corpus verification matrix.
 
-## Delivery phases
+## Scope
 
-- [x] Provision an API-33 reference AVD and ignored oracle cache.
-- [x] Build the canonical API catalog and support classifier; migrate audit tools to it.
-- [x] Build and run the dependency-free differential probe APK.
-- [x] Add deterministic API and graphics generation, comparison, replay and minimization.
-- [x] Add opt-in JVM coverage and semantic UI fuzzing with complete process telemetry.
-- [x] Audit the full TypeScript/Zig tree and retain only evidenced simplifications.
-- [x] Resolve the strict post-implementation review findings for protocol ownership, atomic
-  evidence, failure clustering, UI target boundaries, and isolated campaign resources.
-- [x] Run the final typecheck, unit, smoke, framework, fuzz, text, E2E, corpus and performance
-  matrix. Record measurements and evidence limits in the implementation history.
-
-## Retention gates
-
-- Fixed seeds reproduce identical inputs and normalized results.
-- Every retained failure reproduces twice after minimization.
-- Missing child-process diagnostics are harness failures, not empty observations.
-- Existing visual goldens do not change without independent product evidence.
-- With fuzz coverage disabled, primary performance metrics remain within 3% over five serial
-  alternating baseline/candidate pairs.
+The compatibility changes stay in the native CPU scheduler, pthread startup, and GLES3 bridge.
+The two scheduler regressions have focused ARM32/A64 tests. Graphics acceptance uses the unchanged
+game because the browser's extension-activation behavior and Unity's upload sequence are the
+relevant integration boundary; no app-specific path or synthetic texture substitute is added.
