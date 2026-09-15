@@ -115,11 +115,16 @@ export function actOf(flow: Flow, step: Step, rec?: RecordedStep): Act {
 
 /** Perform one step and settle it on the step's horizon. */
 export function runStep(drv: WebdroidDriver, flow: Flow, step: Step, rec?: RecordedStep, mode: CaptureMode = "full"): Promise<StepResult> {
-  const capture = mode === "full" || evidenceOf(flow, step).kind !== "semantic";
+  const evidence = evidenceOf(flow, step);
+  const capture = mode === "full" || evidence.kind !== "semantic";
+  const semanticSettle = mode === "fast" && evidence.kind === "semantic"
+    ? { stableMs: 50, intervalMs: 50, stableFrames: 2 }
+    : {};
   return drv.step(actOf(flow, step, rec), {
     horizonMs: waitHorizonMs(step.wait),
     sample: isMotionWait(step.wait),
     timeoutMs: waitTimeoutMs(step.wait),
+    ...semanticSettle,
   }, capture, mode === "fast" && flow.clock === "controlled");
 }
 

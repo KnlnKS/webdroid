@@ -202,17 +202,29 @@ function installProbe(cfg: ProbeConfig): void {
   };
 
   let captured: ImageData | null = null;
-  const settle = async (o: SettleOpts): Promise<Settled> => {
+  const driveGuest = async (horizonMs: number): Promise<void> => {
+    const clock = g.wd.guestClock;
+    if (!clock?.controlled) return;
+    const end = clock.now() + horizonMs;
+    for (;;) {
+      const next = clock.nextDeadline();
+      if (next === null || next > end) break;
+      await clock.advanceTo(next);
+    }
+    await clock.advanceTo(end);
+  };
+  const settle = async (o: SettleOpts, controlled: boolean): Promise<Settled> => {
     const t0 = performance.now();
     captured = null;
+    if (controlled) await driveGuest(o.horizonMs);
     if (o.sample) {
-      await sleep(o.horizonMs);
+      if (!controlled) await sleep(o.horizonMs);
       wantSample = true;
       if (await nextPresent(500)) captured = sampled.get(lastHash) ?? null;
       wantSample = false;
       return { how: "snapshot", ms: performance.now() - t0, busy: {} };
     }
-    const horizonAt = t0 + o.horizonMs;
+    const horizonAt = t0 + (controlled ? 0 : o.horizonMs);
     // the pixel rule needs stableFrames + 1 samples past the horizon before it can settle, so
     // anything scheduled inside that window was always waited for: a toast timing out, a
     // snackbar dismissing. The fast path keeps that contract.
@@ -236,13 +248,26 @@ function installProbe(cfg: ProbeConfig): void {
       for (const k of b) seen[k] = (seen[k] ?? 0) + 1;
       const h = stableFrame(hashes, o.stableFrames);
       if (h !== undefined) { captured = sampled.get(h) ?? null; return done("pixels"); }
-      if (now - t0 >= o.timeoutMs + o.horizonMs) return done("timeout");
+      if (now - t0 >= o.timeoutMs + (controlled ? 0 : o.horizonMs)) return done("timeout");
       await sleep(25);
     }
   };
   const capture = () => captured ? encode(captured) : screenPng();
 
-  const act = (a: Act, screen: Screen, deadlineMs: number) => performAction({ a, screen, deadlineMs });
+  const act = (a: Act, screen: Screen, deadlineMs: number, controlled = false) => performAction({ a, screen, deadlineMs, controlled });
+  const driveAction = async <T>(action: Promise<T>, maxVirtualMs: number): Promise<T> => {
+    const clock = g.wd.guestClock;
+    if (!clock?.controlled) return action;
+    const limit = clock.now() + maxVirtualMs;
+    let finished = false;
+    void action.finally(() => { finished = true; }).catch(() => {});
+    while (!finished) {
+      const next = clock.nextDeadline();
+      if (next !== null && next <= limit) await clock.advanceTo(next);
+      else await sleep(0);
+    }
+    return action;
+  };
 
   const seen = { missing: new Set<string>(), native: new Set<string>(), attrs: new Set<string>(), errors: new Set<string>() };
   const fresh = (key: keyof typeof seen, all: string[]): string[] => {
@@ -258,12 +283,13 @@ function installProbe(cfg: ProbeConfig): void {
     let semanticHit: boolean | undefined, error: string | undefined;
     const actionAt = performance.now();
     try {
-      semanticHit = await act(spec.act, spec.screen, spec.settle.timeoutMs + spec.settle.horizonMs);
+      const maxActionMs = spec.settle.timeoutMs + spec.settle.horizonMs;
+      semanticHit = await driveAction(act(spec.act, spec.screen, maxActionMs, spec.controlled), maxActionMs);
     } catch (e) {
       error = String((e as Error)?.message ?? e).slice(0, 300);
     }
     const actionMs = performance.now() - actionAt;
-    const settled = await settle(spec.settle);
+    const settled = await settle(spec.settle, spec.controlled);
     const aliveAt = performance.now();
     const wedged = !(await wd.alive(spec.aliveMs));
     const livenessMs = performance.now() - aliveAt;

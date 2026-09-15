@@ -23,8 +23,7 @@ function installEnvironment(cfg: EnvironmentConfig): void {
 export const environmentScript = (cfg: EnvironmentConfig): string => `(${installEnvironment.toString()})(${JSON.stringify(cfg)})`;
 
 // Self-contained because Playwright and the probe serialize this function into the page.
-export async function performAction(input: { a: Act; screen: Screen; deadlineMs: number }): Promise<boolean | undefined> {
-  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+export async function performAction(input: { a: Act; screen: Screen; deadlineMs: number; controlled?: boolean }): Promise<boolean | undefined> {
   const withDeadline = <T>(p: Promise<T>, ms: number, what: string): Promise<T> => {
     let timer: ReturnType<typeof setTimeout>;
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} did not complete within ${ms}ms`)), ms); });
@@ -32,6 +31,9 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
   };
   const { a, screen: s, deadlineMs } = input;
   const wd = globalThis.wd;
+  const sleep = input.controlled && wd.guestClock?.controlled
+    ? async (ms: number) => { await wd.guestClock.advanceTo(wd.guestClock.now() + ms); }
+    : (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
   const run = (p: Promise<unknown>) => withDeadline(p, deadlineMs, a.type);
   switch (a.type) {
     case "boot": await run(wd.boot(a.apk)); return;
