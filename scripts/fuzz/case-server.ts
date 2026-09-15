@@ -8,7 +8,7 @@ export type CaseServer = {
   stop(): void;
 };
 
-export function serveCases(cases: readonly ProbeCase[], port = 4876, caseTimeoutMs = 5_000): CaseServer {
+export function serveCases(cases: readonly ProbeCase[], port = 0, caseTimeoutMs = 5_000): CaseServer {
   const queue = cases.map(validateProbeCase);
   const expected = new Map(queue.map((item) => [item.id, item]));
   if (expected.size !== queue.length) throw new Error("case ids must be unique");

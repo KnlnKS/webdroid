@@ -235,7 +235,7 @@ function compactDiagnostics(processes: Awaited<ReturnType<typeof readProcesses>>
 
 async function runApk(app: Metadata, options: UiOptions, apkIndex: number, fixedActions?: readonly UiAction[], retainArtifacts = true): Promise<{ steps: UiStep[]; environment: unknown }> {
   const random = new Random((options.seed ^ Math.imul(apkIndex + 1, 0x9e3779b1)) >>> 0);
-  const session = await startWebdroid(app.apk, 4098 + apkIndex);
+  const session = await startWebdroid(app.apk);
   const adb = options.oracle ? adbFor(options.oracle) : null;
   const environment: Record<string, unknown> = { webdroid: { userAgent: await session.page.evaluate(() => navigator.userAgent) } };
   const seenSignals = new Set<string>(), seenCoverage = new Set<string>(), seenTrees = new Set<string>(), seenFrames = new Set<string>();

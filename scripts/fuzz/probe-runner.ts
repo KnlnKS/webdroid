@@ -8,6 +8,7 @@ import { isWebdroidProcessFrame, startWebdroid } from "./webdroid-session";
 const PROBE_APK = "fuzz-cache/WebdroidFuzzProbe.apk";
 const PROBE_PACKAGE = "org.webdroid.fuzz";
 const PROBE_ACTIVITY = `${PROBE_PACKAGE}/.ProbeActivity`;
+const preparedOracles = new Map<string, { sdk: string; fingerprint: string }>();
 
 export type PlatformRun = {
   platform: "android" | "webdroid";
@@ -33,30 +34,36 @@ export async function runAndroid(cases: readonly ProbeCase[], serial: string): P
   requireProbe();
   const adb = androidTool("adb");
   const at = (...args: string[]) => command([adb, "-s", serial, ...args]);
-  const [sdk, fingerprint] = await Promise.all([
-    at("shell", "getprop", "ro.build.version.sdk"), at("shell", "getprop", "ro.build.fingerprint"),
-  ]);
-  if (sdk !== "33") throw new Error(`oracle ${serial} is API ${sdk}, expected API 33`);
+  let environment = preparedOracles.get(serial);
+  if (!environment) {
+    const [sdk, fingerprint] = await Promise.all([
+      at("shell", "getprop", "ro.build.version.sdk"), at("shell", "getprop", "ro.build.fingerprint"),
+    ]);
+    if (sdk !== "33") throw new Error(`oracle ${serial} is API ${sdk}, expected API 33`);
+    await at("install", "-r", "-t", PROBE_APK);
+    environment = { sdk, fingerprint };
+    preparedOracles.set(serial, environment);
+  }
   const server = serveCases(cases);
   try {
-    await at("reverse", "tcp:4876", "tcp:4876");
-    await at("install", "-r", "-t", PROBE_APK);
+    await at("reverse", "tcp:4876", `tcp:${new URL(server.url).port}`);
     await at("shell", "am", "force-stop", PROBE_PACKAGE);
     await at("shell", "am", "start", "-W", "-n", PROBE_ACTIVITY);
     const results = await server.results;
     const logcat = await at("logcat", "-d", "-t", "300", "WebdroidFuzz:D", "AndroidRuntime:E", "*:S");
-    return { platform: "android", results, environment: { serial, sdk, fingerprint }, diagnostics: { logcat } };
+    return { platform: "android", results, environment: { serial, ...environment }, diagnostics: { logcat } };
   } finally {
+    await at("reverse", "--remove", "tcp:4876").catch(() => undefined);
     server.stop();
   }
 }
 
-export async function runWebdroid(cases: readonly ProbeCase[], port = 4097): Promise<PlatformRun> {
+export async function runWebdroid(cases: readonly ProbeCase[]): Promise<PlatformRun> {
   requireProbe();
   const caseServer = serveCases(cases);
   let session: Awaited<ReturnType<typeof startWebdroid>> | undefined;
   try {
-    session = await startWebdroid(PROBE_APK, port);
+    session = await startWebdroid(PROBE_APK, { proxyProbeTo: caseServer.url });
     const { origin, page, errors } = session;
     const results = await caseServer.results;
     let processes = await readProcesses(page);

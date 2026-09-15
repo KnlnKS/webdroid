@@ -19,8 +19,10 @@ describe("fuzz campaign core", () => {
 
   test("case protocol orders and validates results", async () => {
     const cases = generateApiCases(2, 2);
-    const server = serveCases(cases, 4877, 1_000);
+    const server = serveCases(cases, 0, 1_000);
+    const concurrent = serveCases([], 0, 1_000);
     try {
+      expect(server.url).not.toBe(concurrent.url);
       for (const input of cases) {
         expect(await (await fetch(`${server.url}case`)).json()).toEqual(input);
         const result = { schemaVersion: SCHEMA_VERSION, id: input.id, kind: input.kind, outcome: "value", value: null };
@@ -31,6 +33,7 @@ describe("fuzz campaign core", () => {
       expect(() => validateProbeResult({ schemaVersion: 2 })).toThrow();
     } finally {
       server.stop();
+      concurrent.stop();
     }
   });
 
