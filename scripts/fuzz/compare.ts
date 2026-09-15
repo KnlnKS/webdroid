@@ -11,6 +11,17 @@ function graphicsValue(value: unknown): GraphicsValue | null {
     typeof input.center === "number" && typeof input.png === "string" ? input as GraphicsValue : null;
 }
 
+function stateDifferenceKeys(expected: Record<string, JsonValue>, actual: Record<string, JsonValue>): string[] {
+  return [...new Set([...Object.keys(expected), ...Object.keys(actual)])]
+    .filter((key) => !(key in expected) || !(key in actual) || stableJson(expected[key]!) !== stableJson(actual[key]!))
+    .sort();
+}
+
+function graphicsFingerprint(input: ProbeCase, matchKey: string): string {
+  if (input.kind !== "graphics") return matchKey;
+  return `${matchKey}:ops:${input.commands.map((command) => command.op).join(">")}`;
+}
+
 export function compareResult(input: ProbeCase, oracle: ProbeResult, actual: ProbeResult): Failure | null {
   const site = input.kind === "api"
     ? `${input.owner}.${input.calls.at(-1)?.name ?? "<init>"}${input.calls.at(-1)?.descriptor ?? input.constructorDescriptor ?? ""}`
@@ -32,17 +43,21 @@ export function compareResult(input: ProbeCase, oracle: ProbeResult, actual: Pro
   if (!expected || !got) return { kind: "harness-error", fingerprint: "graphics:bad-result", detail: "graphics result has an invalid shape" };
   const { png: expectedPng, ...expectedState } = expected;
   const { png: gotPng, ...gotState } = got;
-  if (stableJson(expectedState) !== stableJson(gotState)) return {
-    kind: "value-mismatch", fingerprint: "graphics:state",
+  if (stableJson(expectedState) !== stableJson(gotState)) {
+    const matchKey = `graphics:state:${stateDifferenceKeys(expectedState, gotState).join(",")}`;
+    return {
+    kind: "value-mismatch", fingerprint: graphicsFingerprint(input, matchKey), matchKey,
     detail: `${stableJson(expectedState)} != ${stableJson(gotState)}`,
-  };
+    };
+  }
   const left = PNG.sync.read(Buffer.from(expectedPng, "base64"));
   const right = PNG.sync.read(Buffer.from(gotPng, "base64"));
   const score = diffImages(left, right, { top: 0, bottom: 0, left: 0, right: 0 });
   if (score.contentDiffPct <= 1 && score.tolerantPct <= 0.1) return null;
+  const matchKey = "graphics:pixels";
   return {
     kind: "pixel-mismatch",
-    fingerprint: "graphics:pixels",
+    fingerprint: graphicsFingerprint(input, matchKey), matchKey,
     detail: `content ${score.contentDiffPct.toFixed(3)}%, tolerant ${score.tolerantPct.toFixed(3)}%`,
     pixel: { strictPct: score.strictPct, tolerantPct: score.tolerantPct, contentDiffPct: score.contentDiffPct },
   };

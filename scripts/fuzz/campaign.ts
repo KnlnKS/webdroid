@@ -2,20 +2,25 @@ import { mkdirSync } from "node:fs";
 import { compareResult } from "./compare";
 import { generateApiCases, generateGraphicsCases } from "./generate";
 import { minimizeCaseBatched, reproducesTwice } from "./minimize";
-import type { Failure, ProbeCase, ProbeResult } from "./model";
+import { sameFailure, validateProbeCase, validateProbeResult, type Failure, type ProbeCase, type ProbeResult } from "./model";
 import { runAndroid, runWebdroid, type PlatformRun } from "./probe-runner";
 import { injectedProbeFailure } from "./injected";
+
+export type ProbeObservation = {
+  input: ProbeCase;
+  failure: Failure;
+  oracle: ProbeResult;
+  webdroid: ProbeResult;
+};
 
 export type FailureBundle = {
   schemaVersion: 1;
   kind: "api" | "graphics";
   injected?: true;
   seed: number;
-  input: ProbeCase;
-  minimized: ProbeCase;
-  failure: Failure;
-  oracle: ProbeResult;
-  webdroid: ProbeResult;
+  original: ProbeObservation;
+  minimized: ProbeObservation;
+  reproductions: [ProbeObservation, ProbeObservation];
   environment: { oracle: Record<string, unknown>; webdroid: Record<string, unknown> };
 };
 
@@ -31,9 +36,10 @@ function failureFor(input: ProbeCase, oracle: ProbeResult, webdroid: ProbeResult
   return compareResult(input, oracle, webdroid);
 }
 
-async function replayFingerprint(input: ProbeCase, serial: string, fingerprint: string): Promise<boolean> {
+async function replayFailure(input: ProbeCase, serial: string, expected: Failure): Promise<ProbeObservation | null> {
   const [oracle, webdroid] = await pair([input], serial);
-  return failureFor(input, oracle.results[0]!, webdroid.results[0]!)?.fingerprint === fingerprint;
+  const failure = failureFor(input, oracle.results[0]!, webdroid.results[0]!);
+  return sameFailure(expected, failure) ? { input, failure: failure!, oracle: oracle.results[0]!, webdroid: webdroid.results[0]! } : null;
 }
 
 export async function runCampaign(options: CampaignOptions): Promise<{ failures: number; bundles: string[] }> {
@@ -48,19 +54,24 @@ export async function runCampaign(options: CampaignOptions): Promise<{ failures:
   mkdirSync(options.out, { recursive: true });
   const bundles: string[] = [];
   const seen = new Set<string>();
+  const attempted = new Set<string>();
   for (const item of failures) {
-    if (seen.has(item.failure.fingerprint)) continue;
-    seen.add(item.failure.fingerprint);
-    const reproduces = (candidate: ProbeCase) => replayFingerprint(candidate, options.oracle, item.failure.fingerprint);
+    if (attempted.has(item.failure.fingerprint)) continue;
+    attempted.add(item.failure.fingerprint);
     const minimized = await minimizeCaseBatched(item.input, async (candidates) => {
       const uniquelyNamed = candidates.map((candidate, index) => ({ ...candidate, id: `${candidate.id}-min-${index}` }));
       const [candidateOracle, candidateWebdroid] = await pair(uniquelyNamed, options.oracle);
-      return uniquelyNamed.map((candidate, index) => failureFor(candidate, candidateOracle.results[index]!, candidateWebdroid.results[index]!)?.fingerprint === item.failure.fingerprint);
+      return uniquelyNamed.map((candidate, index) => sameFailure(item.failure,
+        failureFor(candidate, candidateOracle.results[index]!, candidateWebdroid.results[index]!)));
     });
-    if (!(await reproducesTwice(minimized, reproduces))) continue;
+    const first = await replayFailure(minimized, options.oracle, item.failure);
+    const second = await replayFailure(minimized, options.oracle, item.failure);
+    if (!first || !second || first.failure.fingerprint !== second.failure.fingerprint) continue;
+    if (seen.has(first.failure.fingerprint)) continue;
+    seen.add(first.failure.fingerprint);
     const bundle: FailureBundle = {
-      schemaVersion: 1, kind: options.kind, seed: options.seed, input: item.input, minimized, failure: item.failure,
-      oracle: item.oracle, webdroid: item.webdroid,
+      schemaVersion: 1, kind: options.kind, seed: options.seed,
+      original: item, minimized: first, reproductions: [first, second],
       environment: { oracle: oracle.environment, webdroid: webdroid.environment },
     };
     const path = `${options.out}/${options.kind}-${options.seed}-${bundles.length}.failure.json`;
@@ -76,10 +87,69 @@ export async function runCampaign(options: CampaignOptions): Promise<{ failures:
 }
 
 export async function replayBundle(path: string, oracleSerial?: string): Promise<boolean> {
-  const parsed = JSON.parse(await Bun.file(path).text()) as FailureBundle;
-  if (parsed.schemaVersion !== 1 || !parsed.minimized || !parsed.failure?.fingerprint) throw new Error("invalid failure bundle");
-  if (parsed.injected) return reproducesTwice(parsed.minimized, async (candidate) =>
-    injectedProbeFailure(candidate).failure?.fingerprint === parsed.failure.fingerprint);
+  const parsed = validateFailureBundle(JSON.parse(await Bun.file(path).text()));
+  if (parsed.injected) return reproducesTwice(parsed.minimized.input, async (candidate) =>
+    sameFailure(parsed.minimized.failure, injectedProbeFailure(candidate).failure));
   if (!oracleSerial) throw new Error("API and graphics replay require an oracle serial");
-  return reproducesTwice(parsed.minimized, (candidate) => replayFingerprint(candidate, oracleSerial, parsed.failure.fingerprint));
+  return reproducesTwice(parsed.minimized.input, async (candidate) =>
+    (await replayFailure(candidate, oracleSerial, parsed.minimized.failure)) !== null);
+}
+
+function object(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
+  return value as Record<string, unknown>;
+}
+
+function failure(value: unknown, label: string): Failure {
+  const input = object(value, label);
+  if (typeof input.kind !== "string" || typeof input.fingerprint !== "string" || typeof input.detail !== "string")
+    throw new Error(`${label} is invalid`);
+  const allowed: Failure["kind"][] = ["exception-mismatch", "value-mismatch", "pixel-mismatch", "missing-api", "native-required",
+    "layout-error", "draw-error", "gl-error", "wedge", "timeout", "harness-error"];
+  const kind = allowed.find((candidate) => candidate === input.kind);
+  if (!kind) throw new Error(`${label}.kind is invalid`);
+  const output: Failure = { kind, fingerprint: input.fingerprint, detail: input.detail };
+  if (input.matchKey !== undefined) {
+    if (typeof input.matchKey !== "string") throw new Error(`${label}.matchKey is invalid`);
+    output.matchKey = input.matchKey;
+  }
+  if (input.pixel !== undefined) {
+    const pixel = object(input.pixel, `${label}.pixel`);
+    if (typeof pixel.strictPct !== "number" || typeof pixel.tolerantPct !== "number" || typeof pixel.contentDiffPct !== "number")
+      throw new Error(`${label}.pixel is invalid`);
+    output.pixel = { strictPct: pixel.strictPct, tolerantPct: pixel.tolerantPct, contentDiffPct: pixel.contentDiffPct };
+  }
+  return output;
+}
+
+function observation(value: unknown, label: string): ProbeObservation {
+  const input = object(value, label);
+  const probe = validateProbeCase(input.input);
+  const oracle = validateProbeResult(input.oracle), webdroid = validateProbeResult(input.webdroid);
+  if (oracle.id !== probe.id || webdroid.id !== probe.id || oracle.kind !== probe.kind || webdroid.kind !== probe.kind)
+    throw new Error(`${label} mixes results from different cases`);
+  return { input: probe, failure: failure(input.failure, `${label}.failure`), oracle, webdroid };
+}
+
+export function validateFailureBundle(value: unknown): FailureBundle {
+  const input = object(value, "failure bundle");
+  if (input.schemaVersion !== 1 || (input.kind !== "api" && input.kind !== "graphics") || typeof input.seed !== "number")
+    throw new Error("invalid failure bundle");
+  if (!Array.isArray(input.reproductions) || input.reproductions.length !== 2) throw new Error("failure bundle requires two reproductions");
+  const original = observation(input.original, "failure bundle.original");
+  const minimized = observation(input.minimized, "failure bundle.minimized");
+  const reproductions: [ProbeObservation, ProbeObservation] = [
+    observation(input.reproductions[0], "failure bundle.reproductions[0]"),
+    observation(input.reproductions[1], "failure bundle.reproductions[1]"),
+  ];
+  if (original.input.kind !== input.kind || minimized.input.kind !== input.kind ||
+      reproductions.some((item) => item.input.kind !== input.kind || item.failure.fingerprint !== minimized.failure.fingerprint))
+    throw new Error("failure bundle observations disagree");
+  const environment = object(input.environment, "failure bundle.environment");
+  const output: FailureBundle = {
+    schemaVersion: 1, kind: input.kind, seed: input.seed, original, minimized, reproductions,
+    environment: { oracle: object(environment.oracle, "failure bundle.environment.oracle"), webdroid: object(environment.webdroid, "failure bundle.environment.webdroid") },
+  };
+  if (input.injected === true) output.injected = true;
+  return output;
 }

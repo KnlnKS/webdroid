@@ -95,9 +95,14 @@ export type FailureKind =
 export type Failure = {
   kind: FailureKind;
   fingerprint: string;
+  matchKey?: string;
   detail: string;
   pixel?: { strictPct: number; tolerantPct: number; contentDiffPct: number };
 };
+
+export function sameFailure(expected: Failure, actual: Failure | null): boolean {
+  return actual !== null && (expected.matchKey ?? expected.fingerprint) === (actual.matchKey ?? actual.fingerprint);
+}
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);

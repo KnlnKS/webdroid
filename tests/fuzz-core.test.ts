@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { serveCases } from "../scripts/fuzz/case-server";
 import { generateApiCases, generateGraphicsCases } from "../scripts/fuzz/generate";
+import { injectedProbeFailure } from "../scripts/fuzz/injected";
 import { minimizeCaseBatched, reproducesTwice } from "../scripts/fuzz/minimize";
 import { SCHEMA_VERSION, validateProbeCase, validateProbeResult, type GraphicsCase } from "../scripts/fuzz/model";
 
@@ -43,5 +44,14 @@ describe("fuzz campaign core", () => {
     expect(minimized.commands).toHaveLength(1);
     expect(minimized.commands[0]!.op).toBe("drawRect");
     expect(await reproducesTwice(minimized, reproduces)).toBe(true);
+  });
+
+  test("graphics failures cluster by minimized operation shape", () => {
+    const first: GraphicsCase = { schemaVersion: 1, id: "injected-first", kind: "graphics", width: 1, height: 1,
+      commands: [{ op: "drawRect", args: [0, 0, 1, 1] }] };
+    const second: GraphicsCase = { ...first, id: "injected-second", commands: [{ op: "drawCircle", args: [0, 0, 1] }] };
+    const a = injectedProbeFailure(first).failure!, b = injectedProbeFailure(second).failure!;
+    expect(a.matchKey).toBe(b.matchKey);
+    expect(a.fingerprint).not.toBe(b.fingerprint);
   });
 });

@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { injectedProbeFailure, injectedUiFailure } from "./injected";
 import { minimizeCaseBatched, reproducesTwice } from "./minimize";
-import { SCHEMA_VERSION, type ApiCase, type GraphicsCase, type ProbeCase } from "./model";
+import { sameFailure, SCHEMA_VERSION, type ApiCase, type GraphicsCase, type ProbeCase } from "./model";
 import { minimizeUiActions, type UiFailureBundle } from "./ui";
 import type { UiAction } from "./ui-model";
 
@@ -11,13 +11,19 @@ async function probeLayer(input: ProbeCase): Promise<string> {
   const failure = injectedProbeFailure(input).failure;
   if (!failure) throw new Error(`injected ${input.kind} mismatch was not detected`);
   const minimized = await minimizeCaseBatched(input, async (candidates) =>
-    candidates.map((candidate) => injectedProbeFailure(candidate).failure?.fingerprint === failure.fingerprint));
-  const reproduces = async (candidate: ProbeCase) => injectedProbeFailure(candidate).failure?.fingerprint === failure.fingerprint;
+    candidates.map((candidate) => sameFailure(failure, injectedProbeFailure(candidate).failure)));
+  const reproduces = async (candidate: ProbeCase) => sameFailure(failure, injectedProbeFailure(candidate).failure);
   if (!(await reproducesTwice(minimized, reproduces))) throw new Error(`injected ${input.kind} mismatch did not replay twice`);
-  const { oracle, webdroid } = injectedProbeFailure(input);
+  const observed = (candidate: ProbeCase) => {
+    const result = injectedProbeFailure(candidate);
+    if (!result.failure) throw new Error("injected mismatch disappeared");
+    return { input: candidate, failure: result.failure, oracle: result.oracle, webdroid: result.webdroid };
+  };
+  const original = observed(input), minimizedObservation = observed(minimized);
   const path = `${OUT}/${input.kind}.failure.json`;
   await Bun.write(path, JSON.stringify({ schemaVersion: 1, kind: input.kind, injected: true, seed: 0x5eed1234,
-    input, minimized, failure, oracle, webdroid, environment: { oracle: { injected: true }, webdroid: { injected: true } } }, null, 2) + "\n");
+    original, minimized: minimizedObservation, reproductions: [minimizedObservation, minimizedObservation],
+    environment: { oracle: { injected: true }, webdroid: { injected: true } } }, null, 2) + "\n");
   return path;
 }
 
