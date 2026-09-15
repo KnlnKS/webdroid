@@ -31,6 +31,7 @@ import { overlays, drawToasts, dismissOverlay } from "../android/popup";
 import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
+import { guestNow, setGuestTimeout } from "../guest-clock";
 import { device, orientationForRequest, setDeviceOrientation } from "./config";
 import { restoreRoots } from "./hostfs";
 import { setPixelCopyFrame } from "../android/glview";
@@ -382,7 +383,7 @@ function recreateActivity(act: JActivity): void {
   if (!cls || !booted || booted.stack.indexOf(act) < 0) return;
   // AOSP's recreate() only schedules the relaunch; running it nested inside the caller's own
   // main-looper job (a click handler) would tear the activity down underneath it.
-  setTimeout(() => void onMain(async () => {
+  setGuestTimeout(() => void onMain(async () => {
     if (!booted) return;
     const i = booted.stack.indexOf(act);
     if (i < 0) return;
@@ -573,7 +574,7 @@ async function tick0() {
     // choreographer + animation callbacks. One timestamp for the whole frame, as AOSP's
     // doFrame does: every callback here awaits, so recomputing it per callback let two
     // callbacks in the SAME frame see times hundreds of ms apart during boot.
-    uiState.frameTimeNanos = BigInt(Math.floor(performance.now() * 1e6));
+    uiState.frameTimeNanos = BigInt(Math.floor(guestNow() * 1e6));
     const presentation = uiState.frameTimeNanos + uiState.frameIntervalNanos;
     const cbs = uiState.frameCallbacks.length ? uiState.frameCallbacks.splice(0) : [];
     for (const cb of cbs as { frame?: any; run?: any; vsync?: JObj }[]) {
@@ -743,7 +744,7 @@ let touchTarget: "decor" | { overlay: number } | null = null;
 let downTime = 0;
 // input joins the main queue: keeps DOWN/UP ordered and serialized with layout,
 // Handler posts, and lifecycle — like Android's single main looper.
-export function dispatchPointer(action: number, x: number, y: number, at = performance.now()): Promise<void> {
+export function dispatchPointer(action: number, x: number, y: number, at = guestNow()): Promise<void> {
   // charged to perf.inputMs: the wall time a tap costs is otherwise in no counter at all.
   const t0 = performance.now();
   return onMain(() => dispatchPointer0(action, x, y, at)).finally(() => { perf.inputMs += performance.now() - t0; });

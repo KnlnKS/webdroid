@@ -29,6 +29,7 @@ import { vfs } from "./jvm/natives/jio";
 import { yieldStats, timedParks } from "./jvm/yield";
 import { provisionPackages, provisionServices } from "./shell/provision";
 import { connectProcess, registerForegroundProcess, processPresentation, processBroker } from "./shell/processes";
+import { guestClockControl, guestNow, guestSleep } from "./guest-clock";
 
 const params = new URLSearchParams(location.search);
 const hotThreshold = Number(params.get("jvmHotness") ?? 4096);
@@ -232,7 +233,7 @@ jitStats.on = params.get("jit") !== "0";
 
 /** Dev-console and e2e-driver surface; tests/e2e/drivers/webdroid.ts fires these by name. */
 const wd = {
-  rt, uiState, perf, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), jvmCoverage, mainDbg, yields: yieldStats, timedParks, logs: logBuf, ticks: 0, native,
+  rt, uiState, perf, perfReset: resetPerf, jvmProfile: () => jvmProfiler.snapshot(), jvmCoverage, mainDbg, yields: yieldStats, timedParks, logs: logBuf, ticks: 0, native, guestClock: guestClockControl,
   layoutTrace: (on?: boolean) => { if (on !== undefined) uiState.layoutTrace = on ? { cls: {}, site: {} } : null; return uiState.layoutTrace; },
   // the JVM's entry points, so a page script can drive real bytecode where Canvas2D is needed
   newObj, vcall,
@@ -332,11 +333,11 @@ const wd = {
   },
   swipe: async (x1: number, y1: number, x2: number, y2: number, ms = 400) => {
     const steps = Math.max(2, Math.round(ms / 16));
-    const t0 = performance.now();
+    const t0 = guestNow();
     void dispatchPointer(0, x1, y1, t0);
     for (let i = 1; i <= steps; i++) {
       const at = t0 + ms * i / steps, t = i / steps;
-      await sleep(Math.max(0, at - performance.now()));
+      await guestSleep(Math.max(0, at - guestNow()));
       void dispatchPointer(2, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, at);
     }
     await dispatchPointer(1, x2, y2, t0 + ms);

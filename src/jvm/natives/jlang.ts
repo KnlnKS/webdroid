@@ -7,6 +7,7 @@ import { directionality } from "../bidi";
 import { encodeString } from "../charset";
 import { javaClassSets } from "../regex-sets";
 import { mangleMethod, jmethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
+import { guestNow, type GuestTimer } from "../../guest-clock";
 
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
   const fn = obj[mangleMethod(name, desc)] ?? rt.proxyMethod?.(obj, name, desc);
@@ -1445,7 +1446,7 @@ rt.register({
   methods: {
     "static arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V": arraycopy,
     "static currentTimeMillis()J": () => BigInt(Date.now()),
-    "static nanoTime()J": () => BigInt(Math.floor(performance.now() * 1e6)),
+    "static nanoTime()J": () => BigInt(Math.floor(guestNow() * 1e6)),
     "static identityHashCode(Ljava/lang/Object;)I": idHash,
     "static getProperty(Ljava/lang/String;)Ljava/lang/String;": (k: string) => sysProps[k] ?? null,
     "static getProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (k: string, d: string) => sysProps[k] ?? d,
@@ -1568,7 +1569,7 @@ export function park(t: JThread, arm: (wake: () => void) => () => void, timeoutM
   if (t.interrupted) { t.interrupted = 0; return Promise.reject(ie()); }
   return new Promise<boolean>((resolve, reject) => {
     t.parked = timeoutMs === undefined ? 3 : 4;
-    let id: ReturnType<typeof setTimeout> | undefined;
+    let id: GuestTimer | undefined;
     const disarm = arm(() => { t.parked = 0; t.wake = null; unparkTimeout(id); resolve(true); });
     // a delay past 2^31-1 ms overflows setTimeout and fires at once; treat it as untimed
     if (timeoutMs !== undefined && timeoutMs < 0x7fffffff) id = parkTimeout(() => { disarm(); t.parked = 0; t.wake = null; resolve(false); }, timeoutMs);

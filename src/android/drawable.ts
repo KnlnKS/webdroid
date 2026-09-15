@@ -11,6 +11,7 @@ import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rv
 import { absGravity, gravityApply } from "./gravity";
 import { complexToFraction } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
+import { guestNow, setGuestTimeout } from "../guest-clock";
 
 export const ST = {
   pressed: 0x010100a7, enabled: 0x0101009e, selected: 0x010100a1, checked: 0x010100a0,
@@ -514,7 +515,7 @@ class JAnimationDrawable extends JDrawableContainer {
     this.running = true;
     this.cur = 0;
     const run = ++this.run;
-    const step = () => setTimeout(() => {
+    const step = () => setGuestTimeout(() => {
       if (!this.running || run !== this.run) return;
       if (this.cur + 1 >= this.frames.length) {
         if (this.oneShot) { this.running = false; return; }
@@ -851,7 +852,7 @@ class JRippleDrawable extends JLayerDrawable {
     return after(super.paint(cv), () => this.ripple(cv));
   }
   ripple(cv: JCanvas) {
-    const now = performance.now();
+    const now = guestNow();
     let grow: number, fade: number, animating: boolean;
     if (this.active) {
       const t = (now - this.enterAt) / RIPPLE_ENTER_MS;
@@ -890,7 +891,7 @@ class JRippleDrawable extends JLayerDrawable {
     const active = this.stateSet.includes(ST.pressed) && this.stateSet.includes(ST.enabled);
     if (active === this.active) return false;
     this.active = active;
-    const now = performance.now();
+    const now = guestNow();
     if (active) { this.enterAt = now; this.exitAt = 0; } else this.exitAt = now;
     return true;
   }

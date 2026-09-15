@@ -9,6 +9,7 @@ import { TLS_KEYS } from "./core";
 import { RET_SENTINEL, E } from "./abi";
 import { JThread, reportUncaught, threadExit } from "../jvm/natives/jlang";
 import { readTs, fail, clockTime } from "./libc";
+import { guestSleep } from "../guest-clock";
 
 /** Bionic's LP32 mutex word: the low half is state/counter/shared/type and the high half is
  *  owner tid for recursive/error-check mutexes. Normal mutexes deliberately have no owner. */
@@ -98,7 +99,7 @@ function unlock(cpu: Cpu, a: number): number {
 }
 /** setTimeout past 2^31-1 ms fires at once; a wait that long is untimed */
 const timed = (ms: number | null): number | null => (ms !== null && ms < 0x7fffffff ? ms : null);
-const sleepMs = (ms: number): Promise<number> => (ms < 1 ? yieldToLoop().then(() => 0) : new Promise((r) => setTimeout(() => r(0), Math.min(ms, 0x7ffffffe))));
+const sleepMs = (ms: number): Promise<number> => (ms < 1 ? yieldToLoop().then(() => 0) : guestSleep(Math.min(ms, 0x7ffffffe)).then(() => 0));
 const absMs = (ts: number) => readTs(ts);
 
 // ── futex: what libc++ and an engine's own primitives wait on when they bypass pthread

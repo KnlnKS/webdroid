@@ -3,6 +3,7 @@ import { rt, JObj, type NativeSpec } from "../jvm/runtime";
 import { onMain } from "./mainloop";
 import { vcall } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
+import { guestNow } from "../guest-clock";
 
 // ViewPropertyAnimator: the view's transform/alpha properties animated together from the frame
 // loop. As on AOSP the animation starts on the next frame unless start() is called, runs
@@ -50,7 +51,7 @@ async function vpaStart(this: JVPA) {
   for (const [p, { to, by }] of this.pending) { this.from.set(p, v[p]); this.to.set(p, by ? v[p] + to : to); }
   this.pending.clear();
   this.running = true;
-  this.startT = performance.now();
+  this.startT = guestNow();
   if (this.startAction) { const r = this.startAction; this.startAction = null; try { await vcall(r, "run", "()V"); } catch (e) { reportUncaught(e); } }
   if (this.listener) try { await vcall(this.listener, "onAnimationStart", "(Landroid/animation/Animator;Z)V", vpaAnim(this), 0); } catch (e) { reportUncaught(e); }
   const self = this;
@@ -67,7 +68,7 @@ async function vpaStart(this: JVPA) {
 const accelDecelV = (t: number) => Math.cos((t + 1) * Math.PI) / 2 + 0.5;
 async function vpaTick(this: JVPA) {
   const v = this.view!;
-  const el = performance.now() - this.startT - this.delayMs;
+  const el = guestNow() - this.startT - this.delayMs;
   const t = el <= 0 ? 0 : this.durationMs <= 0 ? 1 : Math.min(1, el / this.durationMs);
   const it = this.interp ? Math.fround(await vcall(this.interp, "getInterpolation", "(F)F", Math.fround(t))) : accelDecelV(t);
   for (const [p, to] of this.to) v[p] = this.from.get(p)! + (to - this.from.get(p)!) * it;

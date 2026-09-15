@@ -1,13 +1,14 @@
 import { JObj, rt } from "../runtime";
 import { vcall } from "./jlang";
+import { clearGuestInterval, clearGuestTimeout, setGuestInterval, setGuestTimeout, type GuestTimer } from "../../guest-clock";
 
 // java.util.Timer: one background timer thread per Timer in the JDK; here the tasks are host
 // timers, cancelled together with the Timer that scheduled them.
-class JTimerTask extends JObj { handle: ReturnType<typeof setTimeout> | ReturnType<typeof setInterval> | null = null; repeating = false; }
+class JTimerTask extends JObj { handle: GuestTimer | null = null; repeating = false; }
 class JTimer extends JObj { tasks = new Set<JTimerTask>(); }
 function timerCancel(t: JTimerTask) {
   if (t.handle === null) return;
-  if (t.repeating) clearInterval(t.handle); else clearTimeout(t.handle);
+  if (t.repeating) clearGuestInterval(t.handle); else clearGuestTimeout(t.handle);
   t.handle = null;
 }
 function schedule(timer: JTimer, task: JTimerTask, delay: number, period = 0) {
@@ -15,8 +16,8 @@ function schedule(timer: JTimer, task: JTimerTask, delay: number, period = 0) {
   task.repeating = period > 0;
   const run = () => { void vcall(task, "run", "()V").catch(() => {}); };
   task.handle = period > 0
-    ? setTimeout(() => { run(); task.handle = setInterval(run, period); }, Math.max(0, delay))
-    : setTimeout(() => { task.handle = null; timer.tasks.delete(task); run(); }, Math.max(0, delay));
+    ? setGuestTimeout(() => { run(); task.handle = setGuestInterval(run, period); }, Math.max(0, delay))
+    : setGuestTimeout(() => { task.handle = null; timer.tasks.delete(task); run(); }, Math.max(0, delay));
 }
 rt.register({
   name: "java/util/TimerTask", ctor: JTimerTask, ifaces: ["java/lang/Runnable"],

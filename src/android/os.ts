@@ -23,6 +23,7 @@ import { mkFile, JInputStream, JOutputStream, vfs, type JFileDescriptor } from "
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd } from "../native/stdio";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
 import { unavailableClock } from "../jvm/natives/jtime";
+import { clearGuestInterval, clearGuestTimeout, guestNow, guestSleep, setGuestInterval, setGuestTimeout, type GuestTimer } from "../guest-clock";
 
 rt.register({
   name: "android/os/SystemProperties", ctor: class extends JObj {},
@@ -46,7 +47,7 @@ class JMessageQueue extends JObj {
   checkIdle() {
     if (!this.owner || this.scheduled || !this.handlers.size || !this.isIdle()) return;
     this.scheduled = true;
-    setTimeout(() => void this.owner!.run(async () => {
+    setGuestTimeout(() => void this.owner!.run(async () => {
       this.scheduled = false;
       if (!this.isIdle()) return;
       for (const handler of [...this.handlers]) {
@@ -133,7 +134,7 @@ defineException("android/os/DeadObjectException", "android/os/RemoteException");
 defineException("android/os/OperationCanceledException", "java/lang/RuntimeException");
 
 export const bootTime = typeof window === "undefined" ? performance.timeOrigin : window.parent.performance.timeOrigin;
-export const uptimeMillis = () => performance.timeOrigin - bootTime + performance.now();
+export const uptimeMillis = () => performance.timeOrigin - bootTime + guestNow();
 let handlerSeq = 0;
 function emptyMessage(w: number): JMessage { const m = new JMessage(); m.what = w; return m; }
 export class JHandler extends JObj {
@@ -161,14 +162,14 @@ export class JHandler extends JObj {
         else await vcall(this, "dispatchMessage", "(Landroid/os/Message;)V", msg).catch(reportUncaught);
       } finally { queue.checkIdle(); }
     });
-    if (delay > 0) msg.timer = setTimeout(() => void go(), delay); else void go();
+    if (delay > 0) msg.timer = setGuestTimeout(() => void go(), delay) as ReturnType<typeof setTimeout>; else void go();
     return 1;
   }
   post(r: unknown, delay: number): number { return this.send(obtain(this, 0, null, 0, 0, r), delay); }
   cancel(key: unknown): void {
     const messages = this.pending.get(key);
     if (!messages) return;
-    for (const m of messages) { clearTimeout(m.timer); this.looper.queue.messages.delete(m); }
+    for (const m of messages) { clearGuestTimeout(m.timer); this.looper.queue.messages.delete(m); }
     messages.clear();
     this.pending.delete(key);
     this.looper.queue.checkIdle();
@@ -280,7 +281,7 @@ rt.register({
     "static elapsedRealtimeNanos()J": () => BigInt(Math.floor(uptimeMillis() * 1e6)),
     "static currentThreadTimeMillis()J": () => BigInt(Math.floor(performance.now())),
     "static currentGnssTimeClock()Ljava/time/Clock;": () => unavailableClock("Gnss based time is not available."),
-    "static sleep(J)V": (ms: bigint) => new Promise((r) => setTimeout(r, Number(ms))),
+    "static sleep(J)V": (ms: bigint) => guestSleep(Number(ms)),
   },
 });
 class JConditionVariable extends JObj {
@@ -290,8 +291,8 @@ class JConditionVariable extends JObj {
     if (this.opened) return 1;
     if (ms < 0) return 0;
     return new Promise((resolve) => {
-      const done = () => { clearTimeout(timer); this.waiters.delete(done); resolve(this.opened ? 1 : 0); };
-      const timer = ms === 0 ? undefined : setTimeout(done, ms);
+      const done = () => { clearGuestTimeout(timer); this.waiters.delete(done); resolve(this.opened ? 1 : 0); };
+      const timer = ms === 0 ? undefined : setGuestTimeout(done, ms);
       this.waiters.add(done);
     });
   }
@@ -865,7 +866,7 @@ rt.register({
       uiState.frameCallbacks.push({ frame: cb });
     },
     "postFrameCallbackDelayed(Landroid/view/Choreographer$FrameCallback;J)V": (cb: unknown, d: bigint) => {
-      setTimeout(() => uiState.frameCallbacks.push({ frame: cb }), Number(d));
+      setGuestTimeout(() => uiState.frameCallbacks.push({ frame: cb }), Number(d));
     },
     "removeFrameCallback(Landroid/view/Choreographer$FrameCallback;)V": (cb: unknown) => {
       uiState.frameCallbacks = uiState.frameCallbacks.filter((c: any) => c.frame !== cb);
@@ -1160,7 +1161,7 @@ async function runAsyncTask(this: JAsyncTask, executor: unknown, params: unknown
 class JCountDownTimer extends JObj {
   totalMs = 0n;
   intervalMs = 1000n;
-  timer: ReturnType<typeof setInterval> | null = null;
+  timer: GuestTimer | null = null;
   endAt = 0;
 }
 rt.register({
@@ -1171,12 +1172,12 @@ rt.register({
       this.intervalMs = interval;
     },
     "start()Landroid/os/CountDownTimer;": function (this: JCountDownTimer) {
-      this.endAt = performance.now() + Number(this.totalMs);
-      if (this.timer) clearInterval(this.timer);
-      this.timer = setInterval(() => {
-        const left = this.endAt - performance.now();
+      this.endAt = guestNow() + Number(this.totalMs);
+      if (this.timer) clearGuestInterval(this.timer);
+      this.timer = setGuestInterval(() => {
+        const left = this.endAt - guestNow();
         if (left <= 0) {
-          clearInterval(this.timer!);
+          clearGuestInterval(this.timer!);
           this.timer = null;
           void vcall(this, "onFinish", "()V").catch(reportUncaught);
         } else {
@@ -1186,7 +1187,7 @@ rt.register({
       return this;
     },
     "cancel()V": function (this: JCountDownTimer) {
-      if (this.timer) { clearInterval(this.timer); this.timer = null; }
+      if (this.timer) { clearGuestInterval(this.timer); this.timer = null; }
     },
     "onTick(J)V": function () {},
     "onFinish()V": function () {},

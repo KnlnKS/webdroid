@@ -13,6 +13,7 @@ import { type Resources, type RV, attrTable, T_STR, normRV, rvFloat, rvInt } fro
 import type { JContext } from "./context";
 import { JRect, type JPoint } from "./graphics";
 import { pathKeyframeData, type JPath } from "./path";
+import { guestNow, setGuestTimeout } from "../guest-clock";
 
 // ── ValueAnimator/ObjectAnimator (time-driven via animHooks)
 class JValueAnimator extends JObj {
@@ -96,7 +97,7 @@ class JPathEvaluator extends JObj {
 const accelDecel = (t: number) => Math.cos((t + 1) * Math.PI) / 2 + 0.5;
 async function animTick(a: JValueAnimator): Promise<boolean> {
   if (a.paused) return true;
-  const now = performance.now(), el = now - a.startT - a.delayMs;
+  const now = guestNow(), el = now - a.startT - a.delayMs;
   if (a instanceof JTimeAnimator) {
     if (el < 0) return true;
     if (!a.timeStarted) { a.startT = now - a.delayMs; a.timeStarted = true; }
@@ -372,8 +373,8 @@ const vaMethods: NativeSpec["methods"] = {
     const i = this.updateLs.indexOf(l); if (i >= 0) this.updateLs.splice(i, 1);
   },
   "getListeners()Ljava/util/ArrayList;": function (this: JValueAnimator) { return this.animLs.length ? newArrayList([...this.animLs]) : null; },
-  "pause()V": function (this: JValueAnimator) { if (this.running && !this.paused) { this.paused = true; this.pausedAt = performance.now(); } },
-  "resume()V": function (this: JValueAnimator) { if (this.paused) { this.paused = false; this.startT += performance.now() - this.pausedAt; } },
+  "pause()V": function (this: JValueAnimator) { if (this.running && !this.paused) { this.paused = true; this.pausedAt = guestNow(); } },
+  "resume()V": function (this: JValueAnimator) { if (this.paused) { this.paused = false; this.startT += guestNow() - this.pausedAt; } },
   ...fieldSetters({ "setInterpolator(Landroid/animation/TimeInterpolator;)V": "interp",
     "setInterpolator(Landroid/view/animation/Interpolator;)V": "interp",
     "setEvaluator(Landroid/animation/TypeEvaluator;)V": "evaluator" }),
@@ -381,13 +382,13 @@ const vaMethods: NativeSpec["methods"] = {
     "getRepeatMode()I": "repeatMode" }),
   ...flagGetters({ "isPaused()Z": "paused" }),
   "reverse()V": async function (this: JValueAnimator) {
-    if (this.running) { this.reversed = !this.reversed; this.startT = performance.now() - (this.durationMs - (performance.now() - this.startT)); return; }
+    if (this.running) { this.reversed = !this.reversed; this.startT = guestNow() - (this.durationMs - (guestNow() - this.startT)); return; }
     this.startReversed = true;
     await guardCall(this, M_start);
   },
-  "setCurrentPlayTime(J)V": function (this: JValueAnimator, t: bigint) { this.startT = performance.now() - Number(t); },
-  "getCurrentPlayTime()J": function (this: JValueAnimator) { return BigInt(Math.max(0, Math.round(performance.now() - this.startT))); },
-  "setCurrentFraction(F)V": function (this: JValueAnimator, f: number) { this.startT = performance.now() - f * this.durationMs; },
+  "setCurrentPlayTime(J)V": function (this: JValueAnimator, t: bigint) { this.startT = guestNow() - Number(t); },
+  "getCurrentPlayTime()J": function (this: JValueAnimator) { return BigInt(Math.max(0, Math.round(guestNow() - this.startT))); },
+  "setCurrentFraction(F)V": function (this: JValueAnimator, f: number) { this.startT = guestNow() - f * this.durationMs; },
   "getValues()[Landroid/animation/PropertyValuesHolder;": function (this: JValueAnimator) {
     if (!this.holders.length) { const h = new JPVH(); h.name = this.propName; h.keys = this.keys ?? [this.from, this.to]; h.isInt = this.isInt; h.objKeys = this.objKeys; h.evaluator = this.evaluator; this.holders = [h]; }
     return jarray([...this.holders], "Landroid/animation/PropertyValuesHolder;");
@@ -434,7 +435,7 @@ const vaMethods: NativeSpec["methods"] = {
     }
     this.reversed = this.startReversed;
     this.startReversed = false;
-    this.startT = performance.now();
+    this.startT = guestNow();
     if (this instanceof JTimeAnimator) { this.lastTime = -1; this.timeStarted = false; }
     this.running = true;
     // AOSP's start() animates fraction 0 at once, so getAnimatedValue() read from a start
@@ -539,7 +540,7 @@ rt.register({
       } else for (const a of this.anims) await vcallOn(thread, a, "start", "()V");
       const total = this.sequential ? this.anims.reduce((s, a) => s + a.delayMs + a.durationMs, 0)
         : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
-      setTimeout(() => {
+      setGuestTimeout(() => {
         void onMain(async () => {
           this.running = false;
           for (const l of [...this.animLs]) {
@@ -561,7 +562,7 @@ rt.register({
       return BigInt(this.delayMs + d);
     },
     "reverse()V": async function (this: JAnimatorSet) { for (const a of [...this.anims].reverse()) await vcall(a, "reverse", "()V"); },
-    "setCurrentPlayTime(J)V": function (this: JAnimatorSet, t: bigint) { for (const a of this.anims) a.startT = performance.now() - Number(t); },
+    "setCurrentPlayTime(J)V": function (this: JAnimatorSet, t: bigint) { for (const a of this.anims) a.startT = guestNow() - Number(t); },
     "setInterpolator(Landroid/animation/TimeInterpolator;)V": function (this: JAnimatorSet, i: unknown) { this.interp = i; for (const a of this.anims) a.interp = i; },
     "isRunning()Z": function (this: JAnimatorSet) { return this.running || this.anims.some((a) => a.running) ? 1 : 0; },
   },

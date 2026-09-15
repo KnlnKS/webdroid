@@ -1,9 +1,10 @@
 import type { PendingIntents } from "./pendingintents";
+import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
 
 type Alarm = { type: number; at: number; interval: number; unwatch: () => void };
 export class Alarms {
   private entries = new Map<number, Alarm>();
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private timer: GuestTimer | null = null;
   constructor(private intents: PendingIntents, private elapsed: () => number, private report: (error: unknown) => void) {}
   cancel(id: number): void {
     const alarm = this.entries.get(id);
@@ -17,11 +18,11 @@ export class Alarms {
     this.entries.set(id, { type, at, interval, unwatch }); this.arm();
   }
   private arm(): void {
-    if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
+    if (this.timer !== null) { clearGuestTimeout(this.timer); this.timer = null; }
     let delay = Infinity;
     const wall = Date.now(), elapsed = this.elapsed();
     for (const alarm of this.entries.values()) delay = Math.min(delay, alarm.at - (alarm.type < 2 ? wall : elapsed));
-    if (delay !== Infinity) this.timer = setTimeout(() => this.fire(), Math.max(0, Math.min(delay, 0x7fffffff)));
+    if (delay !== Infinity) this.timer = setGuestTimeout(() => this.fire(), Math.max(0, Math.min(delay, 0x7fffffff)));
   }
   private fire(): void {
     this.timer = null;

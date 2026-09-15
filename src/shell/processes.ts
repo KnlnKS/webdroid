@@ -34,6 +34,7 @@ import { BrowserLocation } from "./geolocation";
 import { locationTransport } from "../android/locationmanager";
 import { PrivateFiles } from "./privatefiles";
 import { packedArchives, type PackedArchive } from "./packedarchive";
+import { guestSleep } from "../guest-clock";
 
 const permissionDenied = async (permission: string, pkg: string) =>
   await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", permission, pkg) !== 0;
@@ -170,7 +171,7 @@ class ProcessBroker {
       const entry = this.entry(pid);
       await this.visibility(entry, "pause", PAUSE_TIMEOUT_MS);
       await this.visibility(entry, "stop", STOP_TIMEOUT_MS);
-      await new Promise((resolve) => setTimeout(resolve, ms));
+      await guestSleep(ms);
       await this.request(entry, (endpoint) => endpoint.activity({ kind: "visibility", phase: "resume" }));
       this.show(pid);
     });
@@ -229,7 +230,7 @@ class ProcessBroker {
       frame.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:16px;z-index:1";
       frame.src = "/process?pid=" + entry.pid + `&screen=${device.width}x${device.height}@${device.densityDpi}`;
       const params = new URLSearchParams(location.search);
-      for (const key of ["bytecode", "jit", "fuzzCoverage"]) {
+      for (const key of ["bytecode", "jit", "fuzzCoverage", "testClock"]) {
         const value = params.get(key); if (value !== null) frame.src += "&" + key + "=" + encodeURIComponent(value);
       }
       frame.addEventListener("error", () => this.fail(entry.pid, "Process frame failed"));

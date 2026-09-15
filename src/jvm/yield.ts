@@ -1,3 +1,5 @@
+import { clearGuestTimeout, setGuestTimeout, type GuestTimer } from "../guest-clock";
+
 // A macrotask boundary so the main looper, rAF and other cooperative threads get the JS thread.
 // MessageChannel is not subject to the nested-setTimeout clamp (4 ms once the chain is nested),
 // which is what a computation that yields every few milliseconds would otherwise spend idle in.
@@ -15,15 +17,15 @@ export function yieldToLoop(): Promise<void> {
 /** Timers that are a thread waiting with a deadline rather than scheduled work: a park, a timed
  *  monitor wait, a futex or semaphore timeout. An idle observer ignores them; everything else it
  *  must wait for. */
-export const timedParks = new Set<ReturnType<typeof setTimeout>>();
-export function parkTimeout(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
-  const id = setTimeout(() => { timedParks.delete(id); fn(); }, ms);
+export const timedParks = new Set<GuestTimer>();
+export function parkTimeout(fn: () => void, ms: number): GuestTimer {
+  const id = setGuestTimeout(() => { timedParks.delete(id); fn(); }, ms);
   timedParks.add(id);
   return id;
 }
-export function unparkTimeout(id: ReturnType<typeof setTimeout> | undefined): void {
+export function unparkTimeout(id: GuestTimer | undefined): void {
   if (id === undefined) return;
   timedParks.delete(id);
-  clearTimeout(id);
+  clearGuestTimeout(id);
 }
 export const yieldStats = { pushes: 0, fires: 0, pending: () => waiters.length, kick: () => { const w = waiters.splice(0); for (const f of w) f(); return w.length; } };

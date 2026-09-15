@@ -6,6 +6,7 @@ import { after, vcall, vcallOn, newObj, JThread, JEnum, enumValueOf, setCurThrea
 import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods, toJsArray } from "./jutil";
 import { JRandom, randomSeed } from "./jrandom";
 import { mangleMethod, splitSig, jarray } from "../abi";
+import { clearGuestTimeout, guestNow, setGuestTimeout, type GuestTimer } from "../../guest-clock";
 
 // ── atomics (single-threaded: trivial)
 const atomicCore = (d: string): NativeSpec["methods"] => ({
@@ -293,16 +294,16 @@ function submit(ex: JExecutor, task: unknown, method: string, desc: string, dela
   ex.pending++; ex.jobs.set(f, task);
   f.promise = new Promise((resolve) => {
     const entry = { task, f, method, desc, finish: () => resolve(null) };
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: GuestTimer | undefined;
     const enqueue = () => {
       timer = undefined; ex.tasks.push(entry); mirror(ex)?.push(task);
       scheduleDrain(ex);
     };
-    if (delay > 0) timer = setTimeout(enqueue, delay); else enqueue();
+    if (delay > 0) timer = setGuestTimeout(enqueue, delay); else enqueue();
     f.cancel = () => {
       const index = ex.tasks.indexOf(entry);
       if (index >= 0) { ex.tasks.splice(index, 1); mirror(ex)?.splice(index, 1); ex.pending--; ex.jobs.delete(f); }
-      else if (timer !== undefined) { clearTimeout(timer); timer = undefined; ex.pending--; ex.jobs.delete(f); }
+      else if (timer !== undefined) { clearGuestTimeout(timer); timer = undefined; ex.pending--; ex.jobs.delete(f); }
       resolve(null);
     };
   });
@@ -348,9 +349,9 @@ const executorMethods: NativeSpec["methods"] = {
     if (tasks == null || unit == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
     const futures = newArrayList();
     for (const task of tasks.a) futures.a.push(await vcall(this, "submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;", task));
-    const deadline = performance.now() + Number(timeout) * unit.ms;
+    const deadline = guestNow() + Number(timeout) * unit.ms;
     for (let i = 0; i < futures.a.length; i++) {
-      const remaining = Math.max(0, deadline - performance.now());
+      const remaining = Math.max(0, deadline - guestNow());
       try { await vcall(futures.a[i], "get", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;", BigInt(Math.ceil(remaining * 1e6)), TUS.NANOSECONDS); }
       catch (e) {
         if (!rt.iof(e, "java/util/concurrent/TimeoutException")) continue;
@@ -409,14 +410,14 @@ function repeating(name: string, fixedRate: boolean): NativeSpec["methods"] {
     function (this: JExecutor, r: unknown, init: bigint, period: bigint, u: JTimeUnit) {
       if (period <= 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "nonpositive period");
       const f = newFuture();
-      let next = performance.now() + Number(init) * u.ms, task: JFuture;
+      let next = guestNow() + Number(init) * u.ms, task: JFuture;
       f.promise = new Promise((resolve) => {
         const tick = () => {
           if (f.cancelled || this.shut) { f.done = 1; resolve(null); return; }
-          task = submit(this, r, "run", "()V", next - performance.now());
+          task = submit(this, r, "run", "()V", next - guestNow());
           void task.promise!.then(() => {
             if (task.error) { f.error = task.error; f.done = 1; resolve(null); }
-            else { next = (fixedRate ? next : performance.now()) + Number(period) * u.ms; tick(); }
+            else { next = (fixedRate ? next : guestNow()) + Number(period) * u.ms; tick(); }
           });
         };
         f.cancel = (interrupt) => {
@@ -679,9 +680,9 @@ rt.register({
       return (await condPark(this, Number(d) * u.ms)) ? 1 : 0;
     },
     "awaitNanos(J)J": async function (this: JCondition, n: bigint) {
-      const t0 = performance.now();
+      const t0 = guestNow();
       if (!(await condPark(this, Number(n) / 1e6))) return 0n;
-      return n - BigInt(Math.round((performance.now() - t0) * 1e6));
+      return n - BigInt(Math.round((guestNow() - t0) * 1e6));
     },
     "signal()V": function (this: JCondition) { const w = this.q.shift(); if (w) queueMicrotask(w); },
     "signalAll()V": function (this: JCondition) { const ws = this.q.splice(0); for (const w of ws) queueMicrotask(w); },

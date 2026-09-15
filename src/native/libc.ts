@@ -16,6 +16,7 @@ import { procInit, abortMessageOr } from "./proc";
 import { netInit } from "./net";
 import { MONTHS, DAYS } from "../jvm/natives/jtime";
 import { device } from "../shell/config";
+import { guestNow } from "../guest-clock";
 
 /** bionic struct offsets/sizes, one block per ABI; LAYOUT is the process's, chosen in libcInit. */
 const LAYOUT32 = {
@@ -35,7 +36,7 @@ const LAYOUT64: typeof LAYOUT32 = {
   SIGACTION_SIZE: 32, SA_HANDLER: 8, SA_FLAGS: 0, STATFS_SIZE: 120,
 };
 export let LAYOUT = LAYOUT32;
-export const clockTime = (id: number): number => id === 0 ? Date.now() : performance.now() + 1000;
+export const clockTime = (id: number): number => id === 0 ? Date.now() : guestNow() + 1000;
 /** a struct timespec / timeval as milliseconds, and back (the second field is nanoseconds or microseconds) */
 export function readTs(p: number, unit = 1e6): number { return mem.ld32(p + LAYOUT.TS_SEC) * 1000 + mem.ld32(p + LAYOUT.TS_NSEC) / unit; }
 export function writeTs(p: number, ms: number, unit = 1e6): void {
@@ -209,7 +210,7 @@ function fillSysinfo(p: number): void {
   const L = PTR, unit = L === 8 ? 1 : 4096;
   mem.memset(p, 0, L === 8 ? 112 : 64);
   const put = (off: number, v: number) => { if (L === 8) mem.st64(p + off, BigInt(v)); else mem.st32(p + off, v); };
-  put(0, Math.floor(performance.now() / 1000));
+  put(0, Math.floor(guestNow() / 1000));
   put(L * 4, TOTAL_RAM / unit); put(L * 5, FREE_RAM / unit);
   mem.st16(p + L * 10, 1);
   mem.st32(p + (L === 8 ? 104 : 52), unit);
