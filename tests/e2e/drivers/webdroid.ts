@@ -78,7 +78,7 @@ const SETTLE_DEFAULTS: SettleOpts = { ...DEFAULT_SETTLE, horizonMs: 0, sample: f
 
 export class WebdroidDriver {
   readonly errors: string[] = [];
-  constructor(private browser: Browser, public page: Page, public screen: Screen) {}
+  constructor(private browser: Browser, public page: Page, public screen: Screen, private coverage = false) {}
 
   static async launch(opts: LaunchOpts = {}): Promise<WebdroidDriver> {
     const screen = opts.screen ?? deviceScreen();
@@ -87,7 +87,7 @@ export class WebdroidDriver {
     await ctx.addInitScript({ content: probeScript({ fixedMs: opts.fixedMs === undefined ? PINNED_CLOCK_MS : opts.fixedMs, storage: opts.storage ?? [], shots: !!opts.shots }) });
     const page = await ctx.newPage();
     if (opts.coverage) await page.coverage.startJSCoverage({ resetOnNavigation: false });
-    const drv = new WebdroidDriver(browser, page, screen);
+    const drv = new WebdroidDriver(browser, page, screen, !!opts.coverage);
     page.on("pageerror", (e) => { drv.errors.push(String(e)); console.error("  [page error]", String(e).slice(0, 200)); });
     page.on("console", (message) => { if (message.type() === "error") drv.errors.push(`${message.location().url}: ${message.text()}`); });
     await drv.open(screen, !!opts.controlled);
@@ -110,7 +110,7 @@ export class WebdroidDriver {
 
   /** One flow step, start to finish, in the page: action, settle, liveness, capture, telemetry. */
   step(act: Act, settle: Partial<SettleOpts> = {}, capture = true, controlled = false): Promise<StepResult> {
-    const spec: StepSpec = { act, screen: this.screen, settle: { ...SETTLE_DEFAULTS, ...settle }, aliveMs: controlled ? 3500 : 1500, capture, controlled };
+    const spec: StepSpec = { act, screen: this.screen, settle: { ...SETTLE_DEFAULTS, ...settle }, aliveMs: this.coverage ? 5000 : controlled ? 3500 : 1500, capture, controlled };
     return this.page.evaluate((s) => globalThis.__wd.step(s), spec);
   }
 
