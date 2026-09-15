@@ -50,12 +50,13 @@ async function visualFailures(flow: Flow): Promise<string[]> {
 
 async function runFlow(flow: Flow): Promise<Outcome> {
   const manifest = await loadManifest(flow.app);
-  const driver = await launchFor(flow, manifest, false, flow.clock === "controlled", coverage);
+  const collectCoverage = coverage && flow.sourceCoverage !== "unsupported";
+  const driver = await launchFor(flow, manifest, false, flow.clock === "controlled", collectCoverage);
   const started = performance.now();
   let runs: StepRun[] = [];
   try {
     runs = await captureFlow(flow, driver, { jobs, mode: "fast" });
-    const sourceCoverage = coverage ? await driver.takeSourceCoverage() : [];
+    const sourceCoverage = collectCoverage ? await driver.takeSourceCoverage() : [];
     return { flow, runs, errors: [...failures(runs), ...await visualFailures(flow)], ms: performance.now() - started,
       coverage: sourceCoverage, browser: driver.browserVersion(), screen: screenParam(driver.screen) };
   } finally {
@@ -112,6 +113,7 @@ if (coverage && !failed) {
     mode: "v8-precise-sourcemap",
     apkHashes: await apkHashes(deterministic),
     screens: Object.fromEntries(outcomes.map((outcome) => [outcome.flow.app, outcome.screen])),
+    unsupportedFlows: outcomes.filter((outcome) => outcome.flow.sourceCoverage === "unsupported").map((outcome) => outcome.flow.app),
     flows: Object.fromEntries(outcomes.map((outcome) => [outcome.flow.app, outcome.coverage])),
     files: byFile,
   };

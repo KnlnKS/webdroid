@@ -4613,4 +4613,6 @@ are mapped back to repository files through their source maps; the always-execut
 excluded. The compact index records its source revision, flow schema, APK hashes, screen, browser,
 and mode. Focused selection expands dependencies through the TypeScript import graph and widens to
 the complete deterministic lane for missing, partial, changed-fixture, uncovered, or critical-root
-inputs. Coverage is absent from normal and performance runs.
+inputs. V8 instrumentation starves Doodle Jump's long-running native main-loop job, so that flow is
+executed uninstrumented and recorded as unsupported; files without sound coverage widen safely.
+Coverage is absent from normal and performance runs.

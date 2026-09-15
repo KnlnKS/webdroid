@@ -95,6 +95,8 @@ export type Flow = {
   fastCheckpoints: readonly string[];
   /** Maximum golden content diff at fast checkpoints, retained from the starting revision. */
   fastVisualLimits?: Readonly<Record<string, number>>;
+  /** V8 instrumentation can distort long-running native loops; absent means source coverage is safe. */
+  sourceCoverage?: "unsupported";
   /** The geometry positional taps were measured at. A flow with no goldens runs at it, since a
    *  normalized coordinate only lands on the same view at the same size. */
   screen?: Screen;

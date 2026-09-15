@@ -12,6 +12,7 @@ export type CoverageIndex = {
   mode: "v8-precise-sourcemap";
   apkHashes: Record<string, string>;
   screens: Record<string, string>;
+  unsupportedFlows: string[];
   flows: Record<string, string[]>;
   files: Record<string, string[]>;
 };
@@ -37,6 +38,7 @@ export function flowSchemaHash(flows: Flow[]): string {
   const value = flows.map((flow) => ({
     app: flow.app,
     clock: flow.clock,
+    sourceCoverage: flow.sourceCoverage,
     steps: flow.steps.map((step) => [step.id, step.action.type, waitHorizonMs(step.wait)]),
   }));
   return new Bun.CryptoHasher("sha256").update(new TextEncoder().encode(JSON.stringify(value))).digest("hex");
