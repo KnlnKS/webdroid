@@ -189,8 +189,11 @@ export class Cpu {
   }
   private takeSignal(): number {
     if (!this.signals.length) return 0;
-    const i = this.signals.findIndex((sig) => !(this.signalMask & 1n << BigInt(sig - 1)));
+    const i = this.pendingSignalIndex();
     return i < 0 ? 0 : this.signals.splice(i, 1)[0];
+  }
+  private pendingSignalIndex(): number {
+    return this.signals.findIndex((sig) => !(this.signalMask & 1n << BigInt(sig - 1)));
   }
   /** the depth of the run loop awaiting a host call's promise, -1 for none: the Cpu is parked only when that
    *  loop is the innermost one — a nested frame in its teardown, or a handler above, owns the register file */
@@ -212,7 +215,7 @@ export class Cpu {
    *  a running loop takes its queue at its next slice boundary. A handler parked in its own host call
    *  (sigsuspend) is a parked frame like any other: the next signal runs on top of it. */
   pump(): void {
-    queueMicrotask(() => { if (!this.finished && (this.parked || this.loops === 0)) { const sig = this.takeSignal(); if (sig) void this.deliver(sig); } });
+    queueMicrotask(() => { if (!this.finished && (this.parked || (this.loops === 0 && this.depth === 0))) { const sig = this.takeSignal(); if (sig) void this.deliver(sig); } });
   }
   sigLog: string[] = [];                           // wd.native.regs: what each thread was signalled and when it ran
   /** a handler running on an otherwise idle Cpu (a Java thread between native calls): the next
@@ -220,9 +223,12 @@ export class Cpu {
   baseBusy: Promise<void> | null = null;
   /** an entry from Java must not stack on a handler that owns the register file from the bottom */
   async awaitIdleBase(): Promise<void> {
-    while (this.baseBusy || (this.loops > 0 && this.frames[0]?.startsWith("signal "))) {
+    while (this.baseBusy
+      || (this.loops > 0 && this.frames[0]?.startsWith("signal "))
+      || (this.loops === 0 && this.pendingSignalIndex() >= 0)) {
       if (this.baseBusy) await this.baseBusy;
-      else await new Promise<void>((r) => this.idle.push(r));
+      else if (this.loops > 0) await new Promise<void>((r) => this.idle.push(r));
+      else { this.pump(); await Promise.resolve(); }
     }
   }
   async deliver(sig: number): Promise<void> {
@@ -231,7 +237,7 @@ export class Cpu {
     const mask = this.signalMask, handling = this.handling.has(sig);
     this.signalMask = (mask | (h?.mask ?? 0n) | (h && h.flags & 0x40000000 ? 0n : 1n << BigInt(sig - 1))) & 0xfffffffffffbfeffn;
     this.handling.add(sig);
-    const base = this.loops === 0;
+    const base = this.loops === 0 && this.depth === 0;
     const p = (async () => { if (h) await this.call(h.fn, [sig, 0, 0], "signal " + sig); })();
     if (base) this.baseBusy = p.catch(() => {}).finally(() => { this.baseBusy = null; });
     try { await p; }

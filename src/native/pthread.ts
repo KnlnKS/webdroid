@@ -174,8 +174,11 @@ function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean)
   const rec = { retval: 0n, done: Promise.resolve(), detached, joined: false, exited: false };
   rec.done = new Promise<void>((resolve) => {
     setTimeout(() => {
-      cpu.depth++;
       void (async () => {
+        // pthread_create makes the thread signalable before its start routine runs. A handler
+        // delivered in that window owns the base register file, so the routine must wait for it.
+        await cpu.awaitIdleBase();
+        cpu.depth++;
         try {
           await cpu.run();
           if (!cpu.finished) rec.retval = (cpu.a64 ? BigInt(cpu.w[1] >>> 0) << 32n : 0n) | BigInt(cpu.w[0] >>> 0);

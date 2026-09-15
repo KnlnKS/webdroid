@@ -95,6 +95,55 @@ for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 t
       cpu.dispose(); setCurThread(mainThread);
     }
   });
+
+  test("a base entry waits for a queued signal handler", async () => {
+    setA64(a64);
+    const cpu = new Cpu(new JThread(), "signal-order"), order: string[] = [];
+    const deferred = Promise.withResolvers<number>();
+    const handler = defineHost("test.signal.order." + a64, async () => {
+      order.push("handler");
+      await deferred.promise;
+      order.push("handled");
+      return 0;
+    });
+    const previous = sigHandlers.get(12);
+    sigHandlers.set(12, { fn: handler, mask: 0n, flags: 0 });
+    try {
+      cpu.kill(12);
+      const idle = cpu.awaitIdleBase().then(() => order.push("idle"));
+      await Promise.resolve();
+      expect(order).toEqual(["handler"]);
+      deferred.resolve(0);
+      await idle;
+      expect(order).toEqual(["handler", "handled", "idle"]);
+    } finally {
+      if (previous) sigHandlers.set(12, previous); else sigHandlers.delete(12);
+      cpu.dispose();
+    }
+  });
+
+  test("a signal waits for an exiting call to release its frame", async () => {
+    setA64(a64);
+    const cpu = new Cpu(new JThread(), "signal-teardown");
+    let handlerFrames: string[] = [];
+    const entry = defineHost("test.signal.teardown.entry." + a64, () => 0);
+    const handler = defineHost("test.signal.teardown.handler." + a64, () => {
+      handlerFrames = [...cpu.frames];
+      return 0;
+    });
+    const previous = sigHandlers.get(12);
+    sigHandlers.set(12, { fn: handler, mask: 0n, flags: 0 });
+    try {
+      const result = cpu.call(entry, [], "outer call");
+      cpu.kill(12);
+      await result;
+      await cpu.awaitIdleBase();
+      expect(handlerFrames).toEqual(["signal 12"]);
+    } finally {
+      if (previous) sigHandlers.set(12, previous); else sigHandlers.delete(12);
+      cpu.dispose();
+    }
+  });
 });
 
 
