@@ -22,6 +22,8 @@ export function nativeClassSupport(runtime: Runtime, cls: string): NativeSupport
 
 export function nativeMethodSupport(runtime: Runtime, key: string): NativeSupport {
   const [cls, signature] = splitMember(key);
+  const jni = runtime.jniFn(cls, signature);
+  if (jni) return isPlaceholderMethod(jni) ? "placeholder" : "delegate";
   const ctor = nativeCtor(runtime, cls);
   const paren = signature.indexOf("(");
   if (!ctor || paren < 0) return "missing";
