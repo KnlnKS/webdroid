@@ -8,8 +8,11 @@ import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Point;
+import android.graphics.BlendMode;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.RenderNode;
+import android.graphics.drawable.ColorDrawable;
 import android.os.Bundle;
 import android.os.Parcel;
 import android.os.Parcelable;
@@ -94,7 +97,7 @@ public final class ProbeActivity extends Activity {
         return output.toString(StandardCharsets.UTF_8.name());
     }
 
-    private static JSONObject execute(JSONObject input) {
+    private JSONObject execute(JSONObject input) {
         JSONObject result = new JSONObject();
         put(result, "schemaVersion", 1);
         put(result, "id", input.optString("id"));
@@ -224,13 +227,15 @@ public final class ProbeActivity extends Activity {
         return result;
     }
 
-    private static Object graphics(JSONObject input) throws Exception {
+    private Object graphics(JSONObject input) throws Exception {
         int width = input.optInt("width", 128), height = input.optInt("height", 128);
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         Path path = new Path();
         Matrix matrix = new Matrix();
+        ColorDrawable drawable = new ColorDrawable(Color.TRANSPARENT);
+        RenderNode renderNode = new RenderNode("fuzz");
         JSONArray commands = input.getJSONArray("commands");
         for (int index = 0; index < commands.length(); index++) {
             JSONObject command = commands.getJSONObject(index);
@@ -243,13 +248,21 @@ public final class ProbeActivity extends Activity {
                 case "strokeWidth" -> paint.setStrokeWidth((float) a.getDouble(0));
                 case "style" -> paint.setStyle(Paint.Style.valueOf(a.getString(0)));
                 case "textSize" -> paint.setTextSize((float) a.getDouble(0));
+                case "antiAlias" -> paint.setAntiAlias(a.getBoolean(0));
+                case "strokeCap" -> paint.setStrokeCap(Paint.Cap.valueOf(a.getString(0)));
+                case "strokeJoin" -> paint.setStrokeJoin(Paint.Join.valueOf(a.getString(0)));
+                case "blendMode" -> paint.setBlendMode(a.isNull(0) ? null : BlendMode.valueOf(a.getString(0)));
                 case "drawRect" -> canvas.drawRect(f(a, 0), f(a, 1), f(a, 2), f(a, 3), paint);
                 case "drawCircle" -> canvas.drawCircle(f(a, 0), f(a, 1), f(a, 2), paint);
                 case "drawLine" -> canvas.drawLine(f(a, 0), f(a, 1), f(a, 2), f(a, 3), paint);
                 case "drawText" -> canvas.drawText(a.getString(0), f(a, 1), f(a, 2), paint);
+                case "drawOval" -> canvas.drawOval(f(a, 0), f(a, 1), f(a, 2), f(a, 3), paint);
+                case "drawRoundRect" -> canvas.drawRoundRect(f(a, 0), f(a, 1), f(a, 2), f(a, 3), f(a, 4), f(a, 5), paint);
+                case "drawArc" -> canvas.drawArc(f(a, 0), f(a, 1), f(a, 2), f(a, 3), f(a, 4), f(a, 5), a.getBoolean(6), paint);
                 case "translate" -> canvas.translate(f(a, 0), f(a, 1));
                 case "scale" -> canvas.scale(f(a, 0), f(a, 1));
                 case "rotate" -> canvas.rotate(f(a, 0));
+                case "skew" -> canvas.skew(f(a, 0), f(a, 1));
                 case "save" -> canvas.save();
                 case "restore" -> canvas.restore();
                 case "clipRect" -> canvas.clipRect(f(a, 0), f(a, 1), f(a, 2), f(a, 3));
@@ -257,11 +270,41 @@ public final class ProbeActivity extends Activity {
                 case "pathMove" -> path.moveTo(f(a, 0), f(a, 1));
                 case "pathLine" -> path.lineTo(f(a, 0), f(a, 1));
                 case "pathQuad" -> path.quadTo(f(a, 0), f(a, 1), f(a, 2), f(a, 3));
+                case "pathCubic" -> path.cubicTo(f(a, 0), f(a, 1), f(a, 2), f(a, 3), f(a, 4), f(a, 5));
+                case "pathAddCircle" -> path.addCircle(f(a, 0), f(a, 1), f(a, 2), Path.Direction.valueOf(a.getString(3)));
+                case "pathFill" -> path.setFillType(Path.FillType.valueOf(a.getString(0)));
                 case "pathClose" -> path.close();
                 case "drawPath" -> canvas.drawPath(path, paint);
                 case "matrixRotate" -> matrix.setRotate(f(a, 0));
                 case "matrixTranslate" -> matrix.setTranslate(f(a, 0), f(a, 1));
+                case "matrixScale" -> matrix.setScale(f(a, 0), f(a, 1));
+                case "matrixSkew" -> matrix.setSkew(f(a, 0), f(a, 1));
+                case "matrixPostTranslate" -> matrix.postTranslate(f(a, 0), f(a, 1));
                 case "setMatrix" -> canvas.setMatrix(matrix);
+                case "bitmapDensity" -> bitmap.setDensity(a.getInt(0));
+                case "drawable" -> {
+                    drawable.setColor(a.getInt(0));
+                    drawable.setBounds(a.getInt(1), a.getInt(2), a.getInt(3), a.getInt(4));
+                    drawable.setAlpha(a.getInt(5));
+                    drawable.draw(canvas);
+                }
+                case "renderNode" -> {
+                    renderNode.setPosition(a.getInt(0), a.getInt(1), a.getInt(2), a.getInt(3));
+                    renderNode.setAlpha(f(a, 4));
+                    renderNode.setTranslationX(f(a, 5));
+                    renderNode.setTranslationY(f(a, 6));
+                }
+                case "viewText" -> {
+                    TextView view = new TextView(this);
+                    view.setText(a.getString(0));
+                    view.setTextColor(a.getInt(1));
+                    view.setTextSize(f(a, 2));
+                    int viewWidth = a.getInt(3), viewHeight = a.getInt(4);
+                    view.measure(View.MeasureSpec.makeMeasureSpec(viewWidth, View.MeasureSpec.EXACTLY),
+                            View.MeasureSpec.makeMeasureSpec(viewHeight, View.MeasureSpec.EXACTLY));
+                    view.layout(0, 0, viewWidth, viewHeight);
+                    view.draw(canvas);
+                }
                 default -> throw new IllegalArgumentException("unknown graphics op " + command.getString("op"));
             }
         }
@@ -272,6 +315,22 @@ public final class ProbeActivity extends Activity {
         put(result, "height", height);
         put(result, "saveCount", canvas.getSaveCount());
         put(result, "center", bitmap.getPixel(width / 2, height / 2));
+        put(result, "bitmapDensity", bitmap.getDensity());
+        put(result, "paint", array(paint.getColor(), paint.getAlpha(), paint.getStrokeWidth(),
+                paint.getStyle().name(), paint.getTextSize(), paint.isAntiAlias(), paint.getStrokeCap().name(), paint.getStrokeJoin().name(),
+                paint.getBlendMode() == null ? JSONObject.NULL : paint.getBlendMode().name()));
+        float[] matrixValues = new float[9];
+        canvas.getMatrix(matrix);
+        matrix.getValues(matrixValues);
+        put(result, "matrix", array(matrixValues));
+        Rect clip = new Rect();
+        canvas.getClipBounds(clip);
+        put(result, "clip", array(new int[]{clip.left, clip.top, clip.right, clip.bottom}));
+        RectF pathBounds = new RectF();
+        path.computeBounds(pathBounds, true);
+        put(result, "pathBounds", array(new double[]{pathBounds.left, pathBounds.top, pathBounds.right, pathBounds.bottom}));
+        put(result, "renderNode", array(renderNode.getWidth(), renderNode.getHeight(), renderNode.getAlpha(),
+                renderNode.getTranslationX(), renderNode.getTranslationY()));
         put(result, "png", Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP));
         return result;
     }
@@ -291,28 +350,28 @@ public final class ProbeActivity extends Activity {
         }
         if (value instanceof Character) return (int) ((Character) value).charValue();
         if (value instanceof Enum<?>) return ((Enum<?>) value).name();
-        if (value instanceof int[]) return new JSONArray((int[]) value);
-        if (value instanceof String[]) return new JSONArray((String[]) value);
+        if (value instanceof int[]) return array((int[]) value);
+        if (value instanceof String[]) return array((String[]) value);
         if (value instanceof Rect) {
             Rect rect = (Rect) value;
-            return new JSONArray(new int[]{rect.left, rect.top, rect.right, rect.bottom});
+            return array(new int[]{rect.left, rect.top, rect.right, rect.bottom});
         }
         if (value instanceof RectF) {
             RectF rect = (RectF) value;
-            return new JSONArray(new double[]{rect.left, rect.top, rect.right, rect.bottom});
+            return array(new double[]{rect.left, rect.top, rect.right, rect.bottom});
         }
         if (value instanceof Point) {
             Point point = (Point) value;
-            return new JSONArray(new int[]{point.x, point.y});
+            return array(new int[]{point.x, point.y});
         }
         if (value instanceof Matrix) {
             float[] values = new float[9];
             ((Matrix) value).getValues(values);
-            return new JSONArray(values);
+            return array(values);
         }
         if (value instanceof Bitmap) {
             Bitmap bitmap = (Bitmap) value;
-            return new JSONArray(new int[]{bitmap.getWidth(), bitmap.getHeight(), bitmap.getDensity()});
+            return array(new int[]{bitmap.getWidth(), bitmap.getHeight(), bitmap.getDensity()});
         }
         if (value instanceof Parcelable) {
             Parcel parcel = Parcel.obtain();
@@ -328,5 +387,35 @@ public final class ProbeActivity extends Activity {
     private static void put(JSONObject object, String key, Object value) {
         try { object.put(key, value); }
         catch (Exception error) { throw new IllegalStateException(error); }
+    }
+
+    private static JSONArray array(Object... values) {
+        JSONArray result = new JSONArray();
+        for (Object value : values) result.put(value);
+        return result;
+    }
+
+    private static JSONArray array(int[] values) {
+        JSONArray result = new JSONArray();
+        for (int value : values) result.put(value);
+        return result;
+    }
+
+    private static JSONArray array(float[] values) throws Exception {
+        JSONArray result = new JSONArray();
+        for (float value : values) result.put(value);
+        return result;
+    }
+
+    private static JSONArray array(double[] values) throws Exception {
+        JSONArray result = new JSONArray();
+        for (double value : values) result.put(value);
+        return result;
+    }
+
+    private static JSONArray array(String[] values) {
+        JSONArray result = new JSONArray();
+        for (String value : values) result.put(value);
+        return result;
     }
 }

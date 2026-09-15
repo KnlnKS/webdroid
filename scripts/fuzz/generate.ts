@@ -52,7 +52,7 @@ function coordinate(random: Random): number {
 }
 
 function drawCommand(random: Random): GraphicsCommand {
-  switch (random.int(0, 13)) {
+  switch (random.int(0, 20)) {
     case 0: return { op: "color", args: [random.pick(COLOURS)] };
     case 1: return { op: "alpha", args: [random.int(-32, 288)] };
     case 2: return { op: "strokeWidth", args: [random.pick([0, 1, 2, 8, 32])] };
@@ -66,7 +66,39 @@ function drawCommand(random: Random): GraphicsCommand {
     case 10: return { op: "scale", args: [random.pick([-2, -1, 0, 0.5, 1, 2]), random.pick([-2, -1, 0, 0.5, 1, 2])] };
     case 11: return { op: "rotate", args: [random.int(-720, 720)] };
     case 12: return { op: "clipRect", args: Array.from({ length: 4 }, () => coordinate(random)) };
+    case 13: return { op: "drawOval", args: Array.from({ length: 4 }, () => coordinate(random)) };
+    case 14: return { op: "drawRoundRect", args: [...Array.from({ length: 4 }, () => coordinate(random)), random.int(0, 64), random.int(0, 64)] };
+    case 15: return { op: "drawArc", args: [...Array.from({ length: 4 }, () => coordinate(random)), random.int(-360, 360), random.int(-720, 720), random.chance(0.5)] };
+    case 16: return { op: "antiAlias", args: [random.chance(0.5)] };
+    case 17: return { op: "strokeCap", args: [random.pick(["BUTT", "ROUND", "SQUARE"])] };
+    case 18: return { op: "strokeJoin", args: [random.pick(["MITER", "ROUND", "BEVEL"])] };
+    case 19: return { op: "skew", args: [random.pick([-1, -0.5, 0, 0.5, 1]), random.pick([-1, -0.5, 0, 0.5, 1])] };
     default: return { op: "drawColor", args: [random.pick(COLOURS)] };
+  }
+}
+
+function subsystemCommands(random: Random, index: number): GraphicsCommand[] {
+  switch (index % 6) {
+    case 0: return [
+      { op: "pathMove", args: [coordinate(random), coordinate(random)] },
+      { op: "pathCubic", args: Array.from({ length: 6 }, () => coordinate(random)) },
+      { op: "pathAddCircle", args: [coordinate(random), coordinate(random), random.int(0, 64), random.pick(["CW", "CCW"])] },
+      { op: "pathFill", args: [random.pick(["WINDING", "EVEN_ODD", "INVERSE_WINDING", "INVERSE_EVEN_ODD"])] },
+      { op: "drawPath" },
+    ];
+    case 1: return [
+      { op: random.pick(["matrixScale", "matrixSkew"]), args: [random.pick([-2, -1, 0, 0.5, 1, 2]), random.pick([-2, -1, 0, 0.5, 1, 2])] },
+      { op: "matrixPostTranslate", args: [coordinate(random), coordinate(random)] }, { op: "setMatrix" },
+      { op: "drawRect", args: [0, 0, 64, 64] },
+    ];
+    case 2: return [{ op: "drawable", args: [random.pick(COLOURS), random.int(-32, 64), random.int(-32, 64), random.int(64, 160), random.int(64, 160), random.int(0, 255)] }];
+    case 3: return [{ op: "renderNode", args: [random.int(-32, 32), random.int(-32, 32), random.int(64, 160), random.int(64, 160), random.next(), coordinate(random), coordinate(random)] }];
+    case 4: return [{ op: "viewText", args: [random.pick(TEXT), random.pick(COLOURS), random.pick([8, 16, 32]), random.int(32, 128), random.int(16, 96)] }];
+    default: return [
+      { op: "bitmapDensity", args: [random.pick([0, 120, 160, 240, 320, 480, 640])] },
+      { op: "blendMode", args: [random.pick([null, "SRC_OVER", "SRC_IN", "MULTIPLY", "SCREEN", "PLUS"])] },
+      { op: "drawRect", args: [0, 0, 128, 128] },
+    ];
   }
 }
 
@@ -81,6 +113,7 @@ export function generateGraphicsCases(seed: number, count: number): GraphicsCase
       else if (saveDepth && random.chance(0.08)) { commands.push({ op: "restore" }); saveDepth--; }
       else commands.push(drawCommand(random));
     }
+    commands.push(...subsystemCommands(random, index));
     while (saveDepth-- > 0) commands.push({ op: "restore" });
     return { schemaVersion: SCHEMA_VERSION, id: `graphics-${seed}-${index}`, kind: "graphics", width: 128, height: 128, commands };
   });

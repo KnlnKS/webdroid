@@ -1,8 +1,8 @@
 import { PNG } from "pngjs";
 import { diffImages } from "../../tests/e2e/lib/diff";
-import { stableJson, type Failure, type ProbeCase, type ProbeResult } from "./model";
+import { stableJson, type Failure, type JsonValue, type ProbeCase, type ProbeResult } from "./model";
 
-type GraphicsValue = { width: number; height: number; saveCount: number; center: number; png: string };
+type GraphicsValue = { width: number; height: number; saveCount: number; center: number; png: string; [key: string]: JsonValue };
 
 function graphicsValue(value: unknown): GraphicsValue | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -30,14 +30,14 @@ export function compareResult(input: ProbeCase, oracle: ProbeResult, actual: Pro
   }
   const expected = graphicsValue(oracle.value), got = graphicsValue(actual.value);
   if (!expected || !got) return { kind: "harness-error", fingerprint: "graphics:bad-result", detail: "graphics result has an invalid shape" };
-  const expectedState = [expected.width, expected.height, expected.saveCount, expected.center];
-  const gotState = [got.width, got.height, got.saveCount, got.center];
+  const { png: expectedPng, ...expectedState } = expected;
+  const { png: gotPng, ...gotState } = got;
   if (stableJson(expectedState) !== stableJson(gotState)) return {
     kind: "value-mismatch", fingerprint: `graphics-state:${stableJson(expectedState)}:${stableJson(gotState)}`,
     detail: `${stableJson(expectedState)} != ${stableJson(gotState)}`,
   };
-  const left = PNG.sync.read(Buffer.from(expected.png, "base64"));
-  const right = PNG.sync.read(Buffer.from(got.png, "base64"));
+  const left = PNG.sync.read(Buffer.from(expectedPng, "base64"));
+  const right = PNG.sync.read(Buffer.from(gotPng, "base64"));
   const score = diffImages(left, right, { top: 0, bottom: 0, left: 0, right: 0 });
   if (score.contentDiffPct <= 1 && score.tolerantPct <= 0.1) return null;
   return {
