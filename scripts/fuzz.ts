@@ -5,6 +5,7 @@ import { validateProbeCase } from "./fuzz/model";
 import { Random, randomSeed } from "./fuzz/random";
 import { replayUiBundle, runUi } from "./fuzz/ui";
 import { generateUiAction } from "./fuzz/ui-model";
+import { runInjectedSmoke } from "./fuzz/self-test";
 
 const [command, ...args] = process.argv.slice(2);
 
@@ -45,7 +46,7 @@ async function campaign(kind: "api" | "graphics"): Promise<void> {
   console.log(`${result.failures} differences; ${result.bundles.length} minimized and retained in ${out}`);
 }
 
-function smoke(): void {
+async function smoke(): Promise<void> {
   const seed = 0x5eed1234;
   const api = generateApiCases(seed, 32).map(validateProbeCase);
   const graphics = generateGraphicsCases(seed, 32).map(validateProbeCase);
@@ -56,6 +57,8 @@ function smoke(): void {
   if (canonical(api) !== canonical(generateApiCases(seed, 32))) throw new Error("API generation is not deterministic");
   if (canonical(graphics) !== canonical(generateGraphicsCases(seed, 32))) throw new Error("graphics generation is not deterministic");
   console.log(`fuzz smoke passed: ${api.length} API and ${graphics.length} graphics cases (seed ${seed})`);
+  const bundles = await runInjectedSmoke();
+  console.log(`injected mismatches minimized and replayed: ${bundles.join(", ")}`);
 }
 
 switch (command) {
@@ -78,15 +81,16 @@ switch (command) {
     const path = args.find((arg) => !arg.startsWith("-"));
     const oracle = value("--oracle");
     if (!path) throw new Error("usage: bun run fuzz replay <failure.json> [--oracle <adb-serial>]");
-    const kind = (JSON.parse(await Bun.file(path).text()) as { kind?: unknown }).kind;
-    if (kind !== "ui" && !oracle) throw new Error("API and graphics replay require --oracle <adb-serial>");
+    const header = JSON.parse(await Bun.file(path).text()) as { kind?: unknown; injected?: unknown };
+    const kind = header.kind;
+    if (kind !== "ui" && header.injected !== true && !oracle) throw new Error("API and graphics replay require --oracle <adb-serial>");
     const reproduced = kind === "ui" ? await replayUiBundle(path, oracle) : await replayBundle(path, oracle!);
     if (!reproduced) throw new Error("minimized failure did not reproduce twice");
     console.log(`reproduced twice: ${path}`);
     break;
   }
   case "smoke":
-    smoke();
+    await smoke();
     {
       const nodes = [{ text: "Save", desc: "", cls: "android.widget.Button", resId: "app:id/save",
         bounds: [0, 0, 100, 100] as [number, number, number, number], clickable: true, enabled: true,

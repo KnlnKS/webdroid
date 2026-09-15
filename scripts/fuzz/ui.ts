@@ -13,6 +13,7 @@ import { Random } from "./random";
 import { generateUiAction, matchIdentity, semanticKeys, type UiAction } from "./ui-model";
 import { startWebdroid } from "./webdroid-session";
 import type { Failure } from "./model";
+import { injectedUiFailure } from "./injected";
 
 const STEP_DEADLINE_MS = 5_000;
 type Metadata = { apk: string; pkg: string; activity: string };
@@ -43,6 +44,7 @@ export type UiFailureBundle = {
   minimized: UiAction[];
   failure: Failure;
   environment: unknown;
+  injected?: true;
 };
 
 async function command(argv: string[], deadlineMs = STEP_DEADLINE_MS): Promise<CommandResult> {
@@ -358,7 +360,7 @@ function shrinkAction(action: UiAction): UiAction[] {
   }
 }
 
-async function minimizeActions(input: readonly UiAction[], reproduces: (candidate: UiAction[]) => Promise<boolean>): Promise<UiAction[]> {
+export async function minimizeUiActions(input: readonly UiAction[], reproduces: (candidate: UiAction[]) => Promise<boolean>): Promise<UiAction[]> {
   let current = [...input], rounds = 0;
   for (let chunk = Math.floor(current.length / 2); chunk >= 1 && rounds < 4; chunk = Math.floor(chunk / 2)) {
     let changed = true;
@@ -397,7 +399,7 @@ export async function runUi(options: UiOptions): Promise<void> {
     if (!failure) continue;
     const input = run.steps.map((step) => step.action);
     const reproduces = (actions: UiAction[]) => reproduceUi(app, actions, options, failure.fingerprint);
-    const minimized = await minimizeActions(input, reproduces);
+    const minimized = await minimizeUiActions(input, reproduces);
     if (!(await reproduces(minimized)) || !(await reproduces(minimized))) continue;
     const bundle: UiFailureBundle = { schemaVersion: 1, kind: "ui", seed: options.seed, app, input, minimized, failure, environment: run.environment };
     await Bun.write(`${options.out}/${basename(app.apk).replace(/\.[^.]+$/, "")}.failure.json`, JSON.stringify(bundle, null, 2) + "\n");
@@ -412,6 +414,8 @@ export async function replayUiBundle(path: string, oracle?: string): Promise<boo
   const bundle = JSON.parse(await Bun.file(path).text()) as UiFailureBundle;
   if (bundle.schemaVersion !== 1 || bundle.kind !== "ui" || !Array.isArray(bundle.minimized) || !bundle.failure?.fingerprint)
     throw new Error("invalid UI failure bundle");
+  if (bundle.injected) return injectedUiFailure(bundle.minimized)?.fingerprint === bundle.failure.fingerprint &&
+    injectedUiFailure(bundle.minimized)?.fingerprint === bundle.failure.fingerprint;
   const options: UiOptions = { apks: [bundle.app.apk], seed: bundle.seed, steps: bundle.minimized.length,
     oracle, out: `${path}.replay` };
   return await reproduceUi(bundle.app, bundle.minimized, options, bundle.failure.fingerprint) &&

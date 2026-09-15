@@ -4,9 +4,12 @@ import { generateApiCases, generateGraphicsCases } from "./generate";
 import { minimizeCaseBatched, reproducesTwice } from "./minimize";
 import type { Failure, ProbeCase, ProbeResult } from "./model";
 import { runAndroid, runWebdroid, type PlatformRun } from "./probe-runner";
+import { injectedProbeFailure } from "./injected";
 
 export type FailureBundle = {
   schemaVersion: 1;
+  kind: "api" | "graphics";
+  injected?: true;
   seed: number;
   input: ProbeCase;
   minimized: ProbeCase;
@@ -56,7 +59,7 @@ export async function runCampaign(options: CampaignOptions): Promise<{ failures:
     });
     if (!(await reproducesTwice(minimized, reproduces))) continue;
     const bundle: FailureBundle = {
-      schemaVersion: 1, seed: options.seed, input: item.input, minimized, failure: item.failure,
+      schemaVersion: 1, kind: options.kind, seed: options.seed, input: item.input, minimized, failure: item.failure,
       oracle: item.oracle, webdroid: item.webdroid,
       environment: { oracle: oracle.environment, webdroid: webdroid.environment },
     };
@@ -72,8 +75,11 @@ export async function runCampaign(options: CampaignOptions): Promise<{ failures:
   return { failures: failures.length, bundles };
 }
 
-export async function replayBundle(path: string, oracleSerial: string): Promise<boolean> {
+export async function replayBundle(path: string, oracleSerial?: string): Promise<boolean> {
   const parsed = JSON.parse(await Bun.file(path).text()) as FailureBundle;
   if (parsed.schemaVersion !== 1 || !parsed.minimized || !parsed.failure?.fingerprint) throw new Error("invalid failure bundle");
+  if (parsed.injected) return reproducesTwice(parsed.minimized, async (candidate) =>
+    injectedProbeFailure(candidate).failure?.fingerprint === parsed.failure.fingerprint);
+  if (!oracleSerial) throw new Error("API and graphics replay require an oracle serial");
   return reproducesTwice(parsed.minimized, (candidate) => replayFingerprint(candidate, oracleSerial, parsed.failure.fingerprint));
 }
