@@ -37,6 +37,24 @@ test("core copies preserve overlap and invalidate executed pages across the copi
   }
 });
 
+test("core zlib checksums preserve incremental state", () => {
+  const p = mem.malloc(9), cp = core.cpu_alloc(1, 1);
+  const args = new BigUint64Array(mem.buf, cp, 3);
+  mem.write(p, new TextEncoder().encode("123456789"));
+  const update = (id: number, initial: number, offset: number, length: number) => {
+    args.set([BigInt(initial >>> 0), BigInt(p + offset), BigInt(length)]);
+    expect(core.libc_call(cp, id)).toBe(0);
+    return Number(args[0] & 0xffffffffn);
+  };
+  try {
+    expect(update(CORE_LIBC.crc32, update(CORE_LIBC.crc32, 0, 0, 4), 4, 5)).toBe(0xcbf43926);
+    expect(update(CORE_LIBC.adler32, update(CORE_LIBC.adler32, 1, 0, 4), 4, 5)).toBe(0x091e01de);
+  } finally {
+    core.cpu_free(cp);
+    mem.free(p);
+  }
+});
+
 test("A64 transient mappings stay out of the malloc arena", () => {
   const warmup = mem.malloc(16);
   mem.free(warmup);

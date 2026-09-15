@@ -50,6 +50,8 @@ pub const Fn = enum(u8) {
     fmod,
     sincosf,
     sincos,
+    crc32,
+    adler32,
 };
 pub const Result = enum(u32) { done, fault, host };
 export fn libc_call(cp: u32, id: u32) u32 {
@@ -147,6 +149,48 @@ fn sincos(comptime F: type, c: *Cpu) Result {
     return .done;
 }
 
+const crc_table = blk: {
+    @setEvalBranchQuota(20_000);
+    var table: [8][256]u32 = undefined;
+    for (0..256) |i| {
+        var crc: u32 = @intCast(i);
+        for (0..8) |_| crc = (crc >> 1) ^ (if (crc & 1 != 0) @as(u32, 0xedb88320) else 0);
+        table[0][i] = crc;
+    }
+    for (1..8) |slice| for (0..256) |i| {
+        const crc = table[slice - 1][i];
+        table[slice][i] = table[0][@as(u8, @truncate(crc))] ^ (crc >> 8);
+    };
+    break :blk table;
+};
+
+fn crc32(initial: u32, input: []const u8) u32 {
+    var crc = ~initial;
+    var i: usize = 0;
+    while (i + 8 <= input.len) : (i += 8) {
+        crc ^= std.mem.readInt(u32, input[i..][0..4], .little);
+        crc = crc_table[7][@as(u8, @truncate(crc))] ^ crc_table[6][@as(u8, @truncate(crc >> 8))] ^
+            crc_table[5][@as(u8, @truncate(crc >> 16))] ^ crc_table[4][crc >> 24] ^
+            crc_table[3][input[i + 4]] ^ crc_table[2][input[i + 5]] ^ crc_table[1][input[i + 6]] ^ crc_table[0][input[i + 7]];
+    }
+    while (i < input.len) : (i += 1) crc = crc_table[0][@as(u8, @truncate(crc ^ input[i]))] ^ (crc >> 8);
+    return ~crc;
+}
+
+fn checksum(c: *Cpu, id: Fn) Result {
+    const address = arg(c, 1);
+    if (address == 0) {
+        ret(c, if (id == .crc32) 0 else 1);
+        return .done;
+    }
+    const p = ptr(c, 1) orelse return .fault;
+    const input = mem.bytes(p)[0..@as(u32, @truncate(arg(c, 2)))];
+    const initial: u32 = @truncate(arg(c, 0));
+    const value = if (id == .crc32) crc32(initial, input) else std.hash.Adler32.permute(initial, input);
+    ret(c, value);
+    return .done;
+}
+
 pub fn call(c: *Cpu, id: u8) Result {
     const f: Fn = @enumFromInt(id);
     switch (f) {
@@ -157,6 +201,7 @@ pub fn call(c: *Cpu, id: u8) Result {
         .pow, .atan2, .fmod => two(f64, c, f),
         .sincosf => return sincos(f32, c),
         .sincos => return sincos(f64, c),
+        .crc32, .adler32 => return checksum(c, f),
         .pthread_mutex_lock, .pthread_mutex_trylock => {
             const a = ptr(c, 0) orelse return .fault;
             const w = mem.ld(u32, a);
