@@ -13,6 +13,7 @@ import { compileClassSource, compileLazyMethod, methodKey, type CompiledCtor } f
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
 import { jvmProfiler } from "./profile";
+import { jvmCoverage } from "./coverage";
 import { Monitors } from "./monitor";
 
 export const ACC = { STATIC: 0x8, NATIVE: 0x100, INTERFACE: 0x200 } as const;
@@ -122,6 +123,7 @@ export class Runtime {
   natives = new Map<string, NativeSpec>();
   dexes: DexFile[] = [];
   dexIndex = new Map<string, [DexFile, number]>();
+  cv(method: string): void { jvmCoverage.hit(method); }
   private refCache = new Map<string, Map<string, string>>();
   /** every method the loaded dexes reference on class `cls`, name+desc → desc: the surface a
    *  framework interface has as far as this app is concerned, which is what a proxy over it or a

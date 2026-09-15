@@ -75,6 +75,7 @@ export async function runWebdroid(cases: readonly ProbeCase[], port = 4097): Pro
   void new Response(devServer.stdout).text().then((value) => output.push(value));
   void new Response(devServer.stderr).text().then((value) => output.push(value));
   const origin = `http://127.0.0.1:${port}`;
+  const pageUrl = `${origin}/?apk=WebdroidFuzzProbe.apk&screen=1080x2160@480&fuzzCoverage=1`;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
     await waitForServer(origin, devServer);
@@ -84,17 +85,17 @@ export async function runWebdroid(cases: readonly ProbeCase[], port = 4097): Pro
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(String(error)));
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
-    await page.goto(`${origin}/?apk=WebdroidFuzzProbe.apk&screen=1080x2160@480`, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await page.waitForFunction(() => Boolean(globalThis.wd?.app()), null, { timeout: 60_000 });
     const results = await caseServer.results;
     let processes = await readProcesses(page);
-    let processFrames = processes.filter((process) => process.url === `${origin}/?apk=WebdroidFuzzProbe.apk&screen=1080x2160@480` || process.url.startsWith(`${origin}/process`));
+    let processFrames = processes.filter((process) => process.url === pageUrl || process.url.startsWith(`${origin}/process`));
     let missingDiagnostics = processFrames.filter((process) => process.diagnostics === null ||
       (typeof process.diagnostics === "object" && process.diagnostics !== null && "failure" in process.diagnostics));
     for (let attempt = 0; missingDiagnostics.length && attempt < 10; attempt++) {
       await Bun.sleep(250);
       processes = await readProcesses(page);
-      processFrames = processes.filter((process) => process.url === `${origin}/?apk=WebdroidFuzzProbe.apk&screen=1080x2160@480` || process.url.startsWith(`${origin}/process`));
+      processFrames = processes.filter((process) => process.url === pageUrl || process.url.startsWith(`${origin}/process`));
       missingDiagnostics = processFrames.filter((process) => process.diagnostics === null ||
         (typeof process.diagnostics === "object" && process.diagnostics !== null && "failure" in process.diagnostics));
     }
