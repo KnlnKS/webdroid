@@ -25,10 +25,10 @@ export async function runInjectedSmoke(): Promise<string[]> {
   mkdirSync(OUT, { recursive: true });
   const api: ApiCase = { schemaVersion: SCHEMA_VERSION, id: "injected-api", kind: "api", owner: "android/graphics/Color", calls: [
     { name: "alpha", descriptor: "(I)I", static: true, args: [{ kind: "int", value: 255 }] },
-    { name: "__injectedMismatch", descriptor: "()I", static: true },
+    { name: "red", descriptor: "(I)I", static: true, args: [{ kind: "int", value: 255 }] },
   ] };
   const graphics: GraphicsCase = { schemaVersion: SCHEMA_VERSION, id: "injected-graphics", kind: "graphics", width: 8, height: 8,
-    commands: [{ op: "drawColor", args: [0] }, { op: "__injectedMismatch", args: [99] }, { op: "save" }] };
+    commands: [{ op: "drawColor", args: [0] }, { op: "drawRect", args: [0, 0, 4, 4] }, { op: "save" }] };
   const paths = [await probeLayer(api), await probeLayer(graphics)];
 
   const input: UiAction[] = [{ type: "back" }, { type: "configuration", orientation: "landscape" },

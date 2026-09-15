@@ -1,4 +1,4 @@
-import type { JsonPrimitive, ProbeArgument, ProbeCase } from "./model";
+import { validateGraphicsCommand, type JsonPrimitive, type ProbeArgument, type ProbeCase } from "./model";
 
 type Reproduces<T extends ProbeCase = ProbeCase> = (candidate: T) => Promise<boolean>;
 
@@ -41,14 +41,21 @@ type ReproducesBatch<T extends ProbeCase> = (candidates: readonly T[]) => Promis
 function argumentCandidates(input: ProbeCase): ProbeCase[] {
   const candidates: ProbeCase[] = [];
   if (input.kind === "graphics") {
-    input.commands.forEach((command, commandIndex) => command.args?.forEach((value, argumentIndex) => {
+    input.commands.forEach((command, commandIndex) => {
+      if (!("args" in command)) return;
+      command.args.forEach((value, argumentIndex) => {
       for (const shrunk of shrinks(value)) {
-        const commands = input.commands.slice(), args = command.args!.slice();
+        const commands = input.commands.slice(), args: JsonPrimitive[] = command.args.slice();
         args[argumentIndex] = shrunk;
-        commands[commandIndex] = { ...command, args };
+        try {
+          commands[commandIndex] = validateGraphicsCommand({ op: command.op, args });
+        } catch {
+          continue;
+        }
         candidates.push({ ...input, commands });
       }
-    }));
+      });
+    });
   } else {
     const append = (callIndex: number, args: ProbeArgument[]) => args.forEach((value, argumentIndex) => {
       for (const shrunk of argumentShrinks(value)) {

@@ -10,6 +10,10 @@ describe("fuzz campaign core", () => {
     expect(generateGraphicsCases(1234, 20)).toEqual(generateGraphicsCases(1234, 20));
     for (const input of [...generateApiCases(1234, 20), ...generateGraphicsCases(1234, 20)])
       expect(validateProbeCase(JSON.parse(JSON.stringify(input)))).toEqual(input);
+    expect(() => validateProbeCase({ schemaVersion: 1, id: "bad-op", kind: "graphics", width: 1, height: 1,
+      commands: [{ op: "typo", args: [1] }] })).toThrow("unsupported graphics operation");
+    expect(() => validateProbeCase({ schemaVersion: 1, id: "bad-args", kind: "graphics", width: 1, height: 1,
+      commands: [{ op: "drawRect", args: [1, 2] }] })).toThrow("must contain 4 items");
   });
 
   test("case protocol orders and validates results", async () => {

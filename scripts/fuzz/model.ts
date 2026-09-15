@@ -33,7 +33,31 @@ export type ApiCase = {
   calls: ApiCall[];
 };
 
-export type GraphicsCommand = { op: string; args?: JsonPrimitive[] };
+type Number1 = [number];
+type Number2 = [number, number];
+type Number3 = [number, number, number];
+type Number4 = [number, number, number, number];
+type Number6 = [number, number, number, number, number, number];
+
+export type GraphicsCommand =
+  | { op: "drawColor" | "color" | "alpha" | "strokeWidth" | "textSize" | "rotate" | "matrixRotate" | "bitmapDensity"; args: Number1 }
+  | { op: "antiAlias"; args: [boolean] }
+  | { op: "style"; args: ["FILL" | "STROKE" | "FILL_AND_STROKE"] }
+  | { op: "strokeCap"; args: ["BUTT" | "ROUND" | "SQUARE"] }
+  | { op: "strokeJoin"; args: ["MITER" | "ROUND" | "BEVEL"] }
+  | { op: "blendMode"; args: [null | "SRC_OVER" | "SRC_IN" | "MULTIPLY" | "SCREEN" | "PLUS"] }
+  | { op: "drawRect" | "drawLine" | "drawOval" | "clipRect" | "pathQuad"; args: Number4 }
+  | { op: "drawCircle"; args: Number3 }
+  | { op: "drawText"; args: [string, number, number] }
+  | { op: "drawRoundRect" | "pathCubic"; args: Number6 }
+  | { op: "drawArc"; args: [number, number, number, number, number, number, boolean] }
+  | { op: "translate" | "scale" | "skew" | "pathMove" | "pathLine" | "matrixTranslate" | "matrixScale" | "matrixSkew" | "matrixPostTranslate"; args: Number2 }
+  | { op: "save" | "restore" | "pathReset" | "pathClose" | "drawPath" | "setMatrix" }
+  | { op: "pathAddCircle"; args: [number, number, number, "CW" | "CCW"] }
+  | { op: "pathFill"; args: ["WINDING" | "EVEN_ODD" | "INVERSE_WINDING" | "INVERSE_EVEN_ODD"] }
+  | { op: "drawable"; args: [number, number, number, number, number, number] }
+  | { op: "renderNode"; args: [number, number, number, number, number, number, number] }
+  | { op: "viewText"; args: [string, number, number, number, number] };
 
 export type GraphicsCase = {
   schemaVersion: typeof SCHEMA_VERSION;
@@ -140,6 +164,101 @@ function json(value: unknown, label: string): JsonValue {
   return output;
 }
 
+function array(value: unknown, label: string, length: number): unknown[] {
+  if (!Array.isArray(value) || value.length !== length) throw new Error(`${label} must contain ${length} items`);
+  return value;
+}
+
+function numericArgs(value: unknown, label: string, length: 1): Number1;
+function numericArgs(value: unknown, label: string, length: 2): Number2;
+function numericArgs(value: unknown, label: string, length: 3): Number3;
+function numericArgs(value: unknown, label: string, length: 4): Number4;
+function numericArgs(value: unknown, label: string, length: 6): Number6;
+function numericArgs(value: unknown, label: string, length: number): number[] {
+  return array(value, label, length).map((item, index) => number(item, `${label}[${index}]`));
+}
+
+function enumValue<T extends string>(value: unknown, label: string, allowed: readonly T[]): T {
+  const item = text(value, label);
+  const match = allowed.find((candidate) => candidate === item);
+  if (match === undefined) throw new Error(`${label} has unsupported value ${item}`);
+  return match;
+}
+
+export function validateGraphicsCommand(value: unknown, label = "command"): GraphicsCommand {
+  const input = record(value, label);
+  const op = text(input.op, `${label}.op`);
+  const args = `${label}.args`;
+  switch (op) {
+    case "drawColor": case "color": case "alpha": case "strokeWidth": case "textSize":
+    case "rotate": case "matrixRotate": case "bitmapDensity":
+      return { op, args: numericArgs(input.args, args, 1) };
+    case "antiAlias": {
+      const items = array(input.args, args, 1);
+      return { op, args: [bool(items[0], `${args}[0]`)] };
+    }
+    case "style": {
+      const items = array(input.args, args, 1);
+      return { op, args: [enumValue(items[0], `${args}[0]`, ["FILL", "STROKE", "FILL_AND_STROKE"])] };
+    }
+    case "strokeCap": {
+      const items = array(input.args, args, 1);
+      return { op, args: [enumValue(items[0], `${args}[0]`, ["BUTT", "ROUND", "SQUARE"])] };
+    }
+    case "strokeJoin": {
+      const items = array(input.args, args, 1);
+      return { op, args: [enumValue(items[0], `${args}[0]`, ["MITER", "ROUND", "BEVEL"])] };
+    }
+    case "blendMode": {
+      const items = array(input.args, args, 1);
+      return { op, args: [items[0] === null ? null : enumValue(items[0], `${args}[0]`, ["SRC_OVER", "SRC_IN", "MULTIPLY", "SCREEN", "PLUS"] as const)] };
+    }
+    case "drawRect": case "drawLine": case "drawOval": case "clipRect": case "pathQuad":
+      return { op, args: numericArgs(input.args, args, 4) };
+    case "drawCircle": return { op, args: numericArgs(input.args, args, 3) };
+    case "drawText": {
+      const items = array(input.args, args, 3);
+      return { op, args: [text(items[0], `${args}[0]`), number(items[1], `${args}[1]`), number(items[2], `${args}[2]`)] };
+    }
+    case "drawRoundRect": case "pathCubic": return { op, args: numericArgs(input.args, args, 6) };
+    case "drawArc": {
+      const items = array(input.args, args, 7);
+      return { op, args: [
+        number(items[0], `${args}[0]`), number(items[1], `${args}[1]`), number(items[2], `${args}[2]`),
+        number(items[3], `${args}[3]`), number(items[4], `${args}[4]`), number(items[5], `${args}[5]`),
+        bool(items[6], `${args}[6]`),
+      ] };
+    }
+    case "translate": case "scale": case "skew": case "pathMove": case "pathLine":
+    case "matrixTranslate": case "matrixScale": case "matrixSkew": case "matrixPostTranslate":
+      return { op, args: numericArgs(input.args, args, 2) };
+    case "save": case "restore": case "pathReset": case "pathClose": case "drawPath": case "setMatrix":
+      if (input.args !== undefined) throw new Error(`${args} is not allowed`);
+      return { op };
+    case "pathAddCircle": {
+      const items = array(input.args, args, 4);
+      return { op, args: [number(items[0], `${args}[0]`), number(items[1], `${args}[1]`), number(items[2], `${args}[2]`), enumValue(items[3], `${args}[3]`, ["CW", "CCW"])] };
+    }
+    case "pathFill": {
+      const items = array(input.args, args, 1);
+      return { op, args: [enumValue(items[0], `${args}[0]`, ["WINDING", "EVEN_ODD", "INVERSE_WINDING", "INVERSE_EVEN_ODD"])] };
+    }
+    case "drawable": return { op, args: numericArgs(input.args, args, 6) };
+    case "renderNode": {
+      const items = array(input.args, args, 7);
+      return { op, args: [
+        number(items[0], `${args}[0]`), number(items[1], `${args}[1]`), number(items[2], `${args}[2]`),
+        number(items[3], `${args}[3]`), number(items[4], `${args}[4]`), number(items[5], `${args}[5]`), number(items[6], `${args}[6]`),
+      ] };
+    }
+    case "viewText": {
+      const items = array(input.args, args, 5);
+      return { op, args: [text(items[0], `${args}[0]`), number(items[1], `${args}[1]`), number(items[2], `${args}[2]`), number(items[3], `${args}[3]`), number(items[4], `${args}[4]`)] };
+    }
+    default: throw new Error(`unsupported graphics operation ${op}`);
+  }
+}
+
 export function validateProbeCase(value: unknown): ProbeCase {
   const input = record(value, "case");
   if (input.schemaVersion !== SCHEMA_VERSION) throw new Error(`unsupported case schema ${String(input.schemaVersion)}`);
@@ -158,17 +277,7 @@ export function validateProbeCase(value: unknown): ProbeCase {
     if (!Number.isInteger(input.width) || !Number.isInteger(input.height) || Number(input.width) < 1 || Number(input.height) < 1)
       throw new Error("graphics dimensions must be positive integers");
     if (!Array.isArray(input.commands)) throw new Error("case.commands must be an array");
-    const commands = input.commands.map((value, index): GraphicsCommand => {
-      const command = record(value, `case.commands[${index}]`);
-      if (command.args !== undefined && !Array.isArray(command.args)) throw new Error(`case.commands[${index}].args must be an array`);
-      return {
-        op: text(command.op, `case.commands[${index}].op`),
-        ...(command.args === undefined ? {} : { args: command.args.map((item, itemIndex) => {
-          if (item === null || typeof item === "boolean" || typeof item === "string") return item;
-          return number(item, `case.commands[${index}].args[${itemIndex}]`);
-        }) }),
-      };
-    });
+    const commands = input.commands.map((value, index) => validateGraphicsCommand(value, `case.commands[${index}]`));
     return { schemaVersion: SCHEMA_VERSION, id, kind: "graphics", width: Number(input.width), height: Number(input.height), commands };
   }
   throw new Error(`unsupported case kind ${String(input.kind)}`);
