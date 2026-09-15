@@ -1,7 +1,7 @@
 # Trace-directed fast testing redesign — plan
 
 Starting revision: `e75c7c5`. Planning branch: `codex/trace-directed-testing-plan`.
-Status: design complete; implementation not started.
+Status: implemented; final verification in progress.
 
 ## Objective
 

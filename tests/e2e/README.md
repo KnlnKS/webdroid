@@ -4,10 +4,11 @@ Walks the same scripted flow through **a real Android emulator** and through **w
 then reports how far apart the two look, step by step. The output is a target: the numbers
 should go down as webdroid improves.
 
-## The two commands
+## The testing lanes
 
 ```bash
 PORT=4090 bun run server.ts
+WEBDROID_URL=http://localhost:4090 bun run e2e:fast -- --jobs 1
 WEBDROID_URL=http://localhost:4090 bun run e2e
 ```
 
@@ -23,6 +24,19 @@ machine, the four scored flows about half of that.
 
 Recording new goldens is a separate, manual step (below).
 
+`bun run e2e:fast` reuses the same flows but runs only fixed-input, fixed-clock cases. Android
+timers are advanced logically where that preserves the app's behavior; native GL games remain on
+real monotonic time. Semantic steps keep diagnostics and a frame hash without PNG readback, while
+named checkpoints retain pixels and enforce their recorded visual limits. A failure automatically
+reruns that flow into `actual-fast/failures/` with full evidence. The fast lane never replaces the
+serialized full lane as the final compatibility and performance gate.
+
+`bun run test:focused -- <paths>` selects dependent Bun tests through the TypeScript import graph,
+then selects fast flows from `tests/e2e/coverage-index.json`. `--base <revision>` includes committed,
+staged, unstaged, and untracked changes. Missing, partial, stale-schema, changed-APK, uncovered, and
+runtime-root inputs expand to all deterministic flows. Refresh the compact index only with a clean,
+successful `bun run e2e:coverage`; the command refuses partial flow selection.
+
 ### Running one flow
 
 ```bash
@@ -35,7 +49,7 @@ bun run e2e --list                    # what flows exist
 bun run e2e --shots                   # also save every distinct frame per step to webdroid-shots/
 ```
 
-`--test` works the same way on `e2e:record` and `e2e:diff`.
+`--test` works the same way on `e2e:fast`, `e2e:record`, and `e2e:diff`.
 
 `WEBDROID_JS_FLAGS='--no-sparkplug --no-maglev'` opts either webdroid driver into a controlled
 V8-tier experiment. Leave it unset when measuring stock-browser behavior.
@@ -43,9 +57,9 @@ V8-tier experiment. Leave it unset when measuring stock-browser behavior.
 A flow with no `golden/<flow>/manifest.json` runs in **smoke mode**: every step still executes,
 `actual/<flow>/run.json` records rendered/wedged/`newMissing`/`newErrors`/perf/fps per step,
 the console prints a smoke summary, and nothing is scored or written to the report. A step
-declared `animated: true` (a game loop never settles) is captured once after its
-`settleDelayMs` instead of waiting for stable frames; `tapAt` takes `repeat`/`everyMs` for a
-burst of taps as one step, and `Flow.minFps` flags an animated step as `SLOW` — only under
+with a `sample` or sampled `live` wait (a game loop never settles) is captured at its declared
+logical or real instant; `tapAt` takes `repeat`/`everyMs` for a burst of taps as one step, and
+`Flow.minFps` flags a motion sample as `SLOW` — only under
 `--jobs 1`, because a frame rate measured beside six other browsers measures the host.
 `run.json` records the `jobs` a run used. A partial run replaces `report/index.html` with only
 the flows it ran, and says so.
@@ -120,31 +134,41 @@ A step is declared once, semantically, in `flows/`. Two drivers interpret it:
 | `tapAt` | `input tap` at normalized coords | `wd.tap` |
 | `typeInto` | tap, `input text`, close the IME | `wd.tap` then `wd.type` |
 | `swipe` / `back` | `input swipe` / `keyevent 4` | `wd.swipe` / `wd.back` |
-| settle | sleep `settleDelayMs`, then screenshots every 350 ms until 4 agree | see below |
+| completion | honor the declared wait, then capture until 4 frames agree | state, quiescence, logical sample, or live wait |
 
 The webdroid side of a step is one `page.evaluate`: the probe `lib/probe.ts` installs into the
 page performs the action, waits for the app to settle, checks the main looper is alive, encodes
 the frame and returns it with the step's telemetry. Nothing polls the page from outside.
 
-### How webdroid settles
+### How webdroid completes a step
 
 The probe wraps `setTimeout`, `fetch`, `createImageBitmap`, `ImageDecoder`, `WebSocket` and the
 screen's `transferFromImageBitmap` before the page boots, and pins `Date` to the flow's clock
 (Playwright's own clock shim cannot be wrapped). With that and what `wd` exposes it knows when
-the app is idle, and a step ends on the first of:
+the app is idle. Each step declares one completion policy:
+
+* **state** — wait for an activity, semantic text/presence change, or a named performance counter,
+  then cross a main-queue sentinel and observe a resulting presentation.
+* **quiescent** — wait for the conservative idle or stable-pixel rules below. Fast semantic steps
+  do not retain old visual dwell horizons; full capture and checkpoint steps do.
+* **sample** — advance Android-owned time to a logical instant and request the corresponding frame.
+  Browser/network/media time is never advanced.
+* **live** — preserve real-time waiting for external content and performance evidence.
+
+Quiescence ends on the first of:
 
 * **idle** — no main-looper job running or queued, no pending layout/draw/insets, no frame
   callbacks or animators, no parked yields, nothing in flight over fetch/decode/the relay, no
-  timer due before `settleDelayMs` plus the stability window (timed parks are waits, not work,
+  timer due before the policy horizon plus the stability window (timed parks are waits, not work,
   and do not count), and nothing presented in the last 150 ms. This may end a step long before
   its horizon: nothing is scheduled that could change the screen.
 * **pixels** — the recorder's own rule, on frames sampled every 250 ms *past* the horizon: four
   consecutive identical samples, or a steady two-frame oscillation (a blinking caret) with the
   more frequent frame chosen. `lib/settle.ts` is the one copy of that rule.
-* **timeout** — `settleDelayMs` + 20 s.
+* **timeout** — the policy's real timeout.
 
-`settleDelayMs` is therefore a **horizon**, not a sleep: how long the screen may legitimately
-keep changing after the action. The emulator recorder still sleeps it. `run.json` records per
+The policy horizon bounds relevant future work; it is not a mandatory sleep. The emulator recorder
+still honors the equivalent real dwell before defining a golden. `run.json` records per
 step which tier ended it (`settled`), how long it took (`settleMs`), and what kept the fast
 path waiting (`busy`, poll counts per reason) — the first thing to read when a step is slow.
 
@@ -259,7 +283,7 @@ Then eyeball the goldens and commit `tests/e2e/golden/`. `actual/` and `report/`
 Determinism the recorder depends on (all applied by `boot-emulator.sh`): animations off,
 SystemUI demo mode (fixed 12:00 clock, full battery, no notification icons), `adb root` +
 a clock pinned to `PINNED_CLOCK_MS` (2026-01-02T12:00:00Z — FitNotes renders the current date,
-and webdroid pins the same instant via `page.clock.setFixedTime`), fixed locale and font scale,
+and webdroid pins the same instant in its test environment), fixed locale and font scale,
 light theme, and `pm clear` before each flow. Recording twice produces byte-identical PNGs.
 
 The soft keyboard is closed before every capture — webdroid does not render Android's keyboard,

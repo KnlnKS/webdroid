@@ -4586,3 +4586,31 @@ error, or process whose completed-frame count trails its frame count. It retains
 TikTok layout delegate errors, YouTube's two settle timeouts and draw gap, Lichess's Flutter pthread
 limits, and Mihon's terminal onboarding page error. The corpus renders 20/20 APKs and reports 45
 distinct existing gaps. No visual golden is changed.
+
+## 2026-09-15: trace-directed fast testing
+
+The deterministic development lane now reuses all 82 actions in the six fixed-input flows. Steps
+declare state, quiescent, logical-sample, or live completion instead of the former timing flags.
+Fast semantic steps retain process diagnostics, errors, liveness, counters, presentation identity,
+and a frame hash without PNG readback; stable named checkpoints retain pixels and compare against
+the starting revision's visual limits. Any failure reruns the complete flow with full artifacts.
+
+Android-visible Handler/Looper, executor, alarm, animation, lifecycle, input, Java sleep/park, and
+native monotonic timing share a stable controlled deadline heap across same-origin process realms.
+Host measurements, network, WebSocket, WebGL, media, and persistence time remain real. Mihon's
+Compose startup and the two native GL games did not preserve their observed screens under logical
+time, so those flows deliberately keep fixed `Date` with real scheduling rather than accepting a
+faster but different state.
+
+The first serialized candidate run completes 82/82 actions in 85.7 seconds versus the retained
+123.0-second artifact (30.3% faster). It writes 6.0 MiB by default versus 64 MiB, with no new runtime
+missing APIs, native requirements, errors, or wedges. The 45-second stretch target is not reached;
+the retained improvement clears the plan's 20% fallback gate, and native game sampling accounts for
+roughly 47 of the remaining seconds.
+
+Chrome precise coverage is collected only by the explicit coverage command. Bun's bundled scripts
+are mapped back to repository files through their source maps; the always-executed bundle wrapper is
+excluded. The compact index records its source revision, flow schema, APK hashes, screen, browser,
+and mode. Focused selection expands dependencies through the TypeScript import graph and widens to
+the complete deterministic lane for missing, partial, changed-fixture, uncovered, or critical-root
+inputs. Coverage is absent from normal and performance runs.
