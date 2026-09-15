@@ -1,26 +1,341 @@
-# Subway Surfers compatibility
+# Trace-directed fast testing redesign — plan
 
-Starting revision: `d91679c`.
+Starting revision: `e75c7c5`. Planning branch: `codex/trace-directed-testing-plan`.
+Status: design complete; implementation not started.
 
-## Acceptance
+## Objective
 
-- [x] Reproduce the black age screen and frozen Unity player with the unchanged Subway Surfers APK.
-- [x] Trace the input failure through native execution rather than substituting app behavior.
-- [x] Preserve CPU register ownership across pthread startup and asynchronous signal delivery.
-- [x] Render GLES3-core ETC2/EAC textures without requiring an earlier extension query from the app.
-- [x] Reach and interact with the age gate, loading screen, main menu, and live gameplay in Chrome.
-- [x] Complete the final typecheck, unit, smoke, framework, text, E2E, and corpus verification matrix.
+Make webdroid's normal development feedback loop substantially faster without weakening the
+existing full Android-parity evidence. The fast path will execute real APK and framework bytecode,
+advance Android-visible time deterministically where the environment permits it, wait for explicit
+state transitions instead of broad timing horizons, avoid eager image artifacts, and select the
+smallest safe flow set from measured execution coverage.
 
-## Thermo-nuclear follow-up
+The full serialized real-time E2E matrix remains the final compatibility gate. Performance runs
+remain real-time, uncontended, and uninstrumented.
 
-- [x] Confirm production compatibility logic contains no package- or app-specific checks.
-- [x] Replace repeated CPU ownership conditions and microtask polling with one base-availability invariant.
-- [x] Name and centralize the complete GLES3-core ETC2/EAC format policy.
-- [x] Repeat the final verification matrix after the structural cleanup.
+## Acceptance gates
 
-## Scope
+Measure on the same machine with `--jobs 1`, fresh browser processes, no competing diagnostic
+load, advancing `wd.ticks`, and successfully rendered applications.
 
-The compatibility changes stay in the native CPU scheduler, pthread startup, and GLES3 bridge.
-The two scheduler regressions have focused ARM32/A64 tests. Graphics acceptance uses the unchanged
-game because the browser's extension-activation behavior and Unity's upload sequence are the
-relevant integration boundary; no app-specific path or synthetic texture substitute is added.
+- Add a deterministic `e2e:fast` lane covering every action in the six pinned-clock flows. Its
+  median of three frozen runs must be at most 45 seconds, down from the retained 123.0-second
+  artifact, without new missing APIs, native requirements, errors, wedges, or changed designated
+  visual checkpoints.
+- A typical changed-module run selected from the retained coverage index should complete within
+  30 seconds. Unknown, stale, or safety-critical changes must widen selection rather than risk an
+  empty or falsely narrow run.
+- The fast lane should write no more than 10 MiB by default, down from 64 MiB for the current full
+  `actual/` tree. A failure rerun must retain all evidence needed for diagnosis.
+- The final full matrix must still execute and score all 159 existing steps. No golden is changed
+  as part of this work.
+- Production-mode startup, interaction CPU, p95 opportunity latency, and retained heap must not
+  regress by more than 1% in matched repeated measurements. Test-only tracing and scheduling must
+  be absent from performance runs.
+- `bun run typecheck`, `bun run test`, affected APK smoke compilation, targeted framework probes,
+  the deterministic fast lane, and the full verification matrix must pass at the frozen candidate.
+
+Targets are retention gates, not permission to alter guest deadlines, omit failures, or fabricate
+idle state. If 45 seconds is not reached, retain only measured improvements that clear a 20%
+deterministic-lane speedup and document the remaining cost by phase.
+
+## Retained baseline
+
+The latest ignored `tests/e2e/actual/*/run.json` artifacts are a serialized `--jobs 1` run:
+
+| Scope | Steps | Step wall time | Settle time |
+| --- | ---: | ---: | ---: |
+| All 12 flows | 159 | 790.930 s | 743.885 s |
+| Six pinned-clock flows | 82 | 122.971 s | 102.975 s |
+| Six live-clock flows | 77 | 667.959 s | 640.910 s |
+
+Settling accounts for 94% of step time. Outcomes are 93 idle, 34 pixel-stable, 30 timed animated
+snapshots, and 2 timeouts. The declared flow horizons total 675.7 seconds; animated steps alone
+force 239.2 seconds of real waiting. The largest recurring busy reasons are timers, sockets,
+presentations, drawing, and animators.
+
+The current probe also reads and PNG-encodes a frame for every step. The remaining roughly 47
+seconds outside settling combines action execution, liveness checks, readback, encoding, IPC, and
+host writes; it is not yet attributed finely enough to optimize safely.
+
+## Design boundaries
+
+- Preserve two clocks. Host measurement time always uses the real monotonic clock. Guest semantic
+  time is real in production and live tests, but can be controlled in deterministic tests.
+- Virtual time applies only to Android-visible scheduling and time. Network I/O, WebSocket relay
+  progress, WebCodecs, audio, WebGL fence waits, browser file handles, compiler timings, and
+  performance counters remain real unless their owning contract provides a deterministic test
+  mechanism.
+- Do not globally replace `performance.now`, `Date`, `setTimeout`, or `requestAnimationFrame`.
+  Prior Playwright clock injection conflicted with the probe's timer wrappers. Route only canonical
+  Android scheduling owners through the new clock.
+- Run application and bundled library bytecode unchanged. The test scheduler is a platform clock,
+  not an app-specific shortcut. Do not add package checks, screen-specific delegates, synthetic
+  success, or seeded memory.
+- A fast result is diagnostic evidence, not the final parity score. The full mode keeps pixel
+  capture, real live content, liveness checks, process diagnostics, and performance semantics.
+- Prefer deletion over parallel compatibility paths. Once all flows use the new step model, remove
+  `settleDelayMs`, `animated`, and obsolete settle branches rather than indefinitely supporting
+  both schemas.
+- Add no dependency unless a measured implementation cannot be expressed with the browser,
+  Playwright, Bun, and existing utilities.
+
+## Target architecture
+
+### 1. Explicit step completion
+
+Replace the optional `settleDelayMs`/`animated` pair with a discriminated wait policy. Begin with
+only the policies required by current flows:
+
+```ts
+type WaitPolicy =
+  | { kind: "state"; condition: StateCondition; maxVirtualMs: number; maxRealMs: number }
+  | { kind: "quiescent"; maxVirtualMs: number; maxRealMs: number }
+  | { kind: "sample"; atVirtualMs: number; maxRealMs: number }
+  | { kind: "live"; horizonMs: number; timeoutMs: number };
+
+type EvidencePolicy =
+  | { kind: "semantic" }
+  | { kind: "visual" }
+  | { kind: "motion"; minFps: number };
+```
+
+`StateCondition` initially supports active activity/component, visible semantic text or content
+description, and absence of a previously visible anchor. Add another condition only when a
+current flow cannot express its completion with these or quiescence.
+
+A state step completes after its condition is true, the main queue has crossed a sentinel, and a
+resulting frame has presented. It does not wait for unrelated future timers. Quiescent steps retain
+the current conservative busy checks. Sample steps drive deterministic animations to a declared
+logical instant. Live steps preserve wall-clock settling for external content.
+
+Full mode captures every existing visual step. Fast mode captures only designated visual/motion
+checkpoints; semantic steps retain UI state, diagnostics, and a lightweight presented-frame hash.
+Any diagnostic mismatch automatically reruns the failing flow in full evidence mode.
+
+### 2. Runtime-owned guest clock and scheduler
+
+Introduce one small owner for guest time. Keep its production hot path as direct bound functions,
+not allocation-heavy event objects or repeated mode switches.
+
+The real implementation delegates to browser time. The controlled implementation owns a stable
+deadline heap ordered by `(deadline, process, sequence)`, a logical monotonic instant, and explicit
+frame deadlines. Advancing time performs:
+
+1. Drain runnable main/looper/native-return work across live processes.
+2. If the completion condition is satisfied after a presented frame, stop.
+3. Otherwise advance to the next eligible guest deadline or requested frame instant.
+4. Run callbacks due at that instant in stable order and drain again.
+5. Stop with structured `stalled`, `real-io`, or `virtual-timeout` evidence rather than guessing
+   that the app is idle.
+
+The parent process broker coordinates logical time for same-origin process iframes. Each realm owns
+its callbacks; the broker owns ordering and assigns tokens, so no callback or Promise is serialized.
+An unloaded process cancels its tokens. External I/O pauses logical advancement while a completion
+condition explicitly depends on that I/O; real network timeouts are never consumed by a logical
+jump.
+
+First route the canonical high-value owners:
+
+- Handler/Looper messages, Java sleep/park, Timer and scheduled executors.
+- Choreographer callbacks, shell ticks, Animator/View animation time, delayed invalidation, and
+  input event timestamps.
+- Android alarms and lifecycle delays.
+- Guest monotonic APIs in Java, bionic, pthread, and the native core.
+
+Classify every existing time access before changing it. Leave profiling, compiler/JIT accounting,
+relay/network deadlines, media clocks, WebGL waits, persistence debounce, and harness watchdogs on
+real host time. Record intentional real-time sites in one concise ownership table rather than
+repeating explanatory comments throughout the code.
+
+### 3. Lazy evidence pipeline
+
+Split a step into measured phases: action, guest drain, external wait, liveness, readback, encode,
+IPC, host write, and diff. Retain these phase timings in `run.json` so speedup claims name the work
+that disappeared.
+
+In fast mode:
+
+- Use presentation generation plus a lightweight frame hash for semantic steps.
+- Read and encode pixels only for designated visual checkpoints or motion samples.
+- Write images and UI JSON only when they are assertions or failure evidence.
+- On failure, rerun that flow with full capture and process diagnostics; never discard the initial
+  structured failure.
+
+Full mode preserves the current sampled-frame rule and artifacts. Do not compare a fresh readback
+when the settle rule selected an earlier frame.
+
+### 4. Trace-directed flow selection
+
+Build the selection index only from successful full or coverage runs. Collection is test-only and
+disabled for performance measurements.
+
+Prototype Chrome precise JavaScript coverage against the unbundled module URLs used by `index.html`
+and `process.html`. Attach to child process targets as well as the main page. The prototype must
+prove that invoked code in process iframes maps back to repository files and that a deliberately
+untouched module is not reported as covered.
+
+If precise coverage is sound, store a compact generated index mapping repository source files to
+flows and first/last covering steps. Do not commit raw V8 ranges or browser-generated source. Add
+explicit coverage only for generated DEX/JIT/native dispatch that browser source coverage cannot
+attribute. If precise coverage is unsound, stop this phase and use a conservative subsystem index
+at canonical dispatch owners; do not scatter manual `hit()` calls through implementation files.
+
+Selection rules:
+
+- A changed file selects every flow that covered it, including the shortest required prefix.
+- A changed dependency owner expands through the static TypeScript import graph.
+- JVM compiler/runtime, process/Binder, renderer root, native CPU/memory/core, test harness, build,
+  provenance, or configuration changes select named broad representative packs or all deterministic
+  flows. Native semantic changes also select the relevant oracle/unit family.
+- New, renamed, uncovered, stale-index, or uncommitted generated files widen to the deterministic
+  lane. They never produce “no tests needed.”
+- Live flows run only when their traced code or a broad networking/media/WebView owner changed,
+  and always in the final full matrix.
+
+The index records the source revision, flow schema hash, APK hashes, screen, browser version, and
+coverage mode. A mismatch invalidates it visibly.
+
+### 5. Verification lanes
+
+Expose a small command surface:
+
+- `bun run test:focused -- <paths or git base>`: import-graph-selected Bun tests plus the selected
+  fast E2E prefixes.
+- `bun run e2e:fast [flow...]`: all actions in selected deterministic flows, controlled guest
+  time, semantic evidence by default, full evidence on failure.
+- Existing focused `smoke`, `fwtest`, fuzz replay, and native oracle commands remain the tools for
+  their owning changes.
+- `bun run e2e --jobs 1`: complete real-time visual/parity matrix for the frozen final candidate.
+
+Do not create a second test taxonomy. Reuse current flows and action definitions; the wait and
+evidence policies are additional semantics on those steps. Reuse minimized fuzz failure bundles as
+focused regressions rather than translating them into duplicate unit tests.
+
+## Implementation phases and decision gates
+
+### Phase 0 — measurement and schema
+
+- Add harness-only phase timing without changing settle or capture behavior.
+- Record targeted baseline repeats for one idle flow, one animated flow, one live flow, and one
+  multiprocess flow. Use the retained serialized full artifact for the initial global baseline;
+  defer matched full-matrix repeats until the candidate is frozen.
+- Define `WaitPolicy`, `EvidencePolicy`, completion results, and validation at the flow boundary.
+- Migrate two representative flows behind an explicit experimental flag.
+
+Gate: phase totals explain at least 95% of wall time and the flagged old/new paths capture identical
+frames and diagnostics at their shared checkpoints. Otherwise fix attribution before optimization.
+
+### Phase 1 — semantic waits and lazy evidence
+
+- Implement state conditions using existing activity, UI-tree, presentation, queue, and diagnostic
+  owners.
+- Add semantic-only fast capture and automatic full-evidence failure reruns.
+- Migrate pinned flows, keeping existing emulator recording semantics.
+- Delete migrated optional timing flags and duplicate capture helpers once no caller remains.
+
+Gate: pinned flows retain their full-mode results, fast mode is at least 1.5x faster, and failures
+produce actionable full evidence. If readback/encoding is not material, retain the simpler pipeline
+but do not add caching machinery.
+
+### Phase 2 — controlled guest time
+
+- Introduce real and controlled clock implementations with host/guest time separated by name and
+  type.
+- Route Handler/Looper, scheduled Java work, frames/animations, alarms, input timestamps, and then
+  native guest clocks in small ownership commits.
+- Coordinate process realms through the broker and expose one test-driver `advanceUntil` entry.
+- Convert animated pinned flows to logical samples and remove the probe's test-clock timer wrapping
+  where the runtime now supplies authoritative pending-work data.
+
+Gate: deterministic flows produce the same designated frames and lifecycle/order diagnostics under
+real and controlled time; three frozen fast-lane runs meet the 45-second target or the documented
+retention threshold. A matched production run proves no performance regression.
+
+### Phase 3 — coverage selection
+
+- Run the precise-coverage prototype before designing stored formats.
+- Generate and validate the compact flow index.
+- Add import-graph expansion, conservative broad packs, stale detection, and command integration.
+- Validate the selector against a sample of historical focused fixes: the reproducing flow or
+  owning oracle must be selected for every sample.
+
+Gate: no sampled known fix is missed, unknown inputs widen safely, typical Android-module changes
+finish within 30 seconds, and coverage mode is measurably absent from production/performance runs.
+
+### Phase 4 — cleanup and final evidence
+
+- Remove the old optional step schema, obsolete timer interception, duplicate settle branches,
+  abandoned experimental flags, and tests made redundant by existing end-to-end contracts.
+- Keep only scheduler ordering/boundary tests that protect the core abstraction: one deterministic
+  deadline-order unit test, one cross-process cancellation/order browser test, and existing flows as
+  integration coverage. Do not add per-timer-wrapper tests.
+- Update the harness guide and implementation history with retained measurements, failure
+  mechanisms, unsupported virtual-time boundaries, and rejected experiments.
+- Freeze code, then run the full verification matrix once at the end as requested.
+
+Gate: all acceptance gates pass and `git diff` contains no compatibility scaffolding or diagnostic
+instrumentation that is unused by a retained command.
+
+## Planned commit sequence
+
+Keep commits independently reviewable and use `area: sentence` subjects. Expected sequence:
+
+1. `e2e: attribute step wall time by phase`
+2. `e2e: model completion and evidence policies`
+3. `e2e: capture semantic evidence on the fast path`
+4. `runtime: separate guest time from host measurement time`
+5. `android: schedule Java and frame work on guest time`
+6. `native: route guest monotonic time through the clock owner`
+7. `process: coordinate controlled deadlines across realms`
+8. `e2e: drive deterministic flows with logical time`
+9. `e2e: select flow prefixes from measured coverage`
+10. `test: remove superseded timing and capture paths`
+11. `docs: record fast-testing evidence and limits`
+
+Split or combine a commit when the actual ownership boundary makes that clearer; do not preserve
+this list at the cost of mixed concerns.
+
+## Final verification
+
+During implementation, run only the smallest owning checks and affected flows. After the candidate
+is frozen:
+
+1. `bun run typecheck`
+2. `bun run test`
+3. Smoke-compile affected APKs with zero method failures.
+4. Run targeted `fwtest` prefixes, native oracles, and retained fuzz failure replays.
+5. Run three serialized `bun run e2e:fast` measurements with no competing load.
+6. Start an unused-port server and run targeted text comparison.
+7. Run `WEBDROID_URL=<url> bun run e2e --jobs 1` once for the complete 159-step matrix.
+8. Run the corpus and performance comparison required by the final changed ownership areas.
+
+Inspect every `run.json`, including child-process diagnostics, settle/completion reasons, advancing
+ticks, rendered state, new missing APIs, new errors, native requirements, and phase timings. Report
+network-content drift separately from deterministic regressions; it is not a waiver.
+
+## Principal risks
+
+- Advancing time can reorder work across realms. Stable broker ordering and cross-process evidence
+  are mandatory before enabling controlled time by default.
+- Skipping intermediate animation frames can hide per-frame defects. Motion checkpoints and the
+  full real-time matrix remain; performance/FPS tests never use virtual time.
+- A semantic anchor can appear before its screen is actually drawable. Require a main-queue
+  sentinel and a subsequent presentation, not text presence alone.
+- Future timers may be irrelevant to a state assertion but essential to a quiescence assertion.
+  Keep those policies distinct rather than weakening the existing busy definition globally.
+- Coverage-guided selection can create false confidence. Staleness and unknown coverage always
+  expand selection; core runtime changes use conservative packs.
+- Clock abstraction can tax hot paths. Keep production bindings direct and reject the design if
+  matched application measurements cross the 1% gate.
+
+## Non-goals
+
+- No process, Java-heap, Wasm-memory, or browser save states.
+- No attempt to accelerate external servers, TLS, live video/audio, or real performance time.
+- No replacement of the Android emulator oracle or committed visual goldens.
+- No app-specific test delegates, package conditionals, synthetic lifecycle completion, or hidden
+  retries that turn failures into success.
+- No broad test rewrite, new test framework, or duplicate unit coverage for behavior already
+  exercised by a retained real fixture.
