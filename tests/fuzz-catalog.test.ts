@@ -36,6 +36,7 @@ test("API catalog filters future members and distinguishes placeholders", () => 
   expect(status.get("android/example/Value.answer()I")).toBe("placeholder");
   expect(status.get("android/example/Value.VALUE")).toBe("delegate");
   expect(status.get("android/example/Removed.gone()V")).toBe("platform-absent");
+  expect(catalog.members.every((member) => !member.exercised)).toBe(true);
 
   const reached = {
     classes: new Map<string, number>(),

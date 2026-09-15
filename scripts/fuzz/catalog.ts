@@ -73,6 +73,25 @@ export function parseApiVersions(xml: string, sdk: number): Decl[] {
 
 type FrameworkSurface = { classes: Set<string>; methods: Set<string>; fields: Set<string> };
 
+const RECIPE_MEMBERS = new Set([
+  "class:android/graphics/Color.android/graphics/Color",
+  "method:android/graphics/Color.rgb(III)I", "method:android/graphics/Color.parseColor(Ljava/lang/String;)I",
+  "class:android/graphics/Rect.android/graphics/Rect", "method:android/graphics/Rect.<init>(IIII)V",
+  "method:android/graphics/Rect.width()I", "method:android/graphics/Rect.height()I",
+  "method:android/graphics/Rect.centerX()I", "method:android/graphics/Rect.centerY()I",
+  "method:android/graphics/Rect.contains(II)Z",
+  "class:android/net/Uri.android/net/Uri", "method:android/net/Uri.parse(Ljava/lang/String;)Landroid/net/Uri;",
+  "method:android/net/Uri.toString()Ljava/lang/String;", "method:android/net/Uri.getScheme()Ljava/lang/String;",
+  "method:android/net/Uri.getHost()Ljava/lang/String;", "method:android/net/Uri.getPath()Ljava/lang/String;",
+  "class:android/text/TextUtils.android/text/TextUtils", "method:android/text/TextUtils.isEmpty(Ljava/lang/CharSequence;)Z",
+  "class:android/graphics/Matrix.android/graphics/Matrix", "method:android/graphics/Matrix.<init>()V",
+  "method:android/graphics/Matrix.setRotate(F)V", "method:android/graphics/Matrix.setScale(FF)V",
+  "method:android/graphics/Matrix.setTranslate(FF)V", "method:android/graphics/Matrix.isIdentity()Z",
+]);
+
+const recipeExercised = (member: Decl): boolean =>
+  RECIPE_MEMBERS.has(`${member.kind}:${member.owner}.${member.signature}`);
+
 export function frameworkSurface(dexes: DexFile[]): FrameworkSurface {
   const surface: FrameworkSurface = { classes: new Set(), methods: new Set(), fields: new Set() };
   for (const dex of dexes) for (let i = 0; i < dex.classDefCount; i++) {
@@ -103,7 +122,7 @@ export function buildCatalog(options: { sdk: number; xml: string; runtime: Runti
     ...decl,
     source: "public",
     support: supportOf(options.runtime, framework, decl, options.sdk),
-    exercised: false,
+    exercised: recipeExercised(decl),
   })).sort((a, b) => a.owner.localeCompare(b.owner) || a.kind.localeCompare(b.kind) || a.signature.localeCompare(b.signature));
   const totals: Record<Support, number> = {
     delegate: 0, placeholder: 0, "bytecode-candidate": 0, missing: 0, "platform-absent": 0,
