@@ -205,13 +205,15 @@ rt.register({
     "static green(I)I": (c: number) => (c >> 8) & 0xff,
     "static blue(I)I": (c: number) => c & 0xff,
     "static parseColor(Ljava/lang/String;)I": (s: string) => {
-      if (s[0] === "#") {
-        let h = s.slice(1);
-        if (h.length === 3) h = h.split("").map((c) => c + c).join("");
-        if (h.length === 6) h = "ff" + h;
-        return parseInt(h, 16) | 0;
-      }
-      const named: Record<string, number> = { black: -16777216, white: -1, red: -65536, green: -16711936, blue: -16776961, gray: -7829368, transparent: 0 };
+      const hex = /^#([\da-f]{6}|[\da-f]{8})$/i.exec(s)?.[1];
+      if (hex) return parseInt(hex.length === 6 ? `ff${hex}` : hex, 16) | 0;
+      const named: Record<string, number> = {
+        black: -16777216, darkgray: -12303292, gray: -7829368, lightgray: -3355444, white: -1,
+        red: -65536, green: -16711936, blue: -16776961, yellow: -256, cyan: -16711681,
+        magenta: -65281, aqua: -16711681, fuchsia: -65281, darkgrey: -12303292,
+        grey: -7829368, lightgrey: -3355444, lime: -16711936, maroon: -8388608,
+        navy: -16777088, olive: -8355840, purple: -8388480, silver: -4144960, teal: -16744320,
+      };
       const v = named[s.toLowerCase()];
       if (v === undefined) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown color " + s);
       return v;
