@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { compareResult } from "./compare";
 import { generateApiCases, generateGraphicsCases } from "./generate";
-import { minimizeCase, reproducesTwice } from "./minimize";
+import { minimizeCaseBatched, reproducesTwice } from "./minimize";
 import type { Failure, ProbeCase, ProbeResult } from "./model";
 import { runAndroid, runWebdroid, type PlatformRun } from "./probe-runner";
 
@@ -49,7 +49,11 @@ export async function runCampaign(options: CampaignOptions): Promise<{ failures:
     if (seen.has(item.failure.fingerprint)) continue;
     seen.add(item.failure.fingerprint);
     const reproduces = (candidate: ProbeCase) => replayFingerprint(candidate, options.oracle, item.failure.fingerprint);
-    const minimized = await minimizeCase(item.input, reproduces);
+    const minimized = await minimizeCaseBatched(item.input, async (candidates) => {
+      const uniquelyNamed = candidates.map((candidate, index) => ({ ...candidate, id: `${candidate.id}-min-${index}` }));
+      const [candidateOracle, candidateWebdroid] = await pair(uniquelyNamed, options.oracle);
+      return uniquelyNamed.map((candidate, index) => failureFor(candidate, candidateOracle.results[index]!, candidateWebdroid.results[index]!)?.fingerprint === item.failure.fingerprint);
+    });
     if (!(await reproducesTwice(minimized, reproduces))) continue;
     const bundle: FailureBundle = {
       schemaVersion: 1, seed: options.seed, input: item.input, minimized, failure: item.failure,

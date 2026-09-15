@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { serveCases } from "../scripts/fuzz/case-server";
 import { generateApiCases, generateGraphicsCases } from "../scripts/fuzz/generate";
-import { minimizeCase, reproducesTwice } from "../scripts/fuzz/minimize";
+import { minimizeCaseBatched, reproducesTwice } from "../scripts/fuzz/minimize";
 import { SCHEMA_VERSION, validateProbeCase, validateProbeResult, type GraphicsCase } from "../scripts/fuzz/model";
 
 describe("fuzz campaign core", () => {
@@ -35,7 +35,7 @@ describe("fuzz campaign core", () => {
       commands: [{ op: "drawColor", args: [0] }, { op: "drawRect", args: [100, 50, 9, -8] }],
     };
     const reproduces = async (candidate: typeof input) => candidate.commands.some((command) => command.op === "drawRect" && command.args?.[0] !== 0);
-    const minimized = await minimizeCase(input, reproduces);
+    const minimized = await minimizeCaseBatched(input, async (candidates) => Promise.all(candidates.map(reproduces)));
     expect(minimized.commands).toHaveLength(1);
     expect(minimized.commands[0]!.op).toBe("drawRect");
     expect(await reproducesTwice(minimized, reproduces)).toBe(true);

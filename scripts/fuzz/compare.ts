@@ -33,7 +33,7 @@ export function compareResult(input: ProbeCase, oracle: ProbeResult, actual: Pro
   const { png: expectedPng, ...expectedState } = expected;
   const { png: gotPng, ...gotState } = got;
   if (stableJson(expectedState) !== stableJson(gotState)) return {
-    kind: "value-mismatch", fingerprint: `graphics-state:${stableJson(expectedState)}:${stableJson(gotState)}`,
+    kind: "value-mismatch", fingerprint: "graphics:state",
     detail: `${stableJson(expectedState)} != ${stableJson(gotState)}`,
   };
   const left = PNG.sync.read(Buffer.from(expectedPng, "base64"));

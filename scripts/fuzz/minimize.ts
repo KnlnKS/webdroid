@@ -1,4 +1,4 @@
-import type { ApiCase, GraphicsCase, JsonPrimitive, ProbeArgument, ProbeCase } from "./model";
+import type { JsonPrimitive, ProbeArgument, ProbeCase } from "./model";
 
 type Reproduces<T extends ProbeCase = ProbeCase> = (candidate: T) => Promise<boolean>;
 
@@ -11,28 +11,12 @@ function withSequence<T extends ProbeCase>(input: T, items: readonly unknown[]):
 }
 
 function shrinks(value: JsonPrimitive): JsonPrimitive[] {
-  if (typeof value === "number") return [...new Set([0, 1, -1, Math.sign(value), Math.trunc(value / 2)])].filter((item) => item !== value);
-  if (typeof value === "string") return [...new Set(["", value.slice(0, 1), value.slice(0, Math.floor(value.length / 2))])].filter((item) => item !== value);
+  if (typeof value === "number") return [...new Set([0, Math.sign(value), Math.trunc(value / 2)])]
+    .filter((item) => Math.abs(item) < Math.abs(value));
+  if (typeof value === "string") return [...new Set(["", value.slice(0, 1), value.slice(0, Math.floor(value.length / 2))])]
+    .filter((item) => item.length < value.length);
   if (typeof value === "boolean") return value ? [false] : [];
   return [];
-}
-
-async function shrinkGraphics(input: GraphicsCase, reproduces: Reproduces<GraphicsCase>): Promise<GraphicsCase> {
-  let current = input;
-  for (let commandIndex = 0; commandIndex < current.commands.length; commandIndex++) {
-    const command = current.commands[commandIndex]!;
-    for (let argumentIndex = 0; argumentIndex < (command.args?.length ?? 0); argumentIndex++) {
-      for (const value of shrinks(command.args![argumentIndex]!)) {
-        const commands = current.commands.slice();
-        const args = command.args!.slice();
-        args[argumentIndex] = value;
-        commands[commandIndex] = { ...command, args };
-        const candidate = { ...current, commands };
-        if (await reproduces(candidate)) { current = candidate; break; }
-      }
-    }
-  }
-  return current;
 }
 
 function argumentShrinks(argument: ProbeArgument): ProbeArgument[] {
@@ -48,41 +32,63 @@ function argumentShrinks(argument: ProbeArgument): ProbeArgument[] {
   return [];
 }
 
-async function shrinkApi(input: ApiCase, reproduces: Reproduces<ApiCase>): Promise<ApiCase> {
-  let current = input;
-  for (let callIndex = -1; callIndex < current.calls.length; callIndex++) {
-    const args = callIndex < 0 ? current.constructorArgs : current.calls[callIndex]?.args;
-    if (!args) continue;
-    for (let argumentIndex = 0; argumentIndex < args.length; argumentIndex++) {
-      for (const argument of argumentShrinks(args[argumentIndex]!)) {
-        const nextArgs = args.slice();
-        nextArgs[argumentIndex] = argument;
-        const candidate = callIndex < 0
-          ? { ...current, constructorArgs: nextArgs }
-          : { ...current, calls: current.calls.map((call, index) => index === callIndex ? { ...call, args: nextArgs } : call) };
-        if (await reproduces(candidate)) { current = candidate; break; }
-      }
-    }
-  }
-  return current;
-}
-
-export async function minimizeCase<T extends ProbeCase>(input: T, reproduces: Reproduces<T>): Promise<T> {
-  let current: ProbeCase = input;
-  for (let chunk = Math.floor(sequence(current).length / 2); chunk >= 1; chunk = Math.floor(chunk / 2)) {
-    let start = 0;
-    while (start < sequence(current).length) {
-      const items = sequence(current);
-      const candidate = withSequence(current, [...items.slice(0, start), ...items.slice(start + chunk)]);
-      if (sequence(candidate).length && await reproduces(candidate as T)) current = candidate;
-      else start += chunk;
-    }
-  }
-  if (current.kind === "graphics") current = await shrinkGraphics(current, reproduces as Reproduces<GraphicsCase>);
-  else current = await shrinkApi(current, reproduces as Reproduces<ApiCase>);
-  return current as T;
-}
-
 export async function reproducesTwice<T extends ProbeCase>(input: T, reproduces: Reproduces<T>): Promise<boolean> {
   return await reproduces(input) && await reproduces(input);
+}
+
+type ReproducesBatch<T extends ProbeCase> = (candidates: readonly T[]) => Promise<readonly boolean[]>;
+
+function argumentCandidates(input: ProbeCase): ProbeCase[] {
+  const candidates: ProbeCase[] = [];
+  if (input.kind === "graphics") {
+    input.commands.forEach((command, commandIndex) => command.args?.forEach((value, argumentIndex) => {
+      for (const shrunk of shrinks(value)) {
+        const commands = input.commands.slice(), args = command.args!.slice();
+        args[argumentIndex] = shrunk;
+        commands[commandIndex] = { ...command, args };
+        candidates.push({ ...input, commands });
+      }
+    }));
+  } else {
+    const append = (callIndex: number, args: ProbeArgument[]) => args.forEach((value, argumentIndex) => {
+      for (const shrunk of argumentShrinks(value)) {
+        const nextArgs = args.slice(); nextArgs[argumentIndex] = shrunk;
+        candidates.push(callIndex < 0
+          ? { ...input, constructorArgs: nextArgs }
+          : { ...input, calls: input.calls.map((call, index) => index === callIndex ? { ...call, args: nextArgs } : call) });
+      }
+    });
+    if (input.constructorArgs) append(-1, input.constructorArgs);
+    input.calls.forEach((call, index) => { if (call.args) append(index, call.args); });
+  }
+  return candidates;
+}
+
+export async function minimizeCaseBatched<T extends ProbeCase>(input: T, reproduces: ReproducesBatch<T>): Promise<T> {
+  let current: ProbeCase = input;
+  let rounds = 0;
+  for (let chunk = Math.floor(sequence(current).length / 2); chunk >= 1; chunk = Math.floor(chunk / 2)) {
+    for (; rounds < 4;) {
+      const items = sequence(current), candidates: ProbeCase[] = [];
+      for (let start = 0; start < items.length; start += chunk) {
+        const candidate = withSequence(current, [...items.slice(0, start), ...items.slice(start + chunk)]);
+        if (sequence(candidate).length) candidates.push(candidate);
+      }
+      if (!candidates.length) break;
+      const matches = await reproduces(candidates as T[]);
+      const match = matches.findIndex(Boolean);
+      if (match < 0) break;
+      current = candidates[match]!;
+      rounds++;
+    }
+  }
+  for (rounds = 0; rounds < 4; rounds++) {
+    const candidates = argumentCandidates(current);
+    if (!candidates.length) break;
+    const matches = await reproduces(candidates as T[]);
+    const match = matches.findIndex(Boolean);
+    if (match < 0) break;
+    current = candidates[match]!;
+  }
+  return current as T;
 }
