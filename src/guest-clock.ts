@@ -112,7 +112,7 @@ const clock = controlledGuestTime
   ? (((window.top as unknown as ClockHost).__wdGuestClock ??= new ControlledGuestClock(performance.now())))
   : null;
 
-const realNow = performance.now.bind(performance);
+const realNow = browser ? performance.now.bind(performance) : () => performance.now();
 const realSetTimeout = globalThis.setTimeout.bind(globalThis);
 const realClearTimeout = globalThis.clearTimeout.bind(globalThis);
 const realSetInterval = globalThis.setInterval.bind(globalThis);
