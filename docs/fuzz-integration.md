@@ -77,6 +77,23 @@ Merge `3798a575` retains the tested production tree. Post-merge FitNotes thread/
 Both finish all steps without wedges, timeouts, errors or new requirements. Raw values:
 `post-2-1.json`, `mihon-post-2-1.json`.
 
+### 3. Activity dialog teardown — accepted
+
+Source `3f7c2a3f`, extracted with corrected callback semantics as `00a5e91`.
+Main left a dialog showing after both finish and recreation. The browser reproduction now
+closes it, fires exactly one dismiss callback and zero cancel callbacks in each case.
+The historical patch used `dismissOverlay`, which invokes the dialog's cancellation path;
+activity teardown now calls virtual `dismiss` directly. Only direct activity ownership is
+covered; this does not add support for arbitrary wrapped-context ownership.
+
+Typecheck and 14 existing window/attachment tests pass. Three alternating FitNotes pairs:
+main thread/process 3389.704/6043.490 ms, cumulative candidate
+3270.808/5927.457 ms (-3.51%/-1.92%). All 234 steps
+complete without errors, wedges, timeouts or new requirements. All 39 screenshots and
+semantic trees match baseline repeats. Production tree:
+`4cfa72d886301e5a9e1ffa577cbcf784a390afb0`. Evidence: `dialog-before.json`,
+`dialog-after.json`, `summary-3.json`, `pixels-3.json`, `{base,chunk}-3-*`.
+
 ## Deferred scope
 
 - Generated API expansion and native/DEX ownership: broad coupling and compatibility risk.
@@ -84,3 +101,6 @@ Both finish all steps without wedges, timeouts, errors or new requirements. Raw 
   regression exceeds this gate; the glyph optimization depends on that renderer.
 - JSON number boxing: the historical patch duplicates `optInt` and uses sentinel-string
   serialization; it needs a separately reviewed extraction rather than blind cherry-picking.
+- Android-side semantic fuzz targets and exit handling: no connected Android oracle for
+  validation. The source patch also needs correction for missing targets and oracle-free
+  exit classification; do not cherry-pick it unchanged. The one-off tree replay script stays out.
