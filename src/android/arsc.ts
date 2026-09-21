@@ -52,7 +52,8 @@ export class Arsc {
   values!: StringPool;
   pkgId = 0x7f;
   pkgName = "";
-  types = new Map<number, TypeChunk[]>();   // typeId → chunks (one per config)
+  types = new Map<number, TypeChunk[]>();   // default package: typeId → configurations
+  private packages = new Map<number, { name: string; types: Map<number, TypeChunk[]> }>();
   locales = new Set<string>();
   device = { density: dev.densityDpi, sdk: dev.sdk, orientation: dev.orientation, night: dev.night ? 1 : 0,
     wdp: dev.widthDp, hdp: dev.screenHeightDp, swdp: dev.smallestWidthDp, lang: dev.lang, region: dev.region,
@@ -64,7 +65,7 @@ export class Arsc {
 
   /** A config split's table: the same package, carrying only its configs' entries. Its value
    *  strings are appended past the base pool so every entry keeps indexing one pool. */
-  add(bytes: Uint8Array): void { this.parse(bytes, true); }
+  add(bytes: Uint8Array): void { this.parse(bytes, true); this.profiles.clear(); this.active = null; }
 
   private parse(bytes: Uint8Array, split: boolean) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -86,14 +87,19 @@ export class Arsc {
   }
 
   private parsePackage(view: DataView, base: number, headerSize: number, size: number, remap: Remap) {
-    this.pkgId = view.getUint32(base + 8, true);
+    const pkgId = view.getUint32(base + 8, true);
     let name = "";
     for (let i = 0; i < 128; i++) {
       const c = view.getUint16(base + 12 + i * 2, true);
       if (!c) break;
       name += String.fromCharCode(c);
     }
-    this.pkgName = name;
+    const first = this.packages.size === 0;
+    let pkg = this.packages.get(pkgId);
+    if (!pkg) this.packages.set(pkgId, pkg = { name, types: new Map() });
+    if (first || pkgId === 0x7f || pkgId === this.pkgId) {
+      this.pkgId = pkgId; this.pkgName = name; this.types = pkg.types;
+    }
     // A table may hold several package chunks under one id (aapt2 emits one per staged public
     // group), each with its own name pools — so they are read per chunk, never kept on `this`.
     const typeNames = new StringPool(view, base + view.getUint32(base + 268, true));
@@ -104,12 +110,12 @@ export class Arsc {
     while (pos < end) {
       const ctype = view.getUint16(pos, true);
       const csize = view.getUint32(pos + 4, true);
-      if (ctype === 0x0201) this.parseType(view, pos, typeNames, keyNames, remap, typeIdOffset);
+      if (ctype === 0x0201) this.parseType(view, pos, typeNames, keyNames, remap, typeIdOffset, pkg.types);
       pos += csize;
     }
   }
 
-  private parseType(view: DataView, base: number, typeNames: StringPool, keyNames: StringPool, remap: Remap, typeIdOffset: number) {
+  private parseType(view: DataView, base: number, typeNames: StringPool, keyNames: StringPool, remap: Remap, typeIdOffset: number, types: Map<number, TypeChunk[]>) {
     const rawId = view.getUint8(base + 8), id = rawId + typeIdOffset;
     const cfgSize = view.getUint32(base + 20, true);
     const cfg: Config = { ...defaultConfig };
@@ -146,8 +152,8 @@ export class Arsc {
     if (cfg.lang && cfg.lang !== this.device.lang || cfg.dir && cfg.dir !== this.device.dir) {
       chunk.load = () => this.parseEntries(view, base, keyNames, chunk, remap);
     } else this.parseEntries(view, base, keyNames, chunk, remap);
-    let list = this.types.get(id);
-    if (!list) this.types.set(id, (list = []));
+    let list = types.get(id);
+    if (!list) types.set(id, (list = []));
     list.push(chunk);
   }
 
@@ -220,19 +226,31 @@ export class Arsc {
     return this.active;
   }
 
-  private chunksFor(typeId: number): TypeChunk[] {
+  private packageTypes(pkgId: number): Map<number, TypeChunk[]> | undefined {
+    return pkgId === this.pkgId ? this.types : this.packages.get(pkgId)?.types;
+  }
+
+  packageName(pkgId: number): string | undefined { return pkgId === this.pkgId ? this.pkgName : this.packages.get(pkgId)?.name; }
+  packageId(name: string): number | undefined {
+    if (name === this.pkgName) return this.pkgId;
+    for (const [id, pkg] of this.packages) if (pkg.name === name) return id;
+    return undefined;
+  }
+
+  private chunksFor(typeId: number, pkgId = this.pkgId): TypeChunk[] {
     const profile = this.profile();
-    let chunks = profile.types.get(typeId);
+    const key = (pkgId << 8) | typeId;
+    let chunks = profile.types.get(key);
     if (!chunks) {
-      chunks = (this.types.get(typeId) ?? []).filter(ch => (!ch.config.lang || ch.config.lang === profile.lang) && (!ch.config.dir || ch.config.dir === profile.dir));
+      chunks = (this.packageTypes(pkgId)?.get(typeId) ?? []).filter(ch => (!ch.config.lang || ch.config.lang === profile.lang) && (!ch.config.dir || ch.config.dir === profile.dir));
       for (const chunk of chunks) chunk.load?.();
-      profile.types.set(typeId, chunks);
+      profile.types.set(key, chunks);
     }
     return chunks;
   }
 
-  typeName(typeId: number, entryIdx?: number): string {
-    const chunks = this.chunksFor(typeId);
+  typeName(typeId: number, entryIdx?: number, pkgId = this.pkgId): string {
+    const chunks = this.chunksFor(typeId, pkgId);
     return (entryIdx === undefined ? chunks[0] : chunks.find((chunk) => chunk.entries.has(entryIdx)))?.name ?? "?";
   }
 
@@ -245,10 +263,10 @@ export class Arsc {
 
   /** best-config entry for resId, or null */
   entry(resId: number, selected?: { density: number }): ResEntry | null {
-    if ((resId >>> 24) !== this.pkgId) return null;
+    const pkgId = resId >>> 24;
     const typeId = (resId >> 16) & 0xff;
     const entryIdx = resId & 0xffff;
-    const chunks = this.chunksFor(typeId);
+    const chunks = this.chunksFor(typeId, pkgId);
     let best: ResEntry | null = null;
     let bestScore = -1;
     for (const ch of chunks) {
@@ -301,23 +319,24 @@ export class Arsc {
   }
 
   /** every entry name of a type → its id, built once per type */
-  names(typeName: string): Map<string, number> {
+  names(typeName: string, pkgId = this.pkgId): Map<string, number> {
     const names = this.profile().names;
-    let m = names.get(typeName);
+    const key = pkgId + ":" + typeName;
+    let m = names.get(key);
     if (m) return m;
-    names.set(typeName, m = new Map());
+    names.set(key, m = new Map());
     // A resource still being staged is emitted twice: once at its finalized id and once under a
     // staging type id, which is allocated high. Ascending type id, first name wins, so the
     // finalized id is the one a name resolves to.
-    for (const tid of [...this.types.keys()].sort((a, b) => a - b)) {
-      for (const ch of this.chunksFor(tid)) {
+    for (const tid of [...(this.packageTypes(pkgId)?.keys() ?? [])].sort((a, b) => a - b)) {
+      for (const ch of this.chunksFor(tid, pkgId)) {
         if (ch.name !== typeName) continue;
-        for (const [idx, e] of ch.entries) if (!m.has(e.key)) m.set(e.key, (this.pkgId << 24) | (tid << 16) | idx);
+        for (const [idx, e] of ch.entries) if (!m.has(e.key)) m.set(e.key, (pkgId << 24) | (tid << 16) | idx);
       }
     }
     return m;
   }
 
   /** find resource id by type name + entry name */
-  findId(typeName: string, key: string): number { return this.names(typeName).get(key) ?? 0; }
+  findId(typeName: string, key: string, pkgId = this.pkgId): number { return this.names(typeName, pkgId).get(key) ?? 0; }
 }

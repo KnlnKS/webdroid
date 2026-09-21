@@ -4757,3 +4757,14 @@ Additional reached failures repaired during paired guest navigation:
 Search-result rendering, font defaults, status insets, feed overlays and performance remain
 under investigation. Successful native decoding does not establish a working search result.
 JSON "missing method" reports require receiver diagnosis: the named methods already exist.
+
+The APK's resource table contains 12 different package IDs. The parser previously merged all
+packages into one type map: 0x7f0b000b, an integer font selector with value 42, resolved to a
+library style from package 0x4f. Resource entries, configuration caches and name lookup now
+retain their package namespace; the main 0x7f package remains the default. One core parser
+case covers colliding IDs and cache invalidation after adding a split. Five resource tests
+pass (21 assertions); Chrome resolves the original APK's font selector to integer 42.
+
+ActivityOptions.makeScaleUpAnimation now records screen-relative bounds and package metadata
+in the options Bundle. A live Chrome probe returns the expected type 2 and all four supplied
+bounds. VibratorManager delegates its default vibrator to the existing service owner.

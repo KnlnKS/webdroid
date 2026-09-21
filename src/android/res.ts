@@ -178,12 +178,18 @@ export class Resources {
   /** id by type and name; a package name picks a table, otherwise the app is searched first */
   idFor(type: string, name: string, pkg = ""): number {
     if (pkg && pkg === fwPkg?.pkgName) return fwPkg.findId(type, name);
+    if (pkg) {
+      const id = this.arsc?.packageId(pkg);
+      return id === undefined ? 0 : this.arsc!.findId(type, name, id);
+    }
     return this.arsc?.findId(type, name) || fwPkg?.findId(type, name) || 0;
   }
 
+  idPackage(resId: number): string { return this.tbl(resId)?.packageName(resId >>> 24) ?? "app"; }
+
   idType(resId: number): string {
     const a = this.tbl(resId);
-    return a ? a.typeName((resId >> 16) & 0xff, resId & 0xffff) : "?";
+    return a ? a.typeName((resId >> 16) & 0xff, resId & 0xffff, resId >>> 24) : "?";
   }
   idName(resId: number): string {
     return this.tbl(resId)?.entry(resId)?.key ?? "0x" + resId.toString(16);

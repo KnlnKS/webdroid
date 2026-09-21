@@ -23,7 +23,7 @@ function stringPool(text = ""): Uint8Array {
   return bytes;
 }
 
-function packageChunk(typeName: string, key: string, entryIdx: number, typeId = 1, typeIdOffset = 0): Uint8Array {
+function packageChunk(typeName: string, key: string, entryIdx: number, typeId = 1, typeIdOffset = 0, pkgId = 0x7f): Uint8Array {
   const types = stringPool(typeName);
   const keys = stringPool(key);
   const entriesStart = 84 + (entryIdx + 1) * 4;
@@ -46,7 +46,9 @@ function packageChunk(typeName: string, key: string, entryIdx: number, typeId = 
   view.setUint16(0, 0x0200, true);
   view.setUint16(2, 288, true);
   view.setUint32(4, packageSize, true);
-  view.setUint32(8, 0x7f, true);
+  view.setUint32(8, pkgId, true);
+  const name = `package${pkgId}`;
+  for (let i = 0; i < name.length; i++) view.setUint16(12 + i * 2, name.charCodeAt(i), true);
   view.setUint32(268, 288, true);
   view.setUint32(276, 288 + types.length, true);
   view.setUint32(284, typeIdOffset, true);
@@ -83,4 +85,23 @@ test("resource names use the type pool of each package chunk", () => {
   ));
   expect(resources.findId("id", "target")).toBe(0x7f010001);
   expect(resources.typeName(1, 1)).toBe("id");
+});
+
+test("resource packages keep colliding type and entry IDs separate", () => {
+  const resources = new Arsc(resourceTable(
+    packageChunk("style", "library", 0, 1, 0, 0x4f),
+    packageChunk("integer", "font", 0),
+    packageChunk("drawable", "feature", 0, 1, 0, 0x53),
+  ));
+  expect(resources.pkgId).toBe(0x7f);
+  expect(resources.entry(0x7f010000)?.key).toBe("font");
+  expect(resources.entry(0x4f010000)?.key).toBe("library");
+  expect(resources.typeName(1, 0)).toBe("integer");
+  expect(resources.typeName(1, 0, 0x53)).toBe("drawable");
+  expect(resources.findId("style", "library")).toBe(0);
+  expect(resources.findId("style", "library", 0x4f)).toBe(0x4f010000);
+  expect(resources.packageName(0x53)).toBe("package83");
+  expect(resources.packageId("package79")).toBe(0x4f);
+  resources.add(resourceTable(packageChunk("string", "extra", 1, 1, 0, 0x4f)));
+  expect(resources.findId("string", "extra", 0x4f)).toBe(0x4f010001);
 });

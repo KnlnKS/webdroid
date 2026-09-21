@@ -373,12 +373,12 @@ const resMethods: NativeSpec["methods"] = {
     tv.resourceId = id;
   },
   "getResourceName(I)Ljava/lang/String;": function (this: JResources, id: number) {
-    return (id >>> 24 === 1 ? "android" : this.host.arsc?.pkgName ?? "app") + ":" + this.host.idType(id) + "/" + this.host.idName(id);
+    return this.host.idPackage(id) + ":" + this.host.idType(id) + "/" + this.host.idName(id);
   },
   "getResourceEntryName(I)Ljava/lang/String;": function (this: JResources, id: number) { return this.host.idName(id); },
   "getResourceTypeName(I)Ljava/lang/String;": function (this: JResources, id: number) { return this.host.idType(id); },
   "getResourcePackageName(I)Ljava/lang/String;": function (this: JResources, id: number) {
-    return id >>> 24 === 1 ? "android" : this.host.arsc?.pkgName ?? "app";
+    return this.host.idPackage(id);
   },
   "getIdentifier(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I":
     function (this: JResources, name: string, defType: string | null, defPkg: string | null) {
