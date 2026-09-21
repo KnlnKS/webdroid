@@ -83,12 +83,12 @@ test("submit synchronously uses an overridden task factory and executor", async 
   expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("answer");
 });
 
-test("a native pool submit queues before returning its future", async () => {
+test("a pool gives its first task directly to a core worker", async () => {
   const queue = await newObj("java/util/concurrent/LinkedBlockingQueue");
   const ex = await pool(queue);
   const task = rt.make("test/QueueRunnable");
   const future = await vcall(ex, "submit", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;", task, "result");
-  expect(await vcall(queue, "size", "()I")).toBe(1);
+  expect(await vcall(queue, "size", "()I")).toBe(0);
   expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("result");
 });
 
@@ -159,4 +159,32 @@ test("executor backlogs yield to the browser event loop", async () => {
   expect(task.runs).toBeGreaterThan(0);
   expect(task.runs).toBeLessThan(200);
   while (task.runs < 200) await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+test("a pool grows when a wrapped synchronous queue refuses storage", async () => {
+  class QueueProxy extends JObj { delegate: unknown; }
+  rt.register({
+    name: "test/HandoffQueue", ctor: QueueProxy, ifaces: ["java/util/concurrent/BlockingQueue"],
+    methods: {
+      "offer(Ljava/lang/Object;)Z": function (this: QueueProxy, item: unknown) {
+        return vcall(this.delegate, "offer", "(Ljava/lang/Object;)Z", item);
+      },
+    },
+  });
+  const queue = rt.make("test/HandoffQueue") as QueueProxy;
+  queue.delegate = await newObj("java/util/concurrent/SynchronousQueue");
+  const ex = await newObj("java/util/concurrent/ThreadPoolExecutor",
+    "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V", 0, 2, 0n, seconds(), queue);
+  const first = new BlockingRunnable(), second = new BlockingRunnable();
+  const a = await vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", first);
+  const b = await vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", second);
+  await Promise.resolve();
+  expect(await vcall(ex, "getActiveCount", "()I")).toBe(2);
+  expect(await vcall(ex, "getCorePoolSize", "()I")).toBe(0);
+  expect(await vcall(ex, "getMaximumPoolSize", "()I")).toBe(2);
+  expect(await vcall(queue.delegate, "size", "()I")).toBe(0);
+  await expect(vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", new RecordingRunnable())).rejects.toBeDefined();
+  first.release(); second.release();
+  await vcall(a, "get", "()Ljava/lang/Object;");
+  await vcall(b, "get", "()Ljava/lang/Object;");
 });

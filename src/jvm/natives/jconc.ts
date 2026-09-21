@@ -181,15 +181,16 @@ class JExecutor extends JObj {
   removeOnCancel = 0;
   queue: JList | JObj | null = null;
   limit = 1;
+  coreSize = 1;
+  maxSize = 1;
+  pool = false;
   factory: unknown = null;
   workers: { thread: JThread | null; busy: boolean }[] = [];
   jobs = new Map<JFuture, unknown>();
-  tasks: { task: unknown; f: JFuture; method: string; desc: string; finish: () => void }[] = [];
+  tasks: { task: unknown; f: JFuture; method: string; desc: string; queued: boolean; finish: () => void }[] = [];
   drainScheduled = false;
   consecutiveDrains = 0;
 }
-// a queue implemented in bytecode is only handed back by getQueue(); the executor's own task
-// list stays the source of truth and native queues mirror it for size()/isEmpty()
 const mirror = (ex: JExecutor) => (ex.queue instanceof JList ? ex.queue.a : null);
 function drainExecutor(ex: JExecutor) {
   while (ex.tasks.length) {
@@ -199,7 +200,7 @@ function drainExecutor(ex: JExecutor) {
       worker = { thread: null, busy: false }; ex.workers.push(worker);
     }
     const task = ex.tasks.shift()!;
-    mirror(ex)?.shift();
+    if (!ex.pool) mirror(ex)?.shift();
     worker.busy = true;
     void runTask(ex, worker, task);
   }
@@ -214,6 +215,7 @@ function scheduleDrain(ex: JExecutor) {
 async function runTask(ex: JExecutor, worker: JExecutor["workers"][number], entry: JExecutor["tasks"][number]) {
   const { task, f, method, desc } = entry;
   try {
+    if (entry.queued) await vcall(ex.queue, "remove", "(Ljava/lang/Object;)Z", task);
     if (f.cancelled) return;
     if (!worker.thread) {
       worker.thread = ex.factory ? await vcall(ex.factory, "newThread", "(Ljava/lang/Runnable;)Ljava/lang/Thread;", task) : rt.make("java/lang/Thread");
@@ -288,44 +290,62 @@ function cancelFuture(f: JFuture, interrupt: number) {
 }
 let futureCtor: (new () => JFuture) | null = null;
 const newFuture = () => new (futureCtor ??= rt.link("webdroid/Future").ctor as new () => JFuture)();
-function submit(ex: JExecutor, task: unknown, method: string, desc: string, delay = 0): JFuture {
+function submit(ex: JExecutor, task: unknown, method: string, desc: string, delay = 0, queued = false): JFuture {
   if (ex.shut) throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "executor shut down");
   const f = newFuture();
   ex.pending++; ex.jobs.set(f, task);
   f.promise = new Promise((resolve) => {
-    const entry = { task, f, method, desc, finish: () => resolve(null) };
+    const entry = { task, f, method, desc, queued, finish: () => resolve(null) };
     let timer: GuestTimer | undefined;
     const enqueue = () => {
-      timer = undefined; ex.tasks.push(entry); mirror(ex)?.push(task);
+      timer = undefined; ex.tasks.push(entry); if (!ex.pool) mirror(ex)?.push(task);
       scheduleDrain(ex);
     };
     if (delay > 0) timer = setGuestTimeout(enqueue, delay); else enqueue();
     f.cancel = () => {
       const index = ex.tasks.indexOf(entry);
-      if (index >= 0) { ex.tasks.splice(index, 1); mirror(ex)?.splice(index, 1); ex.pending--; ex.jobs.delete(f); }
+      if (index >= 0) {
+        ex.tasks.splice(index, 1);
+        if (entry.queued) void vcall(ex.queue, "remove", "(Ljava/lang/Object;)Z", task);
+        else if (!ex.pool) mirror(ex)?.splice(index, 1);
+        ex.pending--; ex.jobs.delete(f);
+      }
       else if (timer !== undefined) { clearGuestTimeout(timer); timer = undefined; ex.pending--; ex.jobs.delete(f); }
       resolve(null);
     };
   });
   return f;
 }
-function execute(this: JExecutor, r: unknown) {
-  const f = submit(this, r, "run", "()V");
-  void f.promise!.then(() => {
-    if (!f.error) return;
-    const e = f.error as { msg?: string; jsStack?: string; jframes?: string[] };
-    console.error("[executor]", (e.msg ?? f.error) + (e.jframes ? "\n  at " + e.jframes.join("\n  at ") : ""), e.jsStack ?? "");
+function execute(this: JExecutor, r: unknown): unknown {
+  if (r == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (this.shut) throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "executor shut down");
+  const enqueue = (queued = false) => {
+    const f = submit(this, r, "run", "()V", 0, queued);
+    void f.promise!.then(() => {
+      if (!f.error) return;
+      const e = f.error as { msg?: string; jsStack?: string; jframes?: string[] };
+      console.error("[executor]", (e.msg ?? f.error) + (e.jframes ? "\n  at " + e.jframes.join("\n  at ") : ""), e.jsStack ?? "");
+    });
+  };
+  if (!this.pool || this.pending < this.coreSize || this.pending < this.workers.length) return enqueue();
+  return after(vcall(this.queue, "offer", "(Ljava/lang/Object;)Z", r), accepted => {
+    if (accepted) return enqueue(true);
+    if (this.pending >= this.limit) {
+      if (this.limit >= this.maxSize) throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "executor saturated");
+      this.limit++;
+    }
+    return enqueue();
   });
 }
-function removeQueued(this: JExecutor, task: unknown): number {
+function removeQueued(this: JExecutor, task: unknown): unknown {
   const index = this.tasks.findIndex((entry) => entry.task === task);
   if (index < 0) return 0;
   const [entry] = this.tasks.splice(index, 1);
-  mirror(this)?.splice(index, 1);
+  if (!this.pool) mirror(this)?.splice(index, 1);
   this.pending--;
   this.jobs.delete(entry.f);
   entry.finish();
-  return 1;
+  return entry.queued ? after(vcall(this.queue, "remove", "(Ljava/lang/Object;)Z", task), () => 1) : 1;
 }
 const executorMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
@@ -436,7 +456,8 @@ function initScheduled(this: JExecutor, core: number, factory: unknown = null) {
 }
 function initPool(this: JExecutor, core: number, max: number, keep: bigint, unit: JTimeUnit, queue: JList, factory: unknown = null) {
   if (core < 0 || max <= 0 || max < core || keep < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid pool size");
-  this.limit = rt.iof(queue, "java/util/concurrent/SynchronousQueue") ? max : Math.max(1, core); this.queue = queue; this.factory = factory;
+  this.pool = true; this.coreSize = core; this.maxSize = max;
+  this.limit = Math.max(1, core); this.queue = queue; this.factory = factory;
 }
 for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurrent/ScheduledThreadPoolExecutor",
   "webdroid/Executor"]) {
@@ -460,8 +481,8 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       "allowCoreThreadTimeOut(Z)V": function () {},
       "getPoolSize()I": function (this: JExecutor) { return this.workers.length; },
       "getActiveCount()I": function (this: JExecutor) { return this.workers.filter((w) => w.busy).length; },
-      "getCorePoolSize()I": function (this: JExecutor) { return this.limit; },
-      "getMaximumPoolSize()I": function (this: JExecutor) { return this.limit; },
+      "getCorePoolSize()I": function (this: JExecutor) { return this.pool ? this.coreSize : this.limit; },
+      "getMaximumPoolSize()I": function (this: JExecutor) { return this.pool ? this.maxSize : this.limit; },
       "remove(Ljava/lang/Runnable;)Z": removeQueued,
       "setKeepAliveTime(JLjava/util/concurrent/TimeUnit;)V": function () {},
       "getQueue()Ljava/util/concurrent/BlockingQueue;": function (this: JExecutor) {
@@ -874,7 +895,11 @@ const mkBlockingQueue = (name: string, deque = false) => rt.register({
       for (const v of await toJsArray(c)) this.enqueue(v);
     },
     "put(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); },
-    "offer(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
+    "offer(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) {
+      if (v == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      if (name === "java/util/concurrent/SynchronousQueue" && !this.takers.length) return 0;
+      this.enqueue(v); return 1;
+    },
     "offer(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
     "add(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
     "take()Ljava/lang/Object;": takeFirst,
