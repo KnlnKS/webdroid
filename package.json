@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "fflate": "^0.8.2",
+    "libheif-js": "1.23.2",
     "node-forge": "^1.4.0",
     "sql.js": "workspace:*",
     "tough-cookie": "^6.0.2",

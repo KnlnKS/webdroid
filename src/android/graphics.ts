@@ -17,6 +17,7 @@ import { type JRenderEffect } from "./rendereffect";
 import { JTypedValue, type JDisplayMetrics } from "./util";
 import { parcelCreator } from "./parcelable";
 import type { JParcel } from "./parcel";
+import { decodeHeif, isHeif } from "./heif";
 
 const cssCache = new Map<number, string>();
 export function cssColor(argb: number): string {
@@ -2318,7 +2319,12 @@ export async function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null,
   let img: ImageBitmap | undefined;
   try {
     const blob = new Blob([bytes as BlobPart]);
-    img = await createImageBitmap(blob);
+    try { img = await createImageBitmap(blob); }
+    catch (error) {
+      if (!isHeif(bytes)) throw error;
+      img = await decodeHeif(bytes);
+      if (opts) opts.outMimeType = "image/heif";
+    }
     if (opts) {
       opts.outWidth = img.width;
       opts.outHeight = img.height;
