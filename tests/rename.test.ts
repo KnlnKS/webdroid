@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { vfs } from "../src/jvm/natives/jio";
+import { vfs, mkFile } from "../src/jvm/natives/jio";
 import { BytesFile } from "../src/shell/lazyfile";
 import { renamePath } from "../src/native/stdio";
+import { rt } from "../src/jvm/runtime";
+import { vcall } from "../src/jvm/natives/jlang";
 
 describe("renamePath", () => {
   test("moves a loaded file and keeps a lazy source lazy", () => {
@@ -24,10 +26,11 @@ describe("renamePath", () => {
     expect(vfs.exists("/data/t/f")).toBe(true);
   });
 
-  test("renames a directory with its entries", () => {
+  test("Java and native renames carry directory entries", async () => {
+    rt.link("java/io/File");
     vfs.write("/data/t/old/sub/x", new Uint8Array([4]));
     vfs.mkdir("/data/t/old/empty");
-    expect(renamePath(null, "/data/t/old", "/data/t/new")).toBe(0);
+    expect(await vcall(mkFile("/data/t/old"), "renameTo", "(Ljava/io/File;)Z", mkFile("/data/t/new"))).toBe(1);
     expect(vfs.exists("/data/t/old")).toBe(false);
     expect([...vfs.read("/data/t/new/sub/x")!]).toEqual([4]);
     expect(vfs.isDir("/data/t/new/empty")).toBe(true);

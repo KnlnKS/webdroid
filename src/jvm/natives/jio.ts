@@ -6,7 +6,7 @@ import { vcall, vcallMaybe, vcallOn, curThread, after, stringHash, stringCompare
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
 import { procText } from "../../shell/procfs";
 import { mappedBuffer, mappedReadOnlyBuffer, type JBuffer } from "./jnio";
-import { javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd } from "../../native/stdio";
+import { renamePath, javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd } from "../../native/stdio";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
  *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
@@ -191,7 +191,7 @@ rt.register({
     "delete()Z": function (this: JFile) { return vfs.delete(this.path) ? 1 : 0; },
     "deleteOnExit()V": function () {},
     "renameTo(Ljava/io/File;)Z": function (this: JFile, dst: JFile) {
-      return vfs.rename(this.path, dst.path) ? 1 : 0;
+      return renamePath(null, this.path, dst.path) === 0 ? 1 : 0;
     },
     "list()[Ljava/lang/String;": function (this: JFile) {
       return jarray(vfs.list(this.path), "Ljava/lang/String;");
