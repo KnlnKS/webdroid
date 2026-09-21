@@ -107,6 +107,7 @@ const SERVICE_CLASS: Record<string, string> = {
   input: "android/hardware/input/InputManager",
   media_router: "android/media/MediaRouter",
   vibrator: "android/os/Vibrator",
+  vibrator_manager: "android/os/VibratorManager",
   audio: "android/media/AudioManager",
   phone: "android/telephony/TelephonyManager",
   notification: "android/app/NotificationManager",
@@ -141,7 +142,7 @@ const SERVICE_CLASS: Record<string, string> = {
 };
 const SERVICE_NAME = new Map(Object.entries(SERVICE_CLASS).map(([n, c]) => [c, n]));
 SERVICE_NAME.set("android/view/WindowManager", "window");
-export function systemService(jctx: JContext, name: string): unknown {
+export function systemService(jctx: JContext | null, name: string): unknown {
   if (name === "layout_inflater") return getInflater(jctx);
   if (name === "storagestats") return null;
   let s = services.get(name);

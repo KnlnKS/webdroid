@@ -54,10 +54,24 @@ rt.register({
       "getIconResource()I": "iconResource", "getPrimaryColor()I": "primaryColor" }),
   },
 });
-class JActivityOptions extends JObj { animationType = -1; }
+class JActivityOptions extends JObj {
+  animationType = -1;
+  packageName: string | null = null;
+  bounds: number[] | null = null;
+}
 rt.register({
   name: "android/app/ActivityOptions", ctor: JActivityOptions,
   methods: {
+    "static makeScaleUpAnimation(Landroid/view/View;IIII)Landroid/app/ActivityOptions;": async (view: JView, x: number, y: number, width: number, height: number) => {
+      const options = new JActivityOptions();
+      const context = await vcall(view, "getContext", "()Landroid/content/Context;");
+      options.packageName = await vcall(context, "getPackageName", "()Ljava/lang/String;");
+      const location = new Int32Array(2);
+      await vcall(view, "getLocationOnScreen", "([I)V", location);
+      options.animationType = 2;
+      options.bounds = [location[0] + x, location[1] + y, width, height];
+      return options;
+    },
     "static makeBasic()Landroid/app/ActivityOptions;": () => new JActivityOptions(),
     "static makeSceneTransitionAnimation(Landroid/app/Activity;[Landroid/util/Pair;)Landroid/app/ActivityOptions;": (activity: JActivity) => {
       if (!activity) return rt.npe();
@@ -66,7 +80,10 @@ rt.register({
     },
     "toBundle()Landroid/os/Bundle;": function (this: JActivityOptions) {
       const bundle = new JBundle();
+      if (this.packageName !== null) bundle.map.set("android:activity.packageName", this.packageName);
       if (this.animationType !== -1) bundle.map.set("android:activity.animType", this.animationType);
+      if (this.bounds) for (const [i, key] of ["animStartX", "animStartY", "animWidth", "animHeight"].entries())
+        bundle.map.set("android:activity." + key, this.bounds[i]);
       return bundle;
     },
   },
@@ -561,6 +578,9 @@ for (const [name, methods, statics] of [
   ["android/bluetooth/BluetoothAdapter", {
     "static getDefaultAdapter()Landroid/bluetooth/BluetoothAdapter;": () => null,
     "isEnabled()Z": () => 0,
+  }],
+  ["android/os/VibratorManager", {
+    "getDefaultVibrator()Landroid/os/Vibrator;": () => systemService(null, "vibrator"),
   }],
   ["android/os/Vibrator", {
     "vibrate(J)V": (ms: bigint) => globalThis.navigator?.vibrate?.(Number(ms)),
