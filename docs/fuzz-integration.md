@@ -46,6 +46,32 @@ is identical to the tested candidate. Post-merge CPU: thread 3295.035 ms (-3.31%
 6024.767 ms (-0.96%); 39/39 steps complete with the same clean compatibility checks.
 Evidence: `post-1-1.json`.
 
+### 2. Layout invalidation — accepted
+
+Source `4b7989fa`, extracted as `1182651` plus standalone fixture setup `9136d42`.
+Two new core regression cases reproduce missed root remeasurement on the pre-change source;
+both pass after the fix. Nine focused tests and typecheck pass. The existing fixture needed
+native registration when run alone; initialization is now explicit.
+
+Three alternating FitNotes pairs: baseline thread/process 3248.559/5904.490 ms, candidate
+3164.396/5802.566 ms (-2.59%/-1.73%). All 234 steps across six runs pass; 39 screenshots
+and semantic trees match the baseline repeats. Production tree:
+`38e8731312d43692e8f0b400bdebaf7db40e8d11`.
+
+Additional 36-step Mihon/Harmonic captures complete without wedges, action errors or added
+missing/native requirements; all 108 process snapshots succeed on each revision. The
+source branch's newer Mihon text-readiness condition times out on BOTH revisions, because
+its accessibility expansion is not included here. Both also reproduce Harmonic's atomic
+regex error. The matching captures are retained as limits, not counted as clean passes.
+Mihon uses frozen main's original flow definition and the same async-capable capture
+harness on both sides. Three alternating pairs complete all 17 steps without timeouts or
+errors. Median thread/process CPU: main 8893.414/20508.902 ms, candidate
+8655.656/20238.509 ms (-2.67%/-1.32%). All 17 trees match; 15/17 screenshots match exactly.
+The two differences are confined to the random empty-library face (visually inspected;
+labels and geometry outside that face match). No golden changed. Evidence:
+`mihon-summary-2.json`, `mihon-pixels-2.json`, `mihon-{base,chunk}-2-*`, and
+`{base,chunk}-2-e2e/`.
+
 ## Deferred scope
 
 - Generated API expansion and native/DEX ownership: broad coupling and compatibility risk.
