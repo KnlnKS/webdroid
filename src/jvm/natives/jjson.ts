@@ -131,7 +131,7 @@ function jsonWrap(v: unknown): unknown {
   if (typeof v === "boolean") return v ? TRUE : FALSE;
   return v;
 }
-const isObj = (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v);
+const isObj = (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v) && !(v instanceof JObj);
 /** the typed get/opt family both containers answer, keyed by name on an object and by index on an array */
 /** the text a string getter answers for a stored value: Java's toString for an object (a nested
  *  JSONObject/JSONArray prints its JSON), the literal for a primitive */
@@ -155,6 +155,11 @@ function accessors<S>(K: string, read: (self: S, k: never) => unknown): NonNulla
     [`getBoolean(${K})Z`]: function (this: S, k: never) { return read(this, k) ? 1 : 0; },
     [`optBoolean(${K})Z`]: function (this: S, k: never) { return read(this, k) ? 1 : 0; },
     [`optBoolean(${K}Z)Z`]: function (this: S, k: never, d: number) { const v = read(this, k); return v === undefined ? d : v ? 1 : 0; },
+    [`getJSONObject(${K})${O}`]: function (this: S, k: never) {
+      const v = read(this, k);
+      if (!isObj(v)) throw rt.mkThrowable("org/json/JSONException", k + " is not an object");
+      return jsonWrap(v);
+    },
     [`optJSONObject(${K})${O}`]: function (this: S, k: never) { const v = read(this, k); return isObj(v) ? jsonWrap(v) : null; },
     [`getJSONArray(${K})${A}`]: function (this: S, k: never) {
       const v = read(this, k);
@@ -179,7 +184,7 @@ async function publicWrap(v: unknown): Promise<unknown> {
   if (v === null || v === undefined || v instanceof JJSONObject || v instanceof JJSONArray) return v ?? null;
   if (Array.isArray(v)) {
     const array = new JJSONArray();
-    array.a = v.map(jsonUnwrap);
+    array.a = await Promise.all(v.map(async value => jsonUnwrap(await publicWrap(value))));
     return array;
   }
   if (ArrayBuffer.isView(v) && !(v instanceof DataView)) {
@@ -196,7 +201,7 @@ async function publicWrap(v: unknown): Promise<unknown> {
   }
   if (rt.iof(v, "java/util/Collection")) {
     const array = new JJSONArray();
-    array.a = (await toJsArray(v)).map(jsonUnwrap);
+    array.a = await Promise.all((await toJsArray(v)).map(async value => jsonUnwrap(await publicWrap(value))));
     return array;
   }
   if (rt.iof(v, "java/lang/Number") || rt.iof(v, "java/lang/Boolean") || rt.iof(v, "java/lang/Character")) return v;
@@ -204,7 +209,7 @@ async function publicWrap(v: unknown): Promise<unknown> {
 }
 async function initFromMap(object: JJSONObject, map: unknown): Promise<void> {
   for (const entry of await toJsArray(await vcall(map, "entrySet", "()Ljava/util/Set;"))) {
-    object.o[String(await vcall(entry, "getKey", "()Ljava/lang/Object;"))] = jsonUnwrap(await vcall(entry, "getValue", "()Ljava/lang/Object;"));
+    object.o[String(await vcall(entry, "getKey", "()Ljava/lang/Object;"))] = jsonUnwrap(await publicWrap(await vcall(entry, "getValue", "()Ljava/lang/Object;")));
   }
 }
 /** the JSON text of a stored tree; a long that reached storage unboxed (a Map's boxed values) prints its digits */
@@ -316,10 +321,6 @@ rt.register({
       if (!(k in this.o)) throw rt.mkThrowable("org/json/JSONException", "No value for " + k);
       return jsonText(this.o[k]);
     },
-    "getJSONObject(Ljava/lang/String;)Lorg/json/JSONObject;": function (this: JJSONObject, k: string) {
-      if (!isObj(this.o[k])) throw rt.mkThrowable("org/json/JSONException", k + " is not an object");
-      return jsonWrap(this.o[k]);
-    },
     "has(Ljava/lang/String;)Z": function (this: JJSONObject, k: string) { return k in this.o ? 1 : 0; },
     "remove(Ljava/lang/String;)Ljava/lang/Object;": function (this: JJSONObject, k: string) {
       const v = jsonWrap(this.o[k] ?? null);
@@ -354,7 +355,6 @@ rt.register({
     "length()I": function (this: JJSONArray) { return this.a.length; },
     "get(I)Ljava/lang/Object;": function (this: JJSONArray, i: number) { return jsonWrap(this.a[i] ?? null); },
     ...accessors("I", (self: JJSONArray, i: number) => self.a[i]),
-    "getJSONObject(I)Lorg/json/JSONObject;": function (this: JJSONArray, i: number) { return jsonWrap(this.a[i]); },
     "getString(I)Ljava/lang/String;": function (this: JJSONArray, i: number) { return String(this.a[i]); },
     "remove(I)Ljava/lang/Object;": function (this: JJSONArray, i: number) { return jsonWrap(this.a.splice(i, 1)[0] ?? null); },
     "put(ILjava/lang/Object;)Lorg/json/JSONArray;": function (this: JJSONArray, i: number, v: unknown) { return putAt(this, i, jsonUnwrap(v)); },

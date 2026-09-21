@@ -32,5 +32,19 @@ test("JSONObject.wrap preserves JSON values and converts containers", async () =
   const map = await newObj("java/util/HashMap");
   await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "answer", boxed);
   expect(await vcall(await wrap(map), "toString", "()Ljava/lang/String;")).toBe('{"answer":7}');
+  const object = await newObj("org/json/JSONObject");
+  await vcall(object, "put", "(Ljava/lang/String;Ljava/lang/Object;)Lorg/json/JSONObject;", "raw", map);
+  expect(await vcall(object, "optJSONObject", "(Ljava/lang/String;)Lorg/json/JSONObject;", "raw")).toBeNull();
+  await expect(vcall(object, "getJSONObject", "(Ljava/lang/String;)Lorg/json/JSONObject;", "raw")).rejects.toMatchObject({
+    constructor: rt.link("org/json/JSONException").ctor,
+  });
+  await vcall(list, "add", "(Ljava/lang/Object;)Z", map);
+  await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "nested", await wrap(list));
+  const nested = await vcall(await wrap(map), "getJSONArray", "(Ljava/lang/String;)Lorg/json/JSONArray;", "nested");
+  const child = await vcall(nested, "getJSONObject", "(I)Lorg/json/JSONObject;", 2);
+  expect(await vcall(child, "getInt", "(Ljava/lang/String;)I", "answer")).toBe(7);
+  await expect(vcall(nested, "getJSONObject", "(I)Lorg/json/JSONObject;", 0)).rejects.toMatchObject({
+    constructor: rt.link("org/json/JSONException").ctor,
+  });
   expect(await wrap(new JObj())).toBeNull();
 });
