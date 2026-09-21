@@ -185,6 +185,7 @@ class JExecutor extends JObj {
   maxSize = 1;
   pool = false;
   factory: unknown = null;
+  rejectionHandler: unknown = null;
   workers: { thread: JThread | null; busy: boolean }[] = [];
   jobs = new Map<JFuture, unknown>();
   tasks: { task: unknown; f: JFuture; method: string; desc: string; queued: boolean; finish: () => void }[] = [];
@@ -316,9 +317,14 @@ function submit(ex: JExecutor, task: unknown, method: string, desc: string, dela
   });
   return f;
 }
+function reject(ex: JExecutor, task: unknown): unknown {
+  if (ex.rejectionHandler) return vcall(ex.rejectionHandler, "rejectedExecution",
+    "(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V", task, ex);
+  throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", ex.shut ? "executor shut down" : "executor saturated");
+}
 function execute(this: JExecutor, r: unknown): unknown {
   if (r == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-  if (this.shut) throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "executor shut down");
+  if (this.shut) return reject(this, r);
   const enqueue = (queued = false) => {
     const f = submit(this, r, "run", "()V", 0, queued);
     void f.promise!.then(() => {
@@ -331,7 +337,7 @@ function execute(this: JExecutor, r: unknown): unknown {
   return after(vcall(this.queue, "offer", "(Ljava/lang/Object;)Z", r), accepted => {
     if (accepted) return enqueue(true);
     if (this.pending >= this.limit) {
-      if (this.limit >= this.maxSize) throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "executor saturated");
+      if (this.limit >= this.maxSize) return reject(this, r);
       this.limit++;
     }
     return enqueue();
@@ -450,14 +456,14 @@ function repeating(name: string, fixedRate: boolean): NativeSpec["methods"] {
     },
   };
 }
-function initScheduled(this: JExecutor, core: number, factory: unknown = null) {
+function initScheduled(this: JExecutor, core: number, factory: unknown = null, handler: unknown = null) {
   if (core < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative pool size");
-  this.limit = Math.max(1, core); this.factory = factory;
+  this.limit = Math.max(1, core); this.factory = factory; this.rejectionHandler = handler;
 }
-function initPool(this: JExecutor, core: number, max: number, keep: bigint, unit: JTimeUnit, queue: JList, factory: unknown = null) {
+function initPool(this: JExecutor, core: number, max: number, keep: bigint, unit: JTimeUnit, queue: JList, factory: unknown = null, handler: unknown = null) {
   if (core < 0 || max <= 0 || max < core || keep < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid pool size");
   this.pool = true; this.coreSize = core; this.maxSize = max;
-  this.limit = Math.max(1, core); this.queue = queue; this.factory = factory;
+  this.limit = Math.max(1, core); this.queue = queue; this.factory = factory; this.rejectionHandler = handler;
 }
 for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurrent/ScheduledThreadPoolExecutor",
   "webdroid/Executor"]) {
@@ -472,11 +478,11 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       ...executorMethods,
       "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V": initPool,
       "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/ThreadFactory;)V": initPool,
-      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number, max: number, keep: bigint, unit: JTimeUnit, queue: JList) { initPool.call(this, core, max, keep, unit, queue); },
+      "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number, max: number, keep: bigint, unit: JTimeUnit, queue: JList, handler: unknown) { initPool.call(this, core, max, keep, unit, queue, null, handler); },
       "<init>(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;Ljava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": initPool,
       "<init>(I)V": initScheduled,
       "<init>(ILjava/util/concurrent/ThreadFactory;)V": initScheduled,
-      "<init>(ILjava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number) { initScheduled.call(this, core); },
+      "<init>(ILjava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number, handler: unknown) { initScheduled.call(this, core, null, handler); },
       "<init>(ILjava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": initScheduled,
       "allowCoreThreadTimeOut(Z)V": function () {},
       "getPoolSize()I": function (this: JExecutor) { return this.workers.length; },
@@ -490,7 +496,13 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
         return this.queue;
       },
       "purge()V": function () {},
-      "setRejectedExecutionHandler(Ljava/util/concurrent/RejectedExecutionHandler;)V": function () {},
+      "setRejectedExecutionHandler(Ljava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, handler: unknown) {
+        if (!handler) throw rt.mkThrowable("java/lang/NullPointerException", null);
+        this.rejectionHandler = handler;
+      },
+      "getRejectedExecutionHandler()Ljava/util/concurrent/RejectedExecutionHandler;": function (this: JExecutor) {
+        return this.rejectionHandler ??= rt.make("java/util/concurrent/ThreadPoolExecutor$AbortPolicy");
+      },
       // kotlinx looks this up reflectively (removeFutureOnCancel); a cancelled schedule() never runs
       // here regardless, so the policy is just remembered
       "setRemoveOnCancelPolicy(Z)V": function (this: JExecutor, v: number) { this.removeOnCancel = v; },
@@ -980,17 +992,22 @@ for (const [i, ...ifaces] of [["java/util/concurrent/Executor"], ["java/util/con
   ["java/util/concurrent/RejectedExecutionHandler"]]) {
   rt.register({ name: i, ctor: class extends JObj {}, ifaces });
 }
-// ThreadPoolExecutor's four saturation policies. Our executors never saturate, so the policy is
-// only ever constructed and handed over — but a pool built with one must not fail to link.
 for (const [n, run] of [["AbortPolicy", 0], ["CallerRunsPolicy", 1], ["DiscardPolicy", 0], ["DiscardOldestPolicy", 0]] as const) {
   rt.register({
     name: "java/util/concurrent/ThreadPoolExecutor$" + n, ctor: class extends JObj {},
     ifaces: ["java/util/concurrent/RejectedExecutionHandler"],
     methods: {
       "<init>()V": function () {},
-      "rejectedExecution(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V": (r: unknown) => {
-        if (run) return vcall(r, "run", "()V");
+      "rejectedExecution(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V": async (r: unknown, ex: JExecutor) => {
         if (n === "AbortPolicy") throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "rejected");
+        if (await vcall(ex, "isShutdown", "()Z")) return;
+        if (run) return vcall(r, "run", "()V");
+        if (n === "DiscardOldestPolicy") {
+          const queue = await vcall(ex, "getQueue", "()Ljava/util/concurrent/BlockingQueue;");
+          const oldest = await vcall(queue, "poll", "()Ljava/lang/Object;");
+          if (oldest) await removeQueued.call(ex, oldest);
+          return vcall(ex, "execute", "(Ljava/lang/Runnable;)V", r);
+        }
       },
     },
   });

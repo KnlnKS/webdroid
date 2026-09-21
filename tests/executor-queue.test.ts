@@ -184,7 +184,16 @@ test("a pool grows when a wrapped synchronous queue refuses storage", async () =
   expect(await vcall(ex, "getMaximumPoolSize", "()I")).toBe(2);
   expect(await vcall(queue.delegate, "size", "()I")).toBe(0);
   await expect(vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", new RecordingRunnable())).rejects.toBeDefined();
+  const handler = await newObj("java/util/concurrent/ThreadPoolExecutor$CallerRunsPolicy");
+  await vcall(ex, "setRejectedExecutionHandler", "(Ljava/util/concurrent/RejectedExecutionHandler;)V", handler);
+  const overflow = new RecordingRunnable();
+  await vcall(ex, "execute", "(Ljava/lang/Runnable;)V", overflow);
+  expect(overflow.runs).toBe(1);
+  expect(await vcall(ex, "getRejectedExecutionHandler", "()Ljava/util/concurrent/RejectedExecutionHandler;")).toBe(handler);
   first.release(); second.release();
   await vcall(a, "get", "()Ljava/lang/Object;");
   await vcall(b, "get", "()Ljava/lang/Object;");
+  await vcall(ex, "shutdown", "()V");
+  await vcall(ex, "execute", "(Ljava/lang/Runnable;)V", overflow);
+  expect(overflow.runs).toBe(1);
 });
