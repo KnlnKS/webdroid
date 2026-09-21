@@ -2361,6 +2361,10 @@ rt.register({
     "static makeMeasureSpec(II)I": (size: number, mode: number) => makeSpec(size, mode),
     "static getMode(I)I": (s: number) => specMode(s),
     "static getSize(I)I": (s: number) => specSize(s),
+    "static toString(I)Ljava/lang/String;": (s: number) => {
+      const mode = specMode(s);
+      return `MeasureSpec: ${mode === MS_EXACTLY ? "EXACTLY" : mode === MS_AT_MOST ? "AT_MOST" : mode === MS_UNSPEC ? "UNSPECIFIED" : mode} ${specSize(s)}`;
+    },
   },
 });
 rt.register({
