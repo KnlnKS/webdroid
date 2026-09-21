@@ -41,7 +41,10 @@ Three alternating pairs (CPU ms, medians):
 All six runs: 39 steps, visible, advancing ticks, no wedges/timeouts/errors/missing APIs,
 no native-required entries or draw/layout failures. All 39 captured screenshots match a
 baseline repeat exactly; all 39 semantic trees match. Evidence: `summary-1.json`,
-`pixels-1.json`, `base-1-*`, `chunk-1-*`. Post-merge verification follows.
+`pixels-1.json`, `base-1-*`, `chunk-1-*`. Merge `42ab191f`; production tree `6db61cb42fd19ead6e9525653752071b3cf67d91`
+is identical to the tested candidate. Post-merge CPU: thread 3295.035 ms (-3.31%), process
+6024.767 ms (-0.96%); 39/39 steps complete with the same clean compatibility checks.
+Evidence: `post-1-1.json`.
 
 ## Deferred scope
 
