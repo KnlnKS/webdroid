@@ -31,6 +31,7 @@ export class JTextView extends JView {
   transformation: unknown = null;
   editableFactory: unknown = null; spannableFactory: unknown = null;
   keyListener: unknown = null; movementMethod: unknown = null; selActionMode: unknown = null; editorActionL: unknown = null;
+  insertionActionMode: unknown = null;
   drawableTint: JColorStateList | null = null;
   imeOptions = 0; privateImeOptions: string | null = null; breakStrategy = 0; hyphenation = 0; autoSizeType = 0;
   linksClickable = true; fontVariation: string | null = null;
@@ -456,6 +457,8 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getFontVariationSettings()Ljava/lang/String;": function (this: JTextView) { return this.fontVariation; },
   "setCustomSelectionActionModeCallback(Landroid/view/ActionMode$Callback;)V": function (this: JTextView, cb: unknown) { this.selActionMode = cb; },
   "getCustomSelectionActionModeCallback()Landroid/view/ActionMode$Callback;": function (this: JTextView) { return this.selActionMode; },
+  "setCustomInsertionActionModeCallback(Landroid/view/ActionMode$Callback;)V": function (this: JTextView, cb: unknown) { this.insertionActionMode = cb; },
+  "getCustomInsertionActionModeCallback()Landroid/view/ActionMode$Callback;": function (this: JTextView) { return this.insertionActionMode; },
   "onCheckIsTextEditor()Z": function (this: JTextView) { return this.editable ? 1 : 0; },
   // AOSP: an explicit line height is applied as extra spacing over the font's own line height
   "setLineHeight(I)V": function (this: JTextView, h: number) { this.lineSpacingMult = 1; this.lineSpacingExtra = h - this.lineHeight() + this.lineSpacingExtra; requestLayout(this); },

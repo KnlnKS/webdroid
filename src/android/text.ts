@@ -99,6 +99,16 @@ export class JTextPaint extends JPaint {
    *  shares the one device-density constant, not a magic literal. */
   density = device.density;
 }
+function copyTextPaint(src: JTextPaint, dst: JTextPaint): void {
+  copyPaint(src, dst);
+  dst.linkColor = src.linkColor;
+  dst.bgColor = src.bgColor;
+  dst.baselineShift = src.baselineShift;
+  dst.drawableState = src.drawableState;
+  dst.density = src.density;
+  dst.underlineColor = src.underlineColor;
+  dst.underlineThickness = src.underlineThickness;
+}
 rt.register({
   name: "android/text/TextPaint", ctor: JTextPaint, sup: "android/graphics/Paint",
   fields: ["linkColor", "bgColor", "baselineShift", "drawableState", "density", "underlineColor", "underlineThickness"],
@@ -109,15 +119,7 @@ rt.register({
       if (p) copyPaint(p, this);
     },
     "set(Landroid/text/TextPaint;)V": function (this: JTextPaint, p: JTextPaint) {
-      if (!p) return;
-      copyPaint(p, this);
-      this.linkColor = p.linkColor;
-      this.bgColor = p.bgColor;
-      this.baselineShift = p.baselineShift;
-      this.drawableState = p.drawableState;
-      this.density = p.density;
-      this.underlineColor = p.underlineColor;
-      this.underlineThickness = p.underlineThickness;
+      if (p) copyTextPaint(p, this);
     },
     // the CharSequence half of Paint.getRunCharacterAdvance: same body, but flattening a
     // Spanned belongs here. AOSP's StaticLayout reads per-character advances through it.
@@ -637,8 +639,6 @@ for (const [name] of [
   ["android/text/style/BackgroundColorSpan", { color: 0 }],
   ["android/text/style/UnderlineSpan", {}],
   ["android/text/style/StrikethroughSpan", {}],
-  ["android/text/style/ClickableSpan", {}],
-  ["android/text/style/URLSpan", {}],
 ] as const) {
   const Base = spanHierarchy[name].sup === "android/text/style/MetricAffectingSpan" ? JMetricAffectingSpan : JCharacterStyle;
   const c = class extends Base { color = 0; style = 0; size = 1; url = ""; };
@@ -659,6 +659,28 @@ for (const [name] of [
     },
   });
 }
+
+class JClickableSpan extends JCharacterStyle {}
+rt.register({
+  name: "android/text/style/ClickableSpan", ctor: JClickableSpan,
+  ...spanHierarchy["android/text/style/ClickableSpan"],
+  methods: {
+    "<init>()V": function () {},
+    "updateDrawState(Landroid/text/TextPaint;)V": async (paint: JTextPaint) => {
+      await vcall(paint, "setColor", "(I)V", paint.linkColor);
+      await vcall(paint, "setUnderlineText", "(Z)V", 1);
+    },
+  },
+});
+class JURLSpan extends JClickableSpan { url = ""; }
+rt.register({
+  name: "android/text/style/URLSpan", ctor: JURLSpan,
+  ...spanHierarchy["android/text/style/URLSpan"],
+  methods: {
+    "<init>(Ljava/lang/String;)V": function (this: JURLSpan, url: string) { this.url = url; },
+    "getURL()Ljava/lang/String;": function (this: JURLSpan) { return this.url; },
+  },
+});
 
 class JTypefaceSpan extends JMetricAffectingSpan {
   family: string | null = null;
@@ -737,7 +759,7 @@ export function drawStyledText(src: unknown, text: string, start: number, canvas
     canvas.ctx.save();
     try {
       for (let i = 0; i < edges.length - 1; i++) {
-        copyPaint(paint, p); p.color = color; p.textAlignN = 0;
+        copyTextPaint(paint, p); p.color = color; p.textAlignN = 0;
         for (const r of spans) if (r.start <= edges[i] && r.end > edges[i]) {
           const pending = vcallMaybe(r.span, "updateDrawState", "(Landroid/text/TextPaint;)V", p);
           if (pending instanceof Promise) await pending;

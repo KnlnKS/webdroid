@@ -24,4 +24,8 @@ test("TextView retains link color lists and updates its paint across state chang
   expect(await vcall(view, "getLinkTextColors", "()Landroid/content/res/ColorStateList;")).toBeNull();
   expect(view.paintT.linkColor).toBe(0xff112233 | 0);
   expect(perf.layoutRequests).toBe(layouts);
+  const span = await newObj("android/text/style/URLSpan", "(Ljava/lang/String;)V", "https://example.com");
+  await vcall(span, "updateDrawState", "(Landroid/text/TextPaint;)V", view.paintT);
+  expect(view.paintT.color).toBe(view.paintT.linkColor);
+  expect(view.paintT.underline).toBe(true);
 });
