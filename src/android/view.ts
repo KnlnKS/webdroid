@@ -2220,7 +2220,7 @@ export async function fireDrawPass(root: JView) {
 }
 
 export const lpAttrs = function (this: JLayoutParams, _c: unknown, set: JAttrSet) { lpFromAttrs(this, set.res, set); };
-const marginCopy = function (this: JMarginLP, o: JLayoutParams | null) {
+export const marginCopy = function (this: JMarginLP, o: JLayoutParams | null) {
   if (!o) return;
   this.width = o.width; this.height = o.height;
   if (o instanceof JMarginLP) { this.marginL = o.marginL; this.marginT = o.marginT; this.marginR = o.marginR; this.marginB = o.marginB; }

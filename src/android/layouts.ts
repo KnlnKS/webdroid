@@ -2,7 +2,7 @@ import { AID } from "./res";
 import {
   JMarginLP, type JLayoutParams, JViewGroup, JFrameLP, MATCH_PARENT, lpFromAttrs, lpAttrs, measureChildWithMargins,
   resolveSizeAndState, makeSpec, MS_EXACTLY, childMeasureSpec, measureView, layoutView, initViewFromCtx,
-  requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState, viewConstructors
+  requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState, viewConstructors, marginCopy
 } from "./view";
 import { JObj, type NativeSpec, rt, callSelf, noops } from "../jvm/runtime";
 import { type JAttrSet, type Resources, obtainStyled, rvInt, rvFloat, rvDimen, onFramework } from "./res";
@@ -19,8 +19,7 @@ import { vcall, vcallMaybe } from "../jvm/natives/jlang";
 function adoptLp<T extends JMarginLP>(Ctor: new () => T, lp: JLayoutParams | null): T {
   if (lp instanceof Ctor) return lp;
   const n = new Ctor();
-  if (lp) { n.width = lp.width; n.height = lp.height; }
-  if (lp instanceof JMarginLP) { n.marginL = lp.marginL; n.marginT = lp.marginT; n.marginR = lp.marginR; n.marginB = lp.marginB; }
+  marginCopy.call(n, lp);
   return n;
 }
 
@@ -848,7 +847,8 @@ onFramework(() => { for (const [n, verb] of rlAttrByName) rlAttrIds.push([AID(n)
 class JRelativeLayout extends JViewGroup {
   /** positions resolved by the last onMeasure, consumed by onLayout */
   rlPos = new Map<JView, { l: number; t: number }>();
-  gravityR = 0;
+  gravityR = G.START | G.TOP;
+  ignoreGravity = 0;
 }
 const NO_MARGIN = { marginL: 0, marginT: 0, marginR: 0, marginB: 0 };
 const relativeMethods: NativeSpec["methods"] = {
@@ -856,10 +856,19 @@ const relativeMethods: NativeSpec["methods"] = {
     await initViewFromCtx(this, c, set);
     if (set && this.jres) {
       const ta = obtainStyled(this.jres, this.theme, set, [AID("gravity")], 0, 0);
-      if (ta.vals[0]) this.gravityR = rvInt(this.jres, ta.vals[0], 0);
+      if (ta.vals[0]) this.gravityR = rvInt(this.jres, ta.vals[0], this.gravityR);
     }
   },
-  "setGravity(I)V": function (this: JRelativeLayout, g: number) { this.gravityR = g; },
+  "getGravity()I": function (this: JRelativeLayout) { return this.gravityR; },
+  "getIgnoreGravity()I": function (this: JRelativeLayout) { return this.ignoreGravity; },
+  "setIgnoreGravity(I)V": function (this: JRelativeLayout, id: number) { this.ignoreGravity = id; },
+  "setGravity(I)V": function (this: JRelativeLayout, g: number) {
+    if (this.gravityR === g) return;
+    if (!(g & G.H_MASK)) g |= G.START;
+    if (!(g & G.V_MASK)) g |= G.TOP;
+    this.gravityR = g;
+    requestLayout(this);
+  },
   "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;": function (this: JRelativeLayout, set: JAttrSet) {
     const lp = lpFromAttrs(new JRelativeLP(), this.jres!, set);
     if (set.node) {
@@ -881,6 +890,7 @@ const relativeMethods: NativeSpec["methods"] = {
   "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": (lp: unknown) => +(lp instanceof JRelativeLP),
   "onMeasure(II)V": async function (this: JRelativeLayout, wSpec: number, hSpec: number) {
     const availW = specSize(wSpec), availH = specSize(hSpec);
+    const wrapW = specMode(wSpec) !== MS_EXACTLY, wrapH = specMode(hSpec) !== MS_EXACTLY;
     const kids = this.children.filter((c) => c.visibility !== 8);
     for (const c of kids) {
       const w = c.lp?.width === MATCH_PARENT && specMode(wSpec) !== MS_UNSPEC ? makeSpec(availW, MS_EXACTLY) : wSpec;
@@ -916,9 +926,9 @@ const relativeMethods: NativeSpec["methods"] = {
             return id && id > 0 ? byId.get(id) ?? null : null;
           };
           if (lp.rules[RL.ALIGN_PARENT_RIGHT]) l = availW - this.padR - c.measuredW - m.marginR;
-          if (lp.rules[RL.CENTER_HORIZONTAL] || lp.rules[RL.CENTER_IN_PARENT]) l = (availW - c.measuredW) >> 1;
+          if (!wrapW && (lp.rules[RL.CENTER_HORIZONTAL] || lp.rules[RL.CENTER_IN_PARENT])) l = (availW - c.measuredW) >> 1;
           if (lp.rules[RL.ALIGN_PARENT_BOTTOM]) t = availH - this.padB - c.measuredH - m.marginB;
-          if (lp.rules[RL.CENTER_VERTICAL] || lp.rules[RL.CENTER_IN_PARENT]) t = (availH - c.measuredH) >> 1;
+          if (!wrapH && (lp.rules[RL.CENTER_VERTICAL] || lp.rules[RL.CENTER_IN_PARENT])) t = (availH - c.measuredH) >> 1;
           const rOf = anchor(RL.RIGHT_OF);
           if (rOf) l = anchorPos(rOf).l + rOf.measuredW + m.marginL;
           const lOf = anchor(RL.LEFT_OF);
@@ -963,14 +973,19 @@ const relativeMethods: NativeSpec["methods"] = {
       // the first walk places everything; only a forward reference makes a second one worth it
       if (walk === 0) moved = forward;
     }
-    this.measuredW = resolveSizeAndState(maxR + this.padR, wSpec);
-    this.measuredH = resolveSizeAndState(maxB + this.padB, hSpec);
+    this.measuredW = resolveSizeAndState(Math.max(this.minW, maxR + this.padR), wSpec);
+    this.measuredH = resolveSizeAndState(Math.max(this.minH, maxB + this.padB), hSpec);
     for (const c of kids) {
       if (c.lp?.width === MATCH_PARENT || c.lp?.height === MATCH_PARENT) {
         const m = c.lp instanceof JMarginLP ? c.lp : NO_MARGIN;
         const w = c.lp.width === MATCH_PARENT ? this.measuredW - this.padL - this.padR - m.marginL - m.marginR : c.measuredW;
         const h = c.lp.height === MATCH_PARENT ? this.measuredH - this.padT - this.padB - m.marginT - m.marginB : c.measuredH;
         await measureView(c, makeSpec(Math.max(0, w), MS_EXACTLY), makeSpec(Math.max(0, h), MS_EXACTLY));
+      }
+      const lp = c.lp, p = pos.get(c);
+      if (lp instanceof JRelativeLP && p) {
+        if (wrapW && (lp.rules[RL.CENTER_HORIZONTAL] || lp.rules[RL.CENTER_IN_PARENT])) p.l = (this.measuredW - c.measuredW) >> 1;
+        if (wrapH && (lp.rules[RL.CENTER_VERTICAL] || lp.rules[RL.CENTER_IN_PARENT])) p.t = (this.measuredH - c.measuredH) >> 1;
       }
     }
   },
@@ -993,7 +1008,13 @@ rt.register({
   methods: {
     "<init>(II)V": function (this: JRelativeLP, w: number, h: number) { this.width = w; this.height = h; },
     "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JRelativeLP, o: JLayoutParams) {
-      if (o) { this.width = o.width; this.height = o.height; }
+      this.width = o.width; this.height = o.height;
+    },
+    "<init>(Landroid/view/ViewGroup$MarginLayoutParams;)V": marginCopy,
+    "<init>(Landroid/widget/RelativeLayout$LayoutParams;)V": function (this: JRelativeLP, o: JRelativeLP) {
+      marginCopy.call(this, o);
+      this.rules.set(o.rules);
+      this.alignWithParent = o.alignWithParent;
     },
     "getRules()[I": function (this: JRelativeLP) { return this.rules; },
     "getRule(I)I": function (this: JRelativeLP, verb: number) { return this.rules[verb]; },

@@ -1,3 +1,18 @@
+# TikTok parity repair
+
+Branch: `codex/tiktok-parity`. Starting revision: `9071fec70953eb3b76df86c6cdede69bdf316eaf`.
+Status: reproducing current failures in full Chrome and the API 33 reference AVD.
+
+- Compare the unchanged TikTok APK at 1080×2160, 480 dpi, with screenshots and diagnostic evidence.
+- Trace reached platform failures to Android/DEX/native contracts; repair canonical owners.
+- Exercise guest onboarding, feed, swipes, resume and reachable navigation. Keep goldens unchanged.
+- Keep changes focused, remove redundant paths where justified, and avoid speculative APIs/tests.
+- During development test TikTok only plus owning core checks. Run the full serialized E2E matrix
+  once the final candidate is frozen; report existing failures and evidence limits explicitly.
+- Record mechanisms, paired captures, verification and focused commits in implementation history.
+
+---
+
 # Staged fuzz-audit integration
 
 Fixed comparison baseline: `02aec2c1f92c140a1754ba72a0e239a7305211da` (starting main).

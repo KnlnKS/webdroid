@@ -4712,3 +4712,23 @@ The broad API/ownership and software-renderer expansion remains deferred.
 
 See [the integration ledger](fuzz-integration.md) for every merge, withdrawal, CPU samples,
 visual comparisons, evidence paths and limitations. No golden changed.
+
+### 2026-09-21 — TikTok layout recovery (in progress)
+
+Starting `9071fec7`, full Chrome reproduces the black guest feed at 1080×2160/480 dpi.
+Video metadata arrives, but RelativeLayout.getGravity repeatedly aborts layout. Once supplied,
+getIgnoreGravity is the next reached failure. The bundled API 35 framework DEX establishes
+START|TOP defaults, gravity normalization/invalidation, ignore-gravity state and the distinct
+RelativeLayout/ MarginLayoutParams copy overloads. The typed copy owns its rule array; the
+base LayoutParams overload copies size only. Shared margin copying now has one owner.
+
+The next visible fault is wrap-content centering against the parent's AT_MOST limit: a
+72 px engagement count gives its wrapper a 594 px width on a 1080 px screen. AOSP's
+positionChildHorizontal/Vertical defer centering until wrap-content measurement finishes.
+The delegate now does likewise and respects minimum sizes. Existing layout coverage includes
+independent rule copies and one core centered-wrap measurement case. Nine owning layout tests
+pass. TikTok's 462,058 classes smoke-compile with zero method failures.
+
+Chrome reaches real video after removing the layout failures; screenshot/interaction parity
+and performance remain under investigation. Evidence is under `webdroid-shots/tiktok-parity/`.
+The API 33 AVD runs the unchanged APK, completed guest onboarding and plays its live feed.

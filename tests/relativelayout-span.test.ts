@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
-import { JView, JViewGroup, makeSpec, MS_EXACTLY, MS_AT_MOST } from "../src/android/view";
+import { JView, JViewGroup, JMarginLP, makeSpec, MS_EXACTLY, MS_AT_MOST } from "../src/android/view";
 
 rt.linkNatives();
 const RIGHT_OF = 1, ALIGN_PARENT_RIGHT = 11, ALIGN_PARENT_TOP = 10, ALIGN_PARENT_BOTTOM = 12, MATCH_PARENT = -1;
@@ -36,6 +36,13 @@ test("RelativeLayout rules expose their verb-indexed anchors", async () => {
   expect(rules.length).toBe(22);
   expect(rules[RIGHT_OF]).toBe(42);
   expect(rules[ALIGN_PARENT_RIGHT]).toBe(-1);
+  await vcall(params, "setMargins", "(IIII)V", 2, 3, 5, 7);
+  const copy = await newObj("android/widget/RelativeLayout$LayoutParams", "(Landroid/widget/RelativeLayout$LayoutParams;)V", params);
+  expect(copy).toBeInstanceOf(JMarginLP);
+  if (!(copy instanceof JMarginLP)) throw new Error("Invalid layout parameters");
+  expect([copy.marginL, copy.marginT, copy.marginR, copy.marginB]).toEqual([2, 3, 5, 7]);
+  await vcall(params, "removeRule", "(I)V", RIGHT_OF);
+  expect(await vcall(copy, "getRule", "(I)I", RIGHT_OF)).toBe(42);
 });
 
 test("RelativeLayout fills a match-parent overlay before centering its controls under AT_MOST", async () => {
@@ -51,4 +58,18 @@ test("RelativeLayout fills a match-parent overlay before centering its controls 
   await vcall(layout, "onLayout", "(ZIIII)V", 1, 0, 0, 360, 700);
   expect([layout.measuredW, layout.measuredH, overlay.measuredW, overlay.measuredH]).toEqual([360, 700, 360, 700]);
   expect([button.left, button.top, button.right, button.bottom]).toEqual([150, 320, 210, 380]);
+});
+
+test("RelativeLayout centers wrapping content inside its measured bounds", async () => {
+  const layout = rt.make("android/widget/RelativeLayout");
+  if (!(layout instanceof JViewGroup)) throw new Error("Invalid layout");
+  const child = new JView();
+  child.lp = await newObj("android/widget/RelativeLayout$LayoutParams", "(II)V", 60, 40);
+  await vcall(child.lp, "addRule", "(I)V", 13);
+  child.parent = layout; layout.children.push(child);
+  layout.minW = 100; layout.minH = 80;
+  await vcall(layout, "onMeasure", "(II)V", makeSpec(1080, MS_AT_MOST), makeSpec(2160, MS_AT_MOST));
+  await vcall(layout, "onLayout", "(ZIIII)V", 1, 0, 0, layout.measuredW, layout.measuredH);
+  expect([layout.measuredW, layout.measuredH]).toEqual([100, 80]);
+  expect([child.left, child.top, child.right, child.bottom]).toEqual([20, 20, 80, 60]);
 });
