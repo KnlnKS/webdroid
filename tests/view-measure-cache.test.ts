@@ -58,7 +58,11 @@ test("an in-layout hierarchy mutation invalidates the parent's measure cache", a
 });
 
 test("a child request crosses a flagged parent and invalidates the root measure", async () => {
-  const root = new CountingGroup(), parent = new JViewGroup(), child = new JView();
+  class RequestingParent extends JViewGroup {
+    requests = 0;
+    [mangleMethod("requestLayout", "()V")]() { this.requests++; requestLayout(this); }
+  }
+  const root = new CountingGroup(), parent = new RequestingParent(), child = new JView();
   parent.parent = root;
   child.parent = parent;
   const spec = makeSpec(100, MS_EXACTLY);
@@ -68,6 +72,7 @@ test("a child request crosses a flagged parent and invalidates the root measure"
   requestLayout(child);
   await measureView(root, spec, spec);
   expect(root.measures).toBe(2);
+  expect(parent.requests).toBe(0);
 });
 
 test("a request cleared by layout is not replayed into another measure", async () => {

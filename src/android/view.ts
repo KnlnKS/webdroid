@@ -139,6 +139,7 @@ export function requestLayout(v: JView) {
     // layoutView clears flags per view; a marked parent may still have an unmarked root.
     const par = p.parent;
     if (!par) break;
+    if (par.layoutRequested) continue;
     const f = jmethod(par, M_requestLayout);
     if (f && f !== nativeRequestLayout) { void guardApply(f as JMethod, par); break; }
   }
