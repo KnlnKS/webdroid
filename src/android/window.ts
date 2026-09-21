@@ -47,6 +47,8 @@ export class JWindow extends JObj {
   barsBehavior = 1;
   navBarDividerColor = 0;
   insetsController: JInsetsController | null = null;
+  enterTransition: unknown = null;
+  exitTransition: unknown = null;
 }
 export const APPEARANCE_LIGHT_STATUS_BARS = 8;
 class JInsetsController extends JObj { w: JWindow = null!; }
@@ -74,6 +76,10 @@ export function darken(c: number): number {
 rt.register({
   name: "android/view/Window", ctor: JWindow,
   methods: {
+    "setEnterTransition(Landroid/transition/Transition;)V": function (this: JWindow, transition: unknown) { this.enterTransition = transition; },
+    "getEnterTransition()Landroid/transition/Transition;": function (this: JWindow) { return this.enterTransition; },
+    "setExitTransition(Landroid/transition/Transition;)V": function (this: JWindow, transition: unknown) { this.exitTransition = transition; },
+    "getExitTransition()Landroid/transition/Transition;": function (this: JWindow) { return this.exitTransition; },
     "getDecorView()Landroid/view/View;": async function (this: JWindow) {
       // AOSP installs the real decor on first access (appcompat asks for it before
       // setContentView); dialog windows materialize a bare one so insets helpers can operate
