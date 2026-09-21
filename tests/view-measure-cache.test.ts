@@ -58,7 +58,11 @@ test("an in-layout hierarchy mutation invalidates the parent's measure cache", a
 });
 
 test("a child request crosses a flagged parent and invalidates the root measure", async () => {
-  const root = new CountingGroup(), parent = new JViewGroup(), child = new JView();
+  class RequestingParent extends JViewGroup {
+    requests = 0;
+    [mangleMethod("requestLayout", "()V")]() { this.requests++; requestLayout(this); }
+  }
+  const root = new CountingGroup(), parent = new RequestingParent(), child = new JView();
   parent.parent = root;
   child.parent = parent;
   const spec = makeSpec(100, MS_EXACTLY);
@@ -68,9 +72,10 @@ test("a child request crosses a flagged parent and invalidates the root measure"
   requestLayout(child);
   await measureView(root, spec, spec);
   expect(root.measures).toBe(2);
+  expect(parent.requests).toBe(0);
 });
 
-test("a request during layout is measured again even after layout clears its flag", async () => {
+test("a request cleared by layout is not replayed into another measure", async () => {
   class RequestingView extends CountingView {
     [mangleMethod("onLayout", "(ZIIII)V")]() { requestLayout(this); }
   }
@@ -81,5 +86,5 @@ test("a request during layout is measured again even after layout clears its fla
   await layoutRoot(view, 0, 0, 100, 100);
   replayLayoutRequests();
   await measureView(view, spec, spec);
-  expect(view.measures).toBe(2);
+  expect(view.measures).toBe(1);
 });
