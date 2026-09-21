@@ -205,14 +205,15 @@ function installProbe(cfg: ProbeConfig): void {
   };
 
   let captured: ImageData | null = null;
-  const stateMatches = (condition: StateCondition): boolean => {
+  const stateMatches = async (condition: StateCondition): Promise<boolean> => {
     if (condition.kind === "perf") return (g.wd.perf[condition.counter] ?? 0) >= condition.atLeast;
     if (condition.kind === "activity") {
       const activity = g.wd.app()?.stack.at(-1);
       return activity?.component === condition.component || activity?.constructor?.$i?.name === condition.component;
     }
     const want = condition.text.replace(/\s+/g, " ").trim().toLowerCase();
-    const found = (g.wd.uiTree() as UiNode[]).some((node) =>
+    const nodes: UiNode[] = await g.wd.uiTree();
+    const found = nodes.some((node) =>
       [node.text, node.desc].some((text) => text.replace(/\s+/g, " ").trim().toLowerCase().includes(want)));
     return condition.kind === "text" ? found : !found;
   };
@@ -235,7 +236,7 @@ function installProbe(cfg: ProbeConfig): void {
     };
     if (policy.kind === "state") {
       const virtualEnd = (g.wd.guestClock?.now() ?? 0) + policy.maxVirtualMs;
-      while (!stateMatches(policy.condition)) {
+      while (!await stateMatches(policy.condition)) {
         if (performance.now() - t0 >= policy.maxRealMs) return done("timeout", { state: 1 });
         const next = controlled ? g.wd.guestClock.nextDeadline() : null;
         if (controlled && g.wd.guestClock.now() < virtualEnd) {
@@ -331,6 +332,7 @@ function installProbe(cfg: ProbeConfig): void {
     for (const f of shots) frames.push(await encode(f));
     const captureMs = performance.now() - captureAt;
     const telemetryAt = performance.now();
+    const uiTree: UiNode[] = await wd.uiTree();
     const counters = { ...wd.perf };
     const result = {
       png, frameHash: lastHash < 0 ? null : lastHash.toString(16).padStart(8, "0"), presentation,
@@ -341,7 +343,7 @@ function installProbe(cfg: ProbeConfig): void {
       unreadAttrs: fresh("attrs", wd.unreadAttrs()),
       newErrors: fresh("errors", (wd.logs as string[]).filter((l) => l.startsWith("error:"))),
       web: (wd.web() as StepResult["web"]).map(({ url, title, loaded }) => ({ url, title, loaded })),
-      uiTree: wd.uiTree(),
+      uiTree,
       frames,
     };
     const telemetryMs = performance.now() - telemetryAt;
