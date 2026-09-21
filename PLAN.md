@@ -1,3 +1,30 @@
+# Staged fuzz-audit integration
+
+Fixed comparison baseline: `02aec2c1f92c140a1754ba72a0e239a7305211da` (starting main).
+Source: `codex/cpu-overhead` at `1bb72551`, including reviewed fuzz-audit repairs.
+Status: integrating independent changes through focused branches and merges.
+
+1. Character-array conversion: avoid iterator expansion, preserve every UTF-16 code unit.
+2. Layout invalidation: propagate requests to the root and replay in-layout requests.
+3. Activity lifecycle: dismiss windows owned by a destroyed activity.
+4. Harness: async tree capture, semantic fuzz targets and foreground exit handling.
+
+For each candidate: focused checks, serialized fresh-browser FitNotes comparisons against
+fixed main, then merge only if compatibility holds and median renderer-thread AND
+renderer-process CPU remain within +5%. Repeat measurements after the merge and record
+results in [the integration ledger](docs/fuzz-integration.md). A confirmed gate failure
+stops further integration; preserve the failed candidate separately. Three alternating
+pairs control drift; no tracing or competing diagnostic load. Check visibility, advancing
+ticks, all 39 completed steps, errors, missing APIs, and rendered pixels. Keep goldens fixed.
+
+Run the full unit and serialized 159-step E2E matrices once on the final accepted state.
+Broad API declarations/ownership changes and software rasterization remain deferred: they
+need independent justification and evidence, not inclusion to empty the source branch.
+
+Earlier completed work follows.
+
+---
+
 # Trace-directed fast testing redesign — plan
 
 Starting revision: `e75c7c5`. Planning branch: `codex/trace-directed-testing-plan`.
