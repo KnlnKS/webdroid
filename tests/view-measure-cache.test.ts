@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
 import { attachView, JView, JViewGroup, layoutView, layoutRoot, replayLayoutRequests, makeSpec, measureView, MS_EXACTLY, requestLayout } from "../src/android/view";
