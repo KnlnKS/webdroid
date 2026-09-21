@@ -98,6 +98,21 @@ Merge `c7c995f9` retains the tested production tree. Post-merge thread/process C
 3283.990/6001.789 ms (-3.12%/-0.69%); all 39 steps pass the same
 compatibility checks. Evidence: `post-3-1.json`.
 
+### 4. Async capture contract — accepted
+
+Source `2f6d8d29`, extracted as `9859aa1d`. Await UI-tree results before state matching and
+capture, allowing both synchronous and asynchronous providers. Typecheck passes. A real
+FitNotes browser probe wraps only the diagnostic tree reader in a Promise: main's harness
+throws in `.some`; the candidate reaches the text state, captures 49 nodes, and reports no
+errors or wedge. No emulator behavior is replaced by this probe.
+
+This is test-harness code only. The production tree remains
+`4cfa72d886301e5a9e1ffa577cbcf784a390afb0`, identical to chunk 3; the shared measurement
+harness already contained this correction for every preceding comparison. Therefore chunk
+3's repeated CPU and compatibility evidence applies without another pre-merge benchmark.
+Post-merge measurements and the final full matrix follow. Evidence: focused check logs
+`chunk-4-probe{,-before}.log`, `chunk-4-typecheck.log`.
+
 ## Deferred scope
 
 - Generated API expansion and native/DEX ownership: broad coupling and compatibility risk.
