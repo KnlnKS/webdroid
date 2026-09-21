@@ -752,6 +752,13 @@ for (const [name, methods, statics] of [
     "static getAltitude(FF)F": (p0: number, p: number) => Math.fround(44330 * Math.fround(1 - Math.fround(Math.pow(Math.fround(p / p0), Math.fround(1 / Math.fround(5.255)))))),
     "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z": () => 0,
     "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z": () => 0,
+    "static getOrientation([F[F)[F": (r: Float32Array, values: Float32Array) => {
+      const stride = r.length === 9 ? 3 : 4;
+      values[0] = Math.atan2(r[1], r[stride + 1]);
+      values[1] = Math.asin(-r[2 * stride + 1]);
+      values[2] = Math.atan2(-r[2 * stride], r[2 * stride + 2]);
+      return values;
+    },
     "static getRotationMatrix([F[F[F[F)Z": (r: Float32Array | null, inclination: Float32Array | null, gravity: Float32Array, geomagnetic: Float32Array) => {
       let ax = gravity[0], ay = gravity[1], az = gravity[2];
       const ex = geomagnetic[0], ey = geomagnetic[1], ez = geomagnetic[2];

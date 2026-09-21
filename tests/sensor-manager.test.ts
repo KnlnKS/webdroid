@@ -24,3 +24,15 @@ test("SensorManager.getRotationMatrix supports 4x4 output and rejects free fall"
   expect([...r]).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
   expect(rotation(r, null, new Float32Array([0, 0, 0]), new Float32Array([0, 1, 0]))).toBe(0);
 });
+
+test("SensorManager orientation uses the same axes in 3x3 and 4x4 matrices", () => {
+  const fn = Reflect.get(rt.link("android/hardware/SensorManager").ctor, mangleMethod("getOrientation", "([F[F)[F"));
+  if (typeof fn !== "function") throw new Error("getOrientation is not linked");
+  for (const size of [9, 16]) {
+    const r = new Float32Array(size), out = new Float32Array(3);
+    rotation(r, null, new Float32Array([0, 0, 9.81]), new Float32Array([1, 0, 0]));
+    expect(fn(r, out)).toBe(out);
+    expect(out[0]).toBeCloseTo(-Math.PI / 2);
+    expect(Math.abs(out[1]) + Math.abs(out[2])).toBe(0);
+  }
+});
