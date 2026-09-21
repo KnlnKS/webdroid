@@ -58,3 +58,23 @@ test("copy constructors do not share mutable mapping entries", async () => {
     expect(await vcall(copy, "get", `(${O})${O}`, key)).toBe("after");
   }
 });
+
+test("hash maps filter stored hashes before calling key equality", async () => {
+  class Key extends JObj { hash = 1; comparisons = 0; }
+  rt.register({ name: "test/HashFilteredKey", ctor: Key, methods: {
+    "hashCode()I": function (this: Key) { return this.hash; },
+    "equals(Ljava/lang/Object;)Z": function (this: Key) { this.comparisons++; return 1; },
+  } });
+  rt.link("test/HashFilteredKey");
+  const a = new Key(), b = new Key(); b.hash = 2;
+  const target = await map();
+  await put(target, a, "first"); await put(target, b, "second");
+  expect(await vcall(target, "size", "()I")).toBe(2);
+  expect(b.comparisons).toBe(0);
+  expect(await vcall(target, "get", `(${O})${O}`, b)).toBe("second");
+  a.hash = 3;
+  expect(await vcall(target, "get", `(${O})${O}`, a)).toBeNull();
+  const lookup = new Key();
+  expect(await vcall(target, "get", `(${O})${O}`, lookup)).toBe("first");
+  expect(lookup.comparisons).toBe(1);
+});

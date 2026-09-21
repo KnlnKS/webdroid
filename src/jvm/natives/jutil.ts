@@ -63,7 +63,7 @@ function mapKey(k: unknown): unknown {
   return SLOW;
 }
 
-interface Ent { k: unknown; v: unknown; }
+interface Ent { k: unknown; v: unknown; hash?: number; }
 class JMapEntry extends JObj {
   constructor(public e: Ent, public mutable = true) { super(); }
 }
@@ -697,12 +697,24 @@ export class JMap extends JObj {
 function ensureMapMutable(map: JMap): void {
   if (!map.mutable) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
 }
-async function slowFind(list: Ent[], k: unknown): Promise<number> {
+async function slowFind(list: Ent[], k: unknown, hash?: number): Promise<number> {
+  hash ??= await jhash(k);
   for (let i = 0; i < list.length; i++) {
-    const r = jeq(list[i].k, k);
+    if (list[i].hash !== undefined && list[i].hash !== hash) continue;
+    const r = jeq(k, list[i].k);
     if (r instanceof Promise ? await r : r) return i;
   }
   return -1;
+}
+async function putSlow(map: JMap, k: unknown, v: unknown, onlyAbsent: boolean): Promise<unknown> {
+  const hash = await jhash(k), index = await slowFind(map.slow, k, hash);
+  if (index >= 0) {
+    const entry = map.slow[index], old = entry.v;
+    if (!onlyAbsent || old == null) entry.v = v;
+    return old;
+  }
+  map.slow.push({ k, v, hash });
+  return null;
 }
 function mapMethods(): Methods {
   return {
@@ -715,7 +727,7 @@ function mapMethods(): Methods {
       const c = new (this.constructor as new () => JMap)();
       c.access = this.access;
       for (const [k, e] of this.m) c.m.set(k, { k: e.k, v: e.v });
-      c.slow = this.slow.map((e) => ({ k: e.k, v: e.v }));
+      c.slow = this.slow.map((e) => ({ ...e }));
       return c;
     },
     "<init>(Ljava/util/Map;)V": async function (this: JMap, src: unknown) {
@@ -765,11 +777,7 @@ function mapMethods(): Methods {
         this.m.set(mk, { k, v });
         return null;
       }
-      return slowFind(this.slow, k).then((i) => {
-        if (i >= 0) { const o = this.slow[i].v; this.slow[i].v = v; return o; }
-        this.slow.push({ k, v });
-        return null;
-      });
+      return putSlow(this, k, v, false);
     },
     "putIfAbsent(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown, v: unknown) {
       ensureMapMutable(this);
@@ -780,11 +788,7 @@ function mapMethods(): Methods {
         if (e) e.v = v; else this.m.set(mk, { k, v });
         return null;
       }
-      return slowFind(this.slow, k).then((i) => {
-        if (i >= 0 && this.slow[i].v !== null && this.slow[i].v !== undefined) return this.slow[i].v;
-        if (i >= 0) this.slow[i].v = v; else this.slow.push({ k, v });
-        return null;
-      });
+      return putSlow(this, k, v, true);
     },
     "remove(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown) {
       ensureMapMutable(this);
@@ -887,8 +891,9 @@ async function addImmutableMapping(map: JImmutableMap, key: unknown, value: unkn
     if (map.m.has(bucket)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate key: " + String(key));
     map.m.set(bucket, { k: key, v: value });
   } else {
-    if (await slowFind(map.slow, key) >= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate key: " + String(key));
-    map.slow.push({ k: key, v: value });
+    const hash = await jhash(key);
+    if (await slowFind(map.slow, key, hash) >= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate key: " + String(key));
+    map.slow.push({ k: key, v: value, hash });
   }
 }
 async function immutableMap(entries: readonly (readonly [unknown, unknown])[]): Promise<JImmutableMap> {
@@ -1109,7 +1114,7 @@ function setMethods(): Methods {
     "clone()Ljava/lang/Object;": function (this: JSet) {
       const c = new (this.constructor as new () => JSet)();
       for (const [k, e] of this.m) c.m.set(k, { k: e.k, v: e.v });
-      c.slow = this.slow.map((e) => ({ k: e.k, v: e.v }));
+      c.slow = this.slow.map((e) => ({ ...e }));
       return c;
     },
     "<init>(IF)V": function () {},
@@ -1211,7 +1216,7 @@ function addToSet(s: JSet, v: unknown): number | Promise<number> {
     s.m.set(mk, { k: v, v: v });
     return 1;
   }
-  return slowFind(s.slow, v).then((i) => (i >= 0 ? 0 : (s.slow.push({ k: v, v }), 1)));
+  return after(jhash(v), hash => slowFind(s.slow, v, hash).then(i => i >= 0 ? 0 : (s.slow.push({ k: v, v, hash }), 1)));
 }
 rt.register({ name: "webdroid/BaseSet", ctor: JSet, typeVars: "E", ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: setMethods() });
 const setSerialization: Methods = {
@@ -1295,7 +1300,7 @@ function enumSetStatics() {
       const copy = new (this.constructor as new () => JEnumSet)();
       copy.enumClass = this.enumClass;
       for (const [key, entry] of this.m) copy.m.set(key, { k: entry.k, v: entry.v });
-      copy.slow = this.slow.map((entry) => ({ k: entry.k, v: entry.v }));
+      copy.slow = this.slow.map((entry) => ({ ...entry }));
       return copy;
     },
     "static allOf(Ljava/lang/Class;)Ljava/util/EnumSet;": async (c: JObj) => fromValues(c, true, []),
