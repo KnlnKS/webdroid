@@ -257,6 +257,8 @@ for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System
   rt.register({
     name: `android/provider/Settings$${cls}`, ctor: class extends JObj {},
     statics: {
+      ...(cls === "System" ? { SCREEN_BRIGHTNESS: "screen_brightness" } : {}),
+      ...(cls === "Global" ? { ADB_ENABLED: "adb_enabled", ADB_WIFI_ENABLED: "adb_wifi_enabled" } : {}),
       ANIMATOR_DURATION_SCALE: "animator_duration_scale",
       TRANSITION_ANIMATION_SCALE: "transition_animation_scale",
       WINDOW_ANIMATION_SCALE: "window_animation_scale",
