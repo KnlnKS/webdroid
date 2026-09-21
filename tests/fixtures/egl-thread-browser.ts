@@ -7,13 +7,14 @@ import { mangleStaticField, mangleMethod } from "../../src/jvm/abi";
 import { JThread, setCurThread, mainThread, curThread, vcallMaybe, vcallOn } from "../../src/jvm/natives/jlang";
 import { gl, tables } from "../../src/android/gl";
 import { glSurfaces } from "../../src/native/egl-current";
-import { EglContext } from "../../src/android/glview";
+import { EglContext, type GlSurface } from "../../src/android/glview";
 import { mem } from "../../src/native/mem";
 import { Cpu, setA64 } from "../../src/native/cpu";
 import { jitStats, JIT_HEAT } from "../../src/native/core";
 import { RET_SENTINEL } from "../../src/native/abi";
 import { gles1Init } from "../../src/native/gles1";
 import { gles3Init } from "../../src/native/gles3";
+import { nativeWindowFor, ndkInit } from "../../src/native/libandroid";
 import { hostFn, type ArgReader } from "../../src/native/host";
 
 function readback() {
@@ -130,7 +131,31 @@ async function probe() {
   await Reflect.apply(Reflect.get(view, "runFrame"), view, []);
   return { callbacks, bound10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
     firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null,
-    lifecycle: await lifecycle(), windowCopy: await windowCopy(), readback: readback() };
+    lifecycle: await lifecycle(), nativeWindow: await nativeWindow(), windowCopy: await windowCopy(), readback: readback() };
+}
+async function nativeWindow() {
+  ndkInit();
+  const surface: GlSurface = { view: null, width: 2, height: 1, present: null, frames: 0 };
+  const handle = nativeWindowFor(surface), out = mem.malloc(64);
+  const cpu = new Cpu(mainThread, "window-buffer");
+  const invoke = (name: string, values: number[]) => {
+    let i = 0; const next = () => values[i++] ?? 0;
+    const args: ArgReader = { i: next, u: next, p: next, va: () => BigInt(next()), l: () => BigInt(next()), ul: () => BigInt(next()),
+      f: next, d: next, vd: next, str: () => "", strAt: () => "" };
+    return hostFn("libandroid.so", name)!(cpu, args);
+  };
+  const locked = await invoke("ANativeWindow_lock", [handle, out, 0]);
+  const dimensions = [mem.ld32(out), mem.ld32(out + 4), mem.ld32(out + 8), mem.ld32(out + 12)];
+  const duplicate = await invoke("ANativeWindow_lock", [handle, out, 0]);
+  mem.write(mem.ld32(out + 16), Uint8Array.of(255, 0, 0, 255, 0, 255, 0, 255));
+  const posted = await invoke("ANativeWindow_unlockAndPost", [handle]);
+  const canvas = new OffscreenCanvas(2, 1), ctx = canvas.getContext("2d")!;
+  ctx.drawImage(surface.present!, 0, 0);
+  const pixels = [...ctx.getImageData(0, 0, 2, 1).data];
+  await invoke("ANativeWindow_release", [handle]);
+  const released = await invoke("ANativeWindow_lock", [handle, out, 0]);
+  surface.present?.close(); mem.free(out);
+  return { locked, dimensions, duplicate, posted, pixels, released, frames: surface.frames };
 }
 async function windowCopy() {
   const screen = document.createElement("canvas"); screen.width = screen.height = 4;

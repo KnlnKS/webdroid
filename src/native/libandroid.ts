@@ -5,7 +5,7 @@
 import { mem, guestAt } from "./mem";
 import { hostLib, hostData, cstr, stp, retF, type HostFn, type ArgReader } from "./host";
 import { deref } from "./jni";
-import { JSurface, type GlSurface } from "../android/glview";
+import { JSurface, presentSurface, type GlSurface } from "../android/glview";
 import type { Cpu } from "./cpu";
 import { onMain } from "../android/mainloop";
 import { mainThread, reportUncaught } from "../jvm/natives/jlang";
@@ -14,8 +14,66 @@ import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 
 // ── ANativeWindow: a handle per surface (non-zero, as the pointer it stands for)
 const windows: (GlSurface | null)[] = [null];
+const windowRefs = [0];
+export function nativeWindowFor(surface: GlSurface): number {
+  const existing = windows.indexOf(surface);
+  if (existing > 0) { windowRefs[existing]++; return existing; }
+  windows.push(surface); windowRefs.push(1);
+  return windows.length - 1;
+}
 export function windowOf(h: number): GlSurface | null { return windows[h] ?? null; }
 const W = (a: ArgReader) => windows[a.i()];
+interface WindowBuffer { width: number; height: number; format: number; bits: number; size: number; locked: boolean; lockedWidth: number; lockedHeight: number }
+const windowBuffers = new WeakMap<GlSurface, WindowBuffer>();
+function bufferOf(surface: GlSurface): WindowBuffer {
+  let buffer = windowBuffers.get(surface);
+  if (!buffer) {
+    buffer = { width: 0, height: 0, format: 1, bits: 0, size: 0, locked: false, lockedWidth: 0, lockedHeight: 0 };
+    windowBuffers.set(surface, buffer);
+  }
+  return buffer;
+}
+function lockWindow(_cpu: Cpu, args: ArgReader): number {
+  const surface = W(args), out = args.p(), dirty = args.p();
+  if (!surface || !out) return -22;
+  const buffer = bufferOf(surface);
+  if (buffer.locked) return -16;
+  const width = buffer.width || surface.width, height = buffer.height || surface.height;
+  const size = width * height * (buffer.format === 4 ? 2 : 4);
+  if (!size || !Number.isSafeInteger(size) || size > 0x7fffffff) return -22;
+  if (size !== buffer.size) {
+    if (buffer.bits) mem.free(buffer.bits);
+    buffer.bits = mem.malloc(size); buffer.size = buffer.bits ? size : 0;
+  }
+  if (!buffer.bits) return -12;
+  mem.st32(out, width); mem.st32(out + 4, height); mem.st32(out + 8, width);
+  mem.st32(out + 12, buffer.format); stp(out + 16, buffer.bits);
+  if (dirty) {
+    mem.st32(dirty, 0); mem.st32(dirty + 4, 0);
+    mem.st32(dirty + 8, width); mem.st32(dirty + 12, height);
+  }
+  buffer.lockedWidth = width; buffer.lockedHeight = height; buffer.locked = true;
+  return 0;
+}
+async function postWindow(_cpu: Cpu, args: ArgReader): Promise<number> {
+  const surface = W(args), buffer = surface && windowBuffers.get(surface);
+  if (!surface || !buffer?.locked) return -22;
+  const width = buffer.lockedWidth, height = buffer.lockedHeight;
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  if (buffer.format === 4) {
+    for (let i = 0; i < width * height; i++) {
+      const rgb = mem.ld16u(buffer.bits + i * 2), p = i * 4;
+      pixels[p] = (rgb >>> 11) * 255 / 31; pixels[p + 1] = ((rgb >>> 5) & 63) * 255 / 63;
+      pixels[p + 2] = (rgb & 31) * 255 / 31; pixels[p + 3] = 255;
+    }
+  } else {
+    pixels.set(mem.bytes(buffer.bits, pixels.length));
+    if (buffer.format === 2) for (let i = 3; i < pixels.length; i += 4) pixels[i] = 255;
+  }
+  try { presentSurface(surface, await createImageBitmap(new ImageData(pixels, width, height))); }
+  finally { buffer.locked = false; }
+  return 0;
+}
 
 // ── ALooper: one per thread; pollOnce parks the thread until a wake or its timeout
 interface LooperFd { ident: number; events: number; callback: number; data: bigint }
@@ -99,16 +157,29 @@ export function ndkInit(): void {
     ANativeWindow_fromSurface: (cpu, a) => {
       a.p(); const s = deref(a.i(), cpu), surf = s instanceof JSurface ? s.surf : null;
       if (!surf) return 0;
-      const i = windows.indexOf(surf);
-      if (i > 0) return i;
-      windows.push(surf);
-      return windows.length - 1;
+      return nativeWindowFor(surf);
     },
-    ANativeWindow_acquire: () => {}, ANativeWindow_release: () => {},
-    ANativeWindow_getWidth: (_c, a) => W(a)?.width ?? -1,
-    ANativeWindow_getHeight: (_c, a) => W(a)?.height ?? -1,
-    ANativeWindow_getFormat: () => 1,                                           // WINDOW_FORMAT_RGBA_8888
-    ANativeWindow_setBuffersGeometry: () => 0, ANativeWindow_setFrameRate: () => 0, ANativeWindow_setFrameRateWithChangeStrategy: () => 0,
+    ANativeWindow_acquire: (_c, a) => { const h = a.i(); if (windows[h]) windowRefs[h]++; },
+    ANativeWindow_release: (_c, a) => {
+      const h = a.i(), surface = windows[h];
+      if (!surface || --windowRefs[h] > 0) return;
+      const buffer = windowBuffers.get(surface);
+      if (buffer?.bits) mem.free(buffer.bits);
+      windowBuffers.delete(surface); windows[h] = null;
+    },
+    ANativeWindow_getWidth: (_c, a) => { const s = W(a); return s ? bufferOf(s).width || s.width : -22; },
+    ANativeWindow_getHeight: (_c, a) => { const s = W(a); return s ? bufferOf(s).height || s.height : -22; },
+    ANativeWindow_getFormat: (_c, a) => { const s = W(a); return s ? bufferOf(s).format : -22; },
+    ANativeWindow_lock: lockWindow, ANativeWindow_unlockAndPost: postWindow,
+    ANativeWindow_setBuffersGeometry: (_c, a) => {
+      const surface = W(a), width = a.i(), height = a.i(), format = a.i();
+      if (!surface || width < 0 || height < 0 || (!width !== !height) || ![0, 1, 2, 4].includes(format)) return -22;
+      const buffer = bufferOf(surface);
+      if (buffer.locked) return -16;
+      buffer.width = width; buffer.height = height; buffer.format = format || 1;
+      return 0;
+    },
+    ANativeWindow_setFrameRate: () => 0, ANativeWindow_setFrameRateWithChangeStrategy: () => 0,
 
     ALooper_prepare: (cpu, a) => {
       const options = a.i();
