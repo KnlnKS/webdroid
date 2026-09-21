@@ -405,6 +405,7 @@ function recreateActivity(act: JActivity): void {
         await vcall(act, "onDestroy", "()V");
         await fireActivityLifecycle(act, "Destroyed");
       } catch (e) { reportUncaught(e); }
+      await closeActivityDialogs(act);
       booted.stack.splice(i, 1);
       const options = { caller: act.callingActivity, result: act.resultTo ?? undefined, remoteId: act.remoteId, activityId: act.activityId, taskId: act.taskId };
       act.remoteId = 0;
@@ -468,7 +469,17 @@ async function finishActivity(act: JActivity, resume = true) {
   if (act.window.decor) await dispatchDetached(act.window.decor);
   if (act.started) await stopActivity(act);
   await lifecycleStep(act, "onDestroy", "Destroyed");
+  await closeActivityDialogs(act);
   invalidateWindow();
+}
+
+async function closeActivityDialogs(act: JActivity) {
+  for (const o of [...overlays]) {
+    const dialog = o.view.windowOwner?.dialog;
+    if (!dialog || typeof dialog !== "object" || !("jctx" in dialog) || dialog.jctx !== act) continue;
+    // Teardown dismisses the window; it is not a user cancellation.
+    try { await vcall(dialog, "dismiss", "()V"); } catch (e) { reportUncaught(e); }
+  }
 }
 
 export function finishTask(taskId: number, resume: boolean): Promise<void> {
