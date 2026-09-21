@@ -94,6 +94,10 @@ semantic trees match baseline repeats. Production tree:
 `4cfa72d886301e5a9e1ffa577cbcf784a390afb0`. Evidence: `dialog-before.json`,
 `dialog-after.json`, `summary-3.json`, `pixels-3.json`, `{base,chunk}-3-*`.
 
+Merge `c7c995f9` retains the tested production tree. Post-merge thread/process CPU:
+3283.990/6001.789 ms (-3.12%/-0.69%); all 39 steps pass the same
+compatibility checks. Evidence: `post-3-1.json`.
+
 ## Deferred scope
 
 - Generated API expansion and native/DEX ownership: broad coupling and compatibility risk.

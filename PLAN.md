@@ -7,7 +7,7 @@ Status: integrating independent changes through focused branches and merges.
 1. Character-array conversion: avoid iterator expansion, preserve every UTF-16 code unit.
 2. Layout invalidation: propagate requests to the root and replay in-layout requests.
 3. Activity lifecycle: dismiss windows owned by a destroyed activity.
-4. Harness: async tree capture, semantic fuzz targets and foreground exit handling.
+4. Harness: async tree capture. Defer Android-side fuzz changes until oracle validation.
 
 For each candidate: focused checks, serialized fresh-browser FitNotes comparisons against
 fixed main, then merge only if compatibility holds and median renderer-thread AND
