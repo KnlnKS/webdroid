@@ -40,6 +40,7 @@ rt.register({ name: "android/os/Message", ctor: JMessage, ifaces: ["android/os/P
       if (m.data) { copy.data = new JBundle(); copy.data.map = new Map(m.data.map); copy.data.loader = m.data.loader; }
       return copy;
     },
+    "getTarget()Landroid/os/Handler;": function (this: JMessage) { return this.target; },
     "setTarget(Landroid/os/Handler;)V": function (this: JMessage, h: JHandler) { this.target = h; },
     "sendToTarget()V": function (this: JMessage) { this.target?.send(this, 0); },
     "getCallback()Ljava/lang/Runnable;": function (this: JMessage) { return this.callback; },
