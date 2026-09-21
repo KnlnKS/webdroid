@@ -822,7 +822,29 @@ rt.register({ name: "android/widget/HorizontalScrollView", ctor: class extends J
 // ── RelativeLayout (common-rule subset)
 class JRelativeLP extends JMarginLP {
   rules = new Int32Array(22);
+  initialRules = new Int32Array(22);
+  rulesChanged = true;
+  ruleDirection = -1;
   alignWithParent = false;           // layout_alignWithParentIfMissing, a public field on AOSP
+  addRule(verb: number, anchor: number): void {
+    this.rules[verb] = this.initialRules[verb] = anchor;
+    this.rulesChanged = true;
+  }
+  resolveRules(direction: number): Int32Array {
+    if (!this.rulesChanged && this.ruleDirection === direction) return this.rules;
+    const r = this.rules;
+    r.set(this.initialRules);
+    for (const [start, end, left, right] of relativeRulePairs) {
+      if (r[start] || r[end]) {
+        r[left] = direction === 1 ? r[end] : r[start];
+        r[right] = direction === 1 ? r[start] : r[end];
+        r[start] = r[end] = 0;
+      }
+    }
+    this.ruleDirection = direction;
+    this.rulesChanged = false;
+    return r;
+  }
 }
 const RL = {
   LEFT_OF: 0, RIGHT_OF: 1, ABOVE: 2, BELOW: 3, ALIGN_BASELINE: 4, ALIGN_LEFT: 5, ALIGN_TOP: 6,
@@ -831,6 +853,11 @@ const RL = {
   CENTER_VERTICAL: 15, START_OF: 16, END_OF: 17, ALIGN_START: 18, ALIGN_END: 19,
   ALIGN_PARENT_START: 20, ALIGN_PARENT_END: 21,
 };
+const relativeRulePairs = [
+  [RL.START_OF, RL.END_OF, RL.LEFT_OF, RL.RIGHT_OF],
+  [RL.ALIGN_START, RL.ALIGN_END, RL.ALIGN_LEFT, RL.ALIGN_RIGHT],
+  [RL.ALIGN_PARENT_START, RL.ALIGN_PARENT_END, RL.ALIGN_PARENT_LEFT, RL.ALIGN_PARENT_RIGHT],
+] as const;
 const rlAttrByName: [string, number][] = [
   ["layout_toLeftOf", RL.LEFT_OF], ["layout_toRightOf", RL.RIGHT_OF], ["layout_above", RL.ABOVE],
   ["layout_below", RL.BELOW], ["layout_alignBaseline", RL.ALIGN_BASELINE], ["layout_alignLeft", RL.ALIGN_LEFT],
@@ -838,15 +865,15 @@ const rlAttrByName: [string, number][] = [
   ["layout_alignParentLeft", RL.ALIGN_PARENT_LEFT], ["layout_alignParentTop", RL.ALIGN_PARENT_TOP],
   ["layout_alignParentRight", RL.ALIGN_PARENT_RIGHT], ["layout_alignParentBottom", RL.ALIGN_PARENT_BOTTOM],
   ["layout_centerInParent", RL.CENTER_IN_PARENT], ["layout_centerHorizontal", RL.CENTER_HORIZONTAL],
-  ["layout_centerVertical", RL.CENTER_VERTICAL], ["layout_toStartOf", RL.LEFT_OF], ["layout_toEndOf", RL.RIGHT_OF],
-  ["layout_alignStart", RL.ALIGN_LEFT], ["layout_alignEnd", RL.ALIGN_RIGHT],
-  ["layout_alignParentStart", RL.ALIGN_PARENT_LEFT], ["layout_alignParentEnd", RL.ALIGN_PARENT_RIGHT],
+  ["layout_centerVertical", RL.CENTER_VERTICAL], ["layout_toStartOf", RL.START_OF], ["layout_toEndOf", RL.END_OF],
+  ["layout_alignStart", RL.ALIGN_START], ["layout_alignEnd", RL.ALIGN_END],
+  ["layout_alignParentStart", RL.ALIGN_PARENT_START], ["layout_alignParentEnd", RL.ALIGN_PARENT_END],
 ];
 const rlAttrIds: (readonly [number, number])[] = [];
 onFramework(() => { for (const [n, verb] of rlAttrByName) rlAttrIds.push([AID(n), verb] as const); });
 class JRelativeLayout extends JViewGroup {
   /** positions resolved by the last onMeasure, consumed by onLayout */
-  rlPos = new Map<JView, { l: number; t: number }>();
+  rlPos = new Map<JView, { l: number; t: number; fixedW: boolean; fixedH: boolean }>();
   gravityR = G.START | G.TOP;
   ignoreGravity = 0;
 }
@@ -875,8 +902,7 @@ const relativeMethods: NativeSpec["methods"] = {
       for (const a of set.node.attrs) {
         for (const [aid, verb] of rlAttrIds) {
           if (aid && a.resId === aid) {
-            lp.rules[verb] = a.type === TV.BOOLEAN || a.type >= TV.INT_DEC ? (a.data ? (a.type === TV.REFERENCE ? a.data : (a.data > 1 ? a.data : -1)) : 0) : a.data;
-            if (a.type === TV.REFERENCE) lp.rules[verb] = a.data;
+            lp.addRule(verb, a.type === TV.BOOLEAN || a.type >= TV.INT_DEC ? (a.data ? (a.data > 1 ? a.data : -1) : 0) : a.data);
           }
         }
       }
@@ -891,6 +917,8 @@ const relativeMethods: NativeSpec["methods"] = {
   "onMeasure(II)V": async function (this: JRelativeLayout, wSpec: number, hSpec: number) {
     const availW = specSize(wSpec), availH = specSize(hSpec);
     const wrapW = specMode(wSpec) !== MS_EXACTLY, wrapH = specMode(hSpec) !== MS_EXACTLY;
+    const direction = await vcall(this, "getLayoutDirection", "()I");
+    for (const c of this.children) if (c.lp instanceof JRelativeLP) c.lp.resolveRules(direction);
     const kids = this.children.filter((c) => c.visibility !== 8);
     for (const c of kids) {
       const w = c.lp?.width === MATCH_PARENT && specMode(wSpec) !== MS_UNSPEC ? makeSpec(availW, MS_EXACTLY) : wSpec;
@@ -900,7 +928,7 @@ const relativeMethods: NativeSpec["methods"] = {
     const pos = this.rlPos;
     pos.clear();
     const byId = new Map<number, JView>();
-    for (const c of kids) if (c.idNum > 0) byId.set(c.idNum, c);
+    for (const c of this.children) if (c.idNum > 0) byId.set(c.idNum, c);
     // a rule naming a later sibling reads where that sibling sat last pass until this pass places it
     let forward = false;
     const anchorPos = (v: JView) => {
@@ -920,10 +948,15 @@ const relativeMethods: NativeSpec["methods"] = {
         const m = c.lp instanceof JMarginLP ? c.lp : NO_MARGIN;
         let l = this.padL + m.marginL;
         let t = this.padT + m.marginT;
+        let fixedW = false, fixedH = false;
         if (lp) {
           const anchor = (verb: number): JView | null => {
-            const id = lp.rules[verb];
-            return id && id > 0 ? byId.get(id) ?? null : null;
+            let view = byId.get(lp.rules[verb]);
+            for (let hops = 0; view && hops < byId.size; hops++) {
+              if (view.visibility !== 8) return view;
+              view = view.lp instanceof JRelativeLP ? byId.get(view.lp.rules[verb]) : undefined;
+            }
+            return null;
           };
           if (lp.rules[RL.ALIGN_PARENT_RIGHT]) l = availW - this.padR - c.measuredW - m.marginR;
           if (!wrapW && (lp.rules[RL.CENTER_HORIZONTAL] || lp.rules[RL.CENTER_IN_PARENT])) l = (availW - c.measuredW) >> 1;
@@ -955,6 +988,7 @@ const relativeMethods: NativeSpec["methods"] = {
           const tE = lp.rules[RL.ALIGN_PARENT_TOP] ? this.padT + m.marginT : aT ? anchorPos(aT).t : below ? anchorPos(below).t + below.measuredH + m.marginT : NaN;
           const bE = lp.rules[RL.ALIGN_PARENT_BOTTOM] ? availH - this.padB - m.marginB : aB ? anchorPos(aB).t + aB.measuredH : above ? anchorPos(above).t - m.marginB : NaN;
           const spanW = rE - lE, spanH = bE - tE;
+          fixedW = spanW === spanW; fixedH = spanH === spanH;
           if (spanW === spanW || spanH === spanH) {
             if (spanW === spanW) l = lE;
             if (spanH === spanH) t = tE;
@@ -965,8 +999,11 @@ const relativeMethods: NativeSpec["methods"] = {
           }
         }
         const p = pos.get(c);
-        if (!p) pos.set(c, { l, t });
-        else if (p.l !== l || p.t !== t) { p.l = l; p.t = t; moved = true; }
+        if (!p) pos.set(c, { l, t, fixedW, fixedH });
+        else {
+          if (p.l !== l || p.t !== t) { p.l = l; p.t = t; moved = true; }
+          p.fixedW = fixedW; p.fixedH = fixedH;
+        }
         maxR = Math.max(maxR, l + c.measuredW + m.marginR);
         maxB = Math.max(maxB, t + c.measuredH + m.marginB);
       }
@@ -976,16 +1013,16 @@ const relativeMethods: NativeSpec["methods"] = {
     this.measuredW = resolveSizeAndState(Math.max(this.minW, maxR + this.padR), wSpec);
     this.measuredH = resolveSizeAndState(Math.max(this.minH, maxB + this.padB), hSpec);
     for (const c of kids) {
+      const lp = c.lp, p = pos.get(c);
       if (c.lp?.width === MATCH_PARENT || c.lp?.height === MATCH_PARENT) {
         const m = c.lp instanceof JMarginLP ? c.lp : NO_MARGIN;
-        const w = c.lp.width === MATCH_PARENT ? this.measuredW - this.padL - this.padR - m.marginL - m.marginR : c.measuredW;
-        const h = c.lp.height === MATCH_PARENT ? this.measuredH - this.padT - this.padB - m.marginT - m.marginB : c.measuredH;
+        const w = c.lp.width === MATCH_PARENT && !p?.fixedW ? this.measuredW - this.padL - this.padR - m.marginL - m.marginR : c.measuredW;
+        const h = c.lp.height === MATCH_PARENT && !p?.fixedH ? this.measuredH - this.padT - this.padB - m.marginT - m.marginB : c.measuredH;
         await measureView(c, makeSpec(Math.max(0, w), MS_EXACTLY), makeSpec(Math.max(0, h), MS_EXACTLY));
       }
-      const lp = c.lp, p = pos.get(c);
       if (lp instanceof JRelativeLP && p) {
-        if (wrapW && (lp.rules[RL.CENTER_HORIZONTAL] || lp.rules[RL.CENTER_IN_PARENT])) p.l = (this.measuredW - c.measuredW) >> 1;
-        if (wrapH && (lp.rules[RL.CENTER_VERTICAL] || lp.rules[RL.CENTER_IN_PARENT])) p.t = (this.measuredH - c.measuredH) >> 1;
+        if (wrapW && !p.fixedW && (lp.rules[RL.CENTER_HORIZONTAL] || lp.rules[RL.CENTER_IN_PARENT])) p.l = (this.measuredW - c.measuredW) >> 1;
+        if (wrapH && !p.fixedH && (lp.rules[RL.CENTER_VERTICAL] || lp.rules[RL.CENTER_IN_PARENT])) p.t = (this.measuredH - c.measuredH) >> 1;
       }
     }
   },
@@ -1014,13 +1051,18 @@ rt.register({
     "<init>(Landroid/widget/RelativeLayout$LayoutParams;)V": function (this: JRelativeLP, o: JRelativeLP) {
       marginCopy.call(this, o);
       this.rules.set(o.rules);
+      this.initialRules.set(o.initialRules);
+      this.rulesChanged = o.rulesChanged;
+      this.ruleDirection = o.ruleDirection;
       this.alignWithParent = o.alignWithParent;
     },
     "getRules()[I": function (this: JRelativeLP) { return this.rules; },
+    "getRules(I)[I": function (this: JRelativeLP, direction: number) { return this.resolveRules(direction); },
+    "resolveLayoutDirection(I)V": function (this: JRelativeLP, direction: number) { this.resolveRules(direction); },
     "getRule(I)I": function (this: JRelativeLP, verb: number) { return this.rules[verb]; },
-    "addRule(I)V": function (this: JRelativeLP, verb: number) { this.rules[verb] = -1; },
-    "addRule(II)V": function (this: JRelativeLP, verb: number, anchor: number) { this.rules[verb] = anchor; },
-    "removeRule(I)V": function (this: JRelativeLP, verb: number) { this.rules[verb] = 0; },
+    "addRule(I)V": function (this: JRelativeLP, verb: number) { this.addRule(verb, -1); },
+    "addRule(II)V": function (this: JRelativeLP, verb: number, anchor: number) { this.addRule(verb, anchor); },
+    "removeRule(I)V": function (this: JRelativeLP, verb: number) { this.addRule(verb, 0); },
   },
 });
 
