@@ -72,6 +72,11 @@ labels and geometry outside that face match). No golden changed. Evidence:
 `mihon-summary-2.json`, `mihon-pixels-2.json`, `mihon-{base,chunk}-2-*`, and
 `{base,chunk}-2-e2e/`.
 
+Merge `3798a575` retains the tested production tree. Post-merge FitNotes thread/process:
+3253.257/5919.652 ms (+0.14%/+0.26%); Mihon: 8671.127/20306.984 ms (-2.50%/-0.98%).
+Both finish all steps without wedges, timeouts, errors or new requirements. Raw values:
+`post-2-1.json`, `mihon-post-2-1.json`.
+
 ## Deferred scope
 
 - Generated API expansion and native/DEX ownership: broad coupling and compatibility risk.
