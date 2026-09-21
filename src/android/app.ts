@@ -473,6 +473,7 @@ rt.register({
 });
 
 let audioSession = 0;
+let audioCapturePolicy = 1;
 class JVibrationEffect extends JObj {
   timings: bigint[] = [];
   repeat = -1;
@@ -596,6 +597,11 @@ for (const [name, methods, statics] of [
     "areEffectsSupported([I)[I": (ids: Int32Array) => new Int32Array(ids.length).fill(2),
   }],
   ["android/media/AudioManager", {
+    "getAllowedCapturePolicy()I": () => audioCapturePolicy,
+    "setAllowedCapturePolicy(I)V": (policy: number) => {
+      if (policy < 1 || policy > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid capture policy");
+      audioCapturePolicy = policy;
+    },
     "getSpatializer()Landroid/media/Spatializer;": () => { rt.link("android/media/Spatializer"); return new JSpatializer(); },
     "getStreamVolume(I)I": () => 5,
     "getStreamMaxVolume(I)I": () => 10,
