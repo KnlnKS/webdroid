@@ -4685,3 +4685,30 @@ main loop, required native delegate, or frame-completion lag. All 524 available 
 report `ok`; 12 excluded web-content frames report `unavailable`. It retains only the two known
 YouTube settle timeouts and the documented live-app errors. The corpus renders 20/20 APKs and
 reports 46 current compatibility gaps. No visual golden is changed.
+
+
+## 2026-09-21 — staged fuzz-audit integration with a CPU gate
+
+Extracted from `1bb72551` against frozen main `02aec2c1`. Retained faster UTF-16 conversion,
+ancestor layout-flag propagation without duplicate parent callbacks, and awaited UI-tree
+capture. Final production revision `bccf7ff3`, tree `ca0a097592e72aa527b97c1f20c14811c8155bad`.
+Three alternating pairs per workload: renderer-thread/process CPU changes -4.63%/-1.80%
+for FitNotes and -1.39%/+0.91% for Mihon; post-merge checks also stay below +5%.
+
+Do not restore the discarded dialog or layout-replay assumptions. Bundled AOSP
+`Activity.onDestroy` dismisses managed dialogs; general `WindowManagerGlobal` cleanup
+removes leaked windows without calling `Dialog.dismiss`. `ViewRootImpl` filters first-pass
+layout requesters by the surviving FORCE_LAYOUT flag; `View.layout` clears that flag.
+A browser probe that merely confirms a proposed callback or extra measure is not Android
+parity evidence. The first dialog extraction and unconditional replay were withdrawn.
+
+Typecheck, 1,237 tests, zero-method-failure FitNotes compilation and 6/6 text parity pass.
+Framework coverage remains 295/363. Full E2E completes 159 steps with zero wedges or action
+failures and 524 successful process snapshots. Two YouTube quiescence timeouts occur during
+actual playback; fresh main stays on home at those same player steps, so its lack of timeouts
+is not equivalent player coverage. Caption fields and existing SAX/matrix gaps remain;
+video-control correctness and comparative playback CPU are not established by this run.
+The broad API/ownership and software-renderer expansion remains deferred.
+
+See [the integration ledger](fuzz-integration.md) for every merge, withdrawal, CPU samples,
+visual comparisons, evidence paths and limitations. No golden changed.

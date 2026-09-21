@@ -2,7 +2,12 @@
 
 Fixed comparison baseline: `02aec2c1f92c140a1754ba72a0e239a7305211da` (starting main).
 Source: `codex/cpu-overhead` at `1bb72551`, including reviewed fuzz-audit repairs.
-Status: integrating independent changes through focused branches and merges.
+Status: retained subset merged and validated. Final production revision: `bccf7ff3`.
+Three improvements retained: UTF-16 conversion, ancestor flag repair, async UI capture.
+Dialog teardown and unconditional layout replay were withdrawn after AOSP evidence review.
+Repeated FitNotes/Mihon CPU stays within +5%; all 1,237 unit tests pass. Full E2E completes
+159 steps with zero wedges and two YouTube settling limits on a newly reached playback path.
+The ledger records per-merge measurements, baseline comparisons and remaining limits.
 
 1. Character-array conversion: avoid iterator expansion, preserve every UTF-16 code unit.
 2. Layout invalidation: repair ancestor flags; preserve Android callback/replay filtering.

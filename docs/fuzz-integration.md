@@ -3,6 +3,19 @@
 Baseline: `02aec2c1f92c140a1754ba72a0e239a7305211da`. Source: `1bb72551`.
 Local main only; no remote push. Baseline stays fixed across all chunks.
 
+## Final decision
+
+Retained in local main: UTF-16 conversion optimization, narrowly scoped ancestor layout-flag
+repair, and async UI-tree capture. Final production revision: `bccf7ff3`; production tree:
+`ca0a097592e72aa527b97c1f20c14811c8155bad`. No measured CPU gate crossed +5%.
+Three matched pairs per workload: FitNotes thread/process -4.63%/-1.80%; Mihon
+-1.39%/+0.91%. These are renderer CPU measurements for those working workloads, not an
+all-APK or whole-browser CPU guarantee. Both post-merge checks also pass.
+
+The general dialog-dismiss change was withdrawn after AOSP contradicted its callback
+semantics. Unconditional layout replay was also removed; Android's flag filter and parent
+callback guard are preserved. The larger fuzz branch remains unmerged.
+
 ## Protocol
 
 The same harness from source revision `1bb72551` drives both server revisions through
@@ -178,6 +191,12 @@ is not a reliable loaded-content checkpoint, so this is an explicit harness limi
 No goldens changed. Evidence: `summary-6.json`, `mihon-summary-6.json`, `pixels-6.json`,
 `mihon-pixels-6.json`, `library-{base,candidate}.{json,png}`.
 
+Merge `bccf7ff3` retains production tree `ca0a097592e72aa527b97c1f20c14811c8155bad`.
+Post-merge FitNotes thread/process 3216.548/5922.936 ms
+(-4.90%/-2.44%); Mihon 8678.173/20445.987 ms
+(-1.44%/+0.58%). All 56 steps pass the compatibility/visibility/liveness checks.
+Evidence: `post-6-summary.json`, `post-6-1.json`, `mihon-post-6-1.json`.
+
 ## Deferred scope
 
 - Generated API expansion and native/DEX ownership: broad coupling and compatibility risk.
@@ -188,3 +207,38 @@ No goldens changed. Evidence: `summary-6.json`, `mihon-summary-6.json`, `pixels-
 - Android-side semantic fuzz targets and exit handling: no connected Android oracle for
   validation. The source patch also needs correction for missing targets and oracle-free
   exit classification; do not cherry-pick it unchanged. The one-off tree replay script stays out.
+
+## Final validation on the retained state
+
+- Typecheck passes; 1,237 tests pass, zero fail, 26,599 assertions (218 files).
+- FitNotes smoke compiles 4,213 classes with zero method failures.
+- Text parity: 6/6 paragraphs. Framework delegate coverage stays 295/363; the 68 gaps
+  remain unsupported, not newly implemented.
+- Full serialized E2E: 159 steps across 12 flows, 827.1 seconds. Zero main-loop wedges
+  or harness action failures; all 524 relevant process-diagnostic snapshots succeed.
+- Two YouTube settle timeouts remain at `show-controls` and `pause`. They must not be
+  described as a clean 159-step functional pass. A fresh, matching main replay completes
+  without these timeouts but stays on the home screen at the supposed player steps;
+  the candidate reaches actual Big Buck Bunny playback. Its timeout telemetry shows
+  continuing presentations, sockets and timers. Thus these runs do not provide equivalent
+  player workloads or establish pause/control compatibility. Caption-style fields and a
+  short-form `mapRect` diagnostic appear only in the candidate's newly reached player path.
+  They remain real compatibility gaps. The SAX initialization error reproduces on main.
+  Images and complete diagnostics are in `final-actual/youtube/`, `baseline-replay/youtube/`,
+  and `youtube-matched-comparison.json`; no error is suppressed or wait extended.
+- No added missing/native requirements outside YouTube. TikTok's existing render-error
+  footprint remains. Lichess's pthread and Stockfish failures match baseline signatures;
+  only allocated code-block addresses are normalized for that comparison. Harmonic's
+  atomic-regex error also reproduced in the earlier fresh main comparison.
+- Static pixels versus saved main: FitNotes 38/39 exact (168 caret pixels); Calculator
+  6/8 exact (each remaining image differs in a 1-by-34-pixel vertical column); Mihon
+  onboarding 5/5 exact; Mihon app 15/17 exact (initial spinner phase and random library face).
+  Separate quiescence captures confirm the loaded Mihon library on both revisions.
+- Unchanged-golden content differences: FitNotes 40.12%, Mihon app 62.13%, Harmonic
+  32.50%, onboarding 17.69%. Random/live content prevents treating the small aggregate
+  change as a fidelity improvement. Goldens are unchanged.
+
+Final logs, `final-comparison.json`, `final-static-pixels.json`, full captures and report:
+`/tmp/webdroid-staged-integration/webdroid-shots/integration/`. The main replay was saved
+separately; `tests/e2e/actual/` and `tests/e2e/report/` again show the full candidate matrix.
+The failed assumptions and intermediate measurements above are retained for auditability.
