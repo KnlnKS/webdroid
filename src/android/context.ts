@@ -2,7 +2,7 @@ import { type JFile, vfs, mkFile } from "../jvm/natives/jio";
 import { JObj, rt, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
 import { resString, themeOf, JTheme, obtainStyled, resolveStyleValue, type JAttrSet, JTypedArray } from "./res";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { newObj, vcall, systemClassLoader } from "../jvm/natives/jlang";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
@@ -51,9 +51,6 @@ const viaResources = (name: string, desc: string, themed = false) => async funct
 let defaultDisplay: unknown;
 export const display = () => defaultDisplay ??= newObj("android/view/Display", null);
 export const displayListeners = new Set<unknown>();
-/** the one loader Class.getClassLoader() hands out, so `ctx.getClassLoader() == X.class.getClassLoader()` holds */
-let loader: unknown;
-const bootLoader = () => loader ??= rt.link("java/lang/Class").ctor.prototype[mangleMethod("getClassLoader", "()Ljava/lang/ClassLoader;")]();
 /**
  * A runtime permission is DENIED until the app asks for it, which is the state a freshly
  * installed app is in — reporting a blanket grant sends an app straight past the fallback it
@@ -266,7 +263,7 @@ export const contextMethods: NativeSpec["methods"] = {
     a.host = this.$host.res;
     return a;
   },
-  "getClassLoader()Ljava/lang/ClassLoader;": function (this: JContext) { return this.packageLoader ?? bootLoader(); },
+  "getClassLoader()Ljava/lang/ClassLoader;": function (this: JContext) { return this.packageLoader ?? systemClassLoader(); },
   "getPackageResourcePath()Ljava/lang/String;": function (this: JContext) { return getAppInfo(this.$host).sourceDir; },
   "getPackageCodePath()Ljava/lang/String;": function (this: JContext) { return getAppInfo(this.$host).sourceDir; },
   // AOSP's ensurePrivateDirExists: the directory exists once asked for (native code stat()s it)

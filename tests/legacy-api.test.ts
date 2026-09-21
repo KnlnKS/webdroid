@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { JThread, curThread, newObj, setCurThread, vcall, vcallMaybe } from "../src/jvm/natives/jlang";
+import { JClassLoader, JThread, curThread, newObj, setCurThread, vcall, vcallMaybe } from "../src/jvm/natives/jlang";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { Resources } from "../src/android/res";
 import { JAssetManager, type JResources } from "../src/android/resnative";
@@ -9,6 +9,7 @@ import { PROCESS_PID } from "../src/android/os";
 import { fireActivityLifecycle, JActivity, JApplication } from "../src/android/app";
 import { appHost, setAppHost } from "../src/android/apphost";
 import { onMain } from "../src/android/mainloop";
+import { vfs } from "../src/jvm/natives/jio";
 
 const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => vcallMaybe(rt.link(cls).ctor, name, desc, ...args);
 
@@ -683,10 +684,19 @@ test("Locale constants carry their language and country, and JSON text prints a 
   expect(await vcall(json, "toString", "()Ljava/lang/String;")).toBe('{"big":9007199254740993}');
 });
 
-test("Android path loaders expose the BaseDexClassLoader hierarchy", async () => {
+test("Android path loaders expose their hierarchy and readable native library paths", async () => {
   for (const name of ["dalvik/system/PathClassLoader", "dalvik/system/DexClassLoader", "webdroid/PackageClassLoader"]) {
     expect(rt.iof(rt.make(name), "dalvik/system/BaseDexClassLoader")).toBe(1);
   }
+  const loader = rt.make("dalvik/system/PathClassLoader");
+  if (!(loader instanceof JClassLoader)) throw new Error("Invalid class loader");
+  loader.runtime = rt.fork();
+  loader.runtime.classpath["lib/arm64-v8a/libfixture.so"] = new Uint8Array([1, 2, 3]);
+  loader.runtime.classpathLocations.set("lib/arm64-v8a/libfixture.so", "/data/fixture.apk");
+  const path = await vcall(loader, "findLibrary", "(Ljava/lang/String;)Ljava/lang/String;", "fixture");
+  expect(vfs.read(path)).toEqual(new Uint8Array([1, 2, 3]));
+  expect(await vcall(loader, "findLibrary", "(Ljava/lang/String;)Ljava/lang/String;", "absent")).toBeNull();
+  vfs.delete(path);
 });
 
 test("ContextWrapper.getResources reaches a base context's overriding getResources, and Context.getString goes through it", async () => {

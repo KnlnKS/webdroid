@@ -326,7 +326,7 @@ rt.register({
   name: "java/lang/ClassLoader",
   ctor: JClassLoader,
   methods: {
-    "static getSystemClassLoader()Ljava/lang/ClassLoader;": () => bootLoader,
+    "static getSystemClassLoader()Ljava/lang/ClassLoader;": systemClassLoader,
     "<init>()V": function (this: JClassLoader) { this.parent = bootLoader; },
     "<init>(Ljava/lang/ClassLoader;)V": function (this: JClassLoader, parent: JClassLoader | null) { this.parent = parent; },
     "getParent()Ljava/lang/ClassLoader;": function (this: JClassLoader) { return this.parent; },
@@ -368,11 +368,24 @@ rt.register({
       const url = await vcall(this, "getResource", "(Ljava/lang/String;)Ljava/net/URL;", path.replace(/^\//, ""));
       return url ? vcall(url, "openStream", "()Ljava/io/InputStream;") : null;
     },
-    // the path System.load would take for lib<name>.so, or null: dlopen resolves it by name
-    "findLibrary(Ljava/lang/String;)Ljava/lang/String;": (n: string) => { const a = pickAbi((abi) => rt.hasClasspath(`lib/${abi}/lib${n}.so`)); return a ? `/lib/lib${n}.so` : null; },
+    "findLibrary(Ljava/lang/String;)Ljava/lang/String;": async function (this: JClassLoader, n: string) {
+      const abi = pickAbi((a) => this.runtime.hasClasspath(`lib/${a}/lib${n}.so`));
+      if (!abi) return null;
+      const { vfs, apkPath } = await import("./jio");
+      const entry = `lib/${abi}/lib${n}.so`;
+      const archive = this.runtime.classpathLocations.get(entry) ?? apkPath();
+      const path = `${archive}.lib/${abi}/lib${n}.so`;
+      if (!vfs.exists(path)) {
+        const bytes = await this.runtime.readClasspath(entry);
+        if (!bytes) return null;
+        vfs.write(path, bytes, false);
+      }
+      return path;
+    },
   },
 });
 const bootLoader = new JClassLoader();
+export function systemClassLoader(): unknown { return rt.classLoader ?? bootLoader; }
 /** a classpath entry as an InputStream, or null when the apk has no such file */
 export async function classpathStream(path: string, runtime: Runtime = rt): Promise<unknown> {
   const bytes = await runtime.readClasspath(path);
@@ -1640,7 +1653,7 @@ rt.register({
     "join(J)V": function (this: JThread, ms: bigint) { return join(this, Number(ms)); },
     "join(JI)V": function (this: JThread, ms: bigint, ns: number) { return join(this, Number(ms) + (ns > 0 ? 1 : 0)); },
     "getThreadGroup()Ljava/lang/ThreadGroup;": () => mainGroup,
-    "getContextClassLoader()Ljava/lang/ClassLoader;": () => bootLoader,
+    "getContextClassLoader()Ljava/lang/ClassLoader;": systemClassLoader,
     "setContextClassLoader(Ljava/lang/ClassLoader;)V": () => {},
     "getStackTrace()[Ljava/lang/StackTraceElement;": () => jsStackTrace(new Error().stack),
     "static currentThread()Ljava/lang/Thread;": () => curThread,

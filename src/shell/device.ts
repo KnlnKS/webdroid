@@ -130,6 +130,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   // interface is a class provenance withheld would otherwise link it, find no dex yet, and
   // auto-stub it into the class cache for the rest of the run.
   rt.linkNatives((name, e) => console.warn("[link native]", name, e));
+  rt.classLoader = rt.make("dalvik/system/PathClassLoader");
   const pkg = attrStr(manifest, "package") ?? "app";
   await vfs.prepare(pkg);
   const appNode = manifest.children.find((c) => c.name === "application");
