@@ -37,6 +37,12 @@ async function probe() {
   const result = { measures, draws, width: view.layout?.lines[0].width, height: view.measuredH,
     center: [...ctx.getImageData(50, 16, 1, 1).data], outside: [...ctx.getImageData(10, 16, 1, 1).data],
     layout: await vcall(view, "getLayout", "()Landroid/text/Layout;") === view.layout };
+  const heightLimits: number[] = [];
+  for (const [method, value] of [["setHeight", 20], ["setMaxHeight", 25], ["setLines", 1]] as const) {
+    await vcall(view, method, "(I)V", value);
+    await vcall(view, "onMeasure", "(II)V", makeSpec(100, MS_EXACTLY), makeSpec(100, MS_AT_MOST));
+    heightLimits.push(view.measuredH);
+  }
   await vcall(view, "setText", "(Ljava/lang/CharSequence;)V", "A long title with a location");
   view.singleLine = view.ellipsizeEnd = true;
   const width = measureText(view.paintT, "A long title…"), wrapped = await view.measuredLines(width);
@@ -114,7 +120,7 @@ async function probe() {
     ellipsis: await vcall(mixedLayout, "getEllipsisCount", "(I)I", 0),
     span: [mixedLayout.replacements[0].start, mixedLayout.replacements[0].end], original: mixedText.text,
     same: mixedLayout === mixed.layout, pixels: mixedCanvas.getImageData(0, 0, 80, 60).data.every((v, i) => v === directPixels[i]) };
-  return { ...result, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
+  return { ...result, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
     fitting: (await view.measuredLines(measureText(view.paintT, view.text))).lines.map(l => l.text), cleared: (await view.measuredLines(width)).replacements.length === 0,
     compound: { drawsAt, retained, restored: surface.getTransform().isIdentity } };
 }

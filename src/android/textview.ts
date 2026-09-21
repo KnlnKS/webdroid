@@ -36,6 +36,7 @@ export class JTextView extends JView {
   imeOptions = 0; privateImeOptions: string | null = null; breakStrategy = 0; hyphenation = 0; autoSizeType = 0;
   linksClickable = true; fontVariation: string | null = null;
   maxW = Infinity;
+  maxH = Infinity;
   text = "";
   rawText: unknown = "";       // original CharSequence (may be Spannable)
   hint = "";
@@ -360,10 +361,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
 
   "setSingleLine()V": function (this: JTextView) { this.singleLine = true; requestLayout(this); },
   "setSingleLine(Z)V": function (this: JTextView, v: number) { this.singleLine = !!v; requestLayout(this); },
-  "setMaxLines(I)V": function (this: JTextView, n: number) { this.maxLinesV = n || Infinity; requestLayout(this); },
+  "setMaxLines(I)V": function (this: JTextView, n: number) { this.maxLinesV = n; this.maxH = Infinity; requestLayout(this); },
   "getMaxLines()I": function (this: JTextView) { return Number.isFinite(this.maxLinesV) ? this.maxLinesV : 0x7fffffff; },
-  "setMinLines(I)V": function (this: JTextView, n: number) { this.minLinesV = n; requestLayout(this); },
-  "setLines(I)V": function (this: JTextView, n: number) { this.maxLinesV = n; this.minLinesV = n; requestLayout(this); },
+  "setMinLines(I)V": function (this: JTextView, n: number) { this.minLinesV = n; this.minH = 0; requestLayout(this); },
+  "setLines(I)V": function (this: JTextView, n: number) { this.maxLinesV = n; this.maxH = Infinity; this.minLinesV = n; this.minH = 0; requestLayout(this); },
   "setEllipsize(Landroid/text/TextUtils$TruncateAt;)V": function (this: JTextView, e: { ord: number } | null) {
     const end = e?.ord === 2;
     if (this.ellipsizeEnd !== end) { this.ellipsizeEnd = end; requestLayout(this); }
@@ -447,6 +448,11 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getTotalPaddingRight()I": compoundPadR,
   "getTotalPaddingTop()I": compoundPadT,
   "getTotalPaddingBottom()I": compoundPadB,
+  "setHeight(I)V": function (this: JTextView, h: number) {
+    this.minH = this.maxH = h; this.minLinesV = 0; this.maxLinesV = Infinity; requestLayout(this);
+  },
+  "setMaxHeight(I)V": function (this: JTextView, h: number) { this.maxH = h; this.maxLinesV = Infinity; requestLayout(this); },
+  "getMaxHeight()I": function (this: JTextView) { return Number.isFinite(this.maxH) ? this.maxH : -1; },
   "setWidth(I)V": function (this: JTextView, w: number) { this.minW = w; this.maxW = w; requestLayout(this); },
   "setMinEms(I)V": function (this: JTextView, ems: number) { this.minW = Math.round(ems * this.paintT.textSize); requestLayout(this); },
   "setRawInputType(I)V": function (this: JTextView, t: number) { this.inputTypeV = t; },
@@ -511,7 +517,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     "setTextLocales(Landroid/os/LocaleList;)V", "setImeHintLocales(Landroid/os/LocaleList;)V", "beginBatchEdit()V",
     "endBatchEdit()V", "setHighlightColor(I)V", "setHorizontallyScrolling(Z)V", "setMarqueeRepeatLimit(I)V",
     "setSelectAllOnFocus(Z)V", "setTextIsSelectable(Z)V", "setError(Ljava/lang/CharSequence;)V", "setAutoLinkMask(I)V",
-    "setMaxEms(I)V", "setMaxHeight(I)V"),
+    "setMaxEms(I)V"),
   ...stubs(1, "getIncludeFontPadding()Z"),
   ...stubs(0, "isHorizontallyScrollable()Z"),
   ...stubs(-1, "getAutoSizeMinTextSize()I", "getAutoSizeMaxTextSize()I", "getAutoSizeStepGranularity()I"),
@@ -568,6 +574,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const vPad = this.padT + this.padB;
     let h = this.textHeight(lineCount) + vPad + dtH;
     if (this.layout) h = Math.max(h, layoutHeight(this.layout) + vPad + dtH);
+    h = Math.min(h, this.maxH);
     h = Math.max(h, this.minH, (this.drawableL ? compoundHeight(this.drawableL) : 0) + vPad, (this.drawableR ? compoundHeight(this.drawableR) : 0) + vPad);
     if (specMode(hSpec) !== MS_EXACTLY) {
       const min = vcallOn(thread, this, "getSuggestedMinimumHeight", "()I");

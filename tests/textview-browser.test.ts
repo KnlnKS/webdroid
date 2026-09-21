@@ -15,6 +15,7 @@ test("TextView measures and paints replacement spans with cached geometry and re
     expect(result).toMatchObject({ measures: 1, draws: 1, width: 24, center: [0, 255, 0, 255], outside: [0, 0, 0, 0], layout: true,
       ellipsis: ["A long title…"], cached: true, fitting: ["A long title with a location"], cleared: true });
     expect(result.height).toBeGreaterThanOrEqual(32);
+    expect(result.heightLimits).toEqual([20, 25, result.height]);
     expect(result.styles).toEqual([true, true, true]);
     expect(result.compound).toEqual({ drawsAt: [[2, 30], [51, 31], [24, 3], [23, 60]],
       retained: [[2, 3, 8, 11], [1, 2, 11, 8], [0, 0, 5, 7], [2, 1, 14, 6]], restored: true });
