@@ -152,10 +152,18 @@ async function nativeWindow() {
   const canvas = new OffscreenCanvas(2, 1), ctx = canvas.getContext("2d")!;
   ctx.drawImage(surface.present!, 0, 0);
   const pixels = [...ctx.getImageData(0, 0, 2, 1).data];
+  await invoke("ANativeWindow_setBuffersGeometry", [handle, 2, 2, 0x32315659]);
+  await invoke("ANativeWindow_lock", [handle, out, 0]);
+  const stride = mem.ld32(out + 8), bits = mem.ld32(out + 16);
+  mem.bytes(bits, 32).fill(81); mem.bytes(bits + 32, 16).fill(240); mem.bytes(bits + 48, 16).fill(90);
+  await invoke("ANativeWindow_unlockAndPost", [handle]);
+  ctx.drawImage(surface.present!, 0, 0);
+  const red = ctx.getImageData(0, 0, 1, 1).data;
+  const yv12 = stride === 16 && red[0] > 240 && red[1] < 10 && red[2] < 10 && red[3] === 255;
   await invoke("ANativeWindow_release", [handle]);
   const released = await invoke("ANativeWindow_lock", [handle, out, 0]);
   surface.present?.close(); mem.free(out);
-  return { locked, dimensions, duplicate, posted, pixels, released, frames: surface.frames };
+  return { locked, dimensions, duplicate, posted, pixels, yv12, released, frames: surface.frames };
 }
 async function windowCopy() {
   const screen = document.createElement("canvas"); screen.width = screen.height = 4;

@@ -23,6 +23,7 @@ export function nativeWindowFor(surface: GlSurface): number {
 }
 export function windowOf(h: number): GlSurface | null { return windows[h] ?? null; }
 const W = (a: ArgReader) => windows[a.i()];
+const YV12 = 0x32315659;
 interface WindowBuffer { width: number; height: number; format: number; bits: number; size: number; locked: boolean; lockedWidth: number; lockedHeight: number }
 const windowBuffers = new WeakMap<GlSurface, WindowBuffer>();
 function bufferOf(surface: GlSurface): WindowBuffer {
@@ -39,14 +40,15 @@ function lockWindow(_cpu: Cpu, args: ArgReader): number {
   const buffer = bufferOf(surface);
   if (buffer.locked) return -16;
   const width = buffer.width || surface.width, height = buffer.height || surface.height;
-  const size = width * height * (buffer.format === 4 ? 2 : 4);
+  const stride = buffer.format === YV12 ? Math.ceil(width / 16) * 16 : width;
+  const size = buffer.format === YV12 ? (stride + Math.ceil(stride / 32) * 16) * height : width * height * (buffer.format === 4 ? 2 : 4);
   if (!size || !Number.isSafeInteger(size) || size > 0x7fffffff) return -22;
   if (size !== buffer.size) {
     if (buffer.bits) mem.free(buffer.bits);
     buffer.bits = mem.malloc(size); buffer.size = buffer.bits ? size : 0;
   }
   if (!buffer.bits) return -12;
-  mem.st32(out, width); mem.st32(out + 4, height); mem.st32(out + 8, width);
+  mem.st32(out, width); mem.st32(out + 4, height); mem.st32(out + 8, stride);
   mem.st32(out + 12, buffer.format); stp(out + 16, buffer.bits);
   if (dirty) {
     mem.st32(dirty, 0); mem.st32(dirty + 4, 0);
@@ -59,6 +61,21 @@ async function postWindow(_cpu: Cpu, args: ArgReader): Promise<number> {
   const surface = W(args), buffer = surface && windowBuffers.get(surface);
   if (!surface || !buffer?.locked) return -22;
   const width = buffer.lockedWidth, height = buffer.lockedHeight;
+  if (buffer.format === YV12) {
+    const stride = Math.ceil(width / 16) * 16, chromaStride = Math.ceil(stride / 32) * 16;
+    // Android stores Y,V,U with both strides aligned to 16; I420's layout names Y,U,V.
+    const ySize = stride * height, chromaSize = chromaStride * height / 2;
+    let frame: VideoFrame | undefined;
+    try {
+      frame = new VideoFrame(mem.bytes(buffer.bits, buffer.size), {
+        format: "I420", codedWidth: width, codedHeight: height, timestamp: 0,
+        layout: [{ offset: 0, stride }, { offset: ySize + chromaSize, stride: chromaStride }, { offset: ySize, stride: chromaStride }],
+        colorSpace: { matrix: "smpte170m", primaries: "smpte170m", transfer: "smpte170m", fullRange: false },
+      });
+      presentSurface(surface, await createImageBitmap(frame));
+    } finally { frame?.close(); buffer.locked = false; }
+    return 0;
+  }
   const pixels = new Uint8ClampedArray(width * height * 4);
   if (buffer.format === 4) {
     for (let i = 0; i < width * height; i++) {
@@ -173,7 +190,8 @@ export function ndkInit(): void {
     ANativeWindow_lock: lockWindow, ANativeWindow_unlockAndPost: postWindow,
     ANativeWindow_setBuffersGeometry: (_c, a) => {
       const surface = W(a), width = a.i(), height = a.i(), format = a.i();
-      if (!surface || width < 0 || height < 0 || (!width !== !height) || ![0, 1, 2, 4].includes(format)) return -22;
+      if (!surface || width < 0 || height < 0 || (!width !== !height) || ![0, 1, 2, 4, YV12].includes(format)
+        || format === YV12 && ((width | height) & 1)) return -22;
       const buffer = bufferOf(surface);
       if (buffer.locked) return -16;
       buffer.width = width; buffer.height = height; buffer.format = format || 1;
