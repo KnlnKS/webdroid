@@ -112,11 +112,11 @@ export function jarray<T>(items: T[], elem = "Ljava/lang/Object;"): T[] {
 }
 export const strArray = (a: readonly string[]) => jarray([...a], "Ljava/lang/String;");
 
-/** code units → string, chunked to stay under the spread argument limit */
+/** code units → string, chunked to stay under the argument limit */
 export function charsToString(chars: Uint16Array | Uint8Array, off: number, len: number): string {
   let s = "";
   for (let i = 0; i < len; i += 1024) {
-    s += String.fromCharCode(...chars.subarray(off + i, off + Math.min(len, i + 1024)));
+    s += Reflect.apply(String.fromCharCode, null, chars.subarray(off + i, off + Math.min(len, i + 1024)));
   }
   return s;
 }
