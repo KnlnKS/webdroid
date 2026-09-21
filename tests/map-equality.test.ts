@@ -46,3 +46,15 @@ test("a null mapping is distinct from an absent key", async () => {
   await put(b, "present", null);
   expect(await equals(a, b)).toBe(0);
 });
+
+test("copy constructors do not share mutable mapping entries", async () => {
+  for (const name of ["java/util/HashMap", "java/util/EnumMap"]) {
+    const source = await map(name);
+    const key = name.endsWith("EnumMap") ? Reflect.get(rt.link("java/util/concurrent/TimeUnit").ctor, "s$SECONDS") : "key";
+    await put(source, key, "before");
+    const copy = await newObj(name, name.endsWith("EnumMap") ? "(Ljava/util/EnumMap;)V" : "(Ljava/util/Map;)V", source);
+    await put(copy, key, "after");
+    expect(await vcall(source, "get", `(${O})${O}`, key)).toBe("before");
+    expect(await vcall(copy, "get", `(${O})${O}`, key)).toBe("after");
+  }
+});

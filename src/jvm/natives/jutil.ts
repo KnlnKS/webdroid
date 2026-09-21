@@ -6,7 +6,7 @@ import {
 } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo } from "../runtime";
 import {
-  synchronizedCollection, synchronizedList, synchronizedMap, synchronizedSet,
+  synchronizedCollection, synchronizedList, synchronizedMap, synchronizedSet, synchronizedSortedMap,
   unmodifiableCollection, unmodifiableList, unmodifiableMap, unmodifiableSet, unmodifiableSortedMap, unmodifiableSortedSet,
 } from "./jwrappers";
 
@@ -719,7 +719,7 @@ function mapMethods(): Methods {
       return c;
     },
     "<init>(Ljava/util/Map;)V": async function (this: JMap, src: unknown) {
-      if (src instanceof JMap) { this.m = new Map(src.m); this.slow = src.slow.slice(); }
+      if (src instanceof JMap) { this.m = new Map([...src.m].map(([k, e]) => [k, { ...e }])); this.slow = src.slow.map(e => ({ ...e })); }
       else if (src) await copyMapInto(src, this);
     },
     "size()I": function (this: JMap) { return this.m.size + this.slow.length; },
@@ -1074,7 +1074,10 @@ for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/conc
   "java/util/WeakHashMap", "java/util/IdentityHashMap", "java/util/Hashtable", "java/util/EnumMap",
   "android/util/ArrayMap"]) {
   const methods = { ...mapMethods(), ...mapExtras[n] };
-  if (n === "java/util/EnumMap") methods["put(Ljava/lang/Enum;Ljava/lang/Object;)Ljava/lang/Object;"] = methods["put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"];
+  if (n === "java/util/EnumMap") {
+    methods["put(Ljava/lang/Enum;Ljava/lang/Object;)Ljava/lang/Object;"] = methods["put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"];
+    methods["<init>(Ljava/util/EnumMap;)V"] = methods["<init>(Ljava/util/Map;)V"];
+  }
   rt.register({
     name: n, ctor: class extends JMap {}, typeVars: "K,V",
     sup: n === "java/util/LinkedHashMap" ? "java/util/HashMap" : n === "android/util/ArrayMap" ? "java/lang/Object" : "java/util/AbstractMap",
@@ -2524,6 +2527,7 @@ rt.register({
     "static synchronizedCollection(Ljava/util/Collection;)Ljava/util/Collection;": synchronizedCollection,
     "static synchronizedList(Ljava/util/List;)Ljava/util/List;": synchronizedList,
     "static synchronizedMap(Ljava/util/Map;)Ljava/util/Map;": synchronizedMap,
+    "static synchronizedSortedMap(Ljava/util/SortedMap;)Ljava/util/SortedMap;": synchronizedSortedMap,
     "static synchronizedSet(Ljava/util/Set;)Ljava/util/Set;": synchronizedSet,
     "static sort(Ljava/util/List;)V": (l: unknown) => vcallMaybe(l, "sort", "(Ljava/util/Comparator;)V", null),
     "static sort(Ljava/util/List;Ljava/util/Comparator;)V": (l: unknown, c: unknown) => vcallMaybe(l, "sort", "(Ljava/util/Comparator;)V", c),

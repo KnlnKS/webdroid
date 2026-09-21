@@ -40,7 +40,7 @@ const names: Record<Mode, Record<Kind, string>> = {
   synchronized: {
     collection: "webdroid/SynchronizedCollection", list: "webdroid/SynchronizedList",
     set: "webdroid/SynchronizedSet", sortedSet: "webdroid/SynchronizedSet",
-    map: "webdroid/SynchronizedMap", sortedMap: "webdroid/SynchronizedMap",
+    map: "webdroid/SynchronizedMap", sortedMap: "webdroid/SynchronizedSortedMap",
   },
 };
 
@@ -201,6 +201,7 @@ registerCollection("webdroid/SynchronizedCollection", "synchronized", "collectio
 registerCollection("webdroid/SynchronizedList", "synchronized", "list", ["java/util/List", "java/util/Collection", "java/lang/Iterable"]);
 registerCollection("webdroid/SynchronizedSet", "synchronized", "set", ["java/util/Set", "java/util/Collection", "java/lang/Iterable"]);
 registerMap("webdroid/SynchronizedMap", "synchronized", false);
+registerMap("webdroid/SynchronizedSortedMap", "synchronized", true);
 
 export const unmodifiableCollection = (value: unknown) => wrap(value, "unmodifiable", "collection");
 export const unmodifiableList = (value: unknown) => wrap(value, "unmodifiable", "list");
@@ -212,3 +213,5 @@ export const synchronizedCollection = (value: unknown) => wrap(value, "synchroni
 export const synchronizedList = (value: unknown) => wrap(value, "synchronized", "list");
 export const synchronizedSet = (value: unknown) => wrap(value, "synchronized", "set");
 export const synchronizedMap = (value: unknown) => wrap(value, "synchronized", "map");
+
+export const synchronizedSortedMap = (value: unknown) => wrap(value, "synchronized", "sortedMap");
