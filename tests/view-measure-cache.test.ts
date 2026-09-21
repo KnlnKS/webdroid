@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
+import { rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
-import { attachView, JView, JViewGroup, layoutView, makeSpec, measureView, MS_EXACTLY, requestLayout } from "../src/android/view";
+import { attachView, JView, JViewGroup, layoutView, layoutRoot, replayLayoutRequests, makeSpec, measureView, MS_EXACTLY, requestLayout } from "../src/android/view";
+
+rt.linkNatives();
 
 class CountingView extends JView {
   measures = 0;
@@ -50,5 +53,32 @@ test("an in-layout hierarchy mutation invalidates the parent's measure cache", a
   await attachView(view, new JView(), -1, false);
   await measureView(view, widthSpec, heightSpec);
 
+  expect(view.measures).toBe(2);
+});
+
+test("a child request crosses a flagged parent and invalidates the root measure", async () => {
+  const root = new CountingGroup(), parent = new JViewGroup(), child = new JView();
+  parent.parent = root;
+  child.parent = parent;
+  const spec = makeSpec(100, MS_EXACTLY);
+  await measureView(root, spec, spec);
+  root.layoutRequested = false;
+  parent.layoutRequested = true;
+  requestLayout(child);
+  await measureView(root, spec, spec);
+  expect(root.measures).toBe(2);
+});
+
+test("a request during layout is measured again even after layout clears its flag", async () => {
+  class RequestingView extends CountingView {
+    [mangleMethod("onLayout", "(ZIIII)V")]() { requestLayout(this); }
+  }
+  const view = new RequestingView();
+  view.attached = true;
+  const spec = makeSpec(100, MS_EXACTLY);
+  await measureView(view, spec, spec);
+  await layoutRoot(view, 0, 0, 100, 100);
+  replayLayoutRequests();
+  await measureView(view, spec, spec);
   expect(view.measures).toBe(2);
 });

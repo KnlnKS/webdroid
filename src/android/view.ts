@@ -135,9 +135,10 @@ export function requestLayout(v: JView) {
     p.oldWSpec = -1;
     clearMeasureCache(p);
     // AOSP calls the parent's requestLayout() virtually: an override (Compose's AndroidViewHolder
-    // asks its layout node to remeasure, DrawerLayout declines mid-layout) resumes the walk itself
+    // asks its layout node to remeasure, DrawerLayout declines mid-layout) resumes the walk itself.
+    // layoutView clears flags per view; a marked parent may still have an unmarked root.
     const par = p.parent;
-    if (!par || par.layoutRequested) break;
+    if (!par) break;
     const f = jmethod(par, M_requestLayout);
     if (f && f !== nativeRequestLayout) { void guardApply(f as JMethod, par); break; }
   }
@@ -166,18 +167,14 @@ function shownPath(v: JView): boolean {
   for (let p: JView | null = v; p; p = p.parent) if (p.visibility === 8) return false;
   return true;
 }
-/**
- * AOSP getValidLayoutRequesters: only a requester whose flag survived the pass lost its request,
- * and only one still attached and not under a GONE ancestor asks again. Every requester's flagged
- * path is cleared first, so the new request marks it to the root. The repeat runs in the next
- * frame's pass rather than as a second pass in this one.
- */
+/** Layout clears request flags after onLayout, so replay attached, visible requesters even
+ *  when their flags were cleared: their measurement preceded the request. */
 export function replayLayoutRequests() {
   const rs = layoutPass.requesters;
   if (!rs.length) return;
   for (const r of rs) {
     r.inRequesters = false;
-    if (r.layoutRequested && r.attached && shownPath(r)) validRequesters.push(r);
+    if (r.attached && shownPath(r)) validRequesters.push(r);
   }
   for (const r of rs) for (let p: JView | null = r; p && p.layoutRequested; p = p.parent) p.layoutRequested = false;
   rs.length = 0;
