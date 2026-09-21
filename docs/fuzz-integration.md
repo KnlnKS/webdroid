@@ -46,7 +46,7 @@ is identical to the tested candidate. Post-merge CPU: thread 3295.035 ms (-3.31%
 6024.767 ms (-0.96%); 39/39 steps complete with the same clean compatibility checks.
 Evidence: `post-1-1.json`.
 
-### 2. Layout invalidation — accepted
+### 2. Layout invalidation — narrowed in the final candidate
 
 Source `4b7989fa`, extracted as `1182651` plus standalone fixture setup `9136d42`.
 Two new core regression cases reproduce missed root remeasurement on the pre-change source;
@@ -138,6 +138,45 @@ chunk 2's three alternating FitNotes and Mihon pairs. The first full E2E run was
 and its artifacts moved to `withdrawn-dialog/`; it is not final-state evidence. Typecheck,
 1,237 unit tests, smoke, framework coverage and text checks had passed on that intermediate
 state. Repeat final validation after withdrawal and record post-merge CPU again.
+
+Withdrawal merge `5daf486d`: post-merge FitNotes thread/process
+3231.728/5946.330 ms (-0.52%/+0.71%); Mihon
+8604.702/20166.957 ms (-3.25%/-1.67%). All 56 steps complete cleanly.
+Evidence: `post-5-summary.json`, `post-5-1.json`, `mihon-post-5-1.json`.
+
+### 6. Narrow layout propagation to the proven defect — accepted
+
+AOSP `ViewRootImpl.getValidLayoutRequesters` (PC 26–31) requires `PFLAG_FORCE_LAYOUT`
+(0x1000) after the first layout pass; `View.layout` clears it at PC 243–247. The source
+branch's unconditional replay was therefore unjustified. Restore main's replay filter;
+replace the contrary test expectation with the actual Android rule. The original test
+proved the proposed behavior, not its correctness. Evidence: `layout-aosp-requesters.txt`
+and `layout-aosp-layout.txt`.
+
+Keep the internal stale-ancestor repair, while skipping the already-requested parent's
+virtual callback as Android does. A single core case now checks both root remeasurement
+and zero duplicate parent callbacks. Candidate commits `816b7d3`, `efb9fc5`; production
+tree `ca0a097592e72aa527b97c1f20c14811c8155bad`. Nine targeted tests and typecheck pass.
+Pre-guard samples are retained under `layout-pre-virtual-guard/` and excluded.
+The bundled `View.requestLayout` bytecode also confirms the parent `isLayoutRequested`
+guard before its virtual request (PC 80–94); see `layout-aosp-request.txt`.
+
+Three fresh alternating pairs per workload on the final candidate:
+
+| Workload | Main thread/process ms | Candidate thread/process ms | CPU change |
+| --- | ---: | ---: | ---: |
+| FitNotes | 3382.434 / 6070.863 | 3225.954 / 5961.534 | -4.63% / -1.80% |
+| Mihon | 8805.053 / 20328.622 | 8682.401 / 20513.103 | -1.39% / +0.91% |
+
+All 336 steps across 12 runs complete without wedges, timeouts, errors, or new missing/native
+requirements. FitNotes: all 39 trees match, 38/39 screenshots match; the 168 differing pixels
+form its blinking caret. Mihon: all 17 trees match, 15/17 screenshots match. The remaining
+captures show a random empty-library face and a launch spinner captured on both baseline
+and candidate repeats. Separate quiescence checks reach the fully loaded library on both,
+without errors; those images were inspected. The original presentation-count launch wait
+is not a reliable loaded-content checkpoint, so this is an explicit harness limitation.
+No goldens changed. Evidence: `summary-6.json`, `mihon-summary-6.json`, `pixels-6.json`,
+`mihon-pixels-6.json`, `library-{base,candidate}.{json,png}`.
 
 ## Deferred scope
 
