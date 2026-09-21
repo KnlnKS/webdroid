@@ -4732,3 +4732,28 @@ pass. TikTok's 462,058 classes smoke-compile with zero method failures.
 Chrome reaches real video after removing the layout failures; screenshot/interaction parity
 and performance remain under investigation. Evidence is under `webdroid-shots/tiktok-parity/`.
 The API 33 AVD runs the unchanged APK, completed guest onboarding and plays its live feed.
+
+Additional reached failures repaired during paired guest navigation:
+
+- SensorManager.getOrientation now computes both supported rotation-matrix layouts from the
+  bundled framework formulas. ClickableSpan/URLSpan inherit CharacterStyle and apply link
+  color/underline through virtual Paint methods; styled text retains TextPaint fields.
+- Search construction required insertion action-mode callbacks, transition names/groups,
+  PhoneWindow enter/exit transition state, Message.getTarget and MeasureSpec.toString.
+- Programmatic START/END rules were ignored. RelativeLayout now resolves them by direction,
+  follows a GONE anchor's same-rule chain (AOSP getRelatedView), and retains widths fixed by
+  opposing edges during its final MATCH_PARENT pass. The search input now ends at x=835,
+  beside the button, rather than overflowing to x=1230. AVD's corresponding edge is x=834.
+- Context exposed a plain ClassLoader, so TikTok's BaseDexClassLoader cast stopped Zoin
+  decompression. Startup now owns a PathClassLoader; findLibrary uses its owning runtime and
+  materializes a readable, archive-scoped path on demand. The unmodified Zoin native decoder
+  verifies all four lynxsuit outputs and loads liblynx.so. No Lynx JNI substitutes were added.
+- Java File.renameTo only moved files, whereas native rename already handled directory trees.
+  Sharing renamePath removes that mismatch: the downloaded search template now reports a
+  successful update instead of failing to rename its --updating directory.
+- TextView.setHeight and pixel maximum-height enforcement were missing. Existing browser
+  text coverage now exercises fixed height, a changed maximum and return to line sizing.
+
+Search-result rendering, font defaults, status insets, feed overlays and performance remain
+under investigation. Successful native decoding does not establish a working search result.
+JSON "missing method" reports require receiver diagnosis: the named methods already exist.
