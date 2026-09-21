@@ -77,7 +77,19 @@ Merge `3798a575` retains the tested production tree. Post-merge FitNotes thread/
 Both finish all steps without wedges, timeouts, errors or new requirements. Raw values:
 `post-2-1.json`, `mihon-post-2-1.json`.
 
-### 3. Activity dialog teardown — accepted
+### 3. Activity dialog teardown — withdrawn after Android evidence review
+
+**Not retained in final main.** Bundled AOSP `Activity.onDestroy` calls `dismiss` only
+for `mManagedDialogs` (PC 10–48). `WindowManagerGlobal.closeAllExceptView` reports leaked
+windows and calls `removeViewLocked` (PC 44–113), without `Dialog.dismiss`.
+`PhoneWindow.onDestroy` only unregisters its audio mode listener. Thus the historical
+claim that general window teardown dismisses all context-owned dialogs was incorrect.
+Our browser probe established the patch's behavior, not Android parity; its expected
+callback was wrong. The source patch and our extraction are deferred. The generic window
+cleanup gap needs a separate implementation with ownership/token and callback evidence.
+Disassemblies: `dialog-aosp-{activity,closeall,window}.txt` in focused evidence.
+
+The measurements below describe the withdrawn intermediate state for auditability.
 
 Source `3f7c2a3f`, extracted with corrected callback semantics as `00a5e91`.
 Main left a dialog showing after both finish and recreation. The browser reproduction now
@@ -110,8 +122,22 @@ This is test-harness code only. The production tree remains
 `4cfa72d886301e5a9e1ffa577cbcf784a390afb0`, identical to chunk 3; the shared measurement
 harness already contained this correction for every preceding comparison. Therefore chunk
 3's repeated CPU and compatibility evidence applies without another pre-merge benchmark.
-Post-merge measurements and the final full matrix follow. Evidence: focused check logs
+Merge `b823f214`; production tree unchanged. Post-merge FitNotes thread/process
+3162.784/5833.684 ms (-6.69%/-3.47%); Mihon
+8618.334/20473.704 ms (-3.09%/-0.17%). All 56 steps pass, with advancing
+ticks and no errors or new requirements. These are single post-merge checks, not a new
+claim of a larger optimization than the repeated candidate medians. Evidence:
+`post-4-summary.json`, `post-4-1.json`, `mihon-post-4-1.json`. The full matrix is running. Evidence: focused check logs
 `chunk-4-probe{,-before}.log`, `chunk-4-typecheck.log`.
+
+### Withdrawal and final retained state
+
+Withdraw `00a5e91` while retaining the string, layout and async capture chunks. Production
+tree returns exactly to `38e8731312d43692e8f0b400bdebaf7db40e8d11`, already validated by
+chunk 2's three alternating FitNotes and Mihon pairs. The first full E2E run was stopped
+and its artifacts moved to `withdrawn-dialog/`; it is not final-state evidence. Typecheck,
+1,237 unit tests, smoke, framework coverage and text checks had passed on that intermediate
+state. Repeat final validation after withdrawal and record post-merge CPU again.
 
 ## Deferred scope
 
