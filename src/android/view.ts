@@ -358,6 +358,7 @@ export class JView extends JObj {
   tag: unknown = null;
   keyedTags = new Map<number, unknown>();
   outlineProvider: unknown = undefined;
+  transitionName: string | null = null;
   clipToOutline = false;
   outline: JOutline | null = null;
   outlineDirty = true;
@@ -988,6 +989,8 @@ const viewMethods: NativeSpec["methods"] = {
   "getScaleY()F": function (this: JView) { return this.scaleYv; },
   "setRotation(F)V": function (this: JView, r: number) { this.rotationV = r; invalidate(); },
   "getRotation()F": function (this: JView) { return this.rotationV; },
+  "setTransitionName(Ljava/lang/String;)V": function (this: JView, name: string | null) { this.transitionName = name; },
+  "getTransitionName()Ljava/lang/String;": function (this: JView) { return this.transitionName; },
   "setPivotX(F)V": function (this: JView, p: number) { this.pivotXv = p; },
   "setPivotY(F)V": function (this: JView, p: number) { this.pivotYv = p; },
   "setElevation(F)V": function (this: JView, e: number) { this.elevationV = e; },
@@ -1546,7 +1549,7 @@ const viewMethods: NativeSpec["methods"] = {
     "setSoundEffectsEnabled(Z)V", "setImportantForAccessibility(I)V", "setAccessibilityLiveRegion(I)V",
     "onInitializeAccessibilityNodeInfo(Landroid/view/accessibility/AccessibilityNodeInfo;)V",
     "onInitializeAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)V", "setLabelFor(I)V",
-    "destroyDrawingCache()V", "buildDrawingCache()V", "setTransitionName(Ljava/lang/String;)V",
+    "destroyDrawingCache()V", "buildDrawingCache()V",
   "sendAccessibilityEvent(I)V", "announceForAccessibility(Ljava/lang/CharSequence;)V",
     "setVerticalScrollBarEnabled(Z)V", "setHorizontalScrollBarEnabled(Z)V",
     "setScrollBarStyle(I)V", "setScrollContainer(Z)V", "setImportantForAutofill(I)V",
@@ -1584,7 +1587,7 @@ const viewMethods: NativeSpec["methods"] = {
     "onKeyPreIme(ILandroid/view/KeyEvent;)Z", "onCheckIsTextEditor()Z", "fitSystemWindows(Landroid/graphics/Rect;)Z",
     "isInEditMode()Z", "getLayoutDirection()I", "getTextDirection()I", "isPaddingRelative()Z"),
   ...stubs(null, "getContentCaptureSession()Landroid/view/contentcapture/ContentCaptureSession;",
-    "getDrawingCache()Landroid/graphics/Bitmap;", "getTransitionName()Ljava/lang/String;",
+    "getDrawingCache()Landroid/graphics/Bitmap;",
     "createAccessibilityNodeInfo()Landroid/view/accessibility/AccessibilityNodeInfo;",
     "getAccessibilityNodeProvider()Landroid/view/accessibility/AccessibilityNodeProvider;",
     "getAccessibilityPaneTitle()Ljava/lang/CharSequence;", "getStateDescription()Ljava/lang/CharSequence;",
@@ -1656,6 +1659,7 @@ export class JViewGroup extends JView {
   disallowIntercept = false;
   touchTarget: JView | null = null;
   hierarchyChangeL: unknown = null;
+  transitionGroup: boolean | null = null;
 }
 /** Convert a LayoutParams to one this ViewGroup accepts (e.g. ViewPager needs its own LP type,
  *  and casts in its onLayout otherwise). Dispatches to the ViewGroup's own check/generate overrides. */
@@ -1982,6 +1986,13 @@ const vgMethods: NativeSpec["methods"] = {
     return out;
   },
   "static getChildMeasureSpec(III)I": (spec: number, padding: number, dim: number) => childMeasureSpec(spec, padding, dim),
+  "setTransitionGroup(Z)V": function (this: JViewGroup, group: number) { this.transitionGroup = !!group; },
+  "isTransitionGroup()Z": async function (this: JViewGroup) {
+    if (this.transitionGroup !== null) return +this.transitionGroup;
+    const outline = await vcall(this, "getOutlineProvider", "()Landroid/view/ViewOutlineProvider;");
+    return +(!!(await vcall(this, "getBackground", "()Landroid/graphics/drawable/Drawable;")) ||
+      (await vcall(this, "getTransitionName", "()Ljava/lang/String;")) !== null || !!outline && outline !== bgOutline);
+  },
   ...noops("onViewAdded(Landroid/view/View;)V", "onViewRemoved(Landroid/view/View;)V",
     "setChildrenDrawingCacheEnabled(Z)V", "setHandwritingBoundsOffsets(FFFF)V", "suppressLayout(Z)V",
     "setMotionEventSplittingEnabled(Z)V", "setDescendantFocusability(I)V",
@@ -1991,7 +2002,7 @@ const vgMethods: NativeSpec["methods"] = {
   ...stubs(null, "focusSearch(Landroid/view/View;I)Landroid/view/View;",
     "getLayoutTransition()Landroid/animation/LayoutTransition;"),
   ...stubs(0, "onRequestFocusInDescendants(ILandroid/graphics/Rect;)Z",
-    "requestChildRectangleOnScreen(Landroid/view/View;Landroid/graphics/Rect;Z)Z", "isTransitionGroup()Z"),
+    "requestChildRectangleOnScreen(Landroid/view/View;Landroid/graphics/Rect;Z)Z"),
   ...stubs(1, "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z"),
 
   "offsetDescendantRectToMyCoords(Landroid/view/View;Landroid/graphics/Rect;)V": function (this: JViewGroup, c: JView, r: JRect) {
