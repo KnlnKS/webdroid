@@ -12,6 +12,9 @@ test("LruCache resize evicts least-recent entries and snapshot is independent", 
   await vcall(cache, "get", `(${O})${O}`, "a");
   await vcall(cache, "resize", "(I)V", 2);
   expect(await vcall(cache, "get", `(${O})${O}`, "b")).toBe(null);
+  expect(await vcall(cache, "hitCount", "()I")).toBe(1);
+  expect(await vcall(cache, "missCount", "()I")).toBe(1);
+  expect(await vcall(cache, "evictionCount", "()I")).toBe(1);
   const snapshot = await vcall(cache, "snapshot", "()Ljava/util/Map;");
   await vcall(cache, "remove", `(${O})${O}`, "a");
   expect(await vcall(snapshot, "get", `(${O})${O}`, "a")).toBe("a");

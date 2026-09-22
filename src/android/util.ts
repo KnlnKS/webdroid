@@ -217,26 +217,37 @@ rt.register({
 
 class JLruCache extends JObj {
   max = 16; m = new Map<unknown, unknown>();
+  hits = 0; misses = 0; puts = 0; creates = 0; evictions = 0;
+  trim(max: number) {
+    while (this.m.size && this.m.size > max) { this.m.delete(this.m.keys().next().value); this.evictions++; }
+  }
 }
 rt.register({
   name: "android/util/LruCache", ctor: JLruCache,
   methods: {
-    "<init>(I)V": function (this: JLruCache, n: number) { this.max = Math.max(1, n); },
+    "<init>(I)V": function (this: JLruCache, n: number) {
+      if (n <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "maxSize <= 0");
+      this.max = n;
+    },
     "get(Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JLruCache, k: unknown) {
       if (this.m.has(k)) {
+        this.hits++;
         const v = this.m.get(k);
         this.m.delete(k); this.m.set(k, v);   // re-insert: Map order is the recency order
         return v;
       }
+      this.misses++;
       const created = await vcall(this, "create", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
-      if (created !== null) this.m.set(k, created);
+      if (created !== null) { this.creates++; this.m.set(k, created); this.trim(this.max); }
       return created;
     },
     "create(Ljava/lang/Object;)Ljava/lang/Object;": () => null,
     "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JLruCache, k: unknown, v: unknown) {
       const old = this.m.get(k) ?? null;
+      this.puts++;
+      this.m.delete(k);
       this.m.set(k, v);
-      if (this.m.size > this.max) this.m.delete(this.m.keys().next().value);
+      this.trim(this.max);
       return old;
     },
     "remove(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JLruCache, k: unknown) {
@@ -244,11 +255,11 @@ rt.register({
       this.m.delete(k);
       return old;
     },
-    "evictAll()V": function (this: JLruCache) { this.m.clear(); },
+    "evictAll()V": function (this: JLruCache) { this.trim(-1); },
     "resize(I)V": function (this: JLruCache, n: number) {
       if (n <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "maxSize <= 0");
       this.max = n;
-      while (this.m.size > n) this.m.delete(this.m.keys().next().value);
+      this.trim(n);
     },
     "snapshot()Ljava/util/Map;": async function (this: JLruCache) {
       const result = rt.make("java/util/LinkedHashMap");
@@ -257,6 +268,11 @@ rt.register({
     },
     "size()I": function (this: JLruCache) { return this.m.size; },
     "maxSize()I": function (this: JLruCache) { return this.max; },
+    "hitCount()I": function (this: JLruCache) { return this.hits; },
+    "missCount()I": function (this: JLruCache) { return this.misses; },
+    "putCount()I": function (this: JLruCache) { return this.puts; },
+    "createCount()I": function (this: JLruCache) { return this.creates; },
+    "evictionCount()I": function (this: JLruCache) { return this.evictions; },
   },
 });
 
