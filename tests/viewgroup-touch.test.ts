@@ -4,6 +4,9 @@ import { rt, JObj } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
 import { vcall } from "../src/jvm/natives/jlang";
 import { attachView, detachView, JView, JViewGroup } from "../src/android/view";
+import { JActivity } from "../src/android/app";
+import { JFrameLayout } from "../src/android/layouts";
+import type { JMotionEvent } from "../src/android/motionevent";
 
 rt.linkNatives();
 const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => (rt.link(cls).ctor as any)[mangleMethod(name, desc)](...args);
@@ -14,6 +17,23 @@ const tap = async (v: JView, x: number, y: number) => {
 };
 class TouchListener extends JObj { seen = 0; [mangleMethod("onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z")]() { this.seen++; return 1; } }
 class ClickListener extends JObj { clicks = 0; [mangleMethod("onClick", "(Landroid/view/View;)V")]() { this.clicks++; } }
+
+test("Activity delivers unhandled window touches to its virtual onTouchEvent", async () => {
+  const seen: number[] = [];
+  class Activity extends JActivity {
+    [mangleMethod("onUserInteraction", "()V")]() { seen.push(-1); }
+    [mangleMethod("onTouchEvent", "(Landroid/view/MotionEvent;)Z")](event: JMotionEvent) { seen.push(event.action); return 1; }
+  }
+  const activity = new Activity(), decor = new JFrameLayout();
+  activity.window.decor = decor; decor.right = 200; decor.bottom = 200;
+  for (const action of [0, 2, 1]) expect(await vcall(activity, "dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z", event(action, 50, 50))).toBe(1);
+  expect(seen).toEqual([-1, 0, 2, 1]);
+  seen.length = 0;
+  const child = new JView(); child.right = 100; child.bottom = 100; child.clickable = true;
+  child.parent = decor; decor.children.push(child);
+  await vcall(activity, "dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z", event(0, 50, 50));
+  expect(seen).toEqual([-1]);
+});
 
 test("ViewGroup dispatches hierarchy callbacks after updating the parent link", async () => {
   const events: string[] = [];

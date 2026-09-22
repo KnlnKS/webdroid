@@ -94,6 +94,9 @@ rt.register({
       return theme ? +!!rvInt(theme.res, theme.lookup(AID("windowIsFloating")), 0) : 0;
     },
     "peekDecorView()Landroid/view/View;": function (this: JWindow) { return this.decor; },
+    "superDispatchTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JWindow, event: unknown) {
+      return this.decor ? vcall(this.decor, "dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z", event) : 0;
+    },
     "findViewById(I)Landroid/view/View;": function (this: JWindow, id: number) {
       return this.decor ? findById(this.decor, id) : null;
     },

@@ -12,7 +12,8 @@ import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, attachView, detachView, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragmentManager } from "./fragment";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread } from "../jvm/natives/jlang";
+import type { JMotionEvent } from "./motionevent";
 import { appHost, jclsNameOf } from "./apphost";
 import { resString } from "./res";
 import { onMain } from "./mainloop";
@@ -357,6 +358,12 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     }, 0);
   },
   "getVolumeControlStream()I": () => 3,
+  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JActivity, event: JMotionEvent) {
+    const thread = curThread;
+    if (event.action === 0) await vcallOn(thread, this, "onUserInteraction", "()V");
+    if (await vcallOn(thread, this.window, "superDispatchTouchEvent", "(Landroid/view/MotionEvent;)Z", event)) return 1;
+    return vcallOn(thread, this, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", event);
+  },
   ...noops("registerScreenCaptureCallback(Ljava/util/concurrent/Executor;Landroid/app/Activity$ScreenCaptureCallback;)V",
     "unregisterScreenCaptureCallback(Landroid/app/Activity$ScreenCaptureCallback;)V"),
   ...noops("onCreate(Landroid/os/Bundle;)V", "onPostCreate(Landroid/os/Bundle;)V", "onRestart()V", "onPostResume()V",
@@ -376,7 +383,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...stubs(0, "onOptionsItemSelected(Landroid/view/MenuItem;)Z", "onSearchRequested()Z",
     "onSearchRequested(Landroid/view/SearchEvent;)Z", "onKeyDown(ILandroid/view/KeyEvent;)Z",
     "onKeyUp(ILandroid/view/KeyEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
-    "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z", "dispatchTouchEvent(Landroid/view/MotionEvent;)Z",
+    "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z",
     "isInMultiWindowMode()Z", "isInPictureInPictureMode()Z"),
   ...stubs(null, "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;",
     "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;",

@@ -753,7 +753,7 @@ export function dispatchPointer(action: number, x: number, y: number, at = guest
   return onMain(() => dispatchPointer0(action, x, y, at)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
 async function dispatchPointer0(action: number, x: number, y: number, t: number) {
-  const decor = booted?.stack.at(-1)?.window.decor;
+  const window = booted?.stack.at(-1)?.window, decor = window?.decor;
   if (!decor) return;
   const ev = new JMotionEvent();
   ev.action = action;
@@ -798,7 +798,7 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
     } else {
       ev.x = x;
       ev.y = y;
-      await guardCall(decor, M_dispatch, ev);
+      await guardCall(window.callbackObj ?? window.activity, M_dispatch, ev);
     }
     if (action === 1 || action === 3) touchTarget = null;
   } catch (e) {
