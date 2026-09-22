@@ -1,8 +1,10 @@
 # Cut the Rope parity repair
 
 Branch: `codex/cut-the-rope`. Starting revision: `9d0bb979ae7987cd70b7d5242ec6c6b720b5a1e2`.
-Status: ARM64 gameplay renders and accepts rope cuts; native audio works. Remaining native,
-SDK initialization and ARM32 gaps are under investigation. Final regression matrix pending.
+Status: original ARM32 and ARM64 builds complete levels 1 and 2 in Chrome; graphics and native
+audio work. The AVD completed level 1 and reached level 2, where a test interstitial blocks its
+current replay. Original ARM32 performance and fresh-launch lifecycle/persistence validation
+are in progress. Final regression matrix pending.
 
 - Run the unchanged 4.2.1 XAPK in full Chrome and an AVD at matching geometry.
 - Capture startup, menus, gameplay, pause/resume and saved progression in both.

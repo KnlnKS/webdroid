@@ -43,6 +43,17 @@ writeback and PC-target forms retain their existing paths. Typecheck and 73 ARM 
 assertions pass. An isolated instruction-loop probe fell from roughly 54–72 ms to 2–3 ms warm;
 this is a microbenchmark with the browser still running, not a whole-app speed measurement.
 
+Original ARM32 also completed the third level-2 stage and its reward screen. A fresh launch
+with the immediate-transfer fast path restored level 3, 240 coins and both muted sound controls.
+An adaptive four-millisecond CPU-slice experiment was removed. Alternating visible settings
+samples on that candidate measured 1.15/1.45 GL FPS with adaptation versus 2.00/2.12 with the
+existing three-million-instruction budget; a fixed 100,000 budget measured 1.68 FPS. Smaller
+budgets improved shell ticks (35–49/s versus 4–5/s) but reduced guest rendering. These samples
+had no instruction/GL tracing, and the temporary runSlice budget wrapper was used only to
+compare scheduling on one live app. Remaining background decoding limits their steady-state
+interpretation. A two-second background/resume returned without a native fault or Unity pause
+timeout; continued gameplay is being checked before final validation.
+
 Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this
 game and changed owners; the full serialized E2E matrix is reserved for the final candidate.
 Full Chrome runs at port 4091, 720×1280 / 320 dpi, alongside API 33 AVD `emulator-5560` at the
