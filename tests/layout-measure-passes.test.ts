@@ -63,6 +63,17 @@ test("an all-match-parent linear layout retains the available cross dimension", 
   expect([row.measuredW, row.measuredH, child.measuredH]).toEqual([40, 200, 200]);
 });
 
+test("an unspecified negative spacer dimension preserves weighted child space", async () => {
+  const column = rt.make("android/widget/LinearLayout");
+  const content = rt.make("android/view/View"), spacer = rt.make("android/view/View");
+  await vcall(column, "setOrientation", "(I)V", 1);
+  const lp = await newObj("android/widget/LinearLayout$LayoutParams", "(IIF)V", -1, 0, 1);
+  await vcall(column, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", content, lp);
+  await add(column, spacer, "LinearLayout", -1, -147);
+  await measureView(column, makeSpec(200, MS_EXACTLY), makeSpec(300, MS_EXACTLY));
+  expect([content.measuredH, spacer.measuredH]).toEqual([300, 0]);
+});
+
 test("unchanged padding preserves measurement caches while changed padding remeasures", async () => {
   const view = rt.make("android/widget/FrameLayout");
   if (!(view instanceof JView)) throw new Error("Invalid view");

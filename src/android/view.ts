@@ -1788,6 +1788,7 @@ export function childMeasureSpec(spec: number, padding: number, childDim: number
     if (mode === MS_AT_MOST) return makeSpec(size, MS_AT_MOST);
     return makeSpec(size, MS_UNSPEC);
   }
+  if (childDim !== WRAP_CONTENT) return makeSpec(0, MS_UNSPEC);
   return mode === MS_UNSPEC ? makeSpec(size, MS_UNSPEC) : makeSpec(size, MS_AT_MOST);
 }
 export async function measureChildWithMargins(vg: JViewGroup, child: JView, wSpec: number, wUsed: number, hSpec: number, hUsed: number) {
