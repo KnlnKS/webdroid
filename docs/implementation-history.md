@@ -4977,3 +4977,24 @@ abstract base rather than DecimalFormat. The paired AOSP implementation construc
 the shared factory now links and creates that class, including integer and percent factories.
 Existing formatting checks also assert runtime type: five number checks pass (32 assertions),
 and typecheck passes. These repairs do not complete locale/currency/pattern semantics.
+
+The fresh-source comments replay rendered and scrolled rows with no observed layout/draw errors.
+Guest reply/sign-up navigation then reached Integer.rotateRight; the implementation now uses
+32-bit rotations with Java's masked shift distance. A direct runtime probe covers zero, wrapped,
+negative and sign-bit rotations; typecheck passes.
+
+Animated comment images failed because libstatic-webp's JNI_OnLoad requests Bitmap.Config.nativeInt.
+The native enum exposed only names/ordinals, so GetFieldID left NoSuchFieldError pending before
+registration. Config now exposes AOSP's identifiers (1, 3, 4, 5, 6, 7, 8) through the canonical enum
+registration helper. Reflection reads those values; loading the unchanged APK library with all
+platform delegates registers 27 JNI methods with no unresolved imports, called missing functions
+or JNI misses (7,389 guest instructions). Six owning bitmap/number checks pass (38 assertions),
+and typecheck passes. Full browser image replay remains pending. The native loader currently
+ignores JNI_OnLoad's return version; that separate failure-reporting limitation remains.
+
+The disassembler also truncated jumbo string indexes to 16 bits, falsely displaying a class name
+where the APK actually requested "static-webp". It now reads both index words; no APK changed.
+After the host restart, the reference AVD loaded an older snapshot without TikTok. Reinstall and
+a reset of that test installation both led directly to a login wall without a guest close button.
+Earlier AVD guest captures remain reference evidence; this latest launch is not a paired guest
+comparison. No account was created and no comment was posted.
