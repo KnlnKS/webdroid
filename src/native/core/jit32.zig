@@ -628,6 +628,16 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
     }
     if (h >= 0xe800) {
         const h2: u32 = mem.ld(u16, pc + 2);
+        const wideMove = h & 0xfbf0;
+        if ((wideMove == 0xf240 or wideMove == 0xf2c0) and h2 & 0x8000 == 0) {
+            const d = (h2 >> 8) & 15;
+            if (d < 15) {
+                const imm = ((h & 15) << 12) | (((h >> 10) & 1) << 11) | (((h2 >> 12) & 7) << 8) | (h2 & 255);
+                if (wideMove == 0xf2c0) b.emit(.{ get(L_X + d), c32(0xffff), O.i32_and, c32(@bitCast(imm << 16)), O.i32_or }) else b.i32c(@bitCast(imm));
+                setR(e, d);
+                return false;
+            }
+        }
         if (thumbCall(h, h2)) {
             const Sb = (h >> 10) & 1;
             const I1 = 1 - (((h2 >> 13) & 1) ^ Sb);
