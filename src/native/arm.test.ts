@@ -1075,6 +1075,21 @@ describe("thumb decoder", () => {
       0x4770,
     ]);
     expect([multiple.w[0], multiple.w[2], multiple.w[4], multiple.w[6]]).toEqual([1, 2, 3, 4]);
+    for (const input of [0, 1]) {
+      let startIc = 0;
+      const moves = runThumb([
+        0x2800,                         // cmp r0, #0
+        0xbf08, 0x2101,                 // it eq; moveq r1, #1
+        0xbf08, 0x460b,                 // it eq; moveq r3, r1
+        0xbf08, 0xf04f, 0x0907,         // it eq; moveq.w r9, #7
+        0xbf18, 0x2209,                 // it ne; movne r2, #9
+        0x4770,
+      ], cpu => { cpu.w[0] = input; startIc = cpu.ic; });
+      expect([moves.w[2], moves.w[6], moves.w[18], moves.w[4]]).toEqual(input ? [0, 0, 0, 9] : [1, 1, 7, 0]);
+      expect(moves.cpsr >>> 28).toBe(input ? 2 : 6);
+      expect(moves.cpsr & 0x0600fc00).toBe(0);
+      expect(moves.ic - startIc).toBe(10);
+    }
   });
 
   test("signed high multiplication rounds the complete accumulate or subtract result", () => {

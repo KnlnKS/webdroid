@@ -16,6 +16,9 @@ or rendering faults. Its repeated final matrix passes all 1,295 unit tests and c
 159 E2E steps in 823.4 seconds without wedges, action failures or settling timeouts. Known
 baseline errors remain visible. Direct Bun tests now rebuild stale native cores before running.
 Performance and Player ID remain unresolved; the full parity goal is not complete.
+Follow-up performance work now lowers single-instruction IT/move pairs through the JIT. Owning
+checks pass and fresh Chrome restores level 3 and completes its first puzzle. This production
+change follows the matrix above; another full E2E is reserved for the final finished candidate.
 
 - Run the unchanged 4.2.1 XAPK in full Chrome and an AVD at matching geometry.
 - Capture startup, menus, gameplay, pause/resume and saved progression in both.

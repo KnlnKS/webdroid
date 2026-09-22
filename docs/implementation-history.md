@@ -153,6 +153,23 @@ or errors. Goldens remain unchanged. This is compatibility evidence, not an unco
 claim; a separate active Chrome workload remains on the host. Complete Cut the Rope parity
 is still limited by slow startup/rendering, blank Player ID and untested later unlocked features.
 
+The loaded original-ARM32 puzzle still rendered 30 frames in 26.56 seconds at `61dbde11`, with
+23.47 seconds in native execution. Unity's hot texture worker repeatedly leaves the JIT for
+single-instruction IT/move pairs. Those non-faulting register/immediate pairs now use the shared
+condition emitter and retain flags, both instruction counts and code-invalidation coverage.
+Longer IT blocks, PC operands, cross-page pairs and forced-interpreter ranges retain the old
+path. The existing IT fixture now covers taken/skipped moves across all three accepted forms;
+typecheck and 73 ARM tests / 829 assertions pass. The isolated million-loop probe preserves
+its exact 9,000,001 instruction count and register results while falling from about 39 ms to
+2.5–3.6 ms warm. No additional test file or app-specific behavior is introduced.
+
+Fresh Chrome restores level 3 with 240 coins and six candies, then completes its first puzzle
+and advances to the second without native, GL, layout or draw faults. A visible pre-cut sample
+renders 68 frames in 42.63 seconds (1.60 GL FPS), spending 40.41 seconds on 3.34 billion native
+instructions. This is not a controlled paired app-speed claim. The profile also identifies
+writeback transfers in hot native arithmetic loops that remain interpreted; performance work is open.
+The preceding full regression matrix does not cover this follow-up change.
+
 Earlier investigation entries follow; their open questions describe the revision at that time.
 
 Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this

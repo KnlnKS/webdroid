@@ -41,6 +41,25 @@ fn thumbBranch(h: u32, h2: u32) bool {
     return (h & 0xfff0 == 0xe8d0 and h2 & 0xffe0 == 0xf000) or (h & 0xf800 == 0xf000 and h2 & 0xd000 == 0x9000);
 }
 
+const ItMove = struct { len: u32, d: u32, value: union(enum) { reg: u32, imm: u32 } };
+fn itMove(pc: u32, h: u32) ?ItMove {
+    if (h & 0xff0f != 0xbf08 or bits(h, 4, 4) >= 14 or (pc & (abi.PAGE_SIZE - 1)) > abi.PAGE_SIZE - 4) return null;
+    if (jit.forcedFallback(pc) or jit.forcedFallback(pc + 2)) return null;
+    const next: u32 = mem.ld(u16, pc + 2);
+    if (next & 0xf800 == 0x2000) return .{ .len = 2, .d = bits(next, 8, 3), .value = .{ .imm = next & 255 } };
+    if (next & 0xff00 == 0x4600) {
+        const d = (next & 7) | ((next >> 4) & 8);
+        const m = bits(next, 3, 4);
+        if (d < 15 and m < 15) return .{ .len = 2, .d = d, .value = .{ .reg = m } };
+    }
+    if (next == 0xf04f and (pc & (abi.PAGE_SIZE - 1)) <= abi.PAGE_SIZE - 6) {
+        const second: u32 = mem.ld(u16, pc + 4);
+        const d = bits(second, 8, 4);
+        if (second & 0xf000 == 0 and d < 15) return .{ .len = 4, .d = d, .value = .{ .imm = second & 255 } };
+    }
+    return null;
+}
+
 pub fn rwArm(w: u32) jit.RW {
     var rw = jit.ALL32;
     rw.fr = 0;
@@ -92,9 +111,7 @@ pub fn rwThumb(h: u32) jit.RW {
     if (h & 0xf800 >= 0xe800) return rw;
     rw.fr = 0;
     rw.fw = 0;
-    // IT itself is interpreted from a JIT fallback.  Its condition reads NZCV and it writes
-    // CPSR's ITSTATE bits, so pending flags from an instruction earlier in the region must be
-    // committed before the interpreter observes them and reloaded afterward.
+    // IT fallbacks read NZCV and write CPSR's ITSTATE, so they require the complete flag state.
     if ((h & 0xff00) == 0xbf00 and h & 15 != 0) {
         rw.fr = 15;
         rw.fw = 15;
@@ -187,7 +204,13 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
             if (o == 3 or ((o == 0 or o == 2) and d == 15)) return .{ .len = 2, .ends = true };
         },
         11 => {
-            if ((h & 0xff00) == 0xbf00 and h & 15 != 0) return .{ .len = 2, .ends = true };
+            if ((h & 0xff00) == 0xbf00 and h & 15 != 0) {
+                if (itMove(pc, h)) |move| {
+                    cpu.cover(page, pc, pc + move.len);
+                    b.fall = jit.blockFor(r, pc + 2 + move.len);
+                }
+                return .{ .len = 2, .ends = true };
+            }
             if ((h & 0xfe00) == 0xbc00 and h & 0x100 != 0) return .{ .len = 2, .ends = true };
             if ((h & 0xff00) == 0xbe00) return .{ .len = 2, .ends = true };
             if ((h & 0xf500) == 0xb100) {
@@ -623,6 +646,19 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
     const b = e.b;
     const h: u32 = mem.ld(u16, pc);
     if ((h & 0xff00) == 0xbf00 and h & 15 != 0) {
+        if (itMove(pc, h)) |move| {
+            // Neither instruction can fault or change flags, so ITSTATE need not escape this pair.
+            e.cond(@intCast(bits(h, 4, 4)));
+            e.ifv();
+            switch (move.value) {
+                .reg => |m| b.get(L_X + m),
+                .imm => |imm| b.i32c(@intCast(imm)),
+            }
+            setR(e, move.d);
+            e.endif();
+            e.transfer(e.r.blocks[e.blk].fall, (pc + 2 + move.len) | 1, k + 1);
+            return true;
+        }
         e.fallback(pc, k);
         e.exitToInterpreter((pc + 2) | 1, k);
         return true;

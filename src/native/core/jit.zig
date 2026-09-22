@@ -154,6 +154,9 @@ export fn jit_fallback(lo: u32, hi: u32) void {
     fb_lo = lo;
     fb_hi = hi;
 }
+pub fn forcedFallback(pc: u32) bool {
+    return pc -% fb_lo < fb_hi -% fb_lo;
+}
 export fn jit_pending() u32 {
     return if (in_flight) 0 else nrequests;
 }
@@ -1069,7 +1072,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
                 .arm => jit32.rwArm(mem.ld(u32, pc)),
                 .thumb => jit32.rwThumb(mem.ld(u16, pc)),
             };
-            if (pc -% fb_lo < fb_hi -% fb_lo) rw = if (wide) ALL else ALL32;
+            if (forcedFallback(pc)) rw = if (wide) ALL else ALL32;
             writes[i] |= rw.w;
             e.used |= rw.r | rw.w;
             assert(t < fr.len);
@@ -1153,7 +1156,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
                 e.rw = rwOf(o);
                 e.wcur |= e.rw.w;
             }
-            if (pc -% fb_lo < fb_hi -% fb_lo) {
+            if (forcedFallback(pc)) {
                 if (wide) e.rw = ALL;
                 e.fallback(pc, j + 1);
                 ended = false;
