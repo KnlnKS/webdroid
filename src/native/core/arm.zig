@@ -279,7 +279,11 @@ fn neonMisc(c: *Cpu, w: u32, pc: u32) Status {
         0x0ea0d800
     else if (w & 0xffbf0f10 == 0xf3b90700)
         0x0ea0f800 | (bits(w, 7, 1) << 29)
-    else if (w & 0xffb30e10 == 0xf3b00000) blk: {
+    else if (w & 0xffb30f10 == 0xf3b10300) blk: {
+        const size = bits(w, 18, 2);
+        if (size == 3) return fault(c, .undefined, w, pc);
+        break :blk 0x0e20b800 | (size << 22) | (bits(w, 7, 1) << 29);
+    } else if (w & 0xffb30e10 == 0xf3b00000) blk: {
         const op = bits(w, 7, 2);
         const size = bits(w, 18, 2);
         if (op > 2 or size + op >= 3) return fault(c, .undefined, w, pc);
@@ -352,6 +356,8 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
         0x0e208400 | (u << 29) | (size << 22)
     else if (op == 3 and size != 3)
         0x0e203400 | (u << 29) | (size << 22) | (b << 11)
+    else if (op == 6 and size != 3)
+        0x0e206400 | (u << 29) | (size << 22) | (b << 11)
     else if (op == 8 and b == 1)
         0x0e208c00 | (u << 29) | (size << 22)
     else if (op == 9 and size != 3 and (b == 0 or u == 0))
