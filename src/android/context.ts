@@ -8,7 +8,7 @@ import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
 import { contentResolver, checkUriPermission } from "./contentresolver";
 import { mainLooper, mainExecutor, PROCESS_PID, PROCESS_UID } from "./os";
-import { getPrefs, movePrefs } from "./sharedprefs";
+import { getPrefs, movePrefs, deletePrefs } from "./sharedprefs";
 import { JAssetManager, type JConfiguration, scopedResources } from "./resnative";
 import { dbPath } from "./sqlite";
 import { type JIntent, launchIntent } from "./intent";
@@ -247,6 +247,7 @@ export const contextMethods: NativeSpec["methods"] = {
   "getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;": function (this: JContext, name: string) {
     return getPrefs(this.$host.pkg, name);
   },
+  "deleteSharedPreferences(Ljava/lang/String;)Z": function (this: JContext, name: string) { return +deletePrefs(this.$host.pkg, name); },
   "moveSharedPreferencesFrom(Landroid/content/Context;Ljava/lang/String;)Z": function (this: JContext, source: JContext, name: string) {
     if (!source || name == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
     return movePrefs(source.$host.pkg, this.$host.pkg, name) ? 1 : 0;
