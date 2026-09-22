@@ -416,9 +416,6 @@ rt.register({
     "getUnderlying()Landroid/text/style/MetricAffectingSpan;": function (this: JMetricAffectingSpan) { return this; },
   },
 });
-// Interface only (no ParagraphStyle registered yet to extend): the type real span classes
-// implement for the chooseHeight line-height adjustment applyLineHeightSpans applies.
-rt.markers("android/text/style/LineHeightSpan", "android/text/style/LineHeightSpan$WithDensity");
 class JStylePassthrough extends JCharacterStyle { style: unknown = null; }
 const passthroughMethods: NativeSpec["methods"] = {
   "updateDrawState(Landroid/text/TextPaint;)V": function (this: JStylePassthrough, paint: JTextPaint) { return vcall(this.style, "updateDrawState", "(Landroid/text/TextPaint;)V", paint); },
@@ -820,9 +817,9 @@ rt.register({ name: "android/text/style/AbsoluteSizeSpan", ctor: JAbsoluteSizeSp
   },
 });
 
-// Paragraph-level spans: interfaces the layout would consult per paragraph (nothing in JLayout
-// walks them yet), plus the concrete Standard leading-margin span Compose uses for textIndent.
 rt.markers("android/text/style/ParagraphStyle");
+rt.register({ name: "android/text/style/LineHeightSpan", ctor: class extends JObj {}, ifaces: ["android/text/style/ParagraphStyle"] });
+rt.register({ name: "android/text/style/LineHeightSpan$WithDensity", ctor: class extends JObj {}, ifaces: ["android/text/style/LineHeightSpan"] });
 rt.register({ name: "android/text/style/LeadingMarginSpan", ctor: class extends JObj {}, ifaces: ["android/text/style/ParagraphStyle"] });
 rt.register({ name: "android/text/style/LeadingMarginSpan$LeadingMarginSpan2", ctor: class extends JObj {}, ifaces: ["android/text/style/LeadingMarginSpan", "android/text/style/WrapTogetherSpan"] });
 rt.register({ name: "android/text/style/WrapTogetherSpan", ctor: class extends JObj {}, ifaces: ["android/text/style/ParagraphStyle"] });
@@ -1341,12 +1338,19 @@ export class JLayout extends JObj {
         fm.ascent = Math.min(fm.ascent, span.metrics.ascent); fm.descent = Math.max(fm.descent, span.metrics.descent);
         fm.top = Math.min(fm.top, span.metrics.top); fm.bottom = Math.max(fm.bottom, span.metrics.bottom);
       }
-      if (i === 0) fm.ascent -= this.padTop;
-      if (i === this.lines.length - 1) fm.descent += this.padBottom;
       for (const s of spans) {
         if (s.start > l.end || s.end < l.start) continue;
-        await vcall(s.span, "chooseHeight", "(Ljava/lang/CharSequence;IIIILandroid/graphics/Paint$FontMetricsInt;)V",
-          src, l.start, l.end, s.start, v, fm);
+        if (rt.iof(s.span, "android/text/style/LineHeightSpan$WithDensity")) {
+          await vcall(s.span, "chooseHeight", "(Ljava/lang/CharSequence;IIIILandroid/graphics/Paint$FontMetricsInt;Landroid/text/TextPaint;)V",
+            src, l.start, l.end, s.start, v, fm, this.paint);
+        } else {
+          await vcall(s.span, "chooseHeight", "(Ljava/lang/CharSequence;IIIILandroid/graphics/Paint$FontMetricsInt;)V",
+            src, l.start, l.end, s.start, v, fm);
+        }
+      }
+      if (this.includePad) {
+        if (i === 0) { this.padTop = fm.ascent - fm.top; fm.ascent = fm.top; }
+        if (i === this.lines.length - 1) { this.padBottom = fm.bottom - fm.descent; fm.descent = fm.bottom; }
       }
       tops.push(v);
       bases.push(v - fm.ascent);
@@ -1532,8 +1536,7 @@ function boringMetrics(text: string, paint: JTextPaint): JBoringMetrics | null {
   return m;
 }
 class JBoringLayout extends JLayout {
-  /** the single-line layout every ctor/make overload builds; `incl` is the include-pad flag only make() takes */
-  async setup(cs: unknown, p: JTextPaint, w: number, smult: number, sadd: number, incl = this.includePad): Promise<this> {
+  async setup(cs: unknown, p: JTextPaint, w: number, smult: number, sadd: number, incl: boolean): Promise<this> {
     this.text = spannedString(cs); this.src = cs; this.paint = p; this.width = w;
     this.spacingMult = smult; this.spacingAdd = sadd; this.includePad = incl;
     const spans = replacementSpans(cs);
@@ -1543,13 +1546,16 @@ class JBoringLayout extends JLayout {
     return this;
   }
 }
-const boringInit = function (this: JBoringLayout, cs: unknown, p: JTextPaint, w: number, alignment: JSimpleEnum, smult: number, sadd: number) {
+const boringInit = function (this: JBoringLayout, cs: unknown, p: JTextPaint, w: number, alignment: JSimpleEnum, smult: number, sadd: number, _m: unknown, incl: number) {
   this.alignment = alignment;
-  return this.setup(cs, p, w, smult, sadd);
+  return this.setup(cs, p, w, smult, sadd, !!incl);
 };
 const boringMake = (cs: unknown, p: JTextPaint, w: number, alignment: JSimpleEnum, smult: number, sadd: number, _m: unknown, incl: number) =>
   Object.assign(new JBoringLayout(), { alignment }).setup(cs, p, w, smult, sadd, !!incl);
-const isBoring = (cs: unknown, p: JTextPaint) => replacementSpans(cs).length ? null : boringMetrics(spannedString(cs), p);
+function isBoring(cs: unknown, p: JTextPaint) {
+  if (cs instanceof JSpanned && cs.spans.some((s) => rt.iof(s.span, "android/text/style/ParagraphStyle"))) return null;
+  return replacementSpans(cs).length ? null : boringMetrics(spannedString(cs), p);
+}
 rt.register({
   name: "android/text/BoringLayout", ctor: JBoringLayout, sup: "android/text/Layout",
   methods: {

@@ -5799,3 +5799,37 @@ three known SLF4J messages and no rendering errors, settling limits or required 
 The standalone font test now links its own natives rather than relying on another test's
 initialization. Evidence: fractional-font-actual/, fractional-font-summary.json,
 e2e-fractional-fonts.log and fractional-final-{font-tests,fwtest,typecheck}.log.
+
+### Paragraph spans and country-row geometry
+
+The remaining 170px country-row stride was caused by selecting BoringLayout for text carrying
+LineHeightSpan. Android rejects every ParagraphStyle from this fast layout. Webdroid omitted
+that check and the LineHeightSpan interface inheritance, then ignored the constructor's
+includePad argument. Country labels consequently used baseline 54 while their flag layouts
+used 52. The app's unchanged baseline-alignment code enlarged each row by two pixels.
+
+LineHeightSpan now extends ParagraphStyle, its WithDensity variant extends LineHeightSpan,
+and isBoring rejects paragraph spans. Boring constructors honor includePad. The general layout
+calls the proper span overload before applying the first/last font padding, matching AOSP's
+StaticLayout ordering. The old order supplied padded metrics to the callback and incorrectly
+retained 72px height when Android's padded result was 65px. Incorrect comments were removed.
+
+The private API 33 oracle at 48px gives plain height/baseline 57/45 without padding and 65/51
+with it. A 72px LineHeightSpan is not boring; StaticLayout gives 72/52 without padding and
+65/51 with padding, including top padding 1 and bottom padding -6. The WithDensity callback
+receives the same Paint and produces the same values. One owning core case retains these
+boundaries. Typecheck and nine focused font/span/browser tests pass (72 assertions).
+
+In full Chrome, the app now builds unpadded StaticLayouts with 72px height and baseline 52
+for both country labels and flags. Chrome and the current AVD both have 168px row stride.
+All nine fully visible flag crops compare pixel-identically, not just the first row; Latin
+text remains heavier in Chrome. Search for Canada works in both apps and the country result
+can be selected. The minimized Android keyboard strip and device-state icons still differ.
+
+ChatGPT's focused run completes 24/24 in 121.4 seconds with 96 successful process inspections,
+only the three known SLF4J messages, and no rendering error, required native, settling limit
+or wedge. Evidence: paragraph-layout-actual/, paragraph-layout-summary.json,
+e2e-paragraph-layout.log, paragraph-layout-core-tests.log, chrome-country-paragraph-layout.png,
+avd-country-paragraph-layout.png and font-probe/{native-layout,native-layout-density}.log.
+The full regression gate below must cover these changes and the Android emoji asset pair;
+the earlier system-bar gate does not validate them.
