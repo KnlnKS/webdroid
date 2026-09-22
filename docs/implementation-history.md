@@ -139,6 +139,29 @@ BitmapFactory.decodeFile now opens and closes a real FileInputStream and shares 
 A Chrome probe decoded a generated 3×2 PNG, returned bounds-only metadata, and returned null
 for a missing file. Typecheck passed. Full regression and final performance checks remain pending.
 
+The fresh ARM64 run passed the earlier decor lookup, retained level 3 / 240 coins on reload,
+and completed its first puzzle. Ad presentation then failed at setWillNotCacheDrawing; that
+flag now has real setter/getter state. The Unity looper subsequently retained a NEXT_FRAME
+message without dispatching it, despite advancing shell ticks and no captured native fault.
+This freeze remains unresolved; shell ticks alone do not establish ongoing gameplay. The AVD
+again reached its undismissed test interstitial after restart, so no AVD level-2 reward is claimed.
+
+Original ARM32 startup exhausted its 256 MB address space while loading Unity and IL2CPP.
+The core still starts at 256 MB but now expands to 2 GB when loading ARM32 native images,
+following the existing lazy ARM64 expansion. Startup then exposed Thumb rotated extensions,
+signed memory loads, ARM RBIT/exclusive decoding, and signed halfword multiply accumulation.
+Shared decoders replace the repeated Thumb memory-transfer branches and halfword accumulation.
+Further native initialization reached qsort/bsearch callbacks: BigInt pointer arguments consumed
+two ARM32 registers, placing the second pointer in r2 instead of r1. Both comparators now use
+the guest pointer ABI; real guest-comparator checks pass for ARM32 and ARM64.
+
+ARM MLS was decoded as a transfer and now shares each tier's multiply path. ARM LDREXD
+also exposed a JIT fallback bug: generic transfer writeback modified its base before interpreter
+dispatch, adding PC+8 to the valid address. Exclusive and swap instructions now dispatch before
+transfer side effects. The decoder suite passes 54 checks / 553 assertions, including a 64-bit
+exclusive increment with carry and unchanged base. The temporary NEON advertisement remains
+uncommitted, and original-package gameplay is still unproven.
+
 ## microG completion and open acceptance
 
 PLAN.md owns current status. Both Android and webdroid now
