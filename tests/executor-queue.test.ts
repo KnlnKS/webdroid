@@ -210,3 +210,29 @@ test("scheduled shutdown policy cancels delayed work without running it", async 
     expect(await vcall(ex, "isTerminated", "()Z")).toBe(1);
   }
 });
+
+test("resizing a scheduled pool starts queued work and retires idle excess workers", async () => {
+  const ex = await newObj("java/util/concurrent/ScheduledThreadPoolExecutor", "(I)V", 1);
+  const first = new BlockingRunnable(), second = new BlockingRunnable(), third = new RecordingRunnable();
+  const a = await vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", first);
+  const b = await vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", second);
+  expect(await vcall(ex, "getActiveCount", "()I")).toBe(1);
+  await vcall(ex, "setCorePoolSize", "(I)V", 2);
+  await Promise.resolve();
+  expect(await vcall(ex, "getActiveCount", "()I")).toBe(2);
+  await vcall(ex, "setCorePoolSize", "(I)V", 1);
+  const c = await vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", third);
+  first.release();
+  await vcall(a, "get", "()Ljava/lang/Object;");
+  await Bun.sleep(0);
+  expect(third.runs).toBe(0);
+  expect(await vcall(ex, "getPoolSize", "()I")).toBe(1);
+  second.release();
+  await vcall(b, "get", "()Ljava/lang/Object;");
+  await vcall(c, "get", "()Ljava/lang/Object;");
+  expect(third.runs).toBe(1);
+  await vcall(ex, "setCorePoolSize", "(I)V", 0);
+  expect(await vcall(ex, "getCorePoolSize", "()I")).toBe(0);
+  expect(await vcall(ex, "getMaximumPoolSize", "()I")).toBe(0x7fffffff);
+  await expect(vcall(ex, "setCorePoolSize", "(I)V", -1)).rejects.toBeDefined();
+});

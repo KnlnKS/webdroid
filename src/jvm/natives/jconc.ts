@@ -63,6 +63,14 @@ class JExecutor extends JObj {
   consecutiveDrains = 0;
 }
 const mirror = (ex: JExecutor) => (ex.queue instanceof JList ? ex.queue.a : null);
+function retireIdleWorkers(ex: JExecutor) {
+  for (let i = ex.workers.length - 1; i >= 0 && ex.workers.length > ex.limit; i--) {
+    const worker = ex.workers[i];
+    if (worker.busy) continue;
+    if (worker.thread) worker.thread.alive = 0;
+    ex.workers.splice(i, 1);
+  }
+}
 function drainExecutor(ex: JExecutor) {
   while (ex.tasks.length) {
     let worker = ex.workers.find((w) => !w.busy);
@@ -106,6 +114,7 @@ async function runTask(ex: JExecutor, worker: JExecutor["workers"][number], entr
     if (!f.cancelled) f.error = rt.jx(e);
   } finally {
     ex.pending--; ex.jobs.delete(f); worker.busy = false;
+    retireIdleWorkers(ex);
     f.done = 1; f.thread = null;
     entry.finish();
     if (ex.tasks.length) scheduleDrain(ex);
@@ -335,6 +344,7 @@ function cancelDelayed(ex: JExecutor): void {
 }
 function initScheduled(this: JExecutor, core: number, factory: unknown = null, handler: unknown = null) {
   if (core < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative pool size");
+  this.coreSize = core; this.maxSize = 0x7fffffff;
   this.limit = Math.max(1, core); this.factory = factory; this.rejectionHandler = handler;
 }
 function initPool(this: JExecutor, core: number, max: number, keep: bigint, unit: JTimeUnit, queue: JObj, factory: unknown = null, handler: unknown = null) {
@@ -371,8 +381,14 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       "allowCoreThreadTimeOut(Z)V": function () {},
       "getPoolSize()I": function (this: JExecutor) { return this.workers.length; },
       "getActiveCount()I": function (this: JExecutor) { return this.workers.filter((w) => w.busy).length; },
-      "getCorePoolSize()I": function (this: JExecutor) { return this.pool ? this.coreSize : this.limit; },
-      "getMaximumPoolSize()I": function (this: JExecutor) { return this.pool ? this.maxSize : this.limit; },
+      "getCorePoolSize()I": function (this: JExecutor) { return this.coreSize; },
+      "getMaximumPoolSize()I": function (this: JExecutor) { return this.maxSize; },
+      "setCorePoolSize(I)V": function (this: JExecutor, core: number) {
+        if (core < 0 || core > this.maxSize) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid core pool size");
+        this.coreSize = core; this.limit = Math.max(1, core);
+        retireIdleWorkers(this);
+        if (this.tasks.length) scheduleDrain(this);
+      },
       "remove(Ljava/lang/Runnable;)Z": removeQueued,
       "setKeepAliveTime(JLjava/util/concurrent/TimeUnit;)V": function () {},
       "getQueue()Ljava/util/concurrent/BlockingQueue;": function (this: JExecutor) {
@@ -496,7 +512,7 @@ rt.register({ name: "webdroid/DelegatedScheduledExecutor", ctor: JDelegatedExecu
 export function mkExecutor(count = 1, factory: unknown = null): JExecutor {
   if (count <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "nonpositive pool size");
   const ex: JExecutor = rt.make("webdroid/Executor");
-  ex.limit = count; ex.factory = factory; return ex;
+  ex.limit = ex.coreSize = ex.maxSize = count; ex.factory = factory; return ex;
 }
 /** A scheduled pool takes the constructor's rule, not the fixed pool's: zero cores is legal
  *  and still runs a due task. */
