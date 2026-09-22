@@ -161,6 +161,7 @@ export function presentSurface(surface: GlSurface, frame: ImageBitmap | VideoFra
   surface.present?.close();
   surface.present = frame;
   surface.frames++;
+  perf.glFrames++;
   if (surface.view) { surface.view.surfaceLayer = frame; invalidate(surface.view); }
   surface.onFrame?.();
 }
@@ -191,7 +192,6 @@ export class EglContext {
     try { bmp = this.canvas.transferToImageBitmap(); }
     catch (e) { if (this.gl?.isContextLost()) return Promise.resolve(false); throw e; }
     presentSurface(s, bmp);
-    perf.glFrames++;
     return new Promise((r) => { const done = () => r(!this.gl?.isContextLost()); if (typeof requestAnimationFrame === "function" && !document.hidden) requestAnimationFrame(done); else setTimeout(done, 16); });
   }
 }

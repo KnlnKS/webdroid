@@ -30,8 +30,8 @@ export const perf = {
   jvmDecodeMs: 0, jvmCfgMs: 0, jvmTypeMs: 0, jvmColdBuildMs: 0, jvmHotEmitMs: 0,
   jvmJsCompileMs: 0, jvmClassLinkMs: 0, jvmColdRunMs: 0, jvmHotRunMs: 0, jvmSuspendMs: 0,
   jvmProfileDroppedMethods: 0,
-  // GL surfaces: Renderer frames and their wall time; glSkipped = ticks where the previous
-  // GL frame was still in flight (a renderer that awaits its engine spans ticks).
+  // Surface frames (GL, native windows and decoded video), Renderer wall time, and ticks where
+  // the previous Renderer frame was still in flight.
   glFrames: 0, glFrameMs: 0, glSkipped: 0,
   // the native tier: guest instructions, wall time in the core, slices, host calls, time spent
   // in host bodies, GLES draws and errors from native GL.

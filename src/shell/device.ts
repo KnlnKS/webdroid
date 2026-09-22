@@ -35,6 +35,7 @@ import { device, orientationForRequest, setDeviceOrientation } from "./config";
 import { resolveSystemBars, drawSystemBarBackgrounds, drawSystemBarIcons } from "./systembars";
 import { restoreRoots } from "./hostfs";
 import { setPixelCopyFrame } from "../android/glview";
+import { requestResponsiveSlices } from "../native/cpu";
 
 export let SCREEN_W = device.width, SCREEN_H = device.height;
 const STATUS_H = device.statusBar;
@@ -755,6 +756,7 @@ let downTime = 0;
 export function dispatchPointer(action: number, x: number, y: number, at = guestNow()): Promise<void> {
   // charged to perf.inputMs: the wall time a tap costs is otherwise in no counter at all.
   const t0 = performance.now();
+  requestResponsiveSlices();
   return onMain(() => dispatchPointer0(action, x, y, at)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
 async function dispatchPointer0(action: number, x: number, y: number, t: number) {

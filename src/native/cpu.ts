@@ -19,8 +19,19 @@ const isSignalFrame = (label: string | undefined): boolean => label?.startsWith(
 // ~5 ms of guest time per slice: coarse enough that the macrotask hop per slice is noise, fine
 // enough that a 60 Hz frame loop on the JS thread keeps its cadence
 const SLICE_INSTR = 3_000_000;
+const RESPONSIVE_SLICE_INSTR = 300_000;
+const RESPONSIVE_WINDOW_MS = 250;
 /** the run loop's instruction budget per slice; lowering it makes `profile` sample finely (debug) */
 export const slice = { instr: SLICE_INSTR };
+let responsiveUntil = 0;
+
+export function requestResponsiveSlices(): void {
+  responsiveUntil = Math.max(responsiveUntil, performance.now() + RESPONSIVE_WINDOW_MS);
+}
+
+function sliceBudget(): number {
+  return performance.now() < responsiveUntil ? Math.min(slice.instr, RESPONSIVE_SLICE_INSTR) : slice.instr;
+}
 
 /** an argument to a guest function: a float or double travels in a V register on AAPCS64 and as
  *  its bit pattern in core registers on the softfp ABI, and only Cpu.call knows which */
@@ -400,7 +411,7 @@ export class Cpu {
         const t0 = performance.now(), ic0 = this.ic;
         let ex: SliceExit;
         this.state = "slice";
-        try { ex = this.runSlice(slice.instr); }
+        try { ex = this.runSlice(sliceBudget()); }
         finally {
           const dt = performance.now() - t0;
           perf.nativeMs += dt; perf.nativeSlices++; perf.nativeInstr += this.ic - ic0;

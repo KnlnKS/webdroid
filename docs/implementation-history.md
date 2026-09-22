@@ -6379,3 +6379,37 @@ full E2E matrix was run for this integration; the prior matrices remain revision
 Evidence is retained in the main checkout under `webdroid-shots/chatgpt/merge-*.log`, alongside
 the prior ChatGPT captures. Task-owned development servers, browser bridge, Chrome profile and
 reference emulator were stopped before removing the implementation worktree.
+
+### TikTok playback and interaction follow-up — 2026-09-22
+
+Fresh full-Chrome profiling reached TikTok's unchanged ByteVC1 and ByteVC2 libraries. ByteVC1's
+hottest fallback loops use saturating byte/halfword add, signed-to-unsigned narrowing and rounded
+saturating narrowing. ByteVC2's table-based prediction loop uses one- to four-register TBL/TBX.
+The A64 JIT now lowers those operations to WebAssembly SIMD and preserves FPSR.Q exactly by
+detecting saturation before the sticky flag update. The existing hardware-captured SIMD oracle
+covers signed/unsigned saturation, lower/upper narrowing and every implemented table width; the
+31 directly affected oracle cases pass with 1,025 assertions. No decoder or APK bytes are changed.
+
+The same session exposed reachable platform gaps before video startup. XmlBlock and its parser
+now reuse the resource parser implementation over the binary-XML document; JobInfo and content
+URI triggers use the API-33 parcel layout; Debug.MemoryInfo exposes swappable-PSS fields; and the
+ImageReader callback interface, MediaDrm byte-array property failure and View.mContext field are
+present. Bionic FTS now owns a pre/post-order VFS traversal with child links, sorting, skipping
+and balanced storage. The observed platform/API missing set is empty after a fresh launch; nine
+remaining probes name optional TikTok, Lynx, vendor and AppsFlyer classes rather than Android APIs.
+
+The view guard no longer allocates an async wrapper for every synchronous virtual draw/measure
+call. On an animated Java feed this changed a ten-second sample from 115 presentations with
+43.6 ms mean draw time to 596 presentations with 9.3 ms mean draw time. This is a live-content
+comparison, not a controlled video-FPS result. Pointer streams retain DOWN and UP while
+coalescing queued MOVE events; event timestamps are captured at browser arrival, and native
+execution temporarily uses shorter slices after input. A warm timed swipe charged about 249 ms
+of total emulator dispatch work; earlier warm three-event sampling charged 82 ms. The requested
+universal 150 ms action bound is therefore not established.
+
+Full-Chrome video frames visibly advance with either native JIT enabled or `jit=0`. Some live
+YV12 items in both tiers show duplicated green imagery, so the symptom is not attributed to the
+new emitter paths; varying remote content prevents a matched pixel conclusion. Syscalls 220
+(clone) and 260 (wait4) remain explicit unsupported process-creation boundaries rather than
+fabricated success. Surface-frame telemetry now counts every canonical presenter, although this
+session's native-window route still did not increment that counter and is not reported as FPS.
