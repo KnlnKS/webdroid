@@ -404,6 +404,24 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(2, 4))).toEqual([-2, 0]);
     }
   });
+  test("NEON scalar integer multiply wraps each lane before accumulation", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([2147483647, 3, -2, -2147483648, 2, -3, 4, 5], 0);
+      cpu.si.set([10, 20, 30, 40], 36);
+      cpu.si.set([0x00020001, 0xfffeffff, 0x00040003, 0x0002ffff], 12);
+      cpu.si.set([0x00020001, 0xffff8000, 0x00030004, 0x7fff0000], 20);
+      cpu.si.set([0x000a000a, 0x000a000a], 10);
+    };
+    for (const execute of [
+      () => run([0xf3e00860, 0xf3e22062, 0xf296546f, 0xf39a8863, BXLR], setup),
+      () => runThumb([0xffe0, 0x0860, 0xffe2, 0x2062, 0xef96, 0x546f, 0xff9a, 0x8863, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(32, 40))).toEqual([2147483645, 9, -6, -2147483648, 4, 29, 18, 25]);
+      expect(Array.from(c.si.slice(10, 12))).toEqual([0x00060008, 0x000e000c]);
+      expect(Array.from(c.si.slice(16, 20))).toEqual([0x000a0005, 0xfffb8000 | 0, 0x000f0014, 0x7ffb0000]);
+    }
+  });
   test("NEON reciprocal estimates and steps retain ARM32 rounding", () => {
     const setup = (cpu: Cpu) => {
       cpu.s.set([1, 4, 0, Infinity], 44);

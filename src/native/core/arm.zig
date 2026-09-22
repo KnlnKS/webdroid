@@ -345,17 +345,17 @@ fn neonLong(c: *Cpu, w: u32, pc: u32) Status {
 }
 
 fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
-    const scalar = w & 0xfeb00050 == 0xf2a00040;
+    const scalar = w & 0xfe800050 == 0xf2800040 and bits(w, 20, 2) != 3;
+    const size = bits(w, 20, 2);
     const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
     const n = (bits(w, 7, 1) << 4) | bits(w, 16, 4);
-    const m = if (scalar) bits(w, 0, 4) else (bits(w, 5, 1) << 4) | bits(w, 0, 4);
+    const m = if (scalar) bits(w, 0, if (size == 1) @as(u32, 3) else 4) else (bits(w, 5, 1) << 4) | bits(w, 0, 4);
     const q = if (scalar) bits(w, 24, 1) else bits(w, 6, 1);
     if (q != 0 and (d | n | (if (scalar) @as(u32, 0) else m)) & 1 != 0) return fault(c, .undefined, w, pc);
     const op = bits(w, 8, 4);
     if (w & 0xffb00010 == 0xf2b00000 and q == 0 and op >= 8) return fault(c, .undefined, w, pc);
     const b = bits(w, 4, 1);
     const u = bits(w, 24, 1);
-    const size = bits(w, 20, 2);
     if (!scalar and op == 15 and b == 1 and u == 0 and size & 1 == 0) {
         const lhs: [*]f32 = @ptrCast(vreg(u64, c, n));
         const rhs: [*]f32 = @ptrCast(vreg(u64, c, m));
@@ -363,10 +363,13 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
         for (0..if (q != 0) @as(usize, 4) else 2) |i| dst[i] = fp.recipStep32(lhs[i], rhs[i], size == 2);
         return .next;
     }
-    if (scalar and op != 1 and op != 5 and op != 9) return fault(c, .unimplemented, w, pc);
+    if (scalar and (size == 0 or (op & 1 != 0 and size != 2))) return fault(c, .undefined, w, pc);
+    if (scalar and op & 0xe != 0 and op & 0xe != 4 and op & 0xe != 8) return fault(c, .unimplemented, w, pc);
     const variable_shift = !scalar and op == 4 and b == 0;
-    const accumulate = if (scalar) op != 9 else op == 13 and b == 1 and u == 0 and size & 1 == 0;
-    const translated: u32 = if (scalar)
+    const accumulate = if (scalar) op == 1 or op == 5 else op == 13 and b == 1 and u == 0 and size & 1 == 0;
+    const translated: u32 = if (scalar and op & 1 == 0)
+        0x0e209400 | (size << 22) | (if (op == 8) @as(u32, 1 << 11) else if (op == 4) @as(u32, 1 << 29) else 0)
+    else if (scalar)
         (if (op == 9) @as(u32, 0x2e20dc00) else 0x0e20d400 | (if (op == 5) @as(u32, 1 << 23) else 0))
     else if (w & 0xffb00010 == 0xf2b00000)
         0x2e000000 | (op << 11)
@@ -402,7 +405,10 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
     const count: usize = if (q != 0) 16 else 8;
     @memcpy(c.v[16][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
     @memcpy(c.v[17][0..count], @as([*]u8, @ptrCast(vreg(u64, c, if (variable_shift) m else n)))[0..count]);
-    if (scalar) {
+    if (scalar and size == 1) {
+        const lane = @as([*]u16, @ptrCast(vreg(u64, c, m)))[(bits(w, 5, 1) << 1) | bits(w, 3, 1)];
+        @as(*[8]u16, @ptrCast(&c.v[18])).* = @splat(lane);
+    } else if (scalar) {
         const lane = @as([*]u32, @ptrCast(vreg(u64, c, m)))[bits(w, 5, 1)];
         @as(*[4]u32, @ptrCast(&c.v[18])).* = @splat(lane);
     } else @memcpy(c.v[18][0..count], @as([*]u8, @ptrCast(vreg(u64, c, if (variable_shift) n else m)))[0..count]);
@@ -460,7 +466,7 @@ fn execArm(c: *Cpu, pc: u32) Status {
     if (cc == 15) {
         if (w & 0xfe800010 == 0xf2800010 and w & 0x00380080 != 0) return neonShift(c, w, pc);
         if (w & 0xffb00010 == 0xf3b00000) return neonMisc(c, w, pc);
-        if (w & 0xfe800000 == 0xf2000000 or w & 0xffb00010 == 0xf2b00000 or w & 0xfeb00050 == 0xf2a00040) return neonSame(c, w, pc);
+        if (w & 0xfe800000 == 0xf2000000 or w & 0xffb00010 == 0xf2b00000 or w & 0xfe800050 == 0xf2800040) return neonSame(c, w, pc);
         if (w & 0xfe800050 == 0xf2800000) return neonLong(c, w, pc);
         if (w & 0xff100000 == 0xf4000000) return neonStruct(c, w, pc);
         if (w & 0xfeb00010 == 0xf2800010) return neonImmediate(c, w, pc, (bits(w, 24, 1) << 7) | (bits(w, 16, 3) << 4) | bits(w, 0, 4));
@@ -1082,7 +1088,7 @@ inline fn execThumb32(c: *Cpu, h: u32, second: u32, pc: u32) ?Status {
         c.pc = pc + 4;
         return neonMisc(c, 0xf3000000 | ((h & 0xff) << 16) | second, pc);
     }
-    if (h & 0xef80 == 0xef00 or (h & 0xffb0 == 0xefb0 and second & 0x10 == 0) or (h & 0xefb0 == 0xefa0 and second & 0x50 == 0x40)) {
+    if (h & 0xef80 == 0xef00 or (h & 0xffb0 == 0xefb0 and second & 0x10 == 0) or (h & 0xef80 == 0xef80 and second & 0x50 == 0x40)) {
         c.pc = pc + 4;
         return neonSame(c, 0xf2000000 | ((h & 0x1000) << 12) | ((h & 0xff) << 16) | second, pc);
     }
