@@ -394,6 +394,8 @@ rt.register({
   },
 });
 class JMemoryInfo extends JObj {
+  dalvikSharedClean = 0; nativeSharedClean = 0; otherSharedClean = 0;
+  dalvikPrivateClean = 0; nativePrivateClean = 0; otherPrivateClean = 0;
   dalvikPss = 0; nativePss = 0; otherPss = 0;
   dalvikSharedDirty = 0; dalvikPrivateDirty = 0; nativeSharedDirty = 0; nativePrivateDirty = 0; otherSharedDirty = 0; otherPrivateDirty = 0;
   get totalPss() { return this.dalvikPss + this.nativePss + this.otherPss; }
@@ -410,12 +412,15 @@ class JMemoryInfo extends JObj {
 rt.register({
   name: "android/os/Debug$MemoryInfo", ctor: JMemoryInfo,
   fields: ["dalvikPss", "nativePss", "otherPss", "dalvikSharedDirty", "dalvikPrivateDirty",
-    "nativeSharedDirty", "nativePrivateDirty", "otherSharedDirty", "otherPrivateDirty"],
+    "nativeSharedDirty", "nativePrivateDirty", "otherSharedDirty", "otherPrivateDirty",
+    "dalvikSharedClean", "nativeSharedClean", "otherSharedClean", "dalvikPrivateClean", "nativePrivateClean", "otherPrivateClean"],
   methods: {
     "getTotalPss()I": function (this: JMemoryInfo) { return this.totalPss; },
     ...noops("<init>()V"),
     "getTotalPrivateDirty()I": function (this: JMemoryInfo) { return this.privateDirty; },
     "getTotalSharedDirty()I": function (this: JMemoryInfo) { return this.dalvikSharedDirty + this.nativeSharedDirty + this.otherSharedDirty; },
+    "getTotalSharedClean()I": function (this: JMemoryInfo) { return this.dalvikSharedClean + this.nativeSharedClean + this.otherSharedClean; },
+    "getTotalPrivateClean()I": function (this: JMemoryInfo) { return this.dalvikPrivateClean + this.nativePrivateClean + this.otherPrivateClean; },
     "getMemoryStat(Ljava/lang/String;)Ljava/lang/String;": function (this: JMemoryInfo, key: string) {
       const stats = this.stats(); return Object.hasOwn(stats, key) ? String(stats[key]) : null;
     },
