@@ -550,8 +550,9 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
     if (top == 0) {
         if ((w & 0x0ff000f0) == 0x01200010) return bx(c, reg(c, rm, pc));
         if ((w & 0x0ff000f0) == 0x01200030) {
+            const target = reg(c, rm, pc);
             set(c, 14, pc + 4);
-            return bx(c, reg(c, rm, pc));
+            return bx(c, target);
         }
         if ((w & 0x0ff000f0) == 0x01200070) return fault(c, .brk, w, pc);
         if ((w & 0x0fff0ff0) == 0x016f0f10) {

@@ -60,6 +60,14 @@ describe("arm decoder", () => {
     expect(thumb.cpsr & 0x0600fc00).toBe(0);
   });
 
+  test("BLX reads its LR target before replacing the return address", () => {
+    const c = run([
+      0xe1a0400e, 0xe28fe00c, 0xe12fff3e, 0xe2800001,
+      0xe12fff14, 0xe1a00000, 0xe280000a, BXLR,
+    ], cpu => { cpu.w[0] = 5; });
+    expect(c.w[0]).toBe(16);
+  });
+
   test("Thumb BL and BLX preserve state across Thumb and ARM callees", () => {
     const c = runThumb([
       0xb510, 0x4604, // push {r4, lr}; mov r4, r0
