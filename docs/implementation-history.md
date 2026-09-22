@@ -170,6 +170,19 @@ instructions. This is not a controlled paired app-speed claim. The profile also 
 writeback transfers in hot native arithmetic loops that remain interpreted; performance work is open.
 The preceding full regression matrix does not cover this follow-up change.
 
+Hot native arithmetic loops also use Thumb pre/post-index memory transfers. Their immediate
+offsets and base-register updates now reuse the existing memory emitter and store-invalidation
+helper; PC operands, invalid encodings and overlapping load/writeback destinations still use
+the interpreter. Typecheck, 73 ARM tests / 829 assertions and all 12 cache/invalidation tests /
+1,147 assertions pass. Existing word, byte, halfword and signed-load fixtures cover these forms;
+no new test is added. A million-loop spill/restore probe preserves its base and loaded value,
+dropping from 26–28 ms to about 1.3 ms warm. Fresh full Chrome restores level 3 and completes its
+first puzzle, advancing to the second with zero native, GL, layout or draw faults. Its visible
+pre-cut sample renders 69 frames in 38.36 seconds (1.80 GL FPS), with 36.01 seconds native time
+and 3.31 billion instructions. Different sample timing and host contention still prevent a
+controlled app-speed claim. The same profile's Thumb long multiply-accumulate path remains an
+interpreted hotspot; its ARM counterpart already has reusable JIT arithmetic.
+
 Earlier investigation entries follow; their open questions describe the revision at that time.
 
 Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this

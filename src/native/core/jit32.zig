@@ -714,9 +714,14 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             const signed = h & 0x100 != 0;
             const reading = h & 0x10 != 0;
             const immOffset = h & 0x80 != 0;
-            if (n < 15 and d < 15 and (!signed or (reading and size < 2)) and (immOffset or (h2 & 0xfc0 == 0 and h2 & 15 < 15))) {
+            const indexed = !immOffset and h2 & 0x800 != 0 and h2 & 0x500 != 0;
+            const writeback = indexed and h2 & 0x100 != 0;
+            if (n < 15 and d < 15 and (!signed or (reading and size < 2)) and !(reading and writeback and n == d) and
+                (immOffset or indexed or (h2 & 0xfc0 == 0 and h2 & 15 < 15)))
+            {
+                const offset: i32 = @as(i32, @intCast(h2 & 255)) * (if (h2 & 0x200 != 0) @as(i32, 1) else -1);
                 b.get(L_X + n);
-                if (immOffset) b.i32c(@intCast(h2 & 0xfff)) else b.emit(.{ get(L_X + (h2 & 15)), c32(@intCast(bits(h2, 4, 2))), O.i32_shl });
+                if (immOffset) b.i32c(@intCast(h2 & 0xfff)) else if (indexed) b.i32c(if (h2 & 0x400 != 0) offset else 0) else b.emit(.{ get(L_X + (h2 & 15)), c32(@intCast(bits(h2, 4, 2))), O.i32_shl });
                 b.emit(.{ O.i32_add, set(L_A) });
                 if (reading) {
                     load(e, ([_]u8{ O.i32_load8_u, O.i32_load16_u, O.i32_load })[size] - @as(u8, if (signed) 1 else 0), 0);
@@ -725,6 +730,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                     b.get(L_X + d);
                     store(e, ([_]u8{ O.i32_store8, O.i32_store16, O.i32_store })[size], 0);
                 }
+                if (writeback) b.emit(.{ get(L_X + n), c32(offset), O.i32_add, set(L_X + n) });
                 return false;
             }
         }

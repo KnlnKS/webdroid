@@ -19,6 +19,8 @@ Performance and Player ID remain unresolved; the full parity goal is not complet
 Follow-up performance work now lowers single-instruction IT/move pairs through the JIT. Owning
 checks pass and fresh Chrome restores level 3 and completes its first puzzle. This production
 change follows the matrix above; another full E2E is reserved for the final finished candidate.
+Thumb indexed transfers also reuse the same memory emitter for pre/post-index writeback. The
+combined build passes owning checks and the same gameplay replay; rendering remains below 2 FPS.
 
 - Run the unchanged 4.2.1 XAPK in full Chrome and an AVD at matching geometry.
 - Capture startup, menus, gameplay, pause/resume and saved progression in both.
