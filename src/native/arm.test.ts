@@ -341,6 +341,21 @@ describe("arm decoder", () => {
       cpu.s.set([1 - 2 ** -23, 3, 4, 1], 36);
     });
     expect(Array.from(accumulated.s.slice(48, 52))).toEqual([0, 2, 7, 0]);
+    const scalar = (cpu: Cpu) => {
+      cpu.s.set([1, 2, 3, 4, 3, 4, 5, 6], 32);
+      cpu.s.set([10, 11, 12, 13, 14, 15, 16, 17], 40);
+      cpu.s[13] = 1; cpu.s[14] = 2;
+      cpu.s.set([1 - 2 ** -23, 1 + 2 ** -23, 2, 1, 8], 5);
+    };
+    for (const execute of [
+      () => run([0xf3a0c9c7, 0xf3a2c1e6, 0xf2a34562, 0xf2f428e6, BXLR], scalar),
+      () => runThumb([0xffa0, 0xc9c7, 0xffa2, 0xc1e6, 0xefa3, 0x4562, 0xeff4, 0x28e6, 0x4770], scalar),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.s.slice(24, 28))).toEqual([5, 8, 11, 14]);
+      expect(Array.from(c.s.slice(8, 10))).toEqual([0, 6]);
+      expect(Array.from(c.s.slice(36, 40))).toEqual([12, 13, 14, 15]);
+    }
     const shifts = (cpu: Cpu) => {
       cpu.si.set([1, 0, 0, -2147483648], 40);
       cpu.si.set([32, 0, 192, 0], 36);
