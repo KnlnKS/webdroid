@@ -94,6 +94,14 @@ interface LooperFd { ident: number; events: number; callback: number; data: bigi
 interface Looper { cpu: Cpu; pumping: boolean; woken: boolean; wake: AbortController | null; fds: Map<number, LooperFd>; allowNonCallbacks: boolean }
 const loopers: (Looper | null)[] = [null];
 const looperOf = new WeakMap<Cpu, number>();
+function prepareLooper(cpu: Cpu, allowNonCallbacks: boolean): number {
+  const existing = looperOf.get(cpu);
+  if (existing) return existing;
+  const handle = loopers.length;
+  loopers.push({ cpu, pumping: false, woken: false, wake: null, fds: new Map(), allowNonCallbacks });
+  looperOf.set(cpu, handle);
+  return handle;
+}
 const pollEvents = (events: number) => (events & 1) | ((events & 2) << 1);
 const looperEvents = (events: number) => (events & 1) | ((events & (4 | 8 | 16 | 32)) >> 1);
 async function pollLooper(cpu: Cpu, ms: number, fdOut: bigint, eventsOut: bigint, dataOut: bigint, main = false): Promise<number> {
@@ -194,13 +202,8 @@ export function ndkInit(): void {
     },
     ANativeWindow_setFrameRate: () => 0, ANativeWindow_setFrameRateWithChangeStrategy: () => 0,
 
-    ALooper_prepare: (cpu, a) => {
-      const options = a.i();
-      let h = looperOf.get(cpu);
-      if (!h) { loopers.push({ cpu, pumping: false, woken: false, wake: null, fds: new Map(), allowNonCallbacks: !!(options & 1) }); looperOf.set(cpu, (h = loopers.length - 1)); }
-      return h;
-    },
-    ALooper_forThread: (cpu) => looperOf.get(cpu) ?? 0,
+    ALooper_prepare: (cpu, a) => prepareLooper(cpu, !!(a.i() & 1)),
+    ALooper_forThread: (cpu) => looperOf.get(cpu) ?? (cpu.jthread.looper ? prepareLooper(cpu, false) : 0),
     ALooper_acquire: () => {}, ALooper_release: () => {},
     ALooper_wake: (_c, a) => { const l = loopers[a.i()]; if (l) { l.woken = true; l.wake?.abort(); } },
     ALooper_addFd: (_c, a) => {
