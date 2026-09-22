@@ -286,6 +286,12 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(2, 8))).toEqual([0x06050403, -1073741817, 0x56785678, 0x56785678, 0x41200000, 0x41400000]);
       expect(Array.from(c.si.slice(18, 24))).toEqual([0x00030003, -262149, 0, 0, 0, 0]);
     }
+    const accumulated = run([0xf26a8df2, BXLR], (cpu) => {
+      cpu.s.set([1, 8, -1, 0], 48);
+      cpu.s.set([1 + 2 ** -23, 2, -2, 0], 52);
+      cpu.s.set([1 - 2 ** -23, 3, 4, 1], 36);
+    });
+    expect(Array.from(accumulated.s.slice(48, 52))).toEqual([0, 2, 7, 0]);
   });
   test("rsb/adc/sbc", () => {
     const c = run([
