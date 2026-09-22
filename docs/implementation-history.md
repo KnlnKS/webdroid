@@ -33,6 +33,16 @@ was muted. A visible, untraced settings sample still completed only 40 GL frames
 spending 19.3 s in native execution. This optimization does not establish adequate app speed;
 the earlier gameplay and current settings samples are not a matched performance comparison.
 
+The original ARM32 level-2 transition stayed black for several minutes while guest asset
+decoding continued, then rendered the expected puzzle without a native fault or bounds warning.
+Longer swipes completed its first two stages with three stars each. Short swipes can finish
+between game frames at the current low frame rate. The matching AVD remains responsive.
+Wide Thumb immediate loads/stores now use the existing JIT memory and code-invalidation helpers,
+avoiding full interpreter spills for ordinary byte, halfword and word fields. PC-relative,
+writeback and PC-target forms retain their existing paths. Typecheck and 73 ARM tests / 817
+assertions pass. An isolated instruction-loop probe fell from roughly 54–72 ms to 2–3 ms warm;
+this is a microbenchmark with the browser still running, not a whole-app speed measurement.
+
 Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this
 game and changed owners; the full serialized E2E matrix is reserved for the final candidate.
 Full Chrome runs at port 4091, 720×1280 / 320 dpi, alongside API 33 AVD `emulator-5560` at the

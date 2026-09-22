@@ -630,6 +630,24 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
     if (h >= 0xe800) {
         const h2: u32 = mem.ld(u16, pc + 2);
         if (h & 0xff00 == 0xee00 and jitfp.emitVfp(e, h << 16 | h2)) return false;
+        if (h & 0xfe80 == 0xf880 and bits(h, 5, 2) < 3) {
+            const n = h & 15;
+            const d = h2 >> 12;
+            const size = bits(h, 5, 2);
+            const signed = h & 0x100 != 0;
+            const reading = h & 0x10 != 0;
+            if (n < 15 and d < 15 and (!signed or (reading and size < 2))) {
+                b.emit(.{ get(L_X + n), c32(@intCast(h2 & 0xfff)), O.i32_add, set(L_A) });
+                if (reading) {
+                    load(e, ([_]u8{ O.i32_load8_u, O.i32_load16_u, O.i32_load })[size] - @as(u8, if (signed) 1 else 0), 0);
+                    setR(e, d);
+                } else {
+                    b.get(L_X + d);
+                    store(e, ([_]u8{ O.i32_store8, O.i32_store16, O.i32_store })[size], 0);
+                }
+                return false;
+            }
+        }
         const wideMove = h & 0xfbf0;
         if ((wideMove == 0xf240 or wideMove == 0xf2c0) and h2 & 0x8000 == 0) {
             const d = (h2 >> 8) & 15;
