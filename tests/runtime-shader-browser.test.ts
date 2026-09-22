@@ -10,7 +10,7 @@ test("runtime shaders preserve recorded uniforms, premultiplied alpha and canvas
     await page.addScriptTag({ type: "module", content: await build.outputs[0].text() });
     await page.waitForFunction(() => Object.hasOwn(window, "shaderProbe"));
     expect(await page.evaluate(() => Object.getOwnPropertyDescriptor(window, "shaderProbe")?.value)).toEqual({
-      recorded: [255, 0, 0, 128], outside: [0, 255, 0, 255], direct: [0, 0, 255, 255], invalid: true, text: [14, 39],
+      recorded: [255, 0, 0, 128], outside: [0, 255, 0, 255], direct: [0, 0, 255, 255], invalid: true, recordedRasters: 1, rasterizations: 2, text: [14, 39],
     });
   } finally { await browser.close(); }
 }, 15000);

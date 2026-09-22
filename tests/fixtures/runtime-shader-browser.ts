@@ -21,6 +21,7 @@ async function probe() {
   await vcall(node, "setPosition", "(IIII)Z", 0, 0, 16, 16);
   const recording = await vcall(node, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", 16, 16);
   await vcall(recording, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 0, 0, 16, 16, paint);
+  await vcall(recording, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 8, 0, 16, 16, paint);
   const textPaint = new JPaint(); textPaint.textSize = 2;
   await vcall(recording, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "Label", 0, 14, textPaint);
   await vcall(node, "endRecording", "()V");
@@ -30,16 +31,22 @@ async function probe() {
   const owner = { drawnText: null, drawnTextPoints: null, drawnTextCount: 0 };
   canvas.semanticOwner = owner;
   ctx.translate(10, 12); ctx.scale(2, 2);
+  let rasterizations = 0;
+  const drawArrays = WebGL2RenderingContext.prototype.drawArrays;
+  WebGL2RenderingContext.prototype.drawArrays = function(mode, first, count) {
+    rasterizations++; return drawArrays.call(this, mode, first, count);
+  };
   await vcall(canvas, "drawRenderNode", "(Landroid/graphics/RenderNode;)V", node);
   const pixel = (x: number, y: number) => Array.from(ctx.getImageData(x, y, 1, 1).data);
-  const recorded = pixel(20, 20), outside = pixel(30, 20);
+  const recorded = pixel(20, 20), outside = pixel(30, 20), recordedRasters = rasterizations;
   ctx.clearRect(0, 0, 16, 16);
   await vcall(canvas, "drawRect", "(FFFFLandroid/graphics/Paint;)V", 0, 0, 16, 16, paint);
   const direct = pixel(20, 20);
+  WebGL2RenderingContext.prototype.drawArrays = drawArrays;
   let invalid = false;
   try { await vcall(shader, "setFloatUniform", "(Ljava/lang/String;F)V", "color", 1); }
   catch (error) { invalid = !!rt.iof(error, "java/lang/IllegalArgumentException"); }
   const text = locateDrawnText(owner, "label", 64, 64);
-  return { recorded, outside, direct, invalid, text: text && [Math.round(text.x), Math.round(text.y)] };
+  return { recorded, outside, direct, invalid, recordedRasters, rasterizations, text: text && [Math.round(text.x), Math.round(text.y)] };
 }
 Object.defineProperty(window, "shaderProbe", { value: await probe() });

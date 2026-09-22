@@ -1,7 +1,7 @@
 import { rt, type NativeSpec } from "../jvm/runtime";
 import { JShader } from "./graphics";
 
-type Context = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+import type { Ctx2D } from "./recording";
 type UniformType = { size: number; integer: boolean; upload: (gl: WebGL2RenderingContext, location: WebGLUniformLocation | null, values: number[]) => void };
 type Uniform = { location: WebGLUniformLocation | null; format: UniformType; color: boolean; values: number[] };
 const vector = (size: 1 | 2 | 3 | 4, integer = false): UniformType => ({ size, integer,
@@ -35,15 +35,48 @@ function compile(gl: WebGL2RenderingContext, type: number, source: string): WebG
   return shader;
 }
 const programs = new FinalizationRegistry<WebGLProgram>(program => context?.deleteProgram(program));
-export class JRuntimeShader extends JShader {
-  private compiled: { program: WebGLProgram } | null = null;
-  private uniforms = new Map<string, Uniform>();
-  private revision = 0;
-  private cached = "";
+type ShaderState = { readonly uniforms: readonly Uniform[]; readonly local: DOMMatrixReadOnly | null };
+class ShaderProgram {
+  private cached: { state: ShaderState; key: string; pattern: CanvasPattern } | null = null;
   private raster: OffscreenCanvas | null = null;
-  private patternValue: CanvasPattern | null = null;
-  private transform: WebGLUniformLocation | null = null;
-  private height: WebGLUniformLocation | null = null;
+  readonly transform: WebGLUniformLocation | null;
+  readonly height: WebGLUniformLocation | null;
+  constructor(readonly program: WebGLProgram, gl: WebGL2RenderingContext) {
+    this.transform = gl.getUniformLocation(program, "wd_coords");
+    this.height = gl.getUniformLocation(program, "wd_height");
+    programs.register(this, program);
+  }
+  pattern(ctx: Ctx2D, state: ShaderState): CanvasPattern {
+    const gl = graphics(), width = ctx.canvas.width, height = ctx.canvas.height;
+    const canvasMatrix = ctx.getTransform();
+    const inverse = (state.local ? canvasMatrix.multiply(state.local) : canvasMatrix).inverse();
+    const key = `${width},${height},${inverse.a},${inverse.b},${inverse.c},${inverse.d},${inverse.e},${inverse.f}`;
+    if (this.cached?.state !== state || this.cached.key !== key) {
+      const canvas = surface!;
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      gl.viewport(0, 0, width, height); gl.useProgram(this.program);
+      gl.uniformMatrix3fv(this.transform, false, [inverse.a, inverse.b, 0, inverse.c, inverse.d, 0, inverse.e, inverse.f, 1]);
+      gl.uniform1f(this.height, height);
+      for (const u of state.uniforms) u.format.upload(gl, u.location, u.values);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      // One recyclable raster per program, independent of the number of recorded draws.
+      const raster = this.raster ??= new OffscreenCanvas(width, height);
+      if (raster.width !== width) raster.width = width;
+      if (raster.height !== height) raster.height = height;
+      const target = raster.getContext("2d")!; target.globalCompositeOperation = "copy"; target.drawImage(canvas, 0, 0);
+      const pattern = ctx.createPattern(raster, "no-repeat");
+      if (!pattern) return invalid("Cannot create shader pattern");
+      this.cached = { state, key, pattern };
+    }
+    this.cached.pattern.setTransform(canvasMatrix.inverse());
+    return this.cached.pattern;
+  }
+}
+export class JRuntimeShader extends JShader {
+  private compiled: ShaderProgram | null = null;
+  private uniforms = new Map<string, Uniform>();
+  private captured: { local: string; pattern: (ctx: Ctx2D) => CanvasPattern } | null = null;
   init(source: string): void {
     if (source == null) throw rt.mkThrowable("java/lang/NullPointerException", "shader");
     const gl = graphics();
@@ -77,9 +110,8 @@ export class JRuntimeShader extends JShader {
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
         const error = gl.getProgramInfoLog(program); gl.deleteProgram(program); invalid(error ?? "Invalid AGSL program");
       }
-      this.compiled = { program }; programs.register(this.compiled, program);
+      this.compiled = new ShaderProgram(program, gl);
       for (const [name, u] of this.uniforms) u.location = gl.getUniformLocation(program, name);
-      this.transform = gl.getUniformLocation(program, "wd_coords"); this.height = gl.getUniformLocation(program, "wd_height");
     } finally { gl.deleteShader(vertex); if (fragment) gl.deleteShader(fragment); }
   }
   set(name: string, values: ArrayLike<number>, color = false, integer = false): void {
@@ -88,40 +120,21 @@ export class JRuntimeShader extends JShader {
     if (!u || u.values.length !== values.length || u.color !== color || u.format.integer !== integer) invalid("Invalid uniform: " + name);
     let changed = false;
     for (let i = 0; i < values.length; i++) { changed ||= u.values[i] !== values[i]; u.values[i] = values[i]; }
-    if (changed) this.revision++;
+    if (changed) this.captured = null;
   }
-  override deferredPattern(): (ctx: Context) => CanvasPattern {
-    const snapshot = new JRuntimeShader();
-    snapshot.compiled = this.compiled;
-    snapshot.transform = this.transform; snapshot.height = this.height;
-    snapshot.local = this.local ? [...this.local] : null;
-    snapshot.uniforms = new Map([...this.uniforms].map(([name, u]) => [name, { ...u, values: [...u.values] }]));
-    return ctx => snapshot.pattern(ctx);
-  }
-  override pattern(ctx: Context): CanvasPattern {
-    const gl = graphics(), width = ctx.canvas.width, height = ctx.canvas.height;
-    const canvasMatrix = ctx.getTransform();
-    const local = this.local ? canvasMatrix.multiply(new DOMMatrix(this.local)) : canvasMatrix;
-    const inverse = local.inverse();
-    const key = `${width},${height},${inverse.a},${inverse.b},${inverse.c},${inverse.d},${inverse.e},${inverse.f},${this.revision}`;
-    if (this.cached !== key || !this.patternValue) {
-      const canvas = surface!;
-      if (canvas.width !== width) canvas.width = width;
-      if (canvas.height !== height) canvas.height = height;
-      gl.viewport(0, 0, width, height); gl.useProgram(this.compiled!.program);
-      gl.uniformMatrix3fv(this.transform, false, [inverse.a, inverse.b, 0, inverse.c, inverse.d, 0, inverse.e, inverse.f, 1]);
-      gl.uniform1f(this.height, height);
-      for (const u of this.uniforms.values()) u.format.upload(gl, u.location, u.values);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-      const raster = this.raster ??= new OffscreenCanvas(width, height);
-      if (raster.width !== width) raster.width = width;
-      if (raster.height !== height) raster.height = height;
-      const target = raster.getContext("2d")!; target.globalCompositeOperation = "copy"; target.drawImage(canvas, 0, 0);
-      this.patternValue = ctx.createPattern(raster, "no-repeat"); this.cached = key;
+  override deferredPattern(): (ctx: Ctx2D) => CanvasPattern {
+    const local = this.local?.join(",") ?? "";
+    if (!this.captured || this.captured.local !== local) {
+      const program = this.compiled;
+      if (!program) return invalid("Shader is not initialized");
+      const state: ShaderState = { local: this.local ? new DOMMatrixReadOnly(this.local) : null,
+        uniforms: [...this.uniforms.values()].map(u => ({ ...u, values: [...u.values] })) };
+      this.captured = { local, pattern: ctx => program.pattern(ctx, state) };
     }
-    this.patternValue!.setTransform(canvasMatrix.inverse());
-    return this.patternValue!;
+    return this.captured.pattern;
   }
+  override pattern(ctx: Ctx2D): CanvasPattern { return this.deferredPattern()(ctx); }
+
 }
 const methods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Ljava/lang/String;)V": function (this: JRuntimeShader, source: string) { this.init(source); },
