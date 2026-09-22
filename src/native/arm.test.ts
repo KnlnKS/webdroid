@@ -223,6 +223,14 @@ describe("arm decoder", () => {
     expect(c.w[6] >>> 30).toBe(1); // Z set, N clear
     expect((c.w[6] >>> 29) & 1).toBe(1);
   });
+  test("exclusive stores require a live monitor", () => {
+    const c = run([0xe1912f9f, 0xe2822001, 0xe1810f92, 0xf57ff01f, 0xe3a02063, 0xe1813f92, BXLR], (cpu) => {
+      cpu.w[2] = cpu.stackTop - 16;
+      mem.st32(cpu.w[2], 41);
+    });
+    expect(mem.ld32(c.w[2])).toBe(42);
+    expect([c.w[0], c.w[6]]).toEqual([0, 1]);
+  });
   test("ldm/stm ia/db forms", () => {
     const c = run([
       0xe3a00001, 0xe3a01002, 0xe3a02003,   // r0..r2 = 1,2,3

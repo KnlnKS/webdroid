@@ -319,7 +319,7 @@ fn execArm(c: *Cpu, pc: u32) Status {
         }
         if ((w & 0x0d70f000) == 0x0550f000) return .next;
         if ((w & 0x0ff000f0) == 0x05700040 or (w & 0x0ff000f0) == 0x05700050 or (w & 0x0ff000f0) == 0x05700060) return .next;
-        if ((w & 0x0fff00ff) == 0x057ff01f) {
+        if ((w & 0x0fffffff) == 0x057ff01f) {
             c.excl = 0;
             return .next;
         }
@@ -451,7 +451,7 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
             set(c, rd, t);
             return .next;
         }
-        if ((w & 0x0f9000f0) == 0x01800090) {
+        if ((w & 0x0f800ff0) == 0x01800f90) {
             const Ld = w & (1 << 20) != 0;
             const sz = bits(w, 21, 2);
             const a = addr(c, reg(c, rn, pc)) orelse return badAddr(c, w, pc);
@@ -467,7 +467,7 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
                     },
                 }
             } else {
-                const ok = switch (sz) {
+                const ok = c.excl == 0 or switch (sz) {
                     0 => st(u32, c, a, r(c, rm)),
                     2 => st(u8, c, a, @truncate(r(c, rm))),
                     3 => st(u16, c, a, @truncate(r(c, rm))),
