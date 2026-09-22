@@ -128,6 +128,13 @@ native, GL, layout or draw faults. A 15.40-second stage-two sample renders 18 fr
 spending 15.13 s on 934 million native instructions. Different game state and background work
 prevent a paired whole-app speed claim. The candidate is frozen for repeated final verification.
 
+Direct `bun test` previously bypassed the runtime-only preload, allowing ARM tests to read stale
+generated Wasm. Bun's separate `[test].preload` now invokes the same owning builder. Marking both
+generated outputs stale and running the existing ARM suite rebuilt ReleaseFast and ReleaseSafe
+before all 73 tests / 817 assertions passed. Both generated files remain byte-identical to the
+validated candidate. This adds no test file or duplicate build logic; Bun documents the separate
+configuration in https://bun.com/docs/runtime/bunfig.
+
 Earlier investigation entries follow; their open questions describe the revision at that time.
 
 Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this
