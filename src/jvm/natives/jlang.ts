@@ -673,6 +673,12 @@ sm("getBytes()[B", utf8Bytes);
 const encodedBytes = function (this: string, charset: unknown) { return encodeString(this, charset); };
 sm("getBytes(Ljava/lang/String;)[B", encodedBytes);
 sm("getBytes(Ljava/nio/charset/Charset;)[B", encodedBytes);
+sm("getBytes(II[BI)V", function (begin: number, end: number, dst: Int8Array, offset: number) {
+  if (begin < 0 || end > this.length || begin > end) throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", null);
+  if (dst == null) rt.npe();
+  if (offset < 0 || offset + end - begin > dst.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
+  for (let i = begin; i < end; i++) dst[offset + i - begin] = this.charCodeAt(i);
+});
 sm("replace(CC)Ljava/lang/String;", function (a: number, b: number) {
   return this.split(String.fromCharCode(a)).join(String.fromCharCode(b));
 });

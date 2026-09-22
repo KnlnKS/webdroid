@@ -725,6 +725,26 @@ rt.register({
     },
     "read([B)I": async function (this: JRAF, b: Int8Array) { return await rafRead(this, b, 0, b.length); },
     "read([BII)I": async function (this: JRAF, b: Int8Array, off: number, len: number) { return await rafRead(this, b, off, len); },
+    "readLine()Ljava/lang/String;": async function (this: JRAF) {
+      checkFileOpen(this);
+      const parts: string[] = [], size = this.source?.size ?? this.buf.length;
+      if (this.pos >= size) return null;
+      while (this.pos < size) {
+        const n = Math.min(4096, size - this.pos), bytes = this.source ? await this.source.read(this.pos, n) : this.buf.subarray(this.pos, this.pos + n);
+        if (!bytes.length) break;
+        let end = 0; while (end < bytes.length && bytes[end] !== 10 && bytes[end] !== 13) end++;
+        parts.push(charsToString(bytes, 0, end)); this.pos += end;
+        if (end < bytes.length) {
+          this.pos++;
+          if (bytes[end] === 13 && this.pos < size) {
+            const next = this.source ? (await this.source.read(this.pos, 1))[0] : this.buf[this.pos];
+            if (next === 10) this.pos++;
+          }
+          break;
+        }
+      }
+      return parts.join("");
+    },
     "readFully([B)V": function (this: JRAF, b: Int8Array) { return rafReadFully(this, b, 0, b.length); },
     "readFully([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { return rafReadFully(this, b, off, len); },
     ...readers((n, get) => async function (this: JRAF) { const b = new Int8Array(n); await rafReadFully(this, b, 0, n); return get(new DataView(b.buffer)); }),

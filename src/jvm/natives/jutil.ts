@@ -1564,6 +1564,14 @@ const concurrentListExtras: Record<string, Methods> = {
       this.a.push(v);
       return 1;
     },
+    "retainAll(Ljava/util/Collection;)Z": async function (this: JList, c: unknown) {
+      if (c == null) rt.npe();
+      const thread = curThread, before = this.a.slice(), retained: unknown[] = [];
+      for (const item of before) if (await vcallOn(thread, c, "contains", "(Ljava/lang/Object;)Z", item)) retained.push(item);
+      if (this.a.length !== before.length || this.a.some((item, i) => item !== before[i])) throw rt.mkThrowable("java/util/ConcurrentModificationException", null);
+      if (retained.length === before.length) return 0;
+      this.a = retained; return 1;
+    },
   },
 };
 for (const n of ["java/util/concurrent/CopyOnWriteArrayList", "java/util/concurrent/ConcurrentLinkedDeque"]) {
