@@ -12,7 +12,10 @@ unvalidated; this is verified early gameplay, not a complete parity claim.
 Post-matrix profiling found expensive interpreted Thumb arithmetic and indexed memory operations.
 Their shared JIT lowering passes owning checks; arithmetic also completes a fresh puzzle.
 The combined candidate `b5ae9cb5` restores level 3 and completes its first puzzle without native
-or rendering faults. It is frozen for a new final regression matrix; performance remains slow.
+or rendering faults. Its repeated final matrix passes all 1,295 unit tests and completes all
+159 E2E steps in 823.4 seconds without wedges, action failures or settling timeouts. Known
+baseline errors remain visible. Direct Bun tests now rebuild stale native cores before running.
+Performance and Player ID remain unresolved; the full parity goal is not complete.
 
 - Run the unchanged 4.2.1 XAPK in full Chrome and an AVD at matching geometry.
 - Capture startup, menus, gameplay, pause/resume and saved progression in both.

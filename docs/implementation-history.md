@@ -135,6 +135,24 @@ before all 73 tests / 817 assertions passed. Both generated files remain byte-id
 validated candidate. This adds no test file or duplicate build logic; Bun documents the separate
 configuration in https://bun.com/docs/runtime/bunfig.
 
+Final validation of `b5ae9cb5` passes typecheck and all 1,295 tests / 27,213 assertions. The
+serialized full E2E rerun completes 159 steps across 12 flows in 823.4 seconds. There are no
+wedges, failed actions, settling timeouts, GL errors or required native delegates. All Android
+realms return diagnostics and each main app advances ticks. YouTube retains four Matrix draw
+errors and SAX exceptions; Harmonic retains its regex error; Lichess retains pthread errors
+3/22/35. Flappy's embedded WebView retains its page-status TypeError and two frames without
+emulator diagnostics. Reddit additionally reaches the already unsupported process-start timing
+query without an uncaught exception or failed action. These gaps are recorded, not suppressed.
+
+Compared with the preceding matrix, FitNotes and Mihon onboarding retain exact mean content
+scores of 40.11639% and 17.69141%. Mihon app changes 57.23855→56.68434%, concentrated in its
+randomized final empty-state face; inspected surrounding controls are unchanged. Harmonic
+changes 27.49948→27.40239%, primarily in the overflow capture, with populated comments and
+unchanged inset behavior. Resy again renders its venue and all 13 steps without missing APIs
+or errors. Goldens remain unchanged. This is compatibility evidence, not an uncontended speed
+claim; a separate active Chrome workload remains on the host. Complete Cut the Rope parity
+is still limited by slow startup/rendering, blank Player ID and untested later unlocked features.
+
 Earlier investigation entries follow; their open questions describe the revision at that time.
 
 Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this
