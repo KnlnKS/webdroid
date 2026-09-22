@@ -258,6 +258,12 @@ class JCompoundButton extends JButton {
   buttonW = 0;
   buttonTint: JColorStateList | null = null;
   hasButtonTint = false;
+  async updateButtonState() {
+    const thread = curThread, drawable = this.buttonD;
+    if (!drawable || !await vcallOn(thread, drawable, "isStateful", "()Z")) return;
+    const state = await vcallOn(thread, this, "getDrawableState", "()[I");
+    if (await vcallOn(thread, drawable, "setState", "([I)Z", state)) invalidate(this);
+  }
   async applyButtonTint() {
     if (this.buttonD && this.hasButtonTint) await vcall(this.buttonD, "setTintList", "(Landroid/content/res/ColorStateList;)V", this.buttonTint);
     invalidate(this);
@@ -298,6 +304,7 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
     if (ta.vals[1]) {
       this.buttonD = await loadDrawableRV(this.jres, ta.vals[1], this.theme);
       this.buttonW = kind === "switch" ? device.dp(52) : device.dp(32);
+      await this.updateButtonState();
     }
   };
   return {
@@ -326,20 +333,26 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
     this.buttonTint = tint; this.hasButtonTint = true; return this.applyButtonTint();
   },
   "getButtonTintList()Landroid/content/res/ColorStateList;": function (this: JCompoundButton) { return this.buttonTint; },
-  "setButtonDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JCompoundButton, d: JDrawable | null) {
+  "setButtonDrawable(Landroid/graphics/drawable/Drawable;)V": async function (this: JCompoundButton, d: JDrawable | null) {
     this.buttonD = d;
     this.buttonW = d ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;
+    await this.updateButtonState();
     return this.applyButtonTint();
   },
   "setButtonDrawable(I)V": async function (this: JCompoundButton, id: number) {
     this.buttonD = id ? await loadDrawable(this.jres!, id, this.theme) : null;
     this.buttonW = id ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;
+    await this.updateButtonState();
     await this.applyButtonTint();
+  },
+  "drawableStateChanged()V": function (this: JCompoundButton) {
+    this.updateLinkColor();
+    return this.updateButtonState();
   },
   "onMeasure(II)V": async function (this: JCompoundButton, wSpec: number, hSpec: number) {
     await callSelf(textViewMethods, "onMeasure(II)V", this, wSpec, hSpec);
     this.measuredW = resolveSizeAndState(this.measuredW + this.buttonW, wSpec);
-    this.measuredH = Math.max(this.measuredH, device.dp(48));
+    this.measuredH = resolveSizeAndState(Math.max(this.measuredH, device.dp(48)), hSpec);
   },
   "onDraw(Landroid/graphics/Canvas;)V": async function (this: JCompoundButton, cv: JCanvas) {
     const thread = curThread;

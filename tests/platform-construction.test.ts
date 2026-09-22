@@ -6,6 +6,7 @@ import { classCtors } from "../src/jvm/natives/jreflect";
 import { mangleStaticField } from "../src/jvm/abi";
 import { glSurfaces } from "../src/native/egl-current";
 import { JMatrix } from "../src/android/graphics";
+import { ST } from "../src/android/drawable";
 
 rt.linkNatives();
 test("TextureView copies content transforms and resets them without changing its bounds", async () => {
@@ -49,6 +50,11 @@ test("CompoundButton subclasses implement Checkable and preserve tint state", as
   const colors = await vcall(rt.link("android/content/res/ColorStateList").ctor, "valueOf", "(I)Landroid/content/res/ColorStateList;", 0xff123456 | 0);
   await vcall(button, "setButtonTintList", "(Landroid/content/res/ColorStateList;)V", colors);
   expect(await vcall(button, "getButtonTintList", "()Landroid/content/res/ColorStateList;")).toBe(colors);
+  const indicator = rt.make("android/graphics/drawable/StateListDrawable");
+  await vcall(button, "setButtonDrawable", "(Landroid/graphics/drawable/Drawable;)V", indicator);
+  expect([...await vcall(indicator, "getState", "()[I")]).toContain(ST.checked);
+  await vcall(button, "setChecked", "(Z)V", 0);
+  expect([...await vcall(indicator, "getState", "()[I")]).not.toContain(ST.checked);
 });
 
 test("EGL10 returns configurations with their declared Java type", async () => {

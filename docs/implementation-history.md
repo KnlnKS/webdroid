@@ -5031,3 +5031,12 @@ Android-visible dimensions stay zero. The owning browser check passes (23 assert
 multiline selection and independent Canvas transforms; typecheck passes. Fresh full Chrome now
 renders the login modal's title, account options and legal links with zero layout/draw errors,
 where the prior capture showed only a blank sheet. Authentication itself is not exercised.
+
+Phone-login comparison exposed two CompoundButton defects: an exact 48-pixel height became
+144 pixels, stretching/clipping the app's own checkbox drawing, and checked state never reached
+its StateListDrawable when the app overrode onDraw. Measurement now resolves its minimum against
+the supplied spec; drawable assignment and drawableStateChanged propagate virtual state to
+stateful indicators, matching paired framework bytecode. Owning state and browser checks pass
+(5 and 24 assertions), with clean typecheck. A separate duplicate save-login row is under diagnosis.
+One reload stalled at 302 ticks with a queued main job and no native fault; a fresh browser session
+advanced and opened the login modal. This is an unresolved repeated-load observation, not a waiver.

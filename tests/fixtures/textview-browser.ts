@@ -133,7 +133,10 @@ async function probe() {
   await vcall(emptyCanvas, "save", "()I");
   await vcall(emptyCanvas, "translate", "(FF)V", 4, 7);
   const independentCanvas = otherCanvas.ctx.getTransform().isIdentity && emptyCanvas.ctx.getTransform().e === 4;
-  return { ...result, selection, emptySelection, independentCanvas, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
+  const checkBox = rt.make("android/widget/CheckBox");
+  await vcall(checkBox, "measure", "(II)V", 0x40000030, 0x40000030);
+  const checkBoxHeight = await vcall(checkBox, "getMeasuredHeight", "()I");
+  return { ...result, selection, emptySelection, independentCanvas, checkBoxHeight, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
     fitting: (await view.measuredLines(measureText(view.paintT, view.text))).lines.map(l => l.text), cleared: (await view.measuredLines(width)).replacements.length === 0,
     compound: { drawsAt, retained, restored: surface.getTransform().isIdentity } };
 }
