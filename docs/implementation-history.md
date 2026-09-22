@@ -54,6 +54,20 @@ compare scheduling on one live app. Remaining background decoding limits their s
 interpretation. A two-second background/resume returned without a native fault or Unity pause
 timeout; continued gameplay is being checked before final validation.
 
+The same run subsequently resumed rendered home, accepted settings close, and entered level 3
+with six candies and the expected rope/star layout. An ad SDK's delayed handler reached missing
+`Message.getWhen` and set the shell's uncaught-error label, but the main queue, GL frames and
+game navigation continued. That optional ad path is left unimplemented under the task scope.
+The AVD replay again showed an AppLovin test interstitial without a dismissible control; restarting
+the reference restored its level-2 puzzle. No AVD level-2 reward is claimed. A separate TikTok
+Chrome renderer was later observed consuming several cores, so the timing samples above are
+contended observations, not controlled speed claims.
+
+At `6bbc2b80`, typecheck and 1,295 unit tests / 27,213 assertions pass, including native hardware
+oracles. The original XAPK compiles 64,465 classes with zero method failures. All eight runnable
+framework exercises pass (295/363 declared natives); text metrics retain the browser-only skip.
+The final serialized E2E matrix remains pending.
+
 Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this
 game and changed owners; the full serialized E2E matrix is reserved for the final candidate.
 Full Chrome runs at port 4091, 720×1280 / 320 dpi, alongside API 33 AVD `emulator-5560` at the
