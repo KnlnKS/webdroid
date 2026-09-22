@@ -393,20 +393,37 @@ rt.register({
     ...stubs(0, "static isTagEnabled(J)Z", "static isEnabled()Z"),
   },
 });
-// the process's memory as the one heap the page has: no separate native, dalvik or graphics accounting
+class JMemoryInfo extends JObj {
+  dalvikPss = 0; nativePss = 0; otherPss = 0;
+  dalvikSharedDirty = 0; dalvikPrivateDirty = 0; nativeSharedDirty = 0; nativePrivateDirty = 0; otherSharedDirty = 0; otherPrivateDirty = 0;
+  get totalPss() { return this.dalvikPss + this.nativePss + this.otherPss; }
+  get privateDirty() { return this.dalvikPrivateDirty + this.nativePrivateDirty + this.otherPrivateDirty; }
+  stats(): Record<string, number> {
+    return {
+      "summary.java-heap": this.dalvikPrivateDirty, "summary.native-heap": this.nativePrivateDirty,
+      "summary.code": 0, "summary.stack": 0, "summary.graphics": 0,
+      "summary.private-other": this.otherPrivateDirty, "summary.system": this.totalPss - this.privateDirty,
+      "summary.total-pss": this.totalPss, "summary.total-swap": 0,
+    };
+  }
+}
 rt.register({
-  name: "android/os/Debug$MemoryInfo", ctor: class extends JObj {
-    dalvikPss = 0; nativePss = 0; otherPss = 0;
-    dalvikSharedDirty = 0; dalvikPrivateDirty = 0; nativeSharedDirty = 0; nativePrivateDirty = 0; otherSharedDirty = 0; otherPrivateDirty = 0;
-  },
+  name: "android/os/Debug$MemoryInfo", ctor: JMemoryInfo,
   fields: ["dalvikPss", "nativePss", "otherPss", "dalvikSharedDirty", "dalvikPrivateDirty",
     "nativeSharedDirty", "nativePrivateDirty", "otherSharedDirty", "otherPrivateDirty"],
   methods: {
-    "getTotalPss()I": function (this: { dalvikPss: number; nativePss: number; otherPss: number }) { return this.dalvikPss + this.nativePss + this.otherPss; },
+    "getTotalPss()I": function (this: JMemoryInfo) { return this.totalPss; },
     ...noops("<init>()V"),
-    "getTotalPrivateDirty()I": function (this: { dalvikPrivateDirty: number; nativePrivateDirty: number; otherPrivateDirty: number }) { return this.dalvikPrivateDirty + this.nativePrivateDirty + this.otherPrivateDirty; },
-    "getTotalSharedDirty()I": function (this: { dalvikSharedDirty: number; nativeSharedDirty: number; otherSharedDirty: number }) { return this.dalvikSharedDirty + this.nativeSharedDirty + this.otherSharedDirty; },
-    "getMemoryStat(Ljava/lang/String;)Ljava/lang/String;": () => "0",
+    "getTotalPrivateDirty()I": function (this: JMemoryInfo) { return this.privateDirty; },
+    "getTotalSharedDirty()I": function (this: JMemoryInfo) { return this.dalvikSharedDirty + this.nativeSharedDirty + this.otherSharedDirty; },
+    "getMemoryStat(Ljava/lang/String;)Ljava/lang/String;": function (this: JMemoryInfo, key: string) {
+      const stats = this.stats(); return Object.hasOwn(stats, key) ? String(stats[key]) : null;
+    },
+    "getMemoryStats()Ljava/util/Map;": async function (this: JMemoryInfo) {
+      const map = await newObj("java/util/HashMap");
+      for (const [key, value] of Object.entries(this.stats())) await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, String(value));
+      return map;
+    },
   },
 });
 rt.register({

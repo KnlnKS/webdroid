@@ -12,6 +12,7 @@ export class JKeyGenSpec extends JObj {
   keyValidityStart: unknown = null; keyValidityEnd: unknown = null; keyValidityConsumptionEnd: unknown = null;
   unlockedDeviceRequired = false; invalidatedByEnrollment = true; attestation: Int8Array | null = null;
   uid = -1;
+  devicePropertiesAttestation = false;
   certificateSubject: unknown = null; certificateSerial: unknown = null;
   certificateNotBefore: unknown = null; certificateNotAfter: unknown = null;
 }
@@ -27,6 +28,7 @@ const specGetters = {
     "getKeyValidityForConsumptionEnd()Ljava/util/Date;": "keyValidityConsumptionEnd",
     "getAttestationChallenge()[B": "attestation", "getUid()I": "uid" }),
   ...flagGetters({ "isUserAuthenticationRequired()Z": "userAuth",
+    "isDevicePropertiesAttestationIncluded()Z": "devicePropertiesAttestation",
     "isRandomizedEncryptionRequired()Z": "randomizedEncryption", "isStrongBoxBacked()Z": "strongBox",
     "isUnlockedDeviceRequired()Z": "unlockedDeviceRequired",
     "isInvalidatedByBiometricEnrollment()Z": "invalidatedByEnrollment" }),
@@ -64,6 +66,7 @@ rt.register({
     [`setKeyValidityEnd(Ljava/util/Date;)${B}`]: set((s, d) => { s.keyValidityEnd = d; s.keyValidityConsumptionEnd = d; }),
     [`setKeyValidityForOriginationEnd(Ljava/util/Date;)${B}`]: set((s, d) => { s.keyValidityEnd = d; }),
     [`setKeyValidityForConsumptionEnd(Ljava/util/Date;)${B}`]: set((s, d) => { s.keyValidityConsumptionEnd = d; }),
+    [`setDevicePropertiesAttestationIncluded(Z)${B}`]: set((s, value: number) => { s.devicePropertiesAttestation = !!value; }),
     [`setAttestationChallenge([B)${B}`]: set((s, b) => { s.attestation = b; }),
     [`setCertificateSubject(Ljavax/security/auth/x500/X500Principal;)${B}`]: set((s, value) => { s.certificateSubject = value; }),
     [`setCertificateSerialNumber(Ljava/math/BigInteger;)${B}`]: set((s, value) => { s.certificateSerial = value; }),
