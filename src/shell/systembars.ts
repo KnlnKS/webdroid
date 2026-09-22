@@ -77,12 +77,21 @@ export function drawStatusIcons(ctx: OffscreenCanvasRenderingContext2D, res: Res
   ctx.restore();
 }
 
+let handleImage: { density: number; dark: OffscreenCanvas; light: OffscreenCanvas } | null = null;
+function navigationHandle(color: string): OffscreenCanvas {
+  const width = device.dp(108), height = device.dp(4);
+  const image = new OffscreenCanvas(Math.ceil(width), Math.ceil(height)), ctx = image.getContext("2d")!;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.roundRect(0, 0, width, height, height / 2);
+  ctx.fill();
+  return image;
+}
 export function drawNavigationHandle(ctx: OffscreenCanvasRenderingContext2D, bg: number, appearance: number, mask: number, systemUi: number) {
   const dark = mask & APPEARANCE_LIGHT_NAVIGATION_BARS ? !!(appearance & APPEARANCE_LIGHT_NAVIGATION_BARS)
     : !!(systemUi & 16) || lightBackground(bg);
-  ctx.fillStyle = dark ? "#00000099" : "#ffffffeb";
-  const width = device.dp(108), height = device.dp(4);
-  ctx.beginPath();
-  ctx.roundRect((device.width - width) / 2, device.height - device.dp(10) - height, width, height, height / 2);
-  ctx.fill();
+  if (!handleImage || handleImage.density !== device.density) {
+    handleImage = { density: device.density, dark: navigationHandle("#00000099"), light: navigationHandle("#ffffffeb") };
+  }
+  ctx.drawImage(dark ? handleImage.dark : handleImage.light, (device.width - device.dp(108)) / 2, device.height - device.dp(14));
 }
