@@ -163,6 +163,12 @@ rt.register({
     "getPath()Ljava/lang/String;": function (this: JFile) { return this.path; },
     "getAbsolutePath()Ljava/lang/String;": function (this: JFile) { return this.path; },
     "getCanonicalPath()Ljava/lang/String;": function (this: JFile) { return this.path; },
+    "toURI()Ljava/net/URI;": function (this: JFile) {
+      let path = this.path.startsWith("/") ? this.path : "/" + this.path;
+      if (vfs.isDir(this.path) && !path.endsWith("/")) path += "/";
+      if (path.startsWith("//")) path = "//" + path;
+      return newObj("java/net/URI", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", "file", null, path, null);
+    },
     "getName()Ljava/lang/String;": function (this: JFile) { return this.path.split("/").pop() ?? ""; },
     "getParent()Ljava/lang/String;": function (this: JFile) {
       const i = this.path.lastIndexOf("/");
