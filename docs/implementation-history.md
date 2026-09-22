@@ -5499,3 +5499,70 @@ failure. Flappy Bird reproduces the browser `status` TypeError and matches the c
 11–12 FPS play samples. Doodle Jump's baseline play samples are 20/23/23 FPS versus candidate
 22/22/23. This supports the existing slow-game limitation under the current load, not a controlled
 performance equivalence claim. Preserved baseline captures: `expanded-baseline-games/`.
+
+### ChatGPT continuation: themed dialogs and visible authentication forms
+
+`aae988ec` replaces Dialog's separate synthesized frame theme with the actual themed
+ContextThemeWrapper Android exposes through getContext and getLayoutInflater. Native builders,
+ProgressDialog and TimePickerDialog share that initialization; explicit ownerActivity remains a
+separate property. Previously Material's bottom-sheet content inherited the activity theme while
+only the outer frame saw the dialog overlay. Correct context propagation makes unchanged microG
+construct its white MaterialShapeDrawable and exposes a real missing Path.isConvex call.
+
+`537762ce` implements control-polygon convexity and replaces the framework delegate's always-true
+stub with the same owner. It follows API 33 Skia's single-contour, implicit-closure, direction and
+reversal checks, including non-finite rejection. The existing compound-path representation still
+expands arcs to cubics. One core geometry case covers curves, concavity, multiple contours and
+transformed rounded rectangles; the duplicate path-set tests are consolidated into path-copy.
+The dialog and geometry/layout suites pass 13 tests with 60 assertions; typecheck passes.
+
+`d37658e2` preserves translucent surfaces instead of filling them black. The local renderer walks
+visible activities back to the first opaque window, while the broker retains the underlying
+process layers and pauses their activities without stopping them. Opaque transitions stop the
+covered activities. Local launches now enqueue after the caller's main callback, preventing
+IdentityCredentialChooserActivity and AssistedSignInActivity from both ending up resumed.
+Observed final states have only the foreground activity resumed. Opening LoginActivity stops
+both underlying processes' activities; cancelling restores ChatGPT with no new diagnostics.
+
+This corrects the earlier interpretation that the provider prevented the email form: the form
+was rendered behind the opaque black surface. The extra microG Add Account sheet remains a
+provider difference, but dismissing it now visibly returns to ChatGPT's working email form.
+Phone entry and the country selector are reachable. No email address, phone submission, password,
+account creation or authenticated operation was performed. Full Chrome provider-process diagnostics
+contain no missing API, required native, layout error or draw error on the exercised transitions.
+A remaining overlay ownership issue is visible when a covered provider dialog continues dimming
+its opaque LoginActivity; the lifecycle state alone does not remove that overlay.
+
+`f16ffe3b` handles rectangular DIFFERENCE clips instead of ignoring them. Observational tracing of
+RecordingCanvas captures the two exact label exclusions: [36,-24.5,327,24.5] and
+[36,-24.5,309,24.5]. The owning Canvas helper builds the exclusion in destination coordinates at
+replay, preserving the current transform and clip/save stack. Native clipOutRect overloads and
+nClipRect share it. The phone form now has the reference gaps around its floating labels. Real
+Chrome pixel checks cover scaling, save/restore, and a recorded rectangle at two parent offsets.
+Existing approximate clip-result/bounds queries and non-rectangular difference stubs are not
+claimed repaired. An initial synthetic replay using drawColor exposed its separate use of the
+recording canvas's dimensions after resetting the destination transform; that issue remains open.
+The passing difference test uses an ordinary recorded drawRect to isolate the clipping behavior.
+
+The focused ChatGPT E2E at f16ffe3b completes 24/24 in 124.8 seconds with no settling limit, wedge,
+layout/draw error or required native. All 96 process diagnostic snapshots succeed. The only browser
+errors are the three known SLF4J warnings; optional provider/service queries remain unchanged.
+Preserved evidence: auth-surfaces-actual/, auth-surfaces-summary.json, e2e-auth-surfaces.log,
+translucent-lifecycle.json, opaque-provider-state.json, translucent-provider-restored.json,
+clip-trace.json and clip-pixels.log. These changes postdate the expanded final matrix above;
+that older result must not be presented as current-candidate regression validation.
+
+Closing the private AVD's stuck System UI component restores interaction without wiping state.
+Fresh reviewed references are avd-email-recovered.png, avd-phone-keyboard.png and
+avd-country-current.png. Chrome counterparts are chrome-email-form.png,
+chrome-phone-clipped.png and chrome-country-clipped.png. The country selector is 72 pixels lower
+in Chrome; keyboard/navigation strips, country defaults, emoji rendering and text weights also
+differ. avd-country-selector.png is a coordinate-miss capture of the guest screen and is not a
+country-selector reference. The browser comparison gallery records these evidence limits.
+
+Sources:
+https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/core/java/android/app/Dialog.java
+https://raw.githubusercontent.com/microg/GmsCore/v0.3.16.252432/play-services-core/src/main/res/values/themes.xml
+https://raw.githubusercontent.com/aosp-mirror/platform_external_skia/android-13.0.0_r1/src/core/SkPath.cpp
+https://developer.android.com/guide/components/activities/activity-lifecycle
+https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/graphics/java/android/graphics/Canvas.java

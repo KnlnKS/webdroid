@@ -3,23 +3,29 @@
 Branch: `codex/chatgpt-parity`. Starting revision: `9d0bb979`.
 Status: guest conversation and reachable settings repaired; full authentication parity remains incomplete.
 
-Current implementation revision: `937c84c9`; expanded ChatGPT flow: `6c958327`. Full Chrome and
-the private API 33 AVD both receive real guest responses. Paired captures additionally cover
-attachment menus, Camera/Photos login requirements, dictation and Plugins. New fixes cover
-camera/executor startup, overlay insets, durable SQLite snapshots and SVG stream detection.
+Current implementation revision: `f16ffe3b`; expanded ChatGPT flow: `6c958327`. Guest responses,
+settings, attachments and Plugins remain functional. Further repairs cover dialog contexts, path
+convexity, translucent activity composition/lifecycle ordering and rectangular difference clipping.
+Dismissing microG's account chooser now exposes the working email and phone forms. No account
+credentials have been entered; authenticated uploads and voice remain unvalidated.
 
-Final validation at `418437b7`: typecheck and all 1,265 unit tests pass; ChatGPT compiles 66,165
-classes with zero method failures. The serialized full E2E completes 183 steps in 1,209.4 seconds
-with zero wedged main loops. ChatGPT's 24 steps have zero settling limits or rendering errors and
-96 successful process inspections. Existing Resy/YouTube limits, YouTube draw failures, Lichess
-pthread aborts and slow game samples remain; baseline replays reproduce the relevant failures.
-This is not a clean all-tests/no-regressions claim. Goldens remain unchanged.
+Focused validation at `f16ffe3b`: typecheck passes; 13 owning tests pass (60 assertions). The
+ChatGPT-only E2E completes 24/24 steps in 124.8 seconds, with no settling limit, wedge, required
+native or layout/draw error; all 96 process inspections succeed. Full Chrome additionally exercises
+provider dismissal, the email/phone/country forms, and opening/cancelling the opaque Google login
+activity. Browser pixel checks verify transformed difference clipping and RenderNode replay.
 
-Remaining limits: bundled microG chooses Add Google account where the reference reaches email
-login; authenticated voice and uploads are unvalidated. The provider surface has poor contrast,
-Visualize's remote icon still falls back, and system bars/some text weights differ. The earlier
-long-session GC retention cause is unresolved. Later reference-AVD system ANRs limit new native
-interaction. Complete app parity remains unfinished; no speedup is claimed.
+The earlier final matrix at `418437b7` completed 183 steps with zero wedges, but predates these
+new repairs and is not validation of the current candidate. Run the full matrix again only when
+the next candidate is frozen. Goldens remain unchanged.
+
+Remaining limits: microG still offers an extra account chooser; authenticated operation is
+unvalidated. A covered provider dialog still dims the opaque login activity, and the country
+selector starts 72 pixels below its reference position. A synthetic recorded drawColor check
+also exposed a destination-bounds issue. Visualize's remote icon, system bars, text weights and
+long-session GC retention remain unresolved. The private AVD recovered after closing its stuck
+System UI component, and fresh email/phone/country reference captures are available. Complete
+parity is unfinished; no speedup is claimed.
 
 - Run unchanged ChatGPT XAPK in full Chrome and API 33 AVD at 1080×2160, 480 dpi.
 - Capture and compare reachable interactions; trace failures to platform contracts.
