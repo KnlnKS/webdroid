@@ -721,6 +721,7 @@ describe("thumb decoder", () => {
       0xfb8a, 0x4508, // smull r4, r5, r10, r8
       0xfbe1, 0x6708, // umlal r6, r7, r1, r8
       0xfbca, 0xbc08, // smlal r11, r12, r10, r8
+      0xfbea, 0x2368, // umaal r2, r3, r10, r8
       0x4770,         // bx lr
     ], (cpu) => {
       cpu.w[2] = 3;
@@ -731,7 +732,7 @@ describe("thumb decoder", () => {
       cpu.w[22] = 5;
       cpu.cpsr = 0xa0000000;
     });
-    expect([c.w[4], c.w[6]]).toEqual([-2, 1]);
+    expect([c.w[4], c.w[6]]).toEqual([-3, 2]);
     expect([c.w[8], c.w[10]]).toEqual([-2, -1]);
     expect([c.w[12], c.w[14]]).toEqual([11, 1]);
     expect([c.w[22], c.w[24]]).toEqual([3, 0]);

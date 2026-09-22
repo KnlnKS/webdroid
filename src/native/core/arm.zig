@@ -1178,7 +1178,8 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
     if ((h & 0xff80) == 0xfb80) {
         const h2: u32 = ld(u16, pc + 2);
         const op = (h >> 4) & 7;
-        if (op & 1 == 0 and h2 & 0x00f0 == 0) {
+        const dual_accumulate = op == 6 and h2 & 0x00f0 == 0x60;
+        if (op & 1 == 0 and (h2 & 0x00f0 == 0 or dual_accumulate)) {
             const lo = h2 >> 12;
             const hi = (h2 >> 8) & 15;
             const n = h & 15;
@@ -1188,7 +1189,8 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
                 @bitCast(@as(i64, @as(i32, @bitCast(r(c, n)))) *% @as(i64, @as(i32, @bitCast(r(c, m)))))
             else
                 @as(u64, r(c, n)) *% @as(u64, r(c, m));
-            if (op >= 4) product +%= (@as(u64, r(c, hi)) << 32) | r(c, lo);
+            if (dual_accumulate) product += @as(u64, r(c, hi)) + r(c, lo)
+            else if (op >= 4) product +%= (@as(u64, r(c, hi)) << 32) | r(c, lo);
             c.pc = pc + 4;
             set(c, lo, @truncate(product));
             set(c, hi, @intCast(product >> 32));
