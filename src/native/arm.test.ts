@@ -272,6 +272,15 @@ describe("arm decoder", () => {
 });
 
 describe("thumb decoder", () => {
+  test("bitfield insertion and clearing preserve bits outside the field", () => {
+    const c = runThumb([
+      0xf36f, 0x0313, // bfc r3, #0, #20
+      0xf361, 0x021d, // bfi r2, r1, #0, #30
+      0x4770,
+    ], (cpu) => { cpu.w[2] = 0x12345678; cpu.w[4] = -1; cpu.w[6] = -1; });
+    expect(c.w[4] >>> 0).toBe(0xd2345678);
+    expect(c.w[6] >>> 0).toBe(0xfff00000);
+  });
   test("NEON modified immediates populate both halves of a quad register", () => {
     const c = runThumb([
       0xef81, 0x6452, // vmov.i32 q3, #0x120000

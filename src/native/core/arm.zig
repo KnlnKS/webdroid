@@ -844,6 +844,18 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         set(c, (h2 >> 8) & 15, (r(c, h & 15) >> @intCast(lsb)) & mask);
         return .next;
     }
+    if ((h & 0xfff0) == 0xf360) {
+        const h2: u32 = ld(u16, pc + 2);
+        const lsb = (bits(h2, 12, 3) << 2) | bits(h2, 6, 2);
+        const msb = h2 & 31;
+        if (h2 & 0x8020 != 0 or msb < lsb) return fault(c, .undefined, h << 16 | h2, pc);
+        const mask = (~@as(u32, 0) >> @intCast(31 - msb)) & (~@as(u32, 0) << @intCast(lsb));
+        const d = bits(h2, 8, 4);
+        const src = if (h & 15 == 15) 0 else r(c, h & 15);
+        set(c, d, (r(c, d) & ~mask) | ((src << @intCast(lsb)) & mask));
+        c.pc = pc + 4;
+        return .next;
+    }
     if ((h & 0xfff0) == 0xfab0) {
         const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0xf0f0 == 0xf080 and (h & 15) == (h2 & 15)) {
