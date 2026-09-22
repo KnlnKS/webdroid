@@ -250,6 +250,23 @@ incompatible loads with UnsatisfiedLinkError before changing CPU/JNI state. Dire
 with both packaged libmain images confirm that rejected opposite-width loads preserve pointer
 width, CPU mode and ABI search order. The fresh browser comparison is pending.
 
+After ABI isolation, an ordinary JIT run stalled near the title screen; a diagnostic 100,000-
+instruction slice run first reported Unity stack-canary failure at `+0x357358`, followed by
+Wasm table/memory faults. These later faults are downstream evidence, not independent causes.
+A full interpreter comparison reached 1,637 GL draws without that failure, then stopped on
+`VADDHN.I16` at Unity `+0xa9d4a8` in a game worker. High narrowing add/subtract, including rounding,
+now reuse the shared SIMD implementation. Auditing the execution tiers also found Thumb JIT
+`BLX lr` overwriting its target before reading it. The minimal call program produced 6 under
+JIT versus 16 under the interpreter before the repair; both now produce 16. This contract fix
+is not yet established as the stack-canary failure's cause. All 71 ARM checks / 794 assertions
+and typecheck pass. Production JIT validation is restarting.
+
+AVD settings captures confirm independent music/sound toggles and exit to the home screen;
+leaving the puzzle reduces lives from five to four while retaining 220 coins and level 2.
+`avd-home-settings-settled.png` shows the home settings dialog with both audio options muted.
+Intro-video playback is a reached non-ad gap; the interpreter logs a real VideoPlayer failure.
+Ad-only APIs remain deferred. No final E2E or performance acceptance claim has been made.
+
 ## microG completion and open acceptance
 
 PLAN.md owns current status. Both Android and webdroid now
