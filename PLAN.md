@@ -3,7 +3,7 @@
 Branch: `codex/chatgpt-parity`. Starting revision: `9d0bb979`.
 Status: guest flows repaired; full authentication and visual parity remain incomplete.
 
-Current implementation: `f326334b`; expanded ChatGPT flow: `6c958327`. Guest responses,
+Current implementation: `27f36406`; expanded ChatGPT flow: `6c958327`. Guest responses,
 settings, attachments, Plugins and reachable email/phone forms work. Browser and native text
 share the API 33 Android emoji font pair; fractional metrics and paragraph-span routing retain
 the country-list geometry established in the previous parity pass.
@@ -14,20 +14,25 @@ resolves system-bar colors and appearance from the presented window, and uses on
 descriptor for shader declaration validation and uploads. A theme-appearance override was
 removed during validation to preserve existing legacy system-UI precedence.
 
-Validation: typecheck; 1,268 unit tests (26,911 assertions across 219 files); ChatGPT
+The second review follow-up selects system bars from resolved overlay bounds, treats replacement
+spans as indivisible content during whitespace handling, centralizes display-list recording and
+replay context in one typed module, and shares a single recyclable shader raster per program.
+Focused browser checks verify replacement spaces are drawn and identical recorded shader
+snapshots rasterize once while preserving captured uniforms.
+
+Current gate: typecheck; 1,268 unit tests (26,914 assertions across 219 files); ChatGPT
 smoke compilation of 66,165 classes with zero method failures; eight runnable framework
 exercises with 295/363 declared natives supported. The focused ChatGPT run completes 24/24
-steps in 122.4 seconds with 96 successful process inspections, only the known SLF4J messages,
-and no rendering errors, required natives, settling limits or wedges. The final appearance
-correction passes its four owning tests and typecheck. Fresh full-Chrome and AVD country-list
-captures retain aligned rows. The final serialized regression matrix completes 183 steps in
-13 flows in 971.4 seconds. ChatGPT completes 24/24 in 118.8 seconds with no new diagnostics.
-The matrix retains two YouTube settling limits and six Matrix.mapRect draw errors, plus
-historical Lichess/Flappy failures. There are no wedges, layout errors or required natives.
-The restored measurement state widens FitNotes' help dialog; its mean golden content diff
-increases from 39.24% to 39.82%. This visible parity gap remains, so the gate is not evidence
-of complete visual non-regression. Reddit re-reaches its historical Process timing query;
-TikTok additionally probes its LocationClientImpl class, absent from the saved comparison.
+steps in 129.5 seconds. Fresh full-Chrome and AVD country-list captures retain aligned rows.
+The final serialized matrix completes 183 steps in 13 flows in 978.8 seconds; ChatGPT completes
+24/24 in 124.3 seconds with no added missing APIs/errors, rendering failures or settling limits.
+Across the matrix there are no added missing APIs, wedges, layout errors or required natives.
+Known YouTube control timeouts remain, with seven Matrix.mapRect draw errors versus six in the
+baseline; historical Lichess failures and unavailable Flappy child diagnostics remain.
+FitNotes' mean golden content difference is unchanged at 39.82%, retaining its prior help-dialog
+discrepancy. Mihon's app/onboarding differences improve to 42.83%/9.08% as the recorder now
+preserves Canvas letter-spacing capability checks; random emoticons still affect its score.
+Harmonic scores 32.01% with different live content. These results do not establish full parity.
 
 Remaining limits: authenticated uploads and voice are unvalidated because no credentials have
 been entered. microG's extra chooser, Visualize's remote icon, Latin text rasterization,

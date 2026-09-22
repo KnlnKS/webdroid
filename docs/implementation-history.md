@@ -5966,3 +5966,68 @@ review-full-{actual,report,summary.json,audit.log}, review-final-country.{png,js
 review-avd-country.png and review-fitnotes.{ts,log}. The saved comparison is
 fonts-final-{actual,report}; it has the review baseline's production source. Diagnostic
 measurement instrumentation lives only in ignored scratch scripts and is not shipped.
+
+
+### Second code-quality review follow-up
+
+Review baseline `cbfc6fae`; final production candidate `27f36406`. The four selected findings
+are implemented in focused commits, without changing goldens or adding a test suite:
+
+- `7d5bfddc`: system-bar selection uses the laid-out overlay frame, visibility and focusability.
+  Explicit screen dimensions and MATCH_PARENT produce the same owner when their frames match;
+  hidden, unfocusable and partial-width overlays retain the activity's bars.
+- `13c1b3db`: the line breaker's content model owns atomic replacement ranges, legal boundaries,
+  removable spaces and paragraph separators. Greedy advancement and balanced candidate/visible
+  text handling use it consistently. A space carrying a ReplacementSpan is content rather than
+  trimmable whitespace; newline characters inside a replacement do not split that content.
+- `6f15c5c9`: `recording.ts` owns recording dispatch, the Canvas proxy and scoped replay-canvas
+  context. Graphics and SurfaceView paths use typed functions instead of probing hidden
+  __isRecorder/__record properties. The existing surface test now exercises this recorder.
+- `27f36406`: captured uniform/local-matrix state is separate from the compiled program's
+  recyclable raster. Identical draws share the captured state and raster result; uniform changes
+  invalidate the current capture without mutating recorded values. Each program retains at most
+  one raster/cache entry, keyed by captured state, destination dimensions and transform. Replaying
+  alternating states can re-render; no unbounded raster map is introduced.
+
+The original replacement-space browser probe had one measured span but zero draw callbacks.
+It now wraps to two lines and draws the span once. The existing TextView fixture checks both
+simple and balanced breaking. The shader probe changes from two GPU draws for two identical
+snapshots to one; the existing pixel fixture still verifies frozen recorded uniforms,
+premultiplied alpha and transformed coordinates. This is evidence of eliminated duplicate
+rasterization, not an app-wide throughput benchmark.
+
+Typecheck and all 1,268 unit tests pass (26,914 assertions across 219 files, 87.61s). ChatGPT
+smoke-compiles 66,165 classes with zero method failures in 26.45s. Eight runnable framework
+exercises pass; declared-native coverage remains 295/363, with Canvas text checked in-browser.
+The focused ChatGPT flow completes 24/24 in 129.5s with 96 successful process inspections and
+no new missing APIs/errors, rendering failures, required natives, settling limits or wedges.
+Full Chrome was reloaded onto this source and driven through the actual country selector.
+Fresh Chrome/owned-AVD captures retain matching row geometry; Latin rasterization and the
+native minimized-keyboard strip remain different. The early capture caught the opening
+animation; the stable capture is the comparison evidence.
+
+The final serialized matrix completes 183 steps across 13 flows in 978.8s. ChatGPT completes
+24/24 in 124.3s; its 96 process inspections have no added missing APIs/errors or rendering
+failures. All 632 process inspection records were audited; 12 unavailable Flappy child
+inspections remain an evidence gap. No flow adds a missing API, layout error, required
+native or wedge. YouTube retains its show-controls/pause settling limits and the same
+Matrix.mapRect failure, counted seven times versus six in the baseline. Lichess retains
+pthread failures 3/22/35. Raw log differences are timestamp/address changes and TikTok's
+initialization/TLS diagnostics, not new failure families. This is not a clean error-free gate.
+
+FitNotes' mean content difference is identical at 39.82%. Mihon app/onboarding improve from
+46.83%/11.14% to 42.83%/9.08%. Inspection shows the recorder now preserves native property
+membership checks: `"letterSpacing" in ctx` reaches the Canvas mirror, so recorded text honors
+its spacing. Settings and onboarding text align more closely with the Android reference.
+Mihon's larger final-library delta is a different app-generated emoticon; it does not establish
+a layout regression. Harmonic improves from 32.72% to 32.01% with different live feed content,
+so that score cannot be attributed to this change. Goldens are unchanged. Doodle gameplay
+samples are 32/34/33 fps versus 26/28/29 in the baseline; host conditions are not controlled
+enough to claim a throughput improvement.
+
+Evidence under `webdroid-shots/chatgpt/`: followup-{typecheck,unit,smoke,framework,chatgpt}.log,
+followup-focused-{actual,summary.json}, followup-country-stable.{png,json},
+followup-avd-country.png, quality-{shader,span}-{fixture,probe}.ts, followup-full-e2e.log
+and followup-full-{actual,report,summary.json,audit.log}. These scratch probes are ignored; production source stayed frozen during
+final capture. Authentication, voice and the earlier FitNotes help-dialog discrepancy remain
+outside the four selected review repairs.
