@@ -28,12 +28,6 @@ const M_setBounds = mangleMethod("setBounds", "(IIII)V");
 const M_onCreate = mangleMethod("onCreate", "(Landroid/os/Bundle;)V");
 const M_getPadding = mangleMethod("getPadding", "(Landroid/graphics/Rect;)Z");
 
-/**
- * The dialog's theme: the host theme with the dialog style layered on top — the explicit
- * one passed to Dialog(Context, int) if there is one, else the host theme's own dialogTheme.
- * Without this every dialog inherited the activity's window background (and we painted a
- * hardcoded white card instead).
- */
 /** Dialog(Context, theme): the window theme layers the explicit style (else the context theme's
  *  dialogTheme) over the CONTEXT's theme — a ContextThemeWrapper's own, not the application's. */
 function dialogTheme(ctx: any, themeId: number): JTheme | null {
@@ -110,7 +104,14 @@ rt.register({
         const padW = this.bgPad[0] + this.bgPad[2], padH = this.bgPad[1] + this.bgPad[3];
         const widthLimit = lw >= 0 ? lw : maxW, heightLimit = lh >= 0 ? lh : maxH;
         const hSpec = makeSpec(Math.max(0, heightLimit - padH), lh === -2 ? MS_AT_MOST : MS_EXACTLY);
-        await measureView(c, makeSpec(Math.max(0, widthLimit - padW), lw === -2 ? MS_AT_MOST : MS_EXACTLY), hSpec);
+        const preferred = lw === -2 && this.jres
+          ? rvDimen(this.jres, this.jres.value(this.jres.idFor("dimen", "config_prefDialogWidth", "android")), 0) : 0;
+        // ViewRootImpl tries the platform dialog width before allowing a wrapping window to expand.
+        const widths = preferred > 0 && preferred < widthLimit ? [preferred, (preferred + widthLimit) >> 1, widthLimit] : [widthLimit];
+        for (const width of widths) {
+          await measureView(c, makeSpec(Math.max(0, width - padW), lw === -2 ? MS_AT_MOST : MS_EXACTLY), hSpec);
+          if (!(c.measuredState & 0x01000000)) break;
+        }
         let width = c.measuredW + padW;
         if (lw === -2 && this.theme && this.jres) {
           const min = this.theme.lookup(AID(device.orientation === 1 ? "windowMinWidthMinor" : "windowMinWidthMajor"));

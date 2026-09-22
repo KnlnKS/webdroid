@@ -1,7 +1,7 @@
 import { AID } from "./res";
 import {
   JMarginLP, type JLayoutParams, JViewGroup, JFrameLP, MATCH_PARENT, lpFromAttrs, lpAttrs, measureChildWithMargins,
-  resolveSizeAndState, makeSpec, MS_EXACTLY, childMeasureSpec, measureView, layoutView, initViewFromCtx,
+  resolveSizeAndState, measuredSize, makeSpec, MS_EXACTLY, childMeasureSpec, measureView, layoutView, initViewFromCtx,
   requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState, viewConstructors, marginCopy
 } from "./view";
 import { JObj, type NativeSpec, rt, callSelf, noops } from "../jvm/runtime";
@@ -47,17 +47,18 @@ const frameMethods: NativeSpec["methods"] = {
   "generateLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;": (lp: JLayoutParams) => adoptLp(JFrameLP, lp),
   "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": (lp: unknown) => +(lp instanceof JFrameLP),
   "onMeasure(II)V": async function (this: JFrameLayout, wSpec: number, hSpec: number) {
-    let mw = 0, mh = 0, matchCount = 0;
+    let mw = 0, mh = 0, matchCount = 0, state = 0;
     for (const c of this.children) {
       if (c.visibility === 8 && !this.measureAllChildren) continue;
       await measureChildWithMargins(this, c, wSpec, 0, hSpec, 0);
       const lp = c.lp instanceof JMarginLP ? c.lp : null;
       mw = Math.max(mw, c.measuredW + (lp ? lp.marginL + lp.marginR : 0));
       mh = Math.max(mh, c.measuredH + (lp ? lp.marginT + lp.marginB : 0));
+      state |= c.measuredState;
       if (c.lp?.width === MATCH_PARENT || c.lp?.height === MATCH_PARENT) matchCount++;
     }
-    this.measuredW = resolveSizeAndState(Math.max(mw + this.padL + this.padR, this.minW), wSpec);
-    this.measuredH = resolveSizeAndState(Math.max(mh + this.padT + this.padB, this.minH), hSpec);
+    this.setMeasuredDimension(measuredSize(Math.max(mw + this.padL + this.padR, this.minW), wSpec, state),
+      measuredSize(Math.max(mh + this.padT + this.padB, this.minH), hSpec, state << 16));
     if (matchCount <= 1 || (specMode(wSpec) === MS_EXACTLY && specMode(hSpec) === MS_EXACTLY)) return;
     for (const c of this.children) {
       if (c.visibility === 8 && !this.measureAllChildren) continue;

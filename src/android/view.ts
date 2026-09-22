@@ -373,7 +373,11 @@ export class JView extends JObj {
   touchDelegate: JObj | null = null;
   left = 0; top = 0; right = 0; bottom = 0;
   static $nextDrawingId = 0;
-  measuredW = 0; measuredH = 0;
+  measuredW = 0; measuredH = 0; measuredState = 0;
+  setMeasuredDimension(w: number, h: number) {
+    this.measuredW = w & 0xffffff; this.measuredH = h & 0xffffff;
+    this.measuredState = (w & 0xff000000) | ((h >>> 16) & 0xff00);
+  }
   oldWSpec = -1; oldHSpec = -1;
   /** AOSP mMeasureCache: up to three spec pairs and the sizes they produced, [w, h, mw, mh] each,
    *  so a parent measuring a child under alternating specs does not re-run its onMeasure.
@@ -585,6 +589,10 @@ export function resolveSizeAndState(size: number, spec: number): number {
   if (mode === MS_AT_MOST) return Math.min(size, sz);
   return size;
 }
+export function measuredSize(size: number, spec: number, state = 0): number {
+  return resolveSizeAndState(size, spec) | (state & 0xff000000) |
+    (specMode(spec) === MS_AT_MOST && size > specSize(spec) ? 0x01000000 : 0);
+}
 
 export function clearMeasureCache(v: JView) { v.mcLen = v.mcNext = 0; }
 function measureCacheFind(v: JView, wSpec: number, hSpec: number): number {
@@ -600,7 +608,9 @@ function measureCachePut(v: JView, wSpec: number, hSpec: number) {
     v.mcNext = (v.mcNext + 1) % 3;
     if (v.mcLen < 3) v.mcLen++;
   }
-  c[i] = wSpec; c[i + 1] = hSpec; c[i + 2] = v.measuredW; c[i + 3] = v.measuredH;
+  c[i] = wSpec; c[i + 1] = hSpec;
+  c[i + 2] = v.measuredW | (v.measuredState & 0xff000000);
+  c[i + 3] = v.measuredH | ((v.measuredState & 0xff00) << 16);
 }
 /** AOSP View.sAlwaysRemeasureExactly: an app targeting M (23) or lower re-measures under a changed
  *  EXACTLY spec even at the size it already has; its LinearLayout weights relied on that pass.
@@ -633,7 +643,7 @@ export async function measureView(v: JView, wSpec: number, hSpec: number) {
   if (i >= 0) {
     const c = v.mc!;
     v.oldWSpec = wSpec; v.oldHSpec = hSpec;
-    v.measuredW = c[i + 2]; v.measuredH = c[i + 3];
+    v.setMeasuredDimension(c[i + 2], c[i + 3]);
     v.measureBeforeLayout = true;
     v.layoutRequired = true;
     perf.measureCacheHits++;
@@ -642,6 +652,7 @@ export async function measureView(v: JView, wSpec: number, hSpec: number) {
   v.oldWSpec = wSpec; v.oldHSpec = hSpec;
   perf.onMeasures++;
   try {
+    v.measuredState = 0;
     await guardCall(v, M_onMeasure, wSpec, hSpec);
     v.layoutRequired = true;   // AOSP sets PFLAG_LAYOUT_REQUIRED whenever onMeasure runs
     v.measureBeforeLayout = false;
@@ -925,8 +936,9 @@ const viewMethods: NativeSpec["methods"] = {
   "getBottom()I": function (this: JView) { return this.bottom; },
   "getMeasuredWidth()I": function (this: JView) { return this.measuredW; },
   "getMeasuredHeight()I": function (this: JView) { return this.measuredH; },
-  "getMeasuredWidthAndState()I": function (this: JView) { return this.measuredW; },
-  "getMeasuredHeightAndState()I": function (this: JView) { return this.measuredH; },
+  "getMeasuredWidthAndState()I": function (this: JView) { return this.measuredW | (this.measuredState & 0xff000000); },
+  "getMeasuredHeightAndState()I": function (this: JView) { return this.measuredH | ((this.measuredState & 0xff00) << 16); },
+  "getMeasuredState()I": function (this: JView) { return this.measuredState; },
   "getPaddingLeft()I": function (this: JView) { return this.padL; },
   "getPaddingTop()I": function (this: JView) { return this.padT; },
   "getPaddingRight()I": function (this: JView) { return this.padR; },
@@ -1102,7 +1114,7 @@ const viewMethods: NativeSpec["methods"] = {
     }));
   },
   "setMeasuredDimension(II)V": function (this: JView, w: number, h: number) {
-    this.measuredW = w & 0xffffff; this.measuredH = h & 0xffffff;
+    this.setMeasuredDimension(w, h);
   },
   "layout(IIII)V": function (this: JView, l: number, t: number, r: number, b: number) {
     return layoutView(this, l, t, r, b);
@@ -1583,7 +1595,7 @@ const viewMethods: NativeSpec["methods"] = {
     "onKeyDown(ILandroid/view/KeyEvent;)Z", "onKeyUp(ILandroid/view/KeyEvent;)Z",
     "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z",
     "dispatchPopulateAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)Z",
-    "isAccessibilityHeading()Z", "isScreenReaderFocusable()Z", "isInLayout()Z", "getMeasuredState()I",
+    "isAccessibilityHeading()Z", "isScreenReaderFocusable()Z", "isInLayout()Z",
     "getRotationX()F", "getRotationY()F", "isHovered()Z", "isAccessibilityFocused()Z",
     "isDuplicateParentStateEnabled()Z", "getAccessibilityLiveRegion()I",
     "awakenScrollBars()Z", "getWindowSystemUiVisibility()I", "onHoverEvent(Landroid/view/MotionEvent;)Z",
@@ -1598,8 +1610,8 @@ const viewMethods: NativeSpec["methods"] = {
     "getBackgroundTintMode()Landroid/graphics/PorterDuff$Mode;",
     "onCreateInputConnection(Landroid/view/inputmethod/EditorInfo;)Landroid/view/inputmethod/InputConnection;"),
   ...stubs(-1, "getBaseline()I"),
-  "resolveSizeAndState(III)I": (size: number, spec: number) => resolveSizeAndState(size, spec),
-  "static resolveSizeAndState(III)I": (size: number, spec: number) => resolveSizeAndState(size, spec),
+  "resolveSizeAndState(III)I": measuredSize,
+  "static resolveSizeAndState(III)I": measuredSize,
   "static resolveSize(II)I": (size: number, spec: number) => resolveSizeAndState(size, spec),
   "static getDefaultSize(II)I": (size: number, spec: number) => defaultSize(size, spec),
   "static generateViewId()I": (() => { let n = 0x00ffff00; return () => ++n; })(),

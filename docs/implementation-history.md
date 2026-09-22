@@ -5247,3 +5247,35 @@ SQLiteOpenHelper.setOpenParams. Apply synchronous mode before onConfigure and mi
 reject changing parameters after opening. Its tables, indices and triggers now initialize
 without an uncaught exception. The existing SQLite transaction test passes. This does not add
 WAL capability: the existing backend still reports WAL unavailable. Typecheck passes.
+
+The paired app-language dialog measured 1080px wide in webdroid and 960px on Android.
+ViewRootImpl first measures wrapping windows at `config_prefDialogWidth` (320dp here),
+then expands only when the measured state says content is too small. DialogRoot now follows
+that sequence. Preserve size-state bits through Java View calls, FrameLayout aggregation,
+and the existing measurement cache without expanding its storage. The dialog now spans
+x=60..1020, matching the AVD; vertical size differs by two pixels. The existing layout suite
+includes one core state/cache check and passes, as does typecheck. Source:
+https://android.googlesource.com/platform/frameworks/base/+/android-13.0.0_r1/core/java/android/view/ViewRootImpl.java
+
+The guest navigation capture also confirms real responses, background/resume, settings,
+language and About. The retained E2E flow accepts the observed welcome variants (Skip,
+Continue without logging in, or the compact Continue sheet). A first smoke run had failed
+to dismiss the compact sheet despite exiting successfully; its screenshots do not establish
+conversation coverage. The corrected 14-step run visibly receives “Two plus two is 4,” with
+14 completed renders, no wedges, no draw/layout errors and no required natives. It records
+three SLF4J provider warnings and optional Amazon/window-extension/DatagramSocket/media-projection
+queries. Startup hits a settling limit under competing Chrome/AVD load; this is not a clean
+performance comparison. A fresh full-Chrome process is responsive and reuses shader rasters.
+The previous hour-long session spent most of a sampled pause in V8 GC; its retention cause
+remains unresolved. No speculative shader-cache change was retained.
+
+Authentication remains different from the AVD. The bundled microG 0.3.16.252432 credential
+provider routes Google-ID requests to AssistedSignIn; with zero accounts its unchanged
+AssistedSignInFragment always opens Add Google account. Cancelling becomes a credential
+cancellation, so ChatGPT does not fall through to the email form observed on the AVD. Child
+process diagnostics show no missing API or exception on this path. Root-canvas-only captures
+omit the foreground child surface; the full Chrome capture shows the actual account sheet.
+This is a provider behavior limit, not justification for an app-specific credential response.
+Sources:
+https://github.com/microg/GmsCore/blob/v0.3.16.252432/play-services-core/src/main/kotlin/org/microg/gms/auth/credentials/identity/IdentityCredentialChooserActivity.kt
+https://github.com/microg/GmsCore/blob/v0.3.16.252432/play-services-core/src/main/kotlin/org/microg/gms/auth/signin/AssistedSignInFragment.kt

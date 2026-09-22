@@ -41,6 +41,22 @@ test("a wrapping frame aligns multiple match-parent children to its final size",
   expect([frame.measuredW, a.measuredW, b.measuredW]).toEqual([80, 80, 80]);
 });
 
+test("frame measurement preserves child size-state flags through the measure cache", async () => {
+  const frame = rt.make("android/widget/FrameLayout");
+  const child = rt.make("android/view/View");
+  await add(frame, child, "FrameLayout", -2, -2);
+  Object.assign(child, { [onMeasure](w: number, h: number) {
+    this.setMeasuredDimension(w & 0xffffff | 0x01000000, h & 0xffffff | 0x01000000);
+  } });
+  for (const size of [200, 100, 200]) {
+    await measureView(frame, makeSpec(size, MS_AT_MOST), makeSpec(size, MS_AT_MOST));
+    expect(await vcall(frame, "getMeasuredWidth", "()I")).toBe(size);
+    expect(await vcall(frame, "getMeasuredWidthAndState", "()I")).toBe(size | 0x01000000);
+    expect(await vcall(frame, "getMeasuredHeightAndState", "()I")).toBe(size | 0x01000000);
+    expect(await vcall(frame, "getMeasuredState", "()I")).toBe(0x01000100);
+  }
+});
+
 test("wrapping linear layouts size match-parent dividers from their siblings", async () => {
   for (const vertical of [false, true]) {
     const row = rt.make("android/widget/LinearLayout") as JView;
