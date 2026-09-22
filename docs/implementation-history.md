@@ -5006,3 +5006,17 @@ LinearLayout assigned its weighted video sibling zero height. AOSP's method leav
 negative dimensions at UNSPECIFIED/0; the shared helper now does likewise. One core weighted
 layout check verifies the content retains its space; 12 owning layout checks pass (23 assertions)
 and typecheck passes. Fresh feed replay remains pending.
+
+Fresh replay after the child-measure fix displayed the next feed video at full height. A visible,
+untraced 10.214-second sample recorded 101 completed shell frames and 61 new video frames
+(9.89 and 5.97 fps respectively). This is functioning playback, not a smooth-playback claim or
+matched performance comparison. The bundled WebP library also decoded a browser-produced 2×2
+WebP, rendered its frame into an Android Bitmap and returned the expected red pixel 0xffff0000.
+
+Profiling showed frequent __memcpy_chk host exits. Valid checked copies now share the core's
+existing memcpy/memmove implementation; oversize copies return to the existing host failure path
+before writing. The owning copy check includes overlap, zero length and unchanged memory on a
+rejected size. Three memory checks pass (81 assertions), and typecheck passes. A warmed A64 loop
+of 100,000 identical 64-byte copies, alternating the same trampoline's binding with Chrome closed,
+measured median 1.284 ms in-core versus 5.575 ms through the host, with correct bytes in every run
+and 0 versus 100,000 host exits. This microbenchmark does not establish a comparable app FPS gain.
