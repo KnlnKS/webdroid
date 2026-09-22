@@ -262,6 +262,20 @@ describe("arm decoder", () => {
     expect(Array.from(interleaved.si.slice(2, 6))).toEqual([1, 3, 2, 4]);
     expect(Array.from(mem.u32.slice((interleaved.w[0] - 16) >>> 2, interleaved.w[0] >>> 2))).toEqual([5, 6, 7, 8]);
     expect(interleaved.w[0]).toBe(interleaved.w[2]);
+    const setup = (cpu: Cpu) => {
+      cpu.w[0] = cpu.stackTop - 16; cpu.w[2] = cpu.stackTop - 32; cpu.w[4] = 4;
+      mem.st32(cpu.w[0], 0x12345678); mem.st32(cpu.w[2], 0x7f0000);
+      cpu.si.set([42, 43], 54);
+    };
+    for (const execute of [
+      () => run([0xf4e0b8bf, 0xf4c1b4cd, 0xf4e1cc22, BXLR], setup),
+      () => runThumb([0xf9e0, 0xb8bf, 0xf9c1, 0xb4cd, 0xf9e1, 0xcc22, 0x4770], setup),
+    ]) {
+      const lanes = execute();
+      expect(Array.from(lanes.si.slice(54, 60))).toEqual([42, 0x12345678, 0x7f7f7f7f, 0x7f7f7f7f, 0x7f7f7f7f, 0x7f7f7f7f]);
+      expect(mem.ld32(lanes.stackTop - 32)).toBe(0x7f1234);
+      expect(lanes.w[2]).toBe(lanes.stackTop - 26);
+    }
   });
   test("NEON modified immediates select high quad registers in ARM mode", () => {
     const c = run([

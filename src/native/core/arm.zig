@@ -128,6 +128,7 @@ fn thumbExpandImm(c: *Cpu, imm12: u32) Shifted {
 }
 
 fn neonStruct(c: *Cpu, w: u32, pc: u32) Status {
+    if (w & (1 << 23) != 0) return neonLane(c, w, pc);
     const kind = bits(w, 8, 4);
     const structures: u32 = switch (kind) {
         7, 10, 6, 2 => 1,
@@ -164,6 +165,42 @@ fn neonStruct(c: *Cpu, w: u32, pc: u32) Status {
     }
     const m = w & 15;
     if (m != 15) set(c, n, r(c, n) +% (if (m == 13) regs * structures * 8 else r(c, m)));
+    return .next;
+}
+
+fn neonLane(c: *Cpu, w: u32, pc: u32) Status {
+    if (bits(w, 8, 2) != 0) return fault(c, .unimplemented, w, pc);
+    const load = w & (1 << 21) != 0;
+    const replicate = bits(w, 10, 2) == 3;
+    const size = if (replicate) bits(w, 6, 2) else bits(w, 10, 2);
+    const index_align = bits(w, 4, 4);
+    if (replicate) {
+        if (!load or size == 3 or size == 0 and index_align & 1 != 0) return fault(c, .undefined, w, pc);
+    } else if (switch (size) {
+        0 => index_align & 1 != 0,
+        1 => index_align & 2 != 0,
+        else => index_align & 7 != 0 and index_align & 7 != 3,
+    }) return fault(c, .undefined, w, pc);
+    const bytes = @as(u32, 1) << @intCast(size);
+    const alignment = if (index_align & 1 != 0) bytes else 1;
+    const regs: u32 = if (replicate) 1 + bits(w, 5, 1) else 1;
+    const n = bits(w, 16, 4);
+    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
+    if (n == 15 or d + regs > 32) return fault(c, .undefined, w, pc);
+    const a = addr(c, r(c, n)) orelse return badAddr(c, w, pc);
+    if (a & (alignment - 1) != 0) return badAddr(c, w, pc);
+    const first = if (replicate) 0 else index_align >> @intCast(size + 1);
+    const end = if (replicate) regs * 8 / bytes else first + 1;
+    const dst: [*]u8 = @ptrCast(vreg(u64, c, d));
+    var lane = first;
+    while (lane < end) : (lane += 1) {
+        var i: u32 = 0;
+        while (i < bytes) : (i += 1) {
+            if (load) dst[lane * bytes + i] = ld(u8, a + i) else if (!st(u8, c, a + i, dst[lane * bytes + i])) return badAddr(c, w, pc);
+        }
+    }
+    const m = w & 15;
+    if (m != 15) set(c, n, r(c, n) +% (if (m == 13) bytes else r(c, m)));
     return .next;
 }
 
@@ -1140,7 +1177,7 @@ inline fn execThumb32Branches(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
 }
 
 inline fn execThumb32Late(c: *Cpu, h: u32, pc: u32) ?Status {
-    if ((h & 0xff90) == 0xf900) {
+    if ((h & 0xff10) == 0xf900) {
         const h2: u32 = ld(u16, pc + 2);
         c.pc = pc + 4;
         return neonStruct(c, h << 16 | h2, pc);
