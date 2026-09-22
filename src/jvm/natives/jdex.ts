@@ -7,11 +7,15 @@ import { dexesIn } from "../dex";
 import { JClassLoader } from "./jlang";
 import { vfs } from "./jio";
 import { packedArchives } from "../../shell/packedarchive";
+import type { JBuffer } from "./jnio";
 
+function initRuntime(loader: JClassLoader, parent: JClassLoader | null): void {
+  loader.parent = parent;
+  loader.runtime = (parent?.runtime ?? rt).fork();
+  loader.runtime.classLoader = loader;
+}
 async function init(this: JClassLoader, path: string, libraries: string | null, parent: JClassLoader | null) {
-  this.parent = parent;
-  this.runtime = (parent?.runtime ?? rt).fork();
-  this.runtime.classLoader = this;
+  initRuntime(this, parent);
   for (const entry of path.split(":")) {
     const packed = packedArchives.get(entry);
     let files: Record<string, Uint8Array>;
@@ -60,14 +64,10 @@ rt.register({
     "close()V": function () {},
   },
 });
+class JBaseDexClassLoader extends JClassLoader {}
 rt.register({
-  name: "dalvik/system/BaseDexClassLoader", ctor: class extends JClassLoader {}, sup: "java/lang/ClassLoader",
-});
-rt.register({
-  name: "dalvik/system/PathClassLoader", ctor: class extends JClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
+  name: "dalvik/system/BaseDexClassLoader", ctor: JBaseDexClassLoader, sup: "java/lang/ClassLoader",
   methods: {
-    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": init,
-    "<init>(Ljava/lang/String;Ljava/lang/ClassLoader;)V": async function (this: JClassLoader, path: string, parent: JClassLoader | null) { await init.call(this, path, null, parent); },
     "findClass(Ljava/lang/String;)Ljava/lang/Class;": function (this: JClassLoader, n: string) {
       const name = slashName(n);
       if (!this.runtime.dexIndex.has(name)) {
@@ -79,9 +79,34 @@ rt.register({
   },
 });
 rt.register({
-  name: "dalvik/system/DexClassLoader", ctor: class extends JClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
+  name: "dalvik/system/PathClassLoader", ctor: class extends JBaseDexClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
   methods: {
-    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": init,
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": init,
+    "<init>(Ljava/lang/String;Ljava/lang/ClassLoader;)V": async function (this: JClassLoader, path: string, parent: JClassLoader | null) { await init.call(this, path, null, parent); },
+  },
+});
+rt.register({
+  name: "dalvik/system/DexClassLoader", ctor: class extends JBaseDexClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
+  methods: {
+    "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": function (this: JClassLoader, path: string, _optimized: string, libraries: string | null, parent: JClassLoader | null) { return init.call(this, path, libraries, parent); },
+  },
+});
+function initMemory(this: JClassLoader, buffers: JBuffer[], parent: JClassLoader | null): void {
+  if (!buffers) throw rt.mkThrowable("java/lang/NullPointerException", "null DEX buffers");
+  initRuntime(this, parent);
+  for (const [index, buffer] of buffers.entries()) {
+    if (!buffer) throw rt.mkThrowable("java/lang/NullPointerException", "null DEX buffer");
+    const view = buffer.dv;
+    const bytes = new Uint8Array(view.buffer, view.byteOffset + buffer.pos, buffer.lim - buffer.pos).slice();
+    for (const dex of dexesIn(bytes, `memory:${index}`)) this.runtime.loadDex(dex);
+  }
+}
+rt.register({
+  name: "dalvik/system/InMemoryDexClassLoader", ctor: class extends JBaseDexClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
+  methods: {
+    "<init>(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V": function (this: JClassLoader, buffer: JBuffer, parent: JClassLoader | null) { initMemory.call(this, [buffer], parent); },
+    "<init>([Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V": initMemory,
+    "<init>([Ljava/nio/ByteBuffer;Ljava/lang/String;Ljava/lang/ClassLoader;)V": function (this: JClassLoader, buffers: JBuffer[], _libraries: string | null, parent: JClassLoader | null) { initMemory.call(this, buffers, parent); },
   },
 });
 rt.register({

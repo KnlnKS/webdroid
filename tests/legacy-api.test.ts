@@ -726,6 +726,21 @@ test("Android path loaders expose their hierarchy and readable native library pa
   vfs.delete(path);
 });
 
+test("In-memory DEX loaders read the buffer window and preserve defining-loader identity", async () => {
+  const bytes = new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/JvmTierProbe.dex").arrayBuffer());
+  const padded = new Int8Array(bytes.length + 16);
+  padded.set(bytes, 8);
+  const buffer = await scall("java/nio/ByteBuffer", "wrap", "([BII)Ljava/nio/ByteBuffer;", padded, 8, bytes.length);
+  const load = () => newObj("dalvik/system/InMemoryDexClassLoader", "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V", buffer, null);
+  const first = await load(), second = await load();
+  const cls = await vcall(first, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", "JvmTierProbe");
+  expect(await vcall(first, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", "JvmTierProbe")).toBe(cls);
+  expect(await vcall(second, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", "JvmTierProbe")).not.toBe(cls);
+  expect(await vcall(cls, "getClassLoader", "()Ljava/lang/ClassLoader;")).toBe(first);
+  expect(await vcall(buffer, "position", "()I")).toBe(8);
+  expect(await vcall(buffer, "limit", "()I")).toBe(8 + bytes.length);
+});
+
 test("ContextWrapper.getResources reaches a base context's overriding getResources, and Context.getString goes through it", async () => {
   const host = new Resources(null, {});
   const assets = rt.make("android/content/res/AssetManager") as JAssetManager;
