@@ -716,15 +716,17 @@ inline fn reverse(v: u32, kind: u32) u32 {
     };
 }
 fn sat32(c: *Cpu, v: i64) i64 {
-    if (v > std.math.maxInt(i32)) {
-        c.cpsr |= 1 << 27;
-        return std.math.maxInt(i32);
-    }
-    if (v < std.math.minInt(i32)) {
-        c.cpsr |= 1 << 27;
-        return std.math.minInt(i32);
-    }
-    return v;
+    return satN(c, v, 31, false);
+}
+fn satN(c: *Cpu, v: i64, width: u5, unsigned: bool) i64 {
+    const bound = @as(i64, 1) << width;
+    const result = @min(@max(v, if (unsigned) 0 else -bound), bound - 1);
+    if (result != v) c.cpsr |= 1 << 27;
+    return result;
+}
+fn saturatingShift(c: *Cpu, value: u32, amount: u5, asr: bool, width: u5, unsigned: bool) u32 {
+    const shifted: i32 = if (asr) @as(i32, @bitCast(value)) >> (if (amount == 0) 31 else amount) else @bitCast(value << amount);
+    return @bitCast(@as(i32, @intCast(satN(c, shifted, width, unsigned))));
 }
 
 fn signedHalf(v: u32, top: u32) i32 {
@@ -792,17 +794,7 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         return .next;
     }
     if ((w & 0x0fe00030) == 0x06a00010 or (w & 0x0fe00030) == 0x06e00010) {
-        const sh = bits(w, 7, 5);
-        const satb = bits(w, 16, 5);
-        const shifted: i64 = if (w & (1 << 6) != 0) @as(i32, @bitCast(RN)) >> @intCast(if (sh == 0) 31 else sh) else @as(i64, @as(i32, @bitCast(RN))) << @intCast(sh);
-        if (w & (1 << 22) != 0) {
-            const max: i64 = (@as(i64, 1) << @intCast(satb)) - 1;
-            set(c, rd, @intCast(@min(@max(shifted, 0), max)));
-        } else {
-            const hi: i64 = (@as(i64, 1) << @intCast(satb)) - 1;
-            const lo: i64 = -(@as(i64, 1) << @intCast(satb));
-            set(c, rd, @bitCast(@as(i32, @intCast(@min(@max(shifted, lo), hi)))));
-        }
+        set(c, rd, saturatingShift(c, RM, @intCast(bits(w, 7, 5)), w & (1 << 6) != 0, @intCast(bits(w, 16, 5)), w & (1 << 22) != 0));
         return .next;
     }
     if ((w & 0x0ff00030) == 0x06800010) {
@@ -1068,6 +1060,15 @@ inline fn execThumb32(c: *Cpu, h: u32, second: u32, pc: u32) ?Status {
 }
 
 inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
+    if (h & 0xff50 == 0xf300) {
+        const h2: u32 = ld(u16, pc + 2);
+        const amount: u5 = @intCast((bits(h2, 12, 3) << 2) | bits(h2, 6, 2));
+        const asr = h & 0x20 != 0;
+        if (h2 & 0x8020 != 0 or (asr and amount == 0)) return fault(c, .unimplemented, h << 16 | h2, pc);
+        set(c, bits(h2, 8, 4), saturatingShift(c, r(c, h & 15), amount, asr, @intCast(h2 & 31), h & 0x80 != 0));
+        c.pc = pc + 4;
+        return .next;
+    }
     if ((h & 0xefb0) == 0xef80) {
         const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0x10 == 0) return fault(c, .undefined, h << 16 | h2, pc);

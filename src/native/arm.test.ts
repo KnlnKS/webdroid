@@ -215,6 +215,18 @@ describe("arm decoder", () => {
     expect(c.w[0]).toBe(-4);
     expect(c.cpsr >>> 28).toBe(10);
   });
+  test("saturation uses its source register, wraps shifts and retains sticky Q", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.w[0] = 8; cpu.w[2] = 0x40000001; cpu.w[4] = -16; cpu.w[6] = -2147483648;
+    };
+    for (const execute of [
+      () => run([0xe6e28010, 0xe6a79211, 0xe6e4a1d2, 0xe6bfb013, BXLR], setup),
+      () => runThumb([0xf380, 0x0802, 0xf301, 0x1907, 0xf3a2, 0x0ac4, 0xf303, 0x0b1f, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect([c.w[16], c.w[18], c.w[20], c.w[22], c.q]).toEqual([3, 16, 0, -2147483648, 1]);
+    }
+  });
   test("clz, mrs/msr", () => {
     const c = run([
       0xe3a00001,   // mov r0, #1
