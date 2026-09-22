@@ -398,6 +398,12 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
     return result;
 }
 
+fn packHalf(n: u32, m: u32, amount: u5, top: bool) u32 {
+    const shifted = if (top) @as(u32, @bitCast(@as(i32, @bitCast(m)) >> (if (amount == 0) @as(u5, 31) else amount))) else m << amount;
+    const mask: u32 = if (top) 0xffff0000 else 0xffff;
+    return (n & mask) | (shifted & ~mask);
+}
+
 fn op2(c: *Cpu, w: u32, pc: u32) Shifted {
     if (w & (1 << 25) != 0) {
         const rot = bits(w, 8, 4) * 2;
@@ -804,8 +810,7 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         return .next;
     }
     if ((w & 0x0ff00030) == 0x06800010) {
-        const sh = bits(w, 7, 5);
-        if (w & (1 << 6) != 0) set(c, rd, (RN & 0xffff0000) | (@as(u32, @bitCast(@as(i32, @bitCast(RM)) >> @intCast(if (sh == 0) 31 else sh))) & 0xffff)) else set(c, rd, (RN & 0xffff) | ((RM << @intCast(sh)) & 0xffff0000));
+        set(c, rd, packHalf(RN, RM, @intCast(bits(w, 7, 5)), w & (1 << 6) != 0));
         return .next;
     }
     if ((w & 0x0ff000f0) == 0x07800010) {
@@ -1186,6 +1191,11 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0x8000 != 0) return fault(c, .undefined, h << 16 | h2, pc);
         const op = (h >> 5) & 15;
+        if (op == 6 and h & 0x10 == 0 and h2 & 0x10 == 0) {
+            set(c, bits(h2, 8, 4), packHalf(r(c, h & 15), r(c, h2 & 15), @intCast((bits(h2, 12, 3) << 2) | bits(h2, 6, 2)), h2 & 0x20 != 0));
+            c.pc = pc + 4;
+            return .next;
+        }
         if (op <= 4 or op == 8 or op == 10 or op == 11 or op == 13 or op == 14) {
             c.pc = pc + 4;
             const shifted = shiftImm(c, (h2 >> 4) & 3, r(c, h2 & 15), (((h2 >> 12) & 7) << 2) | ((h2 >> 6) & 3));

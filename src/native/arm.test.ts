@@ -944,6 +944,21 @@ describe("thumb decoder", () => {
     expect([multiple.w[0], multiple.w[2], multiple.w[4], multiple.w[6]]).toEqual([1, 2, 3, 4]);
   });
 
+  test("halfword packing shifts before merging without changing flags", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.w[0] = 0x12345678; cpu.w[2] = 0x87654321; cpu.w[4] = 0xfedcba98; cpu.w[12] = 0xaabbccdd;
+      cpu.cpsr |= 0xa8000000;
+    };
+    for (const execute of [
+      () => run([0xe6806016, 0xe6814692, 0xe6815052, 0xe6817252, BXLR], setup),
+      () => runThumb([0xeac0, 0x0606, 0xeac1, 0x3442, 0xeac1, 0x0522, 0xeac1, 0x1722, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect([c.w[12] >>> 0, c.w[8] >>> 0, c.w[10] >>> 0, c.w[14] >>> 0]).toEqual([0xaabb5678, 0x97534321, 0x8765ffff, 0x8765cba9]);
+      expect(c.cpsr >>> 27).toBe(0x15);
+    }
+  });
+
   test("wide shifted-register operations preserve shifts and high destinations", () => {
     const c = runThumb([
       0xea5f, 0x7bc6, // lsls.w r11, r6, #31
