@@ -5225,3 +5225,13 @@ RuntimeShader review found that the AGSL square-matrix spelling (`float2x2`) was
 to a GLSL alias that the uniform parser did not recognize. Normalize square matrices to
 `mat2`/`mat3`/`mat4`; the retained browser shader fixture now exercises a matrix uniform.
 It still passes the same pixel, alpha, snapshot and coordinate assertions.
+
+Configuration diagnosis: HTTP/2 capture showed `/v1/initialize` on `ab.chatgpt.com` returning
+400, with malformed request JSON such as adjacent string fields without commas. The bundled
+`eba0` Writer overrides `write(String,int,int)`, `write(int)` and `write(char[],int,int)`.
+Our inherited `Writer.write(String)` appended to its own unused string instead of dispatching
+to the subclass range method. Restore the Java dispatch chain through virtual string/character
+ranges, retain concrete native writers' direct string fast paths, and validate ranges. After
+the fix both observed initialization requests return 200 with valid JSON and Brotli responses.
+The existing legacy API suite (71 tests, 264 assertions) includes one core asynchronous writer
+override check. This was a runtime serialization fault, not an upstream network outage.

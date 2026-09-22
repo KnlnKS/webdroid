@@ -1168,12 +1168,30 @@ rt.register({
   },
 });
 class JWriter extends JObj { s = ""; }
-/** every Writer overload funnels through the VIRTUAL write(String) so subclasses intercept */
 const wr = (w: unknown, s: string) => vcallMaybe(w, "write", "(Ljava/lang/String;)V", s);
 const chars = (c: Uint16Array): string => charsToString(c, 0, c.length);
+function writerRange(value: string | Uint16Array, off: number, len: number): void {
+  if (value == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (off < 0 || len < 0 || off > value.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+}
+const nativeWriterRanges = {
+  "write(Ljava/lang/String;II)V": function (this: JWriter, text: string, off: number, len: number) {
+    writerRange(text, off, len); return wr(this, text.slice(off, off + len));
+  },
+  "write([CII)V": function (this: JWriter, c: Uint16Array, off: number, len: number) {
+    writerRange(c, off, len); return wr(this, charsToString(c, off, len));
+  },
+};
+const memoryWriterMethods = {
+  ...nativeWriterRanges,
+  "write(Ljava/lang/String;)V": function (this: JWriter, s: string) {
+    if (s == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    this.s += s;
+  },
+};
 function writerAppend(ret: string): NonNullable<NativeSpec["methods"]> {
   return {
-    [`append(C)L${ret};`]: function (this: JWriter, c: number) { return after(wr(this, String.fromCharCode(c & 0xffff)), () => this); },
+    [`append(C)L${ret};`]: function (this: JWriter, c: number) { return after(vcallMaybe(this, "write", "(I)V", c), () => this); },
     [`append(Ljava/lang/CharSequence;)L${ret};`]: async function (this: JWriter, cs: unknown) {
       const thread = curThread, text = cs == null ? "null" : await csText(cs);
       await vcallOn(thread, this, "write", "(Ljava/lang/String;)V", text); return this;
@@ -1190,18 +1208,29 @@ rt.register({
   ifaces: ["java/io/Closeable", "java/io/Flushable", "java/lang/Appendable"],
   methods: {
     "<init>()V": function () {},
-    "write(Ljava/lang/String;)V": function (this: JWriter, s: string) { this.s += s; },
+    "write(Ljava/lang/String;)V": function (this: JWriter, s: string) {
+      if (s == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      return vcallMaybe(this, "write", "(Ljava/lang/String;II)V", s, 0, s.length);
+    },
     ...writerAppend("java/io/Writer"), ...writerAppend("java/lang/Appendable"),
-    "write(Ljava/lang/String;II)V": function (this: JWriter, s: string, off: number, len: number) { return wr(this, s.substr(off, len)); },
-    "write(I)V": function (this: JWriter, c: number) { return wr(this, String.fromCharCode(c & 0xffff)); },
-    "write([C)V": function (this: JWriter, c: Uint16Array) { return wr(this, chars(c)); },
-    "write([CII)V": function (this: JWriter, c: Uint16Array, off: number, len: number) { return wr(this, chars(c.subarray(off, off + len))); },
+    "write(Ljava/lang/String;II)V": function (this: JWriter, s: string, off: number, len: number) {
+      writerRange(s, off, len);
+      const chars = new Uint16Array(len);
+      for (let i = 0; i < len; i++) chars[i] = s.charCodeAt(off + i);
+      return vcallMaybe(this, "write", "([CII)V", chars, 0, len);
+    },
+    "write(I)V": function (this: JWriter, c: number) { return vcallMaybe(this, "write", "([CII)V", Uint16Array.of(c), 0, 1); },
+    "write([C)V": function (this: JWriter, c: Uint16Array) {
+      if (c == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      return vcallMaybe(this, "write", "([CII)V", c, 0, c.length);
+    },
     "flush()V": function () {}, "close()V": function () {},
   },
 });
 rt.register({
   name: "java/io/StringWriter", ctor: class extends JWriter {}, sup: "java/io/Writer",
   methods: {
+    ...memoryWriterMethods,
     "<init>()V": function () {},
     "<init>(I)V": function () {},
     "toString()Ljava/lang/String;": function (this: JWriter) { return this.s; },
@@ -1216,6 +1245,7 @@ rt.register({
 rt.register({
   name: "java/io/CharArrayWriter", ctor: class extends JWriter {}, sup: "java/io/Writer",
   methods: {
+    ...memoryWriterMethods,
     "<init>()V": function () {},
     "<init>(I)V": function () {},
     "reset()V": function (this: JWriter) { this.s = ""; },
@@ -1232,6 +1262,7 @@ rt.register({
 rt.register({
   name: "java/io/BufferedWriter", ctor: class extends JWriter { target: JWriter | null = null; }, sup: "java/io/Writer",
   methods: {
+    ...nativeWriterRanges,
     "<init>(Ljava/io/Writer;)V": function (this: any, w: JWriter) { this.target = w; },
     "<init>(Ljava/io/Writer;I)V": function (this: any, w: JWriter) { this.target = w; },
     "write(Ljava/lang/String;)V": function (this: any, str: string) { return wr(this.target, str); },
@@ -1256,6 +1287,7 @@ const mkOSW = async (o: unknown) => {
 rt.register({
   name: "java/io/PrintWriter", ctor: JPrintWriter, sup: "java/io/Writer",
   methods: {
+    ...nativeWriterRanges,
     "<init>(Ljava/io/Writer;)V": function (this: JPrintWriter, w: unknown) { this.target = w; },
     "<init>(Ljava/io/Writer;Z)V": function (this: JPrintWriter, w: unknown, a: number) { this.target = w; this.auto = !!a; },
     "<init>(Ljava/io/OutputStream;)V": async function (this: JPrintWriter, o: unknown) { this.target = await mkOSW(o); },
@@ -1276,6 +1308,7 @@ class JOSW extends JWriter { sink: unknown = null; }
 rt.register({
   name: "java/io/OutputStreamWriter", ctor: JOSW, sup: "java/io/Writer",
   methods: {
+    ...nativeWriterRanges,
     "<init>(Ljava/io/OutputStream;)V": function (this: JOSW, o: unknown) { this.sink = o; },
     "<init>(Ljava/io/OutputStream;Ljava/nio/charset/Charset;)V": function (this: JOSW, o: unknown) { this.sink = o; },
     "<init>(Ljava/io/OutputStream;Ljava/lang/String;)V": function (this: JOSW, o: unknown) { this.sink = o; },
