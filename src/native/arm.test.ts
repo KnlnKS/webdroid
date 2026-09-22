@@ -459,11 +459,11 @@ describe("arm decoder", () => {
       cpu.si.set([-1, -1, -1, -1], 20);
     };
     for (const execute of [
-      () => run([0xf3b90144, 0xf3b9e389, 0xf3b12344, 0xf3b563c8, 0xf26106a0, 0xf328a65a, BXLR], setup),
-      () => runThumb([0xffb9, 0x0144, 0xffb9, 0xe389, 0xffb1, 0x2344, 0xffb5, 0x63c8, 0xef61, 0x06a0, 0xff28, 0xa65a, 0x4770], setup),
+      () => run([0xf3b90144, 0xf3b9e389, 0xf3b12344, 0xf3b563c8, 0xf26106a0, 0xf328a65a, 0xf3b005c0, BXLR], setup),
+      () => runThumb([0xffb9, 0x0144, 0xffb9, 0xe389, 0xffb1, 0x2344, 0xffb5, 0x63c8, 0xef61, 0x06a0, 0xff28, 0xa65a, 0xffb0, 0x05c0, 0x4770], setup),
     ]) {
       const c = execute();
-      expect(Array.from(c.si.slice(0, 4))).toEqual([0, 0, -1, -1]);
+      expect(Array.from(c.si.slice(0, 4))).toEqual([-1, -1, 0, 0]);
       expect(Array.from(c.si.slice(28, 30))).toEqual([-2147483648, -7]);
       expect(Array.from(c.si.slice(4, 8))).toEqual([0x807f0101 | 0, 0x01010101, 0, 0]);
       expect(Array.from(c.si.slice(12, 16))).toEqual([0x80000001 | 0, 0x8001ffff | 0, -2147483648, 65529]);

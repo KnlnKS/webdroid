@@ -275,6 +275,8 @@ fn neonMisc(c: *Cpu, w: u32, pc: u32) Status {
         break :blk 0x0e212800 | (size << 22);
     } else if (w & 0xffbf0f10 == 0xf3bb0500)
         0x0ea1d800 | (bits(w, 7, 1) << 29)
+    else if (w & 0xffbf0f90 == 0xf3b00580)
+        0x2e205800
     else if (w & 0xffbf0e10 == 0xf3bb0600)
         (if (w & 0x100 != 0) @as(u32, 0x0ea1b800) else 0x0e21d800) | (bits(w, 7, 1) << 29)
     else if (w & 0xffb30810 == 0xf3b10000) blk: {
