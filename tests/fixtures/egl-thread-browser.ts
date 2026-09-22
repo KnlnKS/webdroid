@@ -144,6 +144,8 @@ async function nativeWindow() {
       f: next, d: next, vd: next, str: () => "", strAt: () => "" };
     return hostFn("libandroid.so", name)!(cpu, args);
   };
+  const sameHandle = nativeWindowFor(surface) === handle;
+  await invoke("ANativeWindow_release", [handle]);
   const locked = await invoke("ANativeWindow_lock", [handle, out, 0]);
   const dimensions = [mem.ld32(out), mem.ld32(out + 4), mem.ld32(out + 8), mem.ld32(out + 12)];
   const duplicate = await invoke("ANativeWindow_lock", [handle, out, 0]);
@@ -162,8 +164,11 @@ async function nativeWindow() {
   const yv12 = stride === 16 && red[0] > 240 && red[1] < 10 && red[2] < 10 && red[3] === 255;
   await invoke("ANativeWindow_release", [handle]);
   const released = await invoke("ANativeWindow_lock", [handle, out, 0]);
+  const fresh = nativeWindowFor(surface);
+  const reset = fresh !== handle && await invoke("ANativeWindow_getFormat", [fresh]) === 1;
+  await invoke("ANativeWindow_release", [fresh]);
   surface.present?.close(); mem.free(out);
-  return { locked, dimensions, duplicate, posted, pixels, yv12, released, frames: surface.frames };
+  return { locked, dimensions, duplicate, posted, pixels, yv12, released, sameHandle, reset, frames: surface.frames };
 }
 async function windowCopy() {
   const screen = document.createElement("canvas"); screen.width = screen.height = 4;

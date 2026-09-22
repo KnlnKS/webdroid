@@ -13,33 +13,30 @@ import { nativePoll } from "./net";
 import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 
 // ── ANativeWindow: a handle per surface (non-zero, as the pointer it stands for)
-const windows: (GlSurface | null)[] = [null];
-const windowRefs = [0];
-export function nativeWindowFor(surface: GlSurface): number {
-  const existing = windows.indexOf(surface);
-  if (existing > 0) { windowRefs[existing]++; return existing; }
-  windows.push(surface); windowRefs.push(1);
-  return windows.length - 1;
+class NativeWindow {
+  refs = 1;
+  width = 0; height = 0; format = 1;
+  bits = 0; size = 0;
+  locked = false; lockedWidth = 0; lockedHeight = 0;
+  constructor(readonly surface: GlSurface, readonly handle: number) {}
 }
-export function windowOf(h: number): GlSurface | null { return windows[h] ?? null; }
+const windows: (NativeWindow | null)[] = [null];
+const windowBySurface = new WeakMap<GlSurface, NativeWindow>();
+export function nativeWindowFor(surface: GlSurface): number {
+  const existing = windowBySurface.get(surface);
+  if (existing) { existing.refs++; return existing.handle; }
+  const window = new NativeWindow(surface, windows.length);
+  windows.push(window); windowBySurface.set(surface, window);
+  return window.handle;
+}
+export function windowOf(h: number): GlSurface | null { return windows[h]?.surface ?? null; }
 const W = (a: ArgReader) => windows[a.i()];
 const YV12 = 0x32315659;
-interface WindowBuffer { width: number; height: number; format: number; bits: number; size: number; locked: boolean; lockedWidth: number; lockedHeight: number }
-const windowBuffers = new WeakMap<GlSurface, WindowBuffer>();
-function bufferOf(surface: GlSurface): WindowBuffer {
-  let buffer = windowBuffers.get(surface);
-  if (!buffer) {
-    buffer = { width: 0, height: 0, format: 1, bits: 0, size: 0, locked: false, lockedWidth: 0, lockedHeight: 0 };
-    windowBuffers.set(surface, buffer);
-  }
-  return buffer;
-}
 function lockWindow(_cpu: Cpu, args: ArgReader): number {
-  const surface = W(args), out = args.p(), dirty = args.p();
-  if (!surface || !out) return -22;
-  const buffer = bufferOf(surface);
+  const buffer = W(args), out = args.p(), dirty = args.p();
+  if (!buffer || !out) return -22;
   if (buffer.locked) return -16;
-  const width = buffer.width || surface.width, height = buffer.height || surface.height;
+  const width = buffer.width || buffer.surface.width, height = buffer.height || buffer.surface.height;
   const stride = buffer.format === YV12 ? Math.ceil(width / 16) * 16 : width;
   const size = buffer.format === YV12 ? (stride + Math.ceil(stride / 32) * 16) * height : width * height * (buffer.format === 4 ? 2 : 4);
   if (!size || !Number.isSafeInteger(size) || size > 0x7fffffff) return -22;
@@ -58,8 +55,8 @@ function lockWindow(_cpu: Cpu, args: ArgReader): number {
   return 0;
 }
 async function postWindow(_cpu: Cpu, args: ArgReader): Promise<number> {
-  const surface = W(args), buffer = surface && windowBuffers.get(surface);
-  if (!surface || !buffer?.locked) return -22;
+  const buffer = W(args);
+  if (!buffer?.locked) return -22;
   const width = buffer.lockedWidth, height = buffer.lockedHeight;
   if (buffer.format === YV12) {
     const stride = Math.ceil(width / 16) * 16, chromaStride = Math.ceil(stride / 32) * 16;
@@ -72,7 +69,7 @@ async function postWindow(_cpu: Cpu, args: ArgReader): Promise<number> {
         layout: [{ offset: 0, stride }, { offset: ySize + chromaSize, stride: chromaStride }, { offset: ySize, stride: chromaStride }],
         colorSpace: { matrix: "smpte170m", primaries: "smpte170m", transfer: "smpte170m", fullRange: false },
       });
-      presentSurface(surface, await createImageBitmap(frame));
+      presentSurface(buffer.surface, await createImageBitmap(frame));
     } finally { frame?.close(); buffer.locked = false; }
     return 0;
   }
@@ -87,7 +84,7 @@ async function postWindow(_cpu: Cpu, args: ArgReader): Promise<number> {
     pixels.set(mem.bytes(buffer.bits, pixels.length));
     if (buffer.format === 2) for (let i = 3; i < pixels.length; i += 4) pixels[i] = 255;
   }
-  try { presentSurface(surface, await createImageBitmap(new ImageData(pixels, width, height))); }
+  try { presentSurface(buffer.surface, await createImageBitmap(new ImageData(pixels, width, height))); }
   finally { buffer.locked = false; }
   return 0;
 }
@@ -176,23 +173,21 @@ export function ndkInit(): void {
       if (!surf) return 0;
       return nativeWindowFor(surf);
     },
-    ANativeWindow_acquire: (_c, a) => { const h = a.i(); if (windows[h]) windowRefs[h]++; },
+    ANativeWindow_acquire: (_c, a) => { const window = W(a); if (window) window.refs++; },
     ANativeWindow_release: (_c, a) => {
-      const h = a.i(), surface = windows[h];
-      if (!surface || --windowRefs[h] > 0) return;
-      const buffer = windowBuffers.get(surface);
-      if (buffer?.bits) mem.free(buffer.bits);
-      windowBuffers.delete(surface); windows[h] = null;
+      const h = a.i(), window = windows[h];
+      if (!window || --window.refs > 0) return;
+      if (window.bits) mem.free(window.bits);
+      windowBySurface.delete(window.surface); windows[h] = null;
     },
-    ANativeWindow_getWidth: (_c, a) => { const s = W(a); return s ? bufferOf(s).width || s.width : -22; },
-    ANativeWindow_getHeight: (_c, a) => { const s = W(a); return s ? bufferOf(s).height || s.height : -22; },
-    ANativeWindow_getFormat: (_c, a) => { const s = W(a); return s ? bufferOf(s).format : -22; },
+    ANativeWindow_getWidth: (_c, a) => { const s = W(a); return s ? s.width || s.surface.width : -22; },
+    ANativeWindow_getHeight: (_c, a) => { const s = W(a); return s ? s.height || s.surface.height : -22; },
+    ANativeWindow_getFormat: (_c, a) => { const s = W(a); return s ? s.format : -22; },
     ANativeWindow_lock: lockWindow, ANativeWindow_unlockAndPost: postWindow,
     ANativeWindow_setBuffersGeometry: (_c, a) => {
-      const surface = W(a), width = a.i(), height = a.i(), format = a.i();
-      if (!surface || width < 0 || height < 0 || (!width !== !height) || ![0, 1, 2, 4, YV12].includes(format)
+      const buffer = W(a), width = a.i(), height = a.i(), format = a.i();
+      if (!buffer || width < 0 || height < 0 || (!width !== !height) || ![0, 1, 2, 4, YV12].includes(format)
         || format === YV12 && ((width | height) & 1)) return -22;
-      const buffer = bufferOf(surface);
       if (buffer.locked) return -16;
       buffer.width = width; buffer.height = height; buffer.format = format || 1;
       return 0;
