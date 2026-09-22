@@ -4,7 +4,7 @@ import { dexesIn } from "../jvm/dex";
 import { rt, type JObj } from "../jvm/runtime";
 import { vfs, apkPath } from "../jvm/natives/jio";
 import { openInstall, type Install } from "./install";
-import { vcall, curThread, mainThread, setCurThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, curThread, mainThread, setCurThread } from "../jvm/natives/jlang";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadFrameworkDex } from "../android/framework";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
@@ -222,12 +222,12 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     }
     const p0 = rt.initClass(appInfo);
     if (p0) await p0;
-    const application = new appInfo.ctor();
+    const application = callOn(mainThread, () => new appInfo.ctor());
     host.application = application;
     application.$host = host;
     try {
-      await vcall(application, "<init>", "()V");
-      await vcall(application, "attachBaseContext", "(Landroid/content/Context;)V", baseCtx);
+      await vcallOn(mainThread, application, "<init>", "()V");
+      await vcallOn(mainThread, application, "attachBaseContext", "(Landroid/content/Context;)V", baseCtx);
       // ContentProviders install before Application.onCreate
       for (const [pn, node] of providers) {
         if (processName) {
@@ -239,11 +239,11 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
           if (rt.link(cls).stub) continue;
           const authority = attrStr(node, "authorities")?.split(";")[0];
           if (!authority) continue;
-          const info = await vcall(getPM(), "resolveContentProvider", "(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;", authority, 128);
+          const info = await vcallOn(mainThread, getPM(), "resolveContentProvider", "(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;", authority, 128) as Parameters<typeof attachProvider>[1] | null;
           if (info) await attachProvider(application, info);
         } catch (e) { console.warn("[provider]", pn, (e as { msg?: string })?.msg ?? e); }
       }
-      await vcall(application, "onCreate", "()V");
+      await vcallOn(mainThread, application, "onCreate", "()V");
     } catch (e) {
       reportUncaught(e);
     }
