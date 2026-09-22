@@ -5191,3 +5191,20 @@ That protected field was absent from the native declaration, so DEX compilation 
 missing and assigned a disconnected fallback property. Writer now declares the canonical field,
 initializes it to itself, and implements the explicit-lock constructor with the bundled core-oj
 null check. The existing JDK utility test covers both lock owners and rejects null (12 assertions).
+
+At `5eaaedbf`, typecheck and all 73 owning package/intent/legacy checks pass (280 assertions).
+TikTok smoke compilation completes with zero method failures. Full Chrome executes unchanged
+`X/0HSG` construction and writing, verifies its lock refers to the supplied StringBuilder, and
+returns the expected text. GET_ACTIVITIES returns 499 enabled activities, omitting the disabled
+entry and unrequested metadata. Four process realms return diagnostics; the three supporting
+realms report no missing API or required native delegate. The main queue sentinel passes, ticks
+advance, and no uncaught/layout/draw error is observed on the consent-screen path.
+
+The shared AVD was switched to ChatGPT by concurrent work after the valid TikTok phone capture.
+Later captures are excluded explicitly. A separate `webdroid_tiktok_usability` AVD on port 5562
+was created for subsequent interactions. Its startup was initially blocked by the emulator's
+old crash-report prompt; an isolated crash database resolves that without touching other instances.
+Other tasks are active on this host, so the query timings above are illustrative; they are not
+an uncontended app-performance comparison. Guest navigation, playback, the 150 ms response target,
+JobInfo parcel support and the final serialized E2E suite remain outstanding. The Chrome guest
+consent agreement awaits the user's confirmation; no acceptance or credentials were submitted.

@@ -1,7 +1,7 @@
 # TikTok usability follow-up
 
 Branch: `codex/tiktok-usability`. Starting revision: `9d0bb979`.
-Status: reproducing current full-Chrome and AVD behavior in an isolated worktree.
+Status: package-query and Writer-lock repairs committed; guest-flow testing awaits consent confirmation.
 
 - Compare TikTok at 1080×2160, 480 dpi; retain screenshots and per-process diagnostics.
 - Investigate slow playback, interaction latency, reload stalls, and reached platform gaps.
@@ -11,7 +11,8 @@ Status: reproducing current full-Chrome and AVD behavior in an isolated worktree
 - Freeze the candidate before the final serialized full E2E run; keep visual goldens unchanged.
 - Record limitations, matching baseline evidence, and final checks in implementation history.
 
-The current AVD opens a login wall, while full Chrome reaches guest consent. Feed comparisons
+The shared AVD opened a login wall, while full Chrome reached guest consent.
+A separate `webdroid_tiktok_usability` AVD on emulator-5562 now isolates further interactions. Feed comparisons
 must identify that state difference; authentication and publishing are outside the exercised guest path.
 
 ---
