@@ -703,6 +703,14 @@ inline fn sxh(v: u32) u32 {
 inline fn rev16(v: u32) u32 {
     return ((v & 0xff00ff) << 8) | ((v >> 8) & 0xff00ff);
 }
+inline fn reverse(v: u32, kind: u32) u32 {
+    return switch (kind) {
+        0 => @byteSwap(v),
+        1 => rev16(v),
+        2 => @bitReverse(v),
+        else => sxh(@byteSwap(@as(u16, @truncate(v)))),
+    };
+}
 fn sat32(c: *Cpu, v: i64) i64 {
     if (v > std.math.maxInt(i32)) {
         c.cpsr |= 1 << 27;
@@ -765,12 +773,7 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         return .next;
     }
     if ((w & 0x0fbf0f70) == 0x06bf0f30) {
-        set(c, rd, switch (w & 0x400080) {
-            0 => @byteSwap(RM),
-            0x80 => rev16(RM),
-            0x400000 => @bitReverse(RM),
-            else => sxh(@byteSwap(@as(u16, @truncate(RM)))),
-        });
+        set(c, rd, reverse(RM, (bits(w, 22, 1) << 1) | bits(w, 7, 1)));
         return .next;
     }
     if ((w & 0x0ff00ff0) == 0x06800fb0) {
@@ -1123,9 +1126,9 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
     if ((h & 0xffd0) == 0xfa90) {
         const h2: u32 = ld(u16, pc + 2);
         const clz = h & 0x20 != 0;
-        if (h2 & 0xf0f0 == (if (clz) @as(u32, 0xf080) else 0xf0a0) and (h & 15) == (h2 & 15)) {
+        if (h2 & 0xf0c0 == 0xf080 and (!clz or h2 & 0x30 == 0) and (h & 15) == (h2 & 15)) {
             c.pc = pc + 4;
-            set(c, (h2 >> 8) & 15, if (clz) @clz(r(c, h & 15)) else @bitReverse(r(c, h & 15)));
+            set(c, (h2 >> 8) & 15, if (clz) @clz(r(c, h & 15)) else reverse(r(c, h & 15), bits(h2, 4, 2)));
             return .next;
         }
     }
@@ -1612,9 +1615,7 @@ fn thumbMisc(c: *Cpu, h: u32, pc: u32, rd: u32, rn: u32) Status {
         0xb240 => set(c, rd, sxb(t)),
         0xb280 => set(c, rd, t & 0xffff),
         0xb2c0 => set(c, rd, t & 255),
-        0xba00 => set(c, rd, @byteSwap(t)),
-        0xba40 => set(c, rd, rev16(t)),
-        0xbac0 => set(c, rd, sxh(@byteSwap(@as(u16, @truncate(t))))),
+        0xba00, 0xba40, 0xbac0 => set(c, rd, reverse(t, bits(h, 6, 2))),
         else => {
             if ((h & 0xf500) == 0xb100) {
                 const imm = ((h >> 3) & 31) * 2 + ((h & 0x200) >> 3);

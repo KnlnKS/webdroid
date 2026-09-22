@@ -938,18 +938,22 @@ describe("thumb decoder", () => {
     expect([arm.w[2], arm.q]).toEqual([-2147483648, 1]);
   });
 
-  test("wide bit reversal and leading-zero count preserve their source", () => {
+  test("wide reversals and leading-zero count preserve their source", () => {
     const c = runThumb([
       0xfab2, 0xf082, // clz r0, r2
       0xfab3, 0xf183, // clz r1, r3
       0xfa92, 0xf4a2, // rbit r4, r2
       0xfa94, 0xf5a4, // rbit r5, r4
+      0xfa96, 0xfb86, // rev.w r11, r6
+      0xfa96, 0xfc96, // rev16.w r12, r6
+      0xfa96, 0xf9b6, // revsh.w r9, r6
       0x4770,         // bx lr
-    ], (cpu) => { cpu.w[4] = 0x0000ffff; cpu.w[6] = 0; });
+    ], (cpu) => { cpu.w[4] = 0x0000ffff; cpu.w[6] = 0; cpu.w[12] = 0x123480ff; });
     expect(c.w[0]).toBe(16);
     expect(c.w[2]).toBe(32);
     expect(c.w[8] >>> 0).toBe(0xffff0000);
     expect(c.w[10]).toBe(c.w[4]);
+    expect([c.w[22] >>> 0, c.w[24] >>> 0, c.w[18], c.w[12]]).toEqual([0xff803412, 0x3412ff80, -128, 0x123480ff]);
   });
 
   test("wide word spills support pre-index and post-index writeback", () => {
