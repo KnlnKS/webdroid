@@ -5,7 +5,7 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { parseAXML, TV, type XmlNode } from "./axml";
 import { JAttrSet, type JXmlParser, askTheme, themeOf, noteAttrsRead, noteUnreadAttrs, obtainStyled, rvInt } from "./res";
-import { JView, JViewGroup, guardCall, guardMaybe, resolveLp } from "./view";
+import { JView, JViewGroup, type JLayoutParams, guardCall, guardMaybe, resolveLp } from "./view";
 import type { JContext } from "./context";
 
 class JLayoutInflater extends JObj {
@@ -121,7 +121,7 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
     const v = await createViewFromTag(inflater, parentView, child.name, cctx, set);
     noteUnreadAttrs(child, child.name);
     let lp = v.lp;
-    if (!lp) lp = await guardCall(parentView, M_generateLP, set);
+    if (!lp) lp = await guardCall(parentView, M_generateLP, set) as JLayoutParams;
     await guardCall(parentView, M_addView, v, lp);
     if (v instanceof JViewGroup && child.children.length) {
       await inflateChildren(inflater, child, v, cctx);
@@ -153,7 +153,7 @@ async function inflateNodeInner(jctx: unknown, root: XmlNode, parent: JViewGroup
   const v = await createViewFromTag(inf, parent, root.name, rctx, set);
   noteUnreadAttrs(root, root.name);
   if (parent) {
-    const lp = await guardCall(parent, M_generateLP, set);
+    const lp = await guardCall(parent, M_generateLP, set) as JLayoutParams;
     if (attach) await guardCall(parent, M_addView, v, lp);
     else { v.lp = lp; await resolveLp(lp); }
   }

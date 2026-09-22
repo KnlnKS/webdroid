@@ -16,6 +16,9 @@ rt.register({
     "getPropertyString(Ljava/lang/String;)Ljava/lang/String;": () => {
       throw rt.mkThrowable("java/lang/IllegalStateException", "MediaDrm is not initialized");
     },
+    "getPropertyByteArray(Ljava/lang/String;)[B": () => {
+      throw rt.mkThrowable("java/lang/IllegalStateException", "MediaDrm is not initialized");
+    },
     ...noops("close()V", "release()V"),
   },
 });

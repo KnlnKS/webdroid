@@ -397,6 +397,7 @@ class JMemoryInfo extends JObj {
   dalvikSharedClean = 0; nativeSharedClean = 0; otherSharedClean = 0;
   dalvikPrivateClean = 0; nativePrivateClean = 0; otherPrivateClean = 0;
   dalvikPss = 0; nativePss = 0; otherPss = 0;
+  dalvikSwappablePss = 0; nativeSwappablePss = 0; otherSwappablePss = 0;
   dalvikSharedDirty = 0; dalvikPrivateDirty = 0; nativeSharedDirty = 0; nativePrivateDirty = 0; otherSharedDirty = 0; otherPrivateDirty = 0;
   get totalPss() { return this.dalvikPss + this.nativePss + this.otherPss; }
   get privateDirty() { return this.dalvikPrivateDirty + this.nativePrivateDirty + this.otherPrivateDirty; }
@@ -413,9 +414,11 @@ rt.register({
   name: "android/os/Debug$MemoryInfo", ctor: JMemoryInfo,
   fields: ["dalvikPss", "nativePss", "otherPss", "dalvikSharedDirty", "dalvikPrivateDirty",
     "nativeSharedDirty", "nativePrivateDirty", "otherSharedDirty", "otherPrivateDirty",
+    "dalvikSwappablePss", "nativeSwappablePss", "otherSwappablePss",
     "dalvikSharedClean", "nativeSharedClean", "otherSharedClean", "dalvikPrivateClean", "nativePrivateClean", "otherPrivateClean"],
   methods: {
     "getTotalPss()I": function (this: JMemoryInfo) { return this.totalPss; },
+    "getTotalSwappablePss()I": function (this: JMemoryInfo) { return this.dalvikSwappablePss + this.nativeSwappablePss + this.otherSwappablePss; },
     ...noops("<init>()V"),
     "getTotalPrivateDirty()I": function (this: JMemoryInfo) { return this.privateDirty; },
     "getTotalSharedDirty()I": function (this: JMemoryInfo) { return this.dalvikSharedDirty + this.nativeSharedDirty + this.otherSharedDirty; },

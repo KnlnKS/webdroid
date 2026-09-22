@@ -21,11 +21,13 @@ test("Context.databaseList returns private database directory entries", async ()
   }
 });
 
-test("Debug.MemoryInfo exposes legacy dirty-page fields", () => {
+test("Debug.MemoryInfo exposes legacy page fields", async () => {
   const info = rt.link("android/os/Debug$MemoryInfo");
   for (const name of ["dalvikSharedDirty", "dalvikPrivateDirty", "nativeSharedDirty",
-    "nativePrivateDirty", "otherSharedDirty", "otherPrivateDirty"]) {
+    "nativePrivateDirty", "otherSharedDirty", "otherPrivateDirty", "dalvikSwappablePss",
+    "nativeSwappablePss", "otherSwappablePss"]) {
     expect(info.fieldTable.get(name)).toBe(name);
     expect((new info.ctor() as unknown as Record<string, number>)[name]).toBe(0);
   }
+  expect(await vcall(new info.ctor(), "getTotalSwappablePss", "()I")).toBe(0);
 });
