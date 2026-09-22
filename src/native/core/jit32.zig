@@ -630,6 +630,47 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
     if (h >= 0xe800) {
         const h2: u32 = mem.ld(u16, pc + 2);
         if (h & 0xff00 == 0xee00 and jitfp.emitVfp(e, h << 16 | h2)) return false;
+        const shifted = h & 0xfe00 == 0xea00;
+        const immediate = h & 0xfe00 == 0xf000 and h2 & 0x7000 == 0;
+        if ((shifted or immediate) and h2 & 0x8000 == 0) {
+            const op = bits(h, 5, 4);
+            var n = h & 15;
+            const d = bits(h2, 8, 4);
+            const m = h2 & 15;
+            const flags = h & 0x10 != 0;
+            var mapped: ?u32 = switch (op) {
+                0 => 0,
+                1 => 14,
+                2 => 12,
+                4 => 1,
+                8 => 4,
+                10 => 5,
+                11 => 6,
+                13 => 2,
+                14 => 3,
+                else => null,
+            };
+            if (n == 15 and (op == 2 or op == 3)) {
+                mapped = if (op == 2) 13 else 15;
+                n = 0;
+            }
+            if (d == 15) mapped = if (flags) switch (op) {
+                0 => 8,
+                4 => 9,
+                8 => 11,
+                13 => 10,
+                else => null,
+            } else null;
+            if (mapped) |o| {
+                if (n < 15 and (immediate or m < 15)) {
+                    const shift = bits(h2, 12, 3) << 2 | bits(h2, 6, 2);
+                    const operand = if (immediate) (1 << 25) | (h2 & 255) else (shift << 7) | (bits(h2, 4, 2) << 5) | m;
+                    const w = 0xe0000000 | (o << 21) | (@as(u32, @intFromBool(flags)) << 20) | (n << 16) | (d << 12) |
+                        operand;
+                    return dataProcessing(e, w, pc, k, @intFromBool(immediate), n, d, 0, m);
+                }
+            }
+        }
         if (h & 0xfe80 == 0xf880 and bits(h, 5, 2) < 3) {
             const n = h & 15;
             const d = h2 >> 12;

@@ -105,6 +105,18 @@ to the configuration service does not prove that record was retrieved. No identi
 success is fabricated. Later unlocked features and complete game coverage remain unvalidated;
 the evidence establishes the observed early-level, audio, persistence and resume paths.
 
+A post-matrix native sample remained slow: 11 GL frames in 15.57 s, 15.40 s native execution,
+with audio callbacks, Unity workers and Adjust's signer sharing the work. Unity's hot texture
+worker at `+0x32a320` repeatedly uses wide Thumb arithmetic. Equivalent shifted-register and
+eight-bit immediate forms now lower through the existing ARM data-processing emitter, retaining
+its flag and shifter semantics. General ORN, PC operands and other modified immediates remain
+on the interpreter path. All 73 ARM checks / 817 assertions and typecheck pass. A million-loop
+probe with four wide operations measures 32–35 ms before and 0.6–0.8 ms warm afterward, with
+identical results; this is not an app-speed claim. Fresh normal-JIT Chrome restores level 3
+by the 230-second capture, and a rope swipe completes its first puzzle without a native or
+rendering fault. The first 15-second game sample remains about 0.72 GL FPS. A new full matrix
+is required after the performance candidate is frozen.
+
 Earlier investigation entries follow; their open questions describe the revision at that time.
 
 Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this
