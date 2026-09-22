@@ -188,6 +188,15 @@ operations share the SIMD owner. The owning run passes 62 checks / 679 assertion
 passed before those last two extensions. No original-package gameplay or final regression
 pass is claimed yet.
 
+The next reached instructions reuse shared SIMD widening, integer extrema/sign, and pairwise
+extrema. ARM ABI `__aeabi_memclr{,4,8}` reuses bounded `bzero`; a guest probe verifies an
+unaligned byte count and unchanged surrounding bytes. Thumb saturation exposed defects in
+the existing ARM operation: wrong source-register selection, missing 32-bit shift wrapping,
+and missing sticky Q. Both encodings now share corrected saturation. Thumb halfword packing
+also shares the existing ARM semantics. The latest owning decoder run passes 65 checks /
+722 assertions and typecheck passes. Original ARM32 initialization now creates its graphics
+worker, but rendered gameplay, lifecycle stability and final regression checks remain open.
+
 ## microG completion and open acceptance
 
 PLAN.md owns current status. Both Android and webdroid now
