@@ -1670,6 +1670,24 @@ function clipRect(this: JCanvas, l: number, t: number, r: number, b: number) {
   ctx.clip();
   return +(r > l && b > t);
 }
+function clipOutRect(this: JCanvas, l: number, t: number, r: number, b: number) {
+  if (!(r > l && b > t)) return 1;
+  const excluded = new Path2D();
+  excluded.rect(l, t, r - l, b - t);
+  const apply = (ctx: Ctx2D) => {
+    const matrix = ctx.getTransform(), inverse = new Path2D();
+    inverse.rect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    inverse.addPath(excluded, matrix);
+    ctx.resetTransform();
+    try { ctx.clip(inverse, "evenodd"); }
+    finally { ctx.setTransform(matrix); }
+  };
+  // RenderNode replay supplies the parent transform and the actual destination bounds.
+  const recorder = this.ctx as RecordingContext;
+  if (recorder.__isRecorder) recorder.__record(apply);
+  else apply(this.ctx);
+  return 1;
+}
 function drawRect(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
   this.drawShape(p, (c) => c.fillRect(l, t, r - l, b - t), (c) => c.strokeRect(l, t, r - l, b - t));
 }
@@ -1774,10 +1792,13 @@ export const canvasMethods: NativeSpec["methods"] = {
   "clipRect(FFFF)Z": clipRect,
   "clipRect(IIII)Z": clipRect,
   "clipRect(FFFFLandroid/graphics/Region$Op;)Z": function (this: JCanvas, l: number, t: number, r: number, b: number, op: { ename?: string } | null) {
-    // Region.Op other than INTERSECT (esp. DIFFERENCE for scrollbar exclusion) is
-    // unsupported on a 2D context; ignore non-intersect ops rather than corrupt the clip
+    if (op?.ename === "DIFFERENCE") return clipOutRect.call(this, l, t, r, b);
     return op && op.ename && op.ename !== "INTERSECT" ? 1 : clipRect.call(this, l, t, r, b);
   },
+  "clipOutRect(FFFF)Z": clipOutRect,
+  "clipOutRect(IIII)Z": clipOutRect,
+  "clipOutRect(Landroid/graphics/Rect;)Z": function (this: JCanvas, r: JRect) { return clipOutRect.call(this, r.left, r.top, r.right, r.bottom); },
+  "clipOutRect(Landroid/graphics/RectF;)Z": function (this: JCanvas, r: JRectF) { return clipOutRect.call(this, r.left, r.top, r.right, r.bottom); },
   "clipRect(Landroid/graphics/Rect;)Z": function (this: JCanvas, r: JRect) { return clipRect.call(this, r.left, r.top, r.right, r.bottom); },
   "clipRect(Landroid/graphics/RectF;)Z": function (this: JCanvas, r: JRectF) { return clipRect.call(this, r.left, r.top, r.right, r.bottom); },
   "clipPath(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z": function (this: JCanvas, path: JPath, op: { ename?: string } | null) {
@@ -1898,8 +1919,7 @@ export const canvasMethods: NativeSpec["methods"] = {
   "drawPicture(Landroid/graphics/Picture;Landroid/graphics/Rect;)V": function (this: JCanvas, picture: JPicture, dst: JRect) { drawPicture(this, picture, dst); },
   ...noops("enableZ()V", "disableZ()V",
     "setDrawFilter(Landroid/graphics/DrawFilter;)V"),
-  ...stubs(1, "clipOutRect(FFFF)Z", "clipOutRect(IIII)Z", "clipOutRect(Landroid/graphics/Rect;)Z",
-    "clipOutPath(Landroid/graphics/Path;)Z", "isHardwareAccelerated()Z"),
+  ...stubs(1, "clipOutPath(Landroid/graphics/Path;)Z", "isHardwareAccelerated()Z"),
   ...stubs(0, "quickReject(FFFFLandroid/graphics/Canvas$EdgeType;)Z"),
   "setBitmap(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
 };

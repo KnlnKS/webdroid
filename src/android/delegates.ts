@@ -587,7 +587,7 @@ delegate("android/graphics/Canvas", {
     replace(into, Float64Array.of(t.a, t.c, t.e, t.b, t.d, t.f, 0, 0, 1));
   },
 
-  "nClipRect(JFFFFI)Z": (h: bigint, l: number, t: number, r: number, b: number) => on("clipRect(FFFF)Z")(h, l, t, r, b),
+  "nClipRect(JFFFFI)Z": (h: bigint, l: number, t: number, r: number, b: number, op: number) => on(op === 0 ? "clipOutRect(FFFF)Z" : "clipRect(FFFF)Z")(h, l, t, r, b),
   "nClipPath(JJI)Z": (h: bigint, p: bigint) => {
     const c = canvas(h), pp = deref<JPath>(p);
     c.ctx.clip(pp.path(), pp.fillRule);
