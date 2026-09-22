@@ -1167,7 +1167,7 @@ rt.register({
     },
   },
 });
-class JWriter extends JObj { s = ""; }
+class JWriter extends JObj { s = ""; lock: unknown = this; }
 /** every Writer overload funnels through the VIRTUAL write(String) so subclasses intercept */
 const wr = (w: unknown, s: string) => vcallMaybe(w, "write", "(Ljava/lang/String;)V", s);
 const chars = (c: Uint16Array): string => charsToString(c, 0, c.length);
@@ -1186,10 +1186,14 @@ function writerAppend(ret: string): NonNullable<NativeSpec["methods"]> {
   };
 }
 rt.register({
-  name: "java/io/Writer", ctor: JWriter,
+  name: "java/io/Writer", ctor: JWriter, fields: { lock: "lock" },
   ifaces: ["java/io/Closeable", "java/io/Flushable", "java/lang/Appendable"],
   methods: {
     "<init>()V": function () {},
+    "<init>(Ljava/lang/Object;)V": function (this: JWriter, lock: unknown) {
+      if (lock == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      this.lock = lock;
+    },
     "write(Ljava/lang/String;)V": function (this: JWriter, s: string) { this.s += s; },
     ...writerAppend("java/io/Writer"), ...writerAppend("java/lang/Appendable"),
     "write(Ljava/lang/String;II)V": function (this: JWriter, s: string, off: number, len: number) { return wr(this, s.substr(off, len)); },

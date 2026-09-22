@@ -5185,3 +5185,9 @@ This is a query microbenchmark, not an end-to-end input latency or playback-spee
 pages were visible; the candidate rendered with no observed uncaught/layout/draw failures.
 Typecheck and three existing package/intent checks pass (15 assertions). Reload also reached
 Writer.lock, JobInfo.writeToParcel and optional XmlBlock lookup gaps; investigation continues.
+
+TikTok's unchanged `X/0HSG` Writer subclass assigns its StringBuilder to inherited `Writer.lock`.
+That protected field was absent from the native declaration, so DEX compilation reported it
+missing and assigned a disconnected fallback property. Writer now declares the canonical field,
+initializes it to itself, and implements the explicit-lock constructor with the bundled core-oj
+null check. The existing JDK utility test covers both lock owners and rejects null (12 assertions).
