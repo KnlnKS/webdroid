@@ -1233,6 +1233,7 @@ rt.register({
   statics: { MAX_VALUE: 32767, MIN_VALUE: -32768, get TYPE() { return rt.classFor("short"); } },
   methods: {
     ...numCommon("S", JShort),
+    "static hashCode(S)I": (v: number) => v,
     "static valueOf(S)Ljava/lang/Short;": (v: number) => box(JShort, v),
   },
 });
@@ -1283,6 +1284,16 @@ function offsetCodePoints(text: string, index: number, offset: number): number {
   if (offset !== 0) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(offset));
   return index;
 }
+function charTitleCase(c: number): number {
+  // Unicode simple title mappings differ from uppercase for digraphs, Georgian and Greek.
+  if (c >= 0x1c4 && c <= 0x1cc) return 0x1c5 + Math.floor((c - 0x1c4) / 3) * 3;
+  if (c >= 0x1f1 && c <= 0x1f3) return 0x1f2;
+  if (c >= 0x10d0 && c <= 0x10ff) return c;
+  if (c >= 0x1f80 && c <= 0x1faf) return c | 8;
+  if (c === 0x1fb3 || c === 0x1fc3 || c === 0x1ff3) return c + 9;
+  const upper = String.fromCharCode(c).toUpperCase();
+  return upper.length === 1 ? upper.charCodeAt(0) : c;
+}
 const isISOControl = (c: number) => +((c >= 0 && c <= 0x1f) || (c >= 0x7f && c <= 0x9f));
 rt.register({
   name: "java/lang/Character", ctor: JChar,
@@ -1327,6 +1338,7 @@ rt.register({
     })),
     "static isUpperCase(C)Z": (c: number) => { const s = String.fromCharCode(c); return s !== s.toLowerCase() && s === s.toUpperCase() ? 1 : 0; },
     "static isLowerCase(C)Z": (c: number) => { const s = String.fromCharCode(c); return s !== s.toUpperCase() && s === s.toLowerCase() ? 1 : 0; },
+    "static toTitleCase(C)C": charTitleCase,
     "static toUpperCase(C)C": (c: number) => String.fromCharCode(c).toUpperCase().charCodeAt(0),
     "static toLowerCase(C)C": (c: number) => String.fromCharCode(c).toLowerCase().charCodeAt(0),
     "static digit(CI)I": (c: number, r: number) => { const d = parseInt(String.fromCharCode(c), r); return Number.isNaN(d) ? -1 : d; },

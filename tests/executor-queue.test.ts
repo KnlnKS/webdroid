@@ -197,3 +197,16 @@ test("a pool grows when a wrapped synchronous queue refuses storage", async () =
   await vcall(ex, "execute", "(Ljava/lang/Runnable;)V", overflow);
   expect(overflow.runs).toBe(1);
 });
+
+test("scheduled shutdown policy cancels delayed work without running it", async () => {
+  for (const beforeShutdown of [true, false]) {
+    const ex = await newObj("java/util/concurrent/ScheduledThreadPoolExecutor", "(I)V", 1);
+    const task = rt.make("test/QueueRunnable");
+    const future = await vcall(ex, "schedule", "(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;", task, 60n, seconds());
+    if (!beforeShutdown) await vcall(ex, "shutdown", "()V");
+    await vcall(ex, "setExecuteExistingDelayedTasksAfterShutdownPolicy", "(Z)V", 0);
+    if (beforeShutdown) await vcall(ex, "shutdown", "()V");
+    expect(await vcall(future, "isCancelled", "()Z")).toBe(1);
+    expect(await vcall(ex, "isTerminated", "()Z")).toBe(1);
+  }
+});

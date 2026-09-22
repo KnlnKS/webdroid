@@ -48,6 +48,7 @@ class JExecutor extends JObj {
   shut = false;
   pending = 0;
   removeOnCancel = 0;
+  executeDelayedAfterShutdown = true;
   queue: JObj | null = null;
   limit = 1;
   coreSize = 1;
@@ -115,6 +116,7 @@ async function runTask(ex: JExecutor, worker: JExecutor["workers"][number], entr
   }
 }
 class JFuture extends JObj {
+  delayed = false;
   promise: Promise<unknown> | null = null;
   value: unknown = null;
   error: unknown = null;
@@ -168,10 +170,10 @@ function submit(ex: JExecutor, task: unknown, method: string, desc: string, dela
     const entry = { task, f, method, desc, queued, finish: () => resolve(null) };
     let timer: GuestTimer | undefined;
     const enqueue = () => {
-      timer = undefined; ex.tasks.push(entry); if (!ex.pool) mirror(ex)?.push(task);
+      timer = undefined; f.delayed = false; ex.tasks.push(entry); if (!ex.pool) mirror(ex)?.push(task);
       scheduleDrain(ex);
     };
-    if (delay > 0) timer = setGuestTimeout(enqueue, delay); else enqueue();
+    if (delay > 0) { f.delayed = true; timer = setGuestTimeout(enqueue, delay); } else enqueue();
     f.cancel = () => {
       const index = ex.tasks.indexOf(entry);
       if (index >= 0) {
@@ -263,7 +265,10 @@ const executorMethods: NativeSpec["methods"] = {
     taskForCallable(runnableCallable(r, result)),
   "newTaskFor(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;": (c: unknown) =>
     taskForCallable(c),
-  "shutdown()V": function (this: JExecutor) { this.shut = true; },
+  "shutdown()V": function (this: JExecutor) {
+    this.shut = true;
+    if (!this.executeDelayedAfterShutdown) cancelDelayed(this);
+  },
   "shutdownNow()Ljava/util/List;": function (this: JExecutor) {
     this.shut = true;
     const result = newArrayList();
@@ -325,6 +330,9 @@ function repeating(name: string, fixedRate: boolean): NativeSpec["methods"] {
     },
   };
 }
+function cancelDelayed(ex: JExecutor): void {
+  for (const f of ex.jobs.keys()) if (f.delayed) cancelFuture(f, 0);
+}
 function initScheduled(this: JExecutor, core: number, factory: unknown = null, handler: unknown = null) {
   if (core < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative pool size");
   this.limit = Math.max(1, core); this.factory = factory; this.rejectionHandler = handler;
@@ -353,6 +361,13 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       "<init>(ILjava/util/concurrent/ThreadFactory;)V": initScheduled,
       "<init>(ILjava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number, handler: unknown) { initScheduled.call(this, core, null, handler); },
       "<init>(ILjava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": initScheduled,
+      ...(n === "java/util/concurrent/ScheduledThreadPoolExecutor" ? {
+        "setExecuteExistingDelayedTasksAfterShutdownPolicy(Z)V": function (this: JExecutor, value: number) {
+          this.executeDelayedAfterShutdown = !!value;
+          if (this.shut && !value) cancelDelayed(this);
+        },
+        "getExecuteExistingDelayedTasksAfterShutdownPolicy()Z": function (this: JExecutor) { return +this.executeDelayedAfterShutdown; },
+      } : {}),
       "allowCoreThreadTimeOut(Z)V": function () {},
       "getPoolSize()I": function (this: JExecutor) { return this.workers.length; },
       "getActiveCount()I": function (this: JExecutor) { return this.workers.filter((w) => w.busy).length; },

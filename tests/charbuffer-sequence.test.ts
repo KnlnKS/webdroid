@@ -13,6 +13,12 @@ test("CharBuffer keeps a live read-only CharSequence view", async () => {
   expect(await vcall(b, "toString", "()Ljava/lang/String;")).toBe("axc");
   expect(await vcall(b, "get", "()C")).toBe(97);
   expect(await vcall(b, "toString", "()Ljava/lang/String;")).toBe("xc");
+  const slice = await vcall(b, "slice", "()Ljava/nio/CharBuffer;");
+  await vcall(text, "setCharAt", "(IC)V", 2, 121);
+  expect(await vcall(slice, "toString", "()Ljava/lang/String;")).toBe("xy");
+  expect(await vcall(slice, "position", "()I")).toBe(0);
+  expect(await vcall(slice, "capacity", "()I")).toBe(2);
+  await expect(vcall(slice, "put", "(C)Ljava/nio/CharBuffer;", 65)).rejects.toBeDefined();
   await expect(vcall(b, "put", "(C)Ljava/nio/CharBuffer;", 65)).rejects.toBeDefined();
 });
 test("one-shot charset encoding consumes UTF-16 input and reports malformed surrogates", async () => {

@@ -49,6 +49,13 @@ function javaTypeName(d: string): string {
 }
 class JAccessibleObject extends JObj { accessible = 0; }
 const accessibleMethods: NonNullable<NativeSpec["methods"]> = {
+  "static setAccessible([Ljava/lang/reflect/AccessibleObject;Z)V": (objects: JAccessibleObject[] | null, value: number) => {
+    if (objects === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    for (const object of objects) {
+      if (object === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      object.accessible = value ? 1 : 0;
+    }
+  },
   "setAccessible(Z)V": function (this: JAccessibleObject, value: number) { this.accessible = value ? 1 : 0; },
   "isAccessible()Z": function (this: JAccessibleObject) { return this.accessible; },
   "trySetAccessible()Z": function (this: JAccessibleObject) { this.accessible = 1; return 1; },
@@ -171,8 +178,7 @@ rt.register({
     "getModifiers()I": function (this: JField) { return this.flags; },
     "isSynthetic()Z": function (this: JField) { return (this.flags >> 12) & 1; },
     "isEnumConstant()Z": function (this: JField) { return (this.flags >> 14) & 1; },
-    "setAccessible(Z)V": function (this: JField, value: number) { this.accessible = value ? 1 : 0; },
-    "isAccessible()Z": function (this: JField) { return this.accessible; },
+    ...accessibleMethods,
     "getDeclaringClass()Ljava/lang/Class;": function (this: JField) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
     "get(Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JField, o: unknown) {
       return boxReturn(this.desc, await readField.call(this, o));
@@ -509,9 +515,8 @@ function fieldOffset(f: JField): bigint {
   if (i === undefined) { i = unsafeFields.length; unsafeFields.push({ prop: f.prop, desc: f.desc }); unsafeIndex.set(f.prop, i); }
   return BigInt(i * 8);
 }
-const isRaw = (o: unknown) => Array.isArray(o) || ArrayBuffer.isView(o);
 function uKey(o: unknown, off: bigint): string | number {
-  return isRaw(o) ? Number(off) : unsafeFields[Number(off) / 8].prop;
+  return Array.isArray(o) ? Number(off) / 4 : ArrayBuffer.isView(o) ? Number(off) : unsafeFields[Number(off) / 8].prop;
 }
 function uGet(o: any, off: bigint) { return o[uKey(o, off)] ?? null; }
 function uPut(o: any, off: bigint, v: unknown) { o[uKey(o, off)] = v; }
@@ -550,7 +555,7 @@ function uPutLong(o: any, off: bigint, value: bigint): void {
   else { const f = unsafeFields[Number(off) / 8]; o[f.prop] = f.desc === "D" ? longBitsToDouble(value) : value; }
 }
 function arrayIndexScale(cls: JClass): number {
-  return PRIM_ARRAYS[cls.arrDesc?.[1] as PrimElem]?.BYTES_PER_ELEMENT ?? 1;
+  return PRIM_ARRAYS[cls.arrDesc?.[1] as PrimElem]?.BYTES_PER_ELEMENT ?? 4;
 }
 
 const methodsCache = new WeakMap<ClassInfo, [JMethod[] | undefined, JMethod[] | undefined]>();
@@ -633,8 +638,7 @@ rt.register({
     "getParameterTypes()[Ljava/lang/Class;": function (this: JMethod) { return paramClasses(this.desc, "Ljava/lang/Class;", this.owner.owner); },
     "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JMethod) { return types(genericMethodTypes(this.owner, this.name, this.desc).params); },
     "getDeclaringClass()Ljava/lang/Class;": function (this: JMethod) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
-    "setAccessible(Z)V": () => {},
-    "isAccessible()Z": () => 1,
+    ...accessibleMethods,
     "isSynthetic()Z": () => 0,
     "isBridge()Z": () => 0,
     "invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JMethod, recv: unknown, args: unknown[] | null) {
@@ -699,8 +703,7 @@ rt.register({
     "getTypeParameters()[Ljava/lang/reflect/TypeVariable;": noTypeVars,
     "getModifiers()I": function (this: JCtor) { return this.flags; },
     "getDeclaringClass()Ljava/lang/Class;": function (this: JCtor) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
-    "setAccessible(Z)V": () => {},
-    "isAccessible()Z": () => 1,
+    ...accessibleMethods,
     "isSynthetic()Z": () => 0,
     "isVarArgs()Z": function (this: JCtor) { return (this.flags & 0x80) ? 1 : 0; },
     "getParameterCount()I": function (this: JCtor) { return parseMethodDesc(this.desc).params.length; },
