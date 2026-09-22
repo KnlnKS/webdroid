@@ -1233,6 +1233,7 @@ rt.register({
   statics: { MAX_VALUE: 32767, MIN_VALUE: -32768, get TYPE() { return rt.classFor("short"); } },
   methods: {
     ...numCommon("S", JShort),
+    "static hashCode(S)I": (v: number) => v,
     "static valueOf(S)Ljava/lang/Short;": (v: number) => box(JShort, v),
   },
 });
@@ -1283,7 +1284,26 @@ function offsetCodePoints(text: string, index: number, offset: number): number {
   if (offset !== 0) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(offset));
   return index;
 }
+function charTitleCase(c: number): number {
+  // Unicode simple title mappings differ from uppercase for digraphs, Georgian and Greek.
+  if (c >= 0x1c4 && c <= 0x1cc) return 0x1c5 + Math.floor((c - 0x1c4) / 3) * 3;
+  if (c >= 0x1f1 && c <= 0x1f3) return 0x1f2;
+  if (c >= 0x10d0 && c <= 0x10ff) return c;
+  if (c >= 0x1f80 && c <= 0x1faf) return c | 8;
+  if (c === 0x1fb3 || c === 0x1fc3 || c === 0x1ff3) return c + 9;
+  const upper = String.fromCharCode(c).toUpperCase();
+  return upper.length === 1 ? upper.charCodeAt(0) : c;
+}
 const isISOControl = (c: number) => +((c >= 0 && c <= 0x1f) || (c >= 0x7f && c <= 0x9f));
+const characterCategories = "Cn Lu Ll Lt Lm Lo Mn Me Mc Nd Nl No Zs Zl Zp Cc Cf - Co Cs Pd Ps Pe Pc Po Sm Sc Sk So Pi Pf"
+  .split(" ").map(category => category === "-" ? null : new RegExp(`\\p{${category}}`, "u"));
+function unicodeCategory(c: number): number {
+  if (c < 0 || c > 0x10ffff) return 0;
+  const s = String.fromCodePoint(c);
+  return characterCategories.findIndex(category => category?.test(s));
+}
+const asciiCategories = Uint8Array.from({ length: 128 }, (_, c) => unicodeCategory(c));
+const characterType = (c: number) => c >= 0 && c < 128 ? asciiCategories[c] : unicodeCategory(c);
 rt.register({
   name: "java/lang/Character", ctor: JChar,
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
@@ -1307,7 +1327,10 @@ rt.register({
     "static toCodePoint(CC)I": (h: number, l: number) => ((h - 0xd800) << 10) + (l - 0xdc00) + 0x10000,
     "static isISOControl(I)Z": isISOControl,
     "static isISOControl(C)Z": isISOControl,
-    "static isDefined(I)Z": () => 1,
+    "static getType(C)I": characterType,
+    "static getType(I)I": characterType,
+    "static isDefined(C)Z": (c: number) => +(characterType(c) !== 0),
+    "static isDefined(I)Z": (c: number) => +(characterType(c) !== 0),
     "<init>(C)V": function (this: JChar, v: number) { this.v = v; },
     "charValue()C": function (this: JChar) { return this.v; },
     "compareTo(Ljava/lang/Character;)I": cmpV,
@@ -1327,6 +1350,7 @@ rt.register({
     })),
     "static isUpperCase(C)Z": (c: number) => { const s = String.fromCharCode(c); return s !== s.toLowerCase() && s === s.toUpperCase() ? 1 : 0; },
     "static isLowerCase(C)Z": (c: number) => { const s = String.fromCharCode(c); return s !== s.toUpperCase() && s === s.toLowerCase() ? 1 : 0; },
+    "static toTitleCase(C)C": charTitleCase,
     "static toUpperCase(C)C": (c: number) => String.fromCharCode(c).toUpperCase().charCodeAt(0),
     "static toLowerCase(C)C": (c: number) => String.fromCharCode(c).toLowerCase().charCodeAt(0),
     "static digit(CI)I": (c: number, r: number) => { const d = parseInt(String.fromCharCode(c), r); return Number.isNaN(d) ? -1 : d; },

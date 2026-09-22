@@ -126,6 +126,8 @@ const SERVICE_CLASS: Record<string, string> = {
   autofill: "android/view/autofill/AutofillManager",
   textservices: "android/view/textservice/TextServicesManager",
   user: "android/os/UserManager",
+  restrictions: "android/content/RestrictionsManager",
+  appwidget: "android/appwidget/AppWidgetManager",
   shortcut: "android/content/pm/ShortcutManager",
   appops: "android/app/AppOpsManager",
   systemhealth: "android/os/health/SystemHealthManager",

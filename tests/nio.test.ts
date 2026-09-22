@@ -88,6 +88,22 @@ test("FileChannel.write drains a ByteBuffer at the shared file position", async 
   });
 });
 
+test("FileChannel truncation shrinks storage and the shared position without extending files", async () => {
+  for (const kind of ["java/io/FileOutputStream", "java/io/RandomAccessFile"]) {
+    const path = `/tmp/truncate-${kind.split("/").at(-1)}`;
+    const file = kind.endsWith("RandomAccessFile") ? await newObj(kind, "(Ljava/lang/String;Ljava/lang/String;)V", path, "rw") : await newObj(kind, "(Ljava/lang/String;)V", path);
+    await vcall(file, "write", "([B)V", new Int8Array([1, 2, 3]));
+    const channel = await vcall(file, "getChannel", "()Ljava/nio/channels/FileChannel;");
+    expect(await vcall(channel, "truncate", "(J)Ljava/nio/channels/FileChannel;", 2n)).toBe(channel);
+    expect(await vcall(channel, "position", "()J")).toBe(2n);
+    await vcall(channel, "truncate", "(J)Ljava/nio/channels/FileChannel;", 10n);
+    expect(await vcall(channel, "size", "()J")).toBe(2n);
+    await vcall(file, "close", "()V");
+    expect([...vfs.read(path)!]).toEqual([1, 2]);
+    await expect(vcall(channel, "truncate", "(J)Ljava/nio/channels/FileChannel;", 0n)).rejects.toMatchObject({ constructor: rt.link("java/nio/channels/ClosedChannelException").ctor });
+  }
+});
+
 test("Channels adapt input and output streams without copying their state", async () => {
   const input = await newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array([1, 2, 3]));
   const readable = await scall("java/nio/channels/Channels", "newChannel",

@@ -563,6 +563,7 @@ rt.register({
       return mkURI((m[1] ?? "") + (m[2] ?? "") + out.join("/") + m[4]);
     },
     "toASCIIString()Ljava/lang/String;": function (this: JURI) { return this.u; },
+    "isAbsolute()Z": function (this: JURI) { return +(this.parts().scheme !== null); },
     "getScheme()Ljava/lang/String;": function (this: JURI) { return this.parts().scheme; },
     "getHost()Ljava/lang/String;": function (this: JURI) { return this.parts().host; },
     "getAuthority()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().authority); },
@@ -838,8 +839,8 @@ class JURLConnection extends JObj {
   stream(): JHttpInputStream { return this.res!.stream; }
 }
 /** an accessor that needs the response: connect first */
-function withRes<A extends unknown[]>(f: (this: JURLConnection, r: HttpRes, ...a: A) => unknown) {
-  return async function (this: JURLConnection, ...a: A) { return f.call(this, await this.connect(), ...a); };
+function withRes<A extends unknown[], C extends JURLConnection = JURLConnection>(f: (this: C, r: HttpRes, ...a: A) => unknown) {
+  return async function (this: C, ...a: A) { return f.call(this, await this.connect(), ...a); };
 }
 const asLong = (v: string | null, d: bigint) => v && /^\s*-?\d+\s*$/.test(v) ? BigInt(v.trim()) : d;
 // a jar: URL names an entry of an archive on the class path; the stream is the URL's own openStream
@@ -937,10 +938,10 @@ rt.register({
   },
 });
 const HTTP_METHODS = new Set(["GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "TRACE", "PATCH"]);
-class JHttpURLConnection extends JURLConnection { chunkLength = -1; fixedContentLength = -1; fixedContentLengthLong = -1n; }
+class JHttpURLConnection extends JURLConnection { responseCode = -1; responseMessage: string | null = null; chunkLength = -1; fixedContentLength = -1; fixedContentLengthLong = -1n; }
 rt.register({
   name: "java/net/HttpURLConnection", ctor: JHttpURLConnection, sup: "java/net/URLConnection",
-  fields: { method: "method", instanceFollowRedirects: "follow", chunkLength: "chunkLength", fixedContentLength: "fixedContentLength", fixedContentLengthLong: "fixedContentLengthLong" },
+  fields: { responseCode: "responseCode", responseMessage: "responseMessage", method: "method", instanceFollowRedirects: "follow", chunkLength: "chunkLength", fixedContentLength: "fixedContentLength", fixedContentLengthLong: "fixedContentLengthLong" },
   statics: {
     HTTP_OK: 200, HTTP_CREATED: 201, HTTP_ACCEPTED: 202, HTTP_NOT_AUTHORITATIVE: 203, HTTP_NO_CONTENT: 204, HTTP_RESET: 205,
     HTTP_PARTIAL: 206, HTTP_MULT_CHOICE: 300, HTTP_MOVED_PERM: 301, HTTP_MOVED_TEMP: 302, HTTP_SEE_OTHER: 303,
@@ -966,8 +967,8 @@ rt.register({
     "setChunkedStreamingMode(I)V": function (this: JHttpURLConnection, n: number) { this.chunkLength = n <= 0 ? 4096 : n; },
     "setFixedLengthStreamingMode(I)V": function (this: JHttpURLConnection, n: number) { this.fixedContentLength = n; this.fixedContentLengthLong = BigInt(n); },
     "setFixedLengthStreamingMode(J)V": function (this: JHttpURLConnection, n: bigint) { this.fixedContentLengthLong = n; this.fixedContentLength = Number(BigInt.asIntN(32, n)); },
-    "getResponseCode()I": withRes((r) => r.status),
-    "getResponseMessage()Ljava/lang/String;": withRes((r) => r.msg || null),
+    "getResponseCode()I": withRes(function (this: JHttpURLConnection, r) { this.responseMessage = r.msg || null; return this.responseCode = r.status; }),
+    "getResponseMessage()Ljava/lang/String;": withRes(function (this: JHttpURLConnection, r) { this.responseCode = r.status; return this.responseMessage = r.msg || null; }),
     "getErrorStream()Ljava/io/InputStream;": async function (this: JHttpURLConnection) {
       // AOSP connects here too, and answers null for any failure rather than throwing
       try { return (await this.connect()).status >= 400 ? this.stream() : null; } catch { return null; }

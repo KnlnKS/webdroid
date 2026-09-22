@@ -374,7 +374,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     "onSearchRequested(Landroid/view/SearchEvent;)Z", "onKeyDown(ILandroid/view/KeyEvent;)Z",
     "onKeyUp(ILandroid/view/KeyEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
     "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z", "dispatchTouchEvent(Landroid/view/MotionEvent;)Z",
-    "isInMultiWindowMode()Z", "isInPictureInPictureMode()Z"),
+    "isInMultiWindowMode()Z", "isInPictureInPictureMode()Z", "isLaunchedFromBubble()Z"),
   ...stubs(null, "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;",
     "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;",
     "onCreateView(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
@@ -814,17 +814,17 @@ for (const [name, methods, statics] of [
   // a charging battery at 80%; counters the platform cannot read answer Integer/Long.MIN_VALUE
   // as BatteryManager does for an unsupported property
   ["android/os/BatteryManager", {
-    "getIntProperty(I)I": (id: number) => id === 4 ? 80 : id === 6 ? 2 : -2147483648,
-    "getLongProperty(I)J": (id: number) => id === 4 ? 80n : id === 6 ? 2n : -9223372036854775808n,
-    "isCharging()Z": () => 1,
+    "getIntProperty(I)I": (id: number) => id === 4 ? device.battery.level : id === 6 ? device.battery.status : -2147483648,
+    "getLongProperty(I)J": (id: number) => id === 4 ? BigInt(device.battery.level) : id === 6 ? BigInt(device.battery.status) : -9223372036854775808n,
+    "isCharging()Z": () => +(device.battery.status === 2 || device.battery.status === 5),
     "computeChargeTimeRemaining()J": () => -1n,
   }],
   ["android/hardware/display/DisplayManager", {
     // one fixed built-in display: unknown ids are null as in AOSP, and registered listeners
     // never fire because no display is ever added, removed or reconfigured here
     "getDisplay(I)Landroid/view/Display;": (id: number) => (id === 0 ? display() : null),
-    "getDisplays()[Landroid/view/Display;": () => jarray([display()], "Landroid/view/Display;"),
-    "getDisplays(Ljava/lang/String;)[Landroid/view/Display;": (cat: string | null) => jarray(cat === null ? [display()] : [], "Landroid/view/Display;"),
+    "getDisplays()[Landroid/view/Display;": async () => jarray([await display()], "Landroid/view/Display;"),
+    "getDisplays(Ljava/lang/String;)[Landroid/view/Display;": async (cat: string | null) => jarray(cat === null ? [await display()] : [], "Landroid/view/Display;"),
     "registerDisplayListener(Landroid/hardware/display/DisplayManager$DisplayListener;Landroid/os/Handler;)V": (l: unknown) => {
       if (l === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "listener must not be null");
       displayListeners.add(l);
@@ -1059,11 +1059,10 @@ rt.register({
 });
 
 class JAppWidgetManager extends JObj {}
-const theAppWidgetManager = new JAppWidgetManager();
 rt.register({
   name: "android/appwidget/AppWidgetManager", ctor: JAppWidgetManager,
   methods: {
-    "static getInstance(Landroid/content/Context;)Landroid/appwidget/AppWidgetManager;": () => theAppWidgetManager,
+    "static getInstance(Landroid/content/Context;)Landroid/appwidget/AppWidgetManager;": () => systemService(null, "appwidget"),
     "getAppWidgetIds(Landroid/content/ComponentName;)[I": () => new Int32Array(0),
     "getInstalledProviders()Ljava/util/List;": () => newArrayList(),
     "getInstalledProvidersForPackage(Ljava/lang/String;Landroid/os/UserHandle;)Ljava/util/List;": () => newArrayList(),

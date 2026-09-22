@@ -8,10 +8,10 @@ import { rt, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, boxInt } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
-import { JAlertDialog } from "./dialog";
+import { JAlertDialog, initDialog } from "./dialog";
 import { JLinearLP, attachView, addUnattachedView, detachView, requestLayout, invalidate, initViewFromCtx, inheritContext } from "./view";
 import { tfMedium } from "./graphics";
-import { JAttrSet } from "./res";
+import { JAttrSet, themeOf } from "./res";
 import { JLinearLayout } from "./layouts";
 import { JTextView } from "./textview";
 import { themeAccent } from "./widget";
@@ -219,13 +219,13 @@ class JTimePickerDialog extends JAlertDialog {
   picker: JTimePicker | null = null;
   timeSetL: unknown = null;
 }
-async function initTimePickerDialog(d: JTimePickerDialog, c: unknown, listener: unknown, hourOfDay: number, minute: number, is24HourView: number) {
-  d.jctx = c;
+async function initTimePickerDialog(d: JTimePickerDialog, c: unknown, listener: unknown, hourOfDay: number, minute: number, is24HourView: number, themeId = 0) {
+  await initDialog.call(d, c, themeId);
   const tp = new JTimePicker();
-  tp.ctx = c;
-  const host = (c as JContext | null)?.$host;
+  tp.ctx = d.jctx;
+  const host = (d.jctx as JContext | null)?.$host;
   tp.jres = host?.res ?? null;
-  tp.theme = host?.theme ?? null;
+  tp.theme = themeOf(d.jctx);
   tp.hourVal = hourOfDay | 0;
   tp.minuteVal = minute | 0;
   tp.is24 = !!is24HourView;
@@ -248,8 +248,7 @@ const timePickerDialogMethods: NativeSpec["methods"] = {
     },
   "<init>(Landroid/content/Context;ILandroid/app/TimePickerDialog$OnTimeSetListener;IIZ)V":
     function (this: JTimePickerDialog, c: unknown, themeId: number, l: unknown, h: number, m: number, is24: number) {
-      this.themeId = themeId | 0;
-      return initTimePickerDialog(this, c, l, h, m, is24);
+      return initTimePickerDialog(this, c, l, h, m, is24, themeId);
     },
   "getTimePicker()Landroid/widget/TimePicker;": function (this: JTimePickerDialog) { return this.picker; },
   "updateTime(II)V": function (this: JTimePickerDialog, h: number, m: number) {

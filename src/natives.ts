@@ -49,6 +49,7 @@ import "./android/mediasession";
 import "./android/intentservice";
 import "./android/resultreceiver";
 import "./android/graphics";
+import "./android/runtime-shader";
 import "./android/rendereffect";
 import "./android/imagedecoder";
 import "./android/fonts";

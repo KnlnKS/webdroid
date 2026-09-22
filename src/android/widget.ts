@@ -1,5 +1,5 @@
 import { AID } from "./res";
-import { JView, initViewFromCtx, invalidate, requestLayout, resolveSizeAndState, uiState, JViewGroup } from "./view";
+import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, uiState, JViewGroup } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild, drawableSize, JLayerDrawable } from "./drawable";
 import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, flagSetters } from "../jvm/runtime";
 import { type JAttrSet, rvColor, obtainStyled, rvInt, rvDimen } from "./res";
@@ -58,8 +58,8 @@ rt.register({
     ...stubs(null, "getInterpolator()Landroid/view/animation/Interpolator;"),
     "onMeasure(II)V": function (this: JProgressBar, wSpec: number, hSpec: number) {
       const dw = this.horizontal ? 48 : 96, dh = this.horizontal ? 16 : 96;
-      this.measuredW = resolveSizeAndState(Math.max(dw + this.padL + this.padR, this.minW), wSpec);
-      this.measuredH = resolveSizeAndState(Math.max(dh + this.padT + this.padB, this.minH), hSpec);
+      this.measuredW = resolveSize(Math.max(dw + this.padL + this.padR, this.minW), wSpec);
+      this.measuredH = resolveSize(Math.max(dh + this.padT + this.padB, this.minH), hSpec);
     },
     "onDraw(Landroid/graphics/Canvas;)V": function (this: JProgressBar, cv: JCanvas) {
       const ctx = cv.ctx;
@@ -164,8 +164,8 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
     const thread = curThread, d = this.progressD;
     const w = d ? Math.max(0, Number(await drawableSize(d, false, thread))) : 0;
     const h = d ? Math.max(0, Number(await drawableSize(d, true, thread))) : 0;
-    this.measuredW = resolveSizeAndState(Math.max(this.minW, w + this.padL + this.padR), ws);
-    this.measuredH = resolveSizeAndState(Math.max(this.minH, Math.max(h, this.thumbH) + this.padT + this.padB), hs);
+    this.measuredW = resolveSize(Math.max(this.minW, w + this.padL + this.padR), ws);
+    this.measuredH = resolveSize(Math.max(this.minH, Math.max(h, this.thumbH) + this.padT + this.padB), hs);
   },
   "onDraw(Landroid/graphics/Canvas;)V": async function (this: JSeekBar, canvas: JCanvas) {
     const thread = curThread, ctx = canvas.ctx, d = this.progressD;
@@ -351,8 +351,8 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
   },
   "onMeasure(II)V": async function (this: JCompoundButton, wSpec: number, hSpec: number) {
     await callSelf(textViewMethods, "onMeasure(II)V", this, wSpec, hSpec);
-    this.measuredW = resolveSizeAndState(this.measuredW + this.buttonW, wSpec);
-    this.measuredH = resolveSizeAndState(Math.max(this.measuredH, device.dp(48)), hSpec);
+    this.measuredW = resolveSize(this.measuredW + this.buttonW, wSpec);
+    this.measuredH = resolveSize(Math.max(this.measuredH, device.dp(48)), hSpec);
   },
   "onDraw(Landroid/graphics/Canvas;)V": async function (this: JCompoundButton, cv: JCanvas) {
     const thread = curThread;
@@ -472,8 +472,8 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initSpace,
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": initSpace,
     "onMeasure(II)V": async function (this: JView, wSpec: number, hSpec: number) {
-      this.measuredW = resolveSizeAndState(await vcall(this, "getSuggestedMinimumWidth", "()I"), wSpec) & 0xffffff;
-      this.measuredH = resolveSizeAndState(await vcall(this, "getSuggestedMinimumHeight", "()I"), hSpec) & 0xffffff;
+      this.measuredW = resolveSize(await vcall(this, "getSuggestedMinimumWidth", "()I"), wSpec) & 0xffffff;
+      this.measuredH = resolveSize(await vcall(this, "getSuggestedMinimumHeight", "()I"), hSpec) & 0xffffff;
     },
     "draw(Landroid/graphics/Canvas;)V": () => {},
   },

@@ -1,5 +1,6 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
+import { recordOrRun, recordingContext, replayCanvas, replayWithSemantics, type Ctx2D } from "./recording";
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
@@ -251,6 +252,12 @@ function hsvToColor(alpha: number, hsv: Float32Array): number {
 }
 
 const ROBOTO = "Roboto, sans-serif";
+export const SYSTEM_FONTS = [
+  ["Roboto", "Roboto-Regular.ttf", 400, "normal"], ["Roboto Medium", "Roboto-Medium.ttf", 500, "normal"],
+  ["Roboto", "Roboto-Bold.ttf", 700, "normal"], ["Roboto", "Roboto-Italic.ttf", 400, "italic"],
+] as const;
+export const SYSTEM_EMOJI_FONTS = [["Noto Emoji", "NotoColorEmoji.ttf"], ["Noto Emoji Flags", "NotoColorEmojiFlags.ttf"]] as const;
+const EMOJI_FALLBACK = SYSTEM_EMOJI_FONTS.map(([family]) => family).join(", ");
 export class JTypeface extends JObj {
   family = ROBOTO;
   bold = false; italic = false;
@@ -357,14 +364,24 @@ export class JPaint extends JObj {
   private fBold = false;
   font(): string {
     if (this.fTf === this.tf && this.fSize === this.textSize && this.fBold === this.fakeBold) return this.fCache;
-    const it = this.tf.italic ? "italic " : "";
-    let w = this.fakeBold || this.tf.bold ? 700 : this.tf.weight;
+    let w = this.fakeBold ? Math.max(700, this.tf.weight) : this.tf.weight;
     if (!(w >= 100 && w <= 1000)) w = 400; // bogus weights (untyped-register artifacts) → regular
+    let family = this.tf.family;
+    if (family === ROBOTO) {
+      // Minikin keeps the first face on an equal weight/slant score; CSS prefers heavier weights.
+      const score = (face: typeof SYSTEM_FONTS[number]) => Math.abs(Math.floor(w / 100) - face[2] / 100) + (this.tf.italic !== (face[3] === "italic") ? 2 : 0);
+      let face: typeof SYSTEM_FONTS[number] = SYSTEM_FONTS[0];
+      for (const candidate of SYSTEM_FONTS) if (score(candidate) < score(face)) face = candidate;
+      family = face[0] + ", sans-serif";
+      w = w >= 600 && w - face[2] >= 200 ? 700 : face[2];
+    }
+    const it = this.tf.italic ? "italic " : "";
     this.fTf = this.tf; this.fSize = this.textSize; this.fBold = this.fakeBold;
-    return (this.fCache = `${it}${w} ${this.textSize}px ${this.tf.family}`);
+    return (this.fCache = `${it}${w} ${this.textSize}px ${family.replace(/, sans-serif$/, "")}, ${EMOJI_FALLBACK}, sans-serif`);
   }
   fillStyle(ctx?: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): string | CanvasGradient | CanvasPattern {
-    if (this.shaderObj instanceof JBitmapShader && ctx) return this.shaderObj.pattern(ctx);
+    const pattern = ctx && this.shaderObj?.pattern(ctx);
+    if (pattern) return pattern;
     if (this.shader) return this.shader;
     const f = this.filterColor;
     if (this.filterMatrix) return cssColor(matrixColor(this.filterMatrix, this.color));
@@ -533,7 +550,7 @@ const paintMethods: NativeSpec["methods"] = {
   "getFontMetricsInt(Landroid/graphics/Paint$FontMetricsInt;)I": function (this: JPaint, fm: JFontMetricsInt | null) {
     return fillFontMetrics(this, fm, true);
   },
-  "getFontSpacing()F": function (this: JPaint) { return this.textSize * 1.17; },
+  "getFontSpacing()F": function (this: JPaint) { return fontDescent(this) - fontAscent(this); },
   "ascent()F": function (this: JPaint) { return fontAscent(this); },
   "descent()F": function (this: JPaint) { return fontDescent(this); },
   "getTextWidths(Ljava/lang/String;[F)I": function (this: JPaint, s: string, w: Float32Array) {
@@ -662,19 +679,13 @@ export function measureText(p: JPaint, s: string): number {
   perf.measureText++;
   return Math.fround(rawWidth(p.font(), s, p.language) + p.letterSpacingEm * p.textSize * s.length);
 }
-/**
- * The device font's vertical metrics, in em units: AOSP's Roboto build reports hhea
- * ascender/descender 1900/-500 as Paint ascent/descent and the OS/2 win metrics 2146/555 as
- * top/bottom, so a line is 1.172em. The Roboto we ship (the Google Fonts build) carries
- * 2146/-555 in hhea too, so the browser's fontBoundingBox is Android's top/bottom — every line
- * came out 12.5% too tall, and auto-sizing text (measure, overflow, shrink, repeat) converged
- * on the wrong size. main.ts applies these as ascent/descent-override on the loaded faces.
- */
-export const SYSTEM_FONT = { ascent: 1900 / 2048, descent: 500 / 2048, top: 2146 / 2048, bottom: 555 / 2048 };
+/** Android Paint retains fractional hhea ascent/descent and uses head.yMax/yMin for bounds.
+ * Browser bounding-box metrics round to pixels even with FontFace metric overrides. */
+export const SYSTEM_FONT = { ascent: 1900 / 2048, descent: 500 / 2048, top: 2163 / 2048, bottom: 555 / 2048 };
 type FontMetrics = typeof SYSTEM_FONT;
 /** Per CSS family, the metrics AOSP would report for it; anything unregistered is the device
  *  font's. fonts.ts fills this in as it registers a face out of an app's own resources. */
-const familyMetrics = new Map<string, FontMetrics>();
+const familyMetrics = new Map<string, FontMetrics>(SYSTEM_FONTS.map(([family]): [string, FontMetrics] => [family, SYSTEM_FONT]));
 export function setFamilyMetrics(family: string, m: FontMetrics) { familyMetrics.set(family, m); }
 /** the metrics of the first family in a paint's CSS stack — the one the browser will pick */
 function metricsOf(p: JPaint): FontMetrics | undefined {
@@ -703,8 +714,8 @@ function vmetrics(p: JPaint): { a: number; d: number } {
 }
 export function fontAscent(p: JPaint): number { return vmetrics(p).a; }
 export function fontDescent(p: JPaint): number { return vmetrics(p).d; }
-export function fontTop(p: JPaint): number { const m = metricsOf(p) ?? SYSTEM_FONT; return vmetrics(p).a * (m.top / m.ascent); }
-export function fontBottom(p: JPaint): number { const m = metricsOf(p) ?? SYSTEM_FONT; return vmetrics(p).d * (m.bottom / m.descent); }
+export function fontTop(p: JPaint): number { const m = metricsOf(p) ?? SYSTEM_FONT; return Math.fround(vmetrics(p).a * (m.top / m.ascent)); }
+export function fontBottom(p: JPaint): number { const m = metricsOf(p) ?? SYSTEM_FONT; return Math.fround(vmetrics(p).d * (m.bottom / m.descent)); }
 export function fillFontMetrics(p: JPaint, fm: { top: number; ascent: number; descent: number; bottom: number; leading: number } | null, int: boolean) {
   const a = fontAscent(p), d = fontDescent(p);
   const ascent = int ? Math.round(a) : a, descent = int ? Math.round(d) : d;
@@ -915,7 +926,9 @@ rt.register({
   },
 });
 
-class JShader extends JObj {
+export class JShader extends JObj {
+  pattern(_ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): CanvasGradient | CanvasPattern | null { return this.grad; }
+  deferredPattern(): ((ctx: Ctx2D) => CanvasPattern) | null { return null; }
   grad: CanvasGradient | CanvasPattern | null = null;
   /** setLocalMatrix: maps shader space into the canvas; null = identity */
   local: [number, number, number, number, number, number] | null = null;
@@ -1435,28 +1448,32 @@ export class JCanvas extends JObj {
     return this.semanticBase ? matMul(this.semanticBase, current) : current as [number, number, number, number, number, number];
   }
   recordText(text: string, x?: number, y?: number, size?: number, align = 0) {
-    const owner = this.semanticOwner;
-    if (!owner) return;
-    (owner.drawnText ??= []).push(text);
-    if (x === undefined || y === undefined || size === undefined) return;
-    const i = owner.drawnTextCount++;
-    if (!owner.drawnTextPoints || owner.drawnTextPoints.length < (i + 1) * 2) {
-      const next = new Float32Array(Math.max(8, (i + 1) * 4));
-      if (owner.drawnTextPoints) next.set(owner.drawnTextPoints);
-      owner.drawnTextPoints = next;
-    }
-    const cx = x + (align === 0 ? size : align === 2 ? -size : 0), cy = y - size * 0.3;
-    const m = this.ctx.getTransform();
-    let sx = m.a * cx + m.c * cy + m.e, sy = m.b * cx + m.d * cy + m.f;
-    if (this.semanticBase) {
-      const b = this.semanticBase;
-      const px = sx;
-      sx = b[0] * px + b[2] * sy + b[4];
-      sy = b[1] * px + b[3] * sy + b[5];
-    }
-    owner.drawnTextPoints[i * 2] = sx;
-    owner.drawnTextPoints[i * 2 + 1] = sy;
+    recordOrRun(this.ctx, ctx => {
+      const canvas = replayCanvas(ctx) ?? this;
+      const owner = canvas.semanticOwner;
+      if (!owner) return;
+      (owner.drawnText ??= []).push(text);
+      if (x === undefined || y === undefined || size === undefined) return;
+      const i = owner.drawnTextCount++;
+      if (!owner.drawnTextPoints || owner.drawnTextPoints.length < (i + 1) * 2) {
+        const next = new Float32Array(Math.max(8, (i + 1) * 4));
+        if (owner.drawnTextPoints) next.set(owner.drawnTextPoints);
+        owner.drawnTextPoints = next;
+      }
+      const cx = x + (align === 0 ? size : align === 2 ? -size : 0), cy = y - size * 0.3;
+      const m = ctx.getTransform();
+      let sx = m.a * cx + m.c * cy + m.e, sy = m.b * cx + m.d * cy + m.f;
+      if (canvas.semanticBase) {
+        const b = canvas.semanticBase;
+        const px = sx;
+        sx = b[0] * px + b[2] * sy + b[4];
+        sy = b[1] * px + b[3] * sy + b[5];
+      }
+      owner.drawnTextPoints[i * 2] = sx;
+      owner.drawnTextPoints[i * 2 + 1] = sy;
+    });
   }
+
   static wrap(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, w: number, h: number): JCanvas {
     const c = new JCanvas();
     c.ctx = ctx; c.w = w; c.h = h;
@@ -1464,15 +1481,18 @@ export class JCanvas extends JObj {
   }
   prep(p: JPaint, stroke: boolean) {
     const ctx = this.ctx;
+    const pattern = p.shaderObj?.deferredPattern();
+    if (pattern) recordOrRun(ctx, c => { c[stroke ? "strokeStyle" : "fillStyle"] = pattern(c); });
     if (stroke) {
-      ctx.strokeStyle = p.fillStyle(ctx) as string;
+      if (!pattern) ctx.strokeStyle = p.fillStyle(ctx) as string;
       ctx.lineWidth = Math.max(p.strokeWidth, 0.75);
       ctx.lineCap = p.strokeCapN;
       ctx.lineJoin = p.strokeJoinN;
       ctx.setLineDash(p.dash ?? []);
     } else {
-      ctx.fillStyle = p.fillStyle(ctx) as string;
+      if (!pattern) ctx.fillStyle = p.fillStyle(ctx) as string;
     }
+    return !!pattern || typeof CanvasPattern !== "undefined" && ctx[stroke ? "strokeStyle" : "fillStyle"] instanceof CanvasPattern;
   }
   private blurLayer: { source: JCanvas; target: OffscreenCanvasRenderingContext2D; paint: JPaint } | null = null;
   drawMask(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke?: (ctx: typeof this.ctx) => void) {
@@ -1533,10 +1553,10 @@ export class JCanvas extends JObj {
         const lm = p.shaderObj?.local;
         if (p.shaderObj instanceof JBitmapShader) fill(this.shaderClipCtx(lm ?? shaderIdentity, p.shaderObj));
         else {
-          this.prep(p, false);
+          const pattern = this.prep(p, false);
           // a gradient with a local matrix: Canvas2D gradients have no transform of their own, so
           // clip to the shape and fill the plane under the matrix instead
-          fill(lm && !(p.shader instanceof CanvasPattern) ? this.shaderClipCtx(lm) : this.ctx);
+          fill(lm && !pattern ? this.shaderClipCtx(lm) : this.ctx);
         }
       }
       if (p.style === 1 || p.style === 2) { this.prep(p, true); stroke(this.ctx); }
@@ -1646,8 +1666,35 @@ function clipRect(this: JCanvas, l: number, t: number, r: number, b: number) {
   ctx.clip();
   return +(r > l && b > t);
 }
+function clipOutRect(this: JCanvas, l: number, t: number, r: number, b: number) {
+  if (!(r > l && b > t)) return 1;
+  const excluded = new Path2D();
+  excluded.rect(l, t, r - l, b - t);
+  const apply = (ctx: Ctx2D) => {
+    const matrix = ctx.getTransform(), inverse = new Path2D();
+    inverse.rect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    inverse.addPath(excluded, matrix);
+    ctx.resetTransform();
+    try { ctx.clip(inverse, "evenodd"); }
+    finally { ctx.setTransform(matrix); }
+  };
+  // RenderNode replay supplies the parent transform and the actual destination bounds.
+  recordOrRun(this.ctx, apply);
+  return 1;
+}
 function drawRect(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
   this.drawShape(p, (c) => c.fillRect(l, t, r - l, b - t), (c) => c.strokeRect(l, t, r - l, b - t));
+}
+function drawColor(this: JCanvas, color: number, clear = false) {
+  const fill = cssColor(color);
+  const apply = (ctx: Ctx2D) => {
+    ctx.save();
+    ctx.resetTransform();
+    if (clear) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    else { ctx.fillStyle = fill; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); }
+    ctx.restore();
+  };
+  recordOrRun(this.ctx, apply);
 }
 /** ellipse arc in the box; a full sweep without the centre is drawOval */
 function drawArc(this: JCanvas, l: number, t: number, r: number, b: number, start: number, sweep: number, useCenter: number, p: JPaint) {
@@ -1750,10 +1797,13 @@ export const canvasMethods: NativeSpec["methods"] = {
   "clipRect(FFFF)Z": clipRect,
   "clipRect(IIII)Z": clipRect,
   "clipRect(FFFFLandroid/graphics/Region$Op;)Z": function (this: JCanvas, l: number, t: number, r: number, b: number, op: { ename?: string } | null) {
-    // Region.Op other than INTERSECT (esp. DIFFERENCE for scrollbar exclusion) is
-    // unsupported on a 2D context; ignore non-intersect ops rather than corrupt the clip
+    if (op?.ename === "DIFFERENCE") return clipOutRect.call(this, l, t, r, b);
     return op && op.ename && op.ename !== "INTERSECT" ? 1 : clipRect.call(this, l, t, r, b);
   },
+  "clipOutRect(FFFF)Z": clipOutRect,
+  "clipOutRect(IIII)Z": clipOutRect,
+  "clipOutRect(Landroid/graphics/Rect;)Z": function (this: JCanvas, r: JRect) { return clipOutRect.call(this, r.left, r.top, r.right, r.bottom); },
+  "clipOutRect(Landroid/graphics/RectF;)Z": function (this: JCanvas, r: JRectF) { return clipOutRect.call(this, r.left, r.top, r.right, r.bottom); },
   "clipRect(Landroid/graphics/Rect;)Z": function (this: JCanvas, r: JRect) { return clipRect.call(this, r.left, r.top, r.right, r.bottom); },
   "clipRect(Landroid/graphics/RectF;)Z": function (this: JCanvas, r: JRectF) { return clipRect.call(this, r.left, r.top, r.right, r.bottom); },
   "clipPath(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z": function (this: JCanvas, path: JPath, op: { ename?: string } | null) {
@@ -1774,22 +1824,9 @@ export const canvasMethods: NativeSpec["methods"] = {
     r.right = this.w; r.bottom = this.h;
     return r;
   },
-  "drawColor(I)V": function (this: JCanvas, c: number) {
-    this.ctx.save();
-    this.ctx.fillStyle = cssColor(c);
-    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
-    this.ctx.fillRect(0, 0, this.w, this.h);
-    this.ctx.restore();
-  },
+  "drawColor(I)V": drawColor,
   "drawColor(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JCanvas, c: number, m: { ord: number }) {
-    if (m?.ord === 0) { // CLEAR
-      this.ctx.save();
-      this.ctx.setTransform(1, 0, 0, 1, 0, 0);
-      this.ctx.clearRect(0, 0, this.w, this.h);
-      this.ctx.restore();
-    } else {
-      (this as any)[drawColorKey](c);
-    }
+    drawColor.call(this, c, m?.ord === 0);
   },
   "drawRGB(III)V": function (this: JCanvas, r: number, g: number, b: number) {
     (this as any)[drawColorKey]((0xff000000 | (r << 16) | (g << 8) | b) | 0);
@@ -1874,8 +1911,7 @@ export const canvasMethods: NativeSpec["methods"] = {
   "drawPicture(Landroid/graphics/Picture;Landroid/graphics/Rect;)V": function (this: JCanvas, picture: JPicture, dst: JRect) { drawPicture(this, picture, dst); },
   ...noops("enableZ()V", "disableZ()V",
     "setDrawFilter(Landroid/graphics/DrawFilter;)V"),
-  ...stubs(1, "clipOutRect(FFFF)Z", "clipOutRect(IIII)Z", "clipOutRect(Landroid/graphics/Rect;)Z",
-    "clipOutPath(Landroid/graphics/Path;)Z", "isHardwareAccelerated()Z"),
+  ...stubs(1, "clipOutPath(Landroid/graphics/Path;)Z", "isHardwareAccelerated()Z"),
   ...stubs(0, "quickReject(FFFFLandroid/graphics/Canvas$EdgeType;)Z"),
   "setBitmap(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
 };
@@ -1893,7 +1929,7 @@ function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
   try {
     ctx.font = p.font();
     if ("lang" in ctx) ctx.lang = p.language;
-    ctx.fillStyle = p.fillStyle(ctx) as string;
+    cv.prep(p, false);
     ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
     ctx.textBaseline = "alphabetic";
     if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
@@ -2023,35 +2059,6 @@ class JRenderNode extends JObj {
   effect: JRenderEffect | null = null;
   effectInput: OffscreenCanvas | null = null;
 }
-type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-/** recording proxy: applies ops immediately to the mirror octx (so reads like
- *  measureText/getTransform work) while appending replay closures to node.ops */
-function mkRecorder(node: JRenderNode): Ctx2D {
-  const octx = node.octx!;
-  const base = {
-    __isRecorder: true,
-    __record(fn: (c: Ctx2D) => void) { node.ops.push(fn); },
-  };
-  const fns = new Map<PropertyKey, (...args: unknown[]) => unknown>();
-  return new Proxy(base, {
-    get(t, p) {
-      if (p in t) return (t as Record<PropertyKey, unknown>)[p];
-      const v = (octx as unknown as Record<PropertyKey, unknown>)[p];
-      if (typeof v !== "function") return v;
-      let w = fns.get(p);
-      if (!w) fns.set(p, w = (...args: unknown[]) => {
-        node.ops.push((c) => { ((c as unknown as Record<PropertyKey, (...a: unknown[]) => unknown>)[p])(...args); });
-        return (v as (...a: unknown[]) => unknown).apply(octx, args);
-      });
-      return w;
-    },
-    set(t, p, val) {
-      node.ops.push((c) => { (c as unknown as Record<PropertyKey, unknown>)[p] = val; });
-      (octx as unknown as Record<PropertyKey, unknown>)[p] = val;
-      return true;
-    },
-  }) as unknown as Ctx2D;
-}
 /** replay a node's display list into ctx with its transform props applied */
 // android.graphics.Picture is the same recording the render node already does, without the
 // transform properties: what it recorded is replayed into whatever canvas is drawing it.
@@ -2068,7 +2075,7 @@ rt.register({
     "getWidth()I": function (this: JPicture) { return this.node.w; },
     "getHeight()I": function (this: JPicture) { return this.node.h; },
     "draw(Landroid/graphics/Canvas;)V": function (this: JPicture, cv: JCanvas) {
-      if (this.node.hasDL) for (const op of this.node.ops) op(cv.ctx);
+      replayWithSemantics(cv, () => { if (this.node.hasDL) for (const op of this.node.ops) op(cv.ctx); });
     },
   },
 });
@@ -2081,7 +2088,7 @@ function drawPicture(canvas: JCanvas, picture: JPicture, dst?: JRect) {
       ctx.translate(dst.left, dst.top);
       if (node.w > 0 && node.h > 0) ctx.scale((dst.right - dst.left) / node.w, (dst.bottom - dst.top) / node.h);
     }
-    if (node.hasDL) for (const op of node.ops) op(ctx);
+    replayWithSemantics(canvas, () => { if (node.hasDL) for (const op of node.ops) op(ctx); });
   } finally { ctx.restore(); }
 }
 function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
@@ -2108,7 +2115,10 @@ function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
       if (surface.width !== n.w) surface.width = n.w;
       if (surface.height !== n.h) surface.height = n.h;
       const input = surface.getContext("2d")!; input.reset();
-      for (const op of n.ops) op(input);
+      const recording = replayCanvas(ctx);
+      const canvas = JCanvas.wrap(input, n.w, n.h);
+      if (recording) { canvas.semanticOwner = recording.semanticOwner; canvas.semanticBase = recording.semanticTransform(); }
+      replayWithSemantics(canvas, () => { for (const op of n.ops) op(input); });
       n.effect.draw(ctx, surface);
     } else for (const op of n.ops) op(ctx);
   }
@@ -2156,7 +2166,7 @@ rt.register({
       }
       this.ops = [];
       const c = new JRecordingCanvas();
-      c.ctx = mkRecorder(this); c.w = cw; c.h = ch;
+      c.ctx = recordingContext(this.octx!, this.ops); c.w = cw; c.h = ch;
       return c;
     },
     "beginRecording()Landroid/graphics/RecordingCanvas;": async function (this: JRenderNode) {
@@ -2216,13 +2226,7 @@ rt.register({
 });
 canvasMethods["drawRenderNode(Landroid/graphics/RenderNode;)V"] = function (this: JCanvas, n: JRenderNode) {
   if (!n) return;
-  const t = this.ctx as unknown as { __isRecorder?: boolean; __record?: (fn: (c: Ctx2D) => void) => void };
-  if (t.__isRecorder) {
-    // deferred: replay the child's CURRENT display list at draw time, not record time
-    t.__record!((c) => drawNodeInto(c, n));
-  } else {
-    drawNodeInto(this.ctx, n);
-  }
+  replayWithSemantics(this, () => recordOrRun(this.ctx, ctx => drawNodeInto(ctx, n)));
 };
 rt.register({ name: "android/graphics/Paint", ctor: JPaint, methods: paintMethods });
 mkEnumSet("android/graphics/Canvas$EdgeType", ["BW", "AA"]);

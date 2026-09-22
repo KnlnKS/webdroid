@@ -3,7 +3,7 @@ import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
-import { JView, makeSpec, measureView, layoutView, MS_AT_MOST, MS_EXACTLY, resolveSizeAndState } from "../src/android/view";
+import { JView, makeSpec, measureView, layoutView, MS_AT_MOST, MS_EXACTLY, resolveSize } from "../src/android/view";
 
 rt.linkNatives();
 const onMeasure = mangleMethod("onMeasure", "(II)V");
@@ -33,12 +33,32 @@ test("a wrapping frame aligns multiple match-parent children to its final size",
   const frame = rt.make("android/widget/FrameLayout") as JView;
   const a = rt.make("android/view/View") as JView, b = rt.make("android/view/View") as JView;
   for (const [view, width] of [[a, 40], [b, 80]] as const) Object.assign(view, {
-    [onMeasure](w: number, h: number) { view.measuredW = resolveSizeAndState(width, w); view.measuredH = resolveSizeAndState(20, h); },
+    [onMeasure](w: number, h: number) { view.measuredW = resolveSize(width, w); view.measuredH = resolveSize(20, h); },
   });
   await add(frame, a, "FrameLayout", -1, 20);
   await add(frame, b, "FrameLayout", -1, 20);
   await measureView(frame, makeSpec(200, MS_AT_MOST), makeSpec(200, MS_AT_MOST));
   expect([frame.measuredW, a.measuredW, b.measuredW]).toEqual([80, 80, 80]);
+});
+
+test("container measurement preserves nested child size-state flags through the measure cache", async () => {
+  for (const owner of ["FrameLayout", "LinearLayout", "GridLayout", "RelativeLayout"]) {
+    const frame = rt.make("android/widget/FrameLayout");
+    const child = rt.make("android/view/View");
+    const middle = rt.make(`android/widget/${owner}`);
+    await add(frame, middle, "FrameLayout", -2, -2);
+    await add(middle, child, owner, -2, -2);
+    Object.assign(child, { [onMeasure](w: number, h: number) {
+      this.setMeasuredDimension(w & 0xffffff | 0x01000000, h & 0xffffff | 0x01000000);
+    } });
+    for (const size of [200, 100, 200]) {
+      await measureView(frame, makeSpec(size, MS_AT_MOST), makeSpec(size, MS_AT_MOST));
+      expect(await vcall(frame, "getMeasuredWidth", "()I")).toBe(size);
+      expect(await vcall(frame, "getMeasuredWidthAndState", "()I")).toBe(size | 0x01000000);
+      expect(await vcall(frame, "getMeasuredHeightAndState", "()I")).toBe(size | 0x01000000);
+      expect(await vcall(frame, "getMeasuredState", "()I")).toBe(0x01000100);
+    }
+  }
 });
 
 test("wrapping linear layouts size match-parent dividers from their siblings", async () => {

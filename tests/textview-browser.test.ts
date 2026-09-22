@@ -14,6 +14,9 @@ test("TextView measures and paints replacement spans with cached geometry and re
     const result = await page.evaluate(() => Object.getOwnPropertyDescriptor(window, "textViewProbe")?.value);
     expect(result).toMatchObject({ measures: 1, draws: 1, width: 24, center: [0, 255, 0, 255], outside: [0, 0, 0, 0], layout: true,
       ellipsis: ["A long title…"], cached: true, fitting: ["A long title with a location"], cleared: true });
+    expect(result.balanced).toEqual([["aaaaa", 0, 6], ["bb cccc", 6, 14], ["z", 14, 15]]);
+    expect(result.balancedSpanned).toEqual(["aaaaa", "bb cccc", "z"]);
+    expect(result.spaceReplacements).toEqual([{ draws: 1, visible: true }, { draws: 1, visible: true }]);
     expect(result.height).toBeGreaterThanOrEqual(32);
     expect(result.heightLimits).toEqual([20, 25, result.height]);
     expect(result.styles).toEqual([true, true, true]);

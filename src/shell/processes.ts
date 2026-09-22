@@ -45,7 +45,7 @@ type ServiceRequest = { kind: "bind"; intent: IntentData; key: string } | { kind
   | { kind: "pending"; operation: PendingOperation; fill: IntentData | null; alarmCount: number };
 type BroadcastData = { code: number; data: string | null; extras: ParcelData; aborted: boolean };
 type ActivityRequest = { kind: "launch"; id: number; taskId: number; component: string; intent: IntentData; caller: { pkg: string; cls: string } | null }
-  | { kind: "visibility"; phase: "pause" | "stop" | "resume" }
+  | { kind: "visibility"; phase: "pause" | "stop" | "resume" | "visible" }
   | { kind: "result"; request: number; code: number; data: IntentData | null } | { kind: "back" } | { kind: "finishTask"; taskId: number; resume: boolean };
 export const processPresentation = { visible: true, changed: (_visible: boolean) => {} };
 /** AOSP ActivityRecord: how long the previous activity may take to pause, then to stop */
@@ -59,6 +59,7 @@ type ProcessEndpoint = {
   broadcast: (intent: IntentData, component: string | null, ordered: boolean, result: BroadcastData) => Promise<BroadcastData>;
 };
 type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
+  translucent: boolean;
   ready: Promise<ProcessEndpoint>; resolve: (endpoint: ProcessEndpoint) => void; reject: (error: unknown) => void; dead: boolean;
   bindings: Map<string, { pkg: string; process: string }>;
   watchers: Set<() => void>; pending: Set<(error: unknown) => void> };
@@ -101,6 +102,7 @@ class ProcessBroker {
   private byName = new Map<string, Entry>();
   private nextPid = 1001;
   private foregroundPid = 0;
+  private shownPids = new Set<number>();
   private nextActivity = 1;
   private activities: { id: number; pid: number; taskId: number; caller: number; previous: number; request: number }[] = [];
   private activityQueue: Promise<void> = Promise.resolve();
@@ -113,7 +115,13 @@ class ProcessBroker {
     await this.broadcast(null, await encodeIntent(intent), "android.permission.RECEIVE_BOOT_COMPLETED", false);
   }
 
-  foreground(pid: number): void { this.foregroundPid = pid; }
+  foreground(pid: number): void { this.foregroundPid = pid; this.shownPids = new Set([pid]); }
+  presentation(pid: number, translucent: boolean): void {
+    const entry = this.entry(pid);
+    if (entry.translucent === translucent) return;
+    entry.translucent = translucent;
+    if (pid === this.foregroundPid) void this.queueActivity(() => pid === this.foregroundPid ? this.show(pid) : Promise.resolve());
+  }
   launchActivity(caller: number, pkg: string, process: string, component: string, intent: IntentData, request: number, callingClass: string | null = null, taskId = 0): Promise<void> {
     const source = this.entry(caller);
     const target = this.connect(pkg, process), activity = { id: this.nextActivity++, pid: target.pid, taskId, caller, previous: 0, request };
@@ -123,8 +131,7 @@ class ProcessBroker {
       this.activities.push(activity);
       try {
         await this.request(target, (endpoint) => endpoint.activity({ kind: "launch", id: activity.id, taskId, component, intent, caller: callingClass ? { pkg: source.pkg, cls: callingClass } : null }));
-        await this.visibility(previous, "stop", STOP_TIMEOUT_MS);
-        this.show(target.pid);
+        await this.show(target.pid);
       } catch (error) {
         this.activities.splice(this.activities.indexOf(activity), 1);
         await this.restore(activity, 0, null);
@@ -170,10 +177,11 @@ class ProcessBroker {
     return this.queueActivity(async () => {
       const entry = this.entry(pid);
       await this.visibility(entry, "pause", PAUSE_TIMEOUT_MS);
-      await this.visibility(entry, "stop", STOP_TIMEOUT_MS);
+      for (const shown of this.shownPids) if (this.alive(shown)) await this.visibility(this.entry(shown), "stop", STOP_TIMEOUT_MS);
+      this.shownPids.clear();
       await guestSleep(ms);
       await this.request(entry, (endpoint) => endpoint.activity({ kind: "visibility", phase: "resume" }));
-      this.show(pid);
+      await this.show(pid);
     });
   }
   /**
@@ -183,7 +191,7 @@ class ProcessBroker {
    * would otherwise hold the launch forever. Its late answer still lands, and a dead process
    * answers nothing.
    */
-  private visibility(entry: Entry, phase: "pause" | "stop", timeoutMs: number): Promise<void> {
+  private visibility(entry: Entry, phase: "pause" | "stop" | "visible", timeoutMs: number): Promise<void> {
     return new Promise((resolve) => {
       const timer = setTimeout(resolve, timeoutMs);
       this.request(entry, (endpoint) => endpoint.activity({ kind: "visibility", phase }))
@@ -199,18 +207,37 @@ class ProcessBroker {
     const target = this.alive(activity.previous) ? activity.previous : activity.caller;
     if (this.alive(target)) {
       await this.request(this.entry(target), (endpoint) => endpoint.activity({ kind: "visibility", phase: "resume" }));
-      this.show(target);
+      await this.show(target);
     }
     if (this.alive(activity.caller)) await this.result(activity, code, data);
   }
   private result(activity: { caller: number; request: number }, code: number, data: IntentData | null): Promise<void> {
     return this.request(this.entry(activity.caller), (endpoint) => endpoint.activity({ kind: "result", request: activity.request, code, data }));
   }
-  private show(pid: number): void {
+  private async show(pid: number): Promise<void> {
     this.foregroundPid = pid;
+    const visible = new Set<number>();
+    let current = pid, index = this.activities.length;
+    while (this.alive(current) && !visible.has(current)) {
+      visible.add(current);
+      if (!this.entry(current).translucent) break;
+      do { index--; } while (index >= 0 && this.activities[index].pid !== current);
+      if (index < 0) break;
+      current = this.activities[index].previous;
+    }
+    for (const covered of this.shownPids) {
+      if (!visible.has(covered) && this.alive(covered)) await this.visibility(this.entry(covered), "stop", STOP_TIMEOUT_MS);
+    }
+    for (const shown of visible) {
+      if (!this.shownPids.has(shown)) await this.visibility(this.entry(shown), "visible", STOP_TIMEOUT_MS);
+    }
+    this.shownPids = visible;
+    const layers = [...visible].reverse();
     for (const entry of this.entries.values()) {
       if (!entry.frame) continue;
-      entry.frame.hidden = entry.pid !== pid;
+      entry.frame.hidden = !visible.has(entry.pid);
+      entry.frame.style.zIndex = String(layers.indexOf(entry.pid) + 1);
+      entry.frame.style.pointerEvents = entry.pid === pid ? "auto" : "none";
     }
   }
 
@@ -220,7 +247,7 @@ class ProcessBroker {
     const owner = packages.get(pkg);
     if (!owner) throw new Error("Package not installed: " + pkg);
     let resolve!: Entry["resolve"], reject!: Entry["reject"];
-    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? this.nextPid++, frame: null, dead: false, bindings: new Map(), watchers: new Set(), pending: new Set(),
+    const entry: Entry = { pkg, process, uid: owner.uid, pid: pid ?? this.nextPid++, frame: null, translucent: false, dead: false, bindings: new Map(), watchers: new Set(), pending: new Set(),
       ready: new Promise((yes, no) => { resolve = yes; reject = no; }), resolve, reject };
     void entry.ready.catch(() => {});
     this.entries.set(entry.pid, entry); this.byName.set(key, entry);
@@ -383,6 +410,7 @@ export function connectProcess(): ProcessEndpoint {
   const broker = processBroker();
   let nextRequest = 1;
   const requests = new Map<number, ActivityResultTarget>();
+  activityTransport.presentation = translucent => broker.presentation(PROCESS_PID, translucent);
   activityTransport.launch = async (pkg, process, component, intent, result) => {
     const request = nextRequest++, data = await encodeIntent(intent);
     if (result && result.code >= 0) requests.set(request, result);
@@ -448,7 +476,7 @@ export function connectProcess(): ProcessEndpoint {
       if (request.kind === "back") return shell.pressBack();
       if (request.kind === "visibility") {
         await shell.activityVisibility(request.phase);
-        if (request.phase !== "pause") setVisible(request.phase === "resume");
+        if (request.phase !== "pause") setVisible(request.phase !== "stop");
       } else if (request.kind === "launch") {
         const intent = await decodeIntent(request.intent);
         await onMain(async () => {

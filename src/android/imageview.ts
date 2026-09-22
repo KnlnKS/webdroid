@@ -1,5 +1,5 @@
 import { AID } from "./res";
-import { JView, initViewFromCtx, requestLayout, invalidate, resolveSizeAndState, specMode, MS_EXACTLY } from "./view";
+import { JView, initViewFromCtx, requestLayout, invalidate, resolveSize, specMode, MS_EXACTLY } from "./view";
 import {
   type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, cslColor, drawableSize
 } from "./drawable";
@@ -145,13 +145,13 @@ const imageViewMethods: NativeSpec["methods"] = {
     let w = dw + this.padL + this.padR;
     let h = dh + this.padT + this.padB;
     w = Math.max(w, this.minW); h = Math.max(h, this.minH);
-    this.measuredW = resolveSizeAndState(w, wSpec);
-    this.measuredH = resolveSizeAndState(h, hSpec);
+    this.measuredW = resolveSize(w, wSpec);
+    this.measuredH = resolveSize(h, hSpec);
     if (this.adjustBounds && dw > 0 && dh > 0) {
       if (specMode(wSpec) === MS_EXACTLY && specMode(hSpec) !== MS_EXACTLY) {
-        this.measuredH = resolveSizeAndState(Math.round((this.measuredW - this.padL - this.padR) * dh / dw) + this.padT + this.padB, hSpec);
+        this.measuredH = resolveSize(Math.round((this.measuredW - this.padL - this.padR) * dh / dw) + this.padT + this.padB, hSpec);
       } else if (specMode(hSpec) === MS_EXACTLY && specMode(wSpec) !== MS_EXACTLY) {
-        this.measuredW = resolveSizeAndState(Math.round((this.measuredH - this.padT - this.padB) * dw / dh) + this.padL + this.padR, wSpec);
+        this.measuredW = resolveSize(Math.round((this.measuredH - this.padT - this.padB) * dw / dh) + this.padL + this.padR, wSpec);
       }
     }
   },

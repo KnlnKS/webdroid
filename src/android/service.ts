@@ -5,7 +5,7 @@
 import { rt, JObj, stubs, noops } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jutil";
 import { vcall } from "../jvm/natives/jlang";
-import { JUserHandle, PARCELABLE, PROCESS_UID, reportUncaught, userHandleForUid } from "./os";
+import { JBundle, JUserHandle, PARCELABLE, PROCESS_UID, reportUncaught, userHandleForUid } from "./os";
 import { onMain } from "./mainloop";
 
 // ── UserHandle: handles are canonical per Android user id.
@@ -37,6 +37,11 @@ rt.register({
     "getUserForSerialNumber(J)Landroid/os/UserHandle;": () => userHandleForUid(PROCESS_UID),
   },
 });
+
+rt.register({ name: "android/content/RestrictionsManager", ctor: class extends JObj {}, methods: {
+  "getApplicationRestrictions()Landroid/os/Bundle;": () => new JBundle(),
+  "hasRestrictionsProvider()Z": () => 0,
+} });
 
 // The browser cannot join the local multicast groups required by DNS-SD. Keep the Android
 // service present, but report that discovery could not start instead of inventing devices.

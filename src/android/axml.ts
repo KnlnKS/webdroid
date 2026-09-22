@@ -57,7 +57,9 @@ export class StringPool {
   styleOf(i: number): Int32Array | null {
     if (!this.stylesOff || i >= this.styleCount) return null;
     const v = this.view;
-    let p = this.stylesOff + v.getUint32(this.styleOffsets + i * 4, true);
+    const offset = v.getUint32(this.styleOffsets + i * 4, true);
+    if (offset === 0xffffffff) return null;
+    let p = this.stylesOff + offset;
     const out: number[] = [];
     for (;;) {
       const name = v.getUint32(p, true);

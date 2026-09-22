@@ -1,6 +1,43 @@
 import { jarray } from "../jvm/abi";
+import { curThread } from "../jvm/natives/jlang";
 import { newStringSet } from "../jvm/natives/jutil";
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, noops, rt } from "../jvm/runtime";
+
+rt.register({
+  name: "android/hardware/camera2/CameraCaptureSession", ctor: class extends JObj {},
+  ifaces: ["java/lang/AutoCloseable"], methods: { "<init>()V": function () {} },
+});
+rt.markers("android/hardware/camera2/CameraCharacteristics", "android/hardware/camera2/CaptureResult");
+rt.register({ name: "android/hardware/camera2/CameraDevice$StateCallback", ctor: class extends JObj {},
+  statics: { ERROR_CAMERA_IN_USE: 1, ERROR_MAX_CAMERAS_IN_USE: 2, ERROR_CAMERA_DISABLED: 3, ERROR_CAMERA_DEVICE: 4, ERROR_CAMERA_SERVICE: 5 },
+  methods: noops("<init>()V", "onClosed(Landroid/hardware/camera2/CameraDevice;)V"),
+});
+rt.register({ name: "android/hardware/camera2/CameraCaptureSession$StateCallback", ctor: class extends JObj {}, methods: noops(
+  "<init>()V",
+  "onReady(Landroid/hardware/camera2/CameraCaptureSession;)V",
+  "onActive(Landroid/hardware/camera2/CameraCaptureSession;)V",
+  "onCaptureQueueEmpty(Landroid/hardware/camera2/CameraCaptureSession;)V",
+  "onClosed(Landroid/hardware/camera2/CameraCaptureSession;)V",
+  "onSurfacePrepared(Landroid/hardware/camera2/CameraCaptureSession;Landroid/view/Surface;)V",
+) });
+rt.register({ name: "android/hardware/camera2/CameraCaptureSession$CaptureCallback", ctor: class extends JObj {}, methods: noops(
+  "<init>()V",
+  "onCaptureStarted(Landroid/hardware/camera2/CameraCaptureSession;Landroid/hardware/camera2/CaptureRequest;JJ)V",
+  "onReadoutStarted(Landroid/hardware/camera2/CameraCaptureSession;Landroid/hardware/camera2/CaptureRequest;JJ)V",
+  "onCapturePartial(Landroid/hardware/camera2/CameraCaptureSession;Landroid/hardware/camera2/CaptureRequest;Landroid/hardware/camera2/CaptureResult;)V",
+  "onCaptureProgressed(Landroid/hardware/camera2/CameraCaptureSession;Landroid/hardware/camera2/CaptureRequest;Landroid/hardware/camera2/CaptureResult;)V",
+  "onCaptureCompleted(Landroid/hardware/camera2/CameraCaptureSession;Landroid/hardware/camera2/CaptureRequest;Landroid/hardware/camera2/TotalCaptureResult;)V",
+  "onCaptureFailed(Landroid/hardware/camera2/CameraCaptureSession;Landroid/hardware/camera2/CaptureRequest;Landroid/hardware/camera2/CaptureFailure;)V",
+  "onCaptureSequenceCompleted(Landroid/hardware/camera2/CameraCaptureSession;IJ)V",
+  "onCaptureSequenceAborted(Landroid/hardware/camera2/CameraCaptureSession;I)V",
+  "onCaptureBufferLost(Landroid/hardware/camera2/CameraCaptureSession;Landroid/hardware/camera2/CaptureRequest;Landroid/view/Surface;J)V",
+) });
+
+rt.register({ name: "android/hardware/camera2/CameraManager$AvailabilityCallback", ctor: class extends JObj {}, methods: noops(
+  "<init>()V", "onCameraAvailable(Ljava/lang/String;)V", "onCameraUnavailable(Ljava/lang/String;)V",
+  "onCameraAccessPrioritiesChanged()V", "onPhysicalCameraAvailable(Ljava/lang/String;Ljava/lang/String;)V",
+  "onPhysicalCameraUnavailable(Ljava/lang/String;Ljava/lang/String;)V",
+) });
 
 class JCaptureRequestKey extends JObj { keyName = ""; }
 class JCaptureRequest extends JObj {
@@ -56,6 +93,14 @@ rt.register({
   name: "android/hardware/camera2/CameraManager", ctor: class extends JObj {},
   methods: {
     "getCameraIdList()[Ljava/lang/String;": () => jarray([], "Ljava/lang/String;"),
+    // The exposed camera topology is empty, so registration has no initial availability events.
+    "registerAvailabilityCallback(Ljava/util/concurrent/Executor;Landroid/hardware/camera2/CameraManager$AvailabilityCallback;)V": (executor: unknown) => {
+      if (executor == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "executor was null");
+    },
+    "registerAvailabilityCallback(Landroid/hardware/camera2/CameraManager$AvailabilityCallback;Landroid/os/Handler;)V": (_callback: unknown, handler: unknown) => {
+      if (handler == null && !curThread.looper) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No handler given, and current thread has no looper");
+    },
+    "unregisterAvailabilityCallback(Landroid/hardware/camera2/CameraManager$AvailabilityCallback;)V": () => {},
     "getConcurrentCameraIds()Ljava/util/Set;": () => newStringSet([]),
     "getCameraCharacteristics(Ljava/lang/String;)Landroid/hardware/camera2/CameraCharacteristics;": () => {
       throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown camera ID");

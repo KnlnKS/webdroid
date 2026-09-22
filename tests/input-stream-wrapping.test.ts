@@ -3,9 +3,31 @@ import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { newObj, vcall, vcallOn, JThread, curThread, setCurThread, mainThread } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
+import { JInputStream, readStreamFully } from "../src/jvm/natives/jio";
+class ForwardOnlyStream extends JInputStream { cursor = 0; bytes = new TextEncoder().encode("<svg/>"); }
+rt.register({ name: "test/ForwardOnlyStream", ctor: ForwardOnlyStream, sup: "java/io/InputStream", methods: {
+  "read()I": function (this: ForwardOnlyStream) { return this.cursor < this.bytes.length ? this.bytes[this.cursor++] : -1; },
+  "read([BII)I": function (this: ForwardOnlyStream, out: Int8Array, offset: number, count: number) {
+    if (!count) return 0;
+    const bytes = this.bytes.subarray(this.cursor, this.cursor + count);
+    out.set(bytes, offset); this.cursor += bytes.length; return bytes.length || -1;
+  },
+} });
 rt.linkNatives();
 const bytes = (values: number[]) => newObj("java/io/ByteArrayInputStream", "([B)V", Int8Array.from(values));
 const data = (source: unknown) => newObj("java/io/DataInputStream", "(Ljava/io/InputStream;)V", source);
+
+test("forward-only subclasses request buffering before probing and rewinding a stream", async () => {
+  const source = new ForwardOnlyStream();
+  expect(await vcall(source, "markSupported", "()Z")).toBe(0);
+  await expect(vcall(source, "reset", "()V")).rejects.toMatchObject({ msg: "mark/reset not supported" });
+  const buffer = await newObj("java/io/BufferedInputStream", "(Ljava/io/InputStream;)V", source);
+  await vcall(buffer, "mark", "(I)V", 3);
+  expect(await vcall(buffer, "read", "()I")).toBe(60);
+  expect(await vcall(buffer, "read", "()I")).toBe(115);
+  await vcall(buffer, "reset", "()V");
+  expect(new TextDecoder().decode(await readStreamFully(buffer))).toBe("<svg/>");
+});
 
 test("DataInputStream advances the original stream's cursor", async () => {
   const source = await bytes([0, 0, 1, 2, 3]), input = await data(source);

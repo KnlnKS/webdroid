@@ -1,8 +1,9 @@
 import { JMap } from "../jvm/natives/jutil";
-// android.database.* over sql.js (in-memory, persisted to localStorage per db).
+// android.database.* over sql.js, with snapshots in the shared private-file store.
 
 import initSqlJs, { type Database, type Statement } from "sql.js";
-import { charsToString, i8, u8 } from "../jvm/abi";
+import { i8, u8 } from "../jvm/abi";
+import { vfs } from "../jvm/natives/jio";
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { vcall, boxInt, box, JLong, JBool } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
@@ -20,10 +21,6 @@ async function ensureSql(): Promise<NonNullable<typeof SQL>> {
   return SQL;
 }
 
-function b64(bytes: Uint8Array): string {
-  const s = charsToString(bytes, 0, bytes.length);
-  return btoa(s);
-}
 function unb64(s: string): Uint8Array {
   const bin = atob(s);
   const out = new Uint8Array(bin.length);
@@ -71,7 +68,7 @@ class JSQLiteDatabase extends JObj {
   scheduleSave() {
     if (this.readOnly || this.path === ":memory:") return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => {
+    this.saveTimer = setTimeout(async () => {
       this.saveTimer = null;
       // Mid-transaction the file can hold spilled uncommitted pages whose undo lives in the
       // journal we do not copy; wait for the commit instead of persisting a torn snapshot.
@@ -79,7 +76,11 @@ class JSQLiteDatabase extends JObj {
       if (!SQL || !this.db) return;
       try {
         const bytes = snapshotBytes(SQL, this.db);
-        if (bytes) globalThis.localStorage?.setItem("wd:db:" + this.path, b64(bytes));
+        if (bytes) {
+          vfs.write(this.path, bytes);
+          await vfs.flush();
+          globalThis.localStorage?.removeItem("wd:db:" + this.path);
+        }
         else this.scheduleSave();
       } catch (e) {
         if (e instanceof Error && e.message.includes("locked")) this.scheduleSave();
@@ -167,11 +168,12 @@ export async function openDatabase(path: string, flags = 0x10000000): Promise<JS
   if (jdb?.open) return jdb;
   jdb = new JSQLiteDatabase();
   jdb.path = path;
-  let data: Uint8Array | null = null;
+  let data = vfs.read(path);
+  let legacy = false;
   const shared = path === ":memory:" ? undefined : sqliteStore.files.get(path);
   try {
-    const raw = globalThis.localStorage?.getItem("wd:db:" + path);
-    if (raw) data = unb64(raw);
+    const raw = !data && globalThis.localStorage?.getItem("wd:db:" + path);
+    if (raw) { data = unb64(raw); legacy = true; }
   } catch { /* */ }
   if (!shared && !data && path !== ":memory:" && !(flags & 0x10000000)) {
     throw rt.mkThrowable("android/database/sqlite/SQLiteCantOpenDatabaseException", "Database does not exist: " + path);
@@ -186,6 +188,7 @@ export async function openDatabase(path: string, flags = 0x10000000): Promise<JS
   }
   jdb.db.exec("PRAGMA user_version");
   dbCache.set(path, jdb);
+  if (legacy) jdb.scheduleSave();
   return jdb;
 }
 
@@ -702,12 +705,25 @@ rt.register({
 });
 
 // SQLiteOpenHelper: version migration flow
+class JOpenParams extends JObj { flags = 0; synchronous: string | null = null; }
+class JOpenParamsBuilder extends JObj { params = new JOpenParams(); }
+rt.register({ name: "android/database/sqlite/SQLiteDatabase$OpenParams", ctor: JOpenParams });
+rt.register({ name: "android/database/sqlite/SQLiteDatabase$OpenParams$Builder", ctor: JOpenParamsBuilder, methods: {
+  "<init>()V": function () {},
+  "addOpenFlags(I)Landroid/database/sqlite/SQLiteDatabase$OpenParams$Builder;": function (this: JOpenParamsBuilder, flags: number) { this.params.flags |= flags; return this; },
+  "setSynchronousMode(Ljava/lang/String;)Landroid/database/sqlite/SQLiteDatabase$OpenParams$Builder;": function (this: JOpenParamsBuilder, mode: string) {
+    if (mode == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "synchronousMode must not be null");
+    this.params.synchronous = mode; return this;
+  },
+  "build()Landroid/database/sqlite/SQLiteDatabase$OpenParams;": function (this: JOpenParamsBuilder) { return Object.assign(new JOpenParams(), this.params); },
+} });
 class JSQLiteOpenHelper extends JObj {
   jctx: any = null;
   name: string | null = null;
   version = 1;
   jdb: JSQLiteDatabase | null = null;
   opening = false;
+  params = new JOpenParams();
 }
 rt.register({
   name: "android/database/sqlite/SQLiteOpenHelper", ctor: JSQLiteOpenHelper,
@@ -732,6 +748,11 @@ rt.register({
     },
     "getDatabaseName()Ljava/lang/String;": function (this: JSQLiteOpenHelper) { return this.name; },
     "close()V": function (this: JSQLiteOpenHelper) { this.jdb?.scheduleSave(); },
+    "setOpenParams(Landroid/database/sqlite/SQLiteDatabase$OpenParams;)V": function (this: JSQLiteOpenHelper, params: JOpenParams) {
+      if (params == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "OpenParams must not be null");
+      if (this.jdb) throw rt.mkThrowable("java/lang/IllegalStateException", "Database already open");
+      this.params = Object.assign(new JOpenParams(), params);
+    },
     ...noops("onCreate(Landroid/database/sqlite/SQLiteDatabase;)V",
       "onUpgrade(Landroid/database/sqlite/SQLiteDatabase;II)V",
       "onDowngrade(Landroid/database/sqlite/SQLiteDatabase;II)V", "onOpen(Landroid/database/sqlite/SQLiteDatabase;)V",
@@ -742,7 +763,8 @@ async function openHelperDb(h: JSQLiteOpenHelper): Promise<JSQLiteDatabase> {
   if (h.jdb) return h.jdb;
   const pkg = h.jctx?.$host?.pkg ?? "app";
   const path = h.name ? dbPath(pkg, h.name) : ":memory:";
-  const jdb = await openDatabase(path);
+  const jdb = await openDatabase(path, h.params.flags | 0x10000000);
+  if (h.params.synchronous !== null) jdb.db!.exec("PRAGMA synchronous='" + h.params.synchronous.replace(/'/g, "''") + "'");
   h.jdb = jdb;
   await vcall(h, "onConfigure", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
   const cur = callSelf(dbMethods, "getVersion()I", jdb) as number;

@@ -20,8 +20,6 @@ export interface AppHost {
   splits: string[];
   application: JApplication | null;
   jresources: JResources;
-  statusBarColor: number;
-  navBarColor: number;
   launch: (component: string, intent: JIntent | null, options?: ActivityLaunch) => Promise<void>;
   /** the pause/resume a modal system window (the permission dialog) leaves behind */
   roundTrip: (activity: JActivity) => Promise<void>;

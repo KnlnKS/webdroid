@@ -94,3 +94,17 @@ test("type variables are equal only within one generic declaration", async () =>
   expect(await vcall(map, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", eOfArrayList)).toBe(null);
   expect(await vcall(map, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", eOfList)).toBe("list");
 });
+
+test("Unsafe reference-array offsets preserve adjacent elements and compare-and-swap", async () => {
+  const unsafe = await vcall(rt.link("sun/misc/Unsafe").ctor, "getUnsafe", "()Lsun/misc/Unsafe;");
+  const cls = rt.classFor("[Ljava/lang/Object;");
+  const base = await vcall(unsafe, "arrayBaseOffset", "(Ljava/lang/Class;)I", cls);
+  const scale = await vcall(unsafe, "arrayIndexScale", "(Ljava/lang/Class;)I", cls);
+  expect([4, 8]).toContain(scale);
+  const values = ["first", null, "last"];
+  const offset = BigInt(base + scale);
+  await vcall(unsafe, "putOrderedObject", "(Ljava/lang/Object;JLjava/lang/Object;)V", values, offset, "middle");
+  expect(await vcall(unsafe, "getObjectVolatile", "(Ljava/lang/Object;J)Ljava/lang/Object;", values, offset)).toBe("middle");
+  expect(await vcall(unsafe, "compareAndSwapObject", "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z", values, offset, "middle", "changed")).toBe(1);
+  expect(values).toEqual(["first", "changed", "last"]);
+});

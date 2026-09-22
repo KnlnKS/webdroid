@@ -22,8 +22,9 @@ import {
 } from "./graphics";
 import { newObj } from "../jvm/natives/jlang";
 import { charsToString, floatToIntBits, i8, u8 } from "../jvm/abi";
-import { JPath, pathBounds, pathOffset, pathTransform } from "./path";
-import { greedyBreaks, type JTextPaint, type TLine } from "./text";
+import { JPath, pathBounds, pathIsConvex, pathOffset, pathTransform } from "./path";
+import type { JTextPaint, TLine } from "./text";
+import { breakLines } from "./linebreak";
 import {
   Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, resolveStyleValue, rvString,
   currentResources, T_STR, T_PX, type RV,
@@ -319,16 +320,8 @@ delegate("android/graphics/Paint", {
   "nGetUnderlineThickness(J)F": (h: bigint) => paint(h).textSize * 0.06,
   "nGetStrikeThruPosition(J)F": (h: bigint) => -paint(h).textSize * 0.28,
   "nGetStrikeThruThickness(J)F": (h: bigint) => paint(h).textSize * 0.06,
-  "nGetFontMetrics(JLandroid/graphics/Paint$FontMetrics;Z)F": (h: bigint, fm: Metrics) => {
-    const p = paint(h);
-    fillFontMetrics(p, fm, false);
-    return fontDescent(p) - fontAscent(p);
-  },
-  "nGetFontMetricsInt(JLandroid/graphics/Paint$FontMetricsInt;Z)I": (h: bigint, fm: Metrics) => {
-    const p = paint(h);
-    fillFontMetrics(p, fm, true);
-    return Math.round(fontDescent(p) - fontAscent(p));
-  },
+  "nGetFontMetrics(JLandroid/graphics/Paint$FontMetrics;Z)F": (h: bigint, fm: Metrics) => fillFontMetrics(paint(h), fm, false),
+  "nGetFontMetricsInt(JLandroid/graphics/Paint$FontMetricsInt;Z)I": (h: bigint, fm: Metrics) => fillFontMetrics(paint(h), fm, true),
   // the per-run forms answer for one text run; with one font for everything, the run does
   // not change the answer, so they are the whole-paint metrics
   "nGetFontMetricsIntForText(J[CIIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, _c: Uint16Array, _a: number, _b: number, _d: number, _e: number, _f: number, fm: Metrics) => fillFontMetrics(paint(h), fm, true),
@@ -520,7 +513,6 @@ delegate("android/graphics/Path", {
   "nSetFillType(JI)V": (h: bigint, ft: number) => { path(h).fillRule = ft === 1 || ft === 3 ? "evenodd" : "nonzero"; },
   "nGetFillType(J)I": (h: bigint) => (path(h).fillRule === "evenodd" ? 1 : 0),
 
-  // Skia answers these off geometry we do not keep; none of them changes what is drawn
   "nIsRect(JLandroid/graphics/RectF;)Z": (h: bigint, r: Rect) => {
     const p = path(h);
     if (p.ops.length !== 1 || p.ops[0][0] !== "rect") return 0;
@@ -528,7 +520,7 @@ delegate("android/graphics/Path", {
     return 1;
   },
   ...noops("nIncReserve(JI)V"),
-  ...stubs(1, "nIsConvex(J)Z"),
+  "nIsConvex(J)Z": (h: bigint) => pathIsConvex(path(h)),
   ...stubs(0, "nIsInterpolatable(JJ)Z", "nInterpolate(JJFJ)Z", "nOp(JJIJ)Z"),
   "nApproximate(JF)[F": () => new Float32Array(0),
 });
@@ -588,7 +580,7 @@ delegate("android/graphics/Canvas", {
     replace(into, Float64Array.of(t.a, t.c, t.e, t.b, t.d, t.f, 0, 0, 1));
   },
 
-  "nClipRect(JFFFFI)Z": (h: bigint, l: number, t: number, r: number, b: number) => on("clipRect(FFFF)Z")(h, l, t, r, b),
+  "nClipRect(JFFFFI)Z": (h: bigint, l: number, t: number, r: number, b: number, op: number) => on(op === 0 ? "clipOutRect(FFFF)Z" : "clipRect(FFFF)Z")(h, l, t, r, b),
   "nClipPath(JJI)Z": (h: bigint, p: bigint) => {
     const c = canvas(h), pp = deref<JPath>(p);
     c.ctx.clip(pp.path(), pp.fillRule);
@@ -708,7 +700,7 @@ function applyMatrix(c: JCanvas, m: Mat, replace: boolean) {
 // lineBreakWordStyle, hyphenation, start, end, isRtl) — so they came out of appendStyleRun's
 // and computeLineBreaks' own bytecode, off the register moves into each range invoke.
 //
-// The breaking itself is text.ts's greedyBreaks, the body JLayout uses, so AOSP's Layout and
+// The breaking itself is linebreak.ts's breakLines, the body JLayout uses, so AOSP's Layout and
 // ours agree by construction rather than by two implementations happening to match. AOSP's
 // balanced and optimal strategies are a later, separate change; this is the greedy one.
 interface Run { start: number; end: number; paint: JTextPaint }
@@ -717,7 +709,7 @@ interface Breaks { lines: TLine[]; asc: number; desc: number }
 
 const meas = (h: bigint) => deref<Meas>(h);
 /** the paint covering `at`, or the paragraph's first — one paint per paragraph is the common
- *  case, and a run-aware breaker is what AOSP's own is, not what greedyBreaks is */
+ *  case, and a run-aware breaker is what AOSP's own is, not what breakLines is */
 const runPaint = (m: Meas, at = 0) => (m.runs.find((r) => at >= r.start && at < r.end) ?? m.runs[0])?.paint;
 const measWidth = (m: Meas, start: number, end: number) => {
   const p = runPaint(m, start);
@@ -759,13 +751,13 @@ delegate("android/graphics/text/LineBreaker", {
     const m = meas(mt);
     const p = runPaint(m);
     // AOSP has already split the text into paragraphs and hands us ONE, with its terminating
-    // newline included. greedyBreaks splits on "\n" itself (JLayout gives it whole text), so
+    // newline included. breakLines splits on "\n" itself (JLayout gives it whole text), so
     // the newline has to come off first or every paragraph gains an empty line after it — and
     // the last break offset still has to cover it, because that is where the next paragraph
     // starts and minikin reports the same.
     const full = charsToString(chars, 0, len);
     const body = full.endsWith("\n") ? full.slice(0, -1) : full;
-    const lines = p ? greedyBreaks(body, p, firstWidth, firstCount, restWidth) : [];
+    const lines = p ? breakLines(body, p, { width: restWidth, firstWidth, firstCount }) : [];
     if (lines.length && body.length !== full.length) lines[lines.length - 1].end = full.length;
     return handle({ lines, asc: p ? fontAscent(p) : 0, desc: p ? fontDescent(p) : 0 } as Breaks);
   },

@@ -1,7 +1,7 @@
 import type { JSimpleEnum } from "./jlang";
 import { JObj, rt } from "../runtime";
 import { jarray } from "../abi";
-import { mkEnumSet, stringHash, vcallMaybe } from "./jlang";
+import { defineException, mkEnumSet, stringHash, vcallMaybe } from "./jlang";
 import { newArrayList } from "./jutil";
 
 class JStringJoiner extends JObj { sep = ","; pre = ""; suf = ""; parts: string[] = []; }
@@ -163,6 +163,17 @@ rt.register({
     "hashCode()I": function (this: JLocale) { return stringHash(localeTag(this)); },
   },
 });
+
+defineException("java/util/IllformedLocaleException", "java/lang/RuntimeException");
+class JLocaleBuilder extends JObj { value = new JLocale(); }
+rt.register({ name: "java/util/Locale$Builder", ctor: JLocaleBuilder, methods: {
+  "<init>()V": function () {},
+  "setRegion(Ljava/lang/String;)Ljava/util/Locale$Builder;": function (this: JLocaleBuilder, region: string | null) {
+    if (region && !/^(?:[a-z]{2}|\d{3})$/i.test(region)) throw rt.mkThrowable("java/util/IllformedLocaleException", "Ill-formed region: " + region);
+    this.value.country = region?.toUpperCase() ?? ""; return this;
+  },
+  "build()Ljava/util/Locale;": function (this: JLocaleBuilder) { return Object.assign(new JLocale(), this.value); },
+} });
 
 class JULocale extends JObj {
   locale = new JLocale();

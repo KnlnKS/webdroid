@@ -1,10 +1,16 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall } from "../src/jvm/natives/jlang";
 import { JContext, JContextWrapper, display } from "../src/android/context";
-import { addOverlay, overlays, detachContextOverlays, removeOverlay } from "../src/android/popup";
+import { JTheme, Resources, T_STR, themeOf } from "../src/android/res";
+import { getInflater } from "../src/android/inflate";
+import { JFrameLayout } from "../src/android/layouts";
+import { JWindow } from "../src/android/window";
+import { resolveSystemBars } from "../src/shell/systembars";
+import { device } from "../src/shell/config";
 import { JView, dispatchAttached, uiState } from "../src/android/view";
+import { addOverlay, overlays, detachContextOverlays, removeOverlay } from "../src/android/popup";
 
 rt.linkNatives();
 
@@ -62,4 +68,55 @@ test("destroyed context windows detach without dismissing dialogs or other activ
     await detachContextOverlays(other);
     removeOverlay(ownedView);
   }
+});
+
+test("Dialog exposes its overlay theme through its context and inflater without changing its owner", async () => {
+  const res = new Resources(null, {}), theme = new JTheme();
+  theme.res = res; theme.styles = [100];
+  res.bagCache.set(100, { parent: 0, map: new Map([[1, { t: T_STR, d: 0, s: "base" }]]) });
+  res.bagCache.set(101, { parent: 0, map: new Map([[1, { t: T_STR, d: 0, s: "dialog" }]]) });
+  const context = Object.assign(rt.make("android/content/Context"), { $host: { res, theme } });
+  const dialog = await newObj("android/app/Dialog", "(Landroid/content/Context;I)V", context, 101);
+  const themed = await vcall(dialog, "getContext", "()Landroid/content/Context;");
+  expect(themed).not.toBe(context);
+  expect(themeOf(themed)?.lookup(1)?.s).toBe("dialog");
+  expect(themeOf(getInflater(themed).jctx)?.lookup(1)?.s).toBe("dialog");
+  expect(theme.lookup(1)?.s).toBe("base");
+  expect(await vcall(dialog, "getOwnerActivity", "()Landroid/app/Activity;")).toBeNull();
+  const owner = rt.make("android/app/Activity");
+  await vcall(dialog, "setOwnerActivity", "(Landroid/app/Activity;)V", owner);
+  expect(await vcall(dialog, "getOwnerActivity", "()Landroid/app/Activity;")).toBe(owner);
+});
+
+
+test("full-screen windows own their system bars and hiding restores the underlying window", async () => {
+  const activity = new JFrameLayout(), dialog = new JFrameLayout();
+  const underneath = activity.windowOwner = new JWindow(), above = dialog.windowOwner = new JWindow();
+  underneath.decor = activity; above.decor = dialog;
+  above.layoutW = above.layoutH = -1;
+  dialog.right = device.width; dialog.bottom = device.height;
+  const overlays = [{ view: dialog, x: 0, y: 0, dismissOnOutside: false }];
+  await vcall(underneath, "setStatusBarColor", "(I)V", 0xff112233);
+  await vcall(underneath, "setNavigationBarColor", "(I)V", 0xff223344);
+  await vcall(above, "setStatusBarColor", "(I)V", 0xffeeeeee);
+  await vcall(above, "setNavigationBarColor", "(I)V", 0xffdddddd);
+  const controller = await vcall(above, "getInsetsController", "()Landroid/view/WindowInsetsController;");
+  await vcall(controller, "setSystemBarsAppearance", "(II)V", 24, 24);
+  await vcall(controller, "hide", "(I)V", 1);
+  const bars = resolveSystemBars(activity, overlays);
+  expect(bars.root).toBe(dialog);
+  expect([bars.status, bars.navigation, bars.appearance, bars.visible & 3]).toEqual([0xffeeeeee, 0xffdddddd, 24, 2]);
+  above.layoutW = device.width; above.layoutH = device.height;
+  expect(resolveSystemBars(activity, overlays)).toEqual(bars);
+  above.flags |= 8;
+  expect(resolveSystemBars(activity, overlays).root).toBe(activity);
+  above.flags &= ~8;
+  dialog.right--;
+  expect(resolveSystemBars(activity, overlays).root).toBe(activity);
+  dialog.right++;
+  dialog.visibility = 4;
+  const restored = resolveSystemBars(activity, overlays);
+  expect(restored.root).toBe(activity);
+  expect([restored.status, restored.navigation, restored.appearance, restored.visible & 3]).toEqual([0xff112233, 0xff223344, 0, 3]);
+  expect(await vcall(underneath, "getNavigationBarColor", "()I")).toBe(0xff223344);
 });

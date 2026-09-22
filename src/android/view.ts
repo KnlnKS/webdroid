@@ -1,3 +1,4 @@
+import { isRecording, recordOrRun } from "./recording";
 import { perf } from "../perf";
 import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JMatrix, JOutline, matMul, rotM, type JPoint } from "./graphics";
@@ -373,7 +374,11 @@ export class JView extends JObj {
   touchDelegate: JObj | null = null;
   left = 0; top = 0; right = 0; bottom = 0;
   static $nextDrawingId = 0;
-  measuredW = 0; measuredH = 0;
+  measuredW = 0; measuredH = 0; measuredState = 0;
+  setMeasuredDimension(w: number, h: number) {
+    this.measuredW = w & 0xffffff; this.measuredH = h & 0xffffff;
+    this.measuredState = (w & 0xff000000) | ((h >>> 16) & 0xff00);
+  }
   oldWSpec = -1; oldHSpec = -1;
   /** AOSP mMeasureCache: up to three spec pairs and the sizes they produced, [w, h, mw, mh] each,
    *  so a parent measuring a child under alternating specs does not re-run its onMeasure.
@@ -579,11 +584,15 @@ export function defaultSize(size: number, spec: number): number {
   const mode = specMode(spec), sz = specSize(spec);
   return mode === MS_UNSPEC ? size : sz;
 }
-export function resolveSizeAndState(size: number, spec: number): number {
+export function resolveSize(size: number, spec: number): number {
   const mode = specMode(spec), sz = specSize(spec);
   if (mode === MS_EXACTLY) return sz;
   if (mode === MS_AT_MOST) return Math.min(size, sz);
   return size;
+}
+export function resolveSizeAndState(size: number, spec: number, state = 0): number {
+  return resolveSize(size, spec) | (state & 0xff000000) |
+    (specMode(spec) === MS_AT_MOST && size > specSize(spec) ? 0x01000000 : 0);
 }
 
 export function clearMeasureCache(v: JView) { v.mcLen = v.mcNext = 0; }
@@ -600,7 +609,9 @@ function measureCachePut(v: JView, wSpec: number, hSpec: number) {
     v.mcNext = (v.mcNext + 1) % 3;
     if (v.mcLen < 3) v.mcLen++;
   }
-  c[i] = wSpec; c[i + 1] = hSpec; c[i + 2] = v.measuredW; c[i + 3] = v.measuredH;
+  c[i] = wSpec; c[i + 1] = hSpec;
+  c[i + 2] = v.measuredW | (v.measuredState & 0xff000000);
+  c[i + 3] = v.measuredH | ((v.measuredState & 0xff00) << 16);
 }
 /** AOSP View.sAlwaysRemeasureExactly: an app targeting M (23) or lower re-measures under a changed
  *  EXACTLY spec even at the size it already has; its LinearLayout weights relied on that pass.
@@ -633,7 +644,7 @@ export async function measureView(v: JView, wSpec: number, hSpec: number) {
   if (i >= 0) {
     const c = v.mc!;
     v.oldWSpec = wSpec; v.oldHSpec = hSpec;
-    v.measuredW = c[i + 2]; v.measuredH = c[i + 3];
+    v.setMeasuredDimension(c[i + 2], c[i + 3]);
     v.measureBeforeLayout = true;
     v.layoutRequired = true;
     perf.measureCacheHits++;
@@ -642,6 +653,7 @@ export async function measureView(v: JView, wSpec: number, hSpec: number) {
   v.oldWSpec = wSpec; v.oldHSpec = hSpec;
   perf.onMeasures++;
   try {
+    v.measuredState = 0;
     await guardCall(v, M_onMeasure, wSpec, hSpec);
     v.layoutRequired = true;   // AOSP sets PFLAG_LAYOUT_REQUIRED whenever onMeasure runs
     v.measureBeforeLayout = false;
@@ -803,14 +815,13 @@ function drawSelf(v: JView, cv: JCanvas): Promise<void> {
 /** the view's own painting, in its own coordinate space: background, content, children, overlay */
 async function drawContent(v: JView, cv: JCanvas) {
   const ctx = cv.ctx;
-  const recorder = ctx as typeof ctx & { __isRecorder?: boolean; __record?: (draw: (target: typeof ctx) => void) => void };
-  if (recorder.__isRecorder && v.surfaceBacked) {
+  if (v.surfaceBacked && isRecording(ctx)) {
     if (!v.surfaceLayer && v.background) {
       await guardCall(v.background, M_setBounds, 0, 0, v.width(), v.height());
       await guardCall(v.background, M_drawableDraw, cv);
     }
     // The first frame can arrive after recording; later frames replace and close their predecessor.
-    recorder.__record!((target) => {
+    recordOrRun(ctx, target => {
       if (v.surfaceLayer) drawSurface(v, target);
     });
   } else if (v.surfaceLayer) {
@@ -925,8 +936,9 @@ const viewMethods: NativeSpec["methods"] = {
   "getBottom()I": function (this: JView) { return this.bottom; },
   "getMeasuredWidth()I": function (this: JView) { return this.measuredW; },
   "getMeasuredHeight()I": function (this: JView) { return this.measuredH; },
-  "getMeasuredWidthAndState()I": function (this: JView) { return this.measuredW; },
-  "getMeasuredHeightAndState()I": function (this: JView) { return this.measuredH; },
+  "getMeasuredWidthAndState()I": function (this: JView) { return this.measuredW | (this.measuredState & 0xff000000); },
+  "getMeasuredHeightAndState()I": function (this: JView) { return this.measuredH | ((this.measuredState & 0xff00) << 16); },
+  "getMeasuredState()I": function (this: JView) { return this.measuredState; },
   "getPaddingLeft()I": function (this: JView) { return this.padL; },
   "getPaddingTop()I": function (this: JView) { return this.padT; },
   "getPaddingRight()I": function (this: JView) { return this.padR; },
@@ -1097,12 +1109,12 @@ const viewMethods: NativeSpec["methods"] = {
       // onDraw content), respect the wrap_content LP so it collapses instead of filling. Custom
       // View subclasses keep Android semantics (they may render content sized by getDefaultSize).
       const plain = (this.constructor as any)?.$i?.name === "android/view/View";
-      this.measuredW = plain && this.lp && this.lp.width === WRAP_CONTENT ? resolveSizeAndState(cw, wSpec) : defaultSize(cw, wSpec);
-      this.measuredH = plain && this.lp && this.lp.height === WRAP_CONTENT ? resolveSizeAndState(ch, hSpec) : defaultSize(ch, hSpec);
+      this.measuredW = plain && this.lp && this.lp.width === WRAP_CONTENT ? resolveSize(cw, wSpec) : defaultSize(cw, wSpec);
+      this.measuredH = plain && this.lp && this.lp.height === WRAP_CONTENT ? resolveSize(ch, hSpec) : defaultSize(ch, hSpec);
     }));
   },
   "setMeasuredDimension(II)V": function (this: JView, w: number, h: number) {
-    this.measuredW = w & 0xffffff; this.measuredH = h & 0xffffff;
+    this.setMeasuredDimension(w, h);
   },
   "layout(IIII)V": function (this: JView, l: number, t: number, r: number, b: number) {
     return layoutView(this, l, t, r, b);
@@ -1583,7 +1595,7 @@ const viewMethods: NativeSpec["methods"] = {
     "onKeyDown(ILandroid/view/KeyEvent;)Z", "onKeyUp(ILandroid/view/KeyEvent;)Z",
     "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z",
     "dispatchPopulateAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)Z",
-    "isAccessibilityHeading()Z", "isScreenReaderFocusable()Z", "isInLayout()Z", "getMeasuredState()I",
+    "isAccessibilityHeading()Z", "isScreenReaderFocusable()Z", "isInLayout()Z",
     "getRotationX()F", "getRotationY()F", "isHovered()Z", "isAccessibilityFocused()Z",
     "isDuplicateParentStateEnabled()Z", "getAccessibilityLiveRegion()I",
     "awakenScrollBars()Z", "getWindowSystemUiVisibility()I", "onHoverEvent(Landroid/view/MotionEvent;)Z",
@@ -1598,9 +1610,9 @@ const viewMethods: NativeSpec["methods"] = {
     "getBackgroundTintMode()Landroid/graphics/PorterDuff$Mode;",
     "onCreateInputConnection(Landroid/view/inputmethod/EditorInfo;)Landroid/view/inputmethod/InputConnection;"),
   ...stubs(-1, "getBaseline()I"),
-  "resolveSizeAndState(III)I": (size: number, spec: number) => resolveSizeAndState(size, spec),
-  "static resolveSizeAndState(III)I": (size: number, spec: number) => resolveSizeAndState(size, spec),
-  "static resolveSize(II)I": (size: number, spec: number) => resolveSizeAndState(size, spec),
+  "resolveSizeAndState(III)I": resolveSizeAndState,
+  "static resolveSizeAndState(III)I": resolveSizeAndState,
+  "static resolveSize(II)I": (size: number, spec: number) => resolveSize(size, spec),
   "static getDefaultSize(II)I": (size: number, spec: number) => defaultSize(size, spec),
   "static generateViewId()I": (() => { let n = 0x00ffff00; return () => ++n; })(),
   "static inflate(Landroid/content/Context;ILandroid/view/ViewGroup;)Landroid/view/View;": async (ctx: unknown, id: number, root: unknown) => {
@@ -1653,6 +1665,12 @@ export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | n
 }
 
 export class JViewGroup extends JView {
+  measuredChildState(): number {
+    let state = 0;
+    for (const child of this.children) if (child.visibility !== 8) state |= child.measuredState;
+    return state;
+  }
+
   children: JView[] = [];
   transientChildren = 0;
   addStatesFromChildren = false;
@@ -1924,8 +1942,9 @@ const vgMethods: NativeSpec["methods"] = {
       mw = Math.max(mw, c.measuredW);
       mh = Math.max(mh, c.measuredH);
     }
-    this.measuredW = resolveSizeAndState(mw + this.padL + this.padR, w);
-    this.measuredH = resolveSizeAndState(mh + this.padT + this.padB, h);
+    const state = this.measuredChildState();
+    this.setMeasuredDimension(resolveSizeAndState(mw + this.padL + this.padR, w, state),
+      resolveSizeAndState(mh + this.padT + this.padB, h, state << 16));
   },
   "onLayout(ZIIII)V": async function (this: JViewGroup) {
     for (const c of this.children) {
@@ -2454,6 +2473,7 @@ rt.register({
 });
 rt.register({
   name: "android/view/Display", ctor: JDisplay,
+  statics: { STATE_UNKNOWN: 0, STATE_OFF: 1, STATE_ON: 2, STATE_DOZE: 3, STATE_DOZE_SUSPEND: 4 },
   methods: {
     "getWidth()I": () => device.width,
     // getMetrics excludes the system bars; getRealMetrics is the whole display
@@ -2463,6 +2483,7 @@ rt.register({
     "getSize(Landroid/graphics/Point;)V": (p: JPoint) => { p.x = device.width; p.y = device.height - device.statusBar; },
     "getRealSize(Landroid/graphics/Point;)V": (p: JPoint) => { p.x = device.width; p.y = device.height; },
     "getRefreshRate()F": () => 60,
+    "getState()I": () => 2,
     "getPresentationDeadlineNanos()J": () => 16666667n,
     "getMode()Landroid/view/Display$Mode;": () => displayMode(),
     "getSupportedModes()[Landroid/view/Display$Mode;": () => jarray([displayMode()], "Landroid/view/Display$Mode;"),

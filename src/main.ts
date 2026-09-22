@@ -4,7 +4,7 @@ import { recordVsync, PROCESS_PID } from "./android/os";
 import { RangeFile } from "./shell/lazyfile";
 import { mountSystemCertificates } from "./shell/cacerts";
 
-import { locateDrawnText, SYSTEM_FONT } from "./android/graphics";
+import { locateDrawnText, SYSTEM_FONT, SYSTEM_FONTS, SYSTEM_EMOJI_FONTS } from "./android/graphics";
 import { rt } from "./jvm/runtime";
 import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
@@ -353,8 +353,8 @@ const wd = {
     ]);
   },
   // wipe persisted app state (sqlite + prefs + the picked directories) so a run starts fresh
-  reset: () => {
-    void clearRoots();
+  reset: async () => {
+    await Promise.all([clearRoots(), processBroker().files.clear()]);
     const gone: string[] = [];
     for (const k of Object.keys(localStorage)) {
       if (k.startsWith("wd:db:") || k.startsWith("wd:prefs:") || k.startsWith("wd:install:") || k.startsWith("wd:keystore:")) { localStorage.removeItem(k); gone.push(k); }
@@ -417,25 +417,28 @@ document.getElementById("btn-home")!.addEventListener("click", () => location.re
 
 mountSystemCertificates();
 
-const fontsReady = Promise.all([Promise.all([
-  ["Roboto", "Roboto-Regular.ttf", "400", "normal"], ["Roboto Medium", "Roboto-Medium.ttf", "500", "normal"],
-  ["Roboto", "Roboto-Bold.ttf", "700", "normal"], ["Roboto", "Roboto-Italic.ttf", "400", "italic"],
-].map(async ([name, file, weight, style]) => {
+const fontsReady = Promise.all([Promise.all(SYSTEM_FONTS.map(async ([name, file, weight, style]) => {
   const response = await fetch(`/vendor/fonts/${file}`);
   if (!response.ok) throw new Error(`font ${file}: ${response.status}`);
   const bytes = await response.arrayBuffer();
   vfs.write(`/system/fonts/${file}`, new Uint8Array(bytes));
   const f = new FontFace(name, bytes, {
-    weight, style,
+    weight: String(weight), style,
     ascentOverride: `${SYSTEM_FONT.ascent * 100}%`, descentOverride: `${SYSTEM_FONT.descent * 100}%`,
   });
   document.fonts.add(await f.load());
   return `<font weight="${weight}" style="${style}">${file}</font>`;
-})), RangeFile.open("/vendor/fonts/Noto-COLRv1.ttf").then(font => vfs.mount("/system/fonts/Noto-COLRv1.ttf", font))]).then(([fonts]) => {
+})), Promise.all(SYSTEM_EMOJI_FONTS.map(async ([name, file]) => {
+  const url = `/vendor/fonts/${file}`;
+  const [font, nativeFile] = await Promise.all([new FontFace(name, `url(${url})`).load(), RangeFile.open(url)]);
+  document.fonts.add(font);
+  vfs.mount(`/system/fonts/${file}`, nativeFile);
+}))]).then(([fonts]) => {
   // Native Skia reads the same faces through Android's system font configuration.
   vfs.write("/system/etc/fonts.xml", new TextEncoder().encode(
     `<?xml version="1.0"?><familyset version="23"><family name="sans-serif">${fonts.join("")}</family>` +
-    '<alias name="sans-serif-medium" to="sans-serif" weight="500"/><family lang="und-Zsye"><font weight="400" style="normal">Noto-COLRv1.ttf</font></family></familyset>'));
+    '<alias name="sans-serif-medium" to="sans-serif" weight="500"/>' +
+    SYSTEM_EMOJI_FONTS.map(([, file]) => `<family lang="und-Zsye"><font weight="400" style="normal">${file}</font></family>`).join("") + '</familyset>'));
   uiState.needsDraw = true;
 });
 void fontsReady.catch((e) => console.error("[fonts]", e));

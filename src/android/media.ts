@@ -26,6 +26,9 @@ rt.register({ name: "android/media/RingtoneManager", ctor: class extends JObj {}
 });
 
 rt.register({ name: "android/media/Image", ctor: class extends JObj {}, ifaces: ["java/lang/AutoCloseable"] });
+rt.register({ name: "android/media/MediaDataSource", ctor: class extends JObj {}, ifaces: ["java/io/Closeable"],
+  methods: noops("<init>()V"),
+});
 
 rt.register({
   name: "android/media/session/MediaController$Callback", ctor: class extends JObj {},

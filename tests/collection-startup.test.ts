@@ -72,3 +72,14 @@ test("abstract queue defaults use subclass storage", async () => {
   const selfAdd = await vcall(queue, "addAll", "(Ljava/util/Collection;)Z", queue).catch(e => e);
   expect(rt.iof(selfAdd, "java/lang/IllegalArgumentException")).toBe(1);
 });
+
+test("list retainAll preserves live sublists and rejects immutable mutations", async () => {
+  const list = newArrayList(["outside", "keep", "remove", "keep", "tail"]);
+  const view = await vcall(list, "subList", "(II)Ljava/util/List;", 1, 4);
+  expect(await vcall(view, "retainAll", "(Ljava/util/Collection;)Z", newArrayList(["keep"]))).toBe(1);
+  expect(list.a).toEqual(["outside", "keep", "keep", "tail"]);
+  expect(await vcall(view, "retainAll", "(Ljava/util/Collection;)Z", view)).toBe(0);
+  await expect(vcall(newArrayList(), "retainAll", "(Ljava/util/Collection;)Z", null)).rejects.toBeDefined();
+  const immutable = await vcall(rt.link("java/util/List").ctor, "of", "(Ljava/lang/Object;)Ljava/util/List;", "keep");
+  await expect(vcall(immutable, "retainAll", "(Ljava/util/Collection;)Z", newArrayList())).rejects.toBeDefined();
+});

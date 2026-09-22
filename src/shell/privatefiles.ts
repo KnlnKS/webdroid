@@ -80,4 +80,18 @@ export class PrivateFiles {
     });
     return write;
   }
+  async clear(): Promise<void> {
+    await Promise.all(this.loaded.values());
+    if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
+    this.pending.clear();
+    for (const path of this.values.keys()) this.update(path, null);
+    this.loaded.clear();
+    const clear = this.writes.then(async () => {
+      const transaction = (await this.db()).transaction("files", "readwrite");
+      transaction.objectStore("files").clear();
+      await txDone(transaction);
+    });
+    this.writes = clear.catch(() => {});
+    await clear;
+  }
 }

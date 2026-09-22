@@ -546,6 +546,7 @@ rt.register({
       this.fillRule = ft?.ord === 1 || ft?.ord === 3 ? "evenodd" : "nonzero";
     },
     "isEmpty()Z": function (this: JPath) { return this.ops.length ? 0 : 1; },
+    "isConvex()Z": function (this: JPath) { return pathIsConvex(this); },
     // These three walk coordinates only: an op's trailing scalars are radii and angles, and
     // moving or bounding a path must not touch them.
     "computeBounds(Landroid/graphics/RectF;Z)V": function (this: JPath, r: JRectF) { pathBounds(this, r); },
@@ -671,6 +672,59 @@ function pathVerbs(ops: PathOp[]): Verb[] {
     }
   }
   return out;
+}
+
+// Skia tests the control polygon, including implicit closure, rather than sampling curves.
+export function pathIsConvex(path: JPath): number {
+  const points: Pt[] = [];
+  let start: Pt = [0, 0], ended = false;
+  for (const verb of pathVerbs(path.ops)) {
+    if (verb.slice(1).some(value => !Number.isFinite(Math.fround(value)))) return 0;
+    if (verb[0] === MOVE) {
+      if (points.length) ended = true;
+      start = [Math.fround(verb[1]), Math.fround(verb[2])];
+      continue;
+    }
+    if (ended) return 0;
+    if (!points.length) points.push(start);
+    if (verb[0] === CLOSE) { ended = true; continue; }
+    for (let i = 3; i < verb.length; i += 2) {
+      const x = Math.fround(verb[i]), y = Math.fround(verb[i + 1]), last = points[points.length - 1];
+      if (last[0] !== x || last[1] !== y) points.push([x, y]);
+    }
+  }
+  if (points.length < 2) return 1;
+  const vectors: Pt[] = [];
+  let xChanges = 0, yChanges = 0, lastX = -1, lastY = -1;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i], b = points[(i + 1) % points.length];
+    const x = Math.fround(b[0] - a[0]), y = Math.fround(b[1] - a[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return 0;
+    if (x === 0 && y === 0) continue;
+    const sx = x < 0 ? 1 : 0, sy = y < 0 ? 1 : 0;
+    if (sx !== lastX) xChanges++;
+    if (sy !== lastY) yChanges++;
+    if (xChanges > 3 || yChanges > 3) return 0;
+    lastX = sx; lastY = sy;
+    vectors.push([x, y]);
+  }
+  let direction = 0, reversals = 0;
+  let [lastVX, lastVY] = vectors[0];
+  for (let i = 1; i <= vectors.length; i++) {
+    const [x, y] = vectors[i % vectors.length];
+    const cross = Math.fround(Math.fround(lastVX * y) - Math.fround(lastVY * x));
+    if (!Number.isFinite(cross)) return 0;
+    if (cross !== 0) {
+      const turn = Math.sign(cross);
+      if (direction && turn !== direction) return 0;
+      direction = turn;
+    } else {
+      if (Math.fround(Math.fround(lastVX * x) + Math.fround(lastVY * y)) >= 0) continue;
+      if (++reversals > 2) return 0;
+    }
+    lastVX = x; lastVY = y;
+  }
+  return 1;
 }
 
 /** the inverse of pathVerbs: a flattened path back as ops */

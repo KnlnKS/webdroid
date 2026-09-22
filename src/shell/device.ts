@@ -19,20 +19,20 @@ import { JActivity, fireActivityLifecycle } from "../android/app";
 import { JMenu, pushMenuToBar } from "../android/menu";
 import { JContext } from "../android/context";
 import { attachProvider } from "../android/contentresolver";
-import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
 import { reportUncaught, JBundle, dispatchVsync, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { packageUid, packages } from "../android/packages";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
 import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setViewTargetSdk, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets, rootWindowInsets } from "../android/windowinsets";
-import { JCanvas, cssColor, tfMedium } from "../android/graphics";
+import { JCanvas } from "../android/graphics";
 import { overlays, drawToasts, dismissOverlay, detachContextOverlays } from "../android/popup";
 import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
 import { guestNow, setGuestTimeout } from "../guest-clock";
 import { device, orientationForRequest, setDeviceOrientation } from "./config";
+import { resolveSystemBars, drawSystemBarBackgrounds, drawSystemBarIcons } from "./systembars";
 import { restoreRoots } from "./hostfs";
 import { setPixelCopyFrame } from "../android/glview";
 
@@ -97,7 +97,16 @@ export function currentApp(): BootedApp | null { return booted; }
 /** <activity-alias> component name → the Activity class that actually runs */
 const aliasTargets = new Map<string, string>();
 
-const invalidateWindow = () => { uiState.needsLayout = uiState.needsDraw = uiState.needsInsets = true; };
+const invalidateWindow = () => {
+  uiState.needsLayout = uiState.needsDraw = uiState.needsInsets = true;
+  activityTransport.presentation?.(!!booted?.stack.length && booted.stack.every(act => act.window.translucent));
+};
+function visibleActivities(): JActivity[] {
+  const stack = booted?.stack ?? [];
+  let first = stack.length - 1;
+  while (first > 0 && stack[first].window.translucent) first--;
+  return first > 0 ? stack.slice(first) : stack;
+}
 
 export async function bootApk(input: Uint8Array | Install, onStatus: (s: string) => void, apkFile = "", processName: string | null = null, prepared?: () => void): Promise<BootedApp> {
   // The framework package must be in place before anything links, and restored storage roots
@@ -186,7 +195,6 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     res, theme, pkg, apkFile, appLabel: label, themeResId, iconRes: iconAttr?.data ?? 0, zip,
     splits: install.splits.map((sp) => sp.name),
     application: null, jresources: jres,
-    statusBarColor: -16777216, navBarColor: -16777216,
     launch: async (component, intent, options) => { await launchActivity(component, intent, options); },
     // finish() only requests: AOSP delivers the pause/stop/destroy chain as later main-thread
     // messages, so it queues as a main job rather than running detached alongside the caller
@@ -341,7 +349,9 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
     await safeCall(act, "onPostResume");
     await windowFocus(act, true);
     // AOSP stops the covered activity only once the new one is up
-    if (prev?.started) await stopActivity(prev);
+    if (!act.window.translucent) {
+      for (const covered of booted.stack.slice(0, -1)) if (covered.started) await stopActivity(covered);
+    }
     void buildOptionsMenu(act);
     invalidateWindow();
   } catch (e) {
@@ -429,15 +439,19 @@ const stopActivity = (act: JActivity) => lifecycleStep(act, "onStop", "Stopped")
 /** Returning to a covered activity: onRestart → onStart → onResume → onPostResume, with the
  *  ActivityLifecycleCallbacks a fresh launch fires. */
 async function resumeActivity(act: JActivity) {
+  await startActivity(act);
+  if (!act.resumed) await lifecycleStep(act, "onResume", "Resumed");
+  await safeCall(act, "onPostResume");
+}
+async function startActivity(act: JActivity) {
   if (!act.started) {
     await safeCall(act, "onRestart");
     await lifecycleStep(act, "onStart", "Started");
   }
-  if (!act.resumed) await lifecycleStep(act, "onResume", "Resumed");
-  await safeCall(act, "onPostResume");
 }
 async function resumeTop(top: JActivity) {
   applyOrientationRequest(top.requestedOrientation);
+  for (const act of visibleActivities()) if (act !== top) await startActivity(act);
   await resumeActivity(top);
   await windowFocus(top, true);
   void buildOptionsMenu(top);
@@ -484,7 +498,7 @@ export function finishTask(taskId: number, resume: boolean): Promise<void> {
   });
 }
 
-export function activityVisibility(phase: "pause" | "stop" | "resume"): Promise<void> {
+export function activityVisibility(phase: "pause" | "stop" | "resume" | "visible"): Promise<void> {
   return onMain(async () => {
     const act = booted?.host.currentActivity();
     if (!act) return;
@@ -492,10 +506,13 @@ export function activityVisibility(phase: "pause" | "stop" | "resume"): Promise<
       if (act.resumed) await pauseActivity(act);
       await windowFocus(act, false);
     } else if (phase === "stop") {
-      if (act.started) await stopActivity(act);
+      for (const covered of booted!.stack) if (covered.started) await stopActivity(covered);
     } else {
-      await resumeActivity(act);
-      await windowFocus(act, true);
+      for (const visible of visibleActivities()) await startActivity(visible);
+      if (phase === "resume") {
+        await resumeActivity(act);
+        await windowFocus(act, true);
+      }
       uiState.needsLayout = uiState.needsDraw = true;
     }
   });
@@ -521,7 +538,10 @@ export function pressBack(): Promise<void> {
 }
 async function pressBack0() {
   // the topmost window takes the key: a dialog or popup before the activity under it
-  const top = overlays.at(-1);
+  let top;
+  for (let i = overlays.length - 1; i >= 0; i--) {
+    if (overlays[i].view.visibility === 0) { top = overlays[i]; break; }
+  }
   const act = booted?.stack.at(-1);
   try {
     if (top?.onBack) await top.onBack();
@@ -533,14 +553,6 @@ async function pressBack0() {
 const M_doFrame = mangleMethod("doFrame", "(J)V");
 const M_dispatch = mangleMethod("dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
 let drawing = false;
-let sbColor = NaN, sbCss = "";
-function drawStatusBar(ctx: OffscreenCanvasRenderingContext2D, appearance: number, appearanceMask: number, systemUi = 0) {
-  const sb = booted!.host.statusBarColor;
-  if (sb !== sbColor) { sbColor = sb; sbCss = cssColor(sb); }
-  ctx.fillStyle = sbCss;
-  ctx.fillRect(0, 0, SCREEN_W, STATUS_H);
-  drawStatusIcons(ctx, sb, appearance, appearanceMask, systemUi);
-}
 /** AOSP's starting window: the system's, painted from the package's theme before the app has
  *  run. It is not the app drawing, so it deliberately does not count in perf.draws — corpus
  *  reads that to mean "this apk got far enough to render", and it must keep meaning it. */
@@ -551,9 +563,12 @@ async function drawStartWin(w: { view: JView; fullscreen: boolean }) {
   try {
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-    if (contentY) drawStatusBar(ctx, 0, 0);
     ctx.translate(0, contentY);
     await drawView(w.view, JCanvas.wrap(ctx, SCREEN_W, SCREEN_H - contentY));
+    ctx.resetTransform();
+    const bars = resolveSystemBars(w.view, []);
+    drawSystemBarBackgrounds(ctx, bars);
+    drawSystemBarIcons(ctx, booted!.host.res, bars);
   } catch (e) {
     perf.drawErrors++;
     console.error("[draw]", e);
@@ -562,7 +577,6 @@ async function drawStartWin(w: { view: JView; fullscreen: boolean }) {
   }
   present();
 }
-let clockMinute = -1, clockText = "";
 
 export async function tick() {
   if (drawing) return;
@@ -593,7 +607,8 @@ async function tick0() {
     if (uiState.animHooks.size) {
       for (const hook of [...uiState.animHooks]) if (!hook()) uiState.animHooks.delete(hook);
     }
-    const act = booted?.stack.at(-1);
+    const activities = visibleActivities();
+    const act = activities.at(-1);
     const decor = act?.window.decor;
     if (!decor) {
       if (startWin && uiState.needsDraw) {
@@ -605,11 +620,14 @@ async function tick0() {
     startWin = null;
     // Dispatch before measure so decor margins and descendant inset padding affect this pass.
     // Clear first: a listener's requestApplyInsets() belongs to the next traversal.
-    if (uiState.needsInsets) {
+    const insetsChanged = uiState.needsInsets;
+    if (insetsChanged) {
       uiState.needsInsets = false;
       perf.insetsPasses++;
       mainDbg.phase = "insets";
-      try { await dispatchWindowInsets(decor); } catch (e) { console.error("[insets]", e); }
+      try {
+        for (const activity of activities) if (activity.window.decor) await dispatchWindowInsets(activity.window.decor);
+      } catch (e) { console.error("[insets]", e); }
       uiState.needsLayout = true;
     }
     if (uiState.needsLayout) {
@@ -622,13 +640,17 @@ async function tick0() {
         // everything else; a window nothing asked for is not re-measured at all.
         if (uiState.forceAll) {
           uiState.forceAll = false;
-          forceLayoutFlags(decor);
+          for (const activity of activities) if (activity.window.decor) forceLayoutFlags(activity.window.decor);
           for (const o of overlays) forceLayoutFlags(o.view);
         }
-        mainDbg.phase = "measure";
-        await measureView(decor, makeSpec(SCREEN_W, MS_EXACTLY), makeSpec(SCREEN_H, MS_EXACTLY));
-        mainDbg.phase = "layout";
-        await layoutRoot(decor, 0, 0, SCREEN_W, SCREEN_H);
+        for (const activity of activities) {
+          const root = activity.window.decor;
+          if (!root) continue;
+          mainDbg.phase = "measure";
+          await measureView(root, makeSpec(SCREEN_W, MS_EXACTLY), makeSpec(SCREEN_H, MS_EXACTLY));
+          mainDbg.phase = "layout";
+          await layoutRoot(root, 0, 0, SCREEN_W, SCREEN_H);
+        }
         mainDbg.phase = "overlays";
         for (const o of overlays) {
           const win = o.view.windowOwner, floating = !!win?.dialog;
@@ -647,10 +669,14 @@ async function tick0() {
           // and the position is written back, since hit-testing reads it too.
           o.x = Math.max(0, Math.min(o.x, SCREEN_W - o.view.measuredW));
           o.y = Math.max(0, Math.min(o.y, SCREEN_H - o.view.measuredH));
-          await layoutRoot(o.view, o.x, o.y, o.x + o.view.measuredW, o.y + o.view.measuredH);
+          const right = o.x + o.view.measuredW, bottomEdge = o.y + o.view.measuredH;
+          const frameChanged = o.view.left !== o.x || o.view.top !== o.y || o.view.right !== right || o.view.bottom !== bottomEdge;
+          await layoutRoot(o.view, o.x, o.y, right, bottomEdge);
+          // Floating windows need their final frame to calculate window-local bar insets.
+          if (insetsChanged || frameChanged) await dispatchWindowInsets(o.view);
         }
         mainDbg.phase = "globalLayout";
-        await fireGlobalLayout(decor);
+        for (const activity of activities) if (activity.window.decor) await fireGlobalLayout(activity.window.decor);
       } catch (e) {
         // A subtree that cannot measure costs a frame, not the session: fall through and draw
         // whatever DID lay out. Re-arming needsLayout here would turn a deterministic throw
@@ -670,28 +696,31 @@ async function tick0() {
       ctx.save();
       rt.yieldGap = 50;
       try {
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        if (activities[0].window.translucent) ctx.clearRect(0, 0, SCREEN_W, SCREEN_H);
+        else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H); }
         const cv = JCanvas.wrap(ctx, SCREEN_W, SCREEN_H);
         // AOSP's performDraw() dispatches OnPreDrawListener/OnDrawListener right before the
         // tree draw, on every draw pass -- not only ones that also ran a layout.
         try {
-          mainDbg.phase = "preDraw";
-          await fireDrawPass(decor);
-          mainDbg.phase = "draw";
-          await drawView(decor, cv);
-          const bars = rootWindowInsets(decor);
-          if (bars.vis & 1) drawStatusBar(ctx, act!.window.appearance, act!.window.appearanceMask, decor.systemUiVisibility);
-          if (bars.vis & 2) {
-            ctx.fillStyle = cssColor(booted!.host.navBarColor);
-            ctx.fillRect(0, SCREEN_H - device.navBar, SCREEN_W, device.navBar);
+          const bars = resolveSystemBars(decor, overlays);
+          for (const activity of activities) {
+            const root = activity.window.decor;
+            if (!root) continue;
+            mainDbg.phase = "preDraw";
+            await fireDrawPass(root);
+            mainDbg.phase = "draw";
+            await drawView(root, cv);
+            if (root === bars.root) drawSystemBarBackgrounds(ctx, bars);
           }
           mainDbg.phase = "drawOverlays";
           for (const o of overlays) {
+            if (o.view.visibility !== 0) continue;
             const dim = o.dim?.() ?? 0;
             if (dim > 0) { ctx.fillStyle = `rgba(0,0,0,${dim})`; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H); }
             await drawView(o.view, cv);
+            if (o.view === bars.root) drawSystemBarBackgrounds(ctx, bars);
           }
+          drawSystemBarIcons(ctx, booted!.host.res, bars);
           drawToasts(ctx, SCREEN_W, SCREEN_H);
         } catch (e) {
           perf.drawErrors++;
@@ -704,7 +733,7 @@ async function tick0() {
       present();
       perf.drawMs += performance.now() - t0;
       // WebView frames are DOM over the canvas: show the ones this pass drew, hide the rest
-      webLayerSweep(overlays.length > 0);
+      webLayerSweep(overlays.some(o => o.view.visibility === 0));
     }
   } catch (e) {
     console.error("[tick]", e);
@@ -717,32 +746,6 @@ function forceLayoutFlags(v: JView) {
   v.oldWSpec = -1;
   clearMeasureCache(v);
   if (v instanceof JViewGroup) for (const c of v.children) forceLayoutFlags(c);
-}
-function drawStatusIcons(ctx: OffscreenCanvasRenderingContext2D, bg: number, appearance: number, appearanceMask: number, systemUi: number) {
-  // AOSP: the light-status-bars appearance bit decides once the app has set or cleared it;
-  // the luminance guess only stands in for an app that never asked.
-  const dark = appearanceMask & APPEARANCE_LIGHT_STATUS_BARS ? (appearance & APPEARANCE_LIGHT_STATUS_BARS) !== 0
-    : !!(systemUi & 0x2000) || 0.299 * ((bg >> 16) & 0xff) + 0.587 * ((bg >> 8) & 0xff) + 0.114 * (bg & 0xff) > 160;
-  ctx.fillStyle = dark ? "rgba(0,0,0,0.85)" : "#ffffff";
-  ctx.font = `500 ${device.dp(13)}px ${tfMedium.family}`;
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "left";
-  const now = new Date(), minute = now.getHours() * 60 + now.getMinutes();
-  if (minute !== clockMinute) { clockMinute = minute; clockText = `${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}`; }
-  ctx.fillText(clockText, device.dp(10), STATUS_H / 2 + device.dp(0.5));
-  ctx.textAlign = "right";
-  const x = SCREEN_W - device.dp(8);
-  ctx.strokeStyle = ctx.fillStyle;
-  ctx.lineWidth = device.dp(1.25);
-  ctx.strokeRect(x - device.dp(17), device.dp(6), device.dp(13), device.dp(12));
-  ctx.fillRect(x - device.dp(15), device.dp(8), device.dp(9), device.dp(8));
-  ctx.fillRect(x - device.dp(3.5), device.dp(9.5), device.dp(2), device.dp(5));
-  ctx.beginPath();
-  ctx.moveTo(x - device.dp(37), device.dp(17));
-  ctx.lineTo(x - device.dp(23), device.dp(17));
-  ctx.lineTo(x - device.dp(30), device.dp(7));
-  ctx.closePath();
-  ctx.fill();
 }
 
 let touchTarget: "decor" | { overlay: number } | null = null;
@@ -771,6 +774,7 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
       for (let i = overlays.length - 1; i >= 0; i--) {
         const o = overlays[i];
         const v = o.view;
+        if (v.visibility !== 0) continue;
         if (x >= v.left && x < v.right && y >= v.top && y < v.bottom) {
           touchTarget = { overlay: i };
           break;
@@ -792,7 +796,7 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
     }
     if (touchTarget && touchTarget !== "decor") {
       const o = overlays[touchTarget.overlay];
-      if (o) {
+      if (o?.view.visibility === 0) {
         ev.x = x - o.view.left;
         ev.y = y - o.view.top;
         await guardCall(o.view, M_dispatch, ev);

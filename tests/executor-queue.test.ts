@@ -197,3 +197,42 @@ test("a pool grows when a wrapped synchronous queue refuses storage", async () =
   await vcall(ex, "execute", "(Ljava/lang/Runnable;)V", overflow);
   expect(overflow.runs).toBe(1);
 });
+
+test("scheduled shutdown policy cancels delayed work without running it", async () => {
+  for (const beforeShutdown of [true, false]) {
+    const ex = await newObj("java/util/concurrent/ScheduledThreadPoolExecutor", "(I)V", 1);
+    const task = rt.make("test/QueueRunnable");
+    const future = await vcall(ex, "schedule", "(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;", task, 60n, seconds());
+    if (!beforeShutdown) await vcall(ex, "shutdown", "()V");
+    await vcall(ex, "setExecuteExistingDelayedTasksAfterShutdownPolicy", "(Z)V", 0);
+    if (beforeShutdown) await vcall(ex, "shutdown", "()V");
+    expect(await vcall(future, "isCancelled", "()Z")).toBe(1);
+    expect(await vcall(ex, "isTerminated", "()Z")).toBe(1);
+  }
+});
+
+test("resizing a scheduled pool starts queued work and retires idle excess workers", async () => {
+  const ex = await newObj("java/util/concurrent/ScheduledThreadPoolExecutor", "(I)V", 1);
+  const first = new BlockingRunnable(), second = new BlockingRunnable(), third = new RecordingRunnable();
+  const a = await vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", first);
+  const b = await vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", second);
+  expect(await vcall(ex, "getActiveCount", "()I")).toBe(1);
+  await vcall(ex, "setCorePoolSize", "(I)V", 2);
+  await Promise.resolve();
+  expect(await vcall(ex, "getActiveCount", "()I")).toBe(2);
+  await vcall(ex, "setCorePoolSize", "(I)V", 1);
+  const c = await vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", third);
+  first.release();
+  await vcall(a, "get", "()Ljava/lang/Object;");
+  await Bun.sleep(0);
+  expect(third.runs).toBe(0);
+  expect(await vcall(ex, "getPoolSize", "()I")).toBe(1);
+  second.release();
+  await vcall(b, "get", "()Ljava/lang/Object;");
+  await vcall(c, "get", "()Ljava/lang/Object;");
+  expect(third.runs).toBe(1);
+  await vcall(ex, "setCorePoolSize", "(I)V", 0);
+  expect(await vcall(ex, "getCorePoolSize", "()I")).toBe(0);
+  expect(await vcall(ex, "getMaximumPoolSize", "()I")).toBe(0x7fffffff);
+  await expect(vcall(ex, "setCorePoolSize", "(I)V", -1)).rejects.toBeDefined();
+});

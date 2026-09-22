@@ -48,6 +48,7 @@ class JExecutor extends JObj {
   shut = false;
   pending = 0;
   removeOnCancel = 0;
+  executeDelayedAfterShutdown = true;
   queue: JObj | null = null;
   limit = 1;
   coreSize = 1;
@@ -62,6 +63,14 @@ class JExecutor extends JObj {
   consecutiveDrains = 0;
 }
 const mirror = (ex: JExecutor) => (ex.queue instanceof JList ? ex.queue.a : null);
+function retireIdleWorkers(ex: JExecutor) {
+  for (let i = ex.workers.length - 1; i >= 0 && ex.workers.length > ex.limit; i--) {
+    const worker = ex.workers[i];
+    if (worker.busy) continue;
+    if (worker.thread) worker.thread.alive = 0;
+    ex.workers.splice(i, 1);
+  }
+}
 function drainExecutor(ex: JExecutor) {
   while (ex.tasks.length) {
     let worker = ex.workers.find((w) => !w.busy);
@@ -105,6 +114,7 @@ async function runTask(ex: JExecutor, worker: JExecutor["workers"][number], entr
     if (!f.cancelled) f.error = rt.jx(e);
   } finally {
     ex.pending--; ex.jobs.delete(f); worker.busy = false;
+    retireIdleWorkers(ex);
     f.done = 1; f.thread = null;
     entry.finish();
     if (ex.tasks.length) scheduleDrain(ex);
@@ -115,6 +125,7 @@ async function runTask(ex: JExecutor, worker: JExecutor["workers"][number], entr
   }
 }
 class JFuture extends JObj {
+  delayed = false;
   promise: Promise<unknown> | null = null;
   value: unknown = null;
   error: unknown = null;
@@ -168,10 +179,10 @@ function submit(ex: JExecutor, task: unknown, method: string, desc: string, dela
     const entry = { task, f, method, desc, queued, finish: () => resolve(null) };
     let timer: GuestTimer | undefined;
     const enqueue = () => {
-      timer = undefined; ex.tasks.push(entry); if (!ex.pool) mirror(ex)?.push(task);
+      timer = undefined; f.delayed = false; ex.tasks.push(entry); if (!ex.pool) mirror(ex)?.push(task);
       scheduleDrain(ex);
     };
-    if (delay > 0) timer = setGuestTimeout(enqueue, delay); else enqueue();
+    if (delay > 0) { f.delayed = true; timer = setGuestTimeout(enqueue, delay); } else enqueue();
     f.cancel = () => {
       const index = ex.tasks.indexOf(entry);
       if (index >= 0) {
@@ -263,7 +274,10 @@ const executorMethods: NativeSpec["methods"] = {
     taskForCallable(runnableCallable(r, result)),
   "newTaskFor(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/RunnableFuture;": (c: unknown) =>
     taskForCallable(c),
-  "shutdown()V": function (this: JExecutor) { this.shut = true; },
+  "shutdown()V": function (this: JExecutor) {
+    this.shut = true;
+    if (!this.executeDelayedAfterShutdown) cancelDelayed(this);
+  },
   "shutdownNow()Ljava/util/List;": function (this: JExecutor) {
     this.shut = true;
     const result = newArrayList();
@@ -325,8 +339,12 @@ function repeating(name: string, fixedRate: boolean): NativeSpec["methods"] {
     },
   };
 }
+function cancelDelayed(ex: JExecutor): void {
+  for (const f of ex.jobs.keys()) if (f.delayed) cancelFuture(f, 0);
+}
 function initScheduled(this: JExecutor, core: number, factory: unknown = null, handler: unknown = null) {
   if (core < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative pool size");
+  this.coreSize = core; this.maxSize = 0x7fffffff;
   this.limit = Math.max(1, core); this.factory = factory; this.rejectionHandler = handler;
 }
 function initPool(this: JExecutor, core: number, max: number, keep: bigint, unit: JTimeUnit, queue: JObj, factory: unknown = null, handler: unknown = null) {
@@ -353,11 +371,24 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       "<init>(ILjava/util/concurrent/ThreadFactory;)V": initScheduled,
       "<init>(ILjava/util/concurrent/RejectedExecutionHandler;)V": function (this: JExecutor, core: number, handler: unknown) { initScheduled.call(this, core, null, handler); },
       "<init>(ILjava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V": initScheduled,
+      ...(n === "java/util/concurrent/ScheduledThreadPoolExecutor" ? {
+        "setExecuteExistingDelayedTasksAfterShutdownPolicy(Z)V": function (this: JExecutor, value: number) {
+          this.executeDelayedAfterShutdown = !!value;
+          if (this.shut && !value) cancelDelayed(this);
+        },
+        "getExecuteExistingDelayedTasksAfterShutdownPolicy()Z": function (this: JExecutor) { return +this.executeDelayedAfterShutdown; },
+      } : {}),
       "allowCoreThreadTimeOut(Z)V": function () {},
       "getPoolSize()I": function (this: JExecutor) { return this.workers.length; },
       "getActiveCount()I": function (this: JExecutor) { return this.workers.filter((w) => w.busy).length; },
-      "getCorePoolSize()I": function (this: JExecutor) { return this.pool ? this.coreSize : this.limit; },
-      "getMaximumPoolSize()I": function (this: JExecutor) { return this.pool ? this.maxSize : this.limit; },
+      "getCorePoolSize()I": function (this: JExecutor) { return this.coreSize; },
+      "getMaximumPoolSize()I": function (this: JExecutor) { return this.maxSize; },
+      "setCorePoolSize(I)V": function (this: JExecutor, core: number) {
+        if (core < 0 || core > this.maxSize) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid core pool size");
+        this.coreSize = core; this.limit = Math.max(1, core);
+        retireIdleWorkers(this);
+        if (this.tasks.length) scheduleDrain(this);
+      },
       "remove(Ljava/lang/Runnable;)Z": removeQueued,
       "setKeepAliveTime(JLjava/util/concurrent/TimeUnit;)V": function () {},
       "getQueue()Ljava/util/concurrent/BlockingQueue;": function (this: JExecutor) {
@@ -481,7 +512,7 @@ rt.register({ name: "webdroid/DelegatedScheduledExecutor", ctor: JDelegatedExecu
 export function mkExecutor(count = 1, factory: unknown = null): JExecutor {
   if (count <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "nonpositive pool size");
   const ex: JExecutor = rt.make("webdroid/Executor");
-  ex.limit = count; ex.factory = factory; return ex;
+  ex.limit = ex.coreSize = ex.maxSize = count; ex.factory = factory; return ex;
 }
 /** A scheduled pool takes the constructor's rule, not the fixed pool's: zero cores is legal
  *  and still runs a due task. */

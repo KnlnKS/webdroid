@@ -10,7 +10,7 @@ import { JFrameLayout, JLinearLayout } from "./layouts";
 import { rt } from "../jvm/runtime";
 import { JActionBarView } from "./menu";
 import { TV } from "./axml";
-import { darken } from "./window";
+import { darken, applyWindowTheme, JWindow } from "./window";
 import { sysIns, type JWindowInsets } from "./windowinsets";
 import { vcall } from "../jvm/natives/jlang";
 
@@ -56,6 +56,8 @@ export async function startingWindow(host: AppHost, cls: string): Promise<{ view
   const v = new JView();
   v.jres = host.res;
   v.theme = theme;
+  v.windowOwner = new JWindow();
+  applyWindowTheme(v.windowOwner, theme);
   v.background = await windowBackground(host, theme);
   v.left = v.top = 0;
   v.right = device.width;
@@ -74,8 +76,7 @@ export async function ensureDecor(act: JActivity) {
   decor.background = await windowBackground(host, theme);
   const noTitle = rvInt(host.res, themeByName(host.res, theme, "windowNoTitle"), 0);
   const actionBar = rvInt(host.res, themeByName(host.res, theme, "windowActionBar"), noTitle ? 0 : 1);
-  // a *.Fullscreen theme is the same request as Window.addFlags(FLAG_FULLSCREEN): no status bar
-  if (rvInt(host.res, theme.lookup(AID("windowFullscreen")), 0)) act.window.flags |= 1024;
+  let statusDefault = -16777216;
   const root = new JLinearLayout();
   root.orientation = 1;
   root.ctx = act;
@@ -115,18 +116,14 @@ export async function ensureDecor(act: JActivity) {
     if (host.iconRes) bar.icon = await loadDrawableRV(host.res, { t: TV.REFERENCE, d: host.iconRes }, theme);
     const upv = theme.lookup(AID("homeAsUpIndicator"));
     if (upv) bar.upDrawable = await loadDrawableRV(host.res, upv as any, theme);
-    if (bgD instanceof JColorDrawable) host.statusBarColor = darken(bgD.color);
-    const sbc = theme.lookup(AID("statusBarColor"));
-    if (sbc) host.statusBarColor = rvColor(host.res, sbc, host.statusBarColor);
+    if (bgD instanceof JColorDrawable) statusDefault = darken(bgD.color);
     const lp = rt.make("android/widget/LinearLayout$LayoutParams");
     lp.width = -1; lp.height = -2;
     bar.lp = lp;
     addUnattachedView(root, bar);
     act.window.actionBarView = bar;
-  } else {
-    const sbc = theme.lookup(AID("statusBarColor"));
-    host.statusBarColor = sbc ? rvColor(host.res, sbc, -16777216) : -16777216;
   }
+  applyWindowTheme(act.window, theme, statusDefault);
   const content = new JFrameLayout();
   content.ctx = act;
   content.jres = host.res;

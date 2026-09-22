@@ -401,6 +401,14 @@ rt.register({
     "static allocate(I)Ljava/nio/CharBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 2), JCharBuffer, 1),
     "static wrap(Ljava/lang/CharSequence;)Ljava/nio/CharBuffer;": wrapSequence,
     "static wrap(Ljava/lang/CharSequence;II)Ljava/nio/CharBuffer;": wrapSequence,
+    "slice()Ljava/nio/CharBuffer;": function (this: JCharBuffer) {
+      const b = new JCharBuffer();
+      b.backing = this.backing; b.little = this.little; b.readOnly = this.readOnly; b.elemShift = 1;
+      b.cap = b.lim = this.lim - this.pos;
+      b.sequence = this.sequence; b.sequenceOffset = this.sequenceOffset + this.pos;
+      b.byteOffset = this.sequence === null ? this.byteOffset + this.pos * 2 : 0;
+      return b;
+    },
     "length()I": function (this: JCharBuffer) { return this.lim - this.pos; },
     "charAt(I)C": function (this: JCharBuffer, i: number) { if (i < 0) rt.aio(i, this.lim - this.pos); return charAt(this, this.pos + i); },
     "get(I)C": function (this: JCharBuffer, i: number) { return charAt(this, i); },

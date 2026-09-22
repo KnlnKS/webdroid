@@ -5494,3 +5494,888 @@ report no uncaught/layout/draw error or required native delegate. This longer pa
 JobInfo parceling, ImageReader and XmlBlock. The production execution budget is unchanged.
 No own benchmark or emulator ran concurrently, but unrelated host workloads remain active.
 These are live observations, not a matched latency speedup. The 150 ms target is unmet.
+
+### ChatGPT startup and guest conversation
+
+The unchanged ChatGPT XAPK initially stopped in startup contracts: missing executor shutdown
+policy, reflection accessibility, Character title casing, URI/CharBuffer operations, and an
+object-array Unsafe stride of one byte where bundled bytecode accepts four or eight. The
+repairs retain the original bytecode. DisplayManager additionally returned a Promise inside
+its Java Display array; awaiting the display fixes the subsequent getState dispatch.
+
+Guest entry then reached FileChannel.truncate and Message asynchronous flags. Sending the
+first prompt exposed Character.getType; its exception interrupted Compose composition and
+left a secondary layout-state error. Unicode category dispatch now uses the host Unicode
+properties with Java category numbers, including the unused category 17, and an ASCII table.
+Its Unicode version follows the host browser, as existing character property queries do.
+File truncation preserves shared position and cannot extend storage. Focused NIO/Character
+checks pass (15 tests, 104 assertions); typecheck passes. Earlier ChatGPT smoke compilation
+completed 66,165 classes with zero method failures.
+
+Full Chrome on port 4093 and a dedicated API 33 AVD on emulator-5580 both sent the synthetic
+prompt “What is two plus two?” and rendered real service answers. Captures are under ignored
+webdroid-shots/chatgpt (gettype-response.png and avd-private-response.png). This establishes
+one guest text round trip, not complete app parity. RuntimeShader and text alignment repairs
+remain under verification; shadows, settings configuration differences, recreation and further
+interactions still need review. No full E2E run has been performed at this stage.
+
+ChatGPT supplies AGSL for its shadows. RuntimeShader now compiles the reached numeric-uniform
+AGSL subset to WebGL2, preserving top-left shader coordinates, local matrices and premultiplied
+output. Unsupported shader uniform types fail explicitly. Rendering remains Canvas2D; shader
+rasters are cached by dimensions, transform and uniform state. Recording must capture uniforms
+and defer rasterization until replay: rendering into the display-list recorder's 1×1 mirror
+silently erased the shadows. Shared program ownership keeps recorded snapshots alive without
+leaking programs. The focused browser fixture verifies snapshot isolation, alpha and transformed
+coordinates. It also verifies text coordinates replay through a recorded layer, which fixes
+ChatGPT's previously unfindable labels. The repeated shader draws are not yet a performance claim.
+
+Layout now retains requested alignment through BoringLayout, DynamicLayout and StaticLayout's
+builder; draw positions, line bounds and cursor offsets use the same origin. The login sheet's
+centered text and the toolbar/composer shadows are visible in the paired captures. Greedy line
+breaking, some link styling and system-bar appearance still differ from the reference.
+
+ChatGPT's settings and login entry also reach `RestrictionsManager`, class-based
+`AppWidgetManager` lookup, and `Locale.Builder.setRegion`. The first now reports the
+unmanaged device's empty restrictions; both widget entry points share the existing context
+service owner. Locale region construction validates BCP 47 region syntax, normalizes case,
+and builds independent values. This removes the login-entry exception; account login itself
+is not yet validated. Typecheck and the two existing locale tests pass. No additional tests
+were needed for the service registration changes.
+
+The welcome title explicitly requests `StaticLayout.Builder.setBreakStrategy(2)`, confirmed
+by observing its real builder calls. Balanced text now minimizes squared unused line width,
+including the final line, with Minikin's line and emergency-break penalties. It preserves
+paragraph offsets and retains the existing greedy path for default layouts and replacement
+spans. This fixes “Welcome / to ChatGPT” against the private AVD capture. The existing browser
+text fixture now checks a balanced paragraph and its offsets; it passes. Hyphenation,
+language-specific break opportunities and balanced replacement spans remain unsupported.
+Source: https://android.googlesource.com/platform/frameworks/minikin/+/refs/heads/main/libs/minikin/OptimalLineBreaker.cpp
+
+RuntimeShader review found that the AGSL square-matrix spelling (`float2x2`) was translated
+to a GLSL alias that the uniform parser did not recognize. Normalize square matrices to
+`mat2`/`mat3`/`mat4`; the retained browser shader fixture now exercises a matrix uniform.
+It still passes the same pixel, alpha, snapshot and coordinate assertions.
+
+Configuration diagnosis: HTTP/2 capture showed `/v1/initialize` on `ab.chatgpt.com` returning
+400, with malformed request JSON such as adjacent string fields without commas. The bundled
+`eba0` Writer overrides `write(String,int,int)`, `write(int)` and `write(char[],int,int)`.
+Our inherited `Writer.write(String)` appended to its own unused string instead of dispatching
+to the subclass range method. Restore the Java dispatch chain through virtual string/character
+ranges, retain concrete native writers' direct string fast paths, and validate ranges. After
+the fix both observed initialization requests return 200 with valid JSON and Brotli responses.
+The existing legacy API suite (71 tests, 264 assertions) includes one core asynchronous writer
+override check. This was a runtime serialization fault, not an upstream network outage.
+
+Once configuration succeeded, Statsig's real gzip request writer reached
+`Deflater.getBytesRead()`. Track consumed input through one feed helper used by both direct
+Deflater calls and DeflaterOutputStream; reset clears the count. The gzip footer now receives
+its actual uncompressed size. A targeted probe verified pre-consumption, finish and reset counts.
+
+The successful server configuration enables Statsig's SQLite queue on the next startup.
+Implement the reached OpenParams builder (flags, synchronous mode, immutable build) and
+SQLiteOpenHelper.setOpenParams. Apply synchronous mode before onConfigure and migrations, and
+reject changing parameters after opening. Its tables, indices and triggers now initialize
+without an uncaught exception. The existing SQLite transaction test passes. This does not add
+WAL capability: the existing backend still reports WAL unavailable. Typecheck passes.
+
+The paired app-language dialog measured 1080px wide in webdroid and 960px on Android.
+ViewRootImpl first measures wrapping windows at `config_prefDialogWidth` (320dp here),
+then expands only when the measured state says content is too small. DialogRoot now follows
+that sequence. Preserve size-state bits through Java View calls, FrameLayout aggregation,
+and the existing measurement cache without expanding its storage. The dialog now spans
+x=60..1020, matching the AVD; vertical size differs by two pixels. The existing layout suite
+includes one core state/cache check and passes, as does typecheck. Source:
+https://android.googlesource.com/platform/frameworks/base/+/android-13.0.0_r1/core/java/android/view/ViewRootImpl.java
+
+The guest navigation capture also confirms real responses, background/resume, settings,
+language and About. The retained E2E flow accepts the observed welcome variants (Skip,
+Continue without logging in, or the compact Continue sheet). A first smoke run had failed
+to dismiss the compact sheet despite exiting successfully; its screenshots do not establish
+conversation coverage. The corrected 14-step run visibly receives “Two plus two is 4,” with
+14 completed renders, no wedges, no draw/layout errors and no required natives. It records
+three SLF4J provider warnings and optional Amazon/window-extension/DatagramSocket/media-projection
+queries. Startup hits a settling limit under competing Chrome/AVD load; this is not a clean
+performance comparison. A fresh full-Chrome process is responsive and reuses shader rasters.
+The previous hour-long session spent most of a sampled pause in V8 GC; its retention cause
+remains unresolved. No speculative shader-cache change was retained.
+
+Authentication remains different from the AVD. The bundled microG 0.3.16.252432 credential
+provider routes Google-ID requests to AssistedSignIn; with zero accounts its unchanged
+AssistedSignInFragment always opens Add Google account. Cancelling becomes a credential
+cancellation, so ChatGPT does not fall through to the email form observed on the AVD. Child
+process diagnostics show no missing API or exception on this path. Root-canvas-only captures
+omit the foreground child surface; the full Chrome capture shows the actual account sheet.
+This is a provider behavior limit, not justification for an app-specific credential response.
+Sources:
+https://github.com/microg/GmsCore/blob/v0.3.16.252432/play-services-core/src/main/kotlin/org/microg/gms/auth/credentials/identity/IdentityCredentialChooserActivity.kt
+https://github.com/microg/GmsCore/blob/v0.3.16.252432/play-services-core/src/main/kotlin/org/microg/gms/auth/signin/AssistedSignInFragment.kt
+
+Font instrumentation found ChatGPT requesting weight 600 while Paint emitted CSS weight 700.
+Preserve requested custom-font weights and choose system faces with Minikin's weight/slant
+distance and first-match tie rule. The existing medium file now serves both 500 and 600 requests;
+the canonical shipped-face table also drives browser registration and native fonts.xml. This
+removes the heavier headings seen in paired About/language captures without modifying app styles.
+One font-selection check extends the existing font test file. Source:
+https://android.googlesource.com/platform/frameworks/minikin/+/e900276/libs/minikin/FontFamily.cpp
+
+The first full unit run found three failures in Canvas semantic-text checks because the shader
+pattern check assumed a browser's CanvasPattern global. Guard that optional host constructor;
+all affected canvas, shader and text browser checks pass again. The remaining 1,257 tests passed
+in that run. Final whole-suite results follow after the candidate is frozen.
+
+The APK's “Learn more” string carries `annotation;url=…` over characters 116..125 in its
+binary resource pool, but Resources.getText returned the plain string. Preserve resource
+Annotation spans and their inclusive source endpoints as immutable SpannedString values.
+Both getText overloads retain their missing-resource behavior; getString still returns text.
+ChatGPT now creates its own link styling, and the Settings underline matches the AVD.
+Guard the string-pool no-style offset sentinel. This change handles annotation metadata;
+other resource style tags and style metadata from merged split pools remain limitations.
+The existing resource and span checks pass (12 tests, 55 assertions); no new test file was added.
+The preceding complete unit run passed all 1,261 tests, and the final candidate is rechecked below.
+
+
+Final candidate `dc729dfe`: typecheck passes; all 1,261 tests / 26,813 assertions pass across
+220 files. ChatGPT smoke compilation reports 66,165 classes and zero method failures. Framework
+exercises pass with the existing browser-only Paint text-metrics skip and 295/363 declared-native
+coverage. The serialized full E2E executes 177 steps in 1,307.7 seconds. ChatGPT's 18 steps show a
+real “2 + 2 = 4” response, background/resume, Settings, Language, About and login-sheet dismissal.
+All 72 ChatGPT process inspections succeed, with zero wedges, settling limits, layout/draw errors
+or required natives. Only three SLF4J warnings and optional Amazon/window-extension/DatagramSocket/
+media-projection queries remain on this observed path. Empty diagnostics do not cover unused APIs.
+
+The complete matrix records one transient TikTok consent-step liveness failure, followed by
+recovery; five Resy settling limits; five YouTube Matrix draw-error occurrences plus its SAX/cursor
+errors; Harmonic's atomic-group regex failure; and Lichess's native engine null-address fault.
+Flappy Bird retains unavailable bridge-frame diagnostics and its browser status TypeError. No
+observed process requires a native delegate. All four scored flows complete: FitNotes 39.50%,
+Mihon app 55.78%, Harmonic 31.60%, Mihon onboarding 17.72% content mismatch. Goldens are unchanged.
+Game samples fall below some FPS thresholds under other Chrome/AVD workloads; these are not
+uncontended performance measurements. Matching selected-flow baseline comparisons follow below.
+
+The maintainability pass keeps repairs in their owning modules: one shipped-font table drives
+browser registration, native font metadata and face selection; one Deflater feed helper tracks
+consumed bytes; Writer overloads share Java's virtual dispatch chain while concrete native writers
+retain direct fast paths; packed measurement state reuses the existing cache. RuntimeShader owns
+its WebGL programs, immutable recording snapshots and raster cache. No app bytecode, visual golden,
+or bundled credential-provider behavior was patched. Added checks target core contracts and the
+actual shader browser path; existing suites were extended wherever possible.
+
+Reviewed paired screenshots and the complete frozen-run captures are indexed in ignored
+`webdroid-shots/chatgpt/README.md`; `comparison.html` is the side-by-side gallery. The full Chrome
+capture is required for the foreground microG child surface. Root-canvas-only login images do not
+prove blank rendering. Full authentication parity, voice/attachments, native system-bar styling,
+and the long-session GC retention cause remain unresolved.
+
+Baseline `9d0bb979` reproduces YouTube's Matrix/SAX/cursor errors and the two playback settling
+limits. The candidate's initial “video-open” screenshot instead shows Home: a different live ad
+pushes the film title bounds to y=1916..2120 (center 2018), overlapping bottom navigation. The
+baseline ad leaves the title at y=1766..1970 (center 1868). Both harness taps report semantic hits,
+and `untilText` stops before swiping because the offscreen node already exists. Therefore the
+candidate's initial 106–121 FPS samples do not measure video playback; rendered counts alone do
+not establish interaction success. This is an observed harness visibility limit, not a claim
+that the candidate improved playback. Supplemental candidate replay is recorded below.
+
+The matching baseline Resy replay reproduces all five settling limits (location permission,
+list, venue, venue-back and near-me), with zero layout/draw errors or missing APIs. It additionally
+hits a transient onboarding-close liveness failure and then recovers; the candidate does not.
+The baseline takes 363.0 seconds versus the candidate's 332.7 seconds under competing host load,
+which is not a controlled speed comparison. Baseline TikTok completes without the candidate's
+single consent-step liveness failure; both show slow decoded playback and no layout/draw or
+uncaught/executor exceptions. Different live video workloads prevent a timing conclusion.
+
+The baseline Doodle Jump flow also falls below its frame-rate threshold (20–22 FPS in play,
+candidate 18–22), with no missing API or render error. The baseline Mihon onboarding score is
+17.69% versus 17.72% on the candidate; inspected captures retain layout and controls, with the
+small text-weight change from system-face matching. No golden is replaced. The fresh baseline
+Lichess game does not reproduce the candidate's previously documented FairyStockfish fault;
+historical reproduction establishes earlier occurrence, but this pair cannot establish unchanged
+fault frequency. This remains an explicit regression-evidence limit.
+
+A supplemental candidate TikTok replay clears consent, but its interests step misses the liveness
+deadline before recovering. The process queue is already empty when diagnostics are collected;
+48 frames completed during that step, with roughly 20 seconds in native execution and no
+uncaught/executor/layout/draw exception. The moving transient failure is not reproduced by the
+single matching baseline TikTok run. Host contention and varying videos complicate diagnosis,
+but are not a regression waiver: this liveness comparison remains unresolved.
+
+The supplemental candidate YouTube replay visibly advances Big Buck Bunny frames and completes
+16/16 steps, reproducing the baseline's show-controls/pause settling limits, Matrix/SAX/cursor
+errors and caption-style field queries. It has six Matrix draw-error occurrences and no layout
+errors or liveness failures. Its 225.5-second duration versus baseline 226.5 seconds is not a
+performance claim. The final full run and targeted replays establish working ChatGPT guest paths,
+but do not establish a clean no-regression result because TikTok liveness and Lichess fault
+frequency remain unresolved. Production code stayed frozen at `dc729dfe` throughout these captures.
+
+### ChatGPT continuation: attachment startup, overlay insets and durable SQLite snapshots
+
+The full-Chrome guest attachment menu exposed three additional contracts. `vus.<init>` creates a
+`CameraCaptureSession` subclass; CameraX then resizes a scheduled executor and retains a subset of
+camera IDs through `List.retainAll`. The missing base constructor, availability callback and
+executor setter caused initialization failures before the menu stabilized. Camera registrations now
+live in `camera2.ts`; an empty exposed camera topology sends no fabricated availability callbacks.
+Scheduled pool resizing starts queued work after growth and retires excess idle workers after active
+work completes. Native lists reuse the existing virtual collection removal helper for `retainAll`,
+including live sublist updates and immutable-list rejection. Focused checks: executor queue 13/13,
+collection startup 6/6, typecheck passed. Commits: `5de2088c`, `f8d2e01f`, `f995265a`.
+
+The attachment popup sat exactly 72 pixels below the API 33 reference. Tracing proved that the main
+Compose view received the correct 72-pixel navigation inset, while overlay roots received no inset
+dispatch. The traversal now dispatches overlay insets when requested or when their frame changes,
+after determining the frame so floating dialogs receive window-local distances. The corrected menu
+matches the reference height; Photos and Camera reach the same guest login sheet. Files and dictation
+also reach guest login sheets in Chrome. No upload or audio recording is claimed. `72f40cf5`.
+
+After a long session, localStorage rejected the Statsig database's base64 snapshot (4,352,684
+characters). SQLite now publishes binary snapshots through the existing shared private-file owner
+and its IndexedDB persistence, retaining transaction/WAL and TEMP-schema protections. Existing
+localStorage databases migrate on opening; their old key is removed only after the binary write
+commits. The debug reset now awaits clearing persisted private files as well as the existing state.
+A core test round-trips a six-MiB SQL value while preserving a live TEMP table and trigger. An isolated
+browser additionally verifies a 6,303,744-byte database across page reload and verifies reset removes
+it. The real ChatGPT event queue reopened at 837 pages without quota warnings. `95ee0641`.
+
+Early isolated-browser restore failures were invalid verification: Playwright 1.62.1's local
+`waitForFunctionExpression` treats a returned Promise as truthy and does not repoll its eventual false
+result. The test navigated before the debounce had written anything. An explicit asynchronous poll
+that awaits IndexedDB transaction completion passes twice, including reload and reset. No storage
+workaround was added for those invalid failures. Evidence: ignored `persistence-roundtrip-awaited.log`
+and `persistence-roundtrip-confirm.log`. The larger final regression matrix must be rerun after the
+new candidate is frozen; the previous 177-step gate predates these changes.
+
+The continuing Chrome session remained responsive at about 80 minutes. Forced GC retained roughly
+672 MB of JavaScript heap and 262 MB of backing storage. A heap snapshot attributes substantial
+space to compiled code, decoded arrays and class objects; this distribution does not establish a
+leak or explain the earlier repeated-load GC stall. No speculative cache eviction was retained.
+
+### ChatGPT continuation: SVG stream detection and Android exception contracts
+
+Plugins exposed a forward-only app stream (`p66`) inheriting the native InputStream's incorrect
+`markSupported=true`. AndroidSVG consumed two bytes to detect gzip, then `reset` rewound an unused
+native cursor instead of the subclass cursor. Its parser therefore received `vg width=…` rather
+than `<svg width=…`. Base InputStream now reports no mark support and throws on reset; native
+byte-array and lazy buffered sources explicitly retain seekable behavior. Existing wrappers keep
+their delegated contracts. One core forward-only sniff/rewind case extends the stream suite, which
+passes all ten tests (75 assertions). Study's complete 967-byte SVG now parses and its colored book
+icon renders in full Chrome and the focused E2E. Commit: `937c84c9`.
+
+The same path required the MediaDataSource base constructor and Android SAXException's legacy
+embedded-exception constructors. SAXException preserves `getException`, message fallback and the
+Android-specific `toString` behavior; its inherited cause stays null. This deliberately follows
+API 33 libcore rather than current OpenJDK semantics. Scratch constructor checks and typecheck
+pass. Commits: `2c94a1e5`, `d3feb3f3`. Sources:
+https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/media/java/android/media/MediaDataSource.java
+https://android.googlesource.com/platform/libcore/+/refs/heads/android13-release/luni/src/main/java/org/xml/sax/SAXException.java
+
+The expanded ChatGPT flow completes 24/24 steps in 123.0 seconds with zero settling limits,
+liveness failures, layout/draw errors or required native delegates. All 96 process diagnostic
+snapshots report successful collection. Only three SLF4J warnings and the previously observed
+optional provider/service queries remain. Captures visibly show a real response, attachments, the
+guest Photos login sheet, Study, settings and login. Goldens remain unchanged. Ignored evidence:
+`attachments-actual/`, `e2e-attachments.log`, `plugins-mark-fixed.png`, `avd-plugins-settled.png`,
+`avd-camera-confirmed.png`, and `avd-dictation-confirmed.png`.
+
+Visualize's remote icon still uses the fallback in the long-lived Chrome session. A host request
+to its URL receives a Cloudflare challenge, but this does not prove the app's request outcome. The
+fresh service configuration exposes only Study, so the 24-step run does not validate Visualize.
+No app-specific replacement icon or network-response workaround was added. Slight text-weight
+and system-bar differences remain; the reference's Roboto file differs from the bundled face.
+Authenticated uploads and voice remain unvalidated pending account access and the provider limit.
+
+### Expanded final ChatGPT gate
+
+The frozen candidate at `418437b7` passes typecheck and all 1,265 unit tests (26,834 assertions,
+220 files, 162.91 seconds). ChatGPT smoke-compiles all 66,165 classes with zero method failures.
+All eight runnable framework exercises pass; declared native coverage remains 295/363, with the
+Paint text-metrics exercise explicitly requiring a browser. No visual golden changes.
+
+The serialized full matrix completes all 183 steps across 13 flows in 1,209.4 seconds with zero
+wedged main loops, zero layout errors and no required native delegate. ChatGPT completes 24/24
+steps in 130.0 seconds, visibly receives a real response, and has no settling limit or draw error.
+All 96 ChatGPT process snapshots are collected successfully; its only browser errors are the
+three SLF4J warnings. Resy retains one location-permission settling limit; YouTube retains the
+show-controls/pause limits and seven occurrences of the existing Matrix draw failure. YouTube
+captures reach the real video page. Flappy Bird has 13 unavailable auxiliary-frame inspections;
+these are not empty diagnostics. The entire matrix retains 632 process inspection attempts.
+
+FitNotes differs from the preceding candidate capture in only four frames: three text carets
+and the added-exercise toast still visible at step 24. The other 35 captures are pixel-identical.
+Mihon onboarding is pixel-identical. Mihon app has three changed captures: the initial guide
+button is still a loading spinner, the reader scrollbar position differs, and the final empty
+state chooses another face. Its next navigation capture is unchanged. These are observed capture
+differences, not evidence for a performance conclusion. Final unchanged-golden content scores:
+FitNotes 39.70%, Mihon app 55.18%, Harmonic 28.11%, Mihon onboarding 17.72%.
+
+Lichess reports Flutter DartWorker pthread aborts (35, 3 and 22) during startup/tools while later
+game steps still reach an engine reply. A matching replay of starting commit `9d0bb979` reproduces
+all three abort variants and also reaches a game/engine reply. This establishes pre-existence,
+not unchanged fault frequency. The earlier FairyStockfish null fault does not recur in this run.
+TikTok completes 13/13 without the preceding candidate's transient liveness failures. Native
+game FPS remains below thresholds under competing Chrome/AVD load; no speedup is claimed.
+
+The private AVD later shows ANRs for ChatGPT, Digital Wellbeing and System UI, including after
+a private-emulator restart. These captures do not establish app parity and are excluded from the
+comparison gallery; earlier reviewed paired captures remain the evidence. No other task's
+browser or emulator was stopped. The fresh login capture still shows microG's Add Google account
+path with poor surface contrast. Complete authentication, authenticated voice/uploads, remote
+Visualize icon rendering and complete visual parity remain unresolved.
+
+Ignored final evidence: `expanded-final-actual/`, `expanded-final-report/`,
+`expanded-final-summary.json`, `e2e-expanded-final.log`, `unit-expanded-final.log`,
+`typecheck-expanded-final.log`, `smoke-expanded-final.log`, `fwtest-expanded-final.log`, and
+`e2e-expanded-baseline-games.log`. All new captures used stable code.
+
+The serialized baseline game replay completes 28/28 steps in 158.1 seconds with no liveness
+failure. Flappy Bird reproduces the browser `status` TypeError and matches the candidate's
+11–12 FPS play samples. Doodle Jump's baseline play samples are 20/23/23 FPS versus candidate
+22/22/23. This supports the existing slow-game limitation under the current load, not a controlled
+performance equivalence claim. Preserved baseline captures: `expanded-baseline-games/`.
+
+### ChatGPT continuation: themed dialogs and visible authentication forms
+
+`aae988ec` replaces Dialog's separate synthesized frame theme with the actual themed
+ContextThemeWrapper Android exposes through getContext and getLayoutInflater. Native builders,
+ProgressDialog and TimePickerDialog share that initialization; explicit ownerActivity remains a
+separate property. Previously Material's bottom-sheet content inherited the activity theme while
+only the outer frame saw the dialog overlay. Correct context propagation makes unchanged microG
+construct its white MaterialShapeDrawable and exposes a real missing Path.isConvex call.
+
+`537762ce` implements control-polygon convexity and replaces the framework delegate's always-true
+stub with the same owner. It follows API 33 Skia's single-contour, implicit-closure, direction and
+reversal checks, including non-finite rejection. The existing compound-path representation still
+expands arcs to cubics. One core geometry case covers curves, concavity, multiple contours and
+transformed rounded rectangles; the duplicate path-set tests are consolidated into path-copy.
+The dialog and geometry/layout suites pass 13 tests with 60 assertions; typecheck passes.
+
+`d37658e2` preserves translucent surfaces instead of filling them black. The local renderer walks
+visible activities back to the first opaque window, while the broker retains the underlying
+process layers and pauses their activities without stopping them. Opaque transitions stop the
+covered activities. Local launches now enqueue after the caller's main callback, preventing
+IdentityCredentialChooserActivity and AssistedSignInActivity from both ending up resumed.
+Observed final states have only the foreground activity resumed. Opening LoginActivity stops
+both underlying processes' activities; cancelling restores ChatGPT with no new diagnostics.
+
+This corrects the earlier interpretation that the provider prevented the email form: the form
+was rendered behind the opaque black surface. The extra microG Add Account sheet remains a
+provider difference, but dismissing it now visibly returns to ChatGPT's working email form.
+Phone entry and the country selector are reachable. No email address, phone submission, password,
+account creation or authenticated operation was performed. Full Chrome provider-process diagnostics
+contain no missing API, required native, layout error or draw error on the exercised transitions.
+A remaining overlay ownership issue is visible when a covered provider dialog continues dimming
+its opaque LoginActivity; the lifecycle state alone does not remove that overlay.
+
+`f16ffe3b` handles rectangular DIFFERENCE clips instead of ignoring them. Observational tracing of
+RecordingCanvas captures the two exact label exclusions: [36,-24.5,327,24.5] and
+[36,-24.5,309,24.5]. The owning Canvas helper builds the exclusion in destination coordinates at
+replay, preserving the current transform and clip/save stack. Native clipOutRect overloads and
+nClipRect share it. The phone form now has the reference gaps around its floating labels. Real
+Chrome pixel checks cover scaling, save/restore, and a recorded rectangle at two parent offsets.
+Existing approximate clip-result/bounds queries and non-rectangular difference stubs are not
+claimed repaired. An initial synthetic replay using drawColor exposed its separate use of the
+recording canvas's dimensions after resetting the destination transform; that issue remains open.
+The passing difference test uses an ordinary recorded drawRect to isolate the clipping behavior.
+
+The focused ChatGPT E2E at f16ffe3b completes 24/24 in 124.8 seconds with no settling limit, wedge,
+layout/draw error or required native. All 96 process diagnostic snapshots succeed. The only browser
+errors are the three known SLF4J warnings; optional provider/service queries remain unchanged.
+Preserved evidence: auth-surfaces-actual/, auth-surfaces-summary.json, e2e-auth-surfaces.log,
+translucent-lifecycle.json, opaque-provider-state.json, translucent-provider-restored.json,
+clip-trace.json and clip-pixels.log. These changes postdate the expanded final matrix above;
+that older result must not be presented as current-candidate regression validation.
+
+Closing the private AVD's stuck System UI component restores interaction without wiping state.
+Fresh reviewed references are avd-email-recovered.png, avd-phone-keyboard.png and
+avd-country-current.png. Chrome counterparts are chrome-email-form.png,
+chrome-phone-clipped.png and chrome-country-clipped.png. The country selector is 72 pixels lower
+in Chrome; keyboard/navigation strips, country defaults, emoji rendering and text weights also
+differ. avd-country-selector.png is a coordinate-miss capture of the guest screen and is not a
+country-selector reference. The browser comparison gallery records these evidence limits.
+
+Sources:
+https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/core/java/android/app/Dialog.java
+https://raw.githubusercontent.com/microg/GmsCore/v0.3.16.252432/play-services-core/src/main/res/values/themes.xml
+https://raw.githubusercontent.com/aosp-mirror/platform_external_skia/android-13.0.0_r1/src/core/SkPath.cpp
+https://developer.android.com/guide/components/activities/activity-lifecycle
+https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/graphics/java/android/graphics/Canvas.java
+
+
+### Hidden dialogs, non-floating windows and recorded color bounds
+
+`de2f247f` narrows the opaque-login dimming diagnosis above: AndroidX correctly calls Dialog.hide,
+and the retained provider root has visibility 4. The shell nevertheless drew its scrim before
+skipping the root itself, and its modal input/Back handling remained active. Hide now uses View's
+visibility operation; invisible overlay roots no longer draw a scrim, obscure WebView layers or
+receive new input/Back. Full Chrome's opaque Google login is undimmed; tapping its actual Cancel
+button restores the visible provider sheet and its resumed activity. This observation does not
+require a speculative overlay ownership redesign. Typecheck passes.
+
+`75cc37a6` fixes the country selector's extra 72 pixels. Its dialog theme explicitly sets
+windowIsFloating=false, but webdroid retained floating-window inset defaults. API 33 PhoneWindow's
+generateLayout sets LAYOUT_IN_SCREEN | LAYOUT_INSET_DECOR and clears fitted inset sides/types for
+non-floating windows. The private AVD's window dump confirms an application dialog with those
+flags, no fitted sides, and frame [0,0,1080,2160]. Applying those defaults when constructing the
+native Dialog's Window gives the same frame. The app's own sheet starts at y=72 in both captures:
+chrome-country-nonfloating.png and avd-country-reference.png. Text, emoji, caret timing and the
+native minimized-keyboard/navigation strip still differ.
+Source: https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/core/java/com/android/internal/policy/PhoneWindow.java
+
+`80b91f98` repairs the synthetic drawColor failure recorded above. Color fills and CLEAR now resolve
+canvas bounds when replay executes, preserving the destination clip and transform stack. Direct
+and RenderNode pixel checks pass at two translated/scaled offsets, including excluded rectangles,
+outside-node pixels and transparent clearing. The two overloads share their fill helper. Other
+PorterDuff modes retain their existing limitations; this is not a claim of complete blend support.
+Source: https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/graphics/java/android/graphics/Canvas.java
+
+The frozen candidate passes typecheck, 13 owning tests/60 assertions, and ChatGPT smoke compilation
+of 66,165 classes with zero method failures. The 24-step ChatGPT run completes in 123.5 seconds;
+all 96 process diagnostic snapshots succeed, with no required natives, settling limits, wedges or
+layout/draw errors. Only three known SLF4J warnings appear as browser errors. Evidence is retained
+under window-fixes-actual/, window-fixes-summary.json, e2e-window-fixes.log, window-core-tests.log,
+window-smoke.log, drawcolor-typecheck.log, drawcolor-pixels.log and drawcolor-clear-pixels.log.
+
+A text diagnostic confirms regular country rows use a 400-weight 48px font, without strokeText.
+The bundled Roboto is version 2.001047 (2015); the AVD fonts.xml selects RobotoStatic-Regular 2.138
+(2017) for regular text and a variable Roboto 3.002 (2020) for other weights. Loading the AVD's
+regular face under an explicit alias in full Chrome did not clearly eliminate the observed
+text-weight difference. No asset replacement is retained; reload removes the diagnostic wrappers
+and font substitutions. This is an unresolved raster/metrics comparison, not proof that font-file
+age alone causes the discrepancy. Final broad regression checks follow on the frozen candidate.
+
+
+### Window/replay final regression gate
+
+The frozen implementation `80b91f98` passes all 1,265 unit tests (26,848 assertions across 219
+files, 92.43 seconds). All eight runnable framework exercises pass; coverage is 295/363 declared
+natives, with Paint text measurement still requiring browser metrics. The final serialized E2E
+completes all 183 steps across 13 flows in 983.9 seconds, exit zero. No step wedges, no layout
+errors or required native delegates are reported, and no new host error types appear relative to
+the retained `418437b7` candidate. This does not make existing diagnostics successful operations.
+
+ChatGPT completes 24/24 in 125.2 seconds, with all 96 process inspections successful and no rendering
+error, settling limit or required native. Its three SLF4J warnings and optional queries are unchanged.
+Resy completes 13/13 without the earlier location-dialog settling timeout. YouTube completes 16/16,
+retaining the same show-controls/pause settling limits and six instances of its known Matrix draw
+failure. Lichess completes 15/15 and its engine moves, while retaining the previously baseline-
+reproduced pthread 35/3/22 diagnostics. Flappy Bird completes 7/7 but retains 12 unavailable auxiliary
+frame snapshots and the same browser status-property TypeError (13 unavailable in the earlier run).
+Those collection gaps remain explicit; they do not establish diagnostics for those frames.
+
+FitNotes has 37/39 images pixel-identical to the earlier candidate. The other two differ only in
+the onboarding dialog's OK glyph bounds after resolving its proper themed context. Mihon onboarding
+is 5/5 identical; Mihon app is 14/17 identical, with differences in initial loading completion, a
+reader scrollbar, and the random empty-library face. Harmonic's welcome interior is unchanged;
+its live stories and clock differ, while its settings differ only in the clock. Goldens are unchanged.
+The faster elapsed suite time and game frame rates were not measured under matched host load, so
+no performance improvement is claimed.
+
+Preserved final evidence: window-final-actual/, window-final-report/, window-final-summary.json,
+window-final-audit.log, e2e-window-final.log, window-final-unit.log and window-final-fwtest.log.
+The comparison gallery includes the corrected country sheet and undimmed provider login.
+Full authenticated functionality and complete visual parity remain unfinished; no account
+credentials, phone/email submission or authenticated upload/voice operation has been performed.
+
+
+### System-bar geometry and isolated font raster comparison
+
+The system-bar renderer now uses the paired framework's Wi-Fi/battery paths and API 33 SystemUI
+geometry: 14sp clock, 7.8×13dp battery and 108×4dp gesture handle with 10dp bottom clearance.
+Status icons and the handle draw above dialog dimming. BatteryManager and the icon share the
+existing virtual device's 80%-charging state; the private AVD is at 100% and is not charging.
+Webdroid does not add a fictitious cellular connection to copy the AVD's cellular icon. The two
+battery bitmaps are cached by density/state, and framework paths are cached per Resources.
+This replaces placeholder drawing in the main device loop with one owning system-bars module.
+
+Fresh full-Chrome country captures confirm the status icons no longer fade under the dialog.
+At 1080×2160 both Chrome and the AVD have gesture-handle bounds [378,2118,702,2130]. A browser
+pixel probe through WindowInsetsController verifies explicit light/dark appearance, hide/show,
+and BatteryManager's level/status/charging values. The AVD retains its minimized-keyboard strip;
+per-window ownership of bar colors/appearance and complete SystemUI behavior remain incomplete.
+No font, golden or application bytecode is changed.
+
+An isolated API 33 Canvas oracle now confirms that font bytes alone do not explain the heavier
+Chrome text. app_process must initialize Typeface.loadPreinstalledSystemFontMap before using
+Paint; otherwise this non-Zygote probe crashes in native typeface initialization. The successful
+probe draws “Afghanistan” at 48px, weight 400, on #ebebeb with #0d0d0d ink. With Android Paint flags
+1, 129 and 193, summed normalized ink coverage is 2740.0, 2743.7 and 2751.1. Chrome draws 3292.7
+with bundled Roboto and 3290.8 with the exact AVD regular font file, approximately 20% more ink.
+Native widths are 260/260/259px, versus Chrome's 258.61/258.21px. A live app draw is a single
+fillText at alpha 1 with no stroke or shadow. This isolates a host font-rendering difference
+outside webdroid; its precise rasterizer/hinting mechanism is not established. Artificial weight
+or alpha adjustments are not retained as a platform repair.
+
+Evidence: font-probe/FontRasterProbe.java, android-{1,129,193}.png, chrome-Roboto.png,
+chrome-NativeRegularProbe.png, chrome-metrics.log and row-draw.json; systembars-check.log,
+chrome-systembars-country-final.png and avd-systembars-country.png. Typecheck and the five owning
+window/context checks pass (29 assertions). The earlier full regression gate covers 80b91f98;
+it does not validate this later system-bar change. Focused and final results follow below.
+
+Sources:
+https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/packages/SystemUI/res/values/dimens.xml
+https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/NavigationHandle.java
+https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/packages/SettingsLib/src/com/android/settingslib/graph/ThemedBatteryDrawable.kt
+https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/graphics/java/android/graphics/Typeface.java
+
+At `976ca274`, the focused ChatGPT run completes 24/24 in 122.7 seconds with 96 successful process
+inspections and no rendering errors, required natives, wedges or settling limits. The final
+serialized matrix executes 183 steps in 969.2 seconds, exit zero; TikTok's interests step fails
+its liveness check, so the matrix is not an unqualified pass. TikTok resumes and completes the
+remaining actions. ChatGPT is 24/24 in 119.6 seconds with clean rendering and all 96 inspections
+successful. No flow reports a new host error type, layout error or required native delegate.
+YouTube retains two settling limits and six known Matrix draw errors. Flappy Bird retains the
+same status-property TypeError and 12 unavailable auxiliary-process snapshots. Doodle Jump's
+three gameplay samples are 28/28/29 fps, versus 29/31/30 in the preceding unmatched run.
+
+Outside the deliberate system-bar pixels, FitNotes is 39/39 pixel-identical to the preceding
+candidate, Mihon onboarding 5/5, and Mihon app 15/17. Visual inspection confirms the two Mihon
+differences are initial loading completion and the random empty-library face. Harmonic's welcome
+interior [70,210,650,1000] is identical; live feed content, scores and colors differ behind it.
+No golden is updated. These results do not establish a speedup or full screenshot parity.
+
+The original complete run and report are preserved in systembars-final-actual/ and
+systembars-final-report/, with systembars-final-summary.json, systembars-final-audit.log,
+systembars-content-comparison.json and e2e-systembars-final.log. Targeted serial comparisons of
+TikTok and Doodle Jump follow against the starting revision `9d0bb979` using the same unchanged
+flows and geometry, followed by the candidate; their output does not overwrite that full record.
+
+
+The serial starting-revision comparison completes TikTok 13/13 without a failed liveness check;
+the candidate repeat also completes 13/13. The original interests-step failure remains unexplained
+and is preserved, rather than erased by the successful repeat. Reddit newly reaches
+Process.getStartRequestedElapsedRealtime; the first candidate TikTok run newly queries XmlBlock
+and ImageReader$OnImageAvailableListener, absent from its repeat. These are observed-path coverage
+differences, not evidence of complete API support or a blanket regression waiver.
+
+Doodle Jump reveals a reproducible rendering cost in the newly added gesture handle: starting
+revision 9d0bb979 produces 36/37/38 fps, the candidate repeat 28/28/28, and immediate parent
+4846ca2a produces 36/38/38. `643b03c` rasterizes the two handle colors once per density instead
+of filling a rounded path directly on the frame canvas every frame. The repaired run produces
+36/37/38 fps. The exact browser-internal cost is not established, but the isolated comparison
+supports retaining this cache. Full-Chrome handle pixels are identical before/after; explicit
+appearance and visibility probes and typecheck pass. The cache is bounded to two small images.
+
+Evidence: systembars-baseline-actual/, systembars-repeat-actual/, systembars-parent-actual/,
+systembars-handle-cache-actual/ and their e2e-systembars-*.log files, systembars-cache-typecheck.log,
+systembars-cache-check.log and systembars-cache-guest.png. The immediate-parent comparison server
+used a detached scratch checkout at /tmp/webdroid-chatgpt-systembars-base, port 4096. The complete
+serialized matrix is repeated on the repaired revision; its results follow separately.
+
+
+### Cached system-bar final gate
+
+The repaired frozen revision `643b03c` completes the full serialized E2E matrix: 183 steps across
+13 flows in 964.7 seconds, exit zero, with no wedges, layout errors or required natives. There
+are no new missing API names or host error types relative to the retained window-repair candidate.
+ChatGPT completes 24/24 in 121.2 seconds; all 96 process inspections succeed, rendering is clean,
+and the only browser-error messages are its three known SLF4J warnings. TikTok completes 13/13
+without reproducing the earlier liveness failure. Doodle Jump completes 6/6 with 37/38/38 fps in
+its gameplay samples, retaining the cache's benefit within the complete matrix.
+
+YouTube retains its two known settling limits and six Matrix draw failures. Flappy Bird retains
+the known status-property TypeError and 12 unavailable auxiliary-process snapshots. These remain
+explicit gaps, not successes. Outside system bars, FitNotes is 39/39 pixel-identical to the prior
+candidate, Mihon onboarding 5/5 and Mihon app 15/17; both changed Mihon images show different random
+empty-library faces. Harmonic's welcome interior remains identical while its live feed differs.
+No golden changes or new permanent tests are added.
+
+Typecheck and browser appearance/visibility/pixel checks pass. ChatGPT smoke-compiles 66,165
+classes in 13.1 seconds with zero method failures. Evidence is preserved as
+systembars-cached-final-actual/, systembars-cached-final-report/, systembars-cached-final-summary.json,
+systembars-cached-final-audit.log, systembars-cached-content-comparison.json,
+e2e-systembars-cached-final.log and systembars-cache-smoke.log. The temporary immediate-parent
+server/check-out was removed after its comparison; both its results and the first full run remain
+available. The main full-Chrome session and private AVD remain open, and the comparison gallery
+shows the final country-sheet capture and isolated font raster evidence. Full authenticated
+operation and complete visual parity remain unfinished.
+
+### Android emoji fallback and fractional Paint metrics
+
+At `6d0815b7`, browser Paint uses the Android emoji fallback rather than the host platform's
+emoji. The API 33 AVD uses separate general COLRv1 and bitmap flag fonts. The retained AOSP
+files match the AVD SHA-256 hashes byte-for-byte; provenance, versions and licensing are in
+vendor/fonts/NotoEmoji-README.md. Their combined 3,616,936 bytes replace the 4,991,984-byte
+newer Noto font. This intentionally follows API 33 coverage rather than the newer Unicode
+coverage of the preceding asset. Both browser Canvas and native Skia use this pair.
+
+The browser loads the fonts before app layout to avoid caching host-fallback widths. An
+unloaded face measured the country flag at 48px wide, versus about 59.89px with Android's flag
+font. Same-origin child processes share the loaded system FontFace objects, avoiding duplicate
+font loading while preserving separate Java realms. The actual credential-provider process
+reports all six loaded system faces. The first country flag's isolated crop becomes
+pixel-identical to the AVD. Country row spacing and Latin ink weight remain separate issues.
+
+The emoji candidate passes typecheck, the owning font assertions and all 24 ChatGPT steps in
+122.0 seconds. All 96 process inspections succeed, with only the three known SLF4J messages,
+no rendering errors, settling limits or required natives. The last full regression gate above
+predates this font change. Startup must now load the emoji bytes before layout; local startup
+probes do not establish the effect on slow connections. Evidence: system-emoji-actual/,
+system-emoji-summary.json, emoji-child-country.log and font-probe/ under the ChatGPT scratch tree.
+
+A separate API 33 Paint oracle establishes fractional metrics at 48px: ascent -44.53125,
+descent 11.71875, top -50.6953125, bottom 13.0078125 and font spacing 56.25. Browser Canvas
+bounding-box metrics round ascent/descent to pixels, so system families now use the known
+Android font metrics directly. Top uses head.yMax rather than the OS/2 win-ascent value.
+The native delegate shares fillFontMetrics's return value: integer metrics return 57, the
+difference of separately rounded ascent/descent, rather than 56 from rounding float spacing.
+A single native-oracle unit case covers this boundary. Full Chrome matches these float and
+integer fields. The integer field bounds stay unchanged at this size; this metric repair
+alone does not remove the country's two-pixel-per-row drift. Native oracle output and the
+browser comparison are retained as font-probe/native-paint-metrics-final.log and
+font-probe/paint-metrics-final.json.
+
+The fractional-metrics candidate passes typecheck, three owning font tests (14 assertions),
+36 broader owning text/layout tests, and eight runnable framework exercises with the Paint
+cut (86/87 declared natives supported; the text-measure exercise still requires a browser).
+ChatGPT completes 24/24 in 124.4 seconds, with 96 successful process inspections, only the
+three known SLF4J messages and no rendering errors, settling limits or required natives.
+The standalone font test now links its own natives rather than relying on another test's
+initialization. Evidence: fractional-font-actual/, fractional-font-summary.json,
+e2e-fractional-fonts.log and fractional-final-{font-tests,fwtest,typecheck}.log.
+
+### Paragraph spans and country-row geometry
+
+The remaining 170px country-row stride was caused by selecting BoringLayout for text carrying
+LineHeightSpan. Android rejects every ParagraphStyle from this fast layout. Webdroid omitted
+that check and the LineHeightSpan interface inheritance, then ignored the constructor's
+includePad argument. Country labels consequently used baseline 54 while their flag layouts
+used 52. The app's unchanged baseline-alignment code enlarged each row by two pixels.
+
+LineHeightSpan now extends ParagraphStyle, its WithDensity variant extends LineHeightSpan,
+and isBoring rejects paragraph spans. Boring constructors honor includePad. The general layout
+calls the proper span overload before applying the first/last font padding, matching AOSP's
+StaticLayout ordering. The old order supplied padded metrics to the callback and incorrectly
+retained 72px height when Android's padded result was 65px. Incorrect comments were removed.
+
+The private API 33 oracle at 48px gives plain height/baseline 57/45 without padding and 65/51
+with it. A 72px LineHeightSpan is not boring; StaticLayout gives 72/52 without padding and
+65/51 with padding, including top padding 1 and bottom padding -6. The WithDensity callback
+receives the same Paint and produces the same values. One owning core case retains these
+boundaries. Typecheck and nine focused font/span/browser tests pass (72 assertions).
+
+In full Chrome, the app now builds unpadded StaticLayouts with 72px height and baseline 52
+for both country labels and flags. Chrome and the current AVD both have 168px row stride.
+All nine fully visible flag crops compare pixel-identically, not just the first row; Latin
+text remains heavier in Chrome. Search for Canada works in both apps and the country result
+can be selected. The minimized Android keyboard strip and device-state icons still differ.
+
+ChatGPT's focused run completes 24/24 in 121.4 seconds with 96 successful process inspections,
+only the three known SLF4J messages, and no rendering error, required native, settling limit
+or wedge. Evidence: paragraph-layout-actual/, paragraph-layout-summary.json,
+e2e-paragraph-layout.log, paragraph-layout-core-tests.log, chrome-country-paragraph-layout.png,
+avd-country-paragraph-layout.png and font-probe/{native-layout,native-layout-density}.log.
+The full regression gate below must cover these changes and the Android emoji asset pair;
+the earlier system-bar gate does not validate them.
+
+### Font and paragraph-layout final gate
+
+The frozen source candidate `f0ad6b11` passes typecheck and all 1,267 unit tests (26,869
+assertions across 219 files, 114.77 seconds). ChatGPT smoke-compiles all 66,165 classes with
+zero method failures in 24.3 seconds. All eight runnable framework exercises pass, with
+295/363 declared natives supported; Canvas text measurement still requires the browser.
+
+The serialized full E2E finishes all 183 steps across 13 flows in 1,071.8 seconds, exit zero.
+ChatGPT completes 24/24 in 126.0 seconds, with 96 successful process inspections and only the
+three known SLF4J messages. Across the full matrix there are no wedges, layout errors or
+required natives. Of 632 process inspections, 12 Flappy Bird auxiliary-frame inspections
+remain unavailable, with its existing status-property TypeError. YouTube retains its two
+settling limits and the same Matrix.mapRect failure, now counted nine times rather than six.
+Its extra unqualified missing-method spelling names that same overload, not a new API.
+
+Lichess again reports pthread errors 3/22/35 and reaches the FairyStockfish
+RootMove::extract_ponder_from_tt+0x280 null-address fault. The latter was absent from the
+immediately preceding full gate but is documented above on a pre-task pristine revision and
+in the earlier cleanup comparison. A fresh starting-revision replay and a candidate replay
+both complete 15/15 with the pthread failures and without the null-address fault. This
+establishes recurrence of a historical fault family, not its cause or unchanged frequency.
+There are no native-core source changes between this task's start and this candidate.
+
+The full run records Doodle gameplay at 29/30/28 fps, below the preceding 37–38 fps gate.
+A matched starting-revision run records 33/35/35 and the first candidate repeat 24/25/26.
+The immediate pre-font revision `643b03c` also slows to 26/30/29, versus 25/25/30 in the next
+candidate run. These results do not isolate a font-code regression. The task's long-lived
+full-Chrome renderer was consuming several CPU cores; a five-second profile records 4,258
+samples in garbage collection and very few in app execution. The 24 GiB host was using about
+10.1 GiB of swap. Page freezing did not stop that load, so only this task's renderer was
+briefly suspended for the remaining measurements and then resumed for diagnosis.
+
+After explicit collection the renderer retains 693,715,548 bytes of JS heap and 278,574,435
+bytes of backing storage, close to the earlier retained measurements, and CPU use drops.
+That does not prove absence of a leak. Clearing the long-lived owned browser session yields
+30/33/33 fps on the immediate pre-font revision and 30/31/32 on the candidate. The full timings
+remain confounded by changing host load; neither a throughput improvement nor recovery of
+the prior 37–38 fps is established. No speculative performance workaround is retained.
+The temporary comparison checkout/server was removed, and full Chrome was reopened and
+verified with advancing ticks, an idle main queue and the real country-selector flow.
+
+Mean golden content differences change from 39.70 to 39.24% for FitNotes, 56.06 to 47.77% for
+Mihon app, and 17.72 to 11.14% for Mihon onboarding. The onboarding welcome geometry was
+visually checked against its Android reference. Harmonic changes from 27.71 to 31.59%; its
+large comments delta is a different live article and content, verified by inspecting both
+captures. Lower aggregate scores alone do not prove every changed pixel is better. Goldens
+remain unchanged. Complete authentication and visual parity remain unfinished.
+
+Retained scratch evidence: fonts-final-{actual,report,summary.json,audit.log,new-missing.json,
+unit-tests.log,smoke.log,framework.log,perfsum.log}, e2e-fonts-final.log, fonts-baseline-games/,
+fonts-repeat-games/, fonts-{parent,candidate}-doodle/, fonts-{parent,candidate}-quieter/,
+chrome-frozen.cpuprofile, chrome-paused-page-cpu.sample.txt, chrome-long-session-state.json,
+chrome-long-session-post-gc.json and restored-country-stable-inspection.log. The comparison
+gallery includes the paired country selector and successful Canada search captures.
+
+
+### Code-quality review implementation and final gate
+
+Review baseline `a311e4d8`; final production revision `f326334b`. Five focused commits retain
+four fixes and one appearance-precedence correction:
+
+- `74603466`: runtime shader declarations, setters and GL uploads share one uniform type
+  descriptor. Comma-separated scalar declarations and arrays use the same validation contract;
+  color uniforms require four components. The existing browser fixture verifies the second
+  comma-declared scalar by rendering green pixels.
+- `7fb62ea1`: `linebreak.ts` owns paragraph traversal, offsets and line measurement for greedy
+  and balanced policies. JLayout supplies span-aware measurement and indivisible replacement
+  boundaries to both. The native LineBreaker path keeps its existing greedy policy. The
+  existing browser fixture verifies equal-width replacement spans retain balanced line breaks.
+- `33327b06`: native containers propagate child measurement flags and resolve their own bounds
+  without discarding state. The dimension-only helper is named `resolveSize`; the stateful
+  helper is `resolveSizeAndState`, matching their Java contracts. Existing measurement-cache
+  coverage now exercises nested FrameLayout, LinearLayout, GridLayout and RelativeLayout.
+- `f45ad79f`: colors belong to JWindow rather than AppHost. A shared system-bar snapshot selects
+  the top visible focusable full-screen window and drives both backgrounds and icon appearance.
+  Backgrounds are painted at that window's layer so higher floating scrims still dim them.
+  Existing icon/handle caches remain. One core window test checks dialog ownership and restoration.
+- `f326334b`: removed eager theme-light-appearance masking, which could override subsequent
+  legacy decor system-UI requests. Existing appearance precedence is preserved.
+
+At `f45ad79f`, typecheck and all 1,268 unit tests pass (26,911 assertions, 219 files, 103.58s).
+ChatGPT smoke-compiles 66,165 classes with zero method failures. Eight runnable framework
+exercises pass, covering 295/363 declared natives; Paint text remains a browser-only check.
+After the final appearance correction, its four owning tests (21 assertions) and typecheck
+pass again. No new test suite was introduced; the new window test and extensions exercise
+owning contracts rather than app-specific snapshots.
+
+The focused ChatGPT run completes 24/24 in 122.4s. The final serialized full matrix completes
+183 steps across 13 flows in 971.4s, exit zero. ChatGPT completes 24/24 in 118.8s, with 96
+successful process inspections, no new missing APIs/errors and only the known SLF4J messages.
+Its guest answer, settings, attachment and login-sheet paths remain reachable. Full Chrome
+was reloaded onto the final source and driven through the country selector again; its row
+and flag geometry matches the fresh owned API 33 AVD capture. Latin rasterization and the
+native minimized-keyboard strip still differ. Authentication and voice remain unvalidated.
+
+Across 632 process snapshots, 12 Flappy auxiliary-frame inspections remain unavailable with
+the historical status-property TypeError. There are no wedges, layout errors or required
+natives. YouTube retains `show-controls`/`pause` settling limits and the same Matrix.mapRect
+failure (six draw errors versus nine in the saved comparison). Lichess retains pthread
+errors 3/22/35. Timestamped Chromium DnsConfig warnings recur. Reddit additionally reaches
+Process.getStartRequestedElapsedRealtime, already documented in earlier gates but absent
+from the immediately preceding saved run. TikTok additionally probes its app-owned
+LocationClientImpl class; no matched replay establishes why this optional query differed.
+Changing object IDs, TLS pointers and network messages also prevent raw error strings from
+being a useful regression count. No success stub or speculative delegate was added.
+
+Mean golden content differences are FitNotes 39.82% (previously 39.24%), Mihon app 46.83%
+(47.77%), Mihon onboarding 11.14% (unchanged), and Harmonic 32.72% (31.59%). Visual inspection
+confirms Harmonic's overflow-screen delta includes different live articles and an active
+button highlight, with the menu geometry retained; the scores do not isolate causality.
+FitNotes' changed help dialog is a real geometry difference: the window expands from 640px
+to 720px at the 720px test screen. Read-only measurement instrumentation traces this to
+weighted horizontal rows emitting TOO_SMALL, now propagated through ScrollView and the
+outer containers into the existing preferred-width retry. Android 13 LinearLayout computes
+widthSizeAndState before weight redistribution and retains it in setMeasuredDimension
+([AOSP source](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-13.0.0_r1/core/java/android/widget/LinearLayout.java#L1333)).
+The restored state contract is retained; the native dialog reconstruction still differs from
+the reference. This increased visual discrepancy remains unresolved and the full run must
+not be described as proof of complete visual non-regression. Goldens are unchanged.
+
+Timing is not a controlled performance comparison: another worktree ran its own E2E on the
+same host during this matrix. Doodle gameplay is 26/28/29 fps versus 29/30/28 previously;
+these samples do not establish either a speedup or a regression. System-bar selection covers
+visible full-screen dialogs within one process; general multi-window and cross-process bar
+arbitration are still limited.
+
+Evidence under `webdroid-shots/chatgpt/`: review-unit.log, review-smoke.log,
+review-framework.log, review-focused-chatgpt.log, review-full-e2e.log,
+review-full-{actual,report,summary.json,audit.log}, review-final-country.{png,json},
+review-avd-country.png and review-fitnotes.{ts,log}. The saved comparison is
+fonts-final-{actual,report}; it has the review baseline's production source. Diagnostic
+measurement instrumentation lives only in ignored scratch scripts and is not shipped.
+
+
+### Second code-quality review follow-up
+
+Review baseline `cbfc6fae`; final production candidate `27f36406`. The four selected findings
+are implemented in focused commits, without changing goldens or adding a test suite:
+
+- `7d5bfddc`: system-bar selection uses the laid-out overlay frame, visibility and focusability.
+  Explicit screen dimensions and MATCH_PARENT produce the same owner when their frames match;
+  hidden, unfocusable and partial-width overlays retain the activity's bars.
+- `13c1b3db`: the line breaker's content model owns atomic replacement ranges, legal boundaries,
+  removable spaces and paragraph separators. Greedy advancement and balanced candidate/visible
+  text handling use it consistently. A space carrying a ReplacementSpan is content rather than
+  trimmable whitespace; newline characters inside a replacement do not split that content.
+- `6f15c5c9`: `recording.ts` owns recording dispatch, the Canvas proxy and scoped replay-canvas
+  context. Graphics and SurfaceView paths use typed functions instead of probing hidden
+  __isRecorder/__record properties. The existing surface test now exercises this recorder.
+- `27f36406`: captured uniform/local-matrix state is separate from the compiled program's
+  recyclable raster. Identical draws share the captured state and raster result; uniform changes
+  invalidate the current capture without mutating recorded values. Each program retains at most
+  one raster/cache entry, keyed by captured state, destination dimensions and transform. Replaying
+  alternating states can re-render; no unbounded raster map is introduced.
+
+The original replacement-space browser probe had one measured span but zero draw callbacks.
+It now wraps to two lines and draws the span once. The existing TextView fixture checks both
+simple and balanced breaking. The shader probe changes from two GPU draws for two identical
+snapshots to one; the existing pixel fixture still verifies frozen recorded uniforms,
+premultiplied alpha and transformed coordinates. This is evidence of eliminated duplicate
+rasterization, not an app-wide throughput benchmark.
+
+Typecheck and all 1,268 unit tests pass (26,914 assertions across 219 files, 87.61s). ChatGPT
+smoke-compiles 66,165 classes with zero method failures in 26.45s. Eight runnable framework
+exercises pass; declared-native coverage remains 295/363, with Canvas text checked in-browser.
+The focused ChatGPT flow completes 24/24 in 129.5s with 96 successful process inspections and
+no new missing APIs/errors, rendering failures, required natives, settling limits or wedges.
+Full Chrome was reloaded onto this source and driven through the actual country selector.
+Fresh Chrome/owned-AVD captures retain matching row geometry; Latin rasterization and the
+native minimized-keyboard strip remain different. The early capture caught the opening
+animation; the stable capture is the comparison evidence.
+
+The final serialized matrix completes 183 steps across 13 flows in 978.8s. ChatGPT completes
+24/24 in 124.3s; its 96 process inspections have no added missing APIs/errors or rendering
+failures. All 632 process inspection records were audited; 12 unavailable Flappy child
+inspections remain an evidence gap. No flow adds a missing API, layout error, required
+native or wedge. YouTube retains its show-controls/pause settling limits and the same
+Matrix.mapRect failure, counted seven times versus six in the baseline. Lichess retains
+pthread failures 3/22/35. Raw log differences are timestamp/address changes and TikTok's
+initialization/TLS diagnostics, not new failure families. This is not a clean error-free gate.
+
+FitNotes' mean content difference is identical at 39.82%. Mihon app/onboarding improve from
+46.83%/11.14% to 42.83%/9.08%. Inspection shows the recorder now preserves native property
+membership checks: `"letterSpacing" in ctx` reaches the Canvas mirror, so recorded text honors
+its spacing. Settings and onboarding text align more closely with the Android reference.
+Mihon's larger final-library delta is a different app-generated emoticon; it does not establish
+a layout regression. Harmonic improves from 32.72% to 32.01% with different live feed content,
+so that score cannot be attributed to this change. Goldens are unchanged. Doodle gameplay
+samples are 32/34/33 fps versus 26/28/29 in the baseline; host conditions are not controlled
+enough to claim a throughput improvement.
+
+Evidence under `webdroid-shots/chatgpt/`: followup-{typecheck,unit,smoke,framework,chatgpt}.log,
+followup-focused-{actual,summary.json}, followup-country-stable.{png,json},
+followup-avd-country.png, quality-{shader,span}-{fixture,probe}.ts, followup-full-e2e.log
+and followup-full-{actual,report,summary.json,audit.log}. These scratch probes are ignored; production source stayed frozen during
+final capture. Authentication, voice and the earlier FitNotes help-dialog discrepancy remain
+outside the four selected review repairs.
+
+
+### ChatGPT parity integration into main
+
+Merged `codex/chatgpt-parity` at `2dafbaa0` with main at `1c46fe7b`. Writer retains main's
+lock field/constructor and the branch's virtual range dispatch. The combined browser fixture
+checks main's cursor drawable and the branch's balanced/replacement-span behavior. Activity
+window cleanup, package-query flags, lazy JVM methods and native JIT changes from main remain.
+Both task plans, histories and window tests are retained.
+
+Typecheck passes. The combined suite passes all 1,271 tests with 26,974 assertions across
+219 files. An initial run started alongside Wasm regeneration failed the low-address cache
+assertion; its isolated 12 tests and the complete rerun pass with unchanged source/assertions.
+ChatGPT compiles 66,165 classes and TikTok 462,058, both with zero method failures. No additional
+full E2E matrix was run for this integration; the prior matrices remain revision-specific.
+Evidence is retained in the main checkout under `webdroid-shots/chatgpt/merge-*.log`, alongside
+the prior ChatGPT captures. Task-owned development servers, browser bridge, Chrome profile and
+reference emulator were stopped before removing the implementation worktree.

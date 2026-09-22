@@ -476,6 +476,23 @@ test("reached JDK utility primitives preserve their Java behavior", async () => 
   expect(await vcall(file, "setReadOnly", "()Z")).toBe(1);
 });
 
+test("Writer overloads reach virtual range writes without dropping JSON tokens", async () => {
+  const writer = await newObj("java/io/Writer"), chunks: string[] = [];
+  writer[mangleMethod("write", "([CII)V")] = async (chars: Uint16Array, off: number, len: number) => {
+    await Promise.resolve(); chunks.push(String.fromCharCode(...chars.subarray(off, off + len)));
+  };
+  await vcall(writer, "write", "(I)V", 123);
+  await vcall(writer, "write", "(Ljava/lang/String;)V", '"n":');
+  await vcall(writer, "write", "(Ljava/lang/String;II)V", "x42x", 1, 2);
+  await vcall(writer, "append", "(C)Ljava/io/Writer;", 125);
+  expect(chunks.join("")).toBe('{"n":42}');
+  writer[mangleMethod("write", "(Ljava/lang/String;II)V")] = async (text: string, off: number, len: number) => {
+    await Promise.resolve(); chunks.push(text.slice(off, off + len));
+  };
+  await vcall(writer, "write", "(Ljava/lang/String;)V", "\ud83d\ude00");
+  expect(chunks.at(-1)).toBe("\ud83d\ude00");
+});
+
 test("network support objects retain packet and HTTP parameter state", async () => {
   const address = await scall("java/net/InetAddress", "getByAddress", "([B)Ljava/net/InetAddress;", Int8Array.of(-17, -1, -1, -6));
   const bytes = Int8Array.of(1, 2, 3);

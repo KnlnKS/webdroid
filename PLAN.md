@@ -21,6 +21,57 @@ must identify that state difference; authentication and publishing are outside t
 
 ---
 
+# ChatGPT parity repair
+
+Branch: `codex/chatgpt-parity`. Starting revision: `9d0bb979`.
+Status: guest flows repaired; full authentication and visual parity remain incomplete.
+
+Current implementation: `27f36406`; expanded ChatGPT flow: `6c958327`. Guest responses,
+settings, attachments, Plugins and reachable email/phone forms work. Browser and native text
+share the API 33 Android emoji font pair; fractional metrics and paragraph-span routing retain
+the country-list geometry established in the previous parity pass.
+
+The code-quality review follow-up shares paragraph measurement and replacement boundaries
+between greedy and balanced wrapping, propagates measured state through native containers,
+resolves system-bar colors and appearance from the presented window, and uses one uniform
+descriptor for shader declaration validation and uploads. A theme-appearance override was
+removed during validation to preserve existing legacy system-UI precedence.
+
+The second review follow-up selects system bars from resolved overlay bounds, treats replacement
+spans as indivisible content during whitespace handling, centralizes display-list recording and
+replay context in one typed module, and shares a single recyclable shader raster per program.
+Focused browser checks verify replacement spaces are drawn and identical recorded shader
+snapshots rasterize once while preserving captured uniforms.
+
+Current gate: typecheck; 1,268 unit tests (26,914 assertions across 219 files); ChatGPT
+smoke compilation of 66,165 classes with zero method failures; eight runnable framework
+exercises with 295/363 declared natives supported. The focused ChatGPT run completes 24/24
+steps in 129.5 seconds. Fresh full-Chrome and AVD country-list captures retain aligned rows.
+The final serialized matrix completes 183 steps in 13 flows in 978.8 seconds; ChatGPT completes
+24/24 in 124.3 seconds with no added missing APIs/errors, rendering failures or settling limits.
+Across the matrix there are no added missing APIs, wedges, layout errors or required natives.
+Known YouTube control timeouts remain, with seven Matrix.mapRect draw errors versus six in the
+baseline; historical Lichess failures and unavailable Flappy child diagnostics remain.
+FitNotes' mean golden content difference is unchanged at 39.82%, retaining its prior help-dialog
+discrepancy. Mihon's app/onboarding differences improve to 42.83%/9.08% as the recorder now
+preserves Canvas letter-spacing capability checks; random emoticons still affect its score.
+Harmonic scores 32.01% with different live content. These results do not establish full parity.
+
+Remaining limits: authenticated uploads and voice are unvalidated because no credentials have
+been entered. microG's extra chooser, Visualize's remote icon, Latin text rasterization,
+the native minimized-keyboard strip and long-session retention remain unresolved. System-bar
+selection now handles visible full-screen dialogs within a process; general multi-window and
+cross-process bar arbitration remain limited. Concurrent tests in another worktree share this
+host, so the current run is not a clean performance benchmark. Goldens remain unchanged.
+See [implementation history](docs/implementation-history.md) for evidence and comparison limits.
+
+- Run unchanged ChatGPT XAPK in full Chrome and API 33 AVD at 1080×2160, 480 dpi.
+- Fix reached platform failures at their canonical owners, guided by native evidence.
+- Test ChatGPT and changed core behavior during development; run full E2E at the end.
+- Preserve goldens, record unresolved limits, and keep commits focused.
+
+---
+
 # TikTok parity repair
 
 Branch: `codex/tiktok-parity`. Starting revision: `9071fec70953eb3b76df86c6cdede69bdf316eaf`.

@@ -1,4 +1,4 @@
-import { AID, rvInt, themeOf } from "./res";
+import { AID, rvInt, rvColor, themeOf, type JTheme } from "./res";
 import { rt, JObj, callSelf, stubs, noops } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import type { JFrameLayout } from "./layouts";
@@ -33,6 +33,7 @@ export class JWindow extends JObj {
   backDispatcher(): JObj { return this.backD ??= rt.make("android/window/OnBackInvokedDispatcher"); }
   /** WindowManager.LayoutParams flags; the shell reads FLAG_FULLSCREEN off the top activity. */
   flags = 0;
+  translucent = false;
   decorFitsSystemWindows = true;
   fitInsetsSides = 15;
   fitInsetsTypes = 7;
@@ -48,12 +49,22 @@ export class JWindow extends JObj {
   appearance = 0;
   appearanceMask = 0;
   barsBehavior = 1;
+  statusBarColor: number | null = null;
+  navBarColor: number | null = null;
   navBarDividerColor = 0;
   insetsController: JInsetsController | null = null;
   enterTransition: unknown = null;
   exitTransition: unknown = null;
 }
 export const APPEARANCE_LIGHT_STATUS_BARS = 8;
+export const APPEARANCE_LIGHT_NAVIGATION_BARS = 16;
+export function applyWindowTheme(window: JWindow, theme: JTheme, statusDefault = -16777216) {
+  window.statusBarColor ??= rvColor(theme.res, theme.lookup(AID("statusBarColor")), statusDefault);
+  window.navBarColor ??= rvColor(theme.res, theme.lookup(AID("navigationBarColor")), -16777216);
+  window.translucent = !!rvInt(theme.res, theme.lookup(AID("windowIsTranslucent")), 0);
+  if (rvInt(theme.res, theme.lookup(AID("windowFullscreen")), 0)) window.flags |= 1024;
+
+}
 class JInsetsController extends JObj { w: JWindow = null!; }
 /** A change to how a window is sized or placed relays out its tree: an activity's decor or a
  *  dialog's frame. A window not built yet lays out fresh when it is. */
@@ -123,12 +134,11 @@ rt.register({
     },
     "requestFeature(I)Z": function (this: JWindow, f: number) { this.features.add(f); return 1; },
     "setStatusBarColor(I)V": function (this: JWindow, c: number) {
-      if (appHost) appHost.statusBarColor = c;
-      invalidate();
+      this.statusBarColor = c; invalidate();
     },
-    "getStatusBarColor()I": () => appHost?.statusBarColor ?? -16777216,
-    "getNavigationBarColor()I": () => appHost?.navBarColor ?? -16777216,
-    "setNavigationBarColor(I)V": function (this: JWindow, c: number) { if (appHost) appHost.navBarColor = c; },
+    "getStatusBarColor()I": function (this: JWindow) { return this.statusBarColor ?? -16777216; },
+    "getNavigationBarColor()I": function (this: JWindow) { return this.navBarColor ?? -16777216; },
+    "setNavigationBarColor(I)V": function (this: JWindow, c: number) { this.navBarColor = c; invalidate(); },
     "setNavigationBarDividerColor(I)V": function (this: JWindow, c: number) { this.navBarDividerColor = c; invalidate(); },
     "getNavigationBarDividerColor()I": function (this: JWindow) { return this.navBarDividerColor; },
     "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JWindow, d: JDrawable | null) {
@@ -190,7 +200,7 @@ rt.register({
 // API-30 window state, shared by decor's inset consumption and the shell's bar rendering.
 rt.register({
   name: "android/view/WindowInsetsController", ctor: class extends JObj {},
-  statics: { APPEARANCE_LOW_PROFILE_BARS: 4, APPEARANCE_LIGHT_STATUS_BARS, APPEARANCE_LIGHT_NAVIGATION_BARS: 16,
+  statics: { APPEARANCE_LOW_PROFILE_BARS: 4, APPEARANCE_LIGHT_STATUS_BARS, APPEARANCE_LIGHT_NAVIGATION_BARS,
     BEHAVIOR_DEFAULT: 1, BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE: 2 },
 });
 rt.markers("android/view/WindowInsetsController$OnControllableInsetsChangedListener");

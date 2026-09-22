@@ -3,7 +3,7 @@ import { AID, resString } from "./res";
 
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
-import { vcall } from "../jvm/natives/jlang";
+import { newObj, vcall } from "../jvm/natives/jlang";
 import {
   JView, JFrameLP, JLinearLP, attachView, addUnattachedView, detachView, requestLayout, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST,
   specSize, findById, guardCall, dispatchAttached, dispatchDetached
@@ -15,12 +15,12 @@ import { JCanvas, tfMedium , JRect } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";
-import { rvInt, rvFloat, rvDimen, themeOf, JTheme } from "./res";
+import { rvInt, rvFloat, rvDimen, askTheme, themeOf } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
 import { inflateLayout, getInflater } from "./inflate";
 import { csText } from "./text";
-import type { JWindow } from "./window";
+import { applyWindowTheme, type JWindow } from "./window";
 import { complexToFraction } from "./util";
 
 const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
@@ -28,27 +28,13 @@ const M_setBounds = mangleMethod("setBounds", "(IIII)V");
 const M_onCreate = mangleMethod("onCreate", "(Landroid/os/Bundle;)V");
 const M_getPadding = mangleMethod("getPadding", "(Landroid/graphics/Rect;)Z");
 
-/**
- * The dialog's theme: the host theme with the dialog style layered on top — the explicit
- * one passed to Dialog(Context, int) if there is one, else the host theme's own dialogTheme.
- * Without this every dialog inherited the activity's window background (and we painted a
- * hardcoded white card instead).
- */
-/** Dialog(Context, theme): the window theme layers the explicit style (else the context theme's
- *  dialogTheme) over the CONTEXT's theme — a ContextThemeWrapper's own, not the application's. */
-function dialogTheme(ctx: any, themeId: number): JTheme | null {
-  const base: JTheme | null = themeOf(ctx);
-  if (!base) return null;
-  let styleId = themeId;
-  if (!styleId) {
-    const rv = base.lookup(AID("dialogTheme"));
-    styleId = rv && rv.t === TV.REFERENCE ? rv.d : 0;
+export async function initDialog(this: JDialog, ctx: unknown, themeId = 0) {
+  const base = await askTheme(ctx);
+  if (!themeId) {
+    const rv = base?.lookup(AID("dialogTheme"));
+    themeId = rv?.t === TV.REFERENCE ? rv.d : 0;
   }
-  if (!styleId) return base;
-  const t = new JTheme();
-  t.res = base.res;
-  t.styles = [...base.styles, styleId];
-  return t;
+  this.jctx = await newObj("android/view/ContextThemeWrapper", "(Landroid/content/Context;I)V", ctx, themeId);
 }
 
 async function loadCardBg(root: DialogRoot): Promise<void> {
@@ -110,7 +96,14 @@ rt.register({
         const padW = this.bgPad[0] + this.bgPad[2], padH = this.bgPad[1] + this.bgPad[3];
         const widthLimit = lw >= 0 ? lw : maxW, heightLimit = lh >= 0 ? lh : maxH;
         const hSpec = makeSpec(Math.max(0, heightLimit - padH), lh === -2 ? MS_AT_MOST : MS_EXACTLY);
-        await measureView(c, makeSpec(Math.max(0, widthLimit - padW), lw === -2 ? MS_AT_MOST : MS_EXACTLY), hSpec);
+        const preferred = lw === -2 && this.jres
+          ? rvDimen(this.jres, this.jres.value(this.jres.idFor("dimen", "config_prefDialogWidth", "android")), 0) : 0;
+        // ViewRootImpl tries the platform dialog width before allowing a wrapping window to expand.
+        const widths = preferred > 0 && preferred < widthLimit ? [preferred, (preferred + widthLimit) >> 1, widthLimit] : [widthLimit];
+        for (const width of widths) {
+          await measureView(c, makeSpec(Math.max(0, width - padW), lw === -2 ? MS_AT_MOST : MS_EXACTLY), hSpec);
+          if (!(c.measuredState & 0x01000000)) break;
+        }
         let width = c.measuredW + padW;
         if (lw === -2 && this.theme && this.jres) {
           const min = this.theme.lookup(AID(device.orientation === 1 ? "windowMinWidthMinor" : "windowMinWidthMajor"));
@@ -176,7 +169,7 @@ class JDialog extends JObj {
   win: JWindow | null = null;
   content: JView | null = null;
   titleStr: string | null = null;
-  themeId = 0;
+  ownerActivity: unknown = null;
   showing = false;
   cancelable = true;
   canceledOnTouchOutside = true;
@@ -207,7 +200,7 @@ class JDialog extends JObj {
       r.dialog = this;
       r.ctx = this.jctx;
       r.jres = this.jctx?.$host?.res ?? null;
-      r.theme = dialogTheme(this.jctx, this.themeId);
+      r.theme = themeOf(this.jctx);
       const c = r.content = new JFrameLayout();
       c.ctx = r.ctx; c.jres = r.jres; c.theme = r.theme;
       c.idNum = 0x01020002;
@@ -234,13 +227,10 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     const i = rt.link("android/window/OnBackInvokedDispatcher");
     return new i.ctor();
   },
-  "<init>(Landroid/content/Context;)V": function (this: JDialog, c: unknown) { this.jctx = c; },
-  "<init>(Landroid/content/Context;I)V": function (this: JDialog, c: unknown, themeId: number) {
-    this.jctx = c;
-    this.themeId = themeId | 0;
-  },
-  "<init>(Landroid/content/Context;ZLandroid/content/DialogInterface$OnCancelListener;)V": function (this: JDialog, c: unknown, canc: number, l: unknown) {
-    this.jctx = c;
+  "<init>(Landroid/content/Context;)V": initDialog,
+  "<init>(Landroid/content/Context;I)V": initDialog,
+  "<init>(Landroid/content/Context;ZLandroid/content/DialogInterface$OnCancelListener;)V": async function (this: JDialog, c: unknown, canc: number, l: unknown) {
+    await initDialog.call(this, c);
     this.cancelable = !!canc;
     this.cancelL = l;
   },
@@ -296,7 +286,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     }
     requestLayout(root);
   },
-  "hide()V": function (this: JDialog) { if (this.root) this.root.visibility = 4; },
+  "hide()V": function (this: JDialog) { if (this.root) return vcall(this.root, "setVisibility", "(I)V", 4); },
   "dismiss()V": function (this: JDialog) { return this.dismissImpl(); },
   "cancel()V": function (this: JDialog) { return this.cancel(); },
   "isShowing()Z": function (this: JDialog) { return this.showing ? 1 : 0; },
@@ -314,25 +304,33 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   // one Window per dialog, its callback the dialog itself (AOSP's ctor does w.setCallback(this)):
   // appcompat wraps that callback and rejects a null one
   "getWindow()Landroid/view/Window;": function (this: JDialog) {
+    const root = this.ensureRoot();
     if (!this.win) {
       this.win = new (rt.link("android/view/Window").ctor as new () => JWindow)();
       this.win.callbackObj = this;
       this.win.dialog = this;
+      if (root.theme) applyWindowTheme(this.win, root.theme);
+      if (root.jres && root.theme && !rvInt(root.jres, root.theme.lookup(AID("windowIsFloating")), 0)) {
+        this.win.flags |= 0x10100; // PhoneWindow: LAYOUT_IN_SCREEN | LAYOUT_INSET_DECOR.
+        this.win.fitInsetsSides = this.win.fitInsetsTypes = 0;
+        this.win.layoutW = this.win.layoutH = -1;
+      }
     }
-    this.win.decor = this.ensureRoot();
+    this.win.decor = root;
     this.win.decor.windowOwner = this.win;
     return this.win;
   },
   "getLayoutInflater()Landroid/view/LayoutInflater;": async function (this: JDialog) {
     return getInflater(this.jctx);
   },
-  "getOwnerActivity()Landroid/app/Activity;": function (this: JDialog) { return this.jctx; },
+  "getOwnerActivity()Landroid/app/Activity;": function (this: JDialog) { return this.ownerActivity; },
+  "setOwnerActivity(Landroid/app/Activity;)V": function (this: JDialog, activity: unknown) { this.ownerActivity = activity; },
   "onBackPressed()V": function (this: JDialog) { if (this.cancelable) return this.cancel(); },
   // Window.Callback, as Dialog's defaults
   "onContentChanged()V": function () {},
   "onSaveInstanceState()Landroid/os/Bundle;": () => rt.make("android/os/Bundle"),
   ...noops("onCreate(Landroid/os/Bundle;)V", "onStart()V", "onStop()V",
-    "setOnKeyListener(Landroid/content/DialogInterface$OnKeyListener;)V", "setOwnerActivity(Landroid/app/Activity;)V",
+    "setOnKeyListener(Landroid/content/DialogInterface$OnKeyListener;)V",
     "create()V", "onAttachedToWindow()V", "onDetachedFromWindow()V",
     "onWindowAttributesChanged(Landroid/view/WindowManager$LayoutParams;)V", "onWindowFocusChanged(Z)V",
     "onPanelClosed(ILandroid/view/Menu;)V", "onActionModeStarted(Landroid/view/ActionMode;)V",
@@ -378,7 +376,7 @@ async function buildAlertContent(d: JAlertDialog) {
   col.orientation = 1;
   col.ctx = d.jctx;
   col.jres = d.jctx?.$host?.res ?? null;
-  col.theme = d.jctx?.$host?.theme ?? null;
+  col.theme = themeOf(d.jctx);
   // AOSP's alert layout weights the message and custom panels so an overflowing body shrinks
   // and the button bar keeps its height
   const lpFill = (weight = 0) => {
@@ -494,8 +492,8 @@ class JAlertBuilder extends JObj {
 async function builderTitle(this: JAlertBuilder, t: unknown) { this.d.titleStr = await str(this.d.jctx?.$host, t); return this; }
 async function builderMessage(this: JAlertBuilder, m: unknown) { this.d.message = await str(this.d.jctx?.$host, m); return this; }
 const builderMethods: NativeSpec["methods"] = {
-  "<init>(Landroid/content/Context;)V": function (this: JAlertBuilder, c: unknown) { this.d.jctx = c; },
-  "<init>(Landroid/content/Context;I)V": function (this: JAlertBuilder, c: unknown) { this.d.jctx = c; },
+  "<init>(Landroid/content/Context;)V": function (this: JAlertBuilder, c: unknown) { return initDialog.call(this.d, c); },
+  "<init>(Landroid/content/Context;I)V": function (this: JAlertBuilder, c: unknown, themeId: number) { return initDialog.call(this.d, c, themeId); },
   "setTitle(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;": builderTitle,
   "setTitle(I)Landroid/app/AlertDialog$Builder;": builderTitle,
   "setMessage(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;": builderMessage,
@@ -561,7 +559,7 @@ rt.register({ name: "android/app/ProgressDialog", ctor: class extends JAlertDial
     "static show(Landroid/content/Context;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/app/ProgressDialog;":
       async (c: any, t: unknown, m: unknown) => {
         const d = rt.make("android/app/ProgressDialog");
-        d.jctx = c;
+        await initDialog.call(d, c);
         d.titleStr = await str(c?.$host, t);
         d.message = await str(c?.$host, m);
         await callSelf(alertMethods, "show()V", d);
