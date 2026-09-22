@@ -761,6 +761,10 @@ describe("thumb decoder", () => {
     expect([c.w[12], c.w[14]]).toEqual([11, 1]);
     expect([c.w[22], c.w[24]]).toEqual([3, 0]);
     expect(c.cpsr >>> 28).toBe(0xa);
+    const arm = run([0xe0410392, BXLR], cpu => {
+      cpu.w[0] = 5; cpu.w[2] = 6; cpu.w[4] = -1; cpu.w[6] = -1;
+    });
+    expect([arm.w[0], arm.w[2]]).toEqual([12, -2]);
   });
 
   test("flags resume after a multi-instruction IT block", () => {

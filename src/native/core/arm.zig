@@ -587,10 +587,12 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
             if (w & (1 << 20) != 0) setNZ(c, v);
             return .next;
         }
-        if ((w & 0x0f8000f0) == 0x00800090) {
-            const signed = w & (1 << 22) != 0;
+        const dual_accumulate = w & 0x0ff000f0 == 0x00400090;
+        if ((w & 0x0f8000f0) == 0x00800090 or dual_accumulate) {
+            const signed = !dual_accumulate and w & (1 << 22) != 0;
             var p: u64 = if (signed) @bitCast(@as(i64, @as(i32, @bitCast(reg(c, rm, pc)))) *% @as(i64, @as(i32, @bitCast(reg(c, rs, pc))))) else @as(u64, reg(c, rm, pc)) *% @as(u64, reg(c, rs, pc));
-            if (w & (1 << 21) != 0) p +%= (@as(u64, r(c, rn)) << 32) | r(c, rd);
+            if (dual_accumulate) p += @as(u64, r(c, rn)) + r(c, rd)
+            else if (w & (1 << 21) != 0) p +%= (@as(u64, r(c, rn)) << 32) | r(c, rd);
             set(c, rd, @truncate(p));
             set(c, rn, @intCast(p >> 32));
             if (w & (1 << 20) != 0) c.cpsr = (c.cpsr & 0x3fff_ffff) | (@as(u32, @intCast(p >> 63)) << 31) | (@as(u32, @intFromBool(p == 0)) << 30);

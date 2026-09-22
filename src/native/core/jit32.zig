@@ -434,13 +434,15 @@ fn dataProcessing(e: *Emit, w: u32, pc: u32, k: u32, top: u32, rn: u32, rd: u32,
             if (S) e.pend(false, .nz);
             return false;
         }
-        if ((w & 0x0f8000f0) == 0x00800090) {
-            const ext: u8 = if (w & (1 << 22) != 0) O.i64_extend_i32_s else O.i64_extend_i32_u;
+        const dual_accumulate = w & 0x0ff000f0 == 0x00400090;
+        if ((w & 0x0f8000f0) == 0x00800090 or dual_accumulate) {
+            const ext: u8 = if (!dual_accumulate and w & (1 << 22) != 0) O.i64_extend_i32_s else O.i64_extend_i32_u;
             getR(e, rm, pc, false);
             b.byte(ext);
             getR(e, rs, pc, false);
             b.emit(.{ ext, O.i64_mul });
-            if (w & (1 << 21) != 0) b.emit(.{ get(L_X + rn), O.i64_extend_i32_u, wasm.c64(32), O.i64_shl, get(L_X + rd), O.i64_extend_i32_u, O.i64_or, O.i64_add });
+            if (dual_accumulate) b.emit(.{ get(L_X + rn), O.i64_extend_i32_u, O.i64_add, get(L_X + rd), O.i64_extend_i32_u, O.i64_add })
+            else if (w & (1 << 21) != 0) b.emit(.{ get(L_X + rn), O.i64_extend_i32_u, wasm.c64(32), O.i64_shl, get(L_X + rd), O.i64_extend_i32_u, O.i64_or, O.i64_add });
             b.emit(.{ tee(jit.L_T0), O.i32_wrap_i64, set(L_X + rd), get(jit.L_T0), wasm.c64(32), O.i64_shr_u, O.i32_wrap_i64, set(L_X + rn) });
             if (w & (1 << 20) != 0) {
                 e.eager(jit.FN | jit.FZ);
