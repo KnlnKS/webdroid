@@ -5642,3 +5642,116 @@ window-final-audit.log, e2e-window-final.log, window-final-unit.log and window-f
 The comparison gallery includes the corrected country sheet and undimmed provider login.
 Full authenticated functionality and complete visual parity remain unfinished; no account
 credentials, phone/email submission or authenticated upload/voice operation has been performed.
+
+
+### System-bar geometry and isolated font raster comparison
+
+The system-bar renderer now uses the paired framework's Wi-Fi/battery paths and API 33 SystemUI
+geometry: 14sp clock, 7.8×13dp battery and 108×4dp gesture handle with 10dp bottom clearance.
+Status icons and the handle draw above dialog dimming. BatteryManager and the icon share the
+existing virtual device's 80%-charging state; the private AVD is at 100% and is not charging.
+Webdroid does not add a fictitious cellular connection to copy the AVD's cellular icon. The two
+battery bitmaps are cached by density/state, and framework paths are cached per Resources.
+This replaces placeholder drawing in the main device loop with one owning system-bars module.
+
+Fresh full-Chrome country captures confirm the status icons no longer fade under the dialog.
+At 1080×2160 both Chrome and the AVD have gesture-handle bounds [378,2118,702,2130]. A browser
+pixel probe through WindowInsetsController verifies explicit light/dark appearance, hide/show,
+and BatteryManager's level/status/charging values. The AVD retains its minimized-keyboard strip;
+per-window ownership of bar colors/appearance and complete SystemUI behavior remain incomplete.
+No font, golden or application bytecode is changed.
+
+An isolated API 33 Canvas oracle now confirms that font bytes alone do not explain the heavier
+Chrome text. app_process must initialize Typeface.loadPreinstalledSystemFontMap before using
+Paint; otherwise this non-Zygote probe crashes in native typeface initialization. The successful
+probe draws “Afghanistan” at 48px, weight 400, on #ebebeb with #0d0d0d ink. With Android Paint flags
+1, 129 and 193, summed normalized ink coverage is 2740.0, 2743.7 and 2751.1. Chrome draws 3292.7
+with bundled Roboto and 3290.8 with the exact AVD regular font file, approximately 20% more ink.
+Native widths are 260/260/259px, versus Chrome's 258.61/258.21px. A live app draw is a single
+fillText at alpha 1 with no stroke or shadow. This isolates a host font-rendering difference
+outside webdroid; its precise rasterizer/hinting mechanism is not established. Artificial weight
+or alpha adjustments are not retained as a platform repair.
+
+Evidence: font-probe/FontRasterProbe.java, android-{1,129,193}.png, chrome-Roboto.png,
+chrome-NativeRegularProbe.png, chrome-metrics.log and row-draw.json; systembars-check.log,
+chrome-systembars-country-final.png and avd-systembars-country.png. Typecheck and the five owning
+window/context checks pass (29 assertions). The earlier full regression gate covers 80b91f98;
+it does not validate this later system-bar change. Focused and final results follow below.
+
+Sources:
+https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/packages/SystemUI/res/values/dimens.xml
+https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/NavigationHandle.java
+https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/packages/SettingsLib/src/com/android/settingslib/graph/ThemedBatteryDrawable.kt
+https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/graphics/java/android/graphics/Typeface.java
+
+At `976ca274`, the focused ChatGPT run completes 24/24 in 122.7 seconds with 96 successful process
+inspections and no rendering errors, required natives, wedges or settling limits. The final
+serialized matrix executes 183 steps in 969.2 seconds, exit zero; TikTok's interests step fails
+its liveness check, so the matrix is not an unqualified pass. TikTok resumes and completes the
+remaining actions. ChatGPT is 24/24 in 119.6 seconds with clean rendering and all 96 inspections
+successful. No flow reports a new host error type, layout error or required native delegate.
+YouTube retains two settling limits and six known Matrix draw errors. Flappy Bird retains the
+same status-property TypeError and 12 unavailable auxiliary-process snapshots. Doodle Jump's
+three gameplay samples are 28/28/29 fps, versus 29/31/30 in the preceding unmatched run.
+
+Outside the deliberate system-bar pixels, FitNotes is 39/39 pixel-identical to the preceding
+candidate, Mihon onboarding 5/5, and Mihon app 15/17. Visual inspection confirms the two Mihon
+differences are initial loading completion and the random empty-library face. Harmonic's welcome
+interior [70,210,650,1000] is identical; live feed content, scores and colors differ behind it.
+No golden is updated. These results do not establish a speedup or full screenshot parity.
+
+The original complete run and report are preserved in systembars-final-actual/ and
+systembars-final-report/, with systembars-final-summary.json, systembars-final-audit.log,
+systembars-content-comparison.json and e2e-systembars-final.log. Targeted serial comparisons of
+TikTok and Doodle Jump follow against the starting revision `9d0bb979` using the same unchanged
+flows and geometry, followed by the candidate; their output does not overwrite that full record.
+
+
+The serial starting-revision comparison completes TikTok 13/13 without a failed liveness check;
+the candidate repeat also completes 13/13. The original interests-step failure remains unexplained
+and is preserved, rather than erased by the successful repeat. Reddit newly reaches
+Process.getStartRequestedElapsedRealtime; the first candidate TikTok run newly queries XmlBlock
+and ImageReader$OnImageAvailableListener, absent from its repeat. These are observed-path coverage
+differences, not evidence of complete API support or a blanket regression waiver.
+
+Doodle Jump reveals a reproducible rendering cost in the newly added gesture handle: starting
+revision 9d0bb979 produces 36/37/38 fps, the candidate repeat 28/28/28, and immediate parent
+4846ca2a produces 36/38/38. `643b03c` rasterizes the two handle colors once per density instead
+of filling a rounded path directly on the frame canvas every frame. The repaired run produces
+36/37/38 fps. The exact browser-internal cost is not established, but the isolated comparison
+supports retaining this cache. Full-Chrome handle pixels are identical before/after; explicit
+appearance and visibility probes and typecheck pass. The cache is bounded to two small images.
+
+Evidence: systembars-baseline-actual/, systembars-repeat-actual/, systembars-parent-actual/,
+systembars-handle-cache-actual/ and their e2e-systembars-*.log files, systembars-cache-typecheck.log,
+systembars-cache-check.log and systembars-cache-guest.png. The immediate-parent comparison server
+used a detached scratch checkout at /tmp/webdroid-chatgpt-systembars-base, port 4096. The complete
+serialized matrix is repeated on the repaired revision; its results follow separately.
+
+
+### Cached system-bar final gate
+
+The repaired frozen revision `643b03c` completes the full serialized E2E matrix: 183 steps across
+13 flows in 964.7 seconds, exit zero, with no wedges, layout errors or required natives. There
+are no new missing API names or host error types relative to the retained window-repair candidate.
+ChatGPT completes 24/24 in 121.2 seconds; all 96 process inspections succeed, rendering is clean,
+and the only browser-error messages are its three known SLF4J warnings. TikTok completes 13/13
+without reproducing the earlier liveness failure. Doodle Jump completes 6/6 with 37/38/38 fps in
+its gameplay samples, retaining the cache's benefit within the complete matrix.
+
+YouTube retains its two known settling limits and six Matrix draw failures. Flappy Bird retains
+the known status-property TypeError and 12 unavailable auxiliary-process snapshots. These remain
+explicit gaps, not successes. Outside system bars, FitNotes is 39/39 pixel-identical to the prior
+candidate, Mihon onboarding 5/5 and Mihon app 15/17; both changed Mihon images show different random
+empty-library faces. Harmonic's welcome interior remains identical while its live feed differs.
+No golden changes or new permanent tests are added.
+
+Typecheck and browser appearance/visibility/pixel checks pass. ChatGPT smoke-compiles 66,165
+classes in 13.1 seconds with zero method failures. Evidence is preserved as
+systembars-cached-final-actual/, systembars-cached-final-report/, systembars-cached-final-summary.json,
+systembars-cached-final-audit.log, systembars-cached-content-comparison.json,
+e2e-systembars-cached-final.log and systembars-cache-smoke.log. The temporary immediate-parent
+server/check-out was removed after its comparison; both its results and the first full run remain
+available. The main full-Chrome session and private AVD remain open, and the comparison gallery
+shows the final country-sheet capture and isolated font raster evidence. Full authenticated
+operation and complete visual parity remain unfinished.

@@ -1,38 +1,40 @@
 # ChatGPT parity repair
 
 Branch: `codex/chatgpt-parity`. Starting revision: `9d0bb979`.
-Status: guest conversation and reachable settings repaired; full authentication parity remains incomplete.
+Status: guest flows repaired; full authentication and visual parity remain incomplete.
 
-Current implementation revision: `80b91f98`; expanded ChatGPT flow: `6c958327`. Guest responses,
-settings, attachments, Plugins and reachable email/phone forms work. New repairs exclude hidden
-dialogs from drawing/input, apply non-floating window defaults and resolve recorded canvas color
-fills against destination bounds. The country sheet now starts at the same y=72 position as the AVD.
-No credentials have been entered; authenticated uploads and voice remain unvalidated.
+Current implementation: `643b03c`; expanded ChatGPT flow: `6c958327`. Guest responses,
+settings, attachments, Plugins and reachable email/phone forms work. Dialog visibility,
+non-floating window defaults, recorded canvas bounds and rectangular clipping are repaired.
+Framework system icons now draw above dialog dimming. The gesture handle has the same pixel
+bounds as the API 33 AVD and is cached to preserve frame throughput.
 
-Focused validation at `80b91f98`: typecheck and 13 owning tests pass (60 assertions); ChatGPT
-smoke-compiles 66,165 classes with zero method failures. ChatGPT-only E2E completes 24/24 in
-123.5 seconds, with 96 successful process inspections and no settling limit, wedge, required native
-or layout/draw error. Full Chrome verifies provider cancellation and matching country-sheet height;
-real browser pixels verify direct and recorded color fills/clears under transformed clips.
+Latest checks: typecheck, five owning window/context tests (29 assertions), browser bar-API/pixel
+checks, and ChatGPT smoke compilation of 66,165 classes with zero method failures. The complete
+serialized E2E at `643b03c` executes 183 steps across 13 flows in 964.7 seconds. ChatGPT is 24/24
+in 121.2 seconds, with 96 successful process inspections and no rendering error, settling limit
+or required native. The matrix reports no wedges, layout errors, required natives, new missing
+API names or new host error types relative to the preceding window-repair candidate. Known
+YouTube settling/Matrix errors and Flappy Bird diagnostic gaps remain. Goldens are unchanged.
+The preceding broader repairs passed all 1,265 unit tests and eight runnable framework exercises.
 
-Final gate at `80b91f98`: all 1,265 unit tests pass (26,848 assertions); all eight runnable
-framework exercises pass. The serialized full E2E completes 183 steps across 13 flows in 983.9
-seconds, with zero wedges, layout errors or required natives. ChatGPT is 24/24 with clean rendering
-and 96 successful process inspections. YouTube retains two known settling limits and six Matrix
-draw failures; previously reproduced Lichess and Flappy Bird diagnostics remain. No new host error
-types are observed. Goldens remain unchanged; dynamic content limits pixel equivalence.
+The first system-bar candidate reduced Doodle Jump to 28 fps. Comparison with both the starting
+revision and immediate parent isolated the handle path. Caching it restores 36–38 fps with
+identical pixels; the final full run records 37–38 fps. An earlier TikTok liveness failure did
+not recur in the serial baseline/candidate comparison or repaired full run; its cause is unresolved.
+Outside system bars, FitNotes is 39/39 and Mihon onboarding 5/5 pixel-identical to the prior candidate.
+See [implementation history](docs/implementation-history.md) for measurements and evidence limits.
 
-Remaining limits: microG offers an extra account chooser; authenticated operation is unvalidated.
-Visualize's remote icon, system bars, text rendering and long-session GC retention remain unresolved.
-A live font substitution did not clearly eliminate the text difference, so no font asset change is
-retained. Fresh private-AVD email/phone/country captures are available after its System UI recovery.
-Complete parity is unfinished; no speedup is claimed.
+Remaining limits: no credentials have been entered, so authenticated uploads and voice are
+unvalidated. microG offers an extra chooser. Visualize's remote icon, full system-bar ownership,
+emoji/text rendering and long-session retention remain unresolved. An isolated Canvas oracle
+produces about 20% more ink in Chrome even with the exact AVD font; no artificial weight fix is
+retained. Fresh full-Chrome/private-AVD captures are in the local comparison gallery.
 
 - Run unchanged ChatGPT XAPK in full Chrome and API 33 AVD at 1080×2160, 480 dpi.
-- Capture and compare reachable interactions; trace failures to platform contracts.
-- Fix canonical owners, keep changes focused and avoid speculative delegates/tests.
-- Test only ChatGPT and changed core behavior during development. Run full E2E only at the end.
-- Preserve goldens, record evidence and remaining limitations, make focused commits.
+- Fix reached platform failures at their canonical owners, guided by native evidence.
+- Test ChatGPT and changed core behavior during development; run full E2E at the end.
+- Preserve goldens, record unresolved limits, and keep commits focused.
 
 ---
 
