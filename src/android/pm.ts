@@ -537,10 +537,8 @@ function queryComponents(intent: JIntent | null, flags: number, kind: Exclude<Co
       priority = Math.max(...filters.map((filter) => attr(filter, "priority")?.data ?? 0));
     }
     const info = rt.make("android/content/pm/ResolveInfo");
-    if (kind === "activity") {
-      info.activityInfo = mkActivityInfo(name, owner);
-      componentInfo(info.activityInfo, name, node, flags, owner);
-    } else if (kind === "receiver") info.activityInfo = receiverInfo(name, node, flags, owner);
+    if (kind === "activity") info.activityInfo = mkActivityInfo(name, flags, owner);
+    else if (kind === "receiver") info.activityInfo = receiverInfo(name, node, flags, owner);
     else info.serviceInfo = serviceInfo(name, node, flags, owner);
     info.priority = priority;
     result.a.push(info);
@@ -702,7 +700,7 @@ rt.register({
       if (flags & 0x1000) await fillRequestedPermissions(pi);
       if (flags & 2) pi.receivers = jarray([...manifestReceivers].filter(([name, node]) => visibleComponent(name, node, flags)).map(([name, node]) => receiverInfo(name, node, flags)), "Landroid/content/pm/ActivityInfo;");
       if (flags & 4) pi.services = jarray([...manifestServices].filter(([name, node]) => visibleComponent(name, node, flags)).map(([name, node]) => serviceInfo(name, node, flags)), "Landroid/content/pm/ServiceInfo;");
-      pi.activities = jarray([...manifestActivities.keys()].map((n) => mkActivityInfo(n.replace(/\//g, "."))), "Landroid/content/pm/ActivityInfo;");
+      if (flags & 1) pi.activities = jarray([...manifestActivities].filter(([name, node]) => visibleComponent(name, node, flags)).map(([name]) => mkActivityInfo(name.replace(/\//g, "."), flags)), "Landroid/content/pm/ActivityInfo;");
       return pi;
     },
     "getApplicationInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$ApplicationInfoFlags;)Landroid/content/pm/ApplicationInfo;": async function (pkg: string, f: JInfoFlags | null) {
@@ -806,8 +804,10 @@ rt.register({
     },
     "getInstalledPackages(I)Ljava/util/List;": installedPackages,
     "getInstalledPackages(Landroid/content/pm/PackageManager$PackageInfoFlags;)Ljava/util/List;": (flags: JInfoFlags) => installedPackages(Number(flags.value)),
-    "getActivityInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;": (comp: any) =>
-      mkActivityInfo(String(comp?.cls ?? "")),
+    "getActivityInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;": (comp: JComponentName, flags: number) => {
+      const [name, , owner] = lookupComponent(comp, "activity", flags);
+      return mkActivityInfo(name, flags, owner);
+    },
     // only this package is installed; its launcher activity is the one carrying the LAUNCHER category
     "getLaunchIntentForPackage(Ljava/lang/String;)Landroid/content/Intent;": (pkg: string) => {
       if (!appHost || pkg !== appHost.pkg) return null;
@@ -841,18 +841,14 @@ export function activityHandlesConfig(act: JActivity, bits: number): boolean {
 }
 
 /** ActivityInfo for a dotted class name, read off that activity's own manifest node. */
-function mkActivityInfo(cls: string, owner = currentPackage): JActivityInfo {
+function mkActivityInfo(cls: string, flags: number, owner = currentPackage): JActivityInfo {
   const node = owner?.components.activity.get(cls.replace(/\//g, "."));
   const a = new JActivityInfo();
-  a.name = cls;
-  a.packageName = owner?.pkg ?? appHost?.pkg ?? "";
+  if (node) componentInfo(a, cls, node, flags, owner);
   a.theme = (node && attr(node, "theme")?.data) ?? appHost?.themeResId ?? 0;
   a.configChanges = (node && attr(node, "configChanges")?.data) ?? 0;
   a.screenOrientation = (node && attr(node, "screenOrientation")?.data) ?? -1;
-  a.exported = node && attr(node, "exported")?.data ? 1 : 0;
-  a.permission = node ? attrStr(node, "permission") : null;
   a.parentActivityName = node ? attrStr(node, "parentActivityName") : null;
-  a.metaData = metaData(node, owner?.res);
   return a;
 }
 
@@ -1030,7 +1026,7 @@ async function recordInfo(record: PackageRecord, flags: number): Promise<JPackag
   if (flags & 0x8000000) pi.signingInfo = signingInfo(await record.visibleCertificates());
   pi.reqFeatures = reqFeatures(root);
   if (flags & 0x1000) await fillRequestedPermissions(pi, root);
-  if (flags & 1) pi.activities = jarray([...record.components.activity].filter(([n, node]) => visibleComponent(n, node, flags, record)).map(([n]) => mkActivityInfo(n, record)), "Landroid/content/pm/ActivityInfo;");
+  if (flags & 1) pi.activities = jarray([...record.components.activity].filter(([n, node]) => visibleComponent(n, node, flags, record)).map(([n]) => mkActivityInfo(n, flags, record)), "Landroid/content/pm/ActivityInfo;");
   if (flags & 2) pi.receivers = jarray([...record.components.receiver].filter(([n, node]) => visibleComponent(n, node, flags, record)).map(([n, node]) => receiverInfo(n, node, flags, record)), "Landroid/content/pm/ActivityInfo;");
   if (flags & 4) pi.services = jarray([...record.components.service].filter(([n, node]) => visibleComponent(n, node, flags, record)).map(([n, node]) => serviceInfo(n, node, flags, record)), "Landroid/content/pm/ServiceInfo;");
   return pi;

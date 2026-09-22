@@ -5164,3 +5164,24 @@ FairyStockfish `RootMove::extract_ponder_from_tt+0x280` null-address fault. It i
 single matching starting-revision replay; historical reproduction establishes prior occurrence,
 but the varying engine games prevent a conclusive paired fault-frequency comparison. Complete
 TikTok parity and the earlier playback/styling/authentication limits remain unresolved.
+
+### TikTok usability follow-up: package queries
+
+Starting revision `9d0bb979`, worktree `codex/tiktok-usability`. Full Chrome and the API-33 AVD
+use the same TikTok APK at 1080×2160 / 480 dpi. The AVD currently opens a login wall; Chrome
+opens guest consent. Captures and profiling artifacts are in ignored
+`webdroid-shots/tiktok-usability/`; this state difference prevents a paired feed comparison.
+
+A 10-second Chrome CPU profile at guest consent attributed 458 ms to `mkActivityInfo` and
+440 ms to `getPackageInfo`: signature-only requests constructed all 500 APK activities.
+The bundled PackageParser's `generatePackageInfo` gates activities on flag 1. The current-package
+path now does likewise, applies the existing component visibility rules, and shares activity
+field construction with component queries. Activity lookups also use the existing package/name
+resolution and metadata flag handling instead of fabricating information for unknown components.
+
+Four same-page batches of 100 real-runtime signature queries took 22.3/24.2/21.9/21.5 ms before
+and 0.5/0.4/0.3/0.4 ms after; activity results changed from 500 unrequested records to null.
+This is a query microbenchmark, not an end-to-end input latency or playback-speed claim. Both
+pages were visible; the candidate rendered with no observed uncaught/layout/draw failures.
+Typecheck and three existing package/intent checks pass (15 assertions). Reload also reached
+Writer.lock, JobInfo.writeToParcel and optional XmlBlock lookup gaps; investigation continues.
