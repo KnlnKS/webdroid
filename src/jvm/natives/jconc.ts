@@ -115,6 +115,7 @@ async function runTask(ex: JExecutor, worker: JExecutor["workers"][number], entr
   }
 }
 class JFuture extends JObj {
+  deadline = guestNow();
   promise: Promise<unknown> | null = null;
   value: unknown = null;
   error: unknown = null;
@@ -147,6 +148,17 @@ rt.register({
     "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFuture, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
     "isDone()Z": function (this: JFuture) { return this.done; },
     "isCancelled()Z": function (this: JFuture) { return this.cancelled; },
+    "getDelay(Ljava/util/concurrent/TimeUnit;)J": function (this: JFuture, unit: JTimeUnit) {
+      if (!unit) rt.npe();
+      return tuConvert(BigInt(Math.trunc((this.deadline - guestNow()) * 1e6)), 1n, unit.ns);
+    },
+    "compareTo(Ljava/util/concurrent/Delayed;)I": async function (this: JFuture, other: unknown) {
+      if (this === other) return 0;
+      if (other instanceof JFuture) return Math.sign(this.deadline - other.deadline);
+      const delay: bigint = await vcall(other, "getDelay", "(Ljava/util/concurrent/TimeUnit;)J", TUS.NANOSECONDS);
+      const delta = BigInt(Math.trunc((this.deadline - guestNow()) * 1e6)) - delay;
+      return delta < 0n ? -1 : delta > 0n ? 1 : 0;
+    },
     "cancel(Z)Z": function (this: JFuture, interrupt: number) {
       if (this.done) return 0;
       cancelFuture(this, interrupt); return 1;
@@ -163,6 +175,7 @@ const newFuture = () => new (futureCtor ??= rt.link("webdroid/Future").ctor as n
 function submit(ex: JExecutor, task: unknown, method: string, desc: string, delay = 0, queued = false): JFuture {
   if (ex.shut) throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "executor shut down");
   const f = newFuture();
+  f.deadline = guestNow() + Math.max(0, delay);
   ex.pending++; ex.jobs.set(f, task);
   f.promise = new Promise((resolve) => {
     const entry = { task, f, method, desc, queued, finish: () => resolve(null) };
@@ -309,6 +322,7 @@ function repeating(name: string, fixedRate: boolean): NativeSpec["methods"] {
       f.promise = new Promise((resolve) => {
         const tick = () => {
           if (f.cancelled || this.shut) { f.done = 1; resolve(null); return; }
+          f.deadline = next;
           task = submit(this, r, "run", "()V", next - guestNow());
           void task.promise!.then(() => {
             if (task.error) { f.error = task.error; f.done = 1; resolve(null); }
@@ -548,7 +562,8 @@ rt.register({
 
 for (const [i, ...ifaces] of [["java/util/concurrent/Executor"], ["java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"],
   ["java/util/concurrent/ScheduledExecutorService", "java/util/concurrent/ExecutorService", "java/util/concurrent/Executor"], ["java/util/concurrent/Future"],
-  ["java/util/concurrent/ScheduledFuture", "java/util/concurrent/Future"], ["java/util/concurrent/Callable"], ["java/util/concurrent/ThreadFactory"],
+  ["java/util/concurrent/Delayed", "java/lang/Comparable"],
+  ["java/util/concurrent/ScheduledFuture", "java/util/concurrent/Future", "java/util/concurrent/Delayed"], ["java/util/concurrent/Callable"], ["java/util/concurrent/ThreadFactory"],
   ["java/util/concurrent/RunnableFuture", "java/lang/Runnable", "java/util/concurrent/Future"],
   ["java/util/concurrent/RunnableScheduledFuture", "java/util/concurrent/RunnableFuture", "java/util/concurrent/ScheduledFuture"],
   ["java/util/concurrent/RejectedExecutionHandler"]]) {

@@ -49,6 +49,19 @@ const seconds = () => Reflect.get(rt.link("java/util/concurrent/TimeUnit").ctor,
 const pool = (queue: unknown) => newObj("java/util/concurrent/ThreadPoolExecutor",
   "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V", 1, 1, 0n, seconds(), queue);
 
+test("scheduled futures expose remaining delay and deadline ordering", async () => {
+  const ex = await newObj("java/util/concurrent/ScheduledThreadPoolExecutor", "(I)V", 1);
+  const task = new RecordingRunnable(), unit = seconds();
+  const schedule = (delay: bigint) => vcall(ex, "schedule", "(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;", task, delay, unit);
+  const first = await schedule(60n), second = await schedule(120n);
+  try {
+    const delay = await vcall(first, "getDelay", "(Ljava/util/concurrent/TimeUnit;)J", unit);
+    expect(delay >= 59n && delay <= 60n).toBe(true);
+    expect(await vcall(first, "compareTo", "(Ljava/util/concurrent/Delayed;)I", second)).toBe(-1);
+    expect(rt.iof(first, "java/util/concurrent/Delayed")).toBe(1);
+  } finally { await vcall(ex, "shutdownNow", "()Ljava/util/List;"); }
+});
+
 test("a pool executor runs tasks through a bytecode BlockingQueue", async () => {
   const queue = rt.make("test/AppQueue");
   const ex = await pool(queue);
