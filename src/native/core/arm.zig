@@ -869,7 +869,7 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
         const Ld = bits(w, 20, 1) != 0;
         const rn = bits(w, 16, 4);
         const imm8 = w & 255;
-        if (top == 12 and !P and !W and bits(w, 21, 2) == 2) {
+        if (top == 12 and !U and !W and bits(w, 21, 2) == 2) {
             const rt = bits(w, 12, 4);
             const rt2 = bits(w, 16, 4);
             const lo = if (dp) m * 2 else m;

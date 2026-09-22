@@ -438,6 +438,24 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(36, 38), x => x >>> 0)).toEqual([0x8000ffff, 0xab34beef]);
     }
   });
+  test("high VFP register loads remain distinct from core-register pair moves", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.w[0] = cpu.stackTop - 64; cpu.w[2] = cpu.stackTop - 32;
+      mem.u32.set([1, 2, 3, 4], cpu.w[2] >>> 2);
+      cpu.w[8] = 5; cpu.w[10] = 6;
+    };
+    const words = [0xecd12b04, 0xece02b04, 0xec532b32, 0xec454b34];
+    for (const execute of [
+      () => run([...words, BXLR], setup),
+      () => runThumb([...words.flatMap(w => [w >>> 16, w & 0xffff]), 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect([c.w[0], c.w[2]]).toEqual([c.stackTop - 48, c.stackTop - 32]);
+      expect(Array.from(mem.u32.slice((c.stackTop - 64) >>> 2, (c.stackTop - 48) >>> 2))).toEqual([1, 2, 3, 4]);
+      expect([c.w[4], c.w[6]]).toEqual([1, 2]);
+      expect(Array.from(c.si.slice(40, 42))).toEqual([5, 6]);
+    }
+  });
   test("NEON float extrema and sign operations preserve NaN and signed zero", () => {
     const setup = (cpu: Cpu) => {
       cpu.s.set([-2, -0, -Infinity, NaN], 40);
