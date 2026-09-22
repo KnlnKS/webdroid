@@ -3,12 +3,13 @@
 Branch: `codex/tiktok-parity`. Starting revision: `9071fec70953eb3b76df86c6cdede69bdf316eaf`.
 Status: guest-path repairs and final regression validation recorded; complete TikTok parity remains incomplete.
 
-Final implementation: `00208a4d`. Typecheck and 1,253 tests pass; TikTok smoke compilation has
-zero method failures. The serialized full E2E completes 159 steps with zero wedges and two
-baseline YouTube settling limits. Matched baseline checks caught and resolved Resy startup and
+Guest-path implementation: `00208a4d`; structural cleanup: `66dd0467`. Typecheck and 1,253 tests pass; TikTok smoke compilation has
+zero method failures. The post-cleanup serialized full E2E completes 159 steps in 833.6 seconds
+with zero wedges and two baseline YouTube settling limits. Matched baseline checks caught and resolved Resy startup and
 Harmonic inset regressions. Remaining gaps include slow decoded playback, onboarding graphic
 artifacts, phone-form styling, intermittent Top search loading, an optional JobInfo parcel API,
-and a repeated-load stall. Authentication and publishing are unvalidated.
+and a repeated-load stall. Authentication and publishing are unvalidated. The cleanup review
+and supplemental Lichess comparison limits are recorded in implementation history.
 
 - Compare the unchanged TikTok APK at 1080×2160, 480 dpi, with screenshots and diagnostic evidence.
 - Trace reached platform failures to Android/DEX/native contracts; repair canonical owners.

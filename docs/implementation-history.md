@@ -5117,3 +5117,50 @@ parcel operation remains unsupported, and one reload stalled. Earlier decoded pl
 about 6 fps; shell-frame counters are not video FPS. Latest AVD access is login-gated, while earlier
 guest captures remain historical evidence. Authentication/publishing/DRM are unvalidated. Curated
 captures, logs and per-step diagnostics are indexed in ignored webdroid-shots/tiktok-parity/README.md.
+
+### TikTok branch structural review
+
+The follow-up review against `main` separates the 1,642-line concurrency registration module
+into atomics, blocking queues, and synchronization owners; the executor/future owner is now 796
+lines. Both the full registration entry point and the deliberately partial `jsrc` entry point
+load the extracted registrations. Queue/deque aliases share their owning method table and one
+occurrence-removal implementation. Executor queue parameters accept Java objects, including
+bytecode queues, instead of claiming every queue is a native list. Existing interruption,
+condition reacquisition, drain reservation, and rejection behavior remains in place.
+
+Native windows previously spread lifetime and buffer state across a surface array, a parallel
+reference-count array, and a weak buffer map. Each handle now owns one record; the reverse surface
+index resolves an existing handle without scanning every past window. Release removes both
+indexes and frees that record's guest buffer. The existing browser fixture additionally checks
+shared-handle reference counts and fresh default format ownership after final release.
+No new test file or visual golden was added. This reduces ownership ambiguity; it does not claim
+a measured playback FPS improvement.
+
+Validation at `66dd0467`: typecheck and all 1,253 tests / 26,744 assertions pass. TikTok smoke
+compilation has zero method failures; all eight runnable framework exercises pass, with the
+browser-only Paint text-metrics skip and unchanged 295/363 declared-native coverage. The final
+serialized matrix completes all 159 steps in 833.6 seconds, with zero main-loop wedges and the
+same YouTube `show-controls` / `pause` timeouts. An earlier attempt was operator-interrupted after
+TikTok completed and is excluded from this full result.
+
+TikTok renders 13/13 steps with advancing ticks, all four process diagnostics, no layout/draw
+errors, no uncaught/executor exceptions, and no required native delegate. Its nine optional
+missing classes are unchanged. Resy's Carbone venue and Harmonic's comments are populated;
+Harmonic retains two inset passes and seven layout passes on the comments step. FitNotes and
+Mihon onboarding retain their rounded content scores (40.12% / 17.69%). Mihon's 57.40% to 57.65%
+change is concentrated in the final randomized empty-state face, with unchanged surrounding
+controls; Harmonic's 31.14% to 32.02% change is concentrated in menu/scroll captures. These are
+single-run visual observations, not a performance or full-fidelity guarantee.
+
+The audit retains all process errors. YouTube repeats Matrix/SAX/cursor failures (one additional
+Matrix draw-error occurrence on video-back); Harmonic repeats the atomic-group regex error;
+Flappy Bird repeats the WebView status TypeError and unavailable bridge-frame diagnostics.
+Reddit additionally reaches `Process.getStartRequestedElapsedRealtime`, which has no implementation
+in either cleanup revision. No optional failure was hidden or replaced with fabricated success.
+
+A serialized Lichess replay at cleanup start `b3ed93e3` completes 15/15 steps in 90.6 seconds and
+reproduces pthread errors 3, 22, and 35. The candidate also reaches the previously documented
+FairyStockfish `RootMove::extract_ponder_from_tt+0x280` null-address fault. It is absent from this
+single matching starting-revision replay; historical reproduction establishes prior occurrence,
+but the varying engine games prevent a conclusive paired fault-frequency comparison. Complete
+TikTok parity and the earlier playback/styling/authentication limits remain unresolved.
