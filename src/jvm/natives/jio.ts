@@ -3,6 +3,7 @@
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i8, u8 } from "../abi";
 import { vcall, vcallMaybe, vcallOn, curThread, after, stringHash, stringCompare, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
+import { csText } from "./jchars";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
 import { procText } from "../../shell/procfs";
 import { mappedBuffer, mappedReadOnlyBuffer, type JBuffer } from "./jnio";
@@ -1164,25 +1165,31 @@ class JWriter extends JObj { s = ""; }
 /** every Writer overload funnels through the VIRTUAL write(String) so subclasses intercept */
 const wr = (w: unknown, s: string) => vcallMaybe(w, "write", "(Ljava/lang/String;)V", s);
 const chars = (c: Uint16Array): string => charsToString(c, 0, c.length);
+function writerAppend(ret: string): NonNullable<NativeSpec["methods"]> {
+  return {
+    [`append(C)L${ret};`]: function (this: JWriter, c: number) { return after(wr(this, String.fromCharCode(c & 0xffff)), () => this); },
+    [`append(Ljava/lang/CharSequence;)L${ret};`]: async function (this: JWriter, cs: unknown) {
+      const thread = curThread, text = cs == null ? "null" : await csText(cs);
+      await vcallOn(thread, this, "write", "(Ljava/lang/String;)V", text); return this;
+    },
+    [`append(Ljava/lang/CharSequence;II)L${ret};`]: async function (this: JWriter, cs: unknown, start: number, end: number) {
+      const thread = curThread, text = cs == null ? "null" : await csText(cs);
+      if (start < 0 || end < start || end > text.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      await vcallOn(thread, this, "write", "(Ljava/lang/String;)V", text.slice(start, end)); return this;
+    },
+  };
+}
 rt.register({
   name: "java/io/Writer", ctor: JWriter,
   ifaces: ["java/io/Closeable", "java/io/Flushable", "java/lang/Appendable"],
   methods: {
     "<init>()V": function () {},
     "write(Ljava/lang/String;)V": function (this: JWriter, s: string) { this.s += s; },
-    // Appendable: the base class routes through write(String), which a subclass overrides
-    "append(Ljava/lang/CharSequence;)Ljava/io/Writer;": async function (this: JWriter, cs: unknown) { await vcall(this, "write", "(Ljava/lang/String;)V", String(cs ?? "null")); return this; },
-    "append(Ljava/lang/CharSequence;II)Ljava/io/Writer;": async function (this: JWriter, cs: unknown, a: number, b: number) { await vcall(this, "write", "(Ljava/lang/String;)V", String(cs ?? "null").slice(a, b)); return this; },
-    "append(C)Ljava/io/Writer;": async function (this: JWriter, c: number) { await vcall(this, "write", "(Ljava/lang/String;)V", String.fromCharCode(c)); return this; },
+    ...writerAppend("java/io/Writer"), ...writerAppend("java/lang/Appendable"),
     "write(Ljava/lang/String;II)V": function (this: JWriter, s: string, off: number, len: number) { return wr(this, s.substr(off, len)); },
     "write(I)V": function (this: JWriter, c: number) { return wr(this, String.fromCharCode(c & 0xffff)); },
     "write([C)V": function (this: JWriter, c: Uint16Array) { return wr(this, chars(c)); },
     "write([CII)V": function (this: JWriter, c: Uint16Array, off: number, len: number) { return wr(this, chars(c.subarray(off, off + len))); },
-    "append(C)Ljava/lang/Appendable;": function (this: JWriter, c: number) { return after(wr(this, String.fromCharCode(c & 0xffff)), () => this); },
-    "append(Ljava/lang/CharSequence;)Ljava/lang/Appendable;": async function (this: JWriter, cs: unknown) {
-      await wr(this, cs === null ? "null" : String(await vcall(cs, "toString", "()Ljava/lang/String;")));
-      return this;
-    },
     "flush()V": function () {}, "close()V": function () {},
   },
 });
@@ -1251,7 +1258,7 @@ rt.register({
       if (this.target === null) { this.s += s; return; }
       return vcall(this.target, "write", "(Ljava/lang/String;)V", s);
     },
-    ...printMethods(pw, "java/io/PrintWriter"),
+    ...printMethods(pw, "java/io/PrintWriter"), ...writerAppend("java/io/PrintWriter"),
     "flush()V": function (this: JPrintWriter) { return this.target === null ? undefined : vcall(this.target, "flush", "()V"); },
     "close()V": function (this: JPrintWriter) { return this.target === null ? undefined : vcall(this.target, "close", "()V"); },
     "checkError()Z": function () { return 0; },
