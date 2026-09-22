@@ -1319,6 +1319,11 @@ rt.register({
     "<init>(Ljava/io/OutputStream;)V": function (this: JDataOut, s: unknown) { this.sink = s; },
     "write(I)V": function (this: JDataOut, b: number) { return after(vcallMaybe(this.sink, "write", "(I)V", b), () => { this.written++; }); },
     "write([BII)V": function (this: JDataOut, b: Int8Array, off: number, len: number) { return emit(this, b, off, len); },
+    "writeBytes(Ljava/lang/String;)V": function (this: JDataOut, s: string) {
+      const bytes = new Int8Array(s.length);
+      for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+      return emit(this, bytes, 0, bytes.length);
+    },
     ...writers((n, put) => function (this: JDataOut, x: never) { const b = new Int8Array(n); put(new DataView(b.buffer), x); return emit(this, b, 0, n); }),
     "writeUTF(Ljava/lang/String;)V": function (this: JDataOut, s: string) {
       const b = utf8.enc.encode(s), out = new Int8Array(b.length + 2);
