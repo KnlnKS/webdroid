@@ -161,12 +161,13 @@ function semWait(cpu: Cpu, s: { count: number; waiters: (() => void)[] }, ts: nu
   });
 }
 
-function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean): Cpu {
+export function startThread(parent: Cpu, start: number, arg: bigint, detached: boolean): Cpu {
   const jt = new JThread();
   jt.jname = `pthread-${++threadSeq}`;
   jt.alive = 1;
   const cpu = new Cpu(jt, jt.jname);
   cpu.signalMask = parent.signalMask;
+  cpu.nativeRuntime = parent.nativeRuntime;
   bindCpu(jt, cpu);
   try { cpu.ensureStack(); } catch (e) { cpu.dispose(); throw e; }
   cpu.w[0] = Number(arg & 0xffffffffn) | 0; cpu.w[1] = Number(arg >> 32n) | 0;

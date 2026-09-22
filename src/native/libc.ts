@@ -17,6 +17,7 @@ import { netInit } from "./net";
 import { MONTHS, DAYS } from "../jvm/natives/jtime";
 import { device } from "../shell/config";
 import { guestNow } from "../guest-clock";
+import { timersInit } from "./timers";
 
 /** bionic struct offsets/sizes, one block per ABI; LAYOUT is the process's, chosen in libcInit. */
 const LAYOUT32 = {
@@ -568,6 +569,7 @@ export function libcInit(): void {
   stp(localeConv, mem.hostStr(".")); stp(localeConv + PTR, mem.hostStr("")); stp(localeConv + 2 * PTR, mem.hostStr(""));
   stdioInit();
   pthreadInit();
+  timersInit();
   zlibInit();
   libmInit();
   localeInit();
