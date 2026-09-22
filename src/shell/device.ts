@@ -27,7 +27,7 @@ import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, mea
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets, rootWindowInsets } from "../android/windowinsets";
 import { JCanvas, cssColor, tfMedium } from "../android/graphics";
-import { overlays, drawToasts, dismissOverlay } from "../android/popup";
+import { overlays, drawToasts, dismissOverlay, detachContextOverlays } from "../android/popup";
 import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
@@ -406,6 +406,7 @@ function recreateActivity(act: JActivity): void {
         await vcall(act, "onDestroy", "()V");
         await fireActivityLifecycle(act, "Destroyed");
       } catch (e) { reportUncaught(e); }
+      await detachContextOverlays(act);
       booted.stack.splice(i, 1);
       const options = { caller: act.callingActivity, result: act.resultTo ?? undefined, remoteId: act.remoteId, activityId: act.activityId, taskId: act.taskId };
       act.remoteId = 0;
@@ -469,6 +470,7 @@ async function finishActivity(act: JActivity, resume = true) {
   if (act.window.decor) await dispatchDetached(act.window.decor);
   if (act.started) await stopActivity(act);
   await lifecycleStep(act, "onDestroy", "Destroyed");
+  await detachContextOverlays(act);
   invalidateWindow();
 }
 

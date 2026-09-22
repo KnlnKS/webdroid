@@ -2,8 +2,9 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { vcall } from "../src/jvm/natives/jlang";
-import { JContext, display } from "../src/android/context";
-import { uiState } from "../src/android/view";
+import { JContext, JContextWrapper, display } from "../src/android/context";
+import { addOverlay, overlays, detachContextOverlays, removeOverlay } from "../src/android/popup";
+import { JView, dispatchAttached, uiState } from "../src/android/view";
 
 rt.linkNatives();
 
@@ -37,4 +38,29 @@ test("unchanged window attributes do not restart inset dispatch", async () => {
     await vcall(window, "setAttributes", "(Landroid/view/WindowManager$LayoutParams;)V", attrs);
     expect(uiState.needsInsets).toBe(false);
   } finally { uiState.needsInsets = pending; }
+});
+
+
+test("destroyed context windows detach without dismissing dialogs or other activities", async () => {
+  const owner = new JContext(), other = new JContext();
+  const themed = new JContextWrapper();
+  themed.base = owner;
+  const ownedView = new JView(), otherView = new JView();
+  ownedView.ctx = themed; otherView.ctx = other;
+  let dismissed = false;
+  addOverlay(ownedView, 0, 0, false, undefined, () => { dismissed = true; });
+  addOverlay(otherView);
+  await dispatchAttached(ownedView);
+  await dispatchAttached(otherView);
+  try {
+    await detachContextOverlays(owner);
+    expect(ownedView.attached).toBe(false);
+    expect(overlays.some(o => o.view === ownedView)).toBe(false);
+    expect(otherView.attached).toBe(true);
+    expect(overlays.some(o => o.view === otherView)).toBe(true);
+    expect(dismissed).toBe(false);
+  } finally {
+    await detachContextOverlays(other);
+    removeOverlay(ownedView);
+  }
 });

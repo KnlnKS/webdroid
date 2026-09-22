@@ -5208,3 +5208,29 @@ Other tasks are active on this host, so the query timings above are illustrative
 an uncontended app-performance comparison. Guest navigation, playback, the 150 ms response target,
 JobInfo parcel support and the final serialized E2E suite remain outstanding. The Chrome guest
 consent agreement awaits the user's confirmation; no acceptance or credentials were submitted.
+
+
+### TikTok activity-window teardown — 2026-09-21
+
+After consent authorization, raw Node WebSocket CDP reached TikTok's live guest feed in
+full Chrome. Short-lived Playwright CDP connections changed the emulated color scheme,
+recreated UniversalPopupActivity and exposed leaked activity windows; they are unsuitable
+for these repeated interactive probes. Bun's raw WebSocket helper did not complete, while
+Node's did. A broad object diagnostic also exhausted the renderer; its forced restart is
+operator-induced evidence, not an application regression.
+
+API-33 ActivityThread.handleDestroyActivity removes the decor and calls
+WindowManagerGlobal.closeAll after activity destruction. It does not call Dialog.dismiss.
+The shell now detaches remaining overlays whose context wraps the destroyed activity,
+both on finish and recreation. It preserves other contexts and does not synthesize
+onDismiss/onCancel/onStop. This repairs the observed dialog path; full token-based ownership
+for independently constructed WindowManager windows remains outside this change.
+
+The owning core check covers wrapped context ownership, attachment state, isolation and
+absence of dismissal callbacks (3 window-context checks, 15 assertions); typecheck passes.
+In the real APK, the old consent root is detached and removed after recreation. TikTok's
+restored activity can still create multiple new consent dialogs, but accepting consent now
+finishes that activity, removes all its windows and reaches the feed with zero overlays.
+The captured path has nine optional app/library class probes and no native requirements.
+The dedicated AVD instead requires a birthdate for guest access; none was entered.
+The paired feed and <=150 ms response targets remain unproven.

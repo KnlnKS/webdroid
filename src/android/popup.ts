@@ -11,6 +11,7 @@ import { JDrawable, loadDrawableRV } from "./drawable";
 import { AID, obtainStyled, rvDimen, rvInt, themeOf, type Resources, type JTheme, type JAttrSet } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
+import { JContextWrapper, type JContext } from "./context";
 import { JCanvas, JRect, measureCtx } from "./graphics";
 
 interface Overlay {
@@ -38,6 +39,23 @@ export function removeOverlay(v: JView) {
   const i = overlays.findIndex((o) => o.view === v);
   if (i >= 0) overlays.splice(i, 1);
   invalidate();
+}
+
+/** ActivityThread closes leaked windows after destruction, without dismissing their dialogs. */
+export async function detachContextOverlays(owner: JContext): Promise<void> {
+  for (const o of [...overlays]) {
+    let context: unknown = o.view.ctx;
+    const visited = new Set<unknown>();
+    while (context && !visited.has(context)) {
+      if (context === owner) {
+        removeOverlay(o.view);
+        await dispatchDetached(o.view);
+        break;
+      }
+      visited.add(context);
+      context = context instanceof JContextWrapper ? context.base : null;
+    }
+  }
 }
 
 // toast: plain shell-drawn banner (not a View)
