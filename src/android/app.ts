@@ -1059,11 +1059,10 @@ rt.register({
 });
 
 class JAppWidgetManager extends JObj {}
-const theAppWidgetManager = new JAppWidgetManager();
 rt.register({
   name: "android/appwidget/AppWidgetManager", ctor: JAppWidgetManager,
   methods: {
-    "static getInstance(Landroid/content/Context;)Landroid/appwidget/AppWidgetManager;": () => theAppWidgetManager,
+    "static getInstance(Landroid/content/Context;)Landroid/appwidget/AppWidgetManager;": () => systemService(null, "appwidget"),
     "getAppWidgetIds(Landroid/content/ComponentName;)[I": () => new Int32Array(0),
     "getInstalledProviders()Ljava/util/List;": () => newArrayList(),
     "getInstalledProvidersForPackage(Ljava/lang/String;Landroid/os/UserHandle;)Ljava/util/List;": () => newArrayList(),

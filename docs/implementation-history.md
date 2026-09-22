@@ -5203,3 +5203,11 @@ Layout now retains requested alignment through BoringLayout, DynamicLayout and S
 builder; draw positions, line bounds and cursor offsets use the same origin. The login sheet's
 centered text and the toolbar/composer shadows are visible in the paired captures. Greedy line
 breaking, some link styling and system-bar appearance still differ from the reference.
+
+ChatGPT's settings and login entry also reach `RestrictionsManager`, class-based
+`AppWidgetManager` lookup, and `Locale.Builder.setRegion`. The first now reports the
+unmanaged device's empty restrictions; both widget entry points share the existing context
+service owner. Locale region construction validates BCP 47 region syntax, normalizes case,
+and builds independent values. This removes the login-entry exception; account login itself
+is not yet validated. Typecheck and the two existing locale tests pass. No additional tests
+were needed for the service registration changes.
