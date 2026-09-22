@@ -5450,3 +5450,52 @@ fresh service configuration exposes only Study, so the 24-step run does not vali
 No app-specific replacement icon or network-response workaround was added. Slight text-weight
 and system-bar differences remain; the reference's Roboto file differs from the bundled face.
 Authenticated uploads and voice remain unvalidated pending account access and the provider limit.
+
+### Expanded final ChatGPT gate
+
+The frozen candidate at `418437b7` passes typecheck and all 1,265 unit tests (26,834 assertions,
+220 files, 162.91 seconds). ChatGPT smoke-compiles all 66,165 classes with zero method failures.
+All eight runnable framework exercises pass; declared native coverage remains 295/363, with the
+Paint text-metrics exercise explicitly requiring a browser. No visual golden changes.
+
+The serialized full matrix completes all 183 steps across 13 flows in 1,209.4 seconds with zero
+wedged main loops, zero layout errors and no required native delegate. ChatGPT completes 24/24
+steps in 130.0 seconds, visibly receives a real response, and has no settling limit or draw error.
+All 96 ChatGPT process snapshots are collected successfully; its only browser errors are the
+three SLF4J warnings. Resy retains one location-permission settling limit; YouTube retains the
+show-controls/pause limits and seven occurrences of the existing Matrix draw failure. YouTube
+captures reach the real video page. Flappy Bird has 13 unavailable auxiliary-frame inspections;
+these are not empty diagnostics. The entire matrix retains 632 process inspection attempts.
+
+FitNotes differs from the preceding candidate capture in only four frames: three text carets
+and the added-exercise toast still visible at step 24. The other 35 captures are pixel-identical.
+Mihon onboarding is pixel-identical. Mihon app has three changed captures: the initial guide
+button is still a loading spinner, the reader scrollbar position differs, and the final empty
+state chooses another face. Its next navigation capture is unchanged. These are observed capture
+differences, not evidence for a performance conclusion. Final unchanged-golden content scores:
+FitNotes 39.70%, Mihon app 55.18%, Harmonic 28.11%, Mihon onboarding 17.72%.
+
+Lichess reports Flutter DartWorker pthread aborts (35, 3 and 22) during startup/tools while later
+game steps still reach an engine reply. A matching replay of starting commit `9d0bb979` reproduces
+all three abort variants and also reaches a game/engine reply. This establishes pre-existence,
+not unchanged fault frequency. The earlier FairyStockfish null fault does not recur in this run.
+TikTok completes 13/13 without the preceding candidate's transient liveness failures. Native
+game FPS remains below thresholds under competing Chrome/AVD load; no speedup is claimed.
+
+The private AVD later shows ANRs for ChatGPT, Digital Wellbeing and System UI, including after
+a private-emulator restart. These captures do not establish app parity and are excluded from the
+comparison gallery; earlier reviewed paired captures remain the evidence. No other task's
+browser or emulator was stopped. The fresh login capture still shows microG's Add Google account
+path with poor surface contrast. Complete authentication, authenticated voice/uploads, remote
+Visualize icon rendering and complete visual parity remain unresolved.
+
+Ignored final evidence: `expanded-final-actual/`, `expanded-final-report/`,
+`expanded-final-summary.json`, `e2e-expanded-final.log`, `unit-expanded-final.log`,
+`typecheck-expanded-final.log`, `smoke-expanded-final.log`, `fwtest-expanded-final.log`, and
+`e2e-expanded-baseline-games.log`. All new captures used stable code.
+
+The serialized baseline game replay completes 28/28 steps in 158.1 seconds with no liveness
+failure. Flappy Bird reproduces the browser `status` TypeError and matches the candidate's
+11–12 FPS play samples. Doodle Jump's baseline play samples are 20/23/23 FPS versus candidate
+22/22/23. This supports the existing slow-game limitation under the current load, not a controlled
+performance equivalence claim. Preserved baseline captures: `expanded-baseline-games/`.

@@ -5,16 +5,21 @@ Status: guest conversation and reachable settings repaired; full authentication 
 
 Current implementation revision: `937c84c9`; expanded ChatGPT flow: `6c958327`. Full Chrome and
 the private API 33 AVD both receive real guest responses. Paired captures additionally cover
-attachment menus, Camera/Photos login requirements, dictation and Plugins. The focused 24-step
-ChatGPT run completes without wedges, settling limits, draw/layout errors or required natives;
-all 96 process diagnostic snapshots are collected successfully. New fixes cover camera/executor
-startup, overlay insets, durable SQLite snapshots and forward-only stream detection for SVGs.
-The previous 177-step full E2E predates these changes; a fresh final regression gate is pending.
+attachment menus, Camera/Photos login requirements, dictation and Plugins. New fixes cover
+camera/executor startup, overlay insets, durable SQLite snapshots and SVG stream detection.
+
+Final validation at `418437b7`: typecheck and all 1,265 unit tests pass; ChatGPT compiles 66,165
+classes with zero method failures. The serialized full E2E completes 183 steps in 1,209.4 seconds
+with zero wedged main loops. ChatGPT's 24 steps have zero settling limits or rendering errors and
+96 successful process inspections. Existing Resy/YouTube limits, YouTube draw failures, Lichess
+pthread aborts and slow game samples remain; baseline replays reproduce the relevant failures.
+This is not a clean all-tests/no-regressions claim. Goldens remain unchanged.
 
 Remaining limits: bundled microG chooses Add Google account where the reference reaches email
-login; authenticated voice and uploads are unvalidated. Visualize's remote icon still falls back
-in the long-lived session. System bars and some text weights differ, and the earlier long-session
-GC retention cause is unresolved. No complete-parity or speedup claim is made.
+login; authenticated voice and uploads are unvalidated. The provider surface has poor contrast,
+Visualize's remote icon still falls back, and system bars/some text weights differ. The earlier
+long-session GC retention cause is unresolved. Later reference-AVD system ANRs limit new native
+interaction. Complete app parity remains unfinished; no speedup is claimed.
 
 - Run unchanged ChatGPT XAPK in full Chrome and API 33 AVD at 1080×2160, 480 dpi.
 - Capture and compare reachable interactions; trace failures to platform contracts.
