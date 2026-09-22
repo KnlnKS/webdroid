@@ -5040,3 +5040,10 @@ stateful indicators, matching paired framework bytecode. Owning state and browse
 (5 and 24 assertions), with clean typecheck. A separate duplicate save-login row is under diagnosis.
 One reload stalled at 302 ticks with a queued main job and no native fault; a fresh browser session
 advanced and opened the login modal. This is an unresolved repeated-load observation, not a waiver.
+
+The duplicate phone-login row came from ignored <include android:visibility="gone"> in the
+unchanged res/b/y4.xml. Include inflation now applies the resolved visibility enum through the
+view's virtual setter, as AOSP parseInclude does. Fresh full Chrome shows one correctly sized,
+checked save-login row and the Continue button, with zero observed layout/draw errors. The current
+AVD phone form was captured too; Chrome's cursor/disabled-label styling and system IME/navigation
+remain visually different. Typecheck passes; the real APK replay verifies the include override.

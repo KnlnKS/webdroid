@@ -4,7 +4,7 @@ import { rt, JObj } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { parseAXML, TV, type XmlNode } from "./axml";
-import { JAttrSet, type JXmlParser, askTheme, themeOf, noteAttrsRead, noteUnreadAttrs } from "./res";
+import { JAttrSet, type JXmlParser, askTheme, themeOf, noteAttrsRead, noteUnreadAttrs, obtainStyled, rvInt } from "./res";
 import { JView, JViewGroup, guardCall, guardMaybe, resolveLp } from "./view";
 import type { JContext } from "./context";
 
@@ -66,8 +66,8 @@ async function createViewFromTag(
   return createViewByName(name, jctx, set);
 }
 
-const A_theme = 0x01010000, A_id = 0x010100d0, A_layout = 0x010100f2, A_layoutWidth = 0x010100f4;
-noteAttrsRead(A_theme, A_id, A_layout, A_layoutWidth);
+const A_theme = 0x01010000, A_id = 0x010100d0, A_layout = 0x010100f2, A_layoutWidth = 0x010100f4, A_visibility = 0x010100dc;
+noteAttrsRead(A_theme, A_id, A_layout, A_layoutWidth, A_visibility);
 /** AOSP wraps a tag carrying android:theme -- and its whole subtree -- in a ContextThemeWrapper,
  *  which is how a per-widget ThemeOverlay reaches everything the tag contains. */
 async function themedCtx(jctx: JContext, node: XmlNode): Promise<JContext> {
@@ -101,6 +101,8 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
           set.theme = host.theme;
           const idAttr = child.attrs.find((a) => a.resId === A_id);
           if (idAttr) (incView as JView).idNum = idAttr.data;
+          const visibility = rvInt(host.res, obtainStyled(host.res, themeOf(jctx), set, [A_visibility], 0, 0).vals[0], -1);
+          if (visibility >= 0 && visibility <= 2) await vcall(incView, "setVisibility", "(I)V", visibility * 4);
           // AOSP: the <include> tag's layout params win only when it declares them; otherwise
           // the included root keeps its own (inflateNode already put them on incView.lp).
           const lp = child.attrs.some((a) => a.resId === A_layoutWidth)
