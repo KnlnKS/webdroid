@@ -4960,3 +4960,20 @@ One core subclass-storage case covers insertion, inspection, removal, clearing a
 failures. The 26 collection/executor/queue checks pass (146 assertions), as does typecheck. Live
 cache replay on this repair is pending. The fresh View-resources build produced a single detail
 root and no captured resource exception, but one replay still had empty content.
+
+Fresh full-Chrome replay after the AbstractQueue repair reached a single populated detail root,
+playing cat video and the comment sheet without another observed eviction assertion. Initial
+comment assembly returned normally; the empty list instead accompanied repeated layout failures
+from missing TextView.getCompoundPaddingStart. Start/end getters now select the virtual physical
+padding getter using layout direction, preserving the Java caller through suspension. A diagnostic
+native-method installation immediately allowed comment rows, dates, likes and reply links to
+render. A runtime probe checks both directions and an asynchronous physical getter override;
+six owning text checks pass (28 assertions), with clean typecheck. Fresh-source UI replay is next.
+Relative drawable assignment still uses the existing physical slots; broader RTL resolution is
+outside this reached getter repair.
+
+A caught detail-path ClassCastException also identified NumberFormat factories returning the
+abstract base rather than DecimalFormat. The paired AOSP implementation constructs DecimalFormat;
+the shared factory now links and creates that class, including integer and percent factories.
+Existing formatting checks also assert runtime type: five number checks pass (32 assertions),
+and typecheck passes. These repairs do not complete locale/currency/pattern semantics.
