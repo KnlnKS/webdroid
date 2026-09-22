@@ -66,6 +66,8 @@ describe("arm decoder", () => {
       0xe12fff14, 0xe1a00000, 0xe280000a, BXLR,
     ], cpu => { cpu.w[0] = 5; });
     expect(c.w[0]).toBe(16);
+    const thumb = runThumb([0xb510, 0xf20f, 0x010d, 0x468e, 0x47f0, 0x3001, 0xbd10, 0xbf00, 0x300a, 0x4770], cpu => { cpu.w[0] = 5; });
+    expect(thumb.w[0]).toBe(16);
   });
 
   test("Thumb BL and BLX preserve state across Thumb and ARM callees", () => {

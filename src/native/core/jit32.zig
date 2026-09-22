@@ -738,8 +738,8 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                 const m = (h >> 3) & 15;
                 switch (o) {
                     3 => {
-                        if (h & 0x80 != 0) b.emit(.{ c32(@bitCast(pc +% 3)), set(L_X + 14) });
                         getR(e, m, pc, true);
+                        if (h & 0x80 != 0) b.emit(.{ c32(@bitCast(pc +% 3)), set(L_X + 14) });
                         bxExit(e, k);
                         return true;
                     },
