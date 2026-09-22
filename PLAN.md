@@ -1,3 +1,21 @@
+# TikTok usability follow-up
+
+Branch: `codex/tiktok-usability`. Starting revision: `9d0bb979`.
+Status: reproducing current full-Chrome and AVD behavior in an isolated worktree.
+
+- Compare TikTok at 1080×2160, 480 dpi; retain screenshots and per-process diagnostics.
+- Investigate slow playback, interaction latency, reload stalls, and reached platform gaps.
+- Implement Android behavior in canonical owners, preserving unchanged APK/library bytecode.
+- Keep code and tests proportionate; use focused commits and core checks during development.
+- Target 150 ms action response, measuring completed visible changes separately from frame opportunities.
+- Freeze the candidate before the final serialized full E2E run; keep visual goldens unchanged.
+- Record limitations, matching baseline evidence, and final checks in implementation history.
+
+The current AVD opens a login wall, while full Chrome reaches guest consent. Feed comparisons
+must identify that state difference; authentication and publishing are outside the exercised guest path.
+
+---
+
 # TikTok parity repair
 
 Branch: `codex/tiktok-parity`. Starting revision: `9071fec70953eb3b76df86c6cdede69bdf316eaf`.
