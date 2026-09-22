@@ -603,7 +603,8 @@ async function tick0() {
     startWin = null;
     // Dispatch before measure so decor margins and descendant inset padding affect this pass.
     // Clear first: a listener's requestApplyInsets() belongs to the next traversal.
-    if (uiState.needsInsets) {
+    const insetsChanged = uiState.needsInsets;
+    if (insetsChanged) {
       uiState.needsInsets = false;
       perf.insetsPasses++;
       mainDbg.phase = "insets";
@@ -645,7 +646,11 @@ async function tick0() {
           // and the position is written back, since hit-testing reads it too.
           o.x = Math.max(0, Math.min(o.x, SCREEN_W - o.view.measuredW));
           o.y = Math.max(0, Math.min(o.y, SCREEN_H - o.view.measuredH));
-          await layoutRoot(o.view, o.x, o.y, o.x + o.view.measuredW, o.y + o.view.measuredH);
+          const right = o.x + o.view.measuredW, bottomEdge = o.y + o.view.measuredH;
+          const frameChanged = o.view.left !== o.x || o.view.top !== o.y || o.view.right !== right || o.view.bottom !== bottomEdge;
+          await layoutRoot(o.view, o.x, o.y, right, bottomEdge);
+          // Floating windows need their final frame to calculate window-local bar insets.
+          if (insetsChanged || frameChanged) await dispatchWindowInsets(o.view);
         }
         mainDbg.phase = "globalLayout";
         await fireGlobalLayout(decor);

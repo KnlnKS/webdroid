@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec, callSelf, stubs, noops, fieldGetters, flagGe
 import { mangleMethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
-import { JView, JFrameLP, invalidate, requestLayout, locationOnScreen, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST } from "./view";
+import { JView, JFrameLP, uiState, invalidate, requestLayout, locationOnScreen, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST } from "./view";
 import { JMotionEvent } from "./motionevent";
 import { JFrameLayout } from "./layouts";
 import { JDrawable, loadDrawableRV } from "./drawable";
@@ -29,6 +29,7 @@ export const overlays: Overlay[] = [];
 export function addOverlay(v: JView, x = 0, y = 0, dismissOnOutside = false, onBack?: () => unknown, onDismiss?: () => unknown) {
   const overlay: Overlay = { view: v, x, y, dismissOnOutside, onBack, onDismiss };
   overlays.push(overlay);
+  uiState.needsInsets = true;
   requestLayout(v);
   return overlay;
 }
