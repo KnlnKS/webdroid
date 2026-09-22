@@ -3,8 +3,12 @@
 Branch: `codex/cut-the-rope`. Starting revision: `9d0bb979ae7987cd70b7d5242ec6c6b720b5a1e2`.
 Status: original ARM32 and ARM64 builds complete levels 1 and 2 in Chrome; graphics and native
 audio work. The AVD completed level 1 and reached level 2, where a test interstitial blocks its
-current replay. Original ARM32 performance and fresh-launch lifecycle/persistence validation
-are in progress. Final regression matrix pending.
+current replay. Original ARM32 reload restores level 3, coins and sound settings; background /
+resume and its first level-3 puzzle pass. Rendering remains slow. Typecheck, 1,295 unit tests,
+XAPK compilation and all eight runnable framework exercises pass. The final 159-step E2E
+completes with no wedge or action failure. Starting-revision visual and performance comparisons
+find no reproduced regression. Player ID/backend parity and later unlocked features remain
+unvalidated; this is verified early gameplay, not a complete parity claim.
 
 - Run the unchanged 4.2.1 XAPK in full Chrome and an AVD at matching geometry.
 - Capture startup, menus, gameplay, pause/resume and saved progression in both.

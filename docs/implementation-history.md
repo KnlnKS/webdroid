@@ -66,7 +66,46 @@ contended observations, not controlled speed claims.
 At `6bbc2b80`, typecheck and 1,295 unit tests / 27,213 assertions pass, including native hardware
 oracles. The original XAPK compiles 64,465 classes with zero method failures. All eight runnable
 framework exercises pass (295/363 declared natives); text metrics retain the browser-only skip.
-The final serialized E2E matrix remains pending.
+The post-resume level-3 replay completed its first puzzle and advanced to the second, reaching
+2,335 GL frames / 80,153 draws with zero native, GL, layout or draw faults and no invalid-bounds
+warning. The final serialized E2E matrix completes all 159 steps across 12 flows in 830.3 s
+with the interactive game closed. No step reports a main-loop wedge, action failure, settling
+timeout or required native delegate. Every Android realm returns diagnostics, and all main
+apps advance ticks. Flappy Bird's embedded WebView frames do not expose emulator diagnostics
+and its page-status TypeError remains visible. YouTube retains Matrix draw and SAX failures,
+Harmonic the atomic-group regex failure, and Lichess native pthread errors 3/22/35. This run is not
+an uncontended performance measurement because the unrelated TikTok renderer remains active.
+
+A fresh serialized starting-`9d0bb979` replay covers all four scored flows, Resy, Doodle Jump
+and Flappy Bird (101 steps, 304.1 s). Mean content differences from unchanged AVD goldens are
+FitNotes 40.11639→40.11639%, Mihon app 57.23758→57.23855%, onboarding 17.69141→17.69141%,
+and Harmonic 27.59968→27.49948%. Harmonic comments are populated with
+two inset and eight layout passes in both revisions; variations concentrate in menu/scroll
+captures. Resy's populated venue reproduces roughly one layout per rendered frame on both
+revisions (371/450 layouts), with comparable step time and no missing APIs or draw failure.
+Flappy Bird's page error and Harmonic's regex error reproduce. Saved same-baseline YouTube
+and Lichess captures also contain their respective Matrix/SAX and pthread failures.
+
+The full capture's lower native-game FPS did not persist in two alternating, fresh-browser
+15-second comparisons without readback in the timed window. Flappy Bird after `play` measured
+22.40→22.46 and 23.06→23.20 GL FPS; Doodle Jump after `title` measured 26.73→28.26 and
+29.72→28.92. Every sample remains visible, alive, advances rendering, and has no GL/layout/draw
+error or queued main job. Flappy retains its baseline ad WebView error. These SwiftShader runs
+do not prove a speedup or uncontended performance; they do not reproduce a consistent slowdown.
+No production changes or visual-golden updates followed the frozen final validation.
+An additional clean, uninstrumented full-Chrome launch of that source restored the level-3
+puzzle, 240 coins and six lives by the five-minute capture. It had 431 GL frames / 4,977 draws,
+no native fault and zero GL/layout/draw errors. Chrome and the reference AVD were left open;
+the AVD retained its level-2 puzzle. This confirms the final source without the removed
+adaptive-slice experiment or temporary budget wrapper.
+
+The current original-ARM32 settings screen leaves Player ID blank while the ARM64 AVD shows
+an ID. Unity logs say legacy migration is waiting for a player record; a successful TCP connect
+to the configuration service does not prove that record was retrieved. No identity or backend
+success is fabricated. Later unlocked features and complete game coverage remain unvalidated;
+the evidence establishes the observed early-level, audio, persistence and resume paths.
+
+Earlier investigation entries follow; their open questions describe the revision at that time.
 
 Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this
 game and changed owners; the full serialized E2E matrix is reserved for the final candidate.
