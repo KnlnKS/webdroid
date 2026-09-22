@@ -4,7 +4,7 @@
 
 import { mapElf, symbolize, nearestSymbol, type Module } from "./elf";
 import { mem } from "./mem";
-import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp } from "./host";
+import { defineHost, probeHost, hostLib, lookupHost, hostLibNames, missingStub, slotName, isTrampPc, PTR, stp, type HostFn } from "./host";
 import { cpuFor, setSymbolizeHook, setBacktraceHook, setA64, isA64, type Cpu } from "./cpu";
 import { trampSlot, RET_SENTINEL } from "./abi";
 import { rt, type Runtime } from "../jvm/runtime";
@@ -122,6 +122,11 @@ function handleOf(h: Handle): number {
 export function dlInit(): void {
   setSymbolizeHook(symbolizePc);
   dlerrorBuf = mem.hostAlloc(256);
+  const findExidx: HostFn = (_cpu, a) => {
+    const pc = a.p(), pcount = a.p(), m = moduleOf(pc);
+    mem.st32(pcount, m?.exidx.count ?? 0);
+    return m?.exidx.addr ?? 0;
+  };
   hostLib("libdl.so", {
     dlopen: async (cpu, a) => {
       const path = a.p(), name = path ? basename(mem.cstr(path)) : "";
@@ -183,13 +188,8 @@ export function dlInit(): void {
         return 0;
       } finally { mem.free(info); }
     },
-    __gnu_Unwind_Find_exidx: (_cpu, a) => {
-      const pc = a.p(), pcount = a.p();
-      const m = moduleOf(pc);
-      if (!m) { mem.st32(pcount, 0); return 0; }
-      mem.st32(pcount, m.exidx.count);
-      return m.exidx.addr;
-    },
+    __gnu_Unwind_Find_exidx: findExidx,
+    dl_unwind_find_exidx: findExidx,
   });
 }
 
