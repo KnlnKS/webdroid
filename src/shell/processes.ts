@@ -436,6 +436,10 @@ export function connectProcess(): ProcessEndpoint {
   pendingTransport.operation = id => {
     try { return broker.takePending(PROCESS_PID, id); } catch (error) { return remoteError(error); }
   };
+  pendingTransport.creator = id => {
+    const operation = broker.intents.get(id);
+    return operation ? { pkg: operation.pkg, uid: operation.uid } : null;
+  };
   alarmTransport.schedule = (id, type, at, interval) => broker.alarms.schedule(id, type, at, interval);
   alarmTransport.cancel = id => broker.alarms.cancel(id);
   serviceTransport.bind = async (owner, process, intent, key) => importBinder(await remote(broker.service(PROCESS_PID, owner.pkg, process, { kind: "bind", intent: await encodeIntent(intent), key })));
