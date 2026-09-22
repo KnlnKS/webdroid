@@ -460,10 +460,11 @@ test("reached JDK utility primitives preserve their Java behavior", async () => 
   expect(await vcall(info, "getName", "()Ljava/lang/String;")).toBe("INFO");
 
   const writer = await newObj("java/io/CharArrayWriter");
-  expect(writer[rt.link("java/io/Writer").fieldTable.get("lock")!]).toBe(writer);
+  const lockField = rt.link("java/io/Writer").fieldTable.get("lock")!;
+  expect(writer[lockField]).toBe(writer);
   const lock = rt.make("java/lang/Object");
   const lockedWriter = await newObj("java/io/Writer", "(Ljava/lang/Object;)V", lock);
-  expect(lockedWriter[rt.link("java/io/Writer").fieldTable.get("lock")!]).toBe(lock);
+  expect(lockedWriter[lockField]).toBe(lock);
   await expect(newObj("java/io/Writer", "(Ljava/lang/Object;)V", null)).rejects.toThrow();
   await vcall(writer, "write", "(Ljava/lang/String;)V", "hello");
   expect(await vcall(writer, "size", "()I")).toBe(5);

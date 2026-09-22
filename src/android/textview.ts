@@ -237,7 +237,8 @@ export async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyle
     tv.linkColors = link.t === TV.REFERENCE ? await loadColorStateList(res, link.d, tv.theme) : mkCsl(rvColor(res, link, tv.paintT.linkColor));
     tv.updateLinkColor();
   }
-  if (g(35)?.t === TV.REFERENCE) tv.cursorDrawableRes = g(35)!.d;
+  const cursor = g(35);
+  if (cursor?.t === TV.REFERENCE) tv.cursorDrawableRes = cursor.d;
   if (tv.styleBits & 1) tv.paintT.fakeBold = true;
   if (tv.styleBits & 2) tv.paintT.tf = (() => { const t = new JTypeface(); t.family = tv.paintT.tf.family; t.italic = true; t.weight = tv.paintT.tf.weight; return t; })();
 }
@@ -663,14 +664,13 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       const caretY = vg === 16 ? (contentB - contentT - caretHeight) / 2 + contentT : vg === 80 ? contentB - caretHeight : contentT;
       const cy = caretY + caretLayout.baseline(Math.max(0, caretLayout.lines.length - 1));
       const cursor = await textCursorDrawable(this);
-      if (cursor) {
-        const padding = new JRect();
-        await vcallOn(thread, cursor, "getPadding", "(Landroid/graphics/Rect;)Z", padding);
-        const width = await drawableSize(cursor, false, thread);
-        const left = Math.min(Math.max(0, Math.trunc(cx - 0.5)) - padding.left, avail - width + padding.right);
-        await vcallOn(thread, cursor, "setBounds", "(IIII)V", 0, 0, width, this.lineHeight() + padding.top + padding.bottom);
-        await draw(cursor, contentL + left, cy - this.ascent() - padding.top);
-      }
+      if (!cursor) return;
+      const padding = new JRect();
+      await vcallOn(thread, cursor, "getPadding", "(Landroid/graphics/Rect;)Z", padding);
+      const width = await drawableSize(cursor, false, thread);
+      const left = Math.min(Math.max(0, Math.trunc(cx - 0.5)) - padding.left, avail - width + padding.right);
+      await vcallOn(thread, cursor, "setBounds", "(IIII)V", 0, 0, width, this.lineHeight() + padding.top + padding.bottom);
+      await draw(cursor, contentL + left, cy - this.ascent() - padding.top);
     }
   },
 };

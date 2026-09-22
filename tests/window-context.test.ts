@@ -40,7 +40,6 @@ test("unchanged window attributes do not restart inset dispatch", async () => {
   } finally { uiState.needsInsets = pending; }
 });
 
-
 test("destroyed context windows detach without dismissing dialogs or other activities", async () => {
   const owner = new JContext(), other = new JContext();
   const themed = new JContextWrapper();

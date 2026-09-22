@@ -26,10 +26,7 @@ const paramList = (desc: string) => parseMethodDesc(desc).params.map((_, j) => "
 const isRef = (desc: string) => desc[0] === "L" || desc[0] === "[";
 const ref = (r: string) => `(${r}===0?null:${r})`;
 
-/** Generating a method's JS source costs ~4x what handing it to `new Function` does, and on
- *  a large app's boot only 31% of the methods of the classes we load are ever called. So a body is
- *  reached through a shared thunk that compiles it on first call. Set false to compile everything up
- *  front (scripts/smoke.ts, which exists to surface compile failures). */
+// Compile on first call; smoke compilation disables laziness to surface every method failure.
 let lazyMethods = true;
 export function setLazyMethods(v: boolean) { lazyMethods = v; }
 
@@ -106,13 +103,12 @@ function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod
   info.lazy!.push({ m, mangled, isStatic, name, desc });
   const C: CompiledCtor = info.ctor;
   let entry: JvmFunction | undefined;
-  (isStatic ? C : C.prototype)[mangled] = function(this: unknown, ...args: unknown[]) {
+  (isStatic ? C : C.prototype)[mangled] = function (this: unknown, ...args: unknown[]) {
     entry ??= R.lz(C, i);
     return entry.apply(this, args);
   };
 }
 
-/** Compile one lazily-emitted method and install it. */
 export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> } & Record<string, unknown>;
 type JvmFunction = (this: unknown, ...args: unknown[]) => unknown;
 interface CompiledMethod {
