@@ -1221,11 +1221,7 @@ export class JLayout extends JObj {
     this.lines = breakLines(this.text, this.paint, {
       width: this.width, maxLines, balanced: this.breakStrategy === 2,
       measure: (start, end) => this.rangeWidth(start, end),
-      boundary: (start, end) => {
-        const span = this.replacements.find(s => s.start < end && s.end > end);
-        if (span) return span.start > start ? span.start : span.end;
-        return end > start && /[\uD800-\uDBFF]/.test(this.text[end - 1]) && end < this.text.length ? (end - 1 > start ? end - 1 : end + 1) : end;
-      },
+      atomic: this.replacements,
     });
   }
   rangeWidth(start: number, end: number): number {

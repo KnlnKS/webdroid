@@ -2,6 +2,7 @@ import "../../src/natives";
 import { rt } from "../../src/jvm/runtime";
 import { mangleMethod } from "../../src/jvm/abi";
 import { newObj, vcall } from "../../src/jvm/natives/jlang";
+import { JLayout, JTextPaint, measureReplacements, drawLayout } from "../../src/android/text";
 import { JTextView } from "../../src/android/textview";
 import { JCanvas, measureText, typefaceFor, type JPaint } from "../../src/android/graphics";
 import { makeSpec, MS_EXACTLY, MS_AT_MOST, JViewGroup } from "../../src/android/view";
@@ -162,7 +163,19 @@ async function probe() {
   await vcall(spanBuilder, "setBreakStrategy", "(I)Landroid/text/StaticLayout$Builder;", 2);
   const balancedSpanned = (await vcall(spanBuilder, "build", "()Landroid/text/StaticLayout;")).lines.map((line: { text: string }) => line.text);
   const balanced = balancedLayout.lines.map((l: {text: string; start: number; end: number}) => [l.text, l.start, l.end]);
-  return { ...result, balancedSpanned, balanced, selection, emptySelection, independentCanvas, checkBoxHeight, caretAtStart, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
+  const spaceReplacements = [];
+  const spaceText = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "aaa b ");
+  await vcall(spaceText, "setSpan", "(Ljava/lang/Object;III)V", span, 5, 6, 33);
+  for (const strategy of [0, 2]) {
+    const layout = new JLayout(); layout.paint = new JTextPaint(); layout.paint.textSize = 16;
+    layout.text = "aaa b "; layout.src = spaceText; layout.width = 60; layout.breakStrategy = strategy;
+    layout.replacements = await measureReplacements(spaceText, layout.paint);
+    layout.layoutLines();
+    const before = draws;
+    await drawLayout.call(layout, JCanvas.wrap(new OffscreenCanvas(60, 100).getContext("2d")!, 60, 100));
+    spaceReplacements.push({ draws: draws - before, visible: layout.lines.some(line => line.start <= 5 && line.start + line.text.length >= 6) });
+  }
+  return { ...result, spaceReplacements, balancedSpanned, balanced, selection, emptySelection, independentCanvas, checkBoxHeight, caretAtStart, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
     fitting: (await view.measuredLines(measureText(view.paintT, view.text))).lines.map(l => l.text), cleared: (await view.measuredLines(width)).replacements.length === 0,
     compound: { drawsAt, retained, restored: surface.getTransform().isIdentity } };
 }
