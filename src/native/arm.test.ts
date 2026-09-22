@@ -218,10 +218,12 @@ describe("arm decoder", () => {
       0xe3a02000,   // mov r2, #0 (doesn't set flags)
       0xe3520000,   // cmp r2, #0 -> Z=1 C=1
       0xe10f3000,   // mrs r3, cpsr
+      0xe6ff4f30,   // rbit r4, r0
       BXLR]);
     expect(c.w[2]).toBe(31);
     expect(c.w[6] >>> 30).toBe(1); // Z set, N clear
     expect((c.w[6] >>> 29) & 1).toBe(1);
+    expect(c.w[8] >>> 0).toBe(0x80000000);
   });
   test("exclusive stores require a live monitor", () => {
     const c = run([0xe1912f9f, 0xe2822001, 0xe1810f92, 0xf57ff01f, 0xe3a02063, 0xe1813f92, BXLR], (cpu) => {

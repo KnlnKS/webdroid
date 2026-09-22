@@ -650,16 +650,13 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         set(c, rd, v);
         return .next;
     }
-    if ((w & 0x0fff0ff0) == 0x06bf0f30) {
-        set(c, rd, @byteSwap(RM));
-        return .next;
-    }
-    if ((w & 0x0fff0ff0) == 0x06bf0fb0) {
-        set(c, rd, rev16(RM));
-        return .next;
-    }
-    if ((w & 0x0fff0ff0) == 0x06ff0fb0) {
-        set(c, rd, sxh(@byteSwap(@as(u16, @truncate(RM)))));
+    if ((w & 0x0fbf0f70) == 0x06bf0f30) {
+        set(c, rd, switch (w & 0x400080) {
+            0 => @byteSwap(RM),
+            0x80 => rev16(RM),
+            0x400000 => @bitReverse(RM),
+            else => sxh(@byteSwap(@as(u16, @truncate(RM)))),
+        });
         return .next;
     }
     if ((w & 0x0ff00ff0) == 0x06800fb0) {
