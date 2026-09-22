@@ -10,6 +10,7 @@ import { resy } from "./resy";
 import { reddit } from "./reddit";
 import { tiktok } from "./tiktok";
 import { youtube } from "./youtube";
+import { chatgpt } from "./chatgpt";
 
-export const FLOWS: Flow[] = [fitnotes, mihonOnboarding, mihonApp, flappybird, harmonic, calculatorm, lichess, doodlejump, resy, reddit, tiktok, youtube];
+export const FLOWS: Flow[] = [fitnotes, mihonOnboarding, mihonApp, flappybird, harmonic, calculatorm, lichess, doodlejump, resy, reddit, tiktok, youtube, chatgpt];
 for (const flow of FLOWS) validateFlow(flow);
