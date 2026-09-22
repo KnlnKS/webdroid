@@ -3,7 +3,7 @@ import { codeStats, invalidateRange, setA64 } from "./cpu";
 import { mem } from "./mem";
 import { RET, run } from "./a64.testkit";
 import { JIT_HEAT, jitEvict, jitStats } from "./core";
-import { RET_SENTINEL } from "./abi";
+import { LOW, RET_SENTINEL } from "./abi";
 
 const movW0 = (v: number) => 0x52800000 | (v << 5);
 
@@ -194,6 +194,30 @@ describe("region discovery", () => {
     expect(run(words, (c) => { c.w[0] = 0; }).w[0]).toBe(0);
     expect(jitStats.regions).toBeGreaterThan(before);
   });
+});
+
+test("compiled scalar and vector memory operations retain low-address faults", () => {
+  const data = mem.reserve(0x1000, 0x1000), c = run([RET]);
+  for (const word of [0xf9400120, 0x3dc00120, 0x4c40a130, 0x4c9f792f]) {
+    const at = mem.reserve(0x1000, 0x1000);
+    mem.u32[at >>> 2] = word; mem.u32[(at >>> 2) + 1] = RET;
+    const execute = (address: number) => {
+      c.w[18] = address; c.w[19] = 0;
+      c.setPc(at);
+      while (c.runSlice(10000) !== 2) { /* spin */ }
+    };
+    for (const hot of [false, true]) {
+      if (hot) {
+        const before = jitStats.regions;
+        for (let i = 0; i < JIT_HEAT + 2; i++) execute(data);
+        expect(jitStats.regions).toBeGreaterThan(before);
+      }
+      for (const address of [0, LOW - 1]) {
+        expect(() => execute(address)).toThrow(/bad address/);
+        expect(c.w[18]).toBe(address);
+      }
+    }
+  }
 });
 
 describe("a branch to a null pointer", () => {
