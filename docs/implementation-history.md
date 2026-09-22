@@ -6413,3 +6413,11 @@ new emitter paths; varying remote content prevents a matched pixel conclusion. S
 (clone) and 260 (wait4) remain explicit unsupported process-creation boundaries rather than
 fabricated success. Surface-frame telemetry now counts every canonical presenter, although this
 session's native-window route still did not increment that counter and is not reported as FPS.
+
+The final serialized E2E matrix passed in 1,036.7 seconds. TikTok rendered all 13 steps,
+including background resume and two video swipes, with no wedged main loop, settle timeout,
+layout/draw error or required native. Its video steps recorded 32–80 canonical surface frames
+and 5–16 presented FPS, superseding the earlier interactive session's counter limitation but
+confirming that decode throughput remains the dominant constraint. Across all 13 flows, 183
+steps completed with no wedge or layout error; the two settle timeouts and seven draw errors
+were confined to YouTube's existing smoke-only path.
