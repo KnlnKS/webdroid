@@ -5047,3 +5047,11 @@ view's virtual setter, as AOSP parseInclude does. Fresh full Chrome shows one co
 checked save-login row and the Continue button, with zero observed layout/draw errors. The current
 AVD phone form was captured too; Chrome's cursor/disabled-label styling and system IME/navigation
 remain visually different. Typecheck passes; the real APK replay verifies the include override.
+
+Final manual pass on 07439dd4 reached guest feed, Profile/login, phone/email tabs, back navigation,
+Videos search results, a populated video detail, resume, and a swipe to the next result. No observed
+layout/draw errors and the final main-queue sentinel passed. The Top search tab remained loading
+in this pass; Videos loaded. The final comment tap opened TikTok's sign-up gate, so earlier rendered
+comment captures remain the comment evidence. No credentials or posts were submitted. Screenshots
+and navigation telemetry are in ignored webdroid-shots/tiktok-parity. Full regression validation is
+next; these observations do not establish complete app parity or smooth playback.

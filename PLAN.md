@@ -1,7 +1,7 @@
 # TikTok parity repair
 
 Branch: `codex/tiktok-parity`. Starting revision: `9071fec70953eb3b76df86c6cdede69bdf316eaf`.
-Status: reproducing current failures in full Chrome and the API 33 reference AVD.
+Status: platform repairs and manual Chrome/AVD comparisons recorded; final regression validation in progress.
 
 - Compare the unchanged TikTok APK at 1080×2160, 480 dpi, with screenshots and diagnostic evidence.
 - Trace reached platform failures to Android/DEX/native contracts; repair canonical owners.
