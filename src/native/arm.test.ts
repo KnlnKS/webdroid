@@ -199,17 +199,21 @@ describe("arm decoder", () => {
       BXLR]);
     expect(c.w[2]).toBe(1); expect(c.w[4]).toBe(3);
   });
-  test("mul/umull/smull", () => {
+  test("mul/umull/smull/mls", () => {
     const c = run([
       0xe3e00000,   // mvn r0, #0  (0xffffffff)
       0xe3a01002,   // mov r1, #2
       0xe0832190,   // umull r2, r3, r0, r1  -> 0x1_fffffffe
       0xe0c54190,   // smull r4, r5, r0, r1  -> -2 (r4=-2, r5=-1)
       0xe0060190,   // mul r6, r0, r1        -> -2
+      0xe3500000,   // cmp r0, #0
+      0x10604596,   // mlsne r0, r6, r5, r4 -> -4
       BXLR]);
     expect(c.w[4]).toBe(-2); expect(c.w[6]).toBe(1);
     expect(c.w[8]).toBe(-2); expect(c.w[10]).toBe(-1);
     expect(c.w[12]).toBe(-2);
+    expect(c.w[0]).toBe(-4);
+    expect(c.cpsr >>> 28).toBe(10);
   });
   test("clz, mrs/msr", () => {
     const c = run([

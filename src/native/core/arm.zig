@@ -427,9 +427,9 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
             set(c, rd, c.cpsr | 0x10);
             return .next;
         }
-        if ((w & 0x0fc000f0) == 0x00000090) {
+        if ((w & 0x0fc000f0) == 0x00000090 or (w & 0x0ff000f0) == 0x00600090) {
             var v = reg(c, rm, pc) *% reg(c, rs, pc);
-            if (w & (1 << 21) != 0) v +%= r(c, rd);
+            if (w & (1 << 22) != 0) v = r(c, rd) -% v else if (w & (1 << 21) != 0) v +%= r(c, rd);
             set(c, rn, v);
             if (w & (1 << 20) != 0) setNZ(c, v);
             return .next;

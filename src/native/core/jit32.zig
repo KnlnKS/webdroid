@@ -420,11 +420,13 @@ fn dataProcessing(e: *Emit, w: u32, pc: u32, k: u32, top: u32, rn: u32, rd: u32,
             b.emit(.{ O.i32_clz, set(L_X + rd) });
             return false;
         }
-        if ((w & 0x0fc000f0) == 0x00000090) {
+        if ((w & 0x0fc000f0) == 0x00000090 or (w & 0x0ff000f0) == 0x00600090) {
+            const subtract = w & (1 << 22) != 0;
+            if (subtract) b.emit(.{get(L_X + rd)});
             getR(e, rm, pc, false);
             getR(e, rs, pc, false);
             b.byte(O.i32_mul);
-            if (w & (1 << 21) != 0) b.emit(.{ get(L_X + rd), O.i32_add });
+            if (subtract) b.byte(O.i32_sub) else if (w & (1 << 21) != 0) b.emit(.{ get(L_X + rd), O.i32_add });
             const S = w & (1 << 20) != 0;
             if (S) e.pre(.nz);
             b.emit(.{ tee(if (S) FR else L_R), set(L_X + rn) });
