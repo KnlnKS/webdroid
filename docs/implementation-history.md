@@ -4998,3 +4998,11 @@ After the host restart, the reference AVD loaded an older snapshot without TikTo
 a reset of that test installation both led directly to a login wall without a guest close button.
 Earlier AVD guest captures remain reference evidence; this latest launch is not a paired guest
 comparison. No account was created and no comment was posted.
+
+The fresh feed's decoded surfaces advanced, but swiping exposed a separate geometry failure:
+a spacer had LayoutParams.height=-147. childMeasureSpec treated every negative dimension other
+than MATCH_PARENT as WRAP_CONTENT, so the plain spacer measured the full available height and
+LinearLayout assigned its weighted video sibling zero height. AOSP's method leaves unknown
+negative dimensions at UNSPECIFIED/0; the shared helper now does likewise. One core weighted
+layout check verifies the content retains its space; 12 owning layout checks pass (23 assertions)
+and typecheck passes. Fresh feed replay remains pending.
