@@ -1418,7 +1418,8 @@ rt.register({ name: "android/graphics/Bitmap", ctor: JBitmap, ifaces: ["android/
     return b;
   }); } } });
 mkEnumSet("android/graphics/Matrix$ScaleToFit", ["FILL", "START", "CENTER", "END"]);
-const bitmapConfigs = mkEnumSet("android/graphics/Bitmap$Config", ["ALPHA_8", "RGB_565", "ARGB_4444", "ARGB_8888", "RGBA_F16", "HARDWARE", "RGBA_1010102"]);
+const bitmapConfigs = mkEnumSet("android/graphics/Bitmap$Config", ["ALPHA_8", "RGB_565", "ARGB_4444", "ARGB_8888", "RGBA_F16", "HARDWARE", "RGBA_1010102"], {}, undefined, ["nativeInt"]);
+bitmapConfigs.forEach((config, i) => Object.assign(config, { nativeInt: i === 0 ? 1 : i + 2 }));
 mkEnumSet("android/graphics/Bitmap$CompressFormat", ["JPEG", "PNG", "WEBP"]);
 
 export class JCanvas extends JObj {

@@ -1783,11 +1783,11 @@ export function enumValueOf<T extends JEnum>(values: T[], name: string): T {
  * compareTo come from java/lang/Enum via the prototype chain).
  */
 export class JSimpleEnum extends JEnum {}
-export function mkEnumSet(cls: string, names: string[], extra: NativeSpec["methods"] = {}, ifaces?: string[]): JSimpleEnum[] {
+export function mkEnumSet(cls: string, names: string[], extra: NativeSpec["methods"] = {}, ifaces?: string[], fields?: NativeSpec["fields"]): JSimpleEnum[] {
   const ctor = class extends JSimpleEnum {};
   const vals = names.map((n, i) => { const e = new ctor(); e.ename = n; e.ord = i; return e; });
   rt.register({
-    name: cls, ctor, sup: "java/lang/Enum", ifaces,
+    name: cls, ctor, sup: "java/lang/Enum", ifaces, fields,
     statics: Object.fromEntries(names.map((n, i) => [n, vals[i]])),
     methods: {
       [`static values()[L${cls};`]: () => jarray(vals.slice(), `L${cls};`),
