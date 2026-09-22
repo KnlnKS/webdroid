@@ -1,0 +1,118 @@
+import { JAudioTrack, outputSampleRate, newAudioSessionId } from "../android/media";
+import { JThread, reportUncaught } from "../jvm/natives/jlang";
+import { Cpu, bindCpu, hasProcessExited } from "./cpu";
+import { hostLib, stp, type HostFn } from "./host";
+import { mem } from "./mem";
+
+const INVALID = -898, INVALID_STATE = -895, INVALID_HANDLE = -892, UNAVAILABLE = -889;
+const builders = new Map<number, Builder>(), streams = new Map<number, Stream>();
+class Builder {
+  SampleRate = 0; ChannelCount = 0; Format = 0; Direction = 0; SharingMode = 1;
+  BufferCapacityInFrames = 0; FramesPerDataCallback = 0; PerformanceMode = 10;
+  DeviceId = 0; SessionId = -1;
+  callback = 0; context = 0; errorCallback = 0; errorContext = 0;
+}
+class Stream {
+  readonly track = new JAudioTrack();
+  readonly cpu: Cpu;
+  readonly buffer: number;
+  readonly frames: number;
+  readonly capacity: number;
+  size: number;
+  state = 2;
+  pumping: Promise<void> | null = null;
+  readonly waiters = new Set<() => void>();
+  constructor(readonly handle: number, readonly config: Builder, parent: Cpu) {
+    const track = this.track;
+    track.rate = config.SampleRate || outputSampleRate(); track.channels = config.ChannelCount || 2;
+    track.bytesPerSample = config.Format === 1 ? 2 : 4;
+    track.sessionId = config.SessionId === 0 ? newAudioSessionId() : config.SessionId;
+    this.frames = config.FramesPerDataCallback || Math.ceil(track.rate / 100);
+    this.capacity = Math.max(config.BufferCapacityInFrames, this.frames * 4);
+    this.size = this.capacity;
+    this.buffer = mem.malloc(this.frames * track.frameBytes());
+    const thread = new JThread(); thread.jname = "AAudio callback"; thread.alive = 1;
+    this.cpu = new Cpu(thread, thread.jname); this.cpu.nativeRuntime = parent.nativeRuntime;
+    bindCpu(thread, this.cpu);
+  }
+  change(state: number): void { this.state = state; for (const wake of this.waiters) wake(); }
+  pump(): void {
+    if (this.pumping || !this.config.callback || this.state !== 4) return;
+    this.pumping = this.fill().catch(reportUncaught).finally(() => { this.pumping = null; });
+  }
+  async fill(): Promise<void> {
+    const track = this.track;
+    while (this.state === 4 && !hasProcessExited() && track.queuedSec() * track.rate + this.frames <= this.size) {
+      const result = await this.cpu.call(this.config.callback, [this.handle, this.config.context, this.buffer, this.frames], "AAudio data callback");
+      if (this.state !== 4) break;
+      if (result !== 0) { this.stop(); break; }
+      const bytes = mem.bytes(this.buffer, this.frames * track.frameBytes());
+      const samples = track.bytesPerSample === 2 ? new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2) : new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+      track.push(samples, this.frames, () => {
+        if (this.state === 9 && !track.queue.length) this.change(10);
+        else this.pump();
+      });
+    }
+  }
+  start(): number {
+    if (this.state === 12 || this.state === 9) return INVALID_STATE;
+    this.track.playState = 3; void this.track.ctx().resume(); this.track.schedule(); this.change(4); this.pump(); return 0;
+  }
+  stop(): number {
+    if (this.track.playState !== 3) this.track.clearQueue();
+    this.change(this.track.queue.length ? 9 : 10);
+    return 0;
+  }
+  async close(): Promise<number> {
+    this.change(12); this.track.clearQueue(); this.track.gain?.disconnect();
+    await this.pumping;
+    this.cpu.jthread.alive = 0; this.cpu.dispose(); mem.free(this.buffer); mem.free(this.handle);
+    streams.delete(this.handle); return 0;
+  }
+  wait(input: number, out: number, nanos: bigint): number | Promise<number> {
+    const done = () => { if (out) mem.st32(out, this.state); return this.state === input ? -885 : 0; };
+    if (this.state !== input || nanos <= 0n) return done();
+    return new Promise(resolve => {
+      const wake = () => { clearTimeout(timer); this.waiters.delete(wake); resolve(done()); };
+      const timer = setTimeout(wake, Math.min(Number(nanos / 1000000n), 0x7fffffff)); this.waiters.add(wake);
+    });
+  }
+}
+type Setting = "SampleRate" | "ChannelCount" | "Format" | "Direction" | "SharingMode" | "BufferCapacityInFrames" | "FramesPerDataCallback" | "PerformanceMode" | "DeviceId" | "SessionId";
+export function aaudioInit(): void {
+  const methods: Record<string, HostFn> = {
+    AAudio_createStreamBuilder: (_cpu, a) => { const out = a.p(); if (!out) return -886; const p = mem.malloc(4); builders.set(p, new Builder()); stp(out, p); return 0; },
+    AAudioStreamBuilder_delete: (_cpu, a) => { const p = a.p(); if (!builders.delete(p)) return INVALID_HANDLE; mem.free(p); return 0; },
+    AAudioStreamBuilder_openStream: (cpu, a) => {
+      const b = builders.get(a.p()), out = a.p(); if (!b) return INVALID_HANDLE; if (!out) return -886; stp(out, 0);
+      if (b.Direction !== 0 || (b.DeviceId !== 0 && b.DeviceId !== 1) || !b.callback) return UNAVAILABLE;
+      if (b.SessionId < -1) return INVALID;
+      if (b.SampleRate !== 0 && (b.SampleRate < 8000 || b.SampleRate > 192000)) return -880;
+      if (![0, 1, 2].includes(b.Format)) return -883;
+      if (![0, 1, 2].includes(b.ChannelCount) || ![0, 1].includes(b.SharingMode) || ![10, 11, 12].includes(b.PerformanceMode) || b.FramesPerDataCallback < 0 || b.BufferCapacityInFrames < 0) return INVALID;
+      if (b.FramesPerDataCallback > 1000000 || b.BufferCapacityInFrames > 1000000) return -882;
+      const p = mem.malloc(4), stream = new Stream(p, { ...b }, cpu); streams.set(p, stream); stp(out, p); return 0;
+    },
+    AAudioStreamBuilder_setDataCallback: (_cpu, a) => { const b = builders.get(a.p()); if (b) { b.callback = a.p(); b.context = a.p(); } },
+    AAudioStreamBuilder_setErrorCallback: (_cpu, a) => { const b = builders.get(a.p()); if (b) { b.errorCallback = a.p(); b.errorContext = a.p(); } },
+    AAudioStream_close: (_cpu, a) => streams.get(a.p())?.close() ?? INVALID_HANDLE,
+    AAudioStream_requestStart: (_cpu, a) => streams.get(a.p())?.start() ?? INVALID_HANDLE,
+    AAudioStream_requestStop: (_cpu, a) => streams.get(a.p())?.stop() ?? INVALID_HANDLE,
+    AAudioStream_requestPause: (_cpu, a) => { const s = streams.get(a.p()); if (!s) return INVALID_HANDLE; s.track.playState = 2; s.track.pauseQueue(); s.change(6); return 0; },
+    AAudioStream_requestFlush: (_cpu, a) => { const s = streams.get(a.p()); if (!s) return INVALID_HANDLE; if (s.state === 4) return INVALID_STATE; s.track.clearQueue(); s.change(8); return 0; },
+    AAudioStream_waitForStateChange: (_cpu, a) => { const s = streams.get(a.p()), input = a.i(), out = a.p(), timeout = a.l(); return s?.wait(input, out, timeout) ?? INVALID_HANDLE; },
+    AAudioStream_setBufferSizeInFrames: (_cpu, a) => { const s = streams.get(a.p()), size = a.i(); if (!s) return INVALID_HANDLE; if (size < 0) return -882; s.size = Math.max(s.frames, Math.min(size, s.capacity)); s.pump(); return s.size; },
+  };
+  const settings: Setting[] = ["SampleRate", "ChannelCount", "Format", "Direction", "SharingMode", "BufferCapacityInFrames", "FramesPerDataCallback", "PerformanceMode", "DeviceId", "SessionId"];
+  for (const key of settings) methods[`AAudioStreamBuilder_set${key}`] = (_cpu, a) => { const b = builders.get(a.p()); if (b) b[key] = a.i(); };
+  const getters: Record<string, (stream: Stream) => number | bigint> = {
+    SampleRate: s => s.track.rate, ChannelCount: s => s.track.channels, Format: s => s.track.bytesPerSample === 2 ? 1 : 2,
+    Direction: () => 0, SharingMode: () => 1, PerformanceMode: () => 10, DeviceId: () => 1, SessionId: s => s.track.sessionId,
+    FramesPerDataCallback: s => s.frames, FramesPerBurst: s => Math.ceil(s.track.rate / 100),
+    BufferCapacityInFrames: s => s.capacity, BufferSizeInFrames: s => s.size, XRunCount: s => s.track.underruns,
+    State: s => s.state, FramesWritten: s => BigInt(s.track.written), FramesRead: s => BigInt(Math.floor(s.track.head())),
+  };
+  for (const [key, get] of Object.entries(getters)) methods[`AAudioStream_get${key}`] = (_cpu, a) => { const s = streams.get(a.p()); return s ? get(s) : INVALID_HANDLE; };
+  methods.AAudioStream_isMMapUsed = () => 0;
+  hostLib("libaaudio.so", methods, { closed: true });
+}

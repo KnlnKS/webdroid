@@ -22,7 +22,7 @@ import { showToast } from "./popup";
 import { newArrayList } from "../jvm/natives/jutil";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { JService, runningServices, svcStop, svcFg } from "./runningservices";
-import { isMusicActive, outputSampleRate, JSpatializer } from "./media";
+import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from "./media";
 import { device } from "../shell/config";
 import type { JBitmap } from "./graphics";
 import { JConfigurationInfo } from "./pm";
@@ -477,7 +477,6 @@ rt.register({
   },
 });
 
-let audioSession = 0;
 let audioCapturePolicy = 1;
 class JVibrationEffect extends JObj {
   timings: bigint[] = [];
@@ -610,7 +609,7 @@ for (const [name, methods, statics] of [
     "getSpatializer()Landroid/media/Spatializer;": () => { rt.link("android/media/Spatializer"); return new JSpatializer(); },
     "getStreamVolume(I)I": () => 5,
     "getStreamMaxVolume(I)I": () => 10,
-    "generateAudioSessionId()I": () => ++audioSession,
+    "generateAudioSessionId()I": newAudioSessionId,
     "getRingerMode()I": () => 2,
     "isMusicActive()Z": isMusicActive,
     // the output path is the Web Audio context: its rate is real, its buffer size is not a fixed number of frames

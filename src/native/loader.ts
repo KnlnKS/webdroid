@@ -7,6 +7,7 @@ import { jniInit, javaVM, pushFrame, popFrame, resolveByExport } from "./jni";
 import { gles1Init } from "./gles1";
 import { gles3Init } from "./gles3";
 import { eglInit } from "./egl";
+import { aaudioInit } from "./aaudio";
 import { ndkInit } from "./libandroid";
 import { bitmapInit } from "./bitmap";
 import { cpuFor, setA64 } from "./cpu";
@@ -22,6 +23,7 @@ function nativeInit(): void {
   gles3Init();
   eglInit();
   ndkInit();
+  aaudioInit();
   bitmapInit();
   resolveByExport(resolveGlobalOrNull);
 }
