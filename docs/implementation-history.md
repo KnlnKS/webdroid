@@ -5416,3 +5416,37 @@ The continuing Chrome session remained responsive at about 80 minutes. Forced GC
 672 MB of JavaScript heap and 262 MB of backing storage. A heap snapshot attributes substantial
 space to compiled code, decoded arrays and class objects; this distribution does not establish a
 leak or explain the earlier repeated-load GC stall. No speculative cache eviction was retained.
+
+### ChatGPT continuation: SVG stream detection and Android exception contracts
+
+Plugins exposed a forward-only app stream (`p66`) inheriting the native InputStream's incorrect
+`markSupported=true`. AndroidSVG consumed two bytes to detect gzip, then `reset` rewound an unused
+native cursor instead of the subclass cursor. Its parser therefore received `vg width=…` rather
+than `<svg width=…`. Base InputStream now reports no mark support and throws on reset; native
+byte-array and lazy buffered sources explicitly retain seekable behavior. Existing wrappers keep
+their delegated contracts. One core forward-only sniff/rewind case extends the stream suite, which
+passes all ten tests (75 assertions). Study's complete 967-byte SVG now parses and its colored book
+icon renders in full Chrome and the focused E2E. Commit: `937c84c9`.
+
+The same path required the MediaDataSource base constructor and Android SAXException's legacy
+embedded-exception constructors. SAXException preserves `getException`, message fallback and the
+Android-specific `toString` behavior; its inherited cause stays null. This deliberately follows
+API 33 libcore rather than current OpenJDK semantics. Scratch constructor checks and typecheck
+pass. Commits: `2c94a1e5`, `d3feb3f3`. Sources:
+https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/media/java/android/media/MediaDataSource.java
+https://android.googlesource.com/platform/libcore/+/refs/heads/android13-release/luni/src/main/java/org/xml/sax/SAXException.java
+
+The expanded ChatGPT flow completes 24/24 steps in 123.0 seconds with zero settling limits,
+liveness failures, layout/draw errors or required native delegates. All 96 process diagnostic
+snapshots report successful collection. Only three SLF4J warnings and the previously observed
+optional provider/service queries remain. Captures visibly show a real response, attachments, the
+guest Photos login sheet, Study, settings and login. Goldens remain unchanged. Ignored evidence:
+`attachments-actual/`, `e2e-attachments.log`, `plugins-mark-fixed.png`, `avd-plugins-settled.png`,
+`avd-camera-confirmed.png`, and `avd-dictation-confirmed.png`.
+
+Visualize's remote icon still uses the fallback in the long-lived Chrome session. A host request
+to its URL receives a Cloudflare challenge, but this does not prove the app's request outcome. The
+fresh service configuration exposes only Study, so the 24-step run does not validate Visualize.
+No app-specific replacement icon or network-response workaround was added. Slight text-weight
+and system-bar differences remain; the reference's Roboto file differs from the bundled face.
+Authenticated uploads and voice remain unvalidated pending account access and the provider limit.

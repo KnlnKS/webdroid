@@ -3,18 +3,18 @@
 Branch: `codex/chatgpt-parity`. Starting revision: `9d0bb979`.
 Status: guest conversation and reachable settings repaired; full authentication parity remains incomplete.
 
-Production revision: `dc729dfe`. Full Chrome and the private API 33 AVD both receive real guest
-responses. Paired captures cover conversations, Settings, Language, About and the divergent
-credential-provider path. Typecheck and all 1,261 unit tests pass; ChatGPT smoke compilation has
-zero method failures. The final serialized E2E executes 177 steps, including all 18 ChatGPT steps
-without wedges, settling limits, draw/layout errors or required natives. Targeted baseline
-comparisons reproduce the Resy/YouTube settling limits and Doodle Jump's slow samples. TikTok's
-transient liveness failures and Lichess's native fault frequency remain unresolved, so the broader
-regression gate is not clean. Evidence is recorded in implementation history.
+Current implementation revision: `937c84c9`; expanded ChatGPT flow: `6c958327`. Full Chrome and
+the private API 33 AVD both receive real guest responses. Paired captures additionally cover
+attachment menus, Camera/Photos login requirements, dictation and Plugins. The focused 24-step
+ChatGPT run completes without wedges, settling limits, draw/layout errors or required natives;
+all 96 process diagnostic snapshots are collected successfully. New fixes cover camera/executor
+startup, overlay insets, durable SQLite snapshots and forward-only stream detection for SVGs.
+The previous 177-step full E2E predates these changes; a fresh final regression gate is pending.
 
-Remaining limits: bundled microG chooses Add Google account where the reference app reaches email
-login; authenticated, voice and attachment workflows are unvalidated. System bars differ, and an
-hour-long session's GC retention cause is unresolved. No complete-parity or speedup claim is made.
+Remaining limits: bundled microG chooses Add Google account where the reference reaches email
+login; authenticated voice and uploads are unvalidated. Visualize's remote icon still falls back
+in the long-lived session. System bars and some text weights differ, and the earlier long-session
+GC retention cause is unresolved. No complete-parity or speedup claim is made.
 
 - Run unchanged ChatGPT XAPK in full Chrome and API 33 AVD at 1080×2160, 480 dpi.
 - Capture and compare reachable interactions; trace failures to platform contracts.
