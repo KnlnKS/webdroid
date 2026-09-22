@@ -375,6 +375,19 @@ export function libcInit(): void {
     malloc: SERVED, free: SERVED, calloc: SERVED, realloc: SERVED, memalign: SERVED, posix_memalign: SERVED, malloc_usable_size: SERVED,
     valloc: (_c, a) => mem.valloc(a.u()),
     memcpy: SERVED, memmove: SERVED, memset: SERVED, memcmp: SERVED, memchr: SERVED,
+    memmem: (_c, a) => {
+      const h = a.p(), length = a.u(), n = a.p(), size = a.u();
+      if (!size) return ptr(h);
+      const bytes = mem.u8.subarray(h, h + length), needle = mem.u8.subarray(n, n + size), end = length - size;
+      for (let p = 0; p <= end; p++) {
+        p = bytes.indexOf(needle[0], p);
+        if (p < 0 || p > end) break;
+        let i = 1;
+        while (i < size && bytes[p + i] === needle[i]) i++;
+        if (i === size) return ptr(h + p);
+      }
+      return 0;
+    },
     memrchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); for (let i = p + n - 1; i >= p; i--) if (mem.u8[i] === c) return ptr(i); return 0; },
     bcopy: (_c, a) => { const s = a.p(), d = a.p(), n = a.u(); mem.memmove(d, s, n); },
     bzero: (_c, a) => { const d = a.p(), n = a.u(); mem.memset(d, 0, n); },
