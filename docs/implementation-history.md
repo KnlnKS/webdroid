@@ -5375,3 +5375,44 @@ errors or liveness failures. Its 225.5-second duration versus baseline 226.5 sec
 performance claim. The final full run and targeted replays establish working ChatGPT guest paths,
 but do not establish a clean no-regression result because TikTok liveness and Lichess fault
 frequency remain unresolved. Production code stayed frozen at `dc729dfe` throughout these captures.
+
+### ChatGPT continuation: attachment startup, overlay insets and durable SQLite snapshots
+
+The full-Chrome guest attachment menu exposed three additional contracts. `vus.<init>` creates a
+`CameraCaptureSession` subclass; CameraX then resizes a scheduled executor and retains a subset of
+camera IDs through `List.retainAll`. The missing base constructor, availability callback and
+executor setter caused initialization failures before the menu stabilized. Camera registrations now
+live in `camera2.ts`; an empty exposed camera topology sends no fabricated availability callbacks.
+Scheduled pool resizing starts queued work after growth and retires excess idle workers after active
+work completes. Native lists reuse the existing virtual collection removal helper for `retainAll`,
+including live sublist updates and immutable-list rejection. Focused checks: executor queue 13/13,
+collection startup 6/6, typecheck passed. Commits: `5de2088c`, `f8d2e01f`, `f995265a`.
+
+The attachment popup sat exactly 72 pixels below the API 33 reference. Tracing proved that the main
+Compose view received the correct 72-pixel navigation inset, while overlay roots received no inset
+dispatch. The traversal now dispatches overlay insets when requested or when their frame changes,
+after determining the frame so floating dialogs receive window-local distances. The corrected menu
+matches the reference height; Photos and Camera reach the same guest login sheet. Files and dictation
+also reach guest login sheets in Chrome. No upload or audio recording is claimed. `72f40cf5`.
+
+After a long session, localStorage rejected the Statsig database's base64 snapshot (4,352,684
+characters). SQLite now publishes binary snapshots through the existing shared private-file owner
+and its IndexedDB persistence, retaining transaction/WAL and TEMP-schema protections. Existing
+localStorage databases migrate on opening; their old key is removed only after the binary write
+commits. The debug reset now awaits clearing persisted private files as well as the existing state.
+A core test round-trips a six-MiB SQL value while preserving a live TEMP table and trigger. An isolated
+browser additionally verifies a 6,303,744-byte database across page reload and verifies reset removes
+it. The real ChatGPT event queue reopened at 837 pages without quota warnings. `95ee0641`.
+
+Early isolated-browser restore failures were invalid verification: Playwright 1.62.1's local
+`waitForFunctionExpression` treats a returned Promise as truthy and does not repoll its eventual false
+result. The test navigated before the debounce had written anything. An explicit asynchronous poll
+that awaits IndexedDB transaction completion passes twice, including reload and reset. No storage
+workaround was added for those invalid failures. Evidence: ignored `persistence-roundtrip-awaited.log`
+and `persistence-roundtrip-confirm.log`. The larger final regression matrix must be rerun after the
+new candidate is frozen; the previous 177-step gate predates these changes.
+
+The continuing Chrome session remained responsive at about 80 minutes. Forced GC retained roughly
+672 MB of JavaScript heap and 262 MB of backing storage. A heap snapshot attributes substantial
+space to compiled code, decoded arrays and class objects; this distribution does not establish a
+leak or explain the earlier repeated-load GC stall. No speculative cache eviction was retained.
