@@ -620,7 +620,7 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         const msb = bits(w, 16, 5);
         const width = msb -% lsb +% 1;
         const mask: u32 = if (width >= 32) 0xffff_ffff else ((@as(u32, 1) << @intCast(width)) - 1) << @intCast(lsb);
-        set(c, rd, if (rn == 15) r(c, rd) & ~mask else (r(c, rd) & ~mask) | ((RN << @intCast(lsb)) & mask));
+        set(c, rd, if (rm == 15) r(c, rd) & ~mask else (r(c, rd) & ~mask) | ((RM << @intCast(lsb)) & mask));
         return .next;
     }
     if ((w & 0x0fa00070) == 0x07a00050) {

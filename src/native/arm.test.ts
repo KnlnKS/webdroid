@@ -322,13 +322,16 @@ describe("arm decoder", () => {
 
 describe("thumb decoder", () => {
   test("bitfield insertion and clearing preserve bits outside the field", () => {
-    const c = runThumb([
-      0xf36f, 0x0313, // bfc r3, #0, #20
-      0xf361, 0x021d, // bfi r2, r1, #0, #30
-      0x4770,
-    ], (cpu) => { cpu.w[2] = 0x12345678; cpu.w[4] = -1; cpu.w[6] = -1; });
-    expect(c.w[4] >>> 0).toBe(0xd2345678);
-    expect(c.w[6] >>> 0).toBe(0xfff00000);
+    const setup = (cpu: Cpu) => { cpu.w[2] = 0x12345678; cpu.w[4] = -1; cpu.w[6] = -1; cpu.w[26] -= 8; };
+    for (const [i, execute] of [
+      () => runThumb([0xf36f, 0x0313, 0xf361, 0x021d, 0x4770], setup),
+      () => run([0xe7d3301f, 0xe7dd2011, 0xe7c3d01f, BXLR], setup),
+    ].entries()) {
+      const c = execute();
+      expect(c.w[4] >>> 0).toBe(0xd2345678);
+      expect(c.w[6] >>> 0).toBe(0xfff00000);
+      expect(c.w[26] & 15).toBe(i === 0 ? 8 : 0);
+    }
   });
   test("NEON modified immediates populate both halves of a quad register", () => {
     const c = runThumb([

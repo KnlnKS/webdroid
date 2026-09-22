@@ -583,8 +583,8 @@ fn media(e: *Emit, w: u32, pc: u32, k: u32, rd: u32, rn: u32, rm: u32) bool {
         const width = bits(w, 16, 5) -% lsb +% 1;
         const mask: u32 = if (width >= 32) 0xffff_ffff else ((@as(u32, 1) << @intCast(width)) - 1) << @intCast(lsb);
         b.emit(.{ get(L_X + rd), c32(@bitCast(~mask)), O.i32_and });
-        if (rn != 15) {
-            getR(e, rn, pc, false);
+        if (rm != 15) {
+            getR(e, rm, pc, false);
             b.emit(.{ c32(@intCast(lsb)), O.i32_shl, c32(@bitCast(mask)), O.i32_and, O.i32_or });
         }
         setR(e, rd);
