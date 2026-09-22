@@ -128,24 +128,59 @@ fn thumbExpandImm(c: *Cpu, imm12: u32) Shifted {
 }
 
 fn neonStruct(c: *Cpu, w: u32, pc: u32) Status {
-    const count: u32 = switch (bits(w, 8, 4)) {
-        7 => 1,
-        10 => 2,
-        6 => 3,
-        2 => 4,
+    const kind = bits(w, 8, 4);
+    const structures: u32 = switch (kind) {
+        7, 10, 6, 2 => 1,
+        8, 9, 3 => 2,
+        4, 5 => 3,
+        0, 1 => 4,
         else => return fault(c, .unimplemented, w, pc),
     };
+    const regs: u32 = switch (kind) { 10, 3 => 2, 6 => 3, 2 => 4, else => 1 };
+    const stride: u32 = if (kind == 9 or kind == 3 or kind == 5 or kind == 1) 2 else 1;
+    const size = bits(w, 6, 2);
+    const alignment = bits(w, 4, 2);
+    if (structures > 1 and size == 3 or structures == 3 and alignment > 1 or structures == 2 and regs == 1 and alignment == 3)
+        return fault(c, .undefined, w, pc);
+    if (structures == 1 and (regs & 1 != 0 and alignment > 1 or regs == 2 and alignment == 3)) return fault(c, .undefined, w, pc);
     const load = w & (1 << 21) != 0;
     const n = bits(w, 16, 4);
     const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
+    if (n == 15 or d + (structures - 1) * stride + regs > 32) return fault(c, .undefined, w, pc);
     const a = addr(c, r(c, n)) orelse return badAddr(c, w, pc);
-    var i: u32 = 0;
-    while (i < count) : (i += 1) {
-        if (load) vreg(u64, c, d + i).* = ld(u64, a + i * 8) else if (!st(u64, c, a + i * 8, vreg(u64, c, d + i).*)) return badAddr(c, w, pc);
+    if (alignment != 0 and a & ((@as(u32, 4) << @intCast(alignment)) - 1) != 0) return badAddr(c, w, pc);
+    if (structures == 1) {
+        var i: u32 = 0;
+        while (i < regs) : (i += 1) {
+            if (load) vreg(u64, c, d + i).* = ld(u64, a + i * 8) else if (!st(u64, c, a + i * 8, vreg(u64, c, d + i).*)) return badAddr(c, w, pc);
+        }
+    } else {
+        const ok = switch (size) {
+            0 => neonInterleave(u8, c, a, d, regs, structures, stride, load),
+            1 => neonInterleave(u16, c, a, d, regs, structures, stride, load),
+            else => neonInterleave(u32, c, a, d, regs, structures, stride, load),
+        };
+        if (!ok) return badAddr(c, w, pc);
     }
     const m = w & 15;
-    if (m != 15) set(c, n, r(c, n) +% (if (m == 13) count * 8 else r(c, m)));
+    if (m != 15) set(c, n, r(c, n) +% (if (m == 13) regs * structures * 8 else r(c, m)));
     return .next;
+}
+
+fn neonInterleave(comptime T: type, c: *Cpu, base: u32, d: u32, regs: u32, structures: u32, stride: u32, load: bool) bool {
+    var a = base;
+    var index: u32 = 0;
+    while (index < regs) : (index += 1) {
+        for (0..8 / @sizeOf(T)) |lane| {
+            var s: u32 = 0;
+            while (s < structures) : (s += 1) {
+                const vector: [*]align(1) T = @ptrCast(vreg(u64, c, d + index + s * stride));
+                if (load) vector[lane] = ld(T, a) else if (!st(T, c, a, vector[lane])) return false;
+                a += @sizeOf(T);
+            }
+        }
+    }
+    return true;
 }
 
 fn neonImmediate(c: *Cpu, w: u32, pc: u32, imm8: u32) Status {
