@@ -505,6 +505,20 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(20, 24))).toEqual([-2147483648, 1, 2, 2]);
       expect(Array.from(c.si.slice(28, 32))).toEqual([0, 256, 0, 512]);
     }
+    const widen = (cpu: Cpu) => {
+      cpu.si.set([0x80007fff, 0xffff0001], 32);
+      cpu.si.set([0x7fff0180, 0xfe0200ff], 6);
+      cpu.si.set([-2147483648, 2147483647], 10);
+    };
+    for (const execute of [
+      () => run([0xf3d00a30, 0xf2a08a15, 0xf28c4a13, BXLR], widen),
+      () => runThumb([0xffd0, 0x0a30, 0xefa0, 0x8a15, 0xef8c, 0x4a13, 0x4770], widen),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(32, 36))).toEqual([32767, 32768, 1, 65535]);
+      expect(Array.from(new Int16Array(c.si.buffer, c.si.byteOffset + 32, 8))).toEqual([-2048, 16, -16, 2032, -16, 0, 32, -32]);
+      expect(Array.from(c.si.slice(16, 20))).toEqual([-2147483648, -1, 2147483647, 0]);
+    }
   });
   test("rsb/adc/sbc", () => {
     const c = run([

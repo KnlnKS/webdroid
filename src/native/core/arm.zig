@@ -244,12 +244,14 @@ fn neonShift(c: *Cpu, w: u32, pc: u32) Status {
     const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
     const q = bits(w, 6, 1);
     const op = bits(w, 8, 4);
-    if (op > 7) return fault(c, .unimplemented, w, pc);
-    if (q != 0 and (d | m) & 1 != 0) return fault(c, .undefined, w, pc);
+    const widen = op == 10;
+    if (op > 7 and !widen) return fault(c, .unimplemented, w, pc);
+    if ((widen and (d & 1 != 0 or q != 0)) or (q != 0 and (d | m) & 1 != 0)) return fault(c, .undefined, w, pc);
     const imm = (bits(w, 7, 1) << 6) | bits(w, 16, 6);
-    const count: usize = if (q != 0) 16 else 8;
+    const count: usize = if (q != 0 or widen) 16 else 8;
+    const read_count = if (widen) 8 else count;
     @memcpy(c.v[16][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
-    @memcpy(c.v[18][0..count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..count]);
+    @memcpy(c.v[18][0..read_count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..read_count]);
     const result = simd.exec(c, 0x0f000400 | (q << 30) | (bits(w, 24, 1) << 29) | (imm << 16) | (op << 12) | (18 << 5) | 16);
     if (result == .next) @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count], c.v[16][0..count]);
     return result;
