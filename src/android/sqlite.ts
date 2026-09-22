@@ -1,8 +1,9 @@
 import { JMap } from "../jvm/natives/jutil";
-// android.database.* over sql.js (in-memory, persisted to localStorage per db).
+// android.database.* over sql.js, with snapshots in the shared private-file store.
 
 import initSqlJs, { type Database, type Statement } from "sql.js";
-import { charsToString, i8, u8 } from "../jvm/abi";
+import { i8, u8 } from "../jvm/abi";
+import { vfs } from "../jvm/natives/jio";
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { vcall, boxInt, box, JLong, JBool } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
@@ -20,10 +21,6 @@ async function ensureSql(): Promise<NonNullable<typeof SQL>> {
   return SQL;
 }
 
-function b64(bytes: Uint8Array): string {
-  const s = charsToString(bytes, 0, bytes.length);
-  return btoa(s);
-}
 function unb64(s: string): Uint8Array {
   const bin = atob(s);
   const out = new Uint8Array(bin.length);
@@ -71,7 +68,7 @@ class JSQLiteDatabase extends JObj {
   scheduleSave() {
     if (this.readOnly || this.path === ":memory:") return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => {
+    this.saveTimer = setTimeout(async () => {
       this.saveTimer = null;
       // Mid-transaction the file can hold spilled uncommitted pages whose undo lives in the
       // journal we do not copy; wait for the commit instead of persisting a torn snapshot.
@@ -79,7 +76,11 @@ class JSQLiteDatabase extends JObj {
       if (!SQL || !this.db) return;
       try {
         const bytes = snapshotBytes(SQL, this.db);
-        if (bytes) globalThis.localStorage?.setItem("wd:db:" + this.path, b64(bytes));
+        if (bytes) {
+          vfs.write(this.path, bytes);
+          await vfs.flush();
+          globalThis.localStorage?.removeItem("wd:db:" + this.path);
+        }
         else this.scheduleSave();
       } catch (e) {
         if (e instanceof Error && e.message.includes("locked")) this.scheduleSave();
@@ -167,11 +168,12 @@ export async function openDatabase(path: string, flags = 0x10000000): Promise<JS
   if (jdb?.open) return jdb;
   jdb = new JSQLiteDatabase();
   jdb.path = path;
-  let data: Uint8Array | null = null;
+  let data = vfs.read(path);
+  let legacy = false;
   const shared = path === ":memory:" ? undefined : sqliteStore.files.get(path);
   try {
-    const raw = globalThis.localStorage?.getItem("wd:db:" + path);
-    if (raw) data = unb64(raw);
+    const raw = !data && globalThis.localStorage?.getItem("wd:db:" + path);
+    if (raw) { data = unb64(raw); legacy = true; }
   } catch { /* */ }
   if (!shared && !data && path !== ":memory:" && !(flags & 0x10000000)) {
     throw rt.mkThrowable("android/database/sqlite/SQLiteCantOpenDatabaseException", "Database does not exist: " + path);
@@ -186,6 +188,7 @@ export async function openDatabase(path: string, flags = 0x10000000): Promise<JS
   }
   jdb.db.exec("PRAGMA user_version");
   dbCache.set(path, jdb);
+  if (legacy) jdb.scheduleSave();
   return jdb;
 }
 

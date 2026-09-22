@@ -353,8 +353,8 @@ const wd = {
     ]);
   },
   // wipe persisted app state (sqlite + prefs + the picked directories) so a run starts fresh
-  reset: () => {
-    void clearRoots();
+  reset: async () => {
+    await Promise.all([clearRoots(), processBroker().files.clear()]);
     const gone: string[] = [];
     for (const k of Object.keys(localStorage)) {
       if (k.startsWith("wd:db:") || k.startsWith("wd:prefs:") || k.startsWith("wd:install:") || k.startsWith("wd:keystore:")) { localStorage.removeItem(k); gone.push(k); }
