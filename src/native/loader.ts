@@ -10,11 +10,17 @@ import { eglInit } from "./egl";
 import { aaudioInit } from "./aaudio";
 import { ndkInit } from "./libandroid";
 import { bitmapInit } from "./bitmap";
-import { cpuFor, setA64 } from "./cpu";
+import { cpuFor, setA64, isA64 } from "./cpu";
 
 let inited = false;
-function nativeInit(): void {
-  if (inited) return;
+function nativeInit(abi: string): void {
+  const wide = abi === "arm64-v8a";
+  if (inited) {
+    if (wide !== isA64()) throw rt.mkThrowable("java/lang/UnsatisfiedLinkError", `Cannot load ${abi} code in a ${isA64() ? "64" : "32"}-bit process`);
+    return;
+  }
+  setA64(wide);
+  rt.nativeAbis = NATIVE_ABIS.filter(a => (a === "arm64-v8a") === wide);
   inited = true;
   libcInit();
   dlInit();
@@ -37,8 +43,7 @@ rt.nativeAbis = NATIVE_ABIS;
 /** Load and relocate an image without executing a single instruction of it. An ABI whose
  *  emitter does not exist yet can still prove its loader: scripts/nrun.ts --load-only. */
 export async function linkNativeLib(name: string, bytes: Uint8Array, abi = ""): Promise<Module> {
-  setA64(abi === "arm64-v8a");
-  nativeInit();
+  nativeInit(abi);
   return loadModule(name, bytes, true);
 }
 
@@ -48,8 +53,7 @@ export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string
   }
   // the ABI decides the pointer width the JNI tables are laid out at, so it has to be known
   // before nativeInit builds them
-  setA64(abi === "arm64-v8a");
-  nativeInit();
+  nativeInit(abi);
   // the caller's Cpu, chosen before anything awaits: init arrays and JNI_OnLoad run on the thread
   // that called dlopen. Picking it afterwards once ran an executor's JNI_OnLoad on the main Cpu,
   // parked mid-static-initialiser, and libc++'s guard reported a recursive initialisation.
