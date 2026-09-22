@@ -227,7 +227,7 @@ Fresh ARM32 startup now resolves the catalog and enters asset preloading. Reache
 VMLAL/VMLSL/VMULL and integer scalar multiplication reuse the SIMD owner; ARM UMAAL joins
 the existing long-multiply paths in both execution tiers. Thumb SBFX shares extraction with
 ARM SBFX/UBFX, including full-width and signed lane checks. The current ARM owner run passes
-70 checks / 771 assertions; typecheck passes.
+70 checks / 773 assertions; typecheck passes.
 
 A later signal delivery jumped outside the loaded libraries. The installed IL2CPP handler
 remained valid, but nested guest entry retained the interrupted Thumb IT state. A minimal
@@ -239,6 +239,16 @@ All 19 CPU owner checks pass. Fresh gameplay validation is still pending; the is
 establishes this entry contract, not the cause of every earlier worker fault. The AVD was
 restarted past the stuck test ad, advanced to level 2's second puzzle, and captured with its
 settings controls expanded (`avd-level2-stage2-latest.png`, `avd-settings-stage2.png`).
+
+Original ARM32 startup next reached packed-byte extension. ARM/Thumb now share the pair
+operation; SX(T|TA)B16 and UX(T|TA)B16 preserve independent halfword addition and rotation.
+The owning checks pass 70 tests / 781 assertions, and typecheck passes. The next fresh run
+rendered the title screen, then a Cronet load changed all Unity CPUs to A64. The public loader
+called `setA64` before the linker's width check, defeating its process-ABI guard. Initialization
+now fixes the ABI once, restricts subsequent library searches to that width, and rejects
+incompatible loads with UnsatisfiedLinkError before changing CPU/JNI state. Direct probes
+with both packaged libmain images confirm that rejected opposite-width loads preserve pointer
+width, CPU mode and ABI search order. The fresh browser comparison is pending.
 
 ## microG completion and open acceptance
 
