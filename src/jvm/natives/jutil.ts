@@ -425,6 +425,7 @@ export function listMethods(): Methods {
       this.a.splice(i, 0, ...src);
       return src.length ? 1 : 0;
     },
+    "retainAll(Ljava/util/Collection;)Z": function (this: JList, collection: unknown) { return bulkRemove(this, collection, false); },
     "removeAll(Ljava/util/Collection;)Z": async function (this: JList, c: unknown) {
       const src = await toJsArray(c);
       const before = this.a.length;
@@ -574,7 +575,7 @@ const immutableListMethods = listMethods();
 for (const method of [
   "set(ILjava/lang/Object;)Ljava/lang/Object;", "add(Ljava/lang/Object;)Z", "add(ILjava/lang/Object;)V",
   "remove(I)Ljava/lang/Object;", "remove(Ljava/lang/Object;)Z", "removeIf(Ljava/util/function/Predicate;)Z", "clear()V",
-  "addAll(Ljava/util/Collection;)Z", "addAll(ILjava/util/Collection;)Z", "removeAll(Ljava/util/Collection;)Z",
+  "addAll(Ljava/util/Collection;)Z", "addAll(ILjava/util/Collection;)Z", "removeAll(Ljava/util/Collection;)Z", "retainAll(Ljava/util/Collection;)Z",
   "sort(Ljava/util/Comparator;)V", "replaceAll(Ljava/util/function/UnaryOperator;)V",
 ]) immutableListMethods[method] = () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
 immutableListMethods["iterator()Ljava/util/Iterator;"] = function (this: JImmutableList) {
@@ -1898,6 +1899,7 @@ const absCollection: Methods = {
   },
 };
 async function bulkRemove(self: unknown, c: unknown, when: boolean): Promise<number> {
+  if (c == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   let ch = 0;
   const it = await iterOf(self);
   while (await vcall(it, "hasNext", "()Z")) {
