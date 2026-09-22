@@ -170,6 +170,7 @@ rt.register({
       return newObj("java/net/URI", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", "file", null, path, null);
     },
     "getName()Ljava/lang/String;": function (this: JFile) { return this.path.split("/").pop() ?? ""; },
+    "isHidden()Z": function (this: JFile) { return this.path.slice(this.path.lastIndexOf("/") + 1).startsWith(".") ? 1 : 0; },
     "getParent()Ljava/lang/String;": function (this: JFile) {
       const i = this.path.lastIndexOf("/");
       return i <= 0 ? null : this.path.slice(0, i);
