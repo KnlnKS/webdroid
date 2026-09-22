@@ -3,33 +3,39 @@
 Branch: `codex/chatgpt-parity`. Starting revision: `9d0bb979`.
 Status: guest flows repaired; full authentication and visual parity remain incomplete.
 
-Current implementation: `643b03c`; expanded ChatGPT flow: `6c958327`. Guest responses,
+Current implementation: `f0ad6b11`; expanded ChatGPT flow: `6c958327`. Guest responses,
 settings, attachments, Plugins and reachable email/phone forms work. Dialog visibility,
 non-floating window defaults, recorded canvas bounds and rectangular clipping are repaired.
-Framework system icons now draw above dialog dimming. The gesture handle has the same pixel
-bounds as the API 33 AVD and is cached to preserve frame throughput.
+Framework system icons draw above dialog dimming, and the cached gesture handle preserves
+frame throughput. Browser and native text now share the API 33 Android emoji font pair.
+Fractional Paint metrics match the AVD, and paragraph-span routing removes the country list's
+two-pixel-per-row drift. All nine fully visible flag crops are pixel-identical to the AVD.
 
-Latest checks: typecheck, five owning window/context tests (29 assertions), browser bar-API/pixel
-checks, and ChatGPT smoke compilation of 66,165 classes with zero method failures. The complete
-serialized E2E at `643b03c` executes 183 steps across 13 flows in 964.7 seconds. ChatGPT is 24/24
-in 121.2 seconds, with 96 successful process inspections and no rendering error, settling limit
-or required native. The matrix reports no wedges, layout errors, required natives, new missing
-API names or new host error types relative to the preceding window-repair candidate. Known
-YouTube settling/Matrix errors and Flappy Bird diagnostic gaps remain. Goldens are unchanged.
-The preceding broader repairs passed all 1,265 unit tests and eight runnable framework exercises.
+Latest focused checks: typecheck; nine font/span/browser tests (72 assertions); 24/24 ChatGPT
+steps in 121.4 seconds with 96 successful process inspections, only the known SLF4J messages,
+and no rendering error, required native, settling limit or wedge. Country search and selection
+work in both full Chrome and the private AVD. The final candidate passes all 1,267 unit tests,
+ChatGPT smoke compilation (66,165 classes, zero method failures) and all eight runnable
+framework exercises. Full E2E completes 183 steps across 13 flows in 1,071.8 seconds, with
+ChatGPT 24/24, no wedges, layout errors or required natives. Known YouTube settling/Matrix
+failures, Flappy Bird diagnostic gaps and the historically observed Lichess native faults
+remain visible. This is not a claim of complete app compatibility.
 
-The first system-bar candidate reduced Doodle Jump to 28 fps. Comparison with both the starting
-revision and immediate parent isolated the handle path. Caching it restores 36–38 fps with
-identical pixels; the final full run records 37–38 fps. An earlier TikTok liveness failure did
-not recur in the serial baseline/candidate comparison or repaired full run; its cause is unresolved.
-Outside system bars, FitNotes is 39/39 and Mihon onboarding 5/5 pixel-identical to the prior candidate.
-See [implementation history](docs/implementation-history.md) for measurements and evidence limits.
+The full run's timings are confounded by host memory pressure and garbage collection in the
+long-lived full-Chrome session. After clearing that session, matched Doodle samples are
+30/33/33 fps on the immediate pre-font revision and 30/31/32 on the candidate. This does not
+establish the earlier 37–38 fps throughput under current conditions. The new Lichess null-address
+occurrence matches a pre-task historical fault; it did not recur in the matched starting/candidate
+replays, so its frequency remains unresolved. Goldens are unchanged. See
+[implementation history](docs/implementation-history.md) for evidence and comparison limits.
 
 Remaining limits: no credentials have been entered, so authenticated uploads and voice are
 unvalidated. microG offers an extra chooser. Visualize's remote icon, full system-bar ownership,
-emoji/text rendering and long-session retention remain unresolved. An isolated Canvas oracle
-produces about 20% more ink in Chrome even with the exact AVD font; no artificial weight fix is
-retained. Fresh full-Chrome/private-AVD captures are in the local comparison gallery.
+Latin text rasterization, the native minimized-keyboard strip and long-session retention remain
+unresolved. An isolated Canvas oracle produces about 20% more ink in Chrome even with the exact
+AVD font; no artificial weight fix is retained. Android emoji coverage intentionally matches
+API 33, and browser startup now loads those fonts before layout. Fresh paired captures are in
+the local comparison gallery.
 
 - Run unchanged ChatGPT XAPK in full Chrome and API 33 AVD at 1080×2160, 480 dpi.
 - Fix reached platform failures at their canonical owners, guided by native evidence.

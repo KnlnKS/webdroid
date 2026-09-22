@@ -5833,3 +5833,58 @@ e2e-paragraph-layout.log, paragraph-layout-core-tests.log, chrome-country-paragr
 avd-country-paragraph-layout.png and font-probe/{native-layout,native-layout-density}.log.
 The full regression gate below must cover these changes and the Android emoji asset pair;
 the earlier system-bar gate does not validate them.
+
+### Font and paragraph-layout final gate
+
+The frozen source candidate `f0ad6b11` passes typecheck and all 1,267 unit tests (26,869
+assertions across 219 files, 114.77 seconds). ChatGPT smoke-compiles all 66,165 classes with
+zero method failures in 24.3 seconds. All eight runnable framework exercises pass, with
+295/363 declared natives supported; Canvas text measurement still requires the browser.
+
+The serialized full E2E finishes all 183 steps across 13 flows in 1,071.8 seconds, exit zero.
+ChatGPT completes 24/24 in 126.0 seconds, with 96 successful process inspections and only the
+three known SLF4J messages. Across the full matrix there are no wedges, layout errors or
+required natives. Of 632 process inspections, 12 Flappy Bird auxiliary-frame inspections
+remain unavailable, with its existing status-property TypeError. YouTube retains its two
+settling limits and the same Matrix.mapRect failure, now counted nine times rather than six.
+Its extra unqualified missing-method spelling names that same overload, not a new API.
+
+Lichess again reports pthread errors 3/22/35 and reaches the FairyStockfish
+RootMove::extract_ponder_from_tt+0x280 null-address fault. The latter was absent from the
+immediately preceding full gate but is documented above on a pre-task pristine revision and
+in the earlier cleanup comparison. A fresh starting-revision replay and a candidate replay
+both complete 15/15 with the pthread failures and without the null-address fault. This
+establishes recurrence of a historical fault family, not its cause or unchanged frequency.
+There are no native-core source changes between this task's start and this candidate.
+
+The full run records Doodle gameplay at 29/30/28 fps, below the preceding 37–38 fps gate.
+A matched starting-revision run records 33/35/35 and the first candidate repeat 24/25/26.
+The immediate pre-font revision `643b03c` also slows to 26/30/29, versus 25/25/30 in the next
+candidate run. These results do not isolate a font-code regression. The task's long-lived
+full-Chrome renderer was consuming several CPU cores; a five-second profile records 4,258
+samples in garbage collection and very few in app execution. The 24 GiB host was using about
+10.1 GiB of swap. Page freezing did not stop that load, so only this task's renderer was
+briefly suspended for the remaining measurements and then resumed for diagnosis.
+
+After explicit collection the renderer retains 693,715,548 bytes of JS heap and 278,574,435
+bytes of backing storage, close to the earlier retained measurements, and CPU use drops.
+That does not prove absence of a leak. Clearing the long-lived owned browser session yields
+30/33/33 fps on the immediate pre-font revision and 30/31/32 on the candidate. The full timings
+remain confounded by changing host load; neither a throughput improvement nor recovery of
+the prior 37–38 fps is established. No speculative performance workaround is retained.
+The temporary comparison checkout/server was removed, and full Chrome was reopened and
+verified with advancing ticks, an idle main queue and the real country-selector flow.
+
+Mean golden content differences change from 39.70 to 39.24% for FitNotes, 56.06 to 47.77% for
+Mihon app, and 17.72 to 11.14% for Mihon onboarding. The onboarding welcome geometry was
+visually checked against its Android reference. Harmonic changes from 27.71 to 31.59%; its
+large comments delta is a different live article and content, verified by inspecting both
+captures. Lower aggregate scores alone do not prove every changed pixel is better. Goldens
+remain unchanged. Complete authentication and visual parity remain unfinished.
+
+Retained scratch evidence: fonts-final-{actual,report,summary.json,audit.log,new-missing.json,
+unit-tests.log,smoke.log,framework.log,perfsum.log}, e2e-fonts-final.log, fonts-baseline-games/,
+fonts-repeat-games/, fonts-{parent,candidate}-doodle/, fonts-{parent,candidate}-quieter/,
+chrome-frozen.cpuprofile, chrome-paused-page-cpu.sample.txt, chrome-long-session-state.json,
+chrome-long-session-post-gc.json and restored-country-stable-inspection.log. The comparison
+gallery includes the paired country selector and successful Canada search captures.
