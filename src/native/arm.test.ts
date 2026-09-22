@@ -551,6 +551,25 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(40, 42))).toEqual([5, 6]);
     }
   });
+  test("VFP arithmetic preserves aliased lanes and rounds multiply before accumulation", () => {
+    const words = [0xeeb60a00, 0xee710a02, 0xee711a42, 0xee612a02, 0xeec13a02, 0xee010a02, 0xee010a42,
+      0xee614a42, 0xeef05ae4, 0xeef16a65, 0xeef07a66, 0xeef12be0, 0xee703ba1, 0xee098a0a];
+    const setup = (cpu: Cpu) => {
+      cpu.cpsr = 0xa0000000;
+      cpu.s[2] = 3; cpu.s[4] = 4;
+      cpu.s[16] = -1; cpu.s[18] = 1 + 2 ** -23; cpu.s[20] = 1 - 2 ** -23;
+      cpu.d[16] = 81; cpu.d[17] = 19;
+    };
+    for (const execute of [
+      () => run([...words, BXLR], setup),
+      () => runThumb([...words.flatMap(w => [w >>> 16, w & 0xffff]), 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect([0, 1, 3, 5, 7, 9, 11, 13, 15, 16].map(i => c.s[i])).toEqual([0.5, 7, -1, 12, 0.75, -12, 12, -12, -12, 0]);
+      expect(Array.from(c.d.slice(16, 20))).toEqual([81, 19, 9, 100]);
+      expect(c.cpsr >>> 28).toBe(10);
+    }
+  });
   test("NEON float extrema and sign operations preserve NaN and signed zero", () => {
     const setup = (cpu: Cpu) => {
       cpu.s.set([-2, -0, -Infinity, NaN], 40);

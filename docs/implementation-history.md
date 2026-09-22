@@ -23,6 +23,16 @@ and displayed its reward screen. The NEON advertisement is now retained with tho
 instruction repairs. Startup took roughly five minutes and gameplay was about one rendered
 frame per second; performance, settings, persistence and later-level acceptance remain open.
 
+Scalar VFP arithmetic now lowers directly in the floating-point JIT owner instead of spilling
+all ARM registers for interpreter fallback. ARM and Thumb fixtures retain adjacent lanes,
+condition flags, high double registers and separate multiply/add rounding. Typecheck and 82
+ARM/SIMD checks (1,035 assertions) pass. A one-million-iteration arithmetic loop improved from
+about 35 ms to 1 ms after warmup. A fresh original-ARM32 reload restored level 2 and 220 coins,
+rendered home/settings without bounds warnings, and changed actual PCM to silence when music
+was muted. A visible, untraced settings sample still completed only 40 GL frames in 21.7 s,
+spending 19.3 s in native execution. This optimization does not establish adequate app speed;
+the earlier gameplay and current settings samples are not a matched performance comparison.
+
 Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this
 game and changed owners; the full serialized E2E matrix is reserved for the final candidate.
 Full Chrome runs at port 4091, 720×1280 / 320 dpi, alongside API 33 AVD `emulator-5560` at the

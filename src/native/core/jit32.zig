@@ -2,6 +2,7 @@ const abi = @import("abi.zig");
 const mem = @import("mem.zig");
 const cpu = @import("cpu.zig");
 const jit = @import("jit.zig");
+const jitfp = @import("jitfp.zig");
 const wasm = @import("wasm.zig");
 const bt = @import("bits.zig");
 const bits = bt.bits;
@@ -87,7 +88,7 @@ pub fn rwArm(w: u32) jit.RW {
 }
 pub fn rwThumb(h: u32) jit.RW {
     var rw = jit.ALL32;
-    // Wide instructions use the interpreter fallback, including carry reads across block edges.
+    // Wide-instruction fallbacks can consume incoming carry across block edges.
     if (h & 0xf800 >= 0xe800) return rw;
     rw.fr = 0;
     rw.fw = 0;
@@ -404,7 +405,7 @@ fn armBody(e: *Emit, w: u32, pc: u32, k: u32) bool {
             return false;
         },
         else => {
-            e.fallback(pc, k);
+            if (!jitfp.emitVfp(e, w)) e.fallback(pc, k);
             return false;
         },
     }
@@ -628,6 +629,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
     }
     if (h >= 0xe800) {
         const h2: u32 = mem.ld(u16, pc + 2);
+        if (h & 0xff00 == 0xee00 and jitfp.emitVfp(e, h << 16 | h2)) return false;
         const wideMove = h & 0xfbf0;
         if ((wideMove == 0xf240 or wideMove == 0xf2c0) and h2 & 0x8000 == 0) {
             const d = (h2 >> 8) & 15;
