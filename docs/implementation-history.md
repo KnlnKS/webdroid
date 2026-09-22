@@ -4933,3 +4933,20 @@ against the previous implementation and passes after the change. Six reflection 
 (119 assertions), as does typecheck. Proxy defining-loader semantics remain a separate limit.
 TikTok smoke compilation completed 462,058 method bodies with zero method failures; the tool's
 printed word “classes” counts method compilation attempts, not class definitions.
+
+Inflater resource overloads bypassed cloned factories and parser overrides by looking up another
+inflater from the context. They now dispatch through the receiving inflater's parser overload,
+close resource parsers on success or failure, and retain the same inflater for includes. A runtime
+probe verifies clone factories, virtual parser dispatch and exceptional close; six hierarchy and
+view-switching checks pass (26 assertions), as does typecheck. This did not resolve the duplicate
+root by itself. The cache eviction assertion also recurred after the lock fix; its cause is open.
+
+Fragment tracing found the duplicate root followed a swallowed setup exception: the same fragment
+retained its first view and then ran performCreateView again. One captured exception was a missing
+string from SearchSwipeGuideUIComponent. View.getResources returned the base table instead of the
+Context's custom Resources object; the APK's override supplies that string from its own store.
+View construction now retains the virtual Context.getResources result, matching the bundled AOSP
+constructor/getter. A resource-identity probe and 16 owning view checks pass (87 assertions), with
+clean typecheck. A live dispatch experiment then produced one detail root with populated caption
+and controls, without the swallowed resource exception. Fresh-build replay remains to be checked.
+Another earlier setup exception was UnsupportedOperationException; its source remains untraced.
