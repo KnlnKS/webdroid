@@ -12,7 +12,7 @@ import {
   fontDescent, fontAscent, fontTop, fontBottom, measureText, typefaceFor, JTypeface, tfDefault, type JRect,
   type JCanvas, cssColor, tfMedium
 } from "./graphics";
-import { vcall, vcallOn, callOn, curThread, mkEnumSet, newObj } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, curThread, after, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import {
   attrTable, type Resources, resolveStyleValue, rvDimen, rvColor, rvInt, rvFloat, type RV, rvString, type JAttrSet,
   obtainStyled
@@ -294,6 +294,11 @@ function compoundPadL(this: JTextView) { return this.padL + (this.drawableL ? co
 function compoundPadR(this: JTextView) { return this.padR + (this.drawableR ? compoundWidth(this.drawableR) + this.drawablePad : 0); }
 function compoundPadT(this: JTextView) { return this.padT + (this.drawableT ? compoundHeight(this.drawableT) + this.drawablePad : 0); }
 function compoundPadB(this: JTextView) { return this.padB + (this.drawableB ? compoundHeight(this.drawableB) + this.drawablePad : 0); }
+function compoundPadRelative(view: JTextView, start: boolean) {
+  const thread = curThread;
+  return after(vcallOn(thread, view, "getLayoutDirection", "()I"), direction =>
+    vcallOn(thread, view, start !== (direction === 1) ? "getCompoundPaddingLeft" : "getCompoundPaddingRight", "()I"));
+}
 export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   ...textViewCtors("textViewStyle"),
   // AOSP routes every setText through the two-arg form, and that is the one apps override:
@@ -402,6 +407,8 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getCompoundPaddingRight()I": compoundPadR,
   "getCompoundPaddingTop()I": compoundPadT,
   "getCompoundPaddingBottom()I": compoundPadB,
+  "getCompoundPaddingStart()I": function (this: JTextView) { return compoundPadRelative(this, true); },
+  "getCompoundPaddingEnd()I": function (this: JTextView) { return compoundPadRelative(this, false); },
   // the factories only matter to a TextView that hands its buffer to the app (emoji2 wraps
   // them to intercept the Editable); kept so getters round-trip
   "setEditableFactory(Landroid/text/Editable$Factory;)V": function (this: JTextView, f: unknown) { this.editableFactory = f; },
