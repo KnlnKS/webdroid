@@ -5220,3 +5220,8 @@ spans. This fixes “Welcome / to ChatGPT” against the private AVD capture. Th
 text fixture now checks a balanced paragraph and its offsets; it passes. Hyphenation,
 language-specific break opportunities and balanced replacement spans remain unsupported.
 Source: https://android.googlesource.com/platform/frameworks/minikin/+/refs/heads/main/libs/minikin/OptimalLineBreaker.cpp
+
+RuntimeShader review found that the AGSL square-matrix spelling (`float2x2`) was translated
+to a GLSL alias that the uniform parser did not recognize. Normalize square matrices to
+`mat2`/`mat3`/`mat4`; the retained browser shader fixture now exercises a matrix uniform.
+It still passes the same pixel, alpha, snapshot and coordinate assertions.

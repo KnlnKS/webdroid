@@ -8,8 +8,10 @@ async function probe() {
   const shader = await newObj("android/graphics/RuntimeShader", "(Ljava/lang/String;)V", `
     layout(color) uniform half4 color;
     uniform float boundary;
-    half4 main(float2 p) { return p.x < boundary ? half4(color.rgb * color.a, color.a) : half4(0); }
+    uniform float2x2 transform;
+    half4 main(float2 p) { return (transform * p).x < boundary ? half4(color.rgb * color.a, color.a) : half4(0); }
   `);
+  await vcall(shader, "setFloatUniform", "(Ljava/lang/String;[F)V", "transform", new Float32Array([1, 0, 0, 1]));
   await vcall(shader, "setFloatUniform", "(Ljava/lang/String;F)V", "boundary", 8);
   await vcall(shader, "setColorUniform", "(Ljava/lang/String;I)V", "color", 0x80ff0000);
   const paint = new JPaint();

@@ -36,7 +36,7 @@ export class JRuntimeShader extends JShader {
     if (source == null) throw rt.mkThrowable("java/lang/NullPointerException", "shader");
     const gl = graphics();
     const code = source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "")
-      .replace(/\b(?:half|float)([234])x([234])\b/g, "mat$1x$2")
+      .replace(/\b(?:half|float)([234])x([234])\b/g, (_type, columns: string, rows: string) => columns === rows ? "mat" + columns : `mat${columns}x${rows}`)
       .replace(/\b(?:half|float)([234])\b/g, "vec$1")
       .replace(/\bint([234])\b/g, "ivec$1").replace(/\bhalf\b/g, "float");
     for (const match of code.matchAll(/(layout\s*\(\s*color\s*\)\s*)?uniform\s+(\w+)\s+(\w+)\s*(?:\[\s*(\d+)\s*\])?\s*;/g)) {
