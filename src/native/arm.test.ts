@@ -384,6 +384,28 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(2, 4))).toEqual([-2, 0]);
     }
   });
+  test("NEON reciprocal estimates and steps retain ARM32 rounding", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.s.set([1, 4, 0, Infinity], 44);
+      cpu.s.set([1 + 2 ** -23, 0, 1e-45, NaN], 8);
+      cpu.s.set([2 - 2 ** -22, Infinity, Infinity, 1], 12);
+      cpu.s.set([3, Infinity, 0, 2], 48);
+      cpu.s.set([1 + 2 ** -23, 0, -Infinity, 6], 52);
+    };
+    for (const execute of [
+      () => run([0xf2042f56, 0xf26aaff8, 0xf3fbc5e6, 0xf3f9e566, 0xf3f80066, BXLR], setup),
+      () => runThumb([0xef04, 0x2f56, 0xef6a, 0xaff8, 0xfffb, 0xc5e6, 0xfff9, 0xe566, 0xfff8, 0x0066, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.s.slice(4, 8))).toEqual([0, 2, 2, NaN]);
+      expect(Array.from(c.s.slice(52, 56))).toEqual([-(2 ** -22), 1.5, 1.5, -4.5]);
+      expect(Math.abs(c.s[56] - 1)).toBeLessThan(2 ** -8);
+      expect(Math.abs(c.s[57] - 0.5)).toBeLessThan(2 ** -9);
+      expect(Array.from(c.s.slice(58, 60))).toEqual([Infinity, 0]);
+      expect(Array.from(c.si.slice(60, 64))).toEqual([0, 0, -1, 0]);
+      expect(Array.from(c.s.slice(32, 36))).toEqual([4, 1, Infinity, 0]);
+    }
+  });
   test("rsb/adc/sbc", () => {
     const c = run([
       0xe3a00005,   // mov r0, #5

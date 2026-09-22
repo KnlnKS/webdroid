@@ -239,15 +239,39 @@ fn neonImmediate(c: *Cpu, w: u32, pc: u32, imm8: u32) Status {
     return .next;
 }
 
-fn neonDuplicate(c: *Cpu, w: u32, pc: u32) Status {
+fn neonMisc(c: *Cpu, w: u32, pc: u32) Status {
+    if (w & 0xffb30e10 == 0xf3b20000) return neonPermute(c, w, pc);
     const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
     const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
     const q = bits(w, 6, 1);
-    const imm = bits(w, 16, 4);
-    if (imm & 7 == 0 or (q != 0 and d & 1 != 0)) return fault(c, .undefined, w, pc);
-    @memcpy(c.v[18][0..8], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..8]);
-    const result = simd.exec(c, 0x0e000400 | (q << 30) | (imm << 16) | (18 << 5) | 16);
+    const duplicate = w & 0xffb00f90 == 0xf3b00c00;
+    if (q != 0 and (d | (if (duplicate) @as(u32, 0) else m)) & 1 != 0) return fault(c, .undefined, w, pc);
+    const translated: u32 = if (duplicate) blk: {
+        const imm = bits(w, 16, 4);
+        if (imm & 7 == 0) return fault(c, .undefined, w, pc);
+        break :blk 0x0e000400 | (imm << 16);
+    } else if (w & 0xffbf0f10 == 0xf3bb0500)
+        0x0ea1d800 | (bits(w, 7, 1) << 29)
+    else if (w & 0xffbf0f90 == 0xf3b90500)
+        0x0ea0d800
+    else if (w & 0xffb30e10 == 0xf3b00000) blk: {
+        const op = bits(w, 7, 2);
+        const size = bits(w, 18, 2);
+        if (op > 2 or size + op >= 3) return fault(c, .undefined, w, pc);
+        break :blk 0x0e200800 | (size << 22) | (if (op == 1) @as(u32, 1 << 29) else if (op == 2) @as(u32, 1 << 12) else 0);
+    } else return fault(c, .unimplemented, w, pc);
     const count: usize = if (q != 0) 16 else 8;
+    const read_count = if (duplicate) 8 else count;
+    @memcpy(c.v[18][0..read_count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..read_count]);
+    if (w & 0x0f00 == 0x0500) {
+        const lanes: *[4]f32 = @ptrCast(&c.v[18]);
+        for (lanes[0 .. count / 4]) |*lane| lane.* = fp.standard32(lane.*);
+    }
+    const result = simd.exec(c, translated | (q << 30) | (18 << 5) | 16);
+    if (result == .next and w & 0xffbf0f10 == 0xf3bb0500) {
+        const lanes: *[4]f32 = @ptrCast(&c.v[16]);
+        for (lanes[0 .. count / 4]) |*lane| lane.* = fp.standard32(lane.*);
+    }
     if (result == .next) @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count], c.v[16][0..count]);
     return result;
 }
@@ -285,6 +309,13 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
     const b = bits(w, 4, 1);
     const u = bits(w, 24, 1);
     const size = bits(w, 20, 2);
+    if (!scalar and op == 15 and b == 1 and u == 0 and size & 1 == 0) {
+        const lhs: [*]f32 = @ptrCast(vreg(u64, c, n));
+        const rhs: [*]f32 = @ptrCast(vreg(u64, c, m));
+        const dst: [*]f32 = @ptrCast(vreg(u64, c, d));
+        for (0..if (q != 0) @as(usize, 4) else 2) |i| dst[i] = fp.recipStep32(lhs[i], rhs[i], size == 2);
+        return .next;
+    }
     if (scalar and op != 1 and op != 5 and op != 9) return fault(c, .unimplemented, w, pc);
     const variable_shift = !scalar and op == 4 and b == 0;
     const accumulate = if (scalar) op != 9 else op == 13 and b == 1 and u == 0 and size & 1 == 0;
@@ -353,8 +384,7 @@ fn execArm(c: *Cpu, pc: u32) Status {
     const cc = w >> 28;
     c.pc = pc + 4;
     if (cc == 15) {
-        if (w & 0xffb00f90 == 0xf3b00c00) return neonDuplicate(c, w, pc);
-        if (w & 0xffb30e10 == 0xf3b20000) return neonPermute(c, w, pc);
+        if (w & 0xffb00010 == 0xf3b00000) return neonMisc(c, w, pc);
         if (w & 0xfe800000 == 0xf2000000 or w & 0xffb00010 == 0xf2b00000 or w & 0xfeb00050 == 0xf2a00040) return neonSame(c, w, pc);
         if (w & 0xff100000 == 0xf4000000) return neonStruct(c, w, pc);
         if (w & 0xfeb00010 == 0xf2800010) return neonImmediate(c, w, pc, (bits(w, 24, 1) << 7) | (bits(w, 16, 3) << 4) | bits(w, 0, 4));
@@ -960,13 +990,9 @@ fn execThumb(c: *Cpu, pc: u32) Status {
 
 inline fn execThumb32(c: *Cpu, h: u32, second: u32, pc: u32) ?Status {
     if (execThumb32Branches(c, h, second, pc)) |status| return status;
-    if (h & 0xffb0 == 0xffb0 and second & 0x0f90 == 0x0c00) {
+    if (h & 0xffb0 == 0xffb0 and second & 0x10 == 0) {
         c.pc = pc + 4;
-        return neonDuplicate(c, 0xf3000000 | ((h & 0xff) << 16) | second, pc);
-    }
-    if (h & 0xffb3 == 0xffb2 and second & 0x0e10 == 0) {
-        c.pc = pc + 4;
-        return neonPermute(c, 0xf3000000 | ((h & 0xff) << 16) | second, pc);
+        return neonMisc(c, 0xf3000000 | ((h & 0xff) << 16) | second, pc);
     }
     if (h & 0xef80 == 0xef00 or (h & 0xffb0 == 0xefb0 and second & 0x10 == 0) or (h & 0xefb0 == 0xefa0 and second & 0x50 == 0x40)) {
         c.pc = pc + 4;
