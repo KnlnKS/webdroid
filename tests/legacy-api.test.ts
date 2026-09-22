@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { JClassLoader, JThread, curThread, newObj, setCurThread, vcall, vcallMaybe } from "../src/jvm/natives/jlang";
+import { JClassLoader, JThread, curThread, newObj, setCurThread, vcall, vcallOn, vcallMaybe } from "../src/jvm/natives/jlang";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { Resources } from "../src/android/res";
 import { JAssetManager, type JResources } from "../src/android/resnative";
@@ -118,12 +118,39 @@ test("DataSetObserver base callbacks are no-ops", async () => {
   await expect(vcall(observer, "onInvalidated", "()V")).resolves.toBeUndefined();
 });
 
-test("ReentrantLock timed tryLock acquires cooperatively", async () => {
-  const lock = await newObj("java/util/concurrent/locks/ReentrantLock", "()V");
-  const unit = (rt.link("java/util/concurrent/TimeUnit").ctor as any).s$MILLISECONDS;
-  expect(await vcall(lock, "tryLock", "(JLjava/util/concurrent/TimeUnit;)Z", 0n, unit)).toBe(1);
-  expect(await vcall(lock, "isHeldByCurrentThread", "()Z")).toBe(1);
-  await vcall(lock, "unlock", "()V");
+test("ReentrantLock excludes suspended threads and conditions restore recursive ownership", async () => {
+  const lock = await newObj("java/util/concurrent/locks/ReentrantLock", "(Z)V", 1);
+  rt.link("java/lang/Thread");
+  const first = new JThread(), second = new JThread(), third = new JThread();
+  const call = (thread: JThread, name: string, desc = "()V", ...args: unknown[]) => vcallOn(thread, lock, name, desc, ...args);
+  const unit = Reflect.get(rt.link("java/util/concurrent/TimeUnit").ctor, "s$MILLISECONDS");
+  await call(first, "lock"); await call(first, "lock");
+  expect(await call(second, "isHeldByCurrentThread", "()Z")).toBe(0);
+  expect(await call(second, "tryLock", "()Z")).toBe(0);
+  expect(await call(second, "tryLock", "(JLjava/util/concurrent/TimeUnit;)Z", 0n, unit)).toBe(0);
+  expect(() => call(second, "unlock")).toThrow();
+  const acquisition = call(second, "lock");
+  expect(acquisition).toBeInstanceOf(Promise);
+  await call(first, "unlock");
+  expect(await call(first, "getHoldCount", "()I")).toBe(1);
+  await call(first, "unlock"); await acquisition;
+  expect(await call(second, "getHoldCount", "()I")).toBe(1);
+  await call(second, "lock");
+  const condition = await call(second, "newCondition", "()Ljava/util/concurrent/locks/Condition;");
+  const waiting = vcallOn(second, condition, "await", "()V");
+  await call(first, "lock");
+  await vcallOn(first, condition, "signal", "()V");
+  const later = call(third, "lock");
+  await call(first, "unlock"); await waiting;
+  expect(await call(second, "getHoldCount", "()I")).toBe(2);
+  expect(await call(third, "isHeldByCurrentThread", "()Z")).toBe(0);
+  await call(second, "unlock"); await call(second, "unlock"); await later;
+  const interrupted = Promise.resolve(call(first, "lockInterruptibly"));
+  const rejection = interrupted.then(() => "acquired", (error: unknown) => rt.iof(error, "java/lang/InterruptedException"));
+  await vcallOn(second, first, "interrupt", "()V");
+  expect(await rejection).toBe(1);
+  expect(await call(third, "getQueueLength", "()I")).toBe(0);
+  await call(third, "unlock");
 });
 
 test("LinkedList has the AbstractSequentialList hierarchy", async () => {

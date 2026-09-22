@@ -677,48 +677,104 @@ rt.register({
   },
 });
 
-// ── locks (no-op-ish under cooperative scheduling)
-class JLock extends JObj { held = 0; }
+// ── locks
+class JLock extends JObj {
+  owner: JThread | null = null;
+  held = 0;
+  fair = false;
+  queue: { thread: JThread; wake: () => void }[] = [];
+  acquire(thread: JThread, barge = false): boolean {
+    if (this.owner === thread) { this.held++; return true; }
+    if (this.owner || !barge && this.fair && this.queue.length) return false;
+    this.owner = thread; this.held = 1; return true;
+  }
+  check(thread: JThread): void {
+    if (this.owner !== thread) throw rt.mkThrowable("java/lang/IllegalMonitorStateException", "Lock not held by current thread");
+  }
+  release(thread: JThread): void {
+    this.check(thread);
+    if (--this.held) return;
+    this.owner = null;
+    const next = this.queue.shift();
+    if (next) { this.acquire(next.thread, true); next.wake(); }
+  }
+  lock(thread: JThread, interruptible: boolean, timeout?: number): boolean | Promise<boolean> {
+    if (interruptible && thread.interrupted) {
+      thread.interrupted = 0; throw rt.mkThrowable("java/lang/InterruptedException", null);
+    }
+    if (this.acquire(thread)) return true;
+    if (timeout !== undefined && timeout <= 0) return false;
+    const arm = (wake: () => void) => {
+      const waiter = { thread, wake }; this.queue.push(waiter);
+      return () => { const index = this.queue.indexOf(waiter); if (index >= 0) this.queue.splice(index, 1); };
+    };
+    return interruptible ? park(thread, arm, timeout) : new Promise<boolean>((resolve) => arm(() => resolve(true)));
+  }
+}
 rt.register({
   name: "java/util/concurrent/locks/ReentrantLock", ctor: JLock,
   ifaces: ["java/util/concurrent/locks/Lock"],
   methods: {
     "<init>()V": function () {},
-    "<init>(Z)V": function () {},
-    "lock()V": function (this: JLock) { this.held++; },
-    "unlock()V": function (this: JLock) { this.held--; },
-    "tryLock()Z": function (this: JLock) { this.held++; return 1; },
-    "tryLock(JLjava/util/concurrent/TimeUnit;)Z": function (this: JLock) { this.held++; return 1; },
-    "lockInterruptibly()V": function (this: JLock) { this.held++; },
-    "isHeldByCurrentThread()Z": function (this: JLock) { return this.held > 0 ? 1 : 0; },
+    "<init>(Z)V": function (this: JLock, fair: number) { this.fair = !!fair; },
+    "lock()V": function (this: JLock) { return this.lock(curThread, false); },
+    "unlock()V": function (this: JLock) { this.release(curThread); },
+    "tryLock()Z": function (this: JLock) { return this.acquire(curThread, true) ? 1 : 0; },
+    "tryLock(JLjava/util/concurrent/TimeUnit;)Z": async function (this: JLock, duration: bigint, unit: JTimeUnit) {
+      return await this.lock(curThread, true, Number(duration) * unit.ms) ? 1 : 0;
+    },
+    "lockInterruptibly()V": function (this: JLock) { return this.lock(curThread, true); },
+    "getHoldCount()I": function (this: JLock) { return this.owner === curThread ? this.held : 0; },
+    "isHeldByCurrentThread()Z": function (this: JLock) { return this.owner === curThread ? 1 : 0; },
     "isLocked()Z": function (this: JLock) { return this.held > 0 ? 1 : 0; },
-    "newCondition()Ljava/util/concurrent/locks/Condition;": function () { return new JCondition(); },
+    "isFair()Z": function (this: JLock) { return this.fair ? 1 : 0; },
+    "hasQueuedThreads()Z": function (this: JLock) { return this.queue.length ? 1 : 0; },
+    "getQueueLength()I": function (this: JLock) { return this.queue.length; },
+    "newCondition()Ljava/util/concurrent/locks/Condition;": function (this: JLock) {
+      const condition: JCondition = rt.make("webdroid/Condition"); condition.lock = this; return condition;
+    },
   },
 });
 class JCondition extends JObj {
+  lock!: JLock;
   q: (() => void)[] = [];
-}
-function condPark(c: JCondition, ms?: number) {
-  return park(curThread, (wake) => {
-    c.q.push(wake);
-    return () => { const i = c.q.indexOf(wake); if (i >= 0) c.q.splice(i, 1); };
-  }, ms);
+  async await(interruptible: boolean, ms?: number): Promise<boolean> {
+    const thread = curThread;
+    if (interruptible && thread.interrupted) {
+      thread.interrupted = 0; throw rt.mkThrowable("java/lang/InterruptedException", null);
+    }
+    this.lock.check(thread);
+    const holds = this.lock.held;
+    this.lock.held = 1; this.lock.release(thread);
+    let acquisition: boolean | Promise<boolean> | undefined;
+    const arm = (wake: () => void) => {
+      const transfer = () => { acquisition = this.lock.lock(thread, false); };
+      const signal = () => { transfer(); wake(); };
+      this.q.push(signal);
+      return () => { const index = this.q.indexOf(signal); if (index >= 0) this.q.splice(index, 1); transfer(); };
+    };
+    try {
+      return await (interruptible ? park(thread, arm, ms) : new Promise<boolean>((resolve) => arm(() => resolve(true))));
+    } finally {
+      await (acquisition ?? this.lock.lock(thread, false));
+      this.lock.held = holds;
+    }
+  }
 }
 rt.register({
   name: "webdroid/Condition", ctor: JCondition, ifaces: ["java/util/concurrent/locks/Condition"],
   methods: {
-    "await()V": function (this: JCondition) { return condPark(this); },
-    "awaitUninterruptibly()V": function (this: JCondition) { return new Promise<void>((r) => this.q.push(r)); },
+    "await()V": function (this: JCondition) { return this.await(true); },
+    "awaitUninterruptibly()V": function (this: JCondition) { return this.await(false); },
     "await(JLjava/util/concurrent/TimeUnit;)Z": async function (this: JCondition, d: bigint, u: JTimeUnit) {
-      return (await condPark(this, Number(d) * u.ms)) ? 1 : 0;
+      return await this.await(true, Number(d) * u.ms) ? 1 : 0;
     },
     "awaitNanos(J)J": async function (this: JCondition, n: bigint) {
-      const t0 = guestNow();
-      if (!(await condPark(this, Number(n) / 1e6))) return 0n;
-      return n - BigInt(Math.round((guestNow() - t0) * 1e6));
+      const start = guestNow(); await this.await(true, Number(n) / 1e6);
+      return n - BigInt(Math.round((guestNow() - start) * 1e6));
     },
-    "signal()V": function (this: JCondition) { const w = this.q.shift(); if (w) queueMicrotask(w); },
-    "signalAll()V": function (this: JCondition) { const ws = this.q.splice(0); for (const w of ws) queueMicrotask(w); },
+    "signal()V": function (this: JCondition) { this.lock.check(curThread); this.q.shift()?.(); },
+    "signalAll()V": function (this: JCondition) { this.lock.check(curThread); for (const wake of this.q.splice(0)) wake(); },
   },
 });
 
