@@ -279,10 +279,11 @@ fn neonMisc(c: *Cpu, w: u32, pc: u32) Status {
         0x0ea0d800
     else if (w & 0xffbf0f10 == 0xf3b90700)
         0x0ea0f800 | (bits(w, 7, 1) << 29)
-    else if (w & 0xffb30f10 == 0xf3b10300) blk: {
+    else if (w & 0xffb30c10 == 0xf3b10000) blk: {
         const size = bits(w, 18, 2);
-        if (size == 3) return fault(c, .undefined, w, pc);
-        break :blk 0x0e20b800 | (size << 22) | (bits(w, 7, 1) << 29);
+        const op = bits(w, 7, 3);
+        if (size == 3 or op == 5) return fault(c, .undefined, w, pc);
+        break :blk 0x0e200800 | ((8 + op / 2) << 12) | (size << 22) | ((op & 1) << 29);
     } else if (w & 0xffb30e10 == 0xf3b00000) blk: {
         const op = bits(w, 7, 2);
         const size = bits(w, 18, 2);

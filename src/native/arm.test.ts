@@ -450,7 +450,7 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(38, 40))).toEqual([2, 2]);
     }
   });
-  test("NEON integer signs wrap and extrema retain signedness", () => {
+  test("NEON integer signs, zero comparisons and extrema retain signedness", () => {
     const setup = (cpu: Cpu) => {
       cpu.si.set([0x807fff01, -1, 0, 0], 8);
       cpu.si.set([0x8000ffff, 0x7fff0001, 0, 0], 16);
@@ -459,10 +459,11 @@ describe("arm decoder", () => {
       cpu.si.set([-1, -1, -1, -1], 20);
     };
     for (const execute of [
-      () => run([0xf3b9e389, 0xf3b12344, 0xf3b563c8, 0xf26106a0, 0xf328a65a, BXLR], setup),
-      () => runThumb([0xffb9, 0xe389, 0xffb1, 0x2344, 0xffb5, 0x63c8, 0xef61, 0x06a0, 0xff28, 0xa65a, 0x4770], setup),
+      () => run([0xf3b90144, 0xf3b9e389, 0xf3b12344, 0xf3b563c8, 0xf26106a0, 0xf328a65a, BXLR], setup),
+      () => runThumb([0xffb9, 0x0144, 0xffb9, 0xe389, 0xffb1, 0x2344, 0xffb5, 0x63c8, 0xef61, 0x06a0, 0xff28, 0xa65a, 0x4770], setup),
     ]) {
       const c = execute();
+      expect(Array.from(c.si.slice(0, 4))).toEqual([0, 0, -1, -1]);
       expect(Array.from(c.si.slice(28, 30))).toEqual([-2147483648, -7]);
       expect(Array.from(c.si.slice(4, 8))).toEqual([0x807f0101 | 0, 0x01010101, 0, 0]);
       expect(Array.from(c.si.slice(12, 16))).toEqual([0x80000001 | 0, 0x8001ffff | 0, -2147483648, 65529]);
