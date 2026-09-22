@@ -38,6 +38,22 @@ fn addFlags(c: *Cpu, a: u32, b: u32, cin: u1) u32 {
 inline fn subFlags(c: *Cpu, a: u32, b: u32, cin: u1) u32 {
     return addFlags(c, a, ~b, cin);
 }
+fn thumbData(c: *Cpu, op: u32, n: u32, rhs: u32, flags: bool) u32 {
+    const lhs = if (n == 15 and op <= 4) 0 else r(c, n);
+    return switch (op) {
+        0 => lhs & rhs,
+        1 => lhs & ~rhs,
+        2 => lhs | rhs,
+        3 => lhs | ~rhs,
+        4 => lhs ^ rhs,
+        8 => if (flags) addFlags(c, lhs, rhs, 0) else lhs +% rhs,
+        10 => if (flags) addFlags(c, lhs, rhs, @intCast(cf(c))) else lhs +% rhs +% cf(c),
+        11 => if (flags) subFlags(c, lhs, rhs, @intCast(cf(c))) else lhs -% rhs -% (1 - cf(c)),
+        13 => if (flags) subFlags(c, lhs, rhs, 1) else lhs -% rhs,
+        14 => if (flags) subFlags(c, rhs, lhs, 1) else rhs -% lhs,
+        else => unreachable,
+    };
+}
 inline fn fault(c: *Cpu, code: Fault, w: u32, pc: u32) Status {
     c.pc = pc;
     return cpu.raise(c, code, w);
@@ -817,18 +833,7 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
             const n = h & 15;
             const d = (h2 >> 8) & 15;
             const S = h & 0x10 != 0;
-            const out = switch (op) {
-                0 => r(c, n) & imm,
-                1 => r(c, n) & ~imm,
-                2 => r(c, n) | imm,
-                3 => r(c, n) | ~imm,
-                4 => r(c, n) ^ imm,
-                8 => if (S) addFlags(c, r(c, n), imm, 0) else r(c, n) +% imm,
-                10 => if (S) addFlags(c, r(c, n), imm, @intCast(cf(c))) else r(c, n) +% imm +% cf(c),
-                11 => if (S) subFlags(c, r(c, n), imm, @intCast(cf(c))) else r(c, n) -% imm -% (1 - cf(c)),
-                13 => if (S) subFlags(c, r(c, n), imm, 1) else r(c, n) -% imm,
-                else => if (S) subFlags(c, imm, r(c, n), 1) else imm -% r(c, n),
-            };
+            const out = thumbData(c, op, n, imm, S);
             if (S and op <= 4) setNZC(c, out, expanded.carry);
             if (d != 15) set(c, d, out);
             return .next;
@@ -898,22 +903,13 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0x8000 != 0) return fault(c, .undefined, h << 16 | h2, pc);
         const op = (h >> 5) & 15;
-        if (op <= 4 or op == 8 or op == 13) {
+        if (op <= 4 or op == 8 or op == 10 or op == 11 or op == 13 or op == 14) {
             c.pc = pc + 4;
             const shifted = shiftImm(c, (h2 >> 4) & 3, r(c, h2 & 15), (((h2 >> 12) & 7) << 2) | ((h2 >> 6) & 3));
             const n = h & 15;
             const d = (h2 >> 8) & 15;
             const S = h & 0x10 != 0;
-            const lhs = if (n == 15 and op <= 4) 0 else r(c, n);
-            const out = switch (op) {
-                0 => lhs & shifted.v,
-                1 => lhs & ~shifted.v,
-                2 => lhs | shifted.v,
-                3 => lhs | ~shifted.v,
-                4 => lhs ^ shifted.v,
-                8 => if (S) addFlags(c, lhs, shifted.v, 0) else lhs +% shifted.v,
-                else => if (S) subFlags(c, lhs, shifted.v, 1) else lhs -% shifted.v,
-            };
+            const out = thumbData(c, op, n, shifted.v, S);
             if (S and op <= 4) setNZC(c, out, shifted.carry);
             if (d != 15) set(c, d, out);
             return .next;

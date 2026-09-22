@@ -585,7 +585,7 @@ describe("thumb decoder", () => {
     expect(c.cpsr >>> 28).toBe(0xa);
   });
 
-  test("wide carry arithmetic immediates consume and update carry", () => {
+  test("wide carry arithmetic consumes carry from immediates and shifted registers", () => {
     const c = runThumb([
       0x2800,         // cmp r0, #0 (C=1)
       0xf170, 0x0000, // sbcs r0, r0, #0
@@ -595,6 +595,15 @@ describe("thumb decoder", () => {
     expect(c.w[0]).toBe(0);
     expect(c.w[6]).toBe(5);
     expect(c.c).toBe(1);
+    const shifted = runThumb([
+      0xeb75, 0x05c1, // sbcs.w r5, r5, r1, lsl #3
+      0xeb40, 0x0251, // adc.w r2, r0, r1, lsr #1
+      0xebd0, 0x0341, // rsbs.w r3, r0, r1, lsl #1
+      0xf04f, 0x24ff, // mov.w r4, #0xff00ff00
+      0x4770,
+    ], (cpu) => { cpu.w[0] = 10; cpu.w[2] = 2; cpu.w[10] = 16; });
+    expect([shifted.w[10], shifted.w[4], shifted.w[6], shifted.w[8] >>> 0]).toEqual([-1, 11, -6, 0xff00ff00]);
+    expect(shifted.cpsr >>> 28).toBe(8);
   });
 
   test("IT conditions gate instructions and bitfield extraction", () => {
