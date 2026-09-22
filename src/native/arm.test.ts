@@ -963,6 +963,17 @@ describe("thumb decoder", () => {
     expect([multiple.w[0], multiple.w[2], multiple.w[4], multiple.w[6]]).toEqual([1, 2, 3, 4]);
   });
 
+  test("signed high multiplication rounds the complete accumulate or subtract result", () => {
+    const setup = (cpu: Cpu) => { cpu.w[0] = 10; cpu.w[2] = -5; cpu.w[4] = 0x40000000; };
+    for (const execute of [
+      () => run([0xe758f211, 0xe753f231, 0xe7540211, 0xe7550231, 0xe75602d1, 0xe75702f1, BXLR], setup),
+      () => runThumb([0xfb51, 0xf802, 0xfb51, 0xf312, 0xfb51, 0x0402, 0xfb51, 0x0512, 0xfb61, 0x0602, 0xfb61, 0x0712, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect([c.w[16], c.w[6], c.w[8], c.w[10], c.w[12], c.w[14]]).toEqual([-2, -1, 8, 9, 11, 11]);
+    }
+  });
+
   test("halfword packing shifts before merging without changing flags", () => {
     const setup = (cpu: Cpu) => {
       cpu.w[0] = 0x12345678; cpu.w[2] = 0x87654321; cpu.w[4] = 0xfedcba98; cpu.w[12] = 0xaabbccdd;

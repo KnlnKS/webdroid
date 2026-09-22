@@ -400,6 +400,13 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
     return result;
 }
 
+fn multiplyHigh(n: u32, m: u32, accumulator: u32, subtract: bool, round: bool) u32 {
+    const product: u64 = @bitCast(@as(i64, @as(i32, @bitCast(n))) * @as(i64, @as(i32, @bitCast(m))));
+    const base = @as(u64, accumulator) << 32;
+    const result = (if (subtract) base -% product else base +% product) +% (if (round) @as(u64, 0x80000000) else 0);
+    return @truncate(result >> 32);
+}
+
 fn packHalf(n: u32, m: u32, amount: u5, top: bool) u32 {
     const shifted = if (top) @as(u32, @bitCast(@as(i32, @bitCast(m)) >> (if (amount == 0) @as(u5, 31) else amount))) else m << amount;
     const mask: u32 = if (top) 0xffff0000 else 0xffff;
@@ -827,11 +834,10 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         set(c, rn, RM *% reg(c, rs, pc));
         return .next;
     }
-    if ((w & 0x0ff0f0f0) == 0x0750f010 or (w & 0x0ff000f0) == 0x07500010) {
-        const p: i64 = @as(i64, @as(i32, @bitCast(RM))) * @as(i64, @as(i32, @bitCast(reg(c, rs, pc))));
-        var v: u32 = @truncate(@as(u64, @bitCast(p)) >> 32);
-        if ((w & 0x0ff0f0f0) != 0x0750f010) v +%= r(c, rd);
-        set(c, rn, v);
+    if ((w & 0x0ff000d0) == 0x07500010 or (w & 0x0ff000d0) == 0x075000d0) {
+        const subtract = w & 0x80 != 0;
+        if (subtract and rd == 15) return fault(c, .undefined, w, pc);
+        set(c, rn, multiplyHigh(RM, reg(c, rs, pc), if (rd == 15) 0 else r(c, rd), subtract, w & 0x20 != 0));
         return .next;
     }
     return fault(c, .unimplemented, w, pc);
@@ -1209,6 +1215,15 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
             if (d != 15) set(c, d, out);
             return .next;
         }
+    }
+    if ((h & 0xfff0) == 0xfb50 or (h & 0xfff0) == 0xfb60) {
+        const h2: u32 = ld(u16, pc + 2);
+        const a = h2 >> 12;
+        const subtract = h & 0x20 != 0;
+        if (h2 & 0xe0 != 0 or (subtract and a == 15)) return fault(c, .undefined, h << 16 | h2, pc);
+        set(c, bits(h2, 8, 4), multiplyHigh(r(c, h & 15), r(c, h2 & 15), if (a == 15) 0 else r(c, a), subtract, h2 & 0x10 != 0));
+        c.pc = pc + 4;
+        return .next;
     }
     if ((h & 0xfff0) == 0xfb10) {
         const h2: u32 = ld(u16, pc + 2);
