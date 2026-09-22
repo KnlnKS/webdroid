@@ -75,7 +75,7 @@ interface Core {
   jit_fma64(a: number, b: number, c: number): number;
 }
 /** the libc calls the core serves itself, by the id libc.zig gives them */
-export const CORE_LIBC: Record<string, number> = Object.fromEntries("memcpy memmove memset memcmp memchr strlen strnlen strcmp strncmp malloc free calloc realloc memalign posix_memalign malloc_usable_size pthread_self pthread_getspecific pthread_setspecific pthread_mutex_lock pthread_mutex_trylock pthread_mutex_unlock sinf cosf tanf expf logf sqrtf sin cos tan exp log sqrt powf atan2f fmodf pow atan2 fmod sincosf sincos crc32 adler32".split(" ").map((n, i) => [n, i + 1]));
+export const CORE_LIBC: Record<string, number> = Object.fromEntries("memcpy memmove memset memcmp memchr strlen strnlen strcmp strncmp malloc free calloc realloc memalign posix_memalign malloc_usable_size pthread_self pthread_getspecific pthread_setspecific pthread_mutex_lock pthread_mutex_trylock pthread_mutex_unlock sinf cosf tanf expf logf sqrtf sin cos tan exp log sqrt powf atan2f fmodf pow atan2 fmod sincosf sincos crc32 adler32 __memcpy_chk".split(" ").map((n, i) => [n, i + 1]));
 /** pthread keys per thread, the size of the table each Cpu carries (libc.zig) */
 export const TLS_KEYS = 256;
 

@@ -52,6 +52,7 @@ pub const Fn = enum(u8) {
     sincos,
     crc32,
     adler32,
+    __memcpy_chk,
 };
 pub const Result = enum(u32) { done, fault, host };
 export fn libc_call(cp: u32, id: u32) u32 {
@@ -227,7 +228,8 @@ pub fn call(c: *Cpu, id: u8) Result {
             if (!cpu.st(u32, c, a, if (kind != 0 and w & 0x3ffc != 0) w - 4 else w & 0xe000)) return .fault;
             ret(c, 0);
         },
-        .memcpy, .memmove => {
+        .memcpy, .memmove, .__memcpy_chk => {
+            if (f == .__memcpy_chk and (arg(c, 2) > arg(c, 3) or arg(c, 2) > std.math.maxInt(u32))) return .host;
             const n: u32 = @truncate(arg(c, 2));
             if (n != 0) {
                 const d = ptr(c, 0) orelse return .fault;
