@@ -5164,3 +5164,27 @@ FairyStockfish `RootMove::extract_ponder_from_tt+0x280` null-address fault. It i
 single matching starting-revision replay; historical reproduction establishes prior occurrence,
 but the varying engine games prevent a conclusive paired fault-frequency comparison. Complete
 TikTok parity and the earlier playback/styling/authentication limits remain unresolved.
+
+### ChatGPT startup and guest conversation (in progress)
+
+The unchanged ChatGPT XAPK initially stopped in startup contracts: missing executor shutdown
+policy, reflection accessibility, Character title casing, URI/CharBuffer operations, and an
+object-array Unsafe stride of one byte where bundled bytecode accepts four or eight. The
+repairs retain the original bytecode. DisplayManager additionally returned a Promise inside
+its Java Display array; awaiting the display fixes the subsequent getState dispatch.
+
+Guest entry then reached FileChannel.truncate and Message asynchronous flags. Sending the
+first prompt exposed Character.getType; its exception interrupted Compose composition and
+left a secondary layout-state error. Unicode category dispatch now uses the host Unicode
+properties with Java category numbers, including the unused category 17, and an ASCII table.
+Its Unicode version follows the host browser, as existing character property queries do.
+File truncation preserves shared position and cannot extend storage. Focused NIO/Character
+checks pass (15 tests, 104 assertions); typecheck passes. Earlier ChatGPT smoke compilation
+completed 66,165 classes with zero method failures.
+
+Full Chrome on port 4093 and a dedicated API 33 AVD on emulator-5580 both sent the synthetic
+prompt “What is two plus two?” and rendered real service answers. Captures are under ignored
+webdroid-shots/chatgpt (gettype-response.png and avd-private-response.png). This establishes
+one guest text round trip, not complete app parity. RuntimeShader and text alignment repairs
+remain under verification; shadows, settings configuration differences, recreation and further
+interactions still need review. No full E2E run has been performed at this stage.

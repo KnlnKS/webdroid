@@ -1396,6 +1396,19 @@ rt.register({
         ? Math.max(vfs.read(file.fpath)?.length ?? 0, file.chunks.length ? file.pos : 0)
         : file.source?.size ?? file.buf.length);
     },
+    "truncate(J)Ljava/nio/channels/FileChannel;": function (this: JFileChannel, size: bigint) {
+      if (size < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "size");
+      const file = this.writable();
+      if (file instanceof JRAF) {
+        if (size < BigInt(file.buf.length)) { file.buf = file.buf.slice(0, Number(size)); vfs.write(file.path, file.buf); }
+      } else {
+        flushFOS(file);
+        const bytes = vfs.read(file.fpath);
+        if (bytes && size < BigInt(bytes.length)) vfs.write(file.fpath, bytes.slice(0, Number(size)));
+      }
+      if (BigInt(file.pos) > size) file.pos = Number(size);
+      return this;
+    },
     "position()J": function (this: JFileChannel) { return BigInt(this.opened().pos); },
     "position(J)Ljava/nio/channels/FileChannel;": function (this: JFileChannel, position: bigint) {
       if (position < 0n || position > BigInt(Number.MAX_SAFE_INTEGER)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "position");

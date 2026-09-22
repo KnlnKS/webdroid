@@ -1295,6 +1295,15 @@ function charTitleCase(c: number): number {
   return upper.length === 1 ? upper.charCodeAt(0) : c;
 }
 const isISOControl = (c: number) => +((c >= 0 && c <= 0x1f) || (c >= 0x7f && c <= 0x9f));
+const characterCategories = "Cn Lu Ll Lt Lm Lo Mn Me Mc Nd Nl No Zs Zl Zp Cc Cf - Co Cs Pd Ps Pe Pc Po Sm Sc Sk So Pi Pf"
+  .split(" ").map(category => category === "-" ? null : new RegExp(`\\p{${category}}`, "u"));
+function unicodeCategory(c: number): number {
+  if (c < 0 || c > 0x10ffff) return 0;
+  const s = String.fromCodePoint(c);
+  return characterCategories.findIndex(category => category?.test(s));
+}
+const asciiCategories = Uint8Array.from({ length: 128 }, (_, c) => unicodeCategory(c));
+const characterType = (c: number) => c >= 0 && c < 128 ? asciiCategories[c] : unicodeCategory(c);
 rt.register({
   name: "java/lang/Character", ctor: JChar,
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
@@ -1318,7 +1327,10 @@ rt.register({
     "static toCodePoint(CC)I": (h: number, l: number) => ((h - 0xd800) << 10) + (l - 0xdc00) + 0x10000,
     "static isISOControl(I)Z": isISOControl,
     "static isISOControl(C)Z": isISOControl,
-    "static isDefined(I)Z": () => 1,
+    "static getType(C)I": characterType,
+    "static getType(I)I": characterType,
+    "static isDefined(C)Z": (c: number) => +(characterType(c) !== 0),
+    "static isDefined(I)Z": (c: number) => +(characterType(c) !== 0),
     "<init>(C)V": function (this: JChar, v: number) { this.v = v; },
     "charValue()C": function (this: JChar) { return this.v; },
     "compareTo(Ljava/lang/Character;)I": cmpV,

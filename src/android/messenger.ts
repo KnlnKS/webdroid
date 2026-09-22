@@ -5,6 +5,7 @@ import { JBinder, callingIdentity } from "./binder";
 import { JParcel, parcelCreator } from "./parcel";
 
 export class JMessage extends JObj {
+  asynchronous = false;
   what = 0; arg1 = 0; arg2 = 0; obj: unknown = null;
   callback: unknown = null; target: JHandler | null = null;
   whenMs = 0; sendingUid = -1; workSourceUid = -1;
@@ -36,10 +37,13 @@ rt.register({ name: "android/os/Message", ctor: JMessage, ifaces: ["android/os/P
     "static obtain(Landroid/os/Handler;Ljava/lang/Runnable;)Landroid/os/Message;": (h: JHandler, r: unknown) => obtain(h, 0, null, 0, 0, r),
     "static obtain(Landroid/os/Message;)Landroid/os/Message;": (m: JMessage) => {
       const copy = obtain(m.target, m.what, m.obj, m.arg1, m.arg2, m.callback);
+      copy.asynchronous = m.asynchronous;
       copy.replyTo = m.replyTo; copy.sendingUid = m.sendingUid; copy.workSourceUid = m.workSourceUid;
       if (m.data) { copy.data = new JBundle(); copy.data.map = new Map(m.data.map); copy.data.loader = m.data.loader; }
       return copy;
     },
+    "setAsynchronous(Z)V": function (this: JMessage, value: number) { this.asynchronous = !!value; },
+    "isAsynchronous()Z": function (this: JMessage) { return +this.asynchronous; },
     "getTarget()Landroid/os/Handler;": function (this: JMessage) { return this.target; },
     "setTarget(Landroid/os/Handler;)V": function (this: JMessage, h: JHandler) { this.target = h; },
     "sendToTarget()V": function (this: JMessage) { this.target?.send(this, 0); },
