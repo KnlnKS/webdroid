@@ -59,19 +59,23 @@ class JActivityOptions extends JObj {
   packageName: string | null = null;
   bounds: number[] | null = null;
 }
+const boundsAnimation = (type: 2 | 11) => async (view: JView, x: number, y: number, width: number, height: number) => {
+  const options = new JActivityOptions();
+  if (type === 2) {
+    const context = await vcall(view, "getContext", "()Landroid/content/Context;");
+    options.packageName = await vcall(context, "getPackageName", "()Ljava/lang/String;");
+  }
+  const location = new Int32Array(2);
+  await vcall(view, "getLocationOnScreen", "([I)V", location);
+  options.animationType = type;
+  options.bounds = [location[0] + x, location[1] + y, width, height];
+  return options;
+};
 rt.register({
   name: "android/app/ActivityOptions", ctor: JActivityOptions,
   methods: {
-    "static makeScaleUpAnimation(Landroid/view/View;IIII)Landroid/app/ActivityOptions;": async (view: JView, x: number, y: number, width: number, height: number) => {
-      const options = new JActivityOptions();
-      const context = await vcall(view, "getContext", "()Landroid/content/Context;");
-      options.packageName = await vcall(context, "getPackageName", "()Ljava/lang/String;");
-      const location = new Int32Array(2);
-      await vcall(view, "getLocationOnScreen", "([I)V", location);
-      options.animationType = 2;
-      options.bounds = [location[0] + x, location[1] + y, width, height];
-      return options;
-    },
+    "static makeScaleUpAnimation(Landroid/view/View;IIII)Landroid/app/ActivityOptions;": boundsAnimation(2),
+    "static makeClipRevealAnimation(Landroid/view/View;IIII)Landroid/app/ActivityOptions;": boundsAnimation(11),
     "static makeBasic()Landroid/app/ActivityOptions;": () => new JActivityOptions(),
     "static makeSceneTransitionAnimation(Landroid/app/Activity;[Landroid/util/Pair;)Landroid/app/ActivityOptions;": (activity: JActivity) => {
       if (!activity) return rt.npe();
