@@ -277,6 +277,7 @@ function metaData(node: XmlNode | null | undefined, res = appHost?.res): JBundle
 
 class JApplicationInfo extends JPackageItemInfo {
   packageName = ""; sourceDir = ""; dataDir = ""; nativeLibraryDir = "/lib";
+  deviceProtectedDataDir: string | null = null; storageUuid: unknown = null;
   flags = 0; targetSdkVersion = 33; minSdkVersion = 21; theme = 0; labelRes = 0; icon = 0;
   // AOSP fills exactly one of these from <application android:label>: the resource id when it
   // is a reference, the literal otherwise. Code that names the app reads whichever is set.
@@ -289,7 +290,7 @@ class JApplicationInfo extends JPackageItemInfo {
 }
 rt.register({
   name: "android/content/pm/ApplicationInfo", ctor: JApplicationInfo, sup: "android/content/pm/PackageItemInfo", ifaces: ["android/os/Parcelable"],
-  fields: ["packageName", "sourceDir", "dataDir", "nativeLibraryDir", "flags", "targetSdkVersion", "minSdkVersion",
+  fields: ["packageName", "sourceDir", "dataDir", "deviceProtectedDataDir", "storageUuid", "nativeLibraryDir", "flags", "targetSdkVersion", "minSdkVersion",
     "theme", "labelRes", "nonLocalizedLabel", "icon", "className", "publicSourceDir", "uid", "processName", "enabled",
     "metaData", "splitNames", "splitSourceDirs", "splitPublicSourceDirs", "sharedLibraryFiles"],
   methods: { "<init>()V": function () {} },
@@ -310,6 +311,7 @@ export function getAppInfo(host: AppHost): JApplicationInfo {
       cachedAppInfo.splitPublicSourceDirs = cachedAppInfo.splitSourceDirs.slice();
     }
     cachedAppInfo.dataDir = `/data/data/${host.pkg}`;
+    cachedAppInfo.deviceProtectedDataDir = `/data/user_de/0/${host.pkg}`;
     cachedAppInfo.processName = host.pkg;
     cachedAppInfo.theme = host.themeResId;
     cachedAppInfo.icon = host.iconRes;
@@ -994,6 +996,7 @@ export function usesSdk(root: XmlNode): { min: number; target: number } {
 }
 function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resources, root: XmlNode, app: XmlNode | null | undefined, flags: number) {
   ai.packageName = pkg; ai.sourceDir = ai.publicSourceDir = path; ai.dataDir = `/data/data/${pkg}`; ai.archiveResources = res;
+  ai.deviceProtectedDataDir = `/data/user_de/0/${pkg}`;
   const label = app && attr(app, "label");
   ai.labelRes = label?.type === TV.REFERENCE ? label.data : 0;
   ai.nonLocalizedLabel = label?.str ?? null;

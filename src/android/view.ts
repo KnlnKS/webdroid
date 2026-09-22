@@ -2454,6 +2454,7 @@ rt.register({
 });
 rt.register({
   name: "android/view/Display", ctor: JDisplay,
+  statics: { STATE_UNKNOWN: 0, STATE_OFF: 1, STATE_ON: 2, STATE_DOZE: 3, STATE_DOZE_SUSPEND: 4 },
   methods: {
     "getWidth()I": () => device.width,
     // getMetrics excludes the system bars; getRealMetrics is the whole display
@@ -2463,6 +2464,7 @@ rt.register({
     "getSize(Landroid/graphics/Point;)V": (p: JPoint) => { p.x = device.width; p.y = device.height - device.statusBar; },
     "getRealSize(Landroid/graphics/Point;)V": (p: JPoint) => { p.x = device.width; p.y = device.height; },
     "getRefreshRate()F": () => 60,
+    "getState()I": () => 2,
     "getPresentationDeadlineNanos()J": () => 16666667n,
     "getMode()Landroid/view/Display$Mode;": () => displayMode(),
     "getSupportedModes()[Landroid/view/Display$Mode;": () => jarray([displayMode()], "Landroid/view/Display$Mode;"),

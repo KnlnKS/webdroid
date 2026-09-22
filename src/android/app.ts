@@ -374,7 +374,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     "onSearchRequested(Landroid/view/SearchEvent;)Z", "onKeyDown(ILandroid/view/KeyEvent;)Z",
     "onKeyUp(ILandroid/view/KeyEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
     "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z", "dispatchTouchEvent(Landroid/view/MotionEvent;)Z",
-    "isInMultiWindowMode()Z", "isInPictureInPictureMode()Z"),
+    "isInMultiWindowMode()Z", "isInPictureInPictureMode()Z", "isLaunchedFromBubble()Z"),
   ...stubs(null, "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;",
     "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;",
     "onCreateView(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
@@ -823,8 +823,8 @@ for (const [name, methods, statics] of [
     // one fixed built-in display: unknown ids are null as in AOSP, and registered listeners
     // never fire because no display is ever added, removed or reconfigured here
     "getDisplay(I)Landroid/view/Display;": (id: number) => (id === 0 ? display() : null),
-    "getDisplays()[Landroid/view/Display;": () => jarray([display()], "Landroid/view/Display;"),
-    "getDisplays(Ljava/lang/String;)[Landroid/view/Display;": (cat: string | null) => jarray(cat === null ? [display()] : [], "Landroid/view/Display;"),
+    "getDisplays()[Landroid/view/Display;": async () => jarray([await display()], "Landroid/view/Display;"),
+    "getDisplays(Ljava/lang/String;)[Landroid/view/Display;": async (cat: string | null) => jarray(cat === null ? [await display()] : [], "Landroid/view/Display;"),
     "registerDisplayListener(Landroid/hardware/display/DisplayManager$DisplayListener;Landroid/os/Handler;)V": (l: unknown) => {
       if (l === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "listener must not be null");
       displayListeners.add(l);
