@@ -243,14 +243,15 @@ export class JInputStream extends JObj {
   pos = 0;
   declare markPos?: number;
 }
-/** a plain InputStream over bytes already in hand */
+class JByteArrayInputStream extends JInputStream {}
+/** A seekable stream over bytes already in hand or a lazy file source. */
 export function streamOf(bytes: Uint8Array): JInputStream {
-  const s = new JInputStream();
+  const s = new JByteArrayInputStream();
   s.buf = bytes;
   return s;
 }
 export function streamOfSource(source: FileSource): JInputStream {
-  const s = new JInputStream();
+  const s = new JByteArrayInputStream();
   s.source = source;
   return s;
 }
@@ -300,9 +301,12 @@ const inputStreamMethods: NativeSpec["methods"] = {
     return BigInt(k);
   },
   "close()V": function (this: JInputStream) { if (this.wrapped) return vcallMaybe(this.wrapped, "close", "()V"); },
-  "mark(I)V": function (this: JInputStream, limit: number) { if (this.wrapped) return vcallMaybe(this.wrapped, "mark", "(I)V", limit); this.markPos = this.pos; },
-  "reset()V": function (this: JInputStream) { if (this.wrapped) return vcallMaybe(this.wrapped, "reset", "()V"); this.pos = this.markPos ?? 0; },
-  "markSupported()Z": function (this: JInputStream) { return this.wrapped ? vcallMaybe(this.wrapped, "markSupported", "()Z") : 1; },
+  "mark(I)V": function (this: JInputStream, limit: number) { if (this.wrapped) return vcallMaybe(this.wrapped, "mark", "(I)V", limit); },
+  "reset()V": function (this: JInputStream) {
+    if (this.wrapped) return vcallMaybe(this.wrapped, "reset", "()V");
+    throw rt.mkThrowable("java/io/IOException", "mark/reset not supported");
+  },
+  "markSupported()Z": function (this: JInputStream) { return this.wrapped ? vcallMaybe(this.wrapped, "markSupported", "()Z") : 0; },
 };
 const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII)I");
 const writeBII = mangleMethod("write", "([BII)V");
@@ -358,12 +362,15 @@ export async function readStreamFully(s: unknown): Promise<Uint8Array> {
 }
 rt.register({ name: "java/io/InputStream", ctor: JInputStream, ifaces: ["java/io/Closeable"], methods: inputStreamMethods });
 rt.register({
-  name: "java/io/ByteArrayInputStream", ctor: class extends JInputStream {}, sup: "java/io/InputStream",
+  name: "java/io/ByteArrayInputStream", ctor: JByteArrayInputStream, sup: "java/io/InputStream",
   methods: {
     "<init>([B)V": function (this: JInputStream, b: Int8Array) { this.buf = u8(b); },
     "<init>([BII)V": function (this: JInputStream, b: Int8Array, off: number, len: number) {
       this.buf = u8(b, off, len);
     },
+    "mark(I)V": function (this: JInputStream) { this.markPos = this.pos; },
+    "reset()V": function (this: JInputStream) { this.pos = this.markPos ?? 0; },
+    "markSupported()Z": () => 1,
   },
 });
 class JFileInputStream extends JInputStream { fd = new JFileDescriptor(); ownsFd = false; }
