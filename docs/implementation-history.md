@@ -5240,3 +5240,10 @@ Once configuration succeeded, Statsig's real gzip request writer reached
 `Deflater.getBytesRead()`. Track consumed input through one feed helper used by both direct
 Deflater calls and DeflaterOutputStream; reset clears the count. The gzip footer now receives
 its actual uncompressed size. A targeted probe verified pre-consumption, finish and reset counts.
+
+The successful server configuration enables Statsig's SQLite queue on the next startup.
+Implement the reached OpenParams builder (flags, synchronous mode, immutable build) and
+SQLiteOpenHelper.setOpenParams. Apply synchronous mode before onConfigure and migrations, and
+reject changing parameters after opening. Its tables, indices and triggers now initialize
+without an uncaught exception. The existing SQLite transaction test passes. This does not add
+WAL capability: the existing backend still reports WAL unavailable. Typecheck passes.
