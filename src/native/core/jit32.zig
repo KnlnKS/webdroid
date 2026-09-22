@@ -666,6 +666,19 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
     if (h >= 0xe800) {
         const h2: u32 = mem.ld(u16, pc + 2);
         if (h & 0xff00 == 0xee00 and jitfp.emitVfp(e, h << 16 | h2)) return false;
+        if (h & 0xff80 == 0xfb80) {
+            const op = bits(h, 4, 3);
+            const dual = op == 6 and h2 & 0xf0 == 0x60;
+            const lo = h2 >> 12;
+            const hi = bits(h2, 8, 4);
+            const n = h & 15;
+            const m = h2 & 15;
+            if (op & 1 == 0 and (h2 & 0xf0 == 0 or dual) and lo < 15 and hi < 15 and lo != hi and n < 15 and m < 15) {
+                const base: u32 = if (dual) 0xe0400090 else 0xe0800090 | (if (op & 2 == 0) @as(u32, 1 << 22) else 0) | (if (op & 4 != 0) @as(u32, 1 << 21) else 0);
+                const w = base | (hi << 16) | (lo << 12) | (m << 8) | n;
+                return dataProcessing(e, w, pc, k, 0, hi, lo, m, n);
+            }
+        }
         const shifted = h & 0xfe00 == 0xea00;
         const immediate = h & 0xfe00 == 0xf000 and h2 & 0x7000 == 0;
         if ((shifted or immediate) and h2 & 0x8000 == 0) {

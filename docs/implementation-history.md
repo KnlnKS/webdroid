@@ -183,6 +183,23 @@ and 3.31 billion instructions. Different sample timing and host contention still
 controlled app-speed claim. The same profile's Thumb long multiply-accumulate path remains an
 interpreted hotspot; its ARM counterpart already has reusable JIT arithmetic.
 
+Thumb signed/unsigned long multiplication, long accumulation and UMAAL now lower through that
+existing ARM arithmetic emitter. Invalid register combinations and other instruction families
+retain interpreter handling. Typecheck and 73 ARM tests / 829 assertions pass; the existing
+long-multiply fixture compares both halves, signed results, accumulation and unchanged flags
+between tiers. No new test is added. The million-UMAAL probe retains 21,000,000 / 0 in its low/high
+registers and falls from about 8.8 ms to 0.8 ms warm. Fresh original-ARM32 Chrome restores level 3
+and again completes its first puzzle without native or rendering faults. An untraced visible
+sample renders 80 frames in 44.18 seconds (1.81 GL FPS), with 40.97 seconds native execution;
+this does not establish a whole-app improvement over the preceding candidate.
+
+The AVD's current Unity log says legacy migration is already complete. The existing browser
+profile instead waits for a player record on a suspected reinstall. A new isolated Chrome
+context is testing a clean install without deleting the existing saved game. A short filtered
+native trace there records priority/scheduler calls; its startup is diagnostic, not a timing
+comparison. Native priority entry points currently return success without changing scheduling,
+but their actual requested priorities must be established before changing the scheduler.
+
 Earlier investigation entries follow; their open questions describe the revision at that time.
 
 Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this

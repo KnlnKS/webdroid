@@ -21,6 +21,8 @@ checks pass and fresh Chrome restores level 3 and completes its first puzzle. Th
 change follows the matrix above; another full E2E is reserved for the final finished candidate.
 Thumb indexed transfers also reuse the same memory emitter for pre/post-index writeback. The
 combined build passes owning checks and the same gameplay replay; rendering remains below 2 FPS.
+Thumb long multiply/accumulate now shares ARM JIT arithmetic and passes the same checks and
+gameplay replay. A separate clean browser context is investigating the unresolved Player ID.
 
 - Run the unchanged 4.2.1 XAPK in full Chrome and an AVD at matching geometry.
 - Capture startup, menus, gameplay, pause/resume and saved progression in both.
