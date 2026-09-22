@@ -438,6 +438,24 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(36, 38), x => x >>> 0)).toEqual([0x8000ffff, 0xab34beef]);
     }
   });
+  test("NEON float extrema and sign operations preserve NaN and signed zero", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.s.set([-2, -0, -Infinity, NaN], 40);
+      cpu.s.set([1, -2, NaN, 0], 8);
+      cpu.s.set([-0, -2, NaN, -Infinity], 0); cpu.s.set([0, -3, 4, Infinity], 56);
+      cpu.s.set([-0, -2, NaN, -Infinity, 0, -3, 4, Infinity], 16);
+    };
+    for (const execute of [
+      () => run([0xf3f94764, 0xf3b927c4, 0xf2402f6c, 0xf2286f4a, BXLR], setup),
+      () => runThumb([0xfff9, 0x4764, 0xffb9, 0x27c4, 0xef40, 0x2f6c, 0xef28, 0x6f4a, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.s.slice(40, 44))).toEqual([2, 0, Infinity, NaN]);
+      expect(Array.from(c.s.slice(4, 8))).toEqual([-1, 2, NaN, -0]);
+      expect(Array.from(c.s.slice(36, 40))).toEqual([0, -2, NaN, Infinity]);
+      expect(Array.from(c.s.slice(12, 16))).toEqual([-0, -3, NaN, -Infinity]);
+    }
+  });
   test("NEON immediate shifts preserve signed, rounded and accumulating behavior", () => {
     const setup = (cpu: Cpu) => {
       cpu.si.set([-1, 0, -2147483648, 2147483647], 36);

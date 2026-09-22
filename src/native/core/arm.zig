@@ -275,6 +275,8 @@ fn neonMisc(c: *Cpu, w: u32, pc: u32) Status {
         0x0ea1d800 | (bits(w, 7, 1) << 29)
     else if (w & 0xffbf0f90 == 0xf3b90500)
         0x0ea0d800
+    else if (w & 0xffbf0f10 == 0xf3b90700)
+        0x0ea0f800 | (bits(w, 7, 1) << 29)
     else if (w & 0xffb30e10 == 0xf3b00000) blk: {
         const op = bits(w, 7, 2);
         const size = bits(w, 18, 2);
@@ -284,12 +286,12 @@ fn neonMisc(c: *Cpu, w: u32, pc: u32) Status {
     const count: usize = if (q != 0) 16 else 8;
     const read_count = if (duplicate) 8 else if (narrow) 16 else count;
     @memcpy(c.v[18][0..read_count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..read_count]);
-    if (w & 0x0f00 == 0x0500) {
+    if (w & 0x0d00 == 0x0500) {
         const lanes: *[4]f32 = @ptrCast(&c.v[18]);
         for (lanes[0 .. count / 4]) |*lane| lane.* = fp.standard32(lane.*);
     }
     const result = simd.exec(c, translated | (q << 30) | (18 << 5) | 16);
-    if (result == .next and w & 0xffbf0f10 == 0xf3bb0500) {
+    if (result == .next and (w & 0xffbf0f10 == 0xf3bb0500 or w & 0xffbf0f10 == 0xf3b90700)) {
         const lanes: *[4]f32 = @ptrCast(&c.v[16]);
         for (lanes[0 .. count / 4]) |*lane| lane.* = fp.standard32(lane.*);
     }
@@ -356,6 +358,8 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
         0x2e20dc00
     else if (op == 14 and size & 1 == 0 and (u == 1 or (b == 0 and size == 0)))
         0x0e20e400 | (u << 29) | (bits(w, 21, 1) << 23) | (b << 11)
+    else if (op == 15 and b == 0 and size & 1 == 0)
+        0x0e20f400 | (u << 29) | (bits(w, 21, 1) << 23)
     else if (accumulate)
         0x0e20d400 | (bits(w, 21, 1) << 23)
     else
