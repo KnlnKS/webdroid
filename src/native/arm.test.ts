@@ -523,6 +523,23 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(44, 60))).toEqual([-1, 0, 0, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, -1, 0, -1]);
     }
   });
+  test("NEON float/integer conversions round and saturate at lane bounds", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([-1, 2147483647, -2147483648, 16777217], 60);
+      cpu.si.set([-1, 0, -2147483648, 16777217], 8);
+      cpu.s.set([1.9, -1.9, NaN, Infinity], 16);
+    };
+    for (const execute of [
+      () => run([0xf3fbe66e, 0xf3bb26c4, 0xf3bb6748, 0xf3bb5788, BXLR], setup),
+      () => runThumb([0xfffb, 0xe66e, 0xffbb, 0x26c4, 0xffbb, 0x6748, 0xffbb, 0x5788, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.s.slice(60, 64))).toEqual([-1, 2147483648, -2147483648, 16777216]);
+      expect(Array.from(c.s.slice(4, 8))).toEqual([4294967296, 0, 2147483648, 16777216]);
+      expect(Array.from(c.si.slice(12, 16))).toEqual([1, -1, 0, 2147483647]);
+      expect(Array.from(c.si.slice(10, 12))).toEqual([1, 0]);
+    }
+  });
   test("NEON immediate shifts preserve signed, rounded and accumulating behavior", () => {
     const setup = (cpu: Cpu) => {
       cpu.si.set([-1, 0, -2147483648, 2147483647], 36);
