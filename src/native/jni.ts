@@ -6,7 +6,7 @@ import { defineHost, type HostFn, vaList, retF, retD, retPair, type ArgReader, P
 import { Cpu, cpuFor, type CallArg } from "./cpu";
 import { rt, JObj, type ClassInfo, type Runtime } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, splitSig, u8, primElem } from "../jvm/abi";
-import { curThread, JClass, stackTraceText } from "../jvm/natives/jlang";
+import { curThread, callOn, JClass, stackTraceText } from "../jvm/natives/jlang";
 import { JCtor, JMethod, classCtors, mkMethod, methodAnnotations } from "../jvm/natives/jreflect";
 import { JBuffer, directBufferAddress, nativeByteBuffer } from "../jvm/natives/jnio";
 const enc = new TextEncoder();
@@ -177,13 +177,13 @@ async function invoke(cpu: Cpu, m: MethodRec, self: unknown, args: unknown[], no
       const p = (m.info.owner ?? rt).initClass(m.info); if (p) await p;
       fn = m.info.ctor[m.mangled];
       if (typeof fn !== "function") throw throwable("java/lang/NoSuchMethodError", m.name + m.desc);
-      const r = fn.apply(m.info.ctor, args);
+      const r = callOn(cpu.jthread, () => fn.apply(m.info.ctor, args));
       return retWord(m.ret, r instanceof Promise ? await r : r, cpu);
     }
     if (self === null || self === undefined) throw throwable("java/lang/NullPointerException", "JNI call on null " + m.name);
     fn = nonvirtual ? m.info.ctor.prototype[m.mangled] : (self as any)[m.mangled] ?? rt.proxyMethod?.(self, m.name, m.desc);
     if (typeof fn !== "function") throw throwable("java/lang/NoSuchMethodError", m.name + m.desc);
-    const r = fn.apply(self, args);
+    const r = callOn(cpu.jthread, () => fn.apply(self, args));
     return retWord(m.ret, r instanceof Promise ? await r : r, cpu);
   } catch (e) {
     pend(cpu, rt.jx(e));
@@ -313,18 +313,18 @@ export function jniInit(): void {
   def(24, "IsSameObject", (_c, a) => { a.p(); return deref(a.p()) === deref(a.p()) ? 1 : 0; });
   def(25, "NewLocalRef", (_c, a) => { a.p(); return toRef(deref(a.p())); });
   def(26, "EnsureLocalCapacity", () => 0);
-  def(27, "AllocObject", async (cpu, a) => { a.p(); const i = infoOf(a.p()); if (!i) return 0; const p = (i.owner ?? rt).initClass(i); if (p) await p; return toRef(new i.ctor(), cpu); });
+  def(27, "AllocObject", async (cpu, a) => { a.p(); const i = infoOf(a.p()); if (!i) return 0; const p = (i.owner ?? rt).initClass(i); if (p) await p; return toRef(callOn(cpu.jthread, () => new i.ctor()), cpu); });
   const newObject = (read: (m: MethodRec, a: ArgReader) => unknown[]) => async (cpu: Cpu, a: ArgReader) => {
     a.p(); const i = infoOf(a.p()); const m = methodOf(a.p());
     if (!i || !m) return 0;
+    const args = read(m, a);
     try {
       const p = (i.owner ?? rt).initClass(i); if (p) await p;
-      const args = read(m, a);
       if (i.name === "java/lang/String") return toRef(rt.newStr(m.desc, args), cpu);   // a Java string is a JS string, built by the runtime's own constructor table
-      const o = new i.ctor();
+      const o = callOn(cpu.jthread, () => new i.ctor());
       const fn = o[m.mangled];
       if (typeof fn !== "function") throw throwable("java/lang/NoSuchMethodError", "<init>" + m.desc);
-      const r = fn.apply(o, args);
+      const r = callOn(cpu.jthread, () => fn.apply(o, args));
       if (r instanceof Promise) await r;
       return toRef(o, cpu);
     } catch (e) { pend(cpu, rt.jx(e)); return 0; }
