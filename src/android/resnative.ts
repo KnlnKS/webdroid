@@ -3,6 +3,7 @@
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newXmlPullParser } from "./xmlpull";
+import { parseSax } from "./sax";
 import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, JXmlParser, obtainStyled, resolveStyleValue, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
@@ -717,6 +718,7 @@ rt.register({
     // our XmlResourceParser already implements AttributeSet
     "static asAttributeSet(Lorg/xmlpull/v1/XmlPullParser;)Landroid/util/AttributeSet;": (p: unknown) => p,
     "static newPullParser()Lorg/xmlpull/v1/XmlPullParser;": () => newXmlPullParser(),
+    "static parse(Ljava/lang/String;Lorg/xml/sax/ContentHandler;)V": parseSax,
   },
 });
 
