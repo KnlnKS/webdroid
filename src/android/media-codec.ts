@@ -7,13 +7,13 @@ import { JBufferInfo } from "./media";
 import { JSurface, presentSurface } from "./glview";
 import { mainHandler, reportUncaught } from "./os";
 
-type Definition = { kind: "video"; mime: string; codec: string; maxDimension: number; profiles: [number, number][] } | { kind: "audio"; mime: string; codec: string; profiles: [number, number][] };
+type Definition = { kind: "video"; mime: string; codec: string; maxDimension: number; maxBitrate: number; profiles: [number, number][] } | { kind: "audio"; mime: string; codec: string; profiles: [number, number][] };
 const definitions: Definition[] = [
-  { kind: "video", mime: "video/avc", codec: "avc1.42002A", maxDimension: 4096, profiles: [[1, 8192]] },
-  { kind: "video", mime: "video/avc", codec: "avc1.4d002A", maxDimension: 4096, profiles: [[2, 8192]] },
-  { kind: "video", mime: "video/avc", codec: "avc1.64002A", maxDimension: 4096, profiles: [[8, 8192]] },
-  { kind: "video", mime: "video/x-vnd.on2.vp8", codec: "vp8", maxDimension: 16383, profiles: [[1, 8]] },
-  { kind: "video", mime: "video/x-vnd.on2.vp9", codec: "vp09.00.41.08", maxDimension: 8192, profiles: [[1, 128]] },
+  { kind: "video", mime: "video/avc", codec: "avc1.42002A", maxDimension: 4096, maxBitrate: 50000000, profiles: [[1, 8192]] },
+  { kind: "video", mime: "video/avc", codec: "avc1.4d002A", maxDimension: 4096, maxBitrate: 50000000, profiles: [[2, 8192]] },
+  { kind: "video", mime: "video/avc", codec: "avc1.64002A", maxDimension: 4096, maxBitrate: 62500000, profiles: [[8, 8192]] },
+  { kind: "video", mime: "video/x-vnd.on2.vp8", codec: "vp8", maxDimension: 16383, maxBitrate: 100000000, profiles: [[1, 8]] },
+  { kind: "video", mime: "video/x-vnd.on2.vp9", codec: "vp09.00.41.08", maxDimension: 8192, maxBitrate: 30000000, profiles: [[1, 128]] },
   { kind: "audio", mime: "audio/mp4a-latm", codec: "mp4a.40.2", profiles: [[2, 0]] },
   { kind: "audio", mime: "audio/opus", codec: "opus", profiles: [] },
 ];
@@ -57,6 +57,7 @@ function audioConfig(def: Definition, format: JMediaFormat): AudioDecoderConfig 
 async function supports(def: Definition, format = new JMediaFormat()): Promise<boolean> {
   const mime = stringValue(format, "mime");
   if (mime && mime !== def.mime) return false;
+  if (def.kind === "video" && numberValue(format, "bitrate", 0) > def.maxBitrate) return false;
   try {
     return def.kind === "video" ? typeof VideoDecoder !== "undefined" && (await VideoDecoder.isConfigSupported(videoConfig(def, format))).supported === true
       : typeof AudioDecoder !== "undefined" && (await AudioDecoder.isConfigSupported(audioConfig(def, format))).supported === true;
@@ -102,6 +103,11 @@ const supportsSize = async function (this: JVideoCapabilities, width: number, he
 };
 rt.register({ name: "android/media/MediaCodecInfo$VideoCapabilities", ctor: JVideoCapabilities, methods: {
   "getWidthAlignment()I": () => 1, "getHeightAlignment()I": () => 1,
+  "getBitrateRange()Landroid/util/Range;": function (this: JVideoCapabilities) {
+    const definition = this.info.definition;
+    if (definition.kind !== "video") throw rt.mkThrowable("java/lang/IllegalStateException", "Not a video codec");
+    return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(1), boxInt(definition.maxBitrate));
+  },
   "getSupportedHeights()Landroid/util/Range;": function (this: JVideoCapabilities) {
     const definition = this.info.definition;
     if (definition.kind !== "video") throw rt.mkThrowable("java/lang/IllegalStateException", "Not a video codec");
