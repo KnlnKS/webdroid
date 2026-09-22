@@ -5188,3 +5188,18 @@ webdroid-shots/chatgpt (gettype-response.png and avd-private-response.png). This
 one guest text round trip, not complete app parity. RuntimeShader and text alignment repairs
 remain under verification; shadows, settings configuration differences, recreation and further
 interactions still need review. No full E2E run has been performed at this stage.
+
+ChatGPT supplies AGSL for its shadows. RuntimeShader now compiles the reached numeric-uniform
+AGSL subset to WebGL2, preserving top-left shader coordinates, local matrices and premultiplied
+output. Unsupported shader uniform types fail explicitly. Rendering remains Canvas2D; shader
+rasters are cached by dimensions, transform and uniform state. Recording must capture uniforms
+and defer rasterization until replay: rendering into the display-list recorder's 1×1 mirror
+silently erased the shadows. Shared program ownership keeps recorded snapshots alive without
+leaking programs. The focused browser fixture verifies snapshot isolation, alpha and transformed
+coordinates. It also verifies text coordinates replay through a recorded layer, which fixes
+ChatGPT's previously unfindable labels. The repeated shader draws are not yet a performance claim.
+
+Layout now retains requested alignment through BoringLayout, DynamicLayout and StaticLayout's
+builder; draw positions, line bounds and cursor offsets use the same origin. The login sheet's
+centered text and the toolbar/composer shadows are visible in the paired captures. Greedy line
+breaking, some link styling and system-bar appearance still differ from the reference.

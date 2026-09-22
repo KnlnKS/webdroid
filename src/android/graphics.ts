@@ -364,7 +364,7 @@ export class JPaint extends JObj {
     return (this.fCache = `${it}${w} ${this.textSize}px ${this.tf.family}`);
   }
   fillStyle(ctx?: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): string | CanvasGradient | CanvasPattern {
-    if (this.shaderObj instanceof JBitmapShader && ctx) return this.shaderObj.pattern(ctx);
+    if (this.shaderObj && ctx) { const style = this.shaderObj.pattern(ctx); if (style) return style; }
     if (this.shader) return this.shader;
     const f = this.filterColor;
     if (this.filterMatrix) return cssColor(matrixColor(this.filterMatrix, this.color));
@@ -915,7 +915,9 @@ rt.register({
   },
 });
 
-class JShader extends JObj {
+export class JShader extends JObj {
+  pattern(_ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): CanvasGradient | CanvasPattern | null { return this.grad; }
+  deferredPattern(): ((ctx: Ctx2D) => CanvasPattern) | null { return null; }
   grad: CanvasGradient | CanvasPattern | null = null;
   /** setLocalMatrix: maps shader space into the canvas; null = identity */
   local: [number, number, number, number, number, number] | null = null;
@@ -1435,6 +1437,11 @@ export class JCanvas extends JObj {
     return this.semanticBase ? matMul(this.semanticBase, current) : current as [number, number, number, number, number, number];
   }
   recordText(text: string, x?: number, y?: number, size?: number, align = 0) {
+    const recorder = this.ctx as RecordingContext;
+    if (recorder.__isRecorder) {
+      recorder.__record(ctx => replayCanvases.get(ctx)?.recordText(text, x, y, size, align));
+      return;
+    }
     const owner = this.semanticOwner;
     if (!owner) return;
     (owner.drawnText ??= []).push(text);
@@ -1464,15 +1471,19 @@ export class JCanvas extends JObj {
   }
   prep(p: JPaint, stroke: boolean) {
     const ctx = this.ctx;
+    const recorder = ctx as RecordingContext;
+    const pattern = recorder.__isRecorder ? p.shaderObj?.deferredPattern() : null;
+    if (pattern) recorder.__record(c => { c[stroke ? "strokeStyle" : "fillStyle"] = pattern(c); });
     if (stroke) {
-      ctx.strokeStyle = p.fillStyle(ctx) as string;
+      if (!pattern) ctx.strokeStyle = p.fillStyle(ctx) as string;
       ctx.lineWidth = Math.max(p.strokeWidth, 0.75);
       ctx.lineCap = p.strokeCapN;
       ctx.lineJoin = p.strokeJoinN;
       ctx.setLineDash(p.dash ?? []);
     } else {
-      ctx.fillStyle = p.fillStyle(ctx) as string;
+      if (!pattern) ctx.fillStyle = p.fillStyle(ctx) as string;
     }
+    return !!pattern || ctx[stroke ? "strokeStyle" : "fillStyle"] instanceof CanvasPattern;
   }
   private blurLayer: { source: JCanvas; target: OffscreenCanvasRenderingContext2D; paint: JPaint } | null = null;
   drawMask(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke?: (ctx: typeof this.ctx) => void) {
@@ -1533,10 +1544,10 @@ export class JCanvas extends JObj {
         const lm = p.shaderObj?.local;
         if (p.shaderObj instanceof JBitmapShader) fill(this.shaderClipCtx(lm ?? shaderIdentity, p.shaderObj));
         else {
-          this.prep(p, false);
+          const pattern = this.prep(p, false);
           // a gradient with a local matrix: Canvas2D gradients have no transform of their own, so
           // clip to the shape and fill the plane under the matrix instead
-          fill(lm && !(p.shader instanceof CanvasPattern) ? this.shaderClipCtx(lm) : this.ctx);
+          fill(lm && !pattern ? this.shaderClipCtx(lm) : this.ctx);
         }
       }
       if (p.style === 1 || p.style === 2) { this.prep(p, true); stroke(this.ctx); }
@@ -1893,7 +1904,7 @@ function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
   try {
     ctx.font = p.font();
     if ("lang" in ctx) ctx.lang = p.language;
-    ctx.fillStyle = p.fillStyle(ctx) as string;
+    cv.prep(p, false);
     ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
     ctx.textBaseline = "alphabetic";
     if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
@@ -2024,6 +2035,14 @@ class JRenderNode extends JObj {
   effectInput: OffscreenCanvas | null = null;
 }
 type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+type RecordingContext = Ctx2D & { __isRecorder?: boolean; __record: (fn: (ctx: Ctx2D) => void) => void };
+const replayCanvases = new WeakMap<Ctx2D, JCanvas>();
+function replayWithSemantics(canvas: JCanvas, draw: () => void) {
+  const previous = replayCanvases.get(canvas.ctx);
+  replayCanvases.set(canvas.ctx, canvas);
+  try { draw(); }
+  finally { if (previous) replayCanvases.set(canvas.ctx, previous); else replayCanvases.delete(canvas.ctx); }
+}
 /** recording proxy: applies ops immediately to the mirror octx (so reads like
  *  measureText/getTransform work) while appending replay closures to node.ops */
 function mkRecorder(node: JRenderNode): Ctx2D {
@@ -2068,7 +2087,7 @@ rt.register({
     "getWidth()I": function (this: JPicture) { return this.node.w; },
     "getHeight()I": function (this: JPicture) { return this.node.h; },
     "draw(Landroid/graphics/Canvas;)V": function (this: JPicture, cv: JCanvas) {
-      if (this.node.hasDL) for (const op of this.node.ops) op(cv.ctx);
+      replayWithSemantics(cv, () => { if (this.node.hasDL) for (const op of this.node.ops) op(cv.ctx); });
     },
   },
 });
@@ -2081,7 +2100,7 @@ function drawPicture(canvas: JCanvas, picture: JPicture, dst?: JRect) {
       ctx.translate(dst.left, dst.top);
       if (node.w > 0 && node.h > 0) ctx.scale((dst.right - dst.left) / node.w, (dst.bottom - dst.top) / node.h);
     }
-    if (node.hasDL) for (const op of node.ops) op(ctx);
+    replayWithSemantics(canvas, () => { if (node.hasDL) for (const op of node.ops) op(ctx); });
   } finally { ctx.restore(); }
 }
 function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
@@ -2108,7 +2127,10 @@ function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
       if (surface.width !== n.w) surface.width = n.w;
       if (surface.height !== n.h) surface.height = n.h;
       const input = surface.getContext("2d")!; input.reset();
-      for (const op of n.ops) op(input);
+      const recording = replayCanvases.get(ctx);
+      const canvas = JCanvas.wrap(input, n.w, n.h);
+      if (recording) { canvas.semanticOwner = recording.semanticOwner; canvas.semanticBase = recording.semanticTransform(); }
+      replayWithSemantics(canvas, () => { for (const op of n.ops) op(input); });
       n.effect.draw(ctx, surface);
     } else for (const op of n.ops) op(ctx);
   }
@@ -2221,7 +2243,7 @@ canvasMethods["drawRenderNode(Landroid/graphics/RenderNode;)V"] = function (this
     // deferred: replay the child's CURRENT display list at draw time, not record time
     t.__record!((c) => drawNodeInto(c, n));
   } else {
-    drawNodeInto(this.ctx, n);
+    replayWithSemantics(this, () => drawNodeInto(this.ctx, n));
   }
 };
 rt.register({ name: "android/graphics/Paint", ctor: JPaint, methods: paintMethods });
