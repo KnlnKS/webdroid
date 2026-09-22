@@ -4915,3 +4915,21 @@ to the lock queue and reacquire before returning or throwing. The former unconte
 lock test now checks exclusion, ownership, recursive condition restoration, FIFO transfer and
 interrupt removal (one core case, 11 assertions); typecheck passes. The cache failure has not
 yet been reproduced under the repaired implementation, so causal validation remains pending.
+
+ViewFlipper inflation was reached by detail/comment UI. Its constructors now share ViewAnimator
+initialization, read flipInterval/autoStart, and schedule virtual showNext calls through the main
+handler. Visibility and detach cancel pending flips. A real-timer runtime probe checks visible
+flipping and detach cancellation; the three owning view-switching checks pass (15 assertions).
+The host still lacks general window-visibility broadcasts on activity backgrounding.
+
+A later detail replay produced duplicate roots: a zero-width obsolete child and the fragment's
+full-width replacement. This layout issue remains under investigation. Back navigation then
+threw ClassCastException casting $Proxy57 to SuggestWordsApi$SuggestApi; that synthetic class
+actually implemented ActivityLifecycleCallbacks. Concurrent Proxy creation overwrote the same
+interface-set cache entry, so Map.size reused a generated class name for a different interface.
+Pending class creation is now cached before suspension, names use a monotonic counter, and
+framework declaration indexing is shared. The new concurrent identity/interface check fails
+against the previous implementation and passes after the change. Six reflection checks pass
+(119 assertions), as does typecheck. Proxy defining-loader semantics remain a separate limit.
+TikTok smoke compilation completed 462,058 method bodies with zero method failures; the tool's
+printed word “classes” counts method compilation attempts, not class definitions.
