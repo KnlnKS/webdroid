@@ -1000,6 +1000,10 @@ describe("thumb decoder", () => {
     ];
     expect(runThumb(program, (cpu) => { cpu.w[0] = 0; cpu.w[6] = 0xfe; }).w[10]).toBe(0x7f);
     expect(runThumb(program, (cpu) => { cpu.w[0] = 1; cpu.w[6] = 0xfe; }).w[10]).toBe(0);
+    const signed = runThumb([0xf340, 0x001e, 0xf343, 0x1207, 0xf343, 0x041f, 0xf3c3, 0x1507, 0x4770], (cpu) => {
+      cpu.w[0] = 0x40000000; cpu.w[6] = -16;
+    });
+    expect([signed.w[0], signed.w[4], signed.w[8], signed.w[10]]).toEqual([-1073741824, -1, -16, 255]);
     const multiple = runThumb([
       0x4280,             // cmp r0, r0
       0xbf01,             // itttt eq

@@ -429,6 +429,12 @@ fn multiplyHigh(n: u32, m: u32, accumulator: u32, subtract: bool, round: bool) u
     return @truncate(result >> 32);
 }
 
+fn extractField(value: u32, lsb: u32, width: u32, signed: bool) u32 {
+    const shifted = value << @intCast(32 - lsb - width);
+    const amount: u5 = @intCast(32 - width);
+    return if (signed) @bitCast(@as(i32, @bitCast(shifted)) >> amount) else shifted >> amount;
+}
+
 fn packHalf(n: u32, m: u32, amount: u5, top: bool) u32 {
     const shifted = if (top) @as(u32, @bitCast(@as(i32, @bitCast(m)) >> (if (amount == 0) @as(u5, 31) else amount))) else m << amount;
     const mask: u32 = if (top) 0xffff0000 else 0xffff;
@@ -801,12 +807,8 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
     if ((w & 0x0fa00070) == 0x07a00050) {
         const lsb = bits(w, 7, 5);
         const width = bits(w, 16, 5) + 1;
-        if (w & (1 << 22) != 0) {
-            set(c, rd, if (width == 32) RM >> @intCast(lsb) else (RM >> @intCast(lsb)) & ((@as(u32, 1) << @intCast(width)) - 1));
-        } else {
-            const sh: u5 = @intCast(32 - width);
-            set(c, rd, @bitCast(@as(i32, @bitCast(RM << @intCast(32 - lsb - width))) >> sh));
-        }
+        if (lsb + width > 32) return fault(c, .undefined, w, pc);
+        set(c, rd, extractField(RM, lsb, width, w & (1 << 22) == 0));
         return .next;
     }
     if (op1 >= 8 and op1 <= 15 and (op2b & 3) == 3) {
@@ -1155,14 +1157,14 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
             return .next;
         }
     }
-    if ((h & 0xfff0) == 0xf3c0) {
+    if ((h & 0xff70) == 0xf340) {
         const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0x8000 != 0) return fault(c, .undefined, h << 16 | h2, pc);
         c.pc = pc + 4;
         const lsb = (((h2 >> 12) & 7) << 2) | ((h2 >> 6) & 3);
         const width = (h2 & 31) + 1;
-        const mask = if (width == 32) ~@as(u32, 0) else (@as(u32, 1) << @intCast(width)) - 1;
-        set(c, (h2 >> 8) & 15, (r(c, h & 15) >> @intCast(lsb)) & mask);
+        if (h2 & 0x20 != 0 or lsb + width > 32) return fault(c, .undefined, h << 16 | h2, pc);
+        set(c, (h2 >> 8) & 15, extractField(r(c, h & 15), lsb, width, h & 0x80 == 0));
         return .next;
     }
     if ((h & 0xfff0) == 0xf360) {
