@@ -5260,3 +5260,38 @@ subsequent presentation, including 446.1 ms of lazy compilation. These are obser
 full-Chrome timings under shared host load, not controlled acceptance measurements, and they
 fail to establish the 150 ms target. The full 1,254-test run passed before the cursor change;
 final candidate verification follows below.
+
+
+### Final usability follow-up verification — 2026-09-22
+
+Frozen production revision: a1b169d7. Typecheck passes. All 1,254 unit tests pass with 26,755
+assertions; TikTok smoke compilation covers 462,058 classes with zero method failures.
+The final serialized full E2E completes all 159 steps across 12 flows in 854.1 seconds, with
+zero main-loop wedges or step-action failures. The two settling timeouts remain YouTube's
+show-controls/pause. Goldens are unchanged. Outputs are tests/e2e/actual, tests/e2e/report,
+and the indexed webdroid-shots/tiktok-usability evidence directory.
+
+All 13 TikTok steps render, including background/resume and successive swipes. Every step
+returns diagnostics from all four realms. There are no layout/draw failures, uncaught runtime
+exceptions, or required native delegates; the nine optional app/library class probes remain.
+The error-severity native TLS progress logs include successful handshakes and are retained,
+along with startup hook/monitor limitations and an AppsFlyer HTTP 404. Empty support-process
+missing/error lists establish only the exercised paths.
+
+Resy reaches a populated Carbone venue, with no runtime missing/layout/draw errors. Harmonic
+comments retain two inset passes and seven layout passes. Content-difference means against
+unchanged goldens are FitNotes 40.10%, Mihon app 57.43%, Harmonic 31.99%, and Mihon onboarding
+17.69%; the preceding recorded run was 40.12%, 57.65%, 32.02%, and 17.69%. These are historical
+single-run comparisons, not matched repeated performance evidence. The full run retains
+YouTube's Matrix/SAX limitations (six Matrix draw-error occurrences), Lichess's native
+pthread errors 3/22/35, Harmonic's atomic-group regex failure, Reddit's missing
+Process.getStartRequestedElapsedRealtime, and Flappy Bird's WebView status TypeError. Its
+12 unavailable snapshots belong to bridge/WebView frames; Android realms provide diagnostics.
+These existing failures prevent describing the entire matrix as error-free.
+
+The repair set is verified, but full TikTok parity and the 150 ms target are not achieved.
+Cold search opening remains slow; decoded playback throughput, onboarding artwork and other
+login styling differences remain unresolved. The optional JobInfo parcel operation and
+XmlBlock probe from earlier/manual paths are not implemented. No authentication, publishing,
+DRM or birthdate-gated AVD feed was validated. Four production commits isolate package-query
+allocation/flags, Writer lock semantics, activity-window teardown, and cursor drawables.

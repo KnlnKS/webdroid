@@ -1,7 +1,7 @@
 # TikTok usability follow-up
 
 Branch: `codex/tiktok-usability`. Starting revision: `9d0bb979`.
-Status: package-query, Writer-lock and activity-window repairs implemented; live guest-flow and final regression checks in progress.
+Status: four focused repairs committed and final 159-step regression matrix completed; full TikTok parity and the 150 ms target remain unmet.
 
 - Compare TikTok at 1080×2160, 480 dpi; retain screenshots and per-process diagnostics.
 - Investigate slow playback, interaction latency, reload stalls, and reached platform gaps.
