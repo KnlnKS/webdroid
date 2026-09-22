@@ -698,14 +698,18 @@ describe("thumb decoder", () => {
     expect(c.w[0]).toBe(1);
   });
 
-  test("wide count-leading-zeros handles zero and populated words", () => {
+  test("wide bit reversal and leading-zero count preserve their source", () => {
     const c = runThumb([
       0xfab2, 0xf082, // clz r0, r2
       0xfab3, 0xf183, // clz r1, r3
+      0xfa92, 0xf4a2, // rbit r4, r2
+      0xfa94, 0xf5a4, // rbit r5, r4
       0x4770,         // bx lr
     ], (cpu) => { cpu.w[4] = 0x0000ffff; cpu.w[6] = 0; });
     expect(c.w[0]).toBe(16);
     expect(c.w[2]).toBe(32);
+    expect(c.w[8] >>> 0).toBe(0xffff0000);
+    expect(c.w[10]).toBe(c.w[4]);
   });
 
   test("wide word spills support pre-index and post-index writeback", () => {

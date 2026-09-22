@@ -989,11 +989,12 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         c.pc = pc + 4;
         return .next;
     }
-    if ((h & 0xfff0) == 0xfab0) {
+    if ((h & 0xffd0) == 0xfa90) {
         const h2: u32 = ld(u16, pc + 2);
-        if (h2 & 0xf0f0 == 0xf080 and (h & 15) == (h2 & 15)) {
+        const clz = h & 0x20 != 0;
+        if (h2 & 0xf0f0 == (if (clz) @as(u32, 0xf080) else 0xf0a0) and (h & 15) == (h2 & 15)) {
             c.pc = pc + 4;
-            set(c, (h2 >> 8) & 15, @clz(r(c, h & 15)));
+            set(c, (h2 >> 8) & 15, if (clz) @clz(r(c, h & 15)) else @bitReverse(r(c, h & 15)));
             return .next;
         }
     }
