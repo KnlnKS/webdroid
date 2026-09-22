@@ -239,6 +239,27 @@ fn neonImmediate(c: *Cpu, w: u32, pc: u32, imm8: u32) Status {
     return .next;
 }
 
+fn neonPermute(c: *Cpu, w: u32, pc: u32) Status {
+    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
+    const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
+    const q = bits(w, 6, 1);
+    const size = bits(w, 18, 2);
+    const op = bits(w, 7, 2);
+    if (size == 3 or op == 0 or (q != 0 and (d | m) & 1 != 0)) return fault(c, .undefined, w, pc);
+    const count: usize = if (q != 0) 16 else 8;
+    @memcpy(c.v[17][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
+    @memcpy(c.v[18][0..count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..count]);
+    const opcode: u32 = if (op == 1) 2 else if (op == 2) 1 else 3;
+    const translated = 0x0e000800 | (q << 30) | (size << 22) | (opcode << 12) | (18 << 16) | (17 << 5);
+    const low = simd.exec(c, translated | 16);
+    if (low != .next) return low;
+    const high = simd.exec(c, translated | (4 << 12) | 19);
+    if (high != .next) return high;
+    @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count], c.v[16][0..count]);
+    @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, m)))[0..count], c.v[19][0..count]);
+    return .next;
+}
+
 fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
     const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
     const n = (bits(w, 7, 1) << 4) | bits(w, 16, 4);
@@ -312,6 +333,7 @@ fn execArm(c: *Cpu, pc: u32) Status {
     const cc = w >> 28;
     c.pc = pc + 4;
     if (cc == 15) {
+        if (w & 0xffb30e10 == 0xf3b20000) return neonPermute(c, w, pc);
         if (w & 0xfe800000 == 0xf2000000 or w & 0xffb00010 == 0xf2b00000) return neonSame(c, w, pc);
         if (w & 0xff100000 == 0xf4000000) return neonStruct(c, w, pc);
         if (w & 0xfeb00010 == 0xf2800010) return neonImmediate(c, w, pc, (bits(w, 24, 1) << 7) | (bits(w, 16, 3) << 4) | bits(w, 0, 4));
@@ -917,17 +939,21 @@ fn execThumb(c: *Cpu, pc: u32) Status {
 
 inline fn execThumb32(c: *Cpu, h: u32, second: u32, pc: u32) ?Status {
     if (execThumb32Branches(c, h, second, pc)) |status| return status;
+    if (h & 0xffb3 == 0xffb2 and second & 0x0e10 == 0) {
+        c.pc = pc + 4;
+        return neonPermute(c, 0xf3000000 | ((h & 0xff) << 16) | second, pc);
+    }
     if (h & 0xef80 == 0xef00 or (h & 0xffb0 == 0xefb0 and second & 0x10 == 0)) {
         c.pc = pc + 4;
         return neonSame(c, 0xf2000000 | ((h & 0x1000) << 12) | ((h & 0xff) << 16) | second, pc);
     }
-        const cp = (second >> 8) & 15;
-        if (cp == 10 or cp == 11) {
-            if (vfp(c, h << 16 | second, pc -% 4)) |status| {
-                if (status != .fault) c.pc = pc + 4;
-                return status;
-            }
+    const cp = (second >> 8) & 15;
+    if (cp == 10 or cp == 11) {
+        if (vfp(c, h << 16 | second, pc -% 4)) |status| {
+            if (status != .fault) c.pc = pc + 4;
+            return status;
         }
+    }
     if (execThumb32Data(c, h, pc)) |status| return status;
     if (execThumb32Transfers(c, h, pc)) |status| return status;
     return execThumb32Late(c, h, pc);
