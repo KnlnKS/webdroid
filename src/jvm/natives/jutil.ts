@@ -1,7 +1,7 @@
 import { readStreamFully } from "./jio";
 import { jarray, mangleMethod, charsToString, dotName } from "../abi";
 import {
-  vcall, vcallOn, curThread, type JThread, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException,
+  vcall, vcallOn, callOn, curThread, type JThread, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException,
   mkCmp, fmtDouble, bitCount32, cmpFloat
 } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo } from "../runtime";
@@ -698,16 +698,22 @@ function ensureMapMutable(map: JMap): void {
   if (!map.mutable) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
 }
 async function slowFind(list: Ent[], k: unknown, hash?: number): Promise<number> {
-  hash ??= await jhash(k);
+  const thread = curThread;
+  if (hash === undefined) {
+    const value = jhash(k);
+    hash = value instanceof Promise ? await value : value;
+  }
   for (let i = 0; i < list.length; i++) {
     if (list[i].hash !== undefined && list[i].hash !== hash) continue;
-    const r = jeq(k, list[i].k);
+    const r = callOn(thread, () => jeq(k, list[i].k));
     if (r instanceof Promise ? await r : r) return i;
   }
   return -1;
 }
 async function putSlow(map: JMap, k: unknown, v: unknown, onlyAbsent: boolean): Promise<unknown> {
-  const hash = await jhash(k), index = await slowFind(map.slow, k, hash);
+  const thread = curThread, value = jhash(k);
+  const hash = value instanceof Promise ? await value : value;
+  const index = await callOn(thread, () => slowFind(map.slow, k, hash));
   if (index >= 0) {
     const entry = map.slow[index], old = entry.v;
     if (!onlyAbsent || old == null) entry.v = v;
@@ -891,14 +897,15 @@ async function addImmutableMapping(map: JImmutableMap, key: unknown, value: unkn
     if (map.m.has(bucket)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate key: " + String(key));
     map.m.set(bucket, { k: key, v: value });
   } else {
-    const hash = await jhash(key);
-    if (await slowFind(map.slow, key, hash) >= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate key: " + String(key));
+    const thread = curThread, result = jhash(key);
+    const hash = result instanceof Promise ? await result : result;
+    if (await callOn(thread, () => slowFind(map.slow, key, hash)) >= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate key: " + String(key));
     map.slow.push({ k: key, v: value, hash });
   }
 }
 async function immutableMap(entries: readonly (readonly [unknown, unknown])[]): Promise<JImmutableMap> {
-  const map = new JImmutableMap();
-  for (const [key, value] of entries) await addImmutableMapping(map, key, value);
+  const map = new JImmutableMap(), thread = curThread;
+  for (const [key, value] of entries) await callOn(thread, () => addImmutableMapping(map, key, value));
   return map;
 }
 rt.register({
@@ -1216,7 +1223,8 @@ function addToSet(s: JSet, v: unknown): number | Promise<number> {
     s.m.set(mk, { k: v, v: v });
     return 1;
   }
-  return after(jhash(v), hash => slowFind(s.slow, v, hash).then(i => i >= 0 ? 0 : (s.slow.push({ k: v, v, hash }), 1)));
+  const thread = curThread;
+  return after(jhash(v), hash => callOn(thread, () => slowFind(s.slow, v, hash)).then(i => i >= 0 ? 0 : (s.slow.push({ k: v, v, hash }), 1)));
 }
 rt.register({ name: "webdroid/BaseSet", ctor: JSet, typeVars: "E", ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: setMethods() });
 const setSerialization: Methods = {

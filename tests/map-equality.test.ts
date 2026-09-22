@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, curThread, setCurThread, type JThread } from "../src/jvm/natives/jlang";
 
 class Value extends JObj {
   constructor(readonly value: number) { super(); }
@@ -60,10 +60,10 @@ test("copy constructors do not share mutable mapping entries", async () => {
 });
 
 test("hash maps filter stored hashes before calling key equality", async () => {
-  class Key extends JObj { hash = 1; comparisons = 0; }
+  class Key extends JObj { hash = 1; comparisons = 0; comparedOn: JThread | null = null; }
   rt.register({ name: "test/HashFilteredKey", ctor: Key, methods: {
-    "hashCode()I": function (this: Key) { return this.hash; },
-    "equals(Ljava/lang/Object;)Z": function (this: Key) { this.comparisons++; return 1; },
+    "hashCode()I": async function (this: Key) { await Promise.resolve(); return this.hash; },
+    "equals(Ljava/lang/Object;)Z": function (this: Key) { this.comparedOn = curThread; this.comparisons++; return 1; },
   } });
   rt.link("test/HashFilteredKey");
   const a = new Key(), b = new Key(); b.hash = 2;
@@ -75,6 +75,12 @@ test("hash maps filter stored hashes before calling key equality", async () => {
   a.hash = 3;
   expect(await vcall(target, "get", `(${O})${O}`, a)).toBeNull();
   const lookup = new Key();
-  expect(await vcall(target, "get", `(${O})${O}`, lookup)).toBe("first");
+  const original = curThread, worker = await newObj("java/lang/Thread");
+  let result: Promise<unknown>;
+  setCurThread(worker);
+  try { result = vcall(target, "get", `(${O})${O}`, lookup); }
+  finally { setCurThread(original); }
+  expect(await result).toBe("first");
   expect(lookup.comparisons).toBe(1);
+  expect(lookup.comparedOn).toBe(worker);
 });
