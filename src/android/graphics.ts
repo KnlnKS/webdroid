@@ -548,7 +548,7 @@ const paintMethods: NativeSpec["methods"] = {
   "getFontMetricsInt(Landroid/graphics/Paint$FontMetricsInt;)I": function (this: JPaint, fm: JFontMetricsInt | null) {
     return fillFontMetrics(this, fm, true);
   },
-  "getFontSpacing()F": function (this: JPaint) { return this.textSize * 1.17; },
+  "getFontSpacing()F": function (this: JPaint) { return fontDescent(this) - fontAscent(this); },
   "ascent()F": function (this: JPaint) { return fontAscent(this); },
   "descent()F": function (this: JPaint) { return fontDescent(this); },
   "getTextWidths(Ljava/lang/String;[F)I": function (this: JPaint, s: string, w: Float32Array) {
@@ -677,19 +677,13 @@ export function measureText(p: JPaint, s: string): number {
   perf.measureText++;
   return Math.fround(rawWidth(p.font(), s, p.language) + p.letterSpacingEm * p.textSize * s.length);
 }
-/**
- * The device font's vertical metrics, in em units: AOSP's Roboto build reports hhea
- * ascender/descender 1900/-500 as Paint ascent/descent and the OS/2 win metrics 2146/555 as
- * top/bottom, so a line is 1.172em. The Roboto we ship (the Google Fonts build) carries
- * 2146/-555 in hhea too, so the browser's fontBoundingBox is Android's top/bottom — every line
- * came out 12.5% too tall, and auto-sizing text (measure, overflow, shrink, repeat) converged
- * on the wrong size. main.ts applies these as ascent/descent-override on the loaded faces.
- */
-export const SYSTEM_FONT = { ascent: 1900 / 2048, descent: 500 / 2048, top: 2146 / 2048, bottom: 555 / 2048 };
+/** Android Paint retains fractional hhea ascent/descent and uses head.yMax/yMin for bounds.
+ * Browser bounding-box metrics round to pixels even with FontFace metric overrides. */
+export const SYSTEM_FONT = { ascent: 1900 / 2048, descent: 500 / 2048, top: 2163 / 2048, bottom: 555 / 2048 };
 type FontMetrics = typeof SYSTEM_FONT;
 /** Per CSS family, the metrics AOSP would report for it; anything unregistered is the device
  *  font's. fonts.ts fills this in as it registers a face out of an app's own resources. */
-const familyMetrics = new Map<string, FontMetrics>();
+const familyMetrics = new Map<string, FontMetrics>(SYSTEM_FONTS.map(([family]): [string, FontMetrics] => [family, SYSTEM_FONT]));
 export function setFamilyMetrics(family: string, m: FontMetrics) { familyMetrics.set(family, m); }
 /** the metrics of the first family in a paint's CSS stack — the one the browser will pick */
 function metricsOf(p: JPaint): FontMetrics | undefined {
@@ -718,8 +712,8 @@ function vmetrics(p: JPaint): { a: number; d: number } {
 }
 export function fontAscent(p: JPaint): number { return vmetrics(p).a; }
 export function fontDescent(p: JPaint): number { return vmetrics(p).d; }
-export function fontTop(p: JPaint): number { const m = metricsOf(p) ?? SYSTEM_FONT; return vmetrics(p).a * (m.top / m.ascent); }
-export function fontBottom(p: JPaint): number { const m = metricsOf(p) ?? SYSTEM_FONT; return vmetrics(p).d * (m.bottom / m.descent); }
+export function fontTop(p: JPaint): number { const m = metricsOf(p) ?? SYSTEM_FONT; return Math.fround(vmetrics(p).a * (m.top / m.ascent)); }
+export function fontBottom(p: JPaint): number { const m = metricsOf(p) ?? SYSTEM_FONT; return Math.fround(vmetrics(p).d * (m.bottom / m.descent)); }
 export function fillFontMetrics(p: JPaint, fm: { top: number; ascent: number; descent: number; bottom: number; leading: number } | null, int: boolean) {
   const a = fontAscent(p), d = fontDescent(p);
   const ascent = int ? Math.round(a) : a, descent = int ? Math.round(d) : d;

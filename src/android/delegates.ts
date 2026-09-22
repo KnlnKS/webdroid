@@ -319,16 +319,8 @@ delegate("android/graphics/Paint", {
   "nGetUnderlineThickness(J)F": (h: bigint) => paint(h).textSize * 0.06,
   "nGetStrikeThruPosition(J)F": (h: bigint) => -paint(h).textSize * 0.28,
   "nGetStrikeThruThickness(J)F": (h: bigint) => paint(h).textSize * 0.06,
-  "nGetFontMetrics(JLandroid/graphics/Paint$FontMetrics;Z)F": (h: bigint, fm: Metrics) => {
-    const p = paint(h);
-    fillFontMetrics(p, fm, false);
-    return fontDescent(p) - fontAscent(p);
-  },
-  "nGetFontMetricsInt(JLandroid/graphics/Paint$FontMetricsInt;Z)I": (h: bigint, fm: Metrics) => {
-    const p = paint(h);
-    fillFontMetrics(p, fm, true);
-    return Math.round(fontDescent(p) - fontAscent(p));
-  },
+  "nGetFontMetrics(JLandroid/graphics/Paint$FontMetrics;Z)F": (h: bigint, fm: Metrics) => fillFontMetrics(paint(h), fm, false),
+  "nGetFontMetricsInt(JLandroid/graphics/Paint$FontMetricsInt;Z)I": (h: bigint, fm: Metrics) => fillFontMetrics(paint(h), fm, true),
   // the per-run forms answer for one text run; with one font for everything, the run does
   // not change the answer, so they are the whole-paint metrics
   "nGetFontMetricsIntForText(J[CIIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, _c: Uint16Array, _a: number, _b: number, _d: number, _e: number, _f: number, fm: Metrics) => fillFontMetrics(paint(h), fm, true),

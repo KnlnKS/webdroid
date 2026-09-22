@@ -5755,3 +5755,47 @@ server/check-out was removed after its comparison; both its results and the firs
 available. The main full-Chrome session and private AVD remain open, and the comparison gallery
 shows the final country-sheet capture and isolated font raster evidence. Full authenticated
 operation and complete visual parity remain unfinished.
+
+### Android emoji fallback and fractional Paint metrics
+
+At `6d0815b7`, browser Paint uses the Android emoji fallback rather than the host platform's
+emoji. The API 33 AVD uses separate general COLRv1 and bitmap flag fonts. The retained AOSP
+files match the AVD SHA-256 hashes byte-for-byte; provenance, versions and licensing are in
+vendor/fonts/NotoEmoji-README.md. Their combined 3,616,936 bytes replace the 4,991,984-byte
+newer Noto font. This intentionally follows API 33 coverage rather than the newer Unicode
+coverage of the preceding asset. Both browser Canvas and native Skia use this pair.
+
+The browser loads the fonts before app layout to avoid caching host-fallback widths. An
+unloaded face measured the country flag at 48px wide, versus about 59.89px with Android's flag
+font. Same-origin child processes share the loaded system FontFace objects, avoiding duplicate
+font loading while preserving separate Java realms. The actual credential-provider process
+reports all six loaded system faces. The first country flag's isolated crop becomes
+pixel-identical to the AVD. Country row spacing and Latin ink weight remain separate issues.
+
+The emoji candidate passes typecheck, the owning font assertions and all 24 ChatGPT steps in
+122.0 seconds. All 96 process inspections succeed, with only the three known SLF4J messages,
+no rendering errors, settling limits or required natives. The last full regression gate above
+predates this font change. Startup must now load the emoji bytes before layout; local startup
+probes do not establish the effect on slow connections. Evidence: system-emoji-actual/,
+system-emoji-summary.json, emoji-child-country.log and font-probe/ under the ChatGPT scratch tree.
+
+A separate API 33 Paint oracle establishes fractional metrics at 48px: ascent -44.53125,
+descent 11.71875, top -50.6953125, bottom 13.0078125 and font spacing 56.25. Browser Canvas
+bounding-box metrics round ascent/descent to pixels, so system families now use the known
+Android font metrics directly. Top uses head.yMax rather than the OS/2 win-ascent value.
+The native delegate shares fillFontMetrics's return value: integer metrics return 57, the
+difference of separately rounded ascent/descent, rather than 56 from rounding float spacing.
+A single native-oracle unit case covers this boundary. Full Chrome matches these float and
+integer fields. The integer field bounds stay unchanged at this size; this metric repair
+alone does not remove the country's two-pixel-per-row drift. Native oracle output and the
+browser comparison are retained as font-probe/native-paint-metrics-final.log and
+font-probe/paint-metrics-final.json.
+
+The fractional-metrics candidate passes typecheck, three owning font tests (14 assertions),
+36 broader owning text/layout tests, and eight runnable framework exercises with the Paint
+cut (86/87 declared natives supported; the text-measure exercise still requires a browser).
+ChatGPT completes 24/24 in 124.4 seconds, with 96 successful process inspections, only the
+three known SLF4J messages and no rendering errors, settling limits or required natives.
+The standalone font test now links its own natives rather than relying on another test's
+initialization. Evidence: fractional-font-actual/, fractional-font-summary.json,
+e2e-fractional-fonts.log and fractional-final-{font-tests,fwtest,typecheck}.log.
