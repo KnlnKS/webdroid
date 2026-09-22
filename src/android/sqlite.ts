@@ -4,7 +4,7 @@ import { JMap } from "../jvm/natives/jutil";
 import initSqlJs, { type Database, type Statement } from "sql.js";
 import { charsToString, i8, u8 } from "../jvm/abi";
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
-import { vcall, boxInt, box, JLong, JBool } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, curThread, type JThread, boxInt, box, JLong, JBool } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { JBundle } from "./os";
 
@@ -153,7 +153,7 @@ export async function openDatabase(path: string, flags = 0x10000000): Promise<JS
   if (!path) throw rt.mkThrowable("java/lang/IllegalArgumentException", "path must not be empty");
   const readOnly = (flags & 1) !== 0;
   const sql = await ensureSql();
-  let jdb = dbCache.get(path);
+  let jdb = path === ":memory:" ? undefined : dbCache.get(path);
   if (readOnly) {
     const writer = await openDatabase(path, flags & ~1 & ~0x10000000);
     const cached = readOnlyCache.get(path);
@@ -185,7 +185,7 @@ export async function openDatabase(path: string, flags = 0x10000000): Promise<JS
     file.transactions.add(() => connection.txDepth > 0);
   }
   jdb.db.exec("PRAGMA user_version");
-  dbCache.set(path, jdb);
+  if (path !== ":memory:") dbCache.set(path, jdb);
   return jdb;
 }
 
@@ -319,7 +319,7 @@ const cursorMethods: NativeSpec["methods"] = {
   "getExtras()Landroid/os/Bundle;": () => new JBundle(),
   "respond(Landroid/os/Bundle;)Landroid/os/Bundle;": () => new JBundle(),
 };
-rt.markers("android/database/Cursor");
+rt.register({ name: "android/database/Cursor", ctor: class extends JObj {}, ifaces: ["java/io/Closeable"] });
 // CharArrayBuffer: the caller's reusable char[] a text column is copied into, grown when it is short
 class JCharArrayBuffer extends JObj { data: Uint16Array = new Uint16Array(0); sizeCopied = 0; }
 rt.register({
@@ -336,7 +336,7 @@ cursorMethods["copyStringToBuffer(ILandroid/database/CharArrayBuffer;)V"] = asyn
   for (let k = 0; k < text.length; k++) buffer.data[k] = text.charCodeAt(k);
   buffer.sizeCopied = text.length;
 };
-rt.register({ name: "webdroid/Cursor", ctor: JCursor, ifaces: ["android/database/Cursor", "java/io/Closeable"], methods: cursorMethods });
+rt.register({ name: "webdroid/Cursor", ctor: JCursor, ifaces: ["android/database/Cursor"], methods: cursorMethods });
 class JRowBuilder extends JObj { cursor!: JCursor; row!: unknown[]; index = 0; }
 rt.register({ name: "android/database/MatrixCursor$RowBuilder", ctor: JRowBuilder, methods: {
   "add(Ljava/lang/Object;)Landroid/database/MatrixCursor$RowBuilder;": function (this: JRowBuilder, value: unknown) {
@@ -348,7 +348,7 @@ rt.register({ name: "android/database/MatrixCursor$RowBuilder", ctor: JRowBuilde
     return this;
   },
 } });
-rt.register({ name: "android/database/MatrixCursor", ctor: class extends JCursor {}, ifaces: ["android/database/Cursor", "java/io/Closeable"], methods: {
+rt.register({ name: "android/database/MatrixCursor", ctor: class extends JCursor {}, ifaces: ["android/database/Cursor"], methods: {
   ...cursorMethods,
   "<init>([Ljava/lang/String;)V": function (this: JCursor, cols: string[]) { this.cols = cols; },
   "<init>([Ljava/lang/String;I)V": function (this: JCursor, cols: string[]) { this.cols = cols; },
@@ -416,6 +416,7 @@ function unbox(v: unknown): unknown {
 }
 
 const dbMethods: NonNullable<NativeSpec["methods"]> = {
+  "static create(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;)Landroid/database/sqlite/SQLiteDatabase;": () => openDatabase(":memory:"),
   "static openDatabase(Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)Landroid/database/sqlite/SQLiteDatabase;":
     async (path: string, _factory: unknown, flags: number) => openDatabase(path, flags),
   "static openDatabase(Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;ILandroid/database/DatabaseErrorHandler;)Landroid/database/sqlite/SQLiteDatabase;":
@@ -567,7 +568,7 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     st.sql = sql;
     return st;
   },
-  ...noops("setMaxSqlCacheSize(I)V", "disableWriteAheadLogging()V", "setLocale(Ljava/util/Locale;)V"),
+  ...noops("setMaxSqlCacheSize(I)V", "disableWriteAheadLogging()V", "setLocale(Ljava/util/Locale;)V", "setLockingEnabled(Z)V"),
   ...stubs(0, "isWriteAheadLoggingEnabled()Z", "isDbLockedByCurrentThread()Z", "enableWriteAheadLogging()Z",
     "yieldIfContendedSafely()Z", "static releaseMemory()I"),
 };
@@ -707,7 +708,7 @@ class JSQLiteOpenHelper extends JObj {
   name: string | null = null;
   version = 1;
   jdb: JSQLiteDatabase | null = null;
-  opening = false;
+  opening: { thread: JThread; ready: Promise<JSQLiteDatabase> } | null = null;
 }
 rt.register({
   name: "android/database/sqlite/SQLiteOpenHelper", ctor: JSQLiteOpenHelper,
@@ -738,27 +739,36 @@ rt.register({
       "onConfigure(Landroid/database/sqlite/SQLiteDatabase;)V", "setWriteAheadLoggingEnabled(Z)V"),
   },
 });
-async function openHelperDb(h: JSQLiteOpenHelper): Promise<JSQLiteDatabase> {
-  if (h.jdb) return h.jdb;
+function openHelperDb(h: JSQLiteOpenHelper): Promise<JSQLiteDatabase> {
+  if (h.jdb?.open) return Promise.resolve(h.jdb);
+  if (h.opening) {
+    if (h.opening.thread === curThread) throw rt.mkThrowable("java/lang/IllegalStateException", "getDatabase called recursively");
+    return h.opening.ready;
+  }
+  const thread = curThread, ready = initializeHelperDb(h, thread).finally(() => { h.opening = null; });
+  h.opening = { thread, ready };
+  return ready;
+}
+async function initializeHelperDb(h: JSQLiteOpenHelper, thread: JThread): Promise<JSQLiteDatabase> {
   const pkg = h.jctx?.$host?.pkg ?? "app";
   const path = h.name ? dbPath(pkg, h.name) : ":memory:";
   const jdb = await openDatabase(path);
-  h.jdb = jdb;
-  await vcall(h, "onConfigure", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
+  await vcallOn(thread, h, "onConfigure", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
   const cur = callSelf(dbMethods, "getVersion()I", jdb) as number;
   if (cur !== h.version) {
-    callSelf(dbMethods, "beginTransaction()V", jdb);
+    await callOn(thread, () => callSelf(dbMethods, "beginTransaction()V", jdb));
     try {
-      if (cur === 0) await vcall(h, "onCreate", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
-      else if (cur < h.version) await vcall(h, "onUpgrade", "(Landroid/database/sqlite/SQLiteDatabase;II)V", jdb, cur, h.version);
-      else await vcall(h, "onDowngrade", "(Landroid/database/sqlite/SQLiteDatabase;II)V", jdb, cur, h.version);
+      if (cur === 0) await vcallOn(thread, h, "onCreate", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
+      else if (cur < h.version) await vcallOn(thread, h, "onUpgrade", "(Landroid/database/sqlite/SQLiteDatabase;II)V", jdb, cur, h.version);
+      else await vcallOn(thread, h, "onDowngrade", "(Landroid/database/sqlite/SQLiteDatabase;II)V", jdb, cur, h.version);
       callSelf(dbMethods, "setVersion(I)V", jdb, h.version);
       callSelf(dbMethods, "setTransactionSuccessful()V", jdb);
     } finally {
-      callSelf(dbMethods, "endTransaction()V", jdb);
+      await callOn(thread, () => callSelf(dbMethods, "endTransaction()V", jdb));
     }
   }
-  await vcall(h, "onOpen", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
+  await vcallOn(thread, h, "onOpen", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
+  h.jdb = jdb;
   return jdb;
 }
 rt.markers("android/database/DatabaseErrorHandler");
