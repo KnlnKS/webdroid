@@ -1100,6 +1100,7 @@ rt.register({
     "static highestOneBit(I)I": (v: number) => (v === 0 ? 0 : 1 << (31 - Math.clz32(v))),
     "static reverse(I)I": rev32,
     "static rotateLeft(II)I": (v: number, n: number) => ((v << n) | (v >>> (32 - n))) | 0,
+    "static rotateRight(II)I": (v: number, n: number) => (v >>> n) | (v << -n),
     "static hashCode(I)I": (v: number) => v,
     "static signum(I)I": (v: number) => Math.sign(v),
   },
