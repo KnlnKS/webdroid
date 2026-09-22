@@ -334,13 +334,16 @@ fn neonLong(c: *Cpu, w: u32, pc: u32) Status {
     const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
     const n = (bits(w, 7, 1) << 4) | bits(w, 16, 4);
     const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
-    if (size == 3 or d & 1 != 0) return fault(c, .undefined, w, pc);
-    if (op != 8 and op != 10 and op != 12) return fault(c, .unimplemented, w, pc);
-    @memcpy(&c.v[16], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..16]);
-    @memcpy(c.v[17][0..8], @as([*]u8, @ptrCast(vreg(u64, c, n)))[0..8]);
-    @memcpy(c.v[18][0..8], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..8]);
+    const narrow = op == 4 or op == 6;
+    if (size == 3 or (if (narrow) (n | m) else d) & 1 != 0) return fault(c, .undefined, w, pc);
+    if (!narrow and op != 8 and op != 10 and op != 12) return fault(c, .unimplemented, w, pc);
+    const count: usize = if (narrow) 8 else 16;
+    const read_count: usize = if (narrow) 16 else 8;
+    @memcpy(c.v[16][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
+    @memcpy(c.v[17][0..read_count], @as([*]u8, @ptrCast(vreg(u64, c, n)))[0..read_count]);
+    @memcpy(c.v[18][0..read_count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..read_count]);
     const result = simd.exec(c, 0x0e200000 | (bits(w, 24, 1) << 29) | (size << 22) | (op << 12) | (18 << 16) | (17 << 5) | 16);
-    if (result == .next) @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..16], &c.v[16]);
+    if (result == .next) @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count], c.v[16][0..count]);
     return result;
 }
 

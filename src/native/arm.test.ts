@@ -567,6 +567,23 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(8, 12))).toEqual([0xfffeff00 | 0, 0x00030004, 0, 0]);
     }
   });
+  test("NEON high narrowing arithmetic wraps before optional rounding", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([0x00ff7fff, -1, 0, 0x01008000], 40);
+      cpu.si.set([0x00010001, 0x00010001, -1, 0x7fff8000], 36);
+      cpu.si.set([0, 0x7fffffff, -1, 0x00018000, 1, -1, 0, 0], 8);
+      cpu.si.set([-1, -1, 0x7fffffff, 4, 1, 0, 0, 0], 16);
+    };
+    for (const execute of [
+      () => run([0xf2c434a2, 0xf3941606, 0xf3a8340a, BXLR], setup),
+      () => runThumb([0xefc4, 0x34a2, 0xff94, 0x1606, 0xffa8, 0x340a, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(38, 40))).toEqual([0x00000180, 0x8000ffff | 0]);
+      expect(Array.from(c.si.slice(2, 4))).toEqual([0x80000000 | 0, 0x00020000]);
+      expect(Array.from(c.si.slice(6, 8))).toEqual([0, 4]);
+    }
+  });
   test("NEON float/integer conversions round and saturate at lane bounds", () => {
     const setup = (cpu: Cpu) => {
       cpu.si.set([-1, 2147483647, -2147483648, 16777217], 60);
