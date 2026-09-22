@@ -304,12 +304,18 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   // one Window per dialog, its callback the dialog itself (AOSP's ctor does w.setCallback(this)):
   // appcompat wraps that callback and rejects a null one
   "getWindow()Landroid/view/Window;": function (this: JDialog) {
+    const root = this.ensureRoot();
     if (!this.win) {
       this.win = new (rt.link("android/view/Window").ctor as new () => JWindow)();
       this.win.callbackObj = this;
       this.win.dialog = this;
+      if (root.jres && root.theme && !rvInt(root.jres, root.theme.lookup(AID("windowIsFloating")), 0)) {
+        this.win.flags |= 0x10100; // PhoneWindow: LAYOUT_IN_SCREEN | LAYOUT_INSET_DECOR.
+        this.win.fitInsetsSides = this.win.fitInsetsTypes = 0;
+        this.win.layoutW = this.win.layoutH = -1;
+      }
     }
-    this.win.decor = this.ensureRoot();
+    this.win.decor = root;
     this.win.decor.windowOwner = this.win;
     return this.win;
   },
