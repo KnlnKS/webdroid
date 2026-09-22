@@ -9,9 +9,9 @@ XAPK compilation and all eight runnable framework exercises pass. The final 159-
 completes with no wedge or action failure. Starting-revision visual and performance comparisons
 find no reproduced regression. Player ID/backend parity and later unlocked features remain
 unvalidated; this is verified early gameplay, not a complete parity claim.
-Post-matrix profiling found expensive interpreted Thumb arithmetic. Its shared ARM JIT
-lowering passes owning checks and is under fresh gameplay validation; the full matrix must
-be rerun if this additional optimization is retained.
+Post-matrix profiling found expensive interpreted Thumb arithmetic and indexed memory operations.
+Their shared JIT lowering passes owning checks; arithmetic also completes a fresh puzzle.
+The combined candidate needs fresh gameplay validation and a new final regression matrix.
 
 - Run the unchanged 4.2.1 XAPK in full Chrome and an AVD at matching geometry.
 - Capture startup, menus, gameplay, pause/resume and saved progression in both.

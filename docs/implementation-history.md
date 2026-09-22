@@ -116,6 +116,12 @@ identical results; this is not an app-speed claim. Fresh normal-JIT Chrome resto
 by the 230-second capture, and a rope swipe completes its first puzzle without a native or
 rendering fault. The first 15-second game sample remains about 0.72 GL FPS. A new full matrix
 is required after the performance candidate is frozen.
+The same worker's register-indexed byte/halfword/word accesses now share the existing immediate-
+transfer emitter, including signed loads and executable-memory invalidation. Writeback and PC
+forms retain interpreter handling. Rebuilding before the tests passes 73 ARM checks / 817
+assertions and typecheck. The focused four-transfer loop gives identical outputs and measures
+55–104 ms on the old path versus about 1.6 ms warm on the new one; host contention remains.
+Fresh combined app validation follows. No additional test file or app-specific shortcut is added.
 
 Earlier investigation entries follow; their open questions describe the revision at that time.
 

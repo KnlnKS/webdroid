@@ -671,14 +671,17 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                 }
             }
         }
-        if (h & 0xfe80 == 0xf880 and bits(h, 5, 2) < 3) {
+        if (h & 0xfe00 == 0xf800 and bits(h, 5, 2) < 3) {
             const n = h & 15;
             const d = h2 >> 12;
             const size = bits(h, 5, 2);
             const signed = h & 0x100 != 0;
             const reading = h & 0x10 != 0;
-            if (n < 15 and d < 15 and (!signed or (reading and size < 2))) {
-                b.emit(.{ get(L_X + n), c32(@intCast(h2 & 0xfff)), O.i32_add, set(L_A) });
+            const immOffset = h & 0x80 != 0;
+            if (n < 15 and d < 15 and (!signed or (reading and size < 2)) and (immOffset or (h2 & 0xfc0 == 0 and h2 & 15 < 15))) {
+                b.get(L_X + n);
+                if (immOffset) b.i32c(@intCast(h2 & 0xfff)) else b.emit(.{ get(L_X + (h2 & 15)), c32(@intCast(bits(h2, 4, 2))), O.i32_shl });
+                b.emit(.{ O.i32_add, set(L_A) });
                 if (reading) {
                     load(e, ([_]u8{ O.i32_load8_u, O.i32_load16_u, O.i32_load })[size] - @as(u8, if (signed) 1 else 0), 0);
                     setR(e, d);
