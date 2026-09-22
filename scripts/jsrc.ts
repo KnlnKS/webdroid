@@ -9,6 +9,9 @@ import "../src/jvm/natives/jlogging";
 import "../src/jvm/natives/jtimer";
 import "../src/jvm/natives/jstream";
 import "../src/jvm/natives/jio";
+import "../src/jvm/natives/jatomic";
+import "../src/jvm/natives/jblockingqueue";
+import "../src/jvm/natives/jsync";
 import "../src/jvm/natives/jconc";
 import { compileClassSource } from "../src/jvm/compiler";
 
