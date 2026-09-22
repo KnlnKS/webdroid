@@ -1070,6 +1070,15 @@ describe("thumb decoder", () => {
       0x4770,
     ], (cpu) => { cpu.w[0] = 0x80ffaa55; cpu.w[2] = 10; });
     expect([c.w[20], c.w[22], c.w[24], c.w[18]]).toEqual([0xaa55, -86, 265, -118]);
+    const setup = (cpu: Cpu) => { cpu.w[0] = 0x80ffaa55; cpu.w[2] = 0x0000ffff; cpu.cpsr = 0xa8000000; };
+    for (const execute of [
+      () => run([0xe6cf2070, 0xe68f3470, 0xe6c14070, 0xe6815470, BXLR], setup),
+      () => runThumb([0xfa3f, 0xf280, 0xfa2f, 0xf390, 0xfa31, 0xf480, 0xfa21, 0xf590, 0x4770], setup),
+    ]) {
+      const pair = execute();
+      expect([pair.w[4], pair.w[6], pair.w[8], pair.w[10]]).toEqual([0x00ff0055, 0xff80ffaa | 0, 0x00ff0054, 0xff80ffa9 | 0]);
+      expect(pair.cpsr).toBe(0xa8000000);
+    }
   });
   test("signed halfword multiply-accumulate wraps and sets sticky Q", () => {
     const setup = (cpu: Cpu) => {

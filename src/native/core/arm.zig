@@ -429,6 +429,12 @@ fn multiplyHigh(n: u32, m: u32, accumulator: u32, subtract: bool, round: bool) u
     return @truncate(result >> 32);
 }
 
+fn extendBytePair(value: u32, base: u32, signed: bool) u32 {
+    const low = if (signed) sxb(value) else value & 255;
+    const high = if (signed) sxb(value >> 16) else (value >> 16) & 255;
+    return ((base +% low) & 0xffff) | (((base >> 16) +% high) << 16);
+}
+
 fn extractField(value: u32, lsb: u32, width: u32, signed: bool) u32 {
     const shifted = value << @intCast(32 - lsb - width);
     const amount: u5 = @intCast(32 - width);
@@ -820,8 +826,7 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
             11 => add +% sxh(rotated),
             14 => add +% (rotated & 255),
             15 => add +% (rotated & 65535),
-            8 => (sxb(rotated) & 0xffff) | (sxb(rotated >> 16) << 16),
-            12 => rotated & 0xff00ff,
+            8, 12 => extendBytePair(rotated, add, op1 == 8),
             else => return fault(c, .unimplemented, w, pc),
         };
         set(c, rd, v);
@@ -1191,11 +1196,17 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
     if ((h & 0xff80) == 0xfa00) {
         const h2: u32 = ld(u16, pc + 2);
         const extend = (h >> 4) & 7;
-        if (h2 & 0xf0c0 == 0xf080 and (extend == 0 or extend == 1 or extend == 4 or extend == 5)) {
+        if (h2 & 0xf0c0 == 0xf080 and extend <= 5) {
             const value = std.math.rotr(u32, r(c, h2 & 15), bits(h2, 4, 2) * 8);
-            const part = switch (extend) { 0 => sxh(value), 1 => value & 65535, 4 => sxb(value), else => value & 255 };
             const base = if (h & 15 == 15) 0 else r(c, h & 15);
-            set(c, (h2 >> 8) & 15, base +% part);
+            const result = switch (extend) {
+                0 => base +% sxh(value),
+                1 => base +% (value & 65535),
+                2, 3 => extendBytePair(value, base, extend == 2),
+                4 => base +% sxb(value),
+                else => base +% (value & 255),
+            };
+            set(c, (h2 >> 8) & 15, result);
             c.pc = pc + 4;
             return .next;
         }
