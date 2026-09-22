@@ -120,7 +120,20 @@ async function probe() {
     ellipsis: await vcall(mixedLayout, "getEllipsisCount", "(I)I", 0),
     span: [mixedLayout.replacements[0].start, mixedLayout.replacements[0].end], original: mixedText.text,
     same: mixedLayout === mixed.layout, pixels: mixedCanvas.getImageData(0, 0, 80, 60).data.every((v, i) => v === directPixels[i]) };
-  return { ...result, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
+  const selectionView = rt.make("android/widget/TextView");
+  await vcall(selectionView, "setText", "(Ljava/lang/CharSequence;)V", "ab\ncd");
+  await vcall(selectionView, "onMeasure", "(II)V", makeSpec(100, MS_EXACTLY), makeSpec(100, MS_EXACTLY));
+  const selectedLayout = await vcall(selectionView, "getLayout", "()Landroid/text/Layout;");
+  const path = await newObj("android/graphics/Path");
+  await vcall(selectedLayout, "getSelectionPath", "(IILandroid/graphics/Path;)V", 4, 1, path);
+  const selection = path.ops.map((op: number[]) => [op[1], op[3]]);
+  await vcall(selectedLayout, "getSelectionPath", "(IILandroid/graphics/Path;)V", 2, 2, path);
+  const emptySelection = path.ops.length;
+  const emptyCanvas = await newObj("android/graphics/Canvas", "()V"), otherCanvas = await newObj("android/graphics/Canvas", "()V");
+  await vcall(emptyCanvas, "save", "()I");
+  await vcall(emptyCanvas, "translate", "(FF)V", 4, 7);
+  const independentCanvas = otherCanvas.ctx.getTransform().isIdentity && emptyCanvas.ctx.getTransform().e === 4;
+  return { ...result, selection, emptySelection, independentCanvas, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
     fitting: (await view.measuredLines(measureText(view.paintT, view.text))).lines.map(l => l.text), cleared: (await view.measuredLines(width)).replacements.length === 0,
     compound: { drawsAt, retained, restored: surface.getTransform().isIdentity } };
 }

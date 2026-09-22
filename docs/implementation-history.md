@@ -5020,3 +5020,14 @@ rejected size. Three memory checks pass (81 assertions), and typecheck passes. A
 of 100,000 identical 64-byte copies, alternating the same trampoline's binding with Chrome closed,
 measured median 1.284 ms in-core versus 5.575 ms through the host, with correct bytes in every run
 and 0 versus 100,000 host exits. This microbenchmark does not establish a comparable app FPS gain.
+
+Profile navigation reached Compose text-link selection and a bitmap-free Canvas. Layout now
+builds selection rectangles across its existing line geometry, including reversed and empty
+ranges; mixed bidi runs remain limited by the existing layout model. Canvas's default constructor
+was also overwritten by a no-op registration. It now initializes a private backing context, shared
+with the framework delegate's construction path; bitmap-free canvases no longer share transforms.
+A zero-size browser canvas discards transform state, so the detached backing remains 1×1 while
+Android-visible dimensions stay zero. The owning browser check passes (23 assertions), including
+multiline selection and independent Canvas transforms; typecheck passes. Fresh full Chrome now
+renders the login modal's title, account options and legal links with zero layout/draw errors,
+where the prior capture showed only a blank sheet. Authentication itself is not exercised.

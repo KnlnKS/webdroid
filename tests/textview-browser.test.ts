@@ -29,6 +29,13 @@ test("TextView measures and paints replacement spans with cached geometry and re
     expect(result.combined.line).toEndWith("…");
     expect(result.combined.width).toBeLessThanOrEqual(80);
     expect(result.combined.ellipsis).toBeGreaterThan(0);
+    expect(result.selection).toHaveLength(2);
+    expect(result.selection[0][0]).toBeGreaterThan(0);
+    expect(result.selection[0][1]).toBe(100);
+    expect(result.selection[1][0]).toBe(0);
+    expect(result.selection[1][1]).toBeGreaterThan(0);
+    expect(result.emptySelection).toBe(0);
+    expect(result.independentCanvas).toBe(true);
     expect(errors).toEqual([]);
   } finally { await browser.close(); }
 }, 15000);

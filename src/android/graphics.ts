@@ -1698,6 +1698,7 @@ function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m:
  *  delegates (src/android/delegates.ts) rather than a second copy of each. */
 export const canvasMethods: NativeSpec["methods"] = {
   "drawPaint(Landroid/graphics/Paint;)V": drawPaint,
+  "<init>()V": function (this: JCanvas) { setCanvasBitmap(this, null); },
   "<init>(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
   "getWidth()I": function (this: JCanvas) { return this.w; },
   "getHeight()I": function (this: JCanvas) { return this.h; },
@@ -1871,18 +1872,16 @@ export const canvasMethods: NativeSpec["methods"] = {
   "drawPicture(Landroid/graphics/Picture;)V": function (this: JCanvas, picture: JPicture) { drawPicture(this, picture); },
   "drawPicture(Landroid/graphics/Picture;Landroid/graphics/RectF;)V": function (this: JCanvas, picture: JPicture, dst: JRect) { drawPicture(this, picture, dst); },
   "drawPicture(Landroid/graphics/Picture;Landroid/graphics/Rect;)V": function (this: JCanvas, picture: JPicture, dst: JRect) { drawPicture(this, picture, dst); },
-  ...noops("<init>()V", "enableZ()V", "disableZ()V",
+  ...noops("enableZ()V", "disableZ()V",
     "setDrawFilter(Landroid/graphics/DrawFilter;)V"),
   ...stubs(1, "clipOutRect(FFFF)Z", "clipOutRect(IIII)Z", "clipOutRect(Landroid/graphics/Rect;)Z",
     "clipOutPath(Landroid/graphics/Path;)Z", "isHardwareAccelerated()Z"),
   ...stubs(0, "quickReject(FFFFLandroid/graphics/Canvas$EdgeType;)Z"),
   "setBitmap(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
 };
-/** AOSP: a canvas without a bitmap accepts and discards draws; one detached 1x1 surface takes them */
-let noBitmap: OffscreenCanvasRenderingContext2D | null = null;
-function setCanvasBitmap(cv: JCanvas, b: JBitmap | null) {
+export function setCanvasBitmap(cv: JCanvas, b: JBitmap | null) {
   if (b) { cv.ctx = b.ctx; cv.w = b.w; cv.h = b.h; cv.bmp = b; return; }
-  cv.ctx = noBitmap ??= new OffscreenCanvas(1, 1).getContext("2d")!;
+  cv.ctx = new OffscreenCanvas(1, 1).getContext("2d")!;
   cv.w = cv.h = 0; cv.bmp = null;
 }
 const drawColorKey = mangleMethod("drawColor", "(I)V");

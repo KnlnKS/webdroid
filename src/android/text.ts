@@ -17,6 +17,7 @@ import { JPersistableBundle, bundleBox } from "./os";
 import { JLocaleList, readLocaleList } from "./resnative";
 import type { JLocale } from "../jvm/natives/jvalues";
 import { csText as javaCsText } from "../jvm/natives/jchars";
+import type { JPath } from "./path";
 
 class JAnnotation extends JObj { key: string | null = null; value: string | null = null; }
 async function writeAnnotation(this: JAnnotation, parcel: JObj) {
@@ -1387,6 +1388,23 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getPrimaryHorizontal(I)F": primaryHorizontal,
   "getSecondaryHorizontal(I)F": primaryHorizontal,
+  "getSelectionPath(IILandroid/graphics/Path;)V": async function (this: JLayout, start: number, end: number, path: JPath) {
+    const thread = curThread;
+    await vcallOn(thread, path, "reset", "()V");
+    if (start === end) return;
+    if (start > end) [start, end] = [end, start];
+    const first = Number(await vcallOn(thread, this, "getLineForOffset", "(I)I", start));
+    const last = Number(await vcallOn(thread, this, "getLineForOffset", "(I)I", end));
+    const width = Number(await vcallOn(thread, this, "getWidth", "()I"));
+    for (let line = first; line <= last; line++) {
+      const rtl = await vcallOn(thread, this, "getParagraphDirection", "(I)I", line) === -1;
+      const left = line === first ? Number(await vcallOn(thread, this, "getPrimaryHorizontal", "(I)F", start)) : rtl ? width : 0;
+      const right = line === last ? Number(await vcallOn(thread, this, "getPrimaryHorizontal", "(I)F", end)) : rtl ? 0 : width;
+      const top = Number(await vcallOn(thread, this, "getLineTop", "(I)I", line));
+      const bottom = Number(await vcallOn(thread, this, "getLineBottom", "(I)I", line));
+      if (left !== right) path.add(["rect", Math.min(left, right), top, Math.max(left, right), bottom, 0]);
+    }
+  },
   "getOffsetForHorizontal(IF)I": function (this: JLayout, line: number, x: number) {
     const l = this.lines[Math.min(line, this.lines.length - 1)];
     if (!l) return 0;

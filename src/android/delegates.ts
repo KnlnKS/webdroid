@@ -18,7 +18,7 @@ import { handle, deref, replace, release } from "./handles";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
   fontAscent, fontDescent, fillFontMetrics, copyPaint, argbOfColorLong,
-  JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, extractBitmapAlpha, colorLongOfArgb, affineFromPoints, CAPS, JOINS,
+  JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, affineFromPoints, CAPS, JOINS,
 } from "./graphics";
 import { newObj } from "../jvm/natives/jlang";
 import { charsToString, floatToIntBits, i8, u8 } from "../jvm/abi";
@@ -681,7 +681,7 @@ delegate("android/graphics/BaseCanvas", {
 /** a Canvas over a bitmap's backing context, as Canvas(Bitmap) makes one */
 function bitmapCanvas(b: JBitmap | undefined): JCanvas {
   const c = new JCanvas();
-  if (b) { c.ctx = b.ctx; c.w = b.w; c.h = b.h; c.bmp = b; }
+  setCanvasBitmap(c, b ?? null);
   return c;
 }
 function doubleRoundRect(c: JCanvas, o: number[], orad: number[], i: number[], irad: number[], p: JPaint) {
