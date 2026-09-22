@@ -162,6 +162,19 @@ transfer side effects. The decoder suite passes 54 checks / 553 assertions, incl
 exclusive increment with carry and unchanged base. The temporary NEON advertisement remains
 uncommitted, and original-package gameplay is still unproven.
 
+Further unchanged Unity initialization reached NEON variable shifts, ZIP/UZP/TRN, scalar-lane
+float multiply/accumulate, lane broadcasts, reciprocal estimates/steps, zero comparisons,
+reversals, float comparison masks, narrowing, and signed/unsigned lane-to-core transfers.
+These use the shared SIMD/FP owners. A too-broad scalar decode initially intercepted VEXT;
+the mask was narrowed and the reached quad-register VEXT was added to the same core check.
+ARM32 reciprocal steps round their multiplication separately, unlike A64's fused step;
+the implementation follows ARM DDI 0406C.d A2.7, pages A2-84 through A2-88, including the
+zero/infinity special result and standard denormal handling. The source reference is
+[Arm's architecture manual](https://documentation-service.arm.com/static/5f8dc043f86e16515cdbbc92).
+The latest owning decoder run passes 58 checks / 627 assertions. Some startup reloads failed
+inside Unity's matrix initialization before nativeRender; the subsequent strlen(null) error
+was downstream of those instruction faults, not evidence for accepting null strings in libc.
+
 ## microG completion and open acceptance
 
 PLAN.md owns current status. Both Android and webdroid now
