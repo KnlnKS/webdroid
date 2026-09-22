@@ -1226,6 +1226,45 @@ export function greedyBreaks(text: string, p: JTextPaint, first: number, firstCo
   if (!out.length) out.push({ start: 0, end: 0, text: "", width: 0 });
   return out;
 }
+function balancedBreaks(text: string, paint: JTextPaint, width: number, maxLines: number): TLine[] {
+  const lines: TLine[] = [];
+  let offset = 0;
+  for (const paragraph of text.split("\n")) {
+    if (lines.length >= maxLines) break;
+    const greedy = greedyBreaks(paragraph, paint, width, 0, width);
+    let result = greedy;
+    if (greedy.length > 1) {
+      const words = new Set([...paragraph.matchAll(/ +/g)].map(m => m.index + m[0].length));
+      const ends = [...new Set([0, ...words, ...greedy.map(l => l.end), paragraph.length])].sort((a, b) => a - b);
+      const scores = new Float64Array(ends.length).fill(Infinity), previous = new Int32Array(ends.length);
+      scores[0] = 0;
+      // Minikin balances squared unused width, including the last line; emergency word
+      // splits have a much larger penalty than whitespace breaks.
+      for (let i = 1; i < ends.length; i++) {
+        const end = ends[i];
+        let visible = end;
+        while (visible > 0 && paragraph[visible - 1] === " ") visible--;
+        for (let j = i - 1; j >= 0; j--) {
+          const advance = measureText(paint, paragraph.slice(ends[j], visible));
+          if (advance > width && j < i - 1) break;
+          const penalty = end === paragraph.length || words.has(end) ? 0 : 1e10;
+          const score = scores[j] + (advance > width ? 1e12 : (width - advance) ** 2) + paint.textSize * width + penalty;
+          if (score <= scores[i]) { scores[i] = score; previous[i] = j; }
+        }
+      }
+      result = [];
+      for (let i = ends.length - 1; i > 0; i = previous[i]) {
+        const start = ends[previous[i]], end = ends[i], text = paragraph.slice(start, end).replace(/ +$/, "");
+        result.push({ start, end, text, width: measureText(paint, text) });
+      }
+      result.reverse();
+    }
+    for (const line of result.slice(0, maxLines - lines.length)) lines.push({ ...line, start: line.start + offset, end: line.end + offset });
+    if (offset + paragraph.length < text.length && lines.at(-1)?.end === offset + paragraph.length) lines[lines.length - 1].end++;
+    offset += paragraph.length + 1;
+  }
+  return lines;
+}
 export class JLayout extends JObj {
   text = "";
   /** the CharSequence the layout was built from, kept for its spans (LineHeightSpan) */
@@ -1233,6 +1272,7 @@ export class JLayout extends JObj {
   paint!: JTextPaint;
   width = 0;
   alignment: JSimpleEnum | null = null;
+  breakStrategy = 0;
   lineLeft(line: TLine): number {
     return this.alignment?.ord === 2 ? (this.width - line.width) / 2 : this.alignment?.ord === 1 ? this.width - line.width : 0;
   }
@@ -1258,7 +1298,7 @@ export class JLayout extends JObj {
       (start, end) => this.rangeWidth(start, end), (start, end) => {
         const span = this.replacements.find((s) => s.start < end && s.end > end);
         return span ? span.start > start ? span.start : span.end : end;
-      }) : greedyBreaks(this.text, p, this.width, 0, this.width, maxLines);
+      }) : this.breakStrategy === 2 ? balancedBreaks(this.text, p, this.width, maxLines) : greedyBreaks(this.text, p, this.width, 0, this.width, maxLines);
   }
   rangeWidth(start: number, end: number): number {
     return this.replacements.length ? replacementWidth(this.text, this.paint, this.replacements, start, end) : measureText(this.paint, this.text.slice(start, end));
@@ -1510,6 +1550,7 @@ rt.register({
 export class JStaticLayout extends JLayout {}
 class JSLBuilder extends JObj {
   cs: unknown = null; p!: JTextPaint; w = 0; alignment: JSimpleEnum | null = null;
+  breakStrategy = 0;
   smult = 1; sadd = 0; incl = true; maxLines = Number.MAX_SAFE_INTEGER;
 }
 const slSetter = (fn?: (b: JSLBuilder, ...a: never[]) => void) =>
@@ -1531,7 +1572,7 @@ rt.register({
     "setEllipsize(Landroid/text/TextUtils$TruncateAt;)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setEllipsizedWidth(I)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setMaxLines(I)Landroid/text/StaticLayout$Builder;": slSetter((b, v: number) => { b.maxLines = v > 0 ? v : b.maxLines; }),
-    "setBreakStrategy(I)Landroid/text/StaticLayout$Builder;": slSetter(),
+    "setBreakStrategy(I)Landroid/text/StaticLayout$Builder;": slSetter((b, strategy: number) => { b.breakStrategy = strategy; }),
     "setHyphenationFrequency(I)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setIndents([I[I)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setJustificationMode(I)Landroid/text/StaticLayout$Builder;": slSetter(),
@@ -1539,16 +1580,16 @@ rt.register({
     "setUseLineSpacingFromFallbacks(Z)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setLineBreakConfig(Landroid/graphics/text/LineBreakConfig;)Landroid/text/StaticLayout$Builder;": slSetter(),
     "build()Landroid/text/StaticLayout;": async function (this: JSLBuilder) {
-      const layout = await mkSpannedLayout(this.cs, this.p, this.w, this.smult, this.sadd, this.maxLines, this.incl);
+      const layout = await mkSpannedLayout(this.cs, this.p, this.w, this.smult, this.sadd, this.maxLines, this.incl, this.breakStrategy);
       layout.alignment = this.alignment; return layout;
     },
   },
 });
 rt.register({ name: "android/text/StaticLayout", ctor: JStaticLayout, sup: "android/text/Layout", methods: {} });
-export async function mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean): Promise<JLayout> {
+export async function mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy = 0): Promise<JLayout> {
   const l = new JStaticLayout();
   l.text = spannedString(cs); l.src = cs; l.paint = p; l.width = Math.max(0, w);
-  l.spacingMult = mult; l.spacingAdd = add; l.includePad = includePad;
+  l.spacingMult = mult; l.spacingAdd = add; l.includePad = includePad; l.breakStrategy = breakStrategy;
   const spans = replacementSpans(cs);
   if (spans.length) l.replacements = await measureReplacements(cs, p, spans);
   l.layoutLines(maxLines);

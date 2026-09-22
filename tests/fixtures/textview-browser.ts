@@ -3,7 +3,7 @@ import { rt } from "../../src/jvm/runtime";
 import { mangleMethod } from "../../src/jvm/abi";
 import { newObj, vcall } from "../../src/jvm/natives/jlang";
 import { JTextView } from "../../src/android/textview";
-import { JCanvas, measureText, type JPaint } from "../../src/android/graphics";
+import { JCanvas, measureText, typefaceFor, type JPaint } from "../../src/android/graphics";
 import { makeSpec, MS_EXACTLY, MS_AT_MOST, JViewGroup } from "../../src/android/view";
 
 async function probe() {
@@ -146,7 +146,14 @@ async function probe() {
   const caretCanvas = new OffscreenCanvas(100, 50).getContext("2d")!;
   await vcall(input, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(caretCanvas, 100, 50));
   const caretAtStart = caretCanvas.getImageData(2, 0, 1, 50).data.some((v, i) => i % 4 === 3 && v === 255);
-  return { ...result, selection, emptySelection, independentCanvas, checkBoxHeight, caretAtStart, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
+  const balancedText = "aaaaa bb cccc\nz";
+  const balancedPaint = await newObj("android/text/TextPaint"); balancedPaint.tf = typefaceFor("monospace", 0); balancedPaint.textSize = 20;
+  const builder = await vcall(rt.link("android/text/StaticLayout$Builder").ctor, "obtain", "(Ljava/lang/CharSequence;IILandroid/text/TextPaint;I)Landroid/text/StaticLayout$Builder;",
+    balancedText, 0, balancedText.length, balancedPaint, Math.ceil(measureText(balancedPaint, "aaaaa bb") + 1));
+  await vcall(builder, "setBreakStrategy", "(I)Landroid/text/StaticLayout$Builder;", 2);
+  const balancedLayout = await vcall(builder, "build", "()Landroid/text/StaticLayout;");
+  const balanced = balancedLayout.lines.map((l: {text: string; start: number; end: number}) => [l.text, l.start, l.end]);
+  return { ...result, balanced, selection, emptySelection, independentCanvas, checkBoxHeight, caretAtStart, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
     fitting: (await view.measuredLines(measureText(view.paintT, view.text))).lines.map(l => l.text), cleared: (await view.measuredLines(width)).replacements.length === 0,
     compound: { drawsAt, retained, restored: surface.getTransform().isIdentity } };
 }

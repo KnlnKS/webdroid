@@ -5211,3 +5211,12 @@ service owner. Locale region construction validates BCP 47 region syntax, normal
 and builds independent values. This removes the login-entry exception; account login itself
 is not yet validated. Typecheck and the two existing locale tests pass. No additional tests
 were needed for the service registration changes.
+
+The welcome title explicitly requests `StaticLayout.Builder.setBreakStrategy(2)`, confirmed
+by observing its real builder calls. Balanced text now minimizes squared unused line width,
+including the final line, with Minikin's line and emergency-break penalties. It preserves
+paragraph offsets and retains the existing greedy path for default layouts and replacement
+spans. This fixes “Welcome / to ChatGPT” against the private AVD capture. The existing browser
+text fixture now checks a balanced paragraph and its offsets; it passes. Hyphenation,
+language-specific break opportunities and balanced replacement spans remain unsupported.
+Source: https://android.googlesource.com/platform/frameworks/minikin/+/refs/heads/main/libs/minikin/OptimalLineBreaker.cpp
