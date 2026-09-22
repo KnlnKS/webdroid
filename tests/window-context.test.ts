@@ -8,6 +8,7 @@ import { getInflater } from "../src/android/inflate";
 import { JFrameLayout } from "../src/android/layouts";
 import { JWindow } from "../src/android/window";
 import { resolveSystemBars } from "../src/shell/systembars";
+import { device } from "../src/shell/config";
 import { uiState } from "../src/android/view";
 
 rt.linkNatives();
@@ -68,6 +69,7 @@ test("full-screen windows own their system bars and hiding restores the underlyi
   const underneath = activity.windowOwner = new JWindow(), above = dialog.windowOwner = new JWindow();
   underneath.decor = activity; above.decor = dialog;
   above.layoutW = above.layoutH = -1;
+  dialog.right = device.width; dialog.bottom = device.height;
   const overlays = [{ view: dialog, x: 0, y: 0, dismissOnOutside: false }];
   await vcall(underneath, "setStatusBarColor", "(I)V", 0xff112233);
   await vcall(underneath, "setNavigationBarColor", "(I)V", 0xff223344);
@@ -79,6 +81,14 @@ test("full-screen windows own their system bars and hiding restores the underlyi
   const bars = resolveSystemBars(activity, overlays);
   expect(bars.root).toBe(dialog);
   expect([bars.status, bars.navigation, bars.appearance, bars.visible & 3]).toEqual([0xffeeeeee, 0xffdddddd, 24, 2]);
+  above.layoutW = device.width; above.layoutH = device.height;
+  expect(resolveSystemBars(activity, overlays)).toEqual(bars);
+  above.flags |= 8;
+  expect(resolveSystemBars(activity, overlays).root).toBe(activity);
+  above.flags &= ~8;
+  dialog.right--;
+  expect(resolveSystemBars(activity, overlays).root).toBe(activity);
+  dialog.right++;
   dialog.visibility = 4;
   const restored = resolveSystemBars(activity, overlays);
   expect(restored.root).toBe(activity);
