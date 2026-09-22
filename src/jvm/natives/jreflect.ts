@@ -1124,17 +1124,20 @@ rt.register({
 // InvocationHandler and unboxes what comes back.
 rt.markers("java/lang/reflect/InvocationHandler");
 class JProxy extends JObj { h: unknown = null; }
-const proxyClasses = new Map<string, ClassInfo>();
+const proxyClasses = new Map<string, Promise<ClassInfo>>();
+let nextProxyId = 0;
 const D_INVOKE = "(Ljava/lang/Object;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;";
 type Decl = [ClassInfo, string, string, number];
 /** framework.jar's class defs by name, fetched once a proxy needs a marker interface's declaration */
 let declIndex: Map<string, [DexFile, number]> | null = null;
-async function ensureDecls(): Promise<void> {
-  if (declIndex) return;
-  const { frameworkDecls } = await import("../../android/framework");
-  const idx = new Map<string, [DexFile, number]>();
-  for (const dex of await frameworkDecls()) for (let i = 0; i < dex.classDefCount; i++) idx.set(descToName(dex.type(dex.classDef2Type(i))), [dex, i]);
-  declIndex = idx;
+let declLoading: Promise<void> | null = null;
+function ensureDecls(): Promise<void> {
+  return declLoading ??= (async () => {
+    const { frameworkDecls } = await import("../../android/framework");
+    const idx = new Map<string, [DexFile, number]>();
+    for (const dex of await frameworkDecls()) for (let i = 0; i < dex.classDefCount; i++) idx.set(descToName(dex.type(dex.classDef2Type(i))), [dex, i]);
+    declIndex = idx;
+  })().catch((error) => { declLoading = null; throw error; });
 }
 /** what an interface declares, as the proxy sees it: bytecode when there is any, else the
  *  hand-written spec plus the app's own references plus AOSP's declaration of the same name */
@@ -1164,21 +1167,25 @@ function proxyMethod(info: ClassInfo, owner: ClassInfo, n: string, desc: string,
   return fn;
 }
 const proxyIfaces = new WeakMap<ClassInfo, ClassInfo[]>();
-async function proxyClass(ifaces: ClassInfo[]): Promise<ClassInfo> {
+function proxyClass(ifaces: ClassInfo[]): Promise<ClassInfo> {
   const key = ifaces.map((i) => i.name).join(";");
-  let info = proxyClasses.get(key);
-  if (info) return info;
+  const cached = proxyClasses.get(key);
+  if (cached) return cached;
+  const pending = buildProxy(ifaces).catch((error) => { proxyClasses.delete(key); throw error; });
+  proxyClasses.set(key, pending);
+  return pending;
+}
+async function buildProxy(ifaces: ClassInfo[]): Promise<ClassInfo> {
+  const name = "java/lang/reflect/$Proxy" + nextProxyId++;
   if (ifaces.some((i) => !i.dex)) await ensureDecls();
-  const name = "java/lang/reflect/$Proxy" + proxyClasses.size;
   rt.register({ name, ctor: class extends JProxy {}, ifaces: ifaces.map((i) => i.name) });
-  info = rt.link(name);
+  const info = rt.link(name);
   proxyIfaces.set(info, ifaces);
   const methods = new Map<string, Decl>();
   const object = rt.link("java/lang/Object");
   for (const [n, d] of [["equals", "(Ljava/lang/Object;)Z"], ["hashCode", "()I"], ["toString", "()Ljava/lang/String;"]]) methods.set(n + d, [object, n, d, 0x1]);
   for (const i of ifaces) interfaceMethods(i, methods);
   for (const [owner, n, desc, mods] of methods.values()) proxyMethod(info, owner, n, desc, mods);
-  proxyClasses.set(key, info);
   return info;
 }
 // a method no declaration named: the first call names it, and the proxy materialises it then,
