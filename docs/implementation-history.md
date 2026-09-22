@@ -4727,7 +4727,7 @@ The next visible fault is wrap-content centering against the parent's AT_MOST li
 positionChildHorizontal/Vertical defer centering until wrap-content measurement finishes.
 The delegate now does likewise and respects minimum sizes. Existing layout coverage includes
 independent rule copies and one core centered-wrap measurement case. Nine owning layout tests
-pass. TikTok's 462,058 classes smoke-compile with zero method failures.
+pass. TikTok's 462,058 methods smoke-compile with zero method failures.
 
 Chrome reaches real video after removing the layout failures; screenshot/interaction parity
 and performance remain under investigation. Evidence is under `webdroid-shots/tiktok-parity/`.
@@ -4768,3 +4768,136 @@ pass (21 assertions); Chrome resolves the original APK's font selector to intege
 ActivityOptions.makeScaleUpAnimation now records screen-relative bounds and package metadata
 in the options Bundle. A live Chrome probe returns the expected type 2 and all four supplied
 bounds. VibratorManager delegates its default vibrator to the existing service owner.
+
+A stalled cover request exposed a wrapped SynchronousQueue in TikTok's I/O pool: webdroid's
+concrete-class check missed the wrapper, limiting a cached pool to one worker with 39 queued
+tasks behind a blocked task. ThreadPoolExecutor now calls the queue's virtual offer and grows
+up to its maximum when storage is refused. Accepted queue entries are removed when dispatched
+or cancelled; direct worker assignments no longer appear in getQueue(). SynchronousQueue's
+nonblocking offer refuses storage without a waiting consumer. The bundled core-oj execute
+bytecode confirms the offer/add-worker sequence. Sixteen focused concurrency tests pass,
+including a wrapped handoff queue with two blocked workers and rejection at the maximum.
+
+Newly released background work reached EnumMap's copy overload, synchronizedSortedMap and
+AudioManager's capture-policy query. The map implementation now owns copied entry records;
+sorted wrappers reuse the canonical locking/view machinery. Four map checks pass, and a
+runtime probe verifies SortedMap identity and firstKey. Audio capture policy is retained as
+application state with Android's default and range validation. These repairs do not establish
+support for recording other applications' audio.
+
+TikTok's native video path reached ANativeWindow_lock/unlockAndPost. These now allocate a
+reusable guest buffer with ABI-correct geometry and pixel pointer, present copied RGBA/RGBX
+or RGB565 pixels through the canonical surface owner, and balance window references. The
+existing EGL browser fixture verifies two exact pixels, duplicate-lock rejection and handle
+release. This establishes software presentation support, not sustained video throughput.
+
+The apparent JSONObject.optString missing API was an invalid receiver: optJSONObject returned
+a JHashMap. JSONObject(Map) now recursively wraps values; raw objects supplied to put retain
+their Java identity and typed getters reject non-JSON containers. Object and array getters
+share one implementation. Six focused JSON checks pass (21 assertions). Temporary receiver
+and exception logging was removed. JNI Settings constant probes now resolve SCREEN_BRIGHTNESS,
+ADB_ENABLED and ADB_WIFI_ENABLED in their declaring classes.
+
+Saturation diagnostics subsequently reached an AppsFlyer pool at its configured maximum of
+six workers. Executor constructors and setRejectedExecutionHandler had discarded the supplied
+handler. Rejection now dispatches it, and the built-in CallerRuns/DiscardOldest policies honor
+shutdown. The existing saturation case checks caller execution and shutdown behavior; 15
+executor tests pass (57 assertions). This does not prove that this analytics pool caused the
+search request delay.
+
+A native trace then identified rejected format 0x32315659 (YV12) at 576×1024. Window buffers
+now implement Android's aligned Y,V,U planes. VideoFrame performs YUV-to-RGB conversion and
+feeds the existing surface presenter; guest decoding remains unchanged. The EGL fixture
+checks padded YV12 chroma order in addition to RGBA. A fresh full Chrome capture shows feed
+pixels after this repair; sustained throughput and search-video playback still need validation.
+
+Repeated thumbnails were shared Java bitmap identities, not decoder corruption. The custom
+cache key's DEX equals method can return true for different hash codes: it relies on HashMap
+checking the hash before invoking equals. Our slow-key map/set path skipped that check. It now
+retains insertion hashes, compares only matching hashes, and calls equality on the lookup key.
+One core hash-map case covers hash filtering, collisions and mutated keys; 21 owning collection
+checks pass (119 assertions). This avoids needless bytecode equality calls as well as collisions.
+
+Chrome rejects HEIF files received by BitmapFactory. The fallback recognizes HEIF brands,
+lazily imports libheif-js 1.23.2's bundled Wasm decoder, selects the primary image, and releases
+image handles and the decode context. Ordinary formats retain browser decoding. The package's
+LGPL-3.0 license and upstream source are included in node_modules/libheif-js and its repository
+https://github.com/catdad-experiments/libheif-js; the dependency is unmodified and rebuildable.
+
+
+Slow-key hashing now preserves the calling Java thread across suspending hashCode/equals
+callbacks, including immutable factories. The existing hash case checks a suspended callback
+under another thread. Fresh Chrome proceeds beyond consent; older reloaded sessions with
+large object diagnostics are not comparable performance evidence.
+
+The reached PrintWriter CharSequence append overload now shares Writer's virtual write path,
+uses csText and validates subsequence bounds. A runtime probe checks StringBuilder text, char,
+subsequence, null and return identity. MemoryInfo exposes summaries from its existing counters
+and returns null for unknown keys; KeyGenParameterSpec retains the requested device-properties
+attestation flag without claiming hardware attestation support.
+
+The bandwidth estimator's ArrayBlockingQueue grew beyond its ten-element capacity, causing
+repeated sort bounds exceptions in X/058j. Shared blocking queues now enforce capacity, reject
+nonblocking overflow, park producers and wake them after removals. SynchronousQueue transfers
+pending producers without reporting stored entries. Twenty-six queue/executor/collection checks
+pass (145 assertions). The next live TikTok search run reports no estimator bounds exceptions.
+
+Search dates were exactly 2^32 seconds late. A64 struct tm.tm_gmtoff was 4294942096 instead of
+-25200 because libc stored a signed long with the pointer writer. Time structs now preserve
+signed ABI-width fields, read 64-bit time_t on A64 and normalize negative subsecond timestamps.
+The NDK time.h declares tm_gmtoff as long int. One core ABI check covers negative offsets,
+pre-epoch time and A64 timestamps beyond 2106 (ten assertions). Paired browser verification
+of the date correction is still pending.
+
+A result click reached makeClipRevealAnimation. Its bundled framework bytecode records type
+11 and screen-relative bounds without a package name. Clip-reveal and scale-up options now
+share bounds calculation while preserving that difference; a runtime Bundle probe passes.
+
+Full Chrome now places the search input at y=96, matching the reference AVD. XML
+fitsSystemWindows was omitted, and ViewGroup always used pre-R sibling consumption.
+The paired framework DEX sets sBrokenInsetsDispatch only below target 30; modern dispatch
+passes the parent's result independently to every child, including GONE views. The existing
+hierarchy checks now cover both target behaviors. Legacy light-status-bar flags also reach
+the shell renderer. Seven hierarchy/measurement checks pass (18 assertions).
+
+Repeated Playwright CDP connections changed prefers-color-scheme on connection/disconnection,
+causing actual activity recreation and misleading repeated-consent observations. Raw WebSocket
+CDP probes leave that configuration stable. Temporary recreation logging was removed. Old
+activity-owned overlays still require a cleanup audit without fabricated dismiss callbacks.
+
+CharsetDecoder now retains and applies replacement strings, reports malformed sequences, and
+preserves incomplete/overflow input instead of consuming the entire buffer. UTF-8, ASCII,
+Latin-1 and UTF-16 share the supported charset-name normalization. One core buffer case checks
+report/replacement, literal U+FFFD preservation and supplementary-character overflow; the three
+CharBuffer checks pass (16 assertions). This does not complete encoder streaming semantics.
+
+A search menu reached WindowManager.LayoutParams.setFitInsetsSides. Insets sides/types and
+visibility policy now survive Window attribute application and bound dialog layout. A runtime
+round-trip probe and the existing window-context check pass; live menu verification is pending.
+
+A later startup deadlocked Keva readers behind a writer. Native fault state identified the
+reader's earlier abort inside vsnprintf: %p translated an unmapped diagnostic address before
+formatting it. Printing an address must not dereference it. The formatter now consumes the raw
+ABI-width pointer and retains all unsigned bits. The exact 0x1107420ec address and all-ones
+pointer pass a core native snprintf check; six stdio checks pass (42 assertions). The next
+startup passes consent without a native fault. The underlying Keva diagnostic was recoverable
+library behavior; no bytecode, library lock or data validation was bypassed.
+
+The later search screenshot shows Jun 16, 2025 for model timestamp 1750095269 and distinct
+2023/2026 dates; the signed-time correction is verified in the running APK. Search sheets now
+open with Filters and Share feedback. Both photo and video routing reached Intent.putExtras
+(Intent), now sharing Bundle merging without sharing the source map. A further coroutine
+reached File.toURI; it uses the existing URI constructor to quote the absolute path and append
+an existing directory's slash. A runtime probe checks spaces, fragment/query characters and
+directory suffixes. MemoryInfo clean counters now expose the framework's field sums.
+
+Native fixed-address remapping also wrote back shared pages after zeroing them. The order is
+now write-back, invalidation, replacement. A core mmap/MAP_FIXED probe verifies dirty bytes
+survive; seven stdio checks pass (45 assertions). Separate overlapping MAP_SHARED mappings
+still use copied pages rather than a continuously coherent page cache; no broader coherence
+claim is made. A temporary mmap trace was saved and disabled.
+
+Forest resource fetching reached LruCache.hitCount and threw during its fetch chain. The
+cache now counts hits, misses, puts, creations and evictions, with one trimming path used by
+resize, insertion and evictAll. Updating a key makes it most recent. The existing LRU check
+verifies hit/miss/eviction counts alongside recency and snapshot independence.
