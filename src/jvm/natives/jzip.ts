@@ -104,6 +104,7 @@ class JDeflater extends JObj {
   st: Codec | null = null;
   out: Uint8Array[] = [];
   done = false;
+  fed = 0;
   pending: Uint8Array | null = null;
   ensure() {
     if (!this.st) {
@@ -111,6 +112,9 @@ class JDeflater extends JObj {
       this.st.ondata = collect(this);
     }
     return this.st;
+  }
+  feed(bytes: Uint8Array, final = false) {
+    this.ensure().push(bytes, final); this.fed += bytes.length;
   }
 }
 rt.register({
@@ -124,17 +128,18 @@ rt.register({
       this.pending = u8(b, off, len).slice();
     },
     "finish()V": function (this: JDeflater) {
-      this.ensure().push(this.pending ?? new Uint8Array(0), true);
+      this.feed(this.pending ?? new Uint8Array(0), true);
       this.pending = null;
     },
     "deflate([BII)I": function (this: JDeflater, b: Int8Array, off: number, len: number) {
-      if (this.pending) { this.ensure().push(this.pending); this.pending = null; }
+      if (this.pending) { this.feed(this.pending); this.pending = null; }
       return drain(this, b, off, len);
     },
     "finished()Z": function (this: JDeflater) { return this.done && !this.out.length ? 1 : 0; },
     "needsInput()Z": function (this: JDeflater) { return this.pending ? 0 : 1; },
+    "getBytesRead()J": function (this: JDeflater) { return BigInt(this.fed); },
     "end()V": function (this: JDeflater) { this.st = null; this.out = []; },
-    "reset()V": function (this: JDeflater) { this.st = null; this.out = []; this.done = false; this.pending = null; },
+    "reset()V": function (this: JDeflater) { this.st = null; this.out = []; this.done = false; this.pending = null; this.fed = 0; },
   },
 });
 
@@ -159,10 +164,10 @@ rt.register({
     "write(I)V": function (this: JDeflaterOut, b: number) { return vcallMaybe(this, "write", "([BII)V", Int8Array.of(b), 0, 1); },
     "write([BII)V": async function (this: JDeflaterOut, b: Int8Array, off: number, len: number) {
       if (this.def.done) throw rt.mkThrowable("java/io/IOException", "write beyond end of stream");
-      if (len > 0) { this.def.ensure().push(u8(b, off, len).slice()); await pump(this); }
+      if (len > 0) { this.def.feed(u8(b, off, len).slice()); await pump(this); }
     },
     "finish()V": async function (this: JDeflaterOut) {
-      if (!this.def.done) { this.def.ensure().push(new Uint8Array(0), true); await pump(this); }
+      if (!this.def.done) { this.def.feed(new Uint8Array(0), true); await pump(this); }
     },
     "flush()V": function (this: JDeflaterOut) { return vcallMaybe(this.out, "flush", "()V"); },
     "close()V": async function (this: JDeflaterOut) {

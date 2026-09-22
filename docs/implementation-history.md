@@ -5235,3 +5235,8 @@ ranges, retain concrete native writers' direct string fast paths, and validate r
 the fix both observed initialization requests return 200 with valid JSON and Brotli responses.
 The existing legacy API suite (71 tests, 264 assertions) includes one core asynchronous writer
 override check. This was a runtime serialization fault, not an upstream network outage.
+
+Once configuration succeeded, Statsig's real gzip request writer reached
+`Deflater.getBytesRead()`. Track consumed input through one feed helper used by both direct
+Deflater calls and DeflaterOutputStream; reset clears the count. The gzip footer now receives
+its actual uncompressed size. A targeted probe verified pre-consumption, finish and reset counts.
