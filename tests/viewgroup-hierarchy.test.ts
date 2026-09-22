@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
 import { vcall } from "../src/jvm/natives/jlang";
-import { JView, JViewGroup, JLayoutParams, attachView, detachView } from "../src/android/view";
+import { JView, JViewGroup, JLayoutParams, attachView, detachView, setViewTargetSdk } from "../src/android/view";
+import { JWindowInsets } from "../src/android/windowinsets";
 
 class Group extends JViewGroup { events: string[] = []; }
 class Listener extends JObj {}
@@ -40,4 +41,23 @@ test("native view mutations complete with default callbacks", async () => {
   expect(child.parent).toBe(parent);
   await detachView(parent, child);
   expect(child.parent).toBeNull();
+});
+
+test("target R dispatches insets independently to siblings, including gone views", async () => {
+  const parent = new JViewGroup(), first = new JView(), second = new JView();
+  first.fitsSys = second.fitsSys = true;
+  second.visibility = 8;
+  await attachView(parent, first);
+  await attachView(parent, second);
+  const insets = new JWindowInsets();
+  insets.ins[0] = { left: 0, top: 72, right: 0, bottom: 0 };
+  try {
+    setViewTargetSdk(29);
+    await vcall(parent, "dispatchApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", insets);
+    expect([first.padT, second.padT]).toEqual([72, 0]);
+    setViewTargetSdk(30);
+    const result = await vcall(parent, "dispatchApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", insets);
+    expect([first.padT, second.padT]).toEqual([72, 72]);
+    expect(result).toBe(insets);
+  } finally { setViewTargetSdk(35); }
 });

@@ -23,7 +23,7 @@ import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
 import { reportUncaught, JBundle, dispatchVsync, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { packageUid, packages } from "../android/packages";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
-import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setMeasureTargetSdk, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
+import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setViewTargetSdk, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets, rootWindowInsets } from "../android/windowinsets";
 import { JCanvas, cssColor, tfMedium } from "../android/graphics";
@@ -207,7 +207,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   setProcessIdentity(PROCESS_PID, packages.get(pkg)?.uid ?? packageUid(pkg));
   setProcessName(processName ?? pkg);
   setManifest(manifest, activities, providers);
-  setMeasureTargetSdk(usesSdk(manifest).target);
+  setViewTargetSdk(usesSdk(manifest).target);
   prepared?.();
 
   return onMain(async () => {
@@ -532,12 +532,12 @@ const M_doFrame = mangleMethod("doFrame", "(J)V");
 const M_dispatch = mangleMethod("dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
 let drawing = false;
 let sbColor = NaN, sbCss = "";
-function drawStatusBar(ctx: OffscreenCanvasRenderingContext2D, appearance: number, appearanceMask: number) {
+function drawStatusBar(ctx: OffscreenCanvasRenderingContext2D, appearance: number, appearanceMask: number, systemUi = 0) {
   const sb = booted!.host.statusBarColor;
   if (sb !== sbColor) { sbColor = sb; sbCss = cssColor(sb); }
   ctx.fillStyle = sbCss;
   ctx.fillRect(0, 0, SCREEN_W, STATUS_H);
-  drawStatusIcons(ctx, sb, appearance, appearanceMask);
+  drawStatusIcons(ctx, sb, appearance, appearanceMask, systemUi);
 }
 /** AOSP's starting window: the system's, painted from the package's theme before the app has
  *  run. It is not the app drawing, so it deliberately does not count in perf.draws — corpus
@@ -677,7 +677,7 @@ async function tick0() {
           mainDbg.phase = "draw";
           await drawView(decor, cv);
           const bars = rootWindowInsets(decor);
-          if (bars.vis & 1) drawStatusBar(ctx, act!.window.appearance, act!.window.appearanceMask);
+          if (bars.vis & 1) drawStatusBar(ctx, act!.window.appearance, act!.window.appearanceMask, decor.systemUiVisibility);
           if (bars.vis & 2) {
             ctx.fillStyle = cssColor(booted!.host.navBarColor);
             ctx.fillRect(0, SCREEN_H - device.navBar, SCREEN_W, device.navBar);
@@ -714,11 +714,11 @@ function forceLayoutFlags(v: JView) {
   clearMeasureCache(v);
   if (v instanceof JViewGroup) for (const c of v.children) forceLayoutFlags(c);
 }
-function drawStatusIcons(ctx: OffscreenCanvasRenderingContext2D, bg: number, appearance: number, appearanceMask: number) {
+function drawStatusIcons(ctx: OffscreenCanvasRenderingContext2D, bg: number, appearance: number, appearanceMask: number, systemUi: number) {
   // AOSP: the light-status-bars appearance bit decides once the app has set or cleared it;
   // the luminance guess only stands in for an app that never asked.
   const dark = appearanceMask & APPEARANCE_LIGHT_STATUS_BARS ? (appearance & APPEARANCE_LIGHT_STATUS_BARS) !== 0
-    : 0.299 * ((bg >> 16) & 0xff) + 0.587 * ((bg >> 8) & 0xff) + 0.114 * (bg & 0xff) > 160;
+    : !!(systemUi & 0x2000) || 0.299 * ((bg >> 16) & 0xff) + 0.587 * ((bg >> 8) & 0xff) + 0.114 * (bg & 0xff) > 160;
   ctx.fillStyle = dark ? "rgba(0,0,0,0.85)" : "#ffffff";
   ctx.font = `500 ${device.dp(13)}px ${tfMedium.family}`;
   ctx.textBaseline = "middle";

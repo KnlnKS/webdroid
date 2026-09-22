@@ -482,7 +482,7 @@ const AT = attrTable(
   "clickable", "enabled", "minWidth", "minHeight", "alpha", "focusable", "scaleType", "src",
   "contentDescription", "weightSum", "divider", "showDividers", "dividerPadding", "fillViewport",
   "scrollbars", "fadeScrollbars", "clipToPadding", "clipChildren", "descendantFocusability",
-  "foreground", "duplicateParentState", "baselineAligned", "autoHandwritingEnabled", "textAlignment");
+  "foreground", "duplicateParentState", "baselineAligned", "autoHandwritingEnabled", "textAlignment", "fitsSystemWindows");
 // ── ViewOverlay: a drawing layer over the host's content. AOSP keeps an internal ViewGroup for
 // it; ours holds the two lists the host's draw pass walks, which is all anything reads back.
 class JViewOverlay extends JObj {
@@ -541,7 +541,7 @@ async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0) 
   const ta = obtainStyled(res, v.theme, set, [
     AT.id, AT.background, AT.padding, AT.paddingLeft, AT.paddingTop, AT.paddingRight, AT.paddingBottom,
     AT.visibility, AT.clickable, AT.enabled, AT.minWidth, AT.minHeight, AT.alpha, AT.focusable,
-    AT.paddingStart, AT.paddingEnd, AT.tag, AT.contentDescription, AT.autoHandwritingEnabled, AT.textAlignment,
+    AT.paddingStart, AT.paddingEnd, AT.tag, AT.contentDescription, AT.autoHandwritingEnabled, AT.textAlignment, AT.fitsSystemWindows,
   ], defStyleAttr, 0);
   const g = (i: number) => ta.vals[i];
   // the id the reference names (getResourceId's answer): resolving @id/x lands on the entry's own
@@ -570,6 +570,7 @@ async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0) 
   if (g(17)) v.contentDesc = rvString(res, g(17));
   if (g(18)) v.autoHandwritingEnabled = !!rvInt(res, g(18), 1);
   if (g(19)) v.textAlignment = rvInt(res, g(19), 0);
+  if (g(20)) v.fitsSys = !!rvInt(res, g(20), 0);
 }
 
 export function defaultSize(size: number, spec: number): number {
@@ -603,10 +604,11 @@ function measureCachePut(v: JView, wSpec: number, hSpec: number) {
  *  EXACTLY spec even at the size it already has; its LinearLayout weights relied on that pass.
  *  View.sIgnoreMeasureCache: one targeting below KitKat (19) never has onMeasure answered by
  *  the measure cache. */
-let alwaysRemeasureExactly = false, ignoreMeasureCache = false;
-export function setMeasureTargetSdk(target: number) {
+let alwaysRemeasureExactly = false, ignoreMeasureCache = false, brokenInsetsDispatch = false;
+export function setViewTargetSdk(target: number) {
   alwaysRemeasureExactly = target <= 23;
   ignoreMeasureCache = target < 19;
+  brokenInsetsDispatch = target < 30;
 }
 export async function measureView(v: JView, wSpec: number, hSpec: number) {
   // AOSP View.measure: with no forced layout and identical specs the previous measurement
@@ -1833,14 +1835,13 @@ async function addViewFunnel(vg: JViewGroup, c: JView, i: number, lp: JLayoutPar
 }
 
 const vgMethods: NativeSpec["methods"] = {
-  // AOSP ViewGroup: self first (listener or onApplyWindowInsets), then each child in order,
-  // threading the possibly-modified insets along and stopping as soon as one consumes them.
-  "dispatchApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": async function (this: JViewGroup, ins: unknown) {
+  "dispatchApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": async function (this: JViewGroup, ins: JWindowInsets) {
     let cur = await viewDispatchInsets.call(this, ins);
     for (const c of this.children) {
-      if ((cur as JWindowInsets)?.consumedV) break;
-      if (c.visibility === 8) continue;
-      cur = await vcall(c, "dispatchApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", cur);
+      if (cur?.consumedV) break;
+      const childInsets = await vcall(c, "dispatchApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", cur);
+      // Before target R, a consuming child also starved its siblings of insets.
+      if (brokenInsetsDispatch) cur = childInsets;
     }
     return cur;
   },
