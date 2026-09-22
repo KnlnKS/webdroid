@@ -208,6 +208,20 @@ checks / 738 assertions and typecheck passes. Original ARM32 XAPK smoke compilat
 Ad-specific implementation is excluded unless it blocks another feature; the AVD test ad
 is not a target for independent implementation.
 
+Further worker startup reached Thumb SMMUL and UMAAL. Signed high multiplication shares
+ARM/Thumb rounding and accumulate/subtract semantics; UMAAL extends the existing Thumb
+long-multiply path. With those faults cleared, both normal JIT and `jit=0` reported missing
+`RootAssetsScriptableObject` / `BaseToastPrefab` keys. Two guest catalog buffers had SHA-256
+`853cb8eb44508d4bfaa686229b033a739cdd60b56a0ef1e1d7195ce396dbc5a0`, identical to both
+packaged variants. Read-only IL2CPP reflection found 3,623 decoded dictionary entries,
+including both keys. Direct dictionary lookups succeeded; ResourceLocator.Locate failed.
+Instruction tracing identified the delegate trampoline's `BLX lr`: the interpreter replaced
+LR before reading its branch target, skipping the delegate entirely. Reading the target first
+fixes that ordering; JIT already reads before writing. A minimal call/return check exercises
+both tiers. All 68 ARM checks / 747 assertions and typecheck pass. An earlier overlapping
+manual reflection probe caused a diagnostic-only main-CPU fault; it is excluded from app
+fault evidence. Fresh game validation follows this repair.
+
 ## microG completion and open acceptance
 
 PLAN.md owns current status. Both Android and webdroid now
