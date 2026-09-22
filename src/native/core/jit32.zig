@@ -87,6 +87,8 @@ pub fn rwArm(w: u32) jit.RW {
 }
 pub fn rwThumb(h: u32) jit.RW {
     var rw = jit.ALL32;
+    // Wide instructions use the interpreter fallback, including carry reads across block edges.
+    if (h & 0xf800 >= 0xe800) return rw;
     rw.fr = 0;
     rw.fw = 0;
     // IT itself is interpreted from a JIT fallback.  Its condition reads NZCV and it writes

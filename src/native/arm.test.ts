@@ -990,6 +990,12 @@ describe("thumb decoder", () => {
   });
 
   test("wide carry arithmetic consumes carry from immediates and shifted registers", () => {
+    const edge = runThumb([
+      0x2800, 0xe000, 0xbf00, // cmp r0, #0; branch over nop
+      0xeb40, 0x0201,        // adc.w r2, r0, r1 consumes carry across the edge
+      0x2b00, 0x4770,        // cmp r3, #0; bx lr
+    ]);
+    expect(edge.w[4]).toBe(1);
     const c = runThumb([
       0x2800,         // cmp r0, #0 (C=1)
       0xf170, 0x0000, // sbcs r0, r0, #0
