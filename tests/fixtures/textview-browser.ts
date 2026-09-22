@@ -143,10 +143,18 @@ async function probe() {
   await vcall(input, "setHintTextColor", "(I)V", 0);
   await vcall(input, "measure", "(II)V", makeSpec(100, MS_EXACTLY), makeSpec(50, MS_EXACTLY));
   input.blinkStart = performance.now();
+  const cursor = await newObj("android/graphics/drawable/GradientDrawable", "()V");
+  await vcall(cursor, "setColor", "(I)V", 0xffff0000 | 0);
+  await vcall(cursor, "setSize", "(II)V", 4, -1);
+  await vcall(input, "setTextCursorDrawable", "(Landroid/graphics/drawable/Drawable;)V", cursor);
+  const cursorIdentity = await vcall(input, "getTextCursorDrawable", "()Landroid/graphics/drawable/Drawable;") === cursor;
   const caretCanvas = new OffscreenCanvas(100, 50).getContext("2d")!;
   await vcall(input, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(caretCanvas, 100, 50));
   const caretAtStart = caretCanvas.getImageData(2, 0, 1, 50).data.some((v, i) => i % 4 === 3 && v === 255);
-  return { ...result, selection, emptySelection, independentCanvas, checkBoxHeight, caretAtStart, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
+  const cursorPixels = [...caretCanvas.getImageData(2, 20, 1, 1).data];
+  await vcall(input, "setTextCursorDrawable", "(I)V", 0);
+  const cursorCleared = await vcall(input, "getTextCursorDrawable", "()Landroid/graphics/drawable/Drawable;") === null;
+  return { ...result, cursorIdentity, cursorPixels, cursorCleared, selection, emptySelection, independentCanvas, checkBoxHeight, caretAtStart, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
     fitting: (await view.measuredLines(measureText(view.paintT, view.text))).lines.map(l => l.text), cleared: (await view.measuredLines(width)).replacements.length === 0,
     compound: { drawsAt, retained, restored: surface.getTransform().isIdentity } };
 }

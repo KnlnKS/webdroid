@@ -9,8 +9,8 @@ import { G, gravityV, gravityH } from "./gravity";
 import { isRtl } from "./bidiformatter";
 import { device } from "../shell/config";
 import {
-  fontDescent, fontAscent, fontTop, fontBottom, measureText, typefaceFor, JTypeface, tfDefault, type JRect,
-  type JCanvas, cssColor, tfMedium
+  fontDescent, fontAscent, fontTop, fontBottom, measureText, typefaceFor, JTypeface, tfDefault, JRect,
+  type JCanvas, tfMedium
 } from "./graphics";
 import { vcall, vcallOn, callOn, curThread, after, mkEnumSet, newObj } from "../jvm/natives/jlang";
 import {
@@ -67,6 +67,8 @@ export class JTextView extends JView {
   editable = false;
   editObj: JEditable | null = null;
   cursorVisible = true;
+  cursorDrawable: JDrawable | null = null;
+  cursorDrawableRes = 0;
   /** when the caret last restarted its blink: focus and every edit, as AOSP's Editor.Blink does */
   blinkStart = 0;
   layout: JLayout | null = null;
@@ -134,7 +136,7 @@ const tvAttr = attrTable(
   "minLines", "lines", "singleLine", "ellipsize", "lineSpacingExtra", "lineSpacingMultiplier",
   "drawableLeft", "drawableTop", "drawableRight", "drawableBottom", "drawablePadding", "drawableStart",
   "drawableEnd", "fontFamily", "textAllCaps", "textColorHint", "inputType", "letterSpacing", "maxLength",
-  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth", "shadowColor", "shadowDx", "shadowDy", "shadowRadius", "textColorLink");
+  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth", "shadowColor", "shadowDx", "shadowDy", "shadowRadius", "textColorLink", "textCursorDrawable");
 
 async function applyTextAppearance(tv: JTextView, res: Resources, styleId: number) {
   if (!styleId) return;
@@ -180,7 +182,7 @@ export async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyle
     tvAttr.inputType, tvAttr.lineSpacingExtra, tvAttr.lineSpacingMultiplier, tvAttr.lines,
     tvAttr.drawableStart, tvAttr.drawableEnd, tvAttr.minLines,
     tvAttr.ems, tvAttr.minEms, tvAttr.minWidth, tvAttr.includeFontPadding, tvAttr.imeOptions,
-    tvAttr.shadowColor, tvAttr.shadowDx, tvAttr.shadowDy, tvAttr.shadowRadius, tvAttr.textColorLink,
+    tvAttr.shadowColor, tvAttr.shadowDx, tvAttr.shadowDy, tvAttr.shadowRadius, tvAttr.textColorLink, tvAttr.textCursorDrawable,
   ];
   const ta = obtainStyled(res, tv.theme, set, ids, defStyleAttr, 0);
   const g = (i: number) => ta.vals[i];
@@ -235,8 +237,16 @@ export async function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyle
     tv.linkColors = link.t === TV.REFERENCE ? await loadColorStateList(res, link.d, tv.theme) : mkCsl(rvColor(res, link, tv.paintT.linkColor));
     tv.updateLinkColor();
   }
+  if (g(35)?.t === TV.REFERENCE) tv.cursorDrawableRes = g(35)!.d;
   if (tv.styleBits & 1) tv.paintT.fakeBold = true;
   if (tv.styleBits & 2) tv.paintT.tf = (() => { const t = new JTypeface(); t.family = tv.paintT.tf.family; t.italic = true; t.weight = tv.paintT.tf.weight; return t; })();
+}
+async function textCursorDrawable(tv: JTextView): Promise<JDrawable | null> {
+  if (tv.cursorDrawableRes && tv.jres) {
+    tv.cursorDrawable = await loadDrawable(tv.jres, tv.cursorDrawableRes, tv.theme);
+    tv.cursorDrawableRes = 0;
+  }
+  return tv.cursorDrawable;
 }
 async function setTextShadow(this: JTextView, radius: number, dx: number, dy: number, color: number) {
   this.shadowRadius = radius; this.shadowDx = dx; this.shadowDy = dy; this.shadowColor = color;
@@ -493,6 +503,14 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getAutoSizeTextAvailableSizes()[I": () => new Int32Array(0),
   "setTransformationMethod(Landroid/text/method/TransformationMethod;)V": function (this: JTextView, m: unknown) { this.transformation = m; },
   "getTransformationMethod()Landroid/text/method/TransformationMethod;": function (this: JTextView) { return this.transformation; },
+  "setTextCursorDrawable(I)V": async function (this: JTextView, id: number) {
+    const drawable = id ? await vcall(this.ctx, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", id) : null;
+    await vcall(this, "setTextCursorDrawable", "(Landroid/graphics/drawable/Drawable;)V", drawable);
+  },
+  "setTextCursorDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JTextView, drawable: JDrawable | null) {
+    this.cursorDrawableRes = 0; this.cursorDrawable = drawable; invalidate(this);
+  },
+  "getTextCursorDrawable()Landroid/graphics/drawable/Drawable;": function (this: JTextView) { return textCursorDrawable(this); },
   "setCursorVisible(Z)V": function (this: JTextView, v: number) { this.cursorVisible = !!v; },
   "setOnEditorActionListener(Landroid/widget/TextView$OnEditorActionListener;)V": function (this: JTextView, l: unknown) { this.editorActionL = l; },
   "setFilters([Landroid/text/InputFilter;)V": function (this: JTextView, arr: unknown[]) {
@@ -640,12 +658,19 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       if (!caretLayout) return;
       const caretGravity = this.horizontalGravity(display, alignment, layoutDirection);
       const cw = caretLayout.lines.at(-1)?.width ?? 0;
-      const cx = contentL + (caretGravity === 1 ? (avail + cw) / 2 : caretGravity === 5 ? avail : cw) + 1;
+      const cx = caretGravity === 1 ? (avail + cw) / 2 : caretGravity === 5 ? avail : cw;
       const caretHeight = Math.max(layoutHeight(caretLayout), this.textHeight(1));
       const caretY = vg === 16 ? (contentB - contentT - caretHeight) / 2 + contentT : vg === 80 ? contentB - caretHeight : contentT;
       const cy = caretY + caretLayout.baseline(Math.max(0, caretLayout.lines.length - 1));
-      ctx.fillStyle = cssColor(cslColor(this.colors, []));
-      ctx.fillRect(cx, cy - this.ascent(), 3, this.lineHeight());
+      const cursor = await textCursorDrawable(this);
+      if (cursor) {
+        const padding = new JRect();
+        await vcallOn(thread, cursor, "getPadding", "(Landroid/graphics/Rect;)Z", padding);
+        const width = await drawableSize(cursor, false, thread);
+        const left = Math.min(Math.max(0, Math.trunc(cx - 0.5)) - padding.left, avail - width + padding.right);
+        await vcallOn(thread, cursor, "setBounds", "(IIII)V", 0, 0, width, this.lineHeight() + padding.top + padding.bottom);
+        await draw(cursor, contentL + left, cy - this.ascent() - padding.top);
+      }
     }
   },
 };

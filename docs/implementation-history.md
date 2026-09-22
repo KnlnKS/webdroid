@@ -5234,3 +5234,29 @@ finishes that activity, removes all its windows and reaches the feed with zero o
 The captured path has nine optional app/library class probes and no native requirements.
 The dedicated AVD instead requires a birthdate for guest access; none was entered.
 The paired feed and <=150 ms response targets remain unproven.
+
+
+### Resource-backed text cursors — 2026-09-22
+
+The paired phone-form screenshots showed a black fixed-width caret in Chrome versus TikTok's
+pink rounded drawable in the AVD. TextView ignored textCursorDrawable and painted a rectangle
+in the text color. TextView now retains the styled resource lazily, implements both
+setTextCursorDrawable overloads and getTextCursorDrawable, and draws its intrinsic width and
+padding through the existing virtual drawable path. Setting zero/null removes the drawable.
+API-33 TextView setters and Editor.drawCursor/updateCursorPosition/clampHorizontalPosition
+provide the platform evidence; no TikTok-specific branch or resource replacement is added.
+
+The existing browser rendering fixture now uses a real GradientDrawable and checks its pixels,
+identity and clearing, alongside the existing caret-at-start check. The two text-view checks
+pass 37 assertions and typecheck passes. Full Chrome's real login field loads the unchanged
+APK's six-pixel-wide pink GradientDrawable (solid -119723), with zero draw errors; the visible
+capture is webdroid-shots/tiktok-usability/chrome-cursor-visible.png. Phone/email tab navigation
+works in both surfaces. Chrome still uses a different header/tab layout and faded disabled
+button label; those differences have not been resolved or attributed to remote variants.
+
+Live guest checks also reached search results for cats and returned to Profile/login. A warm
+300 ms swipe completed in 387.4 ms; first search opening took 1839.9 ms to dispatch and a
+subsequent presentation, including 446.1 ms of lazy compilation. These are observational
+full-Chrome timings under shared host load, not controlled acceptance measurements, and they
+fail to establish the 150 ms target. The full 1,254-test run passed before the cursor change;
+final candidate verification follows below.
