@@ -16,6 +16,25 @@ test("printf renders unmapped guest pointer values without dereferencing them", 
   } finally { cpu.dispose(); setA64(false); }
 });
 
+test("fixed file remapping preserves dirty shared bytes before replacing pages", async () => {
+  setA64(true); libcInit(); stdioInit();
+  const path = "/fixed-mapping-test";
+  vfs.write(path, new Uint8Array(4096));
+  const fd = javaOpenFd(path, 2), cpu = new Cpu(mainThread, "fixed-mapping-test");
+  const mmap = lookupHost("mmap", "libc.so")!, munmap = lookupHost("munmap", "libc.so")!;
+  let address = 0;
+  try {
+    address = await cpu.call(mmap, [0, 4096, 3, 1, fd, 0]);
+    mem.st8(address, 17);
+    expect(await cpu.call(mmap, [address, 4096, 3, 0x11, fd, 0])).toBe(address);
+    expect(mem.ld8u(address)).toBe(17);
+    expect(vfs.read(path)?.[0]).toBe(17);
+  } finally {
+    if (address) await cpu.call(munmap, [address, 4096]);
+    javaCloseFd(fd); vfs.delete(path); cpu.dispose(); setA64(false);
+  }
+});
+
 test("record-lock queries report no conflicting process lock through the guest pointer", async () => {
   setA64(true);
   stdioInit();

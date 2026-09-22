@@ -350,7 +350,7 @@ export function libcInit(): void {
       const reserve = (flags & 0x20) !== 0 && prot === 0;
       const p = flags & 0x10 ? hint : mem.mapVa(n, reserve);
       if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return failed(E.NOMEM);
-      if (flags & 0x10 && !reserve) { invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); syncShared(hint, n, true); }
+      if (flags & 0x10 && !reserve) { syncShared(hint, n, true); invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
       if (fd !== -1 && !(flags & 0x20)) {
         if (flags & 1 && prot & 2) { const writeBack = fdWriteBack(fd); if (writeBack) sharedMaps.push({ va: BigInt(p), n, off, writeBack }); }
         const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(() => p) : p;
