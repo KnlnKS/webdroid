@@ -236,6 +236,13 @@ describe("arm decoder", () => {
     });
     expect(mem.ld32(c.w[2])).toBe(42);
     expect([c.w[0], c.w[6]]).toEqual([0, 1]);
+    const double = run([0xe1b12f9f, 0xe2924001, 0xe2a35000, 0xe1a12f94, BXLR], (cpu) => {
+      cpu.w[2] = cpu.stackTop - 16;
+      mem.st64(cpu.w[2], 0x12345678ffffffffn);
+    });
+    expect(double.w[2]).toBe(double.stackTop - 16);
+    expect(mem.ld64(double.w[2])).toBe(0x1234567900000000n);
+    expect(double.w[4]).toBe(0);
   });
   test("ldm/stm ia/db forms", () => {
     const c = run([
