@@ -9,6 +9,7 @@ for (const cls of ["java/text/NumberFormat", "android/icu/text/NumberFormat"]) {
     const locale = await newObj("java/util/Locale", "(Ljava/lang/String;Ljava/lang/String;)V", "en", "US");
     const f = await vcall(rt.link(cls).ctor, "getPercentInstance", `(Ljava/util/Locale;)L${cls};`, locale);
     expect(rt.iof(f, cls)).toBe(1);
+    if (cls === "java/text/NumberFormat") expect(rt.iof(f, "java/text/DecimalFormat")).toBe(1);
     for (const [value, text] of [[0.14, "14%"], [0.025, "2%"], [0.035, "4%"], [-0.025, "-2%"]]) {
       expect(await vcall(f, "format", "(D)Ljava/lang/String;", value)).toBe(text);
     }
@@ -24,5 +25,6 @@ for (const cls of ["java/text/NumberFormat", "android/icu/text/NumberFormat"]) {
 }
 test("NumberFormat preserves all long integer digits", async () => {
   const f = await vcall(rt.link("java/text/NumberFormat").ctor, "getInstance", "()Ljava/text/NumberFormat;");
+  expect(rt.iof(f, "java/text/DecimalFormat")).toBe(1);
   expect(await vcall(f, "format", "(J)Ljava/lang/String;", 9007199254740993n)).toBe("9,007,199,254,740,993");
 });

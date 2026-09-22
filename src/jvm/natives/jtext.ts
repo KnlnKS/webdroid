@@ -255,7 +255,11 @@ const nfMethods: NativeSpec["methods"] = {
   "setMinimumIntegerDigits(I)V": () => {},
   "setParseIntegerOnly(Z)V": () => {},
 };
-const nfInstance = (locale = defaultLocale) => Object.assign(new JNumberFormat(), { locale: localeTag(locale) });
+class JDecimalFormat extends JNumberFormat {}
+const nfInstance = (locale = defaultLocale) => {
+  rt.link("java/text/DecimalFormat");
+  return Object.assign(new JDecimalFormat(), { locale: localeTag(locale) });
+};
 const percentInstance = (locale = defaultLocale) => Object.assign(nfInstance(locale), { style: "percent", maxFrac: 0 });
 rt.register({
   name: "java/text/NumberFormat", ctor: JNumberFormat, sup: "java/text/Format", ifaces: ["java/lang/Cloneable"],
@@ -265,7 +269,7 @@ rt.register({
     "static getInstance(Ljava/util/Locale;)Ljava/text/NumberFormat;": nfInstance,
     "static getNumberInstance()Ljava/text/NumberFormat;": nfInstance,
     "static getNumberInstance(Ljava/util/Locale;)Ljava/text/NumberFormat;": nfInstance,
-    "static getIntegerInstance()Ljava/text/NumberFormat;": () => { const f = new JNumberFormat(); f.maxFrac = 0; return f; },
+    "static getIntegerInstance()Ljava/text/NumberFormat;": () => { const f = nfInstance(); f.maxFrac = 0; return f; },
     "static getPercentInstance()Ljava/text/NumberFormat;": percentInstance,
     "static getPercentInstance(Ljava/util/Locale;)Ljava/text/NumberFormat;": percentInstance,
     "static getCurrencyInstance()Ljava/text/NumberFormat;": nfInstance,
@@ -283,7 +287,7 @@ rt.register({
   },
 });
 rt.register({
-  name: "java/text/DecimalFormat", ctor: class extends JNumberFormat {}, sup: "java/text/NumberFormat",
+  name: "java/text/DecimalFormat", ctor: JDecimalFormat, sup: "java/text/NumberFormat",
   methods: {
     ...nfMethods,
     "<init>()V": function () {},
