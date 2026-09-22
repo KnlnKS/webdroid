@@ -1,3 +1,4 @@
+import { recordOrRun, recordingContext, replayCanvas, replayWithSemantics, type Ctx2D } from "./recording";
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
@@ -1446,33 +1447,32 @@ export class JCanvas extends JObj {
     return this.semanticBase ? matMul(this.semanticBase, current) : current as [number, number, number, number, number, number];
   }
   recordText(text: string, x?: number, y?: number, size?: number, align = 0) {
-    const recorder = this.ctx as RecordingContext;
-    if (recorder.__isRecorder) {
-      recorder.__record(ctx => replayCanvases.get(ctx)?.recordText(text, x, y, size, align));
-      return;
-    }
-    const owner = this.semanticOwner;
-    if (!owner) return;
-    (owner.drawnText ??= []).push(text);
-    if (x === undefined || y === undefined || size === undefined) return;
-    const i = owner.drawnTextCount++;
-    if (!owner.drawnTextPoints || owner.drawnTextPoints.length < (i + 1) * 2) {
-      const next = new Float32Array(Math.max(8, (i + 1) * 4));
-      if (owner.drawnTextPoints) next.set(owner.drawnTextPoints);
-      owner.drawnTextPoints = next;
-    }
-    const cx = x + (align === 0 ? size : align === 2 ? -size : 0), cy = y - size * 0.3;
-    const m = this.ctx.getTransform();
-    let sx = m.a * cx + m.c * cy + m.e, sy = m.b * cx + m.d * cy + m.f;
-    if (this.semanticBase) {
-      const b = this.semanticBase;
-      const px = sx;
-      sx = b[0] * px + b[2] * sy + b[4];
-      sy = b[1] * px + b[3] * sy + b[5];
-    }
-    owner.drawnTextPoints[i * 2] = sx;
-    owner.drawnTextPoints[i * 2 + 1] = sy;
+    recordOrRun(this.ctx, ctx => {
+      const canvas = replayCanvas(ctx) ?? this;
+      const owner = canvas.semanticOwner;
+      if (!owner) return;
+      (owner.drawnText ??= []).push(text);
+      if (x === undefined || y === undefined || size === undefined) return;
+      const i = owner.drawnTextCount++;
+      if (!owner.drawnTextPoints || owner.drawnTextPoints.length < (i + 1) * 2) {
+        const next = new Float32Array(Math.max(8, (i + 1) * 4));
+        if (owner.drawnTextPoints) next.set(owner.drawnTextPoints);
+        owner.drawnTextPoints = next;
+      }
+      const cx = x + (align === 0 ? size : align === 2 ? -size : 0), cy = y - size * 0.3;
+      const m = ctx.getTransform();
+      let sx = m.a * cx + m.c * cy + m.e, sy = m.b * cx + m.d * cy + m.f;
+      if (canvas.semanticBase) {
+        const b = canvas.semanticBase;
+        const px = sx;
+        sx = b[0] * px + b[2] * sy + b[4];
+        sy = b[1] * px + b[3] * sy + b[5];
+      }
+      owner.drawnTextPoints[i * 2] = sx;
+      owner.drawnTextPoints[i * 2 + 1] = sy;
+    });
   }
+
   static wrap(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, w: number, h: number): JCanvas {
     const c = new JCanvas();
     c.ctx = ctx; c.w = w; c.h = h;
@@ -1480,9 +1480,8 @@ export class JCanvas extends JObj {
   }
   prep(p: JPaint, stroke: boolean) {
     const ctx = this.ctx;
-    const recorder = ctx as RecordingContext;
-    const pattern = recorder.__isRecorder ? p.shaderObj?.deferredPattern() : null;
-    if (pattern) recorder.__record(c => { c[stroke ? "strokeStyle" : "fillStyle"] = pattern(c); });
+    const pattern = p.shaderObj?.deferredPattern();
+    if (pattern) recordOrRun(ctx, c => { c[stroke ? "strokeStyle" : "fillStyle"] = pattern(c); });
     if (stroke) {
       if (!pattern) ctx.strokeStyle = p.fillStyle(ctx) as string;
       ctx.lineWidth = Math.max(p.strokeWidth, 0.75);
@@ -1679,9 +1678,7 @@ function clipOutRect(this: JCanvas, l: number, t: number, r: number, b: number) 
     finally { ctx.setTransform(matrix); }
   };
   // RenderNode replay supplies the parent transform and the actual destination bounds.
-  const recorder = this.ctx as RecordingContext;
-  if (recorder.__isRecorder) recorder.__record(apply);
-  else apply(this.ctx);
+  recordOrRun(this.ctx, apply);
   return 1;
 }
 function drawRect(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
@@ -1696,9 +1693,7 @@ function drawColor(this: JCanvas, color: number, clear = false) {
     else { ctx.fillStyle = fill; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); }
     ctx.restore();
   };
-  const recorder = this.ctx as RecordingContext;
-  if (recorder.__isRecorder) recorder.__record(apply);
-  else apply(this.ctx);
+  recordOrRun(this.ctx, apply);
 }
 /** ellipse arc in the box; a full sweep without the centre is drawOval */
 function drawArc(this: JCanvas, l: number, t: number, r: number, b: number, start: number, sweep: number, useCenter: number, p: JPaint) {
@@ -2063,43 +2058,6 @@ class JRenderNode extends JObj {
   effect: JRenderEffect | null = null;
   effectInput: OffscreenCanvas | null = null;
 }
-type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-type RecordingContext = Ctx2D & { __isRecorder?: boolean; __record: (fn: (ctx: Ctx2D) => void) => void };
-const replayCanvases = new WeakMap<Ctx2D, JCanvas>();
-function replayWithSemantics(canvas: JCanvas, draw: () => void) {
-  const previous = replayCanvases.get(canvas.ctx);
-  replayCanvases.set(canvas.ctx, canvas);
-  try { draw(); }
-  finally { if (previous) replayCanvases.set(canvas.ctx, previous); else replayCanvases.delete(canvas.ctx); }
-}
-/** recording proxy: applies ops immediately to the mirror octx (so reads like
- *  measureText/getTransform work) while appending replay closures to node.ops */
-function mkRecorder(node: JRenderNode): Ctx2D {
-  const octx = node.octx!;
-  const base = {
-    __isRecorder: true,
-    __record(fn: (c: Ctx2D) => void) { node.ops.push(fn); },
-  };
-  const fns = new Map<PropertyKey, (...args: unknown[]) => unknown>();
-  return new Proxy(base, {
-    get(t, p) {
-      if (p in t) return (t as Record<PropertyKey, unknown>)[p];
-      const v = (octx as unknown as Record<PropertyKey, unknown>)[p];
-      if (typeof v !== "function") return v;
-      let w = fns.get(p);
-      if (!w) fns.set(p, w = (...args: unknown[]) => {
-        node.ops.push((c) => { ((c as unknown as Record<PropertyKey, (...a: unknown[]) => unknown>)[p])(...args); });
-        return (v as (...a: unknown[]) => unknown).apply(octx, args);
-      });
-      return w;
-    },
-    set(t, p, val) {
-      node.ops.push((c) => { (c as unknown as Record<PropertyKey, unknown>)[p] = val; });
-      (octx as unknown as Record<PropertyKey, unknown>)[p] = val;
-      return true;
-    },
-  }) as unknown as Ctx2D;
-}
 /** replay a node's display list into ctx with its transform props applied */
 // android.graphics.Picture is the same recording the render node already does, without the
 // transform properties: what it recorded is replayed into whatever canvas is drawing it.
@@ -2156,7 +2114,7 @@ function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
       if (surface.width !== n.w) surface.width = n.w;
       if (surface.height !== n.h) surface.height = n.h;
       const input = surface.getContext("2d")!; input.reset();
-      const recording = replayCanvases.get(ctx);
+      const recording = replayCanvas(ctx);
       const canvas = JCanvas.wrap(input, n.w, n.h);
       if (recording) { canvas.semanticOwner = recording.semanticOwner; canvas.semanticBase = recording.semanticTransform(); }
       replayWithSemantics(canvas, () => { for (const op of n.ops) op(input); });
@@ -2207,7 +2165,7 @@ rt.register({
       }
       this.ops = [];
       const c = new JRecordingCanvas();
-      c.ctx = mkRecorder(this); c.w = cw; c.h = ch;
+      c.ctx = recordingContext(this.octx!, this.ops); c.w = cw; c.h = ch;
       return c;
     },
     "beginRecording()Landroid/graphics/RecordingCanvas;": async function (this: JRenderNode) {
@@ -2267,13 +2225,7 @@ rt.register({
 });
 canvasMethods["drawRenderNode(Landroid/graphics/RenderNode;)V"] = function (this: JCanvas, n: JRenderNode) {
   if (!n) return;
-  const t = this.ctx as unknown as { __isRecorder?: boolean; __record?: (fn: (c: Ctx2D) => void) => void };
-  if (t.__isRecorder) {
-    // deferred: replay the child's CURRENT display list at draw time, not record time
-    t.__record!((c) => drawNodeInto(c, n));
-  } else {
-    replayWithSemantics(this, () => drawNodeInto(this.ctx, n));
-  }
+  replayWithSemantics(this, () => recordOrRun(this.ctx, ctx => drawNodeInto(ctx, n)));
 };
 rt.register({ name: "android/graphics/Paint", ctor: JPaint, methods: paintMethods });
 mkEnumSet("android/graphics/Canvas$EdgeType", ["BW", "AA"]);

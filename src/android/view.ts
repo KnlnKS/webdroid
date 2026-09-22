@@ -1,3 +1,4 @@
+import { isRecording, recordOrRun } from "./recording";
 import { perf } from "../perf";
 import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JMatrix, JOutline, matMul, rotM, type JPoint } from "./graphics";
@@ -814,14 +815,13 @@ function drawSelf(v: JView, cv: JCanvas): Promise<void> {
 /** the view's own painting, in its own coordinate space: background, content, children, overlay */
 async function drawContent(v: JView, cv: JCanvas) {
   const ctx = cv.ctx;
-  const recorder = ctx as typeof ctx & { __isRecorder?: boolean; __record?: (draw: (target: typeof ctx) => void) => void };
-  if (recorder.__isRecorder && v.surfaceBacked) {
+  if (v.surfaceBacked && isRecording(ctx)) {
     if (!v.surfaceLayer && v.background) {
       await guardCall(v.background, M_setBounds, 0, 0, v.width(), v.height());
       await guardCall(v.background, M_drawableDraw, cv);
     }
     // The first frame can arrive after recording; later frames replace and close their predecessor.
-    recorder.__record!((target) => {
+    recordOrRun(ctx, target => {
       if (v.surfaceLayer) drawSurface(v, target);
     });
   } else if (v.surfaceLayer) {
