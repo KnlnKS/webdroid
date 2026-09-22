@@ -337,6 +337,7 @@ export const activityTransport: {
   attach?: (act: JActivity, task: number) => void;
   isTaskRoot?: (act: JActivity) => boolean;
   removeTask?: (act: JActivity) => void;
+  presentation?: (translucent: boolean) => void;
 } = {};
 /** `sender` is the package whose identity the start carries (a PendingIntent's creator) */
 export async function launchIntent(host: AppHost, intent: JIntent, result?: ActivityResultTarget, sender = host.pkg) {
@@ -352,7 +353,8 @@ export async function launchIntent(host: AppHost, intent: JIntent, result?: Acti
     return activityTransport.launch(info.packageName, info.processName, component, intent, result);
   }
   const caller = result && result.code >= 0 ? await vcall(result.act, "getComponentName", "()Landroid/content/ComponentName;") as JComponentName : null;
-  await host.launch(component, intent, { caller, result });
+  // ActivityThread delivers the launch after the caller's current lifecycle callback returns.
+  void onMain(() => host.launch(component, intent, { caller, result })).catch(reportUncaught);
 }
 
 export const RESULT_OK = -1, RESULT_CANCELED = 0;

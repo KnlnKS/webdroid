@@ -33,6 +33,7 @@ export class JWindow extends JObj {
   backDispatcher(): JObj { return this.backD ??= rt.make("android/window/OnBackInvokedDispatcher"); }
   /** WindowManager.LayoutParams flags; the shell reads FLAG_FULLSCREEN off the top activity. */
   flags = 0;
+  translucent = false;
   decorFitsSystemWindows = true;
   fitInsetsSides = 15;
   fitInsetsTypes = 7;

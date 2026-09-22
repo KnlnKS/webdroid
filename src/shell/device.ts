@@ -97,7 +97,16 @@ export function currentApp(): BootedApp | null { return booted; }
 /** <activity-alias> component name → the Activity class that actually runs */
 const aliasTargets = new Map<string, string>();
 
-const invalidateWindow = () => { uiState.needsLayout = uiState.needsDraw = uiState.needsInsets = true; };
+const invalidateWindow = () => {
+  uiState.needsLayout = uiState.needsDraw = uiState.needsInsets = true;
+  activityTransport.presentation?.(!!booted?.stack.length && booted.stack.every(act => act.window.translucent));
+};
+function visibleActivities(): JActivity[] {
+  const stack = booted?.stack ?? [];
+  let first = stack.length - 1;
+  while (first > 0 && stack[first].window.translucent) first--;
+  return first > 0 ? stack.slice(first) : stack;
+}
 
 export async function bootApk(input: Uint8Array | Install, onStatus: (s: string) => void, apkFile = "", processName: string | null = null, prepared?: () => void): Promise<BootedApp> {
   // The framework package must be in place before anything links, and restored storage roots
@@ -341,7 +350,9 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
     await safeCall(act, "onPostResume");
     await windowFocus(act, true);
     // AOSP stops the covered activity only once the new one is up
-    if (prev?.started) await stopActivity(prev);
+    if (!act.window.translucent) {
+      for (const covered of booted.stack.slice(0, -1)) if (covered.started) await stopActivity(covered);
+    }
     void buildOptionsMenu(act);
     invalidateWindow();
   } catch (e) {
@@ -428,15 +439,19 @@ const stopActivity = (act: JActivity) => lifecycleStep(act, "onStop", "Stopped")
 /** Returning to a covered activity: onRestart → onStart → onResume → onPostResume, with the
  *  ActivityLifecycleCallbacks a fresh launch fires. */
 async function resumeActivity(act: JActivity) {
+  await startActivity(act);
+  if (!act.resumed) await lifecycleStep(act, "onResume", "Resumed");
+  await safeCall(act, "onPostResume");
+}
+async function startActivity(act: JActivity) {
   if (!act.started) {
     await safeCall(act, "onRestart");
     await lifecycleStep(act, "onStart", "Started");
   }
-  if (!act.resumed) await lifecycleStep(act, "onResume", "Resumed");
-  await safeCall(act, "onPostResume");
 }
 async function resumeTop(top: JActivity) {
   applyOrientationRequest(top.requestedOrientation);
+  for (const act of visibleActivities()) if (act !== top) await startActivity(act);
   await resumeActivity(top);
   await windowFocus(top, true);
   void buildOptionsMenu(top);
@@ -482,7 +497,7 @@ export function finishTask(taskId: number, resume: boolean): Promise<void> {
   });
 }
 
-export function activityVisibility(phase: "pause" | "stop" | "resume"): Promise<void> {
+export function activityVisibility(phase: "pause" | "stop" | "resume" | "visible"): Promise<void> {
   return onMain(async () => {
     const act = booted?.host.currentActivity();
     if (!act) return;
@@ -490,10 +505,13 @@ export function activityVisibility(phase: "pause" | "stop" | "resume"): Promise<
       if (act.resumed) await pauseActivity(act);
       await windowFocus(act, false);
     } else if (phase === "stop") {
-      if (act.started) await stopActivity(act);
+      for (const covered of booted!.stack) if (covered.started) await stopActivity(covered);
     } else {
-      await resumeActivity(act);
-      await windowFocus(act, true);
+      for (const visible of visibleActivities()) await startActivity(visible);
+      if (phase === "resume") {
+        await resumeActivity(act);
+        await windowFocus(act, true);
+      }
       uiState.needsLayout = uiState.needsDraw = true;
     }
   });
@@ -591,7 +609,8 @@ async function tick0() {
     if (uiState.animHooks.size) {
       for (const hook of [...uiState.animHooks]) if (!hook()) uiState.animHooks.delete(hook);
     }
-    const act = booted?.stack.at(-1);
+    const activities = visibleActivities();
+    const act = activities.at(-1);
     const decor = act?.window.decor;
     if (!decor) {
       if (startWin && uiState.needsDraw) {
@@ -608,7 +627,9 @@ async function tick0() {
       uiState.needsInsets = false;
       perf.insetsPasses++;
       mainDbg.phase = "insets";
-      try { await dispatchWindowInsets(decor); } catch (e) { console.error("[insets]", e); }
+      try {
+        for (const activity of activities) if (activity.window.decor) await dispatchWindowInsets(activity.window.decor);
+      } catch (e) { console.error("[insets]", e); }
       uiState.needsLayout = true;
     }
     if (uiState.needsLayout) {
@@ -621,13 +642,17 @@ async function tick0() {
         // everything else; a window nothing asked for is not re-measured at all.
         if (uiState.forceAll) {
           uiState.forceAll = false;
-          forceLayoutFlags(decor);
+          for (const activity of activities) if (activity.window.decor) forceLayoutFlags(activity.window.decor);
           for (const o of overlays) forceLayoutFlags(o.view);
         }
-        mainDbg.phase = "measure";
-        await measureView(decor, makeSpec(SCREEN_W, MS_EXACTLY), makeSpec(SCREEN_H, MS_EXACTLY));
-        mainDbg.phase = "layout";
-        await layoutRoot(decor, 0, 0, SCREEN_W, SCREEN_H);
+        for (const activity of activities) {
+          const root = activity.window.decor;
+          if (!root) continue;
+          mainDbg.phase = "measure";
+          await measureView(root, makeSpec(SCREEN_W, MS_EXACTLY), makeSpec(SCREEN_H, MS_EXACTLY));
+          mainDbg.phase = "layout";
+          await layoutRoot(root, 0, 0, SCREEN_W, SCREEN_H);
+        }
         mainDbg.phase = "overlays";
         for (const o of overlays) {
           const win = o.view.windowOwner, floating = !!win?.dialog;
@@ -653,7 +678,7 @@ async function tick0() {
           if (insetsChanged || frameChanged) await dispatchWindowInsets(o.view);
         }
         mainDbg.phase = "globalLayout";
-        await fireGlobalLayout(decor);
+        for (const activity of activities) if (activity.window.decor) await fireGlobalLayout(activity.window.decor);
       } catch (e) {
         // A subtree that cannot measure costs a frame, not the session: fall through and draw
         // whatever DID lay out. Re-arming needsLayout here would turn a deterministic throw
@@ -673,16 +698,20 @@ async function tick0() {
       ctx.save();
       rt.yieldGap = 50;
       try {
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        if (activities[0].window.translucent) ctx.clearRect(0, 0, SCREEN_W, SCREEN_H);
+        else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H); }
         const cv = JCanvas.wrap(ctx, SCREEN_W, SCREEN_H);
         // AOSP's performDraw() dispatches OnPreDrawListener/OnDrawListener right before the
         // tree draw, on every draw pass -- not only ones that also ran a layout.
         try {
-          mainDbg.phase = "preDraw";
-          await fireDrawPass(decor);
-          mainDbg.phase = "draw";
-          await drawView(decor, cv);
+          for (const activity of activities) {
+            const root = activity.window.decor;
+            if (!root) continue;
+            mainDbg.phase = "preDraw";
+            await fireDrawPass(root);
+            mainDbg.phase = "draw";
+            await drawView(root, cv);
+          }
           const bars = rootWindowInsets(decor);
           if (bars.vis & 1) drawStatusBar(ctx, act!.window.appearance, act!.window.appearanceMask, decor.systemUiVisibility);
           if (bars.vis & 2) {

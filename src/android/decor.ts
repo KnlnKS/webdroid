@@ -67,6 +67,7 @@ export async function ensureDecor(act: JActivity) {
   if (act.window.decor) return;
   const host = act.$host;
   const theme: JTheme = themeOf(act) ?? host.theme;
+  act.window.translucent = !!rvInt(host.res, theme.lookup(AID("windowIsTranslucent")), 0);
   const decor = new JDecorView();
   decor.ctx = act;
   decor.jres = host.res;
