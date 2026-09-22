@@ -5566,3 +5566,79 @@ https://raw.githubusercontent.com/microg/GmsCore/v0.3.16.252432/play-services-co
 https://raw.githubusercontent.com/aosp-mirror/platform_external_skia/android-13.0.0_r1/src/core/SkPath.cpp
 https://developer.android.com/guide/components/activities/activity-lifecycle
 https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/graphics/java/android/graphics/Canvas.java
+
+
+### Hidden dialogs, non-floating windows and recorded color bounds
+
+`de2f247f` narrows the opaque-login dimming diagnosis above: AndroidX correctly calls Dialog.hide,
+and the retained provider root has visibility 4. The shell nevertheless drew its scrim before
+skipping the root itself, and its modal input/Back handling remained active. Hide now uses View's
+visibility operation; invisible overlay roots no longer draw a scrim, obscure WebView layers or
+receive new input/Back. Full Chrome's opaque Google login is undimmed; tapping its actual Cancel
+button restores the visible provider sheet and its resumed activity. This observation does not
+require a speculative overlay ownership redesign. Typecheck passes.
+
+`75cc37a6` fixes the country selector's extra 72 pixels. Its dialog theme explicitly sets
+windowIsFloating=false, but webdroid retained floating-window inset defaults. API 33 PhoneWindow's
+generateLayout sets LAYOUT_IN_SCREEN | LAYOUT_INSET_DECOR and clears fitted inset sides/types for
+non-floating windows. The private AVD's window dump confirms an application dialog with those
+flags, no fitted sides, and frame [0,0,1080,2160]. Applying those defaults when constructing the
+native Dialog's Window gives the same frame. The app's own sheet starts at y=72 in both captures:
+chrome-country-nonfloating.png and avd-country-reference.png. Text, emoji, caret timing and the
+native minimized-keyboard/navigation strip still differ.
+Source: https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/core/java/com/android/internal/policy/PhoneWindow.java
+
+`80b91f98` repairs the synthetic drawColor failure recorded above. Color fills and CLEAR now resolve
+canvas bounds when replay executes, preserving the destination clip and transform stack. Direct
+and RenderNode pixel checks pass at two translated/scaled offsets, including excluded rectangles,
+outside-node pixels and transparent clearing. The two overloads share their fill helper. Other
+PorterDuff modes retain their existing limitations; this is not a claim of complete blend support.
+Source: https://raw.githubusercontent.com/aosp-mirror/platform_frameworks_base/android-13.0.0_r1/graphics/java/android/graphics/Canvas.java
+
+The frozen candidate passes typecheck, 13 owning tests/60 assertions, and ChatGPT smoke compilation
+of 66,165 classes with zero method failures. The 24-step ChatGPT run completes in 123.5 seconds;
+all 96 process diagnostic snapshots succeed, with no required natives, settling limits, wedges or
+layout/draw errors. Only three known SLF4J warnings appear as browser errors. Evidence is retained
+under window-fixes-actual/, window-fixes-summary.json, e2e-window-fixes.log, window-core-tests.log,
+window-smoke.log, drawcolor-typecheck.log, drawcolor-pixels.log and drawcolor-clear-pixels.log.
+
+A text diagnostic confirms regular country rows use a 400-weight 48px font, without strokeText.
+The bundled Roboto is version 2.001047 (2015); the AVD fonts.xml selects RobotoStatic-Regular 2.138
+(2017) for regular text and a variable Roboto 3.002 (2020) for other weights. Loading the AVD's
+regular face under an explicit alias in full Chrome did not clearly eliminate the observed
+text-weight difference. No asset replacement is retained; reload removes the diagnostic wrappers
+and font substitutions. This is an unresolved raster/metrics comparison, not proof that font-file
+age alone causes the discrepancy. Final broad regression checks follow on the frozen candidate.
+
+
+### Window/replay final regression gate
+
+The frozen implementation `80b91f98` passes all 1,265 unit tests (26,848 assertions across 219
+files, 92.43 seconds). All eight runnable framework exercises pass; coverage is 295/363 declared
+natives, with Paint text measurement still requiring browser metrics. The final serialized E2E
+completes all 183 steps across 13 flows in 983.9 seconds, exit zero. No step wedges, no layout
+errors or required native delegates are reported, and no new host error types appear relative to
+the retained `418437b7` candidate. This does not make existing diagnostics successful operations.
+
+ChatGPT completes 24/24 in 125.2 seconds, with all 96 process inspections successful and no rendering
+error, settling limit or required native. Its three SLF4J warnings and optional queries are unchanged.
+Resy completes 13/13 without the earlier location-dialog settling timeout. YouTube completes 16/16,
+retaining the same show-controls/pause settling limits and six instances of its known Matrix draw
+failure. Lichess completes 15/15 and its engine moves, while retaining the previously baseline-
+reproduced pthread 35/3/22 diagnostics. Flappy Bird completes 7/7 but retains 12 unavailable auxiliary
+frame snapshots and the same browser status-property TypeError (13 unavailable in the earlier run).
+Those collection gaps remain explicit; they do not establish diagnostics for those frames.
+
+FitNotes has 37/39 images pixel-identical to the earlier candidate. The other two differ only in
+the onboarding dialog's OK glyph bounds after resolving its proper themed context. Mihon onboarding
+is 5/5 identical; Mihon app is 14/17 identical, with differences in initial loading completion, a
+reader scrollbar, and the random empty-library face. Harmonic's welcome interior is unchanged;
+its live stories and clock differ, while its settings differ only in the clock. Goldens are unchanged.
+The faster elapsed suite time and game frame rates were not measured under matched host load, so
+no performance improvement is claimed.
+
+Preserved final evidence: window-final-actual/, window-final-report/, window-final-summary.json,
+window-final-audit.log, e2e-window-final.log, window-final-unit.log and window-final-fwtest.log.
+The comparison gallery includes the corrected country sheet and undimmed provider login.
+Full authenticated functionality and complete visual parity remain unfinished; no account
+credentials, phone/email submission or authenticated upload/voice operation has been performed.
