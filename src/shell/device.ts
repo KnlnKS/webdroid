@@ -537,7 +537,10 @@ export function pressBack(): Promise<void> {
 }
 async function pressBack0() {
   // the topmost window takes the key: a dialog or popup before the activity under it
-  const top = overlays.at(-1);
+  let top;
+  for (let i = overlays.length - 1; i >= 0; i--) {
+    if (overlays[i].view.visibility === 0) { top = overlays[i]; break; }
+  }
   const act = booted?.stack.at(-1);
   try {
     if (top?.onBack) await top.onBack();
@@ -720,6 +723,7 @@ async function tick0() {
           }
           mainDbg.phase = "drawOverlays";
           for (const o of overlays) {
+            if (o.view.visibility !== 0) continue;
             const dim = o.dim?.() ?? 0;
             if (dim > 0) { ctx.fillStyle = `rgba(0,0,0,${dim})`; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H); }
             await drawView(o.view, cv);
@@ -736,7 +740,7 @@ async function tick0() {
       present();
       perf.drawMs += performance.now() - t0;
       // WebView frames are DOM over the canvas: show the ones this pass drew, hide the rest
-      webLayerSweep(overlays.length > 0);
+      webLayerSweep(overlays.some(o => o.view.visibility === 0));
     }
   } catch (e) {
     console.error("[tick]", e);
@@ -803,6 +807,7 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
       for (let i = overlays.length - 1; i >= 0; i--) {
         const o = overlays[i];
         const v = o.view;
+        if (v.visibility !== 0) continue;
         if (x >= v.left && x < v.right && y >= v.top && y < v.bottom) {
           touchTarget = { overlay: i };
           break;
@@ -824,7 +829,7 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
     }
     if (touchTarget && touchTarget !== "decor") {
       const o = overlays[touchTarget.overlay];
-      if (o) {
+      if (o?.view.visibility === 0) {
         ev.x = x - o.view.left;
         ev.y = y - o.view.top;
         await guardCall(o.view, M_dispatch, ev);

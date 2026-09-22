@@ -286,7 +286,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     }
     requestLayout(root);
   },
-  "hide()V": function (this: JDialog) { if (this.root) this.root.visibility = 4; },
+  "hide()V": function (this: JDialog) { if (this.root) return vcall(this.root, "setVisibility", "(I)V", 4); },
   "dismiss()V": function (this: JDialog) { return this.dismissImpl(); },
   "cancel()V": function (this: JDialog) { return this.cancel(); },
   "isShowing()Z": function (this: JDialog) { return this.showing ? 1 : 0; },
