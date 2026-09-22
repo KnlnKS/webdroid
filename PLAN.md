@@ -11,7 +11,8 @@ find no reproduced regression. Player ID/backend parity and later unlocked featu
 unvalidated; this is verified early gameplay, not a complete parity claim.
 Post-matrix profiling found expensive interpreted Thumb arithmetic and indexed memory operations.
 Their shared JIT lowering passes owning checks; arithmetic also completes a fresh puzzle.
-The combined candidate needs fresh gameplay validation and a new final regression matrix.
+The combined candidate `b5ae9cb5` restores level 3 and completes its first puzzle without native
+or rendering faults. It is frozen for a new final regression matrix; performance remains slow.
 
 - Run the unchanged 4.2.1 XAPK in full Chrome and an AVD at matching geometry.
 - Capture startup, menus, gameplay, pause/resume and saved progression in both.

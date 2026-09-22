@@ -122,6 +122,11 @@ forms retain interpreter handling. Rebuilding before the tests passes 73 ARM che
 assertions and typecheck. The focused four-transfer loop gives identical outputs and measures
 55–104 ms on the old path versus about 1.6 ms warm on the new one; host contention remains.
 Fresh combined app validation follows. No additional test file or app-specific shortcut is added.
+The combined `b5ae9cb5` build subsequently restores the level-3 puzzle by the 248-second capture
+and completes its first stage with an ordinary rope swipe. It advances to stage two without
+native, GL, layout or draw faults. A 15.40-second stage-two sample renders 18 frames (1.17 GL FPS),
+spending 15.13 s on 934 million native instructions. Different game state and background work
+prevent a paired whole-app speed claim. The candidate is frozen for repeated final verification.
 
 Earlier investigation entries follow; their open questions describe the revision at that time.
 
