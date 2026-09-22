@@ -916,9 +916,21 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
             } else if (vn == 1) c.fpcr = r(c, rt);
             return .next;
         }
-        if (dp and (o == 0 or o == 1) and (w & 0x60) == 0) {
-            const lane = n * 2 + (o & 1);
-            if (Ld) set(c, rt, vreg(u32, c, lane).*) else vreg(u32, c, lane).* = reg(c, rt, pc);
+        if (dp and (Ld or o < 4) and w & 15 == 0) {
+            const size: u32 = if (w & (1 << 22) != 0) 1 else if (w & 0x20 != 0) 2 else 4;
+            if (size == 4 and w & 0x800040 != 0) return fault(c, .undefined, w, pc);
+            const offset = (bits(w, 21, 1) << 2) | (if (size == 1) bits(w, 5, 2) else if (size == 2) bits(w, 6, 1) << 1 else 0);
+            const a = @as(u32, @intFromPtr(vreg(u64, c, n))) + offset;
+            const unsigned = w & (1 << 23) != 0;
+            if (Ld) set(c, rt, switch (size) {
+                1 => if (unsigned) ld(u8, a) else sxb(ld(u8, a)),
+                2 => if (unsigned) ld(u16, a) else sxh(ld(u16, a)),
+                else => ld(u32, a),
+            }) else switch (size) {
+                1 => mem.ptr(u8, a).* = @truncate(r(c, rt)),
+                2 => mem.ptr(u16, a).* = @truncate(r(c, rt)),
+                else => mem.ptr(u32, a).* = r(c, rt),
+            }
             return .next;
         }
         return null;

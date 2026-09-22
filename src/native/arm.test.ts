@@ -423,6 +423,21 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(36, 40))).toEqual([0xffff, 0, 0, 0]);
     }
   });
+  test("NEON core-register transfers extend scalar lanes and preserve neighbors", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([0x8000ffff, 0x80000001], 36);
+      cpu.w[10] = 0xab; cpu.w[12] = 0xbeef; cpu.w[14] = 0x12345678;
+    };
+    const words = [0xeef20bf0, 0xee521bf0, 0xeeb22bf0, 0xee123bf0, 0xee324b90, 0xee227b90, 0xee625bf0, 0xee226bb0];
+    for (const execute of [
+      () => run([...words, BXLR], setup),
+      () => runThumb([...words.flatMap(w => [w >>> 16, w & 0xffff]), 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect([c.w[0], c.w[2], c.w[4], c.w[6], c.w[8]]).toEqual([128, -128, 32768, -32768, -2147483647]);
+      expect(Array.from(c.si.slice(36, 38), x => x >>> 0)).toEqual([0x8000ffff, 0xab34beef]);
+    }
+  });
   test("rsb/adc/sbc", () => {
     const c = run([
       0xe3a00005,   // mov r0, #5
