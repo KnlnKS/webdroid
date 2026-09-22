@@ -2,7 +2,19 @@ import { rt, type NativeSpec } from "../jvm/runtime";
 import { JShader } from "./graphics";
 
 type Context = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-type Uniform = { location: WebGLUniformLocation | null; type: string; size: number; color: boolean; values: number[] };
+type UniformType = { size: number; integer: boolean; upload: (gl: WebGL2RenderingContext, location: WebGLUniformLocation | null, values: number[]) => void };
+type Uniform = { location: WebGLUniformLocation | null; format: UniformType; color: boolean; values: number[] };
+const vector = (size: 1 | 2 | 3 | 4, integer = false): UniformType => ({ size, integer,
+  upload: (gl, location, values) => integer ? gl[`uniform${size}iv`](location, values) : gl[`uniform${size}fv`](location, values),
+});
+const matrix = (size: 2 | 3 | 4): UniformType => ({ size: size * size, integer: false,
+  upload: (gl, location, values) => gl[`uniformMatrix${size}fv`](location, false, values),
+});
+const uniformTypes = new Map<string, UniformType>([
+  ["float", vector(1)], ["vec2", vector(2)], ["vec3", vector(3)], ["vec4", vector(4)],
+  ["int", vector(1, true)], ["ivec2", vector(2, true)], ["ivec3", vector(3, true)], ["ivec4", vector(4, true)],
+  ["mat2", matrix(2)], ["mat3", matrix(3)], ["mat4", matrix(4)],
+]);
 let surface: OffscreenCanvas | null = null;
 let context: WebGL2RenderingContext | null = null;
 function graphics(): WebGL2RenderingContext {
@@ -39,11 +51,16 @@ export class JRuntimeShader extends JShader {
       .replace(/\b(?:half|float)([234])x([234])\b/g, (_type, columns: string, rows: string) => columns === rows ? "mat" + columns : `mat${columns}x${rows}`)
       .replace(/\b(?:half|float)([234])\b/g, "vec$1")
       .replace(/\bint([234])\b/g, "ivec$1").replace(/\bhalf\b/g, "float");
-    for (const match of code.matchAll(/(layout\s*\(\s*color\s*\)\s*)?uniform\s+(\w+)\s+(\w+)\s*(?:\[\s*(\d+)\s*\])?\s*;/g)) {
-      const [, color, type, name, array] = match;
-      const count = type === "float" || type === "int" ? 1 : /^[ib]?vec[234]$/.test(type) ? Number(type.at(-1)) : /^mat[234]$/.test(type) ? Number(type.at(-1)) ** 2 : 0;
-      if (!count) invalid("Unsupported AGSL uniform type: " + type);
-      this.uniforms.set(name, { location: null, type, size: count * Number(array ?? 1), color: !!color, values: new Array(count * Number(array ?? 1)).fill(0) });
+    for (const match of code.matchAll(/(layout\s*\(\s*color\s*\)\s*)?\buniform\s+(\w+)\s+([^;]+);/g)) {
+      const [, color, type, declarations] = match, format = uniformTypes.get(type);
+      if (!format || color && type !== "vec4") invalid("Unsupported AGSL uniform type: " + type);
+      for (const declaration of declarations.split(",")) {
+        const parsed = /^\s*(\w+)\s*(?:\[\s*(\d+)\s*\])?\s*$/.exec(declaration);
+        if (!parsed) invalid("Unsupported AGSL uniform declaration: " + declaration);
+        const [, name, array] = parsed, count = Number(array ?? 1);
+        if (!Number.isSafeInteger(count) || count < 1) invalid("Invalid uniform array: " + name);
+        this.uniforms.set(name, { location: null, format, color: !!color, values: new Array(format.size * count).fill(0) });
+      }
     }
     const vertex = compile(gl, gl.VERTEX_SHADER, `#version 300 es
       void main() { vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`);
@@ -68,7 +85,7 @@ export class JRuntimeShader extends JShader {
   set(name: string, values: ArrayLike<number>, color = false, integer = false): void {
     if (name == null || values == null) throw rt.mkThrowable("java/lang/NullPointerException", "uniform");
     const u = this.uniforms.get(name);
-    if (!u || u.size !== values.length || u.color !== color || /^(?:int|ivec)/.test(u.type) !== integer) invalid("Invalid uniform: " + name);
+    if (!u || u.values.length !== values.length || u.color !== color || u.format.integer !== integer) invalid("Invalid uniform: " + name);
     let changed = false;
     for (let i = 0; i < values.length; i++) { changed ||= u.values[i] !== values[i]; u.values[i] = values[i]; }
     if (changed) this.revision++;
@@ -94,19 +111,7 @@ export class JRuntimeShader extends JShader {
       gl.viewport(0, 0, width, height); gl.useProgram(this.compiled!.program);
       gl.uniformMatrix3fv(this.transform, false, [inverse.a, inverse.b, 0, inverse.c, inverse.d, 0, inverse.e, inverse.f, 1]);
       gl.uniform1f(this.height, height);
-      for (const u of this.uniforms.values()) {
-        if (u.type === "float") gl.uniform1fv(u.location, u.values);
-        else if (u.type === "vec2") gl.uniform2fv(u.location, u.values);
-        else if (u.type === "vec3") gl.uniform3fv(u.location, u.values);
-        else if (u.type === "vec4") gl.uniform4fv(u.location, u.values);
-        else if (u.type === "int") gl.uniform1iv(u.location, u.values);
-        else if (u.type === "ivec2") gl.uniform2iv(u.location, u.values);
-        else if (u.type === "ivec3") gl.uniform3iv(u.location, u.values);
-        else if (u.type === "ivec4") gl.uniform4iv(u.location, u.values);
-        else if (u.type === "mat2") gl.uniformMatrix2fv(u.location, false, u.values);
-        else if (u.type === "mat3") gl.uniformMatrix3fv(u.location, false, u.values);
-        else if (u.type === "mat4") gl.uniformMatrix4fv(u.location, false, u.values);
-      }
+      for (const u of this.uniforms.values()) u.format.upload(gl, u.location, u.values);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       const raster = this.raster ??= new OffscreenCanvas(width, height);
       if (raster.width !== width) raster.width = width;
