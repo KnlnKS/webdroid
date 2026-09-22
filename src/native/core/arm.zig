@@ -1000,6 +1000,15 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
     }
     if ((h & 0xff80) == 0xfa00) {
         const h2: u32 = ld(u16, pc + 2);
+        const extend = (h >> 4) & 7;
+        if (h2 & 0xf0c0 == 0xf080 and (extend == 0 or extend == 1 or extend == 4 or extend == 5)) {
+            const value = std.math.rotr(u32, r(c, h2 & 15), bits(h2, 4, 2) * 8);
+            const part = switch (extend) { 0 => sxh(value), 1 => value & 65535, 4 => sxb(value), else => value & 255 };
+            const base = if (h & 15 == 15) 0 else r(c, h & 15);
+            set(c, (h2 >> 8) & 15, base +% part);
+            c.pc = pc + 4;
+            return .next;
+        }
         if (h2 & 0xf0f0 == 0xf000) {
             c.pc = pc + 4;
             const shifted = shiftReg(c, (h >> 5) & 3, r(c, h & 15), r(c, h2 & 15) & 255);

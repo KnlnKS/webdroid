@@ -711,6 +711,17 @@ describe("thumb decoder", () => {
     expect(c.w[0]).toBe(1);
   });
 
+  test("wide extensions rotate before extending and adding", () => {
+    const c = runThumb([
+      0xfa1f, 0xfa80, // uxth.w r10, r0
+      0xfa0f, 0xfb90, // sxth.w r11, r0, ror #8
+      0xfa51, 0xfca0, // uxtab r12, r1, r0, ror #16
+      0xfa41, 0xf9b0, // sxtab r9, r1, r0, ror #24
+      0x4770,
+    ], (cpu) => { cpu.w[0] = 0x80ffaa55; cpu.w[2] = 10; });
+    expect([c.w[20], c.w[22], c.w[24], c.w[18]]).toEqual([0xaa55, -86, 265, -118]);
+  });
+
   test("wide bit reversal and leading-zero count preserve their source", () => {
     const c = runThumb([
       0xfab2, 0xf082, // clz r0, r2
