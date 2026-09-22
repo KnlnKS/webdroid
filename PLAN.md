@@ -1,3 +1,16 @@
+# ChatGPT parity repair
+
+Branch: `codex/chatgpt-parity`. Starting revision: `9d0bb979`.
+Status: establishing paired Chrome/AVD baseline.
+
+- Run unchanged ChatGPT XAPK in full Chrome and API 33 AVD at 1080×2160, 480 dpi.
+- Capture and compare reachable interactions; trace failures to platform contracts.
+- Fix canonical owners, keep changes focused and avoid speculative delegates/tests.
+- Test only ChatGPT and changed core behavior during development. Run full E2E only at the end.
+- Preserve goldens, record evidence and remaining limitations, make focused commits.
+
+---
+
 # TikTok parity repair
 
 Branch: `codex/tiktok-parity`. Starting revision: `9071fec70953eb3b76df86c6cdede69bdf316eaf`.
