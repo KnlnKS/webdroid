@@ -5,6 +5,26 @@ import { newObj, vcall } from "../src/jvm/natives/jlang";
 import { newArrayList } from "../src/jvm/natives/jutil";
 rt.linkNatives();
 
+test("bounded queues reject overflow and wake blocked producers after removal", async () => {
+  const queue = await newObj("java/util/concurrent/ArrayBlockingQueue", "(I)V", 1);
+  expect(await vcall(queue, "offer", "(Ljava/lang/Object;)Z", "first")).toBe(1);
+  expect(await vcall(queue, "offer", "(Ljava/lang/Object;)Z", "overflow")).toBe(0);
+  let completed = false;
+  const producer = vcall(queue, "put", "(Ljava/lang/Object;)V", "second").then(() => { completed = true; });
+  await Promise.resolve();
+  expect(completed).toBe(false);
+  expect(await vcall(queue, "remainingCapacity", "()I")).toBe(0);
+  expect(await vcall(queue, "poll", "()Ljava/lang/Object;")).toBe("first");
+  await producer;
+  expect(await vcall(queue, "take", "()Ljava/lang/Object;")).toBe("second");
+  expect(await vcall(queue, "remainingCapacity", "()I")).toBe(1);
+  const handoff = await newObj("java/util/concurrent/SynchronousQueue");
+  const pending = vcall(handoff, "put", "(Ljava/lang/Object;)V", "handoff");
+  expect(await vcall(handoff, "size", "()I")).toBe(0);
+  expect(await vcall(handoff, "take", "()Ljava/lang/Object;")).toBe("handoff");
+  await pending;
+});
+
 for (const name of ["ArrayBlockingQueue", "LinkedBlockingQueue", "LinkedBlockingDeque", "LinkedTransferQueue", "PriorityBlockingQueue"]) {
   test(`${name} drains a bounded prefix and then the remaining elements`, async () => {
     const queue = await newObj(`java/util/concurrent/${name}`, "(I)V", 8);

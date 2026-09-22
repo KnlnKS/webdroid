@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
 import { after, vcall, vcallOn, newObj, JThread, JEnum, enumValueOf, setCurThread, curThread, park, defineException } from "./jlang";
-import { JList, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods, toJsArray } from "./jutil";
+import { JList, mkIter, newArrayList, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods, toJsArray } from "./jutil";
 import { JRandom, randomSeed } from "./jrandom";
 import { mangleMethod, splitSig, jarray } from "../abi";
 import { clearGuestTimeout, guestNow, setGuestTimeout, type GuestTimer } from "../../guest-clock";
@@ -845,77 +845,148 @@ const timedPoll = function (this: WaitingQueue, d: bigint, u: JTimeUnit): unknow
 };
 
 class JBlockingQueue extends JList {
+  capacity = 0x7fffffff;
+  reserved = 0;
   takers: ((v: unknown) => void)[] = [];
-  /** hand the value to a parked take(), else queue it */
-  enqueue(v: unknown, front = false) {
-    const t = this.takers.shift();
-    if (t) queueMicrotask(() => t(v));
-    else if (front) this.a.unshift(v);
-    else this.a.push(v);
+  putters: { value: unknown; front: boolean; done: (accepted: number) => void }[] = [];
+  enqueue(value: unknown, front = false): number {
+    if (value == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    const taker = this.takers.shift();
+    if (taker) { taker(value); return 1; }
+    if (this.a.length + this.reserved >= this.capacity) return 0;
+    if (front) this.a.unshift(value); else this.a.push(value);
+    return 1;
   }
+  refill(): void {
+    while (this.putters.length && (this.takers.length || this.a.length + this.reserved < this.capacity)) {
+      const pending = this.putters.shift()!;
+      this.enqueue(pending.value, pending.front); pending.done(1);
+    }
+  }
+  put(value: unknown, front = false, timeout?: number): number | Promise<number> {
+    if (this.enqueue(value, front)) return 1;
+    if (timeout !== undefined && timeout <= 0) return 0;
+    return new Promise(resolve => {
+      let timer: GuestTimer | undefined;
+      const pending = { value, front, done: (accepted: number) => { if (timer) clearGuestTimeout(timer); resolve(accepted); } };
+      this.putters.push(pending);
+      if (timeout !== undefined) timer = setGuestTimeout(() => {
+        this.putters.splice(this.putters.indexOf(pending), 1); pending.done(0);
+      }, timeout);
+    });
+  }
+  poll(last = false): unknown {
+    if (this.a.length) {
+      const value = last ? this.a.pop() : this.a.shift(); this.refill(); return value;
+    }
+    const pending = this.putters.shift();
+    if (!pending) return null;
+    pending.done(1); return pending.value;
+  }
+  take(last = false, timeout?: number): unknown {
+    const value = this.poll(last);
+    if (value !== null) return value;
+    if (timeout !== undefined && timeout <= 0) return null;
+    return new Promise(resolve => {
+      let timer: GuestTimer | undefined;
+      const taker = (value: unknown) => { if (timer) clearGuestTimeout(timer); resolve(value); };
+      this.takers.push(taker);
+      if (timeout !== undefined) timer = setGuestTimeout(() => {
+        this.takers.splice(this.takers.indexOf(taker), 1); taker(null);
+      }, timeout);
+    });
+  }
+  removeAt(index: number): void { this.a.splice(index, 1); this.refill(); }
 }
+const queueAdd = function (this: JBlockingQueue, value: unknown, front = false): number {
+  if (!this.enqueue(value, front)) throw rt.mkThrowable("java/lang/IllegalStateException", "Queue full");
+  return 1;
+};
+const queueCapacity = function (this: JBlockingQueue, capacity: number): void {
+  if (capacity <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+  this.capacity = capacity;
+};
 async function drainTo(this: JBlockingQueue, collection: unknown, max = 0x7fffffff) {
   if (collection == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   if (collection === this) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
   if (max <= 0) return 0;
   const batch = this.a.splice(0, max);
+  this.reserved += batch.length;
   let count = 0;
   try {
     for (const value of batch) { await vcall(collection, "add", "(Ljava/lang/Object;)Z", value); count++; }
-  } finally { if (count < batch.length) this.a.unshift(...batch.slice(count)); }
+  } finally {
+    if (count < batch.length) this.a.unshift(...batch.slice(count));
+    this.reserved -= batch.length; this.refill();
+  }
   return count;
 }
 /** BlockingDeque's ends: a parked taker still receives whatever arrives next, either end. */
 const dequeMethods = (): NonNullable<NativeSpec["methods"]> => ({
-  "putFirst(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v, true); },
-  "offerFirst(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v, true); return 1; },
-  "addFirst(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v, true); },
-  "addLast(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); },
-  "putLast(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); },
-  "offerLast(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
-  "takeFirst()Ljava/lang/Object;": takeFirst,
+  "putFirst(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { return this.put(v, true); },
+  "offerFirst(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { return this.enqueue(v, true); },
+  "addFirst(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { queueAdd.call(this, v, true); },
+  "addLast(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { queueAdd.call(this, v); },
+  "putLast(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { return this.put(v); },
+  "offerLast(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { return this.enqueue(v); },
+  "takeFirst()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.take(); },
   "takeLast()Ljava/lang/Object;": function (this: JBlockingQueue) {
-    return this.a.length ? this.a.pop() : new Promise((r) => this.takers.push(r));
+    return this.take(true);
   },
-  "pollFirst()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.a.length ? this.a.shift() : null; },
-  "pollLast()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.a.length ? this.a.pop() : null; },
+  "pollFirst()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.poll(); },
+  "pollLast()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.poll(true); },
   "peekFirst()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.a[0] ?? null; },
   "peekLast()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.a[this.a.length - 1] ?? null; },
   "removeFirstOccurrence(Ljava/lang/Object;)Z": async function (this: JBlockingQueue, v: unknown) {
     const i = await vcall(this, "indexOf", "(Ljava/lang/Object;)I", v) as number;
     if (i < 0) return 0;
-    this.a.splice(i, 1); return 1;
+    this.removeAt(i); return 1;
   },
   "removeLastOccurrence(Ljava/lang/Object;)Z": async function (this: JBlockingQueue, v: unknown) {
     const i = await vcall(this, "lastIndexOf", "(Ljava/lang/Object;)I", v) as number;
     if (i < 0) return 0;
-    this.a.splice(i, 1); return 1;
+    this.removeAt(i); return 1;
   },
 });
 const mkBlockingQueue = (name: string, deque = false) => rt.register({
-  name, ctor: class extends JBlockingQueue {},
+  name, ctor: class extends JBlockingQueue { override capacity = name === "java/util/concurrent/SynchronousQueue" ? 0 : 0x7fffffff; },
   ifaces: deque
     ? ["java/util/concurrent/BlockingDeque", "java/util/Deque", "java/util/concurrent/BlockingQueue", "java/util/Queue", "java/util/Collection", "java/lang/Iterable"]
     : ["java/util/concurrent/BlockingQueue", "java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
   methods: {
+    ...Object.fromEntries(Object.entries(listMethods()).filter(([k]) => !k.startsWith("<init>"))),
     ...(deque ? dequeMethods() : {}),
-    ...drainMethods,
-    ...Object.fromEntries(Object.entries(listMethods() ?? {}).filter(([k]) => !k.startsWith("<init>"))),
     "<init>()V": function () {},
-    "<init>(I)V": function () {},
+    "<init>(I)V": queueCapacity,
+    "<init>(IZ)V": queueCapacity,
+    "<init>(Z)V": function () {},
     "<init>(Ljava/util/Collection;)V": async function (this: JBlockingQueue, c: unknown) {
       for (const v of await toJsArray(c)) this.enqueue(v);
     },
-    "put(Ljava/lang/Object;)V": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); },
-    "offer(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) {
-      if (v == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      if (name === "java/util/concurrent/SynchronousQueue" && !this.takers.length) return 0;
-      this.enqueue(v); return 1;
+    "put(Ljava/lang/Object;)V": function (this: JBlockingQueue, value: unknown) { return this.put(value); },
+    "offer(Ljava/lang/Object;)Z": function (this: JBlockingQueue, value: unknown) { return this.enqueue(value); },
+    "offer(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z": function (this: JBlockingQueue, value: unknown, duration: bigint, unit: JTimeUnit) { return this.put(value, false, Number(duration) * unit.ms); },
+    "add(Ljava/lang/Object;)Z": queueAdd,
+    "addAll(Ljava/util/Collection;)Z": async function (this: JBlockingQueue, collection: unknown) {
+      if (collection === this) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+      const values = await toJsArray(collection);
+      for (const value of values) queueAdd.call(this, value);
+      return values.length ? 1 : 0;
     },
-    "offer(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
-    "add(Ljava/lang/Object;)Z": function (this: JBlockingQueue, v: unknown) { this.enqueue(v); return 1; },
-    "take()Ljava/lang/Object;": takeFirst,
-    "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": timedPoll,
+    "remainingCapacity()I": function (this: JBlockingQueue) { return this.capacity - this.a.length - this.reserved; },
+    "take()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.take(); },
+    "poll()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.poll(); },
+    "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JBlockingQueue, duration: bigint, unit: JTimeUnit) { return this.take(false, Number(duration) * unit.ms); },
+    "remove()Ljava/lang/Object;": function (this: JBlockingQueue) {
+      const value = this.poll(); if (value === null) throw rt.mkThrowable("java/util/NoSuchElementException", null); return value;
+    },
+    "remove(Ljava/lang/Object;)Z": async function (this: JBlockingQueue, value: unknown) {
+      const index = await vcall(this, "indexOf", "(Ljava/lang/Object;)I", value);
+      if (index < 0) return 0;
+      this.removeAt(index); return 1;
+    },
+    "iterator()Ljava/util/Iterator;": function (this: JBlockingQueue) { return mkIter(this.a, this); },
+    "clear()V": function (this: JBlockingQueue) { this.a.length = 0; this.refill(); },
     "drainTo(Ljava/util/Collection;)I": drainTo,
     "drainTo(Ljava/util/Collection;I)I": drainTo,
   },
