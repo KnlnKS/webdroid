@@ -197,6 +197,17 @@ also shares the existing ARM semantics. The latest owning decoder run passes 65 
 722 assertions and typecheck passes. Original ARM32 initialization now creates its graphics
 worker, but rendered gameplay, lifecycle stability and final regression checks remain open.
 
+Reaching managed startup exceptions exposed missing `dl_unwind_find_exidx`. Android's
+[ARM unwind lookup](https://android.googlesource.com/platform/bionic/+/ics-mr1-release/libc/arch-arm/bionic/exidx_dynamic.c)
+has the same semantics as the already implemented GNU lookup; both names now share it.
+Guest tracing confirms table lookup and continued exception unwinding rather than aborting.
+Further reached SIMD gaps include integer/float zero comparisons, float/integer conversion
+and vector inversion. They reuse the shared SIMD implementation. The owning run passes 66
+checks / 738 assertions and typecheck passes. Original ARM32 XAPK smoke compilation covers
+64,465 classes with zero method failures. These checks do not establish rendered gameplay.
+Ad-specific implementation is excluded unless it blocks another feature; the AVD test ad
+is not a target for independent implementation.
+
 ## microG completion and open acceptance
 
 PLAN.md owns current status. Both Android and webdroid now
