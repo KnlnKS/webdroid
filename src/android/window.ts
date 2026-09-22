@@ -63,13 +63,7 @@ export function applyWindowTheme(window: JWindow, theme: JTheme, statusDefault =
   window.navBarColor ??= rvColor(theme.res, theme.lookup(AID("navigationBarColor")), -16777216);
   window.translucent = !!rvInt(theme.res, theme.lookup(AID("windowIsTranslucent")), 0);
   if (rvInt(theme.res, theme.lookup(AID("windowFullscreen")), 0)) window.flags |= 1024;
-  for (const [name, mask] of [["windowLightStatusBar", APPEARANCE_LIGHT_STATUS_BARS], ["windowLightNavigationBar", APPEARANCE_LIGHT_NAVIGATION_BARS]] as const) {
-    const value = theme.lookup(AID(name));
-    if (value && !(window.appearanceMask & mask)) {
-      window.appearance = (window.appearance & ~mask) | (rvInt(theme.res, value, 0) ? mask : 0);
-      window.appearanceMask |= mask;
-    }
-  }
+
 }
 class JInsetsController extends JObj { w: JWindow = null!; }
 /** A change to how a window is sized or placed relays out its tree: an activity's decor or a
