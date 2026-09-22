@@ -331,6 +331,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   // Activity.isChild is only true for the long-dead ActivityGroup embedding; AppCompat asks it
   // before relaunching for a night-mode change.
   "isChild()Z": () => 0,
+  "getParent()Landroid/app/Activity;": () => null,
   "recreate()V": function (this: JActivity) { appHost?.recreateActivity(this); },
   ...fieldSetters({ "setIntent(Landroid/content/Intent;)V": "intent", "setResult(I)V": "resultCode" }),
   ...fieldGetters({ "getTitle()Ljava/lang/CharSequence;": "titleStr",
