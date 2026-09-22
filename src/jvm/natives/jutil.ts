@@ -2697,6 +2697,28 @@ async function streamProperties(stream: unknown): Promise<Map<string, string>> {
   return propertyText(charsToString(bytes, 0, bytes.length));
 }
 export class JProps extends JMap {}
+function escapeProperty(text: string, key: boolean): string {
+  return text.replace(/[\u0000-\u0020\\=:#!\u007f-\uffff]/g, (c, offset: number) => {
+    const code = c.charCodeAt(0);
+    if (code > 0x7e || code < 0x20 && !"\t\n\r\f".includes(c)) return "\\u" + code.toString(16).padStart(4, "0");
+    if (c === " " && !key && offset > 0) return c;
+    return "\\" + ({ "\t": "t", "\n": "n", "\r": "r", "\f": "f" }[c] ?? c);
+  });
+}
+async function storeProperties(props: JProps, stream: unknown, comments: string | null): Promise<void> {
+  const thread = curThread, lines: string[] = [];
+  if (comments != null) lines.push("#" + comments.replace(/[\u0100-\uffff]/g, c => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"))
+    .replace(/\r\n|\r|\n/g, "\n#"));
+  lines.push("#" + new Date().toString());
+  for (const { k, v } of props.m.values()) {
+    if (typeof k !== "string" || typeof v !== "string") throw rt.mkThrowable("java/lang/ClassCastException", "Properties keys and values must be strings");
+    lines.push(escapeProperty(k, true) + "=" + escapeProperty(v, false));
+  }
+  const text = lines.join("\n") + "\n", bytes = new Int8Array(text.length);
+  for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+  await vcallOn(thread, stream, "write", "([BII)V", bytes, 0, bytes.length);
+  await vcallOn(thread, stream, "flush", "()V");
+}
 const setProperties = (props: JProps, entries: Map<string, string>) => { for (const [k, v] of entries) props.m.set(k, { k, v }); };
 rt.register({
   name: "java/util/Properties", ctor: JProps, sup: "java/util/HashMap",
@@ -2709,6 +2731,7 @@ rt.register({
     },
     "load(Ljava/io/InputStream;)V": async function (this: JProps, stream: unknown) { setProperties(this, await streamProperties(stream)); },
     "load(Ljava/io/Reader;)V": async function (this: JProps, reader: unknown) { setProperties(this, await readerProperties(reader)); },
+    "store(Ljava/io/OutputStream;Ljava/lang/String;)V": function (this: JProps, stream: unknown, comments: string | null) { return storeProperties(this, stream, comments); },
   },
 });
 defineException("java/util/MissingResourceException", "java/lang/RuntimeException");
