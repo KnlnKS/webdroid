@@ -1,6 +1,6 @@
 import { splitSig } from "../abi";
 import { JObj, rt, type NativeSpec } from "../runtime";
-import { vcall } from "./jlang";
+import { vcall, vcallOn, curThread } from "./jlang";
 
 type Methods = NonNullable<NativeSpec["methods"]>;
 type Kind = "collection" | "list" | "set" | "sortedSet" | "map" | "sortedMap";
@@ -24,10 +24,10 @@ async function call(wrapper: JWrapper, signature: string, args: unknown[]): Prom
   const [name, descriptor] = splitSig(signature);
   const forwarded = signature === "equals(Ljava/lang/Object;)Z" && args[0] instanceof JWrapper ? [args[0].delegate] : args;
   if (wrapper.mode === "unmodifiable") return vcall(wrapper.delegate, name, descriptor, ...forwarded);
-  const thread = rt.th();
+  const thread = curThread;
   const entered = rt.monitors.enter(wrapper.mutex, thread);
   if (entered) await entered;
-  try { return await vcall(wrapper.delegate, name, descriptor, ...forwarded); }
+  try { return await vcallOn(thread, wrapper.delegate, name, descriptor, ...forwarded); }
   finally { rt.monitors.exit(wrapper.mutex, thread); }
 }
 

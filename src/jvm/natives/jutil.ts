@@ -873,19 +873,22 @@ function mapHash(entries: Ent[], from = 0, hash = 0): number | Promise<number> {
   return hash;
 }
 async function copyMapInto(src: unknown, dst: JMap) {
+  const thread = curThread;
+  const call = (target: unknown, name: string, desc: string, ...args: unknown[]) => vcallOn(thread, target, name, desc, ...args);
   if (src instanceof JMap) {
     for (const e of allEnts(src)) {
       // through put(), not m.set: slow (custom-equals) keys must go through the bucket path
-      await vcall(dst, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", e.k, e.v);
+      const result = call(dst, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", e.k, e.v);
+      if (result instanceof Promise) await result;
     }
     return;
   }
-  const es = await vcall(src, "entrySet", "()Ljava/util/Set;");
-  const it = await vcall(es, "iterator", "()Ljava/util/Iterator;");
-  while (await vcall(it, "hasNext", "()Z")) {
-    const e = await vcall(it, "next", "()Ljava/lang/Object;");
-    await vcall(dst, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
-      await vcall(e, "getKey", "()Ljava/lang/Object;"), await vcall(e, "getValue", "()Ljava/lang/Object;"));
+  const es = await call(src, "entrySet", "()Ljava/util/Set;");
+  const it = await call(es, "iterator", "()Ljava/util/Iterator;");
+  while (await call(it, "hasNext", "()Z")) {
+    const e = await call(it, "next", "()Ljava/lang/Object;");
+    await call(dst, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+      await call(e, "getKey", "()Ljava/lang/Object;"), await call(e, "getValue", "()Ljava/lang/Object;"));
   }
 }
 

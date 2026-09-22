@@ -1,8 +1,17 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { JThread, newObj, vcall, vcallOn } from "../src/jvm/natives/jlang";
 import { newArrayList } from "../src/jvm/natives/jutil";
+import { synchronizedMap } from "../src/jvm/natives/jwrappers";
+
+test("a synchronized map can copy its own entries across suspension on the owning thread", async () => {
+  const map = synchronizedMap(await newObj("java/util/HashMap")), thread = new JThread();
+  await vcallOn(thread, map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "key", "value");
+  await vcallOn(thread, map, "putAll", "(Ljava/util/Map;)V", map);
+  expect(await vcall(map, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "key")).toBe("value");
+  expect(rt.monitors.blocked()).toEqual([]);
+}, 1000);
 
 class Destination extends JObj { values: unknown[] = []; }
 rt.register({ name: "test/DrainDestination", ctor: Destination, ifaces: ["java/util/Collection"], methods: {
