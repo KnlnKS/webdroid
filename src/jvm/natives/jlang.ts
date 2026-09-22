@@ -984,6 +984,7 @@ rt.register(sbSpec("java/lang/StringBuffer"));
 class JNumber extends JObj {}
 rt.register({
   name: "java/lang/Number", ctor: JNumber, ifaces: ["java/io/Serializable"],
+  serialization: { uid: -8742448824652078965n, fields: [] },
   methods: { "<init>()V": function () {} },
 });
 
@@ -1077,6 +1078,7 @@ const numCommon = (kind: "I" | "J" | "F" | "D" | "B" | "S", Ctor: new () => { v:
 });
 rt.register({
   name: "java/lang/Integer", ctor: JInt, sup: "java/lang/Number",
+  serialization: { uid: 1360826667806852920n, fields: [{ name: "value", desc: "I", prop: "v" }] },
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   statics: { MAX_VALUE: 2147483647, MIN_VALUE: -2147483648, SIZE: 32, BYTES: 4, get TYPE() { return rt.classFor("int"); } },
   methods: {
@@ -1130,6 +1132,7 @@ function parseLongJ(s: string, radix = 10): bigint {
 }
 rt.register({
   name: "java/lang/Long", ctor: JLong, sup: "java/lang/Number",
+  serialization: { uid: 4290774380558885855n, fields: [{ name: "value", desc: "J", prop: "v" }] },
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   statics: { MAX_VALUE: 9223372036854775807n, MIN_VALUE: -9223372036854775808n, SIZE: 64, BYTES: 8, get TYPE() { return rt.classFor("long"); } },
   methods: {
@@ -1183,6 +1186,7 @@ const isInfZ = (v: number) => (v === Infinity || v === -Infinity ? 1 : 0);
 export const cmpFloat = (a: number, b: number) => a < b ? -1 : a > b ? 1 : Object.is(a, b) ? 0 : a === b ? Object.is(a, -0) ? -1 : 1 : a !== a ? 1 : -1;
 rt.register({
   name: "java/lang/Float", ctor: JFloat, sup: "java/lang/Number",
+  serialization: { uid: -2671257302660747028n, fields: [{ name: "value", desc: "F", prop: "v" }] },
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   statics: { MAX_VALUE: 3.4028234663852886e38, MIN_VALUE: 1.401298464324817e-45, POSITIVE_INFINITY: Infinity, NEGATIVE_INFINITY: -Infinity, NaN: NaN, get TYPE() { return rt.classFor("float"); } },
   methods: {
@@ -1204,6 +1208,7 @@ rt.register({
 });
 rt.register({
   name: "java/lang/Double", ctor: JDouble, sup: "java/lang/Number",
+  serialization: { uid: -9172774392245257468n, fields: [{ name: "value", desc: "D", prop: "v" }] },
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   statics: { MAX_VALUE: 1.7976931348623157e308, MIN_VALUE: 4.9e-324, POSITIVE_INFINITY: Infinity, NEGATIVE_INFINITY: -Infinity, NaN: NaN, get TYPE() { return rt.classFor("double"); } },
   methods: {
@@ -1226,6 +1231,7 @@ rt.register({
 });
 rt.register({
   name: "java/lang/Byte", ctor: JByte, sup: "java/lang/Number",
+  serialization: { uid: -7183698231559129828n, fields: [{ name: "value", desc: "B", prop: "v" }] },
   statics: { MAX_VALUE: 127, MIN_VALUE: -128, get TYPE() { return rt.classFor("byte"); } },
   methods: {
     ...numCommon("B", JByte),
@@ -1236,6 +1242,7 @@ rt.register({
 });
 rt.register({
   name: "java/lang/Short", ctor: JShort, sup: "java/lang/Number",
+  serialization: { uid: 7515723908773894738n, fields: [{ name: "value", desc: "S", prop: "v" }] },
   statics: { MAX_VALUE: 32767, MIN_VALUE: -32768, get TYPE() { return rt.classFor("short"); } },
   methods: {
     ...numCommon("S", JShort),
@@ -1246,6 +1253,7 @@ export const TRUE = new JBool(); TRUE.v = 1;
 export const FALSE = new JBool();
 rt.register({
   name: "java/lang/Boolean", ctor: JBool,
+  serialization: { uid: -3665804199014368530n, fields: [{ name: "value", desc: "Z", prop: "v" }] },
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   statics: { TRUE, FALSE, get TYPE() { return rt.classFor("boolean"); } },
   methods: {
@@ -1292,6 +1300,7 @@ function offsetCodePoints(text: string, index: number, offset: number): number {
 const isISOControl = (c: number) => +((c >= 0 && c <= 0x1f) || (c >= 0x7f && c <= 0x9f));
 rt.register({
   name: "java/lang/Character", ctor: JChar,
+  serialization: { uid: 3786198910865385080n, fields: [{ name: "value", desc: "C", prop: "v" }] },
   ifaces: ["java/lang/Comparable", "java/io/Serializable"],
   statics: { MAX_VALUE: 0xffff, MIN_VALUE: 0, get TYPE() { return rt.classFor("char"); } },
   methods: {
