@@ -222,6 +222,24 @@ both tiers. All 68 ARM checks / 747 assertions and typecheck pass. An earlier ov
 manual reflection probe caused a diagnostic-only main-CPU fault; it is excluded from app
 fault evidence. Fresh game validation follows this repair.
 
+
+Fresh ARM32 startup now resolves the catalog and enters asset preloading. Reached widening
+VMLAL/VMLSL/VMULL and integer scalar multiplication reuse the SIMD owner; ARM UMAAL joins
+the existing long-multiply paths in both execution tiers. Thumb SBFX shares extraction with
+ARM SBFX/UBFX, including full-width and signed lane checks. The current ARM owner run passes
+70 checks / 771 assertions; typecheck passes.
+
+A later signal delivery jumped outside the loaded libraries. The installed IL2CPP handler
+remained valid, but nested guest entry retained the interrupted Thumb IT state. A minimal
+signal-handler test reproduces a skipped first instruction before the fix and verifies both
+handler execution and restoration of the interrupted condition state afterward. Guest entry
+now clears IT after saving the register file, consistent with
+[Android's ARM signal setup](https://android.googlesource.com/kernel/common/+/f6ec306b93dc6/arch/arm/kernel/signal.c).
+All 19 CPU owner checks pass. Fresh gameplay validation is still pending; the isolated test
+establishes this entry contract, not the cause of every earlier worker fault. The AVD was
+restarted past the stuck test ad, advanced to level 2's second puzzle, and captured with its
+settings controls expanded (`avd-level2-stage2-latest.png`, `avd-settings-stage2.png`).
+
 ## microG completion and open acceptance
 
 PLAN.md owns current status. Both Android and webdroid now
