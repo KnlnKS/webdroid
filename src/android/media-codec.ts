@@ -103,6 +103,7 @@ const supportsSize = async function (this: JVideoCapabilities, width: number, he
 };
 rt.register({ name: "android/media/MediaCodecInfo$VideoCapabilities", ctor: JVideoCapabilities, methods: {
   "getWidthAlignment()I": () => 1, "getHeightAlignment()I": () => 1,
+  "getSupportedFrameRates()Landroid/util/Range;": () => newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(0), boxInt(960)),
   "getBitrateRange()Landroid/util/Range;": function (this: JVideoCapabilities) {
     const definition = this.info.definition;
     if (definition.kind !== "video") throw rt.mkThrowable("java/lang/IllegalStateException", "Not a video codec");
