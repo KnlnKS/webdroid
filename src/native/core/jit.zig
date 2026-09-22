@@ -289,6 +289,7 @@ pub fn Emit(comptime wide: bool) type {
         b: *Buf,
         r: *Region,
         blk: u32,
+        pc: u32 = 0,
         used: u32,
         written: u32,
         wcur: u32,
@@ -519,7 +520,7 @@ pub fn Emit(comptime wide: bool) type {
             e.endif();
         }
         fn faultExit(e: *Self) void {
-            e.b.emit(.{ get(L_CPU), c32(@bitCast(e.r.blocks[e.blk].pc)), mo(O.i32_store, OFF_BPC) });
+            e.b.emit(.{ get(L_CPU), c32(@bitCast(e.r.blocks[e.blk].pc)), mo(O.i32_store, OFF_BPC), get(L_CPU), c64(e.pc), mo(O.i64_store, @offsetOf(Cpu, "pc")) });
             e.exitStatus(2);
         }
         pub fn address(e: *Self) void {
@@ -528,7 +529,7 @@ pub fn Emit(comptime wide: bool) type {
             e.nest += 1;
             b.emit(.{ get(L_B), c32(255), O.i32_and, c32(2), O.i32_shl, set(L_NEXT), get(L_T0), O.i32_wrap_i64, get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.L)), O.i32_sub, tee(L_R), get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.S)), O.i32_lt_u, get(L_B), c32(256), O.i32_lt_u, O.i32_and, O.if_, wasm.I32, get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.P)), get(L_R), O.i32_add, O.else_, c32(0), O.end, tee(L_A), O.i32_eqz });
             e.ifv();
-            b.emit(.{ get(L_CPU), c32(@intFromEnum(cpu.Fault.bad_address)), mo(O.i32_store, OFF_EXIT), get(L_CPU), c32(0), mo(O.i32_store, OFF_FAULT_WORD), get(L_CPU), get(L_T0), O.i32_wrap_i64, mo(O.i32_store, OFF_FAULT_ADDR) });
+            b.emit(.{ get(L_CPU), c32(@intFromEnum(cpu.Fault.bad_address)), mo(O.i32_store, OFF_EXIT), get(L_CPU), c32(@bitCast(mem.ld(u32, e.pc))), mo(O.i32_store, OFF_FAULT_WORD), get(L_CPU), get(L_T0), O.i32_wrap_i64, mo(O.i32_store, OFF_FAULT_ADDR) });
             e.faultExit();
             e.endif();
             b.emit(.{ get(L_A), O.end });
@@ -1145,6 +1146,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
         var j: u32 = 0;
         var ended = false;
         while (j < blk.n) : (j += 1) {
+            e.pc = pc;
             const len = ilen(isa, pc);
             const o = &page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2];
             if (wide) {
