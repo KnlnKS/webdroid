@@ -7,6 +7,138 @@ and evidence limits, not a complete API-coverage claim. Older source comments na
 investigations refer here; Git retains their full chronological narratives.
 Temporary /tmp evidence may expire. Committed regression fixtures are the durable reproductions.
 
+## Cut the Rope repair (2026-09-22, in progress)
+
+Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this
+game and changed owners; the full serialized E2E matrix is reserved for the final candidate.
+Full Chrome runs at port 4091, 720×1280 / 320 dpi, alongside API 33 AVD `emulator-5560` at the
+same geometry. The supplied 4.2.1 / 3000048 XAPK contains only ARM32 native libraries. The
+available AVD images run ARM64 applications; an API 25 ARM32 emulator attempt was unsupported
+by the installed host emulator. The ARM64 variant of the same publisher/version was obtained
+from [APKPure](https://apkpure.net/cut-the-rope/com.zeptolab.ctr.ads/download/4.2.1), installed
+in the AVD and added separately as `Cut the Rope ARM64.xapk`. Both variants have signing
+certificate SHA-256 `f51a71b121cfd93f25aa2e00eeb50a8ab5ef0e39648bc3b7a711a3f89382d330`;
+their base APKs differ, so ARM64 results do not establish original ARM32 compatibility.
+
+Retained startup fixes include bounded binary `memmem`, Thumb BFI/BFC, Java/NDK shared
+Looper identity, and guest-pointer-width EGL config arrays. Unity ARM32 still rejects the
+advertised CPU features. A temporary NEON advertisement exposes reached SIMD gaps while they are implemented. The
+diagnostic advertisement remains uncommitted; committed code does not yet advertise NEON.
+
+The ARM64 black screen was a shader rewrite defect. Swizzle helpers were inserted after the
+last `#extension`, inside a conditional extension block. WebGL removed that block, leaving
+Unity's final CoreBlit pass 23 with undeclared helpers. Keeping the helper preamble outside
+conditional blocks restored title and gameplay rendering. Intermediate render targets already
+contained valid pixels. `jit=0` retained the failure, and a zero GL-error count alone did not
+detect shader compilation failures. A later temporary uniform probe itself threw on a null
+uniform location and broke rendering; that probe was removed and its output excluded.
+
+SDK startup exposed three separate JVM problems: in-memory DEX buffers were not loadable;
+distinct Unicode field names collapsed to the same mangled name (a HashMap overwrote a
+HashSet in IronSource); and String reflection omitted Object as its superclass. Retained fixes
+use the shared DEX loader, lossless member-name escaping, and the normal superclass path.
+Synchronized `Map.putAll(self)` also lost thread ownership after an awaited entry-set lookup,
+then blocked on its own monitor as another thread. The shared copy path now preserves the
+caller. JNI construction/invocation similarly restores the caller after class initialization
+and reads JNI arguments before suspension. Focused core tests cover these contracts.
+
+Unity's FMOD engine selects `libaaudio.so`; it does not fall back to OpenSL ES on this build.
+An initial OpenSL implementation was abandoned after the loader trace established that fact.
+The retained AAudio bridge sends the app's 24 kHz mono float PCM, 512 frames per callback,
+through the existing AudioTrack scheduling owner. Callback CPUs are independent from the
+Java caller. Real browser probes observed thousands of buffers, nonzero PCM, and no FMOD
+initialization error. The music toggle produced silence and restored nonzero output. Capture
+and synchronous AAudio writes remain explicitly unsupported. The implementation follows the
+[NDK callback and state contracts](https://developer.android.com/ndk/guides/audio/aaudio/aaudio)
+and installed NDK 29 headers. ScheduledFuture lacked Delayed.getDelay; adding real deadlines
+removed that missing call and the observed two-second Unity pause timeout on the next
+background/resume comparison. More lifecycle validation remains.
+
+Local captures and diagnostic logs are under ignored `webdroid-shots/cut-the-rope/`.
+`avd-menu.png` is the first tutorial, `avd-cut.png` the second, and
+`avd-stage2-swing.png` the third after another cut; the AVD subsequently completed level 1.
+Chrome renders the first tutorial. Its shell initially sent touch events directly to the decor,
+bypassing UnityActivity.onTouchEvent. Dispatch now follows Activity → Window → decor, with
+the Activity fallback when children do not consume the event. A real rope cut then advanced
+to the second puzzle, but native worker faults prevent a reliable completed-level comparison.
+Earlier claims of two working Chrome transitions were not supported by the later input checks.
+A black canvas.toDataURL capture is also excluded: the displayed bitmaprenderer surface
+requires the harness readback path or a browser screenshot. Startup takes substantially longer than the shell's
+reported boot time; that boot number excludes Unity initialization and is not a game timing.
+ARM64 smoke compilation passed 64,465 classes with zero method failures. Owning checks and
+typecheck passed at intermediate revisions. Full tests/E2E and final performance measurements
+have not run. POSIX timer callbacks now use real guest pthreads. Provider/Application startup
+and SQLiteOpenHelper callbacks retain main-thread/connection ownership; Cursor implements
+Closeable. Boxed primitive serialization matches Java wire descriptors. Android XML parsing
+reuses the SAX owner, including callbacks that suspend. Reached package, preference, pending
+intent, file and codec queries are implemented at their owning modules. Native worker faults,
+a GC signal-mask deadlock in an interpreter comparison, video extraction/decoding, additional
+SDK paths, and ARM32 execution remain open; this entry is progress evidence, not completion.
+
+Follow-up diagnosis established that a signal handler released its call depth before restoring
+its signal mask. An interrupted host call that completed during delivery could resume and create
+a pthread with the temporary handler mask. A minimal ARM32/A64 program reproduces that inherited
+mask window; restoring signal state before releasing the frame fixes it. Normal JIT execution
+still reproduced an independent Unity worker fault at `libunity.so+0x687150` (store through x25).
+JIT fault exits now retain the exact instruction PC instead of an older host-return address.
+The symbolized block is `libunity.so+0x6870ec`; an earlier manual base subtraction incorrectly
+attributed that block to the allocator at `+0x6720ec`.
+
+A diagnostic run excluding Unity offsets `0x670000..0x689000` from JIT compilation completed
+all three level-1 puzzles and displayed the same 20-coin/3-candy reward as the AVD. Narrower
+exclusions through `0x672000..0x673000` also stayed fault-free on the observed path. These are
+experiments, not a production workaround or proof of a specific miscompiled instruction. An
+isolated copied bit-reader function at `+0x672c18` agreed across interpreter/JIT on randomized
+fast and slow decode paths. The worker fault remains open.
+
+The game writes profile files below `/sdcard/Android/data/com.zeptolab.ctr.ads/files`, which the
+existing internal-file persistence filter omitted. Extending that canonical owner to app-owned
+external files retains package-prefix restoration and disposable-cache behavior. A browser
+probe confirms profile files reach IndexedDB. A controlled reload returned to level 2 with
+220 coins and six candies; device-auth and player-profile hashes stayed identical. The level
+profile changed during startup, so byte identity is not claimed for that file. A reached parcel failure is specifically ApplicationInfo in Google's
+SafeParcelWriter, identified through a throwing receiver probe; it remains to be implemented.
+
+A fresh isolated Chrome profile subsequently completed all three level-1 puzzles with normal
+JIT, showing the same 20-coin/3-candy reward. That run stayed fault-free through 9,146 shell
+ticks; it does not explain earlier worker faults. The browser/server handles later disappeared
+and were restarted only after tool inventory and the listening-port check confirmed termination.
+A new full-interpreter run advanced beyond the previous GC stall and completed level 2’s
+first puzzle with matching AVD geometry. During the next puzzle it faulted in nativePause;
+that run therefore does not establish lifecycle stability. `browser-level2-reloaded.png` and `avd-level2.png` capture matching level-2
+geometry; animated poses and star phases differ.
+
+Reached FileChannel.transferTo now copies bounded chunks through virtual channel writes without
+moving the source position. The existing NIO tests pass (12 tests, 55 assertions). Video codec
+queries use the advertised AVC 4.2 / VP9 4.1 block and rate limits; the size-specific range uses
+Double bounds, and size/rate checks no longer ignore the rate. Typecheck and the owning check
+pass. ARM32 shifted-register ADC/SBC/RSB now share the immediate arithmetic implementation;
+assembled instruction bytes pass all 50 ARM decoder tests, including interpreter/JIT comparison.
+
+
+Further ARM32 startup coverage now includes NEON interleaved structure transfers, VLD1/VST1
+lane transfers and VLD1 replication, shared SIMD arithmetic, non-fused VMLA/VMLS, Thumb RBIT,
+and doubleword exclusive transfers. ARM BFC/BFI used the width field as a source register in
+both tiers; Unity’s `bfc sp,#0,#4` consequently left the stack misaligned. Both tiers now use
+the actual low register field. Assembled instructions and the existing decoder checks validate
+these changes. With the diagnostic NEON advertisement, the original package now reaches
+Unity’s nativeRender before the next missing Thumb encoding; gameplay is not yet established.
+
+The interpreter lifecycle fault was at Unity `+0x93ad70`, block `+0x934068`, during nativePause,
+followed by an IL2CPP fault. A later normal-JIT run completed all three level-2 puzzles and
+showed the 20-coin/3-candy reward without a native fault through 25,681 ticks. One explicit
+background/resume cycle also passed. These observations do not resolve the earlier failures.
+`browser-jit-level2-stage3.png` captures the final puzzle; the reward was captured inline.
+The AVD reached an AppLovin test interstitial (`avd-after-ad.png`) that did not dismiss with
+Back. The browser reached the same activity but threw before displaying it: Activity and
+Window.findViewById returned null before decor installation. They now follow Android’s
+Activity → Window → getDecorView path; the owning window check passes. That correction still
+requires a fresh app run through the interstitial.
+
+BitmapFactory.decodeFile now opens and closes a real FileInputStream and shares decodeStream.
+A Chrome probe decoded a generated 3×2 PNG, returned bounds-only metadata, and returned null
+for a missing file. Typecheck passed. Full regression and final performance checks remain pending.
+
 ## microG completion and open acceptance
 
 PLAN.md owns current status. Both Android and webdroid now
