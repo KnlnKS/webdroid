@@ -731,6 +731,16 @@ describe("thumb decoder", () => {
     ], (cpu) => { cpu.w[0] = 0x80ffaa55; cpu.w[2] = 10; });
     expect([c.w[20], c.w[22], c.w[24], c.w[18]]).toEqual([0xaa55, -86, 265, -118]);
   });
+  test("signed halfword multiply-accumulate wraps and sets sticky Q", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.w[0] = 0x7fffffff; cpu.w[2] = 1; cpu.w[6] = 1;
+      cpu.w[4] = 0xfffeffff; cpu.w[8] = 0xfffd0004;
+    };
+    const thumb = runThumb([0xfb11, 0x0103, 0xfb12, 0x0514, 0xfb12, 0xf634, 0x4770], setup);
+    expect([thumb.w[2], thumb.w[10], thumb.w[12], thumb.q]).toEqual([-2147483648, -2147483646, 6, 1]);
+    const arm = run([0xe1010381, BXLR], setup);
+    expect([arm.w[2], arm.q]).toEqual([-2147483648, 1]);
+  });
 
   test("wide bit reversal and leading-zero count preserve their source", () => {
     const c = runThumb([

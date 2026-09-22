@@ -483,24 +483,19 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
             const o = bits(w, 21, 2);
             const x = bits(w, 5, 1);
             const y = bits(w, 6, 1);
-            const half = struct {
-                fn f(v: u32, h: u32) i32 {
-                    return if (h != 0) @as(i32, @bitCast(v)) >> 16 else @as(i16, @bitCast(@as(u16, @truncate(v))));
-                }
-            }.f;
             const m = reg(c, rm, pc);
             const s = reg(c, rs, pc);
             switch (o) {
-                0 => set(c, rn, @bitCast(half(m, x) *% half(s, y) +% @as(i32, @bitCast(r(c, rd))))),
-                3 => set(c, rn, @bitCast(half(m, x) *% half(s, y))),
+                0 => set(c, rn, halfAccumulate(c, signedHalf(m, x), signedHalf(s, y), r(c, rd))),
+                3 => set(c, rn, @bitCast(signedHalf(m, x) *% signedHalf(s, y))),
                 1 => {
-                    const p: i64 = @as(i64, @as(i32, @bitCast(m))) * @as(i64, half(s, y));
+                    const p: i64 = @as(i64, @as(i32, @bitCast(m))) * @as(i64, signedHalf(s, y));
                     var v: u32 = @truncate(@as(u64, @bitCast(p)) >> 16);
                     if (x == 0) v +%= r(c, rd);
                     set(c, rn, v);
                 },
                 else => {
-                    const p: u64 = @bitCast(@as(i64, half(m, x)) * @as(i64, half(s, y)));
+                    const p: u64 = @bitCast(@as(i64, signedHalf(m, x)) * @as(i64, signedHalf(s, y)));
                     const acc = ((@as(u64, r(c, rn)) << 32) | r(c, rd)) +% p;
                     set(c, rd, @truncate(acc));
                     set(c, rn, @intCast(acc >> 32));
@@ -608,6 +603,15 @@ fn sat32(c: *Cpu, v: i64) i64 {
         return std.math.minInt(i32);
     }
     return v;
+}
+
+fn signedHalf(v: u32, top: u32) i32 {
+    return if (top != 0) @as(i32, @bitCast(v)) >> 16 else @as(i16, @bitCast(@as(u16, @truncate(v))));
+}
+fn halfAccumulate(c: *Cpu, a: i32, b: i32, acc: u32) u32 {
+    const sum = @as(i64, a) * b + @as(i32, @bitCast(acc));
+    if (sum > std.math.maxInt(i32) or sum < std.math.minInt(i32)) c.cpsr |= 1 << 27;
+    return @truncate(@as(u64, @bitCast(sum)));
 }
 
 fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
@@ -1049,6 +1053,16 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
             if (d != 15) set(c, d, out);
             return .next;
         }
+    }
+    if ((h & 0xfff0) == 0xfb10) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 & 0xc0 != 0) return fault(c, .undefined, h << 16 | h2, pc);
+        const a = h2 >> 12;
+        const n = signedHalf(r(c, h & 15), bits(h2, 5, 1));
+        const m = signedHalf(r(c, h2 & 15), bits(h2, 4, 1));
+        set(c, bits(h2, 8, 4), if (a == 15) @bitCast(n * m) else halfAccumulate(c, n, m, r(c, a)));
+        c.pc = pc + 4;
+        return .next;
     }
     if ((h & 0xfff0) == 0xfb00) {
         const h2: u32 = ld(u16, pc + 2);
