@@ -328,6 +328,22 @@ fn neonPermute(c: *Cpu, w: u32, pc: u32) Status {
     return .next;
 }
 
+fn neonLong(c: *Cpu, w: u32, pc: u32) Status {
+    const op = bits(w, 8, 4);
+    const size = bits(w, 20, 2);
+    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
+    const n = (bits(w, 7, 1) << 4) | bits(w, 16, 4);
+    const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
+    if (size == 3 or d & 1 != 0) return fault(c, .undefined, w, pc);
+    if (op != 8 and op != 10 and op != 12) return fault(c, .unimplemented, w, pc);
+    @memcpy(&c.v[16], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..16]);
+    @memcpy(c.v[17][0..8], @as([*]u8, @ptrCast(vreg(u64, c, n)))[0..8]);
+    @memcpy(c.v[18][0..8], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..8]);
+    const result = simd.exec(c, 0x0e200000 | (bits(w, 24, 1) << 29) | (size << 22) | (op << 12) | (18 << 16) | (17 << 5) | 16);
+    if (result == .next) @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..16], &c.v[16]);
+    return result;
+}
+
 fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
     const scalar = w & 0xfeb00050 == 0xf2a00040;
     const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
@@ -445,6 +461,7 @@ fn execArm(c: *Cpu, pc: u32) Status {
         if (w & 0xfe800010 == 0xf2800010 and w & 0x00380080 != 0) return neonShift(c, w, pc);
         if (w & 0xffb00010 == 0xf3b00000) return neonMisc(c, w, pc);
         if (w & 0xfe800000 == 0xf2000000 or w & 0xffb00010 == 0xf2b00000 or w & 0xfeb00050 == 0xf2a00040) return neonSame(c, w, pc);
+        if (w & 0xfe800050 == 0xf2800000) return neonLong(c, w, pc);
         if (w & 0xff100000 == 0xf4000000) return neonStruct(c, w, pc);
         if (w & 0xfeb00010 == 0xf2800010) return neonImmediate(c, w, pc, (bits(w, 24, 1) << 7) | (bits(w, 16, 3) << 4) | bits(w, 0, 4));
         if ((w & 0x0e000000) == 0x0a000000) {
@@ -1066,6 +1083,10 @@ inline fn execThumb32(c: *Cpu, h: u32, second: u32, pc: u32) ?Status {
     if (h & 0xef80 == 0xef00 or (h & 0xffb0 == 0xefb0 and second & 0x10 == 0) or (h & 0xefb0 == 0xefa0 and second & 0x50 == 0x40)) {
         c.pc = pc + 4;
         return neonSame(c, 0xf2000000 | ((h & 0x1000) << 12) | ((h & 0xff) << 16) | second, pc);
+    }
+    if (h & 0xef80 == 0xef80 and second & 0x50 == 0) {
+        c.pc = pc + 4;
+        return neonLong(c, 0xf2000000 | ((h & 0x1000) << 12) | ((h & 0xff) << 16) | second, pc);
     }
     const cp = (second >> 8) & 15;
     if (cp == 10 or cp == 11) {

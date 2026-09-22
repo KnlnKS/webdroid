@@ -531,6 +531,22 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(44, 60))).toEqual([-1, 0, 0, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, -1, 0, -1]);
     }
   });
+  test("NEON widening multiply uses original narrow operands before accumulation", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([-1, -1, 10, 0, -1, -2147483648, 2, 3], 36);
+      cpu.si.set([0x0002ffff, 0x7fff8000, 0x00030004, 0x00010002], 6);
+      cpu.si.set([0x0302ff80, 0, 0x01020202, 0], 10);
+    };
+    for (const execute of [
+      () => run([0xf3e428a5, 0xf2932a04, 0xf2854c06, BXLR], setup),
+      () => runThumb([0xffe4, 0x28a5, 0xef93, 0x2a04, 0xef85, 0x4c06, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(36, 40))).toEqual([-3, 1, -2147483638, 1]);
+      expect(Array.from(c.si.slice(4, 8))).toEqual([4, -6, 65536 + 0x0002ffff, 0x7fff8000 - 32767]);
+      expect(Array.from(c.si.slice(8, 12))).toEqual([0xfffeff00 | 0, 0x00030004, 0, 0]);
+    }
+  });
   test("NEON float/integer conversions round and saturate at lane bounds", () => {
     const setup = (cpu: Cpu) => {
       cpu.si.set([-1, 2147483647, -2147483648, 16777217], 60);
