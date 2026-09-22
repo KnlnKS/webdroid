@@ -1,19 +1,21 @@
 import { JObj, rt, noops } from "../jvm/runtime";
 import { jarray, u8 } from "../jvm/abi";
-import { boxInt, JThrowable, newObj, vcall } from "../jvm/natives/jlang";
+import { box, boxInt, JDouble, JThrowable, newObj, vcall } from "../jvm/natives/jlang";
 import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
 import { JMediaFormat } from "./media-format";
 import { JBufferInfo } from "./media";
 import { JSurface, presentSurface } from "./glview";
 import { mainHandler, reportUncaught } from "./os";
 
-type Definition = { kind: "video"; mime: string; codec: string; maxDimension: number; maxBitrate: number; profiles: [number, number][] } | { kind: "audio"; mime: string; codec: string; profiles: [number, number][] };
+type VideoLimits = { maxDimension: number; maxBitrate: number; blockSize: number; maxBlocks: number; blocksPerSecond: number };
+type Definition = ({ kind: "video"; mime: string; codec: string; profiles: [number, number][] } & VideoLimits) | { kind: "audio"; mime: string; codec: string; profiles: [number, number][] };
+const avc42 = { maxDimension: 4096, maxBitrate: 50000000, blockSize: 16, maxBlocks: 8704, blocksPerSecond: 522240 };
 const definitions: Definition[] = [
-  { kind: "video", mime: "video/avc", codec: "avc1.42002A", maxDimension: 4096, maxBitrate: 50000000, profiles: [[1, 8192]] },
-  { kind: "video", mime: "video/avc", codec: "avc1.4d002A", maxDimension: 4096, maxBitrate: 50000000, profiles: [[2, 8192]] },
-  { kind: "video", mime: "video/avc", codec: "avc1.64002A", maxDimension: 4096, maxBitrate: 62500000, profiles: [[8, 8192]] },
-  { kind: "video", mime: "video/x-vnd.on2.vp8", codec: "vp8", maxDimension: 16383, maxBitrate: 100000000, profiles: [[1, 8]] },
-  { kind: "video", mime: "video/x-vnd.on2.vp9", codec: "vp09.00.41.08", maxDimension: 8192, maxBitrate: 30000000, profiles: [[1, 128]] },
+  { kind: "video", mime: "video/avc", codec: "avc1.42002A", ...avc42, profiles: [[1, 8192]] },
+  { kind: "video", mime: "video/avc", codec: "avc1.4d002A", ...avc42, profiles: [[2, 8192]] },
+  { kind: "video", mime: "video/avc", codec: "avc1.64002A", ...avc42, maxBitrate: 62500000, profiles: [[8, 8192]] },
+  { kind: "video", mime: "video/x-vnd.on2.vp8", codec: "vp8", maxDimension: 16383, maxBitrate: 100000000, blockSize: 16, maxBlocks: 0x7fffffff, blocksPerSecond: 0x7fffffff, profiles: [[1, 8]] },
+  { kind: "video", mime: "video/x-vnd.on2.vp9", codec: "vp09.00.41.08", maxDimension: 4160, maxBitrate: 30000000, blockSize: 8, maxBlocks: 34816, blocksPerSecond: 2506752, profiles: [[1, 128]] },
   { kind: "audio", mime: "audio/mp4a-latm", codec: "mp4a.40.2", profiles: [[2, 0]] },
   { kind: "audio", mime: "audio/opus", codec: "opus", profiles: [] },
 ];
@@ -54,10 +56,19 @@ function videoConfig(def: Definition, format: JMediaFormat): VideoDecoderConfig 
 function audioConfig(def: Definition, format: JMediaFormat): AudioDecoderConfig {
   return { codec: def.codec, sampleRate: numberValue(format, "sample-rate", 48000), numberOfChannels: numberValue(format, "channel-count", 2), description: codecData(format, "csd-0") };
 }
+function frameRates(def: VideoLimits, width: number, height: number): [number, number] | null {
+  const blocks = Math.ceil(width / def.blockSize) * Math.ceil(height / def.blockSize);
+  if (width <= 0 || height <= 0 || width > def.maxDimension || height > def.maxDimension || blocks > def.maxBlocks) return null;
+  return [1 / blocks, Math.min(960, def.blocksPerSecond / blocks)];
+}
 async function supports(def: Definition, format = new JMediaFormat()): Promise<boolean> {
   const mime = stringValue(format, "mime");
   if (mime && mime !== def.mime) return false;
-  if (def.kind === "video" && numberValue(format, "bitrate", 0) > def.maxBitrate) return false;
+  if (def.kind === "video") {
+    const range = frameRates(def, numberValue(format, "width", 640), numberValue(format, "height", 360));
+    const rate = numberValue(format, "frame-rate", 0);
+    if (!range || numberValue(format, "bitrate", 0) > def.maxBitrate || rate && (rate < range[0] || rate > range[1])) return false;
+  }
   try {
     return def.kind === "video" ? typeof VideoDecoder !== "undefined" && (await VideoDecoder.isConfigSupported(videoConfig(def, format))).supported === true
       : typeof AudioDecoder !== "undefined" && (await AudioDecoder.isConfigSupported(audioConfig(def, format))).supported === true;
@@ -104,6 +115,11 @@ const supportsSize = async function (this: JVideoCapabilities, width: number, he
 rt.register({ name: "android/media/MediaCodecInfo$VideoCapabilities", ctor: JVideoCapabilities, methods: {
   "getWidthAlignment()I": () => 1, "getHeightAlignment()I": () => 1,
   "getSupportedFrameRates()Landroid/util/Range;": () => newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(0), boxInt(960)),
+  "getSupportedFrameRatesFor(II)Landroid/util/Range;": async function (this: JVideoCapabilities, width: number, height: number) {
+    const def = this.info.definition, range = def.kind === "video" ? frameRates(def, width, height) : null;
+    if (!range || !await supportsSize.call(this, width, height)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "unsupported size");
+    return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", box(JDouble, range[0]), box(JDouble, range[1]));
+  },
   "getBitrateRange()Landroid/util/Range;": function (this: JVideoCapabilities) {
     const definition = this.info.definition;
     if (definition.kind !== "video") throw rt.mkThrowable("java/lang/IllegalStateException", "Not a video codec");
@@ -119,7 +135,11 @@ rt.register({ name: "android/media/MediaCodecInfo$VideoCapabilities", ctor: JVid
     if (definition.kind !== "video") throw rt.mkThrowable("java/lang/IllegalStateException", "Not a video codec");
     return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(1), boxInt(definition.maxDimension));
   },
-  "isSizeSupported(II)Z": supportsSize, "areSizeAndRateSupported(IID)Z": supportsSize,
+  "isSizeSupported(II)Z": supportsSize,
+  "areSizeAndRateSupported(IID)Z": async function (this: JVideoCapabilities, width: number, height: number, rate: number) {
+    const def = this.info.definition, range = def.kind === "video" ? frameRates(def, width, height) : null;
+    return +(!!range && rate >= range[0] && rate <= range[1] && !!await supportsSize.call(this, width, height));
+  },
   "getSupportedPerformancePoints()Ljava/util/List;": () => null,
   "getAchievableFrameRatesFor(II)Landroid/util/Range;": () => null,
 } });
