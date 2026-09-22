@@ -4,6 +4,7 @@ import { vcall, curThread, vcallOn, newObj } from "../jvm/natives/jlang";
 import { JFrameLayout } from "./layouts";
 import { JView, type JLayoutParams, initViewFromCtx } from "./view";
 import { AID, obtainStyled, rvInt, type JAttrSet } from "./res";
+import { JFnRunnable, mainHandler } from "./os";
 
 class JViewAnimator extends JFrameLayout {
   displayed = 0;
@@ -88,6 +89,57 @@ rt.register({ name: "android/widget/ViewAnimator", ctor: JViewAnimator, sup: "an
   "getOutAnimation()Landroid/view/animation/Animation;": function (this: JViewAnimator) { return this.outAnimation; },
   "setInAnimation(Landroid/content/Context;I)V": async function (this: JViewAnimator, context: unknown, id: number) { this.inAnimation = await vcall(rt.link("android/view/animation/AnimationUtils").ctor, "loadAnimation", "(Landroid/content/Context;I)Landroid/view/animation/Animation;", context, id); },
   "setOutAnimation(Landroid/content/Context;I)V": async function (this: JViewAnimator, context: unknown, id: number) { this.outAnimation = await vcall(rt.link("android/view/animation/AnimationUtils").ctor, "loadAnimation", "(Landroid/content/Context;I)Landroid/view/animation/Animation;", context, id); },
+} });
+
+class JViewFlipper extends JViewAnimator {
+  interval = 3000;
+  autoStart = false;
+  started = false;
+  windowVisible = false;
+  running = false;
+  flip: JFnRunnable | null = null;
+  async update(animate = true) {
+    const running = this.windowVisible && this.started;
+    if (running === this.running) return;
+    this.running = running;
+    if (!running) { if (this.flip) mainHandler().cancel(this.flip); return; }
+    if (!this.flip) {
+      const flip: JFnRunnable = rt.make("webdroid/FnRunnable");
+      this.flip = flip;
+      flip.fn = async () => {
+        if (!this.running) return;
+        await vcall(this, "showNext", "()V");
+        if (this.running) mainHandler().post(this.flip, this.interval);
+      };
+    }
+    await vcall(this, "showOnly", "(IZ)V", this.displayed, +animate);
+    if (this.running) mainHandler().post(this.flip, this.interval);
+  }
+}
+async function initFlipper(this: JViewFlipper, context: unknown, attrs: JAttrSet | null = null) {
+  await init.call(this, context, attrs);
+  if (!this.jres) return;
+  const ta = obtainStyled(this.jres, this.theme, attrs, [AID("flipInterval"), AID("autoStart")], 0, 0);
+  this.interval = rvInt(this.jres, ta.vals[0], 3000);
+  this.autoStart = !!rvInt(this.jres, ta.vals[1], 0);
+}
+rt.register({ name: "android/widget/ViewFlipper", ctor: JViewFlipper, sup: "android/widget/ViewAnimator", methods: {
+  "<init>(Landroid/content/Context;)V": initFlipper,
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initFlipper,
+  "setFlipInterval(I)V": function (this: JViewFlipper, interval: number) { this.interval = interval; },
+  "getFlipInterval()I": function (this: JViewFlipper) { return this.interval; },
+  "setAutoStart(Z)V": function (this: JViewFlipper, auto: number) { this.autoStart = !!auto; },
+  "isAutoStart()Z": function (this: JViewFlipper) { return +this.autoStart; },
+  "isFlipping()Z": function (this: JViewFlipper) { return +this.started; },
+  "startFlipping()V": function (this: JViewFlipper) { this.started = true; return this.update(); },
+  "stopFlipping()V": function (this: JViewFlipper) { this.started = false; return this.update(); },
+  "onAttachedToWindow()V": async function (this: JViewFlipper) {
+    this.windowVisible = await vcall(this, "getWindowVisibility", "()I") === 0;
+    if (this.autoStart) await vcall(this, "startFlipping", "()V");
+    else await this.update(false);
+  },
+  "onDetachedFromWindow()V": function (this: JViewFlipper) { this.windowVisible = false; return this.update(); },
+  "onWindowVisibilityChanged(I)V": function (this: JViewFlipper, visibility: number) { this.windowVisible = visibility === 0; return this.update(false); },
 } });
 
 rt.markers("android/widget/ViewSwitcher$ViewFactory");
