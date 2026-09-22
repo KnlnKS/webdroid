@@ -5314,9 +5314,28 @@ and checks refreshing an empty query after load. The 14 JVM-tier/reflection chec
 580 assertions; typecheck passes. No golden changes.
 
 Fresh headless hardware-rendered browser observations remain noisy under concurrent host
-load and live video variation. Baseline/candidate first search dispatch was 1055.5/2280.8 ms;
-post-GC heap before feed sampling was 1207.0/1135.2 MB. Warm searches also varied substantially.
-These single observations do not establish a navigation speedup or the 150 ms target.
+load and live video variation. Post-GC heap before feed sampling was 1207.0/1135.2 MB. Screenshot inspection subsequently
+showed the baseline search taps were blocked by the swipe tutorial; those action timings are
+invalid navigation samples. The harness now repeats the swipe after startup and requires an
+editable search field. These observations do not establish a navigation speedup or the 150 ms target.
 Diagnostic evidence lives in `webdroid-shots/tiktok-performance`. A full heap-snapshot attempt
 crashed the diagnostic renderer; that run is excluded, and lighter allocation sampling was
 used after a fresh navigation. No other browser or emulator was stopped.
+
+### TikTok performance: shared lazy Java entries
+
+Class loading previously generated and compiled a distinct JavaScript thunk for every DEX
+method. A shared closure now owns each method's lazy-entry cell. Captured direct and interface
+entries still follow that cell after first-call compilation and promotion; fresh virtual calls
+use the installed body. Eager body compilation and JNI stub resolution retain their behavior.
+Class method installation and source compilation now live together in the compiler. `jsrc`
+emits full method bodies without first installing lazy thunks.
+
+Using the same 44,792 classes observed in TikTok, three alternating fresh Bun processes at
+`54d548f3` versus this candidate measured class installation at 1116/1660/1955 ms versus
+271/777/322 ms (median 1660 → 322 ms). Retained incremental heap was consistently about
+337 MB versus 164 MB. These measurements isolate class installation; they do not measure
+whole-app responsiveness. Shared-entry core checks exercise captured direct/interface calls,
+promotion, rejected and fulfilled suspension, callbacks, constants and thread restoration:
+14 tests / 580 assertions pass, as does typecheck. Full-Chrome TikTok reaches and renders
+the guest feed and search. Whole-app timing remains sensitive to live content and host load.

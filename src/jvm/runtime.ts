@@ -9,10 +9,9 @@ import { yieldToLoop } from "./yield";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle, primElem, splitSig } from "./abi";
-import { compileClassSource, compileLazyMethod, methodKey, type CompiledCtor } from "./compiler";
+import { compileClass, compileLazyMethod, methodKey, type CompiledCtor } from "./compiler";
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
-import { jvmProfiler } from "./profile";
 import { jvmCoverage } from "./coverage";
 import { Monitors } from "./monitor";
 
@@ -608,18 +607,7 @@ export class Runtime {
     info.compiled = true;
     const t0 = performance.now();
     const dex = info.dex!;
-    const D = this.dexLink(dex);
-    // sourceURL names the class in stack traces — the compiled body is otherwise anonymous.
-    const src = compileClassSource(this, dex, info) + `\n//# sourceURL=wd/${info.name}.js`;
-    try {
-      const linkStarted = jvmProfiler.enabled ? performance.now() : 0;
-      const mk = new Function("C", "D", "R", "S", "P", src);
-      mk(info.ctor, D, this, info.superInfo?.ctor ?? JObj, jvmProfiler);
-      if (jvmProfiler.enabled) jvmProfiler.addAggregate("classLink", performance.now() - linkStarted);
-    } catch (e) {
-      console.error("compile failed for", info.name, e, src.slice(0, 2000));
-      throw e;
-    }
+    compileClass(this, dex, info);
     perf.compileMs += performance.now() - t0;
     perf.classesCompiled++;
     for (const m of info.def.virtualMethods) {
@@ -670,7 +658,7 @@ export class Runtime {
   // ───────────────────────────── helpers called from compiled code (`R.…`)
 
   /** Compile a lazily-emitted method body on first call, install it, and hand it back. */
-  lz(C: CompiledCtor, i: number): unknown {
+  lz(C: CompiledCtor, i: number): ReturnType<typeof compileLazyMethod> {
     const t0 = performance.now();
     const fn = compileLazyMethod(this, C, i);
     perf.compileMs += performance.now() - t0;

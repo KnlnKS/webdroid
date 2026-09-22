@@ -6,7 +6,7 @@
 
 import type { DexFile, CodeItem, EncodedMethod } from "./dex";
 import { mangleMethod, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble, PRIM_ARRAYS, type PrimElem } from "./abi";
-import { ACC, type Runtime, type ClassInfo } from "./runtime";
+import { ACC, JObj, type Runtime, type ClassInfo } from "./runtime";
 import { perf } from "../perf";
 import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
 import { jvmProfiler } from "./profile";
@@ -28,7 +28,7 @@ const ref = (r: string) => `(${r}===0?null:${r})`;
 
 /** Generating a method's JS source costs ~4x what handing it to `new Function` does, and on
  *  a large app's boot only 31% of the methods of the classes we load are ever called. So a body is
- *  emitted as a thunk that compiles itself on first call. Set false to compile everything up
+ *  reached through a shared thunk that compiles it on first call. Set false to compile everything up
  *  front (scripts/smoke.ts, which exists to surface compile failures). */
 let lazyMethods = true;
 export function setLazyMethods(v: boolean) { lazyMethods = v; }
@@ -51,13 +51,31 @@ function prepareDexMethod(
 }
 
 export function compileClassSource(R: Runtime, dex: DexFile, info: ClassInfo): string {
+  return classSource(R, dex, info, false);
+}
+
+export function compileClass(R: Runtime, dex: DexFile, info: ClassInfo): void {
+  const src = classSource(R, dex, info, lazyMethods);
+  if (!src) return;
+  try {
+    const started = jvmProfiler.enabled ? performance.now() : 0;
+    new Function("C", "D", "R", "S", "P", src + `\n//# sourceURL=wd/${info.name}.js`)(
+      info.ctor, R.dexLink(dex), R, info.superInfo?.ctor ?? JObj, jvmProfiler);
+    if (jvmProfiler.enabled) jvmProfiler.addAggregate("classLink", performance.now() - started);
+  } catch (e) {
+    console.error("compile failed for", info.name, e, src.slice(0, 2000));
+    throw e;
+  }
+}
+
+function classSource(R: Runtime, dex: DexFile, info: ClassInfo, lazy: boolean): string {
   const def = info.def!;
   const out: string[] = [];
-  info.lazy = lazyMethods ? [] : undefined;
+  info.lazy = lazy ? [] : undefined;
   for (const list of [def.directMethods, def.virtualMethods]) {
     for (const m of list) {
       if (m.codeOff) {
-        if (info.lazy) out.push(emitLazy(dex, info, m));
+        if (info.lazy) installLazy(R, dex, info, m);
         else out.push(emitEagerMethod(R, dex, info, m));
       }
       else if (m.flags & ACC.NATIVE) out.push(emitNativeStub(dex, info, m));
@@ -80,18 +98,18 @@ function bootstrapName(dex: DexFile, callSiteIdx: number): string {
   }
 }
 
-/** `C.prototype.m$x = function(p0){ return (cell || (cell = R.lz(C, i))).call(this, p0) }`
- *  — the cell keeps already-captured references (D.dp direct-dispatch slots, interface
- *  default methods copied down) one call away, while fresh virtual dispatch finds the real
- *  function R.lz installed on the prototype. */
-function emitLazy(dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
+/** Captured direct/interface entries retain the cell; fresh virtual calls find the installed body. */
+function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod): void {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   const i = info.lazy!.length;
   info.lazy!.push({ m, mangled, isStatic, name, desc });
-  const ps = paramList(desc);
-  return `let $z${i};${holder(isStatic)}.${mangled}=function(${ps}){` +
-    `return ($z${i}||($z${i}=R.lz(C,${i}))).call(this${ps ? "," + ps : ""})};`;
+  const C: CompiledCtor = info.ctor;
+  let entry: JvmFunction | undefined;
+  (isStatic ? C : C.prototype)[mangled] = function(this: unknown, ...args: unknown[]) {
+    entry ??= R.lz(C, i);
+    return entry.apply(this, args);
+  };
 }
 
 /** Compile one lazily-emitted method and install it. */
@@ -102,7 +120,7 @@ interface CompiledMethod {
   resume?: (frame: ColdFrame, receiver: unknown) => Promise<unknown>;
 }
 
-export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): unknown {
+export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFunction {
   const info = C.$i, rec = info.lazy![i], dex = info.dex!;
   const profileName = `${info.name}.${rec.name}${rec.desc}`;
   const target = rec.isStatic ? C : C.prototype;
