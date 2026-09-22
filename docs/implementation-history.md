@@ -5339,3 +5339,27 @@ whole-app responsiveness. Shared-entry core checks exercise captured direct/inte
 promotion, rejected and fulfilled suspension, callbacks, constants and thread restoration:
 14 tests / 580 assertions pass, as does typecheck. Full-Chrome TikTok reaches and renders
 the guest feed and search. Whole-app timing remains sensitive to live content and host load.
+
+### TikTok performance: native decoder SIMD
+
+Fine slice-boundary samples of full-Chrome playback led into ByteVC2 widening arithmetic
+and contiguous vector memory operations. A64 now emits WebAssembly SIMD for widening
+add/subtract/multiply and multiply-accumulate/subtract, including high halves and indexed
+lanes. Contiguous LD1/ST1 groups use the existing vector memory helpers, retaining upper-half
+clearing, register wraparound, post-index writeback and executable-store invalidation.
+Interleaved and unsupported instructions retain the interpreter path.
+
+The existing A64 SIMD suite and hardware oracle pass 555 tests / 18,238 assertions after both
+changes. Two fixed kernels compare `6cf42ee2` with this candidate in fresh Bun processes:
+200,000 iterations of the observed widening mix have median 24.82 → 1.52 ms; contiguous
+loads/stores have median 15.81 → 1.90 ms. Register outputs, instruction counts and the memory
+kernel's destination bytes are identical. These isolate the instruction families, not entire
+video decoding or app latency. No test or golden was added. Source and five samples per
+kernel are retained under `webdroid-shots/tiktok-performance`.
+
+A fresh TikTok observation after widening arithmetic reaches the editable search field on
+all three trials, with input-to-next-presentation times 3396, 489 and 1090 ms. The feed
+presents 49 EGL frames in 10.45 seconds, with advancing ticks and no layout/draw failures.
+Live content selected ByteVC1 instead of the earlier ByteVC2 stream; concurrent host load
+also persists. These observations establish functioning rendering, not a matched playback
+speedup, and remain well above the 150 ms goal.

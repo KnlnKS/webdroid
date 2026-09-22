@@ -343,6 +343,21 @@ fn emitVector(e: *Emit, w: u32) bool {
         vput(e, rd, q);
         return true;
     }
+    if (is(w, 0x9f20_0c00, 0x0e20_0000) and size < 3) {
+        const opcode = bits(w, 12, 4);
+        if (opcode > 3 and opcode != 8 and opcode != 10 and opcode != 12) return false;
+        const extend = S.extend_low_s[size] + @as(u8, if (q) 1 else 0) + @as(u8, if (U) 2 else 0);
+        const accumulate = opcode == 8 or opcode == 10;
+        b.get(L_CPU);
+        if (accumulate) vget(e, rd);
+        vget(e, rn);
+        if (opcode != 1 and opcode != 3) b.emit(.{sv(extend)});
+        vget(e, rm);
+        b.emit(.{ sv(extend), sv(if (opcode >= 8) S.mul[size + 1] else if (opcode >= 2) S.sub[size + 1] else S.add[size + 1]) });
+        if (accumulate) b.emit(.{sv(if (opcode == 10) S.sub[size + 1] else S.add[size + 1])});
+        vput(e, rd, true);
+        return true;
+    }
     if (is(w, 0x9f20_0400, 0x0e20_0400)) {
         const opcode = bits(w, 11, 5);
         if (opcode >= 24) {
@@ -515,6 +530,20 @@ fn emitVector(e: *Emit, w: u32) bool {
             vput(e, rd, q);
             return true;
         }
+        if ((opcode == 2 or opcode == 6 or opcode == 10) and (size == 1 or size == 2)) {
+            const idx: u8 = @intCast(if (size == 1) (H << 2) | (Lb << 1) | M else (H << 1) | Lb);
+            const m: u8 = @intCast(if (size == 1) rmLow else (M << 4) | rmLow);
+            const extend = S.extend_low_s[size] + @as(u8, if (U) 2 else 0);
+            b.get(L_CPU);
+            if (opcode != 10) vget(e, rd);
+            vget(e, rn);
+            b.emit(.{sv(extend + @as(u8, if (q) 1 else 0))});
+            vget(e, m);
+            b.emit(.{ sv(S.extract_u[size]), idx, sv(S.splat[size]), sv(extend), sv(S.mul[size + 1]) });
+            if (opcode != 10) b.emit(.{sv(if (opcode == 6) S.sub[size + 1] else S.add[size + 1])});
+            vput(e, rd, true);
+            return true;
+        }
         return false;
     }
     return false;
@@ -636,7 +665,31 @@ pub fn emitVmem(e: *Emit, w: u32, pc: u32, k: u32) void {
     const rt: u8 = @intCast(w & 31);
     const rn: u8 = @intCast(bits(w, 5, 5));
     const rm: u8 = @intCast(bits(w, 16, 5));
-    if (is(w, 0xbfbf0000, 0x0c000000) or is(w, 0xbfa00000, 0x0c800000)) return e.fallback(pc, k);
+    if (is(w, 0xbfbf0000, 0x0c000000) or is(w, 0xbfa00000, 0x0c800000)) {
+        const regs: u32 = switch (bits(w, 12, 4)) {
+            7 => 1,
+            10 => 2,
+            6 => 3,
+            2 => 4,
+            else => return e.fallback(pc, k),
+        };
+        const sz: u32 = 3 + bits(w, 30, 1);
+        const width = @as(u32, 1) << @intCast(sz);
+        e.getSP(rn);
+        e.address();
+        for (0..regs) |i| {
+            const t: u8 = @intCast((rt + i) & 31);
+            const off = @as(u32, @intCast(i)) * width;
+            if (bits(w, 22, 1) != 0) vload(e, t, off, sz) else vstore(e, t, off, sz);
+        }
+        if (bits(w, 23, 1) != 0) {
+            e.getSP(rn);
+            if (rm == 31) b.i64c(regs * width) else e.getX(rm);
+            b.byte(O.i64_add);
+            e.setSP(rn);
+        }
+        return;
+    }
     if (is(w, 0xbf9f0000, 0x0d000000) or is(w, 0xbf800000, 0x0d800000)) {
         if (!emitVlane(e, w)) e.fallback(pc, k);
         return;
