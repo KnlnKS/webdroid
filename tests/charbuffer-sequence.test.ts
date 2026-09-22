@@ -26,3 +26,24 @@ test("one-shot charset encoding consumes UTF-16 input and reports malformed surr
   await expect(vcall(encoder, "encode", "(Ljava/nio/CharBuffer;)Ljava/nio/ByteBuffer;", bad)).rejects.toMatchObject({ msg: "Input length = 1" });
   expect(await vcall(bad, "position", "()I")).toBe(1);
 });
+
+test("decoder replacement preserves valid replacement characters and unread overflow input", async () => {
+  const decoder = await vcall(rt.link("java/nio/charset/StandardCharsets").ctor.s$UTF_8, "newDecoder", "()Ljava/nio/charset/CharsetDecoder;");
+  await vcall(decoder, "replaceWith", "(Ljava/lang/String;)Ljava/nio/charset/CharsetDecoder;", "?");
+  const input = await vcall(rt.link("java/nio/ByteBuffer").ctor, "wrap", "([B)Ljava/nio/ByteBuffer;", new Int8Array([0xef, 0xbf, 0xbd, 0xff, 0xf0, 0x9f, 0x90, 0x88]));
+  const output = await vcall(rt.link("java/nio/CharBuffer").ctor, "allocate", "(I)Ljava/nio/CharBuffer;", 3);
+  const decode = () => vcall(decoder, "decode", "(Ljava/nio/ByteBuffer;Ljava/nio/CharBuffer;Z)Ljava/nio/charset/CoderResult;", input, output, 1);
+  const error = await decode();
+  expect(await vcall(error, "isMalformed", "()Z")).toBe(1);
+  expect(input.pos).toBe(3);
+  await rt.initClass(rt.link("java/nio/charset/CodingErrorAction"));
+  await vcall(decoder, "onMalformedInput", "(Ljava/nio/charset/CodingErrorAction;)Ljava/nio/charset/CharsetDecoder;", rt.link("java/nio/charset/CodingErrorAction").ctor.s$REPLACE);
+  expect(await vcall(await decode(), "isOverflow", "()Z")).toBe(1);
+  expect(input.pos).toBe(4);
+  await vcall(output, "flip", "()Ljava/nio/Buffer;");
+  expect(await vcall(output, "toString", "()Ljava/lang/String;")).toBe("\ufffd?");
+  await vcall(output, "clear", "()Ljava/nio/Buffer;");
+  expect(await vcall(await decode(), "isUnderflow", "()Z")).toBe(1);
+  await vcall(output, "flip", "()Ljava/nio/Buffer;");
+  expect(await vcall(output, "toString", "()Ljava/lang/String;")).toBe("🐈");
+});
