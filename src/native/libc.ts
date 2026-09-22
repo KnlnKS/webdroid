@@ -560,6 +560,7 @@ export function libcInit(): void {
     "iswspace", "iswdigit", "iswalpha", "iswupper", "iswlower", "towlower", "towupper", "mbrtowc", "wcrtomb", "localeconv", "strerror",
     "sprintf", "snprintf", "vsprintf", "vsnprintf", "asprintf", "vasprintf", "sscanf", "vsscanf", "btowc", "wctob", "wctype", "iswctype"]) if (M[n]) M[n + "_l"] = M[n];
   M.strtold = M.strtod; M.strtold_l = M.strtod; M.__strchr_chk = M.strchr; M.__strrchr_chk = M.strrchr;
+  M.__aeabi_memclr = M.__aeabi_memclr4 = M.__aeabi_memclr8 = M.bzero;
   hostLib("libc.so", M);
   hostLib("liblog.so", { __android_log_write: M.__android_log_write, __android_log_print: M.__android_log_print, __android_log_vprint: M.__android_log_vprint, __android_log_assert: M.__android_log_assert });
   const tmBuf = mem.hostAlloc(LAYOUT.TM_SIZE);
