@@ -5165,7 +5165,7 @@ single matching starting-revision replay; historical reproduction establishes pr
 but the varying engine games prevent a conclusive paired fault-frequency comparison. Complete
 TikTok parity and the earlier playback/styling/authentication limits remain unresolved.
 
-### ChatGPT startup and guest conversation (in progress)
+### ChatGPT startup and guest conversation
 
 The unchanged ChatGPT XAPK initially stopped in startup contracts: missing executor shutdown
 policy, reflection accessibility, Character title casing, URI/CharBuffer operations, and an
@@ -5302,3 +5302,76 @@ Guard the string-pool no-style offset sentinel. This change handles annotation m
 other resource style tags and style metadata from merged split pools remain limitations.
 The existing resource and span checks pass (12 tests, 55 assertions); no new test file was added.
 The preceding complete unit run passed all 1,261 tests, and the final candidate is rechecked below.
+
+
+Final candidate `dc729dfe`: typecheck passes; all 1,261 tests / 26,813 assertions pass across
+220 files. ChatGPT smoke compilation reports 66,165 classes and zero method failures. Framework
+exercises pass with the existing browser-only Paint text-metrics skip and 295/363 declared-native
+coverage. The serialized full E2E executes 177 steps in 1,307.7 seconds. ChatGPT's 18 steps show a
+real “2 + 2 = 4” response, background/resume, Settings, Language, About and login-sheet dismissal.
+All 72 ChatGPT process inspections succeed, with zero wedges, settling limits, layout/draw errors
+or required natives. Only three SLF4J warnings and optional Amazon/window-extension/DatagramSocket/
+media-projection queries remain on this observed path. Empty diagnostics do not cover unused APIs.
+
+The complete matrix records one transient TikTok consent-step liveness failure, followed by
+recovery; five Resy settling limits; five YouTube Matrix draw-error occurrences plus its SAX/cursor
+errors; Harmonic's atomic-group regex failure; and Lichess's native engine null-address fault.
+Flappy Bird retains unavailable bridge-frame diagnostics and its browser status TypeError. No
+observed process requires a native delegate. All four scored flows complete: FitNotes 39.50%,
+Mihon app 55.78%, Harmonic 31.60%, Mihon onboarding 17.72% content mismatch. Goldens are unchanged.
+Game samples fall below some FPS thresholds under other Chrome/AVD workloads; these are not
+uncontended performance measurements. Matching selected-flow baseline comparisons follow below.
+
+The maintainability pass keeps repairs in their owning modules: one shipped-font table drives
+browser registration, native font metadata and face selection; one Deflater feed helper tracks
+consumed bytes; Writer overloads share Java's virtual dispatch chain while concrete native writers
+retain direct fast paths; packed measurement state reuses the existing cache. RuntimeShader owns
+its WebGL programs, immutable recording snapshots and raster cache. No app bytecode, visual golden,
+or bundled credential-provider behavior was patched. Added checks target core contracts and the
+actual shader browser path; existing suites were extended wherever possible.
+
+Reviewed paired screenshots and the complete frozen-run captures are indexed in ignored
+`webdroid-shots/chatgpt/README.md`; `comparison.html` is the side-by-side gallery. The full Chrome
+capture is required for the foreground microG child surface. Root-canvas-only login images do not
+prove blank rendering. Full authentication parity, voice/attachments, native system-bar styling,
+and the long-session GC retention cause remain unresolved.
+
+Baseline `9d0bb979` reproduces YouTube's Matrix/SAX/cursor errors and the two playback settling
+limits. The candidate's initial “video-open” screenshot instead shows Home: a different live ad
+pushes the film title bounds to y=1916..2120 (center 2018), overlapping bottom navigation. The
+baseline ad leaves the title at y=1766..1970 (center 1868). Both harness taps report semantic hits,
+and `untilText` stops before swiping because the offscreen node already exists. Therefore the
+candidate's initial 106–121 FPS samples do not measure video playback; rendered counts alone do
+not establish interaction success. This is an observed harness visibility limit, not a claim
+that the candidate improved playback. Supplemental candidate replay is recorded below.
+
+The matching baseline Resy replay reproduces all five settling limits (location permission,
+list, venue, venue-back and near-me), with zero layout/draw errors or missing APIs. It additionally
+hits a transient onboarding-close liveness failure and then recovers; the candidate does not.
+The baseline takes 363.0 seconds versus the candidate's 332.7 seconds under competing host load,
+which is not a controlled speed comparison. Baseline TikTok completes without the candidate's
+single consent-step liveness failure; both show slow decoded playback and no layout/draw or
+uncaught/executor exceptions. Different live video workloads prevent a timing conclusion.
+
+The baseline Doodle Jump flow also falls below its frame-rate threshold (20–22 FPS in play,
+candidate 18–22), with no missing API or render error. The baseline Mihon onboarding score is
+17.69% versus 17.72% on the candidate; inspected captures retain layout and controls, with the
+small text-weight change from system-face matching. No golden is replaced. The fresh baseline
+Lichess game does not reproduce the candidate's previously documented FairyStockfish fault;
+historical reproduction establishes earlier occurrence, but this pair cannot establish unchanged
+fault frequency. This remains an explicit regression-evidence limit.
+
+A supplemental candidate TikTok replay clears consent, but its interests step misses the liveness
+deadline before recovering. The process queue is already empty when diagnostics are collected;
+48 frames completed during that step, with roughly 20 seconds in native execution and no
+uncaught/executor/layout/draw exception. The moving transient failure is not reproduced by the
+single matching baseline TikTok run. Host contention and varying videos complicate diagnosis,
+but are not a regression waiver: this liveness comparison remains unresolved.
+
+The supplemental candidate YouTube replay visibly advances Big Buck Bunny frames and completes
+16/16 steps, reproducing the baseline's show-controls/pause settling limits, Matrix/SAX/cursor
+errors and caption-style field queries. It has six Matrix draw-error occurrences and no layout
+errors or liveness failures. Its 225.5-second duration versus baseline 226.5 seconds is not a
+performance claim. The final full run and targeted replays establish working ChatGPT guest paths,
+but do not establish a clean no-regression result because TikTok liveness and Lichess fault
+frequency remain unresolved. Production code stayed frozen at `dc729dfe` throughout these captures.
