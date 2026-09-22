@@ -451,7 +451,7 @@ export class Cpu {
     for (;;) {
       if (stepMode.on) { stepPrev.set(this.w); if (watchPcs.has(this.pc)) this.watchHit(); }
       let ex: number;
-      try { ex = core.run_slice(this.base, Math.max(stepMode.on ? 1 : 0, limit - this.ic)); }
+      try { ex = core.run_slice(this.base, stepMode.on ? 1 : Math.max(0, limit - this.ic)); }
       catch (e) { throw this.trap(e); }
       if (stepMode.on) this.step();
       switch (ex) {
