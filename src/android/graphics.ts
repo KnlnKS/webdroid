@@ -1691,6 +1691,19 @@ function clipOutRect(this: JCanvas, l: number, t: number, r: number, b: number) 
 function drawRect(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
   this.drawShape(p, (c) => c.fillRect(l, t, r - l, b - t), (c) => c.strokeRect(l, t, r - l, b - t));
 }
+function drawColor(this: JCanvas, color: number, clear = false) {
+  const fill = cssColor(color);
+  const apply = (ctx: Ctx2D) => {
+    ctx.save();
+    ctx.resetTransform();
+    if (clear) ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    else { ctx.fillStyle = fill; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); }
+    ctx.restore();
+  };
+  const recorder = this.ctx as RecordingContext;
+  if (recorder.__isRecorder) recorder.__record(apply);
+  else apply(this.ctx);
+}
 /** ellipse arc in the box; a full sweep without the centre is drawOval */
 function drawArc(this: JCanvas, l: number, t: number, r: number, b: number, start: number, sweep: number, useCenter: number, p: JPaint) {
   if (!(r > l && b > t)) return;
@@ -1819,22 +1832,9 @@ export const canvasMethods: NativeSpec["methods"] = {
     r.right = this.w; r.bottom = this.h;
     return r;
   },
-  "drawColor(I)V": function (this: JCanvas, c: number) {
-    this.ctx.save();
-    this.ctx.fillStyle = cssColor(c);
-    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
-    this.ctx.fillRect(0, 0, this.w, this.h);
-    this.ctx.restore();
-  },
+  "drawColor(I)V": drawColor,
   "drawColor(ILandroid/graphics/PorterDuff$Mode;)V": function (this: JCanvas, c: number, m: { ord: number }) {
-    if (m?.ord === 0) { // CLEAR
-      this.ctx.save();
-      this.ctx.setTransform(1, 0, 0, 1, 0, 0);
-      this.ctx.clearRect(0, 0, this.w, this.h);
-      this.ctx.restore();
-    } else {
-      (this as any)[drawColorKey](c);
-    }
+    drawColor.call(this, c, m?.ord === 0);
   },
   "drawRGB(III)V": function (this: JCanvas, r: number, g: number, b: number) {
     (this as any)[drawColorKey]((0xff000000 | (r << 16) | (g << 8) | b) | 0);
