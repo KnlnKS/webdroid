@@ -5888,3 +5888,81 @@ fonts-repeat-games/, fonts-{parent,candidate}-doodle/, fonts-{parent,candidate}-
 chrome-frozen.cpuprofile, chrome-paused-page-cpu.sample.txt, chrome-long-session-state.json,
 chrome-long-session-post-gc.json and restored-country-stable-inspection.log. The comparison
 gallery includes the paired country selector and successful Canada search captures.
+
+
+### Code-quality review implementation and final gate
+
+Review baseline `a311e4d8`; final production revision `f326334b`. Five focused commits retain
+four fixes and one appearance-precedence correction:
+
+- `74603466`: runtime shader declarations, setters and GL uploads share one uniform type
+  descriptor. Comma-separated scalar declarations and arrays use the same validation contract;
+  color uniforms require four components. The existing browser fixture verifies the second
+  comma-declared scalar by rendering green pixels.
+- `7fb62ea1`: `linebreak.ts` owns paragraph traversal, offsets and line measurement for greedy
+  and balanced policies. JLayout supplies span-aware measurement and indivisible replacement
+  boundaries to both. The native LineBreaker path keeps its existing greedy policy. The
+  existing browser fixture verifies equal-width replacement spans retain balanced line breaks.
+- `33327b06`: native containers propagate child measurement flags and resolve their own bounds
+  without discarding state. The dimension-only helper is named `resolveSize`; the stateful
+  helper is `resolveSizeAndState`, matching their Java contracts. Existing measurement-cache
+  coverage now exercises nested FrameLayout, LinearLayout, GridLayout and RelativeLayout.
+- `f45ad79f`: colors belong to JWindow rather than AppHost. A shared system-bar snapshot selects
+  the top visible focusable full-screen window and drives both backgrounds and icon appearance.
+  Backgrounds are painted at that window's layer so higher floating scrims still dim them.
+  Existing icon/handle caches remain. One core window test checks dialog ownership and restoration.
+- `f326334b`: removed eager theme-light-appearance masking, which could override subsequent
+  legacy decor system-UI requests. Existing appearance precedence is preserved.
+
+At `f45ad79f`, typecheck and all 1,268 unit tests pass (26,911 assertions, 219 files, 103.58s).
+ChatGPT smoke-compiles 66,165 classes with zero method failures. Eight runnable framework
+exercises pass, covering 295/363 declared natives; Paint text remains a browser-only check.
+After the final appearance correction, its four owning tests (21 assertions) and typecheck
+pass again. No new test suite was introduced; the new window test and extensions exercise
+owning contracts rather than app-specific snapshots.
+
+The focused ChatGPT run completes 24/24 in 122.4s. The final serialized full matrix completes
+183 steps across 13 flows in 971.4s, exit zero. ChatGPT completes 24/24 in 118.8s, with 96
+successful process inspections, no new missing APIs/errors and only the known SLF4J messages.
+Its guest answer, settings, attachment and login-sheet paths remain reachable. Full Chrome
+was reloaded onto the final source and driven through the country selector again; its row
+and flag geometry matches the fresh owned API 33 AVD capture. Latin rasterization and the
+native minimized-keyboard strip still differ. Authentication and voice remain unvalidated.
+
+Across 632 process snapshots, 12 Flappy auxiliary-frame inspections remain unavailable with
+the historical status-property TypeError. There are no wedges, layout errors or required
+natives. YouTube retains `show-controls`/`pause` settling limits and the same Matrix.mapRect
+failure (six draw errors versus nine in the saved comparison). Lichess retains pthread
+errors 3/22/35. Timestamped Chromium DnsConfig warnings recur. Reddit additionally reaches
+Process.getStartRequestedElapsedRealtime, already documented in earlier gates but absent
+from the immediately preceding saved run. TikTok additionally probes its app-owned
+LocationClientImpl class; no matched replay establishes why this optional query differed.
+Changing object IDs, TLS pointers and network messages also prevent raw error strings from
+being a useful regression count. No success stub or speculative delegate was added.
+
+Mean golden content differences are FitNotes 39.82% (previously 39.24%), Mihon app 46.83%
+(47.77%), Mihon onboarding 11.14% (unchanged), and Harmonic 32.72% (31.59%). Visual inspection
+confirms Harmonic's overflow-screen delta includes different live articles and an active
+button highlight, with the menu geometry retained; the scores do not isolate causality.
+FitNotes' changed help dialog is a real geometry difference: the window expands from 640px
+to 720px at the 720px test screen. Read-only measurement instrumentation traces this to
+weighted horizontal rows emitting TOO_SMALL, now propagated through ScrollView and the
+outer containers into the existing preferred-width retry. Android 13 LinearLayout computes
+widthSizeAndState before weight redistribution and retains it in setMeasuredDimension
+([AOSP source](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-13.0.0_r1/core/java/android/widget/LinearLayout.java#L1333)).
+The restored state contract is retained; the native dialog reconstruction still differs from
+the reference. This increased visual discrepancy remains unresolved and the full run must
+not be described as proof of complete visual non-regression. Goldens are unchanged.
+
+Timing is not a controlled performance comparison: another worktree ran its own E2E on the
+same host during this matrix. Doodle gameplay is 26/28/29 fps versus 29/30/28 previously;
+these samples do not establish either a speedup or a regression. System-bar selection covers
+visible full-screen dialogs within one process; general multi-window and cross-process bar
+arbitration are still limited.
+
+Evidence under `webdroid-shots/chatgpt/`: review-unit.log, review-smoke.log,
+review-framework.log, review-focused-chatgpt.log, review-full-e2e.log,
+review-full-{actual,report,summary.json,audit.log}, review-final-country.{png,json},
+review-avd-country.png and review-fitnotes.{ts,log}. The saved comparison is
+fonts-final-{actual,report}; it has the review baseline's production source. Diagnostic
+measurement instrumentation lives only in ignored scratch scripts and is not shipped.
