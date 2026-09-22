@@ -132,9 +132,9 @@ export class Runtime {
     let m = this.refCache.get(cls);
     if (m) return m;
     this.refCache.set(cls, (m = new Map()));
-    for (const dex of this.dexes) for (let i = 0; i < dex.methodCount; i++) {
+    const descriptor = cls.startsWith("[") ? cls : `L${cls};`;
+    for (const dex of this.dexes) for (const i of dex.methodsOf(descriptor)) {
       const r = dex.method(i);
-      if (descToName(dex.type(r.cls)) !== cls) continue;
       const d = dex.methodDesc(i);
       m.set(r.name + d, d);
     }

@@ -1,7 +1,11 @@
 # TikTok usability follow-up
 
 Branch: `codex/tiktok-usability`. Starting revision: `9d0bb979`.
-Status: four focused repairs committed and final 159-step regression matrix completed; full TikTok parity and the 150 ms target remain unmet.
+Status: performance investigation resumed from `2d4a6330`; prior repair matrix completed, but full TikTok parity and the 150 ms target remain unmet.
+
+Current pass separates cold navigation, warmed input and decoded playback; profiles JavaScript
+allocation/GC, method preparation, native execution, scheduling and rendering. Keep only measured
+improvements, with focused core/TikTok checks during development and a final full E2E run.
 
 - Compare TikTok at 1080×2160, 480 dpi; retain screenshots and per-process diagnostics.
 - Investigate slow playback, interaction latency, reload stalls, and reached platform gaps.

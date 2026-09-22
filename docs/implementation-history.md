@@ -5295,3 +5295,28 @@ login styling differences remain unresolved. The optional JobInfo parcel operati
 XmlBlock probe from earlier/manual paths are not implemented. No authentication, publishing,
 DRM or birthdate-gated AVD feed was validated. Four production commits isolate package-query
 allocation/flags, Writer lock semantics, activity-window teardown, and cursor drawables.
+
+### TikTok performance: bounded DEX reference lookup — 2026-09-22
+
+Follow-up baseline: `2d4a6330`. Allocation sampling in full Chrome attributed roughly 80 MiB
+of retained allocations to `Runtime.methodRefs` and its string/method decoding descendants.
+Each first query scanned all loaded method IDs, filling caches for unrelated owners. DEX
+method IDs are sorted by declaring type, and type IDs by UTF-16 descriptor order
+([format contract](https://source.android.com/docs/core/runtime/dex-format#file-layout)).
+`DexFile.methodsOf` now finds the first matching owner with binary search and visits only
+its contiguous range. Runtime cache invalidation on subsequent DEX loads is unchanged.
+
+Eight queries against the unchanged TikTok DEX files return identical reference sets. In
+separate fresh Bun processes they take 527.8 ms / 161.7 MB additional heap with the old scan
+and 18.0 ms / 2.8 MB with the bounded lookup. This is a lookup microbenchmark, not an app
+latency claim. The core fixture compares all represented owners and absent boundary names,
+and checks refreshing an empty query after load. The 14 JVM-tier/reflection checks pass
+580 assertions; typecheck passes. No golden changes.
+
+Fresh headless hardware-rendered browser observations remain noisy under concurrent host
+load and live video variation. Baseline/candidate first search dispatch was 1055.5/2280.8 ms;
+post-GC heap before feed sampling was 1207.0/1135.2 MB. Warm searches also varied substantially.
+These single observations do not establish a navigation speedup or the 150 ms target.
+Diagnostic evidence lives in `webdroid-shots/tiktok-performance`. A full heap-snapshot attempt
+crashed the diagnostic renderer; that run is excluded, and lighter allocation sampling was
+used after a fresh navigation. No other browser or emulator was stopped.

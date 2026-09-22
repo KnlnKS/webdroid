@@ -213,6 +213,17 @@ export class DexFile {
   }
 
   get methodCount(): number { return this.methodCache.length; }
+  *methodsOf(descriptor: string): Generator<number> {
+    const owner = (i: number) => this.type(this.view.getUint16(this.methodIdsOff + i * 8, true));
+    // DEX method_ids sort by type_idx; type_ids sort by their UTF-16 descriptors.
+    let lo = 0, hi = this.methodCount;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (owner(mid) < descriptor) lo = mid + 1;
+      else hi = mid;
+    }
+    for (; lo < this.methodCount && owner(lo) === descriptor; lo++) yield lo;
+  }
   method(i: number): MethodRef {
     let m = this.methodCache[i];
     if (m === undefined) {
