@@ -408,6 +408,7 @@ export class JView extends JObj {
   scrollChangeL: unknown = null;
   insetsL: unknown = null; a11yDelegate: unknown = null; dragL: unknown = null;
   fitsSys = false;
+  optionalFitsSys = false;
   overlay: JViewOverlay | null = null;
   layoutChangeLs: unknown[] = [];
   attachLs: unknown[] = [];
@@ -1231,6 +1232,7 @@ const viewMethods: NativeSpec["methods"] = {
   },
   "getSystemUiVisibility()I": function (this: JView) { return this.systemUiVisibility; },
   "setFitsSystemWindows(Z)V": function (this: JView, on: number) { this.fitsSys = !!on; },
+  "makeOptionalFitsSystemWindows()V": function (this: JView) { this.optionalFitsSys = true; },
   "requestApplyInsets()V": () => { uiState.needsInsets = true; },
   // registering a listener is the moment an app declares interest, and it usually happens after
   // the first traversal has already dispatched — re-arm so this listener sees one too
@@ -1445,17 +1447,16 @@ const viewMethods: NativeSpec["methods"] = {
     while (root.parent) root = root.parent;
     return root.windowOwner ? vcall(root.windowOwner, "getInsetsController", "()Landroid/view/WindowInsetsController;") : null;
   },
-  // AOSP: a view that fits system windows turns the bars into padding and consumes them; one
-  // that does not still offers them to the deprecated fitSystemWindows(Rect) an app may override.
+  "fitSystemWindows(Landroid/graphics/Rect;)Z": function (this: JView, rect: JRect) {
+    if (!this.fitsSys) return 0;
+    // Optional fitting belongs to the window; without a framework content listener it passes through.
+    const optional = this.optionalFitsSys && this.attached;
+    setPadding.call(this, optional ? 0 : rect.left, optional ? 0 : rect.top, optional ? 0 : rect.right, optional ? 0 : rect.bottom);
+    return optional ? 0 : 1;
+  },
   "onApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": async function (this: JView, ins: JWindowInsets) {
     if (!ins || ins.consumedV) return ins;
-    const s = sysIns(ins);
-    if (this.fitsSys) {
-      this.padL = s.left; this.padT = s.top; this.padR = s.right; this.padB = s.bottom;
-      requestLayout(this);
-    } else if (!await vcall(this, "fitSystemWindows", "(Landroid/graphics/Rect;)Z", Object.assign(new JRect(), s))) {
-      return ins;
-    }
+    if (!await vcall(this, "fitSystemWindows", "(Landroid/graphics/Rect;)Z", Object.assign(new JRect(), sysIns(ins)))) return ins;
     return vcall(ins, "consumeSystemWindowInsets", "()Landroid/view/WindowInsets;");
   },
   "dispatchApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": viewDispatchInsets,
@@ -1587,7 +1588,7 @@ const viewMethods: NativeSpec["methods"] = {
     "isDuplicateParentStateEnabled()Z", "getAccessibilityLiveRegion()I",
     "awakenScrollBars()Z", "getWindowSystemUiVisibility()I", "onHoverEvent(Landroid/view/MotionEvent;)Z",
     "dispatchHoverEvent(Landroid/view/MotionEvent;)Z", "onDragEvent(Landroid/view/DragEvent;)Z",
-    "onKeyPreIme(ILandroid/view/KeyEvent;)Z", "onCheckIsTextEditor()Z", "fitSystemWindows(Landroid/graphics/Rect;)Z",
+    "onKeyPreIme(ILandroid/view/KeyEvent;)Z", "onCheckIsTextEditor()Z",
     "isInEditMode()Z", "getLayoutDirection()I", "getTextDirection()I", "isPaddingRelative()Z"),
   ...stubs(null, "getContentCaptureSession()Landroid/view/contentcapture/ContentCaptureSession;",
     "getDrawingCache()Landroid/graphics/Bitmap;",

@@ -59,5 +59,10 @@ test("target R dispatches insets independently to siblings, including gone views
     const result = await vcall(parent, "dispatchApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", insets);
     expect([first.padT, second.padT]).toEqual([72, 72]);
     expect(result).toBe(insets);
+    parent.fitsSys = parent.attached = true;
+    await vcall(parent, "makeOptionalFitsSystemWindows", "()V");
+    first.padT = second.padT = 0;
+    await vcall(parent, "dispatchApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", insets);
+    expect([parent.padT, first.padT, second.padT]).toEqual([0, 72, 72]);
   } finally { setViewTargetSdk(35); }
 });

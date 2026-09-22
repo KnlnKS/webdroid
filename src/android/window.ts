@@ -153,6 +153,9 @@ rt.register({
     },
     "setAttributes(Landroid/view/WindowManager$LayoutParams;)V": function (this: JWindow, lp: JWindowLayoutParams | null) {
       if (!lp) return;
+      if (this.screenBrightness === lp.screenBrightness && this.flags === lp.flags &&
+          this.fitInsetsSides === lp.fitInsetsSides && this.fitInsetsTypes === lp.fitInsetsTypes &&
+          this.fitInsetsIgnoringVisibility === lp.fitInsetsIgnoringVisibility) return;
       this.screenBrightness = lp.screenBrightness;
       this.flags = lp.flags;
       this.fitInsetsSides = lp.fitInsetsSides;

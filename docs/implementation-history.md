@@ -5078,3 +5078,16 @@ force-normal vertical-offset path. The existing browser fixture checks an empty 
 25 assertions and typecheck pass. Full Chrome confirms the caret at the start of Phone number
 with zero layout/draw errors. Its drawable/color styling remains different from the AVD. The
 interrupted final matrix is not counted as completed validation; a new frozen run follows.
+
+Matched starting-revision E2E exposed a regression hidden by Harmonic's nearly unchanged mean
+visual score: comments stayed empty, with 450–453 inset/layout passes instead of two inset passes.
+A traced pre-draw listener waited for two app inset callbacks. Reading fitsSystemWindows from XML
+made AppCompat's FitWindowsLinearLayout consume insets before its children; its reflective
+makeOptionalFitsSystemWindows call had no implementation. View now preserves optional fitting and
+routes onApplyWindowInsets through virtual fitSystemWindows. Paired framework bytecode specifies
+that an attached optional-fit view without a framework content listener clears local inset padding
+and passes the insets through. Shared padding mutation also avoids redundant layout requests.
+Fresh uninstrumented Harmonic replay restores visible comments: two inset passes, six layout
+passes, zero layout/draw errors; starting revision had two and seven. Five owning tests pass with
+22 assertions, and typecheck passes. Window.setAttributes also retains change detection for all
+stored flags/fit fields instead of unconditionally scheduling insets on identical values.

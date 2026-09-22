@@ -3,6 +3,7 @@ import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { vcall } from "../src/jvm/natives/jlang";
 import { JContext, display } from "../src/android/context";
+import { uiState } from "../src/android/view";
 
 rt.linkNatives();
 
@@ -21,4 +22,19 @@ test("display and window contexts retain display identity and own their window s
   expect(await vcall(second, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "window")).not.toBe(manager);
   const error = await vcall(source, "createDisplayContext", "(Landroid/view/Display;)Landroid/content/Context;", null).then(() => null, e => e);
   expect(rt.iof(error, "java/lang/IllegalArgumentException")).toBeTruthy();
+});
+
+test("unchanged window attributes do not restart inset dispatch", async () => {
+  const window = rt.make("android/view/Window");
+  const attrs = await vcall(window, "getAttributes", "()Landroid/view/WindowManager$LayoutParams;");
+  const pending = uiState.needsInsets;
+  try {
+    uiState.needsInsets = false;
+    await vcall(attrs, "setFitInsetsTypes", "(I)V", 0);
+    await vcall(window, "setAttributes", "(Landroid/view/WindowManager$LayoutParams;)V", attrs);
+    expect(uiState.needsInsets).toBe(true);
+    uiState.needsInsets = false;
+    await vcall(window, "setAttributes", "(Landroid/view/WindowManager$LayoutParams;)V", attrs);
+    expect(uiState.needsInsets).toBe(false);
+  } finally { uiState.needsInsets = pending; }
 });
