@@ -4950,3 +4950,13 @@ constructor/getter. A resource-identity probe and 16 owning view checks pass (87
 clean typecheck. A live dispatch experiment then produced one detail root with populated caption
 and controls, without the swallowed resource exception. Fresh-build replay remains to be checked.
 Another earlier setup exception was UnsupportedOperationException; its source remains untraced.
+
+The cache's access/write queues extend AbstractQueue and populate through Queue.add. That native
+base incorrectly reused listMethods, so inherited add wrote a separate array instead of calling
+the subclass's offer; its linked iterator then saw no eviction entries. AbstractQueue now inherits
+AbstractCollection and implements add/remove/element/clear through virtual offer/poll/peek. Shared
+bulk insertion traverses the actual iterator and preserves the Java caller across suspension.
+One core subclass-storage case covers insertion, inspection, removal, clearing and empty/self-add
+failures. The 26 collection/executor/queue checks pass (146 assertions), as does typecheck. Live
+cache replay on this repair is pending. The fresh View-resources build produced a single detail
+root and no captured resource exception, but one replay still had empty content.
