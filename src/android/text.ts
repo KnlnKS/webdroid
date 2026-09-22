@@ -19,6 +19,8 @@ import type { JLocale } from "../jvm/natives/jvalues";
 import { csText as javaCsText } from "../jvm/natives/jchars";
 import type { JPath } from "./path";
 import type { StringPool } from "./axml";
+import { breakLines, type TLine } from "./linebreak";
+export type { TLine } from "./linebreak";
 
 class JAnnotation extends JObj { key: string | null = null; value: string | null = null; }
 async function writeAnnotation(this: JAnnotation, parcel: JObj) {
@@ -1188,97 +1190,6 @@ function replacementWidth(text: string, paint: JTextPaint, replacements: Replace
   }
   return x + (position < end ? measureText(paint, text.slice(position, end)) : 0);
 }
-export interface TLine { start: number; end: number; text: string; width: number; ellipsis?: { start: number; count: number }; }
-
-/**
- * Greedy line breaking over `measureText`: the break point is the largest space index that
- * still fits, else the largest character index. Widths grow monotonically with prefix length,
- * so the character limit is a binary search rather than a step back per word (that was O(n)
- * measures per line and O(n^2) per paragraph).
- *
- * `first` is the width of the first `firstCount` lines and `rest` of the ones after, which is
- * AOSP's ParagraphConstraints. Exported so its own LineBreaker bytecode reaches this body
- * through the delegate rather than a second copy of it.
- */
-export function greedyBreaks(text: string, p: JTextPaint, first: number, firstCount: number, rest: number, maxLines = Number.MAX_SAFE_INTEGER, rangeWidth?: (start: number, end: number) => number, breakAt?: (start: number, end: number) => number): TLine[] {
-  const out: TLine[] = [];
-  const paras = text.split("\n");
-  let pos = 0;
-  for (let pi = 0; pi < paras.length; pi++) {
-    const para = paras[pi];
-    if (out.length >= maxLines) break;
-    const before = out.length;
-    if (para === "") { out.push({ start: pos, end: pos, text: "", width: 0 }); }
-    else {
-      let left = para, off = 0;
-      while (left.length && out.length < maxLines) {
-        const width = out.length < firstCount ? first : rest;
-        let n = left.length;
-        if ((rangeWidth ? rangeWidth(pos + off, pos + para.length) : measureText(p, left)) > width) {
-          let lo = 1, hi = left.length;
-          while (lo < hi) {
-            const mid = (lo + hi + 1) >> 1;
-            if ((rangeWidth ? rangeWidth(pos + off, pos + off + mid) : measureText(p, left.slice(0, mid))) <= width) lo = mid; else hi = mid - 1;
-          }
-          const sp = left.lastIndexOf(" ", Math.min(lo, left.length - 2));
-          n = sp > 0 ? sp : lo;
-        }
-        if (breakAt) n = breakAt(pos + off, pos + off + n) - pos - off;
-        const chunk = left.slice(0, n);
-        out.push({ start: pos + off, end: pos + off + n, text: chunk, width: rangeWidth ? rangeWidth(pos + off, pos + off + n) : measureText(p, chunk) });
-        off += n;
-        if (left[n] === " ") { n++; off++; }
-        left = left.slice(n);
-      }
-    }
-    // A line that ends a paragraph OWNS its newline: AOSP's invariant is
-    // getLineEnd(i) == getLineStart(i + 1), and an app slicing text by line loses the
-    // separators without it. `text` still excludes it, which is what getLineVisibleEnd reports.
-    if (pi < paras.length - 1 && out.length > before) out[out.length - 1].end++;
-    pos += para.length + 1;
-  }
-  if (!out.length) out.push({ start: 0, end: 0, text: "", width: 0 });
-  return out;
-}
-function balancedBreaks(text: string, paint: JTextPaint, width: number, maxLines: number): TLine[] {
-  const lines: TLine[] = [];
-  let offset = 0;
-  for (const paragraph of text.split("\n")) {
-    if (lines.length >= maxLines) break;
-    const greedy = greedyBreaks(paragraph, paint, width, 0, width);
-    let result = greedy;
-    if (greedy.length > 1) {
-      const words = new Set([...paragraph.matchAll(/ +/g)].map(m => m.index + m[0].length));
-      const ends = [...new Set([0, ...words, ...greedy.map(l => l.end), paragraph.length])].sort((a, b) => a - b);
-      const scores = new Float64Array(ends.length).fill(Infinity), previous = new Int32Array(ends.length);
-      scores[0] = 0;
-      // Minikin balances squared unused width, including the last line; emergency word
-      // splits have a much larger penalty than whitespace breaks.
-      for (let i = 1; i < ends.length; i++) {
-        const end = ends[i];
-        let visible = end;
-        while (visible > 0 && paragraph[visible - 1] === " ") visible--;
-        for (let j = i - 1; j >= 0; j--) {
-          const advance = measureText(paint, paragraph.slice(ends[j], visible));
-          if (advance > width && j < i - 1) break;
-          const penalty = end === paragraph.length || words.has(end) ? 0 : 1e10;
-          const score = scores[j] + (advance > width ? 1e12 : (width - advance) ** 2) + paint.textSize * width + penalty;
-          if (score <= scores[i]) { scores[i] = score; previous[i] = j; }
-        }
-      }
-      result = [];
-      for (let i = ends.length - 1; i > 0; i = previous[i]) {
-        const start = ends[previous[i]], end = ends[i], text = paragraph.slice(start, end).replace(/ +$/, "");
-        result.push({ start, end, text, width: measureText(paint, text) });
-      }
-      result.reverse();
-    }
-    for (const line of result.slice(0, maxLines - lines.length)) lines.push({ ...line, start: line.start + offset, end: line.end + offset });
-    if (offset + paragraph.length < text.length && lines.at(-1)?.end === offset + paragraph.length) lines[lines.length - 1].end++;
-    offset += paragraph.length + 1;
-  }
-  return lines;
-}
 export class JLayout extends JObj {
   text = "";
   /** the CharSequence the layout was built from, kept for its spans (LineHeightSpan) */
@@ -1307,12 +1218,15 @@ export class JLayout extends JObj {
   }
   layoutLines(maxLines = Number.MAX_SAFE_INTEGER) {
     this.updateMetrics();
-    const p = this.paint;
-    this.lines = this.replacements.length ? greedyBreaks(this.text, p, this.width, 0, this.width, maxLines,
-      (start, end) => this.rangeWidth(start, end), (start, end) => {
-        const span = this.replacements.find((s) => s.start < end && s.end > end);
-        return span ? span.start > start ? span.start : span.end : end;
-      }) : this.breakStrategy === 2 ? balancedBreaks(this.text, p, this.width, maxLines) : greedyBreaks(this.text, p, this.width, 0, this.width, maxLines);
+    this.lines = breakLines(this.text, this.paint, {
+      width: this.width, maxLines, balanced: this.breakStrategy === 2,
+      measure: (start, end) => this.rangeWidth(start, end),
+      boundary: (start, end) => {
+        const span = this.replacements.find(s => s.start < end && s.end > end);
+        if (span) return span.start > start ? span.start : span.end;
+        return end > start && /[\uD800-\uDBFF]/.test(this.text[end - 1]) && end < this.text.length ? (end - 1 > start ? end - 1 : end + 1) : end;
+      },
+    });
   }
   rangeWidth(start: number, end: number): number {
     return this.replacements.length ? replacementWidth(this.text, this.paint, this.replacements, start, end) : measureText(this.paint, this.text.slice(start, end));

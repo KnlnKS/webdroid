@@ -152,8 +152,17 @@ async function probe() {
     balancedText, 0, balancedText.length, balancedPaint, Math.ceil(measureText(balancedPaint, "aaaaa bb") + 1));
   await vcall(builder, "setBreakStrategy", "(I)Landroid/text/StaticLayout$Builder;", 2);
   const balancedLayout = await vcall(builder, "build", "()Landroid/text/StaticLayout;");
+  const balancedSpan = rt.make("android/text/style/ReplacementSpan");
+  Object.assign(balancedSpan, { [mangleMethod("getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I")]:
+    () => Math.round(measureText(balancedPaint, "aaaaa")) });
+  const spanned = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", balancedText);
+  await vcall(spanned, "setSpan", "(Ljava/lang/Object;III)V", balancedSpan, 0, 5, 33);
+  const spanBuilder = await vcall(rt.link("android/text/StaticLayout$Builder").ctor, "obtain", "(Ljava/lang/CharSequence;IILandroid/text/TextPaint;I)Landroid/text/StaticLayout$Builder;",
+    spanned, 0, balancedText.length, balancedPaint, balancedLayout.width);
+  await vcall(spanBuilder, "setBreakStrategy", "(I)Landroid/text/StaticLayout$Builder;", 2);
+  const balancedSpanned = (await vcall(spanBuilder, "build", "()Landroid/text/StaticLayout;")).lines.map((line: { text: string }) => line.text);
   const balanced = balancedLayout.lines.map((l: {text: string; start: number; end: number}) => [l.text, l.start, l.end]);
-  return { ...result, balanced, selection, emptySelection, independentCanvas, checkBoxHeight, caretAtStart, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
+  return { ...result, balancedSpanned, balanced, selection, emptySelection, independentCanvas, checkBoxHeight, caretAtStart, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
     fitting: (await view.measuredLines(measureText(view.paintT, view.text))).lines.map(l => l.text), cleared: (await view.measuredLines(width)).replacements.length === 0,
     compound: { drawsAt, retained, restored: surface.getTransform().isIdentity } };
 }
