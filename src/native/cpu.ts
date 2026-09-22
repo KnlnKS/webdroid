@@ -245,15 +245,21 @@ export class Cpu {
     const mask = this.signalMask, handling = this.handling.has(sig);
     this.signalMask = (mask | (h?.mask ?? 0n) | (h && h.flags & 0x40000000 ? 0n : 1n << BigInt(sig - 1))) & 0xfffffffffffbfeffn;
     this.handling.add(sig);
+    let restored = false;
+    const restore = () => {
+      if (restored) return;
+      restored = true;
+      this.signalMask = mask;
+      if (!handling) this.handling.delete(sig);
+    };
     const base = this.baseAvailable;
-    const p = (async () => { if (h) await this.call(h.fn, [sig, 0, 0], SIGNAL_FRAME + sig); })();
+    const p = (async () => { if (h) await this.call(h.fn, [sig, 0, 0], SIGNAL_FRAME + sig, restore); })();
     if (base) this.baseBusy = p.catch(() => {}).finally(() => { this.baseBusy = null; });
     try { await p; }
     catch (e) { console.error(`[native] signal ${sig} handler on ${this.name}:`, e); throw e; }
     finally {
       this.sigLog.push(`~${sig}`);
-      this.signalMask = mask;
-      if (!handling) this.handling.delete(sig);
+      restore();
       this.pump();
     }
     const w = this.sigWait;
@@ -306,7 +312,7 @@ export class Cpu {
   /** run guest function `fn` to completion on this Cpu (reentrant: saves and restores the register file) */
   frames: string[] = [];                            // what each nested call() is for (wd.native.regs)
   private savePool: Uint8Array[] = [];
-  async call(fn: number, args: CallArg[] = [], label = "call"): Promise<number> {
+  async call(fn: number, args: CallArg[] = [], label = "call", beforeResume?: () => void): Promise<number> {
     // host code calling back into the guest (a comparator, a JNI entry) while a signal handler owns the
     // register file above the frame it belongs to waits for that handler, as the kernel would hold the
     // thread; a handler's own delivery never waits
@@ -365,6 +371,8 @@ export class Cpu {
       this.retFp1 = this.a64 ? this.si[1] : w[2];
       return w[0];
     } finally {
+      // Signal state belongs to this frame until the interrupted thread can resume.
+      beforeResume?.();
       this.depth--;
       this.frames.pop();
       for (const w2 of this.idle.splice(0)) w2();

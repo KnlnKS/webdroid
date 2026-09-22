@@ -122,6 +122,30 @@ for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 t
     }
   });
 
+  test("signal masks are restored before an interrupted host call resumes", async () => {
+    setA64(a64);
+    const cpu = new Cpu(new JThread(), "signal-mask"), deferred = Promise.withResolvers<number>();
+    const entry = defineHost("test.signal.mask.wait." + a64, () => deferred.promise);
+    let resumedMask = -1n;
+    const observe = defineHost("test.signal.mask.observe." + a64, () => { resumedMask = cpu.signalMask; return 0; });
+    const handler = defineHost("test.signal.mask.handler." + a64, () => { deferred.resolve(0); return 0; });
+    const previous = sigHandlers.get(30), address = mem.reserve(4096, 4096);
+    sigHandlers.set(30, { fn: handler, mask: 0xffffffffffffffffn, flags: 0 });
+    mem.u32.set(a64
+      ? [0xa9bf7bfd, 0x580000f0, 0xd63f0200, 0x580000f0, 0xd63f0200, 0xa8c17bfd, 0xd65f03c0, 0xd503201f, entry, 0, observe, 0]
+      : [0xe92d4010, 0xe59fc00c, 0xe12fff3c, 0xe59fc008, 0xe12fff3c, 0xe8bd8010, entry, observe], address >>> 2);
+    try {
+      const result = cpu.call(address);
+      cpu.kill(30);
+      await result;
+      expect(resumedMask).toBe(0n);
+      expect(cpu.signalMask).toBe(0n);
+    } finally {
+      if (previous) sigHandlers.set(30, previous); else sigHandlers.delete(30);
+      cpu.dispose();
+    }
+  });
+
   test("a signal waits for an exiting call to release its frame", async () => {
     setA64(a64);
     const cpu = new Cpu(new JThread(), "signal-teardown");
