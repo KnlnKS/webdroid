@@ -726,6 +726,13 @@ describe("thumb decoder", () => {
     });
     expect(mem.ld64(double.w[8])).toBe(0x1234567a11223345n);
     expect([double.w[0], double.w[2]]).toEqual([0, 1]);
+    for (const [kind, loaded, stored] of [[0x40, 0x44, 0x11223399], [0x50, 0x3344, 0x1122ef99]]) {
+      const c = runThumb([0xe8d7, 0x0f0f | kind, 0xe8c7, 0x4f01 | kind, 0xf3bf, 0x8f2f, 0xe8c7, 0x0f02 | kind, 0x4770], (cpu) => {
+        cpu.w[14] = cpu.stackTop - 16; cpu.w[8] = 0xabcdef99;
+        mem.st32(cpu.w[14], 0x11223344);
+      });
+      expect([c.w[0], c.w[2], c.w[4], mem.ld32(c.w[14])]).toEqual([loaded, 0, 1, stored]);
+    }
   });
 
   test("wide register lists preserve high registers", () => {

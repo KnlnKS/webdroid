@@ -1221,22 +1221,28 @@ inline fn execThumb32Transfers(c: *Cpu, h: u32, pc: u32) ?Status {
             return jump(c, pc +% 4 +% off * 2);
         }
     }
-    if ((h & 0xff60) == 0xe840 and (h & 0x80 == 0 or ld(u16, pc + 2) & 0xf0 == 0x70)) {
+    if ((h & 0xff60) == 0xe840 and (h & 0x80 == 0 or ld(u16, pc + 2) & 0xc0 == 0x40)) {
         const h2: u32 = ld(u16, pc + 2);
         const load = h & 0x10 != 0;
-        const double = h & 0x80 != 0;
+        const extended = h & 0x80 != 0;
+        const kind = bits(h2, 4, 4);
+        const double = extended and kind == 7;
+        const byte = extended and kind == 4;
+        const half = extended and kind == 5;
         const n = h & 15;
-        const status = if (double) h2 & 15 else (h2 >> 8) & 15;
-        const a = addr(c, r(c, n) +% (if (double) 0 else (h2 & 255) * 4)) orelse return badAddr(c, h << 16 | h2, pc);
+        const status = if (extended) h2 & 15 else (h2 >> 8) & 15;
+        if (extended and ((!double and !byte and !half) or (!double and bits(h2, 8, 4) != 15))) return fault(c, .undefined, h << 16 | h2, pc);
+        const a = addr(c, r(c, n) +% (if (extended) 0 else (h2 & 255) * 4)) orelse return badAddr(c, h << 16 | h2, pc);
         if ((load and status != 15) or (!load and status == 15)) return fault(c, .undefined, h << 16 | h2, pc);
         c.pc = pc + 4;
         if (load) {
             if (double) set(c, (h2 >> 8) & 15, ld(u32, a + 4));
-            set(c, h2 >> 12, ld(u32, a));
+            set(c, h2 >> 12, if (byte) ld(u8, a) else if (half) ld(u16, a) else ld(u32, a));
             c.excl = 1;
         } else {
             if (c.excl != 0) {
-                if (!st(u32, c, a, r(c, h2 >> 12))) return badAddr(c, h << 16 | h2, pc);
+                const value = r(c, h2 >> 12);
+                if (!(if (byte) st(u8, c, a, @truncate(value)) else if (half) st(u16, c, a, @truncate(value)) else st(u32, c, a, value))) return badAddr(c, h << 16 | h2, pc);
                 if (double and !st(u32, c, a + 4, r(c, (h2 >> 8) & 15))) return badAddr(c, h << 16 | h2, pc);
             }
             set(c, status, c.excl ^ 1);
