@@ -7,8 +7,8 @@ export const PAGE_SIZE = 1 << PAGE_SHIFT;
 export const LOW = 0x1_0000;
 
 // Every fixed region sits at the bottom, each starting where the last ended, so the memory can
-// grow for the process without moving anything: a 32-bit process keeps 256 MiB, a 64-bit one
-// gets the whole 32-bit space a wasm memory can back, grown in place by the first image loaded
+// grow from 256 MiB to the process address space when its first native image loads:
+// 2 GiB for ARM32, or the whole 32-bit space a wasm memory can back for ARM64
 // (mem.init from setA64). Above the fixed regions the malloc arena and the ELF images share one
 // region and grow toward each other (malloc bumps up, mem.reserve bumps down), which is what a
 // process does anyway. The range test mem.ts inlines into every load and store is derived from
@@ -29,12 +29,13 @@ export const RET_SENTINEL = TRAMP_END - 8;
 const KERN_BASE = TRAMP_END;
 const KERN_END = KERN_BASE + KERN_SPAN;
 export const JIT_BUF = KERN_END - 0x0010_0000;
-export const MEM_SIZE_A32 = 0x1000_0000;
+export const MEM_SIZE_INITIAL = 0x1000_0000;
+export const MEM_SIZE_A32 = 0x8000_0000;
 export const MEM_SIZE_A64 = 0xffff_0000; // 4 GiB less a page: the whole 32-bit space a WebAssembly memory can back
 /** above this the buffer backs the address planes' chunks rather than plane 0 itself (mem.ts) */
 export const POOL_BASE = 0xa000_0000;
 /** the live size, set by mem.init */
-export let MEM_SIZE = MEM_SIZE_A32;
+export let MEM_SIZE = MEM_SIZE_INITIAL;
 export function setMemSize(n: number): void { MEM_SIZE = n; }
 export const STACK_SIZE = 0x10_0000;
 

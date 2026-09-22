@@ -1,8 +1,8 @@
 // The wasm core (src/native/core/*.zig) owns the guest memory: a guest address is an offset
-// into the memory it imports. One instance per process; the memory starts at the 32-bit size
-// and grows on the switch to a 64-bit process (mem.init), so nothing is ever copied or rebuilt.
+// into the memory it imports. One instance per process; memory grows to the native ABI's
+// address space when its first image loads (mem.init), without copying or rebuilding the core.
 
-import { JIT_BUF, MEM_SIZE_A32, MEM_SIZE_A64, STACK_BASE } from "./abi";
+import { JIT_BUF, MEM_SIZE_INITIAL, MEM_SIZE_A64, STACK_BASE } from "./abi";
 import { perf } from "../perf";
 
 export class NativeFault extends Error {
@@ -79,7 +79,7 @@ export const CORE_LIBC: Record<string, number> = Object.fromEntries("memcpy memm
 /** pthread keys per thread, the size of the table each Cpu carries (libc.zig) */
 export const TLS_KEYS = 256;
 
-export const memory = new WebAssembly.Memory({ initial: MEM_SIZE_A32 / 65536, maximum: MEM_SIZE_A64 / 65536 });
+export const memory = new WebAssembly.Memory({ initial: MEM_SIZE_INITIAL / 65536, maximum: MEM_SIZE_A64 / 65536 });
 /** the core's function table, which JIT regions are linked into above the core's own entries */
 const TABLE_SIZE = 1 << 18, JIT_SLOT0 = 8192; // cpu.zig's dead map is sized to match
 const table = new WebAssembly.Table({ initial: TABLE_SIZE, element: "anyfunc" });

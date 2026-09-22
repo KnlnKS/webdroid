@@ -7,7 +7,7 @@ import { JThread, mainThread, setCurThread } from "../jvm/natives/jlang";
 import { NativeFault, mem } from "./mem";
 import { core, jitDrain, TLS_KEYS } from "./core";
 import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET } from "./host";
-import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
+import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
 import { yieldToLoop, yieldStats } from "../jvm/yield";
 export { NativeFault, yieldToLoop, yieldStats };
@@ -60,9 +60,10 @@ export function invalidateRange(addr: number, size: number, reason = "range"): v
  *  graph — so the instruction set is a property of the process, set when its first image loads. */
 let A64 = false;
 export function setA64(on: boolean): void {
-  if (A64 === on) return;
+  const size = on ? MEM_SIZE_A64 : MEM_SIZE_A32;
+  if (A64 === on && MEM_SIZE === size) return;
   A64 = on;
-  mem.init(on ? MEM_SIZE_A64 : MEM_SIZE_A32);
+  mem.init(size);
   // the pointer width is a property of the process, not of a thread: set it here, because the
   // JNI tables are laid out before the first Cpu exists
   setPtrWidth(on ? 8 : 4);
