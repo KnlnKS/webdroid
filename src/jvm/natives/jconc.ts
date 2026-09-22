@@ -1356,13 +1356,10 @@ rt.register({ name: "java/util/concurrent/locks/ReentrantReadWriteLock$WriteLock
 for (const name of ["java/util/concurrent/locks/ReadWriteLock", "java/util/concurrent/locks/Lock", "java/util/concurrent/locks/Condition"]) rt.register({ name, ctor: class extends JObj {} });
 
 // ── ConcurrentLinkedQueue / LockSupport / FutureTask
-for (const n of ["java/util/concurrent/ConcurrentLinkedQueue", "java/util/AbstractQueue"]) {
-  rt.register({
-    name: n, ctor: class extends JList {},
-    ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable"],
-    methods: listMethods(),
-  });
-}
+rt.register({
+  name: "java/util/concurrent/ConcurrentLinkedQueue", ctor: class extends JList {}, sup: "java/util/AbstractQueue",
+  ifaces: ["java/util/Queue", "java/util/Collection", "java/lang/Iterable"], methods: listMethods(),
+});
 // A parked thread wakes on its permit, its deadline, or an interrupt. The wake is a macrotask
 // so the unparker's own chain runs to its next await first, and an untimed park still polls,
 // as Java's spurious wakeups allow, so a permit lost to a stale thread identity cannot hang it.

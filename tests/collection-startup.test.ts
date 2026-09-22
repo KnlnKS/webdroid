@@ -50,3 +50,25 @@ test("AtomicLongArray lazySet publishes full-width values and checks the index",
   const error = await vcall(array, "lazySet", "(IJ)V", 1, 0n).then(() => null, e => e);
   expect(rt.iof(error, "java/lang/IndexOutOfBoundsException")).toBeTruthy();
 });
+
+class OfferedQueue extends rt.link("java/util/AbstractQueue").ctor { values: unknown[] = []; }
+rt.register({ name: "test/OfferedQueue", ctor: OfferedQueue, sup: "java/util/AbstractQueue", methods: {
+  "offer(Ljava/lang/Object;)Z": function (this: OfferedQueue, value: unknown) { this.values.push(value); return 1; },
+  "poll()Ljava/lang/Object;": function (this: OfferedQueue) { return this.values.shift() ?? null; },
+  "peek()Ljava/lang/Object;": function (this: OfferedQueue) { return this.values[0] ?? null; },
+} });
+rt.link("test/OfferedQueue");
+
+test("abstract queue defaults use subclass storage", async () => {
+  const queue = new OfferedQueue();
+  await vcall(queue, "addAll", "(Ljava/util/Collection;)Z", newArrayList(["first", "second"]));
+  expect(queue.values).toEqual(["first", "second"]);
+  expect(await vcall(queue, "element", "()Ljava/lang/Object;")).toBe("first");
+  expect(await vcall(queue, "remove", "()Ljava/lang/Object;")).toBe("first");
+  await vcall(queue, "clear", "()V");
+  expect(queue.values).toEqual([]);
+  const failure = await vcall(queue, "remove", "()Ljava/lang/Object;").catch(e => e);
+  expect(rt.iof(failure, "java/util/NoSuchElementException")).toBe(1);
+  const selfAdd = await vcall(queue, "addAll", "(Ljava/util/Collection;)Z", queue).catch(e => e);
+  expect(rt.iof(selfAdd, "java/lang/IllegalArgumentException")).toBe(1);
+});

@@ -1839,6 +1839,17 @@ rt.register({
   },
 });
 
+async function collectionAddAll(this: JObj, collection: unknown): Promise<number> {
+  const thread = curThread;
+  const iterator = await vcallOn(thread, collection, "iterator", "()Ljava/util/Iterator;");
+  let changed = 0;
+  while (await vcallOn(thread, iterator, "hasNext", "()Z")) {
+    const value = await vcallOn(thread, iterator, "next", "()Ljava/lang/Object;");
+    if (await vcallOn(thread, this, "add", "(Ljava/lang/Object;)Z", value)) changed = 1;
+  }
+  return changed;
+}
+
 // abstract bases apps extend: the JDK's default bodies, each a virtual call on `this`
 const absCollection: Methods = {
   "<init>()V": function () {},
@@ -1860,11 +1871,7 @@ const absCollection: Methods = {
     for (const x of await toJsArray(c)) if (!(await vcall(this, "contains", "(Ljava/lang/Object;)Z", x))) return 0;
     return 1;
   },
-  "addAll(Ljava/util/Collection;)Z": async function (this: JObj, c: unknown) {
-    let ch = 0;
-    for (const x of (await toJsArray(c)).slice()) if (await vcall(this, "add", "(Ljava/lang/Object;)Z", x)) ch = 1;
-    return ch;
-  },
+  "addAll(Ljava/util/Collection;)Z": collectionAddAll,
   "remove(Ljava/lang/Object;)Z": async function (this: JObj, o: unknown) {
     const it = await iterOf(this);
     while (await vcall(it, "hasNext", "()Z")) {
@@ -2052,6 +2059,35 @@ const absMap: Methods = {
 rt.register({
   name: "java/util/AbstractCollection", ctor: JAbstractCollection, typeVars: "E",
   ifaces: ["java/util/Collection", "java/lang/Iterable"], methods: absCollection,
+});
+rt.register({
+  name: "java/util/AbstractQueue", ctor: class extends JAbstractCollection {}, sup: "java/util/AbstractCollection", typeVars: "E",
+  ifaces: ["java/util/Queue"], methods: {
+    "<init>()V": function () {},
+    "add(Ljava/lang/Object;)Z": function (this: JObj, value: unknown) {
+      return after(vcall(this, "offer", "(Ljava/lang/Object;)Z", value), accepted => {
+        if (!accepted) throw rt.mkThrowable("java/lang/IllegalStateException", "Queue full");
+        return 1;
+      });
+    },
+    ...Object.fromEntries([["remove", "poll"], ["element", "peek"]].map(([name, delegate]) => [
+      `${name}()Ljava/lang/Object;`, function (this: JObj) {
+        return after(vcall(this, delegate, "()Ljava/lang/Object;"), value => {
+          if (value == null) throw rt.mkThrowable("java/util/NoSuchElementException", null);
+          return value;
+        });
+      },
+    ])),
+    "clear()V": async function (this: JObj) {
+      const thread = curThread;
+      while (await vcallOn(thread, this, "poll", "()Ljava/lang/Object;") != null) {}
+    },
+    "addAll(Ljava/util/Collection;)Z": function (this: JObj, collection: unknown) {
+      if (collection === this) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+      if (collection == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      return collectionAddAll.call(this, collection);
+    },
+  },
 });
 rt.register({
   name: "java/util/AbstractList", ctor: JAbstractList, sup: "java/util/AbstractCollection", typeVars: "E",
