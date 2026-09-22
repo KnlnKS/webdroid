@@ -4713,7 +4713,7 @@ The broad API/ownership and software-renderer expansion remains deferred.
 See [the integration ledger](fuzz-integration.md) for every merge, withdrawal, CPU samples,
 visual comparisons, evidence paths and limitations. No golden changed.
 
-### 2026-09-21 — TikTok layout recovery (in progress)
+### 2026-09-21 — TikTok platform recovery and regression validation
 
 Starting `9071fec7`, full Chrome reproduces the black guest feed at 1080×2160/480 dpi.
 Video metadata arrives, but RelativeLayout.getGravity repeatedly aborts layout. Once supplied,
@@ -5091,3 +5091,29 @@ Fresh uninstrumented Harmonic replay restores visible comments: two inset passes
 passes, zero layout/draw errors; starting revision had two and seven. Five owning tests pass with
 22 assertions, and typecheck passes. Window.setAttributes also retains change detection for all
 stored flags/fit fields instead of unconditionally scheduling insets on identical values.
+
+Final frozen implementation 00208a4d passes typecheck and all 1,253 tests (26,744 assertions).
+The full serialized E2E completes 159 steps across 12 flows in 843.4 seconds, with no wedged
+main loop or step-action failure. Only YouTube show-controls/pause hit settling limits, reproduced
+on starting 9071fec7. All 13 TikTok steps render decoded feed content, resume and successive
+videos, with zero layout/draw errors. All four realms return diagnostics on every TikTok step;
+its three supporting realms have no missing APIs or uncaught errors. Main missing entries are
+nine optional APK/service classes; no realm reports a native-required delegate. Resy again
+reaches a populated venue page through all 13 steps, with clean diagnostics in all four realms.
+Harmonic comments remain populated with two inset and seven layout passes, matching baseline.
+
+Matched baseline content-difference means are FitNotes 40.116→40.115%, Mihon app 62.528→57.396%,
+Harmonic 31.843→31.142%, and Mihon onboarding 17.691→17.691%. These are distances from unchanged
+AVD goldens, not direct pairwise differences. Inspection attributes Mihon's worse final library
+step to its changing empty-state face; surrounding controls remain aligned. Single matched
+rollups show comparable step durations and drawing cost, not a repeated performance guarantee.
+YouTube's Matrix/SAX errors, Harmonic's atomic-group regex failure, Flappy Bird's page error and
+Lichess's native pthread aborts reproduce on starting revision. Flappy's embedded WebView frames
+lack wd diagnostics; its Android realms do report. Rendered-step counts do not waive those gaps.
+
+Full TikTok parity is still unproven: onboarding hand drawing has artifacts, caret color and
+phone-button styling differ, Top search stayed loading in one manual pass, an optional JobInfo
+parcel operation remains unsupported, and one reload stalled. Earlier decoded playback measured
+about 6 fps; shell-frame counters are not video FPS. Latest AVD access is login-gated, while earlier
+guest captures remain historical evidence. Authentication/publishing/DRM are unvalidated. Curated
+captures, logs and per-step diagnostics are indexed in ignored webdroid-shots/tiktok-parity/README.md.
