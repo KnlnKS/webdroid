@@ -7,6 +7,7 @@ SDK initialization and ARM32 gaps are under investigation. Final regression matr
 - Run the unchanged 4.2.1 XAPK in full Chrome and an AVD at matching geometry.
 - Capture startup, menus, gameplay, pause/resume and saved progression in both.
 - Repair reached platform/JNI/native failures at their canonical owners; retain real app bytecode.
+- Ignore ad-specific implementation unless it blocks gameplay or other non-ad features.
 - Keep changes focused, remove justified duplication, and add only core contract tests.
 - During development test Cut the Rope and owning checks only; freeze before full serialized E2E.
 - Record evidence, performance, limitations and focused commits in implementation history.
