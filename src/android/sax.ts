@@ -6,7 +6,27 @@ import { newXmlPullParser, readerText } from "./xmlpull";
 const S = "Ljava/lang/String;", NS = "http://xml.org/sax/features/namespaces";
 rt.markers("org/xml/sax/XMLReader", "org/xml/sax/ContentHandler", "org/xml/sax/Attributes",
   "org/xml/sax/ErrorHandler", "org/xml/sax/EntityResolver", "org/xml/sax/DTDHandler");
-defineException("org/xml/sax/SAXException", "java/lang/Exception");
+class JSaxException extends JThrowable { exception: JThrowable | null = null; }
+function saxMessage(this: JSaxException) {
+  return this.msg ?? (this.exception ? vcall(this.exception, "getMessage", "()Ljava/lang/String;") : null);
+}
+rt.register({ name: "org/xml/sax/SAXException", sup: "java/lang/Exception", ctor: JSaxException, methods: {
+  "<init>()V": function () {},
+  "<init>(Ljava/lang/String;)V": function (this: JSaxException, message: string | null) { this.msg = message; },
+  "<init>(Ljava/lang/Exception;)V": function (this: JSaxException, error: JThrowable | null) { this.exception = error; },
+  "<init>(Ljava/lang/String;Ljava/lang/Exception;)V": function (this: JSaxException, message: string | null, error: JThrowable | null) {
+    this.msg = message; this.exception = error;
+  },
+  "getException()Ljava/lang/Exception;": function (this: JSaxException) { return this.exception; },
+  "getMessage()Ljava/lang/String;": saxMessage,
+  "getLocalizedMessage()Ljava/lang/String;": function () { return vcall(this, "getMessage", "()Ljava/lang/String;"); },
+  "toString()Ljava/lang/String;": async function (this: JSaxException) {
+    if (this.exception) return vcall(this.exception, "toString", "()Ljava/lang/String;");
+    const name = await vcall(await vcall(this, "getClass", "()Ljava/lang/Class;"), "getName", "()Ljava/lang/String;");
+    const message = await vcall(this, "getLocalizedMessage", "()Ljava/lang/String;");
+    return name + (message === null ? "" : ": " + message);
+  },
+} });
 defineException("org/xml/sax/SAXParseException", "org/xml/sax/SAXException");
 defineException("org/xml/sax/SAXNotRecognizedException", "org/xml/sax/SAXException");
 
