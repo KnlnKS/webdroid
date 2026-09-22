@@ -5279,3 +5279,16 @@ This is a provider behavior limit, not justification for an app-specific credent
 Sources:
 https://github.com/microg/GmsCore/blob/v0.3.16.252432/play-services-core/src/main/kotlin/org/microg/gms/auth/credentials/identity/IdentityCredentialChooserActivity.kt
 https://github.com/microg/GmsCore/blob/v0.3.16.252432/play-services-core/src/main/kotlin/org/microg/gms/auth/signin/AssistedSignInFragment.kt
+
+Font instrumentation found ChatGPT requesting weight 600 while Paint emitted CSS weight 700.
+Preserve requested custom-font weights and choose system faces with Minikin's weight/slant
+distance and first-match tie rule. The existing medium file now serves both 500 and 600 requests;
+the canonical shipped-face table also drives browser registration and native fonts.xml. This
+removes the heavier headings seen in paired About/language captures without modifying app styles.
+One font-selection check extends the existing font test file. Source:
+https://android.googlesource.com/platform/frameworks/minikin/+/e900276/libs/minikin/FontFamily.cpp
+
+The first full unit run found three failures in Canvas semantic-text checks because the shader
+pattern check assumed a browser's CanvasPattern global. Guard that optional host constructor;
+all affected canvas, shader and text browser checks pass again. The remaining 1,257 tests passed
+in that run. Final whole-suite results follow after the candidate is frozen.

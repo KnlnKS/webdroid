@@ -4,7 +4,7 @@ import { recordVsync, PROCESS_PID } from "./android/os";
 import { RangeFile } from "./shell/lazyfile";
 import { mountSystemCertificates } from "./shell/cacerts";
 
-import { locateDrawnText, SYSTEM_FONT } from "./android/graphics";
+import { locateDrawnText, SYSTEM_FONT, SYSTEM_FONTS } from "./android/graphics";
 import { rt } from "./jvm/runtime";
 import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
@@ -417,16 +417,13 @@ document.getElementById("btn-home")!.addEventListener("click", () => location.re
 
 mountSystemCertificates();
 
-const fontsReady = Promise.all([Promise.all([
-  ["Roboto", "Roboto-Regular.ttf", "400", "normal"], ["Roboto Medium", "Roboto-Medium.ttf", "500", "normal"],
-  ["Roboto", "Roboto-Bold.ttf", "700", "normal"], ["Roboto", "Roboto-Italic.ttf", "400", "italic"],
-].map(async ([name, file, weight, style]) => {
+const fontsReady = Promise.all([Promise.all(SYSTEM_FONTS.map(async ([name, file, weight, style]) => {
   const response = await fetch(`/vendor/fonts/${file}`);
   if (!response.ok) throw new Error(`font ${file}: ${response.status}`);
   const bytes = await response.arrayBuffer();
   vfs.write(`/system/fonts/${file}`, new Uint8Array(bytes));
   const f = new FontFace(name, bytes, {
-    weight, style,
+    weight: String(weight), style,
     ascentOverride: `${SYSTEM_FONT.ascent * 100}%`, descentOverride: `${SYSTEM_FONT.descent * 100}%`,
   });
   document.fonts.add(await f.load());

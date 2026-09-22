@@ -251,6 +251,10 @@ function hsvToColor(alpha: number, hsv: Float32Array): number {
 }
 
 const ROBOTO = "Roboto, sans-serif";
+export const SYSTEM_FONTS = [
+  ["Roboto", "Roboto-Regular.ttf", 400, "normal"], ["Roboto Medium", "Roboto-Medium.ttf", 500, "normal"],
+  ["Roboto", "Roboto-Bold.ttf", 700, "normal"], ["Roboto", "Roboto-Italic.ttf", 400, "italic"],
+] as const;
 export class JTypeface extends JObj {
   family = ROBOTO;
   bold = false; italic = false;
@@ -357,11 +361,20 @@ export class JPaint extends JObj {
   private fBold = false;
   font(): string {
     if (this.fTf === this.tf && this.fSize === this.textSize && this.fBold === this.fakeBold) return this.fCache;
-    const it = this.tf.italic ? "italic " : "";
-    let w = this.fakeBold || this.tf.bold ? 700 : this.tf.weight;
+    let w = this.fakeBold ? Math.max(700, this.tf.weight) : this.tf.weight;
     if (!(w >= 100 && w <= 1000)) w = 400; // bogus weights (untyped-register artifacts) → regular
+    let family = this.tf.family;
+    if (family === ROBOTO) {
+      // Minikin keeps the first face on an equal weight/slant score; CSS prefers heavier weights.
+      const score = (face: typeof SYSTEM_FONTS[number]) => Math.abs(Math.floor(w / 100) - face[2] / 100) + (this.tf.italic !== (face[3] === "italic") ? 2 : 0);
+      let face: typeof SYSTEM_FONTS[number] = SYSTEM_FONTS[0];
+      for (const candidate of SYSTEM_FONTS) if (score(candidate) < score(face)) face = candidate;
+      family = face[0] + ", sans-serif";
+      w = w >= 600 && w - face[2] >= 200 ? 700 : face[2];
+    }
+    const it = this.tf.italic ? "italic " : "";
     this.fTf = this.tf; this.fSize = this.textSize; this.fBold = this.fakeBold;
-    return (this.fCache = `${it}${w} ${this.textSize}px ${this.tf.family}`);
+    return (this.fCache = `${it}${w} ${this.textSize}px ${family}`);
   }
   fillStyle(ctx?: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): string | CanvasGradient | CanvasPattern {
     if (this.shaderObj && ctx) { const style = this.shaderObj.pattern(ctx); if (style) return style; }
@@ -1483,7 +1496,7 @@ export class JCanvas extends JObj {
     } else {
       if (!pattern) ctx.fillStyle = p.fillStyle(ctx) as string;
     }
-    return !!pattern || ctx[stroke ? "strokeStyle" : "fillStyle"] instanceof CanvasPattern;
+    return !!pattern || typeof CanvasPattern !== "undefined" && ctx[stroke ? "strokeStyle" : "fillStyle"] instanceof CanvasPattern;
   }
   private blurLayer: { source: JCanvas; target: OffscreenCanvasRenderingContext2D; paint: JPaint } | null = null;
   drawMask(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke?: (ctx: typeof this.ctx) => void) {
