@@ -44,6 +44,11 @@ function copyBounds(rect: JRect): JRect {
   rt.link("android/graphics/Rect");
   return Object.assign(new JRect(), { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
 }
+function putExtras(this: JIntent, source: JBundle | JIntent) {
+  const extras = source instanceof JIntent ? source.extras : source;
+  if (extras) for (const [key, value] of extras.map) this.extras.map.set(key, value);
+  return this;
+}
 async function readIntent(p: JParcel, intent = new JIntent()): Promise<JIntent> {
   rt.link("android/content/Intent");
   intent.action = readString8(p); intent.dataUri = (await readUri(p))?.uri ?? null;
@@ -155,10 +160,8 @@ const intentMethods: NativeSpec["methods"] = {
     return changed;
   },
   "getExtras()Landroid/os/Bundle;": function (this: JIntent) { return this.extras.map.size ? this.extras : null; },
-  "putExtras(Landroid/os/Bundle;)Landroid/content/Intent;": function (this: JIntent, b: JBundle) {
-    if (b) for (const [k, v] of b.map) this.extras.map.set(k, v);
-    return this;
-  },
+  "putExtras(Landroid/os/Bundle;)Landroid/content/Intent;": putExtras,
+  "putExtras(Landroid/content/Intent;)Landroid/content/Intent;": putExtras,
   "hasExtra(Ljava/lang/String;)Z": function (this: JIntent, k: string) { return this.extras.map.has(k) ? 1 : 0; },
   "removeExtra(Ljava/lang/String;)V": function (this: JIntent, k: string) { this.extras.map.delete(k); },
   // Extras are live objects here, never a parcel, so there is nothing for a class loader to do.
