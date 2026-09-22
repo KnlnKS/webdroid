@@ -267,6 +267,23 @@ leaving the puzzle reduces lives from five to four while retaining 220 coins and
 Intro-video playback is a reached non-ad gap; the interpreter logs a real VideoPlayer failure.
 Ad-only APIs remain deferred. No final E2E or performance acceptance claim has been made.
 
+The title-screen stall's measured hot thread was Adjust's native signer: 100,000 guest
+instructions took about 2.8 seconds while repeated reallocations grew a 130+ MiB buffer by
+512 bytes. Shorter slices exposed the workload but did not fix it. A separate fresh run
+failed Unity's stack canary before the signer loaded. Inspecting JIT flag liveness found a
+core defect: wide Thumb instructions had no declared flag dependencies, so a branch could
+discard carry before an interpreted ADC. A seven-halfword fixture returned 0 under JIT and
+1 under the interpreter. Wide instructions now conservatively retain the fallback's flag
+dependencies across block edges. All 71 ARM checks / 797 assertions and typecheck pass.
+The next normal-JIT game run reached 4,700 GL draws without either prior fault, then stopped
+on `VTBL.8` at Unity `+0x90f6e4` in a game worker. ARM and Thumb VTBL/VTBX now share byte-table
+lookup with A64, preserving out-of-range extension bytes and overlapping registers. The
+ARM/A64 SIMD owner checks pass 81 tests / 1,023 assertions, and typecheck passes. A focused
+Thumb MOVW/MOVT lowering also removes full register spills for immediate moves. An isolated
+one-million-iteration loop dropped from about 45 ms to 0.78 ms after warmup; this is a
+microbenchmark, not app performance acceptance. Fresh game validation with the normal
+3,000,000-instruction slice budget is restarting.
+
 ## microG completion and open acceptance
 
 PLAN.md owns current status. Both Android and webdroid now
