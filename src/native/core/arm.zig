@@ -356,6 +356,8 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
         0x0e208c00 | (u << 29) | (size << 22)
     else if (op == 9 and size != 3 and (b == 0 or u == 0))
         0x0e209400 | (u << 29) | (size << 22) | (b << 11)
+    else if (op == 10 and size != 3 and q == 0)
+        0x0e20a400 | (u << 29) | (size << 22) | (b << 11)
     else if (op == 1 and b == 1)
         0x0e201c00 | (u << 29) | (size << 22)
     else if (variable_shift)
