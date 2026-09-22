@@ -5055,3 +5055,18 @@ in this pass; Videos loaded. The final comment tap opened TikTok's sign-up gate,
 comment captures remain the comment evidence. No credentials or posts were submitted. Screenshots
 and navigation telemetry are in ignored webdroid-shots/tiktok-parity. Full regression validation is
 next; these observations do not establish complete app parity or smooth playback.
+
+The first frozen full regression run (f88b72c2) completed all 159 steps with no wedges; YouTube's
+show-controls and pause steps hit settling limits. All 13 TikTok steps rendered, with zero layout
+or draw errors, advancing completed frames and diagnostics from four process realms. Main-process
+missing entries were nine optional app/service classes; native-required was empty. Supporting
+GMS and vending realms exposed uncaught Integer.reverseBytes failures that the main summary alone
+would miss. Integer byte reversal now handles ZIP signatures and signed boundaries (five direct
+runtime cases pass). GMS next entered obsolete multidex extraction because java.vm.version was
+absent. The runtime already indexes every classes*.dex before initialization; it now reports the
+reference AVD's 2.1.0 capability version (adb shell dalvikvm -showversion), allowing unchanged
+AndroidX code to select built-in multidex support. Fresh TikTok launch reports no missing APIs or
+uncaught errors in all three supporting realms. Typecheck passes; final matrix rerun is required.
+The prior full unit run passed 1,252 tests/26,740 assertions; TikTok compilation produced 462,058
+bodies-bearing classes and zero method failures. Eight non-DOM framework exercises passed, with
+text measurement explicitly skipped and 68 unexercised native declarations lacking delegates.

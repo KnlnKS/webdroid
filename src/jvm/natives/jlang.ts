@@ -1099,6 +1099,7 @@ rt.register({
     "static numberOfTrailingZeros(I)I": ctz32,
     "static highestOneBit(I)I": (v: number) => (v === 0 ? 0 : 1 << (31 - Math.clz32(v))),
     "static reverse(I)I": rev32,
+    "static reverseBytes(I)I": (v: number) => (v >>> 24) | ((v >>> 8) & 0xff00) | ((v & 0xff00) << 8) | (v << 24),
     "static rotateLeft(II)I": (v: number, n: number) => ((v << n) | (v >>> (32 - n))) | 0,
     "static rotateRight(II)I": (v: number, n: number) => (v >>> n) | (v << -n),
     "static hashCode(I)I": (v: number) => v,
@@ -1450,6 +1451,8 @@ function sysLong(prop: string): bigint | null {
 }
 const sysProps: Record<string, string> = {
   "java.version": "0", "os.name": "Linux", "line.separator": "\n",
+  // The loader indexes every DEX before application initialization, as ART 2.1 does.
+  "java.vm.version": "2.1.0",
   "java.vm.name": "webdroid", "file.separator": "/", "path.separator": ":",
   "java.io.tmpdir": "/data/local/tmp", "user.dir": "/",
 };
