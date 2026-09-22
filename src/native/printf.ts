@@ -97,7 +97,7 @@ export function format(fmt: string, args: ArgReader): string {
         if (prec >= 0) s = s.slice(0, prec);
         break;
       }
-      case "p": { const v = args.p(); s = v ? "0x" + v.toString(16) : "(nil)"; break; }
+      case "p": { const v = BigInt.asUintN(PTR * 8, args.va()); s = v ? "0x" + v.toString(16) : "(nil)"; break; }
       case "f": case "F": case "e": case "E": case "g": case "G": case "a": case "A": {
         const v = args.vd();
         let body = fmtFloat(Math.abs(v), conv, prec < 0 ? 6 : prec, alt);

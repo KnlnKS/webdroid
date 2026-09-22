@@ -3,8 +3,18 @@ import { mainThread } from "../jvm/natives/jlang";
 import { vfs } from "../jvm/natives/jio";
 import { Cpu, setA64 } from "./cpu";
 import { lookupHost } from "./host";
+import { libcInit } from "./libc";
 import { mem } from "./mem";
 import { fdWriteBack, javaCloseFd, javaOpenFd, javaFdBytes, javaSeekFd, javaDupFd, renamePath, stdioInit } from "./stdio";
+
+test("printf renders unmapped guest pointer values without dereferencing them", async () => {
+  setA64(true); libcInit();
+  const cpu = new Cpu(mainThread, "printf-pointer-test"), out = mem.hostAlloc(80), fmt = mem.strdup("%p %p");
+  try {
+    await cpu.call(lookupHost("snprintf", "libc.so")!, [out, 80, fmt, 0x1107420ecn, 0xffffffffffffffffn]);
+    expect(mem.cstr(out)).toBe("0x1107420ec 0xffffffffffffffff");
+  } finally { cpu.dispose(); setA64(false); }
+});
 
 test("record-lock queries report no conflicting process lock through the guest pointer", async () => {
   setA64(true);
