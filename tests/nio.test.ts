@@ -83,6 +83,11 @@ test("FileChannel.write drains a ByteBuffer at the shared file position", async 
 
   const input = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/tmp/nio-channel-write.bin");
   const readOnly = await vcall(input, "getChannel", "()Ljava/nio/channels/FileChannel;");
+  const copy = await newObj("java/io/ByteArrayOutputStream", "()V");
+  const target = await scall("java/nio/channels/Channels", "newChannel", "(Ljava/io/OutputStream;)Ljava/nio/channels/WritableByteChannel;", copy);
+  expect(await vcall(readOnly, "transferTo", "(JJLjava/nio/channels/WritableByteChannel;)J", 1n, 100n, target)).toBe(2n);
+  expect(Array.from(await vcall(copy, "toByteArray", "()[B"))).toEqual([2, 3]);
+  expect(await vcall(readOnly, "position", "()J")).toBe(0n);
   await expect(vcall(readOnly, "write", "(Ljava/nio/ByteBuffer;)I", buffer)).rejects.toMatchObject({
     constructor: rt.link("java/nio/channels/NonWritableChannelException").ctor,
   });

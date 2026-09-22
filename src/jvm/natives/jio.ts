@@ -6,7 +6,7 @@ import { vcall, vcallMaybe, vcallOn, curThread, after, stringHash, stringCompare
 import { csText } from "./jchars";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
 import { procText } from "../../shell/procfs";
-import { mappedBuffer, mappedReadOnlyBuffer, type JBuffer } from "./jnio";
+import { mappedBuffer, mappedReadOnlyBuffer, mkByteBuffer, type JBuffer } from "./jnio";
 import { renamePath, javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd } from "../../native/stdio";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
@@ -1451,6 +1451,28 @@ rt.register({
       return after(channelRead(this, dst), (n) => { file.pos = saved; return n; });
     },
     "write(Ljava/nio/ByteBuffer;)I": function (this: JFileChannel, src: JBuffer) { return channelWrite(this, src); },
+    "transferTo(JJLjava/nio/channels/WritableByteChannel;)J": async function (this: JFileChannel, position: bigint, count: bigint, target: JObj | null) {
+      const file = this.readable(), thread = curThread;
+      if (!target) return rt.npe();
+      if (position < 0n || count < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "position/count");
+      if (!await vcallOn(thread, target, "isOpen", "()Z")) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
+      if (target instanceof JFileChannel) target.writable();
+      const available = BigInt(file.source?.size ?? file.buf.length) - position;
+      const length = Number(count < available ? count : available);
+      if (length <= 0) return 0n;
+      const buffer = mkByteBuffer(Math.min(length, 65536)), bytes = new Uint8Array(buffer.ab);
+      let transferred = 0;
+      while (transferred < length) {
+        this.readable();
+        const start = Number(position) + transferred, n = Math.min(length - transferred, bytes.length);
+        const data = file.source ? await readFully(file.source, start, n) : file.buf.subarray(start, start + n);
+        bytes.set(data); buffer.pos = 0; buffer.lim = data.length;
+        const written = Number(await vcallOn(thread, target, "write", "(Ljava/nio/ByteBuffer;)I", buffer));
+        transferred += written;
+        if (written < n) break;
+      }
+      return BigInt(transferred);
+    },
     "force(Z)V": () => {},
     "tryLock()Ljava/nio/channels/FileLock;": fileLock,
     "tryLock(JJZ)Ljava/nio/channels/FileLock;": fileLock,
