@@ -406,6 +406,23 @@ describe("arm decoder", () => {
       expect(Array.from(c.s.slice(32, 36))).toEqual([4, 1, Infinity, 0]);
     }
   });
+  test("NEON float comparisons produce masks that narrow without saturation", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.s.set([1, -2, NaN, 0, 0, 1, 5, -0], 8);
+      cpu.s.set([2, 1, NaN, -0], 44);
+      cpu.s.set([1, 1, 0, 0], 56);
+    };
+    for (const execute of [
+      () => run([0xf2042e46, 0xf3040e46, 0xf3248e56, 0xf3662eec, 0xf3f62222, BXLR], setup),
+      () => runThumb([0xef04, 0x2e46, 0xff04, 0x0e46, 0xff24, 0x8e56, 0xff66, 0x2eec, 0xfff6, 0x2222, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(4, 8))).toEqual([0, 0, 0, -1]);
+      expect(Array.from(c.si.slice(0, 4))).toEqual([-1, 0, 0, -1]);
+      expect(Array.from(c.si.slice(16, 20))).toEqual([-1, -1, 0, 0]);
+      expect(Array.from(c.si.slice(36, 40))).toEqual([0xffff, 0, 0, 0]);
+    }
+  });
   test("rsb/adc/sbc", () => {
     const c = run([
       0xe3a00005,   // mov r0, #5

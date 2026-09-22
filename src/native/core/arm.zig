@@ -245,11 +245,16 @@ fn neonMisc(c: *Cpu, w: u32, pc: u32) Status {
     const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
     const q = bits(w, 6, 1);
     const duplicate = w & 0xffb00f90 == 0xf3b00c00;
+    const narrow = w & 0xffb30fd0 == 0xf3b20200;
     if (q != 0 and (d | (if (duplicate) @as(u32, 0) else m)) & 1 != 0) return fault(c, .undefined, w, pc);
     const translated: u32 = if (duplicate) blk: {
         const imm = bits(w, 16, 4);
         if (imm & 7 == 0) return fault(c, .undefined, w, pc);
         break :blk 0x0e000400 | (imm << 16);
+    } else if (narrow) blk: {
+        const size = bits(w, 18, 2);
+        if (size == 3 or m & 1 != 0) return fault(c, .undefined, w, pc);
+        break :blk 0x0e212800 | (size << 22);
     } else if (w & 0xffbf0f10 == 0xf3bb0500)
         0x0ea1d800 | (bits(w, 7, 1) << 29)
     else if (w & 0xffbf0f90 == 0xf3b90500)
@@ -261,7 +266,7 @@ fn neonMisc(c: *Cpu, w: u32, pc: u32) Status {
         break :blk 0x0e200800 | (size << 22) | (if (op == 1) @as(u32, 1 << 29) else if (op == 2) @as(u32, 1 << 12) else 0);
     } else return fault(c, .unimplemented, w, pc);
     const count: usize = if (q != 0) 16 else 8;
-    const read_count = if (duplicate) 8 else count;
+    const read_count = if (duplicate) 8 else if (narrow) 16 else count;
     @memcpy(c.v[18][0..read_count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..read_count]);
     if (w & 0x0f00 == 0x0500) {
         const lanes: *[4]f32 = @ptrCast(&c.v[18]);
@@ -333,6 +338,8 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
         0x0e20d400 | (u << 29) | (bits(w, 21, 1) << 23)
     else if (op == 13 and size == 0 and b == 1 and u == 1)
         0x2e20dc00
+    else if (op == 14 and size & 1 == 0 and (u == 1 or (b == 0 and size == 0)))
+        0x0e20e400 | (u << 29) | (bits(w, 21, 1) << 23) | (b << 11)
     else if (accumulate)
         0x0e20d400 | (bits(w, 21, 1) << 23)
     else
