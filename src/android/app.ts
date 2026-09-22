@@ -178,7 +178,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     await attachView(this.window.contentParent!, v);
   },
   "findViewById(I)Landroid/view/View;": function (this: JActivity, id: number) {
-    return this.window.decor ? findById(this.window.decor, id) : null;
+    return vcall(this.window, "findViewById", "(I)Landroid/view/View;", id);
   },
   "setShowWhenLocked(Z)V": function (this: JActivity, show: number) { return vcall(this.window, "setFlags", "(II)V", show ? 0x80000 : 0, 0x80000); },
   "requireViewById(I)Landroid/view/View;": requireViewById,
