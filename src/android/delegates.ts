@@ -22,7 +22,7 @@ import {
 } from "./graphics";
 import { newObj } from "../jvm/natives/jlang";
 import { charsToString, floatToIntBits, i8, u8 } from "../jvm/abi";
-import { JPath, pathBounds, pathOffset, pathTransform } from "./path";
+import { JPath, pathBounds, pathIsConvex, pathOffset, pathTransform } from "./path";
 import { greedyBreaks, type JTextPaint, type TLine } from "./text";
 import {
   Resources, JTheme, JAttrSet, JTypedArray, obtainStyled, resolveStyleValue, rvString,
@@ -520,7 +520,6 @@ delegate("android/graphics/Path", {
   "nSetFillType(JI)V": (h: bigint, ft: number) => { path(h).fillRule = ft === 1 || ft === 3 ? "evenodd" : "nonzero"; },
   "nGetFillType(J)I": (h: bigint) => (path(h).fillRule === "evenodd" ? 1 : 0),
 
-  // Skia answers these off geometry we do not keep; none of them changes what is drawn
   "nIsRect(JLandroid/graphics/RectF;)Z": (h: bigint, r: Rect) => {
     const p = path(h);
     if (p.ops.length !== 1 || p.ops[0][0] !== "rect") return 0;
@@ -528,7 +527,7 @@ delegate("android/graphics/Path", {
     return 1;
   },
   ...noops("nIncReserve(JI)V"),
-  ...stubs(1, "nIsConvex(J)Z"),
+  "nIsConvex(J)Z": (h: bigint) => pathIsConvex(path(h)),
   ...stubs(0, "nIsInterpolatable(JJ)Z", "nInterpolate(JJFJ)Z", "nOp(JJIJ)Z"),
   "nApproximate(JF)[F": () => new Float32Array(0),
 });

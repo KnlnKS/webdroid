@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
-import { JPath } from "../src/android/path";
+import { JPath, pathIsConvex, pathTransform } from "../src/android/path";
 import { JMatrix } from "../src/android/graphics";
 
 rt.linkNatives();
@@ -41,4 +41,31 @@ test("appending a transformed path preserves independent geometry and its curren
   await vcall(target, "offset", "(FF)V", 1, 1);
   expect(target.ops[0]).toEqual(["m", 9, 22]);
   expect(source.ops).toEqual([["m", 1, 2], ["l", 3, 4]]);
+});
+
+test("Path convexity follows control points, closure and contour boundaries", async () => {
+  const path = new JPath();
+  expect(await vcall(path, "isConvex", "()Z")).toBe(1);
+  path.ops = [["m", 0, 0], ["l", 10, 0]];
+  expect(pathIsConvex(path)).toBe(1);
+  path.ops.push(["l", 10, 10], ["l", 0, 10]);
+  expect(pathIsConvex(path)).toBe(1);
+  path.ops.push(["l", 5, 5]);
+  expect(pathIsConvex(path)).toBe(0);
+  path.ops = [["m", 0, 0], ["q", 10, 0, 10, 10], ["l", 0, 10], ["z"]];
+  expect(pathIsConvex(path)).toBe(1);
+  path.ops[1] = ["q", -10, 20, 10, 10];
+  expect(pathIsConvex(path)).toBe(0);
+  path.ops = [["rrect", 0, 0, 300, 200, 28, 28, 28, 28, 0, 0, 0, 0]];
+  expect(pathIsConvex(path)).toBe(1);
+  pathTransform(path, [0, 1, -1, 0, 300, 0]);
+  expect(pathIsConvex(path)).toBe(1);
+  path.ops.push(["m", 900, 900]);
+  expect(pathIsConvex(path)).toBe(1);
+  path.ops.push(["l", 901, 900]);
+  expect(pathIsConvex(path)).toBe(0);
+  path.ops = [["m", 0, 3], ["l", 2, -3], ["l", -3, 1], ["l", 3, 1], ["l", -2, -3], ["z"]];
+  expect(pathIsConvex(path)).toBe(0);
+  path.ops = [["m", Infinity, 0]];
+  expect(pathIsConvex(path)).toBe(0);
 });
