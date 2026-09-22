@@ -336,6 +336,7 @@ rt.register({
 export class JView extends JObj {
   ctx: unknown = null;            // android Context
   jres: Resources | null = null;
+  resources: unknown = null;
   theme: JTheme | null = null;
   parent: JView | null = null;
   attached = false;
@@ -905,7 +906,7 @@ export const viewConstructors: NativeSpec["methods"] = {
 const viewMethods: NativeSpec["methods"] = {
   ...viewConstructors,
   "getContext()Landroid/content/Context;": function (this: JView) { return this.ctx; },
-  "getResources()Landroid/content/res/Resources;": function (this: JView) { return this.jres?.jobj ?? null; },
+  "getResources()Landroid/content/res/Resources;": function (this: JView) { return this.resources ?? this.jres?.jobj ?? null; },
   "getId()I": function (this: JView) { return this.idNum; },
   "setId(I)V": function (this: JView, i: number) { this.idNum = i; },
   "getTag()Ljava/lang/Object;": function (this: JView) { return this.tag; },
@@ -1640,6 +1641,7 @@ export function inheritContext(child: JView, from: JView) {
 export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | null, defStyleAttr = 0) {
   v.ctx = jctx;
   if (jctx) {
+    v.resources = await vcall(jctx, "getResources", "()Landroid/content/res/Resources;");
     const host = (jctx as JContext | null)?.$host;
     if (host) {
       v.jres = host.res;
