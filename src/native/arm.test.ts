@@ -438,6 +438,25 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(36, 38), x => x >>> 0)).toEqual([0x8000ffff, 0xab34beef]);
     }
   });
+  test("NEON immediate shifts preserve signed, rounded and accumulating behavior", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([-1, 0, -2147483648, 2147483647], 36);
+      cpu.si.set([-1, -1], 4);
+      cpu.si.fill(0x00010001, 12, 16); cpu.si.fill(0x0010fff8, 16, 20);
+      cpu.si.set([-1, 2, 3, 4], 24); cpu.si.set([1, 0, 2, 0], 32);
+    };
+    for (const execute of [
+      () => run([0xf2e14072, 0xf3881012, 0xf29d6158, 0xf3bfa25c, 0xf2a8e5f0, BXLR], setup),
+      () => runThumb([0xefe1, 0x4072, 0xff88, 0x1012, 0xef9d, 0x6158, 0xffbf, 0xa25c, 0xefa8, 0xe5f0, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(40, 44))).toEqual([-1, 0, -1, 0]);
+      expect(Array.from(c.si.slice(2, 4))).toEqual([0, 0]);
+      expect(Array.from(c.si.slice(12, 16))).toEqual(Array(4).fill(0x00030000));
+      expect(Array.from(c.si.slice(20, 24))).toEqual([-2147483648, 1, 2, 2]);
+      expect(Array.from(c.si.slice(28, 32))).toEqual([0, 256, 0, 512]);
+    }
+  });
   test("rsb/adc/sbc", () => {
     const c = run([
       0xe3a00005,   // mov r0, #5

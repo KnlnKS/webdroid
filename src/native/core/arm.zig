@@ -239,6 +239,22 @@ fn neonImmediate(c: *Cpu, w: u32, pc: u32, imm8: u32) Status {
     return .next;
 }
 
+fn neonShift(c: *Cpu, w: u32, pc: u32) Status {
+    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
+    const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
+    const q = bits(w, 6, 1);
+    const op = bits(w, 8, 4);
+    if (op > 7) return fault(c, .unimplemented, w, pc);
+    if (q != 0 and (d | m) & 1 != 0) return fault(c, .undefined, w, pc);
+    const imm = (bits(w, 7, 1) << 6) | bits(w, 16, 6);
+    const count: usize = if (q != 0) 16 else 8;
+    @memcpy(c.v[16][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
+    @memcpy(c.v[18][0..count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..count]);
+    const result = simd.exec(c, 0x0f000400 | (q << 30) | (bits(w, 24, 1) << 29) | (imm << 16) | (op << 12) | (18 << 5) | 16);
+    if (result == .next) @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count], c.v[16][0..count]);
+    return result;
+}
+
 fn neonMisc(c: *Cpu, w: u32, pc: u32) Status {
     if (w & 0xffb30e10 == 0xf3b20000) return neonPermute(c, w, pc);
     const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
@@ -391,6 +407,7 @@ fn execArm(c: *Cpu, pc: u32) Status {
     const cc = w >> 28;
     c.pc = pc + 4;
     if (cc == 15) {
+        if (w & 0xfe800010 == 0xf2800010 and w & 0x00380080 != 0) return neonShift(c, w, pc);
         if (w & 0xffb00010 == 0xf3b00000) return neonMisc(c, w, pc);
         if (w & 0xfe800000 == 0xf2000000 or w & 0xffb00010 == 0xf2b00000 or w & 0xfeb00050 == 0xf2a00040) return neonSame(c, w, pc);
         if (w & 0xff100000 == 0xf4000000) return neonStruct(c, w, pc);
@@ -1009,6 +1026,10 @@ fn execThumb(c: *Cpu, pc: u32) Status {
 
 inline fn execThumb32(c: *Cpu, h: u32, second: u32, pc: u32) ?Status {
     if (execThumb32Branches(c, h, second, pc)) |status| return status;
+    if (h & 0xef80 == 0xef80 and second & 0x10 != 0 and (h & 0x38 != 0 or second & 0x80 != 0)) {
+        c.pc = pc + 4;
+        return neonShift(c, 0xf2000000 | ((h & 0x1000) << 12) | ((h & 0xff) << 16) | second, pc);
+    }
     if (h & 0xffb0 == 0xffb0 and second & 0x10 == 0) {
         c.pc = pc + 4;
         return neonMisc(c, 0xf3000000 | ((h & 0xff) << 16) | second, pc);
