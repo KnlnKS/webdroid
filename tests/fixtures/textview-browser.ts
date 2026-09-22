@@ -136,7 +136,17 @@ async function probe() {
   const checkBox = rt.make("android/widget/CheckBox");
   await vcall(checkBox, "measure", "(II)V", 0x40000030, 0x40000030);
   const checkBoxHeight = await vcall(checkBox, "getMeasuredHeight", "()I");
-  return { ...result, selection, emptySelection, independentCanvas, checkBoxHeight, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
+  const input = rt.make("android/widget/EditText");
+  if (!(input instanceof JTextView)) throw new Error("Invalid EditText");
+  input.right = 100; input.bottom = 50; input.focused = true;
+  await vcall(input, "setHint", "(Ljava/lang/CharSequence;)V", "Phone number");
+  await vcall(input, "setHintTextColor", "(I)V", 0);
+  await vcall(input, "measure", "(II)V", makeSpec(100, MS_EXACTLY), makeSpec(50, MS_EXACTLY));
+  input.blinkStart = performance.now();
+  const caretCanvas = new OffscreenCanvas(100, 50).getContext("2d")!;
+  await vcall(input, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(caretCanvas, 100, 50));
+  const caretAtStart = caretCanvas.getImageData(2, 0, 1, 50).data.some((v, i) => i % 4 === 3 && v === 255);
+  return { ...result, selection, emptySelection, independentCanvas, checkBoxHeight, caretAtStart, heightLimits, styles, alignment, combined, ellipsis: wrapped.lines.map(l => l.text), cached: wrapped === await view.measuredLines(width),
     fitting: (await view.measuredLines(measureText(view.paintT, view.text))).lines.map(l => l.text), cleared: (await view.measuredLines(width)).replacements.length === 0,
     compound: { drawsAt, retained, restored: surface.getTransform().isIdentity } };
 }

@@ -5070,3 +5070,11 @@ uncaught errors in all three supporting realms. Typecheck passes; final matrix r
 The prior full unit run passed 1,252 tests/26,740 assertions; TikTok compilation produced 462,058
 bodies-bearing classes and zero method failures. Eight non-DOM framework exercises passed, with
 text measurement explicitly skipped and 68 unexercised native declarations lacking delegates.
+
+Phone-form capture also exposed a caret positioned after the empty field's hint. TextView was
+using the hint layout for both painting and insertion geometry. The caret now takes its width,
+baseline, gravity and vertical offset from the editable text layout, consistent with AOSP's
+force-normal vertical-offset path. The existing browser fixture checks an empty hinted input;
+25 assertions and typecheck pass. Full Chrome confirms the caret at the start of Phone number
+with zero layout/draw errors. Its drawable/color styling remains different from the AVD. The
+interrupted final matrix is not counted as completed validation; a new frozen run follows.

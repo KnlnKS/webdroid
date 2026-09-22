@@ -37,6 +37,7 @@ test("TextView measures and paints replacement spans with cached geometry and re
     expect(result.emptySelection).toBe(0);
     expect(result.independentCanvas).toBe(true);
     expect(result.checkBoxHeight).toBe(48);
+    expect(result.caretAtStart).toBe(true);
     expect(errors).toEqual([]);
   } finally { await browser.close(); }
 }, 15000);

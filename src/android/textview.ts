@@ -636,9 +636,14 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       if (drawn instanceof Promise) await drawn;
     } finally { ctx.restore(); }
     if (this.editable && this.focused && this.cursorVisible && Math.floor((performance.now() - this.blinkStart) / 500) % 2 === 0) {
-      const cw = layout.lines.at(-1)?.width ?? 0;
-      const cx = contentL + (hg === 1 ? (avail + cw) / 2 : hg === 5 ? avail : cw) + 1;
-      const cy = y + layout.baseline(Math.max(0, layout.lines.length - 1));
+      const caretLayout = this.layout;
+      if (!caretLayout) return;
+      const caretGravity = this.horizontalGravity(display, alignment, layoutDirection);
+      const cw = caretLayout.lines.at(-1)?.width ?? 0;
+      const cx = contentL + (caretGravity === 1 ? (avail + cw) / 2 : caretGravity === 5 ? avail : cw) + 1;
+      const caretHeight = Math.max(layoutHeight(caretLayout), this.textHeight(1));
+      const caretY = vg === 16 ? (contentB - contentT - caretHeight) / 2 + contentT : vg === 80 ? contentB - caretHeight : contentT;
+      const cy = caretY + caretLayout.baseline(Math.max(0, caretLayout.lines.length - 1));
       ctx.fillStyle = cssColor(cslColor(this.colors, []));
       ctx.fillRect(cx, cy - this.ascent(), 3, this.lineHeight());
     }
