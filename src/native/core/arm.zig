@@ -1071,20 +1071,25 @@ inline fn execThumb32Transfers(c: *Cpu, h: u32, pc: u32) ?Status {
             return jump(c, pc +% 4 +% off * 2);
         }
     }
-    if ((h & 0xffe0) == 0xe840) {
+    if ((h & 0xff60) == 0xe840 and (h & 0x80 == 0 or ld(u16, pc + 2) & 0xf0 == 0x70)) {
         const h2: u32 = ld(u16, pc + 2);
         const load = h & 0x10 != 0;
+        const double = h & 0x80 != 0;
         const n = h & 15;
-        const a = addr(c, r(c, n) +% (h2 & 255) * 4) orelse return badAddr(c, h << 16 | h2, pc);
-        if ((load and h2 & 0x0f00 != 0x0f00) or (!load and h2 & 0x0f00 == 0x0f00)) return fault(c, .undefined, h << 16 | h2, pc);
+        const status = if (double) h2 & 15 else (h2 >> 8) & 15;
+        const a = addr(c, r(c, n) +% (if (double) 0 else (h2 & 255) * 4)) orelse return badAddr(c, h << 16 | h2, pc);
+        if ((load and status != 15) or (!load and status == 15)) return fault(c, .undefined, h << 16 | h2, pc);
         c.pc = pc + 4;
         if (load) {
+            if (double) set(c, (h2 >> 8) & 15, ld(u32, a + 4));
             set(c, h2 >> 12, ld(u32, a));
             c.excl = 1;
         } else {
-            const d = (h2 >> 8) & 15;
-            if (c.excl != 0 and !st(u32, c, a, r(c, h2 >> 12))) return badAddr(c, h << 16 | h2, pc);
-            set(c, d, c.excl ^ 1);
+            if (c.excl != 0) {
+                if (!st(u32, c, a, r(c, h2 >> 12))) return badAddr(c, h << 16 | h2, pc);
+                if (double and !st(u32, c, a + 4, r(c, (h2 >> 8) & 15))) return badAddr(c, h << 16 | h2, pc);
+            }
+            set(c, status, c.excl ^ 1);
             c.excl = 0;
         }
         return .next;

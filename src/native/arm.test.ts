@@ -514,6 +514,19 @@ describe("thumb decoder", () => {
     });
     expect(mem.ld32(c.w[0])).toBe(42);
     expect(c.w[4]).toBe(0);
+    const double = runThumb([
+      0xe8d4, 0x327f, // ldrexd r3, r2, [r4]
+      0x3301, 0x3202,
+      0xe8c4, 0x3270, // strexd r0, r3, r2, [r4]
+      0xf3bf, 0x8f2f, // clrex
+      0xe8c4, 0x3271, // strexd r1, r3, r2, [r4]
+      0x4770,
+    ], (cpu) => {
+      cpu.w[8] = cpu.stackTop - 16;
+      mem.st64(cpu.w[8], 0x1234567811223344n);
+    });
+    expect(mem.ld64(double.w[8])).toBe(0x1234567a11223345n);
+    expect([double.w[0], double.w[2]]).toEqual([0, 1]);
   });
 
   test("wide register lists preserve high registers", () => {
