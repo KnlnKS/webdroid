@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall } from "../src/jvm/natives/jlang";
 import { JContext, display } from "../src/android/context";
+import { JTheme, Resources, T_STR, themeOf } from "../src/android/res";
+import { getInflater } from "../src/android/inflate";
 import { uiState } from "../src/android/view";
 
 rt.linkNatives();
@@ -37,4 +39,22 @@ test("unchanged window attributes do not restart inset dispatch", async () => {
     await vcall(window, "setAttributes", "(Landroid/view/WindowManager$LayoutParams;)V", attrs);
     expect(uiState.needsInsets).toBe(false);
   } finally { uiState.needsInsets = pending; }
+});
+
+test("Dialog exposes its overlay theme through its context and inflater without changing its owner", async () => {
+  const res = new Resources(null, {}), theme = new JTheme();
+  theme.res = res; theme.styles = [100];
+  res.bagCache.set(100, { parent: 0, map: new Map([[1, { t: T_STR, d: 0, s: "base" }]]) });
+  res.bagCache.set(101, { parent: 0, map: new Map([[1, { t: T_STR, d: 0, s: "dialog" }]]) });
+  const context = Object.assign(rt.make("android/content/Context"), { $host: { res, theme } });
+  const dialog = await newObj("android/app/Dialog", "(Landroid/content/Context;I)V", context, 101);
+  const themed = await vcall(dialog, "getContext", "()Landroid/content/Context;");
+  expect(themed).not.toBe(context);
+  expect(themeOf(themed)?.lookup(1)?.s).toBe("dialog");
+  expect(themeOf(getInflater(themed).jctx)?.lookup(1)?.s).toBe("dialog");
+  expect(theme.lookup(1)?.s).toBe("base");
+  expect(await vcall(dialog, "getOwnerActivity", "()Landroid/app/Activity;")).toBeNull();
+  const owner = rt.make("android/app/Activity");
+  await vcall(dialog, "setOwnerActivity", "(Landroid/app/Activity;)V", owner);
+  expect(await vcall(dialog, "getOwnerActivity", "()Landroid/app/Activity;")).toBe(owner);
 });
