@@ -17,6 +17,7 @@ export const killLog: string[] = [];
 
 const CAP_VERSION_1 = 0x19980330, CAP_VERSION_2 = 0x20071026, CAP_VERSION_3 = 0x20080522;
 const capWords = (version: number) => version === CAP_VERSION_1 ? 1 : version === CAP_VERSION_2 || version === CAP_VERSION_3 ? 2 : 0;
+const pointerArg = (cpu: Cpu, address: bigint): number | bigint => cpu.a64 ? address : Number(address);
 
 /** Linux capget for the one unprivileged Android app process represented by this runtime. */
 function capget(cpu: Cpu, header: number, data: number): number {
@@ -153,7 +154,7 @@ export function procInit(): void {
       const vbase = a.va(), n = a.u(), size = a.u(), cmp = a.p();
       if (n < 2) return;
       const idx = [...Array(n).keys()];
-      const key = (i: number) => vbase + BigInt(i * size);
+      const key = (i: number) => pointerArg(cpu, vbase + BigInt(i * size));
       // merge sort: O(n log n) guest calls, stable
       const merge = async (lo: number, hi: number): Promise<void> => {
         if (hi - lo < 2) return;
@@ -177,8 +178,8 @@ export function procInit(): void {
       let lo = 0, hi = n;
       while (lo < hi) {
         const mid = (lo + hi) >> 1, p = base + BigInt(mid * size);
-        const r = (await cpu.call(cmp, [keyp, p])) | 0;
-        if (r === 0) return p;
+        const r = (await cpu.call(cmp, [pointerArg(cpu, keyp), pointerArg(cpu, p)])) | 0;
+        if (r === 0) return pointerArg(cpu, p);
         if (r < 0) hi = mid; else lo = mid + 1;
       }
       return 0;
