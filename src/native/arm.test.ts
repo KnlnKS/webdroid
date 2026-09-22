@@ -304,6 +304,20 @@ describe("arm decoder", () => {
       BXLR,
     ], (cpu) => { cpu.si.fill(-1, 32, 36); });
     expect(Array.from(c.si.slice(32, 36))).toEqual([0, 0, 0, 0]);
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([0x03020100, 0x07060504], 4);
+      cpu.si.set([0x0b0a0908, 0x0f0e0d0c], 34);
+      cpu.si.set([0x11223344, 0x55667788], 8);
+    };
+    for (const execute of [
+      () => run([0xf3bf1c02, 0xf3ba6c61, 0xf3bc8c44, BXLR], setup),
+      () => runThumb([0xffbf, 0x1c02, 0xffba, 0x6c61, 0xffbc, 0x8c44, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(2, 4))).toEqual([0x07070707, 0x07070707]);
+      expect(Array.from(c.si.slice(12, 16))).toEqual(Array(4).fill(0x0d0c0d0c));
+      expect(Array.from(c.si.slice(16, 20))).toEqual(Array(4).fill(0x55667788));
+    }
   });
   test("NEON permutations update both operands from their original lanes", () => {
     const setup = (cpu: Cpu) => {
