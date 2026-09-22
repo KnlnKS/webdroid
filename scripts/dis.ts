@@ -31,7 +31,10 @@ for (const dex of await openDexes(apk)) {
         const [name, fmt] = OPS[op]!;
         const words = [...code.insns.slice(pc, pc + FMT_LEN[fmt])].map((w) => w.toString(16).padStart(4, "0")).join(" ");
         let extra = "";
-        if (name.includes("const-string")) extra = JSON.stringify(dex.string(code.insns[pc + 1]).slice(0, 40));
+        if (name.includes("const-string")) {
+          const index = code.insns[pc + 1] + (op === 0x1b ? code.insns[pc + 2] * 65536 : 0);
+          extra = JSON.stringify(dex.string(index).slice(0, 40));
+        }
         if (/invoke/.test(name)) {
           const mm = dex.method(code.insns[pc + 1]);
           const pp = dex.proto(mm.proto);
