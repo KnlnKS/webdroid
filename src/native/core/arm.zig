@@ -1218,78 +1218,39 @@ inline fn execThumb32Late(c: *Cpu, h: u32, pc: u32) ?Status {
         set(c, (h2 >> 8) & 15, if (wideAddress == 0xf2a0) base -% imm else base +% imm);
         return .next;
     }
-    if ((h & 0xff80) == 0xf880 and ((h >> 5) & 3) < 3) {
+    if (h & 0xfe00 == 0xf800 and bits(h, 5, 2) < 3) {
         const h2: u32 = ld(u16, pc + 2);
-        c.pc = pc + 4;
-        const Ld = h & 0x10 != 0;
-        const size = (h >> 5) & 3;
-        const t = h2 >> 12;
+        const load = h & 0x10 != 0;
+        const signed = h & 0x100 != 0;
+        const size = bits(h, 5, 2);
         const n = h & 15;
-        const base = if (n == 15 and Ld) (pc +% 4) & ~@as(u32, 3) else r(c, n);
-        const a = addr(c, base +% (h2 & 0xfff)) orelse return badAddr(c, h << 16 | h2, pc);
-        if (Ld) {
-            const value: u32 = switch (size) {
-                0 => ld(u8, a),
-                1 => ld(u16, a),
-                else => ld(u32, a),
-            };
-            if (t == 15) return bx(c, value);
-            set(c, t, value);
-        } else if (!(switch (size) {
-            0 => st(u8, c, a, @truncate(r(c, t))),
-            1 => st(u16, c, a, @truncate(r(c, t))),
-            else => st(u32, c, a, r(c, t)),
-        })) return badAddr(c, h << 16 | h2, pc);
-        return .next;
-    }
-    if ((h & 0xff80) == 0xf800 and ((h >> 5) & 3) < 3) {
-        const h2: u32 = ld(u16, pc + 2);
-        if (h2 & 0x0fc0 == 0) {
-            c.pc = pc + 4;
-            const Ld = h & 0x10 != 0;
-            const size = (h >> 5) & 3;
-            const t = h2 >> 12;
-            const a = addr(c, r(c, h & 15) +% (r(c, h2 & 15) << @intCast((h2 >> 4) & 3))) orelse return badAddr(c, h << 16 | h2, pc);
-            if (Ld) {
-                const value: u32 = switch (size) {
-                    0 => ld(u8, a),
-                    1 => ld(u16, a),
-                    else => ld(u32, a),
-                };
-                if (t == 15) return bx(c, value);
-                set(c, t, value);
-            } else if (!(switch (size) {
-                0 => st(u8, c, a, @truncate(r(c, t))),
-                1 => st(u16, c, a, @truncate(r(c, t))),
-                else => st(u32, c, a, r(c, t)),
-            })) return badAddr(c, h << 16 | h2, pc);
-            return .next;
+        const t = h2 >> 12;
+        const w = h << 16 | h2;
+        if (signed and (!load or size == 2) or !load and n == 15) return fault(c, .undefined, w, pc);
+        c.pc = pc + 4;
+        if (load and t == 15 and size < 2) return .next; // PLD/PLI hints do not access memory.
+        const base = if (n == 15) (pc +% 4) & ~@as(u32, 3) else r(c, n);
+        var effective: u32 = undefined;
+        var indexed: u32 = 0;
+        var writeback = false;
+        if (h & 0x80 != 0 or n == 15) {
+            effective = if (h & 0x80 != 0) base +% (h2 & 0xfff) else base -% (h2 & 0xfff);
+        } else if (h2 & 0xfc0 == 0) {
+            effective = base +% (r(c, h2 & 15) << @intCast(bits(h2, 4, 2)));
+        } else {
+            if (h2 & 0x800 == 0 or h2 & 0x500 == 0) return fault(c, .undefined, w, pc);
+            indexed = if (h2 & 0x200 != 0) base +% (h2 & 255) else base -% (h2 & 255);
+            effective = if (h2 & 0x400 != 0) indexed else base;
+            writeback = h2 & 0x100 != 0;
         }
-    }
-    // Thumb-2's indexed load/store forms carry P/U/W and an 8-bit offset in the second
-    // halfword. Compilers use them for high-register fields and spills.
-    if ((h & 0xff80) == 0xf800 and ((h >> 5) & 3) < 3) {
-        const h2: u32 = ld(u16, pc + 2);
-        if (h2 & 0x0800 == 0) return fault(c, .undefined, h << 16 | h2, pc);
-        c.pc = pc + 4;
-        const Ld = h & 0x10 != 0;
-        const size = (h >> 5) & 3;
-        const n = h & 15;
-        const t = h2 >> 12;
-        const P = h2 & 0x0400 != 0;
-        const U = h2 & 0x0200 != 0;
-        const W = h2 & 0x0100 != 0;
-        const base = r(c, n);
-        const off = h2 & 255;
-        const indexed = if (U) base +% off else base -% off;
-        const a = addr(c, if (P) indexed else base) orelse return badAddr(c, h << 16 | h2, pc);
-        if (Ld) {
+        const a = addr(c, effective) orelse return badAddr(c, w, pc);
+        if (load) {
             const value: u32 = switch (size) {
-                0 => ld(u8, a),
-                1 => ld(u16, a),
+                0 => if (signed) sxb(ld(u8, a)) else ld(u8, a),
+                1 => if (signed) sxh(ld(u16, a)) else ld(u16, a),
                 else => ld(u32, a),
             };
-            if (W) set(c, n, indexed);
+            if (writeback) set(c, n, indexed);
             if (t == 15) return bx(c, value);
             set(c, t, value);
         } else {
@@ -1297,8 +1258,8 @@ inline fn execThumb32Late(c: *Cpu, h: u32, pc: u32) ?Status {
                 0 => st(u8, c, a, @truncate(r(c, t))),
                 1 => st(u16, c, a, @truncate(r(c, t))),
                 else => st(u32, c, a, r(c, t)),
-            })) return badAddr(c, h << 16 | h2, pc);
-            if (W) set(c, n, indexed);
+            })) return badAddr(c, w, pc);
+            if (writeback) set(c, n, indexed);
         }
         return .next;
     }

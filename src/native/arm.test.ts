@@ -763,6 +763,12 @@ describe("thumb decoder", () => {
     expect(c.w[2]).toBe(0xab);
     expect(c.w[6]).toBe(0x5678);
     expect(c.w[0]).toBe(c.stackTop - 52);
+    const signed = runThumb([0xf9b5, 0x0008, 0xf915, 0x1002, 0xf935, 0x3f02, 0x4770], (cpu) => {
+      cpu.w[10] = cpu.stackTop - 32; cpu.w[4] = 3;
+      mem.st16(cpu.w[10] + 2, 0x8123); mem.st16(cpu.w[10] + 8, 0xfedc);
+    });
+    expect([signed.w[0], signed.w[2], signed.w[6]]).toEqual([-292, -127, -32477]);
+    expect(signed.w[10]).toBe(signed.stackTop - 30);
   });
 
   test("wide word offsets address high registers and large fields", () => {
