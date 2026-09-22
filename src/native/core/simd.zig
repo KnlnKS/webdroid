@@ -355,11 +355,9 @@ pub fn exec(c: *Cpu, w: u32) Status {
         const tbx = bits(w, 12, 1) != 0;
         const nbytes: usize = if (q) 16 else 8;
         if (rn + len > 32) return fault(c, w);
-        var out: V align(16) = @splat(0);
-        for (0..nbytes) |i| {
-            const idx: u32 = c.v[rm][i];
-            out[i] = if (idx < 16 * len) c.v[rn + idx / 16][idx % 16] else if (tbx) c.v[rd][i] else 0;
-        }
+        var out: V align(16) = c.v[rd];
+        const table: [*]const u8 = @ptrCast(&c.v[rn]);
+        tableLookup(table[0 .. 16 * len], c.v[rm][0..nbytes], out[0..nbytes], tbx);
         write(c, rd, out, q);
         return .next;
     }
@@ -405,6 +403,12 @@ pub fn exec(c: *Cpu, w: u32) Status {
     if (vector(c, w)) |st| return st;
     if ((w & 0x50000000) == 0x10000000) return scalarFp(c, w);
     return fault(c, w);
+}
+
+pub fn tableLookup(table: []const u8, indices: []const u8, out: []u8, extend: bool) void {
+    for (indices, out) |index, *value| {
+        if (index < table.len) value.* = table[index] else if (!extend) value.* = 0;
+    }
 }
 
 pub const Lane = struct { m: bool, i: usize };

@@ -263,6 +263,16 @@ fn neonMisc(c: *Cpu, w: u32, pc: u32) Status {
     const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
     const q = bits(w, 6, 1);
     const duplicate = w & 0xffb00f90 == 0xf3b00c00;
+    if (w & 0xffb00c10 == 0xf3b00800) {
+        const n = (bits(w, 7, 1) << 4) | bits(w, 16, 4);
+        const len = bits(w, 8, 2) + 1;
+        if (n + len > 32) return fault(c, .undefined, w, pc);
+        const table: [*]const u8 = @ptrCast(vreg(u64, c, n));
+        var out: [8]u8 = @bitCast(vreg(u64, c, d).*);
+        simd.tableLookup(table[0 .. 8 * len], std.mem.asBytes(vreg(u64, c, m)), &out, q != 0);
+        vreg(u64, c, d).* = @bitCast(out);
+        return .next;
+    }
     const narrow = w & 0xffb30fd0 == 0xf3b20200;
     if (q != 0 and (d | (if (duplicate) @as(u32, 0) else m)) & 1 != 0) return fault(c, .undefined, w, pc);
     const translated: u32 = if (duplicate) blk: {

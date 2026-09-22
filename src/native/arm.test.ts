@@ -341,6 +341,24 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(16, 20))).toEqual(Array(4).fill(0x55667788));
     }
   });
+  test("NEON table lookups retain source bytes across overlapping registers", () => {
+    const setup = (cpu: Cpu) => {
+      const bytes = new Uint8Array(cpu.si.buffer, cpu.si.byteOffset, 256);
+      bytes.set(Array.from({ length: 256 }, (_, i) => i));
+      bytes.set([7, 6, 5, 4, 3, 2, 1, 0], 0);
+      bytes.set([0, 7, 8, 23, 24, 255, 15, 16], 8);
+      bytes.set([0, 7, 8, 15, 16, 255, 1, 14], 26 * 8);
+      bytes.set([0, 7, 8, 15, 16, 23, 24, 31], 27 * 8);
+    };
+    for (const execute of [
+      () => run([0xf3f8e9aa, 0xf3b31a41, 0xf3b00800, 0xf3fcfbab, BXLR], setup),
+      () => runThumb([0xfff8, 0xe9aa, 0xffb3, 0x1a41, 0xffb0, 0x0800, 0xfffc, 0xfbab, 0x4770], setup),
+    ]) {
+      const c = execute(), bytes = new Uint8Array(c.si.buffer, c.si.byteOffset, 256);
+      expect(Array.from(bytes.slice(0, 16))).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 24, 31, 32, 47, 24, 255, 39, 40]);
+      expect(Array.from(bytes.slice(240))).toEqual([192, 199, 200, 207, 0, 0, 193, 206, 224, 231, 232, 239, 192, 206, 248, 255]);
+    }
+  });
   test("NEON permutations update both operands from their original lanes", () => {
     const setup = (cpu: Cpu) => {
       cpu.si.set([10, 11, 12, 13, 0, 1, 2, 3, 20, 21, 22, 23], 32);
