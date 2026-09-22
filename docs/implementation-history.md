@@ -175,6 +175,19 @@ The latest owning decoder run passes 58 checks / 627 assertions. Some startup re
 inside Unity's matrix initialization before nativeRender; the subsequent strlen(null) error
 was downstream of those instruction faults, not evidence for accepting null strings in libc.
 
+After the remaining reached immediate shifts and float extrema/sign operations were added,
+both tiers reproduced a pointer-corruption fault during matrix initialization. Diagnostic
+single stepping itself was passing a whole slice budget to the core; it now requests one
+instruction per trace entry. That trace identified high-register VLDM instructions being
+decoded as VFP/core register-pair moves, replacing pointers and LR with float/NaN bits.
+The register-pair mask omitted the U bit. Requiring U=0 preserves real pair moves and restores
+high-register loads. The original package then completed matrix initialization and started
+Unity worker threads, reaching Thumb LDREXB/STREXB and NEON integer comparison/multiply.
+The existing exclusive-transfer path now handles byte/halfword lanes, and integer vector
+operations share the SIMD owner. The owning run passes 62 checks / 679 assertions; typecheck
+passed before those last two extensions. No original-package gameplay or final regression
+pass is claimed yet.
+
 ## microG completion and open acceptance
 
 PLAN.md owns current status. Both Android and webdroid now
