@@ -198,6 +198,7 @@ describe("region discovery", () => {
 
 test("compiled scalar and vector memory operations retain low-address faults", () => {
   const data = mem.reserve(0x1000, 0x1000), c = run([RET]);
+  // LDR X0, LDR Q0, LD1 V16/V17 and post-index ST1 V15, all through X9.
   for (const word of [0xf9400120, 0x3dc00120, 0x4c40a130, 0x4c9f792f]) {
     const at = mem.reserve(0x1000, 0x1000);
     mem.u32[at >>> 2] = word; mem.u32[(at >>> 2) + 1] = RET;

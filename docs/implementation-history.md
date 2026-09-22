@@ -5363,3 +5363,134 @@ presents 49 EGL frames in 10.45 seconds, with advancing ticks and no layout/draw
 Live content selected ByteVC1 instead of the earlier ByteVC2 stream; concurrent host load
 also persists. These observations establish functioning rendering, not a matched playback
 speedup, and remain well above the 150 ms goal.
+
+### TikTok performance: experiments not retained
+
+Execution-slice trials alternate 3,000,000 / 1,000,000 / 300,000 instructions within fresh
+TikTok sessions, checking real search editors and screenshot state. During advancing video,
+300,000-instruction slices reduce sampled p95 event-loop delay to 10–28 ms, versus 112–435 ms
+at 3,000,000. The reverse-order advancing-video run also reduces stalls, but yields only
+26/30 frames per eight seconds at 300,000 versus 73/68 at 3,000,000. Live decoding workload
+changes between windows, so these are observations rather than an isolated throughput ratio.
+Warm search still takes hundreds of milliseconds. A separate fixed 110-million-instruction
+Chromium kernel is nearly flat after warming (28.1 ms at 3,000,000; 28.8/28.9 at 300,000;
+27.9 at 1,000,000). The global default is unchanged: the app trial does not establish a
+consistent responsiveness/throughput improvement. A photo-carousel reverse run is excluded
+from playback claims; its zero EGL frames and screenshot identify the different workload.
+
+Directly presenting YV12 VideoFrames was compared with the existing ImageBitmap conversion
+using 90 frames at 720×1280. Rendered pixels match, but warm totals are 13.1–14.5 ms for both
+routes; the first bitmap trial alone includes a 325 ms cold cost. No production change is
+justified by that ordering-sensitive sample. Drawing allocation remains visible in profiles,
+but the measured navigation samples spend far more time in native execution than drawing.
+The asynchronous virtual-draw traversal and callback ordering are unchanged. These limits,
+shared-host contention and live content prevent claiming a 150 ms response or universal
+playback speedup from the retained isolated optimizations.
+
+### Performance follow-up verification checkpoint — 2026-09-22
+
+Frozen production revision: `9894c659`. Typecheck and all 1,255 unit tests / 26,766 assertions
+pass. Eager smoke compilation covers all 462,058 TikTok classes with zero method failures.
+The eight runnable framework exercises pass, covering 295/363 declared delegates; the
+browser-only text-metric exercise remains outside that command. No golden was changed.
+
+Fresh full-Chrome captures reach the guest feed, successive swipes and editable search, with
+no uncaught, layout or draw errors across all four returned runtime realms. This longer manual
+path also probes unsupported JobInfo parceling, ImageReader and SurfaceControl APIs. They
+remain explicit limitations; empty required-native lists do not establish complete platform
+support. A small post-return SurfaceView counter probe did not cover every video presentation
+route and is not used as an FPS result. The isolated AVD reference remains the earlier
+birthdate-gated guest/login capture, without fabricated credentials or an asserted feed match.
+
+The serialized full E2E at this checkpoint completes 159 steps across 12 flows in 855.6 seconds. Every step
+renders; there are no main-loop wedges, action failures, required native delegates or newly
+missing API signatures relative to the preserved prior full run. YouTube retains its two
+show-controls/pause settling timeouts and six Matrix draw-error occurrences. Its Matrix/SAX
+limitations, Lichess pthread failures and Flappy Bird's WebView status error remain; the 12
+unavailable snapshots are bridge/WebView frames, not silent empty Android diagnostics.
+Absence of previously observed Harmonic/Reddit errors in this particular run is not a repair.
+
+TikTok renders all 13 steps with diagnostics from all four realms, no layout/draw failures or
+uncaught runtime exception, and the same nine optional class probes. Active video steps have
+EGL frame rates around 4–12 fps. The decoder's bitstream-specific WPP-disabled warning and
+error-severity successful TLS progress logs remain visible. These live, software-rendered
+E2E windows do not establish proportional decoder speedups or the 150 ms response goal.
+
+Scored content differences are FitNotes 40.10%, Mihon app 57.17%, Harmonic 30.91%, and Mihon
+onboarding 17.69%; the preserved prior values are 40.10%, 57.43%, 31.99%, and 17.69%.
+Resy reaches the populated Carbone venue without missing/runtime/layout/draw errors. Its
+step total is 135.4 versus 130.7 seconds, chiefly a different onboarding-close state: the
+candidate already displays restaurants where the prior capture still has an empty result.
+That state difference prevents a matched performance conclusion; it is not counted as a
+runtime speedup or an unexplained failed action.
+
+The final Lichess flow additionally hits the previously recorded FairyStockfish
+`RootMove::extract_ponder_from_tt+0x280` null-address fault. A fresh serialized replay of the
+same flow at starting revision `2d4a6330` reproduces that exact fault, alongside pthread
+errors 3/22/35. Candidate and baseline captures remain separate in the evidence directory.
+
+The checkpoint's YouTube video-open step also reports one layout-thread identity error
+(`ComponentLayoutThread1-1`). Two same-settings starting-revision replays and one candidate
+replay complete without that error. A further instrumented starting-revision video-opening
+pass, retaining Java-stack/thread-transition capture, also does not reproduce it. This does
+not establish repair or prior occurrence: attribution remains unresolved. Those captures are
+separate from the full matrix and are not used as performance samples.
+
+### Native performance follow-up: preserve low-address faults
+
+Reviewing the contiguous-vector path exposed a pre-existing inconsistency in the shared A64
+JIT address helper: its direct low-32-bit branch did not reject the unmapped first 64 KiB,
+whereas the interpreter did. The new vector-transfer emission would inherit that behavior.
+Address translation now joins before one common low-address check, also covering invalid
+high-address translations. This removes nested fault-path bookkeeping and preserves the
+existing guest-fault exit. There is no app-specific bypass.
+
+One core cache/tier test covers scalar and vector loads and a post-index vector store at zero
+and `LOW - 1`, before and after compilation, including unchanged writeback state on failure.
+It fails against the preceding generated core and passes after explicitly rebuilding both
+Wasm modes. Typecheck and all 12 cache checks / 1,178 assertions pass. The checked vector
+kernel still matches registers, destination bytes and instruction counts, with five times
+7.605/2.086/2.896/2.064/3.071 ms (median 2.896 ms versus the retained 15.812 ms baseline).
+This supersedes the unchecked transfer-kernel timing for the final candidate. Arithmetic
+widening is unchanged. Final broad verification is repeated after this semantic correction.
+
+### Performance follow-up final verification — 2026-09-22
+
+Final executable revision: `34189cf`. Explicitly rebuilt ReleaseFast and ReleaseSafe cores
+pass typecheck and all 1,256 unit tests / 26,804 assertions. The earlier smoke result still
+covers the unchanged JVM implementation: 462,058 TikTok classes, zero method failures.
+All eight runnable framework exercises pass, with 295/363 declared delegates covered.
+Only two focused core tests were added in this performance pass; visual goldens are unchanged.
+
+The final serialized full matrix completes all 159 steps across 12 flows in 852.5 seconds.
+Every step has completed rendering, with no main-loop wedge, action failure or required
+native delegate. All returned Android realms supply diagnostics; the 12 unavailable snapshots
+belong to Flappy Bird bridge/WebView frames. TikTok completes 13/13 steps across four realms
+with no uncaught runtime, layout or draw failure. Its nine missing class probes are unchanged;
+its error-severity app/network progress logs and ByteVC2 WPP warning are still recorded.
+Browser network errors also remain visible: TikTok has a 404 and Resy has 400/410 responses.
+Resy renders 13/13 steps without runtime/layout/draw errors or missing APIs.
+
+YouTube retains two settling timeouts, nine Matrix draw-error occurrences, the SQLiteCursor
+cast diagnostic and SAX initialization failure. Its unqualified `mapRect` missing entry also
+occurs in the first starting-revision replay; this is the existing Matrix overload failure.
+There is no layout-thread failure in the final run, but the earlier checkpoint occurrence
+remains unattributed as described above. Lichess retains pthread errors 3/22/35; this run does
+not repeat the Stockfish null fault reproduced in both the earlier checkpoint and baseline.
+Flappy Bird retains its WebView status error. These results establish exercised-path
+completion, not an error-free compatibility matrix or proof against every regression.
+
+Final scored content differences are FitNotes 40.10%, Mihon app 57.40%, Harmonic 32.10%,
+and Mihon onboarding 17.69%. Live content and documented geometry/compatibility differences
+remain; no visual reference was updated to improve these scores. Full logs, per-process
+summaries, screenshots, baseline replays and rejected experiments are indexed in
+`webdroid-shots/tiktok-performance/README.md` in the implementation checkout.
+
+A final full-Chrome observation at `34189cf`, after the suite exited, opens search three times
+from the guest feed. Each trial verifies an editable field, then a later completed presentation
+with its own five-second deadline. Tap-to-presentation times are 1307/508/636 ms, with advancing
+ticks and a visible page. Screenshots confirm feed and search state; all four runtime realms
+report no uncaught/layout/draw error or required native delegate. This longer path still probes
+JobInfo parceling, ImageReader and XmlBlock. The production execution budget is unchanged.
+No own benchmark or emulator ran concurrently, but unrelated host workloads remain active.
+These are live observations, not a matched latency speedup. The 150 ms target is unmet.

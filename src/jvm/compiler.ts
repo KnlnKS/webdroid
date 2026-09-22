@@ -203,7 +203,7 @@ export function methodKey(dex: DexFile, methodIdx: number): { name: string; desc
 }
 
 /** Resolved on first call, not when the class body is generated: a JNI_OnLoad run later may
- *  register the native. The cell mirrors emitLazy's so a captured thunk stays one call away. */
+ *  register the native. Captured entries keep the cell after resolution. */
 function emitNativeStub(dex: DexFile, info: ClassInfo, m: EncodedMethod): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const target = holder((m.flags & ACC.STATIC) !== 0);
