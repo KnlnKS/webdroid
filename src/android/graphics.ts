@@ -255,6 +255,8 @@ export const SYSTEM_FONTS = [
   ["Roboto", "Roboto-Regular.ttf", 400, "normal"], ["Roboto Medium", "Roboto-Medium.ttf", 500, "normal"],
   ["Roboto", "Roboto-Bold.ttf", 700, "normal"], ["Roboto", "Roboto-Italic.ttf", 400, "italic"],
 ] as const;
+export const SYSTEM_EMOJI_FONTS = [["Noto Emoji", "NotoColorEmoji.ttf"], ["Noto Emoji Flags", "NotoColorEmojiFlags.ttf"]] as const;
+const EMOJI_FALLBACK = SYSTEM_EMOJI_FONTS.map(([family]) => family).join(", ");
 export class JTypeface extends JObj {
   family = ROBOTO;
   bold = false; italic = false;
@@ -374,7 +376,7 @@ export class JPaint extends JObj {
     }
     const it = this.tf.italic ? "italic " : "";
     this.fTf = this.tf; this.fSize = this.textSize; this.fBold = this.fakeBold;
-    return (this.fCache = `${it}${w} ${this.textSize}px ${family}`);
+    return (this.fCache = `${it}${w} ${this.textSize}px ${family.replace(/, sans-serif$/, "")}, ${EMOJI_FALLBACK}, sans-serif`);
   }
   fillStyle(ctx?: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): string | CanvasGradient | CanvasPattern {
     if (this.shaderObj && ctx) { const style = this.shaderObj.pattern(ctx); if (style) return style; }

@@ -23,11 +23,11 @@ test("Paint selects the nearest system face without promoting every bold style t
   const paint = new JPaint(); paint.textSize = 18;
   for (const weight of [500, 600]) {
     paint.tf = mkTypeface("Roboto, sans-serif", weight >= 600, false, weight);
-    expect(paint.font()).toBe("500 18px Roboto Medium, sans-serif");
+    expect(paint.font()).toBe("500 18px Roboto Medium, Noto Emoji, Noto Emoji Flags, sans-serif");
   }
   paint.tf = mkTypeface("custom-family", true, false, 900);
-  expect(paint.font()).toBe("900 18px custom-family");
+  expect(paint.font()).toBe("900 18px custom-family, Noto Emoji, Noto Emoji Flags, sans-serif");
   paint.tf = mkTypeface("Roboto, sans-serif", false, false, 400);
   paint.fakeBold = true;
-  expect(paint.font()).toBe("700 18px Roboto, sans-serif");
+  expect(paint.font()).toBe("700 18px Roboto, Noto Emoji, Noto Emoji Flags, sans-serif");
 });

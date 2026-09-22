@@ -18,6 +18,7 @@ import { configureJvmCoverage, jvmCoverage } from "./jvm/coverage";
 import { perf } from "./perf";
 import { mainDbg } from "./android/mainloop";
 import { guestClockControl } from "./guest-clock";
+import { SYSTEM_FONTS, SYSTEM_EMOJI_FONTS } from "./android/graphics";
 
 const params = new URLSearchParams(location.search), pid = Number(params.get("pid")), broker = processBroker();
 jitStats.on = params.get("jit") !== "0";
@@ -63,6 +64,10 @@ window.addEventListener("pagehide", () => {
 try {
   const data = await broker.bootstrap(pid);
   setProcessIdentity(pid, data.uid);
+  const systemFonts = new Set<string>([...SYSTEM_FONTS, ...SYSTEM_EMOJI_FONTS].map(([family]) => family));
+  for (const font of parent.document.fonts) {
+    if (systemFonts.has(font.family.replace(/^"(.*)"$/, "$1"))) document.fonts.add(font);
+  }
   mountSystemCertificates();
   let boot: Uint8Array | Install | null = null;
   for (const snapshot of data.registry) {
