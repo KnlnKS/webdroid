@@ -1,7 +1,7 @@
 import { AID } from "./res";
 import {
   JMarginLP, type JLayoutParams, JViewGroup, JFrameLP, MATCH_PARENT, lpFromAttrs, lpAttrs, measureChildWithMargins,
-  resolveSizeAndState, measuredSize, makeSpec, MS_EXACTLY, childMeasureSpec, measureView, layoutView, initViewFromCtx,
+  resolveSizeAndState, makeSpec, MS_EXACTLY, childMeasureSpec, measureView, layoutView, initViewFromCtx,
   requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState, viewConstructors, marginCopy
 } from "./view";
 import { JObj, type NativeSpec, rt, callSelf, noops } from "../jvm/runtime";
@@ -57,8 +57,8 @@ const frameMethods: NativeSpec["methods"] = {
       state |= c.measuredState;
       if (c.lp?.width === MATCH_PARENT || c.lp?.height === MATCH_PARENT) matchCount++;
     }
-    this.setMeasuredDimension(measuredSize(Math.max(mw + this.padL + this.padR, this.minW), wSpec, state),
-      measuredSize(Math.max(mh + this.padT + this.padB, this.minH), hSpec, state << 16));
+    this.setMeasuredDimension(resolveSizeAndState(Math.max(mw + this.padL + this.padR, this.minW), wSpec, state),
+      resolveSizeAndState(Math.max(mh + this.padT + this.padB, this.minH), hSpec, state << 16));
     if (matchCount <= 1 || (specMode(wSpec) === MS_EXACTLY && specMode(hSpec) === MS_EXACTLY)) return;
     for (const c of this.children) {
       if (c.visibility === 8 && !this.measureAllChildren) continue;
@@ -222,7 +222,7 @@ export const linearMethods: NativeSpec["methods"] = {
       maxCross = Math.max(maxCross, (matchCross ? 0 : vertical ? c.measuredW : c.measuredH) + mCross);
     }
     if (kids.length && this.showDividers & 4) totalMain += dividerSize;
-    const size = resolveSizeAndState(totalMain + mainPad, mainSpec);
+    const mainSize = resolveSizeAndState(totalMain + mainPad, mainSpec), size = mainSize & 0xffffff;
     let excess = size - totalMain - mainPad + consumed;
     if (skipped || (excess !== 0 && totalWeight > 0)) {
       let wsum = this.weightSum > 0 ? this.weightSum : totalWeight;
@@ -244,9 +244,11 @@ export const linearMethods: NativeSpec["methods"] = {
         maxCross = Math.max(maxCross, (matchCross ? 0 : vertical ? c.measuredW : c.measuredH) + mCross);
       }
     }
-    const finalCross = resolveSizeAndState(Math.max(maxCross + crossPad, vertical ? this.minW : this.minH), vertical ? wSpec : hSpec);
-    this.measuredW = vertical ? finalCross : size;
-    this.measuredH = vertical ? size : finalCross;
+    const state = this.measuredChildState();
+    const finalCross = resolveSizeAndState(Math.max(maxCross + crossPad, vertical ? this.minW : this.minH),
+      vertical ? wSpec : hSpec, vertical ? state : state << 16);
+    const finalMain = mainSize | ((vertical ? state << 16 : state) & 0xff000000);
+    this.setMeasuredDimension(vertical ? finalCross : finalMain, vertical ? finalMain : finalCross);
     for (const c of kids) {
       const crossDim = vertical ? c.lp?.width ?? WRAP_CONTENT : c.lp?.height ?? WRAP_CONTENT;
       if (crossDim === MATCH_PARENT && specMode(vertical ? wSpec : hSpec) !== MS_EXACTLY) {
@@ -508,8 +510,9 @@ const gridMethods: NonNullable<NativeSpec["methods"]> = {
     }
     expandWeightedTracks(this, kids, cw, true, specSize(wSpec) - this.padL - this.padR);
     expandWeightedTracks(this, kids, rh, false, specSize(hSpec) - this.padT - this.padB);
-    this.measuredW = resolveSizeAndState(trackOffset(cw, cw.length) + this.padL + this.padR, wSpec);
-    this.measuredH = resolveSizeAndState(trackOffset(rh, rh.length) + this.padT + this.padB, hSpec);
+    const state = this.measuredChildState();
+    this.setMeasuredDimension(resolveSizeAndState(trackOffset(cw, cw.length) + this.padL + this.padR, wSpec, state),
+      resolveSizeAndState(trackOffset(rh, rh.length) + this.padT + this.padB, hSpec, state << 16));
   },
   "onLayout(ZIIII)V": async function (this: JGridLayout) {
     for (const c of this.children) {
@@ -653,8 +656,9 @@ rt.register({
           lpH >= 0 ? makeSpec(lpH, MS_EXACTLY) : makeSpec(0, MS_UNSPEC));
         x += w + mw; maxH = Math.max(maxH, c.measuredH + mh);
       }
-      this.measuredW = resolveSizeAndState(x, wSpec);
-      this.measuredH = resolveSizeAndState(maxH + this.padT + this.padB, hSpec);
+      const state = this.measuredChildState();
+      this.setMeasuredDimension(resolveSizeAndState(x, wSpec, state),
+        resolveSizeAndState(maxH + this.padT + this.padB, hSpec, state << 16));
     },
   },
 });
@@ -713,8 +717,9 @@ const scrollMethods: NativeSpec["methods"] = {
     // FrameLayout.onMeasure: wrap to content on BOTH axes, clamped by the spec
     const contentW = (c?.measuredW ?? 0) + this.padL + this.padR;
     const contentH = (c?.measuredH ?? 0) + this.padT + this.padB;
-    this.measuredW = resolveSizeAndState(Math.max(contentW, this.minW), wSpec);
-    this.measuredH = resolveSizeAndState(Math.max(contentH, this.minH), hSpec);
+    const state = this.measuredChildState();
+    this.setMeasuredDimension(resolveSizeAndState(Math.max(contentW, this.minW), wSpec, state),
+      resolveSizeAndState(Math.max(contentH, this.minH), hSpec, state << 16));
     if (c && this.fillViewport) {
       if (!this.horizontal && c.measuredH < this.measuredH - this.padT - this.padB) {
         await measureView(c, makeSpec(c.measuredW, MS_EXACTLY), makeSpec(this.measuredH - this.padT - this.padB, MS_EXACTLY));
@@ -1011,8 +1016,9 @@ const relativeMethods: NativeSpec["methods"] = {
       // the first walk places everything; only a forward reference makes a second one worth it
       if (walk === 0) moved = forward;
     }
-    this.measuredW = resolveSizeAndState(Math.max(this.minW, maxR + this.padR), wSpec);
-    this.measuredH = resolveSizeAndState(Math.max(this.minH, maxB + this.padB), hSpec);
+    const state = this.measuredChildState();
+    this.setMeasuredDimension(resolveSizeAndState(Math.max(this.minW, maxR + this.padR), wSpec, state),
+      resolveSizeAndState(Math.max(this.minH, maxB + this.padB), hSpec, state << 16));
     for (const c of kids) {
       const lp = c.lp, p = pos.get(c);
       if (c.lp?.width === MATCH_PARENT || c.lp?.height === MATCH_PARENT) {

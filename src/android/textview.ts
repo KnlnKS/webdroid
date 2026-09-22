@@ -1,5 +1,5 @@
 import { AID, resString } from "./res";
-import { JView, requestLayout, initViewFromCtx, guardCall, invalidate, specMode, specSize, MS_UNSPEC, MS_EXACTLY, MS_AT_MOST, resolveSizeAndState, setFocusHook, removeFrom } from "./view";
+import { JView, requestLayout, initViewFromCtx, guardCall, invalidate, specMode, specSize, MS_UNSPEC, MS_EXACTLY, MS_AT_MOST, resolveSize, setFocusHook, removeFrom } from "./view";
 import {
   type JColorStateList, mkCsl, type JDrawable, loadColorStateList, loadDrawableRV, cslColor, loadDrawable,
   drawChild, drawableSize
@@ -588,7 +588,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       h = Math.max(h, Number(min instanceof Promise ? await min : min));
     }
     this.measuredW = w;
-    this.measuredH = resolveSizeAndState(h, hSpec);
+    this.measuredH = resolveSize(h, hSpec);
     this.layoutWidthFor = w;
   },
   "onDraw(Landroid/graphics/Canvas;)V": async function (this: JTextView, cv: JCanvas) {

@@ -5,7 +5,7 @@ import { AID, bagStrings } from "./res";
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall, curThread, after } from "../jvm/natives/jlang";
-import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSizeAndState, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom } from "./view";
+import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSize, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom } from "./view";
 import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
 import { JAttrSet, obtainStyled, rvDimen, rvInt, rvString, type Resources } from "./res";
 import { attr } from "./axml";
@@ -400,7 +400,7 @@ async function measureListView(this: JListView, wSpec: number, hSpec: number) {
       totalH += v.measuredH + this.divH;
     }
     this.measuredW = w;
-    this.measuredH = specMode(hSpec) === MS_EXACTLY ? specSize(hSpec) : resolveSizeAndState(totalH, hSpec);
+    this.measuredH = specMode(hSpec) === MS_EXACTLY ? specSize(hSpec) : resolveSize(totalH, hSpec);
 }
 const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JListView, c: unknown, set: JAttrSet | null) {
@@ -706,7 +706,7 @@ rt.register({
         }
       }
       this.measuredW = w;
-      this.measuredH = specMode(hSpec) === MS_EXACTLY ? specSize(hSpec) : resolveSizeAndState(totalH, hSpec);
+      this.measuredH = specMode(hSpec) === MS_EXACTLY ? specSize(hSpec) : resolveSize(totalH, hSpec);
     },
     "onLayout(ZIIII)V": async function (this: any) {
       const availW = Math.max(0, this.width() - this.padL - this.padR);

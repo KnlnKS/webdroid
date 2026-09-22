@@ -583,14 +583,14 @@ export function defaultSize(size: number, spec: number): number {
   const mode = specMode(spec), sz = specSize(spec);
   return mode === MS_UNSPEC ? size : sz;
 }
-export function resolveSizeAndState(size: number, spec: number): number {
+export function resolveSize(size: number, spec: number): number {
   const mode = specMode(spec), sz = specSize(spec);
   if (mode === MS_EXACTLY) return sz;
   if (mode === MS_AT_MOST) return Math.min(size, sz);
   return size;
 }
-export function measuredSize(size: number, spec: number, state = 0): number {
-  return resolveSizeAndState(size, spec) | (state & 0xff000000) |
+export function resolveSizeAndState(size: number, spec: number, state = 0): number {
+  return resolveSize(size, spec) | (state & 0xff000000) |
     (specMode(spec) === MS_AT_MOST && size > specSize(spec) ? 0x01000000 : 0);
 }
 
@@ -1109,8 +1109,8 @@ const viewMethods: NativeSpec["methods"] = {
       // onDraw content), respect the wrap_content LP so it collapses instead of filling. Custom
       // View subclasses keep Android semantics (they may render content sized by getDefaultSize).
       const plain = (this.constructor as any)?.$i?.name === "android/view/View";
-      this.measuredW = plain && this.lp && this.lp.width === WRAP_CONTENT ? resolveSizeAndState(cw, wSpec) : defaultSize(cw, wSpec);
-      this.measuredH = plain && this.lp && this.lp.height === WRAP_CONTENT ? resolveSizeAndState(ch, hSpec) : defaultSize(ch, hSpec);
+      this.measuredW = plain && this.lp && this.lp.width === WRAP_CONTENT ? resolveSize(cw, wSpec) : defaultSize(cw, wSpec);
+      this.measuredH = plain && this.lp && this.lp.height === WRAP_CONTENT ? resolveSize(ch, hSpec) : defaultSize(ch, hSpec);
     }));
   },
   "setMeasuredDimension(II)V": function (this: JView, w: number, h: number) {
@@ -1610,9 +1610,9 @@ const viewMethods: NativeSpec["methods"] = {
     "getBackgroundTintMode()Landroid/graphics/PorterDuff$Mode;",
     "onCreateInputConnection(Landroid/view/inputmethod/EditorInfo;)Landroid/view/inputmethod/InputConnection;"),
   ...stubs(-1, "getBaseline()I"),
-  "resolveSizeAndState(III)I": measuredSize,
-  "static resolveSizeAndState(III)I": measuredSize,
-  "static resolveSize(II)I": (size: number, spec: number) => resolveSizeAndState(size, spec),
+  "resolveSizeAndState(III)I": resolveSizeAndState,
+  "static resolveSizeAndState(III)I": resolveSizeAndState,
+  "static resolveSize(II)I": (size: number, spec: number) => resolveSize(size, spec),
   "static getDefaultSize(II)I": (size: number, spec: number) => defaultSize(size, spec),
   "static generateViewId()I": (() => { let n = 0x00ffff00; return () => ++n; })(),
   "static inflate(Landroid/content/Context;ILandroid/view/ViewGroup;)Landroid/view/View;": async (ctx: unknown, id: number, root: unknown) => {
@@ -1665,6 +1665,12 @@ export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | n
 }
 
 export class JViewGroup extends JView {
+  measuredChildState(): number {
+    let state = 0;
+    for (const child of this.children) if (child.visibility !== 8) state |= child.measuredState;
+    return state;
+  }
+
   children: JView[] = [];
   transientChildren = 0;
   addStatesFromChildren = false;
@@ -1936,8 +1942,9 @@ const vgMethods: NativeSpec["methods"] = {
       mw = Math.max(mw, c.measuredW);
       mh = Math.max(mh, c.measuredH);
     }
-    this.measuredW = resolveSizeAndState(mw + this.padL + this.padR, w);
-    this.measuredH = resolveSizeAndState(mh + this.padT + this.padB, h);
+    const state = this.measuredChildState();
+    this.setMeasuredDimension(resolveSizeAndState(mw + this.padL + this.padR, w, state),
+      resolveSizeAndState(mh + this.padT + this.padB, h, state << 16));
   },
   "onLayout(ZIIII)V": async function (this: JViewGroup) {
     for (const c of this.children) {
