@@ -270,6 +270,23 @@ describe("arm decoder", () => {
     ], (cpu) => { cpu.si.fill(-1, 32, 36); });
     expect(Array.from(c.si.slice(32, 36))).toEqual([0, 0, 0, 0]);
   });
+  test("NEON arithmetic shares D/Q lanes in ARM and Thumb encodings", () => {
+    const setup = (cpu: Cpu) => {
+      const floats = new Float32Array(cpu.si.buffer, cpu.si.byteOffset, cpu.si.length);
+      floats.set([1, 2, 3, 4, 5, 6, 7, 8], 8);
+      cpu.si.set([0x00050007, 0x00010003, 0x00020004, 0x00060008], 20);
+      cpu.si.set([0x03020100, 0x07060504], 2);
+      cpu.w[2] = 0x12345678;
+    };
+    for (const execute of [
+      () => run([0xf2042d46, 0xf31a980b, 0xf30aa15a, 0xf2b11302, 0xee821b30, BXLR], setup),
+      () => runThumb([0xef04, 0x2d46, 0xff1a, 0x980b, 0xff0a, 0xa15a, 0xefb1, 0x1302, 0xee82, 0x1b30, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(2, 8))).toEqual([0x06050403, -1073741817, 0x56785678, 0x56785678, 0x41200000, 0x41400000]);
+      expect(Array.from(c.si.slice(18, 24))).toEqual([0x00030003, -262149, 0, 0, 0, 0]);
+    }
+  });
   test("rsb/adc/sbc", () => {
     const c = run([
       0xe3a00005,   // mov r0, #5

@@ -202,6 +202,39 @@ fn neonImmediate(c: *Cpu, w: u32, pc: u32, imm8: u32) Status {
     return .next;
 }
 
+fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
+    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
+    const n = (bits(w, 7, 1) << 4) | bits(w, 16, 4);
+    const m = (bits(w, 5, 1) << 4) | bits(w, 0, 4);
+    const q = bits(w, 6, 1);
+    if (q != 0 and (d | n | m) & 1 != 0) return fault(c, .undefined, w, pc);
+    const op = bits(w, 8, 4);
+    if (w & 0xffb00010 == 0xf2b00000 and q == 0 and op >= 8) return fault(c, .undefined, w, pc);
+    const b = bits(w, 4, 1);
+    const u = bits(w, 24, 1);
+    const size = bits(w, 20, 2);
+    const translated: u32 = if (w & 0xffb00010 == 0xf2b00000)
+        0x2e000000 | (op << 11)
+    else if (op == 8 and b == 0)
+        0x0e208400 | (u << 29) | (size << 22)
+    else if (op == 1 and b == 1)
+        0x0e201c00 | (u << 29) | (size << 22)
+    else if (op == 13 and size & 1 == 0 and b == 0)
+        0x0e20d400 | (u << 29) | (bits(w, 21, 1) << 23)
+    else if (op == 13 and size == 0 and b == 1 and u == 1)
+        0x2e20dc00
+    else
+        return fault(c, .unimplemented, w, pc);
+    // A32 D registers alias halves of Q registers; the upper A64 registers are scratch.
+    const count: usize = if (q != 0) 16 else 8;
+    @memcpy(c.v[16][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
+    @memcpy(c.v[17][0..count], @as([*]u8, @ptrCast(vreg(u64, c, n)))[0..count]);
+    @memcpy(c.v[18][0..count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..count]);
+    const result = simd.exec(c, translated | (q << 30) | (18 << 16) | (17 << 5) | 16);
+    if (result == .next) @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count], c.v[16][0..count]);
+    return result;
+}
+
 fn op2(c: *Cpu, w: u32, pc: u32) Shifted {
     if (w & (1 << 25) != 0) {
         const rot = bits(w, 8, 4) * 2;
@@ -231,6 +264,7 @@ fn execArm(c: *Cpu, pc: u32) Status {
     const cc = w >> 28;
     c.pc = pc + 4;
     if (cc == 15) {
+        if (w & 0xfe800000 == 0xf2000000 or w & 0xffb00010 == 0xf2b00000) return neonSame(c, w, pc);
         if (w & 0xff100000 == 0xf4000000) return neonStruct(c, w, pc);
         if (w & 0xfeb00010 == 0xf2800010) return neonImmediate(c, w, pc, (bits(w, 24, 1) << 7) | (bits(w, 16, 3) << 4) | bits(w, 0, 4));
         if ((w & 0x0e000000) == 0x0a000000) {
@@ -731,6 +765,16 @@ fn vfp(c: *Cpu, w: u32, pc: u32) ?Status {
         const rt = bits(w, 12, 4);
         const o = bits(w, 21, 3);
         const Ld = bits(w, 20, 1) != 0;
+        if (dp and !Ld and o & 4 != 0 and w & 0x4f == 0) {
+            const q = bits(w, 21, 1);
+            const size: u32 = if (w & (1 << 22) != 0) 1 else if (w & (1 << 5) != 0) 2 else 4;
+            if (q != 0 and n & 1 != 0) return fault(c, .undefined, w, pc);
+            const value = r(c, rt);
+            const out: [*]u8 = @ptrCast(vreg(u64, c, n));
+            var i: u32 = 0;
+            while (i < (if (q != 0) @as(u32, 16) else 8)) : (i += 1) out[i] = @truncate(value >> @intCast((i % size) * 8));
+            return .next;
+        }
         if (o == 0 and !dp) {
             if (Ld) set(c, rt, vreg(u32, c, n).*) else vreg(u32, c, n).* = reg(c, rt, pc);
             return .next;
@@ -824,6 +868,10 @@ fn execThumb(c: *Cpu, pc: u32) Status {
 
 inline fn execThumb32(c: *Cpu, h: u32, second: u32, pc: u32) ?Status {
     if (execThumb32Branches(c, h, second, pc)) |status| return status;
+    if (h & 0xef80 == 0xef00 or (h & 0xffb0 == 0xefb0 and second & 0x10 == 0)) {
+        c.pc = pc + 4;
+        return neonSame(c, 0xf2000000 | ((h & 0x1000) << 12) | ((h & 0xff) << 16) | second, pc);
+    }
         const cp = (second >> 8) & 15;
         if (cp == 10 or cp == 11) {
             if (vfp(c, h << 16 | second, pc -% 4)) |status| {
