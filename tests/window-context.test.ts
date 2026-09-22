@@ -5,6 +5,9 @@ import { newObj, vcall } from "../src/jvm/natives/jlang";
 import { JContext, display } from "../src/android/context";
 import { JTheme, Resources, T_STR, themeOf } from "../src/android/res";
 import { getInflater } from "../src/android/inflate";
+import { JFrameLayout } from "../src/android/layouts";
+import { JWindow } from "../src/android/window";
+import { resolveSystemBars } from "../src/shell/systembars";
 import { uiState } from "../src/android/view";
 
 rt.linkNatives();
@@ -57,4 +60,28 @@ test("Dialog exposes its overlay theme through its context and inflater without 
   const owner = rt.make("android/app/Activity");
   await vcall(dialog, "setOwnerActivity", "(Landroid/app/Activity;)V", owner);
   expect(await vcall(dialog, "getOwnerActivity", "()Landroid/app/Activity;")).toBe(owner);
+});
+
+
+test("full-screen windows own their system bars and hiding restores the underlying window", async () => {
+  const activity = new JFrameLayout(), dialog = new JFrameLayout();
+  const underneath = activity.windowOwner = new JWindow(), above = dialog.windowOwner = new JWindow();
+  underneath.decor = activity; above.decor = dialog;
+  above.layoutW = above.layoutH = -1;
+  const overlays = [{ view: dialog, x: 0, y: 0, dismissOnOutside: false }];
+  await vcall(underneath, "setStatusBarColor", "(I)V", 0xff112233);
+  await vcall(underneath, "setNavigationBarColor", "(I)V", 0xff223344);
+  await vcall(above, "setStatusBarColor", "(I)V", 0xffeeeeee);
+  await vcall(above, "setNavigationBarColor", "(I)V", 0xffdddddd);
+  const controller = await vcall(above, "getInsetsController", "()Landroid/view/WindowInsetsController;");
+  await vcall(controller, "setSystemBarsAppearance", "(II)V", 24, 24);
+  await vcall(controller, "hide", "(I)V", 1);
+  const bars = resolveSystemBars(activity, overlays);
+  expect(bars.root).toBe(dialog);
+  expect([bars.status, bars.navigation, bars.appearance, bars.visible & 3]).toEqual([0xffeeeeee, 0xffdddddd, 24, 2]);
+  dialog.visibility = 4;
+  const restored = resolveSystemBars(activity, overlays);
+  expect(restored.root).toBe(activity);
+  expect([restored.status, restored.navigation, restored.appearance, restored.visible & 3]).toEqual([0xff112233, 0xff223344, 0, 3]);
+  expect(await vcall(underneath, "getNavigationBarColor", "()I")).toBe(0xff223344);
 });

@@ -13,7 +13,7 @@ import { TV } from "./axml";
 import { device } from "../shell/config";
 import { JCanvas, JRect, measureCtx } from "./graphics";
 
-interface Overlay {
+export interface Overlay {
   view: JView;
   x: number; y: number;
   dismissOnOutside: boolean;

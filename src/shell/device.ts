@@ -25,14 +25,14 @@ import { onMain, inMainJob, mainDbg } from "../android/mainloop";
 import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setViewTargetSdk, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets, rootWindowInsets } from "../android/windowinsets";
-import { JCanvas, cssColor } from "../android/graphics";
+import { JCanvas } from "../android/graphics";
 import { overlays, drawToasts, dismissOverlay } from "../android/popup";
 import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
 import { guestNow, setGuestTimeout } from "../guest-clock";
 import { device, orientationForRequest, setDeviceOrientation } from "./config";
-import { drawStatusIcons, drawNavigationHandle } from "./systembars";
+import { resolveSystemBars, drawSystemBarBackgrounds, drawSystemBarIcons } from "./systembars";
 import { restoreRoots } from "./hostfs";
 import { setPixelCopyFrame } from "../android/glview";
 
@@ -195,7 +195,6 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     res, theme, pkg, apkFile, appLabel: label, themeResId, iconRes: iconAttr?.data ?? 0, zip,
     splits: install.splits.map((sp) => sp.name),
     application: null, jresources: jres,
-    statusBarColor: -16777216, navBarColor: -16777216,
     launch: async (component, intent, options) => { await launchActivity(component, intent, options); },
     // finish() only requests: AOSP delivers the pause/stop/destroy chain as later main-thread
     // messages, so it queues as a main job rather than running detached alongside the caller
@@ -552,13 +551,6 @@ async function pressBack0() {
 const M_doFrame = mangleMethod("doFrame", "(J)V");
 const M_dispatch = mangleMethod("dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
 let drawing = false;
-let sbColor = NaN, sbCss = "";
-function drawStatusBar(ctx: OffscreenCanvasRenderingContext2D) {
-  const sb = booted!.host.statusBarColor;
-  if (sb !== sbColor) { sbColor = sb; sbCss = cssColor(sb); }
-  ctx.fillStyle = sbCss;
-  ctx.fillRect(0, 0, SCREEN_W, STATUS_H);
-}
 /** AOSP's starting window: the system's, painted from the package's theme before the app has
  *  run. It is not the app drawing, so it deliberately does not count in perf.draws — corpus
  *  reads that to mean "this apk got far enough to render", and it must keep meaning it. */
@@ -569,12 +561,12 @@ async function drawStartWin(w: { view: JView; fullscreen: boolean }) {
   try {
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-    if (contentY) {
-      drawStatusBar(ctx);
-      drawStatusIcons(ctx, booted!.host.res, booted!.host.statusBarColor, 0, 0, 0);
-    }
     ctx.translate(0, contentY);
     await drawView(w.view, JCanvas.wrap(ctx, SCREEN_W, SCREEN_H - contentY));
+    ctx.resetTransform();
+    const bars = resolveSystemBars(w.view, []);
+    drawSystemBarBackgrounds(ctx, bars);
+    drawSystemBarIcons(ctx, booted!.host.res, bars);
   } catch (e) {
     perf.drawErrors++;
     console.error("[draw]", e);
@@ -708,6 +700,7 @@ async function tick0() {
         // AOSP's performDraw() dispatches OnPreDrawListener/OnDrawListener right before the
         // tree draw, on every draw pass -- not only ones that also ran a layout.
         try {
+          const bars = resolveSystemBars(decor, overlays);
           for (const activity of activities) {
             const root = activity.window.decor;
             if (!root) continue;
@@ -715,12 +708,7 @@ async function tick0() {
             await fireDrawPass(root);
             mainDbg.phase = "draw";
             await drawView(root, cv);
-          }
-          const bars = rootWindowInsets(decor);
-          if (bars.vis & 1) drawStatusBar(ctx);
-          if (bars.vis & 2) {
-            ctx.fillStyle = cssColor(booted!.host.navBarColor);
-            ctx.fillRect(0, SCREEN_H - device.navBar, SCREEN_W, device.navBar);
+            if (root === bars.root) drawSystemBarBackgrounds(ctx, bars);
           }
           mainDbg.phase = "drawOverlays";
           for (const o of overlays) {
@@ -728,9 +716,9 @@ async function tick0() {
             const dim = o.dim?.() ?? 0;
             if (dim > 0) { ctx.fillStyle = `rgba(0,0,0,${dim})`; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H); }
             await drawView(o.view, cv);
+            if (o.view === bars.root) drawSystemBarBackgrounds(ctx, bars);
           }
-          if (bars.vis & 1) drawStatusIcons(ctx, booted!.host.res, booted!.host.statusBarColor, act!.window.appearance, act!.window.appearanceMask, decor.systemUiVisibility);
-          if (bars.vis & 2) drawNavigationHandle(ctx, booted!.host.navBarColor, act!.window.appearance, act!.window.appearanceMask, decor.systemUiVisibility);
+          drawSystemBarIcons(ctx, booted!.host.res, bars);
           drawToasts(ctx, SCREEN_W, SCREEN_H);
         } catch (e) {
           perf.drawErrors++;

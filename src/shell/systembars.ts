@@ -1,8 +1,32 @@
 import { attrStr, parseAXML } from "../android/axml";
-import { tfMedium } from "../android/graphics";
+import { cssColor, tfMedium } from "../android/graphics";
 import { resString, type Resources } from "../android/res";
 import { APPEARANCE_LIGHT_NAVIGATION_BARS, APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
 import { device } from "./config";
+import type { JView } from "../android/view";
+import { rootWindowInsets } from "../android/windowinsets";
+import type { Overlay } from "../android/popup";
+
+export function resolveSystemBars(activity: JView, overlays: readonly Overlay[]) {
+  let root = activity;
+  for (let i = overlays.length - 1; i >= 0; i--) {
+    const view = overlays[i].view, window = view.windowOwner;
+    if (view.visibility === 0 && window && !(window.flags & 8) && window.layoutW === -1 && window.layoutH === -1) { root = view; break; }
+  }
+  const window = root.windowOwner;
+  return { root, visible: rootWindowInsets(root).vis, status: window?.statusBarColor ?? -16777216,
+    navigation: window?.navBarColor ?? -16777216, appearance: window?.appearance ?? 0,
+    mask: window?.appearanceMask ?? 0, systemUi: root.systemUiVisibility };
+}
+type SystemBars = ReturnType<typeof resolveSystemBars>;
+export function drawSystemBarBackgrounds(ctx: OffscreenCanvasRenderingContext2D, bars: SystemBars) {
+  if (bars.visible & 1) { ctx.fillStyle = cssColor(bars.status); ctx.fillRect(0, 0, device.width, device.statusBar); }
+  if (bars.visible & 2) { ctx.fillStyle = cssColor(bars.navigation); ctx.fillRect(0, device.height - device.navBar, device.width, device.navBar); }
+}
+export function drawSystemBarIcons(ctx: OffscreenCanvasRenderingContext2D, res: Resources, bars: SystemBars) {
+  if (bars.visible & 1) drawStatusIcons(ctx, res, bars.status, bars.appearance, bars.mask, bars.systemUi);
+  if (bars.visible & 2) drawNavigationHandle(ctx, bars.navigation, bars.appearance, bars.mask, bars.systemUi);
+}
 
 type IconPaths = { wifi: Path2D; battery: Path2D; fill: Path2D; bolt: Path2D; withoutBolt: Path2D };
 const paths = new WeakMap<Resources, IconPaths>();
@@ -49,7 +73,7 @@ function lightBackground(color: number): boolean {
 }
 let clockMinute = -1, clockText = "";
 
-export function drawStatusIcons(ctx: OffscreenCanvasRenderingContext2D, res: Resources, bg: number, appearance: number, mask: number, systemUi: number) {
+function drawStatusIcons(ctx: OffscreenCanvasRenderingContext2D, res: Resources, bg: number, appearance: number, mask: number, systemUi: number) {
   const dark = mask & APPEARANCE_LIGHT_STATUS_BARS ? !!(appearance & APPEARANCE_LIGHT_STATUS_BARS)
     : !!(systemUi & 0x2000) || lightBackground(bg);
   ctx.fillStyle = dark ? "#00000099" : "#ffffff";
@@ -87,7 +111,7 @@ function navigationHandle(color: string): OffscreenCanvas {
   ctx.fill();
   return image;
 }
-export function drawNavigationHandle(ctx: OffscreenCanvasRenderingContext2D, bg: number, appearance: number, mask: number, systemUi: number) {
+function drawNavigationHandle(ctx: OffscreenCanvasRenderingContext2D, bg: number, appearance: number, mask: number, systemUi: number) {
   const dark = mask & APPEARANCE_LIGHT_NAVIGATION_BARS ? !!(appearance & APPEARANCE_LIGHT_NAVIGATION_BARS)
     : !!(systemUi & 16) || lightBackground(bg);
   if (!handleImage || handleImage.density !== device.density) {

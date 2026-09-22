@@ -20,7 +20,7 @@ import { TV } from "./axml";
 import { device } from "../shell/config";
 import { inflateLayout, getInflater } from "./inflate";
 import { csText } from "./text";
-import type { JWindow } from "./window";
+import { applyWindowTheme, type JWindow } from "./window";
 import { complexToFraction } from "./util";
 
 const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
@@ -309,6 +309,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
       this.win = new (rt.link("android/view/Window").ctor as new () => JWindow)();
       this.win.callbackObj = this;
       this.win.dialog = this;
+      if (root.theme) applyWindowTheme(this.win, root.theme);
       if (root.jres && root.theme && !rvInt(root.jres, root.theme.lookup(AID("windowIsFloating")), 0)) {
         this.win.flags |= 0x10100; // PhoneWindow: LAYOUT_IN_SCREEN | LAYOUT_INSET_DECOR.
         this.win.fitInsetsSides = this.win.fitInsetsTypes = 0;

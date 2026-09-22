@@ -1,4 +1,4 @@
-import { AID, rvInt, themeOf } from "./res";
+import { AID, rvInt, rvColor, themeOf, type JTheme } from "./res";
 import { rt, JObj, callSelf, stubs, noops } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import type { JFrameLayout } from "./layouts";
@@ -49,6 +49,8 @@ export class JWindow extends JObj {
   appearance = 0;
   appearanceMask = 0;
   barsBehavior = 1;
+  statusBarColor: number | null = null;
+  navBarColor: number | null = null;
   navBarDividerColor = 0;
   insetsController: JInsetsController | null = null;
   enterTransition: unknown = null;
@@ -56,6 +58,19 @@ export class JWindow extends JObj {
 }
 export const APPEARANCE_LIGHT_STATUS_BARS = 8;
 export const APPEARANCE_LIGHT_NAVIGATION_BARS = 16;
+export function applyWindowTheme(window: JWindow, theme: JTheme, statusDefault = -16777216) {
+  window.statusBarColor ??= rvColor(theme.res, theme.lookup(AID("statusBarColor")), statusDefault);
+  window.navBarColor ??= rvColor(theme.res, theme.lookup(AID("navigationBarColor")), -16777216);
+  window.translucent = !!rvInt(theme.res, theme.lookup(AID("windowIsTranslucent")), 0);
+  if (rvInt(theme.res, theme.lookup(AID("windowFullscreen")), 0)) window.flags |= 1024;
+  for (const [name, mask] of [["windowLightStatusBar", APPEARANCE_LIGHT_STATUS_BARS], ["windowLightNavigationBar", APPEARANCE_LIGHT_NAVIGATION_BARS]] as const) {
+    const value = theme.lookup(AID(name));
+    if (value && !(window.appearanceMask & mask)) {
+      window.appearance = (window.appearance & ~mask) | (rvInt(theme.res, value, 0) ? mask : 0);
+      window.appearanceMask |= mask;
+    }
+  }
+}
 class JInsetsController extends JObj { w: JWindow = null!; }
 /** A change to how a window is sized or placed relays out its tree: an activity's decor or a
  *  dialog's frame. A window not built yet lays out fresh when it is. */
@@ -125,12 +140,11 @@ rt.register({
     },
     "requestFeature(I)Z": function (this: JWindow, f: number) { this.features.add(f); return 1; },
     "setStatusBarColor(I)V": function (this: JWindow, c: number) {
-      if (appHost) appHost.statusBarColor = c;
-      invalidate();
+      this.statusBarColor = c; invalidate();
     },
-    "getStatusBarColor()I": () => appHost?.statusBarColor ?? -16777216,
-    "getNavigationBarColor()I": () => appHost?.navBarColor ?? -16777216,
-    "setNavigationBarColor(I)V": function (this: JWindow, c: number) { if (appHost) appHost.navBarColor = c; },
+    "getStatusBarColor()I": function (this: JWindow) { return this.statusBarColor ?? -16777216; },
+    "getNavigationBarColor()I": function (this: JWindow) { return this.navBarColor ?? -16777216; },
+    "setNavigationBarColor(I)V": function (this: JWindow, c: number) { this.navBarColor = c; invalidate(); },
     "setNavigationBarDividerColor(I)V": function (this: JWindow, c: number) { this.navBarDividerColor = c; invalidate(); },
     "getNavigationBarDividerColor()I": function (this: JWindow) { return this.navBarDividerColor; },
     "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JWindow, d: JDrawable | null) {
