@@ -4901,3 +4901,17 @@ Forest resource fetching reached LruCache.hitCount and threw during its fetch ch
 cache now counts hits, misses, puts, creations and evictions, with one trimming path used by
 resize, insertion and evictAll. Updating a key makes it most recent. The existing LRU check
 verifies hit/miss/eviction counts alongside recency and snapshot independence.
+
+The next stable search capture has distinct photo/video covers and avatars with correct dates.
+Opening a card now reaches DetailActivity, where missing Activity.getParent aborted fragment
+creation and caused downstream scene-state errors. Standalone activities now return null,
+consistent with isChild=false and the framework's nullable mParent getter. Typecheck passes.
+
+A subsequent search merge threw in the bundled Guava-style cache's size-eviction path. Its
+segment extends ReentrantLock, whose native implementation only incremented a shared counter,
+allowing different Java threads to overlap during suspension. Locks now retain thread ownership,
+recursive holds and queued acquisitions. Conditions release all holds, transfer signaled waiters
+to the lock queue and reacquire before returning or throwing. The former uncontended-only
+lock test now checks exclusion, ownership, recursive condition restoration, FIFO transfer and
+interrupt removal (one core case, 11 assertions); typecheck passes. The cache failure has not
+yet been reproduced under the repaired implementation, so causal validation remains pending.
