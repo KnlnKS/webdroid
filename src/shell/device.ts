@@ -19,20 +19,20 @@ import { JActivity, fireActivityLifecycle } from "../android/app";
 import { JMenu, pushMenuToBar } from "../android/menu";
 import { JContext } from "../android/context";
 import { attachProvider } from "../android/contentresolver";
-import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
 import { reportUncaught, JBundle, dispatchVsync, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { packageUid, packages } from "../android/packages";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
 import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setViewTargetSdk, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
 import { JMotionEvent } from "../android/motionevent";
 import { dispatchWindowInsets, rootWindowInsets } from "../android/windowinsets";
-import { JCanvas, cssColor, tfMedium } from "../android/graphics";
+import { JCanvas, cssColor } from "../android/graphics";
 import { overlays, drawToasts, dismissOverlay } from "../android/popup";
 import { webLayerSweep } from "../android/webkit";
 import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
 import { guestNow, setGuestTimeout } from "../guest-clock";
 import { device, orientationForRequest, setDeviceOrientation } from "./config";
+import { drawStatusIcons, drawNavigationHandle } from "./systembars";
 import { restoreRoots } from "./hostfs";
 import { setPixelCopyFrame } from "../android/glview";
 
@@ -553,12 +553,11 @@ const M_doFrame = mangleMethod("doFrame", "(J)V");
 const M_dispatch = mangleMethod("dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
 let drawing = false;
 let sbColor = NaN, sbCss = "";
-function drawStatusBar(ctx: OffscreenCanvasRenderingContext2D, appearance: number, appearanceMask: number, systemUi = 0) {
+function drawStatusBar(ctx: OffscreenCanvasRenderingContext2D) {
   const sb = booted!.host.statusBarColor;
   if (sb !== sbColor) { sbColor = sb; sbCss = cssColor(sb); }
   ctx.fillStyle = sbCss;
   ctx.fillRect(0, 0, SCREEN_W, STATUS_H);
-  drawStatusIcons(ctx, sb, appearance, appearanceMask, systemUi);
 }
 /** AOSP's starting window: the system's, painted from the package's theme before the app has
  *  run. It is not the app drawing, so it deliberately does not count in perf.draws — corpus
@@ -570,7 +569,10 @@ async function drawStartWin(w: { view: JView; fullscreen: boolean }) {
   try {
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-    if (contentY) drawStatusBar(ctx, 0, 0);
+    if (contentY) {
+      drawStatusBar(ctx);
+      drawStatusIcons(ctx, booted!.host.res, booted!.host.statusBarColor, 0, 0, 0);
+    }
     ctx.translate(0, contentY);
     await drawView(w.view, JCanvas.wrap(ctx, SCREEN_W, SCREEN_H - contentY));
   } catch (e) {
@@ -581,7 +583,6 @@ async function drawStartWin(w: { view: JView; fullscreen: boolean }) {
   }
   present();
 }
-let clockMinute = -1, clockText = "";
 
 export async function tick() {
   if (drawing) return;
@@ -716,7 +717,7 @@ async function tick0() {
             await drawView(root, cv);
           }
           const bars = rootWindowInsets(decor);
-          if (bars.vis & 1) drawStatusBar(ctx, act!.window.appearance, act!.window.appearanceMask, decor.systemUiVisibility);
+          if (bars.vis & 1) drawStatusBar(ctx);
           if (bars.vis & 2) {
             ctx.fillStyle = cssColor(booted!.host.navBarColor);
             ctx.fillRect(0, SCREEN_H - device.navBar, SCREEN_W, device.navBar);
@@ -728,6 +729,8 @@ async function tick0() {
             if (dim > 0) { ctx.fillStyle = `rgba(0,0,0,${dim})`; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H); }
             await drawView(o.view, cv);
           }
+          if (bars.vis & 1) drawStatusIcons(ctx, booted!.host.res, booted!.host.statusBarColor, act!.window.appearance, act!.window.appearanceMask, decor.systemUiVisibility);
+          if (bars.vis & 2) drawNavigationHandle(ctx, booted!.host.navBarColor, act!.window.appearance, act!.window.appearanceMask, decor.systemUiVisibility);
           drawToasts(ctx, SCREEN_W, SCREEN_H);
         } catch (e) {
           perf.drawErrors++;
@@ -753,32 +756,6 @@ function forceLayoutFlags(v: JView) {
   v.oldWSpec = -1;
   clearMeasureCache(v);
   if (v instanceof JViewGroup) for (const c of v.children) forceLayoutFlags(c);
-}
-function drawStatusIcons(ctx: OffscreenCanvasRenderingContext2D, bg: number, appearance: number, appearanceMask: number, systemUi: number) {
-  // AOSP: the light-status-bars appearance bit decides once the app has set or cleared it;
-  // the luminance guess only stands in for an app that never asked.
-  const dark = appearanceMask & APPEARANCE_LIGHT_STATUS_BARS ? (appearance & APPEARANCE_LIGHT_STATUS_BARS) !== 0
-    : !!(systemUi & 0x2000) || 0.299 * ((bg >> 16) & 0xff) + 0.587 * ((bg >> 8) & 0xff) + 0.114 * (bg & 0xff) > 160;
-  ctx.fillStyle = dark ? "rgba(0,0,0,0.85)" : "#ffffff";
-  ctx.font = `500 ${device.dp(13)}px ${tfMedium.family}`;
-  ctx.textBaseline = "middle";
-  ctx.textAlign = "left";
-  const now = new Date(), minute = now.getHours() * 60 + now.getMinutes();
-  if (minute !== clockMinute) { clockMinute = minute; clockText = `${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}`; }
-  ctx.fillText(clockText, device.dp(10), STATUS_H / 2 + device.dp(0.5));
-  ctx.textAlign = "right";
-  const x = SCREEN_W - device.dp(8);
-  ctx.strokeStyle = ctx.fillStyle;
-  ctx.lineWidth = device.dp(1.25);
-  ctx.strokeRect(x - device.dp(17), device.dp(6), device.dp(13), device.dp(12));
-  ctx.fillRect(x - device.dp(15), device.dp(8), device.dp(9), device.dp(8));
-  ctx.fillRect(x - device.dp(3.5), device.dp(9.5), device.dp(2), device.dp(5));
-  ctx.beginPath();
-  ctx.moveTo(x - device.dp(37), device.dp(17));
-  ctx.lineTo(x - device.dp(23), device.dp(17));
-  ctx.lineTo(x - device.dp(30), device.dp(7));
-  ctx.closePath();
-  ctx.fill();
 }
 
 let touchTarget: "decor" | { overlay: number } | null = null;

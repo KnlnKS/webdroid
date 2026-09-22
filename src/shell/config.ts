@@ -75,6 +75,7 @@ export const device = {
   touchSlopDp: 8,
   /** AOSP ViewConfiguration.SCROLL_FACTOR: dp scrolled per wheel/keyboard scroll unit */
   scrollUnitDp: 64,
+  battery: { level: 80, status: 2 },
   sdk: 33,
   release: "13",
   lang: "en",

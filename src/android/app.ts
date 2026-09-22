@@ -814,9 +814,9 @@ for (const [name, methods, statics] of [
   // a charging battery at 80%; counters the platform cannot read answer Integer/Long.MIN_VALUE
   // as BatteryManager does for an unsupported property
   ["android/os/BatteryManager", {
-    "getIntProperty(I)I": (id: number) => id === 4 ? 80 : id === 6 ? 2 : -2147483648,
-    "getLongProperty(I)J": (id: number) => id === 4 ? 80n : id === 6 ? 2n : -9223372036854775808n,
-    "isCharging()Z": () => 1,
+    "getIntProperty(I)I": (id: number) => id === 4 ? device.battery.level : id === 6 ? device.battery.status : -2147483648,
+    "getLongProperty(I)J": (id: number) => id === 4 ? BigInt(device.battery.level) : id === 6 ? BigInt(device.battery.status) : -9223372036854775808n,
+    "isCharging()Z": () => +(device.battery.status === 2 || device.battery.status === 5),
     "computeChargeTimeRemaining()J": () => -1n,
   }],
   ["android/hardware/display/DisplayManager", {

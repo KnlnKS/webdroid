@@ -55,6 +55,7 @@ export class JWindow extends JObj {
   exitTransition: unknown = null;
 }
 export const APPEARANCE_LIGHT_STATUS_BARS = 8;
+export const APPEARANCE_LIGHT_NAVIGATION_BARS = 16;
 class JInsetsController extends JObj { w: JWindow = null!; }
 /** A change to how a window is sized or placed relays out its tree: an activity's decor or a
  *  dialog's frame. A window not built yet lays out fresh when it is. */
@@ -191,7 +192,7 @@ rt.register({
 // API-30 window state, shared by decor's inset consumption and the shell's bar rendering.
 rt.register({
   name: "android/view/WindowInsetsController", ctor: class extends JObj {},
-  statics: { APPEARANCE_LOW_PROFILE_BARS: 4, APPEARANCE_LIGHT_STATUS_BARS, APPEARANCE_LIGHT_NAVIGATION_BARS: 16,
+  statics: { APPEARANCE_LOW_PROFILE_BARS: 4, APPEARANCE_LIGHT_STATUS_BARS, APPEARANCE_LIGHT_NAVIGATION_BARS,
     BEHAVIOR_DEFAULT: 1, BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE: 2 },
 });
 rt.markers("android/view/WindowInsetsController$OnControllableInsetsChangedListener");
