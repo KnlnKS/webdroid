@@ -1461,7 +1461,7 @@ const boringInit = function (this: JBoringLayout, cs: unknown, p: JTextPaint, w:
   return this.setup(cs, p, w, smult, sadd, !!incl);
 };
 const boringMake = (cs: unknown, p: JTextPaint, w: number, alignment: JSimpleEnum, smult: number, sadd: number, _m: unknown, incl: number) =>
-  Object.assign(new JBoringLayout(), { alignment }).setup(cs, p, w, smult, sadd, !!incl);
+  boringInit.call(new JBoringLayout(), cs, p, w, alignment, smult, sadd, _m, incl);
 function isBoring(cs: unknown, p: JTextPaint) {
   if (cs instanceof JSpanned && cs.spans.some((s) => rt.iof(s.span, "android/text/style/ParagraphStyle"))) return null;
   return replacementSpans(cs).length ? null : boringMetrics(spannedString(cs), p);

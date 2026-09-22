@@ -1,6 +1,6 @@
-import { recordOrRun, recordingContext, replayCanvas, replayWithSemantics, type Ctx2D } from "./recording";
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
+import { recordOrRun, recordingContext, replayCanvas, replayWithSemantics, type Ctx2D } from "./recording";
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
@@ -380,7 +380,8 @@ export class JPaint extends JObj {
     return (this.fCache = `${it}${w} ${this.textSize}px ${family.replace(/, sans-serif$/, "")}, ${EMOJI_FALLBACK}, sans-serif`);
   }
   fillStyle(ctx?: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): string | CanvasGradient | CanvasPattern {
-    if (this.shaderObj && ctx) { const style = this.shaderObj.pattern(ctx); if (style) return style; }
+    const pattern = ctx && this.shaderObj?.pattern(ctx);
+    if (pattern) return pattern;
     if (this.shader) return this.shader;
     const f = this.filterColor;
     if (this.filterMatrix) return cssColor(matrixColor(this.filterMatrix, this.color));

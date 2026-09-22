@@ -683,17 +683,14 @@ export function pathIsConvex(path: JPath): number {
     if (verb[0] === MOVE) {
       if (points.length) ended = true;
       start = [Math.fround(verb[1]), Math.fround(verb[2])];
-    } else if (verb[0] === CLOSE) {
-      if (ended) return 0;
-      if (!points.length) points.push(start);
-      ended = true;
-    } else {
-      if (ended) return 0;
-      if (!points.length) points.push(start);
-      for (let i = 3; i < verb.length; i += 2) {
-        const x = Math.fround(verb[i]), y = Math.fround(verb[i + 1]), last = points[points.length - 1];
-        if (last[0] !== x || last[1] !== y) points.push([x, y]);
-      }
+      continue;
+    }
+    if (ended) return 0;
+    if (!points.length) points.push(start);
+    if (verb[0] === CLOSE) { ended = true; continue; }
+    for (let i = 3; i < verb.length; i += 2) {
+      const x = Math.fround(verb[i]), y = Math.fround(verb[i + 1]), last = points[points.length - 1];
+      if (last[0] !== x || last[1] !== y) points.push([x, y]);
     }
   }
   if (points.length < 2) return 1;

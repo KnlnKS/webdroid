@@ -35,7 +35,6 @@ class BreakText {
   }
 }
 
-/** Paragraph offsets and replacement boundaries are shared by both breaking strategies. */
 export function breakLines(text: string, paint: JTextPaint, constraints: Constraints): TLine[] {
   const { width, firstWidth = width, firstCount = 0, maxLines = Number.MAX_SAFE_INTEGER, balanced = false } = constraints;
   const measure = constraints.measure ?? ((start, end) => measureText(paint, text.slice(start, end)));

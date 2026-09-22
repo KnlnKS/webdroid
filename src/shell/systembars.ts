@@ -11,7 +11,8 @@ export function resolveSystemBars(activity: JView, overlays: readonly Overlay[])
   let root = activity;
   for (let i = overlays.length - 1; i >= 0; i--) {
     const view = overlays[i].view, window = view.windowOwner;
-    if (view.visibility === 0 && window && !(window.flags & 8) && view.left <= 0 && view.top <= 0 && view.right >= device.width && view.bottom >= device.height) { root = view; break; }
+    if (view.visibility !== 0 || !window || window.flags & 8) continue;
+    if (view.left <= 0 && view.top <= 0 && view.right >= device.width && view.bottom >= device.height) { root = view; break; }
   }
   const window = root.windowOwner;
   return { root, visible: rootWindowInsets(root).vis, status: window?.statusBarColor ?? -16777216,
