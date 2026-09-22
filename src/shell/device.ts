@@ -630,7 +630,9 @@ async function tick0() {
         mainDbg.phase = "overlays";
         for (const o of overlays) {
           const win = o.view.windowOwner, floating = !!win?.dialog;
-          const top = floating ? STATUS_H : 0, bottom = floating ? device.navBar : 0;
+          const visible = win?.fitInsetsIgnoringVisibility ? ~0 : rootWindowInsets(o.view).vis;
+          const top = floating && (win.fitInsetsSides & 2) && (win.fitInsetsTypes & visible & 1) ? STATUS_H : 0;
+          const bottom = floating && (win.fitInsetsSides & 8) && (win.fitInsetsTypes & visible & 2) ? device.navBar : 0;
           await measureView(o.view, makeSpec(SCREEN_W, 0x80000000 | 0), makeSpec(SCREEN_H - top - bottom, 0x80000000 | 0));
           if (floating) {
             const gravity = win!.gravity;

@@ -34,6 +34,9 @@ export class JWindow extends JObj {
   /** WindowManager.LayoutParams flags; the shell reads FLAG_FULLSCREEN off the top activity. */
   flags = 0;
   decorFitsSystemWindows = true;
+  fitInsetsSides = 15;
+  fitInsetsTypes = 7;
+  fitInsetsIgnoringVisibility = false;
   hiddenInsets = 0;
   screenBrightness = -1;
   /** WindowManager.LayoutParams width/height/gravity/dimAmount, which size and place a dialog
@@ -143,10 +146,19 @@ rt.register({
       const lp = rt.make("android/view/WindowManager$LayoutParams");
       lp.flags = this.flags;
       lp.screenBrightness = this.screenBrightness;
+      lp.fitInsetsSides = this.fitInsetsSides;
+      lp.fitInsetsTypes = this.fitInsetsTypes;
+      lp.fitInsetsIgnoringVisibility = this.fitInsetsIgnoringVisibility;
       return lp;
     },
-    "setAttributes(Landroid/view/WindowManager$LayoutParams;)V": function (this: JWindow, lp: { flags: number; screenBrightness: number } | null) {
-      if (lp) { this.screenBrightness = lp.screenBrightness; setWindowFlags(this, lp.flags); }
+    "setAttributes(Landroid/view/WindowManager$LayoutParams;)V": function (this: JWindow, lp: JWindowLayoutParams | null) {
+      if (!lp) return;
+      this.screenBrightness = lp.screenBrightness;
+      this.flags = lp.flags;
+      this.fitInsetsSides = lp.fitInsetsSides;
+      this.fitInsetsTypes = lp.fitInsetsTypes;
+      this.fitInsetsIgnoringVisibility = lp.fitInsetsIgnoringVisibility;
+      relayoutWindow(this);
     },
     "getCallback()Landroid/view/Window$Callback;": function (this: JWindow) { return this.callbackObj ?? this.activity; },
     "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JWindow) { return this.backDispatcher(); },
@@ -201,16 +213,20 @@ rt.register({
       "controlWindowInsetsAnimation(IJLandroid/view/animation/Interpolator;Landroid/os/CancellationSignal;Landroid/view/WindowInsetsAnimationControlListener;)V"),
   },
 });
+class JWindowLayoutParams extends JLayoutParams {
+  width = -1; height = -1; gravity = 0; flags = 0; format = 1; type = 2; softInputMode = 0;
+  x = 0; y = 0; windowAnimations = 0; dimAmount = 0.6; alpha = 1; layoutInDisplayCutoutMode = 0;
+  token: JObj | null = null;
+  title: unknown = "";
+  preferredDisplayModeId = 0;
+  preferredRefreshRate = 0;
+  screenBrightness = -1;
+  fitInsetsSides = 15;
+  fitInsetsTypes = 7;
+  fitInsetsIgnoringVisibility = false;
+}
 rt.register({
-  name: "android/view/WindowManager$LayoutParams", sup: "android/view/ViewGroup$LayoutParams", ctor: class extends JLayoutParams {
-    width = -1; height = -1; gravity = 0; flags = 0; format = 1; type = 2; softInputMode = 0;
-    x = 0; y = 0; windowAnimations = 0; dimAmount = 0.6; alpha = 1; layoutInDisplayCutoutMode = 0;
-    token: JObj | null = null;
-    title: unknown = "";
-    preferredDisplayModeId = 0;
-    preferredRefreshRate = 0;
-    screenBrightness = -1;
-  },
+  name: "android/view/WindowManager$LayoutParams", sup: "android/view/ViewGroup$LayoutParams", ctor: JWindowLayoutParams,
   fields: ["width", "height", "gravity", "flags", "x", "y", "softInputMode", "windowAnimations", "dimAmount", "alpha",
     "format", "type", "layoutInDisplayCutoutMode", "token", "preferredDisplayModeId", "preferredRefreshRate", "screenBrightness"],
   statics: { MATCH_PARENT: -1, WRAP_CONTENT: -2, FLAG_FULLSCREEN: 1024, FLAG_KEEP_SCREEN_ON: 128, TYPE_APPLICATION: 2, SOFT_INPUT_ADJUST_RESIZE: 16, SOFT_INPUT_STATE_HIDDEN: 3,
@@ -222,6 +238,12 @@ rt.register({
     ...stubs(0, "copyFrom(Landroid/view/WindowManager$LayoutParams;)I"),
     "setTitle(Ljava/lang/CharSequence;)V": function (this: { title: unknown }, title: unknown) { this.title = title ?? ""; },
     "getTitle()Ljava/lang/CharSequence;": function (this: { title: unknown }) { return this.title; },
+    "setFitInsetsSides(I)V": function (this: JWindowLayoutParams, value: number) { this.fitInsetsSides = value; },
+    "getFitInsetsSides()I": function (this: JWindowLayoutParams) { return this.fitInsetsSides; },
+    "setFitInsetsTypes(I)V": function (this: JWindowLayoutParams, value: number) { this.fitInsetsTypes = value; },
+    "getFitInsetsTypes()I": function (this: JWindowLayoutParams) { return this.fitInsetsTypes; },
+    "setFitInsetsIgnoringVisibility(Z)V": function (this: JWindowLayoutParams, value: number) { this.fitInsetsIgnoringVisibility = !!value; },
+    "isFitInsetsIgnoringVisibility()Z": function (this: JWindowLayoutParams) { return +this.fitInsetsIgnoringVisibility; },
   },
 });
 rt.markers("android/view/WindowManager");
