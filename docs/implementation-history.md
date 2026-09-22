@@ -17,7 +17,11 @@ decoder's variable-shift operand-swapping predicate, reversing VEXT's inputs in 
 tiers. Separating extraction from variable shifts fixes a minimal replay of the actual merge.
 The existing ARM/Thumb permutation test now checks this offset; it failed before the fix.
 ARM DDI 0406C.d A8.8.317 defines the operand order. Typecheck and 81 owning ARM/SIMD tests
-(1,025 assertions) pass. Fresh app validation is pending; this does not establish visual parity.
+(1,025 assertions) pass. A fresh normal-JIT Chrome run rendered the original ARM32 tutorial
+without the bounds warnings or corrupt text, accepted all required rope cuts, completed level 1,
+and displayed its reward screen. The NEON advertisement is now retained with those reached
+instruction repairs. Startup took roughly five minutes and gameplay was about one rendered
+frame per second; performance, settings, persistence and later-level acceptance remain open.
 
 Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this
 game and changed owners; the full serialized E2E matrix is reserved for the final candidate.
@@ -31,9 +35,9 @@ certificate SHA-256 `f51a71b121cfd93f25aa2e00eeb50a8ab5ef0e39648bc3b7a711a3f8938
 their base APKs differ, so ARM64 results do not establish original ARM32 compatibility.
 
 Retained startup fixes include bounded binary `memmem`, Thumb BFI/BFC, Java/NDK shared
-Looper identity, and guest-pointer-width EGL config arrays. Unity ARM32 still rejects the
-advertised CPU features. A temporary NEON advertisement exposes reached SIMD gaps while they are implemented. The
-diagnostic advertisement remains uncommitted; committed code does not yet advertise NEON.
+Looper identity, and guest-pointer-width EGL config arrays. Unity ARM32 rejected the former
+CPU feature list. Advertising NEON exposed the SIMD gaps documented below; the advertisement
+is retained after the original ARM32 build completed level 1.
 
 The ARM64 black screen was a shader rewrite defect. Swizzle helpers were inserted after the
 last `#extension`, inside a conditional extension block. WebGL removed that block, leaving
