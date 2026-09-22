@@ -366,7 +366,8 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
     const q = if (scalar) bits(w, 24, 1) else bits(w, 6, 1);
     if (q != 0 and (d | n | (if (scalar) @as(u32, 0) else m)) & 1 != 0) return fault(c, .undefined, w, pc);
     const op = bits(w, 8, 4);
-    if (w & 0xffb00010 == 0xf2b00000 and q == 0 and op >= 8) return fault(c, .undefined, w, pc);
+    const extract = w & 0xffb00010 == 0xf2b00000;
+    if (extract and q == 0 and op >= 8) return fault(c, .undefined, w, pc);
     const b = bits(w, 4, 1);
     const u = bits(w, 24, 1);
     if (!scalar and op == 15 and b == 1 and u == 0 and size & 1 == 0) {
@@ -378,13 +379,13 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
     }
     if (scalar and (size == 0 or (op & 1 != 0 and size != 2))) return fault(c, .undefined, w, pc);
     if (scalar and op & 0xe != 0 and op & 0xe != 4 and op & 0xe != 8) return fault(c, .unimplemented, w, pc);
-    const variable_shift = !scalar and op == 4 and b == 0;
+    const variable_shift = !scalar and !extract and op == 4 and b == 0;
     const accumulate = if (scalar) op == 1 or op == 5 else op == 13 and b == 1 and u == 0 and size & 1 == 0;
     const translated: u32 = if (scalar and op & 1 == 0)
         0x0e209400 | (size << 22) | (if (op == 8) @as(u32, 1 << 11) else if (op == 4) @as(u32, 1 << 29) else 0)
     else if (scalar)
         (if (op == 9) @as(u32, 0x2e20dc00) else 0x0e20d400 | (if (op == 5) @as(u32, 1 << 23) else 0))
-    else if (w & 0xffb00010 == 0xf2b00000)
+    else if (extract)
         0x2e000000 | (op << 11)
     else if (op == 8 and b == 0)
         0x0e208400 | (u << 29) | (size << 22)

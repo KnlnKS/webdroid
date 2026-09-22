@@ -9,6 +9,16 @@ Temporary /tmp evidence may expire. Committed regression fixtures are the durabl
 
 ## Cut the Rope repair (2026-09-22, in progress)
 
+The first original-ARM32 tutorial reached rendering with missing sprites, black text blocks
+and repeated invalid-bounds warnings. Unity's bounds predicate was correct; a live instruction
+watch found real negative infinities in the merged maximum coordinates. Its merge at
+`libunity.so+0x65fd26` uses VEXT with a four-byte offset. That encoding overlapped the shared
+decoder's variable-shift operand-swapping predicate, reversing VEXT's inputs in both execution
+tiers. Separating extraction from variable shifts fixes a minimal replay of the actual merge.
+The existing ARM/Thumb permutation test now checks this offset; it failed before the fix.
+ARM DDI 0406C.d A8.8.317 defines the operand order. Typecheck and 81 owning ARM/SIMD tests
+(1,025 assertions) pass. Fresh app validation is pending; this does not establish visual parity.
+
 Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this
 game and changed owners; the full serialized E2E matrix is reserved for the final candidate.
 Full Chrome runs at port 4091, 720×1280 / 320 dpi, alongside API 33 AVD `emulator-5560` at the
