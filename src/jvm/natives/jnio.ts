@@ -631,6 +631,14 @@ rt.register({
       return this;
     },
     "implReplaceWith(Ljava/lang/String;)V": () => {},
+    "decode(Ljava/nio/ByteBuffer;)Ljava/nio/CharBuffer;": async function (this: JCharsetDecoder, src: JBuffer) {
+      this.endian = null;
+      const out = viewBuffer(mkByteBuffer((src.lim - src.pos) * 2), JCharBuffer, 1);
+      const result = decodeBuffer(this, src, out, 1);
+      if (result.length) await vcall(result, "throwException", "()V");
+      out.lim = out.pos; out.pos = 0;
+      return out;
+    },
     "flush(Ljava/nio/CharBuffer;)Ljava/nio/charset/CoderResult;": () => CODER_UNDERFLOW,
     "decode(Ljava/nio/ByteBuffer;Ljava/nio/CharBuffer;Z)Ljava/nio/charset/CoderResult;":
       function (this: JCharsetDecoder, src: JBuffer, dst: JBuffer, end: number) { return decodeBuffer(this, src, dst, end); },
