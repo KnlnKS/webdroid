@@ -250,6 +250,7 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
     const b = bits(w, 4, 1);
     const u = bits(w, 24, 1);
     const size = bits(w, 20, 2);
+    const variable_shift = op == 4 and b == 0;
     const accumulate = op == 13 and b == 1 and u == 0 and size & 1 == 0;
     const translated: u32 = if (w & 0xffb00010 == 0xf2b00000)
         0x2e000000 | (op << 11)
@@ -257,6 +258,8 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
         0x0e208400 | (u << 29) | (size << 22)
     else if (op == 1 and b == 1)
         0x0e201c00 | (u << 29) | (size << 22)
+    else if (variable_shift)
+        0x0e204400 | (u << 29) | (size << 22)
     else if (op == 13 and size & 1 == 0 and b == 0)
         0x0e20d400 | (u << 29) | (bits(w, 21, 1) << 23)
     else if (op == 13 and size == 0 and b == 1 and u == 1)
@@ -268,8 +271,8 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
     // A32 D registers alias halves of Q registers; the upper A64 registers are scratch.
     const count: usize = if (q != 0) 16 else 8;
     @memcpy(c.v[16][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
-    @memcpy(c.v[17][0..count], @as([*]u8, @ptrCast(vreg(u64, c, n)))[0..count]);
-    @memcpy(c.v[18][0..count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..count]);
+    @memcpy(c.v[17][0..count], @as([*]u8, @ptrCast(vreg(u64, c, if (variable_shift) m else n)))[0..count]);
+    @memcpy(c.v[18][0..count], @as([*]u8, @ptrCast(vreg(u64, c, if (variable_shift) n else m)))[0..count]);
     if (accumulate) {
         // A32 VMLA/VMLS round the product before adding; A64 FMLA is fused.
         const multiplied = simd.exec(c, 0x2e20dc00 | (q << 30) | (18 << 16) | (17 << 5) | 19);
