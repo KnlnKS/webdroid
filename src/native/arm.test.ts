@@ -423,6 +423,19 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(36, 40))).toEqual([0xffff, 0, 0, 0]);
     }
   });
+  test("NEON integer comparison and multiplication retain unsigned lanes", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([1, 2, 3, -1, 2, 3, 4, 5, 0, 2, -1, 4], 32);
+    };
+    for (const execute of [
+      () => run([0xf364a3f0, 0xf260c9f2, BXLR], setup),
+      () => runThumb([0xff64, 0xa3f0, 0xef60, 0xc9f2, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(52, 56))).toEqual([0, -1, -1, 0]);
+      expect(Array.from(c.si.slice(56, 60))).toEqual([2, 6, 12, -5]);
+    }
+  });
   test("NEON core-register transfers extend scalar lanes and preserve neighbors", () => {
     const setup = (cpu: Cpu) => {
       cpu.si.set([0x8000ffff, 0x80000001], 36);
