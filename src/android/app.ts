@@ -33,6 +33,8 @@ import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./life
 
 export { fireActivityLifecycle } from "./lifecycle";
 
+rt.markers("android/bluetooth/BluetoothProfile$ServiceListener");
+
 class JTaskDescription extends JObj {
   label: string | null = null;
   icon: JBitmap | null = null;
@@ -177,6 +179,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "findViewById(I)Landroid/view/View;": function (this: JActivity, id: number) {
     return this.window.decor ? findById(this.window.decor, id) : null;
   },
+  "setShowWhenLocked(Z)V": function (this: JActivity, show: number) { return vcall(this.window, "setFlags", "(II)V", show ? 0x80000 : 0, 0x80000); },
   "requireViewById(I)Landroid/view/View;": requireViewById,
   "onStart()V": async function (this: JActivity) { this.started = true; return dispatchFragLifecycle(this, "onStart"); },
   "onResume()V": async function (this: JActivity) { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); },
@@ -609,6 +612,7 @@ for (const [name, methods, statics] of [
     "getSpatializer()Landroid/media/Spatializer;": () => { rt.link("android/media/Spatializer"); return new JSpatializer(); },
     "getStreamVolume(I)I": () => 5,
     "getStreamMaxVolume(I)I": () => 10,
+    "getStreamMinVolume(I)I": () => 0,
     "generateAudioSessionId()I": newAudioSessionId,
     "getRingerMode()I": () => 2,
     "isMusicActive()Z": isMusicActive,
