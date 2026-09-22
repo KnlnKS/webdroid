@@ -275,15 +275,12 @@ fn neonMisc(c: *Cpu, w: u32, pc: u32) Status {
         break :blk 0x0e212800 | (size << 22);
     } else if (w & 0xffbf0f10 == 0xf3bb0500)
         0x0ea1d800 | (bits(w, 7, 1) << 29)
-    else if (w & 0xffbf0f90 == 0xf3b90500)
-        0x0ea0d800
-    else if (w & 0xffbf0f10 == 0xf3b90700)
-        0x0ea0f800 | (bits(w, 7, 1) << 29)
-    else if (w & 0xffb30c10 == 0xf3b10000) blk: {
+    else if (w & 0xffb30810 == 0xf3b10000) blk: {
         const size = bits(w, 18, 2);
         const op = bits(w, 7, 3);
-        if (size == 3 or op == 5) return fault(c, .undefined, w, pc);
-        break :blk 0x0e200800 | ((8 + op / 2) << 12) | (size << 22) | ((op & 1) << 29);
+        const float = bits(w, 10, 1);
+        if (size == 3 or op == 5 or (float != 0 and size != 2)) return fault(c, .undefined, w, pc);
+        break :blk 0x0e200800 | ((8 + op / 2 + 4 * float) << 12) | (size << 22) | ((op & 1) << 29);
     } else if (w & 0xffb30e10 == 0xf3b00000) blk: {
         const op = bits(w, 7, 2);
         const size = bits(w, 18, 2);
@@ -293,7 +290,7 @@ fn neonMisc(c: *Cpu, w: u32, pc: u32) Status {
     const count: usize = if (q != 0) 16 else 8;
     const read_count = if (duplicate) 8 else if (narrow) 16 else count;
     @memcpy(c.v[18][0..read_count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..read_count]);
-    if (w & 0x0d00 == 0x0500) {
+    if (w & 0xffbf0c10 == 0xf3b90400 or w & 0xffbf0f10 == 0xf3bb0500) {
         const lanes: *[4]f32 = @ptrCast(&c.v[18]);
         for (lanes[0 .. count / 4]) |*lane| lane.* = fp.standard32(lane.*);
     }

@@ -512,14 +512,15 @@ describe("arm decoder", () => {
       cpu.s.set([-0, -2, NaN, -Infinity, 0, -3, 4, Infinity], 16);
     };
     for (const execute of [
-      () => run([0xf3f94764, 0xf3b927c4, 0xf2402f6c, 0xf2286f4a, BXLR], setup),
-      () => runThumb([0xfff9, 0x4764, 0xffb9, 0x27c4, 0xef40, 0x2f6c, 0xef28, 0x6f4a, 0x4770], setup),
+      () => run([0xf3f94764, 0xf3b927c4, 0xf2402f6c, 0xf2286f4a, 0xf3f96444, 0xf3f98644, 0xf3f9a4c4, 0xf3f9c5c4, BXLR], setup),
+      () => runThumb([0xfff9, 0x4764, 0xffb9, 0x27c4, 0xef40, 0x2f6c, 0xef28, 0x6f4a, 0xfff9, 0x6444, 0xfff9, 0x8644, 0xfff9, 0xa4c4, 0xfff9, 0xc5c4, 0x4770], setup),
     ]) {
       const c = execute();
       expect(Array.from(c.s.slice(40, 44))).toEqual([2, 0, Infinity, NaN]);
       expect(Array.from(c.s.slice(4, 8))).toEqual([-1, 2, NaN, -0]);
       expect(Array.from(c.s.slice(36, 40))).toEqual([0, -2, NaN, Infinity]);
       expect(Array.from(c.s.slice(12, 16))).toEqual([-0, -3, NaN, -Infinity]);
+      expect(Array.from(c.si.slice(44, 60))).toEqual([-1, 0, 0, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, -1, 0, -1]);
     }
   });
   test("NEON immediate shifts preserve signed, rounded and accumulating behavior", () => {
