@@ -16,6 +16,7 @@ import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 import { fontResource } from "./fonts";
 import { type JParcel, readString, writeString } from "./parcel";
 import { parcelCreator } from "./parcelable";
+import { annotatedResource } from "./text";
 
 export class JResources extends JObj {
   host!: Resources;
@@ -304,15 +305,23 @@ const stringOf = (res: Resources, id: number): string => rvString(res, res.ref(i
 const pluralOf = (res: Resources, id: number, n: number): string => pluralString(res, id, n) ?? (() => { throw notFound("Plural", id); })();
 const stringsOf = (res: Resources, id: number): string[] => res.bag(id) ? bagStrings(res, id) : (() => { throw notFound("String array", id); })();
 const getString = function (this: JResources, id: number) { return stringOf(this.host, id); };
+function resourceText(res: Resources, id: number): unknown {
+  const value = res.ref(id), pool = res.tbl(value.r ?? id)?.values;
+  return value.t === TV.STRING && pool ? annotatedResource(pool, value.d) : rvString(res, value);
+}
 const getColor = function (this: JResources, id: number) { return rvColor(this.host, this.host.ref(id), 0); };
 const resMethods: NativeSpec["methods"] = {
   "getString(I)Ljava/lang/String;": getString,
   "getString(I[Ljava/lang/Object;)Ljava/lang/String;": function (this: JResources, id: number, args: unknown[]) {
     return javaFormat(stringOf(this.host, id), args);
   },
-  "getText(I)Ljava/lang/CharSequence;": getString,
+  "getText(I)Ljava/lang/CharSequence;": function (this: JResources, id: number) {
+    const text = resourceText(this.host, id);
+    if (text == null) throw notFound("Text", id);
+    return text;
+  },
   "getText(ILjava/lang/CharSequence;)Ljava/lang/CharSequence;": function (this: JResources, id: number, def: unknown) {
-    return rvString(this.host, this.host.ref(id)) ?? def;
+    return resourceText(this.host, id) ?? def;
   },
   "getQuantityString(II)Ljava/lang/String;": function (this: JResources, id: number, n: number) {
     return pluralOf(this.host, id, n);

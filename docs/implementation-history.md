@@ -5292,3 +5292,13 @@ The first full unit run found three failures in Canvas semantic-text checks beca
 pattern check assumed a browser's CanvasPattern global. Guard that optional host constructor;
 all affected canvas, shader and text browser checks pass again. The remaining 1,257 tests passed
 in that run. Final whole-suite results follow after the candidate is frozen.
+
+The APK's “Learn more” string carries `annotation;url=…` over characters 116..125 in its
+binary resource pool, but Resources.getText returned the plain string. Preserve resource
+Annotation spans and their inclusive source endpoints as immutable SpannedString values.
+Both getText overloads retain their missing-resource behavior; getString still returns text.
+ChatGPT now creates its own link styling, and the Settings underline matches the AVD.
+Guard the string-pool no-style offset sentinel. This change handles annotation metadata;
+other resource style tags and style metadata from merged split pools remain limitations.
+The existing resource and span checks pass (12 tests, 55 assertions); no new test file was added.
+The preceding complete unit run passed all 1,261 tests, and the final candidate is rechecked below.

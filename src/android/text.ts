@@ -18,6 +18,7 @@ import { JLocaleList, readLocaleList } from "./resnative";
 import type { JLocale } from "../jvm/natives/jvalues";
 import { csText as javaCsText } from "../jvm/natives/jchars";
 import type { JPath } from "./path";
+import type { StringPool } from "./axml";
 
 class JAnnotation extends JObj { key: string | null = null; value: string | null = null; }
 async function writeAnnotation(this: JAnnotation, parcel: JObj) {
@@ -214,6 +215,22 @@ rt.register({
   },
 });
 class JSpannedString extends JSpanned {}
+export function annotatedResource(pool: StringPool, index: number): string | JSpanned {
+  const text = pool.get(index), styles = pool.styleOf(index);
+  if (!styles) return text;
+  const result = new JSpannedString(); result.text = text;
+  for (let i = 0; i < styles.length; i += 3) {
+    const tag = pool.get(styles[i]);
+    if (!tag.startsWith("annotation;")) continue;
+    for (const entry of tag.slice(11).split(";")) {
+      const equals = entry.indexOf("=");
+      if (equals < 0) continue;
+      const span = new JAnnotation(); span.key = entry.slice(0, equals); span.value = entry.slice(equals + 1);
+      result.spans.push({ span, start: styles[i + 1], end: styles[i + 2] + 1, flags: 33 });
+    }
+  }
+  return result.spans.length ? result : text;
+}
 const immutableSpanMethods = Object.fromEntries(Object.entries(spanMethods!).filter(([name]) => !name.startsWith("setSpan(") && !name.startsWith("removeSpan(") && name !== "<init>()V"));
 rt.register({
   name: "android/text/SpannedString", ctor: JSpannedString,
