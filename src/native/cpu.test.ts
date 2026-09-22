@@ -201,3 +201,21 @@ test("A64 mixed floating spills retain eight-byte slots and leave integer regist
     expect(actual).toEqual([12, ...Array.from({ length: 8 }, (_, i) => i + 0.125), -2.5, 23, Math.PI, 4.75]);
   } finally { cpu.dispose(); setA64(false); }
 });
+
+test("ARM signal entry clears Thumb IT state and restores it on return", async () => {
+  setA64(false);
+  const cpu = new Cpu(new JThread(), "signal-it"), address = mem.reserve(4096, 4096);
+  mem.u16.set([0x2107, 0x6021, 0x4770], address >>> 1);
+  cpu.w[8] = address + 64;
+  cpu.cpsr = 0x820;
+  const previous = sigHandlers.get(30);
+  sigHandlers.set(30, { fn: address | 1, flags: 0, mask: 0n });
+  try {
+    await cpu.deliver(30);
+    expect(mem.ld32(address + 64)).toBe(7);
+    expect(cpu.cpsr).toBe(0x820);
+  } finally {
+    if (previous) sigHandlers.set(30, previous); else sigHandlers.delete(30);
+    cpu.dispose();
+  }
+});

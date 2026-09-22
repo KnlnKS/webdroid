@@ -325,6 +325,7 @@ export class Cpu {
     saved.set(this.bytes.subarray(0, ARCH_SIZE));
     const spending = this.pending, sstate = this.state;   // the frame below is parked in its host call until we return
     this.excl = 0;
+    if (!this.a64) this.cpsr &= ~0x0600fc00;
     let n = 0, nv = 0;
     const stack: (number | bigint)[] = [];
     const nregs = this.a64 ? 8 : 4;
