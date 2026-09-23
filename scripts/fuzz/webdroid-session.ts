@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
+import { device } from "../../src/shell/config";
 
 export type WebdroidSession = {
   origin: string;
@@ -61,7 +62,7 @@ export async function startWebdroid(apkPath: string, options: WebdroidOptions = 
     const page = await context.newPage();
     page.on("pageerror", (error) => errors.push(String(error)));
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
-    const query = new URLSearchParams({ apk, screen: "1080x2160@480" });
+    const query = new URLSearchParams({ apk, screen: `${device.width}x${device.height}@${device.densityDpi}` });
     if (options.coverage !== false) query.set("fuzzCoverage", "1");
     await page.goto(`${origin}/?${query}`, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await page.waitForFunction(() => Boolean(globalThis.wd?.app()), null, { timeout: 60_000 });

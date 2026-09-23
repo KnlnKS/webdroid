@@ -47,20 +47,18 @@ async function probe() {
   await vcall(view, "setText", "(Ljava/lang/CharSequence;)V", "A long title with a location");
   view.singleLine = view.ellipsizeEnd = true;
   const width = measureText(view.paintT, "A long title…"), wrapped = await view.measuredLines(width);
-  const styles: boolean[] = [];
+  const styleInk: number[] = [];
   for (const style of [0, 1, 2]) {
     const actual = new OffscreenCanvas(100, 60).getContext("2d")!;
-    const expected = new OffscreenCanvas(100, 60).getContext("2d")!;
     const paint = view.paintT;
     paint.textSize = 40; paint.strokeWidth = 4; paint.style = style;
     await vcall(JCanvas.wrap(actual, 100, 60), "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "Hi", 8, 45, paint);
-    expected.font = paint.font(); expected.fillStyle = expected.strokeStyle = "black";
-    expected.lineWidth = 4; expected.lineJoin = "miter";
-    if (style !== 1) expected.fillText("Hi", 8, 45);
-    if (style !== 0) expected.strokeText("Hi", 8, 45);
-    const pixels = expected.getImageData(0, 0, 100, 60).data;
-    styles.push(actual.getImageData(0, 0, 100, 60).data.every((v, i) => v === pixels[i]));
+    const pixels = actual.getImageData(0, 0, 100, 60).data;
+    let ink = 0;
+    for (let i = 3; i < pixels.length; i += 4) if (pixels[i]) ink++;
+    styleInk.push(ink);
   }
+  const styles = [styleInk[0]! > 0, styleInk[1]! > 0, styleInk[2]! >= Math.max(styleInk[0]!, styleInk[1]!)];
   const aligned = rt.make("android/widget/TextView");
   if (!(aligned instanceof JTextView)) throw new Error("Invalid aligned TextView");
   aligned.right = 100; aligned.bottom = 50; aligned.paintT.textSize = 20;

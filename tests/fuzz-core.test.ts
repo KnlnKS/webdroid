@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { PNG } from "pngjs";
 import { serveCases } from "../scripts/fuzz/case-server";
+import { compareResult, graphicsPrecisionDeltas } from "../scripts/fuzz/compare";
 import { generateApiCases, generateGraphicsCases } from "../scripts/fuzz/generate";
 import { injectedProbeFailure } from "../scripts/fuzz/injected";
 import { minimizeCaseBatched, reproducesTwice } from "../scripts/fuzz/minimize";
-import { GRAPHICS_OPERATIONS, SCHEMA_VERSION, validateProbeCase, validateProbeResult, type GraphicsCase } from "../scripts/fuzz/model";
+import { GRAPHICS_OPERATIONS, SCHEMA_VERSION, validateProbeCase, validateProbeResult, type GraphicsCase, type ProbeResult } from "../scripts/fuzz/model";
 
 describe("fuzz campaign core", () => {
   test("fixed seeds generate identical typed cases", () => {
@@ -63,5 +65,23 @@ describe("fuzz campaign core", () => {
     const a = injectedProbeFailure(first).failure!, b = injectedProbeFailure(second).failure!;
     expect(a.matchKey).toBe(b.matchKey);
     expect(a.fingerprint).not.toBe(b.fingerprint);
+  });
+
+  test("graphics state reports tolerated float32 differences", () => {
+    const input: GraphicsCase = { schemaVersion: 1, id: "float-state", kind: "graphics", width: 1, height: 1, commands: [] };
+    const png = PNG.sync.write(new PNG({ width: 1, height: 1 })).toString("base64");
+    const state = { width: 1, height: 1, saveCount: 1, center: 0, png,
+      matrix: [1, 0.7867724], renderNode: [1, 1, 0.7023938], clip: [0, 0, 1, 1] };
+    const result = (value: typeof state): ProbeResult => ({ schemaVersion: 1, id: input.id, kind: "graphics", outcome: "value", value });
+    const near = { ...state, matrix: [1, 0.7867723703384399], renderNode: [1, 1, 0.7023937702178955] };
+    expect(compareResult(input, result(state), result(near))).toBeNull();
+    expect(graphicsPrecisionDeltas(result(state), result(near))).toEqual({});
+    const rounded = { ...state, matrix: [1, Math.fround(0.7867724) + 5.960464477539063e-8] };
+    expect(compareResult(input, result(state), result(rounded))).toBeNull();
+    expect(graphicsPrecisionDeltas(result(state), result(rounded)).matrix).toBeGreaterThan(0);
+    expect(compareResult(input, result(state), result({ ...state,
+      renderNode: [1, 1, Math.fround(0.7023938) + 5.960464477539063e-8] }))?.matchKey)
+      .toBe("graphics:state:renderNode");
+    expect(compareResult(input, result(state), result({ ...near, center: 1 }))?.matchKey).toBe("graphics:state:center");
   });
 });

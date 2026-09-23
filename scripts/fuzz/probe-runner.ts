@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { androidTool } from "../android-sdk";
+import { device } from "../../src/shell/config";
 import { readProcesses } from "../../tests/e2e/lib/processes";
 import { serveCases } from "./case-server";
 import type { ProbeCase, ProbeResult } from "./model";
@@ -8,7 +9,7 @@ import { isWebdroidProcessFrame, startWebdroid } from "./webdroid-session";
 const PROBE_APK = "fuzz-cache/WebdroidFuzzProbe.apk";
 const PROBE_PACKAGE = "org.webdroid.fuzz";
 const PROBE_ACTIVITY = `${PROBE_PACKAGE}/.ProbeActivity`;
-const preparedOracles = new Map<string, { sdk: string; fingerprint: string }>();
+const preparedOracles = new Map<string, { sdk: string; fingerprint: string; screen: string }>();
 
 export type PlatformRun = {
   platform: "android" | "webdroid";
@@ -36,12 +37,16 @@ export async function runAndroid(cases: readonly ProbeCase[], serial: string): P
   const at = (...args: string[]) => command([adb, "-s", serial, ...args]);
   let environment = preparedOracles.get(serial);
   if (!environment) {
-    const [sdk, fingerprint] = await Promise.all([
+    const [sdk, fingerprint, size, density] = await Promise.all([
       at("shell", "getprop", "ro.build.version.sdk"), at("shell", "getprop", "ro.build.fingerprint"),
+      at("shell", "wm", "size"), at("shell", "wm", "density"),
     ]);
     if (sdk !== "33") throw new Error(`oracle ${serial} is API ${sdk}, expected API 33`);
+    const screen = `${size.match(/(\d+x\d+)\s*$/)?.[1]}@${density.match(/(\d+)\s*$/)?.[1]}`;
+    const expected = `${device.width}x${device.height}@${device.densityDpi}`;
+    if (screen !== expected) throw new Error(`oracle ${serial} screen is ${screen}, expected ${expected}; run scripts/fuzz/setup-oracle.sh`);
     await at("install", "-r", "-t", PROBE_APK);
-    environment = { sdk, fingerprint };
+    environment = { sdk, fingerprint, screen };
     preparedOracles.set(serial, environment);
   }
   const server = serveCases(cases);

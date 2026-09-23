@@ -1,3 +1,23 @@
+# Fuzzer compatibility follow-up — 2026-09-23
+
+Integrated into `main` from `codex/fuzzer-compatibility`. API 33 oracle:
+emulator-5554 at 1080×2160, 480 dpi.
+The API 33 1,000-case API campaign has no differences. Both 100-case graphics campaigns
+(seeds `20260923` and `20260924`) now have no reported differences, as do all 38 retained
+minimized graphics findings and 42 focused color-glyph probes. The fixes cover software
+shape coverage, inverted paths, clipping, Android text raster and line wrapping. They use
+platform geometry and font data rather than APK-specific behavior. No visual golden changed.
+See implementation history for mechanisms, verification and evidence limits.
+The renderer review follow-up isolates bitmap raster policy and crops CanvasKit text transfers.
+Graphics campaigns now record tolerated float32 state deltas separately: 7 cases in seed
+`20260923` and 14 in seed `20260924`. Larger 1,000-case graphics campaigns still have
+58 differences for seed `20260925` and 74 for seed `20260926` after the current repairs.
+Exact matrix and clip state, raster edge coverage, small text, and arbitrary-transform
+color-glyph parity remain open. The zero-difference 100-case campaigns therefore do not
+establish graphics parity.
+
+---
+
 # Cut the Rope FPS follow-up — 2026-09-23
 
 Branch: `codex/cut-the-rope-fps`. Starting revision: `756491fb`.

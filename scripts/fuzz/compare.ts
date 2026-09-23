@@ -11,9 +11,41 @@ function graphicsValue(value: unknown): GraphicsValue | null {
     typeof input.center === "number" && typeof input.png === "string" ? input as GraphicsValue : null;
 }
 
+function stateValueEqual(key: string, expected: JsonValue, actual: JsonValue): boolean {
+  if ((key === "matrix" || key === "pathBounds" || key === "renderNode") && Array.isArray(expected) && Array.isArray(actual)) {
+    return expected.length === actual.length && expected.every((value, index) => {
+      const other = actual[index];
+      return typeof value === "number" && typeof other === "number" &&
+        (key === "matrix"
+          ? Math.abs(value - other) <= 2e-6 * Math.max(1, Math.abs(value), Math.abs(other))
+          : Math.fround(value) === Math.fround(other));
+    });
+  }
+  return stableJson(expected) === stableJson(actual);
+}
+
+export function graphicsPrecisionDeltas(oracle: ProbeResult, actual: ProbeResult): Record<string, number> {
+  if (oracle.outcome !== "value" || actual.outcome !== "value") return {};
+  const expected = graphicsValue(oracle.value), got = graphicsValue(actual.value);
+  if (!expected || !got) return {};
+  const deltas: Record<string, number> = {};
+  for (const key of ["matrix", "pathBounds", "renderNode"]) {
+    const left = expected[key], right = got[key];
+    if (!Array.isArray(left) || !Array.isArray(right) || !stateValueEqual(key, left, right)) continue;
+    let difference = 0;
+    for (let index = 0; index < left.length; index++) {
+      const value = left[index], other = right[index];
+      if (typeof value === "number" && typeof other === "number" && Math.fround(value) !== Math.fround(other))
+        difference = Math.max(difference, Math.abs(value - other));
+    }
+    if (difference) deltas[key] = difference;
+  }
+  return deltas;
+}
+
 function stateDifferenceKeys(expected: Record<string, JsonValue>, actual: Record<string, JsonValue>): string[] {
   return [...new Set([...Object.keys(expected), ...Object.keys(actual)])]
-    .filter((key) => !(key in expected) || !(key in actual) || stableJson(expected[key]!) !== stableJson(actual[key]!))
+    .filter((key) => !(key in expected) || !(key in actual) || !stateValueEqual(key, expected[key]!, actual[key]!))
     .sort();
 }
 
@@ -43,8 +75,9 @@ export function compareResult(input: ProbeCase, oracle: ProbeResult, actual: Pro
   if (!expected || !got) return { kind: "harness-error", fingerprint: "graphics:bad-result", detail: "graphics result has an invalid shape" };
   const { png: expectedPng, ...expectedState } = expected;
   const { png: gotPng, ...gotState } = got;
-  if (stableJson(expectedState) !== stableJson(gotState)) {
-    const matchKey = `graphics:state:${stateDifferenceKeys(expectedState, gotState).join(",")}`;
+  const differing = stateDifferenceKeys(expectedState, gotState);
+  if (differing.length) {
+    const matchKey = `graphics:state:${differing.join(",")}`;
     return {
     kind: "value-mismatch", fingerprint: graphicsFingerprint(input, matchKey), matchKey,
     detail: `${stableJson(expectedState)} != ${stableJson(gotState)}`,

@@ -29,6 +29,82 @@ their tested revision, not necessarily current status.
   Lichess pthread faults, and Flappy Bird page-status errors need matching-baseline
   assessment, not silent waivers.
 
+## API-33 fuzz compatibility — 2026-09-23
+
+Branch `codex/fuzzer-compatibility` starts at `756491fb`. The unchanged signed probe
+(`8e8cc2f9` SHA-256 prefix) ran on API-33 emulator-5554, fingerprint
+`google/sdk_gphone64_arm64/emu64a:13/TE1A.240213.009/12342917:userdebug/dev-keys`.
+The AVD retained an old 720×1280, 320 dpi override even after its config was rewritten;
+initial density and clip comparisons were invalid. Oracle setup now applies the active
+1080×2160, 480 dpi profile and the runner rejects mismatched geometry. Webdroid's
+probe URL uses that same profile. The harness now tolerates only small float serialization
+differences in Matrix, path-bound and RenderNode state; pixels and integer state remain exact.
+
+The matched-profile 20-case graphics campaign at seed `1592594996` retained 19 failures
+after the first Matrix skew repair. The final candidate retains six: two center-pixel
+differences under compound transforms, one rotated `clipRect` bound, and three small
+pixel differences. The clip tracker keeps a conservative device-space rectangle, so
+a rotated clip may still report a larger bound than Android. Minimized bundles are in
+`fuzz-results/graphics-final/` in this worktree. A 1,000-case API campaign with the same
+seed has zero differences. These counts cover generated paths, not arbitrary graphics
+or APK behavior.
+
+The fixes add Matrix skew through the existing affine operations; restore Paint's 12 px
+default and zero text size; preserve API-33 alpha conversion; ignore nonpositive circle
+radii; include circle radii in Path bounds; normalize reversed rectangle, oval, arc and
+round-rectangle bounds; and retain distinct horizontal and vertical corner radii.
+Canvas clipping now tracks rectangular bounds across save/restore and shares one bounds
+implementation with the AOSP native delegate. Chrome needs an off-canvas clip path for
+empty or singular-transform clips; a zero-size Canvas2D path leaves its clip unchanged.
+
+Verification: typecheck, all 1,325 unit tests, deterministic fuzz smoke, zero method
+failures compiling the probe APK, and focused framework exercises pass. The API-35
+framework cut reports 204/222 declared graphics natives registered; its exercised paths
+report no new missing delegate. The 39-step FitNotes fast lane passes with all process
+diagnostics `ok`, no new missing APIs/errors/native requirements or timeouts, and main
+ticks advancing from 13 to 1001. Its 12.2-second wall time is a functional check, not a
+controlled baseline performance comparison. The serialized six-flow fast lane completed
+all steps but passed 5/6 flows: Doodle Jump missed its 30 fps gameplay gate once at
+29 fps, and its full-evidence rerun recorded 28–30 fps at several checkpoints. With
+one flow at a time and the same screen profile, the starting `756491fb` revision passed
+at 31 fps and the candidate passed at 37 fps on an isolated repeat. This does not
+reproduce a performance regression, but a single pair does not explain the variability.
+The full serialized E2E matrix and a matched CPU microbenchmark were not run for this
+pass. Goldens were not changed.
+
+Follow-up on the six retained graphics cases: the same 20-case seed now has zero
+differences, as does a fresh 1,000-case API run. The causes were inverse Path fill
+types being discarded, non-AA clip bounds rounding outward instead of to the
+nearest device pixel, reversed arc bounds being normalized like oval bounds,
+zero-width stroked round rectangles being dropped, Canvas2D `source-in` clearing
+outside a filled rectangle, and bitmap hairline coverage under compound transforms.
+The bitmap hairline path follows Android Skia's 26.6 endpoint and 16.16 slope
+stepping for plain non-AA rectangle strokes. The inverse nonzero Path uses the
+existing flattened path boolean operation, so curved edges remain approximate.
+Other blend shapes and filtered hairlines retain the general Canvas2D path.
+
+The follow-up passed typecheck, all 1,325 unit tests, graphics fuzz smoke, 33/33
+Canvas and 43/43 Path framework native registration checks, and serialized
+FitNotes/Calculator M fast E2E flows. A paired visible-browser comparison for
+software bitmap contexts (`willReadFrequently`) passed both flows with either
+setting: 15.4 seconds for the new setting and 15.6 for the old one. This small
+sample establishes no app-level speedup. No goldens changed.
+
+A fresh API-33 sweep at seed `20260923` found 36 graphics differences in 100
+generated cases. The harness retained its maximum of 20 distinct minimized
+fingerprints and replayed each twice. These are not 20 proven independent causes:
+fingerprints include command sequences, and the run stopped retaining after 20.
+Minimized bundles are in `fuzz-results/graphics-next-20260923/` in this worktree.
+The clearest cases are a cubic Path combined with a circle whose filled region
+differs across roughly 30% of pixels (`-11` bundle), and translation after a
+singular skew that Android retains in its Canvas matrix but Webdroid loses
+(`-10` bundle). Other retained cases involve Path fill and center pixels,
+non-AA lines, text and View text rendering, Drawable alpha/compositing, and
+degenerate arcs or round rectangles. Pixel differences range from sub-percent
+edge coverage to substantial shape changes; each needs cause-level diagnosis
+before a platform change. The matching fresh 1,000-case API run had zero
+differences, but its generator exercises only seven API recipes.
+
 ## JVM, DEX and process ownership
 
 - Main-thread identity is not main-queue ownership. Boot, providers, application
@@ -477,3 +553,141 @@ two control settle timeouts and seven `Matrix.mapRect` draw errors; Flappy Bird 
 unavailable auxiliary snapshots while rendering all seven steps. Lichess's Flutter pthread
 fault and Flappy Bird's page-status error remain. The Cut gameplay run above is the direct
 game acceptance check because the matrix has no Cut flow. No visual golden was changed.
+
+## Fuzzer compatibility follow-up — 2026-09-23
+
+An API 33 fuzzer campaign at 1080×2160 and 480 dpi found no API difference in 1,000
+generated cases, but 36 graphics differences in 100 cases with seed `20260923`.
+Twenty graphics failures were retained and minimized. The six retained failures from the
+preceding graphics campaign were also kept as regression inputs. All oracle comparisons
+used unchanged generated commands against Android and browser implementations.
+
+Path circles and ovals now begin separate contours. ColorDrawable uses Android's alpha
+modulation, while Paint keeps its API 33 observable narrowed alpha separate from the
+opaque raster alpha used for out-of-range `setAlpha` input. TextView bounds clip its
+own text and zero-sized child drawing. Canvas preserves translation after singular
+transforms, rounds rotation through float32 radians, and tracks rectangular clip
+intersections in device space. Bitmap hairlines use the existing pixel raster helper;
+reversed full-sweep arcs, empty ovals and zero-extent round rectangles follow the
+oracle. The bundled regular Roboto face now matches the API 33 emulator's static face.
+These changes use platform geometry and state rather than APK names or command sequences.
+
+All six preceding retained graphics cases and 18 of the 20 new retained cases replay
+without a difference. The original 100-case graphics campaign has 20 differences
+after the fixes, down from 36. Most residual cases differ in antialiased edge or glyph
+coverage. The two remaining minimized cases isolate a small `drawText` glyph and a
+one-pixel-high, full-sweep arc; Android Skia and Chrome Canvas2D assign different pixel
+coverage. One original case differs at the center by a single alpha-1 pixel on a
+transformed stroked path. These are real output differences, not treated as passing
+operations. Matching every coverage value would require a general Skia-compatible
+raster path; shape-specific pixel substitutions would compromise arbitrary-APK behavior.
+
+The final candidate passes typecheck, the 1,325-test suite (27,577 assertions), fuzzer
+smoke, and all declared Canvas, Paint and Path framework delegates (33/33, 86/86 and
+43/43). FitNotes and Calculator M fast E2E flows pass 39/39 and 8/8 steps. All these
+checks, plus retained and original campaign replays, ran after the final code edits.
+
+## Fuzzer renderer completion — 2026-09-23
+
+The follow-up kept the API 33 oracle and generated commands fixed. The original graphics
+seed `20260923` had 20 differences after the preceding repairs. A fresh 100-case seed
+`20260924` found 12 more, including antialiased text, inverse paths, non-antialiased
+shapes, rotated clip bounds and color emoji under skew. Both full seeds now replay with
+0/100 differences. All 38 minimized findings from the two seeds and preceding campaign
+replay with no difference. The earlier 1,000-case API seed still had no differences;
+these changes do not add API delegates. No APK bytes or visual goldens changed.
+
+Small software bitmaps now use pixel-center coverage for non-antialiased fills and a
+four-by-four coverage grid for one-pixel-high antialiased ellipses. Fill-and-stroke joins
+are composed as one binary mask when antialiasing is disabled. Inverse winding fills
+and positive-width inverse strokes render from their complements; zero-width inverse
+strokes stay on the source contour. Hairline paths draw in device space, and rotated
+clip bounds scan pixel centers. Pixel-aligned ordinary rectangles bypass the sampling
+path. These cases were compared against Android with the same transforms and Paint state.
+
+CanvasKit 0.38 renders eligible default Roboto text in small bitmaps. Android's static
+Roboto face, ligatures, malformed surrogate replacement and white-glyph coverage were
+matched from direct oracle probes. TextView line-fit decisions use rounded measured
+widths, preserving the unrounded width for layout. Noto Color Emoji uses the same font
+file as the API 33 emulator (matching SHA-256). Its COLRv1 clip records are read from
+the font; transform-dependent clipping accounts for the remaining color-layer edge
+differences. This is an empirical raster correction, not a claim of byte-identical
+Skia output for every matrix or font. Forty-two targeted emoji probes covering seven
+glyphs at sizes 12 and 24 and several skew matrices have no reported difference;
+separate rocket probes at sizes 8–32 also pass. The normal
+full-screen software draw path remains Canvas2D; CanvasKit text is capped at 250,000
+bitmap pixels and starts loading alongside the APK and fonts.
+
+Typecheck, FitNotes and fuzz-probe smoke compilation pass with zero method failures.
+Canvas, Paint and Path have 33/33, 86/86 and 43/43 declared native coverage in the
+focused framework check. FitNotes text comparison passes 6/6 paragraphs. The serialized
+FitNotes and Calculator M runs render 39/39 and 8/8 steps, with no newly missing API,
+runtime error, required native, layout error or draw error. FitNotes still has a 39.34%
+content pixel difference against its app golden; the fuzzer result does not establish
+whole-app visual parity. The existing browser test's Paint-style assertion now checks
+visible fill/stroke behavior instead of demanding Chrome's exact glyph raster.
+
+## Fuzzer renderer code-quality review — 2026-09-23
+
+CanvasKit loading now falls back to Canvas2D if the optional renderer fails, so an
+asset or Wasm failure cannot abort APK boot. Canvas and TextView now share the same
+Paint eligibility check for bitmap text. Typecheck, 14 focused text/fuzz tests and
+the deterministic fuzz smoke pass after these changes.
+
+The review follow-up moved bitmap shape coverage and offscreen composition into
+`bitmap-raster.ts`; `graphics.ts` fell from 2,785 to 2,616 lines. CanvasKit text now reads
+and uploads only the transformed glyph bounds, with a growing reusable staging canvas.
+Both fresh API-33 100-case graphics campaigns still report zero compatibility
+differences, with diagnostics present for all three browser processes and no browser
+errors. Typecheck, 20 focused tests and FitNotes smoke compilation (zero method
+failures) pass. The full test and E2E matrix were not repeated for this renderer refactor.
+
+The graphics comparator now records tolerated exact float32 state deltas separately in
+each campaign file. Replaying the two 100-case campaigns records 7 and 14 matrix cases
+respectively, though both retain zero differences under the documented `2e-6` relative
+tolerance. Their largest absolute deltas are `0.0000152587890625` and
+`0.00006103515625`. Path bounds and RenderNode state now compare by exact float32
+value; replaying both campaigns after that change still reports zero differences.
+Skia-style float32 matrix arithmetic matched most sampled states
+in an isolated experiment, but native `sinf` and translation rounding still differed;
+changing Canvas transforms without matching the raster path was not justified.
+
+The COLRv1 clip correction remains empirical. A direct clip to the font's ClipBox was
+tested against the API-33 oracle and mismatched a retained rocket/skew case plus three
+fresh visible emoji probes, so that replacement was reverted. The existing correction
+uses font records and transform values, never an APK identity, but arbitrary-transform
+emoji parity and exact matrix-state parity remain unresolved.
+
+## Larger graphics campaigns — 2026-09-23
+
+An unchanged API-33 probe ran 1,000 generated graphics cases in each of seeds `20260925`
+and `20260926`. The first campaign began with 76 reported differences; the current branch
+replays at 58. The second found 75 and replays at 74. Both earlier 100-case campaigns
+still replay with zero differences. The second large campaign recorded 110 tolerated
+float32 state deltas. Browser diagnostics arrived from all three processes with no
+reported missing native, Java or draw errors, so these are observed rendering and state
+differences rather than missing telemetry.
+
+Generic repairs in this pass keep zero-width bitmap hairlines in device space, preserve
+inverse even-odd fills under singular matrices, keep Roboto ligatures together while
+wrapping, and use float32 canvas transforms when inverting clip bounds. Solid opaque
+`SRC_IN` uses source-atop to preserve pixels outside the shape; transparent source-in
+erases through shape coverage; intermediate alpha uses a bounded shape mask and the
+destination's alpha. Sampled rectangle fills exclude left-edge ties. Singular hairline
+rectangles draw nothing, as confirmed against four direct Android probes. Inverse
+fill-and-stroke paths with zero stroke width use the same bitmap complement as fills.
+RenderNode alpha snaps to zero or one within the 0.001 boundary observed in direct
+API-33 probes. The source-in compositor reuses the bitmap mask builder and is capped at
+250,000 pixels; ordinary source-over drawing does not allocate its layers.
+
+The 1,000-case replays checked every generated input, not just retained failures, and
+found no newly failing case against either campaign's initial oracle comparison.
+Typecheck, all 1,325 tests (27,581 assertions), FitNotes smoke compilation with
+zero method failures, and the Canvas/Paint framework checks passed after the edits.
+No golden changed.
+The current comparison still reports 132 differences across the two larger graphics
+campaigns. Many are one-pixel glyph or antialias coverage differences, while others
+involve clip and matrix state or Porter-Duff edge behavior. A direct device-bound
+shortcut for axis-aligned clip polygons fixed one clip case but introduced three new
+cases in the 1,000-case replay, so it was reverted. Full arbitrary-APK or pixel parity
+is not established.

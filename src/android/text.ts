@@ -724,7 +724,7 @@ rt.register({ name: "android/text/style/ForegroundColorSpan", ctor: JForegroundC
   ...spanHierarchy["android/text/style/ForegroundColorSpan"], methods: {
     "<init>(I)V": function (this: JForegroundColorSpan, color: number) { this.color = color; },
     "getForegroundColor()I": function (this: JForegroundColorSpan) { return this.color; },
-    "updateDrawState(Landroid/text/TextPaint;)V": function (this: JForegroundColorSpan, paint: JTextPaint) { paint.color = this.color; },
+    "updateDrawState(Landroid/text/TextPaint;)V": function (this: JForegroundColorSpan, paint: JTextPaint) { paint.setColorValue(this.color); },
   },
 });
 
@@ -776,7 +776,7 @@ export function drawStyledText(src: unknown, text: string, start: number, canvas
     canvas.ctx.save();
     try {
       for (let i = 0; i < edges.length - 1; i++) {
-        copyTextPaint(paint, p); p.color = color; p.textAlignN = 0;
+        copyTextPaint(paint, p); p.setColorValue(color); p.textAlignN = 0;
         for (const r of spans) if (r.start <= edges[i] && r.end > edges[i]) {
           const pending = vcallMaybe(r.span, "updateDrawState", "(Landroid/text/TextPaint;)V", p);
           if (pending instanceof Promise) await pending;

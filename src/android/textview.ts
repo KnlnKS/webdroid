@@ -81,7 +81,7 @@ export class JTextView extends JView {
   constructor() {
     super();
     this.paintT.textSize = device.dp(14); // AOSP TextView default, 14sp
-    this.paintT.color = -16777216;
+    this.paintT.setColorValue(-16777216);
   }
   updateLinkColor() {
     if (!this.linkColors) return;
@@ -611,6 +611,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     this.layoutWidthFor = w;
   },
   "onDraw(Landroid/graphics/Canvas;)V": async function (this: JTextView, cv: JCanvas) {
+    if (this.width() <= 0 || this.height() <= 0) return;
     const thread = curThread, ctx = cv.ctx;
     const display = this.displayText();
     const resolved = vcallOn(thread, this, "getTextAlignment", "()I");
@@ -648,8 +649,10 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (!layout) return;
     const vg = gravityV(this.gravityT), height = Math.max(layoutHeight(layout), this.textHeight(1));
     const y = vg === 16 ? (contentB - contentT - height) / 2 + contentT : vg === 80 ? contentB - height : contentT;
-    this.paintT.color = cslColor(showHint ? this.hintColors ?? this.colors : this.colors, this.drawableState());
-    ctx.save(); ctx.translate(contentL, y);
+    this.paintT.setColorValue(cslColor(showHint ? this.hintColors ?? this.colors : this.colors, this.drawableState()));
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, 0, this.width(), this.height()); ctx.clip();
+    ctx.translate(contentL, y);
     try {
       const drawn = callOn(thread, () => drawTextViewLayout(layout, cv, hg));
       if (drawn instanceof Promise) await drawn;

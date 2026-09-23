@@ -11,6 +11,8 @@ test("path copies retain contours and fill rules without sharing mutable geometr
   await vcall(source, "moveTo", "(FF)V", 10, 20);
   await vcall(source, "lineTo", "(FF)V", 30, 40);
   source.fillRule = "evenodd";
+  source.inverseFill = true;
+  expect((await vcall(source, "getFillType", "()Landroid/graphics/Path$FillType;") as { ename: string }).ename).toBe("INVERSE_EVEN_ODD");
   const copy = await newObj("android/graphics/Path", "(Landroid/graphics/Path;)V", source) as JPath;
   const target = rt.make("android/graphics/Path") as JPath;
   await vcall(target, "set", "(Landroid/graphics/Path;)V", copy);
@@ -18,7 +20,7 @@ test("path copies retain contours and fill rules without sharing mutable geometr
   await vcall(target, "rLineTo", "(FF)V", 5, 6);
   expect(target.ops.at(-1)).toEqual(["l", 35, 46]);
   await vcall(target, "close", "()V");
-  expect([target.curX, target.curY, target.fillRule]).toEqual([10, 20, "evenodd"]);
+  expect([target.curX, target.curY, target.fillRule, target.inverseFill]).toEqual([10, 20, "evenodd", true]);
   await vcall(copy, "offset", "(FF)V", 100, 200);
   expect(source.ops).toEqual([["m", 10, 20], ["l", 30, 40]]);
   expect(target.ops.slice(0, 2)).toEqual(source.ops);

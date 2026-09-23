@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { compareResult } from "./compare";
+import { compareResult, graphicsPrecisionDeltas } from "./compare";
 import { generateApiCases, generateGraphicsCases } from "./generate";
 import { minimizeCaseBatched, reproducesTwice } from "./minimize";
 import { sameFailure, validateFailure, validateProbeCase, validateProbeResult, type Failure, type ProbeCase, type ProbeResult } from "./model";
@@ -40,7 +40,7 @@ async function replayFailure(input: ProbeCase, serial: string, expected: Failure
   return sameFailure(expected, failure) ? { input, failure: failure!, oracle: oracle.results[0]!, webdroid: webdroid.results[0]! } : null;
 }
 
-export async function runCampaign(options: CampaignOptions): Promise<{ failures: number; bundles: string[] }> {
+export async function runCampaign(options: CampaignOptions): Promise<{ failures: number; precisionDeltas: number; bundles: string[] }> {
   const webRunner = new WebdroidProbeRunner();
   try {
     return await runCampaignWithRunner(options, webRunner);
@@ -49,7 +49,7 @@ export async function runCampaign(options: CampaignOptions): Promise<{ failures:
   }
 }
 
-async function runCampaignWithRunner(options: CampaignOptions, webRunner: WebdroidProbeRunner): Promise<{ failures: number; bundles: string[] }> {
+async function runCampaignWithRunner(options: CampaignOptions, webRunner: WebdroidProbeRunner): Promise<{ failures: number; precisionDeltas: number; bundles: string[] }> {
   const inputs = options.kind === "api"
     ? generateApiCases(options.seed, options.cases)
     : generateGraphicsCases(options.seed, options.cases);
@@ -58,6 +58,10 @@ async function runCampaignWithRunner(options: CampaignOptions, webRunner: Webdro
     const failure = failureFor(input, oracle.results[index]!, webdroid.results[index]!);
     return failure ? [{ input, failure, oracle: oracle.results[index]!, webdroid: webdroid.results[index]! }] : [];
   });
+  const precisionDeltas = options.kind === "graphics" ? inputs.flatMap((input, index) => {
+    const fields = graphicsPrecisionDeltas(oracle.results[index]!, webdroid.results[index]!);
+    return Object.keys(fields).length ? [{ id: input.id, fields }] : [];
+  }) : [];
   mkdirSync(options.out, { recursive: true });
   const bundles: string[] = [];
   const seen = new Set<string>();
@@ -88,9 +92,9 @@ async function runCampaignWithRunner(options: CampaignOptions, webRunner: Webdro
   }
   await Bun.write(`${options.out}/${options.kind}-${options.seed}.campaign.json`, JSON.stringify({
     schemaVersion: 1, kind: options.kind, seed: options.seed, cases: inputs.length,
-    failures: failures.length, retained: bundles, oracle, webdroid,
+    failures: failures.length, precisionDeltas, retained: bundles, oracle, webdroid,
   }, null, 2) + "\n");
-  return { failures: failures.length, bundles };
+  return { failures: failures.length, precisionDeltas: precisionDeltas.length, bundles };
 }
 
 export async function replayBundle(path: string, oracleSerial?: string): Promise<boolean> {

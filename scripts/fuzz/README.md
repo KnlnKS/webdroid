@@ -116,7 +116,8 @@ It performs four operations:
 
 1. Creates or updates the `webdroid_api33_ref` AVD.
 2. Uses webdroid's canonical framebuffer geometry and density, currently supplied by
-   `src/shell/config.ts` rather than duplicated in the setup script.
+   `src/shell/config.ts` rather than duplicated in the setup script, and replaces any
+   persistent `wm size` or `wm density` overrides.
 3. boots or validates an API-33 emulator.
 4. pulls the matching `framework.jar`, `framework-res.apk`, build fingerprint, and
    `api-versions.xml` into `fuzz-cache/android-33/`.
@@ -138,7 +139,7 @@ adb -s emulator-5554 emu avd name
 ```
 
 The SDK value must be `33`, and the AVD name should be `webdroid_api33_ref`. The campaign runner
-rejects a non-33 oracle.
+rejects a non-33 oracle or one whose active size and density differ from webdroid's profile.
 
 The cache is deliberately ignored. Do not replace `vendor/aosp/framework.jar` or
 `vendor/framework-res.apk` with API-33 files; those checked-in paths have different provenance.
@@ -316,8 +317,8 @@ Comparison occurs in this order:
 
 1. value versus exception outcome;
 2. normalized exception class;
-3. exact non-pixel graphics state, including save count, center pixel, density, paint, matrix,
-   clip, path bounds, and RenderNode state;
+3. exact non-pixel graphics state, with float-backed path bounds and RenderNode arrays compared
+   by float32 value; Canvas matrices use a relative tolerance of `2e-6`;
 4. tolerant image comparison if state agrees.
 
 An image passes only when both `contentDiffPct <= 1` and `tolerantPct <= 0.1`. The full strict score
@@ -332,6 +333,8 @@ Graphics failures use two identities:
 
 The campaign retains at most 20 distinct minimized bundles. The printed failure count is the number
 of differing generated cases, not the number retained after clustering and the retention cap.
+`campaign.json` also records each float32 state value that differs despite passing the tolerance,
+with its case ID, field, and maximum absolute delta. The CLI prints that count separately.
 
 ## Run semantic UI fuzzing
 

@@ -1,6 +1,8 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
-import { recordOrRun, recordingContext, replayCanvas, replayWithSemantics, type Ctx2D } from "./recording";
+import { isRecording, recordOrRun, recordingContext, replayCanvas, replayWithSemantics, type Ctx2D } from "./recording";
+import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect, tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
+import { drawSkiaText } from "./skia-text";
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
@@ -12,7 +14,7 @@ import { readStreamFully, vfs, type JFileDescriptor } from "../jvm/natives/jio";
 import { javaFdBytes } from "../native/stdio";
 import { jclsNameOf } from "./apphost";
 import { JBuffer } from "../jvm/natives/jnio";
-import { JPath } from "./path";
+import { JPath, inversePath } from "./path";
 import { perf } from "../perf";
 import { type JRenderEffect } from "./rendereffect";
 import { JTypedValue, type JDisplayMetrics } from "./util";
@@ -327,10 +329,17 @@ rt.register({
 
 export class JPaint extends JObj {
   color = -16777216;
+  renderAlpha: number | null = null;
+  setColorValue(color: number) { this.color = color; this.renderAlpha = null; }
+  setAlphaValue(alpha: number) {
+    // API 33 exposes a narrowed alpha in getColor but draws out-of-range values opaque.
+    this.color = ((((alpha < 0 ? alpha + 1 : alpha) & 255) << 24) | (this.color & 0xffffff)) | 0;
+    this.renderAlpha = alpha < 0 || alpha > 255 ? 255 : null;
+  }
   style = 0;
   strokeWidth = 0;
   shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
-  textSize = device.dp(16); // AOSP defaults to 12px, but every view sets its own
+  textSize = 12;
   tf: JTypeface = tfDefault;
   antiAlias = true;
   textAlignN = 0; // 0 left, 1 center, 2 right
@@ -347,6 +356,16 @@ export class JPaint extends JObj {
   blend: GlobalCompositeOperation | null = null;
   xfermode: JObj | null = null;      // kept only so getXfermode() round-trips
   blendMode: JSimpleEnum | null = null;
+  compositeOp(): GlobalCompositeOperation | null {
+    if (this.blend === "source-in" && !this.shader && !this.shaderObj &&
+      this.filterColor === null && !this.filterMatrix && (this.renderAlpha ?? this.color >>> 24) === 255)
+      return "source-atop";
+    return this.blend;
+  }
+  transparentSourceIn(): boolean {
+    return this.blend === "source-in" && (this.renderAlpha ?? this.color >>> 24) === 0 &&
+      !this.shader && !this.shaderObj && this.filterColor === null && !this.filterMatrix;
+  }
   letterSpacingEm = 0;
   textScaleX = 1;
   textSkewX = 0;
@@ -384,11 +403,12 @@ export class JPaint extends JObj {
     if (pattern) return pattern;
     if (this.shader) return this.shader;
     const f = this.filterColor;
-    if (this.filterMatrix) return cssColor(matrixColor(this.filterMatrix, this.color));
+    const color = this.renderAlpha === null ? this.color : (this.renderAlpha << 24) | (this.color & 0xffffff);
+    if (this.filterMatrix) return cssColor(matrixColor(this.filterMatrix, color));
     // PorterDuff/BlendMode SRC_IN — how Material tints every shape it draws: the filter's
     // colour replaces the paint's, keeping the alpha the two agree on
-    if (f === null) return cssColor(this.color);
-    return cssColor(((f & 0xffffff) | ((((f >>> 24) * (this.color >>> 24) / 255) | 0) << 24)) | 0);
+    if (f === null) return cssColor(color);
+    return cssColor(((f & 0xffffff) | ((((f >>> 24) * (color >>> 24) / 255) | 0) << 24)) | 0);
   }
 }
 const paintMethods: NativeSpec["methods"] = {
@@ -420,8 +440,8 @@ const paintMethods: NativeSpec["methods"] = {
   "getShadowLayerDy()F": function (this: JPaint) { return this.shadowDy; },
   "getShadowLayerColor()I": function (this: JPaint) { return this.shadowColor; },
   "set(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { copyPaint(o, this); },
-  "setColor(I)V": function (this: JPaint, c: number) { this.color = c; },
-  "setColor(J)V": function (this: JPaint, c: bigint) { this.color = Number(BigInt.asIntN(32, c >> 32n)); },
+  "setColor(I)V": function (this: JPaint, c: number) { this.setColorValue(c); },
+  "setColor(J)V": function (this: JPaint, c: bigint) { this.setColorValue(Number(BigInt.asIntN(32, c >> 32n))); },
   "getColorLong()J": function (this: JPaint) { return BigInt(this.color >>> 0) << 32n; },
   "getTextLocale()Ljava/util/Locale;": function (this: JPaint) { return this.locales?.values[0] ?? usLocale; },
   "getTextLocales()Landroid/os/LocaleList;": async function (this: JPaint) { return this.locales ??= await vcall((await linkInit("android/os/LocaleList")).ctor, "getDefault", "()Landroid/os/LocaleList;"); },
@@ -444,14 +464,14 @@ const paintMethods: NativeSpec["methods"] = {
   "getMaskFilter()Landroid/graphics/MaskFilter;": function (this: JPaint) { return this.maskFilter; },
   "setMaskFilter(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;": function (this: JPaint, f: JBlurMaskFilter | null) { return this.maskFilter = f; },
   "getColor()I": function (this: JPaint) { return this.color; },
-  "setAlpha(I)V": function (this: JPaint, a: number) { this.color = ((a << 24) | (this.color & 0xffffff)) | 0; },
-  "setARGB(IIII)V": function (this: JPaint, a: number, r: number, g: number, b: number) { this.color = ((a & 255) << 24 | (r & 255) << 16 | (g & 255) << 8 | (b & 255)) | 0; },
+  "setAlpha(I)V": function (this: JPaint, a: number) { this.setAlphaValue(a); },
+  "setARGB(IIII)V": function (this: JPaint, a: number, r: number, g: number, b: number) { this.setColorValue(((a & 255) << 24 | (r & 255) << 16 | (g & 255) << 8 | (b & 255)) | 0); },
   "getAlpha()I": function (this: JPaint) { return this.color >>> 24; },
   "setStyle(Landroid/graphics/Paint$Style;)V": function (this: JPaint, s: { ord: number }) { this.style = s?.ord ?? 0; },
   "getStyle()Landroid/graphics/Paint$Style;": function (this: JPaint) { return paintStyleEnum[this.style]; },
   "setStrokeWidth(F)V": function (this: JPaint, w: number) { this.strokeWidth = w; },
   "getStrokeWidth()F": function (this: JPaint) { return this.strokeWidth; },
-  "setTextSize(F)V": function (this: JPaint, s: number) { if (s > 0) this.textSize = s; },
+  "setTextSize(F)V": function (this: JPaint, s: number) { if (s >= 0) this.textSize = s; },
   "getTextSize()F": function (this: JPaint) { return this.textSize; },
   "setAntiAlias(Z)V": function (this: JPaint, v: number) { this.antiAlias = !!v; },
   "isAntiAlias()Z": function (this: JPaint) { return this.antiAlias ? 1 : 0; },
@@ -571,8 +591,8 @@ const paintMethods: NativeSpec["methods"] = {
   },
 };
 function resetPaint(paint: JPaint): void {
-  paint.color = -16777216; paint.style = 0; paint.strokeWidth = 0;
-  paint.textSize = device.dp(16); paint.tf = tfDefault; paint.antiAlias = true;
+  paint.color = -16777216; paint.renderAlpha = null; paint.style = 0; paint.strokeWidth = 0;
+  paint.textSize = 12; paint.tf = tfDefault; paint.antiAlias = true;
   paint.textAlignN = 0; paint.shader = null; paint.shaderObj = null; paint.maskFilter = null;
   paint.strokeCapN = "butt"; paint.strokeJoinN = "miter"; paint.dash = null;
   paint.filterColor = null; paint.filterMatrix = null; paint.filterObj = null;
@@ -595,7 +615,7 @@ export function beginPaintShadow(ctx: JCanvas["ctx"], p: JPaint): boolean {
   return true;
 }
 export function copyPaint(src: JPaint, dst: JPaint) {
-  dst.color = src.color; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
+  dst.color = src.color; dst.renderAlpha = src.renderAlpha; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
   dst.textSize = src.textSize; dst.tf = src.tf; dst.antiAlias = src.antiAlias;
   dst.textAlignN = src.textAlignN; dst.shader = src.shader; dst.shaderObj = src.shaderObj; dst.dash = src.dash;
   dst.maskFilter = src.maskFilter; dst.strokeCapN = src.strokeCapN; dst.strokeJoinN = src.strokeJoinN;
@@ -1068,6 +1088,7 @@ export function matMul(a: number[], b: number[]): [number, number, number, numbe
 }
 const translateA = (x: number, y: number): JMatrix["m"] => [1, 0, 0, 1, x, y];
 const scaleA = (sx: number, sy: number, px = 0, py = 0): JMatrix["m"] => [sx, 0, 0, sy, px - sx * px, py - sy * py];
+const skewA = (kx: number, ky: number, px = 0, py = 0): JMatrix["m"] => [1, ky, kx, 1, -kx * py, -ky * px];
 function affineOps(name: string, make: (a: number, b: number, c?: number, d?: number) => JMatrix["m"], sigs: string[]) {
   const ops: NativeSpec["methods"] = {};
   for (const s of sigs) {
@@ -1124,6 +1145,7 @@ rt.register({
     },
     ...affineOps("Translate", translateA, ["FF"]),
     ...affineOps("Scale", scaleA, ["FF", "FFFF"]),
+    ...affineOps("Skew", skewA, ["FF", "FFFF"]),
     ...affineOps("Rotate", rotM, ["F", "FFF"]),
     "postConcat(Landroid/graphics/Matrix;)Z": function (this: JMatrix, o: JMatrix) {
       this.m = matMul(o.m, this.m);
@@ -1228,7 +1250,7 @@ export class JBitmap extends JObj {
   get canvas(): OffscreenCanvas {
     if (!this.cv) {
       this.cv = new OffscreenCanvas(this.w, this.h);
-      this.cx = this.cv.getContext("2d", { willReadFrequently: false })!;
+      this.cx = this.cv.getContext("2d", { willReadFrequently: true })!;
       if (this.px) this.cx.putImageData(new ImageData(this.px, this.w, this.h), 0, 0);
     }
     this.px = null;
@@ -1439,6 +1461,10 @@ export class JCanvas extends JObj {
   ctx!: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
   w = 0; h = 0;
   saveCount = 1;
+  clipDevice: [number, number, number, number] | null = null;
+  clipStack: ([number, number, number, number] | null)[] = [];
+  clipPolygon: [number, number][] | null = null;
+  clipPolygonStack: ([number, number][] | null)[] = [];
   bmp: JBitmap | null = null;
   semanticOwner: { drawnText: string[] | null; drawnTextPoints: Float32Array | null; drawnTextCount: number } | null = null;
   semanticBase: [number, number, number, number, number, number] | null = null;
@@ -1485,7 +1511,7 @@ export class JCanvas extends JObj {
     if (pattern) recordOrRun(ctx, c => { c[stroke ? "strokeStyle" : "fillStyle"] = pattern(c); });
     if (stroke) {
       if (!pattern) ctx.strokeStyle = p.fillStyle(ctx) as string;
-      ctx.lineWidth = Math.max(p.strokeWidth, 0.75);
+      ctx.lineWidth = Math.max(p.strokeWidth, 1);
       ctx.lineCap = p.strokeCapN;
       ctx.lineJoin = p.strokeJoinN;
       ctx.setLineDash(p.dash ?? []);
@@ -1508,7 +1534,7 @@ export class JCanvas extends JObj {
     source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
     copyPaint(p, layer.paint);
     layer.paint.maskFilter = null; layer.paint.blend = null; layer.paint.shadowRadius = 0;
-    layer.paint.color = -1; layer.paint.shader = layer.paint.shaderObj = null; layer.paint.filterColor = null; layer.paint.filterMatrix = null;
+    layer.paint.color = -1; layer.paint.renderAlpha = null; layer.paint.shader = layer.paint.shaderObj = null; layer.paint.filterColor = null; layer.paint.filterMatrix = null;
     if (stroke) layer.source.drawShape(layer.paint, fill, stroke);
     else fill(source);
     target.clearRect(0, 0, w, h);
@@ -1537,18 +1563,33 @@ export class JCanvas extends JObj {
     } finally { if (shadow) ctx.restore(); ctx.restore(); }
   }
   drawShape(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke: (ctx: typeof this.ctx) => void) {
+    if (tryPartialSourceIn(this, p, fill, stroke)) return;
+    if (tryBitmapShape(this, p, fill, stroke)) return;
     if (p.maskFilter?.style) return this.drawMask(p, fill, stroke);
+    if (p.transparentSourceIn() && !p.maskFilter && !p.shadowRadius) {
+      const ctx = this.ctx;
+      ctx.save();
+      try {
+        ctx.globalCompositeOperation = "destination-out";
+        if (p.style !== 1) { this.prep(p, false); ctx.fillStyle = "#000"; fill(ctx); }
+        if (p.style !== 0 && (p.style !== 2 || p.strokeWidth !== 0)) {
+          this.prep(p, true); ctx.strokeStyle = "#000"; stroke(ctx);
+        }
+      } finally { ctx.restore(); }
+      return;
+    }
     // A blended paint owns the composite op only for its own ops — restore it straight after,
     // so a CLEAR fill can never leak into the next drawImage/drawText and erase it.
     const shadow = beginPaintShadow(this.ctx, p);
-    const prev = p.blend ? this.ctx.globalCompositeOperation : null;
+    const blend = p.compositeOp();
+    const prev = blend ? this.ctx.globalCompositeOperation : null;
     const filter = p.maskFilter ? this.ctx.filter : null;
     if (p.maskFilter) {
       const m = this.ctx.getTransform();
       this.ctx.filter = `blur(${p.maskFilter.sigma * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c))}px)`;
     }
     try {
-      if (p.blend) this.ctx.globalCompositeOperation = p.blend;
+      if (blend) this.ctx.globalCompositeOperation = blend;
       if (p.style === 0 || p.style === 2) {
         const lm = p.shaderObj?.local;
         if (p.shaderObj instanceof JBitmapShader) fill(this.shaderClipCtx(lm ?? shaderIdentity, p.shaderObj));
@@ -1559,7 +1600,7 @@ export class JCanvas extends JObj {
           fill(lm && !pattern ? this.shaderClipCtx(lm) : this.ctx);
         }
       }
-      if (p.style === 1 || p.style === 2) { this.prep(p, true); stroke(this.ctx); }
+      if (p.style === 1 || (p.style === 2 && p.strokeWidth !== 0)) { this.prep(p, true); stroke(this.ctx); }
     } finally {
       if (prev) this.ctx.globalCompositeOperation = prev;
       if (filter !== null) this.ctx.filter = filter;
@@ -1641,16 +1682,23 @@ export function locateDrawnText(owner: DrawnTextOwner, text: string, width: numb
 // ── Canvas method bodies shared by several overloads
 export function saveCanvas(cv: JCanvas): number {
   cv.ctx.save();
+  cv.clipStack.push(cv.clipDevice);
+  cv.clipPolygonStack.push(cv.clipPolygon);
   return cv.saveCount++;
 }
 export function restoreCanvas(cv: JCanvas): void {
   if (cv.saveCount <= 1) throw rt.mkThrowable("java/lang/IllegalStateException", "Underflow in restore - more restores than saves");
   cv.ctx.restore();
+  cv.clipDevice = cv.clipStack.pop() ?? null;
+  cv.clipPolygon = cv.clipPolygonStack.pop() ?? null;
   cv.saveCount--;
 }
 export function restoreCanvasToCount(cv: JCanvas, count: number): void {
   if (count < 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Underflow in restoreToCount - more restores than saves");
-  while (cv.saveCount > count) { cv.ctx.restore(); cv.saveCount--; }
+  while (cv.saveCount > count) {
+    cv.ctx.restore(); cv.clipDevice = cv.clipStack.pop() ?? null;
+    cv.clipPolygon = cv.clipPolygonStack.pop() ?? null; cv.saveCount--;
+  }
 }
 function canvasSave(this: JCanvas): number {
   return saveCanvas(this);
@@ -1659,12 +1707,65 @@ function canvasSave(this: JCanvas): number {
 function aboutPivot(ctx: JCanvas["ctx"], px: number, py: number, f: () => void) {
   ctx.translate(px, py); f(); ctx.translate(-px, -py);
 }
+export function clipEmptyCanvas(ctx: JCanvas["ctx"]) {
+  const m = ctx.getTransform();
+  ctx.resetTransform();
+  ctx.beginPath();
+  ctx.rect(ctx.canvas.width + 1, ctx.canvas.height + 1, 1, 1);
+  ctx.clip();
+  ctx.setTransform(m);
+}
+type ClipPoint = [number, number];
+function intersectClip(subject: ClipPoint[], shape: ClipPoint[]): ClipPoint[] {
+  let out = subject;
+  const orientation = Math.sign(shape.reduce((sum, point, i) => {
+    const next = shape[(i + 1) % shape.length]!;
+    return sum + point[0] * next[1] - next[0] * point[1];
+  }, 0));
+  if (!orientation) return [];
+  for (let i = 0; i < shape.length && out.length; i++) {
+    const a = shape[i]!, b = shape[(i + 1) % shape.length]!;
+    const side = (p: ClipPoint) => orientation * ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]));
+    const input = out;
+    out = [];
+    for (let j = 0; j < input.length; j++) {
+      const prev = input[(j + input.length - 1) % input.length]!, cur = input[j]!;
+      const before = side(prev), after = side(cur);
+      if ((before < 0) !== (after < 0)) {
+        const t = before / (before - after);
+        out.push([prev[0] + t * (cur[0] - prev[0]), prev[1] + t * (cur[1] - prev[1])]);
+      }
+      if (after >= 0) out.push(cur);
+    }
+  }
+  return out;
+}
 function clipRect(this: JCanvas, l: number, t: number, r: number, b: number) {
   const ctx = this.ctx;
+  const m = ctx.getTransform();
+  if (r === l || b === t || !(m.a * m.d - m.b * m.c)) {
+    this.clipDevice = [0, 0, 0, 0];
+    this.clipPolygon = [];
+    clipEmptyCanvas(ctx);
+    return 0;
+  }
   ctx.beginPath();
-  ctx.rect(l, t, r > l && b > t ? r - l : 0, r > l && b > t ? b - t : 0);
+  ctx.rect(l, t, r - l, b - t);
   ctx.clip();
-  return +(r > l && b > t);
+  const x = m.a * l + m.c * t + m.e, y = m.b * l + m.d * t + m.f;
+  const wx = m.a * (r - l), wy = m.b * (r - l);
+  const hx = m.c * (b - t), hy = m.d * (b - t);
+  const old = this.clipDevice;
+  const left = Math.max(old?.[0] ?? 0, Math.round(x + Math.min(0, wx) + Math.min(0, hx)));
+  const top = Math.max(old?.[1] ?? 0, Math.round(y + Math.min(0, wy) + Math.min(0, hy)));
+  const right = Math.min(old?.[2] ?? this.w, Math.round(x + Math.max(0, wx) + Math.max(0, hx)));
+  const bottom = Math.min(old?.[3] ?? this.h, Math.round(y + Math.max(0, wy) + Math.max(0, hy)));
+  this.clipDevice = right > left && bottom > top ? [left, top, right, bottom] : [0, 0, 0, 0];
+  if (this.clipDevice[2] > this.clipDevice[0] && this.clipDevice[3] > this.clipDevice[1]) {
+    const shape: ClipPoint[] = [[x, y], [x + wx, y + wy], [x + wx + hx, y + wy + hy], [x + hx, y + hy]];
+    this.clipPolygon = intersectClip(this.clipPolygon ?? [[0, 0], [this.w, 0], [this.w, this.h], [0, this.h]], shape);
+  } else this.clipPolygon = [];
+  return +(right > left && bottom > top);
 }
 function clipOutRect(this: JCanvas, l: number, t: number, r: number, b: number) {
   if (!(r > l && b > t)) return 1;
@@ -1682,8 +1783,77 @@ function clipOutRect(this: JCanvas, l: number, t: number, r: number, b: number) 
   recordOrRun(this.ctx, apply);
   return 1;
 }
+function clipPath(this: JCanvas, path: JPath): number {
+  if (path.inverseFill) {
+    const bounds = canvasLocalBounds(this.ctx);
+    if (!bounds) return 0;
+    const [inverse, rule] = inversePath(path, ...bounds);
+    this.ctx.clip(inverse, rule);
+  } else this.ctx.clip(path.path(), path.fillRule);
+  return 1;
+}
+// Canvas2D exposes no clip region; rectangular clips retain a device-space bound.
+function viewportClipBounds(cv: JCanvas, out: JRect): number {
+  const matrix = cv.ctx.getTransform();
+  const a = Math.fround(matrix.a), b = Math.fround(matrix.b);
+  const c = Math.fround(matrix.c), d = Math.fround(matrix.d);
+  const e = Math.fround(matrix.e), f = Math.fround(matrix.f);
+  const det = a * d - b * c;
+  const polygon = cv.clipPolygon;
+  const clip = cv.clipDevice;
+  let left = clip?.[0] ?? 0, top = clip?.[1] ?? 0;
+  let right = clip?.[2] ?? cv.w, bottom = clip?.[3] ?? cv.h;
+  if (polygon) {
+    const minY = Math.max(0, Math.floor(Math.min(...polygon.map(p => p[1]))));
+    const maxY = Math.min(cv.h, Math.ceil(Math.max(...polygon.map(p => p[1]))));
+    left = top = Infinity; right = bottom = -Infinity;
+    for (let y = minY; y < maxY; y++) {
+      const at = y + 0.5;
+      let minX = Infinity, maxX = -Infinity;
+      for (let i = 0; i < polygon.length; i++) {
+        const [ax, ay] = polygon[i]!, [bx, by] = polygon[(i + 1) % polygon.length]!;
+        if ((ay <= at && at < by) || (by <= at && at < ay)) {
+          const x = ax + (at - ay) * (bx - ax) / (by - ay);
+          minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        }
+      }
+      if (minX === maxX || !Number.isFinite(minX)) continue;
+      const x0 = Math.max(0, Math.floor(minX - 0.5) + 1);
+      const x1 = Math.min(cv.w, Math.ceil(maxX - 0.5));
+      if (x0 >= x1) continue;
+      left = Math.min(left, x0); right = Math.max(right, x1);
+      top = Math.min(top, y); bottom = Math.max(bottom, y + 1);
+    }
+  }
+  if (!det || !Number.isFinite(det) || !(right > left && bottom > top)) {
+    out.left = out.top = out.right = out.bottom = 0;
+    return 0;
+  }
+  const dx = left - e, dy = top - f;
+  const ox = (d * dx - c * dy) / det, oy = (a * dy - b * dx) / det;
+  const wx = d * (right - left) / det, wy = -b * (right - left) / det;
+  const hx = -c * (bottom - top) / det, hy = a * (bottom - top) / det;
+  out.left = Math.round(ox + Math.min(0, wx) + Math.min(0, hx));
+  out.top = Math.round(oy + Math.min(0, wy) + Math.min(0, hy));
+  out.right = Math.round(ox + Math.max(0, wx) + Math.max(0, hx));
+  out.bottom = Math.round(oy + Math.max(0, wy) + Math.max(0, hy));
+  return 1;
+}
 function drawRect(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
-  this.drawShape(p, (c) => c.fillRect(l, t, r - l, b - t), (c) => c.strokeRect(l, t, r - l, b - t));
+  const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
+  if ((!width || !height) && p.style !== 1) return;
+  if (tryBitmapRect(this, p, left, top, left + width, top + height)) return;
+  if (p.blend === "source-in" && p.style === 0) {
+    const shape = new Path2D();
+    shape.rect(left, top, width, height);
+    this.ctx.save();
+    try {
+      this.ctx.clip(shape);
+      this.drawShape(p, (c) => c.fill(shape), (c) => c.stroke(shape));
+    } finally { this.ctx.restore(); }
+    return;
+  }
+  this.drawShape(p, (c) => c.fillRect(left, top, width, height), (c) => c.strokeRect(left, top, width, height));
 }
 function drawColor(this: JCanvas, color: number, clear = false) {
   const fill = cssColor(color);
@@ -1698,18 +1868,26 @@ function drawColor(this: JCanvas, color: number, clear = false) {
 }
 /** ellipse arc in the box; a full sweep without the centre is drawOval */
 function drawArc(this: JCanvas, l: number, t: number, r: number, b: number, start: number, sweep: number, useCenter: number, p: JPaint) {
-  if (!(r > l && b > t)) return;
+  if (!(r > l && b > t) && Math.abs(sweep) < 360) return;
+  const left = Math.min(l, r), top = Math.min(t, b), right = Math.max(l, r), bottom = Math.max(t, b);
+  if (tryBitmapOval(this, p, left, top, right, bottom, sweep)) return;
   const path = new Path2D();
-  const cx = (l + r) / 2, cy = (t + b) / 2;
+  const cx = (left + right) / 2, cy = (top + bottom) / 2;
   if (useCenter) path.moveTo(cx, cy);
-  path.ellipse(cx, cy, (r - l) / 2, (b - t) / 2, 0, start * Math.PI / 180, (start + sweep) * Math.PI / 180, sweep < 0);
+  path.ellipse(cx, cy, (right - left) / 2, (bottom - top) / 2, 0, start * Math.PI / 180, (start + sweep) * Math.PI / 180, sweep < 0);
   if (useCenter) path.closePath();
   this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
 }
-function drawRoundRect(this: JCanvas, l: number, t: number, r: number, b: number, rx: number, _ry: number, p: JPaint) {
-  if (!(r > l && b > t)) return;
+function drawOval(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
+  if (l === r || t === b) return;
+  drawArc.call(this, Math.min(l, r), Math.min(t, b), Math.max(l, r), Math.max(t, b), 0, 360, 0, p);
+}
+function drawRoundRect(this: JCanvas, l: number, t: number, r: number, b: number, rx: number, ry: number, p: JPaint) {
+  const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
+  if ((!width || !height) && p.style !== 1) return;
+  if (tryBitmapRoundRect(this, p, left, top, left + width, top + height, rx, ry)) return;
   const path = new Path2D();
-  path.roundRect(l, t, r - l, b - t, Math.min(rx, (r - l) / 2, (b - t) / 2));
+  path.roundRect(left, top, width, height, { x: Math.max(rx, 0), y: Math.max(ry, 0) });
   this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
 }
 function drawBitmapRect(this: JCanvas, b: JBitmap, src: JRect | null, dst: JRect | JRectF, p: JPaint | null) {
@@ -1718,14 +1896,20 @@ function drawBitmapRect(this: JCanvas, b: JBitmap, src: JRect | null, dst: JRect
     dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top));
 }
 const defaultBitmapPaint = new JPaint();
-function drawPaint(this: JCanvas, paint: JPaint) {
-  const ctx = this.ctx, inverse = ctx.getTransform().inverse();
+function canvasLocalBounds(ctx: JCanvas["ctx"]): [number, number, number, number] | null {
+  const inverse = ctx.getTransform().inverse();
   const points = [[0, 0], [ctx.canvas.width, 0], [0, ctx.canvas.height], [ctx.canvas.width, ctx.canvas.height]]
     .map(([x, y]) => inverse.transformPoint({ x, y }));
-  if (!points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) return;
-  const l = Math.min(...points.map(p => p.x)), t = Math.min(...points.map(p => p.y));
+  if (!points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) return null;
+  return [Math.min(...points.map(p => p.x)), Math.min(...points.map(p => p.y)),
+    Math.max(...points.map(p => p.x)), Math.max(...points.map(p => p.y))];
+}
+function drawPaint(this: JCanvas, paint: JPaint) {
+  const bounds = canvasLocalBounds(this.ctx);
+  if (!bounds) return;
+  const [l, t, r, b] = bounds;
   const p = new JPaint(); copyPaint(paint, p); p.style = 0; p.maskFilter = null;
-  this.drawShape(p, c => c.fillRect(l, t, Math.max(...points.map(p => p.x)) - l, Math.max(...points.map(p => p.y)) - t), () => {});
+  this.drawShape(p, c => c.fillRect(l, t, r - l, b - t), () => {});
 }
 function drawBitmap(canvas: JCanvas, b: JBitmap, paint: JPaint | null, draw: (ctx: Ctx2D, image: OffscreenCanvas) => void) {
   if (b.config === 1) {
@@ -1772,14 +1956,18 @@ export const canvasMethods: NativeSpec["methods"] = {
     restoreCanvasToCount(this, count);
   },
   "getSaveCount()I": function (this: JCanvas) { return this.saveCount; },
-  "translate(FF)V": function (this: JCanvas, x: number, y: number) { this.ctx.translate(x, y); },
+  "translate(FF)V": function (this: JCanvas, x: number, y: number) {
+    const m = this.ctx.getTransform();
+    if (m.a * m.d === m.b * m.c) this.ctx.setTransform(m.a, m.b, m.c, m.d, m.e + m.a * x + m.c * y, m.f + m.b * x + m.d * y);
+    else this.ctx.translate(x, y);
+  },
   "scale(FF)V": function (this: JCanvas, x: number, y: number) { this.ctx.scale(x, y); },
   "scale(FFFF)V": function (this: JCanvas, sx: number, sy: number, px: number, py: number) {
     aboutPivot(this.ctx, px, py, () => this.ctx.scale(sx, sy));
   },
-  "rotate(F)V": function (this: JCanvas, d: number) { this.ctx.rotate(d * Math.PI / 180); },
+  "rotate(F)V": function (this: JCanvas, d: number) { this.ctx.rotate(Math.fround(d * Math.PI / 180)); },
   "rotate(FFF)V": function (this: JCanvas, d: number, px: number, py: number) {
-    aboutPivot(this.ctx, px, py, () => this.ctx.rotate(d * Math.PI / 180));
+    aboutPivot(this.ctx, px, py, () => this.ctx.rotate(Math.fround(d * Math.PI / 180)));
   },
   "skew(FF)V": function (this: JCanvas, sx: number, sy: number) { this.ctx.transform(1, sy, sx, 1, 0, 0); },
   "concat(Landroid/graphics/Matrix;)V": function (this: JCanvas, m: JMatrix) {
@@ -1808,20 +1996,15 @@ export const canvasMethods: NativeSpec["methods"] = {
   "clipRect(Landroid/graphics/RectF;)Z": function (this: JCanvas, r: JRectF) { return clipRect.call(this, r.left, r.top, r.right, r.bottom); },
   "clipPath(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z": function (this: JCanvas, path: JPath, op: { ename?: string } | null) {
     if (op && op.ename && op.ename !== "INTERSECT") return 1;
-    this.ctx.clip(path.path(), path.fillRule);
-    return 1;
+    return clipPath.call(this, path);
   },
-  "clipPath(Landroid/graphics/Path;)Z": function (this: JCanvas, path: JPath) {
-    this.ctx.clip(path.path(), path.fillRule);
-    return 1;
-  },
+  "clipPath(Landroid/graphics/Path;)Z": clipPath,
   "getClipBounds(Landroid/graphics/Rect;)Z": function (this: JCanvas, r: JRect) {
-    r.left = 0; r.top = 0; r.right = this.w; r.bottom = this.h;
-    return 1;
+    return viewportClipBounds(this, r);
   },
   "getClipBounds()Landroid/graphics/Rect;": function (this: JCanvas) {
     const r = new JRect();
-    r.right = this.w; r.bottom = this.h;
+    viewportClipBounds(this, r);
     return r;
   },
   "drawColor(I)V": drawColor,
@@ -1842,21 +2025,19 @@ export const canvasMethods: NativeSpec["methods"] = {
     drawRoundRect.call(this, r.left, r.top, r.right, r.bottom, rx, ry, p);
   },
   "drawCircle(FFFLandroid/graphics/Paint;)V": function (this: JCanvas, x: number, y: number, r: number, p: JPaint) {
-    const path = new Path2D();
-    path.arc(x, y, r, 0, Math.PI * 2);
-    this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
+    if (!(r > 0)) return;
+    drawOval.call(this, x - r, y - r, x + r, y + r, p);
   },
-  "drawOval(FFFFLandroid/graphics/Paint;)V": function (this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
-    drawArc.call(this, l, t, r, b, 0, 360, 0, p);
-  },
+  "drawOval(FFFFLandroid/graphics/Paint;)V": drawOval,
   "drawOval(Landroid/graphics/RectF;Landroid/graphics/Paint;)V": function (this: JCanvas, r: JRectF, p: JPaint) {
-    drawArc.call(this, r.left, r.top, r.right, r.bottom, 0, 360, 0, p);
+    drawOval.call(this, r.left, r.top, r.right, r.bottom, p);
   },
   "drawArc(FFFFFFZLandroid/graphics/Paint;)V": drawArc,
   "drawArc(Landroid/graphics/RectF;FFZLandroid/graphics/Paint;)V": function (this: JCanvas, r: JRectF, start: number, sweep: number, useCenter: number, p: JPaint) {
     drawArc.call(this, r.left, r.top, r.right, r.bottom, start, sweep, useCenter, p);
   },
   "drawLine(FFFFLandroid/graphics/Paint;)V": function (this: JCanvas, x0: number, y0: number, x1: number, y1: number, p: JPaint) {
+    if (tryBitmapLine(this, p, x0, y0, x1, y1)) return;
     this.prep(p, true);
     this.ctx.beginPath();
     this.ctx.moveTo(x0, y0);
@@ -1877,7 +2058,15 @@ export const canvasMethods: NativeSpec["methods"] = {
     this.ctx.fillRect(x - p.strokeWidth / 2, y - p.strokeWidth / 2, Math.max(1, p.strokeWidth), Math.max(1, p.strokeWidth));
   },
   "drawPath(Landroid/graphics/Path;Landroid/graphics/Paint;)V": function (this: JCanvas, path: JPath, p: JPaint) {
-    this.drawShape(p, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()));
+    if (tryBitmapPath(this, p, path)) return;
+    if (!path.inverseFill) {
+      this.drawShape(p, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()));
+      return;
+    }
+    const bounds = canvasLocalBounds(this.ctx);
+    if (!bounds) return;
+    const [inverse, rule] = inversePath(path, ...bounds);
+    this.drawShape(p, (c) => c.fill(inverse, rule), (c) => c.stroke(path.path()));
   },
   "drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V": function (this: JCanvas, s: string, x: number, y: number, p: JPaint) {
     drawTextImpl(this, s, x, y, p);
@@ -1916,6 +2105,7 @@ export const canvasMethods: NativeSpec["methods"] = {
   "setBitmap(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
 };
 export function setCanvasBitmap(cv: JCanvas, b: JBitmap | null) {
+  cv.clipDevice = cv.clipPolygon = null; cv.clipStack.length = cv.clipPolygonStack.length = 0;
   if (b) { cv.ctx = b.ctx; cv.w = b.w; cv.h = b.h; cv.bmp = b; return; }
   cv.ctx = new OffscreenCanvas(1, 1).getContext("2d")!;
   cv.w = cv.h = 0; cv.bmp = null;
@@ -1923,18 +2113,31 @@ export function setCanvasBitmap(cv: JCanvas, b: JBitmap | null) {
 const drawColorKey = mangleMethod("drawColor", "(I)V");
 export const CAPS = ["butt", "round", "square"] as const;
 export const JOINS = ["miter", "round", "bevel"] as const;
+export function tryDrawBitmapText(cv: JCanvas, s: string, x: number, y: number, p: JPaint, subpixel = false): boolean {
+  return !!(cv.bmp && (p.style === 0 || p.style === 2 && p.strokeWidth === 0 ||
+    p.style === 1 && p.strokeWidth === 0 && p.strokeCapN === "butt" && p.strokeJoinN === "miter" && !p.dash) &&
+    p.antiAlias && p.textAlignN === 0 && !p.letterSpacingEm &&
+    !p.underline && !p.strikeThru && !p.shader && !p.shaderObj && !p.maskFilter && !p.shadowRadius &&
+    !p.filterColor && !p.filterMatrix && !p.blend && !isRecording(cv.ctx) &&
+    p.tf.family === ROBOTO && !p.tf.bold && !p.tf.italic &&
+    drawSkiaText(cv.ctx, s, x, y, p.textSize,
+      p.renderAlpha === null ? p.color : (p.renderAlpha << 24) | (p.color & 0xffffff),
+      p.style === 1 ? "hairline" : "fill", subpixel));
+}
 function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
   cv.recordText(s, x, y, p.textSize, p.textAlignN);
+  if (tryDrawBitmapText(cv, s, x, y, p)) return;
   const ctx = cv.ctx, shadow = beginPaintShadow(cv.ctx, p);
   try {
     ctx.font = p.font();
+    ctx.textRendering = "geometricPrecision";
     if ("lang" in ctx) ctx.lang = p.language;
     cv.prep(p, false);
     ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
     ctx.textBaseline = "alphabetic";
     if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
     if (p.style !== 1) ctx.fillText(s, x, y);
-    if (p.style === 1 || p.style === 2) {
+    if (p.style === 1 || p.style === 2 && p.strokeWidth !== 0) {
       cv.prep(p, true);
       ctx.strokeText(s, x, y);
     }
@@ -2177,7 +2380,11 @@ rt.register({
     "discardDisplayList()V": function (this: JRenderNode) { this.hasDL = false; this.ops = []; },
     "getWidth()I": function (this: JRenderNode) { return this.w; },
     "getHeight()I": function (this: JRenderNode) { return this.h; },
-    "setAlpha(F)Z": function (this: JRenderNode, a: number) { this.alpha = asF(a); return 1; },
+    "setAlpha(F)Z": function (this: JRenderNode, a: number) {
+      const alpha = asF(a), epsilon = Math.fround(0.001);
+      this.alpha = alpha <= epsilon ? 0 : alpha >= 1 - epsilon ? 1 : alpha;
+      return 1;
+    },
     "getAlpha()F": function (this: JRenderNode) { return this.alpha; },
     "setTranslationX(F)Z": function (this: JRenderNode, v: number) { this.tx = asF(v); return 1; },
     "setTranslationY(F)Z": function (this: JRenderNode, v: number) { this.ty = asF(v); return 1; },

@@ -9,6 +9,7 @@ import { rt } from "./jvm/runtime";
 import { newObj, vcall, linkInit } from "./jvm/natives/jlang";
 import { mangleMethod } from "./jvm/abi";
 import { loadFramework } from "./android/framework";
+import { loadSkiaText } from "./android/skia-text";
 import { unreadAttrs } from "./android/res";
 import { bootApk, tick, dispatchPointer, pressBack, currentApp, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas, frame, present } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
@@ -198,7 +199,7 @@ window.addEventListener("unhandledrejection", (e) => logBuf.push("unhandledrejec
 async function boot(file: string) {
   try {
     statusEl.textContent = "downloading " + file + "…";
-    const [install] = await Promise.all([openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady, provisionPackages()]);
+    const [install] = await Promise.all([openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady, provisionPackages(), loadSkiaText()]);
     const t0 = performance.now();
     connectProcess();
     await bootApk(install, (s) => { statusEl.textContent = s; }, file, null, registerForegroundProcess);

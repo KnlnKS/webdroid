@@ -13,6 +13,7 @@ export class JPath extends JObj {
   ops: PathOp[] = [];
   curX = 0; curY = 0; startX = 0; startY = 0;
   fillRule: CanvasFillRule = "nonzero";
+  inverseFill = false;
   p2d: Path2D | null = null;
   dirty = true;
   path(): Path2D {
@@ -94,8 +95,13 @@ function applyPathOp(p: Path2D, op: PathOp) {
       p.roundRect(l, t, r - l, b - t, [{ x: q[0], y: q[1] }, { x: q[2], y: q[3] }, { x: q[4], y: q[5] }, { x: q[6], y: q[7] }]);
       break;
     }
-    case "oval": p.ellipse((op[1] + op[3]) / 2, (op[2] + op[4]) / 2, (op[3] - op[1]) / 2, (op[4] - op[2]) / 2, 0, 0, Math.PI * 2, !!op[5]); break;
-    case "circle": p.arc(op[1], op[2], op[3], 0, Math.PI * 2, !!op[4]); break;
+    case "oval": {
+      const cx = (op[1] + op[3]) / 2, cy = (op[2] + op[4]) / 2, rx = (op[3] - op[1]) / 2, ry = (op[4] - op[2]) / 2;
+      p.moveTo(cx + rx, cy);
+      p.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2, !!op[5]);
+      break;
+    }
+    case "circle": p.moveTo(op[1] + op[3], op[2]); p.arc(op[1], op[2], op[3], 0, Math.PI * 2, !!op[4]); break;
     case "arc": {
       const [, l, t, r, b, startDeg, sweepDeg] = op;
       const cx = (l + r) / 2, cy = (t + b) / 2, rx = (r - l) / 2, ry = (b - t) / 2;
@@ -436,10 +442,25 @@ function pathOp(dst: JPath, pa: JPath, pb: JPath, mode: number): number {
   }
   dst.ops = chainSegs(kept).flatMap((c) => [["m", c[0][0], c[0][1]] as PathOp, ...c.slice(1).map((p) => ["l", p[0], p[1]] as PathOp), ["z"] as PathOp]);
   dst.fillRule = "nonzero";
+  dst.inverseFill = false;
   dst.curX = dst.startX = dst.ops.length ? (dst.ops[0][1] as number) : 0;
   dst.curY = dst.startY = dst.ops.length ? (dst.ops[0][2] as number) : 0;
   dst.dirty = true;
   return 1;
+}
+
+export function inversePath(path: JPath, l: number, t: number, r: number, b: number): [Path2D, CanvasFillRule] {
+  if (path.fillRule === "evenodd") {
+    const inverse = new Path2D();
+    inverse.rect(l, t, r - l, b - t);
+    inverse.addPath(path.path());
+    return [inverse, "evenodd"];
+  }
+  const outer = new JPath();
+  outer.add(["rect", l, t, r, b, 0]);
+  const result = new JPath();
+  pathOp(result, outer, path, PathOpMode.DIFFERENCE);
+  return [result.path(), "nonzero"];
 }
 
 function copyPath(this: JPath, source: JPath) {
@@ -448,6 +469,7 @@ function copyPath(this: JPath, source: JPath) {
   this.curX = source.curX; this.curY = source.curY;
   this.startX = source.startX; this.startY = source.startY;
   this.fillRule = source.fillRule;
+  this.inverseFill = source.inverseFill;
   this.dirty = true;
 }
 function appendPath(target: JPath, source: JPath, matrix?: ArrayLike<number>) {
@@ -495,7 +517,7 @@ rt.register({
       return pathOp(this, a, b, mode?.ord ?? 0);
     },
     "getFillType()Landroid/graphics/Path$FillType;": function (this: JPath) {
-      return pathFillTypes[this.fillRule === "evenodd" ? 1 : 0];
+      return pathFillTypes[(this.fillRule === "evenodd" ? 1 : 0) + (this.inverseFill ? 2 : 0)];
     },
 
     "addRect(FFFFLandroid/graphics/Path$Direction;)V": function (this: JPath, l: number, t: number, r: number, b: number, d: { ord: number } | null) {
@@ -523,7 +545,7 @@ rt.register({
       this.add(["oval", r.left, r.top, r.right, r.bottom, d?.ord ?? 0]);
     },
     "addCircle(FFFLandroid/graphics/Path$Direction;)V": function (this: JPath, x: number, y: number, r: number, d: { ord: number } | null) {
-      this.add(["circle", x, y, r, d?.ord ?? 0]);
+      if (r > 0) this.add(["circle", x, y, r, d?.ord ?? 0]);
     },
     "addPath(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { appendPath(this, o); },
     "addPath(Landroid/graphics/Path;FF)V": function (this: JPath, o: JPath, dx: number, dy: number) {
@@ -544,6 +566,7 @@ rt.register({
     },
     "setFillType(Landroid/graphics/Path$FillType;)V": function (this: JPath, ft: { ord: number }) {
       this.fillRule = ft?.ord === 1 || ft?.ord === 3 ? "evenodd" : "nonzero";
+      this.inverseFill = ft?.ord === 2 || ft?.ord === 3;
     },
     "isEmpty()Z": function (this: JPath) { return this.ops.length ? 0 : 1; },
     "isConvex()Z": function (this: JPath) { return pathIsConvex(this); },
@@ -567,6 +590,12 @@ rt.register({
 export function pathBounds(p: JPath, r: { left: number; top: number; right: number; bottom: number }) {
   let l = Infinity, t = Infinity, rr = -Infinity, b = -Infinity;
   for (const op of p.ops) {
+    if (op[0] === "circle") {
+      const x = op[1], y = op[2], radius = op[3];
+      l = Math.min(l, x - radius); rr = Math.max(rr, x + radius);
+      t = Math.min(t, y - radius); b = Math.max(b, y + radius);
+      continue;
+    }
     for (let i = 1, n = opPairs[op[0]] ?? 0; n--; i += 2) {
       l = Math.min(l, op[i] as number); rr = Math.max(rr, op[i] as number);
       t = Math.min(t, op[i + 1] as number); b = Math.max(b, op[i + 1] as number);

@@ -269,9 +269,9 @@ delegate("android/graphics/Paint", {
   "nReset(J)V": (h: bigint) => { replace(h, new JPaint()); },
   "nSet(JJ)V": (h: bigint, src: bigint) => copyPaint(paint(src), paint(h)),
 
-  "nSetColor(JI)V": (h: bigint, c: number) => { paint(h).color = c; },
-  "nSetColor(JJJ)V": (h: bigint, _cs: bigint, c: bigint) => { paint(h).color = argbOfColorLong(c); },
-  "nSetAlpha(JI)V": (h: bigint, a: number) => { const p = paint(h); p.color = (p.color & 0xffffff) | ((a & 0xff) << 24); },
+  "nSetColor(JI)V": (h: bigint, c: number) => { paint(h).setColorValue(c); },
+  "nSetColor(JJJ)V": (h: bigint, _cs: bigint, c: bigint) => { paint(h).setColorValue(argbOfColorLong(c)); },
+  "nSetAlpha(JI)V": (h: bigint, a: number) => { paint(h).setAlphaValue(a); },
   "nSetStyle(JI)V": (h: bigint, v: number) => { paint(h).style = v; },
   "nGetStyle(J)I": (h: bigint) => paint(h).style,
   "nSetStrokeWidth(JF)V": (h: bigint, w: number) => { paint(h).strokeWidth = w; },
@@ -586,11 +586,7 @@ delegate("android/graphics/Canvas", {
     c.ctx.clip(pp.path(), pp.fillRule);
     return 1;
   },
-  "nGetClipBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: Rect) => {
-    const c = canvas(h);
-    r.left = 0; r.top = 0; r.right = c.w; r.bottom = c.h;
-    return 1;
-  },
+  "nGetClipBounds(JLandroid/graphics/Rect;)Z": on("getClipBounds(Landroid/graphics/Rect;)Z"),
   ...stubs(0, "nIsOpaque(J)Z", "nIsHighContrastText(J)Z", "nQuickReject(JFFFF)Z", "nQuickReject(JJ)Z"),
   ...noops("nSetCompatibilityVersion(I)V", "nSetDrawFilter(JJ)V", "nClipShader(JJI)V"),
 });

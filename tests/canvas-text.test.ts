@@ -22,10 +22,10 @@ test("Canvas records custom-drawn text for semantic lookup", async () => {
   await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "second", 0, 20, paint);
 
   expect(owner.drawnText).toEqual(["first", "second"]);
-  expect(owner.drawnTextPoints![0]).toBe(58);
-  expect(owner.drawnTextPoints![1]).toBeCloseTo(5.6);
-  expect(owner.drawnTextPoints![2]).toBe(58);
-  expect(owner.drawnTextPoints![3]).toBeCloseTo(25.6);
+  expect(owner.drawnTextPoints![0]).toBe(10 + paint.textSize);
+  expect(owner.drawnTextPoints![1]).toBeCloseTo(20 - paint.textSize * 0.3);
+  expect(owner.drawnTextPoints![2]).toBe(10 + paint.textSize);
+  expect(owner.drawnTextPoints![3]).toBeCloseTo(40 - paint.textSize * 0.3);
 });
 
 test("Canvas maps layered semantic text through its parent transform", async () => {
@@ -36,8 +36,8 @@ test("Canvas maps layered semantic text through its parent transform", async () 
 
   await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "layered", 0, 0, paint);
 
-  expect(owner.drawnTextPoints![0]).toBe(158);
-  expect(owner.drawnTextPoints![1]).toBeCloseTo(205.6);
+  expect(owner.drawnTextPoints![0]).toBe(110 + paint.textSize);
+  expect(owner.drawnTextPoints![1]).toBeCloseTo(220 - paint.textSize * 0.3);
 });
 
 test("Canvas resolves virtual CharSequence text before drawing", async () => {
