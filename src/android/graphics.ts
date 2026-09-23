@@ -1,7 +1,7 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
 import { isRecording, recordOrRun, recordingContext, replayCanvas, replayWithSemantics, type Ctx2D } from "./recording";
-import { hairlineRect } from "./hairline";
+import { hairlineLine, hairlineRect } from "./hairline";
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
@@ -1805,16 +1805,7 @@ function drawRect(this: JCanvas, l: number, t: number, r: number, b: number, p: 
   if (this.bmp && p.style === 1 && p.strokeWidth === 0 && !p.antiAlias && !p.shader && !p.shaderObj &&
     !p.maskFilter && !p.shadowRadius && !p.dash && !isRecording(this.ctx)) {
     const ctx = this.ctx, pixels = hairlineRect(ctx, left, top, left + width, top + height, p.strokeCapN);
-    if (pixels) {
-      ctx.save();
-      try {
-        ctx.resetTransform();
-        ctx.fillStyle = p.fillStyle(ctx);
-        if (p.blend) ctx.globalCompositeOperation = p.blend;
-        ctx.fill(pixels);
-      } finally { ctx.restore(); }
-      return;
-    }
+    if (pixels) return drawHairline(this, p, pixels);
   }
   if (p.blend === "source-in" && p.style === 0) {
     const shape = new Path2D();
@@ -1827,6 +1818,16 @@ function drawRect(this: JCanvas, l: number, t: number, r: number, b: number, p: 
     return;
   }
   this.drawShape(p, (c) => c.fillRect(left, top, width, height), (c) => c.strokeRect(left, top, width, height));
+}
+function drawHairline(canvas: JCanvas, paint: JPaint, pixels: Path2D) {
+  const ctx = canvas.ctx;
+  ctx.save();
+  try {
+    ctx.resetTransform();
+    ctx.fillStyle = paint.fillStyle(ctx);
+    if (paint.blend) ctx.globalCompositeOperation = paint.blend;
+    ctx.fill(pixels);
+  } finally { ctx.restore(); }
 }
 function drawColor(this: JCanvas, color: number, clear = false) {
   const fill = cssColor(color);
@@ -1841,20 +1842,22 @@ function drawColor(this: JCanvas, color: number, clear = false) {
 }
 /** ellipse arc in the box; a full sweep without the centre is drawOval */
 function drawArc(this: JCanvas, l: number, t: number, r: number, b: number, start: number, sweep: number, useCenter: number, p: JPaint) {
-  if (!(r > l && b > t)) return;
+  if (!(r > l && b > t) && Math.abs(sweep) < 360) return;
+  const left = Math.min(l, r), top = Math.min(t, b), right = Math.max(l, r), bottom = Math.max(t, b);
   const path = new Path2D();
-  const cx = (l + r) / 2, cy = (t + b) / 2;
+  const cx = (left + right) / 2, cy = (top + bottom) / 2;
   if (useCenter) path.moveTo(cx, cy);
-  path.ellipse(cx, cy, (r - l) / 2, (b - t) / 2, 0, start * Math.PI / 180, (start + sweep) * Math.PI / 180, sweep < 0);
+  path.ellipse(cx, cy, (right - left) / 2, (bottom - top) / 2, 0, start * Math.PI / 180, (start + sweep) * Math.PI / 180, sweep < 0);
   if (useCenter) path.closePath();
   this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
 }
 function drawOval(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
+  if (l === r || t === b) return;
   drawArc.call(this, Math.min(l, r), Math.min(t, b), Math.max(l, r), Math.max(t, b), 0, 360, 0, p);
 }
 function drawRoundRect(this: JCanvas, l: number, t: number, r: number, b: number, rx: number, ry: number, p: JPaint) {
   const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
-  if ((!width || !height) && p.style === 0) return;
+  if ((!width || !height) && p.style !== 1) return;
   const path = new Path2D();
   path.roundRect(left, top, width, height, { x: Math.max(rx, 0), y: Math.max(ry, 0) });
   this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
@@ -2008,6 +2011,11 @@ export const canvasMethods: NativeSpec["methods"] = {
     drawArc.call(this, r.left, r.top, r.right, r.bottom, start, sweep, useCenter, p);
   },
   "drawLine(FFFFLandroid/graphics/Paint;)V": function (this: JCanvas, x0: number, y0: number, x1: number, y1: number, p: JPaint) {
+    if (this.bmp && p.strokeWidth === 0 && !p.antiAlias && !p.shader && !p.shaderObj &&
+      !p.maskFilter && !p.shadowRadius && !p.dash && !isRecording(this.ctx)) {
+      const pixels = hairlineLine(this.ctx, x0, y0, x1, y1, p.strokeCapN);
+      if (pixels) return drawHairline(this, p, pixels);
+    }
     this.prep(p, true);
     this.ctx.beginPath();
     this.ctx.moveTo(x0, y0);

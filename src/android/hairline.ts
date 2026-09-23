@@ -1,6 +1,12 @@
 type Point = [number, number];
 type Context = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
+function devicePoint(matrix: DOMMatrix, x: number, y: number): Point {
+  const f = Math.fround;
+  return [f(f(f(matrix.a * x) + f(matrix.c * y)) + matrix.e),
+    f(f(f(matrix.b * x) + f(matrix.d * y)) + matrix.f)];
+}
+
 function clipLine(start: Point, end: Point, width: number, height: number): [Point, Point] | null {
   const points: [Point, Point] = [[...start], [...end]];
   for (const [axis, limit] of [[1, height], [0, width]]) {
@@ -53,8 +59,7 @@ export function hairlineRect(ctx: Context, left: number, top: number, right: num
   if (!(right > left && bottom > top && width > 0 && height > 0)) return null;
   const matrix = ctx.getTransform(), f = Math.fround;
   const points: Point[] = [[left, top], [right, top], [right, bottom], [left, bottom]]
-    .map(([x, y]) => [f(f(f(matrix.a * x) + f(matrix.c * y)) + matrix.e),
-      f(f(f(matrix.b * x) + f(matrix.d * y)) + matrix.f)]);
+    .map(([x, y]) => devicePoint(matrix, x, y));
   if (!points.every(([x, y]) => Number.isFinite(x) && Number.isFinite(y))) return null;
   const outset = cap === "square" ? 0.5 : cap === "round" ? Math.PI / 8 : 0;
   // The cap-adjusted first point is also the endpoint of the closing edge.
@@ -80,4 +85,24 @@ export function hairlineRect(ctx: Context, left: number, top: number, right: num
     if (clipped) count += rasterLine(clipped[0], clipped[1], width, height, pixels);
   }
   return count ? pixels : null;
+}
+
+export function hairlineLine(ctx: Context, x0: number, y0: number, x1: number, y1: number,
+  cap: CanvasLineCap): Path2D | null {
+  const width = ctx.canvas.width, height = ctx.canvas.height;
+  if (!(width > 0 && height > 0)) return null;
+  const matrix = ctx.getTransform();
+  const start = devicePoint(matrix, x0, y0), end = devicePoint(matrix, x1, y1);
+  if (![...start, ...end].every(Number.isFinite)) return null;
+  const outset = cap === "square" ? 0.5 : cap === "round" ? Math.PI / 8 : 0;
+  if (outset) {
+    const dx = end[0] - start[0], dy = end[1] - start[1], length = Math.hypot(dx, dy);
+    if (!length) return null;
+    start[0] -= dx / length * outset; start[1] -= dy / length * outset;
+    end[0] += dx / length * outset; end[1] += dy / length * outset;
+  }
+  const clipped = clipLine(start, end, width, height);
+  if (!clipped) return null;
+  const pixels = new Path2D();
+  return rasterLine(clipped[0], clipped[1], width, height, pixels) ? pixels : null;
 }
