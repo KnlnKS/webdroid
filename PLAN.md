@@ -1,12 +1,13 @@
 # TikTok native playback throughput — 2026-09-23
 
 Branch: `codex/tiktok-playback`. Starting revision: `756491fb`.
-Status: decoder SIMD arithmetic, interleaved loads/stores, vector FMLA, and polynomial byte
-multiplication JIT paths are committed. TikTok renders all 13 focused steps with no reached
-Android API gap or required native. FFmpeg reports HEVC at 30/1 fps for the observed stream;
-the focused replay presented 25–29 EGL frames/s across its four video steps. The final
-serialized matrix rendered 183/183 steps in 957.8 seconds. Its TikTok video steps presented
-19–31 EGL frames/s on different live clips. Original-rate playback remains inconsistent.
+Status: decoder SIMD arithmetic, interleaved loads/stores, vector FMLA, polynomial byte
+multiplication, and within-block vector-read caching are committed. TikTok renders all 13
+focused steps with no reached Android API gap or required native. FFmpeg reports HEVC at 30/1
+fps for the observed stream. The latest focused replay rendered 13/13 and its two playing
+video steps presented 6.5 and 20.1 EGL frames/s on different live clips. The serialized
+183/183 E2E matrix predates vector-read caching and must be repeated on the final candidate.
+Original-rate playback remains inconsistent.
 
 The remaining target is generic native decoder throughput. Use fixed guest kernels for controlled
 before/after comparisons and full-Chromium profiles for live behavior. A fixed source video is

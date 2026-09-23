@@ -441,10 +441,31 @@ No visual golden changed. The final A64 SIMD and hardware-oracle check passed 56
 
 A later fixed ByteVC1-style loop with 11 widening-multiply/EXT operations and a changing
 lane load ran 500,000 iterations in about 1.7–2.0 ms under the current JIT. This isolated
-kernel omits the decoder's control flow and does not predict live frame rate. It gave no
-evidence that a broad vector-register cache would repay its extra state and invalidation
-complexity, so no cache change was kept. The remaining diagnosis should distinguish decoded
-frames from EGL presentations on repeatable source media.
+kernel omits the decoder's control flow and does not predict live frame rate. It initially gave
+no evidence for caching vector writes across blocks. A narrower JIT change later cached SIMD
+register reads within a block while writing every result through to memory. On the same fixed
+kernel, the median fell from about 1.8 to 1.6 ms per 500,000 iterations. All 581 A64 and SIMD
+oracle checks passed (18,450 assertions). The following TikTok-only replay rendered 13/13 steps
+in 199.7 seconds, with no new platform API gap, required native, wedge, settle timeout, layout
+error, or draw error. Its two video steps reached 6.5 and 20.1 EGL frames/s on different live
+clips, so this does not establish an end-to-end FPS gain. A further experiment deferring vector
+writes until block exit slowed the fixed loop to about 2.1 ms and was removed.
+
+The bundled FFmpeg stream observed during the earlier probe identified HEVC video at 30/1 fps.
+Tracing ByteVC1's frame-ready flag and picture-order counter during a separate live 20-second
+sample counted 554 distinct decoded pictures versus 440 EGL swaps; counts include playback
+looping and cannot alone identify a compositor fault. A 300,000-instruction slice budget
+increased UI tick frequency but reduced native throughput on a different clip. A six-million
+budget also failed to improve its separate live sample. A temporary adaptive EGL-swap delay
+raised swaps but lowered sampled screen presentations; it was removed. Repeatable source media
+is still needed to attribute the remaining presentation gap.
+
+A post-cache 12-second full-Chromium sample presented 293 EGL swaps and 274 completed screen
+frames while spending 5.93 seconds in native execution. Native slice samples still cluster in
+ByteVC1's widening SIMD arithmetic and lane loads. Chromium's CPU profile also shows repeated
+`glGetError` driver calls, but skipping them would change GLES error behavior; no shortcut was
+kept. Chrome DevTools MCP could not attach because its shared profile was already locked; the
+existing CDP harness collected this profile instead.
 
 ## TikTok video playback follow-up — 2026-09-23
 
