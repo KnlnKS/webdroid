@@ -23,7 +23,7 @@ export interface PreparedMethod {
   readonly params: readonly string[];
   readonly widths: readonly number[];
   readonly sync: boolean;
-  readonly wasmEligible: boolean;
+  readonly wasmEligible: boolean; // diagnostic only; false without an observer
 }
 
 export type PreparationPhase = "decode" | "cfg" | "type";
@@ -199,29 +199,6 @@ function typeConstants(
     current.push(instruction);
   }
 
-  const successors = new Map<number, number[]>();
-  for (const [leader, block] of body) {
-    const last = block.at(-1);
-    if (!last) throw new Error(`empty basic block ${leader}`);
-    const targets = new Set(branchTargets(code, last).filter((target) => body.has(target)));
-    if (!endsBlock(last.op)) {
-      const next = last.pc + last.len;
-      if (body.has(next)) targets.add(next);
-    }
-    successors.set(leader, [...targets]);
-  }
-  for (const region of code.tries) {
-    const handlers = region.handlers.map(([, address]) => address)
-      .concat(region.catchAllAddr >= 0 ? [region.catchAllAddr] : []);
-    for (const [leader, block] of body) {
-      const last = block.at(-1);
-      if (!last || last.pc < region.start || leader >= region.end) continue;
-      const targets = successors.get(leader);
-      if (!targets) throw new Error(`missing successors for block ${leader}`);
-      for (const handler of handlers) if (body.has(handler) && !targets.includes(handler)) targets.push(handler);
-    }
-  }
-
   const retType = parseMethodDesc(desc).ret;
   let liveDefs: Defs | null = null;
   const mark = (reg: number, kind: "F" | "D") => {
@@ -307,6 +284,29 @@ function typeConstants(
     return;
   }
 
+  const successors = new Map<number, number[]>();
+  for (const [leader, block] of body) {
+    const last = block.at(-1);
+    if (!last) throw new Error(`empty basic block ${leader}`);
+    const targets = new Set(branchTargets(code, last).filter((target) => body.has(target)));
+    if (!endsBlock(last.op)) {
+      const next = last.pc + last.len;
+      if (body.has(next)) targets.add(next);
+    }
+    successors.set(leader, [...targets]);
+  }
+  for (const region of code.tries) {
+    const handlers = region.handlers.map(([, address]) => address)
+      .concat(region.catchAllAddr >= 0 ? [region.catchAllAddr] : []);
+    for (const [leader, block] of body) {
+      const last = block.at(-1);
+      if (!last || last.pc < region.start || leader >= region.end) continue;
+      const targets = successors.get(leader);
+      if (!targets) throw new Error(`missing successors for block ${leader}`);
+      for (const handler of handlers) if (body.has(handler) && !targets.includes(handler)) targets.push(handler);
+    }
+  }
+
   const inDefs = new Map<number, Defs>(leaders.map((leader) => [leader, new Map()] as const));
   const inArrays = new Map<number, ArrayKinds | null>(leaders.map((leader) => [leader, null] as const));
   inArrays.set(leaders[0], new Map(paramArrays));
@@ -381,17 +381,18 @@ export function prepareMethod(
   if (observe) observe("cfg", performance.now() - started);
 
   started = observe ? performance.now() : 0;
-  typeConstants(dex, code, desc, isStatic, instructions, leaders);
+  // Only numeric const writes can seed the reaching-definition analysis.
+  if (instructions.some((instruction) => instruction.op >= 0x12 && instruction.op <= 0x19))
+    typeConstants(dex, code, desc, isStatic, instructions, leaders);
   if (observe) observe("type", performance.now() - started);
 
   const signature = parseMethodDesc(desc);
   const sync = instructions.every((instruction) => !maySuspend(instruction.op));
-  const primitiveSignature = signature.params.every((type) => type.length === 1) && signature.ret.length === 1;
-  const hasBackedge = instructions.some((instruction) =>
-    branchTargets(code, instruction).some((target) => target <= instruction.pc));
-  const wasmEligible = !code.tries.length && primitiveSignature && hasBackedge &&
+  const wasmEligible = observe !== undefined && !code.tries.length &&
+    signature.params.every((type) => type.length === 1) && signature.ret.length === 1 &&
     instructions.some((instruction) => isWasmNumericOpcode(instruction.op)) &&
-    instructions.every((instruction) => isWasmRegionOpcode(instruction.op));
+    instructions.every((instruction) => isWasmRegionOpcode(instruction.op)) &&
+    instructions.some((instruction) => branchTargets(code, instruction).some((target) => target <= instruction.pc));
   return {
     instructions,
     leaders,
