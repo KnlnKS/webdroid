@@ -8,6 +8,7 @@ import { encodeString } from "../charset";
 import { javaClassSets } from "../regex-sets";
 import { mangleMethod, jmethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { guestNow, type GuestTimer } from "../../guest-clock";
+import { device } from "../../shell/config";
 
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
   const fn = obj[mangleMethod(name, desc)] ?? rt.proxyMethod?.(obj, name, desc);
@@ -1544,7 +1545,7 @@ rt.register({
     // the page never shuts the runtime down the way a JVM does; hooks are kept so removal works
     "addShutdownHook(Ljava/lang/Thread;)V": (t: unknown) => { shutdownHooks.add(t); },
     "removeShutdownHook(Ljava/lang/Thread;)Z": (t: unknown) => (shutdownHooks.delete(t) ? 1 : 0),
-    "availableProcessors()I": () => (globalThis.navigator?.hardwareConcurrency ?? 4),
+    "availableProcessors()I": () => device.cpu.cores,
     "maxMemory()J": () => 536870912n,
     "totalMemory()J": () => 268435456n,
     "freeMemory()J": () => 134217728n,
