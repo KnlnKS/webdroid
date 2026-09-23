@@ -90,6 +90,21 @@ software bitmap contexts (`willReadFrequently`) passed both flows with either
 setting: 15.4 seconds for the new setting and 15.6 for the old one. This small
 sample establishes no app-level speedup. No goldens changed.
 
+A fresh API-33 sweep at seed `20260923` found 36 graphics differences in 100
+generated cases. The harness retained its maximum of 20 distinct minimized
+fingerprints and replayed each twice. These are not 20 proven independent causes:
+fingerprints include command sequences, and the run stopped retaining after 20.
+Minimized bundles are in `fuzz-results/graphics-next-20260923/` in this worktree.
+The clearest cases are a cubic Path combined with a circle whose filled region
+differs across roughly 30% of pixels (`-11` bundle), and translation after a
+singular skew that Android retains in its Canvas matrix but Webdroid loses
+(`-10` bundle). Other retained cases involve Path fill and center pixels,
+non-AA lines, text and View text rendering, Drawable alpha/compositing, and
+degenerate arcs or round rectangles. Pixel differences range from sub-percent
+edge coverage to substantial shape changes; each needs cause-level diagnosis
+before a platform change. The matching fresh 1,000-case API run had zero
+differences, but its generator exercises only seven API recipes.
+
 ## JVM, DEX and process ownership
 
 - Main-thread identity is not main-queue ownership. Boot, providers, application
