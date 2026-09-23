@@ -46,6 +46,10 @@ export function loadSkiaText(): Promise<void> {
     kit = canvasKit; face = typeface;
     emojiFace = canvasKit.Typeface.MakeFreeTypeFaceFromData(emojiData);
     emojiClips = colorGlyphClips(emojiData);
+  }).catch(error => {
+    kit = null;
+    face = emojiFace = null;
+    console.warn("[skia-text] CanvasKit unavailable; using Canvas2D text", error);
   });
 }
 
