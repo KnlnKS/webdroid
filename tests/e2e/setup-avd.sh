@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create the webdroid_ref AVD with geometry byte-identical to webdroid's framebuffer.
+# Create the API 33 reference AVD at webdroid's default framebuffer geometry.
 # The size is NOT written here: it is read from the one device profile (src/shell/config.ts),
 # so a profile change cannot leave the reference AVD behind. WEBDROID_SCREEN=WxH@dpi overrides.
 # Idempotent: re-running rewrites config.ini but keeps the existing userdata.
