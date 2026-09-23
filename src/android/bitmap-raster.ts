@@ -141,7 +141,11 @@ export function tryBitmapLine(canvas: JCanvas, paint: JPaint,
 
 export function tryBitmapPath(canvas: JCanvas, paint: JPaint, path: JPath): boolean {
   const strokeInverse = path.inverseFill && paint.style === 1 && paint.strokeWidth > 0 && !paint.dash;
-  const fillInverse = path.inverseFill && path.fillRule === "nonzero" && paint.style === 0;
+  let fillInverse = path.inverseFill && path.fillRule === "nonzero" && paint.style === 0;
+  if (path.inverseFill && path.fillRule === "evenodd" && paint.style === 0) {
+    const m = canvas.ctx.getTransform();
+    fillInverse = m.a * m.d === m.b * m.c;
+  }
   const hairline = paint.style === 1 && paint.strokeWidth === 0 && paint.antiAlias && !paint.dash;
   if (!(strokeInverse || fillInverse || hairline) || !eligible(canvas, paint)) return false;
   if ((strokeInverse || fillInverse) && canvas.w * canvas.h <= 250_000) {
