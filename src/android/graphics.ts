@@ -1777,7 +1777,10 @@ function clipPath(this: JCanvas, path: JPath): number {
 }
 // Canvas2D exposes no clip region; rectangular clips retain a device-space bound.
 function viewportClipBounds(cv: JCanvas, out: JRect): number {
-  const { a, b, c, d, e, f } = cv.ctx.getTransform();
+  const matrix = cv.ctx.getTransform();
+  const a = Math.fround(matrix.a), b = Math.fround(matrix.b);
+  const c = Math.fround(matrix.c), d = Math.fround(matrix.d);
+  const e = Math.fround(matrix.e), f = Math.fround(matrix.f);
   const det = a * d - b * c;
   const polygon = cv.clipPolygon;
   const clip = cv.clipDevice;
