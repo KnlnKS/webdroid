@@ -620,6 +620,49 @@ steps with four process diagnostics, advancing ticks and no required native, JIT
 or GLES error. Its two active video steps presented 17.0 and 22.7 EGL swaps/s on different
 live clips; their original frame rates remain unknown.
 
+Native bionic and raw A64/ARM syscalls previously returned PID 4242 and thread IDs derived
+from it, while Java and the process broker used PID 1000 or a child PID. The CPU state now
+shares the Java process and thread identity; pthread handles, `getpid`, `gettid`, `tgkill`,
+`capget` and `setsid` use the same guest-visible IDs. The native CPU's separate internal ID
+still owns mutexes. Focused A64/ARM, procfs and memory checks passed 102 tests; a new A64
+syscall check covers the guest-visible IDs. TikTok smoke compiled 462,058 classes with zero
+method failures. The following TikTok-only replay rendered 13/13 steps in 195.6 seconds,
+with four process diagnostics and no required native, wedge, settle timeout, layout, draw or
+GLES error. Monitor probes moved from `/proc/4242` to the real guest `/proc/1000`, confirming
+the corrected identity; the unimplemented per-process stat and smaps files still fail to open.
+The two active video steps made 13.0 and 14.0 EGL swaps/s while native execution consumed
+5.6/6.4 and 5.1/6.6 seconds respectively. Live clip differences prevent an FPS comparison.
+
+Java's process UID also differed from bionic's hardcoded 10123 and the virtual file owner.
+Native UID/GID and passwd metadata now use the package UID, and `/proc/<pid>/status` exposes
+the known process identity and CPU affinity. It omits memory and CPU accounting fields that
+this runtime cannot measure, so the separate stat/smaps probes remain unsupported. Focused
+libc, stdio and procfs tests passed (13 cases). The following TikTok-only replay rendered
+13/13 steps in 203.3 seconds with four process diagnostics, advancing main ticks and no
+required native, wedge, settle timeout, layout, draw or GLES error. The monitor's prior
+`/proc/1000/status` open errors disappeared; its stat/smaps probes remain unsupported. Two
+active video steps presented 14.4 and 16.4 EGL swaps/s on different live clips while native
+execution took 4.9/6.4 and 4.7/6.4 seconds. This is not evidence of an FPS improvement.
+
+The libc wrapper and raw syscall had separate `sysinfo` writers. The former reported the
+configured 2 GiB, wrote a 112-byte struct even for ARM32, and set `procs` to 64; the latter
+reported 4 GiB with a 64-byte ARM32 struct. Both routes now share one ABI-aware writer using
+the configured device RAM. A focused test verifies 32/64-bit RAM and struct bounds; 26 libc
+and A64 checks pass. The following TikTok-only replay rendered 13/13 steps in 206.6 seconds,
+with all four process diagnostics available, advancing ticks, and no required native, wedge,
+settle timeout, layout, draw or GLES error. Its two active video steps presented 17.2 and
+20.2 EGL swaps/s on different clips, with 4.1/6.5 and 4.7/6.5 seconds spent in guest native
+execution. Their source cadences were not captured, so this does not prove original-rate
+playback.
+
+A temporary native entry trap captured 48 unchanged ByteVC2 packets (68 KiB) from one live
+clip. A headless harness drove the bundled decoder's public API with those same packet bytes
+and produced 42 frames at 576×1024, with no decoder error. After removing the trap, three
+uncontended runs spent 829–1,044 ms in native execution and retired 228.4 million guest
+instructions each. This relatively light clip does not reproduce the hardest live playback
+case, but it now provides a fixed ByteVC2 correctness and timing fixture. The trap was removed
+from production source; capture and harness remain ignored local diagnostics.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only
