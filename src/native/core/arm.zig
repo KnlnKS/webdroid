@@ -245,7 +245,17 @@ fn neonShift(c: *Cpu, w: u32, pc: u32) Status {
     const q = bits(w, 6, 1);
     const op = bits(w, 8, 4);
     const widen = op == 10;
-    if (op > 7 and !widen) return fault(c, .unimplemented, w, pc);
+    const narrow = op == 8 or op == 9;
+    if (op > 7 and !widen and !narrow) return fault(c, .unimplemented, w, pc);
+    if (narrow) {
+        if (m & 1 != 0) return fault(c, .undefined, w, pc);
+        const imm = (bits(w, 7, 1) << 6) | bits(w, 16, 6);
+        @memcpy(&c.v[18], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..16]);
+        const opcode = 16 + (op - 8) * 2 + q;
+        const result = simd.exec(c, 0x0f000400 | (bits(w, 24, 1) << 29) | (imm << 16) | (opcode << 11) | (18 << 5) | 16);
+        if (result == .next) @memcpy(@as([*]u8, @ptrCast(vreg(u64, c, d)))[0..8], c.v[16][0..8]);
+        return result;
+    }
     if ((widen and (d & 1 != 0 or q != 0)) or (q != 0 and (d | m) & 1 != 0)) return fault(c, .undefined, w, pc);
     const imm = (bits(w, 7, 1) << 6) | bits(w, 16, 6);
     const count: usize = if (q != 0 or widen) 16 else 8;

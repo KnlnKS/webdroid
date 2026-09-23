@@ -387,6 +387,24 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(20, 24))).toEqual([8, 9, 10, 11]);
     }
   });
+  test("NEON narrowing shifts retain rounding and saturation", () => {
+    const cases: [number, number, bigint[], number[]][] = [
+      [0xf2f23812, 0xeff2, [0x123456789abcdef0n, 0xfedcba9876543210n], [0x59e26af3, 0xea61d950]],
+      [0xf2f23852, 0xeff2, [0x123456789abcdef0n, 0xfedcba9876543210n], [0x59e26af3, 0xea61d951]],
+      [0xf2f23912, 0xeff2, [0x7fffffffffffffffn, 0x8000000000000000n], [0x7fffffff, 0x80000000]],
+      [0xf3f23812, 0xfff2, [0x7fffffffffffffffn, 0x8000000000000000n], [0xffffffff, 0]],
+    ];
+    for (const [word, first, values, expected] of cases) {
+      const setup = (cpu: Cpu) => { new BigUint64Array(cpu.si.buffer, cpu.si.byteOffset, 32).set(values, 2); };
+      for (const execute of [
+        () => run([word, BXLR], setup),
+        () => runThumb([first, word & 0xffff, 0x4770], setup),
+      ]) {
+        const c = execute();
+        expect(Array.from(c.si.slice(38, 40), x => x >>> 0)).toEqual(expected);
+      }
+    }
+  });
   test("NEON arithmetic shares D/Q lanes in ARM and Thumb encodings", () => {
     const setup = (cpu: Cpu) => {
       const floats = new Float32Array(cpu.si.buffer, cpu.si.byteOffset, cpu.si.length);
