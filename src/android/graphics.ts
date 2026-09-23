@@ -1732,8 +1732,9 @@ function viewportClipBounds(cv: JCanvas, out: JRect): number {
   return 1;
 }
 function drawRect(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
-  if (!(r > l && b > t)) return;
-  this.drawShape(p, (c) => c.fillRect(l, t, r - l, b - t), (c) => c.strokeRect(l, t, r - l, b - t));
+  const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
+  if (!width || !height) return;
+  this.drawShape(p, (c) => c.fillRect(left, top, width, height), (c) => c.strokeRect(left, top, width, height));
 }
 function drawColor(this: JCanvas, color: number, clear = false) {
   const fill = cssColor(color);
@@ -1748,18 +1749,20 @@ function drawColor(this: JCanvas, color: number, clear = false) {
 }
 /** ellipse arc in the box; a full sweep without the centre is drawOval */
 function drawArc(this: JCanvas, l: number, t: number, r: number, b: number, start: number, sweep: number, useCenter: number, p: JPaint) {
-  if (!(r > l && b > t)) return;
+  const left = Math.min(l, r), top = Math.min(t, b), right = Math.max(l, r), bottom = Math.max(t, b);
+  if (right === left || bottom === top) return;
   const path = new Path2D();
-  const cx = (l + r) / 2, cy = (t + b) / 2;
+  const cx = (left + right) / 2, cy = (top + bottom) / 2;
   if (useCenter) path.moveTo(cx, cy);
-  path.ellipse(cx, cy, (r - l) / 2, (b - t) / 2, 0, start * Math.PI / 180, (start + sweep) * Math.PI / 180, sweep < 0);
+  path.ellipse(cx, cy, (right - left) / 2, (bottom - top) / 2, 0, start * Math.PI / 180, (start + sweep) * Math.PI / 180, sweep < 0);
   if (useCenter) path.closePath();
   this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
 }
-function drawRoundRect(this: JCanvas, l: number, t: number, r: number, b: number, rx: number, _ry: number, p: JPaint) {
-  if (!(r > l && b > t)) return;
+function drawRoundRect(this: JCanvas, l: number, t: number, r: number, b: number, rx: number, ry: number, p: JPaint) {
+  const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
+  if (!width || !height) return;
   const path = new Path2D();
-  path.roundRect(l, t, r - l, b - t, Math.min(rx, (r - l) / 2, (b - t) / 2));
+  path.roundRect(left, top, width, height, { x: Math.min(Math.max(rx, 0), width / 2), y: Math.min(Math.max(ry, 0), height / 2) });
   this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
 }
 function drawBitmapRect(this: JCanvas, b: JBitmap, src: JRect | null, dst: JRect | JRectF, p: JPaint | null) {
