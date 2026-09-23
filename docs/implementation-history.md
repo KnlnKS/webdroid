@@ -314,6 +314,53 @@ The corpus renders 20/21 APKs. Amazon crashes before drawing both here and on th
 pre-merge `54e48012` revision under an isolated replay, so that failure is not attributed
 to this integration.
 
+## TikTok native playback throughput — 2026-09-23
+
+An isolated `codex/tiktok-playback` worktree starts at `756491fb`. A fresh TikTok-only baseline
+rendered 13/13 steps in 202.0 seconds. Four process diagnostics were available at every step;
+none showed a wedged loop, required native, layout error or draw error. Its nine missing-class
+probes name optional app, Lynx, vendor and AppsFlyer code, not reached Android APIs.
+
+A three-second live decoder trace counted millions of A64 interpreter exits for SQRSHRUN,
+SRSHL, halving add/subtract, absolute difference, rounded shifts, pairwise add, lane MLA/MLS
+and interleaved LD2. The JIT now emits general WebAssembly SIMD or lane code for those
+operations, retaining destination aliasing, FPSR.Q saturation and zeroed upper halves. The
+existing unsigned halfword shift path shares the signed/rounded implementation. A trial of
+vector load/store emission slowed a fixed kernel by about 3%, so it was withdrawn. No APK or
+bundled library bytecode changed.
+
+Fixed guest kernels improved from about 67 to 7.5 ms per million four-instruction SQRSHRUN
+loops and from about 96 to 35–40 ms per million four-instruction SRSHL loops. The complete
+A64 SIMD and hardware-oracle check passed 558 tests with 18,253 assertions. TikTok smoke
+compiled 462,058 classes with zero method failures. The final focused TikTok replay rendered
+13/13 in 204.7 seconds with advancing processes and no new reached Android API gap, required
+native, wedge, layout error or draw error.
+
+That replay's feed and two later video steps reached about 8, 9.8 and 10.7 EGL frames/s;
+their live media differ from baseline clips, so those values cannot establish a throughput
+regression or improvement. A separate ten-second full-Chromium hardware profile reached
+23.8 EGL frames/s on another clip and spent 5.19 seconds in native execution. Its hottest
+native samples remain in ByteVC1; frequent WebGL `getError` calls also appear in the CPU
+profile. Preserving GL error semantics rules out simply skipping those calls. Neither this
+profile nor the fixed kernels establish original-rate playback on dense feed videos. No visual
+goldens changed.
+
+TikTok logs also report that `libstagefright.so` cannot be opened. The string originates in
+TikTok's `libsysoptimizer.so` private MediaCodec hook, which looks for internal ACodec and
+MediaCodec symbols. The failed optional hook is not evidence that TikTok's feed requested the
+Android MediaCodec API or that fabricating this private library would accelerate playback.
+
+The final serialized E2E matrix rendered 183/183 steps in 976.9 seconds. TikTok rendered
+13/13 with four process snapshots at each step, no required native, wedge, settle timeout,
+layout error or draw error, and the same nine optional missing classes as the starting run.
+Its feed, resume and two later video steps measured 13.5, 13.9, 19.7 and 27.4 EGL frames/s
+on different live clips; these are not a matched FPS comparison. No flow wedged or reported
+a required native or layout error. YouTube retained its two known control settle timeouts
+and recorded nine `Matrix.mapRect` draw errors, versus the earlier reported seven; whether
+that count change is due to source timing or code requires a matched reproduction. The four
+scored flows rendered all 75 steps; their mean content differences were FitNotes 39.80%,
+Mihon app 42.12%, Harmonic 26.99% and Mihon onboarding 9.07%. No visual golden changed.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only

@@ -1,3 +1,17 @@
+# TikTok native playback throughput — 2026-09-23
+
+Branch: `codex/tiktok-playback`. Starting revision: `756491fb`.
+Status: decoder SIMD arithmetic and interleaved-load JIT paths are committed. TikTok renders all
+13 focused steps with no reached Android API gap or required native. The final serialized matrix
+renders 183/183 steps. Original-rate feed playback remains unmet on dense live clips; no fixed
+source video was available for a matched FPS comparison.
+
+The remaining target is generic native decoder throughput. Use fixed guest kernels for controlled
+before/after comparisons and full-Chromium profiles for live behavior. A fixed source video is
+needed to verify original FPS. Avoid app-specific decoder substitution.
+
+---
+
 # TikTok video playback follow-up — 2026-09-23
 
 Branch: `codex/tiktok-video-playback`. Starting revision: `9a038ff3`.
