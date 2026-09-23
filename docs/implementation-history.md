@@ -38,6 +38,14 @@ The codec output format supplied color-format 21, width, height, stride and slic
 remaining absent metadata queries (rotation, color range/standard, sample aspect and display
 dimensions, AAC profile) have not been established as the cause. Full E2E is reserved for the
 final candidate, and no visual goldens changed.
+An audit then caught a distinct NDK format bug: `AMediaFormat_getBuffer` could report success
+with a null pointer for the extractor's heap-backed codec-specific data. Extracted and
+set buffers now use promotable direct storage; the ARM32/64 fixture checks the returned SPS
+start code. This path was not called by the observed Unity intro, so the fix does not explain
+its stall. The unmodified bundle's `intro_uncompressed` resource was extracted to a temporary
+file for diagnosis; its first frames visibly show a door. A fresh full-Chrome GL probe during
+the black intro found no WebGL error or failed shader compile/link, so those hypotheses did
+not reproduce. Probe code was removed.
 
 The first original-ARM32 tutorial reached rendering with missing sprites, black text blocks
 and repeated invalid-bounds warnings. Unity's bounds predicate was correct; a live instruction
