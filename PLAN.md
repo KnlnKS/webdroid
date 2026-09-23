@@ -4,17 +4,14 @@ Branch: `codex/tiktok-playback`. Starting revision: `756491fb`.
 Status: decoder SIMD arithmetic, interleaved loads/stores, vector FMLA, polynomial byte
 multiplication, within-block vector-read caching, zeroed 64-bit vector-result caching, direct
 vector memory transfers, accumulator reuse, longer JIT regions, A64 bit/byte reversal, and
-cached vector stores are committed. The latest TikTok-only replay rendered 13/13 steps with no
-reached Android API gap or required native. Its two video steps presented 13.0 and 14.0 EGL
-swaps/s on different live clips after aligning native process IDs with Java. The subsequent
-TikTok-only replay after native UID/GID and procfs status fixes rendered 13/13 with 14.4 and
-16.4 EGL swaps/s on two other clips. The duplicate `sysinfo` writers are now consolidated and
-the following TikTok replay rendered 13/13 with 17.2 and 20.2 EGL swaps/s on two more clips.
-A fixed 48-packet ByteVC2 capture decodes 42 frames in 0.83–1.04 seconds under the normal
-core; it is a light clip and does not reproduce the slowest feed cases. FFmpeg reported
-HEVC at 30/1 fps for one earlier stream, not those clips. The serialized 183/183 E2E matrix
-predates the latest JIT changes and must be repeated on the final candidate.
-Original-rate playback remains inconsistent.
+cached vector stores are committed. Further generic SIMD lowerings reduced fallback calls on
+a fixed 48-packet ByteVC2 capture from 3.82 million to 0.35 million and shortened three quiet
+42-frame runs from 823–840 ms to 760–768 ms. The latest TikTok-only replay rendered 13/13
+steps with no reached Android API gap or required native; its two video steps presented 21 and
+25 EGL swaps/s on different live clips. Their source cadences remain unknown. An isolated
+DevTools browser reached the For You screen but received no video frames. The serialized
+183/183 E2E matrix predates the latest JIT changes and must be repeated on the final candidate.
+Original-rate playback remains unproved.
 
 The Android ClipboardManager stub has been replaced with a process-shared service. TikTok's
 Share → Copy link now returns its URL through `getPrimaryClip`; TikTok smoke compilation has

@@ -663,6 +663,28 @@ instructions each. This relatively light clip does not reproduce the hardest liv
 case, but it now provides a fixed ByteVC2 correctness and timing fixture. The trap was removed
 from production source; capture and harness remain ignored local diagnostics.
 
+Live native samples attributed over 93% of their top execution sites to the bundled FFmpeg
+or ByteVC2 decoder, depending on the feed clip. A temporary fallback counter observed 36.0
+million JIT interpreter handoffs over 12 seconds on one ByteVC2 clip. Disassembly identified
+repeated narrowing shifts, pairwise minima, widening pairwise sums, absolute differences, and
+32-bit saturated adds/subtracts in the decoder's pixel loops. The A64 JIT now lowers those
+operations generically, using a byte shuffle for byte-aligned plain narrowing shifts. A
+hardware-oracle and core sweep passed 563 SIMD tests; focused checks cover the shift's two
+destination halves and inactive-lane saturation/accumulation semantics. Temporary fallback
+instrumentation was removed from the production core.
+
+On the same captured 48-packet ByteVC2 input, fallback calls fell from 3.82 million to 0.35
+million. In a quiet matched comparison, three uninstrumented decoder runs spent 823–840 ms at
+the starting JIT and 760–768 ms with the new lowerings; each decoded all 42 frames and retired
+228.4 million guest instructions. Runs made beside another CPU-heavy Chromium workload took
+longer and were excluded from the timing comparison. A TikTok-only replay rendered 13/13 steps
+in 200.4 seconds with no required native, wedge, settle timeout, layout, draw or GLES error.
+Its active video steps presented 21 and 25 EGL swaps/s on two live clips while native execution
+consumed 4.8 of roughly 5.5 seconds per step. The clips differ from earlier runs and their
+source FPS is unknown; original-rate playback is therefore still unproved. A separate Chrome
+DevTools browser reached the For You screen but remained on a loading spinner despite successful
+CDN TLS handshakes and advancing guest ticks, so it supplied no video cadence evidence.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only
