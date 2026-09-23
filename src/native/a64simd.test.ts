@@ -417,6 +417,15 @@ describe("a64 simd: vector arithmetic", () => {
     expect(c.fpsr & (1 << 27)).toBe(1 << 27);
   });
 
+  test("64-bit SQRSHL ignores saturation in inactive upper lanes", () => {
+    const c = run([0x0ea45e32, RET], (cpu) => {
+      cpu.si.set([7, -3, 0x40000000, -0x40000000], 4 * 17);
+      cpu.si.set([-1, -2, 2, 2], 4 * 4);
+    });
+    expect(I(c, 18)).toEqual([4, -1, 0, 0]);
+    expect(c.fpsr & (1 << 27)).toBe(0);
+  });
+
   test("byte-aligned SHRN preserves destination halves", () => {
     const c = run([0x0f188420, 0x4f188420, RET], (cpu) => {
       cpu.vb.set(Array.from({ length: 16 }, (_, i) => i), 16);

@@ -405,6 +405,37 @@ fn emitVariableShift16(e: *Emit, rd: u8, rn: u8, rm: u8, q: bool, unsigned: bool
     }
     if (!q) zeroTop(e, rd, true);
 }
+fn emitSqrshl32(e: *Emit, rd: u8, rn: u8, rm: u8, q: bool) void {
+    const b = e.b;
+    vectorConst(e, 2, 0);
+    b.set(jit.L_VB);
+    for (0..(if (q) @as(usize, 4) else 2)) |i| {
+        b.get(jit.L_VB);
+        vget(e, rm);
+        b.emit(.{ sv(S.extract_s[0]), @as(u8, @intCast(i * 4)), set(L_A) });
+        vget(e, rn);
+        b.emit(.{ sv(S.extract_s[2]), @as(u8, @intCast(i)), set(L_B) });
+        b.emit(.{ get(L_A), c32(0), O.i32_ge_s });
+        b.blockStart(O.if_, wasm.I32);
+        b.emit(.{ get(L_B), O.i64_extend_i32_s,
+            get(L_A), c32(32), get(L_A), c32(32), O.i32_lt_s, O.select, O.i64_extend_i32_u,
+            O.i64_shl, tee(jit.L_T0), O.i32_wrap_i64, tee(jit.L_R), O.i64_extend_i32_s,
+            get(jit.L_T0), O.i64_ne, tee(jit.L_NEXT) });
+        setQIf(e);
+        b.emit(.{ c32(-2147483648), c32(2147483647), get(L_B), c32(0), O.i32_lt_s, O.select,
+            get(jit.L_R), get(jit.L_NEXT), O.select, O.else_,
+            get(L_A), c32(-32), O.i32_lt_s });
+        b.blockStart(O.if_, wasm.I32);
+        b.i32c(0);
+        b.byte(O.else_);
+        b.emit(.{ get(L_B), O.i64_extend_i32_s, c64(1),
+            c32(0), get(L_A), O.i32_sub, c32(1), O.i32_sub, O.i64_extend_i32_u, O.i64_shl,
+            O.i64_add, c32(0), get(L_A), O.i32_sub, O.i64_extend_i32_u, O.i64_shr_s, O.i32_wrap_i64, O.end, O.end,
+            sv(S.replace[2]), @as(u8, @intCast(i)), set(jit.L_VB) });
+    }
+    b.emit(.{ get(L_CPU), get(jit.L_VB) });
+    vput(e, rd, q);
+}
 fn halvingOperand(e: *Emit, rm: u8, subtract: bool) void {
     vget(e, rm);
     if (subtract) e.b.emit(.{sv(S.not)});
@@ -619,6 +650,23 @@ fn emitVector(e: *Emit, w: u32) bool {
         vput(e, rd, q);
         return true;
     }
+    if (is(w, 0x8f3e_0c00, 0x0e30_0800) and bits(w, 12, 5) == 3 and size < 3) {
+        b.get(L_CPU);
+        vget(e, rn);
+        if (!q) maskLowHalf(e);
+        if (size == 0) b.emit(.{sv(S.extadd_pairwise[0][@intFromBool(U)])});
+        if (size < 2) b.emit(.{sv(S.extadd_pairwise[1][@intFromBool(U)])});
+        b.set(jit.L_VA);
+        for (0..4) |i| {
+            b.emit(.{ get(jit.L_VA), sv(S.extract_u[2]), @as(u8, @intCast(i)) });
+            if (size == 2) b.byte(if (U) O.i64_extend_i32_u else O.i64_extend_i32_s);
+            if (i != 0) b.byte(if (size == 2) O.i64_add else O.i32_add);
+        }
+        if (size == 0) b.emit(.{ c32(0xffff), O.i32_and });
+        b.memop(if (size == 2) O.i64_store else O.i32_store, voff(rd));
+        zeroTop(e, rd, size == 2);
+        return true;
+    }
     if (is(w, 0x9f20_0c00, 0x0e20_0000) and size < 3) {
         const opcode = bits(w, 12, 4);
         if ((opcode == 5 or opcode == 7) and size < 2) {
@@ -680,6 +728,10 @@ fn emitVector(e: *Emit, w: u32) bool {
         }
         if (size == 1 and ((opcode == 8 and U) or opcode == 10)) {
             emitVariableShift16(e, rd, rn, rm, q, U, opcode == 10);
+            return true;
+        }
+        if (size == 2 and !U and opcode == 11) {
+            emitSqrshl32(e, rd, rn, rm, q);
             return true;
         }
         if ((opcode == 0 or opcode == 2 or (opcode == 4 and !U)) and size < 3) {
