@@ -19,6 +19,13 @@ test("Java and native-facing procfs expose the current process cmdline", async (
     expect(new TextDecoder().decode(new Uint8Array(bytes.buffer, 0, length))).toBe("com.example.app\0");
   }
   expect(await vcall(await newObj("java/io/File", "(Ljava/lang/String;)V", "/proc/9999/cmdline"), "exists", "()Z")).toBe(0);
+  const status = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/proc/2468/status");
+  const bytes = new Int8Array(512);
+  const length = await vcall(status, "read", "([B)I", bytes);
+  const text = new TextDecoder().decode(new Uint8Array(bytes.buffer, 0, length));
+  expect(text).toContain("Pid:\t2468\n");
+  expect(text).toContain("Uid:\t10001\t10001\t10001\t10001\n");
+  expect(text).toContain("Cpus_allowed_list:\t");
 });
 
 test("String.trim removes a proc cmdline terminator", () => {

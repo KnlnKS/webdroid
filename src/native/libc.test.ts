@@ -4,6 +4,35 @@ import { Cpu, setA64 } from "./cpu";
 import { lookupHost } from "./host";
 import { libcInit } from "./libc";
 import { mem } from "./mem";
+import { procIdentity } from "../shell/procfs";
+import { device } from "../shell/config";
+
+test("native user IDs match the process identity", async () => {
+  setA64(true); libcInit();
+  const cpu = new Cpu(new JThread(), "identity-test");
+  try {
+    for (const name of ["getuid", "geteuid", "getgid", "getegid"]) {
+      expect(await cpu.call(lookupHost(name, "libc.so")!, [])).toBe(procIdentity.uid);
+    }
+  } finally { cpu.dispose(); setA64(false); }
+});
+
+test("sysinfo uses the device RAM in both native ABIs without overrunning its struct", async () => {
+  for (const a64 of [false, true]) {
+    setA64(a64); libcInit();
+    const cpu = new Cpu(new JThread(), "sysinfo-test"), out = mem.hostAlloc(128);
+    const size = a64 ? 112 : 64;
+    mem.st32(out + size, 0xfeedbeef);
+    try {
+      expect(await cpu.call(lookupHost("sysinfo", "libc.so")!, [out])).toBe(0);
+      const unit = mem.ld32(out + (a64 ? 104 : 52));
+      const total = a64 ? Number(mem.ld64(out + 32)) : mem.ld32(out + 16);
+      expect(total * unit).toBe(device.cpu.memKb * 1024);
+      expect(mem.ld32(out + size) >>> 0).toBe(0xfeedbeef);
+    } finally { cpu.dispose(); }
+  }
+  setA64(false);
+});
 
 test("sort and search pass pointers in the guest ABI", async () => {
   for (const a64 of [false, true]) {

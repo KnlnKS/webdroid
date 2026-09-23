@@ -240,7 +240,7 @@ export function pthreadInit(): void {
       if (t.exited) { threads.delete(tid); handles.delete(handle); }
       return 0;
     },
-    pthread_gettid_np: (_c, a) => { const tid = tidOf(a.p()); return tid < 0 ? -1 : 4242 + tid; },
+    pthread_gettid_np: (_c, a) => { const tid = tidOf(a.p()); return cpuByTid(tid)?.osTid ?? -1; },
     pthread_exit: (cpu, a) => {
       const rv = a.va();
       const t = threads.get(cpu.tid);

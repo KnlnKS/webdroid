@@ -19,7 +19,74 @@ test("USHL halfword lanes handle signed shift counts and destination aliasing", 
   expect([...c.vw.subarray(8 * 3, 8 * 4)]).toEqual([0x4000, 0x07f8, 0, 0, 0, 0, 0, 0]);
 });
 
+test("PMULL2 multiplies upper byte lanes when the destination aliases a source", () => {
+  const a = [0x80, 0x01, 0xff, 0x53, 0x17, 0xc0, 0x7e, 0x39];
+  const b = [0x02, 0x80, 0xff, 0x65, 0xb4, 0x09, 0x42, 0xe1];
+  const c = run([0x4e23e0a5, RET], cpu => {
+    cpu.vb.set(a, 16 * 5 + 8);
+    cpu.vb.set(b, 16 * 3 + 8);
+  });
+  const expected = a.flatMap((x, lane) => {
+    let product = 0;
+    for (let bit = 0; bit < 8; bit++) if (b[lane] & (1 << bit)) product ^= x << bit;
+    return [product & 255, product >> 8];
+  });
+  expect([...c.vb.subarray(16 * 5, 16 * 6)]).toEqual(expected);
+});
+
 describe("a64 simd: memory", () => {
+  test("vector reads survive scalar work and refresh after a vector load", () => {
+    const buf = pattern();
+    const c = run([
+      0x3dc00120, // ldr q0, [x9]
+      0x9100054a, // add x10, x10, #1
+      0x4e208401, // add v1.16b, v0.16b, v0.16b
+      0x3dc00520, // ldr q0, [x9, #16]
+      0x9100054a, // add x10, x10, #1
+      0x4e218402, // add v2.16b, v0.16b, v1.16b
+      RET,
+    ], cpu => { cpu.w[18] = buf + 256; });
+    expect(c.w[20]).toBe(2);
+    expect([...c.vb.subarray(16, 32)]).toEqual(Array.from({ length: 16 }, (_, i) => i * 2));
+    expect([...c.vb.subarray(32, 48)]).toEqual(Array.from({ length: 16 }, (_, i) => 16 + i * 3));
+  });
+
+  test("lane stores use the latest vector value across compiled instructions", () => {
+    const buf = pattern();
+    const c = run([
+      0x4e080458, // dup v24.2d, v2.d[0]
+      0x4d818518, // st1 { v24.d }[1], [x8], x1
+      0x4e080478, // dup v24.2d, v3.d[0]
+      0x4d818518, // st1 { v24.d }[1], [x8], x1
+      RET,
+    ], cpu => {
+      cpu.w[16] = buf + 256;
+      cpu.w[2] = 8;
+      cpu.vb.set([1, 2, 3, 4, 5, 6, 7, 8], 16 * 2);
+      cpu.vb.set([9, 10, 11, 12, 13, 14, 15, 16], 16 * 3);
+    });
+    expect(c.w[16] >>> 0).toBe(buf + 272);
+    expect([...mem.u8.subarray(buf + 256, buf + 272)]).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+  });
+
+  test("interleaved stores preserve lane order at both vector widths", () => {
+    const buf = pattern();
+    const c = run([0x0c9f8926, 0x4c00813e, RET], cpu => {
+      cpu.w[18] = buf + 256;
+      cpu.vb.set(Array.from({ length: 16 }, (_, i) => i), 16 * 6);
+      cpu.vb.set(Array.from({ length: 16 }, (_, i) => i + 32), 16 * 7);
+      cpu.vb.set(Array.from({ length: 16 }, (_, i) => i + 64), 16 * 30);
+      cpu.vb.set(Array.from({ length: 16 }, (_, i) => i + 96), 16 * 31);
+    });
+    expect(c.w[18] >>> 0).toBe(buf + 272);
+    expect([...mem.u8.subarray(buf + 256, buf + 272)]).toEqual([
+      0, 1, 2, 3, 32, 33, 34, 35, 4, 5, 6, 7, 36, 37, 38, 39,
+    ]);
+    expect([...mem.u8.subarray(buf + 272, buf + 304)]).toEqual(
+      Array.from({ length: 32 }, (_, i) => (i & 1 ? 96 : 64) + (i >> 1)),
+    );
+  });
+
   test("multi-register lanes preserve wraparound, writeback and stores across tiers", () => {
     const buf = pattern();
     const c = run([
@@ -363,6 +430,57 @@ describe("a64 simd: vector arithmetic", () => {
       c.si.set([2, 2, -1, -2], 4 * 4);
     });
     expect(I(c, 18)).toEqual([0x7fffffff, -0x80000000, 4, -1]);
+    expect(c.fpsr & (1 << 27)).toBe(1 << 27);
+  });
+
+  test("64-bit SQRSHL ignores saturation in inactive upper lanes", () => {
+    const c = run([0x0ea45e32, RET], (cpu) => {
+      cpu.si.set([7, -3, 0x40000000, -0x40000000], 4 * 17);
+      cpu.si.set([-1, -2, 2, 2], 4 * 4);
+    });
+    expect(I(c, 18)).toEqual([4, -1, 0, 0]);
+    expect(c.fpsr & (1 << 27)).toBe(0);
+  });
+
+  test("byte-aligned SHRN preserves destination halves", () => {
+    const c = run([0x0f188420, 0x4f188420, RET], (cpu) => {
+      cpu.vb.set(Array.from({ length: 16 }, (_, i) => i), 16);
+      cpu.vb.fill(0xa5, 0, 16);
+    });
+    expect([...c.vb.subarray(0, 16)]).toEqual([1, 2, 5, 6, 9, 10, 13, 14, 1, 2, 5, 6, 9, 10, 13, 14]);
+  });
+
+  test("64-bit vector saturation ignores inactive upper lanes", () => {
+    const c = run([0x0ea20c20, RET], (cpu) => {
+      cpu.si.set([1, 2, 0x7fffffff, 0x7fffffff], 4);
+      cpu.si.set([3, 4, 1, 1], 8);
+    });
+    expect(I(c, 0)).toEqual([4, 6, 0, 0]);
+    expect(c.fpsr & (1 << 27)).toBe(0);
+  });
+
+  test("64-bit UQSHL ignores saturation in inactive upper lanes", () => {
+    const c = run([0x2f0974e7, RET], (cpu) => {
+      cpu.vb.set([1, 2, 3, 4, 5, 6, 7, 8, 255, 255, 255, 255, 255, 255, 255, 255], 16 * 7);
+    });
+    expect([...c.vb.subarray(16 * 7, 16 * 8)]).toEqual([2, 4, 6, 8, 10, 12, 14, 16, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(c.fpsr & (1 << 27)).toBe(0);
+  });
+
+  test("64-bit UADALP clears inactive upper lanes", () => {
+    const c = run([0x2e206820, RET], (cpu) => {
+      cpu.vb.set([1, 2, 3, 4, 5, 6, 7, 8], 16);
+      cpu.vw.fill(10, 0, 8);
+    });
+    expect([...c.vw.subarray(0, 8)]).toEqual([13, 17, 21, 25, 0, 0, 0, 0]);
+  });
+
+  test("sqrshrun rounds signed lanes into both unsigned destination halves", () => {
+    const c = run([0x2f098c20, 0x6f0a8c40, RET], (cpu) => {
+      cpu.vsw.set([-32768, -129, -65, -64, -1, 0, 64, 32767], 8);
+      cpu.vsw.set([-32768, -65, 0, 31, 32, 127, 16320, 32767], 16);
+    });
+    expect([...c.vb.subarray(0, 16)]).toEqual([0, 0, 0, 0, 0, 0, 1, 255, 0, 0, 0, 0, 1, 2, 255, 255]);
     expect(c.fpsr & (1 << 27)).toBe(1 << 27);
   });
 });

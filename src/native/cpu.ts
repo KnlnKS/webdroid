@@ -10,6 +10,7 @@ import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, ty
 import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
 import { yieldToLoop, yieldStats } from "../jvm/yield";
+import { procIdentity, processTid } from "../shell/procfs";
 export { NativeFault, yieldToLoop, yieldStats };
 
 const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2 }
@@ -120,6 +121,8 @@ export class Cpu {
   pthreadSelf = 0;
   jthread: JThread;
   tid: number;
+  readonly pid: number;
+  readonly osTid: number;
   stackBase = 0; stackTop = 0;
   errnoAddr = 0;
   env = 0;
@@ -135,7 +138,9 @@ export class Cpu {
     this.jthread = jthread;
     this.name = name;
     this.tid = ++tidSeq;
-    this.base = core.cpu_alloc(this.tid, A64 ? 1 : 0) >>> 0;
+    this.pid = procIdentity.pid;
+    this.osTid = processTid(jthread, jthread === mainThread);
+    this.base = core.cpu_alloc(this.tid, this.osTid, this.pid, A64 ? 1 : 0) >>> 0;
     if (!this.base) throw new NativeFault("[native] out of memory for thread state");
     this.views();
     mem.initHooks.push(() => this.views());
@@ -152,7 +157,7 @@ export class Cpu {
     this.tlsTab = this.threadData + 264;
     this.u32[OFF_TLSTAB >> 2] = this.tlsTab;
     this.pthreadSelf = this.tlsTab + 8 * TLS_KEYS;
-    mem.st32(this.pthreadSelf + 0x10, 4242 + this.tid);
+    mem.st32(this.pthreadSelf + 0x10, this.osTid);
     mem.st32(this.tlsBase + (A64 ? 8 : 4), this.pthreadSelf);
     cpus.add(this);
   }
@@ -613,6 +618,7 @@ export function cpuFor(t: JThread): Cpu {
 export const cpuOf = (t: JThread): Cpu | undefined => byThread.get(t);
 export function bindCpu(t: JThread, c: Cpu): void { byThread.set(t, c); }
 export function cpuByTid(tid: number): Cpu | undefined { for (const c of cpus) if (c.tid === tid) return c; return undefined; }
+export function cpuByOsTid(tid: number): Cpu | undefined { for (const c of cpus) if (c.osTid === tid) return c; return undefined; }
 /** sigaction's table: signal → handler (sa_handler or sa_sigaction) and flags */
 export const sigHandlers = new Map<number, { fn: number; flags: number; mask?: bigint }>();
 

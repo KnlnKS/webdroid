@@ -6,12 +6,13 @@
 import { wrote, mem } from "./mem";
 import { hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
 import { E } from "./abi";
-import { type Cpu, cpuByTid, sigHandlers } from "./cpu";
+import { type Cpu, cpuByTid, cpuByOsTid, sigHandlers } from "./cpu";
 import { tidOf } from "./pthread";
-import { fail, logLine, LAYOUT, strncpy, snprintfInto, readTm } from "./libc";
+import { fail, fillSysinfo, logLine, LAYOUT, strncpy, snprintfInto, readTm } from "./libc";
 import { MONTHS, DAYS } from "../jvm/natives/jtime";
 import { format } from "./printf";
 import { device } from "../shell/config";
+import { procIdentity } from "../shell/procfs";
 /** wd.native.killLog: the last pthread_kill calls, who signalled whom and what the target was doing */
 export const killLog: string[] = [];
 
@@ -30,7 +31,7 @@ function capget(cpu: Cpu, header: number, data: number): number {
   if (!data) return 0; // Linux permits a header-only capability-version probe.
   const pid = mem.ld32(header + 4);
   if (pid < 0) return fail(cpu, E.INVAL);
-  if (pid !== 0 && pid !== 4242 && !cpuByTid(pid - 4242)) return fail(cpu, E.SRCH);
+  if (pid !== 0 && pid !== cpu.pid && cpuByOsTid(pid)?.pid !== cpu.pid) return fail(cpu, E.SRCH);
   mem.memset(data, 0, words * 12);
   return 0;
 }
@@ -82,21 +83,14 @@ export function procInit(): void {
   const u8 = mem.u8;
   // struct passwd: name, passwd, uid, gid, gecos, dir, shell — pointers at the pointer stride
   const pw = mem.hostAlloc(8 * PTR);
-  stp(pw, mem.hostStr("u0_a123")); stp(pw + PTR, mem.hostStr("")); mem.st32(pw + 2 * PTR, 10123); mem.st32(pw + 2 * PTR + 4, 10123);
+  const uid = procIdentity.uid, appId = uid % 100000;
+  const userName = appId >= 10000 && appId < 20000 ? `u${Math.floor(uid / 100000)}_a${appId - 10000}` : String(uid);
+  stp(pw, mem.hostStr(userName)); stp(pw + PTR, mem.hostStr("")); mem.st32(pw + 2 * PTR, uid); mem.st32(pw + 2 * PTR + 4, uid);
   stp(pw + 2 * PTR + 8, mem.hostStr("")); stp(pw + 3 * PTR + 8, mem.hostStr("/data")); stp(pw + 4 * PTR + 8, mem.hostStr("/system/bin/sh"));
   const cpuMask = (1 << device.cpu.cores) - 1;
   const chk = (n: number, len: number, cpu: Cpu) => { if (n > len) cpu.fault(`fortify: ${n} bytes into a ${len}-byte object`); };
   const M: Record<string, HostFn> = {
-    sysinfo: (_c, a) => {
-      const p = a.p(), total = device.cpu.memKb * 1024;
-      mem.memset(p, 0, 112);
-      stp(p, Math.floor(performance.now() / 1000));                                 // uptime
-      const at = (i: number) => p + (PTR === 8 ? 32 + 8 * i : 16 + 4 * i);        // totalram, freeram, sharedram, bufferram, totalswap, freeswap
-      stp(at(0), total); stp(at(1), total >> 1);
-      mem.st16(PTR === 8 ? p + 80 : p + 40, 64);                                     // procs
-      mem.st32(PTR === 8 ? p + 104 : p + 52, 1);                                     // mem_unit
-      return 0;
-    },
+    sysinfo: (_c, a) => { fillSysinfo(a.p()); return 0; },
     sched_getaffinity: (_c, a) => { a.i(); const n = a.u(), set = a.p(); mem.memset(set, 0, n); mem.st32(set, cpuMask); return 0; },
     sched_setaffinity: () => 0, sched_getcpu: () => 0,
     __sched_cpucount: (_c, a) => { const n = a.u(), set = a.p(); let k = 0; for (let i = 0; i < n; i++) { let b = u8[set + i]; while (b) { k += b & 1; b >>= 1; } } return k; },
@@ -106,7 +100,7 @@ export function procInit(): void {
     getpwuid: () => pw,
     getpwuid_r: (_c, a) => { a.i(); const out = a.p(); a.p(); a.p(); const res = a.p(); mem.memmove(out, pw, 8 * PTR); stp(res, out); return 0; },
     getpwnam: () => pw,
-    setuid: () => 0, setgid: () => 0, seteuid: () => 0, setegid: () => 0, setgroups: () => 0, initgroups: () => 0, setsid: () => 4242,
+    setuid: () => 0, setgid: () => 0, seteuid: () => 0, setegid: () => 0, setgroups: () => 0, initgroups: () => 0, setsid: (cpu) => cpu.pid,
     ptrace: (cpu) => fail(cpu, E.PERM),
     // signals: a handler runs on the target thread, at once when it is parked in a host call
     // (as a kernel interrupts a syscall) and at its next slice boundary when it is running
@@ -126,7 +120,7 @@ export function procInit(): void {
       if (r === 0) t!.kill(sig);
       return r;
     },
-    tgkill: (_c, a) => { a.i(); const t = cpuByTid(a.i() - 4242), sig = a.i(); if (!t) return fail(_c, E.SRCH); t.kill(sig); return 0; },
+    tgkill: (cpu, a) => { const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i(); if (pid !== cpu.pid || !t || t.pid !== pid || t.finished) return fail(cpu, E.SRCH); t.kill(sig); return 0; },
     raise: (cpu, a) => { const sig = a.i(); if (!sigHandlers.has(sig) && (sig === 6 || sig === 11 || sig === 9)) cpu.fault(`raise(${sig})`); cpu.kill(sig); return 0; },
     kill: (cpu, a) => { a.i(); const sig = a.i(); if (!sigHandlers.has(sig) && (sig === 6 || sig === 11 || sig === 9)) cpu.fault(`kill(${sig})`); cpu.kill(sig); return 0; },
     sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), PTR); return e ? fail(cpu, e) : 0; },

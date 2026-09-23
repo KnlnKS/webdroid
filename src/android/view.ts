@@ -44,7 +44,7 @@ export const uiState = {
    *  hands the same value to every callback; Compose's BroadcastFrameClock fans one timestamp
    *  to all withFrameNanos awaiters, so animations desync if callbacks see different times. */
   frameTimeNanos: 0n,
-  frameIntervalNanos: 0n,
+  frameIntervalNanos: BigInt(Math.round(1e9 / device.refreshRate)),
   /** debug only (wd.layoutTrace): requestLayout counts by requesting class, and by frame phase
    *  plus the two native frames that asked. Null costs one test per request. */
   layoutTrace: null as { cls: Record<string, number>; site: Record<string, number> } | null,
@@ -2471,7 +2471,7 @@ rt.register({
     "getModeId()I": () => 1,
     "getPhysicalWidth()I": () => device.width,
     "getPhysicalHeight()I": () => device.height,
-    "getRefreshRate()F": () => 60,
+    "getRefreshRate()F": () => device.refreshRate,
   },
 });
 rt.register({
@@ -2485,9 +2485,9 @@ rt.register({
     "getRealMetrics(Landroid/util/DisplayMetrics;)V": (dm: JDisplayMetrics) => fillMetrics(dm, device.height),
     "getSize(Landroid/graphics/Point;)V": (p: JPoint) => { p.x = device.width; p.y = device.height - device.statusBar; },
     "getRealSize(Landroid/graphics/Point;)V": (p: JPoint) => { p.x = device.width; p.y = device.height; },
-    "getRefreshRate()F": () => 60,
+    "getRefreshRate()F": () => device.refreshRate,
     "getState()I": () => 2,
-    "getPresentationDeadlineNanos()J": () => 16666667n,
+    "getPresentationDeadlineNanos()J": () => uiState.frameIntervalNanos,
     "getMode()Landroid/view/Display$Mode;": () => displayMode(),
     "getSupportedModes()[Landroid/view/Display$Mode;": () => jarray([displayMode()], "Landroid/view/Display$Mode;"),
     "getHdrCapabilities()Landroid/view/Display$HdrCapabilities;": () => hdrCapabilities,

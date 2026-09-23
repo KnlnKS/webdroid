@@ -52,10 +52,10 @@ describe("A64 add/subtract with carry", () => {
 // settled on the way in as on any other exit. bn_mul_mont's `cmp x6, #1` fed an `adc` in such a
 // block when the region was entered at the function's dispatcher and the sibling variants on the
 // same page had spent the budget (clang: cbz x9,far; mov x0,#1; cmp x0,#1; cbz x1,taken;
-// fall: adc x2,x2,xzr; ret; taken: adc x3,x3,xzr; ret; far: 315 nops; ret). The far block is
+// fall: adc x2,x2,xzr; ret; taken: adc x3,x3,xzr; ret; far: 635 nops; ret). The far block is
 // sized so the cbz at the end of the fall block is jit.zig's MAX_INSTR-th instruction scanned.
 describe("A64 carry into a budget-starved block", () => {
-  const program = [0xb4000109, 0xd2800020, 0xf100041f, 0xb4000061, 0x9a1f0042, RET, 0x9a1f0063, RET, ...Array<number>(315).fill(0xd503201f), RET];
+  const program = [0xb4000109, 0xd2800020, 0xf100041f, 0xb4000061, 0x9a1f0042, RET, 0x9a1f0063, RET, ...Array<number>(635).fill(0xd503201f), RET];
   for (const [edge, x1] of [["taken", 0], ["fall-through", 1]] as const) test(`the cmp carry reaches the adc across the ${edge} edge`, () => {
     const cpu = run(program, (c) => { c.w[18] = 1; c.w[2] = x1; c.w[4] = 5; c.w[6] = 5; });
     expect(cpu.c).toBe(1);

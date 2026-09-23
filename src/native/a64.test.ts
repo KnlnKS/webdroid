@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mem } from "./mem";
 import { setA64 } from "./cpu";
 import { run, RET } from "./a64.testkit";
+import { device } from "../shell/config";
 
 beforeAll(() => setA64(true));
 afterAll(() => setA64(false));
@@ -386,6 +387,18 @@ describe("a64 decoder: hints, atomics, the REV family and system registers", () 
 });
 
 describe("raw syscalls", () => {
+  test("kernel process and thread IDs agree with the guest process", () => {
+    const c = run([
+      0xd2801588,   // mov x8, #172 (getpid)
+      0xd4000001,   // svc #0
+      0xaa0003e1,   // mov x1, x0
+      0xd2801648,   // mov x8, #178 (gettid)
+      0xd4000001,   // svc #0
+      RET]);
+    expect(c.w[2]).toBe(c.pid);
+    expect(c.w[0]).toBe(c.osTid);
+  });
+
   test("zero-length getrandom does not dereference its buffer", async () => {
     const { libcInit } = await import("./libc");
     libcInit();
@@ -410,6 +423,6 @@ describe("raw syscalls", () => {
     expect([c.w[2], c.w[3]]).toEqual([0, 0]);          // sysinfo succeeded
     expect([c.w[0], c.w[1]]).toEqual([-38, -1]);       // -ENOSYS, sign-extended to x0
     expect(mem.ld32(buf + 104)).toBe(1);               // mem_unit
-    expect(Number(mem.ld64(buf + 32))).toBe(4 * 2 ** 30);
+    expect(Number(mem.ld64(buf + 32))).toBe(device.cpu.memKb * 1024);
   });
 });

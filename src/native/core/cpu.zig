@@ -19,6 +19,8 @@ pub const Cpu = extern struct {
     ic: i64,
     bpc: u32,
     tid: u32,
+    os_tid: u32,
+    pid: u32,
     a64: u32,
     exit: u32,
     fault_word: u32,
@@ -80,11 +82,13 @@ export fn layout(i: u32) u32 {
     return 0xffff_ffff;
 }
 
-export fn cpu_alloc(tid: u32, is64: u32) u32 {
+export fn cpu_alloc(tid: u32, os_tid: u32, pid: u32, is64: u32) u32 {
     const p = mem.calloc(1, @sizeOf(Cpu));
     if (p == 0) return 0;
     const c: *Cpu = @ptrFromInt(p);
     c.tid = tid;
+    c.os_tid = os_tid;
+    c.pid = pid;
     c.a64 = is64;
     return p;
 }

@@ -31,6 +31,7 @@ import { deviceConfiguration } from "./resnative";
 import { transactionCaller } from "./binder";
 import { packages } from "./packages";
 import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
+import { clipboardMethods } from "./clipboard";
 
 export { fireActivityLifecycle } from "./lifecycle";
 
@@ -773,14 +774,7 @@ for (const [name, methods, statics] of [
     ...noops("addCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V",
       "removeCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V"),
   }],
-  ["android/content/ClipboardManager", {
-    "setPrimaryClip(Landroid/content/ClipData;)V": () => {},
-    "getPrimaryClip()Landroid/content/ClipData;": () => null,
-    "hasPrimaryClip()Z": () => 0,
-    "getPrimaryClipDescription()Landroid/content/ClipDescription;": () => null,
-    "addPrimaryClipChangedListener(Landroid/content/ClipboardManager$OnPrimaryClipChangedListener;)V": () => {},
-    "removePrimaryClipChangedListener(Landroid/content/ClipboardManager$OnPrimaryClipChangedListener;)V": () => {},
-  }],
+  ["android/content/ClipboardManager", clipboardMethods],
   // UI_MODE_TYPE_NORMAL: a handset, not a car/desk/TV dock (Configuration.uiMode agrees).
   // getNightMode reports the device's own setting, which is not this app's to change.
   ["android/app/UiModeManager", {

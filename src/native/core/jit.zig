@@ -6,6 +6,7 @@ const a64 = @import("a64.zig");
 const wasm = @import("wasm.zig");
 const jit32 = @import("jit32.zig");
 const jitfp = @import("jitfp.zig");
+const jitmem = @import("jitmem.zig");
 const fp = @import("fp.zig");
 const bt = @import("bits.zig");
 const assert = std.debug.assert;
@@ -26,7 +27,7 @@ const bits = bt.bits;
 
 pub const HEAT = 48;
 const MAX_BLOCKS = 40;
-const MAX_INSTR = 320;
+const MAX_INSTR = 640;
 const MAX_REGIONS = 64;
 
 pub const L_CPU = 0;
@@ -56,6 +57,9 @@ pub const L_FR64 = 54;
 pub const L_FA32 = 55;
 pub const L_FB32 = 56;
 pub const L_FR32 = 57;
+pub const L_VA = 58;
+pub const L_VB = 59;
+pub const L_VREG = 60;
 pub const FN: u4 = 8;
 pub const FZ: u4 = 4;
 pub const FC: u4 = 2;
@@ -287,6 +291,45 @@ inline fn cW(comptime wide: bool, v: i32) if (wide) wasm.C64 else wasm.C32 {
     return if (wide) c64(v) else c32(v);
 }
 
+fn swapAdjacent(b: *Buf, comptime wide: bool, comptime shift: u6) void {
+    const pattern: u64 = switch (shift) {
+        1 => 0x5555_5555_5555_5555,
+        2 => 0x3333_3333_3333_3333,
+        4 => 0x0f0f_0f0f_0f0f_0f0f,
+        8 => 0x00ff_00ff_00ff_00ff,
+        16 => 0x0000_ffff_0000_ffff,
+        32 => 0x0000_0000_ffff_ffff,
+        else => unreachable,
+    };
+    const tmp = regs(wide).t;
+    b.tee(tmp);
+    if (wide) b.i64c(@bitCast(pattern)) else b.i32c(@bitCast(@as(u32, @truncate(pattern))));
+    b.emit(.{ W(wide, O.i32_and), cW(wide, shift), W(wide, O.i32_shl), get(tmp), cW(wide, shift), W(wide, O.i32_shr_u) });
+    if (wide) b.i64c(@bitCast(pattern)) else b.i32c(@bitCast(@as(u32, @truncate(pattern))));
+    b.emit(.{ W(wide, O.i32_and), W(wide, O.i32_or) });
+}
+
+fn emitOne(b: *Buf, comptime wide: bool, op: u8) void {
+    switch (op) {
+        0 => {
+            inline for ([_]u6{ 1, 2, 4, 8, 16 }) |shift| swapAdjacent(b, wide, shift);
+            if (wide) swapAdjacent(b, wide, 32);
+        },
+        1, 2, 3 => {
+            swapAdjacent(b, wide, 8);
+            if (op >= 2) swapAdjacent(b, wide, 16);
+            if (op == 3 and wide) swapAdjacent(b, wide, 32);
+        },
+        4 => b.byte(W(wide, O.i32_clz)),
+        5 => {
+            const tmp = regs(wide).t;
+            b.tee(tmp);
+            b.emit(.{ get(tmp), cW(wide, if (wide) 63 else 31), W(wide, O.i32_shr_s), W(wide, O.i32_xor), W(wide, O.i32_clz), cW(wide, 1), W(wide, O.i32_sub) });
+        },
+        else => unreachable,
+    }
+}
+
 pub fn Emit(comptime wide: bool) type {
     return struct {
         const Self = @This();
@@ -307,6 +350,8 @@ pub fn Emit(comptime wide: bool) type {
         lin: [MAX_BLOCKS]u4 = undefined,
         pw: bool = false,
         pdirty: u4 = 0,
+        vloaded: u32 = 0,
+        vcachedWrite: bool = false,
 
         pub fn ifv(e: *Self) void {
             e.b.blockStart(O.if_, wasm.VOID);
@@ -512,6 +557,7 @@ pub fn Emit(comptime wide: bool) type {
             if (e.rw.fr | e.rw.fw != 0) e.spillFlags();
             if (wide) b.emit(.{ get(L_CPU), c32(@bitCast(mem.ld(u32, pc))), c32(@bitCast(pc)), call(F_EXEC), set(L_R) }) else b.emit(.{ get(L_CPU), c32(@bitCast(pc)), call(F_EXEC32), set(L_R) });
             e.loadRegs(e.rw.w);
+            e.vloaded = 0;
             if (e.rw.fw != 0) {
                 e.loadFlags(15);
                 e.eager(15);
@@ -951,16 +997,17 @@ pub fn Emit(comptime wide: bool) type {
                     b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_TLS) });
                     e.setX(o.rd);
                 } else e.fallback(pc, k),
-                .one => if (o.a & 7 == 4) {
+                .one => {
                     e.getX(o.rn);
                     if (o.a & 8 != 0) {
-                        b.byte(O.i64_clz);
+                        emitOne(b, true, o.a & 7);
                         e.setX(o.rd);
                     } else {
-                        b.emit(.{ O.i32_wrap_i64, O.i32_clz });
+                        b.byte(O.i32_wrap_i64);
+                        emitOne(b, false, o.a & 7);
                         e.setW(o.rd);
                     }
-                } else e.fallback(pc, k),
+                },
                 .two => {
                     const opc = o.a & 63;
                     const sf = o.a & 64 != 0;
@@ -999,8 +1046,8 @@ pub fn Emit(comptime wide: bool) type {
                     } else e.fallback(pc, k);
                 },
                 .simd => jitfp.emitSimd(e, @truncate(o.imm), pc, k),
-                .vmem => jitfp.emitVmem(e, @truncate(o.imm), pc, k),
-                .vldrlit => jitfp.emitVldrlit(e, o),
+                .vmem => jitmem.emitVmem(e, @truncate(o.imm), pc, k),
+                .vldrlit => jitmem.emitVldrlit(e, o),
                 else => e.fallback(pc, k),
             }
             return false;
@@ -1151,7 +1198,8 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
         e.written = 0x7fff;
         @memset(wb[0..n], 0x7fff);
     }
-    b.emit(.{ 8, 32, if (wide) wasm.I64 else wasm.I32, 4, wasm.I32, 4, wasm.I64, 6, wasm.I32, 2, wasm.I64, 2, wasm.F64, 3, wasm.I64, 3, wasm.I32 });
+    b.emit(.{ if (wide) @as(u8, 10) else 9, 32, if (wide) wasm.I64 else wasm.I32, 4, wasm.I32, 4, wasm.I64, 6, wasm.I32, 2, wasm.I64, 2, wasm.F64, 3, wasm.I64, 3, wasm.I32, 2, wasm.V128 });
+    if (wide) b.emit(.{ 32, wasm.V128 });
     e.loadRegs(e.used);
     e.loadFlags(live);
     b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_IC), set(L_IC), get(L_CPU), mo(O.i64_load, OFF_LIMIT), set(L_LIMIT), get(L_ENTRY), set(L_NEXT), O.block, wasm.VOID, O.block, wasm.VOID, O.loop, wasm.VOID });
@@ -1169,6 +1217,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
         e.wcur = wb[i];
         e.pk = .none;
         e.pdirty = 0;
+        e.vloaded = 0;
         var pc = blk.pc;
         var j: u32 = 0;
         var ended = false;

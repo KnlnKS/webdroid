@@ -59,6 +59,21 @@ snapshots remain. Cut still has no matrix flow, and the intro stall remains unre
 
 ---
 
+# TikTok playback integration — 2026-09-23
+
+Integrated from `codex/tiktok-playback` (starting revision `756491fb`). Generic A64 SIMD,
+vector memory and JIT improvements, virtual-display frame pacing, process identity, and a
+process-shared clipboard are committed. TikTok smoke compilation has zero method failures;
+the focused flow rendered 13/13 steps without a reached Android API, required-native,
+layout, or draw failure. A matched 30-fps-header HEVC segment presented 268 EGL swaps in
+9.00 seconds, and two other observed steady segments reached 29–30 swaps/s. Other live
+clips presented more slowly, but their source timing was not captured. Original-rate
+playback across demanding clips remains unproved. Fixed decoder comparisons and the
+parallel-worker constraints are recorded in the implementation history. Run the final
+serialized E2E matrix on this merged checkout before declaring integration verified.
+
+---
+
 # TikTok video playback follow-up — 2026-09-23
 
 Branch: `codex/tiktok-video-playback`. Starting revision: `9a038ff3`.

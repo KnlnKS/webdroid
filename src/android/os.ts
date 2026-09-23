@@ -2,7 +2,7 @@ import { readFully } from "../shell/lazyfile";
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
 import { JMessage, obtain } from "./messenger";
-import { procIdentity } from "../shell/procfs";
+import { procIdentity, processTid } from "../shell/procfs";
 import { parcelCreator, type JParcel } from "./parcel";
 import { keyCodes, deadChar } from "./keycodes";
 import { mem } from "../native/mem";
@@ -340,7 +340,7 @@ rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {
 });
 export let PROCESS_PID = 1000, PROCESS_UID = 10001;
 export let PROCESS_NAME = "";
-export function setProcessIdentity(pid: number, uid: number): void { PROCESS_PID = pid; PROCESS_UID = uid; procIdentity.pid = pid; }
+export function setProcessIdentity(pid: number, uid: number): void { PROCESS_PID = pid; PROCESS_UID = uid; procIdentity.pid = pid; procIdentity.uid = uid; }
 export class JUserHandle extends JObj { constructor(readonly id = 0) { super(); } }
 const userHandles = new Map<number, JUserHandle>();
 export function userHandleForUid(uid: number): JUserHandle {
@@ -349,14 +349,9 @@ export function userHandleForUid(uid: number): JUserHandle {
   if (!handle) { handle = new JUserHandle(userId); userHandles.set(userId, handle); }
   return handle;
 }
-const threadTids = new WeakMap<JThread, number>();
-let tidSeq = 0;
 /** the kernel thread id of a Java thread: the main thread's is the pid, as on a device */
 export function threadTid(t: JThread): number {
-  if (t === mainThread) return PROCESS_PID;
-  let tid = threadTids.get(t);
-  if (tid === undefined) threadTids.set(t, (tid = PROCESS_PID + ++tidSeq));
-  return tid;
+  return processTid(t, t === mainThread);
 }
 export function setProcessName(name: string): void { PROCESS_NAME = name; procIdentity.name = name; }
 rt.register({
@@ -846,16 +841,13 @@ rt.register({
   },
 });
 rt.markers("android/view/Choreographer$VsyncCallback");
-const rafIntervals = new Float64Array(32);
-let lastRaf = 0, rafSample = 0;
-export function recordVsync(time: number) {
-  if (lastRaf && time > lastRaf) {
-    rafIntervals[rafSample++ % rafIntervals.length] = time - lastRaf;
-    let interval = Infinity;
-    for (let i = 0; i < Math.min(rafSample, rafIntervals.length); i++) interval = Math.min(interval, rafIntervals[i]);
-    uiState.frameIntervalNanos = BigInt(Math.round(interval * 1e6));
-  }
-  lastRaf = time;
+const VSYNC_INTERVAL_MS = 1000 / device.refreshRate;
+let nextVsync = 0;
+export function recordVsync(time: number): boolean {
+  // Allow sub-millisecond rAF jitter without skipping a virtual display frame.
+  if (nextVsync && time + 0.75 < nextVsync) return false;
+  nextVsync = !nextVsync || time > nextVsync + VSYNC_INTERVAL_MS ? time + VSYNC_INTERVAL_MS : nextVsync + VSYNC_INTERVAL_MS;
+  return true;
 }
 export async function dispatchVsync(callback: JObj, presentation: bigint) {
   rt.link("android/view/Choreographer$FrameData");
