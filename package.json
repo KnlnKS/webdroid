@@ -35,6 +35,7 @@
     "build:core": "bun scripts/build-core.ts"
   },
   "dependencies": {
+    "canvaskit-wasm": "0.38.0",
     "fflate": "^0.8.2",
     "libheif-js": "1.23.2",
     "mp4box": "2.3.0",

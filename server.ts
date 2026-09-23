@@ -160,6 +160,7 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
       return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": type } });
     },
     "/sqljs/:file": (req) => serveFile("vendor/sql.js/dist", req.params.file),
+    "/canvaskit.wasm": () => serveFile("node_modules/canvaskit-wasm/bin", "canvaskit.wasm", { "cache-control": IMMUTABLE }),
     // the android: resource package (bun run gen-framework-res) and, under vendor/aosp, the
     // device's own framework.jar + framework-res.apk (bun run gen-framework). Both only change
     // when the device profile does, so let the browser keep them across reloads.

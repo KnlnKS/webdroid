@@ -1,5 +1,6 @@
 import { JSpanned, JSpannable, JStaticLayout, type JLayout, type TLine, measureReplacements, drawLayout } from "./text";
 import { beginPaintShadow, cssColor, measureText, type JCanvas } from "./graphics";
+import { drawSkiaText } from "./skia-text";
 import { after, callOn, curThread } from "../jvm/natives/jlang";
 import { perf } from "../perf";
 import type { JTextView } from "./textview";
@@ -60,6 +61,7 @@ function breakLines(layout: JLayout, single: boolean, max: number, ellipsis: boo
   perf.wraps++;
   const text = layout.text, avail = layout.width, out: TLine[] = [];
   const width = (start: number, end: number) => layout.rangeWidth(start, end);
+  const fits = (start: number, end: number) => Math.round(width(start, end)) <= avail;
   const push = (start: number, end: number) => out.push({ start, end, text: text.slice(start, end), width: width(start, end) });
   const boundary = (start: number, end: number) => {
     const span = layout.replacements.find(s => s.start < end && s.end > end);
@@ -67,9 +69,9 @@ function breakLines(layout: JLayout, single: boolean, max: number, ellipsis: boo
     return end > start && /[\uD800-\uDBFF]/.test(text[end - 1]) ? end - 1 : end;
   };
   const breakWide = (start: number, end: number): number => {
-    while (width(start, end) > avail && end - start > 1) {
+    while (!fits(start, end) && end - start > 1) {
       let lo = start + 1, hi = end;
-      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (width(start, mid) <= avail) lo = mid; else hi = mid - 1; }
+      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (fits(start, mid)) lo = mid; else hi = mid - 1; }
       let cut = boundary(start, lo);
       if (cut === start) cut = layout.replacements.find(s => s.start <= start && s.end > start)?.end ?? start + (text.codePointAt(start)! > 0xffff ? 2 : 1);
       push(start, cut); start = cut;
@@ -81,12 +83,12 @@ function breakLines(layout: JLayout, single: boolean, max: number, ellipsis: boo
   for (const hard of text.split("\n")) {
     const end = start + hard.length;
     if (single || max === 1) { push(start, end); break; }
-    if (width(start, end) <= avail) push(start, end);
+    if (fits(start, end)) push(start, end);
     else {
       let lineStart = start, lineEnd = start;
       for (const match of hard.matchAll(/\s+|\S+/g)) {
         const wordStart = start + match.index, wordEnd = wordStart + match[0].length;
-        if (lineStart === lineEnd || width(lineStart, wordEnd) <= avail) lineStart = breakWide(lineStart, wordEnd);
+        if (lineStart === lineEnd || fits(lineStart, wordEnd)) lineStart = breakWide(lineStart, wordEnd);
         else {
           const trimmedEnd = lineStart + text.slice(lineStart, lineEnd).trimEnd().length;
           const rest = breakWide(lineStart, trimmedEnd);
@@ -123,14 +125,18 @@ export function drawTextViewLayout(layout: JLayout, cv: JCanvas, gravity: number
   if (layout.replacements.length || layout.src instanceof JSpanned && layout.src.spans.length) return drawLayout.call(layout, cv, gravity);
   const ctx = cv.ctx, p = layout.paint;
   ctx.font = p.font(); ctx.fillStyle = cssColor(p.color); ctx.textBaseline = "alphabetic";
+  ctx.textRendering = "geometricPrecision";
   ctx.textAlign = gravity === 1 ? "center" : gravity === 5 ? "right" : "left";
   const x = gravity === 1 ? layout.width / 2 : gravity === 5 ? layout.width : 0;
+  const matrix = ctx.getTransform(), oblique = matrix.b !== 0 || matrix.c !== 0;
   const shadow = beginPaintShadow(ctx, p);
   try {
     for (let i = 0; i < layout.lines.length; i++) {
       const line = layout.lines[i], y = layout.baseline(i);
       cv.recordText(line.text, x, y, p.textSize, gravity === 1 ? 1 : gravity === 5 ? 2 : 0);
-      ctx.fillText(line.text, x, y);
+      if (!(cv.bmp && gravity !== 1 && gravity !== 5 && !p.shadowRadius && !p.underline && !p.strikeThru &&
+        p.tf.family === "Roboto, sans-serif" && !p.tf.bold && !p.tf.italic &&
+        drawSkiaText(ctx, line.text, x + (oblique ? 0.25 : 0), y, p.textSize, p.color, "fill", !oblique))) ctx.fillText(line.text, x, y);
       if (p.strikeThru && line.text) {
         const sx = gravity === 1 ? x - line.width / 2 : gravity === 5 ? x - line.width : x;
         ctx.fillRect(sx, y - p.textSize * 0.3, line.width, Math.max(1, p.textSize / 14));

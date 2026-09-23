@@ -2,6 +2,7 @@
 
 import { isRecording, recordOrRun, recordingContext, replayCanvas, replayWithSemantics, type Ctx2D } from "./recording";
 import { hairlineLine, hairlineRect } from "./hairline";
+import { drawSkiaText } from "./skia-text";
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
@@ -2092,16 +2093,26 @@ export const CAPS = ["butt", "round", "square"] as const;
 export const JOINS = ["miter", "round", "bevel"] as const;
 function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
   cv.recordText(s, x, y, p.textSize, p.textAlignN);
+  if (cv.bmp && (p.style === 0 || p.style === 2 && p.strokeWidth === 0 ||
+    p.style === 1 && p.strokeWidth === 0 && p.strokeCapN === "butt" && p.strokeJoinN === "miter" && !p.dash) &&
+    p.antiAlias && p.textAlignN === 0 && !p.letterSpacingEm &&
+    !p.underline && !p.strikeThru && !p.shader && !p.shaderObj && !p.maskFilter && !p.shadowRadius &&
+    !p.filterColor && !p.filterMatrix && !p.blend && !isRecording(cv.ctx) &&
+    p.tf.family === ROBOTO && !p.tf.bold && !p.tf.italic &&
+    drawSkiaText(cv.ctx, s, x, y, p.textSize,
+      p.renderAlpha === null ? p.color : (p.renderAlpha << 24) | (p.color & 0xffffff),
+      p.style === 1 ? "hairline" : "fill")) return;
   const ctx = cv.ctx, shadow = beginPaintShadow(cv.ctx, p);
   try {
     ctx.font = p.font();
+    ctx.textRendering = "geometricPrecision";
     if ("lang" in ctx) ctx.lang = p.language;
     cv.prep(p, false);
     ctx.textAlign = p.textAlignN === 1 ? "center" : p.textAlignN === 2 ? "right" : "left";
     ctx.textBaseline = "alphabetic";
     if (p.letterSpacingEm && "letterSpacing" in ctx) ctx.letterSpacing = `${p.letterSpacingEm * p.textSize}px`;
     if (p.style !== 1) ctx.fillText(s, x, y);
-    if (p.style === 1 || p.style === 2) {
+    if (p.style === 1 || p.style === 2 && p.strokeWidth !== 0) {
       cv.prep(p, true);
       ctx.strokeText(s, x, y);
     }
