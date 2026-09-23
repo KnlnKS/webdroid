@@ -328,6 +328,13 @@ rt.register({
 
 export class JPaint extends JObj {
   color = -16777216;
+  renderAlpha: number | null = null;
+  setColorValue(color: number) { this.color = color; this.renderAlpha = null; }
+  setAlphaValue(alpha: number) {
+    // API 33 exposes a narrowed alpha in getColor but draws out-of-range values opaque.
+    this.color = ((((alpha < 0 ? alpha + 1 : alpha) & 255) << 24) | (this.color & 0xffffff)) | 0;
+    this.renderAlpha = alpha < 0 || alpha > 255 ? 255 : null;
+  }
   style = 0;
   strokeWidth = 0;
   shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
@@ -385,11 +392,12 @@ export class JPaint extends JObj {
     if (pattern) return pattern;
     if (this.shader) return this.shader;
     const f = this.filterColor;
-    if (this.filterMatrix) return cssColor(matrixColor(this.filterMatrix, this.color));
+    const color = this.renderAlpha === null ? this.color : (this.renderAlpha << 24) | (this.color & 0xffffff);
+    if (this.filterMatrix) return cssColor(matrixColor(this.filterMatrix, color));
     // PorterDuff/BlendMode SRC_IN — how Material tints every shape it draws: the filter's
     // colour replaces the paint's, keeping the alpha the two agree on
-    if (f === null) return cssColor(this.color);
-    return cssColor(((f & 0xffffff) | ((((f >>> 24) * (this.color >>> 24) / 255) | 0) << 24)) | 0);
+    if (f === null) return cssColor(color);
+    return cssColor(((f & 0xffffff) | ((((f >>> 24) * (color >>> 24) / 255) | 0) << 24)) | 0);
   }
 }
 const paintMethods: NativeSpec["methods"] = {
@@ -421,8 +429,8 @@ const paintMethods: NativeSpec["methods"] = {
   "getShadowLayerDy()F": function (this: JPaint) { return this.shadowDy; },
   "getShadowLayerColor()I": function (this: JPaint) { return this.shadowColor; },
   "set(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { copyPaint(o, this); },
-  "setColor(I)V": function (this: JPaint, c: number) { this.color = c; },
-  "setColor(J)V": function (this: JPaint, c: bigint) { this.color = Number(BigInt.asIntN(32, c >> 32n)); },
+  "setColor(I)V": function (this: JPaint, c: number) { this.setColorValue(c); },
+  "setColor(J)V": function (this: JPaint, c: bigint) { this.setColorValue(Number(BigInt.asIntN(32, c >> 32n))); },
   "getColorLong()J": function (this: JPaint) { return BigInt(this.color >>> 0) << 32n; },
   "getTextLocale()Ljava/util/Locale;": function (this: JPaint) { return this.locales?.values[0] ?? usLocale; },
   "getTextLocales()Landroid/os/LocaleList;": async function (this: JPaint) { return this.locales ??= await vcall((await linkInit("android/os/LocaleList")).ctor, "getDefault", "()Landroid/os/LocaleList;"); },
@@ -445,11 +453,8 @@ const paintMethods: NativeSpec["methods"] = {
   "getMaskFilter()Landroid/graphics/MaskFilter;": function (this: JPaint) { return this.maskFilter; },
   "setMaskFilter(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;": function (this: JPaint, f: JBlurMaskFilter | null) { return this.maskFilter = f; },
   "getColor()I": function (this: JPaint) { return this.color; },
-  "setAlpha(I)V": function (this: JPaint, a: number) {
-    // The API-33 native path maps -32 to 225 and -1 to 0 before narrowing.
-    this.color = ((((a < 0 ? a + 1 : a) & 255) << 24) | (this.color & 0xffffff)) | 0;
-  },
-  "setARGB(IIII)V": function (this: JPaint, a: number, r: number, g: number, b: number) { this.color = ((a & 255) << 24 | (r & 255) << 16 | (g & 255) << 8 | (b & 255)) | 0; },
+  "setAlpha(I)V": function (this: JPaint, a: number) { this.setAlphaValue(a); },
+  "setARGB(IIII)V": function (this: JPaint, a: number, r: number, g: number, b: number) { this.setColorValue(((a & 255) << 24 | (r & 255) << 16 | (g & 255) << 8 | (b & 255)) | 0); },
   "getAlpha()I": function (this: JPaint) { return this.color >>> 24; },
   "setStyle(Landroid/graphics/Paint$Style;)V": function (this: JPaint, s: { ord: number }) { this.style = s?.ord ?? 0; },
   "getStyle()Landroid/graphics/Paint$Style;": function (this: JPaint) { return paintStyleEnum[this.style]; },
@@ -575,7 +580,7 @@ const paintMethods: NativeSpec["methods"] = {
   },
 };
 function resetPaint(paint: JPaint): void {
-  paint.color = -16777216; paint.style = 0; paint.strokeWidth = 0;
+  paint.color = -16777216; paint.renderAlpha = null; paint.style = 0; paint.strokeWidth = 0;
   paint.textSize = 12; paint.tf = tfDefault; paint.antiAlias = true;
   paint.textAlignN = 0; paint.shader = null; paint.shaderObj = null; paint.maskFilter = null;
   paint.strokeCapN = "butt"; paint.strokeJoinN = "miter"; paint.dash = null;
@@ -599,7 +604,7 @@ export function beginPaintShadow(ctx: JCanvas["ctx"], p: JPaint): boolean {
   return true;
 }
 export function copyPaint(src: JPaint, dst: JPaint) {
-  dst.color = src.color; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
+  dst.color = src.color; dst.renderAlpha = src.renderAlpha; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
   dst.textSize = src.textSize; dst.tf = src.tf; dst.antiAlias = src.antiAlias;
   dst.textAlignN = src.textAlignN; dst.shader = src.shader; dst.shaderObj = src.shaderObj; dst.dash = src.dash;
   dst.maskFilter = src.maskFilter; dst.strokeCapN = src.strokeCapN; dst.strokeJoinN = src.strokeJoinN;
@@ -1516,7 +1521,7 @@ export class JCanvas extends JObj {
     source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
     copyPaint(p, layer.paint);
     layer.paint.maskFilter = null; layer.paint.blend = null; layer.paint.shadowRadius = 0;
-    layer.paint.color = -1; layer.paint.shader = layer.paint.shaderObj = null; layer.paint.filterColor = null; layer.paint.filterMatrix = null;
+    layer.paint.color = -1; layer.paint.renderAlpha = null; layer.paint.shader = layer.paint.shaderObj = null; layer.paint.filterColor = null; layer.paint.filterMatrix = null;
     if (stroke) layer.source.drawShape(layer.paint, fill, stroke);
     else fill(source);
     target.clearRect(0, 0, w, h);

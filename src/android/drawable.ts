@@ -1279,7 +1279,7 @@ rt.register({
       const p = this.padding ?? (this.padding = new JRect());
       p.left = r.left; p.top = r.top; p.right = r.right; p.bottom = r.bottom;
     },
-    "setAlpha(I)V": function (this: JShapeDrawable, a: number) { this.alpha = a; this.p.color = ((a << 24) | (this.p.color & 0xffffff)) | 0; invalidateSelf.call(this); },
+    "setAlpha(I)V": function (this: JShapeDrawable, a: number) { this.alpha = a; this.p.setColorValue(((a << 24) | (this.p.color & 0xffffff)) | 0); invalidateSelf.call(this); },
     "getAlpha()I": function (this: JShapeDrawable) { return this.p.color >>> 24; },
     "getOpacity()I": function (this: JShapeDrawable) { const a = this.p.color >>> 24; return a === 255 ? -1 : a === 0 ? -2 : -3; },
     "getOutline(Landroid/graphics/Outline;)V": () => {},
@@ -1316,7 +1316,7 @@ rt.register({
   name: "android/graphics/drawable/PaintDrawable", ctor: JPaintDrawable, sup: "android/graphics/drawable/ShapeDrawable",
   methods: {
     "<init>()V": function (this: JPaintDrawable) { this.p.antiAlias = true; this.shape = new JShape(); },
-    "<init>(I)V": function (this: JPaintDrawable, color: number) { this.p.antiAlias = true; this.p.color = color; this.shape = new JShape(); },
+    "<init>(I)V": function (this: JPaintDrawable, color: number) { this.p.antiAlias = true; this.p.setColorValue(color); this.shape = new JShape(); },
     "setCornerRadius(F)V": function (this: JPaintDrawable, radius: number) {
       this.setCornerRadii(radius > 0 ? new Float32Array(8).fill(radius) : null);
     },
