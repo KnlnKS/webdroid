@@ -19,6 +19,10 @@ flows. All six had advancing ticks and presentation counts, available diagnostic
 their relevant processes, and no reached missing API, native requirement, wedge,
 completion timeout, or new process error. The machine-readable summary marks seven
 live flows as not run by this lane.
+The default `bun run e2e` now runs that quick lane; `--full`, `--record`, `--diff`,
+and `--coverage` replace the four separate command aliases. A broad focused-selection
+run used the same entry point and passed 6/6 in 30.5 seconds. The full CalculatorM
+mode and offline scorer also passed through the new command routing.
 
 CalculatorM now has an API 33 Android reference at 1080×2424 and a fast result
 checkpoint: `7 + 7 = 14` differs by 7.07% of content pixels in the first fast run,
