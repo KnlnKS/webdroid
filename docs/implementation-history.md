@@ -425,3 +425,36 @@ step, advancing ticks, zero required natives and no draw error; the two video st
 control settle timeouts and Matrix draw failure. No visual golden was changed. The varying
 TikTok FPS confirms that an original-rate playback claim needs a fixed input video and a
 substantially faster generic native execution path.
+
+## Fuzzer compatibility follow-up — 2026-09-23
+
+An API 33 fuzzer campaign at 1080×2160 and 480 dpi found no API difference in 1,000
+generated cases, but 36 graphics differences in 100 cases with seed `20260923`.
+Twenty graphics failures were retained and minimized. The six retained failures from the
+preceding graphics campaign were also kept as regression inputs. All oracle comparisons
+used unchanged generated commands against Android and browser implementations.
+
+Path circles and ovals now begin separate contours. ColorDrawable uses Android's alpha
+modulation, while Paint keeps its API 33 observable narrowed alpha separate from the
+opaque raster alpha used for out-of-range `setAlpha` input. TextView bounds clip its
+own text and zero-sized child drawing. Canvas preserves translation after singular
+transforms, rounds rotation through float32 radians, and tracks rectangular clip
+intersections in device space. Bitmap hairlines use the existing pixel raster helper;
+reversed full-sweep arcs, empty ovals and zero-extent round rectangles follow the
+oracle. The bundled regular Roboto face now matches the API 33 emulator's static face.
+These changes use platform geometry and state rather than APK names or command sequences.
+
+All six preceding retained graphics cases and 18 of the 20 new retained cases replay
+without a difference. The original 100-case graphics campaign has 20 differences
+after the fixes, down from 36. Most residual cases differ in antialiased edge or glyph
+coverage. The two remaining minimized cases isolate a small `drawText` glyph and a
+one-pixel-high, full-sweep arc; Android Skia and Chrome Canvas2D assign different pixel
+coverage. One original case differs at the center by a single alpha-1 pixel on a
+transformed stroked path. These are real output differences, not treated as passing
+operations. Matching every coverage value would require a general Skia-compatible
+raster path; shape-specific pixel substitutions would compromise arbitrary-APK behavior.
+
+The final candidate passes typecheck, the 1,325-test suite (27,577 assertions), fuzzer
+smoke, and all declared Canvas, Paint and Path framework delegates (33/33, 86/86 and
+43/43). FitNotes and Calculator M fast E2E flows pass 39/39 and 8/8 steps. All these
+checks, plus retained and original campaign replays, ran after the final code edits.

@@ -1,3 +1,16 @@
+# Fuzzer compatibility follow-up — 2026-09-23
+
+Branch: `codex/fuzzer-compatibility`. API 33 oracle: emulator-5554 at 1080×2160, 480 dpi.
+The saved 100-case graphics campaign fell from 36 to 20 differences after generic Path,
+Canvas, Paint, drawable, widget and font fixes. All six earlier retained cases now replay
+without a difference; 18 of the 20 newly retained cases do too. The two remaining minimized
+cases exercise browser-versus-Skia text glyph and thin-arc coverage. The other original cases
+also contain antialiasing differences, including one center pixel. No visual golden was changed.
+The preceding 1,000-case API campaign had no differences. See implementation history for the
+fixes, evidence and remaining renderer limit.
+
+---
+
 # TikTok video playback follow-up — 2026-09-23
 
 Branch: `codex/tiktok-video-playback`. Starting revision: `9a038ff3`.
