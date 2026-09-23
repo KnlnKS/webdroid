@@ -480,6 +480,27 @@ cache, and replacing the low-address high-word test with a 64-bit comparison was
 slower. Neither justified the added state or changed emission. Chrome DevTools MCP remained
 locked to its existing profile; the CDP harness still supplied native and Chromium CPU samples.
 
+A temporary native dispatcher probe identified `ByteVC1_send_packet` calls and captured 360
+unchanged HEVC packets from one live TikTok clip. Starting at the packet with VPS/SPS/PPS and
+an IDR frame, a headless harness drove the bundled decoder's `send_packet`/`get_frame` API:
+83 packets yielded 71 frames at 576×1024 with no decoder warning. The first three production
+JIT runs spent 776–785 ms in native execution; disabling JIT took 3913 ms on the same bytes.
+The capture and harness are ignored local diagnostics, not shipped media or an app substitute.
+Native worker scheduling varied between runs, so small timing differences need matched trials.
+
+The fixed decoder workload rejected three further generic experiments. Keeping vector reads
+across GPR instructions or updating cached vectors after lane loads yielded no repeatable gain;
+the combined version's median native time was about 808 ms. Preloading read-only vector
+operands for a whole JIT region preserved all 71 decoded frames but raised a representative
+loop median from 1.74 to 1.82 ms and did not reliably improve the full decoder run. A deferred
+vector-write cache also slowed that loop from about 1.6 to 2.1 ms. All were removed. Smaller
+native slice budgets and bounded batches of waking guest threads sometimes shortened the
+headless decoder run, but live TikTok samples did not show more EGL swaps; the three-million
+instruction budget reached 317 swaps in a fresh 12-second sample. Different feed clips prevent
+a causal FPS comparison. Those scheduling variants were removed. No additional required
+Android API was observed. Chrome DevTools MCP still reported its shared profile locked; the
+project's CDP harness supplied the live counters.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only
