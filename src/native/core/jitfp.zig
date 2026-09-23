@@ -243,14 +243,14 @@ fn vget(e: *Emit, n: u8) void {
     e.b.get(jit.L_VREG + n);
 }
 fn vput(e: *Emit, d: u8, q: bool) void {
-    if (q) {
-        e.b.emit(.{ tee(jit.L_VREG + d), vm(S.store, voff(d)) });
-        e.vloaded |= bt.bit(d);
-        e.vcachedWrite = true;
-        return;
+    if (!q) {
+        e.b.emit(.{ sv(S.const_) });
+        e.b.bytes(&([_]u8{0xff} ** 8 ++ [_]u8{0} ** 8));
+        e.b.emit(.{ sv(S.and_) });
     }
-    e.b.emit(.{ vm(S.store64_lane, voff(d)), 0, get(L_CPU), c64(0), mo(O.i64_store, voff(d) + 8) });
-    e.vloaded &= ~bt.bit(d);
+    e.b.emit(.{ tee(jit.L_VREG + d), vm(S.store, voff(d)) });
+    e.vloaded |= bt.bit(d);
+    e.vcachedWrite = true;
 }
 fn setQIf(e: *Emit) void {
     const b = e.b;
