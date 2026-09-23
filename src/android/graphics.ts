@@ -1452,6 +1452,8 @@ export class JCanvas extends JObj {
   saveCount = 1;
   clipDevice: [number, number, number, number] | null = null;
   clipStack: ([number, number, number, number] | null)[] = [];
+  clipPolygon: [number, number][] | null = null;
+  clipPolygonStack: ([number, number][] | null)[] = [];
   bmp: JBitmap | null = null;
   semanticOwner: { drawnText: string[] | null; drawnTextPoints: Float32Array | null; drawnTextCount: number } | null = null;
   semanticBase: [number, number, number, number, number, number] | null = null;
@@ -1655,17 +1657,22 @@ export function locateDrawnText(owner: DrawnTextOwner, text: string, width: numb
 export function saveCanvas(cv: JCanvas): number {
   cv.ctx.save();
   cv.clipStack.push(cv.clipDevice);
+  cv.clipPolygonStack.push(cv.clipPolygon);
   return cv.saveCount++;
 }
 export function restoreCanvas(cv: JCanvas): void {
   if (cv.saveCount <= 1) throw rt.mkThrowable("java/lang/IllegalStateException", "Underflow in restore - more restores than saves");
   cv.ctx.restore();
   cv.clipDevice = cv.clipStack.pop() ?? null;
+  cv.clipPolygon = cv.clipPolygonStack.pop() ?? null;
   cv.saveCount--;
 }
 export function restoreCanvasToCount(cv: JCanvas, count: number): void {
   if (count < 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Underflow in restoreToCount - more restores than saves");
-  while (cv.saveCount > count) { cv.ctx.restore(); cv.clipDevice = cv.clipStack.pop() ?? null; cv.saveCount--; }
+  while (cv.saveCount > count) {
+    cv.ctx.restore(); cv.clipDevice = cv.clipStack.pop() ?? null;
+    cv.clipPolygon = cv.clipPolygonStack.pop() ?? null; cv.saveCount--;
+  }
 }
 function canvasSave(this: JCanvas): number {
   return saveCanvas(this);
@@ -1674,16 +1681,46 @@ function canvasSave(this: JCanvas): number {
 function aboutPivot(ctx: JCanvas["ctx"], px: number, py: number, f: () => void) {
   ctx.translate(px, py); f(); ctx.translate(-px, -py);
 }
+export function clipEmptyCanvas(ctx: JCanvas["ctx"]) {
+  const m = ctx.getTransform();
+  ctx.resetTransform();
+  ctx.beginPath();
+  ctx.rect(ctx.canvas.width + 1, ctx.canvas.height + 1, 1, 1);
+  ctx.clip();
+  ctx.setTransform(m);
+}
+type ClipPoint = [number, number];
+function intersectClip(subject: ClipPoint[], shape: ClipPoint[]): ClipPoint[] {
+  let out = subject;
+  const orientation = Math.sign(shape.reduce((sum, point, i) => {
+    const next = shape[(i + 1) % shape.length]!;
+    return sum + point[0] * next[1] - next[0] * point[1];
+  }, 0));
+  if (!orientation) return [];
+  for (let i = 0; i < shape.length && out.length; i++) {
+    const a = shape[i]!, b = shape[(i + 1) % shape.length]!;
+    const side = (p: ClipPoint) => orientation * ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]));
+    const input = out;
+    out = [];
+    for (let j = 0; j < input.length; j++) {
+      const prev = input[(j + input.length - 1) % input.length]!, cur = input[j]!;
+      const before = side(prev), after = side(cur);
+      if ((before < 0) !== (after < 0)) {
+        const t = before / (before - after);
+        out.push([prev[0] + t * (cur[0] - prev[0]), prev[1] + t * (cur[1] - prev[1])]);
+      }
+      if (after >= 0) out.push(cur);
+    }
+  }
+  return out;
+}
 function clipRect(this: JCanvas, l: number, t: number, r: number, b: number) {
   const ctx = this.ctx;
   const m = ctx.getTransform();
   if (r === l || b === t || !(m.a * m.d - m.b * m.c)) {
     this.clipDevice = [0, 0, 0, 0];
-    ctx.resetTransform();
-    ctx.beginPath();
-    ctx.rect(ctx.canvas.width + 1, ctx.canvas.height + 1, 1, 1);
-    ctx.clip();
-    ctx.setTransform(m);
+    this.clipPolygon = [];
+    clipEmptyCanvas(ctx);
     return 0;
   }
   ctx.beginPath();
@@ -1698,6 +1735,10 @@ function clipRect(this: JCanvas, l: number, t: number, r: number, b: number) {
   const right = Math.min(old?.[2] ?? this.w, Math.round(x + Math.max(0, wx) + Math.max(0, hx)));
   const bottom = Math.min(old?.[3] ?? this.h, Math.round(y + Math.max(0, wy) + Math.max(0, hy)));
   this.clipDevice = right > left && bottom > top ? [left, top, right, bottom] : [0, 0, 0, 0];
+  if (this.clipDevice[2] > this.clipDevice[0] && this.clipDevice[3] > this.clipDevice[1]) {
+    const shape: ClipPoint[] = [[x, y], [x + wx, y + wy], [x + wx + hx, y + wy + hy], [x + hx, y + hy]];
+    this.clipPolygon = intersectClip(this.clipPolygon ?? [[0, 0], [this.w, 0], [this.w, this.h], [0, this.h]], shape);
+  } else this.clipPolygon = [];
   return +(right > left && bottom > top);
 }
 function clipOutRect(this: JCanvas, l: number, t: number, r: number, b: number) {
@@ -1725,13 +1766,25 @@ function clipPath(this: JCanvas, path: JPath): number {
   } else this.ctx.clip(path.path(), path.fillRule);
   return 1;
 }
-// Canvas2D exposes no clip region; rotated clips retain a conservative device-space bound.
+// Canvas2D exposes no clip region; rectangular clips retain a device-space bound.
 function viewportClipBounds(cv: JCanvas, out: JRect): number {
   const { a, b, c, d, e, f } = cv.ctx.getTransform();
   const det = a * d - b * c;
+  const polygon = cv.clipPolygon;
   const clip = cv.clipDevice;
-  const left = clip?.[0] ?? 0, top = clip?.[1] ?? 0;
-  const right = clip?.[2] ?? cv.w, bottom = clip?.[3] ?? cv.h;
+  let left = clip?.[0] ?? 0, top = clip?.[1] ?? 0;
+  let right = clip?.[2] ?? cv.w, bottom = clip?.[3] ?? cv.h;
+  if (polygon) {
+    left = top = Infinity; right = bottom = -Infinity;
+    for (const [x, y] of polygon) {
+      if (x < left) left = x;
+      if (y < top) top = y;
+      if (x > right) right = x;
+      if (y > bottom) bottom = y;
+    }
+    left = Math.floor(left); top = Math.floor(top);
+    right = Math.floor(right); bottom = Math.floor(bottom);
+  }
   if (!det || !Number.isFinite(det) || !(right > left && bottom > top)) {
     out.left = out.top = out.right = out.bottom = 0;
     return 0;
@@ -1872,14 +1925,18 @@ export const canvasMethods: NativeSpec["methods"] = {
     restoreCanvasToCount(this, count);
   },
   "getSaveCount()I": function (this: JCanvas) { return this.saveCount; },
-  "translate(FF)V": function (this: JCanvas, x: number, y: number) { this.ctx.translate(x, y); },
+  "translate(FF)V": function (this: JCanvas, x: number, y: number) {
+    const m = this.ctx.getTransform();
+    if (m.a * m.d === m.b * m.c) this.ctx.setTransform(m.a, m.b, m.c, m.d, m.e + m.a * x + m.c * y, m.f + m.b * x + m.d * y);
+    else this.ctx.translate(x, y);
+  },
   "scale(FF)V": function (this: JCanvas, x: number, y: number) { this.ctx.scale(x, y); },
   "scale(FFFF)V": function (this: JCanvas, sx: number, sy: number, px: number, py: number) {
     aboutPivot(this.ctx, px, py, () => this.ctx.scale(sx, sy));
   },
-  "rotate(F)V": function (this: JCanvas, d: number) { this.ctx.rotate(d * Math.PI / 180); },
+  "rotate(F)V": function (this: JCanvas, d: number) { this.ctx.rotate(Math.fround(d * Math.PI / 180)); },
   "rotate(FFF)V": function (this: JCanvas, d: number, px: number, py: number) {
-    aboutPivot(this.ctx, px, py, () => this.ctx.rotate(d * Math.PI / 180));
+    aboutPivot(this.ctx, px, py, () => this.ctx.rotate(Math.fround(d * Math.PI / 180)));
   },
   "skew(FF)V": function (this: JCanvas, sx: number, sy: number) { this.ctx.transform(1, sy, sx, 1, 0, 0); },
   "concat(Landroid/graphics/Matrix;)V": function (this: JCanvas, m: JMatrix) {
@@ -2017,7 +2074,7 @@ export const canvasMethods: NativeSpec["methods"] = {
   "setBitmap(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
 };
 export function setCanvasBitmap(cv: JCanvas, b: JBitmap | null) {
-  cv.clipDevice = null; cv.clipStack.length = 0;
+  cv.clipDevice = cv.clipPolygon = null; cv.clipStack.length = cv.clipPolygonStack.length = 0;
   if (b) { cv.ctx = b.ctx; cv.w = b.w; cv.h = b.h; cv.bmp = b; return; }
   cv.ctx = new OffscreenCanvas(1, 1).getContext("2d")!;
   cv.w = cv.h = 0; cv.bmp = null;
