@@ -976,6 +976,12 @@ describe("thumb decoder", () => {
     });
     expect(Array.from(c.w.slice(16, 24).filter((_, i) => i % 2 === 0))).toEqual([1, 2, 3, 4]);
     expect(c.w[26]).toBe(c.stackTop - 32);
+    const returned = runThumb([
+      0xe92d, 0x4100, // push.w {r8,lr}
+      0xe8bd, 0x8100, // pop.w {r8,pc}
+    ], (cpu) => { cpu.w[16] = 123; });
+    expect(returned.w[16]).toBe(123);
+    expect(returned.w[26]).toBe(returned.stackTop);
   });
 
   test("wide conditional branches preserve taken and fallthrough paths", () => {
