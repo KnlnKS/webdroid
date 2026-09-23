@@ -26,7 +26,7 @@ const bits = bt.bits;
 
 pub const HEAT = 48;
 const MAX_BLOCKS = 40;
-const MAX_INSTR = 320;
+const MAX_INSTR = 640;
 const MAX_REGIONS = 64;
 
 pub const L_CPU = 0;
