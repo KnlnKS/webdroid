@@ -434,6 +434,14 @@ describe("a64 simd: vector arithmetic", () => {
     expect(c.fpsr & (1 << 27)).toBe(0);
   });
 
+  test("64-bit UQSHL ignores saturation in inactive upper lanes", () => {
+    const c = run([0x2f0974e7, RET], (cpu) => {
+      cpu.vb.set([1, 2, 3, 4, 5, 6, 7, 8, 255, 255, 255, 255, 255, 255, 255, 255], 16 * 7);
+    });
+    expect([...c.vb.subarray(16 * 7, 16 * 8)]).toEqual([2, 4, 6, 8, 10, 12, 14, 16, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(c.fpsr & (1 << 27)).toBe(0);
+  });
+
   test("64-bit UADALP clears inactive upper lanes", () => {
     const c = run([0x2e206820, RET], (cpu) => {
       cpu.vb.set([1, 2, 3, 4, 5, 6, 7, 8], 16);

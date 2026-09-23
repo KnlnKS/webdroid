@@ -929,6 +929,30 @@ fn emitVector(e: *Emit, w: u32) bool {
             vput(e, rd, q);
             return true;
         }
+        if ((opcode == 2 or opcode == 6) and shr < bitsT) {
+            b.get(L_CPU);
+            vget(e, rd);
+            emitRoundedShift(e, rn, esz, shr, opcode == 6, U);
+            b.emit(.{sv(S.add[esz])});
+            vput(e, rd, q);
+            return true;
+        }
+        if (opcode == 14 and U and esz < 3) {
+            const shift = amount - bitsT;
+            const max = narrowMax(esz) >> @intCast(shift);
+            vget(e, rn);
+            vectorConst(e, esz, max);
+            b.emit(.{ sv(S.gt_u[esz]), set(jit.L_VB), get(jit.L_VB) });
+            if (!q) maskLowHalf(e);
+            b.emit(.{sv(S.any_true)});
+            setQIf(e);
+            b.get(L_CPU);
+            vget(e, rn);
+            vectorConst(e, esz, max);
+            b.emit(.{ sv(S.min_u[esz]), c32(@intCast(shift)), sv(S.shl[esz]), get(jit.L_VB), sv(S.or_) });
+            vput(e, rd, q);
+            return true;
+        }
         if (opcode == 20) {
             if (esz == 3) return false;
             b.get(L_CPU);
