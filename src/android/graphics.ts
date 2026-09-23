@@ -1441,6 +1441,8 @@ export class JCanvas extends JObj {
   ctx!: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
   w = 0; h = 0;
   saveCount = 1;
+  clipDevice: [number, number, number, number] | null = null;
+  clipStack: ([number, number, number, number] | null)[] = [];
   bmp: JBitmap | null = null;
   semanticOwner: { drawnText: string[] | null; drawnTextPoints: Float32Array | null; drawnTextCount: number } | null = null;
   semanticBase: [number, number, number, number, number, number] | null = null;
@@ -1643,16 +1645,18 @@ export function locateDrawnText(owner: DrawnTextOwner, text: string, width: numb
 // ── Canvas method bodies shared by several overloads
 export function saveCanvas(cv: JCanvas): number {
   cv.ctx.save();
+  cv.clipStack.push(cv.clipDevice);
   return cv.saveCount++;
 }
 export function restoreCanvas(cv: JCanvas): void {
   if (cv.saveCount <= 1) throw rt.mkThrowable("java/lang/IllegalStateException", "Underflow in restore - more restores than saves");
   cv.ctx.restore();
+  cv.clipDevice = cv.clipStack.pop() ?? null;
   cv.saveCount--;
 }
 export function restoreCanvasToCount(cv: JCanvas, count: number): void {
   if (count < 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Underflow in restoreToCount - more restores than saves");
-  while (cv.saveCount > count) { cv.ctx.restore(); cv.saveCount--; }
+  while (cv.saveCount > count) { cv.ctx.restore(); cv.clipDevice = cv.clipStack.pop() ?? null; cv.saveCount--; }
 }
 function canvasSave(this: JCanvas): number {
   return saveCanvas(this);
@@ -1663,10 +1667,29 @@ function aboutPivot(ctx: JCanvas["ctx"], px: number, py: number, f: () => void) 
 }
 function clipRect(this: JCanvas, l: number, t: number, r: number, b: number) {
   const ctx = this.ctx;
+  const m = ctx.getTransform();
+  if (r === l || b === t || !(m.a * m.d - m.b * m.c)) {
+    this.clipDevice = [0, 0, 0, 0];
+    ctx.resetTransform();
+    ctx.beginPath();
+    ctx.rect(ctx.canvas.width + 1, ctx.canvas.height + 1, 1, 1);
+    ctx.clip();
+    ctx.setTransform(m);
+    return 0;
+  }
   ctx.beginPath();
-  ctx.rect(l, t, r > l && b > t ? r - l : 0, r > l && b > t ? b - t : 0);
+  ctx.rect(l, t, r - l, b - t);
   ctx.clip();
-  return +(r > l && b > t);
+  const x = m.a * l + m.c * t + m.e, y = m.b * l + m.d * t + m.f;
+  const wx = m.a * (r - l), wy = m.b * (r - l);
+  const hx = m.c * (b - t), hy = m.d * (b - t);
+  const old = this.clipDevice;
+  const left = Math.max(old?.[0] ?? 0, Math.floor(x + Math.min(0, wx) + Math.min(0, hx)));
+  const top = Math.max(old?.[1] ?? 0, Math.floor(y + Math.min(0, wy) + Math.min(0, hy)));
+  const right = Math.min(old?.[2] ?? this.w, Math.ceil(x + Math.max(0, wx) + Math.max(0, hx)));
+  const bottom = Math.min(old?.[3] ?? this.h, Math.ceil(y + Math.max(0, wy) + Math.max(0, hy)));
+  this.clipDevice = right > left && bottom > top ? [left, top, right, bottom] : [0, 0, 0, 0];
+  return +(right > left && bottom > top);
 }
 function clipOutRect(this: JCanvas, l: number, t: number, r: number, b: number) {
   if (!(r > l && b > t)) return 1;
@@ -1684,7 +1707,29 @@ function clipOutRect(this: JCanvas, l: number, t: number, r: number, b: number) 
   recordOrRun(this.ctx, apply);
   return 1;
 }
+// Canvas2D exposes no clip region; rotated clips retain a conservative device-space bound.
+function viewportClipBounds(cv: JCanvas, out: JRect): number {
+  const { a, b, c, d, e, f } = cv.ctx.getTransform();
+  const det = a * d - b * c;
+  const clip = cv.clipDevice;
+  const left = clip?.[0] ?? 0, top = clip?.[1] ?? 0;
+  const right = clip?.[2] ?? cv.w, bottom = clip?.[3] ?? cv.h;
+  if (!det || !Number.isFinite(det) || !(right > left && bottom > top)) {
+    out.left = out.top = out.right = out.bottom = 0;
+    return 0;
+  }
+  const dx = left - e, dy = top - f;
+  const ox = (d * dx - c * dy) / det, oy = (a * dy - b * dx) / det;
+  const wx = d * (right - left) / det, wy = -b * (right - left) / det;
+  const hx = -c * (bottom - top) / det, hy = a * (bottom - top) / det;
+  out.left = Math.round(ox + Math.min(0, wx) + Math.min(0, hx));
+  out.top = Math.round(oy + Math.min(0, wy) + Math.min(0, hy));
+  out.right = Math.round(ox + Math.max(0, wx) + Math.max(0, hx));
+  out.bottom = Math.round(oy + Math.max(0, wy) + Math.max(0, hy));
+  return 1;
+}
 function drawRect(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
+  if (!(r > l && b > t)) return;
   this.drawShape(p, (c) => c.fillRect(l, t, r - l, b - t), (c) => c.strokeRect(l, t, r - l, b - t));
 }
 function drawColor(this: JCanvas, color: number, clear = false) {
@@ -1818,12 +1863,11 @@ export const canvasMethods: NativeSpec["methods"] = {
     return 1;
   },
   "getClipBounds(Landroid/graphics/Rect;)Z": function (this: JCanvas, r: JRect) {
-    r.left = 0; r.top = 0; r.right = this.w; r.bottom = this.h;
-    return 1;
+    return viewportClipBounds(this, r);
   },
   "getClipBounds()Landroid/graphics/Rect;": function (this: JCanvas) {
     const r = new JRect();
-    r.right = this.w; r.bottom = this.h;
+    viewportClipBounds(this, r);
     return r;
   },
   "drawColor(I)V": drawColor,
@@ -1919,6 +1963,7 @@ export const canvasMethods: NativeSpec["methods"] = {
   "setBitmap(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
 };
 export function setCanvasBitmap(cv: JCanvas, b: JBitmap | null) {
+  cv.clipDevice = null; cv.clipStack.length = 0;
   if (b) { cv.ctx = b.ctx; cv.w = b.w; cv.h = b.h; cv.bmp = b; return; }
   cv.ctx = new OffscreenCanvas(1, 1).getContext("2d")!;
   cv.w = cv.h = 0; cv.bmp = null;

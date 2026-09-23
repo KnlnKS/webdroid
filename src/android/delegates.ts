@@ -586,11 +586,7 @@ delegate("android/graphics/Canvas", {
     c.ctx.clip(pp.path(), pp.fillRule);
     return 1;
   },
-  "nGetClipBounds(JLandroid/graphics/Rect;)Z": (h: bigint, r: Rect) => {
-    const c = canvas(h);
-    r.left = 0; r.top = 0; r.right = c.w; r.bottom = c.h;
-    return 1;
-  },
+  "nGetClipBounds(JLandroid/graphics/Rect;)Z": on("getClipBounds(Landroid/graphics/Rect;)Z"),
   ...stubs(0, "nIsOpaque(J)Z", "nIsHighContrastText(J)Z", "nQuickReject(JFFFF)Z", "nQuickReject(JJ)Z"),
   ...noops("nSetCompatibilityVersion(I)V", "nSetDrawFilter(JJ)V", "nClipShader(JJI)V"),
 });
