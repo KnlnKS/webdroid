@@ -504,8 +504,8 @@ the next tutorial. There were no required native calls, JNI misses, page excepti
 or layout, draw or GL errors. Two earlier candidate captures presented 26.6 and
 27.9 frames/s, but startup timing and shared host load vary, so these samples do
 not prove a stable visible-Chrome FPS improvement. Earlier visible Chrome
-windows were about 5–11 frames/s with competing captures. The intro video still
-needed a tap to skip. `NativeActivity` was an optional class probe; `VideoView`,
+windows were about 5–11 frames/s with competing captures. The focused flow used a
+tap to skip the intro. `NativeActivity` was an optional class probe; `VideoView`,
 `DialogFragment`, Parcelable and Cronet failures remain in the ad paths documented
 above. No game bytecode, assets or visual goldens changed.
 
@@ -521,7 +521,7 @@ one and presented 434 frames in 12.05 seconds (36.0 frames/s), with 438 advancin
 ticks and 2.06 billion guest instructions. It had no recorded page exception or
 required gameplay API miss. A Cronet native fault appeared in the previously traced
 ad network path, outside the requested scope. The visible capture is one run, and
-the intro still required a tap to skip. ARM interpreter/JIT parity tests and Cut
+the focused flow used a tap to skip the intro. ARM interpreter/JIT parity tests and Cut
 smoke compilation passed (82 tests, 64,465 classes, zero method failures).
 
 The final serialized E2E matrix on this code captured 183/183 steps across 13 flows in
@@ -531,3 +531,15 @@ and eight `Matrix.mapRect` draw errors, the same failure as earlier gates with v
 counts. Twelve Flappy Bird auxiliary process snapshots were unavailable, while all
 seven of its screen steps rendered. Cut has no matrix flow; the visible level-one
 capture above is its direct FPS evidence. No visual golden changed.
+
+A post-gate Cut-only intro check sampled the NDK-backed video and audio codec state
+without a tap. One run showed an AAC decoder with eight in-flight buffers and no
+output at 32 seconds; another still showed both codecs before inputs arrived at the
+same wall time. Both ended on a black screen by 47 seconds. Raising the bounded audio
+pending limit to 32 did not restore the intro, so that trial and its diagnostic hook
+were removed. A longer no-tap trace on the unchanged implementation reached level one
+by 64 seconds, though the intro image stayed black. It observed a surface-free AVC
+decoder initially spinning on empty output while eight WebCodecs inputs were pending,
+then a surface-backed decoder rendering 30 of 62 dequeued frames before cleanup.
+The intro's missing pixels remain unresolved; the measured level-one flow skipped it
+with a tap.
