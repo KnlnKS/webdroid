@@ -102,7 +102,7 @@ async function diffFlow(flow: Flow): Promise<FlowReport> {
   // bad one: Compose draws through canvas ops and exposes no View.text for either side to name.
   const paired = withTree.some((s) => s.tree!.matched > 0);
   return {
-    app: flow.app, steps,
+    app: flow.app, androidSdk: manifest.device.sdk, steps,
     meanTreeDiffPct: paired ? withTree.reduce((a, s) => a + s.tree!.diffPct, 0) / withTree.length : undefined,
     treeSteps: paired ? withTree.length : undefined,
     meanTolerantPct: mean((s) => s.tolerantPct),

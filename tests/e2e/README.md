@@ -19,17 +19,21 @@ already be serving the default port. Run captures sequentially: they share outpu
 `adb` may be absent from `PATH` entirely. It reads `golden/`, drives webdroid over Playwright,
 and writes `actual/` + `report/index.html`. Every flow runs in its own headless browser and
 `--jobs N` (default: half the cpus) bounds how many run at once; each flow is scored in a
-subprocess as soon as it has captured. The full suite takes about a minute on a 14-core
-machine, the four scored flows about half of that.
+subprocess as soon as it has captured. The serialized 13-flow matrix has taken about 13 minutes;
+live network and video flows dominate that cost.
 
 Recording new goldens is a separate, manual step (below).
 
-`bun run e2e:fast` reuses the same flows but runs only fixed-input, fixed-clock cases. Android
+`bun run e2e:fast` reuses the same flows but runs only six fixed-input, fixed-clock cases. Android
 timers are advanced logically where that preserves the app's behavior; native GL games remain on
 real monotonic time. Semantic steps keep diagnostics and a frame hash without PNG readback, while
 named checkpoints retain pixels and enforce their recorded visual limits. A failure automatically
 reruns that flow into `actual-fast/failures/` with full evidence. The fast lane never replaces the
 serialized full lane as the final compatibility and performance gate.
+At `--jobs 4`, all six flows passed in 30.6 seconds on this machine. Motion frame rates are
+informational in parallel runs; use `--jobs 1` for their frame-rate gates. Four fast flows have
+Android visual checkpoints. Flappy Bird and Doodle Jump remain smoke-only because the available
+API 33 ARM64 emulator cannot install their ARM32 native libraries.
 
 `bun run test:focused -- <paths>` selects dependent Bun tests through the TypeScript import graph,
 then selects fast flows from `tests/e2e/coverage-index.json`. `--base <revision>` includes committed,
@@ -273,18 +277,22 @@ first to ask for and not find). None of that is in the HTML report; read the fil
 ## Re-recording the goldens (needs an emulator)
 
 ```bash
-bun run e2e:setup    # create/configure the webdroid_ref AVD (geometry from the device profile)
+bun run e2e:setup    # create/configure an API 33 AVD (geometry from the device profile)
 bun run e2e:boot     # boot it and apply the determinism settings
 bun run e2e:record   # walk every flow, write golden/ + manifest.json
 ```
 
-Then eyeball the goldens and commit `tests/e2e/golden/`. `actual/` and `report/` are ignored.
+Install the APKs on the emulator first. The recorder adjusts size and density for each flow,
+then verifies both geometry and API 33 before capture. Review the images and commit
+`tests/e2e/golden/`; `actual/` and `report/` are ignored. Older FitNotes, Mihon, and Harmonic
+references were recorded on API 35 and remain labeled as such in the report. CalculatorM was
+recorded on API 33 at its declared 1080×2424 geometry.
 
 Determinism the recorder depends on (all applied by `boot-emulator.sh`): animations off,
 SystemUI demo mode (fixed 12:00 clock, full battery, no notification icons), `adb root` +
 a clock pinned to `PINNED_CLOCK_MS` (2026-01-02T12:00:00Z — FitNotes renders the current date,
 and webdroid pins the same instant in its test environment), fixed locale and font scale,
-light theme, and `pm clear` before each flow. Recording twice produces byte-identical PNGs.
+light theme, and `pm clear` before each flow. Live content can still change between recordings.
 
 The soft keyboard is closed before every capture — webdroid does not render Android's keyboard,
 and a keyboard in a golden would floor that step near 50%. It is closed **only when actually shown**, because the
@@ -303,15 +311,17 @@ dismiss key also closes dialogs.
 * **harmonic** (14 steps) — the welcome dialog and its presets, the front page, settings, a
   story and its comments. It renders live Hacker News, so it spreads ~6 points run to run;
   A/B it against the parent commit rather than reading one number.
+* **calculatorm** (8 steps) — calculate 7 + 7 and compare the API 33 result screen.
 
-The other four have no goldens and run in smoke mode — every step must render, and the run
+The flows without goldens run in smoke mode — every step must render, and the run
 reports fps and the per-step missing-API list rather than a diff percentage:
 
 * **flappybird** (7 steps) — splash → title → PLAY → taps flap past pipes → Game Over panel.
-* **calculatorm** (8 steps) — keys from the rendered keypad.
 * **lichess** (15 steps) — Flutter home → Board editor → drag e2 to e4 → level-1 computer
   game as White → e4, Nf3, and Ne5 with native Stockfish replies.
 * **doodlejump** (6 steps) — title → play → Back, on the ARM32 native tier.
+* **resy**, **reddit**, **tiktok**, **youtube**, and **chatgpt** exercise live first-run and
+  content paths. Their run files expose diagnostics, but they have no Android visual reference.
 
 Flows are aspirational on purpose. Steps webdroid cannot reach score near 100% and *are* the
 target; they are not trimmed to match what works today.

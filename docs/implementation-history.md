@@ -6,6 +6,24 @@ measured tradeoffs and unresolved limits. Git history contains the run-by-run
 captures and commit IDs removed from this summary. Historical results describe
 their tested revision, not necessarily current status.
 
+## Differential test consolidation — 2026-09-23
+
+The six deterministic fast flows passed in 30.6 seconds at four browser jobs after
+longest-first scheduling. The earlier fast runner serialized both native games after
+the other flows and took 99.8 seconds in a run contaminated by an emulator boot and
+a Doodle Jump frame-rate failure rerun; that number is not a matched speed baseline.
+Parallel motion frame rates are informational. The one-job lane retains frame-rate
+gates, while the parallel lane checks compatibility and Android visual checkpoints.
+
+CalculatorM now has an API 33 Android reference at 1080×2424 and a fast result
+checkpoint: `7 + 7 = 14` differs by 7.07% of content pixels in the first fast run,
+below its 10% retained limit. Older FitNotes, Mihon and Harmonic goldens identify
+API 35, so their visual scores are labeled as API 35 evidence. The available API 33
+ARM64 emulator rejects Flappy Bird and Doodle Jump with `INSTALL_FAILED_NO_MATCHING_ABIS`;
+those native ARM32 games remain smoke and motion checks, not Android visual parity
+checks. The live flows also lack Android references. A missing or stale `run.json`
+now stops offline scoring because wedge flags otherwise silently disappear.
+
 ## Evidence and measurement
 
 - Run real APK and bundled library bytecode. A rendered screen or empty missing-API

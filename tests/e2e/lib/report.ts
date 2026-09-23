@@ -20,6 +20,7 @@ export type StepReport = {
 
 export type FlowReport = {
   app: string;
+  androidSdk: string;
   steps: StepReport[];
   meanTolerantPct: number;
   meanStrictPct: number;
@@ -70,7 +71,7 @@ export function printSmoke(app: string, runs: StepRun[], log = console.log): voi
 }
 
 export function printFlow(r: FlowReport): void {
-  console.log(`\n--- ${r.app} ---`);
+  console.log(`\n--- ${r.app} (Android API ${r.androidSdk}) ---`);
   console.log("  ##  strict  tolerant  content  step");
   for (const s of r.steps) {
     const flags = [
@@ -160,7 +161,7 @@ ${reports.map((r) => `<div class="card"><b>${r.meanContentDiffPct.toFixed(1)}%</
   <span>${esc(r.app)} &middot; mean content diff &middot; rendered ${r.stepsRendered}/${r.steps.length} steps
   ${r.wedgedAtStep !== undefined ? `&middot; wedged at step ${String(r.wedgedAtStep).padStart(2, "0")}` : ""}</span></div>`).join("")}
 </div>
-${reports.map((r) => `<h2>${esc(r.app)} <span class="meta">recorded ${esc(r.recordedAt)}</span></h2>
+${reports.map((r) => `<h2>${esc(r.app)} <span class="meta">Android API ${esc(r.androidSdk)} &middot; recorded ${esc(r.recordedAt)}</span></h2>
 <table><thead><tr><th></th><th>step</th><th>strict</th><th>tolerant</th><th>content</th>
   <th>golden &middot; webdroid &middot; diff</th></tr></thead>
 <tbody>${rows(r)}</tbody></table>`).join("")}`;
