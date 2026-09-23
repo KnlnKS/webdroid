@@ -6,7 +6,7 @@
 import { wrote, mem } from "./mem";
 import { hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, ARG0, ptr } from "./host";
 import { E } from "./abi";
-import { type Cpu, cpuByTid, sigHandlers } from "./cpu";
+import { type Cpu, cpuByTid, cpuByOsTid, sigHandlers } from "./cpu";
 import { tidOf } from "./pthread";
 import { fail, logLine, LAYOUT, strncpy, snprintfInto, readTm } from "./libc";
 import { MONTHS, DAYS } from "../jvm/natives/jtime";
@@ -30,7 +30,7 @@ function capget(cpu: Cpu, header: number, data: number): number {
   if (!data) return 0; // Linux permits a header-only capability-version probe.
   const pid = mem.ld32(header + 4);
   if (pid < 0) return fail(cpu, E.INVAL);
-  if (pid !== 0 && pid !== 4242 && !cpuByTid(pid - 4242)) return fail(cpu, E.SRCH);
+  if (pid !== 0 && pid !== cpu.pid && cpuByOsTid(pid)?.pid !== cpu.pid) return fail(cpu, E.SRCH);
   mem.memset(data, 0, words * 12);
   return 0;
 }
@@ -106,7 +106,7 @@ export function procInit(): void {
     getpwuid: () => pw,
     getpwuid_r: (_c, a) => { a.i(); const out = a.p(); a.p(); a.p(); const res = a.p(); mem.memmove(out, pw, 8 * PTR); stp(res, out); return 0; },
     getpwnam: () => pw,
-    setuid: () => 0, setgid: () => 0, seteuid: () => 0, setegid: () => 0, setgroups: () => 0, initgroups: () => 0, setsid: () => 4242,
+    setuid: () => 0, setgid: () => 0, seteuid: () => 0, setegid: () => 0, setgroups: () => 0, initgroups: () => 0, setsid: (cpu) => cpu.pid,
     ptrace: (cpu) => fail(cpu, E.PERM),
     // signals: a handler runs on the target thread, at once when it is parked in a host call
     // (as a kernel interrupts a syscall) and at its next slice boundary when it is running
@@ -126,7 +126,7 @@ export function procInit(): void {
       if (r === 0) t!.kill(sig);
       return r;
     },
-    tgkill: (_c, a) => { a.i(); const t = cpuByTid(a.i() - 4242), sig = a.i(); if (!t) return fail(_c, E.SRCH); t.kill(sig); return 0; },
+    tgkill: (cpu, a) => { const pid = a.i(), t = cpuByOsTid(a.i()), sig = a.i(); if (pid !== cpu.pid || !t || t.pid !== pid || t.finished) return fail(cpu, E.SRCH); t.kill(sig); return 0; },
     raise: (cpu, a) => { const sig = a.i(); if (!sigHandlers.has(sig) && (sig === 6 || sig === 11 || sig === 9)) cpu.fault(`raise(${sig})`); cpu.kill(sig); return 0; },
     kill: (cpu, a) => { a.i(); const sig = a.i(); if (!sigHandlers.has(sig) && (sig === 6 || sig === 11 || sig === 9)) cpu.fault(`kill(${sig})`); cpu.kill(sig); return 0; },
     sigprocmask: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), PTR); return e ? fail(cpu, e) : 0; },

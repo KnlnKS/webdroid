@@ -921,8 +921,8 @@ fn swi(c: *Cpu) Status {
             c.exit = 175;
             return .syscall;
         },
-        20 => set(c, 0, 4242),
-        224 => set(c, 0, 4242 + c.tid),
+        20 => set(c, 0, c.pid),
+        224 => set(c, 0, c.os_tid),
         // every other number is the host's: it serves the same table as libc's syscall(2)
         else => {
             c.exit = r(c, 7);

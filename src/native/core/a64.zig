@@ -794,8 +794,8 @@ fn atomic(c: *Cpu, o: *const Op, pc: u32) Status {
 
 fn svc(c: *Cpu) Status {
     switch (@as(u32, @truncate(c.x[8]))) {
-        172 => c.x[0] = 4242,
-        178 => c.x[0] = 4242 + c.tid,
+        172 => c.x[0] = c.pid,
+        178 => c.x[0] = c.os_tid,
         135 => {
             c.exit = 135;
             return .syscall;

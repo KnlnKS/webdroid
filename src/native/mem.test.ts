@@ -7,7 +7,7 @@ beforeAll(() => setA64(true));
 afterAll(() => setA64(false));
 
 test("core copies preserve overlap and invalidate executed pages across the copied range", () => {
-  const p = mem.memalign(0x1000, 0x4000), cp = core.cpu_alloc(1, 1);
+  const p = mem.memalign(0x1000, 0x4000), cp = core.cpu_alloc(1, 1001, 1000, 1);
   const args = new BigUint64Array(mem.buf, cp, 4);
   const copy = (d: number, s: number, n: number, id = CORE_LIBC.memmove) => {
     args.set([BigInt(d), BigInt(s), BigInt(n), 0xffffffffffffffffn]);
@@ -42,7 +42,7 @@ test("core copies preserve overlap and invalidate executed pages across the copi
 });
 
 test("core zlib checksums preserve incremental state", () => {
-  const p = mem.malloc(9), cp = core.cpu_alloc(1, 1);
+  const p = mem.malloc(9), cp = core.cpu_alloc(1, 1001, 1000, 1);
   const args = new BigUint64Array(mem.buf, cp, 3);
   mem.write(p, new TextEncoder().encode("123456789"));
   const update = (id: number, initial: number, offset: number, length: number) => {

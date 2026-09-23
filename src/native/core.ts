@@ -39,7 +39,7 @@ interface Core {
   free_stack(base: number, size: number): void;
   host_alloc(n: number, align: number): number;
   layout(i: number): number;
-  cpu_alloc(tid: number, a64: number): number;
+  cpu_alloc(tid: number, osTid: number, pid: number, a64: number): number;
   cpu_free(p: number): void;
   run_slice(cpu: number, budget: number): number;
   code_write(addr: number, size: number): number;

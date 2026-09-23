@@ -1,6 +1,15 @@
 import { device } from "./config";
 
 export const procIdentity = { pid: 1000, name: "" };
+const threadOffsets = new WeakMap<object, number>();
+let nextThreadOffset = 0;
+
+export function processTid(thread: object, main: boolean): number {
+  if (main) return procIdentity.pid;
+  let offset = threadOffsets.get(thread);
+  if (offset === undefined) threadOffsets.set(thread, (offset = ++nextThreadOffset));
+  return procIdentity.pid + offset;
+}
 
 const cpuList = () => device.cpu.cores === 1 ? "0\n" : `0-${device.cpu.cores - 1}\n`;
 

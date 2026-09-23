@@ -224,8 +224,8 @@ function fillSysinfo(p: number): void {
 function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promise<HostRet> {
   if (nr === (PTR === 8 ? 98 : 240)) { const addr = a.p(), op = a.i(), val = a.i(), ts = a.p(); a.p(); return futex(cpu, addr, op, val, ts, a.i()); }
   if (nr === (PTR === 8 ? 135 : 175)) { const how = a.i(), set = a.p(), old = a.p(), size = a.u(); const e = size === 8 ? cpu.sigmask(how, set, old, 8) : E.INVAL; return e ? fail(cpu, e) : 0; }
-  if (nr === (PTR === 8 ? 178 : 224)) return 4242 + cpu.tid;              // gettid
-  if (nr === (PTR === 8 ? 172 : 20)) return 4242;                          // getpid
+  if (nr === (PTR === 8 ? 178 : 224)) return cpu.osTid;                    // gettid
+  if (nr === (PTR === 8 ? 172 : 20)) return cpu.pid;                        // getpid
   if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); if (n) { crypto.getRandomValues(mem.bytes(buf, n)); wrote(buf, n); } return n; } // getrandom
   if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin
   if (nr === (PTR === 8 ? 179 : 116)) { fillSysinfo(a.p()); return 0; }    // sysinfo
@@ -296,8 +296,8 @@ export function libcInit(): void {
     __cxa_finalize: () => 0,
     __cxa_pure_virtual: (cpu) => cpu.fault("pure virtual call"),
     __stack_chk_fail: (cpu) => cpu.fault("stack smashing detected"),
-    getpid: () => 4242,
-    gettid: (cpu) => 4242 + cpu.tid,
+    getpid: (cpu) => cpu.pid,
+    gettid: (cpu) => cpu.osTid,
     getuid: () => 10123, geteuid: () => 10123, getgid: () => 10123, getegid: () => 10123,
     getppid: () => 1,
     bsd_signal: () => 0,

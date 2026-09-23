@@ -386,6 +386,18 @@ describe("a64 decoder: hints, atomics, the REV family and system registers", () 
 });
 
 describe("raw syscalls", () => {
+  test("kernel process and thread IDs agree with the guest process", () => {
+    const c = run([
+      0xd2801588,   // mov x8, #172 (getpid)
+      0xd4000001,   // svc #0
+      0xaa0003e1,   // mov x1, x0
+      0xd2801648,   // mov x8, #178 (gettid)
+      0xd4000001,   // svc #0
+      RET]);
+    expect(c.w[2]).toBe(c.pid);
+    expect(c.w[0]).toBe(c.osTid);
+  });
+
   test("zero-length getrandom does not dereference its buffer", async () => {
     const { libcInit } = await import("./libc");
     libcInit();

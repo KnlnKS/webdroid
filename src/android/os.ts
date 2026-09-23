@@ -2,7 +2,7 @@ import { readFully } from "../shell/lazyfile";
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
 import { JMessage, obtain } from "./messenger";
-import { procIdentity } from "../shell/procfs";
+import { procIdentity, processTid } from "../shell/procfs";
 import { parcelCreator, type JParcel } from "./parcel";
 import { keyCodes, deadChar } from "./keycodes";
 import { mem } from "../native/mem";
@@ -349,14 +349,9 @@ export function userHandleForUid(uid: number): JUserHandle {
   if (!handle) { handle = new JUserHandle(userId); userHandles.set(userId, handle); }
   return handle;
 }
-const threadTids = new WeakMap<JThread, number>();
-let tidSeq = 0;
 /** the kernel thread id of a Java thread: the main thread's is the pid, as on a device */
 export function threadTid(t: JThread): number {
-  if (t === mainThread) return PROCESS_PID;
-  let tid = threadTids.get(t);
-  if (tid === undefined) threadTids.set(t, (tid = PROCESS_PID + ++tidSeq));
-  return tid;
+  return processTid(t, t === mainThread);
 }
 export function setProcessName(name: string): void { PROCESS_NAME = name; procIdentity.name = name; }
 rt.register({
