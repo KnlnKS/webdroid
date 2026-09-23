@@ -5,7 +5,7 @@ import type { JCanvas, JPaint } from "./graphics";
 
 function eligible(canvas: JCanvas, paint: JPaint): boolean {
   return !!canvas.bmp && !paint.shader && !paint.shaderObj && !paint.maskFilter &&
-    !paint.shadowRadius && !isRecording(canvas.ctx);
+    !paint.shadowRadius && !paint.transparentSourceIn() && !isRecording(canvas.ctx);
 }
 
 function deviceFill(canvas: JCanvas, paint: JPaint, pixels: Path2D): void {

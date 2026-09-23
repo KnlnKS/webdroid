@@ -362,6 +362,10 @@ export class JPaint extends JObj {
       return "source-atop";
     return this.blend;
   }
+  transparentSourceIn(): boolean {
+    return this.blend === "source-in" && (this.renderAlpha ?? this.color >>> 24) === 0 &&
+      !this.shader && !this.shaderObj && this.filterColor === null && !this.filterMatrix;
+  }
   letterSpacingEm = 0;
   textScaleX = 1;
   textSkewX = 0;
@@ -1561,6 +1565,18 @@ export class JCanvas extends JObj {
   drawShape(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke: (ctx: typeof this.ctx) => void) {
     if (tryBitmapShape(this, p, fill, stroke)) return;
     if (p.maskFilter?.style) return this.drawMask(p, fill, stroke);
+    if (p.transparentSourceIn() && !p.maskFilter && !p.shadowRadius) {
+      const ctx = this.ctx;
+      ctx.save();
+      try {
+        ctx.globalCompositeOperation = "destination-out";
+        if (p.style !== 1) { this.prep(p, false); ctx.fillStyle = "#000"; fill(ctx); }
+        if (p.style !== 0 && (p.style !== 2 || p.strokeWidth !== 0)) {
+          this.prep(p, true); ctx.strokeStyle = "#000"; stroke(ctx);
+        }
+      } finally { ctx.restore(); }
+      return;
+    }
     // A blended paint owns the composite op only for its own ops — restore it straight after,
     // so a CLEAR fill can never leak into the next drawImage/drawText and erase it.
     const shadow = beginPaintShadow(this.ctx, p);
