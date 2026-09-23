@@ -679,11 +679,66 @@ the starting JIT and 760–768 ms with the new lowerings; each decoded all 42 fr
 228.4 million guest instructions. Runs made beside another CPU-heavy Chromium workload took
 longer and were excluded from the timing comparison. A TikTok-only replay rendered 13/13 steps
 in 200.4 seconds with no required native, wedge, settle timeout, layout, draw or GLES error.
-Its active video steps presented 21 and 25 EGL swaps/s on two live clips while native execution
+Its active video steps presented 18.6 and 21.9 EGL swaps/s on two live clips while native execution
 consumed 4.8 of roughly 5.5 seconds per step. The clips differ from earlier runs and their
 source FPS is unknown; original-rate playback is therefore still unproved. A separate Chrome
 DevTools browser reached the For You screen but remained on a loading spinner despite successful
 CDN TLS handshakes and advancing guest ticks, so it supplied no video cadence evidence.
+
+An earlier fixed ByteVC1 capture supplies 83 valid packets that decode 71 frames through the
+bundled library. Replaying the preceding 277 captured packets from a fresh decoder reports
+missing parameter sets and produces no additional frames, so the 360 packets cannot be timed
+as one continuous valid clip. A temporary fallback counter found just 3,583 interpreter
+handoffs during the 71-frame replay, compared with roughly 349 million guest instructions.
+The dense ByteVC1 playback limit is therefore in compiled guest execution, not a large set
+of missing SIMD JIT lowerings on this captured path. The counter was removed. A longer fixed
+ByteVC1 replay of 332 packets decoded 320 frames in roughly 2.6 seconds native time and
+retired 2.49 billion guest instructions. A temporary host timing probe measured about 19 ms
+inside 177,942 host callbacks during one replay, so host callback bodies were not the decoder
+bottleneck; the probe was removed. A raw HEVC stream assembled from those packets reports a
+nominal 30 fps in its header, but has no presentation timestamps for a live FPS comparison.
+
+The remaining fixed ByteVC2 fallbacks included rounded accumulating shifts and unsigned
+saturating immediate shifts in pixel loops. The JIT now lowers both using WebAssembly SIMD,
+including FPSR.Q updates and inactive-lane masking. Existing AArch64 hardware oracle cases
+for `SRSRA`, `URSRA` and `UQSHL` pass; a focused test checks that inactive upper lanes do not
+set Q. The 48-packet capture still decodes 42 frames and its interpreter handoffs fell from
+354,125 to 258,461. Two three-run quiet groups measured candidate native times of 768–776 ms
+against a baseline group of 769–785 ms. The small timing difference does not establish an
+end-to-end playback gain. Later runs overlapped another CPU-heavy Chromium process and were
+excluded from timing comparisons.
+
+On a separate active ByteVC1 clip, a 12.01-second full-Chromium profile recorded 342 EGL
+swaps (28.5/s), 1,284 software view-tree draws (107/s), 2.27 seconds drawing, and 5.15
+seconds native execution. Chrome's `requestAnimationFrame` ran near 120 Hz although the
+guest `Display` and `Display.Mode` both advertised 60 Hz. The virtual display now paces both
+process realms at its reported 60 Hz and supplies the same interval to `Choreographer` and
+the display deadline API. Synthetic 10-second rAF streams at 60, 75, 90, 120 and 144 Hz
+each admitted 600 guest frames. A later 12.02-second ByteVC1 sample recorded 360 EGL swaps
+(30.0/s), 357 software draws, 0.56 seconds drawing, and 4.83 seconds native execution.
+These are different live clips, and the later sample overlapped another CPU-heavy browser;
+the draw reduction is consistent with pacing, but the FPS difference is not a matched gain.
+Chrome DevTools MCP reached the feed and briefly decoded frames after a tap; its trace then
+landed on an idle page and did not provide a steady playback profile.
+
+After frame pacing, TikTok-only E2E rendered 13/13 steps in 194.6 seconds without a required
+native, newly reached Android API, settle timeout, wedge, layout, draw or GLES error. The
+video steps presented 88 and 93 EGL swaps in 6.40 and 6.37 seconds; native work used 4.64
+and 5.65 seconds. The clips were different from the browser profile. A diagnostic attempt to
+capture live packet presentation timestamps failed because an old ignored hook script expected
+a removed core watch API, so original frame cadence remains unknown.
+
+The final serialized E2E matrix on this candidate rendered 183/183 steps in 960.4 seconds.
+TikTok rendered 13/13 with four process diagnostics per step, advancing main ticks, no newly
+reached platform API, required native, wedge, settle timeout, layout, draw or GLES error. Its
+two steady video steps presented 111 EGL swaps in 6.36 seconds (17.4/s) and 121 in 6.48
+seconds (18.7/s), while native execution used 4.76 and 4.88 seconds respectively. The nine
+missing classes at TikTok launch remain optional app/vendor probes. All other flows rendered;
+YouTube retained its two known control settle timeouts and six `Matrix.mapRect` draw errors.
+No other flow reported a wedge, settle timeout, required native, layout, draw or GLES error.
+The four scored flows had mean content differences of 39.80% FitNotes, 42.13% Mihon app,
+31.31% Harmonic and 9.07% Mihon onboarding. Live content and unpaired clips limit score and
+FPS comparisons. Visual goldens were not changed.
 
 ## TikTok video playback follow-up — 2026-09-23
 

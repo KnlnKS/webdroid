@@ -6,12 +6,17 @@ multiplication, within-block vector-read caching, zeroed 64-bit vector-result ca
 vector memory transfers, accumulator reuse, longer JIT regions, A64 bit/byte reversal, and
 cached vector stores are committed. Further generic SIMD lowerings reduced fallback calls on
 a fixed 48-packet ByteVC2 capture from 3.82 million to 0.35 million and shortened three quiet
-42-frame runs from 823–840 ms to 760–768 ms. The latest TikTok-only replay rendered 13/13
-steps with no reached Android API gap or required native; its two video steps presented 21 and
-25 EGL swaps/s on different live clips. Their source cadences remain unknown. An isolated
-DevTools browser reached the For You screen but received no video frames. The serialized
-183/183 E2E matrix predates the latest JIT changes and must be repeated on the final candidate.
-Original-rate playback remains unproved.
+42-frame runs from 823–840 ms to 760–768 ms. Rounded accumulating shifts and unsigned
+saturating shifts now cut the same capture's remaining fallback count to 0.26 million, with a
+small, uncertain timing gain. Guest frame pacing now follows the virtual display's reported
+60 Hz instead of a faster host rAF. A 12-second ByteVC1 sample presented 30.0 EGL swaps/s
+and made 357 software draws, compared with 1,284 draws on an unmatched unpaced clip; this
+does not prove a causal FPS gain. The latest TikTok-only replay rendered 13/13 steps with no
+reached Android API gap or required native; its two video steps presented 13.8 and 14.6 EGL
+swaps/s on different live clips. Their source cadences remain unknown. The final serialized
+E2E matrix rendered 183/183 steps in 960.4 seconds with no wedge or required native; TikTok's
+video steps presented 17.4 and 18.7 EGL swaps/s on another pair of live clips. Original-rate
+playback remains unproved.
 
 The Android ClipboardManager stub has been replaced with a process-shared service. TikTok's
 Share → Copy link now returns its URL through `getPrimaryClip`; TikTok smoke compilation has
@@ -24,9 +29,11 @@ and 12.2 EGL frames/s respectively. Their source cadences were not captured. Dec
 identify repeated pixel kernels, but no matched live clip is available for a causal before/after
 comparison.
 
-The remaining target is generic native decoder throughput. Use fixed guest kernels for controlled
+The remaining target is generic native decoder throughput on demanding clips. Use fixed guest kernels for controlled
 before/after comparisons and full-Chromium profiles for live behavior. A fixed source video is
-needed for a matched before/after FPS comparison. Avoid app-specific decoder substitution.
+needed for a matched before/after FPS comparison. The fixed 71-frame ByteVC1 path has only
+3,583 JIT fallbacks over roughly 349 million guest instructions, so compiled execution is
+the principal remaining cost. Avoid app-specific decoder substitution.
 
 ---
 
