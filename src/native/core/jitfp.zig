@@ -947,6 +947,30 @@ pub fn emitVmem(e: *Emit, w: u32, pc: u32, k: u32) void {
     const rn: u8 = @intCast(bits(w, 5, 5));
     const rm: u8 = @intCast(bits(w, 16, 5));
     if (is(w, 0xbfbf0000, 0x0c000000) or is(w, 0xbfa00000, 0x0c800000)) {
+        const q = bits(w, 30, 1) != 0;
+        const size = bits(w, 10, 2);
+        if (bits(w, 12, 4) == 8 and bits(w, 22, 1) != 0 and (q or size < 3)) {
+            const es: usize = @as(usize, 1) << @intCast(size);
+            const count: usize = (if (q) @as(usize, 16) else 8) / es;
+            e.getSP(rn);
+            e.address();
+            for (0..2) |reg| {
+                var lanes: [16]u8 = [_]u8{0} ** 16;
+                for (0..count) |i| for (0..es) |j| {
+                    lanes[i * es + j] = @intCast((2 * i + reg) * es + j);
+                };
+                b.emit(.{ get(L_CPU), get(L_A), vm(S.load, 0), get(L_A), vm(S.load, if (q) 16 else 0), sv(S.shuffle) });
+                b.bytes(&lanes);
+                vput(e, @intCast((rt + reg) & 31), q);
+            }
+            if (bits(w, 23, 1) != 0) {
+                e.getSP(rn);
+                if (rm == 31) b.i64c(if (q) 32 else 16) else e.getX(rm);
+                b.byte(O.i64_add);
+                e.setSP(rn);
+            }
+            return;
+        }
         const regs: u32 = switch (bits(w, 12, 4)) {
             7 => 1,
             10 => 2,
