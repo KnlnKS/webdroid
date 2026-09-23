@@ -819,6 +819,19 @@ compile and instantiate with shared memory, and Bun can clone that memory to a w
 current browser page is not cross-origin isolated. Parallel guest execution would also need
 per-worker JIT tables and synchronization of host calls and core state; no such change is shipped.
 
+A standalone Chromium page with COOP/COEP headers was cross-origin isolated. It cloned shared
+`WebAssembly.Memory` into a worker, instantiated the shared-memory core there with a local
+table, and observed a worker write in the page's buffer. This confirms the browser primitive,
+not safe concurrent guest execution. The app server and runtime still use unshared memory.
+
+The fixed 332-packet ByteVC1 capture decoded 320 frames and retired 2.49 billion guest
+instructions at each JIT threshold. Three runs at the current 48-hit threshold took
+2.66–2.69 seconds native time. At 16 hits, 86 extra regions compiled and the runs took
+2.72–2.84 seconds. At 96 hits, 46 fewer regions compiled but the runs ranged from 2.63 to
+2.78 seconds. Both threshold changes were rejected. A temporary mutex probe found about
+85,000 state-2 unlocks, nearly all with queued waiters; bypassing their host wakeup would
+break pthread behavior. The probes and experimental core edits were removed.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only

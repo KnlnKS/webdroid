@@ -69,9 +69,17 @@ pthread workers during one ten-second live clip. Their work is serialized in one
 realm. Frequent host-call bodies consumed about 0.59 seconds in another ten-second sample,
 making shared-memory native execution a more consequential avenue than host-call micro-tuning.
 The core can compile for shared Wasm memory and Bun can pass that memory to a worker, but the
-browser page lacks cross-origin isolation and JIT tables are local to each worker. Before any
+browser page lacks cross-origin isolation and JIT tables are local to each worker. A small
+isolated Chromium page successfully shared the same Wasm memory with a worker instance and
+observed the worker's write. Before any
 parallel runtime change, resolve cross-origin isolation, JIT installation barriers, host-call
 ownership, shared core metadata, and data-race safety in a controlled prototype.
+
+On a fixed 332-packet, 320-frame ByteVC1 capture, lowering JIT heat from 48 to 16 compiled 86
+extra regions and slowed three native runs from 2.66–2.69 seconds to 2.72–2.84 seconds. Raising
+it to 96 compiled 46 fewer regions but varied from 2.63 to 2.78 seconds. The current 48-hit
+threshold stays. Roughly 85,000 mutex unlocks on the same capture reached the host because a
+waiting thread needed wakeup; they cannot be bypassed as uncontended locks.
 
 Java `Runtime.availableProcessors()` now reports the same four cores as the virtual device's
 native and procfs interfaces. TikTok-only verification passed 13/13; no fixed-source live FPS
