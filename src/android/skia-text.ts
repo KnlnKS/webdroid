@@ -1,6 +1,6 @@
 import CanvasKitInit from "canvaskit-wasm";
 import { version as canvasKitVersion } from "canvaskit-wasm/package.json";
-import type { CanvasKit, Surface, Typeface } from "canvaskit-wasm";
+import type { CanvasKit, Font, Paint, Surface, Typeface } from "canvaskit-wasm";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 let kit: CanvasKit | null = null;
@@ -12,6 +12,30 @@ let surfaceWidth = 0, surfaceHeight = 0;
 let bitmap: OffscreenCanvasRenderingContext2D | null = null;
 let emojiClips = new Map<number, [number, number]>();
 const ligatureGlyphs: Record<string, string> = { fi: "\uFB01", fl: "\uFB02", ffi: "\uFB03", ffl: "\uFB04" };
+
+function inkBounds(font: Font, paint: Paint, glyphs: Uint16Array, x: number, y: number,
+  matrix: DOMMatrix, width: number, height: number): [number, number, number, number] | null {
+  const bounds = font.getGlyphBounds(glyphs, paint), advances = font.getGlyphWidths(glyphs, paint);
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity, pen = x;
+  for (let i = 0; i < glyphs.length; i++) {
+    const offset = i * 4;
+    if (bounds[offset + 2]! > bounds[offset]! && bounds[offset + 3]! > bounds[offset + 1]!) {
+      const x0 = pen + bounds[offset]!, x1 = pen + bounds[offset + 2]!;
+      const y0 = y + bounds[offset + 1]!, y1 = y + bounds[offset + 3]!;
+      const ax0 = matrix.a * x0, ax1 = matrix.a * x1, cx0 = matrix.c * y0, cx1 = matrix.c * y1;
+      const bx0 = matrix.b * x0, bx1 = matrix.b * x1, dx0 = matrix.d * y0, dx1 = matrix.d * y1;
+      left = Math.min(left, Math.min(ax0, ax1) + Math.min(cx0, cx1) + matrix.e);
+      right = Math.max(right, Math.max(ax0, ax1) + Math.max(cx0, cx1) + matrix.e);
+      top = Math.min(top, Math.min(bx0, bx1) + Math.min(dx0, dx1) + matrix.f);
+      bottom = Math.max(bottom, Math.max(bx0, bx1) + Math.max(dx0, dx1) + matrix.f);
+    }
+    pen += advances[i]!;
+  }
+  if (left === Infinity) return null;
+  if (![left, top, right, bottom].every(Number.isFinite)) return [0, 0, width, height];
+  return [Math.max(0, Math.floor(left) - 2), Math.max(0, Math.floor(top) - 2),
+    Math.min(width, Math.ceil(right) + 2), Math.min(height, Math.ceil(bottom) + 2)];
+}
 
 function colorGlyphClips(data: ArrayBuffer): Map<number, [number, number]> {
   const font = new DataView(data), tables = font.getUint16(4);
@@ -65,9 +89,8 @@ export function drawSkiaText(ctx: Ctx, text: string, x: number, y: number, size:
     surface?.delete();
     surface = kit.MakeSurface(width, height);
     surfaceWidth = width; surfaceHeight = height;
-    bitmap = new OffscreenCanvas(width, height).getContext("2d");
   }
-  if (!surface || !bitmap) return false;
+  if (!surface) return false;
   const canvas = surface.getCanvas();
   canvas.clear(kit.TRANSPARENT);
   const m = ctx.getTransform();
@@ -97,6 +120,7 @@ export function drawSkiaText(ctx: Ctx, text: string, x: number, y: number, size:
   font.setEdging(kit.FontEdging.AntiAlias);
   font.setHinting(kit.FontHinting.None);
   font.setSubpixel(subpixel && !hasLigature);
+  const ink = inkBounds(font, paint, glyphs, x, y, m, width, height);
   if (emoji && m.b && m.c && Math.abs(m.a * m.d - m.b * m.c - 1) > 1e-3) {
     let top = -Infinity, bottom = -Infinity;
     for (const glyph of glyphs) {
@@ -117,7 +141,11 @@ export function drawSkiaText(ctx: Ctx, text: string, x: number, y: number, size:
   canvas.drawText(text, x, y, paint, font);
   canvas.restore();
   font.delete(); paint.delete();
-  const pixels = canvas.readPixels(0, 0, { width, height, colorType: kit.ColorType.RGBA_8888,
+  if (!ink) return true;
+  const [left, top, right, bottom] = ink;
+  const inkWidth = right - left, inkHeight = bottom - top;
+  if (inkWidth <= 0 || inkHeight <= 0) return true;
+  const pixels = canvas.readPixels(left, top, { width: inkWidth, height: inkHeight, colorType: kit.ColorType.RGBA_8888,
     alphaType: kit.AlphaType.Unpremul, colorSpace: kit.ColorSpace.SRGB });
   if (!(pixels instanceof Uint8Array)) return false;
   if (style === "fill" && !emoji && Math.min((color >>> 16) & 255, (color >>> 8) & 255, color & 255) >= 200)
@@ -126,9 +154,13 @@ export function drawSkiaText(ctx: Ctx, text: string, x: number, y: number, size:
   const rgba = pixels.buffer instanceof ArrayBuffer
     ? new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength)
     : new Uint8ClampedArray(pixels);
-  bitmap.putImageData(new ImageData(rgba, width, height), 0, 0);
+  if (!bitmap || bitmap.canvas.width < inkWidth || bitmap.canvas.height < inkHeight)
+    bitmap = new OffscreenCanvas(Math.max(bitmap?.canvas.width ?? 0, inkWidth),
+      Math.max(bitmap?.canvas.height ?? 0, inkHeight)).getContext("2d");
+  if (!bitmap) return false;
+  bitmap.putImageData(new ImageData(rgba, inkWidth, inkHeight), 0, 0);
   ctx.save();
-  try { ctx.resetTransform(); ctx.drawImage(bitmap.canvas, 0, 0); }
+  try { ctx.resetTransform(); ctx.drawImage(bitmap.canvas, 0, 0, inkWidth, inkHeight, left, top, inkWidth, inkHeight); }
   finally { ctx.restore(); }
   return true;
 }
