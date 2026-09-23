@@ -111,6 +111,8 @@ export class DexFile {
   private fieldCache: (FieldRef | undefined)[];
   private methodCache: (MethodRef | undefined)[];
 
+  get cachedStrings(): readonly (string | undefined)[] { return this.stringCache; }
+
   /** `headerOff` is where this logical dex's header sits inside the physical file. It is 0 for
    *  everything before v41; a v41 container holds several headers and their section offsets are
    *  relative to the CONTAINER, so every dex in one keeps the whole buffer and only the header

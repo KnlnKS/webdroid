@@ -101,7 +101,7 @@ interface DexLink {
   R: Runtime;
   cl: any[];            // typeIdx → linked ctor
   ic: any[];            // typeIdx → inited ctor
-  s: (string | undefined)[]; // string cache
+  s: readonly (string | undefined)[]; // string cache
   dp: any[];            // methodIdx → direct-invoke prototype fn
   fs: any[];            // fieldIdx → inited owner ctor (static fields declared off-refclass)
   info: ClassInfo[];    // typeIdx → ClassInfo (linked)
@@ -226,8 +226,8 @@ export class Runtime {
     d = {
       dex, R,
       cl: new Array(dex.typeCount), ic: new Array(dex.typeCount),
-      s: new Array(dex.stringCount), dp: [], fs: [], info: new Array(dex.typeCount),
-      gs(i) { return (this.s[i] = dex.string(i)); },
+      s: dex.cachedStrings, dp: [], fs: [], info: new Array(dex.typeCount),
+      gs(i) { return dex.string(i); },
       linfo(i) { return this.info[i] ?? (this.info[i] = R.link(descToName(dex.type(i)))); },
       link(i) { return (this.cl[i] = this.linfo(i).ctor); },
       init(i, from) {
