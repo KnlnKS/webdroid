@@ -361,6 +361,39 @@ that count change is due to source timing or code requires a matched reproductio
 scored flows rendered all 75 steps; their mean content differences were FitNotes 39.80%,
 Mihon app 42.12%, Harmonic 26.99% and Mihon onboarding 9.07%. No visual golden changed.
 
+A later active-video interpreter trace counted about 544,000 vector FMLA and 147,000 ST2
+fallbacks in 3.4 seconds inside `libttffmpeg.so`. The A64 JIT now widens f32 pairs to f64 for
+the same multiply-add rounding used by the interpreter, then demotes to f32; it also interleaves
+ST2 bytes with SIMD shuffles. A six-second trace after those changes found another 174,000
+selected-lane vector FMLA fallbacks, now lowered through the shared FMLA emitter. Fixed guest
+kernels improved from about 60 to 11 ms per four million vector FMLAs, 68 to 3.8 ms per four
+million ST2 stores, and 56 to 10.5 ms per four million selected-lane FMLAs. The full A64 SIMD
+and hardware oracle check passed 559 tests with 18,258 assertions. One new test covers the core
+ST2 lane-order and writeback behavior at both vector widths.
+
+The follow-up TikTok-only replay rendered 13/13 steps in 207 seconds. Feed, resume, and the two
+video steps measured 16.4, 13.3, 19.0, and 16.6 EGL frames/s on live content. Every step had
+advancing state, with no new reached Android API gap, required native, wedge, settle timeout,
+layout error, or draw error; the same nine optional app/vendor classes were probed. Separate
+full-Chromium clips reached 28.5 EGL frames/s and only 3.9–5.1 EGL frames/s. The latter spent
+92–95% of wall time in guest native execution, with ByteVC1 still dominant. Source frame rates
+and clip identity were unavailable for matched comparison, so original-rate playback remains
+unverified and dense clips remain slow. A fixed four-million-operation RBIT loop already took
+about 28 ms, so its remaining fallback does not explain the multi-second decoder cost and no
+RBIT JIT change was kept.
+
+The final serialized E2E matrix after the FMLA/ST2 changes rendered 183/183 steps in 966.2
+seconds. All 13 TikTok steps had four process snapshots, no new reached platform gap, required
+native, wedge, settle timeout, layout error or draw error, and the same nine optional probes.
+This full run selected a denser clip than the focused replay: feed and resume measured 7.2 and
+5.2 EGL frames/s, with 8.6 and 8.2 seconds charged to native execution in those steps. YouTube
+retained its two known control settle timeouts and six `Matrix.mapRect` draw errors, versus nine
+in the earlier full run. All other flows had zero wedge, settle timeout, layout error and draw
+error. The four scored flows rendered all 75 steps; mean content differences were FitNotes
+39.80%, Mihon app 42.64%, Harmonic 28.87%, and Mihon onboarding 9.07%. Harmonic's earlier
+26.99% mean changed despite zero guest native execution in the final flow, so this native JIT
+patch does not explain the difference. No visual golden changed.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only
