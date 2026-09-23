@@ -740,6 +740,65 @@ The four scored flows had mean content differences of 39.80% FitNotes, 42.13% Mi
 31.31% Harmonic and 9.07% Mihon onboarding. Live content and unpaired clips limit score and
 FPS comparisons. Visual goldens were not changed.
 
+A further generic SIMD lowering compiles signed and unsigned widening across-lane sums and
+32-bit `SQRSHL`, including saturation flags and inactive-lane behavior. On the same 48-packet
+ByteVC2 input, the hundred most frequent interpreter handoff sites fell from 258,444 to
+194,394 calls; all 42 frames still decoded. Quiet native timings changed from 769–776 ms to
+762–766 ms, too little to establish a playback gain. A uniform-shift specialization was
+rejected after it increased process CPU time. The updated TikTok-only replay rendered 13/13
+steps with no newly reached platform gap, required native, wedge, settle timeout, or rendering
+error. Its active video steps made 18.5 and 19.2 EGL swaps/s on different live clips.
+
+A temporary dual-decoder hook then captured 503 ByteVC1 HEVC packets on one live clip while
+recording EGL swaps. Its SPS VUI states 30/1 fps, and a steady 9.00-second interval contained
+268 EGL swaps (29.8/s) with video packets arriving at roughly 30/s. This demonstrates
+original-rate presentation for that observed segment, not for the denser clips that still
+render below 30/s. The hook was removed after the capture; the packet data stays in the
+ignored diagnostic directory. The full matrix must be repeated after the final candidate is
+frozen.
+
+The SIMD JIT had separate saturation checks and result writes that recomputed every narrowed
+vector. Sharing the shifted value and narrowed result removes that duplicate work. The core
+build shrank by 205 bytes in release mode and 224 in safe mode. All 566 SIMD and hardware
+oracle cases passed. A fixed 332-packet ByteVC1 capture decoded all 320 frames in every
+comparison; three baseline runs used 2.63–2.68 seconds native time, and three candidate runs
+used 2.56–2.61 seconds. The TikTok-only browser run rendered 13/13 steps without new platform
+API gaps, required natives, a wedge, or rendering errors. Its two video steps presented 133
+EGL swaps in 6.39 seconds and 44 in 6.35 seconds on different live clips. The latter spent
+2.8 seconds in native execution; its source rate and remaining idle time need diagnosis before
+attributing the low EGL count to decoder throughput.
+
+One later-feed 15-second diagnostic sample submitted 406 ByteVC1 packets and made 430 EGL
+swaps, averaging 28.6 swaps/s; source timestamps were unavailable. A 30-second run swiped
+through several live clips while capturing both counters. On two clips whose HEVC SPS VUI
+reported 30/1 fps, steady five-and-a-half-second windows made 26.8 and 27.6 EGL swaps/s,
+while their packet ingress averaged 32.3 and 33.3/s. Another clip made 20.5 EGL swaps/s and
+received 22.7 packets/s, but its stream header was not captured. The first sample had native
+execution for 5.8 of 15 seconds; the multi-clip sample had 13.2 of 30 seconds. Variable
+packet arrival, swipes, and missing presentation timestamps prevent a firm distinction
+between variable-rate sources, buffering, and decoder backpressure. All diagnostic hooks were
+removed, and the clean core was rebuilt afterward.
+
+The one-second bins narrow that limit: after each swipe, EGL output rose over roughly three
+seconds; both 30-fps-header clips then reached 29–30 swaps/s while receiving about 30
+packets/s. Averaging over a whole swipe window understates steady playback rate. This does
+not establish that every TikTok source plays at its original cadence, since some low-rate
+focused E2E clips lack matched source timing.
+
+The final frozen-code matrix rendered 183/183 steps across 13 flows in 959.2 seconds. TikTok
+rendered 13/13 with four available process diagnostics at every step, advancing guest ticks,
+and no new Android API, required native, wedge, settle timeout, layout/draw error, or GLES
+error. Its two live video steps presented 88 EGL swaps in 6.43 seconds (13.7/s) and 86 in
+6.47 seconds (13.3/s), with 4.97 and 4.92 seconds spent in native execution. Their source
+cadences were not captured, so these samples cannot be called original-rate playback. The
+nine missing classes at launch remain optional app/vendor probes. Every other flow rendered;
+YouTube retained its two control settle timeouts and eight `Matrix.mapRect` draw failures
+versus six on the previous full run. Flappy Bird's child-process diagnostics were unavailable
+at 12 steps. There were no wedges, required natives, or layout errors anywhere. Mean content
+differences were 39.80% FitNotes, 42.45% Mihon app, 27.63% Harmonic, and 9.07% Mihon
+onboarding. Live content and unmatched clips prevent causal FPS or score comparisons, and no
+goldens changed.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only

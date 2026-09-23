@@ -29,6 +29,35 @@ and 12.2 EGL frames/s respectively. Their source cadences were not captured. Dec
 identify repeated pixel kernels, but no matched live clip is available for a causal before/after
 comparison.
 
+Additional generic lane-reduction and rounded-shift lowering is committed. A matched live
+ByteVC1 segment carries a 30-fps HEVC timing header and presented 268 EGL frames in 9.00 seconds
+(29.8/s). This establishes original-rate playback on one observed clip; demanding clips remain
+slower and no fixed-source before/after live comparison establishes the effect of the latest
+lowering. The new focused TikTok run passed 13/13.
+
+The SIMD narrow path now reuses its computed output for saturation checks and destination
+writes. A fixed 320-frame ByteVC1 comparison improved native time by roughly 2%, and the next
+TikTok-only run again rendered 13/13 without a reached platform or rendering failure. Its two
+video clips made 20.8 and 6.9 EGL swaps/s; the slower clip's source FPS was not captured and
+native execution occupied only 2.8 of 6.35 seconds. Continue with matched packet/presentation
+evidence on slow clips before classifying their limit.
+
+A subsequent multi-clip browser capture found two nominally 30-fps HEVC segments presenting at
+26.8 and 27.6 EGL swaps/s in steady windows, with packet ingress above 30/s. Another segment
+made 20.5 swaps/s with 22.7 packets/s but lacked a captured source header. These varying live
+sources and absent packet presentation timestamps leave the slow-case cause unresolved. The
+temporary packet hooks have been removed. No further platform API gap was reached.
+
+The per-second counters show both 30-fps-header clips reaching 29–30 EGL swaps/s after the
+post-swipe startup interval. Steady original-rate presentation is demonstrated on these
+observed clips; unmatched low-rate E2E clips remain an evidence limit.
+
+The frozen candidate's final serialized matrix rendered 183/183 steps in 959.2 seconds.
+TikTok passed 13/13 with no new Android API or rendering failure, but its two unmatched
+live video clips presented only 13.7 and 13.3 EGL swaps/s while native execution occupied
+about five of each 6.4 seconds. The remaining goal is original-rate playback on these demanding
+clips; the observed 30-fps segments do not establish that result for every source.
+
 The remaining target is generic native decoder throughput on demanding clips. Use fixed guest kernels for controlled
 before/after comparisons and full-Chromium profiles for live behavior. A fixed source video is
 needed for a matched before/after FPS comparison. The fixed 71-frame ByteVC1 path has only
