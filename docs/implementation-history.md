@@ -29,6 +29,43 @@ their tested revision, not necessarily current status.
   Lichess pthread faults, and Flappy Bird page-status errors need matching-baseline
   assessment, not silent waivers.
 
+## API-33 fuzz compatibility — 2026-09-23
+
+Branch `codex/fuzzer-compatibility` starts at `756491fb`. The unchanged signed probe
+(`8e8cc2f9` SHA-256 prefix) ran on API-33 emulator-5554, fingerprint
+`google/sdk_gphone64_arm64/emu64a:13/TE1A.240213.009/12342917:userdebug/dev-keys`.
+The AVD retained an old 720×1280, 320 dpi override even after its config was rewritten;
+initial density and clip comparisons were invalid. Oracle setup now applies the active
+1080×2160, 480 dpi profile and the runner rejects mismatched geometry. Webdroid's
+probe URL uses that same profile. The harness now tolerates only small float serialization
+differences in Matrix, path-bound and RenderNode state; pixels and integer state remain exact.
+
+The matched-profile 20-case graphics campaign at seed `1592594996` retained 19 failures
+after the first Matrix skew repair. The final candidate retains six: two center-pixel
+differences under compound transforms, one rotated `clipRect` bound, and three small
+pixel differences. The clip tracker keeps a conservative device-space rectangle, so
+a rotated clip may still report a larger bound than Android. Minimized bundles are in
+`fuzz-results/graphics-final/` in this worktree. A 1,000-case API campaign with the same
+seed has zero differences. These counts cover generated paths, not arbitrary graphics
+or APK behavior.
+
+The fixes add Matrix skew through the existing affine operations; restore Paint's 12 px
+default and zero text size; preserve API-33 alpha conversion; ignore nonpositive circle
+radii; include circle radii in Path bounds; normalize reversed rectangle, oval, arc and
+round-rectangle bounds; and retain distinct horizontal and vertical corner radii.
+Canvas clipping now tracks rectangular bounds across save/restore and shares one bounds
+implementation with the AOSP native delegate. Chrome needs an off-canvas clip path for
+empty or singular-transform clips; a zero-size Canvas2D path leaves its clip unchanged.
+
+Verification: typecheck, all 1,325 unit tests, deterministic fuzz smoke, zero method
+failures compiling the probe APK, and focused framework exercises pass. The API-35
+framework cut reports 204/222 declared graphics natives registered; its exercised paths
+report no new missing delegate. The 39-step FitNotes fast lane passes with all process
+diagnostics `ok`, no new missing APIs/errors/native requirements or timeouts, and main
+ticks advancing from 13 to 1001. Its 12.2-second wall time is a functional check, not a
+controlled baseline performance comparison. The full serialized E2E matrix and a matched
+CPU comparison were not run for this pass. Goldens were not changed.
+
 ## JVM, DEX and process ownership
 
 - Main-thread identity is not main-queue ownership. Boot, providers, application
