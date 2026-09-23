@@ -102,6 +102,11 @@ function accessPath(cpu: Cpu, path: string, mode: number): number {
   const p = vfs.norm(path);
   return vfs.exists(p) || vfs.isDir(p) || procText(p) !== null || p === "/dev/urandom" || p === "/dev/random" ? 0 : fail(cpu, E.NOENT);
 }
+export function faccessatPath(cpu: Cpu, dirfd: number, name: string, mode: number, flags: number): number {
+  const path = atPath(cpu, dirfd, name);
+  if (flags & ~(0x100 | 0x200)) return fail(cpu, E.INVAL);
+  return typeof path === "string" ? accessPath(cpu, path, mode) : path;
+}
 function mkdirPath(cpu: Cpu, path: string): number {
   const p = vfs.norm(path);
   if (vfs.exists(p) || vfs.isDir(p)) return fail(cpu, E.EXIST);
@@ -695,11 +700,7 @@ export function stdioInit(): void {
       return typeof path === "string" ? statPath(cpu, path, buf) : path;
     },
     access: (cpu, a) => accessPath(cpu, a.str(), a.i()),
-    faccessat: (cpu, a) => {
-      const path = atPath(cpu, a.i(), a.str()), mode = a.i(), flags = a.i();
-      if (flags & ~(0x100 | 0x200)) return fail(cpu, E.INVAL);
-      return typeof path === "string" ? accessPath(cpu, path, mode) : path;
-    },
+    faccessat: (cpu, a) => faccessatPath(cpu, a.i(), a.str(), a.i(), a.i()),
     chmod: () => 0, fchmod: () => 0, chown: () => 0, fchown: () => 0, umask: () => 0o22,
     unlink: (cpu, a) => (vfs.delete(a.str()) ? 0 : fail(cpu, E.NOENT)),
     remove: (cpu, a) => { const p = vfs.norm(a.str()); if (vfs.isDir(p)) return vfs.list(p).length ? fail(cpu, E.NOTEMPTY) : 0; return vfs.delete(p) ? 0 : fail(cpu, E.NOENT); },

@@ -7,7 +7,7 @@ import { hostLib, hostData, hostFn, NORET, ARG0, SERVED, ptr, vaList, type HostF
 import { E, ERRSTR } from "./abi";
 import { invalidateRange, markProcessExited, setRawSyscall, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
-import { stdioInit, readInto, fdWriteBack } from "./stdio";
+import { stdioInit, readInto, fdWriteBack, faccessatPath } from "./stdio";
 import { pthreadInit, futex } from "./pthread";
 import { zlibInit } from "./zlib";
 import { libmInit } from "./libm";
@@ -160,6 +160,10 @@ function mktime(tm: number): number {
   const [sec, min, hour, mday, mon, year] = readTm(tm);
   return new Date(year + 1900, mon, mday, hour, min, sec).getTime();
 }
+function timegm(tm: number): number {
+  const [sec, min, hour, mday, mon, year] = readTm(tm);
+  return Math.floor(Date.UTC(year + 1900, mon, mday, hour, min, sec) / 1000);
+}
 let tznames: number[] = [0, 0];
 
 // ── setjmp/longjmp: the callee-saved registers live in the guest jmp_buf itself — r4–r14 on
@@ -229,6 +233,8 @@ function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promise<HostR
   if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); if (n) { crypto.getRandomValues(mem.bytes(buf, n)); wrote(buf, n); } return n; } // getrandom
   if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin
   if (nr === (PTR === 8 ? 179 : 116)) { fillSysinfo(a.p()); return 0; }    // sysinfo
+  // ARM's raw faccessat has three arguments; libc's faccessat wrapper has a fourth flags argument.
+  if (PTR === 4 && nr === 334) return faccessatPath(cpu, a.i(), a.str(), a.i(), 0);
   // the numbers whose wrapper takes the syscall's own arguments: the argument cursor sits
   // past nr, where those start
   const name = (PTR === 8 ? SYSCALL_NR64 : SYSCALL_NR32)[nr];
@@ -512,7 +518,8 @@ export function libcInit(): void {
     localtime: (_c, a) => { const t = readLong(a.p()); fillTm(tmBuf, new Date(t * 1000), false); return tmBuf; },
     gmtime: (_c, a) => { const t = readLong(a.p()); fillTm(tmBuf, new Date(t * 1000), true); return tmBuf; },
     mktime: (_c, a) => { const t = Math.floor(mktime(a.p()) / 1000); return PTR === 8 ? BigInt(t) : t; },
-    timegm: (_c, a) => { const [sec, min, hour, mday, mon, year] = readTm(a.p()); const t = Math.floor(Date.UTC(year + 1900, mon, mday, hour, min, sec) / 1000); return PTR === 8 ? BigInt(t) : t; },
+    timegm: (_c, a) => { const t = timegm(a.p()); return PTR === 8 ? BigInt(t) : t; },
+    timegm64: (_c, a) => BigInt(timegm(a.p())),
     strftime: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(), tm = a.p(); const s = utf8(strftime(f, tm)); if (s.length >= n) return 0; mem.write(d, s); mem.st8(d + s.length, 0); return s.length; },
     tzset: () => {},
     difftime: (c, a) => retD(c, a.i() - a.i()),
@@ -561,6 +568,10 @@ export function libcInit(): void {
     "sprintf", "snprintf", "vsprintf", "vsnprintf", "asprintf", "vasprintf", "sscanf", "vsscanf", "btowc", "wctob", "wctype", "iswctype"]) if (M[n]) M[n + "_l"] = M[n];
   M.strtold = M.strtod; M.strtold_l = M.strtod; M.__strchr_chk = M.strchr; M.__strrchr_chk = M.strrchr;
   M.__aeabi_memclr = M.__aeabi_memclr4 = M.__aeabi_memclr8 = M.bzero;
+  M.__aeabi_memset = M.__aeabi_memset4 = M.__aeabi_memset8 = (_c, a) => {
+    const d = a.p(), n = a.u(), value = a.i();
+    mem.memset(d, value, n);
+  };
   hostLib("libc.so", M);
   hostLib("liblog.so", { __android_log_write: M.__android_log_write, __android_log_print: M.__android_log_print, __android_log_vprint: M.__android_log_vprint, __android_log_assert: M.__android_log_assert });
   const tmBuf = mem.hostAlloc(LAYOUT.TM_SIZE);
