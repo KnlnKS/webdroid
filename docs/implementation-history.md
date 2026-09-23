@@ -608,6 +608,18 @@ profile was dominated by `libmetasec_ov.so`, not the decoder. A short DevTools p
 could not be exported because its result exceeded the tool's string limit. That browser session
 therefore supplies no playback-rate evidence and was closed before further timing.
 
+The A64 JIT now keeps cached vector values across vector memory stores and uses WebAssembly
+lane stores directly for 8-, 16-, 32- and 64-bit lanes. Loads and interpreter fallbacks still
+invalidate the cache. An existing broad SIMD/oracle matrix passed all 560 cases (18,261
+assertions), and a focused cache parity case checks successive lane stores after different
+vector writes. A repeated interleaved-store kernel improved from about 3.76 to 3.49 ms per
+million iterations in one quiet comparison; a simple duplicate-and-lane-store loop was
+effectively unchanged. The fixed ByteVC1 decoder decoded 320 frames in each paired run with
+only a small, noisy aggregate timing difference. A fresh TikTok-only replay rendered 13/13
+steps with four process diagnostics, advancing ticks and no required native, JIT, layout, draw
+or GLES error. Its two active video steps presented 17.0 and 22.7 EGL swaps/s on different
+live clips; their original frame rates remain unknown.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only
