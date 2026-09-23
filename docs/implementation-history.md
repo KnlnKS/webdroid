@@ -33,6 +33,15 @@ those native ARM32 games remain smoke and motion checks, not Android visual pari
 checks. The live flows also lack Android references. A missing or stale `run.json`
 now stops offline scoring because wedge flags otherwise silently disappear.
 
+The final serialized `bun run e2e --full --jobs 1` completed all 183 steps in
+964.3 seconds and exited zero. All relevant process diagnostics were available;
+every flow advanced ticks, with no main-loop wedge or required native call.
+YouTube retained two completion timeouts and six draw errors. Lichess, Reddit,
+TikTok, YouTube and ChatGPT retained reached errors; the unmatched TikTok log
+lines were live TLS timing, CDN, and object-identity variants, so this run is
+not evidence of a new platform failure or proof of parity. The five scored
+flows averaged 28.05% content difference; four use older API 35 references.
+
 ## Evidence and measurement
 
 - Run real APK and bundled library bytecode. A rendered screen or empty missing-API

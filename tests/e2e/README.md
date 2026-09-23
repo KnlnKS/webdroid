@@ -19,7 +19,7 @@ already be serving the default port. Run captures sequentially: they share outpu
 `adb` may be absent from `PATH` entirely. It reads `golden/`, drives webdroid over Playwright,
 and writes `actual/` + `report/index.html`. Every flow runs in its own headless browser and
 `--jobs N` (default: half the cpus) bounds how many run at once; each flow is scored in a
-subprocess as soon as it has captured. The serialized 13-flow matrix has taken about 13 minutes;
+subprocess as soon as it has captured. The serialized 13-flow matrix has taken 13–16 minutes;
 live network and video flows dominate that cost.
 
 Recording new goldens is a separate, manual step (below).
