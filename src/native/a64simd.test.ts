@@ -11,6 +11,25 @@ afterAll(() => setA64(false));
 const I = (c: { si: Int32Array }, v: number) => [c.si[4 * v], c.si[4 * v + 1], c.si[4 * v + 2], c.si[4 * v + 3]];
 
 describe("a64 simd: memory", () => {
+  test("multi-register lanes preserve wraparound, writeback and stores across tiers", () => {
+    const buf = pattern();
+    const c = run([
+      0x0d60e13c, // ld4r { v28.8b, v29.8b, v30.8b, v31.8b }, [x9]
+      0x0dff913f, // ld2 { v31.s, v0.s }[1], [x9], #8
+      0x0d40693d, // ld3 { v29.h, v30.h, v31.h }[1], [x9]
+      0x0dbf913f, // st2 { v31.s, v0.s }[1], [x9], #8
+      RET,
+    ], cpu => {
+      cpu.w[18] = buf + 256;
+      for (let i = 8; i < 16; i++) mem.u8[buf + 256 + i] = i;
+    });
+    expect(c.w[18] >>> 0).toBe(buf + 272);
+    expect(I(c, 28)).toEqual([0, 0, 0, 0]);
+    expect(I(c, 31)[1]).toBe(0x03020100);
+    expect(I(c, 0)[1]).toBe(0x07060504);
+    expect([...mem.u8.subarray(buf + 264, buf + 272)]).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
   test("every width, addressing mode, pair, structure and replicating load", () => {
     const buf = pattern();
     const c = run([
