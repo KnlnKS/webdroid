@@ -543,6 +543,34 @@ use interleaved vector loads, lane copies, byte extraction and widening multiply
 The diagnostic hook was removed. A separate ByteVC1 clip reached 30 EGL swaps/s, illustrating
 the variation between live feed items; their source cadences were not captured.
 
+The A64 JIT now uses one WebAssembly SIMD load/store for 128-bit guest vector transfers and
+`v128.load64_zero` for 64-bit vector loads. The superseded scalar branches were removed. All
+560 A64 SIMD/oracle checks passed. In an uncontended three-run comparison on the unchanged
+332-packet ByteVC1 capture, median native time fell from 2,597 to 2,536 ms; a second candidate
+group measured 2,553–2,579 ms. Each run decoded 320 frames. TikTok-only E2E rendered 13/13
+steps with no required native or layout, draw or GLES error. A separate 12.14-second hardware
+sample used a demanding ByteVC1 clip, presented 148 EGL swaps (12.2/s), and spent 10.43
+seconds in guest native execution across 10.17 billion guest instructions. The clip's source
+cadence was not captured.
+
+The vector cache initially discarded a destination before every SIMD instruction, forcing
+widening multiply-accumulate chains to reload their prior result from memory. Keeping that
+cached value until an instruction writes the destination without updating the cache passed all
+560 SIMD/oracle checks. Two paired fixed-decoder comparisons decoded the same 320 frames and
+measured candidate medians of 2,554 and 2,545 ms against baseline medians of 2,665 and 2,671
+ms. A short synthetic SIMD loop did not show the same gain, so the full decoder capture is the
+better evidence for this change. The following TikTok-only replay rendered 13/13 steps, with
+17.6 and 21.1 EGL swaps/s on different clips, four process diagnostics per video step, and no
+required native or rendering error. Live source rates remain unknown; the final multi-app E2E
+matrix is still pending.
+
+Chrome DevTools inspected a fresh guest, but that session showed TikTok's unstable-network
+screen and no video relay on its top-page network target. A separate browser relay probe found
+that the native player sends TLS itself, leaving video headers encrypted at the WebSocket
+boundary. Neither supplied a stable clip or source-frame timestamps. A shorter 64-bit vector
+zeroing sequence was also tried and removed because paired decoder and kernel timings did not
+show a reliable gain.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only

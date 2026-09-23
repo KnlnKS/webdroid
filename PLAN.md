@@ -2,11 +2,11 @@
 
 Branch: `codex/tiktok-playback`. Starting revision: `756491fb`.
 Status: decoder SIMD arithmetic, interleaved loads/stores, vector FMLA, polynomial byte
-multiplication, within-block vector-read caching, and zeroed 64-bit vector-result caching are
-committed. TikTok renders all 13 focused steps with no reached Android API gap or required
-native. FFmpeg reports HEVC at 30/1 fps for one observed stream. An uncontended focused
-replay before the latest JIT change rendered 13/13 and its two playing video steps presented
-17.1 and 13.1 EGL frames/s on different live clips. The serialized
+multiplication, within-block vector-read caching, zeroed 64-bit vector-result caching, direct
+vector memory transfers, and accumulator reuse are committed. The latest TikTok-only replay
+rendered 13/13 steps with no reached Android API gap or required native. Its two video steps
+presented 17.6 and 21.1 EGL frames/s on different live clips. FFmpeg reported HEVC at 30/1
+fps for one earlier stream, not those clips. The serialized
 183/183 E2E matrix predates the latest JIT changes and must be repeated on the final candidate.
 Original-rate playback remains inconsistent.
 
@@ -16,9 +16,10 @@ zero method failures. The 13-step TikTok replay passed with no layout/draw error
 video EGL rates were below 30 fps. Those clips' source rates were not captured. Opening the
 copied URL through a VIEW intent did not replay the same feed clip in the observed guest path,
 so live FPS samples remain unmatched.
-The latest uncontended hardware-browser sample used ByteVC2 and presented 13.8 EGL frames/s;
-its source cadence was not captured. Decoder probes identify repeated ByteVC2 pixel kernels,
-but no matched live clip is available for a causal before/after comparison.
+Uncontended hardware-browser samples used different ByteVC2 and ByteVC1 clips, presenting 13.8
+and 12.2 EGL frames/s respectively. Their source cadences were not captured. Decoder probes
+identify repeated pixel kernels, but no matched live clip is available for a causal before/after
+comparison.
 
 The remaining target is generic native decoder throughput. Use fixed guest kernels for controlled
 before/after comparisons and full-Chromium profiles for live behavior. A fixed source video is
