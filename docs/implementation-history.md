@@ -501,6 +501,27 @@ a causal FPS comparison. Those scheduling variants were removed. No additional r
 Android API was observed. Chrome DevTools MCP still reported its shared profile locked; the
 project's CDP harness supplied the live counters.
 
+TikTok's Share → Copy link exposed a real `ClipboardManager` stub: writes vanished and reads
+always returned empty. A broker-owned Parcel copy now shares clips between processes while
+foreground UID rules guard reads; primary-clip listeners are delivered on each process's main
+queue. The unchanged TikTok app copied a `vt.tiktok.com` URL and read it back through
+`getPrimaryClip` with a timestamp. The URL resolved to a specific video ID, but a clean VIEW
+intent replay showed a different feed creator after 30 seconds, so it did not provide a
+matched playback fixture. A separate fixed ByteVC1 capture of 332 HEVC packets decoded 320
+576×1024 frames with 2.49 billion guest instructions in 2.80 seconds native; the slower live
+clip spent 8.65 billion guest instructions in 12 seconds while presenting 69 EGL frames.
+The different clips and possible background decoder work prevent dividing these figures into
+a reliable per-frame cost comparison. The framework delegate runner could not run in this
+worktree because `vendor/aosp/framework.jar` was absent. Chrome DevTools MCP later attached,
+but its trace session navigated away from the manually booted guest, so timed playback still
+used the project's CDP harness.
+The next serialized TikTok-only E2E replay rendered 13/13 steps. Its steady second- and
+third-video steps presented 17.1 and 13.1 EGL frames/s, despite UI frame counters of 33 and
+32 frames/s. Their source rates were not captured; a separate observed stream was 30 fps.
+No layout/draw error or required native appeared. The only new missing class in the final
+step was ByteDance's optional `MagpieBridge`; earlier optional vendor classes remained.
+The full multi-app E2E matrix remains reserved for the final candidate.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only

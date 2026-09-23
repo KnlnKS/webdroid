@@ -5,9 +5,16 @@ Status: decoder SIMD arithmetic, interleaved loads/stores, vector FMLA, polynomi
 multiplication, and within-block vector-read caching are committed. TikTok renders all 13
 focused steps with no reached Android API gap or required native. FFmpeg reports HEVC at 30/1
 fps for the observed stream. The latest focused replay rendered 13/13 and its two playing
-video steps presented 6.5 and 20.1 EGL frames/s on different live clips. The serialized
+video steps presented 17.1 and 13.1 EGL frames/s on different live clips. The serialized
 183/183 E2E matrix predates vector-read caching and must be repeated on the final candidate.
 Original-rate playback remains inconsistent.
+
+The Android ClipboardManager stub has been replaced with a process-shared service. TikTok's
+Share → Copy link now returns its URL through `getPrimaryClip`; TikTok smoke compilation has
+zero method failures. The 13-step TikTok replay passed with no layout/draw errors, but its
+video EGL rates were below 30 fps. Those clips' source rates were not captured. Opening the
+copied URL through a VIEW intent did not replay the same feed clip in the observed guest path,
+so live FPS samples remain unmatched.
 
 The remaining target is generic native decoder throughput. Use fixed guest kernels for controlled
 before/after comparisons and full-Chromium profiles for live behavior. A fixed source video is
