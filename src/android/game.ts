@@ -1,6 +1,6 @@
 import { JObj, rt } from "../jvm/runtime";
 import { appHost } from "./apphost";
-import { getAppInfo } from "./pm";
+import { FLAG_IS_GAME, getAppInfo } from "./pm";
 import { type JParcel, parcelCreator, readInt, writeInt } from "./parcel";
 
 class JGameState extends JObj {
@@ -34,14 +34,13 @@ rt.register({ name: "android/app/GameState", ctor: JGameState, ifaces: ["android
   },
 });
 
-class JGameManager extends JObj { state: JGameState | null = null; }
+class JGameManager extends JObj {}
 rt.register({ name: "android/app/GameManager", ctor: JGameManager, methods: {
   "getGameMode()I": () => {
     const info = appHost ? getAppInfo(appHost) : null;
-    return info && (info.category === 0 || info.flags & 0x02000000) ? 1 : 0;
+    return info && (info.category === 0 || info.flags & FLAG_IS_GAME) ? 1 : 0;
   },
-  "setGameState(Landroid/app/GameState;)V": function (this: JGameManager, state: JGameState | null) {
+  "setGameState(Landroid/app/GameState;)V": (state: JGameState | null) => {
     if (state == null) throw rt.mkThrowable("java/lang/NullPointerException", "gameState");
-    this.state = state;
   },
 } });

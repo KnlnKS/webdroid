@@ -289,6 +289,7 @@ class JApplicationInfo extends JPackageItemInfo {
   splitNames: string[] | null = null; splitSourceDirs: string[] | null = null; splitPublicSourceDirs: string[] | null = null;
   sharedLibraryFiles: string[] | null = null;
 }
+export const FLAG_IS_GAME = 0x02000000;
 rt.register({
   name: "android/content/pm/ApplicationInfo", ctor: JApplicationInfo, sup: "android/content/pm/PackageItemInfo", ifaces: ["android/os/Parcelable"],
   fields: ["packageName", "sourceDir", "dataDir", "deviceProtectedDataDir", "storageUuid", "nativeLibraryDir", "flags", "targetSdkVersion", "minSdkVersion",
@@ -321,8 +322,7 @@ export function getAppInfo(host: AppHost): JApplicationInfo {
     }
     cachedAppInfo.icon = host.iconRes;
     const node = appNode();
-    cachedAppInfo.category = node ? attr(node, "appCategory")?.data ?? -1 : -1;
-    if (node && attr(node, "isGame")?.data) cachedAppInfo.flags |= 0x02000000;
+    fillManifestGameInfo(cachedAppInfo, node);
     const label = node ? attr(node, "label") : undefined;
     if (label?.type === TV.REFERENCE) cachedAppInfo.labelRes = label.data;
     else cachedAppInfo.nonLocalizedLabel = host.appLabel;
@@ -1016,6 +1016,7 @@ export function usesSdk(root: XmlNode): { min: number; target: number } {
 function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resources, root: XmlNode, app: XmlNode | null | undefined, flags: number) {
   ai.packageName = pkg; ai.sourceDir = ai.publicSourceDir = path; ai.dataDir = `/data/data/${pkg}`; ai.archiveResources = res;
   ai.deviceProtectedDataDir = `/data/user_de/0/${pkg}`;
+  fillManifestGameInfo(ai, app);
   const label = app && attr(app, "label");
   ai.labelRes = label?.type === TV.REFERENCE ? label.data : 0;
   ai.nonLocalizedLabel = label?.str ?? null;
@@ -1025,6 +1026,10 @@ function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resou
   ai.targetSdkVersion = sdk.target;
   if (flags & 128) ai.metaData = metaData(app, res);
   return ai;
+}
+function fillManifestGameInfo(ai: JApplicationInfo, app: XmlNode | null | undefined): void {
+  ai.category = app ? attr(app, "appCategory")?.data ?? -1 : -1;
+  if (app && attr(app, "isGame")?.data) ai.flags |= FLAG_IS_GAME;
 }
 function fillPackageManifest(info: JPackageInfo, root: XmlNode, res: Resources, flags: number) {
   info.versionCode = attr(root, "versionCode")?.data ?? 0;
@@ -1049,7 +1054,8 @@ function recordAppInfo(record: PackageRecord, flags = 0): JApplicationInfo {
   const app = record.application;
   const ai = appInfoFrom(new JApplicationInfo(), record.pkg, record.path, record.res, record.root, app, flags);
   ai.uid = record.uid; ai.processName = app ? record.process(app) : record.pkg;
-  ai.enabled = record.enabled ? 1 : 0; ai.flags = record.system ? 1 : 0;
+  ai.enabled = record.enabled ? 1 : 0;
+  if (record.system) ai.flags |= 1;
   ai.theme = app && attr(app, "theme")?.data || 0;
   const cls = app && attrStr(app, "name");
   ai.className = cls ? qualifyComponent(cls, record.pkg) : null;
