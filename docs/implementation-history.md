@@ -394,6 +394,13 @@ error. The four scored flows rendered all 75 steps; mean content differences wer
 26.99% mean changed despite zero guest native execution in the final flow, so this native JIT
 patch does not explain the difference. No visual golden changed.
 
+BytePlus documents ByteVC1 as HEVC in its [Android encoding parameters](https://docs.byteplus.com/pt/docs/video-editor-sdk/150-android-encoding-and-composition-parameters),
+but that label alone does not establish that TikTok's selected bitstream can enter the browser's
+HEVC decoder. Chrome reported its 720p HEVC decoder as supported, smooth and power efficient.
+Temporary diagnostic counters in all four TikTok process realms recorded no Java MediaCodecList
+or `MediaCodecInfo.isHardwareAccelerated` call by the active feed. The counters were removed;
+changing that capability flag would not address the observed native decoder path.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only
