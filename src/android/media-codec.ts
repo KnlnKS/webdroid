@@ -108,7 +108,7 @@ rt.register({ name: "android/media/MediaCodecInfo", ctor: JCodecInfo, methods: {
     rt.link("android/media/MediaCodecInfo$CodecCapabilities"); rt.link("android/media/MediaCodecInfo$CodecProfileLevel"); return new JCapabilities(this);
   },
 } });
-rt.register({ name: "android/media/MediaCodecInfo$CodecCapabilities", ctor: JCapabilities, fields: { profileLevels: "profileLevels" }, methods: {
+rt.register({ name: "android/media/MediaCodecInfo$CodecCapabilities", ctor: JCapabilities, fields: { profileLevels: "profileLevels" }, statics: { COLOR_FormatYUV420Planar: 19 }, methods: {
   "isFeatureSupported(Ljava/lang/String;)Z": () => 0, "isFeatureRequired(Ljava/lang/String;)Z": () => 0,
   "getMaxSupportedInstances()I": () => 1,
   "isFormatSupported(Landroid/media/MediaFormat;)Z": async function (this: JCapabilities, format: JMediaFormat) { return +await supports(this.info.definition, format); },
