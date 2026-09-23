@@ -474,6 +474,11 @@ add ownership and lifetime complexity for little measured benefit, so no JNI cha
 TikTok smoke compilation after the vector-read cache compiled 462,058 classes with zero method
 failures. The final full E2E matrix remains pending because original-rate playback is not yet
 consistent.
+Two further generic JIT variants were tested against the same ByteVC1-style loop and removed.
+Preserving vector-read locals across lane loads showed no repeatable gain over the committed
+cache, and replacing the low-address high-word test with a 64-bit comparison was slightly
+slower. Neither justified the added state or changed emission. Chrome DevTools MCP remained
+locked to its existing profile; the CDP harness still supplied native and Chromium CPU samples.
 
 ## TikTok video playback follow-up — 2026-09-23
 
