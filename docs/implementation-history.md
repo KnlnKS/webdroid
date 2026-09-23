@@ -457,8 +457,10 @@ sample counted 554 distinct decoded pictures versus 440 EGL swaps; counts includ
 looping and cannot alone identify a compositor fault. A 300,000-instruction slice budget
 increased UI tick frequency but reduced native throughput on a different clip. A six-million
 budget also failed to improve its separate live sample. A temporary adaptive EGL-swap delay
-raised swaps but lowered sampled screen presentations; it was removed. Repeatable source media
-is still needed to attribute the remaining presentation gap.
+raised swaps but lowered sampled screen presentations; it was removed. A follow-up full removal
+of the swap wait likewise showed no gain in an advancing 30-second clip (sampled EGL 7.1 versus
+7.6 fps, screen presentations 8.7 versus 9.2 fps) and was removed. Repeatable source media is
+still needed to attribute the remaining presentation gap.
 
 A post-cache 12-second full-Chromium sample presented 293 EGL swaps and 274 completed screen
 frames while spending 5.93 seconds in native execution. Native slice samples still cluster in
