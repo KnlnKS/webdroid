@@ -1131,6 +1131,11 @@ describe("thumb decoder", () => {
       0x4770,
     ]);
     expect([multiple.w[0], multiple.w[2], multiple.w[4], multiple.w[6]]).toEqual([1, 2, 3, 4]);
+    const wideMove = [0x2800, 0xbf04, 0xf04f, 0x0907, 0x2203, 0x4770];
+    const taken = runThumb(wideMove);
+    expect([taken.w[18], taken.w[4]]).toEqual([7, 3]);
+    const skipped = runThumb(wideMove, cpu => { cpu.w[0] = 1; });
+    expect([skipped.w[18], skipped.w[4]]).toEqual([0, 0]);
     for (const input of [0, 1]) {
       let startIc = 0;
       const moves = runThumb([
