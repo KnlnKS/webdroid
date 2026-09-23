@@ -469,6 +469,9 @@ existing CDP harness collected this profile instead.
 Another eight-second playback probe observed 7,073 JNI `GetStringUTFChars` calls but 5,473
 distinct values; only one value had substantial reuse. Caching returned string buffers would
 add ownership and lifetime complexity for little measured benefit, so no JNI change was kept.
+TikTok smoke compilation after the vector-read cache compiled 462,058 classes with zero method
+failures. The final full E2E matrix remains pending because original-rate playback is not yet
+consistent.
 
 ## TikTok video playback follow-up — 2026-09-23
 
