@@ -79,6 +79,9 @@ describe("fuzz campaign core", () => {
     const rounded = { ...state, matrix: [1, Math.fround(0.7867724) + 5.960464477539063e-8] };
     expect(compareResult(input, result(state), result(rounded))).toBeNull();
     expect(graphicsPrecisionDeltas(result(state), result(rounded)).matrix).toBeGreaterThan(0);
+    expect(compareResult(input, result(state), result({ ...state,
+      renderNode: [1, 1, Math.fround(0.7023938) + 5.960464477539063e-8] }))?.matchKey)
+      .toBe("graphics:state:renderNode");
     expect(compareResult(input, result(state), result({ ...near, center: 1 }))?.matchKey).toBe("graphics:state:center");
   });
 });

@@ -518,7 +518,9 @@ The graphics comparator now records tolerated exact float32 state deltas separat
 each campaign file. Replaying the two 100-case campaigns records 7 and 14 matrix cases
 respectively, though both retain zero differences under the documented `2e-6` relative
 tolerance. Their largest absolute deltas are `0.0000152587890625` and
-`0.00006103515625`. Skia-style float32 matrix arithmetic matched most sampled states
+`0.00006103515625`. Path bounds and RenderNode state now compare by exact float32
+value; replaying both campaigns after that change still reports zero differences.
+Skia-style float32 matrix arithmetic matched most sampled states
 in an isolated experiment, but native `sinf` and translation rounding still differed;
 changing Canvas transforms without matching the raster path was not justified.
 

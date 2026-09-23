@@ -13,11 +13,12 @@ function graphicsValue(value: unknown): GraphicsValue | null {
 
 function stateValueEqual(key: string, expected: JsonValue, actual: JsonValue): boolean {
   if ((key === "matrix" || key === "pathBounds" || key === "renderNode") && Array.isArray(expected) && Array.isArray(actual)) {
-    // The two raster engines round intermediate transforms differently; pixel parity is checked separately.
     return expected.length === actual.length && expected.every((value, index) => {
       const other = actual[index];
       return typeof value === "number" && typeof other === "number" &&
-        Math.abs(value - other) <= 2e-6 * Math.max(1, Math.abs(value), Math.abs(other));
+        (key === "matrix"
+          ? Math.abs(value - other) <= 2e-6 * Math.max(1, Math.abs(value), Math.abs(other))
+          : Math.fround(value) === Math.fround(other));
     });
   }
   return stableJson(expected) === stableJson(actual);

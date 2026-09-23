@@ -317,8 +317,8 @@ Comparison occurs in this order:
 
 1. value versus exception outcome;
 2. normalized exception class;
-3. exact non-pixel graphics state except float-backed matrix, path bounds, and RenderNode arrays,
-   which use a relative tolerance of `2e-6`;
+3. exact non-pixel graphics state, with float-backed path bounds and RenderNode arrays compared
+   by float32 value; Canvas matrices use a relative tolerance of `2e-6`;
 4. tolerant image comparison if state agrees.
 
 An image passes only when both `contentDiffPct <= 1` and `tolerantPct <= 0.1`. The full strict score
