@@ -6,6 +6,7 @@ const a64 = @import("a64.zig");
 const wasm = @import("wasm.zig");
 const jit32 = @import("jit32.zig");
 const jitfp = @import("jitfp.zig");
+const jitmem = @import("jitmem.zig");
 const fp = @import("fp.zig");
 const bt = @import("bits.zig");
 const assert = std.debug.assert;
@@ -1017,8 +1018,8 @@ pub fn Emit(comptime wide: bool) type {
                     } else e.fallback(pc, k);
                 },
                 .simd => jitfp.emitSimd(e, @truncate(o.imm), pc, k),
-                .vmem => jitfp.emitVmem(e, @truncate(o.imm), pc, k),
-                .vldrlit => jitfp.emitVldrlit(e, o),
+                .vmem => jitmem.emitVmem(e, @truncate(o.imm), pc, k),
+                .vldrlit => jitmem.emitVldrlit(e, o),
                 else => e.fallback(pc, k),
             }
             return false;

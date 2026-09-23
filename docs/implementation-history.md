@@ -855,6 +855,14 @@ timestamps and may not map one-to-one to frames; the comparison does not establi
 or a decoder backlog. The temporary probe and its second JIT fallback range were removed, and
 the ordinary release/safe core was rebuilt.
 
+The code-quality review separated scalar FP, vector arithmetic, vector memory, and the
+shared vector-register cache. Three ordered SIMD encoding families now have named emitters.
+Inlining those emitters produced a byte-identical ReleaseFast core versus the pre-review
+revision. Typecheck, 566 SIMD/hardware-oracle cases, 33 focused SIMD/cache cases, and TikTok
+smoke compilation passed; the smoke compiler reported zero method failures. A matched
+332-packet capture decoded 320 frames and retired the same 2.49 billion guest instructions
+in both versions. No final E2E run was made for this structural change.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only
