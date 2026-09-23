@@ -1068,6 +1068,7 @@ export function matMul(a: number[], b: number[]): [number, number, number, numbe
 }
 const translateA = (x: number, y: number): JMatrix["m"] => [1, 0, 0, 1, x, y];
 const scaleA = (sx: number, sy: number, px = 0, py = 0): JMatrix["m"] => [sx, 0, 0, sy, px - sx * px, py - sy * py];
+const skewA = (kx: number, ky: number, px = 0, py = 0): JMatrix["m"] => [1, ky, kx, 1, -kx * py, -ky * px];
 function affineOps(name: string, make: (a: number, b: number, c?: number, d?: number) => JMatrix["m"], sigs: string[]) {
   const ops: NativeSpec["methods"] = {};
   for (const s of sigs) {
@@ -1124,6 +1125,7 @@ rt.register({
     },
     ...affineOps("Translate", translateA, ["FF"]),
     ...affineOps("Scale", scaleA, ["FF", "FFFF"]),
+    ...affineOps("Skew", skewA, ["FF", "FFFF"]),
     ...affineOps("Rotate", rotM, ["F", "FFF"]),
     "postConcat(Landroid/graphics/Matrix;)Z": function (this: JMatrix, o: JMatrix) {
       this.m = matMul(o.m, this.m);

@@ -19,3 +19,11 @@ test("Matrix.set copies independently and null restores identity", async () => {
   await vcall(target, "mapPoints", "([F)V", points);
   expect([...points]).toEqual([4, 6]);
 });
+
+test("Matrix skew maps points around the requested pivot", async () => {
+  const matrix = await newObj("android/graphics/Matrix", "()V");
+  await vcall(matrix, "setSkew", "(FFFF)V", 2, 3, 10, 20);
+  const points = new Float32Array([4, 5, 10, 20]);
+  await vcall(matrix, "mapPoints", "([F)V", points);
+  expect([...points]).toEqual([-26, -13, 10, 20]);
+});
