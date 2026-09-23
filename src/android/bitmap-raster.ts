@@ -39,6 +39,18 @@ function sampled(canvas: JCanvas, paint: JPaint, left: number, top: number, righ
   return true;
 }
 
+function deviceHairline(canvas: JCanvas, paint: JPaint, path: Path2D): void {
+  const ctx = canvas.ctx, devicePath = new Path2D();
+  devicePath.addPath(path, ctx.getTransform());
+  ctx.save();
+  try {
+    canvas.prep(paint, true);
+    const blend = paint.compositeOp();
+    if (blend) ctx.globalCompositeOperation = blend;
+    ctx.resetTransform(); ctx.stroke(devicePath);
+  } finally { ctx.restore(); }
+}
+
 export function tryBitmapShape(canvas: JCanvas, paint: JPaint,
   fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void): boolean {
   if (paint.style !== 2 || paint.strokeWidth <= 0 || paint.antiAlias || paint.dash ||
@@ -62,6 +74,12 @@ export function tryBitmapShape(canvas: JCanvas, paint: JPaint,
 
 export function tryBitmapRect(canvas: JCanvas, paint: JPaint, left: number, top: number,
   right: number, bottom: number): boolean {
+  if (paint.antiAlias && paint.style === 1 && paint.strokeWidth === 0 && !paint.dash && eligible(canvas, paint)) {
+    const path = new Path2D();
+    path.rect(left, top, right - left, bottom - top);
+    deviceHairline(canvas, paint, path);
+    return true;
+  }
   if (paint.antiAlias || paint.style === 1 && paint.strokeWidth !== 0 ||
     paint.style === 2 && paint.strokeWidth !== 0 || !eligible(canvas, paint)) return false;
   if (!paint.antiAlias && (paint.style === 0 || paint.style === 2 && paint.strokeWidth === 0)) {
@@ -122,11 +140,22 @@ export function tryBitmapRoundRect(canvas: JCanvas, paint: JPaint, left: number,
 
 export function tryBitmapLine(canvas: JCanvas, paint: JPaint,
   x0: number, y0: number, x1: number, y1: number): boolean {
-  if (paint.strokeWidth !== 0 || paint.dash || !eligible(canvas, paint)) return false;
+  if (paint.dash || !eligible(canvas, paint)) return false;
   const ctx = canvas.ctx;
+  if (paint.strokeWidth !== 0) {
+    if (paint.strokeWidth !== 1 || paint.antiAlias) return false;
+    const m = ctx.getTransform();
+    if (m.a * m.a + m.b * m.b !== 1 || m.c * m.c + m.d * m.d !== 1 ||
+      m.a * m.c + m.b * m.d !== 0) return false;
+  }
   if (!paint.antiAlias) {
     const pixels = hairlineLine(ctx, x0, y0, x1, y1, paint.strokeCapN);
-    if (!pixels) return false;
+    if (!pixels) {
+      if (paint.strokeWidth !== 1) return false;
+      const m = ctx.getTransform(), start = devicePoint(m, x0, y0), end = devicePoint(m, x1, y1);
+      return Math.max(start[0], end[0]) <= 0 || Math.min(start[0], end[0]) >= canvas.w ||
+        Math.max(start[1], end[1]) <= 0 || Math.min(start[1], end[1]) >= canvas.h;
+    }
     deviceFill(canvas, paint, pixels);
     return true;
   }
@@ -184,14 +213,6 @@ export function tryBitmapPath(canvas: JCanvas, paint: JPaint, path: JPath): bool
     return true;
   }
   if (!hairline) return false;
-  const ctx = canvas.ctx, devicePath = new Path2D();
-  devicePath.addPath(path.path(), ctx.getTransform());
-  ctx.save();
-  try {
-    canvas.prep(paint, true);
-    const blend = paint.compositeOp();
-    if (blend) ctx.globalCompositeOperation = blend;
-    ctx.resetTransform(); ctx.stroke(devicePath);
-  } finally { ctx.restore(); }
+  deviceHairline(canvas, paint, path.path());
   return true;
 }
