@@ -29,6 +29,7 @@ import { sqliteStore, useSQLiteStore } from "../android/sqlite";
 import { preferenceStore, usePreferenceStore } from "../android/sharedprefs";
 import { rt } from "../jvm/runtime";
 import { useWebCookies } from "../android/cookies";
+import { clipboardTransport, clipboardChanged } from "../android/clipboard";
 import type { WebCookies } from "./webcookies";
 import { BrowserLocation } from "./geolocation";
 import { locationTransport } from "../android/locationmanager";
@@ -57,6 +58,7 @@ type ProcessEndpoint = {
   service: (request: ServiceRequest) => Promise<BinderHandle | null>;
   provider: (request: ProviderRequest, caller: Caller) => Promise<ProviderReply>;
   broadcast: (intent: IntentData, component: string | null, ordered: boolean, result: BroadcastData) => Promise<BroadcastData>;
+  clipboardChanged: () => Promise<void>;
 };
 type Entry = { pkg: string; process: string; uid: number; pid: number; frame: HTMLIFrameElement | null;
   translucent: boolean;
@@ -103,6 +105,8 @@ class ProcessBroker {
   private nextPid = 1001;
   private foregroundPid = 0;
   private shownPids = new Set<number>();
+  private clipboard: ParcelData | null = null;
+  private clipboardWatchers = new Set<number>();
   private nextActivity = 1;
   private activities: { id: number; pid: number; taskId: number; caller: number; previous: number; request: number }[] = [];
   private activityQueue: Promise<void> = Promise.resolve();
@@ -116,6 +120,25 @@ class ProcessBroker {
   }
 
   foreground(pid: number): void { this.foregroundPid = pid; this.shownPids = new Set([pid]); }
+  private copyClipboard(data: ParcelData): ParcelData {
+    return { bytes: data.bytes.slice(), objects: data.objects.map(([at, handle]) => [at, handle && { ...handle }]) };
+  }
+  setClipboard(pid: number, data: ParcelData | null): void {
+    this.entry(pid);
+    this.clipboard = data ? this.copyClipboard(data) : null;
+    for (const watcher of this.clipboardWatchers) {
+      if (this.alive(watcher)) void this.request(this.entry(watcher), (endpoint) => endpoint.clipboardChanged()).catch(reportUncaught);
+    }
+  }
+  getClipboard(pid: number): ParcelData | null {
+    const caller = this.entry(pid), foreground = this.entries.get(this.foregroundPid);
+    if (caller.uid !== foreground?.uid || !this.clipboard) return null;
+    return this.copyClipboard(this.clipboard);
+  }
+  watchClipboard(pid: number, active: boolean): void {
+    this.entry(pid);
+    if (active) this.clipboardWatchers.add(pid); else this.clipboardWatchers.delete(pid);
+  }
   presentation(pid: number, translucent: boolean): void {
     const entry = this.entry(pid);
     if (entry.translucent === translucent) return;
@@ -286,7 +309,7 @@ class ProcessBroker {
       void this.service(null, binding.pkg, binding.process, { kind: "unbind", key }).catch(reportUncaught);
     entry.bindings.clear();
     for (const watcher of entry.watchers) { try { watcher(); } catch (error) { console.error("[process death]", error); } }
-    entry.watchers.clear(); entry.frame?.remove(); this.files.detach(pid); this.location.remove(pid);
+    entry.watchers.clear(); entry.frame?.remove(); this.files.detach(pid); this.location.remove(pid); this.clipboardWatchers.delete(pid);
     for (const activity of this.activities.filter((a) => a.pid === pid)) this.finishActivity(pid, activity.id, 0, null);
   }
   alive(pid: number): boolean { const entry = this.entries.get(pid); return !!entry && !entry.dead; }
@@ -408,6 +431,9 @@ async function remote<T>(pending: Promise<T>): Promise<T> {
 }
 export function connectProcess(): ProcessEndpoint {
   const broker = processBroker();
+  clipboardTransport.set = data => broker.setClipboard(PROCESS_PID, data);
+  clipboardTransport.get = () => broker.getClipboard(PROCESS_PID);
+  clipboardTransport.listen = active => broker.watchClipboard(PROCESS_PID, active);
   let nextRequest = 1;
   const requests = new Map<number, ActivityResultTarget>();
   activityTransport.presentation = translucent => broker.presentation(PROCESS_PID, translucent);
@@ -474,6 +500,7 @@ export function connectProcess(): ProcessEndpoint {
   serviceTransport.unbind = async (owner, process, key) => { await remote(broker.service(PROCESS_PID, owner.pkg, process, { kind: "unbind", key })); };
   serviceTransport.start = async (owner, process, intent, foreground) => { await remote(broker.service(PROCESS_PID, owner.pkg, process, { kind: "start", intent: await encodeIntent(intent), foreground })); };
   return {
+    clipboardChanged: async () => clipboardChanged(),
     activity: async (request) => {
       const shell = await import("./device");
       if (request.kind === "finishTask") return shell.finishTask(request.taskId, request.resume);

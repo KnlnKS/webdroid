@@ -7,7 +7,7 @@ import { writeText, readText } from "./text";
 import { JBundle } from "./os";
 import type { JUri } from "./net";
 
-class JClipDescription extends JObj { label: unknown = null; types: string[] = []; extras: JBundle | null = null; time = 0n; styled = 0; classification = 1; confidence = new JBundle(); }
+export class JClipDescription extends JObj { label: unknown = null; types: string[] = []; extras: JBundle | null = null; time = 0n; styled = 0; classification = 1; confidence = new JBundle(); }
 const matches = (type: string, desired: string) => desired === "*/*" || type === desired || desired.endsWith("/*") && type.startsWith(desired.slice(0, -1));
 async function readDescription(parcel: JParcel): Promise<JClipDescription> {
   rt.link("android/content/ClipDescription"); const desc = new JClipDescription();
@@ -30,6 +30,7 @@ statics: { get CREATOR() { return parcelCreator("android/content/ClipDescription
     this.label = label; this.types = [...types];
   },
   "getLabel()Ljava/lang/CharSequence;": function (this: JClipDescription) { return this.label; },
+  "getTimestamp()J": function (this: JClipDescription) { return this.time; },
   "getMimeTypeCount()I": function (this: JClipDescription) { return this.types.length; },
   "getMimeType(I)Ljava/lang/String;": function (this: JClipDescription, index: number) { if (index < 0 || index >= this.types.length) rt.aio(index, this.types.length); return this.types[index]; },
   "hasMimeType(Ljava/lang/String;)Z": function (this: JClipDescription, type: string) { return +this.types.some(t => matches(t, type)); },
@@ -49,11 +50,12 @@ rt.register({ name: "android/content/ClipData$Item", ctor: JClipItem, methods: {
   "getIntent()Landroid/content/Intent;": function (this: JClipItem) { return this.intent; },
   "getUri()Landroid/net/Uri;": function (this: JClipItem) { return this.uri; },
 } });
-class JClipData extends JObj { description = new JClipDescription(); items: JClipItem[] = []; icon: unknown = null; }
+export class JClipData extends JObj { description = new JClipDescription(); items: JClipItem[] = []; icon: unknown = null; }
 function clip(label: unknown, type: string, item: JClipItem): JClipData {
   rt.link("android/content/ClipData$Item"); rt.link("android/content/ClipDescription");
   const data = new JClipData(); data.description.label = label; data.description.types = [type]; data.items.push(item); return data;
 }
+export function plainTextClip(label: unknown, text: unknown): JClipData { return clip(label, "text/plain", Object.assign(new JClipItem(), { text })); }
 const itemObjects = [["intent", "android/content/Intent"], ["sender", "android/content/IntentSender"], ["uri", "android/net/Uri"],
   ["activity", "android/content/pm/ActivityInfo"], ["links", "android/view/textclassifier/TextLinks"]] as const;
 async function readTyped(parcel: JParcel, type: string): Promise<unknown> {
@@ -89,7 +91,7 @@ statics: { get CREATOR() { return parcelCreator("android/content/ClipData", read
     this.description.label = label; this.description.types = [...types]; this.items = [item];
   },
   "static newIntent(Ljava/lang/CharSequence;Landroid/content/Intent;)Landroid/content/ClipData;": (label: unknown, intent: JIntent) => clip(label, "text/vnd.android.intent", Object.assign(new JClipItem(), { intent })),
-  "static newPlainText(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;": (label: unknown, text: unknown) => clip(label, "text/plain", Object.assign(new JClipItem(), { text })),
+  "static newPlainText(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;": plainTextClip,
   "static newRawUri(Ljava/lang/CharSequence;Landroid/net/Uri;)Landroid/content/ClipData;": (label: unknown, uri: JUri) => clip(label, "text/uri-list", Object.assign(new JClipItem(), { uri })),
   "getDescription()Landroid/content/ClipDescription;": function (this: JClipData) { return this.description; },
   "getItemCount()I": function (this: JClipData) { return this.items.length; },
