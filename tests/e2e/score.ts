@@ -8,7 +8,7 @@ import { html, printFlow, type FlowReport, type StepReport } from "./lib/report"
 import { parseArgs } from "./lib/args";
 import { screenOf, screenParam, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step, type UiNode } from "./types";
 import { diffTrees } from "./lib/tree";
-import type { FlowRun, StepRun } from "./capture-webdroid";
+import type { FlowRun } from "./capture-webdroid";
 import { E2E_DIR, sha1 } from "./lib/util";
 
 /**
@@ -32,7 +32,7 @@ async function treeDiffFor(goldenDir: string, actualDir: string, rec: RecordedSt
   return diffTrees(golden, await Bun.file(actualFile).json());
 }
 
-async function diffFlow(flow: Flow, runs?: StepRun[]): Promise<FlowReport> {
+async function diffFlow(flow: Flow): Promise<FlowReport> {
   const goldenDir = `${E2E_DIR}golden/${flow.app}`;
   const actualDir = `${E2E_DIR}actual/${flow.app}`;
   const sxsDir = `${E2E_DIR}report/${flow.app}-sxs`;
@@ -43,13 +43,15 @@ async function diffFlow(flow: Flow, runs?: StepRun[]): Promise<FlowReport> {
   await rm(sxsDir, { recursive: true, force: true });
   await mkdir(sxsDir, { recursive: true });
 
-  // Fall back to the flags the capture pass left on disk, so `e2e:diff` scores identically.
-  let runInfo = runs;
-  if (!runInfo) {
-    if (existsSync(`${actualDir}/run.json`)) runInfo = ((await Bun.file(`${actualDir}/run.json`).json()) as FlowRun).steps;
-    else console.warn(`  ${flow.app}: actual/ has no run.json — scoring pixels only, wedge flags unknown; rerun \`bun run e2e --test ${flow.app}\``);
+  const runPath = `${actualDir}/run.json`;
+  if (!existsSync(runPath)) throw new Error(`${flow.app}: missing run.json; rerun \`bun run e2e --test ${flow.app}\``);
+  const runInfo = await Bun.file(runPath).json() as FlowRun;
+  if (runInfo.screen !== screenParam(screenOf(manifest)) ||
+      runInfo.steps.length !== flow.steps.length ||
+      runInfo.steps.some((run, index) => run.id !== flow.steps[index]?.id)) {
+    throw new Error(`${flow.app}: run.json does not match the Android reference flow and geometry`);
   }
-  const runById = new Map((runInfo ?? []).map((r) => [r.id, r]));
+  const runById = new Map(runInfo.steps.map((run) => [run.id, run]));
   const steps: StepReport[] = [];
   let lastHash = "";
   let stepsTracked = 0;
