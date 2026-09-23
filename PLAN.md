@@ -23,6 +23,11 @@ Thumb indexed transfers also reuse the same memory emitter for pre/post-index wr
 combined build passes owning checks and the same gameplay replay; rendering remains below 2 FPS.
 Thumb long multiply/accumulate now shares ARM JIT arithmetic and passes the same checks and
 gameplay replay. A separate clean browser context is investigating the unresolved Player ID.
+Fresh original-ARM32 startup reaches the bundled seven-second intro clip through NDK extraction
+and decoding. It decodes initial video/audio samples but playback stalls with full output queues;
+a tap skips the intro and the tutorial eventually renders. The new media path and buffer-slot
+reuse pass owning tests and typecheck; the final E2E matrix has not yet been rerun. Intro playback,
+startup/render speed, Player ID and later unlocked features remain open.
 
 - Run the unchanged 4.2.1 XAPK in full Chrome and an AVD at matching geometry.
 - Capture startup, menus, gameplay, pause/resume and saved progression in both.

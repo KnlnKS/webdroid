@@ -9,6 +9,36 @@ Temporary /tmp evidence may expire. Committed regression fixtures are the durabl
 
 ## Cut the Rope repair (2026-09-22, in progress)
 
+The AVD reference now has a separate clean Android user, preserving the earlier level-2 profile.
+At 720×1280/320 dpi its tutorial and settings captures are under
+`webdroid-shots/cut-the-rope/avd-clean-*.png`; the prior original-ARM32 Chrome tutorial capture
+matches its layout, assets and text. Ads remain outside this task unless they block gameplay.
+
+Fresh Chrome startup reaches the app's own intro MP4 via `AMediaExtractor_setDataSourceCustom`.
+The new NDK media owner uses that callback to read the unchanged asset, MP4Box for sample tables,
+and the existing Java/WebCodecs codec owner for AVC/AAC decode. The actual clip has 214 video
+frames, 309 audio samples and a 7.133-second duration. VideoDecoder emits NV12; Chrome rejects
+explicit non-RGB `VideoFrame.copyTo` formats, so the raw buffer path copies in the frame's native
+format and advertises Android's semiplanar color layout. Input buffers use their promoted native
+backing address, and released output indices now return to the codec's free slot pool. A small
+real MP4 fixture checks ARM32/64 extraction, descriptor ownership, timestamps and sync seeking.
+Owning tests and typecheck pass. The API contracts follow the
+[Android NDK media reference](https://developer.android.com/ndk/reference/group/media) and
+[WebCodecs](https://www.w3.org/TR/webcodecs/).
+
+This is partial media support, not successful intro playback. In untraced full Chrome, the clip
+reaches about 0.4 seconds, then both output queues fill and Unity stops calling
+`AMediaCodec_dequeueOutputBuffer`, though its workers still poll input buffers. No codec error or
+native fault is reported. A controlled temporary increase from 8 to 32 pending outputs reached
+about 1.0 seconds before the same stall; it was removed. A tap dismisses the intro and Unity later
+renders the tutorial, but startup remains minutes long. On the diagnostic build a horizontal rope
+swipe then advanced to the second puzzle with zero native, GL, layout or draw faults; gameplay
+input remains live after media teardown. Temporary queue/format probes were removed.
+The codec output format supplied color-format 21, width, height, stride and slice height; Unity's
+remaining absent metadata queries (rotation, color range/standard, sample aspect and display
+dimensions, AAC profile) have not been established as the cause. Full E2E is reserved for the
+final candidate, and no visual goldens changed.
+
 The first original-ARM32 tutorial reached rendering with missing sprites, black text blocks
 and repeated invalid-bounds warnings. Unity's bounds predicate was correct; a live instruction
 watch found real negative infinities in the merged maximum coordinates. Its merge at
