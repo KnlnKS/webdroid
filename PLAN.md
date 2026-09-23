@@ -1,13 +1,12 @@
 # Fuzzer compatibility follow-up — 2026-09-23
 
 Branch: `codex/fuzzer-compatibility`. API 33 oracle: emulator-5554 at 1080×2160, 480 dpi.
-The saved 100-case graphics campaign fell from 36 to 20 differences after generic Path,
-Canvas, Paint, drawable, widget and font fixes. All six earlier retained cases now replay
-without a difference; 18 of the 20 newly retained cases do too. The two remaining minimized
-cases exercise browser-versus-Skia text glyph and thin-arc coverage. The other original cases
-also contain antialiasing differences, including one center pixel. No visual golden was changed.
-The preceding 1,000-case API campaign had no differences. See implementation history for the
-fixes, evidence and remaining renderer limit.
+The API 33 1,000-case API campaign has no differences. Both 100-case graphics campaigns
+(seeds `20260923` and `20260924`) now have no reported differences, as do all 38 retained
+minimized graphics findings and 42 focused color-glyph probes. The fixes cover software
+shape coverage, inverted paths, clipping, Android text raster and line wrapping. They use
+platform geometry and font data rather than APK-specific behavior. No visual golden changed.
+See implementation history for mechanisms, verification and evidence limits.
 
 ---
 

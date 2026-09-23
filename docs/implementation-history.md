@@ -458,3 +458,43 @@ The final candidate passes typecheck, the 1,325-test suite (27,577 assertions), 
 smoke, and all declared Canvas, Paint and Path framework delegates (33/33, 86/86 and
 43/43). FitNotes and Calculator M fast E2E flows pass 39/39 and 8/8 steps. All these
 checks, plus retained and original campaign replays, ran after the final code edits.
+
+## Fuzzer renderer completion — 2026-09-23
+
+The follow-up kept the API 33 oracle and generated commands fixed. The original graphics
+seed `20260923` had 20 differences after the preceding repairs. A fresh 100-case seed
+`20260924` found 12 more, including antialiased text, inverse paths, non-antialiased
+shapes, rotated clip bounds and color emoji under skew. Both full seeds now replay with
+0/100 differences. All 38 minimized findings from the two seeds and preceding campaign
+replay with no difference. The earlier 1,000-case API seed still had no differences;
+these changes do not add API delegates. No APK bytes or visual goldens changed.
+
+Small software bitmaps now use pixel-center coverage for non-antialiased fills and a
+four-by-four coverage grid for one-pixel-high antialiased ellipses. Fill-and-stroke joins
+are composed as one binary mask when antialiasing is disabled. Inverse winding fills
+and positive-width inverse strokes render from their complements; zero-width inverse
+strokes stay on the source contour. Hairline paths draw in device space, and rotated
+clip bounds scan pixel centers. Pixel-aligned ordinary rectangles bypass the sampling
+path. These cases were compared against Android with the same transforms and Paint state.
+
+CanvasKit 0.38 renders eligible default Roboto text in small bitmaps. Android's static
+Roboto face, ligatures, malformed surrogate replacement and white-glyph coverage were
+matched from direct oracle probes. TextView line-fit decisions use rounded measured
+widths, preserving the unrounded width for layout. Noto Color Emoji uses the same font
+file as the API 33 emulator (matching SHA-256). Its COLRv1 clip records are read from
+the font; transform-dependent clipping accounts for the remaining color-layer edge
+differences. This is an empirical raster correction, not a claim of byte-identical
+Skia output for every matrix or font. Forty-two targeted emoji probes covering seven
+glyphs at sizes 12 and 24 and several skew matrices have no reported difference;
+separate rocket probes at sizes 8–32 also pass. The normal
+full-screen software draw path remains Canvas2D; CanvasKit text is capped at 250,000
+bitmap pixels and starts loading alongside the APK and fonts.
+
+Typecheck, FitNotes and fuzz-probe smoke compilation pass with zero method failures.
+Canvas, Paint and Path have 33/33, 86/86 and 43/43 declared native coverage in the
+focused framework check. FitNotes text comparison passes 6/6 paragraphs. The serialized
+FitNotes and Calculator M runs render 39/39 and 8/8 steps, with no newly missing API,
+runtime error, required native, layout error or draw error. FitNotes still has a 39.34%
+content pixel difference against its app golden; the fuzzer result does not establish
+whole-app visual parity. The existing browser test's Paint-style assertion now checks
+visible fill/stroke behavior instead of demanding Chrome's exact glyph raster.
