@@ -300,26 +300,30 @@ fn emitRoundedShift(e: *Emit, rn: u8, size: u32, amount: u32, round: bool, unsig
     vectorConst(e, size, 1);
     e.b.emit(.{ sv(S.and_), sv(S.add[size]) });
 }
-fn emitShiftNarrow(e: *Emit, rn: u8, size: u32, amount: u32, round: bool, unsigned: bool) void {
-    emitRoundedShift(e, rn, size + 1, amount, round, unsigned);
-    if (unsigned) {
+fn emitShiftNarrow(e: *Emit, rn: u8, size: u32, amount: u32, round: bool, kind: NarrowKind) void {
+    emitRoundedShift(e, rn, size + 1, amount, round, kind == .unsigned);
+    if (kind == .signed_to_unsigned) {
+        vectorConst(e, size + 1, 0);
+        e.b.emit(.{sv(S.max_s[size + 1])});
+    }
+    if (kind != .signed) {
         vectorConst(e, size + 1, narrowMax(size));
         e.b.emit(.{sv(S.min_u[size + 1])});
     }
     vectorConst(e, size + 1, 0);
-    e.b.emit(.{sv(if (unsigned) S.narrow_u[size] else S.narrow_s[size])});
+    e.b.emit(.{sv(if (kind == .signed) S.narrow_s[size] else S.narrow_u[size])});
 }
-fn checkShiftNarrowSaturation(e: *Emit, rn: u8, size: u32, amount: u32, round: bool, unsigned: bool) void {
-    emitShiftNarrow(e, rn, size, amount, round, unsigned);
-    e.b.emit(.{sv(S.extend_low_s[size] + @as(u8, if (unsigned) 2 else 0))});
-    emitRoundedShift(e, rn, size + 1, amount, round, unsigned);
+fn checkShiftNarrowSaturation(e: *Emit, rn: u8, size: u32, amount: u32, round: bool, kind: NarrowKind) void {
+    emitShiftNarrow(e, rn, size, amount, round, kind);
+    e.b.emit(.{sv(S.extend_low_s[size] + @as(u8, if (kind == .signed) 0 else 2))});
+    emitRoundedShift(e, rn, size + 1, amount, round, kind == .unsigned);
     e.b.emit(.{ sv(S.ne[size + 1]), sv(S.any_true) });
     setQIf(e);
 }
-fn putShiftNarrow(e: *Emit, rd: u8, rn: u8, size: u32, amount: u32, round: bool, unsigned: bool, q: bool) void {
+fn putShiftNarrow(e: *Emit, rd: u8, rn: u8, size: u32, amount: u32, round: bool, kind: NarrowKind, q: bool) void {
     const b = e.b;
     b.get(L_CPU);
-    emitShiftNarrow(e, rn, size, amount, round, unsigned);
+    emitShiftNarrow(e, rn, size, amount, round, kind);
     if (q) b.emit(.{ vm(S.store64_lane, voff(rd) + 8), 0 }) else vput(e, rd, false);
 }
 fn shuffle(e: *Emit, rn: u8, rm: u8, lanes: *const [16]u8) void {
@@ -334,6 +338,51 @@ inline fn narrowByte(k: usize, es: usize) usize {
 }
 fn lane(tab: [4]u8, esz: u32) ?u8 {
     return if (tab[esz] == 0) null else tab[esz];
+}
+fn emitVariableShift16(e: *Emit, rd: u8, rn: u8, rm: u8, q: bool, unsigned: bool, round: bool) void {
+    const b = e.b;
+    for (0..(if (q) @as(usize, 8) else 4)) |i| {
+        vget(e, rm);
+        b.emit(.{ sv(S.extract_s[0]), @as(u8, @intCast(i * 2)), set(L_A) });
+        vget(e, rn);
+        b.emit(.{ sv(if (unsigned) S.extract_u[1] else S.extract_s[1]), @as(u8, @intCast(i)), set(L_B) });
+        b.emit(.{ get(L_CPU), get(L_CPU), vm(S.load, voff(rd)), get(L_B), get(L_A), O.i32_shl, get(L_B) });
+        if (round) b.emit(.{ c32(1), c32(0), get(L_A), O.i32_sub, c32(1), O.i32_sub, O.i32_shl, O.i32_add });
+        b.emit(.{ c32(0), get(L_A), O.i32_sub, if (unsigned) O.i32_shr_u else O.i32_shr_s,
+            get(L_A), c32(0), O.i32_ge_s, O.select,
+            c32(0), get(L_A), c32(-16), if (round) O.i32_ge_s else O.i32_gt_s,
+            get(L_A), c32(16), O.i32_lt_s, O.i32_and, O.select,
+            sv(S.replace[1]), @as(u8, @intCast(i)), vm(S.store, voff(rd)) });
+    }
+    if (!q) zeroTop(e, rd, true);
+}
+fn halvingOperand(e: *Emit, rm: u8, subtract: bool) void {
+    vget(e, rm);
+    if (subtract) e.b.emit(.{sv(S.not)});
+}
+fn emitHalving(e: *Emit, rd: u8, rn: u8, rm: u8, size: u32, q: bool, unsigned: bool, round: bool, subtract: bool) void {
+    const b = e.b;
+    b.get(L_CPU);
+    if (unsigned and round and !subtract and size < 2) {
+        vget(e, rn);
+        vget(e, rm);
+        b.emit(.{sv(S.avgr_u[size])});
+    } else {
+        vget(e, rn);
+        halvingOperand(e, rm, subtract);
+        b.emit(.{sv(S.and_)});
+        vget(e, rn);
+        halvingOperand(e, rm, subtract);
+        b.emit(.{ sv(S.xor), c32(1), sv(if (unsigned) S.shr_u[size] else S.shr_s[size]), sv(S.add[size]) });
+        if (round) {
+            vget(e, rn);
+            halvingOperand(e, rm, subtract);
+            b.emit(.{sv(S.xor)});
+            vectorConst(e, size, 1);
+            b.emit(.{ sv(S.and_), sv(S.add[size]) });
+        }
+    }
+    vput(e, rd, q);
 }
 fn emitVector(e: *Emit, w: u32) bool {
     const b = e.b;
@@ -515,19 +564,53 @@ fn emitVector(e: *Emit, w: u32) bool {
     }
     if (is(w, 0x9f20_0400, 0x0e20_0400)) {
         const opcode = bits(w, 11, 5);
-        if (opcode == 8 and U and size == 1) {
-            for (0..(if (q) @as(usize, 8) else 4)) |i| {
-                vget(e, rm);
-                b.emit(.{ sv(S.extract_s[0]), @as(u8, @intCast(i * 2)), set(L_A) });
-                vget(e, rn);
-                b.emit(.{ sv(S.extract_u[1]), @as(u8, @intCast(i)), set(L_B) });
-                b.emit(.{ get(L_CPU), get(L_CPU), vm(S.load, voff(rd)), get(L_B), get(L_A), O.i32_shl,
-                    get(L_B), c32(0), get(L_A), O.i32_sub, O.i32_shr_u,
-                    get(L_A), c32(0), O.i32_ge_s, O.select,
-                    c32(0), get(L_A), c32(-16), O.i32_gt_s, get(L_A), c32(16), O.i32_lt_s, O.i32_and, O.select,
-                    sv(S.replace[1]), @as(u8, @intCast(i)), vm(S.store, voff(rd)) });
+        if (size == 1 and ((opcode == 8 and U) or opcode == 10)) {
+            emitVariableShift16(e, rd, rn, rm, q, U, opcode == 10);
+            return true;
+        }
+        if ((opcode == 0 or opcode == 2 or (opcode == 4 and !U)) and size < 3) {
+            // Signed halving subtraction is ceil((n + ~m) / 2).
+            emitHalving(e, rd, rn, rm, size, q, U, opcode != 0, opcode == 4);
+            return true;
+        }
+        if (opcode == 23 and !U and (size < 3 or q)) {
+            const es: usize = @as(usize, 1) << @intCast(size);
+            const count: usize = (if (q) @as(usize, 16) else 8) / es;
+            var even: [16]u8 = [_]u8{0} ** 16;
+            var odd: [16]u8 = [_]u8{0} ** 16;
+            for (0..count) |i| {
+                const source = if (i < count / 2) @as(usize, 0) else 16;
+                const pair = (i % (count / 2)) * 2;
+                for (0..es) |j| {
+                    even[i * es + j] = @intCast(source + pair * es + j);
+                    odd[i * es + j] = @intCast(source + (pair + 1) * es + j);
+                }
             }
-            if (!q) zeroTop(e, rd, true);
+            b.get(L_CPU);
+            vget(e, rn);
+            vget(e, rm);
+            b.emit(.{sv(S.shuffle)});
+            b.bytes(&even);
+            vget(e, rn);
+            vget(e, rm);
+            b.emit(.{sv(S.shuffle)});
+            b.bytes(&odd);
+            b.emit(.{sv(S.add[size])});
+            vput(e, rd, q);
+            return true;
+        }
+        if (opcode == 14 and size < 3) {
+            b.get(L_CPU);
+            vget(e, rn);
+            vget(e, rm);
+            b.emit(.{sv(S.sub[size])});
+            vget(e, rm);
+            vget(e, rn);
+            b.emit(.{sv(S.sub[size])});
+            vget(e, rn);
+            vget(e, rm);
+            b.emit(.{ sv(if (U) S.gt_u[size] else S.gt_s[size]), sv(S.bitselect) });
+            vput(e, rd, q);
             return true;
         }
         if (opcode >= 24) {
@@ -667,9 +750,16 @@ fn emitVector(e: *Emit, w: u32) bool {
         const opcode = bits(w, 11, 5);
         const amount = (immh << 3) | bits(w, 16, 3);
         const shr = 2 * bitsT - amount;
-        if ((opcode == 18 or opcode == 19) and esz < 2) {
-            checkShiftNarrowSaturation(e, rn, esz, shr, opcode == 19, U);
-            putShiftNarrow(e, rd, rn, esz, shr, opcode == 19, U, q);
+        if (opcode >= 16 and opcode <= 19 and esz < 2) {
+            const kind: NarrowKind = if (opcode < 18) (if (U) .signed_to_unsigned else return false) else if (U) .unsigned else .signed;
+            checkShiftNarrowSaturation(e, rn, esz, shr, opcode & 1 != 0, kind);
+            putShiftNarrow(e, rd, rn, esz, shr, opcode & 1 != 0, kind, q);
+            return true;
+        }
+        if (opcode == 4 and shr < bitsT) {
+            b.get(L_CPU);
+            emitRoundedShift(e, rn, esz, shr, true, U);
+            vput(e, rd, q);
             return true;
         }
         if (opcode == 20) {
@@ -711,13 +801,15 @@ fn emitVector(e: *Emit, w: u32) bool {
             vput(e, rd, q);
             return true;
         }
-        if (opcode == 8 and !U and (size == 1 or size == 2)) {
+        if (((opcode == 8 and !U) or ((opcode == 0 or opcode == 4) and U)) and (size == 1 or size == 2)) {
             const idx: u8 = @intCast(if (size == 1) (H << 2) | (Lb << 1) | M else (H << 1) | Lb);
             const m: u8 = @intCast(if (size == 1) rmLow else (M << 4) | rmLow);
             b.get(L_CPU);
+            if (opcode != 8) vget(e, rd);
             vget(e, rn);
             vget(e, m);
             b.emit(.{ sv(S.extract_u[size]), idx, sv(S.splat[size]), sv(S.mul[size]) });
+            if (opcode != 8) b.emit(.{sv(if (opcode == 4) S.sub[size] else S.add[size])});
             vput(e, rd, q);
             return true;
         }

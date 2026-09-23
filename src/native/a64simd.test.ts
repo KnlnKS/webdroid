@@ -365,6 +365,15 @@ describe("a64 simd: vector arithmetic", () => {
     expect(I(c, 18)).toEqual([0x7fffffff, -0x80000000, 4, -1]);
     expect(c.fpsr & (1 << 27)).toBe(1 << 27);
   });
+
+  test("sqrshrun rounds signed lanes into both unsigned destination halves", () => {
+    const c = run([0x2f098c20, 0x6f0a8c40, RET], (cpu) => {
+      cpu.vsw.set([-32768, -129, -65, -64, -1, 0, 64, 32767], 8);
+      cpu.vsw.set([-32768, -65, 0, 31, 32, 127, 16320, 32767], 16);
+    });
+    expect([...c.vb.subarray(0, 16)]).toEqual([0, 0, 0, 0, 0, 0, 1, 255, 0, 0, 0, 0, 1, 2, 255, 255]);
+    expect(c.fpsr & (1 << 27)).toBe(1 << 27);
+  });
 });
 
 // frsqrte had no coverage of any kind, here or in the hardware oracle. The architecture fixes the

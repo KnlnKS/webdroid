@@ -191,6 +191,7 @@ pub const Simd = struct {
     pub const sub = [_]u8{ 0x71, 0x91, 0xb1, 0xd1 };
     pub const sub_sat_s = [_]u8{ 0x72, 0x92 };
     pub const sub_sat_u = [_]u8{ 0x73, 0x93 };
+    pub const avgr_u = [_]u8{ 0x7b, 0x9b };
     pub const mul = [_]u8{ 0, 0x95, 0xb5, 0xd5 };
     pub const min_s = [_]u8{ 0x76, 0x96, 0xb6, 0 };
     pub const min_u = [_]u8{ 0x77, 0x97, 0xb7, 0 };
