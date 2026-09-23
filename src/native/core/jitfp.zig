@@ -84,6 +84,33 @@ pub fn emitVfp(e: *jit.Emit(false), w: u32) bool {
     return true;
 }
 
+pub fn emitVfpMemory(e: *jit.Emit(false), w: u32) bool {
+    if (w & 0x0f200000 != 0x0d000000) return false;
+    const cp = bits(w, 8, 4);
+    if (cp != 10 and cp != 11) return false;
+    const rn = bits(w, 16, 4);
+    if (rn == 15) return false;
+    const dp = cp == 11;
+    const d = if (dp) (bits(w, 22, 1) << 4) | bits(w, 12, 4) else (bits(w, 12, 4) << 1) | bits(w, 22, 1);
+    const slot = if (dp) d * 2 else d;
+    const offset = (w & 255) * 4;
+    const load_mem = bits(w, 20, 1) != 0;
+    const b = e.b;
+    b.emit(.{ get(jit.L_X + rn), c32(@intCast(offset)), if (bits(w, 23, 1) != 0) O.i32_add else O.i32_sub, set(L_A) });
+    e.checkLowAddress();
+    for (0..(if (dp) @as(usize, 2) else 1)) |i| {
+        const off: u32 = @intCast(i * 4);
+        const reg_off = OFF_V + slot * 4 + off;
+        if (load_mem) {
+            b.emit(.{ get(L_CPU), get(L_A), mo(O.i32_load, off), mo(O.i32_store, reg_off) });
+        } else {
+            e.storeCheck(off, 4);
+            b.emit(.{ get(L_A), get(L_CPU), mo(O.i32_load, reg_off), mo(O.i32_store, off) });
+        }
+    }
+    return true;
+}
+
 pub fn emitSimd(e: *Emit, w: u32, pc: u32, k: u32) void {
     if (!is(w, 0x5000_0000, 0x1000_0000)) {
         if (!emitVector(e, w)) e.fallback(pc, k);

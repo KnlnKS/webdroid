@@ -50,10 +50,23 @@ fn thumbCondTarget(pc: u32, h: u32, h2: u32) u32 {
 
 const ItBody = union(enum) {
     move_imm: struct { d: u32, imm: u32 },
+    move_half: WideMove,
     move_reg: struct { d: u32, m: u32 },
     shift_left: struct { d: u32, m: u32, amount: u32 },
     load_byte: struct { d: u32, n: u32, offset: u32 },
 };
+const WideMove = struct { d: u32, imm: u32, top: bool };
+fn wideMove(h: u32, h2: u32) ?WideMove {
+    const op = h & 0xfbf0;
+    const d = bits(h2, 8, 4);
+    if ((op != 0xf240 and op != 0xf2c0) or h2 & 0x8000 != 0 or d == 15) return null;
+    return .{ .d = d, .imm = ((h & 15) << 12) | (((h >> 10) & 1) << 11) | (((h2 >> 12) & 7) << 8) | (h2 & 255), .top = op == 0xf2c0 };
+}
+fn emitWideMove(e: *Emit, move: WideMove) void {
+    const b = e.b;
+    if (move.top) b.emit(.{ get(L_X + move.d), c32(0xffff), O.i32_and, c32(@bitCast(move.imm << 16)), O.i32_or }) else b.i32c(@bitCast(move.imm));
+    setR(e, move.d);
+}
 const ItOp = struct {
     pc: u32,
     cc: u8,
@@ -71,6 +84,7 @@ fn itBody(at: u32, word: u32, len: u32) ?ItBody {
         }
         if (word == 0xf04f and second & 0xf000 == 0 and bits(second, 8, 4) < 15)
             return .{ .move_imm = .{ .d = bits(second, 8, 4), .imm = second & 255 } };
+        if (wideMove(word, second)) |move| return .{ .move_half = move };
         return null;
     }
     if (word & 0xf800 == 0x2000) return .{ .move_imm = .{ .d = (word >> 8) & 7, .imm = word & 255 } };
@@ -477,7 +491,7 @@ fn armBody(e: *Emit, w: u32, pc: u32, k: u32) bool {
             return false;
         },
         else => {
-            if (!jitfp.emitVfp(e, w)) e.fallback(pc, k);
+            if (!jitfp.emitVfp(e, w) and !jitfp.emitVfpMemory(e, w)) e.fallback(pc, k);
             return false;
         },
     }
@@ -703,6 +717,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                     e.pc = op.pc;
                     switch (op.body) {
                         .move_imm => |v| b.emit(.{ c32(@intCast(v.imm)), set(L_X + v.d) }),
+                        .move_half => |v| emitWideMove(e, v),
                         .move_reg => |v| b.emit(.{ get(L_X + v.m), set(L_X + v.d) }),
                         .shift_left => |v| b.emit(.{ get(L_X + v.m), c32(@intCast(v.amount)), O.i32_shl, set(L_X + v.d) }),
                         .load_byte => |v| {
@@ -763,6 +778,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             return false;
         }
         if (h & 0xff00 == 0xee00 and jitfp.emitVfp(e, h << 16 | h2)) return false;
+        if (h & 0xff00 == 0xed00 and jitfp.emitVfpMemory(e, h << 16 | h2)) return false;
         if (h & 0xff80 == 0xfb80) {
             const op = bits(h, 4, 3);
             const dual = op == 6 and h2 & 0xf0 == 0x60;
@@ -889,15 +905,20 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                 return false;
             }
         }
-        const wideMove = h & 0xfbf0;
-        if ((wideMove == 0xf240 or wideMove == 0xf2c0) and h2 & 0x8000 == 0) {
-            const d = (h2 >> 8) & 15;
-            if (d < 15) {
-                const imm = ((h & 15) << 12) | (((h >> 10) & 1) << 11) | (((h2 >> 12) & 7) << 8) | (h2 & 255);
-                if (wideMove == 0xf2c0) b.emit(.{ get(L_X + d), c32(0xffff), O.i32_and, c32(@bitCast(imm << 16)), O.i32_or }) else b.i32c(@bitCast(imm));
+        if ((h & 0xff80) == 0xfa00 and h2 & 0xf0f0 == 0xf000 and h & 0x10 == 0) {
+            const n = h & 15;
+            const d = bits(h2, 8, 4);
+            const m = h2 & 15;
+            if (n < 15 and d < 15 and m < 15) {
+                b.emit(.{ get(L_X + n), set(L_B), get(L_X + m), c32(255), O.i32_and, set(L_A) });
+                shiftByReg(e, bits(h, 5, 2), false);
                 setR(e, d);
                 return false;
             }
+        }
+        if (wideMove(h, h2)) |move| {
+            emitWideMove(e, move);
+            return false;
         }
         if (thumbCall(h, h2)) {
             const Sb = (h >> 10) & 1;
