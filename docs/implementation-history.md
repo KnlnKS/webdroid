@@ -72,6 +72,24 @@ reproduce a performance regression, but a single pair does not explain the varia
 The full serialized E2E matrix and a matched CPU microbenchmark were not run for this
 pass. Goldens were not changed.
 
+Follow-up on the six retained graphics cases: the same 20-case seed now has zero
+differences, as does a fresh 1,000-case API run. The causes were inverse Path fill
+types being discarded, non-AA clip bounds rounding outward instead of to the
+nearest device pixel, reversed arc bounds being normalized like oval bounds,
+zero-width stroked round rectangles being dropped, Canvas2D `source-in` clearing
+outside a filled rectangle, and bitmap hairline coverage under compound transforms.
+The bitmap hairline path follows Android Skia's 26.6 endpoint and 16.16 slope
+stepping for plain non-AA rectangle strokes. The inverse nonzero Path uses the
+existing flattened path boolean operation, so curved edges remain approximate.
+Other blend shapes and filtered hairlines retain the general Canvas2D path.
+
+The follow-up passed typecheck, all 1,325 unit tests, graphics fuzz smoke, 33/33
+Canvas and 43/43 Path framework native registration checks, and serialized
+FitNotes/Calculator M fast E2E flows. A paired visible-browser comparison for
+software bitmap contexts (`willReadFrequently`) passed both flows with either
+setting: 15.4 seconds for the new setting and 15.6 for the old one. This small
+sample establishes no app-level speedup. No goldens changed.
+
 ## JVM, DEX and process ownership
 
 - Main-thread identity is not main-queue ownership. Boot, providers, application
