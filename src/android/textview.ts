@@ -611,6 +611,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     this.layoutWidthFor = w;
   },
   "onDraw(Landroid/graphics/Canvas;)V": async function (this: JTextView, cv: JCanvas) {
+    if (this.width() <= 0 || this.height() <= 0) return;
     const thread = curThread, ctx = cv.ctx;
     const display = this.displayText();
     const resolved = vcallOn(thread, this, "getTextAlignment", "()I");
@@ -649,7 +650,9 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const vg = gravityV(this.gravityT), height = Math.max(layoutHeight(layout), this.textHeight(1));
     const y = vg === 16 ? (contentB - contentT - height) / 2 + contentT : vg === 80 ? contentB - height : contentT;
     this.paintT.color = cslColor(showHint ? this.hintColors ?? this.colors : this.colors, this.drawableState());
-    ctx.save(); ctx.translate(contentL, y);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, 0, this.width(), this.height()); ctx.clip();
+    ctx.translate(contentL, y);
     try {
       const drawn = callOn(thread, () => drawTextViewLayout(layout, cv, hg));
       if (drawn instanceof Promise) await drawn;

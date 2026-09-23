@@ -1,7 +1,7 @@
 import { isRecording, recordOrRun } from "./recording";
 import { perf } from "../perf";
 import { TV } from "./axml";
-import { setInvalidateHook, JRect, JCanvas, JMatrix, JOutline, matMul, rotM, type JPoint } from "./graphics";
+import { setInvalidateHook, JRect, JCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, type JPoint } from "./graphics";
 import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallOn, vcallMaybe, after, idHash, box, JFloat, curThread } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize } from "./drawable";
@@ -761,9 +761,12 @@ export async function drawView(v: JView, cv: JCanvas, parent?: JViewGroup) {
     }
     if (v.layerType && w > 0 && h > 0) await drawLayered(v, cv, w, h);
     else {
-      ctx.beginPath();
-      ctx.rect(0, 0, w, h);
-      ctx.clip();
+      if (w <= 0 || h <= 0) clipEmptyCanvas(ctx);
+      else {
+        ctx.beginPath();
+        ctx.rect(0, 0, w, h);
+        ctx.clip();
+      }
       await drawSemantic(v, cv);
     }
   } catch (e) {
