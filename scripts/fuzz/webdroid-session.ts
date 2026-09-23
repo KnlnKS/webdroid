@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { device } from "../../src/shell/config";
+import { isWebdroidProcessFrame } from "../../tests/e2e/lib/processes";
 
 export type WebdroidSession = {
   origin: string;
@@ -13,11 +14,7 @@ export type WebdroidSession = {
 
 export type WebdroidOptions = { port?: number; coverage?: boolean; proxyProbeTo?: string };
 
-export const isWebdroidProcessFrame = (url: string, origin: string): boolean =>
-  (() => {
-    const frame = new URL(url), root = new URL(origin);
-    return frame.origin === root.origin && (frame.pathname === "/" || frame.pathname === "/process");
-  })();
+export { isWebdroidProcessFrame };
 
 function freePort(): number {
   const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });

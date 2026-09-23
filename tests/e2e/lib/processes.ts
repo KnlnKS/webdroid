@@ -16,6 +16,11 @@ export type ProcessDiagnostics = {
 
 export type ProcessSnapshot = { url: string; diagnostics: ProcessDiagnostics };
 
+export function isWebdroidProcessFrame(url: string, origin: string): boolean {
+  const frame = new URL(url), root = new URL(origin);
+  return frame.origin === root.origin && (frame.pathname === "/" || frame.pathname === "/process");
+}
+
 export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
   return Promise.all(page.frames().map(async (frame) => {
     let timer: ReturnType<typeof setTimeout> | undefined;

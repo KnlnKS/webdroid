@@ -8,6 +8,8 @@ import { diffImages } from "./lib/diff";
 import { E2E_DIR } from "./lib/util";
 import { apkHashes, flowSchemaHash, repositoryRevision, type CoverageIndex } from "./coverage";
 import { screenParam } from "./types";
+import { BASE_URL } from "./lib/util";
+import { isWebdroidProcessFrame } from "./lib/processes";
 
 const deterministic = FLOWS.filter((flow) => flow.clock !== "live");
 const coverage = process.argv.includes("--coverage");
@@ -20,6 +22,7 @@ type Outcome = { flow: Flow; runs: StepRun[]; errors: string[]; ms: number; cove
 
 function failures(runs: StepRun[]): string[] {
   const errors: string[] = [];
+  const seenProcessErrors = new Set<string>();
   for (const step of runs) {
     const prefix = `${String(step.index).padStart(2, "0")} ${step.id}`;
     if (step.mainLoopWedged) errors.push(`${prefix}: main loop wedged`);
@@ -29,6 +32,21 @@ function failures(runs: StepRun[]): string[] {
     for (const item of step.newMissing ?? []) errors.push(`${prefix}: missing ${item}`);
     for (const item of step.nativeRequired ?? []) errors.push(`${prefix}: native code required ${item}`);
     for (const item of step.newErrors ?? []) errors.push(`${prefix}: ${item}`);
+    const processes = (step.processes ?? []).filter((process) => isWebdroidProcessFrame(process.url, BASE_URL));
+    if (!processes.length) errors.push(`${prefix}: no webdroid process diagnostics`);
+    for (const process of processes) {
+      const diagnostics = process.diagnostics;
+      if (diagnostics.status !== "ok") {
+        errors.push(`${prefix}: ${process.url} diagnostics ${diagnostics.status}`);
+        continue;
+      }
+      for (const item of diagnostics.errors ?? []) {
+        const key = `${process.url}:${item}`;
+        if (seenProcessErrors.has(key)) continue;
+        seenProcessErrors.add(key);
+        if (!(step.newErrors ?? []).includes(item)) errors.push(`${prefix}: ${process.url}: ${item}`);
+      }
+    }
   }
   return errors;
 }
