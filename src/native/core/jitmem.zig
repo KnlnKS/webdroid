@@ -95,6 +95,7 @@ fn vstore(e: *Emit, t: u8, off: u32, sz: u32) void {
     b.emit(.{ vm(S.store8_lane + @as(u8, @intCast(sz)), off), 0 });
 }
 pub fn emitVldrlit(e: *Emit, o: *const a64.Op) void {
+    e.vloaded = 0;
     const a: u32 = @truncate(o.imm);
     const sz: u32 = 2 + o.b;
     e.b.emit(.{ get(L_CPU), c32(0), mo(jit.LD[@min(sz, 3)][0], a), mo(O.i64_store, voff(o.rd)), get(L_CPU) });
@@ -102,6 +103,7 @@ pub fn emitVldrlit(e: *Emit, o: *const a64.Op) void {
     e.b.memop(O.i64_store, voff(o.rd) + 8);
 }
 pub fn emitVmem(e: *Emit, w: u32, pc: u32, k: u32) void {
+    if (w & (1 << 22) != 0) e.vloaded = 0;
     const b = e.b;
     const rt: u8 = @intCast(w & 31);
     const rn: u8 = @intCast(bits(w, 5, 5));

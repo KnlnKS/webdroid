@@ -1206,8 +1206,6 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
                 e.fallback(pc, j + 1);
                 ended = false;
             } else {
-                // Scalar operations cannot change V registers; vector loads and literal loads can.
-                if (wide and (o.kind == .vldrlit or (o.kind == .vmem and o.imm & (1 << 22) != 0))) e.vloaded = 0;
                 ended = switch (isa) {
                     .a64 => e.emitOp(o, pc, j + 1),
                     .arm => jit32.emitArm(&e, pc, j + 1),
