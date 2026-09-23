@@ -13,7 +13,7 @@ function graphicsValue(value: unknown): GraphicsValue | null {
 
 function stateValueEqual(key: string, expected: JsonValue, actual: JsonValue): boolean {
   if ((key === "matrix" || key === "pathBounds" || key === "renderNode") && Array.isArray(expected) && Array.isArray(actual)) {
-    // Android prints float-backed values to fewer decimal places than JSON.stringify does.
+    // The two raster engines round intermediate transforms differently; pixel parity is checked separately.
     return expected.length === actual.length && expected.every((value, index) => {
       const other = actual[index];
       return typeof value === "number" && typeof other === "number" &&
@@ -21,6 +21,25 @@ function stateValueEqual(key: string, expected: JsonValue, actual: JsonValue): b
     });
   }
   return stableJson(expected) === stableJson(actual);
+}
+
+export function graphicsPrecisionDeltas(oracle: ProbeResult, actual: ProbeResult): Record<string, number> {
+  if (oracle.outcome !== "value" || actual.outcome !== "value") return {};
+  const expected = graphicsValue(oracle.value), got = graphicsValue(actual.value);
+  if (!expected || !got) return {};
+  const deltas: Record<string, number> = {};
+  for (const key of ["matrix", "pathBounds", "renderNode"]) {
+    const left = expected[key], right = got[key];
+    if (!Array.isArray(left) || !Array.isArray(right) || !stateValueEqual(key, left, right)) continue;
+    let difference = 0;
+    for (let index = 0; index < left.length; index++) {
+      const value = left[index], other = right[index];
+      if (typeof value === "number" && typeof other === "number" && Math.fround(value) !== Math.fround(other))
+        difference = Math.max(difference, Math.abs(value - other));
+    }
+    if (difference) deltas[key] = difference;
+  }
+  return deltas;
 }
 
 function stateDifferenceKeys(expected: Record<string, JsonValue>, actual: Record<string, JsonValue>): string[] {

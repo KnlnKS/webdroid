@@ -44,6 +44,7 @@ async function campaign(kind: "api" | "graphics"): Promise<void> {
   console.log(`cases ${cases}`);
   const result = await runCampaign({ kind, seed, cases, oracle, out });
   console.log(`${result.failures} differences; ${result.bundles.length} minimized and retained in ${out}`);
+  if (result.precisionDeltas) console.log(`${result.precisionDeltas} tolerated float32 state differences recorded in campaign.json`);
 }
 
 async function smoke(): Promise<void> {

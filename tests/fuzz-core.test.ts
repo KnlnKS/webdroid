@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { PNG } from "pngjs";
 import { serveCases } from "../scripts/fuzz/case-server";
-import { compareResult } from "../scripts/fuzz/compare";
+import { compareResult, graphicsPrecisionDeltas } from "../scripts/fuzz/compare";
 import { generateApiCases, generateGraphicsCases } from "../scripts/fuzz/generate";
 import { injectedProbeFailure } from "../scripts/fuzz/injected";
 import { minimizeCaseBatched, reproducesTwice } from "../scripts/fuzz/minimize";
@@ -67,7 +67,7 @@ describe("fuzz campaign core", () => {
     expect(a.fingerprint).not.toBe(b.fingerprint);
   });
 
-  test("graphics state ignores float serialization noise but preserves exact pixels", () => {
+  test("graphics state reports tolerated float32 differences", () => {
     const input: GraphicsCase = { schemaVersion: 1, id: "float-state", kind: "graphics", width: 1, height: 1, commands: [] };
     const png = PNG.sync.write(new PNG({ width: 1, height: 1 })).toString("base64");
     const state = { width: 1, height: 1, saveCount: 1, center: 0, png,
@@ -75,6 +75,10 @@ describe("fuzz campaign core", () => {
     const result = (value: typeof state): ProbeResult => ({ schemaVersion: 1, id: input.id, kind: "graphics", outcome: "value", value });
     const near = { ...state, matrix: [1, 0.7867723703384399], renderNode: [1, 1, 0.7023937702178955] };
     expect(compareResult(input, result(state), result(near))).toBeNull();
+    expect(graphicsPrecisionDeltas(result(state), result(near))).toEqual({});
+    const rounded = { ...state, matrix: [1, Math.fround(0.7867724) + 5.960464477539063e-8] };
+    expect(compareResult(input, result(state), result(rounded))).toBeNull();
+    expect(graphicsPrecisionDeltas(result(state), result(rounded)).matrix).toBeGreaterThan(0);
     expect(compareResult(input, result(state), result({ ...near, center: 1 }))?.matchKey).toBe("graphics:state:center");
   });
 });
