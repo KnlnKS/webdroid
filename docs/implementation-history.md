@@ -466,6 +466,9 @@ ByteVC1's widening SIMD arithmetic and lane loads. Chromium's CPU profile also s
 `glGetError` driver calls, but skipping them would change GLES error behavior; no shortcut was
 kept. Chrome DevTools MCP could not attach because its shared profile was already locked; the
 existing CDP harness collected this profile instead.
+Another eight-second playback probe observed 7,073 JNI `GetStringUTFChars` calls but 5,473
+distinct values; only one value had substantial reuse. Caching returned string buffers would
+add ownership and lifetime complexity for little measured benefit, so no JNI change was kept.
 
 ## TikTok video playback follow-up — 2026-09-23
 
