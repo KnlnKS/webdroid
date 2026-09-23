@@ -6418,3 +6418,18 @@ with its test. Shorter native slices had previously lowered event-loop delay whi
 reducing observed video throughput; no new scheduling override was retained. Absent
 app/vendor classes and unsupported Android surfaces need contract evidence before
 implementation, rather than placeholders or fabricated success.
+
+After production code was frozen, the serialized full E2E matrix exited zero: 183/183
+steps rendered across 13 flows in 995.7 seconds. No main-loop wedges, required natives or
+layout errors appeared. TikTok again completed 13/13 with four realm diagnostics on each
+step, no layout/draw errors and only the same nine launch-time vendor probes. Its active
+video windows produced 3.2–9.2 EGL frames/s, and swipes took 1.85–2.17 seconds to finish.
+YouTube retains two control settling timeouts and seven Matrix draw errors, matching the
+prior recorded count; Lichess retains Flutter pthread failures. Other per-flow missing
+queries are unchanged platform/vendor observations. FitNotes scored 39.80% mean content
+difference versus the prior 39.82%. Mihon onboarding's theme preview colors changed while
+the compared screen geometry and text remained aligned; its 16.10% content score versus
+the prior 9.08% is a visual difference, not evidence that the A64 decoder JIT path changed
+Mihon's UI. Harmonic uses different live stories and scored 27.14% versus 32.01%; no
+golden was updated. The final matrix supports broad rendering continuity but does not
+establish original-rate TikTok playback or sub-150 ms interaction.
