@@ -1,6 +1,6 @@
 // The NDK's closed host libraries: libandroid (windows over the shell's surfaces, per-thread
-// loopers, sensors, assets), libOpenSLES (no engine, so audio takes the AudioTrack path) and
-// libmediandk (nothing). A name they lack is NULL from dlsym, as on a device without it.
+// loopers, sensors, assets) and libOpenSLES (no engine, so audio takes the AudioTrack path).
+// A name they lack is NULL from dlsym, as on a device without it.
 
 import { mem, guestAt } from "./mem";
 import { hostLib, hostData, cstr, stp, retF, type HostFn, type ArgReader } from "./host";
@@ -279,5 +279,4 @@ export function ndkInit(): void {
     mem.st32(p, 0x1000 + i);
     hostData("libOpenSLES.so", "SL_IID_" + n, p);
   }
-  hostLib("libmediandk.so", {}, { closed: true });
 }

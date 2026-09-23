@@ -8,6 +8,7 @@ import { gles1Init } from "./gles1";
 import { gles3Init } from "./gles3";
 import { eglInit } from "./egl";
 import { aaudioInit } from "./aaudio";
+import { mediaInit } from "./media";
 import { ndkInit } from "./libandroid";
 import { bitmapInit } from "./bitmap";
 import { cpuFor, setA64, isA64 } from "./cpu";
@@ -29,6 +30,7 @@ function nativeInit(abi: string): void {
   gles3Init();
   eglInit();
   ndkInit();
+  mediaInit();
   aaudioInit();
   bitmapInit();
   resolveByExport(resolveGlobalOrNull);
