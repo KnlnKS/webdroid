@@ -543,3 +543,25 @@ decoder initially spinning on empty output while eight WebCodecs inputs were pen
 then a surface-backed decoder rendering 30 of 62 dequeued frames before cleanup.
 The intro's missing pixels remain unresolved; the measured level-one flow skipped it
 with a tap.
+
+## Cut the Rope JIT code-quality follow-up — 2026-09-23
+
+Thumb PUSH.W/POP.W now use the ARM block-transfer emitter because their register-list
+encodings are identical. Thumb SBFX/UBFX/BFI/BFC likewise use the ARM media emitter
+after encoding their operands as ARM fields. This removes 25 net lines of duplicate
+lowering. The shared block-transfer path checks the low-address guard before memory
+access, preserving the prior Thumb fault behavior. ARM interpreter/JIT parity tests
+passed (77 tests), and Cut smoke-compiled 64,465 classes with zero method failures.
+
+A clean headless level-one capture presented 380 frames in 12.02 seconds (31.6 FPS)
+with advancing ticks and no gameplay JNI miss, layout, draw or GL error. The
+persistent Cronet fault was in the excluded ad network path. This
+single run confirms the 15 FPS target on the tutorial screen, not a statistically
+stable improvement over the earlier 27.5 FPS headless sample.
+
+The final serialized E2E matrix captured 183/183 steps across 13 flows in 904.9
+seconds, with no main-loop wedge, required native call or GL error. YouTube recorded
+11 layout errors and four instances of its existing `Matrix.mapRect` draw failure;
+the layout errors were absent from the preceding gate. Their cause is unconfirmed,
+and no YouTube-specific investigation was run under the Cut-only testing scope.
+No visual golden changed.
