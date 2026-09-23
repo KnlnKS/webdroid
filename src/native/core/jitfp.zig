@@ -326,18 +326,20 @@ fn emitSaturatedNarrow(e: *Emit, rn: u8, size: u32, kind: NarrowKind) void {
     vectorConst(e, size + 1, 0);
     e.b.emit(.{sv(if (kind == .signed) S.narrow_s[size] else S.narrow_u[size])});
 }
-fn checkNarrowSaturation(e: *Emit, rn: u8, size: u32, kind: NarrowKind) void {
+fn writeNarrow(e: *Emit, rd: u8, q: bool) void {
+    const b = e.b;
+    b.get(L_CPU);
+    b.get(jit.L_VA);
+    if (q) b.emit(.{ vm(S.store64_lane, voff(rd) + 8), 0 }) else vput(e, rd, false);
+}
+fn putNarrow(e: *Emit, rd: u8, rn: u8, size: u32, q: bool, kind: NarrowKind) void {
     emitSaturatedNarrow(e, rn, size, kind);
-    e.b.emit(.{sv(S.extend_low_s[size] + @as(u8, if (kind == .signed) 0 else 2))});
+    e.b.set(jit.L_VA);
+    e.b.emit(.{ get(jit.L_VA), sv(S.extend_low_s[size] + @as(u8, if (kind == .signed) 0 else 2)) });
     vget(e, rn);
     e.b.emit(.{ sv(S.ne[size + 1]), sv(S.any_true) });
     setQIf(e);
-}
-fn putNarrow(e: *Emit, rd: u8, rn: u8, size: u32, q: bool, kind: NarrowKind) void {
-    const b = e.b;
-    b.get(L_CPU);
-    emitSaturatedNarrow(e, rn, size, kind);
-    if (q) b.emit(.{ vm(S.store64_lane, voff(rd) + 8), 0 }) else vput(e, rd, false);
+    writeNarrow(e, rd, q);
 }
 fn emitRoundedShift(e: *Emit, rn: u8, size: u32, amount: u32, round: bool, unsigned: bool) void {
     const shift = if (unsigned) S.shr_u[size] else S.shr_s[size];
@@ -349,8 +351,7 @@ fn emitRoundedShift(e: *Emit, rn: u8, size: u32, amount: u32, round: bool, unsig
     vectorConst(e, size, 1);
     e.b.emit(.{ sv(S.and_), sv(S.add[size]) });
 }
-fn emitShiftNarrow(e: *Emit, rn: u8, size: u32, amount: u32, round: bool, kind: NarrowKind) void {
-    emitRoundedShift(e, rn, size + 1, amount, round, kind == .unsigned);
+fn narrowShifted(e: *Emit, size: u32, kind: NarrowKind) void {
     if (kind == .signed_to_unsigned) {
         vectorConst(e, size + 1, 0);
         e.b.emit(.{sv(S.max_s[size + 1])});
@@ -362,18 +363,16 @@ fn emitShiftNarrow(e: *Emit, rn: u8, size: u32, amount: u32, round: bool, kind: 
     vectorConst(e, size + 1, 0);
     e.b.emit(.{sv(if (kind == .signed) S.narrow_s[size] else S.narrow_u[size])});
 }
-fn checkShiftNarrowSaturation(e: *Emit, rn: u8, size: u32, amount: u32, round: bool, kind: NarrowKind) void {
-    emitShiftNarrow(e, rn, size, amount, round, kind);
-    e.b.emit(.{sv(S.extend_low_s[size] + @as(u8, if (kind == .signed) 0 else 2))});
-    emitRoundedShift(e, rn, size + 1, amount, round, kind == .unsigned);
-    e.b.emit(.{ sv(S.ne[size + 1]), sv(S.any_true) });
-    setQIf(e);
-}
 fn putShiftNarrow(e: *Emit, rd: u8, rn: u8, size: u32, amount: u32, round: bool, kind: NarrowKind, q: bool) void {
     const b = e.b;
-    b.get(L_CPU);
-    emitShiftNarrow(e, rn, size, amount, round, kind);
-    if (q) b.emit(.{ vm(S.store64_lane, voff(rd) + 8), 0 }) else vput(e, rd, false);
+    emitRoundedShift(e, rn, size + 1, amount, round, kind == .unsigned);
+    b.emit(.{tee(jit.L_VB)});
+    narrowShifted(e, size, kind);
+    b.set(jit.L_VA);
+    b.emit(.{ get(jit.L_VA), sv(S.extend_low_s[size] + @as(u8, if (kind == .signed) 0 else 2)), get(jit.L_VB),
+        sv(S.ne[size + 1]), sv(S.any_true) });
+    setQIf(e);
+    writeNarrow(e, rd, q);
 }
 fn shuffle(e: *Emit, rn: u8, rm: u8, lanes: *const [16]u8) void {
     e.b.get(L_CPU);
@@ -914,7 +913,6 @@ fn emitVector(e: *Emit, w: u32) bool {
         }
         if ((opcode == 20 or (opcode == 18 and U)) and size < 2) {
             const kind: NarrowKind = if (opcode == 18) .signed_to_unsigned else if (U) .unsigned else .signed;
-            checkNarrowSaturation(e, rn, size, kind);
             putNarrow(e, rd, rn, size, q, kind);
             return true;
         }
@@ -971,7 +969,6 @@ fn emitVector(e: *Emit, w: u32) bool {
         }
         if (opcode >= 16 and opcode <= 19 and esz < 2) {
             const kind: NarrowKind = if (opcode < 18) (if (U) .signed_to_unsigned else return false) else if (U) .unsigned else .signed;
-            checkShiftNarrowSaturation(e, rn, esz, shr, opcode & 1 != 0, kind);
             putShiftNarrow(e, rd, rn, esz, shr, opcode & 1 != 0, kind, q);
             return true;
         }
