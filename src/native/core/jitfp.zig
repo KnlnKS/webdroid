@@ -389,14 +389,28 @@ fn promoteF32Half(e: *Emit, reg: u8, high: bool) void {
     if (high) e.b.emit(.{ sv(S.extract_u[3]), @as(u8, 1), sv(S.splat[3]) });
     e.b.emit(.{sv(S.f64x2_promote_low_f32x4)});
 }
-fn emitFma32Half(e: *Emit, rd: u8, rn: u8, rm: u8, high: bool, subtract: bool) void {
+fn emitFma32Half(e: *Emit, rd: u8, rn: u8, rm: u8, high: bool, subtract: bool, element: ?u8) void {
     const b = e.b;
     promoteF32Half(e, rn, high);
     if (subtract) b.emit(.{sv(S.fneg[1])});
-    promoteF32Half(e, rm, high);
+    if (element) |idx| {
+        vget(e, rm);
+        b.emit(.{ sv(S.fextract[0]), idx, sv(S.fsplat[0]), sv(S.f64x2_promote_low_f32x4) });
+    } else promoteF32Half(e, rm, high);
     b.emit(.{sv(S.fmul[1])});
     promoteF32Half(e, rd, high);
     b.emit(.{ sv(S.fadd[1]), sv(S.f32x4_demote_f64x2_zero) });
+}
+fn emitFma32(e: *Emit, rd: u8, rn: u8, rm: u8, q: bool, subtract: bool, element: ?u8) void {
+    const b = e.b;
+    b.get(L_CPU);
+    emitFma32Half(e, rd, rn, rm, false, subtract, element);
+    if (q) {
+        emitFma32Half(e, rd, rn, rm, true, subtract, element);
+        b.emit(.{sv(S.shuffle)});
+        b.bytes(&[_]u8{ 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23 });
+    }
+    vput(e, rd, q);
 }
 fn emitVector(e: *Emit, w: u32) bool {
     const b = e.b;
@@ -632,14 +646,7 @@ fn emitVector(e: *Emit, w: u32) bool {
             const fv = size & 2 != 0;
             const f: u32 = @intFromBool(dp);
             if (opcode == 25 and !U and !dp) {
-                b.get(L_CPU);
-                emitFma32Half(e, rd, rn, rm, false, fv);
-                if (q) {
-                    emitFma32Half(e, rd, rn, rm, true, fv);
-                    b.emit(.{sv(S.shuffle)});
-                    b.bytes(&[_]u8{ 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23 });
-                }
-                vput(e, rd, q);
+                emitFma32(e, rd, rn, rm, q, fv, null);
                 return true;
             }
             if (opcode == 27 and !U) {
@@ -824,6 +831,12 @@ fn emitVector(e: *Emit, w: u32) bool {
             vget(e, @intCast((M << 4) | rmLow));
             b.emit(.{ sv(S.fextract[f]), idx, sv(S.fsplat[f]), sv(S.fmul[f]) });
             vput(e, rd, q);
+            return true;
+        }
+        if ((opcode == 1 or opcode == 5) and size == 2) {
+            const idx: u8 = @intCast((H << 1) | Lb);
+            const m: u8 = @intCast((M << 4) | rmLow);
+            emitFma32(e, rd, rn, m, q, opcode == 5, idx);
             return true;
         }
         if (((opcode == 8 and !U) or ((opcode == 0 or opcode == 4) and U)) and (size == 1 or size == 2)) {
