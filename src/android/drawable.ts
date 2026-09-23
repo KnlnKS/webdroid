@@ -212,8 +212,9 @@ export class JColorDrawable extends JDrawable {
     if (!(this.color >>> 24) || this.alpha === 0) return;
     const ctx = cv.ctx;
     ctx.save();
-    ctx.globalAlpha *= this.alpha / 255;
-    ctx.fillStyle = cssColor(this.tintMatrix ? matrixColor(this.tintMatrix, this.color) : this.tint ?? this.color);
+    const color = this.tintMatrix ? matrixColor(this.tintMatrix, this.color) : this.tint ?? this.color;
+    const alpha = ((color >>> 24) * (this.alpha + (this.alpha >>> 7))) >>> 8;
+    ctx.fillStyle = cssColor((alpha << 24) | (color & 0xffffff));
     ctx.fillRect(this.bounds.left, this.bounds.top, this.bounds.right - this.bounds.left, this.bounds.bottom - this.bounds.top);
     ctx.restore();
   }
