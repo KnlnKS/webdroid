@@ -219,8 +219,9 @@ export function tryBitmapLine(canvas: JCanvas, paint: JPaint,
 
 export function tryBitmapPath(canvas: JCanvas, paint: JPaint, path: JPath): boolean {
   const strokeInverse = path.inverseFill && paint.style === 1 && paint.strokeWidth > 0 && !paint.dash;
-  let fillInverse = path.inverseFill && path.fillRule === "nonzero" && paint.style === 0;
-  if (path.inverseFill && path.fillRule === "evenodd" && paint.style === 0) {
+  const fillsOnly = paint.style === 0 || paint.style === 2 && paint.strokeWidth === 0;
+  let fillInverse = path.inverseFill && path.fillRule === "nonzero" && fillsOnly;
+  if (path.inverseFill && path.fillRule === "evenodd" && fillsOnly) {
     const m = canvas.ctx.getTransform();
     fillInverse = m.a * m.d === m.b * m.c;
   }
