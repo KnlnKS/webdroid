@@ -571,6 +571,29 @@ boundary. Neither supplied a stable clip or source-frame timestamps. A shorter 6
 zeroing sequence was also tried and removed because paired decoder and kernel timings did not
 show a reliable gain.
 
+Doubling the per-region instruction cap from 320 to 640 preserved more straight-line native
+decoder work in each compiled region. Two uncontended paired comparisons on the same 332
+ByteVC1 packets decoded 320 frames each time. Candidate native medians were 2,459 and 2,424
+ms, against 2,530 and 2,546 ms with the old cap; region counts fell from 1,240 to about 1,220.
+The A64 SIMD, oracle and cache checks passed (573 tests), and the next TikTok-only replay
+rendered 13/13 steps without a required native or rendering error. Its video steps presented
+17.5 and 6.3 EGL swaps/s on different clips. The latter used 3.19 of 6.86 seconds in native
+execution, so its low rate cannot be attributed solely to native CPU time. Source FPS was
+not captured.
+
+A full-Chromium hardware sample on another live ByteVC2 clip presented 134 EGL swaps in 12.05
+seconds while spending 6.76 seconds in native execution. Its native profile reached bitstream
+routines containing A64 `RBIT` and `REV`, which still fell back to the interpreter. The JIT now
+lowers the full bit/byte reversal and leading-sign-count family for 32 and 64 bit registers.
+Existing interpreter/JIT parity checks passed (25 A64 tests, 2,229 assertions). A fixed
+one-million-iteration bit-reversal loop fell from roughly 27–30 to 16–18 ms. The captured
+ByteVC1 decoder showed no reliable whole-decoder gain, and no fixed ByteVC2 capture was
+available. A fresh TikTok-only replay rendered 13/13 steps, with 21.9 and 9.8 EGL swaps/s on
+different clips, advancing main ticks, four available process diagnostics per video step,
+and no required native, layout, draw or GLES error. The first feed step in that replay had no
+EGL swaps, despite later videos playing. Original-rate playback remains unverified and the
+final full E2E matrix is pending.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only

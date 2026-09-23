@@ -3,9 +3,10 @@
 Branch: `codex/tiktok-playback`. Starting revision: `756491fb`.
 Status: decoder SIMD arithmetic, interleaved loads/stores, vector FMLA, polynomial byte
 multiplication, within-block vector-read caching, zeroed 64-bit vector-result caching, direct
-vector memory transfers, and accumulator reuse are committed. The latest TikTok-only replay
-rendered 13/13 steps with no reached Android API gap or required native. Its two video steps
-presented 17.6 and 21.1 EGL frames/s on different live clips. FFmpeg reported HEVC at 30/1
+vector memory transfers, accumulator reuse, longer JIT regions, and A64 bit/byte reversal
+lowering are committed. The latest TikTok-only replay rendered 13/13 steps with no reached
+Android API gap or required native. Its two video steps presented 21.9 and 9.8 EGL frames/s
+on different live clips. FFmpeg reported HEVC at 30/1
 fps for one earlier stream, not those clips. The serialized
 183/183 E2E matrix predates the latest JIT changes and must be repeated on the final candidate.
 Original-rate playback remains inconsistent.
