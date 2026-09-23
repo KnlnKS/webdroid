@@ -110,13 +110,16 @@ export function hairlineLine(ctx: Context, x0: number, y0: number, x1: number, y
 function samplingRegion(ctx: Context, left: number, top: number, right: number, bottom: number) {
   const m = ctx.getTransform(), det = m.a * m.d - m.b * m.c;
   if (!det || !Number.isFinite(det)) return null;
-  const corners = [[left, top], [right, top], [right, bottom], [left, bottom]]
-    .map(([x, y]) => devicePoint(m, x, y));
-  if (!corners.every(([x, y]) => Number.isFinite(x) && Number.isFinite(y))) return null;
-  const x0 = Math.max(0, Math.floor(Math.min(...corners.map(p => p[0]))));
-  const y0 = Math.max(0, Math.floor(Math.min(...corners.map(p => p[1]))));
-  const x1 = Math.min(ctx.canvas.width, Math.ceil(Math.max(...corners.map(p => p[0]))));
-  const y1 = Math.min(ctx.canvas.height, Math.ceil(Math.max(...corners.map(p => p[1]))));
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of [devicePoint(m, left, top), devicePoint(m, right, top),
+    devicePoint(m, right, bottom), devicePoint(m, left, bottom)]) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    minX = Math.min(minX, x); minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+  }
+  const x0 = Math.max(0, Math.floor(minX)), y0 = Math.max(0, Math.floor(minY));
+  const x1 = Math.min(ctx.canvas.width, Math.ceil(maxX));
+  const y1 = Math.min(ctx.canvas.height, Math.ceil(maxY));
   if ((x1 - x0) * (y1 - y0) > 250_000) return null;
   return { m, det, x0, y0, x1, y1 };
 }

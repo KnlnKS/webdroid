@@ -1805,15 +1805,18 @@ function viewportClipBounds(cv: JCanvas, out: JRect): number {
     const maxY = Math.min(cv.h, Math.ceil(Math.max(...polygon.map(p => p[1]))));
     left = top = Infinity; right = bottom = -Infinity;
     for (let y = minY; y < maxY; y++) {
-      const at = y + 0.5, crossings: number[] = [];
+      const at = y + 0.5;
+      let minX = Infinity, maxX = -Infinity;
       for (let i = 0; i < polygon.length; i++) {
         const [ax, ay] = polygon[i]!, [bx, by] = polygon[(i + 1) % polygon.length]!;
-        if ((ay <= at && at < by) || (by <= at && at < ay))
-          crossings.push(ax + (at - ay) * (bx - ax) / (by - ay));
+        if ((ay <= at && at < by) || (by <= at && at < ay)) {
+          const x = ax + (at - ay) * (bx - ax) / (by - ay);
+          minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        }
       }
-      if (crossings.length < 2) continue;
-      const x0 = Math.max(0, Math.floor(Math.min(...crossings) - 0.5) + 1);
-      const x1 = Math.min(cv.w, Math.ceil(Math.max(...crossings) - 0.5));
+      if (minX === maxX || !Number.isFinite(minX)) continue;
+      const x0 = Math.max(0, Math.floor(minX - 0.5) + 1);
+      const x1 = Math.min(cv.w, Math.ceil(maxX - 0.5));
       if (x0 >= x1) continue;
       left = Math.min(left, x0); right = Math.max(right, x1);
       top = Math.min(top, y); bottom = Math.max(bottom, y + 1);
