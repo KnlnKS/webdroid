@@ -374,6 +374,19 @@ describe("arm decoder", () => {
       expect(Array.from(c.si.slice(44, 48))).toEqual([12, 3, 13, 21]);
     }
   });
+  test("NEON VSWP exchanges D and Q registers in ARM and Thumb mode", () => {
+    const setup = (cpu: Cpu) => { for (let i = 0; i < cpu.si.length; i++) cpu.si[i] = i; };
+    for (const execute of [
+      () => run([0xf3b22027, 0xf3b2404a, BXLR], setup),
+      () => runThumb([0xffb2, 0x2027, 0xffb2, 0x404a, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(4, 6))).toEqual([46, 47]);
+      expect(Array.from(c.si.slice(46, 48))).toEqual([4, 5]);
+      expect(Array.from(c.si.slice(8, 12))).toEqual([20, 21, 22, 23]);
+      expect(Array.from(c.si.slice(20, 24))).toEqual([8, 9, 10, 11]);
+    }
+  });
   test("NEON arithmetic shares D/Q lanes in ARM and Thumb encodings", () => {
     const setup = (cpu: Cpu) => {
       const floats = new Float32Array(cpu.si.buffer, cpu.si.byteOffset, cpu.si.length);

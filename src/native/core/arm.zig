@@ -323,7 +323,14 @@ fn neonPermute(c: *Cpu, w: u32, pc: u32) Status {
     const q = bits(w, 6, 1);
     const size = bits(w, 18, 2);
     const op = bits(w, 7, 2);
-    if (size == 3 or op == 0 or (q != 0 and (d | m) & 1 != 0)) return fault(c, .undefined, w, pc);
+    if (size == 3 or (q != 0 and (d | m) & 1 != 0)) return fault(c, .undefined, w, pc);
+    if (op == 0) {
+        if (size != 0) return fault(c, .undefined, w, pc);
+        for (0..(if (q != 0) @as(usize, 2) else 1)) |i| {
+            std.mem.swap(u64, vreg(u64, c, d + @as(u32, @intCast(i))), vreg(u64, c, m + @as(u32, @intCast(i))));
+        }
+        return .next;
+    }
     const count: usize = if (q != 0) 16 else 8;
     @memcpy(c.v[17][0..count], @as([*]u8, @ptrCast(vreg(u64, c, d)))[0..count]);
     @memcpy(c.v[18][0..count], @as([*]u8, @ptrCast(vreg(u64, c, m)))[0..count]);
