@@ -951,6 +951,20 @@ diagnostics at every step, no required native, wedge, layout or draw error. Its 
 rates varied with content and the last post was a photo, so the run does not establish
 original-rate video playback. The full E2E matrix remains reserved for the final candidate.
 
+The `codex/tiktok-playback` branch was merged into `main` as `5e6744c9` after resolving the
+only textual conflict in `PLAN.md` by retaining both active work summaries. The automatic
+native and TypeScript merges retained the unrelated Thumb JIT, renderer, and scheduling
+changes from `main`. Typecheck, 1,340 unit tests, framework checks, and TikTok and Cut the
+Rope smoke compilation passed, each smoke with zero method failures. The uncontended final
+serialized E2E matrix rendered 183/183 steps in 949.9 seconds. TikTok rendered 13/13 with
+four `ok` process diagnostics per step, no new reached platform API gap, required native,
+wedge, timeout, layout, draw or GL error. Its two live video steps presented 112 and 38 EGL
+swaps in 6.40 and 6.31 seconds (17.5 and 6.0/s). Source frame timing was unavailable, so
+original-rate playback on these clips remains unproved. YouTube retained its two known
+control settle timeouts and `Matrix.mapRect` failure; this run counted 18 draw failures,
+versus seven in the prior `main` run. The count change has no matched live-content
+reproduction. The 12 unavailable Flappy Bird auxiliary snapshots remained.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only

@@ -69,8 +69,16 @@ layout, or draw failure. A matched 30-fps-header HEVC segment presented 268 EGL 
 9.00 seconds, and two other observed steady segments reached 29–30 swaps/s. Other live
 clips presented more slowly, but their source timing was not captured. Original-rate
 playback across demanding clips remains unproved. Fixed decoder comparisons and the
-parallel-worker constraints are recorded in the implementation history. Run the final
-serialized E2E matrix on this merged checkout before declaring integration verified.
+parallel-worker constraints are recorded in the implementation history.
+The merged `main` revision `5e6744c9` passed typecheck, 1,340 unit tests, framework checks,
+and zero-failure TikTok and Cut the Rope smoke compilation. Its uncontended serialized E2E
+matrix rendered 183/183 steps in 949.9 seconds. TikTok rendered 13/13 with four available
+process diagnostics per step and no required native, wedge, timeout, layout, draw or GL error.
+The two live video steps presented 17.5 and 6.0 EGL swaps/s; their source timing is unknown.
+YouTube retained two known control settle timeouts and the `Matrix.mapRect` draw failure;
+the 18 draw failures counted in this run exceed the seven recorded in the prior `main` run.
+That count difference has no matched live-content reproduction. The 12 unavailable Flappy
+Bird auxiliary snapshots also remain.
 
 ---
 
