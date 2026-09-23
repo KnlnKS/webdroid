@@ -498,3 +498,24 @@ runtime error, required native, layout error or draw error. FitNotes still has a
 content pixel difference against its app golden; the fuzzer result does not establish
 whole-app visual parity. The existing browser test's Paint-style assertion now checks
 visible fill/stroke behavior instead of demanding Chrome's exact glyph raster.
+
+## Fuzzer renderer code-quality review — 2026-09-23
+
+CanvasKit loading now falls back to Canvas2D if the optional renderer fails, so an
+asset or Wasm failure cannot abort APK boot. Canvas and TextView now share the same
+Paint eligibility check for bitmap text. Typecheck, 14 focused text/fuzz tests and
+the deterministic fuzz smoke pass after these changes.
+
+The saved 20-case zero-difference graphics campaign has eight matrix-state differences
+if float-backed arrays are compared by exact float32 value. They occur under Android
+Skia versus Canvas2D transform arithmetic while the saved pixels match. The current
+relative tolerance of `2e-6` classifies them as equivalent; the zero-difference claim
+uses that comparison rule. Exact matrix-state parity remains unproven.
+
+The renderer still spreads bitmap-specific Paint checks and offscreen compositing
+across `graphics.ts`, which adds 396 lines and removes 54 on this branch and now has
+2,782 lines. The CanvasKit text path reads, uploads and composites the full bitmap for
+each draw. The color-glyph clip and light-text coverage corrections are empirical. These are
+maintainability, performance and arbitrary-transform compatibility limits for a
+subsequent renderer consolidation, not evidence of differences in the retained
+campaigns.
