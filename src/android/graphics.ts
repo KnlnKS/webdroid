@@ -444,7 +444,10 @@ const paintMethods: NativeSpec["methods"] = {
   "getMaskFilter()Landroid/graphics/MaskFilter;": function (this: JPaint) { return this.maskFilter; },
   "setMaskFilter(Landroid/graphics/MaskFilter;)Landroid/graphics/MaskFilter;": function (this: JPaint, f: JBlurMaskFilter | null) { return this.maskFilter = f; },
   "getColor()I": function (this: JPaint) { return this.color; },
-  "setAlpha(I)V": function (this: JPaint, a: number) { this.color = ((a << 24) | (this.color & 0xffffff)) | 0; },
+  "setAlpha(I)V": function (this: JPaint, a: number) {
+    // The API-33 native path maps -32 to 225 and -1 to 0 before narrowing.
+    this.color = ((((a < 0 ? a + 1 : a) & 255) << 24) | (this.color & 0xffffff)) | 0;
+  },
   "setARGB(IIII)V": function (this: JPaint, a: number, r: number, g: number, b: number) { this.color = ((a & 255) << 24 | (r & 255) << 16 | (g & 255) << 8 | (b & 255)) | 0; },
   "getAlpha()I": function (this: JPaint) { return this.color >>> 24; },
   "setStyle(Landroid/graphics/Paint$Style;)V": function (this: JPaint, s: { ord: number }) { this.style = s?.ord ?? 0; },
