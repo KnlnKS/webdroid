@@ -1,7 +1,13 @@
 # TikTok usability follow-up
 
 Branch: `codex/tiktok-usability`. Starting revision: `9d0bb979`.
-Status: performance improvements and compiled-memory fault parity are committed and verified. Full TikTok parity and the 150 ms target remain unmet.
+Status: performance improvements and compiled-memory fault parity are committed and verified. The `codex/tiktok-playback-20260922` follow-up compiles decoder lane transfers and unsigned halfword shifts, and repairs CopyOnWriteArrayList random-access identity. Full TikTok parity, original-rate playback and the 150 ms target remain unmet.
+
+The final serialized matrix renders 183/183 steps in 969.1 seconds without a
+wedge or required native. TikTok renders 13/13 with advancing ticks, but active
+video remains at 4.7–8.4 EGL frames/s and a swipe action takes 1.95 seconds.
+See the implementation history for the earlier transient consent timeout,
+decoder kernel measurements, and existing YouTube/Lichess failures.
 
 Current pass separates cold navigation, warmed input and decoded playback; profiles JavaScript
 allocation/GC, method preparation, native execution, scheduling and rendering. Keep only measured

@@ -10,7 +10,35 @@ afterAll(() => setA64(false));
 
 const I = (c: { si: Int32Array }, v: number) => [c.si[4 * v], c.si[4 * v + 1], c.si[4 * v + 2], c.si[4 * v + 3]];
 
+test("USHL halfword lanes handle signed shift counts and destination aliasing", () => {
+  const c = run([0x6e614465, 0x2e614463, RET], cpu => {
+    cpu.vw.set([0x8001, 0x00ff, 0xffff, 0x1234, 0x0080, 0xffff, 1, 0x7777], 8 * 3);
+    cpu.vw.set([0xff, 3, 0xf0, 16, 1, 0xf1, 15, 0x80], 8);
+  });
+  expect([...c.vw.subarray(8 * 5, 8 * 6)]).toEqual([0x4000, 0x07f8, 0, 0, 0x0100, 1, 0x8000, 0]);
+  expect([...c.vw.subarray(8 * 3, 8 * 4)]).toEqual([0x4000, 0x07f8, 0, 0, 0, 0, 0, 0]);
+});
+
 describe("a64 simd: memory", () => {
+  test("multi-register lanes preserve wraparound, writeback and stores across tiers", () => {
+    const buf = pattern();
+    const c = run([
+      0x0d60e13c, // ld4r { v28.8b, v29.8b, v30.8b, v31.8b }, [x9]
+      0x0dff913f, // ld2 { v31.s, v0.s }[1], [x9], #8
+      0x0d40693d, // ld3 { v29.h, v30.h, v31.h }[1], [x9]
+      0x0dbf913f, // st2 { v31.s, v0.s }[1], [x9], #8
+      RET,
+    ], cpu => {
+      cpu.w[18] = buf + 256;
+      for (let i = 8; i < 16; i++) mem.u8[buf + 256 + i] = i;
+    });
+    expect(c.w[18] >>> 0).toBe(buf + 272);
+    expect(I(c, 28)).toEqual([0, 0, 0, 0]);
+    expect(I(c, 31)[1]).toBe(0x03020100);
+    expect(I(c, 0)[1]).toBe(0x07060504);
+    expect([...mem.u8.subarray(buf + 264, buf + 272)]).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
   test("every width, addressing mode, pair, structure and replicating load", () => {
     const buf = pattern();
     const c = run([

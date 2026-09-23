@@ -20,6 +20,7 @@ const sv = wasm.simd;
 const vm = wasm.vm;
 const L_CPU = jit.L_CPU;
 const L_A = jit.L_A;
+const L_B = jit.L_B;
 const OFF_V = @offsetOf(cpu.Cpu, "v");
 
 inline fn voff(n: u8) u32 {
@@ -360,6 +361,21 @@ fn emitVector(e: *Emit, w: u32) bool {
     }
     if (is(w, 0x9f20_0400, 0x0e20_0400)) {
         const opcode = bits(w, 11, 5);
+        if (opcode == 8 and U and size == 1) {
+            for (0..(if (q) @as(usize, 8) else 4)) |i| {
+                vget(e, rm);
+                b.emit(.{ sv(S.extract_s[0]), @as(u8, @intCast(i * 2)), set(L_A) });
+                vget(e, rn);
+                b.emit(.{ sv(S.extract_u[1]), @as(u8, @intCast(i)), set(L_B) });
+                b.emit(.{ get(L_CPU), get(L_CPU), vm(S.load, voff(rd)), get(L_B), get(L_A), O.i32_shl,
+                    get(L_B), c32(0), get(L_A), O.i32_sub, O.i32_shr_u,
+                    get(L_A), c32(0), O.i32_ge_s, O.select,
+                    c32(0), get(L_A), c32(-16), O.i32_gt_s, get(L_A), c32(16), O.i32_lt_s, O.i32_and, O.select,
+                    sv(S.replace[1]), @as(u8, @intCast(i)), vm(S.store, voff(rd)) });
+            }
+            if (!q) zeroTop(e, rd, true);
+            return true;
+        }
         if (opcode >= 24) {
             const dp = size & 1 != 0;
             const fv = size & 2 != 0;
@@ -602,7 +618,7 @@ fn emitVlane(e: *Emit, w: u32) bool {
     const opcode = bits(w, 13, 3);
     const Sb = bits(w, 12, 1);
     const size = bits(w, 10, 2);
-    if (bits(w, 21, 1) != 0 or opcode & 1 != 0) return false;
+    const regs = 1 + bits(w, 21, 1) + (opcode & 1) * 2;
     var esz: u32 = undefined;
     var idx: u32 = 0;
     if (opcode >= 6) {
@@ -620,22 +636,26 @@ fn emitVlane(e: *Emit, w: u32) bool {
     }
     e.getSP(rn);
     e.address();
-    if (opcode >= 6) {
-        b.emit(.{ get(L_CPU), get(L_A), vm(S.load8_splat + @as(u8, @intCast(esz)), 0) });
-        vput(e, rt, q != 0);
-    } else if (Ld) {
-        b.emit(.{ get(L_CPU), get(L_A) });
-        vget(e, rt);
-        b.emit(.{ vm(S.load8_lane + @as(u8, @intCast(esz)), 0), @as(u8, @intCast(idx)), vm(S.store, voff(rt)) });
-    } else {
-        e.storeCheck(0, @as(u32, 1) << @intCast(esz));
-        b.get(L_A);
-        vget(e, rt);
-        b.emit(.{ vm(S.store8_lane + @as(u8, @intCast(esz)), 0), @as(u8, @intCast(idx)) });
+    for (0..regs) |i| {
+        const t: u8 = @intCast((rt + i) & 31);
+        const off: u32 = @as(u32, @intCast(i)) << @intCast(esz);
+        if (opcode >= 6) {
+            b.emit(.{ get(L_CPU), get(L_A), vm(S.load8_splat + @as(u8, @intCast(esz)), off) });
+            vput(e, t, q != 0);
+        } else if (Ld) {
+            b.emit(.{ get(L_CPU), get(L_A) });
+            vget(e, t);
+            b.emit(.{ vm(S.load8_lane + @as(u8, @intCast(esz)), off), @as(u8, @intCast(idx)), vm(S.store, voff(t)) });
+        } else {
+            e.storeCheck(off, @as(u32, 1) << @intCast(esz));
+            b.get(L_A);
+            vget(e, t);
+            b.emit(.{ vm(S.store8_lane + @as(u8, @intCast(esz)), off), @as(u8, @intCast(idx)) });
+        }
     }
     if (post) {
         e.getSP(rn);
-        if (rm == 31) b.i64c(@as(i64, 1) << @intCast(esz)) else e.getX(rm);
+        if (rm == 31) b.i64c(@as(i64, @intCast(regs)) << @intCast(esz)) else e.getX(rm);
         b.byte(O.i64_add);
         e.setSP(rn);
     }

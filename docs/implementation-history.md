@@ -6570,3 +6570,113 @@ An API audit found no additional change justified for the sampled JVM workloads:
   shader and compositing paths without an identified GPU-compute bottleneck. WebGPU is also
   not yet broadly available across browsers.
   [WebGPU](https://developer.mozilla.org/en-US/docs/Web/API/WebGPU_API).
+
+### TikTok playback follow-up — 2026-09-22
+
+Branch `codex/tiktok-playback-20260922` starts at `18fe1097` in an isolated worktree.
+The unchanged TikTok APK runs in full Chrome at 1080×2160 / 480 dpi. The existing
+ByteVC2 decoder sample at `libbyteVC2dec.so+0x53784` executes an A64 `LD2` lane transfer.
+The JIT previously returned every multi-register lane load/store to the interpreter.
+Commit `f6859fb5` extends the owning `emitVlane` path to one through four registers,
+including wraparound, post-index writeback and executable-store checks. It reuses the
+existing lane operations and leaves interpreter semantics intact.
+
+A fixed 200,000-iteration `LD2` kernel executes 600,002 guest instructions in both
+revisions, with identical vector and destination bytes. Across alternating fresh Bun
+processes, warm baseline iterations take roughly 2–5 ms and the candidate 0.2–0.7 ms;
+cold compilation and host contention widen individual samples. This isolates one
+instruction family and cannot be extrapolated to whole-video speed. Typecheck and the
+A64 SIMD/hardware-oracle checks pass (555 tests, 18,238 assertions). The added focused
+test covers multi-register replicate, lane load/store, register wraparound and writeback.
+
+The TikTok-only E2E completes all 13 steps. Every step returns four process diagnostics;
+there are no new missing signatures after launch, required natives, layout or draw
+failures. Nine launch-time vendor class probes remain, as in the earlier capture. The
+active-video steps show 4.1–10.2 EGL frames/s across different live clips; swipes take
+2.7–3.7 seconds to complete. A separate hardware-accelerated Chrome playback capture
+shows a visible video, 45 EGL frames in 10.06 seconds, 100 screen presentations,
+advancing ticks and 6.10 seconds charged to native execution. Its subsequent main-queue
+liveness sentinel times out, so the capture is evidence of playback and load, not a
+healthy latency result. A CPU-profiled second clip advances ticks with 22 EGL frames
+in 8.24 seconds, 6.38 seconds of native work and a passing sentinel. Clip selection
+and profiling overhead make these two runs unsuitable as a matched speed comparison.
+Original video rate and the 150 ms action target remain unmet.
+
+The structural audit found that `emitVlane` already owned lane addressing and store
+invalidation, so extending its register loop avoided a parallel decoder. A trial
+ctype host-call fast path saved only about 4 ms per 100,000 warm calls and was removed
+with its test. Shorter native slices had previously lowered event-loop delay while
+reducing observed video throughput; no new scheduling override was retained. Absent
+app/vendor classes and unsupported Android surfaces need contract evidence before
+implementation, rather than placeholders or fabricated success.
+
+After production code was frozen, the serialized full E2E matrix exited zero: 183/183
+steps rendered across 13 flows in 995.7 seconds. No main-loop wedges, required natives or
+layout errors appeared. TikTok again completed 13/13 with four realm diagnostics on each
+step, no layout/draw errors and only the same nine launch-time vendor probes. Its active
+video windows produced 3.2–9.2 EGL frames/s, and swipes took 1.85–2.17 seconds to finish.
+YouTube retains two control settling timeouts and seven Matrix draw errors, matching the
+prior recorded count; Lichess retains Flutter pthread failures. Other per-flow missing
+queries are unchanged platform/vendor observations. FitNotes scored 39.80% mean content
+difference versus the prior 39.82%. Mihon onboarding's theme preview colors changed while
+the compared screen geometry and text remained aligned; its 16.10% content score versus
+the prior 9.08% is a visual difference, not evidence that the A64 decoder JIT path changed
+Mihon's UI. Harmonic uses different live stories and scored 27.14% versus 32.01%; no
+golden was updated. The final matrix supports broad rendering continuity but does not
+establish original-rate TikTok playback or sub-150 ms interaction.
+
+Further TikTok swipes exposed an uncaught `UnsupportedOperationException` in
+`X/036p.LJJIII`. The app checks whether a `CopyOnWriteArrayList` implements
+`RandomAccess` before choosing indexed removal; the missing interface marker
+selected its iterator-removal path, which correctly rejects mutation. Commit
+`005f94c4` registers its actual `RandomAccess`, `Cloneable`, and `Serializable`
+interfaces without changing snapshot iteration. The focused collection test
+checks identity, indexed removal, and immutable iterator removal. A fresh
+13-step TikTok replay completed without the exception or a required native.
+
+The same ByteVC2 decode path executes `USHL` on unsigned halfword lanes at
+`libbyteVC2dec.so+0x5379c` and `+0x538f0`. Commit `6a778c5b` adds this one
+instruction family to the existing A64 SIMD JIT path, retaining the interpreter
+for other forms. The focused test covers both vector widths, negative and large
+shift counts, lane zeroing, and register aliasing. A fixed 200,000-iteration
+kernel executes 600,002 instructions and yields identical vector/memory state.
+Five fresh baseline samples took 6.89–12.15 ms; candidate samples took
+0.99–1.79 ms. This is an instruction-local result, not a whole-app FPS claim.
+
+Optional `--native-profile` support in `scripts/perf-browser.ts` records hot
+guest PCs without changing emulator execution. A fresh visible TikTok capture
+after the shift change selected ByteVC1, not ByteVC2: 62 EGL frames in 10.09 s
+(6.15 frames/s), 61 presentations, advancing ticks, a passing liveness sentinel,
+8.61 s native time and 6.52 billion guest instructions. This cannot isolate the
+ByteVC2 change. TikTok-only E2E again completed 13/13 with four process
+diagnostics each and no wedge, settle timeout, uncaught exception, layout or draw
+failure. Live video varied from 3.9 to 7.3 EGL frames/s and swipes took
+2.7–5.9 s; content and host load differ from the earlier capture. Typecheck,
+TikTok smoke compilation (462,058 method bodies, zero failures), 557 A64 SIMD
+tests with 18,249 assertions, and seven collection tests with 42 assertions pass.
+The original FPS and 150 ms action targets remain unmet. The fresh flow's
+missing classes are largely vendor probes; observed optional queries do not
+justify fabricated Android delegates. The Chrome session reached and rendered
+the For You feed after approved Terms of Service acceptance.
+
+After these code changes, a serialized full matrix exited zero in 999.6 s and
+rendered 183/183 steps. Its TikTok consent liveness check timed out once while
+a separate full-Chrome TikTok video was running; the next step recovered and
+later video rendered. There was no matching failure in the focused TikTok runs.
+The extra Chrome tab was closed for a repeat with unchanged source. This
+isolates one competing load but does not prove it caused the timeout.
+
+The final serialized matrix exited zero in 969.1 s and rendered all 183 steps
+across 13 flows. All 632 process diagnostic records were available, including
+four per TikTok step; its main-process ticks advanced from 1,578 to 3,376.
+There were no wedges, required native calls or layout errors. TikTok completed
+13/13 without an uncaught exception, draw error, settle timeout or new missing
+signature after launch; the same nine optional vendor probes remain. Its
+active-video steps produced 4.7–8.4 EGL frames/s, and a swipe action phase
+took 1.95 s. YouTube retains two control settling timeouts and eight Matrix
+draw errors (seven in the earlier matrix); Lichess retains Flutter pthread
+failures. FitNotes scored 39.80% mean content difference, Mihon app/onboarding
+42.42%/16.10%, and Harmonic 26.84% with live content variation. Goldens remain
+unchanged. The final run verifies broad rendering continuity but does not
+establish original-rate playback, sub-150 ms interaction, or complete Android
+API coverage.
