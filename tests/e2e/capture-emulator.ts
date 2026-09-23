@@ -8,24 +8,26 @@
 import { mkdir, rm } from "node:fs/promises";
 import * as emu from "./drivers/emulator";
 import { parseArgs } from "./lib/args";
-import { PINNED_CLOCK_MS, uiFileFor, waitHorizonMs, type Flow, type Manifest, type RecordedStep } from "./types";
+import { PINNED_CLOCK_MS, screenOf, screenParam, sameScreen, uiFileFor, waitHorizonMs, type Flow, type Manifest, type RecordedStep } from "./types";
 import { E2E_DIR, sleep } from "./lib/util";
 import { device as profile } from "../../src/shell/config";
 
 const { flows } = parseArgs(process.argv.slice(2), "bun run e2e:record");
 
-async function ensureDevice() {
+async function ensureDevice(flow: Flow) {
   const devices = (await emu.sh(["devices"], { quiet: true })).split("\n").filter((l) => /\tdevice$/.test(l));
   if (!devices.length) {
     throw new Error("no emulator attached — run `bash tests/e2e/boot-emulator.sh` first");
   }
-  const info = await emu.deviceInfo();
-  if (info.width !== profile.width || info.height !== profile.height || info.densityDpi !== profile.densityDpi) {
-    throw new Error(
-      `device is ${info.width}x${info.height} @${info.densityDpi}dpi — the goldens must come from ` +
-      `${profile.width}x${profile.height} @${profile.densityDpi}dpi so no rescaling enters the metric. Use the webdroid_ref AVD.`,
-    );
+  const expected = screenOf(undefined, flow.screen);
+  let info = await emu.deviceInfo();
+  if (info.sdk !== String(profile.sdk)) throw new Error(`Android SDK ${info.sdk} cannot record an SDK ${profile.sdk} reference`);
+  if (!sameScreen(info, expected)) {
+    await emu.shell(`wm size ${expected.width}x${expected.height}`);
+    await emu.shell(`wm density ${expected.densityDpi}`);
+    info = await emu.deviceInfo();
   }
+  if (!sameScreen(info, expected)) throw new Error(`device is ${screenParam(info)}; ${flow.app} requires ${screenParam(expected)}`);
   return info;
 }
 
@@ -90,18 +92,18 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
           break;
         }
         const [cx, cy] = emu.centerOf(node);
-        resolved = emu.norm(cx, cy);
+        resolved = { x: cx / device.width, y: cy / device.height };
         bounds = node.bounds;
         await emu.tap(cx, cy);
         break;
       }
       case "tapAt":
         resolved = { x: a.x, y: a.y };
-        await emu.tap(a.x * profile.width, a.y * profile.height);
+        await emu.tap(a.x * device.width, a.y * device.height);
         break;
       case "typeInto":
         resolved = { x: a.x, y: a.y };
-        await emu.tap(a.x * profile.width, a.y * profile.height);
+        await emu.tap(a.x * device.width, a.y * device.height);
         await sleep(700);
         await emu.typeText(a.text);
         await sleep(500);
@@ -125,8 +127,8 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
       case "swipe":
         for (let n = 0; n < (a.maxSwipes ?? 1); n++) {
           if (a.untilText && emu.findNode(await emu.dumpUi(), a.untilText)) break;
-          await emu.swipe(a.from[0] * profile.width, a.from[1] * profile.height,
-                          a.to[0] * profile.width, a.to[1] * profile.height, a.ms ?? 400);
+          await emu.swipe(a.from[0] * device.width, a.from[1] * device.height,
+                          a.to[0] * device.width, a.to[1] * device.height, a.ms ?? 400);
           if (a.untilText) await sleep(500);
         }
         break;
@@ -165,7 +167,7 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
   console.log(`  -> ${dir}`);
 }
 
-const device = await ensureDevice();
+const device = await ensureDevice(flows[0]!);
 console.log(`device: ${device.width}x${device.height} @${device.densityDpi}dpi  sdk=${device.sdk}`);
 const clock = (await emu.shell("date -u +%s")).trim();
 const drift = Math.abs(+clock * 1000 - PINNED_CLOCK_MS);
@@ -173,5 +175,5 @@ if (drift > 86_400_000 && flows.some((f) => f.clock === "controlled")) {
   console.warn(`WARN: device clock is ${new Date(+clock * 1000).toISOString()}, not the pinned ` +
     `${new Date(PINNED_CLOCK_MS).toISOString()}. Re-run boot-emulator.sh or date-bearing screens will drift.`);
 }
-for (const f of flows) await record(f, device);
+for (const [index, flow] of flows.entries()) await record(flow, index === 0 ? device : await ensureDevice(flow));
 console.log("\ndone. Review the goldens, then commit tests/e2e/golden/.");

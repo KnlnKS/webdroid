@@ -116,8 +116,6 @@ export const swipe = (x1: number, y1: number, x2: number, y2: number, ms = 400) 
 export const typeText = (s: string) =>
   shell(`input text ${JSON.stringify(s.replace(/ /g, "%s"))}`);
 
-export const norm = (x: number, y: number) => ({ x: x / device.width, y: y / device.height });
-
 export async function deviceInfo() {
   const [size, density, fp, sdk] = await Promise.all([
     shell("wm size"), shell("wm density"),
