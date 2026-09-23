@@ -6464,3 +6464,37 @@ and Mihon (21,918 classes) pass with zero method failures. The first complete un
 failure because the new worktree lacked the ignored `vendor/aosp/framework.jar`; the focused
 test passes after linking the existing local JAR. No new test or visual golden was added.
 The complete rerun passes 1,271 tests and 26,974 assertions across 219 files.
+
+### Paged DEX reference caches — 2026-09-22
+
+The follow-up inspected cache occupancy in fresh Chrome app realms. Mihon used 38,869 of
+124,593 method IDs and 20,414 of 66,124 field IDs after launch. TikTok used 228,224 of
+2,552,070 method IDs and 97,691 of 1,423,327 field IDs across 55 DEX files. V8's
+array element model makes large holey backing stores a plausible memory cost
+([elements kinds](https://v8.dev/blog/elements-kinds),
+[fast properties](https://v8.dev/blog/fast-properties)); that is a hypothesis until
+measured in this application.
+
+A full `Map` replacement reduced launch heap but raised TikTok's JVM compile counter and
+reduced advancing frames in three startup windows. Retaining an array for methods while using
+maps for fields/prototypes still gave mixed compiler and frame results for a modest Mihon heap
+gain. Both variants were discarded. A 128-entry paged array for method and field references
+keeps indexed lookup within each allocated page while leaving untouched ranges unallocated.
+Measured TikTok access covered about 26% of possible 128-entry pages for each of these two
+caches. Prototype, type and string caches retain their prior layout.
+
+Three alternating fresh Chrome starts per app compared the preceding commit `4ad583bd`
+with the paged candidate. The foreground realm's post-GC heap at the end of a three-second
+window had medians of 756.9 → 735.8 MB for TikTok and 263.8 → 258.4 MB for Mihon.
+At the start of that window TikTok medians were 657.9 → 639.8 MB. TikTok launch-action
+medians were 6.91 → 6.85 seconds; Mihon 1.06 → 1.07 seconds. The JVM compile counter and
+presented frames varied across both variants without a repeatable regression. Every measured
+run was visible, alive and presented frames; TikTok still emitted its existing live/native
+console diagnostics. These are selected startup paths, not whole-app throughput or total
+browser/GPU memory measurements.
+
+Typecheck, all 1,271 unit tests / 26,974 assertions, and cold smoke compilation of FitNotes
+(4,213 classes) and Mihon (21,918 classes) pass with zero method failures. Full TikTok smoke
+compilation, both eager and cold, was stopped after exceeding 5 GB of resident memory; it is
+not a completed gate. TikTok's fresh Chrome launches exercise the reached methods and render,
+but do not cover its whole DEX corpus. No new tests or visual goldens were added.
