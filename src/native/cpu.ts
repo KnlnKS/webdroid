@@ -7,7 +7,7 @@ import { JThread, mainThread, setCurThread } from "../jvm/natives/jlang";
 import { NativeFault, mem } from "./mem";
 import { core, jitDrain, TLS_KEYS } from "./core";
 import { Args, Args64, type ArgReader, hostDispatch, hostReturn, setPtrWidth, type HostRet, fbits, dbits, bitsf, bitsd, retPair, slowMs, NORET } from "./host";
-import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
+import { RET_SENTINEL, TRAMP_BASE, TRAMP_END, STACK_SIZE, MEM_SIZE, MEM_SIZE_A32, MEM_SIZE_A64 } from "./abi";
 import { perf } from "../perf";
 import { yieldToLoop, yieldStats } from "../jvm/yield";
 export { NativeFault, yieldToLoop, yieldStats };
@@ -60,9 +60,10 @@ export function invalidateRange(addr: number, size: number, reason = "range"): v
  *  graph — so the instruction set is a property of the process, set when its first image loads. */
 let A64 = false;
 export function setA64(on: boolean): void {
-  if (A64 === on) return;
+  const size = on ? MEM_SIZE_A64 : MEM_SIZE_A32;
+  if (A64 === on && MEM_SIZE === size) return;
   A64 = on;
-  mem.init(on ? MEM_SIZE_A64 : MEM_SIZE_A32);
+  mem.init(size);
   // the pointer width is a property of the process, not of a thread: set it here, because the
   // JNI tables are laid out before the first Cpu exists
   setPtrWidth(on ? 8 : 4);
@@ -245,15 +246,21 @@ export class Cpu {
     const mask = this.signalMask, handling = this.handling.has(sig);
     this.signalMask = (mask | (h?.mask ?? 0n) | (h && h.flags & 0x40000000 ? 0n : 1n << BigInt(sig - 1))) & 0xfffffffffffbfeffn;
     this.handling.add(sig);
+    let restored = false;
+    const restore = () => {
+      if (restored) return;
+      restored = true;
+      this.signalMask = mask;
+      if (!handling) this.handling.delete(sig);
+    };
     const base = this.baseAvailable;
-    const p = (async () => { if (h) await this.call(h.fn, [sig, 0, 0], SIGNAL_FRAME + sig); })();
+    const p = (async () => { if (h) await this.call(h.fn, [sig, 0, 0], SIGNAL_FRAME + sig, restore); })();
     if (base) this.baseBusy = p.catch(() => {}).finally(() => { this.baseBusy = null; });
     try { await p; }
     catch (e) { console.error(`[native] signal ${sig} handler on ${this.name}:`, e); throw e; }
     finally {
       this.sigLog.push(`~${sig}`);
-      this.signalMask = mask;
-      if (!handling) this.handling.delete(sig);
+      restore();
       this.pump();
     }
     const w = this.sigWait;
@@ -306,7 +313,7 @@ export class Cpu {
   /** run guest function `fn` to completion on this Cpu (reentrant: saves and restores the register file) */
   frames: string[] = [];                            // what each nested call() is for (wd.native.regs)
   private savePool: Uint8Array[] = [];
-  async call(fn: number, args: CallArg[] = [], label = "call"): Promise<number> {
+  async call(fn: number, args: CallArg[] = [], label = "call", beforeResume?: () => void): Promise<number> {
     // host code calling back into the guest (a comparator, a JNI entry) while a signal handler owns the
     // register file above the frame it belongs to waits for that handler, as the kernel would hold the
     // thread; a handler's own delivery never waits
@@ -318,6 +325,7 @@ export class Cpu {
     saved.set(this.bytes.subarray(0, ARCH_SIZE));
     const spending = this.pending, sstate = this.state;   // the frame below is parked in its host call until we return
     this.excl = 0;
+    if (!this.a64) this.cpsr &= ~0x0600fc00;
     let n = 0, nv = 0;
     const stack: (number | bigint)[] = [];
     const nregs = this.a64 ? 8 : 4;
@@ -365,6 +373,8 @@ export class Cpu {
       this.retFp1 = this.a64 ? this.si[1] : w[2];
       return w[0];
     } finally {
+      // Signal state belongs to this frame until the interrupted thread can resume.
+      beforeResume?.();
       this.depth--;
       this.frames.pop();
       for (const w2 of this.idle.splice(0)) w2();
@@ -442,7 +452,7 @@ export class Cpu {
     for (;;) {
       if (stepMode.on) { stepPrev.set(this.w); if (watchPcs.has(this.pc)) this.watchHit(); }
       let ex: number;
-      try { ex = core.run_slice(this.base, Math.max(stepMode.on ? 1 : 0, limit - this.ic)); }
+      try { ex = core.run_slice(this.base, stepMode.on ? 1 : Math.max(0, limit - this.ic)); }
       catch (e) { throw this.trap(e); }
       if (stepMode.on) this.step();
       switch (ex) {

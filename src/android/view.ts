@@ -408,6 +408,7 @@ export class JView extends JObj {
   enabled = true; pressed = false; selected = false; activated = false; focused = false;
   focusable = false; focusableInTouchMode = false;
   autoHandwritingEnabled = true;
+  willNotCache = false;
   clickL: unknown = null; longClickL: unknown = null; touchL: unknown = null; keyL: unknown = null; focusL: unknown = null;
 
   scrollChangeL: unknown = null;
@@ -1062,6 +1063,8 @@ const viewMethods: NativeSpec["methods"] = {
   "setFocusableInTouchMode(Z)V": function (this: JView, f: number) { this.focusableInTouchMode = !!f; },
   "setAutoHandwritingEnabled(Z)V": function (this: JView, enabled: number) { this.autoHandwritingEnabled = !!enabled; },
   "isAutoHandwritingEnabled()Z": function (this: JView) { return this.autoHandwritingEnabled ? 1 : 0; },
+  "setWillNotCacheDrawing(Z)V": function (this: JView, disabled: number) { this.willNotCache = !!disabled; },
+  "willNotCacheDrawing()Z": function (this: JView) { return +this.willNotCache; },
   "requestFocus()Z": function (this: JView) {
     return vcall(this, "requestFocus", "(ILandroid/graphics/Rect;)Z", 130, null);
   },

@@ -4,7 +4,7 @@
 // implement is NULL from eglGetProcAddress.
 
 import { mem } from "./mem";
-import { hostLib, lookupHost, defineHost, probed, cstr, type HostFn } from "./host";
+import { hostLib, lookupHost, defineHost, probed, cstr, stp, type HostFn } from "./host";
 import { EglContext, eglConfigAttrib, eglFailure, takeEglError, type GlSurface } from "../android/glview";
 import { windowOf } from "./libandroid";
 import { gles1Procs } from "./gles1";
@@ -33,12 +33,12 @@ export function eglInit(): void {
       a.i(); const n = a.i();
       return cstr(n === 0x3053 ? "webdroid" : n === 0x3054 ? "1.5" : n === 0x3055 ? "EGL_ANDROID_presentation_time EGL_KHR_create_context EGL_KHR_surfaceless_context" : n === 0x308d ? "OpenGL_ES" : "");
     },
-    eglGetConfigs: (_c, a) => { a.i(); const cfgs = a.p(), size = a.i(), num = a.p(); if (cfgs && size > 0) mem.st32(cfgs, 1); if (num) mem.st32(num, 1); return 1; },
+    eglGetConfigs: (_c, a) => { a.i(); const cfgs = a.p(), size = a.i(), num = a.p(); if (cfgs && size > 0) stp(cfgs, 1); if (num) mem.st32(num, 1); return 1; },
     eglChooseConfig: (_c, a) => {
       a.i(); const want = attrs(a.p()), cfgs = a.p(), size = a.i(), num = a.p();
       // the one config matches unless the caller needs what it lacks (multisampling)
       const n = (want.get(0x3031) ?? 0) > 0 || (want.get(0x3032) ?? 0) > 0 ? 0 : 1;
-      if (cfgs && size > 0 && n) mem.st32(cfgs, 1);
+      if (cfgs && size > 0 && n) stp(cfgs, 1);
       if (num) mem.st32(num, n);
       return 1;
     },

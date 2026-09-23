@@ -20,6 +20,11 @@ test("video codec capabilities expose the advertised height range", async () => 
       const upper = await vcall(range, "getUpper", "()Ljava/lang/Comparable;");
       expect(await vcall(upper, "intValue", "()I")).toBe(4096);
     }
+    const rates = await vcall(video, "getSupportedFrameRatesFor", "(II)Landroid/util/Range;", 1920, 1080);
+    const upper = await vcall(rates, "getUpper", "()Ljava/lang/Comparable;");
+    expect(await vcall(upper, "doubleValue", "()D")).toBe(64);
+    expect(await vcall(video, "areSizeAndRateSupported", "(IID)Z", 1920, 1080, 65)).toBe(0);
+    expect(await vcall(video, "isSizeSupported", "(II)Z", 4096, 4096)).toBe(0);
   } finally {
     if (previous) Object.defineProperty(globalThis, "VideoDecoder", previous);
     else delete (globalThis as { VideoDecoder?: unknown }).VideoDecoder;

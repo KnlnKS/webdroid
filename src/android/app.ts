@@ -12,7 +12,8 @@ import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, attachView, detachView, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragmentManager } from "./fragment";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread } from "../jvm/natives/jlang";
+import type { JMotionEvent } from "./motionevent";
 import { appHost, jclsNameOf } from "./apphost";
 import { resString } from "./res";
 import { onMain } from "./mainloop";
@@ -22,7 +23,7 @@ import { showToast } from "./popup";
 import { newArrayList } from "../jvm/natives/jutil";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { JService, runningServices, svcStop, svcFg } from "./runningservices";
-import { isMusicActive, outputSampleRate, JSpatializer } from "./media";
+import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from "./media";
 import { device } from "../shell/config";
 import type { JBitmap } from "./graphics";
 import { JConfigurationInfo } from "./pm";
@@ -32,6 +33,8 @@ import { packages } from "./packages";
 import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
 
 export { fireActivityLifecycle } from "./lifecycle";
+
+rt.markers("android/bluetooth/BluetoothProfile$ServiceListener");
 
 class JTaskDescription extends JObj {
   label: string | null = null;
@@ -175,8 +178,9 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     await attachView(this.window.contentParent!, v);
   },
   "findViewById(I)Landroid/view/View;": function (this: JActivity, id: number) {
-    return this.window.decor ? findById(this.window.decor, id) : null;
+    return vcall(this.window, "findViewById", "(I)Landroid/view/View;", id);
   },
+  "setShowWhenLocked(Z)V": function (this: JActivity, show: number) { return vcall(this.window, "setFlags", "(II)V", show ? 0x80000 : 0, 0x80000); },
   "requireViewById(I)Landroid/view/View;": requireViewById,
   "onStart()V": async function (this: JActivity) { this.started = true; return dispatchFragLifecycle(this, "onStart"); },
   "onResume()V": async function (this: JActivity) { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); },
@@ -354,6 +358,12 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     }, 0);
   },
   "getVolumeControlStream()I": () => 3,
+  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JActivity, event: JMotionEvent) {
+    const thread = curThread;
+    if (event.action === 0) await vcallOn(thread, this, "onUserInteraction", "()V");
+    if (await vcallOn(thread, this.window, "superDispatchTouchEvent", "(Landroid/view/MotionEvent;)Z", event)) return 1;
+    return vcallOn(thread, this, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", event);
+  },
   ...noops("registerScreenCaptureCallback(Ljava/util/concurrent/Executor;Landroid/app/Activity$ScreenCaptureCallback;)V",
     "unregisterScreenCaptureCallback(Landroid/app/Activity$ScreenCaptureCallback;)V"),
   ...noops("onCreate(Landroid/os/Bundle;)V", "onPostCreate(Landroid/os/Bundle;)V", "onRestart()V", "onPostResume()V",
@@ -373,7 +383,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...stubs(0, "onOptionsItemSelected(Landroid/view/MenuItem;)Z", "onSearchRequested()Z",
     "onSearchRequested(Landroid/view/SearchEvent;)Z", "onKeyDown(ILandroid/view/KeyEvent;)Z",
     "onKeyUp(ILandroid/view/KeyEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
-    "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z", "dispatchTouchEvent(Landroid/view/MotionEvent;)Z",
+    "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z",
     "isInMultiWindowMode()Z", "isInPictureInPictureMode()Z", "isLaunchedFromBubble()Z"),
   ...stubs(null, "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;",
     "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;",
@@ -477,7 +487,6 @@ rt.register({
   },
 });
 
-let audioSession = 0;
 let audioCapturePolicy = 1;
 class JVibrationEffect extends JObj {
   timings: bigint[] = [];
@@ -610,7 +619,8 @@ for (const [name, methods, statics] of [
     "getSpatializer()Landroid/media/Spatializer;": () => { rt.link("android/media/Spatializer"); return new JSpatializer(); },
     "getStreamVolume(I)I": () => 5,
     "getStreamMaxVolume(I)I": () => 10,
-    "generateAudioSessionId()I": () => ++audioSession,
+    "getStreamMinVolume(I)I": () => 0,
+    "generateAudioSessionId()I": newAudioSessionId,
     "getRingerMode()I": () => 2,
     "isMusicActive()Z": isMusicActive,
     // the output path is the Web Audio context: its rate is real, its buffer size is not a fixed number of frames

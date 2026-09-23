@@ -2,10 +2,12 @@ import { expect, test } from "bun:test";
 import "../natives";
 import { rt, JObj } from "../jvm/runtime";
 import { type ClassDef, type DexFile } from "../jvm/dex";
-import { JThread, mainThread, setCurThread } from "../jvm/natives/jlang";
+import { JThread, curThread, mainThread, setCurThread } from "../jvm/natives/jlang";
 import { cpuFor, setA64 } from "./cpu";
-import { defineHost, retD } from "./host";
-import { jniInit, resolveByExport } from "./jni";
+import { defineHost, retD, PTR, ldp, cstr } from "./host";
+import { javaVM, jniInit, resolveByExport } from "./jni";
+import { mkMethod } from "../jvm/natives/jreflect";
+import { mem } from "./mem";
 
 rt.linkNatives();
 for (const a64 of [false, true]) test(`${a64 ? "A64" : "ARM32"} critical natives omit JNI handles while fast natives retain them`, async () => {
@@ -39,4 +41,30 @@ for (const a64 of [false, true]) test(`${a64 ? "A64" : "ARM32"} critical natives
       expect(seen).toEqual([[123, 40n, 1.25, 2.5]]);
     }
   } finally { rt.jniResolver = previousResolver; cpu.dispose(); setCurThread(mainThread); }
+});
+
+test("JNI callbacks retain their caller after suspended class initialization", async () => {
+  setA64(true); jniInit();
+  const thread = new JThread(), cpu = cpuFor(thread), out = mem.malloc(PTR);
+  let finish!: () => void;
+  const ready = new Promise<void>(resolve => { finish = resolve; });
+  rt.register({ name: "test/JniInitThread", ctor: class extends JObj {}, clinit: () => ready,
+    methods: { "static current()Z": () => +(curThread === thread) } });
+  const info = rt.link("test/JniInitThread");
+  rt.register({ name: "test/JniReflect", ctor: class extends JObj {}, methods: {
+    "static method()Ljava/lang/reflect/Method;": () => mkMethod(info, "current", "()Z", true, null),
+  } });
+  try {
+    await cpu.call(ldp(ldp(javaVM.addr) + 6 * PTR), [javaVM.addr, out, 0x10006]);
+    const env = ldp(out), table = ldp(env);
+    const call = (slot: number, ...args: number[]) => cpu.call(ldp(table + slot * PTR), [env, ...args]);
+    const factory = await call(6, cstr("test/JniReflect"));
+    const factoryMethod = await call(113, factory, cstr("method"), cstr("()Ljava/lang/reflect/Method;"));
+    const reflected = await call(114, factory, factoryMethod);
+    const method = await call(7, reflected), cls = await call(6, cstr("test/JniInitThread"));
+    const result = call(117, cls, method);
+    setCurThread(mainThread); finish();
+    expect(await result).toBe(1);
+    expect(cpu.exc).toBeNull();
+  } finally { mem.free(out); cpu.dispose(); setCurThread(mainThread); }
 });

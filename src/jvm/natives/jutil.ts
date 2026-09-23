@@ -874,19 +874,22 @@ function mapHash(entries: Ent[], from = 0, hash = 0): number | Promise<number> {
   return hash;
 }
 async function copyMapInto(src: unknown, dst: JMap) {
+  const thread = curThread;
+  const call = (target: unknown, name: string, desc: string, ...args: unknown[]) => vcallOn(thread, target, name, desc, ...args);
   if (src instanceof JMap) {
     for (const e of allEnts(src)) {
       // through put(), not m.set: slow (custom-equals) keys must go through the bucket path
-      await vcall(dst, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", e.k, e.v);
+      const result = call(dst, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", e.k, e.v);
+      if (result instanceof Promise) await result;
     }
     return;
   }
-  const es = await vcall(src, "entrySet", "()Ljava/util/Set;");
-  const it = await vcall(es, "iterator", "()Ljava/util/Iterator;");
-  while (await vcall(it, "hasNext", "()Z")) {
-    const e = await vcall(it, "next", "()Ljava/lang/Object;");
-    await vcall(dst, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
-      await vcall(e, "getKey", "()Ljava/lang/Object;"), await vcall(e, "getValue", "()Ljava/lang/Object;"));
+  const es = await call(src, "entrySet", "()Ljava/util/Set;");
+  const it = await call(es, "iterator", "()Ljava/util/Iterator;");
+  while (await call(it, "hasNext", "()Z")) {
+    const e = await call(it, "next", "()Ljava/lang/Object;");
+    await call(dst, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+      await call(e, "getKey", "()Ljava/lang/Object;"), await call(e, "getValue", "()Ljava/lang/Object;"));
   }
 }
 
@@ -1561,6 +1564,14 @@ const concurrentListExtras: Record<string, Methods> = {
       if ((await indexIn(this.a, v)) >= 0) return 0;
       this.a.push(v);
       return 1;
+    },
+    "retainAll(Ljava/util/Collection;)Z": async function (this: JList, c: unknown) {
+      if (c == null) rt.npe();
+      const thread = curThread, before = this.a.slice(), retained: unknown[] = [];
+      for (const item of before) if (await vcallOn(thread, c, "contains", "(Ljava/lang/Object;)Z", item)) retained.push(item);
+      if (this.a.length !== before.length || this.a.some((item, i) => item !== before[i])) throw rt.mkThrowable("java/util/ConcurrentModificationException", null);
+      if (retained.length === before.length) return 0;
+      this.a = retained; return 1;
     },
   },
 };
@@ -2698,6 +2709,28 @@ async function streamProperties(stream: unknown): Promise<Map<string, string>> {
   return propertyText(charsToString(bytes, 0, bytes.length));
 }
 export class JProps extends JMap {}
+function escapeProperty(text: string, key: boolean): string {
+  return text.replace(/[\u0000-\u0020\\=:#!\u007f-\uffff]/g, (c, offset: number) => {
+    const code = c.charCodeAt(0);
+    if (code > 0x7e || code < 0x20 && !"\t\n\r\f".includes(c)) return "\\u" + code.toString(16).padStart(4, "0");
+    if (c === " " && !key && offset > 0) return c;
+    return "\\" + ({ "\t": "t", "\n": "n", "\r": "r", "\f": "f" }[c] ?? c);
+  });
+}
+async function storeProperties(props: JProps, stream: unknown, comments: string | null): Promise<void> {
+  const thread = curThread, lines: string[] = [];
+  if (comments != null) lines.push("#" + comments.replace(/[\u0100-\uffff]/g, c => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"))
+    .replace(/\r\n|\r|\n/g, "\n#"));
+  lines.push("#" + new Date().toString());
+  for (const { k, v } of props.m.values()) {
+    if (typeof k !== "string" || typeof v !== "string") throw rt.mkThrowable("java/lang/ClassCastException", "Properties keys and values must be strings");
+    lines.push(escapeProperty(k, true) + "=" + escapeProperty(v, false));
+  }
+  const text = lines.join("\n") + "\n", bytes = new Int8Array(text.length);
+  for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+  await vcallOn(thread, stream, "write", "([BII)V", bytes, 0, bytes.length);
+  await vcallOn(thread, stream, "flush", "()V");
+}
 const setProperties = (props: JProps, entries: Map<string, string>) => { for (const [k, v] of entries) props.m.set(k, { k, v }); };
 rt.register({
   name: "java/util/Properties", ctor: JProps, sup: "java/util/HashMap",
@@ -2710,6 +2743,7 @@ rt.register({
     },
     "load(Ljava/io/InputStream;)V": async function (this: JProps, stream: unknown) { setProperties(this, await streamProperties(stream)); },
     "load(Ljava/io/Reader;)V": async function (this: JProps, reader: unknown) { setProperties(this, await readerProperties(reader)); },
+    "store(Ljava/io/OutputStream;Ljava/lang/String;)V": function (this: JProps, stream: unknown, comments: string | null) { return storeProperties(this, stream, comments); },
   },
 });
 defineException("java/util/MissingResourceException", "java/lang/RuntimeException");

@@ -11,7 +11,7 @@
 // Methods:      proto[`m$name$H` ] where H = hash(fullMethodDescriptor)
 // Constructors: proto[`i$H`]
 // Static via ctor: Ctor[`m$...`], Ctor[`s$fieldName`]
-// Instance fields: `f$name$H2` where H2 = hash(declaringClass + name) — avoids R8 shadowing collisions
+// Instance fields: `f$name$H2` where H2 = hash(declaringClass) — avoids R8 shadowing collisions
 
 function hash36(s: string): string {
   let h = 5381;
@@ -19,9 +19,9 @@ function hash36(s: string): string {
   return h.toString(36);
 }
 
-const nameRe = /[^A-Za-z0-9_$]/g;
+const nameRe = /[^A-Za-z0-9_]/g;
 function safeName(n: string): string {
-  return n.replace(nameRe, "_");
+  return n.replace(nameRe, (c) => "$" + c.charCodeAt(0).toString(16) + "$");
 }
 
 // Two-level memo (name → desc → mangled). vcall mangles on every dynamic dispatch — per

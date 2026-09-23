@@ -50,6 +50,537 @@ complexity. Sources: [ART JIT](https://source.android.com/docs/core/runtime/jit-
 [V8 fast properties](https://v8.dev/blog/fast-properties), and
 [cross-origin isolation](https://web.dev/articles/cross-origin-isolation-guide).
 
+---
+
+## Cut the Rope repair (2026-09-22, in progress)
+
+The AVD reference used a separate clean Android user at 720×1280/320 dpi. After the AVD
+restarted without that disposable profile, another clean user was created. Its fresh title,
+tutorial, level-one reward and second-puzzle captures are under
+`webdroid-shots/cut-the-rope/avd-fresh-*.png`; earlier tutorial and settings captures are under
+`avd-clean-*.png` in the same directory. Chrome's tutorial and second puzzle match their layout,
+assets and text. Ads remain outside this task unless they block gameplay.
+
+Fresh Chrome startup reaches the app's own intro MP4 via `AMediaExtractor_setDataSourceCustom`.
+The new NDK media owner uses that callback to read the unchanged asset, MP4Box for sample tables,
+and the existing Java/WebCodecs codec owner for AVC/AAC decode. The actual clip has 214 video
+frames, 309 audio samples and a 7.133-second duration. VideoDecoder emits NV12; Chrome rejects
+explicit non-RGB `VideoFrame.copyTo` formats, so the raw buffer path copies in the frame's native
+format and advertises Android's semiplanar color layout. Input buffers use their promoted native
+backing address, and released output indices now return to the codec's free slot pool. A small
+real MP4 fixture checks ARM32/64 extraction, descriptor ownership, timestamps and sync seeking.
+Owning tests and typecheck pass. The API contracts follow the
+[Android NDK media reference](https://developer.android.com/ndk/reference/group/media) and
+[WebCodecs](https://www.w3.org/TR/webcodecs/).
+
+This is partial media support, not successful intro playback. In untraced full Chrome, the clip
+reaches about 0.4 seconds, then both output queues fill and Unity stops calling
+`AMediaCodec_dequeueOutputBuffer`, though its workers still poll input buffers. No codec error or
+native fault is reported. A controlled temporary increase from 8 to 32 pending outputs reached
+about 1.0 seconds before the same stall; it was removed. A tap dismisses the intro and Unity later
+renders the tutorial, but startup remains minutes long. On the diagnostic build a horizontal rope
+swipe then advanced to the second puzzle with zero native, GL, layout or draw faults; gameplay
+input remains live after media teardown. Temporary queue/format probes were removed.
+The codec output format supplied color-format 21, width, height, stride and slice height; Unity's
+remaining absent metadata queries (rotation, color range/standard, sample aspect and display
+dimensions, AAC profile) have not been established as the cause. Full E2E is reserved for the
+final candidate, and no visual goldens changed.
+An audit then caught a distinct NDK format bug: `AMediaFormat_getBuffer` could report success
+with a null pointer for the extractor's heap-backed codec-specific data. Extracted and
+set buffers now use promotable direct storage; the ARM32/64 fixture checks the returned SPS
+start code. This path was not called by the observed Unity intro, so the fix does not explain
+its stall. The unmodified bundle's `intro_uncompressed` resource was extracted to a temporary
+file for diagnosis; its first frames visibly show a door. A fresh full-Chrome GL probe during
+the black intro found no WebGL error or failed shader compile/link, so those hypotheses did
+not reproduce. Probe code was removed.
+
+The fresh AVD title displays the expected video artwork; Chrome's intro is black. A bounded
+NDK trace found that Unity configures all four observed decoders with no output surface and
+reads raw output buffers. The video decoder returns frames and Unity releases several, but its
+dequeue loop stops after roughly the seven-second clip duration while only about 0.4 seconds
+of samples have been consumed. The guest made about 84,000 nonblocking dequeue calls in one
+early burst. No video-sized GL texture upload was observed. A temporary controlled-clock run
+could not isolate timing: its scheduled work advanced only about six guest seconds in 86 real
+seconds and reached a separate native fault. The clock experiment remains inconclusive; no
+clock behavior was changed. A rope swipe advances both AVD and Chrome to the second puzzle.
+The observed life count differed (AVD five, Chrome four) after that input, so gameplay parity
+still needs a matched replay.
+
+An independent background-network fault at `libcronet.102.0.5005.125.so+0xd37f0` was the
+valid ARM NEON `VSWP d2,d23`, which the core decoded as undefined. The next run reached
+`+0xd3804`, `VSHRN.I64 d19,q1,#14`, an unimplemented narrowing shift. The ARM owner now
+executes D/Q swaps and translates narrowing, rounding and saturating shifts through the shared
+SIMD semantics. ARM/Thumb interpreter and JIT checks pass. These are generic instruction fixes;
+the same network thread has not yet completed a full post-fix browser replay.
+
+The first original-ARM32 tutorial reached rendering with missing sprites, black text blocks
+and repeated invalid-bounds warnings. Unity's bounds predicate was correct; a live instruction
+watch found real negative infinities in the merged maximum coordinates. Its merge at
+`libunity.so+0x65fd26` uses VEXT with a four-byte offset. That encoding overlapped the shared
+decoder's variable-shift operand-swapping predicate, reversing VEXT's inputs in both execution
+tiers. Separating extraction from variable shifts fixes a minimal replay of the actual merge.
+The existing ARM/Thumb permutation test now checks this offset; it failed before the fix.
+ARM DDI 0406C.d A8.8.317 defines the operand order. Typecheck and 81 owning ARM/SIMD tests
+(1,025 assertions) pass. A fresh normal-JIT Chrome run rendered the original ARM32 tutorial
+without the bounds warnings or corrupt text, accepted all required rope cuts, completed level 1,
+and displayed its reward screen. The NEON advertisement is now retained with those reached
+instruction repairs. Startup took roughly five minutes and gameplay was about one rendered
+frame per second; performance, settings, persistence and later-level acceptance remain open.
+
+Scalar VFP arithmetic now lowers directly in the floating-point JIT owner instead of spilling
+all ARM registers for interpreter fallback. ARM and Thumb fixtures retain adjacent lanes,
+condition flags, high double registers and separate multiply/add rounding. Typecheck and 82
+ARM/SIMD checks (1,035 assertions) pass. A one-million-iteration arithmetic loop improved from
+about 35 ms to 1 ms after warmup. A fresh original-ARM32 reload restored level 2 and 220 coins,
+rendered home/settings without bounds warnings, and changed actual PCM to silence when music
+was muted. A visible, untraced settings sample still completed only 40 GL frames in 21.7 s,
+spending 19.3 s in native execution. This optimization does not establish adequate app speed;
+the earlier gameplay and current settings samples are not a matched performance comparison.
+
+The original ARM32 level-2 transition stayed black for several minutes while guest asset
+decoding continued, then rendered the expected puzzle without a native fault or bounds warning.
+Longer swipes completed its first two stages with three stars each. Short swipes can finish
+between game frames at the current low frame rate. The matching AVD remains responsive.
+Wide Thumb immediate loads/stores now use the existing JIT memory and code-invalidation helpers,
+avoiding full interpreter spills for ordinary byte, halfword and word fields. PC-relative,
+writeback and PC-target forms retain their existing paths. Typecheck and 73 ARM tests / 817
+assertions pass. An isolated instruction-loop probe fell from roughly 54–72 ms to 2–3 ms warm;
+this is a microbenchmark with the browser still running, not a whole-app speed measurement.
+
+Original ARM32 also completed the third level-2 stage and its reward screen. A fresh launch
+with the immediate-transfer fast path restored level 3, 240 coins and both muted sound controls.
+An adaptive four-millisecond CPU-slice experiment was removed. Alternating visible settings
+samples on that candidate measured 1.15/1.45 GL FPS with adaptation versus 2.00/2.12 with the
+existing three-million-instruction budget; a fixed 100,000 budget measured 1.68 FPS. Smaller
+budgets improved shell ticks (35–49/s versus 4–5/s) but reduced guest rendering. These samples
+had no instruction/GL tracing, and the temporary runSlice budget wrapper was used only to
+compare scheduling on one live app. Remaining background decoding limits their steady-state
+interpretation. A two-second background/resume returned without a native fault or Unity pause
+timeout; continued gameplay is being checked before final validation.
+
+The same run subsequently resumed rendered home, accepted settings close, and entered level 3
+with six candies and the expected rope/star layout. An ad SDK's delayed handler reached missing
+`Message.getWhen` and set the shell's uncaught-error label, but the main queue, GL frames and
+game navigation continued. That optional ad path is left unimplemented under the task scope.
+The AVD replay again showed an AppLovin test interstitial without a dismissible control; restarting
+the reference restored its level-2 puzzle. No AVD level-2 reward is claimed. A separate TikTok
+Chrome renderer was later observed consuming several cores, so the timing samples above are
+contended observations, not controlled speed claims.
+
+At `6bbc2b80`, typecheck and 1,295 unit tests / 27,213 assertions pass, including native hardware
+oracles. The original XAPK compiles 64,465 classes with zero method failures. All eight runnable
+framework exercises pass (295/363 declared natives); text metrics retain the browser-only skip.
+The post-resume level-3 replay completed its first puzzle and advanced to the second, reaching
+2,335 GL frames / 80,153 draws with zero native, GL, layout or draw faults and no invalid-bounds
+warning. The final serialized E2E matrix completes all 159 steps across 12 flows in 830.3 s
+with the interactive game closed. No step reports a main-loop wedge, action failure, settling
+timeout or required native delegate. Every Android realm returns diagnostics, and all main
+apps advance ticks. Flappy Bird's embedded WebView frames do not expose emulator diagnostics
+and its page-status TypeError remains visible. YouTube retains Matrix draw and SAX failures,
+Harmonic the atomic-group regex failure, and Lichess native pthread errors 3/22/35. This run is not
+an uncontended performance measurement because the unrelated TikTok renderer remains active.
+
+A fresh serialized starting-`9d0bb979` replay covers all four scored flows, Resy, Doodle Jump
+and Flappy Bird (101 steps, 304.1 s). Mean content differences from unchanged AVD goldens are
+FitNotes 40.11639→40.11639%, Mihon app 57.23758→57.23855%, onboarding 17.69141→17.69141%,
+and Harmonic 27.59968→27.49948%. Harmonic comments are populated with
+two inset and eight layout passes in both revisions; variations concentrate in menu/scroll
+captures. Resy's populated venue reproduces roughly one layout per rendered frame on both
+revisions (371/450 layouts), with comparable step time and no missing APIs or draw failure.
+Flappy Bird's page error and Harmonic's regex error reproduce. Saved same-baseline YouTube
+and Lichess captures also contain their respective Matrix/SAX and pthread failures.
+
+The full capture's lower native-game FPS did not persist in two alternating, fresh-browser
+15-second comparisons without readback in the timed window. Flappy Bird after `play` measured
+22.40→22.46 and 23.06→23.20 GL FPS; Doodle Jump after `title` measured 26.73→28.26 and
+29.72→28.92. Every sample remains visible, alive, advances rendering, and has no GL/layout/draw
+error or queued main job. Flappy retains its baseline ad WebView error. These SwiftShader runs
+do not prove a speedup or uncontended performance; they do not reproduce a consistent slowdown.
+No production changes or visual-golden updates followed the frozen final validation.
+An additional clean, uninstrumented full-Chrome launch of that source restored the level-3
+puzzle, 240 coins and six lives by the five-minute capture. It had 431 GL frames / 4,977 draws,
+no native fault and zero GL/layout/draw errors. Chrome and the reference AVD were left open;
+the AVD retained its level-2 puzzle. This confirms the final source without the removed
+adaptive-slice experiment or temporary budget wrapper.
+
+The current original-ARM32 settings screen leaves Player ID blank while the ARM64 AVD shows
+an ID. Unity logs say legacy migration is waiting for a player record; a successful TCP connect
+to the configuration service does not prove that record was retrieved. No identity or backend
+success is fabricated. Later unlocked features and complete game coverage remain unvalidated;
+the evidence establishes the observed early-level, audio, persistence and resume paths.
+
+A post-matrix native sample remained slow: 11 GL frames in 15.57 s, 15.40 s native execution,
+with audio callbacks, Unity workers and Adjust's signer sharing the work. Unity's hot texture
+worker at `+0x32a320` repeatedly uses wide Thumb arithmetic. Equivalent shifted-register and
+eight-bit immediate forms now lower through the existing ARM data-processing emitter, retaining
+its flag and shifter semantics. General ORN, PC operands and other modified immediates remain
+on the interpreter path. All 73 ARM checks / 817 assertions and typecheck pass. A million-loop
+probe with four wide operations measures 32–35 ms before and 0.6–0.8 ms warm afterward, with
+identical results; this is not an app-speed claim. Fresh normal-JIT Chrome restores level 3
+by the 230-second capture, and a rope swipe completes its first puzzle without a native or
+rendering fault. The first 15-second game sample remains about 0.72 GL FPS. A new full matrix
+is required after the performance candidate is frozen.
+The same worker's register-indexed byte/halfword/word accesses now share the existing immediate-
+transfer emitter, including signed loads and executable-memory invalidation. Writeback and PC
+forms retain interpreter handling. Rebuilding before the tests passes 73 ARM checks / 817
+assertions and typecheck. The focused four-transfer loop gives identical outputs and measures
+55–104 ms on the old path versus about 1.6 ms warm on the new one; host contention remains.
+Fresh combined app validation follows. No additional test file or app-specific shortcut is added.
+The combined `b5ae9cb5` build subsequently restores the level-3 puzzle by the 248-second capture
+and completes its first stage with an ordinary rope swipe. It advances to stage two without
+native, GL, layout or draw faults. A 15.40-second stage-two sample renders 18 frames (1.17 GL FPS),
+spending 15.13 s on 934 million native instructions. Different game state and background work
+prevent a paired whole-app speed claim. The candidate is frozen for repeated final verification.
+
+Direct `bun test` previously bypassed the runtime-only preload, allowing ARM tests to read stale
+generated Wasm. Bun's separate `[test].preload` now invokes the same owning builder. Marking both
+generated outputs stale and running the existing ARM suite rebuilt ReleaseFast and ReleaseSafe
+before all 73 tests / 817 assertions passed. Both generated files remain byte-identical to the
+validated candidate. This adds no test file or duplicate build logic; Bun documents the separate
+configuration in https://bun.com/docs/runtime/bunfig.
+
+Final validation of `b5ae9cb5` passes typecheck and all 1,295 tests / 27,213 assertions. The
+serialized full E2E rerun completes 159 steps across 12 flows in 823.4 seconds. There are no
+wedges, failed actions, settling timeouts, GL errors or required native delegates. All Android
+realms return diagnostics and each main app advances ticks. YouTube retains four Matrix draw
+errors and SAX exceptions; Harmonic retains its regex error; Lichess retains pthread errors
+3/22/35. Flappy's embedded WebView retains its page-status TypeError and two frames without
+emulator diagnostics. Reddit additionally reaches the already unsupported process-start timing
+query without an uncaught exception or failed action. These gaps are recorded, not suppressed.
+
+Compared with the preceding matrix, FitNotes and Mihon onboarding retain exact mean content
+scores of 40.11639% and 17.69141%. Mihon app changes 57.23855→56.68434%, concentrated in its
+randomized final empty-state face; inspected surrounding controls are unchanged. Harmonic
+changes 27.49948→27.40239%, primarily in the overflow capture, with populated comments and
+unchanged inset behavior. Resy again renders its venue and all 13 steps without missing APIs
+or errors. Goldens remain unchanged. This is compatibility evidence, not an uncontended speed
+claim; a separate active Chrome workload remains on the host. Complete Cut the Rope parity
+is still limited by slow startup/rendering, blank Player ID and untested later unlocked features.
+
+The loaded original-ARM32 puzzle still rendered 30 frames in 26.56 seconds at `61dbde11`, with
+23.47 seconds in native execution. Unity's hot texture worker repeatedly leaves the JIT for
+single-instruction IT/move pairs. Those non-faulting register/immediate pairs now use the shared
+condition emitter and retain flags, both instruction counts and code-invalidation coverage.
+Longer IT blocks, PC operands, cross-page pairs and forced-interpreter ranges retain the old
+path. The existing IT fixture now covers taken/skipped moves across all three accepted forms;
+typecheck and 73 ARM tests / 829 assertions pass. The isolated million-loop probe preserves
+its exact 9,000,001 instruction count and register results while falling from about 39 ms to
+2.5–3.6 ms warm. No additional test file or app-specific behavior is introduced.
+
+Fresh Chrome restores level 3 with 240 coins and six candies, then completes its first puzzle
+and advances to the second without native, GL, layout or draw faults. A visible pre-cut sample
+renders 68 frames in 42.63 seconds (1.60 GL FPS), spending 40.41 seconds on 3.34 billion native
+instructions. This is not a controlled paired app-speed claim. The profile also identifies
+writeback transfers in hot native arithmetic loops that remain interpreted; performance work is open.
+The preceding full regression matrix does not cover this follow-up change.
+
+Hot native arithmetic loops also use Thumb pre/post-index memory transfers. Their immediate
+offsets and base-register updates now reuse the existing memory emitter and store-invalidation
+helper; PC operands, invalid encodings and overlapping load/writeback destinations still use
+the interpreter. Typecheck, 73 ARM tests / 829 assertions and all 12 cache/invalidation tests /
+1,147 assertions pass. Existing word, byte, halfword and signed-load fixtures cover these forms;
+no new test is added. A million-loop spill/restore probe preserves its base and loaded value,
+dropping from 26–28 ms to about 1.3 ms warm. Fresh full Chrome restores level 3 and completes its
+first puzzle, advancing to the second with zero native, GL, layout or draw faults. Its visible
+pre-cut sample renders 69 frames in 38.36 seconds (1.80 GL FPS), with 36.01 seconds native time
+and 3.31 billion instructions. Different sample timing and host contention still prevent a
+controlled app-speed claim. The same profile's Thumb long multiply-accumulate path remains an
+interpreted hotspot; its ARM counterpart already has reusable JIT arithmetic.
+
+Thumb signed/unsigned long multiplication, long accumulation and UMAAL now lower through that
+existing ARM arithmetic emitter. Invalid register combinations and other instruction families
+retain interpreter handling. Typecheck and 73 ARM tests / 829 assertions pass; the existing
+long-multiply fixture compares both halves, signed results, accumulation and unchanged flags
+between tiers. No new test is added. The million-UMAAL probe retains 21,000,000 / 0 in its low/high
+registers and falls from about 8.8 ms to 0.8 ms warm. Fresh original-ARM32 Chrome restores level 3
+and again completes its first puzzle without native or rendering faults. An untraced visible
+sample renders 80 frames in 44.18 seconds (1.81 GL FPS), with 40.97 seconds native execution;
+this does not establish a whole-app improvement over the preceding candidate.
+
+The AVD's current Unity log says legacy migration is already complete. The existing browser
+profile instead waits for a player record on a suspected reinstall. A new isolated Chrome
+context is testing a clean install without deleting the existing saved game. A short filtered
+native trace there records priority/scheduler calls; its startup is diagnostic, not a timing
+comparison. Native priority entry points currently return success without changing scheduling,
+but their actual requested priorities must be established before changing the scheduler.
+
+Earlier investigation entries follow; their open questions describe the revision at that time.
+
+Worktree `codex/cut-the-rope`, baseline `9d0bb979`. Development checks are restricted to this
+game and changed owners; the full serialized E2E matrix is reserved for the final candidate.
+Full Chrome runs at port 4091, 720×1280 / 320 dpi, alongside API 33 AVD `emulator-5560` at the
+same geometry. The supplied 4.2.1 / 3000048 XAPK contains only ARM32 native libraries. The
+available AVD images run ARM64 applications; an API 25 ARM32 emulator attempt was unsupported
+by the installed host emulator. The ARM64 variant of the same publisher/version was obtained
+from [APKPure](https://apkpure.net/cut-the-rope/com.zeptolab.ctr.ads/download/4.2.1), installed
+in the AVD and added separately as `Cut the Rope ARM64.xapk`. Both variants have signing
+certificate SHA-256 `f51a71b121cfd93f25aa2e00eeb50a8ab5ef0e39648bc3b7a711a3f89382d330`;
+their base APKs differ, so ARM64 results do not establish original ARM32 compatibility.
+
+Retained startup fixes include bounded binary `memmem`, Thumb BFI/BFC, Java/NDK shared
+Looper identity, and guest-pointer-width EGL config arrays. Unity ARM32 rejected the former
+CPU feature list. Advertising NEON exposed the SIMD gaps documented below; the advertisement
+is retained after the original ARM32 build completed level 1.
+
+The ARM64 black screen was a shader rewrite defect. Swizzle helpers were inserted after the
+last `#extension`, inside a conditional extension block. WebGL removed that block, leaving
+Unity's final CoreBlit pass 23 with undeclared helpers. Keeping the helper preamble outside
+conditional blocks restored title and gameplay rendering. Intermediate render targets already
+contained valid pixels. `jit=0` retained the failure, and a zero GL-error count alone did not
+detect shader compilation failures. A later temporary uniform probe itself threw on a null
+uniform location and broke rendering; that probe was removed and its output excluded.
+
+SDK startup exposed three separate JVM problems: in-memory DEX buffers were not loadable;
+distinct Unicode field names collapsed to the same mangled name (a HashMap overwrote a
+HashSet in IronSource); and String reflection omitted Object as its superclass. Retained fixes
+use the shared DEX loader, lossless member-name escaping, and the normal superclass path.
+Synchronized `Map.putAll(self)` also lost thread ownership after an awaited entry-set lookup,
+then blocked on its own monitor as another thread. The shared copy path now preserves the
+caller. JNI construction/invocation similarly restores the caller after class initialization
+and reads JNI arguments before suspension. Focused core tests cover these contracts.
+
+Unity's FMOD engine selects `libaaudio.so`; it does not fall back to OpenSL ES on this build.
+An initial OpenSL implementation was abandoned after the loader trace established that fact.
+The retained AAudio bridge sends the app's 24 kHz mono float PCM, 512 frames per callback,
+through the existing AudioTrack scheduling owner. Callback CPUs are independent from the
+Java caller. Real browser probes observed thousands of buffers, nonzero PCM, and no FMOD
+initialization error. The music toggle produced silence and restored nonzero output. Capture
+and synchronous AAudio writes remain explicitly unsupported. The implementation follows the
+[NDK callback and state contracts](https://developer.android.com/ndk/guides/audio/aaudio/aaudio)
+and installed NDK 29 headers. ScheduledFuture lacked Delayed.getDelay; adding real deadlines
+removed that missing call and the observed two-second Unity pause timeout on the next
+background/resume comparison. More lifecycle validation remains.
+
+Local captures and diagnostic logs are under ignored `webdroid-shots/cut-the-rope/`.
+`avd-menu.png` is the first tutorial, `avd-cut.png` the second, and
+`avd-stage2-swing.png` the third after another cut; the AVD subsequently completed level 1.
+Chrome renders the first tutorial. Its shell initially sent touch events directly to the decor,
+bypassing UnityActivity.onTouchEvent. Dispatch now follows Activity → Window → decor, with
+the Activity fallback when children do not consume the event. A real rope cut then advanced
+to the second puzzle, but native worker faults prevent a reliable completed-level comparison.
+Earlier claims of two working Chrome transitions were not supported by the later input checks.
+A black canvas.toDataURL capture is also excluded: the displayed bitmaprenderer surface
+requires the harness readback path or a browser screenshot. Startup takes substantially longer than the shell's
+reported boot time; that boot number excludes Unity initialization and is not a game timing.
+ARM64 smoke compilation passed 64,465 classes with zero method failures. Owning checks and
+typecheck passed at intermediate revisions. Full tests/E2E and final performance measurements
+have not run. POSIX timer callbacks now use real guest pthreads. Provider/Application startup
+and SQLiteOpenHelper callbacks retain main-thread/connection ownership; Cursor implements
+Closeable. Boxed primitive serialization matches Java wire descriptors. Android XML parsing
+reuses the SAX owner, including callbacks that suspend. Reached package, preference, pending
+intent, file and codec queries are implemented at their owning modules. Native worker faults,
+a GC signal-mask deadlock in an interpreter comparison, video extraction/decoding, additional
+SDK paths, and ARM32 execution remain open; this entry is progress evidence, not completion.
+
+Follow-up diagnosis established that a signal handler released its call depth before restoring
+its signal mask. An interrupted host call that completed during delivery could resume and create
+a pthread with the temporary handler mask. A minimal ARM32/A64 program reproduces that inherited
+mask window; restoring signal state before releasing the frame fixes it. Normal JIT execution
+still reproduced an independent Unity worker fault at `libunity.so+0x687150` (store through x25).
+JIT fault exits now retain the exact instruction PC instead of an older host-return address.
+The symbolized block is `libunity.so+0x6870ec`; an earlier manual base subtraction incorrectly
+attributed that block to the allocator at `+0x6720ec`.
+
+A diagnostic run excluding Unity offsets `0x670000..0x689000` from JIT compilation completed
+all three level-1 puzzles and displayed the same 20-coin/3-candy reward as the AVD. Narrower
+exclusions through `0x672000..0x673000` also stayed fault-free on the observed path. These are
+experiments, not a production workaround or proof of a specific miscompiled instruction. An
+isolated copied bit-reader function at `+0x672c18` agreed across interpreter/JIT on randomized
+fast and slow decode paths. The worker fault remains open.
+
+The game writes profile files below `/sdcard/Android/data/com.zeptolab.ctr.ads/files`, which the
+existing internal-file persistence filter omitted. Extending that canonical owner to app-owned
+external files retains package-prefix restoration and disposable-cache behavior. A browser
+probe confirms profile files reach IndexedDB. A controlled reload returned to level 2 with
+220 coins and six candies; device-auth and player-profile hashes stayed identical. The level
+profile changed during startup, so byte identity is not claimed for that file. A reached parcel failure is specifically ApplicationInfo in Google's
+SafeParcelWriter, identified through a throwing receiver probe; it remains to be implemented.
+
+A fresh isolated Chrome profile subsequently completed all three level-1 puzzles with normal
+JIT, showing the same 20-coin/3-candy reward. That run stayed fault-free through 9,146 shell
+ticks; it does not explain earlier worker faults. The browser/server handles later disappeared
+and were restarted only after tool inventory and the listening-port check confirmed termination.
+A new full-interpreter run advanced beyond the previous GC stall and completed level 2’s
+first puzzle with matching AVD geometry. During the next puzzle it faulted in nativePause;
+that run therefore does not establish lifecycle stability. `browser-level2-reloaded.png` and `avd-level2.png` capture matching level-2
+geometry; animated poses and star phases differ.
+
+Reached FileChannel.transferTo now copies bounded chunks through virtual channel writes without
+moving the source position. The existing NIO tests pass (12 tests, 55 assertions). Video codec
+queries use the advertised AVC 4.2 / VP9 4.1 block and rate limits; the size-specific range uses
+Double bounds, and size/rate checks no longer ignore the rate. Typecheck and the owning check
+pass. ARM32 shifted-register ADC/SBC/RSB now share the immediate arithmetic implementation;
+assembled instruction bytes pass all 50 ARM decoder tests, including interpreter/JIT comparison.
+
+
+Further ARM32 startup coverage now includes NEON interleaved structure transfers, VLD1/VST1
+lane transfers and VLD1 replication, shared SIMD arithmetic, non-fused VMLA/VMLS, Thumb RBIT,
+and doubleword exclusive transfers. ARM BFC/BFI used the width field as a source register in
+both tiers; Unity’s `bfc sp,#0,#4` consequently left the stack misaligned. Both tiers now use
+the actual low register field. Assembled instructions and the existing decoder checks validate
+these changes. With the diagnostic NEON advertisement, the original package now reaches
+Unity’s nativeRender before the next missing Thumb encoding; gameplay is not yet established.
+
+The interpreter lifecycle fault was at Unity `+0x93ad70`, block `+0x934068`, during nativePause,
+followed by an IL2CPP fault. A later normal-JIT run completed all three level-2 puzzles and
+showed the 20-coin/3-candy reward without a native fault through 25,681 ticks. One explicit
+background/resume cycle also passed. These observations do not resolve the earlier failures.
+`browser-jit-level2-stage3.png` captures the final puzzle; the reward was captured inline.
+The AVD reached an AppLovin test interstitial (`avd-after-ad.png`) that did not dismiss with
+Back. The browser reached the same activity but threw before displaying it: Activity and
+Window.findViewById returned null before decor installation. They now follow Android’s
+Activity → Window → getDecorView path; the owning window check passes. That correction still
+requires a fresh app run through the interstitial.
+
+BitmapFactory.decodeFile now opens and closes a real FileInputStream and shares decodeStream.
+A Chrome probe decoded a generated 3×2 PNG, returned bounds-only metadata, and returned null
+for a missing file. Typecheck passed. Full regression and final performance checks remain pending.
+
+The fresh ARM64 run passed the earlier decor lookup, retained level 3 / 240 coins on reload,
+and completed its first puzzle. Ad presentation then failed at setWillNotCacheDrawing; that
+flag now has real setter/getter state. The Unity looper subsequently retained a NEXT_FRAME
+message without dispatching it, despite advancing shell ticks and no captured native fault.
+This freeze remains unresolved; shell ticks alone do not establish ongoing gameplay. The AVD
+again reached its undismissed test interstitial after restart, so no AVD level-2 reward is claimed.
+
+Original ARM32 startup exhausted its 256 MB address space while loading Unity and IL2CPP.
+The core still starts at 256 MB but now expands to 2 GB when loading ARM32 native images,
+following the existing lazy ARM64 expansion. Startup then exposed Thumb rotated extensions,
+signed memory loads, ARM RBIT/exclusive decoding, and signed halfword multiply accumulation.
+Shared decoders replace the repeated Thumb memory-transfer branches and halfword accumulation.
+Further native initialization reached qsort/bsearch callbacks: BigInt pointer arguments consumed
+two ARM32 registers, placing the second pointer in r2 instead of r1. Both comparators now use
+the guest pointer ABI; real guest-comparator checks pass for ARM32 and ARM64.
+
+ARM MLS was decoded as a transfer and now shares each tier's multiply path. ARM LDREXD
+also exposed a JIT fallback bug: generic transfer writeback modified its base before interpreter
+dispatch, adding PC+8 to the valid address. Exclusive and swap instructions now dispatch before
+transfer side effects. The decoder suite passes 54 checks / 553 assertions, including a 64-bit
+exclusive increment with carry and unchanged base. The temporary NEON advertisement remains
+uncommitted, and original-package gameplay is still unproven.
+
+Further unchanged Unity initialization reached NEON variable shifts, ZIP/UZP/TRN, scalar-lane
+float multiply/accumulate, lane broadcasts, reciprocal estimates/steps, zero comparisons,
+reversals, float comparison masks, narrowing, and signed/unsigned lane-to-core transfers.
+These use the shared SIMD/FP owners. A too-broad scalar decode initially intercepted VEXT;
+the mask was narrowed and the reached quad-register VEXT was added to the same core check.
+ARM32 reciprocal steps round their multiplication separately, unlike A64's fused step;
+the implementation follows ARM DDI 0406C.d A2.7, pages A2-84 through A2-88, including the
+zero/infinity special result and standard denormal handling. The source reference is
+[Arm's architecture manual](https://documentation-service.arm.com/static/5f8dc043f86e16515cdbbc92).
+The latest owning decoder run passes 58 checks / 627 assertions. Some startup reloads failed
+inside Unity's matrix initialization before nativeRender; the subsequent strlen(null) error
+was downstream of those instruction faults, not evidence for accepting null strings in libc.
+
+After the remaining reached immediate shifts and float extrema/sign operations were added,
+both tiers reproduced a pointer-corruption fault during matrix initialization. Diagnostic
+single stepping itself was passing a whole slice budget to the core; it now requests one
+instruction per trace entry. That trace identified high-register VLDM instructions being
+decoded as VFP/core register-pair moves, replacing pointers and LR with float/NaN bits.
+The register-pair mask omitted the U bit. Requiring U=0 preserves real pair moves and restores
+high-register loads. The original package then completed matrix initialization and started
+Unity worker threads, reaching Thumb LDREXB/STREXB and NEON integer comparison/multiply.
+The existing exclusive-transfer path now handles byte/halfword lanes, and integer vector
+operations share the SIMD owner. The owning run passes 62 checks / 679 assertions; typecheck
+passed before those last two extensions. No original-package gameplay or final regression
+pass is claimed yet.
+
+The next reached instructions reuse shared SIMD widening, integer extrema/sign, and pairwise
+extrema. ARM ABI `__aeabi_memclr{,4,8}` reuses bounded `bzero`; a guest probe verifies an
+unaligned byte count and unchanged surrounding bytes. Thumb saturation exposed defects in
+the existing ARM operation: wrong source-register selection, missing 32-bit shift wrapping,
+and missing sticky Q. Both encodings now share corrected saturation. Thumb halfword packing
+also shares the existing ARM semantics. The latest owning decoder run passes 65 checks /
+722 assertions and typecheck passes. Original ARM32 initialization now creates its graphics
+worker, but rendered gameplay, lifecycle stability and final regression checks remain open.
+
+Reaching managed startup exceptions exposed missing `dl_unwind_find_exidx`. Android's
+[ARM unwind lookup](https://android.googlesource.com/platform/bionic/+/ics-mr1-release/libc/arch-arm/bionic/exidx_dynamic.c)
+has the same semantics as the already implemented GNU lookup; both names now share it.
+Guest tracing confirms table lookup and continued exception unwinding rather than aborting.
+Further reached SIMD gaps include integer/float zero comparisons, float/integer conversion
+and vector inversion. They reuse the shared SIMD implementation. The owning run passes 66
+checks / 738 assertions and typecheck passes. Original ARM32 XAPK smoke compilation covers
+64,465 classes with zero method failures. These checks do not establish rendered gameplay.
+Ad-specific implementation is excluded unless it blocks another feature; the AVD test ad
+is not a target for independent implementation.
+
+Further worker startup reached Thumb SMMUL and UMAAL. Signed high multiplication shares
+ARM/Thumb rounding and accumulate/subtract semantics; UMAAL extends the existing Thumb
+long-multiply path. With those faults cleared, both normal JIT and `jit=0` reported missing
+`RootAssetsScriptableObject` / `BaseToastPrefab` keys. Two guest catalog buffers had SHA-256
+`853cb8eb44508d4bfaa686229b033a739cdd60b56a0ef1e1d7195ce396dbc5a0`, identical to both
+packaged variants. Read-only IL2CPP reflection found 3,623 decoded dictionary entries,
+including both keys. Direct dictionary lookups succeeded; ResourceLocator.Locate failed.
+Instruction tracing identified the delegate trampoline's `BLX lr`: the interpreter replaced
+LR before reading its branch target, skipping the delegate entirely. Reading the target first
+fixes that ordering; JIT already reads before writing. A minimal call/return check exercises
+both tiers. All 68 ARM checks / 747 assertions and typecheck pass. An earlier overlapping
+manual reflection probe caused a diagnostic-only main-CPU fault; it is excluded from app
+fault evidence. Fresh game validation follows this repair.
+
+
+Fresh ARM32 startup now resolves the catalog and enters asset preloading. Reached widening
+VMLAL/VMLSL/VMULL and integer scalar multiplication reuse the SIMD owner; ARM UMAAL joins
+the existing long-multiply paths in both execution tiers. Thumb SBFX shares extraction with
+ARM SBFX/UBFX, including full-width and signed lane checks. The current ARM owner run passes
+70 checks / 773 assertions; typecheck passes.
+
+A later signal delivery jumped outside the loaded libraries. The installed IL2CPP handler
+remained valid, but nested guest entry retained the interrupted Thumb IT state. A minimal
+signal-handler test reproduces a skipped first instruction before the fix and verifies both
+handler execution and restoration of the interrupted condition state afterward. Guest entry
+now clears IT after saving the register file, consistent with
+[Android's ARM signal setup](https://android.googlesource.com/kernel/common/+/f6ec306b93dc6/arch/arm/kernel/signal.c).
+All 19 CPU owner checks pass. Fresh gameplay validation is still pending; the isolated test
+establishes this entry contract, not the cause of every earlier worker fault. The AVD was
+restarted past the stuck test ad, advanced to level 2's second puzzle, and captured with its
+settings controls expanded (`avd-level2-stage2-latest.png`, `avd-settings-stage2.png`).
+
+Original ARM32 startup next reached packed-byte extension. ARM/Thumb now share the pair
+operation; SX(T|TA)B16 and UX(T|TA)B16 preserve independent halfword addition and rotation.
+The owning checks pass 70 tests / 781 assertions, and typecheck passes. The next fresh run
+rendered the title screen, then a Cronet load changed all Unity CPUs to A64. The public loader
+called `setA64` before the linker's width check, defeating its process-ABI guard. Initialization
+now fixes the ABI once, restricts subsequent library searches to that width, and rejects
+incompatible loads with UnsatisfiedLinkError before changing CPU/JNI state. Direct probes
+with both packaged libmain images confirm that rejected opposite-width loads preserve pointer
+width, CPU mode and ABI search order. The fresh browser comparison is pending.
+
+After ABI isolation, an ordinary JIT run stalled near the title screen; a diagnostic 100,000-
+instruction slice run first reported Unity stack-canary failure at `+0x357358`, followed by
+Wasm table/memory faults. These later faults are downstream evidence, not independent causes.
+A full interpreter comparison reached 1,637 GL draws without that failure, then stopped on
+`VADDHN.I16` at Unity `+0xa9d4a8` in a game worker. High narrowing add/subtract, including rounding,
+now reuse the shared SIMD implementation. Auditing the execution tiers also found Thumb JIT
+`BLX lr` overwriting its target before reading it. The minimal call program produced 6 under
+JIT versus 16 under the interpreter before the repair; both now produce 16. This contract fix
+is not yet established as the stack-canary failure's cause. All 71 ARM checks / 794 assertions
+and typecheck pass. Production JIT validation is restarting.
+
+AVD settings captures confirm independent music/sound toggles and exit to the home screen;
+leaving the puzzle reduces lives from five to four while retaining 220 coins and level 2.
+`avd-home-settings-settled.png` shows the home settings dialog with both audio options muted.
+Intro-video playback is a reached non-ad gap; the interpreter logs a real VideoPlayer failure.
+Ad-only APIs remain deferred. No final E2E or performance acceptance claim has been made.
+
+The title-screen stall's measured hot thread was Adjust's native signer: 100,000 guest
+instructions took about 2.8 seconds while repeated reallocations grew a 130+ MiB buffer by
+512 bytes. Shorter slices exposed the workload but did not fix it. A separate fresh run
+failed Unity's stack canary before the signer loaded. Inspecting JIT flag liveness found a
+core defect: wide Thumb instructions had no declared flag dependencies, so a branch could
+discard carry before an interpreted ADC. A seven-halfword fixture returned 0 under JIT and
+1 under the interpreter. Wide instructions now conservatively retain the fallback's flag
+dependencies across block edges. All 71 ARM checks / 797 assertions and typecheck pass.
+The next normal-JIT game run reached 4,700 GL draws without either prior fault, then stopped
+on `VTBL.8` at Unity `+0x90f6e4` in a game worker. ARM and Thumb VTBL/VTBX now share byte-table
+lookup with A64, preserving out-of-range extension bytes and overlapping registers. The
+ARM/A64 SIMD owner checks pass 81 tests / 1,023 assertions, and typecheck passes. A focused
+Thumb MOVW/MOVT lowering also removes full register spills for immediate moves. An isolated
+one-million-iteration loop dropped from about 45 ms to 0.78 ms after warmup; this is a
+microbenchmark, not app performance acceptance. Fresh game validation with the normal
+3,000,000-instruction slice budget is restarting.
+
 ## microG completion and open acceptance
 
 PLAN.md owns current status. Both Android and webdroid now

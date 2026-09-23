@@ -376,10 +376,15 @@ rt.markers("android/net/TransportInfo");
 // ── Wi-Fi: the relay's network is the one Wi-Fi network, and everything a location permission
 // would gate (SSID, BSSID, address) reads as the platform's redacted values
 class JWifiInfo extends JObj {}
+const supplicantStates = mkEnumSet("android/net/wifi/SupplicantState", [
+  "DISCONNECTED", "INTERFACE_DISABLED", "INACTIVE", "SCANNING", "AUTHENTICATING", "ASSOCIATING",
+  "ASSOCIATED", "FOUR_WAY_HANDSHAKE", "GROUP_HANDSHAKE", "COMPLETED", "DORMANT", "UNINITIALIZED", "INVALID",
+]);
 rt.register({
   name: "android/net/wifi/WifiInfo", ctor: JWifiInfo, ifaces: ["android/net/TransportInfo", "android/os/Parcelable"],
   methods: {
     "getSSID()Ljava/lang/String;": () => "<unknown ssid>",
+    "getSupplicantState()Landroid/net/wifi/SupplicantState;": () => supplicantStates[11],
     "getBSSID()Ljava/lang/String;": () => "02:00:00:00:00:00",
     "getMacAddress()Ljava/lang/String;": () => "02:00:00:00:00:00",
     "getNetworkId()I": () => -1,
@@ -538,6 +543,7 @@ rt.register({
     },
     "getBoundNetworkForProcess()Landroid/net/Network;": () => boundNetwork,
     "getRestrictBackgroundStatus()I": () => 1,
+    "getBackgroundDataSetting()Z": () => 1,
     "getDefaultProxy()Landroid/net/ProxyInfo;": () => null,
     "registerNetworkCallback(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;)V": (_r: unknown, cb: unknown) => registerCallback(cb),
     "registerNetworkCallback(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;Landroid/os/Handler;)V": async (_r: unknown, cb: unknown, handler: unknown) => registerOnHandler(cb, handler),

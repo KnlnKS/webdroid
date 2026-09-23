@@ -89,8 +89,8 @@ export const device = {
     "android.hardware.faketouch", "android.hardware.screen.portrait", "android.hardware.screen.landscape", "android.hardware.wifi",
     "android.hardware.location", "android.hardware.location.gps", "android.hardware.location.network",
     "android.software.webview", "android.software.input_methods", "android.software.home_screen", "android.software.app_widgets"],
-  /** /proc/cpuinfo, /proc/meminfo and uname: VFPv3 without NEON, as the ARM32 tier implements */
-  cpu: { cores: 4, features: "swp half thumb fastmult vfp edsp thumbee vfpv3 tls", hardware: "webdroid", memKb: 2 * 1024 * 1024 },
+  /** CPU and memory descriptors shared by procfs and uname. */
+  cpu: { cores: 4, features: "swp half thumb fastmult vfp edsp thumbee vfpv3 neon tls", hardware: "webdroid", memKb: 2 * 1024 * 1024 },
   get statusBar(): number { return Math.round(this.statusBarDp * this.density); },
   get navBar(): number { return Math.round(this.navBarDp * this.density); },
   get touchSlop(): number { return Math.round(this.touchSlopDp * this.density); },

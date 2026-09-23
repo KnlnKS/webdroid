@@ -535,6 +535,8 @@ rt.register({
     "isActive()Z": () => served || focusedEdit ? 1 : 0,
     "isActive(Landroid/view/View;)Z": (view: unknown) => view != null && (view === served?.view || view === focusedEdit) ? 1 : 0,
     "getEnabledInputMethodList()Ljava/util/List;": () => newArrayList(),
+    "getInputMethodList()Ljava/util/List;": () => newArrayList(),
+    "getCurrentInputMethodSubtype()Landroid/view/inputmethod/InputMethodSubtype;": () => null,
     "restartInput(Landroid/view/View;)V": async (view: JView) => imeMain(async () => { if (view) await connectInput(view); }),
     "updateSelection(Landroid/view/View;IIII)V": (view: JView, start: number, end: number) => {
       if (served?.view === view) { served.start = start; served.end = end; mirrorInput(); }

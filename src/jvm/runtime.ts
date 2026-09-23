@@ -368,7 +368,7 @@ export class Runtime {
       info.native = true;
       if (this.nativeIfaces().has(name)) info.flags |= ACC.INTERFACE;
       info.ctor = native.ctor;
-      this.adopt(info, name !== "java/lang/Object" && name !== "java/lang/String" ? native.sup ?? "java/lang/Object" : null, native.ifaces ?? []);
+      this.adopt(info, name !== "java/lang/Object" ? native.sup ?? "java/lang/Object" : null, native.ifaces ?? []);
       this.setupNativeMembers(info, native);
       this.copyDefaults(info);
       return info;

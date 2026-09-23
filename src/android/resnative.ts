@@ -3,6 +3,7 @@
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newXmlPullParser } from "./xmlpull";
+import { parseSax } from "./sax";
 import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, JXmlParser, obtainStyled, resolveStyleValue, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
@@ -116,6 +117,7 @@ rt.register({
     "getLayoutDirection()I": function (this: JConfiguration) { return (this.screenLayout & 0xc0) === 0x80 ? 1 : 0; },
     "isNightModeActive()Z": function (this: JConfiguration) { return (this.uiMode & 0x30) === 0x20 ? 1 : 0; },
     "isScreenWideColorGamut()Z": function (this: JConfiguration) { return (this.colorMode & 3) === 2 ? 1 : 0; },
+    "isScreenHdr()Z": function (this: JConfiguration) { return (this.colorMode & 12) === 8 ? 1 : 0; },
   },
 });
 // API 33: no per-app locale override is ever set here, so the app's locales are the system's
@@ -273,6 +275,11 @@ rt.register({
     "getNonSystemLocales()[Ljava/lang/String;": function (this: JAssetManager) { return jarray([...this.host.arsc?.locales ?? []], "Ljava/lang/String;"); },
     "open(Ljava/lang/String;)Ljava/io/InputStream;": assetOpen,
     "open(Ljava/lang/String;I)Ljava/io/InputStream;": assetOpen,
+    "openXmlResourceParser(Ljava/lang/String;)Landroid/content/res/XmlResourceParser;": async function (this: JAssetManager, path: string) {
+      const bytes = this.host.zip[path], source = this.host.lazyEntries.get(path);
+      if (!bytes && !source) throw rt.mkThrowable("java/io/FileNotFoundException", path);
+      return xmlFromBytes(this.host, bytes ?? await readFully(source!));
+    },
     "openFd(Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": async function (this: JAssetManager, p: string) {
       return mkAssetFd(await readFully(assetSource(this, p)));
     },
@@ -652,9 +659,12 @@ rt.register({
 
 // XmlResourceParser (pull parser over XmlNode tree)
 export function mkXmlParser(res: Resources, id: number): JXmlParser {
-  rt.link("android/content/res/XmlResourceParser");
   const bytes = id ? res.fileOf(id)?.bytes : null;
   if (!bytes) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "xml resource 0x" + id.toString(16));
+  return xmlFromBytes(res, bytes);
+}
+function xmlFromBytes(res: Resources, bytes: Uint8Array): JXmlParser {
+  rt.link("android/content/res/XmlResourceParser");
   const p = new JXmlParser();
   p.res = res;
   p.set.res = res;
@@ -717,6 +727,7 @@ rt.register({
     // our XmlResourceParser already implements AttributeSet
     "static asAttributeSet(Lorg/xmlpull/v1/XmlPullParser;)Landroid/util/AttributeSet;": (p: unknown) => p,
     "static newPullParser()Lorg/xmlpull/v1/XmlPullParser;": () => newXmlPullParser(),
+    "static parse(Ljava/lang/String;Lorg/xml/sax/ContentHandler;)V": parseSax,
   },
 });
 

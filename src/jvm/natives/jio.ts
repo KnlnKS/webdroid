@@ -6,7 +6,7 @@ import { vcall, vcallMaybe, vcallOn, curThread, after, stringHash, stringCompare
 import { csText } from "./jchars";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
 import { procText } from "../../shell/procfs";
-import { mappedBuffer, mappedReadOnlyBuffer, type JBuffer } from "./jnio";
+import { mappedBuffer, mappedReadOnlyBuffer, mkByteBuffer, type JBuffer } from "./jnio";
 import { renamePath, javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd } from "../../native/stdio";
 
 /** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
@@ -170,6 +170,7 @@ rt.register({
       return newObj("java/net/URI", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", "file", null, path, null);
     },
     "getName()Ljava/lang/String;": function (this: JFile) { return this.path.split("/").pop() ?? ""; },
+    "isHidden()Z": function (this: JFile) { return this.path.slice(this.path.lastIndexOf("/") + 1).startsWith(".") ? 1 : 0; },
     "getParent()Ljava/lang/String;": function (this: JFile) {
       const i = this.path.lastIndexOf("/");
       return i <= 0 ? null : this.path.slice(0, i);
@@ -732,6 +733,26 @@ rt.register({
     },
     "read([B)I": async function (this: JRAF, b: Int8Array) { return await rafRead(this, b, 0, b.length); },
     "read([BII)I": async function (this: JRAF, b: Int8Array, off: number, len: number) { return await rafRead(this, b, off, len); },
+    "readLine()Ljava/lang/String;": async function (this: JRAF) {
+      checkFileOpen(this);
+      const parts: string[] = [], size = this.source?.size ?? this.buf.length;
+      if (this.pos >= size) return null;
+      while (this.pos < size) {
+        const n = Math.min(4096, size - this.pos), bytes = this.source ? await this.source.read(this.pos, n) : this.buf.subarray(this.pos, this.pos + n);
+        if (!bytes.length) break;
+        let end = 0; while (end < bytes.length && bytes[end] !== 10 && bytes[end] !== 13) end++;
+        parts.push(charsToString(bytes, 0, end)); this.pos += end;
+        if (end < bytes.length) {
+          this.pos++;
+          if (bytes[end] === 13 && this.pos < size) {
+            const next = this.source ? (await this.source.read(this.pos, 1))[0] : this.buf[this.pos];
+            if (next === 10) this.pos++;
+          }
+          break;
+        }
+      }
+      return parts.join("");
+    },
     "readFully([B)V": function (this: JRAF, b: Int8Array) { return rafReadFully(this, b, 0, b.length); },
     "readFully([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { return rafReadFully(this, b, off, len); },
     ...readers((n, get) => async function (this: JRAF) { const b = new Int8Array(n); await rafReadFully(this, b, 0, n); return get(new DataView(b.buffer)); }),
@@ -1363,6 +1384,11 @@ rt.register({
     "<init>(Ljava/io/OutputStream;)V": function (this: JDataOut, s: unknown) { this.sink = s; },
     "write(I)V": function (this: JDataOut, b: number) { return after(vcallMaybe(this.sink, "write", "(I)V", b), () => { this.written++; }); },
     "write([BII)V": function (this: JDataOut, b: Int8Array, off: number, len: number) { return emit(this, b, off, len); },
+    "writeBytes(Ljava/lang/String;)V": function (this: JDataOut, s: string) {
+      const bytes = new Int8Array(s.length);
+      for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+      return emit(this, bytes, 0, bytes.length);
+    },
     ...writers((n, put) => function (this: JDataOut, x: never) { const b = new Int8Array(n); put(new DataView(b.buffer), x); return emit(this, b, 0, n); }),
     "writeUTF(Ljava/lang/String;)V": function (this: JDataOut, s: string) {
       const b = utf8.enc.encode(s), out = new Int8Array(b.length + 2);
@@ -1482,6 +1508,28 @@ rt.register({
       return after(channelRead(this, dst), (n) => { file.pos = saved; return n; });
     },
     "write(Ljava/nio/ByteBuffer;)I": function (this: JFileChannel, src: JBuffer) { return channelWrite(this, src); },
+    "transferTo(JJLjava/nio/channels/WritableByteChannel;)J": async function (this: JFileChannel, position: bigint, count: bigint, target: JObj | null) {
+      const file = this.readable(), thread = curThread;
+      if (!target) return rt.npe();
+      if (position < 0n || count < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "position/count");
+      if (!await vcallOn(thread, target, "isOpen", "()Z")) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
+      if (target instanceof JFileChannel) target.writable();
+      const available = BigInt(file.source?.size ?? file.buf.length) - position;
+      const length = Number(count < available ? count : available);
+      if (length <= 0) return 0n;
+      const buffer = mkByteBuffer(Math.min(length, 65536)), bytes = new Uint8Array(buffer.ab);
+      let transferred = 0;
+      while (transferred < length) {
+        this.readable();
+        const start = Number(position) + transferred, n = Math.min(length - transferred, bytes.length);
+        const data = file.source ? await readFully(file.source, start, n) : file.buf.subarray(start, start + n);
+        bytes.set(data); buffer.pos = 0; buffer.lim = data.length;
+        const written = Number(await vcallOn(thread, target, "write", "(Ljava/nio/ByteBuffer;)I", buffer));
+        transferred += written;
+        if (written < n) break;
+      }
+      return BigInt(transferred);
+    },
     "force(Z)V": () => {},
     "tryLock()Ljava/nio/channels/FileLock;": fileLock,
     "tryLock(JJZ)Ljava/nio/channels/FileLock;": fileLock,

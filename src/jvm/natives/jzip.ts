@@ -1,6 +1,6 @@
 // java.util.zip on fflate: streaming codecs (Inflater/Deflater raw+zlib, CRC32), ZipFile over a
 // central-directory index, GZIPInputStream over a drained source.
-import { Inflate, Unzlib, Deflate, Zlib, Gzip, inflateSync, gunzipSync } from "fflate";
+import { Inflate, Unzlib, Deflate, Zlib, Gzip, inflateSync, gunzipSync, type DeflateOptions } from "fflate";
 import { rt, JObj } from "../runtime";
 import { utf8, i8, u8 } from "../abi";
 import { vcall, vcallMaybe, newObj, defineException } from "./jlang";
@@ -101,6 +101,7 @@ rt.register({
 
 class JDeflater extends JObj {
   raw = false;
+  options: DeflateOptions = {};
   st: Codec | null = null;
   out: Uint8Array[] = [];
   done = false;
@@ -108,7 +109,7 @@ class JDeflater extends JObj {
   pending: Uint8Array | null = null;
   ensure() {
     if (!this.st) {
-      this.st = this.raw ? new Deflate() : new Zlib();
+      this.st = this.raw ? new Deflate(this.options) : new Zlib(this.options);
       this.st.ondata = collect(this);
     }
     return this.st;
@@ -116,14 +117,18 @@ class JDeflater extends JObj {
   feed(bytes: Uint8Array, final = false) {
     this.ensure().push(bytes, final); this.fed += bytes.length;
   }
+  level(value: number): void {
+    if (value !== -1 && (value < 0 || value > 9 || !Number.isInteger(value))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid compression level");
+    this.options.level = value === -1 ? undefined : value as DeflateOptions["level"];
+  }
 }
 rt.register({
   name: "java/util/zip/Deflater", ctor: JDeflater,
   methods: {
     "<init>()V": function () {},
-    // fflate's Deflate has no level knob: the level argument is accepted and ignored.
-    "<init>(I)V": function () {},
-    "<init>(IZ)V": function (this: JDeflater, _level: number, nowrap: number) { this.raw = !!nowrap; },
+    "<init>(I)V": function (this: JDeflater, level: number) { this.level(level); },
+    "<init>(IZ)V": function (this: JDeflater, level: number, nowrap: number) { this.level(level); this.raw = !!nowrap; },
+    "setLevel(I)V": function (this: JDeflater, level: number) { this.level(level); },
     "setInput([BII)V": function (this: JDeflater, b: Int8Array, off: number, len: number) {
       this.pending = u8(b, off, len).slice();
     },

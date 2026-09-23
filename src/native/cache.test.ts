@@ -252,3 +252,21 @@ describe("a branch to a null pointer", () => {
     expect(() => { while (c.runSlice(10000) !== 2) { /* spin */ } }).toThrow(/null page/);
   });
 });
+
+
+test("compiled memory faults retain the failing instruction address", () => {
+  const at = mem.reserve(4096, 4096), data = mem.malloc(16), c = run([RET]);
+  mem.u32.set([0xd503201f, 0xb9000120, RET], at >>> 2); // nop; str w0, [x9]; ret
+  const execute = () => { c.setPc(at); while (c.runSlice(10000) !== 2) { /* spin */ } };
+  try {
+    c.w[18] = data; c.w[19] = 0;
+    const before = jitStats.regions;
+    for (let i = 0; i < JIT_HEAT + 2; i++) execute();
+    expect(jitStats.regions).toBeGreaterThan(before);
+    for (const high of [0, 256]) {
+      c.w[18] = 0; c.w[19] = high;
+      expect(execute).toThrow(/bad address/);
+      expect(c.pc).toBe(at + 4);
+    }
+  } finally { mem.free(data); }
+});

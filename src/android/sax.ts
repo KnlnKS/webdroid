@@ -1,5 +1,5 @@
 import { JObj, noops, rt } from "../jvm/runtime";
-import { defineException, JThrowable, vcall } from "../jvm/natives/jlang";
+import { defineException, JThrowable, vcall, vcallOn, curThread } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 import { newXmlPullParser, readerText } from "./xmlpull";
 
@@ -57,40 +57,43 @@ rt.register({ name: "webdroid/SaxAttributes", ctor: JAttributes, ifaces: ["org/x
   [`getIndex(${S}${S})I`]: function (this: JAttributes, uri: string, local: string) { return attrIndex(this, uri, local); },
 } });
 class JXmlReader extends JObj { handler: unknown = null; errorHandler: unknown = null; namespaces = true; }
-async function parse(this: JXmlReader, source: JInputSource): Promise<void> {
-  if (!source) throw rt.mkThrowable("java/lang/NullPointerException", "source");
-  const input = source.chars ?? source.bytes;
-  if (!input) throw rt.mkThrowable("org/xml/sax/SAXException", "InputSource requires a stream or reader");
+async function parse(this: JXmlReader, source: JInputSource | string): Promise<void> {
+  if (source == null) throw rt.mkThrowable("java/lang/NullPointerException", "source");
+  const thread = curThread, input = typeof source === "string" ? null : source.chars ?? source.bytes;
+  if (typeof source !== "string" && !input) throw rt.mkThrowable("org/xml/sax/SAXException", "InputSource requires a stream or reader");
   const parser = newXmlPullParser(); parser.nsAware = this.namespaces;
   try {
-    const text = source.chars ? await readerText(source.chars) : new TextDecoder(source.encoding ?? "utf-8").decode(await readStreamFully(source.bytes));
+    const text = typeof source === "string" ? source : source.chars ? await readerText(source.chars) : new TextDecoder(source.encoding ?? "utf-8").decode(await readStreamFully(source.bytes));
     try { parser.load(text); }
     catch (error) {
       const exception = rt.mkThrowable("org/xml/sax/SAXParseException", error instanceof JThrowable ? error.msg : String(error));
-      if (this.errorHandler) await vcall(this.errorHandler, "fatalError", "(Lorg/xml/sax/SAXParseException;)V", exception);
+      if (this.errorHandler) await vcallOn(thread, this.errorHandler, "fatalError", "(Lorg/xml/sax/SAXParseException;)V", exception);
       throw exception;
     }
     if (!this.handler) return;
-    await vcall(this.handler, "startDocument", "()V");
+    await vcallOn(thread, this.handler, "startDocument", "()V");
     for (const event of parser.events) {
       const qname = parser.nsAware && event.prefix ? event.prefix + ":" + event.name : event.name;
       if (event.t === 2) {
-        for (const binding of event.bindings ?? []) await vcall(this.handler, "startPrefixMapping", `(${S}${S})V`, binding.name === "xmlns" ? "" : binding.localName, binding.value);
+        for (const binding of event.bindings ?? []) await vcallOn(thread, this.handler, "startPrefixMapping", `(${S}${S})V`, binding.name === "xmlns" ? "" : binding.localName, binding.value);
         rt.link("webdroid/SaxAttributes");
         const attrs = new JAttributes(); attrs.attrs = event.attrs; attrs.namespaces = this.namespaces;
-        await vcall(this.handler, "startElement", `(${S}${S}${S}Lorg/xml/sax/Attributes;)V`, event.ns, this.namespaces ? event.name : "", qname, attrs);
+        await vcallOn(thread, this.handler, "startElement", `(${S}${S}${S}Lorg/xml/sax/Attributes;)V`, event.ns, this.namespaces ? event.name : "", qname, attrs);
       } else if (event.t === 3) {
-        await vcall(this.handler, "endElement", `(${S}${S}${S})V`, event.ns, this.namespaces ? event.name : "", qname);
-        for (const binding of event.bindings ?? []) await vcall(this.handler, "endPrefixMapping", `(${S})V`, binding.name === "xmlns" ? "" : binding.localName);
+        await vcallOn(thread, this.handler, "endElement", `(${S}${S}${S})V`, event.ns, this.namespaces ? event.name : "", qname);
+        for (const binding of event.bindings ?? []) await vcallOn(thread, this.handler, "endPrefixMapping", `(${S})V`, binding.name === "xmlns" ? "" : binding.localName);
       }
       else if (event.t === 4) {
         const chars = new Uint16Array(event.text.length);
         for (let i = 0; i < chars.length; i++) chars[i] = event.text.charCodeAt(i);
-        await vcall(this.handler, "characters", "([CII)V", chars, 0, chars.length);
+        await vcallOn(thread, this.handler, "characters", "([CII)V", chars, 0, chars.length);
       }
     }
-    await vcall(this.handler, "endDocument", "()V");
-  } finally { await vcall(input, "close", "()V"); }
+    await vcallOn(thread, this.handler, "endDocument", "()V");
+  } finally { if (input) await vcallOn(thread, input, "close", "()V"); }
+}
+export function parseSax(text: string, handler: unknown): Promise<void> {
+  const reader = new JXmlReader(); reader.handler = handler; return parse.call(reader, text);
 }
 rt.register({ name: "webdroid/SaxReader", ctor: JXmlReader, ifaces: ["org/xml/sax/XMLReader"], methods: {
   "setContentHandler(Lorg/xml/sax/ContentHandler;)V": function (this: JXmlReader, handler: unknown) { this.handler = handler; },

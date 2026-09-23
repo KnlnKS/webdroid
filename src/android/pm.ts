@@ -2,7 +2,7 @@ import { JObj, rt, stubs, fieldGetters, flagGetters } from "../jvm/runtime";
 import { jarray, hexBytes } from "../jvm/abi";
 import { device } from "../shell/config";
 import type { JBundle } from "./os";
-import { vcall, newObj } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, newObj } from "../jvm/natives/jlang";
 import { type XmlNode, attrStr, attr, TV } from "./axml";
 import { normRV, resString, type Resources } from "./res";
 import { apkCertificates, parsePackageArchive, packageArchive, type PackageArchive } from "./packagearchive";
@@ -314,6 +314,10 @@ export function getAppInfo(host: AppHost): JApplicationInfo {
     cachedAppInfo.deviceProtectedDataDir = `/data/user_de/0/${host.pkg}`;
     cachedAppInfo.processName = host.pkg;
     cachedAppInfo.theme = host.themeResId;
+    if (manifestRoot) {
+      const sdk = usesSdk(manifestRoot);
+      cachedAppInfo.minSdkVersion = sdk.min; cachedAppInfo.targetSdkVersion = sdk.target;
+    }
     cachedAppInfo.icon = host.iconRes;
     const node = appNode();
     const label = node ? attr(node, "label") : undefined;
@@ -334,7 +338,16 @@ class JPackageInfo extends JObj {
   requestedPermissions: string[] | null = null;
   requestedPermissionsFlags: Int32Array | null = null;
   activities: unknown = null; receivers: unknown = null; services: unknown = null; providers: unknown = null;
+  installLocation = -1; instrumentation: JInstrumentationInfo[] | null = null;
 }
+class JInstrumentationInfo extends JPackageItemInfo {
+  targetPackage = ""; targetProcesses: string | null = null;
+  handleProfiling = 0; functionalTest = 0;
+  sourceDir = ""; publicSourceDir = ""; dataDir = "";
+}
+rt.register({ name: "android/content/pm/InstrumentationInfo", ctor: JInstrumentationInfo, sup: "android/content/pm/PackageItemInfo",
+  ifaces: ["android/os/Parcelable"], fields: ["targetPackage", "targetProcesses", "handleProfiling", "functionalTest", "sourceDir", "publicSourceDir", "dataDir"],
+  methods: { "<init>()V": function () {} } });
 /**
  * When this package was installed, epoch ms. An app's data directory IS its installation
  * here, so the first boot that has no persisted state is the install, and the timestamp is
@@ -387,7 +400,7 @@ rt.register({
   name: "android/content/pm/PackageInfo", ctor: JPackageInfo, ifaces: ["android/os/Parcelable"],
   fields: ["packageName", "versionName", "versionCode", "splitNames", "applicationInfo", "firstInstallTime",
     "lastUpdateTime", "signatures", "signingInfo", "reqFeatures", "requestedPermissions", "requestedPermissionsFlags", "activities", "receivers",
-    "services", "providers"],
+    "services", "providers", "installLocation", "instrumentation"],
   methods: {
     "<init>()V": function () {},
     "getLongVersionCode()J": function (this: JPackageInfo) { return this.longVersionCode; },
@@ -680,11 +693,8 @@ rt.register({
       if (appHost && pkg !== appHost.pkg) throw nameNotFound(pkg);
       const pi = new JPackageInfo();
       pi.packageName = pkg;
-      // the manifest's own version, not an invented one
-      pi.versionName = (manifestRoot && attrStr(manifestRoot, "versionName")) ?? "1.0";
-      pi.versionCode = (manifestRoot && attr(manifestRoot, "versionCode")?.data) ?? 1;
-      pi.longVersionCode = BigInt(pi.versionCode);
       pi.applicationInfo = appHost ? getAppInfo(appHost) : null;
+      if (manifestRoot && appHost) fillPackageManifest(pi, manifestRoot, appHost.res, flags);
       pi.splitNames = pi.applicationInfo?.splitNames ?? null;
       pi.firstInstallTime = pi.lastUpdateTime = installTime(pkg);
       if (flags & (64 | 0x8000000)) {
@@ -741,6 +751,10 @@ rt.register({
     "resolveService(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;": (i: JIntent, f: number) => queryComponents(i, f).a[0] ?? null,
     "resolveService(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Landroid/content/pm/ResolveInfo;": (i: JIntent, f: JInfoFlags) => queryComponents(i, Number(f.value)).a[0] ?? null,
     "getComponentEnabledSetting(Landroid/content/ComponentName;)I": (c: JComponentName) => componentState.get(c),
+    "getApplicationEnabledSetting(Ljava/lang/String;)I": (pkg: string) => {
+      if (!packages.has(pkg)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown package " + pkg);
+      return 0;
+    },
     "setComponentEnabledSetting(Landroid/content/ComponentName;II)V": (c: JComponentName, st: number) => componentState.set(c, st),
     "hasSystemFeature(Ljava/lang/String;)Z": (name: string) => device.features.includes(name) ? 1 : 0,
     "hasSystemFeature(Ljava/lang/String;I)Z": (name: string) => device.features.includes(name) ? 1 : 0,
@@ -805,6 +819,11 @@ rt.register({
       return left.length === right.length && left.every((cert) => right.some((other) => cert.length === other.length && cert.every((v, i) => v === other[i]))) ? 0 : -3;
     },
     "getInstalledPackages(I)Ljava/util/List;": installedPackages,
+    "getInstalledApplications(I)Ljava/util/List;": async (flags: number) => {
+      const list = await installedPackages(flags);
+      list.a = list.a.map(info => (info as JPackageInfo).applicationInfo);
+      return list;
+    },
     "getInstalledPackages(Landroid/content/pm/PackageManager$PackageInfoFlags;)Ljava/util/List;": (flags: JInfoFlags) => installedPackages(Number(flags.value)),
     "getActivityInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;": (comp: JComponentName, flags: number) => {
       const [name, , owner] = lookupComponent(comp, "activity", flags);
@@ -965,10 +984,10 @@ async function archiveInfo(archive: PackageArchive, path: string, flags: number,
   rt.link("android/content/pm/PackageInfo"); rt.link("android/content/pm/ApplicationInfo");
   const info = new JPackageInfo(), ai = appInfoFrom(new JApplicationInfo(), pkg, path, res, root, app, flags);
   info.packageName = pkg;
-  setVersion(info, root, res);
   ai.processName = pkg;
   ai.className = app && attrStr(app, "name") || null;
   info.applicationInfo = ai; info.reqFeatures = reqFeatures(root);
+  fillPackageManifest(info, root, res, flags);
   if (flags & 0x1000) await fillRequestedPermissions(info, root, installed);
   if (flags & 64) info.signatures = signatures(certificates);
   if (flags & 0x8000000) info.signingInfo = signingInfo(certificates);
@@ -1003,11 +1022,24 @@ function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resou
   if (flags & 128) ai.metaData = metaData(app, res);
   return ai;
 }
-function setVersion(info: JPackageInfo, root: XmlNode, res: Resources) {
+function fillPackageManifest(info: JPackageInfo, root: XmlNode, res: Resources, flags: number) {
   info.versionCode = attr(root, "versionCode")?.data ?? 0;
   info.longVersionCode = BigInt(info.versionCode >>> 0) | BigInt(attr(root, "versionCodeMajor")?.data ?? 0) << 32n;
   const version = attr(root, "versionName");
   info.versionName = version?.type === TV.REFERENCE ? resString(res, version.data) : version?.str ?? "";
+  info.installLocation = attr(root, "installLocation")?.data ?? -1;
+  if (flags & 16) {
+    const nodes = root.children.filter(node => node.name === "instrumentation");
+    if (nodes.length) info.instrumentation = jarray(nodes.map(node => {
+      const item = new JInstrumentationInfo();
+      item.name = qualifyComponent(attrStr(node, "name") ?? "", info.packageName); item.packageName = info.packageName;
+      item.targetPackage = attrStr(node, "targetPackage") ?? ""; item.targetProcesses = attrStr(node, "targetProcesses") ?? null;
+      item.handleProfiling = attr(node, "handleProfiling")?.data ? 1 : 0; item.functionalTest = attr(node, "functionalTest")?.data ? 1 : 0;
+      item.sourceDir = item.publicSourceDir = info.applicationInfo?.sourceDir ?? ""; item.dataDir = info.applicationInfo?.dataDir ?? "";
+      if (flags & 128) item.metaData = metaData(node, res);
+      return item;
+    }), "Landroid/content/pm/InstrumentationInfo;");
+  }
 }
 function recordAppInfo(record: PackageRecord, flags = 0): JApplicationInfo {
   const app = record.application;
@@ -1022,8 +1054,8 @@ function recordAppInfo(record: PackageRecord, flags = 0): JApplicationInfo {
 async function recordInfo(record: PackageRecord, flags: number): Promise<JPackageInfo> {
   const pi = new JPackageInfo(), root = record.root;
   pi.packageName = record.pkg;
-  setVersion(pi, root, record.res);
   pi.applicationInfo = recordAppInfo(record, flags);
+  fillPackageManifest(pi, root, record.res, flags);
   pi.firstInstallTime = pi.lastUpdateTime = installTime(record.pkg);
   if (flags & 64) pi.signatures = signatures(await record.visibleCertificates());
   if (flags & 0x8000000) pi.signingInfo = signingInfo(await record.visibleCertificates());
@@ -1041,6 +1073,7 @@ async function installedPackage(pkg: string) {
   return archive ? { path, archive } : null;
 }
 async function installedPackages(flags: number): Promise<JList> {
+  const thread = curThread;
   await restorePackages();
   const result = newArrayList();
   for (const path of vfs.files.keys()) {
@@ -1048,7 +1081,7 @@ async function installedPackages(flags: number): Promise<JList> {
     const archive = await readArchive(path);
     if (archive && !packages.has(archive.pkg)) registerPackage(archive, path);
   }
-  for (const record of packages.values()) result.a.push(await vcall(getPM(), "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", record.pkg, flags));
+  for (const record of packages.values()) result.a.push(await vcallOn(thread, getPM(), "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", record.pkg, flags));
   return result;
 }
 export async function installPackageArchive(bytes: Uint8Array, expectedPackage: string | null = null): Promise<string> {

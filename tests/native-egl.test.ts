@@ -3,6 +3,8 @@ import { eglInit } from "../src/native/egl";
 import { hostFn, type ArgReader } from "../src/native/host";
 import { curThread } from "../src/jvm/natives/jlang";
 import type { Cpu } from "../src/native/cpu";
+import { setA64 } from "../src/native/cpu";
+import { mem } from "../src/native/mem";
 
 eglInit();
 
@@ -18,6 +20,24 @@ function args(ints: number[] = [], longs: bigint[] = [], strings: string[] = [])
 }
 
 const cpu = { jthread: curThread } as Cpu;
+
+test("EGL config arrays use guest pointer width while counts remain EGLint", () => {
+  const p = mem.malloc(16);
+  try {
+    for (const a64 of [false, true]) {
+      setA64(a64);
+      for (const name of ["eglGetConfigs", "eglChooseConfig"]) {
+        mem.u8.fill(0xff, p, p + 16);
+        const values = name === "eglGetConfigs" ? [1, p, 1, p + 8] : [1, 0, p, 1, p + 8];
+        expect(hostFn("libEGL.so", name)!(cpu, args(values))).toBe(1);
+        expect(mem.ld32(p)).toBe(1);
+        expect(mem.ld32(p + 4)).toBe(a64 ? 0 : -1);
+        expect(mem.ld32(p + 8)).toBe(1);
+        expect(mem.ld32(p + 12)).toBe(-1);
+      }
+    }
+  } finally { mem.free(p); setA64(false); }
+});
 
 test("EGL advertises and resolves presentation timestamps", () => {
   const query = hostFn("libEGL.so", "eglQueryString");

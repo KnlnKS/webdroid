@@ -30,6 +30,10 @@ export const pendingTransport = {
   cancel: (id: number) => localPendingIntents.cancel(id),
   send: (id: number, fill: IntentData | null) => localPendingIntents.send(id, fill),
   operation: (id: number): PendingOperation | null => localPendingIntents.take(id),
+  creator: (id: number): { pkg: string; uid: number } | null => {
+    const operation = localPendingIntents.get(id);
+    return operation ? { pkg: operation.pkg, uid: operation.uid } : null;
+  },
 };
 export class JIntentSender extends JObj { target: JObj | null = null; }
 export class JPendingIntent extends JObj { sender = new JIntentSender(); }
@@ -89,6 +93,8 @@ rt.register({ name: "android/app/PendingIntent", ctor: JPendingIntent, ifaces: [
     "equals(Ljava/lang/Object;)Z": function (this: JPendingIntent, other: unknown) { return +(other instanceof JPendingIntent && this.sender.target === other.sender.target); },
     "hashCode()I": function (this: JPendingIntent) { return idHash(this.sender.target); },
     "cancel()V": function (this: JPendingIntent) { pendingTransport.cancel(pendingId(this)); },
+    "getCreatorPackage()Ljava/lang/String;": function (this: JPendingIntent) { return pendingTransport.creator(pendingId(this))?.pkg ?? null; },
+    "getCreatorUid()I": function (this: JPendingIntent) { return pendingTransport.creator(pendingId(this))?.uid ?? -1; },
     "send()V": function (this: JPendingIntent) { return sendIntent(this.sender); },
   },
 });

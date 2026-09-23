@@ -3,6 +3,17 @@ const std = @import("std");
 pub inline fn isNan(x: anytype) bool {
     return x != x;
 }
+pub fn standard32(x: f32) f32 {
+    const b: u32 = @bitCast(x);
+    if (b & 0x7f800000 == 0) return @bitCast(b & 0x80000000);
+    return if (isNan(x)) @bitCast(@as(u32, 0x7fc00000)) else x;
+}
+pub fn recipStep32(a: f32, b: f32, sqrt: bool) f32 {
+    const n = standard32(a);
+    const m = standard32(b);
+    const product = if ((std.math.isInf(n) and m == 0) or (n == 0 and std.math.isInf(m))) 0 else standard32(n * m);
+    return standard32(@floatCast(if (sqrt) (3.0 - @as(f64, product)) / 2 else 2.0 - @as(f64, product)));
+}
 pub fn rne(comptime F: type, x: F) F {
     const t = @trunc(x);
     if (@abs(x - t) == 0.5) return if (@mod(t, 2) == 0) t else t + (if (x < 0) @as(F, -1) else 1);

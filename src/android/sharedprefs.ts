@@ -36,6 +36,11 @@ class PreferenceStore {
       return true;
     } catch { return false; }
   }
+  delete(name: string): boolean {
+    try { globalThis.localStorage?.removeItem("wd:prefs:" + name); }
+    catch { return false; }
+    this.files.delete(name); return true;
+  }
   move(source: string, target: string): boolean {
     if (source === target) return true;
     const persisted = globalThis.localStorage?.getItem("wd:prefs:" + source);
@@ -81,6 +86,11 @@ export function movePrefs(sourcePkg: string, targetPkg: string, name: string): b
     prefsCache.delete(target);
   }
   return moved;
+}
+export function deletePrefs(pkg: string, name: string): boolean {
+  const key = pkg + ":" + name;
+  if (!preferenceStore.delete(key)) return false;
+  prefsCache.delete(key); return true;
 }
 class JPrefsEditor extends JObj {
   prefs!: JSharedPrefs;

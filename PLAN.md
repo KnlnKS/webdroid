@@ -78,6 +78,47 @@ See [implementation history](docs/implementation-history.md) for evidence and co
 
 ---
 
+# Cut the Rope parity repair
+
+Branch: `codex/cut-the-rope`. Starting revision: `9d0bb979ae7987cd70b7d5242ec6c6b720b5a1e2`.
+Status: original ARM32 and ARM64 builds complete levels 1 and 2 in Chrome; graphics and native
+audio work. The AVD completed level 1 and reached level 2, where a test interstitial blocks its
+current replay. Original ARM32 reload restores level 3, coins and sound settings; background /
+resume and its first level-3 puzzle pass. Rendering remains slow. Typecheck, 1,295 unit tests,
+XAPK compilation and all eight runnable framework exercises pass. The final 159-step E2E
+completes with no wedge or action failure. Starting-revision visual and performance comparisons
+find no reproduced regression. Player ID/backend parity and later unlocked features remain
+unvalidated; this is verified early gameplay, not a complete parity claim.
+Post-matrix profiling found expensive interpreted Thumb arithmetic and indexed memory operations.
+Their shared JIT lowering passes owning checks; arithmetic also completes a fresh puzzle.
+The combined candidate `b5ae9cb5` restores level 3 and completes its first puzzle without native
+or rendering faults. Its repeated final matrix passes all 1,295 unit tests and completes all
+159 E2E steps in 823.4 seconds without wedges, action failures or settling timeouts. Known
+baseline errors remain visible. Direct Bun tests now rebuild stale native cores before running.
+Performance and Player ID remain unresolved; the full parity goal is not complete.
+Follow-up performance work now lowers single-instruction IT/move pairs through the JIT. Owning
+checks pass and fresh Chrome restores level 3 and completes its first puzzle. This production
+change follows the matrix above; another full E2E is reserved for the final finished candidate.
+Thumb indexed transfers also reuse the same memory emitter for pre/post-index writeback. The
+combined build passes owning checks and the same gameplay replay; rendering remains below 2 FPS.
+Thumb long multiply/accumulate now shares ARM JIT arithmetic and passes the same checks and
+gameplay replay. A separate clean browser context is investigating the unresolved Player ID.
+Fresh original-ARM32 startup reaches the bundled seven-second intro clip through NDK extraction
+and decoding. It decodes initial video/audio samples but playback stalls with full output queues;
+a tap skips the intro and the tutorial eventually renders. The new media path and buffer-slot
+reuse pass owning tests and typecheck; the final E2E matrix has not yet been rerun. Intro playback,
+startup/render speed, Player ID and later unlocked features remain open.
+
+- Run the unchanged 4.2.1 XAPK in full Chrome and an AVD at matching geometry.
+- Capture startup, menus, gameplay, pause/resume and saved progression in both.
+- Repair reached platform/JNI/native failures at their canonical owners; retain real app bytecode.
+- Ignore ad-specific implementation unless it blocks gameplay or other non-ad features.
+- Keep changes focused, remove justified duplication, and add only core contract tests.
+- During development test Cut the Rope and owning checks only; freeze before full serialized E2E.
+- Record evidence, performance, limitations and focused commits in implementation history.
+
+---
+
 # TikTok parity repair
 
 Branch: `codex/tiktok-parity`. Starting revision: `9071fec70953eb3b76df86c6cdede69bdf316eaf`.

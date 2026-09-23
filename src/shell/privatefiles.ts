@@ -2,8 +2,8 @@ import type { vfs } from "../jvm/natives/jio";
 import { openDb, txDone } from "./idb";
 
 type FileValue = { kind: "file"; bytes: Uint8Array } | { kind: "directory" };
-const privatePath = /^\/data\/(?:data|user\/0|user_de\/0)\/[^/]+(?:\/|$)/;
-const disposablePath = /^\/data\/(?:data|user\/0|user_de\/0)\/[^/]+\/(?:cache|code_cache)(?:\/|$)/;
+const roots = ["/data/data/", "/data/user/0/", "/data/user_de/0/", "/sdcard/Android/data/"];
+const appPath = new RegExp("^(?:" + roots.join("|") + ")[^/]+(?:/(.*))?$");
 export class PrivateFiles {
   private values = new Map<string, FileValue>();
   private views = new Map<number, typeof vfs>();
@@ -20,11 +20,12 @@ export class PrivateFiles {
     view.prepare = (pkg) => this.prepare(pkg);
     view.flush = () => this.flush();
     view.onWrite = (path) => {
-      if (!privatePath.test(path)) return;
+      const relative = appPath.exec(path);
+      if (!relative) return;
       const bytes = view.files.get(path);
       const value: FileValue | null = bytes ? { kind: "file", bytes } : view.dirs.has(path) ? { kind: "directory" } : null;
       this.update(path, value);
-      if (disposablePath.test(path)) return;
+      if (/^(?:cache|code_cache)(?:\/|$)/.test(relative[1] ?? "")) return;
       this.pending.set(path, value);
       this.timer ??= setTimeout(() => { this.timer = null; void this.flush().catch((error) => console.error("[private files]", error)); }, 0);
     };
@@ -47,7 +48,7 @@ export class PrivateFiles {
     if (!loaded) {
       loaded = this.db().then((db) => {
         const transaction = db.transaction("files"), store = transaction.objectStore("files");
-        for (const root of ["/data/data/", "/data/user/0/", "/data/user_de/0/"]) {
+        for (const root of roots) {
           const prefix = root + pkg + "/", request = store.openCursor(IDBKeyRange.bound(prefix, prefix + "\uffff"));
           request.onsuccess = () => {
             const cursor = request.result;

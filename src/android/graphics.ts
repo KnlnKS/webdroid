@@ -5,7 +5,7 @@ import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
-import { vcall, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
+import { vcall, newObj, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
 import { type JLocale, localeTag, usLocale } from "../jvm/natives/jvalues";
 import type { JLocaleList } from "./resnative";
 import { readStreamFully, vfs, type JFileDescriptor } from "../jvm/natives/jio";
@@ -2368,6 +2368,18 @@ async function decodeFileDescriptor(fd: JFileDescriptor | null, pad: JRect | nul
   if (bitmap && pad) pad.left = pad.top = pad.right = pad.bottom = -1;
   return bitmap;
 }
+async function decodeFile(path: string | null, opts: JBFOptions | null = null) {
+  let stream: unknown = null;
+  try {
+    stream = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", path);
+    return await decodeStream(stream, null, opts);
+  } catch (error) {
+    if (!rt.iof(error, "java/lang/Exception")) throw error;
+    return null;
+  } finally {
+    if (stream) await vcall(stream, "close", "()V");
+  }
+}
 async function decodeResourceStream(res: unknown, value: JTypedValue | null, stream: unknown, pad: JRect | null, opts: JBFOptions | null) {
   opts ??= new JBFOptions();
   if (!opts.inDensity && value && value.density !== 0xffff) opts.inDensity = value.density || 160;
@@ -2402,6 +2414,8 @@ rt.register({
         decodeBytes(u8(b, off, len), o),
     "static decodeStream(Ljava/io/InputStream;)Landroid/graphics/Bitmap;": decodeStream,
     "static decodeStream(Ljava/io/InputStream;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeStream,
+    "static decodeFile(Ljava/lang/String;)Landroid/graphics/Bitmap;": decodeFile,
+    "static decodeFile(Ljava/lang/String;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeFile,
     "static decodeFileDescriptor(Ljava/io/FileDescriptor;)Landroid/graphics/Bitmap;": decodeFileDescriptor,
     "static decodeFileDescriptor(Ljava/io/FileDescriptor;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeFileDescriptor,
     "static decodeResource(Landroid/content/res/Resources;I)Landroid/graphics/Bitmap;": decodeResource,

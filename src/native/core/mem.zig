@@ -52,12 +52,12 @@ comptime {
     assert(SMALL_MAX / CLASS_STEP + 1 == small_heads.len);
     assert(PAGE_MAX > SMALL_MAX);
 }
-var mem_size: u32 = abi.MEM_SIZE_A32;
+var mem_size: u32 = abi.MEM_SIZE_INITIAL;
 var heap_top: u32 = abi.ARENA_BASE;
 var heap_peak: u32 = 0;
 var blocks: u32 = 0;
 var used: u64 = 0;
-var module_bot: u32 = abi.MEM_SIZE_A32;
+var module_bot: u32 = abi.MEM_SIZE_INITIAL;
 var stack_top: u32 = abi.STACK_BASE;
 var host_top: u32 = abi.HOST_DATA;
 

@@ -9,7 +9,7 @@ import {
 import { mkPfd } from "./os";
 import { mkFile } from "../jvm/natives/jio";
 import { mkAssetFd } from "./resnative";
-import { newObj, defineException, vcall } from "../jvm/natives/jlang";
+import { newObj, defineException, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang";
 import { mkCursor } from "./sqlite";
 import { newArrayList } from "../jvm/natives/jutil";
 import { getPM } from "./pm";
@@ -27,8 +27,8 @@ export function attachProvider(ctx: JContext, info: ProviderInfo): Promise<unkno
   const existing = local.get(authorities[0]);
   if (existing) return existing;
   const create = async () => {
-    const provider = await newObj(info.name.replace(/\./g, "/"));
-    await vcall(provider, "attachInfo", "(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V", ctx, info);
+    const provider = await callOn(mainThread, () => newObj(info.name.replace(/\./g, "/")));
+    await vcallOn(mainThread, provider, "attachInfo", "(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V", ctx, info);
     return provider;
   };
   const ready = (inMainJob() ? create() : onMain(create)).catch((error) => {

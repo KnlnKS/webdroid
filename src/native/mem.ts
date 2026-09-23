@@ -3,7 +3,7 @@
 // address map. The code-page flags let a store into executable pages invalidate the decoder.
 
 import { core, memory, NativeFault } from "./core";
-import { MEM_SIZE, MEM_SIZE_A32, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, POOL_BASE, MEM_SIZE_A64 } from "./abi";
+import { MEM_SIZE, MEM_SIZE_INITIAL, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, POOL_BASE, MEM_SIZE_A64 } from "./abi";
 export { NativeFault };
 
 let buf: ArrayBuffer, u8: Uint8Array, i8: Int8Array, u16: Uint16Array, i16: Int16Array, u32: Uint32Array, i32: Int32Array, f32: Float32Array, f64: Float64Array, dv: DataView, codePages: Uint8Array;
@@ -204,5 +204,5 @@ export const mem = {
 };
 export const guestAt = (base: number | bigint, offset = 0): number => (typeof base === "bigint" ? mem.txVa(base + BigInt(offset)) : base + offset);
 views();
-core.mem_init(MEM_SIZE_A32);
-SPAN = MEM_SIZE_A32 - LOW;
+core.mem_init(MEM_SIZE_INITIAL);
+SPAN = MEM_SIZE_INITIAL - LOW;

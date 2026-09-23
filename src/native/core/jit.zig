@@ -154,6 +154,9 @@ export fn jit_fallback(lo: u32, hi: u32) void {
     fb_lo = lo;
     fb_hi = hi;
 }
+pub fn forcedFallback(pc: u32) bool {
+    return pc -% fb_lo < fb_hi -% fb_lo;
+}
 export fn jit_pending() u32 {
     return if (in_flight) 0 else nrequests;
 }
@@ -289,6 +292,7 @@ pub fn Emit(comptime wide: bool) type {
         b: *Buf,
         r: *Region,
         blk: u32,
+        pc: u32 = 0,
         used: u32,
         written: u32,
         wcur: u32,
@@ -519,7 +523,7 @@ pub fn Emit(comptime wide: bool) type {
             e.endif();
         }
         fn faultExit(e: *Self) void {
-            e.b.emit(.{ get(L_CPU), c32(@bitCast(e.r.blocks[e.blk].pc)), mo(O.i32_store, OFF_BPC) });
+            e.b.emit(.{ get(L_CPU), c32(@bitCast(e.r.blocks[e.blk].pc)), mo(O.i32_store, OFF_BPC), get(L_CPU), c64(e.pc), mo(O.i64_store, @offsetOf(Cpu, "pc")) });
             e.exitStatus(2);
         }
         pub fn address(e: *Self) void {
@@ -527,7 +531,7 @@ pub fn Emit(comptime wide: bool) type {
             b.emit(.{ tee(L_T0), c64(32), O.i64_shr_u, O.i32_wrap_i64, tee(L_B), O.i32_eqz, O.if_, wasm.I32, get(L_T0), O.i32_wrap_i64, O.else_ });
             b.emit(.{ get(L_B), c32(255), O.i32_and, c32(2), O.i32_shl, set(L_NEXT), get(L_T0), O.i32_wrap_i64, get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.L)), O.i32_sub, tee(L_R), get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.S)), O.i32_lt_u, get(L_B), c32(256), O.i32_lt_u, O.i32_and, O.if_, wasm.I32, get(L_NEXT), mo(O.i32_load, @intFromPtr(&mem.P)), get(L_R), O.i32_add, O.else_, c32(0), O.end, O.end, tee(L_A), c32(abi.LOW), O.i32_lt_u });
             e.ifv();
-            b.emit(.{ get(L_CPU), c32(@intFromEnum(cpu.Fault.bad_address)), mo(O.i32_store, OFF_EXIT), get(L_CPU), c32(0), mo(O.i32_store, OFF_FAULT_WORD), get(L_CPU), get(L_T0), O.i32_wrap_i64, mo(O.i32_store, OFF_FAULT_ADDR) });
+            b.emit(.{ get(L_CPU), c32(@intFromEnum(cpu.Fault.bad_address)), mo(O.i32_store, OFF_EXIT), get(L_CPU), c32(@bitCast(mem.ld(u32, e.pc))), mo(O.i32_store, OFF_FAULT_WORD), get(L_CPU), get(L_T0), O.i32_wrap_i64, mo(O.i32_store, OFF_FAULT_ADDR) });
             e.faultExit();
             e.endif();
         }
@@ -1064,7 +1068,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
                 .arm => jit32.rwArm(mem.ld(u32, pc)),
                 .thumb => jit32.rwThumb(mem.ld(u16, pc)),
             };
-            if (pc -% fb_lo < fb_hi -% fb_lo) rw = if (wide) ALL else ALL32;
+            if (forcedFallback(pc)) rw = if (wide) ALL else ALL32;
             writes[i] |= rw.w;
             e.used |= rw.r | rw.w;
             assert(t < fr.len);
@@ -1141,13 +1145,14 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
         var j: u32 = 0;
         var ended = false;
         while (j < blk.n) : (j += 1) {
+            e.pc = pc;
             const len = ilen(isa, pc);
             const o = &page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2];
             if (wide) {
                 e.rw = rwOf(o);
                 e.wcur |= e.rw.w;
             }
-            if (pc -% fb_lo < fb_hi -% fb_lo) {
+            if (forcedFallback(pc)) {
                 if (wide) e.rw = ALL;
                 e.fallback(pc, j + 1);
                 ended = false;

@@ -11,8 +11,21 @@ import { resolveSystemBars } from "../src/shell/systembars";
 import { device } from "../src/shell/config";
 import { JView, dispatchAttached, uiState } from "../src/android/view";
 import { addOverlay, overlays, detachContextOverlays, removeOverlay } from "../src/android/popup";
+import { JActivity } from "../src/android/app";
 
 rt.linkNatives();
+
+test("finding an activity content view installs its decor before setContentView", async () => {
+  const activity = new JActivity(), res = new Resources(null, {}), theme = new JTheme();
+  theme.res = res;
+  Reflect.set(activity, "$host", { res, theme, pkg: "test" });
+  activity.window.activity = activity;
+  expect(activity.window.decor).toBeNull();
+  const content = await vcall(activity, "findViewById", "(I)Landroid/view/View;", 0x01020002);
+  expect(content).not.toBeNull();
+  expect(content).toBe(activity.window.contentParent);
+  expect(await vcall(activity.window, "findViewById", "(I)Landroid/view/View;", 0x01020002)).toBe(content);
+});
 
 test("display and window contexts retain display identity and own their window service", async () => {
   const source = new JContext(), screen = await display();

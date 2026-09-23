@@ -17,6 +17,7 @@ import { netInit } from "./net";
 import { MONTHS, DAYS } from "../jvm/natives/jtime";
 import { device } from "../shell/config";
 import { guestNow } from "../guest-clock";
+import { timersInit } from "./timers";
 
 /** bionic struct offsets/sizes, one block per ABI; LAYOUT is the process's, chosen in libcInit. */
 const LAYOUT32 = {
@@ -375,6 +376,19 @@ export function libcInit(): void {
     malloc: SERVED, free: SERVED, calloc: SERVED, realloc: SERVED, memalign: SERVED, posix_memalign: SERVED, malloc_usable_size: SERVED,
     valloc: (_c, a) => mem.valloc(a.u()),
     memcpy: SERVED, memmove: SERVED, memset: SERVED, memcmp: SERVED, memchr: SERVED,
+    memmem: (_c, a) => {
+      const h = a.p(), length = a.u(), n = a.p(), size = a.u();
+      if (!size) return ptr(h);
+      const bytes = mem.u8.subarray(h, h + length), needle = mem.u8.subarray(n, n + size), end = length - size;
+      for (let p = 0; p <= end; p++) {
+        p = bytes.indexOf(needle[0], p);
+        if (p < 0 || p > end) break;
+        let i = 1;
+        while (i < size && bytes[p + i] === needle[i]) i++;
+        if (i === size) return ptr(h + p);
+      }
+      return 0;
+    },
     memrchr: (_c, a) => { const p = a.p(), c = a.i() & 255, n = a.u(); for (let i = p + n - 1; i >= p; i--) if (mem.u8[i] === c) return ptr(i); return 0; },
     bcopy: (_c, a) => { const s = a.p(), d = a.p(), n = a.u(); mem.memmove(d, s, n); },
     bzero: (_c, a) => { const d = a.p(), n = a.u(); mem.memset(d, 0, n); },
@@ -546,6 +560,7 @@ export function libcInit(): void {
     "iswspace", "iswdigit", "iswalpha", "iswupper", "iswlower", "towlower", "towupper", "mbrtowc", "wcrtomb", "localeconv", "strerror",
     "sprintf", "snprintf", "vsprintf", "vsnprintf", "asprintf", "vasprintf", "sscanf", "vsscanf", "btowc", "wctob", "wctype", "iswctype"]) if (M[n]) M[n + "_l"] = M[n];
   M.strtold = M.strtod; M.strtold_l = M.strtod; M.__strchr_chk = M.strchr; M.__strrchr_chk = M.strrchr;
+  M.__aeabi_memclr = M.__aeabi_memclr4 = M.__aeabi_memclr8 = M.bzero;
   hostLib("libc.so", M);
   hostLib("liblog.so", { __android_log_write: M.__android_log_write, __android_log_print: M.__android_log_print, __android_log_vprint: M.__android_log_vprint, __android_log_assert: M.__android_log_assert });
   const tmBuf = mem.hostAlloc(LAYOUT.TM_SIZE);
@@ -555,6 +570,7 @@ export function libcInit(): void {
   stp(localeConv, mem.hostStr(".")); stp(localeConv + PTR, mem.hostStr("")); stp(localeConv + 2 * PTR, mem.hostStr(""));
   stdioInit();
   pthreadInit();
+  timersInit();
   zlibInit();
   libmInit();
   localeInit();

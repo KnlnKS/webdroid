@@ -157,7 +157,7 @@ function samplerArg(source: string, tokens: Token[], start: number, end: number,
 }
 
 function preambleEnd(source: string): number {
-  let i = 0, lastDirective = 0;
+  let i = 0, lastDirective = 0, depth = 0;
   while (i < source.length) {
     const c = source.charCodeAt(i);
     if (c === 9 || c === 10 || c === 12 || c === 13 || c === 32) { i++; continue; }
@@ -181,7 +181,11 @@ function preambleEnd(source: string): number {
       i = nl + 1;
       if (source.charCodeAt(p) !== 92) break;
     } while (i < source.length);
-    if (/^#\s*(?:version|extension)\b/.test(source.slice(start, i).trimStart())) lastDirective = i;
+    const directive = /^#\s*(\w+)/.exec(source.slice(start, i))?.[1];
+    if (directive === "if" || directive === "ifdef" || directive === "ifndef") depth++;
+    else if (directive === "endif") depth--;
+    // Helpers must remain visible when a conditional extension is disabled.
+    if (depth === 0) lastDirective = i;
   }
   return lastDirective;
 }

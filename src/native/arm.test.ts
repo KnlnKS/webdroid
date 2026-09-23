@@ -60,6 +60,16 @@ describe("arm decoder", () => {
     expect(thumb.cpsr & 0x0600fc00).toBe(0);
   });
 
+  test("BLX reads its LR target before replacing the return address", () => {
+    const c = run([
+      0xe1a0400e, 0xe28fe00c, 0xe12fff3e, 0xe2800001,
+      0xe12fff14, 0xe1a00000, 0xe280000a, BXLR,
+    ], cpu => { cpu.w[0] = 5; });
+    expect(c.w[0]).toBe(16);
+    const thumb = runThumb([0xb510, 0xf20f, 0x010d, 0x468e, 0x47f0, 0x3001, 0xbd10, 0xbf00, 0x300a, 0x4770], cpu => { cpu.w[0] = 5; });
+    expect(thumb.w[0]).toBe(16);
+  });
+
   test("Thumb BL and BLX preserve state across Thumb and ARM callees", () => {
     const c = runThumb([
       0xb510, 0x4604, // push {r4, lr}; mov r4, r0
@@ -199,17 +209,33 @@ describe("arm decoder", () => {
       BXLR]);
     expect(c.w[2]).toBe(1); expect(c.w[4]).toBe(3);
   });
-  test("mul/umull/smull", () => {
+  test("mul/umull/smull/mls", () => {
     const c = run([
       0xe3e00000,   // mvn r0, #0  (0xffffffff)
       0xe3a01002,   // mov r1, #2
       0xe0832190,   // umull r2, r3, r0, r1  -> 0x1_fffffffe
       0xe0c54190,   // smull r4, r5, r0, r1  -> -2 (r4=-2, r5=-1)
       0xe0060190,   // mul r6, r0, r1        -> -2
+      0xe3500000,   // cmp r0, #0
+      0x10604596,   // mlsne r0, r6, r5, r4 -> -4
       BXLR]);
     expect(c.w[4]).toBe(-2); expect(c.w[6]).toBe(1);
     expect(c.w[8]).toBe(-2); expect(c.w[10]).toBe(-1);
     expect(c.w[12]).toBe(-2);
+    expect(c.w[0]).toBe(-4);
+    expect(c.cpsr >>> 28).toBe(10);
+  });
+  test("saturation uses its source register, wraps shifts and retains sticky Q", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.w[0] = 8; cpu.w[2] = 0x40000001; cpu.w[4] = -16; cpu.w[6] = -2147483648;
+    };
+    for (const execute of [
+      () => run([0xe6e28010, 0xe6a79211, 0xe6e4a1d2, 0xe6bfb013, BXLR], setup),
+      () => runThumb([0xf380, 0x0802, 0xf301, 0x1907, 0xf3a2, 0x0ac4, 0xf303, 0x0b1f, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect([c.w[16], c.w[18], c.w[20], c.w[22], c.q]).toEqual([3, 16, 0, -2147483648, 1]);
+    }
   });
   test("clz, mrs/msr", () => {
     const c = run([
@@ -218,10 +244,27 @@ describe("arm decoder", () => {
       0xe3a02000,   // mov r2, #0 (doesn't set flags)
       0xe3520000,   // cmp r2, #0 -> Z=1 C=1
       0xe10f3000,   // mrs r3, cpsr
+      0xe6ff4f30,   // rbit r4, r0
       BXLR]);
     expect(c.w[2]).toBe(31);
     expect(c.w[6] >>> 30).toBe(1); // Z set, N clear
     expect((c.w[6] >>> 29) & 1).toBe(1);
+    expect(c.w[8] >>> 0).toBe(0x80000000);
+  });
+  test("exclusive stores require a live monitor", () => {
+    const c = run([0xe1912f9f, 0xe2822001, 0xe1810f92, 0xf57ff01f, 0xe3a02063, 0xe1813f92, BXLR], (cpu) => {
+      cpu.w[2] = cpu.stackTop - 16;
+      mem.st32(cpu.w[2], 41);
+    });
+    expect(mem.ld32(c.w[2])).toBe(42);
+    expect([c.w[0], c.w[6]]).toEqual([0, 1]);
+    const double = run([0xe1b12f9f, 0xe2924001, 0xe2a35000, 0xe1a12f94, BXLR], (cpu) => {
+      cpu.w[2] = cpu.stackTop - 16;
+      mem.st64(cpu.w[2], 0x12345678ffffffffn);
+    });
+    expect(double.w[2]).toBe(double.stackTop - 16);
+    expect(mem.ld64(double.w[2])).toBe(0x1234567900000000n);
+    expect(double.w[4]).toBe(0);
   });
   test("ldm/stm ia/db forms", () => {
     const c = run([
@@ -250,6 +293,32 @@ describe("arm decoder", () => {
     });
     expect(Array.from(mem.u32.slice((c.w[0] - 16) >>> 2, c.w[0] >>> 2))).toEqual([0x12345678, 0x76543210, 0x0badf00d, 0x5eedface]);
     expect(c.w[2]).toBe(c.stackTop);
+    const interleaved = run([
+      0xf421188f, // vld2.32 {d1,d2}, [r1]
+      0xf400398d, // vst2.32 {d3,d5}, [r0]!
+      BXLR,
+    ], (cpu) => {
+      cpu.w[0] = cpu.stackTop - 32; cpu.w[2] = cpu.stackTop - 16;
+      mem.u32.set([1, 2, 3, 4], cpu.w[2] >>> 2);
+      cpu.si.set([5, 7], 6); cpu.si.set([6, 8], 10);
+    });
+    expect(Array.from(interleaved.si.slice(2, 6))).toEqual([1, 3, 2, 4]);
+    expect(Array.from(mem.u32.slice((interleaved.w[0] - 16) >>> 2, interleaved.w[0] >>> 2))).toEqual([5, 6, 7, 8]);
+    expect(interleaved.w[0]).toBe(interleaved.w[2]);
+    const setup = (cpu: Cpu) => {
+      cpu.w[0] = cpu.stackTop - 16; cpu.w[2] = cpu.stackTop - 32; cpu.w[4] = 4;
+      mem.st32(cpu.w[0], 0x12345678); mem.st32(cpu.w[2], 0x7f0000);
+      cpu.si.set([42, 43], 54);
+    };
+    for (const execute of [
+      () => run([0xf4e0b8bf, 0xf4c1b4cd, 0xf4e1cc22, BXLR], setup),
+      () => runThumb([0xf9e0, 0xb8bf, 0xf9c1, 0xb4cd, 0xf9e1, 0xcc22, 0x4770], setup),
+    ]) {
+      const lanes = execute();
+      expect(Array.from(lanes.si.slice(54, 60))).toEqual([42, 0x12345678, 0x7f7f7f7f, 0x7f7f7f7f, 0x7f7f7f7f, 0x7f7f7f7f]);
+      expect(mem.ld32(lanes.stackTop - 32)).toBe(0x7f1234);
+      expect(lanes.w[2]).toBe(lanes.stackTop - 26);
+    }
   });
   test("NEON modified immediates select high quad registers in ARM mode", () => {
     const c = run([
@@ -257,6 +326,382 @@ describe("arm decoder", () => {
       BXLR,
     ], (cpu) => { cpu.si.fill(-1, 32, 36); });
     expect(Array.from(c.si.slice(32, 36))).toEqual([0, 0, 0, 0]);
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([0x03020100, 0x07060504], 4);
+      cpu.si.set([0x0b0a0908, 0x0f0e0d0c], 34);
+      cpu.si.set([0x11223344, 0x55667788], 8);
+    };
+    for (const execute of [
+      () => run([0xf3bf1c02, 0xf3ba6c61, 0xf3bc8c44, BXLR], setup),
+      () => runThumb([0xffbf, 0x1c02, 0xffba, 0x6c61, 0xffbc, 0x8c44, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(2, 4))).toEqual([0x07070707, 0x07070707]);
+      expect(Array.from(c.si.slice(12, 16))).toEqual(Array(4).fill(0x0d0c0d0c));
+      expect(Array.from(c.si.slice(16, 20))).toEqual(Array(4).fill(0x55667788));
+    }
+  });
+  test("NEON table lookups retain source bytes across overlapping registers", () => {
+    const setup = (cpu: Cpu) => {
+      const bytes = new Uint8Array(cpu.si.buffer, cpu.si.byteOffset, 256);
+      bytes.set(Array.from({ length: 256 }, (_, i) => i));
+      bytes.set([7, 6, 5, 4, 3, 2, 1, 0], 0);
+      bytes.set([0, 7, 8, 23, 24, 255, 15, 16], 8);
+      bytes.set([0, 7, 8, 15, 16, 255, 1, 14], 26 * 8);
+      bytes.set([0, 7, 8, 15, 16, 23, 24, 31], 27 * 8);
+    };
+    for (const execute of [
+      () => run([0xf3f8e9aa, 0xf3b31a41, 0xf3b00800, 0xf3fcfbab, BXLR], setup),
+      () => runThumb([0xfff8, 0xe9aa, 0xffb3, 0x1a41, 0xffb0, 0x0800, 0xfffc, 0xfbab, 0x4770], setup),
+    ]) {
+      const c = execute(), bytes = new Uint8Array(c.si.buffer, c.si.byteOffset, 256);
+      expect(Array.from(bytes.slice(0, 16))).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 24, 31, 32, 47, 24, 255, 39, 40]);
+      expect(Array.from(bytes.slice(240))).toEqual([192, 199, 200, 207, 0, 0, 193, 206, 224, 231, 232, 239, 192, 206, 248, 255]);
+    }
+  });
+  test("NEON permutations update both operands from their original lanes", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([10, 11, 12, 13, 0, 1, 2, 3, 20, 21, 22, 23], 32);
+      cpu.si.set([0x03020100, 0x07060504, 0x13121110, 0x17161514], 2);
+    };
+    for (const execute of [
+      () => run([0xf3fa21e0, 0xf3fa40e2, 0xf3b21102, 0xf2f064e2, BXLR], setup),
+      () => runThumb([0xfffa, 0x21e0, 0xfffa, 0x40e2, 0xffb2, 0x1102, 0xeff0, 0x64e2, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(32, 44))).toEqual([2, 12, 3, 13, 21, 10, 23, 11, 20, 0, 22, 1]);
+      expect(Array.from(c.si.slice(2, 6))).toEqual([0x06040200, 0x16141210, 0x07050301, 0x17151311]);
+      expect(Array.from(c.si.slice(44, 48))).toEqual([12, 3, 13, 21]);
+    }
+  });
+  test("NEON VSWP exchanges D and Q registers in ARM and Thumb mode", () => {
+    const setup = (cpu: Cpu) => { for (let i = 0; i < cpu.si.length; i++) cpu.si[i] = i; };
+    for (const execute of [
+      () => run([0xf3b22027, 0xf3b2404a, BXLR], setup),
+      () => runThumb([0xffb2, 0x2027, 0xffb2, 0x404a, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(4, 6))).toEqual([46, 47]);
+      expect(Array.from(c.si.slice(46, 48))).toEqual([4, 5]);
+      expect(Array.from(c.si.slice(8, 12))).toEqual([20, 21, 22, 23]);
+      expect(Array.from(c.si.slice(20, 24))).toEqual([8, 9, 10, 11]);
+    }
+  });
+  test("NEON narrowing shifts retain rounding and saturation", () => {
+    const cases: [number, number, bigint[], number[]][] = [
+      [0xf2f23812, 0xeff2, [0x123456789abcdef0n, 0xfedcba9876543210n], [0x59e26af3, 0xea61d950]],
+      [0xf2f23852, 0xeff2, [0x123456789abcdef0n, 0xfedcba9876543210n], [0x59e26af3, 0xea61d951]],
+      [0xf2f23912, 0xeff2, [0x7fffffffffffffffn, 0x8000000000000000n], [0x7fffffff, 0x80000000]],
+      [0xf3f23812, 0xfff2, [0x7fffffffffffffffn, 0x8000000000000000n], [0xffffffff, 0]],
+    ];
+    for (const [word, first, values, expected] of cases) {
+      const setup = (cpu: Cpu) => { new BigUint64Array(cpu.si.buffer, cpu.si.byteOffset, 32).set(values, 2); };
+      for (const execute of [
+        () => run([word, BXLR], setup),
+        () => runThumb([first, word & 0xffff, 0x4770], setup),
+      ]) {
+        const c = execute();
+        expect(Array.from(c.si.slice(38, 40), x => x >>> 0)).toEqual(expected);
+      }
+    }
+  });
+  test("NEON arithmetic shares D/Q lanes in ARM and Thumb encodings", () => {
+    const setup = (cpu: Cpu) => {
+      const floats = new Float32Array(cpu.si.buffer, cpu.si.byteOffset, cpu.si.length);
+      floats.set([1, 2, 3, 4, 5, 6, 7, 8], 8);
+      cpu.si.set([0x00050007, 0x00010003, 0x00020004, 0x00060008], 20);
+      cpu.si.set([0x03020100, 0x07060504], 2);
+      cpu.w[2] = 0x12345678;
+    };
+    for (const execute of [
+      () => run([0xf2042d46, 0xf31a980b, 0xf30aa15a, 0xf2b11302, 0xee821b30, BXLR], setup),
+      () => runThumb([0xef04, 0x2d46, 0xff1a, 0x980b, 0xff0a, 0xa15a, 0xefb1, 0x1302, 0xee82, 0x1b30, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(2, 8))).toEqual([0x06050403, -1073741817, 0x56785678, 0x56785678, 0x41200000, 0x41400000]);
+      expect(Array.from(c.si.slice(18, 24))).toEqual([0x00030003, -262149, 0, 0, 0, 0]);
+    }
+    const accumulated = run([0xf26a8df2, BXLR], (cpu) => {
+      cpu.s.set([1, 8, -1, 0], 48);
+      cpu.s.set([1 + 2 ** -23, 2, -2, 0], 52);
+      cpu.s.set([1 - 2 ** -23, 3, 4, 1], 36);
+    });
+    expect(Array.from(accumulated.s.slice(48, 52))).toEqual([0, 2, 7, 0]);
+    const scalar = (cpu: Cpu) => {
+      cpu.s.set([1, 2, 3, 4, 3, 4, 5, 6], 32);
+      cpu.s.set([10, 11, 12, 13, 14, 15, 16, 17], 40);
+      cpu.s[13] = 1; cpu.s[14] = 2;
+      cpu.s.set([1 - 2 ** -23, 1 + 2 ** -23, 2, 1, 8], 5);
+    };
+    for (const execute of [
+      () => run([0xf3a0c9c7, 0xf3a2c1e6, 0xf2a34562, 0xf2f428e6, BXLR], scalar),
+      () => runThumb([0xffa0, 0xc9c7, 0xffa2, 0xc1e6, 0xefa3, 0x4562, 0xeff4, 0x28e6, 0x4770], scalar),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.s.slice(24, 28))).toEqual([5, 8, 11, 14]);
+      expect(Array.from(c.s.slice(8, 10))).toEqual([0, 6]);
+      expect(Array.from(c.s.slice(36, 40))).toEqual([12, 13, 14, 15]);
+    }
+    const shifts = (cpu: Cpu) => {
+      cpu.si.set([1, 0, 0, -2147483648], 40);
+      cpu.si.set([32, 0, 192, 0], 36);
+      cpu.si.set([-8, -2147483648, -2, 32], 4);
+    };
+    for (const execute of [
+      () => run([0xf37284e4, 0xf2231402, BXLR], shifts),
+      () => runThumb([0xff72, 0x84e4, 0xef23, 0x1402, 0x4770], shifts),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(48, 52))).toEqual([0, 1, 0, 0]);
+      expect(Array.from(c.si.slice(2, 4))).toEqual([-2, 0]);
+    }
+  });
+  test("NEON scalar integer multiply wraps each lane before accumulation", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([2147483647, 3, -2, -2147483648, 2, -3, 4, 5], 0);
+      cpu.si.set([10, 20, 30, 40], 36);
+      cpu.si.set([0x00020001, 0xfffeffff, 0x00040003, 0x0002ffff], 12);
+      cpu.si.set([0x00020001, 0xffff8000, 0x00030004, 0x7fff0000], 20);
+      cpu.si.set([0x000a000a, 0x000a000a], 10);
+    };
+    for (const execute of [
+      () => run([0xf3e00860, 0xf3e22062, 0xf296546f, 0xf39a8863, BXLR], setup),
+      () => runThumb([0xffe0, 0x0860, 0xffe2, 0x2062, 0xef96, 0x546f, 0xff9a, 0x8863, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(32, 40))).toEqual([2147483645, 9, -6, -2147483648, 4, 29, 18, 25]);
+      expect(Array.from(c.si.slice(10, 12))).toEqual([0x00060008, 0x000e000c]);
+      expect(Array.from(c.si.slice(16, 20))).toEqual([0x000a0005, 0xfffb8000 | 0, 0x000f0014, 0x7ffb0000]);
+    }
+  });
+  test("NEON reciprocal estimates and steps retain ARM32 rounding", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.s.set([1, 4, 0, Infinity], 44);
+      cpu.s.set([1 + 2 ** -23, 0, 1e-45, NaN], 8);
+      cpu.s.set([2 - 2 ** -22, Infinity, Infinity, 1], 12);
+      cpu.s.set([3, Infinity, 0, 2], 48);
+      cpu.s.set([1 + 2 ** -23, 0, -Infinity, 6], 52);
+    };
+    for (const execute of [
+      () => run([0xf2042f56, 0xf26aaff8, 0xf3fbc5e6, 0xf3f9e566, 0xf3f80066, BXLR], setup),
+      () => runThumb([0xef04, 0x2f56, 0xef6a, 0xaff8, 0xfffb, 0xc5e6, 0xfff9, 0xe566, 0xfff8, 0x0066, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.s.slice(4, 8))).toEqual([0, 2, 2, NaN]);
+      expect(Array.from(c.s.slice(52, 56))).toEqual([-(2 ** -22), 1.5, 1.5, -4.5]);
+      expect(Math.abs(c.s[56] - 1)).toBeLessThan(2 ** -8);
+      expect(Math.abs(c.s[57] - 0.5)).toBeLessThan(2 ** -9);
+      expect(Array.from(c.s.slice(58, 60))).toEqual([Infinity, 0]);
+      expect(Array.from(c.si.slice(60, 64))).toEqual([0, 0, -1, 0]);
+      expect(Array.from(c.s.slice(32, 36))).toEqual([4, 1, Infinity, 0]);
+    }
+  });
+  test("NEON float comparisons produce masks that narrow without saturation", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.s.set([1, -2, NaN, 0, 0, 1, 5, -0], 8);
+      cpu.s.set([2, 1, NaN, -0], 44);
+      cpu.s.set([1, 1, 0, 0], 56);
+    };
+    for (const execute of [
+      () => run([0xf2042e46, 0xf3040e46, 0xf3248e56, 0xf3662eec, 0xf3f62222, BXLR], setup),
+      () => runThumb([0xef04, 0x2e46, 0xff04, 0x0e46, 0xff24, 0x8e56, 0xff66, 0x2eec, 0xfff6, 0x2222, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(4, 8))).toEqual([0, 0, 0, -1]);
+      expect(Array.from(c.si.slice(0, 4))).toEqual([-1, 0, 0, -1]);
+      expect(Array.from(c.si.slice(16, 20))).toEqual([-1, -1, 0, 0]);
+      expect(Array.from(c.si.slice(36, 40))).toEqual([0xffff, 0, 0, 0]);
+    }
+  });
+  test("NEON integer comparison and multiplication retain unsigned lanes", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([1, 2, 3, -1, -2, 3, 4, 5, 0, 2, -1, 4], 32);
+    };
+    for (const execute of [
+      () => run([0xf364a3f0, 0xf260c9f2, 0xf2626ab2, 0xf2603aa0, BXLR], setup),
+      () => runThumb([0xff64, 0xa3f0, 0xef60, 0xc9f2, 0xef62, 0x6ab2, 0xef60, 0x3aa0, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(52, 56))).toEqual([0, -1, -1, 0]);
+      expect(Array.from(c.si.slice(56, 60))).toEqual([-2, 6, 12, -5]);
+      expect(Array.from(c.si.slice(44, 46))).toEqual([-2, -2]);
+      expect(Array.from(c.si.slice(38, 40))).toEqual([2, 2]);
+    }
+  });
+  test("NEON integer signs, zero comparisons and extrema retain signedness", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([0x807fff01, -1, 0, 0], 8);
+      cpu.si.set([0x8000ffff, 0x7fff0001, 0, 0], 16);
+      cpu.si.set([-2147483648, 7], 18);
+      cpu.si.set([-5, -1, 3, -7], 32);
+      cpu.si.set([-1, -1, -1, -1], 20);
+    };
+    for (const execute of [
+      () => run([0xf3b90144, 0xf3b9e389, 0xf3b12344, 0xf3b563c8, 0xf26106a0, 0xf328a65a, 0xf3b005c0, BXLR], setup),
+      () => runThumb([0xffb9, 0x0144, 0xffb9, 0xe389, 0xffb1, 0x2344, 0xffb5, 0x63c8, 0xef61, 0x06a0, 0xff28, 0xa65a, 0xffb0, 0x05c0, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(0, 4))).toEqual([-1, -1, 0, 0]);
+      expect(Array.from(c.si.slice(28, 30))).toEqual([-2147483648, -7]);
+      expect(Array.from(c.si.slice(4, 8))).toEqual([0x807f0101 | 0, 0x01010101, 0, 0]);
+      expect(Array.from(c.si.slice(12, 16))).toEqual([0x80000001 | 0, 0x8001ffff | 0, -2147483648, 65529]);
+      expect(Array.from(c.si.slice(32, 34))).toEqual([3, -1]);
+      expect(Array.from(c.si.slice(20, 24))).toEqual([0x8000ffff | 0, 0x7fff0001, -2147483648, 7]);
+    }
+  });
+  test("NEON core-register transfers extend scalar lanes and preserve neighbors", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([0x8000ffff, 0x80000001], 36);
+      cpu.w[10] = 0xab; cpu.w[12] = 0xbeef; cpu.w[14] = 0x12345678;
+    };
+    const words = [0xeef20bf0, 0xee521bf0, 0xeeb22bf0, 0xee123bf0, 0xee324b90, 0xee227b90, 0xee625bf0, 0xee226bb0];
+    for (const execute of [
+      () => run([...words, BXLR], setup),
+      () => runThumb([...words.flatMap(w => [w >>> 16, w & 0xffff]), 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect([c.w[0], c.w[2], c.w[4], c.w[6], c.w[8]]).toEqual([128, -128, 32768, -32768, -2147483647]);
+      expect(Array.from(c.si.slice(36, 38), x => x >>> 0)).toEqual([0x8000ffff, 0xab34beef]);
+    }
+  });
+  test("high VFP register loads remain distinct from core-register pair moves", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.w[0] = cpu.stackTop - 64; cpu.w[2] = cpu.stackTop - 32;
+      mem.u32.set([1, 2, 3, 4], cpu.w[2] >>> 2);
+      cpu.w[8] = 5; cpu.w[10] = 6;
+    };
+    const words = [0xecd12b04, 0xece02b04, 0xec532b32, 0xec454b34];
+    for (const execute of [
+      () => run([...words, BXLR], setup),
+      () => runThumb([...words.flatMap(w => [w >>> 16, w & 0xffff]), 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect([c.w[0], c.w[2]]).toEqual([c.stackTop - 48, c.stackTop - 32]);
+      expect(Array.from(mem.u32.slice((c.stackTop - 64) >>> 2, (c.stackTop - 48) >>> 2))).toEqual([1, 2, 3, 4]);
+      expect([c.w[4], c.w[6]]).toEqual([1, 2]);
+      expect(Array.from(c.si.slice(40, 42))).toEqual([5, 6]);
+    }
+  });
+  test("VFP arithmetic preserves aliased lanes and rounds multiply before accumulation", () => {
+    const words = [0xeeb60a00, 0xee710a02, 0xee711a42, 0xee612a02, 0xeec13a02, 0xee010a02, 0xee010a42,
+      0xee614a42, 0xeef05ae4, 0xeef16a65, 0xeef07a66, 0xeef12be0, 0xee703ba1, 0xee098a0a];
+    const setup = (cpu: Cpu) => {
+      cpu.cpsr = 0xa0000000;
+      cpu.s[2] = 3; cpu.s[4] = 4;
+      cpu.s[16] = -1; cpu.s[18] = 1 + 2 ** -23; cpu.s[20] = 1 - 2 ** -23;
+      cpu.d[16] = 81; cpu.d[17] = 19;
+    };
+    for (const execute of [
+      () => run([...words, BXLR], setup),
+      () => runThumb([...words.flatMap(w => [w >>> 16, w & 0xffff]), 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect([0, 1, 3, 5, 7, 9, 11, 13, 15, 16].map(i => c.s[i])).toEqual([0.5, 7, -1, 12, 0.75, -12, 12, -12, -12, 0]);
+      expect(Array.from(c.d.slice(16, 20))).toEqual([81, 19, 9, 100]);
+      expect(c.cpsr >>> 28).toBe(10);
+    }
+  });
+  test("NEON float extrema and sign operations preserve NaN and signed zero", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.s.set([-2, -0, -Infinity, NaN], 40);
+      cpu.s.set([1, -2, NaN, 0], 8);
+      cpu.s.set([-0, -2, NaN, -Infinity], 0); cpu.s.set([0, -3, 4, Infinity], 56);
+      cpu.s.set([-0, -2, NaN, -Infinity, 0, -3, 4, Infinity], 16);
+    };
+    for (const execute of [
+      () => run([0xf3f94764, 0xf3b927c4, 0xf2402f6c, 0xf2286f4a, 0xf3f96444, 0xf3f98644, 0xf3f9a4c4, 0xf3f9c5c4, BXLR], setup),
+      () => runThumb([0xfff9, 0x4764, 0xffb9, 0x27c4, 0xef40, 0x2f6c, 0xef28, 0x6f4a, 0xfff9, 0x6444, 0xfff9, 0x8644, 0xfff9, 0xa4c4, 0xfff9, 0xc5c4, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.s.slice(40, 44))).toEqual([2, 0, Infinity, NaN]);
+      expect(Array.from(c.s.slice(4, 8))).toEqual([-1, 2, NaN, -0]);
+      expect(Array.from(c.s.slice(36, 40))).toEqual([0, -2, NaN, Infinity]);
+      expect(Array.from(c.s.slice(12, 16))).toEqual([-0, -3, NaN, -Infinity]);
+      expect(Array.from(c.si.slice(44, 60))).toEqual([-1, 0, 0, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, -1, 0, -1]);
+    }
+  });
+  test("NEON widening multiply uses original narrow operands before accumulation", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([-1, -1, 10, 0, -1, -2147483648, 2, 3], 36);
+      cpu.si.set([0x0002ffff, 0x7fff8000, 0x00030004, 0x00010002], 6);
+      cpu.si.set([0x0302ff80, 0, 0x01020202, 0], 10);
+    };
+    for (const execute of [
+      () => run([0xf3e428a5, 0xf2932a04, 0xf2854c06, BXLR], setup),
+      () => runThumb([0xffe4, 0x28a5, 0xef93, 0x2a04, 0xef85, 0x4c06, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(36, 40))).toEqual([-3, 1, -2147483638, 1]);
+      expect(Array.from(c.si.slice(4, 8))).toEqual([4, -6, 65536 + 0x0002ffff, 0x7fff8000 - 32767]);
+      expect(Array.from(c.si.slice(8, 12))).toEqual([0xfffeff00 | 0, 0x00030004, 0, 0]);
+    }
+  });
+  test("NEON high narrowing arithmetic wraps before optional rounding", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([0x00ff7fff, -1, 0, 0x01008000], 40);
+      cpu.si.set([0x00010001, 0x00010001, -1, 0x7fff8000], 36);
+      cpu.si.set([0, 0x7fffffff, -1, 0x00018000, 1, -1, 0, 0], 8);
+      cpu.si.set([-1, -1, 0x7fffffff, 4, 1, 0, 0, 0], 16);
+    };
+    for (const execute of [
+      () => run([0xf2c434a2, 0xf3941606, 0xf3a8340a, BXLR], setup),
+      () => runThumb([0xefc4, 0x34a2, 0xff94, 0x1606, 0xffa8, 0x340a, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(38, 40))).toEqual([0x00000180, 0x8000ffff | 0]);
+      expect(Array.from(c.si.slice(2, 4))).toEqual([0x80000000 | 0, 0x00020000]);
+      expect(Array.from(c.si.slice(6, 8))).toEqual([0, 4]);
+    }
+  });
+  test("NEON float/integer conversions round and saturate at lane bounds", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([-1, 2147483647, -2147483648, 16777217], 60);
+      cpu.si.set([-1, 0, -2147483648, 16777217], 8);
+      cpu.s.set([1.9, -1.9, NaN, Infinity], 16);
+    };
+    for (const execute of [
+      () => run([0xf3fbe66e, 0xf3bb26c4, 0xf3bb6748, 0xf3bb5788, BXLR], setup),
+      () => runThumb([0xfffb, 0xe66e, 0xffbb, 0x26c4, 0xffbb, 0x6748, 0xffbb, 0x5788, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.s.slice(60, 64))).toEqual([-1, 2147483648, -2147483648, 16777216]);
+      expect(Array.from(c.s.slice(4, 8))).toEqual([4294967296, 0, 2147483648, 16777216]);
+      expect(Array.from(c.si.slice(12, 16))).toEqual([1, -1, 0, 2147483647]);
+      expect(Array.from(c.si.slice(10, 12))).toEqual([1, 0]);
+    }
+  });
+  test("NEON immediate shifts preserve signed, rounded and accumulating behavior", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.si.set([-1, 0, -2147483648, 2147483647], 36);
+      cpu.si.set([-1, -1], 4);
+      cpu.si.fill(0x00010001, 12, 16); cpu.si.fill(0x0010fff8, 16, 20);
+      cpu.si.set([-1, 2, 3, 4], 24); cpu.si.set([1, 0, 2, 0], 32);
+    };
+    for (const execute of [
+      () => run([0xf2e14072, 0xf3881012, 0xf29d6158, 0xf3bfa25c, 0xf2a8e5f0, BXLR], setup),
+      () => runThumb([0xefe1, 0x4072, 0xff88, 0x1012, 0xef9d, 0x6158, 0xffbf, 0xa25c, 0xefa8, 0xe5f0, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(40, 44))).toEqual([-1, 0, -1, 0]);
+      expect(Array.from(c.si.slice(2, 4))).toEqual([0, 0]);
+      expect(Array.from(c.si.slice(12, 16))).toEqual(Array(4).fill(0x00030000));
+      expect(Array.from(c.si.slice(20, 24))).toEqual([-2147483648, 1, 2, 2]);
+      expect(Array.from(c.si.slice(28, 32))).toEqual([0, 256, 0, 512]);
+    }
+    const widen = (cpu: Cpu) => {
+      cpu.si.set([0x80007fff, 0xffff0001], 32);
+      cpu.si.set([0x7fff0180, 0xfe0200ff], 6);
+      cpu.si.set([-2147483648, 2147483647], 10);
+    };
+    for (const execute of [
+      () => run([0xf3d00a30, 0xf2a08a15, 0xf28c4a13, BXLR], widen),
+      () => runThumb([0xffd0, 0x0a30, 0xefa0, 0x8a15, 0xef8c, 0x4a13, 0x4770], widen),
+    ]) {
+      const c = execute();
+      expect(Array.from(c.si.slice(32, 36))).toEqual([32767, 32768, 1, 65535]);
+      expect(Array.from(new Int16Array(c.si.buffer, c.si.byteOffset + 32, 8))).toEqual([-2048, 16, -16, 2032, -16, 0, 32, -32]);
+      expect(Array.from(c.si.slice(16, 20))).toEqual([-2147483648, -1, 2147483647, 0]);
+    }
   });
   test("rsb/adc/sbc", () => {
     const c = run([
@@ -272,6 +717,18 @@ describe("arm decoder", () => {
 });
 
 describe("thumb decoder", () => {
+  test("bitfield insertion and clearing preserve bits outside the field", () => {
+    const setup = (cpu: Cpu) => { cpu.w[2] = 0x12345678; cpu.w[4] = -1; cpu.w[6] = -1; cpu.w[26] -= 8; };
+    for (const [i, execute] of [
+      () => runThumb([0xf36f, 0x0313, 0xf361, 0x021d, 0x4770], setup),
+      () => run([0xe7d3301f, 0xe7dd2011, 0xe7c3d01f, BXLR], setup),
+    ].entries()) {
+      const c = execute();
+      expect(c.w[4] >>> 0).toBe(0xd2345678);
+      expect(c.w[6] >>> 0).toBe(0xfff00000);
+      expect(c.w[26] & 15).toBe(i === 0 ? 8 : 0);
+    }
+  });
   test("NEON modified immediates populate both halves of a quad register", () => {
     const c = runThumb([
       0xef81, 0x6452, // vmov.i32 q3, #0x120000
@@ -394,6 +851,7 @@ describe("thumb decoder", () => {
       0xfb8a, 0x4508, // smull r4, r5, r10, r8
       0xfbe1, 0x6708, // umlal r6, r7, r1, r8
       0xfbca, 0xbc08, // smlal r11, r12, r10, r8
+      0xfbea, 0x2368, // umaal r2, r3, r10, r8
       0x4770,         // bx lr
     ], (cpu) => {
       cpu.w[2] = 3;
@@ -404,11 +862,15 @@ describe("thumb decoder", () => {
       cpu.w[22] = 5;
       cpu.cpsr = 0xa0000000;
     });
-    expect([c.w[4], c.w[6]]).toEqual([-2, 1]);
+    expect([c.w[4], c.w[6]]).toEqual([-3, 2]);
     expect([c.w[8], c.w[10]]).toEqual([-2, -1]);
     expect([c.w[12], c.w[14]]).toEqual([11, 1]);
     expect([c.w[22], c.w[24]]).toEqual([3, 0]);
     expect(c.cpsr >>> 28).toBe(0xa);
+    const arm = run([0xe0410392, BXLR], cpu => {
+      cpu.w[0] = 5; cpu.w[2] = 6; cpu.w[4] = -1; cpu.w[6] = -1;
+    });
+    expect([arm.w[0], arm.w[2]]).toEqual([12, -2]);
   });
 
   test("flags resume after a multi-instruction IT block", () => {
@@ -453,6 +915,26 @@ describe("thumb decoder", () => {
     });
     expect(mem.ld32(c.w[0])).toBe(42);
     expect(c.w[4]).toBe(0);
+    const double = runThumb([
+      0xe8d4, 0x327f, // ldrexd r3, r2, [r4]
+      0x3301, 0x3202,
+      0xe8c4, 0x3270, // strexd r0, r3, r2, [r4]
+      0xf3bf, 0x8f2f, // clrex
+      0xe8c4, 0x3271, // strexd r1, r3, r2, [r4]
+      0x4770,
+    ], (cpu) => {
+      cpu.w[8] = cpu.stackTop - 16;
+      mem.st64(cpu.w[8], 0x1234567811223344n);
+    });
+    expect(mem.ld64(double.w[8])).toBe(0x1234567a11223345n);
+    expect([double.w[0], double.w[2]]).toEqual([0, 1]);
+    for (const [kind, loaded, stored] of [[0x40, 0x44, 0x11223399], [0x50, 0x3344, 0x1122ef99]]) {
+      const c = runThumb([0xe8d7, 0x0f0f | kind, 0xe8c7, 0x4f01 | kind, 0xf3bf, 0x8f2f, 0xe8c7, 0x0f02 | kind, 0x4770], (cpu) => {
+        cpu.w[14] = cpu.stackTop - 16; cpu.w[8] = 0xabcdef99;
+        mem.st32(cpu.w[14], 0x11223344);
+      });
+      expect([c.w[0], c.w[2], c.w[4], mem.ld32(c.w[14])]).toEqual([loaded, 0, 1, stored]);
+    }
   });
 
   test("wide register lists preserve high registers", () => {
@@ -576,7 +1058,13 @@ describe("thumb decoder", () => {
     expect(c.cpsr >>> 28).toBe(0xa);
   });
 
-  test("wide carry arithmetic immediates consume and update carry", () => {
+  test("wide carry arithmetic consumes carry from immediates and shifted registers", () => {
+    const edge = runThumb([
+      0x2800, 0xe000, 0xbf00, // cmp r0, #0; branch over nop
+      0xeb40, 0x0201,        // adc.w r2, r0, r1 consumes carry across the edge
+      0x2b00, 0x4770,        // cmp r3, #0; bx lr
+    ]);
+    expect(edge.w[4]).toBe(1);
     const c = runThumb([
       0x2800,         // cmp r0, #0 (C=1)
       0xf170, 0x0000, // sbcs r0, r0, #0
@@ -586,6 +1074,15 @@ describe("thumb decoder", () => {
     expect(c.w[0]).toBe(0);
     expect(c.w[6]).toBe(5);
     expect(c.c).toBe(1);
+    const shifted = runThumb([
+      0xeb75, 0x05c1, // sbcs.w r5, r5, r1, lsl #3
+      0xeb40, 0x0251, // adc.w r2, r0, r1, lsr #1
+      0xebd0, 0x0341, // rsbs.w r3, r0, r1, lsl #1
+      0xf04f, 0x24ff, // mov.w r4, #0xff00ff00
+      0x4770,
+    ], (cpu) => { cpu.w[0] = 10; cpu.w[2] = 2; cpu.w[10] = 16; });
+    expect([shifted.w[10], shifted.w[4], shifted.w[6], shifted.w[8] >>> 0]).toEqual([-1, 11, -6, 0xff00ff00]);
+    expect(shifted.cpsr >>> 28).toBe(8);
   });
 
   test("IT conditions gate instructions and bitfield extraction", () => {
@@ -597,6 +1094,10 @@ describe("thumb decoder", () => {
     ];
     expect(runThumb(program, (cpu) => { cpu.w[0] = 0; cpu.w[6] = 0xfe; }).w[10]).toBe(0x7f);
     expect(runThumb(program, (cpu) => { cpu.w[0] = 1; cpu.w[6] = 0xfe; }).w[10]).toBe(0);
+    const signed = runThumb([0xf340, 0x001e, 0xf343, 0x1207, 0xf343, 0x041f, 0xf3c3, 0x1507, 0x4770], (cpu) => {
+      cpu.w[0] = 0x40000000; cpu.w[6] = -16;
+    });
+    expect([signed.w[0], signed.w[4], signed.w[8], signed.w[10]]).toEqual([-1073741824, -1, -16, 255]);
     const multiple = runThumb([
       0x4280,             // cmp r0, r0
       0xbf01,             // itttt eq
@@ -605,6 +1106,47 @@ describe("thumb decoder", () => {
       0x4770,
     ]);
     expect([multiple.w[0], multiple.w[2], multiple.w[4], multiple.w[6]]).toEqual([1, 2, 3, 4]);
+    for (const input of [0, 1]) {
+      let startIc = 0;
+      const moves = runThumb([
+        0x2800,                         // cmp r0, #0
+        0xbf08, 0x2101,                 // it eq; moveq r1, #1
+        0xbf08, 0x460b,                 // it eq; moveq r3, r1
+        0xbf08, 0xf04f, 0x0907,         // it eq; moveq.w r9, #7
+        0xbf18, 0x2209,                 // it ne; movne r2, #9
+        0x4770,
+      ], cpu => { cpu.w[0] = input; startIc = cpu.ic; });
+      expect([moves.w[2], moves.w[6], moves.w[18], moves.w[4]]).toEqual(input ? [0, 0, 0, 9] : [1, 1, 7, 0]);
+      expect(moves.cpsr >>> 28).toBe(input ? 2 : 6);
+      expect(moves.cpsr & 0x0600fc00).toBe(0);
+      expect(moves.ic - startIc).toBe(10);
+    }
+  });
+
+  test("signed high multiplication rounds the complete accumulate or subtract result", () => {
+    const setup = (cpu: Cpu) => { cpu.w[0] = 10; cpu.w[2] = -5; cpu.w[4] = 0x40000000; };
+    for (const execute of [
+      () => run([0xe758f211, 0xe753f231, 0xe7540211, 0xe7550231, 0xe75602d1, 0xe75702f1, BXLR], setup),
+      () => runThumb([0xfb51, 0xf802, 0xfb51, 0xf312, 0xfb51, 0x0402, 0xfb51, 0x0512, 0xfb61, 0x0602, 0xfb61, 0x0712, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect([c.w[16], c.w[6], c.w[8], c.w[10], c.w[12], c.w[14]]).toEqual([-2, -1, 8, 9, 11, 11]);
+    }
+  });
+
+  test("halfword packing shifts before merging without changing flags", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.w[0] = 0x12345678; cpu.w[2] = 0x87654321; cpu.w[4] = 0xfedcba98; cpu.w[12] = 0xaabbccdd;
+      cpu.cpsr |= 0xa8000000;
+    };
+    for (const execute of [
+      () => run([0xe6806016, 0xe6814692, 0xe6815052, 0xe6817252, BXLR], setup),
+      () => runThumb([0xeac0, 0x0606, 0xeac1, 0x3442, 0xeac1, 0x0522, 0xeac1, 0x1722, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect([c.w[12] >>> 0, c.w[8] >>> 0, c.w[10] >>> 0, c.w[14] >>> 0]).toEqual([0xaabb5678, 0x97534321, 0x8765ffff, 0x8765cba9]);
+      expect(c.cpsr >>> 27).toBe(0x15);
+    }
   });
 
   test("wide shifted-register operations preserve shifts and high destinations", () => {
@@ -628,14 +1170,52 @@ describe("thumb decoder", () => {
     expect(c.w[0]).toBe(1);
   });
 
-  test("wide count-leading-zeros handles zero and populated words", () => {
+  test("wide extensions rotate before extending and adding", () => {
+    const c = runThumb([
+      0xfa1f, 0xfa80, // uxth.w r10, r0
+      0xfa0f, 0xfb90, // sxth.w r11, r0, ror #8
+      0xfa51, 0xfca0, // uxtab r12, r1, r0, ror #16
+      0xfa41, 0xf9b0, // sxtab r9, r1, r0, ror #24
+      0x4770,
+    ], (cpu) => { cpu.w[0] = 0x80ffaa55; cpu.w[2] = 10; });
+    expect([c.w[20], c.w[22], c.w[24], c.w[18]]).toEqual([0xaa55, -86, 265, -118]);
+    const setup = (cpu: Cpu) => { cpu.w[0] = 0x80ffaa55; cpu.w[2] = 0x0000ffff; cpu.cpsr = 0xa8000000; };
+    for (const execute of [
+      () => run([0xe6cf2070, 0xe68f3470, 0xe6c14070, 0xe6815470, BXLR], setup),
+      () => runThumb([0xfa3f, 0xf280, 0xfa2f, 0xf390, 0xfa31, 0xf480, 0xfa21, 0xf590, 0x4770], setup),
+    ]) {
+      const pair = execute();
+      expect([pair.w[4], pair.w[6], pair.w[8], pair.w[10]]).toEqual([0x00ff0055, 0xff80ffaa | 0, 0x00ff0054, 0xff80ffa9 | 0]);
+      expect(pair.cpsr).toBe(0xa8000000);
+    }
+  });
+  test("signed halfword multiply-accumulate wraps and sets sticky Q", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.w[0] = 0x7fffffff; cpu.w[2] = 1; cpu.w[6] = 1;
+      cpu.w[4] = 0xfffeffff; cpu.w[8] = 0xfffd0004;
+    };
+    const thumb = runThumb([0xfb11, 0x0103, 0xfb12, 0x0514, 0xfb12, 0xf634, 0x4770], setup);
+    expect([thumb.w[2], thumb.w[10], thumb.w[12], thumb.q]).toEqual([-2147483648, -2147483646, 6, 1]);
+    const arm = run([0xe1010381, BXLR], setup);
+    expect([arm.w[2], arm.q]).toEqual([-2147483648, 1]);
+  });
+
+  test("wide reversals and leading-zero count preserve their source", () => {
     const c = runThumb([
       0xfab2, 0xf082, // clz r0, r2
       0xfab3, 0xf183, // clz r1, r3
+      0xfa92, 0xf4a2, // rbit r4, r2
+      0xfa94, 0xf5a4, // rbit r5, r4
+      0xfa96, 0xfb86, // rev.w r11, r6
+      0xfa96, 0xfc96, // rev16.w r12, r6
+      0xfa96, 0xf9b6, // revsh.w r9, r6
       0x4770,         // bx lr
-    ], (cpu) => { cpu.w[4] = 0x0000ffff; cpu.w[6] = 0; });
+    ], (cpu) => { cpu.w[4] = 0x0000ffff; cpu.w[6] = 0; cpu.w[12] = 0x123480ff; });
     expect(c.w[0]).toBe(16);
     expect(c.w[2]).toBe(32);
+    expect(c.w[8] >>> 0).toBe(0xffff0000);
+    expect(c.w[10]).toBe(c.w[4]);
+    expect([c.w[22] >>> 0, c.w[24] >>> 0, c.w[18], c.w[12]]).toEqual([0xff803412, 0x3412ff80, -128, 0x123480ff]);
   });
 
   test("wide word spills support pre-index and post-index writeback", () => {
@@ -665,6 +1245,12 @@ describe("thumb decoder", () => {
     expect(c.w[2]).toBe(0xab);
     expect(c.w[6]).toBe(0x5678);
     expect(c.w[0]).toBe(c.stackTop - 52);
+    const signed = runThumb([0xf9b5, 0x0008, 0xf915, 0x1002, 0xf935, 0x3f02, 0x4770], (cpu) => {
+      cpu.w[10] = cpu.stackTop - 32; cpu.w[4] = 3;
+      mem.st16(cpu.w[10] + 2, 0x8123); mem.st16(cpu.w[10] + 8, 0xfedc);
+    });
+    expect([signed.w[0], signed.w[2], signed.w[6]]).toEqual([-292, -127, -32477]);
+    expect(signed.w[10]).toBe(signed.stackTop - 30);
   });
 
   test("wide word offsets address high registers and large fields", () => {

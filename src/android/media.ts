@@ -8,6 +8,8 @@ import type { JBuffer } from "../jvm/natives/jnio";
 rt.markers("android/media/AudioManager$OnAudioFocusChangeListener");
 /** the rate the Web Audio output actually runs at */
 export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
+let audioSession = 0;
+export const newAudioSessionId = (): number => ++audioSession;
 import { onMain } from "./mainloop";
 import { JBundle, reportUncaught } from "./os";
 import { mkUri } from "./net";
@@ -415,12 +417,12 @@ rt.register({
 // AudioContext; the periodic position listener is what streaming mixers (a native engine's
 // SoundPlayer) refill from, so it fires whenever the queue runs below a few periods.
 const D_periodic = "(Landroid/media/AudioTrack;)V";
-class JAudioTrack extends JObj {
+export class JAudioTrack extends JObj {
   rate = 44100; channels = 2; bytesPerSample = 2; bufBytes = 0;
   sessionId = 0; attributes: unknown = null;
   state = 1; playState = 1;          // STATE_INITIALIZED; PLAYSTATE_STOPPED
   nextTime = 0; written = 0; played = 0; headOrigin = 0; resetHead = false; underruns = 0;
-  queue: { buffer: AudioBuffer; offset: number; start: number; source: AudioBufferSourceNode | null }[] = [];
+  queue: { buffer: AudioBuffer; offset: number; start: number; source: AudioBufferSourceNode | null; consumed?: () => void }[] = [];
   period = 0; listener: unknown = null; timer: ReturnType<typeof setInterval> | null = null;
   gain: GainNode | null = null;
   vol = 1;
@@ -445,6 +447,7 @@ class JAudioTrack extends JObj {
         if (index < 0) return;
         this.queue.splice(index, 1); this.played += entry.buffer.length; source.disconnect();
         if (!this.queue.length && this.playState === 1) this.played = this.written = this.headOrigin = 0;
+        entry.consumed?.();
       };
       source.start(entry.start, entry.offset / this.rate);
       this.nextTime = entry.start + (entry.buffer.length - entry.offset) / this.rate;
@@ -467,7 +470,7 @@ class JAudioTrack extends JObj {
     return excess > 0.005 ? new Promise((r) => setTimeout(() => r(n), excess * 1000)) : n;
   }
   /** interleaved 16-bit (or 8-bit unsigned) PCM → one scheduled buffer */
-  push(samples: Int16Array | Int8Array | Float32Array, frames: number): void {
+  push(samples: Int16Array | Int8Array | Float32Array, frames: number, consumed?: () => void): void {
     if (frames <= 0) return;
     const ctx = this.ctx();
     const buf = ctx.createBuffer(this.channels, frames, this.rate);
@@ -478,7 +481,7 @@ class JAudioTrack extends JObj {
       else for (let i = 0; i < frames; i++) ch[i] = ((samples[i * this.channels + c] & 0xff) - 128) / 128;
     }
     if (this.playState === 3 && this.written && this.queuedSec() === 0) this.underruns++;
-    this.queue.push({ buffer: buf, offset: 0, start: 0, source: null });
+    this.queue.push({ buffer: buf, offset: 0, start: 0, source: null, consumed });
     this.written += frames;
     if (this.playState === 3) this.schedule();
   }
