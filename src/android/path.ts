@@ -523,7 +523,7 @@ rt.register({
       this.add(["oval", r.left, r.top, r.right, r.bottom, d?.ord ?? 0]);
     },
     "addCircle(FFFLandroid/graphics/Path$Direction;)V": function (this: JPath, x: number, y: number, r: number, d: { ord: number } | null) {
-      this.add(["circle", x, y, r, d?.ord ?? 0]);
+      if (r > 0) this.add(["circle", x, y, r, d?.ord ?? 0]);
     },
     "addPath(Landroid/graphics/Path;)V": function (this: JPath, o: JPath) { appendPath(this, o); },
     "addPath(Landroid/graphics/Path;FF)V": function (this: JPath, o: JPath, dx: number, dy: number) {
@@ -567,6 +567,12 @@ rt.register({
 export function pathBounds(p: JPath, r: { left: number; top: number; right: number; bottom: number }) {
   let l = Infinity, t = Infinity, rr = -Infinity, b = -Infinity;
   for (const op of p.ops) {
+    if (op[0] === "circle") {
+      const x = op[1], y = op[2], radius = op[3];
+      l = Math.min(l, x - radius); rr = Math.max(rr, x + radius);
+      t = Math.min(t, y - radius); b = Math.max(b, y + radius);
+      continue;
+    }
     for (let i = 1, n = opPairs[op[0]] ?? 0; n--; i += 2) {
       l = Math.min(l, op[i] as number); rr = Math.max(rr, op[i] as number);
       t = Math.min(t, op[i + 1] as number); b = Math.max(b, op[i + 1] as number);

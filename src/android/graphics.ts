@@ -330,7 +330,7 @@ export class JPaint extends JObj {
   style = 0;
   strokeWidth = 0;
   shadowRadius = 0; shadowDx = 0; shadowDy = 0; shadowColor = 0;
-  textSize = device.dp(16); // AOSP defaults to 12px, but every view sets its own
+  textSize = 12;
   tf: JTypeface = tfDefault;
   antiAlias = true;
   textAlignN = 0; // 0 left, 1 center, 2 right
@@ -451,7 +451,7 @@ const paintMethods: NativeSpec["methods"] = {
   "getStyle()Landroid/graphics/Paint$Style;": function (this: JPaint) { return paintStyleEnum[this.style]; },
   "setStrokeWidth(F)V": function (this: JPaint, w: number) { this.strokeWidth = w; },
   "getStrokeWidth()F": function (this: JPaint) { return this.strokeWidth; },
-  "setTextSize(F)V": function (this: JPaint, s: number) { if (s > 0) this.textSize = s; },
+  "setTextSize(F)V": function (this: JPaint, s: number) { if (s >= 0) this.textSize = s; },
   "getTextSize()F": function (this: JPaint) { return this.textSize; },
   "setAntiAlias(Z)V": function (this: JPaint, v: number) { this.antiAlias = !!v; },
   "isAntiAlias()Z": function (this: JPaint) { return this.antiAlias ? 1 : 0; },
@@ -572,7 +572,7 @@ const paintMethods: NativeSpec["methods"] = {
 };
 function resetPaint(paint: JPaint): void {
   paint.color = -16777216; paint.style = 0; paint.strokeWidth = 0;
-  paint.textSize = device.dp(16); paint.tf = tfDefault; paint.antiAlias = true;
+  paint.textSize = 12; paint.tf = tfDefault; paint.antiAlias = true;
   paint.textAlignN = 0; paint.shader = null; paint.shaderObj = null; paint.maskFilter = null;
   paint.strokeCapN = "butt"; paint.strokeJoinN = "miter"; paint.dash = null;
   paint.filterColor = null; paint.filterMatrix = null; paint.filterObj = null;
@@ -1844,6 +1844,7 @@ export const canvasMethods: NativeSpec["methods"] = {
     drawRoundRect.call(this, r.left, r.top, r.right, r.bottom, rx, ry, p);
   },
   "drawCircle(FFFLandroid/graphics/Paint;)V": function (this: JCanvas, x: number, y: number, r: number, p: JPaint) {
+    if (!(r > 0)) return;
     const path = new Path2D();
     path.arc(x, y, r, 0, Math.PI * 2);
     this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
