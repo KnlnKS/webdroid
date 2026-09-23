@@ -356,6 +356,12 @@ export class JPaint extends JObj {
   blend: GlobalCompositeOperation | null = null;
   xfermode: JObj | null = null;      // kept only so getXfermode() round-trips
   blendMode: JSimpleEnum | null = null;
+  compositeOp(): GlobalCompositeOperation | null {
+    if (this.blend === "source-in" && !this.shader && !this.shaderObj &&
+      this.filterColor === null && !this.filterMatrix && (this.renderAlpha ?? this.color >>> 24) === 255)
+      return "source-atop";
+    return this.blend;
+  }
   letterSpacingEm = 0;
   textScaleX = 1;
   textSkewX = 0;
@@ -1558,14 +1564,15 @@ export class JCanvas extends JObj {
     // A blended paint owns the composite op only for its own ops — restore it straight after,
     // so a CLEAR fill can never leak into the next drawImage/drawText and erase it.
     const shadow = beginPaintShadow(this.ctx, p);
-    const prev = p.blend ? this.ctx.globalCompositeOperation : null;
+    const blend = p.compositeOp();
+    const prev = blend ? this.ctx.globalCompositeOperation : null;
     const filter = p.maskFilter ? this.ctx.filter : null;
     if (p.maskFilter) {
       const m = this.ctx.getTransform();
       this.ctx.filter = `blur(${p.maskFilter.sigma * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c))}px)`;
     }
     try {
-      if (p.blend) this.ctx.globalCompositeOperation = p.blend;
+      if (blend) this.ctx.globalCompositeOperation = blend;
       if (p.style === 0 || p.style === 2) {
         const lm = p.shaderObj?.local;
         if (p.shaderObj instanceof JBitmapShader) fill(this.shaderClipCtx(lm ?? shaderIdentity, p.shaderObj));

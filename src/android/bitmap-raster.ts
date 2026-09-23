@@ -14,7 +14,8 @@ function deviceFill(canvas: JCanvas, paint: JPaint, pixels: Path2D): void {
   try {
     ctx.resetTransform();
     ctx.fillStyle = paint.fillStyle(ctx);
-    if (paint.blend) ctx.globalCompositeOperation = paint.blend;
+    const blend = paint.compositeOp();
+    if (blend) ctx.globalCompositeOperation = blend;
     ctx.fill(pixels);
   } finally { ctx.restore(); }
 }
@@ -24,7 +25,8 @@ function composite(canvas: JCanvas, paint: JPaint, image: OffscreenCanvas): void
   ctx.save();
   try {
     ctx.resetTransform();
-    if (paint.blend) ctx.globalCompositeOperation = paint.blend;
+    const blend = paint.compositeOp();
+    if (blend) ctx.globalCompositeOperation = blend;
     ctx.drawImage(image, 0, 0);
   } finally { ctx.restore(); }
 }
@@ -92,7 +94,8 @@ export function tryBitmapOval(canvas: JCanvas, paint: JPaint, left: number, top:
   ctx.save();
   try {
     ctx.resetTransform(); ctx.fillStyle = paint.fillStyle(ctx);
-    if (paint.blend) ctx.globalCompositeOperation = paint.blend;
+    const blend = paint.compositeOp();
+    if (blend) ctx.globalCompositeOperation = blend;
     for (let count = 1; count <= 16; count++) {
       ctx.globalAlpha = count / 16;
       ctx.fill(coverage[count]!);
@@ -132,7 +135,8 @@ export function tryBitmapLine(canvas: JCanvas, paint: JPaint,
   ctx.save();
   try {
     canvas.prep(paint, true);
-    if (paint.blend) ctx.globalCompositeOperation = paint.blend;
+    const blend = paint.compositeOp();
+    if (blend) ctx.globalCompositeOperation = blend;
     ctx.resetTransform();
     ctx.beginPath(); ctx.moveTo(...start); ctx.lineTo(...end); ctx.stroke();
   } finally { ctx.restore(); }
@@ -185,7 +189,8 @@ export function tryBitmapPath(canvas: JCanvas, paint: JPaint, path: JPath): bool
   ctx.save();
   try {
     canvas.prep(paint, true);
-    if (paint.blend) ctx.globalCompositeOperation = paint.blend;
+    const blend = paint.compositeOp();
+    if (blend) ctx.globalCompositeOperation = blend;
     ctx.resetTransform(); ctx.stroke(devicePath);
   } finally { ctx.restore(); }
   return true;
