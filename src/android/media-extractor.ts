@@ -35,8 +35,10 @@ export class MediaExtractor {
       const format = new JMediaFormat();
       let nalLength = 0;
       const avc = entry && "avcC" in entry && entry.avcC instanceof BoxParser.box.avcC ? entry.avcC : null;
-      const mime = avc ? "video/avc" : track.codec.startsWith("mp4a.40.") ? "audio/mp4a-latm" : "application/octet-stream";
+      const hevc = entry && "hvcC" in entry && entry.hvcC instanceof BoxParser.box.hvcC ? entry.hvcC : null;
+      const mime = avc ? "video/avc" : hevc ? "video/hevc" : track.codec.startsWith("mp4a.40.") ? "audio/mp4a-latm" : "application/octet-stream";
       format.values.set("mime", { type: 4, value: mime });
+      if (hevc) format.values.set("codecs-string", { type: 4, value: track.codec });
       format.values.set("durationUs", { type: 2, value: BigInt(Math.round(track.duration / track.timescale * 1e6)) });
       format.values.set("bitrate", { type: 1, value: Math.round(track.bitrate) });
       format.values.set("language", { type: 4, value: track.language });
@@ -45,6 +47,10 @@ export class MediaExtractor {
       if (avc) {
         nalLength = avc.lengthSizeMinusOne + 1;
         csd(format, "csd-0", annexB(avc.SPS)); csd(format, "csd-1", annexB(avc.PPS));
+        maxSize *= Math.ceil(4 / nalLength);
+      } else if (hevc) {
+        nalLength = hevc.lengthSizeMinusOne + 1;
+        csd(format, "csd-0", annexB(hevc.nalu_arrays.flat()));
         maxSize *= Math.ceil(4 / nalLength);
       }
       format.values.set("max-input-size", { type: 1, value: maxSize });

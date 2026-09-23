@@ -14,6 +14,7 @@ const definitions: Definition[] = [
   { kind: "video", mime: "video/avc", codec: "avc1.42002A", ...avc42, profiles: [[1, 8192]] },
   { kind: "video", mime: "video/avc", codec: "avc1.4d002A", ...avc42, profiles: [[2, 8192]] },
   { kind: "video", mime: "video/avc", codec: "avc1.64002A", ...avc42, maxBitrate: 62500000, profiles: [[8, 8192]] },
+  { kind: "video", mime: "video/hevc", codec: "hvc1.1.6.L123.B0", ...avc42, profiles: [[1, 4096]] },
   { kind: "video", mime: "video/x-vnd.on2.vp8", codec: "vp8", maxDimension: 16383, maxBitrate: 100000000, blockSize: 16, maxBlocks: 0x7fffffff, blocksPerSecond: 0x7fffffff, profiles: [[1, 8]] },
   { kind: "video", mime: "video/x-vnd.on2.vp9", codec: "vp09.00.41.08", maxDimension: 4160, maxBitrate: 30000000, blockSize: 8, maxBlocks: 34816, blocksPerSecond: 2506752, profiles: [[1, 128]] },
   { kind: "audio", mime: "audio/mp4a-latm", codec: "mp4a.40.2", profiles: [[2, 0]] },
@@ -40,10 +41,16 @@ function videoKeyFrame(mime: string, data: Uint8Array): boolean {
     const type = data[i + 3] & 31;
     if (type === 1 || type === 5) return type === 5;
   }
+  if (mime === "video/hevc") for (let i = 0; i + 4 < data.length; i++) {
+    if (data[i] || data[i + 1] || data[i + 2] !== 1) continue;
+    const type = data[i + 3] >>> 1 & 63;
+    if (type <= 31) return type >= 16 && type <= 21;
+  }
   return false;
 }
 function videoConfig(def: Definition, format: JMediaFormat): VideoDecoderConfig {
-  let codec = def.codec;
+  const specified = stringValue(format, "codecs-string");
+  let codec = def.mime === "video/hevc" && /^(hvc1|hev1)\./.test(specified) ? specified : def.codec;
   const data = codecData(format, "csd-0");
   if (def.mime === "video/avc" && data) {
     for (let i = 0; i + 7 < data.length; i++) if (data[i] === 0 && data[i + 1] === 0 && (data[i + 2] === 1 || data[i + 2] === 0 && data[i + 3] === 1)) {
@@ -299,7 +306,7 @@ export class JMediaCodec extends JObj {
     if (!(flags & 2) && size) {
       this.inFlight++;
       if (decoder instanceof VideoDecoder) {
-        if (this.prepend && this.info.definition.mime === "video/avc") {
+        if (this.prepend && (this.info.definition.mime === "video/avc" || this.info.definition.mime === "video/hevc")) {
           const a = codecData(this.format, "csd-0"), b = codecData(this.format, "csd-1");
           if (a) { const joined = new Uint8Array(a.length + (b?.length ?? 0) + data.length); joined.set(a); if (b) joined.set(b, a.length); joined.set(data, a.length + (b?.length ?? 0)); data = joined; }
         }
