@@ -26,6 +26,17 @@ serialized E2E gate for this follow-up rendered 183/183 steps in 968.8 seconds. 
 wedged or required native call appeared. YouTube retained two control settle timeouts and its
 `Matrix.mapRect` draw error; 12 Flappy Bird auxiliary snapshots remained unavailable.
 
+The strict code-quality follow-up now decodes Thumb IT blocks once for scanning and emission,
+including simple multi-instruction blocks with a wide move. Render-thread pacing exemptions
+expire after frame activity stops, package queries share manifest game metadata, and
+`GameManager.setGameState` no longer retains unread state. Typecheck, focused ARM/CPU/package
+tests, and zero-failure Cut XAPK compilation pass. A fresh visible level-one run rendered and
+advanced after a rope swipe; its warm 12-second headless window presented 184 frames, without
+a controlled FPS comparison. The final serialized matrix rendered 183/183 steps in 958.6
+seconds, with no wedge, required native call, layout error or GL error. The known two YouTube
+settle timeouts, seven `Matrix.mapRect` draw errors and 12 unavailable Flappy Bird auxiliary
+snapshots remain. Cut still has no matrix flow, and the intro stall remains unresolved.
+
 ---
 
 # TikTok video playback follow-up — 2026-09-23

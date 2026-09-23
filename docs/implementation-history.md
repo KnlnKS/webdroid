@@ -452,3 +452,28 @@ control settle timeouts and its `Matrix.mapRect` draw error, observed in 16 proc
 in this run; the count has varied with live content. Flappy Bird again lacked 12 auxiliary
 snapshots and logged its page-status error while all seven steps rendered. Lichess retained
 its Flutter pthread errors. No visual golden was changed.
+
+The strict maintainability review found three overlapping Thumb IT body decoders, a permanent
+render-lineage exemption for native CPU pacing, game metadata applied only to the current
+package, and an unread `GameManager` state field. The JIT now uses one IT block decoder for
+scan and emission, retaining interpreter fallback for unsupported bodies and adding direct
+lowering for a multi-instruction block containing a wide move. The CPU scheduler timestamps
+actual frame activity and expires a renderer's pacing exemption after 500 ms without a frame.
+PackageManager's own and registered-package queries now use the same manifest-derived game
+category and flag. `setGameState` still rejects null but no longer stores a value with no
+observable reader. These changes are generic platform/runtime behavior; the game's bytecode
+and assets are unchanged. They landed as `b2dbda3c`, `a61938e4` and `55e5d6ca`.
+
+Typecheck, 76 focused ARM tests, 20 CPU/AAudio tests and the new package game-info contract
+test pass. The original Cut XAPK smoke-compiles 64,465 classes with zero method failures. A
+fresh headless Chrome Cut run at 1080×2160, 480 dpi reached visible level one and advanced
+to the next tutorial after a rope swipe, without layout, draw or GL errors. Its warm 12-second
+window presented 184 frames, with advancing native execution. This was one uncontrolled run,
+so it does not establish an end-to-end FPS improvement over the prior JIT build.
+
+The final serialized E2E gate rendered 183/183 steps across 13 flows in 958.6 seconds. No
+main-loop wedge, required native call, layout error or GL error appeared. YouTube retained
+two control settle timeouts and seven `Matrix.mapRect` draw errors; Flappy Bird again had 12
+unavailable auxiliary snapshots while rendering all seven steps. Lichess's Flutter pthread
+fault and Flappy Bird's page-status error remain. The Cut gameplay run above is the direct
+game acceptance check because the matrix has no Cut flow. No visual golden was changed.
