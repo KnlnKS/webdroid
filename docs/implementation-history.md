@@ -9,10 +9,12 @@ Temporary /tmp evidence may expire. Committed regression fixtures are the durabl
 
 ## Cut the Rope repair (2026-09-22, in progress)
 
-The AVD reference now has a separate clean Android user, preserving the earlier level-2 profile.
-At 720×1280/320 dpi its tutorial and settings captures are under
-`webdroid-shots/cut-the-rope/avd-clean-*.png`; the prior original-ARM32 Chrome tutorial capture
-matches its layout, assets and text. Ads remain outside this task unless they block gameplay.
+The AVD reference used a separate clean Android user at 720×1280/320 dpi. After the AVD
+restarted without that disposable profile, another clean user was created. Its fresh title,
+tutorial, level-one reward and second-puzzle captures are under
+`webdroid-shots/cut-the-rope/avd-fresh-*.png`; earlier tutorial and settings captures are under
+`avd-clean-*.png` in the same directory. Chrome's tutorial and second puzzle match their layout,
+assets and text. Ads remain outside this task unless they block gameplay.
 
 Fresh Chrome startup reaches the app's own intro MP4 via `AMediaExtractor_setDataSourceCustom`.
 The new NDK media owner uses that callback to read the unchanged asset, MP4Box for sample tables,
@@ -46,6 +48,25 @@ its stall. The unmodified bundle's `intro_uncompressed` resource was extracted t
 file for diagnosis; its first frames visibly show a door. A fresh full-Chrome GL probe during
 the black intro found no WebGL error or failed shader compile/link, so those hypotheses did
 not reproduce. Probe code was removed.
+
+The fresh AVD title displays the expected video artwork; Chrome's intro is black. A bounded
+NDK trace found that Unity configures all four observed decoders with no output surface and
+reads raw output buffers. The video decoder returns frames and Unity releases several, but its
+dequeue loop stops after roughly the seven-second clip duration while only about 0.4 seconds
+of samples have been consumed. The guest made about 84,000 nonblocking dequeue calls in one
+early burst. No video-sized GL texture upload was observed. A temporary controlled-clock run
+could not isolate timing: its scheduled work advanced only about six guest seconds in 86 real
+seconds and reached a separate native fault. The clock experiment remains inconclusive; no
+clock behavior was changed. A rope swipe advances both AVD and Chrome to the second puzzle.
+The observed life count differed (AVD five, Chrome four) after that input, so gameplay parity
+still needs a matched replay.
+
+An independent background-network fault at `libcronet.102.0.5005.125.so+0xd37f0` was the
+valid ARM NEON `VSWP d2,d23`, which the core decoded as undefined. The next run reached
+`+0xd3804`, `VSHRN.I64 d19,q1,#14`, an unimplemented narrowing shift. The ARM owner now
+executes D/Q swaps and translates narrowing, rounding and saturating shifts through the shared
+SIMD semantics. ARM/Thumb interpreter and JIT checks pass. These are generic instruction fixes;
+the same network thread has not yet completed a full post-fix browser replay.
 
 The first original-ARM32 tutorial reached rendering with missing sprites, black text blocks
 and repeated invalid-bounds warnings. Unity's bounds predicate was correct; a live instruction
