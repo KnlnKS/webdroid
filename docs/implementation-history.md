@@ -529,3 +529,37 @@ tested against the API-33 oracle and mismatched a retained rocket/skew case plus
 fresh visible emoji probes, so that replacement was reverted. The existing correction
 uses font records and transform values, never an APK identity, but arbitrary-transform
 emoji parity and exact matrix-state parity remain unresolved.
+
+## Larger graphics campaigns — 2026-09-23
+
+An unchanged API-33 probe ran 1,000 generated graphics cases in each of seeds `20260925`
+and `20260926`. The first campaign began with 76 reported differences; the current branch
+replays at 58. The second found 75 and replays at 74. Both earlier 100-case campaigns
+still replay with zero differences. The second large campaign recorded 110 tolerated
+float32 state deltas. Browser diagnostics arrived from all three processes with no
+reported missing native, Java or draw errors, so these are observed rendering and state
+differences rather than missing telemetry.
+
+Generic repairs in this pass keep zero-width bitmap hairlines in device space, preserve
+inverse even-odd fills under singular matrices, keep Roboto ligatures together while
+wrapping, and use float32 canvas transforms when inverting clip bounds. Solid opaque
+`SRC_IN` uses source-atop to preserve pixels outside the shape; transparent source-in
+erases through shape coverage; intermediate alpha uses a bounded shape mask and the
+destination's alpha. Sampled rectangle fills exclude left-edge ties. Singular hairline
+rectangles draw nothing, as confirmed against four direct Android probes. Inverse
+fill-and-stroke paths with zero stroke width use the same bitmap complement as fills.
+RenderNode alpha snaps to zero or one within the 0.001 boundary observed in direct
+API-33 probes. The source-in compositor reuses the bitmap mask builder and is capped at
+250,000 pixels; ordinary source-over drawing does not allocate its layers.
+
+The 1,000-case replays checked every generated input, not just retained failures, and
+found no newly failing case against either campaign's initial oracle comparison.
+Typecheck, all 1,325 tests (27,581 assertions), FitNotes smoke compilation with
+zero method failures, and the Canvas/Paint framework checks passed after the edits.
+No golden changed.
+The current comparison still reports 132 differences across the two larger graphics
+campaigns. Many are one-pixel glyph or antialias coverage differences, while others
+involve clip and matrix state or Porter-Duff edge behavior. A direct device-bound
+shortcut for axis-aligned clip polygons fixed one clip case but introduced three new
+cases in the 1,000-case replay, so it was reverted. Full arbitrary-APK or pixel parity
+is not established.

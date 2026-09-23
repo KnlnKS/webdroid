@@ -9,9 +9,11 @@ platform geometry and font data rather than APK-specific behavior. No visual gol
 See implementation history for mechanisms, verification and evidence limits.
 The renderer review follow-up isolates bitmap raster policy and crops CanvasKit text transfers.
 Graphics campaigns now record tolerated float32 state deltas separately: 7 cases in seed
-`20260923` and 14 in seed `20260924`. Exact matrix-state and arbitrary-transform color-glyph
-parity remain open even though both campaigns have zero differences under their documented
-comparison thresholds.
+`20260923` and 14 in seed `20260924`. Larger 1,000-case graphics campaigns still have
+58 differences for seed `20260925` and 74 for seed `20260926` after the current repairs.
+Exact matrix and clip state, raster edge coverage, small text, and arbitrary-transform
+color-glyph parity remain open. The zero-difference 100-case campaigns therefore do not
+establish graphics parity.
 
 ---
 
