@@ -1,3 +1,20 @@
+# Cut the Rope FPS follow-up — 2026-09-23
+
+Branch: `codex/cut-the-rope-fps`. Starting revision: `756491fb`.
+Status: reached non-ad Android game and shortcut APIs are implemented. A generic native
+frame-aware scheduler improves paired level-one presentation from about 4 to 5 frames/s
+when a sustained background computation is active. The unchanged ARM32 XAPK compiles with
+zero method failures and reaches interactive gameplay in full Chrome. The final serialized
+E2E matrix renders 183/183 steps in 966.3 seconds, with no wedge, layout error or required
+native API. YouTube retains two control settle timeouts and Matrix draw errors; the matrix
+has no Cut the Rope flow, so focused full-Chrome gameplay is its direct check.
+
+Remaining limits: native guest execution still saturates the browser thread; the intro video
+stall and later feature parity remain open. Keep the performance claim tied to paired visible
+gameplay windows and the final matrix; lower JIT compilation counts alone do not prove FPS.
+
+---
+
 # TikTok video playback follow-up — 2026-09-23
 
 Branch: `codex/tiktok-video-playback`. Starting revision: `9a038ff3`.

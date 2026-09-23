@@ -349,3 +349,45 @@ step, advancing ticks, zero required natives and no draw error; the two video st
 control settle timeouts and Matrix draw failure. No visual golden was changed. The varying
 TikTok FPS confirms that an original-rate playback claim needs a fixed input video and a
 substantially faster generic native execution path.
+
+## Cut the Rope FPS follow-up — 2026-09-23
+
+The isolated `codex/cut-the-rope-fps` worktree starts at `756491fb`. Full Chrome runs the
+unchanged ARM32 XAPK at 1080×2160, 480 dpi through its splash and intro skip to the level-one
+tutorial. The game draws, accepts a rope swipe, advances the puzzle and reports no uncaught
+gameplay or rendering error. Smoke compilation covers 64,465 classes with zero method failures.
+
+The reached `ShortcutManager.getPinnedShortcuts()` call now returns an empty list on this
+device, whose launcher reports pinning unsupported. The game service uses manifest
+`ApplicationInfo.category` and `FLAG_IS_GAME`; `GameManager.getGameMode()` reports standard mode
+for games, and `GameState` retains the Android constructors, getters and Parcel layout. Before
+`GameState`, Unity's state callback raised `NoClassDefFoundError`; after registration it runs
+without that exception. Remaining `NativeActivity` class probing is optional in this path.
+`VideoView`, `DialogFragment` and Parcelable errors appear in ad SDK paths, which this pass
+does not implement.
+
+A compiled Thumb entry reached during ITSTATE interpretation was reheated and requested for
+JIT compilation repeatedly. Gating heat on an empty slot reduced one eight-second gameplay
+window from 6,122 regions and 244 ms of JIT work to later windows of 78–737 regions and
+3–18 ms. Matched gameplay FPS remained variable, so this is a compilation and memory fix,
+not an independently proven FPS gain.
+
+Steady level-one profiling showed roughly 500–650 million native guest instructions and
+7.4–8.0 seconds in native execution per eight wall seconds. WebGL calls themselves consumed
+under 2.5 ms in a five-second sample. A sustained native worker used about 170–215 million
+guest instructions per eight seconds while UnityMain and AAudio also ran. Native pthreads
+share one browser JavaScript thread, so the worker competed with frame production. A generic
+cooperative cap now cools sustained budget-exhausting work while EGL frames are presented;
+render-thread ancestors and real-time audio stay responsive, and pending signals end the wait.
+On the same visible puzzle, alternating eight-second capped windows presented 37, 45 and 41
+frames versus 32, 31 and 36 with the busy worker temporarily exempted: about 5.0 versus
+4.0 frames/s. The original intro still stalls after early decoded samples and needs a tap to
+skip; gameplay FPS remains low. The cap was checked by typecheck and owning CPU/AAudio tests.
+
+The final serialized E2E matrix rendered 183/183 steps in 966.3 seconds with no main-loop
+wedge, layout error, GL error or required native API. Every step has a screenshot and process
+record. YouTube retained two control settle timeouts and eight instances of its existing
+`Matrix.mapRect` draw failure; 12 Flappy Bird child snapshots were unavailable as in the
+previous matrix. Its page-status error and Lichess's Flutter pthread fault also remain visible.
+The matrix does not contain a Cut the Rope flow; the separate visible Chrome puzzle and swipe
+above are the focused acceptance evidence. No visual golden was changed.
