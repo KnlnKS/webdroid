@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { mem } from "./mem";
 import { Cpu, setA64 } from "./cpu";
-import { core, JIT_HEAT } from "./core";
+import { core, jitStats, JIT_HEAT } from "./core";
 import { pattern, sweep } from "./a64.testkit";
 import { mainThread } from "../jvm/natives/jlang";
 import { RET_SENTINEL } from "./abi";
@@ -886,6 +886,31 @@ describe("thumb decoder", () => {
       0x4770,         // bx lr
     ]);
     expect(c.w[10]).toBe(16);
+  });
+
+  test("predicated byte loads and shifts preserve IT conditions and writeback", () => {
+    const data = mem.reserve(0x1000, 0x1000);
+    mem.st8(data, 0x7f);
+    const words = [0xbf3a, 0xf813, 0x5b01, 0x022d, 0x2500, 0x4770];
+    const lo = runThumb(words, cpu => {
+      cpu.w[6] = data;
+      cpu.w[10] = 42;
+      cpu.cpsr = 0;
+    });
+    expect([lo.w[6], lo.w[10], lo.cpsr & 0x0600fc00]).toEqual([data + 1, 0x7f00, 0]);
+    const hs = runThumb(words, cpu => {
+      cpu.w[6] = 0;
+      cpu.w[10] = 42;
+      cpu.cpsr = 0x20000000;
+    });
+    expect([hs.w[6], hs.w[10], hs.cpsr & 0x0600fc00]).toEqual([0, 0, 0]);
+
+    const at = mem.reserve(0x1000, 0x1000);
+    mem.u16.set(words, at >>> 1);
+    const before = jitStats.regions;
+    for (let i = 0; i <= JIT_HEAT; i++) execute(at | 1, cpu => { cpu.w[6] = data; });
+    expect(jitStats.regions).toBeGreaterThan(before);
+    expect(() => execute(at | 1, cpu => { cpu.w[6] = 0; })).toThrow(/bad address 0x0/);
   });
 
   test("wide doubleword transfers preserve register pairs", () => {

@@ -544,6 +544,16 @@ pub fn Emit(comptime wide: bool) type {
             e.b.emit(.{ get(L_CPU), c32(@bitCast(e.r.blocks[e.blk].pc)), mo(O.i32_store, OFF_BPC), get(L_CPU), c64(e.pc), mo(O.i64_store, @offsetOf(Cpu, "pc")) });
             e.exitStatus(2);
         }
+        pub fn checkLowAddress(e: *Self) void {
+            const b = e.b;
+            b.emit(.{ get(L_A), c32(abi.LOW), O.i32_lt_u });
+            e.ifv();
+            b.emit(.{ get(L_CPU), c32(@intFromEnum(cpu.Fault.bad_address)), mo(O.i32_store, OFF_EXIT),
+                get(L_CPU), c32(@bitCast(mem.ld(u32, e.pc))), mo(O.i32_store, OFF_FAULT_WORD),
+                get(L_CPU), get(L_A), mo(O.i32_store, OFF_FAULT_ADDR) });
+            e.faultExit();
+            e.endif();
+        }
         pub fn address(e: *Self) void {
             const b = e.b;
             b.emit(.{ tee(L_T0), c64(32), O.i64_shr_u, O.i32_wrap_i64, tee(L_B), O.i32_eqz, O.if_, wasm.I32, get(L_T0), O.i32_wrap_i64, O.else_ });

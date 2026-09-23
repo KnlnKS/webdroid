@@ -72,6 +72,52 @@ fn itBlockEnd(pc: u32, h: u32) ?u32 {
     }
     return at;
 }
+const ItOp = struct {
+    pc: u32,
+    cc: u8,
+    body: union(enum) {
+        move_imm: struct { d: u32, imm: u32 },
+        move_reg: struct { d: u32, m: u32 },
+        shift_left: struct { d: u32, m: u32, amount: u32 },
+        load_byte: struct { d: u32, n: u32, offset: u32 },
+    },
+};
+const ItSimple = struct { end: u32, count: u32, ops: [4]ItOp };
+fn itSimple(pc: u32, h: u32) ?ItSimple {
+    const end = itBlockEnd(pc, h) orelse return null;
+    var result = ItSimple{ .end = end, .count = 0, .ops = undefined };
+    var at = pc + 2;
+    var state = h & 255;
+    while (at < end) {
+        const word: u32 = mem.ld(u16, at);
+        const cc: u8 = @intCast(state >> 4);
+        var op: ItOp = .{ .pc = at, .cc = cc, .body = undefined };
+        if (word & 0xfff0 == 0xf810) {
+            const second: u32 = mem.ld(u16, at + 2);
+            const d = second >> 12;
+            const n = word & 15;
+            if (second & 0x0f00 != 0x0b00 or d >= 15 or n >= 15 or d == n) return null;
+            op.body = .{ .load_byte = .{ .d = d, .n = n, .offset = second & 255 } };
+            at += 4;
+        } else if (word & 0xf800 == 0x2000) {
+            op.body = .{ .move_imm = .{ .d = (word >> 8) & 7, .imm = word & 255 } };
+            at += 2;
+        } else if (word & 0xf800 == 0) {
+            op.body = .{ .shift_left = .{ .d = word & 7, .m = (word >> 3) & 7, .amount = (word >> 6) & 31 } };
+            at += 2;
+        } else if (word & 0xff00 == 0x4600) {
+            const d = (word & 7) | ((word >> 4) & 8);
+            const m = (word >> 3) & 15;
+            if (d >= 15 or m >= 15) return null;
+            op.body = .{ .move_reg = .{ .d = d, .m = m } };
+            at += 2;
+        } else return null;
+        result.ops[result.count] = op;
+        result.count += 1;
+        state = if (state & 7 == 0) 0 else (state & 0xe0) | ((state << 1) & 0x1f);
+    }
+    return if (at == end and state == 0) result else null;
+}
 
 pub fn rwArm(w: u32) jit.RW {
     var rw = jit.ALL32;
@@ -673,6 +719,29 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             setR(e, move.d);
             e.endif();
             e.transfer(e.r.blocks[e.blk].fall, (pc + 2 + move.len) | 1, k + 1);
+            return true;
+        }
+        if (itSimple(pc, h)) |block| {
+            for (block.ops[0..block.count]) |op| {
+                e.cond(op.cc);
+                e.ifv();
+                e.pc = op.pc;
+                switch (op.body) {
+                    .move_imm => |v| b.emit(.{ c32(@intCast(v.imm)), set(L_X + v.d) }),
+                    .move_reg => |v| b.emit(.{ get(L_X + v.m), set(L_X + v.d) }),
+                    .shift_left => |v| b.emit(.{ get(L_X + v.m), c32(@intCast(v.amount)), O.i32_shl, set(L_X + v.d) }),
+                    .load_byte => |v| {
+                        b.emit(.{ get(L_X + v.n), set(L_A) });
+                        e.checkLowAddress();
+                        load(e, O.i32_load8_u, 0);
+                        setR(e, v.d);
+                        b.emit(.{ get(L_X + v.n), c32(@intCast(v.offset)), O.i32_add, set(L_X + v.n) });
+                    },
+                }
+                e.endif();
+            }
+            e.pc = pc;
+            e.transfer(e.r.blocks[e.blk].fall, block.end | 1, k + block.count);
             return true;
         }
         if (itBlockEnd(pc, h)) |end| {
