@@ -1354,3 +1354,15 @@ seconds, with no main-loop wedge, required native call or GL error. YouTube reco
 the layout errors were absent from the preceding gate. Their cause is unconfirmed,
 and no YouTube-specific investigation was run under the Cut-only testing scope.
 No visual golden changed.
+
+## Cut the Rope main integration — 2026-09-23
+
+The Cut branch merged into `main` after retaining both the fuzzer and Cut histories.
+Main's VFP emitter refactor had removed its local `L_A` alias; the merged Cut memory
+emitter needed that alias restored. The merged tree passes typecheck, all 1,344 tests
+(27,674 assertions), and Cut smoke compilation with zero method failures. Its final
+serialized E2E run captured 183/183 steps across 13 flows in 958.9 seconds with no
+main-loop wedge, required native call, layout error or GL error. YouTube retained two
+settle timeouts and eight instances of its known `Matrix.mapRect` draw failure. The
+layout errors from the preceding Cut branch gate did not recur in this merged run;
+their intermittence remains unexplained. No visual golden changed.

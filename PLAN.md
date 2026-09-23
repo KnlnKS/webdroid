@@ -12,6 +12,10 @@ zero method failures; typecheck and 82 focused ARM/libc tests pass. The final se
 E2E gate captured 183/183 steps in 973.5 seconds with no main-loop wedge, required native
 call, layout error or GL error. YouTube retained two settle timeouts and eight known
 `Matrix.mapRect` draw errors; 12 Flappy Bird auxiliary snapshots were unavailable.
+After merging with the newer native and renderer changes on `main`, typecheck, all 1,344
+tests and Cut smoke compilation pass. The final merged E2E run captured 183/183 steps
+with no wedge, required native call, layout error or GL error; YouTube retained its
+eight draw errors and two settle timeouts.
 
 Generic Thumb wide and VFP scalar memory instructions now compile in the ARM32 JIT;
 reached libc ABI calls, Android media constants, the SurfaceTexture transform and Intent
