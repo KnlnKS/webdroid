@@ -401,6 +401,44 @@ Temporary diagnostic counters in all four TikTok process realms recorded no Java
 or `MediaCodecInfo.isHardwareAccelerated` call by the active feed. The counters were removed;
 changing that capability flag would not address the observed native decoder path.
 
+A later FFmpeg entry trace showed `mdl://` media handles rather than direct URLs. Reading this
+bundled library's `AVFormatContext` and `AVStream` layout from its own instructions, the active
+video stream reported codec ID 174 (`hevc` in the library's descriptor table) and average and
+nominal rates of 30/1 fps. The audio stream reported AAC. A browser network capture saw only
+proxy API/image requests; native relay traffic does not expose the media URL there. These
+temporary probes were removed from source and no media implementation was substituted.
+
+A three-second live JIT fallback sample found 24 `PMULL` sites in `libttcrypto.so`, each entered
+about 933,000 times. The A64 JIT now computes both `PMULL` and `PMULL2` byte-lane carryless
+products with Wasm SIMD. Its existing hardware oracle covers `PMULL`; a focused test covers
+upper lanes with a destination alias. A fixed four-million-operation kernel fell from about
+164 to 13 ms. TikTok smoke compiled 462,058 classes with zero method failures.
+
+The follow-up TikTok replay rendered 13/13 steps in 194.7 seconds. Feed, resume, second video,
+and third video presented at 28, 25, 29, and 25 EGL frames/s on live content. All steps had
+advancing state, four process snapshots, no new Android API gap, required native, wedge,
+settle timeout, layout error, or draw error; the same nine optional app/vendor class probes
+remained. Two separate eight-second browser samples reached 17.1 and 25.3 EGL frames/s, showing
+how much live clips vary. A later sample reached 22.3 EGL frames/s and remained concentrated
+in the bundled ByteVC1 decoder. A post-change three-second fallback trace found about 57,000
+active ByteVC1 `RBIT` fallbacks; the millions of HEIF color-conversion fallbacks had accumulated
+during setup and did not advance in the measured video window. The remaining playback gap is
+not explained by a similarly frequent unsupported decoder instruction. The 30 fps source rate
+and 25–29 fps focused playback show that original-rate presentation is not yet consistent.
+
+The final serialized E2E matrix for the PMULL change rendered 183/183 steps in 957.8 seconds.
+TikTok rendered 13/13 with four process snapshots per step, no new reached platform API gap,
+required native, wedge, settle timeout, layout error, or draw error, and the same nine optional
+class probes. Its feed, resume, second video, and third video steps measured 23, 19, 31, and
+21 EGL frames/s on another selection of live clips; the HEVC stream sampled separately reported
+30/1 fps. YouTube retained its two known control settle timeouts and six `Matrix.mapRect` draw
+errors, matching the previous full run. All other flows had zero wedge, settle timeout, layout
+error, draw error, and required native. The four scored flows rendered all 75 steps; their mean
+content differences were FitNotes 39.80%, Mihon app 41.94%, Harmonic 27.79%, and Mihon
+onboarding 9.07%. The score changes on live content do not establish native playback effects.
+No visual golden changed. The final A64 SIMD and hardware-oracle check passed 560 tests with
+18,261 assertions, including the new PMULL2 alias case.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only
