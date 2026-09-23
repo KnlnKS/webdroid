@@ -356,9 +356,12 @@ export fn run_slice(cp: u32, budget: u32) u32 {
                 },
             }
         } else {
-            const h = page.heat[i] +% 1;
-            page.heat[i] = h;
-            if (h == jit.HEAT and !jit.request(pc, if (c.a64 != 0) .a64 else if (c.cpsr & (1 << 5) != 0) .thumb else .arm)) page.heat[i] = h - 1;
+            // Thumb IT can force interpretation even when this entry already has a JIT slot.
+            if (s == 0) {
+                const h = page.heat[i] +% 1;
+                page.heat[i] = h;
+                if (h == jit.HEAT and !jit.request(pc, if (c.a64 != 0) .a64 else if (c.cpsr & (1 << 5) != 0) .thumb else .arm)) page.heat[i] = h - 1;
+            }
             status = if (c.a64 != 0) a64.block(c, pc, page) else arm.block(c, pc, page);
         }
         switch (status) {
