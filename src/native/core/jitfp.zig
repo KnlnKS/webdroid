@@ -997,14 +997,21 @@ fn emitVlane(e: *Emit, w: u32) bool {
 
 fn vload(e: *Emit, t: u8, off: u32, sz: u32) void {
     const b = e.b;
-    b.emit(.{ get(L_CPU), get(L_A), mo(jit.LD[@min(sz, 3)][0], off), mo(O.i64_store, voff(t)), get(L_CPU) });
-    if (sz == 4) b.emit(.{ get(L_A), mo(O.i64_load, off + 8) }) else b.i64c(0);
+    if (sz >= 3) {
+        b.emit(.{ get(L_CPU), get(L_A), vm(if (sz == 4) S.load else S.load64_zero, off), vm(S.store, voff(t)) });
+        return;
+    }
+    b.emit(.{ get(L_CPU), get(L_A), mo(jit.LD[sz][0], off), mo(O.i64_store, voff(t)), get(L_CPU) });
+    b.i64c(0);
     b.memop(O.i64_store, voff(t) + 8);
 }
 fn vstore(e: *Emit, t: u8, off: u32, sz: u32) void {
     e.storeCheck(off, @as(u32, 1) << @intCast(sz));
-    e.b.emit(.{ get(L_A), get(L_CPU), mo(O.i64_load, voff(t)), mo(jit.ST[@min(sz, 3)], off) });
-    if (sz == 4) e.b.emit(.{ get(L_A), get(L_CPU), mo(O.i64_load, voff(t) + 8), mo(O.i64_store, off + 8) });
+    if (sz == 4) {
+        e.b.emit(.{ get(L_A), get(L_CPU), vm(S.load, voff(t)), vm(S.store, off) });
+        return;
+    }
+    e.b.emit(.{ get(L_A), get(L_CPU), mo(O.i64_load, voff(t)), mo(jit.ST[sz], off) });
 }
 pub fn emitVldrlit(e: *Emit, o: *const a64.Op) void {
     const a: u32 = @truncate(o.imm);

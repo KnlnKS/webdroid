@@ -151,6 +151,7 @@ pub const Simd = struct {
     pub const shuffle: u8 = 0x0d;
     pub const swizzle: u8 = 0x0e;
     pub const load8_splat: u8 = 0x07;
+    pub const load64_zero: u8 = 0x5d;
     pub const load8_lane: u8 = 0x54;
     pub const store8_lane: u8 = 0x58;
     pub const store64_lane: u8 = 0x5b;
