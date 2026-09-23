@@ -23,6 +23,20 @@ test("DEX method references preserve class boundaries and refresh after loading"
     expect(R.methodRefs(owner).size).toBe(0);
 });
 
+test("class lookup preserves first DEX precedence across files", async () => {
+  const first = new DexFile(bytes);
+  const second = new DexFile(new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/SerializationProbe.dex").arrayBuffer()));
+  const R = new Runtime();
+  R.register({ name: "java/lang/Object", ctor: class extends JObj {} });
+  R.loadDex(first);
+  R.loadDex(second);
+  R.loadDex(new DexFile(bytes));
+  const firstName = descToName(first.type(first.classDef2Type(0)));
+  const secondName = descToName(second.type(second.classDef2Type(0)));
+  expect(R.link(firstName).dex).toBe(first);
+  expect(R.link(secondName).dex).toBe(second);
+});
+
 const modes = ["hot", "cold", "promoted", "denied"] as const;
 type Mode = typeof modes[number];
 async function fixture(mode: Mode) {

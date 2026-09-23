@@ -50,7 +50,9 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JDexFile) { return this.path; },
     "entries()Ljava/util/Enumeration;": function (this: JDexFile) {
       const names: string[] = [];
-      if (this.runtime) for (const [name, [dex]] of this.runtime.dexIndex) if (dex.name.startsWith(this.path + "!")) names.push(dotName(name));
+      const runtime = this.runtime;
+      if (runtime) for (const [name, loc] of runtime.dexIndex)
+        if (runtime.dexAtClassLocation(loc).name.startsWith(this.path + "!")) names.push(dotName(name));
       return mkIter(names);
     },
     "loadClass(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/Class;": function (this: JDexFile, name: string) {

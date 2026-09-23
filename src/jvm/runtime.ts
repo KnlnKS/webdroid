@@ -16,6 +16,8 @@ import { jvmCoverage } from "./coverage";
 import { Monitors } from "./monitor";
 
 export const ACC = { STATIC: 0x8, NATIVE: 0x100, INTERFACE: 0x200 } as const;
+// DEX type IDs cap distinct class definitions at 65,535 per file.
+const CLASS_INDEX_BASE = 0x10000;
 
 /** Root of the unified JS/Java object hierarchy (java.lang.Object). */
 export class JObj {
@@ -121,7 +123,7 @@ export class Runtime {
   classes = new Map<string, ClassInfo>();
   natives = new Map<string, NativeSpec>();
   dexes: DexFile[] = [];
-  dexIndex = new Map<string, [DexFile, number]>();
+  dexIndex = new Map<string, number>();
   cv(method: string): void { jvmCoverage.hit(method); }
   private refCache = new Map<string, Map<string, string>>();
   /** every method the loaded dexes reference on class `cls`, name+desc → desc: the surface a
@@ -184,16 +186,20 @@ export class Runtime {
   }
 
   loadDex(dex: DexFile, platform = false) {
+    if (dex.classDefCount >= CLASS_INDEX_BASE) throw new Error(`${dex.name}: too many class definitions`);
     this.refCache.clear();
+    const dexIndex = this.dexes.length;
     this.dexes.push(dex);
     for (let i = 0; i < dex.classDefCount; i++) {
       const name = descToName(dex.type(dex.classDef2Type(i)));
       if (!this.dexIndex.has(name)) {
-        this.dexIndex.set(name, [dex, i]);
+        this.dexIndex.set(name, dexIndex * CLASS_INDEX_BASE + i);
         if (platform) this.platformClasses.add(name);
       }
     }
   }
+
+  dexAtClassLocation(location: number): DexFile { return this.dexes[Math.floor(location / CLASS_INDEX_BASE)]; }
 
   private ifaceNames: Set<string> | null = null;
   /** Which registered natives are interfaces: an `ifaces` entry names one by definition, and an
@@ -369,7 +375,7 @@ export class Runtime {
     }
 
     const loc = this.dexIndex.get(name);
-    if (!loc) {
+    if (loc === undefined) {
       // auto-stub: unknown framework class → empty JObj subclass, logged for triage. It keeps
       // instanceof/check-cast/catch matching/field types working; resolving it from a call
       // site (DexLink.init/rdp0/rsf) throws NoClassDefFoundError as ART does.
@@ -386,7 +392,7 @@ export class Runtime {
       info.compiled = true;
       return info;
     }
-    const [dex, defIdx] = loc;
+    const dex = this.dexAtClassLocation(loc), defIdx = loc & (CLASS_INDEX_BASE - 1);
     const def = dex.classDef(defIdx);
     info.dex = dex;
     info.def = def;
