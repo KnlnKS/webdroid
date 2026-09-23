@@ -1687,10 +1687,10 @@ function clipRect(this: JCanvas, l: number, t: number, r: number, b: number) {
   const wx = m.a * (r - l), wy = m.b * (r - l);
   const hx = m.c * (b - t), hy = m.d * (b - t);
   const old = this.clipDevice;
-  const left = Math.max(old?.[0] ?? 0, Math.floor(x + Math.min(0, wx) + Math.min(0, hx)));
-  const top = Math.max(old?.[1] ?? 0, Math.floor(y + Math.min(0, wy) + Math.min(0, hy)));
-  const right = Math.min(old?.[2] ?? this.w, Math.ceil(x + Math.max(0, wx) + Math.max(0, hx)));
-  const bottom = Math.min(old?.[3] ?? this.h, Math.ceil(y + Math.max(0, wy) + Math.max(0, hy)));
+  const left = Math.max(old?.[0] ?? 0, Math.round(x + Math.min(0, wx) + Math.min(0, hx)));
+  const top = Math.max(old?.[1] ?? 0, Math.round(y + Math.min(0, wy) + Math.min(0, hy)));
+  const right = Math.min(old?.[2] ?? this.w, Math.round(x + Math.max(0, wx) + Math.max(0, hx)));
+  const bottom = Math.min(old?.[3] ?? this.h, Math.round(y + Math.max(0, wy) + Math.max(0, hy)));
   this.clipDevice = right > left && bottom > top ? [left, top, right, bottom] : [0, 0, 0, 0];
   return +(right > left && bottom > top);
 }
@@ -1743,6 +1743,16 @@ function viewportClipBounds(cv: JCanvas, out: JRect): number {
 function drawRect(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
   const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
   if (!width || !height) return;
+  if (p.blend === "source-in" && p.style === 0) {
+    const shape = new Path2D();
+    shape.rect(left, top, width, height);
+    this.ctx.save();
+    try {
+      this.ctx.clip(shape);
+      this.drawShape(p, (c) => c.fill(shape), (c) => c.stroke(shape));
+    } finally { this.ctx.restore(); }
+    return;
+  }
   this.drawShape(p, (c) => c.fillRect(left, top, width, height), (c) => c.strokeRect(left, top, width, height));
 }
 function drawColor(this: JCanvas, color: number, clear = false) {
@@ -1758,20 +1768,22 @@ function drawColor(this: JCanvas, color: number, clear = false) {
 }
 /** ellipse arc in the box; a full sweep without the centre is drawOval */
 function drawArc(this: JCanvas, l: number, t: number, r: number, b: number, start: number, sweep: number, useCenter: number, p: JPaint) {
-  const left = Math.min(l, r), top = Math.min(t, b), right = Math.max(l, r), bottom = Math.max(t, b);
-  if (right === left || bottom === top) return;
+  if (!(r > l && b > t)) return;
   const path = new Path2D();
-  const cx = (left + right) / 2, cy = (top + bottom) / 2;
+  const cx = (l + r) / 2, cy = (t + b) / 2;
   if (useCenter) path.moveTo(cx, cy);
-  path.ellipse(cx, cy, (right - left) / 2, (bottom - top) / 2, 0, start * Math.PI / 180, (start + sweep) * Math.PI / 180, sweep < 0);
+  path.ellipse(cx, cy, (r - l) / 2, (b - t) / 2, 0, start * Math.PI / 180, (start + sweep) * Math.PI / 180, sweep < 0);
   if (useCenter) path.closePath();
   this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
 }
+function drawOval(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
+  drawArc.call(this, Math.min(l, r), Math.min(t, b), Math.max(l, r), Math.max(t, b), 0, 360, 0, p);
+}
 function drawRoundRect(this: JCanvas, l: number, t: number, r: number, b: number, rx: number, ry: number, p: JPaint) {
   const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
-  if (!width || !height) return;
+  if ((!width || !height) && p.style === 0) return;
   const path = new Path2D();
-  path.roundRect(left, top, width, height, { x: Math.min(Math.max(rx, 0), width / 2), y: Math.min(Math.max(ry, 0), height / 2) });
+  path.roundRect(left, top, width, height, { x: Math.max(rx, 0), y: Math.max(ry, 0) });
   this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
 }
 function drawBitmapRect(this: JCanvas, b: JBitmap, src: JRect | null, dst: JRect | JRectF, p: JPaint | null) {
@@ -1910,11 +1922,9 @@ export const canvasMethods: NativeSpec["methods"] = {
     path.arc(x, y, r, 0, Math.PI * 2);
     this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
   },
-  "drawOval(FFFFLandroid/graphics/Paint;)V": function (this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
-    drawArc.call(this, l, t, r, b, 0, 360, 0, p);
-  },
+  "drawOval(FFFFLandroid/graphics/Paint;)V": drawOval,
   "drawOval(Landroid/graphics/RectF;Landroid/graphics/Paint;)V": function (this: JCanvas, r: JRectF, p: JPaint) {
-    drawArc.call(this, r.left, r.top, r.right, r.bottom, 0, 360, 0, p);
+    drawOval.call(this, r.left, r.top, r.right, r.bottom, p);
   },
   "drawArc(FFFFFFZLandroid/graphics/Paint;)V": drawArc,
   "drawArc(Landroid/graphics/RectF;FFZLandroid/graphics/Paint;)V": function (this: JCanvas, r: JRectF, start: number, sweep: number, useCenter: number, p: JPaint) {
