@@ -1,7 +1,7 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
 import { isRecording, recordOrRun, recordingContext, replayCanvas, replayWithSemantics, type Ctx2D } from "./recording";
-import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect, tryBitmapShape } from "./bitmap-raster";
+import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect, tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { drawSkiaText } from "./skia-text";
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
@@ -1563,6 +1563,7 @@ export class JCanvas extends JObj {
     } finally { if (shadow) ctx.restore(); ctx.restore(); }
   }
   drawShape(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke: (ctx: typeof this.ctx) => void) {
+    if (tryPartialSourceIn(this, p, fill, stroke)) return;
     if (tryBitmapShape(this, p, fill, stroke)) return;
     if (p.maskFilter?.style) return this.drawMask(p, fill, stroke);
     if (p.transparentSourceIn() && !p.maskFilter && !p.shadowRadius) {

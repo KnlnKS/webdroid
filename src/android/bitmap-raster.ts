@@ -39,6 +39,55 @@ function sampled(canvas: JCanvas, paint: JPaint, left: number, top: number, righ
   return true;
 }
 
+function shapeMask(canvas: JCanvas, paint: JPaint,
+  fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void): OffscreenCanvas {
+  const image = new OffscreenCanvas(canvas.w, canvas.h);
+  const ctx = image.getContext("2d")!;
+  ctx.setTransform(canvas.ctx.getTransform());
+  ctx.fillStyle = ctx.strokeStyle = "white";
+  ctx.lineWidth = Math.max(paint.strokeWidth, 1);
+  ctx.lineCap = paint.strokeCapN;
+  ctx.lineJoin = paint.strokeJoinN;
+  ctx.setLineDash(paint.dash ?? []);
+  if (paint.style !== 1) fill(ctx);
+  if (paint.style === 1 || paint.style === 2 && paint.strokeWidth !== 0) stroke(ctx);
+  if (!paint.antiAlias) {
+    const pixels = ctx.getImageData(0, 0, canvas.w, canvas.h);
+    for (let i = 3; i < pixels.data.length; i += 4) pixels.data[i] = pixels.data[i]! >= 128 ? 255 : 0;
+    ctx.resetTransform(); ctx.putImageData(pixels, 0, 0);
+  }
+  return image;
+}
+
+export function tryPartialSourceIn(canvas: JCanvas, paint: JPaint,
+  fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void): boolean {
+  const alpha = paint.renderAlpha ?? paint.color >>> 24;
+  if (paint.blend !== "source-in" || alpha <= 0 || alpha >= 255 ||
+    !eligible(canvas, paint) || paint.filterColor !== null || paint.filterMatrix ||
+    canvas.w * canvas.h > 250_000) return false;
+  const mask = shapeMask(canvas, paint, fill, stroke);
+
+  const source = new OffscreenCanvas(canvas.w, canvas.h);
+  const s = source.getContext("2d")!;
+  s.drawImage(mask, 0, 0);
+  s.globalCompositeOperation = "source-in";
+  s.fillStyle = paint.fillStyle(s) as string;
+  s.fillRect(0, 0, canvas.w, canvas.h);
+  s.globalCompositeOperation = "destination-in";
+  s.drawImage(canvas.ctx.canvas, 0, 0);
+
+  const ctx = canvas.ctx;
+  ctx.save();
+  try {
+    ctx.resetTransform();
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.drawImage(mask, 0, 0);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.drawImage(source, 0, 0);
+  } finally { ctx.restore(); }
+  return true;
+}
+
 function deviceHairline(canvas: JCanvas, paint: JPaint, path: Path2D): void {
   const ctx = canvas.ctx, devicePath = new Path2D();
   devicePath.addPath(path, ctx.getTransform());
@@ -55,20 +104,12 @@ export function tryBitmapShape(canvas: JCanvas, paint: JPaint,
   fill: (ctx: Ctx2D) => void, stroke: (ctx: Ctx2D) => void): boolean {
   if (paint.style !== 2 || paint.strokeWidth <= 0 || paint.antiAlias || paint.dash ||
     canvas.w * canvas.h > 250_000 || !eligible(canvas, paint)) return false;
-  const layer = new OffscreenCanvas(canvas.w, canvas.h).getContext("2d")!;
-  layer.setTransform(canvas.ctx.getTransform());
-  layer.fillStyle = layer.strokeStyle = "white";
-  layer.lineWidth = paint.strokeWidth;
-  layer.lineCap = paint.strokeCapN;
-  layer.lineJoin = paint.strokeJoinN;
-  fill(layer); stroke(layer);
-  const mask = layer.getImageData(0, 0, canvas.w, canvas.h);
-  for (let i = 3; i < mask.data.length; i += 4) mask.data[i] = mask.data[i]! >= 128 ? 255 : 0;
-  layer.resetTransform(); layer.putImageData(mask, 0, 0);
+  const image = shapeMask(canvas, paint, fill, stroke);
+  const layer = image.getContext("2d")!;
   layer.globalCompositeOperation = "source-in";
   layer.fillStyle = paint.fillStyle(layer) as string;
   layer.fillRect(0, 0, canvas.w, canvas.h);
-  composite(canvas, paint, layer.canvas);
+  composite(canvas, paint, image);
   return true;
 }
 
