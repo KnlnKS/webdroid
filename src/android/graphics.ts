@@ -1,6 +1,7 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
-import { recordOrRun, recordingContext, replayCanvas, replayWithSemantics, type Ctx2D } from "./recording";
+import { isRecording, recordOrRun, recordingContext, replayCanvas, replayWithSemantics, type Ctx2D } from "./recording";
+import { hairlineRect } from "./hairline";
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
@@ -1233,7 +1234,7 @@ export class JBitmap extends JObj {
   get canvas(): OffscreenCanvas {
     if (!this.cv) {
       this.cv = new OffscreenCanvas(this.w, this.h);
-      this.cx = this.cv.getContext("2d", { willReadFrequently: false })!;
+      this.cx = this.cv.getContext("2d", { willReadFrequently: true })!;
       if (this.px) this.cx.putImageData(new ImageData(this.px, this.w, this.h), 0, 0);
     }
     this.px = null;
@@ -1492,7 +1493,7 @@ export class JCanvas extends JObj {
     if (pattern) recordOrRun(ctx, c => { c[stroke ? "strokeStyle" : "fillStyle"] = pattern(c); });
     if (stroke) {
       if (!pattern) ctx.strokeStyle = p.fillStyle(ctx) as string;
-      ctx.lineWidth = Math.max(p.strokeWidth, 0.75);
+      ctx.lineWidth = Math.max(p.strokeWidth, 1);
       ctx.lineCap = p.strokeCapN;
       ctx.lineJoin = p.strokeJoinN;
       ctx.setLineDash(p.dash ?? []);
@@ -1743,6 +1744,20 @@ function viewportClipBounds(cv: JCanvas, out: JRect): number {
 function drawRect(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
   const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
   if (!width || !height) return;
+  if (this.bmp && p.style === 1 && p.strokeWidth === 0 && !p.antiAlias && !p.shader && !p.shaderObj &&
+    !p.maskFilter && !p.shadowRadius && !p.dash && !isRecording(this.ctx)) {
+    const ctx = this.ctx, pixels = hairlineRect(ctx, left, top, left + width, top + height, p.strokeCapN);
+    if (pixels) {
+      ctx.save();
+      try {
+        ctx.resetTransform();
+        ctx.fillStyle = p.fillStyle(ctx);
+        if (p.blend) ctx.globalCompositeOperation = p.blend;
+        ctx.fill(pixels);
+      } finally { ctx.restore(); }
+      return;
+    }
+  }
   if (p.blend === "source-in" && p.style === 0) {
     const shape = new Path2D();
     shape.rect(left, top, width, height);
