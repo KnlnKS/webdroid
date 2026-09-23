@@ -88,7 +88,6 @@ pub fn emitSimd(e: *Emit, w: u32, pc: u32, k: u32) void {
     if (!is(w, 0x5000_0000, 0x1000_0000)) {
         const rd: u8 = @intCast(w & 31);
         e.vcachedWrite = false;
-        e.vloaded &= ~bt.bit(rd);
         if (!emitVector(e, w)) e.fallback(pc, k);
         if (!e.vcachedWrite) e.vloaded &= ~bt.bit(rd);
         return;
