@@ -116,7 +116,8 @@ It performs four operations:
 
 1. Creates or updates the `webdroid_api33_ref` AVD.
 2. Uses webdroid's canonical framebuffer geometry and density, currently supplied by
-   `src/shell/config.ts` rather than duplicated in the setup script.
+   `src/shell/config.ts` rather than duplicated in the setup script, and replaces any
+   persistent `wm size` or `wm density` overrides.
 3. boots or validates an API-33 emulator.
 4. pulls the matching `framework.jar`, `framework-res.apk`, build fingerprint, and
    `api-versions.xml` into `fuzz-cache/android-33/`.
@@ -138,7 +139,7 @@ adb -s emulator-5554 emu avd name
 ```
 
 The SDK value must be `33`, and the AVD name should be `webdroid_api33_ref`. The campaign runner
-rejects a non-33 oracle.
+rejects a non-33 oracle or one whose active size and density differ from webdroid's profile.
 
 The cache is deliberately ignored. Do not replace `vendor/aosp/framework.jar` or
 `vendor/framework-res.apk` with API-33 files; those checked-in paths have different provenance.

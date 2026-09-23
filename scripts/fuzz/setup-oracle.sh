@@ -22,6 +22,9 @@ fi
 
 SDK_LEVEL="$($ADB shell getprop ro.build.version.sdk | tr -d '\r')"
 [ "$SDK_LEVEL" = 33 ] || { echo "oracle reports API $SDK_LEVEL, expected 33" >&2; exit 1; }
+read -r LCD_W LCD_H LCD_DPI <<<"$(bun -e 'import {device as d} from "./src/shell/config.ts"; console.log(d.width, d.height, d.densityDpi)' | tail -n 1)"
+"$ADB" shell wm size "${LCD_W}x${LCD_H}"
+"$ADB" shell wm density "$LCD_DPI"
 mkdir -p "$CACHE"
 "$ADB" pull /system/framework/framework.jar "$CACHE/framework.jar" >/dev/null
 "$ADB" pull /system/framework/framework-res.apk "$CACHE/framework-res.apk" >/dev/null
