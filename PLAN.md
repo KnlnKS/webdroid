@@ -18,6 +18,13 @@ completion remains the direct gameplay check.
 Remaining limits: native guest execution still saturates the browser thread; the intro video
 stall and later feature parity remain open. Keep the performance claim tied to presented
 frames and advancing ticks, with the visible and headless Chrome rates reported separately.
+A follow-up generic Thumb JIT lowering compiles the predicated byte-load/shift blocks observed
+in Unity's hot loop. Its isolated ten-million-instruction kernel improved from 65–71 ms to
+1.5–2.1 ms, and Cut reached the next tutorial after a rope swipe. Warm gameplay FPS could not
+be compared reliably because later captures stalled during startup or readback. The final
+serialized E2E gate for this follow-up rendered 183/183 steps in 968.8 seconds. No main loop
+wedged or required native call appeared. YouTube retained two control settle timeouts and its
+`Matrix.mapRect` draw error; 12 Flappy Bird auxiliary snapshots remained unavailable.
 
 ---
 

@@ -423,3 +423,32 @@ Twelve Flappy Bird auxiliary WebView snapshots were unavailable, as before; all 
 steps rendered. Lichess still reported Flutter pthread faults, and Flappy Bird retained its
 page-status error. No visual golden was changed. Cut the Rope is absent from this matrix, so
 the focused level completion above is its gameplay evidence.
+
+A follow-up trace of the stalled intro found an active surface-free AVC decoder with seven raw
+output buffers queued while Unity repeatedly polled for input and stopped dequeuing output.
+Larger codec capacities and a compressed-input backlog did not restore playback; both trials
+were removed. The observed non-ad `NativeActivity` lookup remains an optional class probe,
+while WebView, Cronet and related errors arose in ad paths. No new required gameplay native
+call was observed.
+
+A fresh level-one CPU sample mapped a hot Unity decompression loop to a Thumb IT block with a
+predicated post-index byte load, shift and move. The existing compiled IT path still called
+the interpreter for each body instruction. A generic JIT path now lowers those simple complete
+blocks directly and keeps conditional writeback, IT flags and precise load faults. A repeated
+10-million-instruction microbenchmark fell from about 65–71 ms to 1.5–2.1 ms for this kernel.
+The ARM interpreter/JIT parity test covers taken and skipped conditions plus a compiled null
+load. Typecheck and 76 focused ARM tests pass, and the unchanged XAPK smoke-compiles 64,465
+classes with zero method failures. A Cut run with this path reached level one and advanced
+after a rope swipe without draw or GL errors. Its immediate post-transition ten-second window
+presented 90 frames; a prior warmed clean run presented 122, so these windows do not establish
+an end-to-end FPS change. Two attempts to capture a later warmed window stalled in startup or
+screen readback, with ad WebView errors present. The isolated kernel gain is repeatable, but
+the overall gameplay FPS effect is still unmeasured.
+
+The final serialized E2E matrix on `86cf0f4` rendered 183/183 steps across 13 flows in
+968.8 seconds. All available process snapshots reported `ok`, with advancing main ticks;
+no main loop wedged, GL failure or required native call appeared. YouTube retained two
+control settle timeouts and its `Matrix.mapRect` draw error, observed in 16 process snapshots
+in this run; the count has varied with live content. Flappy Bird again lacked 12 auxiliary
+snapshots and logged its page-status error while all seven steps rendered. Lichess retained
+its Flutter pthread errors. No visual golden was changed.
