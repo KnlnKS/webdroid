@@ -41,9 +41,9 @@ let frameId = 0, ticking = false, ticks = 0;
 function frame(time: number): void {
   frameId = 0;
   if (!processPresentation.visible) return;
-  ticks++;
-  recordVsync(time); drainInput();
-  if (!ticking) {
+  drainInput();
+  if (recordVsync(time) && !ticking) {
+    ticks++;
     ticking = true;
     void tick().finally(() => { ticking = false; });
   }

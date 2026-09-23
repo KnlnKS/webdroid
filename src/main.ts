@@ -392,8 +392,7 @@ function doTick() {
   void tick().then(() => { perf.completedFrames++; perf.frameMs += performance.now() - lastTick; }).finally(() => { ticking = false; });
 }
 function loop(time: number) {
-  recordVsync(time);
-  doTick();
+  if (recordVsync(time)) doTick();
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);

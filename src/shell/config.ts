@@ -65,6 +65,7 @@ export const device = {
   width: screen.width,
   height: screen.height,
   densityDpi: screen.densityDpi,
+  refreshRate: 60,
   /** AOSP: DisplayMetrics.density is densityDpi/160, so the two can never disagree */
   get density(): number { return this.densityDpi / DENSITY_DEFAULT; },
   /** AOSP status_bar_height */

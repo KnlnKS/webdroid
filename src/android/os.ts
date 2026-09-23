@@ -841,16 +841,13 @@ rt.register({
   },
 });
 rt.markers("android/view/Choreographer$VsyncCallback");
-const rafIntervals = new Float64Array(32);
-let lastRaf = 0, rafSample = 0;
-export function recordVsync(time: number) {
-  if (lastRaf && time > lastRaf) {
-    rafIntervals[rafSample++ % rafIntervals.length] = time - lastRaf;
-    let interval = Infinity;
-    for (let i = 0; i < Math.min(rafSample, rafIntervals.length); i++) interval = Math.min(interval, rafIntervals[i]);
-    uiState.frameIntervalNanos = BigInt(Math.round(interval * 1e6));
-  }
-  lastRaf = time;
+const VSYNC_INTERVAL_MS = 1000 / device.refreshRate;
+let nextVsync = 0;
+export function recordVsync(time: number): boolean {
+  // Allow sub-millisecond rAF jitter without skipping a virtual display frame.
+  if (nextVsync && time + 0.75 < nextVsync) return false;
+  nextVsync = !nextVsync || time > nextVsync + VSYNC_INTERVAL_MS ? time + VSYNC_INTERVAL_MS : nextVsync + VSYNC_INTERVAL_MS;
+  return true;
 }
 export async function dispatchVsync(callback: JObj, presentation: bigint) {
   rt.link("android/view/Choreographer$FrameData");
