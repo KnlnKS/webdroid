@@ -515,12 +515,33 @@ a reliable per-frame cost comparison. The framework delegate runner could not ru
 worktree because `vendor/aosp/framework.jar` was absent. Chrome DevTools MCP later attached,
 but its trace session navigated away from the manually booted guest, so timed playback still
 used the project's CDP harness.
+
 The next serialized TikTok-only E2E replay rendered 13/13 steps. Its steady second- and
 third-video steps presented 17.1 and 13.1 EGL frames/s, despite UI frame counters of 33 and
 32 frames/s. Their source rates were not captured; a separate observed stream was 30 fps.
 No layout/draw error or required native appeared. The only new missing class in the final
 step was ByteDance's optional `MagpieBridge`; earlier optional vendor classes remained.
 The full multi-app E2E matrix remains reserved for the final candidate.
+
+Disassembly and a temporary return-site probe traced hot ByteVC1 call sites to NEON pixel
+kernels with chains of 64-bit transposes. The A64 JIT now masks each 64-bit vector result's
+upper half to zero, keeps the full result in a local vector register, and shares the store path
+with 128-bit results. A fixed 24-instruction transpose loop dropped from about 5.68 to 3.25
+ms per 500,000 iterations. All 560 A64 SIMD/oracle tests passed (18,261 assertions), and
+the unchanged 332-packet ByteVC1 capture decoded 320 frames in each run. In three clean,
+uncontended runs, candidate native time was 2,683–2,694 ms versus 2,707–2,792 ms baseline;
+the medians were 2,691 and 2,752 ms. The gain is small at decoder scale.
+
+A stray old decoder benchmark from the same worktree was found using almost a full CPU core
+during one live candidate sample and a focused replay. It was stopped; those rates are only
+functional checks. An uncontended 12.09-second full-Chromium candidate sample presented 167
+EGL swaps (13.8/s), spent 6.20 seconds in guest native work, and had advancing ticks with no
+required native or rendering error. Its active decoder was ByteVC2, unlike the fixed ByteVC1
+capture, so this is not a matched speed comparison. A temporary probe during a later ByteVC2
+clip resolved indirect calls to pixel kernels at library offsets 0x5b6c8 and 0x5c278. Both
+use interleaved vector loads, lane copies, byte extraction and widening multiply/accumulate.
+The diagnostic hook was removed. A separate ByteVC1 clip reached 30 EGL swaps/s, illustrating
+the variation between live feed items; their source cadences were not captured.
 
 ## TikTok video playback follow-up — 2026-09-23
 
