@@ -2380,7 +2380,11 @@ rt.register({
     "discardDisplayList()V": function (this: JRenderNode) { this.hasDL = false; this.ops = []; },
     "getWidth()I": function (this: JRenderNode) { return this.w; },
     "getHeight()I": function (this: JRenderNode) { return this.h; },
-    "setAlpha(F)Z": function (this: JRenderNode, a: number) { this.alpha = asF(a); return 1; },
+    "setAlpha(F)Z": function (this: JRenderNode, a: number) {
+      const alpha = asF(a), epsilon = Math.fround(0.001);
+      this.alpha = alpha <= epsilon ? 0 : alpha >= 1 - epsilon ? 1 : alpha;
+      return 1;
+    },
     "getAlpha()F": function (this: JRenderNode) { return this.alpha; },
     "setTranslationX(F)Z": function (this: JRenderNode, v: number) { this.tx = asF(v); return 1; },
     "setTranslationY(F)Z": function (this: JRenderNode, v: number) { this.ty = asF(v); return 1; },
