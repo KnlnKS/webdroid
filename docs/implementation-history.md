@@ -6422,3 +6422,45 @@ full E2E matrix was run for this integration; the prior matrices remain revision
 Evidence is retained in the main checkout under `webdroid-shots/chatgpt/merge-*.log`, alongside
 the prior ChatGPT captures. Task-owned development servers, browser bridge, Chrome profile and
 reference emulator were stopped before removing the implementation worktree.
+
+### JVM allocation and preparation audit — 2026-09-22
+
+Starting revision: `1d61248a`. The existing DEX tier redesign already interprets cold methods,
+promotes executed methods, bounds generated JS, and rebuilds preparation only for promoted
+methods. Its recorded Chrome profiles found object-heavy Java code and little numeric-Wasm
+eligibility. ART likewise profiles methods before JIT/AOT work and collects code-cache metadata
+under memory pressure ([ART JIT](https://source.android.com/docs/core/runtime/jit-compiler));
+V8 already has Sparkplug and Maglev tiers for generated JavaScript
+([Sparkplug](https://v8.dev/blog/sparkplug), [Maglev](https://v8.dev/blog/maglev)).
+Those facts do not justify a compiler worker, persistent generated code, or a second numeric
+backend without new app-level bottleneck evidence.
+Chrome's documented serialized code cache applies to fetched script resources; it is not
+a ready-made cache for Webdroid's runtime-generated `new Function` bodies
+([V8 code caching](https://v8.dev/blog/code-caching-for-devs)).
+
+Two bounded changes were retained. DEX preparation now identifies branch targets by numeric
+opcode, shares the empty target list, and parses the method signature once. The paired Bun
+fixture prepared 5,000 FitNotes methods (61,586 instructions) and 10,000 Mihon methods
+(272,832 instructions) in alternating orders. Instruction and leader counts matched exactly;
+timings favored the candidate for FitNotes but were noisy for Mihon, so no app startup speedup
+is claimed. The change removes one allocation for each non-branch instruction prepared.
+
+The runtime's `DexLink.s` now reads the owning `DexFile` string cache instead of allocating a
+second string-ID array per link. Strings are immutable and `DexFile.string()` already fills
+that cache. Linking all 55 TikTok DEX files in three fresh Bun processes retained 39.9 MB
+above the loaded DEX baseline before the change and 20.9 MB after it, a 19.0 MB reduction.
+This is the fully linked upper bound, not TikTok's observed boot-time footprint. The
+55 files contain 2,371,158 string IDs.
+
+Three alternating fresh Chrome Mihon app launches per revision all rendered without page
+errors and with advancing ticks. Post-GC heap after a three-second window was
+266.67–266.75 MB at the starting revision and 263.67–263.73 MB with the changes. Launch
+action time varied across both revisions (baseline 1,022–1,152 ms; candidate 997–1,117 ms),
+so startup improvement is not established. The link-cache result supports reduced retained
+heap in this observed app path; it does not measure every process or GPU allocation.
+
+Typecheck, the eight JVM tier tests, and cold smoke compilation of FitNotes (4,213 classes)
+and Mihon (21,918 classes) pass with zero method failures. The first complete unit run had one
+failure because the new worktree lacked the ignored `vendor/aosp/framework.jar`; the focused
+test passes after linking the existing local JAR. No new test or visual golden was added.
+The complete rerun passes 1,271 tests and 26,974 assertions across 219 files.
