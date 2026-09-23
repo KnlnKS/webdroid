@@ -20,6 +20,7 @@ const sv = wasm.simd;
 const vm = wasm.vm;
 const L_CPU = jit.L_CPU;
 const L_A = jit.L_A;
+const L_B = jit.L_B;
 const OFF_V = @offsetOf(cpu.Cpu, "v");
 
 inline fn voff(n: u8) u32 {
@@ -360,6 +361,21 @@ fn emitVector(e: *Emit, w: u32) bool {
     }
     if (is(w, 0x9f20_0400, 0x0e20_0400)) {
         const opcode = bits(w, 11, 5);
+        if (opcode == 8 and U and size == 1) {
+            for (0..(if (q) @as(usize, 8) else 4)) |i| {
+                vget(e, rm);
+                b.emit(.{ sv(S.extract_s[0]), @as(u8, @intCast(i * 2)), set(L_A) });
+                vget(e, rn);
+                b.emit(.{ sv(S.extract_u[1]), @as(u8, @intCast(i)), set(L_B) });
+                b.emit(.{ get(L_CPU), get(L_CPU), vm(S.load, voff(rd)), get(L_B), get(L_A), O.i32_shl,
+                    get(L_B), c32(0), get(L_A), O.i32_sub, O.i32_shr_u,
+                    get(L_A), c32(0), O.i32_ge_s, O.select,
+                    c32(0), get(L_A), c32(-16), O.i32_gt_s, get(L_A), c32(16), O.i32_lt_s, O.i32_and, O.select,
+                    sv(S.replace[1]), @as(u8, @intCast(i)), vm(S.store, voff(rd)) });
+            }
+            if (!q) zeroTop(e, rd, true);
+            return true;
+        }
         if (opcode >= 24) {
             const dp = size & 1 != 0;
             const fv = size & 2 != 0;

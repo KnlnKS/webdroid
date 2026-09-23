@@ -10,6 +10,15 @@ afterAll(() => setA64(false));
 
 const I = (c: { si: Int32Array }, v: number) => [c.si[4 * v], c.si[4 * v + 1], c.si[4 * v + 2], c.si[4 * v + 3]];
 
+test("USHL halfword lanes handle signed shift counts and destination aliasing", () => {
+  const c = run([0x6e614465, 0x2e614463, RET], cpu => {
+    cpu.vw.set([0x8001, 0x00ff, 0xffff, 0x1234, 0x0080, 0xffff, 1, 0x7777], 8 * 3);
+    cpu.vw.set([0xff, 3, 0xf0, 16, 1, 0xf1, 15, 0x80], 8);
+  });
+  expect([...c.vw.subarray(8 * 5, 8 * 6)]).toEqual([0x4000, 0x07f8, 0, 0, 0x0100, 1, 0x8000, 0]);
+  expect([...c.vw.subarray(8 * 3, 8 * 4)]).toEqual([0x4000, 0x07f8, 0, 0, 0, 0, 0, 0]);
+});
+
 describe("a64 simd: memory", () => {
   test("multi-register lanes preserve wraparound, writeback and stores across tiers", () => {
     const buf = pattern();
