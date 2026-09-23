@@ -649,7 +649,7 @@ bun run fuzz api --seed <fixed-seed> --cases <bounded-count> --oracle <serial> -
 bun run fuzz graphics --seed <fixed-seed> --cases <bounded-count> --oracle <serial> --out <dir>
 PORT=4090 bun run server.ts
 WEBDROID_URL=http://localhost:4090 bun run textcmp FitNotes.apk
-WEBDROID_URL=http://localhost:4090 bun run e2e --jobs 1
+WEBDROID_URL=http://localhost:4090 bun run e2e --full --jobs 1
 WEBDROID_URL=http://localhost:4090 bun run corpus
 ```
 

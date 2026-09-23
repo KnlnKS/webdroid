@@ -141,5 +141,5 @@ if (tests.length) {
   if (await unit.exited) process.exit(1);
 }
 const e2eArgs = [...selected].flatMap((flow) => ["--test", flow]);
-const e2e = Bun.spawn(["bun", "run", "e2e:fast", "--", ...e2eArgs], { cwd: root, stdout: "inherit", stderr: "inherit" });
+const e2e = Bun.spawn(["bun", "run", "e2e", "--", ...e2eArgs], { cwd: root, stdout: "inherit", stderr: "inherit" });
 process.exit(await e2e.exited);

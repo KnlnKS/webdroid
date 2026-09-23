@@ -26,11 +26,7 @@
     "fuzz": "bun scripts/fuzz.ts",
     "e2e:setup": "bash tests/e2e/setup-avd.sh",
     "e2e:boot": "bash tests/e2e/boot-emulator.sh",
-    "e2e:record": "bun tests/e2e/capture-emulator.ts",
-    "e2e:diff": "bun tests/e2e/score.ts",
     "e2e": "bun tests/e2e/run.ts",
-    "e2e:fast": "bun tests/e2e/run-fast.ts",
-    "e2e:coverage": "bun tests/e2e/run-fast.ts --coverage",
     "textcmp": "bun scripts/textcmp.ts",
     "build:core": "bun scripts/build-core.ts"
   },

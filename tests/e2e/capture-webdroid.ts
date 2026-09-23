@@ -206,8 +206,8 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, {
     for (const n of r.nativeRequired) log(`       native code required: ${n}`);
     for (const e of r.newErrors) log(`       ${e.slice(0, 200)}`);
   }
-  // Persist the per-step run flags next to the frames so `bun run e2e:diff` can apply the same
-  // scoring rules as `bun run e2e` — without this, a standalone diff has no idea the app hung
+  // Persist the per-step run flags next to the frames so `bun run e2e --diff` can apply the same
+  // scoring rules as `bun run e2e --full` — without this, a standalone diff has no idea the app hung
   // and would quietly report a better number for the same pixels.
   const run: FlowRun = { mode, jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, steps: runs, browserErrors: [...drv.errors] };
   await Bun.write(`${outDir}/run.json`, JSON.stringify(run, null, 2));

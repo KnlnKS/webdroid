@@ -14,7 +14,7 @@ import { isWebdroidProcessFrame } from "./lib/processes";
 const deterministic = FLOWS.filter((flow) => flow.clock !== "live");
 const coverage = process.argv.includes("--coverage");
 const args = process.argv.slice(2).filter((arg) => arg !== "--coverage");
-const { flows, jobs } = parseArgs(args, "bun run e2e:fast", deterministic);
+const { flows, jobs } = parseArgs(args, "bun run e2e", deterministic);
 if (coverage && flows.length !== deterministic.length)
   throw new Error("coverage collection must run the complete deterministic lane");
 

@@ -4,18 +4,18 @@ Walks the same scripted flow through **a real Android emulator** and through **w
 then reports how far apart the two look, step by step. The output is a target: the numbers
 should go down as webdroid improves.
 
-## The testing lanes
+## One command, two capture depths
 
 ```bash
 PORT=4090 bun run server.ts
-WEBDROID_URL=http://localhost:4090 bun run e2e:fast -- --jobs 1
-WEBDROID_URL=http://localhost:4090 bun run e2e
+WEBDROID_URL=http://localhost:4090 bun run e2e --jobs 4
+WEBDROID_URL=http://localhost:4090 bun run e2e --full --jobs 1
 ```
 
 Use a private port and set `WEBDROID_URL` for every capture command. Another checkout may
 already be serving the default port. Run captures sequentially: they share output directories.
 
-`bun run e2e` **never touches an emulator** and does not need the Android SDK installed —
+`bun run e2e --full` **never touches an emulator** and does not need the Android SDK installed —
 `adb` may be absent from `PATH` entirely. It reads `golden/`, drives webdroid over Playwright,
 and writes `actual/` + `report/index.html`. Every flow runs in its own headless browser and
 `--jobs N` (default: half the cpus) bounds how many run at once; each flow is scored in a
@@ -24,7 +24,7 @@ live network and video flows dominate that cost.
 
 Recording new goldens is a separate, manual step (below).
 
-`bun run e2e:fast` reuses the same flows but runs only six fixed-input, fixed-clock cases. Android
+`bun run e2e` is the default quick test. It reuses the same flows but runs only six fixed-input, fixed-clock cases. Android
 timers are advanced logically where that preserves the app's behavior; native GL games remain on
 real monotonic time. Semantic steps keep diagnostics and a frame hash without PNG readback, while
 named checkpoints retain pixels and enforce their recorded visual limits. A failure automatically
@@ -42,7 +42,7 @@ limit, and Android API version, so a passing fast run cannot be mistaken for ful
 then selects fast flows from `tests/e2e/coverage-index.json`. `--base <revision>` includes committed,
 staged, unstaged, and untracked changes. Missing, partial, stale-schema, changed-APK, uncovered, and
 runtime-root inputs expand to all deterministic flows. Refresh the compact index only with a clean,
-successful `bun run e2e:coverage`; the command refuses partial flow selection.
+successful `bun run e2e --coverage`; the command refuses partial flow selection.
 
 ### Running one flow
 
@@ -51,12 +51,14 @@ bun run e2e --test fitnotes           # just that flow
 bun run e2e --test mihon              # prefix match: both mihon flows
 bun run e2e --test fitnotes,mihon-app # comma-separated
 bun run e2e fitnotes                  # bare name works too
-bun run e2e --jobs 1                  # one browser at a time: the fps gates only apply here
+bun run e2e --jobs 1                  # one browser at a time: apply motion frame-rate gates
 bun run e2e --list                    # what flows exist
-bun run e2e --shots                   # also save every distinct frame per step to webdroid-shots/
+bun run e2e --full --shots            # also save every distinct frame per step
 ```
 
-`--test` works the same way on `e2e:fast`, `e2e:record`, and `e2e:diff`.
+`--full` walks every configured flow. `--record` captures Android references and `--diff`
+rescores an existing full capture without launching a browser. `--test` selects a flow in
+each mode; the default quick mode accepts only deterministic flows.
 
 `WEBDROID_JS_FLAGS='--no-sparkplug --no-maglev'` opts either webdroid driver into a controlled
 V8-tier experiment. Leave it unset when measuring stock-browser behavior.
@@ -128,7 +130,7 @@ retained separately from runtime logs, including caught failures in child proces
 `--shots [dir]` records every distinct frame webdroid *presented* during each step, not just
 the settled one that gets diffed — what you need when a step goes wrong (what was drawn on
 the way, and whether anything was drawn at all). The directory is wiped per run and gitignored.
-Only `e2e` honours it; the emulator recorder and `e2e:diff` have no frames to record.
+Only `e2e --full` honours it; the emulator recorder and offline scorer have no frames to record.
 
 ## How a step works
 
@@ -198,7 +200,7 @@ default can move without invalidating a golden. The recorder sets the API 33 AVD
 flow's declared geometry before capturing. Older FitNotes, Mihon and Harmonic sets use
 720×1280 @ 320dpi; CalculatorM uses 1080×2424 @ 480dpi. Each flow declares its own crop.
 
-`WEBDROID_SCREEN=1080x2424@480 bun run e2e` runs every flow at that size instead. Such a run is
+`WEBDROID_SCREEN=1080x2424@480 bun run e2e --full` runs every flow at that size instead. Such a run is
 reported as **smoke, never scored**: the goldens are pixels at one size, so a run at any other
 size measures cost, not fidelity.
 
@@ -233,7 +235,7 @@ both sets of bounds:
 That line says the dialog's OK button is within 2px vertically and 104px wide where the device
 makes it 620 — the button bar is not stretching. A content percentage cannot say that.
 
-The device half comes from `NN-id.ui.json` beside each golden png, written by `e2e:record`.
+The device half comes from `NN-id.ui.json` beside each golden png, written by `e2e --record`.
 Goldens recorded before that existed have no hierarchy files, and the metric falls back to the
 one node the manifest already carries for every `tapText` step: the bounds the device resolved
 that anchor to. Those are read **a step behind** — a tap resolves against the screen already on
@@ -271,7 +273,7 @@ timeout, so a hung app is reported as hung instead of quietly scoring as stable.
 step settles through the pixel rule (its screen holds still) and is then flagged by that probe.
 
 The capture pass writes these flags to `actual/<flow>/run.json`, so a standalone
-`bun run e2e:diff` scores identically to a full `bun run e2e` instead of silently reporting a
+`bun run e2e --diff` scores identically to a full `bun run e2e --full` instead of silently reporting a
 better number for the same pixels. `run.json` is also the perf artifact: per step it keeps the
 wall-clock `ms`, the `wd.perf` counters burned, and `newMissing` (the APIs the step was the
 first to ask for and not find). None of that is in the HTML report; read the file.
@@ -281,7 +283,7 @@ first to ask for and not find). None of that is in the HTML report; read the fil
 ```bash
 bun run e2e:setup    # create/configure an API 33 AVD (geometry from the device profile)
 bun run e2e:boot     # boot it and apply the determinism settings
-bun run e2e:record   # walk every flow, write golden/ + manifest.json
+bun run e2e --record # walk every flow, write golden/ + manifest.json
 ```
 
 Install the APKs on the emulator first. The recorder adjusts size and density for each flow,

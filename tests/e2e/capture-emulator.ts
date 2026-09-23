@@ -4,7 +4,7 @@
 //
 // Walks each flow on the API 33 oracle, resolves every text anchor to a concrete normalized
 // coordinate, and writes tests/e2e/golden/<flow>/{NN-id.png, manifest.json}. Run this by hand
-// when the flows change; `bun run e2e` then diffs off the committed result with no emulator.
+// when the flows change; `bun run e2e --full` then diffs off the committed result with no emulator.
 import { mkdir, rm } from "node:fs/promises";
 import * as emu from "./drivers/emulator";
 import { parseArgs } from "./lib/args";
@@ -12,7 +12,7 @@ import { PINNED_CLOCK_MS, screenOf, screenParam, sameScreen, uiFileFor, waitHori
 import { E2E_DIR, sleep } from "./lib/util";
 import { device as profile } from "../../src/shell/config";
 
-const { flows } = parseArgs(process.argv.slice(2), "bun run e2e:record");
+const { flows } = parseArgs(process.argv.slice(2), "bun run e2e --record");
 
 async function ensureDevice(flow: Flow) {
   const devices = (await emu.sh(["devices"], { quiet: true })).split("\n").filter((l) => /\tdevice$/.test(l));

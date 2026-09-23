@@ -37,14 +37,14 @@ async function diffFlow(flow: Flow): Promise<FlowReport> {
   const actualDir = `${E2E_DIR}actual/${flow.app}`;
   const sxsDir = `${E2E_DIR}report/${flow.app}-sxs`;
   if (!existsSync(`${goldenDir}/manifest.json`)) {
-    throw new Error(`no goldens for "${flow.app}" — run \`bun run e2e:record\` (needs an emulator)`);
+    throw new Error(`no goldens for "${flow.app}" — run \`bun run e2e --record\` (needs an emulator)`);
   }
   const manifest: Manifest = await Bun.file(`${goldenDir}/manifest.json`).json();
   await rm(sxsDir, { recursive: true, force: true });
   await mkdir(sxsDir, { recursive: true });
 
   const runPath = `${actualDir}/run.json`;
-  if (!existsSync(runPath)) throw new Error(`${flow.app}: missing run.json; rerun \`bun run e2e --test ${flow.app}\``);
+  if (!existsSync(runPath)) throw new Error(`${flow.app}: missing run.json; rerun \`bun run e2e --full --test ${flow.app}\``);
   const runInfo = await Bun.file(runPath).json() as FlowRun;
   if (runInfo.screen !== screenParam(screenOf(manifest)) ||
       runInfo.steps.length !== flow.steps.length ||
@@ -61,7 +61,7 @@ async function diffFlow(flow: Flow): Promise<FlowReport> {
     if (!rec) throw new Error(`golden manifest has no step "${step.id}" — re-record ${flow.app}`);
     const actualPath = `${actualDir}/${rec.file}`;
     if (!existsSync(actualPath)) {
-      throw new Error(`missing ${actualPath} — run \`bun run e2e --test ${flow.app}\``);
+      throw new Error(`missing ${actualPath} — run \`bun run e2e --full --test ${flow.app}\``);
     }
     const golden = await loadPng(`${goldenDir}/${rec.file}`);
     const actual = await loadPng(actualPath);
@@ -139,7 +139,7 @@ export async function assembleReport(apps: string[], geometry: string): Promise<
 
 if (import.meta.main) {
   const json = process.argv[2] === "--json";
-  const { flows, jobs } = parseArgs(process.argv.slice(json ? 3 : 2), "bun run e2e:diff");
+  const { flows, jobs } = parseArgs(process.argv.slice(json ? 3 : 2), "bun run e2e --diff");
   await mkdir(`${E2E_DIR}report`, { recursive: true });
   if (json) {
     const r = await diffFlow(flows[0]);
