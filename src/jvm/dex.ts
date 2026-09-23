@@ -73,6 +73,19 @@ class Reader {
   }
 }
 
+const CACHE_PAGE_SHIFT = 7;
+const CACHE_PAGE_SIZE = 1 << CACHE_PAGE_SHIFT;
+const CACHE_PAGE_MASK = CACHE_PAGE_SIZE - 1;
+
+class PagedCache<T> {
+  private pages: (T[] | undefined)[];
+  constructor(readonly length: number) { this.pages = new Array(Math.ceil(length / CACHE_PAGE_SIZE)); }
+  get(i: number): T | undefined { return this.pages[i >>> CACHE_PAGE_SHIFT]?.[i & CACHE_PAGE_MASK]; }
+  set(i: number, value: T): void {
+    (this.pages[i >>> CACHE_PAGE_SHIFT] ??= new Array<T>(CACHE_PAGE_SIZE))[i & CACHE_PAGE_MASK] = value;
+  }
+}
+
 function decodeMUTF8(bytes: Uint8Array, pos: number, utf16len: number): string {
   // Fast path: ASCII
   let ascii = true;
@@ -108,8 +121,8 @@ export class DexFile {
   private stringCache: (string | undefined)[];
   private typeCache: (string | undefined)[];
   private protoCache: (ProtoRef | undefined)[];
-  private fieldCache: (FieldRef | undefined)[];
-  private methodCache: (MethodRef | undefined)[];
+  private fieldCache: PagedCache<FieldRef>;
+  private methodCache: PagedCache<MethodRef>;
 
   get cachedStrings(): readonly (string | undefined)[] { return this.stringCache; }
 
@@ -137,8 +150,8 @@ export class DexFile {
     this.stringCache = new Array(this.stringCount);
     this.typeCache = new Array(this.typeCount);
     this.protoCache = new Array(protoCount);
-    this.fieldCache = new Array(fieldCount);
-    this.methodCache = new Array(methodCount);
+    this.fieldCache = new PagedCache(fieldCount);
+    this.methodCache = new PagedCache(methodCount);
 
     // Nothing here was checked before, so a truncated or byte-swapped file surfaced as a
     // RangeError from a DataView deep inside a lookup, naming neither the file nor the cause.
@@ -202,14 +215,15 @@ export class DexFile {
   }
 
   field(i: number): FieldRef {
-    let f = this.fieldCache[i];
+    let f = this.fieldCache.get(i);
     if (f === undefined) {
       const off = this.fieldIdsOff + i * 8;
-      f = this.fieldCache[i] = {
+      f = {
         cls: this.view.getUint16(off, true),
         type: this.view.getUint16(off + 2, true),
         name: this.string(this.view.getUint32(off + 4, true)),
       };
+      this.fieldCache.set(i, f);
     }
     return f;
   }
@@ -227,14 +241,15 @@ export class DexFile {
     for (; lo < this.methodCount && owner(lo) === descriptor; lo++) yield lo;
   }
   method(i: number): MethodRef {
-    let m = this.methodCache[i];
+    let m = this.methodCache.get(i);
     if (m === undefined) {
       const off = this.methodIdsOff + i * 8;
-      m = this.methodCache[i] = {
+      m = {
         cls: this.view.getUint16(off, true),
         proto: this.view.getUint16(off + 2, true),
         name: this.string(this.view.getUint32(off + 4, true)),
       };
+      this.methodCache.set(i, m);
     }
     return m;
   }
