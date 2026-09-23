@@ -1,0 +1,20 @@
+import { expect, test } from "bun:test";
+import { JThread } from "../jvm/natives/jlang";
+import { Cpu, setA64 } from "./cpu";
+import { lookupHost } from "./host";
+import { libmInit } from "./libm";
+
+test("nextafter crosses zero, signed zero and infinity at double precision", async () => {
+  for (const wide of [false, true]) {
+    setA64(wide); libmInit();
+    const cpu = new Cpu(new JThread(), "nextafter-test"), fn = lookupHost("nextafter", "libm.so")!;
+    const next = async (x: number, y: number) => { await cpu.call(fn, [{ d: x }, { d: y }]); return cpu.retD(); };
+    try {
+      expect(await next(0, -1)).toBe(-Number.MIN_VALUE);
+      expect(await next(-Number.MIN_VALUE, 1)).toBe(-0);
+      expect(await next(1, 2)).toBe(1 + Number.EPSILON);
+      expect(await next(Infinity, 0)).toBe(Number.MAX_VALUE);
+      expect(Number.isNaN(await next(NaN, 1))).toBe(true);
+    } finally { cpu.dispose(); setA64(false); }
+  }
+});

@@ -2,7 +2,7 @@
 // (bionic exports both). A float result leaves through retF/retD so it lands in v0 on AAPCS64.
 
 import { mem } from "./mem";
-import { hostLib, type HostFn, retF, retD, PTR, VRET, SERVED, fbits, bitsf } from "./host";
+import { hostLib, type HostFn, retF, retD, PTR, VRET, SERVED, fbits, bitsf, dbits, bitsd } from "./host";
 import type { Cpu } from "./cpu";
 
 /** a long result: 64-bit on LP64 */
@@ -48,6 +48,12 @@ export function libmInit(): void {
     ...both2("remainder", (x, y) => x - y * Math.round(x / y)),
   ]);
   Object.assign(M, {
+    nextafter: d2((x, y) => {
+      if (Number.isNaN(x) || Number.isNaN(y)) return NaN;
+      if (x === y) return y;
+      if (x === 0) return y < 0 ? -Number.MIN_VALUE : Number.MIN_VALUE;
+      return bitsd(dbits(x) + ((y > x) === (x > 0) ? 1n : -1n));
+    }),
     nextafterf: f2((x, y) => {
       if (Number.isNaN(x) || Number.isNaN(y)) return NaN;
       if (x === y) return y;
