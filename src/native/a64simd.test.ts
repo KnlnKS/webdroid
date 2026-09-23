@@ -35,6 +35,24 @@ test("PMULL2 multiplies upper byte lanes when the destination aliases a source",
 });
 
 describe("a64 simd: memory", () => {
+  test("lane stores use the latest vector value across compiled instructions", () => {
+    const buf = pattern();
+    const c = run([
+      0x4e080458, // dup v24.2d, v2.d[0]
+      0x4d818518, // st1 { v24.d }[1], [x8], x1
+      0x4e080478, // dup v24.2d, v3.d[0]
+      0x4d818518, // st1 { v24.d }[1], [x8], x1
+      RET,
+    ], cpu => {
+      cpu.w[16] = buf + 256;
+      cpu.w[2] = 8;
+      cpu.vb.set([1, 2, 3, 4, 5, 6, 7, 8], 16 * 2);
+      cpu.vb.set([9, 10, 11, 12, 13, 14, 15, 16], 16 * 3);
+    });
+    expect(c.w[16] >>> 0).toBe(buf + 272);
+    expect([...mem.u8.subarray(buf + 256, buf + 272)]).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+  });
+
   test("interleaved stores preserve lane order at both vector widths", () => {
     const buf = pattern();
     const c = run([0x0c9f8926, 0x4c00813e, RET], cpu => {

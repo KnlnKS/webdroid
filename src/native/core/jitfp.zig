@@ -982,7 +982,9 @@ fn emitVlane(e: *Emit, w: u32) bool {
             b.emit(.{ get(L_CPU), get(L_A), mo(jit.LD[esz][0], off), mo(jit.ST[esz], voff(t) + (idx << @intCast(esz))) });
         } else {
             e.storeCheck(off, @as(u32, 1) << @intCast(esz));
-            b.emit(.{ get(L_A), get(L_CPU), mo(jit.LD[esz][0], voff(t) + (idx << @intCast(esz))), mo(jit.ST[esz], off) });
+            b.get(L_A);
+            vget(e, t);
+            b.emit(.{ vm(S.store8_lane + @as(u8, @intCast(esz)), off), @as(u8, @intCast(idx)) });
         }
     }
     if (post) {
@@ -1005,12 +1007,15 @@ fn vload(e: *Emit, t: u8, off: u32, sz: u32) void {
     b.memop(O.i64_store, voff(t) + 8);
 }
 fn vstore(e: *Emit, t: u8, off: u32, sz: u32) void {
+    const b = e.b;
     e.storeCheck(off, @as(u32, 1) << @intCast(sz));
+    b.get(L_A);
+    vget(e, t);
     if (sz == 4) {
-        e.b.emit(.{ get(L_A), get(L_CPU), vm(S.load, voff(t)), vm(S.store, off) });
+        b.emit(.{vm(S.store, off)});
         return;
     }
-    e.b.emit(.{ get(L_A), get(L_CPU), mo(O.i64_load, voff(t)), mo(jit.ST[sz], off) });
+    b.emit(.{ vm(S.store8_lane + @as(u8, @intCast(sz)), off), 0 });
 }
 pub fn emitVldrlit(e: *Emit, o: *const a64.Op) void {
     const a: u32 = @truncate(o.imm);

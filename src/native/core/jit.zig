@@ -1205,7 +1205,8 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
                 e.fallback(pc, j + 1);
                 ended = false;
             } else {
-                if (wide and o.kind != .simd) e.vloaded = 0;
+                // Vmem's L bit is clear for stores, which leave cached V registers intact.
+                if (wide and o.kind != .simd and !(o.kind == .vmem and (o.imm & (1 << 22)) == 0)) e.vloaded = 0;
                 ended = switch (isa) {
                     .a64 => e.emitOp(o, pc, j + 1),
                     .arm => jit32.emitArm(&e, pc, j + 1),
