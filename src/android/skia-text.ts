@@ -1,4 +1,5 @@
 import CanvasKitInit from "canvaskit-wasm";
+import { version as canvasKitVersion } from "canvaskit-wasm/package.json";
 import type { CanvasKit, Surface, Typeface } from "canvaskit-wasm";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
@@ -36,7 +37,7 @@ function colorGlyphClips(data: ArrayBuffer): Map<number, [number, number]> {
 
 export function loadSkiaText(): Promise<void> {
   return loading ??= Promise.all([
-    CanvasKitInit({ locateFile: () => "/canvaskit.wasm" }),
+    CanvasKitInit({ locateFile: () => `/canvaskit.wasm?v=${canvasKitVersion}` }),
     fetch("/vendor/fonts/Roboto-Regular.ttf").then(response => response.arrayBuffer()),
     fetch("/vendor/fonts/NotoColorEmoji.ttf").then(response => response.arrayBuffer()),
   ]).then(([canvasKit, data, emojiData]) => {
