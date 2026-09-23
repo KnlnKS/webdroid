@@ -313,3 +313,39 @@ timeouts and seven Matrix draw errors; 12 Flappy child snapshots remain unavaila
 The corpus renders 20/21 APKs. Amazon crashes before drawing both here and on the exact
 pre-merge `54e48012` revision under an isolated replay, so that failure is not attributed
 to this integration.
+
+## TikTok video playback follow-up — 2026-09-23
+
+An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only
+headless baseline rendered 13/13 steps; its active feed, resume and two video steps recorded
+about 8–12 EGL frames/s. In full Chromium with the Apple GPU, one live clip reached 27.2 EGL
+frames/s for ten seconds. The guest feed bypassed both Java MediaCodec and NDK AMediaCodec:
+Chrome DevTools and host-call traces show TikTok's unchanged ByteVC1 decoder doing the work,
+with EGL presenting its output. Different clips have very different decode costs, so these
+samples do not establish a matched FPS improvement.
+
+TikTok's APK also bundles a small HEVC welcome video. MediaExtractor now recognizes `hvcC`
+tracks and exposes their Annex B parameter sets and codec string; MediaCodec advertises HEVC
+when WebCodecs supports it and handles IRAP key frames. A local full-Chromium check decoded
+all 122 samples of that bundled 20-fps asset with their original timestamps and no errors.
+This fills a general Android media path but does not accelerate TikTok's ByteVC1 feed.
+
+The A64 JIT now transfers individual vector lanes with scalar memory operations and lowers
+widening integer multiplication directly to WebAssembly SIMD extended multiply. A repeatable
+20-million-iteration guest lane loop took about 13.4 ms after warmup, versus 13.8 ms before;
+the widening multiply loop was effectively unchanged at about 14 ms. The release and safe core
+builds shrank by 216 and 214 bytes respectively. The final emitter passed 557 existing A64 SIMD
+and hardware oracle tests (18,249 assertions); no new unit tests or visual golden changes were
+needed. A focused TikTok capture rendered 13/13 with four process snapshots per step, no new
+Android API gaps, required natives, layout/draw errors or wedges. Its two video steps recorded
+23.6 and 18.6 EGL frames/s. A separate dense live clip managed only about 6 EGL frames/s and
+spent 8.8 of ten seconds in guest native execution. Original-rate playback therefore remains
+unresolved for demanding feed videos.
+
+The final serialized E2E matrix rendered 183/183 steps in 958.0 seconds with no wedged main
+loop or layout error. TikTok again rendered 13/13 with four available process diagnostics per
+step, advancing ticks, zero required natives and no draw error; the two video steps recorded
+8.2 and 9.1 EGL frames/s on different live clips. YouTube retained its two previously observed
+control settle timeouts and Matrix draw failure. No visual golden was changed. The varying
+TikTok FPS confirms that an original-rate playback claim needs a fixed input video and a
+substantially faster generic native execution path.

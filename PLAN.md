@@ -1,3 +1,12 @@
+# TikTok video playback follow-up — 2026-09-23
+
+Branch: `codex/tiktok-video-playback`. Starting revision: `9a038ff3`.
+Status: HEVC extraction/decoding and two generic A64 JIT lowerings are committed. TikTok renders all 13 focused steps, but original-rate playback remains unmet on dense live clips. The final serialized E2E matrix rendered 183/183 steps in 958 seconds with no wedge; YouTube retains two known settle timeouts.
+
+The feed uses TikTok's unchanged native ByteVC1 decoder and EGL rather than Java or NDK MediaCodec. Native decoding dominates the timed samples, especially on dense clips. Keep the remaining performance target tied to controlled source media and presentation counts; live feed videos vary between runs. The observed missing classes are optional app/vendor integrations, not Android platform APIs.
+
+---
+
 # TikTok usability follow-up
 
 Branch: `codex/tiktok-usability`. Starting revision: `9d0bb979`.
