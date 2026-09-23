@@ -417,6 +417,31 @@ describe("a64 simd: vector arithmetic", () => {
     expect(c.fpsr & (1 << 27)).toBe(1 << 27);
   });
 
+  test("byte-aligned SHRN preserves destination halves", () => {
+    const c = run([0x0f188420, 0x4f188420, RET], (cpu) => {
+      cpu.vb.set(Array.from({ length: 16 }, (_, i) => i), 16);
+      cpu.vb.fill(0xa5, 0, 16);
+    });
+    expect([...c.vb.subarray(0, 16)]).toEqual([1, 2, 5, 6, 9, 10, 13, 14, 1, 2, 5, 6, 9, 10, 13, 14]);
+  });
+
+  test("64-bit vector saturation ignores inactive upper lanes", () => {
+    const c = run([0x0ea20c20, RET], (cpu) => {
+      cpu.si.set([1, 2, 0x7fffffff, 0x7fffffff], 4);
+      cpu.si.set([3, 4, 1, 1], 8);
+    });
+    expect(I(c, 0)).toEqual([4, 6, 0, 0]);
+    expect(c.fpsr & (1 << 27)).toBe(0);
+  });
+
+  test("64-bit UADALP clears inactive upper lanes", () => {
+    const c = run([0x2e206820, RET], (cpu) => {
+      cpu.vb.set([1, 2, 3, 4, 5, 6, 7, 8], 16);
+      cpu.vw.fill(10, 0, 8);
+    });
+    expect([...c.vw.subarray(0, 8)]).toEqual([13, 17, 21, 25, 0, 0, 0, 0]);
+  });
+
   test("sqrshrun rounds signed lanes into both unsigned destination halves", () => {
     const c = run([0x2f098c20, 0x6f0a8c40, RET], (cpu) => {
       cpu.vsw.set([-32768, -129, -65, -64, -1, 0, 64, 32767], 8);

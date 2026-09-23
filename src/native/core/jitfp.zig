@@ -241,12 +241,13 @@ fn vget(e: *Emit, n: u8) void {
     }
     e.b.get(jit.L_VREG + n);
 }
+fn maskLowHalf(e: *Emit) void {
+    e.b.emit(.{sv(S.const_)});
+    e.b.bytes(&([_]u8{0xff} ** 8 ++ [_]u8{0} ** 8));
+    e.b.emit(.{sv(S.and_)});
+}
 fn vput(e: *Emit, d: u8, q: bool) void {
-    if (!q) {
-        e.b.emit(.{ sv(S.const_) });
-        e.b.bytes(&([_]u8{0xff} ** 8 ++ [_]u8{0} ** 8));
-        e.b.emit(.{ sv(S.and_) });
-    }
+    if (!q) maskLowHalf(e);
     e.b.emit(.{ tee(jit.L_VREG + d), vm(S.store, voff(d)) });
     e.vloaded |= bt.bit(d);
     e.vcachedWrite = true;
@@ -265,14 +266,48 @@ fn vectorConst(e: *Emit, esz: u32, value: u64) void {
     e.b.emit(.{sv(S.const_)});
     e.b.bytes(&bytes);
 }
-fn saturatedBinop(e: *Emit, rn: u8, rm: u8, size: u32, op: u8, wrapping: u8) void {
+fn saturatedBinop(e: *Emit, rn: u8, rm: u8, size: u32, q: bool, op: u8, wrapping: u8) void {
     vget(e, rn);
     vget(e, rm);
     e.b.emit(.{sv(op)});
     vget(e, rn);
     vget(e, rm);
-    e.b.emit(.{ sv(wrapping), sv(S.ne[size]), sv(S.any_true) });
+    e.b.emit(.{ sv(wrapping), sv(S.ne[size]) });
+    if (!q) maskLowHalf(e);
+    e.b.emit(.{sv(S.any_true)});
     setQIf(e);
+}
+fn saturatedBinop32(e: *Emit, rd: u8, rn: u8, rm: u8, q: bool, unsigned: bool, subtract: bool) void {
+    const b = e.b;
+    vget(e, rn);
+    vget(e, rm);
+    b.emit(.{ sv(if (subtract) S.sub[2] else S.add[2]), set(jit.L_VA) });
+    if (unsigned) {
+        vget(e, if (subtract) rm else rn);
+        if (subtract) vget(e, rn) else b.get(jit.L_VA);
+        b.emit(.{sv(S.gt_u[2])});
+    } else {
+        vget(e, rn);
+        if (subtract) vget(e, rm) else b.get(jit.L_VA);
+        b.emit(.{sv(S.xor)});
+        vget(e, if (subtract) rn else rm);
+        b.get(jit.L_VA);
+        b.emit(.{ sv(S.xor), sv(S.and_), c32(31), sv(S.shr_s[2]) });
+    }
+    b.set(jit.L_VB);
+    b.get(jit.L_VB);
+    if (!q) maskLowHalf(e);
+    b.emit(.{sv(S.any_true)});
+    setQIf(e);
+    b.get(L_CPU);
+    if (unsigned) vectorConst(e, 2, if (subtract) 0 else 0xffff_ffff) else {
+        vget(e, rn);
+        b.emit(.{ c32(31), sv(S.shr_s[2]) });
+        vectorConst(e, 2, 0x7fff_ffff);
+        b.emit(.{sv(S.xor)});
+    }
+    b.emit(.{ get(jit.L_VA), get(jit.L_VB), sv(S.bitselect) });
+    vput(e, rd, q);
 }
 const NarrowKind = enum { signed, unsigned, signed_to_unsigned };
 fn narrowMax(size: u32) u64 {
@@ -586,6 +621,20 @@ fn emitVector(e: *Emit, w: u32) bool {
     }
     if (is(w, 0x9f20_0c00, 0x0e20_0000) and size < 3) {
         const opcode = bits(w, 12, 4);
+        if ((opcode == 5 or opcode == 7) and size < 2) {
+            const extend = S.extend_low_s[size] + @as(u8, if (q) 1 else 0) + @as(u8, if (U) 2 else 0);
+            vget(e, rn);
+            b.emit(.{ sv(extend), set(jit.L_VA) });
+            vget(e, rm);
+            b.emit(.{ sv(extend), set(jit.L_VB) });
+            b.get(L_CPU);
+            if (opcode == 5) vget(e, rd);
+            b.emit(.{ get(jit.L_VA), get(jit.L_VB), sv(if (U) S.max_u[size + 1] else S.max_s[size + 1]),
+                get(jit.L_VA), get(jit.L_VB), sv(if (U) S.min_u[size + 1] else S.min_s[size + 1]), sv(S.sub[size + 1]) });
+            if (opcode == 5) b.emit(.{sv(S.add[size + 1])});
+            vput(e, rd, true);
+            return true;
+        }
         if (opcode == 14 and !U and size == 0) {
             const extend = S.extend_low_s[0] + @as(u8, if (q) 3 else 2);
             vget(e, rn);
@@ -625,6 +674,10 @@ fn emitVector(e: *Emit, w: u32) bool {
     }
     if (is(w, 0x9f20_0400, 0x0e20_0400)) {
         const opcode = bits(w, 11, 5);
+        if ((opcode == 1 or opcode == 5) and size == 2) {
+            saturatedBinop32(e, rd, rn, rm, q, U, opcode == 5);
+            return true;
+        }
         if (size == 1 and ((opcode == 8 and U) or opcode == 10)) {
             emitVariableShift16(e, rd, rn, rm, q, U, opcode == 10);
             return true;
@@ -634,7 +687,7 @@ fn emitVector(e: *Emit, w: u32) bool {
             emitHalving(e, rd, rn, rm, size, q, U, opcode != 0, opcode == 4);
             return true;
         }
-        if (opcode == 23 and !U and (size < 3 or q)) {
+        if (((opcode == 20 or opcode == 21) and size < 3) or (opcode == 23 and !U and (size < 3 or q))) {
             const es: usize = @as(usize, 1) << @intCast(size);
             const count: usize = (if (q) @as(usize, 16) else 8) / es;
             var even: [16]u8 = [_]u8{0} ** 16;
@@ -656,7 +709,12 @@ fn emitVector(e: *Emit, w: u32) bool {
             vget(e, rm);
             b.emit(.{sv(S.shuffle)});
             b.bytes(&odd);
-            b.emit(.{sv(S.add[size])});
+            const pairOp = switch (opcode) {
+                20 => if (U) S.max_u[size] else S.max_s[size],
+                21 => if (U) S.min_u[size] else S.min_s[size],
+                else => S.add[size],
+            };
+            b.emit(.{sv(pairOp)});
             vput(e, rd, q);
             return true;
         }
@@ -719,7 +777,7 @@ fn emitVector(e: *Emit, w: u32) bool {
         const o = op orelse return false;
         b.get(L_CPU);
         if (opcode == 1 or opcode == 5) {
-            saturatedBinop(e, rn, rm, size, o, if (opcode == 1) S.add[size] else S.sub[size]);
+            saturatedBinop(e, rn, rm, size, q, o, if (opcode == 1) S.add[size] else S.sub[size]);
             vget(e, rn);
             vget(e, rm);
             b.emit(.{sv(o)});
@@ -743,6 +801,27 @@ fn emitVector(e: *Emit, w: u32) bool {
         const fv = size & 2 != 0;
         const dp = size & 1 != 0;
         const f: u32 = @intFromBool(dp);
+        if ((opcode == 2 or opcode == 6) and size < 3) {
+            const es: usize = @as(usize, 1) << @intCast(size);
+            const pairs = (if (q) @as(usize, 16) else 8) / (2 * es);
+            b.get(L_CPU);
+            if (opcode == 6) vget(e, rd);
+            for (0..2) |odd| {
+                var lanes: [16]u8 = [_]u8{16} ** 16;
+                for (0..pairs) |i| {
+                    for (0..es) |j| lanes[i * es + j] = @intCast((2 * i + odd) * es + j);
+                }
+                vget(e, rn);
+                vectorConst(e, 0, 0);
+                b.emit(.{sv(S.shuffle)});
+                b.bytes(&lanes);
+                b.emit(.{sv(S.extend_low_s[size] + @as(u8, if (U) 2 else 0))});
+            }
+            b.emit(.{sv(S.add[size + 1])});
+            if (opcode == 6) b.emit(.{sv(S.add[size + 1])});
+            vput(e, rd, q);
+            return true;
+        }
         if (opcode >= 22 or (opcode >= 12 and opcode <= 15 and fv)) {
             const op: u8 = switch (opcode) {
                 15 => if (fv) (if (U) S.fneg[f] else S.fabs[f]) else return false,
@@ -815,6 +894,29 @@ fn emitVector(e: *Emit, w: u32) bool {
         const opcode = bits(w, 11, 5);
         const amount = (immh << 3) | bits(w, 16, 3);
         const shr = 2 * bitsT - amount;
+        if ((opcode == 16 or opcode == 17) and !U and esz < 2 and shr < 2 * bitsT) {
+            b.get(L_CPU);
+            if (opcode == 16 and shr & 7 == 0) {
+                const width: usize = @as(usize, 1) << @intCast(esz);
+                var lanes: [16]u8 = [_]u8{16} ** 16;
+                for (0..8 / width) |i| {
+                    for (0..width) |j| lanes[i * width + j] = @intCast(i * 2 * width + shr / 8 + j);
+                }
+                vget(e, rn);
+                vectorConst(e, 0, 0);
+                b.emit(.{sv(S.shuffle)});
+                b.bytes(&lanes);
+                if (q) b.emit(.{ vm(S.store64_lane, voff(rd) + 8), 0 }) else vput(e, rd, false);
+                return true;
+            }
+            emitRoundedShift(e, rn, esz + 1, shr, opcode == 17, true);
+            vectorConst(e, esz + 1, narrowMax(esz));
+            b.emit(.{sv(S.and_)});
+            vectorConst(e, esz + 1, 0);
+            b.emit(.{sv(S.narrow_u[esz])});
+            if (q) b.emit(.{ vm(S.store64_lane, voff(rd) + 8), 0 }) else vput(e, rd, false);
+            return true;
+        }
         if (opcode >= 16 and opcode <= 19 and esz < 2) {
             const kind: NarrowKind = if (opcode < 18) (if (U) .signed_to_unsigned else return false) else if (U) .unsigned else .signed;
             checkShiftNarrowSaturation(e, rn, esz, shr, opcode & 1 != 0, kind);
