@@ -106,8 +106,11 @@ gameplay replay. A separate clean browser context is investigating the unresolve
 Fresh original-ARM32 startup reaches the bundled seven-second intro clip through NDK extraction
 and decoding. It decodes initial video/audio samples but playback stalls with full output queues;
 a tap skips the intro and the tutorial eventually renders. The new media path and buffer-slot
-reuse pass owning tests and typecheck; the final E2E matrix has not yet been rerun. Intro playback,
-startup/render speed, Player ID and later unlocked features remain open.
+reuse pass owning tests and typecheck. Merged into main as `02696726`: typecheck, all 1,321
+unit tests and zero-failure XAPK compilation pass. The final serialized E2E renders 183/183
+steps in 954.9 seconds, with no wedge or required native; two YouTube steps exceed their
+settling bound. Intro playback, startup/render speed, Player ID and later unlocked features
+remain open.
 
 - Run the unchanged 4.2.1 XAPK in full Chrome and an AVD at matching geometry.
 - Capture startup, menus, gameplay, pause/resume and saved progression in both.

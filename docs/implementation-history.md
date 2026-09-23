@@ -83,8 +83,7 @@ swipe then advanced to the second puzzle with zero native, GL, layout or draw fa
 input remains live after media teardown. Temporary queue/format probes were removed.
 The codec output format supplied color-format 21, width, height, stride and slice height; Unity's
 remaining absent metadata queries (rotation, color range/standard, sample aspect and display
-dimensions, AAC profile) have not been established as the cause. Full E2E is reserved for the
-final candidate, and no visual goldens changed.
+dimensions, AAC profile) have not been established as the cause. No visual goldens changed.
 An audit then caught a distinct NDK format bug: `AMediaFormat_getBuffer` could report success
 with a null pointer for the extractor's heap-backed codec-specific data. Extracted and
 set buffers now use promotable direct storage; the ARM32/64 fixture checks the returned SPS
@@ -112,6 +111,14 @@ valid ARM NEON `VSWP d2,d23`, which the core decoded as undefined. The next run 
 executes D/Q swaps and translates narrowing, rounding and saturating shifts through the shared
 SIMD semantics. ARM/Thumb interpreter and JIT checks pass. These are generic instruction fixes;
 the same network thread has not yet completed a full post-fix browser replay.
+
+The integration merge `02696726` preserves main's later TikTok, ChatGPT and JVM performance
+work. After resolving the SQLite, scheduling, zip, Activity and test-import overlaps, typecheck
+and all 1,321 unit tests pass. The unchanged Cut the Rope XAPK smoke-compiles 64,465 classes
+with zero method failures. The final serialized E2E runs 183/183 steps in 954.9 seconds, with
+no main-loop wedge or required native and two YouTube settling timeouts. Several flows remain
+smoke-only without visual goldens, and this general matrix does not replay Cut the Rope's
+unfinished intro. The fresh Cut the Rope captures were retained in the main workspace.
 
 The first original-ARM32 tutorial reached rendering with missing sprites, black text blocks
 and repeated invalid-bounds warnings. Unity's bounds predicate was correct; a live instruction
