@@ -71,8 +71,8 @@ making shared-memory native execution a more consequential avenue than host-call
 The core can compile for shared Wasm memory and Bun can pass that memory to a worker, but the
 browser page lacks cross-origin isolation and JIT tables are local to each worker. A small
 isolated Chromium page successfully shared the same Wasm memory with a worker instance and
-observed the worker's write. Before any
-parallel runtime change, resolve cross-origin isolation, JIT installation barriers, host-call
+observed the worker's write. Before any parallel runtime change, resolve cross-origin
+isolation, JIT installation barriers, host-call
 ownership, shared core metadata, and data-race safety in a controlled prototype.
 
 On a fixed 332-packet, 320-frame ByteVC1 capture, lowering JIT heat from 48 to 16 compiled 86
@@ -96,6 +96,14 @@ also return before scanning every file key. Focused TikTok verification on froze
 no wedge, timeout, or draw/layout failure. Different live video clips presented at 18.7 and
 22.1 EGL swaps/s, so the original-rate target remains unproved. The full E2E matrix remains
 reserved for the final candidate.
+
+A temporary core probe compared decoder packet ingress and EGL swaps on one 20-second live
+ByteVC1 segment. It recorded 594 packets and 414 EGL swaps, with about 10.0 seconds of native
+execution. The first roughly five seconds presented only 43 swaps while 130 packets arrived;
+later roughly five-second windows received 139–151 packets and presented 99–124 swaps. The
+last window reached about 26 swaps/s against about 29 packets/s, so startup explains much of
+the whole-window average but may not explain the remaining steady gap. Packet count is not
+source frame timing. The temporary probe was removed and the normal core rebuilt.
 
 ---
 

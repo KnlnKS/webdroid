@@ -845,6 +845,16 @@ process diagnostics per step, no new platform missing API, required native, wedg
 timeout, or layout/draw error. Two different live clips made 18.7 and 22.1 EGL swaps/s; their
 source cadence was not captured, so original-rate playback remains unresolved.
 
+A temporary core probe recorded decoder entry times without replacing guest decoder code.
+During one 20-second ByteVC1 playback segment, 594 compressed packets reached the decoder,
+414 EGL swaps occurred, and native execution used about 10.0 seconds. Four successive roughly
+five-second windows recorded 130/43, 151/99, 142/123 and 139/124 packets/swaps. Thus the
+initial fill accounts for much of the low whole-window average, while the later windows still
+presented about 26 swaps/s against about 29 packets/s. These packets lack source presentation
+timestamps and may not map one-to-one to frames; the comparison does not establish source FPS
+or a decoder backlog. The temporary probe and its second JIT fallback range were removed, and
+the ordinary release/safe core was rebuilt.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only
