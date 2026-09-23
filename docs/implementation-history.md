@@ -6498,3 +6498,36 @@ Typecheck, all 1,271 unit tests / 26,974 assertions, and cold smoke compilation 
 compilation, both eager and cold, was stopped after exceeding 5 GB of resident memory; it is
 not a completed gate. TikTok's fresh Chrome launches exercise the reached methods and render,
 but do not cover its whole DEX corpus. No new tests or visual goldens were added.
+
+### Compact class locations — 2026-09-22
+
+`Runtime.loadDex` eagerly indexes every defined class so linking and class-loader checks can
+find it without scanning DEX files. The old map stored one `[DexFile, classDefIndex]` tuple per
+name. TikTok has 462,058 indexed classes across 55 files. An isolated three-run Bun measurement
+put the index's retained heap near 90.9 MB above loaded DEX files. The class-definition index
+fits in 16 bits because each class has a distinct type ID and DEX permits at most 65,535 type
+IDs per file ([DEX format](https://source.android.com/docs/core/runtime/dex-format)). The map
+now stores a numeric DEX ordinal and class index in one value; callers decode the owning file
+only when needed. Duplicate class names still keep the first DEX's definition. A focused
+real-DEX test exercises both the zero-valued first location and a later file.
+
+Three alternating fresh Bun processes per revision index the same 462,058 classes. Median
+incremental heap changes from 90.9 to 68.0 MB, about 22.9 MB less. Construction times overlap,
+so there is no separate index-speed claim. Three alternating Chrome launches per app all stay
+visible and render. TikTok's median foreground post-GC heap at the start of the three-second
+window changes from 636.7 to 620.7 MB; its end-window median is 744.9 to 724.7 MB. Mihon's
+end-window median is 258.4 to 254.1 MB. Launch-action medians move 6.35 to 6.26 seconds for
+TikTok and 0.96 to 1.00 seconds for Mihon, within run-to-run variation. Tick and presentation
+counts advance on every run. TikTok's observed console diagnostics persist on both revisions;
+this is not full guest-flow parity or all-process memory evidence.
+
+A separate no-instance-field constructor experiment covered about half of sampled TikTok
+classes but did not improve Mihon startup/heap and slowed paired Bun smoke compilation; it
+was removed. Class-definition parsing took only about 12.5 ms for 50,000 TikTok definitions
+in an isolated Bun pass, too little to justify a broader parser rewrite without a new profile.
+The packed index and paged caches retain the existing lazy method tiers, class-loader isolation,
+and first-definition precedence.
+Typecheck, 1,272 unit tests / 26,976 assertions, and cold smoke compilation of FitNotes and
+Mihon pass with zero method failures. The first TikTok browser start exercises its reached
+classes but does not replace a completed full TikTok smoke compile; that stress run was
+stopped at the documented memory bound. No visual golden changed.
