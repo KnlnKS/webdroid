@@ -832,6 +832,19 @@ instructions at each JIT threshold. Three runs at the current 48-hit threshold t
 85,000 state-2 unlocks, nearly all with queued waiters; bypassing their host wakeup would
 break pthread behavior. The probes and experimental core edits were removed.
 
+A ten-second full-Chromium TikTok profile showed 2,367 Wasm, 2,010 runtime JavaScript, and
+1,258 guest-Java samples among 6,826 CPU samples. The runtime's `RandomAccessFile` growth
+appeared in 106 samples: each extension had copied the entire prior file. The file now keeps
+geometric capacity while its visible `Uint8Array`, VFS entry and file-channel size reflect only
+the logical length. It updates mapped-buffer storage when reallocating. An explicit VFS
+directory now avoids the descendant key scan. In three fixed 1 MiB, 1,024-write runs, the old
+RAF path took 28.5–29.0 ms and the new path 1.00–1.03 ms. Existing file-channel and descriptor
+tests passed (19 cases), TypeScript typecheck passed, and TikTok smoke compilation had zero
+method failures. A fresh uncontended TikTok-only run rendered 13/13, with four available
+process diagnostics per step, no new platform missing API, required native, wedge, settle
+timeout, or layout/draw error. Two different live clips made 18.7 and 22.1 EGL swaps/s; their
+source cadence was not captured, so original-rate playback remains unresolved.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only

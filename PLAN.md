@@ -87,6 +87,16 @@ comparison establishes a gain. A one-core virtual profile did not improve the fi
 capture and was not retained. The full E2E matrix on this latest commit is reserved for the
 end of the goal, as requested.
 
+A live Chromium CPU profile reached `RandomAccessFile` growth during TikTok playback. The old
+path copied the entire file on every extension. It now retains geometric capacity while exposing
+only the logical length, including to the VFS and file-channel mappings. A fixed 1 MiB benchmark
+with 1,024 small writes took 28.5–29.0 ms before and 1.00–1.03 ms after. Explicit VFS directories
+also return before scanning every file key. Focused TikTok verification on frozen code rendered
+13/13, with four available process diagnostics per step, no new API or required-native gap,
+no wedge, timeout, or draw/layout failure. Different live video clips presented at 18.7 and
+22.1 EGL swaps/s, so the original-rate target remains unproved. The full E2E matrix remains
+reserved for the final candidate.
+
 ---
 
 # TikTok video playback follow-up — 2026-09-23
