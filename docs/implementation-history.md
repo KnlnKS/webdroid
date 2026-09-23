@@ -863,6 +863,18 @@ smoke compilation passed; the smoke compiler reported zero method failures. A ma
 332-packet capture decoded 320 frames and retired the same 2.49 billion guest instructions
 in both versions. No final E2E run was made for this structural change.
 
+The JIT had invalidated cached vector reads after every scalar instruction even though
+scalar instructions do not write V registers. It now clears that cache for vector loads and
+literal loads, while scalar FP and fallback paths retain their own invalidation. A new A64
+sequence checks scalar work between vector operations and a subsequent vector reload against
+the interpreter. In alternating fixed ByteVC2 runs, 42 frames decoded with the same 228.4
+million guest instructions and 1,739 JIT regions; median native time was 745.7 ms before and
+734.9 ms after. A single fixed ByteVC1 pair showed no clear change. Typecheck and 580 focused
+native/SIMD oracle cases passed. TikTok-only browser capture rendered 13/13 with four process
+diagnostics at every step, no required native, wedge, layout or draw error. Its live video
+rates varied with content and the last post was a photo, so the run does not establish
+original-rate video playback. The full E2E matrix remains reserved for the final candidate.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only

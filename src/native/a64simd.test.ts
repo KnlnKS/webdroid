@@ -35,6 +35,22 @@ test("PMULL2 multiplies upper byte lanes when the destination aliases a source",
 });
 
 describe("a64 simd: memory", () => {
+  test("vector reads survive scalar work and refresh after a vector load", () => {
+    const buf = pattern();
+    const c = run([
+      0x3dc00120, // ldr q0, [x9]
+      0x9100054a, // add x10, x10, #1
+      0x4e208401, // add v1.16b, v0.16b, v0.16b
+      0x3dc00520, // ldr q0, [x9, #16]
+      0x9100054a, // add x10, x10, #1
+      0x4e218402, // add v2.16b, v0.16b, v1.16b
+      RET,
+    ], cpu => { cpu.w[18] = buf + 256; });
+    expect(c.w[20]).toBe(2);
+    expect([...c.vb.subarray(16, 32)]).toEqual(Array.from({ length: 16 }, (_, i) => i * 2));
+    expect([...c.vb.subarray(32, 48)]).toEqual(Array.from({ length: 16 }, (_, i) => 16 + i * 3));
+  });
+
   test("lane stores use the latest vector value across compiled instructions", () => {
     const buf = pattern();
     const c = run([

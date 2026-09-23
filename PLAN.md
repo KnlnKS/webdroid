@@ -105,6 +105,11 @@ last window reached about 26 swaps/s against about 29 packets/s, so startup expl
 the whole-window average but may not explain the remaining steady gap. Packet count is not
 source frame timing. The temporary probe was removed and the normal core rebuilt.
 
+The JIT now retains vector register reads across scalar operations. A fixed ByteVC2 capture
+improved by about 1% with unchanged decoded frames and instruction count; the fixed ByteVC1
+capture did not show a clear timing change. Focused TikTok verification rendered 13/13, while
+live video rates still varied and source-frame matching remains unresolved.
+
 ---
 
 # TikTok video playback follow-up — 2026-09-23
