@@ -8,8 +8,8 @@ set -euo pipefail
 export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21}"
 export PATH="$JAVA_HOME/bin:$PATH"
 SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
-AVD_NAME="${AVD_NAME:-webdroid_ref}"
-ANDROID_API="${ANDROID_API:-35}"
+AVD_NAME="${AVD_NAME:-webdroid_api33_ref}"
+ANDROID_API="${ANDROID_API:-33}"
 IMAGE="system-images;android-${ANDROID_API};google_apis;arm64-v8a"
 AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
 
