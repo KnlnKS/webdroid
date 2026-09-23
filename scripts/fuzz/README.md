@@ -317,8 +317,8 @@ Comparison occurs in this order:
 
 1. value versus exception outcome;
 2. normalized exception class;
-3. exact non-pixel graphics state, including save count, center pixel, density, paint, matrix,
-   clip, path bounds, and RenderNode state;
+3. exact non-pixel graphics state except float-backed matrix, path bounds, and RenderNode arrays,
+   which use a relative tolerance of `2e-6`;
 4. tolerant image comparison if state agrees.
 
 An image passes only when both `contentDiffPct <= 1` and `tolerantPct <= 0.1`. The full strict score
@@ -333,6 +333,8 @@ Graphics failures use two identities:
 
 The campaign retains at most 20 distinct minimized bundles. The printed failure count is the number
 of differing generated cases, not the number retained after clustering and the retention cap.
+`campaign.json` also records each float32 state value that differs despite passing the tolerance,
+with its case ID, field, and maximum absolute delta. The CLI prints that count separately.
 
 ## Run semantic UI fuzzing
 

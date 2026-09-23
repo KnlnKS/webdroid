@@ -7,6 +7,11 @@ minimized graphics findings and 42 focused color-glyph probes. The fixes cover s
 shape coverage, inverted paths, clipping, Android text raster and line wrapping. They use
 platform geometry and font data rather than APK-specific behavior. No visual golden changed.
 See implementation history for mechanisms, verification and evidence limits.
+The renderer review follow-up isolates bitmap raster policy and crops CanvasKit text transfers.
+Graphics campaigns now record tolerated float32 state deltas separately: 7 cases in seed
+`20260923` and 14 in seed `20260924`. Exact matrix-state and arbitrary-transform color-glyph
+parity remain open even though both campaigns have zero differences under their documented
+comparison thresholds.
 
 ---
 

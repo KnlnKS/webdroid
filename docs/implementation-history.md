@@ -506,16 +506,24 @@ asset or Wasm failure cannot abort APK boot. Canvas and TextView now share the s
 Paint eligibility check for bitmap text. Typecheck, 14 focused text/fuzz tests and
 the deterministic fuzz smoke pass after these changes.
 
-The saved 20-case zero-difference graphics campaign has eight matrix-state differences
-if float-backed arrays are compared by exact float32 value. They occur under Android
-Skia versus Canvas2D transform arithmetic while the saved pixels match. The current
-relative tolerance of `2e-6` classifies them as equivalent; the zero-difference claim
-uses that comparison rule. Exact matrix-state parity remains unproven.
+The review follow-up moved bitmap shape coverage and offscreen composition into
+`bitmap-raster.ts`; `graphics.ts` fell from 2,785 to 2,616 lines. CanvasKit text now reads
+and uploads only the transformed glyph bounds, with a growing reusable staging canvas.
+Both fresh API-33 100-case graphics campaigns still report zero compatibility
+differences, with diagnostics present for all three browser processes and no browser
+errors. Typecheck, 20 focused tests and FitNotes smoke compilation (zero method
+failures) pass. The full test and E2E matrix were not repeated for this renderer refactor.
 
-The renderer still spreads bitmap-specific Paint checks and offscreen compositing
-across `graphics.ts`, which adds 396 lines and removes 54 on this branch and now has
-2,782 lines. The CanvasKit text path reads, uploads and composites the full bitmap for
-each draw. The color-glyph clip and light-text coverage corrections are empirical. These are
-maintainability, performance and arbitrary-transform compatibility limits for a
-subsequent renderer consolidation, not evidence of differences in the retained
-campaigns.
+The graphics comparator now records tolerated exact float32 state deltas separately in
+each campaign file. Replaying the two 100-case campaigns records 7 and 14 matrix cases
+respectively, though both retain zero differences under the documented `2e-6` relative
+tolerance. Their largest absolute deltas are `0.0000152587890625` and
+`0.00006103515625`. Skia-style float32 matrix arithmetic matched most sampled states
+in an isolated experiment, but native `sinf` and translation rounding still differed;
+changing Canvas transforms without matching the raster path was not justified.
+
+The COLRv1 clip correction remains empirical. A direct clip to the font's ClipBox was
+tested against the API-33 oracle and mismatched a retained rocket/skew case plus three
+fresh visible emoji probes, so that replacement was reverted. The existing correction
+uses font records and transform values, never an APK identity, but arbitrary-transform
+emoji parity and exact matrix-state parity remain unresolved.
