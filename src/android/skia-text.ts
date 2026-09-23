@@ -1,6 +1,7 @@
 import CanvasKitInit from "canvaskit-wasm";
 import { version as canvasKitVersion } from "canvaskit-wasm/package.json";
 import type { CanvasKit, Font, Paint, Surface, Typeface } from "canvaskit-wasm";
+import { shapeLigatures } from "./text-shaping";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 let kit: CanvasKit | null = null;
@@ -11,7 +12,6 @@ let surface: Surface | null = null;
 let surfaceWidth = 0, surfaceHeight = 0;
 let bitmap: OffscreenCanvasRenderingContext2D | null = null;
 let emojiClips = new Map<number, [number, number]>();
-const ligatureGlyphs: Record<string, string> = { fi: "\uFB01", fl: "\uFB02", ffi: "\uFB03", ffl: "\uFB04" };
 
 function inkBounds(font: Font, paint: Paint, glyphs: Uint16Array, x: number, y: number,
   matrix: DOMMatrix, width: number, height: number): [number, number, number, number] | null {
@@ -80,7 +80,7 @@ export function loadSkiaText(): Promise<void> {
 export function drawSkiaText(ctx: Ctx, text: string, x: number, y: number, size: number, color: number,
   style: "fill" | "hairline" = "fill", subpixel = false): boolean {
   if (!kit || !face || !text || !Number.isFinite(size) || size <= 0) return false;
-  const shaped = text.replace(/ff[il]|f[il]/g, sequence => ligatureGlyphs[sequence]!);
+  const shaped = shapeLigatures(text);
   const hasLigature = shaped !== text;
   text = shaped;
   const width = ctx.canvas.width, height = ctx.canvas.height;

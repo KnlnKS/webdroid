@@ -1,5 +1,6 @@
 import { JSpanned, JSpannable, JStaticLayout, type JLayout, type TLine, measureReplacements, drawLayout } from "./text";
-import { beginPaintShadow, cssColor, measureText, tryDrawBitmapText, type JCanvas } from "./graphics";
+import { beginPaintShadow, cssColor, measureText, tfDefault, tryDrawBitmapText, type JCanvas } from "./graphics";
+import { ligatureBoundary } from "./text-shaping";
 import { after, callOn, curThread } from "../jvm/natives/jlang";
 import { perf } from "../perf";
 import type { JTextView } from "./textview";
@@ -65,7 +66,9 @@ function breakLines(layout: JLayout, single: boolean, max: number, ellipsis: boo
   const boundary = (start: number, end: number) => {
     const span = layout.replacements.find(s => s.start < end && s.end > end);
     if (span) return Math.max(start, span.start);
-    return end > start && /[\uD800-\uDBFF]/.test(text[end - 1]) ? end - 1 : end;
+    const code = text.charCodeAt(end - 1);
+    const safe = end > start && code >= 0xd800 && code <= 0xdbff ? end - 1 : end;
+    return layout.paint.tf.family === tfDefault.family ? ligatureBoundary(text, start, safe) : safe;
   };
   const breakWide = (start: number, end: number): number => {
     while (!fits(start, end) && end - start > 1) {
