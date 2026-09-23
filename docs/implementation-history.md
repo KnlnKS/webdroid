@@ -1,11 +1,54 @@
 # Engineering constraints and investigation results
 
-Retained findings through 2026-09-14, organized by engineering problem.
+Retained findings through 2026-09-22, organized by engineering problem.
 [PLAN.md](../PLAN.md) owns active work; [AGENTS.md](../AGENTS.md) owns implementation and
 verification rules. This document preserves failure mechanisms, constraints, negative results
 and evidence limits, not a complete API-coverage claim. Older source comments naming AGENTS
 investigations refer here; Git retains their full chronological narratives.
 Temporary /tmp evidence may expire. Committed regression fixtures are the durable reproductions.
+
+## JVM method preparation audit — 2026-09-22
+
+Starting revision `18fe1097`. `typeConstants` built a reaching-definition CFG for every
+prepared method, although only numeric `const` instructions seed the definitions it uses
+for floating literals and null receivers. It now skips that pass when opcodes 0x12–0x19
+are absent, and skips successor construction for a single-block method. Wasm eligibility
+is diagnostic only (`wasmAvailable: false`), so its extra branch scans run only when JVM
+profiling is enabled. No APK or framework bytecode changed.
+
+FitNotes contains 22,259 code-bearing methods; 14,909 have no numeric constant and 16,006
+have one basic block. Three alternating cold smoke-compilation pairs with the same APK
+and Bun runtime measured median total compile time 390 → 342 ms and pure compile time
+349 → 303 ms, with zero method failures in every run. This is a compiler throughput
+measurement, not a browser startup or interaction claim. A 5-second Chrome FitNotes
+interaction profile was mostly idle (592 advancing ticks, visible, no errors); of 1,864
+recorded methods, one met the current numeric-Wasm filter and it executed no measured
+instructions. The profile does not justify adding a JVM Wasm tier for that workload.
+
+Typecheck and all 1,271 tests pass after linking the ignored AOSP framework jar into the
+worktree. The FitNotes fast flow passes 39/39 steps, with no observed missing APIs, required
+natives, errors, layout/draw failures or wedges. The six-flow deterministic matrix passes
+five flows; Doodle Jump misses the gameplay motion gate at 27 fps. Matching starting-commit
+capture also misses that gate at 26 fps. Flappy Bird's `status` page error occurs on both
+revisions; its candidate flow passes, while baseline motion gates fluctuate. These captures
+do not establish a gameplay FPS improvement or regression. Goldens are unchanged. Evidence:
+`/tmp/webdroid-jvm-audit-*` and ignored `tests/e2e/actual-fast/` in the worktree.
+
+The next Wasm experiment needs an app profile with substantial CPU in eligible, synchronous
+primitive loops. Compile whole loops rather than individual opcodes to limit JS/Wasm crossings;
+preserve DEX integer/float semantics, fuel yields and tier parity. Android's ART uses profile
+guided JIT/OSR, and V8 optimizes hot Wasm functions after baseline compilation. V8 has a
+small-function Wasm-into-JS inliner, but broad cross-boundary gains still need measurement.
+Java objects, callbacks and
+promises remain in JS, so the existing Zig core is a poor home for those operations without
+a separate object/memory design. Additional parallel JVM workers would need to preserve
+per-process thread, class-init and callback ordering; no measured workload yet warrants that
+complexity. Sources: [ART JIT](https://source.android.com/docs/core/runtime/jit-compiler),
+[V8 Wasm compilation](https://v8.dev/docs/wasm-compilation-pipeline),
+[V8 Wasm inlining](https://v8.dev/blog/wasm-speculative-optimizations),
+[V8 small Wasm-into-JS inliner](https://chromium.googlesource.com/v8/v8/+/refs/heads/main/src/compiler/wasm-inlining-into-js.h),
+[V8 fast properties](https://v8.dev/blog/fast-properties), and
+[cross-origin isolation](https://web.dev/articles/cross-origin-isolation-guide).
 
 ## microG completion and open acceptance
 
