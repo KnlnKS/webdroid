@@ -110,6 +110,7 @@ test("ShortcutManager getShortcuts filters to published dynamic shortcuts", asyn
   const manager = rt.make("android/content/pm/ShortcutManager");
   expect(await vcall(await vcall(manager, "getShortcuts", "(I)Ljava/util/List;", 0), "size", "()I")).toBe(0);
   expect(await vcall(await vcall(manager, "getShortcuts", "(I)Ljava/util/List;", 2), "size", "()I")).toBe(0);
+  expect(await vcall(await vcall(manager, "getPinnedShortcuts", "()Ljava/util/List;"), "size", "()I")).toBe(0);
 });
 
 test("DataSetObserver base callbacks are no-ops", async () => {
