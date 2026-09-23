@@ -289,6 +289,45 @@ inline fn cW(comptime wide: bool, v: i32) if (wide) wasm.C64 else wasm.C32 {
     return if (wide) c64(v) else c32(v);
 }
 
+fn swapAdjacent(b: *Buf, comptime wide: bool, comptime shift: u6) void {
+    const pattern: u64 = switch (shift) {
+        1 => 0x5555_5555_5555_5555,
+        2 => 0x3333_3333_3333_3333,
+        4 => 0x0f0f_0f0f_0f0f_0f0f,
+        8 => 0x00ff_00ff_00ff_00ff,
+        16 => 0x0000_ffff_0000_ffff,
+        32 => 0x0000_0000_ffff_ffff,
+        else => unreachable,
+    };
+    const tmp = regs(wide).t;
+    b.tee(tmp);
+    if (wide) b.i64c(@bitCast(pattern)) else b.i32c(@bitCast(@as(u32, @truncate(pattern))));
+    b.emit(.{ W(wide, O.i32_and), cW(wide, shift), W(wide, O.i32_shl), get(tmp), cW(wide, shift), W(wide, O.i32_shr_u) });
+    if (wide) b.i64c(@bitCast(pattern)) else b.i32c(@bitCast(@as(u32, @truncate(pattern))));
+    b.emit(.{ W(wide, O.i32_and), W(wide, O.i32_or) });
+}
+
+fn emitOne(b: *Buf, comptime wide: bool, op: u8) void {
+    switch (op) {
+        0 => {
+            inline for ([_]u6{ 1, 2, 4, 8, 16 }) |shift| swapAdjacent(b, wide, shift);
+            if (wide) swapAdjacent(b, wide, 32);
+        },
+        1, 2, 3 => {
+            swapAdjacent(b, wide, 8);
+            if (op >= 2) swapAdjacent(b, wide, 16);
+            if (op == 3 and wide) swapAdjacent(b, wide, 32);
+        },
+        4 => b.byte(W(wide, O.i32_clz)),
+        5 => {
+            const tmp = regs(wide).t;
+            b.tee(tmp);
+            b.emit(.{ get(tmp), cW(wide, if (wide) 63 else 31), W(wide, O.i32_shr_s), W(wide, O.i32_xor), W(wide, O.i32_clz), cW(wide, 1), W(wide, O.i32_sub) });
+        },
+        else => unreachable,
+    }
+}
+
 pub fn Emit(comptime wide: bool) type {
     return struct {
         const Self = @This();
@@ -929,16 +968,17 @@ pub fn Emit(comptime wide: bool) type {
                     b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_TLS) });
                     e.setX(o.rd);
                 } else e.fallback(pc, k),
-                .one => if (o.a & 7 == 4) {
+                .one => {
                     e.getX(o.rn);
                     if (o.a & 8 != 0) {
-                        b.byte(O.i64_clz);
+                        emitOne(b, true, o.a & 7);
                         e.setX(o.rd);
                     } else {
-                        b.emit(.{ O.i32_wrap_i64, O.i32_clz });
+                        b.byte(O.i32_wrap_i64);
+                        emitOne(b, false, o.a & 7);
                         e.setW(o.rd);
                     }
-                } else e.fallback(pc, k),
+                },
                 .two => {
                     const opc = o.a & 63;
                     const sf = o.a & 64 != 0;
