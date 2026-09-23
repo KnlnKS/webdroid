@@ -6531,3 +6531,42 @@ Typecheck, 1,272 unit tests / 26,976 assertions, and cold smoke compilation of F
 Mihon pass with zero method failures. The first TikTok browser start exercises its reached
 classes but does not replace a completed full TikTok smoke compile; that stress run was
 stopped at the documented memory bound. No visual golden changed.
+
+### Browser memory, scheduling, storage and GPU APIs — 2026-09-22
+
+An API audit found no additional change justified for the sampled JVM workloads:
+
+- ArrayBuffer views already back DEX parsing, Java primitive/NIO arrays, and the native
+  core's WebAssembly memory. The process broker uses direct same-origin iframe calls;
+  transferable buffers would detach an owner's storage, while existing Parcel import copies
+  preserve isolation. A new buffer format needs a measured duplicate or copy hotspot.
+- OffscreenCanvas already holds the framebuffer, bitmaps, view layers and GL surfaces. The
+  screen presents via `transferToImageBitmap` and `bitmaprenderer`, avoiding a full-frame
+  software blit. A previous repeated shader-tile allocation was fixed by sharing tiles.
+  A prior worker-per-process trial increased memory and first-draw time; the UI and WebView
+  still require the document realm.
+- SharedArrayBuffer and Atomics would require cross-origin isolation and a redesigned worker
+  ownership model. The rejected per-process worker trial grew Resy's JS heap about 15%, added
+  a roughly 200 ms first image draw on SwiftShader, and broke shared SQLite ownership. The
+  proxy deliberately allows embedded WebViews. `Atomics.wait` cannot block the main thread.
+  [Shared memory requirements](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer),
+  [Atomics.wait](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics/wait).
+- OPFS is already the fallback for host file pickers. App private files and SQLite snapshots
+  have a shared IndexedDB owner, while sql.js keeps live connection-local TEMP state. Swapping
+  only the snapshot destination to OPFS would still export the whole database. A native OPFS
+  SQLite VFS would require a worker, shared-memory coordination, file-lock design and a state
+  migration. It is a candidate only after a database-heavy profile shows snapshot I/O dominates.
+  [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system),
+  [SQLite OPFS locking](https://sqlite.org/wasm/doc/92e1d3dab4/persistence.md).
+- Chrome's `scheduler.postTask` beat nested zero-delay timers in an isolated 256-task probe
+  (about 1 ms versus 1.12 seconds), but that loop does not resemble the guest executor.
+  A temporary counter in the real app found zero executor timer fallbacks in Mihon's launch
+  and three-second Library window, two in TikTok's launch and zero in its three-second window.
+  Both remained visible with advancing ticks and presentations, without draw/layout errors.
+  The counter was removed. Guest main-queue order and frame callbacks remain owned by their
+  current scheduler. [Prioritized Task Scheduling](https://developer.mozilla.org/en-US/docs/Web/API/Prioritized_Task_Scheduling_API).
+- WebGPU can accelerate large parallel rendering/compute jobs, but the reached guest GL path
+  is already translated to WebGL2 and UI rendering is Canvas2D. Replacing it would add new
+  shader and compositing paths without an identified GPU-compute bottleneck. WebGPU is also
+  not yet broadly available across browsers.
+  [WebGPU](https://developer.mozilla.org/en-US/docs/Web/API/WebGPU_API).
