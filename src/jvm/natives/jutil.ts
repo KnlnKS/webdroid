@@ -1567,7 +1567,9 @@ const concurrentListExtras: Record<string, Methods> = {
 for (const n of ["java/util/concurrent/CopyOnWriteArrayList", "java/util/concurrent/ConcurrentLinkedDeque"]) {
   rt.register({
     name: n, ctor: class extends JList {},
-    ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque"],
+    ifaces: n === "java/util/concurrent/CopyOnWriteArrayList"
+      ? ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/RandomAccess", "java/lang/Cloneable", "java/io/Serializable"]
+      : ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/Queue", "java/util/Deque"],
     methods: { ...listMethods(), ...concurrentListExtras[n] },
   });
 }

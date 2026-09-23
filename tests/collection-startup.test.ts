@@ -35,6 +35,18 @@ test("emptyIterator has no elements and rejects removal without a preceding next
   expect(rt.iof(remove, "java/lang/IllegalStateException")).toBeTruthy();
 });
 
+test("CopyOnWriteArrayList exposes indexed removal while its iterator stays immutable", async () => {
+  const list = await newObj("java/util/concurrent/CopyOnWriteArrayList");
+  expect(rt.iof(list, "java/util/RandomAccess")).toBe(1);
+  await vcall(list, "add", "(Ljava/lang/Object;)Z", "first");
+  await vcall(list, "add", "(Ljava/lang/Object;)Z", "second");
+  const iterator = await vcall(list, "iterator", "()Ljava/util/Iterator;");
+  expect(await vcall(iterator, "next", "()Ljava/lang/Object;")).toBe("first");
+  expect(rt.iof(await vcall(iterator, "remove", "()V").catch(e => e), "java/lang/UnsupportedOperationException")).toBe(1);
+  expect(await vcall(list, "remove", "(I)Ljava/lang/Object;", 0)).toBe("first");
+  expect(await vcall(list, "get", "(I)Ljava/lang/Object;", 0)).toBe("second");
+});
+
 test("Java identifier parts include currency, combining marks and ignorable controls", async () => {
   const character = rt.link("java/lang/Character").ctor;
   for (const code of [65, 0x24, 0x301, 0x200c, 0, 0x1b, 0x203f, 0x2160, 0x10400])
