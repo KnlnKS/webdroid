@@ -63,8 +63,14 @@ framework cut reports 204/222 declared graphics natives registered; its exercise
 report no new missing delegate. The 39-step FitNotes fast lane passes with all process
 diagnostics `ok`, no new missing APIs/errors/native requirements or timeouts, and main
 ticks advancing from 13 to 1001. Its 12.2-second wall time is a functional check, not a
-controlled baseline performance comparison. The full serialized E2E matrix and a matched
-CPU comparison were not run for this pass. Goldens were not changed.
+controlled baseline performance comparison. The serialized six-flow fast lane completed
+all steps but passed 5/6 flows: Doodle Jump missed its 30 fps gameplay gate once at
+29 fps, and its full-evidence rerun recorded 28–30 fps at several checkpoints. With
+one flow at a time and the same screen profile, the starting `756491fb` revision passed
+at 31 fps and the candidate passed at 37 fps on an isolated repeat. This does not
+reproduce a performance regression, but a single pair does not explain the variability.
+The full serialized E2E matrix and a matched CPU microbenchmark were not run for this
+pass. Goldens were not changed.
 
 ## JVM, DEX and process ownership
 
