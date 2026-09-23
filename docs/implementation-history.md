@@ -477,3 +477,57 @@ two control settle timeouts and seven `Matrix.mapRect` draw errors; Flappy Bird 
 unavailable auxiliary snapshots while rendering all seven steps. Lichess's Flutter pthread
 fault and Flappy Bird's page-status error remain. The Cut gameplay run above is the direct
 game acceptance check because the matrix has no Cut flow. No visual golden was changed.
+
+## Cut the Rope 15 FPS follow-up — 2026-09-23
+
+The isolated `codex/cut-the-rope-15fps` worktree starts at `33ab22fd`. A 12-second
+level-one headless Chrome baseline at 1080×2160, 480 dpi presented 25.3 frames/s and
+executed 1.81 billion guest instructions. CPU sampling and temporary instruction
+diagnostics showed repeated Thumb wide branches, register-list transfers, doubleword
+transfers and bitfield operations falling back to the interpreter. The JIT now lowers
+those forms with the existing region epoch checks, memory faults, flag handling and
+ARM/Thumb return rules. The temporary diagnostics were removed. Focused ARM parity
+coverage includes wide POP into PC.
+
+The reached ARM32 libc calls use their actual guest ABI: EABI `__aeabi_memset` takes
+destination, byte count, then value; raw ARM syscall 334 is the three-argument
+`faccessat`; `timegm64` returns a signed 64-bit timestamp. The libc wrapper and raw
+syscall share path resolution. JNI also reached Android's
+`CodecCapabilities.COLOR_FormatYUV420Planar` constant, `SurfaceTexture`'s texture
+transform matrix and the `Parcelable[]` overload of `Intent.putExtra`. Their owning
+Android modules now provide those APIs. SurfaceTexture uploads the visible frame
+without a crop or producer transform, so its matrix is identity for that path.
+
+An intermediate focused headless capture presented 27.5 frames/s and executed 2.05 billion
+guest instructions in the same 12-second tutorial window. A rope swipe advanced to
+the next tutorial. There were no required native calls, JNI misses, page exceptions,
+or layout, draw or GL errors. Two earlier candidate captures presented 26.6 and
+27.9 frames/s, but startup timing and shared host load vary, so these samples do
+not prove a stable visible-Chrome FPS improvement. Earlier visible Chrome
+windows were about 5–11 frames/s with competing captures. The intro video still
+needed a tap to skip. `NativeActivity` was an optional class probe; `VideoView`,
+`DialogFragment`, Parcelable and Cronet failures remain in the ad paths documented
+above. No game bytecode, assets or visual goldens changed.
+
+A second fallback sample identified repeated register-controlled Thumb shifts,
+MOVW/MOVT in simple IT blocks, and single/double VFP scalar loads and stores. The
+JIT now lowers those generic forms; MOVW/MOVT share one decoder across direct and
+IT-block emission. The VFP path uses the same guest-address and code-store checks as
+other compiled memory operations. A bounded diagnostic window improved from 24.4
+to 32.2 presented frames/s after VFP lowering, while fallback calls fell from
+1.04 billion to 0.91 billion; both samples include histogram overhead. The
+temporary counters were removed. A clean, visible Google Chrome run reached level
+one and presented 434 frames in 12.05 seconds (36.0 frames/s), with 438 advancing
+ticks and 2.06 billion guest instructions. It had no recorded page exception or
+required gameplay API miss. A Cronet native fault appeared in the previously traced
+ad network path, outside the requested scope. The visible capture is one run, and
+the intro still required a tap to skip. ARM interpreter/JIT parity tests and Cut
+smoke compilation passed (82 tests, 64,465 classes, zero method failures).
+
+The final serialized E2E matrix on this code captured 183/183 steps across 13 flows in
+973.5 seconds. The 620 available process snapshots reported no required native call,
+layout error or GL error, and no main loop wedged. YouTube retained two settle timeouts
+and eight `Matrix.mapRect` draw errors, the same failure as earlier gates with variable
+counts. Twelve Flappy Bird auxiliary process snapshots were unavailable, while all
+seven of its screen steps rendered. Cut has no matrix flow; the visible level-one
+capture above is its direct FPS evidence. No visual golden changed.
