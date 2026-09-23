@@ -4,6 +4,17 @@ import { Cpu, setA64 } from "./cpu";
 import { lookupHost } from "./host";
 import { libcInit } from "./libc";
 import { mem } from "./mem";
+import { procIdentity } from "../shell/procfs";
+
+test("native user IDs match the process identity", async () => {
+  setA64(true); libcInit();
+  const cpu = new Cpu(new JThread(), "identity-test");
+  try {
+    for (const name of ["getuid", "geteuid", "getgid", "getegid"]) {
+      expect(await cpu.call(lookupHost(name, "libc.so")!, [])).toBe(procIdentity.uid);
+    }
+  } finally { cpu.dispose(); setA64(false); }
+});
 
 test("sort and search pass pointers in the guest ABI", async () => {
   for (const a64 of [false, true]) {

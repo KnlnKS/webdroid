@@ -16,6 +16,7 @@ import { procInit, abortMessageOr } from "./proc";
 import { netInit } from "./net";
 import { MONTHS, DAYS } from "../jvm/natives/jtime";
 import { device } from "../shell/config";
+import { procIdentity } from "../shell/procfs";
 import { guestNow } from "../guest-clock";
 import { timersInit } from "./timers";
 
@@ -298,7 +299,7 @@ export function libcInit(): void {
     __stack_chk_fail: (cpu) => cpu.fault("stack smashing detected"),
     getpid: (cpu) => cpu.pid,
     gettid: (cpu) => cpu.osTid,
-    getuid: () => 10123, geteuid: () => 10123, getgid: () => 10123, getegid: () => 10123,
+    getuid: () => procIdentity.uid, geteuid: () => procIdentity.uid, getgid: () => procIdentity.uid, getegid: () => procIdentity.uid,
     getppid: () => 1,
     bsd_signal: () => 0,
     nice: () => 0, setpriority: () => 0, getpriority: () => 0,

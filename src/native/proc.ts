@@ -12,6 +12,7 @@ import { fail, logLine, LAYOUT, strncpy, snprintfInto, readTm } from "./libc";
 import { MONTHS, DAYS } from "../jvm/natives/jtime";
 import { format } from "./printf";
 import { device } from "../shell/config";
+import { procIdentity } from "../shell/procfs";
 /** wd.native.killLog: the last pthread_kill calls, who signalled whom and what the target was doing */
 export const killLog: string[] = [];
 
@@ -82,7 +83,9 @@ export function procInit(): void {
   const u8 = mem.u8;
   // struct passwd: name, passwd, uid, gid, gecos, dir, shell — pointers at the pointer stride
   const pw = mem.hostAlloc(8 * PTR);
-  stp(pw, mem.hostStr("u0_a123")); stp(pw + PTR, mem.hostStr("")); mem.st32(pw + 2 * PTR, 10123); mem.st32(pw + 2 * PTR + 4, 10123);
+  const uid = procIdentity.uid, appId = uid % 100000;
+  const userName = appId >= 10000 && appId < 20000 ? `u${Math.floor(uid / 100000)}_a${appId - 10000}` : String(uid);
+  stp(pw, mem.hostStr(userName)); stp(pw + PTR, mem.hostStr("")); mem.st32(pw + 2 * PTR, uid); mem.st32(pw + 2 * PTR + 4, uid);
   stp(pw + 2 * PTR + 8, mem.hostStr("")); stp(pw + 3 * PTR + 8, mem.hostStr("/data")); stp(pw + 4 * PTR + 8, mem.hostStr("/system/bin/sh"));
   const cpuMask = (1 << device.cpu.cores) - 1;
   const chk = (n: number, len: number, cpu: Cpu) => { if (n > len) cpu.fault(`fortify: ${n} bytes into a ${len}-byte object`); };

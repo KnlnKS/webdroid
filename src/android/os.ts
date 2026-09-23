@@ -340,7 +340,7 @@ rt.register({ name: "android/os/Build$VERSION_CODES", ctor: class extends JObj {
 });
 export let PROCESS_PID = 1000, PROCESS_UID = 10001;
 export let PROCESS_NAME = "";
-export function setProcessIdentity(pid: number, uid: number): void { PROCESS_PID = pid; PROCESS_UID = uid; procIdentity.pid = pid; }
+export function setProcessIdentity(pid: number, uid: number): void { PROCESS_PID = pid; PROCESS_UID = uid; procIdentity.pid = pid; procIdentity.uid = uid; }
 export class JUserHandle extends JObj { constructor(readonly id = 0) { super(); } }
 const userHandles = new Map<number, JUserHandle>();
 export function userHandleForUid(uid: number): JUserHandle {

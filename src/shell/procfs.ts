@@ -1,6 +1,6 @@
 import { device } from "./config";
 
-export const procIdentity = { pid: 1000, name: "" };
+export const procIdentity = { pid: 1000, uid: 10001, name: "" };
 const threadOffsets = new WeakMap<object, number>();
 let nextThreadOffset = 0;
 
@@ -26,5 +26,9 @@ export function procText(path: string): string | null {
   if (path === "/proc/meminfo") return `MemTotal:        ${device.cpu.memKb} kB\nMemFree:         ${device.cpu.memKb >> 1} kB\nBuffers:               0 kB\nCached:                0 kB\n`;
   if (path === "/proc/self/maps") return "";
   if (path === "/proc/self/cmdline" || path === `/proc/${procIdentity.pid}/cmdline`) return procIdentity.name + "\0";
+  if (path === "/proc/self/status" || path === `/proc/${procIdentity.pid}/status`) {
+    const { pid, uid, name } = procIdentity;
+    return `Name:\t${(name || "app_process").slice(0, 15)}\nState:\tR (running)\nTgid:\t${pid}\nPid:\t${pid}\nPPid:\t1\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\nGid:\t${uid}\t${uid}\t${uid}\t${uid}\nCpus_allowed_list:\t${cpuList().trim()}\n`;
+  }
   return null;
 }

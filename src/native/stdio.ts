@@ -8,7 +8,7 @@ import type { Cpu } from "./cpu";
 import { LAYOUT, fail, utf8, logLine, offArg, readTs, writeTs, clockTime, scanSink } from "./libc";
 import { format, scan } from "./printf";
 import { vfs, type VfsFile } from "../jvm/natives/jio";
-import { procText } from "../shell/procfs";
+import { procIdentity, procText } from "../shell/procfs";
 import { readFully, type FileSource } from "../shell/lazyfile";
 import { concat } from "../jvm/abi";
 import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd } from "./net";
@@ -351,7 +351,7 @@ function fillStat(buf: number, isDir: boolean, size: number, mtimeMs: number, pa
   mem.st32(buf, 1);                                                                  // st_dev
   mem.st32(buf + LAYOUT.ST_MODE, (isDir ? S_IFDIR | 0o755 : S_IFREG | 0o644));
   mem.st32(buf + LAYOUT.ST_NLINK, 1);
-  mem.st32(buf + LAYOUT.ST_UID, 10123); mem.st32(buf + LAYOUT.ST_GID, 10123);
+  mem.st32(buf + LAYOUT.ST_UID, procIdentity.uid); mem.st32(buf + LAYOUT.ST_GID, procIdentity.uid);
   mem.st32(buf + LAYOUT.ST_SIZE, size); mem.st32(buf + LAYOUT.ST_SIZE + 4, 0);
   mem.st32(buf + LAYOUT.ST_BLKSIZE, 4096);
   mem.st32(buf + LAYOUT.ST_BLOCKS, (size + 511) >> 9);
