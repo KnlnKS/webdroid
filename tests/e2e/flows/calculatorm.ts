@@ -32,7 +32,8 @@ export const calculatorm: Flow = {
     { id: "plus", label: "Tap +", action: { type: "tapAt", ...KEY_PLUS }, wait: wait.quiescent(400) },
     { id: "7b", label: "Tap 7 again", action: { type: "tapAt", ...KEY_7 }, wait: wait.quiescent(400) },
     { id: "eq", label: "Tap = (expect 14)", action: { type: "tapAt", ...KEY_EQ }, wait: wait.quiescent(400) },
-    { id: "result", label: "Result shown", action: { type: "settle" }, wait: wait.quiescent() },
+    { id: "result", label: "Result shown", action: { type: "settle" }, wait: wait.quiescent(),
+      fastEvidence: { kind: "visual", maxContentDiffPct: 10 } },
     { id: "back", label: "Back", action: { type: "back" }, wait: wait.quiescent() },
   ],
 };

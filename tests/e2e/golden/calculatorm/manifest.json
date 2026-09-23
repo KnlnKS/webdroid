@@ -1,0 +1,102 @@
+{
+  "app": "calculatorm",
+  "pkg": "com.vagujhelyigergely.calculatorm3",
+  "activity": "com.vagujhelyigergely.calculatorm3.MainActivity",
+  "recordedAt": "2026-09-23T23:14:52.856Z",
+  "pinnedClockMs": 1767355200000,
+  "device": {
+    "width": 1080,
+    "height": 2424,
+    "densityDpi": 480,
+    "fingerprint": "google/sdk_gphone64_arm64/emu64a:13/TE1A.240213.009/12342917:userdebug/dev-keys",
+    "sdk": "33"
+  },
+  "crop": {
+    "top": 48,
+    "bottom": 48,
+    "left": 0,
+    "right": 0
+  },
+  "steps": [
+    {
+      "id": "launch",
+      "label": "Launch — keypad",
+      "index": 0,
+      "file": "00-launch.png",
+      "uiFile": "00-launch.ui.json",
+      "settleTimedOut": false
+    },
+    {
+      "id": "keypad",
+      "label": "Keypad settled",
+      "index": 1,
+      "file": "01-keypad.png",
+      "uiFile": "01-keypad.ui.json",
+      "settleTimedOut": false
+    },
+    {
+      "id": "7",
+      "label": "Tap 7",
+      "index": 2,
+      "file": "02-7.png",
+      "resolved": {
+        "x": 0.13148148148148148,
+        "y": 0.5808580858085809
+      },
+      "uiFile": "02-7.ui.json",
+      "settleTimedOut": false
+    },
+    {
+      "id": "plus",
+      "label": "Tap +",
+      "index": 3,
+      "file": "03-plus.png",
+      "resolved": {
+        "x": 0.862037037037037,
+        "y": 0.7978547854785478
+      },
+      "uiFile": "03-plus.ui.json",
+      "settleTimedOut": false
+    },
+    {
+      "id": "7b",
+      "label": "Tap 7 again",
+      "index": 4,
+      "file": "04-7b.png",
+      "resolved": {
+        "x": 0.13148148148148148,
+        "y": 0.5808580858085809
+      },
+      "uiFile": "04-7b.ui.json",
+      "settleTimedOut": false
+    },
+    {
+      "id": "eq",
+      "label": "Tap = (expect 14)",
+      "index": 5,
+      "file": "05-eq.png",
+      "resolved": {
+        "x": 0.862037037037037,
+        "y": 0.9067656765676567
+      },
+      "uiFile": "05-eq.ui.json",
+      "settleTimedOut": false
+    },
+    {
+      "id": "result",
+      "label": "Result shown",
+      "index": 6,
+      "file": "06-result.png",
+      "uiFile": "06-result.ui.json",
+      "settleTimedOut": false
+    },
+    {
+      "id": "back",
+      "label": "Back",
+      "index": 7,
+      "file": "07-back.png",
+      "uiFile": "07-back.ui.json",
+      "settleTimedOut": false
+    }
+  ]
+}
