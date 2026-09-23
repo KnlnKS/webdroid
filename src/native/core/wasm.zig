@@ -179,6 +179,7 @@ pub const Simd = struct {
     pub const narrow_s = [_]u8{ 0x65, 0x85 };
     pub const narrow_u = [_]u8{ 0x66, 0x86 };
     pub const f32x4_demote_f64x2_zero: u8 = 0x5e;
+    pub const f64x2_promote_low_f32x4: u8 = 0x5f;
     pub const neg = [_]u8{ 0x61, 0x81, 0xa1, 0xc1 };
     pub const extend_low_s = [_]u8{ 0x87, 0xa7, 0xc7 };
     pub const extmul_low_s = [_]u8{ 0x9c, 0xbc, 0xdc };

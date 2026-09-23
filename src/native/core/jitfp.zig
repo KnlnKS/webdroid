@@ -384,6 +384,20 @@ fn emitHalving(e: *Emit, rd: u8, rn: u8, rm: u8, size: u32, q: bool, unsigned: b
     }
     vput(e, rd, q);
 }
+fn promoteF32Half(e: *Emit, reg: u8, high: bool) void {
+    vget(e, reg);
+    if (high) e.b.emit(.{ sv(S.extract_u[3]), @as(u8, 1), sv(S.splat[3]) });
+    e.b.emit(.{sv(S.f64x2_promote_low_f32x4)});
+}
+fn emitFma32Half(e: *Emit, rd: u8, rn: u8, rm: u8, high: bool, subtract: bool) void {
+    const b = e.b;
+    promoteF32Half(e, rn, high);
+    if (subtract) b.emit(.{sv(S.fneg[1])});
+    promoteF32Half(e, rm, high);
+    b.emit(.{sv(S.fmul[1])});
+    promoteF32Half(e, rd, high);
+    b.emit(.{ sv(S.fadd[1]), sv(S.f32x4_demote_f64x2_zero) });
+}
 fn emitVector(e: *Emit, w: u32) bool {
     const b = e.b;
     const rd: u8 = @intCast(w & 31);
@@ -617,6 +631,17 @@ fn emitVector(e: *Emit, w: u32) bool {
             const dp = size & 1 != 0;
             const fv = size & 2 != 0;
             const f: u32 = @intFromBool(dp);
+            if (opcode == 25 and !U and !dp) {
+                b.get(L_CPU);
+                emitFma32Half(e, rd, rn, rm, false, fv);
+                if (q) {
+                    emitFma32Half(e, rd, rn, rm, true, fv);
+                    b.emit(.{sv(S.shuffle)});
+                    b.bytes(&[_]u8{ 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23 });
+                }
+                vput(e, rd, q);
+                return true;
+            }
             if (opcode == 27 and !U) {
                 fmulx(e, rn, rm, dp);
                 vput(e, rd, q);
@@ -949,19 +974,39 @@ pub fn emitVmem(e: *Emit, w: u32, pc: u32, k: u32) void {
     if (is(w, 0xbfbf0000, 0x0c000000) or is(w, 0xbfa00000, 0x0c800000)) {
         const q = bits(w, 30, 1) != 0;
         const size = bits(w, 10, 2);
-        if (bits(w, 12, 4) == 8 and bits(w, 22, 1) != 0 and (q or size < 3)) {
+        if (bits(w, 12, 4) == 8 and (q or size < 3)) {
             const es: usize = @as(usize, 1) << @intCast(size);
             const count: usize = (if (q) @as(usize, 16) else 8) / es;
             e.getSP(rn);
             e.address();
-            for (0..2) |reg| {
-                var lanes: [16]u8 = [_]u8{0} ** 16;
-                for (0..count) |i| for (0..es) |j| {
-                    lanes[i * es + j] = @intCast((2 * i + reg) * es + j);
-                };
-                b.emit(.{ get(L_CPU), get(L_A), vm(S.load, 0), get(L_A), vm(S.load, if (q) 16 else 0), sv(S.shuffle) });
-                b.bytes(&lanes);
-                vput(e, @intCast((rt + reg) & 31), q);
+            if (bits(w, 22, 1) != 0) {
+                for (0..2) |reg| {
+                    var lanes: [16]u8 = [_]u8{0} ** 16;
+                    for (0..count) |i| for (0..es) |j| {
+                        lanes[i * es + j] = @intCast((2 * i + reg) * es + j);
+                    };
+                    b.emit(.{ get(L_CPU), get(L_A), vm(S.load, 0), get(L_A), vm(S.load, if (q) 16 else 0), sv(S.shuffle) });
+                    b.bytes(&lanes);
+                    vput(e, @intCast((rt + reg) & 31), q);
+                }
+            } else {
+                for (0..if (q) @as(usize, 2) else 1) |chunk| {
+                    const off: u32 = @intCast(chunk * 16);
+                    var lanes: [16]u8 = undefined;
+                    for (0..16) |i| {
+                        const pos = chunk * 16 + i;
+                        const element = pos / (2 * es);
+                        const reg = (pos / es) & 1;
+                        lanes[i] = @intCast(reg * 16 + element * es + pos % es);
+                    }
+                    e.storeCheck(off, 16);
+                    b.get(L_A);
+                    vget(e, rt);
+                    vget(e, (rt + 1) & 31);
+                    b.emit(.{sv(S.shuffle)});
+                    b.bytes(&lanes);
+                    b.emit(.{vm(S.store, off)});
+                }
             }
             if (bits(w, 23, 1) != 0) {
                 e.getSP(rn);

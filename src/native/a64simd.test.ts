@@ -20,6 +20,24 @@ test("USHL halfword lanes handle signed shift counts and destination aliasing", 
 });
 
 describe("a64 simd: memory", () => {
+  test("interleaved stores preserve lane order at both vector widths", () => {
+    const buf = pattern();
+    const c = run([0x0c9f8926, 0x4c00813e, RET], cpu => {
+      cpu.w[18] = buf + 256;
+      cpu.vb.set(Array.from({ length: 16 }, (_, i) => i), 16 * 6);
+      cpu.vb.set(Array.from({ length: 16 }, (_, i) => i + 32), 16 * 7);
+      cpu.vb.set(Array.from({ length: 16 }, (_, i) => i + 64), 16 * 30);
+      cpu.vb.set(Array.from({ length: 16 }, (_, i) => i + 96), 16 * 31);
+    });
+    expect(c.w[18] >>> 0).toBe(buf + 272);
+    expect([...mem.u8.subarray(buf + 256, buf + 272)]).toEqual([
+      0, 1, 2, 3, 32, 33, 34, 35, 4, 5, 6, 7, 36, 37, 38, 39,
+    ]);
+    expect([...mem.u8.subarray(buf + 272, buf + 304)]).toEqual(
+      Array.from({ length: 32 }, (_, i) => (i & 1 ? 96 : 64) + (i >> 1)),
+    );
+  });
+
   test("multi-register lanes preserve wraparound, writeback and stores across tiers", () => {
     const buf = pattern();
     const c = run([
