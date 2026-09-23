@@ -10,6 +10,7 @@ import { windowOf } from "./libandroid";
 import { gles1Procs } from "./gles1";
 import { gles3Procs } from "./gles3";
 import { activateEglCurrent, bindEglCurrent, boundEglCurrent } from "./egl-current";
+import { noteNativeFrame } from "./cpu";
 
 const EGL_BAD_ALLOC = 0x3003, EGL_BAD_CONTEXT = 0x3006, EGL_BAD_MATCH = 0x3009, EGL_BAD_NATIVE_WINDOW = 0x300b, EGL_BAD_SURFACE = 0x300d;
 const surfaces: (GlSurface | null)[] = [null], contexts: (EglContext | null)[] = [null];
@@ -95,6 +96,7 @@ export function eglInit(): void {
     eglSwapBuffers: (cpu, a) => {
       a.i(); const s = surfaces[a.i()], c = activateEglCurrent(cpu.jthread);
       if (!s || !c || c.target !== s) { return eglFailure(EGL_BAD_SURFACE, 0, cpu.jthread); }
+      noteNativeFrame(cpu);
       return c.swap().then(ok => ok ? 1 : eglFailure(0x300e, 0, cpu.jthread));
     },
     eglPresentationTimeANDROID: (cpu, a) => {

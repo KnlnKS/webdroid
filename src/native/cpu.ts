@@ -24,6 +24,13 @@ const RESPONSIVE_WINDOW_MS = 250;
 /** the run loop's instruction budget per slice; lowering it makes `profile` sample finely (debug) */
 export const slice = { instr: SLICE_INSTR };
 let responsiveUntil = 0;
+let lastNativeFrame = -Infinity;
+const frameLineage = new WeakSet<Cpu>();
+
+export function noteNativeFrame(cpu: Cpu): void {
+  lastNativeFrame = performance.now();
+  for (let c: Cpu | null = cpu; c; c = c.parent) frameLineage.add(c);
+}
 
 export function requestResponsiveSlices(): void {
   responsiveUntil = Math.max(responsiveUntil, performance.now() + RESPONSIVE_WINDOW_MS);
@@ -91,6 +98,8 @@ export const watchPcs = new Set<number>(((globalThis as { __wdWatch?: number[] }
 
 export class Cpu {
   nativeRuntime: Runtime | null = null;
+  parent: Cpu | null = null;
+  realtime = false;
   /** the state struct's address in guest memory */
   readonly base: number;
   /** the registers as int32 halves: w[2i] is the low half of x[i] (r[i] on ARM32), w[2i+1] the high; x31 is sp */
@@ -115,6 +124,7 @@ export class Cpu {
   /** the pthread key table: TLS_KEYS guest pointers, read and written by the core */
   tlsTab = 0;
   pending: Promise<unknown> | null = null;
+  private budgetWake: (() => void) | null = null;
   /** signals queued for this thread, delivered at its next slice boundary */
   signals: number[] = [];
   signalMask = 0n;
@@ -227,6 +237,7 @@ export class Cpu {
    *  a running loop takes its queue at its next slice boundary. A handler parked in its own host call
    *  (sigsuspend) is a parked frame like any other: the next signal runs on top of it. */
   pump(): void {
+    if (this.budgetWake && this.signals.some((sig) => !(this.signalMask & 1n << BigInt(sig - 1)))) this.budgetWake();
     queueMicrotask(() => {
       if (this.finished || (!this.parked && !this.baseAvailable)) return;
       const sig = this.takeSignal();
@@ -407,6 +418,7 @@ export class Cpu {
   }
   private async loop(): Promise<void> {
     const myDepth = this.depth;
+    let budgetStreak = 0;
     try {
       for (;;) {
         setCurThread(this.jthread);
@@ -419,16 +431,19 @@ export class Cpu {
           setCurThread(this.jthread);
         }
         const t0 = performance.now(), ic0 = this.ic;
+        let sliceMs = 0;
         let ex: SliceExit;
         this.state = "slice";
         try { ex = this.runSlice(sliceBudget()); }
         finally {
           const dt = performance.now() - t0;
+          sliceMs = dt;
           perf.nativeMs += dt; perf.nativeSlices++; perf.nativeInstr += this.ic - ic0;
           if (slowMs && dt > slowMs) console.warn(`[slow-native] ${this.name} slice ${dt.toFixed(0)}ms ${this.ic - ic0} instr from ${symbolizeHook(this.bpc)}`);
         }
         if (ex === SliceExit.Exit) return;
         if (ex === SliceExit.Suspend) {
+          budgetStreak = 0;
           const p = this.pending!;
           this.pending = null;
           const outerParked = this.parkedAt;                                        // a frame below may be parked in its own host call
@@ -452,7 +467,16 @@ export class Cpu {
         }
         this.state = "yield";
         setCurThread(mainThread);
-        await yieldToLoop();
+        budgetStreak++;
+        // All guest pthreads share one JS thread; give sustained off-frame work about a quarter of it.
+        if (budgetStreak >= 3 && !this.realtime && !this.handling.size && !frameLineage.has(this) && performance.now() - lastNativeFrame < 500)
+          await new Promise<void>((resolve) => {
+            let timer: ReturnType<typeof setTimeout>;
+            const resume = () => { clearTimeout(timer); if (this.budgetWake === resume) this.budgetWake = null; resolve(); };
+            this.budgetWake = resume;
+            timer = setTimeout(resume, Math.min(250, sliceMs * 3));
+          });
+        else await yieldToLoop();
       }
     } finally { setCurThread(mainThread); }
   }

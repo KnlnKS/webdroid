@@ -166,6 +166,7 @@ export function startThread(parent: Cpu, start: number, arg: bigint, detached: b
   jt.jname = `pthread-${++threadSeq}`;
   jt.alive = 1;
   const cpu = new Cpu(jt, jt.jname);
+  cpu.parent = parent;
   cpu.signalMask = parent.signalMask;
   cpu.nativeRuntime = parent.nativeRuntime;
   bindCpu(jt, cpu);
