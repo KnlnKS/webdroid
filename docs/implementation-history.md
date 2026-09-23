@@ -439,6 +439,13 @@ onboarding 9.07%. The score changes on live content do not establish native play
 No visual golden changed. The final A64 SIMD and hardware-oracle check passed 560 tests with
 18,261 assertions, including the new PMULL2 alias case.
 
+A later fixed ByteVC1-style loop with 11 widening-multiply/EXT operations and a changing
+lane load ran 500,000 iterations in about 1.7–2.0 ms under the current JIT. This isolated
+kernel omits the decoder's control flow and does not predict live frame rate. It gave no
+evidence that a broad vector-register cache would repay its extra state and invalidation
+complexity, so no cache change was kept. The remaining diagnosis should distinguish decoded
+frames from EGL presentations on repeatable source media.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only
