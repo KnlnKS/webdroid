@@ -24,12 +24,13 @@ const RESPONSIVE_WINDOW_MS = 250;
 /** the run loop's instruction budget per slice; lowering it makes `profile` sample finely (debug) */
 export const slice = { instr: SLICE_INSTR };
 let responsiveUntil = 0;
-let lastNativeFrame = -Infinity;
-const frameLineage = new WeakSet<Cpu>();
+let lastNativeFrameAt = -Infinity;
+const FRAME_ACTIVE_MS = 500;
 
 export function noteNativeFrame(cpu: Cpu): void {
-  lastNativeFrame = performance.now();
-  for (let c: Cpu | null = cpu; c; c = c.parent) frameLineage.add(c);
+  const now = performance.now();
+  lastNativeFrameAt = now;
+  for (let c: Cpu | null = cpu; c; c = c.parent) c.lastFrameAt = now;
 }
 
 export function requestResponsiveSlices(): void {
@@ -100,6 +101,7 @@ export class Cpu {
   nativeRuntime: Runtime | null = null;
   parent: Cpu | null = null;
   realtime = false;
+  lastFrameAt = -Infinity;
   /** the state struct's address in guest memory */
   readonly base: number;
   /** the registers as int32 halves: w[2i] is the low half of x[i] (r[i] on ARM32), w[2i+1] the high; x31 is sp */
@@ -469,7 +471,8 @@ export class Cpu {
         setCurThread(mainThread);
         budgetStreak++;
         // All guest pthreads share one JS thread; give sustained off-frame work about a quarter of it.
-        if (budgetStreak >= 3 && !this.realtime && !this.handling.size && !frameLineage.has(this) && performance.now() - lastNativeFrame < 500)
+        const now = performance.now();
+        if (budgetStreak >= 3 && !this.realtime && !this.handling.size && now - this.lastFrameAt >= FRAME_ACTIVE_MS && now - lastNativeFrameAt < FRAME_ACTIVE_MS)
           await new Promise<void>((resolve) => {
             let timer: ReturnType<typeof setTimeout>;
             const resume = () => { clearTimeout(timer); if (this.budgetWake === resume) this.budgetWake = null; resolve(); };
