@@ -302,21 +302,18 @@ function mergeStates(base: Int32Array, extra: Int32Array | null): Int32Array {
   return base;
 }
 
-export async function guardCall(self: unknown, mangled: string, ...args: unknown[]): Promise<any> {
-  const r = (jmethod(self, mangled) as JMethod).apply(self, args);
-  return r instanceof Promise ? await r : r;
+export function guardCall(self: unknown, mangled: string, ...args: unknown[]): unknown {
+  return (jmethod(self, mangled) as JMethod).apply(self, args);
 }
 
-export async function guardMaybe(self: unknown, mangled: string, ...args: unknown[]): Promise<any> {
+export function guardMaybe(self: unknown, mangled: string, ...args: unknown[]): unknown {
   const fn = jmethod(self, mangled);
   if (!fn) return undefined;
-  const r = fn.apply(self, args);
-  return r instanceof Promise ? await r : r;
+  return fn.apply(self, args);
 }
 
-async function guardApply(fn: JMethod, self: unknown, ...args: unknown[]): Promise<any> {
-  const r = fn.apply(self, args);
-  return r instanceof Promise ? await r : r;
+function guardApply(fn: JMethod, self: unknown, ...args: unknown[]): unknown {
+  return fn.apply(self, args);
 }
 
 class JPointerIcon extends JObj { type = 0; }
@@ -809,7 +806,7 @@ async function drawSemantic(v: JView, cv: JCanvas) {
  * is one, and straight to the base body when there is not.
  */
 const baseDraw = function (this: JView, cv: JCanvas) { return drawContent(this, cv); };
-function drawSelf(v: JView, cv: JCanvas): Promise<void> {
+function drawSelf(v: JView, cv: JCanvas): unknown {
   const fn = jmethod(v, M_draw);
   return fn && fn !== baseDraw ? guardApply(fn, v, cv) : drawContent(v, cv);
 }
@@ -1308,7 +1305,6 @@ const viewMethods: NativeSpec["methods"] = {
     }
     return await guardCall(this, M_onTouchEvent, ev);
   },
-  // Pointer events already enter the main queue as they arrive, without frame batching.
   "requestUnbufferedDispatch(Landroid/view/MotionEvent;)V": () => {},
   "requestDisallowInterceptTouchEvent(Z)V": function (this: JView, dis: number) {
     let v: JView | null = this.parent;
@@ -1835,7 +1831,7 @@ async function addView3(this: JViewGroup, c: JView, i: number, lp: JLayoutParams
   const thread = curThread;
   c.lp = lp ? await convertLp(this, lp)
     : c.lp ? await convertLp(this, c.lp)
-    : await guardCall(this, M_genDefaultLP);
+    : await guardCall(this, M_genDefaultLP) as JLayoutParams | null;
   await resolveLp(c.lp!);
   await attachView(this, c, i, true, thread);
 }
@@ -2303,6 +2299,7 @@ rt.register({ name: "webdroid/ViewAlphaProperty", ctor: class extends JProperty 
 } });
 rt.register({
   name: "android/view/View", ctor: JView,
+  fields: { mContext: "ctx" },
   clinit: () => {
     rt.link("android/view/View").ctor.s$ALPHA = Object.assign(rt.make("webdroid/ViewAlphaProperty"), { name: "alpha", type: rt.classFor("java/lang/Float") });
   },

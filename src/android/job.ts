@@ -1,8 +1,10 @@
 // android.app.job: JobScheduler surface. Jobs are remembered so schedule/cancel/query stay consistent; nothing here ever runs one.
 
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
+import { vcall } from "../jvm/natives/jlang";
 import { JList } from "../jvm/natives/jutil";
 import { JContextWrapper } from "./context";
+import { type JParcel, writeInt } from "./parcel";
 
 class JJobInfo extends JObj { p: Record<string, any> = { id: 0, svc: null, triggers: [] as unknown[] }; }
 class JJobInfoBuilder extends JObj { j = new JJobInfo(); }
@@ -71,16 +73,49 @@ rt.register({
       if (!t.length) return null;
       const a = t.slice(); (a as any).$t = "Landroid/app/job/JobInfo$TriggerContentUri;"; return a;
     },
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JJobInfo, parcel: JParcel, flags: number) {
+      const p = this.p;
+      writeInt(parcel, p.id);
+      await vcall(parcel, "writePersistableBundle", "(Landroid/os/PersistableBundle;)V", p.extras ?? null);
+      await vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", p.transient ?? null);
+      writeInt(parcel, 0);
+      await vcall(parcel, "writeParcelable", "(Landroid/os/Parcelable;I)V", p.svc, flags);
+      const constraints = (p.charging ? 1 : 0) | (p.idle ? 2 : 0) | (p.batteryNotLow ? 4 : 0) | (p.storageNotLow ? 8 : 0);
+      writeInt(parcel, constraints);
+      await vcall(parcel, "writeTypedArray", "([Landroid/os/Parcelable;I)V", p.triggers.length ? p.triggers : null, flags);
+      for (const value of [p.contentUpdateDelay ?? -1n, p.contentMaxDelay ?? -1n]) await vcall(parcel, "writeLong", "(J)V", value);
+      writeInt(parcel, p.netReq ? 1 : 0);
+      if (p.netReq) await vcall(p.netReq, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags);
+      for (const value of [-1n, -1n, -1n, p.minLatency ?? 0n, p.deadline ?? 0n]) await vcall(parcel, "writeLong", "(J)V", value);
+      writeInt(parcel, p.interval !== undefined ? 1 : 0);
+      writeInt(parcel, p.persisted ? 1 : 0);
+      for (const value of [p.interval ?? 0n, p.flex ?? 0n, p.backoff ?? 30000n]) await vcall(parcel, "writeLong", "(J)V", value);
+      writeInt(parcel, p.backoffPolicy ?? 1);
+      writeInt(parcel, p.minLatency !== undefined ? 1 : 0);
+      writeInt(parcel, p.deadline !== undefined || p.interval !== undefined ? 1 : 0);
+      writeInt(parcel, 0);
+      writeInt(parcel, 300);
+      writeInt(parcel, (p.important ? 1 : 0) | (p.expedited ? 16 : 0));
+      writeInt(parcel, 0);
+      await vcall(parcel, "writeString", "(Ljava/lang/String;)V", null);
+    },
   },
 });
 class JTriggerUri extends JObj { uri: unknown = null; flags = 0; }
 rt.register({
   name: "android/app/job/JobInfo$TriggerContentUri", ctor: JTriggerUri,
+  ifaces: ["android/os/Parcelable"],
   statics: { FLAG_NOTIFY_FOR_DESCENDANTS: 1 },
   methods: {
     "<init>(Landroid/net/Uri;I)V": function (this: JTriggerUri, u: unknown, f: number) { this.uri = u; this.flags = f; },
     "getUri()Landroid/net/Uri;": function (this: JTriggerUri) { return this.uri; },
     "getFlags()I": function (this: JTriggerUri) { return this.flags; },
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JTriggerUri, parcel: JParcel, flags: number) {
+      await vcall(this.uri, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags);
+      writeInt(parcel, this.flags);
+    },
   },
 });
 const pendingJobs = new Map<number, JJobInfo>();

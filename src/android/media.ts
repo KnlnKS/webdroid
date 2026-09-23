@@ -5,7 +5,7 @@ import { stringHash, vcall } from "../jvm/natives/jlang";
 import { newArrayList, newStringSet, type JList } from "../jvm/natives/jutil";
 import { vfs } from "../jvm/natives/jio";
 import type { JBuffer } from "../jvm/natives/jnio";
-rt.markers("android/media/AudioManager$OnAudioFocusChangeListener");
+rt.markers("android/media/AudioManager$OnAudioFocusChangeListener", "android/media/ImageReader$OnImageAvailableListener");
 /** the rate the Web Audio output actually runs at */
 export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
 let audioSession = 0;

@@ -4,6 +4,8 @@ import { device } from "./config";
 import { dispatchPointer } from "./device";
 import { setInputElement } from "../android/textview";
 import { imeInput, imeAction, imeActive, imeHasAction, imeSelection, imeFinishComposition } from "../android/ime";
+import { guestNow } from "../guest-clock";
+import { queuePointer, type PointerSample } from "./pointer-queue";
 
 export function attachIme(canvas: HTMLCanvasElement, kbd: HTMLTextAreaElement): void {
   setInputElement(kbd);
@@ -20,9 +22,26 @@ export function attachIme(canvas: HTMLCanvasElement, kbd: HTMLTextAreaElement): 
 // gesture starts, not per move.
 let rect = new DOMRect(0, 0, 1, 1);
 let down = false;
+let pointerPending = false;
+const pendingPointers: PointerSample[] = [];
 
 const at = (e: { clientX: number; clientY: number }): [number, number] =>
   [(e.clientX - rect.left) * device.width / rect.width, (e.clientY - rect.top) * device.height / rect.height];
+
+function sendPointer(sample: PointerSample): void {
+  if (pointerPending) {
+    queuePointer(pendingPointers, sample);
+    return;
+  }
+  pointerPending = true;
+  requestAnimationFrame(() => {
+    void dispatchPointer(sample.action, sample.x, sample.y, sample.at).finally(() => {
+      pointerPending = false;
+      const next = pendingPointers.shift();
+      if (next) sendPointer(next);
+    });
+  });
+}
 
 // The synthetic finger a wheel burst drives: where it went down, how far the deltas have carried
 // it, and where it was last dispatched.
@@ -52,24 +71,24 @@ function attachInput(canvas: HTMLCanvasElement, onDown: () => void) {
     rect = canvas.getBoundingClientRect();
     try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events */ }
     const [x, y] = at(e);
-    void dispatchPointer(0, x, y);
+    sendPointer({ action: 0, x, y, at: guestNow() });
     onDown();
   });
   canvas.addEventListener("pointermove", (e) => {
     if (!down) return;
     const [x, y] = at(e);
-    void dispatchPointer(2, x, y);
+    sendPointer({ action: 2, x, y, at: guestNow() });
   });
   canvas.addEventListener("pointerup", (e) => {
     if (!down) return;
     down = false;
     const [x, y] = at(e);
-    void dispatchPointer(1, x, y);
+    sendPointer({ action: 1, x, y, at: guestNow() });
   });
   canvas.addEventListener("pointercancel", () => {
     if (!down) return;
     down = false;
-    void dispatchPointer(3, 0, 0);
+    sendPointer({ action: 3, x: 0, y: 0, at: guestNow() });
   });
   canvas.addEventListener("wheel", (e) => {
     // the page must not scroll under the phone, and a horizontal swipe must not walk history.

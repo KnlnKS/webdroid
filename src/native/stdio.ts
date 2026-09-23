@@ -552,6 +552,97 @@ function nextDirent(d: { entries: string[]; i: number }, de: number): number {
   return de;
 }
 
+interface FtsNode {
+  pre: number;
+  post: number;
+  children: FtsNode[];
+  first: number;
+  end: number;
+}
+interface FtsWalk {
+  entries: number[];
+  nodes: Map<number, FtsNode>;
+  allocations: number[];
+  index: number;
+  current: number;
+}
+const ftsWalks = new Map<number, FtsWalk>();
+const ftsLayout = () => PTR === 8
+  ? { parent: 8, link: 16, accpath: 40, path: 48, errno: 56, pathlen: 64, namelen: 72, ino: 80, dev: 88, nlink: 96, level: 100, info: 102, flags: 104, instr: 106, statp: 112, name: 120 }
+  : { parent: 4, link: 8, accpath: 20, path: 24, errno: 28, pathlen: 36, namelen: 40, ino: 44, dev: 48, nlink: 52, level: 56, info: 58, flags: 60, instr: 62, statp: 64, name: 68 };
+
+function ftsEntry(walk: FtsWalk, path: string, level: number, parent: number, info: number): number {
+  const layout = ftsLayout(), name = path === "/" ? "/" : path.slice(path.lastIndexOf("/") + 1);
+  const pathlen = utf8(path).length, namelen = utf8(name).length;
+  const entry = mem.malloc(layout.name + namelen + 1), pathp = mem.strdup(path), statp = mem.malloc(LAYOUT.STAT_SIZE);
+  walk.allocations.push(entry, pathp, statp);
+  mem.memset(entry, 0, layout.name + namelen + 1);
+  stp(entry + layout.parent, parent); stp(entry + layout.accpath, pathp); stp(entry + layout.path, pathp);
+  if (PTR === 8) { mem.st64(entry + layout.pathlen, BigInt(pathlen)); mem.st64(entry + layout.namelen, BigInt(namelen)); }
+  else { mem.st32(entry + layout.pathlen, pathlen); mem.st32(entry + layout.namelen, namelen); }
+  mem.st32(entry + layout.ino, inoOf(path)); mem.st32(entry + layout.dev, 1); mem.st32(entry + layout.nlink, 1);
+  mem.st16(entry + layout.level, level); mem.st16(entry + layout.info, info); stp(entry + layout.statp, statp);
+  const file = vfs.stat(path); fillStat(statp, info === 1 || info === 6, file?.size ?? 4096, Date.now(), path);
+  mem.putCstr(entry + layout.name, name);
+  return entry;
+}
+
+function ftsTree(walk: FtsWalk, path: string, level: number, parent: number): FtsNode {
+  const exists = vfs.exists(path), dir = vfs.isDir(path), info = !exists ? 10 : dir ? 1 : 8;
+  const pre = ftsEntry(walk, path, level, parent, info);
+  const post = dir ? ftsEntry(walk, path, level, parent, 6) : 0;
+  const node: FtsNode = { pre, post, children: [], first: 0, end: 0 };
+  walk.nodes.set(pre, node);
+  if (post) walk.nodes.set(post, node);
+  if (dir) for (const name of vfs.list(path)) node.children.push(ftsTree(walk, vfs.norm(path + "/" + name), level + 1, pre));
+  return node;
+}
+
+async function sortFts(cpu: Cpu, node: FtsNode, compar: number, cell: number): Promise<void> {
+  if (compar && node.children.length > 1) {
+    for (let i = 1; i < node.children.length; i++) {
+      const value = node.children[i]; let j = i;
+      while (j > 0) {
+        stp(cell, node.children[j - 1].pre); stp(cell + PTR, value.pre);
+        if ((await cpu.call(compar, [cell, cell + PTR])) <= 0) break;
+        node.children[j] = node.children[j - 1]; j--;
+      }
+      node.children[j] = value;
+    }
+  }
+  for (const child of node.children) await sortFts(cpu, child, compar, cell);
+}
+
+function flattenFts(walk: FtsWalk, node: FtsNode): void {
+  const layout = ftsLayout();
+  walk.entries.push(node.pre);
+  node.first = node.children[0]?.pre ?? 0;
+  for (let i = 0; i < node.children.length; i++) stp(node.children[i].pre + layout.link, node.children[i + 1]?.pre ?? 0);
+  for (const child of node.children) flattenFts(walk, child);
+  if (node.post) walk.entries.push(node.post);
+  node.end = walk.entries.length;
+}
+
+async function ftsOpen(cpu: Cpu, argv: number, options: number, compar: number): Promise<number | bigint> {
+  if (!argv || options & ~0x7f || !(options & (2 | 16))) { fail(cpu, E.INVAL); return 0; }
+  const handle = mem.malloc(PTR), walk: FtsWalk = { entries: [], nodes: new Map(), allocations: [handle], index: 0, current: 0 };
+  const roots: FtsNode[] = [];
+  for (let p = argv, pathp; (pathp = ldp(p)); p += PTR) roots.push(ftsTree(walk, vfs.norm(mem.cstr(pathp)), 0, 0));
+  if (!roots.length) { closeFts(handle); fail(cpu, E.INVAL); return 0; }
+  const cell = mem.malloc(2 * PTR); walk.allocations.push(cell);
+  for (const root of roots) { await sortFts(cpu, root, compar, cell); flattenFts(walk, root); }
+  ftsWalks.set(handle, walk);
+  return ptr(handle);
+}
+
+function closeFts(handle: number): number {
+  const walk = ftsWalks.get(handle);
+  if (!walk) return -1;
+  for (const allocation of walk.allocations) mem.free(allocation);
+  ftsWalks.delete(handle);
+  return 0;
+}
+
 export function stdioInit(): void {
   for (let fd = 0; fd < 3; fd++) reserveFd(fd);
   fds.set(0, fdBase("/dev/stdin"));
@@ -783,6 +874,29 @@ export function stdioInit(): void {
       return kept.length;
     },
     alphasort: (_c, a) => { const x = mem.cstr(ldp(a.p()) + LAYOUT.D_NAME), y = mem.cstr(ldp(a.p()) + LAYOUT.D_NAME); return x < y ? -1 : x > y ? 1 : 0; },
+    fts_open: (cpu, a) => ftsOpen(cpu, a.p(), a.i(), a.p()),
+    fts_read: (_c, a) => {
+      const walk = ftsWalks.get(a.p());
+      if (!walk) return 0;
+      if (walk.current) {
+        const node = walk.nodes.get(walk.current);
+        if (node && mem.ld16u(walk.current + ftsLayout().instr) === 4) walk.index = node.end;
+      }
+      const entry = walk.entries[walk.index++] ?? 0;
+      walk.current = entry;
+      return entry ? ptr(entry) : 0;
+    },
+    fts_children: (_c, a) => {
+      const walk = ftsWalks.get(a.p()); a.i();
+      const first = walk?.nodes.get(walk.current)?.first ?? 0;
+      return first ? ptr(first) : 0;
+    },
+    fts_set: (cpu, a) => {
+      const walk = ftsWalks.get(a.p()), entry = a.p(), instruction = a.i();
+      if (!walk || !walk.nodes.has(entry) || instruction < 1 || instruction > 4) return fail(cpu, E.INVAL);
+      mem.st16(entry + ftsLayout().instr, instruction); return 0;
+    },
+    fts_close: (_c, a) => closeFts(a.p()),
 
     fopen: (cpu, a) => {
       const path = a.str(), mode = a.str();

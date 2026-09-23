@@ -293,10 +293,11 @@ export class JAttrSet extends JObj {
 }
 
 export class JXmlParser extends JObj {
-  events: { type: number; node: XmlNode | null; depth: number }[] = [];
+  events: { type: number; node: XmlNode | null; depth: number; text?: string; line?: number; namespace?: string }[] = [];
   pos = -1;
   res!: Resources;
   set = new JAttrSet();
+  sourceResId = 0;
   get node(): XmlNode | null { return this.events[this.pos]?.node ?? null; }
 }
 

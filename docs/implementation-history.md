@@ -246,3 +246,70 @@ their tested revision, not necessarily current status.
   runnable differential campaigns.
 - [DEX performance architecture](dex-performance-architecture.md): cold/hot
   tiers, OSR, code admission and detailed comparisons.
+
+## TikTok playback and interaction follow-up — 2026-09-22
+
+Fresh full-Chrome profiling reached TikTok's unchanged ByteVC1 and ByteVC2 libraries. ByteVC1's
+hottest fallback loops use saturating byte/halfword add, signed-to-unsigned narrowing and rounded
+saturating narrowing. ByteVC2's table-based prediction loop uses one- to four-register TBL/TBX.
+The A64 JIT now lowers those operations to WebAssembly SIMD and preserves FPSR.Q exactly by
+detecting saturation before the sticky flag update. The existing hardware-captured SIMD oracle
+covers signed/unsigned saturation, lower/upper narrowing and every implemented table width; the
+31 directly affected oracle cases pass with 1,025 assertions. No decoder or APK bytes are changed.
+
+The same session exposed reachable platform gaps before video startup. XmlBlock and its parser
+now reuse the resource parser implementation over the binary-XML document; JobInfo and content
+URI triggers use the API-33 parcel layout; Debug.MemoryInfo exposes swappable-PSS fields; and the
+ImageReader callback interface, MediaDrm byte-array property failure and View.mContext field are
+present. Bionic FTS now owns a pre/post-order VFS traversal with child links, sorting, skipping
+and balanced storage. The observed platform/API missing set is empty after a fresh launch; nine
+remaining probes name optional TikTok, Lynx, vendor and AppsFlyer classes rather than Android APIs.
+
+The view guard no longer allocates an async wrapper for every synchronous virtual draw/measure
+call. On an animated Java feed this changed a ten-second sample from 115 presentations with
+43.6 ms mean draw time to 596 presentations with 9.3 ms mean draw time. This is a live-content
+comparison, not a controlled video-FPS result. Pointer streams retain DOWN and UP while
+coalescing queued MOVE events; event timestamps are captured at browser arrival, and native
+execution temporarily uses shorter slices after input. A warm timed swipe charged about 249 ms
+of total emulator dispatch work; earlier warm three-event sampling charged 82 ms. The requested
+universal 150 ms action bound is therefore not established.
+
+Full-Chrome video frames visibly advance with either native JIT enabled or `jit=0`. Some live
+YV12 items in both tiers show duplicated green imagery, so the symptom is not attributed to the
+new emitter paths; varying remote content prevents a matched pixel conclusion. Syscalls 220
+(clone) and 260 (wait4) remain explicit unsupported process-creation boundaries rather than
+fabricated success. Surface-frame telemetry now counts every canonical presenter, although this
+session's native-window route still did not increment that counter and is not reported as FPS.
+
+The final serialized E2E matrix passed in 1,036.7 seconds. TikTok rendered all 13 steps,
+including background resume and two video swipes, with no wedged main loop, settle timeout,
+layout/draw error or required native. Its video steps recorded 32–80 canonical surface frames
+and 5–16 presented FPS, superseding the earlier interactive session's counter limitation but
+confirming that decode throughput remains the dominant constraint. Across all 13 flows, 183
+steps completed with no wedge or layout error; the two settle timeouts and seven draw errors
+were confined to YouTube's existing smoke-only path.
+
+## TikTok performance integration into main
+
+The branch was merged onto `54e48012`. The resource-parser conflict retains main's SAX
+entry point and the branch's native XmlBlock parser; the AOSP XmlBlock delegate remains
+available through framework provenance. Main's compact history was kept. A pointer backlog
+could replace one tap's UP with the next tap's DOWN; queued input now retains gesture
+boundaries and coalesces only consecutive MOVE events, with a focused regression test.
+
+The combined revision passes typecheck, 1,323 unit tests (27,573 assertions), the TikTok
+and FitNotes smoke compilers with zero method failures, all eight runnable framework
+exercises (295/363 declared natives), and FitNotes text comparison (6/6). TikTok's full
+smoke compilation reached 462,058 classes and used over 13 GiB of resident memory; a
+single successful run is enough evidence, not a cheap repeatable check.
+
+The serialized E2E matrix completes 183/183 steps in 952.4 seconds. TikTok completes
+13/13 with four available process snapshots per step, advancing foreground ticks,
+no native requirement, draw/layout error, settle timeout or wedge. The two video samples
+present about 14 and 18 surface frames/s; different live clips prevent a controlled
+throughput comparison with the branch's 5–16 frames/s samples. Across the matrix there
+are no wedges, layout errors or native requirements. YouTube retains two control settle
+timeouts and seven Matrix draw errors; 12 Flappy child snapshots remain unavailable.
+The corpus renders 20/21 APKs. Amazon crashes before drawing both here and on the exact
+pre-merge `54e48012` revision under an isolated replay, so that failure is not attributed
+to this integration.

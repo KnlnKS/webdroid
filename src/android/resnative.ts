@@ -4,10 +4,10 @@ import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newXmlPullParser } from "./xmlpull";
 import { parseSax } from "./sax";
-import { Resources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, JXmlParser, obtainStyled, resolveStyleValue, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
+import { Resources, currentResources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, JXmlParser, obtainStyled, resolveStyleValue, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
-import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
+import { TV, parseAXML, parseAXMLDoc, type XmlNode, type XmlAttr } from "./axml";
 import { javaFormat, defineException, vcall } from "../jvm/natives/jlang";
 import { type JLocale, localeTag, localeDirection, usLocale } from "../jvm/natives/jvalues";
 import { jarray } from "../jvm/abi";
@@ -680,46 +680,116 @@ function xmlFromBytes(res: Resources, bytes: Uint8Array): JXmlParser {
   p.events = events;
   return p;
 }
+function nextXml(parser: JXmlParser): number {
+  parser.pos = Math.min(parser.pos + 1, parser.events.length - 1);
+  const event = parser.events[parser.pos];
+  parser.set.node = event.node;
+  return event.type;
+}
+const xmlParserMethods: NativeSpec["methods"] = {
+  "next()I": function (this: JXmlParser) { return nextXml(this); },
+  "nextToken()I": function (this: JXmlParser) { return nextXml(this); },
+  "nextTag()I": function (this: JXmlParser) {
+    do {
+      this.pos = Math.min(this.pos + 1, this.events.length - 1);
+    } while (this.events[this.pos].type !== 2 && this.events[this.pos].type !== 3 && this.events[this.pos].type !== 1);
+    this.set.node = this.events[this.pos].node;
+    return this.events[this.pos].type;
+  },
+  "nextText()Ljava/lang/String;": function (this: JXmlParser) {
+    if (this.events[this.pos]?.type !== 2) throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "parser must be on START_TAG");
+    const next = this.events[++this.pos];
+    const text = next?.type === 4 ? next.text ?? "" : "";
+    if (next?.type === 4) this.pos++;
+    this.set.node = this.events[this.pos]?.node ?? null;
+    if (this.events[this.pos]?.type !== 3) throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "event TEXT must be followed by END_TAG");
+    return text;
+  },
+  "getEventType()I": function (this: JXmlParser) { return this.pos < 0 ? 0 : this.events[this.pos].type; },
+  "getNamespace()Ljava/lang/String;": function (this: JXmlParser) { return this.events[this.pos]?.namespace ?? ""; },
+  "getNamespace(Ljava/lang/String;)Ljava/lang/String;": () => null,
+  "getNamespaceCount(I)I": () => 0,
+  "getNamespacePrefix(I)Ljava/lang/String;": () => null,
+  "getNamespaceUri(I)Ljava/lang/String;": () => null,
+  "getPrefix()Ljava/lang/String;": () => null,
+  "require(ILjava/lang/String;Ljava/lang/String;)V": function (this: JXmlParser, type: number, _ns: string | null, name: string | null) {
+    const e = this.events[this.pos];
+    if (e?.type !== type || (name !== null && e.node?.name !== name)) {
+      throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "expected " + (name ?? "event " + type) + " at " + (e?.node?.name ?? "start"));
+    }
+  },
+  "getName()Ljava/lang/String;": function (this: JXmlParser) { return this.events[this.pos]?.node?.name ?? null; },
+  "getDepth()I": function (this: JXmlParser) { return this.events[this.pos]?.depth ?? 0; },
+  "getLineNumber()I": function (this: JXmlParser) { return this.events[this.pos]?.line ?? -1; },
+  "getColumnNumber()I": () => -1,
+  "getInputEncoding()Ljava/lang/String;": () => null,
+  "getSourceResId()I": function (this: JXmlParser) { return this.sourceResId; },
+  "close()V": () => {},
+  ...attributeSetMethods,
+  "getAttributeNamespace(I)Ljava/lang/String;": function (this: JXmlParser, i: number) { return byIdx(this, i)?.ns ?? ""; },
+  "getAttributeType(I)Ljava/lang/String;": () => "CDATA",
+  "getAttributePrefix(I)Ljava/lang/String;": () => null,
+  "getAttributeIntValue(Ljava/lang/String;Ljava/lang/String;I)I": function (this: JXmlParser, _ns: string, name: string, d: number) {
+    const a = this.events[this.pos]?.node?.attrs.find((x) => x.name === name);
+    return a && a.type >= TV.INT_DEC ? a.data : d;
+  },
+  "getIdAttribute()Ljava/lang/String;": function (this: JXmlParser) { return attrStr(this.node?.attrs.find((x) => x.name === "id")); },
+  "getClassAttribute()Ljava/lang/String;": function (this: JXmlParser) { return attrStr(this.node?.attrs.find((x) => x.name === "class")); },
+  "getStyleAttribute()I": function (this: JXmlParser) { return this.node?.attrs.find((x) => x.name === "style" && !x.ns)?.data ?? 0; },
+  "getIdAttributeResourceValue(I)I": function (this: JXmlParser, d: number) { return this.node?.attrs.find((x) => x.resId === 0x010100d0)?.data ?? d; },
+  "getText()Ljava/lang/String;": function (this: JXmlParser) { return this.events[this.pos]?.text ?? null; },
+  "getPositionDescription()Ljava/lang/String;": function (this: JXmlParser) { return `<webdroid xml line ${this.events[this.pos]?.line ?? -1}>`; },
+  "isEmptyElementTag()Z": function (this: JXmlParser) {
+    const e = this.events[this.pos];
+    return e?.type === 2 && !e.node?.children.length ? 1 : 0;
+  },
+  "isWhitespace()Z": function (this: JXmlParser) { return +(this.events[this.pos]?.type === 4 && !this.events[this.pos]?.text?.trim()); },
+  "getFeature(Ljava/lang/String;)Z": (name: string) => +(name.endsWith("#process-namespaces") || name.endsWith("#report-namespace-prefixes")),
+  ...noops("setFeature(Ljava/lang/String;Z)V", "setProperty(Ljava/lang/String;Ljava/lang/Object;)V"),
+  ...stubs(null, "getProperty(Ljava/lang/String;)Ljava/lang/Object;"),
+};
 rt.register({
   name: "android/content/res/XmlResourceParser", ctor: JXmlParser,
   ifaces: ["org/xmlpull/v1/XmlPullParser", "android/util/AttributeSet"],
+  methods: xmlParserMethods,
+});
+
+class JXmlBlock extends JObj {
+  doc: ReturnType<typeof parseAXMLDoc> | null = null;
+  res: Resources | null = null;
+}
+class JXmlBlockParser extends JXmlParser {}
+function initXmlBlock(block: JXmlBlock, bytes: Int8Array, off: number, len: number): void {
+  block.doc = parseAXMLDoc(new Uint8Array(bytes.buffer, bytes.byteOffset + off, len), true);
+  block.res = currentResources();
+}
+function newBlockParser(block: JXmlBlock, sourceResId: number): JXmlBlockParser | null {
+  if (!block.doc) return null;
+  const parser = new JXmlBlockParser();
+  if (block.res) { parser.res = block.res; parser.set.res = block.res; }
+  parser.sourceResId = sourceResId;
+  parser.events = block.doc.events.map((event) => ({
+    type: event.type, node: event.node, depth: event.depth, line: event.line,
+    namespace: event.nsIdx < 0 ? "" : block.doc!.pool.get(event.nsIdx),
+    text: event.type === 4 && event.nameIdx >= 0 ? block.doc!.pool.get(event.nameIdx) : undefined,
+  }));
+  return parser;
+}
+rt.register({
+  name: "android/content/res/XmlBlock", ctor: JXmlBlock,
   methods: {
-    "next()I": function (this: JXmlParser) {
-      this.pos = Math.min(this.pos + 1, this.events.length - 1);
-      const e = this.events[this.pos];
-      this.set.node = e.node;
-      return e.type;
-    },
-    "nextTag()I": function (this: JXmlParser) {
-      do {
-        this.pos = Math.min(this.pos + 1, this.events.length - 1);
-      } while (this.events[this.pos].type !== 2 && this.events[this.pos].type !== 3 && this.events[this.pos].type !== 1);
-      this.set.node = this.events[this.pos].node;
-      return this.events[this.pos].type;
-    },
-    "getEventType()I": function (this: JXmlParser) { return this.pos < 0 ? 0 : this.events[this.pos].type; },
-    "getNamespace()Ljava/lang/String;": () => "",
-    "require(ILjava/lang/String;Ljava/lang/String;)V": function (this: JXmlParser, type: number, _ns: string | null, name: string | null) {
-      const e = this.events[this.pos];
-      if (e?.type !== type || (name !== null && e.node?.name !== name)) {
-        throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "expected " + (name ?? "event " + type) + " at " + (e?.node?.name ?? "start"));
-      }
-    },
-    "getName()Ljava/lang/String;": function (this: JXmlParser) { return this.events[this.pos]?.node?.name ?? null; },
-    "getDepth()I": function (this: JXmlParser) { return this.events[this.pos]?.depth ?? 0; },
-    "close()V": () => {},
-    ...attributeSetMethods,
-    "getAttributeIntValue(Ljava/lang/String;Ljava/lang/String;I)I": function (this: JXmlParser, ns: string, name: string, d: number) {
-      const a = this.events[this.pos]?.node?.attrs.find((x) => x.name === name);
-      return a && a.type >= TV.INT_DEC ? a.data : d;
-    },
-    "getText()Ljava/lang/String;": () => "",
-    "getPositionDescription()Ljava/lang/String;": () => "<webdroid xml>",
-    "isEmptyElementTag()Z": function (this: JXmlParser) {
-      const e = this.events[this.pos];
-      return e?.type === 2 && !e.node?.children.length ? 1 : 0;
-    },
+    "<init>([B)V": function (this: JXmlBlock, bytes: Int8Array) { initXmlBlock(this, bytes, 0, bytes.length); },
+    "<init>([BII)V": function (this: JXmlBlock, bytes: Int8Array, off: number, len: number) { initXmlBlock(this, bytes, off, len); },
+    "newParser()Landroid/content/res/XmlResourceParser;": function (this: JXmlBlock) { return newBlockParser(this, 0); },
+    "newParser(I)Landroid/content/res/XmlResourceParser;": function (this: JXmlBlock, sourceResId: number) { return newBlockParser(this, sourceResId); },
+    "newParser(ILandroid/content/res/Validator;)Landroid/content/res/XmlResourceParser;": function (this: JXmlBlock, sourceResId: number) { return newBlockParser(this, sourceResId); },
+    "close()V": function (this: JXmlBlock) { this.doc = null; },
   },
+});
+rt.register({
+  name: "android/content/res/XmlBlock$Parser", ctor: JXmlBlockParser,
+  ifaces: ["android/content/res/XmlResourceParser", "org/xmlpull/v1/XmlPullParser", "android/util/AttributeSet"],
+  methods: xmlParserMethods,
 });
 rt.register({
   name: "android/util/Xml", ctor: class extends JObj {},
