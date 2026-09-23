@@ -10,7 +10,7 @@ function annexB(units: readonly { data: Uint8Array }[]): Uint8Array {
   return result;
 }
 function csd(format: JMediaFormat, key: string, data: Uint8Array): void {
-  const buffer = mkByteBuffer(data.length); new Uint8Array(buffer.ab).set(data);
+  const buffer = mkByteBuffer(data.length, true); new Uint8Array(buffer.ab).set(data);
   format.values.set(key, { type: 5, value: buffer });
 }
 type Track = { format: JMediaFormat; samples: Sample[]; nalLength: number; timeOffset: number; index: number; selected: boolean };

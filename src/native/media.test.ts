@@ -15,7 +15,7 @@ test("NDK extraction owns its descriptor and preserves samples, timestamps and s
     setA64(wide); mediaInit();
     const cpu = new Cpu(new JThread(), "media-test");
     const call = (name: string, ...args: (number | bigint)[]) => cpu.call(lookupHost("AMedia" + name, "libmediandk.so")!, args);
-    const fd = javaBytesFd(wrapped), out = mem.malloc(8192), mime = mem.ld32(lookupHost("AMEDIAFORMAT_KEY_MIME", "libmediandk.so")!) >>> 0, width = mem.strdup("width");
+    const fd = javaBytesFd(wrapped), out = mem.malloc(8192), mime = mem.ld32(lookupHost("AMEDIAFORMAT_KEY_MIME", "libmediandk.so")!) >>> 0, width = mem.strdup("width"), csd = mem.strdup("csd-0");
     let extractor = 0, format = 0;
     try {
       extractor = await call("Extractor_new");
@@ -26,6 +26,8 @@ test("NDK extraction owns its descriptor and preserves samples, timestamps and s
       expect(await call("Format_getInt32", format, width, out)).toBe(1); expect(mem.ld32(out)).toBe(32);
       expect(await call("Format_getString", format, mime, out)).toBe(1);
       expect(mem.cstr(mem.ld32(out) >>> 0)).toBe("video/avc");
+      expect(await call("Format_getBuffer", format, csd, out, out + 8)).toBe(1);
+      expect([...mem.bytes(mem.ld32(out) >>> 0, 4)]).toEqual([0, 0, 0, 1]);
       expect(await call("Extractor_selectTrack", extractor, 0)).toBe(0);
       expect(await call("Extractor_getSampleTime", extractor)).toBe(0);
       expect(await call("Extractor_getSampleFlags", extractor)).toBe(1);
@@ -43,7 +45,7 @@ test("NDK extraction owns its descriptor and preserves samples, timestamps and s
     } finally {
       if (format) await call("Format_delete", format);
       if (extractor) await call("Extractor_delete", extractor);
-      javaCloseFd(fd); mem.free(out); mem.free(width); cpu.dispose(); setA64(false);
+      javaCloseFd(fd); mem.free(out); mem.free(width); mem.free(csd); cpu.dispose(); setA64(false);
     }
   }
 });

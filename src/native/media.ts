@@ -78,7 +78,7 @@ export function mediaInit(): void {
     },
     AMediaFormat_setBuffer: (_cpu, a) => {
       const format = formats.get(a.p()), key = a.str(), data = a.p(), size = a.u(); if (!format) return;
-      const value = mkByteBuffer(size); new Uint8Array(value.ab).set(mem.bytes(data, size)); format.value.values.set(key, { type: 5, value });
+      const value = mkByteBuffer(size, true); new Uint8Array(value.ab).set(mem.bytes(data, size)); format.value.values.set(key, { type: 5, value });
     },
     AMediaExtractor_new: () => { const handle = nextHandle++; extractors.set(handle, { value: new MediaExtractor(), source: null, close: null }); return handle; },
     AMediaExtractor_delete: async (cpu, a) => { const handle = a.p(), extractor = extractors.get(handle); if (!extractor) return BAD_OBJECT; extractors.delete(handle); await extractor.close?.(cpu); return 0; },
