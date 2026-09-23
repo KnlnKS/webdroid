@@ -19,6 +19,21 @@ test("USHL halfword lanes handle signed shift counts and destination aliasing", 
   expect([...c.vw.subarray(8 * 3, 8 * 4)]).toEqual([0x4000, 0x07f8, 0, 0, 0, 0, 0, 0]);
 });
 
+test("PMULL2 multiplies upper byte lanes when the destination aliases a source", () => {
+  const a = [0x80, 0x01, 0xff, 0x53, 0x17, 0xc0, 0x7e, 0x39];
+  const b = [0x02, 0x80, 0xff, 0x65, 0xb4, 0x09, 0x42, 0xe1];
+  const c = run([0x4e23e0a5, RET], cpu => {
+    cpu.vb.set(a, 16 * 5 + 8);
+    cpu.vb.set(b, 16 * 3 + 8);
+  });
+  const expected = a.flatMap((x, lane) => {
+    let product = 0;
+    for (let bit = 0; bit < 8; bit++) if (b[lane] & (1 << bit)) product ^= x << bit;
+    return [product & 255, product >> 8];
+  });
+  expect([...c.vb.subarray(16 * 5, 16 * 6)]).toEqual(expected);
+});
+
 describe("a64 simd: memory", () => {
   test("interleaved stores preserve lane order at both vector widths", () => {
     const buf = pattern();

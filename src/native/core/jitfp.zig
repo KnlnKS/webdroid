@@ -572,6 +572,25 @@ fn emitVector(e: *Emit, w: u32) bool {
     }
     if (is(w, 0x9f20_0c00, 0x0e20_0000) and size < 3) {
         const opcode = bits(w, 12, 4);
+        if (opcode == 14 and !U and size == 0) {
+            const extend = S.extend_low_s[0] + @as(u8, if (q) 3 else 2);
+            vget(e, rn);
+            b.emit(.{ sv(extend), set(jit.L_VA) });
+            vget(e, rm);
+            b.emit(.{ sv(extend), set(jit.L_VB) });
+            b.get(L_CPU);
+            vectorConst(e, 1, 0);
+            for (0..8) |i| {
+                b.get(jit.L_VA);
+                if (i != 0) b.emit(.{ c32(@intCast(i)), sv(S.shl[1]) });
+                b.get(jit.L_VB);
+                if (i != 0) b.emit(.{ c32(@intCast(i)), sv(S.shr_u[1]) });
+                vectorConst(e, 1, 1);
+                b.emit(.{ sv(S.and_), sv(S.neg[1]), sv(S.and_), sv(S.xor) });
+            }
+            vput(e, rd, true);
+            return true;
+        }
         if (opcode > 3 and opcode != 8 and opcode != 10 and opcode != 12) return false;
         const extend = S.extend_low_s[size] + @as(u8, if (q) 1 else 0) + @as(u8, if (U) 2 else 0);
         const accumulate = opcode == 8 or opcode == 10;

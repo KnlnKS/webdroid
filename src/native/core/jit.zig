@@ -56,6 +56,8 @@ pub const L_FR64 = 54;
 pub const L_FA32 = 55;
 pub const L_FB32 = 56;
 pub const L_FR32 = 57;
+pub const L_VA = 58;
+pub const L_VB = 59;
 pub const FN: u4 = 8;
 pub const FZ: u4 = 4;
 pub const FC: u4 = 2;
@@ -1123,7 +1125,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
         e.written = 0x7fff;
         @memset(wb[0..n], 0x7fff);
     }
-    b.emit(.{ 8, 32, if (wide) wasm.I64 else wasm.I32, 4, wasm.I32, 4, wasm.I64, 6, wasm.I32, 2, wasm.I64, 2, wasm.F64, 3, wasm.I64, 3, wasm.I32 });
+    b.emit(.{ 9, 32, if (wide) wasm.I64 else wasm.I32, 4, wasm.I32, 4, wasm.I64, 6, wasm.I32, 2, wasm.I64, 2, wasm.F64, 3, wasm.I64, 3, wasm.I32, 2, wasm.V128 });
     e.loadRegs(e.used);
     e.loadFlags(live);
     b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_IC), set(L_IC), get(L_CPU), mo(O.i64_load, OFF_LIMIT), set(L_LIMIT), get(L_ENTRY), set(L_NEXT), O.block, wasm.VOID, O.block, wasm.VOID, O.loop, wasm.VOID });
