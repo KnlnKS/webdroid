@@ -87,9 +87,10 @@ export const vfs = {
     return [...this.lazyFiles].map(([path, source]) => ({ path, size: source.size, ...source.stats?.() }));
   },
   under(p: string): boolean {
+    if (this.dirs.has(p)) return true;
     const dir = p.endsWith("/") ? p : p + "/";
     for (const m of [this.files, this.lazyFiles]) for (const k of m.keys()) if (k.startsWith(dir)) return true;
-    return this.dirs.has(p);
+    return false;
   },
   exists(p: string): boolean {
     p = this.norm(p);
@@ -690,12 +691,14 @@ function flushFOS(s: JFOS) {
 // vfs has no partial write, so "rw" is read-modify-write — correct, and the sizes an apk
 // opens this way (a cache index, a downloaded chunk) are the sizes it already unzipped.
 /** `maps` are the live READ_WRITE mappings sharing `buf`: growth moves them to the new storage, as they are the file's pages */
-class JRAF extends JObj { path = ""; buf: Uint8Array = new Uint8Array(0); source: FileSource | null = null; pos = 0; write = false; maps: JBuffer[] | null = null; }
+class JRAF extends JObj { path = ""; buf: Uint8Array = new Uint8Array(0); capacity = 0; source: FileSource | null = null; pos = 0; write = false; maps: JBuffer[] | null = null; }
 const rafGrow = (f: JRAF, need: number) => {
   if (need <= f.buf.length) return;
-  const n = new Uint8Array(need);
+  if (need <= f.capacity) { f.buf = new Uint8Array(f.buf.buffer, f.buf.byteOffset, need); return; }
+  const n = new Uint8Array(Math.max(need, f.capacity ? f.capacity * 2 : 64));
   n.set(f.buf);
-  f.buf = n;
+  f.capacity = n.length;
+  f.buf = n.subarray(0, need);
   if (f.maps) for (const m of f.maps) m.backing.storage = { kind: "direct", ab: n.buffer };
 };
 const rafOpen = function (this: JRAF, p: string, mode: string) {
@@ -707,6 +710,7 @@ const rafOpen = function (this: JRAF, p: string, mode: string) {
   if (source && this.write) throw rt.mkThrowable("java/io/IOException", "read-only file: " + p);
   this.source = this.write ? null : source;
   this.buf = data ?? new Uint8Array(0);
+  this.capacity = this.buf.length;
 };
 rt.register({
   name: "java/io/RandomAccessFile", ctor: JRAF, ifaces: ["java/io/Closeable", "java/io/DataInput", "java/io/DataOutput"],
@@ -768,7 +772,7 @@ rt.register({
     "setLength(J)V": function (this: JRAF, n: bigint) {
       checkFileOpen(this);
       const len = Number(n);
-      if (len <= this.buf.length) this.buf = this.buf.slice(0, len);
+      if (len <= this.buf.length) { this.buf = this.buf.slice(0, len); this.capacity = len; }
       else rafGrow(this, len);
       if (this.pos > len) this.pos = len;
       vfs.write(this.path, this.buf);
@@ -1470,7 +1474,7 @@ rt.register({
       if (size < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "size");
       const file = this.writable();
       if (file instanceof JRAF) {
-        if (size < BigInt(file.buf.length)) { file.buf = file.buf.slice(0, Number(size)); vfs.write(file.path, file.buf); }
+        if (size < BigInt(file.buf.length)) { file.buf = file.buf.slice(0, Number(size)); file.capacity = file.buf.length; vfs.write(file.path, file.buf); }
       } else {
         flushFOS(file);
         const bytes = vfs.read(file.fpath);
