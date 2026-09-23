@@ -594,6 +594,20 @@ and no required native, layout, draw or GLES error. The first feed step in that 
 EGL swaps, despite later videos playing. Original-rate playback remains unverified and the
 final full E2E matrix is pending.
 
+A 1,280-instruction region cap did not reduce the fixed decoder's 1,219 compiled-region count
+further, and timing during that trial overlapped another checkout's heavy Chromium run; the
+640 cap remains. The existing carry test's far branch was lengthened to exercise the new 640
+instruction boundary and passed. A separate attempt to retain the SIMD saturated-narrow result
+for its FPSR Q check and destination removed eight source lines and passed all 560 SIMD/oracle
+checks, but paired fixed-decoder timings changed direction across groups under intermittent
+host contention. The isolated narrow kernel showed no clear gain. That attempt was removed.
+
+A later Chrome DevTools MCP guest reached the For You feed but displayed a loading frame with
+zero EGL swaps. Its log reported HTTP 429 on a TikTok configuration request; the active native
+profile was dominated by `libmetasec_ov.so`, not the decoder. A short DevTools performance trace
+could not be exported because its result exceeded the tool's string limit. That browser session
+therefore supplies no playback-rate evidence and was closed before further timing.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only
