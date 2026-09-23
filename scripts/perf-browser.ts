@@ -19,6 +19,7 @@ const { values } = parseArgs({ options: {
   ms: { type: "string", default: "15000" }, warmup: { type: "string", default: "3000" },
   "align-presentation": { type: "boolean", default: false },
   "cpu-profile": { type: "boolean", default: false },
+  "native-profile": { type: "boolean", default: false },
   "jvm-profile": { type: "boolean", default: false }, "jvm-tier": { type: "string", default: "auto" }, "jvm-hotness": { type: "string", default: "4096" },
   interval: { type: "string" }, "exercise-once": { type: "boolean", default: false }, "setup-shots": { type: "boolean", default: false },
   "setup-settle-cap": { type: "string" },
@@ -139,6 +140,7 @@ try {
     await session.send("Profiler.enable");
     await session.send("Profiler.start");
   }
+  if (values["native-profile"]) await foreground.evaluate(() => globalThis.wd.native.profileReset());
   const measurement = foreground.evaluate(async ({ ms, actions, screen, actionSource, interval, once, offsets, alignPresentation, startState, stateReader }) => {
     const act: typeof performAction = (0, eval)(`(${actionSource})`);
     let matchedState: unknown, stateWaitMs = 0;
@@ -273,6 +275,7 @@ try {
   }, { ms, actions, screen, actionSource: performAction.toString(), interval, once: values["exercise-once"], offsets: inputOffsets, alignPresentation: values["align-presentation"], startState, stateReader });
   const result = await measurement;
   const cpuProfile = values["cpu-profile"] ? (await session.send("Profiler.stop")).profile : undefined;
+  const nativeProfile = values["native-profile"] ? await foreground.evaluate(() => globalThis.wd.native.profile(50)) : undefined;
   const afterMetrics = await session.send("Performance.getMetrics");
   const stateAfter = await readState();
   await session.send("HeapProfiler.collectGarbage");
@@ -289,7 +292,7 @@ try {
   const output = { flow: flow.app, after: values.after, exercise: values.exercise, url: url.href, browser: browser.version(),
     gpu, gpuInfo: gpuInfo.gpu, probe: values.probe, screen, warmup, setup, setupSettleCap, result, alive, tree, metrics, heapBefore, heapAfter, processes, errors,
     ...(jvmProfile ? { jvmProfile } : {}),
-    ...(cpuProfilePath ? { cpuProfilePath } : {}),
+    ...(cpuProfilePath ? { cpuProfilePath } : {}), ...(nativeProfile ? { nativeProfile } : {}),
     stateBefore: startState === undefined ? stateBefore : result.stateBefore, stateAfter, inputOffsets, startExercise: values["start-exercise"], stateReader: values["state-reader"],
     ...(startState !== undefined ? { startState, stateWaitMs: result.stateWaitMs } : {}),
     ...(values["align-presentation"] ? { alignPresentation: true } : {}), ...(interval !== undefined ? { interval } : {}), ...(values["exercise-once"] ? { exerciseOnce: true } : {}) };
