@@ -17,6 +17,7 @@ export type ProcessDiagnostics = {
 export type ProcessSnapshot = { url: string; diagnostics: ProcessDiagnostics };
 
 export function isWebdroidProcessFrame(url: string, origin: string): boolean {
+  if (!URL.canParse(url)) return false;
   const frame = new URL(url), root = new URL(origin);
   return frame.origin === root.origin && (frame.pathname === "/" || frame.pathname === "/process");
 }

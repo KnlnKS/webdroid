@@ -7,7 +7,7 @@ import { loadPng } from "./lib/png";
 import { diffImages } from "./lib/diff";
 import { E2E_DIR } from "./lib/util";
 import { apkHashes, flowSchemaHash, repositoryRevision, type CoverageIndex } from "./coverage";
-import { screenParam } from "./types";
+import { screenParam, waitHorizonMs } from "./types";
 import { BASE_URL } from "./lib/util";
 import { isWebdroidProcessFrame } from "./lib/processes";
 
@@ -91,7 +91,7 @@ async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
   const browser = driver.browserVersion();
   const screen = screenParam(driver.screen);
   try {
-    runs = await captureFlow(flow, driver, { jobs: effectiveJobs, mode: "fast" });
+    runs = await captureFlow(flow, driver, { jobs: effectiveJobs, mode: "fast", log: () => {} });
     sourceCoverage = collectCoverage ? await driver.takeSourceCoverage() : [];
   } finally {
     await driver.close();
@@ -117,25 +117,18 @@ async function retainFailure(outcome: Outcome): Promise<void> {
 
 console.log(`fast flows: ${flows.map((flow) => flow.app).join(", ")} (${jobs} at a time)`);
 await rm(`${E2E_DIR}actual-fast/failures`, { recursive: true, force: true });
-const queue = [...flows];
+const weight = (flow: Flow) => flow.steps.reduce((total, step) => total + waitHorizonMs(step.wait) + 300, 0);
+const queue = [...flows].sort((a, b) => weight(b) - weight(a));
 const outcomes: Outcome[] = [];
 const started = performance.now();
-const motion = queue.filter((flow) => flow.steps.some((step) => step.fastEvidence?.kind === "motion"));
-const ordinary = queue.filter((flow) => !motion.includes(flow));
-await Promise.all(Array.from({ length: Math.min(jobs, ordinary.length) }, async () => {
-  for (let flow = ordinary.shift(); flow; flow = ordinary.shift()) {
+await Promise.all(Array.from({ length: Math.min(jobs, queue.length) }, async () => {
+  for (let flow = queue.shift(); flow; flow = queue.shift()) {
     const outcome = await runFlow(flow, jobs);
     outcomes.push(outcome);
     console.log(`  ${flow.app}: ${flow.steps.length} steps, ${(outcome.ms / 1000).toFixed(1)}s` +
       (outcome.errors.length ? `, ${outcome.errors.length} failure(s)` : ""));
   }
 }));
-for (const flow of motion) {
-  const outcome = await runFlow(flow, 1);
-  outcomes.push(outcome);
-  console.log(`  ${flow.app}: ${flow.steps.length} steps, ${(outcome.ms / 1000).toFixed(1)}s` +
-    (outcome.errors.length ? `, ${outcome.errors.length} failure(s)` : ""));
-}
 
 const order = new Map(deterministic.map((flow, index) => [flow.app, index]));
 outcomes.sort((a, b) => (order.get(a.flow.app) ?? 0) - (order.get(b.flow.app) ?? 0));
