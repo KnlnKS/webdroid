@@ -1,7 +1,7 @@
 type Point = [number, number];
 type Context = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
-function devicePoint(matrix: DOMMatrix, x: number, y: number): Point {
+export function devicePoint(matrix: DOMMatrix, x: number, y: number): Point {
   const f = Math.fround;
   return [f(f(f(matrix.a * x) + f(matrix.c * y)) + matrix.e),
     f(f(f(matrix.b * x) + f(matrix.d * y)) + matrix.f)];
@@ -105,4 +105,56 @@ export function hairlineLine(ctx: Context, x0: number, y0: number, x1: number, y
   if (!clipped) return null;
   const pixels = new Path2D();
   return rasterLine(clipped[0], clipped[1], width, height, pixels) ? pixels : null;
+}
+
+function samplingRegion(ctx: Context, left: number, top: number, right: number, bottom: number) {
+  const m = ctx.getTransform(), det = m.a * m.d - m.b * m.c;
+  if (!det || !Number.isFinite(det)) return null;
+  const corners = [[left, top], [right, top], [right, bottom], [left, bottom]]
+    .map(([x, y]) => devicePoint(m, x, y));
+  if (!corners.every(([x, y]) => Number.isFinite(x) && Number.isFinite(y))) return null;
+  const x0 = Math.max(0, Math.floor(Math.min(...corners.map(p => p[0]))));
+  const y0 = Math.max(0, Math.floor(Math.min(...corners.map(p => p[1]))));
+  const x1 = Math.min(ctx.canvas.width, Math.ceil(Math.max(...corners.map(p => p[0]))));
+  const y1 = Math.min(ctx.canvas.height, Math.ceil(Math.max(...corners.map(p => p[1]))));
+  if ((x1 - x0) * (y1 - y0) > 250_000) return null;
+  return { m, det, x0, y0, x1, y1 };
+}
+
+export function sampledFill(ctx: Context, left: number, top: number, right: number, bottom: number,
+  contains: (x: number, y: number) => boolean): Path2D | null {
+  const region = samplingRegion(ctx, left, top, right, bottom);
+  if (!region) return null;
+  const { m, det, x0, y0, x1, y1 } = region;
+  const pixels = new Path2D();
+  for (let y = y0; y < y1; y++) {
+    const dy = y + 0.5 - m.f;
+    let localX = (m.d * (x0 + 0.5 - m.e) - m.c * dy) / det;
+    let localY = (m.a * dy - m.b * (x0 + 0.5 - m.e)) / det;
+    let start = -1;
+    for (let x = x0; x <= x1; x++) {
+      const inside = x < x1 && contains(localX, localY);
+      if (inside && start < 0) start = x;
+      else if (!inside && start >= 0) { pixels.rect(start, y, x - start, 1); start = -1; }
+      localX += m.d / det; localY -= m.b / det;
+    }
+  }
+  return pixels;
+}
+
+export function sampledCoverage(ctx: Context, left: number, top: number, right: number, bottom: number,
+  contains: (x: number, y: number) => boolean): Path2D[] | null {
+  const region = samplingRegion(ctx, left, top, right, bottom);
+  if (!region) return null;
+  const { m, det, x0, y0, x1, y1 } = region;
+  const paths = Array.from({ length: 17 }, () => new Path2D());
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    let count = 0;
+    for (let sy = 0; sy < 4; sy++) for (let sx = 0; sx < 4; sx++) {
+      const dx = x + (sx + 0.5) / 4 - m.e, dy = y + (sy + 0.5) / 4 - m.f;
+      if (contains((m.d * dx - m.c * dy) / det, (m.a * dy - m.b * dx) / det)) count++;
+    }
+    if (count) paths[count]!.rect(x, y, 1, 1);
+  }
+  return paths;
 }

@@ -1,7 +1,7 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
 import { isRecording, recordOrRun, recordingContext, replayCanvas, replayWithSemantics, type Ctx2D } from "./recording";
-import { hairlineLine, hairlineRect } from "./hairline";
+import { devicePoint, hairlineLine, hairlineRect, sampledCoverage, sampledFill } from "./hairline";
 import { drawSkiaText } from "./skia-text";
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
@@ -14,7 +14,7 @@ import { readStreamFully, vfs, type JFileDescriptor } from "../jvm/natives/jio";
 import { javaFdBytes } from "../native/stdio";
 import { jclsNameOf } from "./apphost";
 import { JBuffer } from "../jvm/natives/jnio";
-import { JPath, inversePath } from "./path";
+import { JPath, inversePath, pathBounds } from "./path";
 import { perf } from "../perf";
 import { type JRenderEffect } from "./rendereffect";
 import { JTypedValue, type JDisplayMetrics } from "./util";
@@ -1553,6 +1553,31 @@ export class JCanvas extends JObj {
     } finally { if (shadow) ctx.restore(); ctx.restore(); }
   }
   drawShape(p: JPaint, fill: (ctx: typeof this.ctx) => void, stroke: (ctx: typeof this.ctx) => void) {
+    if (this.bmp && p.style === 2 && p.strokeWidth > 0 && !p.antiAlias &&
+      !p.shader && !p.shaderObj && !p.maskFilter && !p.shadowRadius && !p.dash &&
+      !isRecording(this.ctx) && this.w * this.h <= 250_000) {
+      const layer = new OffscreenCanvas(this.w, this.h).getContext("2d")!;
+      layer.setTransform(this.ctx.getTransform());
+      layer.fillStyle = layer.strokeStyle = "white";
+      layer.lineWidth = p.strokeWidth;
+      layer.lineCap = p.strokeCapN;
+      layer.lineJoin = p.strokeJoinN;
+      fill(layer); stroke(layer);
+      const mask = layer.getImageData(0, 0, this.w, this.h);
+      for (let i = 3; i < mask.data.length; i += 4) mask.data[i] = mask.data[i]! >= 128 ? 255 : 0;
+      layer.resetTransform(); layer.putImageData(mask, 0, 0);
+      layer.globalCompositeOperation = "source-in";
+      layer.fillStyle = p.fillStyle(layer) as string;
+      layer.fillRect(0, 0, this.w, this.h);
+      const ctx = this.ctx;
+      ctx.save();
+      try {
+        ctx.resetTransform();
+        if (p.blend) ctx.globalCompositeOperation = p.blend;
+        ctx.drawImage(layer.canvas, 0, 0);
+      } finally { ctx.restore(); }
+      return;
+    }
     if (p.maskFilter?.style) return this.drawMask(p, fill, stroke);
     // A blended paint owns the composite op only for its own ops — restore it straight after,
     // so a CLEAR fill can never leak into the next drawImage/drawText and erase it.
@@ -1575,7 +1600,7 @@ export class JCanvas extends JObj {
           fill(lm && !pattern ? this.shaderClipCtx(lm) : this.ctx);
         }
       }
-      if (p.style === 1 || p.style === 2) { this.prep(p, true); stroke(this.ctx); }
+      if (p.style === 1 || (p.style === 2 && p.strokeWidth !== 0)) { this.prep(p, true); stroke(this.ctx); }
     } finally {
       if (prev) this.ctx.globalCompositeOperation = prev;
       if (filter !== null) this.ctx.filter = filter;
@@ -1776,15 +1801,23 @@ function viewportClipBounds(cv: JCanvas, out: JRect): number {
   let left = clip?.[0] ?? 0, top = clip?.[1] ?? 0;
   let right = clip?.[2] ?? cv.w, bottom = clip?.[3] ?? cv.h;
   if (polygon) {
+    const minY = Math.max(0, Math.floor(Math.min(...polygon.map(p => p[1]))));
+    const maxY = Math.min(cv.h, Math.ceil(Math.max(...polygon.map(p => p[1]))));
     left = top = Infinity; right = bottom = -Infinity;
-    for (const [x, y] of polygon) {
-      if (x < left) left = x;
-      if (y < top) top = y;
-      if (x > right) right = x;
-      if (y > bottom) bottom = y;
+    for (let y = minY; y < maxY; y++) {
+      const at = y + 0.5, crossings: number[] = [];
+      for (let i = 0; i < polygon.length; i++) {
+        const [ax, ay] = polygon[i]!, [bx, by] = polygon[(i + 1) % polygon.length]!;
+        if ((ay <= at && at < by) || (by <= at && at < ay))
+          crossings.push(ax + (at - ay) * (bx - ax) / (by - ay));
+      }
+      if (crossings.length < 2) continue;
+      const x0 = Math.max(0, Math.floor(Math.min(...crossings) - 0.5) + 1);
+      const x1 = Math.min(cv.w, Math.ceil(Math.max(...crossings) - 0.5));
+      if (x0 >= x1) continue;
+      left = Math.min(left, x0); right = Math.max(right, x1);
+      top = Math.min(top, y); bottom = Math.max(bottom, y + 1);
     }
-    left = Math.floor(left); top = Math.floor(top);
-    right = Math.floor(right); bottom = Math.floor(bottom);
   }
   if (!det || !Number.isFinite(det) || !(right > left && bottom > top)) {
     out.left = out.top = out.right = out.bottom = 0;
@@ -1802,7 +1835,19 @@ function viewportClipBounds(cv: JCanvas, out: JRect): number {
 }
 function drawRect(this: JCanvas, l: number, t: number, r: number, b: number, p: JPaint) {
   const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
-  if (!width || !height) return;
+  if ((!width || !height) && p.style !== 1) return;
+  if (this.bmp && !p.antiAlias && (p.style === 0 || p.style === 2 && p.strokeWidth === 0) &&
+    !p.shader && !p.shaderObj && !p.maskFilter && !p.shadowRadius && !isRecording(this.ctx)) {
+    const m = this.ctx.getTransform();
+    const pixelAligned = m.a === 1 && m.b === 0 && m.c === 0 && m.d === 1 &&
+      Number.isInteger(left + m.e) && Number.isInteger(top + m.f) &&
+      Number.isInteger(left + width + m.e) && Number.isInteger(top + height + m.f);
+    if (!pixelAligned) {
+      const pixels = sampledFill(this.ctx, left, top, left + width, top + height,
+        (x, y) => x >= left && x < left + width && y >= top && y < top + height);
+      if (pixels) return drawHairline(this, p, pixels);
+    }
+  }
   if (this.bmp && p.style === 1 && p.strokeWidth === 0 && !p.antiAlias && !p.shader && !p.shaderObj &&
     !p.maskFilter && !p.shadowRadius && !p.dash && !isRecording(this.ctx)) {
     const ctx = this.ctx, pixels = hairlineRect(ctx, left, top, left + width, top + height, p.strokeCapN);
@@ -1845,6 +1890,34 @@ function drawColor(this: JCanvas, color: number, clear = false) {
 function drawArc(this: JCanvas, l: number, t: number, r: number, b: number, start: number, sweep: number, useCenter: number, p: JPaint) {
   if (!(r > l && b > t) && Math.abs(sweep) < 360) return;
   const left = Math.min(l, r), top = Math.min(t, b), right = Math.max(l, r), bottom = Math.max(t, b);
+  if (this.bmp && !p.antiAlias && (p.style === 0 || p.style === 2 && p.strokeWidth === 0) && Math.abs(sweep) >= 360 &&
+    right > left && bottom > top && !p.shader && !p.shaderObj && !p.maskFilter &&
+    !p.shadowRadius && !isRecording(this.ctx)) {
+    const cx = (left + right) / 2, cy = (top + bottom) / 2, rx = (right - left) / 2, ry = (bottom - top) / 2;
+    const pixels = sampledFill(this.ctx, left, top, right, bottom,
+      (x, y) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1);
+    if (pixels) return drawHairline(this, p, pixels);
+  }
+  if (this.bmp && p.antiAlias && p.style === 0 && Math.abs(sweep) >= 360 &&
+    bottom > top && bottom - top <= 1 && !p.shader && !p.shaderObj && !p.maskFilter &&
+    !p.shadowRadius && !isRecording(this.ctx)) {
+    const cx = (left + right) / 2, cy = (top + bottom) / 2, rx = (right - left) / 2, ry = (bottom - top) / 2;
+    const coverage = sampledCoverage(this.ctx, left, top, right, bottom,
+      (x, y) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1);
+    if (coverage) {
+      const ctx = this.ctx;
+      ctx.save();
+      try {
+        ctx.resetTransform(); ctx.fillStyle = p.fillStyle(ctx);
+        if (p.blend) ctx.globalCompositeOperation = p.blend;
+        for (let count = 1; count <= 16; count++) {
+          ctx.globalAlpha = count / 16;
+          ctx.fill(coverage[count]!);
+        }
+      } finally { ctx.restore(); }
+      return;
+    }
+  }
   const path = new Path2D();
   const cx = (left + right) / 2, cy = (top + bottom) / 2;
   if (useCenter) path.moveTo(cx, cy);
@@ -1859,6 +1932,20 @@ function drawOval(this: JCanvas, l: number, t: number, r: number, b: number, p: 
 function drawRoundRect(this: JCanvas, l: number, t: number, r: number, b: number, rx: number, ry: number, p: JPaint) {
   const left = Math.min(l, r), top = Math.min(t, b), width = Math.abs(r - l), height = Math.abs(b - t);
   if ((!width || !height) && p.style !== 1) return;
+  if (width && height && this.bmp && !p.antiAlias && (p.style === 0 || p.style === 2 && p.strokeWidth === 0) &&
+    !p.shader && !p.shaderObj && !p.maskFilter && !p.shadowRadius && !isRecording(this.ctx)) {
+    const radiusX = Math.max(0, rx), radiusY = Math.max(0, ry);
+    const scale = Math.min(1, width / (2 * radiusX), height / (2 * radiusY));
+    const cx = radiusX * scale, cy = radiusY * scale;
+    const pixels = sampledFill(this.ctx, left, top, left + width, top + height, (x, y) => {
+      if (x < left || x >= left + width || y < top || y >= top + height) return false;
+      if (!cx || !cy) return true;
+      const dx = x < left + cx ? (x - left - cx) / cx : x > left + width - cx ? (x - left - width + cx) / cx : 0;
+      const dy = y < top + cy ? (y - top - cy) / cy : y > top + height - cy ? (y - top - height + cy) / cy : 0;
+      return dx * dx + dy * dy <= 1;
+    });
+    if (pixels) return drawHairline(this, p, pixels);
+  }
   const path = new Path2D();
   path.roundRect(left, top, width, height, { x: Math.max(rx, 0), y: Math.max(ry, 0) });
   this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
@@ -1999,9 +2086,7 @@ export const canvasMethods: NativeSpec["methods"] = {
   },
   "drawCircle(FFFLandroid/graphics/Paint;)V": function (this: JCanvas, x: number, y: number, r: number, p: JPaint) {
     if (!(r > 0)) return;
-    const path = new Path2D();
-    path.arc(x, y, r, 0, Math.PI * 2);
-    this.drawShape(p, (c) => c.fill(path), (c) => c.stroke(path));
+    drawOval.call(this, x - r, y - r, x + r, y + r, p);
   },
   "drawOval(FFFFLandroid/graphics/Paint;)V": drawOval,
   "drawOval(Landroid/graphics/RectF;Landroid/graphics/Paint;)V": function (this: JCanvas, r: JRectF, p: JPaint) {
@@ -2016,6 +2101,21 @@ export const canvasMethods: NativeSpec["methods"] = {
       !p.maskFilter && !p.shadowRadius && !p.dash && !isRecording(this.ctx)) {
       const pixels = hairlineLine(this.ctx, x0, y0, x1, y1, p.strokeCapN);
       if (pixels) return drawHairline(this, p, pixels);
+    }
+    if (this.bmp && p.strokeWidth === 0 && p.antiAlias && !p.shader && !p.shaderObj &&
+      !p.maskFilter && !p.shadowRadius && !p.dash && !isRecording(this.ctx)) {
+      const ctx = this.ctx, m = ctx.getTransform();
+      const start = devicePoint(m, x0, y0), end = devicePoint(m, x1, y1);
+      if (m.a * m.d !== m.b * m.c && start.every(Number.isFinite) && end.every(Number.isFinite)) {
+        ctx.save();
+        try {
+          this.prep(p, true);
+          if (p.blend) ctx.globalCompositeOperation = p.blend;
+          ctx.resetTransform();
+          ctx.beginPath(); ctx.moveTo(...start); ctx.lineTo(...end); ctx.stroke();
+        } finally { ctx.restore(); }
+        return;
+      }
     }
     this.prep(p, true);
     this.ctx.beginPath();
@@ -2037,6 +2137,67 @@ export const canvasMethods: NativeSpec["methods"] = {
     this.ctx.fillRect(x - p.strokeWidth / 2, y - p.strokeWidth / 2, Math.max(1, p.strokeWidth), Math.max(1, p.strokeWidth));
   },
   "drawPath(Landroid/graphics/Path;Landroid/graphics/Paint;)V": function (this: JCanvas, path: JPath, p: JPaint) {
+    if (path.inverseFill && this.bmp && p.style === 1 && p.strokeWidth > 0 &&
+      this.w * this.h <= 250_000 && !p.shader && !p.shaderObj && !p.maskFilter &&
+      !p.shadowRadius && !p.dash && !isRecording(this.ctx)) {
+      const bounds = { left: 0, top: 0, right: 0, bottom: 0 };
+      pathBounds(path, bounds);
+      const m = this.ctx.getTransform();
+      const corners = [[bounds.left, bounds.top], [bounds.right, bounds.top],
+        [bounds.right, bounds.bottom], [bounds.left, bounds.bottom]].map(([x, y]) => devicePoint(m, x, y));
+      const pad = p.strokeWidth * Math.max(Math.hypot(m.a, m.b), Math.hypot(m.c, m.d)) + 2;
+      if (Math.max(...corners.map(point => point[0])) + pad < 0 ||
+        Math.min(...corners.map(point => point[0])) - pad > this.w ||
+        Math.max(...corners.map(point => point[1])) + pad < 0 ||
+        Math.min(...corners.map(point => point[1])) - pad > this.h) return;
+      const ctx = this.ctx, layer = new OffscreenCanvas(this.w, this.h).getContext("2d")!;
+      layer.fillStyle = p.fillStyle(layer) as string;
+      layer.fillRect(0, 0, this.w, this.h);
+      layer.setTransform(m);
+      layer.globalCompositeOperation = "destination-out";
+      layer.strokeStyle = "white";
+      layer.lineWidth = p.strokeWidth;
+      layer.lineCap = p.strokeCapN;
+      layer.lineJoin = p.strokeJoinN;
+      layer.stroke(path.path());
+      ctx.save();
+      try {
+        ctx.resetTransform();
+        if (p.blend) ctx.globalCompositeOperation = p.blend;
+        ctx.drawImage(layer.canvas, 0, 0);
+      } finally { ctx.restore(); }
+      return;
+    }
+    if (path.inverseFill && path.fillRule === "nonzero" && this.bmp && p.style === 0 && this.w * this.h <= 250_000 &&
+      !p.shader && !p.shaderObj && !p.maskFilter && !p.shadowRadius && !isRecording(this.ctx)) {
+      const ctx = this.ctx, layer = new OffscreenCanvas(this.w, this.h).getContext("2d")!;
+      layer.fillStyle = p.fillStyle(layer) as string;
+      layer.fillRect(0, 0, this.w, this.h);
+      layer.globalCompositeOperation = "destination-out";
+      layer.setTransform(ctx.getTransform());
+      layer.fillStyle = "white";
+      layer.fill(path.path(), path.fillRule);
+      ctx.save();
+      try {
+        ctx.resetTransform();
+        if (p.blend) ctx.globalCompositeOperation = p.blend;
+        ctx.drawImage(layer.canvas, 0, 0);
+      } finally { ctx.restore(); }
+      return;
+    }
+    if (this.bmp && p.style === 1 && p.strokeWidth === 0 && p.antiAlias &&
+      !p.shader && !p.shaderObj && !p.maskFilter && !p.shadowRadius && !p.dash && !isRecording(this.ctx)) {
+      const ctx = this.ctx, m = ctx.getTransform();
+      const devicePath = new Path2D();
+      devicePath.addPath(path.path(), m);
+      ctx.save();
+      try {
+        this.prep(p, true);
+        if (p.blend) ctx.globalCompositeOperation = p.blend;
+        ctx.resetTransform(); ctx.stroke(devicePath);
+      } finally { ctx.restore(); }
+      return;
+    }
     if (!path.inverseFill) {
       this.drawShape(p, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()));
       return;
