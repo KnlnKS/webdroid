@@ -8,7 +8,7 @@ import { hostLib, hostData, type HostFn, type ArgReader, PTR, stp, ldp, vaList, 
 import { E } from "./abi";
 import { type Cpu, cpuByTid, cpuByOsTid, sigHandlers } from "./cpu";
 import { tidOf } from "./pthread";
-import { fail, logLine, LAYOUT, strncpy, snprintfInto, readTm } from "./libc";
+import { fail, fillSysinfo, logLine, LAYOUT, strncpy, snprintfInto, readTm } from "./libc";
 import { MONTHS, DAYS } from "../jvm/natives/jtime";
 import { format } from "./printf";
 import { device } from "../shell/config";
@@ -90,16 +90,7 @@ export function procInit(): void {
   const cpuMask = (1 << device.cpu.cores) - 1;
   const chk = (n: number, len: number, cpu: Cpu) => { if (n > len) cpu.fault(`fortify: ${n} bytes into a ${len}-byte object`); };
   const M: Record<string, HostFn> = {
-    sysinfo: (_c, a) => {
-      const p = a.p(), total = device.cpu.memKb * 1024;
-      mem.memset(p, 0, 112);
-      stp(p, Math.floor(performance.now() / 1000));                                 // uptime
-      const at = (i: number) => p + (PTR === 8 ? 32 + 8 * i : 16 + 4 * i);        // totalram, freeram, sharedram, bufferram, totalswap, freeswap
-      stp(at(0), total); stp(at(1), total >> 1);
-      mem.st16(PTR === 8 ? p + 80 : p + 40, 64);                                     // procs
-      mem.st32(PTR === 8 ? p + 104 : p + 52, 1);                                     // mem_unit
-      return 0;
-    },
+    sysinfo: (_c, a) => { fillSysinfo(a.p()); return 0; },
     sched_getaffinity: (_c, a) => { a.i(); const n = a.u(), set = a.p(); mem.memset(set, 0, n); mem.st32(set, cpuMask); return 0; },
     sched_setaffinity: () => 0, sched_getcpu: () => 0,
     __sched_cpucount: (_c, a) => { const n = a.u(), set = a.p(); let k = 0; for (let i = 0; i < n; i++) { let b = u8[set + i]; while (b) { k += b & 1; b >>= 1; } } return k; },

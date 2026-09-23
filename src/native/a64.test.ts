@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mem } from "./mem";
 import { setA64 } from "./cpu";
 import { run, RET } from "./a64.testkit";
+import { device } from "../shell/config";
 
 beforeAll(() => setA64(true));
 afterAll(() => setA64(false));
@@ -422,6 +423,6 @@ describe("raw syscalls", () => {
     expect([c.w[2], c.w[3]]).toEqual([0, 0]);          // sysinfo succeeded
     expect([c.w[0], c.w[1]]).toEqual([-38, -1]);       // -ENOSYS, sign-extended to x0
     expect(mem.ld32(buf + 104)).toBe(1);               // mem_unit
-    expect(Number(mem.ld64(buf + 32))).toBe(4 * 2 ** 30);
+    expect(Number(mem.ld64(buf + 32))).toBe(device.cpu.memKb * 1024);
   });
 });

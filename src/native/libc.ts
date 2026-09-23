@@ -206,17 +206,16 @@ const SYSCALL_NR32: Record<number, string> = {
   78: "gettimeofday", 91: "munmap", 125: "mprotect",
   174: "rt_sigaction", 332: "readlinkat", 359: "pipe2",
 };
-/** the device's RAM as sysinfo and ActivityManager.getMemoryInfo both report it */
-const TOTAL_RAM = 4 * 2 ** 30, FREE_RAM = 2 * 2 ** 30;
 /** struct sysinfo: uptime, loads[3], totalram, freeram, sharedram, bufferram, totalswap, freeswap
  *  at the long stride, then procs (u16), totalhigh, freehigh, mem_unit (u32); a 32-bit build
  *  scales by mem_unit where the byte counts would not fit */
-function fillSysinfo(p: number): void {
+export function fillSysinfo(p: number): void {
   const L = PTR, unit = L === 8 ? 1 : 4096;
+  const totalRam = device.cpu.memKb * 1024;
   mem.memset(p, 0, L === 8 ? 112 : 64);
   const put = (off: number, v: number) => { if (L === 8) mem.st64(p + off, BigInt(v)); else mem.st32(p + off, v); };
   put(0, Math.floor(guestNow() / 1000));
-  put(L * 4, TOTAL_RAM / unit); put(L * 5, FREE_RAM / unit);
+  put(L * 4, totalRam / unit); put(L * 5, totalRam / (2 * unit));
   mem.st16(p + L * 10, 1);
   mem.st32(p + (L === 8 ? 104 : 52), unit);
 }
