@@ -799,6 +799,26 @@ differences were 39.80% FitNotes, 42.45% Mihon app, 27.63% Harmonic, and 9.07% M
 onboarding. Live content and unmatched clips prevent causal FPS or score comparisons, and no
 goldens changed.
 
+A further ten-second TikTok decoder profile attributed 2.0 of 2.28 billion retired guest
+instructions to four native `pthread` decoder workers, each doing 471–537 million instructions.
+They currently share one JavaScript process realm and therefore execute serially. A separate
+clip made about 237,000 host calls in ten seconds; temporary per-call timing attributed about
+0.59 seconds to the sampled frequent host bodies, including 0.42 seconds in repeated SQLite
+`stat`/`open` probes of one journal. Those calls are not enough to explain the roughly five
+seconds of native execution per sample. The timing and path probes were removed.
+
+The virtual device reports four CPUs through native `sysconf`, Android `Os.sysconf`, and
+`/proc/cpuinfo`, but Java `Runtime.availableProcessors()` had reported the host browser's
+hardware-concurrency count. It now uses the same device profile. A focused TikTok replay
+rendered 13/13 without new platform gaps, native requirements, wedges, timeouts, or rendering
+errors. Its first feed displayed a swipe tutorial until interaction; later live clips differed,
+so their EGL counts cannot establish a playback gain. A fixed 320-frame ByteVC1 comparison
+with a temporary one-core virtual profile retired the same 2.49 billion instructions and showed
+no repeatable speedup versus four cores; that profile change was rejected. The Wasm core can
+compile and instantiate with shared memory, and Bun can clone that memory to a worker, but the
+current browser page is not cross-origin isolated. Parallel guest execution would also need
+per-worker JIT tables and synchronization of host calls and core state; no such change is shipped.
+
 ## TikTok video playback follow-up — 2026-09-23
 
 An isolated `codex/tiktok-video-playback` worktree starts at `9a038ff3`. A fresh TikTok-only

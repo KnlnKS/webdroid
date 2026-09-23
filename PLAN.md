@@ -64,6 +64,21 @@ needed for a matched before/after FPS comparison. The fixed 71-frame ByteVC1 pat
 3,583 JIT fallbacks over roughly 349 million guest instructions, so compiled execution is
 the principal remaining cost. Avoid app-specific decoder substitution.
 
+Thread attribution now shows about 2.0 of 2.28 billion guest instructions in four decoder
+pthread workers during one ten-second live clip. Their work is serialized in one JavaScript
+realm. Frequent host-call bodies consumed about 0.59 seconds in another ten-second sample,
+making shared-memory native execution a more consequential avenue than host-call micro-tuning.
+The core can compile for shared Wasm memory and Bun can pass that memory to a worker, but the
+browser page lacks cross-origin isolation and JIT tables are local to each worker. Before any
+parallel runtime change, resolve cross-origin isolation, JIT installation barriers, host-call
+ownership, shared core metadata, and data-race safety in a controlled prototype.
+
+Java `Runtime.availableProcessors()` now reports the same four cores as the virtual device's
+native and procfs interfaces. TikTok-only verification passed 13/13; no fixed-source live FPS
+comparison establishes a gain. A one-core virtual profile did not improve the fixed decoder
+capture and was not retained. The full E2E matrix on this latest commit is reserved for the
+end of the goal, as requested.
+
 ---
 
 # TikTok video playback follow-up — 2026-09-23
