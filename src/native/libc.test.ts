@@ -69,3 +69,34 @@ test("memmem searches binary ranges without treating NUL as a terminator", async
   }
   setA64(false);
 });
+
+test("ARM EABI memory fill takes the byte count before the value", async () => {
+  setA64(false); libcInit();
+  const cpu = new Cpu(new JThread(), "aeabi-memset-test"), data = mem.malloc(8);
+  try {
+    for (const name of ["__aeabi_memset", "__aeabi_memset4", "__aeabi_memset8"]) {
+      mem.u8.fill(0x7f, data, data + 8);
+      await cpu.call(lookupHost(name, "libc.so")!, [data, 3, 0x1234]);
+      expect(Array.from(mem.u8.slice(data, data + 8))).toEqual([0x34, 0x34, 0x34, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f]);
+    }
+  } finally { mem.free(data); cpu.dispose(); }
+});
+
+test("raw ARM faccessat accepts its three kernel arguments", async () => {
+  setA64(false); libcInit();
+  const cpu = new Cpu(new JThread(), "faccessat-test"), path = mem.malloc(16);
+  mem.u8.set(new TextEncoder().encode("/dev/urandom\0"), path);
+  try {
+    expect(await cpu.call(lookupHost("syscall", "libc.so")!, [334, -100, path, 0, 0x4000])).toBe(0);
+  } finally { mem.free(path); cpu.dispose(); }
+});
+
+test("timegm64 returns seconds beyond the ARM32 time_t range", async () => {
+  setA64(false); libcInit();
+  const cpu = new Cpu(new JThread(), "timegm64-test"), tm = mem.malloc(36);
+  mem.i32.set([0, 0, 0, 1, 0, 140, 0, 0, 0], tm >>> 2);
+  try {
+    const lo = await cpu.call(lookupHost("timegm64", "libc.so")!, [tm]);
+    expect(BigInt(cpu.ret1 >>> 0) << 32n | BigInt(lo >>> 0)).toBe(2208988800n);
+  } finally { mem.free(tm); cpu.dispose(); }
+});

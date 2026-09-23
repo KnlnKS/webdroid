@@ -40,13 +40,33 @@ fn thumbCall(h: u32, h2: u32) bool {
 fn thumbBranch(h: u32, h2: u32) bool {
     return (h & 0xfff0 == 0xe8d0 and h2 & 0xffe0 == 0xf000) or (h & 0xf800 == 0xf000 and h2 & 0xd000 == 0x9000);
 }
+fn thumbCondBranch(h: u32, h2: u32) bool {
+    return h & 0xf800 == 0xf000 and h2 & 0xd000 == 0x8000 and bits(h, 6, 4) < 14;
+}
+fn thumbCondTarget(pc: u32, h: u32, h2: u32) u32 {
+    const raw = (((h >> 10) & 1) << 20) | (((h2 >> 11) & 1) << 19) | (((h2 >> 13) & 1) << 18) | ((h & 0x3f) << 12) | ((h2 & 0x7ff) << 1);
+    return pc +% 4 +% @as(u32, @bitCast(@as(i32, @bitCast(raw << 11)) >> 11));
+}
 
 const ItBody = union(enum) {
     move_imm: struct { d: u32, imm: u32 },
+    move_half: WideMove,
     move_reg: struct { d: u32, m: u32 },
     shift_left: struct { d: u32, m: u32, amount: u32 },
     load_byte: struct { d: u32, n: u32, offset: u32 },
 };
+const WideMove = struct { d: u32, imm: u32, top: bool };
+fn wideMove(h: u32, h2: u32) ?WideMove {
+    const op = h & 0xfbf0;
+    const d = bits(h2, 8, 4);
+    if ((op != 0xf240 and op != 0xf2c0) or h2 & 0x8000 != 0 or d == 15) return null;
+    return .{ .d = d, .imm = ((h & 15) << 12) | (((h >> 10) & 1) << 11) | (((h2 >> 12) & 7) << 8) | (h2 & 255), .top = op == 0xf2c0 };
+}
+fn emitWideMove(e: *Emit, move: WideMove) void {
+    const b = e.b;
+    if (move.top) b.emit(.{ get(L_X + move.d), c32(0xffff), O.i32_and, c32(@bitCast(move.imm << 16)), O.i32_or }) else b.i32c(@bitCast(move.imm));
+    setR(e, move.d);
+}
 const ItOp = struct {
     pc: u32,
     cc: u8,
@@ -64,6 +84,7 @@ fn itBody(at: u32, word: u32, len: u32) ?ItBody {
         }
         if (word == 0xf04f and second & 0xf000 == 0 and bits(second, 8, 4) < 15)
             return .{ .move_imm = .{ .d = bits(second, 8, 4), .imm = second & 255 } };
+        if (wideMove(word, second)) |move| return .{ .move_half = move };
         return null;
     }
     if (word & 0xf800 == 0x2000) return .{ .move_imm = .{ .d = (word >> 8) & 7, .imm = word & 255 } };
@@ -231,7 +252,13 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
     if (h >= 0xe800) {
         const h2: u32 = mem.ld(u16, pc + 2);
         cpu.cover(page, pc, pc + 2);
-        return .{ .len = 4, .ends = thumbCall(h, h2) or thumbBranch(h, h2) or (h == 0xf3bf and h2 & 0xfff0 == 0x8f60) };
+        const conditional = thumbCondBranch(h, h2);
+        if (conditional) {
+            b.taken = jit.blockFor(r, thumbCondTarget(pc, h, h2));
+            b.fall = if ((pc + 4) & (abi.PAGE_SIZE - 1) != 0) jit.blockFor(r, pc + 4) else -1;
+        }
+        return .{ .len = 4, .ends = conditional or thumbCall(h, h2) or thumbBranch(h, h2) or
+            (h == 0xe8bd and h2 & 0x8000 != 0) or (h == 0xf3bf and h2 & 0xfff0 == 0x8f60) };
     }
     switch (h >> 12) {
         4 => if ((h & 0xfc00) == 0x4400) {
@@ -444,6 +471,7 @@ fn armBody(e: *Emit, w: u32, pc: u32, k: u32) bool {
                 if (P) b.emit(.{ c32(4), O.i32_add });
             } else b.emit(.{ c32(@intCast(if (P) 4 * n else 4 * n - 4)), O.i32_sub });
             b.set(L_A);
+            e.checkLowAddress();
             if (Wb and Ld) blockWriteback(e, rn, U, n);
             var off: u32 = 0;
             for (0..16) |i| if (list & (@as(u32, 1) << @intCast(i)) != 0) {
@@ -464,7 +492,7 @@ fn armBody(e: *Emit, w: u32, pc: u32, k: u32) bool {
             return false;
         },
         else => {
-            if (!jitfp.emitVfp(e, w)) e.fallback(pc, k);
+            if (!jitfp.emitVfp(e, w) and !jitfp.emitVfpMemory(e, w)) e.fallback(pc, k);
             return false;
         },
     }
@@ -690,6 +718,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                     e.pc = op.pc;
                     switch (op.body) {
                         .move_imm => |v| b.emit(.{ c32(@intCast(v.imm)), set(L_X + v.d) }),
+                        .move_half => |v| emitWideMove(e, v),
                         .move_reg => |v| b.emit(.{ get(L_X + v.m), set(L_X + v.d) }),
                         .shift_left => |v| b.emit(.{ get(L_X + v.m), c32(@intCast(v.amount)), O.i32_shl, set(L_X + v.d) }),
                         .load_byte => |v| {
@@ -716,7 +745,17 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
     }
     if (h >= 0xe800) {
         const h2: u32 = mem.ld(u16, pc + 2);
+        if (thumbCondBranch(h, h2)) {
+            e.cond(@intCast(bits(h, 6, 4)));
+            e.branch(thumbCondTarget(pc, h, h2) | 1, (pc + 4) | 1, k);
+            return true;
+        }
+        if ((h == 0xe92d or h == 0xe8bd) and h2 != 0 and h2 & 0x2000 == 0 and (h == 0xe8bd or h2 & 0x8000 == 0)) {
+            // PUSH.W/POP.W share the ARM STMDB/LDMIA bit layout.
+            return armBody(e, (h << 16) | h2, pc, k);
+        }
         if (h & 0xff00 == 0xee00 and jitfp.emitVfp(e, h << 16 | h2)) return false;
+        if (h & 0xff00 == 0xed00 and jitfp.emitVfpMemory(e, h << 16 | h2)) return false;
         if (h & 0xff80 == 0xfb80) {
             const op = bits(h, 4, 3);
             const dual = op == 6 and h2 & 0xf0 == 0x60;
@@ -728,6 +767,49 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                 const base: u32 = if (dual) 0xe0400090 else 0xe0800090 | (if (op & 2 == 0) @as(u32, 1 << 22) else 0) | (if (op & 4 != 0) @as(u32, 1 << 21) else 0);
                 const w = base | (hi << 16) | (lo << 12) | (m << 8) | n;
                 return dataProcessing(e, w, pc, k, 0, hi, lo, m, n);
+            }
+        }
+        if ((h & 0xfff0) == 0xe9c0 or (h & 0xfff0) == 0xe9d0) {
+            const n = h & 15;
+            const t = h2 >> 12;
+            const t2 = bits(h2, 8, 4);
+            if (n < 15 and t < 15 and t2 < 15 and t != t2) {
+                b.emit(.{ get(L_X + n), c32(@intCast((h2 & 255) * 4)), O.i32_add, set(L_A) });
+                e.checkLowAddress();
+                if (h & 0x10 != 0) {
+                    load(e, O.i32_load, 0);
+                    setR(e, t);
+                    load(e, O.i32_load, 4);
+                    setR(e, t2);
+                } else {
+                    b.get(L_X + t);
+                    store(e, O.i32_store, 0);
+                    b.get(L_X + t2);
+                    store(e, O.i32_store, 4);
+                }
+                return false;
+            }
+        }
+        if (h & 0xff70 == 0xf340) {
+            const n = h & 15;
+            const d = bits(h2, 8, 4);
+            const lsb = (bits(h2, 12, 3) << 2) | bits(h2, 6, 2);
+            const width = (h2 & 31) + 1;
+            if (n < 15 and d < 15 and h2 & 0x8020 == 0 and lsb + width <= 32) {
+                // Translate Thumb SBFX/UBFX fields into the ARM media encoding.
+                const w: u32 = 0x07a00050 | (if (h & 0x80 != 0) @as(u32, 1 << 22) else 0) |
+                    ((width - 1) << 16) | (d << 12) | (lsb << 7) | n;
+                return media(e, w, pc, k, d, 0, n);
+            }
+        }
+        if (h & 0xfff0 == 0xf360) {
+            const n = h & 15;
+            const d = bits(h2, 8, 4);
+            const lsb = (bits(h2, 12, 3) << 2) | bits(h2, 6, 2);
+            const msb = h2 & 31;
+            if (d < 15 and h2 & 0x8020 == 0 and msb >= lsb) {
+                const w: u32 = 0x07c00010 | (msb << 16) | (d << 12) | (lsb << 7) | n;
+                return media(e, w, pc, k, d, 0, n);
             }
         }
         const shifted = h & 0xfe00 == 0xea00;
@@ -798,15 +880,20 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
                 return false;
             }
         }
-        const wideMove = h & 0xfbf0;
-        if ((wideMove == 0xf240 or wideMove == 0xf2c0) and h2 & 0x8000 == 0) {
-            const d = (h2 >> 8) & 15;
-            if (d < 15) {
-                const imm = ((h & 15) << 12) | (((h >> 10) & 1) << 11) | (((h2 >> 12) & 7) << 8) | (h2 & 255);
-                if (wideMove == 0xf2c0) b.emit(.{ get(L_X + d), c32(0xffff), O.i32_and, c32(@bitCast(imm << 16)), O.i32_or }) else b.i32c(@bitCast(imm));
+        if ((h & 0xff80) == 0xfa00 and h2 & 0xf0f0 == 0xf000 and h & 0x10 == 0) {
+            const n = h & 15;
+            const d = bits(h2, 8, 4);
+            const m = h2 & 15;
+            if (n < 15 and d < 15 and m < 15) {
+                b.emit(.{ get(L_X + n), set(L_B), get(L_X + m), c32(255), O.i32_and, set(L_A) });
+                shiftByReg(e, bits(h, 5, 2), false);
                 setR(e, d);
                 return false;
             }
+        }
+        if (wideMove(h, h2)) |move| {
+            emitWideMove(e, move);
+            return false;
         }
         if (thumbCall(h, h2)) {
             const Sb = (h >> 10) & 1;
@@ -819,7 +906,7 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             return true;
         }
         e.fallback(pc, k);
-        return thumbBranch(h, h2);
+        return thumbBranch(h, h2) or (h == 0xe8bd and h2 & 0x8000 != 0);
     }
     const top = h >> 12;
     const rd = h & 7;

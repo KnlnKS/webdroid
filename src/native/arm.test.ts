@@ -808,6 +808,21 @@ describe("thumb decoder", () => {
     expect(mem.ld32(c.w[26] + 12)).toBe(0x76543210);
   });
 
+  test("VFP scalar memory transfers preserve register bits in both instruction modes", () => {
+    const setup = (cpu: Cpu) => {
+      cpu.w[0] = cpu.stackTop - 16;
+      cpu.w[8] = cpu.stackTop - 32;
+      mem.st32(cpu.w[8], 0x7fc12345);
+    };
+    for (const execute of [
+      () => run([0xed944a00, 0xed804a00, BXLR], setup),
+      () => runThumb([0xed94, 0x4a00, 0xed80, 0x4a00, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect(mem.ld32(c.w[0])).toBe(0x7fc12345);
+    }
+  });
+
   test("wide immediate moves assemble both halves of a register", () => {
     const c = runThumb([
       0xf241, 0x2034, // movw r0, #0x1234
@@ -823,6 +838,9 @@ describe("thumb decoder", () => {
     expect(c.w[4]).toBe(0x10000);
     expect(c.w[6]).toBe(-5);
     expect(c.w[20]).toBe(~0x8d0000);
+    const conditional = [0x2800, 0xbf04, 0xf241, 0x2034, 0xf6ca, 0x50cd, 0x4770];
+    expect(runThumb(conditional).w[0] >>> 0).toBe(0xadcd1234);
+    expect(runThumb(conditional, (cpu) => { cpu.w[0] = 1; }).w[0]).toBe(1);
   });
 
   test("wide multiply and multiply-accumulate preserve flags", () => {
@@ -976,6 +994,12 @@ describe("thumb decoder", () => {
     });
     expect(Array.from(c.w.slice(16, 24).filter((_, i) => i % 2 === 0))).toEqual([1, 2, 3, 4]);
     expect(c.w[26]).toBe(c.stackTop - 32);
+    const returned = runThumb([
+      0xe92d, 0x4100, // push.w {r8,lr}
+      0xe8bd, 0x8100, // pop.w {r8,pc}
+    ], (cpu) => { cpu.w[16] = 123; });
+    expect(returned.w[16]).toBe(123);
+    expect(returned.w[26]).toBe(returned.stackTop);
   });
 
   test("wide conditional branches preserve taken and fallthrough paths", () => {

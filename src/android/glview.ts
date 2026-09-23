@@ -356,6 +356,13 @@ rt.register({
     "setOnFrameAvailableListener(Landroid/graphics/SurfaceTexture$OnFrameAvailableListener;)V": function (this: JSurfaceTexture, listener: unknown) { this.listener = listener; },
     "setOnFrameAvailableListener(Landroid/graphics/SurfaceTexture$OnFrameAvailableListener;Landroid/os/Handler;)V": function (this: JSurfaceTexture, listener: unknown, handler: ReturnType<typeof mainHandler> | null) { this.listener = listener; if (handler) this.looper = handler.looper; },
     "updateTexImage()V": function (this: JSurfaceTexture) { this.update(); },
+    "getTransformMatrix([F)V": function (this: JSurfaceTexture, matrix: Float32Array) {
+      if (!matrix) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      if (matrix.length !== 16) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Matrix must have 16 elements");
+      // updateTexImage uploads the visible frame without a crop or producer transform.
+      matrix.fill(0);
+      matrix[0] = matrix[5] = matrix[10] = matrix[15] = 1;
+    },
     "getTimestamp()J": function (this: JSurfaceTexture) { return this.timestamp; },
     "setDefaultBufferSize(II)V": function (this: JSurfaceTexture, w: number, h: number) {
       if (w <= 0 || h <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid buffer size");

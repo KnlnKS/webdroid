@@ -1266,3 +1266,91 @@ involve clip and matrix state or Porter-Duff edge behavior. A direct device-boun
 shortcut for axis-aligned clip polygons fixed one clip case but introduced three new
 cases in the 1,000-case replay, so it was reverted. Full arbitrary-APK or pixel parity
 is not established.
+
+## Cut the Rope 15 FPS follow-up — 2026-09-23
+
+The isolated `codex/cut-the-rope-15fps` worktree starts at `33ab22fd`. A 12-second
+level-one headless Chrome baseline at 1080×2160, 480 dpi presented 25.3 frames/s and
+executed 1.81 billion guest instructions. CPU sampling and temporary instruction
+diagnostics showed repeated Thumb wide branches, register-list transfers, doubleword
+transfers and bitfield operations falling back to the interpreter. The JIT now lowers
+those forms with the existing region epoch checks, memory faults, flag handling and
+ARM/Thumb return rules. The temporary diagnostics were removed. Focused ARM parity
+coverage includes wide POP into PC.
+
+The reached ARM32 libc calls use their actual guest ABI: EABI `__aeabi_memset` takes
+destination, byte count, then value; raw ARM syscall 334 is the three-argument
+`faccessat`; `timegm64` returns a signed 64-bit timestamp. The libc wrapper and raw
+syscall share path resolution. JNI also reached Android's
+`CodecCapabilities.COLOR_FormatYUV420Planar` constant, `SurfaceTexture`'s texture
+transform matrix and the `Parcelable[]` overload of `Intent.putExtra`. Their owning
+Android modules now provide those APIs. SurfaceTexture uploads the visible frame
+without a crop or producer transform, so its matrix is identity for that path.
+
+An intermediate focused headless capture presented 27.5 frames/s and executed 2.05 billion
+guest instructions in the same 12-second tutorial window. A rope swipe advanced to
+the next tutorial. There were no required native calls, JNI misses, page exceptions,
+or layout, draw or GL errors. Two earlier candidate captures presented 26.6 and
+27.9 frames/s, but startup timing and shared host load vary, so these samples do
+not prove a stable visible-Chrome FPS improvement. Earlier visible Chrome
+windows were about 5–11 frames/s with competing captures. The focused flow used a
+tap to skip the intro. `NativeActivity` was an optional class probe; `VideoView`,
+`DialogFragment`, Parcelable and Cronet failures remain in the ad paths documented
+above. No game bytecode, assets or visual goldens changed.
+
+A second fallback sample identified repeated register-controlled Thumb shifts,
+MOVW/MOVT in simple IT blocks, and single/double VFP scalar loads and stores. The
+JIT now lowers those generic forms; MOVW/MOVT share one decoder across direct and
+IT-block emission. The VFP path uses the same guest-address and code-store checks as
+other compiled memory operations. A bounded diagnostic window improved from 24.4
+to 32.2 presented frames/s after VFP lowering, while fallback calls fell from
+1.04 billion to 0.91 billion; both samples include histogram overhead. The
+temporary counters were removed. A clean, visible Google Chrome run reached level
+one and presented 434 frames in 12.05 seconds (36.0 frames/s), with 438 advancing
+ticks and 2.06 billion guest instructions. It had no recorded page exception or
+required gameplay API miss. A Cronet native fault appeared in the previously traced
+ad network path, outside the requested scope. The visible capture is one run, and
+the focused flow used a tap to skip the intro. ARM interpreter/JIT parity tests and Cut
+smoke compilation passed (82 tests, 64,465 classes, zero method failures).
+
+The final serialized E2E matrix on this code captured 183/183 steps across 13 flows in
+973.5 seconds. The 620 available process snapshots reported no required native call,
+layout error or GL error, and no main loop wedged. YouTube retained two settle timeouts
+and eight `Matrix.mapRect` draw errors, the same failure as earlier gates with variable
+counts. Twelve Flappy Bird auxiliary process snapshots were unavailable, while all
+seven of its screen steps rendered. Cut has no matrix flow; the visible level-one
+capture above is its direct FPS evidence. No visual golden changed.
+
+A post-gate Cut-only intro check sampled the NDK-backed video and audio codec state
+without a tap. One run showed an AAC decoder with eight in-flight buffers and no
+output at 32 seconds; another still showed both codecs before inputs arrived at the
+same wall time. Both ended on a black screen by 47 seconds. Raising the bounded audio
+pending limit to 32 did not restore the intro, so that trial and its diagnostic hook
+were removed. A longer no-tap trace on the unchanged implementation reached level one
+by 64 seconds, though the intro image stayed black. It observed a surface-free AVC
+decoder initially spinning on empty output while eight WebCodecs inputs were pending,
+then a surface-backed decoder rendering 30 of 62 dequeued frames before cleanup.
+The intro's missing pixels remain unresolved; the measured level-one flow skipped it
+with a tap.
+
+## Cut the Rope JIT code-quality follow-up — 2026-09-23
+
+Thumb PUSH.W/POP.W now use the ARM block-transfer emitter because their register-list
+encodings are identical. Thumb SBFX/UBFX/BFI/BFC likewise use the ARM media emitter
+after encoding their operands as ARM fields. This removes 25 net lines of duplicate
+lowering. The shared block-transfer path checks the low-address guard before memory
+access, preserving the prior Thumb fault behavior. ARM interpreter/JIT parity tests
+passed (77 tests), and Cut smoke-compiled 64,465 classes with zero method failures.
+
+A clean headless level-one capture presented 380 frames in 12.02 seconds (31.6 FPS)
+with advancing ticks and no gameplay JNI miss, layout, draw or GL error. The
+persistent Cronet fault was in the excluded ad network path. This
+single run confirms the 15 FPS target on the tutorial screen, not a statistically
+stable improvement over the earlier 27.5 FPS headless sample.
+
+The final serialized E2E matrix captured 183/183 steps across 13 flows in 904.9
+seconds, with no main-loop wedge, required native call or GL error. YouTube recorded
+11 layout errors and four instances of its existing `Matrix.mapRect` draw failure;
+the layout errors were absent from the preceding gate. Their cause is unconfirmed,
+and no YouTube-specific investigation was run under the Cut-only testing scope.
+No visual golden changed.

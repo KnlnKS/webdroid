@@ -1,3 +1,27 @@
+# Cut the Rope 15 FPS goal — 2026-09-23
+
+Integrated into `main` from `codex/cut-the-rope-15fps`. Starting revision: `33ab22fd`.
+Status: the unchanged ARM32 XAPK reaches the level-one tutorial and advances after a rope
+swipe. A clean visible Google Chrome run at 1080×2160, 480 dpi presented 36.0 frames/s
+over 12 seconds, with advancing ticks and no page exception or required gameplay API miss.
+A matched headless baseline at the starting revision presented 25.3 frames/s; the
+intermediate JIT build presented 27.5 frames/s under the same capture timing. A bounded
+fallback diagnostic then measured 24.4 to 32.2 frames/s before and after VFP lowering,
+with that diagnostic's overhead in both samples. Cut smoke-compiles 64,465 classes with
+zero method failures; typecheck and 82 focused ARM/libc tests pass. The final serialized
+E2E gate captured 183/183 steps in 973.5 seconds with no main-loop wedge, required native
+call, layout error or GL error. YouTube retained two settle timeouts and eight known
+`Matrix.mapRect` draw errors; 12 Flappy Bird auxiliary snapshots were unavailable.
+
+Generic Thumb wide and VFP scalar memory instructions now compile in the ARM32 JIT;
+reached libc ABI calls, Android media constants, the SurfaceTexture transform and Intent
+Parcelable-array overload are implemented in their owning modules. The visible Chrome
+sample exceeds the 15 FPS target. The intro video remains a known limit; the focused flow
+skips it. A Cronet native fault remains in a previously traced ad network path. Cut is
+absent from the E2E matrix, so the gameplay capture supplies its direct evidence.
+
+---
+
 # Fuzzer compatibility follow-up — 2026-09-23
 
 Integrated into `main` from `codex/fuzzer-compatibility`. API 33 oracle:

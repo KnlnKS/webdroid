@@ -217,7 +217,8 @@ for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I",
   ["Boolean", "Z", 0], ["Float", "F", 0], ["Double", "D", 0], ["CharSequence", "Ljava/lang/CharSequence;", null],
   ["Parcelable", "Landroid/os/Parcelable;", null], ["Serializable", "Ljava/io/Serializable;", null],
   ["Bundle", "Landroid/os/Bundle;", null],
-  ["IntArray", "[I", null], ["ByteArray", "[B", null], ["StringArray", "[Ljava/lang/String;", null]] as const) {
+  ["IntArray", "[I", null], ["ByteArray", "[B", null], ["StringArray", "[Ljava/lang/String;", null],
+  ["ParcelableArray", "[Landroid/os/Parcelable;", null]] as const) {
   intentMethods[`putExtra(Ljava/lang/String;${d})Landroid/content/Intent;`] = function (this: JIntent, k: string, v: unknown) {
     this.extras.map.set(k, bundleBox(v, d));
     return this;
