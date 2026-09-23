@@ -6379,3 +6379,42 @@ full E2E matrix was run for this integration; the prior matrices remain revision
 Evidence is retained in the main checkout under `webdroid-shots/chatgpt/merge-*.log`, alongside
 the prior ChatGPT captures. Task-owned development servers, browser bridge, Chrome profile and
 reference emulator were stopped before removing the implementation worktree.
+
+### TikTok playback follow-up — 2026-09-22
+
+Branch `codex/tiktok-playback-20260922` starts at `18fe1097` in an isolated worktree.
+The unchanged TikTok APK runs in full Chrome at 1080×2160 / 480 dpi. The existing
+ByteVC2 decoder sample at `libbyteVC2dec.so+0x53784` executes an A64 `LD2` lane transfer.
+The JIT previously returned every multi-register lane load/store to the interpreter.
+Commit `f6859fb5` extends the owning `emitVlane` path to one through four registers,
+including wraparound, post-index writeback and executable-store checks. It reuses the
+existing lane operations and leaves interpreter semantics intact.
+
+A fixed 200,000-iteration `LD2` kernel executes 600,002 guest instructions in both
+revisions, with identical vector and destination bytes. Across alternating fresh Bun
+processes, warm baseline iterations take roughly 2–5 ms and the candidate 0.2–0.7 ms;
+cold compilation and host contention widen individual samples. This isolates one
+instruction family and cannot be extrapolated to whole-video speed. Typecheck and the
+A64 SIMD/hardware-oracle checks pass (555 tests, 18,238 assertions). The added focused
+test covers multi-register replicate, lane load/store, register wraparound and writeback.
+
+The TikTok-only E2E completes all 13 steps. Every step returns four process diagnostics;
+there are no new missing signatures after launch, required natives, layout or draw
+failures. Nine launch-time vendor class probes remain, as in the earlier capture. The
+active-video steps show 4.1–10.2 EGL frames/s across different live clips; swipes take
+2.7–3.7 seconds to complete. A separate hardware-accelerated Chrome playback capture
+shows a visible video, 45 EGL frames in 10.06 seconds, 100 screen presentations,
+advancing ticks and 6.10 seconds charged to native execution. Its subsequent main-queue
+liveness sentinel times out, so the capture is evidence of playback and load, not a
+healthy latency result. A CPU-profiled second clip advances ticks with 22 EGL frames
+in 8.24 seconds, 6.38 seconds of native work and a passing sentinel. Clip selection
+and profiling overhead make these two runs unsuitable as a matched speed comparison.
+Original video rate and the 150 ms action target remain unmet.
+
+The structural audit found that `emitVlane` already owned lane addressing and store
+invalidation, so extending its register loop avoided a parallel decoder. A trial
+ctype host-call fast path saved only about 4 ms per 100,000 warm calls and was removed
+with its test. Shorter native slices had previously lowered event-loop delay while
+reducing observed video throughput; no new scheduling override was retained. Absent
+app/vendor classes and unsupported Android surfaces need contract evidence before
+implementation, rather than placeholders or fabricated success.

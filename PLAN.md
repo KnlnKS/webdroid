@@ -1,7 +1,7 @@
 # TikTok usability follow-up
 
 Branch: `codex/tiktok-usability`. Starting revision: `9d0bb979`.
-Status: performance improvements and compiled-memory fault parity are committed and verified. Full TikTok parity and the 150 ms target remain unmet.
+Status: performance improvements and compiled-memory fault parity are committed and verified. A further decoder JIT lane-transfer optimization is committed on `codex/tiktok-playback-20260922`. Full TikTok parity, original-rate playback and the 150 ms target remain unmet.
 
 Current pass separates cold navigation, warmed input and decoded playback; profiles JavaScript
 allocation/GC, method preparation, native execution, scheduling and rendering. Keep only measured
