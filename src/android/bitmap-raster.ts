@@ -115,6 +115,10 @@ export function tryBitmapShape(canvas: JCanvas, paint: JPaint,
 
 export function tryBitmapRect(canvas: JCanvas, paint: JPaint, left: number, top: number,
   right: number, bottom: number): boolean {
+  if (paint.style === 1 && paint.strokeWidth === 0 && eligible(canvas, paint)) {
+    const m = canvas.ctx.getTransform();
+    if (m.a * m.d === m.b * m.c) return true;
+  }
   if (paint.antiAlias && paint.style === 1 && paint.strokeWidth === 0 && !paint.dash && eligible(canvas, paint)) {
     const path = new Path2D();
     path.rect(left, top, right - left, bottom - top);
