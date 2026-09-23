@@ -284,6 +284,7 @@ class JApplicationInfo extends JPackageItemInfo {
   nonLocalizedLabel: string | null = null;
   className: string | null = null; publicSourceDir = ""; uid = 10001; processName = "";
   enabled = 1; metaData: JBundle | null = null;
+  category = -1;
   // a single base.apk install has no splits: null, as AOSP leaves them (library loaders null-check these)
   splitNames: string[] | null = null; splitSourceDirs: string[] | null = null; splitPublicSourceDirs: string[] | null = null;
   sharedLibraryFiles: string[] | null = null;
@@ -292,7 +293,7 @@ rt.register({
   name: "android/content/pm/ApplicationInfo", ctor: JApplicationInfo, sup: "android/content/pm/PackageItemInfo", ifaces: ["android/os/Parcelable"],
   fields: ["packageName", "sourceDir", "dataDir", "deviceProtectedDataDir", "storageUuid", "nativeLibraryDir", "flags", "targetSdkVersion", "minSdkVersion",
     "theme", "labelRes", "nonLocalizedLabel", "icon", "className", "publicSourceDir", "uid", "processName", "enabled",
-    "metaData", "splitNames", "splitSourceDirs", "splitPublicSourceDirs", "sharedLibraryFiles"],
+    "metaData", "category", "splitNames", "splitSourceDirs", "splitPublicSourceDirs", "sharedLibraryFiles"],
   methods: { "<init>()V": function () {} },
 });
 let cachedAppInfo: JApplicationInfo | null = null;
@@ -320,6 +321,8 @@ export function getAppInfo(host: AppHost): JApplicationInfo {
     }
     cachedAppInfo.icon = host.iconRes;
     const node = appNode();
+    cachedAppInfo.category = node ? attr(node, "appCategory")?.data ?? -1 : -1;
+    if (node && attr(node, "isGame")?.data) cachedAppInfo.flags |= 0x02000000;
     const label = node ? attr(node, "label") : undefined;
     if (label?.type === TV.REFERENCE) cachedAppInfo.labelRes = label.data;
     else cachedAppInfo.nonLocalizedLabel = host.appLabel;

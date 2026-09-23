@@ -87,6 +87,7 @@ import "./android/clipdata";
 import "./android/statsevent";
 import "./android/contentresolver";
 import "./android/context";
+import "./android/game";
 import "./android/runningservices";
 import "./android/window";
 import "./android/menu";
