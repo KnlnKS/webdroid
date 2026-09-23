@@ -88,7 +88,7 @@ export function tryBitmapRect(canvas: JCanvas, paint: JPaint, left: number, top:
       Number.isInteger(left + m.e) && Number.isInteger(top + m.f) &&
       Number.isInteger(right + m.e) && Number.isInteger(bottom + m.f);
     if (!aligned && sampled(canvas, paint, left, top, right, bottom,
-      (x, y) => x >= left && x < right && y >= top && y < bottom)) return true;
+      (x, y) => x > left && x < right && y >= top && y < bottom)) return true;
   }
   if (paint.style === 1 && paint.strokeWidth === 0 && !paint.antiAlias && !paint.dash) {
     const pixels = hairlineRect(canvas.ctx, left, top, right, bottom, paint.strokeCapN);
