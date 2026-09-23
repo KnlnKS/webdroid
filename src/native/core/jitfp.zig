@@ -501,9 +501,14 @@ fn emitVector(e: *Emit, w: u32) bool {
         b.get(L_CPU);
         if (accumulate) vget(e, rd);
         vget(e, rn);
-        if (opcode != 1 and opcode != 3) b.emit(.{sv(extend)});
+        if (opcode < 8 and opcode != 1 and opcode != 3) b.emit(.{sv(extend)});
         vget(e, rm);
-        b.emit(.{ sv(extend), sv(if (opcode >= 8) S.mul[size + 1] else if (opcode >= 2) S.sub[size + 1] else S.add[size + 1]) });
+        if (opcode >= 8) {
+            b.emit(.{sv(S.extmul_low_s[size] + @as(u8, if (q) 1 else 0) + @as(u8, if (U) 2 else 0))});
+        } else {
+            b.emit(.{sv(extend)});
+            b.emit(.{sv(if (opcode >= 2) S.sub[size + 1] else S.add[size + 1])});
+        }
         if (accumulate) b.emit(.{sv(if (opcode == 10) S.sub[size + 1] else S.add[size + 1])});
         vput(e, rd, true);
         return true;
@@ -719,13 +724,11 @@ fn emitVector(e: *Emit, w: u32) bool {
         if ((opcode == 2 or opcode == 6 or opcode == 10) and (size == 1 or size == 2)) {
             const idx: u8 = @intCast(if (size == 1) (H << 2) | (Lb << 1) | M else (H << 1) | Lb);
             const m: u8 = @intCast(if (size == 1) rmLow else (M << 4) | rmLow);
-            const extend = S.extend_low_s[size] + @as(u8, if (U) 2 else 0);
             b.get(L_CPU);
             if (opcode != 10) vget(e, rd);
             vget(e, rn);
-            b.emit(.{sv(extend + @as(u8, if (q) 1 else 0))});
             vget(e, m);
-            b.emit(.{ sv(S.extract_u[size]), idx, sv(S.splat[size]), sv(extend), sv(S.mul[size + 1]) });
+            b.emit(.{ sv(S.extract_u[size]), idx, sv(S.splat[size]), sv(S.extmul_low_s[size] + @as(u8, if (q) 1 else 0) + @as(u8, if (U) 2 else 0)) });
             if (opcode != 10) b.emit(.{sv(if (opcode == 6) S.sub[size + 1] else S.add[size + 1])});
             vput(e, rd, true);
             return true;
@@ -813,14 +816,10 @@ fn emitVlane(e: *Emit, w: u32) bool {
             b.emit(.{ get(L_CPU), get(L_A), vm(S.load8_splat + @as(u8, @intCast(esz)), off) });
             vput(e, t, q != 0);
         } else if (Ld) {
-            b.emit(.{ get(L_CPU), get(L_A) });
-            vget(e, t);
-            b.emit(.{ vm(S.load8_lane + @as(u8, @intCast(esz)), off), @as(u8, @intCast(idx)), vm(S.store, voff(t)) });
+            b.emit(.{ get(L_CPU), get(L_A), mo(jit.LD[esz][0], off), mo(jit.ST[esz], voff(t) + (idx << @intCast(esz))) });
         } else {
             e.storeCheck(off, @as(u32, 1) << @intCast(esz));
-            b.get(L_A);
-            vget(e, t);
-            b.emit(.{ vm(S.store8_lane + @as(u8, @intCast(esz)), off), @as(u8, @intCast(idx)) });
+            b.emit(.{ get(L_A), get(L_CPU), mo(jit.LD[esz][0], voff(t) + (idx << @intCast(esz))), mo(jit.ST[esz], off) });
         }
     }
     if (post) {
