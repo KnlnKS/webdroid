@@ -95,8 +95,13 @@ function applyPathOp(p: Path2D, op: PathOp) {
       p.roundRect(l, t, r - l, b - t, [{ x: q[0], y: q[1] }, { x: q[2], y: q[3] }, { x: q[4], y: q[5] }, { x: q[6], y: q[7] }]);
       break;
     }
-    case "oval": p.ellipse((op[1] + op[3]) / 2, (op[2] + op[4]) / 2, (op[3] - op[1]) / 2, (op[4] - op[2]) / 2, 0, 0, Math.PI * 2, !!op[5]); break;
-    case "circle": p.arc(op[1], op[2], op[3], 0, Math.PI * 2, !!op[4]); break;
+    case "oval": {
+      const cx = (op[1] + op[3]) / 2, cy = (op[2] + op[4]) / 2, rx = (op[3] - op[1]) / 2, ry = (op[4] - op[2]) / 2;
+      p.moveTo(cx + rx, cy);
+      p.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2, !!op[5]);
+      break;
+    }
+    case "circle": p.moveTo(op[1] + op[3], op[2]); p.arc(op[1], op[2], op[3], 0, Math.PI * 2, !!op[4]); break;
     case "arc": {
       const [, l, t, r, b, startDeg, sweepDeg] = op;
       const cx = (l + r) / 2, cy = (t + b) / 2, rx = (r - l) / 2, ry = (b - t) / 2;
