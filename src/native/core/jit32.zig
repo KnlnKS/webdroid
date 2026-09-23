@@ -471,6 +471,7 @@ fn armBody(e: *Emit, w: u32, pc: u32, k: u32) bool {
                 if (P) b.emit(.{ c32(4), O.i32_add });
             } else b.emit(.{ c32(@intCast(if (P) 4 * n else 4 * n - 4)), O.i32_sub });
             b.set(L_A);
+            e.checkLowAddress();
             if (Wb and Ld) blockWriteback(e, rn, U, n);
             var off: u32 = 0;
             for (0..16) |i| if (list & (@as(u32, 1) << @intCast(i)) != 0) {
@@ -750,32 +751,8 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             return true;
         }
         if ((h == 0xe92d or h == 0xe8bd) and h2 != 0 and h2 & 0x2000 == 0 and (h == 0xe8bd or h2 & 0x8000 == 0)) {
-            const count: u32 = @popCount(h2);
-            const pop = h == 0xe8bd;
-            b.get(L_X + 13);
-            if (!pop) b.emit(.{ c32(@intCast(count * 4)), O.i32_sub });
-            b.set(L_A);
-            e.checkLowAddress();
-            var off: u32 = 0;
-            for (0..16) |i| if (h2 & (@as(u32, 1) << @intCast(i)) != 0) {
-                if (pop) {
-                    load(e, O.i32_load, off);
-                    if (i == 15) b.set(L_R) else setR(e, @intCast(i));
-                } else {
-                    b.get(L_X + @as(u32, @intCast(i)));
-                    store(e, O.i32_store, off);
-                }
-                off += 4;
-            };
-            b.get(L_A);
-            if (pop) b.emit(.{ c32(@intCast(count * 4)), O.i32_add });
-            b.set(L_X + 13);
-            if (pop and h2 & 0x8000 != 0) {
-                b.get(L_R);
-                bxExit(e, k);
-                return true;
-            }
-            return false;
+            // PUSH.W/POP.W share the ARM STMDB/LDMIA bit layout.
+            return armBody(e, (h << 16) | h2, pc, k);
         }
         if (h & 0xff00 == 0xee00 and jitfp.emitVfp(e, h << 16 | h2)) return false;
         if (h & 0xff00 == 0xed00 and jitfp.emitVfpMemory(e, h << 16 | h2)) return false;
@@ -819,9 +796,10 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             const lsb = (bits(h2, 12, 3) << 2) | bits(h2, 6, 2);
             const width = (h2 & 31) + 1;
             if (n < 15 and d < 15 and h2 & 0x8020 == 0 and lsb + width <= 32) {
-                b.emit(.{ get(L_X + n), c32(@intCast(32 - lsb - width)), O.i32_shl,
-                    c32(@intCast(32 - width)), if (h & 0x80 == 0) O.i32_shr_s else O.i32_shr_u, set(L_X + d) });
-                return false;
+                // Translate Thumb SBFX/UBFX fields into the ARM media encoding.
+                const w: u32 = 0x07a00050 | (if (h & 0x80 != 0) @as(u32, 1 << 22) else 0) |
+                    ((width - 1) << 16) | (d << 12) | (lsb << 7) | n;
+                return media(e, w, pc, k, d, 0, n);
             }
         }
         if (h & 0xfff0 == 0xf360) {
@@ -830,11 +808,8 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             const lsb = (bits(h2, 12, 3) << 2) | bits(h2, 6, 2);
             const msb = h2 & 31;
             if (d < 15 and h2 & 0x8020 == 0 and msb >= lsb) {
-                const mask = (~@as(u32, 0) >> @intCast(31 - msb)) & (~@as(u32, 0) << @intCast(lsb));
-                b.emit(.{ get(L_X + d), c32(@bitCast(~mask)), O.i32_and });
-                if (n != 15) b.emit(.{ get(L_X + n), c32(@intCast(lsb)), O.i32_shl, c32(@bitCast(mask)), O.i32_and, O.i32_or });
-                setR(e, d);
-                return false;
+                const w: u32 = 0x07c00010 | (msb << 16) | (d << 12) | (lsb << 7) | n;
+                return media(e, w, pc, k, d, 0, n);
             }
         }
         const shifted = h & 0xfe00 == 0xea00;
