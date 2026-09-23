@@ -1,6 +1,5 @@
 import { JSpanned, JSpannable, JStaticLayout, type JLayout, type TLine, measureReplacements, drawLayout } from "./text";
-import { beginPaintShadow, cssColor, measureText, type JCanvas } from "./graphics";
-import { drawSkiaText } from "./skia-text";
+import { beginPaintShadow, cssColor, measureText, tryDrawBitmapText, type JCanvas } from "./graphics";
 import { after, callOn, curThread } from "../jvm/natives/jlang";
 import { perf } from "../perf";
 import type { JTextView } from "./textview";
@@ -134,9 +133,8 @@ export function drawTextViewLayout(layout: JLayout, cv: JCanvas, gravity: number
     for (let i = 0; i < layout.lines.length; i++) {
       const line = layout.lines[i], y = layout.baseline(i);
       cv.recordText(line.text, x, y, p.textSize, gravity === 1 ? 1 : gravity === 5 ? 2 : 0);
-      if (!(cv.bmp && gravity !== 1 && gravity !== 5 && !p.shadowRadius && !p.underline && !p.strikeThru &&
-        p.tf.family === "Roboto, sans-serif" && !p.tf.bold && !p.tf.italic &&
-        drawSkiaText(ctx, line.text, x + (oblique ? 0.25 : 0), y, p.textSize, p.color, "fill", !oblique))) ctx.fillText(line.text, x, y);
+      if (!(gravity !== 1 && gravity !== 5 &&
+        tryDrawBitmapText(cv, line.text, x + (oblique ? 0.25 : 0), y, p, !oblique))) ctx.fillText(line.text, x, y);
       if (p.strikeThru && line.text) {
         const sx = gravity === 1 ? x - line.width / 2 : gravity === 5 ? x - line.width : x;
         ctx.fillRect(sx, y - p.textSize * 0.3, line.width, Math.max(1, p.textSize / 14));

@@ -2255,9 +2255,8 @@ export function setCanvasBitmap(cv: JCanvas, b: JBitmap | null) {
 const drawColorKey = mangleMethod("drawColor", "(I)V");
 export const CAPS = ["butt", "round", "square"] as const;
 export const JOINS = ["miter", "round", "bevel"] as const;
-function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
-  cv.recordText(s, x, y, p.textSize, p.textAlignN);
-  if (cv.bmp && (p.style === 0 || p.style === 2 && p.strokeWidth === 0 ||
+export function tryDrawBitmapText(cv: JCanvas, s: string, x: number, y: number, p: JPaint, subpixel = false): boolean {
+  return !!(cv.bmp && (p.style === 0 || p.style === 2 && p.strokeWidth === 0 ||
     p.style === 1 && p.strokeWidth === 0 && p.strokeCapN === "butt" && p.strokeJoinN === "miter" && !p.dash) &&
     p.antiAlias && p.textAlignN === 0 && !p.letterSpacingEm &&
     !p.underline && !p.strikeThru && !p.shader && !p.shaderObj && !p.maskFilter && !p.shadowRadius &&
@@ -2265,7 +2264,11 @@ function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
     p.tf.family === ROBOTO && !p.tf.bold && !p.tf.italic &&
     drawSkiaText(cv.ctx, s, x, y, p.textSize,
       p.renderAlpha === null ? p.color : (p.renderAlpha << 24) | (p.color & 0xffffff),
-      p.style === 1 ? "hairline" : "fill")) return;
+      p.style === 1 ? "hairline" : "fill", subpixel));
+}
+function drawTextImpl(cv: JCanvas, s: string, x: number, y: number, p: JPaint) {
+  cv.recordText(s, x, y, p.textSize, p.textAlignN);
+  if (tryDrawBitmapText(cv, s, x, y, p)) return;
   const ctx = cv.ctx, shadow = beginPaintShadow(cv.ctx, p);
   try {
     ctx.font = p.font();
