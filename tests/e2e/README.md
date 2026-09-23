@@ -34,6 +34,9 @@ At `--jobs 4`, all six flows passed in 30.6 seconds on this machine. Motion fram
 informational in parallel runs; use `--jobs 1` for their frame-rate gates. Four fast flows have
 Android visual checkpoints. Flappy Bird and Doodle Jump remain smoke-only because the available
 API 33 ARM64 emulator cannot install their ARM32 native libraries.
+`actual-fast/summary.json` lists every configured flow as Android-compared, smoke,
+live-not-run, or not-selected. It includes each checkpoint's measured content difference,
+limit, and Android API version, so a passing fast run cannot be mistaken for full parity.
 
 `bun run test:focused -- <paths>` selects dependent Bun tests through the TypeScript import graph,
 then selects fast flows from `tests/e2e/coverage-index.json`. `--base <revision>` includes committed,

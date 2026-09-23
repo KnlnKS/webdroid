@@ -18,7 +18,8 @@ const { flows, jobs } = parseArgs(args, "bun run e2e:fast", deterministic);
 if (coverage && flows.length !== deterministic.length)
   throw new Error("coverage collection must run the complete deterministic lane");
 
-type Outcome = { flow: Flow; runs: StepRun[]; errors: string[]; ms: number; coverage: string[]; browser: string; screen: string };
+type VisualCheck = { step: string; contentDiffPct: number; maxContentDiffPct: number; androidSdk: string };
+type Outcome = { flow: Flow; runs: StepRun[]; visual: VisualCheck[]; errors: string[]; ms: number; coverage: string[]; browser: string; screen: string };
 
 function failures(runs: StepRun[]): string[] {
   const errors: string[] = [];
@@ -51,12 +52,13 @@ function failures(runs: StepRun[]): string[] {
   return errors;
 }
 
-async function visualFailures(flow: Flow): Promise<string[]> {
+async function visualEvidence(flow: Flow): Promise<{ checks: VisualCheck[]; errors: string[] }> {
   const checks = flow.steps.filter((step) => step.fastEvidence?.kind === "visual");
-  if (!checks.length) return [];
+  if (!checks.length) return { checks: [], errors: [] };
   const manifest = await loadManifest(flow.app);
-  if (!manifest) return [`visual evidence requires a golden manifest`];
+  if (!manifest) return { checks: [], errors: ["visual evidence requires a golden manifest"] };
   const errors: string[] = [];
+  const results: VisualCheck[] = [];
   for (const step of checks) {
     const evidence = step.fastEvidence;
     if (evidence?.kind !== "visual") continue;
@@ -69,10 +71,11 @@ async function visualFailures(flow: Flow): Promise<string[]> {
     const golden = await loadPng(goldenPath);
     const actual = await loadPng(actualPath);
     const diff = diffImages(golden, actual, manifest.crop, step.maskRects ?? []).contentDiffPct;
+    results.push({ step: step.id, contentDiffPct: diff, maxContentDiffPct: evidence.maxContentDiffPct, androidSdk: manifest.device.sdk });
     if (diff > evidence.maxContentDiffPct)
       errors.push(`${step.id}: visual diff ${diff.toFixed(2)}% exceeds retained ${evidence.maxContentDiffPct.toFixed(2)}% limit`);
   }
-  return errors;
+  return { checks: results, errors };
 }
 
 function browserFailures(flow: Flow, errors: string[]): string[] {
@@ -96,7 +99,8 @@ async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
   } finally {
     await driver.close();
   }
-  return { flow, runs, errors: [...failures(runs), ...await visualFailures(flow), ...browserFailures(flow, driver.errors)], ms: performance.now() - started,
+  const visual = await visualEvidence(flow);
+  return { flow, runs, visual: visual.checks, errors: [...failures(runs), ...visual.errors, ...browserFailures(flow, driver.errors)], ms: performance.now() - started,
     coverage: sourceCoverage, browser, screen };
 }
 
@@ -140,6 +144,17 @@ for (const outcome of outcomes.filter((item) => item.errors.length)) {
 }
 
 const failed = outcomes.filter((item) => item.errors.length).length;
+await Bun.write(`${E2E_DIR}actual-fast/summary.json`, JSON.stringify({
+  generatedAt: new Date().toISOString(),
+  durationMs: Math.round(performance.now() - started),
+  flows: FLOWS.map((flow) => {
+    const outcome = outcomes.find((item) => item.flow.app === flow.app);
+    return outcome
+      ? { app: flow.app, status: outcome.errors.length ? "failed" : outcome.visual.length ? "compared" : "smoke",
+          durationMs: Math.round(outcome.ms), visual: outcome.visual, errors: outcome.errors }
+      : { app: flow.app, status: flow.clock === "live" ? "live-not-run" : "not-selected" };
+  }),
+}, null, 2));
 if (coverage && !failed) {
   const byFile: Record<string, string[]> = {};
   for (const outcome of outcomes)
@@ -161,5 +176,7 @@ if (coverage && !failed) {
   await Bun.write(`${E2E_DIR}coverage-index.json`, JSON.stringify(index, null, 2));
   console.log(`coverage: ${E2E_DIR}coverage-index.json (${Object.keys(byFile).length} source files)`);
 }
-console.log(`\n${flows.length - failed}/${flows.length} fast flows passed in ${((performance.now() - started) / 1000).toFixed(1)}s`);
+const compared = outcomes.filter((item) => item.visual.length).length;
+console.log(`\n${flows.length - failed}/${flows.length} fast flows passed in ${((performance.now() - started) / 1000).toFixed(1)}s` +
+  ` (${compared} Android-compared, ${outcomes.length - compared} smoke; actual-fast/summary.json)`);
 if (failed) process.exit(1);

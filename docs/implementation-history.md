@@ -14,6 +14,11 @@ the other flows and took 99.8 seconds in a run contaminated by an emulator boot 
 a Doodle Jump frame-rate failure rerun; that number is not a matched speed baseline.
 Parallel motion frame rates are informational. The one-job lane retains frame-rate
 gates, while the parallel lane checks compatibility and Android visual checkpoints.
+The final repeat passed 6/6 in 30.4 seconds: four Android comparisons and two smoke
+flows. All six had advancing ticks and presentation counts, available diagnostics in
+their relevant processes, and no reached missing API, native requirement, wedge,
+completion timeout, or new process error. The machine-readable summary marks seven
+live flows as not run by this lane.
 
 CalculatorM now has an API 33 Android reference at 1080×2424 and a fast result
 checkpoint: `7 + 7 = 14` differs by 7.07% of content pixels in the first fast run,
