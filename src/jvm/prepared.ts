@@ -168,21 +168,20 @@ export function switchCases(code: CodeItem, instruction: PreparedInstruction): [
   return out;
 }
 
-function branchTargets(code: CodeItem, instruction: PreparedInstruction): number[] {
-  switch (instruction.name) {
-    case "goto": case "goto/16": case "goto/32":
-      return [instruction.pc + instruction.a];
-    case "packed-switch": case "sparse-switch":
-      return switchCases(code, instruction).map(([, target]) => target);
-    default:
-      return instruction.name.startsWith("if-") ? [ifTarget(instruction)] : [];
-  }
+function branchTargets(code: CodeItem, instruction: PreparedInstruction): readonly number[] {
+  const op = instruction.op;
+  if (op >= 0x28 && op <= 0x2a) return [instruction.pc + instruction.a];
+  if (op === 0x2b || op === 0x2c) return switchCases(code, instruction).map(([, target]) => target);
+  if (op >= 0x32 && op <= 0x3d) return [ifTarget(instruction)];
+  return NO_TARGETS;
 }
+
+const NO_TARGETS: readonly number[] = [];
 
 function typeConstants(
   dex: DexFile,
   code: CodeItem,
-  desc: string,
+  signature: ReturnType<typeof parseMethodDesc>,
   isStatic: boolean,
   instructions: MutableInstruction[],
   leadersMap: Uint8Array,
@@ -199,7 +198,7 @@ function typeConstants(
     current.push(instruction);
   }
 
-  const retType = parseMethodDesc(desc).ret;
+  const retType = signature.ret;
   let liveDefs: Defs | null = null;
   const mark = (reg: number, kind: "F" | "D") => {
     const definitions = liveDefs?.get(reg);
@@ -272,7 +271,7 @@ function typeConstants(
   };
 
   const paramArrays: ArrayKinds = new Map();
-  const params = parseMethodDesc(desc).params;
+  const params = signature.params;
   let paramRegister = code.regs - code.ins + (isStatic ? 0 : 1);
   for (const paramType of params) {
     if (paramType === "[F") paramArrays.set(paramRegister, "F");
@@ -382,11 +381,11 @@ export function prepareMethod(
 
   started = observe ? performance.now() : 0;
   // Only numeric const writes can seed the reaching-definition analysis.
+  const signature = parseMethodDesc(desc);
   if (instructions.some((instruction) => instruction.op >= 0x12 && instruction.op <= 0x19))
-    typeConstants(dex, code, desc, isStatic, instructions, leaders);
+    typeConstants(dex, code, signature, isStatic, instructions, leaders);
   if (observe) observe("type", performance.now() - started);
 
-  const signature = parseMethodDesc(desc);
   const sync = instructions.every((instruction) => !maySuspend(instruction.op));
   const wasmEligible = observe !== undefined && !code.tries.length &&
     signature.params.every((type) => type.length === 1) && signature.ret.length === 1 &&
