@@ -4,14 +4,20 @@ Branch: `codex/cut-the-rope-fps`. Starting revision: `756491fb`.
 Status: reached non-ad Android game and shortcut APIs are implemented. A generic native
 frame-aware scheduler improves paired level-one presentation from about 4 to 5 frames/s
 when a sustained background computation is active. The unchanged ARM32 XAPK compiles with
-zero method failures and reaches interactive gameplay in full Chrome. The final serialized
-E2E matrix renders 183/183 steps in 966.3 seconds, with no wedge, layout error or required
-native API. YouTube retains two control settle timeouts and Matrix draw errors; the matrix
-has no Cut the Rope flow, so focused full-Chrome gameplay is its direct check.
+zero method failures and reaches interactive gameplay in full Chrome. A generic Thumb JIT
+path keeps IT blocks in compiled regions. On two fresh headless Chrome level-one runs with
+the same diagnostic counters, interpreted dispatch fell from 8.7 million to 34 thousand
+per eight seconds and presented frames rose from 243 to 266; a clean run also completed the
+first puzzle. FPS varies between launches. The prior serialized E2E matrix rendered 183/183
+steps in 966.3 seconds. The final serialized matrix for this JIT change rendered 183/183 in
+966.7 seconds, with no main-loop wedge, layout or GL error, or required native API. YouTube
+retained two control settle timeouts and its Matrix draw failure; 12 Flappy Bird auxiliary
+snapshots were unavailable as before. Cut the Rope has no matrix flow, so its focused level
+completion remains the direct gameplay check.
 
 Remaining limits: native guest execution still saturates the browser thread; the intro video
-stall and later feature parity remain open. Keep the performance claim tied to paired visible
-gameplay windows and the final matrix; lower JIT compilation counts alone do not prove FPS.
+stall and later feature parity remain open. Keep the performance claim tied to presented
+frames and advancing ticks, with the visible and headless Chrome rates reported separately.
 
 ---
 

@@ -391,3 +391,35 @@ record. YouTube retained two control settle timeouts and eight instances of its 
 previous matrix. Its page-status error and Lichess's Flutter pthread fault also remain visible.
 The matrix does not contain a Cut the Rope flow; the separate visible Chrome puzzle and swipe
 above are the focused acceptance evidence. No visual golden was changed.
+
+Further CPU profiling of the level-one tutorial in headless Chrome mapped the main Wasm
+sample cluster to `arm.execThumb`; 1,069 of 5,386 samples were in that interpreter function.
+Temporary dispatch counters showed that about 8.6 million of 8.7 million interpreted
+dispatches in one eight-second window arrived with Thumb IT state active. A Unity helper
+repeatedly executes three-instruction IT blocks, and the existing JIT only fused a few
+single-instruction moves. The new generic path scans a complete IT block, executes it with
+the existing ARM interpreter through one compiled-region call, checks its source-page epoch,
+and resumes compiled code when the guest PC reaches the expected end. Branch, fault and
+instruction-count exits retain their guest state; temporary counters were removed afterward.
+
+Two fresh headless Chrome runs at the same geometry and tutorial timing, with diagnostic
+counters and an eight-second CPU sample, presented 243 frames before and 266 after the change.
+Interpreted dispatch fell from 8.7 million to 34 thousand, while guest instructions executed
+rose from 1.56 to 1.77 billion in the window. This indicates higher guest throughput; the
+headless FPS difference alone is not a stable visible-Chrome estimate. With counters removed,
+another Cut run presented 221 frames in eight seconds and a rope swipe produced the three-star
+level completion, with advancing ticks, no page exception, GL error or draw error. Its
+unimplemented Cronet call was in an ad network thread and did not stop the game. The ARM and
+CPU tests pass (94 tests), and typecheck includes both Wasm builds. A repeat on the exact
+committed core also completed the level without page, GL or draw errors, presenting 159 frames
+in eight seconds; this spread limits the FPS claim.
+
+The final serialized E2E matrix after the IT-block change rendered all 183 steps in 966.7
+seconds. All main process diagnostics reported `ok` and advanced ticks. There was no main-loop
+wedge, layout error, GL error or required native call. YouTube retained two control settle
+timeouts and six recorded `Matrix.mapRect` draw errors across process snapshots, versus eight
+in the prior matrix. Its live content and other app/vendor missing APIs remain variable.
+Twelve Flappy Bird auxiliary WebView snapshots were unavailable, as before; all seven screen
+steps rendered. Lichess still reported Flutter pthread faults, and Flappy Bird retained its
+page-status error. No visual golden was changed. Cut the Rope is absent from this matrix, so
+the focused level completion above is its gameplay evidence.
