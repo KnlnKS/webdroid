@@ -12,7 +12,7 @@ import { readStreamFully, vfs, type JFileDescriptor } from "../jvm/natives/jio";
 import { javaFdBytes } from "../native/stdio";
 import { jclsNameOf } from "./apphost";
 import { JBuffer } from "../jvm/natives/jnio";
-import { JPath } from "./path";
+import { JPath, inversePath } from "./path";
 import { perf } from "../perf";
 import { type JRenderEffect } from "./rendereffect";
 import { JTypedValue, type JDisplayMetrics } from "./util";
@@ -1710,6 +1710,15 @@ function clipOutRect(this: JCanvas, l: number, t: number, r: number, b: number) 
   recordOrRun(this.ctx, apply);
   return 1;
 }
+function clipPath(this: JCanvas, path: JPath): number {
+  if (path.inverseFill) {
+    const bounds = canvasLocalBounds(this.ctx);
+    if (!bounds) return 0;
+    const [inverse, rule] = inversePath(path, ...bounds);
+    this.ctx.clip(inverse, rule);
+  } else this.ctx.clip(path.path(), path.fillRule);
+  return 1;
+}
 // Canvas2D exposes no clip region; rotated clips retain a conservative device-space bound.
 function viewportClipBounds(cv: JCanvas, out: JRect): number {
   const { a, b, c, d, e, f } = cv.ctx.getTransform();
@@ -1771,14 +1780,20 @@ function drawBitmapRect(this: JCanvas, b: JBitmap, src: JRect | null, dst: JRect
     dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top));
 }
 const defaultBitmapPaint = new JPaint();
-function drawPaint(this: JCanvas, paint: JPaint) {
-  const ctx = this.ctx, inverse = ctx.getTransform().inverse();
+function canvasLocalBounds(ctx: JCanvas["ctx"]): [number, number, number, number] | null {
+  const inverse = ctx.getTransform().inverse();
   const points = [[0, 0], [ctx.canvas.width, 0], [0, ctx.canvas.height], [ctx.canvas.width, ctx.canvas.height]]
     .map(([x, y]) => inverse.transformPoint({ x, y }));
-  if (!points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) return;
-  const l = Math.min(...points.map(p => p.x)), t = Math.min(...points.map(p => p.y));
+  if (!points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) return null;
+  return [Math.min(...points.map(p => p.x)), Math.min(...points.map(p => p.y)),
+    Math.max(...points.map(p => p.x)), Math.max(...points.map(p => p.y))];
+}
+function drawPaint(this: JCanvas, paint: JPaint) {
+  const bounds = canvasLocalBounds(this.ctx);
+  if (!bounds) return;
+  const [l, t, r, b] = bounds;
   const p = new JPaint(); copyPaint(paint, p); p.style = 0; p.maskFilter = null;
-  this.drawShape(p, c => c.fillRect(l, t, Math.max(...points.map(p => p.x)) - l, Math.max(...points.map(p => p.y)) - t), () => {});
+  this.drawShape(p, c => c.fillRect(l, t, r - l, b - t), () => {});
 }
 function drawBitmap(canvas: JCanvas, b: JBitmap, paint: JPaint | null, draw: (ctx: Ctx2D, image: OffscreenCanvas) => void) {
   if (b.config === 1) {
@@ -1861,13 +1876,9 @@ export const canvasMethods: NativeSpec["methods"] = {
   "clipRect(Landroid/graphics/RectF;)Z": function (this: JCanvas, r: JRectF) { return clipRect.call(this, r.left, r.top, r.right, r.bottom); },
   "clipPath(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z": function (this: JCanvas, path: JPath, op: { ename?: string } | null) {
     if (op && op.ename && op.ename !== "INTERSECT") return 1;
-    this.ctx.clip(path.path(), path.fillRule);
-    return 1;
+    return clipPath.call(this, path);
   },
-  "clipPath(Landroid/graphics/Path;)Z": function (this: JCanvas, path: JPath) {
-    this.ctx.clip(path.path(), path.fillRule);
-    return 1;
-  },
+  "clipPath(Landroid/graphics/Path;)Z": clipPath,
   "getClipBounds(Landroid/graphics/Rect;)Z": function (this: JCanvas, r: JRect) {
     return viewportClipBounds(this, r);
   },
@@ -1930,7 +1941,14 @@ export const canvasMethods: NativeSpec["methods"] = {
     this.ctx.fillRect(x - p.strokeWidth / 2, y - p.strokeWidth / 2, Math.max(1, p.strokeWidth), Math.max(1, p.strokeWidth));
   },
   "drawPath(Landroid/graphics/Path;Landroid/graphics/Paint;)V": function (this: JCanvas, path: JPath, p: JPaint) {
-    this.drawShape(p, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()));
+    if (!path.inverseFill) {
+      this.drawShape(p, (c) => c.fill(path.path(), path.fillRule), (c) => c.stroke(path.path()));
+      return;
+    }
+    const bounds = canvasLocalBounds(this.ctx);
+    if (!bounds) return;
+    const [inverse, rule] = inversePath(path, ...bounds);
+    this.drawShape(p, (c) => c.fill(inverse, rule), (c) => c.stroke(path.path()));
   },
   "drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V": function (this: JCanvas, s: string, x: number, y: number, p: JPaint) {
     drawTextImpl(this, s, x, y, p);
