@@ -58,6 +58,7 @@ pub const L_FB32 = 56;
 pub const L_FR32 = 57;
 pub const L_VA = 58;
 pub const L_VB = 59;
+pub const L_VREG = 60;
 pub const FN: u4 = 8;
 pub const FZ: u4 = 4;
 pub const FC: u4 = 2;
@@ -308,6 +309,8 @@ pub fn Emit(comptime wide: bool) type {
         lin: [MAX_BLOCKS]u4 = undefined,
         pw: bool = false,
         pdirty: u4 = 0,
+        vloaded: u32 = 0,
+        vcachedWrite: bool = false,
 
         pub fn ifv(e: *Self) void {
             e.b.blockStart(O.if_, wasm.VOID);
@@ -513,6 +516,7 @@ pub fn Emit(comptime wide: bool) type {
             if (e.rw.fr | e.rw.fw != 0) e.spillFlags();
             if (wide) b.emit(.{ get(L_CPU), c32(@bitCast(mem.ld(u32, pc))), c32(@bitCast(pc)), call(F_EXEC), set(L_R) }) else b.emit(.{ get(L_CPU), c32(@bitCast(pc)), call(F_EXEC32), set(L_R) });
             e.loadRegs(e.rw.w);
+            e.vloaded = 0;
             if (e.rw.fw != 0) {
                 e.loadFlags(15);
                 e.eager(15);
@@ -1125,7 +1129,8 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
         e.written = 0x7fff;
         @memset(wb[0..n], 0x7fff);
     }
-    b.emit(.{ 9, 32, if (wide) wasm.I64 else wasm.I32, 4, wasm.I32, 4, wasm.I64, 6, wasm.I32, 2, wasm.I64, 2, wasm.F64, 3, wasm.I64, 3, wasm.I32, 2, wasm.V128 });
+    b.emit(.{ if (wide) @as(u8, 10) else 9, 32, if (wide) wasm.I64 else wasm.I32, 4, wasm.I32, 4, wasm.I64, 6, wasm.I32, 2, wasm.I64, 2, wasm.F64, 3, wasm.I64, 3, wasm.I32, 2, wasm.V128 });
+    if (wide) b.emit(.{ 32, wasm.V128 });
     e.loadRegs(e.used);
     e.loadFlags(live);
     b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_IC), set(L_IC), get(L_CPU), mo(O.i64_load, OFF_LIMIT), set(L_LIMIT), get(L_ENTRY), set(L_NEXT), O.block, wasm.VOID, O.block, wasm.VOID, O.loop, wasm.VOID });
@@ -1143,6 +1148,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
         e.wcur = wb[i];
         e.pk = .none;
         e.pdirty = 0;
+        e.vloaded = 0;
         var pc = blk.pc;
         var j: u32 = 0;
         var ended = false;
@@ -1158,11 +1164,14 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
                 if (wide) e.rw = ALL;
                 e.fallback(pc, j + 1);
                 ended = false;
-            } else ended = switch (isa) {
-                .a64 => e.emitOp(o, pc, j + 1),
-                .arm => jit32.emitArm(&e, pc, j + 1),
-                .thumb => jit32.emitThumb(&e, pc, j + 1),
-            };
+            } else {
+                if (wide and o.kind != .simd) e.vloaded = 0;
+                ended = switch (isa) {
+                    .a64 => e.emitOp(o, pc, j + 1),
+                    .arm => jit32.emitArm(&e, pc, j + 1),
+                    .thumb => jit32.emitThumb(&e, pc, j + 1),
+                };
+            }
             pc += len;
             if (ended) break;
         }

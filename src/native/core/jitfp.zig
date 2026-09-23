@@ -86,9 +86,14 @@ pub fn emitVfp(e: *jit.Emit(false), w: u32) bool {
 
 pub fn emitSimd(e: *Emit, w: u32, pc: u32, k: u32) void {
     if (!is(w, 0x5000_0000, 0x1000_0000)) {
+        const rd: u8 = @intCast(w & 31);
+        e.vcachedWrite = false;
+        e.vloaded &= ~bt.bit(rd);
         if (!emitVector(e, w)) e.fallback(pc, k);
+        if (!e.vcachedWrite) e.vloaded &= ~bt.bit(rd);
         return;
     }
+    e.vloaded = 0;
     const ftype = bits(w, 22, 2);
     if (w & 0x2000_0000 != 0 or ftype > 1) return e.fallback(pc, k);
     const b = e.b;
@@ -231,11 +236,21 @@ fn fcmp(e: *Emit, rn: u8, rm: ?u8, f: u1) void {
 }
 
 fn vget(e: *Emit, n: u8) void {
-    e.b.emit(.{ get(L_CPU), vm(S.load, voff(n)) });
+    if (e.vloaded & bt.bit(n) == 0) {
+        e.b.emit(.{ get(L_CPU), vm(S.load, voff(n)), set(jit.L_VREG + n) });
+        e.vloaded |= bt.bit(n);
+    }
+    e.b.get(jit.L_VREG + n);
 }
 fn vput(e: *Emit, d: u8, q: bool) void {
-    if (q) return e.b.emit(.{vm(S.store, voff(d))});
+    if (q) {
+        e.b.emit(.{ tee(jit.L_VREG + d), vm(S.store, voff(d)) });
+        e.vloaded |= bt.bit(d);
+        e.vcachedWrite = true;
+        return;
+    }
     e.b.emit(.{ vm(S.store64_lane, voff(d)), 0, get(L_CPU), c64(0), mo(O.i64_store, voff(d) + 8) });
+    e.vloaded &= ~bt.bit(d);
 }
 fn setQIf(e: *Emit) void {
     const b = e.b;
