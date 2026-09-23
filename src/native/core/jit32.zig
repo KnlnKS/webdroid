@@ -59,6 +59,19 @@ fn itMove(pc: u32, h: u32) ?ItMove {
     }
     return null;
 }
+fn itBlockEnd(pc: u32, h: u32) ?u32 {
+    if (h & 0xff00 != 0xbf00 or h & 15 == 0 or bits(h, 4, 4) >= 14 or jit.forcedFallback(pc)) return null;
+    var at = pc + 2;
+    const count: u32 = 4 - @ctz(@as(u4, @truncate(h)));
+    for (0..count) |_| {
+        if (at >> abi.PAGE_SHIFT != pc >> abi.PAGE_SHIFT or jit.forcedFallback(at)) return null;
+        const first: u32 = mem.ld(u16, at);
+        const len: u32 = if (first & 0xf800 >= 0xe800) 4 else 2;
+        if ((at & (abi.PAGE_SIZE - 1)) > abi.PAGE_SIZE - len or (len == 4 and jit.forcedFallback(at + 2))) return null;
+        at += len;
+    }
+    return at;
+}
 
 pub fn rwArm(w: u32) jit.RW {
     var rw = jit.ALL32;
@@ -208,6 +221,9 @@ pub fn scanThumb(r: *Region, i: u32, page: *cpu.Page, pc: u32) Scan {
                 if (itMove(pc, h)) |move| {
                     cpu.cover(page, pc, pc + move.len);
                     b.fall = jit.blockFor(r, pc + 2 + move.len);
+                } else if (itBlockEnd(pc, h)) |end| {
+                    cpu.cover(page, pc, end - 2);
+                    b.fall = jit.blockFor(r, end);
                 }
                 return .{ .len = 2, .ends = true };
             }
@@ -657,6 +673,11 @@ pub fn emitThumb(e: *Emit, pc: u32, k: u32) bool {
             setR(e, move.d);
             e.endif();
             e.transfer(e.r.blocks[e.blk].fall, (pc + 2 + move.len) | 1, k + 1);
+            return true;
+        }
+        if (itBlockEnd(pc, h)) |end| {
+            e.fallbackIt(pc, end, k);
+            e.transfer(e.r.blocks[e.blk].fall, end | 1, 0);
             return true;
         }
         e.fallback(pc, k);

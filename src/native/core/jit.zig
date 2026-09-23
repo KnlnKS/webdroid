@@ -79,7 +79,8 @@ const F_EXEC32 = 2;
 pub const F_FMAX32 = 3;
 pub const F_FMAX64 = 7;
 pub const F_FMA64 = 11;
-const N_IMPORTS = 12;
+const F_IT32 = 12;
+const N_IMPORTS = 13;
 const FP_NAMES = [_][]const u8{ "fmax", "fmin", "fmaxnm", "fminnm" };
 fn fpThunk(comptime F: type, comptime k: u2) *const fn (F, F) callconv(.c) F {
     return &struct {
@@ -518,6 +519,23 @@ pub fn Emit(comptime wide: bool) type {
             b.get(L_R);
             e.ifv();
             e.countIc(k);
+            b.emit(.{ get(L_R), set(L_RET) });
+            e.exit();
+            e.endif();
+        }
+        pub fn fallbackIt(e: *Self, pc: u32, end: u32, k: u32) void {
+            const b = e.b;
+            e.settle(15);
+            e.spillRegs(e.rw.r | e.rw.w);
+            e.spillFlags();
+            e.countIc(k - 1);
+            e.storeIc();
+            b.emit(.{ get(L_CPU), c32(@bitCast(pc)), c32(@bitCast(end)), call(F_IT32), set(L_R) });
+            e.loadRegs(e.rw.w);
+            e.loadFlags(15);
+            e.eager(15);
+            b.emit(.{ get(L_CPU), mo(O.i64_load, OFF_IC), set(L_IC), get(L_R) });
+            e.ifv();
             b.emit(.{ get(L_R), set(L_RET) });
             e.exit();
             e.endif();
@@ -1227,6 +1245,7 @@ export fn jit_emit(out: u32, cap: u32) u32 {
     importFn(&b, "exec32", 0);
     inline for ([_][]const u8{ "32", "64" }, 2..) |sfx, ty| inline for (FP_NAMES) |nm| importFn(&b, nm ++ sfx, ty);
     importFn(&b, "fma64", 4);
+    importFn(&b, "it32", 1);
     b.patch(imp_len, b.len - imp_start);
     b.byte(3);
     b.u(1 + nregions);

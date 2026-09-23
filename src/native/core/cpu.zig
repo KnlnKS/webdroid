@@ -204,6 +204,28 @@ export fn exec_word32(cp: u32, pc: u32) u32 {
         .syscall => 3,
     };
 }
+export fn exec_it_block32(cp: u32, pc: u32, end: u32) u32 {
+    const c: *Cpu = @ptrFromInt(cp);
+    const pg = pc >> abi.PAGE_SHIFT;
+    const source = decodedPage(pg) orelse {
+        c.pc = pc;
+        return 1;
+    };
+    const source_epoch = source.epoch;
+    var at = pc;
+    var n: u32 = 0;
+    while (n < 5) : (n += 1) {
+        const result = exec_word32(cp, at);
+        c.ic += 1;
+        if (result != 0) return result;
+        at = @truncate(c.pc);
+        if (n > 0 and ((((c.cpsr >> 8) & 0xfc) | ((c.cpsr >> 25) & 3)) == 0)) {
+            const current = decodedPage(pg) orelse return 1;
+            return @intFromBool(at != end or current.epoch != source_epoch);
+        }
+    }
+    return 1;
+}
 pub inline fn raise(c: *Cpu, code: Fault, w: u32) Status {
     c.exit = @intFromEnum(code);
     c.fault_word = w;
