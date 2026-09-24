@@ -1,5 +1,5 @@
 // Boot every apk in the tree headlessly and rank the gaps by how many apks they block.
-//   bun run corpus [apk ...] [--json out.json] [--wait ms]      (needs `bun run dev`)
+//   bun run corpus [apk ...] [--json out.json] [--wait ms] [--observe ms]
 import { type Page } from "playwright";
 import { readdirSync } from "node:fs";
 import { argv } from "./args";
@@ -8,8 +8,9 @@ import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
 import { isWebdroidProcessFrame, readProcesses, type ProcessSnapshot } from "../tests/e2e/lib/processes";
 
 const args = process.argv.slice(2);
-const { opt, positional } = argv(args, ["--json", "--wait"]);
+const { opt, positional } = argv(args, ["--json", "--wait", "--observe"]);
 const waitMs = parseInt(opt("--wait", "12000")!);
+const observeMs = parseInt(opt("--observe", "1500")!);
 const apks = positional.length ? positional : readdirSync("apks").filter((f) => /\.x?apk$/.test(f)).sort();
 
 interface Row {
@@ -41,7 +42,7 @@ async function boot(page: Page, apk: string): Promise<Row> {
     // a frame having been drawn is the only evidence that matters; ticks alone can spin on a
     // shell that never got an activity up
     await page.waitForFunction("window.wd && window.wd.perf.draws > 0", null, { timeout: waitMs }).catch(() => {});
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(observeMs);
     const s = await page.evaluate(() => {
       const w = globalThis.wd!;
       return { ticks: w.ticks, draws: w.perf.draws, bootMs: w.perf.bootMs, classes: w.perf.classesCompiled,
