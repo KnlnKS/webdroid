@@ -13,12 +13,12 @@ The active scope is the 20 APKs present before the latest additions to `apks/`. 
 | GmsClient.apk | None observed | Availability, messaging configuration, received-message count, fused location callback and MapLibre map render exercised; account sign-in requires credentials |
 | Google Maps.apk | None observed on targeted rerun | Search and place details work, but the map surface remains blank in both this worktree and the matching starting revision; backup transport is absent |
 | Reddit.xapk | Optional App Set, AppsFlyer and MIUI class probes | Logged-out welcome and auth sheets have a positional fast flow; generic UI exploration cannot identify individual controls on its Compose canvas |
-| Resy.apk | None observed | Boot only |
+| Resy.apk | None observed | Search, venue offers, and Back exercised; live content and completion timeouts remain intermittent |
 | Subway Surfers.apk | None observed | Active run works; background Firebase initialization reports an error |
 | TikTok.apk | Optional bundled and vendor SDK probes | Playback/input rate and authentication/publishing remain unvalidated |
 | Twitch.xapk | Optional MIUI referrer probe | Boot only |
 | WebdroidFuzzProbe.apk | None observed | Boot only |
-| YouTube.xapk | Optional window extensions | Targeted 16-step playback passes; an ELF-image `mprotect` failure is fixed, while one later run hit a separate intermittent native zero-instruction fault |
+| YouTube.xapk | Optional window extensions | Targeted 16-step playback passes after image-alpha support; an ELF-image `mprotect` failure is fixed, while the intermittent native zero-instruction fault remains open |
 | calculatorm.apk | None observed | Covered by E2E and Android comparison flows |
 | flappybird.apk | None observed | Auxiliary snapshots unavailable |
 | harmonic.apk | Optional window extension probe | Article WebView works in deployed build; full navigation remains open |
@@ -54,3 +54,5 @@ The original GmsClient's Availability, Messaging and Received messages buttons r
 Doodle Jump's title remained below its 55 fps quick-flow gate. An isolated 15-second warm sample at `1080x2160@480` produced 40.45 presentations/s on SwiftShader and 59.98 presentations/s on the Apple M4 Pro renderer, both with live ticks and no reported errors. A temporary synchronous cached-read optimization did not improve the title gate and was reverted. The software-renderer shortfall remains real; the hardware result identifies the browser rendering path as a material factor without proving every startup frame is fast.
 
 The UI explorer now reads a launchable activity from the same merged manifest used for an APK or XAPK boot, so it can inspect split installs without asking `aapt2` to parse the outer archive. A 12-action Reddit run collected six optional vendor class probes and no other new missing API. Its Compose host appeared as one non-clickable text node, so the explorer's generic grid did not reach the visible bottom controls; the existing positional Reddit flow remains the better guest path. A bounded Amazon exploration reached its initial state but the first fallback tap exceeded the explorer's five-second action deadline, then repeated that timeout during failure minimization; the attempt was stopped without attributing it to an Android API.
+
+A YouTube fast run with JIT enabled completed all 16 actions but logged hundreds of repeated native jumps into zero-filled memory at `0x10004d20`; the matching `?jit=0` run had no such fault. A subsequent JIT-enabled replay did not reproduce the native fault, but exposed an uncaught `ImageView.setImageAlpha(int)` miss when resuming playback and timed out waiting for the player state. The ImageView implementation now keeps image opacity separate from View opacity, applies it to the current drawable, and reapplies it after a drawable change. A repeat 16-step replay then reached pause, resume, fullscreen, and Shorts with no new playback API or native fault. YouTube XAPK smoke compilation had zero method failures. The JIT fault still needs a reproducible trace or range bisection; the clean rerun does not close it.
