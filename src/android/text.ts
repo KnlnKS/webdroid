@@ -1518,9 +1518,18 @@ rt.register({
     },
   },
 });
-rt.register({ name: "android/text/StaticLayout", ctor: JStaticLayout, sup: "android/text/Layout", methods: {} });
+rt.register({ name: "android/text/StaticLayout", ctor: JStaticLayout, sup: "android/text/Layout", methods: {
+  "<init>(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFZ)V":
+    async function (this: JStaticLayout, cs: unknown, p: JTextPaint, w: number, alignment: JSimpleEnum, mult: number, add: number, includePad: number) {
+      this.alignment = alignment;
+      await setupSpannedLayout(this, cs, p, w, mult, add, Number.MAX_SAFE_INTEGER, !!includePad);
+    },
+} });
 export async function mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy = 0): Promise<JLayout> {
   const l = new JStaticLayout();
+  return setupSpannedLayout(l, cs, p, w, mult, add, maxLines, includePad, breakStrategy);
+}
+async function setupSpannedLayout(l: JStaticLayout, cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy = 0): Promise<JStaticLayout> {
   l.text = spannedString(cs); l.src = cs; l.paint = p; l.width = Math.max(0, w);
   l.spacingMult = mult; l.spacingAdd = add; l.includePad = includePad; l.breakStrategy = breakStrategy;
   const spans = replacementSpans(cs);
