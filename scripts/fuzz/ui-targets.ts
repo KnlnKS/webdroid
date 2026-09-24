@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import type { Page } from "playwright";
 import { androidTool } from "../android-sdk";
+import { openApk } from "../lib";
+import { parseAXML, attrStr } from "../../src/android/axml";
 import { performAction } from "../../tests/e2e/lib/actions";
 import type { Act } from "../../tests/e2e/lib/probe";
 import { parseUiAutomator } from "../../tests/e2e/lib/uiautomator";
@@ -24,16 +26,21 @@ async function command(argv: string[]): Promise<CommandResult> {
   return { stdout: Buffer.from(stdout), stderr };
 }
 
-export function inspectUiApp(apkArg: string): UiApp {
+export async function inspectUiApp(apkArg: string): Promise<UiApp> {
   const apk = existsSync(apkArg) ? apkArg : `apks/${apkArg}`;
   if (!existsSync(apk)) throw new Error(`missing APK ${apkArg}`);
-  const result = Bun.spawnSync([androidTool("aapt2"), "dump", "badging", apk]);
-  if (result.exitCode !== 0) throw new Error(`aapt2 could not inspect ${apk}: ${result.stderr.toString()}`);
-  const out = result.stdout.toString();
-  const pkg = /^package: name='([^']+)'/m.exec(out)?.[1];
-  const activity = /^launchable-activity: name='([^']+)'/m.exec(out)?.[1];
-  if (!pkg || !activity) throw new Error(`${apk} has no launchable activity`);
-  return { apk, pkg, activity };
+  const manifest = (await openApk(apk))["AndroidManifest.xml"];
+  if (!manifest) throw new Error(`${apk} has no AndroidManifest.xml`);
+  const root = parseAXML(manifest), pkg = attrStr(root, "package");
+  const application = root.children.find((node) => node.name === "application");
+  const launcher = application?.children.find((node) =>
+    (node.name === "activity" || node.name === "activity-alias") && node.children.some((filter) =>
+      filter.name === "intent-filter" &&
+      filter.children.some((entry) => entry.name === "action" && attrStr(entry, "name") === "android.intent.action.MAIN") &&
+      filter.children.some((entry) => entry.name === "category" && attrStr(entry, "name") === "android.intent.category.LAUNCHER")));
+  const name = launcher && attrStr(launcher, "name");
+  if (!pkg || !name) throw new Error(`${apk} has no launchable activity`);
+  return { apk, pkg, activity: name.startsWith(".") ? pkg + name : name };
 }
 
 function pixels(point: { x: number; y: number }, size: UiSize): [string, string] {

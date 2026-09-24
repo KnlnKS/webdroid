@@ -317,7 +317,8 @@ export async function runUi(options: UiOptions): Promise<void> {
   if (!options.apks.length) throw new Error("ui fuzzing requires at least one APK");
   if (!options.steps) throw new Error("--steps must be at least 1");
   mkdirSync(options.out, { recursive: true });
-  const apps = options.apks.map(inspectUiApp), runs = [], summaries = [];
+  const apps: UiApp[] = [], runs = [], summaries = [];
+  for (const apk of options.apks) apps.push(await inspectUiApp(apk));
   for (let index = 0; index < apps.length; index++) {
     const app = apps[index]!;
     const explorer = await UiExplorer.open(options.out, app.pkg, app.apk);
