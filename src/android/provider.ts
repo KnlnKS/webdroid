@@ -162,5 +162,8 @@ rt.register({
     VOLUME_INTERNAL: "internal", VOLUME_EXTERNAL: "external", VOLUME_EXTERNAL_PRIMARY: "external_primary",
     MEDIA_SCANNER_VOLUME: "volume", AUTHORITY: "media",
   },
-  methods: { "static getPickImagesMaxLimit()I": () => 150 },
+  methods: {
+    "static getPickImagesMaxLimit()I": () => 150,
+    "static canManageMedia(Landroid/content/Context;)Z": (context: unknown) => { if (!context) rt.npe(); return 0; },
+  },
 });

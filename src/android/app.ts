@@ -837,6 +837,9 @@ for (const [name, methods, statics] of [
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
 }
 rt.register({ name: "android/bluetooth/le/ScanCallback", ctor: class extends JObj {} });
+rt.register({ name: "android/hardware/usb/UsbManager", ctor: class extends JObj {}, methods: {
+  "getDeviceList()Ljava/util/HashMap;": () => rt.make("java/util/HashMap"),
+} });
 rt.register({
   name: "android/hardware/fingerprint/FingerprintManager", ctor: class extends JObj {},
   methods: {
