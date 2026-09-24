@@ -998,7 +998,7 @@ const viewMethods: NativeSpec["methods"] = {
   "setAlpha(F)V": function (this: JView, a: number) { this.alphaV = a; invalidate(); },
   "setTranslationX(F)V": function (this: JView, x: number) { this.translationX = x; invalidate(); },
   "setTranslationY(F)V": function (this: JView, y: number) { this.translationY = y; invalidate(); },
-  "setTranslationZ(F)V": function (this: JView, z: number) { this.translationZ = z; },
+  "setTranslationZ(F)V": function (this: JView, z: number) { this.translationZ = z; invalidate(this); },
   "getTranslationX()F": function (this: JView) { return this.translationX; },
   "getTranslationY()F": function (this: JView) { return this.translationY; },
   "setScaleX(F)V": function (this: JView, s: number) { this.scaleXv = s; invalidate(); },
@@ -1011,7 +1011,7 @@ const viewMethods: NativeSpec["methods"] = {
   "getTransitionName()Ljava/lang/String;": function (this: JView) { return this.transitionName; },
   "setPivotX(F)V": function (this: JView, p: number) { this.pivotXv = p; },
   "setPivotY(F)V": function (this: JView, p: number) { this.pivotYv = p; },
-  "setElevation(F)V": function (this: JView, e: number) { this.elevationV = e; },
+  "setElevation(F)V": function (this: JView, e: number) { this.elevationV = e; invalidate(this); },
   "getElevation()F": function (this: JView) { return this.elevationV; },
   "setOutlineAmbientShadowColor(I)V": function (this: JView, color: number) { this.outlineAmbientShadowColor = color; invalidate(); },
   "getOutlineAmbientShadowColor()I": function (this: JView) { return this.outlineAmbientShadowColor; },
@@ -1502,6 +1502,7 @@ const viewMethods: NativeSpec["methods"] = {
   "getPivotY()F": function (this: JView) { return this.pivotYv ?? this.height() / 2; },
   "getTranslationZ()F": function (this: JView) { return this.translationZ; },
   "getZ()F": function (this: JView) { return this.elevationV + this.translationZ; },
+  "setZ(F)V": function (this: JView, z: number) { this.translationZ = z - this.elevationV; invalidate(this); },
   "setTransitionVisibility(I)V": function (this: JView, v: number) { this.visibility = v; invalidate(); },
   "getClipBounds()Landroid/graphics/Rect;": function (this: JView) { return this.clipBounds; },
   "setClipBounds(Landroid/graphics/Rect;)V": function (this: JView, r: JRect | null) { this.clipBounds = r; invalidate(); },
@@ -1925,12 +1926,17 @@ const vgMethods: NativeSpec["methods"] = {
   },
   "dispatchDraw(Landroid/graphics/Canvas;)V": async function (this: JViewGroup, cv: JCanvas) {
     const n = this.children.length;
-    if (!this.drawingOrderEnabled) { for (const c of this.children) await drawView(c, cv, this); return; }
-    // a subclass's getChildDrawingOrder picks which child paints at each z step (AOSP buildOrderedChildList)
-    for (let i = 0; i < n; i++) {
-      const c = this.children[await vcall(this, "getChildDrawingOrder", "(II)I", n, i)];
-      if (c) await drawView(c, cv, this);
+    let order = this.children;
+    if (this.drawingOrderEnabled) {
+      order = [];
+      for (let i = 0; i < n; i++) {
+        const c = this.children[await vcall(this, "getChildDrawingOrder", "(II)I", n, i)];
+        if (c) order.push(c);
+      }
     }
+    if (order.some((c) => c.elevationV || c.translationZ))
+      order = [...order].sort((a, b) => a.elevationV + a.translationZ - b.elevationV - b.translationZ);
+    for (const c of order) await drawView(c, cv, this);
   },
   "setChildrenDrawingOrderEnabled(Z)V": function (this: JViewGroup, e: number) { this.drawingOrderEnabled = !!e; },
   "isChildrenDrawingOrderEnabled()Z": function (this: JViewGroup) { return this.drawingOrderEnabled ? 1 : 0; },

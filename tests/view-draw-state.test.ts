@@ -1,10 +1,14 @@
 import { expect, test } from "bun:test";
+import "../src/natives";
 import { canvasMethods, JCanvas } from "../src/android/graphics";
 import { JDrawable } from "../src/android/drawable";
 import { JImageView } from "../src/android/imageview";
-import { drawView, JView } from "../src/android/view";
+import { drawView, JView, JViewGroup } from "../src/android/view";
 import { rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
+import { vcall } from "../src/jvm/natives/jlang";
+
+rt.linkNatives();
 
 test("view traversal exposes the child draw save to Android canvas code", async () => {
   let depth = 0;
@@ -32,6 +36,25 @@ test("view traversal exposes the child draw save to Android canvas code", async 
   expect(view.observedSaveCount).toBe(2);
   expect(canvas.saveCount).toBe(1);
   expect(depth).toBe(0);
+});
+
+test("view Z changes child paint order relative to elevation", async () => {
+  const order: string[] = [];
+  const context = { save() {}, restore() {}, translate() {}, beginPath() {}, rect() {}, clip() {} } as unknown as OffscreenCanvasRenderingContext2D;
+  const canvas = JCanvas.wrap(context, 100, 100);
+  class Child extends JView {
+    constructor(readonly label: string) { super(); this.right = this.bottom = 100; }
+    [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]() { order.push(this.label); }
+  }
+  const parent = new JViewGroup(); parent.right = parent.bottom = 100;
+  const raised = new Child("raised"), lowered = new Child("lowered");
+  parent.children.push(raised, lowered);
+  await vcall(raised, "setElevation", "(F)V", 3);
+  await vcall(lowered, "setElevation", "(F)V", 2);
+  await vcall(lowered, "setZ", "(F)V", 1);
+  expect(await vcall(lowered, "getTranslationZ", "()F")).toBe(-1);
+  await vcall(parent, "dispatchDraw", "(Landroid/graphics/Canvas;)V", canvas);
+  expect(order).toEqual(["lowered", "raised"]);
 });
 
 test("canvas root state rejects unmatched restores", () => {
