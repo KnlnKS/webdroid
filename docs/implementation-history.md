@@ -110,6 +110,18 @@ geometry overrides explicitly. Android recording now stages a whole reference
 before replacing the previous one, so capture failures leave committed goldens
 intact. The recorder change has not been exercised against an emulator.
 
+Profiling the full-flow definitions found 738 seconds of declared wait horizons
+across 13 flows; TikTok alone declares 169 seconds, YouTube 128, and Resy 107.
+The prior one-job matrix took 964.3 seconds, so fixed dwell dominates the serial
+wall time. Step phase data showed settle time dominating action, capture, and
+host-write time in the live flows. A seven-job stress run did not establish a
+faster valid matrix: FitNotes rose from 32.4 to 51.7 seconds, Lichess reported
+native thread-abort errors under contention, and Resy rose from 130.4 to 248.3
+seconds with two settle timeouts. The run was stopped after these results; no
+seven-job full-suite duration or clean pass is claimed. Faster full coverage
+needs observable completion conditions for live steps in place of fixed dwell,
+while keeping every action and the existing Android visual checkpoints.
+
 ## Evidence and measurement
 
 - Run real APK and bundled library bytecode. A rendered screen or empty missing-API
