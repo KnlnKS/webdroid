@@ -9,7 +9,7 @@ import {
   specSize, findById, guardCall, dispatchAttached, dispatchDetached
 } from "./view";
 import { JFrameLayout, JLinearLayout } from "./layouts";
-import { JTextView } from "./textview";
+import { JTextView, JButton } from "./textview";
 import { themeAccent } from "./widget";
 import { JCanvas, tfMedium , JRect } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
@@ -369,6 +369,7 @@ export class JAlertDialog extends JDialog {
   items: string[] | null = null;
   itemsL: unknown = null;
   customView: JView | null = null;
+  buttons = new Map<number, JButton>();
   built = false;
 }
 async function buildAlertContent(d: JAlertDialog) {
@@ -439,7 +440,7 @@ async function buildAlertContent(d: JAlertDialog) {
     row.padL = row.padR = device.dp(12); row.padT = row.padB = device.dp(4);
     row.lp = lpFill();
     const mkBtn = (text: string, which: number, l: unknown) => {
-      const b = new JTextView();
+      const b = new JButton();
       b.ctx = d.jctx; b.jres = col.jres; b.theme = col.theme;
       b.text = text.toUpperCase();
       b.paintT.textSize = device.dp(15);
@@ -456,6 +457,7 @@ async function buildAlertContent(d: JAlertDialog) {
           await d.dismissImpl();
         },
       };
+      d.buttons.set(which, b);
       addUnattachedView(row, b);
     };
     if (d.neutText) mkBtn(d.neutText, -3, d.neutL);
@@ -481,7 +483,7 @@ const alertMethods: NativeSpec["methods"] = {
   "setView(Landroid/view/View;)V": function (this: JAlertDialog, v: JView) { this.customView = v; },
   "setButton(ILjava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)V":
     async function (this: JAlertDialog, which: number, t: unknown, l: unknown) { setButton(this, which, await str(this.jctx?.$host, t), l); },
-  "getButton(I)Landroid/widget/Button;": () => null,
+  "getButton(I)Landroid/widget/Button;": function (this: JAlertDialog, which: number) { return this.buttons.get(which) ?? null; },
   "getListView()Landroid/widget/ListView;": () => null,
 };
 rt.register({ name: "android/app/AlertDialog", ctor: JAlertDialog, sup: "android/app/Dialog", methods: alertMethods });

@@ -460,6 +460,7 @@ rt.register({
     "getCheckedRadioButtonId()I": function (this: JRadioGroup) { return this.checkedId; },
   },
 });
+rt.markers("android/widget/RadioGroup$OnCheckedChangeListener");
 
 async function initSpace(this: JView, context: unknown, attrs: JAttrSet | null = null, defStyle = 0) {
   await initViewFromCtx(this, context, attrs, defStyle);
