@@ -5,6 +5,12 @@ import { prepareSystemPackages } from "./system-packages";
 
 const out = "dist";
 const partSize = 24 * 1024 * 1024;
+const aospFiles = ["framework.jar", "framework-res.apk"];
+const includeAosp = process.env.WEBDROID_INCLUDE_AOSP === "1";
+if (process.env.WEBDROID_INCLUDE_AOSP && !includeAosp)
+  throw new Error("WEBDROID_INCLUDE_AOSP must be 1 when set");
+if (includeAosp) for (const name of aospFiles) if (!(await Bun.file(`vendor/aosp/${name}`).exists()))
+  throw new Error(`Missing vendor/aosp/${name}; run bun run gen-framework`);
 
 await Promise.all([ensureFrameworkRes(), prepareSystemPackages()]);
 await rm(out, { recursive: true, force: true });
@@ -29,9 +35,8 @@ await Promise.all([
 ]);
 
 const large: Record<string, { parts: number }> = {};
-for (const name of ["framework.jar", "framework-res.apk"]) {
+if (includeAosp) for (const name of aospFiles) {
   const source = `vendor/aosp/${name}`;
-  if (!(await Bun.file(source).exists())) continue;
   const size = (await stat(source)).size;
   const path = `vendor/aosp/${name}`;
   if (size <= partSize) { await copyFile(source, path); continue; }
