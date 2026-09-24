@@ -301,7 +301,7 @@ rt.register({
   },
 });
 for (const n of ["android/media/MediaPlayer$OnCompletionListener", "android/media/MediaPlayer$OnPreparedListener",
-  "android/media/MediaPlayer$OnErrorListener", "android/media/MediaPlayer$OnSeekCompleteListener",
+  "android/media/MediaPlayer$OnErrorListener", "android/media/MediaPlayer$OnInfoListener", "android/media/MediaPlayer$OnSeekCompleteListener",
   "android/media/SoundPool$OnLoadCompleteListener"]) {
   rt.register({ name: n, ctor: class extends JObj {} });
 }

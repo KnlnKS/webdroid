@@ -836,6 +836,7 @@ for (const [name, methods, statics] of [
 ] as [string, NativeSpec["methods"], NativeSpec["statics"]?][]) {
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
 }
+rt.register({ name: "android/bluetooth/le/ScanCallback", ctor: class extends JObj {} });
 rt.register({ name: "android/telephony/PhoneStateListener", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 rt.register({ name: "android/telephony/TelephonyCallback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 rt.register({ name: "webdroid/TelephonyDelivery", ctor: class extends JObj { run: () => Promise<void> = async () => {}; }, ifaces: ["java/lang/Runnable"],
