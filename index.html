@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>Webdroid — Android in your browser</title>
 <link rel="icon" type="image/png" href="./public/webdroid-logo.png">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="Open an Android APK, XAPK or APKS package and run it in your browser with Webdroid.">
 <link rel="stylesheet" href="./src/shell/ui.css">
 </head>
@@ -33,22 +33,19 @@
       <details id="error-details" hidden><summary>Error details</summary><pre id="error-message"></pre></details>
     </section>
     <p id="notice" role="alert" hidden></p>
-    <details id="screencfg">
-      <summary><span>Device settings</span><span id="profile-label" class="summary-meta">Default</span></summary>
-      <form id="screen-form" class="disclosure-content">
-        <label for="cfg-profile">Device profile</label>
-        <select id="cfg-profile"><option value="default">Default phone</option><option value="custom">Custom</option></select>
-        <fieldset id="custom-screen" hidden>
-          <legend class="sr-only">Custom screen</legend>
+    <section id="screencfg" aria-label="Screen dimensions">
+      <form id="screen-form">
+        <fieldset>
+          <legend>Screen dimensions</legend>
           <label>Width <span class="unit">px</span><input id="cfg-w" type="number" min="1" step="1" required></label>
           <label>Height <span class="unit">px</span><input id="cfg-h" type="number" min="1" step="1" required></label>
           <label>Density <span class="unit">dpi</span><input id="cfg-dpi" type="number" min="1" step="1" required></label>
         </fieldset>
         <p id="cfg-note"></p>
-        <p class="settings-hint">Applying a profile reloads Webdroid.</p>
-        <div class="settings-actions"><button id="cfg-apply" type="submit">Apply profile</button><button id="cfg-reset" class="quiet" type="button">Reset</button></div>
+        <p class="settings-hint">Applying dimensions reloads Webdroid.</p>
+        <div class="settings-actions"><button id="cfg-apply" type="submit">Apply</button><button id="cfg-reset" class="quiet" type="button">Reset</button></div>
       </form>
-    </details>
+    </section>
     <details id="samples" hidden><summary>Local packages</summary><div id="launcher" class="disclosure-content"></div></details>
     <details id="diagnostics" hidden><summary>Diagnostics<span id="diagnostic-count" class="summary-meta"></span></summary><div class="disclosure-content"><p id="runtime-error"></p><p id="native"></p><pre id="missing"></pre></div></details>
   </section>

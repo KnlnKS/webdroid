@@ -1,4 +1,4 @@
-import { DEFAULT_SCREEN, device, parseScreen, storeScreen } from "./config";
+import { device, parseScreen, storeScreen } from "./config";
 
 type SessionState =
   | { kind: "loading"; file: string; stage: string }
@@ -23,7 +23,7 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
   const back = document.querySelector<HTMLButtonElement>("#btn-back")!;
   const home = document.querySelector<HTMLButtonElement>("#btn-home")!;
   const launcher = document.querySelector<HTMLElement>("#launcher")!;
-  const settings = document.querySelector<HTMLDetailsElement>("#screencfg")!;
+  const settings = document.querySelector<HTMLElement>("#screencfg")!;
   const notice = document.querySelector<HTMLElement>("#notice")!;
   const status = document.querySelector<HTMLElement>("#status")!;
   const retry = document.querySelector<HTMLButtonElement>("#retry")!;
@@ -96,7 +96,7 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
       if (next.kind === "loading") announce("");
       session = next;
       root.dataset.state = next.kind;
-      document.querySelector<HTMLElement>("#session")!.hidden = false;
+      document.querySelector<HTMLElement>("#session")!.hidden = next.kind === "running";
       document.querySelector<HTMLElement>("#package-name")!.textContent = next.kind === "running" ? next.label : next.file;
       const busy = next.kind === "loading", failed = next.kind === "failed";
       const mustReload = failed && !next.retry;
@@ -125,8 +125,9 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
         document.querySelector<HTMLElement>("#error-message")!.textContent = errorText(next.error);
       }
       if (next.kind === "running") {
+        canvas.setAttribute("aria-label", `${next.label} — Android app screen`);
         resizeDisplay();
-        if (matchMedia("(max-width: 760px)").matches) stage.scrollIntoView({ block: "start" });
+        window.scrollTo(0, 0);
       }
     },
     reportError(error: unknown) {
@@ -157,8 +158,7 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
 }
 
 function configureScreen() {
-  const profile = document.querySelector<HTMLSelectElement>("#cfg-profile")!;
-  const custom = document.querySelector<HTMLFieldSetElement>("#custom-screen")!;
+  const form = document.querySelector<HTMLFormElement>("#screen-form")!;
   const width = document.querySelector<HTMLInputElement>("#cfg-w")!;
   const height = document.querySelector<HTMLInputElement>("#cfg-h")!;
   const density = document.querySelector<HTMLInputElement>("#cfg-dpi")!;
@@ -166,19 +166,15 @@ function configureScreen() {
   width.value = String(device.width);
   height.value = String(device.height);
   density.value = String(device.densityDpi);
-  profile.value = device.width === DEFAULT_SCREEN.width && device.height === DEFAULT_SCREEN.height && device.densityDpi === DEFAULT_SCREEN.densityDpi ? "default" : "custom";
-  document.querySelector<HTMLElement>("#profile-label")!.textContent = profile.value === "default" ? "Default" : "Custom";
-  const selectedScreen = () => profile.value === "default" ? DEFAULT_SCREEN : parseScreen(`${width.value}x${height.value}@${density.value}`);
+  const selectedScreen = () => parseScreen(`${width.value}x${height.value}@${density.value}`);
   function describeScreen() {
-    custom.hidden = custom.disabled = profile.value === "default";
     const screen = selectedScreen();
     note.textContent = screen
       ? `${Math.round(screen.width * 160 / screen.densityDpi)} × ${Math.round(screen.height * 160 / screen.densityDpi)} dp · ${screen.width} × ${screen.height} px`
       : "Enter positive whole numbers for each dimension.";
   }
   describeScreen();
-  profile.addEventListener("change", describeScreen);
-  custom.addEventListener("input", describeScreen);
+  form.addEventListener("input", describeScreen);
   function applyScreen(useDefault: boolean) {
     const screen = useDefault ? null : selectedScreen();
     if (!useDefault && !screen) { describeScreen(); return; }
@@ -188,20 +184,22 @@ function configureScreen() {
     url.searchParams.delete("screen");
     location.replace(url.href);
   }
-  document.querySelector<HTMLFormElement>("#screen-form")!.addEventListener("submit", (event) => {
+  form.addEventListener("submit", (event) => {
     event.preventDefault();
-    applyScreen(profile.value === "default");
+    applyScreen(false);
   });
   document.querySelector<HTMLButtonElement>("#cfg-reset")!.addEventListener("click", () => applyScreen(true));
 }
 
 function fitDisplay(canvas: HTMLCanvasElement, phone: HTMLElement, stage: HTMLElement) {
+  const nav = document.querySelector<HTMLElement>("#nav")!;
   function fit() {
-    if (!stage.clientWidth) return;
-    const chromeWidth = phone.offsetWidth - canvas.offsetWidth;
-    const chromeHeight = phone.offsetHeight - canvas.offsetHeight;
+    if (!stage.clientWidth || !stage.clientHeight) return;
+    const style = getComputedStyle(phone);
+    const chromeWidth = phone.offsetWidth - phone.clientWidth + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    const chromeHeight = phone.offsetHeight - phone.clientHeight + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + nav.offsetHeight;
     const scale = Math.min(Math.max(1, stage.clientWidth - chromeWidth) / device.width,
-      Math.max(1, window.innerHeight - 64 - chromeHeight) / device.height, 1);
+      Math.max(1, stage.clientHeight - chromeHeight) / device.height);
     canvas.style.width = `${device.width * scale}px`;
     canvas.style.height = `${device.height * scale}px`;
   }
@@ -212,10 +210,7 @@ function fitDisplay(canvas: HTMLCanvasElement, phone: HTMLElement, stage: HTMLEl
   }
   resizeDisplay();
   window.addEventListener("resize", fit);
-  let stageWidth = 0;
-  new ResizeObserver(([entry]) => {
-    if (entry && entry.contentRect.width !== stageWidth) { stageWidth = entry.contentRect.width; fit(); }
-  }).observe(stage);
+  new ResizeObserver(fit).observe(stage);
 
   return resizeDisplay;
 }
