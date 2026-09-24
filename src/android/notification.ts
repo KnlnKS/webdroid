@@ -219,6 +219,11 @@ const B = "Landroid/app/Notification$Builder;";
 function buildNotification(this: JNBuilder) {
   rt.link("android/app/Notification");
   for (const [k, v] of this.extras.map) this.n.extras.map.set(k, v);
+  if (this.style instanceof JNMediaStyle) {
+    if (this.style.token) this.n.extras.map.set("android.mediaSession", this.style.token);
+    if (this.style.compactActions) this.n.extras.map.set("android.compactActions", this.style.compactActions);
+    this.n.category ??= "transport";
+  }
   return this.n;
 }
 const bMethods: Record<string, Impl> = {
@@ -340,6 +345,23 @@ rt.register({
     "build()Landroid/app/Notification;": function (this: JNStyle) { return this.builder?.n ?? null; },
   },
 });
+class JNMediaStyle extends JNStyle {
+  token: unknown = null;
+  compactActions: Int32Array | null = null;
+}
+const MEDIA_STYLE = "Landroid/app/Notification$MediaStyle;";
+rt.register({ name: "android/app/Notification$MediaStyle", ctor: JNMediaStyle, sup: "android/app/Notification$Style", methods: {
+  "<init>()V": function () {},
+  "<init>(Landroid/app/Notification$Builder;)V": function (this: JNMediaStyle, builder: JNBuilder) {
+    this.builder = builder; if (builder) builder.style = this;
+  },
+  ["setMediaSession(Landroid/media/session/MediaSession$Token;)" + MEDIA_STYLE]: function (this: JNMediaStyle, token: unknown) {
+    this.token = token; return this;
+  },
+  ["setShowActionsInCompactView([I)" + MEDIA_STYLE]: function (this: JNMediaStyle, actions: Int32Array | null) {
+    this.compactActions = actions; return this;
+  },
+} });
 for (const [name, extra] of Object.entries({
   BigTextStyle: ["bigText(Ljava/lang/CharSequence;)"],
   BigPictureStyle: ["bigPicture(Landroid/graphics/Bitmap;)", "bigPicture(Landroid/graphics/drawable/Icon;)",
