@@ -48,7 +48,28 @@ export async function performAction(input: { a: Act; screen: Screen; deadlineMs:
       return !!hit;
     }
     case "tap":
-      for (let i = 0; i < (a.repeat ?? 1); i++) {
+      if (a.unlessResource && (await wd.uiTree()).some((node: { resId: string; bounds: [number, number, number, number] }) =>
+        node.resId === a.unlessResource && node.bounds[2] > 0 && node.bounds[3] > 0 &&
+        node.bounds[0] < s.width && node.bounds[1] < s.height)) return;
+      if (a.whileText) {
+        const maxTaps = a.repeat ?? 1;
+        const interval = a.everyMs ?? 500;
+        const end = performance.now() + Math.max(1500, maxTaps * interval + 800);
+        let taps = 0, absentAt = 0;
+        while (performance.now() < end) {
+          if (!wd.locateText(a.whileText)) {
+            absentAt ||= performance.now();
+            if (performance.now() - absentAt >= 400) break;
+            await sleep(50);
+          } else {
+            absentAt = 0;
+            if (taps >= maxTaps) break;
+            await run(wd.tap(a.x * s.width, a.y * s.height));
+            taps++;
+            await sleep(interval);
+          }
+        }
+      } else for (let i = 0; i < (a.repeat ?? 1); i++) {
         if (i) await sleep(a.everyMs ?? 500);
         await run(wd.tap(a.x * s.width, a.y * s.height));
       }

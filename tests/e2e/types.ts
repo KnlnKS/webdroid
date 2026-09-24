@@ -16,7 +16,7 @@ type Action =
   | { type: "tapText"; text: string; optional?: boolean }
   /** Normalized 0..1 tap. Used directly when no stable text anchor exists. `repeat` taps the
    *  same point N times, `everyMs` apart, as ONE step — a burst with no capture in between. */
-  | { type: "tapAt"; x: number; y: number; repeat?: number; everyMs?: number }
+  | { type: "tapAt"; x: number; y: number; repeat?: number; everyMs?: number; whileText?: string; unlessResource?: string }
   /**
    * Focus a field and type into it as ONE step. Kept atomic on purpose: dismissing the soft
    * keyboard between focus and typing clears editor focus on the emulator, so the text would
@@ -35,11 +35,15 @@ type Action =
 
 export type StateCondition =
   | { kind: "activity"; component: string }
-  | { kind: "text" | "text-absent"; text: string; resId?: string }
-  | { kind: "perf"; counter: keyof typeof perf; atLeast: number };
+  | { kind: "text" | "text-absent"; text: string; resId?: string; visible?: boolean }
+  | { kind: "resource"; resId: string }
+  | { kind: "resource-absent"; resId: string }
+  | { kind: "perf"; counter: keyof typeof perf; atLeast: number }
+  | { kind: "all"; conditions: StateCondition[] }
+  | { kind: "any"; conditions: StateCondition[] };
 
 export type WaitPolicy =
-  | { kind: "state"; condition: StateCondition; maxVirtualMs: number; maxRealMs: number }
+  | { kind: "state"; condition: StateCondition; maxVirtualMs: number; maxRealMs: number; stableMs: number }
   | { kind: "quiescent"; maxVirtualMs: number; maxRealMs: number }
   | { kind: "sample"; atVirtualMs: number; maxRealMs: number; minRealMs: number }
   | { kind: "live"; horizonMs: number; timeoutMs: number }
@@ -54,8 +58,8 @@ export type EvidencePolicy =
 
 const REAL_WAIT_MS = 20_000;
 export const wait = {
-  state: (condition: StateCondition, maxVirtualMs = 20_000, maxRealMs = REAL_WAIT_MS): StateWait =>
-    ({ kind: "state", condition, maxVirtualMs, maxRealMs }),
+  state: (condition: StateCondition, maxVirtualMs = 20_000, maxRealMs = REAL_WAIT_MS, stableMs = 0): StateWait =>
+    ({ kind: "state", condition, maxVirtualMs, maxRealMs, stableMs }),
   quiescent: (maxVirtualMs = 0, maxRealMs = REAL_WAIT_MS): WaitPolicy =>
     ({ kind: "quiescent", maxVirtualMs, maxRealMs }),
   sample: (atVirtualMs = 0, maxRealMs = REAL_WAIT_MS, minRealMs = 0): WaitPolicy =>

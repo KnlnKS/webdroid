@@ -16,7 +16,7 @@ type ProbeConfig = {
 
 export type Act =
   | { type: "boot"; apk: string }
-  | { type: "tap"; x: number; y: number; repeat?: number; everyMs?: number }
+  | { type: "tap"; x: number; y: number; repeat?: number; everyMs?: number; whileText?: string; unlessResource?: string }
   | { type: "tapText"; text: string; fallback?: { x: number; y: number } }
   | { type: "type"; text: string; x?: number; y?: number }
   | { type: "back" }
@@ -205,20 +205,29 @@ function installProbe(cfg: ProbeConfig): void {
   };
 
   let captured: ImageData | null = null;
-  const stateMatches = async (condition: StateCondition): Promise<boolean> => {
+  const inScreen = (node: UiNode, screen: Screen) =>
+    node.bounds[2] > 0 && node.bounds[3] > 0 && node.bounds[0] < screen.width && node.bounds[1] < screen.height;
+  const stateMatches = (condition: StateCondition, screen: Screen, nodes: UiNode[]): boolean => {
+    if (condition.kind === "all" || condition.kind === "any") {
+      const matches = condition.conditions.map((item) => stateMatches(item, screen, nodes));
+      return condition.kind === "all" ? matches.every(Boolean) : matches.some(Boolean);
+    }
     if (condition.kind === "perf") return (g.wd.perf[condition.counter] ?? 0) >= condition.atLeast;
     if (condition.kind === "activity") {
       const activity = g.wd.app()?.stack.at(-1);
       return activity?.component === condition.component || activity?.constructor?.$i?.name === condition.component;
     }
+    if (condition.kind === "resource" || condition.kind === "resource-absent") {
+      const found = nodes.some((node) => node.resId === condition.resId && inScreen(node, screen));
+      return condition.kind === "resource" ? found : !found;
+    }
     const want = condition.text.replace(/\s+/g, " ").trim().toLowerCase();
-    const nodes: UiNode[] = await g.wd.uiTree();
     const found = nodes.some((node) =>
-      (!condition.resId || node.resId === condition.resId) &&
+      (!condition.resId || node.resId === condition.resId) && (!condition.visible || inScreen(node, screen)) &&
       [node.text, node.desc].some((text) => text.replace(/\s+/g, " ").trim().toLowerCase().includes(want)));
     return condition.kind === "text" ? found : !found;
   };
-  const settle = async (policy: WaitPolicy, controlled: boolean, q: Quiescence): Promise<Settled> => {
+  const settle = async (policy: WaitPolicy, controlled: boolean, q: Quiescence, capture: boolean, screen: Screen): Promise<Settled> => {
     const t0 = performance.now();
     captured = null;
     const done = (how: Settled["how"], busy: Record<string, number> = {}): Settled => {
@@ -237,7 +246,14 @@ function installProbe(cfg: ProbeConfig): void {
     };
     if (policy.kind === "state") {
       const virtualEnd = (g.wd.guestClock?.now() ?? 0) + policy.maxVirtualMs;
-      while (!await stateMatches(policy.condition)) {
+      let matchedAt = 0;
+      for (;;) {
+        const now = performance.now();
+        const matches = stateMatches(policy.condition, screen, await g.wd.uiTree());
+        if (matches) {
+          matchedAt ||= now;
+          if (now - matchedAt >= policy.stableMs) break;
+        } else matchedAt = 0;
         if (performance.now() - t0 >= policy.maxRealMs) return done("timeout", { state: 1 });
         const next = controlled ? g.wd.guestClock.nextDeadline() : null;
         if (controlled && g.wd.guestClock.now() < virtualEnd) {
@@ -249,6 +265,7 @@ function installProbe(cfg: ProbeConfig): void {
         ? await g.wd.guestClock.drive(g.wd.alive(policy.maxRealMs), policy.maxVirtualMs)
         : await g.wd.alive(policy.maxRealMs);
       if (!alive) return done("timeout", { queued: 1 });
+      if (!capture) return done("state");
       return await samplePresentation() ? done("state") : done("timeout", { presentation: 1 });
     }
     if (policy.kind === "sample" || policy.kind === "live-sample") {
@@ -256,6 +273,7 @@ function installProbe(cfg: ProbeConfig): void {
         await g.wd.guestClock.advanceBy(policy.atVirtualMs);
         if (policy.minRealMs) await sleep(policy.minRealMs);
       } else await sleep(policy.kind === "sample" ? policy.atVirtualMs : policy.atRealMs);
+      if (!capture) return done("snapshot");
       wantSample = true;
       if (controlled) {
         await g.wd.testFrame();
@@ -321,7 +339,7 @@ function installProbe(cfg: ProbeConfig): void {
     }
     const actionMs = performance.now() - actionAt;
     const controlled = spec.timing === "controlled";
-    const settled = await settle(spec.wait, controlled, spec.quiescence);
+    const settled = await settle(spec.wait, controlled, spec.quiescence, spec.capture, spec.screen);
     const aliveAt = performance.now();
     const alive = wd.alive(spec.aliveMs);
     const wedged = !(controlled ? await wd.guestClock.drive(alive, spec.aliveMs) : await alive);

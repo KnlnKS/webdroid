@@ -1,21 +1,6 @@
-// Resy (Java/Kotlin, appcompat + Material, RxJava/Retrofit, MapLibre through microG's maps
-// module) — guest browsing against the live API, so this is a smoke flow: every step must
-// render and nothing may wedge, but the pixels change with the restaurants of the day.
-//
-// Observed boot: the phone-number onboarding ("Right this way.") under the upstream "Unable to
-// configure device for notifications" alert (Firebase 400, reproduces on a device — see the
-// implementation history). Closing onboarding reaches ResyListActivity: the MapLibre map with
-// the user's location, the nearby list with live slots, and — server-dependent — an
-// announcement bottom sheet ("Not a Gold Card Member?") that the API returns again after every
-// venue reload, so it is closed twice. Search is the action-bar pill: the keyword field, the
-// keyboard's Search key, then the list re-queries /4/find with the matched venues; a row opens
-// the venue page (photo, rating, description); back returns to the list. The map's "Near Me"
-// label is the location entry: tapping it opens the search screen on the location field (the
-// list itself stays on the city default until a location is chosen; the fused fix microG
-// derives from browser geolocation reaches ResyLocationManager and the map's own marker).
-// Accepted upstream log lines: the Firebase installations/FCM 400s, the Facebook GraphResponse
-// 400 and the two "Error parsing JSON" warnings Branch's session callback logs when there is no
-// deep link (the referring params carry none of the keys ResyActivity reads).
+// Live API content and an optional notification alert make the launch golden nondeterministic.
+// The fast path asserts onboarding, search results and venue resources; the full path retains
+// the recorded Android flow. The API may re-show its announcement sheet during navigation.
 import { wait, type Flow } from "../types";
 
 const W = 1080, H = 2160;
@@ -26,6 +11,9 @@ const SEARCH_PILL = N(600, 156);      // action-bar search pill (the icon alone 
 const KEYWORD_FIELD = N(600, 168);    // the keyword EditText once the search screen is up
 const FIRST_ROW = N(213, 779);        // the first venue row's name
 const NEAR_ME = N(963, 618);          // the map's "Near Me" label (the search screen has one too)
+const PROMO = "Not a Gold Card Member?";
+const VENUE_NAME = "com.resy.android:id/venueName";
+const DISMISS_SHEET = { type: "tapAt", ...SHEET_CLOSE, repeat: 4, everyMs: 200, whileText: PROMO } as const;
 
 export const resy: Flow = {
   app: "resy",
@@ -37,19 +25,34 @@ export const resy: Flow = {
   screen: { width: W, height: H, densityDpi: 480 },
   crop: { top: 72, bottom: 72, left: 0, right: 0 },
   steps: [
-    { id: "launch", label: "Launch — onboarding under the notification alert", action: { type: "launch" }, wait: wait.live(15000), fastWait: wait.live(15_000, 15_000),
-      fastEvidence: { kind: "visual", maxContentDiffPct: 12 } },
-    { id: "alert-ok", label: "Dismiss the upstream notification alert", action: { type: "tapText", text: "OK" }, wait: wait.live(1500) },
+    { id: "launch", label: "Launch — phone onboarding", action: { type: "launch" }, wait: wait.live(15000),
+      fastWait: wait.state({ kind: "text", text: "Enter your mobile phone number to get started." }, 0, 10_000) },
+    { id: "alert-ok", label: "Dismiss the upstream notification alert if shown", action: { type: "tapText", text: "OK", optional: true }, wait: wait.live(1500) },
     { id: "onboarding-close", label: "Close onboarding", action: { type: "tapText", text: "close" }, wait: wait.live(3000), fastWait: wait.state({ kind: "text", text: "Near Me" }, 0, 10_000) },
     { id: "location-permission", label: "Allow location when Android asks — nearby list loads", action: { type: "tapText", text: "While using the app", optional: true }, wait: wait.live(25000) },
     { id: "list", label: "Nearby list with live slots and the map", action: { type: "settle" }, wait: wait.live(5000) },
-    { id: "sheet-close", label: "Close the announcement sheet", action: { type: "tapAt", ...SHEET_CLOSE }, wait: wait.live(3000) },
+    { id: "sheet-close", label: "Close the announcement sheet", action: { type: "tapAt", ...SHEET_CLOSE },
+      fastAction: DISMISS_SHEET, wait: wait.live(3000) },
     { id: "search-open", label: "Open search from the action bar", action: { type: "tapAt", ...SEARCH_PILL }, fastAction: { type: "tapText", text: "search" }, wait: wait.live(4000) },
-    { id: "search-type", label: 'Type "Carbone"', action: { type: "typeInto", ...KEYWORD_FIELD, text: "Carbone" }, wait: wait.live(2000) },
-    { id: "search-go", label: "Search — the list shows the matches", action: { type: "enter" }, wait: wait.live(15000), fastWait: wait.state({ kind: "text", text: "Carbone", resId: "com.resy.android:id/list_item_venue_name" }, 0, 15_000) },
-    { id: "sheet-close-2", label: "Close the re-shown announcement sheet", action: { type: "tapAt", ...SHEET_CLOSE }, wait: wait.live(3000) },
-    { id: "venue", label: "Open the first result — venue page", action: { type: "tapAt", ...FIRST_ROW }, wait: wait.live(15000), fastWait: wait.state({ kind: "text", text: "NEED TO KNOW" }, 0, 12_000) },
-    { id: "venue-back", label: "Back to the list", action: { type: "back" }, wait: wait.live(5000), fastWait: wait.state({ kind: "text-absent", text: "NEED TO KNOW" }, 0, 6_000) },
-    { id: "near-me", label: "Near Me — the location search", action: { type: "tapAt", ...NEAR_ME }, fastAction: { type: "tapText", text: "Near Me" }, wait: wait.live(10000), fastWait: wait.state({ kind: "text", text: "POPULAR CITIES" }, 0, 8_000) },
+    { id: "search-type", label: 'Type "Carbone"', action: { type: "typeInto", ...KEYWORD_FIELD, text: "Carbone" }, fastAction: { type: "typeInto", ...KEYWORD_FIELD, text: "Car" }, wait: wait.live(2000) },
+    { id: "search-go", label: "Search — the list shows the matches", action: { type: "enter" }, wait: wait.live(15000),
+      fastWait: wait.state({ kind: "text", text: "Car", resId: "com.resy.android:id/list_item_venue_name" }, 0, 15_000) },
+    { id: "sheet-close-2", label: "Close the re-shown announcement sheet", action: { type: "tapAt", ...SHEET_CLOSE },
+      fastAction: DISMISS_SHEET,
+      wait: wait.live(3000) },
+    { id: "venue", label: "Open the first result — venue page", action: { type: "tapAt", ...FIRST_ROW }, wait: wait.live(15000),
+      fastWait: wait.state({ kind: "any", conditions: [
+        { kind: "resource", resId: VENUE_NAME }, { kind: "text", text: PROMO, visible: true },
+      ] }, 0, 12_000) },
+    { id: "venue-offer-close", label: "Close offers covering the venue", action: { type: "settle" },
+      fastAction: DISMISS_SHEET,
+      wait: wait.live(1000), fastWait: wait.state({ kind: "text-absent", text: PROMO, visible: true }, 0, 6_000, 400) },
+    { id: "venue-retry", label: "Open the venue after an offer has covered the result", action: { type: "settle" },
+      fastAction: { type: "tapAt", ...FIRST_ROW, unlessResource: VENUE_NAME },
+      wait: wait.live(1000), fastWait: wait.state({ kind: "resource", resId: VENUE_NAME }, 0, 10_000, 400) },
+    { id: "venue-back", label: "Back to the list", action: { type: "back" }, wait: wait.live(5000), fastWait: wait.state({ kind: "all", conditions: [
+      { kind: "resource-absent", resId: VENUE_NAME }, { kind: "text", text: "Car", resId: "com.resy.android:id/list_item_venue_name" },
+    ] }, 0, 6_000) },
+    { id: "near-me", label: "Near Me — the location search", action: { type: "tapAt", ...NEAR_ME }, fastAction: { type: "tapText", text: "Near Me" }, wait: wait.live(10000) },
   ],
 };

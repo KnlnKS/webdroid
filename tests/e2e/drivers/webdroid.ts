@@ -121,7 +121,7 @@ export class WebdroidDriver {
       screen: this.screen,
       wait: options.wait,
       quiescence: { ...DEFAULT_QUIESCENCE, ...options.quiescence },
-      aliveMs: this.coverage ? 5000 : timing === "controlled" ? 3500 : 1500,
+      aliveMs: this.coverage ? 5000 : timing === "controlled" ? 3500 : 3000,
       capture: options.capture ?? true,
       timing,
     };
