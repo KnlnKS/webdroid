@@ -16,6 +16,8 @@ The production build prepares the pinned system package data and framework resou
 
 For local Worker testing, use `bun run worker:dev`. To deploy after configuring the sites below, run `bun run build:prod` followed by `bunx wrangler deploy`.
 
+Cloudflare Workers Builds connects to the `main` branch of `KnlnKS/webdroid`. Its build command is `sh scripts/build-cloudflare.sh` and its deploy command is `npx wrangler deploy`. Set the build variable `BUN_VERSION` to `1.4.0`. The build script downloads checksum-pinned Zig 0.16.0 and the generated Android resource and sql.js inputs from the `build-inputs-v1` release. These inputs do not change on ordinary source commits; update the release and its checksum when their source or build configuration changes. The build then generates the Wasm core and production assets from the checked out commit.
+
 ## Sites and configuration
 
 Map two HTTPS hostnames to the same Worker: one for Webdroid and one for the isolated WebView renderer. Set `WEBVIEW_ORIGIN` in `wrangler.jsonc` to the renderer origin, such as `https://webview.example.com`. The origin must differ from the address users open. JavaScript interfaces and WebView request interception depend on this isolation. The Worker returns an explicit 503 from `/webview-origin` until configured.
