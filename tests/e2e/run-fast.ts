@@ -7,7 +7,7 @@ import { loadPng } from "./lib/png";
 import { diffImages } from "./lib/diff";
 import { E2E_DIR } from "./lib/util";
 import { apkHashes, flowSchemaHash, repositoryRevision, type CoverageIndex } from "./coverage";
-import { executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs, type Manifest, type Screen } from "./types";
+import { captureScreenKey, executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs, type CaptureScreen, type Manifest } from "./types";
 import { BASE_URL } from "./lib/util";
 import { isWebdroidProcessFrame } from "./lib/processes";
 
@@ -58,13 +58,13 @@ function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: str
   return { errors, gaps };
 }
 
-async function visualEvidence(flow: Flow, manifest: Manifest | undefined, screen: Screen): Promise<{ checks: VisualCheck[]; errors: string[] }> {
+async function visualEvidence(flow: Flow, manifest: Manifest | undefined, screen: CaptureScreen): Promise<{ checks: VisualCheck[]; errors: string[] }> {
   const checks = flow.steps.filter((step) => step.fastEvidence?.kind === "visual");
   if (!checks.length) return { checks: [], errors: [] };
   if (!manifest) return { checks: [], errors: ["visual evidence requires a golden manifest"] };
   const reference = screenOf(manifest);
   if (!sameScreen(screen, reference))
-    return { checks: [], errors: [`visual evidence requires Android reference geometry ${screenParam(reference)} with ${reference.statusBarDp}dp status inset; captured ${screenParam(screen)} with ${screen.statusBarDp ?? 0}dp`] };
+    return { checks: [], errors: [`visual evidence requires Android reference geometry ${screenParam(reference)} with ${reference.statusBarDp}dp status inset; captured ${screenParam(screen)} with ${screen.statusBarDp}dp`] };
   const errors: string[] = [];
   const results: VisualCheck[] = [];
   for (const step of checks) {
@@ -104,7 +104,7 @@ async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
   let runs: StepRun[] = [];
   let sourceCoverage: string[] = [];
   const browser = driver.browserVersion();
-  const screen = screenParam(driver.screen);
+  const screen = captureScreenKey(driver.screen);
   try {
     runs = await captureFlow(selected, driver, { jobs: effectiveJobs, mode: "fast", log: () => {} });
     sourceCoverage = collectCoverage ? await driver.takeSourceCoverage() : [];

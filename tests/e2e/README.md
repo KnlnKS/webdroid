@@ -165,6 +165,9 @@ for an observable quick-pass completion condition; otherwise the quick pass samp
 500 ms. `webdroidAction` uses an equivalent input in both browser capture modes when its
 geometry differs from Android; recording still uses `action`. `fastAction` takes precedence
 for an equivalent quick input when platform UI or a live text anchor differs from the reference.
+Browser runners resolve these overrides once. Execution, diagnostics and `run.json` use that
+resolved plan; offline scoring rejects captures whose browser actions have since changed.
+Android reference fingerprints remain independent of browser overrides.
 
 ### How webdroid completes a step
 
@@ -217,11 +220,15 @@ mismatched pixels. Older FitNotes, Mihon and Harmonic references use
 720×1280 at 320 dpi; CalculatorM uses 1080×2424 at 480 dpi.
 
 Reference capture profiles also retain the Android status-bar inset. Older manifests use
-24dp; `device.statusBarDp` can specify another value. The browser driver passes that profile
+24dp; new recordings measure `device.statusBarDp` from Android's default-display inset source.
+After a size or density change, the recorder waits for SystemUI to settle before measuring it.
+An explicit flow inset is checked against the device; resizing only changes dimensions and density.
+The browser driver passes that profile
 through `?statusBarDp=`, including child processes, and records it in `run.json`. Scoring
 rejects mismatched insets rather than shifting, stretching or masking the app image. Normal
 browser sessions still default to zero status-bar height. Both visual thresholds and goldens
 remain independent of this capture profile.
+Coverage screen identities include the inset, so a geometry change also invalidates focused-test coverage.
 
 - **content** is the target metric: tolerant mismatch over the union of
   non-background pixels. A blank rendering cannot earn a low score by

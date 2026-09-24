@@ -81,6 +81,7 @@ try {
   const gpuInfo = await browserSession.send("SystemInfo.getInfo");
   const url = new URL(values.url);
   url.searchParams.set("screen", screenParam(screen));
+  url.searchParams.set("statusBarDp", String(screen.statusBarDp));
   if (values["jvm-profile"]) url.searchParams.set("jvmProfile", "1");
   if (values["jvm-tier"] !== "auto") url.searchParams.set("jvmTier", values["jvm-tier"]);
   if (values["jvm-hotness"] !== "4096") url.searchParams.set("jvmHotness", values["jvm-hotness"]);

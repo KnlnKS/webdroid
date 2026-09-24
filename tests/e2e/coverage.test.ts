@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { flowSchemaHash, parseCoverageIndex } from "./coverage";
-import { executionFlow, sameScreen, screenOf, wait, type Flow, type Manifest } from "./types";
+import { captureScreenKey, executionFlow, sameDimensions, sameScreen, screenOf, wait, type Flow, type Manifest } from "./types";
 
 const flow = (text: string, timeoutMs: number): Flow => ({
   app: "fixture",
@@ -52,10 +52,18 @@ test("reference geometry distinguishes status insets from the normal browser pro
     device: { ...browser, fingerprint: "fixture", sdk: "33" },
     crop: { top: 48, bottom: 48, left: 0, right: 0 }, steps: [],
   };
-  expect(screenOf(undefined, browser)).toEqual(browser);
+  const normal = screenOf(undefined, browser);
+  expect(normal).toEqual({ ...browser, statusBarDp: 0 });
   expect(screenOf(manifest).statusBarDp).toBe(24);
-  expect(sameScreen(browser, screenOf(manifest))).toBe(false);
+  expect(sameScreen(normal, screenOf(manifest))).toBe(false);
+  expect(sameDimensions(normal, screenOf(manifest))).toBe(true);
+  expect(captureScreenKey(normal)).not.toBe(captureScreenKey(screenOf(manifest)));
   expect(sameScreen({ ...browser, statusBarDp: 24 }, screenOf(manifest))).toBe(true);
   manifest.device.statusBarDp = 0;
-  expect(sameScreen(browser, screenOf(manifest))).toBe(true);
+  expect(sameScreen(normal, screenOf(manifest))).toBe(true);
+  manifest.device.statusBarDp = 28;
+  expect(screenOf(manifest).statusBarDp).toBe(28);
+  expect(screenOf(undefined, { ...browser, statusBarDp: 28 })).toEqual(screenOf(manifest));
+  manifest.device.statusBarDp = -1;
+  expect(() => screenOf(manifest)).toThrow("Invalid status-bar inset");
 });

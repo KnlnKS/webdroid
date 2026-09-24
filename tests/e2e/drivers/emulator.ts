@@ -3,7 +3,7 @@
 // The recorder DEFINES the geometry a golden set is captured at, so it reads the device profile
 // directly rather than a manifest — the manifest is what it writes.
 import { device } from "../../../src/shell/config";
-import { type UiNode } from "../types";
+import { type CaptureScreen, type UiNode } from "../types";
 import { sleep, settleOn } from "../lib/util";
 import { parseUiAutomator } from "../lib/uiautomator";
 
@@ -116,15 +116,20 @@ export const swipe = (x1: number, y1: number, x2: number, y2: number, ms = 400) 
 export const typeText = (s: string) =>
   shell(`input text ${JSON.stringify(s.replace(/ /g, "%s"))}`);
 
-export async function deviceInfo() {
-  const [size, density, fp, sdk] = await Promise.all([
+export async function deviceInfo(): Promise<CaptureScreen & { fingerprint: string; sdk: string }> {
+  const [size, density, fp, sdk, displays] = await Promise.all([
     shell("wm size"), shell("wm density"),
     shell("getprop ro.build.fingerprint"), shell("getprop ro.build.version.sdk"),
+    shell("dumpsys window displays"),
   ]);
   const s = /(\d+)x(\d+)\s*$/.exec(size.trim().split("\n").pop() ?? "");
   const d = /(\d+)\s*$/.exec(density.trim().split("\n").pop() ?? "");
+  const display = displays.split(/Display: mDisplayId=0\b/)[1]?.split(/Display: mDisplayId=/)[0];
+  const status = /InsetsSource type=ITYPE_STATUS_BAR frame=\[0,0\]\[\d+,(\d+)\]/.exec(display ?? "");
+  if (!s || !d || +s[1] <= 0 || +s[2] <= 0 || +d[1] <= 0 || !status)
+    throw new Error("Cannot read the Android reference display dimensions and status inset");
   return {
-    width: s ? +s[1] : 0, height: s ? +s[2] : 0, densityDpi: d ? +d[1] : 0,
+    width: +s[1], height: +s[2], densityDpi: +d[1], statusBarDp: +status[1] * 160 / +d[1],
     fingerprint: fp.trim(), sdk: sdk.trim(),
   };
 }

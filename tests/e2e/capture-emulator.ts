@@ -9,7 +9,7 @@ import { mkdtemp, rename, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import * as emu from "./drivers/emulator";
 import { parseArgs } from "./lib/args";
-import { PINNED_CLOCK_MS, screenOf, screenParam, sameScreen, uiFileFor, waitHorizonMs, type Flow, type Manifest, type RecordedStep } from "./types";
+import { PINNED_CLOCK_MS, screenOf, screenParam, sameDimensions, uiFileFor, waitHorizonMs, type Flow, type Manifest, type RecordedStep } from "./types";
 import { E2E_DIR, sleep } from "./lib/util";
 import { device as profile } from "../../src/shell/config";
 
@@ -26,12 +26,17 @@ async function ensureDevice(flow: Flow) {
   const expected = screenOf(undefined, flow.screen);
   let info = await emu.deviceInfo();
   if (info.sdk !== String(profile.sdk)) throw new Error(`Android SDK ${info.sdk} cannot record an SDK ${profile.sdk} reference`);
-  if (!sameScreen(info, expected)) {
+  if (!sameDimensions(info, expected)) {
     await emu.shell(`wm size ${expected.width}x${expected.height}`);
     await emu.shell(`wm density ${expected.densityDpi}`);
+    // WindowManager applies the new density before SystemUI relayouts its inset sources.
+    if ((await emu.settle({ stableFrames: 3, intervalMs: 200, timeoutMs: 10000 })).timedOut)
+      throw new Error("Android display did not settle after changing dimensions");
     info = await emu.deviceInfo();
   }
-  if (!sameScreen(info, expected)) throw new Error(`device is ${screenParam(info)}; ${flow.app} requires ${screenParam(expected)}`);
+  if (!sameDimensions(info, expected)) throw new Error(`device is ${screenParam(info)}; ${flow.app} requires ${screenParam(expected)}`);
+  if (flow.screen?.statusBarDp !== undefined && info.statusBarDp !== flow.screen.statusBarDp)
+    throw new Error(`device status inset is ${info.statusBarDp}dp; ${flow.app} requires ${flow.screen.statusBarDp}dp`);
   return info;
 }
 

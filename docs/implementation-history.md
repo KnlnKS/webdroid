@@ -7,6 +7,28 @@ runs and commit IDs removed here.
 
 ## Differential testing and evidence
 
+The UI branch's quality review found two reproducible state/identity defects: a late
+development package listing could reveal the selector after an app started, and full
+capture fingerprints ignored `webdroidAction` changes. Package availability now derives
+from session state, including late arrivals. Browser runners resolve action/wait overrides
+once and fingerprint that execution plan; Android reference fingerprints exclude browser
+overrides. Browser probes covered loading, recoverable failure, running and reload-required
+failure. Existing harness tests cover execution fingerprints and geometry normalization.
+
+Capture geometry now requires a status inset after legacy-manifest normalization. The
+Android recorder measures the default display's API-33 inset source and compares dimensions
+separately from explicit inset requirements. Immediate reads after `wm density` reproduced
+a transient 36dp result: the density had changed to 320dpi while SystemUI still reported
+its previous 72px bar. Waiting for the existing screenshot-settle condition before reading
+metadata produced 24dp at both 1080×2160@480 and 720×1280@320 on the reference emulator.
+No Android goldens were rewritten. Coverage geometry identities also retain the inset.
+
+Verification passed typecheck, production build and five existing harness tests. Serialized
+fast and full FitNotes/Calculator runs each completed all 47 steps with no timeout, wedge,
+missing API, required native or runtime error; process diagnostics were available throughout.
+Full fingerprints matched the captures and rejected modified browser actions. Full content
+diffs remained 39.36% and 13.86%, respectively; these checks do not establish pixel parity.
+
 The default `bun run e2e` fast lane runs all 183 actions across 13 flows. It uses
 controlled Android time where behavior permits, state waits and lightweight
 semantic evidence; native GL games keep real time. Two five-job all-action runs

@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { deviceScreen, executionFlow, screenParam, type Flow, type Screen } from "./types";
+import { captureScreenKey, executionFlow, screenOf, type CaptureScreen, type Flow } from "./types";
 
 export type CoverageIndex = {
   generatedAt: string;
@@ -95,11 +95,12 @@ export function flowSchemaHash(flows: Flow[], mode: "all" | "reference" | "full"
   return new Bun.CryptoHasher("sha256").update(new TextEncoder().encode(canonical(resolved))).digest("hex");
 }
 
-function screenFromManifest(value: unknown): Screen | undefined {
+function screenFromManifest(value: unknown): CaptureScreen | undefined {
   if (!isRecord(value) || !isRecord(value.device)) return;
-  const { width, height, densityDpi } = value.device;
-  return typeof width === "number" && typeof height === "number" && typeof densityDpi === "number"
-    ? { width, height, densityDpi }
+  const { width, height, densityDpi, statusBarDp } = value.device;
+  return typeof width === "number" && typeof height === "number" && typeof densityDpi === "number" &&
+    (statusBarDp === undefined || typeof statusBarDp === "number")
+    ? screenOf({ device: { width, height, densityDpi, statusBarDp } })
     : undefined;
 }
 
@@ -109,6 +110,6 @@ export async function expectedScreens(flows: Flow[]): Promise<Record<string, str
     const exists = await file.exists();
     const manifestScreen = exists ? screenFromManifest(await file.json()) : undefined;
     if (exists && !manifestScreen) throw new Error(`${flow.app}: golden manifest has an invalid device screen`);
-    return [flow.app, screenParam(manifestScreen ?? flow.screen ?? deviceScreen())];
+    return [flow.app, captureScreenKey(manifestScreen ?? screenOf(undefined, flow.screen))];
   })));
 }

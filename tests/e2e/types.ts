@@ -1,4 +1,5 @@
-import { device } from "../../src/shell/config";
+import { device, type Screen } from "../../src/shell/config";
+export type { Screen } from "../../src/shell/config";
 import type { perf } from "../../src/perf";
 // Shared vocabulary for the visual E2E harness.
 //
@@ -118,7 +119,7 @@ type FlowBase<TStep extends Step> = {
   minFps?: number;
   /** The geometry positional taps were measured at. A flow with no goldens runs at it, since a
    *  normalized coordinate only lands on the same view at the same size. */
-  screen?: Screen;
+  screen?: ScreenOptions;
   steps: TStep[];
 };
 
@@ -226,7 +227,7 @@ export type Manifest = {
   recordedAt: string;
   /** Instant both sides pin their clock to, ms since epoch. */
   pinnedClockMs: number;
-  device: { width: number; height: number; densityDpi: number; statusBarDp?: number; fingerprint: string; sdk: string };
+  device: ScreenOptions & { fingerprint: string; sdk: string };
   crop: Flow["crop"];
   steps: RecordedStep[];
 };
@@ -238,20 +239,30 @@ export type Manifest = {
  * big the screen is, and `screenOf` reads it from there. Without goldens a flow's own `screen`
  * answers, then the profile — as it does for the recorder, which is *defining* the geometry.
  */
-export type Screen = { width: number; height: number; densityDpi: number; statusBarDp?: number };
+type ScreenOptions = Screen & { statusBarDp?: number };
+export type CaptureScreen = Screen & { statusBarDp: number };
 
 /** Existing Android references predate inset metadata and used a 24dp status bar. */
-export const screenOf = (m: Manifest | undefined, fallback?: Screen): Screen =>
-  m ? { width: m.device.width, height: m.device.height, densityDpi: m.device.densityDpi, statusBarDp: m.device.statusBarDp ?? 24 } : fallback ?? deviceScreen();
+export function screenOf(m: { device: ScreenOptions } | undefined, fallback?: ScreenOptions): CaptureScreen {
+  const source = m?.device ?? fallback ?? deviceScreen();
+  const statusBarDp = source.statusBarDp ?? (m ? 24 : 0);
+  if (!Number.isFinite(statusBarDp) || statusBarDp < 0) throw new Error("Invalid status-bar inset");
+  return { width: source.width, height: source.height, densityDpi: source.densityDpi, statusBarDp };
+}
 
-export const deviceScreen = (): Screen =>
+export const deviceScreen = (): CaptureScreen =>
   ({ width: device.width, height: device.height, densityDpi: device.densityDpi, statusBarDp: device.statusBarDp });
 
 /** the `?screen=` the shell parses, and what setup-avd.sh prints */
 export const screenParam = (s: Screen): string => `${s.width}x${s.height}@${s.densityDpi}`;
 
-export const sameScreen = (a: Screen, b: Screen): boolean =>
-  a.width === b.width && a.height === b.height && a.densityDpi === b.densityDpi && (a.statusBarDp ?? 0) === (b.statusBarDp ?? 0);
+export const sameDimensions = (a: Screen, b: Screen): boolean =>
+  a.width === b.width && a.height === b.height && a.densityDpi === b.densityDpi;
+
+export const sameScreen = (a: CaptureScreen, b: CaptureScreen): boolean =>
+  sameDimensions(a, b) && a.statusBarDp === b.statusBarDp;
+
+export const captureScreenKey = (s: CaptureScreen): string => `${screenParam(s)};statusBarDp=${s.statusBarDp}`;
 
 /**
  * Fixed instant both sides pin to: 2026-01-02T12:00:00Z.

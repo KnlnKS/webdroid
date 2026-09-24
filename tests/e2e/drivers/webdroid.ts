@@ -2,7 +2,7 @@
 // one page.evaluate against the probe in lib/probe.ts; nothing here polls the page.
 // Deliberately free of any Android/adb dependency: `bun run e2e` must run with no SDK present.
 import { chromium, type Browser, type Page } from "playwright";
-import { PINNED_CLOCK_MS, deviceScreen, screenParam, type Screen, type WaitPolicy } from "../types";
+import { PINNED_CLOCK_MS, deviceScreen, screenParam, type CaptureScreen, type WaitPolicy } from "../types";
 import { BASE_URL } from "../lib/util";
 import { DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_QUIESCENCE, probeScript, type Act, type Quiescence, type StepResult, type StepSpec } from "../lib/probe";
 import { decodeMappings, executedSources, type CoverageFunction } from "../lib/source-coverage";
@@ -31,11 +31,11 @@ export const ENV_SCREEN = process.env.WEBDROID_SCREEN;
 
 /** Compose the query rather than concatenating it: `?bytecode=x` + `?screen=y` silently drops
  *  the second parameter, and the run then measures the wrong geometry against the right pixels. */
-function pageUrl(screen: Screen, controlled: boolean): string {
+function pageUrl(screen: CaptureScreen, controlled: boolean): string {
   const u = new URL(BASE_URL);
   if (CUT) u.searchParams.set("bytecode", CUT);
   u.searchParams.set("screen", screenParam(screen));
-  u.searchParams.set("statusBarDp", String(screen.statusBarDp ?? 0));
+  u.searchParams.set("statusBarDp", String(screen.statusBarDp));
   if (controlled) u.searchParams.set("testClock", "controlled");
   return u.href;
 }
@@ -64,7 +64,7 @@ export const launchBrowser = (gpu: "software" | "hardware" = "software") => chro
 });
 
 type LaunchOpts = {
-  screen?: Screen;
+  screen?: CaptureScreen;
   /** Date is pinned here (default PINNED_CLOCK_MS); null keeps the wall clock. Timers, rAF and
    *  performance.now keep running either way. */
   fixedMs?: number | null;
@@ -84,7 +84,7 @@ type StepOptions = {
 
 export class WebdroidDriver {
   readonly errors: string[] = [];
-  constructor(private browser: Browser, public page: Page, public screen: Screen, private coverage = false) {}
+  constructor(private browser: Browser, public page: Page, public screen: CaptureScreen, private coverage = false) {}
 
   static async launch(opts: LaunchOpts = {}): Promise<WebdroidDriver> {
     const screen = opts.screen ?? deviceScreen();
@@ -100,7 +100,7 @@ export class WebdroidDriver {
     return drv;
   }
 
-  private async open(screen: Screen, controlled = false): Promise<void> {
+  private async open(screen: CaptureScreen, controlled = false): Promise<void> {
     this.screen = screen;
     const resp = await this.page.goto(pageUrl(screen, controlled), { waitUntil: "domcontentloaded", timeout: 30_000 });
     if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL} — run \`bun run dev\``);
@@ -109,7 +109,7 @@ export class WebdroidDriver {
   }
 
   /** A fresh install — wd.reset() is the one definition of what that wipes — at `screen`. */
-  async reset(screen: Screen = this.screen): Promise<void> {
+  async reset(screen: CaptureScreen = this.screen): Promise<void> {
     await this.page.evaluate(() => (globalThis as any).wd.reset());
     await this.open(screen);
   }
