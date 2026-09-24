@@ -1,48 +1,58 @@
-import ts from "typescript";
+import { parse } from "acorn";
+import { ancestor } from "acorn-walk";
+import { analyze } from "eslint-scope";
+import type { Program } from "estree";
+
+type Span = { start: number; end: number };
+type Edit = { start: number; end: number; text: string };
 
 export function webScript(source: string): string {
   if (!source.includes("location") && !source.includes("\\u")) return source;
-  const file = ts.createSourceFile("/webview.js", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-  const edits: { start: number; end: number; text: string }[] = [];
-  let checker: ts.TypeChecker | undefined;
-  const symbols = () => checker ??= ts.createProgram([file.fileName], { allowJs: true, noLib: true, noResolve: true }, {
-    ...ts.createCompilerHost({}),
-    getSourceFile: name => name === file.fileName ? file : undefined,
-    fileExists: name => name === file.fileName,
-    readFile: name => name === file.fileName ? source : undefined,
-  }).getTypeChecker();
-  const owner = (node: ts.Expression) => edits.push(
-    { start: node.getStart(file), end: node.getStart(file), text: "(__wdLocationOwner(" },
-    { start: node.end, end: node.end, text: "))" });
-  const visit = (node: ts.Node) => {
-    if ((ts.isPropertyAccessExpression(node) && node.name.text === "location"
-      || ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression) && node.argumentExpression.text === "location")
-      && node.expression.kind !== ts.SyntaxKind.SuperKeyword && !ts.isOptionalChain(node.expression)) {
-      owner(node.expression);
-    } else if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) && node.initializer
-      && node.name.elements.some(element => (element.propertyName ?? element.name).getText(file) === "location")) {
-      owner(node.initializer);
-    } else if (ts.isIdentifier(node) && node.text === "location") {
-      const parent = node.parent;
-      if (ts.isPropertyAccessExpression(parent) && parent.name === node
-        || ts.isPropertyAssignment(parent) && parent.name === node
-        || ts.isBindingElement(parent) && parent.propertyName === node
-        || ts.isLabeledStatement(parent) || ts.isBreakStatement(parent) || ts.isContinueStatement(parent)) return;
-      for (let ancestor: ts.Node | undefined = parent; ancestor; ancestor = ancestor.parent) if (ts.isWithStatement(ancestor)) return;
-      if (ts.isShorthandPropertyAssignment(parent)) {
-        if (!symbols().getShorthandAssignmentValueSymbol(parent)) edits.push({ start: node.end, end: node.end, text: ": __wdLocationOwner().location" });
-      } else if (!symbols().getSymbolAtLocation(node)) {
-        edits.push({ start: node.getStart(file), end: node.end, text: "(__wdLocationOwner().location)" });
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(file);
+  let tree;
+  try { tree = parse(source, { ecmaVersion: "latest", sourceType: "module", ranges: true, allowAwaitOutsideFunction: true }); }
+  catch {
+    try { tree = parse(source, { ecmaVersion: "latest", sourceType: "script", ranges: true, allowReturnOutsideFunction: true }); }
+    catch { return source; }
+  }
+  const scope = analyze(tree as Program, { ecmaVersion: 2024, sourceType: tree.sourceType });
+  const globals = new Set(scope.globalScope?.through.map((reference) => reference.identifier));
+  const edits: Edit[] = [];
+  const owner = (span: Span) => edits.push(
+    { start: span.start, end: span.start, text: "(__wdLocationOwner(" },
+    { start: span.end, end: span.end, text: "))" },
+  );
+
+  ancestor(tree, {
+    MemberExpression(node) {
+      const member = node as typeof node & { object: Span & { type: string }; property: { type: string; name?: string; value?: unknown }; computed: boolean; optional?: boolean };
+      if (member.optional || member.object.type === "Super") return;
+      if (member.computed ? member.property.type === "Literal" && member.property.value === "location"
+        : member.property.type === "Identifier" && member.property.name === "location") owner(member.object);
+    },
+    VariableDeclarator(node) {
+      const declaration = node as typeof node & { id: { type: string; properties?: { key: { name?: string; value?: unknown } }[] }; init?: Span };
+      if (declaration.id.type === "ObjectPattern" && declaration.init && declaration.id.properties?.some((property) =>
+        property.type === "Property" && (property.key.type === "Identifier" && property.key.name === "location"
+          || property.key.type === "Literal" && property.key.value === "location"))) owner(declaration.init);
+    },
+    Identifier(node, _state, ancestors) {
+      if (node.name !== "location" || !globals.has(node)) return;
+      if (ancestors.some((item) => item.type === "WithStatement")) return;
+      const parent = ancestors.at(-2) as { type: string; shorthand?: boolean } | undefined;
+      if (parent?.type === "Property" && parent.shorthand) {
+        edits.push({ start: node.end, end: node.end, text: ": __wdLocationOwner().location" });
+      } else edits.push({ start: node.start, end: node.end, text: "(__wdLocationOwner().location)" });
+    },
+  });
   if (!edits.length) return source;
   edits.sort((a, b) => a.start - b.start);
   let at = 0;
   const parts: string[] = [];
-  for (const edit of edits) { parts.push(source.slice(at, edit.start), edit.text); at = edit.end; }
+  for (const edit of edits) {
+    if (edit.start < at) continue;
+    parts.push(source.slice(at, edit.start), edit.text);
+    at = edit.end;
+  }
   parts.push(source.slice(at));
   return parts.join("");
 }

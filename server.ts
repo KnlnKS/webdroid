@@ -1,8 +1,8 @@
 import index from "./index.html";
 import processIndex from "./process.html";
 import { WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject";
-import { htmlAttribute, webDocument } from "./src/shell/webhtml";
-import { webScript } from "./src/shell/webscript";
+import { webDocument } from "./src/shell/webhtml";
+import { proxyRequest } from "./src/shell/proxy";
 import { openInstall } from "./src/shell/install";
 import { prepareSystemPackages } from "./scripts/system-packages";
 import { ensureFrameworkRes } from "./scripts/gen-framework-res";
@@ -25,11 +25,6 @@ function proxyTarget(requested: string): string {
 }
 
 type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; alpn: string[]; sock: import("bun").Socket | null; ready: boolean; pending: (Uint8Array | Buffer)[] };
-
-// Hop-by-hop/encoding headers never survive the proxy; the framing/isolation set is dropped
-// only for `frame=1`, where the shell embeds the document in an iframe it must be able to script.
-const DROP = /^(content-encoding|content-length|transfer-encoding|set-cookie)$/i;
-const DROP_FRAME = /^(x-frame-options|content-security-policy(-report-only)?|cross-origin-(opener|embedder)-policy)$/i;
 
 const ASSET_TYPE: Record<string, string> = {
   html: "text/html", js: "text/javascript", css: "text/css", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
@@ -71,78 +66,8 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
       return Response.json(url.origin);
     },
     "/webview-worker.js": () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } }),
-    "/proxy": async (req) => {
-      if (req.headers.get("service-worker") === "script") return new Response("invalid worker", { status: 403 });
-      const q = new URL(req.url).searchParams;
-      const requestedUrl = q.get("url");
-      const frame = q.get("frame") === "1", manual = q.get("manual") === "1";
-      const isolated = q.get("webview") === "1";
-      if (!requestedUrl || !/^https?:\/\//.test(requestedUrl)) return new Response("bad url", { status: 400 });
-      const url = proxyTarget(requestedUrl);
-      try {
-        const headers = new Headers();
-        // forward selected headers the app set (via x-wd-* prefix)
-        req.headers.forEach((v, k) => {
-          if (k.startsWith("x-wd-")) headers.set(k.slice(5), v);
-        });
-        const encoded = !frame && !isolated && headers.has("accept-encoding");
-        const bridge = q.get("bridge");
-        let intercepted: Response | null = null;
-        if (bridge) {
-          const result = await webRelay.call(new Request(new URL("/webview-call?id=" + encodeURIComponent(bridge), req.url), {
-            method: "POST", signal: req.signal,
-            body: JSON.stringify({ kind: "request", url, method: req.method, main: frame, headers: Object.fromEntries(headers) }),
-          }));
-          if (!result.ok) throw new Error("WebView request callback unavailable");
-          const reply = await result.json();
-          if (reply.error) throw new Error(reply.error);
-          if (reply.value) {
-            const value = reply.value;
-            intercepted = new Response(req.method === "HEAD" || [204, 205, 304].includes(value.status) ? null : Buffer.from(value.body, "base64"), {
-              status: value.status, statusText: value.reason, headers: value.headers,
-            });
-          }
-        }
-        const upstream = intercepted ?? await fetch(url, {
-          method: req.method === "HEAD" ? "HEAD" : req.method,
-          headers,
-          body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
-          redirect: manual ? "manual" : "follow",
-          decompress: !encoded,
-        });
-        const h = new Headers();
-        upstream.headers.forEach((v, k) => {
-          if (!DROP.test(k) && !(frame && DROP_FRAME.test(k))) h.set(k, v);
-        });
-        h.set("Access-Control-Allow-Origin", "*");
-        h.set("x-wd-final-url", upstream.url || url);
-        if (manual) {
-          h.set("x-wd-status", String(upstream.status));
-          const cookies = upstream.headers.getSetCookie();
-          if (cookies.length) h.set("x-wd-set-cookie", JSON.stringify(cookies));
-          if ([301, 302, 303, 307, 308].includes(upstream.status)) return new Response(null, { headers: h });
-        }
-        if (encoded && upstream.headers.has("content-encoding")) h.set("x-wd-content-encoding", upstream.headers.get("content-encoding")!);
-        if (frame && upstream.body && /^text\/html/i.test(upstream.headers.get("content-type") ?? "")) {
-          // Served from our origin so the shell can script it; <base> keeps its subresources and
-          // links resolving against the real one. text() re-encodes as UTF-8, so say so.
-          h.set("content-type", "text/html; charset=utf-8");
-          if (isolated) { h.delete("etag"); h.delete("last-modified"); }
-          return new Response(webDocument(await upstream.text(), upstream.url || url, isolated), { status: upstream.status, headers: h });
-        }
-        if (isolated && upstream.body && /^(?:text|application)\/(?:x-)?(?:java|ecma)script(?:;|$)/i.test(upstream.headers.get("content-type") ?? "")) {
-          h.delete("etag"); h.delete("last-modified");
-          h.set("content-type", "text/javascript; charset=utf-8");
-          return new Response(webScript(await upstream.text()), { status: upstream.status, headers: h });
-        }
-        return new Response(upstream.body, { status: upstream.status, headers: h });
-      } catch (e) {
-        // a WebView reads the meta to report onReceivedError — a contract, not text sniffing
-        if (frame) return new Response(`<!doctype html><meta name="wd-proxy-error" content="${htmlAttribute(String(e))}">`,
-          { status: 502, headers: { "content-type": "text/html; charset=utf-8" } });
-        return new Response(`proxy error: ${e}`, { status: 502 });
-      }
-    },
+    "/proxy": (req) => proxyRequest(req, { target: proxyTarget, bridgeCall: (call) => webRelay.call(call),
+      fetchUpstream: (url, init, encoded) => fetch(url, { ...init, decompress: !encoded }) }),
     // an apk's assets/ entry — what file:///android_asset/ resolves to inside a WebView. Path-shaped
     // so a page's relative subresources resolve to siblings, as they do under android_asset.
     "/asset/:apk/*": async (req) => {
@@ -156,7 +81,7 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
       if (!bytes) return new Response("not found", { status: 404 });
       const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
       const type = ASSET_TYPE[ext] ?? "application/octet-stream";
-      if (ext === "html") return new Response(webDocument(new TextDecoder().decode(bytes)), { headers: { "content-type": type } });
+      if (ext === "html") return new Response(await webDocument(new TextDecoder().decode(bytes)), { headers: { "content-type": type } });
       return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": type } });
     },
     "/sqljs/:file": (req) => serveFile("vendor/sql.js/dist", req.params.file),

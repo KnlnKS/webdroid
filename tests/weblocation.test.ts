@@ -11,9 +11,9 @@ const renderer = "http://renderer.example:8443";
 
 async function fixture(html = "") {
   const page = await browser.newPage();
-  await page.route(`${renderer}/**`, route => new URL(route.request().url()).pathname === "/webview-call"
+  await page.route(`${renderer}/**`, async route => new URL(route.request().url()).pathname === "/webview-call"
     ? route.fulfill({ json: { value: {} } })
-    : route.fulfill({ contentType: "text/html", body: webDocument(`<!doctype html>${html}`, upstream, true) }));
+    : route.fulfill({ contentType: "text/html", body: await webDocument(`<!doctype html>${html}`, upstream, true) }));
   await page.addInitScript(page => Object.defineProperty(window, "__wdWebView", { configurable: true, value: { id: "location-probe", page } }), upstream);
   await page.goto(`${renderer}/dir/page?q=1#part`);
   return page;

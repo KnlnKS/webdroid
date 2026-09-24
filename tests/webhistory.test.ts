@@ -10,9 +10,9 @@ const renderer = "http://renderer.example:8443";
 
 async function fixture(enabled = true, base = '<base href="/app/">') {
   const page = await browser.newPage();
-  await page.route(`${renderer}/**`, route => new URL(route.request().url()).pathname === "/webview-call"
+  await page.route(`${renderer}/**`, async route => new URL(route.request().url()).pathname === "/webview-call"
     ? route.fulfill({ json: { value: {} } })
-    : route.fulfill({ contentType: "text/html", body: webDocument(`<!doctype html>${base}<title>History probe</title>`, source) }));
+    : route.fulfill({ contentType: "text/html", body: await webDocument(`<!doctype html>${base}<title>History probe</title>`, source) }));
   await page.addInitScript(({ enabled, source }) => {
     const context = { id: enabled ? "history-probe" : null, page: source };
     Object.defineProperty(window, "__wdWebView", { value: context, configurable: true });

@@ -28,7 +28,7 @@ for (const fixture of cases) test(`WebView preserves ${fixture.name}`, async () 
     document.documentElement.dataset.baseCount = document.getElementsByTagName("BASE").length;
     document.documentElement.dataset.bridge = String(!Object.hasOwn(window, "__wdWebView"));
   </script></head><body><a href="child">child</a><form action="submit"></form></body></html>`;
-  await page.route("https://renderer.example/**", route => route.fulfill({ contentType: "text/html", body: webDocument(html, source) }));
+  await page.route("https://renderer.example/**", async route => route.fulfill({ contentType: "text/html", body: await webDocument(html, source) }));
   await page.addInitScript(() => { Object.defineProperty(window, "__wdWebView", { value: {}, configurable: true }); });
   try {
     await page.goto("https://renderer.example/dir/page");
@@ -49,7 +49,7 @@ for (const fixture of cases) test(`WebView preserves ${fixture.name}`, async () 
 test("WebView injects before scripts with an omitted head and preserves asset URLs", async () => {
   const page = await browser.newPage();
   const html = '<!doctype html><!-- <head> --><html><script>document.documentElement.dataset.bridge = String(!Object.hasOwn(window, "__wdWebView"));</script><a href="next">next</a></html>';
-  await page.route("https://renderer.example/**", route => route.fulfill({ contentType: "text/html", body: webDocument(html) }));
+  await page.route("https://renderer.example/**", async route => route.fulfill({ contentType: "text/html", body: await webDocument(html) }));
   await page.addInitScript(() => { Object.defineProperty(window, "__wdWebView", { value: {}, configurable: true }); });
   try {
     await page.goto("https://renderer.example/asset/page");
@@ -62,12 +62,12 @@ test("WebView resolves resources before and after an upstream base", async () =>
   const page = await browser.newPage();
   const scripts: string[] = [];
   page.on("console", message => scripts.push(message.text()));
-  await page.route("**/*", route => {
+  await page.route("**/*", async route => {
     const url = route.request().url();
     if (url.endsWith(".js")) {
       return route.fulfill({ contentType: "text/javascript", body: "console.log(document.currentScript.src)" });
     }
-    return route.fulfill({ contentType: "text/html", body: webDocument(
+    return route.fulfill({ contentType: "text/html", body: await webDocument(
       '<!doctype html><head><script src="before.js"></script><base target="_blank"><base href="/assets/"><script src="after.js"></script></head>', source) });
   });
   try {
