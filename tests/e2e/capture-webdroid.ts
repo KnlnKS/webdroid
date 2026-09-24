@@ -147,7 +147,8 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, {
   const runs: StepRun[] = [];
   for (const [i, step] of flow.steps.entries()) {
     const rec = byId.get(step.id);
-    if (!rec && manifest) throw new Error(`golden manifest has no step "${step.id}" — re-record ${flow.app}`);
+    if (!rec && manifest && manifest.depth !== "startup")
+      throw new Error(`golden manifest has no step "${step.id}" — re-record ${flow.app}`);
     const file = rec?.file ?? `${String(i).padStart(2, "0")}-${step.id}.png`;
     const fastEvidence = evidenceOf(step);
     const evidence = mode === "full" ? "visual" : fastEvidence.kind;

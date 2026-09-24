@@ -1,0 +1,31 @@
+{
+  "app": "resy",
+  "pkg": "com.resy.android",
+  "activity": "com.resy.android.ResyActivity",
+  "depth": "startup",
+  "recordedAt": "2026-09-24T00:35:59.882Z",
+  "pinnedClockMs": 1790210139162,
+  "device": {
+    "width": 1080,
+    "height": 2160,
+    "densityDpi": 480,
+    "fingerprint": "google/sdk_gphone64_arm64/emu64a:13/TE1A.240213.009/12342917:userdebug/dev-keys",
+    "sdk": "33"
+  },
+  "crop": {
+    "top": 72,
+    "bottom": 72,
+    "left": 0,
+    "right": 0
+  },
+  "steps": [
+    {
+      "id": "launch",
+      "label": "Launch — onboarding under the notification alert",
+      "index": 0,
+      "file": "00-launch.png",
+      "uiFile": "00-launch.ui.json",
+      "settleTimedOut": false
+    }
+  ]
+}

@@ -163,7 +163,7 @@ await Bun.write(`${E2E_DIR}actual-fast/summary.json`, JSON.stringify({
   flows: FLOWS.map((flow) => {
     const outcome = outcomes.find((item) => item.flow.app === flow.app);
     return outcome
-      ? { app: flow.app, status: outcome.errors.length ? "failed" : flow.clock === "live" ? "observed" : outcome.visual.length ? "compared" : "smoke",
+      ? { app: flow.app, status: outcome.errors.length ? "failed" : outcome.visual.length ? "compared" : flow.clock === "live" ? "observed" : "smoke",
           durationMs: Math.round(outcome.ms), visual: outcome.visual, errors: outcome.errors, gaps: outcome.gaps }
       : { app: flow.app, status: "not-selected" };
   }),
@@ -190,7 +190,7 @@ if (coverage && !failed) {
   console.log(`coverage: ${E2E_DIR}coverage-index.json (${Object.keys(byFile).length} source files)`);
 }
 const compared = outcomes.filter((item) => item.visual.length).length;
-const observed = outcomes.filter((item) => item.flow.clock === "live").length;
+const observed = outcomes.filter((item) => item.flow.clock === "live" && !item.visual.length).length;
 const gaps = outcomes.reduce((count, item) => count + item.gaps.length, 0);
 console.log(`\n${flows.length - failed}/${flows.length} fast flows reached their checkpoints in ${((performance.now() - started) / 1000).toFixed(1)}s` +
   ` (${compared} Android-compared, ${outcomes.length - compared - observed} smoke, ${observed} live observed, ${gaps} reported gaps; actual-fast/summary.json)`);

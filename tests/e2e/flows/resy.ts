@@ -34,11 +34,12 @@ export const resy: Flow = {
   apk: "Resy.apk",
   // the Resy API is HTTPS on a live certificate chain
   clock: "live",
-  quickWait: wait.state({ kind: "text", text: "Phone number" }, 0, 18_000),
+  quickWait: wait.live(15_000, 15_000),
   screen: { width: W, height: H, densityDpi: 480 },
   crop: { top: 72, bottom: 72, left: 0, right: 0 },
   steps: [
-    { id: "launch", label: "Launch — onboarding under the notification alert", action: { type: "launch" }, wait: wait.live(15000) },
+    { id: "launch", label: "Launch — onboarding under the notification alert", action: { type: "launch" }, wait: wait.live(15000),
+      fastEvidence: { kind: "visual", maxContentDiffPct: 12 } },
     { id: "alert-ok", label: "Dismiss the upstream notification alert", action: { type: "tapText", text: "OK" }, wait: wait.live(1500) },
     { id: "onboarding-close", label: "Close onboarding", action: { type: "tapText", text: "close" }, wait: wait.live(3000) },
     { id: "location-permission", label: "Allow location when Android asks — nearby list loads", action: { type: "tapText", text: "While using the app", optional: true }, wait: wait.live(25000) },

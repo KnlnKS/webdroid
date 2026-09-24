@@ -46,6 +46,7 @@ export type WaitPolicy =
   | { kind: "live"; horizonMs: number; timeoutMs: number }
   | { kind: "live-sample"; atRealMs: number; timeoutMs: number };
 type StateWait = Extract<WaitPolicy, { kind: "state" }>;
+type LiveWait = Extract<WaitPolicy, { kind: "live" }>;
 
 export type EvidencePolicy =
   | { kind: "semantic" }
@@ -60,7 +61,7 @@ export const wait = {
     ({ kind: "quiescent", maxVirtualMs, maxRealMs }),
   sample: (atVirtualMs = 0, maxRealMs = REAL_WAIT_MS, minRealMs = 0): WaitPolicy =>
     ({ kind: "sample", atVirtualMs, maxRealMs, minRealMs }),
-  live: (horizonMs = 0, timeoutMs = REAL_WAIT_MS): WaitPolicy =>
+  live: (horizonMs = 0, timeoutMs = REAL_WAIT_MS): LiveWait =>
     ({ kind: "live", horizonMs, timeoutMs }),
   liveSample: (atRealMs = 0, timeoutMs = REAL_WAIT_MS): WaitPolicy =>
     ({ kind: "live-sample", atRealMs, timeoutMs }),
@@ -103,8 +104,8 @@ type FlowBase = {
 export type Flow = FlowBase & (
   | {
       clock: "live";
-      /** Observable startup checkpoint for the launch-only quick pass. */
-      quickWait: StateWait;
+      /** Startup completion policy for the launch-only quick pass. */
+      quickWait: StateWait | LiveWait;
       sourceCoverage?: never;
       expectedBrowserErrors?: never;
     }
@@ -148,8 +149,8 @@ export function validateFlow(flow: Flow): void {
     if (flow.clock === "live" && step.wait.kind !== "live" && step.wait.kind !== "live-sample")
       throw new Error(`${flow.app}/${step.id}: live flow requires a live wait`);
     const evidence = step.fastEvidence;
-    if (flow.clock === "live" && evidence)
-      throw new Error(`${flow.app}/${step.id}: live flow cannot declare fast evidence`);
+    if (flow.clock === "live" && evidence && (step !== flow.steps[0] || evidence.kind !== "visual"))
+      throw new Error(`${flow.app}/${step.id}: live fast evidence must compare the launch screen`);
     if (evidence?.kind === "visual" && !(evidence.maxContentDiffPct >= 0 && evidence.maxContentDiffPct <= 100))
       throw new Error(`${flow.app}/${step.id}: invalid visual difference limit`);
     const measuresMotion = isMotionWait(step.wait) || (step.wait.kind === "state" && step.wait.condition.kind === "perf");
@@ -197,6 +198,8 @@ export type Manifest = {
   app: string;
   pkg: string;
   activity: string;
+  /** A launch-only Android reference; full flow steps remain smoke evidence. */
+  depth?: "startup";
   recordedAt: string;
   /** Instant both sides pin their clock to, ms since epoch. */
   pinnedClockMs: number;

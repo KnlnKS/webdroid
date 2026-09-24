@@ -12,7 +12,10 @@ import { PINNED_CLOCK_MS, screenOf, screenParam, sameScreen, uiFileFor, waitHori
 import { E2E_DIR, sleep } from "./lib/util";
 import { device as profile } from "../../src/shell/config";
 
-const { flows } = parseArgs(process.argv.slice(2), "bun run e2e --record");
+const startup = process.argv.includes("--startup");
+const { flows } = parseArgs(process.argv.slice(2).filter((arg) => arg !== "--startup"), "bun run e2e --record");
+if (startup && (flows.length !== 1 || flows[0]?.clock !== "live"))
+  throw new Error("--startup requires one selected live flow");
 
 async function ensureDevice(flow: Flow) {
   const devices = (await emu.sh(["devices"], { quiet: true })).split("\n").filter((l) => /\tdevice$/.test(l));
@@ -59,10 +62,15 @@ async function setDeviceClock(flow: Flow): Promise<number> {
 
 async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceInfo>>) {
   const dir = `${E2E_DIR}golden/${flow.app}`;
+  if (startup && await Bun.file(`${dir}/manifest.json`).exists()) {
+    const previous: Manifest = await Bun.file(`${dir}/manifest.json`).json();
+    if (previous.depth !== "startup") throw new Error(`${flow.app}: full Android reference already exists`);
+  }
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
 
-  console.log(`\n=== recording ${flow.app} (${flow.steps.length} steps) ===`);
+  const steps = startup ? flow.steps.slice(0, 1) : flow.steps;
+  console.log(`\n=== recording ${flow.app} (${steps.length} steps) ===`);
   const clockMs = await setDeviceClock(flow);
   await emu.shell(`pm clear ${flow.pkg}`);
   await sleep(1200);
@@ -72,7 +80,7 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
   }
 
   const recorded: RecordedStep[] = [];
-  for (const [i, step] of flow.steps.entries()) {
+  for (const [i, step] of steps.entries()) {
     const a = step.action;
     let resolved: RecordedStep["resolved"];
     let bounds: RecordedStep["bounds"];
@@ -159,6 +167,7 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
 
   const manifest: Manifest = {
     app: flow.app, pkg: flow.pkg, activity: flow.activity,
+    ...(startup ? { depth: "startup" as const } : {}),
     recordedAt: new Date().toISOString(),
     pinnedClockMs: clockMs,
     device, crop: flow.crop, steps: recorded,

@@ -40,6 +40,8 @@ async function diffFlow(flow: Flow): Promise<FlowReport> {
     throw new Error(`no goldens for "${flow.app}" — run \`bun run e2e --record\` (needs an emulator)`);
   }
   const manifest: Manifest = await Bun.file(`${goldenDir}/manifest.json`).json();
+  if (manifest.depth === "startup")
+    throw new Error(`${flow.app}: Android reference covers startup only; run the quick E2E test`);
   await rm(sxsDir, { recursive: true, force: true });
   await mkdir(sxsDir, { recursive: true });
 

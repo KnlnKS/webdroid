@@ -32,7 +32,7 @@ async function runFlow(app: string): Promise<Outcome> {
     // is a flow the run pinned to some other geometry: the goldens are pixels at one size, so a
     // run at any other size measures cost, never fidelity — and saying so here means the gate
     // cannot be passed at the wrong size by accident.
-    if (!manifest) printSmoke(app, runs, log);
+    if (!manifest || manifest.depth === "startup") printSmoke(app, runs, log);
     else if (pinned && !sameScreen(pinned, screenOf(manifest))) {
       log(`\n--- ${app} (smoke: ran at ${screenParam(pinned)}, goldens are ${screenParam(screenOf(manifest))}) ---`);
       printSmoke(app, runs, log);
@@ -65,9 +65,12 @@ if (!scoredApps.length) {
   process.exit(0);
 }
 const { out, reports } = await assembleReport(scoredApps, screenParam(pinned ?? screenOf(await loadManifest(scoredApps[0]))));
-// smoke flows (no goldens) never appear in the report, so compare against the scorable set
+// Smoke flows and launch-only references never appear in the full report.
 let scorable = 0;
-for (const f of FLOWS) if (await loadManifest(f.app)) scorable++;
+for (const f of FLOWS) {
+  const manifest = await loadManifest(f.app);
+  if (manifest && manifest.depth !== "startup") scorable++;
+}
 if (reports.length < scorable) {
   console.log(`\nnote: a flow subset was selected, so the report now covers only ` +
     `${reports.map((r) => r.app).join(", ")} — the other flows' sections were replaced, not merged.`);
