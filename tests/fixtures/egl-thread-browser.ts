@@ -111,6 +111,7 @@ async function probe() {
   const first = new JThread(), second = new JThread();
   setCurThread(first);
   const bound10 = vcallMaybe(e10, "eglMakeCurrent", `(${E10}EGLDisplay;${E10}EGLSurface;${E10}EGLSurface;${E10}EGLContext;)Z`, display10, surface10, surface10, context10);
+  const interval10 = vcallMaybe(rt.make("javax/microedition/khronos/egl/EGL11"), "eglSwapInterval", `(${E10}EGLDisplay;I)Z`, display10, 1);
   const firstGL = gl, firstTables = tables();
   gl?.clearColor(1, 0, 0, 1);
   const suspended = vcallMaybe(e10, "eglSwapBuffers", `(${E10}EGLDisplay;${E10}EGLSurface;)Z`, display10, surface10);
@@ -160,7 +161,7 @@ async function probe() {
     [mangleMethod("onDrawFrame", "(Ljavax/microedition/khronos/opengles/GL10;)V")]: suspend,
   });
   await Reflect.apply(Reflect.get(view, "runFrame"), view, []);
-  return { callbacks, bound10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
+  return { callbacks, bound10, interval10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
     firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null,
     lifecycle: await lifecycle(), nativeWindow: await nativeWindow(), windowCopy: await windowCopy(), readback: readback(), uploads: uploadExtents() };
 }

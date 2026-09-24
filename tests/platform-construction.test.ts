@@ -59,18 +59,33 @@ test("CompoundButton subclasses implement Checkable and preserve tint state", as
 
 test("EGL10 returns configurations with their declared Java type", async () => {
   const egl = rt.make("javax/microedition/khronos/egl/EGL10"), configs = [null], count = new Int32Array(1);
-  expect(await vcall(egl, "eglChooseConfig", "(Ljavax/microedition/khronos/egl/EGLDisplay;[I[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z", null, new Int32Array([0x3038]), configs, 1, count)).toBe(1);
+  const display = await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null);
+  expect(await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null)).toBe(display);
+  expect(rt.iof(display, "javax/microedition/khronos/egl/EGLDisplay")).toBe(1);
+  expect(await vcall(egl, "eglChooseConfig", "(Ljavax/microedition/khronos/egl/EGLDisplay;[I[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z", display, new Int32Array([0x3038]), configs, 1, count)).toBe(1);
   expect(count[0]).toBe(1);
   expect(rt.iof(configs[0], "javax/microedition/khronos/egl/EGLConfig")).toBe(1);
+});
+
+test("EGL11 rejects the no-display handle", async () => {
+  const egl = rt.make("javax/microedition/khronos/egl/EGL11");
+  const noDisplay = rt.link("javax/microedition/khronos/egl/EGL10").ctor[mangleStaticField("EGL_NO_DISPLAY")];
+  const configs = [null], count = new Int32Array([-1]);
+  expect(await vcall(egl, "eglChooseConfig", "(Ljavax/microedition/khronos/egl/EGLDisplay;[I[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z", noDisplay, new Int32Array([0x3038]), configs, 1, count)).toBe(0);
+  expect([configs[0], count[0]]).toEqual([null, -1]);
+  expect(await vcall(egl, "eglGetError", "()I")).toBe(0x3008);
+  expect(await vcall(egl, "eglSwapInterval", "(Ljavax/microedition/khronos/egl/EGLDisplay;I)Z", noDisplay, 0)).toBe(0);
+  expect(await vcall(egl, "eglGetError", "()I")).toBe(0x3008);
 });
 
 test("EGL10 reports its no-context handle until a context is bound", async () => {
   const egl = rt.make("javax/microedition/khronos/egl/EGL10");
   const none = rt.link("javax/microedition/khronos/egl/EGL10").ctor[mangleStaticField("EGL_NO_CONTEXT")];
+  const display = await vcall(egl, "eglGetDisplay", "(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;", null);
   expect(none).not.toBeNull();
   expect(rt.iof(none, "javax/microedition/khronos/egl/EGLContext")).toBe(1);
   expect(await vcall(egl, "eglGetCurrentContext", "()Ljavax/microedition/khronos/egl/EGLContext;")).toBe(none);
   expect(glSurfaces.current).toBeNull();
-  expect(await vcall(egl, "eglMakeCurrent", "(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z", null, null, null, none)).toBe(1);
+  expect(await vcall(egl, "eglMakeCurrent", "(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z", display, null, null, none)).toBe(1);
   expect(glSurfaces.current).toBeNull();
 });
