@@ -1,4 +1,4 @@
-import { SCHEMA_VERSION, type ApiCase, type GraphicsCase, type GraphicsCommand, type ProbeArgument } from "./model";
+import { SCHEMA_VERSION, type ApiCall, type ApiCase, type GraphicsCase, type GraphicsCommand, type ProbeArgument } from "./model";
 import { Random } from "./random";
 
 const i = (value: number): ProbeArgument => ({ kind: "int", value });
@@ -6,16 +6,120 @@ const f = (value: number): ProbeArgument => ({ kind: "float", value });
 const s = (value: string): ProbeArgument => ({ kind: "string", value });
 
 export type ApiRecipeMember = { kind: "class" | "method"; owner: string; signature: string };
-type RecipeGenerator = (random: Random, id: string, rect: number[]) => ApiCase;
+type RecipeGenerator = (random: Random, id: string) => ApiCase;
 type ApiRecipe = { members: readonly ApiRecipeMember[]; generate: RecipeGenerator };
 
 export const apiRecipeMemberId = (member: ApiRecipeMember): string => `${member.kind}:${member.owner}.${member.signature}`;
 
 const member = (kind: ApiRecipeMember["kind"], owner: string, signature: string): ApiRecipeMember => ({ kind, owner, signature });
 
+const BUNDLE = "android/os/Bundle";
+const BASE_BUNDLE = "android/os/BaseBundle";
+const INTENT = "android/content/Intent";
+const STRING = "Ljava/lang/String;";
+
+type StoredValue = {
+  name: string;
+  descriptor: string;
+  generate: (random: Random) => ProbeArgument;
+};
+
+const STORED_VALUES: readonly StoredValue[] = [
+  { name: "Int", descriptor: "I", generate: (random) => i(random.pick([0, -1, 1, -2147483648, 2147483647, random.int(-10_000, 10_000)])) },
+  { name: "Long", descriptor: "J", generate: (random) => ({ kind: "long", value: random.pick(["0", "-1", "1", "-9223372036854775808", "9223372036854775807", String(random.int(-10_000, 10_000))]) }) },
+  { name: "Boolean", descriptor: "Z", generate: (random) => ({ kind: "boolean", value: random.chance(0.5) }) },
+  { name: "String", descriptor: STRING, generate: (random) => random.chance(0.2) ? { kind: "null" } : s(random.pick(["", "text", "two words", "\uD83D\uDE80"])) },
+  { name: "IntArray", descriptor: "[I", generate: (random) => ({ kind: "int-array", value: Array.from({ length: random.int(0, 5) }, () => random.int(-256, 256)) }) },
+  { name: "StringArray", descriptor: "[Ljava/lang/String;", generate: (random) => ({ kind: "string-array", value: Array.from({ length: random.int(0, 5) }, () => random.pick(["", "a", "two words", "\uD83D\uDE80"])) }) },
+];
+
+const bundleMembers = [
+  member("class", BUNDLE, BUNDLE), member("class", BASE_BUNDLE, BASE_BUNDLE), member("method", BUNDLE, "<init>()V"),
+  ...STORED_VALUES.flatMap(({ name, descriptor }) => [
+    member("method", BASE_BUNDLE, `put${name}(${STRING}${descriptor})V`),
+    member("method", BASE_BUNDLE, `get${name}(${STRING})${descriptor}`),
+    ...(descriptor === "I" || descriptor === "J" || descriptor === "Z" || descriptor === STRING
+      ? [member("method", BASE_BUNDLE, `get${name}(${STRING}${descriptor})${descriptor}`)] : []),
+  ]),
+  ...["containsKey(Ljava/lang/String;)Z", "size()I"].map((signature) => member("method", BASE_BUNDLE, signature)),
+  ...["remove(Ljava/lang/String;)V", "clear()V", "clone()Ljava/lang/Object;"].map((signature) => member("method", BUNDLE, signature)),
+];
+
+const intentMembers = [
+  member("class", INTENT, INTENT), member("method", INTENT, "<init>()V"),
+  ...STORED_VALUES.flatMap(({ name, descriptor }) => [
+    member("method", INTENT, `putExtra(${STRING}${descriptor})Landroid/content/Intent;`),
+    member("method", INTENT, `get${name}Extra(${STRING}${descriptor === "I" || descriptor === "J" || descriptor === "Z" ? descriptor : ""})${descriptor}`),
+  ]),
+  ...["hasExtra(Ljava/lang/String;)Z", "removeExtra(Ljava/lang/String;)V",
+    "setAction(Ljava/lang/String;)Landroid/content/Intent;", "getAction()Ljava/lang/String;",
+    "addCategory(Ljava/lang/String;)Landroid/content/Intent;", "hasCategory(Ljava/lang/String;)Z",
+    "setFlags(I)Landroid/content/Intent;", "addFlags(I)Landroid/content/Intent;", "getFlags()I"].map((signature) => member("method", INTENT, signature)),
+];
+
+const key = (random: Random): ProbeArgument => s(random.pick(["", "a", "shared", "unicode-\uD83D\uDE80"]));
+const rectangle = (random: Random): ProbeArgument[] => Array.from({ length: 4 }, () => i(random.int(-128, 128)));
+
+function bundleCase(random: Random, id: string): ApiCase {
+  const stored = random.pick(STORED_VALUES);
+  const target = key(random);
+  const calls: ApiCall[] = [
+    { name: `put${stored.name}`, descriptor: `(${STRING}${stored.descriptor})V`, args: [target, stored.generate(random)] },
+  ];
+  if (random.chance(0.3)) calls.push({ name: `put${stored.name}`, descriptor: `(${STRING}${stored.descriptor})V`, args: [s("other"), stored.generate(random)] });
+  if (random.chance(0.35)) calls.push({ name: `put${stored.name}`, descriptor: `(${STRING}${stored.descriptor})V`, args: [target, stored.generate(random)] });
+  if (random.chance(0.25)) calls.push({ name: "remove", descriptor: `(${STRING})V`, args: [target] });
+  if (random.chance(0.1)) calls.push({ name: "clear", descriptor: "()V" });
+  if (random.chance(0.2)) calls.push({ name: "clone", descriptor: "()Ljava/lang/Object;", replaceReceiver: true });
+  const observation = random.int(0, 3);
+  if (observation === 0) calls.push({ name: "containsKey", descriptor: `(${STRING})Z`, args: [target] });
+  else if (observation === 1) calls.push({ name: "size", descriptor: "()I" });
+  else {
+    const lookup = observation === 2 ? target : key(random);
+    const useDefault = (stored.descriptor === "I" || stored.descriptor === "J" || stored.descriptor === "Z" || stored.descriptor === STRING)
+      && random.chance(0.5);
+    calls.push({ name: `get${stored.name}`, descriptor: `(${STRING}${useDefault ? stored.descriptor : ""})${stored.descriptor}`,
+      args: useDefault ? [lookup, stored.generate(random)] : [lookup] });
+  }
+  return { schemaVersion: SCHEMA_VERSION, id, kind: "api", owner: BUNDLE, constructorDescriptor: "()V", calls };
+}
+
+function intentExtrasCase(random: Random, id: string): ApiCase {
+  const stored = random.pick(STORED_VALUES);
+  const target = key(random);
+  const calls: ApiCall[] = [
+    { name: "putExtra", descriptor: `(${STRING}${stored.descriptor})Landroid/content/Intent;`, args: [target, stored.generate(random)] },
+  ];
+  if (random.chance(0.3)) calls.push({ name: "putExtra", descriptor: `(${STRING}${stored.descriptor})Landroid/content/Intent;`, args: [s("other"), stored.generate(random)] });
+  if (random.chance(0.35)) calls.push({ name: "putExtra", descriptor: `(${STRING}${stored.descriptor})Landroid/content/Intent;`, args: [target, stored.generate(random)] });
+  if (random.chance(0.25)) calls.push({ name: "removeExtra", descriptor: `(${STRING})V`, args: [target] });
+  const observation = random.int(0, 2);
+  if (observation === 0) calls.push({ name: "hasExtra", descriptor: `(${STRING})Z`, args: [target] });
+  else if (stored.descriptor === "I" || stored.descriptor === "J" || stored.descriptor === "Z") {
+    const defaultValue = stored.generate(random);
+    calls.push({ name: `get${stored.name}Extra`, descriptor: `(${STRING}${stored.descriptor})${stored.descriptor}`,
+      args: [observation === 1 ? target : key(random), defaultValue] });
+  } else calls.push({ name: `get${stored.name}Extra`, descriptor: `(${STRING})${stored.descriptor}`,
+    args: [observation === 1 ? target : key(random)] });
+  return { schemaVersion: SCHEMA_VERSION, id, kind: "api", owner: INTENT, constructorDescriptor: "()V", calls };
+}
+
+function intentMetadataCase(random: Random, id: string): ApiCase {
+  const action = random.pick(["", "android.intent.action.VIEW", "org.example.ACTION"]);
+  const category = random.pick(["", "android.intent.category.DEFAULT", "org.example.CATEGORY"]);
+  const calls: ApiCall[] = random.chance(0.5)
+    ? [{ name: "setAction", descriptor: `(${STRING})Landroid/content/Intent;`, args: [s(action)] },
+      { name: "addCategory", descriptor: `(${STRING})Landroid/content/Intent;`, args: [s(category)] },
+      random.chance(0.5) ? { name: "getAction", descriptor: `()${STRING}` }
+        : { name: "hasCategory", descriptor: `(${STRING})Z`, args: [s(category)] }]
+    : [{ name: "setFlags", descriptor: "(I)Landroid/content/Intent;", args: [i(random.int(0, 0xffff))] },
+      { name: "addFlags", descriptor: "(I)Landroid/content/Intent;", args: [i(random.int(0, 0xffff))] },
+      { name: "getFlags", descriptor: "()I" }];
+  return { schemaVersion: SCHEMA_VERSION, id, kind: "api", owner: INTENT, constructorDescriptor: "()V", calls };
+}
+
 function randomApiRecipe(random: Random, id: string): ApiCase {
-  const rect = [random.int(-128, 128), random.int(-128, 128), random.int(-128, 128), random.int(-128, 128)];
-  return API_RECIPES[random.int(0, API_RECIPES.length - 1)]!.generate(random, id, rect);
+  return API_RECIPES[random.int(0, API_RECIPES.length - 1)]!.generate(random, id);
 }
 
 export const API_RECIPES: readonly ApiRecipe[] = [
@@ -33,13 +137,13 @@ export const API_RECIPES: readonly ApiRecipe[] = [
     members: [member("class", "android/graphics/Rect", "android/graphics/Rect"), member("method", "android/graphics/Rect", "<init>(IIII)V"),
       member("method", "android/graphics/Rect", "width()I"), member("method", "android/graphics/Rect", "height()I"),
       member("method", "android/graphics/Rect", "centerX()I"), member("method", "android/graphics/Rect", "centerY()I")],
-    generate: (random, id, rect) =>
-      ({ schemaVersion: SCHEMA_VERSION, id, kind: "api", owner: "android/graphics/Rect", constructorDescriptor: "(IIII)V", constructorArgs: rect.map(i), calls: [{ name: random.pick(["width", "height", "centerX", "centerY"]), descriptor: "()I" }] }),
+    generate: (random, id) =>
+      ({ schemaVersion: SCHEMA_VERSION, id, kind: "api", owner: "android/graphics/Rect", constructorDescriptor: "(IIII)V", constructorArgs: rectangle(random), calls: [{ name: random.pick(["width", "height", "centerX", "centerY"]), descriptor: "()I" }] }),
   },
   {
     members: [member("class", "android/graphics/Rect", "android/graphics/Rect"), member("method", "android/graphics/Rect", "<init>(IIII)V"), member("method", "android/graphics/Rect", "contains(II)Z")],
-    generate: (random, id, rect) =>
-      ({ schemaVersion: SCHEMA_VERSION, id, kind: "api", owner: "android/graphics/Rect", constructorDescriptor: "(IIII)V", constructorArgs: rect.map(i), calls: [{ name: "contains", descriptor: "(II)Z", args: [i(random.int(-128, 128)), i(random.int(-128, 128))] }] }),
+    generate: (random, id) =>
+      ({ schemaVersion: SCHEMA_VERSION, id, kind: "api", owner: "android/graphics/Rect", constructorDescriptor: "(IIII)V", constructorArgs: rectangle(random), calls: [{ name: "contains", descriptor: "(II)Z", args: [i(random.int(-128, 128)), i(random.int(-128, 128))] }] }),
   },
   {
     members: [member("class", "android/net/Uri", "android/net/Uri"), member("method", "android/net/Uri", "parse(Ljava/lang/String;)Landroid/net/Uri;"),
@@ -62,6 +166,9 @@ export const API_RECIPES: readonly ApiRecipe[] = [
       member("method", "android/graphics/Matrix", "setTranslate(FF)V"), member("method", "android/graphics/Matrix", "isIdentity()Z")],
     generate: (random, id) => matrixCase(random, id),
   },
+  { members: bundleMembers, generate: bundleCase },
+  { members: intentMembers, generate: intentExtrasCase },
+  { members: intentMembers, generate: intentMetadataCase },
 ] as const;
 
 export const API_RECIPE_MEMBER_IDS = new Set(API_RECIPES.flatMap((recipe) => recipe.members.map(apiRecipeMemberId)));
@@ -77,9 +184,7 @@ function matrixCase(random: Random, id: string): ApiCase {
 
 export function generateApiCases(seed: number, count: number): ApiCase[] {
   const random = new Random(seed);
-  return Array.from({ length: count }, (_, index) => index % 7 === 6
-    ? matrixCase(random, `api-${seed}-${index}`)
-    : randomApiRecipe(random, `api-${seed}-${index}`));
+  return Array.from({ length: count }, (_, index) => randomApiRecipe(random, `api-${seed}-${index}`));
 }
 
 const COLOURS = [0x00000000, 0xff000000, 0xffffffff, 0xffff0000, 0xff00ff00, 0xff0000ff, 0x80808080].map((value) => value | 0);

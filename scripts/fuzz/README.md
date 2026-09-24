@@ -278,9 +278,11 @@ If `--seed` is omitted, the CLI generates a seed and prints it before doing work
 immediately. `--cases` defaults to 1,000 and must be at least one. `--oracle` is required.
 
 Current API behavior is recipe-based. `API_RECIPES` in `scripts/fuzz/generate.ts` owns both case
-generation and the member metadata used by inventory's `exercised` flag. The initial recipes cover
-bounded operations for `Color`, `Rect`, `Uri`, `TextUtils`, and `Matrix`; inspect the registry for
-the exact current list.
+generation and the member metadata used by inventory's `exercised` flag. Recipes cover bounded
+operations for `Color`, `Rect`, `Uri`, `TextUtils`, and `Matrix`, plus stateful `Bundle` and `Intent`
+sequences. Those sequences write, overwrite, remove, and sometimes clone values before reading
+the resulting state. They use the generic reflection protocol, so minimized cases and replay use
+the same unchanged probe APK on Android and webdroid. Inspect the registry for the exact calls.
 
 The generic probe supports:
 
