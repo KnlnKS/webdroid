@@ -43,6 +43,7 @@ import "./android/atomicfile";
 import "./android/accounts";
 import "./android/authenticator";
 import "./android/parcel";
+import "./android/cursorwindow";
 import "./android/binder";
 import "./android/remotecallbacklist";
 import "./android/mediasession";
