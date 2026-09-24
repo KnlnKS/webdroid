@@ -1366,3 +1366,59 @@ main-loop wedge, required native call, layout error or GL error. YouTube retaine
 settle timeouts and eight instances of its known `Matrix.mapRect` draw failure. The
 layout errors from the preceding Cut branch gate did not recur in this merged run;
 their intermittence remains unexplained. No visual golden changed.
+
+## TikTok A64 local-call follow-up — 2026-09-23
+
+The isolated worktree starts at `5caf45bd` on
+`codex/tiktok-video-playback-20260923`. TikTok uses its bundled ByteVC1/ByteVC2
+decoders and EGL. Its video path did not reach the Java or NDK MediaCodec bridge.
+A static reachability audit listed many possible framework gaps, but the focused
+13-step run reached only nine app or vendor class probes and no required Android
+API or native symbol. Adding substitutes for the audit's unobserved paths would
+not address the measured playback bottleneck.
+
+A clean Chrome ten-second live-feed capture presented 243 EGL swaps in 10.025
+seconds (24.2/s) while executing 3.505 billion guest instructions, with 5.58
+seconds recorded in native execution. Another live capture presented 260 swaps
+in 10.053 seconds (25.9/s), with 3.228 billion guest instructions and 5.38
+seconds in native execution. The clips were live network selections rather
+than matched inputs; their source frame rates were not recorded. Chrome CPU
+sampling placed substantial time in native decoder execution and WebGL
+`getError`. Guest `glGetError` must retain its observable GLES behavior, so
+simply dropping those checks is not a valid speedup.
+
+The A64 JIT previously treated every direct call (`BL`) as a region exit even
+when the target was on the same compiled source page. Scanning now records
+the direct target for both branches and calls, and emission sets the link
+register before transferring to a local compiled block. The existing region
+epoch checks still guard installation and invalidation. A fixed kernel making
+6.55 million local calls fell from 34.4 ms to 22.7–22.8 ms, about 34% faster.
+The focused A64 parity test covers the return address and register result;
+the 603 native A64/SIMD/oracle/cache tests passed with 19,669 assertions.
+Typecheck passed, the full unit suite passed 1,345 tests with 27,677 assertions,
+and TikTok smoke-compiled 462,058 classes with zero method failures.
+
+A trial exemption from native-worker pacing measured up to 90 waits totaling
+5.127 seconds across decoder workers on one clip. On another dense live clip,
+the exemption reduced pacing to two waits totaling 0.648 seconds, but video
+still presented 11.4 EGL swaps/s while native execution took 7.49 seconds.
+The trial also coincided with lower Flappy Bird frame rates in a serialized
+matrix (about 24–26/s against about 28/s in the retained starting run).
+Because different network clips prevented a matched TikTok gain and the
+other-app result raised regression risk, the pacing trial and its temporary
+instrumentation were removed. The final Flappy Bird capture returned to about
+28/s. No scheduler change is retained.
+
+The final code passed a serialized E2E matrix with 183/183 rendered steps
+across 13 flows in 947.1 seconds. No main loop wedged, no required native call,
+and no layout or GL error was recorded. TikTok rendered 13/13; its feed video
+steps presented 91 EGL swaps over 6.482 seconds and 118 over 6.811 seconds,
+including harness interaction and capture time, so these are not isolated
+steady-state rates. The harness's printed 26–30 `fps` for those steps counts
+JavaScript ticks, not video frames. The clean Chrome captures above remain the
+better video-rate evidence, and neither establishes the requested 30/s on
+demanding clips. YouTube retained two settle timeouts and eight instances of
+its known `Matrix.mapRect` draw error; 12 Flappy Bird auxiliary snapshots were
+unavailable as before. TikTok's 149 E-tagged log entries were largely its
+own TLS, crypto and monitor diagnostics; they did not correspond to reached
+required platform calls. No visual goldens changed.

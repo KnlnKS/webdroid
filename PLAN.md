@@ -98,6 +98,18 @@ layout, or draw failure. A matched 30-fps-header HEVC segment presented 268 EGL 
 clips presented more slowly, but their source timing was not captured. Original-rate
 playback across demanding clips remains unproved. Fixed decoder comparisons and the
 parallel-worker constraints are recorded in the implementation history.
+
+## TikTok playback follow-up — 2026-09-23
+
+Branch: `codex/tiktok-video-playback-20260923`. Starting revision: `5caf45bd`.
+An A64 JIT change keeps direct calls to targets on the compiled page within that
+region. A fixed 6.55-million-call kernel fell from 34.4 ms to 22.7–22.8 ms.
+TikTok compiles 462,058 classes with zero method failures and its focused E2E flow
+renders 13/13 steps without a required native call, layout, draw, or GL error.
+The final serialized matrix renders 183/183 steps in 947.1 seconds. The measured
+TikTok feed still falls below 30 presented video frames/s on some live clips;
+the original-rate goal remains open. The source rate of those clips is unknown.
+See the implementation history for the rejected scheduler experiment and evidence limits.
 The merged `main` revision `5e6744c9` passed typecheck, 1,340 unit tests, framework checks,
 and zero-failure TikTok and Cut the Rope smoke compilation. Its uncontended serialized E2E
 matrix rendered 183/183 steps in 949.9 seconds. TikTok rendered 13/13 with four available
