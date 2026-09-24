@@ -35,8 +35,7 @@ type Action =
 
 export type StateCondition =
   | { kind: "activity"; component: string }
-  | { kind: "text"; text: string }
-  | { kind: "text-absent"; text: string }
+  | { kind: "text" | "text-absent"; text: string; resId?: string }
   | { kind: "perf"; counter: keyof typeof perf; atLeast: number };
 
 export type WaitPolicy =

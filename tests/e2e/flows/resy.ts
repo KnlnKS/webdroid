@@ -46,7 +46,7 @@ export const resy: Flow = {
     { id: "sheet-close", label: "Close the announcement sheet", action: { type: "tapAt", ...SHEET_CLOSE }, wait: wait.live(3000) },
     { id: "search-open", label: "Open search from the action bar", action: { type: "tapAt", ...SEARCH_PILL }, fastAction: { type: "tapText", text: "search" }, wait: wait.live(4000) },
     { id: "search-type", label: 'Type "Carbone"', action: { type: "typeInto", ...KEYWORD_FIELD, text: "Carbone" }, wait: wait.live(2000) },
-    { id: "search-go", label: "Search — the list shows the matches", action: { type: "enter" }, wait: wait.live(15000), fastWait: wait.state({ kind: "text", text: "Carbone" }, 0, 15_000) },
+    { id: "search-go", label: "Search — the list shows the matches", action: { type: "enter" }, wait: wait.live(15000), fastWait: wait.state({ kind: "text", text: "Carbone", resId: "com.resy.android:id/list_item_venue_name" }, 0, 15_000) },
     { id: "sheet-close-2", label: "Close the re-shown announcement sheet", action: { type: "tapAt", ...SHEET_CLOSE }, wait: wait.live(3000) },
     { id: "venue", label: "Open the first result — venue page", action: { type: "tapAt", ...FIRST_ROW }, wait: wait.live(15000), fastWait: wait.state({ kind: "text", text: "NEED TO KNOW" }, 0, 12_000) },
     { id: "venue-back", label: "Back to the list", action: { type: "back" }, wait: wait.live(5000), fastWait: wait.state({ kind: "text-absent", text: "NEED TO KNOW" }, 0, 6_000) },

@@ -214,6 +214,7 @@ function installProbe(cfg: ProbeConfig): void {
     const want = condition.text.replace(/\s+/g, " ").trim().toLowerCase();
     const nodes: UiNode[] = await g.wd.uiTree();
     const found = nodes.some((node) =>
+      (!condition.resId || node.resId === condition.resId) &&
       [node.text, node.desc].some((text) => text.replace(/\s+/g, " ").trim().toLowerCase().includes(want)));
     return condition.kind === "text" ? found : !found;
   };
