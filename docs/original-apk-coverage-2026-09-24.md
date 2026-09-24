@@ -4,7 +4,7 @@ The active scope is the 20 APKs present before the latest additions to `apks/`. 
 
 | APK | Boot-path missing APIs after targeted fixes | Open functional evidence |
 | --- | --- | --- |
-| Amazon.xapk | Private Amazon classes/services; optional SLF4J binder | Native ARM fault in Weblab plugin; shopping content and sign-in need deeper exercise |
+| Amazon.xapk | Private Amazon classes/services; optional SLF4J binder | The Weblab Thumb APSR fault is fixed at instruction level; shopping content and sign-in need deeper exercise |
 | Among Us.xapk | None observed | Practice works; online service connection failed on deployed relay |
 | ChatGPT.xapk | `java/net/DatagramSocket`; optional Amazon IAP probe | Settings flow fails; authenticated upload and voice unvalidated |
 | Cut the Rope.xapk | None observed | Level-one tutorial works; intro video and later gameplay speed remain open |
@@ -25,4 +25,4 @@ The active scope is the 20 APKs present before the latest additions to `apks/`. 
 | lichess.apk | Optional window sidecar probe | Intermittent Dart pthread faults and flow timeouts |
 | mihon-v0.20.4.apk | None observed | Boot only |
 
-The Google Maps targeted rerun at `e0045864` drew a frame with zero missing entries, zero required native calls and two process errors. CursorWindow has typed row access and parcel round trip; FileBackupHelper currently supports construction only. Implement and verify backup transport before treating Android backup as supported. The remaining rows use the original sweep unless a focused rerun is recorded elsewhere. Full use of every app has not been demonstrated.
+The current 20-app rerun at `0ac2f429` drew 20/20 frames with diagnostics. Google Maps had zero missing entries, zero required native calls and two process errors. CursorWindow has typed row access and parcel round trip; FileBackupHelper currently supports construction only. Implement and verify backup transport before treating Android backup as supported. A focused Amazon rerun after `a4dbe53b` did not reproduce its prior Thumb APSR fault, and the exact instruction sequence passes a core test; this does not establish a long-session fix. Full use of every app has not been demonstrated.
