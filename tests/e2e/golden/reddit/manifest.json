@@ -1,0 +1,31 @@
+{
+  "app": "reddit",
+  "pkg": "com.reddit.frontpage",
+  "activity": "com.reddit.launch.main.MainActivity",
+  "depth": "startup",
+  "recordedAt": "2026-09-24T01:00:06.678Z",
+  "pinnedClockMs": 1790211574280,
+  "device": {
+    "width": 1080,
+    "height": 2160,
+    "densityDpi": 480,
+    "fingerprint": "google/sdk_gphone64_arm64/emu64a:13/TE1A.240213.009/12342917:userdebug/dev-keys",
+    "sdk": "33"
+  },
+  "crop": {
+    "top": 0,
+    "bottom": 0,
+    "left": 0,
+    "right": 0
+  },
+  "steps": [
+    {
+      "id": "launch",
+      "label": "Launch — welcome behind the One Tap sheet",
+      "index": 0,
+      "file": "00-launch.png",
+      "uiFile": "00-launch.ui.json",
+      "settleTimedOut": false
+    }
+  ]
+}

@@ -15,7 +15,8 @@ export const youtube: Flow = {
   clock: "live",
   quickWait: wait.state({ kind: "text", text: "Search YouTube" }, 0, 18_000),
   steps: [
-    { id: "launch", label: "Launch YouTube", action: { type: "launch" }, wait: wait.live(30000) },
+    { id: "launch", label: "Launch YouTube", action: { type: "launch" }, wait: wait.live(30000),
+      fastEvidence: { kind: "visual", maxContentDiffPct: 82 } },
     { id: "notifications", label: "Continue without notifications", action: { type: "tapText", text: "Don’t allow", optional: true }, wait: wait.live(10000) },
     { id: "home", label: "Guest Home", action: { type: "settle" }, wait: wait.live(10000) },
     { id: "search-open", label: "Open search", action: { type: "tapText", text: "Search" }, wait: wait.live(3000) },
