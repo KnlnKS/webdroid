@@ -578,7 +578,7 @@ ${profileEnd}
 
   private emitStaticField(i: Ins, out: string[], isGet: boolean) {
     const { prop, typeIdx } = this.R.resolveStaticField(this.dex, i.b);
-    if (typeIdx >= 0 && descToName(this.dex.type(typeIdx)) === this.info.name) {
+    if (typeIdx >= 0 && descToName(this.dex.type(typeIdx)) === this.info.name && !this.info.isInterface) {
       out.push(`${this.u}=D.cl[${this.literal(typeIdx)}]??D.link(${this.literal(typeIdx)});`);
     } else if (typeIdx >= 0) {
       this.guard(`D.ic[${this.literal(typeIdx)}]??D.init(${this.literal(typeIdx)}${this.fromArg})`, out, this.u);

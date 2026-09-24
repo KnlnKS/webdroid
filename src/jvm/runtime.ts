@@ -622,9 +622,9 @@ export class Runtime {
     this.copyDefaults(info);
   }
 
-  /** copy interface default methods onto class prototype when not overridden */
+  /** copy inherited interface defaults so both class dispatch and interface super calls resolve */
   private copyDefaults(info: ClassInfo) {
-    if (info.isInterface || !info.ctor || info.defaultsCopied) return;
+    if (!info.ctor || info.defaultsCopied) return;
     info.defaultsCopied = true;
     const seen = new Set<ClassInfo>();
     const walk = (i: ClassInfo) => {
