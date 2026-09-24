@@ -772,14 +772,6 @@ for (const [name, methods, statics] of [
       return jarray([...uids].map(uidHealthSnapshot), "Landroid/os/health/HealthStats;");
     },
   }],
-  ["android/view/accessibility/CaptioningManager", {
-    "isEnabled()Z": () => 0,
-    "getFontScale()F": () => 1,
-    "getLocale()Ljava/util/Locale;": () => null,
-    "getUserStyle()Landroid/view/accessibility/CaptioningManager$CaptionStyle;": () => rt.make("android/view/accessibility/CaptioningManager$CaptionStyle"),
-    ...noops("addCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V",
-      "removeCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V"),
-  }],
   ["android/content/ClipboardManager", clipboardMethods],
   // UI_MODE_TYPE_NORMAL: a handset, not a car/desk/TV dock (Configuration.uiMode agrees).
   // getNightMode reports the device's own setting, which is not this app's to change.
@@ -901,14 +893,6 @@ rt.register({
 for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChangeListener", "AccessibilityServicesStateChangeListener", "AudioDescriptionRequestedChangeListener"]) {
   rt.register({ name: "android/view/accessibility/AccessibilityManager$" + n, ctor: class extends JObj {} });
 }
-rt.register({ name: "android/view/accessibility/CaptioningManager$CaptioningChangeListener", ctor: class extends JObj {} });
-rt.register({
-  name: "android/view/accessibility/CaptioningManager$CaptionStyle", ctor: class extends JObj {},
-  methods: {
-    "getTypeface()Landroid/graphics/Typeface;": () => null,
-    ...stubs(0, "hasBackgroundColor()Z", "hasEdgeColor()Z", "hasEdgeType()Z", "hasForegroundColor()Z", "hasWindowColor()Z"),
-  },
-});
 rt.register({
   name: "android/app/ActivityManager$MemoryInfo",
   ctor: class extends JObj { totalMem = 4n * 1024n ** 3n; availMem = 2n * 1024n ** 3n; lowMemory = 0; threshold = 128n * 1024n * 1024n; },
