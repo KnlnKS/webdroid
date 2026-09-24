@@ -5,7 +5,7 @@
 
 import { mem } from "./mem";
 import { hostLib, lookupHost, defineHost, probed, cstr, stp, type HostFn } from "./host";
-import { EglContext, eglConfigAttrib, eglFailure, takeEglError, type GlSurface } from "../android/glview";
+import { EglContext, eglConfigAttrib, eglFailure, setEglSwapInterval, takeEglError, type GlSurface } from "../android/glview";
 import { windowOf } from "./libandroid";
 import { gles1Procs } from "./gles1";
 import { gles3Procs } from "./gles3";
@@ -71,7 +71,10 @@ export function eglInit(): void {
       surfaces[h] = null;
       return 1;
     },
-    eglSurfaceAttrib: () => 1, eglSwapInterval: () => 1,
+    eglSurfaceAttrib: () => 1, eglSwapInterval: (cpu, a) => {
+      const display = a.i(), interval = a.i();
+      return display === 1 ? setEglSwapInterval(interval, cpu.jthread) : eglFailure(0x3008, 0, cpu.jthread);
+    },
     eglQuerySurface: (cpu, a) => {
       a.i(); const s = surfaces[a.i()], attr = a.i(), out = a.p();
       if (!s) { return eglFailure(EGL_BAD_SURFACE, 0, cpu.jthread); }

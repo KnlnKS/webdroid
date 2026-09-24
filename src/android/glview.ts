@@ -154,6 +154,7 @@ export interface GlSurface {
   height: number;
   present: ImageBitmap | VideoFrame | null;
   frames: number;
+  swapInterval?: number;
   presentationTimeNanos?: bigint;
   onFrame?: () => void;
 }
@@ -192,8 +193,16 @@ export class EglContext {
     try { bmp = this.canvas.transferToImageBitmap(); }
     catch (e) { if (this.gl?.isContextLost()) return Promise.resolve(false); throw e; }
     presentSurface(s, bmp);
+    if (s.swapInterval === 0) return Promise.resolve(!this.gl?.isContextLost());
     return new Promise((r) => { const done = () => r(!this.gl?.isContextLost()); if (typeof requestAnimationFrame === "function" && !document.hidden) requestAnimationFrame(done); else setTimeout(done, 16); });
   }
+}
+export function setEglSwapInterval(interval: number, thread = curThread): number {
+  const context = boundEglCurrent(thread);
+  if (!context) return eglFailure(0x3006, 0, thread);
+  if (!context.target) return eglFailure(0x300d, 0, thread);
+  context.target.swapInterval = Math.max(0, Math.min(1, interval));
+  return 1;
 }
 let pixelCopyFrame: OffscreenCanvas | HTMLCanvasElement | null = null;
 export function setPixelCopyFrame(frame: OffscreenCanvas | HTMLCanvasElement): void { pixelCopyFrame = frame; }
@@ -240,7 +249,7 @@ export function eglConfigAttrib(attr: number): number {
     case 0x3027: return 0x3038; case 0x3028: return 1;                      // CONFIG_CAVEAT: NONE; CONFIG_ID
     case 0x302e: return 1;                                                  // NATIVE_VISUAL_ID: RGBA_8888
     case 0x3039: return 1; case 0x303a: return 0;                           // BIND_TO_TEXTURE_RGB/RGBA
-    case 0x303b: case 0x303c: return 1;                                     // MIN/MAX_SWAP_INTERVAL
+    case 0x303b: return 0; case 0x303c: return 1;                            // MIN/MAX_SWAP_INTERVAL
     case 0x303f: return 0x308e;                                             // COLOR_BUFFER_TYPE: RGB
     case 0x302a: case 0x302b: return 4096; case 0x302c: return 1 << 24;     // MAX_PBUFFER_WIDTH/HEIGHT/PIXELS
     default: return 0;
@@ -489,7 +498,7 @@ for (const i of ["javax/microedition/khronos/opengles/GL", "javax/microedition/k
 rt.register({
   name: "javax/microedition/khronos/egl/EGLContext", ctor: JEGLContext,
   methods: {
-    "static getEGL()Ljavax/microedition/khronos/egl/EGL;": () => rt.make("javax/microedition/khronos/egl/EGL10"),
+    "static getEGL()Ljavax/microedition/khronos/egl/EGL;": () => rt.make("javax/microedition/khronos/egl/EGL11"),
     "getGL()Ljavax/microedition/khronos/opengles/GL;": () => rt.make("webdroid/GL10"),
   },
 });
@@ -507,8 +516,9 @@ const noEglDisplay = rt.make("javax/microedition/khronos/egl/EGLDisplay");
 const eglContexts = new WeakMap<EglContext, JEGLContext>();
 const surfaceOf = (win: unknown): GlSurface | null =>
   win instanceof JSurface ? win.surf : win instanceof JSurfaceTexture ? (win.released ? null : win.surface) : win instanceof JSurfaceHolder ? win.surface : win instanceof JView ? getHolder(win).surface : null;
+class JEGL10 extends JObj {}
 rt.register({
-  name: "javax/microedition/khronos/egl/EGL10", ctor: class extends JObj {},
+  name: "javax/microedition/khronos/egl/EGL10", ctor: JEGL10,
   statics: {
     EGL_RED_SIZE: 0x3024, EGL_GREEN_SIZE: 0x3023, EGL_BLUE_SIZE: 0x3022, EGL_ALPHA_SIZE: 0x3021,
     EGL_DEPTH_SIZE: 0x3025, EGL_STENCIL_SIZE: 0x3026, EGL_RENDERABLE_TYPE: 0x3040, EGL_NONE: 0x3038,
@@ -587,6 +597,11 @@ rt.register({
     },
   },
 });
+rt.register({
+  name: "javax/microedition/khronos/egl/EGL11", ctor: class extends JEGL10 {}, sup: "javax/microedition/khronos/egl/EGL10",
+  statics: { EGL_MIN_SWAP_INTERVAL: 0x303b, EGL_MAX_SWAP_INTERVAL: 0x303c },
+  methods: { "eglSwapInterval(Ljavax/microedition/khronos/egl/EGLDisplay;I)Z": (_d: unknown, interval: number) => setEglSwapInterval(interval) },
+});
 
 class JEGLHandle extends JObj { constructor(readonly handle = 0) { super(); } }
 class JEGL14Display extends JEGLHandle {}
@@ -622,6 +637,7 @@ rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics
   EGL_OPENGL_ES_API: 0x30a0, EGL_BACK_BUFFER: 0x3084,
   EGL_RED_SIZE: 0x3024, EGL_GREEN_SIZE: 0x3023, EGL_BLUE_SIZE: 0x3022, EGL_ALPHA_SIZE: 0x3021,
   EGL_DEPTH_SIZE: 0x3025, EGL_STENCIL_SIZE: 0x3026, EGL_RENDERABLE_TYPE: 0x3040, EGL_SURFACE_TYPE: 0x3033,
+  EGL_MIN_SWAP_INTERVAL: 0x303b, EGL_MAX_SWAP_INTERVAL: 0x303c,
   EGL_OPENGL_ES2_BIT: 4, EGL_PBUFFER_BIT: 1, EGL_WINDOW_BIT: 4,
 }, methods: {
   "static eglGetDisplay(I)Landroid/opengl/EGLDisplay;": (display: number) => display === 0 ? defaultDisplay : eglFailure(0x3008, noDisplay),
@@ -697,6 +713,8 @@ rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics
     if (!surface?.surf || context?.target !== surface.surf) return eglFailure(0x300d, 0);
     return await context.swap() ? 1 : eglFailure(0x300e, 0, thread);
   },
+  "static eglSwapInterval(Landroid/opengl/EGLDisplay;I)Z": (display: JEGL14Display, interval: number) =>
+    display === defaultDisplay ? setEglSwapInterval(interval) : eglFailure(0x3008, 0),
   "static eglDestroySurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": (_display: JEGL14Display, surface: JEGL14Surface) => {
     if (!surface?.surf) return eglFailure(0x300d, 0);
     if (glSurfaces.current?.target === surface.surf) glSurfaces.current.target = null;
