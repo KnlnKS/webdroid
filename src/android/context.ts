@@ -102,6 +102,7 @@ const SERVICE_CLASS: Record<string, string> = {
   input_method: "android/view/inputmethod/InputMethodManager",
   connectivity: "android/net/ConnectivityManager",
   activity: "android/app/ActivityManager",
+  device_policy: "android/app/admin/DevicePolicyManager",
   game: "android/app/GameManager",
   account: "android/accounts/AccountManager",
   power: "android/os/PowerManager",
