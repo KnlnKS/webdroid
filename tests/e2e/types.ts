@@ -72,9 +72,13 @@ export type Step = {
   id: string;
   label: string;
   action: Action;
+  /** Equivalent quick action when platform UI or a live text anchor differs from the reference. */
+  fastAction?: Action;
   /** Regions excluded from the diff (normalized). Escape hatch for non-deterministic pixels. */
   maskRects?: Rect[];
   wait: WaitPolicy;
+  /** Runtime readiness for the all-action quick run; recording keeps the reference wait. */
+  fastWait?: WaitPolicy;
   /** Fast-lane assertion. Absence means semantic evidence only. */
   fastEvidence?: Exclude<EvidencePolicy, { kind: "semantic" }>;
 };
@@ -104,8 +108,6 @@ type FlowBase = {
 export type Flow = FlowBase & (
   | {
       clock: "live";
-      /** Startup completion policy for the launch-only quick pass. */
-      quickWait: StateWait | LiveWait;
       sourceCoverage?: never;
       expectedBrowserErrors?: never;
     }
@@ -148,6 +150,10 @@ export function validateFlow(flow: Flow): void {
       throw new Error(`${flow.app}/${step.id}: controlled flow cannot use a live wait`);
     if (flow.clock === "live" && step.wait.kind !== "live" && step.wait.kind !== "live-sample")
       throw new Error(`${flow.app}/${step.id}: live flow requires a live wait`);
+    if (step.fastWait && flow.clock !== "live")
+      throw new Error(`${flow.app}/${step.id}: fast wait is only for live flows`);
+    if (step.fastAction && flow.clock !== "live")
+      throw new Error(`${flow.app}/${step.id}: fast action is only for live flows`);
     const evidence = step.fastEvidence;
     if (flow.clock === "live" && evidence && (step !== flow.steps[0] || evidence.kind !== "visual"))
       throw new Error(`${flow.app}/${step.id}: live fast evidence must compare the launch screen`);

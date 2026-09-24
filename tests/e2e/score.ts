@@ -49,7 +49,7 @@ async function diffFlow(flow: Flow): Promise<FlowReport> {
   const runPath = `${actualDir}/run.json`;
   if (!existsSync(runPath)) throw new Error(`${flow.app}: missing run.json; rerun \`bun run e2e --full --test ${flow.app}\``);
   const runInfo = await Bun.file(runPath).json() as FlowRun;
-  if (runInfo.mode !== "full" || runInfo.flowSchemaHash !== flowSchemaHash([flow]) ||
+  if (runInfo.mode !== "full" || runInfo.flowSchemaHash !== flowSchemaHash([flow], "reference") ||
       runInfo.screen !== screenParam(screenOf(manifest)) ||
       runInfo.steps.length !== flow.steps.length ||
       runInfo.steps.some((run, index) => run.id !== flow.steps[index]?.id)) {

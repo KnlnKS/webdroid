@@ -83,15 +83,15 @@ export function repositoryRevision(root: string): string {
   return result.exitCode === 0 ? result.stdout.toString().trim() : "unknown";
 }
 
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (isRecord(value)) return `{${Object.keys(value).filter((key) => value[key] !== undefined).sort()
-    .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+function canonical(value: unknown, reference: boolean): string {
+  if (Array.isArray(value)) return `[${value.map((item) => canonical(item, reference)).join(",")}]`;
+  if (isRecord(value)) return `{${Object.keys(value).filter((key) => value[key] !== undefined && (!reference || (key !== "fastWait" && key !== "fastAction"))).sort()
+    .map((key) => `${JSON.stringify(key)}:${canonical(value[key], reference)}`).join(",")}}`;
   return JSON.stringify(value) ?? "null";
 }
 
-export function flowSchemaHash(flows: Flow[]): string {
-  return new Bun.CryptoHasher("sha256").update(new TextEncoder().encode(canonical(flows))).digest("hex");
+export function flowSchemaHash(flows: Flow[], mode: "all" | "reference" = "all"): string {
+  return new Bun.CryptoHasher("sha256").update(new TextEncoder().encode(canonical(flows, mode === "reference"))).digest("hex");
 }
 
 function screenFromManifest(value: unknown): Screen | undefined {

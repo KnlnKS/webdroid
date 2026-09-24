@@ -15,6 +15,17 @@ const flow = (text: string, timeoutMs: number): Flow => ({
 test("coverage fingerprints include action payloads and wait policy", () => {
   expect(flowSchemaHash([flow("A", 100)])).not.toBe(flowSchemaHash([flow("B", 100)]));
   expect(flowSchemaHash([flow("A", 100)])).not.toBe(flowSchemaHash([flow("A", 200)]));
+  const reference: Flow = {
+    app: "fixture", pkg: "fixture", activity: "fixture.Main", apk: "fixture.apk",
+    clock: "live", crop: { top: 0, bottom: 0, left: 0, right: 0 },
+    steps: [{ id: "launch", label: "Launch", action: { type: "launch" }, wait: wait.live(),
+      fastWait: wait.state({ kind: "text", text: "Ready" }) }],
+  };
+  const revised: Flow = { ...reference, steps: [{ ...reference.steps[0]!, fastWait: wait.state({ kind: "text", text: "Done" }) }] };
+  expect(flowSchemaHash([reference])).not.toBe(flowSchemaHash([revised]));
+  expect(flowSchemaHash([reference], "reference")).toBe(flowSchemaHash([revised], "reference"));
+  const alternate: Flow = { ...reference, steps: [{ ...reference.steps[0]!, fastAction: { type: "settle" } }] };
+  expect(flowSchemaHash([reference], "reference")).toBe(flowSchemaHash([alternate], "reference"));
 });
 
 test("coverage indexes are validated at the JSON boundary", () => {

@@ -16,9 +16,8 @@ export const tiktok: Flow = {
   screen: SCREEN,
   crop: { top: 0, bottom: 0, left: 0, right: 0 },
   clock: "live",
-  quickWait: wait.state({ kind: "text", text: "Agree and continue" }, 0, 20_000),
   steps: [
-    { id: "launch", label: "Launch — splash to first-run gates", action: { type: "launch" }, wait: wait.liveSample(90000) },
+    { id: "launch", label: "Launch — splash to first-run gates", action: { type: "launch" }, wait: wait.liveSample(90000), fastWait: wait.state({ kind: "text", text: "Agree and continue" }, 0, 20_000) },
     { id: "fullscreen", label: "Dismiss Android's full-screen notice", action: { type: "tapText", text: "Got it", optional: true }, wait: wait.liveSample(1500) },
     { id: "signup", label: "Skip guest sign-up", action: { type: "tapText", text: "Skip", optional: true }, wait: wait.liveSample(1500) },
     { id: "age", label: "Confirm guest age", action: { type: "tapText", text: "At least 18", optional: true }, wait: wait.liveSample(1500) },

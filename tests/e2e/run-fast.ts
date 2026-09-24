@@ -7,7 +7,7 @@ import { loadPng } from "./lib/png";
 import { diffImages } from "./lib/diff";
 import { E2E_DIR } from "./lib/util";
 import { apkHashes, flowSchemaHash, repositoryRevision, type CoverageIndex } from "./coverage";
-import { screenOf, screenParam, waitHorizonMs, type Manifest } from "./types";
+import { screenOf, screenParam, wait, waitHorizonMs, type Manifest } from "./types";
 import { BASE_URL } from "./lib/util";
 import { isWebdroidProcessFrame } from "./lib/processes";
 
@@ -21,19 +21,24 @@ if (coverage && flows.length !== deterministic.length)
 type VisualCheck = { step: string; contentDiffPct: number; maxContentDiffPct: number; androidSdk: string };
 type Outcome = { flow: Flow; runs: StepRun[]; visual: VisualCheck[]; errors: string[]; gaps: string[]; ms: number; coverage: string[]; browser: string; screen: string };
 
-function diagnostics(runs: StepRun[], live: boolean): { errors: string[]; gaps: string[] } {
+function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: string[] } {
   const errors: string[] = [];
   const gaps: string[] = [];
+  const live = flow.clock === "live";
+  const brief = (item: string) => item.split("\n", 1)[0]!.slice(0, 300);
   const seenProcessErrors = new Set<string>();
   for (const step of runs) {
     const prefix = `${String(step.index).padStart(2, "0")} ${step.id}`;
+    const action = flow.steps[step.index]?.action;
+    if (live && action?.type === "tapText" && !action.optional && step.semanticHit !== true)
+      errors.push(`${prefix}: required text target ${JSON.stringify(action.text)} was not found`);
     if (step.mainLoopWedged) errors.push(`${prefix}: main loop wedged`);
     if (step.settleTimedOut) errors.push(`${prefix}: completion timed out`);
-    if (step.error) errors.push(`${prefix}: ${step.error}`);
+    if (step.error) errors.push(`${prefix}: ${brief(step.error)}`);
     if (step.slow) errors.push(`${prefix}: motion fell below its retained frame-rate limit`);
     for (const item of step.newMissing ?? []) (live ? gaps : errors).push(`${prefix}: missing ${item}`);
     for (const item of step.nativeRequired ?? []) (live ? gaps : errors).push(`${prefix}: native code required ${item}`);
-    for (const item of step.newErrors ?? []) (live ? gaps : errors).push(`${prefix}: ${item}`);
+    for (const item of step.newErrors ?? []) (live ? gaps : errors).push(`${prefix}: ${brief(item)}`);
     const processes = (step.processes ?? []).filter((process) => isWebdroidProcessFrame(process.url, BASE_URL));
     if (!processes.length) errors.push(`${prefix}: no webdroid process diagnostics`);
     for (const process of processes) {
@@ -46,7 +51,7 @@ function diagnostics(runs: StepRun[], live: boolean): { errors: string[]; gaps: 
         const key = `${process.url}:${item}`;
         if (seenProcessErrors.has(key)) continue;
         seenProcessErrors.add(key);
-        if (!(step.newErrors ?? []).includes(item)) (live ? gaps : errors).push(`${prefix}: ${process.url}: ${item}`);
+        if (!(step.newErrors ?? []).includes(item)) (live ? gaps : errors).push(`${prefix}: ${process.url}: ${brief(item)}`);
       }
     }
   }
@@ -55,7 +60,7 @@ function diagnostics(runs: StepRun[], live: boolean): { errors: string[]; gaps: 
 
 function quickFlow(flow: Flow): Flow {
   return flow.clock === "live"
-    ? { ...flow, steps: [{ ...flow.steps[0]!, wait: flow.quickWait }] }
+    ? { ...flow, steps: flow.steps.map((step) => ({ ...step, action: step.fastAction ?? step.action, wait: step.fastWait ?? wait.liveSample(500) })) }
     : flow;
 }
 
@@ -88,7 +93,10 @@ async function visualEvidence(flow: Flow, manifest: Manifest | undefined, screen
 
 function browserFailures(flow: Flow, errors: string[]): string[] {
   const expected = flow.expectedBrowserErrors ?? [];
-  return errors.filter((error) => !expected.some((part) => error.includes(part)))
+  return errors.filter((error) => {
+    const message = URL.canParse(error) ? new URL(error).searchParams.get("msg") ?? error : error;
+    return !expected.some((part) => message.includes(part));
+  })
     .map((error) => `browser: ${error.slice(0, 300)}`);
 }
 
@@ -109,7 +117,7 @@ async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
     await driver.close();
   }
   const visual = await visualEvidence(selected, manifest, screen);
-  const observed = diagnostics(runs, flow.clock === "live");
+  const observed = diagnostics(selected, runs);
   const browserErrors = browserFailures(flow, driver.errors);
   return { flow, runs, visual: visual.checks,
     errors: [...observed.errors, ...visual.errors, ...(flow.clock === "live" ? [] : browserErrors)],
@@ -117,25 +125,10 @@ async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
     coverage: sourceCoverage, browser, screen };
 }
 
-async function retainFailure(outcome: Outcome): Promise<void> {
-  const manifest = await loadManifest(outcome.flow.app);
-  const driver = await launchFor(outcome.flow, manifest, false, false);
-  try {
-    await captureFlow(quickFlow(outcome.flow), driver, {
-      jobs: 1,
-      mode: "full",
-      outRoot: "actual-fast/failures",
-      log: (line) => console.log(`    ${line}`),
-    });
-  } finally {
-    await driver.close();
-  }
-}
-
 console.log(`fast flows: ${flows.map((flow) => flow.app).join(", ")} (${jobs} at a time)`);
-await rm(`${E2E_DIR}actual-fast/failures`, { recursive: true, force: true });
 await rm(`${E2E_DIR}actual-fast/summary.json`, { force: true });
-const weight = (flow: Flow) => quickFlow(flow).steps.reduce((total, step) => total + waitHorizonMs(step.wait) + 300, 0);
+const weight = (flow: Flow) => quickFlow(flow).steps.reduce((total, step) =>
+  total + (step.wait.kind === "state" ? step.wait.maxRealMs : waitHorizonMs(step.wait)) + 300, 0);
 const queue = [...flows].sort((a, b) => weight(b) - weight(a));
 const outcomes: Outcome[] = [];
 const started = performance.now();
@@ -153,9 +146,8 @@ const order = new Map(FLOWS.map((flow, index) => [flow.app, index]));
 outcomes.sort((a, b) => (order.get(a.flow.app) ?? 0) - (order.get(b.flow.app) ?? 0));
 
 for (const outcome of outcomes.filter((item) => item.errors.length)) {
-  console.error(`\n${outcome.flow.app} failed; retaining a full-evidence rerun:`);
+  console.error(`\n${outcome.flow.app} failed:`);
   for (const error of outcome.errors) console.error(`  ${error}`);
-  await retainFailure(outcome);
 }
 
 const failed = outcomes.filter((item) => item.errors.length).length;
@@ -166,7 +158,7 @@ await Bun.write(`${E2E_DIR}actual-fast/summary.json`, JSON.stringify({
     const outcome = outcomes.find((item) => item.flow.app === flow.app);
     return outcome
       ? { app: flow.app, status: outcome.errors.length ? "failed" : outcome.visual.length ? "compared" : flow.clock === "live" ? "observed" : "smoke",
-          durationMs: Math.round(outcome.ms), visual: outcome.visual, errors: outcome.errors, gaps: outcome.gaps }
+          steps: outcome.runs.length, durationMs: Math.round(outcome.ms), visual: outcome.visual, errors: outcome.errors, gaps: outcome.gaps }
       : { app: flow.app, status: "not-selected" };
   }),
 }, null, 2));

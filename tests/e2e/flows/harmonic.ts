@@ -35,11 +35,10 @@ export const harmonic: Flow = {
   // the HN API is HTTPS: a device pinned to a past instant rejects every current certificate
   // and the app records its "Loading failed" state instead of its real UI
   clock: "live",
-  quickWait: wait.state({ kind: "text", text: "Get started" }, 0, 18_000),
   // status bar [0,48) and gesture bar [1232,1280) — the split fitnotes verified on-device
   crop: { top: 48, bottom: 48, left: 0, right: 0 },
   steps: [
-    { id: "launch", label: "Launch — welcome dialog over the loading front page", action: { type: "launch" }, wait: wait.live(6000), maskRects: AROUND_CARD,
+    { id: "launch", label: "Launch — welcome dialog over the loading front page", action: { type: "launch" }, wait: wait.live(6000), fastWait: wait.state({ kind: "text", text: "Get started" }, 0, 18_000), maskRects: AROUND_CARD,
       fastEvidence: { kind: "visual", maxContentDiffPct: 19 } },
     { id: "welcome-scroll", label: "Scroll the welcome dialog to its button", action: { type: "swipe", from: P(360, 1000), to: P(360, 300) }, maskRects: AROUND_CARD, wait: wait.live() },
     { id: "preset-simple", label: "Pick the Simple UI preset", action: { type: "tapText", text: "Simple" }, maskRects: AROUND_CARD, wait: wait.live() },

@@ -164,8 +164,8 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, {
     const writeAt = performance.now();
     if (r.png) {
       await Bun.write(`${outDir}/${file}`, Buffer.from(r.png, "base64"));
-      await Bun.write(`${outDir}/${uiFileFor(file)}`, JSON.stringify(r.uiTree));
     }
+    await Bun.write(`${outDir}/${uiFileFor(file)}`, JSON.stringify(r.uiTree));
     if (shots && r.frames.length) {
       const dir = `${shots}/${flow.app}/${String(i).padStart(2, "0")}-${step.id}`;
       await mkdir(dir, { recursive: true });
@@ -211,7 +211,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, {
   // Persist the per-step run flags next to the frames so `bun run e2e --diff` can apply the same
   // scoring rules as `bun run e2e --full` — without this, a standalone diff has no idea the app hung
   // and would quietly report a better number for the same pixels.
-  const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow]), jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, steps: runs, browserErrors: [...drv.errors] };
+  const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow], mode === "full" ? "reference" : "all"), jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, steps: runs, browserErrors: [...drv.errors] };
   await Bun.write(`${outDir}/run.json`, JSON.stringify(run, null, 2));
   return runs;
 }

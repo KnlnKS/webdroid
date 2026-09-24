@@ -23,8 +23,8 @@ function resolve(name: string, known: Flow[]): Flow[] {
 }
 
 const DEFAULT_SHOTS_DIR = "webdroid-shots";
-/** Half the machine: a flow's renderer, its SwiftShader process and Bun's own work each want a core. */
-const DEFAULT_JOBS = Math.max(1, Math.floor(cpus().length / 2));
+/** Full live flows can saturate the renderer and native worker threads before CPU count does. */
+const DEFAULT_JOBS = Math.max(1, Math.min(4, Math.floor(cpus().length / 3)));
 
 function printHelp(cmd: string, known: Flow[], extra = ""): void {
   console.log(`usage: ${cmd} [--test <flow>]... [--jobs N] [--shots [dir]]
@@ -32,8 +32,8 @@ function printHelp(cmd: string, known: Flow[], extra = ""): void {
   --test, -t <flow>   run only this flow. Repeatable, accepts a comma-separated list, and
                       matches on prefix (--test mihon selects both mihon flows).
                       Bare names work too: ${cmd} fitnotes
-  --jobs, -j N        flows driven at once, each in its own browser (default ${DEFAULT_JOBS} here:
-                      half the cpus). 1 reproduces an uncontended run for fps measurements.
+  --jobs, -j N        flows driven at once, each in its own browser (default ${DEFAULT_JOBS} here).
+                      1 reproduces an uncontended run for fps measurements.
   --shots [dir]       save every distinct webdroid frame during each step to
                       ./${DEFAULT_SHOTS_DIR} (or [dir]). Wiped at the start of every run,
                       and gitignored.
