@@ -23,7 +23,7 @@ type OpenedApk = { source: FileSource; split: string | null; hasManifest: boolea
   | { kind: "lazy"; bytes: null; zip: null; entries: Map<string, ZEntry> }
 );
 
-function mergeInstall(opened: OpenedApk[]): Install {
+export function mergeInstall(opened: OpenedApk[]): Install {
   const base = opened.find((o) => o.hasManifest && !o.split);
   if (!base || base.kind !== "resident") throw new Error("split install has no resident base apk");
   const merged = base.zip;
@@ -35,12 +35,11 @@ function mergeInstall(opened: OpenedApk[]): Install {
     if (o.kind === "resident") zipTree(o.bytes, merged, (path) => {
       const target = path === "AndroidManifest.xml" || path === "resources.arsc" || path.startsWith("META-INF/") ? null
         : /^classes\d*\.dex$/.test(path) ? `classes${1000 + extra++}.dex` : path;
-      if (target) lazyEntries.delete(target);
-      return target;
+      return target && !lazyEntries.has(target) ? target : null;
     });
     else for (const [path, entry] of o.entries) {
       if (path === "AndroidManifest.xml" || path === "resources.arsc" || path.startsWith("META-INF/") || path.endsWith("/")) continue;
-      delete merged[path];
+      if (Object.hasOwn(merged, path) || lazyEntries.has(path)) continue;
       lazyEntries.set(path, new ZipEntryFile(o.source, entry));
     }
     if (o.split) splits.push({ name: o.split, source: o.source, bytes: o.bytes, resources: o.kind === "resident" ? o.zip["resources.arsc"] ?? null : null });
