@@ -35,7 +35,7 @@ test. Live missing APIs, native requirements, runtime errors and browser errors 
 as observed gaps. Inspect `actual-fast/<flow>/run.json` and each step's `.ui.json` after a
 failure; the quick pass does not rerun a failed flow.
 
-An all-step pass took 87.4 seconds at four jobs, with 11 flows passing. Motion frame rates are informational
+The final all-step pass took 84.5 seconds at four jobs, with 11 flows passing. Motion frame rates are informational
 in parallel runs; use `--jobs 1` for their frame-rate gates. Nine fast flows have Android
 visual checkpoints. Those compare the launch or core result where references exist; later
 live steps are semantic checks and do not claim Android visual parity.
@@ -44,7 +44,7 @@ cannot install their ARM32 native libraries. Two live flows lack Android
 references. `actual-fast/summary.json` distinguishes `compared`, `smoke`, `observed`, `failed`,
 and `not-selected` and records visual limits, Android API versions, errors, and observed gaps.
 Live service timing can affect Resy search and ChatGPT responses. The latest four-job run
-failed because Resy's offers sheet blocked the venue page and YouTube's player stayed at
+failed because Resy did not show a matching venue row and YouTube's player stayed at
 0:00 after the pause tap. The serialized full lane remains available for
 step-by-step Android pixel analysis.
 

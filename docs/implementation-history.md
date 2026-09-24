@@ -155,6 +155,13 @@ as four jobs, while seven added a Resy onboarding timeout and a YouTube resume
 timeout. Lichess reported 21, 21, 39 and 62 observed gaps at four through seven
 jobs, mainly native pthread aborts. These runs vary with live content, but the
 speed gain came with more resource-related errors, so four remains the default.
+The search readiness check was then narrowed to the venue result resource ID;
+the refinement chip no longer counts as a loaded result. On that revision the
+four-job matrix ran 183/183 steps in 84.5 seconds, with the same 11/13 flow
+outcome. Resy timed out waiting for a matching venue row; YouTube still failed
+its pause/resume checks. Lichess reported 87 gaps in this run, showing that even
+four parallel jobs can induce native worker errors. Gap totals are diagnostic,
+not a stable performance or parity metric.
 
 ## Evidence and measurement
 
