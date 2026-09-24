@@ -37,6 +37,19 @@ test("maps compare structurally and hash equal entries identically", async () =>
   expect(await hash(a)).toBe(await hash(b));
 });
 
+test("IdentityHashMap uses reference identity for keys and values", async () => {
+  const target = await map("java/util/IdentityHashMap");
+  const first = new Value(7), equalValue = new Value(7);
+  await put(target, first, first);
+
+  expect(await vcall(target, "get", `(${O})${O}`, first)).toBe(first);
+  expect(await vcall(target, "get", `(${O})${O}`, equalValue)).toBeNull();
+  expect(await vcall(target, "containsValue", `(${O})Z`, equalValue)).toBe(0);
+  expect(await vcall(target, "containsValue", `(${O})Z`, first)).toBe(1);
+  await put(target, equalValue, equalValue);
+  expect(await vcall(target, "size", "()I")).toBe(2);
+});
+
 test("a null mapping is distinct from an absent key", async () => {
   const a = await map(), b = await map();
   await put(a, "present", null);
