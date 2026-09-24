@@ -138,6 +138,17 @@ export class WebdroidUiTarget {
     const session = await startWebdroid(app.apk);
     try {
       await session.page.waitForFunction(() => globalThis.wd!.perf.draws > 0, null, { timeout: 30_000 });
+      await session.page.evaluate(async () => {
+        const until = performance.now() + 3_000;
+        let quietSince = 0, draws = globalThis.wd!.perf.draws;
+        while (performance.now() < until) {
+          const now = performance.now(), current = globalThis.wd!.perf.draws;
+          quietSince = globalThis.wd!.mainDbg.queued === 0 && current === draws ? quietSince || now : 0;
+          if (quietSince && now - quietSince >= 400) break;
+          draws = current;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      });
       return new WebdroidUiTarget(session);
     } catch (error) {
       await session.close();

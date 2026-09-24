@@ -190,7 +190,8 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
       nextAndroidNodes = postAndroidNodes;
       const relevant = processes.filter((process) => isWebdroidProcessFrame(process.url, web.origin));
       if (!relevant.length || relevant.some((process) => process.diagnostics.status !== "ok"))
-        throw new Error(`missing process telemetry at UI step ${index}`);
+        throw new Error(`missing process telemetry at UI step ${index}: ${relevant.map((process) =>
+          `${process.url}: ${process.diagnostics.status === "failure" ? process.diagnostics.message : process.diagnostics.status}`).join("; ")}`);
       const signals = processSignals(relevant);
       for (const error of web.errors) signals.push(`page-error:${error}`);
       if (!alive) signals.push("wedge:foreground");
