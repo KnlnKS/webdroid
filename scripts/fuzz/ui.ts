@@ -35,6 +35,8 @@ type UiStep = {
 };
 
 export type UiOptions = { apks: string[]; seed: number; steps: number; oracle?: string; out: string };
+type UiRunPlan = { kind: "explore"; explorer: UiExplorer; prefix: UiPrefix; artifactLabel: string }
+  | { kind: "replay"; actions: readonly UiAction[]; artifactLabel?: string };
 export type UiRun = { steps: UiStep[]; environment: Record<string, unknown>; replayDivergence?: string };
 export type UiObservation = { actions: UiAction[]; failure: Failure; run: UiRun };
 export type UiFailureBundle = {
@@ -128,30 +130,34 @@ function compactDiagnostics(processes: Awaited<ReturnType<typeof readProcesses>>
   });
 }
 
-async function runApk(app: UiApp, options: UiOptions, apkIndex: number, fixedActions?: readonly UiAction[], artifactLabel?: string,
-  explorer?: UiExplorer, prefix: UiPrefix = { actions: [], states: [], target: null }): Promise<UiRun> {
+async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: UiRunPlan): Promise<UiRun> {
   const random = new Random((options.seed ^ Math.imul(apkIndex + 1, 0x9e3779b1)) >>> 0);
   const targets = await openUiTargets(app, options.oracle);
   const web = targets.webdroid, android = targets.android;
-  const environment: Record<string, unknown> = { webdroid: { origin: web.origin, userAgent: await web.page.evaluate(() => navigator.userAgent) } };
-  if (android) environment.android = android.environment;
+  const environment: Record<string, unknown> = {};
   const seenSignals = new Set<string>(), seenCoverage = new Set<string>(), seenTrees = new Set<string>(), seenFrames = new Set<string>();
   const steps: UiStep[] = [];
   let nextAndroidNodes: UiNode[] | undefined;
   try {
-    const stepCount = fixedActions?.length ?? options.steps;
+    environment.webdroid = { origin: web.origin, userAgent: await web.page.evaluate(() => navigator.userAgent) };
+    if (android) environment.android = android.environment;
+    const stepCount = plan.kind === "replay" ? plan.actions.length : options.steps;
     for (let index = 0; index < stepCount; index++) {
       const webNodes = await web.tree();
       const androidNodes = android ? nextAndroidNodes ?? await android.tree() : undefined;
       const source = androidNodes ?? webNodes, sourceSize = screenSize(source), webSize = { width: 1080, height: 2160 };
       const path = steps.map((step) => step.action);
       const states = steps.flatMap((step) => step.state ? [step.state] : []);
-      const state = explorer?.observeState(source, sourceSize.width, sourceSize.height, { actions: path, states, target: null });
-      if (index < prefix.actions.length && state !== prefix.states[index])
-        return { steps, environment, replayDivergence: `prefix state ${index}: expected ${prefix.states[index]}, observed ${state}` };
-      if (index === prefix.actions.length && prefix.target && state !== prefix.target)
-        return { steps, environment, replayDivergence: `prefix destination: expected ${prefix.target}, observed ${state}` };
-      const action = fixedActions?.[index] ?? prefix.actions[index] ?? (state ? explorer?.choose(state, random) : null);
+      const state = plan.kind === "explore" ? plan.explorer.observeState(source, sourceSize.width, sourceSize.height,
+        { actions: path, states, target: null }) : undefined;
+      if (plan.kind === "explore") {
+        if (index < plan.prefix.actions.length && state !== plan.prefix.states[index])
+          return { steps, environment, replayDivergence: `prefix state ${index}: expected ${plan.prefix.states[index]}, observed ${state}` };
+        if (index === plan.prefix.actions.length && plan.prefix.target && state !== plan.prefix.target)
+          return { steps, environment, replayDivergence: `prefix destination: expected ${plan.prefix.target}, observed ${state}` };
+      }
+      const action = plan.kind === "replay" ? plan.actions[index] :
+        plan.prefix.actions[index] ?? (state ? plan.explorer.choose(state, random) : null);
       if (!action) break;
       const missingTarget = "target" in action && !matchIdentity(webNodes, action.target);
       const preDivergence = androidNodes ? treeDivergence(androidNodes, webNodes) : undefined;
@@ -163,9 +169,9 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, fixedAct
         ]).then(() => undefined), `UI step ${index}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (state && explorer) {
-          explorer.observeAction(state, action, [], [`timeout-or-error:${message}`], index >= prefix.actions.length);
-          await explorer.save();
+        if (state && plan.kind === "explore") {
+          plan.explorer.observeAction(state, action, [], [`timeout-or-error:${message}`], index >= plan.prefix.actions.length);
+          await plan.explorer.save();
         }
         steps.push({ index, action, webdroidTreeHash: hash(webNodes), webdroidFrameHash: "", structuralDivergence: message,
           diagnostics: { status: "action-failure", message }, coverageDelta: [], signals: [`timeout-or-error:${message}`] });
@@ -202,19 +208,19 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, fixedAct
         webdroidFrameHash: webFrameHash, structuralDivergence, pixel,
         diagnostics: { status: "ok", alive, errors: web.errors, processes: compactDiagnostics(relevant) },
         coverageDelta, signals };
-      if (state && explorer) {
+      if (state && plan.kind === "explore") {
         step.state = state;
-        step.discoveries = explorer.observeAction(state, action, [...currentCoverage], signals, index >= prefix.actions.length);
+        step.discoveries = plan.explorer.observeAction(state, action, [...currentCoverage], signals, index >= plan.prefix.actions.length);
         if (!structuralDivergence && alive) {
           const nextSource = postAndroidNodes ?? nextWebTree;
           const nextSize = screenSize(nextSource);
-          step.nextState = explorer.observeState(nextSource, nextSize.width, nextSize.height,
+          step.nextState = plan.explorer.observeState(nextSource, nextSize.width, nextSize.height,
             { actions: [...path, action], states: [...states, state], target: null });
         }
-        if (index % 5 === 0) await explorer.save();
+        if (index % 5 === 0) await plan.explorer.save();
       }
-      if (novel && artifactLabel) {
-        const prefix = `${options.out}/${basename(app.apk).replace(/\.[^.]+$/, "")}-${artifactLabel}-${String(index).padStart(3, "0")}`;
+      if (novel && plan.artifactLabel) {
+        const prefix = `${options.out}/${basename(app.apk).replace(/\.[^.]+$/, "")}-${plan.artifactLabel}-${String(index).padStart(3, "0")}`;
         const artifacts: NonNullable<UiStep["artifacts"]> = { webdroid: `${prefix}-webdroid.png` };
         await Bun.write(artifacts.webdroid, webPng);
         if (androidPng) { artifacts.android = `${prefix}-android.png`; await Bun.write(artifacts.android, androidPng); }
@@ -229,8 +235,11 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, fixedAct
     }
     return { steps, environment };
   } finally {
-    try { await explorer?.save(); }
-    finally { await web.close(); }
+    try { if (plan.kind === "explore") await plan.explorer.save(); }
+    finally {
+      try { await android?.close(); }
+      finally { await web.close(); }
+    }
   }
 }
 
@@ -292,7 +301,7 @@ export async function minimizeUiActions(input: readonly UiAction[], reproduces: 
 }
 
 async function observeUi(app: UiApp, actions: UiAction[], options: UiOptions, expected: Failure, artifactLabel?: string): Promise<UiObservation | null> {
-  const run = await runApk(app, { ...options, steps: actions.length }, 0, actions, artifactLabel);
+  const run = await runApk(app, options, 0, { kind: "replay", actions, artifactLabel });
   const failure = uiFailure(run.steps);
   return sameFailure(expected, failure) ? { actions, failure: failure!, run } : null;
 }
@@ -314,8 +323,8 @@ export async function runUi(options: UiOptions): Promise<void> {
     while (remaining > 0 && prefix !== null && episode < episodeLimit) {
       const available = actionLimit - usedActions - prefix.actions.length;
       if (available <= 0) break;
-      const run = await runApk(app, { ...options, steps: prefix.actions.length + Math.min(remaining, available) }, index, undefined,
-        `episode-${episode}`, explorer, prefix);
+      const run = await runApk(app, { ...options, steps: prefix.actions.length + Math.min(remaining, available) }, index,
+        { kind: "explore", explorer, prefix, artifactLabel: `episode-${episode}` });
       const explored = Math.max(0, run.steps.length - prefix.actions.length);
       const replayed = Math.min(run.steps.length, prefix.actions.length);
       usedActions += run.steps.length;

@@ -12,6 +12,7 @@ const STEP_DEADLINE_MS = 5_000;
 export type UiApp = { apk: string; pkg: string; activity: string };
 export type UiSize = { width: number; height: number };
 type CommandResult = { stdout: Buffer; stderr: string };
+type Rotation = { accelerometer: string | null; user: string | null };
 
 async function command(argv: string[]): Promise<CommandResult> {
   const child = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
@@ -42,23 +43,44 @@ function pixels(point: { x: number; y: number }, size: UiSize): [string, string]
 export class AndroidUiTarget {
   readonly environment: { serial: string; fingerprint: string };
   private constructor(private readonly adb: (...args: string[]) => Promise<CommandResult>, private readonly app: UiApp,
-    serial: string, fingerprint: string) {
+    private readonly rotation: Rotation, serial: string, fingerprint: string) {
     this.environment = { serial, fingerprint };
+  }
+
+  private static async restoreRotation(adb: (...args: string[]) => Promise<CommandResult>, rotation: Rotation): Promise<void> {
+    for (const [name, value] of [["user_rotation", rotation.user], ["accelerometer_rotation", rotation.accelerometer]] as const)
+      await adb("shell", "settings", value === null ? "delete" : "put", "system", name, ...(value === null ? [] : [value]));
   }
 
   static async open(serial: string, app: UiApp): Promise<AndroidUiTarget> {
     const adbPath = androidTool("adb");
     const adb = (...args: string[]) => command([adbPath, "-s", serial, ...args]);
-    const [sdk, fingerprint] = await Promise.all([
+    const [sdk, fingerprint, accelerometer, user] = await Promise.all([
       adb("shell", "getprop", "ro.build.version.sdk"), adb("shell", "getprop", "ro.build.fingerprint"),
+      adb("shell", "settings", "get", "system", "accelerometer_rotation"),
+      adb("shell", "settings", "get", "system", "user_rotation"),
     ]);
     if (sdk.stdout.toString().trim() !== "33") throw new Error(`oracle ${serial} is not API 33`);
-    await adb("uninstall", app.pkg).catch(() => undefined);
-    await adb("install", "-r", "-t", app.apk);
-    await adb("shell", "am", "force-stop", app.pkg);
-    await adb("shell", "am", "start", "-W", "-n", `${app.pkg}/${app.activity}`);
-    return new AndroidUiTarget(adb, app, serial, fingerprint.stdout.toString().trim());
+    const setting = (result: CommandResult): string | null => {
+      const value = result.stdout.toString().trim();
+      return value === "null" ? null : value;
+    };
+    const rotation = { accelerometer: setting(accelerometer), user: setting(user) };
+    try {
+      await adb("shell", "settings", "put", "system", "accelerometer_rotation", "0");
+      await adb("shell", "settings", "put", "system", "user_rotation", "0");
+      await adb("uninstall", app.pkg).catch(() => undefined);
+      await adb("install", "-r", "-t", app.apk);
+      await adb("shell", "am", "force-stop", app.pkg);
+      await adb("shell", "am", "start", "-W", "-n", `${app.pkg}/${app.activity}`);
+      return new AndroidUiTarget(adb, app, rotation, serial, fingerprint.stdout.toString().trim());
+    } catch (error) {
+      await AndroidUiTarget.restoreRotation(adb, rotation);
+      throw error;
+    }
   }
+
+  close(): Promise<void> { return AndroidUiTarget.restoreRotation(this.adb, this.rotation); }
 
   async tree(): Promise<UiNode[]> {
     await this.adb("shell", "uiautomator", "dump", "/sdcard/wd-fuzz-ui.xml");
