@@ -1,5 +1,6 @@
 import { readFully } from "./lazyfile";
 import type { Install } from "./install";
+import { EXT_MIME } from "../mime";
 
 let active: { name: string; install: Install } | null = null;
 
@@ -16,6 +17,6 @@ export async function localAsset(path: unknown): Promise<{ status: number; bytes
   const bytes = active.install.zip[entry] ?? (source ? await readFully(source) : null);
   if (!bytes) return { status: 404 };
   const ext = entry.slice(entry.lastIndexOf(".") + 1).toLowerCase();
-  const type = ({ html: "text/html", js: "text/javascript", css: "text/css", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", svg: "image/svg+xml", json: "application/json", txt: "text/plain", woff2: "font/woff2", pdf: "application/pdf" } as Record<string, string>)[ext] ?? "application/octet-stream";
+  const type = EXT_MIME[ext] ?? "application/octet-stream";
   return { status: 200, bytes, type };
 }

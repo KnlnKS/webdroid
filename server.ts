@@ -4,6 +4,7 @@ import { WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject";
 import { webDocument } from "./src/shell/webhtml";
 import { proxyRequest } from "./src/shell/proxy";
 import { openInstall } from "./src/shell/install";
+import { EXT_MIME } from "./src/mime";
 import { prepareSystemPackages } from "./scripts/system-packages";
 import { ensureFrameworkRes } from "./scripts/gen-framework-res";
 
@@ -26,10 +27,6 @@ function proxyTarget(requested: string): string {
 
 type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; alpn: string[]; sock: import("bun").Socket | null; ready: boolean; pending: (Uint8Array | Buffer)[] };
 
-const ASSET_TYPE: Record<string, string> = {
-  html: "text/html", js: "text/javascript", css: "text/css", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-  svg: "image/svg+xml", json: "application/json", txt: "text/plain", woff2: "font/woff2", pdf: "application/pdf",
-};
 const IMMUTABLE = "public, max-age=31536000, immutable";
 function serveFile(dir: string, name: string, headers?: Record<string, string>): Response {
   if (!name || /[/\\]|\.\./.test(name)) return new Response("nope", { status: 400 });
@@ -80,7 +77,7 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
       const bytes = (await apkAssets(apk))[path];
       if (!bytes) return new Response("not found", { status: 404 });
       const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
-      const type = ASSET_TYPE[ext] ?? "application/octet-stream";
+      const type = EXT_MIME[ext] ?? "application/octet-stream";
       if (ext === "html") return new Response(await webDocument(new TextDecoder().decode(bytes)), { headers: { "content-type": type } });
       return new Response(bytes as Uint8Array<ArrayBuffer>, { headers: { "content-type": type } });
     },
