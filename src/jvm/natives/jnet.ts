@@ -809,7 +809,7 @@ class JURLConnection extends JObj {
     let r: Response;
     arm(this.cto, "connect timed out");
     try {
-      r = await fetch("/proxy?url=" + encodeURIComponent(this.url.spec), {
+      r = await fetch("/proxy?url=" + encodeURIComponent(this.url.spec) + (this.follow ? "" : "&manual=1"), {
         method: this.method, headers, signal: ac.signal, body: hasBody ? new Uint8Array(this.out!.chunks) : undefined,
       });
     } catch (e) {
@@ -822,10 +822,11 @@ class JURLConnection extends JObj {
     if (r.status === 502 && !final) throw rt.mkThrowable("java/net/UnknownHostException", await r.text());
     if (final && final !== this.url.u.href) this.url = mkURL(final);   // getURL() reports where a redirect landed
     const hdrs: [string, string][] = [];
-    r.headers.forEach((v, k) => { if (k !== "x-wd-final-url") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]); });
+    r.headers.forEach((v, k) => { if (k !== "x-wd-final-url" && k !== "x-wd-status" && k !== "x-wd-status-text") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]); });
     const stream = new JHttpInputStream();
     stream.reader = r.body?.getReader() ?? null; stream.timeout = () => this.rto;
-    return (this.res = { status: r.status, msg: r.statusText, hdrs, stream });
+    return (this.res = { status: this.follow ? r.status : Number(r.headers.get("x-wd-status")) || r.status,
+      msg: this.follow ? r.statusText : r.headers.get("x-wd-status-text") ?? r.statusText, hdrs, stream });
   }
   /** case-insensitive; the last value wins, as URLConnection documents */
   hdr(name: string | null): string | null {
@@ -916,8 +917,8 @@ rt.register({
     "getIfModifiedSince()J": function (this: JURLConnection) { return this.ifMod; },
     "getHeaderField(Ljava/lang/String;)Ljava/lang/String;": withRes(function (_r, k: string | null) { return this.hdr(k); }),
     // index 0 is the status line under a null key; past the end both are null, which is how a caller finds the end
-    "getHeaderField(I)Ljava/lang/String;": withRes((r, i: number) => r.hdrs[i]?.[1] ?? null),
-    "getHeaderFieldKey(I)Ljava/lang/String;": withRes((r, i: number) => r.hdrs[i]?.[0] ?? null),
+    "getHeaderField(I)Ljava/lang/String;": withRes((r, i: number) => i === 0 ? statusLine(r) : r.hdrs[i - 1]?.[1] ?? null),
+    "getHeaderFieldKey(I)Ljava/lang/String;": withRes((r, i: number) => i === 0 ? null : r.hdrs[i - 1]?.[0] ?? null),
     "getHeaderFields()Ljava/util/Map;": withRes((r) => headerMap(group([[null, statusLine(r)], ...r.hdrs]))),
     "getHeaderFieldInt(Ljava/lang/String;I)I": withRes(function (_r, k: string, d: number) {
       const n = parseInt(this.hdr(k) ?? "", 10);

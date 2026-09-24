@@ -24,7 +24,24 @@ function proxyTarget(requested: string): string {
   return new URL(`${url.pathname}${url.search}`, fuzzOrigin).href;
 }
 
-type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; alpn: string[]; sock: import("bun").Socket | null; ready: boolean; pending: (Uint8Array | Buffer)[] };
+type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; alpn: string[]; sock: import("bun").Socket | null; ready: boolean; closed: boolean; pending: Uint8Array[]; pendingBytes: number };
+const MAX_PENDING_TCP_BYTES = 8 * 1024 * 1024;
+
+function flushTcp(ws: import("bun").ServerWebSocket<TcpData | WebRelayData>, data: TcpData): void {
+  const socket = data.sock;
+  if (!socket || !data.ready || data.closed) return;
+  while (data.pending.length) {
+    const bytes = data.pending[0];
+    const written = socket.write(bytes);
+    if (written < 0) { ws.close(); return; }
+    data.pendingBytes -= written;
+    if (written < bytes.length) {
+      data.pending[0] = bytes.subarray(written);
+      return;
+    }
+    data.pending.shift();
+  }
+}
 
 // Hop-by-hop/encoding headers never survive the proxy; the framing/isolation set is dropped
 // only for `frame=1`, where the shell embeds the document in an iframe it must be able to script.
@@ -120,7 +137,10 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
           h.set("x-wd-status", String(upstream.status));
           const cookies = upstream.headers.getSetCookie();
           if (cookies.length) h.set("x-wd-set-cookie", JSON.stringify(cookies));
-          if ([301, 302, 303, 307, 308].includes(upstream.status)) return new Response(null, { headers: h });
+          if ([301, 302, 303, 307, 308].includes(upstream.status)) {
+            h.set("x-wd-status-text", upstream.statusText);
+            return new Response(null, { headers: h });
+          }
         }
         if (encoded && upstream.headers.has("content-encoding")) h.set("x-wd-content-encoding", upstream.headers.get("content-encoding")!);
         if (frame && upstream.body && /^text\/html/i.test(upstream.headers.get("content-type") ?? "")) {
@@ -216,7 +236,7 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
     }
     const alpn = u.searchParams.getAll("alpn");
     if (alpn.length > 32 || alpn.some(p => !p.length || Buffer.byteLength(p) > 255)) return new Response("bad ALPN", { status: 400 });
-    const data: TcpData = { alpn, kind: "tcp", host, port, tls: u.searchParams.get("tls") === "1", sock: null, ready: false, pending: [] };
+    const data: TcpData = { alpn, kind: "tcp", host, port, tls: u.searchParams.get("tls") === "1", sock: null, ready: false, closed: false, pending: [], pendingBytes: 0 };
     return srv.upgrade(req, { data }) ? undefined : new Response("expected websocket", { status: 400 });
   },
   websocket: {
@@ -228,25 +248,30 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
       // frame goes out only once the socket can carry bytes, and anything that arrives before
       // then is queued.
       const ready = (socket: import("bun").Socket) => {
+        if (d.closed) { socket.end(); return; }
+        d.sock = socket;
         d.ready = true;
         ws.send(JSON.stringify({
           type: "ready", localFamily: socket.localFamily,
           localAddress: socket.localAddress, localPort: socket.localPort, alpn: socket.alpnProtocol || "",
         }));
-        for (const m of d.pending.splice(0)) d.sock?.write(m);
+        flushTcp(ws, d);
       };
       try {
-        d.sock = await Bun.connect({
+        const socket = await Bun.connect({
           hostname: d.host, port: d.port,
           tls: d.tls ? { ALPNProtocols: Buffer.concat(d.alpn.flatMap(p => { const bytes = Buffer.from(p); return [Buffer.from([bytes.length]), bytes]; })) } : false,
           socket: {
             data: (_s, chunk) => { ws.send(chunk); },
+            drain: () => flushTcp(ws, d),
             handshake: (socket, ok, err) => { if (ok) ready(socket); else ws.close(4001, String(err ?? "tls handshake failed").slice(0, 100)); },
             close: () => ws.close(),
             error: () => ws.close(),
           },
         });
-        if (!d.tls) ready(d.sock);
+        d.sock = socket;
+        if (d.closed) socket.end();
+        else if (!d.tls) ready(socket);
       } catch (e) {
         ws.close(4000, String(e).slice(0, 100));
       }
@@ -254,9 +279,21 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
     message(ws, msg) {
       if (ws.data.kind === "webview") { if (typeof msg === "string") webRelay.reply(ws, msg); return; }
       if (typeof msg === "string") return;
-      if (ws.data.ready) ws.data.sock?.write(msg); else ws.data.pending.push(msg);
+      if (ws.data.ready && ws.data.pendingBytes === 0 && ws.data.sock) {
+        const written = ws.data.sock.write(msg);
+        if (written < 0) { ws.close(); return; }
+        if (written === msg.length) return;
+        msg = msg.subarray(written);
+      }
+      ws.data.pendingBytes += msg.length;
+      if (ws.data.pendingBytes > MAX_PENDING_TCP_BYTES) { ws.close(4002, "TCP upstream is too slow"); return; }
+      ws.data.pending.push(msg);
+      flushTcp(ws, ws.data);
     },
-    close(ws) { if (ws.data.kind === "webview") webRelay.close(ws.data.id, ws); else ws.data.sock?.end(); },
+    close(ws) {
+      if (ws.data.kind === "webview") webRelay.close(ws.data.id, ws);
+      else { ws.data.closed = true; ws.data.pending.length = 0; ws.data.pendingBytes = 0; ws.data.sock?.end(); }
+    },
   },
 });
 

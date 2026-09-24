@@ -38,3 +38,30 @@ test("HTTP headers and incremental reads do not await the entire response, and t
     await expect(vcall(stream, "read", "()I")).rejects.toMatchObject({ msg: "Stream closed" });
   } finally { globalThis.fetch = original; server.stop(true); }
 }, 5000);
+
+test("HttpURLConnection preserves a redirect when following is disabled", async () => {
+  const seen: string[] = [];
+  const server = Bun.serve({ port: 0, fetch(request) {
+    const query = new URL(request.url).searchParams;
+    seen.push(query.get("manual") ?? "");
+    return new Response(null, { headers: {
+      "x-wd-status": "302", "x-wd-status-text": "Found", "x-wd-final-url": "https://example.test/start",
+      location: "/next",
+    } });
+  } });
+  const original = globalThis.fetch;
+  globalThis.fetch = Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+    original(new URL(String(input), server.url), init), { preconnect: original.preconnect });
+  try {
+    const url = await newObj("java/net/URL", "(Ljava/lang/String;)V", "https://example.test/start");
+    const connection = await vcall(url, "openConnection", "()Ljava/net/URLConnection;");
+    await vcall(connection, "setInstanceFollowRedirects", "(Z)V", 0);
+    expect(await vcall(connection, "getResponseCode", "()I")).toBe(302);
+    expect(await vcall(connection, "getResponseMessage", "()Ljava/lang/String;")).toBe("Found");
+    expect(await vcall(connection, "getHeaderField", "(I)Ljava/lang/String;", 0)).toBe("HTTP/1.1 302 Found");
+    expect(await vcall(connection, "getHeaderFieldKey", "(I)Ljava/lang/String;", 0)).toBeNull();
+    expect(await vcall(connection, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", "location")).toBe("/next");
+    expect(await vcall(connection, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", "x-wd-status")).toBeNull();
+    expect(seen).toEqual(["1"]);
+  } finally { globalThis.fetch = original; server.stop(true); }
+});
