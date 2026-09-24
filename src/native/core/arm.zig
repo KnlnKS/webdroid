@@ -1147,6 +1147,24 @@ inline fn execThumb32(c: *Cpu, h: u32, second: u32, pc: u32) ?Status {
 }
 
 inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
+    if (h == 0xf3ef) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 & 0xf0ff == 0x8000) {
+            set(c, (h2 >> 8) & 15, c.cpsr & 0xf80f_0000);
+            c.pc = pc + 4;
+            return .next;
+        }
+    }
+    if (h & 0xfff0 == 0xf380) {
+        const h2: u32 = ld(u16, pc + 2);
+        if (h2 == 0x8800 or h2 == 0x8400 or h2 == 0x8c00) {
+            const mask: u32 = (if (h2 & 0x800 != 0) @as(u32, 0xf800_0000) else 0) |
+                (if (h2 & 0x400 != 0) @as(u32, 0x000f_0000) else 0);
+            c.cpsr = (c.cpsr & ~mask) | (r(c, h & 15) & mask);
+            c.pc = pc + 4;
+            return .next;
+        }
+    }
     if (h & 0xff50 == 0xf300) {
         const h2: u32 = ld(u16, pc + 2);
         const amount: u5 = @intCast((bits(h2, 12, 3) << 2) | bits(h2, 6, 2));
