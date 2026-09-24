@@ -128,7 +128,9 @@ rt.register({
 // name -- addIdleHandler dispatches dynamically -- which is exactly why it was missed.
 rt.markers("android/os/MessageQueue$IdleHandler");
 
-rt.markers("android/os/Handler$Callback");
+rt.register({ name: "android/os/Handler$Callback", ctor: class extends JObj {}, methods: {
+  "handleMessage(Landroid/os/Message;)Z": () => { throw rt.mkThrowable("java/lang/AbstractMethodError", "android.os.Handler.Callback.handleMessage"); },
+} });
 defineException("android/os/RemoteException", "java/lang/Exception");
 defineException("android/os/DeadObjectException", "android/os/RemoteException");
 defineException("android/os/OperationCanceledException", "java/lang/RuntimeException");
@@ -897,7 +899,9 @@ rt.register({
     "getFrameTimeNanos()J": () => uiState.frameTimeNanos,
   },
 });
-rt.markers("android/view/Choreographer$FrameCallback");
+rt.register({ name: "android/view/Choreographer$FrameCallback", ctor: class extends JObj {}, methods: {
+  "doFrame(J)V": () => { throw rt.mkThrowable("java/lang/AbstractMethodError", "android.view.Choreographer.FrameCallback.doFrame"); },
+} });
 
 class JKeyEvent extends JObj { action = 0; keyCode = 0; }
 rt.register({
