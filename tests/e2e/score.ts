@@ -51,6 +51,7 @@ async function diffFlow(flow: Flow): Promise<FlowReport> {
   const runInfo = await Bun.file(runPath).json() as FlowRun;
   if (runInfo.mode !== "full" || runInfo.flowSchemaHash !== flowSchemaHash([flow], "reference") ||
       runInfo.screen !== screenParam(screenOf(manifest)) ||
+      runInfo.statusBarDp !== screenOf(manifest).statusBarDp ||
       runInfo.steps.length !== flow.steps.length ||
       runInfo.steps.some((run, index) => run.id !== flow.steps[index]?.id)) {
     throw new Error(`${flow.app}: run.json does not match the current full flow and Android reference geometry; rerun \`bun run e2e --full --test ${flow.app}\``);

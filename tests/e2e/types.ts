@@ -214,7 +214,7 @@ export type Manifest = {
   recordedAt: string;
   /** Instant both sides pin their clock to, ms since epoch. */
   pinnedClockMs: number;
-  device: { width: number; height: number; densityDpi: number; fingerprint: string; sdk: string };
+  device: { width: number; height: number; densityDpi: number; statusBarDp?: number; fingerprint: string; sdk: string };
   crop: Flow["crop"];
   steps: RecordedStep[];
 };
@@ -226,19 +226,20 @@ export type Manifest = {
  * big the screen is, and `screenOf` reads it from there. Without goldens a flow's own `screen`
  * answers, then the profile — as it does for the recorder, which is *defining* the geometry.
  */
-export type Screen = { width: number; height: number; densityDpi: number };
+export type Screen = { width: number; height: number; densityDpi: number; statusBarDp?: number };
 
+/** Existing Android references predate inset metadata and used a 24dp status bar. */
 export const screenOf = (m: Manifest | undefined, fallback?: Screen): Screen =>
-  m ? { width: m.device.width, height: m.device.height, densityDpi: m.device.densityDpi } : fallback ?? deviceScreen();
+  m ? { width: m.device.width, height: m.device.height, densityDpi: m.device.densityDpi, statusBarDp: m.device.statusBarDp ?? 24 } : fallback ?? deviceScreen();
 
 export const deviceScreen = (): Screen =>
-  ({ width: device.width, height: device.height, densityDpi: device.densityDpi });
+  ({ width: device.width, height: device.height, densityDpi: device.densityDpi, statusBarDp: device.statusBarDp });
 
 /** the `?screen=` the shell parses, and what setup-avd.sh prints */
 export const screenParam = (s: Screen): string => `${s.width}x${s.height}@${s.densityDpi}`;
 
 export const sameScreen = (a: Screen, b: Screen): boolean =>
-  a.width === b.width && a.height === b.height && a.densityDpi === b.densityDpi;
+  a.width === b.width && a.height === b.height && a.densityDpi === b.densityDpi && (a.statusBarDp ?? 0) === (b.statusBarDp ?? 0);
 
 /**
  * Fixed instant both sides pin to: 2026-01-02T12:00:00Z.

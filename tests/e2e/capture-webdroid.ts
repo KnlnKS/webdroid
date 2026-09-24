@@ -52,7 +52,7 @@ export type StepRun = {
 };
 
 /** What `actual/<flow>/run.json` holds: the steps plus how the run was driven. */
-export type FlowRun = { mode: "full" | "fast"; flowSchemaHash: string; jobs: number; screen: string; steps: StepRun[]; browserErrors?: string[] };
+export type FlowRun = { mode: "full" | "fast"; flowSchemaHash: string; jobs: number; screen: string; statusBarDp: number; steps: StepRun[]; browserErrors?: string[] };
 export type CaptureMode = "full" | "fast";
 
 /** Wipe the frame-recorder directory. Call once per run, before any flow. */
@@ -90,7 +90,7 @@ export function prefsStorage(pkg: string, xml: string): [string, string] {
  *  to measure cost), the flow's clock, and its seed prefs already in storage. */
 export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = false, controlled = false, coverage = false): Promise<WebdroidDriver> {
   return WebdroidDriver.launch({
-    screen: parseScreen(ENV_SCREEN) ?? screenOf(manifest, flow.screen),
+    screen: { ...screenOf(manifest, flow.screen), ...parseScreen(ENV_SCREEN) },
     fixedMs: flow.clock === "live" ? null : PINNED_CLOCK_MS,
     storage: flow.seedPrefs ? [prefsStorage(flow.pkg, flow.seedPrefs)] : [],
     shots,
@@ -212,7 +212,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, {
   // Persist the per-step run flags next to the frames so `bun run e2e --diff` can apply the same
   // scoring rules as `bun run e2e --full` — without this, a standalone diff has no idea the app hung
   // and would quietly report a better number for the same pixels.
-  const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow], mode === "full" ? "reference" : "all"), jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, steps: runs, browserErrors: [...drv.errors] };
+  const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow], mode === "full" ? "reference" : "all"), jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, statusBarDp: drv.screen.statusBarDp ?? 0, steps: runs, browserErrors: [...drv.errors] };
   await Bun.write(`${outDir}/run.json`, JSON.stringify(run, null, 2));
   return runs;
 }

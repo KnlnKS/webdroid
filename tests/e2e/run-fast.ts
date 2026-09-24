@@ -7,7 +7,7 @@ import { loadPng } from "./lib/png";
 import { diffImages } from "./lib/diff";
 import { E2E_DIR } from "./lib/util";
 import { apkHashes, flowSchemaHash, repositoryRevision, type CoverageIndex } from "./coverage";
-import { screenOf, screenParam, wait, waitHorizonMs, type Manifest } from "./types";
+import { sameScreen, screenOf, screenParam, wait, waitHorizonMs, type Manifest, type Screen } from "./types";
 import { BASE_URL } from "./lib/util";
 import { isWebdroidProcessFrame } from "./lib/processes";
 
@@ -65,12 +65,13 @@ function quickFlow(flow: Flow): Flow {
     : flow;
 }
 
-async function visualEvidence(flow: Flow, manifest: Manifest | undefined, screen: string): Promise<{ checks: VisualCheck[]; errors: string[] }> {
+async function visualEvidence(flow: Flow, manifest: Manifest | undefined, screen: Screen): Promise<{ checks: VisualCheck[]; errors: string[] }> {
   const checks = flow.steps.filter((step) => step.fastEvidence?.kind === "visual");
   if (!checks.length) return { checks: [], errors: [] };
   if (!manifest) return { checks: [], errors: ["visual evidence requires a golden manifest"] };
-  if (screen !== screenParam(screenOf(manifest)))
-    return { checks: [], errors: [`visual evidence requires Android reference geometry ${screenParam(screenOf(manifest))}; captured ${screen}`] };
+  const reference = screenOf(manifest);
+  if (!sameScreen(screen, reference))
+    return { checks: [], errors: [`visual evidence requires Android reference geometry ${screenParam(reference)} with ${reference.statusBarDp}dp status inset; captured ${screenParam(screen)} with ${screen.statusBarDp ?? 0}dp`] };
   const errors: string[] = [];
   const results: VisualCheck[] = [];
   for (const step of checks) {
@@ -117,7 +118,7 @@ async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
   } finally {
     await driver.close();
   }
-  const visual = await visualEvidence(selected, manifest, screen);
+  const visual = await visualEvidence(selected, manifest, driver.screen);
   const observed = diagnostics(selected, runs);
   const browserErrors = browserFailures(flow, driver.errors);
   return { flow, runs, visual: visual.checks,

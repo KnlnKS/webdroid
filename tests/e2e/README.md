@@ -216,6 +216,13 @@ Raw framebuffers are compared only at each golden's recorded geometry;
 mismatched pixels. Older FitNotes, Mihon and Harmonic references use
 720×1280 at 320 dpi; CalculatorM uses 1080×2424 at 480 dpi.
 
+Reference capture profiles also retain the Android status-bar inset. Older manifests use
+24dp; `device.statusBarDp` can specify another value. The browser driver passes that profile
+through `?statusBarDp=`, including child processes, and records it in `run.json`. Scoring
+rejects mismatched insets rather than shifting, stretching or masking the app image. Normal
+browser sessions still default to zero status-bar height. Both visual thresholds and goldens
+remain independent of this capture profile.
+
 - **content** is the target metric: tolerant mismatch over the union of
   non-background pixels. A blank rendering cannot earn a low score by
   matching a mostly white background.

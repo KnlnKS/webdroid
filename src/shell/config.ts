@@ -60,6 +60,7 @@ function resolveScreen(): Screen {
 }
 
 const screen = resolveScreen();
+const statusBarDp = typeof location === "undefined" ? 0 : Number(new URLSearchParams(location.search).get("statusBarDp"));
 
 export const device = {
   width: screen.width,
@@ -68,7 +69,7 @@ export const device = {
   refreshRate: 60,
   /** AOSP: DisplayMetrics.density is densityDpi/160, so the two can never disagree */
   get density(): number { return this.densityDpi / DENSITY_DEFAULT; },
-  statusBarDp: 0,
+  statusBarDp: Number.isFinite(statusBarDp) && statusBarDp >= 0 ? statusBarDp : 0,
   /** the gesture/navigation bar inset */
   navBarDp: 24,
   /** AOSP ViewConfiguration.TOUCH_SLOP: dp of travel before a press counts as a drag */

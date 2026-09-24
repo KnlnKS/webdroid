@@ -33,7 +33,7 @@ async function runFlow(app: string): Promise<Outcome> {
     // run at any other size measures cost, never fidelity — and saying so here means the gate
     // cannot be passed at the wrong size by accident.
     if (!manifest || manifest.depth === "startup") printSmoke(app, runs, log);
-    else if (pinned && !sameScreen(pinned, screenOf(manifest))) {
+    else if (pinned && !sameScreen(drv.screen, screenOf(manifest))) {
       log(`\n--- ${app} (smoke: ran at ${screenParam(pinned)}, goldens are ${screenParam(screenOf(manifest))}) ---`);
       printSmoke(app, runs, log);
     } else {

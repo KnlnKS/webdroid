@@ -35,6 +35,7 @@ function pageUrl(screen: Screen, controlled: boolean): string {
   const u = new URL(BASE_URL);
   if (CUT) u.searchParams.set("bytecode", CUT);
   u.searchParams.set("screen", screenParam(screen));
+  u.searchParams.set("statusBarDp", String(screen.statusBarDp ?? 0));
   if (controlled) u.searchParams.set("testClock", "controlled");
   return u.href;
 }
