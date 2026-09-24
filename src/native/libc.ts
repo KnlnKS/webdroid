@@ -203,7 +203,7 @@ const SYSCALL_NR64: Record<number, string> = {
   85: "timerfd_create", 86: "timerfd_settime", 87: "timerfd_gettime",
   25: "fcntl", 56: "openat", 57: "close", 62: "lseek", 63: "read", 64: "write", 80: "fstat", 101: "nanosleep", 113: "clock_gettime",
   129: "kill", 131: "tgkill", 169: "gettimeofday", 215: "munmap", 222: "mmap", 226: "mprotect",
-  43: "statfs", 48: "faccessat", 59: "pipe2", 78: "readlinkat", 79: "fstatat", 134: "rt_sigaction",
+  43: "statfs", 48: "faccessat", 59: "pipe2", 78: "readlinkat", 79: "fstatat", 134: "rt_sigaction", 267: "syncfs",
 };
 const SYSCALL_NR32: Record<number, string> = {
   316: "inotify_init", 317: "inotify_add_watch", 318: "inotify_rm_watch", 360: "inotify_init1",
