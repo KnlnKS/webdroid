@@ -441,7 +441,7 @@ class JPersonBuilder extends JObj { p = new JPerson(); }
 
 // ── NotificationChannel / NotificationChannelGroup / NotificationManager. Nothing is ever
 // shown; a channel keeps what apps read back out of it.
-class JNotificationChannel extends JObj { id = ""; nm: unknown = null; imp = 3; }
+class JNotificationChannel extends JObj { id = ""; nm: unknown = null; imp = 3; bypassDnd = 0; }
 rt.register({
   name: "android/app/NotificationChannel", ctor: JNotificationChannel,
   methods: {
@@ -449,8 +449,8 @@ rt.register({
       this.id = id; this.nm = nm; this.imp = imp;
     },
     ...fieldGetters({ "getId()Ljava/lang/String;": "id", "getName()Ljava/lang/CharSequence;": "nm",
-      "getImportance()I": "imp" }),
-    ...fieldSetters({ "setName(Ljava/lang/CharSequence;)V": "nm" }),
+      "getImportance()I": "imp", "canBypassDnd()Z": "bypassDnd" }),
+    ...fieldSetters({ "setName(Ljava/lang/CharSequence;)V": "nm", "setBypassDnd(Z)V": "bypassDnd" }),
     ...stubs(null, "getGroup()Ljava/lang/String;", "getSound()Landroid/net/Uri;"),
     ...stubs(0, "shouldVibrate()Z"),
     ...stubs(1, "canShowBadge()Z"),
