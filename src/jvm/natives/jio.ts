@@ -90,6 +90,7 @@ export const vfs = {
   under(p: string): boolean {
     if (this.dirs.has(p)) return true;
     const dir = p.endsWith("/") ? p : p + "/";
+    for (const d of this.dirs) if (d.startsWith(dir)) return true;
     for (const m of [this.files, this.lazyFiles]) for (const k of m.keys()) if (k.startsWith(dir)) return true;
     return false;
   },
@@ -1672,6 +1673,7 @@ rt.register({
   name: "java/nio/file/Files", ctor: class extends JObj {},
   methods: {
     "static exists(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z": (p: JNioPath) => (vfs.exists(p.p) ? 1 : 0),
+    "static isWritable(Ljava/nio/file/Path;)Z": (p: JNioPath) => (vfs.exists(p.p) ? 1 : 0),
     "static move(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;": (src: JNioPath, dst: JNioPath) => {
       const data = vfs.read(src.p);
       if (data) { vfs.write(dst.p, data); vfs.delete(src.p); }

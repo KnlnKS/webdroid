@@ -4,6 +4,7 @@ import { openDb, txDone } from "./idb";
 type FileValue = { kind: "file"; bytes: Uint8Array } | { kind: "directory" };
 const roots = ["/data/data/", "/data/user/0/", "/data/user_de/0/", "/sdcard/Android/data/"];
 const appPath = new RegExp("^(?:" + roots.join("|") + ")[^/]+(?:/(.*))?$");
+const sharedPath = (path: string) => path.startsWith("/sdcard/") && !appPath.test(path);
 export class PrivateFiles {
   private values = new Map<string, FileValue>();
   private views = new Map<number, typeof vfs>();
@@ -21,11 +22,11 @@ export class PrivateFiles {
     view.flush = () => this.flush();
     view.onWrite = (path) => {
       const relative = appPath.exec(path);
-      if (!relative) return;
+      if (!relative && !sharedPath(path)) return;
       const bytes = view.files.get(path);
       const value: FileValue | null = bytes ? { kind: "file", bytes } : view.dirs.has(path) ? { kind: "directory" } : null;
       this.update(path, value);
-      if (/^(?:cache|code_cache)(?:\/|$)/.test(relative[1] ?? "")) return;
+      if (relative && /^(?:cache|code_cache)(?:\/|$)/.test(relative[1] ?? "")) return;
       this.pending.set(path, value);
       this.timer ??= setTimeout(() => { this.timer = null; void this.flush().catch((error) => console.error("[private files]", error)); }, 0);
     };
@@ -43,18 +44,18 @@ export class PrivateFiles {
   private db(): Promise<IDBDatabase> {
     return this.database ??= openDb("webdroid-private-files", "files");
   }
-  prepare(pkg: string): Promise<void> {
-    let loaded = this.loaded.get(pkg);
+  private load(key: string, prefixes: string[], include: (path: string) => boolean): Promise<void> {
+    let loaded = this.loaded.get(key);
     if (!loaded) {
       loaded = this.db().then((db) => {
         const transaction = db.transaction("files"), store = transaction.objectStore("files");
-        for (const root of roots) {
-          const prefix = root + pkg + "/", request = store.openCursor(IDBKeyRange.bound(prefix, prefix + "\uffff"));
+        for (const prefix of prefixes) {
+          const request = store.openCursor(IDBKeyRange.bound(prefix, prefix + "\uffff"));
           request.onsuccess = () => {
             const cursor = request.result;
             if (!cursor) return;
             const path = cursor.key, value: unknown = cursor.value;
-            if (typeof path === "string" && !this.values.has(path) && !this.pending.has(path) && value && typeof value === "object" && "kind" in value) {
+            if (typeof path === "string" && include(path) && !this.values.has(path) && !this.pending.has(path) && value && typeof value === "object" && "kind" in value) {
               if (value.kind === "directory") this.update(path, { kind: "directory" });
               else if (value.kind === "file" && "bytes" in value && value.bytes instanceof Uint8Array) this.update(path, { kind: "file", bytes: value.bytes });
             }
@@ -63,9 +64,15 @@ export class PrivateFiles {
         }
         return txDone(transaction);
       });
-      this.loaded.set(pkg, loaded);
+      this.loaded.set(key, loaded);
     }
     return loaded;
+  }
+  async prepare(pkg: string): Promise<void> {
+    await Promise.all([
+      this.load("@shared", ["/sdcard/"], sharedPath),
+      this.load(pkg, roots.map((root) => root + pkg + "/"), () => true),
+    ]);
   }
   flush(): Promise<void> {
     if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
