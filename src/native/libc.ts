@@ -313,6 +313,7 @@ export function libcInit(): void {
     // Bionic's numbering: _SC_PAGESIZE/_SC_PAGE_SIZE 0x27/0x28, _SC_NPROCESSORS_CONF/ONLN 0x60/0x61, _SC_PHYS_PAGES 0x62
     sysconf: (_c, a) => { const n = a.i(); return n === 0x27 || n === 0x28 ? 4096 : n === 0x60 || n === 0x61 ? device.cpu.cores : n === 0x62 ? 65536 : -1; },
     getpagesize: () => 4096,
+    android_get_device_api_level: () => device.sdk,
     // AT_HWCAP and friends: this CPU advertises no optional feature bits, which is true and is
     // also what steers a library away from the paths the emitter has not written.
     getauxval: (_c, a) => { const t = a.i(); return t === 6 ? 4096 : 0; },   // AT_PAGESZ, else none
