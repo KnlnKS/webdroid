@@ -178,7 +178,7 @@ async function applyHolder(target: unknown, h: JPVH, t: number) {
 /** the property's value now: what an XML animator with no valueFrom (or no valueTo) starts from */
 /** where a one-key animator starts: the Property's own get, or the named getter */
 async function currentValue(target: unknown, prop: unknown, name: string): Promise<number> {
-  if (!prop) return readAnimProp(target, name);
+  if (!prop) return name ? readAnimProp(target, name) : 0;
   const v: unknown = await vcall(prop, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", target);
   return Number(v && typeof v === "object" && "v" in v ? (v as { v: unknown }).v : v ?? 0);
 }
