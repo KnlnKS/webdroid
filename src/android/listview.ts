@@ -4,7 +4,7 @@ import { AID, bagStrings } from "./res";
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
-import { vcall, curThread, after } from "../jvm/natives/jlang";
+import { newObj, vcall, curThread, after } from "../jvm/natives/jlang";
 import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSize, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom } from "./view";
 import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
 import { JAttrSet, obtainStyled, rvDimen, rvInt, rvString, type Resources } from "./res";
@@ -13,7 +13,7 @@ import { JCanvas } from "./graphics";
 import { JDrawable, loadDrawableRV, drawableSize, drawChild } from "./drawable";
 import { reportUncaught } from "./os";
 import { onMain } from "./mainloop";
-import { toJsArray } from "../jvm/natives/jutil";
+import { jeq, toJsArray } from "../jvm/natives/jutil";
 import { JTextView } from "./textview";
 import { inflateLayout } from "./inflate";
 import { addOverlay, removeOverlay } from "./popup";
@@ -97,9 +97,27 @@ rt.register({
     },
     "getCount()I": function (this: JArrayAdapter) { return this.items.length; },
     "getItem(I)Ljava/lang/Object;": function (this: JArrayAdapter, i: number) { return this.items[i] ?? null; },
+    "getPosition(Ljava/lang/Object;)I": async function (this: JArrayAdapter, item: unknown) {
+      for (let i = 0; i < this.items.length; i++) if (await jeq(item, this.items[i])) return i;
+      return -1;
+    },
     "getItemId(I)J": (i: number) => BigInt(i),
-    "add(Ljava/lang/Object;)V": function (this: JArrayAdapter, o: unknown) { this.items.push(o); invalidate(); },
-    "clear()V": function (this: JArrayAdapter) { this.items.length = 0; },
+    "add(Ljava/lang/Object;)V": function (this: JArrayAdapter, o: unknown) {
+      this.items.push(o);
+      return vcall(this, "notifyDataSetChanged", "()V");
+    },
+    "addAll(Ljava/util/Collection;)V": async function (this: JArrayAdapter, collection: unknown) {
+      for (const item of await toJsArray(collection)) this.items.push(item);
+      await vcall(this, "notifyDataSetChanged", "()V");
+    },
+    "addAll([Ljava/lang/Object;)V": function (this: JArrayAdapter, values: unknown[]) {
+      for (const item of values) this.items.push(item);
+      return vcall(this, "notifyDataSetChanged", "()V");
+    },
+    "clear()V": function (this: JArrayAdapter) {
+      this.items.length = 0;
+      return vcall(this, "notifyDataSetChanged", "()V");
+    },
     "getView(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;":
       async function (this: JArrayAdapter, pos: number, convert: unknown, parent: unknown) {
         const item = this.items[pos];
@@ -433,6 +451,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   // appcompat's dropdown list reads both back: without them a Spinner popup dies on open, and
   // picking a row throws instead of selecting it
   "getOnItemClickListener()Landroid/widget/AdapterView$OnItemClickListener;": function (this: JListView) { return this.itemClickL; },
+  "getOnItemSelectedListener()Landroid/widget/AdapterView$OnItemSelectedListener;": function (this: JListView) { return this.itemSelectedL; },
   "addHeaderView(Landroid/view/View;)V": addHeader,
   "addHeaderView(Landroid/view/View;Ljava/lang/Object;Z)V": addHeader,
   "addFooterView(Landroid/view/View;)V": addFooter,
@@ -668,6 +687,55 @@ rt.register({ name: "android/widget/AbsListView", ctor: class extends JListView 
   statics: { CHOICE_MODE_NONE: 0, CHOICE_MODE_SINGLE: 1, CHOICE_MODE_MULTIPLE: 2, CHOICE_MODE_MULTIPLE_MODAL: CHOICE_MODE_MULTIPLE_MODAL },
   methods: listViewMethods });
 rt.register({ name: "android/widget/ListView", ctor: JListView, sup: "android/widget/AbsListView", methods: listViewMethods });
+
+class JListPopupWindow extends JObj {
+  ctx: unknown = null;
+  anchor: JView | null = null;
+  adapter: unknown = null;
+  itemClick: unknown = null;
+  popup: unknown = null;
+  list: JListView | null = null;
+  width = WRAP_CONTENT;
+  height = WRAP_CONTENT;
+  xoff = 0;
+  yoff = 0;
+  modal = true;
+}
+rt.register({ name: "android/widget/ListPopupWindow", ctor: JListPopupWindow, methods: {
+  "<init>(Landroid/content/Context;)V": function (this: JListPopupWindow, ctx: unknown) { this.ctx = ctx; },
+  "setAdapter(Landroid/widget/ListAdapter;)V": async function (this: JListPopupWindow, adapter: unknown) {
+    this.adapter = adapter;
+    if (this.list) await vcall(this.list, "setAdapter", "(Landroid/widget/ListAdapter;)V", adapter);
+  },
+  "setAnchorView(Landroid/view/View;)V": function (this: JListPopupWindow, anchor: JView) { this.anchor = anchor; },
+  "setOnItemClickListener(Landroid/widget/AdapterView$OnItemClickListener;)V": async function (this: JListPopupWindow, listener: unknown) {
+    this.itemClick = listener;
+    if (this.list) await vcall(this.list, "setOnItemClickListener", "(Landroid/widget/AdapterView$OnItemClickListener;)V", listener);
+  },
+  "setModal(Z)V": function (this: JListPopupWindow, value: number) { this.modal = !!value; },
+  "setWidth(I)V": function (this: JListPopupWindow, value: number) { this.width = value; },
+  "setHeight(I)V": function (this: JListPopupWindow, value: number) { this.height = value; },
+  "setHorizontalOffset(I)V": function (this: JListPopupWindow, value: number) { this.xoff = value; },
+  "setVerticalOffset(I)V": function (this: JListPopupWindow, value: number) { this.yoff = value; },
+  "getListView()Landroid/widget/ListView;": function (this: JListPopupWindow) { return this.list; },
+  "isShowing()Z": function (this: JListPopupWindow) { return this.popup ? vcall(this.popup, "isShowing", "()Z") : 0; },
+  "dismiss()V": function (this: JListPopupWindow) { if (this.popup) return vcall(this.popup, "dismiss", "()V"); },
+  "show()V": async function (this: JListPopupWindow) {
+    if (!this.anchor) return;
+    if (!this.popup) {
+      this.list = await newObj("android/widget/ListView", "(Landroid/content/Context;Landroid/util/AttributeSet;)V", this.ctx, null);
+      await vcall(this.list, "setAdapter", "(Landroid/widget/ListAdapter;)V", this.adapter);
+      await vcall(this.list, "setOnItemClickListener", "(Landroid/widget/AdapterView$OnItemClickListener;)V", this.itemClick);
+      this.popup = await newObj("android/widget/PopupWindow", "(Landroid/content/Context;)V", this.ctx);
+      await vcall(this.popup, "setContentView", "(Landroid/view/View;)V", this.list);
+      await vcall(this.popup, "setFocusable", "(Z)V", +this.modal);
+      await vcall(this.popup, "setOutsideTouchable", "(Z)V", 1);
+    }
+    await vcall(this.popup, "setWidth", "(I)V", this.width === WRAP_CONTENT ? this.anchor.width() : this.width);
+    await vcall(this.popup, "setHeight", "(I)V", this.height);
+    await vcall(this.popup, "showAsDropDown", "(Landroid/view/View;II)V", this.anchor, this.xoff, this.yoff);
+  },
+} });
 rt.register({
   name: "android/widget/ExpandableListView", ctor: class extends JListView {}, sup: "android/widget/ListView",
   methods: {

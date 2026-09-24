@@ -23,7 +23,7 @@ function fillToArray(items: unknown[], out: unknown[]): unknown[] {
 }
 
 // equality / hashing bridges (sync when possible)
-function jeq(a: unknown, b: unknown): number | Promise<number> {
+export function jeq(a: unknown, b: unknown): number | Promise<number> {
   if (a === b) return 1;
   if (a === null || b === null || a === undefined || b === undefined) return 0;
   if (typeof a === "string") return 0; // string equals only identical strings

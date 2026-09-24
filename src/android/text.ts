@@ -415,10 +415,11 @@ rt.register({
 });
 // Pure marker interface: "recreate the TextPaint, don't just measure."
 rt.markers("android/text/style/UpdateAppearance");
+rt.register({ name: "android/text/style/UpdateLayout", ctor: class extends JObj {}, ifaces: ["android/text/style/UpdateAppearance"] });
 class JMetricAffectingSpan extends JCharacterStyle {}
 rt.register({
   name: "android/text/style/MetricAffectingSpan", ctor: JMetricAffectingSpan,
-  sup: "android/text/style/CharacterStyle", ifaces: ["android/text/style/UpdateAppearance"],
+  sup: "android/text/style/CharacterStyle", ifaces: ["android/text/style/UpdateLayout"],
   methods: {
     "<init>()V": function () {},
     "getUnderlying()Landroid/text/style/MetricAffectingSpan;": function (this: JMetricAffectingSpan) { return this; },

@@ -1558,6 +1558,7 @@ const viewMethods: NativeSpec["methods"] = {
   "computeVerticalScrollExtent()I": function (this: JView) { return this.height(); },
   "computeVerticalScrollOffset()I": function (this: JView) { return this.scrollY; },
   "computeVerticalScrollRange()I": function (this: JView) { return this.height(); },
+  "getVerticalScrollbarWidth()I": () => 0,
   "setLeftTopRightBottom(IIII)V": function (this: JView, l: number, t: number, r: number, b: number) {
     this.left = l; this.top = t; this.right = r; this.bottom = b; invalidate();
   },
@@ -2334,7 +2335,7 @@ rt.register({
   statics: {
     ALPHA: null,
     VISIBLE: 0, INVISIBLE: 4, GONE: 8, NO_ID: -1,
-    EMPTY_STATE_SET: new Int32Array(0), SELECTED_STATE_SET: Int32Array.of(0x10100a1),
+    EMPTY_STATE_SET: new Int32Array(0), ENABLED_STATE_SET: Int32Array.of(0x101009e), SELECTED_STATE_SET: Int32Array.of(0x10100a1),
     MEASURED_STATE_MASK: -0x1000000, MEASURED_SIZE_MASK: 0x00ffffff,
     SYSTEM_UI_FLAG_VISIBLE: 0, SYSTEM_UI_FLAG_LOW_PROFILE: 1, SYSTEM_UI_FLAG_HIDE_NAVIGATION: 2, SYSTEM_UI_FLAG_FULLSCREEN: 4, SYSTEM_UI_FLAG_LAYOUT_STABLE: 0x100,
     SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION: 0x200, SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN: 0x400, SYSTEM_UI_FLAG_IMMERSIVE: 0x800, SYSTEM_UI_FLAG_IMMERSIVE_STICKY: 0x1000,

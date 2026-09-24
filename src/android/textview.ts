@@ -4,7 +4,7 @@ import {
   type JColorStateList, mkCsl, type JDrawable, loadColorStateList, loadDrawableRV, cslColor, loadDrawable,
   drawChild, drawableSize
 } from "./drawable";
-import { JTextPaint, JEditable, JSpanned, JLayout, spannedString } from "./text";
+import { JTextPaint, JEditable, JSpanned, JLayout, spannedString, textSelection, setTextSelection } from "./text";
 import { G, gravityV, gravityH } from "./gravity";
 import { isRtl } from "./bidiformatter";
 import { device } from "../shell/config";
@@ -318,6 +318,19 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   // the drawable measures itself with no text at all.
   "setText(Ljava/lang/CharSequence;)V": function (this: JTextView, cs: unknown) {
     return vcall(this, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", cs, bufferTypes[0]);
+  },
+  "setTextKeepState(Ljava/lang/CharSequence;)V": function (this: JTextView, cs: unknown) {
+    return vcall(this, "setTextKeepState", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", cs, bufferTypes[0]);
+  },
+  "setTextKeepState(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": async function (this: JTextView, cs: unknown, type: unknown) {
+    const [start, end] = await textSelection(this.editable ? this.getEditable() : this.rawText);
+    await vcall(this, "setText", "(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V", cs, type);
+    if (start >= 0 || end >= 0) {
+      const text = this.editable ? this.getEditable() : this.rawText;
+      if (text && typeof text !== "string" && rt.iof(text, "android/text/Spannable")) {
+        await setTextSelection(text, Math.max(0, Math.min(start, this.text.length)), Math.max(0, Math.min(end, this.text.length)));
+      }
+    }
   },
   "setText(I)V": async function (this: JTextView, id: number) {
     const s = this.jres ? resString(this.jres, id) : "";
@@ -731,9 +744,11 @@ rt.register({
     ...textViewMethods,
     ...textViewCtors<JEditText>("editTextStyle"),
     "getText()Landroid/text/Editable;": function (this: JEditText) { return this.getEditable(); },
-    "getSelectionStart()I": function (this: JEditText) { return this.text.length; },
-    "getSelectionEnd()I": function (this: JEditText) { return this.text.length; },
-    ...noops("setSelection(I)V", "setSelection(II)V", "selectAll()V"),
+    "getSelectionStart()I": async function (this: JEditText) { const [start] = await textSelection(this.getEditable()); return start >= 0 ? start : this.text.length; },
+    "getSelectionEnd()I": async function (this: JEditText) { const [, end] = await textSelection(this.getEditable()); return end >= 0 ? end : this.text.length; },
+    "setSelection(I)V": function (this: JEditText, index: number) { return setTextSelection(this.getEditable(), index, index); },
+    "setSelection(II)V": function (this: JEditText, start: number, end: number) { return setTextSelection(this.getEditable(), start, end); },
+    "selectAll()V": function (this: JEditText) { return setTextSelection(this.getEditable(), 0, this.text.length); },
     "performClick()Z": async function (this: JEditText) {
       await vcall(this, "requestFocus", "()Z");
       if (this.clickL) await vcall(this.clickL, "onClick", "(Landroid/view/View;)V", this);
