@@ -426,7 +426,7 @@ function setRotate(m: Float32Array, deg: number, x: number, y: number, z: number
   m[o + 8] = x * z * nc + y * s; m[o + 9] = y * z * nc - x * s; m[o + 10] = z * z * nc + c; m[o + 11] = 0;
   m[o + 12] = 0; m[o + 13] = 0; m[o + 14] = 0; m[o + 15] = 1;
 }
-function invert(inv: Float32Array, io: number, src: Float32Array, so: number) {
+export function invert(inv: Float32Array, io: number, src: Float32Array, so: number) {
   const a = src[so], b = src[so + 1], c = src[so + 2], d = src[so + 3],
     e = src[so + 4], f = src[so + 5], g = src[so + 6], h = src[so + 7],
     i = src[so + 8], j = src[so + 9], k = src[so + 10], l = src[so + 11],
