@@ -629,7 +629,8 @@ rt.register({
       const d = classAnno(this.owner).cls.find((a) => a.type === "dalvik/annotation/AnnotationDefault")?.elements.value;
       if (!d || typeof d !== "object" || Array.isArray(d) || d.kind !== "annotation") return null;
       const val = d.anno.elements[this.name];
-      return val === undefined ? null : boxReturn(this.desc.slice(this.desc.indexOf(")") + 1), resolveEncVal(val, d.anno.dex, this.owner.owner ?? rt));
+      const type = this.desc.slice(this.desc.indexOf(")") + 1);
+      return val === undefined ? null : boxReturn(type, resolveEncVal(val, d.anno.dex, this.owner.owner ?? rt, type));
     },
     "getReturnType()Ljava/lang/Class;": function (this: JMethod) {
       return classForDesc(parseMethodDesc(this.desc).ret, this.owner.owner);
@@ -814,10 +815,12 @@ export function mkAnnotation(anno: EncAnnotation, runtime: Runtime = rt): JAnnot
 }
 function installElements(target: object, info: ClassInfo, anno: EncAnnotation, runtime: Runtime = rt) {
   for (const [name, val] of Object.entries(anno.elements)) {
-    const key = mangleMethod(name, elementDesc(info, name));
+    const desc = elementDesc(info, name);
+    const type = parseMethodDesc(desc).ret;
+    const key = mangleMethod(name, desc);
     let resolved: unknown, ready = false;
     Reflect.set(target, key, () => {
-      if (!ready) { resolved = resolveEncVal(val, anno.dex, runtime); ready = true; }
+      if (!ready) { resolved = resolveEncVal(val, anno.dex, runtime, type); ready = true; }
       return resolved;
     });
   }
@@ -856,8 +859,14 @@ function elementDesc(info: ClassInfo, name: string): string {
   }
   return "()Ljava/lang/String;"; // common default
 }
-function resolveEncVal(v: EncVal, dex: DexFile, runtime: Runtime): unknown {
-  if (Array.isArray(v)) return v.map((x) => resolveEncVal(x, dex, runtime));
+function resolveEncVal(v: EncVal, dex: DexFile, runtime: Runtime, type?: string): unknown {
+  if (Array.isArray(v)) {
+    const values = v.map((x) => resolveEncVal(x, dex, runtime));
+    const elem = type?.startsWith("[") ? type.slice(1) : "Ljava/lang/Object;";
+    if (elem === "J") return BigInt64Array.from(values as bigint[]);
+    if (elem.length === 1 && elem in PRIM_ARRAYS) return (PRIM_ARRAYS[elem as PrimElem] as typeof Int32Array).from(values as number[]);
+    return jarray(values, elem);
+  }
   if (v !== null && typeof v === "object") {
     if (v.kind === "annotation") return mkAnnotation(v.anno, runtime);
     // an enum constant is a static of its class, which exists only once <clinit> has run;

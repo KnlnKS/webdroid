@@ -47,3 +47,28 @@ test("explicit enum annotation elements wait for class initialization", async ()
 
   expect(await pending).toBe(mode);
 });
+
+test("annotation arrays retain their declared Java types", async () => {
+  const name = "test/ArrayAnnotation";
+  rt.register({
+    name,
+    ctor: class extends JObj {},
+    methods: {
+      "versions()[I": () => null,
+      "names()[Ljava/lang/String;": () => null,
+    },
+  });
+  const annotation = mkAnnotation({
+    visibility: 1,
+    type: name,
+    elements: { versions: [2, 3, 0], names: ["one", "two"] },
+    dex: {} as DexFile,
+  });
+
+  const versions = await vcall(annotation, "versions", "()[I");
+  const names = await vcall(annotation, "names", "()[Ljava/lang/String;");
+  expect(versions).toEqual(new Int32Array([2, 3, 0]));
+  expect(rt.iof(versions, "[I")).toBe(1);
+  expect(names).toEqual(expect.arrayContaining(["one", "two"]));
+  expect(rt.iof(names, "[Ljava/lang/String;")).toBe(1);
+});
