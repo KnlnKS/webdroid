@@ -260,3 +260,4 @@ const timePickerDialogMethods: NativeSpec["methods"] = {
 };
 rt.register({ name: "android/app/TimePickerDialog", ctor: JTimePickerDialog, sup: "android/app/AlertDialog", methods: timePickerDialogMethods });
 rt.markers("android/app/TimePickerDialog$OnTimeSetListener");
+rt.markers("android/app/DatePickerDialog$OnDateSetListener");

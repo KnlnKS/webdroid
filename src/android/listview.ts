@@ -22,7 +22,8 @@ import { spannedString } from "./text";
 
 for (const i of ["android/widget/Adapter", "android/widget/ListAdapter", "android/widget/SpinnerAdapter",
   "android/widget/AdapterView$OnItemClickListener", "android/widget/AdapterView$OnItemLongClickListener",
-  "android/widget/AdapterView$OnItemSelectedListener", "android/widget/AbsListView$SelectionBoundsAdjuster"]) {
+  "android/widget/AdapterView$OnItemSelectedListener", "android/widget/AbsListView$SelectionBoundsAdjuster",
+  "android/widget/AbsListView$RecyclerListener", "android/widget/SectionIndexer"]) {
   rt.register({ name: i, ctor: class extends JObj {} });
 }
 

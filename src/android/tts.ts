@@ -10,6 +10,7 @@ rt.register({
     "onBeginSynthesis(Ljava/lang/String;III)V", "onAudioAvailable(Ljava/lang/String;[B)V", "onRangeStart(Ljava/lang/String;III)V") },
 });
 rt.markers("android/speech/tts/TextToSpeech$OnInitListener");
+rt.markers("android/speech/RecognitionListener");
 
 rt.register({
   name: "android/speech/tts/TextToSpeech", ctor: class extends JObj {},
