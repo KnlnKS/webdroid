@@ -262,11 +262,20 @@ separate staged audit repairs.
 - **Play Integrity.** The bundled microG FakeStore APK declares exported classic
   and express IntegrityService bindings, and its bytecode contains the service
   implementations. `GmsClient.apk` has no Play Integrity dependency or request
-  path, so no token request, Binder reply or server-verified verdict has been
-  observed in webdroid. The existing service/Binder transport is a possible
-  route for an unchanged client, not evidence that attestation works. A focused
-  client probe should compare the real request's success or error with Android
-  before any platform change. No device token or integrity verdict is synthesized.
+  path. The open-source [SPIC v1.4.0 release APK](https://github.com/herzhenr/spic-android/releases/tag/v1.4.0) (`com.henrikherzig.playintegritychecker`,
+  SHA-256 `a9b0036ed4b78b486fcd957fc7038d441cd6e896961ffb6b1bccfd7f03b3e471`)
+  does call `IntegrityManager.requestIntegrityToken` with a locally generated
+  nonce. It smoke-compiled with zero method failures. On the API-33 Google APIs
+  emulator, pressing **Make Play Integrity Request** returned
+  `CANNOT_BIND_TO_SERVICE (-9)`; that run is an error-path oracle, not a
+  successful-token reference. In webdroid, the unchanged app fails earlier while
+  attaching its Compose view: `ContinuationInterceptor.minusKey` reaches a
+  Kotlin null-parameter exception for `key`, leaving the UI tree at four
+  zero-sized ancestors. This is a Compose/JVM startup gap, not Integrity request
+  evidence. No token request, Binder reply or server-verified verdict has been
+  observed in webdroid, and no device token or verdict is synthesized. Reproduce
+  the generic Compose failure before diagnosing Integrity transport; use an
+  Android image with an official Play Store for a successful-request oracle.
 - **Google Maps.** After loader, Parcel, callback, graphics and ABI fixes, the
   unchanged APK rendered real tiles, directions and successive maneuvers.
   ARM64 floating arguments after v0-v7 belong on stack slots, not integer
