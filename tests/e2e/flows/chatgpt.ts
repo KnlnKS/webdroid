@@ -26,7 +26,7 @@ export const chatgpt: Flow = {
     { id: "attachment-tools", label: "Reopen attachments", action: tap(105, 1980), wait: wait.live(1000) },
     { id: "plugins", label: "Show plugin choices and icons", action: { type: "tapText", text: "Plugins" }, wait: wait.live(3000) },
     { id: "plugins-close", label: "Clear the plugin query", action: { type: "typeInto", x: 360 / screen.width, y: 1980 / screen.height, text: "" }, wait: wait.live(1000) },
-    { id: "menu", label: "Open navigation", action: tap(100, 174), wait: wait.live(2000) },
+    { id: "menu", label: "Open navigation", action: tap(100, 100), wait: wait.live(2000) },
     { id: "settings", label: "Guest settings", action: { type: "tapText", text: "Settings" }, wait: wait.live(3000), fastWait: wait.state({ kind: "text", text: "Data controls" }, 0, 6_000) },
     { id: "language", label: "Open the app language dialog", action: { type: "tapText", text: "Language" }, wait: wait.live(2000) },
     { id: "language-back", label: "Dismiss the language dialog", action: { type: "back" }, wait: wait.live(1000) },
@@ -34,7 +34,7 @@ export const chatgpt: Flow = {
     { id: "about-back", label: "Return from app information", action: { type: "back" }, wait: wait.live(1000) },
     { id: "settings-back", label: "Return from settings", action: { type: "back" }, wait: wait.live(2000) },
     { id: "menu-back", label: "Close navigation", action: { type: "back" }, wait: wait.live(2000) },
-    { id: "login", label: "Open the login sheet", action: tap(900, 174), wait: wait.live(3000) },
+    { id: "login", label: "Open the login sheet", action: tap(900, 100), wait: wait.live(3000) },
     { id: "login-back", label: "Dismiss login and retain the conversation", action: { type: "back" }, wait: wait.live(2000) },
   ],
 };
