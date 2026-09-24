@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { vcall, newObj } from "../jvm/natives/jlang";
-import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, copyEvent } from "./view";
+import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, setGroupAnimHook, copyEvent } from "./view";
 import { restVelocity, type JMotionEvent } from "./motionevent";
 import { JMatrix, rotM } from "./graphics";
 import { mangleMethod } from "../jvm/abi";
@@ -10,7 +10,10 @@ import { onMain, inMainJob } from "./mainloop";
 import { newArrayList } from "../jvm/natives/jutil";
 import { device } from "../shell/config";
 import { reportUncaught } from "./os";
-import { currentResources, rvDimen } from "./res";
+import { currentResources, rvDimen, rvFloat, rvInt, normRV, type Resources } from "./res";
+import { parseAXML, attr, TV, type XmlNode } from "./axml";
+import { complexToFraction } from "./util";
+import type { JContext } from "./context";
 
 // ── Scroller/OverScroller: time-based interpolated scroll values
 class JScroller extends JObj {
@@ -355,7 +358,7 @@ async function stepViewAnim(v: JView): Promise<boolean> {
   return more;
 }
 
-setViewAnimHook((v, anim) => {
+const beginViewAnim = (v: JView, anim: unknown) => {
   const a = anim as JAnimation;
   a.startTime = -1; a.started = false; a.ended = false; a.flipped = false; a.repeated = 0;
   v.jAnim = a;
@@ -366,7 +369,8 @@ setViewAnimHook((v, anim) => {
     return true;
   });
   invalidate();
-});
+};
+setViewAnimHook(beginViewAnim);
 
 const animMethods: NativeSpec["methods"] = {
   "setDuration(J)V": function (this: JAnimation, d: bigint) { this.duration = Number(d); },
@@ -501,10 +505,108 @@ rt.register({
     },
   },
 });
+function animationValue(res: Resources, node: XmlNode, name: string) {
+  const a = attr(node, name);
+  if (!a) return null;
+  const value = normRV({ t: a.type, d: a.data, s: a.str ?? undefined });
+  return value.t === TV.REFERENCE ? res.resolveRefs(value) : value;
+}
+function animationNumber(res: Resources, node: XmlNode, name: string, fallback: number) {
+  const value = animationValue(res, node, name);
+  return value?.t === TV.FRACTION ? complexToFraction(value.d, 1, 1) : rvFloat(res, value, fallback);
+}
+function animationDescription(res: Resources, node: XmlNode, name: string, fallback: number): [number, number] {
+  const value = animationValue(res, node, name);
+  return value?.t === TV.FRACTION ? [complexToFraction(value.d, 1, 1), 1 + (value.d & 0xf)]
+    : [rvFloat(res, value, fallback), ABSOLUTE];
+}
+function animationFromXml(res: Resources, node: XmlNode): JAnimation {
+  const kinds: Record<string, string> = { set: "AnimationSet", alpha: "AlphaAnimation", scale: "ScaleAnimation",
+    translate: "TranslateAnimation", rotate: "RotateAnimation" };
+  const kind = kinds[node.name];
+  if (!kind) throw rt.mkThrowable("java/lang/RuntimeException", "Unknown animation name: " + node.name);
+  const a = new (rt.link("android/view/animation/" + kind).ctor as new () => JAnimation)();
+  a.duration = rvInt(res, animationValue(res, node, "duration"), 0);
+  a.startOffset = rvInt(res, animationValue(res, node, "startOffset"), 0);
+  a.fillAfter = !!rvInt(res, animationValue(res, node, "fillAfter"), 0);
+  a.repeatCount = rvInt(res, animationValue(res, node, "repeatCount"), 0);
+  a.repeatMode = rvInt(res, animationValue(res, node, "repeatMode"), 1);
+  if (kind === "AnimationSet") {
+    a.kids = node.children.map((child) => animationFromXml(res, child));
+    if (!a.duration) a.duration = Math.max(0, ...a.kids.map((child) => child.duration + child.startOffset));
+  } else if (kind === "AlphaAnimation") {
+    a.p = [animationNumber(res, node, "fromAlpha", 1), animationNumber(res, node, "toAlpha", 1)];
+  } else if (kind === "ScaleAnimation") {
+    const x = animationDescription(res, node, "pivotX", 0), y = animationDescription(res, node, "pivotY", 0);
+    a.p = [animationNumber(res, node, "fromXScale", 1), animationNumber(res, node, "toXScale", 1),
+      animationNumber(res, node, "fromYScale", 1), animationNumber(res, node, "toYScale", 1), x[0], y[0]];
+    a.pt = [0, 0, 0, 0, x[1], y[1]];
+  } else {
+    const names = kind === "TranslateAnimation" ? ["fromXDelta", "toXDelta", "fromYDelta", "toYDelta"]
+      : ["fromDegrees", "toDegrees", "pivotX", "pivotY"];
+    const desc = names.map((name) => animationDescription(res, node, name, 0));
+    a.p = desc.map(([value]) => value);
+    a.pt = desc.map(([, type]) => type);
+  }
+  return a;
+}
+function animationXml(context: JContext | null, id: number): { res: Resources; root: XmlNode } {
+  if (!context) rt.npe();
+  const res = context!.$host.res;
+  const file = res.fileOf(id);
+  if (!file?.path.endsWith(".xml")) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", `Animation resource ID #0x${id.toString(16)}`);
+  return { res, root: parseAXML(file.bytes) };
+}
+class JLayoutAnimationController extends JObj {
+  animation: JAnimation | null = null;
+  delay = 0.5;
+  order = 0;
+}
+rt.register({ name: "android/view/animation/LayoutAnimationController", ctor: JLayoutAnimationController, methods: {
+  "<init>(Landroid/view/animation/Animation;)V": function (this: JLayoutAnimationController, animation: JAnimation) { this.animation = animation; },
+  "<init>(Landroid/view/animation/Animation;F)V": function (this: JLayoutAnimationController, animation: JAnimation, delay: number) {
+    this.animation = animation; this.delay = delay;
+  },
+  "getAnimation()Landroid/view/animation/Animation;": function (this: JLayoutAnimationController) { return this.animation; },
+  "setAnimation(Landroid/view/animation/Animation;)V": function (this: JLayoutAnimationController, animation: JAnimation) { this.animation = animation; },
+  "getDelay()F": function (this: JLayoutAnimationController) { return this.delay; },
+  "setDelay(F)V": function (this: JLayoutAnimationController, delay: number) { this.delay = delay; },
+  "getOrder()I": function (this: JLayoutAnimationController) { return this.order; },
+  "setOrder(I)V": function (this: JLayoutAnimationController, order: number) { this.order = order; },
+} });
+function copyAnimation(a: JAnimation): JAnimation {
+  const copy = Object.assign(new (a.constructor as new () => JAnimation)(), a);
+  copy.p = a.p.slice(); copy.pt = a.pt.slice(); copy.kids = a.kids.map(copyAnimation);
+  return copy;
+}
+setGroupAnimHook((group, controller) => {
+  const layout = controller as JLayoutAnimationController;
+  if (!layout.animation) return;
+  const children = group.children.filter((child) => child.visibility === 0);
+  for (let i = 0; i < children.length; i++) {
+    const a = copyAnimation(layout.animation);
+    const index = layout.order === 1 ? children.length - i - 1 : i;
+    a.startOffset += Math.round(index * layout.delay * a.duration);
+    beginViewAnim(children[i], a);
+  }
+});
 rt.register({
   name: "android/view/animation/AnimationUtils", ctor: class extends JObj {},
   methods: {
-    "static loadAnimation(Landroid/content/Context;I)Landroid/view/animation/Animation;": () => new JAnimation(),
+    "static loadAnimation(Landroid/content/Context;I)Landroid/view/animation/Animation;": (context: JContext | null, id: number) => {
+      const { res, root } = animationXml(context, id);
+      return animationFromXml(res, root);
+    },
+    "static loadLayoutAnimation(Landroid/content/Context;I)Landroid/view/animation/LayoutAnimationController;": (context: JContext | null, id: number) => {
+      const { res, root } = animationXml(context, id);
+      if (root.name !== "layoutAnimation") throw rt.mkThrowable("java/lang/RuntimeException", "Unknown layout animation name: " + root.name);
+      const animationId = attr(root, "animation")?.data ?? 0;
+      const controller = new JLayoutAnimationController();
+      if (animationId) controller.animation = animationFromXml(res, animationXml(context, animationId).root);
+      controller.delay = animationNumber(res, root, "delay", 0.5);
+      controller.order = rvInt(res, animationValue(res, root, "animationOrder"), 0);
+      return controller;
+    },
     "static loadInterpolator(Landroid/content/Context;I)Landroid/view/animation/Interpolator;": () =>
       rt.make("android/view/animation/LinearInterpolator"),
     "static currentAnimationTimeMillis()J": () => BigInt(Math.floor(performance.now())),

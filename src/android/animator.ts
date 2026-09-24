@@ -1,7 +1,7 @@
 // android.animation: ValueAnimator/ObjectAnimator/AnimatorSet, driven from the frame loop via uiState.animHooks.
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
-import { mangleMethod, jarray } from "../jvm/abi";
+import { mangleMethod, jarray, jmethod } from "../jvm/abi";
 import { vcall, vcallMaybe, vcallOn, curThread, boxInt, box, JFloat } from "../jvm/natives/jlang";
 import { toJsArray, newArrayList } from "../jvm/natives/jutil";
 import { uiState, invalidate, JView, guardCall } from "./view";
@@ -132,7 +132,7 @@ async function animTick(a: JValueAnimator): Promise<boolean> {
     else if (a.prop) await vcall(a.prop, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", a.target, boxedCur(a));
     else if (a.propName) {
       if (a.objKeys) await applyAnimObj(a.target, a.propName, a.cur);
-      else await applyAnimProp(a.target, a.propName, a.cur as number);
+      else await applyAnimProp(a.target, a.propName, a.cur as number, a.isInt);
     }
   }
   for (const l of [...a.updateLs]) {
@@ -173,42 +173,46 @@ async function applyHolder(target: unknown, h: JPVH, t: number) {
   const v = keyAtFractions(h.keys ?? [0, 1], h.fractions, t);
   h.cur = h.isInt ? Math.round(v) : v;
   if (h.prop) return vcall(h.prop, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", target, boxedCur(h));
-  if (h.name) return applyAnimProp(target, h.name, h.cur as number);
+  if (h.name) return applyAnimProp(target, h.name, h.cur as number, h.isInt);
 }
 /** the property's value now: what an XML animator with no valueFrom (or no valueTo) starts from */
 /** where a one-key animator starts: the Property's own get, or the named getter */
-async function currentValue(target: unknown, prop: unknown, name: string): Promise<number> {
-  if (!prop) return name ? readAnimProp(target, name) : 0;
+async function currentValue(target: unknown, prop: unknown, name: string, isInt: boolean): Promise<number> {
+  if (!prop) return name ? readAnimProp(target, name, isInt) : 0;
   const v: unknown = await vcall(prop, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", target);
   return Number(v && typeof v === "object" && "v" in v ? (v as { v: unknown }).v : v ?? 0);
 }
-async function readAnimProp(target: unknown, prop: string): Promise<number> {
+async function readAnimProp(target: unknown, prop: string, isInt: boolean): Promise<number> {
   const field = VIEW_ANIM_PROPS[prop];
   if (field && target instanceof JView) return target[field];
   const getter = "get" + prop[0].toUpperCase() + prop.slice(1);
-  try { return await vcall(target, getter, "()F"); } catch { /* */ }
-  try { return await vcall(target, getter, "()I"); } catch { return 0; }
+  for (const desc of isInt ? ["()I", "()F"] : ["()F", "()I"])
+    if (jmethod(target, mangleMethod(getter, desc))) return vcall(target, getter, desc);
+  return 0;
 }
 // View properties animated straight onto the native fields; anything else goes through setXxx
 const VIEW_ANIM_PROPS: Record<string, keyof JView & ("alphaV" | "translationX" | "translationY" | "scaleXv" | "scaleYv" | "rotationV")> = {
   alpha: "alphaV", translationX: "translationX", translationY: "translationY", scaleX: "scaleXv", scaleY: "scaleYv", rotation: "rotationV",
 };
 const setterDescs = new WeakMap<object, Map<string, string>>();
-async function applyAnimProp(target: unknown, prop: string, v: number) {
+async function applyAnimProp(target: unknown, prop: string, v: number, isInt = false) {
   const field = VIEW_ANIM_PROPS[prop];
   if (field && target instanceof JView) { target[field] = v; return; }
   const setter = "set" + prop[0].toUpperCase() + prop.slice(1);
   const ctor = (target as { constructor?: object } | null)?.constructor;
   let descs = ctor && setterDescs.get(ctor);
   if (ctor && !descs) setterDescs.set(ctor, (descs = new Map()));
-  const known = descs?.get(prop);
+  const key = prop + (isInt ? ":I" : ":F");
+  const known = descs?.get(key);
   if (known) {
-    try { await vcall(target, setter, known, known === "(I)V" ? Math.round(v) : v); } catch { /* */ }
+    await vcall(target, setter, known, known === "(I)V" ? Math.round(v) : v);
     return;
   }
-  try { await vcall(target, setter, "(F)V", v); descs?.set(prop, "(F)V"); }
-  catch {
-    try { await vcall(target, setter, "(I)V", Math.round(v)); descs?.set(prop, "(I)V"); } catch { /* */ }
+  for (const desc of isInt ? ["(I)V", "(F)V"] : ["(F)V", "(I)V"]) {
+    if (!jmethod(target, mangleMethod(setter, desc))) continue;
+    await vcall(target, setter, desc, desc === "(I)V" ? Math.round(v) : v);
+    descs?.set(key, desc);
+    return;
   }
 }
 /** one value = animate from the property's current value to it (AOSP: from is read at start) */
@@ -429,7 +433,7 @@ const vaMethods: NativeSpec["methods"] = {
   "start()V": async function (this: JValueAnimator) {
     if (Number.isNaN(this.from) || Number.isNaN(this.to)) {
       // a single value animates from the property's current value (ValueAnimator: from 0)
-      const cur = this.target ? await currentValue(this.target, this.prop, this.propName) : 0;
+      const cur = this.target ? await currentValue(this.target, this.prop, this.propName, this.isInt) : 0;
       if (Number.isNaN(this.from)) this.from = cur;
       if (Number.isNaN(this.to)) this.to = cur;
     }

@@ -89,6 +89,8 @@ export const setFocusHook = (h: typeof focusHook) => { focusHook = h; };
 /** compat.ts owns android.view.animation; View.startAnimation hands it the view to drive */
 let startViewAnim: (v: JView, a: unknown) => void = () => {};
 export const setViewAnimHook = (h: typeof startViewAnim) => { startViewAnim = h; };
+let startGroupAnim: (v: JViewGroup, a: unknown) => void = () => {};
+export const setGroupAnimHook = (h: typeof startGroupAnim) => { startGroupAnim = h; };
 const M_onFocusChange = mangleMethod("onFocusChange", "(Landroid/view/View;Z)V");
 async function focusChange(v: JView, focused: boolean) {
   v.focused = focused;
@@ -1689,6 +1691,8 @@ export class JViewGroup extends JView {
   /** ViewGroup.getNestedScrollAxes() — the axes of the nested scroll in progress */
   nestedAxes = 0;
   drawingOrderEnabled = false;
+  layoutAnimation: unknown = null;
+  layoutAnimationScheduled = false;
   clipChildren = true;
   clipToPadding = true;
   disallowIntercept = false;
@@ -1933,6 +1937,10 @@ const vgMethods: NativeSpec["methods"] = {
     return lp;
   },
   "dispatchDraw(Landroid/graphics/Canvas;)V": async function (this: JViewGroup, cv: JCanvas) {
+    if (this.layoutAnimationScheduled && this.layoutAnimation && this.children.some((c) => c.visibility === 0)) {
+      this.layoutAnimationScheduled = false;
+      startGroupAnim(this, this.layoutAnimation);
+    }
     const n = this.children.length;
     if (!this.drawingOrderEnabled) { for (const c of this.children) await drawView(c, cv, this); return; }
     // a subclass's getChildDrawingOrder picks which child paints at each z step (AOSP buildOrderedChildList)
@@ -1942,6 +1950,12 @@ const vgMethods: NativeSpec["methods"] = {
     }
   },
   "setChildrenDrawingOrderEnabled(Z)V": function (this: JViewGroup, e: number) { this.drawingOrderEnabled = !!e; },
+  "setLayoutAnimation(Landroid/view/animation/LayoutAnimationController;)V": function (this: JViewGroup, animation: unknown) {
+    this.layoutAnimation = animation;
+  },
+  "getLayoutAnimation()Landroid/view/animation/LayoutAnimationController;": function (this: JViewGroup) { return this.layoutAnimation; },
+  "scheduleLayoutAnimation()V": function (this: JViewGroup) { this.layoutAnimationScheduled = true; invalidate(this); },
+  "startLayoutAnimation()V": function (this: JViewGroup) { this.layoutAnimationScheduled = true; invalidate(this); },
   "isChildrenDrawingOrderEnabled()Z": function (this: JViewGroup) { return this.drawingOrderEnabled ? 1 : 0; },
   "getChildDrawingOrder(II)I": (_n: number, i: number) => i,
   "getChildDrawingOrder(I)I": function (this: JViewGroup, i: number) { return vcall(this, "getChildDrawingOrder", "(II)I", this.children.length, i); },

@@ -21,7 +21,7 @@ async function probe() {
   await vcall(progress, "setLevel", "(I)Z", 5000);
   const ctx = new OffscreenCanvas(300, 54).getContext("2d")!;
   await vcall(track, "draw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 300, 54));
-  const heights = track.layers.map(x => x.d.bounds.bottom - x.d.bounds.top);
+  const heights = track.layers.flatMap(x => x.d ? [x.d.bounds.bottom - x.d.bounds.top] : []);
   const pixel = (x: number, y: number) => [...ctx.getImageData(x, y, 1, 1).data];
   const before = pixel(50, 27), after = pixel(250, 27), above = pixel(50, 15);
   const thumb = await loadDrawable(res, arsc.findId("drawable", "seekbar_thumb_material_anim"), theme);

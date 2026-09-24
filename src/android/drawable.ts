@@ -572,19 +572,21 @@ rt.register({
 });
 
 export class JLayerDrawable extends JDrawable {
-  layers: { d: JDrawable; insets: [number, number, number, number]; w?: number; h?: number; gravity?: number }[] = [];
+  layers: { d: JDrawable | null; insets: [number, number, number, number]; w?: number; h?: number; gravity?: number }[] = [];
   ids: (number | null)[] = [];
   private layerContainer = new JRect();
   private layerBounds = new JRect();
   /** AOSP LayerDrawable.addLayer: a layer's invalidations and scheduling reach this drawable,
    *  and through its own callback the view it is drawn into */
-  pushLayer(layer: JLayerDrawable["layers"][number]) { layer.d.callback = this; this.layers.push(layer); }
+  pushLayer(layer: JLayerDrawable["layers"][number]) { if (layer.d) layer.d.callback = this; this.layers.push(layer); }
   /** AOSP updateLayerBounds: insets, then an explicit layer size placed by its gravity */
   layout(): unknown {
     const thread = curThread;
     const step = (i: number): unknown => {
       for (; i < this.layers.length; i++) {
         const l = this.layers[i];
+        if (!l.d) continue;
+        const d = l.d;
         const place = (w: number, h: number) => {
           const L = this.bounds.left + l.insets[0], T = this.bounds.top + l.insets[1];
           const R = this.bounds.right - l.insets[2], B = this.bounds.bottom - l.insets[3];
@@ -592,10 +594,10 @@ export class JLayerDrawable extends JDrawable {
           const container = this.layerContainer, bounds = this.layerBounds;
           container.left = L; container.top = T; container.right = R; container.bottom = B;
           gravityApply(gravity, w < 0 ? R - L : w, h < 0 ? B - T : h, container, 0, 0, bounds);
-          return vcallOn(thread, l.d, "setBounds", "(IIII)V", bounds.left, bounds.top, bounds.right, bounds.bottom);
+          return vcallOn(thread, d, "setBounds", "(IIII)V", bounds.left, bounds.top, bounds.right, bounds.bottom);
         };
-        const w = l.w !== undefined && l.w >= 0 ? l.w : l.gravity && (l.gravity & 7) !== 7 ? drawableSize(l.d, false, thread) : -1;
-        const height = () => l.h !== undefined && l.h >= 0 ? l.h : l.gravity && (l.gravity & 112) !== 112 ? drawableSize(l.d, true, thread) : -1;
+        const w = l.w !== undefined && l.w >= 0 ? l.w : l.gravity && (l.gravity & 7) !== 7 ? drawableSize(d, false, thread) : -1;
+        const height = () => l.h !== undefined && l.h >= 0 ? l.h : l.gravity && (l.gravity & 112) !== 112 ? drawableSize(d, true, thread) : -1;
         const result = after(w, width => after(height(), h => place(width, h)));
         if (result instanceof Promise) return result.then(() => step(i + 1));
       }
@@ -608,7 +610,9 @@ export class JLayerDrawable extends JDrawable {
     const thread = curThread;
     const step = (i: number): unknown => {
       for (; i < this.layers.length; i++) {
-        const r = vcallOn(thread, this.layers[i].d, "draw", "(Landroid/graphics/Canvas;)V", cv);
+        const d = this.layers[i].d;
+        if (!d) continue;
+        const r = vcallOn(thread, d, "draw", "(Landroid/graphics/Canvas;)V", cv);
         if (r instanceof Promise) return r.then(() => step(i + 1));
       }
     };
@@ -620,6 +624,7 @@ export class JLayerDrawable extends JDrawable {
     const step = (i: number): number | Promise<number> => {
       for (; i < this.layers.length; i++) {
         const l = this.layers[i], explicit = vertical ? l.h : l.w;
+        if (!l.d) continue;
         const n = explicit !== undefined && explicit >= 0 ? explicit : drawableSize(l.d, vertical, thread);
         const inset = l.insets[edge] + l.insets[edge + 2];
         if (n instanceof Promise) return n.then(value => {
@@ -639,6 +644,7 @@ rt.register({
     "getOutline(Landroid/graphics/Outline;)V": async function (this: JLayerDrawable, outline: JOutline) {
       const thread = curThread;
       for (const { d } of this.layers) {
+        if (!d) continue;
         await vcallOn(thread, d, "getOutline", "(Landroid/graphics/Outline;)V", outline);
         if (outline.kind) return;
       }
@@ -650,6 +656,7 @@ rt.register({
       r.left = r.top = r.right = r.bottom = 0;
       const p = new JRect();
       for (const l of this.layers) {
+        if (!l.d) continue;
         p.left = p.top = p.right = p.bottom = 0;
         await vcall(l.d, "getPadding", "(Landroid/graphics/Rect;)Z", p);
         r.left = Math.max(r.left, l.insets[0] + p.left);
@@ -659,14 +666,15 @@ rt.register({
       }
       return r.left || r.top || r.right || r.bottom ? 1 : 0;
     },
-    "<init>([Landroid/graphics/drawable/Drawable;)V": function (this: JLayerDrawable, ds: JDrawable[]) {
-      for (const d of ds ?? []) this.pushLayer({ d, insets: [0, 0, 0, 0] });
+    "<init>([Landroid/graphics/drawable/Drawable;)V": function (this: JLayerDrawable, ds: (JDrawable | null)[] | null) {
+      if (!ds) throw rt.mkThrowable("java/lang/IllegalArgumentException", "layers must be non-null");
+      for (const d of ds) this.pushLayer({ d, insets: [0, 0, 0, 0] });
     },
     // AOSP hands the state to every layer: a Material button's fill is a MaterialShapeDrawable
     // inside an InsetDrawable inside the ripple, and it is the one that reads state_checked
     "onStateChange([I)Z": async function (this: JLayerDrawable, st: Int32Array) {
       let changed = this.onStateChange();
-      for (const l of this.layers) if (await vcall(l.d, "setState", "([I)Z", st)) changed = true;
+      for (const l of this.layers) if (l.d && await vcall(l.d, "setState", "([I)Z", st)) changed = true;
       return changed ? 1 : 0;
     },
     "isStateful()Z": () => 1,
@@ -692,17 +700,17 @@ rt.register({
     "getLayerGravity(I)I": function (this: JLayerDrawable, i: number) { return this.layers[i]?.gravity ?? 0; },
     "setId(II)V": function (this: JLayerDrawable, i: number, id: number) { this.ids[i] = id; },
     "getId(I)I": function (this: JLayerDrawable, i: number) { return this.ids[i] ?? -1; },
-    "addLayer(Landroid/graphics/drawable/Drawable;)I": function (this: JLayerDrawable, d: JDrawable) {
+    "addLayer(Landroid/graphics/drawable/Drawable;)I": function (this: JLayerDrawable, d: JDrawable | null) {
       this.pushLayer({ d, insets: [0, 0, 0, 0] });
       return this.layers.length - 1;
     },
-    "setDrawableByLayerId(ILandroid/graphics/drawable/Drawable;)Z": function (this: JLayerDrawable, id: number, d: JDrawable) {
+    "setDrawableByLayerId(ILandroid/graphics/drawable/Drawable;)Z": function (this: JLayerDrawable, id: number, d: JDrawable | null) {
       const i = this.ids.indexOf(id);
       if (i < 0 || !this.layers[i]) return 0;
-      this.layers[i].d = d; d.callback = this;
+      this.layers[i].d = d; if (d) d.callback = this;
       return 1;
     },
-    "setDrawable(ILandroid/graphics/drawable/Drawable;)V": function (this: JLayerDrawable, i: number, d: JDrawable) { if (this.layers[i]) { this.layers[i].d = d; d.callback = this; } },
+    "setDrawable(ILandroid/graphics/drawable/Drawable;)V": function (this: JLayerDrawable, i: number, d: JDrawable | null) { if (this.layers[i]) { this.layers[i].d = d; if (d) d.callback = this; } },
   },
 });
 /** RippleDrawable.RADIUS_AUTO: compute the radius from bounds instead of using an explicit one. */
@@ -733,6 +741,7 @@ class JTransitionDrawable extends JLayerDrawable {
     }
     return after(this.layout(), () => {
       const first = this.layers[0].d, second = this.layers[1].d, alpha = this.mix;
+      if (!first || !second) return super.paint(cv);
       if (done) {
         const result = !this.crossFade || alpha === 0 ? drawChild(first, cv, thread) : undefined;
         const next = () => alpha === 255 ? drawChild(second, cv, thread) : undefined;
@@ -784,7 +793,7 @@ class JAdaptiveIconDrawable extends JLayerDrawable {
     const thread = curThread;
     const { left, top, right, bottom } = this.bounds;
     const dx = (right - left) / 4, dy = (bottom - top) / 4;
-    for (const l of this.layers) await vcallOn(thread, l.d, "setBounds", "(IIII)V", left - dx, top - dy, right + dx, bottom + dy);
+    for (const l of this.layers) if (l.d) await vcallOn(thread, l.d, "setBounds", "(IIII)V", left - dx, top - dy, right + dx, bottom + dy);
   }
   clip(cv: JCanvas) {
     const { left, top, right, bottom } = this.bounds;
@@ -910,9 +919,9 @@ function cloneDrawable(d: JDrawable): JDrawable {
   }
   if (d instanceof JLayerDrawable) {
     const layered = copy as JLayerDrawable;
-    layered.layers = d.layers.map((layer) => ({ ...layer, insets: [...layer.insets], d: cloneDrawable(layer.d) }));
+    layered.layers = d.layers.map((layer) => ({ ...layer, insets: [...layer.insets], d: layer.d ? cloneDrawable(layer.d) : null }));
     layered.ids = [...d.ids];
-    for (const layer of layered.layers) layer.d.callback = layered;
+    for (const layer of layered.layers) if (layer.d) layer.d.callback = layered;
   }
   if (d instanceof JRippleDrawable) (copy as JRippleDrawable).mask = d.mask ? cloneDrawable(d.mask) : null;
   return copy;
@@ -980,6 +989,10 @@ class JVectorDrawable extends JDrawable {
   size(vertical: boolean): number { return (vertical ? this.vh : this.vw) * device.density; }
 }
 class JAnimatedVectorDrawable extends JVectorDrawable {}
+rt.register({ name: "android/graphics/drawable/Animatable2", ctor: class extends JObj {} });
+rt.register({ name: "android/graphics/drawable/Animatable2$AnimationCallback", ctor: class extends JObj {}, methods: {
+  ...noops("<init>()V", "onAnimationStart(Landroid/graphics/drawable/Drawable;)V", "onAnimationEnd(Landroid/graphics/drawable/Drawable;)V"),
+} });
 // ── DrawableWrapper: one child, everything forwarded (AOSP's base for Clip/Scale/Inset and any
 // app drawable that decorates another). Bounds, state and level reach the child through its
 // own virtual hooks; draw() dispatches virtually so a compiled child subclass paints itself.
