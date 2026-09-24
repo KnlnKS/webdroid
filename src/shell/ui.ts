@@ -98,12 +98,6 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
       root.dataset.state = next.kind;
       document.querySelector<HTMLElement>("#session")!.hidden = false;
       document.querySelector<HTMLElement>("#package-name")!.textContent = next.kind === "running" ? next.label : next.file;
-      const empty = document.querySelector<HTMLElement>("#empty-screen")!;
-      empty.hidden = next.kind !== "failed";
-      if (next.kind === "failed") {
-        empty.querySelector("strong")!.textContent = "Your app couldn’t start";
-        empty.lastElementChild!.textContent = "See the error details to continue.";
-      }
       const busy = next.kind === "loading", failed = next.kind === "failed";
       const mustReload = failed && !next.retry;
       const started = next.kind === "running" || mustReload;
@@ -130,7 +124,10 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
         hint.textContent = !next.retry ? "Reload to start a fresh session, then choose your package again." : "Try again, or choose another package. Check that the file is complete.";
         document.querySelector<HTMLElement>("#error-message")!.textContent = errorText(next.error);
       }
-      if (next.kind === "running" && matchMedia("(max-width: 760px)").matches) stage.scrollIntoView({ block: "start" });
+      if (next.kind === "running") {
+        resizeDisplay();
+        if (matchMedia("(max-width: 760px)").matches) stage.scrollIntoView({ block: "start" });
+      }
     },
     reportError(error: unknown) {
       diagnostic.hidden = false;
@@ -200,6 +197,7 @@ function configureScreen() {
 
 function fitDisplay(canvas: HTMLCanvasElement, phone: HTMLElement, stage: HTMLElement) {
   function fit() {
+    if (!stage.clientWidth) return;
     const chromeWidth = phone.offsetWidth - canvas.offsetWidth;
     const chromeHeight = phone.offsetHeight - canvas.offsetHeight;
     const scale = Math.min(Math.max(1, stage.clientWidth - chromeWidth) / device.width,
@@ -208,8 +206,8 @@ function fitDisplay(canvas: HTMLCanvasElement, phone: HTMLElement, stage: HTMLEl
     canvas.style.height = `${device.height * scale}px`;
   }
   function resizeDisplay() {
-    canvas.width = device.width;
-    canvas.height = device.height;
+    if (canvas.width !== device.width) canvas.width = device.width;
+    if (canvas.height !== device.height) canvas.height = device.height;
     fit();
   }
   resizeDisplay();
