@@ -23,6 +23,7 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
   const back = document.querySelector<HTMLButtonElement>("#btn-back")!;
   const home = document.querySelector<HTMLButtonElement>("#btn-home")!;
   const launcher = document.querySelector<HTMLElement>("#launcher")!;
+  const samples = document.querySelector<HTMLDetailsElement>("#samples")!;
   const settings = document.querySelector<HTMLElement>("#screencfg")!;
   const notice = document.querySelector<HTMLElement>("#notice")!;
   const status = document.querySelector<HTMLElement>("#status")!;
@@ -30,6 +31,21 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
   const reload = document.querySelector<HTMLButtonElement>("#reload")!;
   const diagnostic = document.querySelector<HTMLDetailsElement>("#diagnostics")!;
   let session: SessionState | null = null;
+
+  function updateAvailability() {
+    const busy = session?.kind === "loading";
+    const started = session?.kind === "running" || (session?.kind === "failed" && !session.retry);
+    choose.disabled = picker.disabled = busy || started;
+    launcher.inert = busy || started;
+    samples.hidden = started || !launcher.childElementCount;
+    settings.hidden = busy || started;
+    back.disabled = session?.kind !== "running";
+    home.disabled = busy;
+    const loader = document.querySelector<HTMLElement>("#local-loader")!;
+    loader.hidden = started;
+    loader.setAttribute("aria-busy", String(busy));
+    document.querySelector<HTMLElement>(".privacy-note")!.hidden = started;
+  }
 
   const announce = (message: string) => { notice.textContent = message; notice.hidden = !message; };
   const reset = () => {
@@ -81,7 +97,7 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
   configureScreen();
   const resizeDisplay = fitDisplay(canvas, phone, stage);
 
-  choose.disabled = false;
+  updateAvailability();
   return {
     canvas,
     kbd: document.querySelector<HTMLTextAreaElement>("#kbd")!,
@@ -96,21 +112,10 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
       if (next.kind === "loading") announce("");
       session = next;
       root.dataset.state = next.kind;
+      updateAvailability();
       document.querySelector<HTMLElement>("#session")!.hidden = next.kind === "running";
       document.querySelector<HTMLElement>("#package-name")!.textContent = next.kind === "running" ? next.label : next.file;
-      const busy = next.kind === "loading", failed = next.kind === "failed";
-      const mustReload = failed && !next.retry;
-      const started = next.kind === "running" || mustReload;
-      choose.disabled = picker.disabled = busy;
-      launcher.inert = busy;
-      if (started) document.querySelector<HTMLDetailsElement>("#samples")!.hidden = true;
-      settings.hidden = busy || started;
-      back.disabled = next.kind !== "running";
-      home.disabled = busy;
-      const loader = document.querySelector<HTMLElement>("#local-loader")!;
-      loader.hidden = started;
-      loader.setAttribute("aria-busy", String(busy));
-      document.querySelector<HTMLElement>(".privacy-note")!.hidden = started;
+      const failed = next.kind === "failed";
       document.querySelector<HTMLElement>("#recovery")!.hidden = !failed;
       const hint = document.querySelector<HTMLElement>("#recovery-hint")!;
       hint.hidden = !failed;
@@ -144,7 +149,6 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
       document.querySelector<HTMLElement>("#native")!.textContent = `Native code required: ${lib} (${abi})`;
     },
     addPackage(file: string) {
-      document.querySelector<HTMLDetailsElement>("#samples")!.hidden = false;
       const button = document.createElement("button");
       button.className = "appcard";
       const name = document.createElement("strong"), filename = document.createElement("small");
@@ -153,6 +157,7 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
       button.append(name, filename);
       button.addEventListener("click", () => actions.launch(file));
       launcher.append(button);
+      updateAvailability();
     },
   };
 }
