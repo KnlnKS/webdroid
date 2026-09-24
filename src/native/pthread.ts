@@ -2,7 +2,7 @@
 // Everything runs on one JS thread, so a "contended" lock means the acquirer parks until unlock.
 
 import { mem, AddrMap, NativeFault } from "./mem";
-import { hostLib, NORET, SERVED, type HostFn, stp, stpVa } from "./host";
+import { hostLib, NORET, SERVED, type HostFn, ldp, stp, stpVa, PTR } from "./host";
 import { Cpu, bindCpu, cpuByTid, cpuOf, cpus, yieldToLoop } from "./cpu";
 import { parkTimeout, unparkTimeout } from "../jvm/yield";
 import { TLS_KEYS } from "./core";
@@ -41,6 +41,16 @@ export const tidOf = (handle: number): number => handles.get(handle >>> 0) ?? cp
 function cpuBySelf(handle: number): Cpu | undefined { for (const c of cpus) if (c.pthreadSelf === handle) return c; return undefined; }
 let keySeq = 1, threadSeq = 0;
 const keyDtors = new Map<number, number>();                              // pthread key → destructor, run for the thread's non-null values at its exit
+const cleanupHeads = new Map<number, number>();
+const attrGuards = new AddrMap<number>();
+async function runCleanupHandlers(cpu: Cpu): Promise<void> {
+  for (let head; (head = cleanupHeads.get(cpu.tid) ?? 0);) {
+    cleanupHeads.set(cpu.tid, ldp(head));
+    const routine = ldp(head + PTR);
+    if (routine) { cpu.finished = false; await cpu.call(routine, [ldp(head + 2 * PTR)], "pthread cleanup"); }
+  }
+  cleanupHeads.delete(cpu.tid);
+}
 /** key destructors, as many rounds as they keep setting values (Bionic stops at four) */
 async function runKeyDestructors(cpu: Cpu): Promise<void> {
   for (let round = 0, again = true; again && round < 4; round++) {
@@ -58,7 +68,7 @@ async function runKeyDestructors(cpu: Cpu): Promise<void> {
 threadExit.hook = (t) => {
   const cpu = cpuOf(t);
   if (!cpu || cpu.loops || cpu.depth) return;
-  void runKeyDestructors(cpu).catch(reportUncaught).finally(() => { if (!cpu.loops) cpu.dispose(); });
+  void runCleanupHandlers(cpu).then(() => runKeyDestructors(cpu)).catch(reportUncaught).finally(() => { if (!cpu.loops) cpu.dispose(); });
 };
 const onceWaiters = new AddrMap<(() => void)[]>();
 const ETIMEDOUT = E.TIMEDOUT, EBUSY = E.BUSY;
@@ -185,6 +195,7 @@ export function startThread(parent: Cpu, start: number, arg: bigint, detached: b
         try {
           await cpu.run();
           if (!cpu.finished) rec.retval = (cpu.a64 ? BigInt(cpu.w[1] >>> 0) << 32n : 0n) | BigInt(cpu.w[0] >>> 0);
+          await runCleanupHandlers(cpu);
           await runKeyDestructors(cpu);
         } catch (e) { reportUncaught(e); }
         finally {
@@ -255,8 +266,13 @@ export function pthreadInit(): void {
     pthread_setname_np: (_c, a) => { const c = cpuByTid(tidOf(a.p())); const n = a.str(); if (c) { c.name = n; c.jthread.jname = n; } return 0; },
     pthread_getschedparam: (_c, a) => { a.i(); const pol = a.p(), par = a.p(); if (pol) mem.st32(pol, 0); if (par) mem.st32(par, 0); return 0; },
     pthread_setschedparam: () => 0,
-    pthread_attr_init: (_c, a) => { mem.st32(a.p(), 0); return 0; },
-    pthread_attr_destroy: () => 0, pthread_attr_setstacksize: () => 0, pthread_attr_setstack: () => 0,
+    pthread_attr_init: (_c, a) => { const attr = a.p(); mem.st32(attr, 0); attrGuards.set(attr, 4096); return 0; },
+    pthread_attr_destroy: (_c, a) => { attrGuards.delete(a.p()); return 0; },
+    pthread_attr_setstacksize: () => 0, pthread_attr_setstack: () => 0,
+    pthread_attr_setguardsize: (_c, a) => { attrGuards.set(a.p(), Number(a.va())); return 0; },
+    pthread_attr_getguardsize: (_c, a) => { const attr = a.p(), out = a.p(); stp(out, attrGuards.get(attr) ?? 4096); return 0; },
+    pthread_attr_setscope: (_c, a) => { a.p(); const scope = a.i(); return scope === 0 ? 0 : scope === 1 ? E.NOTSUP : E.INVAL; },
+    pthread_attr_getscope: (_c, a) => { a.p(); mem.st32(a.p(), 0); return 0; },
     pthread_attr_setdetachstate: (_c, a) => {
       const attr = a.p(), state = a.i();
       if (state !== 0 && state !== 1) return E.INVAL;
@@ -268,6 +284,19 @@ export function pthreadInit(): void {
     pthread_attr_getstacksize: (_c, a) => { a.p(); stp(a.p(), 0x100000); return 0; },
     pthread_attr_getstack: (cpu, a) => { a.p(); const base = a.p(), sz = a.p(); stp(base, cpu.stackBase); stp(sz, cpu.stackTop - cpu.stackBase); return 0; },
     pthread_getattr_np: () => 0,
+    __pthread_cleanup_push: (cpu, a) => {
+      const entry = a.p(), routine = a.p(), arg = a.p();
+      stp(entry, cleanupHeads.get(cpu.tid) ?? 0);
+      stp(entry + PTR, routine); stp(entry + 2 * PTR, arg);
+      cleanupHeads.set(cpu.tid, entry);
+    },
+    __pthread_cleanup_pop: (cpu, a) => {
+      const entry = a.p(), execute = a.i();
+      const previous = ldp(entry);
+      if (previous) cleanupHeads.set(cpu.tid, previous); else cleanupHeads.delete(cpu.tid);
+      const routine = ldp(entry + PTR);
+      return execute && routine ? cpu.call(routine, [ldp(entry + 2 * PTR)], "pthread cleanup").then(() => undefined) : undefined;
+    },
     pthread_mutex_init: (_c, a) => {
       const mutex = a.p(), attr = a.p();
       const av = attr ? mem.ld32(attr) : 0, type = av & 0xf;
