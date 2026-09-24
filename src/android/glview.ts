@@ -58,7 +58,7 @@ class JGLSurfaceView extends JViewGroup {
           this.eglConfig = this.configChooser
             ? (await vcallOn(this.glThread, this.configChooser, "chooseConfig", D_chooseConfig,
                 rt.make("javax/microedition/khronos/egl/EGL10"),
-                rt.make("javax/microedition/khronos/egl/EGLDisplay"))) ?? theConfig
+                egl10Display)) ?? theConfig
             : theConfig;
         }
         await vcallOn(this.glThread, this.renderer, "onSurfaceCreated", "(Ljavax/microedition/khronos/opengles/GL10;Ljavax/microedition/khronos/egl/EGLConfig;)V", this.fakeGL10, this.eglConfig);
@@ -154,6 +154,7 @@ export interface GlSurface {
   height: number;
   present: ImageBitmap | VideoFrame | null;
   frames: number;
+  swapInterval?: number;
   presentationTimeNanos?: bigint;
   onFrame?: () => void;
 }
@@ -192,8 +193,16 @@ export class EglContext {
     try { bmp = this.canvas.transferToImageBitmap(); }
     catch (e) { if (this.gl?.isContextLost()) return Promise.resolve(false); throw e; }
     presentSurface(s, bmp);
+    if (s.swapInterval === 0) return Promise.resolve(!this.gl?.isContextLost());
     return new Promise((r) => { const done = () => r(!this.gl?.isContextLost()); if (typeof requestAnimationFrame === "function" && !document.hidden) requestAnimationFrame(done); else setTimeout(done, 16); });
   }
+}
+export function setEglSwapInterval(interval: number, thread = curThread): number {
+  const context = boundEglCurrent(thread);
+  if (!context) return eglFailure(0x3006, 0, thread);
+  if (!context.target) return eglFailure(0x300d, 0, thread);
+  context.target.swapInterval = Math.max(0, Math.min(1, interval));
+  return 1;
 }
 let pixelCopyFrame: OffscreenCanvas | HTMLCanvasElement | null = null;
 export function setPixelCopyFrame(frame: OffscreenCanvas | HTMLCanvasElement): void { pixelCopyFrame = frame; }
@@ -240,7 +249,7 @@ export function eglConfigAttrib(attr: number): number {
     case 0x3027: return 0x3038; case 0x3028: return 1;                      // CONFIG_CAVEAT: NONE; CONFIG_ID
     case 0x302e: return 1;                                                  // NATIVE_VISUAL_ID: RGBA_8888
     case 0x3039: return 1; case 0x303a: return 0;                           // BIND_TO_TEXTURE_RGB/RGBA
-    case 0x303b: case 0x303c: return 1;                                     // MIN/MAX_SWAP_INTERVAL
+    case 0x303b: return 0; case 0x303c: return 1;                            // MIN/MAX_SWAP_INTERVAL
     case 0x303f: return 0x308e;                                             // COLOR_BUFFER_TYPE: RGB
     case 0x302a: case 0x302b: return 4096; case 0x302c: return 1 << 24;     // MAX_PBUFFER_WIDTH/HEIGHT/PIXELS
     default: return 0;
@@ -483,13 +492,15 @@ rt.register({ name: "webdroid/GL10", ctor: class extends JObj {}, ifaces: ["java
 });
 for (const i of ["javax/microedition/khronos/opengles/GL", "javax/microedition/khronos/opengles/GL10",
   "javax/microedition/khronos/opengles/GL11",
-  "javax/microedition/khronos/egl/EGLDisplay", "javax/microedition/khronos/egl/EGL"]) {
+  "javax/microedition/khronos/egl/EGL"]) {
   rt.register({ name: i, ctor: class extends JObj {} });
 }
+class JEGL10Display extends JObj {}
+rt.register({ name: "javax/microedition/khronos/egl/EGLDisplay", ctor: JEGL10Display });
 rt.register({
   name: "javax/microedition/khronos/egl/EGLContext", ctor: JEGLContext,
   methods: {
-    "static getEGL()Ljavax/microedition/khronos/egl/EGL;": () => rt.make("javax/microedition/khronos/egl/EGL10"),
+    "static getEGL()Ljavax/microedition/khronos/egl/EGL;": () => rt.make("javax/microedition/khronos/egl/EGL11"),
     "getGL()Ljavax/microedition/khronos/opengles/GL;": () => rt.make("webdroid/GL10"),
   },
 });
@@ -503,81 +514,107 @@ const egl10Current = new WeakMap<object, JEGLContext>();
 const attrVal = (a: Int32Array | null, k: number): number => { if (a) for (let i = 0; i + 1 < a.length && a[i] !== 0x3038; i += 2) if (a[i] === k) return a[i + 1]; return 0; };
 rt.register({ name: "javax/microedition/khronos/egl/EGLSurface", ctor: JEGLSurface });
 const noEglContext = new JEGLContext(), noEglSurface = new JEGLSurface();
-const noEglDisplay = rt.make("javax/microedition/khronos/egl/EGLDisplay");
+const egl10Display = new JEGL10Display(), noEglDisplay = new JEGL10Display();
+const EGL_BAD_DISPLAY = 0x3008;
+const egl10DisplayValid = (display: unknown) => display === egl10Display;
 const eglContexts = new WeakMap<EglContext, JEGLContext>();
 const surfaceOf = (win: unknown): GlSurface | null =>
   win instanceof JSurface ? win.surf : win instanceof JSurfaceTexture ? (win.released ? null : win.surface) : win instanceof JSurfaceHolder ? win.surface : win instanceof JView ? getHolder(win).surface : null;
+class JEGL10 extends JObj {}
 rt.register({
-  name: "javax/microedition/khronos/egl/EGL10", ctor: class extends JObj {},
+  name: "javax/microedition/khronos/egl/EGL10", ctor: JEGL10,
   statics: {
     EGL_RED_SIZE: 0x3024, EGL_GREEN_SIZE: 0x3023, EGL_BLUE_SIZE: 0x3022, EGL_ALPHA_SIZE: 0x3021,
     EGL_DEPTH_SIZE: 0x3025, EGL_STENCIL_SIZE: 0x3026, EGL_RENDERABLE_TYPE: 0x3040, EGL_NONE: 0x3038,
     EGL_DEFAULT_DISPLAY: null, EGL_NO_CONTEXT: noEglContext, EGL_NO_DISPLAY: noEglDisplay, EGL_NO_SURFACE: noEglSurface,
     EGL_SUCCESS: 0x3000, EGL_CONFIG_CAVEAT: 0x3027, EGL_SAMPLES: 0x3031, EGL_SAMPLE_BUFFERS: 0x3032,
     EGL_BUFFER_SIZE: 0x3020, EGL_SURFACE_TYPE: 0x3033, EGL_WINDOW_BIT: 4, EGL_PBUFFER_BIT: 1, EGL_CONFIG_ID: 0x3028,
-    EGL_WIDTH: 0x3057, EGL_HEIGHT: 0x3056, EGL_BAD_ALLOC: 0x3003, EGL_BAD_NATIVE_WINDOW: 0x300b, EGL_CONTEXT_LOST: 0x300e,
+    EGL_WIDTH: 0x3057, EGL_HEIGHT: 0x3056, EGL_BAD_ALLOC: 0x3003, EGL_BAD_DISPLAY, EGL_BAD_NATIVE_WINDOW: 0x300b, EGL_CONTEXT_LOST: 0x300e,
     EGL_VENDOR: 0x3053, EGL_VERSION: 0x3054, EGL_EXTENSIONS: 0x3055, EGL_NATIVE_VISUAL_ID: 0x302e,
   },
   methods: {
     "eglChooseConfig(Ljavax/microedition/khronos/egl/EGLDisplay;[I[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z":
       (display: unknown, attrs: Int32Array, configs: unknown[] | null, num: number, numConfig: Int32Array) => {
+        if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
         if (configs && num > 0) configs[0] = theConfig;
         if (numConfig) numConfig[0] = 1;
         return 1;
       },
     "eglGetConfigAttrib(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z":
       (display: unknown, config: unknown, attr: number, out: Int32Array) => {
+        if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
         out[0] = eglConfigAttrib(attr);
         return 1;
       },
     "eglGetError()I": takeEglError,
     "eglGetConfigs(Ljavax/microedition/khronos/egl/EGLDisplay;[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z":
-      (_d: unknown, configs: unknown[] | null, n: number, num: Int32Array | null) => {
+      (display: unknown, configs: unknown[] | null, n: number, num: Int32Array | null) => {
+        if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
         if (configs && n > 0) configs[0] = theConfig;
         if (num) num[0] = 1;
         return 1;
       },
-    "eglGetDisplay(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;": () =>
-      rt.make("javax/microedition/khronos/egl/EGLDisplay"),
-    "eglInitialize(Ljavax/microedition/khronos/egl/EGLDisplay;[I)Z": (_d: unknown, v: Int32Array | null) => {
+    "eglGetDisplay(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;": (nativeDisplay: unknown) =>
+      nativeDisplay == null ? egl10Display : eglFailure(EGL_BAD_DISPLAY, noEglDisplay),
+    "eglInitialize(Ljavax/microedition/khronos/egl/EGLDisplay;[I)Z": (display: unknown, v: Int32Array | null) => {
+      if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
       if (v) { v[0] = 1; v[1] = 4; }
       return 1;
     },
-    "eglQueryString(Ljavax/microedition/khronos/egl/EGLDisplay;I)Ljava/lang/String;": (_d: unknown, n: number) => n === 0x3053 ? "webdroid" : n === 0x3054 ? "1.4" : "",
+    "eglQueryString(Ljavax/microedition/khronos/egl/EGLDisplay;I)Ljava/lang/String;": (display: unknown, n: number) => {
+      if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, null);
+      return n === 0x3053 ? "webdroid" : n === 0x3054 ? "1.4" : "";
+    },
     "eglCreateContext(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;Ljavax/microedition/khronos/egl/EGLContext;[I)Ljavax/microedition/khronos/egl/EGLContext;":
-      (_d: unknown, _c: unknown, share: JEGLContext | null, at: Int32Array | null) => {
+      (display: unknown, _c: unknown, share: JEGLContext | null, at: Int32Array | null) => {
+        if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, noEglContext);
         const c = new JEGLContext(); c.egl = new EglContext(share?.egl); c.egl.major = attrVal(at, 0x3098) || 1;
         eglContexts.set(c.egl, c); return c;
       },
     "eglCreatePbufferSurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;[I)Ljavax/microedition/khronos/egl/EGLSurface;":
-      (_d: unknown, _c: unknown, at: Int32Array | null) => {
+      (display: unknown, _c: unknown, at: Int32Array | null) => {
+        if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, noEglSurface);
         const e = new JEGLSurface(); e.surf = { view: null, width: attrVal(at, 0x3057) || 1, height: attrVal(at, 0x3056) || 1, present: null, frames: 0 }; return e;
       },
     "eglCreateWindowSurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;Ljava/lang/Object;[I)Ljavax/microedition/khronos/egl/EGLSurface;":
-      (_d: unknown, _c: unknown, win: unknown) => {
+      (display: unknown, _c: unknown, win: unknown) => {
+        if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, noEglSurface);
         const s = surfaceOf(win);
         // no surface yet (the view has no size): EGL_NO_SURFACE, as a real EGL answers a dead ANativeWindow
         if (!s) return noEglSurface;
         const e = new JEGLSurface(); e.surf = s; return e;
       },
     "eglMakeCurrent(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z":
-      (_d: unknown, draw: JEGLSurface | null, _r: unknown, ctx: JEGLContext | null) => {
+      (display: unknown, draw: JEGLSurface | null, _r: unknown, ctx: JEGLContext | null) => {
+        if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
         if (!ctx || ctx === noEglContext) { egl10Current.delete(curThread); bindEglCurrent(curThread, null); return 1; }
         if (!ctx.egl.makeCurrent(draw?.surf ?? null)) return eglFailure(ctx.egl.gl?.isContextLost() ? 0x300e : 0x3006, 0);
         egl10Current.set(curThread, ctx); bindEglCurrent(curThread, ctx.egl); return 1;
       },
     "eglSwapBuffers(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;)Z":
-      async (_d: unknown, s: JEGLSurface | null) => { const thread = curThread, c = glSurfaces.current; if (!s?.surf || c?.target !== s.surf) return eglFailure(0x300d, 0); return await c.swap() ? 1 : eglFailure(0x300e, 0, thread); },
+      async (display: unknown, s: JEGLSurface | null) => {
+        const thread = curThread, c = glSurfaces.current;
+        if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0, thread);
+        if (!s?.surf || c?.target !== s.surf) return eglFailure(0x300d, 0, thread);
+        return await c.swap() ? 1 : eglFailure(0x300e, 0, thread);
+      },
     "eglQuerySurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;I[I)Z":
-      (_d: unknown, s: JEGLSurface | null, attr: number, out: Int32Array) => { out[0] = attr === 0x3057 ? s?.surf?.width ?? 0 : attr === 0x3056 ? s?.surf?.height ?? 0 : 0; return 1; },
-    "eglDestroyContext(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLContext;)Z": (_d: unknown, ctx: JEGLContext | null) => {
+      (display: unknown, s: JEGLSurface | null, attr: number, out: Int32Array) => {
+        if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
+        out[0] = attr === 0x3057 ? s?.surf?.width ?? 0 : attr === 0x3056 ? s?.surf?.height ?? 0 : 0;
+        return 1;
+      },
+    "eglDestroyContext(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLContext;)Z": (display: unknown, ctx: JEGLContext | null) => {
+      if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
       if (ctx && boundEglCurrent(curThread) === ctx.egl) bindEglCurrent(curThread, null);
       if (egl10Current.get(curThread) === ctx) egl10Current.delete(curThread);
       return 1;
     },
-    ...stubs(1, "eglDestroySurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;)Z",
-      "eglTerminate(Ljavax/microedition/khronos/egl/EGLDisplay;)Z", "eglWaitGL()Z",
-      "eglWaitNative(ILjava/lang/Object;)Z"),
+    "eglDestroySurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;)Z":
+      (display: unknown) => egl10DisplayValid(display) ? 1 : eglFailure(EGL_BAD_DISPLAY, 0),
+    "eglTerminate(Ljavax/microedition/khronos/egl/EGLDisplay;)Z":
+      (display: unknown) => egl10DisplayValid(display) ? 1 : eglFailure(EGL_BAD_DISPLAY, 0),
+    ...stubs(1, "eglWaitGL()Z", "eglWaitNative(ILjava/lang/Object;)Z"),
     "eglGetCurrentContext()Ljavax/microedition/khronos/egl/EGLContext;": () => {
       const current = glSurfaces.current;
       if (!current) return noEglContext;
@@ -586,6 +623,12 @@ rt.register({
       return c;
     },
   },
+});
+rt.register({
+  name: "javax/microedition/khronos/egl/EGL11", ctor: class extends JEGL10 {}, sup: "javax/microedition/khronos/egl/EGL10",
+  statics: { EGL_MIN_SWAP_INTERVAL: 0x303b, EGL_MAX_SWAP_INTERVAL: 0x303c },
+  methods: { "eglSwapInterval(Ljavax/microedition/khronos/egl/EGLDisplay;I)Z": (display: unknown, interval: number) =>
+    egl10DisplayValid(display) ? setEglSwapInterval(interval) : eglFailure(EGL_BAD_DISPLAY, 0) },
 });
 
 class JEGLHandle extends JObj { constructor(readonly handle = 0) { super(); } }
@@ -622,6 +665,7 @@ rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics
   EGL_OPENGL_ES_API: 0x30a0, EGL_BACK_BUFFER: 0x3084,
   EGL_RED_SIZE: 0x3024, EGL_GREEN_SIZE: 0x3023, EGL_BLUE_SIZE: 0x3022, EGL_ALPHA_SIZE: 0x3021,
   EGL_DEPTH_SIZE: 0x3025, EGL_STENCIL_SIZE: 0x3026, EGL_RENDERABLE_TYPE: 0x3040, EGL_SURFACE_TYPE: 0x3033,
+  EGL_MIN_SWAP_INTERVAL: 0x303b, EGL_MAX_SWAP_INTERVAL: 0x303c,
   EGL_OPENGL_ES2_BIT: 4, EGL_PBUFFER_BIT: 1, EGL_WINDOW_BIT: 4,
 }, methods: {
   "static eglGetDisplay(I)Landroid/opengl/EGLDisplay;": (display: number) => display === 0 ? defaultDisplay : eglFailure(0x3008, noDisplay),
@@ -697,6 +741,8 @@ rt.register({ name: "android/opengl/EGL14", ctor: class extends JObj {}, statics
     if (!surface?.surf || context?.target !== surface.surf) return eglFailure(0x300d, 0);
     return await context.swap() ? 1 : eglFailure(0x300e, 0, thread);
   },
+  "static eglSwapInterval(Landroid/opengl/EGLDisplay;I)Z": (display: JEGL14Display, interval: number) =>
+    display === defaultDisplay ? setEglSwapInterval(interval) : eglFailure(0x3008, 0),
   "static eglDestroySurface(Landroid/opengl/EGLDisplay;Landroid/opengl/EGLSurface;)Z": (_display: JEGL14Display, surface: JEGL14Surface) => {
     if (!surface?.surf) return eglFailure(0x300d, 0);
     if (glSurfaces.current?.target === surface.surf) glSurfaces.current.target = null;

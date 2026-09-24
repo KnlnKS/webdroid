@@ -218,7 +218,7 @@ fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
         // ISB must redispatch after a store invalidates the active region's source page.
         .nop => mem.ld(u32, pc) & 0xfffff0ff == 0xd50330df,
         .b => blk: {
-            if (o.a == 0) r.blocks[i].taken = blockFor(r, @truncate(o.imm));
+            r.blocks[i].taken = blockFor(r, @truncate(o.imm));
             break :blk true;
         },
         .bcond, .cbz, .tbz => blk: {
@@ -813,8 +813,8 @@ pub fn Emit(comptime wide: bool) type {
                     if (o.a != 0) {
                         b.i64c(pc + 4);
                         e.setX(30);
-                        e.transfer(-1, @truncate(o.imm), k);
-                    } else e.transfer(e.r.blocks[e.blk].taken, @truncate(o.imm), k);
+                    }
+                    e.transfer(e.r.blocks[e.blk].taken, @truncate(o.imm), k);
                     return true;
                 },
                 .bcond, .cbz, .tbz => {

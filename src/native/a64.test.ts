@@ -8,6 +8,20 @@ beforeAll(() => setA64(true));
 afterAll(() => setA64(false));
 
 describe("a64 decoder", () => {
+  test("a direct call within a page preserves the return address and live registers", () => {
+    const c = run([
+      0xaa1e03f3, // mov x19, x30
+      0x52800020, // mov w0, #1
+      0x94000004, // bl +16
+      0x11000800, // add w0, w0, #2
+      0xaa1303fe, // mov x30, x19
+      RET,
+      0x11001000, // add w0, w0, #4
+      RET,
+    ]);
+    expect(c.w[0]).toBe(7);
+  });
+
   test("a W write zero-extends into its X register", () => {
     const c = run([
       0x92800000,   // mov x0, #-1

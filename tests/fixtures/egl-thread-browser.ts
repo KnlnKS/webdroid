@@ -17,6 +17,16 @@ import { gles3Init } from "../../src/native/gles3";
 import { nativeWindowFor, ndkInit } from "../../src/native/libandroid";
 import { hostFn, type ArgReader } from "../../src/native/host";
 
+function callGl(cpu: Cpu, lib: string, name: string, values: number[]) {
+  let i = 0;
+  const next = () => values[i++] ?? 0;
+  const args: ArgReader = { i: next, p: next, u: next, va: () => BigInt(next()), l: () => BigInt(next()), ul: () => BigInt(next()),
+    f: next, d: next, vd: next, str: () => "", strAt: () => "" };
+  const fn = hostFn(lib, name);
+  if (!fn) throw new Error(`Missing native ${name}`);
+  return fn(cpu, args);
+}
+
 function readback() {
   setA64(false); gles1Init(); gles3Init();
   const context = new EglContext();
@@ -29,15 +39,6 @@ function readback() {
     throw new Error("Readback code did not return");
   };
   const init = (at: number) => { mem.st32(at, 0xe3a00001); mem.st32(at + 4, 0xe12fff1e); };
-  const read = (lib: string, values: number[]) => {
-    let i = 0;
-    const next = () => values[i++] ?? 0;
-    const args: ArgReader = { i: next, p: next, u: next, va: () => BigInt(next()), l: () => BigInt(next()), ul: () => BigInt(next()),
-      f: next, d: next, vd: next, str: () => "", strAt: () => "" };
-    const fn = hostFn(lib, "glReadPixels");
-    if (!fn) throw new Error("Missing native glReadPixels");
-    fn(cpu, args);
-  };
   const fbo = g.createFramebuffer(), rgba = g.createTexture();
   g.bindTexture(g.TEXTURE_2D, rgba); g.texStorage2D(g.TEXTURE_2D, 1, g.RGBA8, 1, 2);
   g.bindFramebuffer(g.FRAMEBUFFER, fbo);
@@ -50,22 +51,52 @@ function readback() {
   const compiled = jitStats.regions >= regions + 2;
   const before = [execute(at), execute(at + 16)];
   g.pixelStorei(g.PACK_ROW_LENGTH, 4); g.pixelStorei(g.PACK_SKIP_ROWS, 1); g.pixelStorei(g.PACK_SKIP_PIXELS, 1);
-  read("libGLESv2.so", [0, 0, 1, 2, g.RGBA, g.UNSIGNED_BYTE, at - 20]);
+  callGl(cpu, "libGLESv2.so", "glReadPixels", [0, 0, 1, 2, g.RGBA, g.UNSIGNED_BYTE, at - 20]);
   const after = [execute(at), execute(at + 16)], error = g.getError();
   g.pixelStorei(g.PACK_ROW_LENGTH, 0); g.pixelStorei(g.PACK_SKIP_ROWS, 0); g.pixelStorei(g.PACK_SKIP_PIXELS, 0);
   g.pixelStorei(g.PACK_ALIGNMENT, 8);
   init(base); init(base + 8);
   for (let i = 0; i <= JIT_HEAT; i++) { execute(base); execute(base + 8); }
-  read("libGLESv1_CM.so", [0, 0, 1, 2, g.RGBA, g.UNSIGNED_BYTE, base]);
+  callGl(cpu, "libGLESv1_CM.so", "glReadPixels", [0, 0, 1, 2, g.RGBA, g.UNSIGNED_BYTE, base]);
   const es1 = [execute(base), execute(base + 8)], es1Error = g.getError();
   const texture = g.createTexture(); g.bindTexture(g.TEXTURE_2D, texture);
   g.texStorage2D(g.TEXTURE_2D, 1, g.R32UI, 1, 1);
   g.framebufferTexture2D(g.FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, texture, 0);
   g.clearBufferuiv(g.COLOR, 0, Uint32Array.of(0x12345678, 0, 0, 0));
-  read("libGLESv2.so", [0, 0, 1, 1, g.RED_INTEGER, g.UNSIGNED_INT, base + 33]);
+  callGl(cpu, "libGLESv2.so", "glReadPixels", [0, 0, 1, 1, g.RED_INTEGER, g.UNSIGNED_INT, base + 33]);
   const unaligned = mem.ld32(base + 33), integerError = g.getError();
   g.deleteFramebuffer(fbo); g.deleteTexture(texture); g.deleteTexture(rgba); context.makeCurrent(null);
   return { compiled, before, after, error, es1, es1Error, unaligned, integerError };
+}
+
+function uploadExtents() {
+  gles3Init();
+  const context = new EglContext();
+  context.makeCurrent({ view: null, width: 4, height: 4, present: null, frames: 0 });
+  const g = context.gl!, cpu = new Cpu(mainThread, "texture-upload"), p = mem.reserve(0x1000, 0x1000);
+  const lengths: number[] = [];
+  for (const name of ["texSubImage2D", "texSubImage3D"] as const) {
+    const original = g[name];
+    Object.defineProperty(g, name, { configurable: true, value: (...args: unknown[]) => {
+      const pixels = args.at(-1);
+      if (ArrayBuffer.isView(pixels)) lengths.push(pixels.byteLength);
+      return Reflect.apply(original, g, args);
+    } });
+  }
+  const two = g.createTexture();
+  g.bindTexture(g.TEXTURE_2D, two);
+  g.texStorage2D(g.TEXTURE_2D, 1, g.RGB8, 3, 2);
+  callGl(cpu, "libGLESv2.so", "glTexSubImage2D", [g.TEXTURE_2D, 0, 0, 0, 3, 2, g.RGB, g.UNSIGNED_BYTE, p]);
+  const error2D = g.getError();
+  const three = g.createTexture();
+  g.bindTexture(g.TEXTURE_3D, three);
+  g.texStorage3D(g.TEXTURE_3D, 1, g.RGBA8, 2, 2, 2);
+  g.pixelStorei(g.UNPACK_ROW_LENGTH, 3); g.pixelStorei(g.UNPACK_IMAGE_HEIGHT, 4);
+  g.pixelStorei(g.UNPACK_SKIP_IMAGES, 1); g.pixelStorei(g.UNPACK_SKIP_ROWS, 1); g.pixelStorei(g.UNPACK_SKIP_PIXELS, 1);
+  callGl(cpu, "libGLESv2.so", "glTexSubImage3D", [g.TEXTURE_3D, 0, 0, 0, 0, 2, 2, 2, g.RGBA, g.UNSIGNED_BYTE, p]);
+  const error3D = g.getError();
+  g.deleteTexture(two); g.deleteTexture(three); context.makeCurrent(null);
+  return { lengths, error2D, error3D };
 }
 
 async function probe() {
@@ -80,6 +111,7 @@ async function probe() {
   const first = new JThread(), second = new JThread();
   setCurThread(first);
   const bound10 = vcallMaybe(e10, "eglMakeCurrent", `(${E10}EGLDisplay;${E10}EGLSurface;${E10}EGLSurface;${E10}EGLContext;)Z`, display10, surface10, surface10, context10);
+  const interval10 = vcallMaybe(rt.make("javax/microedition/khronos/egl/EGL11"), "eglSwapInterval", `(${E10}EGLDisplay;I)Z`, display10, 1);
   const firstGL = gl, firstTables = tables();
   gl?.clearColor(1, 0, 0, 1);
   const suspended = vcallMaybe(e10, "eglSwapBuffers", `(${E10}EGLDisplay;${E10}EGLSurface;)Z`, display10, surface10);
@@ -129,9 +161,9 @@ async function probe() {
     [mangleMethod("onDrawFrame", "(Ljavax/microedition/khronos/opengles/GL10;)V")]: suspend,
   });
   await Reflect.apply(Reflect.get(view, "runFrame"), view, []);
-  return { callbacks, bound10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
+  return { callbacks, bound10, interval10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
     firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null,
-    lifecycle: await lifecycle(), nativeWindow: await nativeWindow(), windowCopy: await windowCopy(), readback: readback() };
+    lifecycle: await lifecycle(), nativeWindow: await nativeWindow(), windowCopy: await windowCopy(), readback: readback(), uploads: uploadExtents() };
 }
 async function nativeWindow() {
   ndkInit();
