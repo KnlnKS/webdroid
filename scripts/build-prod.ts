@@ -27,6 +27,7 @@ async function copyFile(source: string, target = source): Promise<void> {
 
 await Promise.all([
   copyFile("vendor/framework-res.apk"),
+  copyFile("vendor/platform.x509.pem"),
   copyFile("src/native/native-core.wasm", "native-core.wasm"),
   copyFile("vendor/android-cacerts.pem"),
   cp("vendor/fonts", join(out, "vendor/fonts"), { recursive: true, dereference: true }),

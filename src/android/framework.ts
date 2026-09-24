@@ -15,8 +15,11 @@ import { centralDir, entryBytes } from "../jvm/natives/jzip";
 import { rt, JObj } from "../jvm/runtime";
 import { dexesIn, type DexFile } from "../jvm/dex";
 import { mangleStaticField } from "../jvm/abi";
-import { setFramework } from "./res";
+import { Resources, setFramework } from "./res";
 import { needsFramework } from "../jvm/provenance";
+import { parseAXML } from "./axml";
+import { PackageRecord, packages } from "./packages";
+import { apkCertificates } from "./packagearchive";
 
 let pending: Promise<Arsc> | null = null;
 let pendingDex: Promise<void> | null = null;
@@ -68,6 +71,26 @@ export function loadFramework(): Promise<Arsc> {
       return b;
     };
     const arsc = new Arsc(files("resources.arsc")!, files);
+    const manifest = files("AndroidManifest.xml");
+    if (manifest) {
+      const signingZip: Record<string, Uint8Array> = {};
+      for (const name of dir.keys()) if (/^META-INF\/[^/]+\.(RSA|DSA|EC)$/i.test(name)) {
+        const bytes = files(name);
+        if (bytes) signingZip[name] = bytes;
+      }
+      let pendingCertificates: Promise<Uint8Array[]> | null = null;
+      const platform = new PackageRecord(parseAXML(manifest), new Resources(arsc, {}, undefined, true),
+        "/system/framework/framework-res.apk", 1000, () => pendingCertificates ??= (async () => {
+          const certificates = await apkCertificates(apk, signingZip);
+          if (certificates.length) return certificates;
+          const response = await fetch("/vendor/platform.x509.pem");
+          if (!response.ok) throw new Error("Platform certificate unavailable");
+          const encoded = (await response.text()).replace(/-----[^-]+-----|\s/g, "");
+          return [Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0))];
+        })());
+      platform.system = true;
+      packages.set(platform.pkg, platform);
+    }
 
     // android.R.<type>.<name>. R.java spells a resource name as a java identifier, so the dots in
     // a style name are underscores there. Filled on first use: an app that never names one of

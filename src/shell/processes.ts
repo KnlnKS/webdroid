@@ -290,7 +290,7 @@ class ProcessBroker {
   }
   async bootstrap(pid: number): Promise<{ pkg: string; process: string; uid: number; registry: PackageSnapshot[] }> {
     const entry = this.entry(pid), owner = packages.get(entry.pkg)!;
-    const registry = await Promise.all([...packages.values()].map(async (record) => {
+    const registry = await Promise.all([...packages.values()].filter((record) => !(record.system && record.pkg === "android")).map(async (record) => {
       const source = packedArchives.get(record.path) ?? await vfs.readFile(record.path);
       if (!source) throw new Error("Package bytes unavailable: " + record.pkg);
       return { pkg: record.pkg, source, uid: record.uid, system: record.system, grants: [...record.grants], signatures: record.compatibilityCertificates };
