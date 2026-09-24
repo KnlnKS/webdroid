@@ -268,14 +268,37 @@ separate staged audit repairs.
   nonce. It smoke-compiled with zero method failures. On the API-33 Google APIs
   emulator, pressing **Make Play Integrity Request** returned
   `CANNOT_BIND_TO_SERVICE (-9)`; that run is an error-path oracle, not a
-  successful-token reference. In webdroid, the unchanged app fails earlier while
-  attaching its Compose view: `ContinuationInterceptor.minusKey` reaches a
-  Kotlin null-parameter exception for `key`, leaving the UI tree at four
-  zero-sized ancestors. This is a Compose/JVM startup gap, not Integrity request
-  evidence. No token request, Binder reply or server-verified verdict has been
-  observed in webdroid, and no device token or verdict is synthesized. Reproduce
-  the generic Compose failure before diagnosing Integrity transport; use an
-  Android image with an official Play Store for a successful-request oracle.
+  successful-token reference. Webdroid initially failed while attaching Compose:
+  `AndroidUiFrameClock` read `MonotonicFrameClock.Key` from an interface default
+  method before the interface was initialized. The compiler's self-static-field
+  shortcut skipped that initialization, passing a null key to
+  `ContinuationInterceptor.minusKey`. Initializing the interface on static-field
+  access, inheriting defaults onto interface prototypes for `invoke-super`, and
+  implementing the platform's non-null View inspection map, ComponentCallbacks2
+  hierarchy and RenderNode position methods let the unchanged UI render and
+  complete its request callback.
+
+  With `?attestation=1`, microG's attestation setting is enabled through its
+  bundled ProvisionService. Applying that setting globally made the unchanged
+  ChatGPT fast flow stall at launch (9 failed checkpoints versus zero at the
+  starting commit); leaving ordinary launches unprovisioned restored 24/24.
+  Under the opt-in,
+  the request traversed Play Core's Binder call, FakeStore IntegrityService and
+  DroidGuard, downloaded a signed VM response from Google's anti-abuse endpoint,
+  and posted to `play-fe.googleapis.com/fdfe/integrity`. DroidGuard's snapshot
+  returned an empty byte array; the service reported no Google auth token, and
+  Google's endpoint returned HTTP 500 with `DF-DFERH-01`. The app displayed
+  `INTERNAL_ERROR (-100)`. Adding the manifest-backed `PackageInfo.sharedUserId`
+  removed one missing-field diagnostic but did not change the empty DroidGuard
+  result or server response. The remaining `ServiceManager` and
+  `persistent_data_block` probes were caught by microG; their causal role in the
+  empty result is unproved. No device token or verdict is synthesized. A Play
+  Store-equipped Android oracle with a working SPIC request is needed to separate
+  microG/server limitations from webdroid's DroidGuard environment. The frozen
+  full matrix after these platform changes rendered 185/185 steps and averaged
+  27.62% content difference on scored flows. Matched starting-commit runs
+  reproduced Harmonic's ~98.5% strict pixel score and Flappy Bird's 27–30 fps
+  slow-motion flags; those observations are not attributed to this change.
 - **Google Maps.** After loader, Parcel, callback, graphics and ABI fixes, the
   unchanged APK rendered real tiles, directions and successive maneuvers.
   ARM64 floating arguments after v0-v7 belong on stack slots, not integer
