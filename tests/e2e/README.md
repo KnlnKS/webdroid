@@ -162,8 +162,9 @@ page performs the action, waits for the app to settle, checks the main looper is
 returns the step's telemetry and optional frame. Nothing polls the page from outside.
 The full pass and Android recorder use each step's `wait`. Live steps can declare `fastWait`
 for an observable quick-pass completion condition; otherwise the quick pass samples after
-500 ms. `fastAction` uses an equivalent quick input when platform UI or a live text anchor
-differs from the recorded reference.
+500 ms. `webdroidAction` uses an equivalent input in both browser capture modes when its
+geometry differs from Android; recording still uses `action`. `fastAction` takes precedence
+for an equivalent quick input when platform UI or a live text anchor differs from the reference.
 
 ### How webdroid completes a step
 

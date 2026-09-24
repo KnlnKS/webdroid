@@ -29,7 +29,8 @@ function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: str
   const seenProcessErrors = new Set<string>();
   for (const step of runs) {
     const prefix = `${String(step.index).padStart(2, "0")} ${step.id}`;
-    const action = flow.steps[step.index]?.action;
+    const definition = flow.steps[step.index];
+    const action = definition?.webdroidAction ?? definition?.action;
     if (live && action?.type === "tapText" && !action.optional && step.semanticHit !== true)
       errors.push(`${prefix}: required text target ${JSON.stringify(action.text)} was not found`);
     if (step.mainLoopWedged) errors.push(`${prefix}: main loop wedged`);
@@ -60,7 +61,7 @@ function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: str
 
 function quickFlow(flow: Flow): Flow {
   return flow.clock === "live"
-    ? { ...flow, steps: flow.steps.map((step) => ({ ...step, action: step.fastAction ?? step.action, wait: step.fastWait ?? wait.liveSample(500) })) }
+    ? { ...flow, steps: flow.steps.map((step) => ({ ...step, action: step.fastAction ?? step.webdroidAction ?? step.action, webdroidAction: undefined, wait: step.fastWait ?? wait.liveSample(500) })) }
     : flow;
 }
 

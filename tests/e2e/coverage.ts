@@ -85,7 +85,7 @@ export function repositoryRevision(root: string): string {
 
 function canonical(value: unknown, reference: boolean): string {
   if (Array.isArray(value)) return `[${value.map((item) => canonical(item, reference)).join(",")}]`;
-  if (isRecord(value)) return `{${Object.keys(value).filter((key) => value[key] !== undefined && (!reference || (key !== "fastWait" && key !== "fastAction"))).sort()
+  if (isRecord(value)) return `{${Object.keys(value).filter((key) => value[key] !== undefined && (!reference || (key !== "fastWait" && key !== "fastAction" && key !== "webdroidAction"))).sort()
     .map((key) => `${JSON.stringify(key)}:${canonical(value[key], reference)}`).join(",")}}`;
   return JSON.stringify(value) ?? "null";
 }

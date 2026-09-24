@@ -26,6 +26,9 @@ test("coverage fingerprints include action payloads and wait policy", () => {
   expect(flowSchemaHash([reference], "reference")).toBe(flowSchemaHash([revised], "reference"));
   const alternate: Flow = { ...reference, steps: [{ ...reference.steps[0]!, fastAction: { type: "settle" } }] };
   expect(flowSchemaHash([reference], "reference")).toBe(flowSchemaHash([alternate], "reference"));
+  const repositioned: Flow = { ...reference, steps: [{ ...reference.steps[0]!, webdroidAction: { type: "tapAt", x: 0.5, y: 0.1 } }] };
+  expect(flowSchemaHash([reference])).not.toBe(flowSchemaHash([repositioned]));
+  expect(flowSchemaHash([reference], "reference")).toBe(flowSchemaHash([repositioned], "reference"));
 });
 
 test("coverage indexes are validated at the JSON boundary", () => {

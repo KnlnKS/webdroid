@@ -101,7 +101,7 @@ export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = fa
 
 /** The probe action for a step, with the recorded coordinate as the tapText fallback. */
 export function actOf(flow: Flow, step: Step, rec?: RecordedStep): Act {
-  const a = step.action;
+  const a = step.webdroidAction ?? step.action;
   switch (a.type) {
     case "launch": return { type: "boot", apk: flow.apk };
     case "tapText": return { type: "tapText", text: a.text, fallback: a.optional ? undefined : rec?.resolved };
@@ -147,6 +147,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, {
   log(`=== webdroid: ${flow.app} (${flow.steps.length} steps) ===`);
   const runs: StepRun[] = [];
   for (const [i, step] of flow.steps.entries()) {
+    const action = step.webdroidAction ?? step.action;
     const rec = byId.get(step.id);
     if (!rec && manifest && manifest.depth !== "startup")
       throw new Error(`golden manifest has no step "${step.id}" — re-record ${flow.app}`);
@@ -160,7 +161,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, {
     // a frame rate measured beside other flows' browsers measures the host, not the app
     const motion = mode === "fast" ? fastEvidence.kind === "motion" : isMotionWait(step.wait);
     const minFps = mode === "fast" && fastEvidence.kind === "motion" ? fastEvidence.minFps : flow.minFps;
-    const slow = !!(motion && step.action.type !== "launch" && minFps && fps < minFps && jobs === 1);
+    const slow = !!(motion && action.type !== "launch" && minFps && fps < minFps && jobs === 1);
     const writeAt = performance.now();
     if (r.png) {
       await Bun.write(`${outDir}/${file}`, Buffer.from(r.png, "base64"));
@@ -188,7 +189,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, {
                 presentation: r.presentation, evidence, phases: { ...r.phases, hostWriteMs } });
     const p = r.perf;
     const flags = [
-      r.semanticHit === false && !(step.action.type === "tapText" && step.action.optional) ? "coord-fallback" : "",
+      r.semanticHit === false && !(action.type === "tapText" && action.optional) ? "coord-fallback" : "",
       r.settled.how === "timeout" ? `settle timeout (${Object.keys(r.settled.busy).join(" ")})` : r.settled.how === "pixels" ? "pixels" : "",
       r.wedged ? "MAIN LOOP WEDGED" : "",
       frames ? `${frames} frame${frames === 1 ? "" : "s"}` : "",

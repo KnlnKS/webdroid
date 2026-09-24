@@ -75,6 +75,8 @@ export type Step = {
   id: string;
   label: string;
   action: Action;
+  /** Equivalent action when Webdroid geometry differs from the Android reference. */
+  webdroidAction?: Action;
   /** Equivalent quick action when platform UI or a live text anchor differs from the reference. */
   fastAction?: Action;
   /** Regions excluded from the diff (normalized). Escape hatch for non-deterministic pixels. */

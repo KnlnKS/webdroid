@@ -21,9 +21,11 @@ const AB_UP = N(48, 96);                 // content-desc "…, Navigate up"
 /** Log one set: weight, reps, save. Focus+type is one atomic step (see Action.typeInto). */
 const logSet = (n: number, weight: string, reps: string) => [
   { id: `${n}-weight`, label: `Enter weight ${weight} (set ${n})`,
-    action: { type: "typeInto", ...WEIGHT_FIELD, text: weight } as const, wait: wait.quiescent(400) },
+    action: { type: "typeInto", ...WEIGHT_FIELD, text: weight } as const,
+    webdroidAction: { type: "typeInto", ...N(360, 290), text: weight } as const, wait: wait.quiescent(400) },
   { id: `${n}-reps`, label: `Enter reps ${reps} (set ${n})`,
-    action: { type: "typeInto", ...REPS_FIELD, text: reps } as const, wait: wait.quiescent(400) },
+    action: { type: "typeInto", ...REPS_FIELD, text: reps } as const,
+    webdroidAction: { type: "typeInto", ...N(360, 438), text: reps } as const, wait: wait.quiescent(400) },
   { id: `${n}-save`, label: `SAVE set ${n} (${weight}x${reps})`,
     action: { type: "tapText", text: "SAVE" } as const, wait: wait.quiescent(900) },
 ];
@@ -33,8 +35,7 @@ export const fitnotes: Flow = {
   pkg: "com.github.jamesgay.fitnotes",
   activity: "com.github.jamesgay.fitnotes.feature.home.MainActivity",
   apk: "FitNotes.apk",
-  // App content is exactly [0,48]-[720,1232] on both sides: verified against the real
-  // hierarchy dump (status bar [0,0][720,48], gesture bar [0,1232][720,1280]).
+  // Preserve the Android reference crop; Webdroid no longer reserves its 48px status bar.
   crop: { top: 48, bottom: 48, left: 0, right: 0 },
   clock: "controlled",
   steps: [
@@ -57,14 +58,19 @@ export const fitnotes: Flow = {
     { id: "tab-graph", label: "GRAPH tab — one exercise plotted", action: { type: "tapText", text: "GRAPH" }, wait: wait.quiescent(1200) },
 
     { id: "back-to-exlist", label: "Back to exercise list", action: { type: "back" }, wait: wait.quiescent(700) },
-    { id: "new-exercise-open", label: "Create New Exercise", action: { type: "tapAt", ...AB_CREATE_EXERCISE }, wait: wait.quiescent(700) },
+    { id: "new-exercise-open", label: "Create New Exercise", action: { type: "tapAt", ...AB_CREATE_EXERCISE },
+      webdroidAction: { type: "tapAt", ...N(552, 48) }, wait: wait.quiescent(700) },
     { id: "new-name", label: 'Name it "Webdroid Press"',
-      action: { type: "typeInto", ...NAME_FIELD, text: "Webdroid Press" }, wait: wait.quiescent(500) },
-    { id: "new-category-open", label: "Open category spinner", action: { type: "tapAt", ...CATEGORY_SPINNER }, wait: wait.quiescent(900) },
+      action: { type: "typeInto", ...NAME_FIELD, text: "Webdroid Press" },
+      webdroidAction: { type: "typeInto", ...N(360, 230), text: "Webdroid Press" }, wait: wait.quiescent(500) },
+    { id: "new-category-open", label: "Open category spinner", action: { type: "tapAt", ...CATEGORY_SPINNER },
+      webdroidAction: { type: "tapAt", ...N(318, 612) }, wait: wait.quiescent(900) },
     { id: "new-category-chest", label: "Choose Chest", action: { type: "tapText", text: "Chest" }, wait: wait.quiescent(600) },
-    { id: "new-save", label: "Save new exercise", action: { type: "tapAt", ...AB_SAVE }, wait: wait.quiescent(900) },
+    { id: "new-save", label: "Save new exercise", action: { type: "tapAt", ...AB_SAVE },
+      webdroidAction: { type: "tapAt", ...N(664, 48) }, wait: wait.quiescent(900) },
 
-    { id: "up-to-categories", label: "Up to categories", action: { type: "tapAt", ...AB_UP }, wait: wait.quiescent(700) },
+    { id: "up-to-categories", label: "Up to categories", action: { type: "tapAt", ...AB_UP },
+      webdroidAction: { type: "tapAt", ...N(48, 48) }, wait: wait.quiescent(700) },
     { id: "cat-chest", label: "Open Chest", action: { type: "tapText", text: "Chest" }, wait: wait.quiescent(700) },
     { id: "scroll-chest", label: "Scroll to the custom exercise",
       action: { type: "swipe", from: [0.5, 0.781], to: [0.5, 0.3125], ms: 400 }, wait: wait.quiescent(900) },
