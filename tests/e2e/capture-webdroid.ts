@@ -5,7 +5,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { ENV_SCREEN, WebdroidDriver } from "./drivers/webdroid";
 import { E2E_DIR } from "./lib/util";
-import { PINNED_CLOCK_MS, evidenceOf, isMotionWait, screenOf, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step, type WaitPolicy } from "./types";
+import { PINNED_CLOCK_MS, evidenceOf, isMotionWait, screenOf, uiFileFor, type ExecutionFlow, type ExecutionStep, type Flow, type Manifest, type RecordedStep, type WaitPolicy } from "./types";
 import { parseScreen } from "../../src/shell/config";
 import type { Act, Settled, StepResult } from "./lib/probe";
 import { readProcesses, type ProcessSnapshot } from "./lib/processes";
@@ -100,8 +100,8 @@ export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = fa
 }
 
 /** The probe action for a step, with the recorded coordinate as the tapText fallback. */
-export function actOf(flow: Flow, step: Step, rec?: RecordedStep): Act {
-  const a = step.webdroidAction ?? step.action;
+export function actOf(flow: Flow, step: ExecutionStep, rec?: RecordedStep): Act {
+  const a = step.action;
   switch (a.type) {
     case "launch": return { type: "boot", apk: flow.apk };
     case "tapText": return { type: "tapText", text: a.text, fallback: a.optional ? undefined : rec?.resolved };
@@ -116,7 +116,7 @@ export function actOf(flow: Flow, step: Step, rec?: RecordedStep): Act {
 }
 
 /** Perform one step and settle it on the step's horizon. */
-export function runStep(drv: WebdroidDriver, flow: Flow, step: Step, rec?: RecordedStep, mode: CaptureMode = "full"): Promise<StepResult> {
+export function runStep(drv: WebdroidDriver, flow: Flow, step: ExecutionStep, rec?: RecordedStep, mode: CaptureMode = "full"): Promise<StepResult> {
   const evidence = evidenceOf(step);
   const capture = mode === "full" || evidence.kind !== "semantic";
   const policy: WaitPolicy = mode === "fast" && evidence.kind === "semantic" && step.wait.kind === "quiescent"
@@ -133,7 +133,7 @@ export function runStep(drv: WebdroidDriver, flow: Flow, step: Step, rec?: Recor
   });
 }
 
-export async function captureFlow(flow: Flow, drv: WebdroidDriver, {
+export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
   jobs = 1, shots, log = console.log, mode = "full", outRoot = mode === "fast" ? "actual-fast" : "actual",
 }: { jobs?: number; shots?: string; log?: (s: string) => void; mode?: CaptureMode; outRoot?: string } = {}): Promise<StepRun[]> {
   const manifest = await loadManifest(flow.app);
@@ -147,7 +147,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, {
   log(`=== webdroid: ${flow.app} (${flow.steps.length} steps) ===`);
   const runs: StepRun[] = [];
   for (const [i, step] of flow.steps.entries()) {
-    const action = step.webdroidAction ?? step.action;
+    const action = step.action;
     const rec = byId.get(step.id);
     if (!rec && manifest && manifest.depth !== "startup")
       throw new Error(`golden manifest has no step "${step.id}" — re-record ${flow.app}`);
@@ -212,7 +212,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, {
   // Persist the per-step run flags next to the frames so `bun run e2e --diff` can apply the same
   // scoring rules as `bun run e2e --full` — without this, a standalone diff has no idea the app hung
   // and would quietly report a better number for the same pixels.
-  const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow], mode === "full" ? "reference" : "all"), jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, statusBarDp: drv.screen.statusBarDp ?? 0, steps: runs, browserErrors: [...drv.errors] };
+  const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow]), jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, statusBarDp: drv.screen.statusBarDp ?? 0, steps: runs, browserErrors: [...drv.errors] };
   await Bun.write(`${outDir}/run.json`, JSON.stringify(run, null, 2));
   return runs;
 }

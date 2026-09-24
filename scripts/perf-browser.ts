@@ -9,7 +9,7 @@ import { CONTEXT_OPTS, launchBrowser } from "../tests/e2e/drivers/webdroid";
 import { environmentScript, performAction } from "../tests/e2e/lib/actions";
 import { readProcesses } from "../tests/e2e/lib/processes";
 import { probeScript } from "../tests/e2e/lib/probe";
-import { PINNED_CLOCK_MS, screenOf, screenParam, waitHorizonMs } from "../tests/e2e/types";
+import { executionFlow, PINNED_CLOCK_MS, screenOf, screenParam, waitHorizonMs } from "../tests/e2e/types";
 
 const { values } = parseArgs({ options: {
   flow: { type: "string" }, after: { type: "string" }, exercise: { type: "string" },
@@ -24,8 +24,9 @@ const { values } = parseArgs({ options: {
   interval: { type: "string" }, "exercise-once": { type: "boolean", default: false }, "setup-shots": { type: "boolean", default: false },
   "setup-settle-cap": { type: "string" },
 } });
-const flow = FLOWS.find((f) => f.app === values.flow);
-if (!flow || !values.after || !values.out) throw new Error("Required: --flow <flow> --after <step> --out <file.json>");
+const source = FLOWS.find((f) => f.app === values.flow);
+if (!source || !values.after || !values.out) throw new Error("Required: --flow <flow> --after <step> --out <file.json>");
+const flow = executionFlow(source, "full");
 const outParts = parse(values.out);
 const artifactPath = (suffix: string) => join(outParts.dir, outParts.name + suffix);
 const after = flow.steps.findIndex((s) => s.id === values.after);

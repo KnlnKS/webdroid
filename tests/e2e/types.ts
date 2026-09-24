@@ -88,7 +88,19 @@ export type Step = {
   fastEvidence?: Exclude<EvidencePolicy, { kind: "semantic" }>;
 };
 
-type FlowBase = {
+export type ExecutionStep = Step & { fastAction?: never; fastWait?: never; webdroidAction?: never };
+export type ExecutionFlow = Flow<ExecutionStep>;
+
+export function executionFlow(flow: Flow, mode: "reference" | "full" | "fast"): ExecutionFlow {
+  const quick = mode === "fast" && flow.clock === "live";
+  return { ...flow, steps: flow.steps.map(({ fastAction, fastWait, webdroidAction, ...step }) => ({
+    ...step,
+    action: mode === "reference" ? step.action : (quick ? fastAction : undefined) ?? webdroidAction ?? step.action,
+    wait: quick ? fastWait ?? wait.liveSample(500) : step.wait,
+  })) };
+}
+
+type FlowBase<TStep extends Step> = {
   app: string;
   pkg: string;
   activity: string;
@@ -107,10 +119,10 @@ type FlowBase = {
   /** The geometry positional taps were measured at. A flow with no goldens runs at it, since a
    *  normalized coordinate only lands on the same view at the same size. */
   screen?: Screen;
-  steps: Step[];
+  steps: TStep[];
 };
 
-export type Flow = FlowBase & (
+export type Flow<TStep extends Step = Step> = FlowBase<TStep> & (
   | {
       clock: "live";
       sourceCoverage?: never;

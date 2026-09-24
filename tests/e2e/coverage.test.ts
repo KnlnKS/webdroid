@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { flowSchemaHash, parseCoverageIndex } from "./coverage";
-import { sameScreen, screenOf, wait, type Flow, type Manifest } from "./types";
+import { executionFlow, sameScreen, screenOf, wait, type Flow, type Manifest } from "./types";
 
 const flow = (text: string, timeoutMs: number): Flow => ({
   app: "fixture",
@@ -29,6 +29,16 @@ test("coverage fingerprints include action payloads and wait policy", () => {
   const repositioned: Flow = { ...reference, steps: [{ ...reference.steps[0]!, webdroidAction: { type: "tapAt", x: 0.5, y: 0.1 } }] };
   expect(flowSchemaHash([reference])).not.toBe(flowSchemaHash([repositioned]));
   expect(flowSchemaHash([reference], "reference")).toBe(flowSchemaHash([repositioned], "reference"));
+  expect(flowSchemaHash([reference], "full")).not.toBe(flowSchemaHash([repositioned], "full"));
+  expect(flowSchemaHash([reference], "full")).toBe(flowSchemaHash([alternate], "full"));
+  const overridden: Flow = { ...repositioned, steps: [{ ...repositioned.steps[0]!, fastAction: { type: "settle" } }] };
+  const full = executionFlow(overridden, "full"), fast = executionFlow(overridden, "fast");
+  expect(full.steps[0]!.action).toEqual({ type: "tapAt", x: 0.5, y: 0.1 });
+  expect(fast.steps[0]!.action).toEqual({ type: "settle" });
+  expect(fast.steps[0]!.wait).toEqual(reference.steps[0]!.fastWait!);
+  expect(flowSchemaHash([full])).toBe(flowSchemaHash([overridden], "full"));
+  expect(flowSchemaHash([fast])).toBe(flowSchemaHash([overridden], "fast"));
+  expect(flowSchemaHash([overridden], "full")).not.toBe(flowSchemaHash([overridden], "fast"));
 });
 
 test("coverage indexes are validated at the JSON boundary", () => {

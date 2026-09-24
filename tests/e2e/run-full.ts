@@ -3,7 +3,7 @@
 // `--jobs` bounds how many at once, and each is scored as soon as it has captured.
 import { cpus } from "node:os";
 import { ENV_SCREEN } from "./drivers/webdroid";
-import { sameScreen, screenOf, screenParam, waitHorizonMs } from "./types";
+import { executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs } from "./types";
 import { parseScreen } from "../../src/shell/config";
 import { captureFlow, launchFor, loadManifest, prepareShots } from "./capture-webdroid";
 import { assembleReport, scoreFlow } from "./score";
@@ -19,7 +19,7 @@ if (shots) await prepareShots(shots);
 type Outcome = { app: string; scored: boolean; lines: string[]; ms: number };
 
 async function runFlow(app: string): Promise<Outcome> {
-  const flow = flows.find((f) => f.app === app)!;
+  const flow = executionFlow(flows.find((f) => f.app === app)!, "full");
   const manifest = await loadManifest(app);
   const lines: string[] = [];
   const log = (s: string) => lines.push(s);

@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { deviceScreen, screenParam, type Flow, type Screen } from "./types";
+import { deviceScreen, executionFlow, screenParam, type Flow, type Screen } from "./types";
 
 export type CoverageIndex = {
   generatedAt: string;
@@ -83,15 +83,16 @@ export function repositoryRevision(root: string): string {
   return result.exitCode === 0 ? result.stdout.toString().trim() : "unknown";
 }
 
-function canonical(value: unknown, reference: boolean): string {
-  if (Array.isArray(value)) return `[${value.map((item) => canonical(item, reference)).join(",")}]`;
-  if (isRecord(value)) return `{${Object.keys(value).filter((key) => value[key] !== undefined && (!reference || (key !== "fastWait" && key !== "fastAction" && key !== "webdroidAction"))).sort()
-    .map((key) => `${JSON.stringify(key)}:${canonical(value[key], reference)}`).join(",")}}`;
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (isRecord(value)) return `{${Object.keys(value).filter((key) => value[key] !== undefined).sort()
+    .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
   return JSON.stringify(value) ?? "null";
 }
 
-export function flowSchemaHash(flows: Flow[], mode: "all" | "reference" = "all"): string {
-  return new Bun.CryptoHasher("sha256").update(new TextEncoder().encode(canonical(flows, mode === "reference"))).digest("hex");
+export function flowSchemaHash(flows: Flow[], mode: "all" | "reference" | "full" | "fast" = "all"): string {
+  const resolved = mode === "all" ? flows : flows.map((flow) => executionFlow(flow, mode));
+  return new Bun.CryptoHasher("sha256").update(new TextEncoder().encode(canonical(resolved))).digest("hex");
 }
 
 function screenFromManifest(value: unknown): Screen | undefined {

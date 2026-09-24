@@ -7,7 +7,7 @@ import { loadPng } from "./lib/png";
 import { diffImages } from "./lib/diff";
 import { E2E_DIR } from "./lib/util";
 import { apkHashes, flowSchemaHash, repositoryRevision, type CoverageIndex } from "./coverage";
-import { sameScreen, screenOf, screenParam, wait, waitHorizonMs, type Manifest, type Screen } from "./types";
+import { executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs, type Manifest, type Screen } from "./types";
 import { BASE_URL } from "./lib/util";
 import { isWebdroidProcessFrame } from "./lib/processes";
 
@@ -29,8 +29,7 @@ function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: str
   const seenProcessErrors = new Set<string>();
   for (const step of runs) {
     const prefix = `${String(step.index).padStart(2, "0")} ${step.id}`;
-    const definition = flow.steps[step.index];
-    const action = definition?.webdroidAction ?? definition?.action;
+    const action = flow.steps[step.index]?.action;
     if (live && action?.type === "tapText" && !action.optional && step.semanticHit !== true)
       errors.push(`${prefix}: required text target ${JSON.stringify(action.text)} was not found`);
     if (step.mainLoopWedged) errors.push(`${prefix}: main loop wedged`);
@@ -57,12 +56,6 @@ function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: str
     }
   }
   return { errors, gaps };
-}
-
-function quickFlow(flow: Flow): Flow {
-  return flow.clock === "live"
-    ? { ...flow, steps: flow.steps.map((step) => ({ ...step, action: step.fastAction ?? step.webdroidAction ?? step.action, webdroidAction: undefined, wait: step.fastWait ?? wait.liveSample(500) })) }
-    : flow;
 }
 
 async function visualEvidence(flow: Flow, manifest: Manifest | undefined, screen: Screen): Promise<{ checks: VisualCheck[]; errors: string[] }> {
@@ -103,7 +96,7 @@ function browserFailures(flow: Flow, errors: string[]): string[] {
 }
 
 async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
-  const selected = quickFlow(flow);
+  const selected = executionFlow(flow, "fast");
   const manifest = await loadManifest(flow.app);
   const collectCoverage = coverage && flow.sourceCoverage !== "unsupported";
   const driver = await launchFor(flow, manifest, false, flow.clock === "controlled", collectCoverage);
@@ -138,7 +131,7 @@ try {
         previous.set(row.app, row.durationMs);
 } catch {}
 await rm(summaryPath, { force: true });
-const weight = (flow: Flow) => quickFlow(flow).steps.reduce((total, step) =>
+const weight = (flow: Flow) => executionFlow(flow, "fast").steps.reduce((total, step) =>
   total + (step.wait.kind === "state" ? step.wait.maxRealMs : waitHorizonMs(step.wait)) + 300, 0);
 const queue = [...flows].sort((a, b) => (previous.get(b.app) ?? weight(b)) - (previous.get(a.app) ?? weight(a)));
 const outcomes: Outcome[] = [];

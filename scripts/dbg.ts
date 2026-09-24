@@ -2,12 +2,14 @@
 import { mkdir } from "node:fs/promises";
 import { launchFor, loadManifest, runStep } from "../tests/e2e/capture-webdroid";
 import { FLOWS } from "../tests/e2e/flows";
+import { executionFlow } from "../tests/e2e/types";
 import { need } from "./args";
 
 const [app, stopAtArg = "99", outDir = "webdroid-shots/dbg"] = need("bun run dbg <flow> [stopAtStep] [outDir]");
 const stopAt = Number(stopAtArg);
-const flow = FLOWS.find((f) => f.app === app);
-if (!flow) { console.error(`unknown flow "${app}" — known: ${FLOWS.map((f) => f.app).join(", ")}`); process.exit(2); }
+const source = FLOWS.find((f) => f.app === app);
+if (!source) { console.error(`unknown flow "${app}" — known: ${FLOWS.map((f) => f.app).join(", ")}`); process.exit(2); }
+const flow = executionFlow(source, "full");
 const manifest = await loadManifest(app);
 const byId = new Map((manifest?.steps ?? []).map((s) => [s.id, s]));
 await mkdir(outDir, { recursive: true });
