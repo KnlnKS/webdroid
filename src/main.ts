@@ -70,7 +70,7 @@ root.innerHTML = `
     <div id="launcher"></div>
     <div id="local-loader">
       <label for="apk-picker" class="appcard">Choose APK or XAPK</label>
-      <input id="apk-picker" type="file" accept=".apk,.xapk,.apks" hidden>
+      <input id="apk-picker" type="file" hidden>
       <div id="drop-hint">Or drop package files here</div>
     </div>
     <div id="missing" style="white-space:pre-wrap"></div>
