@@ -11,7 +11,7 @@ import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGe
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, attachView, detachView, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
-import { dispatchFragLifecycle, type JFragmentManager } from "./fragment";
+import { dispatchFragLifecycle, type JFragment, type JFragmentManager } from "./fragment";
 import { vcall, vcallOn, curThread } from "../jvm/natives/jlang";
 import type { JMotionEvent } from "./motionevent";
 import { appHost, jclsNameOf } from "./apphost";
@@ -121,6 +121,8 @@ export class JActivity extends JContextWrapper {
   taskId = 0;
   lifecycleCbs: ActivityLifecycleCallback[] | null = null;
   fragMgr: JFragmentManager | null = null;
+  fragmentResults = new Map<number, { fragment: JFragment; requestCode: number }>();
+  nextFragmentRequestCode = 1;
   // set while a configuration-change relaunch is tearing this instance down, so androidx keeps
   // the ViewModelStore alive; the retained object is handed to the replacement instance.
   changingConfigurations = false;

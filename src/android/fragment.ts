@@ -139,6 +139,18 @@ export const fragMethods: NonNullable<NativeSpec["methods"]> = {
   "startActivity(Landroid/content/Intent;)V": function (this: JFragment, i: unknown) {
     return this.act ? vcall(this.act, "startActivity", "(Landroid/content/Intent;)V", i) : undefined;
   },
+  "startActivityForResult(Landroid/content/Intent;I)V": function (this: JFragment, intent: unknown, requestCode: number) {
+    const act = this.act as JActivity | null;
+    if (!act) throw rt.mkThrowable("java/lang/IllegalStateException", "Fragment not attached to Activity");
+    if (requestCode < -1 || requestCode > 0xffff) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Request code must fit in 16 bits");
+    let code = requestCode;
+    if (code >= 0) {
+      const index = act.nextFragmentRequestCode++ & 0x7fff;
+      code = (index << 16) | requestCode;
+      act.fragmentResults.set(code, { fragment: this, requestCode });
+    }
+    return vcall(act, "startActivityForResult", "(Landroid/content/Intent;I)V", intent, code);
+  },
   "getFragmentManager()Landroid/app/FragmentManager;": function (this: JFragment) {
     return this.act ? vcall(this.act, "getFragmentManager", "()Landroid/app/FragmentManager;") : null;
   },

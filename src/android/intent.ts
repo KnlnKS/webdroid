@@ -378,7 +378,11 @@ export function mkResultIntent(uri: string): JIntent {
 /** Post a result to the activity that asked for it. Scheduled, never inline: the caller is
  *  usually mid-click-handler, and androidx dispatches straight into app code from here. */
 export function deliverActivityResult(act: JActivity, code: number, resultCode: number, data: JIntent | null) {
-  setTimeout(() => void onMain(() =>
-    vcall(act, "onActivityResult", "(IILandroid/content/Intent;)V", code, resultCode, data)
-      .catch(reportUncaught)), 0);
+  setTimeout(() => void onMain(async () => {
+    const target = act.fragmentResults.get(code);
+    if (target) {
+      act.fragmentResults.delete(code);
+      await vcall(target.fragment, "onActivityResult", "(IILandroid/content/Intent;)V", target.requestCode, resultCode, data);
+    } else await vcall(act, "onActivityResult", "(IILandroid/content/Intent;)V", code, resultCode, data);
+  }).catch(reportUncaught), 0);
 }
