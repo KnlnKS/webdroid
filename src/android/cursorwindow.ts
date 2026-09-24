@@ -6,6 +6,7 @@ import { vcall } from "../jvm/natives/jlang";
 class JSQLiteClosable extends JObj {
   references = 1;
   onReleased() {}
+  release() { if (this.references > 0 && --this.references === 0) this.onReleased(); }
 }
 rt.register({
   name: "android/database/sqlite/SQLiteClosable", ctor: JSQLiteClosable, ifaces: ["java/io/Closeable"],
@@ -14,15 +15,9 @@ rt.register({
       if (this.references <= 0) throw rt.mkThrowable("java/lang/IllegalStateException", "attempt to re-open an already-closed object");
       this.references++;
     },
-    "releaseReference()V": function (this: JSQLiteClosable) {
-      if (this.references > 0 && --this.references === 0) this.onReleased();
-    },
-    "releaseReferenceFromContainer()V": function (this: JSQLiteClosable) {
-      if (this.references > 0 && --this.references === 0) this.onReleased();
-    },
-    "close()V": function (this: JSQLiteClosable) {
-      if (this.references > 0 && --this.references === 0) this.onReleased();
-    },
+    "releaseReference()V": function (this: JSQLiteClosable) { this.release(); },
+    "releaseReferenceFromContainer()V": function (this: JSQLiteClosable) { this.release(); },
+    "close()V": function (this: JSQLiteClosable) { this.release(); },
   },
 });
 
@@ -56,6 +51,9 @@ const text = (value: Cell): string | null => {
   if (value instanceof Int8Array) throw rt.mkThrowable("android/database/sqlite/SQLiteException", "Cannot convert blob to string");
   return String(value);
 };
+const cellType = (value: Cell): number => value === null ? 0
+  : typeof value === "bigint" || typeof value === "number" && Number.isInteger(value) ? 1
+    : typeof value === "number" ? 2 : typeof value === "string" ? 3 : 4;
 async function fromParcel(parcel: JParcel): Promise<JCursorWindow> {
   rt.link("android/database/CursorWindow");
   const window = new JCursorWindow();
@@ -107,9 +105,7 @@ rt.register({
     "freeLastRow()V": function (this: JCursorWindow) { if (!this.readOnly) this.rows.pop(); },
     "clear()V": function (this: JCursorWindow) { if (!this.readOnly) { this.rows = []; this.columns = 0; this.start = 0; } },
     "getType(II)I": function (this: JCursorWindow, row: number, col: number) {
-      const value = this.cell(row, col);
-      return value === null ? 0 : typeof value === "bigint" || typeof value === "number" && Number.isInteger(value) ? 1
-        : typeof value === "number" ? 2 : typeof value === "string" ? 3 : 4;
+      return cellType(this.cell(row, col));
     },
     "isNull(II)Z": function (this: JCursorWindow, row: number, col: number) { return +(this.cell(row, col) === null); },
     "getString(II)Ljava/lang/String;": function (this: JCursorWindow, row: number, col: number) { return text(this.cell(row, col)); },
@@ -138,8 +134,7 @@ rt.register({
       writeInt(parcel, this.columns);
       writeInt(parcel, this.rows.length);
       for (const row of this.rows) for (const value of row) {
-        const tag = value === null ? 0 : typeof value === "bigint" || typeof value === "number" && Number.isInteger(value) ? 1
-          : typeof value === "number" ? 2 : typeof value === "string" ? 3 : 4;
+        const tag = cellType(value);
         writeInt(parcel, tag);
         if (tag === 1) await vcall(parcel, "writeLong", "(J)V", typeof value === "bigint" ? value : BigInt(value as number));
         else if (tag === 2) await vcall(parcel, "writeDouble", "(D)V", value);
