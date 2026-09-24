@@ -40,6 +40,7 @@ export class JWindow extends JObj {
   fitInsetsIgnoringVisibility = false;
   hiddenInsets = 0;
   screenBrightness = -1;
+  colorMode = 0;
   /** WindowManager.LayoutParams width/height/gravity/dimAmount, which size and place a dialog
    *  window; `bg` is an explicit setBackgroundDrawable (a dialog window draws it as its frame). */
   layoutW = -2; layoutH = -2; gravity = 0; dimAmount = Number.NaN;
@@ -159,6 +160,7 @@ rt.register({
       const lp = rt.make("android/view/WindowManager$LayoutParams");
       lp.flags = this.flags;
       lp.screenBrightness = this.screenBrightness;
+      lp.colorMode = this.colorMode;
       lp.fitInsetsSides = this.fitInsetsSides;
       lp.fitInsetsTypes = this.fitInsetsTypes;
       lp.fitInsetsIgnoringVisibility = this.fitInsetsIgnoringVisibility;
@@ -167,15 +169,20 @@ rt.register({
     "setAttributes(Landroid/view/WindowManager$LayoutParams;)V": function (this: JWindow, lp: JWindowLayoutParams | null) {
       if (!lp) return;
       if (this.screenBrightness === lp.screenBrightness && this.flags === lp.flags &&
+          this.colorMode === lp.colorMode &&
           this.fitInsetsSides === lp.fitInsetsSides && this.fitInsetsTypes === lp.fitInsetsTypes &&
           this.fitInsetsIgnoringVisibility === lp.fitInsetsIgnoringVisibility) return;
       this.screenBrightness = lp.screenBrightness;
+      this.colorMode = lp.colorMode;
       this.flags = lp.flags;
       this.fitInsetsSides = lp.fitInsetsSides;
       this.fitInsetsTypes = lp.fitInsetsTypes;
       this.fitInsetsIgnoringVisibility = lp.fitInsetsIgnoringVisibility;
       relayoutWindow(this);
     },
+    "setColorMode(I)V": function (this: JWindow, mode: number) { this.colorMode = mode; },
+    "getColorMode()I": function (this: JWindow) { return this.colorMode; },
+    "isWideColorGamut()Z": () => 0,
     "getCallback()Landroid/view/Window$Callback;": function (this: JWindow) { return this.callbackObj ?? this.activity; },
     "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JWindow) { return this.backDispatcher(); },
     "setCallback(Landroid/view/Window$Callback;)V": function (this: JWindow, cb: unknown) { this.callbackObj = cb; },
@@ -237,6 +244,7 @@ class JWindowLayoutParams extends JLayoutParams {
   preferredDisplayModeId = 0;
   preferredRefreshRate = 0;
   screenBrightness = -1;
+  colorMode = 0;
   fitInsetsSides = 15;
   fitInsetsTypes = 7;
   fitInsetsIgnoringVisibility = false;
@@ -253,6 +261,8 @@ rt.register({
     ...noops("<init>()V", "<init>(IIIII)V"),
     ...stubs(0, "copyFrom(Landroid/view/WindowManager$LayoutParams;)I"),
     "setTitle(Ljava/lang/CharSequence;)V": function (this: { title: unknown }, title: unknown) { this.title = title ?? ""; },
+    "setColorMode(I)V": function (this: JWindowLayoutParams, mode: number) { this.colorMode = mode; },
+    "getColorMode()I": function (this: JWindowLayoutParams) { return this.colorMode; },
     "getTitle()Ljava/lang/CharSequence;": function (this: { title: unknown }) { return this.title; },
     "setFitInsetsSides(I)V": function (this: JWindowLayoutParams, value: number) { this.fitInsetsSides = value; },
     "getFitInsetsSides()I": function (this: JWindowLayoutParams) { return this.fitInsetsSides; },

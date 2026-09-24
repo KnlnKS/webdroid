@@ -1373,6 +1373,7 @@ export const bitmapMethods: NativeSpec["methods"] = {
     },
     "getWidth()I": function (this: JBitmap) { return this.w; },
     "getHeight()I": function (this: JBitmap) { return this.h; },
+    "getColorSpace()Landroid/graphics/ColorSpace;": () => srgbSpace,
     "getDensity()I": function (this: JBitmap) { return this.density; },
     "setDensity(I)V": function (this: JBitmap, d: number) { this.density = d; },
     "getScaledWidth(I)I": function (this: JBitmap, td: number) { return Math.round(this.w * td / this.density); },
@@ -2647,6 +2648,54 @@ rt.register({
     "static decodeResourceStream(Landroid/content/res/Resources;Landroid/util/TypedValue;Ljava/io/InputStream;Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;": decodeResourceStream,
   },
 });
+
+class JBitmapRegionDecoder extends JObj { bitmap: JBitmap | null = null; }
+async function regionDecoder(bytes: Uint8Array | null): Promise<JBitmapRegionDecoder> {
+  if (!bytes?.length) throw rt.mkThrowable("java/io/IOException", "Unable to decode image");
+  const bitmap = await decodeBytes(bytes, null);
+  if (!bitmap) throw rt.mkThrowable("java/io/IOException", "Unable to decode image");
+  const decoder = new JBitmapRegionDecoder();
+  decoder.bitmap = bitmap;
+  return decoder;
+}
+rt.register({ name: "android/graphics/BitmapRegionDecoder", ctor: JBitmapRegionDecoder, methods: {
+  "static newInstance(Ljava/io/InputStream;Z)Landroid/graphics/BitmapRegionDecoder;":
+    async (stream: unknown) => regionDecoder(await streamBytes(stream)),
+  "static newInstance(Ljava/io/InputStream;)Landroid/graphics/BitmapRegionDecoder;":
+    async (stream: unknown) => regionDecoder(await streamBytes(stream)),
+  "static newInstance(Ljava/lang/String;Z)Landroid/graphics/BitmapRegionDecoder;":
+    async (path: string) => regionDecoder(await vfs.readFile(path)),
+  "static newInstance(Ljava/io/FileDescriptor;Z)Landroid/graphics/BitmapRegionDecoder;":
+    async (fd: JFileDescriptor) => regionDecoder(await javaFdBytes(fd.fd)),
+  "static newInstance([BIIZ)Landroid/graphics/BitmapRegionDecoder;":
+    (bytes: Int8Array, offset: number, length: number) => regionDecoder(u8(bytes, offset, length)),
+  "getWidth()I": function (this: JBitmapRegionDecoder) { return this.bitmap?.w ?? 0; },
+  "getHeight()I": function (this: JBitmapRegionDecoder) { return this.bitmap?.h ?? 0; },
+  "isRecycled()Z": function (this: JBitmapRegionDecoder) { return this.bitmap ? 0 : 1; },
+  "recycle()V": function (this: JBitmapRegionDecoder) { this.bitmap = null; },
+  "decodeRegion(Landroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/Bitmap;":
+    function (this: JBitmapRegionDecoder, rect: JRect, opts: JBFOptions | null) {
+      const source = this.bitmap;
+      if (!source) throw rt.mkThrowable("java/lang/IllegalStateException", "BitmapRegionDecoder is recycled");
+      if (!rect || rect.left < 0 || rect.top < 0 || rect.right > source.w || rect.bottom > source.h ||
+          rect.right <= rect.left || rect.bottom <= rect.top) {
+        throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid image region");
+      }
+      const sample = Math.max(1, opts?.inSampleSize ?? 1);
+      const width = Math.max(1, Math.ceil((rect.right - rect.left) / sample));
+      const height = Math.max(1, Math.ceil((rect.bottom - rect.top) / sample));
+      if (opts) {
+        opts.outWidth = width; opts.outHeight = height;
+        opts.outConfig = bitmapConfigs[3]; opts.outColorSpace = srgbSpace;
+        if (opts.inJustDecodeBounds) return null;
+      }
+      const bitmap = JBitmap.create(width, height);
+      bitmap.ctx.drawImage(source.canvas, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
+        0, 0, width, height);
+      bitmap.immutable = !opts?.inMutable;
+      return bitmap;
+    },
+} });
 
 const imageFormats = {
   UNKNOWN: [0, -1], RGB_565: [4, 16], YV12: [0x32315659, 12], Y8: [0x20203859, 8], Y16: [0x20363159, 16],
