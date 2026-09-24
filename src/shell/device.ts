@@ -4,7 +4,7 @@ import { dexesIn } from "../jvm/dex";
 import { rt, type JObj } from "../jvm/runtime";
 import { vfs, apkPath } from "../jvm/natives/jio";
 import { openInstall, type Install } from "./install";
-import { vcall, vcallOn, callOn, curThread, mainThread, setCurThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, curThread, mainThread, setCurThread, JThrowable, stackTraceText } from "../jvm/natives/jlang";
 import { Arsc } from "../android/arsc";
 import { loadFramework, loadFrameworkDex } from "../android/framework";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
@@ -682,7 +682,7 @@ async function tick0() {
         // whatever DID lay out. Re-arming needsLayout here would turn a deterministic throw
         // into a 60fps exception storm; the next real requestLayout() recovers.
         perf.layoutErrors++;
-        console.error("[layout]", e);
+        console.error("[layout]", e instanceof JThrowable ? await stackTraceText(e) : e);
       }
       mainDbg.phase = "replay";
       replayLayoutRequests();
