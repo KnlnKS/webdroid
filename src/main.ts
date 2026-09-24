@@ -243,6 +243,7 @@ async function boot(file: string, local?: File) {
   booting = true;
   launcherEl.inert = true;
   picker.disabled = true;
+  let rollbackAssets: (() => void) | undefined;
   try {
     statusEl.textContent = (local ? "opening " : "downloading ") + file + "…";
     const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady, provisionPackages(), loadSkiaText()]);
@@ -252,16 +253,15 @@ async function boot(file: string, local?: File) {
       await navigator.serviceWorker.ready;
       if (!navigator.serviceWorker.controller) await new Promise<void>((resolve) => navigator.serviceWorker.addEventListener("controllerchange", () => resolve(), { once: true }));
     }
-    const rollbackAssets = activateLocalAssets(assets);
-    try {
-      const t0 = performance.now();
-      connectProcess();
-      await bootApk(install, (s) => { statusEl.textContent = s; }, assets?.key ?? file, null, registerForegroundProcess);
-      void provisionServices().then(() => processBroker().boot()).catch((error) => console.error("[provision]", error));
-      perf.bootMs = performance.now() - t0;
-      statusEl.textContent = `running (boot ${perf.bootMs.toFixed(0)}ms)` + (rt.nativeRequired.size ? " — needs native code" : "");
-    } catch (error) { rollbackAssets(); throw error; }
+    rollbackAssets = activateLocalAssets(assets);
+    const t0 = performance.now();
+    connectProcess();
+    await bootApk(install, (s) => { statusEl.textContent = s; }, assets?.key ?? file, null, registerForegroundProcess);
+    void provisionServices().then(() => processBroker().boot()).catch((error) => console.error("[provision]", error));
+    perf.bootMs = performance.now() - t0;
+    statusEl.textContent = `running (boot ${perf.bootMs.toFixed(0)}ms)` + (rt.nativeRequired.size ? " — needs native code" : "");
   } catch (e) {
+    rollbackAssets?.();
     console.error(e);
     statusEl.textContent = "boot failed: " + ((e as any)?.msg ?? e);
     statusEl.style.color = "#e77";

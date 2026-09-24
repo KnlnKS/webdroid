@@ -10,7 +10,6 @@ export interface AppHost {
   res: Resources;
   theme: JTheme;
   pkg: string;
-  /** Dev file name or local session ID used by /asset/ URLs. */
   assetKey: string;
   appLabel: string;
   themeResId: number;

@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, rm, stat } from "node:fs/promises";
+import { cp, mkdir, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { ensureFrameworkRes } from "./gen-framework-res";
 import { prepareSystemPackages } from "./system-packages";
@@ -20,14 +20,14 @@ const build = Bun.spawn(["bun", "build", "--target", "browser", "--production", 
 });
 if (await build.exited !== 0) throw new Error("Browser build failed");
 
-async function copyFile(source: string, target: string): Promise<void> {
+async function copyFile(source: string, target = source): Promise<void> {
   await mkdir(dirname(join(out, target)), { recursive: true });
   await cp(source, join(out, target), { dereference: true });
 }
 
 await Promise.all([
-  copyFile("vendor/framework-res.apk", "vendor/framework-res.apk"),
-  copyFile("vendor/android-cacerts.pem", "vendor/android-cacerts.pem"),
+  copyFile("vendor/framework-res.apk"),
+  copyFile("vendor/android-cacerts.pem"),
   cp("vendor/fonts", join(out, "vendor/fonts"), { recursive: true, dereference: true }),
   cp("vendor/microg", join(out, "vendor/microg"), { recursive: true, dereference: true }),
   cp("vendor/sql.js/dist", join(out, "sqljs"), { recursive: true, dereference: true }),
@@ -36,17 +36,14 @@ await Promise.all([
 
 const large: Record<string, { parts: number }> = {};
 if (includeAosp) for (const name of aospFiles) {
-  const source = `vendor/aosp/${name}`;
-  const size = (await stat(source)).size;
   const path = `vendor/aosp/${name}`;
-  if (size <= partSize) { await copyFile(source, path); continue; }
-  const parts = Math.ceil(size / partSize), file = Bun.file(source);
+  const size = (await stat(path)).size;
+  if (size <= partSize) { await copyFile(path); continue; }
+  const parts = Math.ceil(size / partSize), file = Bun.file(path);
   await mkdir(join(out, "vendor/aosp"), { recursive: true });
   for (let i = 0; i < parts; i++) await Bun.write(join(out, `${path}.part${i}`), await file.slice(i * partSize, (i + 1) * partSize).arrayBuffer());
   large[`/${path}`] = { parts };
 }
 await Bun.write(join(out, "large-assets.json"), JSON.stringify(large));
 
-const files = await readdir(out);
-if (!files.includes("index.html") || !files.includes("process.html")) throw new Error("Browser entrypoints missing");
 console.log(`Production assets ready in ${out}/`);

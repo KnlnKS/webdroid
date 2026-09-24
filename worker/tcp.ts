@@ -19,7 +19,7 @@ export async function tcpRelay(request: Request, context: ExecutionContext): Pro
   const close = () => {
     if (closed) return;
     closed = true;
-    try { server.close(); } catch { /* already closed */ }
+    try { server.close(); } catch {}
     void socket.close().catch(() => {});
   };
   void socket.closed.then(close, close);
