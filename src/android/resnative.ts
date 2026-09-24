@@ -569,13 +569,13 @@ rt.register({
     "getLayoutDimension(ILjava/lang/String;)I": function (this: JTypedArray, i: number) {
       const v = this.vals[i];
       if (!v) return 0;
-      if (v.t >= TV.INT_DEC && v.d < 0) return v.d;
+      if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4 && v.d < 0) return v.d;
       return Math.round(rvDimen(this.res, v, 0));
     },
     "getLayoutDimension(II)I": function (this: JTypedArray, i: number, d: number) {
       const v = this.vals[i];
       if (!v) return d;
-      if (v.t >= TV.INT_DEC && v.d < 0) return v.d;
+      if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4 && v.d < 0) return v.d;
       return Math.round(rvDimen(this.res, v, d));
     },
     "getResourceId(II)I": function (this: JTypedArray, i: number, d: number) {

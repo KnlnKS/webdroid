@@ -1697,7 +1697,7 @@ export async function loadDrawableRV(res: Resources, v: RV | null, theme: JTheme
   if (!v || v.t === TV.NULL) return new JColorDrawable();
   if (v.t === TV.ATTRIBUTE) return loadDrawableRV(res, theme?.lookup(v.d) ?? null, theme);
   if (v.t === TV.REFERENCE) return loadDrawable(res, v.d, theme);
-  if (v.t >= TV.COLOR_ARGB8 && v.t <= TV.COLOR_RGB4 || v.t >= TV.INT_DEC) {
+  if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) {
     const d = new JColorDrawable();
     d.color = v.d;
     return d;

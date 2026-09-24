@@ -348,7 +348,7 @@ export function obtainStyled(
   let defStyleId = 0;
   if (defStyleAttr && theme) {
     const v = theme.lookup(defStyleAttr);
-    if (v && (v.t === TV.REFERENCE || v.t >= TV.INT_DEC)) defStyleId = v.d;
+    if (v && (v.t === TV.REFERENCE || v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4)) defStyleId = v.d;
   }
   if (!defStyleId && defStyleRes) defStyleId = defStyleRes;
 
@@ -416,7 +416,7 @@ export function rvString(res: Resources, v: RV | null): string | null {
     return res.value(v.d).s ?? null;
   }
   if (v.t === TV.FLOAT) return String(v.d);
-  if (v.t >= TV.INT_DEC) return String(v.d);
+  if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return String(v.d);
   return v.s ?? null;
 }
 export function rvColor(res: Resources, v: RV | null, dflt = 0, depth = 0): number {
@@ -498,12 +498,12 @@ export function rvDimen(res: Resources, v: RV | null, dflt = 0): number {
   if (v.t === T_PX) return v.d;
   if (v.t === TV.DIMENSION) return complexToPx(v.d, res.dm);
   if (v.t === TV.FLOAT) return v.d;
-  if (v.t >= TV.INT_DEC) return v.d;
+  if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return v.d;
   return dflt;
 }
 export function rvInt(res: Resources, v: RV | null, dflt = 0): number {
   if (!v) return dflt;
-  if (v.t >= TV.INT_DEC || v.t === TV.BOOLEAN) return v.d;
+  if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return v.d;
   if (v.t === TV.FLOAT) return Math.round(v.d);
   if (v.t === T_PX) return Math.round(v.d);
   if (v.t === TV.DIMENSION) return Math.round(complexToPx(v.d, res.dm));
@@ -513,9 +513,12 @@ export function rvInt(res: Resources, v: RV | null, dflt = 0): number {
 export function rvFloat(res: Resources, v: RV | null, dflt = 0): number {
   if (!v) return dflt;
   if (v.t === TV.FLOAT) return v.d;
-  if (v.t >= TV.INT_DEC) return v.d;
+  if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) return v.d;
   if (v.t === T_PX) return v.d;
-  if (v.t === T_STR && v.s) return parseFloat(v.s) || dflt;
+  if (v.t === T_STR && v.s) {
+    const n = parseFloat(v.s);
+    return Number.isNaN(n) ? dflt : n;
+  }
   return dflt;
 }
 
