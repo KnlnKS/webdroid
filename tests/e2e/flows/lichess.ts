@@ -20,7 +20,8 @@ export const lichess: Flow = {
   clock: "live",
   quickWait: wait.state({ kind: "perf", counter: "glFrames", atLeast: 20 }, 0, 20_000),
   steps: [
-    { id: "launch", label: "Launch — Flutter home", action: { type: "launch" }, wait: wait.live(40000) },
+    { id: "launch", label: "Launch — Flutter home", action: { type: "launch" }, wait: wait.live(40000),
+      fastEvidence: { kind: "visual", maxContentDiffPct: 76 } },
     { id: "tools", label: "More — tools", action: tap(972, navY), wait: wait.live(2000) },
     { id: "editor", label: "Board editor", action: tap(540, dp(324)), wait: wait.live(2000) },
     { id: "pawn", label: "Drag e2 pawn to e4", action: { type: "swipe", from: [0.5625, boardY(2.5)], to: [0.5625, boardY(0.5)], ms: 300 }, wait: wait.live(2000) },

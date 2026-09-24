@@ -1,0 +1,31 @@
+{
+  "app": "lichess",
+  "pkg": "org.lichess.mobileV2",
+  "activity": "org.lichess.mobileV2.MainActivity",
+  "depth": "startup",
+  "recordedAt": "2026-09-24T00:46:36.983Z",
+  "pinnedClockMs": 1790210750956,
+  "device": {
+    "width": 1080,
+    "height": 2424,
+    "densityDpi": 480,
+    "fingerprint": "google/sdk_gphone64_arm64/emu64a:13/TE1A.240213.009/12342917:userdebug/dev-keys",
+    "sdk": "33"
+  },
+  "crop": {
+    "top": 0,
+    "bottom": 48,
+    "left": 0,
+    "right": 0
+  },
+  "steps": [
+    {
+      "id": "launch",
+      "label": "Launch — Flutter home",
+      "index": 0,
+      "file": "00-launch.png",
+      "uiFile": "00-launch.ui.json",
+      "settleTimedOut": false
+    }
+  ]
+}
