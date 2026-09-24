@@ -1,3 +1,20 @@
+# TikTok playback continuation — 2026-09-23
+
+Branch: `codex/tiktok-video-playback-20260923` in an isolated worktree.
+The unchanged TikTok APK reaches a steady visible Chrome presentation cadence
+near 30/s on a measured live segment, after feed transition. Browser
+presentation counts include UI redraws, and dense clips remain slower in
+headless software rendering, so all-clip original-rate playback is not yet
+established. Guest A64 local calls now stay inside compiled regions; EGL swap
+intervals have platform semantics; texture uploads pass WebGL only their
+reachable pixel extent. See implementation history for measurements and
+rejected experiments. The final serialized E2E matrix rendered 183/183 steps
+in 986.9 seconds. TikTok rendered 13/13, with advancing ticks and no GL,
+layout or draw failures; its two headless video steps made 14.3 and 9.1 EGL
+swaps/s. The 30-fps target remains unproved across live clips and renderers.
+
+---
+
 # Cut the Rope 15 FPS goal — 2026-09-23
 
 Integrated into `main` from `codex/cut-the-rope-15fps`. Starting revision: `33ab22fd`.

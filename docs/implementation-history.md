@@ -1422,3 +1422,81 @@ its known `Matrix.mapRect` draw error; 12 Flappy Bird auxiliary snapshots were
 unavailable as before. TikTok's 149 E-tagged log entries were largely its
 own TLS, crypto and monitor diagnostics; they did not correspond to reached
 required platform calls. No visual goldens changed.
+
+## TikTok frame cadence and EGL swap intervals — 2026-09-23
+
+Further full-Chromium captures on the same worktree showed why whole-window
+averages can understate playback cadence. A clean 15.205-second window made 347
+EGL swaps (22.8/s); a different 20.095-second window made 549 (27.3/s).
+Both included feed transitions. In a normal-JIT 15.01-second swipe run, 388 EGL
+swaps occurred. Browser presentation counts rose from 5 and 21 in the first
+two seconds after the swipe to 28–33 per second through most of the remaining
+window. The browser presentation counter includes UI redraws, so it is not a
+count of distinct decoded video frames.
+
+A temporary guest-PC watch captured the unchanged ByteVC1 decoder's compressed
+input and was removed afterward. An Annex B packet containing VPS/SPS/PPS
+described 576×1024 HEVC at 30/1 fps. In a separate time-aligned 12-second
+swipe capture, that stream header reached the decoder 2.454 seconds into the
+window. Browser presentations in consecutive one-second bins were 24, 3, 17,
+37, 31, 29, 30, 29, 31, 30, 30 and 26. That run made 266 EGL swaps overall.
+The sparse early output coincided with the new stream arriving; later output
+held about 30 presentations/s. The watch did not capture every packet and
+these live clips are not fixed inputs, so original-rate playback on every
+source remains unproved. The earlier matched 30-fps-header segment with 268
+EGL swaps in nine steady seconds remains the strongest video-rate evidence.
+
+Controlled trials did not justify a decoder or scheduler change. Removing
+worker pacing varied with live content and did not produce a repeatable gain.
+Replacing scalar vector-lane loads with Wasm SIMD lane loads preserved register
+results but slowed a fixed 20-million-instruction guest kernel from about 3.0
+to 6.8 ms. An async draw-guard simplification also had no measured gain.
+All three trials were reverted. Full-Chromium profiling still points primarily
+to guest decoder execution and WebGL `getError`; bypassing the latter would
+change guest-visible GLES errors.
+
+The EGL 1.1 swap-interval behavior was missing: native EGL returned success
+without storing the requested interval, and Java EGL11/EGL14 lacked the
+method. The implementation now tracks the interval on each surface, clamps it
+to the advertised 0–1 range, skips the display wait for interval zero, and
+reports missing current context or draw surface. TikTok did not call
+`eglSwapInterval` in the measured runs, so this fixes a general platform API
+without claiming a TikTok FPS gain.
+
+A subsequent headless TikTok clip exposed a separate WebGL cost. Guest
+`glTex(Sub)Image2D` handed WebGL a typed view extending to the end of the
+guest's roughly 4 GiB memory, although each plane occupied only its image
+extent. In a 12-second ByteVC2 profile, native execution took 7.806 seconds
+and WebGL `getError` alone accounted for 37.7% of sampled CPU time. Returning
+zero without querying WebGL would change GLES semantics. Uploads now pass
+only the bytes reachable under the context's current unpack alignment, row
+length, image height and skip settings, falling back to the old view for
+unknown formats or invalid dimensions. The same pixel-size calculation serves
+readback, removing its duplicate format table.
+
+A same-session 24-second headless A/B used full, bounded, full, bounded views
+in four six-second phases. WebGL `getError` took 718 ms for 32 calls and 772 ms
+for 55 calls in the full-view phases, versus 4 ms for 40 and 8 ms for 79 in
+the bounded phases. EGL rates were 5.3, 6.6, 9.3 and 13.1 swaps/s; live
+content changed between phases, so those rates cannot be attributed solely
+to the view length. GL error counts remained zero. Direct WebGL2 checks
+confirmed the exact valid input lengths for padded 2D rows (21 and 44 bytes)
+and a 3D upload with row and image skips (132 bytes), with a one-byte-short
+input rejected in each case. The focused TikTok flow rendered 13/13 steps
+without a GL, layout or draw error. A clean Chrome hardware window after a
+swipe made 385 EGL swaps in 15.001 seconds; its final seven one-second bins
+made 27–31 each, averaging 29.7/s. Earlier bins included a feed transition.
+This establishes a large WebGL synchronization reduction and steady output
+near 30/s on that live segment, not an all-clips original-rate guarantee.
+
+The final frozen-candidate E2E ran all 13 flows serially and rendered 183/183
+steps in 986.9 seconds. TikTok rendered 13/13 with advancing main-process
+ticks, no settle timeout or main-loop wedge, no required native call, and zero
+GL, layout or draw errors. Its headless `video` and
+`video-after-second-swipe` steps made 14.3 and 9.1 EGL swaps/s, respectively;
+the runner's 24/20 `fps` values count frame opportunities and do not establish
+video playback rate. YouTube retained two known settle timeouts and
+`Matrix.mapRect` draw errors. The other flows rendered all their steps, and
+visual goldens were unchanged. The remaining TikTok missing classes were
+optional app/vendor integrations on the observed path, not required platform
+APIs. Denser clips still fall short of the 30-fps playback goal.
