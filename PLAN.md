@@ -13,6 +13,13 @@ in 986.9 seconds. TikTok rendered 13/13, with advancing ticks and no GL,
 layout or draw failures; its two headless video steps made 14.3 and 9.1 EGL
 swaps/s. The 30-fps target remains unproved across live clips and renderers.
 
+Review follow-up: GLES pack/unpack row geometry now has one calculation, and
+EGL10 uses a canonical display handle with validation across its display
+entry points. Focused browser checks verify padded 2D and skipped 3D uploads;
+the final serialized matrix after these changes rendered 183/183 steps in
+1003.7 seconds. TikTok rendered 13/13 with advancing ticks and no GL, layout,
+draw or required native failure. The playback-rate limit above still applies.
+
 ---
 
 # Cut the Rope 15 FPS goal — 2026-09-23

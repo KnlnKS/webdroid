@@ -1500,3 +1500,31 @@ video playback rate. YouTube retained two known settle timeouts and
 visual goldens were unchanged. The remaining TikTok missing classes were
 optional app/vendor integrations on the observed path, not required platform
 APIs. Denser clips still fall short of the 30-fps playback goal.
+
+## Pixel layout and EGL10 display review — 2026-09-23
+
+The upload extent and readback paths now use the same row stride, row skip and
+last-pixel extent calculation. A two- or three-element dimension tuple makes
+the 2D/3D distinction explicit; only 3D uploads add the image-height and
+image-skip offset. The browser test calls the native GLES entries against real
+WebGL2 and observes exactly 21 bytes for padded RGB 2D rows and 132 bytes for
+a 3D RGBA upload with row and image skips, with no GL error.
+
+Java EGL10 now returns one canonical `EGLDisplay` for its default display and
+uses a distinct `EGL_NO_DISPLAY` handle. Display-taking EGL10 and EGL11
+methods reject other handles with `EGL_BAD_DISPLAY` before changing outputs or
+current state. The synthetic `GLSurfaceView` config chooser receives the
+canonical handle. [AOSP EGL10](https://android.googlesource.com/platform/frameworks/base/+/6f7c5e0914a18e6adafaa319e670363772e51691/opengl/java/javax/microedition/khronos/egl/EGL10.java)
+declares `EGL_DEFAULT_DISPLAY` as null, matching this boundary. Focused tests
+cover canonical identity, invalid displays and a successful EGL11
+swap-interval call on a bound context.
+
+Typecheck and 10 focused EGL/browser tests passed. TikTok smoke compilation
+covered 462,058 bodies-bearing classes with zero method failures. The focused
+TikTok flow rendered 13/13 steps. The frozen candidate's serialized E2E
+rendered all 183/183 steps in 1003.7 seconds; TikTok rendered 13/13, with
+main-process ticks advancing from 4000 to 6033 and zero required native, GL,
+layout or draw failures, settle timeouts or wedges. YouTube retained its two
+known settle timeouts and `Matrix.mapRect` draw error. No visual goldens
+changed. Live TikTok clips still varied and these structural fixes do not
+establish a 30-fps all-clips playback rate.
