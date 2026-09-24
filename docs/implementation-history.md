@@ -84,6 +84,22 @@ This is a large known platform difference, not a close visual match. The run
 completed all 13 checkpoints in 36.0 seconds: seven Android comparisons, two
 smoke flows and four live observations.
 
+YouTube's API 33 launch reference includes Android's notification permission
+sheet, absent from webdroid. Three isolated quick captures differed by
+77.12–77.13%; the seven-job run measured 77.12% against an 82% limit. Reddit's
+API 33 welcome screen is much closer: three isolated captures measured 1.33%,
+and the seven-job run measured 1.34% against a 4% limit. Both are launch-only
+references; their remaining full-flow steps are smoke evidence. The nine-compared,
+two-smoke, two-observed quick matrix finished in 37.0 seconds.
+
+Trial launch references for TikTok and ChatGPT were discarded. Android TikTok
+showed a full-screen notice over sign-in while webdroid reached feed consent;
+three webdroid captures scored 79.39–98.90% with changing pixels. Android ChatGPT
+showed a bottom welcome sheet while webdroid showed a centered modal; its
+three scores varied from 92.88% to 99.35% as the welcome content changed.
+Those measurements are useful diagnosis, but their spread cannot support a
+meaningful retained visual limit. The quick lane keeps both as live observations.
+
 ## Evidence and measurement
 
 - Run real APK and bundled library bytecode. A rendered screen or empty missing-API
