@@ -10,7 +10,7 @@ import { contentResolver, checkUriPermission } from "./contentresolver";
 import { mainLooper, mainExecutor, PROCESS_PID, PROCESS_UID } from "./os";
 import { getPrefs, movePrefs, deletePrefs } from "./sharedprefs";
 import { JAssetManager, type JConfiguration, scopedResources } from "./resnative";
-import { dbPath } from "./sqlite";
+import { dbPath, openDatabase } from "./sqlite";
 import { type JIntent, launchIntent } from "./intent";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { svcStart, svcStop, svcBind, svcUnbind } from "./runningservices";
@@ -299,6 +299,10 @@ export const contextMethods: NativeSpec["methods"] = {
   "getDatabasePath(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, name: string) {
     return mkFile(dbPath(this.$host.pkg, name));
   },
+  "openOrCreateDatabase(Ljava/lang/String;ILandroid/database/sqlite/SQLiteDatabase$CursorFactory;)Landroid/database/sqlite/SQLiteDatabase;":
+    function (this: JContext, name: string) { return openDatabase(dbPath(this.$host.pkg, name)); },
+  "openOrCreateDatabase(Ljava/lang/String;ILandroid/database/sqlite/SQLiteDatabase$CursorFactory;Landroid/database/DatabaseErrorHandler;)Landroid/database/sqlite/SQLiteDatabase;":
+    function (this: JContext, name: string) { return openDatabase(dbPath(this.$host.pkg, name)); },
   "databaseList()[Ljava/lang/String;": function (this: JContext) {
     return jarray(vfs.list(`/data/data/${this.$host.pkg}/databases`), "Ljava/lang/String;");
   },
