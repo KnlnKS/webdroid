@@ -12,6 +12,9 @@ class JWrapper extends JObj {
   mutex: object = this;
   entries = false;
 }
+class JUnmodifiableCollection extends JWrapper {}
+class JUnmodifiableList extends JUnmodifiableCollection {}
+class JUnmodifiableRandomAccessList extends JUnmodifiableList {}
 class JReadOnlyIterator extends JObj {
   delegate: unknown = null;
   entries = false;
@@ -33,7 +36,7 @@ async function call(wrapper: JWrapper, signature: string, args: unknown[]): Prom
 
 const names: Record<Mode, Record<Kind, string>> = {
   unmodifiable: {
-    collection: "webdroid/UnmodifiableCollection", list: "webdroid/UnmodifiableList",
+    collection: "java/util/Collections$UnmodifiableCollection", list: "java/util/Collections$UnmodifiableList",
     set: "webdroid/UnmodifiableSet", sortedSet: "webdroid/UnmodifiableSortedSet",
     map: "webdroid/UnmodifiableMap", sortedMap: "webdroid/UnmodifiableSortedMap",
   },
@@ -46,7 +49,9 @@ const names: Record<Mode, Record<Kind, string>> = {
 
 function wrap(value: unknown, mode: Mode, kind: Kind, mutex?: object, entries = false): JWrapper {
   if (value === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-  const wrapper: JWrapper = rt.make(names[mode][kind]);
+  const name = mode === "unmodifiable" && kind === "list" && rt.iof(value, "java/util/RandomAccess")
+    ? "java/util/Collections$UnmodifiableRandomAccessList" : names[mode][kind];
+  const wrapper: JWrapper = rt.make(name);
   wrapper.delegate = value;
   wrapper.mode = mode;
   wrapper.mutex = mutex ?? wrapper;
@@ -126,7 +131,7 @@ const sortedMapReads = [
   "tailMap(Ljava/lang/Object;)Ljava/util/SortedMap;",
 ] as const;
 
-function registerCollection(name: string, mode: Mode, kind: "collection" | "list" | "set" | "sortedSet", ifaces: string[]): void {
+function registerCollection(name: string, mode: Mode, kind: "collection" | "list" | "set" | "sortedSet", ifaces: string[], extra: Partial<NativeSpec> = {}): void {
   const transforms: Record<string, Transform> = {
     "iterator()Ljava/util/Iterator;": (value, wrapper) => wrapper.mode === "unmodifiable" ? readOnlyIterator(value, wrapper.entries) : value,
     "listIterator()Ljava/util/ListIterator;": (value, wrapper) => wrapper.mode === "unmodifiable" ? readOnlyIterator(value, false) : value,
@@ -138,7 +143,9 @@ function registerCollection(name: string, mode: Mode, kind: "collection" | "list
   };
   const reads = [...collectionReads, ...(kind === "list" ? listReads : []), ...(kind === "set" || kind === "sortedSet" ? setReads : []), ...(kind === "sortedSet" ? sortedSetReads : [])];
   const mutations = [...collectionWrites, ...(kind === "list" ? listWrites : [])];
-  rt.register({ name, ctor: class extends JWrapper {}, ifaces, methods: { ...forwards(reads, transforms), ...writes(mutations, mode) } });
+  rt.register({ name, ctor: extra.ctor ?? class extends JWrapper {}, sup: extra.sup, ifaces,
+    serialization: extra.serialization,
+    methods: { ...forwards(reads, transforms), ...writes(mutations, mode), ...extra.methods } });
 }
 
 function registerMap(name: string, mode: Mode, sorted: boolean): void {
@@ -191,8 +198,29 @@ rt.register({
   },
 });
 
-registerCollection("webdroid/UnmodifiableCollection", "unmodifiable", "collection", ["java/util/Collection", "java/lang/Iterable"]);
-registerCollection("webdroid/UnmodifiableList", "unmodifiable", "list", ["java/util/List", "java/util/Collection", "java/lang/Iterable"]);
+registerCollection("java/util/Collections$UnmodifiableCollection", "unmodifiable", "collection",
+  ["java/util/Collection", "java/io/Serializable"], {
+    ctor: JUnmodifiableCollection,
+    serialization: { uid: 1820017752578914078n, fields: [{ name: "c", desc: "Ljava/util/Collection;", prop: "delegate" }] },
+  });
+registerCollection("java/util/Collections$UnmodifiableList", "unmodifiable", "list",
+  ["java/util/List"], {
+    ctor: JUnmodifiableList, sup: "java/util/Collections$UnmodifiableCollection",
+    serialization: { uid: -283967356065247728n, fields: [{ name: "list", desc: "Ljava/util/List;", prop: "delegate" }] },
+    methods: { "readResolve()Ljava/lang/Object;": function (this: JUnmodifiableList) {
+      return rt.iof(this.delegate, "java/util/RandomAccess") ? wrap(this.delegate, "unmodifiable", "list") : this;
+    } },
+  });
+rt.register({ name: "java/util/Collections$UnmodifiableRandomAccessList", ctor: JUnmodifiableRandomAccessList,
+  sup: "java/util/Collections$UnmodifiableList", ifaces: ["java/util/RandomAccess"],
+  serialization: { uid: -2542308836966382001n, fields: [] },
+  methods: {
+    "writeReplace()Ljava/lang/Object;": function (this: JUnmodifiableRandomAccessList) {
+      const list = rt.make("java/util/Collections$UnmodifiableList");
+      list.delegate = this.delegate;
+      return list;
+    },
+  } });
 registerCollection("webdroid/UnmodifiableSet", "unmodifiable", "set", ["java/util/Set", "java/util/Collection", "java/lang/Iterable"]);
 registerCollection("webdroid/UnmodifiableSortedSet", "unmodifiable", "sortedSet", ["java/util/SortedSet", "java/util/Set", "java/util/Collection", "java/lang/Iterable"]);
 registerMap("webdroid/UnmodifiableMap", "unmodifiable", false);

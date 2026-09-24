@@ -13,6 +13,8 @@ const atomicCore = (d: string): NativeSpec["methods"] => ({
 class JAtomicInt extends JObj { v = 0; }
 rt.register({
   name: "java/util/concurrent/atomic/AtomicInteger", ctor: JAtomicInt, sup: "java/lang/Number",
+  ifaces: ["java/io/Serializable"],
+  serialization: { uid: 6214790243416807050n, fields: [{ name: "value", desc: "I", prop: "v" }] },
   methods: {
     ...atomicCore("I"),
     "incrementAndGet()I": function (this: JAtomicInt) { return (this.v = (this.v + 1) | 0); },
@@ -33,6 +35,8 @@ rt.register({
 class JAtomicLong extends JObj { v = 0n; }
 rt.register({
   name: "java/util/concurrent/atomic/AtomicLong", ctor: JAtomicLong, sup: "java/lang/Number",
+  ifaces: ["java/io/Serializable"],
+  serialization: { uid: 1927816293512124184n, fields: [{ name: "value", desc: "J", prop: "v" }] },
   methods: {
     ...atomicCore("J"),
     "incrementAndGet()J": function (this: JAtomicLong) { return (this.v = BigInt.asIntN(64, this.v + 1n)); },
@@ -227,4 +231,3 @@ rt.register({
     "getAndSet(Ljava/lang/Object;I)I": function (this: JFieldUpdater, o: any, v: number) { const old = o[this.prop] ?? 0; o[this.prop] = v; return old; },
   },
 });
-

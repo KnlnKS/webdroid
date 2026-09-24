@@ -29,3 +29,20 @@ test("ObjectOutputStream writes a complete object before explicit flush", async 
   expect(await vcall(uuid, "getMostSignificantBits", "()J")).toBe(1n);
   expect(await vcall(uuid, "getLeastSignificantBits", "()J")).toBe(2n);
 });
+
+test("unmodifiable random-access lists retain their serialized read-only view", async () => {
+  const list = await newObj("java/util/ArrayList", "()V");
+  await vcall(list, "add", "(Ljava/lang/Object;)Z", "saved");
+  await vcall(list, "add", "(Ljava/lang/Object;)Z", await newObj("java/util/concurrent/atomic/AtomicInteger", "(I)V", 7));
+  const view = await vcall(rt.link("java/util/Collections").ctor, "unmodifiableList", "(Ljava/util/List;)Ljava/util/List;", list);
+  const bytes = await newObj("java/io/ByteArrayOutputStream", "()V");
+  const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", bytes);
+  await vcall(output, "writeObject", "(Ljava/lang/Object;)V", view);
+  const source = await newObj("java/io/ByteArrayInputStream", "([B)V", await vcall(bytes, "toByteArray", "()[B"));
+  const input = await newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source);
+  const restored = await vcall(input, "readObject", "()Ljava/lang/Object;");
+  expect(rt.iof(restored, "java/util/RandomAccess")).toBe(1);
+  expect(await vcall(restored, "get", "(I)Ljava/lang/Object;", 0)).toBe("saved");
+  expect(await vcall(await vcall(restored, "get", "(I)Ljava/lang/Object;", 1), "get", "()I")).toBe(7);
+  await expect(vcall(restored, "add", "(Ljava/lang/Object;)Z", "new")).rejects.toThrow();
+});
