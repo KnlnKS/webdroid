@@ -34,6 +34,7 @@ export const resy: Flow = {
   apk: "Resy.apk",
   // the Resy API is HTTPS on a live certificate chain
   clock: "live",
+  quickWait: wait.state({ kind: "text", text: "Phone number" }, 0, 18_000),
   screen: { width: W, height: H, densityDpi: 480 },
   crop: { top: 72, bottom: 72, left: 0, right: 0 },
   steps: [

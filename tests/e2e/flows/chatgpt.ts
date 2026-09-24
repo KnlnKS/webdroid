@@ -11,6 +11,7 @@ export const chatgpt: Flow = {
   screen,
   crop: { top: 0, bottom: 0, left: 0, right: 0 },
   clock: "live",
+  quickWait: wait.state({ kind: "text", text: "Continue" }, 0, 20_000),
   steps: [
     { id: "launch", label: "Welcome", action: { type: "launch" }, wait: wait.live(20000) },
     { id: "skip", label: "Continue as guest", action: { type: "tapText", text: "Skip", optional: true }, wait: wait.live(3000) },

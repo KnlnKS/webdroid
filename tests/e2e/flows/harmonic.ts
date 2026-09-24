@@ -35,6 +35,7 @@ export const harmonic: Flow = {
   // the HN API is HTTPS: a device pinned to a past instant rejects every current certificate
   // and the app records its "Loading failed" state instead of its real UI
   clock: "live",
+  quickWait: wait.state({ kind: "text", text: "Get started" }, 0, 18_000),
   // status bar [0,48) and gesture bar [1232,1280) — the split fitnotes verified on-device
   crop: { top: 48, bottom: 48, left: 0, right: 0 },
   steps: [

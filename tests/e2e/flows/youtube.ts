@@ -13,6 +13,7 @@ export const youtube: Flow = {
   screen,
   crop: { top: 72, bottom: 72, left: 0, right: 0 },
   clock: "live",
+  quickWait: wait.state({ kind: "text", text: "Search YouTube" }, 0, 18_000),
   steps: [
     { id: "launch", label: "Launch YouTube", action: { type: "launch" }, wait: wait.live(30000) },
     { id: "notifications", label: "Continue without notifications", action: { type: "tapText", text: "Don’t allow", optional: true }, wait: wait.live(10000) },

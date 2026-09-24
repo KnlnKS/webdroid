@@ -45,6 +45,7 @@ export type WaitPolicy =
   | { kind: "sample"; atVirtualMs: number; maxRealMs: number; minRealMs: number }
   | { kind: "live"; horizonMs: number; timeoutMs: number }
   | { kind: "live-sample"; atRealMs: number; timeoutMs: number };
+type StateWait = Extract<WaitPolicy, { kind: "state" }>;
 
 export type EvidencePolicy =
   | { kind: "semantic" }
@@ -53,7 +54,7 @@ export type EvidencePolicy =
 
 const REAL_WAIT_MS = 20_000;
 export const wait = {
-  state: (condition: StateCondition, maxVirtualMs = 20_000, maxRealMs = REAL_WAIT_MS): WaitPolicy =>
+  state: (condition: StateCondition, maxVirtualMs = 20_000, maxRealMs = REAL_WAIT_MS): StateWait =>
     ({ kind: "state", condition, maxVirtualMs, maxRealMs }),
   quiescent: (maxVirtualMs = 0, maxRealMs = REAL_WAIT_MS): WaitPolicy =>
     ({ kind: "quiescent", maxVirtualMs, maxRealMs }),
@@ -100,7 +101,13 @@ type FlowBase = {
 };
 
 export type Flow = FlowBase & (
-  | { clock: "live"; sourceCoverage?: never; expectedBrowserErrors?: never }
+  | {
+      clock: "live";
+      /** Observable startup checkpoint for the launch-only quick pass. */
+      quickWait: StateWait;
+      sourceCoverage?: never;
+      expectedBrowserErrors?: never;
+    }
   | {
       /** Controlled flows advance Android-visible time in fast mode; pinned flows retain real scheduling. */
       clock: "controlled" | "pinned";
@@ -130,6 +137,8 @@ export const isMotionWait = (policy: WaitPolicy): boolean =>
   policy.kind === "sample" || policy.kind === "live-sample";
 
 export function validateFlow(flow: Flow): void {
+  if (flow.clock === "live" && flow.steps[0]?.action.type !== "launch")
+    throw new Error(`${flow.app}: live quick check must start with launch`);
   const ids = new Set<string>();
   for (const step of flow.steps) {
     if (!step.id || ids.has(step.id)) throw new Error(`${flow.app}: duplicate or empty step id "${step.id}"`);
