@@ -99,7 +99,7 @@ Diagnostics unavailable: the browser page crashed before runtime inspection.
 
 - The initial Aegis page crash reproduced in isolation. Chromium reported V8 OOM. An `AutoCompleteTextView` constructor called a virtual two-argument constructor from its three-argument constructor, recursing through the app subclass. The shared text-view constructor path and dropdown accessors now let Aegis render with zero missing APIs or reported errors at launch.
 - OpenTracks launched without missing calls or reported errors after `String.join(CharSequence, Iterable)` and the empty-property animator fix. Calendar also stopped reporting the animator rejection.
-- NewPipe resource-bundle loading advanced through its bundled `ListResourceBundle` classes. Live search returned video results, but selecting a result has not established working playback.
+- NewPipe resource-bundle loading advanced through its bundled `ListResourceBundle` classes. Live search returned video results and a detail page. The player opened after framework package-signature, media notification and progress drawable fixes. Its cache's serialized Java list and atomic counter now round-trip through Android-compatible forms.
 - Fossify File Manager and Gallery advanced past `SimpleDateFormat.toLocalizedPattern` and exposed additional storage, media, and layout calls.
 
 ### Interaction evidence after launch
@@ -109,12 +109,12 @@ Diagnostics unavailable: the browser page crashed before runtime inspection.
 | Mihon | Reader shell launches | Onboarding, library import and reading unverified; a FirebaseSessions boxed-number cast remains in logs |
 | Harmonic | Welcome dialog's Get started action | Article navigation and WebView behavior unverified; optional OEM window-extension probes remain |
 | Lichess | Flutter shell frame | Blank content after native `pthread` error 35; unusable |
-| NewPipe | Search suggestions, live results and a video page | Playback has not worked in the observed flow |
+| NewPipe | Search suggestions, live results, video detail, player service and controls | Video area remains black after 20 seconds with zero presented surface frames; audio playback unverified |
 | AntennaPod | Search field; bundled Conscrypt JNI loads | Podcast fetch and audio playback unverified |
 | Organic Maps | Splash screen | Map never appears in the observed run |
 | OpenTracks | Main screen | Track recording, location and export unverified |
 | KeePassDX | New-vault password form and notification prompt | Database creation, unlock and file-picker behavior unverified |
-| Aegis | Password-protected empty vault; manual entry saved in an unencrypted vault and a six-digit TOTP code rendered | Encrypted-vault entry save, reload persistence, QR scanning and backup unverified |
+| Aegis | Password-protected empty vault; manual entry saved in an unencrypted vault, rendered a six-digit TOTP code and survived page reload | Encrypted-vault entry save and reload, QR scanning and backup unverified |
 | Thunderbird | Add Account form | Account setup and mail use unverified |
 | Feeder | Feed URL/Search/Add feed form | Feed fetch, article reading and sync unverified |
 | Fossify File Manager | File browser | File create, copy and storage mutations unverified |
@@ -122,7 +122,7 @@ Diagnostics unavailable: the browser page crashed before runtime inspection.
 | Fossify Gallery | Folder picker | Media browsing and image operations unverified |
 | Markor | Main view | Document creation, editing and save unverified |
 
-`androidx.window` sidecar/extension provider probes in Harmonic, Lichess and Feeder are optional OEM classes, so their absence is retained rather than reported as implemented support. A launch or an empty missing list covers only the exercised path. The Aegis password and manual-entry flows exposed Java character-array decoding, charset encoding, resource-bundle controls, permissions, layout animation, object serialization and drawable null layers after the initial scan. A sample manual entry displayed a TOTP code with no observed missing APIs or errors on that path; reload persistence still needs verification.
+`androidx.window` sidecar/extension provider probes in Harmonic, Lichess and Feeder are optional OEM classes, so their absence is retained rather than reported as implemented support. A launch or an empty missing list covers only the exercised path. The Aegis password and manual-entry flows exposed Java character-array decoding, charset encoding, resource-bundle controls, permissions, layout animation, object serialization and drawable null layers after the initial scan. A sample manual entry displayed a TOTP code before and after page reload with no observed missing APIs or errors on that path.
 
 The 2026-09-24 repeat launch scan of these pinned APKs drew 15/15 frames with zero native requirements. Only the two optional `androidx.window` provider classes appeared as missing calls. Lichess still aborted its Flutter worker with native `pthread` error 35. Mihon logged an OkHttp cache recovery and a FirebaseSessions boxed-number cast, NewPipe logged an RxJava undeliverable exception, and File Manager logged Glide failures for `/sdcard/Android`; these need causal checks before treating them as compatibility regressions or harmless probes.
 
