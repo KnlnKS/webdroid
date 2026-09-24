@@ -2,6 +2,8 @@ import { installWebHistory } from "./webhistory";
 import { installWebLocation } from "./weblocation";
 
 export const WEB_INJECT = `<script>(function(){
+// Wrangler can insert __name into functions embedded through toString().
+const __name = (target, value) => Object.defineProperty(target, "name", {value, configurable: true});
 const config = window.__wdWebView, f = window.frameElement;
 delete window.__wdWebView;
 const ua = config?.agent || f?.__wdUserAgent;
