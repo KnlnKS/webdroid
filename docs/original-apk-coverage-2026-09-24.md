@@ -6,7 +6,7 @@ The active scope is the 20 APKs present before the latest additions to `apks/`. 
 | --- | --- | --- |
 | Amazon.xapk | Private Amazon classes/services; optional SLF4J binder | The Weblab Thumb APSR fault is fixed at instruction level; shopping content and sign-in need deeper exercise |
 | Among Us.xapk | None observed | Practice works; online service connection failed on deployed relay |
-| ChatGPT.xapk | `java/net/DatagramSocket`; optional Amazon IAP probe | Settings flow fails; authenticated upload and voice unvalidated |
+| ChatGPT.xapk | Optional Amazon IAP probe on targeted Bun-server boot | Settings flow fails; hosted UDP and screen projection remain unsupported; authenticated upload and voice unvalidated |
 | Cut the Rope.xapk | None observed | Level-one tutorial works; intro video and later gameplay speed remain open |
 | DoodleJumpChrismas.apk | None observed | Boot only |
 | FitNotes.apk | None observed | Covered by E2E and Android comparison flows |
@@ -26,3 +26,5 @@ The active scope is the 20 APKs present before the latest additions to `apks/`. 
 | mihon-v0.20.4.apk | None observed | Boot only |
 
 The current 20-app rerun at `0ac2f429` drew 20/20 frames with diagnostics. Google Maps had zero missing entries, zero required native calls and two process errors. CursorWindow has typed row access and parcel round trip; FileBackupHelper currently supports construction only. Implement and verify backup transport before treating Android backup as supported. A focused Amazon rerun after `a4dbe53b` did not reproduce its prior Thumb APSR fault, and the exact instruction sequence passes a core test; this does not establish a long-session fix. Full use of every app has not been demonstrated.
+
+A later ChatGPT rerun on the Bun development server observed the optional Amazon IAP class probe but no UDP transport miss. A local UDP echo round trip verified the relay's binary framing, and ChatGPT smoke compilation had zero method failures. The fast ChatGPT flow still failed at Settings, Language and About; it newly exposed `media_projection` and `device_policy` service requests on feature paths. The device-policy camera query now returns the state of a device with no active administrator. Remote UDP is available in the Bun development server; the hosted Worker has no UDP transport. The ChatGPT flow's other missing entries and the NTP response itself have not been fully validated.
