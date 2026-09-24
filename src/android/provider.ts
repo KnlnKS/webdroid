@@ -9,6 +9,7 @@ import { newObj, vcall } from "../jvm/natives/jlang";
 import { isDocumentsProvider } from "./pm";
 import { registerSystemActivity, mkResultIntent } from "./intent";
 import { mkUri } from "./net";
+import { packages } from "./packages";
 import { docCreate, docDelete, docRename, pickTree, pickDocument, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
 
 
@@ -141,6 +142,12 @@ for (const [cls, path, extra] of [
   rt.register({ name: "android/provider/ContactsContract$" + cls, ctor: class extends JObj {}, statics: { CONTENT_URI: contactsUri(path), ...extra } });
 }
 
+rt.register({ name: "android/provider/BlockedNumberContract$BlockedNumbers", ctor: class extends JObj {}, statics: {
+  CONTENT_URI: mkUri("content://com.android.blockednumber/blocked"),
+  COLUMN_ID: "_id", COLUMN_ORIGINAL_NUMBER: "original_number", COLUMN_E164_NUMBER: "e164_number",
+  CONTENT_TYPE: "vnd.android.cursor.dir/blocked_number", CONTENT_ITEM_TYPE: "vnd.android.cursor.item/blocked_number",
+} });
+
 // ── MediaStore: the volume-scoped content URIs. content://media/<volume>/<table>
 const mediaUri = (vol: string, table: string) => mkUri(`content://media/${vol}/${table}`);
 for (const [cls, table] of [["Images$Media", "images/media"], ["Video$Media", "video/media"],
@@ -162,5 +169,11 @@ rt.register({
     VOLUME_INTERNAL: "internal", VOLUME_EXTERNAL: "external", VOLUME_EXTERNAL_PRIMARY: "external_primary",
     MEDIA_SCANNER_VOLUME: "volume", AUTHORITY: "media",
   },
-  methods: { "static getPickImagesMaxLimit()I": () => 150 },
+  methods: {
+    "static getPickImagesMaxLimit()I": () => 150,
+    "static canManageMedia(Landroid/content/Context;)Z": (ctx: { $host: { pkg: string } } | null) => {
+      if (!ctx) rt.npe();
+      return packages.get(ctx!.$host.pkg)?.grants.has("android.permission.MANAGE_MEDIA") ? 1 : 0;
+    },
+  },
 });

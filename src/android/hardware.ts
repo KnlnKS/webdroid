@@ -23,6 +23,14 @@ rt.register({
 });
 rt.register({ name: "android/hardware/SensorEventListener2", ctor: class extends JObj {}, ifaces: ["android/hardware/SensorEventListener"] });
 rt.register({ name: "android/hardware/HardwareBuffer", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable", "java/lang/AutoCloseable"] });
+rt.register({ name: "android/hardware/fingerprint/FingerprintManager", ctor: class extends JObj {}, methods: {
+  "isHardwareDetected()Z": () => 0,
+  "hasEnrolledFingerprints()Z": () => 0,
+} });
+rt.register({ name: "android/hardware/usb/UsbManager", ctor: class extends JObj {}, methods: {
+  "getDeviceList()Ljava/util/HashMap;": () => rt.make("java/util/HashMap"),
+  "getAccessoryList()[Landroid/hardware/usb/UsbAccessory;": () => null,
+} });
 
 class JSensor extends JObj { type = 0; sname = ""; vendor = ""; maxRange = 0; resolution = 0; minDelay = 0; }
 rt.register({
