@@ -16,7 +16,7 @@ The production build prepares the pinned system package data and framework resou
 
 For local Worker testing, use `bun run worker:dev`. To deploy after configuring the sites below, run `bun run build:prod` followed by `bunx wrangler deploy`.
 
-Cloudflare Workers Builds connects to the `main` branch of `KnlnKS/webdroid`. Its build command is `sh scripts/build-cloudflare.sh` and its deploy command is `npx wrangler deploy`. Set the build variable `BUN_VERSION` to `1.4.0`. The build script downloads checksum-pinned Zig 0.16.0 and the generated Android resource and sql.js inputs from the `build-inputs-v1` release. These inputs do not change on ordinary source commits; update the release and its checksum when their source or build configuration changes. The build then generates the Wasm core and production assets from the checked out commit.
+Cloudflare Workers Builds connects to the `main` branch of `KnlnKS/webdroid`. Its build command is `sh scripts/build-cloudflare.sh` and its deploy command is `npx wrangler deploy`. Set the build variable `BUN_VERSION` to `1.4.0`. The build script downloads checksum-pinned Zig 0.16.0, Android 33 platform resources, and Android build tools 35.0.1. The existing sql.js build script fetches Emscripten 4.0.9 and its pinned sources. The build generates every asset from the checked out commit; generated assets remain out of Git.
 
 ## Sites and configuration
 
