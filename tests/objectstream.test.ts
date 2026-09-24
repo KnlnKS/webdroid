@@ -14,3 +14,18 @@ test("ObjectInputStream consumes complete short blocks and crosses block boundar
   expect(await vcall(input, "readInt", "()I")).toBe(0x12345678);
   expect(await vcall(input, "readInt", "()I")).toBe(0x11223344);
 });
+
+test("ObjectOutputStream writes a complete object before explicit flush", async () => {
+  const set = await newObj("java/util/TreeSet", "()V");
+  await vcall(set, "add", "(Ljava/lang/Object;)Z", await newObj("java/util/UUID", "(JJ)V", 1n, 2n));
+  const bytes = await newObj("java/io/ByteArrayOutputStream", "()V");
+  const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", bytes);
+  await vcall(output, "writeObject", "(Ljava/lang/Object;)V", set);
+  const source = await newObj("java/io/ByteArrayInputStream", "([B)V", await vcall(bytes, "toByteArray", "()[B"));
+  const input = await newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source);
+  const restored = await vcall(input, "readObject", "()Ljava/lang/Object;");
+  const iterator = await vcall(restored, "iterator", "()Ljava/util/Iterator;");
+  const uuid = await vcall(iterator, "next", "()Ljava/lang/Object;");
+  expect(await vcall(uuid, "getMostSignificantBits", "()J")).toBe(1n);
+  expect(await vcall(uuid, "getLeastSignificantBits", "()J")).toBe(2n);
+});

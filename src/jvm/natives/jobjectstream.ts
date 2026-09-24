@@ -70,6 +70,7 @@ class JObjectOut extends JOutputStream {
   replacements = new Map<unknown, unknown>();
   replace = false;
   context: FieldContext | null = null;
+  writeDepth = 0;
 }
 /** every primitive write is its own TC_BLOCKDATA record, which reads back identically */
 function blockWrite(o: JObjectOut, bytes: Uint8Array): void {
@@ -103,7 +104,12 @@ rt.register({
       b.set(body, 2);
       blockWrite(this, b);
     },
-    "writeObject(Ljava/lang/Object;)V": function (this: JObjectOut, value: unknown) { return writeObject(curThread, this, value); },
+    "writeObject(Ljava/lang/Object;)V": async function (this: JObjectOut, value: unknown) {
+      this.writeDepth++;
+      try { await writeObject(curThread, this, value); }
+      finally { this.writeDepth--; }
+      if (this.writeDepth === 0) await vcall(this, "flush", "()V");
+    },
     "enableReplaceObject(Z)Z": function (this: JObjectOut, enabled: number) { const old = this.replace; this.replace = !!enabled; return +old; },
     "replaceObject(Ljava/lang/Object;)Ljava/lang/Object;": (value: unknown) => value,
     "defaultWriteObject()V": function (this: JObjectOut) { return this.context ? writeFields(curThread, this, this.context) : inactive(); },

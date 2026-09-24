@@ -29,6 +29,9 @@ export function uuidFromString(s: string): JUUID {
 }
 rt.register({
   name: "java/util/UUID", ctor: JUUID, ifaces: ["java/io/Serializable", "java/lang/Comparable"],
+  serialization: { uid: -4856846361193249489n, fields: [
+    { name: "leastSigBits", desc: "J", prop: "lo" }, { name: "mostSigBits", desc: "J", prop: "hi" },
+  ] },
   methods: {
     "<init>(JJ)V": function (this: JUUID, hi: bigint, lo: bigint) { this.hi = hi; this.lo = lo; },
     "static randomUUID()Ljava/util/UUID;": () => {

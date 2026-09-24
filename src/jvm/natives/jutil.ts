@@ -1505,8 +1505,24 @@ for (const n of ["java/util/TreeMap", "java/util/concurrent/ConcurrentSkipListMa
 for (const n of ["java/util/TreeSet", "java/util/concurrent/ConcurrentSkipListSet"]) {
   rt.register({
     name: n, ctor: class extends JTreeSet {}, typeVars: "E",
+    serialization: n === "java/util/TreeSet" ? { uid: -2479143000061671589n, fields: [] } : undefined,
     ifaces: ["java/util/NavigableSet", "java/lang/Cloneable", "java/io/Serializable"],
-    methods: { ...setMethods(), ...treeSetMethods() },
+    methods: { ...setMethods(), ...treeSetMethods(), ...(n === "java/util/TreeSet" ? {
+      "writeObject(Ljava/io/ObjectOutputStream;)V": async function (this: JTreeSet, stream: unknown) {
+        await vcall(stream, "defaultWriteObject", "()V");
+        await vcall(stream, "writeObject", "(Ljava/lang/Object;)V", this.cmp);
+        await vcall(stream, "writeInt", "(I)V", this.slow.length);
+        for (const item of this.slow) await vcall(stream, "writeObject", "(Ljava/lang/Object;)V", item.k);
+      },
+      "readObject(Ljava/io/ObjectInputStream;)V": async function (this: JTreeSet, stream: unknown) {
+        await vcall(stream, "defaultReadObject", "()V");
+        this.cmp = await vcall(stream, "readObject", "()Ljava/lang/Object;");
+        const count: number = await vcall(stream, "readInt", "()I");
+        if (count < 0) throw rt.mkThrowable("java/io/StreamCorruptedException", "negative set size");
+        this.m.clear(); this.slow = [];
+        for (let i = 0; i < count; i++) await tadd(this, await vcall(stream, "readObject", "()Ljava/lang/Object;"));
+      },
+    } : {}) },
   });
 }
 
@@ -2619,6 +2635,12 @@ rt.register({
       }
       return 1;
     },
+    "static frequency(Ljava/util/Collection;Ljava/lang/Object;)I": async (collection: unknown, target: unknown) => {
+      if (collection === null) rt.npe();
+      let count = 0;
+      for (const value of await toJsArray(collection)) if (await jeq(target, value)) count++;
+      return count;
+    },
 
     "static addAll(Ljava/util/Collection;[Ljava/lang/Object;)Z": async (c: unknown, arr: unknown[]) => {
       for (const v of arr) await vcall(c, "add", "(Ljava/lang/Object;)Z", v);
@@ -2766,16 +2788,16 @@ function bundleNames(baseName: string, locale: JLocale): string[] {
   for (let n = parts.length; n > 0; n--) names.push(baseName + "_" + parts.slice(0, n).join("_"));
   return names;
 }
-async function getBundle(baseName: string, locale: JLocale): Promise<JResourceBundle> {
+async function getBundle(baseName: string, locale: JLocale, control?: JBundleControl): Promise<JResourceBundle> {
   if (baseName == null || locale == null) rt.npe();
   const load = async (name: string): Promise<JResourceBundle | null> => {
     const cls = name.replaceAll(".", "/");
-    if (rt.dexIndex.has(cls) || rt.natives.has(cls)) {
+    if ((!control || control.formats.a.includes("java.class")) && (rt.dexIndex.has(cls) || rt.natives.has(cls))) {
       const candidate = await newObj(cls);
       if (!rt.iof(candidate, "java/util/ResourceBundle")) throw rt.mkThrowable("java/lang/ClassCastException", name);
       return candidate;
     }
-    const bytes = await rt.readClasspath(cls + ".properties");
+    const bytes = !control || control.formats.a.includes("java.properties") ? await rt.readClasspath(cls + ".properties") : null;
     if (!bytes) return null;
     const bundle = new JResourceBundle();
     bundle.values = propertyText(charsToString(bytes, 0, bytes.length));
@@ -2787,7 +2809,7 @@ async function getBundle(baseName: string, locale: JLocale): Promise<JResourceBu
     const bundle = await load(name);
     if (bundle) found.push(bundle);
   }
-  if (!found.length && requested.length) {
+  if (!found.length && requested.length && !control?.noFallback) {
     for (const name of bundleNames(baseName, defaultLocale)) {
       const bundle = await load(name);
       if (bundle) found.push(bundle);
@@ -2799,10 +2821,49 @@ async function getBundle(baseName: string, locale: JLocale): Promise<JResourceBu
   for (let i = 1; i < found.length; i++) found[i - 1].parent = found[i];
   return found[0];
 }
+class JBundleControl extends JObj {
+  noFallback = false;
+  formats: JList = newArrayList(["java.class", "java.properties"]);
+}
+rt.register({ name: "java/util/ResourceBundle$Control", ctor: JBundleControl,
+  clinit: () => {
+    const ctor = rt.link("java/util/ResourceBundle$Control").ctor;
+    ctor.s$FORMAT_DEFAULT = unmodifiableList(newArrayList(["java.class", "java.properties"]));
+    ctor.s$FORMAT_CLASS = unmodifiableList(newArrayList(["java.class"]));
+    ctor.s$FORMAT_PROPERTIES = unmodifiableList(newArrayList(["java.properties"]));
+  },
+  methods: {
+    "<init>()V": function () {},
+    "static getNoFallbackControl(Ljava/util/List;)Ljava/util/ResourceBundle$Control;": async (formats: unknown) => {
+      if (formats === null) rt.npe();
+      const values = await toJsArray(formats);
+      if (!((values.length === 2 && values[0] === "java.class" && values[1] === "java.properties") ||
+            (values.length === 1 && (values[0] === "java.class" || values[0] === "java.properties"))))
+        throw rt.mkThrowable("java/lang/IllegalArgumentException", "unknown format");
+      const control = new JBundleControl();
+      control.noFallback = true;
+      control.formats = newArrayList(values);
+      return control;
+    },
+    "getFormats(Ljava/lang/String;)Ljava/util/List;": function (this: JBundleControl, baseName: string | null) {
+      if (baseName === null) rt.npe();
+      return this.formats;
+    },
+    "getFallbackLocale(Ljava/lang/String;Ljava/util/Locale;)Ljava/util/Locale;": function (this: JBundleControl, baseName: string | null, locale: JLocale | null) {
+      if (baseName === null || locale === null) rt.npe();
+      return this.noFallback || locale!.lang === defaultLocale.lang && locale!.country === defaultLocale.country &&
+        locale!.script === defaultLocale.script && locale!.variant === defaultLocale.variant ? null : defaultLocale;
+    },
+  },
+});
 rt.register({ name: "java/util/ResourceBundle", ctor: JResourceBundle, fields: { parent: "parent" }, methods: {
   "<init>()V": function () {},
   "static getBundle(Ljava/lang/String;)Ljava/util/ResourceBundle;": (baseName: string) => getBundle(baseName, defaultLocale),
   "static getBundle(Ljava/lang/String;Ljava/util/Locale;)Ljava/util/ResourceBundle;": getBundle,
+  "static getBundle(Ljava/lang/String;Ljava/util/Locale;Ljava/util/ResourceBundle$Control;)Ljava/util/ResourceBundle;": (baseName: string, locale: JLocale, control: JBundleControl | null) => {
+    if (control === null) rt.npe();
+    return getBundle(baseName, locale, control);
+  },
   "setParent(Ljava/util/ResourceBundle;)V": function (this: JResourceBundle, parent: JResourceBundle) { this.parent = parent; },
   "handleGetObject(Ljava/lang/String;)Ljava/lang/Object;": async function (this: JResourceBundle, key: string) {
     if (key == null) rt.npe();
