@@ -15,7 +15,7 @@ import { setManifest, manifestActivityTheme, manifestActivityOrientation, activi
 import { JIntent, deliverActivityResult, activityTransport, mkComponentName } from "../android/intent";
 import { ensureDecor, startingWindow } from "../android/decor";
 import { getInflater } from "../android/inflate";
-import { JActivity, fireActivityLifecycle } from "../android/app";
+import { JActivity, fireActivityLifecycle, dispatchSplashExit } from "../android/app";
 import { JMenu, pushMenuToBar } from "../android/menu";
 import { JContext } from "../android/context";
 import { attachProvider } from "../android/contentresolver";
@@ -730,6 +730,9 @@ async function tick0() {
         rt.yieldGap = 8;
       }
       present();
+      for (const activity of activities) {
+        try { await dispatchSplashExit(activity); } catch (error) { reportUncaught(error); }
+      }
       perf.drawMs += performance.now() - t0;
       // WebView frames are DOM over the canvas: show the ones this pass drew, hide the rest
       webLayerSweep(overlays.some(o => o.view.visibility === 0));

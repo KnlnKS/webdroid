@@ -10,6 +10,8 @@ import type { JContext } from "./context";
 import type { JActivity } from "./app";
 import { onMain } from "./mainloop";
 import { vcall, defineException } from "../jvm/natives/jlang";
+import { TV, type XmlAttr, type XmlNode } from "./axml";
+import { normRV } from "./res";
 
 export class JIntent extends JObj {
   action: string | null = null;
@@ -81,7 +83,40 @@ async function writeIntent(this: JIntent, p: JParcel, flags: number): Promise<vo
   writeInt(p, this.contentUserHint); await vcall(p, "writeBundle", "(Landroid/os/Bundle;)V", this.extras.map.size ? this.extras : null);
   writeInt(p, +!!this.originalIntent); if (this.originalIntent) await vcall(this.originalIntent, "writeToParcel", "(Landroid/os/Parcel;I)V", p, flags);
 }
+async function parseIntentXml(_resources: unknown, parser: unknown, attrs: unknown): Promise<JIntent> {
+  if (!parser || !attrs) rt.npe();
+  const attribute = (name: string) => vcall(attrs, "getAttributeValue", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "http://schemas.android.com/apk/res/android", name) as Promise<string | null>;
+  const intent = new JIntent();
+  intent.action = await attribute("action");
+  intent.dataUri = await attribute("data");
+  intent.typeStr = await attribute("mimeType");
+  intent.identifier = await attribute("identifier");
+  intent.componentPkg = await attribute("targetPackage");
+  intent.component = await attribute("targetClass");
+  const outerDepth = await vcall(parser, "getDepth", "()I") as number;
+  for (;;) {
+    const type = await vcall(parser, "next", "()I") as number;
+    if (type === 1 || type === 3 && (await vcall(parser, "getDepth", "()I")) <= outerDepth) break;
+    if (type !== 2) continue;
+    const tag = await vcall(parser, "getName", "()Ljava/lang/String;") as string;
+    if (tag === "category") {
+      const category = await attribute("name");
+      if (category) intent.categories.add(category);
+    } else if (tag === "extra") {
+      const name = await attribute("name");
+      if (!name) continue;
+      const raw = await attribute("value");
+      const node = (attrs as { node?: XmlNode | null }).node;
+      const value = node?.attrs.find((a: XmlAttr) => a.name === "value");
+      intent.extras.map.set(name, value?.type === TV.BOOLEAN ? (value.data ? 1 : 0)
+        : value?.type === TV.FLOAT ? normRV({ t: value.type, d: value.data }).d
+          : value && value.type >= TV.INT_DEC && value.type <= TV.COLOR_RGB4 ? value.data : raw);
+    }
+  }
+  return intent;
+}
 const intentMethods: NativeSpec["methods"] = {
+  "static parseIntent(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;)Landroid/content/Intent;": parseIntentXml,
   "<init>()V": function () {},
   "<init>(Landroid/os/Parcel;)V": async function (this: JIntent, p: JParcel) { await readIntent(p, this); },
   "readFromParcel(Landroid/os/Parcel;)V": async function (this: JIntent, p: JParcel) { await readIntent(p, this); },

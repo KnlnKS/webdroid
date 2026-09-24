@@ -1,4 +1,4 @@
-import { JContextWrapper, JAttributionSource, systemService, wrapperMethods, display, displayListeners, grantPermissions } from "./context";
+import { JContextWrapper, JAttributionSource, systemService, wrapperMethods, display, displayListeners, grantPermissions, type JContext } from "./context";
 import { JWindow } from "./window";
 import {
   JIntent, activityTransport, systemActivities, deliverActivityResult, RESULT_OK, RESULT_CANCELED, launchIntent, mkComponentName,
@@ -27,7 +27,7 @@ import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from
 import { device } from "../shell/config";
 import type { JBitmap } from "./graphics";
 import { JConfigurationInfo } from "./pm";
-import { deviceConfiguration } from "./resnative";
+import { deviceConfiguration, setDeviceNight } from "./resnative";
 import { transactionCaller } from "./binder";
 import { packages } from "./packages";
 import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
@@ -100,6 +100,24 @@ rt.register({
   name: "android/app/Instrumentation", ctor: class extends JObj {},
   methods: { "<init>()V": function () {} },
 });
+class JSplashScreenView extends JObj { removed = false; }
+let appNightMode = -1;
+rt.register({ name: "android/window/SplashScreenView", ctor: JSplashScreenView, methods: {
+  "remove()V": function (this: JSplashScreenView) { this.removed = true; },
+} });
+class JSplashScreen extends JObj { listener: unknown = null; exitSent = false; }
+rt.register({ name: "android/window/SplashScreen", ctor: JSplashScreen, methods: {
+  "setOnExitAnimationListener(Landroid/window/SplashScreen$OnExitAnimationListener;)V": function (this: JSplashScreen, listener: unknown) { this.listener = listener; invalidate(); },
+  "clearOnExitAnimationListener()V": function (this: JSplashScreen) { this.listener = null; },
+} });
+rt.markers("android/window/SplashScreen$OnExitAnimationListener");
+export async function dispatchSplashExit(activity: JActivity): Promise<void> {
+  const splash = activity.splashScreen;
+  if (!splash?.listener || splash.exitSent) return;
+  splash.exitSent = true;
+  rt.link("android/window/SplashScreenView");
+  await vcall(splash.listener, "onSplashScreenExit", "(Landroid/window/SplashScreenView;)V", new JSplashScreenView());
+}
 export class JActivity extends JContextWrapper {
   window = new JWindow();
   intent: JIntent | null = null;
@@ -129,6 +147,7 @@ export class JActivity extends JContextWrapper {
   lastNonConfig: unknown = null;
   requestedOrientation = -1;
   mediaController: unknown = null;
+  splashScreen: JSplashScreen | null = null;
 }
 // the API 29 Pre/Post hooks are interface defaults: an implementer's super call must find them
 rt.register({
@@ -140,6 +159,10 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   ...wrapperMethods,
   "<init>()V": function (this: JActivity) { this.window.activity = this; },
   "getWindow()Landroid/view/Window;": function (this: JActivity) { return this.window; },
+  "getSplashScreen()Landroid/window/SplashScreen;": function (this: JActivity) {
+    if (!this.splashScreen) { rt.link("android/window/SplashScreen"); this.splashScreen = new JSplashScreen(); }
+    return this.splashScreen;
+  },
   "setMediaController(Landroid/media/session/MediaController;)V": function (this: JActivity, controller: unknown) { this.mediaController = controller; },
   "getMediaController()Landroid/media/session/MediaController;": function (this: JActivity) { return this.mediaController; },
   "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": function (this: JActivity) { return this.window.backDispatcher(); },
@@ -786,6 +809,13 @@ for (const [name, methods, statics] of [
   ["android/app/UiModeManager", {
     "getNightMode()I": () => device.night ? 2 : 1,
     "setNightMode(I)V": () => {},
+    "getApplicationNightMode()I": () => appNightMode,
+    "setApplicationNightMode(I)V": (mode: number) => {
+      if (mode < 0 || mode > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown night mode " + mode);
+      appNightMode = mode;
+      if (mode !== 3) setDeviceNight(mode === 2 || mode === 0 && device.night);
+      invalidate();
+    },
     "getCurrentModeType()I": () => 1,
   }],
   ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0, "isDeviceSecure()Z": () => 0 }],
@@ -1092,6 +1122,24 @@ rt.register({
 rt.register({
   name: "android/appwidget/AppWidgetProvider", ctor: class extends JObj {}, sup: "android/content/BroadcastReceiver",
   methods: {
+    "onReceive(Landroid/content/Context;Landroid/content/Intent;)V": async function (this: JObj, context: JContext, intent: JIntent) {
+      const action = intent.action;
+      if (!action?.startsWith("android.appwidget.action.APPWIDGET_")) return;
+      const suffix = action.slice("android.appwidget.action.APPWIDGET_".length);
+      const ids = intent.extras.map.get("appWidgetIds") as Int32Array | null ?? null;
+      const manager = systemService(context, "appwidget");
+      if (suffix === "UPDATE" && ids?.length) await vcall(this, "onUpdate", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;[I)V", context, manager, ids);
+      else if (suffix === "DELETED" && ids?.length) await vcall(this, "onDeleted", "(Landroid/content/Context;[I)V", context, ids);
+      else if (suffix === "ENABLED") await vcall(this, "onEnabled", "(Landroid/content/Context;)V", context);
+      else if (suffix === "DISABLED") await vcall(this, "onDisabled", "(Landroid/content/Context;)V", context);
+      else if (suffix === "OPTIONS_CHANGED") {
+        const id = Number(intent.extras.map.get("appWidgetId") ?? -1);
+        if (id !== -1) await vcall(this, "onAppWidgetOptionsChanged", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;ILandroid/os/Bundle;)V", context, manager, id, intent.extras.map.get("appWidgetOptions") ?? null);
+      } else if (suffix === "RESTORED") {
+        const oldIds = intent.extras.map.get("appWidgetOldIds") as Int32Array | null ?? null;
+        if (oldIds && ids) await vcall(this, "onRestored", "(Landroid/content/Context;[I[I)V", context, oldIds, ids);
+      }
+    },
     ...noops("<init>()V", "onUpdate(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;[I)V",
       "onDeleted(Landroid/content/Context;[I)V", "onEnabled(Landroid/content/Context;)V",
       "onDisabled(Landroid/content/Context;)V", "onRestored(Landroid/content/Context;[I[I)V",
