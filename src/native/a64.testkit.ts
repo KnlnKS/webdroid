@@ -73,6 +73,16 @@ export function runJit(words: number[], setup: (c: Cpu) => void = () => {}): Cpu
   return c;
 }
 
+/** Check one register-only program against many inputs in both tiers without recompiling it per input. */
+export function runCases(words: number[], setups: ((c: Cpu) => void)[], check: (tier: string, c: Cpu, index: number) => void): void {
+  const at = place(words);
+  for (let i = 0; i < setups.length; i++) check("interp", execute(at, setups[i]), i);
+  const before = jitStats.regions;
+  for (let i = 0; i < JIT_HEAT; i++) execute(at, setups[0]);
+  if (jitStats.regions === before) throw new Error("the program did not compile");
+  for (let i = 0; i < setups.length; i++) check("jit", execute(at, setups[i]), i);
+}
+
 /** a page whose byte at offset i is i & 0xff, for load/store tests */
 export function pattern(): number {
   const buf = mem.reserve(0x1000, 0x1000);
