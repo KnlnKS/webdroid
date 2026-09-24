@@ -1,7 +1,7 @@
 # webdroid — in-browser Android emulator
 
 Run APKs client-side with static hosting, a CORS proxy and a TCP relay.
-[PLAN.md](PLAN.md) tracks the current task; [implementation history](docs/implementation-history.md)
+[PLAN.md](PLAN.md) tracks current status and open work; [implementation history](docs/implementation-history.md)
 records failure mechanisms, measurements and evidence limits. Older source comments naming
 AGENTS investigations refer to that history. Verify historical status against the current code.
 

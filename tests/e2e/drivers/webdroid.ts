@@ -9,7 +9,7 @@ import { decodeMappings, executedSources, type CoverageFunction } from "../lib/s
 
 // WEBDROID_BYTECODE=android/graphics/,android/content/res/ scores a provenance cut: the same
 // bundle, with those prefixes served by AOSP's own bytecode instead of our native specs. That
-// is how a cut becomes a measurement (PLAN.md's B2) rather than an edit and a rebuild.
+// is how a cut becomes a measurement rather than an edit and a rebuild.
 const CUT = process.env.WEBDROID_BYTECODE;
 const coverageMappings = new Map<string, Promise<ReturnType<typeof decodeMappings>>>();
 

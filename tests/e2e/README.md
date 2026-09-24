@@ -207,92 +207,32 @@ target in its own view tree — which is always for Mihon, since Compose draws t
 ops and exposes no `View.text` to match on. A step that needed the fallback is flagged
 `coord-fallback` in the report; that flag is itself a finding.
 
-## Metrics
+## Metrics and failures
 
-Both images are the raw framebuffer at the geometry the goldens were recorded at — no rescaling
-ever enters the comparison. Each golden set carries that geometry in its `manifest.json`
-`device` block, and the run navigates the page to it (`?screen=WxH@dpi`), so the shell's own
-default can move without invalidating a golden. The recorder sets the API 33 AVD to each
-flow's declared geometry before capturing. Older FitNotes, Mihon and Harmonic sets use
-720×1280 @ 320dpi; CalculatorM uses 1080×2424 @ 480dpi. Each flow declares its own crop.
+Raw framebuffers are compared only at each golden's recorded geometry;
+`manifest.json` names the screen, density and crop. An override such as
+`WEBDROID_SCREEN=1080x2424@480` runs smoke without scoring against
+mismatched pixels. Older FitNotes, Mihon and Harmonic references use
+720×1280 at 320 dpi; CalculatorM uses 1080×2424 at 480 dpi.
 
-`WEBDROID_SCREEN=1080x2424@480 bun run e2e --full` runs every flow at that size instead. Such a run is
-reported as **smoke, never scored**: the goldens are pixels at one size, so a run at any other
-size measures cost, not fidelity.
+- **content** is the target metric: tolerant mismatch over the union of
+  non-background pixels. A blank rendering cannot earn a low score by
+  matching a mostly white background.
+- **strict** counts any RGB difference; **tolerant** uses `pixelmatch`
+  threshold 0.1 over the crop. Both are diagnostics.
+- **structure** compares named hierarchy nodes by resource ID, text or
+  content description and counts bounds differing by more than 2 px or
+  missing nodes. Anonymous containers are excluded. Old goldens without
+  hierarchy files fall back to recorded tap anchors; a flow with no
+  comparable nodes says so.
 
-* **content** — the target metric. Tolerant mismatch measured over the union of the two
-  images' non-background pixels. Whole-frame percentages flatter a renderer that draws
-  nothing: a blank canvas scores **2.7%** against Mihon's mostly-white Library, and **97.9%**
-  here. If the two backgrounds disagree outright, the whole frame counts as content — painting
-  white where the real screen is blue is not a near-miss.
-* **strict** — fraction of compared pixels where any RGB channel differs at all.
-* **tolerant** — `pixelmatch` (threshold 0.1) over the whole cropped frame. Diagnostic only.
-
-Also reported per flow: **rendered N/total** and **WEDGED at step N** (see below).
-
-### structure — which view is wrong, not how much
-
-Beside the pixel numbers, each step compares the two **view hierarchies**: what
-`uiautomator dump` reported on the device against what `wd.uiTree()` reports here, both in
-absolute device px with the status bar included.
-
-Views are paired by what both sides can name the same way — resource id first, then text, then
-content-description, which is what the tap resolver already matches on. Anonymous containers
-are not comparable; system chrome is not the app's hierarchy. **STRUCTURE** is the share of
-nameable device views that webdroid puts somewhere else (>2px on any edge) or does not have at
-all, so it falls as things improve like everything else here. The worst offenders print with
-both sets of bounds:
-
-```
-  STRUCTURE  83.33% of nameable device views misplaced, over 18 steps
-    02 t:OK off by 494px  device [50,1082,670,1178] here [544,1084,648,1172]
-```
-
-That line says the dialog's OK button is within 2px vertically and 104px wide where the device
-makes it 620 — the button bar is not stretching. A content percentage cannot say that.
-
-The device half comes from `NN-id.ui.json` beside each golden png, written by `e2e --record`.
-Goldens recorded before that existed have no hierarchy files, and the metric falls back to the
-one node the manifest already carries for every `tapText` step: the bounds the device resolved
-that anchor to. Those are read **a step behind** — a tap resolves against the screen already on
-display, so the bounds recorded for step N+1 describe the frame captured at step N. Re-record to
-compare whole hierarchies instead of one node per step.
-
-A flow that pairs nothing says so rather than reporting 100%: Compose draws through canvas ops
-and exposes no `View.text` for either side to name, which is why those flows also fall back to
-recorded coordinates for their taps.
-
-### Non-renders score 100%
-
-A step webdroid never rendered — because its main-looper queue was wedged — is scored a flat
-**100%** content diff, not the measured pixel difference. A frozen frame is one the app drew
-several steps ago, so measuring it hands out partial credit for background pixels that happen
-to have survived: a frozen FitNotes home screen measures only ~66% against the golden's graph
-screen. That is not a rendering near-miss; the app was not executing.
-
-Nothing is hidden by this. The measurement is kept as `rawContentDiffPct` per step and
-`meanRawContentDiffPct` per flow, both shown in the report and in the console summary
-(`34 never rendered, scored 100%; raw mean 81.00%`). Only **content** is scored this way —
-`strict` and `tolerant` stay pure measurements, since they are diagnostics.
-
-Note the distinction: *wedged* means the app stopped executing. An app that is alive but draws
-the wrong thing (webdroid on Mihon renders a blank canvas) is **not** wedged and is scored on
-its measured pixels — it rendered, it just rendered wrongly.
-
-## Wedge detection
-
-webdroid runs every input, layout pass and frame through one serialized main-looper queue
-(`src/android/mainloop.ts`). If a job in that queue never settles, the app stops responding
-*and* stops repainting — which from the outside is indistinguishable from "the screen
-settled". `wd.alive()` enqueues a no-op behind whatever is in the queue and races it against a
-timeout, so a hung app is reported as hung instead of quietly scoring as stable. A wedged
-step settles through the pixel rule (its screen holds still) and is then flagged by that probe.
-
-The capture pass writes these flags to `actual/<flow>/run.json`, so a standalone
-`bun run e2e --diff` scores identically to a full `bun run e2e --full` instead of silently reporting a
-better number for the same pixels. `run.json` is also the perf artifact: per step it keeps the
-wall-clock `ms`, the `wd.perf` counters burned, and `newMissing` (the APIs the step was the
-first to ask for and not find). None of that is in the HTML report; read the file.
+A step that never rendered because its main queue wedged receives a 100%
+content score. `rawContentDiffPct` retains the measured pixels; strict
+and tolerant scores remain raw. `wd.alive()` queues a sentinel behind
+pending main work, so a frozen screen cannot masquerade as settled.
+`actual/<flow>/run.json` stores the wedge flag, per-step time,
+`wd.perf`, missing APIs and process diagnostics; `--diff` uses the
+same record rather than inferring health from PNGs.
 
 ## Re-recording the goldens (needs an emulator)
 
