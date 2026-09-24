@@ -3,7 +3,7 @@ import { defineException, JThrowable, vcall, vcallOn, curThread } from "../jvm/n
 import { readStreamFully } from "../jvm/natives/jio";
 import { newXmlPullParser, readerText } from "./xmlpull";
 
-const S = "Ljava/lang/String;", NS = "http://xml.org/sax/features/namespaces";
+const S = "Ljava/lang/String;", NS = "http://xml.org/sax/features/namespaces", NS_PREFIX = "http://xml.org/sax/features/namespace-prefixes";
 rt.markers("org/xml/sax/XMLReader", "org/xml/sax/ContentHandler", "org/xml/sax/Attributes",
   "org/xml/sax/ErrorHandler", "org/xml/sax/EntityResolver", "org/xml/sax/DTDHandler");
 class JSaxException extends JThrowable { exception: JThrowable | null = null; }
@@ -29,6 +29,7 @@ rt.register({ name: "org/xml/sax/SAXException", sup: "java/lang/Exception", ctor
 } });
 defineException("org/xml/sax/SAXParseException", "org/xml/sax/SAXException");
 defineException("org/xml/sax/SAXNotRecognizedException", "org/xml/sax/SAXException");
+defineException("org/xml/sax/SAXNotSupportedException", "org/xml/sax/SAXException");
 
 class JInputSource extends JObj { bytes: unknown = null; chars: unknown = null; encoding: string | null = null; systemId: string | null = null; }
 rt.register({ name: "org/xml/sax/InputSource", ctor: JInputSource, methods: {
@@ -56,9 +57,11 @@ rt.register({ name: "webdroid/SaxAttributes", ctor: JAttributes, ifaces: ["org/x
   [`getIndex(${S})I`]: function (this: JAttributes, name: string) { return this.attrs.findIndex(a => a.name === name); },
   [`getIndex(${S}${S})I`]: function (this: JAttributes, uri: string, local: string) { return attrIndex(this, uri, local); },
 } });
-class JXmlReader extends JObj { handler: unknown = null; errorHandler: unknown = null; namespaces = true; }
+class JXmlReader extends JObj { handler: unknown = null; errorHandler: unknown = null; namespaces = true; namespacePrefixes = false; }
 async function parse(this: JXmlReader, source: JInputSource | string): Promise<void> {
   if (source == null) throw rt.mkThrowable("java/lang/NullPointerException", "source");
+  if (this.namespaces && this.namespacePrefixes)
+    throw rt.mkThrowable("org/xml/sax/SAXNotSupportedException", "namespace-prefixes with namespaces");
   const thread = curThread, input = typeof source === "string" ? null : source.chars ?? source.bytes;
   if (typeof source !== "string" && !input) throw rt.mkThrowable("org/xml/sax/SAXException", "InputSource requires a stream or reader");
   const parser = newXmlPullParser(); parser.nsAware = this.namespaces;
@@ -100,12 +103,14 @@ rt.register({ name: "webdroid/SaxReader", ctor: JXmlReader, ifaces: ["org/xml/sa
   "getContentHandler()Lorg/xml/sax/ContentHandler;": function (this: JXmlReader) { return this.handler; },
   "setErrorHandler(Lorg/xml/sax/ErrorHandler;)V": function (this: JXmlReader, handler: unknown) { this.errorHandler = handler; },
   [`setFeature(${S}Z)V`]: function (this: JXmlReader, name: string, value: number) {
-    if (name !== NS) throw rt.mkThrowable("org/xml/sax/SAXNotRecognizedException", name);
-    this.namespaces = !!value;
+    if (name === NS) this.namespaces = !!value;
+    else if (name === NS_PREFIX) this.namespacePrefixes = !!value;
+    else throw rt.mkThrowable("org/xml/sax/SAXNotRecognizedException", name);
   },
   [`getFeature(${S})Z`]: function (this: JXmlReader, name: string) {
-    if (name !== NS) throw rt.mkThrowable("org/xml/sax/SAXNotRecognizedException", name);
-    return +this.namespaces;
+    if (name === NS) return +this.namespaces;
+    if (name === NS_PREFIX) return +this.namespacePrefixes;
+    throw rt.mkThrowable("org/xml/sax/SAXNotRecognizedException", name);
   },
   "parse(Lorg/xml/sax/InputSource;)V": parse,
 } });
@@ -115,19 +120,26 @@ rt.register({ name: "javax/xml/parsers/SAXParser", ctor: JSaxParser, methods: {
   "isNamespaceAware()Z": function (this: JSaxParser) { return +this.reader.namespaces; },
   "isValidating()Z": () => 0,
 } });
-class JSaxFactory extends JObj { namespaces: boolean | null = null; }
+class JSaxFactory extends JObj { namespaces: boolean | null = null; namespacePrefixes = false; }
 rt.register({ name: "javax/xml/parsers/SAXParserFactory", ctor: JSaxFactory, methods: {
   "static newInstance()Ljavax/xml/parsers/SAXParserFactory;": () => new JSaxFactory(),
   "setNamespaceAware(Z)V": function (this: JSaxFactory, value: number) { this.namespaces = !!value; },
   "isNamespaceAware()Z": function (this: JSaxFactory) { return +!!this.namespaces; },
   "setValidating(Z)V": function () {},
   "setFeature(Ljava/lang/String;Z)V": function (this: JSaxFactory, name: string, value: number) {
-    if (name !== NS) throw rt.mkThrowable("org/xml/sax/SAXNotRecognizedException", name);
-    this.namespaces = !!value;
+    if (name === NS) this.namespaces = !!value;
+    else if (name === NS_PREFIX) this.namespacePrefixes = !!value;
+    else throw rt.mkThrowable("org/xml/sax/SAXNotRecognizedException", name);
+  },
+  "getFeature(Ljava/lang/String;)Z": function (this: JSaxFactory, name: string) {
+    if (name === NS) return +(this.namespaces ?? true);
+    if (name === NS_PREFIX) return +this.namespacePrefixes;
+    throw rt.mkThrowable("org/xml/sax/SAXNotRecognizedException", name);
   },
   "newSAXParser()Ljavax/xml/parsers/SAXParser;": function (this: JSaxFactory) {
     rt.link("webdroid/SaxReader"); rt.link("javax/xml/parsers/SAXParser");
-    const parser = new JSaxParser(); parser.reader.namespaces = this.namespaces ?? true; return parser;
+    const parser = new JSaxParser(); parser.reader.namespaces = this.namespaces ?? true;
+    parser.reader.namespacePrefixes = this.namespacePrefixes; return parser;
   },
 } });
 rt.register({ name: "org/xml/sax/helpers/DefaultHandler", ctor: class extends JObj {},
