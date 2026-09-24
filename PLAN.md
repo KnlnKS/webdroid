@@ -12,6 +12,8 @@ The current code runs unchanged APK and bundled library bytecode in the browser.
 
 ## Open work
 
+Deployment preparation is implemented on `codex/deployment-prep`: a production bundle omits the sample APK directory and loads local APK/XAPK/APKS files in the browser. A Worker serves static assets, proxy/DNS/TCP routes and a Durable Object WebView bridge. [Deployment setup](docs/deployment.md) records the required second hostname and public relay policy. Local Worker tests booted FitNotes and ChatGPT from selected files; outbound TCP relay behavior still needs a deployed-edge check.
+
 1. **TikTok playback and input:** capture repeatable source media and distinct decoded-video, EGL-swap and browser-presentation counts; profile dense clips and warmed visible action latency. Keep live-content variation out of causal performance claims.
 2. **Cut the Rope:** diagnose the intro's output-queue stall and black video, then verify gameplay speed beyond the level-one sample. Player ID/backend behavior and later unlocked features remain unvalidated. The focused flow skips the intro; Cut has no full-matrix flow.
 3. **Graphics parity:** minimize the 132 differences across the two larger API-33 graphics campaigns before changing common renderer behavior. Preserve Canvas2D software drawing and existing visual goldens.

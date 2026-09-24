@@ -377,3 +377,13 @@ The focused flow skipped the intro and Cut has no full-matrix flow.
 The integrated 183-step matrix completed without a wedge, required
 native, layout or GL error; YouTube's known settle/draw failures remained.
 Cut smoke compilation covered 64,465 classes with zero method failures.
+
+## Deployment transport and local package loading
+
+Cloudflare static assets omit `Content-Length` on local HEAD responses and may ignore a range probe. `RangeFile.open` now uses a range probe when HEAD lacks a length, then falls back to a resident file only when the asset server returns a full 200 response. This was needed for bundled font files. The system package blobs are stored as gzip files that Android expects decoded for entry reads but raw for archive span reconstruction. A Worker route serves them with `Content-Encoding: gzip` by default and raw for `?raw=1`; `encodeBody: "manual"` avoids compressing already compressed bytes again.
+
+The prior WebView script transform imported the TypeScript compiler at server startup. Its Node filesystem probe fails in Workers at `__filename`, so the transform now uses Acorn and ESLint's scope analyzer. Existing WebView location, history and HTML tests pass against the replacement. The Worker asset build chunks optional AOSP framework files above Cloudflare's per-file limit and streams them on demand.
+
+The local package path reads browser `File` slices, preserves the established split merge and base precedence, and serves `/asset/` requests from the active install through the service worker, including the isolated renderer's message port. FitNotes APK and ChatGPT XAPK booted in a local Wrangler browser run, and a FitNotes asset was fetched through the service worker. The HTTP proxy, DNS endpoint and Durable Object callback bridge responded locally. The outbound TCP socket relay opened in local Wrangler, but a complete TCP response was not observed; the environment intermittently reported `Network connection lost`, so end-to-end TCP remains unvalidated on the deployed edge.
+
+The serialized 13-flow, 185-step full capture on the development server rendered every step. All emulated processes reported no required native code, layout/draw/GL errors or main-loop wedge; main-process ticks advanced. YouTube's `show-controls` step timed out settling, as it also did at the starting commit. Flappy Bird's ad WebView frame lacked harness diagnostics and logged the same `status` error in the starting checkout; the game process rendered all seven steps. The capture does not validate deployed Worker TCP behavior.
