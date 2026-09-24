@@ -155,6 +155,33 @@ class JNotification extends JObj {
 }
 const FLAG_ONGOING_EVENT = 2, FLAG_AUTO_CANCEL = 16, FLAG_ONLY_ALERT_ONCE = 8;
 const FLAG_LOCAL_ONLY = 256, FLAG_GROUP_SUMMARY = 512, FLAG_HIGH_PRIORITY = 128;
+// JNI looks up these public fields even when Java bytecode inlines their values.
+const NOTIFICATION_EXTRAS = {
+  EXTRA_ANSWER_COLOR: "android.answerColor", EXTRA_ANSWER_INTENT: "android.answerIntent",
+  EXTRA_AUDIO_CONTENTS_URI: "android.audioContents", EXTRA_BACKGROUND_IMAGE_URI: "android.backgroundImageUri",
+  EXTRA_BIG_TEXT: "android.bigText", EXTRA_CALL_IS_VIDEO: "android.callIsVideo",
+  EXTRA_CALL_PERSON: "android.callPerson", EXTRA_CHANNEL_GROUP_ID: "android.intent.extra.CHANNEL_GROUP_ID",
+  EXTRA_CHANNEL_ID: "android.intent.extra.CHANNEL_ID", EXTRA_CHRONOMETER_COUNT_DOWN: "android.chronometerCountDown",
+  EXTRA_COLORIZED: "android.colorized", EXTRA_COMPACT_ACTIONS: "android.compactActions",
+  EXTRA_CONVERSATION_TITLE: "android.conversationTitle", EXTRA_DECLINE_COLOR: "android.declineColor",
+  EXTRA_DECLINE_INTENT: "android.declineIntent", EXTRA_HANG_UP_INTENT: "android.hangUpIntent",
+  EXTRA_HISTORIC_MESSAGES: "android.messages.historic", EXTRA_INFO_TEXT: "android.infoText",
+  EXTRA_IS_GROUP_CONVERSATION: "android.isGroupConversation", EXTRA_LARGE_ICON: "android.largeIcon",
+  EXTRA_LARGE_ICON_BIG: "android.largeIcon.big", EXTRA_MEDIA_SESSION: "android.mediaSession",
+  EXTRA_MESSAGES: "android.messages", EXTRA_MESSAGING_PERSON: "android.messagingUser",
+  EXTRA_NOTIFICATION_ID: "android.intent.extra.NOTIFICATION_ID", EXTRA_NOTIFICATION_TAG: "android.intent.extra.NOTIFICATION_TAG",
+  EXTRA_PEOPLE: "android.people", EXTRA_PEOPLE_LIST: "android.people.list",
+  EXTRA_PICTURE: "android.picture", EXTRA_PICTURE_CONTENT_DESCRIPTION: "android.pictureContentDescription",
+  EXTRA_PICTURE_ICON: "android.pictureIcon", EXTRA_PROGRESS: "android.progress",
+  EXTRA_PROGRESS_INDETERMINATE: "android.progressIndeterminate", EXTRA_PROGRESS_MAX: "android.progressMax",
+  EXTRA_REMOTE_INPUT_DRAFT: "android.remoteInputDraft", EXTRA_REMOTE_INPUT_HISTORY: "android.remoteInputHistory",
+  EXTRA_SELF_DISPLAY_NAME: "android.selfDisplayName", EXTRA_SHOW_BIG_PICTURE_WHEN_COLLAPSED: "android.showBigPictureWhenCollapsed",
+  EXTRA_SHOW_CHRONOMETER: "android.showChronometer", EXTRA_SHOW_WHEN: "android.showWhen",
+  EXTRA_SMALL_ICON: "android.icon", EXTRA_SUB_TEXT: "android.subText", EXTRA_SUMMARY_TEXT: "android.summaryText",
+  EXTRA_TEMPLATE: "android.template", EXTRA_TEXT: "android.text", EXTRA_TEXT_LINES: "android.textLines",
+  EXTRA_TITLE: "android.title", EXTRA_TITLE_BIG: "android.title.big",
+  EXTRA_VERIFICATION_ICON: "android.verificationIcon", EXTRA_VERIFICATION_TEXT: "android.verificationText",
+};
 rt.register({
   name: "android/app/Notification", ctor: JNotification, ifaces: ["android/os/Parcelable"],
   fields: Object.fromEntries([...Object.keys(NFIELDS), "extras"].map((k) => [k, k])),
@@ -165,6 +192,7 @@ rt.register({
     DEFAULT_ALL: -1, DEFAULT_SOUND: 1, DEFAULT_VIBRATE: 2, DEFAULT_LIGHTS: 4,
     PRIORITY_DEFAULT: 0, PRIORITY_LOW: -1, PRIORITY_MIN: -2, PRIORITY_HIGH: 1, PRIORITY_MAX: 2,
     VISIBILITY_PUBLIC: 1, VISIBILITY_PRIVATE: 0, VISIBILITY_SECRET: -1,
+    ...NOTIFICATION_EXTRAS,
     // object-typed, so unlike the int constants it survives as a real field ref
     AUDIO_ATTRIBUTES_DEFAULT: null,
   },

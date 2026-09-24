@@ -110,11 +110,11 @@ rt.register({ name: "android/content/pm/ComponentInfo", ctor: JComponentInfo, su
 });
 class JActivityInfo extends JComponentInfo {
   theme = 0; configChanges = 0; screenOrientation = -1; flags = 0;
-  parentActivityName: string | null = null;
+  parentActivityName: string | null = null; targetActivity: string | null = null;
 }
 rt.register({
   name: "android/content/pm/ActivityInfo", ctor: JActivityInfo, sup: "android/content/pm/ComponentInfo", ifaces: ["android/os/Parcelable"],
-  fields: ["theme", "configChanges", "screenOrientation", "permission", "parentActivityName", "flags"],
+  fields: ["theme", "configChanges", "screenOrientation", "permission", "parentActivityName", "targetActivity", "flags"],
   statics: { SCREEN_ORIENTATION_PORTRAIT: 1, SCREEN_ORIENTATION_UNSPECIFIED: -1, SCREEN_ORIENTATION_LANDSCAPE: 0, SCREEN_ORIENTATION_USER: 2, SCREEN_ORIENTATION_BEHIND: 3,
     SCREEN_ORIENTATION_SENSOR: 4, SCREEN_ORIENTATION_NOSENSOR: 5, SCREEN_ORIENTATION_SENSOR_LANDSCAPE: 6, SCREEN_ORIENTATION_SENSOR_PORTRAIT: 7,
     SCREEN_ORIENTATION_REVERSE_LANDSCAPE: 8, SCREEN_ORIENTATION_REVERSE_PORTRAIT: 9, SCREEN_ORIENTATION_FULL_SENSOR: 10, SCREEN_ORIENTATION_USER_LANDSCAPE: 11,
@@ -874,6 +874,8 @@ function mkActivityInfo(cls: string, flags: number, owner = currentPackage): JAc
   a.configChanges = (node && attr(node, "configChanges")?.data) ?? 0;
   a.screenOrientation = (node && attr(node, "screenOrientation")?.data) ?? -1;
   a.parentActivityName = node ? attrStr(node, "parentActivityName") : null;
+  const target = node && attrStr(node, "targetActivity");
+  a.targetActivity = target ? qualifyComponent(target, owner?.pkg ?? "") : null;
   return a;
 }
 
