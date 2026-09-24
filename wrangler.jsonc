@@ -11,7 +11,7 @@
     "binding": "ASSETS",
     "run_worker_first": ["/proxy*", "/tcp*", "/dns*", "/webview*", "/process", "/vendor/aosp/framework.jar", "/vendor/aosp/framework-res.apk", "/vendor/microg/*.gz"]
   },
-  "vars": { "WEBVIEW_ORIGIN": "https://webdroid-webview.kunalan-k-subagaran.workers.dev" },
+  "vars": { "WEBVIEW_ORIGIN": "https://webdroid-renderer.pages.dev" },
   "durable_objects": {
     "bindings": [{ "name": "WEB_BRIDGES", "class_name": "WebBridgeSession" }]
   },
