@@ -203,7 +203,8 @@ async function boot(file: string) {
     const t0 = performance.now();
     connectProcess();
     await bootApk(install, (s) => { statusEl.textContent = s; }, file, null, registerForegroundProcess);
-    void provisionServices().then(() => processBroker().boot()).catch((error) => console.error("[provision]", error));
+    void provisionServices({ attestationEnabled: params.get("attestation") === "1" })
+      .then(() => processBroker().boot()).catch((error) => console.error("[provision]", error));
     perf.bootMs = performance.now() - t0;
     statusEl.textContent = `running (boot ${perf.bootMs.toFixed(0)}ms)` + (rt.nativeRequired.size ? " — needs native code" : "");
   } catch (e) {

@@ -12,7 +12,7 @@ export type WebdroidSession = {
   close(): Promise<void>;
 };
 
-export type WebdroidOptions = { port?: number; coverage?: boolean; proxyProbeTo?: string };
+export type WebdroidOptions = { port?: number; coverage?: boolean; proxyProbeTo?: string; attestationEnabled?: boolean };
 
 export { isWebdroidProcessFrame };
 
@@ -61,6 +61,7 @@ export async function startWebdroid(apkPath: string, options: WebdroidOptions = 
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
     const query = new URLSearchParams({ apk, screen: `${device.width}x${device.height}@${device.densityDpi}` });
     if (options.coverage !== false) query.set("fuzzCoverage", "1");
+    if (options.attestationEnabled) query.set("attestation", "1");
     await page.goto(`${origin}/?${query}`, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await page.waitForFunction(() => Boolean(globalThis.wd?.app()), null, { timeout: 60_000 });
     return {

@@ -1,6 +1,6 @@
 # Implementation history: durable findings
 
-Retained through 2026-09-23. [PLAN.md](../PLAN.md) tracks current status;
+Retained through 2026-09-24. [PLAN.md](../PLAN.md) tracks current status;
 [AGENTS.md](../AGENTS.md) owns working rules. Results describe their tested
 revision, not necessarily the current tree. Git history preserves intermediate
 runs and commit IDs removed here.
@@ -53,6 +53,17 @@ frames are different counters. Readback and tracing can distort timing.
 `settleDelayMs` bounds scheduled work rather than imposing a fixed sleep.
 
 ## API-33 differential fuzzing
+
+The semantic UI journal now hashes visible text and coarse control positions: two Compose
+screens with the same actionable nodes no longer share tried actions or replay
+paths. A separate structural scroll-family key limits repeated swipes across
+changing list content. This still cannot guarantee a stable replay when content
+changes between launches, and the 256-state cap bounds feeds with unbounded
+text variation. The v2 journal uses a new filename to preserve older evidence.
+Android oracle episodes reset rotation before launch and restore the previous
+system settings at close. The UI runner now makes exploration versus exact
+replay an explicit mode. microG attestation opt-in is passed to provisioning at
+boot rather than read at module import; default behavior remains unchanged.
 
 The unchanged probe runs against an API-33 emulator at 1080×2160, 480 dpi.
 An old AVD size/density override initially invalidated graphics comparisons;

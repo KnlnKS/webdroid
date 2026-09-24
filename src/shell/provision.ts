@@ -43,13 +43,15 @@ export function provisionPackages(): Promise<void> {
     vfs.mount(installedPath(record.pkg), packed);
   })).then(() => {});
 }
-export async function provisionServices(): Promise<void> {
+export async function provisionServices(options: { attestationEnabled: boolean }): Promise<void> {
   for (const spec of SYSTEM_PACKAGES) {
     if (!spec.provision) continue;
     const owner = packages.get(spec.pkg)!, component = owner.components.service.get(spec.provision.component);
     if (!component) throw new Error("Provisioning service unavailable: " + spec.pkg);
     const intent = new JIntent(); intent.component = spec.provision.component; intent.componentPkg = spec.pkg;
-    for (const [key, value] of Object.entries(spec.provision.extras)) intent.extras.map.set(key, box(JBool, value ? 1 : 0));
+    const extras = { ...spec.provision.extras,
+      ...(options.attestationEnabled && "attestationExtras" in spec.provision ? spec.provision.attestationExtras : {}) };
+    for (const [key, value] of Object.entries(extras)) intent.extras.map.set(key, box(JBool, value ? 1 : 0));
     await serviceTransport.start(owner, owner.process(component), intent, false);
   }
 }

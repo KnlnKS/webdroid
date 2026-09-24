@@ -11,10 +11,9 @@ export const SYSTEM_PACKAGES = [
     defaultGrants: ["android.permission.ACCESS_COARSE_LOCATION", "android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_BACKGROUND_LOCATION"],
     // Browser geolocation supplies the platform provider; radio scans are unavailable.
     disabledComponents: ["org.microg.gms.location.network.NetworkLocationService"],
-    provision: { component: "org.microg.gms.provision.ProvisionService", extras: {
-      checkin_enabled: true, gcm_enabled: true,
-      ...(new URLSearchParams(globalThis.location?.search ?? "").get("attestation") === "1" ? { safetynet_enabled: true } : {}),
-    } },
+    provision: { component: "org.microg.gms.provision.ProvisionService",
+      extras: { checkin_enabled: true, gcm_enabled: true },
+      attestationExtras: { safetynet_enabled: true } },
   },
   {
     pkg: "com.android.vending",
