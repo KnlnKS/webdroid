@@ -367,6 +367,7 @@ rt.register({
     // moment here than the page's own timeOrigin
     "static getStartUptimeMillis()J": () => 0n,
     "static getStartRequestedUptimeMillis()J": () => 0n,
+    "static getStartRequestedElapsedRealtime()J": () => 0n,
     "static getElapsedCpuTime()J": () => BigInt(Math.round(performance.now())),
     "static myTid()I": () => threadTid(curThread),
     "static myUid()I": () => PROCESS_UID,
