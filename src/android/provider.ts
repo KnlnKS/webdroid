@@ -148,6 +148,15 @@ rt.register({ name: "android/provider/BlockedNumberContract$BlockedNumbers", cto
   CONTENT_TYPE: "vnd.android.cursor.dir/blocked_number", CONTENT_ITEM_TYPE: "vnd.android.cursor.item/blocked_number",
 } });
 
+const calendarUri = (table: string) => mkUri(`content://com.android.calendar/${table}`);
+rt.register({ name: "android/provider/CalendarContract", ctor: class extends JObj {},
+  statics: { AUTHORITY: "com.android.calendar" } });
+for (const [name, table] of [["Calendars", "calendars"], ["Events", "events"],
+  ["Attendees", "attendees"], ["Reminders", "reminders"], ["Colors", "colors"]] as const) {
+  rt.register({ name: `android/provider/CalendarContract$${name}`, ctor: class extends JObj {},
+    statics: { CONTENT_URI: calendarUri(table) } });
+}
+
 // ── MediaStore: the volume-scoped content URIs. content://media/<volume>/<table>
 const mediaUri = (vol: string, table: string) => mkUri(`content://media/${vol}/${table}`);
 for (const [cls, table] of [["Images$Media", "images/media"], ["Video$Media", "video/media"],

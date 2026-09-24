@@ -1,15 +1,11 @@
-// android.widget.TimePicker + android.app.TimePickerDialog.
-// A minimal, generic (non-app-specific) hour/minute stepper, and a dialog that wraps it in
-// the same AlertDialog chrome (title/customView/OK-Cancel buttons) other dialogs use — see
-// JAlertDialog in dialog.ts, whose show()/buildAlertContent flow this dialog inherits by
-// extending JAlertDialog directly, exactly as AOSP's own TimePickerDialog does.
+// Android time and date pickers use the shared AlertDialog chrome.
 
 import { rt, type NativeSpec } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, boxInt } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
 import { JAlertDialog, initDialog } from "./dialog";
-import { JLinearLP, attachView, addUnattachedView, detachView, requestLayout, invalidate, initViewFromCtx, inheritContext } from "./view";
+import { JView, JLinearLP, attachView, addUnattachedView, detachView, requestLayout, invalidate, initViewFromCtx, inheritContext } from "./view";
 import { tfMedium } from "./graphics";
 import { JAttrSet, themeOf } from "./res";
 import { JLinearLayout } from "./layouts";
@@ -76,7 +72,7 @@ function stepperLP(): JLinearLP {
   return lp;
 }
 
-function mkArrow(tp: JTimePicker, glyph: string, fn: () => void): JTextView {
+function mkArrow(tp: JView, glyph: string, fn: () => void): JTextView {
   const t = new JTextView();
   inheritContext(t, tp);
   t.text = glyph;
@@ -89,7 +85,7 @@ function mkArrow(tp: JTimePicker, glyph: string, fn: () => void): JTextView {
   return t;
 }
 
-function mkValueText(tp: JTimePicker): JTextView {
+function mkValueText(tp: JView): JTextView {
   const t = new JTextView();
   inheritContext(t, tp);
   t.paintT.textSize = 64;
@@ -101,7 +97,7 @@ function mkValueText(tp: JTimePicker): JTextView {
   return t;
 }
 
-function mkColumn(tp: JTimePicker, up: () => void, down: () => void): { col: JLinearLayout; text: JTextView } {
+function mkColumn(tp: JView, up: () => void, down: () => void): { col: JLinearLayout; text: JTextView } {
   const col = new JLinearLayout();
   col.orientation = 1;
   col.gravity = G.CENTER;
@@ -260,3 +256,124 @@ const timePickerDialogMethods: NativeSpec["methods"] = {
 };
 rt.register({ name: "android/app/TimePickerDialog", ctor: JTimePickerDialog, sup: "android/app/AlertDialog", methods: timePickerDialogMethods });
 rt.markers("android/app/TimePickerDialog$OnTimeSetListener");
+
+class JDatePicker extends JLinearLayout {
+  yearVal = 1970;
+  monthVal = 0;
+  dayVal = 1;
+  firstDay = 1;
+  changeL: unknown = null;
+  built = false;
+  valueTexts: JTextView[] = [];
+}
+
+function normalizeDate(p: JDatePicker, year: number, month: number, day: number) {
+  const date = new Date(0);
+  date.setFullYear(year, month, day);
+  p.yearVal = date.getFullYear();
+  p.monthVal = date.getMonth();
+  p.dayVal = date.getDate();
+}
+
+function refreshDate(p: JDatePicker) {
+  const [month, day, year] = p.valueTexts;
+  if (month) setValueText(month, String(p.monthVal + 1).padStart(2, "0"));
+  if (day) setValueText(day, String(p.dayVal).padStart(2, "0"));
+  if (year) setValueText(year, String(p.yearVal));
+}
+
+async function setDate(p: JDatePicker, year: number, month: number, day: number, notify: boolean) {
+  if (p.yearVal === year && p.monthVal === month && p.dayVal === day) return;
+  normalizeDate(p, year, month, day);
+  refreshDate(p);
+  if (notify && p.changeL) await vcall(p.changeL, "onDateChanged", "(Landroid/widget/DatePicker;III)V",
+    p, p.yearVal, p.monthVal, p.dayVal);
+}
+
+async function buildDatePicker(p: JDatePicker) {
+  if (p.built) return;
+  p.built = true;
+  p.orientation = 0;
+  p.gravity = G.CENTER;
+  p.padT = 24; p.padB = 24;
+  const steps: [number, number, number][] = [[0, 1, 0], [0, 0, 1], [1, 0, 0]];
+  for (const [year, month, day] of steps) {
+    const step = (direction: number) => {
+      const nextYear = p.yearVal + year * direction;
+      const nextMonth = p.monthVal + month * direction;
+      const nextDay = year || month ? Math.min(p.dayVal, new Date(nextYear, nextMonth + 1, 0).getDate())
+        : p.dayVal + day * direction;
+      void setDate(p, nextYear, nextMonth, nextDay, true).catch(reportUncaught);
+    };
+    const { col, text } = mkColumn(p, () => step(1), () => step(-1));
+    await attachView(p, col);
+    p.valueTexts.push(text);
+  }
+  refreshDate(p);
+}
+
+rt.register({ name: "android/widget/DatePicker", ctor: JDatePicker, sup: "android/widget/LinearLayout", methods: {
+  "<init>(Landroid/content/Context;)V": async function (this: JDatePicker, c: unknown) {
+    await initViewFromCtx(this, c, null);
+    return buildDatePicker(this);
+  },
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JDatePicker, c: unknown, set: JAttrSet | null) {
+    await initViewFromCtx(this, c, set);
+    return buildDatePicker(this);
+  },
+  "init(IIILandroid/widget/DatePicker$OnDateChangedListener;)V": function (this: JDatePicker, year: number, month: number, day: number, listener: unknown) {
+    normalizeDate(this, year, month, day);
+    this.changeL = listener;
+    refreshDate(this);
+  },
+  "updateDate(III)V": function (this: JDatePicker, year: number, month: number, day: number) {
+    return setDate(this, year, month, day, true);
+  },
+  "getYear()I": function (this: JDatePicker) { return this.yearVal; },
+  "getMonth()I": function (this: JDatePicker) { return this.monthVal; },
+  "getDayOfMonth()I": function (this: JDatePicker) { return this.dayVal; },
+  "setFirstDayOfWeek(I)V": function (this: JDatePicker, day: number) {
+    if (day < 1 || day > 7) throw rt.mkThrowable("java/lang/IllegalArgumentException", "firstDayOfWeek must be between 1 and 7");
+    this.firstDay = day;
+  },
+  "getFirstDayOfWeek()I": function (this: JDatePicker) { return this.firstDay; },
+} });
+rt.markers("android/widget/DatePicker$OnDateChangedListener");
+
+class JDatePickerDialog extends JAlertDialog { picker: JDatePicker | null = null; dateSetL: unknown = null; }
+async function initDatePickerDialog(d: JDatePickerDialog, c: unknown, themeId: number, listener: unknown,
+  year: number, month: number, day: number) {
+  await initDialog.call(d, c, themeId);
+  const p = new JDatePicker();
+  p.ctx = d.jctx;
+  p.jres = (d.jctx as JContext | null)?.$host?.res ?? null;
+  p.theme = themeOf(d.jctx);
+  normalizeDate(p, year, month, day);
+  await buildDatePicker(p);
+  d.picker = p;
+  d.customView = p;
+  d.dateSetL = listener;
+  d.posText = "OK";
+  d.negText = "Cancel";
+  d.posL = {
+    [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: async () => {
+      if (d.dateSetL) await vcall(d.dateSetL, "onDateSet", "(Landroid/widget/DatePicker;III)V",
+        p, p.yearVal, p.monthVal, p.dayVal);
+    },
+  };
+}
+rt.register({ name: "android/app/DatePickerDialog", ctor: JDatePickerDialog, sup: "android/app/AlertDialog", methods: {
+  "<init>(Landroid/content/Context;ILandroid/app/DatePickerDialog$OnDateSetListener;III)V":
+    function (this: JDatePickerDialog, c: unknown, themeId: number, listener: unknown, year: number, month: number, day: number) {
+      return initDatePickerDialog(this, c, themeId, listener, year, month, day);
+    },
+  "<init>(Landroid/content/Context;Landroid/app/DatePickerDialog$OnDateSetListener;III)V":
+    function (this: JDatePickerDialog, c: unknown, listener: unknown, year: number, month: number, day: number) {
+      return initDatePickerDialog(this, c, 0, listener, year, month, day);
+    },
+  "getDatePicker()Landroid/widget/DatePicker;": function (this: JDatePickerDialog) { return this.picker; },
+  "updateDate(III)V": function (this: JDatePickerDialog, year: number, month: number, day: number) {
+    return this.picker ? setDate(this.picker, year, month, day, true) : undefined;
+  },
+} });
+rt.markers("android/app/DatePickerDialog$OnDateSetListener");
