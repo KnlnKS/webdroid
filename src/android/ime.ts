@@ -16,7 +16,7 @@ import { jarray, splitSig } from "../jvm/abi";
 import { JEditable, JSpannable, JSpanned, csText, textSelection, setTextSelection } from "./text";
 import { JView, invalidate } from "./view";
 import { JMatrix } from "./graphics";
-import { JTextView, JEditText, focusedEdit, focusEditText, inputEl, editInput, fireEditorAction, editorAction } from "./textview";
+import { JTextView, JEditText, textViewCtors, focusedEdit, focusEditText, inputEl, editInput, fireEditorAction, editorAction } from "./textview";
 import { inMainJob, onMain } from "./mainloop";
 import { PARCELABLE } from "./os";
 
@@ -559,20 +559,25 @@ class JAutoComplete extends JEditText {
   itemClickL: unknown = null;
   itemSelectedL: unknown = null;
   popupShowing = 0;
+  dropDownAnchor = -1;
+  dropDownBackground: unknown = null;
 }
 rt.register({
   name: "android/widget/AutoCompleteTextView", ctor: JAutoComplete, sup: "android/widget/EditText",
   ifaces: ["android/widget/Filter$FilterListener"],
   methods: {
-    // EditText owns the underline chrome and the min height; route the 3-arg form through
-    // its 2-arg constructor rather than inheriting TextView's, which applies neither.
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": async function (this: JAutoComplete, c: unknown, set: unknown) {
-      await vcall(this, "<init>", "(Landroid/content/Context;Landroid/util/AttributeSet;)V", c, set);
-    },
+    ...textViewCtors<JAutoComplete>("editTextStyle"),
     "setThreshold(I)V": function (this: JAutoComplete, t: number) { this.threshold = t <= 0 ? 1 : t; },
     "enoughToFilter()Z": function (this: JAutoComplete) { return this.text.length >= this.threshold ? 1 : 0; },
     "showDropDown()V": function (this: JAutoComplete) { this.popupShowing = 1; },
     "dismissDropDown()V": function (this: JAutoComplete) { this.popupShowing = 0; },
+    "setDropDownAnchor(I)V": function (this: JAutoComplete, id: number) { this.dropDownAnchor = id; },
+    "getDropDownAnchor()I": function (this: JAutoComplete) { return this.dropDownAnchor; },
+    "getDropDownBackground()Landroid/graphics/drawable/Drawable;": function (this: JAutoComplete) { return this.dropDownBackground; },
+    "setDropDownBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JAutoComplete, drawable: unknown) { this.dropDownBackground = drawable; },
+    "setDropDownBackgroundResource(I)V": async function (this: JAutoComplete, id: number) {
+      this.dropDownBackground = await vcall(this.ctx, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", id);
+    },
     ...fieldSetters({ "setAdapter(Landroid/widget/ListAdapter;)V": "adapter",
       "setOnItemClickListener(Landroid/widget/AdapterView$OnItemClickListener;)V": "itemClickL",
       "setOnItemSelectedListener(Landroid/widget/AdapterView$OnItemSelectedListener;)V": "itemSelectedL" }),
@@ -597,8 +602,7 @@ rt.register({
     "replaceText(Ljava/lang/CharSequence;)V": async function (this: JAutoComplete, cs: unknown) {
       await vcall(this, "setText", "(Ljava/lang/CharSequence;)V", cs);
     },
-    ...noops("setDropDownBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V",
-      "setDropDownBackgroundResource(I)V", "setDropDownAnchor(I)V", "setCompletionHint(Ljava/lang/CharSequence;)V",
+    ...noops("setCompletionHint(Ljava/lang/CharSequence;)V",
       "clearListSelection()V", "performCompletion()V"),
     ...stubs(-1, "getListSelection()I"),
   },
