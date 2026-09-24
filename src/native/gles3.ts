@@ -194,20 +194,28 @@ function pixelByteSize(format: number, type: number): number {
     : [0x8368, 0x8c3b, 0x8c3e, 0x84fa].includes(type) ? 4 : type === 0x8dad ? 8 : 0;
   return packed || channels * pixelArray(type).BYTES_PER_ELEMENT;
 }
+function pixelRows(width: number, height: number, bytes: number, alignment: number, rowLength: number, skipRows: number, skipPixels: number) {
+  const stride = Math.ceil(rowLength * bytes / alignment) * alignment;
+  const skip = skipRows * stride + skipPixels * bytes;
+  return { stride, skip, extent: skip + (height - 1) * stride + width * bytes };
+}
+type PixelDimensions = readonly [width: number, height: number] | readonly [width: number, height: number, depth: number];
 // Bound uploads to the bytes WebGL may read; a guest-memory-sized view stalls getError after each frame.
-function uploadPixels(type: number, p: number, width: number, height: number, depth: number | undefined, format: number): ArrayBufferView {
+function uploadPixels(type: number, p: number, format: number, dimensions: PixelDimensions): ArrayBufferView {
+  const [width, height] = dimensions;
   const bytes = pixelByteSize(format, type);
-  const layers = depth ?? 1;
+  const layers = dimensions.length === 3 ? dimensions[2] : 1;
   if (!bytes || width < 0 || height < 0 || layers < 0) return pixels(type, p);
   const gl = g(), K = pixelArray(type);
   const extended = "UNPACK_ROW_LENGTH" in gl;
   const rowLength = extended ? Number(gl.getParameter(0x0cf2)) || width : width;
-  const alignment = Number(gl.getParameter(gl.UNPACK_ALIGNMENT));
-  const stride = Math.ceil(rowLength * bytes / alignment) * alignment;
-  const skip = extended ? Number(gl.getParameter(0x0cf3)) * stride + Number(gl.getParameter(0x0cf4)) * bytes : 0;
-  const imageHeight = extended && depth !== undefined ? Number(gl.getParameter(0x806e)) || height : height;
-  const imageSkip = extended && depth !== undefined ? Number(gl.getParameter(0x806d)) * imageHeight * stride : 0;
-  const required = imageSkip + skip + (layers - 1) * imageHeight * stride + (height - 1) * stride + width * bytes;
+  const { stride, extent } = pixelRows(width, height, bytes, Number(gl.getParameter(gl.UNPACK_ALIGNMENT)), rowLength,
+    extended ? Number(gl.getParameter(0x0cf3)) : 0, extended ? Number(gl.getParameter(0x0cf4)) : 0);
+  let required = extent;
+  if (dimensions.length === 3 && extended) {
+    const imageHeight = Number(gl.getParameter(0x806e)) || height;
+    required += (Number(gl.getParameter(0x806d)) + dimensions[2] - 1) * imageHeight * stride;
+  }
   if (!Number.isSafeInteger(required) || required < 0) return pixels(type, p);
   return view(K, p, Math.floor(Math.min(required, mem.u8.length - p) / K.BYTES_PER_ELEMENT));
 }
@@ -217,19 +225,17 @@ export function readGuestPixels(gl: WebGLRenderingContext | WebGL2RenderingConte
   if (!bytes || w <= 0 || h <= 0) { gl.readPixels(x, y, w, h, format, type, pixels(type, p)); return; }
   const extended = "PACK_ROW_LENGTH" in gl;
   const rowLength = extended ? Number(gl.getParameter(0x0d02)) || w : w;
-  const alignment = Number(gl.getParameter(gl.PACK_ALIGNMENT));
-  const stride = Math.ceil(rowLength * bytes / alignment) * alignment;
-  const skip = extended ? Number(gl.getParameter(0x0d03)) * stride + Number(gl.getParameter(0x0d04)) * bytes : 0;
-  const size = skip + (h - 1) * stride + w * bytes;
-  const data = view(K, p, Math.floor(Math.min(size, mem.u8.length - p) / element));
+  const { stride, skip, extent } = pixelRows(w, h, bytes, Number(gl.getParameter(gl.PACK_ALIGNMENT)), rowLength,
+    extended ? Number(gl.getParameter(0x0d03)) : 0, extended ? Number(gl.getParameter(0x0d04)) : 0);
+  const data = view(K, p, Math.floor(Math.min(extent, mem.u8.length - p) / element));
   gl.readPixels(x, y, w, h, format, type, data);
   // A short destination is rejected by WebGL. Padding and skipped pixels are never written.
-  if (size > data.byteLength) return;
+  if (extent > data.byteLength) return;
   if (data.buffer !== mem.buf) mem.u8.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), p);
   for (let row = 0; row < h; row++) wrote(p + skip + row * stride, w * bytes);
 }
-const texData = (type: number, p: number, width: number, height: number, depth: number | undefined, format: number): unknown =>
-  (unpackPbo ? p : p ? uploadPixels(type, p, width, height, depth, format) : null);
+const texData = (type: number, p: number, format: number, dimensions: PixelDimensions): number | ArrayBufferView | null =>
+  (unpackPbo ? p : p ? uploadPixels(type, p, format, dimensions) : null);
 /** GL's (bufsize, *length, char *buf) out-string */
 function outStr(s: string, bufsize: number, lenp: number, buf: number): void {
   const n = Math.max(0, Math.min(s.length, bufsize - 1));
@@ -616,10 +622,10 @@ export function gles3Init(): void {
       if (!unit) { unit = new Map(); state.bindings.set(state.activeUnit, unit); }
       if (unit.get(target) !== texture) { unit.set(target, texture); state.revision++; }
     },
-    glTexImage2D: (_c, a) => { const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(), b = a.i(), fmt = a.i(), ty = a.i(); (g().texImage2D as Function)(t, l, f, w, h, b, fmt, ty, texData(ty, a.p(), w, h, undefined, fmt)); },
-    glTexSubImage2D: (_c, a) => { const t = a.i(), l = a.i(), x = a.i(), y = a.i(), w = a.i(), h = a.i(), fmt = a.i(), ty = a.i(); (g().texSubImage2D as Function)(t, l, x, y, w, h, fmt, ty, texData(ty, a.p(), w, h, undefined, fmt)); },
-    glTexImage3D: (_c, a) => { const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(), d = a.i(), b = a.i(), fmt = a.i(), ty = a.i(); (g().texImage3D as Function)(t, l, f, w, h, d, b, fmt, ty, texData(ty, a.p(), w, h, d, fmt)); },
-    glTexSubImage3D: (_c, a) => { const t = a.i(), l = a.i(), x = a.i(), y = a.i(), z = a.i(), w = a.i(), h = a.i(), d = a.i(), fmt = a.i(), ty = a.i(); (g().texSubImage3D as Function)(t, l, x, y, z, w, h, d, fmt, ty, texData(ty, a.p(), w, h, d, fmt)); },
+    glTexImage2D: (_c, a) => { const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(), b = a.i(), fmt = a.i(), ty = a.i(); (g().texImage2D as Function)(t, l, f, w, h, b, fmt, ty, texData(ty, a.p(), fmt, [w, h])); },
+    glTexSubImage2D: (_c, a) => { const t = a.i(), l = a.i(), x = a.i(), y = a.i(), w = a.i(), h = a.i(), fmt = a.i(), ty = a.i(); (g().texSubImage2D as Function)(t, l, x, y, w, h, fmt, ty, texData(ty, a.p(), fmt, [w, h])); },
+    glTexImage3D: (_c, a) => { const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(), d = a.i(), b = a.i(), fmt = a.i(), ty = a.i(); (g().texImage3D as Function)(t, l, f, w, h, d, b, fmt, ty, texData(ty, a.p(), fmt, [w, h, d])); },
+    glTexSubImage3D: (_c, a) => { const t = a.i(), l = a.i(), x = a.i(), y = a.i(), z = a.i(), w = a.i(), h = a.i(), d = a.i(), fmt = a.i(), ty = a.i(); (g().texSubImage3D as Function)(t, l, x, y, z, w, h, d, fmt, ty, texData(ty, a.p(), fmt, [w, h, d])); },
     glCompressedTexImage2D: (_c, a) => {
       const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(); a.i(); const n = a.i(), p = a.p();
       const gl = glForTextureFormat(f);
