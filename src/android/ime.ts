@@ -19,6 +19,14 @@ import { JMatrix } from "./graphics";
 import { JTextView, JEditText, textViewCtors, focusedEdit, focusEditText, inputEl, editInput, fireEditorAction, editorAction } from "./textview";
 import { inMainJob, onMain } from "./mainloop";
 import { PARCELABLE } from "./os";
+import { JService } from "./runningservices";
+
+rt.register({ name: "android/inputmethodservice/AbstractInputMethodService", ctor: class extends JService {}, sup: "android/app/Service", methods: {
+  "<init>()V": function () {},
+} });
+rt.register({ name: "android/inputmethodservice/InputMethodService", ctor: class extends JService {}, sup: "android/inputmethodservice/AbstractInputMethodService", methods: {
+  "<init>()V": function () {},
+} });
 
 rt.markers("android/view/textservice/SpellCheckerSession$SpellCheckerSessionListener");
 rt.register({

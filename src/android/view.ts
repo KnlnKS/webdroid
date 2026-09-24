@@ -407,6 +407,7 @@ export class JView extends JObj {
   autoHandwritingEnabled = true;
   willNotCache = false;
   clickL: unknown = null; longClickL: unknown = null; touchL: unknown = null; keyL: unknown = null; focusL: unknown = null;
+  unhandledKeyLs: unknown[] = [];
 
   scrollChangeL: unknown = null;
   insetsL: unknown = null; a11yDelegate: unknown = null; dragL: unknown = null;
@@ -1081,6 +1082,10 @@ const viewMethods: NativeSpec["methods"] = {
   },
   "setOnTouchListener(Landroid/view/View$OnTouchListener;)V": function (this: JView, l: unknown) { this.touchL = l; },
   "setOnKeyListener(Landroid/view/View$OnKeyListener;)V": function (this: JView, l: unknown) { this.keyL = l; },
+  "addOnUnhandledKeyEventListener(Landroid/view/View$OnUnhandledKeyEventListener;)V": function (this: JView, l: unknown) { this.unhandledKeyLs.push(l); },
+  "removeOnUnhandledKeyEventListener(Landroid/view/View$OnUnhandledKeyEventListener;)V": function (this: JView, l: unknown) {
+    const i = this.unhandledKeyLs.indexOf(l); if (i >= 0) this.unhandledKeyLs.splice(i, 1);
+  },
   "setOnFocusChangeListener(Landroid/view/View$OnFocusChangeListener;)V": function (this: JView, l: unknown) { this.focusL = l; },
   "getOnFocusChangeListener()Landroid/view/View$OnFocusChangeListener;": function (this: JView) { return this.focusL; },
   "addOnLayoutChangeListener(Landroid/view/View$OnLayoutChangeListener;)V": function (this: JView, l: unknown) {
@@ -1434,8 +1439,12 @@ const viewMethods: NativeSpec["methods"] = {
   "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": async function (this: JView, ev: unknown) {
     const code = await vcall(ev, "getKeyCode", "()I"), action = await vcall(ev, "getAction", "()I");
     if (this.keyL && this.enabled && (await vcall(this.keyL, "onKey", "(Landroid/view/View;ILandroid/view/KeyEvent;)Z", this, code, ev))) return 1;
-    return action === 0 ? vcall(this, "onKeyDown", "(ILandroid/view/KeyEvent;)Z", code, ev)
-      : action === 1 ? vcall(this, "onKeyUp", "(ILandroid/view/KeyEvent;)Z", code, ev) : 0;
+    const handled = action === 0 ? await vcall(this, "onKeyDown", "(ILandroid/view/KeyEvent;)Z", code, ev)
+      : action === 1 ? await vcall(this, "onKeyUp", "(ILandroid/view/KeyEvent;)Z", code, ev) : 0;
+    if (handled) return 1;
+    for (let i = this.unhandledKeyLs.length - 1; i >= 0; i--)
+      if (await vcall(this.unhandledKeyLs[i], "onUnhandledKeyEvent", "(Landroid/view/View;Landroid/view/KeyEvent;)Z", this, ev)) return 1;
+    return 0;
   },
   "onSaveInstanceState()Landroid/os/Parcelable;": () => EMPTY_STATE,
   "getDrawingTime()J": () => BigInt(Math.floor(performance.now())),
