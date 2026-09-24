@@ -66,7 +66,8 @@ export function validateUiAction(value: unknown, label = "action"): UiAction {
   }
 }
 
-const usable = (node: UiNode): boolean => node.enabled && node.bounds[2] > node.bounds[0] && node.bounds[3] > node.bounds[1];
+const visible = (node: UiNode): boolean => node.bounds[2] > node.bounds[0] && node.bounds[3] > node.bounds[1];
+const usable = (node: UiNode): boolean => node.enabled && visible(node);
 const normalized = (value: string): string => value.replace(/\s+/g, " ").trim();
 
 function selector(node: UiNode): string {
@@ -144,12 +145,12 @@ function hashStructure(structure: readonly string[]): string {
 }
 
 export function uiStateKey(nodes: readonly UiNode[]): string {
-  const visible = nodes.filter(usable);
-  const width = Math.max(1, ...visible.map((node) => node.bounds[2]));
-  const height = Math.max(1, ...visible.map((node) => node.bounds[3]));
-  return hashStructure(visible.map((node) => JSON.stringify([
+  const visibleNodes = nodes.filter(visible);
+  const width = Math.max(1, ...visibleNodes.map((node) => node.bounds[2]));
+  const height = Math.max(1, ...visibleNodes.map((node) => node.bounds[3]));
+  return hashStructure(visibleNodes.map((node) => JSON.stringify([
     node.resId, node.cls, normalized(node.text), normalized(node.desc),
-    node.clickable, node.editable, node.scrollable,
+    node.enabled, node.clickable, node.editable, node.scrollable,
     node.clickable || node.editable || node.scrollable
       ? node.bounds.map((coordinate, index) => Math.round(16 * coordinate / (index % 2 ? height : width))) : null,
   ])));
@@ -157,7 +158,7 @@ export function uiStateKey(nodes: readonly UiNode[]): string {
 
 export function uiScrollFamilyKey(nodes: readonly UiNode[]): string {
   const scrollables = nodes.filter((node) => usable(node) && node.scrollable);
-  const outside = nodes.filter((node) => usable(node) && !node.scrollable && (node.text || node.desc) &&
+  const outside = nodes.filter((node) => visible(node) && !node.scrollable && (node.text || node.desc) &&
     !scrollables.some((parent) => node.bounds[0] >= parent.bounds[0] && node.bounds[1] >= parent.bounds[1] &&
       node.bounds[2] <= parent.bounds[2] && node.bounds[3] <= parent.bounds[3]));
   return hashStructure([

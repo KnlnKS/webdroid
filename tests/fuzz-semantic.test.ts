@@ -50,7 +50,7 @@ describe("semantic UI fuzzing", () => {
 
   test("Compose screens with the same controls retain distinct content identities", () => {
     const controls = [node({ resId: "app:id/continue", text: "Continue", clickable: true })];
-    const screen = (message: string) => [node({ cls: "androidx.compose.ui.platform.AndroidComposeView", text: message }), ...controls];
+    const screen = (message: string) => [node({ cls: "androidx.compose.ui.platform.AndroidComposeView", text: message, enabled: false }), ...controls];
     const initial = screen("Sign in");
     expect(uiStateKey(initial)).not.toBe(uiStateKey(screen("Account deleted")));
     expect(uiStateKey(initial)).not.toBe(uiStateKey([initial[0]!, { ...initial[1]!, bounds: [50, 50, 100, 100] }]));
