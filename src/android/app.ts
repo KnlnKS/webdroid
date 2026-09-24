@@ -1049,6 +1049,10 @@ rt.register({
   name: "android/service/quicksettings/TileService", ctor: class extends JService {}, sup: "android/app/Service",
   methods: {
     ...noops("<init>()V", "onClick()V", "onTileAdded()V", "onTileRemoved()V"),
+    "static requestListeningState(Landroid/content/Context;Landroid/content/ComponentName;)V": (context: unknown, component: unknown) => {
+      if (!context || !component) rt.npe();
+      rt.noteMissing("systemService statusbar");
+    },
     "startActivityAndCollapse(Landroid/content/Intent;)V": function (this: JService, intent: JIntent) {
       return vcall(this, "startActivity", "(Landroid/content/Intent;)V", intent);
     },
