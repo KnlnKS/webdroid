@@ -2,23 +2,14 @@
 
 Branch: `codex/tiktok-video-playback-20260923` in an isolated worktree.
 The unchanged TikTok APK reaches a steady visible Chrome presentation cadence
-near 30/s on a measured live segment, after feed transition. Browser
-presentation counts include UI redraws, and dense clips remain slower in
-headless software rendering, so all-clip original-rate playback is not yet
-established. Guest A64 local calls now stay inside compiled regions; EGL swap
-intervals have platform semantics; texture uploads pass WebGL only their
-reachable pixel extent. See implementation history for measurements and
-rejected experiments. The final serialized E2E matrix rendered 183/183 steps
-in 986.9 seconds. TikTok rendered 13/13, with advancing ticks and no GL,
-layout or draw failures; its two headless video steps made 14.3 and 9.1 EGL
-swaps/s. The 30-fps target remains unproved across live clips and renderers.
-
-Review follow-up: GLES pack/unpack row geometry now has one calculation, and
-EGL10 uses a canonical display handle with validation across its display
-entry points. Focused browser checks verify padded 2D and skipped 3D uploads;
-the final serialized matrix after these changes rendered 183/183 steps in
-1003.7 seconds. TikTok rendered 13/13 with advancing ticks and no GL, layout,
-draw or required native failure. The playback-rate limit above still applies.
+near 30/s on one measured live segment. Presentation counts include UI redraws,
+and dense clips remain slower in headless software rendering, so original-rate
+playback across clips is unproved. Guest A64 local calls stay inside compiled
+regions; EGL swap intervals and display validation follow platform semantics;
+texture uploads use bounded views and shared pixel-transfer row geometry.
+The final serialized E2E matrix rendered 183/183 steps in 1003.7 seconds.
+TikTok rendered 13/13 with advancing ticks and no GL, layout, draw or required
+native failure. See implementation history for measurements and evidence limits.
 
 ---
 
