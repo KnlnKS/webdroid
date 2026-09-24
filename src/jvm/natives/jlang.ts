@@ -1513,6 +1513,11 @@ const sysProps: Record<string, string> = {
   "java.vm.name": "webdroid", "file.separator": "/", "path.separator": ":",
   "java.io.tmpdir": "/data/local/tmp", "user.dir": "/",
 };
+const sysEnv: Record<string, string> = {
+  PATH: "/system/bin:/system/xbin:/vendor/bin",
+  ANDROID_ROOT: "/system", ANDROID_DATA: "/data", EXTERNAL_STORAGE: "/sdcard",
+  TMPDIR: "/data/local/tmp",
+};
 rt.register({
   name: "java/lang/System", ctor: JSystem,
   callerSensitive: ["loadLibrary(Ljava/lang/String;)V", "load(Ljava/lang/String;)V"],
@@ -1530,7 +1535,15 @@ rt.register({
       return p;
     },
     "static setProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (k: string, v: string) => { const o = sysProps[k] ?? null; sysProps[k] = v; return o; },
-    "static getenv(Ljava/lang/String;)Ljava/lang/String;": () => null,
+    "static getenv(Ljava/lang/String;)Ljava/lang/String;": (key: string | null) => {
+      if (key === null) rt.npe();
+      return sysEnv[key!] ?? null;
+    },
+    "static getenv()Ljava/util/Map;": async () => {
+      const map = await newObj("java/util/HashMap");
+      for (const [key, value] of Object.entries(sysEnv)) await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
+      return map;
+    },
     // Android has never installed one; code that asks is deciding whether it may reflect
     "static getSecurityManager()Ljava/lang/SecurityManager;": () => null,
     "static gc()V": () => {},
