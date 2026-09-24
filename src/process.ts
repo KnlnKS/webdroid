@@ -19,6 +19,7 @@ import { configureJvmCoverage, jvmCoverage } from "./jvm/coverage";
 import { perf } from "./perf";
 import { mainDbg } from "./android/mainloop";
 import { guestClockControl } from "./guest-clock";
+import { nativeRequirements } from "./shell/diagnostics";
 import { SYSTEM_FONTS, SYSTEM_EMOJI_FONTS } from "./android/graphics";
 
 const params = new URLSearchParams(location.search), pid = Number(params.get("pid")), broker = processBroker();
@@ -55,7 +56,7 @@ processPresentation.changed = (visible) => {
   else if (!visible && frameId) { cancelAnimationFrame(frameId); frameId = 0; }
 };
 // the realm's share of the main page's `wd`: enough to see its stack and drive it from a probe
-(globalThis as { wd?: unknown }).wd = { rt, app: () => currentApp(), jvmCoverage, overlays, perf, mainDbg, logs, guestClock: guestClockControl,
+(globalThis as { wd?: unknown }).wd = { rt, app: () => currentApp(), jvmCoverage, overlays, perf, mainDbg, logs, guestClock: guestClockControl, nativeRequirements,
   get ticks() { return ticks; }, back: pressBack, testFrame: () => processPresentation.visible ? tick() : Promise.resolve(),
   tap: async (x: number, y: number) => { await dispatchPointer(0, x, y); await dispatchPointer(1, x, y); } };
 window.addEventListener("pagehide", () => {

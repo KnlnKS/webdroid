@@ -28,7 +28,8 @@ export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
     try {
       const read = () => frame.evaluate(() => {
         const wd = globalThis.wd;
-        return wd ? { status: "ok" as const, pkg: wd.app()?.host.pkg ?? null, ticks: wd.ticks, missing: [...wd.rt.missing], native: [...wd.rt.nativeRequired],
+        return wd ? { status: "ok" as const, pkg: wd.app()?.host.pkg ?? null, ticks: wd.ticks, missing: [...wd.rt.missing],
+          native: wd.nativeRequirements(),
           errors: wd.logs?.filter((line: string) => /^(error:|window.error:|unhandledrejection:)/.test(line)) ?? null,
           perf: wd.perf ? { ...wd.perf } : null,
           queue: wd.mainDbg ? { queued: wd.mainDbg.queued, depth: wd.mainDbg.depth, phase: wd.mainDbg.phase } : null,
