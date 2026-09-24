@@ -359,8 +359,23 @@ bun run fuzz ui FitNotes.apk --seed 1592594996 --steps 100 \
 ```
 
 An APK argument may be an existing path or a file name under `apks/`. The APK must expose a
-launchable activity discoverable with `aapt2 dump badging`. Each APK is run independently; its PRNG
-stream is derived deterministically from the campaign seed and APK index.
+launchable activity discoverable with `aapt2 dump badging`. Each APK is explored independently.
+The same `--out` directory resumes a journal named for its package and APK content hash. `--steps`
+bounds new actions in this invocation; replaying a stored path to an unexplored screen costs extra
+actions, with a total cap of three times `--steps` and at most 64 episodes. The campaign summary
+reports both explored and replayed action counts. To start a fresh search, use a new output directory. The journal records screen states,
+actions tried from each state, shortest replay paths, coverage, and signals. Its state and path
+limits keep long or live-content campaigns bounded. Screen identity excludes text from noninteractive
+nodes; screens with the same structure and controls can therefore share an exploration state.
+
+The explorer chooses an untried semantic action on the current screen, then restarts at a saved
+frontier when it has exhausted that screen's actions. It checks each replayed screen state before
+continuing the saved path. The campaign records each episode and its replay prefix; an incompatible
+prefix is recorded as replay divergence rather than counted as a compatibility failure. The campaign
+also ranks the ten largest paired visual differences as observations with artifact paths; they need
+review before being treated as defects. A retained
+failure bundle still owns its exact original and minimized action sequences. Runs stop at their
+first detected structural, runtime, or liveness failure before minimization.
 
 Generated actions are:
 
@@ -370,7 +385,7 @@ Generated actions are:
 - back and enter;
 - background/resume;
 - portrait/landscape configuration changes; and
-- a normalized blind-coordinate tap only as a recorded fallback when semantic actions are absent.
+- a bounded three-by-three grid of normalized fallback taps only when semantic actions are absent.
 
 Semantic identity prefers resource ID, then normalized text, then content description, and finally
 class plus ordinal. Normalized coordinates are retained with the identity. If Android selects a
@@ -430,8 +445,8 @@ reproductions[0..1]
 Each reproduction owns the exact input and pair of outputs that produced its failure. Never combine
 an input from one observation with results from another.
 
-UI directories contain `ui-<seed>.campaign.json`, novelty screenshots/diffs, and one
-`<apk-name>.failure.json` per retained failing APK. A UI bundle stores the app package/activity,
+UI directories contain `ui-<seed>.campaign.json`, a resumable `*.exploration.json` journal,
+novelty screenshots/diffs, and one `*.failure.json` per distinct retained failure. A UI bundle stores the app package/activity,
 original action sequence and run, minimized action sequence and run, and two minimized
 reproductions. UI run evidence includes its own environment and step diagnostics.
 

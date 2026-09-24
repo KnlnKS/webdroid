@@ -6,7 +6,8 @@ import { savePng, type Img } from "../../tests/e2e/lib/png";
 import { readProcesses } from "../../tests/e2e/lib/processes";
 import type { UiNode } from "../../tests/e2e/types";
 import { Random } from "./random";
-import { generateUiAction, matchIdentity, semanticKeys, validateUiAction, type UiAction } from "./ui-model";
+import { matchIdentity, semanticKeys, validateUiAction, type UiAction } from "./ui-model";
+import { UiExplorer, type UiPrefix } from "./ui-explorer";
 import { isWebdroidProcessFrame } from "./webdroid-session";
 import { inspectUiApp, openUiTargets, type UiApp } from "./ui-targets";
 import { sameFailure, validateFailure, type Failure } from "./model";
@@ -27,11 +28,14 @@ type UiStep = {
     | { status: "action-failure"; message: string };
   coverageDelta: string[];
   signals: string[];
+  state?: string;
+  nextState?: string;
+  discoveries?: number;
   artifacts?: { android?: string; webdroid: string; diff?: string };
 };
 
 export type UiOptions = { apks: string[]; seed: number; steps: number; oracle?: string; out: string };
-export type UiRun = { steps: UiStep[]; environment: Record<string, unknown> };
+export type UiRun = { steps: UiStep[]; environment: Record<string, unknown>; replayDivergence?: string };
 export type UiObservation = { actions: UiAction[]; failure: Failure; run: UiRun };
 export type UiFailureBundle = {
   schemaVersion: 1;
@@ -124,7 +128,8 @@ function compactDiagnostics(processes: Awaited<ReturnType<typeof readProcesses>>
   });
 }
 
-async function runApk(app: UiApp, options: UiOptions, apkIndex: number, fixedActions?: readonly UiAction[], artifactLabel?: string): Promise<UiRun> {
+async function runApk(app: UiApp, options: UiOptions, apkIndex: number, fixedActions?: readonly UiAction[], artifactLabel?: string,
+  explorer?: UiExplorer, prefix: UiPrefix = { actions: [], states: [], target: null }): Promise<UiRun> {
   const random = new Random((options.seed ^ Math.imul(apkIndex + 1, 0x9e3779b1)) >>> 0);
   const targets = await openUiTargets(app, options.oracle);
   const web = targets.webdroid, android = targets.android;
@@ -132,14 +137,21 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, fixedAct
   if (android) environment.android = android.environment;
   const seenSignals = new Set<string>(), seenCoverage = new Set<string>(), seenTrees = new Set<string>(), seenFrames = new Set<string>();
   const steps: UiStep[] = [];
+  let nextAndroidNodes: UiNode[] | undefined;
   try {
     const stepCount = fixedActions?.length ?? options.steps;
     for (let index = 0; index < stepCount; index++) {
-      let androidNodes: UiNode[] | undefined;
       const webNodes = await web.tree();
-      if (android) androidNodes = await android.tree();
+      const androidNodes = android ? nextAndroidNodes ?? await android.tree() : undefined;
       const source = androidNodes ?? webNodes, sourceSize = screenSize(source), webSize = { width: 1080, height: 2160 };
-      const action = fixedActions?.[index] ?? generateUiAction(random, source, sourceSize.width, sourceSize.height);
+      const path = steps.map((step) => step.action);
+      const states = steps.flatMap((step) => step.state ? [step.state] : []);
+      const state = explorer?.observeState(source, sourceSize.width, sourceSize.height, { actions: path, states, target: null });
+      if (index < prefix.actions.length && state !== prefix.states[index])
+        return { steps, environment, replayDivergence: `prefix state ${index}: expected ${prefix.states[index]}, observed ${state}` };
+      if (index === prefix.actions.length && prefix.target && state !== prefix.target)
+        return { steps, environment, replayDivergence: `prefix destination: expected ${prefix.target}, observed ${state}` };
+      const action = fixedActions?.[index] ?? prefix.actions[index] ?? (state ? explorer?.choose(state, random) : null);
       if (!action) break;
       const missingTarget = "target" in action && !matchIdentity(webNodes, action.target);
       const preDivergence = androidNodes ? treeDivergence(androidNodes, webNodes) : undefined;
@@ -151,14 +163,19 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, fixedAct
         ]).then(() => undefined), `UI step ${index}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        if (state && explorer) {
+          explorer.observeAction(state, action, [], [`timeout-or-error:${message}`]);
+          await explorer.save();
+        }
         steps.push({ index, action, webdroidTreeHash: hash(webNodes), webdroidFrameHash: "", structuralDivergence: message,
           diagnostics: { status: "action-failure", message }, coverageDelta: [], signals: [`timeout-or-error:${message}`] });
         break;
       }
       await Bun.sleep(250);
-      const [androidPng, webPng, processes, alive, nextWebTree] = await Promise.all([
-        android?.screenshot(), web.screenshot(), readProcesses(web.page), web.alive(), web.tree(),
+      const [androidPng, webPng, processes, alive, nextWebTree, postAndroidNodes] = await Promise.all([
+        android?.screenshot(), web.screenshot(), readProcesses(web.page), web.alive(), web.tree(), android?.tree(),
       ]);
+      nextAndroidNodes = postAndroidNodes;
       const relevant = processes.filter((process) => isWebdroidProcessFrame(process.url, web.origin));
       if (!relevant.length || relevant.some((process) => process.diagnostics.status !== "ok"))
         throw new Error(`missing process telemetry at UI step ${index}`);
@@ -168,7 +185,7 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, fixedAct
       const currentCoverage = coverage(relevant);
       const coverageDelta = [...currentCoverage].filter((method) => !seenCoverage.has(method));
       const webTreeHash = hash(nextWebTree), webFrameHash = hash(webPng);
-      const androidTreeHash = androidNodes ? hash(androidNodes) : undefined, androidFrameHash = androidPng ? hash(androidPng) : undefined;
+      const androidTreeHash = postAndroidNodes ? hash(postAndroidNodes) : undefined, androidFrameHash = androidPng ? hash(androidPng) : undefined;
       const newSignals = signals.filter((signal) => !seenSignals.has(signal));
       const novel = coverageDelta.length || newSignals.length || !seenTrees.has(webTreeHash) || !seenFrames.has(webFrameHash) || structuralDivergence;
       let pixel: UiStep["pixel"];
@@ -185,6 +202,17 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, fixedAct
         webdroidFrameHash: webFrameHash, structuralDivergence, pixel,
         diagnostics: { status: "ok", alive, errors: web.errors, processes: compactDiagnostics(relevant) },
         coverageDelta, signals };
+      if (state && explorer) {
+        step.state = state;
+        step.discoveries = explorer.observeAction(state, action, [...currentCoverage], signals);
+        if (!structuralDivergence && alive) {
+          const nextSource = postAndroidNodes ?? nextWebTree;
+          const nextSize = screenSize(nextSource);
+          step.nextState = explorer.observeState(nextSource, nextSize.width, nextSize.height,
+            { actions: [...path, action], states: [...states, state], target: null });
+        }
+        if (index % 5 === 0) await explorer.save();
+      }
       if (novel && artifactLabel) {
         const prefix = `${options.out}/${basename(app.apk).replace(/\.[^.]+$/, "")}-${artifactLabel}-${String(index).padStart(3, "0")}`;
         const artifacts: NonNullable<UiStep["artifacts"]> = { webdroid: `${prefix}-webdroid.png` };
@@ -197,11 +225,12 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, fixedAct
       for (const signal of signals) seenSignals.add(signal);
       for (const method of currentCoverage) seenCoverage.add(method);
       seenTrees.add(webTreeHash); seenFrames.add(webFrameHash);
-      if (structuralDivergence || !alive) break;
+      if (uiFailure([step])) break;
     }
     return { steps, environment };
   } finally {
-    await web.close();
+    try { await explorer?.save(); }
+    finally { await web.close(); }
   }
 }
 
@@ -209,8 +238,7 @@ function uiFailure(steps: readonly UiStep[]): Failure | null {
   for (const step of steps) {
     if (step.structuralDivergence) return {
       kind: step.structuralDivergence.includes("timed out") ? "timeout" : "harness-error",
-      fingerprint: step.structuralDivergence.includes("target absent") ? "ui:structure:target" :
-        step.structuralDivergence.includes("semantic overlap") ? "ui:structure:tree" : "ui:action",
+      fingerprint: `ui:structure:${hash(step.structuralDivergence.replace(/UI step \d+/g, "UI step"))}`,
       detail: step.structuralDivergence,
     };
     const signal = step.signals.find((value) => /^(wedge|layout|draw|gl|error|page-error|timeout-or-error|harness):/.test(value));
@@ -219,7 +247,7 @@ function uiFailure(steps: readonly UiStep[]): Failure | null {
     const kind = category === "wedge" ? "wedge" : category === "layout" ? "layout-error" :
       category === "draw" ? "draw-error" : category === "gl" ? "gl-error" :
       category === "timeout-or-error" ? "timeout" : "harness-error";
-    return { kind, fingerprint: `ui:${category}`, detail: signal };
+    return { kind, fingerprint: `ui:${category}:${hash(signal)}`, detail: signal };
   }
   return null;
 }
@@ -273,24 +301,66 @@ export async function runUi(options: UiOptions): Promise<void> {
   if (!options.apks.length) throw new Error("ui fuzzing requires at least one APK");
   if (!options.steps) throw new Error("--steps must be at least 1");
   mkdirSync(options.out, { recursive: true });
-  const apps = options.apks.map(inspectUiApp), runs = [];
+  const apps = options.apks.map(inspectUiApp), runs = [], summaries = [];
   for (let index = 0; index < apps.length; index++) {
-    const app = apps[index]!, run = await runApk(app, options, index, undefined, "original");
-    runs.push({ app, ...run });
-    const failure = uiFailure(run.steps);
-    if (!failure) continue;
-    const input = run.steps.map((step) => step.action);
-    const reproduces = async (actions: UiAction[]) => (await observeUi(app, actions, options, failure)) !== null;
-    const minimized = await minimizeUiActions(input, reproduces);
-    const first = await observeUi(app, minimized, options, failure, "minimized");
-    const second = await observeUi(app, minimized, options, failure);
-    if (!first || !second || first.failure.fingerprint !== second.failure.fingerprint) continue;
-    const bundle: UiFailureBundle = { schemaVersion: 1, kind: "ui", seed: options.seed, app,
-      original: { actions: input, failure, run }, minimized: first, reproductions: [first, second] };
-    await Bun.write(`${options.out}/${basename(app.apk).replace(/\.[^.]+$/, "")}.failure.json`, JSON.stringify(bundle, null, 2) + "\n");
+    const app = apps[index]!;
+    const explorer = await UiExplorer.open(options.out, app.pkg, app.apk);
+    const attemptedPrefixes = new Set<string>();
+    const retained = new Set<string>();
+    const actionLimit = Math.min(Number.MAX_SAFE_INTEGER, options.steps * 3);
+    const episodeLimit = Math.min(options.steps, 64);
+    let usedActions = 0, replayedActions = 0, exploredActions = 0;
+    let remaining = options.steps, episode = 0, prefix: UiPrefix | null = { actions: [], states: [], target: null };
+    while (remaining > 0 && prefix !== null && episode < episodeLimit) {
+      const available = actionLimit - usedActions - prefix.actions.length;
+      if (available <= 0) break;
+      const run = await runApk(app, { ...options, steps: prefix.actions.length + Math.min(remaining, available) }, index, undefined,
+        `episode-${episode}`, explorer, prefix);
+      const explored = Math.max(0, run.steps.length - prefix.actions.length);
+      const replayed = Math.min(run.steps.length, prefix.actions.length);
+      usedActions += run.steps.length;
+      replayedActions += replayed;
+      exploredActions += explored;
+      runs.push({ app, episode, prefix, replayedActions: replayed, exploredActions: explored, ...run });
+      remaining -= explored;
+      if (!explored) attemptedPrefixes.add(JSON.stringify(prefix));
+      if (run.replayDivergence) explorer.rejectPrefix(prefix);
+      const failure = uiFailure(run.steps);
+      if (failure && !retained.has(failure.fingerprint)) {
+        retained.add(failure.fingerprint);
+        const input = run.steps.map((step) => step.action);
+        const reproduces = async (actions: UiAction[]) => (await observeUi(app, actions, options, failure)) !== null;
+        const minimized = await minimizeUiActions(input, reproduces);
+        const first = await observeUi(app, minimized, options, failure, `minimized-${episode}`);
+        const second = await observeUi(app, minimized, options, failure);
+        if (first && second && first.failure.fingerprint === second.failure.fingerprint) {
+          const bundle: UiFailureBundle = { schemaVersion: 1, kind: "ui", seed: options.seed, app,
+            original: { actions: input, failure, run }, minimized: first, reproductions: [first, second] };
+          await Bun.write(`${options.out}/${app.pkg}-${hash(app.apk)}-${hash(failure.fingerprint)}.failure.json`, JSON.stringify(bundle, null, 2) + "\n");
+        }
+      }
+      prefix = explorer.nextPrefix(attemptedPrefixes);
+      episode++;
+    }
+    await explorer.save();
+    summaries.push({ app, requestedActions: options.steps, totalActionLimit: actionLimit, usedActions,
+      replayedActions, exploredActions, episodes: episode, ...explorer.summary() });
+    console.log(`${app.pkg}: ${JSON.stringify(explorer.summary())}`);
   }
+  const visualPairs = new Set<string>();
+  const visualCandidates = runs.flatMap((run) => run.steps.flatMap((step) => {
+    const pixel = step.pixel;
+    return pixel && "contentDiffPct" in pixel ? [{ kind: "observation" as const, app: run.app.pkg,
+      episode: run.episode, step: step.index, contentDiffPct: pixel.contentDiffPct,
+      tolerantPct: pixel.tolerantPct, framePair: `${step.androidFrameHash}:${step.webdroidFrameHash}`,
+      artifacts: step.artifacts }] : [];
+  })).sort((left, right) => right.contentDiffPct - left.contentDiffPct).filter((candidate) => {
+    if (visualPairs.has(candidate.framePair)) return false;
+    visualPairs.add(candidate.framePair);
+    return true;
+  }).slice(0, 10);
   await Bun.write(`${options.out}/ui-${options.seed}.campaign.json`, JSON.stringify({
-    schemaVersion: 1, kind: "ui", seed: options.seed, requestedSteps: options.steps, runs,
+    schemaVersion: 1, kind: "ui", seed: options.seed, requestedSteps: options.steps, summaries, visualCandidates, runs,
   }, null, 2) + "\n");
   console.log(`UI fuzzed ${apps.length} APK(s); retained artifacts in ${options.out}`);
 }

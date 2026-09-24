@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { UiExplorer } from "../scripts/fuzz/ui-explorer";
 import { generateUiAction, matchIdentity, validateUiAction } from "../scripts/fuzz/ui-model";
 import { Random } from "../scripts/fuzz/random";
 import { parseUiAutomator } from "./e2e/lib/uiautomator";
@@ -42,5 +46,30 @@ describe("semantic UI fuzzing", () => {
       type: "tap", target: { className: "android.widget.Button", ordinal: 0 }, at: { x: 0.5, y: 0.5 },
     });
     expect(() => validateUiAction({ type: "configuration", orientation: "diagonal" })).toThrow();
+  });
+
+  test("exploration resumes at an untried action after a saved restart", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "wd-ui-explorer-"));
+    try {
+      const apk = join(directory, "sample.apk");
+      await Bun.write(apk, "test apk bytes");
+      const nodes = [node({ text: "Open", clickable: true })];
+      const explorer = await UiExplorer.open(directory, "sample", apk);
+      const initial = explorer.observeState(nodes, 100, 100, { actions: [], states: [], target: null });
+      const first = explorer.choose(initial, new Random(12));
+      if (!first) throw new Error("expected a UI action");
+      explorer.observeAction(initial, first, ["sample:method"], []);
+      const next = explorer.observeState([node({ text: "Next", clickable: true })], 100, 100,
+        { actions: [first], states: [initial], target: null });
+      await explorer.save();
+
+      const resumed = await UiExplorer.open(directory, "sample", apk);
+      expect(resumed.choose(initial, new Random(12))).not.toEqual(first);
+      expect(resumed.summary()).toEqual({ states: 2, actions: 1, coverage: 1, signals: 0 });
+      expect(resumed.nextPrefix(new Set())).toEqual({ actions: [], states: [], target: initial });
+      expect(next).not.toBe(initial);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
