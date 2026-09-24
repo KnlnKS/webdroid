@@ -1,7 +1,7 @@
 // android.media: MediaPlayer over HTMLAudioElement, SoundPool over Web Audio.
 
 import { rt, JObj, stubs, noops, fieldGetters } from "../jvm/runtime";
-import { stringHash, vcall } from "../jvm/natives/jlang";
+import { vcall } from "../jvm/natives/jlang";
 import { newArrayList, newStringSet, type JList } from "../jvm/natives/jutil";
 import { vfs } from "../jvm/natives/jio";
 import type { JBuffer } from "../jvm/natives/jnio";
@@ -421,6 +421,7 @@ const D_periodic = "(Landroid/media/AudioTrack;)V";
 export class JAudioTrack extends JObj {
   rate = 44100; channels = 2; bytesPerSample = 2; bufBytes = 0;
   sessionId = 0; attributes: unknown = null;
+  logSessionId: unknown = null;
   state = 1; playState = 1;          // STATE_INITIALIZED; PLAYSTATE_STOPPED
   nextTime = 0; written = 0; played = 0; headOrigin = 0; resetHead = false; underruns = 0;
   queue: { buffer: AudioBuffer; offset: number; start: number; source: AudioBufferSourceNode | null; consumed?: () => void }[] = [];
@@ -543,6 +544,10 @@ rt.register({
     "static getNativeOutputSampleRate(I)I": () => outputSampleRate(),
     "static getMaxVolume()F": () => 1, "static getMinVolume()F": () => 0,
     "getPlaybackHeadPosition()I": function (this: JAudioTrack) { return this.playState === 1 ? 0 : Math.floor(this.head() - this.headOrigin) | 0; },
+    "setLogSessionId(Landroid/media/metrics/LogSessionId;)V": function (this: JAudioTrack, id: unknown) {
+      if (!id) rt.npe();
+      this.logSessionId = id;
+    },
     "setStereoVolume(FF)I": function (this: JAudioTrack, l: number, r: number) { this.vol = (l + r) / 2; if (this.gain) this.gain.gain.value = this.vol; return 0; },
     "setVolume(F)I": function (this: JAudioTrack, v: number) { this.vol = v; if (this.gain) this.gain.gain.value = v; return 0; },
     "setPlaybackPositionUpdateListener(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;)V": function (this: JAudioTrack, l: unknown) { this.listener = l; if (!l) this.stopTimer(); else if (this.playState === 3) this.startTimer(); },
@@ -801,13 +806,6 @@ rt.register({
 });
 
 rt.register({ name: "android/media/MediaCodec$Callback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
-class JLogSessionId extends JObj { id = ""; }
-rt.register({ name: "android/media/metrics/LogSessionId", ctor: JLogSessionId, statics: { LOG_SESSION_ID_NONE: new JLogSessionId() }, methods: {
-  "<init>(Ljava/lang/String;)V": function (this: JLogSessionId, id: string) { if (id == null) throw rt.mkThrowable("java/lang/NullPointerException", "id"); this.id = id; },
-  "getStringId()Ljava/lang/String;": function (this: JLogSessionId) { return this.id; },
-  "equals(Ljava/lang/Object;)Z": function (this: JLogSessionId, other: unknown) { return +(other instanceof JLogSessionId && other.id === this.id); },
-  "hashCode()I": function (this: JLogSessionId) { return stringHash(this.id); },
-} });
 export class JBufferInfo extends JObj { offset = 0; size = 0; presentationTimeUs = 0n; flags = 0; }
 rt.register({
   name: "android/media/MediaCodec$BufferInfo", ctor: JBufferInfo,
