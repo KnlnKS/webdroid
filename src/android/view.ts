@@ -928,6 +928,7 @@ const viewMethods: NativeSpec["methods"] = {
   "setTag(ILjava/lang/Object;)V": function (this: JView, k: number, t: unknown) { this.keyedTags.set(k, t); },
   // API 29 layout-inspector bookkeeping: only Studio's attribute inspector ever reads it back
   "saveAttributeDataForStyleable(Landroid/content/Context;[ILandroid/util/AttributeSet;Landroid/content/res/TypedArray;II)V": () => {},
+  "getAttributeSourceResourceMap()Ljava/util/Map;": () => rt.make("java/util/HashMap"),
   "getParent()Landroid/view/ViewParent;": function (this: JView) { return this.parent; },
   "getWidth()I": function (this: JView) { return this.width(); },
   "getHeight()I": function (this: JView) { return this.height(); },

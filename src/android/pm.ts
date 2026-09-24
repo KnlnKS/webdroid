@@ -333,6 +333,7 @@ export function getAppInfo(host: AppHost): JApplicationInfo {
 }
 class JPackageInfo extends JObj {
   packageName = ""; versionName = "1.0"; versionCode = 1; longVersionCode = 1n;
+  sharedUserId: string | null = null;
   splitNames: string[] | null = null;
   applicationInfo: JApplicationInfo | null = null;
   firstInstallTime = 0n; lastUpdateTime = 0n;
@@ -401,7 +402,7 @@ async function fillRequestedPermissions(info: JPackageInfo, root = manifestRoot,
 }
 rt.register({
   name: "android/content/pm/PackageInfo", ctor: JPackageInfo, ifaces: ["android/os/Parcelable"],
-  fields: ["packageName", "versionName", "versionCode", "splitNames", "applicationInfo", "firstInstallTime",
+  fields: ["packageName", "versionName", "versionCode", "sharedUserId", "splitNames", "applicationInfo", "firstInstallTime",
     "lastUpdateTime", "signatures", "signingInfo", "reqFeatures", "requestedPermissions", "requestedPermissionsFlags", "activities", "receivers",
     "services", "providers", "installLocation", "instrumentation"],
   methods: {
@@ -1032,6 +1033,7 @@ function fillManifestGameInfo(ai: JApplicationInfo, app: XmlNode | null | undefi
   if (app && attr(app, "isGame")?.data) ai.flags |= FLAG_IS_GAME;
 }
 function fillPackageManifest(info: JPackageInfo, root: XmlNode, res: Resources, flags: number) {
+  info.sharedUserId = attrStr(root, "sharedUserId");
   info.versionCode = attr(root, "versionCode")?.data ?? 0;
   info.longVersionCode = BigInt(info.versionCode >>> 0) | BigInt(attr(root, "versionCodeMajor")?.data ?? 0) << 32n;
   const version = attr(root, "versionName");

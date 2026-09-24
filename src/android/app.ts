@@ -465,7 +465,11 @@ rt.register({
   },
 });
 
-rt.markers("android/content/ComponentCallbacks", "android/content/ComponentCallbacks2");
+rt.markers("android/content/ComponentCallbacks");
+rt.register({
+  name: "android/content/ComponentCallbacks2", ctor: class extends JObj {},
+  ifaces: ["android/content/ComponentCallbacks"],
+});
 
 class JToast extends JObj { text = ""; }
 rt.register({

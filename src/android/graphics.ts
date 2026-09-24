@@ -2383,6 +2383,20 @@ rt.register({
     "discardDisplayList()V": function (this: JRenderNode) { this.hasDL = false; this.ops = []; },
     "getWidth()I": function (this: JRenderNode) { return this.w; },
     "getHeight()I": function (this: JRenderNode) { return this.h; },
+    "getLeft()I": function (this: JRenderNode) { return this.left; },
+    "getTop()I": function (this: JRenderNode) { return this.top; },
+    "getRight()I": function (this: JRenderNode) { return this.left + this.w; },
+    "getBottom()I": function (this: JRenderNode) { return this.top + this.h; },
+    "offsetLeftAndRight(I)Z": function (this: JRenderNode, offset: number) {
+      if (!offset) return 0;
+      this.left += offset;
+      return 1;
+    },
+    "offsetTopAndBottom(I)Z": function (this: JRenderNode, offset: number) {
+      if (!offset) return 0;
+      this.top += offset;
+      return 1;
+    },
     "setAlpha(F)Z": function (this: JRenderNode, a: number) {
       const alpha = asF(a), epsilon = Math.fround(0.001);
       this.alpha = alpha <= epsilon ? 0 : alpha >= 1 - epsilon ? 1 : alpha;
