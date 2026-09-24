@@ -1,9 +1,9 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, requestLayout, invalidate, resolveSize, specMode, MS_EXACTLY } from "./view";
 import {
-  type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, cslColor, drawableSize
+  type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, drawableSize
 } from "./drawable";
-import { curThread, callOn, vcallOn, mkEnumSet, newObj, after } from "../jvm/natives/jlang";
+import { curThread, callOn, vcallOn, mkEnumSet, newObj, after, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type NativeSpec, rt, noops } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
 import { JMatrix, restoreCanvasToCount, saveCanvas, type JBitmap, type JCanvas } from "./graphics";
@@ -19,7 +19,7 @@ export class JImageView extends JView {
     invalidate(this);
     return after(d ? drawableSize(d, false, thread) : -1, w => after(d ? drawableSize(d, true, thread) : -1, h => {
       this.drawableW = w; this.drawableH = h;
-      return callOn(thread, () => this.applyColorFilter());
+      return callOn(thread, () => after(this.applyTint(), () => this.applyColorFilter()));
     }));
   }
   drawableW = -1; drawableH = -1;
@@ -43,6 +43,13 @@ export class JImageView extends JView {
     return this.imageMatrix;
   }
   tintCsl: JColorStateList | null = null;
+  tintMode: JSimpleEnum | null = null;
+  applyTint(): unknown {
+    const d = this.dr, thread = curThread;
+    if (!d) return;
+    return after(this.tintCsl ? vcallOn(thread, d, "setTintList", "(Landroid/content/res/ColorStateList;)V", this.tintCsl) : undefined,
+      () => this.tintMode ? vcallOn(thread, d, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", this.tintMode) : undefined);
+  }
   colorFilter: unknown = null;
   hasColorFilter = false;
   applyColorFilter(): unknown {
@@ -119,8 +126,16 @@ const imageViewMethods: NativeSpec["methods"] = {
   "getImageTintList()Landroid/content/res/ColorStateList;": function (this: JImageView) { return this.tintCsl; },
   "setImageTintList(Landroid/content/res/ColorStateList;)V": function (this: JImageView, csl: JColorStateList | null) {
     this.tintCsl = csl;
-    if (this.drawable && csl) this.drawable.tint = cslColor(csl, this.drawableState());
     invalidate(this);
+    if (this.drawable) return vcallOn(curThread, this.drawable, "setTintList", "(Landroid/content/res/ColorStateList;)V", csl);
+  },
+  "getImageTintMode()Landroid/graphics/PorterDuff$Mode;": function (this: JImageView) {
+    return this.tintMode ?? rt.link("android/graphics/PorterDuff$Mode").ctor.s$SRC_IN;
+  },
+  "setImageTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JImageView, mode: JSimpleEnum | null) {
+    this.tintMode = mode;
+    invalidate(this);
+    if (this.drawable) return vcallOn(curThread, this.drawable, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", mode);
   },
   "setImageLevel(I)V": function (this: JImageView, l: number) { if (this.drawable) this.drawable.level = l; },
   "getScaleType()Landroid/widget/ImageView$ScaleType;": function (this: JImageView) { return scaleTypes[this.scaleType]; },

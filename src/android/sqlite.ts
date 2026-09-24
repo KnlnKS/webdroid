@@ -340,6 +340,23 @@ cursorMethods["copyStringToBuffer(ILandroid/database/CharArrayBuffer;)V"] = asyn
   buffer.sizeCopied = text.length;
 };
 rt.register({ name: "webdroid/Cursor", ctor: JCursor, ifaces: ["android/database/Cursor"], methods: cursorMethods });
+class JCursorWrapper extends JObj { cursor: unknown = null; }
+const cursorWrapperMethods: NativeSpec["methods"] = {};
+for (const signature of Object.keys(cursorMethods)) {
+  const split = signature.indexOf("(");
+  const name = signature.slice(0, split), descriptor = signature.slice(split);
+  cursorWrapperMethods[signature] = function (this: JCursorWrapper, ...args: unknown[]) {
+    return vcall(this.cursor, name, descriptor, ...args);
+  };
+}
+rt.register({ name: "android/database/CursorWrapper", ctor: JCursorWrapper, ifaces: ["android/database/Cursor"], methods: {
+  ...cursorWrapperMethods,
+  "<init>(Landroid/database/Cursor;)V": function (this: JCursorWrapper, cursor: unknown) {
+    if (!cursor) rt.npe();
+    this.cursor = cursor;
+  },
+  "getWrappedCursor()Landroid/database/Cursor;": function (this: JCursorWrapper) { return this.cursor; },
+} });
 class JRowBuilder extends JObj { cursor!: JCursor; row!: unknown[]; index = 0; }
 rt.register({ name: "android/database/MatrixCursor$RowBuilder", ctor: JRowBuilder, methods: {
   "add(Ljava/lang/Object;)Landroid/database/MatrixCursor$RowBuilder;": function (this: JRowBuilder, value: unknown) {
