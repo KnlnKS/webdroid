@@ -40,10 +40,7 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
   home.addEventListener("click", reset);
   reload.addEventListener("click", reset);
   back.addEventListener("click", actions.back);
-  choose.addEventListener("click", () => {
-    if (session?.kind === "running" || (session?.kind === "failed" && !session.retry)) reset();
-    else picker.click();
-  });
+  choose.addEventListener("click", () => picker.click());
   retry.addEventListener("click", () => {
     if (session?.kind === "failed") session.retry?.();
   });
@@ -117,9 +114,9 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
       back.disabled = next.kind !== "running";
       home.disabled = busy;
       const loader = document.querySelector<HTMLElement>("#local-loader")!;
-      loader.hidden = mustReload;
+      loader.hidden = started;
       loader.setAttribute("aria-busy", String(busy));
-      document.querySelector<HTMLElement>(".privacy-note")!.hidden = mustReload;
+      document.querySelector<HTMLElement>(".privacy-note")!.hidden = started;
       document.querySelector<HTMLElement>("#recovery")!.hidden = !failed;
       const hint = document.querySelector<HTMLElement>("#recovery-hint")!;
       hint.hidden = !failed;
@@ -128,7 +125,6 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
       details.open = false;
       retry.hidden = !failed || !next.retry;
       reload.hidden = !failed;
-      choose.textContent = next.kind === "running" ? "Open another app" : "Open APK";
       status.textContent = next.kind === "loading" ? next.stage : next.kind === "running" ? "Running" : "Couldn’t open this app";
       if (failed) {
         hint.textContent = !next.retry ? "Reload to start a fresh session, then choose your package again." : "Try again, or choose another package. Check that the file is complete.";
@@ -139,7 +135,6 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
     reportError(error: unknown) {
       diagnostic.hidden = false;
       document.querySelector<HTMLElement>("#runtime-error")!.textContent = errorText(error);
-      announce("The app reported an error. See Diagnostics for details.");
     },
     setMissing(items: string[]) {
       diagnostic.hidden = items.length === 0 && !document.querySelector<HTMLElement>("#runtime-error")!.textContent && !document.querySelector<HTMLElement>("#native")!.textContent;

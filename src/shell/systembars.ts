@@ -1,7 +1,7 @@
 import { attrStr, parseAXML } from "../android/axml";
 import { cssColor, tfMedium } from "../android/graphics";
 import { resString, type Resources } from "../android/res";
-import { APPEARANCE_LIGHT_NAVIGATION_BARS, APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
+import { APPEARANCE_LIGHT_STATUS_BARS } from "../android/window";
 import { device } from "./config";
 import type { JView } from "../android/view";
 import { rootWindowInsets } from "../android/windowinsets";
@@ -26,7 +26,6 @@ export function drawSystemBarBackgrounds(ctx: OffscreenCanvasRenderingContext2D,
 }
 export function drawSystemBarIcons(ctx: OffscreenCanvasRenderingContext2D, res: Resources, bars: SystemBars) {
   if (bars.visible & 1) drawStatusIcons(ctx, res, bars.status, bars.appearance, bars.mask, bars.systemUi);
-  if (bars.visible & 2) drawNavigationHandle(ctx, bars.navigation, bars.appearance, bars.mask, bars.systemUi);
 }
 
 type IconPaths = { wifi: Path2D; battery: Path2D; fill: Path2D; bolt: Path2D; withoutBolt: Path2D };
@@ -100,23 +99,4 @@ function drawStatusIcons(ctx: OffscreenCanvasRenderingContext2D, res: Resources,
   ctx.scale(device.dp(15) / 24, device.dp(15) / 24);
   ctx.fill(p.wifi);
   ctx.restore();
-}
-
-let handleImage: { density: number; dark: OffscreenCanvas; light: OffscreenCanvas } | null = null;
-function navigationHandle(color: string): OffscreenCanvas {
-  const width = device.dp(108), height = device.dp(4);
-  const image = new OffscreenCanvas(Math.ceil(width), Math.ceil(height)), ctx = image.getContext("2d")!;
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.roundRect(0, 0, width, height, height / 2);
-  ctx.fill();
-  return image;
-}
-function drawNavigationHandle(ctx: OffscreenCanvasRenderingContext2D, bg: number, appearance: number, mask: number, systemUi: number) {
-  const dark = mask & APPEARANCE_LIGHT_NAVIGATION_BARS ? !!(appearance & APPEARANCE_LIGHT_NAVIGATION_BARS)
-    : !!(systemUi & 16) || lightBackground(bg);
-  if (!handleImage || handleImage.density !== device.density) {
-    handleImage = { density: device.density, dark: navigationHandle("#00000099"), light: navigationHandle("#ffffffeb") };
-  }
-  ctx.drawImage(dark ? handleImage.dark : handleImage.light, (device.width - device.dp(108)) / 2, device.height - device.dp(14));
 }
