@@ -164,7 +164,7 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, fixedAct
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (state && explorer) {
-          explorer.observeAction(state, action, [], [`timeout-or-error:${message}`]);
+          explorer.observeAction(state, action, [], [`timeout-or-error:${message}`], index >= prefix.actions.length);
           await explorer.save();
         }
         steps.push({ index, action, webdroidTreeHash: hash(webNodes), webdroidFrameHash: "", structuralDivergence: message,
@@ -204,7 +204,7 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, fixedAct
         coverageDelta, signals };
       if (state && explorer) {
         step.state = state;
-        step.discoveries = explorer.observeAction(state, action, [...currentCoverage], signals);
+        step.discoveries = explorer.observeAction(state, action, [...currentCoverage], signals, index >= prefix.actions.length);
         if (!structuralDivergence && alive) {
           const nextSource = postAndroidNodes ?? nextWebTree;
           const nextSize = screenSize(nextSource);
@@ -328,15 +328,18 @@ export async function runUi(options: UiOptions): Promise<void> {
       const failure = uiFailure(run.steps);
       if (failure && !retained.has(failure.fingerprint)) {
         retained.add(failure.fingerprint);
-        const input = run.steps.map((step) => step.action);
-        const reproduces = async (actions: UiAction[]) => (await observeUi(app, actions, options, failure)) !== null;
-        const minimized = await minimizeUiActions(input, reproduces);
-        const first = await observeUi(app, minimized, options, failure, `minimized-${episode}`);
-        const second = await observeUi(app, minimized, options, failure);
-        if (first && second && first.failure.fingerprint === second.failure.fingerprint) {
-          const bundle: UiFailureBundle = { schemaVersion: 1, kind: "ui", seed: options.seed, app,
-            original: { actions: input, failure, run }, minimized: first, reproductions: [first, second] };
-          await Bun.write(`${options.out}/${app.pkg}-${hash(app.apk)}-${hash(failure.fingerprint)}.failure.json`, JSON.stringify(bundle, null, 2) + "\n");
+        const bundlePath = `${options.out}/${app.pkg}-${explorer.apkDigest.slice(0, 12)}-${hash(failure.fingerprint)}.failure.json`;
+        if (!(await Bun.file(bundlePath).exists())) {
+          const input = run.steps.map((step) => step.action);
+          const reproduces = async (actions: UiAction[]) => (await observeUi(app, actions, options, failure)) !== null;
+          const minimized = await minimizeUiActions(input, reproduces);
+          const first = await observeUi(app, minimized, options, failure, `minimized-${episode}`);
+          const second = await observeUi(app, minimized, options, failure);
+          if (first && second && first.failure.fingerprint === second.failure.fingerprint) {
+            const bundle: UiFailureBundle = { schemaVersion: 1, kind: "ui", seed: options.seed, app,
+              original: { actions: input, failure, run }, minimized: first, reproductions: [first, second] };
+            await Bun.write(bundlePath, JSON.stringify(bundle, null, 2) + "\n");
+          }
         }
       }
       prefix = explorer.nextPrefix(attemptedPrefixes);

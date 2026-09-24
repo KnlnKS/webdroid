@@ -367,6 +367,8 @@ reports both explored and replayed action counts. To start a fresh search, use a
 actions tried from each state, shortest replay paths, coverage, and signals. Its state and path
 limits keep long or live-content campaigns bounded. Screen identity excludes text from noninteractive
 nodes; screens with the same structure and controls can therefore share an exploration state.
+Each scrollable control can be swiped up to four times from the same state, so a list with stable
+view IDs can reveal more content without creating a new state for every live-feed item.
 
 The explorer chooses an untried semantic action on the current screen, then restarts at a saved
 frontier when it has exhausted that screen's actions. It checks each replayed screen state before

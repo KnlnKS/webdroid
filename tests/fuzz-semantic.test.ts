@@ -72,4 +72,37 @@ describe("semantic UI fuzzing", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  test("a stable list can be scrolled repeatedly with a bounded saved budget", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "wd-ui-scroll-"));
+    try {
+      const apk = join(directory, "sample.apk");
+      await Bun.write(apk, "test apk bytes");
+      const firstPage = [node({ resId: "app:id/list", text: "First page", scrollable: true })];
+      const explorer = await UiExplorer.open(directory, "sample", apk);
+      const initial = explorer.observeState(firstPage, 100, 100, { actions: [], states: [], target: null });
+      for (let index = 0; index < 2; index++) {
+        const action = explorer.choose(initial, new Random(1));
+        if (!action) throw new Error("expected scroll action");
+        expect(action.type).toBe("scroll");
+        explorer.observeAction(initial, action, [], []);
+      }
+      await explorer.save();
+
+      const resumed = await UiExplorer.open(directory, "sample", apk);
+      const nextPage = [node({ resId: "app:id/list", text: "Second page", scrollable: true })];
+      const state = resumed.observeState(nextPage, 100, 100, { actions: [], states: [], target: null });
+      expect(state).toBe(initial);
+      for (let index = 0; index < 2; index++) {
+        const action = resumed.choose(state, new Random(1));
+        if (!action) throw new Error("expected scroll action");
+        expect(action.type).toBe("scroll");
+        resumed.observeAction(state, action, [], []);
+      }
+      expect(resumed.choose(state, new Random(1))?.type).not.toBe("scroll");
+      expect(resumed.summary().actions).toBe(4);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });

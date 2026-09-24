@@ -5,6 +5,7 @@ import { uiActionKey, uiActions, uiStateKey, validateUiAction, type UiAction } f
 
 const MAX_STATES = 256;
 const MAX_ACTIONS_PER_STATE = 256;
+const MAX_SCROLLS_PER_STATE = 4;
 const MAX_PATH = 24;
 const MAX_COVERAGE = 20_000;
 const MAX_SIGNALS = 2_000;
@@ -12,6 +13,14 @@ const MAX_SIGNALS = 2_000;
 export type UiPrefix = { actions: UiAction[]; states: string[]; target: string | null };
 type State = Omit<UiPrefix, "target"> & { hasUntried: boolean; tried: string[]; discoveries: number; replayFailures: number };
 type Journal = { schemaVersion: 1; apkHash: string; states: Record<string, State>; coverage: string[]; signals: string[] };
+
+function availableActions(state: State, candidates: readonly UiAction[]): UiAction[] {
+  if (state.tried.length >= MAX_ACTIONS_PER_STATE) return [];
+  const counts = new Map<string, number>();
+  for (const key of state.tried) counts.set(key, (counts.get(key) ?? 0) + 1);
+  return candidates.filter((action) => (counts.get(uiActionKey(action)) ?? 0) <
+    (action.type === "scroll" ? MAX_SCROLLS_PER_STATE : 1));
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -61,6 +70,8 @@ export class UiExplorer {
     return new UiExplorer(file, apkHash, parseJournal(stored, apkHash));
   }
 
+  get apkDigest(): string { return this.apkHash; }
+
   observeState(nodes: readonly UiNode[], width: number, height: number, prefix: UiPrefix): string {
     const key = uiStateKey(nodes);
     const candidates = uiActions(nodes, width, height);
@@ -80,33 +91,26 @@ export class UiExplorer {
       }
     }
     const saved = this.states[key];
-    if (saved) {
-      const tried = new Set(saved.tried);
-      saved.hasUntried = saved.tried.length < MAX_ACTIONS_PER_STATE && candidates.some((action) => !tried.has(uiActionKey(action)));
-    }
+    if (saved) saved.hasUntried = availableActions(saved, candidates).length > 0;
     return key;
   }
 
   choose(key: string, random: Random): UiAction | null {
     const state = this.states[key];
     if (!state) return null;
-    const tried = new Set(state.tried);
     if (this.liveKey !== key || !state.hasUntried) return null;
-    const available = this.liveCandidates.filter((action) => !tried.has(uiActionKey(action)));
+    const available = availableActions(state, this.liveCandidates);
     const semantic = available.filter((action) => "target" in action);
     return (semantic.length ? random.pick(semantic) : available.length ? random.pick(available) : null);
   }
 
-  observeAction(key: string, action: UiAction, coverage: readonly string[], signals: readonly string[]): number {
+  observeAction(key: string, action: UiAction, coverage: readonly string[], signals: readonly string[], recordAttempt = true): number {
     const state = this.states[key];
     if (!state) throw new Error(`UI exploration state ${key} is absent`);
     const actionKey = uiActionKey(action);
-    if (!state.tried.includes(actionKey)) state.tried.push(actionKey);
-    if (this.liveKey === key) {
-      const tried = new Set(state.tried);
-      state.hasUntried = state.tried.length < MAX_ACTIONS_PER_STATE &&
-        this.liveCandidates.some((candidate) => !tried.has(uiActionKey(candidate)));
-    }
+    if (recordAttempt && state.tried.length < MAX_ACTIONS_PER_STATE && (action.type === "scroll" || !state.tried.includes(actionKey)))
+      state.tried.push(actionKey);
+    if (this.liveKey === key) state.hasUntried = availableActions(state, this.liveCandidates).length > 0;
     let discoveries = 0;
     for (const method of coverage) if (this.coverage.size < MAX_COVERAGE && !this.coverage.has(method)) { this.coverage.add(method); discoveries++; }
     for (const signal of signals) if (this.signals.size < MAX_SIGNALS && !this.signals.has(signal)) { this.signals.add(signal); discoveries++; }

@@ -76,12 +76,6 @@ function selector(node: UiNode): string {
   return `class:${node.cls}`;
 }
 
-export function identityOf(nodes: readonly UiNode[], node: UiNode): SemanticIdentity {
-  const key = selector(node);
-  const peers = nodes.filter((candidate) => usable(candidate) && selector(candidate) === key);
-  return identityWithOrdinal(node, Math.max(0, peers.indexOf(node)));
-}
-
 function identityWithOrdinal(node: UiNode, ordinal: number): SemanticIdentity {
   return {
     ...(node.resId ? { resourceId: node.resId } : {}),
@@ -154,8 +148,12 @@ export function uiStateKey(nodes: readonly UiNode[]): string {
 }
 
 export function uiActionKey(action: UiAction): string {
-  if ("target" in action) return JSON.stringify([action.type, action.target.resourceId, action.target.text,
-    action.target.description, action.target.className, action.target.ordinal, action.type === "type" ? action.text : ""]);
+  if ("target" in action) {
+    const target = action.target;
+    const selector = target.resourceId ? ["id", target.resourceId] : target.text ? ["text", target.text] :
+      target.description ? ["desc", target.description] : ["class", target.className];
+    return JSON.stringify([action.type, selector, target.ordinal, action.type === "type" ? action.text : ""]);
+  }
   if (action.type === "fallback-tap") return JSON.stringify([action.type, action.at]);
   if (action.type === "configuration") return JSON.stringify([action.type, action.orientation]);
   return action.type;
