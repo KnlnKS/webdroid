@@ -17,6 +17,7 @@ import { locationTransport } from "./locationmanager";
 import { inMainJob, onMain } from "./mainloop";
 import { PROCESS_NAME, PROCESS_UID } from "./os";
 import { packages } from "./packages";
+import { isMediaUri, mediaMime, mediaPath, mediaQuery } from "./mediastore";
 
 type ProviderInfo = { name: string; authority: string; packageName: string; processName?: string };
 export const providerTransport: { acquire: (info: ProviderInfo) => Promise<unknown> } = { acquire: async () => null };
@@ -138,6 +139,13 @@ function fileOf(u: JUri): string {
 }
 /** A descriptor carries the document's current bytes and writes them back when it is closed. */
 async function openPfd(u: JUri, mode: string) {
+  if (isMediaUri(u)) {
+    const path = await mediaPath(u);
+    if (!path) throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);
+    const cls = rt.link("android/os/ParcelFileDescriptor").ctor;
+    return vcall(cls, "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;", mkFile(path),
+      await vcall(cls, "parseMode", "(Ljava/lang/String;)I", mode));
+  }
   if (!isDocsUri(u)) {
     const provider = await contentProvider(u);
     if (provider) return vcall(provider, "openFile", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", u, mode);
@@ -176,11 +184,13 @@ const resolverMethods: NativeSpec["methods"] = {
       : newObj("java/io/FileOutputStream", "(Ljava/lang/String;Z)V", fileOf(u), (mode ?? "w").includes("a") ? 1 : 0),
   "getType(Landroid/net/Uri;)Ljava/lang/String;": async (u: JUri) => {
     if (isDocsUri(u)) return (await docRow(documentId(u, true)))?.mime ?? null;
+    if (isMediaUri(u)) return mediaMime(u);
     const provider = await contentProvider(u);
     return provider ? vcall(provider, "getType", "(Landroid/net/Uri;)Ljava/lang/String;", u) : null;
   },
   "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
     async (u: JUri, proj: string[] | null, selection: string | null, args: string[] | null, sort: string | null) => {
+      if (isMediaUri(u)) return mediaQuery(u, proj, selection, args, sort);
       if (!isDocsUri(u)) {
         const provider = await contentProvider(u);
         return provider ? vcall(provider, "query", "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;", u, proj, selection, args, sort) : null;

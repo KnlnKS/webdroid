@@ -14,6 +14,7 @@ import { onMain } from "./mainloop";
 import { JBundle, reportUncaught } from "./os";
 import { mkUri } from "./net";
 import { csText } from "./text";
+import { scannedMediaUri } from "./mediastore";
 
 rt.register({ name: "android/media/RingtoneManager", ctor: class extends JObj {},
   statics: { TYPE_RINGTONE: 1, TYPE_NOTIFICATION: 2, TYPE_ALARM: 4, TYPE_ALL: 7 },
@@ -685,12 +686,7 @@ rt.register({
   },
 });
 
-/**
- * The media scanner indexes a file into MediaStore so a gallery can see it. Nothing here has a
- * MediaStore to index into, but the callback is not optional: an app that waits for it before
- * calling a file finished would hang. AOSP answers with the scanned path and the content URI it
- * was given, and a device with no media provider answers with a null URI.
- */
+/** MediaScannerConnection publishes a file before delivering its callback on the main queue. */
 rt.register({
   name: "android/media/MediaScannerConnection", ctor: class extends JObj {},
   methods: {
@@ -698,7 +694,7 @@ rt.register({
       (_c: unknown, paths: string[] | null, _m: unknown, l: unknown) => {
         if (!l) return;
         for (const p of paths ?? []) {
-          void onMain(() => vcall(l, "onScanCompleted", "(Ljava/lang/String;Landroid/net/Uri;)V", p, null)).catch(reportUncaught);
+          void onMain(async () => vcall(l, "onScanCompleted", "(Ljava/lang/String;Landroid/net/Uri;)V", p, await scannedMediaUri(p))).catch(reportUncaught);
         }
       },
   },
