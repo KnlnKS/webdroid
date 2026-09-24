@@ -494,6 +494,11 @@ rt.register({
     "encode(Ljava/lang/String;)Ljava/nio/ByteBuffer;": function (this: JCharset, text: string) {
       return wrapArray(JByteBuffer, encodeString(text, this), 0);
     },
+    "encode(Ljava/nio/CharBuffer;)Ljava/nio/ByteBuffer;": function (this: JCharset, source: JCharBuffer) {
+      const encoder = mkCoder("CharsetEncoder", this);
+      encoder.malformed = encoder.unmappable = "REPLACE";
+      return vcall(encoder, "encode", "(Ljava/nio/CharBuffer;)Ljava/nio/ByteBuffer;", source);
+    },
     "decode(Ljava/nio/ByteBuffer;)Ljava/nio/CharBuffer;": function (this: JCharset, b: JBuffer) {
       const text = decodeString(new Uint8Array(b.ab, b.dv.byteOffset + b.pos, b.lim - b.pos), this);
       b.pos = b.lim;

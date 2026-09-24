@@ -176,6 +176,12 @@ const spanMethods: NativeSpec["methods"] = {
   },
   "length()I": function (this: JSpannable) { return this.text.length; },
   "charAt(I)C": function (this: JSpannable, i: number) { return this.text.charCodeAt(i); },
+  "getChars(II[CI)V": function (this: JSpannable, start: number, end: number, destination: Uint16Array | null, offset: number) {
+    if (!destination) rt.npe();
+    if (start < 0 || end < start || end > this.text.length) throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", `${start}, ${end}`);
+    if (offset < 0 || offset > destination!.length - (end - start)) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(offset));
+    for (let i = start; i < end; i++) destination![offset + i - start] = this.text.charCodeAt(i);
+  },
   "toString()Ljava/lang/String;": function (this: JSpannable) { return this.text; },
   // AOSP returns a Spanned (SpannableStringBuilder), not a String: app code trims a Spanned and
   // casts the result straight back, so handing out a bare String is a ClassCastException later.

@@ -1336,6 +1336,12 @@ function unicodeCategory(c: number): number {
 }
 const asciiCategories = Uint8Array.from({ length: 128 }, (_, c) => unicodeCategory(c));
 const characterType = (c: number) => c >= 0 && c < 128 ? asciiCategories[c] : unicodeCategory(c);
+function codePointChars(cp: number): Uint16Array {
+  if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid code point: " + cp);
+  if (cp < 0x10000) return Uint16Array.of(cp);
+  const pair = cp - 0x10000;
+  return Uint16Array.of(0xd800 + (pair >> 10), 0xdc00 + (pair & 0x3ff));
+}
 rt.register({
   name: "java/lang/Character", ctor: JChar,
   serialization: { uid: 3786198910865385080n, fields: [{ name: "value", desc: "C", prop: "v" }] },
@@ -1350,8 +1356,25 @@ rt.register({
     "static charCount(I)I": (cp: number) => (cp >= 0x10000 ? 2 : 1),
     "static getDirectionality(C)B": directionality,
     "static getDirectionality(I)B": directionality,
-    "static toChars(I)[C": (cp: number) => { const str = String.fromCodePoint(cp); const a = new Uint16Array(str.length); for (let k = 0; k < str.length; k++) a[k] = str.charCodeAt(k); return a; },
+    "static toChars(I)[C": codePointChars,
+    "static toChars(I[CI)I": (cp: number, destination: Uint16Array | null, offset: number) => {
+      if (destination === null) rt.npe();
+      const chars = codePointChars(cp);
+      if (offset < 0 || offset > destination!.length - chars.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "Invalid char array offset: " + offset);
+      destination!.set(chars, offset);
+      return chars.length;
+    },
     "static codePointAt(Ljava/lang/CharSequence;I)I": (cs: unknown, i2: number) => jToString(cs).codePointAt(i2) ?? 0,
+    "static codePointAt([CII)I": (chars: Uint16Array | null, index: number, limit: number) => {
+      if (chars === null) rt.npe();
+      if (index < 0 || index >= limit || limit > chars!.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(index));
+      const high = chars![index];
+      if (high >= 0xd800 && high <= 0xdbff && index + 1 < limit) {
+        const low = chars![index + 1];
+        if (low >= 0xdc00 && low <= 0xdfff) return ((high - 0xd800) << 10) + (low - 0xdc00) + 0x10000;
+      }
+      return high;
+    },
     "static isSupplementaryCodePoint(I)Z": (cp: number) => (cp >= 0x10000 ? 1 : 0),
     "static isHighSurrogate(C)Z": (c: number) => (c >= 0xd800 && c <= 0xdbff ? 1 : 0),
     "static isLowSurrogate(C)Z": (c: number) => (c >= 0xdc00 && c <= 0xdfff ? 1 : 0),
