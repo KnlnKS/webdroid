@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { JThread } from "../jvm/natives/jlang";
 import { Cpu, setA64 } from "./cpu";
-import { lookupHost } from "./host";
+import { Args64, hostFn, lookupHost, VRET } from "./host";
 import { libmInit } from "./libm";
 
 test("nextafter crosses zero, signed zero and infinity at double precision", async () => {
@@ -17,4 +17,17 @@ test("nextafter crosses zero, signed zero and infinity at double precision", asy
       expect(Number.isNaN(await next(NaN, 1))).toBe(true);
     } finally { cpu.dispose(); setA64(false); }
   }
+});
+
+test("powl reads and returns ARM64 quad arguments", () => {
+  setA64(true); libmInit();
+  const cpu = new Cpu(new JThread(), "powl-test");
+  try {
+    cpu.vu.set([0, 0, 0, 0x40000000, 0, 0, 0, 0x40008000]);
+    expect(hostFn("libm.so", "powl")!(cpu, new Args64(cpu))).toBe(VRET);
+    expect([...cpu.vu.slice(0, 4)]).toEqual([0, 0, 0, 0x40020000]);
+    cpu.vu.set([0, 0, 0, 0x3fff8000, 0, 0, 0, 0x40000000]);
+    hostFn("libm.so", "powl")!(cpu, new Args64(cpu));
+    expect([...cpu.vu.slice(0, 4)]).toEqual([0, 0, 0, 0x40002000]);
+  } finally { cpu.dispose(); setA64(false); }
 });

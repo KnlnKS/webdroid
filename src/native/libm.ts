@@ -19,6 +19,32 @@ function rint(c: Cpu, x: number): number {
   }
 }
 
+function quadToNumber(words: Uint32Array, offset: number): number {
+  const bits = BigInt(words[offset]) | (BigInt(words[offset + 1]) << 32n) |
+    (BigInt(words[offset + 2]) << 64n) | (BigInt(words[offset + 3]) << 96n);
+  const exponent = Number((bits >> 112n) & 0x7fffn), fraction = bits & ((1n << 112n) - 1n);
+  const sign = bits >> 127n ? -1 : 1;
+  if (exponent === 0x7fff) return fraction ? NaN : sign * Infinity;
+  if (!exponent && !fraction) return sign < 0 ? -0 : 0;
+  return sign * (Number(fraction) / 2 ** 112 + (exponent ? 1 : 0)) * 2 ** ((exponent || 1) - 16383);
+}
+
+function numberToQuad(words: Uint32Array, value: number): void {
+  const bits = BigInt.asUintN(64, dbits(value));
+  const sign = (bits & (1n << 63n)) << 64n;
+  const exponent = Number((bits >> 52n) & 0x7ffn);
+  const fraction = bits & ((1n << 52n) - 1n);
+  let quadExponent = exponent ? exponent === 0x7ff ? 0x7fff : exponent - 1023 + 16383 : 0;
+  let quadFraction = fraction << 60n;
+  if (!exponent && fraction) {
+    const leading = fraction.toString(2).length - 1;
+    quadExponent = leading - 1074 + 16383;
+    quadFraction = (fraction ^ (1n << BigInt(leading))) << BigInt(112 - leading);
+  }
+  const quad = sign | (BigInt(quadExponent) << 112n) | quadFraction;
+  for (let i = 0; i < 4; i++) words[i] = Number((quad >> BigInt(i * 32)) & 0xffffffffn);
+}
+
 export function libmInit(): void {
   const d1 = (f: (x: number) => number): HostFn => (c, a) => retD(c, f(a.d()));
   const d2 = (f: (x: number, y: number) => number): HostFn => (c, a) => retD(c, f(a.d(), a.d()));
@@ -60,6 +86,12 @@ export function libmInit(): void {
       if (x === 0) return bitsf(y < 0 ? 0x80000001 : 1);
       return bitsf(fbits(x) + ((y > x) === (x > 0) ? 1 : -1));
     }),
+    powl: (c, a) => {
+      if (!c.a64) return retD(c, Math.pow(a.d(), a.d()));
+      const result = Math.pow(quadToNumber(c.vu, 0), quadToNumber(c.vu, 4));
+      numberToQuad(c.vu, result);
+      return VRET;
+    },
     round: (c, a) => retD(c, rna(a.d())), roundf: (c, a) => retF(c, rna(a.f())),
     rint: (c, a) => retD(c, rint(c, a.d())), rintf: (c, a) => retF(c, rint(c, a.f())),
     nearbyint: (c, a) => retD(c, rint(c, a.d())), nearbyintf: (c, a) => retF(c, rint(c, a.f())),
