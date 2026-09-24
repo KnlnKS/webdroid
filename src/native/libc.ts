@@ -345,7 +345,7 @@ export function libcInit(): void {
     // a protection change moves no byte: a block stays valid until a write or a cache flush says otherwise
     mprotect: (cpu, a) => {
       const va = a.va(), n = Number(a.va()), prot = a.i();
-      if (prot & 3) return mem.commitVa(va, n) ? 0 : fail(cpu, E.NOMEM);
+      if (prot & 7) return mem.commitVa(va, n) ? 0 : fail(cpu, E.NOMEM);
       mem.decommitVa(va, n);
       return 0;
     },
