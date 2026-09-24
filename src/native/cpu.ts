@@ -304,19 +304,22 @@ export class Cpu {
   /** guest-visible thread exit (pthread_exit / thread function returned) */
   finished = false;
 
-  dispose(): void {
+  dispose(retainThreadData = false): number {
     if (this.loops) throw new Error("[native] cannot dispose a running thread");
-    if (!cpus.has(this)) return;
+    if (!cpus.has(this)) return 0;
     this.finished = true;
     if (this.stackTop) mem.freeStack(this.stackBase, this.stackTop);
     for (const p of this.staticTlsBlocks.values()) mem.free(p);
     this.staticTlsBlocks.clear();
-    mem.free(this.threadData); mem.free(this.env);
+    const threadData = retainThreadData ? this.threadData : 0;
+    if (!retainThreadData) mem.free(this.threadData);
+    mem.free(this.env);
     this.threadData = this.errnoAddr = this.env = this.stackBase = this.stackTop = 0;
     this.signals.length = 0;
     cpus.delete(this);
     if (byThread.get(this.jthread) === this) byThread.delete(this.jthread);
     core.cpu_free(this.base);
+    return threadData;
   }
 
   staticTls(key: object, image: Uint8Array, size: number, align: number): number {

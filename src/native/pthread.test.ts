@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { JThread } from "../jvm/natives/jlang";
-import { Cpu, setA64 } from "./cpu";
+import { Cpu, cpus, setA64 } from "./cpu";
 import { lookupHost } from "./host";
 import { mem } from "./mem";
-import { pthreadInit } from "./pthread";
+import { pthreadInit, startThread } from "./pthread";
 
 test("pthread attributes and cleanup handlers preserve bionic behavior", async () => {
   setA64(true); pthreadInit();
@@ -26,5 +26,25 @@ test("pthread attributes and cleanup handlers preserve bionic behavior", async (
     expect(mem.ld32(value)).toBe(42);
   } finally {
     mem.free(attr); mem.free(entry); mem.free(value); mem.free(out); cpu.dispose(); setA64(false);
+  }
+});
+
+test("joinable pthread handles remain distinct after their routines exit", async () => {
+  setA64(true); pthreadInit();
+  const parent = new Cpu(new JThread(), "join-test");
+  const routine = mem.reserve(4096, 4096), result = mem.malloc(8);
+  mem.u32.set([0x528000e0, 0xd65f03c0], routine >>> 2);
+  try {
+    const first = startThread(parent, routine, 0n, false);
+    for (let i = 0; cpus.has(first) && i < 100; i++) await Bun.sleep(1);
+    expect(cpus.has(first)).toBe(false);
+    const second = startThread(parent, routine, 0n, false);
+    expect(second.pthreadSelf).not.toBe(first.pthreadSelf);
+    expect(await parent.call(lookupHost("pthread_join", "libc.so")!, [first.pthreadSelf, result])).toBe(0);
+    expect(mem.ld64(result)).toBe(7n);
+    expect(await parent.call(lookupHost("pthread_join", "libc.so")!, [second.pthreadSelf, result])).toBe(0);
+    expect(mem.ld64(result)).toBe(7n);
+  } finally {
+    mem.free(result); parent.dispose(); setA64(false);
   }
 });
