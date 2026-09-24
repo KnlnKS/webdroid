@@ -837,6 +837,14 @@ for (const [name, methods, statics] of [
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
 }
 rt.register({ name: "android/bluetooth/le/ScanCallback", ctor: class extends JObj {} });
+rt.register({
+  name: "android/hardware/fingerprint/FingerprintManager", ctor: class extends JObj {},
+  methods: {
+    "isHardwareDetected()Z": () => 0,
+    "hasEnrolledFingerprints()Z": () => 0,
+  },
+});
+rt.register({ name: "android/hardware/fingerprint/FingerprintManager$AuthenticationCallback", ctor: class extends JObj {} });
 rt.register({ name: "android/telephony/PhoneStateListener", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 rt.register({ name: "android/telephony/TelephonyCallback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 rt.register({ name: "webdroid/TelephonyDelivery", ctor: class extends JObj { run: () => Promise<void> = async () => {}; }, ifaces: ["java/lang/Runnable"],
