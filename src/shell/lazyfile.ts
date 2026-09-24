@@ -17,6 +17,19 @@ export class BytesFile implements FileSource {
   }
 }
 
+export class BlobFile implements FileSource {
+  readonly size: number;
+
+  constructor(private readonly blob: Blob) {
+    this.size = blob.size;
+  }
+
+  async read(offset: number, length: number): Promise<Uint8Array> {
+    const start = Math.max(0, Math.min(this.size, offset));
+    return new Uint8Array(await this.blob.slice(start, start + Math.max(0, length)).arrayBuffer());
+  }
+}
+
 export class SliceFile implements FileSource {
   readonly size: number;
 
@@ -36,8 +49,15 @@ export class SliceFile implements FileSource {
 
 export async function readFully(source: FileSource, offset = 0, length = source.size - offset): Promise<Uint8Array> {
   const end = Math.min(source.size, offset + Math.max(0, length));
-  const out = new Uint8Array(Math.max(0, end - offset));
-  let pos = 0;
+  const size = Math.max(0, end - offset);
+  if (!size) return new Uint8Array(0);
+  const first = await source.read(offset, size);
+  // Media parsers pass .buffer directly, so a returned view must own its whole buffer.
+  if (first.length >= size) return first.byteOffset === 0 && first.byteLength === first.buffer.byteLength && first.length === size
+    ? first : first.slice(0, size);
+  const out = new Uint8Array(size);
+  out.set(first);
+  let pos = first.length;
   while (offset + pos < end) {
     const chunk = await source.read(offset + pos, end - offset - pos);
     if (!chunk.length) break;
@@ -71,14 +91,20 @@ export class RangeFile implements FileSource {
     private readonly fetcher: FileFetch = fetch,
   ) {}
 
-  static async open(url: string, fetcher: FileFetch = fetch): Promise<RangeFile> {
+  static async open(url: string, fetcher: FileFetch = fetch): Promise<FileSource> {
     const response = await fetcher.call(globalThis, url, { method: "HEAD" });
     if (!response.ok) throw new Error(`HEAD ${url}: ${response.status}`);
     const header = response.headers.get("content-length");
-    if (header === null || !/^\d+$/.test(header)) throw new Error(`HEAD ${url}: no valid Content-Length`);
-    const size = Number(header);
-    if (!Number.isSafeInteger(size)) throw new Error(`HEAD ${url}: no valid Content-Length`);
-    return new RangeFile(url, size, 1 << 20, 32, fetcher);
+    if (header !== null && /^\d+$/.test(header) && Number.isSafeInteger(Number(header)))
+      return new RangeFile(url, Number(header), 1 << 20, 32, fetcher);
+    const probe = await fetcher.call(globalThis, url, { headers: { Range: "bytes=0-0" } });
+    if (probe.status === 206) {
+      const match = /^bytes 0-0\/(\d+)$/.exec(probe.headers.get("content-range") ?? "");
+      await probe.body?.cancel();
+      if (match && Number.isSafeInteger(Number(match[1]))) return new RangeFile(url, Number(match[1]), 1 << 20, 32, fetcher);
+    }
+    if (probe.status === 200) return new BytesFile(new Uint8Array(await probe.arrayBuffer()));
+    throw new Error(`range probe ${url}: ${probe.status}`);
   }
 
   read(offset: number, length: number): Promise<Uint8Array> {

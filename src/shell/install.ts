@@ -4,7 +4,7 @@
 
 import { parseAXML, attrStr } from "../android/axml";
 import { centralDirOfSource, inflateEntry, localDataOffset, zipTree, type ZEntry } from "../jvm/natives/jzip";
-import { BytesFile, RangeFile, SliceFile, readFully, type FileSource } from "./lazyfile";
+import { BlobFile, BytesFile, RangeFile, SliceFile, readFully, type FileSource } from "./lazyfile";
 
 /** A split install (.xapk, .apks, an App Bundle's output) is a zip of apks rather than an
  *  apk: a base and its config/feature splits. Merge them into the one tree the rest of the
@@ -95,12 +95,19 @@ async function openedApk(source: FileSource): Promise<OpenedApk> {
   return { kind: "resident", source: new BytesFile(bytes), bytes, zip: zipTree(bytes), split, hasManifest: !!manifest };
 }
 
-export async function openInstallRemote(url: string): Promise<Install> {
-  const source = await RangeFile.open(url);
+export async function openInstallSource(source: FileSource): Promise<Install> {
   const entries = await centralDirOfSource(source);
   if (entries.has("AndroidManifest.xml")) return openInstall(await readFully(source));
   const apks = [...entries.values()].filter((entry) => entry.name.endsWith(".apk"));
   if (!apks.length) throw new Error("no AndroidManifest.xml and no apks inside: not an apk or a split install");
   const opened = await Promise.all(apks.map(async (entry) => openedApk(await entrySource(source, entry))));
   return mergeInstall(opened);
+}
+
+export async function openInstallRemote(url: string): Promise<Install> {
+  return openInstallSource(await RangeFile.open(url));
+}
+
+export async function openInstallLocal(file: File): Promise<Install> {
+  return openInstallSource(new BlobFile(file));
 }

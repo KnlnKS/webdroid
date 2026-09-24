@@ -70,7 +70,7 @@ addEventListener("message", async event => {
       if (!event.isTrusted || event.source !== controller() || !event.ports[0]) return;
       if (event.data?.kind === "webcontext") {
         stop.call(event); event.ports[0].postMessage(context); event.ports[0].close();
-      } else if (event.data?.kind === "webcookies") { stop.call(event); send(event.data, [event.ports[0]]); }
+      } else if (event.data?.kind === "webcookies" || event.data?.kind === "webasset") { stop.call(event); send(event.data, [event.ports[0]]); }
     }, {capture: true});
     await service.register("/webview-worker.js");
     await service.ready;
@@ -83,7 +83,12 @@ addEventListener("message", async event => {
       context.page = final;
       history.replaceState(null, "", local);
     }
-    const html = event.data.doc ?? await response.text();
+    let html = event.data.doc ?? await response.text();
+    if (response?.headers.get("x-wd-local-asset") === "1") {
+      const inject = ${JSON.stringify(WEB_INJECT).replace(/</g, "\\u003c")};
+      html = /^\\s*<!doctype[^>]*>/i.test(html)
+        ? html.replace(/^(\\s*<!doctype[^>]*>)/i, "$1" + inject) : inject + html;
+    }
     window.__wdWebView = context;
     document.open(); document.write(html); document.close();
   } catch { parent.postMessage({bridge: id, kind: "loaded", error: "WebView document transport failed"}, "*"); }
@@ -98,7 +103,7 @@ const contexts = new Map();
 function message(client, data) {
   return new Promise((resolve, reject) => {
     const channel = new MessageChannel();
-    const timer = setTimeout(() => { channel.port1.close(); reject(Error("WebView cookie owner unavailable")); }, 10000);
+    const timer = setTimeout(() => { channel.port1.close(); reject(Error("WebView client unavailable")); }, 10000);
     channel.port1.onmessage = event => { clearTimeout(timer); channel.port1.close(); resolve(event.data); };
     client.postMessage(data, [channel.port2]);
   });
@@ -118,6 +123,22 @@ async function context(client) {
 }
 self.addEventListener("fetch", event => {
   const request = event.request, original = new URL(request.url);
+  if (original.origin === self.location.origin && original.pathname.startsWith("/asset/")) {
+    event.respondWith((async () => {
+      const clients = await self.clients.matchAll({type: "window", includeUncontrolled: true});
+      const owners = clients.filter(client => client.frameType === "top-level" && new URL(client.url).pathname === "/");
+      if (!owners.length) {
+        const client = await self.clients.get(event.clientId);
+        if (client) owners.push(client);
+      }
+      const replies = await Promise.all(owners.map(owner => message(owner, {kind: "webasset", path: original.pathname}).catch(() => ({status: 404}))));
+      const result = replies.find(reply => reply.status === 200);
+      if (!result) return fetch(request);
+      return new Response(result.bytes || null, {status: result.status, headers: result.type
+        ? {"content-type": result.type, "x-wd-local-asset": "1", "cache-control": "no-store"} : {"cache-control": "no-store"}});
+    })());
+    return;
+  }
   const localProxy = original.origin === self.location.origin && original.pathname === "/proxy";
   if (original.origin === self.location.origin && !localProxy) return;
   event.respondWith((async () => {
