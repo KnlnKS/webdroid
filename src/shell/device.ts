@@ -32,7 +32,7 @@ import { mangleMethod } from "../jvm/abi";
 import { perf } from "../perf";
 import { guestNow, setGuestTimeout } from "../guest-clock";
 import { device, orientationForRequest, setDeviceOrientation } from "./config";
-import { resolveSystemBars, drawSystemBarBackgrounds, drawSystemBarIcons } from "./systembars";
+import { resolveSystemBars, drawSystemBarBackgrounds } from "./systembars";
 import { restoreRoots } from "./hostfs";
 import { setPixelCopyFrame } from "../android/glview";
 import { requestResponsiveSlices } from "../native/cpu";
@@ -569,7 +569,6 @@ async function drawStartWin(w: { view: JView; fullscreen: boolean }) {
     ctx.resetTransform();
     const bars = resolveSystemBars(w.view, []);
     drawSystemBarBackgrounds(ctx, bars);
-    drawSystemBarIcons(ctx, booted!.host.res, bars);
   } catch (e) {
     perf.drawErrors++;
     console.error("[draw]", e);
@@ -721,7 +720,6 @@ async function tick0() {
             await drawView(o.view, cv);
             if (o.view === bars.root) drawSystemBarBackgrounds(ctx, bars);
           }
-          drawSystemBarIcons(ctx, booted!.host.res, bars);
           drawToasts(ctx, SCREEN_W, SCREEN_H);
         } catch (e) {
           perf.drawErrors++;

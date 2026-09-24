@@ -130,6 +130,6 @@ test("full-screen windows own their system bars and hiding restores the underlyi
   dialog.visibility = 4;
   const restored = resolveSystemBars(activity, overlays);
   expect(restored.root).toBe(activity);
-  expect([restored.status, restored.navigation, restored.appearance, restored.visible & 3]).toEqual([0xff112233, 0xff223344, 0, 3]);
+  expect([restored.status, restored.navigation, restored.appearance, restored.visible & 3]).toEqual([0xff112233, 0xff223344, 0, 2]);
   expect(await vcall(underneath, "getNavigationBarColor", "()I")).toBe(0xff223344);
 });

@@ -68,8 +68,7 @@ export const device = {
   refreshRate: 60,
   /** AOSP: DisplayMetrics.density is densityDpi/160, so the two can never disagree */
   get density(): number { return this.densityDpi / DENSITY_DEFAULT; },
-  /** AOSP status_bar_height */
-  statusBarDp: 24,
+  statusBarDp: 0,
   /** the gesture/navigation bar inset */
   navBarDp: 24,
   /** AOSP ViewConfiguration.TOUCH_SLOP: dp of travel before a press counts as a drag */
