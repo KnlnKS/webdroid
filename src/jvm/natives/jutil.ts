@@ -2862,7 +2862,7 @@ rt.register({ name: "java/util/ResourceBundle", ctor: JResourceBundle, fields: {
   "static getBundle(Ljava/lang/String;Ljava/util/Locale;)Ljava/util/ResourceBundle;": getBundle,
   "static getBundle(Ljava/lang/String;Ljava/util/Locale;Ljava/util/ResourceBundle$Control;)Ljava/util/ResourceBundle;": (baseName: string, locale: JLocale, control: JBundleControl | null) => {
     if (control === null) rt.npe();
-    return getBundle(baseName, locale, control);
+    return getBundle(baseName, locale, control!);
   },
   "setParent(Ljava/util/ResourceBundle;)V": function (this: JResourceBundle, parent: JResourceBundle) { this.parent = parent; },
   "handleGetObject(Ljava/lang/String;)Ljava/lang/Object;": async function (this: JResourceBundle, key: string) {
