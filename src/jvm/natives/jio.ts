@@ -555,6 +555,7 @@ function descriptorOf(owner: JObj, path: string, flags: number): JFileDescriptor
 }
 rt.register({
   name: "java/io/FileDescriptor", ctor: JFileDescriptor,
+  fields: { descriptor: "fd", fd: "fd" },
   methods: {
     "<init>()V": () => {}, "sync()V": () => {},
     "valid()Z": function (this: JFileDescriptor) { return this.fd >= 0 || (this.owner !== null && !closedFiles.has(this.owner)) ? 1 : 0; },
