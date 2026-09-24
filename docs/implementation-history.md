@@ -59,6 +59,23 @@ and the subsequent four-job and seven-job matrix runs. The latest seven-job
 run recorded 196 observed gaps, dominated by TikTok's live diagnostics; this
 count varies with network timing and is not a regression metric by itself.
 
+The existing Harmonic API 35 welcome-dialog reference then became a quick visual
+checkpoint. Three isolated captures measured the same 15.04% content difference
+with its live list masked; its missing optional WindowExtensionsProvider remains a
+reported gap. Resy now has an API 33 launch-only Android reference at 1080×2160.
+The emulator shows the phone-number form under its notification alert. A webdroid
+text-state wait sometimes captured the screen before the alert was drawn (one of
+three runs differed by 97.53%). An eight-second real-time settle gave three
+matching isolated captures (8.14% content difference), but a seven-job run
+captured the form before the alert and scored 96.98%. The quick pass now uses
+the full flow's 15-second launch horizon and a 12% visual limit. The full Resy flow
+still has no per-step Android reference: it ran all 13 steps in 130.4 seconds as
+smoke, with no wedge or reached missing API. The startup reference does not turn
+its remaining 12 steps into scored comparisons.
+The 15-second Resy checkpoint passed with 8.29% content difference in a seven-job
+all-app quick run; all 13 flows completed in 40.1 seconds. This revision has six
+Android visual comparisons, two smoke flows and five live startup observations.
+
 ## Evidence and measurement
 
 - Run real APK and bundled library bytecode. A rendered screen or empty missing-API

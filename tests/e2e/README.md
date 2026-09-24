@@ -34,11 +34,12 @@ runtime errors, and browser errors are listed as observed gaps. A missing checkp
 main loop, missing process diagnostics, or timeout fails the quick test. Failed flows rerun
 their selected quick steps into `actual-fast/failures/` with full evidence.
 
-All 13 flows reached their quick checkpoints in 43 seconds at `--jobs 4` and 37 seconds at
-the default seven jobs on this machine. Motion frame rates are informational in parallel runs;
-use `--jobs 1` for their frame-rate gates. Four fast flows have Android visual checkpoints.
+All 13 flows reached their quick checkpoints in 40.1 seconds at the default seven jobs on this
+machine with the Resy reference. Motion frame
+rates are informational in parallel runs; use `--jobs 1` for their frame-rate gates. Six fast flows
+have Android visual checkpoints, including the live Harmonic welcome dialog and Resy onboarding.
 Flappy Bird and Doodle Jump remain smoke-only because the available API 33 ARM64 emulator
-cannot install their ARM32 native libraries. The seven live startup checks lack stable Android
+cannot install their ARM32 native libraries. Five live startup checks lack stable Android
 references. `actual-fast/summary.json` distinguishes `compared`, `smoke`, `observed`, `failed`,
 and `not-selected` and records visual limits, Android API versions, errors, and observed gaps.
 The serialized full lane remains the final compatibility and performance gate.
@@ -289,13 +290,17 @@ first to ask for and not find). None of that is in the HTML report; read the fil
 bun run e2e:setup    # create/configure an API 33 AVD (geometry from the device profile)
 bun run e2e:boot     # boot it and apply the determinism settings
 bun run e2e --record # walk every flow, write golden/ + manifest.json
+bun run e2e --record --startup --test resy # record only a live flow's launch reference
 ```
 
 Install the APKs on the emulator first. The recorder adjusts size and density for each flow,
 then verifies both geometry and API 33 before capture. Review the images and commit
 `tests/e2e/golden/`; `actual/` and `report/` are ignored. Older FitNotes, Mihon, and Harmonic
 references were recorded on API 35 and remain labeled as such in the report. CalculatorM was
-recorded on API 33 at its declared 1080×2424 geometry.
+recorded on API 33 at its declared 1080×2424 geometry. A `depth: "startup"` manifest records
+only one live launch screen. The quick lane can compare it; the full lane still runs every step
+but treats the flow as smoke, without claiming Android references for the remaining steps.
+`--startup` requires one selected live flow and refuses to overwrite a full reference.
 
 Determinism the recorder depends on (all applied by `boot-emulator.sh`): animations off,
 SystemUI demo mode (fixed 12:00 clock, full battery, no notification icons), `adb root` +
@@ -322,7 +327,7 @@ dismiss key also closes dialogs.
   A/B it against the parent commit rather than reading one number.
 * **calculatorm** (8 steps) — calculate 7 + 7 and compare the API 33 result screen.
 
-The flows without goldens run in smoke mode — every step must render, and the run
+The flows without full goldens run in smoke mode — every step must render, and the run
 reports fps and the per-step missing-API list rather than a diff percentage:
 
 * **flappybird** (7 steps) — splash → title → PLAY → taps flap past pipes → Game Over panel.
@@ -330,7 +335,8 @@ reports fps and the per-step missing-API list rather than a diff percentage:
   game as White → e4, Nf3, and Ne5 with native Stockfish replies.
 * **doodlejump** (6 steps) — title → play → Back, on the ARM32 native tier.
 * **resy**, **reddit**, **tiktok**, **youtube**, and **chatgpt** exercise live first-run and
-  content paths. Their run files expose diagnostics, but they have no Android visual reference.
+  content paths. Their run files expose diagnostics. Resy has an API 33 launch-only Android
+  reference; the other four have no Android visual reference.
 
 Flows are aspirational on purpose. Steps webdroid cannot reach score near 100% and *are* the
 target; they are not trimmed to match what works today.
