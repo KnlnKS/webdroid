@@ -101,6 +101,7 @@ Diagnostics unavailable: the browser page crashed before runtime inspection.
 - OpenTracks launched without missing calls or reported errors after `String.join(CharSequence, Iterable)` and the empty-property animator fix. Calendar also stopped reporting the animator rejection.
 - NewPipe resource-bundle loading advanced through its bundled `ListResourceBundle` classes. Live search returned video results and a detail page. The player opened after framework package-signature, media notification and progress drawable fixes. Its cache's serialized Java list and atomic counter now round-trip through Android-compatible forms.
 - Fossify File Manager and Gallery advanced past `SimpleDateFormat.toLocalizedPattern` and exposed additional storage, media, and layout calls.
+- Markor's new-file flow exposed NIO writability, adapter mutations and lookup, a list popup, a selected-item listener, scrollbar width, and the `UpdateLayout` span marker. The file editor saved a 36-byte Markdown document under `/sdcard/Documents/markor/`. Shared external storage previously disappeared on reload because only package-private paths were persisted; the file and directory now restore before app initialization. Reopening needed `TextView.setTextKeepState`; preview exposed `StringBuilder.append(CharSequence, start, end)` incorrectly stringifying its source and recursing through Flexmark's `RepeatedCharSequence`.
 
 ### Interaction evidence after launch
 
@@ -120,7 +121,7 @@ Diagnostics unavailable: the browser page crashed before runtime inspection.
 | Fossify File Manager | File browser | File create, copy and storage mutations unverified |
 | Fossify Calendar | Day view and New Event entry | Event save and reminders unverified |
 | Fossify Gallery | Folder picker | Media browsing and image operations unverified |
-| Markor | Main view | Document creation, editing and save unverified |
+| Markor | Created, saved and reopened a Markdown file after reload; preview rendered in WebView and search reported 1/1 matches | Export and other editor flows unverified |
 
 `androidx.window` sidecar/extension provider probes in Harmonic, Lichess and Feeder are optional OEM classes, so their absence is retained rather than reported as implemented support. A launch or an empty missing list covers only the exercised path. The Aegis password and manual-entry flows exposed Java character-array decoding, charset encoding, resource-bundle controls, permissions, layout animation, object serialization and drawable null layers after the initial scan. A sample manual entry displayed a TOTP code before and after page reload with no observed missing APIs or errors on that path.
 
