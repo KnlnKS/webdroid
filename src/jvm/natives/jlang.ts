@@ -9,6 +9,23 @@ import { javaClassSets } from "../regex-sets";
 import { mangleMethod, jmethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { guestNow, type GuestTimer } from "../../guest-clock";
 import { device } from "../../shell/config";
+import { csText } from "./jchars";
+
+async function joinCharSequences(separator: unknown, parts: unknown[]): Promise<string> {
+  if (separator == null || parts == null) rt.npe();
+  const text = await csText(separator);
+  const values: string[] = [];
+  for (const part of parts) values.push(part == null ? "null" : await csText(part));
+  return values.join(text);
+}
+
+async function joinIterable(separator: unknown, parts: unknown): Promise<string> {
+  if (parts == null) rt.npe();
+  const values: unknown[] = [];
+  const iterator = await vcall(parts, "iterator", "()Ljava/util/Iterator;");
+  while (await vcall(iterator, "hasNext", "()Z")) values.push(await vcall(iterator, "next", "()Ljava/lang/Object;"));
+  return joinCharSequences(separator, values);
+}
 
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
   const fn = obj[mangleMethod(name, desc)] ?? rt.proxyMethod?.(obj, name, desc);
@@ -841,8 +858,8 @@ rt.register({
     "static format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;": (f: string, a: unknown[]) => javaFormat(f, a),
     "static format(Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;":
       (_l: unknown, f: string, a: unknown[]) => javaFormat(f, a),
-    "static join(Ljava/lang/CharSequence;[Ljava/lang/CharSequence;)Ljava/lang/String;":
-      (sep: string, parts: string[]) => parts.join(String(sep)),
+    "static join(Ljava/lang/CharSequence;[Ljava/lang/CharSequence;)Ljava/lang/String;": joinCharSequences,
+    "static join(Ljava/lang/CharSequence;Ljava/lang/Iterable;)Ljava/lang/String;": joinIterable,
   },
   // A getter, because java.util.Comparator is not registered yet when this spec is built.
   statics: { get CASE_INSENSITIVE_ORDER() { return mkCmp(caseInsensitive); } },
