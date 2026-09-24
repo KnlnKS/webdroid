@@ -18,30 +18,35 @@ already be serving the default port. Run captures sequentially: they share outpu
 `bun run e2e --full` **never touches an emulator** and does not need the Android SDK installed —
 `adb` may be absent from `PATH` entirely. It reads `golden/`, drives webdroid over Playwright,
 and writes `actual/` + `report/index.html`. Every flow runs in its own headless browser and
-`--jobs N` (default: half the cpus) bounds how many run at once; each flow is scored in a
+`--jobs N` (default: at most four) bounds how many run at once; each flow is scored in a
 subprocess as soon as it has captured. The serialized 13-flow matrix has taken 13–16 minutes;
 live network and video flows dominate that cost.
 
 Recording new goldens is a separate, manual step (below).
 
-`bun run e2e` is the default quick test for all 13 flows. Six fixed-input flows retain every
-action. Android timers advance logically where that preserves behavior; native GL games remain
-on real monotonic time. Their semantic steps keep diagnostics and a frame hash without PNG
-readback, while named checkpoints enforce recorded Android visual limits. Seven live flows run
-only their launch step, ending when an observable screen or frame condition is reached. They
-retain process diagnostics but do not claim Android parity: missing APIs, native requirements,
-runtime errors, and browser errors are listed as observed gaps. A missing checkpoint, wedged
-main loop, missing process diagnostics, or timeout fails the quick test. Failed flows rerun
-their selected quick steps into `actual-fast/failures/` with full evidence.
+`bun run e2e` is the default quick test for all 13 flows and now runs every step in every
+flow. Six fixed-input flows advance Android timers logically where that preserves behavior;
+native GL games remain on real monotonic time. Seven live flows use per-step readiness checks
+and short observation samples instead of the full recorder's long dwell windows. The fast
+pass keeps process diagnostics and a UI hierarchy at every step, and a frame hash instead of
+PNG readback except at named Android visual checkpoints. Missing required text targets,
+unreached states, wedged main loops, missing process diagnostics and timeouts fail the quick
+test. Live missing APIs, native requirements, runtime errors and browser errors are reported
+as observed gaps. Inspect `actual-fast/<flow>/run.json` and each step's `.ui.json` after a
+failure; the quick pass does not rerun a failed flow.
 
-All 13 flows reached their quick checkpoints in 37.0 seconds at the default seven jobs with
-the Reddit and YouTube references. Motion frame rates are informational in parallel runs; use
-`--jobs 1` for their frame-rate gates. Nine fast flows have Android visual checkpoints.
+An all-step pass took 87.4 seconds at four jobs, with 11 flows passing. Motion frame rates are informational
+in parallel runs; use `--jobs 1` for their frame-rate gates. Nine fast flows have Android
+visual checkpoints. Those compare the launch or core result where references exist; later
+live steps are semantic checks and do not claim Android visual parity.
 Flappy Bird and Doodle Jump remain smoke-only because the available API 33 ARM64 emulator
-cannot install their ARM32 native libraries. Two live startup checks lack Android
+cannot install their ARM32 native libraries. Two live flows lack Android
 references. `actual-fast/summary.json` distinguishes `compared`, `smoke`, `observed`, `failed`,
 and `not-selected` and records visual limits, Android API versions, errors, and observed gaps.
-The serialized full lane remains the final compatibility and performance gate.
+Live service timing can affect Resy search and ChatGPT responses. The latest four-job run
+failed because Resy's offers sheet blocked the venue page and YouTube's player stayed at
+0:00 after the pause tap. The serialized full lane remains available for
+step-by-step Android pixel analysis.
 
 `bun run test:focused -- <paths>` selects dependent Bun tests through the TypeScript import graph,
 then selects fast flows from `tests/e2e/coverage-index.json`. `--base <revision>` includes committed,
@@ -151,8 +156,12 @@ A step is declared once, semantically, in `flows/`. Two drivers interpret it:
 | completion | honor the declared wait, then capture until 4 frames agree | state, quiescence, logical sample, or live wait |
 
 The webdroid side of a step is one `page.evaluate`: the probe `lib/probe.ts` installs into the
-page performs the action, waits for the app to settle, checks the main looper is alive, encodes
-the frame and returns it with the step's telemetry. Nothing polls the page from outside.
+page performs the action, waits for the app to settle, checks the main looper is alive, and
+returns the step's telemetry and optional frame. Nothing polls the page from outside.
+The full pass and Android recorder use each step's `wait`. Live steps can declare `fastWait`
+for an observable quick-pass completion condition; otherwise the quick pass samples after
+500 ms. `fastAction` uses an equivalent quick input when platform UI or a live text anchor
+differs from the recorded reference.
 
 ### How webdroid completes a step
 

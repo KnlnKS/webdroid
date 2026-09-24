@@ -1,6 +1,6 @@
 # Implementation history: durable findings
 
-Retained through 2026-09-22. [PLAN.md](../PLAN.md) owns active work and
+Retained through 2026-09-23. [PLAN.md](../PLAN.md) owns active work and
 [AGENTS.md](../AGENTS.md) owns working rules. This file keeps failure mechanisms,
 measured tradeoffs and unresolved limits. Git history contains the run-by-run
 captures and commit IDs removed from this summary. Historical results describe
@@ -121,6 +121,40 @@ seconds with two settle timeouts. The run was stopped after these results; no
 seven-job full-suite duration or clean pass is claimed. Faster full coverage
 needs observable completion conditions for live steps in place of fixed dwell,
 while keeping every action and the existing Android visual checkpoints.
+
+The fast lane now runs all 183 actions, including the seven live flows. Each live
+step uses an observable `fastWait` when a stable state exists, otherwise a 500 ms
+real-time sample. `fastAction` keeps the Android reference action intact when
+webdroid needs an equivalent text anchor or lacks an Android system sheet. The
+runner stores every step's UI hierarchy without taking a PNG for semantic steps;
+it fails missing required text targets and state timeouts. Failed flows keep their
+first-run evidence instead of repeating the entire path. Fast-only flow changes
+do not invalidate a full capture's schema fingerprint.
+
+The first 13-flow all-action run took 96.6 seconds at four jobs: ten passed and
+three failed. Resy's live search returned no venue for the subsequent venue-page
+check; YouTube's player did not expose the expected pause/resume transition;
+ChatGPT had no answer within its five-second response check. An isolated ChatGPT
+run with a 20-second answer wait passed all 24 steps in 38.4 seconds. Lichess
+reported native Dart pthread aborts under parallel load but continued rendering;
+these remain reported gaps, not parity evidence. This all-action run is over the
+one-minute target and currently fails on real observed behavior. The older
+37-second result covered only live launches, so it is not a comparable baseline.
+After removing the premature ChatGPT send-state wait and using equivalent text
+anchors for Resy and YouTube, the four-job matrix ran all 183 steps in 87.4
+seconds: 11/13 passed. ChatGPT passed in 50.7 seconds under that load. Resy
+eventually displayed Carbone results, but tapping the venue reopened an offers
+sheet and never reached venue details. YouTube's Pause video target was present
+and tapped, yet stayed Pause video at 0:00 after six seconds; resume then had no
+Play video target. These are observed app-path failures, not harness timeouts
+waived as successes. The full one-job visual lane remains useful for diagnosis.
+
+One comparison of the same fast matrix at five, six and seven jobs took 82.4,
+75.2 and 66.0 seconds respectively. Five and six had the same two failing flows
+as four jobs, while seven added a Resy onboarding timeout and a YouTube resume
+timeout. Lichess reported 21, 21, 39 and 62 observed gaps at four through seven
+jobs, mainly native pthread aborts. These runs vary with live content, but the
+speed gain came with more resource-related errors, so four remains the default.
 
 ## Evidence and measurement
 
