@@ -19,7 +19,7 @@ export class JImageView extends JView {
     invalidate(this);
     return after(d ? drawableSize(d, false, thread) : -1, w => after(d ? drawableSize(d, true, thread) : -1, h => {
       this.drawableW = w; this.drawableH = h;
-      return callOn(thread, () => this.applyColorFilter());
+      return callOn(thread, () => after(this.applyColorFilter(), () => this.applyImageAlpha()));
     }));
   }
   drawableW = -1; drawableH = -1;
@@ -45,6 +45,13 @@ export class JImageView extends JView {
   tintCsl: JColorStateList | null = null;
   colorFilter: unknown = null;
   hasColorFilter = false;
+  imageAlpha = 255;
+  hasImageAlpha = false;
+  applyImageAlpha(): unknown {
+    const d = this.dr, thread = curThread;
+    if (d && this.hasImageAlpha) return after(vcallOn(thread, d, "mutate", "()Landroid/graphics/drawable/Drawable;"),
+      () => vcallOn(thread, d, "setAlpha", "(I)V", this.imageAlpha));
+  }
   applyColorFilter(): unknown {
     const d = this.dr, thread = curThread;
     if (d && this.hasColorFilter) return after(vcallOn(thread, d, "mutate", "()Landroid/graphics/drawable/Drawable;"),
@@ -90,6 +97,18 @@ const imageViewMethods: NativeSpec["methods"] = {
     requestLayout(this);
   },
   "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JImageView) { return this.drawable; },
+  "getImageAlpha()I": function (this: JImageView) { return this.imageAlpha; },
+  "setImageAlpha(I)V": function (this: JImageView, alpha: number) {
+    alpha &= 255;
+    if (this.imageAlpha === alpha) return;
+    this.imageAlpha = alpha;
+    this.hasImageAlpha = true;
+    invalidate(this);
+    return this.applyImageAlpha();
+  },
+  "setAlpha(I)V": function (this: JImageView, alpha: number) {
+    return vcallOn(curThread, this, "setImageAlpha", "(I)V", alpha);
+  },
   "setScaleType(Landroid/widget/ImageView$ScaleType;)V": function (this: JImageView, st: { ord: number } | null) {
     if (!st) return rt.npe();
     if (this.scaleType === st.ord) return;
