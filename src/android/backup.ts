@@ -23,6 +23,19 @@ rt.register({
   name: "android/app/backup/SharedPreferencesBackupHelper", ctor: class extends JObj {}, ifaces: ["android/app/backup/BackupHelper"],
   methods: { "<init>(Landroid/content/Context;[Ljava/lang/String;)V": function () {} },
 });
+class JFileBackupHelper extends JObj {
+  context: JContextWrapper | null = null;
+  files: string[] = [];
+}
+rt.register({
+  name: "android/app/backup/FileBackupHelper", ctor: JFileBackupHelper, ifaces: ["android/app/backup/BackupHelper"],
+  methods: {
+    "<init>(Landroid/content/Context;[Ljava/lang/String;)V": function (this: JFileBackupHelper, context: JContextWrapper, files: string[]) {
+      this.context = context;
+      this.files = files.slice();
+    },
+  },
+});
 rt.register({
   name: "android/app/backup/BackupManager", ctor: class extends JObj {},
   methods: {
