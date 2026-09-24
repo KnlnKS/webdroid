@@ -1128,6 +1128,17 @@ export function affineFromPoints(src: Float32Array, si: number, dst: Float32Arra
   }
   return matrix;
 }
+function mapMatrixRect(this: JMatrix, dst: JRectF | null, src: JRectF | null): number {
+  if (!dst || !src) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  const m = this.m, l = src.left, t = src.top, r = src.right, b = src.bottom;
+  const x0 = m[0] * l + m[2] * t + m[4], y0 = m[1] * l + m[3] * t + m[5];
+  const x1 = m[0] * r + m[2] * t + m[4], y1 = m[1] * r + m[3] * t + m[5];
+  const x2 = m[0] * l + m[2] * b + m[4], y2 = m[1] * l + m[3] * b + m[5];
+  const x3 = m[0] * r + m[2] * b + m[4], y3 = m[1] * r + m[3] * b + m[5];
+  dst.left = Math.min(x0, x1, x2, x3); dst.right = Math.max(x0, x1, x2, x3);
+  dst.top = Math.min(y0, y1, y2, y3); dst.bottom = Math.max(y0, y1, y2, y3);
+  return (m[1] === 0 && m[2] === 0) || (m[0] === 0 && m[3] === 0) ? 1 : 0;
+}
 rt.register({
   name: "android/graphics/Matrix", ctor: JMatrix,
   methods: {
@@ -1175,16 +1186,8 @@ rt.register({
       this.m = [sx, 0, 0, sy, dst.left - src.left * sx + tx, dst.top - src.top * sy + ty];
       return 1;
     },
-    "mapRect(Landroid/graphics/RectF;)Z": function (this: JMatrix, r: JRectF) {
-      const m = this.m, l = r.left, t = r.top, rt_ = r.right, b = r.bottom;
-      const x0 = m[0] * l + m[2] * t + m[4], y0 = m[1] * l + m[3] * t + m[5];
-      const x1 = m[0] * rt_ + m[2] * t + m[4], y1 = m[1] * rt_ + m[3] * t + m[5];
-      const x2 = m[0] * l + m[2] * b + m[4], y2 = m[1] * l + m[3] * b + m[5];
-      const x3 = m[0] * rt_ + m[2] * b + m[4], y3 = m[1] * rt_ + m[3] * b + m[5];
-      r.left = Math.min(x0, x1, x2, x3); r.right = Math.max(x0, x1, x2, x3);
-      r.top = Math.min(y0, y1, y2, y3); r.bottom = Math.max(y0, y1, y2, y3);
-      return 1;
-    },
+    "mapRect(Landroid/graphics/RectF;)Z": function (this: JMatrix, rect: JRectF) { return mapMatrixRect.call(this, rect, rect); },
+    "mapRect(Landroid/graphics/RectF;Landroid/graphics/RectF;)Z": mapMatrixRect,
     "mapPoints([F)V": function (this: JMatrix, pts: Float32Array) {
       const m = this.m;
       for (let i = 0; i + 1 < pts.length; i += 2) {
