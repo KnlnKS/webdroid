@@ -137,19 +137,40 @@ export function generateUiAction(random: Random, nodes: readonly UiNode[], width
   return random.pick(uiActions(nodes, width, height));
 }
 
-export function uiStateKey(nodes: readonly UiNode[]): string {
-  const structure = nodes.filter(usable).map((node) => JSON.stringify([
-    node.resId || (node.clickable || node.editable || node.scrollable ? selector(node).slice(0, 80) : ""),
-    node.cls, node.clickable, node.editable, node.scrollable,
-  ])).sort();
+function hashStructure(structure: readonly string[]): string {
   const digest = new Bun.CryptoHasher("sha256");
   digest.update(structure.join("\n"));
   return digest.digest("hex").slice(0, 24);
 }
 
+export function uiStateKey(nodes: readonly UiNode[]): string {
+  const visible = nodes.filter(usable);
+  const width = Math.max(1, ...visible.map((node) => node.bounds[2]));
+  const height = Math.max(1, ...visible.map((node) => node.bounds[3]));
+  return hashStructure(visible.map((node) => JSON.stringify([
+    node.resId, node.cls, normalized(node.text), normalized(node.desc),
+    node.clickable, node.editable, node.scrollable,
+    node.clickable || node.editable || node.scrollable
+      ? node.bounds.map((coordinate, index) => Math.round(16 * coordinate / (index % 2 ? height : width))) : null,
+  ])));
+}
+
+export function uiScrollFamilyKey(nodes: readonly UiNode[]): string {
+  const scrollables = nodes.filter((node) => usable(node) && node.scrollable);
+  const outside = nodes.filter((node) => usable(node) && !node.scrollable && (node.text || node.desc) &&
+    !scrollables.some((parent) => node.bounds[0] >= parent.bounds[0] && node.bounds[1] >= parent.bounds[1] &&
+      node.bounds[2] <= parent.bounds[2] && node.bounds[3] <= parent.bounds[3]));
+  return hashStructure([
+    ...scrollables.map((node) => JSON.stringify([node.resId, node.cls])),
+    ...outside.map((node) => JSON.stringify([node.resId, node.cls, normalized(node.text), normalized(node.desc)])),
+  ]);
+}
+
 export function uiActionKey(action: UiAction): string {
   if ("target" in action) {
     const target = action.target;
+    if (action.type === "scroll") return JSON.stringify([action.type, target.resourceId ?? target.className,
+      action.from.x, action.from.y]);
     const selector = target.resourceId ? ["id", target.resourceId] : target.text ? ["text", target.text] :
       target.description ? ["desc", target.description] : ["class", target.className];
     return JSON.stringify([action.type, selector, target.ordinal, action.type === "type" ? action.text : ""]);

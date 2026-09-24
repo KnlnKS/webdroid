@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UiExplorer } from "../scripts/fuzz/ui-explorer";
-import { generateUiAction, matchIdentity, validateUiAction } from "../scripts/fuzz/ui-model";
+import { generateUiAction, matchIdentity, uiStateKey, validateUiAction } from "../scripts/fuzz/ui-model";
 import { Random } from "../scripts/fuzz/random";
 import { parseUiAutomator } from "./e2e/lib/uiautomator";
 import type { UiNode } from "./e2e/types";
@@ -48,6 +48,14 @@ describe("semantic UI fuzzing", () => {
     expect(() => validateUiAction({ type: "configuration", orientation: "diagonal" })).toThrow();
   });
 
+  test("Compose screens with the same controls retain distinct content identities", () => {
+    const controls = [node({ resId: "app:id/continue", text: "Continue", clickable: true })];
+    const screen = (message: string) => [node({ cls: "androidx.compose.ui.platform.AndroidComposeView", text: message }), ...controls];
+    const initial = screen("Sign in");
+    expect(uiStateKey(initial)).not.toBe(uiStateKey(screen("Account deleted")));
+    expect(uiStateKey(initial)).not.toBe(uiStateKey([initial[0]!, { ...initial[1]!, bounds: [50, 50, 100, 100] }]));
+  });
+
   test("exploration resumes at an untried action after a saved restart", async () => {
     const directory = mkdtempSync(join(tmpdir(), "wd-ui-explorer-"));
     try {
@@ -78,7 +86,7 @@ describe("semantic UI fuzzing", () => {
     try {
       const apk = join(directory, "sample.apk");
       await Bun.write(apk, "test apk bytes");
-      const firstPage = [node({ resId: "app:id/list", text: "First page", scrollable: true })];
+      const firstPage = [node({ text: "First page", scrollable: true })];
       const explorer = await UiExplorer.open(directory, "sample", apk);
       const initial = explorer.observeState(firstPage, 100, 100, { actions: [], states: [], target: null });
       for (let index = 0; index < 2; index++) {
@@ -90,9 +98,9 @@ describe("semantic UI fuzzing", () => {
       await explorer.save();
 
       const resumed = await UiExplorer.open(directory, "sample", apk);
-      const nextPage = [node({ resId: "app:id/list", text: "Second page", scrollable: true })];
+      const nextPage = [node({ text: "Second page", scrollable: true })];
       const state = resumed.observeState(nextPage, 100, 100, { actions: [], states: [], target: null });
-      expect(state).toBe(initial);
+      expect(state).not.toBe(initial);
       for (let index = 0; index < 2; index++) {
         const action = resumed.choose(state, new Random(1));
         if (!action) throw new Error("expected scroll action");
@@ -100,6 +108,8 @@ describe("semantic UI fuzzing", () => {
         resumed.observeAction(state, action, [], []);
       }
       expect(resumed.choose(state, new Random(1))?.type).not.toBe("scroll");
+      resumed.observeState(firstPage, 100, 100, { actions: [], states: [], target: null });
+      expect(resumed.choose(initial, new Random(1))?.type).not.toBe("scroll");
       expect(resumed.summary().actions).toBe(4);
     } finally {
       rmSync(directory, { recursive: true, force: true });
