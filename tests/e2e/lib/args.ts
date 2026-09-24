@@ -24,22 +24,22 @@ function resolve(name: string, known: Flow[]): Flow[] {
 
 const DEFAULT_SHOTS_DIR = "webdroid-shots";
 /** Full live flows can saturate the renderer and native worker threads before CPU count does. */
-const DEFAULT_JOBS = Math.max(1, Math.min(4, Math.floor(cpus().length / 3)));
+export const defaultJobs = (limit: number, coresPerJob = 3): number => Math.max(1, Math.min(limit, Math.floor(cpus().length / coresPerJob)));
+const DEFAULT_JOBS = defaultJobs(4);
 
-function printHelp(cmd: string, known: Flow[], extra = ""): void {
+function printHelp(cmd: string, known: Flow[], jobs: number): void {
   console.log(`usage: ${cmd} [--test <flow>]... [--jobs N] [--shots [dir]]
 
   --test, -t <flow>   run only this flow. Repeatable, accepts a comma-separated list, and
                       matches on prefix (--test mihon selects both mihon flows).
                       Bare names work too: ${cmd} fitnotes
-  --jobs, -j N        flows driven at once, each in its own browser (default ${DEFAULT_JOBS} here).
+  --jobs, -j N        flows driven at once, each in its own browser (default ${jobs} here).
                       1 reproduces an uncontended run for fps measurements.
   --shots [dir]       save every distinct webdroid frame during each step to
                       ./${DEFAULT_SHOTS_DIR} (or [dir]). Wiped at the start of every run,
                       and gitignored.
   --list              list the known flows and exit
   --help, -h          show this
-${extra}
 known flows: ${known.map((f) => f.app).join(", ")}`);
 }
 
@@ -49,11 +49,11 @@ known flows: ${known.map((f) => f.app).join(", ")}`);
  * each step, not just the settled one that gets diffed). Any flag this parser doesn't know
  * is an error rather than a silently ignored typo.
  */
-export function parseArgs(argv: string[], cmd: string, known: Flow[] = FLOWS): { flows: Flow[]; shots?: string; jobs: number } {
+export function parseArgs(argv: string[], cmd: string, known: Flow[] = FLOWS, defaultJobs = DEFAULT_JOBS): { flows: Flow[]; shots?: string; jobs: number } {
   const picked: Flow[] = [];
   const unknownFlags: string[] = [];
   let shots: string | undefined;
-  let jobs = DEFAULT_JOBS;
+  let jobs = defaultJobs;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -70,7 +70,7 @@ export function parseArgs(argv: string[], cmd: string, known: Flow[] = FLOWS): {
       if (!(jobs >= 1)) fail(`${a} needs a positive number`, known);
       continue;
     }
-    if (a === "--help" || a === "-h") { printHelp(cmd, known); process.exit(0); }
+    if (a === "--help" || a === "-h") { printHelp(cmd, known, defaultJobs); process.exit(0); }
     if (a === "--list") { console.log(known.map((f) => f.app).join("\n")); process.exit(0); }
     if (a === "--test" || a === "-t") {
       const v = argv[++i];
@@ -87,7 +87,7 @@ export function parseArgs(argv: string[], cmd: string, known: Flow[] = FLOWS): {
 
   if (unknownFlags.length) {
     console.error(`unknown option: ${unknownFlags.join(" ")}`);
-    printHelp(cmd, known);
+    printHelp(cmd, known, defaultJobs);
     process.exit(2);
   }
 

@@ -1,6 +1,6 @@
 import { rm } from "node:fs/promises";
 import { captureFlow, launchFor, loadManifest, type StepRun } from "./capture-webdroid";
-import { parseArgs } from "./lib/args";
+import { defaultJobs, parseArgs } from "./lib/args";
 import { FLOWS } from "./flows";
 import type { Flow } from "./types";
 import { loadPng } from "./lib/png";
@@ -14,7 +14,7 @@ import { isWebdroidProcessFrame } from "./lib/processes";
 const deterministic = FLOWS.filter((flow) => flow.clock !== "live");
 const coverage = process.argv.includes("--coverage");
 const args = process.argv.slice(2).filter((arg) => arg !== "--coverage");
-const { flows, jobs } = parseArgs(args, "bun run e2e", coverage ? deterministic : FLOWS);
+const { flows, jobs } = parseArgs(args, "bun run e2e", coverage ? deterministic : FLOWS, defaultJobs(5, 2));
 if (coverage && flows.length !== deterministic.length)
   throw new Error("coverage collection must run the complete deterministic lane");
 
@@ -126,10 +126,19 @@ async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
 }
 
 console.log(`fast flows: ${flows.map((flow) => flow.app).join(", ")} (${jobs} at a time)`);
-await rm(`${E2E_DIR}actual-fast/summary.json`, { force: true });
+const summaryPath = `${E2E_DIR}actual-fast/summary.json`;
+const previous = new Map<string, number>();
+try {
+  const data: unknown = await Bun.file(summaryPath).json();
+  if (data && typeof data === "object" && "flows" in data && Array.isArray(data.flows))
+    for (const row of data.flows)
+      if (row && typeof row.app === "string" && typeof row.durationMs === "number" && row.durationMs > 0)
+        previous.set(row.app, row.durationMs);
+} catch {}
+await rm(summaryPath, { force: true });
 const weight = (flow: Flow) => quickFlow(flow).steps.reduce((total, step) =>
   total + (step.wait.kind === "state" ? step.wait.maxRealMs : waitHorizonMs(step.wait)) + 300, 0);
-const queue = [...flows].sort((a, b) => weight(b) - weight(a));
+const queue = [...flows].sort((a, b) => (previous.get(b.app) ?? weight(b)) - (previous.get(a.app) ?? weight(a)));
 const outcomes: Outcome[] = [];
 const started = performance.now();
 await Promise.all(Array.from({ length: Math.min(jobs, queue.length) }, async () => {
