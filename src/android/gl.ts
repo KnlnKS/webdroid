@@ -6,6 +6,7 @@ import { JBuffer, bufferView } from "../jvm/natives/jnio";
 import { JBitmap } from "./graphics";
 import { gles1String } from "../native/gles1";
 import { gles3Extensions } from "../native/gles3";
+import { perf } from "../perf";
 
 // GL dispatch follows the cooperative Java/native thread without a lookup on every GL call.
 type GL = WebGL2RenderingContext | WebGLRenderingContext;
@@ -225,18 +226,20 @@ rt.register({
       gl?.readPixels(x, y, w, h, format, type, pixels);
       if (!aligned) b.set(new Uint8Array(pixels.buffer));
     },
-    "static glDrawArrays(III)V": (mode: number, first: number, count: number) => gl?.drawArrays(mode, first, count),
-    "static glDrawElements(IIII)V": (mode: number, count: number, type: number, offset: number) => gl?.drawElements(mode, count, type, offset),
+    "static glDrawArrays(III)V": (mode: number, first: number, count: number) => { if (gl) { gl.drawArrays(mode, first, count); perf.glDraws++; } },
+    "static glDrawElements(IIII)V": (mode: number, count: number, type: number, offset: number) => { if (gl) { gl.drawElements(mode, count, type, offset); perf.glDraws++; } },
     "static glDrawElements(IIILjava/nio/Buffer;)V": (mode: number, count: number, type: number, indices: JBuffer | null) => {
+      if (!gl) return;
       const b = bytesFrom(indices);
       if (b) {
         // WebGL requires element buffer bound; upload transient buffer
-        const eb = gl!.createBuffer();
-        gl!.bindBuffer(gl!.ELEMENT_ARRAY_BUFFER, eb);
-        gl!.bufferData(gl!.ELEMENT_ARRAY_BUFFER, b.subarray(0, count * (type === 0x1403 ? 2 : 1)), gl!.STREAM_DRAW);
-        gl!.drawElements(mode, count, type, 0);
-        gl!.deleteBuffer(eb);
-      } else gl?.drawElements(mode, count, type, 0);
+        const eb = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, eb);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, b.subarray(0, count * (type === 0x1403 ? 2 : 1)), gl.STREAM_DRAW);
+        gl.drawElements(mode, count, type, 0);
+        gl.deleteBuffer(eb);
+      } else gl.drawElements(mode, count, type, 0);
+      perf.glDraws++;
     },
     "static glEnableVertexAttribArray(I)V": (idx: number) => gl?.enableVertexAttribArray(idx),
     "static glDisableVertexAttribArray(I)V": (idx: number) => gl?.disableVertexAttribArray(idx),
