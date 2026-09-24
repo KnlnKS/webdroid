@@ -21,6 +21,7 @@ scripts/simd-oracle/build/
 .zig-cache/
 src/native/core.wasm.ts
 src/native/core.safe.wasm.ts
+src/native/native-core.wasm
 dist/
 .wrangler/
 worker-configuration.d.ts

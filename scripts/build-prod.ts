@@ -15,7 +15,7 @@ if (includeAosp) for (const name of aospFiles) if (!(await Bun.file(`vendor/aosp
 await Promise.all([ensureFrameworkRes(), prepareSystemPackages()]);
 await rm(out, { recursive: true, force: true });
 await mkdir(out);
-const build = Bun.spawn(["bun", "build", "--target", "browser", "--production", "--splitting", "--outdir", out, "index.html", "process.html"], {
+const build = Bun.spawn(["bun", "build", "--target", "browser", "--production", "--minify", "--splitting", "--external", "*core.wasm", "--external", "*core.safe.wasm", "--outdir", out, "index.html", "process.html"], {
   stdout: "inherit", stderr: "inherit",
 });
 if (await build.exited !== 0) throw new Error("Browser build failed");
@@ -27,6 +27,7 @@ async function copyFile(source: string, target = source): Promise<void> {
 
 await Promise.all([
   copyFile("vendor/framework-res.apk"),
+  copyFile("src/native/native-core.wasm", "native-core.wasm"),
   copyFile("vendor/android-cacerts.pem"),
   cp("vendor/fonts", join(out, "vendor/fonts"), { recursive: true, dereference: true }),
   cp("vendor/microg", join(out, "vendor/microg"), { recursive: true, dereference: true }),

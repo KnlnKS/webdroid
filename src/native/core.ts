@@ -86,6 +86,11 @@ const TABLE_SIZE = 1 << 18, JIT_SLOT0 = 8192; // cpu.zig's dead map is sized to 
 const table = new WebAssembly.Table({ initial: TABLE_SIZE, element: "anyfunc" });
 
 async function load(): Promise<WebAssembly.Module> {
+  if (process.env.NODE_ENV === "production") {
+    const response = await fetch("/native-core.wasm");
+    if (!response.ok) throw new Error(`Native core unavailable: ${response.status}`);
+    return WebAssembly.compile(await response.arrayBuffer());
+  }
   // the tests run the safety-checked build: undefined behaviour panics instead of miscomputing
   const b64 = typeof process !== "undefined" && process.env.NODE_ENV === "test" ? (await import("./core.safe.wasm")).default : (await import("./core.wasm")).default;
   const s = atob(b64), bytes = new Uint8Array(s.length);
