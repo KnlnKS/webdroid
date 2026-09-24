@@ -1,4 +1,4 @@
-import { device, parseScreen, storeScreen } from "./config";
+import { device, parseScreen, storeScreen, type Screen } from "./config";
 
 type SessionState =
   | { kind: "loading"; file: string; stage: string }
@@ -123,7 +123,6 @@ export function createShell(actions: { launch: (name: string, file?: File) => vo
       details.hidden = !failed;
       details.open = false;
       retry.hidden = !failed || !next.retry;
-      reload.hidden = !failed;
       status.textContent = next.kind === "loading" ? next.stage : next.kind === "running" ? "Running" : "Couldn’t open this app";
       if (failed) {
         hint.textContent = !next.retry ? "Reload to start a fresh session, then choose your package again." : "Try again, or choose another package. Check that the file is complete.";
@@ -180,9 +179,7 @@ function configureScreen() {
   }
   describeScreen();
   form.addEventListener("input", describeScreen);
-  function applyScreen(useDefault: boolean) {
-    const screen = useDefault ? null : selectedScreen();
-    if (!useDefault && !screen) { describeScreen(); return; }
+  function applyScreen(screen: Screen | null) {
     storeScreen(screen);
     // A URL profile otherwise overrides the preference again after reloading.
     const url = new URL(location.href);
@@ -191,9 +188,10 @@ function configureScreen() {
   }
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    applyScreen(false);
+    const screen = selectedScreen();
+    if (screen) applyScreen(screen); else describeScreen();
   });
-  document.querySelector<HTMLButtonElement>("#cfg-reset")!.addEventListener("click", () => applyScreen(true));
+  document.querySelector<HTMLButtonElement>("#cfg-reset")!.addEventListener("click", () => applyScreen(null));
 }
 
 function fitDisplay(canvas: HTMLCanvasElement, phone: HTMLElement, stage: HTMLElement) {

@@ -31,8 +31,6 @@ small { font-size: 12px; color: var(--muted); }
 #side { min-width: 0; }
 .brand { display: inline-flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; font-size: 22px; font-weight: 650; letter-spacing: -.5px; }
 .brand-mark { width: 40px; height: 40px; object-fit: contain; }
-h1 { margin: 30px 0 14px; font-size: clamp(28px, 3vw, 36px); font-weight: 600; letter-spacing: -1.2px; line-height: 1.15; }
-.intro-copy { color: var(--muted); max-width: 34ch; margin: 0 auto 28px; }
 #local-loader { display: flex; align-items: center; flex-direction: column; gap: 12px; padding: 28px 20px 22px; border: 1px dashed #515a65; border-radius: 16px; background: #1b1e23; text-align: center; }
 .package-icon { width: 30px; height: 30px; color: var(--accent); margin-bottom: 2px; }
 #local-loader strong { font-weight: 550; }
@@ -75,7 +73,6 @@ input { display: block; width: 100%; margin-top: 6px; padding: 8px; font-family:
 #notice { color: #f2bdb7; border-left: 2px solid #e3968e; padding: 0 0 0 12px; margin-bottom: 20px; font-size: 14px; overflow-wrap: anywhere; }
 #root[data-state="failed"] #state-dot { background: #f2a59b; }
 #root[data-state="loading"] #state-dot { background: #e8ce94; }
-#root[data-state="failed"] #intro h1, #root[data-state="failed"] .intro-copy { display: none; }
 #root[data-state="loading"] #local-loader { opacity: .65; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 ui-monospace, monospace; color: var(--muted); margin: 0; }
 #error-details { margin-top: 16px; }
@@ -97,7 +94,6 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 ui-monospac
 }
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
   #root { padding: 28px 20px; gap: 32px; }
-  h1 { margin-top: 24px; }
   #root[data-state="running"] { padding: 0; }
   #root[data-state="running"] #side { bottom: calc(60px + env(safe-area-inset-bottom)); }
   #phone { width: 100%; height: 100%; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); border: 0; border-radius: 0; box-shadow: none; }

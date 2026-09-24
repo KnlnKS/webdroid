@@ -115,10 +115,11 @@ test("full-screen windows own their system bars and hiding restores the underlyi
   await vcall(above, "setNavigationBarColor", "(I)V", 0xffdddddd);
   const controller = await vcall(above, "getInsetsController", "()Landroid/view/WindowInsetsController;");
   await vcall(controller, "setSystemBarsAppearance", "(II)V", 24, 24);
+  expect(await vcall(controller, "getSystemBarsAppearance", "()I")).toBe(24);
   await vcall(controller, "hide", "(I)V", 1);
   const bars = resolveSystemBars(activity, overlays);
   expect(bars.root).toBe(dialog);
-  expect([bars.status, bars.navigation, bars.appearance, bars.visible & 3]).toEqual([0xffeeeeee, 0xffdddddd, 24, 2]);
+  expect([bars.status, bars.navigation, bars.visible & 3]).toEqual([0xffeeeeee, 0xffdddddd, 2]);
   above.layoutW = device.width; above.layoutH = device.height;
   expect(resolveSystemBars(activity, overlays)).toEqual(bars);
   above.flags |= 8;
@@ -130,6 +131,6 @@ test("full-screen windows own their system bars and hiding restores the underlyi
   dialog.visibility = 4;
   const restored = resolveSystemBars(activity, overlays);
   expect(restored.root).toBe(activity);
-  expect([restored.status, restored.navigation, restored.appearance, restored.visible & 3]).toEqual([0xff112233, 0xff223344, 0, 2]);
+  expect([restored.status, restored.navigation, restored.visible & 3]).toEqual([0xff112233, 0xff223344, 2]);
   expect(await vcall(underneath, "getNavigationBarColor", "()I")).toBe(0xff223344);
 });

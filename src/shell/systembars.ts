@@ -13,8 +13,7 @@ export function resolveSystemBars(activity: JView, overlays: readonly Overlay[])
   }
   const window = root.windowOwner;
   return { root, visible: rootWindowInsets(root).vis, status: window?.statusBarColor ?? -16777216,
-    navigation: window?.navBarColor ?? -16777216, appearance: window?.appearance ?? 0,
-    mask: window?.appearanceMask ?? 0, systemUi: root.systemUiVisibility };
+    navigation: window?.navBarColor ?? -16777216 };
 }
 type SystemBars = ReturnType<typeof resolveSystemBars>;
 export function drawSystemBarBackgrounds(ctx: OffscreenCanvasRenderingContext2D, bars: SystemBars) {
