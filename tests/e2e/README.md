@@ -35,8 +35,9 @@ test. Live missing APIs, native requirements, runtime errors and browser errors 
 as observed gaps. Inspect `actual-fast/<flow>/run.json` and each step's `.ui.json` after a
 failure; the quick pass does not rerun a failed flow.
 
-Two five-job all-step passes took 62.7 and 63.0 seconds, with all 13 flows passing. The quick
-lane uses at most five jobs and starts longer flows first using prior run durations when available.
+After correcting Lichess launch readiness, two five-job all-step passes took 61.2 and 61.9
+seconds, with all 13 flows passing. The quick lane defaults to at most five jobs and starts
+longer flows first using prior run durations when available.
 Motion frame rates are informational in parallel runs; use `--jobs 1` for their frame-rate gates. Eight fast flows have Android
 visual checkpoints. Those compare the launch or core result where references exist; later
 live steps are semantic checks and do not claim Android visual parity.

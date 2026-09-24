@@ -182,8 +182,16 @@ its isolated quick flow then passed 16/16 steps.
 Composite state checks now read one UI-tree snapshot per poll. State checks can require a
 short stable interval, and uncaptured quick steps no longer wait for an extra frame after
 their declared observation time. Prior measured flow durations guide queue order on repeat
-runs. At five jobs, two 13-flow, all-action runs passed in 62.7 and 63.0 seconds; at six
-jobs, Lichess, TikTok and YouTube failed under load in a 73.1-second run. The remaining
+runs. At five jobs, two 13-flow, all-action runs passed in 62.7 and 63.0 seconds. A later
+five-job run failed Lichess launch with 18 GL frames, short of its 20-frame readiness gate.
+Lichess later rendered the correct home screen in failing runs with only 18 GL frames:
+the launch test required 20, so a static screen could never satisfy it. Ten frames captured
+the splash too early; 15 retained the Android visual check and passed in isolation and in
+two five-job runs. A three-second diagnostics read timed out transiently across Resy frames
+during a venue transition even though all frames reported on the next step; the read budget
+is now six seconds. The corrected five-job matrix passed twice in 61.2 and 61.9 seconds,
+so five is the quick-lane default. At six jobs, Lichess, TikTok and YouTube had failed under
+load in a 73.1-second run before the readiness correction. The remaining
 gap to one minute is real workload, including the native games' timed motion checkpoints.
 Live flows still report native and browser gaps; passing checkpoints do not imply parity.
 
