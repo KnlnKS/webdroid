@@ -259,6 +259,14 @@ separate staged audit repairs.
   broker, retaining creator UID, filter identity and wall/elapsed timing.
   Resy's embedded Firebase configuration returned HTTP 400 on both platforms;
   the test project's successful receipt does not repair Resy's configuration.
+- **Play Integrity.** The bundled microG FakeStore APK declares exported classic
+  and express IntegrityService bindings, and its bytecode contains the service
+  implementations. `GmsClient.apk` has no Play Integrity dependency or request
+  path, so no token request, Binder reply or server-verified verdict has been
+  observed in webdroid. The existing service/Binder transport is a possible
+  route for an unchanged client, not evidence that attestation works. A focused
+  client probe should compare the real request's success or error with Android
+  before any platform change. No device token or integrity verdict is synthesized.
 - **Google Maps.** After loader, Parcel, callback, graphics and ABI fixes, the
   unchanged APK rendered real tiles, directions and successive maneuvers.
   ARM64 floating arguments after v0-v7 belong on stack slots, not integer
