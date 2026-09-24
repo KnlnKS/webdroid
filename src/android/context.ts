@@ -105,6 +105,7 @@ const SERVICE_CLASS: Record<string, string> = {
   game: "android/app/GameManager",
   account: "android/accounts/AccountManager",
   power: "android/os/PowerManager",
+  performance_hint: "android/os/PerformanceHintManager",
   input: "android/hardware/input/InputManager",
   media_router: "android/media/MediaRouter",
   vibrator: "android/os/Vibrator",
@@ -150,6 +151,7 @@ SERVICE_NAME.set("android/view/WindowManager", "window");
 export function systemService(jctx: JContext | null, name: string): unknown {
   if (name === "layout_inflater") return getInflater(jctx);
   if (name === "storagestats") return null;
+  if (name === "performance_hint") return null;
   let s = services.get(name);
   if (s) return s;
   const cls = SERVICE_CLASS[name];

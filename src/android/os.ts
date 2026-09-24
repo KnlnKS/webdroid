@@ -33,6 +33,7 @@ rt.register({
     "static get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (_key: string, fallback: string | null) => fallback ?? "",
   },
 });
+rt.register({ name: "android/os/PerformanceHintManager", ctor: class extends JObj {} });
 
 class JMessageQueue extends JObj {
   owner: JLooper | null = null;
