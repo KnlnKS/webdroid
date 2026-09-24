@@ -16,13 +16,5 @@
     "bindings": [{ "name": "WEB_BRIDGES", "class_name": "WebBridgeSession" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WebBridgeSession"] }],
-  "env": {
-    "webview": {
-      "vars": { "WEBVIEW_ORIGIN": "" },
-      "durable_objects": {
-        "bindings": [{ "name": "WEB_BRIDGES", "class_name": "WebBridgeSession", "script_name": "webdroid" }]
-      }
-    }
-  },
   "observability": { "enabled": true, "head_sampling_rate": 0.1 }
 }
