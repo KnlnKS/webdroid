@@ -65,6 +65,17 @@ test("Animator clone uses the covariant framework descriptor", async () => {
   expect(await vcall(copy, "getDuration", "()J")).toBe(750n);
 });
 
+test("AnimatorSet clone owns its child animations", async () => {
+  const set = await newObj("android/animation/AnimatorSet");
+  const child = await newObj("android/animation/ValueAnimator");
+  await vcall(set, "playTogether", "([Landroid/animation/Animator;)V", [child]);
+  const copy = await vcall(set, "clone", "()Landroid/animation/AnimatorSet;");
+  expect(copy).not.toBe(set);
+  expect(copy.anims[0]).not.toBe(child);
+  await vcall(copy.anims[0], "setDuration", "(J)Landroid/animation/ValueAnimator;", 700n);
+  expect(await vcall(child, "getDuration", "()J")).toBe(300n);
+});
+
 test("the directional end callback defaults to the legacy listener", async () => {
   const listener = rt.make("test/LegacyAnimatorListener") as LegacyListener;
   const defaultEnd = (rt.link("android/animation/Animator$AnimatorListener").ctor.prototype as Record<string, (...args: unknown[]) => unknown>)[
