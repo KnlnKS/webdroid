@@ -928,8 +928,17 @@ function sbSpec(name: string): NativeSpec {
     return this;
   };
   const appendRange = async function (this: JSB, v: unknown, a: number, b: number) {
-    const str = v === null ? "null" : String(await vcall(v, "toString", "()Ljava/lang/String;"));
-    this.s += str.slice(a, b);
+    if (v === null || typeof v === "string" || v instanceof JSB) {
+      const str = v === null ? "null" : typeof v === "string" ? v : v.s;
+      if (a < 0 || b < a || b > str.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      this.s += str.slice(a, b);
+      return this;
+    }
+    const len = await vcall(v, "length", "()I") as number;
+    if (a < 0 || b < a || b > len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+    const chars = new Uint16Array(b - a);
+    for (let i = a; i < b; i++) chars[i - a] = await vcall(v, "charAt", "(I)C", i) as number;
+    this.s += charsToString(chars, 0, chars.length);
     return this;
   };
   const appendChar = app(function (v) { this.s += String.fromCharCode(v); });
