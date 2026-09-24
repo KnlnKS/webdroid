@@ -42,6 +42,23 @@ lines were live TLS timing, CDN, and object-identity variants, so this run is
 not evidence of a new platform failure or proof of parity. The five scored
 flows averaged 28.05% content difference; four use older API 35 references.
 
+The quick lane subsequently added launch-only checks for the seven live flows.
+Each ends on an observed text or GL-frame condition instead of the full flow's
+long content waits. At four jobs, all 13 checkpoints completed in 43.0 seconds;
+at the default seven jobs, they completed in 37.2 seconds. These are startup
+checks, not Android comparisons. The six deterministic flows still retain their
+full action paths and four Android visual comparisons. Live missing APIs, native
+requirements, runtime and browser errors remain in `actual-fast/summary.json`
+as observed gaps; failure to reach the screen, missing process diagnostics,
+wedges and completion timeouts fail the lane. One early Harmonic pass found a
+Google Play Services child frame before its diagnostics initialized; waiting
+up to two seconds for that process fixed the race without treating absent
+diagnostics as clean. ChatGPT's `Skip` text was unstable under four-job load;
+the welcome screen's `Continue` text completed in two isolated 9-second runs
+and the subsequent four-job and seven-job matrix runs. The latest seven-job
+run recorded 196 observed gaps, dominated by TikTok's live diagnostics; this
+count varies with network timing and is not a regression metric by itself.
+
 ## Evidence and measurement
 
 - Run real APK and bundled library bytecode. A rendered screen or empty missing-API

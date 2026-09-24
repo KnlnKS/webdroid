@@ -24,19 +24,24 @@ live network and video flows dominate that cost.
 
 Recording new goldens is a separate, manual step (below).
 
-`bun run e2e` is the default quick test. It reuses the same flows but runs only six fixed-input, fixed-clock cases. Android
-timers are advanced logically where that preserves the app's behavior; native GL games remain on
-real monotonic time. Semantic steps keep diagnostics and a frame hash without PNG readback, while
-named checkpoints retain pixels and enforce their recorded visual limits. A failure automatically
-reruns that flow into `actual-fast/failures/` with full evidence. The fast lane never replaces the
-serialized full lane as the final compatibility and performance gate.
-At `--jobs 4`, all six flows passed in 30.6 seconds on this machine. Motion frame rates are
-informational in parallel runs; use `--jobs 1` for their frame-rate gates. Four fast flows have
-Android visual checkpoints. Flappy Bird and Doodle Jump remain smoke-only because the available
-API 33 ARM64 emulator cannot install their ARM32 native libraries.
-`actual-fast/summary.json` lists every configured flow as Android-compared, smoke,
-live-not-run, or not-selected. It includes each checkpoint's measured content difference,
-limit, and Android API version, so a passing fast run cannot be mistaken for full parity.
+`bun run e2e` is the default quick test for all 13 flows. Six fixed-input flows retain every
+action. Android timers advance logically where that preserves behavior; native GL games remain
+on real monotonic time. Their semantic steps keep diagnostics and a frame hash without PNG
+readback, while named checkpoints enforce recorded Android visual limits. Seven live flows run
+only their launch step, ending when an observable screen or frame condition is reached. They
+retain process diagnostics but do not claim Android parity: missing APIs, native requirements,
+runtime errors, and browser errors are listed as observed gaps. A missing checkpoint, wedged
+main loop, missing process diagnostics, or timeout fails the quick test. Failed flows rerun
+their selected quick steps into `actual-fast/failures/` with full evidence.
+
+All 13 flows reached their quick checkpoints in 43 seconds at `--jobs 4` and 37 seconds at
+the default seven jobs on this machine. Motion frame rates are informational in parallel runs;
+use `--jobs 1` for their frame-rate gates. Four fast flows have Android visual checkpoints.
+Flappy Bird and Doodle Jump remain smoke-only because the available API 33 ARM64 emulator
+cannot install their ARM32 native libraries. The seven live startup checks lack stable Android
+references. `actual-fast/summary.json` distinguishes `compared`, `smoke`, `observed`, `failed`,
+and `not-selected` and records visual limits, Android API versions, errors, and observed gaps.
+The serialized full lane remains the final compatibility and performance gate.
 
 `bun run test:focused -- <paths>` selects dependent Bun tests through the TypeScript import graph,
 then selects fast flows from `tests/e2e/coverage-index.json`. `--base <revision>` includes committed,
@@ -58,7 +63,7 @@ bun run e2e --full --shots            # also save every distinct frame per step
 
 `--full` walks every configured flow. `--record` captures Android references and `--diff`
 rescores an existing full capture without launching a browser. `--test` selects a flow in
-each mode; the default quick mode accepts only deterministic flows.
+each mode. `--coverage` collects the six deterministic flows only.
 
 `WEBDROID_JS_FLAGS='--no-sparkplug --no-maglev'` opts either webdroid driver into a controlled
 V8-tier experiment. Leave it unset when measuring stock-browser behavior.
