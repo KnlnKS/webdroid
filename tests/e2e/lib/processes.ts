@@ -26,7 +26,7 @@ export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
   return Promise.all(page.frames().map(async (frame) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const diagnostics = await Promise.race([frame.evaluate(() => {
+      const read = () => frame.evaluate(() => {
         const wd = globalThis.wd;
         return wd ? { status: "ok" as const, pkg: wd.app()?.host.pkg ?? null, ticks: wd.ticks, missing: [...wd.rt.missing], native: [...wd.rt.nativeRequired],
           errors: wd.logs?.filter((line: string) => /^(error:|window.error:|unhandledrejection:)/.test(line)) ?? null,
@@ -35,7 +35,15 @@ export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
           compositor: Reflect.get(wd, "compositorStatus") ?? null,
           unreadAttrs: wd.unreadAttrs?.() ?? null,
           coverage: wd.jvmCoverage?.snapshot?.() ?? null } : { status: "unavailable" as const };
-      }).catch((error) => ({ status: "failure" as const, message: String(error) })),
+      });
+      const diagnostics = await Promise.race([(async () => {
+        let result = await read();
+        if (result.status === "unavailable") {
+          await frame.waitForFunction(() => !!globalThis.wd, null, { timeout: 2_000 });
+          result = await read();
+        }
+        return result;
+      })().catch((error) => ({ status: "failure" as const, message: String(error) })),
       new Promise<{ status: "failure"; message: string }>((resolve) => {
         timer = setTimeout(() => resolve({ status: "failure", message: "diagnostic timeout" }), 3000);
       })]);
