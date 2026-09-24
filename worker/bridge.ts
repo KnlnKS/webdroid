@@ -1,8 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
+import { BridgeCalls } from "../src/shell/bridgecalls";
 
 export class WebBridgeSession extends DurableObject<Env> {
-  private pending = new Map<number, (response: Response) => void>();
-  private next = 0;
+  private calls = new BridgeCalls<WebSocket>();
 
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
@@ -16,41 +16,19 @@ export class WebBridgeSession extends DurableObject<Env> {
     if (path !== "/webview-call" || request.method !== "POST") return new Response("not found", { status: 404 });
     const peer = this.ctx.getWebSockets().find((ws) => ws.readyState === WebSocket.OPEN);
     if (!peer) return new Response("bridge unavailable", { status: 410 });
-    const body = await request.text();
-    if (body.length > 1024 * 1024) return new Response("bridge request too large", { status: 413 });
-    if (request.signal.aborted) return new Response("bridge closed", { status: 410 });
-    return new Promise<Response>((resolve) => {
-      const seq = ++this.next;
-      const finish = (response: Response) => {
-        clearTimeout(timer);
-        request.signal.removeEventListener("abort", abort);
-        this.pending.delete(seq);
-        resolve(response);
-      };
-      const abort = () => finish(new Response("bridge request cancelled", { status: 408 }));
-      const timer = setTimeout(() => finish(new Response("bridge timed out", { status: 504 })), 30_000);
-      this.pending.set(seq, finish);
-      request.signal.addEventListener("abort", abort, { once: true });
-      try { peer.send(`${seq}\n${body}`); }
-      catch { finish(new Response("bridge unavailable", { status: 410 })); }
-    });
+    return this.calls.call(request, peer, () => peer.readyState === WebSocket.OPEN);
   }
 
-  webSocketMessage(_peer: WebSocket, message: string | ArrayBuffer): void {
-    if (typeof message !== "string") return;
-    const at = message.indexOf("\n"), seq = Number(message.slice(0, at));
-    if (at < 1 || !Number.isSafeInteger(seq)) return;
-    this.pending.get(seq)?.(new Response(message.slice(at + 1), {
-      headers: { "content-type": "application/json", "cache-control": "no-store" },
-    }));
+  webSocketMessage(peer: WebSocket, message: string | ArrayBuffer): void {
+    if (typeof message === "string") this.calls.reply(peer, message);
   }
 
-  webSocketClose(_peer: WebSocket): void {
-    for (const finish of this.pending.values()) finish(new Response("bridge closed", { status: 410 }));
+  webSocketClose(peer: WebSocket): void {
+    this.calls.close(peer);
   }
 
   webSocketError(peer: WebSocket): void {
     peer.close(1011, "bridge error");
-    for (const finish of this.pending.values()) finish(new Response("bridge closed", { status: 410 }));
+    this.calls.close(peer);
   }
 }
