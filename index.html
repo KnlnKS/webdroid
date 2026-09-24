@@ -1,18 +1,73 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<title>webdroid</title>
+<title>Webdroid — Android in your browser</title>
 <link rel="icon" type="image/png" href="./public/webdroid-logo.png">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  html, body { margin: 0; height: 100%; background: #16181c; color: #ddd;
-    font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
-  #root { display: flex; height: 100%; align-items: center; justify-content: center; gap: 24px; }
-</style>
+<meta name="description" content="Open an Android APK, XAPK or APKS package and run it in your browser with Webdroid.">
+<link rel="stylesheet" href="./src/shell/ui.css">
 </head>
 <body>
-<div id="root"></div>
+<main id="root" data-state="idle">
+  <section id="side" aria-labelledby="intro-title">
+    <header id="intro">
+      <a class="brand" href="/" aria-label="Webdroid home"><span class="brand-mark" aria-hidden="true">w</span>webdroid</a>
+      <h1 id="intro-title">Android apps.<br>Right in your browser.</h1>
+      <p class="intro-copy">Open a package to get started. No device or installation needed.</p>
+    </header>
+    <div id="local-loader">
+      <svg class="package-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5v8l-9 5-9-5V8Z M3 8l9 5 9-5 M12 13v8 M7.5 5.5l9 5v4"/></svg>
+      <strong>Bring your Android app</strong>
+      <p id="drop-hint">Drag a package here, or choose a file.</p>
+      <button id="choose-file" class="primary" type="button" disabled>Open APK</button>
+      <input id="apk-picker" type="file" accept=".apk,.xapk,.apks" hidden>
+      <small>APK, XAPK or APKS</small>
+    </div>
+    <p class="privacy-note">Your package stays in this browser. Apps may connect to the internet.</p>
+    <section id="session" aria-label="App session" hidden>
+      <div class="session-heading"><span id="state-dot" aria-hidden="true"></span><strong id="package-name"></strong></div>
+      <p id="status" role="status" aria-live="polite" aria-atomic="true"></p>
+      <p id="recovery-hint" hidden></p>
+      <div id="recovery" hidden><button id="retry" type="button">Try again</button><button id="reload" type="button">Reload Webdroid</button></div>
+      <details id="error-details" hidden><summary>Error details</summary><pre id="error-message"></pre></details>
+    </section>
+    <p id="notice" role="alert" hidden></p>
+    <details id="screencfg">
+      <summary><span>Device settings</span><span id="profile-label" class="summary-meta">Default</span></summary>
+      <form id="screen-form" class="disclosure-content">
+        <label for="cfg-profile">Device profile</label>
+        <select id="cfg-profile"><option value="default">Default phone</option><option value="custom">Custom</option></select>
+        <fieldset id="custom-screen" hidden>
+          <legend class="sr-only">Custom screen</legend>
+          <label>Width <span class="unit">px</span><input id="cfg-w" type="number" min="1" step="1" required></label>
+          <label>Height <span class="unit">px</span><input id="cfg-h" type="number" min="1" step="1" required></label>
+          <label>Density <span class="unit">dpi</span><input id="cfg-dpi" type="number" min="1" step="1" required></label>
+        </fieldset>
+        <p id="cfg-note"></p>
+        <p class="settings-hint">Applying a profile reloads Webdroid.</p>
+        <div class="settings-actions"><button id="cfg-apply" type="submit">Apply profile</button><button id="cfg-reset" class="quiet" type="button">Reset</button></div>
+      </form>
+    </details>
+    <details id="samples" hidden><summary>Local packages</summary><div id="launcher" class="disclosure-content"></div></details>
+    <details id="diagnostics" hidden><summary>Diagnostics<span id="diagnostic-count" class="summary-meta"></span></summary><div class="disclosure-content"><p id="runtime-error"></p><p id="native"></p><pre id="missing"></pre></div></details>
+  </section>
+  <section id="stage" aria-label="Android device">
+    <div id="phone">
+      <div id="display">
+        <canvas id="screen" aria-label="Android app screen"></canvas>
+        <div id="weblayer"></div>
+        <div id="empty-screen"><span class="empty-icon" aria-hidden="true"></span><strong>Your app will appear here</strong><span>Ready when you are.</span></div>
+      </div>
+      <nav id="nav" aria-label="Device navigation">
+        <button id="btn-back" class="navb" type="button" aria-label="Back" title="Back" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button>
+        <button id="btn-home" class="navb" type="button" aria-label="Home — close app" title="Home — close app" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg></button>
+      </nav>
+    </div>
+  </section>
+</main>
+<textarea id="kbd" class="sr-only" aria-label="Android keyboard input" tabindex="-1" autocomplete="off"></textarea>
+<noscript>Enable JavaScript to run Android apps in Webdroid.</noscript>
 <script type="module" src="./src/main.ts"></script>
 </body>
 </html>

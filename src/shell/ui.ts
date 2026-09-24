@@ -1,0 +1,228 @@
+import { DEFAULT_SCREEN, device, parseScreen, storeScreen } from "./config";
+
+type SessionState =
+  | { kind: "loading"; file: string; stage: string }
+  | { kind: "running"; file: string; label: string }
+  | { kind: "failed"; file: string; error: unknown; retry: (() => void) | null };
+
+function errorText(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    if ("msg" in error) return String(error.msg);
+    if ("message" in error) return String(error.message);
+  }
+  return String(error);
+}
+
+export function createShell(actions: { launch: (name: string, file?: File) => void; back: () => void }) {
+  const root = document.querySelector<HTMLElement>("#root")!;
+  const canvas = document.querySelector<HTMLCanvasElement>("#screen")!;
+  const phone = document.querySelector<HTMLElement>("#phone")!;
+  const stage = document.querySelector<HTMLElement>("#stage")!;
+  const picker = document.querySelector<HTMLInputElement>("#apk-picker")!;
+  const choose = document.querySelector<HTMLButtonElement>("#choose-file")!;
+  const back = document.querySelector<HTMLButtonElement>("#btn-back")!;
+  const home = document.querySelector<HTMLButtonElement>("#btn-home")!;
+  const launcher = document.querySelector<HTMLElement>("#launcher")!;
+  const settings = document.querySelector<HTMLDetailsElement>("#screencfg")!;
+  const notice = document.querySelector<HTMLElement>("#notice")!;
+  const status = document.querySelector<HTMLElement>("#status")!;
+  const retry = document.querySelector<HTMLButtonElement>("#retry")!;
+  const reload = document.querySelector<HTMLButtonElement>("#reload")!;
+  const diagnostic = document.querySelector<HTMLDetailsElement>("#diagnostics")!;
+  let session: SessionState | null = null;
+
+  const announce = (message: string) => { notice.textContent = message; notice.hidden = !message; };
+  const reset = () => {
+    const url = new URL(location.href);
+    url.searchParams.delete("apk");
+    location.replace(url.href);
+  };
+  home.addEventListener("click", reset);
+  reload.addEventListener("click", reset);
+  back.addEventListener("click", actions.back);
+  choose.addEventListener("click", () => {
+    if (session?.kind === "running" || (session?.kind === "failed" && !session.retry)) reset();
+    else picker.click();
+  });
+  retry.addEventListener("click", () => {
+    if (session?.kind === "failed") session.retry?.();
+  });
+
+  function openFiles(files: FileList) {
+    if (session?.kind === "loading") return;
+    if (session?.kind === "running" || (session?.kind === "failed" && !session.retry)) {
+      announce("Return home to open another app in a fresh session.");
+      return;
+    }
+    const file = files[0];
+    if (!file) return;
+    if (files.length !== 1) { announce("Choose one package at a time."); return; }
+    if (!/\.(?:apk|xapk|apks)$/i.test(file.name)) { announce("Choose an APK, XAPK or APKS file."); return; }
+    actions.launch(file.name, file);
+  }
+  picker.addEventListener("change", () => {
+    if (picker.files) openFiles(picker.files);
+    picker.value = "";
+  });
+  document.addEventListener("dragover", (event) => {
+    if (!event.dataTransfer?.types.includes("Files")) return;
+    event.preventDefault();
+    if (session?.kind !== "loading") document.body.classList.add("dragging");
+  });
+  document.addEventListener("dragleave", (event) => { if (!event.relatedTarget) document.body.classList.remove("dragging"); });
+  document.addEventListener("drop", (event) => {
+    if (!event.dataTransfer?.types.includes("Files")) return;
+    event.preventDefault();
+    document.body.classList.remove("dragging");
+    openFiles(event.dataTransfer.files);
+  });
+  root.addEventListener("pointerdown", ({ target }) => {
+    if (target instanceof Element && target.closest("button, summary") && !root.hasAttribute("data-pointer")) root.dataset.pointer = "";
+  }, { passive: true });
+  document.addEventListener("keydown", () => { if (root.hasAttribute("data-pointer")) delete root.dataset.pointer; });
+
+  configureScreen();
+  const resizeDisplay = fitDisplay(canvas, phone, stage);
+
+  choose.disabled = false;
+  return {
+    canvas,
+    kbd: document.querySelector<HTMLTextAreaElement>("#kbd")!,
+    webLayer: document.querySelector<HTMLElement>("#weblayer")!,
+    resizeDisplay,
+    setState(next: SessionState) {
+      if (session?.kind === "loading" && next.kind === "loading") {
+        session = next;
+        status.textContent = next.stage;
+        return;
+      }
+      if (next.kind === "loading") announce("");
+      session = next;
+      root.dataset.state = next.kind;
+      document.querySelector<HTMLElement>("#session")!.hidden = false;
+      document.querySelector<HTMLElement>("#package-name")!.textContent = next.kind === "running" ? next.label : next.file;
+      const empty = document.querySelector<HTMLElement>("#empty-screen")!;
+      empty.hidden = next.kind !== "failed";
+      if (next.kind === "failed") {
+        empty.querySelector("strong")!.textContent = "Your app couldn’t start";
+        empty.lastElementChild!.textContent = "See the error details to continue.";
+      }
+      const busy = next.kind === "loading", failed = next.kind === "failed";
+      const mustReload = failed && !next.retry;
+      const started = next.kind === "running" || mustReload;
+      choose.disabled = picker.disabled = busy;
+      launcher.inert = busy;
+      if (started) document.querySelector<HTMLDetailsElement>("#samples")!.hidden = true;
+      settings.hidden = busy || started;
+      back.disabled = next.kind !== "running";
+      home.disabled = busy;
+      const loader = document.querySelector<HTMLElement>("#local-loader")!;
+      loader.hidden = mustReload;
+      loader.setAttribute("aria-busy", String(busy));
+      document.querySelector<HTMLElement>(".privacy-note")!.hidden = mustReload;
+      document.querySelector<HTMLElement>("#recovery")!.hidden = !failed;
+      const hint = document.querySelector<HTMLElement>("#recovery-hint")!;
+      hint.hidden = !failed;
+      const details = document.querySelector<HTMLDetailsElement>("#error-details")!;
+      details.hidden = !failed;
+      details.open = false;
+      retry.hidden = !failed || !next.retry;
+      reload.hidden = !failed;
+      choose.textContent = next.kind === "running" ? "Open another app" : "Open APK";
+      status.textContent = next.kind === "loading" ? next.stage : next.kind === "running" ? "Running" : "Couldn’t open this app";
+      if (failed) {
+        hint.textContent = !next.retry ? "Reload to start a fresh session, then choose your package again." : "Try again, or choose another package. Check that the file is complete.";
+        document.querySelector<HTMLElement>("#error-message")!.textContent = errorText(next.error);
+      }
+      if (next.kind === "running" && matchMedia("(max-width: 760px)").matches) stage.scrollIntoView({ block: "start" });
+    },
+    reportError(error: unknown) {
+      diagnostic.hidden = false;
+      document.querySelector<HTMLElement>("#runtime-error")!.textContent = errorText(error);
+      announce("The app reported an error. See Diagnostics for details.");
+    },
+    setMissing(items: string[]) {
+      diagnostic.hidden = items.length === 0 && !document.querySelector<HTMLElement>("#runtime-error")!.textContent && !document.querySelector<HTMLElement>("#native")!.textContent;
+      document.querySelector<HTMLElement>("#diagnostic-count")!.textContent = items.length ? String(items.length) : "";
+      document.querySelector<HTMLElement>("#missing")!.textContent = `Missing APIs (${items.length}):\n${items.slice(-60).join("\n")}`;
+    },
+    setNative(lib: string, abi: string) {
+      diagnostic.hidden = false;
+      document.querySelector<HTMLElement>("#native")!.textContent = `Native code required: ${lib} (${abi})`;
+    },
+    addPackage(file: string) {
+      document.querySelector<HTMLDetailsElement>("#samples")!.hidden = false;
+      const button = document.createElement("button");
+      button.className = "appcard";
+      const name = document.createElement("strong"), filename = document.createElement("small");
+      name.textContent = file.replace(/\.(?:xapk|apks|apk)$/i, "").replace(/[-_]v?\d[\d.]*$/, "").replace(/[-_]+/g, " ");
+      filename.textContent = file;
+      button.append(name, filename);
+      button.addEventListener("click", () => actions.launch(file));
+      launcher.append(button);
+    },
+  };
+}
+
+function configureScreen() {
+  const profile = document.querySelector<HTMLSelectElement>("#cfg-profile")!;
+  const custom = document.querySelector<HTMLFieldSetElement>("#custom-screen")!;
+  const width = document.querySelector<HTMLInputElement>("#cfg-w")!;
+  const height = document.querySelector<HTMLInputElement>("#cfg-h")!;
+  const density = document.querySelector<HTMLInputElement>("#cfg-dpi")!;
+  const note = document.querySelector<HTMLElement>("#cfg-note")!;
+  width.value = String(device.width);
+  height.value = String(device.height);
+  density.value = String(device.densityDpi);
+  profile.value = device.width === DEFAULT_SCREEN.width && device.height === DEFAULT_SCREEN.height && device.densityDpi === DEFAULT_SCREEN.densityDpi ? "default" : "custom";
+  document.querySelector<HTMLElement>("#profile-label")!.textContent = profile.value === "default" ? "Default" : "Custom";
+  const selectedScreen = () => profile.value === "default" ? DEFAULT_SCREEN : parseScreen(`${width.value}x${height.value}@${density.value}`);
+  function describeScreen() {
+    custom.hidden = custom.disabled = profile.value === "default";
+    const screen = selectedScreen();
+    note.textContent = screen
+      ? `${Math.round(screen.width * 160 / screen.densityDpi)} × ${Math.round(screen.height * 160 / screen.densityDpi)} dp · ${screen.width} × ${screen.height} px`
+      : "Enter positive whole numbers for each dimension.";
+  }
+  describeScreen();
+  profile.addEventListener("change", describeScreen);
+  custom.addEventListener("input", describeScreen);
+  function applyScreen(useDefault: boolean) {
+    const screen = useDefault ? null : selectedScreen();
+    if (!useDefault && !screen) { describeScreen(); return; }
+    storeScreen(screen);
+    // A URL profile otherwise overrides the preference again after reloading.
+    const url = new URL(location.href);
+    url.searchParams.delete("screen");
+    location.replace(url.href);
+  }
+  document.querySelector<HTMLFormElement>("#screen-form")!.addEventListener("submit", (event) => {
+    event.preventDefault();
+    applyScreen(profile.value === "default");
+  });
+  document.querySelector<HTMLButtonElement>("#cfg-reset")!.addEventListener("click", () => applyScreen(true));
+}
+
+function fitDisplay(canvas: HTMLCanvasElement, phone: HTMLElement, stage: HTMLElement) {
+  function fit() {
+    const chromeWidth = phone.offsetWidth - canvas.offsetWidth;
+    const chromeHeight = phone.offsetHeight - canvas.offsetHeight;
+    const scale = Math.min(Math.max(1, stage.clientWidth - chromeWidth) / device.width,
+      Math.max(1, window.innerHeight - 64 - chromeHeight) / device.height, 1);
+    canvas.style.width = `${device.width * scale}px`;
+    canvas.style.height = `${device.height * scale}px`;
+  }
+  function resizeDisplay() {
+    canvas.width = device.width;
+    canvas.height = device.height;
+    fit();
+  }
+  resizeDisplay();
+  window.addEventListener("resize", fit);
+  let stageWidth = 0;
+  new ResizeObserver(([entry]) => {
+    if (entry && entry.contentRect.width !== stageWidth) { stageWidth = entry.contentRect.width; fit(); }
+  }).observe(stage);
+
+  return resizeDisplay;
+}

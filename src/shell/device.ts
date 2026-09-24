@@ -112,7 +112,7 @@ function visibleActivities(): JActivity[] {
 export async function bootApk(input: Uint8Array | Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null, prepared?: () => void): Promise<BootedApp> {
   // The framework package must be in place before anything links, and restored storage roots
   // must resolve before the app reads a persisted tree URI: it caches the answer for the session.
-  onStatus("unpacking apk…");
+  onStatus("Reading package…");
   const install = input instanceof Uint8Array ? openInstall(input) : input;
   const zip = install.zip;
   const manifest = parseAXML(zip["AndroidManifest.xml"]);
@@ -129,7 +129,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     if (sp.bytes) vfs.write(apkPath(sp.name), sp.bytes);
     else vfs.mount(apkPath(sp.name), sp.source);
   }
-  onStatus("loading dex…");
+  onStatus("Loading app code…");
   // The apk goes in first: loadDex is first-wins by name, so an app shipping its own copy of a
   // framework class keeps it, as on a device where the app's dex is ahead on the class path.
   for (const name of Object.keys(zip)) {
@@ -171,7 +171,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     providers.set(qualify(pkg, attrStr(c, "name") ?? ""), c);
   }
 
-  onStatus("resources…");
+  onStatus("Loading resources…");
   const arsc = new Arsc(zip["resources.arsc"], (p) => zip[p] ?? null);
   for (const sp of install.splits) if (sp.resources) arsc.add(sp.resources);
   const res = new Resources(arsc, zip, install.lazyEntries);
@@ -220,7 +220,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   prepared?.();
 
   return onMain(async () => {
-    onStatus("starting app…");
+    onStatus("Starting app…");
     const baseCtx = new JContext();
     baseCtx.$host = host;
     let appInfo;
@@ -259,7 +259,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
 
     booted = { host, mainActivityCls: mainActivity ?? "", stack: [], label };
     if (!processName && mainActivity) {
-      onStatus("launching " + mainActivity.split("/").pop());
+      onStatus("Opening app…");
       const intent = new JIntent();
       intent.action = "android.intent.action.MAIN";
       intent.categories.add("android.intent.category.LAUNCHER");

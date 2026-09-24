@@ -11,7 +11,7 @@ import { mangleMethod } from "./jvm/abi";
 import { loadFramework } from "./android/framework";
 import { loadSkiaText } from "./android/skia-text";
 import { unreadAttrs } from "./android/res";
-import { bootApk, tick, dispatchPointer, pressBack, currentApp, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas, frame, present } from "./shell/device";
+import { bootApk, tick, dispatchPointer, pressBack, currentApp, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { perf, perfReset } from "./perf";
@@ -24,7 +24,7 @@ import { overlays } from "./android/popup";
 import { setWebLayer, webViewInfo } from "./android/webkit";
 import { native } from "./native/debug";
 import { jitStats } from "./native/core";
-import { device, parseScreen, readStoredScreen, storeScreen, type Screen } from "./shell/config";
+import { createShell } from "./shell/ui";
 import { openInstallLocal, openInstallRemote } from "./shell/install";
 import { activateLocalAssets, localAsset } from "./shell/localassets";
 import { vfs } from "./jvm/natives/jio";
@@ -40,182 +40,28 @@ configureJvm({ profile: params.get("jvmProfile") === "1", tier: parseJvmTier(par
 configureJvmCoverage(params.get("fuzzCoverage") === "1");
 const resetPerf = (): void => { perfReset(); jvmProfiler.reset(); };
 
-const root = document.getElementById("root")!;
-
-/** the shell's own chrome, shared between the markup that declares it and the fit that subtracts it */
-const SIDE_W = 340, GAP = 20, MARGIN = 24;
-root.innerHTML = `
-<div style="display:flex;align-items:center;gap:${GAP}px;height:100%">
-  <div id="phone" style="position:relative;background:#0a0a0c;border-radius:28px;padding:14px 10px;box-shadow:0 18px 60px rgba(0,0,0,.6), inset 0 0 0 2px #2a2d33">
-    <div style="position:relative">
-      <canvas id="screen" width="${SCREEN_W}" height="${SCREEN_H}" style="display:block;border-radius:16px;background:#000;touch-action:none"></canvas>
-      <div id="weblayer" style="position:absolute;inset:0;pointer-events:none;overflow:hidden;border-radius:16px"></div>
-    </div>
-    <div id="nav" style="display:flex;justify-content:space-around;padding-top:10px">
-      <button class="navb" id="btn-back" title="Back">◁</button>
-      <button class="navb" id="btn-home" title="Home">◯</button>
-    </div>
-  </div>
-  <div id="side" style="width:${SIDE_W}px;max-height:92vh;overflow:auto;font:12px/1.5 ui-monospace,monospace;color:#9aa">
-    <div id="status" style="color:#7c8; margin-bottom:8px">webdroid</div>
-    <div id="native" style="color:#fc6"></div>
-    <div id="screencfg">
-      <label>w <input id="cfg-w" type="number" min="1" step="1"></label>
-      <label>h <input id="cfg-h" type="number" min="1" step="1"></label>
-      <label>dpi <input id="cfg-dpi" type="number" min="1" step="1"></label>
-      <button id="cfg-apply">Apply</button>
-      <button id="cfg-reset" title="back to the built-in profile">Reset</button>
-      <div id="cfg-note"></div>
-    </div>
-    <div id="launcher"></div>
-    <div id="local-loader">
-      <label for="apk-picker" class="appcard">Choose APK or XAPK</label>
-      <input id="apk-picker" type="file" accept=".apk,.xapk,.apks" hidden>
-      <div id="drop-hint">Or drop package files here</div>
-    </div>
-    <div id="missing" style="white-space:pre-wrap"></div>
-  </div>
-</div>
-<textarea id="kbd" style="position:absolute;left:-9999px;top:0" autocomplete="off"></textarea>
-<style>
-  html, body { overscroll-behavior: none }
-  .navb { background:none;border:none;color:#9aa;font-size:20px;cursor:pointer;padding:2px 26px;border-radius:8px }
-  .navb:hover { background:#22252b }
-  .appcard { display:flex;align-items:center;gap:10px;background:#1d2026;border:1px solid #2a2e35;border-radius:10px;
-    padding:10px 12px;margin:6px 0;cursor:pointer;color:#dde }
-  .appcard:hover { background:#252a32 }
-  #screencfg { display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:8px 0 10px;
-    padding:8px 10px;background:#1d2026;border:1px solid #2a2e35;border-radius:10px }
-  #screencfg[hidden] { display:none }
-  #screencfg label { display:flex;align-items:center;gap:4px;color:#678 }
-  #screencfg input { width:52px;background:#12141a;border:1px solid #2a2e35;border-radius:6px;
-    color:#dde;padding:3px 5px;font:inherit }
-  #screencfg button { background:#252a32;border:1px solid #343a44;border-radius:6px;color:#dde;
-    padding:3px 9px;cursor:pointer;font:inherit }
-  #screencfg button:hover { background:#2e343d }
-  #cfg-note { flex-basis:100%;color:#678 }
-  #drop-hint { color:#678;padding:2px 12px 10px }
-  body.dragging #local-loader { outline:2px dashed #7c8;border-radius:10px }
-</style>`;
-
-const canvas = document.getElementById("screen") as HTMLCanvasElement;
+const back = () => { if (!processBroker().back(PROCESS_PID)) return pressBack(); };
+const shell = createShell({ launch: (file, local) => { void boot(file, local); }, back: () => { void back(); } });
+const { canvas, kbd } = shell;
 setScreenCanvas(canvas);
-const statusEl = document.getElementById("status")!;
-const missingEl = document.getElementById("missing")!;
-const launcherEl = document.getElementById("launcher")!;
-const kbd = document.getElementById("kbd") as HTMLTextAreaElement;
-// WebViews are <iframe>s over the canvas: the framework positions them, the shell owns the layer
-setWebLayer(document.getElementById("weblayer")!);
-
-/** Fit the framebuffer into what the viewport has left, measuring the bezel from the stylesheet,
- *  and never past 1 CSS px per device px. */
-const phoneEl = document.getElementById("phone")!;
-function fit() {
-  const chromeW = phoneEl.offsetWidth - canvas.offsetWidth;
-  const chromeH = phoneEl.offsetHeight - canvas.offsetHeight;
-  const availW = window.innerWidth - SIDE_W - GAP - chromeW - MARGIN;
-  const availH = window.innerHeight - chromeH - MARGIN;
-  const s = Math.max(0.1, Math.min(availW / SCREEN_W, availH / SCREEN_H, 1));
-  canvas.style.width = `${SCREEN_W * s}px`;
-  canvas.style.height = `${SCREEN_H * s}px`;
-}
-fit();
-window.addEventListener("resize", fit);
-setDisplayChangeHandler(() => {
-  canvas.width = SCREEN_W;
-  canvas.height = SCREEN_H;
-  fit();
-});
-
-// ── the screen setting. Applying reloads: the profile is read once at module init, before
-// anything that derives from it, so a reload is correct by construction and costs the frame
-// path nothing. It is also what a device does when its display size changes — it relaunches.
-const screenCfgEl = document.getElementById("screencfg")!;
-const cfgW = document.getElementById("cfg-w") as HTMLInputElement;
-const cfgH = document.getElementById("cfg-h") as HTMLInputElement;
-const cfgDpi = document.getElementById("cfg-dpi") as HTMLInputElement;
-const cfgNote = document.getElementById("cfg-note")!;
-cfgW.value = String(device.width);
-cfgH.value = String(device.height);
-cfgDpi.value = String(device.densityDpi);
-const describe = () => {
-  const s = parseScreen(`${cfgW.value}x${cfgH.value}@${cfgDpi.value}`);
-  // dp size is what decides which layout an app picks, so show it rather than make it a surprise
-  cfgNote.textContent = s
-    ? `${Math.round(s.width / (s.densityDpi / 160))}×${Math.round(s.height / (s.densityDpi / 160))}dp` +
-      (readStoredScreen() ? "" : " (built-in)")
-    : "not a screen size";
-};
-describe();
-for (const el of [cfgW, cfgH, cfgDpi]) el.addEventListener("input", describe);
-const applyScreen = (s: Screen | null) => { storeScreen(s); location.reload(); };
-document.getElementById("cfg-apply")!.addEventListener("click", () => {
-  const s = parseScreen(`${cfgW.value}x${cfgH.value}@${cfgDpi.value}`);
-  if (s) applyScreen(s); else describe();
-});
-document.getElementById("cfg-reset")!.addEventListener("click", () => applyScreen(null));
+setWebLayer(shell.webLayer);
+setDisplayChangeHandler(shell.resizeDisplay);
 
 let missingDirty = false;
 rt.onMissing = () => { missingDirty = true; };
 setInterval(() => {
   if (!missingDirty) return;
   missingDirty = false;
-  const items = [...rt.missing];
-  missingEl.textContent = `missing APIs (${items.length}):\n` + items.slice(-60).join("\n");
+  shell.setMissing([...rt.missing]);
 }, 800);
-rt.onUncaught = (e: any) => {
-  statusEl.textContent = "uncaught: " + (e?.msg ?? e);
-  statusEl.style.color = "#e77";
-};
-const nativeEl = document.getElementById("native")!;
-rt.onNativeRequired = (lib, abi) => { nativeEl.textContent = "native code required: " + lib + " (" + abi + ")"; };
+rt.onUncaught = shell.reportError;
+rt.onNativeRequired = shell.setNative;
 
-const back = () => { if (!processBroker().back(PROCESS_PID)) return pressBack(); };
-
-// The android resource package is the same for every app: start it now so a boot never waits.
 void loadFramework();
 
-function addCard(file: string, launch: () => void) {
-  const name = file.replace(/\.(?:xapk|apks|apk)$/i, "").replace(/[-_]v?\d[\d.]*$/, "").replace(/[-_]+/g, " ");
-  const el = document.createElement("button");
-  el.className = "appcard";
-  el.innerHTML = `<b></b><span style="margin-left:auto;color:#678"></span>`;
-  el.firstElementChild!.textContent = name;
-  el.lastElementChild!.textContent = file;
-  el.onclick = launch;
-  launcherEl.appendChild(el);
-}
-const picker = document.getElementById("apk-picker") as HTMLInputElement;
-function launchLocal(files: FileList | File[]) {
-  const file = files[0];
-  const count = files.length;
-  picker.value = "";
-  if (!file) return;
-  if (count > 1) {
-    statusEl.textContent = "Choose one package at a time";
-    return;
-  }
-  if (!/\.(?:apk|xapk|apks)$/i.test(file.name)) {
-    statusEl.textContent = `Unsupported package: ${file.name}`;
-    return;
-  }
-  void boot(file.name, file);
-}
-picker.addEventListener("change", () => launchLocal(picker.files ?? []));
-document.addEventListener("dragover", (event) => {
-  if (!event.dataTransfer?.types.includes("Files")) return;
-  event.preventDefault();
-  document.body.classList.add("dragging");
-});
-document.addEventListener("dragleave", (event) => { if (!event.relatedTarget) document.body.classList.remove("dragging"); });
-document.addEventListener("drop", (event) => {
-  event.preventDefault();
-  document.body.classList.remove("dragging");
-  if (event.dataTransfer?.files) launchLocal(event.dataTransfer.files);
-});
 if (process.env.NODE_ENV !== "production") {
   void fetch("/apks").then((r) => r.json() as Promise<string[]>).catch(() => [] as string[]).then((files) => {
-    for (const file of files) addCard(file, () => void boot(file));
+    for (const file of files) shell.addPackage(file);
     const auto = params.get("apk");
     if (auto && files.includes(auto)) void boot(auto);
   });
@@ -243,17 +89,18 @@ window.addEventListener("error", (e) => logBuf.push("window.error: " + e.message
 window.addEventListener("unhandledrejection", (e) => logBuf.push("unhandledrejection: " + ((e.reason as any)?.message ?? (e.reason as any)?.msg ?? String(e.reason)) + "\n" + ((e.reason as any)?.stack ?? "").slice(0, 600)));
 
 let booting = false;
+// App classes remain in this realm; a second boot needs a page reload.
+let runtimeStarted = false;
 async function boot(file: string, local?: File) {
-  if (booting) return;
+  if (booting || runtimeStarted) return;
   booting = true;
-  launcherEl.inert = true;
-  picker.disabled = true;
+  shell.setState({ kind: "loading", file, stage: local ? "Opening package…" : "Downloading package…" });
   let rollbackAssets: (() => void) | undefined;
   try {
-    statusEl.textContent = (local ? "opening " : "downloading ") + file + "…";
     const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady, provisionPackages(), loadSkiaText()]);
     const assets = local ? { key: crypto.randomUUID(), install } : null;
     if (local) {
+      shell.setState({ kind: "loading", file, stage: "Preparing local app assets…" });
       await navigator.serviceWorker.register("/webview-worker.js");
       await navigator.serviceWorker.ready;
       if (!navigator.serviceWorker.controller) await new Promise<void>((resolve) => navigator.serviceWorker.addEventListener("controllerchange", () => resolve(), { once: true }));
@@ -261,21 +108,18 @@ async function boot(file: string, local?: File) {
     rollbackAssets = activateLocalAssets(assets);
     const t0 = performance.now();
     connectProcess();
-    await bootApk(install, (s) => { statusEl.textContent = s; }, assets?.key ?? file, null, registerForegroundProcess);
+    runtimeStarted = true;
+    const app = await bootApk(install, (stage) => shell.setState({ kind: "loading", file, stage }), assets?.key ?? file, null, registerForegroundProcess);
     void provisionServices({ attestationEnabled: params.get("attestation") === "1" })
       .then(() => processBroker().boot()).catch((error) => console.error("[provision]", error));
     perf.bootMs = performance.now() - t0;
-    statusEl.textContent = `running (boot ${perf.bootMs.toFixed(0)}ms)` + (rt.nativeRequired.size ? " — needs native code" : "");
-    screenCfgEl.hidden = true;
+    shell.setState({ kind: "running", file, label: app.label });
   } catch (e) {
     rollbackAssets?.();
     console.error(e);
-    statusEl.textContent = "boot failed: " + ((e as any)?.msg ?? e);
-    statusEl.style.color = "#e77";
+    shell.setState({ kind: "failed", file, error: e, retry: runtimeStarted ? null : () => { void boot(file, local); } });
   } finally {
     booting = false;
-    launcherEl.inert = false;
-    picker.disabled = false;
   }
 }
 
@@ -467,19 +311,7 @@ setInterval(() => {
   if (performance.now() - lastTick > 40) doTick();
 }, 33);
 
-frame.fillStyle = "#111";
-frame.fillRect(0, 0, SCREEN_W, SCREEN_H);
-frame.fillStyle = "#445";
-frame.font = `${device.dp(20)}px system-ui`;
-frame.textAlign = "center";
-frame.fillText("webdroid", SCREEN_W / 2, SCREEN_H / 2 - device.dp(10));
-frame.font = `${device.dp(13)}px system-ui`;
-frame.fillText("pick an app on the right →", SCREEN_W / 2, SCREEN_H / 2 + device.dp(20));
-present();
-
 attachIme(canvas, kbd);
-document.getElementById("btn-back")!.addEventListener("click", () => void back());
-document.getElementById("btn-home")!.addEventListener("click", () => location.reload());
 
 mountSystemCertificates();
 

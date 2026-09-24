@@ -28,13 +28,13 @@ function orientScreen(screen: Screen, orientation: DeviceOrientation): Screen {
 }
 
 /** A current phone: 480dpi divides both sides exactly and keeps the 360dp width bucket. */
-const DEFAULT: Screen = { width: 1080, height: 2160, densityDpi: 480 };
+export const DEFAULT_SCREEN: Readonly<Screen> = { width: 1080, height: 2160, densityDpi: 480 };
 
 /** `1080x2160@480` — the dpi is optional and falls back to the built-in profile's. */
 export function parseScreen(s: string | null | undefined): Screen | null {
   const m = /^\s*(\d+)\s*x\s*(\d+)\s*(?:@\s*(\d+))?\s*$/i.exec(s ?? "");
   if (!m) return null;
-  const width = +m[1], height = +m[2], densityDpi = m[3] ? +m[3] : DEFAULT.densityDpi;
+  const width = +m[1], height = +m[2], densityDpi = m[3] ? +m[3] : DEFAULT_SCREEN.densityDpi;
   return width > 0 && height > 0 && densityDpi > 0 ? { width, height, densityDpi } : null;
 }
 
@@ -56,7 +56,7 @@ export function storeScreen(s: Screen | null): void {
 function resolveScreen(): Screen {
   const url = typeof location !== "undefined" ? new URLSearchParams(location.search).get("screen") : null;
   const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.WEBDROID_SCREEN;
-  return parseScreen(url) ?? parseScreen(env) ?? readStoredScreen() ?? DEFAULT;
+  return parseScreen(url) ?? parseScreen(env) ?? readStoredScreen() ?? DEFAULT_SCREEN;
 }
 
 const screen = resolveScreen();
