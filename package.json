@@ -36,6 +36,7 @@
   "dependencies": {
     "acorn": "^8.18.0",
     "acorn-walk": "^8.3.5",
+    "bidi-js": "^1.1.0",
     "canvaskit-wasm": "0.38.0",
     "eslint-scope": "^9.1.2",
     "fflate": "^0.8.2",

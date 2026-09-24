@@ -3,10 +3,11 @@
 
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { vcall, vcallMaybe, vcallOn, curThread, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble } from "./jlang";
-import { strArray, jarray, utf8, slashName, dotName } from "../abi";
+import { strArray, jarray, utf8, slashName, dotName, charsToString } from "../abi";
 import { mkIter, toJsArray } from "./jutil";
 import { JDate, JCalendar, localTz, MONTHS, DAYS, pad } from "./jtime";
 import { directionality } from "../bidi";
+import bidiFactory from "bidi-js";
 import { defaultLocale, localeTag, type JLocale } from "./jvalues";
 
 class JListFormatter extends JObj {
@@ -38,9 +39,60 @@ rt.register({ name: "android/icu/text/ListFormatter", ctor: JListFormatter, meth
   },
 } });
 
+const bidiEngine = bidiFactory();
+class JBidi extends JObj {
+  text = "";
+  levels: Uint8Array<ArrayBufferLike> = new Uint8Array();
+  baseLevel = 0;
+  runs: { start: number; limit: number; level: number }[] = [];
+  setLevels(text: string, levels: Uint8Array<ArrayBufferLike>, baseLevel: number) {
+    this.text = text;
+    this.levels = levels;
+    this.baseLevel = baseLevel;
+    this.runs = [];
+    for (let start = 0; start < text.length;) {
+      const level = this.levels[start];
+      let limit = start + 1;
+      while (limit < text.length && this.levels[limit] === level) limit++;
+      this.runs.push({ start, limit, level });
+      start = limit;
+    }
+    if (!this.runs.length) this.runs.push({ start: 0, limit: 0, level: baseLevel });
+  }
+  init(text: string, flags: number) {
+    if (text == null) rt.npe();
+    let dir: "ltr" | "rtl" | "auto" = flags === 1 ? "rtl" : flags === 0 ? "ltr" : "auto";
+    if (flags === -1 && ![...text].some(c => { const d = directionality(c.codePointAt(0)!); return d === 0 || d === 1 || d === 2; })) dir = "rtl";
+    const resolved = bidiEngine.getEmbeddingLevels(text, dir);
+    this.setLevels(text, resolved.levels, resolved.paragraphs[0]?.level ?? (dir === "rtl" ? 1 : 0));
+  }
+}
 rt.register({
-  name: "java/text/Bidi", ctor: class extends JObj {},
+  name: "java/text/Bidi", ctor: JBidi,
+  statics: { DIRECTION_LEFT_TO_RIGHT: 0, DIRECTION_RIGHT_TO_LEFT: 1, DIRECTION_DEFAULT_LEFT_TO_RIGHT: -2, DIRECTION_DEFAULT_RIGHT_TO_LEFT: -1 },
   methods: {
+    "<init>(Ljava/lang/String;I)V": function (this: JBidi, text: string, flags: number) { this.init(text, flags); },
+    "<init>([CI[BIII)V": function (this: JBidi, chars: Uint16Array, start: number, _embeddings: Int8Array | null, _embStart: number, length: number, flags: number) {
+      if (!chars || start < 0 || length < 0 || start > chars.length - length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid text range");
+      this.init(charsToString(chars, start, length), flags);
+    },
+    "getLength()I": function (this: JBidi) { return this.text.length; },
+    "getBaseLevel()I": function (this: JBidi) { return this.baseLevel; },
+    "baseIsLeftToRight()Z": function (this: JBidi) { return this.baseLevel === 0 ? 1 : 0; },
+    "getLevelAt(I)I": function (this: JBidi, i: number) { return this.levels[i] ?? this.baseLevel; },
+    "getRunCount()I": function (this: JBidi) { return this.runs.length; },
+    "getRunStart(I)I": function (this: JBidi, i: number) { return this.runs[i]?.start ?? -1; },
+    "getRunLimit(I)I": function (this: JBidi, i: number) { return this.runs[i]?.limit ?? -1; },
+    "getRunLevel(I)I": function (this: JBidi, i: number) { return this.runs[i]?.level ?? -1; },
+    "isLeftToRight()Z": function (this: JBidi) { return this.baseLevel === 0 && this.runs.length === 1 && this.runs[0].level === 0 ? 1 : 0; },
+    "isRightToLeft()Z": function (this: JBidi) { return this.baseLevel === 1 && this.runs.length === 1 && this.runs[0].level === 1 ? 1 : 0; },
+    "isMixed()Z": function (this: JBidi) { return this.runs.length !== 1 || this.runs[0].level !== this.baseLevel ? 1 : 0; },
+    "createLineBidi(II)Ljava/text/Bidi;": function (this: JBidi, start: number, limit: number) {
+      if (start < 0 || limit < start || limit > this.text.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid line range");
+      const line = new JBidi();
+      line.setLevels(this.text.slice(start, limit), this.levels.slice(start, limit), this.baseLevel);
+      return line;
+    },
     "static requiresBidi([CII)Z": (text: Uint16Array | null, start: number, limit: number) => {
       if (!text) throw rt.mkThrowable("java/lang/NullPointerException", "text");
       if (start < 0 || start > limit || limit > text.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid text range");
