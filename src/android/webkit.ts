@@ -20,6 +20,10 @@ import { WEB_INJECT } from "../shell/webinject";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 
+rt.register({ name: "android/webkit/WebView$FindListener", ctor: class extends JObj {}, methods: {
+  "onFindResultReceived(IIZ)V": () => {},
+} });
+
 rt.register({
   name: "android/webkit/MimeTypeMap", ctor: class extends JObj {},
   methods: {
@@ -227,6 +231,10 @@ export class JWebView extends JViewGroup {
   client = inst("android/webkit/WebViewClient");
   chrome = inst("android/webkit/WebChromeClient");
   dl: unknown = null;
+  findListener: unknown = null;
+  findQuery = "";
+  findCount = 0;
+  findOrdinal = 0;
   url: string | null = null;
   title = "";
   progress = 0;
@@ -444,6 +452,26 @@ export class JWebView extends JViewGroup {
     if (!w) return "null";
     try { return JSON.stringify((w as unknown as { eval(s: string): unknown }).eval(js)) ?? "null"; } catch { return "null"; }
   }
+  findAll(query: string) {
+    this.findQuery = query;
+    const generation = this.gen;
+    const script = `(() => { const q = ${JSON.stringify(query.toLowerCase())}; const text = (document.body?.innerText ?? "").toLowerCase(); let count = 0, pos = 0; while (q && (pos = text.indexOf(q, pos)) !== -1) { count++; pos += q.length; } if (count) window.find(${JSON.stringify(query)}, false, false, true); return count; })()`;
+    void Promise.resolve(this.evalJs(script)).then(result => {
+      if (generation !== this.gen || query !== this.findQuery) return;
+      this.findCount = Number(result) || 0;
+      this.findOrdinal = 0;
+      this.notifyFind();
+    });
+  }
+  notifyFind() {
+    if (this.findListener) void onMain(() => vcall(this.findListener, "onFindResultReceived", "(IIZ)V", this.findOrdinal, this.findCount, 1));
+  }
+  findNext(forward: boolean) {
+    if (!this.findQuery || !this.findCount) return;
+    this.findOrdinal = (this.findOrdinal + (forward ? 1 : -1) + this.findCount) % this.findCount;
+    const script = `window.find(${JSON.stringify(this.findQuery)}, false, ${!forward}, true)`;
+    void Promise.resolve(this.evalJs(script)).then(() => this.notifyFind());
+  }
   async keyEvent(code: number, event: unknown, type: "keydown" | "keyup"): Promise<number> {
     if (await vcall(this.client, "shouldOverrideKeyEvent", "(Landroid/webkit/WebView;Landroid/view/KeyEvent;)Z", this, event)) return 1;
     const key = navigationKeys[code];
@@ -550,8 +578,15 @@ rt.register({
     "scrollTo(II)V": () => {}, "flingScroll(II)V": () => {},
     "zoomIn()Z": () => 0, "zoomOut()Z": () => 0,
     "onPause()V": () => {}, "onResume()V": () => {}, "pauseTimers()V": () => {}, "resumeTimers()V": () => {},
-    "clearCache(Z)V": () => {}, "clearFormData()V": () => {}, "clearSslPreferences()V": () => {}, "clearMatches()V": () => {},
-    "setNetworkAvailable(Z)V": () => {}, "setRendererPriorityPolicy(IZ)V": () => {}, "setFindListener(Landroid/webkit/WebView$FindListener;)V": () => {},
+    "findAllAsync(Ljava/lang/String;)V": function (this: JWebView, query: string) { this.findAll(query); },
+    "findNext(Z)V": function (this: JWebView, forward: number) { this.findNext(!!forward); },
+    "clearMatches()V": function (this: JWebView) {
+      this.findQuery = ""; this.findCount = 0; this.findOrdinal = 0;
+      void this.evalJs("window.getSelection()?.removeAllRanges()");
+    },
+    "clearCache(Z)V": () => {}, "clearFormData()V": () => {}, "clearSslPreferences()V": () => {},
+    "setNetworkAvailable(Z)V": () => {}, "setRendererPriorityPolicy(IZ)V": () => {},
+    "setFindListener(Landroid/webkit/WebView$FindListener;)V": function (this: JWebView, listener: unknown) { this.findListener = listener; },
     ...stubs(null, "getFavicon()Landroid/graphics/Bitmap;",
       "saveState(Landroid/os/Bundle;)Landroid/webkit/WebBackForwardList;",
       "restoreState(Landroid/os/Bundle;)Landroid/webkit/WebBackForwardList;",

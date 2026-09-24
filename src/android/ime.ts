@@ -587,6 +587,17 @@ rt.register({
     },
     "getDropDownBackground()Landroid/graphics/drawable/Drawable;": function (this: JAutoComplete) { return this.dropDownBackground; },
     "enoughToFilter()Z": function (this: JAutoComplete) { return this.text.length >= this.threshold ? 1 : 0; },
+    "refreshAutoCompleteResults()V": async function (this: JAutoComplete) {
+      if (await vcall(this, "enoughToFilter", "()Z")) {
+        await vcall(this, "performFiltering", "(Ljava/lang/CharSequence;I)V", this.text, 0);
+      } else {
+        await vcall(this, "dismissDropDown", "()V");
+        if (this.adapter && rt.iof(this.adapter, "android/widget/Filterable")) {
+          const filter = await vcall(this.adapter, "getFilter", "()Landroid/widget/Filter;");
+          if (filter) await vcall(filter, "filter", "(Ljava/lang/CharSequence;)V", null);
+        }
+      }
+    },
     "showDropDown()V": function (this: JAutoComplete) { this.popupShowing = 1; },
     "dismissDropDown()V": async function (this: JAutoComplete) {
       const wasShowing = this.popupShowing;
