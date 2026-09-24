@@ -165,6 +165,28 @@ not a stable performance or parity metric.
 
 ## Evidence and measurement
 
+The A64 SIMD hardware-oracle test ran JIT warmup for every one of 16 input cases per
+instruction. Reusing the instruction's code page and compiling it once preserves all
+546 instruction and input comparisons against both interpreter and JIT. The 1,347-test Bun
+suite fell from 63.1 to 9.8 seconds on this machine; typecheck and all tests passed.
+
+Resy's notification alert is optional on repeat boots. Its only available Android
+startup golden includes the alert, so that quick visual check could fail at 97% despite
+correct onboarding. The quick flow now asserts onboarding and a live search result row,
+closes repeated offer sheets, verifies a venue resource, and verifies the list after Back.
+The full Android golden is unchanged. A Resy search can return different matching venues;
+the quick query uses `Car` while the full recorded action retains `Carbone`. YouTube's
+observed SAX feature and two-rectangle Matrix failures were fixed in platform modules;
+its isolated quick flow then passed 16/16 steps.
+
+Composite state checks now read one UI-tree snapshot per poll. State checks can require a
+short stable interval, and uncaptured quick steps no longer wait for an extra frame after
+their declared observation time. Prior measured flow durations guide queue order on repeat
+runs. At five jobs, two 13-flow, all-action runs passed in 62.7 and 63.0 seconds; at six
+jobs, Lichess, TikTok and YouTube failed under load in a 73.1-second run. The remaining
+gap to one minute is real workload, including the native games' timed motion checkpoints.
+Live flows still report native and browser gaps; passing checkpoints do not imply parity.
+
 - Run real APK and bundled library bytecode. A rendered screen or empty missing-API
   set proves only the observed path. Inspect each process's diagnostics, advancing
   `wd.ticks`, frames, layout/draw errors and required natives. Auxiliary WebView

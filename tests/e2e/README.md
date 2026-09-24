@@ -8,7 +8,7 @@ should go down as webdroid improves.
 
 ```bash
 PORT=4090 bun run server.ts
-WEBDROID_URL=http://localhost:4090 bun run e2e --jobs 4
+WEBDROID_URL=http://localhost:4090 bun run e2e
 WEBDROID_URL=http://localhost:4090 bun run e2e --full --jobs 1
 ```
 
@@ -18,7 +18,7 @@ already be serving the default port. Run captures sequentially: they share outpu
 `bun run e2e --full` **never touches an emulator** and does not need the Android SDK installed —
 `adb` may be absent from `PATH` entirely. It reads `golden/`, drives webdroid over Playwright,
 and writes `actual/` + `report/index.html`. Every flow runs in its own headless browser and
-`--jobs N` (default: at most four) bounds how many run at once; each flow is scored in a
+`--jobs N` (default: at most four for the full lane) bounds how many run at once; each flow is scored in a
 subprocess as soon as it has captured. The serialized 13-flow matrix has taken 13–16 minutes;
 live network and video flows dominate that cost.
 
@@ -35,18 +35,19 @@ test. Live missing APIs, native requirements, runtime errors and browser errors 
 as observed gaps. Inspect `actual-fast/<flow>/run.json` and each step's `.ui.json` after a
 failure; the quick pass does not rerun a failed flow.
 
-The final all-step pass took 84.5 seconds at four jobs, with 11 flows passing. Motion frame rates are informational
-in parallel runs; use `--jobs 1` for their frame-rate gates. Nine fast flows have Android
+Two five-job all-step passes took 62.7 and 63.0 seconds, with all 13 flows passing. The quick
+lane uses at most five jobs and starts longer flows first using prior run durations when available.
+Motion frame rates are informational in parallel runs; use `--jobs 1` for their frame-rate gates. Eight fast flows have Android
 visual checkpoints. Those compare the launch or core result where references exist; later
 live steps are semantic checks and do not claim Android visual parity.
 Flappy Bird and Doodle Jump remain smoke-only because the available API 33 ARM64 emulator
-cannot install their ARM32 native libraries. Two live flows lack Android
+cannot install their ARM32 native libraries. Three live flows lack stable Android
 references. `actual-fast/summary.json` distinguishes `compared`, `smoke`, `observed`, `failed`,
 and `not-selected` and records visual limits, Android API versions, errors, and observed gaps.
-Live service timing can affect Resy search and ChatGPT responses. The latest four-job run
-failed because Resy did not show a matching venue row and YouTube's player stayed at
-0:00 after the pause tap. The serialized full lane remains available for
-step-by-step Android pixel analysis.
+Resy's Android launch reference includes an optional upstream alert, so its quick flow uses
+semantic onboarding, search and venue checks. Live runtime gaps remain reported diagnostics,
+not parity evidence. Six or more jobs caused live flow failures on this machine. The serialized
+full lane remains available for step-by-step Android pixel analysis.
 
 `bun run test:focused -- <paths>` selects dependent Bun tests through the TypeScript import graph,
 then selects fast flows from `tests/e2e/coverage-index.json`. `--base <revision>` includes committed,
