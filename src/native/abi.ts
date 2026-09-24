@@ -33,7 +33,7 @@ export const MEM_SIZE_INITIAL = 0x1000_0000;
 export const MEM_SIZE_A32 = 0x8000_0000;
 export const MEM_SIZE_A64 = 0xffff_0000; // 4 GiB less a page: the whole 32-bit space a WebAssembly memory can back
 /** above this the buffer backs the address planes' chunks rather than plane 0 itself (mem.ts) */
-export const POOL_BASE = 0xa000_0000;
+export const POOL_BASE = 0x8000_0000;
 /** the live size, set by mem.init */
 export let MEM_SIZE = MEM_SIZE_INITIAL;
 export function setMemSize(n: number): void { MEM_SIZE = n; }

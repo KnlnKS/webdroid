@@ -17,7 +17,7 @@ pub const ARENA_BASE: u32 = KERN_END;
 pub const MEM_SIZE_INITIAL: u32 = 0x1000_0000;
 pub const MEM_SIZE_A32: u32 = 0x8000_0000;
 pub const MEM_SIZE_A64: u32 = 0xffff_0000;
-pub const POOL_BASE: u32 = 0xa000_0000;
+pub const POOL_BASE: u32 = 0x8000_0000;
 pub const STACK_SIZE: u32 = 0x10_0000;
 pub const STACK_GUARD: u32 = 0x1_0000;
 
