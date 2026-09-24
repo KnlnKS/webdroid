@@ -9,6 +9,7 @@ import { prepareSystemPackages } from "./scripts/system-packages";
 import { ensureFrameworkRes } from "./scripts/gen-framework-res";
 
 import { WebRelay, type WebRelayData } from "./src/shell/webrelay";
+import { parseIpv4 } from "./src/shell/relay";
 import dns from "node:dns/promises";
 
 await Promise.all([prepareSystemPackages(), ensureFrameworkRes()]);
@@ -26,9 +27,11 @@ function proxyTarget(requested: string): string {
 }
 
 type TcpData = { kind: "tcp"; host: string; port: number; tls: boolean; alpn: string[]; sock: import("bun").Socket | null; ready: boolean; closed: boolean; pending: Uint8Array[]; pendingBytes: number };
+type UdpData = { kind: "udp"; sock: { send(data: Uint8Array, port: number, address: string): boolean; close(): void } | null; closed: boolean; addresses: Map<string, Promise<string>> };
+type SocketData = TcpData | UdpData | WebRelayData;
 const MAX_PENDING_TCP_BYTES = 8 * 1024 * 1024;
 
-function flushTcp(ws: import("bun").ServerWebSocket<TcpData | WebRelayData>, data: TcpData): void {
+function flushTcp(ws: import("bun").ServerWebSocket<SocketData>, data: TcpData): void {
   const socket = data.sock;
   if (!socket || !data.ready || data.closed) return;
   while (data.pending.length) {
@@ -64,7 +67,7 @@ function apkAssets(apk: string): Promise<Record<string, Uint8Array>> {
   return pending;
 }
 
-const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
+const server: Bun.Server<SocketData> = Bun.serve({
   port: Number(process.env.PORT ?? 4080),
   development: { hmr: false },
   routes: {
@@ -147,6 +150,8 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
         (addresses) => Response.json({ addresses: addresses.map((a) => a.address) }),
         (e: { code?: string }) => new Response(String(e.code ?? e), { status: e.code === "ENOTFOUND" || e.code === "ENODATA" ? 404 : 502 }));
     }
+    if (u.pathname === "/udp") return srv.upgrade(req, { data: { kind: "udp", sock: null, closed: false, addresses: new Map() } })
+      ? undefined : new Response("expected websocket", { status: 400 });
     if (u.pathname !== "/tcp") return new Response("not found", { status: 404 });
     const host = u.searchParams.get("host") ?? "";
     const port = Number(u.searchParams.get("port"));
@@ -162,6 +167,23 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
     async open(ws) {
       const d = ws.data;
       if (d.kind === "webview") { webRelay.open(d.id, ws); return; }
+      if (d.kind === "udp") {
+        try {
+          const sock = await Bun.udpSocket({ socket: {
+            data: (_socket, bytes, port, address) => {
+              const ip = parseIpv4(address.replace(/^::ffff:/, ""));
+              if (!ip || d.closed) return;
+              const frame = new Uint8Array(6 + bytes.length);
+              frame.set(ip); frame[4] = port >> 8; frame[5] = port & 255; frame.set(bytes, 6);
+              ws.send(frame);
+            },
+          } });
+          d.sock = sock;
+          if (d.closed) sock.close();
+          else ws.send("ready");
+        } catch { ws.close(4000, "UDP bind failed"); }
+        return;
+      }
       // A TLS socket silently drops (returns 0 for) anything written before its handshake
       // completes, and connect() resolves on the TCP open, not the handshake. The ready control
       // frame goes out only once the socket can carry bytes, and anything that arrives before
@@ -195,8 +217,26 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
         ws.close(4000, String(e).slice(0, 100));
       }
     },
-    message(ws, msg) {
+    async message(ws, msg) {
       if (ws.data.kind === "webview") { if (typeof msg === "string") webRelay.reply(ws, msg); return; }
+      if (ws.data.kind === "udp") {
+        if (typeof msg === "string" || msg.length < 3) return;
+        const length = msg[0], port = msg[1] << 8 | msg[2];
+        if (msg.length < 3 + length || !length || !port) return;
+        const host = new TextDecoder().decode(msg.subarray(3, 3 + length));
+        if (!/^[A-Za-z0-9.:-]{1,253}$/.test(host)) return;
+        try {
+          let resolved = ws.data.addresses.get(host);
+          if (!resolved) {
+            if (ws.data.addresses.size >= 256) ws.data.addresses.clear();
+            resolved = dns.lookup(host, { family: 4 }).then((result) => result.address);
+            ws.data.addresses.set(host, resolved);
+          }
+          const address = await resolved;
+          if (!ws.data.closed) ws.data.sock?.send(msg.subarray(3 + length), port, address);
+        } catch { ws.data.addresses.delete(host); }
+        return;
+      }
       if (typeof msg === "string") return;
       if (ws.data.ready && ws.data.pendingBytes === 0 && ws.data.sock) {
         const written = ws.data.sock.write(msg);
@@ -211,6 +251,7 @@ const server: Bun.Server<TcpData | WebRelayData> = Bun.serve({
     },
     close(ws) {
       if (ws.data.kind === "webview") webRelay.close(ws.data.id, ws);
+      else if (ws.data.kind === "udp") { ws.data.closed = true; ws.data.sock?.close(); }
       else { ws.data.closed = true; ws.data.pending.length = 0; ws.data.pendingBytes = 0; ws.data.sock?.end(); }
     },
   },
