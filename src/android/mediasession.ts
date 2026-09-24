@@ -1,8 +1,9 @@
 import { JObj, rt, noops } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
-import { curThread, idHash, vcall } from "../jvm/natives/jlang";
+import { curThread, idHash, stringHash, vcall } from "../jvm/natives/jlang";
 import { JHandler, JFnRunnable, JLooper, type JBundle } from "./os";
 import { type JContext } from "./context";
+import { JService } from "./runningservices";
 
 class JMediaSession extends JObj {
   token = new JSessionToken(this);
@@ -23,6 +24,50 @@ class JMediaSession extends JObj {
 }
 class JSessionToken extends JObj { constructor(readonly session: JMediaSession) { super(); } }
 class JMediaController extends JObj { session!: JMediaSession; }
+class JRemoteUserInfo extends JObj { packageName = ""; pid = -1; uid = -1; }
+rt.register({ name: "android/media/session/MediaSessionManager$RemoteUserInfo", ctor: JRemoteUserInfo,
+  fields: { mPackageName: "packageName", mPid: "pid", mUid: "uid" }, methods: {
+    "<init>(Ljava/lang/String;II)V": function (this: JRemoteUserInfo, packageName: string | null, pid: number, uid: number) {
+      if (packageName === null) rt.npe();
+      this.packageName = packageName!; this.pid = pid; this.uid = uid;
+    },
+    "getPackageName()Ljava/lang/String;": function (this: JRemoteUserInfo) { return this.packageName; },
+    "getPid()I": function (this: JRemoteUserInfo) { return this.pid; },
+    "getUid()I": function (this: JRemoteUserInfo) { return this.uid; },
+    "equals(Ljava/lang/Object;)Z": function (this: JRemoteUserInfo, other: unknown) {
+      return other instanceof JRemoteUserInfo && this.packageName === other.packageName && this.pid === other.pid && this.uid === other.uid ? 1 : 0;
+    },
+    "hashCode()I": function (this: JRemoteUserInfo) {
+      return Math.imul(31, Math.imul(31, Math.imul(31, 1) + stringHash(this.packageName)) + this.pid) + this.uid | 0;
+    },
+  } });
+class JMediaBrowserService extends JService { token: JSessionToken | null = null; }
+class JBrowserRoot extends JObj { rootId = ""; extras: JBundle | null = null; }
+rt.register({ name: "android/service/media/MediaBrowserService", ctor: JMediaBrowserService, sup: "android/app/Service", methods: {
+  "<init>()V": function () {},
+  "setSessionToken(Landroid/media/session/MediaSession$Token;)V": function (this: JMediaBrowserService, token: JSessionToken | null) {
+    if (!token) throw rt.mkThrowable("java/lang/IllegalArgumentException", "session token cannot be null");
+    if (this.token) throw rt.mkThrowable("java/lang/IllegalStateException", "session token already set");
+    this.token = token;
+  },
+  "getSessionToken()Landroid/media/session/MediaSession$Token;": function (this: JMediaBrowserService) { return this.token; },
+  "notifyChildrenChanged(Ljava/lang/String;)V": (parent: string | null) => {
+    if (!parent) throw rt.mkThrowable("java/lang/IllegalArgumentException", "parentId cannot be null");
+  },
+  "notifyChildrenChanged(Ljava/lang/String;Landroid/os/Bundle;)V": (parent: string | null, options: JBundle | null) => {
+    if (!parent || !options) throw rt.mkThrowable("java/lang/IllegalArgumentException", "parentId and options cannot be null");
+  },
+  "getBrowserRootHints()Landroid/os/Bundle;": () => { throw rt.mkThrowable("java/lang/IllegalStateException", "Outside onGetRoot or onLoadChildren"); },
+  "getCurrentBrowserInfo()Landroid/media/session/MediaSessionManager$RemoteUserInfo;": () => { throw rt.mkThrowable("java/lang/IllegalStateException", "Outside onGetRoot or onLoadChildren"); },
+} });
+rt.register({ name: "android/service/media/MediaBrowserService$BrowserRoot", ctor: JBrowserRoot, methods: {
+  "<init>(Ljava/lang/String;Landroid/os/Bundle;)V": function (this: JBrowserRoot, id: string | null, extras: JBundle | null) {
+    if (!id) throw rt.mkThrowable("java/lang/IllegalArgumentException", "rootId cannot be null or empty");
+    this.rootId = id; this.extras = extras;
+  },
+  "getRootId()Ljava/lang/String;": function (this: JBrowserRoot) { return this.rootId; },
+  "getExtras()Landroid/os/Bundle;": function (this: JBrowserRoot) { return this.extras; },
+} });
 
 async function initialize(session: JMediaSession, context: JContext | null, tag: string) {
   if (!context) throw rt.mkThrowable("java/lang/IllegalArgumentException", "context cannot be null");

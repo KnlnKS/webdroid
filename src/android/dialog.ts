@@ -326,6 +326,13 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "getOwnerActivity()Landroid/app/Activity;": function (this: JDialog) { return this.ownerActivity; },
   "setOwnerActivity(Landroid/app/Activity;)V": function (this: JDialog, activity: unknown) { this.ownerActivity = activity; },
   "onBackPressed()V": function (this: JDialog) { if (this.cancelable) return this.cancel(); },
+  "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JDialog, ev: { action: number; x: number; y: number }) {
+    const root = this.root;
+    if (!this.showing || !this.cancelable || !this.canceledOnTouchOutside || !root || (ev.action & 0xff) !== 1) return 0;
+    if (ev.x >= 0 && ev.x < root.width() && ev.y >= 0 && ev.y < root.height()) return 0;
+    await this.cancel();
+    return 1;
+  },
   // Window.Callback, as Dialog's defaults
   "onContentChanged()V": function () {},
   "onSaveInstanceState()Landroid/os/Bundle;": () => rt.make("android/os/Bundle"),
