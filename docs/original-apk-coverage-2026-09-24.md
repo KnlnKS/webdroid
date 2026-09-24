@@ -18,7 +18,7 @@ The active scope is the 20 APKs present before the latest additions to `apks/`. 
 | TikTok.apk | Optional bundled and vendor SDK probes | Playback/input rate and authentication/publishing remain unvalidated |
 | Twitch.xapk | Optional MIUI referrer probe | Boot only |
 | WebdroidFuzzProbe.apk | None observed | Boot only |
-| YouTube.xapk | Optional window extensions | Targeted 16-step playback passes; the later serialized matrix saw a bundled V8 memory-protection error and a fullscreen layout stall |
+| YouTube.xapk | Optional window extensions | Targeted 16-step playback passes; an ELF-image `mprotect` failure is fixed, while one later run hit a separate intermittent native zero-instruction fault |
 | calculatorm.apk | None observed | Covered by E2E and Android comparison flows |
 | flappybird.apk | None observed | Auxiliary snapshots unavailable |
 | harmonic.apk | Optional window extension probe | Article WebView works in deployed build; full navigation remains open |
@@ -40,3 +40,7 @@ A native ABI follow-up added the reported YouTube pthread attribute and cleanup 
 Google Maps reached search results and place details after the typed `SystemProperties` getters were added. Its map surface stayed blank after waiting for tile and result requests, with zero GL draw calls. The starting revision showed the same blank surface under matching inputs. Several `/glm/mmap` requests returned 200 while others failed; the current evidence does not isolate a platform API cause. The typed getter removed an observed reflective `getInt` failure, but did not make the map render.
 
 The serialized original-20 boot sweep after these changes rendered 20/20 apps and collected diagnostics for every process. It reported zero called native requirements and 29 distinct missing entries. The entries include optional AndroidX and vendor class probes and Amazon's private service names; they are not evidence that those absent packages should be fabricated as platform APIs. This is startup coverage only.
+
+A subsequent 13-flow fast matrix reached 9/13 checkpoints. Lichess passed without a pthread abort; Doodle still missed its title motion threshold. Resy had two completion timeouts while its state remained busy. ChatGPT missed several text targets, including Settings and About, despite passing the same 24-step flow earlier. YouTube reproduced V8 `mprotect` ENOMEM on an ELF image page and then wedged at video open. The core page ownership check now accepts mapped image pages; a direct test passed. Three targeted YouTube runs afterward reached all 16 checkpoints and did not reproduce ENOMEM or the queue stall. One of those runs logged an intermittent native jump into zeroed code at `0x10004d20`, which remains unexplained. The full suite passed 1,368 tests after this fix. These intermittent findings still need controlled follow-up.
+
+Chrome DevTools confirmed the Maps screen is blank while `glFrames` advances and `glDraws` stays zero. Two `/glm/mmap` requests received HTTP 200 headers and later showed `ERR_ABORTED`; two `/maps/vt/proto` tile requests completed with HTTP 200 bodies. No native GL host calls were recorded, so rendering has not progressed to actual drawing. The evidence does not yet show whether the app deliberately cancels the map requests or the transport mishandles their bodies.
