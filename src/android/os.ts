@@ -31,6 +31,9 @@ rt.register({
     // No property service is installed; use the caller's default, as the framework delegates do.
     "static get(Ljava/lang/String;)Ljava/lang/String;": () => "",
     "static get(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (_key: string, fallback: string | null) => fallback ?? "",
+    "static getInt(Ljava/lang/String;I)I": (_key: string, fallback: number) => fallback,
+    "static getLong(Ljava/lang/String;J)J": (_key: string, fallback: bigint) => fallback,
+    "static getBoolean(Ljava/lang/String;Z)Z": (_key: string, fallback: number) => fallback,
   },
 });
 rt.register({ name: "android/os/PerformanceHintManager", ctor: class extends JObj {} });
