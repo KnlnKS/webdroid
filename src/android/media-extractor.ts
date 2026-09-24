@@ -38,7 +38,7 @@ export class MediaExtractor {
       const hevc = entry && "hvcC" in entry && entry.hvcC instanceof BoxParser.box.hvcC ? entry.hvcC : null;
       const mime = avc ? "video/avc" : hevc ? "video/hevc" : track.codec.startsWith("mp4a.40.") ? "audio/mp4a-latm" : "application/octet-stream";
       format.values.set("mime", { type: 4, value: mime });
-      if (hevc) format.values.set("codecs-string", { type: 4, value: track.codec });
+      if (avc || hevc) format.values.set("codecs-string", { type: 4, value: track.codec });
       format.values.set("durationUs", { type: 2, value: BigInt(Math.round(track.duration / track.timescale * 1e6)) });
       format.values.set("bitrate", { type: 1, value: Math.round(track.bitrate) });
       format.values.set("language", { type: 4, value: track.language });
