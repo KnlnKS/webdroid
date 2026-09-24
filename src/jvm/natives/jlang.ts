@@ -9,6 +9,7 @@ import { javaClassSets } from "../regex-sets";
 import { mangleMethod, jmethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { guestNow, type GuestTimer } from "../../guest-clock";
 import { device } from "../../shell/config";
+import { csText } from "./jchars";
 
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
   const fn = obj[mangleMethod(name, desc)] ?? rt.proxyMethod?.(obj, name, desc);
@@ -842,7 +843,23 @@ rt.register({
     "static format(Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;":
       (_l: unknown, f: string, a: unknown[]) => javaFormat(f, a),
     "static join(Ljava/lang/CharSequence;[Ljava/lang/CharSequence;)Ljava/lang/String;":
-      (sep: string, parts: string[]) => parts.join(String(sep)),
+      async (sep: string, parts: unknown[]) => {
+        if (sep == null || parts == null) rt.npe();
+        const strings: string[] = [];
+        for (const part of parts) strings.push(part == null ? "null" : await csText(part));
+        return strings.join(sep);
+      },
+    "static join(Ljava/lang/CharSequence;Ljava/lang/Iterable;)Ljava/lang/String;":
+      async (sep: string, parts: unknown) => {
+        if (sep == null || parts == null) rt.npe();
+        const iterator = await vcall(parts, "iterator", "()Ljava/util/Iterator;");
+        const strings: string[] = [];
+        while (await vcall(iterator, "hasNext", "()Z")) {
+          const part = await vcall(iterator, "next", "()Ljava/lang/Object;");
+          strings.push(part == null ? "null" : await csText(part));
+        }
+        return strings.join(sep);
+      },
   },
   // A getter, because java.util.Comparator is not registered yet when this spec is built.
   statics: { get CASE_INSENSITIVE_ORDER() { return mkCmp(caseInsensitive); } },

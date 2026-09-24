@@ -193,6 +193,7 @@ rt.register({
     "<init>()V": function () {},
     "<init>(Ljava/lang/String;)V": function (this: JDateFormat, p: string) { this.pattern = p; },
     "<init>(Ljava/lang/String;Ljava/util/Locale;)V": function (this: JDateFormat, p: string) { this.pattern = p; },
+    "toLocalizedPattern()Ljava/lang/String;": function (this: JDateFormat) { return this.pattern; },
   },
 });
 defineException("java/text/ParseException", "java/lang/Exception");

@@ -2,9 +2,10 @@ import { readStreamFully } from "./jio";
 import { jarray, mangleMethod, charsToString, dotName } from "../abi";
 import {
   vcall, vcallOn, callOn, curThread, type JThread, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException,
-  mkCmp, fmtDouble, bitCount32, cmpFloat
+  mkCmp, fmtDouble, bitCount32, cmpFloat, newObj
 } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo } from "../runtime";
+import { defaultLocale, JLocale } from "./jvalues";
 import {
   synchronizedCollection, synchronizedList, synchronizedMap, synchronizedSet, synchronizedSortedMap,
   unmodifiableCollection, unmodifiableList, unmodifiableMap, unmodifiableSet, unmodifiableSortedMap, unmodifiableSortedSet,
@@ -2747,11 +2748,66 @@ rt.register({
   },
 });
 defineException("java/util/MissingResourceException", "java/lang/RuntimeException");
-class JResourceBundle extends JObj { values = new Map<string, string>(); parent: JResourceBundle | null = null; }
+class JResourceBundle extends JObj { values = new Map<string, unknown>(); parent: JResourceBundle | null = null; }
+class JListResourceBundle extends JResourceBundle { loading: Promise<void> | null = null; }
+async function bundleValues(bundle: JResourceBundle): Promise<Map<string, unknown>> {
+  if (bundle instanceof JListResourceBundle) {
+    bundle.loading ??= (async () => {
+      const rows: unknown[][] = await vcall(bundle, "getContents", "()[[Ljava/lang/Object;");
+      for (const row of rows) if (typeof row[0] === "string") bundle.values.set(row[0], row[1]);
+    })();
+    await bundle.loading;
+  }
+  return bundle.values;
+}
+function bundleNames(baseName: string, locale: JLocale): string[] {
+  const parts = [locale.lang, locale.script, locale.country, locale.variant].filter(Boolean);
+  const names: string[] = [];
+  for (let n = parts.length; n > 0; n--) names.push(baseName + "_" + parts.slice(0, n).join("_"));
+  return names;
+}
+async function getBundle(baseName: string, locale: JLocale): Promise<JResourceBundle> {
+  if (baseName == null || locale == null) rt.npe();
+  const load = async (name: string): Promise<JResourceBundle | null> => {
+    const cls = name.replaceAll(".", "/");
+    if (rt.dexIndex.has(cls) || rt.natives.has(cls)) {
+      const candidate = await newObj(cls);
+      if (!rt.iof(candidate, "java/util/ResourceBundle")) throw rt.mkThrowable("java/lang/ClassCastException", name);
+      return candidate;
+    }
+    const bytes = await rt.readClasspath(cls + ".properties");
+    if (!bytes) return null;
+    const bundle = new JResourceBundle();
+    bundle.values = propertyText(charsToString(bytes, 0, bytes.length));
+    return bundle;
+  };
+  const requested = bundleNames(baseName, locale);
+  const found: JResourceBundle[] = [];
+  for (const name of requested) {
+    const bundle = await load(name);
+    if (bundle) found.push(bundle);
+  }
+  if (!found.length && requested.length) {
+    for (const name of bundleNames(baseName, defaultLocale)) {
+      const bundle = await load(name);
+      if (bundle) found.push(bundle);
+    }
+  }
+  const root = await load(baseName);
+  if (root) found.push(root);
+  if (!found.length) throw rt.mkThrowable("java/util/MissingResourceException", baseName);
+  for (let i = 1; i < found.length; i++) found[i - 1].parent = found[i];
+  return found[0];
+}
 rt.register({ name: "java/util/ResourceBundle", ctor: JResourceBundle, fields: { parent: "parent" }, methods: {
   "<init>()V": function () {},
+  "static getBundle(Ljava/lang/String;)Ljava/util/ResourceBundle;": (baseName: string) => getBundle(baseName, defaultLocale),
+  "static getBundle(Ljava/lang/String;Ljava/util/Locale;)Ljava/util/ResourceBundle;": getBundle,
   "setParent(Ljava/util/ResourceBundle;)V": function (this: JResourceBundle, parent: JResourceBundle) { this.parent = parent; },
-  "handleGetObject(Ljava/lang/String;)Ljava/lang/Object;": function (this: JResourceBundle, key: string) { if (key == null) rt.npe(); return this.values.get(key) ?? null; },
+  "handleGetObject(Ljava/lang/String;)Ljava/lang/Object;": async function (this: JResourceBundle, key: string) {
+    if (key == null) rt.npe();
+    return (await bundleValues(this)).get(key) ?? null;
+  },
   "getObject(Ljava/lang/String;)Ljava/lang/Object;": async function (this: JResourceBundle, key: string) {
     const value = await vcall(this, "handleGetObject", "(Ljava/lang/String;)Ljava/lang/Object;", key);
     if (value != null) return value;
@@ -2768,13 +2824,16 @@ rt.register({ name: "java/util/ResourceBundle", ctor: JResourceBundle, fields: {
       : this.parent ? vcall(this.parent, "containsKey", "(Ljava/lang/String;)Z", key) : 0;
   },
   "getKeys()Ljava/util/Enumeration;": async function (this: JResourceBundle) {
-    const keys = new Set(this.values.keys());
+    const keys = new Set((await bundleValues(this)).keys());
     if (this.parent) {
       const inherited = await vcall(this.parent, "getKeys", "()Ljava/util/Enumeration;");
       while (await vcall(inherited, "hasMoreElements", "()Z")) keys.add(await vcall(inherited, "nextElement", "()Ljava/lang/Object;"));
     }
     return mkIter([...keys]);
   },
+} });
+rt.register({ name: "java/util/ListResourceBundle", ctor: JListResourceBundle, sup: "java/util/ResourceBundle", methods: {
+  "<init>()V": function () {},
 } });
 rt.register({ name: "java/util/PropertyResourceBundle", ctor: class extends JResourceBundle {}, sup: "java/util/ResourceBundle", methods: {
   "<init>(Ljava/io/Reader;)V": async function (this: JResourceBundle, reader: unknown) { this.values = await readerProperties(reader); },
