@@ -103,6 +103,7 @@ Diagnostics unavailable: the browser page crashed before runtime inspection.
 - Fossify File Manager and Gallery advanced past `SimpleDateFormat.toLocalizedPattern` and exposed additional storage, media, and layout calls.
 - Markor's new-file flow exposed NIO writability, adapter mutations and lookup, a list popup, a selected-item listener, scrollbar width, and the `UpdateLayout` span marker. The file editor saved a 36-byte Markdown document under `/sdcard/Documents/markor/`. Shared external storage previously disappeared on reload because only package-private paths were persisted; the file and directory now restore before app initialization. Reopening needed `TextView.setTextKeepState`; preview exposed `StringBuilder.append(CharSequence, start, end)` incorrectly stringifying its source and recursing through Flexmark's `RepeatedCharSequence`.
 - Fossify File Manager created `/sdcard/Compatibility/notes.txt`. Glide's thumbnail worker then reached the absent `MediaMetadataRetriever` class. A shared MP4-backed retriever now returns metadata and a decoded frame for the pinned media fixture; it reports invalid nonmedia sources to Glide. A real MP4 copied into shared storage appeared in File Manager after reload without new missing API reports.
+- Fossify Calendar's New Event form probed `DatePickerDialog.OnDateSetListener` and `CalendarContract.Calendars`. Its bytecode also references the CalendarContract event, attendee, reminder and color URIs. The date picker now opens, advances September 24 to October 24, and updates the form. Saving an event first showed a reminder warning, then reached a day view with the event; it remained visible after reload. The notification path exposed `Context.grantUriPermission`, now tracked as a transient grant. The system calendar provider and actual alarm delivery remain unverified.
 
 ### Interaction evidence after launch
 
@@ -120,7 +121,7 @@ Diagnostics unavailable: the browser page crashed before runtime inspection.
 | Thunderbird | Add Account form | Account setup and mail use unverified |
 | Feeder | Feed URL/Search/Add feed form | Feed fetch, article reading and sync unverified |
 | Fossify File Manager | Created a folder and empty file; an MP4 appeared after reload | Copy, rename, delete, previews and broader media formats unverified |
-| Fossify Calendar | Day view and New Event entry | Event save and reminders unverified |
+| Fossify Calendar | Created a local event, changed its date with the date picker, and found the event after reload | System calendar sync, edit/delete, recurrence and actual reminder delivery unverified |
 | Fossify Gallery | Folder picker | Media browsing and image operations unverified |
 | Markor | Created, saved and reopened a Markdown file after reload; preview rendered in WebView and search reported 1/1 matches | Export and other editor flows unverified |
 
