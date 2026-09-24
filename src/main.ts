@@ -70,7 +70,7 @@ root.innerHTML = `
     <div id="launcher"></div>
     <div id="local-loader">
       <label for="apk-picker" class="appcard">Choose APK or XAPK</label>
-      <input id="apk-picker" type="file" accept=".apk,.xapk,.apks" multiple hidden>
+      <input id="apk-picker" type="file" accept=".apk,.xapk,.apks" hidden>
       <div id="drop-hint">Or drop package files here</div>
     </div>
     <div id="missing" style="white-space:pre-wrap"></div>
@@ -86,6 +86,7 @@ root.innerHTML = `
   .appcard:hover { background:#252a32 }
   #screencfg { display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:8px 0 10px;
     padding:8px 10px;background:#1d2026;border:1px solid #2a2e35;border-radius:10px }
+  #screencfg[hidden] { display:none }
   #screencfg label { display:flex;align-items:center;gap:4px;color:#678 }
   #screencfg input { width:52px;background:#12141a;border:1px solid #2a2e35;border-radius:6px;
     color:#dde;padding:3px 5px;font:inherit }
@@ -129,6 +130,7 @@ setDisplayChangeHandler(() => {
 // ── the screen setting. Applying reloads: the profile is read once at module init, before
 // anything that derives from it, so a reload is correct by construction and costs the frame
 // path nothing. It is also what a device does when its display size changes — it relaunches.
+const screenCfgEl = document.getElementById("screencfg")!;
 const cfgW = document.getElementById("cfg-w") as HTMLInputElement;
 const cfgH = document.getElementById("cfg-h") as HTMLInputElement;
 const cfgDpi = document.getElementById("cfg-dpi") as HTMLInputElement;
@@ -173,7 +175,6 @@ const back = () => { if (!processBroker().back(PROCESS_PID)) return pressBack();
 // The android resource package is the same for every app: start it now so a boot never waits.
 void loadFramework();
 
-const localPackages = new Map<string, File>();
 function addCard(file: string, launch: () => void) {
   const name = file.replace(/\.(?:xapk|apks|apk)$/i, "").replace(/[-_]v?\d[\d.]*$/, "").replace(/[-_]+/g, " ");
   const el = document.createElement("button");
@@ -185,18 +186,22 @@ function addCard(file: string, launch: () => void) {
   launcherEl.appendChild(el);
 }
 const picker = document.getElementById("apk-picker") as HTMLInputElement;
-function addLocal(files: FileList | File[]) {
-  for (const file of files) {
-    if (!/\.(?:apk|xapk|apks)$/i.test(file.name)) {
-      statusEl.textContent = `Unsupported package: ${file.name}`;
-      continue;
-    }
-    if (!localPackages.has(file.name)) addCard(file.name, () => void boot(file.name, localPackages.get(file.name)));
-    localPackages.set(file.name, file);
-  }
+function launchLocal(files: FileList | File[]) {
+  const file = files[0];
+  const count = files.length;
   picker.value = "";
+  if (!file) return;
+  if (count > 1) {
+    statusEl.textContent = "Choose one package at a time";
+    return;
+  }
+  if (!/\.(?:apk|xapk|apks)$/i.test(file.name)) {
+    statusEl.textContent = `Unsupported package: ${file.name}`;
+    return;
+  }
+  void boot(file.name, file);
 }
-picker.addEventListener("change", () => addLocal(picker.files ?? []));
+picker.addEventListener("change", () => launchLocal(picker.files ?? []));
 document.addEventListener("dragover", (event) => {
   if (!event.dataTransfer?.types.includes("Files")) return;
   event.preventDefault();
@@ -206,7 +211,7 @@ document.addEventListener("dragleave", (event) => { if (!event.relatedTarget) do
 document.addEventListener("drop", (event) => {
   event.preventDefault();
   document.body.classList.remove("dragging");
-  if (event.dataTransfer?.files) addLocal(event.dataTransfer.files);
+  if (event.dataTransfer?.files) launchLocal(event.dataTransfer.files);
 });
 if (process.env.NODE_ENV !== "production") {
   void fetch("/apks").then((r) => r.json() as Promise<string[]>).catch(() => [] as string[]).then((files) => {
@@ -261,6 +266,7 @@ async function boot(file: string, local?: File) {
       .then(() => processBroker().boot()).catch((error) => console.error("[provision]", error));
     perf.bootMs = performance.now() - t0;
     statusEl.textContent = `running (boot ${perf.bootMs.toFixed(0)}ms)` + (rt.nativeRequired.size ? " — needs native code" : "");
+    screenCfgEl.hidden = true;
   } catch (e) {
     rollbackAssets?.();
     console.error(e);
