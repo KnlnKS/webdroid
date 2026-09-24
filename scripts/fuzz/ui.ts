@@ -141,6 +141,12 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
   try {
     environment.webdroid = { origin: web.origin, userAgent: await web.page.evaluate(() => navigator.userAgent) };
     if (android) environment.android = android.environment;
+    const bootProcesses = (await readProcesses(web.page)).filter((process) =>
+      isWebdroidProcessFrame(process.url, web.origin));
+    const bootSignals = [...processSignals(bootProcesses), ...web.errors.map((error) => `page-error:${error}`)];
+    environment.bootSignals = bootSignals;
+    for (const signal of bootSignals) seenSignals.add(signal);
+    for (const method of coverage(bootProcesses)) seenCoverage.add(method);
     const stepCount = plan.kind === "replay" ? plan.actions.length : options.steps;
     for (let index = 0; index < stepCount; index++) {
       const webNodes = await web.tree();
@@ -207,10 +213,10 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
       const step: UiStep = { index, action, androidTreeHash, webdroidTreeHash: webTreeHash, androidFrameHash,
         webdroidFrameHash: webFrameHash, structuralDivergence, pixel,
         diagnostics: { status: "ok", alive, errors: web.errors, processes: compactDiagnostics(relevant) },
-        coverageDelta, signals };
+        coverageDelta, signals: newSignals };
       if (state && plan.kind === "explore") {
         step.state = state;
-        step.discoveries = plan.explorer.observeAction(state, action, [...currentCoverage], signals, index >= plan.prefix.actions.length);
+        step.discoveries = plan.explorer.observeAction(state, action, coverageDelta, newSignals, index >= plan.prefix.actions.length);
         if (!structuralDivergence && alive) {
           const nextSource = postAndroidNodes ?? nextWebTree;
           const nextSize = screenSize(nextSource);

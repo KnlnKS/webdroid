@@ -135,7 +135,14 @@ export class WebdroidUiTarget {
   }
 
   static async open(app: UiApp): Promise<WebdroidUiTarget> {
-    return new WebdroidUiTarget(await startWebdroid(app.apk));
+    const session = await startWebdroid(app.apk);
+    try {
+      await session.page.waitForFunction(() => globalThis.wd!.perf.draws > 0, null, { timeout: 30_000 });
+      return new WebdroidUiTarget(session);
+    } catch (error) {
+      await session.close();
+      throw error;
+    }
   }
 
   tree(): Promise<UiNode[]> {
