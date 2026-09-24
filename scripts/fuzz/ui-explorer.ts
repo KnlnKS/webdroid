@@ -5,7 +5,7 @@ import { uiActionKey, uiActions, uiScrollFamilyKey, uiStateKey, validateUiAction
 
 const MAX_STATES = 256;
 const MAX_ACTIONS_PER_STATE = 256;
-const MAX_SCROLLS_PER_STATE = 4;
+const MAX_SCROLLS_PER_FAMILY = 4;
 const MAX_PATH = 24;
 const MAX_COVERAGE = 20_000;
 const MAX_SIGNALS = 2_000;
@@ -20,7 +20,7 @@ function scrollKey(family: string, action: string): string { return JSON.stringi
 
 function available(state: State, candidate: Candidate, scrollAttempts: Record<string, number>): boolean {
   return state.tried.length < MAX_ACTIONS_PER_STATE && (candidate.scroll
-    ? (scrollAttempts[scrollKey(state.family, candidate.key)] ?? 0) < MAX_SCROLLS_PER_STATE
+    ? (scrollAttempts[scrollKey(state.family, candidate.key)] ?? 0) < MAX_SCROLLS_PER_FAMILY
     : !state.tried.includes(candidate.key));
 }
 
@@ -89,17 +89,13 @@ export class UiExplorer {
     this.liveKey = key;
     this.liveCandidates = candidates;
     const current = this.states[key];
-    if (!current && Object.keys(this.states).length < MAX_STATES && prefix.actions.length <= MAX_PATH)
+    if (current && prefix.actions.length < current.actions.length) {
+      current.actions = [...prefix.actions];
+      current.states = [...prefix.states];
+      current.replayFailures = 0;
+    } else if (!current && Object.keys(this.states).length < MAX_STATES && prefix.actions.length <= MAX_PATH) {
       this.states[key] = { actions: [...prefix.actions], states: [...prefix.states], family, candidates: [],
         tried: [], discoveries: 0, replayFailures: 0 };
-    else {
-      if (current) {
-        if (prefix.actions.length < current.actions.length) {
-          current.actions = [...prefix.actions];
-          current.states = [...prefix.states];
-          current.replayFailures = 0;
-        }
-      }
     }
     const saved = this.states[key];
     if (saved) {
@@ -111,8 +107,7 @@ export class UiExplorer {
 
   choose(key: string, random: Random): UiAction | null {
     const state = this.states[key];
-    if (!state) return null;
-    if (this.liveKey !== key) return null;
+    if (!state || this.liveKey !== key) return null;
     const actions = this.liveCandidates.filter((action) => available(state,
       { key: uiActionKey(action), scroll: action.type === "scroll" }, this.scrollAttempts));
     const semantic = actions.filter((action) => "target" in action);
@@ -126,8 +121,8 @@ export class UiExplorer {
     if (recordAttempt && state.tried.length < MAX_ACTIONS_PER_STATE && (action.type === "scroll" || !state.tried.includes(actionKey))) {
       state.tried.push(actionKey);
       if (action.type === "scroll") {
-        const key = scrollKey(state.family, actionKey);
-        this.scrollAttempts[key] = (this.scrollAttempts[key] ?? 0) + 1;
+        const attemptKey = scrollKey(state.family, actionKey);
+        this.scrollAttempts[attemptKey] = (this.scrollAttempts[attemptKey] ?? 0) + 1;
       }
     }
     let discoveries = 0;

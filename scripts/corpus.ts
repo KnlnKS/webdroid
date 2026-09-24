@@ -6,7 +6,6 @@ import { argv } from "./args";
 import { BASE_URL } from "../tests/e2e/lib/util";
 import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
 import { isWebdroidProcessFrame, readProcesses, type ProcessSnapshot } from "../tests/e2e/lib/processes";
-import { rankCalls } from "./native-surface";
 
 const args = process.argv.slice(2);
 const { opt, positional } = argv(args, ["--json", "--wait"]);
@@ -57,10 +56,10 @@ async function boot(page: Page, apk: string): Promise<Row> {
   }
   row.processes = await readProcesses(page);
   const relevant = row.processes.filter((process) => isWebdroidProcessFrame(process.url, BASE_URL));
-  const available = relevant.filter((process) => process.diagnostics.status === "ok");
+  const available = relevant.flatMap((process) => process.diagnostics.status === "ok" ? [process.diagnostics] : []);
   row.diagnostics = relevant.length > 0 && available.length === relevant.length ? "ok" : "unavailable";
-  row.missing = [...new Set([...row.missing, ...available.flatMap((process) => process.diagnostics.status === "ok" ? process.diagnostics.missing : [])])];
-  row.nativeRequired = [...new Set(available.flatMap((process) => process.diagnostics.status === "ok" ? process.diagnostics.native : []))];
+  row.missing = [...new Set([...row.missing, ...available.flatMap((diagnostics) => diagnostics.missing)])];
+  row.nativeRequired = [...new Set(available.flatMap((diagnostics) => diagnostics.native))];
   const diagnosticErrors = relevant.flatMap((process) => process.diagnostics.status === "ok"
     ? process.diagnostics.errors ?? []
     : [process.diagnostics.status === "failure" ? process.diagnostics.message : "diagnostics unavailable"]);
@@ -88,8 +87,7 @@ function rank(field: "missing" | "nativeRequired"): [string, string[]][] {
     apks.push(row.apk);
     reached.set(key, apks);
   }
-  return rankCalls(new Map([...reached].map(([key, apks]) => [key, apks.length])), () => true)
-    .map(([key]) => [key, reached.get(key)!]);
+  return [...reached].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
 }
 
 const ranked = rank("missing"), rankedNative = rank("nativeRequired");
