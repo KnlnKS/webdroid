@@ -27,6 +27,36 @@ rt.register({ name: "android/media/RingtoneManager", ctor: class extends JObj {}
   },
 });
 
+class JCamcorderProfile extends JObj {
+  duration = 0; quality = 0; fileFormat = 0;
+  videoCodec = 0; videoBitRate = 0; videoFrameRate = 0; videoFrameWidth = 0; videoFrameHeight = 0;
+  audioCodec = 0; audioBitRate = 0; audioSampleRate = 0; audioChannels = 0;
+}
+function checkCamcorderQuality(quality: number): void {
+  if ((quality >= 0 && quality <= 13) || (quality >= 1000 && quality <= 1013) ||
+      (quality >= 2000 && quality <= 2008)) return;
+  throw rt.mkThrowable("java/lang/IllegalArgumentException", `Unsupported quality level: ${quality}`);
+}
+rt.register({
+  name: "android/media/CamcorderProfile", ctor: JCamcorderProfile,
+  fields: ["duration", "quality", "fileFormat", "videoCodec", "videoBitRate", "videoFrameRate",
+    "videoFrameWidth", "videoFrameHeight", "audioCodec", "audioBitRate", "audioSampleRate", "audioChannels"],
+  methods: {
+    "static get(I)Landroid/media/CamcorderProfile;": () => null,
+    "static get(II)Landroid/media/CamcorderProfile;": (_cameraId: number, quality: number) => {
+      checkCamcorderQuality(quality);
+      return null;
+    },
+    "static hasProfile(I)Z": () => 0,
+    "static hasProfile(II)Z": () => 0,
+    "static getAll(Ljava/lang/String;I)Landroid/media/EncoderProfiles;": (_cameraId: string, quality: number) => {
+      checkCamcorderQuality(quality);
+      return null;
+    },
+  },
+});
+rt.register({ name: "android/media/EncoderProfiles", ctor: class extends JObj {} });
+
 rt.register({ name: "android/media/Image", ctor: class extends JObj {}, ifaces: ["java/lang/AutoCloseable"] });
 rt.register({ name: "android/media/MediaDataSource", ctor: class extends JObj {}, ifaces: ["java/io/Closeable"],
   methods: noops("<init>()V"),
