@@ -13,11 +13,6 @@ async function drainQueue(this: WaitingQueue, c: unknown, max = 0x7fffffff): Pro
   for (const value of batch) await vcall(c, "add", "(Ljava/lang/Object;)Z", value);
   return batch.length;
 }
-const drainMethods = {
-  "drainTo(Ljava/util/Collection;)I": drainQueue,
-  "drainTo(Ljava/util/Collection;I)I": drainQueue,
-};
-
 const takeFirst = function (this: WaitingQueue): unknown {
   return this.a.length ? this.a.shift() : new Promise((resolve) => this.takers.push(resolve));
 };
@@ -176,26 +171,66 @@ for (const name of ["LinkedBlockingQueue", "SynchronousQueue", "ArrayBlockingQue
 }
 // PriorityBlockingQueue: the sorted queue with a parking take(); a parked taker receives the
 // element that would have become the head
-class JPriorityBlockingQueue extends JPriorityQueue { takers: ((v: unknown) => void)[] = []; }
-async function pbqPut(this: JPriorityBlockingQueue, v: unknown) {
-  const t = this.takers.shift();
-  if (t) { queueMicrotask(() => t(v)); return 1; }
-  await pqInsert(this, v);
-  return 1;
+class JPriorityBlockingQueue extends JPriorityQueue {
+  takers: ((v: unknown) => void)[] = [];
+  // A comparator can suspend, so all queue mutations must wait for its insertion to finish.
+  private pending: Promise<unknown> = Promise.resolve();
+  locked<T>(operation: () => T | Promise<T>): Promise<T> {
+    const next = this.pending.then(operation);
+    this.pending = next.then(() => undefined, () => undefined);
+    return next;
+  }
+}
+const priorityMethods = priorityQueueMethods();
+const priorityRemove = priorityMethods["remove(Ljava/lang/Object;)Z"] as (this: JPriorityQueue, v: unknown) => unknown;
+function pbqPut(this: JPriorityBlockingQueue, v: unknown) {
+  return this.locked(async () => {
+    if (v == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    const taker = this.takers.shift();
+    if (taker) { taker(v); return 1; }
+    await pqInsert(this, v);
+    return 1;
+  });
 }
 rt.register({
   name: "java/util/concurrent/PriorityBlockingQueue", ctor: JPriorityBlockingQueue,
   ifaces: ["java/util/concurrent/BlockingQueue", "java/util/Queue", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"],
   methods: {
-    ...priorityQueueMethods(),
+    ...priorityMethods,
     "put(Ljava/lang/Object;)V": pbqPut,
     "offer(Ljava/lang/Object;)Z": pbqPut,
     "add(Ljava/lang/Object;)Z": pbqPut,
     "offer(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z": pbqPut,
-    "take()Ljava/lang/Object;": takeFirst,
-    "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": timedPoll,
+    "addAll(Ljava/util/Collection;)Z": async function (this: JPriorityBlockingQueue, c: unknown) {
+      if (c === this) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+      const values = await toJsArray(c);
+      for (const value of values) await pbqPut.call(this, value);
+      return values.length ? 1 : 0;
+    },
+    "remove(Ljava/lang/Object;)Z": function (this: JPriorityBlockingQueue, v: unknown) {
+      return this.locked(() => priorityRemove.call(this, v));
+    },
+    "remove()Ljava/lang/Object;": function (this: JPriorityBlockingQueue) {
+      return this.locked(() => {
+        if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null);
+        return this.a.shift();
+      });
+    },
+    "clear()V": function (this: JPriorityBlockingQueue) { return this.locked(() => { this.a.length = 0; }); },
+    "poll()Ljava/lang/Object;": function (this: JPriorityBlockingQueue) { return this.locked(() => this.a.shift() ?? null); },
+    "take()Ljava/lang/Object;": function (this: JPriorityBlockingQueue) {
+      return this.locked(() => ({ value: takeFirst.call(this) })).then(({ value }) => value);
+    },
+    "poll(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JPriorityBlockingQueue, d: bigint, u: JTimeUnit) {
+      return this.locked(() => ({ value: timedPoll.call(this, d, u) })).then(({ value }) => value);
+    },
     "remainingCapacity()I": () => 0x7fffffff,
-    ...drainMethods,
+    "drainTo(Ljava/util/Collection;)I": function (this: JPriorityBlockingQueue, c: unknown) {
+      return this.locked(() => drainQueue.call(this, c));
+    },
+    "drainTo(Ljava/util/Collection;I)I": function (this: JPriorityBlockingQueue, c: unknown, max: number) {
+      return this.locked(() => drainQueue.call(this, c, max));
+    },
   },
 });
 
