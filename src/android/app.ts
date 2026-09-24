@@ -12,11 +12,11 @@ import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, attachView, detachView, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragment, type JFragmentManager } from "./fragment";
-import { vcall, vcallOn, curThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread } from "../jvm/natives/jlang";
 import type { JMotionEvent } from "./motionevent";
 import { appHost, jclsNameOf } from "./apphost";
 import { resString } from "./res";
-import { onMain } from "./mainloop";
+import { inMainJob, onMain } from "./mainloop";
 import { getPrefs } from "./sharedprefs";
 import { csText, spannedString } from "./text";
 import { showToast } from "./popup";
@@ -265,7 +265,8 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     return this.actionBarObj;
   },
   "runOnUiThread(Ljava/lang/Runnable;)V": function (this: JActivity, r: unknown) {
-    void onMain(() => vcall(r, "run", "()V").catch(reportUncaught));
+    if (curThread === mainThread && inMainJob()) return vcall(r, "run", "()V");
+    void onMain(() => vcall(r, "run", "()V")).catch(reportUncaught);
   },
   "finish()V": function (this: JActivity) {
     if (!this.finished) {
