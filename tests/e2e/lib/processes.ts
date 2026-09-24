@@ -45,7 +45,7 @@ export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
         return result;
       })().catch((error) => ({ status: "failure" as const, message: String(error) })),
       new Promise<{ status: "failure"; message: string }>((resolve) => {
-        timer = setTimeout(() => resolve({ status: "failure", message: "diagnostic timeout" }), 3000);
+        timer = setTimeout(() => resolve({ status: "failure", message: "diagnostic timeout" }), 6000);
       })]);
       return { url: frame.url(), diagnostics };
     } finally {
