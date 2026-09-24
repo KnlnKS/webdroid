@@ -278,6 +278,20 @@ rt.register({
 });
 class JIcuNumberFormat extends JNumberFormat {}
 const icuPercent = (locale: JLocale = defaultLocale) => Object.assign(new JIcuNumberFormat(), { locale: localeTag(locale), style: "percent", maxFrac: 0 });
+class JCompactDecimalFormat extends JIcuNumberFormat {
+  private formatter: Intl.NumberFormat;
+  constructor(locale: JLocale = defaultLocale, display: "short" | "long" = "short") {
+    super();
+    this.formatter = new Intl.NumberFormat(localeTag(locale), { notation: "compact", compactDisplay: display, maximumSignificantDigits: 2 });
+  }
+  fmt(value: number | bigint): string { return this.formatter.format(value); }
+}
+const compactStyles = mkEnumSet("android/icu/text/CompactDecimalFormat$CompactStyle", ["SHORT", "LONG"]);
+function compactInstance(locale: JLocale, style: JSimpleEnum): JCompactDecimalFormat {
+  if (!locale || !style) rt.npe();
+  if (style !== compactStyles[0] && style !== compactStyles[1]) throw rt.mkThrowable("java/lang/IllegalArgumentException", "compact style");
+  return new JCompactDecimalFormat(locale, style === compactStyles[0] ? "short" : "long");
+}
 rt.register({ name: "android/icu/text/UFormat", ctor: class extends JObj {}, sup: "java/text/Format" });
 rt.register({
   name: "android/icu/text/NumberFormat", ctor: JIcuNumberFormat, sup: "android/icu/text/UFormat",
@@ -285,6 +299,16 @@ rt.register({
     ...nfMethods,
     "static getPercentInstance()Landroid/icu/text/NumberFormat;": icuPercent,
     "static getPercentInstance(Ljava/util/Locale;)Landroid/icu/text/NumberFormat;": icuPercent,
+  },
+});
+rt.register({ name: "android/icu/text/DecimalFormat", ctor: class extends JIcuNumberFormat {}, sup: "android/icu/text/NumberFormat", methods: nfMethods });
+rt.register({
+  name: "android/icu/text/CompactDecimalFormat", ctor: JCompactDecimalFormat, sup: "android/icu/text/DecimalFormat",
+  methods: {
+    ...nfMethods,
+    "static getInstance(Ljava/util/Locale;Landroid/icu/text/CompactDecimalFormat$CompactStyle;)Landroid/icu/text/CompactDecimalFormat;": compactInstance,
+    "static getInstance(Landroid/icu/util/ULocale;Landroid/icu/text/CompactDecimalFormat$CompactStyle;)Landroid/icu/text/CompactDecimalFormat;":
+      (locale: { locale: JLocale }, style: JSimpleEnum) => compactInstance(locale?.locale, style),
   },
 });
 rt.register({
