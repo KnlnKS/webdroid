@@ -6,7 +6,7 @@ The active scope is the 20 APKs present before the latest additions to `apks/`. 
 | --- | --- | --- |
 | Amazon.xapk | Private Amazon classes/services; optional SLF4J binder | The Weblab Thumb APSR fault is fixed at instruction level; shopping content and sign-in need deeper exercise |
 | Among Us.xapk | None observed | Practice works; online service connection failed on deployed relay |
-| ChatGPT.xapk | Optional Amazon IAP probe on targeted Bun-server boot | Settings flow fails; hosted UDP and screen projection remain unsupported; authenticated upload and voice unvalidated |
+| ChatGPT.xapk | Optional Amazon IAP probe on targeted Bun-server boot | The 24-step guest flow passes; hosted UDP and screen projection remain unsupported; camera and authenticated media paths unvalidated |
 | Cut the Rope.xapk | None observed | Level-one tutorial works; intro video and later gameplay speed remain open |
 | DoodleJumpChrismas.apk | None observed | Boot only |
 | FitNotes.apk | None observed | Covered by E2E and Android comparison flows |
@@ -18,7 +18,7 @@ The active scope is the 20 APKs present before the latest additions to `apks/`. 
 | TikTok.apk | Optional bundled and vendor SDK probes | Playback/input rate and authentication/publishing remain unvalidated |
 | Twitch.xapk | Optional MIUI referrer probe | Boot only |
 | WebdroidFuzzProbe.apk | None observed | Boot only |
-| YouTube.xapk | Optional window extensions and `media_metrics` | Full matrix has shown settle timeouts and a draw error |
+| YouTube.xapk | Optional window extensions | The 16-step search/playback flow passes after exposing media metrics and AudioTrack session IDs; longer playback and account paths unvalidated |
 | calculatorm.apk | None observed | Covered by E2E and Android comparison flows |
 | flappybird.apk | None observed | Auxiliary snapshots unavailable |
 | harmonic.apk | Optional window extension probe | Article WebView works in deployed build; full navigation remains open |
@@ -28,3 +28,5 @@ The active scope is the 20 APKs present before the latest additions to `apks/`. 
 The current 20-app rerun at `0ac2f429` drew 20/20 frames with diagnostics. Google Maps had zero missing entries, zero required native calls and two process errors. CursorWindow has typed row access and parcel round trip; FileBackupHelper currently supports construction only. Implement and verify backup transport before treating Android backup as supported. A focused Amazon rerun after `a4dbe53b` did not reproduce its prior Thumb APSR fault, and the exact instruction sequence passes a core test; this does not establish a long-session fix. Full use of every app has not been demonstrated.
 
 A later ChatGPT rerun on the Bun development server observed the optional Amazon IAP class probe but no UDP transport miss. A local UDP echo round trip verified the relay's binary framing, and ChatGPT smoke compilation had zero method failures. The fast ChatGPT flow exposed `media_projection` and `device_policy` service requests on feature paths. The device-policy camera query now returns the state of a device with no active administrator. Settings, Language and About initially appeared to fail because the flow's top-bar tap missed the visible navigation button; correcting the recorded coordinate let all 24 checkpoints complete. The attachment path displays “Unable to initialize the camera”; the current virtual device exposes no camera IDs. Remote UDP is available in the Bun development server; the hosted Worker has no UDP transport. The ChatGPT flow's other missing entries and the NTP response itself have not been fully validated.
+
+YouTube's APK references playback, bundle and editing media metrics sessions. The new service now creates unique log session IDs, retains bounded reports and builds event values. A direct session/builder/report call passed. Its video player exposed `AudioTrack.setLogSessionId`, which now preserves the assigned ID. The fast flow initially tapped a partially visible result label near the bottom navigation bar and returned to Home; tapping the visible thumbnail reached the video and exposed the audio method. After both fixes, all 16 fast checkpoints completed with no new media-metrics or audio API miss. The remaining boot gaps were optional window-extension probes; the reported DNS warning came from bundled Chromium.
