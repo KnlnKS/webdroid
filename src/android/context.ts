@@ -122,6 +122,7 @@ const SERVICE_CLASS: Record<string, string> = {
   sensor: "android/hardware/SensorManager",
   camera: "android/hardware/camera2/CameraManager",
   fingerprint: "android/hardware/fingerprint/FingerprintManager",
+  biometric: "android/hardware/biometrics/BiometricManager",
   usb: "android/hardware/usb/UsbManager",
   location: "android/location/LocationManager",
   batterymanager: "android/os/BatteryManager",

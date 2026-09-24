@@ -8,7 +8,7 @@ import { type JCanvas, cssColor } from "./graphics";
 import { JTextView, textViewMethods, JButton, applyTvStyle } from "./textview";
 import { G } from "./gravity";
 import { device } from "../shell/config";
-import { vcall, vcallOn, curThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type JMotionEvent } from "./motionevent";
 import { JLinearLayout, linearMethods } from "./layouts";
 
@@ -257,6 +257,7 @@ class JCompoundButton extends JButton {
   buttonD: JDrawable | null = null;
   buttonW = 0;
   buttonTint: JColorStateList | null = null;
+  buttonTintMode: JSimpleEnum | null = null;
   hasButtonTint = false;
   async updateButtonState() {
     const thread = curThread, drawable = this.buttonD;
@@ -266,9 +267,18 @@ class JCompoundButton extends JButton {
   }
   async applyButtonTint() {
     if (this.buttonD && this.hasButtonTint) await vcall(this.buttonD, "setTintList", "(Landroid/content/res/ColorStateList;)V", this.buttonTint);
+    if (this.buttonD && this.buttonTintMode) await vcall(this.buttonD, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", this.buttonTintMode);
     invalidate(this);
   }
   async setCheckedInternal(c: boolean) {
+    if (rt.iof(this, "android/widget/RadioButton") && this.idNum > 0) {
+      let parent: JView | null = this.parent;
+      while (parent && !(parent instanceof JRadioGroup)) parent = parent.parent;
+      if (parent instanceof JRadioGroup && (c ? parent.checkedId !== this.idNum : parent.checkedId === this.idNum)) {
+        await parent.checkId(c ? this.idNum : -1);
+        return;
+      }
+    }
     if (this.checked === c) return;
     this.checked = c;
     await this.refreshDrawableState();
@@ -333,6 +343,10 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
     this.buttonTint = tint; this.hasButtonTint = true; return this.applyButtonTint();
   },
   "getButtonTintList()Landroid/content/res/ColorStateList;": function (this: JCompoundButton) { return this.buttonTint; },
+  "setButtonTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JCompoundButton, mode: JSimpleEnum | null) {
+    this.buttonTintMode = mode; return this.applyButtonTint();
+  },
+  "getButtonTintMode()Landroid/graphics/PorterDuff$Mode;": function (this: JCompoundButton) { return this.buttonTintMode; },
   "setButtonDrawable(Landroid/graphics/drawable/Drawable;)V": async function (this: JCompoundButton, d: JDrawable | null) {
     this.buttonD = d;
     this.buttonW = d ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;
@@ -457,7 +471,10 @@ rt.register({
     },
     "check(I)V": function (this: JRadioGroup, id: number) { return this.checkId(id); },
     "clearCheck()V": function (this: JRadioGroup) { return this.checkId(-1); },
-    "getCheckedRadioButtonId()I": function (this: JRadioGroup) { return this.checkedId; },
+    "getCheckedRadioButtonId()I": function (this: JRadioGroup) {
+      if (this.checkedId === -1) this.checkedId = this.radios().find((r) => r.checked && rt.iof(r, "android/widget/RadioButton"))?.idNum ?? -1;
+      return this.checkedId;
+    },
   },
 });
 rt.markers("android/widget/RadioGroup$OnCheckedChangeListener");

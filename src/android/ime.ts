@@ -566,6 +566,7 @@ class JAutoComplete extends JEditText {
   dropDownBackground: unknown = null;
   itemClickL: unknown = null;
   itemSelectedL: unknown = null;
+  dismissL: unknown = null;
   popupShowing = 0;
 }
 rt.register({
@@ -587,7 +588,12 @@ rt.register({
     "getDropDownBackground()Landroid/graphics/drawable/Drawable;": function (this: JAutoComplete) { return this.dropDownBackground; },
     "enoughToFilter()Z": function (this: JAutoComplete) { return this.text.length >= this.threshold ? 1 : 0; },
     "showDropDown()V": function (this: JAutoComplete) { this.popupShowing = 1; },
-    "dismissDropDown()V": function (this: JAutoComplete) { this.popupShowing = 0; },
+    "dismissDropDown()V": async function (this: JAutoComplete) {
+      const wasShowing = this.popupShowing;
+      this.popupShowing = 0;
+      if (wasShowing && this.dismissL) await vcall(this.dismissL, "onDismiss", "()V");
+    },
+    "setOnDismissListener(Landroid/widget/AutoCompleteTextView$OnDismissListener;)V": function (this: JAutoComplete, listener: unknown) { this.dismissL = listener; },
     ...fieldSetters({ "setAdapter(Landroid/widget/ListAdapter;)V": "adapter",
       "setOnItemClickListener(Landroid/widget/AdapterView$OnItemClickListener;)V": "itemClickL",
       "setOnItemSelectedListener(Landroid/widget/AdapterView$OnItemSelectedListener;)V": "itemSelectedL" }),
@@ -618,3 +624,4 @@ rt.register({
   },
 });
 rt.markers("android/widget/Filter$FilterListener");
+rt.markers("android/widget/AutoCompleteTextView$OnDismissListener");

@@ -34,6 +34,7 @@ export class JTextView extends JView {
   insertionActionMode: unknown = null;
   drawableTint: JColorStateList | null = null;
   imeOptions = 0; privateImeOptions: string | null = null; breakStrategy = 0; hyphenation = 0; autoSizeType = 0;
+  showSoftInputOnFocus = true;
   linksClickable = true; fontVariation: string | null = null;
   maxW = Infinity;
   maxH = Infinity;
@@ -431,6 +432,13 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setInputType(I)V": function (this: JTextView, t: number) { this.inputTypeV = t; },
   "getInputType()I": function (this: JTextView) { return this.inputTypeV; },
   "setImeOptions(I)V": function (this: JTextView, o: number) { this.imeOptions = o; },
+  "setShowSoftInputOnFocus(Z)V": function (this: JTextView, enabled: number) {
+    this.showSoftInputOnFocus = !!enabled;
+    if (this === focusedEdit && inputEl) {
+      if (enabled) inputEl.focus(); else inputEl.blur();
+    }
+  },
+  "getShowSoftInputOnFocus()Z": function (this: JTextView) { return this.showSoftInputOnFocus ? 1 : 0; },
   "getImeOptions()I": function (this: JTextView) { return this.imeOptions; },
   "setPrivateImeOptions(Ljava/lang/String;)V": function (this: JTextView, options: string | null) { this.privateImeOptions = options; },
   "getPrivateImeOptions()Ljava/lang/String;": function (this: JTextView) { return this.privateImeOptions; },
@@ -768,7 +776,7 @@ export function focusEditText(et: JEditText | null) {
   if (inputEl) {
     if (et) {
       inputEl.value = et.text;
-      inputEl.focus();
+      if (et.showSoftInputOnFocus) inputEl.focus(); else inputEl.blur();
     } else inputEl.blur();
   }
   invalidate();

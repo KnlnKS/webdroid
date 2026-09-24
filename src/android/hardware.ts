@@ -27,6 +27,14 @@ rt.register({ name: "android/hardware/fingerprint/FingerprintManager", ctor: cla
   "isHardwareDetected()Z": () => 0,
   "hasEnrolledFingerprints()Z": () => 0,
 } });
+rt.register({ name: "android/hardware/biometrics/BiometricManager", ctor: class extends JObj {},
+  statics: { BIOMETRIC_SUCCESS: 0, BIOMETRIC_ERROR_HW_UNAVAILABLE: 1, BIOMETRIC_ERROR_NONE_ENROLLED: 11,
+    BIOMETRIC_ERROR_NO_HARDWARE: 12, BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED: 15 },
+  methods: {
+    "canAuthenticate()I": () => 12,
+    "canAuthenticate(I)I": () => 12,
+  },
+});
 rt.register({ name: "android/hardware/usb/UsbManager", ctor: class extends JObj {}, methods: {
   "getDeviceList()Ljava/util/HashMap;": () => rt.make("java/util/HashMap"),
   "getAccessoryList()[Landroid/hardware/usb/UsbAccessory;": () => null,
