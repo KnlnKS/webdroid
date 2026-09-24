@@ -175,6 +175,15 @@ const resolverMethods: NativeSpec["methods"] = {
     function (this: JObj, u: JUri, proj: string[] | null, selection: string | null, args: string[] | null, sort: string | null) {
       return vcall(this, "query", providerOperations.query, u, proj, selection, args, sort);
     },
+  "query(Landroid/net/Uri;[Ljava/lang/String;Landroid/os/Bundle;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
+    async function (this: JObj, u: JUri, proj: string[] | null, queryArgs: { map: Map<string, unknown> } | null, cancellation: unknown) {
+      if (cancellation) await vcall(cancellation, "throwIfCanceled", "()V");
+      const args = queryArgs?.map;
+      const selection = args?.get("android:query-arg-sql-selection") as string | null ?? null;
+      const selectionArgs = args?.get("android:query-arg-sql-selection-args") as string[] | null ?? null;
+      const sort = args?.get("android:query-arg-sql-sort-order") as string | null ?? null;
+      return vcall(this, "query", providerOperations.query, u, proj, selection, selectionArgs, sort);
+    },
   "call(Landroid/net/Uri;Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;": async (u: JUri, method: string, arg: string | null, extras: unknown) => {
     if (u === null) throw rt.mkThrowable("java/lang/NullPointerException", "uri");
     if (method === null) throw rt.mkThrowable("java/lang/NullPointerException", "method");

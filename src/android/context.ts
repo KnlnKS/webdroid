@@ -10,7 +10,7 @@ import { contentResolver, checkUriPermission } from "./contentresolver";
 import { mainLooper, mainExecutor, PROCESS_PID, PROCESS_UID } from "./os";
 import { getPrefs, movePrefs, deletePrefs } from "./sharedprefs";
 import { JAssetManager, type JConfiguration, scopedResources } from "./resnative";
-import { dbPath } from "./sqlite";
+import { dbPath, openDatabase } from "./sqlite";
 import { type JIntent, launchIntent } from "./intent";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { svcStart, svcStop, svcBind, svcUnbind } from "./runningservices";
@@ -121,6 +121,8 @@ const SERVICE_CLASS: Record<string, string> = {
   jobscheduler: "android/app/job/JobScheduler",
   sensor: "android/hardware/SensorManager",
   camera: "android/hardware/camera2/CameraManager",
+  fingerprint: "android/hardware/fingerprint/FingerprintManager",
+  usb: "android/hardware/usb/UsbManager",
   location: "android/location/LocationManager",
   batterymanager: "android/os/BatteryManager",
   display: "android/hardware/display/DisplayManager",
@@ -175,6 +177,11 @@ rt.register({
 });
 
 // ── Context methods (shared by Context/ContextWrapper/Activity/Application)
+function contextOpenDatabase(this: JContext, name: string) {
+  const path = dbPath(this.$host.pkg, name);
+  vfs.mkdir(path.slice(0, path.lastIndexOf("/")));
+  return openDatabase(path);
+}
 export const contextMethods: NativeSpec["methods"] = {
   "getResources()Landroid/content/res/Resources;": function (this: JContext) { return this.$host.jresources; },
   "getTheme()Landroid/content/res/Resources$Theme;": function (this: JContext) {
@@ -298,6 +305,8 @@ export const contextMethods: NativeSpec["methods"] = {
   "getDatabasePath(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, name: string) {
     return mkFile(dbPath(this.$host.pkg, name));
   },
+  "openOrCreateDatabase(Ljava/lang/String;ILandroid/database/sqlite/SQLiteDatabase$CursorFactory;)Landroid/database/sqlite/SQLiteDatabase;": contextOpenDatabase,
+  "openOrCreateDatabase(Ljava/lang/String;ILandroid/database/sqlite/SQLiteDatabase$CursorFactory;Landroid/database/DatabaseErrorHandler;)Landroid/database/sqlite/SQLiteDatabase;": contextOpenDatabase,
   "databaseList()[Ljava/lang/String;": function (this: JContext) {
     return jarray(vfs.list(`/data/data/${this.$host.pkg}/databases`), "Ljava/lang/String;");
   },
