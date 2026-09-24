@@ -16,6 +16,7 @@ import { getPM } from "./pm";
 import { locationTransport } from "./locationmanager";
 import { inMainJob, onMain } from "./mainloop";
 import { PROCESS_NAME, PROCESS_UID } from "./os";
+import { packages } from "./packages";
 
 type ProviderInfo = { name: string; authority: string; packageName: string; processName?: string };
 export const providerTransport: { acquire: (info: ProviderInfo) => Promise<unknown> } = { acquire: async () => null };
@@ -105,8 +106,30 @@ const uriGrants = {
   all(): string[] { try { return JSON.parse(globalThis.localStorage?.getItem(this.key()) ?? "[]"); } catch { return []; } },
   set(v: string[]) { try { globalThis.localStorage?.setItem(this.key(), JSON.stringify(v)); } catch { /* private mode */ } },
 };
+const transientUriGrants = new Map<string, Map<string, number>>();
+export function grantUriPermission(pkg: string, uri: JUri, modes: number): void {
+  if (!pkg || !uri) rt.npe();
+  let grants = transientUriGrants.get(pkg);
+  if (!grants) transientUriGrants.set(pkg, grants = new Map());
+  grants.set(uri.uri, (grants.get(uri.uri) ?? 0) | (modes & 3));
+}
+export function revokeUriPermission(uri: JUri, modes: number): void {
+  if (!uri) rt.npe();
+  for (const grants of transientUriGrants.values()) {
+    const remaining = (grants.get(uri.uri) ?? 0) & ~(modes & 3);
+    if (remaining) grants.set(uri.uri, remaining);
+    else grants.delete(uri.uri);
+  }
+}
 export function checkUriPermission(u: JUri, _pid: number, uid: number, modes: number): number {
-  return uid === 0 || uid === PROCESS_UID && (modes & 3) !== 0 && uriGrants.all().includes(u.uri) ? 0 : -1;
+  if (uid === 0) return 0;
+  const requested = modes & 3;
+  if (!requested) return -1;
+  if (uid === PROCESS_UID && uriGrants.all().includes(u.uri)) return 0;
+  for (const [pkg, grants] of transientUriGrants) {
+    if (packages.get(pkg)?.uid === uid && ((grants.get(u.uri) ?? 0) & requested) === requested) return 0;
+  }
+  return -1;
 }
 function fileOf(u: JUri): string {
   const parts = uriParts(u);
