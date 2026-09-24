@@ -132,6 +132,23 @@ test("descriptor bytes await pipe data without closing the caller's descriptor",
   } finally { javaCloseFd(reader); mem.free(buffer); cpu.dispose(); }
 });
 
+test("inotify waits on a real descriptor and reports completed file writes", async () => {
+  setA64(true); stdioInit();
+  const cpu = new Cpu(mainThread, "inotify-test"), path = "/inotify-test", buf = mem.malloc(32), name = mem.strdup(path);
+  const call = (method: string, ...args: number[]) => cpu.call(lookupHost(method, "libc.so")!, args);
+  vfs.write(path, Uint8Array.of(1));
+  const fd = await call("inotify_init"), wd = await call("inotify_add_watch", fd, name, 0x8);
+  try {
+    expect(fd).toBeGreaterThan(2);
+    expect(wd).toBeGreaterThan(0);
+    const pending = call("read", fd, buf, 32);
+    vfs.write(path, Uint8Array.of(2));
+    expect(await pending).toBe(16);
+    expect(mem.ld32(buf)).toBe(wd);
+    expect(mem.ld32(buf + 4)).toBe(0x8);
+  } finally { javaCloseFd(fd); vfs.delete(path); mem.free(name); mem.free(buf); cpu.dispose(); setA64(false); }
+});
+
 test("fts walks directories in pre- and postorder", async () => {
   setA64(true); libcInit(); stdioInit();
   const cpu = new Cpu(mainThread, "fts-test"), path = mem.strdup("/fts-test"), argv = mem.malloc(16);

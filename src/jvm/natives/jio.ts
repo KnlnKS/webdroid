@@ -28,7 +28,7 @@ export const vfs = {
   dirs: new Set<string>(["/data", "/sdcard"]),
   prepare: (_pkg: string): Promise<void> => Promise.resolve(),
   flush: (): Promise<void> => Promise.resolve(),
-  onWrite: (path: string) => {},
+  onWrite: (_path: string, _change: "modify" | "write" | "create" | "delete" = "modify") => {},
   norm(p: string): string {
     const parts: string[] = [];
     for (const seg of p.split("/")) {
@@ -65,10 +65,11 @@ export const vfs = {
   publish(file: VfsFile) {
     if (file.path === null || openFiles.get(file.path) !== file) return;
     this.files.set(file.path, file.data.subarray(0, file.len));
-    this.onWrite(file.path);
+    this.onWrite(file.path, "modify");
   },
   write(p: string, data: Uint8Array, notify = true) {
     const path = this.norm(p);
+    const existed = this.files.has(path) || this.lazyFiles.has(path);
     this.lazyFiles.delete(path);
     this.files.set(path, data);
     const file = openFiles.get(path);
@@ -76,7 +77,7 @@ export const vfs = {
       if (file.data.buffer !== data.buffer || file.data.byteOffset !== data.byteOffset) file.data = data;
       file.len = data.length;
     }
-    if (notify) this.onWrite(path);
+    if (notify) this.onWrite(path, existed ? "write" : "create");
   },
   mount(p: string, source: FileSource) {
     const path = this.norm(p);
@@ -105,7 +106,7 @@ export const vfs = {
     const file = openFiles.get(path);
     if (file) { file.path = null; openFiles.delete(path); }
     const removed = this.files.delete(path) || this.lazyFiles.delete(path);
-    if (removed && notify) this.onWrite(path);
+    if (removed && notify) this.onWrite(path, "delete");
     return removed;
   },
   rename(from: string, to: string): boolean {
@@ -119,11 +120,11 @@ export const vfs = {
     }
     const file = openFiles.get(from);
     if (file) { openFiles.delete(from); file.path = to; openFiles.set(to, file); }
-    this.onWrite(from); this.onWrite(to);
+    this.onWrite(from, "delete"); this.onWrite(to, "create");
     return true;
   },
-  mkdir(p: string) { const path = this.norm(p); if (!this.dirs.has(path)) { this.dirs.add(path); this.onWrite(path); } },
-  rmdir(p: string): boolean { const path = this.norm(p), removed = this.dirs.delete(path); if (removed) this.onWrite(path); return removed; },
+  mkdir(p: string) { const path = this.norm(p); if (!this.dirs.has(path)) { this.dirs.add(path); this.onWrite(path, "create"); } },
+  rmdir(p: string): boolean { const path = this.norm(p), removed = this.dirs.delete(path); if (removed) this.onWrite(path, "delete"); return removed; },
   list(p: string): string[] {
     p = this.norm(p);
     const dir = p === "/" ? "/" : p + "/";

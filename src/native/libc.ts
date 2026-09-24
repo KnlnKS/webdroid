@@ -199,12 +199,14 @@ const next48 = () => { r48 = (A48 * r48 + C48) & M48; return Number(r48 >> 17n);
 /** raw syscall numbers served by the libc function of the same shape (an offset in a register on
  *  LP64 makes mmap direct; ILP32's mmap2 counts pages and _llseek splits the offset, so neither is here) */
 const SYSCALL_NR64: Record<number, string> = {
+  26: "inotify_init1", 27: "inotify_add_watch", 28: "inotify_rm_watch",
   85: "timerfd_create", 86: "timerfd_settime", 87: "timerfd_gettime",
   25: "fcntl", 56: "openat", 57: "close", 62: "lseek", 63: "read", 64: "write", 80: "fstat", 101: "nanosleep", 113: "clock_gettime",
   129: "kill", 131: "tgkill", 169: "gettimeofday", 215: "munmap", 222: "mmap", 226: "mprotect",
   43: "statfs", 48: "faccessat", 59: "pipe2", 78: "readlinkat", 79: "fstatat", 134: "rt_sigaction",
 };
 const SYSCALL_NR32: Record<number, string> = {
+  316: "inotify_init", 317: "inotify_add_watch", 318: "inotify_rm_watch", 360: "inotify_init1",
   350: "timerfd_create", 353: "timerfd_settime", 354: "timerfd_gettime",
   221: "fcntl", 322: "openat", 6: "close", 3: "read", 4: "write", 162: "nanosleep", 263: "clock_gettime", 37: "kill", 268: "tgkill",
   78: "gettimeofday", 91: "munmap", 125: "mprotect",

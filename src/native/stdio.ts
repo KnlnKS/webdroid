@@ -20,15 +20,43 @@ const S_IFDIR = 0x4000, S_IFREG = 0x8000;
 
 /** a pipe: byte chunks, and whoever is parked waiting for them (a reader, or an epoll_wait) */
 interface Pipe { q: Uint8Array[]; wake: (() => void)[]; closed: boolean }
+interface Inotify { watches: Map<number, { path: string; mask: number; dir: boolean }>; nextWd: number; pipe: Pipe }
 interface Timer { clock: number; next: number; interval: number; timeout?: ReturnType<typeof setTimeout> }
 interface EpollEntry { events: number; data: bigint; pending: number; disabled: boolean; cancel: () => void }
 interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
 interface Fd {
   path: string; content: VfsFile; pos: number; write: boolean; dir: boolean; append: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
-  timer?: Timer; source?: FileSource; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll;
+  timer?: Timer; source?: FileSource; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
 }
 const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000, EAGAIN = E.AGAIN;
+const IN_MODIFY = 0x2, IN_CLOSE_WRITE = 0x8, IN_CREATE = 0x100, IN_DELETE = 0x200, IN_DELETE_SELF = 0x400, IN_IGNORED = 0x8000;
+const IN_NONBLOCK = 0x800, IN_CLOEXEC = 0x80000, IN_MASK_ADD = 0x20000000, IN_ONLYDIR = 0x01000000;
 const newPipe = (): Pipe => ({ q: [], wake: [], closed: false });
+const inotifies = new Set<Inotify>();
+function inotifyEvent(state: Inotify, wd: number, mask: number, name = ""): void {
+  const bytes = name ? utf8(name + "\0") : new Uint8Array(0);
+  const len = (bytes.length + 3) & ~3, event = new Uint8Array(16 + len);
+  const view = new DataView(event.buffer);
+  view.setInt32(0, wd, true); view.setUint32(4, mask, true); view.setUint32(12, len, true);
+  event.set(bytes, 16);
+  state.pipe.q.push(event);
+  wakeAll(state.pipe);
+}
+function notifyInotify(path: string, mask: number, parentMask = mask): void {
+  const parent = path.slice(0, path.lastIndexOf("/")) || "/", name = path.slice(path.lastIndexOf("/") + 1);
+  for (const state of inotifies) for (const [wd, watch] of state.watches) {
+    const direct = watch.path === path, child = watch.dir && watch.path === parent;
+    const eventMask = direct ? mask : child ? parentMask : 0;
+    if (eventMask & watch.mask) inotifyEvent(state, wd, eventMask & watch.mask, child ? name : "");
+  }
+}
+function inotifyVfsChange(path: string, change: "modify" | "write" | "create" | "delete"): void {
+  if (change === "write") { notifyInotify(path, IN_MODIFY); notifyInotify(path, IN_CLOSE_WRITE); }
+  else if (change === "create") notifyInotify(path, IN_CREATE, IN_CREATE);
+  else if (change === "delete") notifyInotify(path, IN_DELETE_SELF, IN_DELETE);
+  else notifyInotify(path, IN_MODIFY);
+}
+let inotifyHooked = false;
 const ready = (f: Fd): boolean => !!f.random || !!(f.rpipe && (f.rpipe.q.length || f.rpipe.closed)) || !!(f.event && f.event.count > 0);
 function wakeAll(p: { wake: (() => void)[] }): void { for (const w of p.wake.splice(0)) w(); }
 /** the fd's interest in being woken: pipe readers and epoll waiters both park here */
@@ -257,6 +285,21 @@ function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): number | Pro
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
   if (f.dir) return fail(cpu, E.ISDIR);
+  if (f.inotify) {
+    const q = f.inotify.pipe.q;
+    if (!q.length) {
+      if (f.nonblock) return fail(cpu, EAGAIN);
+      return new Promise<void>((resolve) => f.inotify!.pipe.wake.push(resolve)).then(() => fdRead(cpu, fd, p, n));
+    }
+    if (n < q[0].length) return fail(cpu, E.INVAL);
+    let done = 0;
+    while (q.length && done + q[0].length <= n) {
+      const event = q.shift()!;
+      mem.write(p + done, event);
+      done += event.length;
+    }
+    return done;
+  }
   if (f.event && n < 8) return fail(cpu, E.INVAL);
   if (f.rpipe || f.event) {
     if (!ready(f)) {
@@ -321,6 +364,8 @@ function fdClose(cpu: Cpu | null, fd: number): number {
   if (!f) return fail(cpu, E.BADF);
   fds.delete(fd); releaseFd(fd);
   if (--f.references > 0) return 0;
+  if (f.content.path && f.write) notifyInotify(f.content.path, IN_CLOSE_WRITE);
+  if (f.inotify) { inotifies.delete(f.inotify); f.inotify.pipe.closed = true; wakeAll(f.inotify.pipe); }
   if (f.timer) clearTimeout(f.timer.timeout);
   if (f.epoll) { for (const e of f.epoll.entries.values()) e.cancel(); for (const wake of f.epoll.wake) wake(); }
   if (f.wpipe) { f.wpipe.closed = true; wakeAll(f.wpipe); }
@@ -384,6 +429,12 @@ function makePipe(out: number, flags: number): number {
   mem.st32(out, put({ ...fdBase("pipe"), rpipe: p, nonblock: nb, statusFlags: nb ? O_NONBLOCK : 0 }));
   mem.st32(out + 4, put({ ...fdBase("pipe"), wpipe: p, nonblock: nb, write: true, statusFlags: 1 | (nb ? O_NONBLOCK : 0) }));
   return 0;
+}
+function makeInotify(cpu: Cpu, flags: number): number {
+  if (flags & ~(IN_NONBLOCK | IN_CLOEXEC)) return fail(cpu, E.INVAL);
+  const pipe = newPipe(), state: Inotify = { watches: new Map(), nextWd: 1, pipe };
+  inotifies.add(state);
+  return put({ ...fdBase("inotify"), inotify: state, rpipe: pipe, nonblock: !!(flags & IN_NONBLOCK), statusFlags: flags & IN_NONBLOCK });
 }
 function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollEntry {
   const entry: EpollEntry = { events, data, pending: nativePollEvents(fd, events), disabled: false, cancel: () => {} };
@@ -649,6 +700,11 @@ function closeFts(handle: number): number {
 }
 
 export function stdioInit(): void {
+  if (!inotifyHooked) {
+    const priorOnWrite = vfs.onWrite;
+    vfs.onWrite = (path, change = "modify") => { priorOnWrite(path, change); inotifyVfsChange(path, change); };
+    inotifyHooked = true;
+  }
   for (let fd = 0; fd < 3; fd++) reserveFd(fd);
   fds.set(0, fdBase("/dev/stdin"));
   fds.set(1, { ...fdBase("/dev/stdout"), write: true, statusFlags: 1, log: 4 });
@@ -759,6 +815,30 @@ export function stdioInit(): void {
     },
     pipe: (_c, a) => makePipe(a.p(), 0),
     pipe2: (_c, a) => makePipe(a.p(), a.i()),
+    inotify_init: (cpu) => makeInotify(cpu, 0),
+    inotify_init1: (cpu, a) => makeInotify(cpu, a.i()),
+    inotify_add_watch: (cpu, a) => {
+      const fd = a.i(), path = vfs.norm(a.str()), mask = a.u(), state = fds.get(fd)?.inotify;
+      if (!state) return fail(cpu, E.BADF);
+      if (!vfs.exists(path)) return fail(cpu, E.NOENT);
+      const dir = vfs.isDir(path);
+      if (mask & IN_ONLYDIR && !dir) return fail(cpu, E.NOTDIR);
+      const events = mask & ~(IN_MASK_ADD | IN_ONLYDIR);
+      for (const [wd, watch] of state.watches) if (watch.path === path) {
+        watch.mask = mask & IN_MASK_ADD ? watch.mask | events : events;
+        return wd;
+      }
+      const wd = state.nextWd++;
+      state.watches.set(wd, { path, mask: events, dir });
+      return wd;
+    },
+    inotify_rm_watch: (cpu, a) => {
+      const state = fds.get(a.i())?.inotify, wd = a.i();
+      if (!state) return fail(cpu, E.BADF);
+      if (!state.watches.delete(wd)) return fail(cpu, E.INVAL);
+      inotifyEvent(state, wd, IN_IGNORED);
+      return 0;
+    },
     socketpair: (_c, a) => {
       a.i(); const type = a.i(); a.i(); const sv = a.p();
       const ab = newPipe(), ba = newPipe(), nb = !!(type & 0x800);
