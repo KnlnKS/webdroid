@@ -5,7 +5,8 @@
 // Walks each flow on the API 33 oracle, resolves every text anchor to a concrete normalized
 // coordinate, and writes tests/e2e/golden/<flow>/{NN-id.png, manifest.json}. Run this by hand
 // when the flows change; `bun run e2e --full` then diffs off the committed result with no emulator.
-import { mkdir, rm } from "node:fs/promises";
+import { mkdtemp, rename, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import * as emu from "./drivers/emulator";
 import { parseArgs } from "./lib/args";
 import { PINNED_CLOCK_MS, screenOf, screenParam, sameScreen, uiFileFor, waitHorizonMs, type Flow, type Manifest, type RecordedStep } from "./types";
@@ -60,15 +61,7 @@ async function setDeviceClock(flow: Flow): Promise<number> {
   return ms;
 }
 
-async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceInfo>>) {
-  const dir = `${E2E_DIR}golden/${flow.app}`;
-  if (startup && await Bun.file(`${dir}/manifest.json`).exists()) {
-    const previous: Manifest = await Bun.file(`${dir}/manifest.json`).json();
-    if (previous.depth !== "startup") throw new Error(`${flow.app}: full Android reference already exists`);
-  }
-  await rm(dir, { recursive: true, force: true });
-  await mkdir(dir, { recursive: true });
-
+async function recordInto(dir: string, flow: Flow, device: Awaited<ReturnType<typeof emu.deviceInfo>>) {
   const steps = startup ? flow.steps.slice(0, 1) : flow.steps;
   console.log(`\n=== recording ${flow.app} (${steps.length} steps) ===`);
   const clockMs = await setDeviceClock(flow);
@@ -173,6 +166,29 @@ async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceIn
     device, crop: flow.crop, steps: recorded,
   };
   await Bun.write(`${dir}/manifest.json`, JSON.stringify(manifest, null, 2));
+}
+
+async function record(flow: Flow, device: Awaited<ReturnType<typeof emu.deviceInfo>>) {
+  const dir = `${E2E_DIR}golden/${flow.app}`;
+  if (startup && await Bun.file(`${dir}/manifest.json`).exists()) {
+    const previous: Manifest = await Bun.file(`${dir}/manifest.json`).json();
+    if (previous.depth !== "startup") throw new Error(`${flow.app}: full Android reference already exists`);
+  }
+  const staged = await mkdtemp(`${dir}.record-`);
+  const previous = `${staged}.previous`;
+  try {
+    await recordInto(staged, flow, device);
+    if (existsSync(dir)) await rename(dir, previous);
+    try {
+      await rename(staged, dir);
+    } catch (error) {
+      if (existsSync(previous)) await rename(previous, dir);
+      throw error;
+    }
+    await rm(previous, { recursive: true, force: true });
+  } finally {
+    await rm(staged, { recursive: true, force: true });
+  }
   console.log(`  -> ${dir}`);
 }
 
