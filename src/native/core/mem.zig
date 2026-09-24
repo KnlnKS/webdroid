@@ -229,8 +229,9 @@ pub export fn unmap_pages(addr: u32, n_in: u32) u32 {
 export fn commit_pages(addr: u32, n: u32) u32 {
     if (addr < abi.ARENA_BASE) return 0;
     const a = pageOf(addr);
-    const b = pageOf(addr +% n +% (PAGE_SIZE - 1));
-    if (b > pageOf(module_bot)) return 0;
+    const end = @as(u64, addr) + n;
+    if (end > mem_size) return 0;
+    const b: u32 = @intCast((end + PAGE_SIZE - 1) >> PAGE_SHIFT);
     for (a..b) |i| if (pages[i] == FREE) return 0;
     for (a..b) |i| if (pages[i] == RESERVED) {
         cpu.invalidate_range(@intCast(i * PAGE_SIZE), PAGE_SIZE);
