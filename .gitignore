@@ -10,7 +10,7 @@ tests/e2e/report/
 .worktrees/
 vendor/aosp
 vendor/microg/
-vendor/sql.js/dist/
+vendor/sql.js/dist
 vendor/framework-res.apk
 tests/gms-client/.gradle/
 tests/gms-client/build/
@@ -21,3 +21,6 @@ scripts/simd-oracle/build/
 .zig-cache/
 src/native/core.wasm.ts
 src/native/core.safe.wasm.ts
+dist/
+.wrangler/
+worker-configuration.d.ts

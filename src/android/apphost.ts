@@ -10,8 +10,7 @@ export interface AppHost {
   res: Resources;
   theme: JTheme;
   pkg: string;
-  /** the apk's file name under apks/ — what the dev server's /asset route keys on */
-  apkFile: string;
+  assetKey: string;
   appLabel: string;
   themeResId: number;
   iconRes: number;

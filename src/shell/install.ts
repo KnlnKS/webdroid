@@ -4,7 +4,7 @@
 
 import { parseAXML, attrStr } from "../android/axml";
 import { centralDirOfSource, inflateEntry, localDataOffset, zipTree, type ZEntry } from "../jvm/natives/jzip";
-import { BytesFile, RangeFile, SliceFile, readFully, type FileSource } from "./lazyfile";
+import { BlobFile, BytesFile, RangeFile, SliceFile, readFully, type FileSource } from "./lazyfile";
 
 /** A split install (.xapk, .apks, an App Bundle's output) is a zip of apks rather than an
  *  apk: a base and its config/feature splits. Merge them into the one tree the rest of the
@@ -23,7 +23,7 @@ type OpenedApk = { source: FileSource; split: string | null; hasManifest: boolea
   | { kind: "lazy"; bytes: null; zip: null; entries: Map<string, ZEntry> }
 );
 
-function mergeInstall(opened: OpenedApk[]): Install {
+export function mergeInstall(opened: OpenedApk[]): Install {
   const base = opened.find((o) => o.hasManifest && !o.split);
   if (!base || base.kind !== "resident") throw new Error("split install has no resident base apk");
   const merged = base.zip;
@@ -35,12 +35,11 @@ function mergeInstall(opened: OpenedApk[]): Install {
     if (o.kind === "resident") zipTree(o.bytes, merged, (path) => {
       const target = path === "AndroidManifest.xml" || path === "resources.arsc" || path.startsWith("META-INF/") ? null
         : /^classes\d*\.dex$/.test(path) ? `classes${1000 + extra++}.dex` : path;
-      if (target) lazyEntries.delete(target);
-      return target;
+      return target && !lazyEntries.has(target) ? target : null;
     });
     else for (const [path, entry] of o.entries) {
       if (path === "AndroidManifest.xml" || path === "resources.arsc" || path.startsWith("META-INF/") || path.endsWith("/")) continue;
-      delete merged[path];
+      if (Object.hasOwn(merged, path) || lazyEntries.has(path)) continue;
       lazyEntries.set(path, new ZipEntryFile(o.source, entry));
     }
     if (o.split) splits.push({ name: o.split, source: o.source, bytes: o.bytes, resources: o.kind === "resident" ? o.zip["resources.arsc"] ?? null : null });
@@ -95,12 +94,19 @@ async function openedApk(source: FileSource): Promise<OpenedApk> {
   return { kind: "resident", source: new BytesFile(bytes), bytes, zip: zipTree(bytes), split, hasManifest: !!manifest };
 }
 
-export async function openInstallRemote(url: string): Promise<Install> {
-  const source = await RangeFile.open(url);
+export async function openInstallSource(source: FileSource): Promise<Install> {
   const entries = await centralDirOfSource(source);
   if (entries.has("AndroidManifest.xml")) return openInstall(await readFully(source));
   const apks = [...entries.values()].filter((entry) => entry.name.endsWith(".apk"));
   if (!apks.length) throw new Error("no AndroidManifest.xml and no apks inside: not an apk or a split install");
   const opened = await Promise.all(apks.map(async (entry) => openedApk(await entrySource(source, entry))));
   return mergeInstall(opened);
+}
+
+export async function openInstallRemote(url: string): Promise<Install> {
+  return openInstallSource(await RangeFile.open(url));
+}
+
+export async function openInstallLocal(file: File): Promise<Install> {
+  return openInstallSource(new BlobFile(file));
 }

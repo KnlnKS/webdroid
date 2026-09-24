@@ -3,7 +3,9 @@ import { webScript } from "./webscript";
 
 export const htmlAttribute = (value: string) => value.replace(/[&"<]/g, c => c === "&" ? "&amp;" : c === '"' ? "&quot;" : "&lt;");
 
-function bases(rewriter: HTMLRewriter, visit: (element: HTMLRewriterTypes.Element) => void) {
+type RewriterElement = Parameters<NonNullable<Parameters<HTMLRewriter["on"]>[1]["element"]>>[0];
+
+function bases(rewriter: HTMLRewriter, visit: (element: RewriterElement) => void) {
   let templates = 0;
   return rewriter.on("template", { element(element) {
     templates++;
@@ -13,7 +15,7 @@ function bases(rewriter: HTMLRewriter, visit: (element: HTMLRewriterTypes.Elemen
   } });
 }
 
-export function webDocument(html: string, url?: string, scripts = false): string {
+export async function webDocument(html: string, url?: string, scripts = false): Promise<string> {
   scripts &&= url !== undefined && /^https?:/.test(url);
   let hasBase = false, hasHref = false;
   const scriptBodies: string[][] = [];
@@ -26,14 +28,15 @@ export function webDocument(html: string, url?: string, scripts = false): string
       element() { scriptBodies.push([]); },
       text(text) { scriptBodies[scriptBodies.length - 1].push(text.text); },
     });
-    scan.transform(html);
+    await scan.transform(new Response(html)).text();
   }
 
   const injection = (url === undefined ? "" : `<meta name="wd-proxy-url" content="${htmlAttribute(url)}">`
     + `<base data-wd-document-base${hasBase ? " data-wd-fallback" : ""} href="${htmlAttribute(url)}">`) + WEB_INJECT;
   let inserted = false;
   const rewriter = new HTMLRewriter().on("*", { element(element) {
-    if (scripts) for (const [name, value] of element.attributes) {
+    if (scripts) for (const attribute of element.attributes as Iterable<[string, string] | Attr>) {
+      const [name, value] = Array.isArray(attribute) ? attribute : [attribute.name, attribute.value];
       if (/^on/i.test(name)) element.setAttribute(name, webScript(value));
     }
     if (inserted || element.tagName === "html") return;
@@ -76,5 +79,5 @@ export function webDocument(html: string, url?: string, scripts = false): string
       hasHref = true;
     }
   });
-  return rewriter.transform(html);
+  return rewriter.transform(new Response(html)).text();
 }

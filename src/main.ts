@@ -25,7 +25,8 @@ import { setWebLayer, webViewInfo } from "./android/webkit";
 import { native } from "./native/debug";
 import { jitStats } from "./native/core";
 import { device, parseScreen, readStoredScreen, storeScreen, type Screen } from "./shell/config";
-import { openInstallRemote } from "./shell/install";
+import { openInstallLocal, openInstallRemote } from "./shell/install";
+import { activateLocalAssets, localAsset } from "./shell/localassets";
 import { vfs } from "./jvm/natives/jio";
 import { yieldStats, timedParks } from "./jvm/yield";
 import { provisionPackages, provisionServices } from "./shell/provision";
@@ -67,6 +68,11 @@ root.innerHTML = `
       <div id="cfg-note"></div>
     </div>
     <div id="launcher"></div>
+    <div id="local-loader">
+      <label for="apk-picker" class="appcard">Choose APK or XAPK</label>
+      <input id="apk-picker" type="file" accept=".apk,.xapk,.apks" multiple hidden>
+      <div id="drop-hint">Or drop package files here</div>
+    </div>
     <div id="missing" style="white-space:pre-wrap"></div>
   </div>
 </div>
@@ -87,6 +93,8 @@ root.innerHTML = `
     padding:3px 9px;cursor:pointer;font:inherit }
   #screencfg button:hover { background:#2e343d }
   #cfg-note { flex-basis:100%;color:#678 }
+  #drop-hint { color:#678;padding:2px 12px 10px }
+  body.dragging #local-loader { outline:2px dashed #7c8;border-radius:10px }
 </style>`;
 
 const canvas = document.getElementById("screen") as HTMLCanvasElement;
@@ -165,20 +173,53 @@ const back = () => { if (!processBroker().back(PROCESS_PID)) return pressBack();
 // The android resource package is the same for every app: start it now so a boot never waits.
 void loadFramework();
 
-// launcher: whatever is in apks/, named from the filename
-void fetch("/apks").then((r) => r.json() as Promise<string[]>).catch(() => [] as string[]).then((files) => {
+const localPackages = new Map<string, File>();
+function addCard(file: string, launch: () => void) {
+  const name = file.replace(/\.(?:xapk|apks|apk)$/i, "").replace(/[-_]v?\d[\d.]*$/, "").replace(/[-_]+/g, " ");
+  const el = document.createElement("button");
+  el.className = "appcard";
+  el.innerHTML = `<b></b><span style="margin-left:auto;color:#678"></span>`;
+  el.firstElementChild!.textContent = name;
+  el.lastElementChild!.textContent = file;
+  el.onclick = launch;
+  launcherEl.appendChild(el);
+}
+const picker = document.getElementById("apk-picker") as HTMLInputElement;
+function addLocal(files: FileList | File[]) {
   for (const file of files) {
-    const name = file.replace(/\.x?apk$/i, "").replace(/[-_]v?\d[\d.]*$/, "").replace(/[-_]+/g, " ");
-    const el = document.createElement("div");
-    el.className = "appcard";
-    el.innerHTML = `<b></b><span style="margin-left:auto;color:#678"></span>`;
-    el.firstElementChild!.textContent = name;
-    el.lastElementChild!.textContent = file;
-    el.onclick = () => void boot(file);
-    launcherEl.appendChild(el);
+    if (!/\.(?:apk|xapk|apks)$/i.test(file.name)) {
+      statusEl.textContent = `Unsupported package: ${file.name}`;
+      continue;
+    }
+    if (!localPackages.has(file.name)) addCard(file.name, () => void boot(file.name, localPackages.get(file.name)));
+    localPackages.set(file.name, file);
   }
-  const auto = params.get("apk");
-  if (auto && files.includes(auto)) void boot(auto);
+  picker.value = "";
+}
+picker.addEventListener("change", () => addLocal(picker.files ?? []));
+document.addEventListener("dragover", (event) => {
+  if (!event.dataTransfer?.types.includes("Files")) return;
+  event.preventDefault();
+  document.body.classList.add("dragging");
+});
+document.addEventListener("dragleave", (event) => { if (!event.relatedTarget) document.body.classList.remove("dragging"); });
+document.addEventListener("drop", (event) => {
+  event.preventDefault();
+  document.body.classList.remove("dragging");
+  if (event.dataTransfer?.files) addLocal(event.dataTransfer.files);
+});
+if (process.env.NODE_ENV !== "production") {
+  void fetch("/apks").then((r) => r.json() as Promise<string[]>).catch(() => [] as string[]).then((files) => {
+    for (const file of files) addCard(file, () => void boot(file));
+    const auto = params.get("apk");
+    if (auto && files.includes(auto)) void boot(auto);
+  });
+}
+
+navigator.serviceWorker?.addEventListener("message", (event: MessageEvent) => {
+  if (event.data?.kind !== "webasset" || !event.ports[0]) return;
+  const port = event.ports[0], path = event.data.path;
+  void localAsset(path).then((reply) => { port.postMessage(reply); port.close(); }, () => { port.postMessage({ status: 500 }); port.close(); });
 });
 
 // console capture: wd.logs is what the e2e driver and scripts/dbg.ts read back out of the page
@@ -196,21 +237,39 @@ for (const level of ["log", "warn", "error"] as const) {
 window.addEventListener("error", (e) => logBuf.push("window.error: " + e.message + " @" + e.filename + ":" + e.lineno));
 window.addEventListener("unhandledrejection", (e) => logBuf.push("unhandledrejection: " + ((e.reason as any)?.message ?? (e.reason as any)?.msg ?? String(e.reason)) + "\n" + ((e.reason as any)?.stack ?? "").slice(0, 600)));
 
-async function boot(file: string) {
+let booting = false;
+async function boot(file: string, local?: File) {
+  if (booting) return;
+  booting = true;
+  launcherEl.inert = true;
+  picker.disabled = true;
+  let rollbackAssets: (() => void) | undefined;
   try {
-    statusEl.textContent = "downloading " + file + "…";
-    const [install] = await Promise.all([openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady, provisionPackages(), loadSkiaText()]);
+    statusEl.textContent = (local ? "opening " : "downloading ") + file + "…";
+    const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady, provisionPackages(), loadSkiaText()]);
+    const assets = local ? { key: crypto.randomUUID(), install } : null;
+    if (local) {
+      await navigator.serviceWorker.register("/webview-worker.js");
+      await navigator.serviceWorker.ready;
+      if (!navigator.serviceWorker.controller) await new Promise<void>((resolve) => navigator.serviceWorker.addEventListener("controllerchange", () => resolve(), { once: true }));
+    }
+    rollbackAssets = activateLocalAssets(assets);
     const t0 = performance.now();
     connectProcess();
-    await bootApk(install, (s) => { statusEl.textContent = s; }, file, null, registerForegroundProcess);
+    await bootApk(install, (s) => { statusEl.textContent = s; }, assets?.key ?? file, null, registerForegroundProcess);
     void provisionServices({ attestationEnabled: params.get("attestation") === "1" })
       .then(() => processBroker().boot()).catch((error) => console.error("[provision]", error));
     perf.bootMs = performance.now() - t0;
     statusEl.textContent = `running (boot ${perf.bootMs.toFixed(0)}ms)` + (rt.nativeRequired.size ? " — needs native code" : "");
   } catch (e) {
+    rollbackAssets?.();
     console.error(e);
     statusEl.textContent = "boot failed: " + ((e as any)?.msg ?? e);
     statusEl.style.color = "#e77";
+  } finally {
+    booting = false;
+    launcherEl.inert = false;
+    picker.disabled = false;
   }
 }
 

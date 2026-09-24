@@ -1,0 +1,45 @@
+interface BridgePeer { send(message: string): number | void }
+
+export class BridgeCalls<Peer extends BridgePeer> {
+  private pending = new Map<number, { peer: Peer; finish: (response: Response) => void }>();
+  private next = 0;
+
+  async call(request: Request, peer: Peer, active: () => boolean): Promise<Response> {
+    if (request.method !== "POST" || !active()) return new Response("bridge unavailable", { status: 410 });
+    const body = await request.text();
+    if (body.length > 1024 * 1024) return new Response("bridge request too large", { status: 413 });
+    if (request.signal.aborted || !active()) return new Response("bridge closed", { status: 410 });
+    return new Promise<Response>((resolve) => {
+      const seq = ++this.next;
+      const finish = (response: Response) => {
+        clearTimeout(timer);
+        request.signal.removeEventListener("abort", abort);
+        this.pending.delete(seq);
+        resolve(response);
+      };
+      const abort = () => finish(new Response("bridge request cancelled", { status: 408 }));
+      const timer = setTimeout(() => finish(new Response("bridge timed out", { status: 504 })), 30_000);
+      this.pending.set(seq, { peer, finish });
+      request.signal.addEventListener("abort", abort, { once: true });
+      try {
+        const sent = peer.send(`${seq}\n${body}`);
+        if (typeof sent === "number" && sent < 0) finish(new Response("bridge unavailable", { status: 503 }));
+      } catch { finish(new Response("bridge unavailable", { status: 410 })); }
+    });
+  }
+
+  reply(peer: Peer, message: string): void {
+    const at = message.indexOf("\n"), seq = Number(message.slice(0, at));
+    if (at < 1 || !Number.isSafeInteger(seq)) return;
+    const call = this.pending.get(seq);
+    if (call?.peer !== peer) return;
+    call.finish(new Response(message.slice(at + 1), {
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+    }));
+  }
+
+  close(peer: Peer): void {
+    for (const call of this.pending.values()) if (call.peer === peer)
+      call.finish(new Response("bridge closed", { status: 410 }));
+  }
+}

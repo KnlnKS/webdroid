@@ -14,6 +14,7 @@ import { mkUri } from "./net";
 import { appHost } from "./apphost";
 import { webCookies, thirdPartyCookies } from "./cookies";
 import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge";
+import { localAsset } from "../shell/localassets";
 import { EXT_MIME, MIME_EXT } from "../mime";
 import { WEB_INJECT } from "../shell/webinject";
 
@@ -129,12 +130,12 @@ export function webViewInfo(): { url: string | null; title: string; loaded: bool
   return [...live].map((v) => ({ url: v.url, title: v.title, loaded: v.loaded, progress: v.progress, rect: [v.x0, v.y0, v.x1, v.y1] }));
 }
 
-const apkOf = (v: JView) => (v.ctx as JContext | null)?.$host?.apkFile ?? "";
+const assetOf = (v: JView) => (v.ctx as JContext | null)?.$host?.assetKey ?? "";
 /** what the browser loads for an Android URL: the dev server fronts http(s) and the apk's assets */
 function srcFor(url: string, v: JWebView): string {
   if (/^https?:/i.test(url)) return "/proxy?frame=1&url=" + encodeURIComponent(url);
   const m = /^file:\/\/\/android_asset\/(.*)$/i.exec(url);
-  return m ? "/asset/" + encodeURIComponent(apkOf(v)) + "/assets/" + m[1] : url;
+  return m ? "/asset/" + encodeURIComponent(assetOf(v)) + "/assets/" + m[1] : url;
 }
 /** a frame-side absolute URL back to the Android-visible one the app knows */
 function unmap(href: string, v: JWebView): string {
@@ -145,7 +146,7 @@ function unmap(href: string, v: JWebView): string {
     const url = new URL(source); if (local.hash) url.hash = local.hash;
     return url.href;
   }
-  const a = o + "/asset/" + encodeURIComponent(apkOf(v)) + "/assets/";
+  const a = o + "/asset/" + encodeURIComponent(assetOf(v)) + "/assets/";
   return href.startsWith(a) ? "file:///android_asset/" + href.slice(a.length) : href;
 }
 /** the frame's window when its document is ours to script (data: URLs are opaque) */
@@ -250,7 +251,15 @@ export class JWebView extends JViewGroup {
       const channel = new MessageChannel(), cookies = webCookies(appHost?.pkg ?? "");
       this.cookiePort = channel.port1;
       channel.port1.onmessage = async ({ data, ports }) => {
-        if (!ports[0] || typeof data?.url !== "string") return;
+        if (!ports[0]) return;
+        if (data?.kind === "webasset") {
+          const port = ports[0];
+          try { port.postMessage(await localAsset(data.path)); }
+          catch { port.postMessage({ status: 500 }); }
+          port.close();
+          return;
+        }
+        if (typeof data?.url !== "string") return;
         const jar = await cookies;
         const values = Array.isArray(data.values) ? data.values.filter((value: unknown): value is string => typeof value === "string") : [];
         ports[0].postMessage(jar.network(data.url, this.url ?? "", values, thirdPartyCookies.has(this))); ports[0].close();

@@ -109,7 +109,7 @@ function visibleActivities(): JActivity[] {
   return first > 0 ? stack.slice(first) : stack;
 }
 
-export async function bootApk(input: Uint8Array | Install, onStatus: (s: string) => void, apkFile = "", processName: string | null = null, prepared?: () => void): Promise<BootedApp> {
+export async function bootApk(input: Uint8Array | Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null, prepared?: () => void): Promise<BootedApp> {
   // The framework package must be in place before anything links, and restored storage roots
   // must resolve before the app reads a persisted tree URI: it caches the answer for the session.
   onStatus("unpacking apk…");
@@ -193,7 +193,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   }
 
   const host: AppHost = {
-    res, theme, pkg, apkFile, appLabel: label, themeResId, iconRes: iconAttr?.data ?? 0, zip,
+    res, theme, pkg, assetKey, appLabel: label, themeResId, iconRes: iconAttr?.data ?? 0, zip,
     splits: install.splits.map((sp) => sp.name),
     application: null, jresources: jres,
     launch: async (component, intent, options) => { await launchActivity(component, intent, options); },
