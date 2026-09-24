@@ -404,22 +404,24 @@ rt.register({
   methods: { "<init>()V": function () {} },
 });
 class JWifiLock extends JObj { held = false; refCounted = true; acquisitions = 0; }
+const wifiLockMethods = {
+  "acquire()V": function (this: JWifiLock) {
+    if (this.refCounted) this.acquisitions++;
+    this.held = true;
+  },
+  "release()V": function (this: JWifiLock) {
+    if (!this.held || this.refCounted && this.acquisitions === 0) throw rt.mkThrowable("java/lang/RuntimeException", "WifiLock under-locked");
+    if (this.refCounted) this.held = --this.acquisitions > 0;
+    else this.held = false;
+  },
+  "isHeld()Z": function (this: JWifiLock) { return +this.held; },
+  "setReferenceCounted(Z)V": function (this: JWifiLock, enabled: number) { this.refCounted = !!enabled; },
+};
 rt.register({
   name: "android/net/wifi/WifiManager$WifiLock", ctor: JWifiLock,
-  methods: {
-    "acquire()V": function (this: JWifiLock) {
-      if (this.refCounted) this.acquisitions++;
-      this.held = true;
-    },
-    "release()V": function (this: JWifiLock) {
-      if (!this.held || this.refCounted && this.acquisitions === 0) throw rt.mkThrowable("java/lang/RuntimeException", "WifiLock under-locked");
-      if (this.refCounted) this.held = --this.acquisitions > 0;
-      else this.held = false;
-    },
-    "isHeld()Z": function (this: JWifiLock) { return +this.held; },
-    "setReferenceCounted(Z)V": function (this: JWifiLock, enabled: number) { this.refCounted = !!enabled; },
-  },
+  methods: wifiLockMethods,
 });
+rt.register({ name: "android/net/wifi/WifiManager$MulticastLock", ctor: class extends JWifiLock {}, methods: wifiLockMethods });
 rt.register({
   name: "android/net/wifi/WifiManager", ctor: class extends JObj {},
   statics: { WIFI_STATE_DISABLED: 1, WIFI_STATE_ENABLED: 3, WIFI_STATE_UNKNOWN: 4, WIFI_STATE_CHANGED_ACTION: "android.net.wifi.WIFI_STATE_CHANGED", NETWORK_STATE_CHANGED_ACTION: "android.net.wifi.STATE_CHANGE", SCAN_RESULTS_AVAILABLE_ACTION: "android.net.wifi.SCAN_RESULTS" },
@@ -440,6 +442,7 @@ rt.register({
     "getConfiguredNetworks()Ljava/util/List;": () => newArrayList(),
     "createWifiLock(ILjava/lang/String;)Landroid/net/wifi/WifiManager$WifiLock;": () => new JWifiLock(),
     "createWifiLock(Ljava/lang/String;)Landroid/net/wifi/WifiManager$WifiLock;": () => new JWifiLock(),
+    "createMulticastLock(Ljava/lang/String;)Landroid/net/wifi/WifiManager$MulticastLock;": () => rt.make("android/net/wifi/WifiManager$MulticastLock"),
     "startScan()Z": () => 0,
     "isScanAlwaysAvailable()Z": () => 0,
     "is5GHzBandSupported()Z": () => 0,

@@ -19,6 +19,7 @@ const AI_PASSIVE = 1, AI_CANONNAME = 2, AI_NUMERICHOST = 4, AI_NUMERICSERV = 8, 
 const EAI_ADDRFAMILY = 1, EAI_BADFLAGS = 3, EAI_FAMILY = 5, EAI_NONAME = 8;
 const EAI_SERVICE = 9, EAI_SOCKTYPE = 10, EAI_SYSTEM = 11, EAI_PROTOCOL = 13, EAI_OVERFLOW = 14;
 const NI_NUMERICHOST = 2, NI_NAMEREQD = 4;
+const IFF_UP = 1, IFF_LOOPBACK = 8, IFF_RUNNING = 0x40;
 const MSG_PEEK = 0x2, MSG_TRUNC = 0x20, MSG_DONTWAIT = 0x40;
 const E_DESTADDRREQ = 89, E_MSGSIZE = 90, E_OPNOTSUPP = 95, E_ADDRINUSE = 98;
 const UDP_MAX_PAYLOAD = 65_507;
@@ -103,6 +104,24 @@ function parseIpv4(text: string): [number, number, number, number] | null {
 }
 
 const addressFor = syntheticAddress;
+
+function nativeGetifaddrs(cpu: Cpu, result: number): number {
+  if (!result) return fail(cpu, E.FAULT);
+  const size = PTR === 8 ? 56 : 28;
+  const entry = mem.malloc(size + 35);
+  if (!entry) return fail(cpu, E.NOMEM);
+  mem.memset(entry, 0, size + 35);
+  const address = entry + size, netmask = address + 16, name = netmask + 16;
+  stp(entry + PTR, name);
+  mem.st32(entry + PTR * 2, IFF_UP | IFF_LOOPBACK | IFF_RUNNING);
+  stp(entry + (PTR === 8 ? 24 : 12), address);
+  stp(entry + (PTR === 8 ? 32 : 16), netmask);
+  mem.st16(address, AF_INET); mem.u8.set([127, 0, 0, 1], address + 4);
+  mem.st16(netmask, AF_INET); mem.u8.set([255, 0, 0, 0], netmask + 4);
+  mem.u8.set([108, 111, 0], name);
+  stp(result, entry);
+  return 0;
+}
 
 const addrinfoLayout = () => PTR === 8
   ? { size: 48, canon: 24, addr: 32, next: 40 }
@@ -690,6 +709,8 @@ export function netInit(): void {
     getpeername: (cpu, args) => nativeGetpeername(cpu, args.i(), args.p(), args.p()),
     getaddrinfo: (cpu, args) => nativeGetaddrinfo(cpu, args.p(), args.p(), args.p(), args.p()),
     freeaddrinfo: (_cpu, args) => nativeFreeaddrinfo(args.p()),
+    getifaddrs: (cpu, args) => nativeGetifaddrs(cpu, args.p()),
+    freeifaddrs: (_cpu, args) => { const entry = args.p(); if (entry) mem.free(entry); },
     gai_strerror: (_cpu, args) => ptr(gaiStrerror(args.i())),
     getnameinfo: (_cpu, args) => nativeGetnameinfo(args.p(), args.u(), args.p(), args.u(), args.p(), args.u(), args.i()),
     inet_pton: (_cpu, args) => { const family = args.i(), text = args.str(), out = args.p(); const bytes = parseIpv4(text); if (family !== AF_INET) return -1; if (!bytes) return 0; mem.write(out, bytes); return 1; },
