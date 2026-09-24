@@ -104,6 +104,11 @@ rt.register({ name: "android/location/LocationManager", ctor: class extends JObj
       rt.link("android/location/LocationProvider"); const provider = new JLocationProvider(); provider.name = name; return provider;
     },
     "getAllProviders()Ljava/util/List;": () => newArrayList(providers()),
+    "sendExtraCommand(Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Z": (provider: string | null, command: string | null) => {
+      if (provider == null || command == null) rt.npe();
+      if (!providers().includes(provider!)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown provider " + provider);
+      return 1;
+    },
     "getProviders(Z)Ljava/util/List;": (enabled: number) => newArrayList(enabled && !locationTransport.enabled() ? [] : providers()),
     "getProviders(Landroid/location/Criteria;Z)Ljava/util/List;": (_criteria: unknown, enabled: number) => newArrayList(enabled && !locationTransport.enabled() ? [] : providers().filter(p => p !== "passive")),
     "getBestProvider(Landroid/location/Criteria;Z)Ljava/lang/String;": (_criteria: unknown, enabled: number) => locationTransport.available() && (!enabled || locationTransport.enabled()) ? "network" : null,

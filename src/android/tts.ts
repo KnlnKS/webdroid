@@ -11,16 +11,19 @@ rt.register({
 });
 rt.markers("android/speech/tts/TextToSpeech$OnInitListener");
 
+function initTextToSpeech(_context: unknown, listener: unknown) {
+  if (!listener) rt.npe();
+  setTimeout(() => void onMain(() => vcall(listener, "onInit", "(I)V", -1)).catch(reportUncaught), 0);
+}
+
 rt.register({
   name: "android/speech/tts/TextToSpeech", ctor: class extends JObj {},
   statics: { SUCCESS: 0, ERROR: -1, QUEUE_FLUSH: 0, QUEUE_ADD: 1,
     LANG_AVAILABLE: 0, LANG_COUNTRY_AVAILABLE: 1, LANG_COUNTRY_VAR_AVAILABLE: 2,
     LANG_MISSING_DATA: -1, LANG_NOT_SUPPORTED: -2 },
   methods: {
-    "<init>(Landroid/content/Context;Landroid/speech/tts/TextToSpeech$OnInitListener;Ljava/lang/String;)V":
-      function (_context: unknown, listener: unknown) {
-        setTimeout(() => void onMain(() => vcall(listener, "onInit", "(I)V", -1)).catch(reportUncaught), 0);
-      },
+    "<init>(Landroid/content/Context;Landroid/speech/tts/TextToSpeech$OnInitListener;)V": initTextToSpeech,
+    "<init>(Landroid/content/Context;Landroid/speech/tts/TextToSpeech$OnInitListener;Ljava/lang/String;)V": initTextToSpeech,
     ...stubs(-1, "setOnUtteranceProgressListener(Landroid/speech/tts/UtteranceProgressListener;)I",
       "isLanguageAvailable(Ljava/util/Locale;)I", "setLanguage(Ljava/util/Locale;)I",
       "speak(Ljava/lang/CharSequence;ILandroid/os/Bundle;Ljava/lang/String;)I",
