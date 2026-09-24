@@ -76,6 +76,14 @@ The 15-second Resy checkpoint passed with 8.29% content difference in a seven-jo
 all-app quick run; all 13 flows completed in 40.1 seconds. This revision has six
 Android visual comparisons, two smoke flows and five live startup observations.
 
+Lichess now has an API 33 launch-only reference. Android presents a notification
+permission sheet over the Flutter home; webdroid reaches the home without that
+system sheet. Three isolated webdroid captures differed by 69.64–70.73% of content
+pixels, and the seven-job quick run measured 70.73% against a 76% retained limit.
+This is a large known platform difference, not a close visual match. The run
+completed all 13 checkpoints in 36.0 seconds: seven Android comparisons, two
+smoke flows and four live observations.
+
 ## Evidence and measurement
 
 - Run real APK and bundled library bytecode. A rendered screen or empty missing-API

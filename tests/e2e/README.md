@@ -34,12 +34,12 @@ runtime errors, and browser errors are listed as observed gaps. A missing checkp
 main loop, missing process diagnostics, or timeout fails the quick test. Failed flows rerun
 their selected quick steps into `actual-fast/failures/` with full evidence.
 
-All 13 flows reached their quick checkpoints in 40.1 seconds at the default seven jobs on this
-machine with the Resy reference. Motion frame
-rates are informational in parallel runs; use `--jobs 1` for their frame-rate gates. Six fast flows
-have Android visual checkpoints, including the live Harmonic welcome dialog and Resy onboarding.
+All 13 flows reached their quick checkpoints in 36.0 seconds at the default seven jobs with
+the Lichess reference. Motion frame rates are informational in parallel runs; use `--jobs 1`
+for their frame-rate gates. Seven fast flows have Android visual checkpoints, including the
+Harmonic, Resy, and Lichess launch screens.
 Flappy Bird and Doodle Jump remain smoke-only because the available API 33 ARM64 emulator
-cannot install their ARM32 native libraries. Five live startup checks lack stable Android
+cannot install their ARM32 native libraries. Four live startup checks lack Android
 references. `actual-fast/summary.json` distinguishes `compared`, `smoke`, `observed`, `failed`,
 and `not-selected` and records visual limits, Android API versions, errors, and observed gaps.
 The serialized full lane remains the final compatibility and performance gate.
@@ -332,7 +332,9 @@ reports fps and the per-step missing-API list rather than a diff percentage:
 
 * **flappybird** (7 steps) — splash → title → PLAY → taps flap past pipes → Game Over panel.
 * **lichess** (15 steps) — Flutter home → Board editor → drag e2 to e4 → level-1 computer
-  game as White → e4, Nf3, and Ne5 with native Stockfish replies.
+  game as White → e4, Nf3, and Ne5 with native Stockfish replies. Its API 33 launch-only
+  reference includes a notification permission sheet absent in webdroid, so the quick
+  comparison reports a large measured difference rather than visual parity.
 * **doodlejump** (6 steps) — title → play → Back, on the ARM32 native tier.
 * **resy**, **reddit**, **tiktok**, **youtube**, and **chatgpt** exercise live first-run and
   content paths. Their run files expose diagnostics. Resy has an API 33 launch-only Android
