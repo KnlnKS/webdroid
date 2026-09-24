@@ -26,7 +26,7 @@ import { native } from "./native/debug";
 import { jitStats } from "./native/core";
 import { device, parseScreen, readStoredScreen, storeScreen, type Screen } from "./shell/config";
 import { openInstallLocal, openInstallRemote } from "./shell/install";
-import { localAsset, setLocalAssets } from "./shell/localassets";
+import { activateLocalAssets, localAsset } from "./shell/localassets";
 import { vfs } from "./jvm/natives/jio";
 import { yieldStats, timedParks } from "./jvm/yield";
 import { provisionPackages, provisionServices } from "./shell/provision";
@@ -237,27 +237,38 @@ for (const level of ["log", "warn", "error"] as const) {
 window.addEventListener("error", (e) => logBuf.push("window.error: " + e.message + " @" + e.filename + ":" + e.lineno));
 window.addEventListener("unhandledrejection", (e) => logBuf.push("unhandledrejection: " + ((e.reason as any)?.message ?? (e.reason as any)?.msg ?? String(e.reason)) + "\n" + ((e.reason as any)?.stack ?? "").slice(0, 600)));
 
+let booting = false;
 async function boot(file: string, local?: File) {
+  if (booting) return;
+  booting = true;
+  launcherEl.inert = true;
+  picker.disabled = true;
   try {
     statusEl.textContent = (local ? "opening " : "downloading ") + file + "…";
     const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady, provisionPackages(), loadSkiaText()]);
-    const assetId = local ? crypto.randomUUID() : null;
-    setLocalAssets(assetId, install);
+    const assets = local ? { key: crypto.randomUUID(), install } : null;
     if (local) {
       await navigator.serviceWorker.register("/webview-worker.js");
       await navigator.serviceWorker.ready;
       if (!navigator.serviceWorker.controller) await new Promise<void>((resolve) => navigator.serviceWorker.addEventListener("controllerchange", () => resolve(), { once: true }));
     }
-    const t0 = performance.now();
-    connectProcess();
-    await bootApk(install, (s) => { statusEl.textContent = s; }, assetId ?? file, null, registerForegroundProcess);
-    void provisionServices().then(() => processBroker().boot()).catch((error) => console.error("[provision]", error));
-    perf.bootMs = performance.now() - t0;
-    statusEl.textContent = `running (boot ${perf.bootMs.toFixed(0)}ms)` + (rt.nativeRequired.size ? " — needs native code" : "");
+    const rollbackAssets = activateLocalAssets(assets);
+    try {
+      const t0 = performance.now();
+      connectProcess();
+      await bootApk(install, (s) => { statusEl.textContent = s; }, assets?.key ?? file, null, registerForegroundProcess);
+      void provisionServices().then(() => processBroker().boot()).catch((error) => console.error("[provision]", error));
+      perf.bootMs = performance.now() - t0;
+      statusEl.textContent = `running (boot ${perf.bootMs.toFixed(0)}ms)` + (rt.nativeRequired.size ? " — needs native code" : "");
+    } catch (error) { rollbackAssets(); throw error; }
   } catch (e) {
     console.error(e);
     statusEl.textContent = "boot failed: " + ((e as any)?.msg ?? e);
     statusEl.style.color = "#e77";
+  } finally {
+    booting = false;
+    launcherEl.inert = false;
+    picker.disabled = false;
   }
 }
 

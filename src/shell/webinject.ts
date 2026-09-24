@@ -125,15 +125,10 @@ self.addEventListener("fetch", event => {
   const request = event.request, original = new URL(request.url);
   if (original.origin === self.location.origin && original.pathname.startsWith("/asset/")) {
     event.respondWith((async () => {
-      const clients = await self.clients.matchAll({type: "window", includeUncontrolled: true});
-      const owners = clients.filter(client => client.frameType === "top-level" && new URL(client.url).pathname === "/");
-      if (!owners.length) {
-        const client = await self.clients.get(event.clientId);
-        if (client) owners.push(client);
-      }
-      const replies = await Promise.all(owners.map(owner => message(owner, {kind: "webasset", path: original.pathname}).catch(() => ({status: 404}))));
-      const result = replies.find(reply => reply.status === 200);
-      if (!result) return fetch(request);
+      const client = await self.clients.get(event.clientId);
+      if (!client) return fetch(request);
+      const result = await message(client, {kind: "webasset", path: original.pathname}).catch(() => ({status: 404}));
+      if (result.status !== 200) return fetch(request);
       return new Response(result.bytes || null, {status: result.status, headers: result.type
         ? {"content-type": result.type, "x-wd-local-asset": "1", "cache-control": "no-store"} : {"cache-control": "no-store"}});
     })());
