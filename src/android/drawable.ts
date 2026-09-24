@@ -529,6 +529,32 @@ class JAnimationDrawable extends JDrawableContainer {
     invalidateSelf.call(this);
   }
 }
+class JAnimationScaleListDrawable extends JDrawableContainer {
+  children: { d: JDrawable }[] = [];
+  animated = -1;
+  current(): JDrawable | null { return this.children[this.animated]?.d ?? null; }
+  paint(cv: JCanvas) {
+    const child = this.current();
+    if (!child) return;
+    copyBounds(this, child);
+    child.alpha = this.alpha;
+    child.tint = child.tint ?? this.tint;
+    return drawChild(child, cv);
+  }
+  size(vertical: boolean) { return containerSize(this.children, vertical); }
+}
+rt.register({ name: "com/android/internal/graphics/drawable/AnimationScaleListDrawable", ctor: JAnimationScaleListDrawable,
+  sup: "android/graphics/drawable/DrawableContainer", ifaces: ["android/graphics/drawable/Animatable"], methods: {
+    "<init>()V": function () {},
+    "getCurrent()Landroid/graphics/drawable/Drawable;": function (this: JAnimationScaleListDrawable) { return this.current(); },
+    "start()V": function (this: JAnimationScaleListDrawable) { const d = this.current(); if (d) return vcall(d, "start", "()V"); },
+    "stop()V": function (this: JAnimationScaleListDrawable) { const d = this.current(); if (d) return vcall(d, "stop", "()V"); },
+    "isRunning()Z": function (this: JAnimationScaleListDrawable) { const d = this.current(); return d ? vcall(d, "isRunning", "()Z") : 0; },
+    "onStateChange([I)Z": async function (this: JAnimationScaleListDrawable, state: Int32Array) {
+      for (const { d } of this.children) await vcall(d, "setState", "([I)Z", state);
+      return 1;
+    },
+  } });
 rt.register({
   name: "android/graphics/drawable/DrawableContainer", ctor: JDrawableContainer, sup: "android/graphics/drawable/Drawable",
   methods: {
@@ -1048,6 +1074,31 @@ rt.register({
     ...stubs(null, "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;"),
   },
 });
+class JClipDrawable extends JDrawableWrapper {
+  gravity = 3;
+  orientation = 1;
+  async paint(cv: JCanvas) {
+    if (!this.dr || this.level <= 0) return;
+    const b = this.bounds, f = Math.min(1, this.level / 10000);
+    const w = b.right - b.left, h = b.bottom - b.top;
+    const width = this.orientation & 1 ? Math.round(w * f) : w;
+    const height = this.orientation & 2 ? Math.round(h * f) : h;
+    const gravity = absGravity(this.gravity, this.layoutDir);
+    const left = (gravity & 7) === 5 ? b.right - width : (gravity & 7) === 1 ? b.left + Math.round((w - width) / 2) : b.left;
+    const top = (gravity & 112) === 80 ? b.bottom - height : (gravity & 112) === 16 ? b.top + Math.round((h - height) / 2) : b.top;
+    cv.ctx.save();
+    cv.ctx.beginPath(); cv.ctx.rect(left, top, width, height); cv.ctx.clip();
+    try { await drawChild(this.dr, cv); } finally { cv.ctx.restore(); }
+  }
+}
+rt.register({ name: "android/graphics/drawable/ClipDrawable", ctor: JClipDrawable,
+  sup: "android/graphics/drawable/DrawableWrapper", statics: { HORIZONTAL: 1, VERTICAL: 2 }, methods: {
+    "<init>(Landroid/graphics/drawable/Drawable;II)V": function (this: JClipDrawable, drawable: JDrawable | null, gravity: number, orientation: number) {
+      this.gravity = gravity; this.orientation = orientation;
+      return wrapSet.call(this, drawable);
+    },
+    "onLevelChange(I)Z": () => 1,
+  } });
 class JInsetDrawable extends JDrawableWrapper {
   insets: [number, number, number, number] = [0, 0, 0, 0];
   fractions: [number, number, number, number] = [0, 0, 0, 0];
@@ -1413,7 +1464,7 @@ const AT = attrTable(
   "endColor", "angle", "type", "gradientRadius", "src", "alpha", "tint", "viewportWidth",
   "viewportHeight", "pathData", "fillColor", "strokeColor", "strokeWidth", "fillAlpha", "fillType",
   "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
-  "scaleGravity", "gravity", "oneshot", "duration", "scaleWidth", "scaleHeight", "useIntrinsicSizeAsMinimum", "level",
+  "scaleGravity", "gravity", "orientation", "oneshot", "duration", "scaleWidth", "scaleHeight", "useIntrinsicSizeAsMinimum", "level",
   "pivotX", "pivotY", "translateX", "translateY", "scaleX", "scaleY", "rotation", "fromDegrees", "toDegrees");
 async function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): Promise<JDrawable> {
   const root = parseAXML(bytes);
@@ -1502,6 +1553,13 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
         d[`pivot${axis}Relative`] = relative;
         d[`pivot${axis}`] = relative ? complexToFraction(value.d, 1, 1) : rvFloat(res, value);
       }
+      await wrapSet.call(d, await itemDrawable(res, node, theme));
+      return d;
+    }
+    case "clip": {
+      const d = new JClipDrawable();
+      d.gravity = xmlInt(res, get(AT.gravity), 3);
+      d.orientation = xmlInt(res, get(AT.orientation), 1);
       await wrapSet.call(d, await itemDrawable(res, node, theme));
       return d;
     }
@@ -1662,6 +1720,18 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
         const da = nodeAttr(res, c, AT.drawable);
         const child = da ? await loadDrawableRV(res, da, theme) : c.children.length ? await inflateDrawableNode(res, c.children[0], theme) : null;
         if (child) d.frames.push({ d: child, ms: nodeAttr(res, c, AT.duration)?.d ?? 0 });
+      }
+      return d;
+    }
+    case "com.android.internal.graphics.drawable.AnimationScaleListDrawable": {
+      const d = new JAnimationScaleListDrawable();
+      for (const item of node.children) {
+        if (item.name !== "item") continue;
+        const child = await itemDrawable(res, item, theme);
+        if (!child) throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "<item> requires a drawable");
+        child.callback = d;
+        d.children.push({ d: child });
+        if (child instanceof JAnimationDrawable || child instanceof JAnimatedVectorDrawable) d.animated = d.children.length - 1;
       }
       return d;
     }

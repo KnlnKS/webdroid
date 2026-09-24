@@ -20,23 +20,29 @@ class JProgressBar extends JView {
   progressD: JDrawable | null = null; indetD: JDrawable | null = null;
   tintCsl: JColorStateList | null = null;
 }
+async function initProgressBar(this: JProgressBar, c: unknown, set: JAttrSet | null = null, style = AID("progressBarStyle"), def = 0) {
+  await initViewFromCtx(this, c, set, style);
+  if (!this.jres) return;
+  if (set?.node) for (const attr of set.node.attrs) {
+    if (attr.name === "style" && attr.str?.includes("Horizontal")) this.horizontal = true;
+    if (!attr.ns && attr.name === "style" && attr.type === TV.REFERENCE && this.jres.idName(attr.data)?.includes("Horizontal")) this.horizontal = true;
+  }
+  const a = obtainStyled(this.jres, this.theme, set,
+    ["progressDrawable", "indeterminateDrawable", "indeterminate", "min", "max", "progress"].map(AID), style, def);
+  if (a.vals[0]) this.progressD = await loadDrawableRV(this.jres, a.vals[0], this.theme);
+  if (a.vals[1]) this.indetD = await loadDrawableRV(this.jres, a.vals[1], this.theme);
+  this.indeterminate = !!rvInt(this.jres, a.vals[2], this.horizontal ? 0 : +this.indeterminate);
+  this.min = rvInt(this.jres, a.vals[3], this.min);
+  this.max = Math.max(this.min, rvInt(this.jres, a.vals[4], this.max));
+  this.progress = Math.max(this.min, Math.min(this.max, rvInt(this.jres, a.vals[5], this.progress)));
+}
 rt.register({
   name: "android/widget/ProgressBar", ctor: JProgressBar, sup: "android/view/View",
   methods: {
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JProgressBar, c: unknown, set: JAttrSet | null) {
-      await initViewFromCtx(this, c, set);
-      // style attr → horizontal?
-      if (set?.node) {
-        for (const a of set.node.attrs) {
-          if (a.name === "style" && a.str?.includes("Horizontal")) this.horizontal = true;
-          if (!a.ns && a.name === "style" && a.type === TV.REFERENCE) {
-            const nm = this.jres?.idName(a.data) ?? "";
-            if (nm.includes("Horizontal")) this.horizontal = true;
-          }
-        }
-      }
-      if (this.horizontal) this.indeterminate = false;
-    },
+    "<init>(Landroid/content/Context;)V": initProgressBar,
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initProgressBar,
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": initProgressBar,
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": initProgressBar,
     "setProgress(I)V": function (this: JProgressBar, p: number) { this.progress = p; invalidate(); },
     "setMax(I)V": function (this: JProgressBar, m: number) { this.max = Math.max(1, m); },
     "setProgressDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) { this.progressD = d; invalidate(); },
