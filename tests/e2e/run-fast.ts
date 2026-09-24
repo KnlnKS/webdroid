@@ -7,7 +7,7 @@ import { loadPng } from "./lib/png";
 import { diffImages } from "./lib/diff";
 import { E2E_DIR } from "./lib/util";
 import { apkHashes, flowSchemaHash, repositoryRevision, type CoverageIndex } from "./coverage";
-import { screenParam, waitHorizonMs } from "./types";
+import { screenOf, screenParam, waitHorizonMs, type Manifest } from "./types";
 import { BASE_URL } from "./lib/util";
 import { isWebdroidProcessFrame } from "./lib/processes";
 
@@ -59,11 +59,12 @@ function quickFlow(flow: Flow): Flow {
     : flow;
 }
 
-async function visualEvidence(flow: Flow): Promise<{ checks: VisualCheck[]; errors: string[] }> {
+async function visualEvidence(flow: Flow, manifest: Manifest | undefined, screen: string): Promise<{ checks: VisualCheck[]; errors: string[] }> {
   const checks = flow.steps.filter((step) => step.fastEvidence?.kind === "visual");
   if (!checks.length) return { checks: [], errors: [] };
-  const manifest = await loadManifest(flow.app);
   if (!manifest) return { checks: [], errors: ["visual evidence requires a golden manifest"] };
+  if (screen !== screenParam(screenOf(manifest)))
+    return { checks: [], errors: [`visual evidence requires Android reference geometry ${screenParam(screenOf(manifest))}; captured ${screen}`] };
   const errors: string[] = [];
   const results: VisualCheck[] = [];
   for (const step of checks) {
@@ -107,7 +108,7 @@ async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
   } finally {
     await driver.close();
   }
-  const visual = await visualEvidence(selected);
+  const visual = await visualEvidence(selected, manifest, screen);
   const observed = diagnostics(runs, flow.clock === "live");
   const browserErrors = browserFailures(flow, driver.errors);
   return { flow, runs, visual: visual.checks,
@@ -133,6 +134,7 @@ async function retainFailure(outcome: Outcome): Promise<void> {
 
 console.log(`fast flows: ${flows.map((flow) => flow.app).join(", ")} (${jobs} at a time)`);
 await rm(`${E2E_DIR}actual-fast/failures`, { recursive: true, force: true });
+await rm(`${E2E_DIR}actual-fast/summary.json`, { force: true });
 const weight = (flow: Flow) => quickFlow(flow).steps.reduce((total, step) => total + waitHorizonMs(step.wait) + 300, 0);
 const queue = [...flows].sort((a, b) => weight(b) - weight(a));
 const outcomes: Outcome[] = [];

@@ -100,6 +100,16 @@ three scores varied from 92.88% to 99.35% as the welcome content changed.
 Those measurements are useful diagnosis, but their spread cannot support a
 meaningful retained visual limit. The quick lane keeps both as live observations.
 
+A code-quality audit found that offline scoring could accept an old capture after a
+flow changed its actions or waits but retained the same step IDs. `run.json` now
+carries the canonical flow fingerprint; offline scoring requires that fingerprint,
+full capture mode, and the reference geometry. A pre-change FitNotes run was
+correctly rejected, then a fresh 39-step full capture and offline rescore both
+completed with 39.34% mean content difference. Quick visual scoring also rejects
+geometry overrides explicitly. Android recording now stages a whole reference
+before replacing the previous one, so capture failures leave committed goldens
+intact. The recorder change has not been exercised against an emulator.
+
 ## Evidence and measurement
 
 - Run real APK and bundled library bytecode. A rendered screen or empty missing-API

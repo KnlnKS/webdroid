@@ -9,6 +9,7 @@ import { PINNED_CLOCK_MS, evidenceOf, isMotionWait, screenOf, uiFileFor, type Fl
 import { parseScreen } from "../../src/shell/config";
 import type { Act, Settled, StepResult } from "./lib/probe";
 import { readProcesses, type ProcessSnapshot } from "./lib/processes";
+import { flowSchemaHash } from "./coverage";
 
 export type StepRun = {
   id: string; index: number; file: string;
@@ -51,7 +52,7 @@ export type StepRun = {
 };
 
 /** What `actual/<flow>/run.json` holds: the steps plus how the run was driven. */
-export type FlowRun = { mode?: "full" | "fast"; jobs: number; screen: string; steps: StepRun[]; browserErrors?: string[] };
+export type FlowRun = { mode: "full" | "fast"; flowSchemaHash: string; jobs: number; screen: string; steps: StepRun[]; browserErrors?: string[] };
 export type CaptureMode = "full" | "fast";
 
 /** Wipe the frame-recorder directory. Call once per run, before any flow. */
@@ -210,7 +211,7 @@ export async function captureFlow(flow: Flow, drv: WebdroidDriver, {
   // Persist the per-step run flags next to the frames so `bun run e2e --diff` can apply the same
   // scoring rules as `bun run e2e --full` — without this, a standalone diff has no idea the app hung
   // and would quietly report a better number for the same pixels.
-  const run: FlowRun = { mode, jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, steps: runs, browserErrors: [...drv.errors] };
+  const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow]), jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, steps: runs, browserErrors: [...drv.errors] };
   await Bun.write(`${outDir}/run.json`, JSON.stringify(run, null, 2));
   return runs;
 }

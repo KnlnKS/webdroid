@@ -10,6 +10,7 @@ import { screenOf, screenParam, uiFileFor, type Flow, type Manifest, type Record
 import { diffTrees } from "./lib/tree";
 import type { FlowRun } from "./capture-webdroid";
 import { E2E_DIR, sha1 } from "./lib/util";
+import { flowSchemaHash } from "./coverage";
 
 /**
  * The device half of the structural comparison. A full hierarchy if the recorder captured one;
@@ -48,10 +49,11 @@ async function diffFlow(flow: Flow): Promise<FlowReport> {
   const runPath = `${actualDir}/run.json`;
   if (!existsSync(runPath)) throw new Error(`${flow.app}: missing run.json; rerun \`bun run e2e --full --test ${flow.app}\``);
   const runInfo = await Bun.file(runPath).json() as FlowRun;
-  if (runInfo.screen !== screenParam(screenOf(manifest)) ||
+  if (runInfo.mode !== "full" || runInfo.flowSchemaHash !== flowSchemaHash([flow]) ||
+      runInfo.screen !== screenParam(screenOf(manifest)) ||
       runInfo.steps.length !== flow.steps.length ||
       runInfo.steps.some((run, index) => run.id !== flow.steps[index]?.id)) {
-    throw new Error(`${flow.app}: run.json does not match the Android reference flow and geometry`);
+    throw new Error(`${flow.app}: run.json does not match the current full flow and Android reference geometry; rerun \`bun run e2e --full --test ${flow.app}\``);
   }
   const runById = new Map(runInfo.steps.map((run) => [run.id, run]));
   const steps: StepReport[] = [];
