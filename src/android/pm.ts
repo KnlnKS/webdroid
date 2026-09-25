@@ -464,8 +464,32 @@ function providerInfo(cls: string, pkg: string, authority: string, n: XmlNode | 
 }
 const mkProviderInfo = (cls: string, n: XmlNode, flags = 0) =>
   providerInfo(cls, appHost?.pkg ?? "", authoritiesOf(n).join(";"), n, flags);
-const sysProviderInfo = ([auth, cls]: [string, string, string]) =>
-  providerInfo(cls, cls.slice(0, cls.lastIndexOf(".")), auth, null);
+const sysProviderInfo = ([auth, cls]: [string, string, string]) => {
+  const pkg = cls.slice(0, cls.lastIndexOf("."));
+  const info = providerInfo(cls, pkg, auth, null) as JProviderInfo;
+  const app = new JApplicationInfo();
+  app.packageName = app.processName = pkg;
+  app.uid = 1000;
+  app.flags = 1;
+  info.applicationInfo = app;
+  info.processName = pkg;
+  return info;
+};
+
+function queryContentProviders(processName: string | null, uid: number, flags: number, nonNull = false): JList | null {
+  const providers: JProviderInfo[] = [];
+  for (const system of systemProviders) {
+    const info = sysProviderInfo(system);
+    if (processName === null || info.processName === processName && uid === info.applicationInfo?.uid) providers.push(info);
+  }
+  for (const owner of packages.values()) for (const [name, node] of owner.components.provider) {
+    const authorities = authoritiesOf(node);
+    if (!authorities.some(Boolean) || !visibleComponent(name, node, flags, owner)) continue;
+    if (processName !== null && (owner.process(node) !== processName || owner.uid !== uid)) continue;
+    providers.push(providerInfo(name, owner.pkg, authorities.join(";"), node, flags, owner) as JProviderInfo);
+  }
+  return providers.length || nonNull ? newArrayList(providers) : null;
+}
 
 function queryProviders(intent: { action?: string | null } | null, flags = 0): JList {
   const action = intent?.action ?? null;
@@ -755,6 +779,8 @@ rt.register({
     "queryIntentActivities(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": (i: JIntent, f: JInfoFlags) => queryActivities(i, Number(f.value)),
     "queryIntentContentProviders(Landroid/content/Intent;I)Ljava/util/List;": queryProviders,
     "queryIntentContentProviders(Landroid/content/Intent;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Ljava/util/List;": (i: { action?: string | null } | null, flags: JInfoFlags) => queryProviders(i, Number(flags.value)),
+    "queryContentProviders(Ljava/lang/String;II)Ljava/util/List;": queryContentProviders,
+    "queryContentProviders(Ljava/lang/String;ILandroid/content/pm/PackageManager$ComponentInfoFlags;)Ljava/util/List;": (process: string | null, uid: number, flags: JInfoFlags) => queryContentProviders(process, uid, Number(flags.value), true),
     "resolveContentProvider(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;": resolveProvider,
     "resolveContentProvider(Ljava/lang/String;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Landroid/content/pm/ProviderInfo;": (a: string, flags: JInfoFlags) => resolveProvider(a, Number(flags.value)),
     "queryBroadcastReceivers(Landroid/content/Intent;I)Ljava/util/List;": (i: JIntent, f: number) => queryComponents(i, f, "receiver"),
