@@ -19,6 +19,7 @@ class JMediaSession extends JObj {
   receiver: unknown = null;
   activity: unknown = null;
   playback: unknown = null;
+  audioAttributes: unknown = null;
   metadata: unknown = null;
   queue: JList | null = null;
   queueTitle: unknown = null;
@@ -26,7 +27,8 @@ class JMediaSession extends JObj {
   ratingType = 0;
 }
 class JSessionToken extends JObj { constructor(readonly session: JMediaSession) { super(); } }
-class JMediaController extends JObj { session!: JMediaSession; }
+class JMediaController extends JObj { session!: JMediaSession; controls = new JTransportControls(); }
+class JTransportControls extends JObj { session!: JMediaSession; }
 class JRemoteUserInfo extends JObj { packageName = ""; pid = -1; uid = -1; }
 class JQueueItem extends JObj { description: unknown = null; id = -1n; }
 rt.register({ name: "android/media/session/MediaSession$QueueItem", ctor: JQueueItem, ifaces: ["android/os/Parcelable"], methods: {
@@ -90,6 +92,7 @@ async function initialize(session: JMediaSession, context: JContext | null, tag:
   session.pkg = getPackageName ? await getPackageName.call(context) as string : "";
   session.tag = tag;
   session.controller.session = session;
+  session.controller.controls.session = session;
 }
 function dispatch(session: JMediaSession, method: string, desc: string, ...args: unknown[]) {
   if (session.released || !session.callback) return;
@@ -114,8 +117,10 @@ rt.register({ name: "android/media/session/MediaSession", ctor: JMediaSession, m
   "isActive()Z": function (this: JMediaSession) { return this.active; },
   "setFlags(I)V": function (this: JMediaSession, flags: number) { this.flags = flags; },
   "setMediaButtonReceiver(Landroid/app/PendingIntent;)V": function (this: JMediaSession, receiver: unknown) { this.receiver = receiver; },
+  "setMediaButtonBroadcastReceiver(Landroid/content/ComponentName;)V": function (this: JMediaSession, receiver: unknown) { this.receiver = receiver; },
   "setSessionActivity(Landroid/app/PendingIntent;)V": function (this: JMediaSession, activity: unknown) { this.activity = activity; },
   "setPlaybackState(Landroid/media/session/PlaybackState;)V": function (this: JMediaSession, playback: unknown) { this.playback = playback; },
+  "setPlaybackToLocal(Landroid/media/AudioAttributes;)V": function (this: JMediaSession, attributes: unknown) { this.audioAttributes = attributes; },
   "setMetadata(Landroid/media/MediaMetadata;)V": function (this: JMediaSession, metadata: unknown) { this.metadata = metadata; },
   "setQueue(Ljava/util/List;)V": function (this: JMediaSession, queue: JList | null) { this.queue = queue; },
   "setQueueTitle(Ljava/lang/CharSequence;)V": function (this: JMediaSession, title: unknown) { this.queueTitle = title; },
@@ -136,8 +141,9 @@ rt.register({ name: "android/media/session/MediaSession$Callback", ctor: class e
 rt.register({ name: "android/media/session/MediaController", ctor: JMediaController, methods: {
   "<init>(Landroid/content/Context;Landroid/media/session/MediaSession$Token;)V": function (this: JMediaController, context: JContext | null, token: JSessionToken | null) {
     if (!context || !token) throw rt.mkThrowable("java/lang/IllegalArgumentException", "context and token must not be null");
-    this.session = token.session;
+    this.session = token.session; this.controls.session = token.session;
   },
+  "getTransportControls()Landroid/media/session/MediaController$TransportControls;": function (this: JMediaController) { return this.controls; },
   "getSessionToken()Landroid/media/session/MediaSession$Token;": function (this: JMediaController) { return this.session.token; },
   "getPackageName()Ljava/lang/String;": function (this: JMediaController) { return this.session.pkg; },
   "getTag()Ljava/lang/String;": function (this: JMediaController) { return this.session.tag; },
@@ -152,4 +158,14 @@ rt.register({ name: "android/media/session/MediaController", ctor: JMediaControl
     if (!command) throw rt.mkThrowable("java/lang/IllegalArgumentException", "command cannot be null or empty");
     dispatch(this.session, "onCommand", "(Ljava/lang/String;Landroid/os/Bundle;Landroid/os/ResultReceiver;)V", command, args, receiver);
   },
+} });
+rt.register({ name: "android/media/session/MediaController$TransportControls", ctor: JTransportControls, methods: {
+  "sendCustomAction(Ljava/lang/String;Landroid/os/Bundle;)V": function (this: JTransportControls, action: string, args: JBundle | null) {
+    if (!action) throw rt.mkThrowable("java/lang/IllegalArgumentException", "action cannot be null or empty");
+    dispatch(this.session, "onCustomAction", "(Ljava/lang/String;Landroid/os/Bundle;)V", action, args);
+  },
+  "play()V": function (this: JTransportControls) { dispatch(this.session, "onPlay", "()V"); },
+  "pause()V": function (this: JTransportControls) { dispatch(this.session, "onPause", "()V"); },
+  "stop()V": function (this: JTransportControls) { dispatch(this.session, "onStop", "()V"); },
+  "seekTo(J)V": function (this: JTransportControls, position: bigint) { dispatch(this.session, "onSeekTo", "(J)V", position); },
 } });
