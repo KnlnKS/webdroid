@@ -126,6 +126,7 @@ export function unbindLocalService(key: string): Promise<void> {
 type Connection = { key: string; owner: PackageRecord; process: string; remote: boolean;
   cancelDeath: (() => void) | null; pendingService: string | null; connect: () => void };
 const connections = new Map<unknown, Connection>();
+const failedConnections = new Set<unknown>();
 const pendingConnections = new Map<string, Set<Connection>>();
 function activatePending(service: string): void {
   const pending = pendingConnections.get(service);
@@ -146,10 +147,14 @@ export async function svcBind(ctx: JContext, intent: JIntent, connection: unknow
   const deliver = connectionDelivery(executor);
   const resolved = await vcall(getPM(), "resolveService", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", intent, 0);
   const info = resolved?.serviceInfo, owner = info && packages.get(info.packageName);
-  if (!owner || (!info.exported && owner.pkg !== ctx.$host.pkg)) return 0;
+  if (!owner || (!info.exported && owner.pkg !== ctx.$host.pkg)) {
+    if (!connections.has(connection)) failedConnections.add(connection);
+    return 0;
+  }
   if (info.permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", info.permission, ctx.$host.pkg) !== 0)
     throw rt.mkThrowable("java/lang/SecurityException", "Service requires " + info.permission);
   if (connections.has(connection)) return 1;
+  failedConnections.delete(connection);
   const key = PROCESS_PID + ":" + nextConnection++, remote = owner.pkg !== ctx.$host.pkg || info.processName !== (PROCESS_NAME || ctx.$host.pkg);
   const bound: JIntent = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
   bound.component = info.name; bound.componentPkg = owner.pkg;
@@ -189,6 +194,7 @@ export async function svcBind(ctx: JContext, intent: JIntent, connection: unknow
   return 1;
 }
 export function svcUnbind(connection: unknown): void {
+  if (failedConnections.delete(connection)) return;
   const record = connections.get(connection);
   if (!record) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Service not registered");
   connections.delete(connection); record.cancelDeath?.();
