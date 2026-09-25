@@ -120,6 +120,7 @@ export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: numbe
       const finish = (result: number) => {
         if (!active) return;
         active = false;
+        cpu.deferSignalsUntilResume();
         unparkTimeout(id);
         const i = q.indexOf(w); if (i >= 0) q.splice(i, 1);
         if (cpu.signalInterrupt === interrupt) cpu.signalInterrupt = previous;

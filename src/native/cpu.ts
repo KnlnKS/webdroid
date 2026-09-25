@@ -134,7 +134,8 @@ export class Cpu {
   /** signals queued for this thread, delivered at its next slice boundary */
   signals: number[] = [];
   signalInterrupt: (() => void) | null = null;
-  private deferSignalUntilResume = false;
+  private deferredSignalDepths = new Set<number>();
+  deferSignalsUntilResume(): void { if (this.depth) this.deferredSignalDepths.add(this.depth); }
   signalMask = 0n;
   alternateStack: { sp: bigint; size: bigint; flags: number } | null = null;
   alternateActive = false;
@@ -244,7 +245,7 @@ export class Cpu {
     if (this.finished || !sigHandlers.has(sig)) return;
     if (!this.signals.includes(sig)) this.signals.push(sig);           // pending already: signals do not queue up
     if (this.signalInterrupt && !(this.signalMask & 1n << BigInt(sig - 1))) {
-      this.deferSignalUntilResume = true;
+      this.deferSignalsUntilResume();
       this.signalInterrupt();
       return;
     }
@@ -256,7 +257,7 @@ export class Cpu {
   pump(): void {
     if (this.budgetWake && this.signals.some((sig) => !(this.signalMask & 1n << BigInt(sig - 1)))) this.budgetWake();
     queueMicrotask(() => {
-      if (this.finished || this.deferSignalUntilResume || (!this.parked && !this.baseAvailable)) return;
+      if (this.finished || this.deferredSignalDepths.size || (!this.parked && !this.baseAvailable)) return;
       const sig = this.takeSignal();
       if (sig) void this.deliver(sig);
     });
@@ -540,7 +541,7 @@ export class Cpu {
           setCurThread(this.jthread);
           if (this.finished) return;
           hostReturn(this, v as HostRet);
-          this.deferSignalUntilResume = false;
+          this.deferredSignalDepths.delete(myDepth);
           continue;
         }
         this.state = "yield";
@@ -607,7 +608,11 @@ export class Cpu {
       a.reset(this);
       const ret = rawSyscall(this, nr, a);
       // the core has already stepped past the svc: a parked syscall resumes by writing x0 alone
-      if (ret instanceof Promise) { this.pending = ret.then((r) => { this.syscallReturn(r); return NORET; }); return; }
+      if (ret instanceof Promise) {
+        if (nr === 124) this.deferSignalsUntilResume(); // sched_yield completes before a pending signal is delivered
+        this.pending = ret.then((r) => { this.syscallReturn(r); return NORET; });
+        return;
+      }
       this.syscallReturn(ret);
     }
   }
