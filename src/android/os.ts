@@ -720,6 +720,8 @@ rt.register({
     "getFileDescriptor()Ljava/io/FileDescriptor;": function (this: JParcelFileDescriptor) {
       const d = rt.make("java/io/FileDescriptor") as JFileDescriptor;
       d.fd = pfdFd(this);
+      d.path = this.path;
+      d.flags = this.flags;
       return d;
     },
     "getFd()I": function (this: JParcelFileDescriptor) { return pfdFd(this); },

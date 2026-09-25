@@ -1,4 +1,4 @@
-import { JContextWrapper, JAttributionSource, systemService, wrapperMethods, display, displayListeners, grantPermissions, type JContext } from "./context";
+import { JContextWrapper, systemService, wrapperMethods, display, displayListeners, grantPermissions, type JContext } from "./context";
 import { JWindow } from "./window";
 import {
   JIntent, activityTransport, systemActivities, deliverActivityResult, RESULT_OK, RESULT_CANCELED, launchIntent, mkComponentName,
@@ -28,7 +28,6 @@ import { device } from "../shell/config";
 import type { JBitmap } from "./graphics";
 import { JConfigurationInfo } from "./pm";
 import { deviceConfiguration } from "./resnative";
-import { transactionCaller } from "./binder";
 import { packages } from "./packages";
 import { grantUriPermission } from "./contentresolver";
 import { mkUri } from "./net";
@@ -1034,31 +1033,6 @@ rt.register({
   },
 });
 rt.markers("android/window/OnBackInvokedCallback");
-function callingPackage(): string | null {
-  const caller = transactionCaller();
-  if (caller) for (const record of packages.values()) if (record.uid === caller.uid) return record.pkg;
-  return null;
-}
-rt.register({
-  name: "android/content/ContentProvider", ctor: class extends JObj { $ctx: unknown = null; },
-  methods: {
-    "getCallingPackage()Ljava/lang/String;": () => callingPackage(),
-    "getCallingAttributionSource()Landroid/content/AttributionSource;": () => {
-      const caller = transactionCaller();
-      if (!caller) return null;
-      rt.link("android/content/AttributionSource");
-      return Object.assign(new JAttributionSource(), { uid: caller.uid, pid: caller.pid, pkg: callingPackage() });
-    },
-    "<init>()V": function () {},
-    "onCreate()Z": () => 1,
-    "getContext()Landroid/content/Context;": function (this: any) { return this.$ctx ?? appHost?.application ?? null; },
-    "attachInfo(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V": async function (this: { $ctx: unknown }, c: unknown) {
-      if (this.$ctx) return;
-      this.$ctx = c;
-      await vcall(this, "onCreate", "()Z");
-    },
-  },
-});
 
 rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content/ContextWrapper",
   ifaces: ["android/content/ComponentCallbacks2", "android/content/ComponentCallbacks"],
