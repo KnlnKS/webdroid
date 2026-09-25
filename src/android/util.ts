@@ -172,6 +172,15 @@ rt.register({
     "static create(Ljava/lang/Object;Ljava/lang/Object;)Landroid/util/Pair;": (a: unknown, b: unknown) => {
       const p = new JPair(); p.first = a; p.second = b; return p;
     },
+    "equals(Ljava/lang/Object;)Z": async function (this: JPair, other: unknown) {
+      if (!(other instanceof JPair)) return 0;
+      const equal = (a: unknown, b: unknown) => a === b || (a != null && b != null && vcall(a, "equals", "(Ljava/lang/Object;)Z", b));
+      return +!!(await equal(this.first, other.first) && await equal(this.second, other.second));
+    },
+    "hashCode()I": async function (this: JPair) {
+      const hash = (value: unknown) => value == null ? 0 : vcall(value, "hashCode", "()I");
+      return (await hash(this.first) ^ await hash(this.second)) | 0;
+    },
   },
 });
 
