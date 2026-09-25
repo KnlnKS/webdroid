@@ -7,6 +7,7 @@ import { javaFdSource } from "../native/stdio";
 import { SliceFile, type FileSource } from "../shell/lazyfile";
 import { JBitmap } from "./graphics";
 import { MediaExtractor } from "./media-extractor";
+import { mpegAudioDuration } from "./media-mpeg";
 
 const value = (format: MediaExtractor["tracks"][number]["format"], key: string) => format.values.get(key)?.value;
 const codecBytes = (format: MediaExtractor["tracks"][number]["format"], key: string): Uint8Array => {
@@ -23,6 +24,12 @@ class JMediaMetadataRetriever extends JObj {
     this.extractor = null;
     this.source = null;
     this.metadata.clear();
+    const mp3Duration = await mpegAudioDuration(source);
+    if (mp3Duration !== null) {
+      this.source = source;
+      this.metadata = new Map([[9, String(mp3Duration)], [10, "1"], [12, "audio/mpeg"], [16, "yes"], [17, "no"]]);
+      return;
+    }
     const extractor = new MediaExtractor();
     try { await extractor.open(source); }
     catch { throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid media source"); }
@@ -49,7 +56,8 @@ class JMediaMetadataRetriever extends JObj {
   async frame(timeUs: bigint, option: number, targetWidth?: number, targetHeight?: number): Promise<JBitmap | null> {
     if (option < 0 || option > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid frame option");
     const extractor = this.extractor, source = this.source;
-    if (!extractor || !source) throw rt.mkThrowable("java/lang/IllegalStateException", "No media source");
+    if (!source) throw rt.mkThrowable("java/lang/IllegalStateException", "No media source");
+    if (!extractor) return null;
     if (typeof VideoDecoder === "undefined") throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Video decoding is unavailable");
     const track = extractor.tracks.find(item => String(value(item.format, "mime")).startsWith("video/"));
     if (!track?.samples.length) return null;
