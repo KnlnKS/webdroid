@@ -1,5 +1,5 @@
 import { AID } from "./res";
-import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, uiState, JViewGroup } from "./view";
+import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, uiState, JViewGroup, lpFromAttrs, type JLayoutParams } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild, drawableSize, JLayerDrawable } from "./drawable";
 import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, flagSetters } from "../jvm/runtime";
 import { type JAttrSet, rvColor, obtainStyled, rvInt, rvDimen } from "./res";
@@ -10,7 +10,7 @@ import { G } from "./gravity";
 import { device } from "../shell/config";
 import { vcall, vcallOn, curThread, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type JMotionEvent } from "./motionevent";
-import { JLinearLayout, linearMethods } from "./layouts";
+import { JLinearLayout, JRadioLP, copyRadioLp, linearMethods } from "./layouts";
 
 class JProgressBar extends JView {
   indeterminate = true;
@@ -470,10 +470,20 @@ class JRadioGroup extends JLinearLayout {
     invalidate();
   }
 }
+const radioDefaultLP = () => new JRadioLP();
+function radioAttrs(this: JRadioGroup, attrs: JAttrSet) { return lpFromAttrs(new JRadioLP(), this.jres!, attrs); }
+const radioCopy = (source: JLayoutParams) => copyRadioLp(new JRadioLP(), source);
 rt.register({
   name: "android/widget/RadioGroup", ctor: JRadioGroup, sup: "android/widget/LinearLayout",
   methods: {
     ...linearMethods,
+    "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": radioDefaultLP,
+    "generateDefaultLayoutParams()Landroid/widget/LinearLayout$LayoutParams;": radioDefaultLP,
+    "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/widget/RadioGroup$LayoutParams;": radioAttrs,
+    "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/widget/LinearLayout$LayoutParams;": radioAttrs,
+    "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;": radioAttrs,
+    "generateLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;": radioCopy,
+    "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": (params: unknown) => +(params instanceof JRadioLP),
     "setOnCheckedChangeListener(Landroid/widget/RadioGroup$OnCheckedChangeListener;)V": function (this: JRadioGroup, l: unknown) {
       this.checkL = l;
     },
