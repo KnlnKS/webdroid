@@ -4,7 +4,7 @@
 
 import { mem, NativeFault, guestAt, wrote } from "./mem";
 import { hostLib, hostData, hostFn, NORET, ARG0, SERVED, ptr, vaList, type HostFn, type HostRet, type ArgReader, retF, retD, PTR, stp, ldp, calledMissing } from "./host";
-import { E, ERRSTR } from "./abi";
+import { E, ERRSTR, PAGE_SIZE } from "./abi";
 import { invalidateRange, markProcessExited, setRawSyscall, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
 import { stdioInit, readInto, fdWriteBack, faccessatPath } from "./stdio";
@@ -199,10 +199,12 @@ const next48 = () => { r48 = (A48 * r48 + C48) & M48; return Number(r48 >> 17n);
 /** raw syscall numbers served by the libc function of the same shape (an offset in a register on
  *  LP64 makes mmap direct; ILP32's mmap2 counts pages and _llseek splits the offset, so neither is here) */
 const SYSCALL_NR64: Record<number, string> = {
+  19: "eventfd", 20: "epoll_create1", 21: "epoll_ctl", 22: "epoll_pwait", 24: "dup3",
   26: "inotify_init1", 27: "inotify_add_watch", 28: "inotify_rm_watch",
   85: "timerfd_create", 86: "timerfd_settime", 87: "timerfd_gettime",
   25: "fcntl", 56: "openat", 57: "close", 62: "lseek", 63: "read", 64: "write", 80: "fstat", 101: "nanosleep", 113: "clock_gettime",
   129: "kill", 131: "tgkill", 169: "gettimeofday", 215: "munmap", 222: "mmap", 226: "mprotect",
+  124: "sched_yield", 132: "sigaltstack", 167: "prctl", 233: "madvise", 261: "prlimit64",
   43: "statfs", 48: "faccessat", 59: "pipe2", 78: "readlinkat", 79: "fstatat", 134: "rt_sigaction",
 };
 const SYSCALL_NR32: Record<number, string> = {
@@ -234,6 +236,18 @@ function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promise<HostR
   if (nr === (PTR === 8 ? 172 : 20)) return cpu.pid;                        // getpid
   if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); if (n) { crypto.getRandomValues(mem.bytes(buf, n)); wrote(buf, n); } return n; } // getrandom
   if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin
+  if (PTR === 8 && nr === 123) { const pid = a.i(), n = a.u(), set = a.p(); if (n < 8) return fail(cpu, E.INVAL); if (pid < 0) return fail(cpu, E.INVAL); mem.memset(set, 0, n); mem.st32(set, (1 << device.cpu.cores) - 1); return 8; }
+  if (PTR === 8 && nr === 232) {
+    const addr = a.va(), len = Number(a.va()), vec = a.p();
+    if (addr & BigInt(PAGE_SIZE - 1) || !Number.isSafeInteger(len) || len <= 0) return fail(cpu, E.INVAL);
+    const pages = Math.ceil(len / PAGE_SIZE);
+    for (let i = 0; i < pages; i++) {
+      const resident = mem.residentVa(addr + BigInt(i * PAGE_SIZE));
+      if (resident < 0) return fail(cpu, E.NOMEM);
+      mem.st8(vec + i, resident);
+    }
+    return 0;
+  }
   if (nr === (PTR === 8 ? 179 : 116)) { fillSysinfo(a.p()); return 0; }    // sysinfo
   // ARM's raw faccessat has three arguments; libc's faccessat wrapper has a fourth flags argument.
   if (PTR === 4 && nr === 334) return faccessatPath(cpu, a.i(), a.str(), a.i(), 0);
@@ -372,8 +386,6 @@ export function libcInit(): void {
     madvise: (_c, a) => { const va = a.va(), n = Number(a.va()); if (a.i() === 4) mem.dropVa(va, n); return 0; },   // MADV_DONTNEED
     msync: (cpu, a) => { const va = a.va(), n = Number(a.va()); if (va & 4095n) return fail(cpu, E.INVAL); syncShared(va, n, false); return 0; },
     mlock: () => 0, munlock: () => 0,
-    getrlimit: (_c, a) => { a.i(); const r = a.p(); stp(r, 0x100000); stp(r + PTR, 0x100000); return 0; },
-    setrlimit: () => 0,
     // the raw syscalls a runtime issues past libc: futex is the one that must block
     syscall: (cpu, a) => rawSyscall(cpu, a.i(), a),
     // PR_SET_NAME names the calling thread: what wd.native.regs shows and what a trace prefixes

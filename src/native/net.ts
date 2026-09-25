@@ -428,13 +428,13 @@ export function nativeSocketClose(cpu: Cpu, fd: number): number {
   return 0;
 }
 
-export function nativeSocketDup(cpu: Cpu, fd: number, target?: number): number {
+export function nativeSocketDup(cpu: Cpu, fd: number, target?: number, cloexec = false): number {
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
   const duplicate = target ?? allocateFd();
   if (target !== undefined) reserveFd(target);
   descriptor.socket.references++;
-  sockets.set(duplicate, { socket: descriptor.socket, cloexec: false });
+  sockets.set(duplicate, { socket: descriptor.socket, cloexec });
   return duplicate;
 }
 

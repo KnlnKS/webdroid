@@ -15,7 +15,7 @@ import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, 
 import { allocateFd, releaseFd, reserveFd } from "./fd";
 const dec = new TextDecoder();
 
-const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000;
+const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000, O_CLOEXEC = 0x80000;
 const S_IFDIR = 0x4000, S_IFREG = 0x8000;
 
 /** a pipe: byte chunks, and whoever is parked waiting for them (a reader, or an epoll_wait) */
@@ -63,6 +63,7 @@ function wakeAll(p: { wake: (() => void)[] }): void { for (const w of p.wake.spl
 function waitOn(f: Fd, w: () => void): void { if (f.rpipe) f.rpipe.wake.push(w); else if (f.event) f.event.wake.push(w); }
 const fdBase = (path: string): Fd => ({ path, content: { path: null, data: new Uint8Array(0), len: 0 }, pos: 0, write: false, dir: false, append: false, statusFlags: 0, references: 1 });
 const fds = new Map<number, Fd>();
+const closeOnExec = new Set<number>();
 const files = new Map<number, number>();       // FILE* → fd
 const pushback = new Map<number, number[]>();
 const dirs = new Map<number, { entries: string[]; i: number; dirent: number }>();
@@ -147,13 +148,13 @@ function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
   const acc = flags & O_ACCMODE;
   if (path === "/dev/urandom" || path === "/dev/random") {
     if (acc !== 0) return fail(cpu, E.ACCES);
-    return put({ ...fdBase(path), random: true });
+    return put({ ...fdBase(path), random: true }, !!(flags & O_CLOEXEC));
   }
   const s = procText(path);
-  if (s !== null) { const b = utf8(s); return put({ ...fdBase(path), content: { path: null, data: b, len: b.length }, synthetic: true }); }
+  if (s !== null) { const b = utf8(s); return put({ ...fdBase(path), content: { path: null, data: b, len: b.length }, synthetic: true }, !!(flags & O_CLOEXEC)); }
   if (vfs.isDir(path)) {
     if (acc !== 0) return fail(cpu, E.ISDIR);
-    return put({ ...fdBase(path), dir: true });
+    return put({ ...fdBase(path), dir: true }, !!(flags & O_CLOEXEC));
   }
   if (flags & O_DIRECTORY) return fail(cpu, E.NOTDIR);
   const found = vfs.stat(path);
@@ -167,9 +168,9 @@ function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
     vfs.write(path, data);
   } else if (flags & O_CREAT && flags & O_EXCL) return fail(cpu, E.EXIST);
   if (flags & O_TRUNC && acc !== 0) { data = new Uint8Array(0); vfs.write(path, data); }
-  return put({ ...fdBase(path), content: vfs.open(path) ?? { path: null, data: new Uint8Array(0), len: found?.size ?? 0 }, source: data ? undefined : found?.source, write: acc !== 0, append: !!(flags & O_APPEND), nonblock: !!(flags & O_NONBLOCK), statusFlags: flags & (O_ACCMODE | O_APPEND | O_NONBLOCK) });
+  return put({ ...fdBase(path), content: vfs.open(path) ?? { path: null, data: new Uint8Array(0), len: found?.size ?? 0 }, source: data ? undefined : found?.source, write: acc !== 0, append: !!(flags & O_APPEND), nonblock: !!(flags & O_NONBLOCK), statusFlags: flags & (O_ACCMODE | O_APPEND | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
 }
-function put(f: Fd): number { const fd = allocateFd(); fds.set(fd, f); return fd; }
+function put(f: Fd, cloexec = false): number { const fd = allocateFd(); fds.set(fd, f); if (cloexec) closeOnExec.add(fd); return fd; }
 /** a Java-side open into the same descriptor table native code reads, so a fd handed across JNI is live */
 export const javaBytesFd = (bytes: Uint8Array): number => put({ ...fdBase(""), content: { path: null, data: bytes, len: bytes.length }, synthetic: true });
 export const javaOpenFd = (path: string, flags: number): number => fdOpen(null, path, flags);
@@ -362,7 +363,7 @@ function fdClose(cpu: Cpu | null, fd: number): number {
   if (isNativeSocket(fd)) return cpu ? nativeSocketClose(cpu, fd) : fail(cpu, E.BADF);
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
-  fds.delete(fd); releaseFd(fd);
+  fds.delete(fd); closeOnExec.delete(fd); releaseFd(fd);
   if (--f.references > 0) return 0;
   if (f.content.path && f.write) notifyInotify(f.content.path, IN_CLOSE_WRITE);
   if (f.inotify) { inotifies.delete(f.inotify); f.inotify.pipe.closed = true; wakeAll(f.inotify.pipe); }
@@ -370,6 +371,24 @@ function fdClose(cpu: Cpu | null, fd: number): number {
   if (f.epoll) { for (const e of f.epoll.entries.values()) e.cancel(); for (const wake of f.epoll.wake) wake(); }
   if (f.wpipe) { f.wpipe.closed = true; wakeAll(f.wpipe); }
   return 0;
+}
+function fdDup2(cpu: Cpu, fd: number, to: number, cloexec = false): number {
+  if (to < 0) return fail(cpu, E.BADF);
+  if (fd === to) return isNativeSocket(fd) || fds.has(fd) ? fd : fail(cpu, E.BADF);
+  if (isNativeSocket(fd)) {
+    if (isNativeSocket(to)) nativeSocketClose(cpu, to);
+    else if (fds.has(to)) fdClose(cpu, to);
+    return nativeSocketDup(cpu, fd, to, cloexec);
+  }
+  const f = fds.get(fd);
+  if (!f) return fail(cpu, E.BADF);
+  if (isNativeSocket(to)) nativeSocketClose(cpu, to);
+  else if (fds.has(to)) fdClose(cpu, to);
+  f.references++;
+  reserveFd(to);
+  fds.set(to, f);
+  if (cloexec) closeOnExec.add(to);
+  return to;
 }
 /** mkstemp's contract: the six trailing X's become the name in place, and the file is created exclusively */
 function fdTemp(cpu: Cpu, tpl: number, flags: number, dir: boolean): number {
@@ -426,15 +445,15 @@ function fillStatfs(b: number): void {
 }
 function makePipe(out: number, flags: number): number {
   const p = newPipe(), nb = !!(flags & 0x800);
-  mem.st32(out, put({ ...fdBase("pipe"), rpipe: p, nonblock: nb, statusFlags: nb ? O_NONBLOCK : 0 }));
-  mem.st32(out + 4, put({ ...fdBase("pipe"), wpipe: p, nonblock: nb, write: true, statusFlags: 1 | (nb ? O_NONBLOCK : 0) }));
+  mem.st32(out, put({ ...fdBase("pipe"), rpipe: p, nonblock: nb, statusFlags: nb ? O_NONBLOCK : 0 }, !!(flags & O_CLOEXEC)));
+  mem.st32(out + 4, put({ ...fdBase("pipe"), wpipe: p, nonblock: nb, write: true, statusFlags: 1 | (nb ? O_NONBLOCK : 0) }, !!(flags & O_CLOEXEC)));
   return 0;
 }
 function makeInotify(cpu: Cpu, flags: number): number {
   if (flags & ~(IN_NONBLOCK | IN_CLOEXEC)) return fail(cpu, E.INVAL);
   const pipe = newPipe(), state: Inotify = { watches: new Map(), nextWd: 1, pipe };
   inotifies.add(state);
-  return put({ ...fdBase("inotify"), inotify: state, rpipe: pipe, nonblock: !!(flags & IN_NONBLOCK), statusFlags: flags & IN_NONBLOCK });
+  return put({ ...fdBase("inotify"), inotify: state, rpipe: pipe, nonblock: !!(flags & IN_NONBLOCK), statusFlags: flags & IN_NONBLOCK }, !!(flags & O_CLOEXEC));
 }
 function epollWatch(ep: Epoll, fd: number, events: number, data: bigint): EpollEntry {
   const entry: EpollEntry = { events, data, pending: nativePollEvents(fd, events), disabled: false, cancel: () => {} };
@@ -778,6 +797,8 @@ export function stdioInit(): void {
       if (isNativeSocket(fd)) return nativeSocketFcntl(cpu, fd, cmd, a.i());
       const f = fds.get(fd);
       if (!f) return fail(cpu, E.BADF);
+      if (cmd === 1) return closeOnExec.has(fd) ? 1 : 0;
+      if (cmd === 2) { if (a.i() & 1) closeOnExec.add(fd); else closeOnExec.delete(fd); return 0; }
       if (cmd === 5 || cmd === 12) {
         const lock = a.p();
         if (mem.ld16u(lock) > 2) return fail(cpu, E.INVAL);
@@ -795,23 +816,11 @@ export function stdioInit(): void {
     },
     fsync: () => 0, fdatasync: () => 0, sync: () => {},
     dup: (cpu, a) => { const fd = a.i(); if (isNativeSocket(fd)) return nativeSocketDup(cpu, fd); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); f.references++; return put(f); },
-    dup2: (cpu, a) => {
-      const fd = a.i(), to = a.i();
-      if (to < 0) return fail(cpu, E.BADF);
-      if (fd === to) return isNativeSocket(fd) || fds.has(fd) ? fd : fail(cpu, E.BADF);
-      if (isNativeSocket(fd)) {
-        if (isNativeSocket(to)) nativeSocketClose(cpu, to);
-        else if (fds.has(to)) fdClose(cpu, to);
-        return nativeSocketDup(cpu, fd, to);
-      }
-      const f = fds.get(fd);
-      if (!f) return fail(cpu, E.BADF);
-      if (isNativeSocket(to)) nativeSocketClose(cpu, to);
-      else if (fds.has(to)) fdClose(cpu, to);
-      f.references++;
-      reserveFd(to);
-      fds.set(to, f);
-      return to;
+    dup2: (cpu, a) => fdDup2(cpu, a.i(), a.i()),
+    dup3: (cpu, a) => {
+      const fd = a.i(), to = a.i(), flags = a.i();
+      if (fd === to || (flags & ~O_CLOEXEC)) return fail(cpu, E.INVAL);
+      return fdDup2(cpu, fd, to, !!(flags & O_CLOEXEC));
     },
     pipe: (_c, a) => makePipe(a.p(), 0),
     pipe2: (_c, a) => makePipe(a.p(), a.i()),
@@ -842,14 +851,14 @@ export function stdioInit(): void {
     socketpair: (_c, a) => {
       a.i(); const type = a.i(); a.i(); const sv = a.p();
       const ab = newPipe(), ba = newPipe(), nb = !!(type & 0x800);
-      mem.st32(sv, put({ ...fdBase("socketpair"), rpipe: ab, wpipe: ba, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }));
-      mem.st32(sv + 4, put({ ...fdBase("socketpair"), rpipe: ba, wpipe: ab, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }));
+      mem.st32(sv, put({ ...fdBase("socketpair"), rpipe: ab, wpipe: ba, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }, !!(type & O_CLOEXEC)));
+      mem.st32(sv + 4, put({ ...fdBase("socketpair"), rpipe: ba, wpipe: ab, nonblock: nb, statusFlags: 2 | (nb ? O_NONBLOCK : 0) }, !!(type & O_CLOEXEC)));
       return 0;
     },
     timerfd_create: (cpu, a) => {
       const clock = a.i(), flags = a.i();
-      if (![0, 1, 7].includes(clock) || flags & ~(O_NONBLOCK | 0x80000)) return fail(cpu, E.INVAL);
-      return put({ ...fdBase("timerfd"), timer: { clock, next: 0, interval: 0 }, event: { count: 0, wake: [] }, nonblock: !!(flags & O_NONBLOCK), statusFlags: 2 | (flags & O_NONBLOCK) });
+      if (![0, 1, 7].includes(clock) || flags & ~(O_NONBLOCK | O_CLOEXEC)) return fail(cpu, E.INVAL);
+      return put({ ...fdBase("timerfd"), timer: { clock, next: 0, interval: 0 }, event: { count: 0, wake: [] }, nonblock: !!(flags & O_NONBLOCK), statusFlags: 2 | (flags & O_NONBLOCK) }, !!(flags & O_CLOEXEC));
     },
     timerfd_settime: (cpu, a) => {
       const fd = a.i(), flags = a.i(), value = a.p(), old = a.p(), f = fds.get(fd);
@@ -870,8 +879,13 @@ export function stdioInit(): void {
       if (!f.timer) return fail(cpu, E.INVAL);
       timerState(f.timer, out); return 0;
     },
-    eventfd: (_c, a) => { const init = a.u(), flags = a.i(); return put({ ...fdBase("eventfd"), event: { count: init, wake: [] }, nonblock: !!(flags & O_NONBLOCK), statusFlags: 2 | (flags & O_NONBLOCK) }); },
+    eventfd: (_c, a) => { const init = a.u(), flags = a.i(); return put({ ...fdBase("eventfd"), event: { count: init, wake: [] }, nonblock: !!(flags & O_NONBLOCK), statusFlags: 2 | (flags & O_NONBLOCK) }, !!(flags & O_CLOEXEC)); },
     epoll_create: () => put({ ...fdBase("epoll"), epoll: { entries: new Map(), wake: new Set() }, statusFlags: 2 }),
+    epoll_create1: (cpu, a) => {
+      const flags = a.i();
+      if (flags & ~O_CLOEXEC) return fail(cpu, E.INVAL);
+      return put({ ...fdBase("epoll"), epoll: { entries: new Map(), wake: new Set() }, statusFlags: 2 }, !!flags);
+    },
     epoll_ctl: (cpu, a) => {
       const epfd = a.i(), ep = fds.get(epfd)?.epoll, op = a.i(), fd = a.i(), ev = a.p();
       if (fd === epfd) return fail(cpu, E.INVAL);
@@ -1074,7 +1088,7 @@ export function stdioInit(): void {
     },
     perror: (_c, a) => { const s = a.p(); logLine(6, "stderr", (s ? mem.cstr(s) + ": " : "") + "error"); },
   };
-  for (const [alias, name] of [["__openat_2", "openat"], ["epoll_create1", "epoll_create"], ["epoll_pwait", "epoll_wait"], ["fseeko", "fseek"], ["ftello", "ftell"], ["getc", "fgetc"], ["__srget", "fgetc"], ["putc", "fputc"], ["__swbuf", "fputc"]]) M[alias] = M[name];
+  for (const [alias, name] of [["__openat_2", "openat"], ["epoll_pwait", "epoll_wait"], ["fseeko", "fseek"], ["ftello", "ftell"], ["getc", "fgetc"], ["__srget", "fgetc"], ["putc", "fputc"], ["__swbuf", "fputc"]]) M[alias] = M[name];
   for (const name of ["stat", "fstat", "lstat", "fstatat"]) M[name + "64"] = M[name];
   scratch = mem.hostAlloc(16);
   const isStd = (fp: number) => fp >= sF && fp < sF + 3 * LAYOUT.FILE_SIZE;

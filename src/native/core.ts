@@ -31,6 +31,7 @@ interface Core {
   map_va(n: bigint, reserve: number): bigint;
   unmap_va(va: bigint, n: bigint): number;
   check_reserve(h: number, lo: number, size: number): number;
+  resident_va(va: bigint): number;
   commit_va(va: bigint, n: bigint): number;
   drop_va(va: bigint, n: bigint): number;
   decommit_va(va: bigint, n: bigint): void;

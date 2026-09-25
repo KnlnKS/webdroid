@@ -421,6 +421,17 @@ export fn check_reserve(h: u32, l: u32, size: u32) u32 {
     }
     return @intFromBool(h < PLANES and l >= L[h] and @as(u64, l - L[h]) + size <= R[h]);
 }
+export fn resident_va(v: u64) i32 {
+    const h = hi(v);
+    const l = lo(v);
+    if (h == 0) {
+        if (l < abi.ARENA_BASE or l >= (if (pool_base != 0) pool_base else module_bot)) return -1;
+        const state = pages[pageOf(l)];
+        return if (state == FREE) -1 else @intFromBool(state == USED or state == IMAGE);
+    }
+    if (h >= PLANES or R[h] == 0 or l < L[h] or @as(u64, l - L[h]) >= R[h]) return -1;
+    return @intFromBool(l - L[h] < S[h]);
+}
 export fn commit_va(v: u64, n: u64) u32 {
     const h = hi(v);
     const l = lo(v);

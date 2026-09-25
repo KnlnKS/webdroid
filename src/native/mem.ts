@@ -130,6 +130,7 @@ export const mem = {
     return true;
   },
   commitVa: (va: bigint, n: number): boolean => core.commit_va(va, BigInt(n)) !== 0,
+  residentVa: (va: bigint): number => core.resident_va(va),
   /** MADV_DONTNEED on a private anonymous mapping: what is committed of it reads back as zero */
   dropVa(va: bigint, n: number): void {
     if (!core.drop_va(va, BigInt(n))) console.warn(`[mem-native] madvise(DONTNEED) outside the arena ignored: 0x${Number(va).toString(16)}+0x${n.toString(16)}`);

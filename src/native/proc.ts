@@ -19,6 +19,41 @@ export const killLog: string[] = [];
 const CAP_VERSION_1 = 0x19980330, CAP_VERSION_2 = 0x20071026, CAP_VERSION_3 = 0x20080522;
 const capWords = (version: number) => version === CAP_VERSION_1 ? 1 : version === CAP_VERSION_2 || version === CAP_VERSION_3 ? 2 : 0;
 const pointerArg = (cpu: Cpu, address: bigint): number | bigint => cpu.a64 ? address : Number(address);
+const SS_DISABLE = 2, SS_AUTODISARM = 0x80000000;
+const resourceLimits = new Map<number, { soft: bigint; hard: bigint }>();
+const limit = (resource: number) => resourceLimits.get(resource) ?? { soft: 0x100000n, hard: 0x100000n };
+const writeLimit = (p: number, value: bigint) => {
+  if (PTR === 8) mem.st64(p, value);
+  else mem.st32(p, Number(value > 0xffffffffn ? 0xffffffffn : value));
+};
+const readLimit = (p: number) => PTR === 8 ? BigInt.asUintN(64, mem.ld64(p)) : BigInt(mem.ld32(p) >>> 0);
+const setLimit = (cpu: Cpu, resource: number, soft: bigint, hard: bigint) => {
+  if (soft > hard) return fail(cpu, E.INVAL);
+  if (hard > limit(resource).hard) return fail(cpu, E.PERM);
+  resourceLimits.set(resource, { soft, hard });
+  return 0;
+};
+
+function sigaltstack(cpu: Cpu, a: ArgReader): number {
+  const next = a.p(), old = a.p();
+  const previous = cpu.alternateStack ?? { sp: 0n, size: 0n, flags: SS_DISABLE };
+  const sizeAt = PTR === 8 ? 16 : 8;
+  if (old) {
+    if (PTR === 8) mem.st64(old, previous.sp); else mem.st32(old, Number(previous.sp));
+    mem.st32(old + PTR, previous.flags | (cpu.alternateActive ? 1 : 0));
+    if (PTR === 8) mem.st64(old + sizeAt, previous.size); else mem.st32(old + sizeAt, Number(previous.size));
+  }
+  if (!next) return 0;
+  if (cpu.alternateActive) return fail(cpu, E.PERM);
+  const flags = mem.ld32(next + PTR) >>> 0;
+  if (flags !== 0 && flags !== SS_DISABLE && flags !== SS_AUTODISARM) return fail(cpu, E.INVAL);
+  if (flags === SS_DISABLE) { cpu.alternateStack = { sp: 0n, size: 0n, flags }; return 0; }
+  const size = PTR === 8 ? mem.ld64(next + sizeAt) : BigInt(mem.ld32(next + sizeAt) >>> 0);
+  if (size < 2048n) return fail(cpu, E.NOMEM);
+  const sp = PTR === 8 ? mem.ld64(next) : BigInt(mem.ld32(next) >>> 0);
+  cpu.alternateStack = { sp, size, flags };
+  return 0;
+}
 
 /** Linux capget for the one unprivileged Android app process represented by this runtime. */
 function capget(cpu: Cpu, header: number, data: number): number {
@@ -75,6 +110,7 @@ function rtSigaction(a: ArgReader): number {
   return 0;
 }
 export function procInit(): void {
+  resourceLimits.clear();
   const guard = mem.hostAlloc(8);
   mem.st32(guard, (Math.random() * 0x7fffffff) | 0x100); mem.st32(guard + 4, (Math.random() * 0x7fffffff) | 0);
   hostData("libc.so", "__stack_chk_guard", guard);
@@ -91,6 +127,22 @@ export function procInit(): void {
   const chk = (n: number, len: number, cpu: Cpu) => { if (n > len) cpu.fault(`fortify: ${n} bytes into a ${len}-byte object`); };
   const M: Record<string, HostFn> = {
     sysinfo: (_c, a) => { fillSysinfo(a.p()); return 0; },
+    getrlimit: (_cpu, a) => {
+      const current = limit(a.i()), out = a.p();
+      writeLimit(out, current.soft); writeLimit(out + PTR, current.hard);
+      return 0;
+    },
+    setrlimit: (cpu, a) => {
+      const resource = a.i(), next = a.p();
+      return setLimit(cpu, resource, readLimit(next), readLimit(next + PTR));
+    },
+    prlimit64: (cpu, a) => {
+      const pid = a.i(), resource = a.i(), next = a.p(), old = a.p();
+      if (pid !== 0 && pid !== cpu.pid) return fail(cpu, E.SRCH);
+      const previous = limit(resource);
+      if (old) { mem.st64(old, previous.soft); mem.st64(old + 8, previous.hard); }
+      return next ? setLimit(cpu, resource, BigInt.asUintN(64, mem.ld64(next)), BigInt.asUintN(64, mem.ld64(next + 8))) : 0;
+    },
     sched_getaffinity: (_c, a) => { a.i(); const n = a.u(), set = a.p(); mem.memset(set, 0, n); mem.st32(set, cpuMask); return 0; },
     sched_setaffinity: () => 0, sched_getcpu: () => 0,
     __sched_cpucount: (_c, a) => { const n = a.u(), set = a.p(); let k = 0; for (let i = 0; i < n; i++) { let b = u8[set + i]; while (b) { k += b & 1; b >>= 1; } } return k; },
@@ -127,7 +179,7 @@ export function procInit(): void {
     sigprocmask64: (cpu, a) => { const e = cpu.sigmask(a.i(), a.p(), a.p(), 8); return e ? fail(cpu, e) : 0; },
     sigsuspend: (cpu, a) => { const mask = cpu.signalMask; cpu.sigmask(2, a.p(), 0, PTR); return new Promise<number>((r) => { cpu.sigWait = () => { cpu.signalMask = mask; cpu.pump(); r(fail(cpu, E.INTR)); }; }); },
     sigwait: () => new Promise<never>(() => {}),
-    sigaltstack: () => 0, sigpending: (cpu, a) => { const mask = cpu.signals.reduce((v, sig) => v | 1n << BigInt(sig - 1), 0n); const p = a.p(); if (PTR === 8) mem.st64(p, mask); else mem.st32(p, Number(mask & 0xffffffffn)); return 0; },
+    sigaltstack, sigpending: (cpu, a) => { const mask = cpu.signals.reduce((v, sig) => v | 1n << BigInt(sig - 1), 0n); const p = a.p(); if (PTR === 8) mem.st64(p, mask); else mem.st32(p, Number(mask & 0xffffffffn)); return 0; },
     pthread_sigqueue: () => 0, killpg: () => 0,
     openlog: () => {}, closelog: () => {},
     syslog: (_c, a) => { const prio = a.i(), f = a.str(); logLine(prio <= 3 ? 6 : prio <= 5 ? 5 : 4, "syslog", format(f, a)); },

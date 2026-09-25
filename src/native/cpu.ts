@@ -16,6 +16,7 @@ export { NativeFault, yieldToLoop, yieldStats };
 const enum SliceExit { Budget = 0, Suspend = 1, Exit = 2 }
 const enum CoreExit { Budget = 0, Host = 1, Ret = 2, Fault = 3, Syscall = 4 }
 const SIGNAL_FRAME = "signal ";
+const SA_SIGINFO = 4, SA_ONSTACK = 0x08000000, SS_DISABLE = 2, SS_AUTODISARM = 0x80000000;
 const isSignalFrame = (label: string | undefined): boolean => label?.startsWith(SIGNAL_FRAME) ?? false;
 // ~5 ms of guest time per slice: coarse enough that the macrotask hop per slice is noise, fine
 // enough that a 60 Hz frame loop on the JS thread keeps its cadence
@@ -133,6 +134,8 @@ export class Cpu {
   /** signals queued for this thread, delivered at its next slice boundary */
   signals: number[] = [];
   signalMask = 0n;
+  alternateStack: { sp: bigint; size: bigint; flags: number } | null = null;
+  alternateActive = false;
 
   constructor(jthread: JThread, name: string) {
     this.jthread = jthread;
@@ -283,7 +286,55 @@ export class Cpu {
       if (!handling) this.handling.delete(sig);
     };
     const base = this.baseAvailable;
-    const p = (async () => { if (h) await this.call(h.fn, [sig, 0, 0], SIGNAL_FRAME + sig, restore); })();
+    const alt = h && (h.flags & SA_ONSTACK) && this.alternateStack && !(this.alternateStack.flags & SS_DISABLE) && !this.alternateActive
+      ? this.alternateStack.sp + this.alternateStack.size : undefined;
+    const p = (async () => {
+      if (!h) return;
+      const frame = this.a64 && (h.flags & SA_SIGINFO) ? mem.malloc(0x1300) : 0;
+      if (this.a64 && (h.flags & SA_SIGINFO) && !frame) throw new NativeFault("[native] out of memory for signal frame");
+      const context = frame ? frame + 0x80 : 0;
+      if (frame) {
+        // Linux arm64 ucontext_t places mcontext registers at +0xb0.
+        mem.memset(frame, 0, 0x1300);
+        mem.st32(frame, sig);
+        mem.st32(frame + 8, -6);
+        const reg = (i: number) => (BigInt(this.w[2 * i + 1] >>> 0) << 32n) | BigInt(this.w[2 * i] >>> 0);
+        if (this.alternateStack) {
+          mem.st64(context + 0x10, this.alternateStack.sp);
+          mem.st32(context + 0x18, this.alternateStack.flags);
+          mem.st64(context + 0x20, this.alternateStack.size);
+        }
+        mem.st64(context + 0x28, mask);
+        for (let i = 0; i < 31; i++) mem.st64(context + 0xb0 + i * 8, reg(i));
+        mem.st64(context + 0x1a8, reg(31));
+        mem.st64(context + 0x1b0, BigInt(this.pc));
+        mem.st64(context + 0x1b8, BigInt(this.cpsr >>> 0));
+      }
+      const previousAlt = this.alternateStack, previousActive = this.alternateActive;
+      if (alt !== undefined) {
+        const autodisarm = !!(previousAlt && previousAlt.flags & SS_AUTODISARM);
+        this.alternateActive = !autodisarm;
+        if (autodisarm) this.alternateStack = { sp: 0n, size: 0n, flags: SS_DISABLE };
+      }
+      try {
+        await this.call(h.fn, [sig, frame, context], SIGNAL_FRAME + sig, restore, alt);
+        if (context) {
+          for (let i = 0; i < 31; i++) {
+            const value = mem.ld64(context + 0xb0 + i * 8);
+            this.w[2 * i] = Number(value & 0xffffffffn);
+            this.w[2 * i + 1] = Number(value >> 32n);
+          }
+          const sp = mem.ld64(context + 0x1a8);
+          this.w[62] = Number(sp & 0xffffffffn);
+          this.w[63] = Number(sp >> 32n);
+          this.setPc(Number(mem.ld64(context + 0x1b0) & 0xffffffffn));
+          this.cpsr = Number(mem.ld64(context + 0x1b8) & 0xffffffffn);
+        }
+      } finally {
+        if (alt !== undefined) { this.alternateStack = previousAlt; this.alternateActive = previousActive; }
+        if (frame) mem.free(frame);
+      }
+    })();
     if (base) this.baseBusy = p.catch(() => {}).finally(() => { this.baseBusy = null; });
     try { await p; }
     catch (e) { console.error(`[native] signal ${sig} handler on ${this.name}:`, e); throw e; }
@@ -342,7 +393,7 @@ export class Cpu {
   /** run guest function `fn` to completion on this Cpu (reentrant: saves and restores the register file) */
   frames: string[] = [];                            // what each nested call() is for (wd.native.regs)
   private savePool: Uint8Array[] = [];
-  async call(fn: number, args: CallArg[] = [], label = "call", beforeResume?: () => void): Promise<number> {
+  async call(fn: number, args: CallArg[] = [], label = "call", beforeResume?: () => void, stackTop?: bigint): Promise<number> {
     // host code calling back into the guest (a comparator, a JNI entry) while a signal handler owns the
     // register file above the frame it belongs to waits for that handler, as the kernel would hold the
     // thread; a handler's own delivery never waits
@@ -381,16 +432,22 @@ export class Cpu {
     }
     // a nested call (Java → native while this Cpu is parked in a host call) builds its frame below the guest's sp
     const slotSz = this.a64 ? 8 : 4, align = this.a64 ? ~15 : ~7;
-    let sp = (this.depth ? w[2 * this.spx] - 64 : this.stackTop) & align;
+    const nested = this.depth > 0 || stackTop !== undefined;
+    const currentSp = this.depth && stackTop === undefined
+      ? (this.a64 ? BigInt(w[2 * this.spx + 1] >>> 0) << 32n : 0n) | BigInt(w[2 * this.spx] >>> 0) : 0n;
+    const top = stackTop ?? (this.depth ? currentSp - 64n : BigInt(this.stackTop));
+    const baseSp = nested ? mem.txVa(top - 16n) + 16 : this.stackTop;
+    let sp = (baseSp & align) >>> 0;
     if (stack.length) {
-      sp = (sp - stack.length * slotSz) & align;
+      sp = ((sp - stack.length * slotSz) & align) >>> 0;
       let p = sp;
       for (const a of stack) {
-        if (typeof a === "bigint") { if (!this.a64) p = (p + 7) & ~7; mem.st64(p, a); p += 8; }
+        if (typeof a === "bigint") { if (!this.a64) p = ((p + 7) & ~7) >>> 0; mem.st64(p, a); p += 8; }
         else { mem.st32(p, a); if (this.a64) mem.st32(p + 4, 0); p += slotSz; }
       }
     }
-    w[2 * this.spx] = sp; w[2 * this.spx + 1] = 0;
+    const stackVa = nested ? top - BigInt(baseSp - sp) : BigInt(sp);
+    w[2 * this.spx] = Number(stackVa & 0xffffffffn); w[2 * this.spx + 1] = Number(stackVa >> 32n);
     w[2 * this.lrx] = RET_SENTINEL; w[2 * this.lrx + 1] = 0;
     this.setPc(fn);
     this.pending = null;
