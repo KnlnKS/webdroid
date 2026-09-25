@@ -826,7 +826,11 @@ class JURLConnection extends JObj {
     if (r.status === 502 && !final) throw rt.mkThrowable("java/net/UnknownHostException", await r.text());
     if (final && final !== this.url.u.href) this.url = mkURL(final);   // getURL() reports where a redirect landed
     const hdrs: [string, string][] = [];
-    r.headers.forEach((v, k) => { if (k !== "x-wd-final-url" && k !== "x-wd-status" && k !== "x-wd-status-text") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]); });
+    r.headers.forEach((v, k) => { if (k !== "x-wd-final-url" && k !== "x-wd-status" && k !== "x-wd-status-text" && k !== "x-wd-content-length") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]); });
+    if (!r.headers.has("content-length")) {
+      const length = r.headers.get("x-wd-content-length");
+      if (length) hdrs.push(["content-length", length]);
+    }
     const stream = new JHttpInputStream();
     stream.reader = r.body?.getReader() ?? null; stream.timeout = () => this.rto;
     return (this.res = { status: this.follow ? r.status : Number(r.headers.get("x-wd-status")) || r.status,
