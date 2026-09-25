@@ -25,7 +25,7 @@ All 20 launched, drew an initial frame, and supplied diagnostics in a serialized
 | flappybird.apk | Title, play, collision/game over and restart rendered without missing APIs, GL or draw errors. | Scores and longer repeated runs. |
 | harmonic.apk | Onboarding, story/comments, article WebView, search, and settings. Dialog outside-touch miss fixed. Optional window-extension probe. | Login, import/export, and other settings paths. |
 | lichess.apk | 15-step fast flow passed after retaining joinable pthread handle storage until join/detach. Optional window-sidecar probe. | Long sessions, authenticated/online play, persistence and more game modes. |
-| mihon-v0.20.4.apk | Onboarding, local folder grant, local source discovery, two-page CBZ chapter reading, library addition and persistence after reload. A populated backup contained the title and chapter, and its restore worker succeeded with the existing library. No runtime missing call in the final reader/backup path. | Restore into an empty library, extension installation, larger archives and longer reading. Empty-library backup previously reported the app's own “No library entries” error. |
+| mihon-v0.20.4.apk | Onboarding, local folder grant, local source discovery, two-page CBZ chapter reading, library addition and persistence after reload. A populated backup contained the title and chapter; restoring it into an isolated empty library showed the title and Chapter 1. No runtime missing call in the final reader/backup path. | Restore persistence after a browser restart, chapter access from a different storage folder, extension installation, larger archives and longer reading. Empty-library backup previously reported the app's own “No library entries” error. |
 
 ## Added corpus v1 follow-up: Komikku
 
