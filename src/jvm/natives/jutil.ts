@@ -2553,14 +2553,24 @@ function objCopyOf(a: unknown[], n: number, elem?: string): unknown[] {
   return jarray(c, elem);
 }
 
+async function replaceListValues(list: unknown, values: unknown[]): Promise<void> {
+  const iterator = await vcall(list, "listIterator", "()Ljava/util/ListIterator;");
+  for (const value of values) { await vcall(iterator, "next", "()Ljava/lang/Object;"); await vcall(iterator, "set", "(Ljava/lang/Object;)V", value); }
+}
 async function shuffle(list: unknown, random?: unknown): Promise<void> {
   const values = [...await toJsArray(list)];
   for (let i = values.length; i > 1; i--) {
     const j = random === undefined ? Math.floor(Math.random() * i) : await vcall(random, "nextInt", "(I)I", i);
     [values[i - 1], values[j]] = [values[j], values[i - 1]];
   }
-  const iterator = await vcall(list, "listIterator", "()Ljava/util/ListIterator;");
-  for (const value of values) { await vcall(iterator, "next", "()Ljava/lang/Object;"); await vcall(iterator, "set", "(Ljava/lang/Object;)V", value); }
+  await replaceListValues(list, values);
+}
+async function rotate(list: unknown, distance: number): Promise<void> {
+  if (list === null) rt.npe();
+  const values = [...await toJsArray(list)], n = values.length;
+  if (n < 2) return;
+  const shift = ((distance % n) + n) % n;
+  if (shift) await replaceListValues(list, values.slice(n - shift).concat(values.slice(0, n - shift)));
 }
 class JCollections extends JObj {}
 const extreme = (sign: number) => async (c: unknown, cmp: unknown = null) => {
@@ -2619,6 +2629,7 @@ rt.register({
       ? mkCmp((a, b) => vcall(b, "compareTo", "(Ljava/lang/Object;)I", a))
       : mkCmp((a, b) => vcall(c, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", b, a)),
     "static reverse(Ljava/util/List;)V": (l: JList) => l.a.reverse(),
+    "static rotate(Ljava/util/List;I)V": rotate,
     "static shuffle(Ljava/util/List;)V": shuffle,
     "static shuffle(Ljava/util/List;Ljava/util/Random;)V": shuffle,
     "static disjoint(Ljava/util/Collection;Ljava/util/Collection;)Z": async (a: unknown, b: unknown) => {

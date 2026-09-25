@@ -34,3 +34,10 @@ test("Collections.shuffle uses the supplied Random and updates the list", async 
   await vcall(rt.link("java/util/Collections").ctor, "shuffle", "(Ljava/util/List;Ljava/util/Random;)V", list, random);
   expect(await vcall(list, "toArray", "()[Ljava/lang/Object;")).toEqual(expected);
 });
+test("Collections.rotate updates a live sublist", async () => {
+  const list = await newObj("java/util/ArrayList");
+  for (const value of [0, 1, 2, 3, 4]) await vcall(list, "add", "(Ljava/lang/Object;)Z", value);
+  const middle = await vcall(list, "subList", "(II)Ljava/util/List;", 1, 4);
+  await vcall(rt.link("java/util/Collections").ctor, "rotate", "(Ljava/util/List;I)V", middle, -1);
+  expect(await vcall(list, "toArray", "()[Ljava/lang/Object;")).toEqual([0, 2, 3, 1, 4]);
+});
