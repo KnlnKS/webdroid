@@ -696,6 +696,8 @@ export class JMap extends JObj {
   m = new Map<unknown, Ent>();       // fast keys
   slow: Ent[] = [];                  // custom-equals keys (linear; rare)
   slowVersion = 0;
+  loadFactor = 0.75;
+  threshold = 0;
   access = false;                    // LinkedHashMap accessOrder
   mutable = true;
   identity = false;
@@ -734,9 +736,9 @@ function mapMethods(): Methods {
   return {
     "<init>()V": function () {},
     "<init>(I)V": function () {},
-    "<init>(IF)V": function () {},
+    "<init>(IF)V": function (this: JMap, _capacity: number, factor: number) { this.loadFactor = factor; },
     "<init>(IFI)V": function () {},
-    "<init>(IFZ)V": function (this: JMap, _c: number, _f: number, ao: number) { this.access = !!ao; },
+    "<init>(IFZ)V": function (this: JMap, _c: number, factor: number, ao: number) { this.loadFactor = factor; this.access = !!ao; },
     "clone()Ljava/lang/Object;": function (this: JMap) {
       const c = new (this.constructor as new () => JMap)();
       c.access = this.access;
@@ -1094,6 +1096,33 @@ const mapExtras: Record<string, NativeSpec["methods"]> = {
   },
   "java/util/Hashtable": { "contains(Ljava/lang/Object;)Z": hashtableContains, "keys()Ljava/util/Enumeration;": hashtableKeys, "elements()Ljava/util/Enumeration;": hashtableElements },
 };
+const mapSerialization: Methods = {
+  "writeObject(Ljava/io/ObjectOutputStream;)V": async function (this: JMap, stream: unknown) {
+    const entries = [...allEnts(this)];
+    const capacity = Math.min(1 << 30, 2 ** Math.ceil(Math.log2(Math.max(16, entries.length / this.loadFactor))));
+    this.threshold = Math.floor(capacity * this.loadFactor);
+    await vcall(stream, "defaultWriteObject", "()V");
+    await vcall(stream, "writeInt", "(I)V", capacity);
+    await vcall(stream, "writeInt", "(I)V", entries.length);
+    for (const entry of entries) {
+      await vcall(stream, "writeObject", "(Ljava/lang/Object;)V", entry.k);
+      await vcall(stream, "writeObject", "(Ljava/lang/Object;)V", entry.v);
+    }
+  },
+  "readObject(Ljava/io/ObjectInputStream;)V": async function (this: JMap, stream: unknown) {
+    await vcall(stream, "defaultReadObject", "()V");
+    const capacity = await vcall(stream, "readInt", "()I");
+    const count = await vcall(stream, "readInt", "()I");
+    if (!(this.loadFactor > 0) || capacity < 0 || count < 0)
+      throw rt.mkThrowable("java/io/InvalidObjectException", "Invalid map load factor, capacity or size");
+    this.m.clear(); this.slow = [];
+    for (let i = 0; i < count; i++) {
+      const key = await vcall(stream, "readObject", "()Ljava/lang/Object;");
+      const value = await vcall(stream, "readObject", "()Ljava/lang/Object;");
+      await vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
+    }
+  },
+};
 function hashtableKeys(this: JMap) { return mkIter([...allEnts(this)].map((e) => e.k)); }
 function hashtableElements(this: JMap) { return mkIter([...allEnts(this)].map((e) => e.v)); }
 /** the legacy Hashtable-era alias of containsValue, which rejects null */
@@ -1104,13 +1133,18 @@ function hashtableContains(this: JMap, v: unknown) {
 for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/concurrent/ConcurrentHashMap",
   "java/util/WeakHashMap", "java/util/IdentityHashMap", "java/util/Hashtable", "java/util/EnumMap",
   "android/util/ArrayMap"]) {
-  const methods = { ...mapMethods(), ...mapExtras[n] };
+  const methods = { ...mapMethods(), ...mapExtras[n], ...(n === "java/util/HashMap" ? mapSerialization : {}) };
   if (n === "java/util/EnumMap") {
     methods["put(Ljava/lang/Enum;Ljava/lang/Object;)Ljava/lang/Object;"] = methods["put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"];
     methods["<init>(Ljava/util/EnumMap;)V"] = methods["<init>(Ljava/util/Map;)V"];
   }
   rt.register({
     name: n, ctor: n === "java/util/IdentityHashMap" ? JIdentityHashMap : class extends JMap {}, typeVars: "K,V",
+    serialization: n === "java/util/HashMap" ? { uid: 362498820763181265n, fields: [
+      { name: "loadFactor", desc: "F", prop: "loadFactor" }, { name: "threshold", desc: "I", prop: "threshold" },
+    ] } : n === "java/util/LinkedHashMap" ? { uid: 3801124242820219131n, fields: [
+      { name: "accessOrder", desc: "Z", prop: "access" },
+    ] } : undefined,
     sup: n === "java/util/LinkedHashMap" ? "java/util/HashMap" : n === "android/util/ArrayMap" ? "java/lang/Object" : "java/util/AbstractMap",
     ifaces: ["java/util/Map", ...(n === "java/util/concurrent/ConcurrentHashMap" ? ["java/util/concurrent/ConcurrentMap"] : []),
       ...(["java/util/WeakHashMap", "android/util/ArrayMap"].includes(n) ? [] : ["java/lang/Cloneable", "java/io/Serializable"])],
