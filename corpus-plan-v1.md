@@ -1,8 +1,18 @@
 # Original APK corpus handoff
 
-Status: 2026-09-24. This plan covers the **20 APKs that existed before the recent additions** to `apks/`, plus the requested Komikku follow-up below. The newer 15-app corpus has its own [corpus-plan-v2.md](corpus-plan-v2.md) and is outside this pass except for Komikku. Ads and ad APIs are excluded. The full evidence trail is in [docs/original-apk-coverage-2026-09-24.md](docs/original-apk-coverage-2026-09-24.md) and [docs/implementation-history.md](docs/implementation-history.md).
+Status: 2026-09-25. This plan covers the **20 APKs that existed before the recent additions** to `apks/`, plus the requested Komikku follow-up below. The newer 15-app corpus has its own [corpus-plan-v2.md](corpus-plan-v2.md) and is outside this pass except for Komikku. Ads and ad APIs are excluded. The full evidence trail is in [docs/original-apk-coverage-2026-09-24.md](docs/original-apk-coverage-2026-09-24.md) and [docs/implementation-history.md](docs/implementation-history.md).
 
 All 20 launched, drew an initial frame, and supplied diagnostics in a serialized boot sweep. A successful boot is **not** full feature coverage. No app has been established as fully usable. “No missing API observed” below applies only to the paths exercised; optional vendor and AndroidX class probes are not automatically Android platform gaps.
+
+## Current checkpoint for the next agent
+
+- The original-20 boot sweep remains the latest full sweep for that set. A later 33-app boot sweep rendered 33/33 with diagnostics and no required native calls, but it preceded the `Observable` registration correction. Nine affected APKs plus Komikku passed a targeted replay afterward; repeat the full sweep before citing a post-correction 33/33 result. No full interactive corpus matrix was run after the latest compatibility and code-quality changes.
+- Google Maps now renders vector geometry through the bundled Chromium client after indexed HTTP response headers were exposed. A pan advanced GL draws. A retry of route setup reached a rendered route preview and next-turn state; the first attempt failed, and its cause remains unknown. Active navigation, zoom and real backup transport are still open. Mihon and Komikku exercised local reading and populated backup/restore on observed paths, but restart persistence and broader storage cases remain open.
+- Shared platform work added content-provider pipe and bulk-insert paths, chooser sharing and URI grants, SQLiteQueryBuilder projection-map dispatch through Java `Map`, named-zone `ZoneRules`, and media/regex registrations in focused modules. These changes address mechanisms seen in other APKs as well; they do not establish new feature coverage for the original 20. The chooser's native browser share path was denied in the observed Chrome session; Save file worked. A browser interaction has not verified the later centralized URI-grant path.
+- Latest code gates: typecheck and 1,411 tests passed. FitNotes and NewPipe smoke compilation each reported zero method failures. The smoke compiler's missing-class list is a static reachability inventory, not evidence of a runtime failure. Source inspection and focused checks covered the final cleanup; capture and compare real app behavior before closing any feature gap.
+- Resume with the investigations below. Keep the server on an unused port, inspect every relevant process's `run.json`, and compare ambiguous failures with a matching baseline. `docs/implementation-history.md` records the failure mechanisms and evidence limits; [corpus-plan-v2.md](corpus-plan-v2.md) owns the newer 15-app follow-up.
+
+## Original 20 app status
 
 | App | Tested paths and findings | Not tested, or still failing |
 | --- | --- | --- |
