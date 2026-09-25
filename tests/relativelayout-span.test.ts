@@ -31,6 +31,19 @@ test("a RelativeLayout child fixed on both edges is measured to the span between
   expect([band.top, band.bottom, band.measuredW]).toEqual([0, 168, 10]);
 });
 
+test("a match-parent child right of an anchor ends at the parent edge", async () => {
+  const layout = new (rt.link("android/widget/RelativeLayout").ctor as new () => JViewGroup)();
+  const photo = new JView(); photo.idNum = 42;
+  photo.lp = await newObj("android/widget/RelativeLayout$LayoutParams", "(II)V", 96, 80);
+  const text = new JView();
+  text.lp = await newObj("android/widget/RelativeLayout$LayoutParams", "(II)V", MATCH_PARENT, 80);
+  await vcall(text.lp, "addRule", "(II)V", RIGHT_OF, photo.idNum);
+  for (const child of [photo, text]) { child.parent = layout; layout.children.push(child); }
+  await vcall(layout, "onMeasure", "(II)V", makeSpec(360, MS_EXACTLY), makeSpec(80, MS_EXACTLY));
+  await vcall(layout, "onLayout", "(ZIIII)V", 1, 0, 0, 360, 80);
+  expect([text.left, text.right, text.measuredW]).toEqual([96, 360, 264]);
+});
+
 test("RelativeLayout rules expose their verb-indexed anchors", async () => {
   const params = await newObj("android/widget/RelativeLayout$LayoutParams", "(II)V", 1, 1);
   await vcall(params, "addRule", "(II)V", RIGHT_OF, 42);
