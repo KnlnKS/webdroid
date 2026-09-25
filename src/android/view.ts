@@ -429,6 +429,7 @@ export class JView extends JObj {
   outlineAmbientShadowColor = -16777216;
   outlineSpotShadowColor = -16777216;
   longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  pendingPosts: { run: unknown; delay: number }[] | null = null;
   transientState = 0; textAlignment = 0;
   resolvedTextAlignment(): number {
     for (let v: JView | null = this; v; v = v.parent) if (v.textAlignment) return v.textAlignment;
@@ -1172,9 +1173,13 @@ const viewMethods: NativeSpec["methods"] = {
   "requestLayout()V": nativeRequestLayout,
   "forceLayout()V": function (this: JView) { this.layoutRequested = true; clearMeasureCache(this); },
   "isLayoutRequested()Z": function (this: JView) { return this.layoutRequested ? 1 : 0; },
-  "post(Ljava/lang/Runnable;)Z": function (r: unknown) { return mainHandler().post(r, 0); },
-  "postDelayed(Ljava/lang/Runnable;J)Z": function (r: unknown, d: bigint) { return mainHandler().post(r, Number(d)); },
-  "removeCallbacks(Ljava/lang/Runnable;)Z": function (r: unknown) { mainHandler().cancel(r); return 1; },
+  "post(Ljava/lang/Runnable;)Z": function (this: JView, r: unknown) { return postView(this, r, 0); },
+  "postDelayed(Ljava/lang/Runnable;J)Z": function (this: JView, r: unknown, d: bigint) { return postView(this, r, Number(d)); },
+  "removeCallbacks(Ljava/lang/Runnable;)Z": function (this: JView, r: unknown) {
+    if (this.pendingPosts) this.pendingPosts = this.pendingPosts.filter((post) => post.run !== r);
+    mainHandler().cancel(r);
+    return 1;
+  },
   "postOnAnimation(Ljava/lang/Runnable;)V": function (this: JView, r: unknown) {
     uiState.frameCallbacks.push({ run: r });
   },
@@ -1783,11 +1788,24 @@ export async function attachView(parent: JViewGroup, child: JView, index = -1, r
 export async function dispatchAttached(v: JView, thread = curThread) {
   if (v.attached) return;
   await attachTree(v, thread);
+  flushViewPosts(v);
   // a root is a window's view: ViewRootImpl reports the window attached once its tree is
   if (!v.parent) await vtoMap.get(v)?.dispatchWindowAttached(true);
   // Queued attachment may follow an unattached measure and an empty hosted display list.
   requestLayout(v);
   invalidate(v);
+}
+function postView(view: JView, run: unknown, delay: number): number {
+  if (view.attached) return mainHandler().post(run, delay);
+  (view.pendingPosts ??= []).push({ run, delay });
+  return 1;
+}
+function flushViewPosts(view: JView): void {
+  if (view.pendingPosts) {
+    for (const post of view.pendingPosts) mainHandler().post(post.run, post.delay);
+    view.pendingPosts = null;
+  }
+  if (view instanceof JViewGroup) for (const child of view.children) flushViewPosts(child);
 }
 async function attachTree(v: JView, thread: typeof curThread) {
   if (v.attached) return;
