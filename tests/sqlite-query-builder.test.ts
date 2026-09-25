@@ -2,7 +2,14 @@ import { expect, test } from "bun:test";
 import initSqlJs from "sql.js";
 import "../src/natives";
 import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { rt } from "../src/jvm/runtime";
 import { openDatabase, useSQLiteStore } from "../src/android/sqlite";
+
+test("DatabaseUtils appends a quoted SQL string", async () => {
+  const builder = await newObj("java/lang/StringBuilder", "(Ljava/lang/String;)V", "name = ");
+  await vcall(rt.link("android/database/DatabaseUtils").ctor, "appendEscapedSQLString", "(Ljava/lang/StringBuilder;Ljava/lang/String;)V", builder, "O'Brien");
+  expect(await vcall(builder, "toString", "()Ljava/lang/String;")).toBe("name = 'O''Brien'");
+});
 
 test("SQLiteQueryBuilder applies mapped projections and appended filters to reads and updates", async () => {
   useSQLiteStore({ files: new Map(), sql: () => initSqlJs({ locateFile: file => `vendor/sql.js/dist/${file}` }) });

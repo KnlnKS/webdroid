@@ -5,7 +5,7 @@ import initSqlJs, { type Database, type Statement } from "sql.js";
 import { i8, u8 } from "../jvm/abi";
 import { vfs } from "../jvm/natives/jio";
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
-import { vcall, vcallOn, callOn, curThread, type JThread, boxInt, box, JLong, JBool } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, curThread, type JThread, boxInt, box, JLong, JBool, JSB } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { csText } from "../jvm/natives/jchars";
 import { JBundle, JFnRunnable, JObservable, registerDatabaseObserver } from "./os";
@@ -627,6 +627,10 @@ function projectionColumns(builder: JSQLiteQueryBuilder, requested: string[] | n
 function builderWhere(builder: JSQLiteQueryBuilder, selection: string | null): string | null {
   return builder.where ? selection ? `(${builder.where}) AND (${selection})` : `(${builder.where})` : selection;
 }
+function sqlQuoted(value: string | null): string {
+  if (value === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  return "'" + value.replaceAll("'", "''") + "'";
+}
 function builderEditTable(builder: JSQLiteQueryBuilder): string {
   const tables = builder.tables;
   if (tables === null) rt.npe();
@@ -653,7 +657,7 @@ rt.register({
       this.where += `(${await csText(where)})`;
     },
     "appendWhereEscapeString(Ljava/lang/String;)V": function (this: JSQLiteQueryBuilder, where: string) {
-      this.where += "'" + where.replaceAll("'", "''") + "'";
+      this.where += sqlQuoted(where);
     },
     "query(Landroid/database/sqlite/SQLiteDatabase;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
       function (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, cols: string[] | null, selection: string | null, args: unknown[] | null, groupBy: string | null, having: string | null, orderBy: string | null) {
@@ -810,6 +814,11 @@ rt.register({ name: "android/database/DataSetObserver", ctor: class extends JObj
 rt.register({
   name: "android/database/DatabaseUtils", ctor: class extends JObj {},
   methods: {
+    "static appendEscapedSQLString(Ljava/lang/StringBuilder;Ljava/lang/String;)V": (builder: JSB | null, value: string | null) => {
+      if (!builder) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      builder.s += sqlQuoted(value);
+    },
+    "static sqlEscapeString(Ljava/lang/String;)Ljava/lang/String;": sqlQuoted,
     "static queryNumEntries(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;)J": (db: JSQLiteDatabase, table: string) => {
       const c = runQuery(db, `SELECT COUNT(*) FROM "${table}"`, null);
       return longValue(c.rows[0]?.[0]);
@@ -900,7 +909,7 @@ async function initializeHelperDb(h: JSQLiteOpenHelper, thread: JThread): Promis
   const pkg = h.jctx?.$host?.pkg ?? "app";
   const path = h.name ? dbPath(pkg, h.name) : ":memory:";
   const jdb = await openDatabase(path, h.params.flags | 0x10000000);
-  if (h.params.synchronous !== null) jdb.db!.exec("PRAGMA synchronous='" + h.params.synchronous.replace(/'/g, "''") + "'");
+  if (h.params.synchronous !== null) jdb.db!.exec("PRAGMA synchronous=" + sqlQuoted(h.params.synchronous));
   await vcallOn(thread, h, "onConfigure", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
   const cur = callSelf(dbMethods, "getVersion()I", jdb) as number;
   if (cur !== h.version) {
