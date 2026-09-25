@@ -1,9 +1,26 @@
 # Implementation history: durable findings
 
-Retained through 2026-09-24. [PLAN.md](../PLAN.md) tracks current status;
+Retained through 2026-09-25. [PLAN.md](../PLAN.md) tracks current status;
 [AGENTS.md](../AGENTS.md) owns working rules. Results describe their tested
 revision, not necessarily the current tree. Git history preserves intermediate
 runs and commit IDs removed here.
+
+## Compatibility review cleanup
+
+System activity results now pass through `launchIntent`, which grants returned URI
+permissions before delivering the callback. Loading the grant owner when the result
+arrives avoids an initialization cycle through `Context` and `ContentResolver`.
+`SQLiteQueryBuilder` lives in its own module and reads projection maps through Java
+`Map` methods. Its SQL operations reuse the database owner's query and mutation
+helpers; a direct `vcall` on databases constructed by `openDatabase` failed because
+those instances have not been linked to the registered Java class. `ZoneRules` retains
+its source zone and uses the same offset calculation as `ZonedDateTime`. Regex and
+media description registrations moved to focused modules, leaving the three files
+that crossed 1,000 lines below that threshold.
+
+Typecheck, 1,411 tests and FitNotes smoke compilation passed with zero method
+failures. A direct zone check confirmed New York's epoch offset and fixed UTC rules.
+The picker grant path was verified by source inspection, not a browser interaction.
 
 ## Differential testing and evidence
 
