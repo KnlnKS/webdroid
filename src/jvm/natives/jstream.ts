@@ -1,5 +1,5 @@
 import { JObj, rt } from "../runtime";
-import { JList, newArrayList, toJsArray, sortInPlace } from "./jutil";
+import { JList, mkIter, newArrayList, toJsArray, sortInPlace } from "./jutil";
 import { vcall } from "./jlang";
 import { csText } from "./jchars";
 
@@ -132,7 +132,16 @@ rt.register({
       for (const x of this.a) if (await vcall(p, "test", "(Ljava/lang/Object;)Z", x)) return 1;
       return 0;
     },
+    "allMatch(Ljava/util/function/Predicate;)Z": async function (this: JStream, p: unknown) {
+      for (const x of this.a) if (!(await vcall(p, "test", "(Ljava/lang/Object;)Z", x))) return 0;
+      return 1;
+    },
+    "noneMatch(Ljava/util/function/Predicate;)Z": async function (this: JStream, p: unknown) {
+      for (const x of this.a) if (await vcall(p, "test", "(Ljava/lang/Object;)Z", x)) return 0;
+      return 1;
+    },
     "toList()Ljava/util/List;": function (this: JStream) { return newArrayList(this.a.slice()); },
+    "iterator()Ljava/util/Iterator;": function (this: JStream) { return mkIter(this.a); },
     "collect(Ljava/util/stream/Collector;)Ljava/lang/Object;": function (this: JStream, c: unknown) { return collect(this, c); },
   },
 });

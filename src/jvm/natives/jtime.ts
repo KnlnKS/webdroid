@@ -490,6 +490,15 @@ rt.register({
 class JInstant extends JObj { ms = 0; }
 class JDuration extends JObj { ms = 0; }
 class JZoneId extends JObj { id = "UTC"; }
+class JZoneOffset extends JZoneId { totalSeconds = 0; }
+function offsetSeconds(seconds: number): JZoneOffset {
+  if (seconds < -64800 || seconds > 64800) throw rt.mkThrowable("java/time/DateTimeException", "Zone offset not in valid range: -18:00 to +18:00");
+  const offset = new JZoneOffset();
+  offset.totalSeconds = seconds;
+  const abs = Math.abs(seconds);
+  offset.id = seconds === 0 ? "Z" : `${seconds < 0 ? "-" : "+"}${pad(Math.floor(abs / 3600))}:${pad(Math.floor(abs / 60) % 60)}${abs % 60 ? ":" + pad(abs % 60) : ""}`;
+  return offset;
+}
 class JLocalDate extends JObj { y = 1970; mo = 1; d = 1; }
 class JLocalTime extends JObj { h = 0; mi = 0; s = 0; ns = 0; }
 function ltOf(h: number, mi: number, s = 0, ns = 0): JLocalTime {
@@ -621,6 +630,10 @@ rt.register({
   },
   methods: {
     "static now()Ljava/time/Instant;": () => mkInstant(Date.now()),
+    "static now(Ljava/time/Clock;)Ljava/time/Instant;": (clock: JClock | null) => {
+      if (!clock) throw rt.mkThrowable("java/lang/NullPointerException", "clock");
+      return vcall(clock, "instant", "()Ljava/time/Instant;");
+    },
     "static parse(Ljava/lang/CharSequence;)Ljava/time/Instant;": (s: string) => mkInstant(parseIso(s)),
     "static from(Ljava/time/temporal/TemporalAccessor;)Ljava/time/Instant;": (t: unknown) => mkInstant(temporalMs(t)),
     "static ofEpochMilli(J)Ljava/time/Instant;": (ms: bigint) => mkInstant(Number(ms)),
@@ -631,6 +644,11 @@ rt.register({
     "getNano()I": function (this: JInstant) { return Math.round((this.ms - Math.floor(this.ms / 1000) * 1000) * 1e6); },
     "plusMillis(J)Ljava/time/Instant;": function (this: JInstant, d: bigint) { return mkInstant(this.ms + Number(d)); },
     "plusSeconds(J)Ljava/time/Instant;": function (this: JInstant, d: bigint) { return mkInstant(this.ms + Number(d) * 1000); },
+    "plus(Ljava/time/temporal/TemporalAmount;)Ljava/time/Instant;": function (this: JInstant, amount: JDuration | null) {
+      if (!amount) rt.npe();
+      return amount instanceof JDuration ? mkInstant(this.ms + amount.ms)
+        : vcall(amount, "addTo", "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;", this);
+    },
     "minusMillis(J)Ljava/time/Instant;": function (this: JInstant, d: bigint) { return mkInstant(this.ms - Number(d)); },
     "minusSeconds(J)Ljava/time/Instant;": function (this: JInstant, d: bigint) { return mkInstant(this.ms - Number(d) * 1000); },
     ...ordering("Ljava/time/Instant;", (x: JInstant, o: JInstant) => (x.ms < o.ms ? -1 : x.ms > o.ms ? 1 : 0)),
@@ -645,6 +663,7 @@ rt.register({
 });
 rt.register({
   name: "java/time/Duration", ctor: JDuration, ifaces: ["java/lang/Comparable"],
+  clinit: () => { (rt.link("java/time/Duration").ctor as any).s$ZERO = mkDuration(0); },
   methods: {
     "static ofMillis(J)Ljava/time/Duration;": (ms: bigint) => mkDuration(Number(ms)),
     "static ofSeconds(J)Ljava/time/Duration;": (s: bigint) => mkDuration(Number(s) * 1000),
@@ -653,6 +672,14 @@ rt.register({
     "static ofDays(J)Ljava/time/Duration;": (d: bigint) => mkDuration(Number(d) * 86400000),
     "static between(Ljava/time/temporal/Temporal;Ljava/time/temporal/Temporal;)Ljava/time/Duration;": (a: any, b: any) =>
       mkDuration((b?.ms ?? 0) - (a?.ms ?? 0)),
+    "plus(Ljava/time/Duration;)Ljava/time/Duration;": function (this: JDuration, other: JDuration | null) {
+      if (!other) throw rt.mkThrowable("java/lang/NullPointerException", "duration");
+      return mkDuration(this.ms + other.ms);
+    },
+    "minus(Ljava/time/Duration;)Ljava/time/Duration;": function (this: JDuration, other: JDuration | null) {
+      if (!other) throw rt.mkThrowable("java/lang/NullPointerException", "duration");
+      return mkDuration(this.ms - other.ms);
+    },
     "toMillis()J": function (this: JDuration) { return BigInt(Math.trunc(this.ms)); },
     "getSeconds()J": function (this: JDuration) { return BigInt(Math.floor(this.ms / 1000)); },
     "toMinutes()J": function (this: JDuration) { return BigInt(Math.trunc(this.ms / 60000)); },
@@ -674,9 +701,12 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JZoneId) { return this.id; },
   },
 });
-rt.register({ name: "java/time/ZoneOffset", ctor: class extends JZoneId { totalSeconds = 0; }, sup: "java/time/ZoneId",
-  clinit: () => { const c = rt.link("java/time/ZoneOffset").ctor as any; const u = new c(); u.id = "Z"; c.s$UTC = u; },
-  methods: { "getTotalSeconds()I": function (this: any) { return this.totalSeconds ?? 0; } },
+rt.register({ name: "java/time/ZoneOffset", ctor: JZoneOffset, sup: "java/time/ZoneId",
+  clinit: () => { const c = rt.link("java/time/ZoneOffset").ctor as any; c.s$UTC = offsetSeconds(0); c.s$MIN = offsetSeconds(-64800); c.s$MAX = offsetSeconds(64800); },
+  methods: {
+    "static ofTotalSeconds(I)Ljava/time/ZoneOffset;": offsetSeconds,
+    "getTotalSeconds()I": function (this: JZoneOffset) { return this.totalSeconds; },
+  },
 });
 rt.register({
   name: "java/time/LocalDate", ctor: JLocalDate, ifaces: ["java/lang/Comparable", "java/time/temporal/Temporal", "java/time/temporal/TemporalAccessor"],
@@ -860,8 +890,7 @@ rt.register({
   methods: {
     "getOffset(Ljava/time/Instant;)Ljava/time/ZoneOffset;": (inst: any) => {
       const off = -new Date(inst?.ms ?? Date.now()).getTimezoneOffset() * 60;
-      const c = rt.link("java/time/ZoneOffset").ctor as any;
-      const z = new c(); z.id = "local"; z.totalSeconds = off; return z;
+      return offsetSeconds(off);
     },
     "isFixedOffset()Z": () => 0,
   },
