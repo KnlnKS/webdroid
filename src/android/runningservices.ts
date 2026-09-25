@@ -64,7 +64,8 @@ export function svcStart(ctx: JContext, intent: JIntent | null, _fg: boolean): J
   const owner = packages.get(intent.componentPkg ?? intent.pkg ?? ctx.$host?.pkg ?? "");
   const node = owner?.components.service.get(qualifyComponent(cls, owner.pkg));
   if (owner && node && (owner.pkg !== ctx.$host?.pkg || owner.process(node) !== (PROCESS_NAME || ctx.$host?.pkg))) {
-    void serviceTransport.start(owner, owner.process(node), intent, _fg).catch(reportUncaught);
+    void serviceTransport.start(owner, owner.process(node), intent, _fg)
+      .then(() => activatePending(owner.pkg + "/" + qualifyComponent(cls, owner.pkg))).catch(reportUncaught);
     return mkComponentName(owner.pkg, qualifyComponent(cls, owner.pkg));
   }
   const si = serviceRecord(ctx, cls);
@@ -77,6 +78,7 @@ export function svcStart(ctx: JContext, intent: JIntent | null, _fg: boolean): J
     if (runningServices.get(cls) === service) runningServices.delete(cls);
     reportUncaught(error);
   });
+  activatePending((owner?.pkg ?? ctx.$host?.pkg ?? "") + "/" + qualifyComponent(cls, owner?.pkg ?? ctx.$host?.pkg ?? ""));
   return si.service;
 }
 export function svcStop(cls: string | null | undefined, startId = -1): number {
@@ -121,8 +123,16 @@ export function unbindLocalService(key: string): Promise<void> {
   };
   return inMainJob() ? run() : onMain(run);
 }
-type Connection = { key: string; owner: PackageRecord; process: string; remote: boolean; cancelDeath: (() => void) | null };
+type Connection = { key: string; owner: PackageRecord; process: string; remote: boolean;
+  cancelDeath: (() => void) | null; pendingService: string | null; connect: () => void };
 const connections = new Map<unknown, Connection>();
+const pendingConnections = new Map<string, Set<Connection>>();
+function activatePending(service: string): void {
+  const pending = pendingConnections.get(service);
+  if (!pending) return;
+  pendingConnections.delete(service);
+  for (const connection of pending) { connection.pendingService = null; connection.connect(); }
+}
 let nextConnection = 1;
 /** ServiceConnection callbacks run on the caller's main queue, or on the Executor the API 29 overload names. */
 function connectionDelivery(executor: unknown): (job: () => Promise<void>) => Promise<void> {
@@ -139,12 +149,10 @@ export async function svcBind(ctx: JContext, intent: JIntent, connection: unknow
   if (!owner || (!info.exported && owner.pkg !== ctx.$host.pkg)) return 0;
   if (info.permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", info.permission, ctx.$host.pkg) !== 0)
     throw rt.mkThrowable("java/lang/SecurityException", "Service requires " + info.permission);
-  if (!(flags & 1) && !runningServices.has(info.name)) return 0;
   if (connections.has(connection)) return 1;
   const key = PROCESS_PID + ":" + nextConnection++, remote = owner.pkg !== ctx.$host.pkg || info.processName !== (PROCESS_NAME || ctx.$host.pkg);
   const bound: JIntent = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
   bound.component = info.name; bound.componentPkg = owner.pkg;
-  const record: Connection = { key, owner, process: info.processName, remote, cancelDeath: null }; connections.set(connection, record);
   const connect = () => {
     const ready = remote ? serviceTransport.bind(owner, info.processName, bound, key) : onMain(() => bindLocalService(ctx, bound, key));
     void ready.then(binder => {
@@ -169,13 +177,27 @@ export async function svcBind(ctx: JContext, intent: JIntent, connection: unknow
       reportUncaught(error);
     });
   };
-  connect();
+  const record: Connection = { key, owner, process: info.processName, remote, cancelDeath: null, pendingService: null, connect };
+  connections.set(connection, record);
+  if (!(flags & 1) && !runningServices.has(info.name)) {
+    const service = owner.pkg + "/" + info.name;
+    record.pendingService = service;
+    let pending = pendingConnections.get(service);
+    if (!pending) pendingConnections.set(service, pending = new Set());
+    pending.add(record);
+  } else connect();
   return 1;
 }
 export function svcUnbind(connection: unknown): void {
   const record = connections.get(connection);
   if (!record) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Service not registered");
   connections.delete(connection); record.cancelDeath?.();
+  if (record.pendingService) {
+    const pending = pendingConnections.get(record.pendingService);
+    pending?.delete(record);
+    if (!pending?.size) pendingConnections.delete(record.pendingService);
+    return;
+  }
   void (record.remote ? serviceTransport.unbind(record.owner, record.process, record.key) : onMain(() => unbindLocalService(record.key))).catch(reportUncaught);
 }
 export function svcFg(svc: unknown, fg: boolean) {
