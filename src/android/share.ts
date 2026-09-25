@@ -1,4 +1,4 @@
-import { JIntent, registerSystemActivity } from "./intent";
+import { JIntent, registerSystemActivity, systemActivities } from "./intent";
 import { contentResolver } from "./contentresolver";
 import type { JUri } from "./net";
 import { JParcelFileDescriptor } from "./os";
@@ -83,6 +83,8 @@ async function saveFiles(browser: Window, files: File[]): Promise<boolean> {
 async function share(intent: JIntent): Promise<JIntent | null> {
   const target = intent.extras.map.get(EXTRA_INTENT);
   if (!(target instanceof JIntent)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Chooser requires an Intent");
+  const system = target.action === "android.intent.action.CHOOSER" ? null : systemActivities[target.action ?? ""];
+  if (system) return system(target);
   if (target.action !== "android.intent.action.SEND" && target.action !== "android.intent.action.SEND_MULTIPLE")
     throw rt.unimplemented("Chooser for " + target.action);
 
