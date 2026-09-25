@@ -404,9 +404,10 @@ export const systemActivities: Record<string, (intent: JIntent) => Promise<JInte
 export function registerSystemActivity(action: string, run: (intent: JIntent) => Promise<JIntent | null>) {
   systemActivities[action] = run;
 }
-export function mkResultIntent(uri: string): JIntent {
+export function mkResultIntent(uri: string, prefix = false): JIntent {
   const i = new JIntent();
   i.dataUri = uri;
+  i.flags = 1 | 2 | 64 | (prefix ? 128 : 0);
   return i;
 }
 

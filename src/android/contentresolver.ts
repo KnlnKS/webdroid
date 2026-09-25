@@ -102,23 +102,51 @@ export function contentResolver(): unknown {
   return s;
 }
 /** A persistable grant is app state that survives a reboot, so it lives with the install. */
+type UriGrant = { uri: string; modes: number };
 const uriGrants = {
   key: () => "wd:install:" + (appHost?.pkg ?? "") + ":uriperms",
-  all(): string[] { try { return JSON.parse(globalThis.localStorage?.getItem(this.key()) ?? "[]"); } catch { return []; } },
-  set(v: string[]) { try { globalThis.localStorage?.setItem(this.key(), JSON.stringify(v)); } catch { /* private mode */ } },
+  all(): UriGrant[] {
+    try {
+      const entries: unknown = JSON.parse(globalThis.localStorage?.getItem(this.key()) ?? "[]");
+      if (!Array.isArray(entries)) return [];
+      return entries.flatMap((entry): UriGrant[] => {
+        if (typeof entry === "string") return [{ uri: entry, modes: 3 | (entry.includes("/tree/") ? 128 : 0) }];
+        if (entry && typeof entry === "object" && "uri" in entry && typeof entry.uri === "string"
+          && "modes" in entry && typeof entry.modes === "number") return [{ uri: entry.uri, modes: entry.modes }];
+        return [];
+      });
+    } catch { return []; }
+  },
+  set(v: UriGrant[]) { try { globalThis.localStorage?.setItem(this.key(), JSON.stringify(v)); } catch { /* private mode */ } },
 };
 const transientUriGrants = new Map<string, Map<string, number>>();
+const matchesGrant = (uri: string, grantedUri: string, modes: number): boolean =>
+  uri === grantedUri || !!(modes & 128) && uri.startsWith(grantedUri + "/");
+function grantedModes(grants: Iterable<UriGrant>, uri: string): number {
+  let modes = 0;
+  for (const grant of grants) {
+    if (matchesGrant(uri, grant.uri, grant.modes)) modes |= grant.modes;
+  }
+  return modes;
+}
+function transientModes(grants: Map<string, number> | undefined, uri: string): number {
+  let modes = 0;
+  if (grants) for (const [grantedUri, flags] of grants) {
+    if (matchesGrant(uri, grantedUri, flags)) modes |= flags;
+  }
+  return modes;
+}
 export function grantUriPermission(pkg: string, uri: JUri, modes: number): void {
   if (!pkg || !uri) rt.npe();
   let grants = transientUriGrants.get(pkg);
   if (!grants) transientUriGrants.set(pkg, grants = new Map());
-  grants.set(uri.uri, (grants.get(uri.uri) ?? 0) | (modes & 3));
+  grants.set(uri.uri, (grants.get(uri.uri) ?? 0) | (modes & (3 | 64 | 128)));
 }
 export function revokeUriPermission(uri: JUri, modes: number): void {
   if (!uri) rt.npe();
   for (const grants of transientUriGrants.values()) {
     const remaining = (grants.get(uri.uri) ?? 0) & ~(modes & 3);
-    if (remaining) grants.set(uri.uri, remaining);
+    if (remaining & 3) grants.set(uri.uri, remaining);
     else grants.delete(uri.uri);
   }
 }
@@ -126,9 +154,10 @@ export function checkUriPermission(u: JUri, _pid: number, uid: number, modes: nu
   if (uid === 0) return 0;
   const requested = modes & 3;
   if (!requested) return -1;
-  if (uid === PROCESS_UID && uriGrants.all().includes(u.uri)) return 0;
+  if (uid === PROCESS_UID && (grantedModes(uriGrants.all(), u.uri) & requested) === requested) return 0;
   for (const [pkg, grants] of transientUriGrants) {
-    if (packages.get(pkg)?.uid === uid && ((grants.get(u.uri) ?? 0) & requested) === requested) return 0;
+    if ((pkg === appHost?.pkg && uid === PROCESS_UID || packages.get(pkg)?.uid === uid)
+      && (transientModes(grants, u.uri) & requested) === requested) return 0;
   }
   return -1;
 }
@@ -275,24 +304,36 @@ const resolverMethods: NativeSpec["methods"] = {
     const provider = await contentProvider(u);
     return provider ? vcall(provider, "delete", "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I", u, where, args) : 0;
   },
-  // A grant we cannot refuse: nothing here revokes URI access, so the app keeps what it took.
-  "takePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri) => {
+  "takePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri, modes: number) => {
+    if (!u) rt.npe();
+    const requested = modes & 3;
+    const available = transientModes(transientUriGrants.get(appHost?.pkg ?? ""), u.uri);
+    if (!requested || (available & (requested | 64)) !== (requested | 64))
+      throw rt.mkThrowable("java/lang/SecurityException", `No persistable permission grant for ${u.uri}`);
     const all = uriGrants.all();
-    if (!all.includes(u.uri)) uriGrants.set([...all, u.uri]);
+    const existing = all.find((grant) => grant.uri === u.uri);
+    if (existing) existing.modes |= requested | (available & 128);
+    else all.push({ uri: u.uri, modes: requested | (available & 128) });
+    uriGrants.set(all);
   },
-  "releasePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri) =>
-    uriGrants.set(uriGrants.all().filter((s) => s !== u.uri)),
+  "releasePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri, modes: number) =>
+    uriGrants.set(uriGrants.all().flatMap((grant) => {
+      if (grant.uri !== u.uri) return [grant];
+      grant.modes &= ~(modes & 3);
+      return grant.modes & 3 ? [grant] : [];
+    })),
   "getPersistedUriPermissions()Ljava/util/List;": () =>
-    newArrayList(uriGrants.all().map((s) => { const p = new JUriPermission(); p.uriStr = s; return p; })),
+    newArrayList(uriGrants.all().map((grant) => { const p = new JUriPermission(); p.uriStr = grant.uri; p.modes = grant.modes; return p; })),
 };
 rt.register({ name: "android/content/ContentResolver", ctor: class extends JObj {}, methods: resolverMethods });
-class JUriPermission extends JObj { uriStr = ""; }
+class JUriPermission extends JObj { uriStr = ""; modes = 0; }
 rt.register({
   name: "android/content/UriPermission", ctor: JUriPermission,
   methods: {
     "getUri()Landroid/net/Uri;": function (this: JUriPermission) { return mkUri(this.uriStr); },
     ...noops("<init>()V"),
-    ...stubs(1, "isReadPermission()Z", "isWritePermission()Z"),
+    "isReadPermission()Z": function (this: JUriPermission) { return this.modes & 1 ? 1 : 0; },
+    "isWritePermission()Z": function (this: JUriPermission) { return this.modes & 2 ? 1 : 0; },
     ...stubs(0n, "getPersistedTime()J"),
   },
 });

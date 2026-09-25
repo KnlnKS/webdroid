@@ -30,6 +30,8 @@ import { JConfigurationInfo } from "./pm";
 import { deviceConfiguration } from "./resnative";
 import { transactionCaller } from "./binder";
 import { packages } from "./packages";
+import { grantUriPermission } from "./contentresolver";
+import { mkUri } from "./net";
 import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
 import { clipboardMethods } from "./clipboard";
 
@@ -312,7 +314,10 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     const sys = intent?.component ? null : systemActivities[intent?.action ?? ""];
     if (sys) {
       void sys(intent).then(
-        (data) => deliverActivityResult(this, code, data ? RESULT_OK : RESULT_CANCELED, data),
+        (data) => {
+          if (data?.dataUri && (data.flags & 3)) grantUriPermission(this.$host.pkg, mkUri(data.dataUri), data.flags);
+          deliverActivityResult(this, code, data ? RESULT_OK : RESULT_CANCELED, data);
+        },
         (e) => { reportUncaught(e); deliverActivityResult(this, code, RESULT_CANCELED, null); },
       );
       return;

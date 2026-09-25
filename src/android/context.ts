@@ -7,6 +7,7 @@ import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
 import { contentResolver, checkUriPermission, grantUriPermission, revokeUriPermission } from "./contentresolver";
+import type { JUri } from "./net";
 import { mainLooper, mainExecutor, PROCESS_PID, PROCESS_UID } from "./os";
 import { getPrefs, movePrefs, deletePrefs } from "./sharedprefs";
 import { JAssetManager, type JConfiguration, scopedResources } from "./resnative";
@@ -350,6 +351,8 @@ export const contextMethods: NativeSpec["methods"] = {
   },
   "checkSelfPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),
   "checkUriPermission(Landroid/net/Uri;III)I": checkUriPermission,
+  "checkCallingOrSelfUriPermission(Landroid/net/Uri;I)I": (uri: JUri, modes: number) =>
+    checkUriPermission(uri, PROCESS_PID, PROCESS_UID, modes),
   "grantUriPermission(Ljava/lang/String;Landroid/net/Uri;I)V": grantUriPermission,
   "revokeUriPermission(Landroid/net/Uri;I)V": revokeUriPermission,
   "checkPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),
