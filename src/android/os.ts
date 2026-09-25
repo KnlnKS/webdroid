@@ -22,6 +22,7 @@ import { yieldToLoop } from "../native/cpu";
 import { mkFile, JInputStream, JOutputStream, vfs, type JFileDescriptor } from "../jvm/natives/jio";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd } from "../native/stdio";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
+import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
 import { unavailableClock } from "../jvm/natives/jtime";
 import { clearGuestInterval, clearGuestTimeout, guestNow, guestSleep, setGuestInterval, setGuestTimeout, type GuestTimer } from "../guest-clock";
 
@@ -637,6 +638,65 @@ rt.register({
 });
 rt.markers("android/os/Parcelable", "android/os/Parcelable$Creator");
 rt.markers("android/os/OutcomeReceiver");
+const sharedMappings = new WeakSet<JBuffer["backing"]>();
+class JSharedMemory extends JObj {
+  bytes = new Uint8Array(0);
+  protection = 7;
+  closed = false;
+  map(prot: number, offset: number, length: number): JBuffer {
+    if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
+    if (offset < 0 || length <= 0 || offset > this.bytes.length - length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid shared memory range");
+    if (prot < 0 || prot & ~7 || (prot & this.protection) !== prot) throw errno("mmap", E.ACCES);
+    rt.link("java/nio/ByteBuffer");
+    const buffer = mkByteBuffer(0, true);
+    buffer.backing = { storage: { kind: "direct", ab: this.bytes.buffer as ArrayBuffer } };
+    buffer.byteOffset = offset;
+    buffer.cap = buffer.lim = length;
+    buffer.readOnly = !(prot & 2);
+    sharedMappings.add(buffer.backing);
+    return buffer;
+  }
+}
+rt.register({
+  name: "android/os/SharedMemory", ctor: JSharedMemory, ifaces: ["android/os/Parcelable", "java/io/Closeable"],
+  statics: { get CREATOR() { return parcelCreator("android/os/SharedMemory", async (p) => {
+    const protection = await vcall(p, "readInt", "()I") as number;
+    const bytes = await vcall(p, "createByteArray", "()[B") as Int8Array;
+    const shared = new JSharedMemory(); shared.protection = protection; shared.bytes = Uint8Array.from(bytes);
+    return shared;
+  }); } },
+  methods: {
+    "static create(Ljava/lang/String;I)Landroid/os/SharedMemory;": (_name: string | null, size: number) => {
+      if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Size must be positive");
+      const shared = new JSharedMemory(); shared.bytes = new Uint8Array(size); return shared;
+    },
+    "getSize()I": function (this: JSharedMemory) {
+      if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
+      return this.bytes.length;
+    },
+    "map(III)Ljava/nio/ByteBuffer;": function (this: JSharedMemory, prot: number, offset: number, length: number) { return this.map(prot, offset, length); },
+    "mapReadOnly()Ljava/nio/ByteBuffer;": function (this: JSharedMemory) { return this.map(1, 0, this.bytes.length); },
+    "mapReadWrite()Ljava/nio/ByteBuffer;": function (this: JSharedMemory) { return this.map(3, 0, this.bytes.length); },
+    "setProtect(I)Z": function (this: JSharedMemory, prot: number) {
+      if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
+      if (prot < 0 || prot & ~7) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid protection");
+      if ((prot & this.protection) !== prot) return 0;
+      this.protection = prot; return 1;
+    },
+    "static unmap(Ljava/nio/ByteBuffer;)V": (buffer: JBuffer | null) => {
+      if (!buffer) return rt.npe();
+      if (!sharedMappings.delete(buffer.backing)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer is not mapped shared memory");
+      buffer.backing.storage = { kind: "direct", ab: new ArrayBuffer(0) };
+    },
+    "close()V": function (this: JSharedMemory) { this.closed = true; },
+    "describeContents()I": () => 1,
+    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JSharedMemory, parcel: JParcel) {
+      if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
+      await vcall(parcel, "writeInt", "(I)V", this.protection);
+      await vcall(parcel, "writeByteArray", "([B)V", new Int8Array(this.bytes.buffer));
+    },
+  },
+});
 class JCancellationSignal extends JObj {
   cancelled = 0;
   listener: unknown = null;
@@ -1193,6 +1253,9 @@ rt.register({
   statics: {
     ...Object.fromEntries(Object.entries(E).map(([name, value]) => ["E" + name, value])),
     PROT_READ: 0x1,
+    PROT_WRITE: 0x2,
+    PROT_EXEC: 0x4,
+    PROT_NONE: 0,
     MAP_PRIVATE: 0x02,
     SEEK_SET: 0, SEEK_CUR: 1, SEEK_END: 2,
     SIGKILL: 9,
