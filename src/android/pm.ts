@@ -22,8 +22,8 @@ import { csText } from "./text";
 import type { JActivity } from "./app";
 import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, type ComponentKind } from "./packages";
 import { digestBytes } from "../jvm/natives/jsec";
-import { parcelCreator, type JParcel } from "./parcel";
-import { readApplicationInfo, writeApplicationInfo } from "./pm-parcel";
+import { parcelCreator, readInt, readString8, writeInt, writeString8, type JParcel } from "./parcel";
+import { readApplicationInfo, readPackageInfo, writeApplicationInfo, writePackageInfo } from "./pm-parcel";
 
 class JFeatureInfo extends JObj {
   name: string | null = null;   // null on the glEsVersion entry, as AOSP leaves it
@@ -33,7 +33,11 @@ class JFeatureInfo extends JObj {
 }
 rt.register({
   name: "android/content/pm/FeatureInfo", ctor: JFeatureInfo, ifaces: ["android/os/Parcelable"],
-  statics: { FLAG_REQUIRED: 1, GL_ES_VERSION_UNDEFINED: 0 },
+  statics: { FLAG_REQUIRED: 1, GL_ES_VERSION_UNDEFINED: 0, get CREATOR() { return parcelCreator("android/content/pm/FeatureInfo", async (parcel) => {
+    const info = new JFeatureInfo();
+    info.name = readString8(parcel); info.version = readInt(parcel); info.reqGlEsVersion = readInt(parcel); info.flags = readInt(parcel);
+    return info;
+  }); } },
   fields: ["name", "version", "reqGlEsVersion", "flags"],
   methods: {
     "<init>()V": function () {},
@@ -42,6 +46,10 @@ rt.register({
     },
     "toString()Ljava/lang/String;": function (this: JFeatureInfo) {
       return this.name ? "FeatureInfo{" + this.name + "}" : "FeatureInfo{glEsVers=" + (this.reqGlEsVersion >> 16) + "}";
+    },
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JFeatureInfo, parcel: JParcel) {
+      writeString8(parcel, this.name); writeInt(parcel, this.version); writeInt(parcel, this.reqGlEsVersion); writeInt(parcel, this.flags);
     },
   },
 });
@@ -171,7 +179,10 @@ function signingInfo(certificates: Uint8Array[]): JSigningInfo {
   return Object.assign(new JSigningInfo(), { certificates });
 }
 rt.register({
-  name: "android/content/pm/Signature", ctor: JSignature,
+  name: "android/content/pm/Signature", ctor: JSignature, ifaces: ["android/os/Parcelable"],
+  statics: { get CREATOR() { return parcelCreator("android/content/pm/Signature", async (parcel) => {
+    const info = new JSignature(); info.bytes = new Int8Array(await vcall(parcel, "createByteArray", "()[B") as Int8Array); return info;
+  }); } },
   methods: {
     "<init>([B)V": function (this: JSignature, bytes: Int8Array) { this.bytes = bytes.slice(); },
     "<init>(Ljava/lang/String;)V": function (this: JSignature, text: string) {
@@ -183,6 +194,8 @@ rt.register({
     "toCharsString()Ljava/lang/String;": function (this: JSignature) { return [...this.bytes].map((b) => (b & 255).toString(16).padStart(2, "0")).join(""); },
     "hashCode()I": function (this: JSignature) { return this.bytes.reduce((hash, byte) => Math.imul(hash, 31) + byte | 0, 1); },
     "equals(Ljava/lang/Object;)Z": function (this: JSignature, o: unknown) { return o instanceof JSignature && o.bytes.length === this.bytes.length && o.bytes.every((b, i) => b === this.bytes[i]) ? 1 : 0; },
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JSignature, parcel: JParcel) { return vcall(parcel, "writeByteArray", "([B)V", this.bytes); },
   },
 });
 rt.register({
@@ -305,8 +318,8 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JApplicationInfo, parcel: JParcel) {
-      return writeApplicationInfo(parcel, this as unknown as Record<string, unknown>);
+    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JApplicationInfo, parcel: JParcel, flags: number) {
+      return writeApplicationInfo(parcel, this as unknown as Record<string, unknown>, flags);
     },
   },
 });
@@ -415,12 +428,21 @@ async function fillRequestedPermissions(info: JPackageInfo, root = manifestRoot,
 }
 rt.register({
   name: "android/content/pm/PackageInfo", ctor: JPackageInfo, ifaces: ["android/os/Parcelable"],
+  statics: { get CREATOR() { return parcelCreator("android/content/pm/PackageInfo", async (parcel) => {
+    const info = new JPackageInfo();
+    await readPackageInfo(parcel, info as unknown as Record<string, unknown>);
+    return info;
+  }); } },
   fields: ["packageName", "versionName", "versionCode", "sharedUserId", "splitNames", "applicationInfo", "firstInstallTime",
     "lastUpdateTime", "signatures", "signingInfo", "reqFeatures", "requestedPermissions", "requestedPermissionsFlags", "activities", "receivers",
     "services", "providers", "installLocation", "instrumentation"],
   methods: {
     "<init>()V": function () {},
     "getLongVersionCode()J": function (this: JPackageInfo) { return this.longVersionCode; },
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JPackageInfo, parcel: JParcel, flags: number) {
+      return writePackageInfo(parcel, this as unknown as Record<string, unknown>, flags);
+    },
   },
 });
 // ── content providers from the manifest: what queryIntentContentProviders/resolveContentProvider
