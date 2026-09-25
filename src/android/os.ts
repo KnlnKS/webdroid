@@ -170,10 +170,18 @@ export class JHandler extends JObj {
   post(r: unknown, delay: number): number { return this.send(obtain(this, 0, null, 0, 0, r), delay); }
   cancel(key: unknown): void {
     const messages = this.pending.get(key);
-    if (!messages) return;
-    for (const m of messages) { clearGuestTimeout(m.timer); this.looper.queue.messages.delete(m); }
-    messages.clear();
-    this.pending.delete(key);
+    if (messages) this.cancelMatching(() => true, [[key, messages]]);
+  }
+  cancelMatching(matches: (key: unknown, message: JMessage) => boolean, entries: Iterable<[unknown, Set<JMessage>]> = this.pending): void {
+    for (const [key, messages] of entries) {
+      for (const message of messages) {
+        if (!matches(key, message)) continue;
+        clearGuestTimeout(message.timer);
+        this.looper.queue.messages.delete(message);
+        messages.delete(message);
+      }
+      if (!messages.size) this.pending.delete(key);
+    }
     this.looper.queue.checkIdle();
   }
 }
@@ -236,10 +244,17 @@ rt.register({
     "sendEmptyMessage(I)Z": function (this: JHandler, w: number) { return this.send(emptyMessage(w), 0); },
     "sendEmptyMessageAtTime(IJ)Z": function (this: JHandler, w: number, at: bigint) { return this.send(emptyMessage(w), Math.max(0, Number(at) - uptimeMillis())); },
     "sendEmptyMessageDelayed(IJ)Z": function (this: JHandler, w: number, d: bigint) { return this.send(emptyMessage(w), Number(d)); },
-    "removeCallbacks(Ljava/lang/Runnable;Ljava/lang/Object;)V": function (this: JHandler, r: unknown) { this.cancel(r); },
+    "removeCallbacks(Ljava/lang/Runnable;Ljava/lang/Object;)V": function (this: JHandler, r: unknown, token: unknown) {
+      this.cancelMatching((key, message) => key === r && (token == null || message.obj === token));
+    },
     "removeMessages(I)V": function (this: JHandler, w: number) { this.cancel(w); },
-    "removeMessages(ILjava/lang/Object;)V": function (this: JHandler, w: number) { this.cancel(w); },
-    "removeCallbacksAndMessages(Ljava/lang/Object;)V": function (this: JHandler) { for (const k of [...this.pending.keys()]) this.cancel(k); },
+    "removeMessages(ILjava/lang/Object;)V": function (this: JHandler, w: number, obj: unknown) {
+      const messages = this.pending.get(w);
+      if (messages) this.cancelMatching((_key, message) => obj == null || message.obj === obj, [[w, messages]]);
+    },
+    "removeCallbacksAndMessages(Ljava/lang/Object;)V": function (this: JHandler, token: unknown) {
+      this.cancelMatching((_key, message) => token == null || message.obj === token);
+    },
     "hasMessages(I)Z": function (this: JHandler, w: number) { return this.pending.get(w)?.size ? 1 : 0; },
     "hasCallbacks(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.pending.get(r)?.size ? 1 : 0; },
     // the object variant asks about messages carrying that obj; posts here are keyed by `what`
