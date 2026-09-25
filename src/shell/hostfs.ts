@@ -47,6 +47,14 @@ function onNextGesture(fn: () => void) {
   }, { capture: true, once: true });
 }
 
+async function pickWithGesture<T>(open: () => Promise<T>): Promise<T | null> {
+  try { return await open(); }
+  catch (e) {
+    if ((e as Error)?.name !== "SecurityError") return null;
+    return new Promise<T>((resolve, reject) => onNextGesture(() => void open().then(resolve, reject))).catch(() => null);
+  }
+}
+
 async function opfsRoot(name: string): Promise<FileSystemDirectoryHandle> {
   return (await navigator.storage.getDirectory()).getDirectoryHandle(name, { create: true });
 }
@@ -55,12 +63,7 @@ async function opfsRoot(name: string): Promise<FileSystemDirectoryHandle> {
 export async function pickDirectory(): Promise<FileSystemDirectoryHandle | null> {
   const show = window.showDirectoryPicker;
   const open = () => show ? show.call(window, { mode: "readwrite", id: "webdroid" }) : opfsRoot("storage");
-  const h = await open().catch((e: Error) =>
-    // SecurityError: the gesture that led here had gone stale by the time the app asked, so
-    // put the request on the next press rather than losing it.
-    e?.name === "SecurityError"
-      ? new Promise<FileSystemDirectoryHandle>((res, rej) => onNextGesture(() => open().then(res, rej))).catch(() => null)
-      : null);
+  const h = await pickWithGesture(open);
   if (!h) return null;
   roots.set(h.name, h);
   await tx("readwrite", (s) => s.put(h, h.name)).catch(() => {});
@@ -71,16 +74,13 @@ export const rootHandles = (): Map<string, FileSystemDirectoryHandle> => roots;
 
 /** One or more files the user chose, or null if they backed out. `save` asks for a new one. */
 export async function pickFiles(opts: { multiple?: boolean; save?: string; mime?: string | null }): Promise<FileSystemFileHandle[] | null> {
-  const save = opts.save;
-  const open = save
-    ? () => window.showSaveFilePicker?.({ suggestedName: save }).then((h) => [h])
-    : () => window.showOpenFilePicker?.({ multiple: !!opts.multiple, ...(opts.mime ? { types: [{ accept: { [opts.mime]: [] } }] } : {}) });
-  if (!(save ? window.showSaveFilePicker : window.showOpenFilePicker)) return opfsPicked(save);
-  try {
-    return await open() ?? null;
-  } catch {
-    return null;
+  if (opts.save) {
+    const show = window.showSaveFilePicker;
+    return show ? pickWithGesture(() => show.call(window, { suggestedName: opts.save }).then((h) => [h])) : opfsPicked(opts.save);
   }
+  const show = window.showOpenFilePicker;
+  return show ? pickWithGesture(() => show.call(window, { multiple: !!opts.multiple,
+    ...(opts.mime ? { types: [{ accept: { [opts.mime]: [] } }] } : {}) })) : opfsPicked();
 }
 /** Without a dialog the stand-in is a file in OPFS: a save gets the name it asked for, and an
  *  open can only offer what is already there. */
