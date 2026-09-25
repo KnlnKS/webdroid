@@ -7,7 +7,7 @@ import { vfs } from "../jvm/natives/jio";
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { vcall, vcallOn, callOn, curThread, type JThread, boxInt, box, JLong, JBool } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
-import { JBundle } from "./os";
+import { JBundle, JFnRunnable } from "./os";
 
 type SqlJs = Awaited<ReturnType<typeof initSqlJs>>;
 let SQL: SqlJs | null = null;
@@ -695,8 +695,58 @@ rt.register({ name: "android/database/sqlite/SQLiteDatabase", ctor: JSQLiteDatab
   }
 }
 rt.markers("android/database/sqlite/SQLiteDatabase$CursorFactory");
-rt.register({ name: "android/database/ContentObserver", ctor: class extends JObj {},
-  methods: { "<init>(Landroid/os/Handler;)V": function () {} } });
+class JDatabaseObservable extends JObj { observers: unknown[] = []; }
+function registerObserver(this: JDatabaseObservable, observer: unknown): void {
+  if (!observer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "The observer is null.");
+  if (this.observers.includes(observer)) throw rt.mkThrowable("java/lang/IllegalStateException", "Observer is already registered.");
+  this.observers.push(observer);
+}
+rt.register({ name: "android/database/Observable", ctor: JDatabaseObservable, methods: {
+  "<init>()V": function () {},
+  "registerObserver(Ljava/lang/Object;)V": registerObserver,
+  "unregisterObserver(Ljava/lang/Object;)V": function (this: JDatabaseObservable, observer: unknown) {
+    if (!observer) throw rt.mkThrowable("java/lang/IllegalArgumentException", "The observer is null.");
+    const index = this.observers.indexOf(observer);
+    if (index < 0) throw rt.mkThrowable("java/lang/IllegalStateException", "Observer was not registered.");
+    this.observers.splice(index, 1);
+  },
+  "unregisterAll()V": function (this: JDatabaseObservable) { this.observers.length = 0; },
+} });
+rt.register({ name: "android/database/ContentObservable", ctor: class extends JDatabaseObservable {}, sup: "android/database/Observable", methods: {
+  "<init>()V": function () {},
+  "registerObserver(Landroid/database/ContentObserver;)V": registerObserver,
+  "dispatchChange(Z)V": function (this: JDatabaseObservable, selfChange: number) {
+    return vcall(this, "dispatchChange", "(ZLandroid/net/Uri;)V", selfChange, null);
+  },
+  "dispatchChange(ZLandroid/net/Uri;)V": async function (this: JDatabaseObservable, selfChange: number, uri: unknown) {
+    for (const observer of this.observers) {
+      if (!selfChange || await vcall(observer, "deliverSelfNotifications", "()Z"))
+        await vcall(observer, "dispatchChange", "(ZLandroid/net/Uri;)V", selfChange, uri);
+    }
+  },
+  "notifyChange(Z)V": async function (this: JDatabaseObservable, selfChange: number) {
+    for (const observer of this.observers)
+      await vcall(observer, "onChange", "(ZLandroid/net/Uri;)V", selfChange, null);
+  },
+} });
+class JContentObserver extends JObj { handler: unknown = null; }
+rt.register({ name: "android/database/ContentObserver", ctor: JContentObserver, methods: {
+  "<init>(Landroid/os/Handler;)V": function (this: JContentObserver, handler: unknown) { this.handler = handler; },
+  "deliverSelfNotifications()Z": () => 0,
+  "onChange(Z)V": function () {},
+  "onChange(ZLandroid/net/Uri;)V": function (this: JContentObserver, selfChange: number) {
+    return vcall(this, "onChange", "(Z)V", selfChange);
+  },
+  "dispatchChange(Z)V": function (this: JContentObserver, selfChange: number) {
+    return vcall(this, "dispatchChange", "(ZLandroid/net/Uri;)V", selfChange, null);
+  },
+  "dispatchChange(ZLandroid/net/Uri;)V": async function (this: JContentObserver, selfChange: number, uri: unknown) {
+    if (!this.handler) return vcall(this, "onChange", "(ZLandroid/net/Uri;)V", selfChange, uri);
+    const task = new JFnRunnable();
+    task.fn = () => vcall(this, "onChange", "(ZLandroid/net/Uri;)V", selfChange, uri);
+    await vcall(this.handler, "post", "(Ljava/lang/Runnable;)Z", task);
+  },
+} });
 rt.register({ name: "android/database/DataSetObserver", ctor: class extends JObj {}, methods: { ...noops("<init>()V", "onChanged()V", "onInvalidated()V") } });
 rt.register({
   name: "android/database/DatabaseUtils", ctor: class extends JObj {},

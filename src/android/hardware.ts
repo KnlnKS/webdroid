@@ -7,6 +7,7 @@ import { newArrayList } from "../jvm/natives/jutil";
 
 rt.markers("android/hardware/SensorEventListener");
 rt.markers("android/hardware/TriggerEventListener");
+rt.markers("android/hardware/Camera$AutoFocusCallback");
 class JTriggerEvent extends JObj { values = new Float32Array(0); timestamp = 0n; }
 rt.register({ name: "android/hardware/TriggerEvent", ctor: JTriggerEvent, fields: ["values", "timestamp"] });
 class JCameraInfo extends JObj { facing = 0; orientation = 0; }
