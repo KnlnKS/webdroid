@@ -20,3 +20,20 @@ test("a delayed first scroll tick exposes the final offset once before reporting
     }
   } finally { clock.mockRestore(); }
 });
+
+test("OverScroller overfling passes the bound and springs back", async () => {
+  let now = 1000;
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
+  try {
+    const scroller = rt.make("android/widget/OverScroller");
+    await vcall(scroller, "fling", "(IIIIIIIIII)V", 0, 90, 0, 1000, 0, 0, 0, 100, 0, 20);
+    const duration = await vcall(scroller, "getDuration", "()I") as number;
+    now += Math.round(duration * 0.7);
+    expect(await vcall(scroller, "computeScrollOffset", "()Z")).toBe(1);
+    expect(await vcall(scroller, "getCurrY", "()I")).toBe(120);
+    now += duration;
+    expect(await vcall(scroller, "computeScrollOffset", "()Z")).toBe(1);
+    expect(await vcall(scroller, "getCurrY", "()I")).toBe(100);
+    expect(await vcall(scroller, "isFinished", "()Z")).toBe(1);
+  } finally { clock.mockRestore(); }
+});

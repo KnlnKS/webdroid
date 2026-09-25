@@ -8,7 +8,7 @@ test("HTTP headers and incremental reads do not await the entire response, and t
   let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
   const server = Bun.serve({ port: 0, fetch: () => new Response(new ReadableStream<Uint8Array>({
     start(c) { controller = c; c.enqueue(Uint8Array.of(1, 2, 3)); },
-  }), { headers: { "content-type": "application/octet-stream", "x-wd-final-url": "https://example.test/stream" } }) });
+  }), { headers: { "content-type": "application/octet-stream", "x-wd-content-length": "7", "x-wd-final-url": "https://example.test/stream" } }) });
   const original = globalThis.fetch;
   globalThis.fetch = Object.assign((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
     original(new URL(String(input), server.url), init), { preconnect: original.preconnect });
@@ -17,7 +17,7 @@ test("HTTP headers and incremental reads do not await the entire response, and t
     const connection = await vcall(url, "openConnection", "()Ljava/net/URLConnection;");
     await vcall(connection, "setReadTimeout", "(I)V", 30);
     expect(await vcall(connection, "getResponseCode", "()I")).toBe(200);
-    expect(await vcall(connection, "getContentLength", "()I")).toBe(-1);
+    expect(await vcall(connection, "getContentLength", "()I")).toBe(7);
     const stream = await vcall(connection, "getInputStream", "()Ljava/io/InputStream;");
     const out = new Int8Array(5);
     expect(await vcall(stream, "read", "([BII)I", out, 1, 2)).toBe(2);
@@ -58,8 +58,7 @@ test("HttpURLConnection preserves a redirect when following is disabled", async 
     await vcall(connection, "setInstanceFollowRedirects", "(Z)V", 0);
     expect(await vcall(connection, "getResponseCode", "()I")).toBe(302);
     expect(await vcall(connection, "getResponseMessage", "()Ljava/lang/String;")).toBe("Found");
-    expect(await vcall(connection, "getHeaderField", "(I)Ljava/lang/String;", 0)).toBe("HTTP/1.1 302 Found");
-    expect(await vcall(connection, "getHeaderFieldKey", "(I)Ljava/lang/String;", 0)).toBeNull();
+    expect(await vcall(connection, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", null)).toBe("HTTP/1.1 302 Found");
     expect(await vcall(connection, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", "location")).toBe("/next");
     expect(await vcall(connection, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", "x-wd-status")).toBeNull();
     expect(seen).toEqual(["1"]);

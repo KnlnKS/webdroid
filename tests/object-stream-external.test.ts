@@ -112,6 +112,19 @@ test("primitive arrays retain their Java element types and values", async () => 
   }
 });
 
+test("linked maps retain secret keys through Java object streams", async () => {
+  const map = await newObj("java/util/LinkedHashMap");
+  const key = await newObj("javax/crypto/spec/SecretKeySpec", "([BLjava/lang/String;)V", Int8Array.of(0, 1, -1, 3), "HmacSHA1");
+  await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "one", key);
+  const stream = await input(await encode(map));
+  const copy = await vcall(stream, "readObject", "()Ljava/lang/Object;");
+  expect(await vcall(stream, "readObject", "()Ljava/lang/Object;")).toBe(copy);
+  expect(await vcall(copy, "size", "()I")).toBe(1);
+  const restored = await vcall(copy, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "one");
+  expect(await vcall(restored, "getAlgorithm", "()Ljava/lang/String;")).toBe("HmacSHA1");
+  expect(await vcall(restored, "getEncoded", "()[B")).toEqual(Int8Array.of(0, 1, -1, 3));
+});
+
 
 test("serialization retains the caller through nested objects and suspended short reads", async () => {
   const worker = new JThread(), ambient = curThread, calls: string[] = [];

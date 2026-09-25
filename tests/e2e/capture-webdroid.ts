@@ -52,7 +52,7 @@ export type StepRun = {
 };
 
 /** What `actual/<flow>/run.json` holds: the steps plus how the run was driven. */
-export type FlowRun = { mode: "full" | "fast"; flowSchemaHash: string; jobs: number; screen: string; statusBarDp: number; steps: StepRun[]; browserErrors?: string[] };
+export type FlowRun = { mode: "full" | "fast"; flowSchemaHash: string; jobs: number; screen: string; statusBarDp: number; steps: StepRun[]; browserErrors?: string[]; hostFiles?: { path: string; size: number }[] };
 export type CaptureMode = "full" | "fast";
 
 /** Wipe the frame-recorder directory. Call once per run, before any flow. */
@@ -93,6 +93,7 @@ export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = fa
     screen: { ...screenOf(manifest, flow.screen), ...parseScreen(ENV_SCREEN) },
     fixedMs: flow.clock === "live" ? null : PINNED_CLOCK_MS,
     storage: flow.seedPrefs ? [prefsStorage(flow.pkg, flow.seedPrefs)] : [],
+    privateStorage: flow.privateStorage,
     shots,
     controlled,
     coverage,
@@ -212,7 +213,23 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
   // Persist the per-step run flags next to the frames so `bun run e2e --diff` can apply the same
   // scoring rules as `bun run e2e --full` — without this, a standalone diff has no idea the app hung
   // and would quietly report a better number for the same pixels.
-  const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow]), jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, statusBarDp: drv.screen.statusBarDp, steps: runs, browserErrors: [...drv.errors] };
+  const hostFiles = flow.privateStorage ? await drv.page.evaluate(async () => {
+    const scan = async (dir: FileSystemDirectoryHandle, prefix: string): Promise<{ path: string; size: number }[]> => {
+      const files: { path: string; size: number }[] = [];
+      for await (const [name, handle] of dir.entries()) {
+        const path = prefix + name;
+        if (handle.kind === "directory") files.push(...await scan(handle as FileSystemDirectoryHandle, path + "/"));
+        else files.push({ path, size: (await (handle as FileSystemFileHandle).getFile()).size });
+      }
+      return files;
+    };
+    return scan(await navigator.storage.getDirectory(), "");
+  }) : undefined;
+  const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow]), jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, statusBarDp: drv.screen.statusBarDp, steps: runs, browserErrors: [...drv.errors], hostFiles };
   await Bun.write(`${outDir}/run.json`, JSON.stringify(run, null, 2));
+  for (const expected of flow.privateStorage?.expectedFiles ?? []) {
+    if (!hostFiles?.some(({ path, size }) => path.startsWith(expected.pathPrefix) && path.endsWith(expected.suffix) && size >= expected.minBytes))
+      throw new Error(`${flow.app}: missing host file ${expected.pathPrefix}*${expected.suffix} (${expected.minBytes} bytes)`);
+  }
   return runs;
 }

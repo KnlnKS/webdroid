@@ -94,6 +94,7 @@ import "./android/game";
 import "./android/runningservices";
 import "./android/window";
 import "./android/menu";
+import "./android/actionmode";
 import "./android/decor";
 import "./android/fragment";
 import "./android/app";
@@ -114,6 +115,7 @@ import "./android/listview";
 import "./android/preference";
 import "./android/animator";
 import "./android/media";
+import "./android/audiofx";
 import "./android/media-metrics";
 
 import "./android/mediadrm";

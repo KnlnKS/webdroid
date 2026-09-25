@@ -7,6 +7,18 @@ import { JView, JViewGroup, attachView, detachView, addUnattachedView, dispatchA
 import { onMain } from "../src/android/mainloop";
 
 rt.linkNatives();
+test("View.post waits for attachment and removeCallbacks cancels unattached work", async () => {
+  const view = rt.make("android/view/View") as JView;
+  const calls: string[] = [];
+  const run = { [mangleMethod("run", "()V")]: () => calls.push("posted") };
+  const canceled = { [mangleMethod("run", "()V")]: () => calls.push("canceled") };
+  await vcall(view, "post", "(Ljava/lang/Runnable;)Z", run);
+  await vcall(view, "post", "(Ljava/lang/Runnable;)Z", canceled);
+  await vcall(view, "removeCallbacks", "(Ljava/lang/Runnable;)Z", canceled);
+  await onMain(() => expect(calls).toEqual([]));
+  await dispatchAttached(view);
+  await onMain(() => expect(calls).toEqual(["posted"]));
+});
 test("detachment retains attachment and thread identity through child and listener callbacks", async () => {
   const parent = await newObj("android/widget/FrameLayout", "(Landroid/content/Context;)V", null);
   const child = await newObj("android/view/View", "(Landroid/content/Context;)V", null);

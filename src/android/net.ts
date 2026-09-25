@@ -569,6 +569,8 @@ rt.register({
     "requestNetwork(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;)V": (_r: unknown, cb: unknown) => registerCallback(cb),
     "unregisterNetworkCallback(Landroid/net/ConnectivityManager$NetworkCallback;)V": (cb: unknown) => { netCallbacks.delete(cb); },
     "getNetworkCapabilities(Landroid/net/Network;)Landroid/net/NetworkCapabilities;": (n: unknown) => knownNetwork(n) ? netCaps() : null,
+    // The sole network is already modeled as validated; revalidation is only a hint.
+    ...noops("reportNetworkConnectivity(Landroid/net/Network;Z)V"),
     "isActiveNetworkMetered()Z": () => 0,
     // The relay has no radio power-saving transitions while its network is available.
     "isDefaultNetworkActive()Z": async () => (await netUp()) ? 1 : 0,

@@ -263,7 +263,7 @@ const intentMethods: NativeSpec["methods"] = {
   },
 };
 for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I", 0], ["Long", "J", 0n],
-  ["Boolean", "Z", 0], ["Char", "C", 0], ["Float", "F", 0], ["Double", "D", 0], ["CharSequence", "Ljava/lang/CharSequence;", null],
+  ["Byte", "B", 0], ["Short", "S", 0], ["Boolean", "Z", 0], ["Char", "C", 0], ["Float", "F", 0], ["Double", "D", 0], ["CharSequence", "Ljava/lang/CharSequence;", null],
   ["Parcelable", "Landroid/os/Parcelable;", null], ["Serializable", "Ljava/io/Serializable;", null],
   ["Bundle", "Landroid/os/Bundle;", null],
   ["IntArray", "[I", null], ["ByteArray", "[B", null], ["StringArray", "[Ljava/lang/String;", null],
@@ -276,7 +276,7 @@ for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I",
     if (d.length === 1) return bundlePrimitive(this.extras.map.get(k), d, dflt);
     return this.extras.map.get(k) ?? dflt;
   };
-  if (d === "I" || d === "J" || d === "Z" || d === "C" || d === "F" || d === "D") {
+  if ("IJBSCZFD".includes(d)) {
     intentMethods[`get${t}Extra(Ljava/lang/String;${d})${d}`] = function (this: JIntent, k: string, dv: unknown) {
       const v = this.extras.map.get(k);
       return bundlePrimitive(v, d, dv);

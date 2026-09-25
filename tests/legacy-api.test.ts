@@ -966,6 +966,12 @@ test("Wi-Fi locks expose their held state", async () => {
   expect(await vcall(lock, "isHeld", "()Z")).toBe(0);
   await expect(vcall(lock, "release", "()V"))
     .rejects.toMatchObject({ constructor: rt.link("java/lang/RuntimeException").ctor });
+  await vcall(lock, "setReferenceCounted", "(Z)V", 0);
+  await vcall(lock, "release", "()V");
+  await vcall(lock, "acquire", "()V");
+  await vcall(lock, "release", "()V");
+  await vcall(lock, "release", "()V");
+  expect(await vcall(lock, "isHeld", "()Z")).toBe(0);
 });
 
 test("the connected browser network is validated", async () => {

@@ -11,6 +11,7 @@ import { reddit } from "./reddit";
 import { tiktok } from "./tiktok";
 import { youtube } from "./youtube";
 import { chatgpt } from "./chatgpt";
+import { komikku } from "./komikku";
 
-export const FLOWS: Flow[] = [fitnotes, mihonOnboarding, mihonApp, flappybird, harmonic, calculatorm, lichess, doodlejump, resy, reddit, tiktok, youtube, chatgpt];
+export const FLOWS: Flow[] = [fitnotes, mihonOnboarding, mihonApp, flappybird, harmonic, calculatorm, lichess, doodlejump, resy, reddit, tiktok, youtube, chatgpt, komikku];
 for (const flow of FLOWS) validateFlow(flow);

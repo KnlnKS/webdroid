@@ -608,6 +608,10 @@ function buildQuery(table: string, cols: string[] | null, sel: string | null, gr
   return sql;
 }
 
+function queryBuilderEditTable(tables: string | null): string {
+  if (!tables) return rt.npe();
+  return tables.split(/[\s,]/, 1)[0];
+}
 class JSQLiteQueryBuilder extends JObj {
   tables: string | null = null;
   projectionMap: unknown = null;
@@ -671,15 +675,14 @@ rt.register({ name: "android/database/sqlite/SQLiteQueryBuilder", ctor: JSQLiteQ
     },
   "update(Landroid/database/sqlite/SQLiteDatabase;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I":
     function (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, values: JContentValues, selection: string | null, args: string[] | null) {
-      if (!this.tables || !values) rt.npe();
+      if (!values) rt.npe();
       const where = [this.where && `(${this.where})`, selection && `(${selection})`].filter(Boolean).join(" AND ") || null;
-      return callSelf(dbMethods, "update(Ljava/lang/String;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I", db, this.tables, values, where, args);
+      return callSelf(dbMethods, "update(Ljava/lang/String;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I", db, queryBuilderEditTable(this.tables), values, where, args);
     },
   "delete(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/String;)I":
     function (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, selection: string | null, args: string[] | null) {
-      if (!this.tables) rt.npe();
       const where = [this.where && `(${this.where})`, selection && `(${selection})`].filter(Boolean).join(" AND ") || null;
-      return callSelf(dbMethods, "delete(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)I", db, this.tables, where, args);
+      return callSelf(dbMethods, "delete(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)I", db, queryBuilderEditTable(this.tables), where, args);
     },
 } });
 function doInsert(jdb: JSQLiteDatabase, table: string, cv: JContentValues, or: string, doThrow = false): bigint {
@@ -786,6 +789,11 @@ rt.register({ name: "android/database/DataSetObserver", ctor: class extends JObj
 rt.register({
   name: "android/database/DatabaseUtils", ctor: class extends JObj {},
   methods: {
+    "static appendEscapedSQLString(Ljava/lang/StringBuilder;Ljava/lang/String;)V": (builder: { s: string } | null, value: string | null) => {
+      if (!builder) return rt.npe();
+      builder.s += "'" + String(value).replaceAll("'", "''") + "'";
+    },
+    "static sqlEscapeString(Ljava/lang/String;)Ljava/lang/String;": (value: string | null) => "'" + String(value).replaceAll("'", "''") + "'",
     "static queryNumEntries(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;)J": (db: JSQLiteDatabase, table: string) => {
       const c = runQuery(db, `SELECT COUNT(*) FROM "${table}"`, null);
       return longValue(c.rows[0]?.[0]);

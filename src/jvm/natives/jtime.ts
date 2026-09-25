@@ -901,12 +901,15 @@ rt.register({
       return utc ? ldOf(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate()) : ldFromDate(date);
     },
     "toLocalTime()Ljava/time/LocalTime;": function (this: JZonedDateTime) { return localTimeAt(this.ms, this.zone); },
-    "toLocalDateTime()Ljava/time/LocalDateTime;": function (this: JZonedDateTime) { return ldtFromDate(new Date(this.ms)); },
-    "getYear()I": function (this: JZonedDateTime) { return new Date(this.ms).getFullYear(); },
-    "getMonthValue()I": function (this: JZonedDateTime) { return new Date(this.ms).getMonth() + 1; },
-    "getDayOfMonth()I": function (this: JZonedDateTime) { return new Date(this.ms).getDate(); },
-    "getHour()I": function (this: JZonedDateTime) { return new Date(this.ms).getHours(); },
-    "getMinute()I": function (this: JZonedDateTime) { return new Date(this.ms).getMinutes(); },
+    "toLocalDateTime()Ljava/time/LocalDateTime;": function (this: JZonedDateTime) {
+      const { date, utc } = dateAtZone(this.ms, this.zone);
+      return ldtOf(utc ? ldOf(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate()) : ldFromDate(date), localTimeAt(this.ms, this.zone));
+    },
+    "getYear()I": function (this: JZonedDateTime) { const { date, utc } = dateAtZone(this.ms, this.zone); return utc ? date.getUTCFullYear() : date.getFullYear(); },
+    "getMonthValue()I": function (this: JZonedDateTime) { const { date, utc } = dateAtZone(this.ms, this.zone); return (utc ? date.getUTCMonth() : date.getMonth()) + 1; },
+    "getDayOfMonth()I": function (this: JZonedDateTime) { const { date, utc } = dateAtZone(this.ms, this.zone); return utc ? date.getUTCDate() : date.getDate(); },
+    "getHour()I": function (this: JZonedDateTime) { return localTimeAt(this.ms, this.zone).h; },
+    "getMinute()I": function (this: JZonedDateTime) { return localTimeAt(this.ms, this.zone).mi; },
     ...ordering("Ljava/time/chrono/ChronoZonedDateTime;", (x: JZonedDateTime, o: JZonedDateTime) => (x.ms < o.ms ? -1 : x.ms > o.ms ? 1 : 0)),
   },
 });
@@ -996,7 +999,7 @@ rt.register({
         const seconds = zone instanceof JZoneOffset ? zone.totalSeconds : -dt.getTimezoneOffset() * 60;
         const local = new Date(dt.getTime() + seconds * 1000);
         const ms = local.getUTCMilliseconds();
-        return `${local.getUTCFullYear()}-${pad(local.getUTCMonth() + 1)}-${pad(local.getUTCDate())}T${pad(local.getUTCHours())}:${pad(local.getUTCMinutes())}:${pad(local.getUTCSeconds())}${ms ? "." + String(ms).padStart(3, "0").replace(/0+$/, "") : ""}${offsetText(seconds, 3, true)}`;
+        return `${local.getUTCFullYear()}-${pad(local.getUTCMonth() + 1)}-${pad(local.getUTCDate())}T${pad(local.getUTCHours())}:${pad(local.getUTCMinutes())}${local.getUTCSeconds() || ms ? ":" + pad(local.getUTCSeconds()) : ""}${ms ? "." + String(ms).padStart(3, "0").replace(/0+$/, "") : ""}${offsetText(seconds, 3, true)}`;
       }
       const offset = zone instanceof JZoneOffset ? zone.totalSeconds : -dt.getTimezoneOffset() * 60;
       return this.pattern

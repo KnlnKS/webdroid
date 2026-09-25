@@ -70,6 +70,7 @@ type LaunchOpts = {
   fixedMs?: number | null;
   /** localStorage seeded before the page boots: a flow's shared_prefs, already in wd's format */
   storage?: [string, string][];
+  privateStorage?: { files: { path: string; fixture: string }[] };
   shots?: boolean;
   controlled?: boolean;
   coverage?: boolean;
@@ -91,12 +92,31 @@ export class WebdroidDriver {
     const browser = await launchBrowser();
     const ctx = await browser.newContext(CONTEXT_OPTS);
     await ctx.addInitScript({ content: probeScript({ fixedMs: opts.fixedMs === undefined ? PINNED_CLOCK_MS : opts.fixedMs, storage: opts.storage ?? [], shots: !!opts.shots }) });
+    if (opts.privateStorage) await ctx.addInitScript({ content: `for (const name of ['showDirectoryPicker', 'showOpenFilePicker', 'showSaveFilePicker'])
+      Object.defineProperty(window, name, { value: undefined, configurable: true });` });
     const page = await ctx.newPage();
     if (opts.coverage) await page.coverage.startJSCoverage({ resetOnNavigation: false });
     const drv = new WebdroidDriver(browser, page, screen, !!opts.coverage);
     page.on("pageerror", (e) => { drv.errors.push(String(e)); console.error("  [page error]", String(e).slice(0, 200)); });
     page.on("console", (message) => { if (message.type() === "error") drv.errors.push(`${message.location().url}: ${message.text()}`); });
     await drv.open(screen, !!opts.controlled);
+    if (opts.privateStorage) {
+      const files = await Promise.all(opts.privateStorage.files.map(async ({ path, fixture }) => ({
+        path, bytes: Array.from(new Uint8Array(await Bun.file(new URL(`../fixtures/${fixture}`, import.meta.url)).arrayBuffer())),
+      })));
+      await page.evaluate(async (items) => {
+        const root = await navigator.storage.getDirectory();
+        for (const item of items) {
+          const parts = item.path.split("/");
+          let dir = root;
+          for (const part of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(part, { create: true });
+          const file = await dir.getFileHandle(parts.at(-1)!, { create: true });
+          const writer = await file.createWritable();
+          await writer.write(new Uint8Array(item.bytes));
+          await writer.close();
+        }
+      }, files);
+    }
     return drv;
   }
 

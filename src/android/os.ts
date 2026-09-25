@@ -1,11 +1,13 @@
 import { readFully } from "../shell/lazyfile";
+import { processEnv } from "../shell/environment";
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
 import { JMessage, obtain } from "./messenger";
 import { procIdentity, processTid } from "../shell/procfs";
 import { parcelCreator, type JParcel } from "./parcel";
 import { keyCodes, deadChar } from "./keycodes";
-import { mem } from "../native/mem";
+import { guestAt, mem } from "../native/mem";
+import { syncShared, trackSharedMap } from "../native/mappings";
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
 import { markProcessExited } from "../native/cpu";
@@ -20,7 +22,7 @@ import { uiState } from "./view";
 import { mkExecutor } from "../jvm/natives/jconc";
 import { yieldToLoop } from "../native/cpu";
 import { mkFile, JInputStream, JOutputStream, vfs, type JFileDescriptor } from "../jvm/natives/jio";
-import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd } from "../native/stdio";
+import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, fdWriteBack } from "../native/stdio";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
 import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
 import { unavailableClock } from "../jvm/natives/jtime";
@@ -582,7 +584,7 @@ const bundleMethods: NativeSpec["methods"] = {
   "getBundle(Ljava/lang/String;)Landroid/os/Bundle;": function (this: JBundle, k: string) { return this.map.get(k) ?? null; },
   "putBundle(Ljava/lang/String;Landroid/os/Bundle;)V": function (this: JBundle, k: string, v: unknown) { this.map.set(k, v); },
 };
-for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"], ["Boolean", "Z"], ["Char", "C"],
+for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"], ["Byte", "B"], ["Short", "S"], ["Boolean", "Z"], ["Char", "C"],
   ["Float", "F"], ["Double", "D"], ["CharSequence", "Ljava/lang/CharSequence;"], ["ByteArray", "[B"],
   ["IntArray", "[I"], ["LongArray", "[J"], ["StringArray", "[Ljava/lang/String;"],
   ["IntegerArrayList", "Ljava/util/ArrayList;"], ["ParcelableArray", "[Landroid/os/Parcelable;"],
@@ -1219,7 +1221,40 @@ rt.register({
       if (n.fd < 0) throw errno("dup", 9);
       return n;
     },
+    [`static mmap(JJII${FD}J)J`]: async (hint: bigint, count: bigint, prot: number, flags: number, d: JFileDescriptor | null, offset: bigint) => {
+      const size = Number(count);
+      if (!Number.isSafeInteger(size) || size <= 0 || offset < 0n || offset > BigInt(Number.MAX_SAFE_INTEGER) || (offset & 4095n) !== 0n ||
+          (prot & ~7) !== 0 || ((flags & 3) !== 1 && (flags & 3) !== 2) || (flags & 0x10) !== 0 && (hint & 4095n) !== 0n)
+        throw errno("mmap", E.INVAL);
+      if (flags & 0x10) throw errno("mmap", E.NOTSUP);
+      const anonymous = !!(flags & 0x20), fd = anonymous ? -1 : d ? descriptorFd(d) : -1;
+      const source = anonymous ? null : javaFdSource(fd);
+      if (!anonymous && !source) throw errno("mmap", E.BADF);
+      if (source && prot === 0) throw errno("mmap", E.NOTSUP);
+      const writeBack = flags & 1 && prot & 2 ? fdWriteBack(fd) : null;
+      if (flags & 1 && prot & 2 && !writeBack) throw errno("mmap", E.NOTSUP);
+      const address = mem.mapVa(size, prot === 0);
+      if (!address) throw errno("mmap", E.NOMEM);
+      try {
+        if (source && prot) mem.write(guestAt(address), await readFully(source, Number(offset), size));
+      } catch {
+        mem.unmapVa(BigInt(address), size);
+        throw errno("mmap", E.IO);
+      }
+      if (writeBack) trackSharedMap(BigInt(address), size, Number(offset), writeBack);
+      return BigInt(address);
+    },
+    "static munmap(JJ)V": (address: bigint, count: bigint) => {
+      const size = Number(count);
+      if (!Number.isSafeInteger(size) || size <= 0 || address & 4095n) throw errno("munmap", E.INVAL);
+      syncShared(address, size, true);
+      if (!mem.unmapVa(address, size)) throw errno("munmap", E.INVAL);
+    },
     "static gettid()I": () => threadTid(curThread),
+    "static getenv(Ljava/lang/String;)Ljava/lang/String;": (key: string) => {
+      if (key === null) rt.npe();
+      return processEnv[key] ?? null;
+    },
     "static getpid()I": () => PROCESS_PID,
     "static uname()Landroid/system/StructUtsname;": () => {
       const info = new JStructUtsname();
@@ -1247,6 +1282,16 @@ rt.register({
       s.f_namemax = 255n;
       return s;
     },
+    [`static fstatvfs(${FD})Landroid/system/StructStatVfs;`]: async (d: JFileDescriptor) => {
+      if (descriptorFd(d) < 0) throw errno("fstatvfs", E.BADF);
+      const { total, free } = await storageEstimate();
+      const s = new JStructStatVfs();
+      s.f_bsize = s.f_frsize = BLK;
+      s.f_blocks = BigInt(Math.floor(total / Number(BLK)));
+      s.f_bfree = s.f_bavail = BigInt(Math.floor(free / Number(BLK)));
+      s.f_namemax = 255n;
+      return s;
+    },
     "static readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },
   },
 });
@@ -1261,7 +1306,7 @@ rt.register({
     PROT_WRITE: 0x2,
     PROT_EXEC: 0x4,
     PROT_NONE: 0,
-    MAP_PRIVATE: 0x02,
+    MAP_PRIVATE: 0x02, MAP_SHARED: 0x01, MAP_ANONYMOUS: 0x20,
     SEEK_SET: 0, SEEK_CUR: 1, SEEK_END: 2,
     SIGKILL: 9,
     S_IFMT: 0o170000, S_IFREG: 0o100000, S_IFDIR: 0o40000,
