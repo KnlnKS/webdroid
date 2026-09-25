@@ -886,7 +886,7 @@ rt.register({
   },
 });
 
-class JFilterOutputStream extends JOutputStream { out: unknown = null; }
+export class JFilterOutputStream extends JOutputStream { out: unknown = null; }
 rt.register({
   name: "java/io/FilterOutputStream", ctor: JFilterOutputStream, sup: "java/io/OutputStream",
   fields: { out: "out" },

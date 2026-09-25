@@ -462,12 +462,12 @@ rt.register({
 defineException("java/security/KeyStoreException", "java/security/GeneralSecurityException");
 defineException("java/security/UnrecoverableKeyException", "java/security/GeneralSecurityException");
 
-// KeyGenerator: AES / HmacSHA* material from getRandomValues. Under the "AndroidKeyStore"
+// KeyGenerator material from getRandomValues. Under the "AndroidKeyStore"
 // provider the AlgorithmParameterSpec names the alias (KeyGenParameterSpec.getKeystoreAlias),
 // and the generated key is stored there.
 class JKeyGenerator extends JObj { algo = ""; provider: string | null = null; bits = 0; alias: string | null = null; }
 const knownProvider = (p: string | null) => p == null || p === "AndroidKeyStore" || p === "AndroidOpenSSL" || p === "BC";
-const KEYGEN_DEFAULT_BITS: Record<string, number> = { AES: 128, HMACSHA1: 160, HMACSHA256: 256, HMACSHA384: 384, HMACSHA512: 512, DESEDE: 168, CHACHA20: 256 };
+const KEYGEN_DEFAULT_BITS: Record<string, number> = { AES: 128, BLOWFISH: 128, HMACSHA1: 160, HMACSHA256: 256, HMACSHA384: 384, HMACSHA512: 512, DESEDE: 168, CHACHA20: 256 };
 function keyGen(algo: string, provider: string | null): JKeyGenerator {
   const bits = KEYGEN_DEFAULT_BITS[algo?.toUpperCase()];
   if (!bits) throw rt.mkThrowable("java/security/NoSuchAlgorithmException", algo + " KeyGenerator not available");
