@@ -17,10 +17,10 @@ The active scope is the 20 APKs present before the latest additions to `apks/`. 
 | Subway Surfers.apk | None observed | Active run works; background Firebase initialization reports an error |
 | TikTok.apk | Optional bundled and vendor SDK probes | Playback/input rate and authentication/publishing remain unvalidated |
 | Twitch.xapk | Optional MIUI referrer probe | The logged-out welcome screen opens the real Twitch login WebView; authenticated browsing remains unvalidated |
-| WebdroidFuzzProbe.apk | None observed | Boot only |
+| WebdroidFuzzProbe.apk | None observed | The standalone APK expects the fuzz case server on loopback port 4876; the harness smoke checks pass, but a real oracle campaign remains open |
 | YouTube.xapk | Optional window extensions | Targeted 16-step playback passes after image-alpha support; an ELF-image `mprotect` failure is fixed, while the intermittent native zero-instruction fault remains open |
 | calculatorm.apk | None observed | Covered by E2E and Android comparison flows |
-| flappybird.apk | None observed | Auxiliary snapshots unavailable |
+| flappybird.apk | None observed | Title, play, collision/game over and restart render with no GL or draw error; later scores remain unvalidated |
 | harmonic.apk | Optional window extension probe | Onboarding, story/comments, article WebView, search and settings work; login and data import/export remain open |
 | lichess.apk | Optional window sidecar probe | A 15-step fast flow now completes without the prior Dart pthread aborts; longer sessions remain unvalidated |
 | mihon-v0.20.4.apk | None observed | Onboarding, private storage, local source, browse tabs and data settings work; populated-library backup and extension installation remain open |
@@ -70,3 +70,5 @@ Amazon's shopping shell rendered its search header over a blank body. The embedd
 The network audit found that `InetSocketAddress.createUnresolved` had reported a resolved address and performed resolution on `getAddress`. It now retains the unresolved state and returns null for the address, matching Android's libcore contract. A focused test and Amazon smoke compilation passed; this does not explain Amazon's existing OkHttp route errors. A temporary socket probe confirmed that the APK attempted plain and TLS relay connections to its config host without a relay-open failure, then the probe was removed.
 
 Harmonic's welcome dialog initially logged uncaught `Dialog.onTouchEvent(MotionEvent)` misses when selecting its UI preset. The dialog now handles outside touch cancellation through a shared callback, and a fresh onboarding replay selected Simple and pressed Get started without the prior errors or a new missing entry. The first story's comments and article WebView loaded; search for “android” returned results, and Appearance and Data settings opened. Import/export, login and other settings were not exercised.
+
+A manual Flappy Bird run rendered the title, entered play, reached its game-over screen after collision, and accepted a restart tap. Diagnostics showed no missing Java or native API, GL error or draw error on that path. The standalone `WebdroidFuzzProbe.apk` showed a loopback URL transport error when launched without its case server, which its harness normally supplies; `bun run fuzz smoke` passed its fixed 32 API and 32 graphics checks. Standalone launch is not a valid feature result for the probe, and the smoke command is not an Android oracle comparison.
