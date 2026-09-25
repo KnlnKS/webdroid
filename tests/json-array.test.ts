@@ -48,3 +48,11 @@ test("JSONObject.wrap preserves JSON values and converts containers", async () =
   });
   expect(await wrap(new JObj())).toBeNull();
 });
+
+test("JSONObject serializes Java values through toString", async () => {
+  const uuid = await newObj("java/util/UUID", "(JJ)V", 1n, 2n);
+  const object = await newObj("org/json/JSONObject");
+  await vcall(object, "put", "(Ljava/lang/String;Ljava/lang/Object;)Lorg/json/JSONObject;", "uuid", uuid);
+  expect(await vcall(object, "toString", "()Ljava/lang/String;")).toBe('{"uuid":"00000000-0000-0001-0000-000000000002"}');
+  expect(await vcall(object, "get", "(Ljava/lang/String;)Ljava/lang/Object;", "uuid")).toBe(uuid);
+});

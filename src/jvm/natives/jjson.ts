@@ -212,9 +212,33 @@ async function initFromMap(object: JJSONObject, map: unknown): Promise<void> {
     object.o[String(await vcall(entry, "getKey", "()Ljava/lang/Object;"))] = jsonUnwrap(await publicWrap(await vcall(entry, "getValue", "()Ljava/lang/Object;")));
   }
 }
-/** the JSON text of a stored tree; a long that reached storage unboxed (a Map's boxed values) prints its digits */
-const jsonText64 = (v: unknown, indent?: number): string =>
-  JSON.stringify(v, (_k, x) => typeof x === "bigint" ? `\u0000${x}\u0000` : x, indent).replace(/"\\u0000(-?\d+)\\u0000"/g, "$1");
+async function jsonSerializable(v: unknown): Promise<unknown> {
+  if (v instanceof JJSONObject) return jsonSerializable(v.o);
+  if (v instanceof JJSONArray) return jsonSerializable(v.a);
+  if (v instanceof JObj) {
+    const unwrapped = jsonUnwrap(v);
+    return unwrapped === v ? vcall(v, "toString", "()Ljava/lang/String;") : unwrapped;
+  }
+  if (Array.isArray(v)) return Promise.all(v.map(jsonSerializable));
+  if (v && typeof v === "object") {
+    const out: Record<string, unknown> = Object.create(null);
+    for (const [key, value] of Object.entries(v)) out[key] = await jsonSerializable(value);
+    return out;
+  }
+  return v;
+}
+const javaJsonValue = Symbol("javaJsonValue");
+function jsonText64(v: unknown, indent?: number): string | Promise<string> {
+  const stringify = (value: unknown) => JSON.stringify(value, (_k, x) => {
+    if (x instanceof JObj) throw javaJsonValue;
+    return typeof x === "bigint" ? `\u0000${x}\u0000` : x;
+  }, indent).replace(/"\\u0000(-?\d+)\\u0000"/g, "$1");
+  try { return stringify(v); }
+  catch (error) {
+    if (error !== javaJsonValue) throw error;
+    return jsonSerializable(v).then(stringify);
+  }
+}
 const jsonQuote = (text: string) => JSON.stringify(text).replaceAll("/", "\\/");
 type JSONScope = "emptyArray" | "array" | "emptyObject" | "object" | "key";
 class JJSONStringer extends JObj {
