@@ -499,6 +499,7 @@ rt.register({
 class JInstant extends JObj { ms = 0; }
 class JDuration extends JObj { ms = 0; }
 class JZoneId extends JObj { id = "UTC"; }
+class JZoneOffset extends JZoneId { totalSeconds = 0; }
 class JLocalDate extends JObj { y = 1970; mo = 1; d = 1; }
 class JLocalTime extends JObj { h = 0; mi = 0; s = 0; ns = 0; }
 function ltOf(h: number, mi: number, s = 0, ns = 0): JLocalTime {
@@ -557,10 +558,21 @@ rt.register({
 class JClock extends JObj { zone: JZoneId | null = null; fixed: number | null = null; unavailable: string | null = null; }
 const clockIn = (zone: JZoneId, fixed: number | null = null) => { const c = new JClock(); c.zone = zone; c.fixed = fixed; return c; };
 const zoneOf = (id: string) => { const z = new JZoneId(); z.id = id; return z; };
+const offsetCache = new Map<number, JZoneOffset>();
+function offsetOfSeconds(seconds: number): JZoneOffset {
+  if (seconds < -64800 || seconds > 64800) throw rt.mkThrowable("java/time/DateTimeException", "Zone offset not in valid range: -18:00 to +18:00");
+  const cached = offsetCache.get(seconds);
+  if (cached) return cached;
+  rt.link("java/time/ZoneOffset");
+  const offset = new JZoneOffset(), abs = Math.abs(seconds);
+  offset.totalSeconds = seconds;
+  offset.id = seconds === 0 ? "Z" : `${seconds < 0 ? "-" : "+"}${pad(Math.floor(abs / 3600))}:${pad(Math.floor(abs / 60) % 60)}${abs % 60 ? ":" + pad(abs % 60) : ""}`;
+  if (seconds % 900 === 0) offsetCache.set(seconds, offset);
+  return offset;
+}
 const zoneOffsetFormatters = new Map<string, Intl.DateTimeFormat>();
 function zoneOffsetAt(zone: JZoneId, ms: number): JZoneId {
-  const ctor = rt.link("java/time/ZoneOffset").ctor as new () => JZoneId & { totalSeconds: number };
-  if (zone instanceof ctor) return zone;
+  if (zone instanceof JZoneOffset) return zone;
   let formatter = zoneOffsetFormatters.get(zone.id);
   if (!formatter) {
     formatter = new Intl.DateTimeFormat("en-US", { timeZone: zone.id, timeZoneName: "shortOffset" });
@@ -570,8 +582,7 @@ function zoneOffsetAt(zone: JZoneId, ms: number): JZoneId {
   const match = /^GMT(?:([+-])(\d{1,2})(?::(\d{2}))?)?$/.exec(name);
   if (!match) throw rt.mkThrowable("java/time/DateTimeException", `Unsupported zone offset: ${name}`);
   const seconds = (match[1] === "-" ? -1 : 1) * (Number(match[2] ?? 0) * 3600 + Number(match[3] ?? 0) * 60);
-  const offset = new ctor(); offset.id = seconds ? name.slice(3) : "Z"; offset.totalSeconds = seconds;
-  return offset;
+  return offsetOfSeconds(seconds);
 }
 export const unavailableClock = (message: string) => { const c = clockIn(zoneOf("UTC")); c.unavailable = message; return c; };
 const clockMillis = (clock: JClock) => {
@@ -653,6 +664,10 @@ rt.register({
   },
   methods: {
     "static now()Ljava/time/Instant;": () => mkInstant(Date.now()),
+    "static now(Ljava/time/Clock;)Ljava/time/Instant;": (clock: JClock) => {
+      if (!clock) rt.npe();
+      return vcall(clock, "instant", "()Ljava/time/Instant;");
+    },
     "static parse(Ljava/lang/CharSequence;)Ljava/time/Instant;": (s: string) => mkInstant(parseIso(s)),
     "static from(Ljava/time/temporal/TemporalAccessor;)Ljava/time/Instant;": (t: unknown) => mkInstant(temporalMs(t)),
     "static ofEpochMilli(J)Ljava/time/Instant;": (ms: bigint) => mkInstant(Number(ms)),
@@ -703,6 +718,7 @@ rt.register({
 });
 rt.register({
   name: "java/time/Duration", ctor: JDuration, ifaces: ["java/lang/Comparable"],
+  clinit: () => { (rt.link("java/time/Duration").ctor as any).s$ZERO = mkDuration(0); },
   methods: {
     "static ofMillis(J)Ljava/time/Duration;": (ms: bigint) => mkDuration(Number(ms)),
     "static ofSeconds(J)Ljava/time/Duration;": (s: bigint) => mkDuration(Number(s) * 1000),
@@ -711,6 +727,14 @@ rt.register({
     "static ofDays(J)Ljava/time/Duration;": (d: bigint) => mkDuration(Number(d) * 86400000),
     "static between(Ljava/time/temporal/Temporal;Ljava/time/temporal/Temporal;)Ljava/time/Duration;": (a: any, b: any) =>
       mkDuration((b?.ms ?? 0) - (a?.ms ?? 0)),
+    "plus(Ljava/time/Duration;)Ljava/time/Duration;": function (this: JDuration, other: JDuration) {
+      if (!other) rt.npe();
+      return mkDuration(this.ms + other.ms);
+    },
+    "minus(Ljava/time/Duration;)Ljava/time/Duration;": function (this: JDuration, other: JDuration) {
+      if (!other) rt.npe();
+      return mkDuration(this.ms - other.ms);
+    },
     "toMillis()J": function (this: JDuration) { return BigInt(Math.trunc(this.ms)); },
     "getSeconds()J": function (this: JDuration) { return BigInt(Math.floor(this.ms / 1000)); },
     "toMinutes()J": function (this: JDuration) { return BigInt(Math.trunc(this.ms / 60000)); },
@@ -718,7 +742,7 @@ rt.register({
     "toDays()J": function (this: JDuration) { return BigInt(Math.trunc(this.ms / 86400000)); },
     "isNegative()Z": function (this: JDuration) { return this.ms < 0 ? 1 : 0; },
     "compareTo(Ljava/lang/Object;)I": function (this: JDuration, o: JDuration) { return this.ms < o.ms ? -1 : this.ms > o.ms ? 1 : 0; },
-    "getNano()I": function (this: JDuration) { return Math.round((this.ms % 1000) * 1e6); },
+    "getNano()I": function (this: JDuration) { return Math.round((this.ms - Math.floor(this.ms / 1000) * 1000) * 1e6); },
     "isZero()Z": function (this: JDuration) { return this.ms === 0 ? 1 : 0; },
   },
 });
@@ -732,9 +756,15 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JZoneId) { return this.id; },
   },
 });
-rt.register({ name: "java/time/ZoneOffset", ctor: class extends JZoneId { totalSeconds = 0; }, sup: "java/time/ZoneId",
-  clinit: () => { const c = rt.link("java/time/ZoneOffset").ctor as any; const u = new c(); u.id = "Z"; c.s$UTC = u; },
-  methods: { "getTotalSeconds()I": function (this: any) { return this.totalSeconds ?? 0; } },
+rt.register({ name: "java/time/ZoneOffset", ctor: JZoneOffset, sup: "java/time/ZoneId",
+  clinit: () => {
+    const c = rt.link("java/time/ZoneOffset").ctor as any;
+    c.s$UTC = offsetOfSeconds(0); c.s$MIN = offsetOfSeconds(-64800); c.s$MAX = offsetOfSeconds(64800);
+  },
+  methods: {
+    "static ofTotalSeconds(I)Ljava/time/ZoneOffset;": offsetOfSeconds,
+    "getTotalSeconds()I": function (this: JZoneOffset) { return this.totalSeconds; },
+  },
 });
 rt.register({
   name: "java/time/LocalDate", ctor: JLocalDate, ifaces: ["java/lang/Comparable", "java/time/temporal/Temporal", "java/time/temporal/TemporalAccessor"],
@@ -903,7 +933,8 @@ rt.register({
   },
 });
 rt.markers("java/time/temporal/Temporal", "java/time/temporal/TemporalAccessor", "java/time/temporal/TemporalAmount",
-  "java/time/temporal/TemporalUnit", "java/time/format/FormatStyle");
+  "java/time/temporal/TemporalUnit");
+mkEnumSet("java/time/format/FormatStyle", ["FULL", "LONG", "MEDIUM", "SHORT"]);
 defineException("java/time/DateTimeException", "java/lang/RuntimeException");
 defineException("java/time/format/DateTimeParseException", "java/time/DateTimeException");
 defineException("java/time/temporal/UnsupportedTemporalTypeException", "java/time/DateTimeException");
@@ -913,14 +944,25 @@ const chronoUnits = mkEnumSet("java/time/temporal/ChronoUnit", ["NANOS", "MICROS
     return vcall(start, "until", "(Ljava/time/temporal/Temporal;Ljava/time/temporal/TemporalUnit;)J", end, this);
   },
 }, ["java/time/temporal/TemporalUnit"]);
-class JDateTimeFormatter extends JObj { pattern = "yyyy-MM-dd"; zone: unknown = null; timeStyle: "full" | "long" | "medium" | "short" | null = null; }
+type LocalizedStyle = "full" | "long" | "medium" | "short";
+class JDateTimeFormatter extends JObj { pattern = "yyyy-MM-dd"; zone: unknown = null; dateStyle: LocalizedStyle | null = null; timeStyle: LocalizedStyle | null = null; }
 const fmtOf = (pattern: string) => { const f = new JDateTimeFormatter(); f.pattern = pattern; return f; };
+function localizedStyle(style: JSimpleEnum | null): LocalizedStyle {
+  if (!style) rt.npe();
+  const name = style!.ename;
+  return name === "FULL" ? "full" : name === "LONG" ? "long" : name === "SHORT" ? "short" : "medium";
+}
+function localizedFormatter(date: LocalizedStyle | null, time: LocalizedStyle | null): JDateTimeFormatter {
+  const f = new JDateTimeFormatter();
+  f.dateStyle = date; f.timeStyle = time;
+  return f;
+}
 rt.register({
   name: "java/time/format/DateTimeFormatter", ctor: JDateTimeFormatter,
   statics: { ISO_LOCAL_DATE: fmtOf("yyyy-MM-dd"), ISO_LOCAL_TIME: fmtOf("HH:mm:ss"), ISO_LOCAL_DATE_TIME: fmtOf("yyyy-MM-dd'T'HH:mm:ss"), ISO_INSTANT: fmtOf("ISO_INSTANT") },
   methods: {
     "static ofPattern(Ljava/lang/String;)Ljava/time/format/DateTimeFormatter;": fmtOf,
-    "withZone(Ljava/time/ZoneId;)Ljava/time/format/DateTimeFormatter;": function (this: JDateTimeFormatter, z: unknown) { const f = fmtOf(this.pattern); f.zone = z; return f; },
+    "withZone(Ljava/time/ZoneId;)Ljava/time/format/DateTimeFormatter;": function (this: JDateTimeFormatter, z: unknown) { return Object.assign(new JDateTimeFormatter(), this, { zone: z }); },
     "withLocale(Ljava/util/Locale;)Ljava/time/format/DateTimeFormatter;": function (this: JDateTimeFormatter) { return this; },
     "withDecimalStyle(Ljava/time/format/DecimalStyle;)Ljava/time/format/DateTimeFormatter;": function (this: JDateTimeFormatter) { return this; },
     "getZone()Ljava/time/ZoneId;": function (this: JDateTimeFormatter) { return this.zone; },
@@ -928,20 +970,18 @@ rt.register({
     // Locale-aware overload: the pattern still drives the output, and MONTHS below is en-only,
     // so the locale changes nothing here — but omitting the overload throws on the caller.
     "static ofPattern(Ljava/lang/String;Ljava/util/Locale;)Ljava/time/format/DateTimeFormatter;": fmtOf,
-    "static ofLocalizedDate(Ljava/time/format/FormatStyle;)Ljava/time/format/DateTimeFormatter;": () => new JDateTimeFormatter(),
-    "static ofLocalizedTime(Ljava/time/format/FormatStyle;)Ljava/time/format/DateTimeFormatter;": (style: JSimpleEnum | null) => {
-      if (!style) throw rt.mkThrowable("java/lang/NullPointerException", "style");
-      const formatter = new JDateTimeFormatter();
-      formatter.timeStyle = style.ename === "FULL" ? "full" : style.ename === "LONG" ? "long"
-        : style.ename === "SHORT" ? "short" : "medium";
-      return formatter;
-    },
+    "static ofLocalizedDate(Ljava/time/format/FormatStyle;)Ljava/time/format/DateTimeFormatter;": (style: JSimpleEnum | null) => localizedFormatter(localizedStyle(style), null),
+    "static ofLocalizedTime(Ljava/time/format/FormatStyle;)Ljava/time/format/DateTimeFormatter;": (style: JSimpleEnum | null) => localizedFormatter(null, localizedStyle(style)),
+    "static ofLocalizedDateTime(Ljava/time/format/FormatStyle;)Ljava/time/format/DateTimeFormatter;": (style: JSimpleEnum | null) => localizedFormatter(localizedStyle(style), localizedStyle(style)),
+    "static ofLocalizedDateTime(Ljava/time/format/FormatStyle;Ljava/time/format/FormatStyle;)Ljava/time/format/DateTimeFormatter;": (date: JSimpleEnum | null, time: JSimpleEnum | null) => localizedFormatter(localizedStyle(date), localizedStyle(time)),
     "format(Ljava/time/temporal/TemporalAccessor;)Ljava/lang/String;": function (this: JDateTimeFormatter, t: any) {
       const dt: Date = t instanceof JLocalDate ? new Date(t.y, t.mo - 1, t.d)
         : t instanceof JZonedDateTime || t instanceof JInstant ? new Date(t.ms)
         : t instanceof JLocalDateTime ? new Date(localMs(t))
         : new Date();
-      if (this.timeStyle) return new Intl.DateTimeFormat(undefined, { timeStyle: this.timeStyle }).format(dt);
+      if (this.dateStyle || this.timeStyle) return new Intl.DateTimeFormat(undefined,
+        { dateStyle: this.dateStyle ?? undefined, timeStyle: this.timeStyle ?? undefined,
+          timeZone: (this.zone as JZoneId | null)?.id }).format(dt);
       if (this.pattern === "ISO_INSTANT") return dt.toISOString().replace(/\.000Z$/, "Z");
       return this.pattern
         .replace(/'T'/g, "T")
