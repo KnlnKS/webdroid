@@ -8,6 +8,7 @@ class JDomElement extends JDomNode { declare node: Element; }
 class JDomAttr extends JDomNode { declare node: Attr; }
 class JDomList extends JObj { nodes!: NodeList | HTMLCollection; }
 class JDomAttributes extends JObj { attrs!: NamedNodeMap; }
+class JDomImplementation extends JObj { implementation = document.implementation; }
 const nodeCache = new WeakMap<Node, JDomNode>();
 function domNode(node: Node | null): JDomNode | null {
   if (!node) return null;
@@ -52,6 +53,7 @@ const nodeMethods = {
 };
 const documentMethods = {
   "getDocumentElement()Lorg/w3c/dom/Element;": function (this: JDomDocument) { return domNode(this.node.documentElement); },
+  "getImplementation()Lorg/w3c/dom/DOMImplementation;": () => new JDomImplementation(),
   "getElementsByTagName(Ljava/lang/String;)Lorg/w3c/dom/NodeList;": function (this: JDomDocument, name: string) { return domList(this.node.getElementsByTagName(name)); },
 };
 const elementMethods = {
@@ -80,6 +82,21 @@ rt.register({ name: "org/w3c/dom/Element", ctor: class extends JObj {}, ifaces: 
 rt.register({ name: "org/w3c/dom/NodeList", ctor: class extends JObj {}, methods: listMethods });
 rt.register({ name: "org/w3c/dom/Attr", ctor: class extends JObj {}, ifaces: ["org/w3c/dom/Node"], methods: attrMethods });
 rt.register({ name: "org/w3c/dom/NamedNodeMap", ctor: class extends JObj {}, methods: attributeMethods });
+rt.register({ name: "org/w3c/dom/DOMImplementation", ctor: JDomImplementation, methods: {
+  "createDocument(Ljava/lang/String;Ljava/lang/String;Lorg/w3c/dom/DocumentType;)Lorg/w3c/dom/Document;":
+    function (this: JDomImplementation, namespace: string | null, name: string | null, type: JDomNode | null) {
+      const doctype = type?.node;
+      return domNode(this.implementation.createDocument(namespace, name ?? "", doctype instanceof DocumentType ? doctype : null));
+    },
+  "createDocumentType(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/w3c/dom/DocumentType;":
+    function (this: JDomImplementation, name: string, publicId: string, systemId: string) {
+      return domNode(this.implementation.createDocumentType(name, publicId, systemId));
+    },
+  "hasFeature(Ljava/lang/String;Ljava/lang/String;)Z": function (this: JDomImplementation, feature: string, version: string) {
+    return this.implementation.hasFeature(feature, version) ? 1 : 0;
+  },
+} });
+rt.register({ name: "org/w3c/dom/DocumentType", ctor: class extends JObj {}, ifaces: ["org/w3c/dom/Node"] });
 rt.register({ name: "webdroid/DOMNode", ctor: JDomNode, ifaces: ["org/w3c/dom/Node"], methods: nodeMethods });
 rt.register({ name: "webdroid/DOMDocument", ctor: JDomDocument, ifaces: ["org/w3c/dom/Document"], methods: { ...nodeMethods, ...documentMethods } });
 rt.register({ name: "webdroid/DOMElement", ctor: JDomElement, ifaces: ["org/w3c/dom/Element"], methods: { ...nodeMethods, ...elementMethods } });
@@ -105,6 +122,7 @@ rt.register({ name: "javax/xml/parsers/DocumentBuilder", ctor: JDocumentBuilder,
     throw rt.mkThrowable("org/xml/sax/SAXException", "InputSource requires a stream or reader");
   },
   "newDocument()Lorg/w3c/dom/Document;": () => domNode(document.implementation.createDocument(null, "")),
+  "getDOMImplementation()Lorg/w3c/dom/DOMImplementation;": () => new JDomImplementation(),
   "isNamespaceAware()Z": function (this: JDocumentBuilder) { return this.namespaceAware ? 1 : 0; },
   "isValidating()Z": function (this: JDocumentBuilder) { return this.validating ? 1 : 0; },
 } });
