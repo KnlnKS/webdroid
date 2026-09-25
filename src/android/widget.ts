@@ -99,15 +99,17 @@ rt.register({
     },
   },
 });
+class JAbsSeekBar extends JProgressBar { keyProgressIncrement = 1; }
 /** RatingBar reports progress in steps; its star drawable is not implemented. */
-class JRatingBar extends JProgressBar { stars = 5; step = 0.5; ratingL: unknown = null; }
+class JRatingBar extends JAbsSeekBar { stars = 5; step = 0.5; ratingL: unknown = null; }
 const seekBarMethods: NativeSpec["methods"] = {
-  "setKeyProgressIncrement(I)V": () => {},
+  "setKeyProgressIncrement(I)V": function (this: JAbsSeekBar, increment: number) { this.keyProgressIncrement = Math.abs(increment); },
+  "getKeyProgressIncrement()I": function (this: JAbsSeekBar) { return this.keyProgressIncrement; },
   "setThumb(Landroid/graphics/drawable/Drawable;)V": () => {},
   "setOnSeekBarChangeListener(Landroid/widget/SeekBar$OnSeekBarChangeListener;)V": function (this: JRatingBar, l: unknown) { this.ratingL = l; },
 };
-rt.register({ name: "android/widget/AbsSeekBar", ctor: class extends JRatingBar {}, sup: "android/widget/ProgressBar", methods: seekBarMethods });
-class JSeekBar extends JProgressBar {
+rt.register({ name: "android/widget/AbsSeekBar", ctor: JAbsSeekBar, sup: "android/widget/ProgressBar", methods: seekBarMethods });
+class JSeekBar extends JAbsSeekBar {
   thumb: JDrawable | null = null;
   thumbW = 0; thumbH = 0; thumbOffset = 0;
   secondary = 0;
