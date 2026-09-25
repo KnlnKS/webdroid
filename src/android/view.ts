@@ -1708,6 +1708,7 @@ export class JViewGroup extends JView {
   touchTarget: JView | null = null;
   hierarchyChangeL: unknown = null;
   transitionGroup: boolean | null = null;
+  layoutMode: number | null = null;
 }
 /** Convert a LayoutParams to one this ViewGroup accepts (e.g. ViewPager needs its own LP type,
  *  and casts in its onLayout otherwise). Dispatches to the ViewGroup's own check/generate overrides. */
@@ -2446,7 +2447,18 @@ rt.register({
     "onNestedFling(Landroid/view/View;FFZ)Z": (_t: JView, _vx: number, _vy: number, consumed: number) => (consumed ? 0 : 1),
     ...stubs(0, "shouldDelayChildPressedState()Z", "onNestedPreFling(Landroid/view/View;FF)Z"),
     ...noops("onNestedScroll(Landroid/view/View;IIII)V", "onNestedPreScroll(Landroid/view/View;II[I)V"),
-    "getNestedScrollAxes()I": function (this: JViewGroup) { return this.nestedAxes; },
+  "getNestedScrollAxes()I": function (this: JViewGroup) { return this.nestedAxes; },
+    "getLayoutMode()I": function (this: JViewGroup) {
+      for (let parent: JView | null = this; parent; parent = parent.parent) {
+        if (parent instanceof JViewGroup && parent.layoutMode !== null) return parent.layoutMode;
+      }
+      return 0;
+    },
+    "setLayoutMode(I)V": function (this: JViewGroup, mode: number) {
+      if (this.layoutMode === mode) return;
+      this.layoutMode = mode;
+      requestLayoutVirtual(this);
+    },
     "cleanupLayoutState(Landroid/view/View;)V": (c: JView) => { c.layoutRequested = false; },
     ...viewMethods, ...vgMethods },
 });
