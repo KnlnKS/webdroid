@@ -1,6 +1,6 @@
 # Original APK corpus handoff
 
-Status: 2026-09-24. This plan covers the **20 APKs that existed before the recent additions** to `apks/`. The newer 15-app corpus has its own [corpus-plan-v2.md](corpus-plan-v2.md) and is outside this pass. Ads and ad APIs are excluded. The full evidence trail is in [docs/original-apk-coverage-2026-09-24.md](docs/original-apk-coverage-2026-09-24.md) and [docs/implementation-history.md](docs/implementation-history.md).
+Status: 2026-09-24. This plan covers the **20 APKs that existed before the recent additions** to `apks/`, plus the requested Komikku follow-up below. The newer 15-app corpus has its own [corpus-plan-v2.md](corpus-plan-v2.md) and is outside this pass except for Komikku. Ads and ad APIs are excluded. The full evidence trail is in [docs/original-apk-coverage-2026-09-24.md](docs/original-apk-coverage-2026-09-24.md) and [docs/implementation-history.md](docs/implementation-history.md).
 
 All 20 launched, drew an initial frame, and supplied diagnostics in a serialized boot sweep. A successful boot is **not** full feature coverage. No app has been established as fully usable. “No missing API observed” below applies only to the paths exercised; optional vendor and AndroidX class probes are not automatically Android platform gaps.
 
@@ -26,6 +26,10 @@ All 20 launched, drew an initial frame, and supplied diagnostics in a serialized
 | harmonic.apk | Onboarding, story/comments, article WebView, search, and settings. Dialog outside-touch miss fixed. Optional window-extension probe. | Login, import/export, and other settings paths. |
 | lichess.apk | 15-step fast flow passed after retaining joinable pthread handle storage until join/detach. Optional window-sidecar probe. | Long sessions, authenticated/online play, persistence and more game modes. |
 | mihon-v0.20.4.apk | Onboarding, private storage choice, local source, browsing and data settings. No boot missing entry. | Populated-library backup, extension installation and chapter reading. Empty-library backup reports the app's own “No library entries” error. |
+
+## Added corpus v1 follow-up: Komikku
+
+Test `apks/Komikku-arm64-v8a-v1.14.1.apk` as the 21st corpus v1 target. Its v1 boot, reading, library, download, settings and persistence paths have not been verified; do not count it among the original 20 results above. Capture per-step process diagnostics and rendering, investigate any non-ad API or feature gaps, and add a usable-path flow before claiming coverage.
 
 ## Verification and evidence limits
 
