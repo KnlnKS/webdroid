@@ -5,6 +5,7 @@ import { newObj, vcall } from "../src/jvm/natives/jlang";
 import { mkPfd } from "../src/android/os";
 import { javaSeekFd, javaCloseFd } from "../src/native/stdio";
 import { vfs, mkFile } from "../src/jvm/natives/jio";
+import { guestAt, mem } from "../src/native/mem";
 rt.linkNatives();
 
 test("byte-backed descriptors have native storage and duplicates outlive the original", async () => {
@@ -32,4 +33,13 @@ test("read-only file opens load lazy bytes and AutoCloseInputStream owns the des
     await vcall(input, "close", "()V");
     await expect(vcall(pfd, "getFd", "()I")).rejects.toBeDefined();
   } finally { vfs.delete(path); }
+});
+
+test("Os.mmap exposes file bytes to native code and munmap releases the address", async () => {
+  const pfd = mkPfd(Uint8Array.of(9, 8, 7), null);
+  const fd = await vcall(pfd, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
+  const address = await vcall(rt.link("android/system/Os").ctor, "mmap", "(JJIILjava/io/FileDescriptor;J)J", 0n, 3n, 1, 2, fd, 0n) as bigint;
+  expect([...mem.bytes(guestAt(address), 3)]).toEqual([9, 8, 7]);
+  await vcall(rt.link("android/system/Os").ctor, "munmap", "(JJ)V", address, 3n);
+  await vcall(pfd, "close", "()V");
 });

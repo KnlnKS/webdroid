@@ -9,6 +9,7 @@ import { javaClassSets } from "../regex-sets";
 import { mangleMethod, jmethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { guestNow, type GuestTimer } from "../../guest-clock";
 import { device } from "../../shell/config";
+import { processEnv } from "../../shell/environment";
 import { csText } from "./jchars";
 
 async function joinCharSequences(separator: unknown, parts: unknown[]): Promise<string> {
@@ -1556,11 +1557,6 @@ const sysProps: Record<string, string> = {
   "java.vm.name": "Dalvik", "file.separator": "/", "path.separator": ":",
   "java.io.tmpdir": "/data/local/tmp", "user.dir": "/",
 };
-const sysEnv: Record<string, string> = {
-  PATH: "/system/bin:/system/xbin:/vendor/bin",
-  ANDROID_ROOT: "/system", ANDROID_DATA: "/data", EXTERNAL_STORAGE: "/sdcard",
-  TMPDIR: "/data/local/tmp",
-};
 rt.register({
   name: "java/lang/System", ctor: JSystem,
   callerSensitive: ["loadLibrary(Ljava/lang/String;)V", "load(Ljava/lang/String;)V"],
@@ -1580,11 +1576,11 @@ rt.register({
     "static setProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (k: string, v: string) => { const o = sysProps[k] ?? null; sysProps[k] = v; return o; },
     "static getenv(Ljava/lang/String;)Ljava/lang/String;": (key: string | null) => {
       if (key === null) rt.npe();
-      return sysEnv[key!] ?? null;
+      return processEnv[key!] ?? null;
     },
     "static getenv()Ljava/util/Map;": async () => {
       const map = await newObj("java/util/HashMap");
-      for (const [key, value] of Object.entries(sysEnv)) await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
+      for (const [key, value] of Object.entries(processEnv)) await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
       return map;
     },
     // Android has never installed one; code that asks is deciding whether it may reflect

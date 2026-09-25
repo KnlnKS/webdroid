@@ -18,7 +18,9 @@ import { MONTHS, DAYS } from "../jvm/natives/jtime";
 import { device } from "../shell/config";
 import { procIdentity } from "../shell/procfs";
 import { guestNow } from "../guest-clock";
+import { processEnv } from "../shell/environment";
 import { timersInit } from "./timers";
+import { syncShared, trackSharedMap } from "./mappings";
 
 /** bionic struct offsets/sizes, one block per ABI; LAYOUT is the process's, chosen in libcInit. */
 const LAYOUT32 = {
@@ -50,21 +52,6 @@ export function writeTs(p: number, ms: number, unit = 1e6): void {
 }
 /** an off_t argument: 64-bit on LP64, 32-bit on ILP32 */
 export const offArg = (a: { i(): number; l(): bigint }) => (PTR === 8 ? Number(a.l()) : a.i());
-/** MAP_SHARED writable file mappings awaiting write-back; `va` is the mapping's start, `off` its file offset */
-const sharedMaps: { va: bigint; n: number; off: number; writeBack: (off: number, bytes: Uint8Array) => void }[] = [];
-/** Write the part of every shared mapping inside [va, va+n) back to its file; `drop` forgets the mappings touched (munmap, MAP_FIXED). */
-function syncShared(va: bigint, n: number, drop: boolean): void {
-  if (!sharedMaps.length) return;
-  const end = va + BigInt(n);
-  for (let i = sharedMaps.length - 1; i >= 0; i--) {
-    const m = sharedMaps[i], lo = m.va > va ? m.va : va, hi = m.va + BigInt(m.n) < end ? m.va + BigInt(m.n) : end;
-    if (lo >= hi) continue;
-    const start = guestAt(lo);
-    m.writeBack(m.off + Number(lo - m.va), mem.u8.slice(start, start + Number(hi - lo)));
-    if (drop) sharedMaps.splice(i, 1);
-  }
-}
-
 function setErrno(cpu: Cpu, e: number): void { mem.st32(cpu.errnoAddr, e); }
 /** the common "-1 and errno" return */
 export function fail(cpu: Cpu | null, e: number): number { if (cpu) setErrno(cpu, e); return -1; }
@@ -289,13 +276,6 @@ export function libcInit(): void {
   hostData("libc.so", "_toupper_tab_", upperTab + 128); hostData("libc.so", "_tolower_tab_", lowerTab + 128);
 
   const strerrorBuf = mem.hostAlloc(64);
-  // an Android app process's environment (init.environ.rc + the values zygote inherits)
-  const ENV: Record<string, string> = {
-    PATH: "/sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin", LD_LIBRARY_PATH: "/vendor/lib:/system/lib", HOME: "/data",
-    ANDROID_BOOTLOGO: "1", ANDROID_ROOT: "/system", ANDROID_ASSETS: "/system/app", ANDROID_DATA: "/data", ANDROID_STORAGE: "/storage",
-    EXTERNAL_STORAGE: "/sdcard", ASEC_MOUNTPOINT: "/mnt/asec", LOOP_MOUNTPOINT: "/mnt/obb", TMPDIR: "/data/local/tmp",
-  };
-
   let envArray = 0;
   const envStrings = new Set<number>();
   const envEntries = (): number[] => {
@@ -313,7 +293,7 @@ export function libcInit(): void {
     mem.u8.set(bytes, p); mem.st8(p + bytes.length, 0); envStrings.add(p); return p;
   };
   const envKey = (p: number) => mem.cstr(p).split("=", 1)[0];
-  writeEnv(Object.entries(ENV).map(([k, v]) => envString(k + "=" + v)));
+  writeEnv(Object.entries(processEnv).map(([k, v]) => envString(k + "=" + v)));
 
   const M: Record<string, HostFn> = {
     __errno: (cpu) => cpu.errnoAddr,
@@ -356,11 +336,12 @@ export function libcInit(): void {
       if (i >= 0 && !overwrite) return 0;
       const p = envString(k + "=" + v);
       if (i < 0) entries.push(p); else { if (envStrings.delete(entries[i])) mem.free(entries[i]); entries[i] = p; }
-      writeEnv(entries); return 0;
+      processEnv[k] = v; writeEnv(entries); return 0;
     },
     unsetenv: (cpu, a) => {
       const k = a.str(); if (!k || k.includes("=")) return fail(cpu, E.INVAL);
       writeEnv(envEntries().filter((p) => { if (envKey(p) !== k) return true; if (envStrings.delete(p)) mem.free(p); return false; }));
+      delete processEnv[k];
       return 0;
     },
     setlocale: (_c, a) => { a.i(); const l = a.p(); return l && mem.cstr(l) !== "" && mem.cstr(l) !== "C" && mem.cstr(l) !== "POSIX" ? 0 : cLocale; },
@@ -384,7 +365,7 @@ export function libcInit(): void {
       if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return failed(E.NOMEM);
       if (flags & 0x10 && !reserve) { syncShared(hint, n, true); invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
       if (fd !== -1 && !(flags & 0x20)) {
-        if (flags & 1 && prot & 2) { const writeBack = fdWriteBack(fd); if (writeBack) sharedMaps.push({ va: BigInt(p), n, off, writeBack }); }
+        if (flags & 1 && prot & 2) { const writeBack = fdWriteBack(fd); if (writeBack) trackSharedMap(BigInt(p), n, off, writeBack); }
         const r = readInto(cpu, fd, off, guestAt(p), n); return r instanceof Promise ? r.then(() => p) : p;
       }
       return p;
