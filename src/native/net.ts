@@ -1,6 +1,6 @@
 // Bionic IPv4 sockets over browser relays, with local UDP delivery.
 
-import { DatagramRelay, Relay, syntheticAddress, syntheticHost, nameExists } from "../shell/relay";
+import { DatagramRelay, Relay, syntheticAddress, syntheticHost, nameExists, ipv4Key, ipv4Text, parseIpv4 } from "../shell/relay";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
@@ -80,9 +80,6 @@ const wake = (socket: NativeSocket): void => {
   for (const waiter of waiters) waiter();
 };
 const socketFdOf = (cpu: Cpu | null, fd: number): NativeSocketFd | null => sockets.get(fd) ?? (fail(cpu, E.BADF), null);
-const ipv4Key = (bytes: ArrayLike<number>): number =>
-  (bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24)) >>> 0;
-const ipv4Text = (bytes: ArrayLike<number>): string => `${bytes[0]}.${bytes[1]}.${bytes[2]}.${bytes[3]}`;
 const sameAddress = (a: ArrayLike<number>, b: ArrayLike<number>): boolean =>
   a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
 const isAnyAddress = (address: ArrayLike<number>): boolean => ipv4Key(address) === 0;
@@ -95,13 +92,6 @@ function readEndpoint(cpu: Cpu, sockaddr: number, length: number): Ipv4Endpoint 
     port: (mem.u8[sockaddr + 2] << 8) | mem.u8[sockaddr + 3],
     address: [mem.u8[sockaddr + 4], mem.u8[sockaddr + 5], mem.u8[sockaddr + 6], mem.u8[sockaddr + 7]],
   };
-}
-
-function parseIpv4(text: string): [number, number, number, number] | null {
-  const match = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
-  if (!match) return null;
-  const bytes: [number, number, number, number] = [+match[1], +match[2], +match[3], +match[4]];
-  return bytes.every((byte) => byte <= 255) ? bytes : null;
 }
 
 const addressFor = syntheticAddress;
