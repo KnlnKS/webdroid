@@ -1421,6 +1421,15 @@ export const bitmapMethods: NativeSpec["methods"] = {
       b.ctx.drawImage(this.canvas, 0, 0);
       return b;
     },
+    "asShared()Landroid/graphics/Bitmap;": function (this: JBitmap) {
+      if (this.recycled) throw rt.mkThrowable("java/lang/IllegalStateException", "Cannot share a recycled bitmap");
+      const copy = JBitmap.create(this.w, this.h);
+      copy.pixels().set(this.pixels());
+      copy.config = this.config; copy.density = this.density;
+      copy.hasAlpha = this.hasAlpha; copy.premultiplied = this.premultiplied;
+      copy.immutable = true;
+      return copy;
+    },
     "getConfig()Landroid/graphics/Bitmap$Config;": function (this: JBitmap) { return bitmapConfigs[this.config === 1 ? 0 : 3]; },
     "hasAlpha()Z": function (this: JBitmap) { return this.hasAlpha ? 1 : 0; },
     "setHasAlpha(Z)V": function (this: JBitmap, v: number) { this.hasAlpha = !!v; },
