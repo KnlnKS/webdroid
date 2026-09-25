@@ -4,7 +4,7 @@ The active scope is the 20 APKs present before the latest additions to `apks/`. 
 
 | APK | Boot-path missing APIs after targeted fixes | Open functional evidence |
 | --- | --- | --- |
-| Amazon.xapk | Private Amazon classes/services; optional SLF4J binder | The Weblab Thumb APSR fault is fixed at instruction level; shopping content and sign-in need deeper exercise |
+| Amazon.xapk | Private Amazon classes/services; optional SLF4J binder | The Weblab Thumb APSR fault is fixed at instruction level; the shopping gateway returned an empty body under the app WebView agent, and sign-in remains unvalidated |
 | Among Us.xapk | None observed | Practice works; online service connection failed on deployed relay |
 | ChatGPT.xapk | Optional Amazon IAP probe on targeted Bun-server boot | The 24-step guest flow passes; hosted UDP and screen projection remain unsupported; camera and authenticated media paths unvalidated |
 | Cut the Rope.xapk | None observed | Level-one tutorial works; intro video and later gameplay speed remain open |
@@ -16,7 +16,7 @@ The active scope is the 20 APKs present before the latest additions to `apks/`. 
 | Resy.apk | None observed | Search, venue offers, and Back exercised; live content and completion timeouts remain intermittent |
 | Subway Surfers.apk | None observed | Active run works; background Firebase initialization reports an error |
 | TikTok.apk | Optional bundled and vendor SDK probes | Playback/input rate and authentication/publishing remain unvalidated |
-| Twitch.xapk | Optional MIUI referrer probe | Boot only |
+| Twitch.xapk | Optional MIUI referrer probe | The logged-out welcome screen opens the real Twitch login WebView; authenticated browsing remains unvalidated |
 | WebdroidFuzzProbe.apk | None observed | Boot only |
 | YouTube.xapk | Optional window extensions | Targeted 16-step playback passes after image-alpha support; an ELF-image `mprotect` failure is fixed, while the intermittent native zero-instruction fault remains open |
 | calculatorm.apk | None observed | Covered by E2E and Android comparison flows |
@@ -60,3 +60,9 @@ A YouTube fast run with JIT enabled completed all 16 actions but logged hundreds
 A new Maps DevTools capture confirmed its `SurfaceView` receives presented frames. Tracing its Java GLES20 entry points counted repeated `glClear` and `glBindTexture` calls but no draw calls; two `/glm/mmap` transfers completed with about 128 KB and 527 KB of body data before two later requests were aborted. This narrows the symptom to the renderer/tile path but does not identify whether the later aborts are intentional cleanup or a transport failure.
 
 Mihon's eight-action generic UI exploration stayed on onboarding because its Compose host exposes a single combined text node. Manual navigation selected a private storage directory, completed setup, opened the library, local source, browse tabs and data settings with no observed missing API. Manual backup reported the app's own “No library entries to back up” failure on an empty library. This does not validate backup creation for populated data. The browser's file pickers require a fresh user gesture when Android dispatch reaches them asynchronously; the existing directory retry now also covers open/save file pickers, so a stale gesture is no longer reported as a canceled document choice.
+
+Twitch reached its logged-out welcome screen, and its Log In control opened a loaded `m.twitch.tv/wv/auth/login` WebView with username, password and provider controls. No credentials were entered. A ten-action generic UI exploration timed out on its first action while a WebView bridge request returned 504, but a manual DevTools run reached the form. The MIUI referrer class probe was the only missing entry in the main process; the temporary bridge failure needs a reproducible trace before attribution.
+
+A fresh Cut the Rope intro still showed a black image while the app was running. A selective NDK trace recorded extractor samples, codec input and output dequeues, video output releases on UnityMain, and audio output releases on a worker. The trace also showed codec flush/stop/recreation around playback. Two Unity `GL_INVALID_OPERATION` plugin logs occurred, but the later puzzle drew normally with thousands of GL calls and no reported native requirement. The intro media/GL handoff remains unresolved; raising the decoder queue cap without an identified consumer defect would not be justified.
+
+Amazon's shopping shell rendered its search header over a blank body. The embedded gateway request to `www.amazon.com/gp/gw/ajax/mshop.html` returned HTTP 200 with `content-length: 0` under the app's WebView user agent. A separate direct proxy fetch of that URL without the app agent returned about 560 KB of HTML; a remote config JSON URL that the app reported as “exhausted all routes” likewise returned a body through the proxy. The TCP relay independently established TLS to the config host. Later the app repeated `taskSetCountry` startup logs with only 39 shell frames and 33 queued main jobs. The current evidence does not distinguish an upstream agent response from a WebView request-header or app startup problem, so no shopping substitute was added.
