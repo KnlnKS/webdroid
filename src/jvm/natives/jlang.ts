@@ -1553,7 +1553,7 @@ const sysProps: Record<string, string> = {
   "java.version": "0", "os.name": "Linux", "line.separator": "\n",
   // The loader indexes every DEX before application initialization, as ART 2.1 does.
   "java.vm.version": "2.1.0",
-  "java.vm.name": "webdroid", "file.separator": "/", "path.separator": ":",
+  "java.vm.name": "Dalvik", "file.separator": "/", "path.separator": ":",
   "java.io.tmpdir": "/data/local/tmp", "user.dir": "/",
 };
 const sysEnv: Record<string, string> = {
