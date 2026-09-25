@@ -29,7 +29,7 @@ All 20 launched, drew an initial frame, and supplied diagnostics in a serialized
 
 ## Added corpus v1 follow-up: Komikku
 
-Test `apks/Komikku-arm64-v8a-v1.14.1.apk` as the 21st corpus v1 target. Its v1 boot, reading, library, download, settings and persistence paths have not been verified; do not count it among the original 20 results above. Capture per-step process diagnostics and rendering, investigate any non-ad API or feature gaps, and add a usable-path flow before claiming coverage.
+Komikku now has a 17-step smoke flow through onboarding, document-tree storage selection, local-source discovery, chapter reading, adding a title, and reopening a populated library. A staged local PNG rendered in the reader. The serialized capture reported completed rendering, zero runtime missing APIs or native requirements, and zero layout/draw errors at every step; diagnostics reached the main app and child processes. SQLite logged double-quoted string and automatic-index messages, with no observed failure. A manual browser reload also returned to the library with the selected folder intact. There is no Android golden for this flow, and downloads, settings, backup/restore, extension installation, and longer-term persistence still need verification. Do not count Komikku among the original 20 results above or as fully usable.
 
 ## Verification and evidence limits
 
