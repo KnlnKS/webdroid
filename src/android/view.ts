@@ -545,14 +545,14 @@ async function viewDispatchInsets(this: JView, ins: unknown) {
 // defStyleAttr is the widget's own style attribute (buttonStyle, editTextStyle, ...). Without it
 // tiers 3 and 4 of the cascade are dead for every base-View attribute, which is why a Button had
 // to be handed a background in TypeScript instead of resolving Widget.Material.Button's.
-async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0) {
-  if (!v.jres || (!set?.node && !defStyleAttr)) return;
+async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0, defStyleRes = 0) {
+  if (!v.jres || (!set?.node && !defStyleAttr && !defStyleRes)) return;
   const res = v.jres;
   const ta = obtainStyled(res, v.theme, set, [
     AT.id, AT.background, AT.padding, AT.paddingLeft, AT.paddingTop, AT.paddingRight, AT.paddingBottom,
     AT.visibility, AT.clickable, AT.enabled, AT.minWidth, AT.minHeight, AT.alpha, AT.focusable,
     AT.paddingStart, AT.paddingEnd, AT.tag, AT.contentDescription, AT.autoHandwritingEnabled, AT.textAlignment, AT.fitsSystemWindows,
-  ], defStyleAttr, 0);
+  ], defStyleAttr, defStyleRes);
   const g = (i: number) => ta.vals[i];
   // the id the reference names (getResourceId's answer): resolving @id/x lands on the entry's own
   // false-boolean value, and an obfuscated type-name pool keeps resolveRefs from stopping short
@@ -1690,7 +1690,7 @@ function findByPred(v: JView, p: (v: JView) => boolean): JView | null {
 export function inheritContext(child: JView, from: JView) {
   child.ctx = from.ctx; child.jres = from.jres; child.theme = from.theme;
 }
-export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | null, defStyleAttr = 0) {
+export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | null, defStyleAttr = 0, defStyleRes = 0) {
   v.ctx = jctx;
   if (jctx) {
     v.resources = await vcall(jctx, "getResources", "()Landroid/content/res/Resources;");
@@ -1700,7 +1700,7 @@ export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | n
       v.theme = await askTheme(jctx) ?? host.theme;
     }
   }
-  await applyViewAttrs(v, set, defStyleAttr);
+  await applyViewAttrs(v, set, defStyleAttr, defStyleRes);
 }
 
 export class JViewGroup extends JView {
