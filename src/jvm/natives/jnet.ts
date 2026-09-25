@@ -225,21 +225,26 @@ rt.register({
     "isBound()Z": () => 0,
   },
 });
-class JInetSocketAddress extends JObj { host = ""; port = 0; addr: JInetAddress | null = null; }
+class JInetSocketAddress extends JObj { host = ""; port = 0; addr: JInetAddress | null = null; unresolved = false; }
 const inetSock = (host: string | null, port: number) => Object.assign(new JInetSocketAddress(), { host: host ?? "", port });
+function unresolvedSock(host: string, port: number): JInetSocketAddress {
+  if (host == null || port < 0 || port > 65535) throw rt.mkThrowable("java/lang/IllegalArgumentException", `host=${host}, port=${port}`);
+  return Object.assign(new JInetSocketAddress(), { host, port, unresolved: true });
+}
 rt.register({
   name: "java/net/InetSocketAddress", ctor: JInetSocketAddress, sup: "java/net/SocketAddress",
   methods: {
     "<init>(Ljava/lang/String;I)V": function (this: JInetSocketAddress, h: string, p2: number) { this.host = h ?? ""; this.port = p2; },
     "<init>(Ljava/net/InetAddress;I)V": function (this: JInetSocketAddress, a: JInetAddress, p2: number) { this.addr = a; this.host = a?.host ?? ""; this.port = p2; },
-    "static createUnresolved(Ljava/lang/String;I)Ljava/net/InetSocketAddress;": inetSock,
+    "static createUnresolved(Ljava/lang/String;I)Ljava/net/InetSocketAddress;": unresolvedSock,
     "getHostString()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host; },
     "getHostName()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host; },
     "getPort()I": function (this: JInetSocketAddress) { return this.port; },
     "getAddress()Ljava/net/InetAddress;": async function (this: JInetSocketAddress) {
+      if (this.unresolved) return null;
       return this.addr ??= await inetAddr(this.host);
     },
-    "isUnresolved()Z": () => 0,
+    "isUnresolved()Z": function (this: JInetSocketAddress) { return +this.unresolved; },
     "toString()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host + ":" + this.port; },
   },
 });

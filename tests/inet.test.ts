@@ -26,6 +26,14 @@ test("InetAddress hands out the resolver's synthetic address, which dials the na
   expect(await vcall(literal, "getHostAddress", "()Ljava/lang/String;")).toBe("127.0.0.1");
 });
 
+test("createUnresolved keeps the host without resolving its address", async () => {
+  const socket = await scall("java/net/InetSocketAddress", "createUnresolved",
+    "(Ljava/lang/String;I)Ljava/net/InetSocketAddress;", "example.com", 443);
+  expect(await vcall(socket, "getHostString", "()Ljava/lang/String;")).toBe("example.com");
+  expect(await vcall(socket, "isUnresolved", "()Z")).toBe(1);
+  expect(await vcall(socket, "getAddress", "()Ljava/net/InetAddress;")).toBeNull();
+});
+
 test("the platform trust manager accepts relay-verified peers", async () => {
   const socket = Object.assign(rt.make("javax/net/ssl/SSLSocket"), { host: "example.com" });
   const session = await vcall(socket, "getSession", "()Ljavax/net/ssl/SSLSession;");
