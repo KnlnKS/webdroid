@@ -675,9 +675,15 @@ function setBound(v: JView, l: number, t: number, r: number, b: number) {
   v.left = l; v.top = t; v.right = r; v.bottom = b;
   invalidate();
   if (r - l !== ow || b - t !== oh) void guardMaybe(v, M_onSizeChanged, r - l, b - t, ow, oh);
+  updateSurface(v);
   for (const ll of [...v.layoutChangeLs]) {
     void vcall(ll, "onLayoutChange", "(Landroid/view/View;IIIIIIII)V", v, l, t, r, b, oldL, oldT, oldR, oldB);
   }
+}
+
+function updateSurface(v: JView): void {
+  // SurfaceView subclasses may override onLayout without calling super.
+  if (v.surfaceBacked) (v as JView & { ensureSurface?: () => void }).ensureSurface?.();
 }
 
 export async function layoutView(v: JView, l: number, t: number, r: number, b: number) {
@@ -700,6 +706,7 @@ export async function layoutView(v: JView, l: number, t: number, r: number, b: n
   // children the measure memo had just skipped, which is what made settle passes cost.
   if (changed || v.layoutRequired) {
     await guardCall(v, M_onLayout, changed ? 1 : 0, l, t, r, b);
+    updateSurface(v);
     v.layoutRequired = false;
     for (const ll of [...v.layoutChangeLs]) {
       await vcall(ll, "onLayoutChange", "(Landroid/view/View;IIIIIIII)V", v, l, t, r, b, oldL, oldT, oldR, oldB);
