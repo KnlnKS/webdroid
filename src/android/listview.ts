@@ -13,7 +13,7 @@ import { JCanvas } from "./graphics";
 import { JDrawable, loadDrawableRV, drawableSize, drawChild } from "./drawable";
 import { reportUncaught } from "./os";
 import { onMain } from "./mainloop";
-import { jeq, toJsArray } from "../jvm/natives/jutil";
+import { JList, jeq, toJsArray } from "../jvm/natives/jutil";
 import { JTextView } from "./textview";
 import { inflateLayout } from "./inflate";
 import { addOverlay, removeOverlay } from "./popup";
@@ -71,6 +71,17 @@ class JArrayAdapter extends JBaseAdapter {
   layoutRes = 0;
   textViewId = 0;
   items: unknown[] = [];
+  source: unknown = null;
+}
+function adapterList(adapter: JArrayAdapter, list: unknown) {
+  adapter.source = list;
+  adapter.items = list instanceof JList ? list.a : [];
+}
+async function appendAdapterItems(adapter: JArrayAdapter, values: unknown[]) {
+  if (adapter.source) {
+    for (const value of values) await vcall(adapter.source, "add", "(Ljava/lang/Object;)Z", value);
+  } else adapter.items.push(...values);
+  await vcall(adapter, "notifyDataSetChanged", "()V");
 }
 rt.register({
   name: "android/widget/ArrayAdapter", ctor: JArrayAdapter, sup: "android/widget/BaseAdapter",
@@ -82,9 +93,9 @@ rt.register({
     "<init>(Landroid/content/Context;II)V": function (this: JArrayAdapter, c: unknown, res: number, tvId: number) {
       this.jctx = c; this.layoutRes = res; this.textViewId = tvId;
     },
-    "<init>(Landroid/content/Context;ILjava/util/List;)V": async function (this: JArrayAdapter, c: unknown, res: number, list: unknown) {
+    "<init>(Landroid/content/Context;ILjava/util/List;)V": function (this: JArrayAdapter, c: unknown, res: number, list: unknown) {
       this.jctx = c; this.layoutRes = res;
-      this.items = [...await toJsArray(list)];
+      adapterList(this, list);
     },
     "<init>(Landroid/content/Context;I[Ljava/lang/Object;)V": function (this: JArrayAdapter, c: unknown, res: number, arr: unknown[]) {
       this.jctx = c; this.layoutRes = res; this.items = [...(arr ?? [])];
@@ -92,36 +103,39 @@ rt.register({
     "<init>(Landroid/content/Context;II[Ljava/lang/Object;)V": function (this: JArrayAdapter, c: unknown, res: number, tvId: number, arr: unknown[]) {
       this.jctx = c; this.layoutRes = res; this.textViewId = tvId; this.items = [...(arr ?? [])];
     },
-    "<init>(Landroid/content/Context;IILjava/util/List;)V": async function (this: JArrayAdapter, c: unknown, res: number, tvId: number, list: unknown) {
+    "<init>(Landroid/content/Context;IILjava/util/List;)V": function (this: JArrayAdapter, c: unknown, res: number, tvId: number, list: unknown) {
       this.jctx = c; this.layoutRes = res; this.textViewId = tvId;
-      this.items = [...await toJsArray(list)];
+      adapterList(this, list);
     },
-    "getCount()I": function (this: JArrayAdapter) { return this.items.length; },
-    "getItem(I)Ljava/lang/Object;": function (this: JArrayAdapter, i: number) { return this.items[i] ?? null; },
+    "getCount()I": function (this: JArrayAdapter) {
+      return this.source && !(this.source instanceof JList) ? vcall(this.source, "size", "()I") : this.items.length;
+    },
+    "getItem(I)Ljava/lang/Object;": function (this: JArrayAdapter, i: number) {
+      return this.source && !(this.source instanceof JList) ? vcall(this.source, "get", "(I)Ljava/lang/Object;", i) : this.items[i] ?? null;
+    },
     "getPosition(Ljava/lang/Object;)I": async function (this: JArrayAdapter, item: unknown) {
+      if (this.source && !(this.source instanceof JList)) return vcall(this.source, "indexOf", "(Ljava/lang/Object;)I", item);
       for (let i = 0; i < this.items.length; i++) if (await jeq(item, this.items[i])) return i;
       return -1;
     },
     "getItemId(I)J": (i: number) => BigInt(i),
     "add(Ljava/lang/Object;)V": function (this: JArrayAdapter, o: unknown) {
-      this.items.push(o);
-      return vcall(this, "notifyDataSetChanged", "()V");
+      return appendAdapterItems(this, [o]);
     },
     "addAll(Ljava/util/Collection;)V": async function (this: JArrayAdapter, collection: unknown) {
-      for (const item of await toJsArray(collection)) this.items.push(item);
-      await vcall(this, "notifyDataSetChanged", "()V");
+      await appendAdapterItems(this, await toJsArray(collection));
     },
     "addAll([Ljava/lang/Object;)V": function (this: JArrayAdapter, values: unknown[]) {
-      for (const item of values) this.items.push(item);
-      return vcall(this, "notifyDataSetChanged", "()V");
+      return appendAdapterItems(this, values);
     },
-    "clear()V": function (this: JArrayAdapter) {
-      this.items.length = 0;
-      return vcall(this, "notifyDataSetChanged", "()V");
+    "clear()V": async function (this: JArrayAdapter) {
+      if (this.source) await vcall(this.source, "clear", "()V");
+      else this.items.length = 0;
+      await vcall(this, "notifyDataSetChanged", "()V");
     },
     "getView(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;":
       async function (this: JArrayAdapter, pos: number, convert: unknown, parent: unknown) {
-        const item = this.items[pos];
+        const item = await vcall(this, "getItem", "(I)Ljava/lang/Object;", pos);
         const text = item === null || item === undefined ? "" :
           typeof item === "string" ? item : String(await vcall(item, "toString", "()Ljava/lang/String;"));
         let v: any = null;
