@@ -693,6 +693,7 @@ rt.register({
     "getPath()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().path); },
     "toURL()Ljava/net/URL;": function (this: JURI) { const u = new JURL(); urlInit(u, this.u); return u; },
     "getUserInfo()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().userInfo); },
+    "getRawUserInfo()Ljava/lang/String;": function (this: JURI) { return this.parts().userInfo; },
     "getPort()I": function (this: JURI) { return this.parts().port; },
     "getQuery()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().query); },
     "getRawQuery()Ljava/lang/String;": function (this: JURI) { return this.parts().query; },
