@@ -3,7 +3,9 @@
 import { rt, JObj, stubs, noops, fieldGetters } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { newArrayList, newStringSet, type JList } from "../jvm/natives/jutil";
-import { vfs } from "../jvm/natives/jio";
+import { type JFileDescriptor, vfs } from "../jvm/natives/jio";
+import { javaFdSource } from "../native/stdio";
+import { readFully } from "../shell/lazyfile";
 import type { JBuffer } from "../jvm/natives/jnio";
 rt.markers("android/media/AudioManager$OnAudioFocusChangeListener", "android/media/ImageReader$OnImageAvailableListener");
 /** the rate the Web Audio output actually runs at */
@@ -246,17 +248,48 @@ export function isMusicActive(): number {
 
 class JMediaPlayer extends JObj {
   audio: HTMLAudioElement | null = null;
+  attributes: JAudioAttributes | null = null;
   looping = false;
   prepared = false;
+  preparedL: unknown = null;
   completionL: unknown = null;
   srcBytes: Uint8Array | null = null;
 }
+function mpReset(mp: JMediaPlayer) {
+  players.delete(mp);
+  if (mp.audio) {
+    mp.audio.pause();
+    URL.revokeObjectURL(mp.audio.src);
+  }
+  mp.audio = null;
+  mp.srcBytes = null;
+  mp.prepared = false;
+}
 function mpLoad(mp: JMediaPlayer, bytes: Uint8Array) {
+  mpReset(mp);
   const blob = new Blob([bytes as BlobPart]);
   mp.audio = new Audio(URL.createObjectURL(blob));
+  mp.audio.loop = mp.looping;
+  mp.srcBytes = bytes;
   mp.audio.onended = () => {
     if (mp.completionL) void vcall(mp.completionL, "onCompletion", "(Landroid/media/MediaPlayer;)V", mp).catch(reportUncaught);
   };
+}
+async function mpLoadFd(this: JMediaPlayer, fd: JFileDescriptor, offset = 0n, length = 0x7fffffffffffffffn) {
+  if (fd === null) rt.npe();
+  const source = javaFdSource(fd.fd) ?? vfs.source(fd.path);
+  if (!source || offset < 0n || length <= 0n || offset >= BigInt(source.size)) {
+    throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid media file descriptor or range");
+  }
+  mpLoad(this, await readFully(source, Number(offset), Math.min(Number(length), source.size - Number(offset))));
+}
+function mpPrepare(mp: JMediaPlayer) {
+  if (!mp.audio) throw rt.mkThrowable("java/lang/IllegalStateException", "MediaPlayer has no data source");
+  mp.prepared = true;
+  const listener = mp.preparedL;
+  if (listener) setTimeout(() => {
+    if (mp.prepared && mp.preparedL === listener) void vcall(listener, "onPrepared", "(Landroid/media/MediaPlayer;)V", mp).catch(reportUncaught);
+  }, 0);
 }
 rt.register({
   name: "android/media/MediaPlayer", ctor: JMediaPlayer,
@@ -270,8 +303,8 @@ rt.register({
       }
       return mp;
     },
-    "prepare()V": function (this: JMediaPlayer) { this.prepared = true; },
-    "prepareAsync()V": function (this: JMediaPlayer) { this.prepared = true; },
+    "prepare()V": function (this: JMediaPlayer) { mpPrepare(this); },
+    "prepareAsync()V": function (this: JMediaPlayer) { mpPrepare(this); },
     "start()V": function (this: JMediaPlayer) { players.add(this); void this.audio?.play().catch(() => { /* */ }); },
     "pause()V": function (this: JMediaPlayer) { this.audio?.pause(); },
     "stop()V": function (this: JMediaPlayer) {
@@ -280,20 +313,38 @@ rt.register({
         this.audio.currentTime = 0;
       }
     },
-    "release()V": function (this: JMediaPlayer) { players.delete(this); this.audio = null; },
+    "release()V": function (this: JMediaPlayer) { mpReset(this); },
     "isPlaying()Z": function (this: JMediaPlayer) { return this.audio && !this.audio.paused ? 1 : 0; },
     "setLooping(Z)V": function (this: JMediaPlayer, l: number) {
       this.looping = !!l;
       if (this.audio) this.audio.loop = !!l;
+    },
+    "setAudioAttributes(Landroid/media/AudioAttributes;)V": function (this: JMediaPlayer, attributes: JAudioAttributes | null) {
+      if (attributes === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "AudioAttributes must not be null");
+      this.attributes = attributes;
     },
     "setVolume(FF)V": function (this: JMediaPlayer, v: number) { if (this.audio) this.audio.volume = Math.min(1, v); },
     "setOnCompletionListener(Landroid/media/MediaPlayer$OnCompletionListener;)V": function (this: JMediaPlayer, l: unknown) {
       this.completionL = l;
     },
     "setOnPreparedListener(Landroid/media/MediaPlayer$OnPreparedListener;)V": function (this: JMediaPlayer, l: unknown) {
-      setTimeout(() => void vcall(l, "onPrepared", "(Landroid/media/MediaPlayer;)V", this).catch(reportUncaught), 10);
+      this.preparedL = l;
     },
-    ...noops("<init>()V", "setDataSource(Landroid/content/Context;Landroid/net/Uri;)V", "reset()V",
+    "setDataSource(Ljava/io/FileDescriptor;JJ)V": mpLoadFd,
+    "setDataSource(Ljava/io/FileDescriptor;)V": mpLoadFd,
+    "setDataSource(Landroid/content/Context;Landroid/net/Uri;)V": async function (this: JMediaPlayer, context: unknown, uri: unknown) {
+      const resolver = await vcall(context, "getContentResolver", "()Landroid/content/ContentResolver;");
+      const asset = await vcall(resolver, "openAssetFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;", uri, "r");
+      if (asset === null) throw rt.mkThrowable("java/io/FileNotFoundException", "Media source not found");
+      try {
+        const fd = await vcall(asset, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
+        const offset = await vcall(asset, "getStartOffset", "()J");
+        const length = await vcall(asset, "getLength", "()J");
+        await mpLoadFd.call(this, fd, offset, length);
+      } finally { await vcall(asset, "close", "()V"); }
+    },
+    "reset()V": function (this: JMediaPlayer) { mpReset(this); },
+    ...noops("<init>()V",
       "setAudioStreamType(I)V", "setOnErrorListener(Landroid/media/MediaPlayer$OnErrorListener;)V",
       "setWakeMode(Landroid/content/Context;I)V"),
     "getDuration()I": function (this: JMediaPlayer) { return Math.round((this.audio?.duration ?? 0) * 1000); },
