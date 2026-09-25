@@ -376,6 +376,19 @@ rt.markers("android/net/TransportInfo");
 // ── Wi-Fi: the relay's network is the one Wi-Fi network, and everything a location permission
 // would gate (SSID, BSSID, address) reads as the platform's redacted values
 class JWifiInfo extends JObj {}
+class JScanResult extends JObj {
+  SSID: string | null = null;
+  BSSID: string | null = null;
+  capabilities: string | null = null;
+  level = 0;
+  frequency = 0;
+  timestamp = 0n;
+}
+rt.register({
+  name: "android/net/wifi/ScanResult", ctor: JScanResult, ifaces: ["android/os/Parcelable"],
+  fields: ["SSID", "BSSID", "capabilities", "level", "frequency", "timestamp"],
+  methods: { "<init>()V": function () {}, "describeContents()I": () => 0 },
+});
 const supplicantStates = mkEnumSet("android/net/wifi/SupplicantState", [
   "DISCONNECTED", "INTERFACE_DISABLED", "INACTIVE", "SCANNING", "AUTHENTICATING", "ASSOCIATING",
   "ASSOCIATED", "FOUR_WAY_HANDSHAKE", "GROUP_HANDSHAKE", "COMPLETED", "DORMANT", "UNINITIALIZED", "INVALID",
