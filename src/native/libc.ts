@@ -70,6 +70,13 @@ function setErrno(cpu: Cpu, e: number): void { mem.st32(cpu.errnoAddr, e); }
 export function fail(cpu: Cpu | null, e: number): number { if (cpu) setErrno(cpu, e); return -1; }
 
 const enc = new TextEncoder(), dec = new TextDecoder();
+const randomWord = new Uint32Array(1);
+function fillRandom(p: number, n: number): void {
+  const bytes = mem.bytes(p, n);
+  for (let off = 0; off < n; off += 65536) crypto.getRandomValues(bytes.subarray(off, off + 65536));
+  wrote(p, n);
+}
+function random32(): number { crypto.getRandomValues(randomWord); return randomWord[0] >>> 0; }
 export const utf8 = (s: string) => enc.encode(s);
 export const mbLen = (b0: number) => b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : b0 >= 0xc0 ? 2 : 1;
 
@@ -234,7 +241,7 @@ function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promise<HostR
   if (nr === (PTR === 8 ? 135 : 175)) { const how = a.i(), set = a.p(), old = a.p(), size = a.u(); const e = size === 8 ? cpu.sigmask(how, set, old, 8) : E.INVAL; return e ? fail(cpu, e) : 0; }
   if (nr === (PTR === 8 ? 178 : 224)) return cpu.osTid;                    // gettid
   if (nr === (PTR === 8 ? 172 : 20)) return cpu.pid;                        // getpid
-  if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); if (n) { crypto.getRandomValues(mem.bytes(buf, n)); wrote(buf, n); } return n; } // getrandom
+  if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); if (n) fillRandom(buf, n); return n; } // getrandom
   if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin
   if (PTR === 8 && nr === 123) { const pid = a.i(), n = a.u(), set = a.p(); if (n < 8) return fail(cpu, E.INVAL); if (pid < 0) return fail(cpu, E.INVAL); mem.memset(set, 0, n); mem.st32(set, (1 << device.cpu.cores) - 1); return 8; }
   if (PTR === 8 && nr === 232) {
@@ -554,8 +561,16 @@ export function libcInit(): void {
     random: () => next48() & 0x7fffffff,
     srand: (_c, a) => { r48 = (BigInt(a.u()) << 16n) | 0x330en; },
     srandom: (_c, a) => { r48 = (BigInt(a.u()) << 16n) | 0x330en; },
-    arc4random: () => (Math.random() * 4294967296) | 0,
-    arc4random_uniform: (_c, a) => Math.floor(Math.random() * a.u()) | 0,
+    arc4random: () => random32() | 0,
+    arc4random_buf: (_c, a) => { const p = a.p(), n = a.u(); if (n) fillRandom(p, n); },
+    arc4random_uniform: (_c, a) => {
+      const bound = a.u();
+      if (!bound) return 0;
+      const limit = 4294967296 - (4294967296 % bound);
+      let value: number;
+      do { value = random32(); } while (value >= limit);
+      return (value % bound) | 0;
+    },
 
     // Native TCP and resolver functions are registered by netInit below. These unsupported
     // server-side operations stay explicit rather than pretending that a listener exists.
