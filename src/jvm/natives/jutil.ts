@@ -181,8 +181,9 @@ rt.register({
       }
     },
     "remove()V": async function (this: JIter) {
-      if (this.readOnly || this.fixedSize) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      if (this.readOnly) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
       if (this.last < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
+      if (this.fixedSize) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
       checkMod(this);
       if (this.owner?.removeAt) await this.owner.removeAt(this.last);
       else this.arr.splice(this.last, 1);
@@ -2419,14 +2420,31 @@ const arraysListMethods: Methods = {
   ...listMethods(),
   "add(Ljava/lang/Object;)Z": fixedSize,
   "add(ILjava/lang/Object;)V": fixedSize,
-  "addAll(Ljava/util/Collection;)Z": fixedSize,
-  "addAll(ILjava/util/Collection;)Z": fixedSize,
-  "remove(I)Ljava/lang/Object;": fixedSize,
-  "remove(Ljava/lang/Object;)Z": fixedSize,
-  "clear()V": fixedSize,
-  "removeIf(Ljava/util/function/Predicate;)Z": fixedSize,
-  "removeAll(Ljava/util/Collection;)Z": fixedSize,
-  "retainAll(Ljava/util/Collection;)Z": fixedSize,
+  "addAll(Ljava/util/Collection;)Z": async (_c: unknown) => (await toJsArray(_c)).length ? fixedSize() : 0,
+  "addAll(ILjava/util/Collection;)Z": async function (this: JArraysList, i: number, c: unknown) {
+    if (i >>> 0 > this.a.length) ioobe(i, this.a.length);
+    return (await toJsArray(c)).length ? fixedSize() : 0;
+  },
+  "remove(I)Ljava/lang/Object;": function (this: JArraysList, i: number) {
+    if (i >>> 0 >= this.a.length) ioobe(i, this.a.length);
+    return fixedSize();
+  },
+  "remove(Ljava/lang/Object;)Z": function (this: JArraysList, v: unknown) { return after(indexIn(this.a, v), i => i < 0 ? 0 : fixedSize()); },
+  "clear()V": function (this: JArraysList) { if (this.a.length) fixedSize(); },
+  "removeIf(Ljava/util/function/Predicate;)Z": async function (this: JArraysList, p: unknown) {
+    for (const v of this.a) if (await vcall(p, "test", "(Ljava/lang/Object;)Z", v)) fixedSize();
+    return 0;
+  },
+  "removeAll(Ljava/util/Collection;)Z": async function (this: JArraysList, c: unknown) {
+    const values = await toJsArray(c);
+    for (const v of this.a) if (await indexIn(values, v) >= 0) fixedSize();
+    return 0;
+  },
+  "retainAll(Ljava/util/Collection;)Z": async function (this: JArraysList, c: unknown) {
+    const values = await toJsArray(c);
+    for (const v of this.a) if (await indexIn(values, v) < 0) fixedSize();
+    return 0;
+  },
   "iterator()Ljava/util/Iterator;": function (this: JArraysList) { const it = mkIter(this.a, this); it.fixedSize = true; return it; },
   "listIterator()Ljava/util/ListIterator;": function (this: JArraysList) { const it = mkIter(this.a, this); it.fixedSize = true; return it; },
   "listIterator(I)Ljava/util/ListIterator;": function (this: JArraysList, at: number) { const it = mkIter(this.a, this); it.i = at; it.fixedSize = true; return it; },

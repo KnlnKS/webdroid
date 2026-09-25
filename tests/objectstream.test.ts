@@ -50,6 +50,7 @@ test("Arrays.asList keeps its Java serialized form and fixed-size backing array"
   expect((list as { constructor: { $i: { name: string } } }).constructor.$i.name).toBe("java/util/Arrays$ArrayList");
   await vcall(list, "set", "(ILjava/lang/Object;)Ljava/lang/Object;", 0, "after");
   expect(array[0]).toBe("after");
+  expect(await vcall(list, "remove", "(Ljava/lang/Object;)Z", "absent")).toBe(0);
   await expect(vcall(list, "add", "(Ljava/lang/Object;)Z", "third")).rejects.toThrow();
   const bytes = await newObj("java/io/ByteArrayOutputStream", "()V");
   const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", bytes);
