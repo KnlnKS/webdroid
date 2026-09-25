@@ -430,6 +430,7 @@ export class JView extends JObj {
   outlineAmbientShadowColor = -16777216;
   outlineSpotShadowColor = -16777216;
   longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  longPressAction: Promise<unknown> | null = null;
   transientState = 0; textAlignment = 0;
   resolvedTextAlignment(): number {
     for (let v: JView | null = this; v; v = v.parent) if (v.textAlignment) return v.textAlignment;
@@ -1283,11 +1284,15 @@ const viewMethods: NativeSpec["methods"] = {
     switch (ev.action & 0xff) {
       case 0: // DOWN
         this.pressed = true;
+        this.longPressAction = null;
         void this.refreshDrawableState();
         if (this.longClickable) {
-          this.longPressTimer = setTimeout(async () => {
+          this.longPressTimer = setTimeout(() => {
             this.longPressTimer = null;
-            await guardCall(this, M_performLongClick);
+            this.longPressAction = (async () => {
+              try { return await guardCall(this, M_performLongClick); }
+              catch (error) { reportUncaught(error); return 0; }
+            })();
           }, 450);
         }
         return 1;
@@ -1304,14 +1309,16 @@ const viewMethods: NativeSpec["methods"] = {
         const wasPressed = this.pressed;
         this.pressed = false;
         void this.refreshDrawableState();
-        if (wasPressed && this.clickable) {
+        if (wasPressed && this.clickable && !await this.longPressAction) {
           await guardCall(this, M_performClick);
         }
+        this.longPressAction = null;
         return 1;
       }
       case 3: // CANCEL
         if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null; }
         this.pressed = false;
+        this.longPressAction = null;
         void this.refreshDrawableState();
         return 1;
     }
@@ -1487,6 +1494,15 @@ const viewMethods: NativeSpec["methods"] = {
     const optional = this.optionalFitsSys && this.attached;
     setPadding.call(this, optional ? 0 : rect.left, optional ? 0 : rect.top, optional ? 0 : rect.right, optional ? 0 : rect.bottom);
     return optional ? 0 : 1;
+  },
+  "computeSystemWindowInsets(Landroid/view/WindowInsets;Landroid/graphics/Rect;)Landroid/view/WindowInsets;": function (this: JView, ins: JWindowInsets, out: JRect) {
+    if (this.optionalFitsSys && this.attached) {
+      out.left = out.top = out.right = out.bottom = 0;
+      return ins;
+    }
+    const rect = sysIns(ins);
+    out.left = rect.left; out.top = rect.top; out.right = rect.right; out.bottom = rect.bottom;
+    return vcall(ins, "consumeSystemWindowInsets", "()Landroid/view/WindowInsets;");
   },
   "onApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": async function (this: JView, ins: JWindowInsets) {
     if (!ins || ins.consumedV) return ins;

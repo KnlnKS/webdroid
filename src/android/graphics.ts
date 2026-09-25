@@ -184,6 +184,7 @@ rt.register({
   statics: { NONE: INSETS_NONE },
   methods: {
     "static of(IIII)Landroid/graphics/Insets;": (l: number, t: number, r: number, b: number) => insetsOf(l, t, r, b),
+    "static of(Landroid/graphics/Rect;)Landroid/graphics/Insets;": (r: JRect) => insetsOf(r.left, r.top, r.right, r.bottom),
     "toString()Ljava/lang/String;": function (this: JInsets) {
       return `Insets{left=${this.left}, top=${this.top}, right=${this.right}, bottom=${this.bottom}}`;
     },
