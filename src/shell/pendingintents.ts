@@ -1,7 +1,7 @@
 import type { IntentData } from "../android/intentipc";
 
 export type PendingOperation = {
-  pkg: string; process: string; uid: number; kind: "activity" | "broadcast" | "service";
+  pkg: string; process: string; uid: number; kind: "activity" | "broadcast" | "service" | "foreground-service";
   code: number; flags: number; intent: IntentData;
 };
 type Record = { key: string; operation: PendingOperation; cancellations: Set<() => void> };
