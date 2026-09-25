@@ -2,6 +2,7 @@ import { JObj, rt } from "../runtime";
 import { JList, mkIter, newArrayList, toJsArray, sortInPlace } from "./jutil";
 import { vcall } from "./jlang";
 import { csText } from "./jchars";
+import { jarray } from "../abi";
 
 // ── java.util.stream, the sequential subset. Every stage runs eagerly over a JS array: a lambda
 // here is an async compiled method on one thread, so laziness would buy nothing and cost the
@@ -146,6 +147,15 @@ rt.register({
       return 1;
     },
     "toList()Ljava/util/List;": function (this: JStream) { return newArrayList(this.a.slice()); },
+    "toArray()[Ljava/lang/Object;": function (this: JStream) { return jarray(this.a.slice()); },
+    "toArray(Ljava/util/function/IntFunction;)[Ljava/lang/Object;": async function (this: JStream, generator: unknown) {
+      if (!generator) rt.npe();
+      const out = await vcall(generator, "apply", "(I)Ljava/lang/Object;", this.a.length);
+      if (!Array.isArray(out) || out.length !== this.a.length)
+        throw rt.mkThrowable("java/lang/IllegalStateException", "Stream array generator returned the wrong size");
+      for (let i = 0; i < out.length; i++) out[i] = this.a[i];
+      return out;
+    },
     "collect(Ljava/util/stream/Collector;)Ljava/lang/Object;": function (this: JStream, c: unknown) { return collect(this, c); },
   },
 });

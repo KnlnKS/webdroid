@@ -1,6 +1,6 @@
 // java.util.zip on fflate: streaming codecs (Inflater/Deflater raw+zlib, CRC32), ZipFile over a
 // central-directory index, GZIPInputStream over a drained source.
-import { Inflate, Unzlib, Deflate, Zlib, Gzip, inflateSync, gunzipSync, type DeflateOptions } from "fflate";
+import { Inflate, Unzlib, Deflate, Zlib, Gzip, Zip, ZipDeflate, ZipPassThrough, inflateSync, gunzipSync, type DeflateOptions } from "fflate";
 import { rt, JObj } from "../runtime";
 import { utf8, i8, u8 } from "../abi";
 import { vcall, vcallMaybe, newObj, defineException } from "./jlang";
@@ -349,6 +349,91 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JZipEntry) { return this.e.name; },
   },
 });
+
+class JZipOut extends JOutputStream {
+  out: unknown = null;
+  zip: Zip | null = null;
+  entry: ZipDeflate | ZipPassThrough | null = null;
+  pending: Uint8Array[] = [];
+  names = new Set<string>();
+  level: DeflateOptions["level"] = undefined;
+  method = 8;
+  closed = false;
+  finished = false;
+  error: Error | null = null;
+}
+function zipOutInit(this: JZipOut, out: unknown) {
+  if (!out) rt.npe();
+  this.out = out;
+  this.zip = new Zip((error, bytes) => {
+    if (error) this.error = error;
+    else if (bytes?.length) this.pending.push(bytes);
+  });
+}
+async function zipOutDrain(stream: JZipOut) {
+  if (stream.error) throw rt.mkThrowable("java/util/zip/ZipException", stream.error.message);
+  for (const bytes of stream.pending) await vcall(stream.out, "write", "([BII)V", i8(bytes), 0, bytes.length);
+  stream.pending.length = 0;
+}
+async function zipCloseEntry(stream: JZipOut) {
+  if (!stream.entry) return;
+  stream.entry.push(new Uint8Array(0), true);
+  stream.entry = null;
+  await zipOutDrain(stream);
+}
+async function zipFinish(stream: JZipOut) {
+  if (stream.finished) return;
+  await zipCloseEntry(stream);
+  stream.zip?.end();
+  stream.finished = true;
+  await zipOutDrain(stream);
+}
+rt.register({
+  name: "java/util/zip/ZipOutputStream", ctor: JZipOut, sup: "java/util/zip/DeflaterOutputStream",
+  methods: {
+    "<init>(Ljava/io/OutputStream;)V": zipOutInit,
+    "<init>(Ljava/io/OutputStream;Ljava/nio/charset/Charset;)V": zipOutInit,
+    "setLevel(I)V": function (this: JZipOut, level: number) {
+      if (level < -1 || level > 9) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid compression level");
+      this.level = level < 0 ? undefined : level as DeflateOptions["level"];
+    },
+    "setMethod(I)V": function (this: JZipOut, method: number) {
+      if (method !== 0 && method !== 8) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid compression method");
+      this.method = method;
+    },
+    "putNextEntry(Ljava/util/zip/ZipEntry;)V": async function (this: JZipOut, entry: JZipEntry) {
+      if (!entry) rt.npe();
+      if (this.finished || this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
+      await zipCloseEntry(this);
+      const name = entry.e.name;
+      if (this.names.has(name)) throw rt.mkThrowable("java/util/zip/ZipException", "duplicate entry: " + name);
+      const method = entry.e.method < 0 ? this.method : entry.e.method;
+      if (method !== 0 && method !== 8) throw rt.mkThrowable("java/util/zip/ZipException", "unsupported method: " + method);
+      const file = method === 0 ? new ZipPassThrough(name) : new ZipDeflate(name, { level: this.level });
+      this.zip!.add(file);
+      this.names.add(name);
+      this.entry = file;
+      await zipOutDrain(this);
+    },
+    "write(I)V": function (this: JZipOut, value: number) { return vcall(this, "write", "([BII)V", Int8Array.of(value), 0, 1); },
+    "write([BII)V": async function (this: JZipOut, bytes: Int8Array, offset: number, length: number) {
+      if (!this.entry) throw rt.mkThrowable("java/util/zip/ZipException", "no current ZIP entry");
+      if (offset < 0 || length < 0 || offset > bytes.length - length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      if (length) this.entry.push(u8(bytes, offset, length).slice());
+      await zipOutDrain(this);
+    },
+    "closeEntry()V": function (this: JZipOut) { return zipCloseEntry(this); },
+    "finish()V": function (this: JZipOut) { return zipFinish(this); },
+    "flush()V": async function (this: JZipOut) { await zipOutDrain(this); await vcall(this.out, "flush", "()V"); },
+    "close()V": async function (this: JZipOut) {
+      if (this.closed) return;
+      await zipFinish(this);
+      this.closed = true;
+      await vcall(this.out, "close", "()V");
+    },
+  },
+});
+
 class JZipFile extends JObj {
   name = "";
   entries = new Map<string, ZEntry>();
