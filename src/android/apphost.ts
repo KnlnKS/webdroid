@@ -25,6 +25,7 @@ export interface AppHost {
   finishActivity: (activity: JActivity) => void;
   recreateActivity: (activity: JActivity) => void;
   setRequestedOrientation: (activity: JActivity, orientation: number) => void;
+  setApplicationNightMode: (mode: number) => void;
   currentActivity: () => JActivity | null;
   /** every live activity, bottom of the stack first */
   activities: () => JActivity[];

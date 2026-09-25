@@ -779,6 +779,10 @@ for (const [name, methods, statics] of [
   ["android/app/UiModeManager", {
     "getNightMode()I": () => device.night ? 2 : 1,
     "setNightMode(I)V": () => {},
+    "setApplicationNightMode(I)V": (mode: number) => {
+      if (mode < 0 || mode > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", `Unknown mode: ${mode}`);
+      appHost?.setApplicationNightMode(mode);
+    },
     "getCurrentModeType()I": () => 1,
   }],
   ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0, "isDeviceSecure()Z": () => 0 }],

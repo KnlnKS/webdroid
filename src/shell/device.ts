@@ -16,6 +16,7 @@ import { JIntent, deliverActivityResult, activityTransport, mkComponentName } fr
 import { ensureDecor, startingWindow } from "../android/decor";
 import { getInflater } from "../android/inflate";
 import { JActivity, fireActivityLifecycle } from "../android/app";
+import { getPrefs } from "../android/sharedprefs";
 import { JMenu, pushMenuToBar } from "../android/menu";
 import { JContext } from "../android/context";
 import { attachProvider } from "../android/contentresolver";
@@ -94,6 +95,7 @@ interface BootedApp {
   label: string;
 }
 let booted: BootedApp | null = null;
+let applicationNightOverride: boolean | null = null;
 export function currentApp(): BootedApp | null { return booted; }
 /** <activity-alias> component name → the Activity class that actually runs */
 const aliasTargets = new Map<string, string>();
@@ -116,6 +118,10 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   const install = input instanceof Uint8Array ? openInstall(input) : input;
   const zip = install.zip;
   const manifest = parseAXML(zip["AndroidManifest.xml"]);
+  const pkg = attrStr(manifest, "package") ?? "app";
+  const savedNightMode = getPrefs(pkg, "__system_uimode").map.get("mode");
+  applicationNightOverride = savedNightMode === 1 ? false : savedNightMode === 2 ? true : null;
+  setDeviceNight(applicationNightOverride ?? device.night);
   // Orientation precedes resource construction: both app and framework tables must select the
   // same -land/-port entries the Activity will see through Configuration.
   applyOrientationRequest(launcherOrientation(manifest));
@@ -141,7 +147,6 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   // auto-stub it into the class cache for the rest of the run.
   rt.linkNatives((name, e) => console.warn("[link native]", name, e));
   rt.classLoader = rt.make("dalvik/system/PathClassLoader");
-  const pkg = attrStr(manifest, "package") ?? "app";
   await vfs.prepare(pkg);
   const appNode = manifest.children.find((c) => c.name === "application");
   const appCls = (attrStr(appNode!, "name") ?? "android.app.Application").replace(/^\./, pkg + ".").replace(/\./g, "/");
@@ -207,6 +212,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     },
     recreateActivity: (a) => { recreateActivity(a); },
     setRequestedOrientation: (a, orientation) => { changeActivityOrientation(a, orientation); },
+    setApplicationNightMode: (mode) => { setApplicationNightMode(pkg, mode); },
     currentActivity: () => booted?.stack.at(-1) ?? null,
     activities: () => booted?.stack.slice() ?? [],
     finishTask: (taskId) => { void finishTask(taskId, true); },
@@ -372,7 +378,7 @@ function changeActivityOrientation(act: JActivity, request: number): void {
 
 /** A night-mode change reaches the top activity as any configuration change does: through
  *  onConfigurationChanged if it declared uiMode, through a relaunch otherwise. */
-function deviceNightChanged(night: boolean): void {
+function applyNightMode(night: boolean): void {
   if (!setDeviceNight(night) || !booted) return;
   requestLayoutAll();
   const act = booted.stack.at(-1);
@@ -383,8 +389,15 @@ function deviceNightChanged(night: boolean): void {
     }).catch(reportUncaught);
   } else recreateActivity(act);
 }
+function setApplicationNightMode(pkg: string, mode: number): void {
+  const prefs = getPrefs(pkg, "__system_uimode");
+  prefs.map.set("mode", mode);
+  prefs.persist();
+  applicationNightOverride = mode === 1 ? false : mode === 2 ? true : null;
+  applyNightMode(applicationNightOverride ?? device.night);
+}
 globalThis.matchMedia?.("(prefers-color-scheme: dark)")
-  .addEventListener("change", (e) => deviceNightChanged(e.matches));
+  .addEventListener("change", (e) => { if (applicationNightOverride === null) applyNightMode(e.matches); });
 
 interface Relaunch { state: JBundle | null; nonConfig: unknown; requestedOrientation: number }
 
