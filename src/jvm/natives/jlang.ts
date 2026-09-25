@@ -944,6 +944,14 @@ function sbSpec(name: string): NativeSpec {
     return this;
   };
   const appendChar = app(function (v) { this.s += String.fromCharCode(v); });
+  const indexOf = function (this: JSB, value: string | null, from = 0) {
+    if (value === null) return rt.npe();
+    return this.s.indexOf(value, from);
+  };
+  const lastIndexOf = function (this: JSB, value: string | null, from = this.s.length) {
+    if (value === null) return rt.npe();
+    return from < 0 ? -1 : this.s.lastIndexOf(value, from);
+  };
   return {
     name, ctor: c,
     ifaces: ["java/lang/CharSequence", "java/lang/Appendable"],
@@ -996,8 +1004,10 @@ function sbSpec(name: string): NativeSpec {
       [`delete(II)${L}`]: function (this: JSB, a: number, b: number) {
         this.s = this.s.slice(0, a) + this.s.slice(b); return this;
       },
-      "indexOf(Ljava/lang/String;)I": function (this: JSB, v: string) { return this.s.indexOf(v); },
-      "lastIndexOf(Ljava/lang/String;)I": function (this: JSB, v: string) { return this.s.lastIndexOf(v); },
+      "indexOf(Ljava/lang/String;)I": indexOf,
+      "indexOf(Ljava/lang/String;I)I": indexOf,
+      "lastIndexOf(Ljava/lang/String;)I": lastIndexOf,
+      "lastIndexOf(Ljava/lang/String;I)I": lastIndexOf,
       "substring(I)Ljava/lang/String;": function (this: JSB, i: number) { return this.s.slice(i); },
       "substring(II)Ljava/lang/String;": function (this: JSB, a: number, b: number) { return this.s.slice(a, b); },
       "subSequence(II)Ljava/lang/CharSequence;": function (this: JSB, a: number, b: number) { return this.s.slice(a, b); },
