@@ -44,6 +44,16 @@ test("RandomAccessFile handles retain each other's out-of-order writes", async (
   expect(bytes[1023]).toBe(7);
 });
 
+test("an open file sees a longer view of its shared backing", () => {
+  const path = "/data/data/test/fd/growing.bin";
+  const bytes = Uint8Array.from([1, 2, 3, 4, 5, 6]);
+  vfs.write(path, bytes.subarray(0, 3));
+  const open = vfs.open(path)!;
+  vfs.write(path, bytes);
+  expect(open.len).toBe(6);
+  expect([...open.data.subarray(0, open.len)]).toEqual([1, 2, 3, 4, 5, 6]);
+});
+
 test("a file stream's and an archive entry's descriptors duplicate onto open native files", async () => {
   vfs.write("/data/data/test/fd/in.bin", new Uint8Array([5, 6, 7]));
   const input = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/data/data/test/fd/in.bin");

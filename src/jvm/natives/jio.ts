@@ -74,7 +74,7 @@ export const vfs = {
     this.files.set(path, data);
     const file = openFiles.get(path);
     if (file) {
-      if (file.data.buffer !== data.buffer || file.data.byteOffset !== data.byteOffset) file.data = data;
+      file.data = data;
       file.len = data.length;
     }
     if (notify) this.onWrite(path, existed ? "write" : "create");
