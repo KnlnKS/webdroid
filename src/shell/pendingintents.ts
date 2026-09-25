@@ -2,7 +2,7 @@ import type { IntentData } from "../android/intentipc";
 
 export type PendingOperation = {
   pkg: string; process: string; uid: number; kind: "activity" | "broadcast" | "service" | "foreground-service";
-  code: number; flags: number; intent: IntentData;
+  code: number; flags: number; intent: IntentData; intents?: IntentData[];
 };
 type Record = { key: string; operation: PendingOperation; cancellations: Set<() => void> };
 export class PendingIntents {
@@ -17,12 +17,16 @@ export class PendingIntents {
     let id = this.keys.get(key);
     if (id !== undefined && operation.flags & 0x10000000) { this.cancel(id); id = undefined; }
     if (id !== undefined) {
-      if (operation.flags & 0x8000000) this.records.get(id)!.operation.intent.extras = structuredClone(intent.extras);
+      if (operation.flags & 0x8000000) {
+        const current = this.records.get(id)!.operation;
+        current.intent.extras = structuredClone(intent.extras);
+        current.intents = operation.intents && structuredClone(operation.intents);
+      }
       return id;
     }
     if (operation.flags & 0x20000000) return null;
     id = this.nextId++;
-    this.records.set(id, { key, operation: { ...operation, flags, intent: structuredClone(intent) }, cancellations: new Set() });
+    this.records.set(id, { key, operation: { ...operation, flags, intent: structuredClone(intent), intents: operation.intents && structuredClone(operation.intents) }, cancellations: new Set() });
     this.keys.set(key, id); return id;
   }
   known(id: number): boolean { return Number.isInteger(id) && id > 0 && id < this.nextId; }
@@ -48,6 +52,6 @@ export class PendingIntents {
   async send(id: number, fill: IntentData | null = null, alarmCount = 0): Promise<boolean> {
     const operation = this.take(id);
     if (!operation) return false;
-    await this.dispatch({ ...operation, intent: structuredClone(operation.intent) }, fill, alarmCount); return true;
+    await this.dispatch({ ...operation, intent: structuredClone(operation.intent), intents: operation.intents && structuredClone(operation.intents) }, fill, alarmCount); return true;
   }
 }
