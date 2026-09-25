@@ -174,13 +174,28 @@ export class JHandler extends JObj {
     return 1;
   }
   post(r: unknown, delay: number): number { return this.send(obtain(this, 0, null, 0, 0, r), delay); }
-  cancel(key: unknown): void {
-    const messages = this.pending.get(key);
-    if (!messages) return;
-    for (const m of messages) { clearGuestTimeout(m.timer); this.looper.queue.messages.delete(m); }
-    messages.clear();
-    this.pending.delete(key);
-    this.looper.queue.checkIdle();
+  removePending(match: (message: JMessage) => boolean): void {
+    let removed = false;
+    for (const [key, messages] of this.pending) {
+      for (const message of messages) {
+        if (!match(message)) continue;
+        clearGuestTimeout(message.timer);
+        this.looper.queue.messages.delete(message);
+        messages.delete(message);
+        removed = true;
+      }
+      if (!messages.size) this.pending.delete(key);
+    }
+    if (removed) this.looper.queue.checkIdle();
+  }
+  cancel(key: unknown, token: unknown = null): void {
+    this.removePending(message => (typeof key === "number" ? message.what === key : message.callback === key)
+      && (token == null || message.obj === token));
+  }
+  hasMessage(what: number, token: unknown = null): number {
+    for (const messages of this.pending.values())
+      for (const message of messages) if (message.what === what && (token == null || message.obj === token)) return 1;
+    return 0;
   }
 }
 /** The window's handler, which View.post/postDelayed/scheduleDrawable enqueue on. Lazy so it
@@ -242,14 +257,15 @@ rt.register({
     "sendEmptyMessage(I)Z": function (this: JHandler, w: number) { return this.send(emptyMessage(w), 0); },
     "sendEmptyMessageAtTime(IJ)Z": function (this: JHandler, w: number, at: bigint) { return this.send(emptyMessage(w), Math.max(0, Number(at) - uptimeMillis())); },
     "sendEmptyMessageDelayed(IJ)Z": function (this: JHandler, w: number, d: bigint) { return this.send(emptyMessage(w), Number(d)); },
-    "removeCallbacks(Ljava/lang/Runnable;Ljava/lang/Object;)V": function (this: JHandler, r: unknown) { this.cancel(r); },
+    "removeCallbacks(Ljava/lang/Runnable;Ljava/lang/Object;)V": function (this: JHandler, r: unknown, token: unknown) { this.cancel(r, token); },
     "removeMessages(I)V": function (this: JHandler, w: number) { this.cancel(w); },
-    "removeMessages(ILjava/lang/Object;)V": function (this: JHandler, w: number) { this.cancel(w); },
-    "removeCallbacksAndMessages(Ljava/lang/Object;)V": function (this: JHandler) { for (const k of [...this.pending.keys()]) this.cancel(k); },
-    "hasMessages(I)Z": function (this: JHandler, w: number) { return this.pending.get(w)?.size ? 1 : 0; },
+    "removeMessages(ILjava/lang/Object;)V": function (this: JHandler, w: number, token: unknown) { this.cancel(w, token); },
+    "removeCallbacksAndMessages(Ljava/lang/Object;)V": function (this: JHandler, token: unknown) {
+      this.removePending(message => token == null || message.obj === token);
+    },
+    "hasMessages(I)Z": function (this: JHandler, w: number) { return this.hasMessage(w); },
     "hasCallbacks(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.pending.get(r)?.size ? 1 : 0; },
-    // the object variant asks about messages carrying that obj; posts here are keyed by `what`
-    "hasMessages(ILjava/lang/Object;)Z": function (this: JHandler, w: number) { return this.pending.get(w)?.size ? 1 : 0; },
+    "hasMessages(ILjava/lang/Object;)Z": function (this: JHandler, w: number, token: unknown) { return this.hasMessage(w, token); },
     "getLooper()Landroid/os/Looper;": function (this: JHandler) { return this.looper; },
     "obtainMessage()Landroid/os/Message;": function (this: JHandler) { const m = new JMessage(); m.target = this; return m; },
     "obtainMessage(I)Landroid/os/Message;": function (this: JHandler, w: number) { const m = emptyMessage(w); m.target = this; return m; },

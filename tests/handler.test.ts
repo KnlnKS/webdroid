@@ -98,6 +98,19 @@ test("removeCallbacksAndMessages cancels queued messages and runnables", async (
   expect(runnable.runs).toBe(1);
 });
 
+test("removing one Handler token preserves unrelated callbacks", async () => {
+  const handler = new RecordingHandler(), token = new JObj();
+  const tagged = new RecordingRunnable(), untagged = new RecordingRunnable();
+  await onMain(async () => {
+    await vcall(handler, "postDelayed", "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z", tagged, token, 0n);
+    await vcall(handler, "post", "(Ljava/lang/Runnable;)Z", untagged);
+    await vcall(handler, "removeCallbacksAndMessages", "(Ljava/lang/Object;)V", token);
+  });
+  await onMain(() => {});
+  expect(tagged.runs).toBe(0);
+  expect(untagged.runs).toBe(1);
+});
+
 test("a long-lived Handler releases completed callback keys", async () => {
   const handler = new RecordingHandler();
   await onMain(() => {
