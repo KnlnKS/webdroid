@@ -1445,7 +1445,7 @@ for (const t of ["I", "J", "F", "D"]) {
   mm[`static max(${t}${t})${t}`] = t === "J" ? (a: bigint, b: bigint) => (a > b ? a : b) : (a: number, b: number) => Math.max(a, b);
   mm[`static min(${t}${t})${t}`] = t === "J" ? (a: bigint, b: bigint) => (a < b ? a : b) : (a: number, b: number) => Math.min(a, b);
 }
-for (const f of ["sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "log1p", "log10", "cbrt", "sinh", "cosh", "tanh", "floor", "ceil"] as const) {
+for (const f of ["sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "exp", "expm1", "log", "log1p", "log10", "cbrt", "sinh", "cosh", "tanh", "floor", "ceil"] as const) {
   mm[`static ${f}(D)D`] = (v: number) => Math[f](v);
 }
 rt.register({
@@ -1468,7 +1468,6 @@ rt.register({
     "static floorMod(JJ)J": (a: bigint, b: bigint) => ((a % b) + b) % b,
     "static atan2(DD)D": (a: number, b: number) => Math.atan2(a, b),
     "static hypot(DD)D": (a: number, b: number) => Math.hypot(a, b),
-    "static log1p(D)D": (value: number) => Math.log1p(value),
     "static copySign(DD)D": (magnitude: number, sign: number) => longBitsToDouble(
       doubleToLongBits(magnitude) & 0x7fffffffffffffffn | doubleToLongBits(sign) & -0x8000000000000000n),
     "static copySign(FF)F": (magnitude: number, sign: number) => intBitsToFloat(
