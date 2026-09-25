@@ -18,18 +18,42 @@ import type { JContext } from "./context";
 // ── Scroller/OverScroller: time-based interpolated scroll values
 class JScroller extends JObj {
   startX = 0; startY = 0; finalX = 0; finalY = 0;
+  peakX = 0; peakY = 0; overfling = false;
   startT = 0; duration = 250;
   curX = 0; curY = 0;
   finished = true;
   compute(): boolean {
     if (this.finished) return false;
     const t = Math.min(1, (performance.now() - this.startT) / this.duration);
-    const e = 1 - Math.pow(1 - t, 3); // decelerate
-    this.curX = Math.round(this.startX + (this.finalX - this.startX) * e);
-    this.curY = Math.round(this.startY + (this.finalY - this.startY) * e);
+    if (this.overfling) {
+      const out = Math.min(1, t / 0.7);
+      const back = Math.max(0, (t - 0.7) / 0.3);
+      const e = 1 - (1 - out) ** 3;
+      const s = back * back * (3 - 2 * back);
+      this.curX = Math.round(this.startX + (this.peakX - this.startX) * e + (this.finalX - this.peakX) * s);
+      this.curY = Math.round(this.startY + (this.peakY - this.startY) * e + (this.finalY - this.peakY) * s);
+    } else {
+      const e = 1 - (1 - t) ** 3;
+      this.curX = Math.round(this.startX + (this.finalX - this.startX) * e);
+      this.curY = Math.round(this.startY + (this.finalY - this.startY) * e);
+    }
     if (t >= 1) { this.finished = true; this.curX = this.finalX; this.curY = this.finalY; }
     invalidate();
     return true;
+  }
+  fling(sx: number, sy: number, vx: number, vy: number, minX: number, maxX: number, minY: number, maxY: number, overX = 0, overY = 0) {
+    const projectedX = sx + Math.round(vx * 0.35);
+    const projectedY = sy + Math.round(vy * 0.35);
+    this.startX = this.curX = sx; this.startY = this.curY = sy;
+    this.finalX = Math.max(minX, Math.min(maxX, projectedX));
+    this.finalY = Math.max(minY, Math.min(maxY, projectedY));
+    this.peakX = Math.max(minX - Math.max(0, overX), Math.min(maxX + Math.max(0, overX), projectedX));
+    this.peakY = Math.max(minY - Math.max(0, overY), Math.min(maxY + Math.max(0, overY), projectedY));
+    this.overfling = this.peakX !== this.finalX || this.peakY !== this.finalY;
+    this.startT = performance.now();
+    this.duration = Math.min(1200, 300 + Math.hypot(vx, vy) / device.dp(4));
+    this.finished = false;
+    invalidate();
   }
 }
 const scrollerMethods: NativeSpec["methods"] = {
@@ -37,6 +61,7 @@ const scrollerMethods: NativeSpec["methods"] = {
     this.startX = sx; this.startY = sy; this.finalX = sx + dx; this.finalY = sy + dy;
     this.startT = performance.now(); this.duration = 250;
     this.curX = sx; this.curY = sy;
+    this.overfling = false;
     this.finished = false;
     invalidate();
   },
@@ -44,17 +69,12 @@ const scrollerMethods: NativeSpec["methods"] = {
     this.startX = sx; this.startY = sy; this.finalX = sx + dx; this.finalY = sy + dy;
     this.startT = performance.now(); this.duration = Math.max(1, dur);
     this.curX = sx; this.curY = sy;
+    this.overfling = false;
     this.finished = false;
     invalidate();
   },
   "fling(IIIIIIII)V": function (this: JScroller, sx: number, sy: number, vx: number, vy: number, minX: number, maxX: number, minY: number, maxY: number) {
-    this.startX = sx; this.startY = sy;
-    this.finalX = Math.max(minX, Math.min(maxX, sx + Math.round(vx * 0.35)));
-    this.finalY = Math.max(minY, Math.min(maxY, sy + Math.round(vy * 0.35)));
-    this.startT = performance.now();
-    this.duration = Math.min(1200, 300 + Math.hypot(vx, vy) / device.dp(4));
-    this.finished = false;
-    invalidate();
+    this.fling(sx, sy, vx, vy, minX, maxX, minY, maxY);
   },
   "computeScrollOffset()Z": function (this: JScroller) { return this.compute() ? 1 : 0; },
   "getCurrX()I": function (this: JScroller) { return this.curX; },
@@ -76,6 +96,7 @@ const scrollerMethods: NativeSpec["methods"] = {
     const fy = Math.max(minY, Math.min(maxY, sy));
     if (fx === sx && fy === sy) { this.finished = true; return 0; }
     this.startX = sx; this.startY = sy; this.finalX = fx; this.finalY = fy;
+    this.curX = sx; this.curY = sy; this.overfling = false;
     this.startT = performance.now(); this.duration = 200; this.finished = false;
     return 1;
   },
@@ -89,7 +110,13 @@ const scrollerMethods: NativeSpec["methods"] = {
   ...stubs(0, "isOverScrolled()Z"),
 };
 rt.register({ name: "android/widget/Scroller", ctor: JScroller, methods: scrollerMethods });
-rt.register({ name: "android/widget/OverScroller", ctor: class extends JScroller {}, methods: scrollerMethods });
+rt.register({ name: "android/widget/OverScroller", ctor: class extends JScroller {}, methods: {
+  ...scrollerMethods,
+  "fling(IIIIIIIIII)V": function (this: JScroller, sx: number, sy: number, vx: number, vy: number, minX: number, maxX: number, minY: number, maxY: number, overX: number, overY: number) {
+    this.fling(sx, sy, vx, vy, minX, maxX, minY, maxY, overX, overY);
+  },
+  "isOverScrolled()Z": function (this: JScroller) { return this.overfling && !this.finished ? 1 : 0; },
+} });
 
 /** AOSP VelocityTracker: movements older than this before the newest one are not in the estimate */
 const VELOCITY_HORIZON_MS = 100;
