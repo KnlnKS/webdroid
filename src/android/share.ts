@@ -1,6 +1,6 @@
 import { JIntent, registerSystemActivity, systemActivities } from "./intent";
 import { contentResolver } from "./contentresolver";
-import type { JUri } from "./net";
+import { JUri, uriParts } from "./net";
 import { JParcelFileDescriptor } from "./os";
 import { toJsArray } from "../jvm/natives/jutil";
 import { vcall } from "../jvm/natives/jlang";
@@ -15,12 +15,15 @@ const EXTRA_SUBJECT = "android.intent.extra.SUBJECT";
 async function shareFile(uri: JUri, mime: string): Promise<File> {
   const descriptor = await vcall(contentResolver(), "openFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", uri, "r");
   if (!(descriptor instanceof JParcelFileDescriptor)) throw rt.mkThrowable("java/io/FileNotFoundException", uri.uri);
-  const name = decodeURIComponent(uri.uri.split(/[?#]/, 1)[0]!.split("/").pop() || "shared-file");
+  const name = decodeURIComponent(uriParts(uri).path.split("/").pop() || "shared-file");
   const file = new File([descriptor.bytes.slice()], name, { type: mime });
   await vcall(descriptor, "close", "()V");
   return file;
 }
 
+function hasErrorName(error: unknown, name: string): boolean {
+  return typeof error === "object" && error !== null && "name" in error && error.name === name;
+}
 function hostAction(browser: Window, headingText: string, buttonText: string, run: () => Promise<unknown> | unknown): Promise<boolean> {
   return new Promise((resolve, reject) => {
     const doc = browser.document;
@@ -48,7 +51,7 @@ function hostAction(browser: Window, headingText: string, buttonText: string, ru
       catch (error) { panel.remove(); reject(error); return; }
       Promise.resolve(pending).then(() => { panel.remove(); resolve(true); }, (error: unknown) => {
         panel.remove();
-        if ((error as { name?: string })?.name === "AbortError") resolve(false);
+        if (hasErrorName(error, "AbortError")) resolve(false);
         else reject(error);
       });
     }, { once: true });
@@ -90,7 +93,10 @@ async function share(intent: JIntent): Promise<JIntent | null> {
 
   const raw = target.extras.map.get(EXTRA_STREAM);
   const uris = raw == null ? [] : target.action === "android.intent.action.SEND_MULTIPLE" ? await toJsArray(raw) : [raw];
-  const files = await Promise.all(uris.map((uri) => shareFile(uri as JUri, target.typeStr || "application/octet-stream")));
+  const files = await Promise.all(uris.map((uri) => {
+    if (!(uri instanceof JUri)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Share stream is not a Uri");
+    return shareFile(uri, target.typeStr || "application/octet-stream");
+  }));
   const data: ShareData = {
     text: String(target.extras.map.get(EXTRA_TEXT) ?? ""),
     title: String(target.extras.map.get(EXTRA_SUBJECT) ?? ""),
@@ -108,8 +114,8 @@ async function share(intent: JIntent): Promise<JIntent | null> {
     return new JIntent();
   }
   catch (error) {
-    if ((error as { name?: string })?.name === "AbortError") return null;
-    if ((error as { name?: string })?.name === "NotAllowedError" && files.length)
+    if (hasErrorName(error, "AbortError")) return null;
+    if (hasErrorName(error, "NotAllowedError") && files.length)
       return await saveFiles(browser, files) ? new JIntent() : null;
     throw error;
   }

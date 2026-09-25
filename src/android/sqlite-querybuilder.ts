@@ -23,12 +23,13 @@ async function projectionColumns(builder: JSQLiteQueryBuilder, requested: string
   }));
 }
 function builderWhere(builder: JSQLiteQueryBuilder, selection: string | null): string | null {
-  return builder.where ? selection ? `(${builder.where}) AND (${selection})` : `(${builder.where})` : selection;
+  if (!builder.where) return selection;
+  return selection ? `(${builder.where}) AND (${selection})` : `(${builder.where})`;
 }
 function builderEditTable(builder: JSQLiteQueryBuilder): string {
   const tables = builder.tables;
-  if (tables === null) rt.npe();
-  return tables!.split(/[\s,]/, 1)[0];
+  if (tables === null) return rt.npe();
+  return tables.split(/[\s,]/, 1)[0];
 }
 async function queryBuilder(builder: JSQLiteQueryBuilder, db: JSQLiteDatabase, cols: string[] | null, selection: string | null,
   args: unknown[] | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null) {
