@@ -8,7 +8,7 @@ import { parkTimeout, unparkTimeout } from "../jvm/yield";
 import { TLS_KEYS } from "./core";
 import { RET_SENTINEL, E } from "./abi";
 import { JThread, reportUncaught, threadExit } from "../jvm/natives/jlang";
-import { readTs, fail, clockTime } from "./libc";
+import { readTs, fail, clockTime, utf8 } from "./libc";
 import { guestSleep } from "../guest-clock";
 
 /** Bionic's LP32 mutex word: the low half is state/counter/shared/type and the high half is
@@ -264,7 +264,23 @@ export function pthreadInit(): void {
     pthread_equal: (_c, a) => (a.i() === a.i() ? 1 : 0),
     pthread_sigmask: (cpu, a) => cpu.sigmask(a.i(), a.p(), a.p(), cpu.a64 ? 8 : 4),
     pthread_sigmask64: (cpu, a) => cpu.sigmask(a.i(), a.p(), a.p(), 8),
-    pthread_setname_np: (_c, a) => { const c = cpuByTid(tidOf(a.p())); const n = a.str(); if (c) { c.name = n; c.jthread.jname = n; } return 0; },
+    pthread_setname_np: (_c, a) => {
+      const handle = a.p(), name = a.str();
+      if (utf8(name).length >= 16) return E.RANGE;
+      const thread = cpuByTid(tidOf(handle));
+      if (!thread) return E.SRCH;
+      thread.name = name; thread.jthread.jname = name;
+      return 0;
+    },
+    pthread_getname_np: (_c, a) => {
+      const handle = a.p(), out = a.p(), size = a.u();
+      if (size < 16) return E.RANGE;
+      const thread = cpuByTid(tidOf(handle));
+      if (!thread) return E.SRCH;
+      const name = utf8(thread.name).subarray(0, 15);
+      mem.write(out, name); mem.st8(out + name.length, 0);
+      return 0;
+    },
     pthread_getschedparam: (_c, a) => { a.i(); const pol = a.p(), par = a.p(); if (pol) mem.st32(pol, 0); if (par) mem.st32(par, 0); return 0; },
     pthread_setschedparam: () => 0,
     pthread_attr_init: (_c, a) => { const attr = a.p(); mem.st32(attr, 0); attrGuards.set(attr, 4096); return 0; },
