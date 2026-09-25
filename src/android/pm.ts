@@ -672,6 +672,7 @@ export function getPM(): JPackageManager {
 rt.register({
   name: "android/content/pm/PackageManager", ctor: JPackageManager,
   statics: { PERMISSION_GRANTED: 0, PERMISSION_DENIED: -1, GET_ACTIVITIES: 1, GET_RECEIVERS: 2, GET_SERVICES: 4, MATCH_DISABLED_COMPONENTS: 0x200, MATCH_SYSTEM_ONLY: 0x100000, MATCH_DIRECT_BOOT_AWARE: 0x80000, MATCH_DIRECT_BOOT_UNAWARE: 0x40000, GET_META_DATA: 128, GET_SIGNATURES: 64,
+    CERT_INPUT_RAW_X509: 0, CERT_INPUT_SHA256: 1,
     COMPONENT_ENABLED_STATE_DEFAULT: 0, COMPONENT_ENABLED_STATE_ENABLED: 1, COMPONENT_ENABLED_STATE_DISABLED: 2,
     DONT_KILL_APP: 1,
     FEATURE_AUDIO_LOW_LATENCY: "android.hardware.audio.low_latency", FEATURE_AUDIO_PRO: "android.hardware.audio.pro", FEATURE_TOUCHSCREEN: "android.hardware.touchscreen",
@@ -680,6 +681,18 @@ rt.register({
     FEATURE_LOCATION_GPS: "android.hardware.location.gps", FEATURE_LOCATION_NETWORK: "android.hardware.location.network", FEATURE_MICROPHONE: "android.hardware.microphone", FEATURE_WIFI: "android.hardware.wifi", FEATURE_BLUETOOTH: "android.hardware.bluetooth",
     FEATURE_VR_MODE: "android.software.vr.mode", FEATURE_TELEPHONY: "android.hardware.telephony", FEATURE_LEANBACK: "android.software.leanback" },
   methods: {
+    "hasSigningCertificate(Ljava/lang/String;[BI)Z": async (pkg: string | null, certificate: Int8Array | null, type: number) => {
+      if (pkg === null || certificate === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      if (type !== 0 && type !== 1) return 0;
+      if (!packages.has(pkg)) await installedPackage(pkg);
+      const record = packages.get(pkg);
+      if (!record) return 0;
+      for (const signer of await record.visibleCertificates()) {
+        const bytes = type === 0 ? signer : await digestBytes("SHA-256", signer);
+        if (bytes?.length === certificate.length && bytes.every((byte, i) => byte === (certificate[i] & 255))) return 1;
+      }
+      return 0;
+    },
     "requestChecksums(Ljava/lang/String;ZILjava/util/List;Landroid/content/pm/PackageManager$OnChecksumsReadyListener;)V":
       async (pkg: string | null, includeSplits: number, required: number, trustedInstallers: unknown, listener: unknown) => {
         if (pkg === null || trustedInstallers === null || listener === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
