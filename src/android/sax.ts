@@ -5,7 +5,8 @@ import { newXmlPullParser, readerText } from "./xmlpull";
 
 const S = "Ljava/lang/String;", NS = "http://xml.org/sax/features/namespaces", NS_PREFIX = "http://xml.org/sax/features/namespace-prefixes";
 rt.markers("org/xml/sax/XMLReader", "org/xml/sax/ContentHandler", "org/xml/sax/Attributes",
-  "org/xml/sax/ErrorHandler", "org/xml/sax/EntityResolver", "org/xml/sax/DTDHandler");
+  "org/xml/sax/ErrorHandler", "org/xml/sax/EntityResolver", "org/xml/sax/DTDHandler",
+  "org/xml/sax/Locator", "org/xml/sax/ext/LexicalHandler");
 class JSaxException extends JThrowable { exception: JThrowable | null = null; }
 function saxMessage(this: JSaxException) {
   return this.msg ?? (this.exception ? vcall(this.exception, "getMessage", "()Ljava/lang/String;") : null);
@@ -31,7 +32,7 @@ defineException("org/xml/sax/SAXParseException", "org/xml/sax/SAXException");
 defineException("org/xml/sax/SAXNotRecognizedException", "org/xml/sax/SAXException");
 defineException("org/xml/sax/SAXNotSupportedException", "org/xml/sax/SAXException");
 
-class JInputSource extends JObj { bytes: unknown = null; chars: unknown = null; encoding: string | null = null; systemId: string | null = null; }
+class JInputSource extends JObj { bytes: unknown = null; chars: unknown = null; encoding: string | null = null; systemId: string | null = null; publicId: string | null = null; }
 rt.register({ name: "org/xml/sax/InputSource", ctor: JInputSource, methods: {
   "<init>()V": function () {},
   "<init>(Ljava/io/InputStream;)V": function (this: JInputSource, stream: unknown) { this.bytes = stream; },
@@ -39,9 +40,14 @@ rt.register({ name: "org/xml/sax/InputSource", ctor: JInputSource, methods: {
   [`<init>(${S})V`]: function (this: JInputSource, id: string) { this.systemId = id; },
   "getByteStream()Ljava/io/InputStream;": function (this: JInputSource) { return this.bytes; },
   "setByteStream(Ljava/io/InputStream;)V": function (this: JInputSource, stream: unknown) { this.bytes = stream; },
+  "getCharacterStream()Ljava/io/Reader;": function (this: JInputSource) { return this.chars; },
   "setCharacterStream(Ljava/io/Reader;)V": function (this: JInputSource, reader: unknown) { this.chars = reader; },
+  [`getEncoding()${S}`]: function (this: JInputSource) { return this.encoding; },
   [`setEncoding(${S})V`]: function (this: JInputSource, encoding: string) { this.encoding = encoding; },
+  [`getSystemId()${S}`]: function (this: JInputSource) { return this.systemId; },
   [`setSystemId(${S})V`]: function (this: JInputSource, id: string) { this.systemId = id; },
+  [`getPublicId()${S}`]: function (this: JInputSource) { return this.publicId; },
+  [`setPublicId(${S})V`]: function (this: JInputSource, id: string) { this.publicId = id; },
 } });
 class JAttributes extends JObj { attrs: Attr[] = []; namespaces = true; }
 const attrIndex = (a: JAttributes, uri: string, local: string) => a.attrs.findIndex(v => (v.namespaceURI ?? "") === uri && v.localName === local);
