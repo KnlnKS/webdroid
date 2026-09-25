@@ -26,7 +26,7 @@ const procBytes = (path: string): Uint8Array | null => {
 export const vfs = {
   files: new Map<string, Uint8Array>(),
   lazyFiles: new Map<string, FileSource>(),
-  dirs: new Set<string>(["/data", "/sdcard"]),
+  dirs: new Set<string>(["/data", "/data/local", "/data/local/tmp", "/sdcard"]),
   prepare: (_pkg: string): Promise<void> => Promise.resolve(),
   flush: (): Promise<void> => Promise.resolve(),
   onWrite: (_path: string, _change: "modify" | "write" | "create" | "delete" = "modify") => {},
@@ -1691,6 +1691,15 @@ class JNioFileSystemProvider extends JObj {}
 const nioFileSystem = new JNioFileSystem();
 const nioFileSystemProvider = new JNioFileSystemProvider();
 const mkPath = (p: string) => { const q = new JNioPath(); q.p = p; return q; };
+function createNioTempFile(dir: JNioPath | null, prefix: string | null, suffix: string | null, attrs: unknown[] | null): JNioPath {
+  if (attrs?.length) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "File attributes");
+  const parent = dir?.p ?? "/data/local/tmp";
+  if (!vfs.isDir(parent)) throw rt.mkThrowable("java/nio/file/NoSuchFileException", parent);
+  for (;;) {
+    const path = vfs.norm(`${parent}/${prefix ?? ""}${crypto.randomUUID().replaceAll("-", "")}${suffix ?? ".tmp"}`);
+    if (!vfs.exists(path)) { vfs.write(path, new Uint8Array(0)); return mkPath(path); }
+  }
+}
 rt.register({
   name: "java/nio/file/Path", ctor: JNioPath, ifaces: ["java/lang/Comparable", "java/lang/Iterable"],
   methods: {
@@ -1798,6 +1807,8 @@ defineException("java/nio/file/FileAlreadyExistsException", "java/nio/file/FileS
 rt.register({
   name: "java/nio/file/Files", ctor: class extends JObj {},
   methods: {
+    "static createTempFile(Ljava/nio/file/Path;Ljava/lang/String;Ljava/lang/String;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;": createNioTempFile,
+    "static createTempFile(Ljava/lang/String;Ljava/lang/String;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;": (prefix: string | null, suffix: string | null, attrs: unknown[] | null) => createNioTempFile(null, prefix, suffix, attrs),
     "static exists(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z": (p: JNioPath) => (vfs.exists(p.p) ? 1 : 0),
     "static isWritable(Ljava/nio/file/Path;)Z": (p: JNioPath) => (vfs.exists(p.p) ? 1 : 0),
     "static move(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;": (src: JNioPath, dst: JNioPath) => {
