@@ -40,6 +40,12 @@ rt.register({
     "static println(ILjava/lang/String;Ljava/lang/String;)I": (p: number, tag: string, msg: string) => logFn("P")(tag, msg),
   },
 });
+rt.register({ name: "android/util/Printer", ctor: class extends JObj {}, methods: {} });
+class JLogPrinter extends JObj { priority = 4; tag = ""; }
+rt.register({ name: "android/util/LogPrinter", ctor: JLogPrinter, ifaces: ["android/util/Printer"], methods: {
+  "<init>(ILjava/lang/String;)V": function (this: JLogPrinter, priority: number, tag: string) { this.priority = priority; this.tag = tag; },
+  "println(Ljava/lang/String;)V": function (this: JLogPrinter, line: string) { logFn(String(this.priority))(this.tag, line); },
+} });
 
 class JSparseArray extends JObj {
   m = new Map<number | bigint, unknown>();
