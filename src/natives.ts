@@ -109,6 +109,7 @@ import "./android/popup";
 import "./android/security";
 import "./android/transition";
 import "./android/sqlite";
+import "./android/sqlite-querybuilder";
 import "./android/compat";
 import "./android/scalegesture";
 import "./android/dialog";

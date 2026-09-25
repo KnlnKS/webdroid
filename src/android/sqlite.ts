@@ -7,7 +7,6 @@ import { vfs } from "../jvm/natives/jio";
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { vcall, vcallOn, callOn, curThread, type JThread, boxInt, box, JLong, JBool, JSB } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
-import { csText } from "../jvm/natives/jchars";
 import { JBundle, JFnRunnable, JObservable, registerDatabaseObserver } from "./os";
 
 type SqlJs = Awaited<ReturnType<typeof initSqlJs>>;
@@ -56,7 +55,7 @@ function snapshotBytes(sql: NonNullable<typeof SQL>, db: Database): Uint8Array |
   }
 }
 
-class JSQLiteDatabase extends JObj {
+export class JSQLiteDatabase extends JObj {
   db: Database | null = null;
   path = ":memory:";
   version = 0;
@@ -234,7 +233,7 @@ function integerRow(stmt: Statement): unknown[] {
   return (stmt.get as (params: undefined, config: { useBigInt: boolean }) => unknown[])(undefined, { useBigInt: true });
 }
 const longValue = (v: unknown): bigint => typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v ?? 0)));
-function runQuery(jdb: JSQLiteDatabase, sqlStr: string, args: unknown[] | null): JCursor {
+export function runQuery(jdb: JSQLiteDatabase, sqlStr: string, args: unknown[] | null): JCursor {
   const c = mkCursor([], []);
   try {
     const stmt = jdb.db!.prepare(sqlStr);
@@ -440,6 +439,22 @@ function unbox(v: unknown): unknown {
   return v;
 }
 
+export function updateRows(db: JSQLiteDatabase, table: string, cv: JContentValues, where: string | null, args: unknown[] | null): number {
+  const sets = [...cv.data.m.keys()].map((key) => `"${key}"=?`).join(",");
+  const sql = `UPDATE "${table}" SET ${sets}${where ? " WHERE " + where : ""}`;
+  const vals = [...cv.data.m.values()].map((entry) => unbox(entry.v));
+  try { db.db!.run(sql, bindArgs([...vals, ...(args ?? [])]) as never); }
+  catch (error) { throw sqliteExc(String(error), sql); }
+  db.scheduleSave();
+  return db.db!.getRowsModified();
+}
+export function deleteRows(db: JSQLiteDatabase, table: string, where: string | null, args: unknown[] | null): number {
+  const sql = `DELETE FROM "${table}"${where ? " WHERE " + where : ""}`;
+  try { db.db!.run(sql, bindArgs(args ?? []) as never); }
+  catch (error) { throw sqliteExc(String(error), sql); }
+  db.scheduleSave();
+  return db.db!.getRowsModified();
+}
 const dbMethods: NonNullable<NativeSpec["methods"]> = {
   "static create(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;)Landroid/database/sqlite/SQLiteDatabase;": () => openDatabase(":memory:"),
   "static openDatabase(Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)Landroid/database/sqlite/SQLiteDatabase;":
@@ -479,12 +494,12 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "query(Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
     function (this: JSQLiteDatabase, table: string, cols: string[] | null, sel: string | null, selArgs: unknown[] | null, groupBy: string | null, having: string | null, orderBy: string | null) {
-      const sql = buildQuery(table, cols, sel, groupBy, having, orderBy, null);
+      const sql = buildQuery({ table: `"${table}"`, cols, sel, groupBy, having, orderBy, limit: null });
       return runQuery(this, sql, selArgs);
     },
   "query(Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
     function (this: JSQLiteDatabase, table: string, cols: string[] | null, sel: string | null, selArgs: unknown[] | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null) {
-      const sql = buildQuery(table, cols, sel, groupBy, having, orderBy, limit);
+      const sql = buildQuery({ table: `"${table}"`, cols, sel, groupBy, having, orderBy, limit });
       return runQuery(this, sql, selArgs);
     },
   "insert(Ljava/lang/String;Ljava/lang/String;Landroid/content/ContentValues;)J":
@@ -510,21 +525,11 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     },
   "update(Ljava/lang/String;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I":
     function (this: JSQLiteDatabase, table: string, cv: JContentValues, where: string | null, args: unknown[] | null) {
-      const sets = [...cv.data.m.keys()].map((k) => `"${k}"=?`).join(",");
-      const sql = `UPDATE "${table}" SET ${sets}${where ? " WHERE " + where : ""}`;
-      const vals = [...cv.data.m.values()].map((e) => unbox(e.v));
-      try {
-        this.db!.run(sql, bindArgs([...vals, ...(args ?? [])]) as never);
-      } catch (e) { throw sqliteExc(String(e), sql); }
-      this.scheduleSave();
-      return this.db!.getRowsModified();
+      return updateRows(this, table, cv, where, args);
     },
   "delete(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)I":
     function (this: JSQLiteDatabase, table: string, where: string | null, args: unknown[] | null) {
-      const sql = `DELETE FROM "${table}"${where ? " WHERE " + where : ""}`;
-      try { this.db!.run(sql, bindArgs(args ?? []) as never); } catch (e) { throw sqliteExc(String(e), sql); }
-      this.scheduleSave();
-      return this.db!.getRowsModified();
+      return deleteRows(this, table, where, args);
     },
   "beginTransaction()V": function (this: JSQLiteDatabase) {
     if (this.txDepth === 0) this.db!.exec("BEGIN");
@@ -597,9 +602,18 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
   ...stubs(0, "isWriteAheadLoggingEnabled()Z", "isDbLockedByCurrentThread()Z", "enableWriteAheadLogging()Z",
     "yieldIfContendedSafely()Z", "static releaseMemory()I"),
 };
-function buildQuery(table: string, cols: string[] | null, sel: string | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null, rawTable = false, distinct = false): string {
-  const c = cols?.length ? cols.join(",") : "*";
-  let sql = `SELECT ${distinct ? "DISTINCT " : ""}${c} FROM ${rawTable ? table : `"${table}"`}`;
+export interface SelectQuery {
+  table: string;
+  cols: string[] | null;
+  sel: string | null;
+  groupBy: string | null;
+  having: string | null;
+  orderBy: string | null;
+  limit: string | null;
+  distinct?: boolean;
+}
+export function buildQuery({ table, cols, sel, groupBy, having, orderBy, limit, distinct }: SelectQuery): string {
+  let sql = `SELECT ${distinct ? "DISTINCT " : ""}${cols?.length ? cols.join(",") : "*"} FROM ${table}`;
   if (sel) sql += " WHERE " + sel;
   if (groupBy) sql += " GROUP BY " + groupBy;
   if (having) sql += " HAVING " + having;
@@ -607,81 +621,10 @@ function buildQuery(table: string, cols: string[] | null, sel: string | null, gr
   if (limit) sql += " LIMIT " + limit;
   return sql;
 }
-class JSQLiteQueryBuilder extends JObj {
-  tables: string | null = null;
-  projectionMap: JMap | null = null;
-  where = "";
-  distinct = false;
-}
-function projectionColumns(builder: JSQLiteQueryBuilder, requested: string[] | null): string[] | null {
-  const map = builder.projectionMap;
-  if (!map) return requested;
-  if (!requested?.length) return [...map.m.values(), ...map.slow].filter(e => e.k !== "_count").map(e => String(e.v));
-  return requested.map(name => {
-    const mapped = map.m.get(name)?.v ?? map.slow.find(e => e.k === name)?.v;
-    if (mapped != null) return String(mapped);
-    if (/\sAS\s/i.test(name)) return name;
-    throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid column " + name);
-  });
-}
-function builderWhere(builder: JSQLiteQueryBuilder, selection: string | null): string | null {
-  return builder.where ? selection ? `(${builder.where}) AND (${selection})` : `(${builder.where})` : selection;
-}
-function sqlQuoted(value: string | null): string {
+export function sqlQuoted(value: string | null): string {
   if (value === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   return "'" + value.replaceAll("'", "''") + "'";
 }
-function builderEditTable(builder: JSQLiteQueryBuilder): string {
-  const tables = builder.tables;
-  if (tables === null) rt.npe();
-  return tables!.split(/[\s,]/, 1)[0];
-}
-function queryBuilder(builder: JSQLiteQueryBuilder, db: JSQLiteDatabase, cols: string[] | null, selection: string | null,
-  args: unknown[] | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null): JCursor | null {
-  if (builder.tables === null) return null;
-  return runQuery(db, buildQuery(builder.tables, projectionColumns(builder, cols), builderWhere(builder, selection), groupBy, having, orderBy, limit, true, builder.distinct), args);
-}
-rt.register({
-  name: "android/database/sqlite/SQLiteQueryBuilder", ctor: JSQLiteQueryBuilder,
-  methods: {
-    "<init>()V": function () {},
-    "setTables(Ljava/lang/String;)V": function (this: JSQLiteQueryBuilder, tables: string | null) { this.tables = tables; },
-    "getTables()Ljava/lang/String;": function (this: JSQLiteQueryBuilder) { return this.tables; },
-    "setProjectionMap(Ljava/util/Map;)V": function (this: JSQLiteQueryBuilder, map: JMap | null) { this.projectionMap = map; },
-    "getProjectionMap()Ljava/util/Map;": function (this: JSQLiteQueryBuilder) { return this.projectionMap; },
-    "setDistinct(Z)V": function (this: JSQLiteQueryBuilder, distinct: number) { this.distinct = !!distinct; },
-    "isDistinct()Z": function (this: JSQLiteQueryBuilder) { return +this.distinct; },
-    "appendWhere(Ljava/lang/CharSequence;)V": async function (this: JSQLiteQueryBuilder, where: unknown) { this.where += await csText(where); },
-    "appendWhereStandalone(Ljava/lang/CharSequence;)V": async function (this: JSQLiteQueryBuilder, where: unknown) {
-      if (this.where) this.where += " AND ";
-      this.where += `(${await csText(where)})`;
-    },
-    "appendWhereEscapeString(Ljava/lang/String;)V": function (this: JSQLiteQueryBuilder, where: string) {
-      this.where += sqlQuoted(where);
-    },
-    "query(Landroid/database/sqlite/SQLiteDatabase;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
-      function (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, cols: string[] | null, selection: string | null, args: unknown[] | null, groupBy: string | null, having: string | null, orderBy: string | null) {
-        return queryBuilder(this, db, cols, selection, args, groupBy, having, orderBy, null);
-      },
-    "query(Landroid/database/sqlite/SQLiteDatabase;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
-      function (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, cols: string[] | null, selection: string | null, args: unknown[] | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null) {
-        return queryBuilder(this, db, cols, selection, args, groupBy, having, orderBy, limit);
-      },
-    "update(Landroid/database/sqlite/SQLiteDatabase;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I":
-      function (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, values: JContentValues, selection: string | null, args: unknown[] | null) {
-        if (!db || !values) rt.npe();
-        if (!values.data.m.size) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Empty values");
-        return callSelf(dbMethods, "update(Ljava/lang/String;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I",
-          db, builderEditTable(this), values, builderWhere(this, selection), args);
-      },
-    "delete(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/String;)I":
-      function (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, selection: string | null, args: unknown[] | null) {
-        if (!db) rt.npe();
-        return callSelf(dbMethods, "delete(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)I",
-          db, builderEditTable(this), builderWhere(this, selection), args);
-      },
-  },
-});
 function doInsert(jdb: JSQLiteDatabase, table: string, cv: JContentValues, or: string, doThrow = false): bigint {
   const keys = [...cv.data.m.keys()];
   const sql = keys.length
