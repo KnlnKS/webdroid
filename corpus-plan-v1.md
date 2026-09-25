@@ -1,0 +1,45 @@
+# Original APK corpus handoff
+
+Status: 2026-09-24. This plan covers the **20 APKs that existed before the recent additions** to `apks/`. The newer 15-app corpus has its own [corpus-plan-v2.md](corpus-plan-v2.md) and is outside this pass. Ads and ad APIs are excluded. The full evidence trail is in [docs/original-apk-coverage-2026-09-24.md](docs/original-apk-coverage-2026-09-24.md) and [docs/implementation-history.md](docs/implementation-history.md).
+
+All 20 launched, drew an initial frame, and supplied diagnostics in a serialized boot sweep. A successful boot is **not** full feature coverage. No app has been established as fully usable. “No missing API observed” below applies only to the paths exercised; optional vendor and AndroidX class probes are not automatically Android platform gaps.
+
+| App | Tested paths and findings | Not tested, or still failing |
+| --- | --- | --- |
+| Amazon.xapk | Logged-out storefront, search suggestions, categories, product detail, and Add to cart through a real proxied POST rendered. Cordova typed XML boolean, TLS raw-socket lifetime, URI raw user info, and WebView form routing were fixed. Boot probes private Amazon services and optional SLF4J. | Sign-in, checkout, background configuration/file-store recovery, and longer sessions. Some CDN replies lack an `ETag`; do not invent one. |
+| Among Us.xapk | Practice and North America public lobby entry on the Bun server. Native UDP relay now exchanges match packets. No missing entry on that lobby path. | Hosted UDP relay, account sign-in, full match, and repeated Unity `NullReferenceException` after lobby entry. |
+| ChatGPT.xapk | All 24 guest-flow checkpoints, settings/about, and fused media/navigation paths reached. No camera ID exists on this virtual device. Optional Amazon IAP class probe. | Authentication, camera/media workflows, screen projection, and hosted UDP transport. |
+| Cut the Rope.xapk | Level-one tutorial and puzzle draw; codec receives and releases intro video/audio samples. No boot missing entry. | Intro remains black despite codec output; later levels and gameplay speed. |
+| DoodleJumpChrismas.apk | Title and gameplay draw without GL errors; GLES1 gaps fixed. Hardware renderer reached 59.98 presentations/s in a warm sample. | Title fast-flow gate remains about 44 shell frames/s against 55 on SwiftShader; later gameplay and device/backend comparison. |
+| FitNotes.apk | Existing E2E and Android comparison flows, including note creation. No boot missing entry. | Broader feature and long-term persistence coverage. A previous note-creation miss was a tap-coordinate error. |
+| GmsClient.apk | Availability, messaging/count, fused location callback with browser geolocation grant, and visible MapLibre map. No boot missing entry. | Account sign-in and further Play-services flows. |
+| Google Maps.apk | Search and place details; app-night-mode API fixed. Map receives frames but makes zero GL draw calls. Two `/glm/mmap` responses returned 200, then the app opened each input stream and disconnected without reading. JIT-disabled run was also blank. | **Blank map root cause**, map interaction/navigation, and Android backup transport. `FileBackupHelper` construction alone is not backup support. |
+| Reddit.xapk | Logged-out welcome and auth sheets through a positional flow. Optional App Set, AppsFlyer, and MIUI probes. | Signed-in feed/posting and Compose control exploration; the generic explorer sees one combined host node. |
+| Resy.apk | Search, venue offers, dialog dismissal, and Back. No boot missing entry. | Intermittent live-content/completion timeouts and full reservation path; cause is unproven. |
+| Subway Surfers.apk | Active run works; no boot missing entry. | Longer play, persistence, and background Firebase initialization error. Ads are out of scope. |
+| TikTok.apk | Guest feed reached all 13 checkpoints after the no-child `wait4` correction; native syscall 220 (`clone`) remains reported. | Actual child-process execution, playback/input rate, authentication, and publishing. Bundled/vendor probes are optional. |
+| Twitch.xapk | Welcome and a loaded real login WebView with provider controls. Optional MIUI referrer probe. | Credentialed sign-in and browsing. One WebView bridge 504 was transient; reproduce before attributing it to an API. |
+| WebdroidFuzzProbe.apk | `bun run fuzz smoke` passed 32 API and 32 graphics checks. Standalone launch expects a case server on loopback port 4876. | Android oracle campaign and broader generated cases. Standalone transport error is not a feature result. |
+| YouTube.xapk | Targeted 16-step playback including pause, resume, fullscreen, and Shorts passed after image-alpha, animation, view-Z, media-metrics and native fixes. Optional window-extension probes. | **Intermittent native JIT jump into zeroed code at `0x10004d20`**, longer playback, account flows and uploads. Matching `?jit=0` run lacked the observed fault; another JIT run was clean. |
+| calculatorm.apk | Existing E2E and Android comparison flows. No boot missing entry. | Broader feature coverage and persistence. |
+| flappybird.apk | Title, play, collision/game over and restart rendered without missing APIs, GL or draw errors. | Scores and longer repeated runs. |
+| harmonic.apk | Onboarding, story/comments, article WebView, search, and settings. Dialog outside-touch miss fixed. Optional window-extension probe. | Login, import/export, and other settings paths. |
+| lichess.apk | 15-step fast flow passed after retaining joinable pthread handle storage until join/detach. Optional window-sidecar probe. | Long sessions, authenticated/online play, persistence and more game modes. |
+| mihon-v0.20.4.apk | Onboarding, private storage choice, local source, browsing and data settings. No boot missing entry. | Populated-library backup, extension installation and chapter reading. Empty-library backup reports the app's own “No library entries” error. |
+
+## Verification and evidence limits
+
+- The original-20 boot sweeps rendered 20/20 and collected per-process diagnostics. The last reported sweep had zero called native requirements and 29 distinct boot-path missing entries, mostly optional probes or private services. That count does not describe untouched features.
+- Fast-flow matrices reached 10/13 and 9/13 in separate serialized runs. Targeted follow-ups subsequently passed ChatGPT 24/24, YouTube 16/16, TikTok 13/13 and Lichess 15/15. Intermittent failures and Doodle Jump's frame gate remain open; a clean replay is not a regression waiver.
+- The latest branch change routes WebView form POSTs through the proxy. Amazon's product Add to cart sent its body and Android user agent, got HTTP 200, redirected to the cart, and displayed “Added to cart.” A separate simple WebView form POST echoed both fields through the same proxy. Typecheck, all 1,377 tests, and Amazon XAPK smoke compilation passed with zero method failures **before the merge**.
+- A final Maps DevTools probe was in-memory only: `URLConnection.getInputStream()` returned an open stream for two HTTP 200 map-style responses, followed by `disconnect()` and close with zero bytes read. This narrows the symptom but does not establish why the app discards them. No probe code was committed.
+- Initial launch and feature telemetry cover observed paths only. Inspect each step's `run.json` for `newMissing`, `newErrors`, `nativeRequired`, layout/draw errors, completed rendering, and advancing `wd.ticks`; confirm diagnostics reached relevant child processes. Do not count logcat `E/` lines as missing APIs without evidence.
+
+## Next investigation order
+
+1. Reproduce Google Maps' blank surface with Chrome DevTools, trace why the bundled client closes map-style streams unread, and compare the visible GmsClient MapLibre path. Avoid changing GL or transport based on the zero-draw symptom alone.
+2. Reproduce YouTube's `0x10004d20` JIT fault under matching inputs, compare `?jit=0`, then narrow with `__wdJit` ranges or `core.jit_fallback(lo, hi)`.
+3. Address TikTok's `clone` only with correct guest child-process semantics; do not fabricate success. Investigate the Cut the Rope intro's codec-to-Unity handoff and Doodle Jump performance with working rendering and serialized measurements.
+4. Expand each app's shallow path to real feature completion and persistence. Check Resy's live timeouts, Among Us full matches, authenticated paths where credentials are available, and Maps/Mihon backup with populated data. Hosted UDP is a deployment capability gap for the Bun-only online paths.
+
+Run the Bun server on an unused port, then use `bun run corpus` for startup coverage and `bun run e2e --full --jobs 1` or targeted flows for interactions. See [tests/e2e/README.md](tests/e2e/README.md). Smoke-compile affected APKs, typecheck and run focused framework/tests; serialize captures sharing output directories. Compare ambiguous failures with the starting commit under matching inputs and settings. Keep visual goldens unchanged unless reference updates are requested. The original-20 audit document has the exact historical commands and failure mechanisms.
