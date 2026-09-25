@@ -66,10 +66,15 @@ function bufferBaseMethods(): NativeSpec["methods"] {
     "hasRemaining()Z": function (this: JBuffer) { return this.pos < this.lim ? 1 : 0; },
     "isDirect()Z": function (this: JBuffer) { return this.direct ? 1 : 0; },
     "isReadOnly()Z": function (this: JBuffer) { return +this.readOnly; },
-    "hasArray()Z": function (this: JBuffer) { return this.backing.storage.kind === "heap" && !this.readOnly ? 1 : 0; },
+    "hasArray()Z": function (this: JBuffer) {
+      const storage = this.backing.storage;
+      return storage.kind === "heap" && !this.readOnly && (storage.array as Uint8Array).BYTES_PER_ELEMENT === 2 ** this.elemShift &&
+        (!(this instanceof JCharBuffer) || storage.array instanceof Uint16Array) ? 1 : 0;
+    },
     "arrayOffset()I": function (this: JBuffer) {
       const storage = this.backing.storage;
-      if (storage.kind !== "heap" || this.readOnly) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      if (storage.kind !== "heap" || this.readOnly || (storage.array as Uint8Array).BYTES_PER_ELEMENT !== 2 ** this.elemShift ||
+          this instanceof JCharBuffer && !(storage.array instanceof Uint16Array)) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
       return (this.dv.byteOffset - storage.array.byteOffset) >> this.elemShift;
     },
   };
@@ -254,6 +259,10 @@ class JFloatBuffer extends JBuffer {}
 class JIntBuffer extends JBuffer {}
 class JShortBuffer extends JBuffer {}
 class JCharBuffer extends JBuffer { sequence: unknown = null; sequenceOffset = 0; }
+const allocCharBuffer = (cap: number) => {
+  if (cap < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative buffer capacity");
+  return wrapArray(JCharBuffer, new Uint16Array(cap), 1);
+};
 async function wrapSequence(sequence: unknown, start = 0, end?: number): Promise<JCharBuffer> {
   if (sequence === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   const length: number = typeof sequence === "string" ? sequence.length : await vcall(sequence, "length", "()I");
@@ -398,7 +407,7 @@ rt.register({
   methods: {
     ...bufferBaseMethods(),
     ...chaining("Ljava/nio/CharBuffer;"),
-    "static allocate(I)Ljava/nio/CharBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 2), JCharBuffer, 1),
+    "static allocate(I)Ljava/nio/CharBuffer;": allocCharBuffer,
     "static wrap(Ljava/lang/CharSequence;)Ljava/nio/CharBuffer;": wrapSequence,
     "static wrap(Ljava/lang/CharSequence;II)Ljava/nio/CharBuffer;": wrapSequence,
     "slice()Ljava/nio/CharBuffer;": function (this: JCharBuffer) {
@@ -415,6 +424,12 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JCharBuffer) { return charText(this); },
     "static wrap([C)Ljava/nio/CharBuffer;": (arr: Uint16Array) => wrapArray(JCharBuffer, arr, 1),
     "static wrap([CII)Ljava/nio/CharBuffer;": (arr: Uint16Array, off: number, len: number) => wrapArray(JCharBuffer, arr, 1, off, len),
+    "array()[C": function (this: JCharBuffer) {
+      const storage = this.backing.storage;
+      if (this.readOnly) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null);
+      if (storage.kind !== "heap" || !(storage.array instanceof Uint16Array)) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      return storage.array;
+    },
     "get()C": function (this: JCharBuffer) { this.clampGet(1); return charAt(this, this.pos++); },
     "put(C)Ljava/nio/CharBuffer;": function (this: JCharBuffer, v: number) { this.clampPut(1); this.dv.setUint16(this.pos++ << 1, v, this.little); return this; },
   },
@@ -502,7 +517,7 @@ rt.register({
     "decode(Ljava/nio/ByteBuffer;)Ljava/nio/CharBuffer;": function (this: JCharset, b: JBuffer) {
       const text = decodeString(new Uint8Array(b.ab, b.dv.byteOffset + b.pos, b.lim - b.pos), this);
       b.pos = b.lim;
-      const out = viewBuffer(mkByteBuffer(text.length * 2), JCharBuffer, 1);
+      const out = allocCharBuffer(text.length);
       for (let i = 0; i < text.length; i++) out.dv.setUint16(i << 1, text.charCodeAt(i), out.little);
       return out;
     },
@@ -646,7 +661,7 @@ rt.register({
     "implReplaceWith(Ljava/lang/String;)V": () => {},
     "decode(Ljava/nio/ByteBuffer;)Ljava/nio/CharBuffer;": async function (this: JCharsetDecoder, src: JBuffer) {
       this.endian = null;
-      const out = viewBuffer(mkByteBuffer((src.lim - src.pos) * 2), JCharBuffer, 1);
+      const out = allocCharBuffer(src.lim - src.pos);
       const result = decodeBuffer(this, src, out, 1);
       if (result.length) await vcall(result, "throwException", "()V");
       out.lim = out.pos; out.pos = 0;

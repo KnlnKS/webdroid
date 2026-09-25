@@ -462,6 +462,7 @@ function bufferedIn(this: JBufferedIn, source: unknown, size = 8192): void {
 }
 rt.register({
   name: "java/io/BufferedInputStream", ctor: JBufferedIn, sup: "java/io/InputStream",
+  fields: { markpos: "marked" },
   methods: {
     "<init>(Ljava/io/InputStream;)V": bufferedIn,
     "<init>(Ljava/io/InputStream;I)V": bufferedIn,
@@ -1178,6 +1179,13 @@ rt.register({
   name: "java/io/StringReader", ctor: class extends JReader {}, sup: "java/io/Reader",
   methods: {
     "<init>(Ljava/lang/String;)V": function (this: JReader, s: string) { this.s = s; },
+    "markSupported()Z": () => 1,
+    "mark(I)V": function (this: JReader, limit: number) {
+      if (limit < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "readAheadLimit < 0");
+      this.markPos = this.pos;
+    },
+    "reset()V": function (this: JReader) { this.pos = this.markPos < 0 ? 0 : this.markPos; },
+    "ready()Z": () => 1,
   },
 });
 rt.register({

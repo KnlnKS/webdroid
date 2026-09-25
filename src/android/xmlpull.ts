@@ -44,9 +44,6 @@ class JXmlPull extends JObj {
 const attrOf = (p: JXmlPull, i: number) => p.cur.attrs[i] ?? (() => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(i)); })();
 const notFound = (p: JXmlPull) => rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "expected START_TAG, got " + p.cur.t);
 export async function readerText(r: unknown): Promise<string> {
-  const own = r as { s?: string; pos?: number; src?: unknown };
-  // one of our string-backed readers, with nothing left to decode into it
-  if (typeof own.s === "string" && !own.src) { const s = own.s.slice(own.pos ?? 0); own.pos = own.s.length; return s; }
   const buf = new Uint16Array(8192);
   let s = "";
   for (;;) {
