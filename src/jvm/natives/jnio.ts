@@ -254,6 +254,10 @@ class JFloatBuffer extends JBuffer {}
 class JIntBuffer extends JBuffer {}
 class JShortBuffer extends JBuffer {}
 class JCharBuffer extends JBuffer { sequence: unknown = null; sequenceOffset = 0; }
+const mkCharBuffer = (capacity: number) => {
+  if (capacity < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "negative buffer capacity");
+  return wrapArray(JCharBuffer, new Uint16Array(capacity), 1);
+};
 async function wrapSequence(sequence: unknown, start = 0, end?: number): Promise<JCharBuffer> {
   if (sequence === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   const length: number = typeof sequence === "string" ? sequence.length : await vcall(sequence, "length", "()I");
@@ -398,7 +402,24 @@ rt.register({
   methods: {
     ...bufferBaseMethods(),
     ...chaining("Ljava/nio/CharBuffer;"),
-    "static allocate(I)Ljava/nio/CharBuffer;": (cap: number) => viewBuffer(mkByteBuffer(cap * 2), JCharBuffer, 1),
+    "static allocate(I)Ljava/nio/CharBuffer;": (cap: number) => mkCharBuffer(cap),
+    "hasArray()Z": function (this: JCharBuffer) {
+      return this.backing.storage.kind === "heap" && this.backing.storage.array instanceof Uint16Array && !this.readOnly ? 1 : 0;
+    },
+    "array()[C": function (this: JCharBuffer) {
+      if (this.readOnly) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null);
+      const storage = this.backing.storage;
+      if (storage.kind !== "heap" || !(storage.array instanceof Uint16Array))
+        throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      return storage.array;
+    },
+    "arrayOffset()I": function (this: JCharBuffer) {
+      const storage = this.backing.storage;
+      if (this.readOnly) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null);
+      if (storage.kind !== "heap" || !(storage.array instanceof Uint16Array))
+        throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      return (this.dv.byteOffset - storage.array.byteOffset) >> 1;
+    },
     "static wrap(Ljava/lang/CharSequence;)Ljava/nio/CharBuffer;": wrapSequence,
     "static wrap(Ljava/lang/CharSequence;II)Ljava/nio/CharBuffer;": wrapSequence,
     "slice()Ljava/nio/CharBuffer;": function (this: JCharBuffer) {
@@ -502,7 +523,7 @@ rt.register({
     "decode(Ljava/nio/ByteBuffer;)Ljava/nio/CharBuffer;": function (this: JCharset, b: JBuffer) {
       const text = decodeString(new Uint8Array(b.ab, b.dv.byteOffset + b.pos, b.lim - b.pos), this);
       b.pos = b.lim;
-      const out = viewBuffer(mkByteBuffer(text.length * 2), JCharBuffer, 1);
+      const out = mkCharBuffer(text.length);
       for (let i = 0; i < text.length; i++) out.dv.setUint16(i << 1, text.charCodeAt(i), out.little);
       return out;
     },
@@ -646,7 +667,7 @@ rt.register({
     "implReplaceWith(Ljava/lang/String;)V": () => {},
     "decode(Ljava/nio/ByteBuffer;)Ljava/nio/CharBuffer;": async function (this: JCharsetDecoder, src: JBuffer) {
       this.endian = null;
-      const out = viewBuffer(mkByteBuffer((src.lim - src.pos) * 2), JCharBuffer, 1);
+      const out = mkCharBuffer(src.lim - src.pos);
       const result = decodeBuffer(this, src, out, 1);
       if (result.length) await vcall(result, "throwException", "()V");
       out.lim = out.pos; out.pos = 0;

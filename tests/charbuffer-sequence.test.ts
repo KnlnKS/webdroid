@@ -5,6 +5,17 @@ import { newObj, vcall } from "../src/jvm/natives/jlang";
 rt.linkNatives();
 const wrap = (text: unknown) => vcall(rt.link("java/nio/CharBuffer").ctor, "wrap", "(Ljava/lang/CharSequence;)Ljava/nio/CharBuffer;", text);
 
+test("CharBuffer exposes its writable char-array backing", async () => {
+  const buffer = await vcall(rt.link("java/nio/CharBuffer").ctor, "allocate", "(I)Ljava/nio/CharBuffer;", 2);
+  const array = await vcall(buffer, "array", "()[C");
+  array[0] = 65;
+  expect(await vcall(buffer, "get", "(I)C", 0)).toBe(65);
+  await vcall(buffer, "put", "(C)Ljava/nio/CharBuffer;", 66);
+  expect(array[0]).toBe(66);
+  expect(await vcall(buffer, "hasArray", "()Z")).toBe(1);
+  expect(await vcall(await wrap("text"), "hasArray", "()Z")).toBe(0);
+});
+
 test("CharBuffer keeps a live read-only CharSequence view", async () => {
   const text = await newObj("java/lang/StringBuilder", "(Ljava/lang/String;)V", "abc");
   const b = await wrap(text);
