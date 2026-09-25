@@ -150,11 +150,11 @@ export function dbPath(pkg: string, name: string): string {
   if (name.includes("/")) throw rt.mkThrowable("java/lang/IllegalArgumentException", `File ${name} contains a path separator`);
   return `/data/data/${pkg}/databases/${name}`;
 }
-export async function openDatabase(path: string, flags = 0x10000000): Promise<JSQLiteDatabase> {
+export async function openDatabase(path: string, flags = 0x10000000, separate = false): Promise<JSQLiteDatabase> {
   if (!path) throw rt.mkThrowable("java/lang/IllegalArgumentException", "path must not be empty");
   const readOnly = (flags & 1) !== 0;
   const sql = await ensureSql();
-  let jdb = path === ":memory:" ? undefined : dbCache.get(path);
+  let jdb = path === ":memory:" || separate ? undefined : dbCache.get(path);
   if (readOnly) {
     const writer = await openDatabase(path, flags & ~1 & ~0x10000000);
     const cached = readOnlyCache.get(path);
@@ -187,7 +187,7 @@ export async function openDatabase(path: string, flags = 0x10000000): Promise<JS
     file.transactions.add(() => connection.txDepth > 0);
   }
   jdb.db.exec("PRAGMA user_version");
-  if (path !== ":memory:") dbCache.set(path, jdb);
+  if (path !== ":memory:" && !separate) dbCache.set(path, jdb);
   if (legacy) jdb.scheduleSave();
   return jdb;
 }
@@ -790,7 +790,7 @@ function openHelperDb(h: JSQLiteOpenHelper): Promise<JSQLiteDatabase> {
 async function initializeHelperDb(h: JSQLiteOpenHelper, thread: JThread): Promise<JSQLiteDatabase> {
   const pkg = h.jctx?.$host?.pkg ?? "app";
   const path = h.name ? dbPath(pkg, h.name) : ":memory:";
-  const jdb = await openDatabase(path, h.params.flags | 0x10000000);
+  const jdb = await openDatabase(path, h.params.flags | 0x10000000, true);
   if (h.params.synchronous !== null) jdb.db!.exec("PRAGMA synchronous='" + h.params.synchronous.replace(/'/g, "''") + "'");
   await vcallOn(thread, h, "onConfigure", "(Landroid/database/sqlite/SQLiteDatabase;)V", jdb);
   const cur = callSelf(dbMethods, "getVersion()I", jdb) as number;
