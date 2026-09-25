@@ -1,5 +1,5 @@
 import { AID } from "./res";
-import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, uiState, JViewGroup } from "./view";
+import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, uiState, JViewGroup, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, type JLayoutParams } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild, drawableSize, JLayerDrawable } from "./drawable";
 import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, flagSetters } from "../jvm/runtime";
 import { type JAttrSet, rvColor, obtainStyled, rvInt, rvDimen } from "./res";
@@ -468,10 +468,15 @@ class JRadioGroup extends JLinearLayout {
     invalidate();
   }
 }
+class JRadioLP extends JLinearLP {}
 rt.register({
   name: "android/widget/RadioGroup", ctor: JRadioGroup, sup: "android/widget/LinearLayout",
   methods: {
     ...linearMethods,
+    "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": () => Object.assign(new JRadioLP(), { width: MATCH_PARENT, height: WRAP_CONTENT }),
+    "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;": function (this: JRadioGroup, attrs: JAttrSet) { return lpFromAttrs(new JRadioLP(), this.jres!, attrs); },
+    "generateLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;": (source: JLayoutParams) => { const lp = new JRadioLP(); marginCopy.call(lp, source); return lp; },
+    "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": (lp: unknown) => +(lp instanceof JRadioLP),
     "setOnCheckedChangeListener(Landroid/widget/RadioGroup$OnCheckedChangeListener;)V": function (this: JRadioGroup, l: unknown) {
       this.checkL = l;
     },
@@ -481,6 +486,15 @@ rt.register({
       if (this.checkedId === -1) this.checkedId = this.radios().find((r) => r.checked && rt.iof(r, "android/widget/RadioButton"))?.idNum ?? -1;
       return this.checkedId;
     },
+  },
+});
+rt.register({
+  name: "android/widget/RadioGroup$LayoutParams", ctor: JRadioLP, sup: "android/widget/LinearLayout$LayoutParams",
+  methods: {
+    "<init>(II)V": function (this: JLinearLP, width: number, height: number) { this.width = width; this.height = height; },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
+    "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JLinearLP, source: JLayoutParams) { marginCopy.call(this, source); },
+    "<init>(Landroid/view/ViewGroup$MarginLayoutParams;)V": function (this: JLinearLP, source: JLayoutParams) { marginCopy.call(this, source); },
   },
 });
 rt.markers("android/widget/RadioGroup$OnCheckedChangeListener");
