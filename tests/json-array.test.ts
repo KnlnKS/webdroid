@@ -56,3 +56,12 @@ test("JSONObject serializes Java values through toString", async () => {
   expect(await vcall(object, "toString", "()Ljava/lang/String;")).toBe('{"uuid":"00000000-0000-0001-0000-000000000002"}');
   expect(await vcall(object, "get", "(Ljava/lang/String;)Ljava/lang/Object;", "uuid")).toBe(uuid);
 });
+
+test("JSON numeric tokens preserve integer, long and decimal boxes", async () => {
+  const object = await newObj("org/json/JSONObject", "(Ljava/lang/String;)V", '{"int":1,"long":9007199254740993,"decimal":1.0}');
+  expect(rt.iof(await vcall(object, "get", "(Ljava/lang/String;)Ljava/lang/Object;", "int"), "java/lang/Integer")).toBeTruthy();
+  expect(rt.iof(await vcall(object, "get", "(Ljava/lang/String;)Ljava/lang/Object;", "long"), "java/lang/Long")).toBeTruthy();
+  expect(rt.iof(await vcall(object, "get", "(Ljava/lang/String;)Ljava/lang/Object;", "decimal"), "java/lang/Double")).toBeTruthy();
+  expect(await vcall(object, "getLong", "(Ljava/lang/String;)J", "long")).toBe(9007199254740993n);
+  expect(await vcall(object, "getDouble", "(Ljava/lang/String;)D", "decimal")).toBe(1);
+});
