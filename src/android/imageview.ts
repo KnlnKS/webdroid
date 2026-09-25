@@ -24,6 +24,7 @@ export class JImageView extends JView {
   }
   drawableW = -1; drawableH = -1;
   scaleType = 3; // FIT_CENTER
+  imageAlpha = 255;
   adjustBounds = false;
   cropToPadding = false;
   imageMatrix = new JMatrix();
@@ -61,6 +62,10 @@ export class JImageView extends JView {
   maxW = Infinity; maxH = Infinity;
 }
 const scaleTypes = mkEnumSet("android/widget/ImageView$ScaleType", ["MATRIX", "FIT_XY", "FIT_START", "FIT_CENTER", "FIT_END", "CENTER", "CENTER_CROP", "CENTER_INSIDE"]);
+function setImageAlpha(this: JImageView, value: number): void {
+  const alpha = value & 255;
+  if (alpha !== this.imageAlpha) { this.imageAlpha = alpha; invalidate(this); }
+}
 const imageViewMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JImageView, c: unknown, set: JAttrSet | null) {
     await initViewFromCtx(this, c, set);
@@ -97,6 +102,9 @@ const imageViewMethods: NativeSpec["methods"] = {
     requestLayout(this);
   },
   "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JImageView) { return this.drawable; },
+  "setImageAlpha(I)V": setImageAlpha,
+  "setAlpha(I)V": setImageAlpha,
+  "getImageAlpha()I": function (this: JImageView) { return this.imageAlpha; },
   "setScaleType(Landroid/widget/ImageView$ScaleType;)V": function (this: JImageView, st: { ord: number } | null) {
     if (!st) return rt.npe();
     if (this.scaleType === st.ord) return;
@@ -183,6 +191,7 @@ const imageViewMethods: NativeSpec["methods"] = {
     const ctx = cv.ctx;
     const saveCount = saveCanvas(cv);
     try {
+      if (this.imageAlpha !== 255) ctx.globalAlpha *= this.imageAlpha / 255;
       if (this.cropToPadding) {
         ctx.beginPath(); ctx.rect(this.padL, this.padT, aw, ah); ctx.clip();
       }
