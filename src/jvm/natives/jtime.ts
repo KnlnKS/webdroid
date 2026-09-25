@@ -850,6 +850,13 @@ const chronoUnits = mkEnumSet("java/time/temporal/ChronoUnit", ["NANOS", "MICROS
 }, ["java/time/temporal/TemporalUnit"]);
 class JDateTimeFormatter extends JObj { pattern = "yyyy-MM-dd"; zone: unknown = null; }
 const fmtOf = (pattern: string) => { const f = new JDateTimeFormatter(); f.pattern = pattern; return f; };
+function offsetText(seconds: number, length: number, zeroAsZ: boolean): string {
+  if (seconds === 0 && zeroAsZ) return "Z";
+  const abs = Math.abs(seconds), hours = pad(Math.floor(abs / 3600)), minutes = pad(Math.floor(abs / 60) % 60), secs = pad(abs % 60);
+  const sign = seconds < 0 ? "-" : "+", colon = length === 3 || length === 5 ? ":" : "";
+  return sign + hours + (length === 1 && abs % 3600 === 0 ? "" : colon + minutes)
+    + (length >= 4 && abs % 60 ? colon + secs : "");
+}
 rt.register({
   name: "java/time/format/DateTimeFormatter", ctor: JDateTimeFormatter,
   statics: { ISO_LOCAL_DATE: fmtOf("yyyy-MM-dd"), ISO_LOCAL_TIME: fmtOf("HH:mm:ss"), ISO_LOCAL_DATE_TIME: fmtOf("yyyy-MM-dd'T'HH:mm:ss"), ISO_INSTANT: fmtOf("ISO_INSTANT") },
@@ -870,6 +877,8 @@ rt.register({
         : t instanceof JLocalDateTime ? new Date(localMs(t))
         : new Date();
       if (this.pattern === "ISO_INSTANT") return dt.toISOString().replace(/\.000Z$/, "Z");
+      const zone = this.zone ?? (t instanceof JZonedDateTime ? t.zone : null);
+      const offset = zone instanceof JZoneOffset ? zone.totalSeconds : -dt.getTimezoneOffset() * 60;
       return this.pattern
         .replace(/'T'/g, "T")
         .replace(/yyyy/g, String(dt.getFullYear()))
@@ -879,7 +888,8 @@ rt.register({
         .replace(/dd/g, pad(dt.getDate()))
         .replace(/HH/g, pad(dt.getHours()))
         .replace(/mm/g, pad(dt.getMinutes()))
-        .replace(/ss/g, pad(dt.getSeconds()));
+        .replace(/ss/g, pad(dt.getSeconds()))
+        .replace(/X{1,5}|x{1,5}/g, token => offsetText(offset, token.length, token[0] === "X"));
     },
   },
 });
