@@ -93,6 +93,7 @@ export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = fa
     screen: { ...screenOf(manifest, flow.screen), ...parseScreen(ENV_SCREEN) },
     fixedMs: flow.clock === "live" ? null : PINNED_CLOCK_MS,
     storage: flow.seedPrefs ? [prefsStorage(flow.pkg, flow.seedPrefs)] : [],
+    privateStorage: flow.privateStorage,
     shots,
     controlled,
     coverage,

@@ -115,6 +115,8 @@ type FlowBase<TStep extends Step> = {
    * different screens and the diff would be meaningless.
    */
   seedPrefs?: string;
+  /** Browser fallback for directory picking, with files staged before launch. */
+  privateStorage?: { files: { path: string; fixture: string }[] };
   /** Frame-rate gate for motion checkpoints; a step below it is flagged SLOW. */
   minFps?: number;
   /** The geometry positional taps were measured at. A flow with no goldens runs at it, since a
