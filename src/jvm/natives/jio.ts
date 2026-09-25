@@ -945,7 +945,7 @@ rt.register({ name: "java/io/SequenceInputStream", ctor: JSequenceInputStream, s
 
 // every method forwards to the wrapped stream, as the JDK's does: a Java subclass's super.read()
 // reaches the stream it wrapped, whether that is one of ours or app code over a socket
-class JFilterInputStream extends JInputStream { in_: unknown = null; }
+export class JFilterInputStream extends JInputStream { in_: unknown = null; }
 const fwd = (name: string, desc: string) => function (this: JFilterInputStream, ...a: unknown[]) { return vcallMaybe(this.in_, name, desc, ...a); };
 rt.register({
   name: "java/io/FilterInputStream", ctor: JFilterInputStream, sup: "java/io/InputStream",

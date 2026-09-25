@@ -4,7 +4,7 @@ import { vcall, defineException, stringHash } from "./jlang";
 import { jarray, concat, u8 } from "../abi";
 import { JRandom, randomSeed } from "./jrandom";
 import { JProps } from "./jutil";
-import { JFilterOutputStream } from "./jio";
+import { JFilterInputStream, JFilterOutputStream } from "./jio";
 
 class JPermission extends JObj { name = ""; }
 rt.register({ name: "java/security/Permission", ctor: JPermission, fields: { name: "name" }, methods: {
@@ -250,6 +250,33 @@ rt.register({
       if (off < 0 || len < 0) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "wrong index for write");
       await vcall(this.out, "write", "([BII)V", bytes, off, len);
       if (this.enabled) await vcall(this.digest, "update", "([BII)V", bytes, off, len);
+    },
+  },
+});
+
+class JDigestInputStream extends JFilterInputStream {
+  digest: JMessageDigest | null = null;
+  enabled = true;
+}
+rt.register({
+  name: "java/security/DigestInputStream", ctor: JDigestInputStream, sup: "java/io/FilterInputStream",
+  fields: { digest: "digest" },
+  methods: {
+    "<init>(Ljava/io/InputStream;Ljava/security/MessageDigest;)V": function (this: JDigestInputStream, input: unknown, digest: JMessageDigest) {
+      this.in_ = input; this.digest = digest;
+    },
+    "getMessageDigest()Ljava/security/MessageDigest;": function (this: JDigestInputStream) { return this.digest; },
+    "setMessageDigest(Ljava/security/MessageDigest;)V": function (this: JDigestInputStream, digest: JMessageDigest) { this.digest = digest; },
+    "on(Z)V": function (this: JDigestInputStream, enabled: number) { this.enabled = !!enabled; },
+    "read()I": async function (this: JDigestInputStream) {
+      const value: number = await vcall(this.in_, "read", "()I");
+      if (value >= 0 && this.enabled) await vcall(this.digest, "update", "(B)V", value);
+      return value;
+    },
+    "read([BII)I": async function (this: JDigestInputStream, bytes: Int8Array, off: number, len: number) {
+      const count: number = await vcall(this.in_, "read", "([BII)I", bytes, off, len);
+      if (count > 0 && this.enabled) await vcall(this.digest, "update", "([BII)V", bytes, off, count);
+      return count;
     },
   },
 });

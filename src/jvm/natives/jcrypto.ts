@@ -1,6 +1,7 @@
 // javax.crypto — SecretKeySpec, IvParameterSpec, Cipher (AES) and Mac (HMAC) over WebCrypto, which is
 // one-shot and async: update() buffers, doFinal() awaits the whole operation.
 import { rt, JObj } from "../runtime";
+import { vcall } from "./jlang";
 import { defineException } from "./jlang";
 import { mkIter } from "./jutil";
 import { charsToString, concat, i8, u8, utf8 } from "../abi";
@@ -9,6 +10,7 @@ import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain
 import { generateEc, isEcCurve, curveOfParams } from "./jec";
 import { caStoreMethods, parseX509 } from "./jx509";
 import { type JBuffer, bufferView } from "./jnio";
+import { JFilterInputStream, JFilterOutputStream, readStreamFully } from "./jio";
 
 rt.markers("java/security/Key", "javax/crypto/SecretKey", "java/security/spec/KeySpec");
 defineException("java/security/InvalidAlgorithmParameterException", "java/security/GeneralSecurityException");
@@ -138,6 +140,91 @@ class JCipher extends JObj {
   parts: Uint8Array[] = [];
   aad: Uint8Array[] = [];
 }
+rt.register({ name: "javax/crypto/CipherSpi", ctor: class extends JObj {}, methods: { "<init>()V": () => {} } });
+class JCipherOutputStream extends JFilterOutputStream { cipher: JCipher | null = null; closed = false; }
+rt.register({
+  name: "javax/crypto/CipherOutputStream", ctor: JCipherOutputStream, sup: "java/io/FilterOutputStream",
+  methods: {
+    "<init>(Ljava/io/OutputStream;Ljavax/crypto/Cipher;)V": function (this: JCipherOutputStream, out: unknown, cipher: JCipher) {
+      this.out = out; this.cipher = cipher;
+    },
+    "write(I)V": async function (this: JCipherOutputStream, b: number) {
+      const result: Int8Array = await vcall(this.cipher, "update", "([B)[B", Int8Array.of(b));
+      if (result?.length) await vcall(this.out, "write", "([B)V", result);
+    },
+    "write([BII)V": async function (this: JCipherOutputStream, bytes: Int8Array, off: number, len: number) {
+      if (!len) return;
+      const result: Int8Array = await vcall(this.cipher, "update", "([BII)[B", bytes, off, len);
+      if (result?.length) await vcall(this.out, "write", "([B)V", result);
+    },
+    "close()V": async function (this: JCipherOutputStream) {
+      if (this.closed) return;
+      this.closed = true;
+      try {
+        const result: Int8Array = await vcall(this.cipher, "doFinal", "()[B");
+        if (result?.length) await vcall(this.out, "write", "([B)V", result);
+        await vcall(this.out, "flush", "()V");
+      } finally {
+        await vcall(this.out, "close", "()V");
+      }
+    },
+  },
+});
+class JCipherInputStream extends JFilterInputStream {
+  cipher: JCipher | null = null;
+  plain: Int8Array | null = null;
+  loading: Promise<void> | null = null;
+  closed = false;
+  async load() {
+    if (this.plain) return;
+    if (!this.loading) this.loading = (async () => {
+      const encrypted = await readStreamFully(this.in_);
+      this.plain = await vcall(this.cipher, "doFinal", "([B)[B", new Int8Array(encrypted.buffer, encrypted.byteOffset, encrypted.byteLength));
+    })();
+    await this.loading;
+  }
+}
+rt.register({
+  name: "javax/crypto/CipherInputStream", ctor: JCipherInputStream, sup: "java/io/FilterInputStream",
+  methods: {
+    "<init>(Ljava/io/InputStream;Ljavax/crypto/Cipher;)V": function (this: JCipherInputStream, input: unknown, cipher: JCipher) {
+      this.in_ = input; this.cipher = cipher;
+    },
+    "read()I": async function (this: JCipherInputStream) {
+      if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
+      await this.load();
+      return this.pos < this.plain!.length ? this.plain![this.pos++]! & 0xff : -1;
+    },
+    "read([BII)I": async function (this: JCipherInputStream, bytes: Int8Array, off: number, len: number) {
+      if (!bytes) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      if (off < 0 || len < 0 || off > bytes.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
+      if (!len) return 0;
+      await this.load();
+      const count = Math.min(len, this.plain!.length - this.pos);
+      if (!count) return -1;
+      bytes.set(this.plain!.subarray(this.pos, this.pos + count), off);
+      this.pos += count;
+      return count;
+    },
+    "available()I": function (this: JCipherInputStream) { return this.plain ? this.plain.length - this.pos : 0; },
+    "skip(J)J": async function (this: JCipherInputStream, count: bigint) {
+      if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
+      if (count <= 0n) return 0n;
+      await this.load();
+      const skipped = Number(count < BigInt(this.plain!.length - this.pos) ? count : BigInt(this.plain!.length - this.pos));
+      this.pos += skipped;
+      return BigInt(skipped);
+    },
+    "close()V": async function (this: JCipherInputStream) {
+      if (this.closed) return;
+      this.closed = true;
+      this.plain = null;
+      await vcall(this.in_, "close", "()V");
+    },
+    "markSupported()Z": () => 0,
+  },
+});
 function getCipher(t: string, provider?: unknown): JCipher {
   const [alg, mode = "ECB", padding = "PKCS5Padding"] = t.split("/");
   const c = new JCipher();
