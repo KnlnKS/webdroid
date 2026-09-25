@@ -133,6 +133,8 @@ export class Cpu {
   private budgetWake: (() => void) | null = null;
   /** signals queued for this thread, delivered at its next slice boundary */
   signals: number[] = [];
+  signalInterrupt: (() => void) | null = null;
+  private deferSignalUntilResume = false;
   signalMask = 0n;
   alternateStack: { sp: bigint; size: bigint; flags: number } | null = null;
   alternateActive = false;
@@ -241,15 +243,20 @@ export class Cpu {
   kill(sig: number): void {
     if (this.finished || !sigHandlers.has(sig)) return;
     if (!this.signals.includes(sig)) this.signals.push(sig);           // pending already: signals do not queue up
+    if (this.signalInterrupt && !(this.signalMask & 1n << BigInt(sig - 1))) {
+      this.deferSignalUntilResume = true;
+      this.signalInterrupt();
+      return;
+    }
     this.pump();
   }
-  /** a queued signal reaches a parked or idle Cpu on a clean stack, never inside the sender's own host call;
-   *  a running loop takes its queue at its next slice boundary. A handler parked in its own host call
+  /** a queued signal reaches a parked or idle Cpu on a clean stack, except an interrupted futex
+   *  returns to the guest first. A running loop takes its queue at its next slice boundary. A handler parked in its own host call
    *  (sigsuspend) is a parked frame like any other: the next signal runs on top of it. */
   pump(): void {
     if (this.budgetWake && this.signals.some((sig) => !(this.signalMask & 1n << BigInt(sig - 1)))) this.budgetWake();
     queueMicrotask(() => {
-      if (this.finished || (!this.parked && !this.baseAvailable)) return;
+      if (this.finished || this.deferSignalUntilResume || (!this.parked && !this.baseAvailable)) return;
       const sig = this.takeSignal();
       if (sig) void this.deliver(sig);
     });
@@ -305,10 +312,11 @@ export class Cpu {
           mem.st64(context + 0x20, this.alternateStack.size);
         }
         mem.st64(context + 0x28, mask);
-        for (let i = 0; i < 31; i++) mem.st64(context + 0xb0 + i * 8, reg(i));
-        mem.st64(context + 0x1a8, reg(31));
-        mem.st64(context + 0x1b0, BigInt(this.pc));
-        mem.st64(context + 0x1b8, BigInt(this.cpsr >>> 0));
+        // sigcontext begins with fault_address before its 31 registers.
+        for (let i = 0; i < 31; i++) mem.st64(context + 0xb8 + i * 8, reg(i));
+        mem.st64(context + 0x1b0, reg(31));
+        mem.st64(context + 0x1b8, BigInt(this.pc));
+        mem.st64(context + 0x1c0, BigInt(this.cpsr >>> 0));
       }
       const previousAlt = this.alternateStack, previousActive = this.alternateActive;
       if (alt !== undefined) {
@@ -320,15 +328,15 @@ export class Cpu {
         await this.call(h.fn, [sig, frame, context], SIGNAL_FRAME + sig, restore, alt);
         if (context) {
           for (let i = 0; i < 31; i++) {
-            const value = mem.ld64(context + 0xb0 + i * 8);
+            const value = mem.ld64(context + 0xb8 + i * 8);
             this.w[2 * i] = Number(value & 0xffffffffn);
             this.w[2 * i + 1] = Number(value >> 32n);
           }
-          const sp = mem.ld64(context + 0x1a8);
+          const sp = mem.ld64(context + 0x1b0);
           this.w[62] = Number(sp & 0xffffffffn);
           this.w[63] = Number(sp >> 32n);
-          this.setPc(Number(mem.ld64(context + 0x1b0) & 0xffffffffn));
-          this.cpsr = Number(mem.ld64(context + 0x1b8) & 0xffffffffn);
+          this.setPc(Number(mem.ld64(context + 0x1b8) & 0xffffffffn));
+          this.cpsr = Number(mem.ld64(context + 0x1c0) & 0xffffffffn);
         }
       } finally {
         if (alt !== undefined) { this.alternateStack = previousAlt; this.alternateActive = previousActive; }
@@ -532,6 +540,7 @@ export class Cpu {
           setCurThread(this.jthread);
           if (this.finished) return;
           hostReturn(this, v as HostRet);
+          this.deferSignalUntilResume = false;
           continue;
         }
         this.state = "yield";

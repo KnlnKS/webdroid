@@ -115,9 +115,21 @@ export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: numbe
     if (!q) futexes.set(addr, (q = []));
     fstat(cpu, ms === null ? "wait" : "timedwait");
     return new Promise<number>((r) => {
-      const w = (woken: boolean) => { unparkTimeout(id); fstat(cpu, woken ? "woken" : "timeout"); r(woken ? 0 : fail(cpu, E.TIMEDOUT)); };
+      const previous = cpu.signalInterrupt;
+      let active = true;
+      const finish = (result: number) => {
+        if (!active) return;
+        active = false;
+        unparkTimeout(id);
+        const i = q.indexOf(w); if (i >= 0) q.splice(i, 1);
+        if (cpu.signalInterrupt === interrupt) cpu.signalInterrupt = previous;
+        r(result);
+      };
+      const w = (woken: boolean) => { fstat(cpu, woken ? "woken" : "timeout"); finish(woken ? 0 : fail(cpu, E.TIMEDOUT)); };
+      const interrupt = () => { fstat(cpu, "interrupted"); finish(fail(cpu, E.INTR)); };
+      cpu.signalInterrupt = interrupt;
       q.push(w);
-      const id = ms === null ? undefined : parkTimeout(() => { const i = q.indexOf(w); if (i >= 0) { q.splice(i, 1); w(false); } }, Math.max(0, ms));
+      const id = ms === null ? undefined : parkTimeout(() => w(false), Math.max(0, ms));
     });
   }
   if (cmd === 1 || cmd === 10) {                                                // FUTEX_WAKE / FUTEX_WAKE_BITSET
