@@ -62,19 +62,21 @@ export function svcStart(ctx: JContext, intent: JIntent | null, _fg: boolean): J
   const cls = intent?.component;
   if (!cls) return null;
   const owner = packages.get(intent.componentPkg ?? intent.pkg ?? ctx.$host?.pkg ?? "");
-  const node = owner?.components.service.get(qualifyComponent(cls, owner.pkg));
+  const pkg = owner?.pkg ?? ctx.$host?.pkg ?? "", component = qualifyComponent(cls, pkg);
+  const node = owner?.components.service.get(component);
   if (owner && node && (owner.pkg !== ctx.$host?.pkg || owner.process(node) !== (PROCESS_NAME || ctx.$host?.pkg))) {
-    void serviceTransport.start(owner, owner.process(node), intent, _fg).catch(reportUncaught);
-    return mkComponentName(owner.pkg, qualifyComponent(cls, owner.pkg));
+    void serviceTransport.start(owner, owner.process(node), intent, _fg)
+      .then(() => activateBindings(pkg, component)).catch(reportUncaught);
+    return mkComponentName(pkg, component);
   }
-  const si = serviceRecord(ctx, cls);
+  const si = serviceRecord(ctx, component);
   si.started = 1; si.flags |= 1;
   si.lastActivityTime = BigInt(Date.now());
   const service = si, startId = ++si.startId;
   void onMain(async () => {
     await vcall(await createService(service, ctx), "onStartCommand", "(Landroid/content/Intent;II)I", intent, 0, startId);
-  }).catch((error) => {
-    if (runningServices.get(cls) === service) runningServices.delete(cls);
+  }).then(() => activateBindings(pkg, component)).catch((error) => {
+    if (runningServices.get(component) === service) runningServices.delete(component);
     reportUncaught(error);
   });
   return si.service;
@@ -121,9 +123,18 @@ export function unbindLocalService(key: string): Promise<void> {
   };
   return inMainJob() ? run() : onMain(run);
 }
-type Connection = { key: string; owner: PackageRecord; process: string; remote: boolean; cancelDeath: (() => void) | null };
+type Connection = { key: string; owner: PackageRecord; process: string; component: string; remote: boolean;
+  cancelDeath: (() => void) | null; activate: (() => void) | null };
 const connections = new Map<unknown, Connection>();
 let nextConnection = 1;
+function activateBindings(pkg: string, component: string) {
+  for (const record of connections.values()) {
+    if (record.owner.pkg !== pkg || record.component !== component || !record.activate) continue;
+    const activate = record.activate;
+    record.activate = null;
+    activate();
+  }
+}
 /** ServiceConnection callbacks run on the caller's main queue, or on the Executor the API 29 overload names. */
 function connectionDelivery(executor: unknown): (job: () => Promise<void>) => Promise<void> {
   if (!executor) return onMain;
@@ -139,12 +150,11 @@ export async function svcBind(ctx: JContext, intent: JIntent, connection: unknow
   if (!owner || (!info.exported && owner.pkg !== ctx.$host.pkg)) return 0;
   if (info.permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", info.permission, ctx.$host.pkg) !== 0)
     throw rt.mkThrowable("java/lang/SecurityException", "Service requires " + info.permission);
-  if (!(flags & 1) && !runningServices.has(info.name)) return 0;
   if (connections.has(connection)) return 1;
   const key = PROCESS_PID + ":" + nextConnection++, remote = owner.pkg !== ctx.$host.pkg || info.processName !== (PROCESS_NAME || ctx.$host.pkg);
   const bound: JIntent = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent);
   bound.component = info.name; bound.componentPkg = owner.pkg;
-  const record: Connection = { key, owner, process: info.processName, remote, cancelDeath: null }; connections.set(connection, record);
+  const record: Connection = { key, owner, process: info.processName, component: info.name, remote, cancelDeath: null, activate: null }; connections.set(connection, record);
   const connect = () => {
     const ready = remote ? serviceTransport.bind(owner, info.processName, bound, key) : onMain(() => bindLocalService(ctx, bound, key));
     void ready.then(binder => {
@@ -169,7 +179,8 @@ export async function svcBind(ctx: JContext, intent: JIntent, connection: unknow
       reportUncaught(error);
     });
   };
-  connect();
+  if (!(flags & 1) && !runningServices.has(info.name)) record.activate = connect;
+  else connect();
   return 1;
 }
 export function svcUnbind(connection: unknown): void {
