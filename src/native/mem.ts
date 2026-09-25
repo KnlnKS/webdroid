@@ -96,8 +96,7 @@ export const mem = {
   mapPages: (n: number, reserve = false, alignment = PAGE_SIZE): number => core.map_pages(n >>> 0, reserve ? 1 : 0, alignment) >>> 0,
   /** return a page-aligned run (any sub-range of a mapping); false when misaligned */
   unmapPages: (addr: number, n: number): boolean => core.unmap_pages(addr >>> 0, n >>> 0) !== 0,
-  /** mprotect to accessible: a reserved page becomes a zeroed page of its own; false (ENOMEM) on
-   *  an unmapped or phantom one */
+  /** mprotect to accessible: reserved pages become zeroed; image pages retain their bytes. */
   commitPages: (addr: number, n: number): boolean => core.commit_pages(addr >>> 0, n >>> 0) !== 0,
   /** mprotect to PROT_NONE: the pages go back to being address space */
   decommitPages: (addr: number, n: number): void => core.decommit_pages(addr >>> 0, n >>> 0),

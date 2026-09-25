@@ -358,9 +358,26 @@ function setDur(this: JValueAnimator, d: bigint) {
   return this;
 }
 function cloneAnimator(this: JValueAnimator): JValueAnimator {
-  const copy = new (this.constructor as new () => JValueAnimator)();
-  Object.assign(copy, this, { running: false, paused: false, updateLs: [...this.updateLs], animLs: [...this.animLs], holders: [...this.holders] });
-  return copy;
+  const clones = new Map<JValueAnimator, JValueAnimator>();
+  const clone = (source: JValueAnimator): JValueAnimator => {
+    const prior = clones.get(source);
+    if (prior) return prior;
+    const copy = new (source.constructor as new () => JValueAnimator)();
+    clones.set(source, copy);
+    Object.assign(copy, source, {
+      running: false, paused: false, next: null,
+      updateLs: [...source.updateLs], animLs: [...source.animLs],
+      keys: source.keys?.slice() ?? null, objKeys: source.objKeys?.slice() ?? null,
+      holders: source.holders.map((h) => Object.assign(new JPVH(), h, {
+        keys: h.keys?.slice() ?? null, objKeys: h.objKeys?.slice() ?? null,
+        fractions: h.fractions?.slice() ?? null,
+      })),
+    });
+    if (source instanceof JAnimatorSet) (copy as JAnimatorSet).anims = source.anims.map(clone);
+    if (source.next) copy.next = clone(source.next);
+    return copy;
+  };
+  return clone(this);
 }
 const vaMethods: NativeSpec["methods"] = {
   "setDuration(J)Landroid/animation/ValueAnimator;": setDur,
@@ -494,6 +511,7 @@ rt.register({
     // R8/javac narrow the return type at ObjectAnimator call sites, so the mangled name
     // differs from the ValueAnimator/Animator overloads above and needs its own entry.
     "setDuration(J)Landroid/animation/ObjectAnimator;": setDur,
+    "clone()Landroid/animation/ObjectAnimator;": cloneAnimator,
     "static ofFloat(Ljava/lang/Object;Ljava/lang/String;[F)Landroid/animation/ObjectAnimator;": (t: unknown, p: string, v: Float32Array) => objAnim(t, { propName: p }, v, false),
     "static ofInt(Ljava/lang/Object;Ljava/lang/String;[I)Landroid/animation/ObjectAnimator;": (t: unknown, p: string, v: Int32Array) => objAnim(t, { propName: p }, v, true),
     "static ofFloat(Ljava/lang/Object;Landroid/util/Property;[F)Landroid/animation/ObjectAnimator;": (t: unknown, p: unknown, v: Float32Array) => objAnim(t, { prop: p }, v, false),
@@ -527,6 +545,7 @@ rt.register({
   methods: {
     ...vaMethods,
     "setDuration(J)Landroid/animation/AnimatorSet;": setDur,
+    "clone()Landroid/animation/AnimatorSet;": cloneAnimator,
     "playTogether([Landroid/animation/Animator;)V": function (this: JAnimatorSet, arr: JValueAnimator[]) { this.anims = [...(arr ?? [])]; },
     "playTogether(Ljava/util/Collection;)V": async function (this: JAnimatorSet, c: unknown) { this.anims = [...await toJsArray(c)] as JValueAnimator[]; },
     "playSequentially([Landroid/animation/Animator;)V": function (this: JAnimatorSet, arr: JValueAnimator[]) { this.anims = [...(arr ?? [])]; this.sequential = true; },

@@ -86,3 +86,9 @@ test("A64 transient mappings stay out of the malloc arena", () => {
   expect(mem.unmapVa(reservation, 0x7000_0000)).toBe(true);
   expect(mem.stats().planes).toBe(before.planes);
 });
+
+test("mprotect accepts mapped ELF image pages", () => {
+  const image = mem.reserve(4096, 4096);
+  expect(mem.commitVa(BigInt(image), 4096)).toBe(true);
+  expect(mem.commitVa(BigInt(image - 4096), 4096)).toBe(false);
+});

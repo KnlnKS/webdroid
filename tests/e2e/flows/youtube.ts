@@ -23,7 +23,7 @@ export const youtube: Flow = {
     { id: "search-type", label: "Type Big Buck Bunny", action: { type: "typeInto", ...point(576, 144), text: "Big Buck Bunny 60fps 4K" }, wait: wait.live(1000) },
     { id: "search-go", label: "Search results", action: { type: "tapAt", ...point(576, 288) }, wait: wait.live(15000), fastWait: wait.state({ kind: "text", text: "Go to channel" }, 0, 15_000) },
     { id: "results-swipe", label: "Reveal the first film result", action: { type: "swipe", from: pair(540, 1500), to: pair(540, 900), ms: 400, untilText: film, maxSwipes: 8 }, fastAction: { type: "swipe", from: pair(540, 1500), to: pair(540, 900), ms: 400, untilText: fastFilm, maxSwipes: 8 }, wait: wait.live(3000) },
-    { id: "video-open", label: "Open Big Buck Bunny", action: { type: "tapText", text: film }, fastAction: { type: "tapText", text: fastFilm }, wait: wait.liveSample(15000), fastWait: wait.state({ kind: "text", text: "Subscribe" }, 0, 15_000) },
+    { id: "video-open", label: "Open Big Buck Bunny", action: { type: "tapAt", ...point(540, 1350) }, wait: wait.liveSample(15000), fastWait: wait.state({ kind: "text", text: "Subscribe" }, 0, 15_000) },
     { id: "show-controls", label: "Show player controls", action: { type: "tapAt", ...point(540, 360) }, wait: wait.live(12000), fastWait: wait.state({ kind: "text", text: "Pause video" }, 0, 6_000) },
     { id: "pause", label: "Pause playback", action: { type: "tapText", text: "Pause video" }, wait: wait.live(2000), fastWait: wait.state({ kind: "text", text: "Play video" }, 0, 6_000) },
     { id: "resume", label: "Resume playback", action: { type: "tapText", text: "Play video" }, wait: wait.liveSample(1000), fastWait: wait.state({ kind: "text", text: "Pause video" }, 0, 6_000) },

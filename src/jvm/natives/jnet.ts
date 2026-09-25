@@ -14,7 +14,7 @@ import { JThrowable, stringHash, mkEnumSet, newObj, vcall, defineException } fro
 import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, dotName, i8, u8 } from "../abi";
 import { vfs, type JOutputStream } from "./jio";
-import { Relay, syntheticAddress, syntheticHost, nameExists, ipv4Text, type Ipv4 } from "../../shell/relay";
+import { Relay, DatagramRelay, syntheticAddress, syntheticHost, nameExists, ipv4Text, type Ipv4 } from "../../shell/relay";
 
 rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager", "javax/net/ssl/KeyManager",
   "javax/net/ssl/SSLSession", "javax/net/ssl/SSLContextSpi", "java/nio/channels/ReadableByteChannel", "java/nio/channels/WritableByteChannel",
@@ -52,7 +52,13 @@ rt.register({
       function (plain: JSocket, host: string, port: number, autoClose: number) {
         const s = rt.make("javax/net/ssl/SSLSocket") as JSocket;
         s.host = host ?? plain?.host ?? ""; s.port = port || plain?.port || 443; s.tls = true;
-        if (autoClose && plain) { plain.relay?.close(); plain.relay = null; plain.closed = 1; }
+        if (plain) {
+          plain.wrapped = s;
+          if (autoClose) {
+            plain.relay?.close(); plain.relay = null;
+            s.underlying = plain;
+          }
+        }
         return s;
       },
     "createSocket()Ljava/net/Socket;": () => newObj("javax/net/ssl/SSLSocket"),
@@ -225,21 +231,26 @@ rt.register({
     "isBound()Z": () => 0,
   },
 });
-class JInetSocketAddress extends JObj { host = ""; port = 0; addr: JInetAddress | null = null; }
+class JInetSocketAddress extends JObj { host = ""; port = 0; addr: JInetAddress | null = null; unresolved = false; }
 const inetSock = (host: string | null, port: number) => Object.assign(new JInetSocketAddress(), { host: host ?? "", port });
+function unresolvedSock(host: string, port: number): JInetSocketAddress {
+  if (host == null || port < 0 || port > 65535) throw rt.mkThrowable("java/lang/IllegalArgumentException", `host=${host}, port=${port}`);
+  return Object.assign(new JInetSocketAddress(), { host, port, unresolved: true });
+}
 rt.register({
   name: "java/net/InetSocketAddress", ctor: JInetSocketAddress, sup: "java/net/SocketAddress",
   methods: {
     "<init>(Ljava/lang/String;I)V": function (this: JInetSocketAddress, h: string, p2: number) { this.host = h ?? ""; this.port = p2; },
     "<init>(Ljava/net/InetAddress;I)V": function (this: JInetSocketAddress, a: JInetAddress, p2: number) { this.addr = a; this.host = a?.host ?? ""; this.port = p2; },
-    "static createUnresolved(Ljava/lang/String;I)Ljava/net/InetSocketAddress;": inetSock,
+    "static createUnresolved(Ljava/lang/String;I)Ljava/net/InetSocketAddress;": unresolvedSock,
     "getHostString()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host; },
     "getHostName()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host; },
     "getPort()I": function (this: JInetSocketAddress) { return this.port; },
     "getAddress()Ljava/net/InetAddress;": async function (this: JInetSocketAddress) {
+      if (this.unresolved) return null;
       return this.addr ??= await inetAddr(this.host);
     },
-    "isUnresolved()Z": () => 0,
+    "isUnresolved()Z": function (this: JInetSocketAddress) { return +this.unresolved; },
     "toString()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host + ":" + this.port; },
   },
 });
@@ -278,8 +289,111 @@ rt.register({
     "setPort(I)V": function (this: JDatagramPacket, port: number) { packetTarget(this, this.address, port); },
   },
 });
+type Datagram = { bytes: Int8Array; address: JInetAddress; port: number };
+type DatagramWaiter = { resolve: (packet: Datagram) => void; reject: (error: unknown) => void; timer: ReturnType<typeof setTimeout> | null };
+const datagramPorts = new Map<number, JDatagramSocket>();
+let nextDatagramPort = 49152;
+class JDatagramSocket extends JObj {
+  port = -1;
+  timeout = 0;
+  closed = false;
+  remote: JInetSocketAddress | null = null;
+  relay: DatagramRelay | null = null;
+  queue: Datagram[] = [];
+  waiters: DatagramWaiter[] = [];
+  bind(port: number) {
+    if (this.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
+    if (this.port >= 0) throw rt.mkThrowable("java/net/SocketException", "Socket is already bound");
+    if (port < 0 || port > 65535) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Port out of range");
+    if (!port) {
+      for (let i = 0; i < 16384; i++) {
+        const candidate = nextDatagramPort++;
+        if (nextDatagramPort > 65535) nextDatagramPort = 49152;
+        if (!datagramPorts.has(candidate)) { port = candidate; break; }
+      }
+    }
+    if (!port || datagramPorts.has(port)) throw rt.mkThrowable("java/net/BindException", "Address already in use");
+    this.port = port;
+    datagramPorts.set(port, this);
+  }
+  deliver(packet: Datagram) {
+    const waiter = this.waiters.shift();
+    if (waiter) { if (waiter.timer) clearTimeout(waiter.timer); waiter.resolve(packet); }
+    else this.queue.push(packet);
+  }
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.relay?.close();
+    if (this.port >= 0) datagramPorts.delete(this.port);
+    for (const waiter of this.waiters.splice(0)) {
+      if (waiter.timer) clearTimeout(waiter.timer);
+      waiter.reject(rt.mkThrowable("java/net/SocketException", "Socket is closed"));
+    }
+    this.queue = [];
+  }
+}
+rt.register({
+  name: "java/net/DatagramSocket", ctor: JDatagramSocket, ifaces: ["java/io/Closeable"],
+  methods: {
+    "<init>()V": function (this: JDatagramSocket) { this.bind(0); },
+    "<init>(I)V": function (this: JDatagramSocket, port: number) { this.bind(port); },
+    "<init>(Ljava/net/SocketAddress;)V": function (this: JDatagramSocket, address: JInetSocketAddress | null) { this.bind(address?.port ?? 0); },
+    "bind(Ljava/net/SocketAddress;)V": function (this: JDatagramSocket, address: JInetSocketAddress | null) { this.bind(address?.port ?? 0); },
+    "connect(Ljava/net/InetAddress;I)V": function (this: JDatagramSocket, address: JInetAddress, port: number) {
+      if (port < 0 || port > 65535) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Port out of range");
+      this.remote = Object.assign(new JInetSocketAddress(), { addr: address, host: address.host, port });
+    },
+    "disconnect()V": function (this: JDatagramSocket) { this.remote = null; },
+    "send(Ljava/net/DatagramPacket;)V": async function (this: JDatagramSocket, packet: JDatagramPacket) {
+      if (this.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
+      const address = packet.address ?? this.remote?.addr;
+      const port = packet.port >= 0 ? packet.port : this.remote?.port ?? -1;
+      if (!address || port < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Destination is not set");
+      const bytes = packet.data.slice(packet.offset, packet.offset + packet.length);
+      if (address.bytes[0] !== 127) {
+        this.relay ??= new DatagramRelay((data, source, sourcePort) => {
+          if (!this.closed) this.deliver({ bytes: i8(data), address: inetBytes(Int8Array.from(source), null), port: sourcePort });
+        });
+        try { await this.relay.send(address.host, port, u8(bytes)); }
+        catch {
+          rt.noteMissing("UDP remote transport");
+          throw rt.mkThrowable("java/net/SocketException", "Remote UDP transport is unavailable");
+        }
+        return;
+      }
+      datagramPorts.get(port)?.deliver({ bytes, address: inetAddr("localhost") as JInetAddress, port: this.port });
+    },
+    "receive(Ljava/net/DatagramPacket;)V": async function (this: JDatagramSocket, packet: JDatagramPacket) {
+      if (this.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
+      const incoming = this.queue.shift() ?? await new Promise<Datagram>((resolve, reject) => {
+        const waiter: DatagramWaiter = { resolve, reject, timer: null };
+        if (this.timeout) waiter.timer = setTimeout(() => {
+          this.waiters.splice(this.waiters.indexOf(waiter), 1);
+          reject(rt.mkThrowable("java/net/SocketTimeoutException", "Receive timed out"));
+        }, this.timeout);
+        this.waiters.push(waiter);
+      });
+      const length = Math.min(packet.length, incoming.bytes.length);
+      packet.data.set(incoming.bytes.subarray(0, length), packet.offset);
+      packet.length = length;
+      packet.address = incoming.address;
+      packet.port = incoming.port;
+    },
+    "setSoTimeout(I)V": function (this: JDatagramSocket, ms: number) {
+      if (ms < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout < 0");
+      this.timeout = ms;
+    },
+    "getSoTimeout()I": function (this: JDatagramSocket) { return this.timeout; },
+    "getLocalPort()I": function (this: JDatagramSocket) { return this.port; },
+    "isBound()Z": function (this: JDatagramSocket) { return +(this.port >= 0); },
+    "isClosed()Z": function (this: JDatagramSocket) { return +this.closed; },
+    "close()V": function (this: JDatagramSocket) { this.close(); },
+  },
+});
 class JSocket extends JObj {
   host = ""; port = 0; tls = false; alpn: string[] = []; relay: Relay | null = null; closed = 0; soTimeout = 0;
+  wrapped: JSocket | null = null; underlying: JSocket | null = null;
   private opening: Promise<void> | null = null;
   /** Opening is deferred so an SSLSocket wrapping a plain one can take the target over and
    *  connect with TLS instead -- which is exactly how OkHttp builds an HTTPS connection. */
@@ -287,6 +401,7 @@ class JSocket extends JObj {
     if (this.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
     if (this.opening) return this.opening;
     if (this.relay) return Promise.resolve();
+    if (this.wrapped) return this.wrapped.open();
     const r = this.relay = new Relay(this.host, this.port, this.tls, this.alpn);
     return this.opening = r.ready.catch(() => {
       r.close();
@@ -294,6 +409,13 @@ class JSocket extends JObj {
       throw rt.mkThrowable("java/net/ConnectException", `Failed to connect to ${this.host}:${this.port}`);
     }).finally(() => { this.opening = null; });
   }
+  close(): void {
+    if (this.closed) return;
+    this.closed = 1;
+    this.relay?.close(); this.relay = null;
+    this.wrapped?.close(); this.underlying?.close();
+  }
+  activeRelay(): Relay | null { return this.relay ?? this.wrapped?.relay ?? null; }
 }
 class JSocketIn extends JObj { s!: JSocket; }
 /** A read under SO_TIMEOUT waits only that long, then throws and leaves the stream usable —
@@ -331,17 +453,17 @@ const socketMethods: NativeSpec["methods"] = {
   "getOutputStream()Ljava/io/OutputStream;": function (this: JSocket) {
     const o = rt.make("webdroid/SocketOutputStream") as JSocketOut; o.s = this; return o;
   },
-  "close()V": function (this: JSocket) { this.closed = 1; this.relay?.close(); this.relay = null; },
+  "close()V": function (this: JSocket) { this.close(); },
   "isClosed()Z": function (this: JSocket) { return this.closed; },
-  "isConnected()Z": function (this: JSocket) { return this.relay?.connected ? 1 : 0; },
-  "isInputShutdown()Z": function (this: JSocket) { return this.relay ? 0 : 1; },
-  "isOutputShutdown()Z": function (this: JSocket) { return this.relay ? 0 : 1; },
+  "isConnected()Z": function (this: JSocket) { return this.activeRelay()?.connected ? 1 : 0; },
+  "isInputShutdown()Z": function (this: JSocket) { return this.activeRelay() ? 0 : 1; },
+  "isOutputShutdown()Z": function (this: JSocket) { return this.activeRelay() ? 0 : 1; },
   "shutdownInput()V": () => {},
   "shutdownOutput()V": () => {},
   "getPort()I": function (this: JSocket) { return this.port; },
-  "getLocalPort()I": function (this: JSocket) { return this.relay?.localEndpoint?.port ?? -1; },
+  "getLocalPort()I": function (this: JSocket) { return this.activeRelay()?.localEndpoint?.port ?? -1; },
   "getLocalSocketAddress()Ljava/net/SocketAddress;": function (this: JSocket) {
-    const local = this.relay?.localEndpoint; return local ? inetSock(local.address, local.port) : null;
+    const local = this.activeRelay()?.localEndpoint; return local ? inetSock(local.address, local.port) : null;
   },
   "getInetAddress()Ljava/net/InetAddress;": function (this: JSocket) { return inetAddr(this.host); },
   "getRemoteSocketAddress()Ljava/net/SocketAddress;": function (this: JSocket) { return inetSock(this.host, this.port); },
@@ -571,6 +693,7 @@ rt.register({
     "getPath()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().path); },
     "toURL()Ljava/net/URL;": function (this: JURI) { const u = new JURL(); urlInit(u, this.u); return u; },
     "getUserInfo()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().userInfo); },
+    "getRawUserInfo()Ljava/lang/String;": function (this: JURI) { return this.parts().userInfo; },
     "getPort()I": function (this: JURI) { return this.parts().port; },
     "getQuery()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().query); },
     "getRawQuery()Ljava/lang/String;": function (this: JURI) { return this.parts().query; },

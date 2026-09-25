@@ -21,6 +21,14 @@ test("URI.getRawAuthority preserves escaped authority text", async () => {
   expect(await vcall(empty, "getAuthority", "()Ljava/lang/String;")).toBeNull();
 });
 
+test("URI.getRawUserInfo preserves escaped credentials", async () => {
+  const uri = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "https://user%20name:p%40ss@example.com/path");
+  expect(await vcall(uri, "getRawUserInfo", "()Ljava/lang/String;")).toBe("user%20name:p%40ss");
+  expect(await vcall(uri, "getUserInfo", "()Ljava/lang/String;")).toBe("user name:p@ss");
+  const anonymous = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "https://example.com/path");
+  expect(await vcall(anonymous, "getRawUserInfo", "()Ljava/lang/String;")).toBeNull();
+});
+
 test("URI.getRawQuery preserves the hierarchical query component", async () => {
   const escaped = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "https://example.test/a?name=a%20b&path=%2F#fragment");
   expect(await vcall(escaped, "getRawQuery", "()Ljava/lang/String;")).toBe("name=a%20b&path=%2F");

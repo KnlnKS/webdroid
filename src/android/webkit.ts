@@ -16,7 +16,7 @@ import { webCookies, thirdPartyCookies } from "./cookies";
 import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from "../shell/webbridge";
 import { localAsset } from "../shell/localassets";
 import { EXT_MIME, MIME_EXT } from "../mime";
-import { WEB_INJECT } from "../shell/webinject";
+import { WEB_INJECT, webFormRequest } from "../shell/webinject";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 
@@ -197,7 +197,7 @@ function mkRequest(url: string, gesture = false): JReq {
 }
 class JWebErr extends JObj { code = -1; desc = ""; }
 
-interface Entry { url: string; src?: string; doc?: string }
+interface Entry { url: string; src?: string; doc?: string; method?: string; body?: ArrayBuffer; contentType?: string }
 class JWebHistoryItem extends JObj {
   constructor(public entry: Entry) { super(); }
 }
@@ -272,7 +272,9 @@ export class JWebView extends JViewGroup {
         const values = Array.isArray(data.values) ? data.values.filter((value: unknown): value is string => typeof value === "string") : [];
         ports[0].postMessage(jar.network(data.url, this.url ?? "", values, thirdPartyCookies.has(this))); ports[0].close();
       };
-      this.send({ kind: "load", src: this.hist[this.idx]?.src, doc: this.hist[this.idx]?.doc, userAgent: this.settings.v.userAgentString }, [channel.port2]);
+      const entry = this.hist[this.idx];
+      this.send({ kind: "load", src: entry?.src, doc: entry?.doc, method: entry?.method, body: entry?.body,
+        contentType: entry?.contentType, userAgent: this.settings.v.userAgentString }, [channel.port2]);
     }
     else if (data.kind === "script-ready") {
       this.scriptReady = true;
@@ -284,6 +286,9 @@ export class JWebView extends JViewGroup {
       this.finishLoad(typeof data.url === "string" ? data.url : null, typeof data.title === "string" ? data.title : "", typeof data.error === "string" ? data.error : null);
     } else if (data.kind === "fragment" && typeof data.url === "string") this.fragmentNavigated(data.url);
     else if (data.kind === "navigate" && typeof data.url === "string") this.navigate(data.url, data.replace === true);
+    else if (data.kind === "submit" && typeof data.url === "string" && typeof data.method === "string" && data.body instanceof ArrayBuffer)
+      this.go({ url: data.url, src: srcFor(data.url, this), method: data.method, body: data.body,
+        contentType: typeof data.contentType === "string" ? data.contentType : undefined });
     else if (data.kind === "evaluated" && typeof data.seq === "number" && typeof data.value === "string") this.evaluations.get(data.seq)?.(data.value);
   };
   private send(data: object, transfer: Transferable[] = []) { this.el?.contentWindow?.postMessage({ ...data, bridge: this.remote?.id }, this.remoteOrigin, transfer); }
@@ -330,7 +335,7 @@ export class JWebView extends JViewGroup {
         const method = mangleMethod("shouldInterceptRequest", "(Landroid/webkit/WebView;" + arg + ")Landroid/webkit/WebResourceResponse;");
         return jmethod(this.client, method) !== jmethod(base, method);
       });
-      if (intercept || Object.keys(this.ifaces).length) {
+      if (intercept || Object.keys(this.ifaces).length || e.method === "POST") {
         const remote = this.remote = new WebBridge({ ...this.ifaces }, webCookies(appHost?.pkg ?? ""), () => this.url, intercept ? request => this.intercept(request) : undefined);
         window.addEventListener("message", this.message);
         void remote.ready.then((origin) => {
@@ -427,6 +432,20 @@ export class JWebView extends JViewGroup {
       e.preventDefault();
       this.navigate(href);
     }, true);
+    const submit = (form: HTMLFormElement, submitter: HTMLElement | null) => {
+      void webFormRequest(form, submitter, this.url ?? doc.URL).then((request) => {
+        if (!request || this.gen !== g) return;
+        if (request.method === "GET") this.navigate(request.url);
+        else this.go({ ...request, src: srcFor(request.url, this) });
+      });
+    };
+    doc.defaultView?.addEventListener("submit", (event) => {
+      if (event.defaultPrevented || (event.target as Element)?.tagName !== "FORM") return;
+      event.preventDefault();
+      submit(event.target as HTMLFormElement, (event as SubmitEvent).submitter);
+    });
+    const prototype = Object.getPrototypeOf(doc.createElement("form")) as HTMLFormElement;
+    prototype.submit = function (this: HTMLFormElement) { submit(this, null); };
   }
   private navigate(href: string, replace = false) {
     void onMain(async () => {

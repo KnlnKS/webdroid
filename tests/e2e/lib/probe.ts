@@ -358,7 +358,7 @@ function installProbe(cfg: ProbeConfig): void {
       settled, semanticHit, wedged, error,
       perf: counters,
       newMissing: fresh("missing", [...wd.rt.missing]),
-      nativeRequired: fresh("native", [...wd.rt.nativeRequired].map(([l, a]: [string, string]) => l + " (" + a + ")")),
+      nativeRequired: fresh("native", wd.nativeRequirements()),
       unreadAttrs: fresh("attrs", wd.unreadAttrs()),
       newErrors: fresh("errors", (wd.logs as string[]).filter((l) => l.startsWith("error:"))),
       web: (wd.web() as StepResult["web"]).map(({ url, title, loaded }) => ({ url, title, loaded })),

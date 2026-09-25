@@ -6,7 +6,7 @@ import {
   isDocsUri, documentId, docRead, docWrite, docInputStream, docOutputStream, docRow, isChildrenUri, docChildren,
   DOC_COLUMNS, docCells, docDelete
 } from "./documents";
-import { mkPfd } from "./os";
+import { mkPfd, type JBundle } from "./os";
 import { mkFile } from "../jvm/natives/jio";
 import { mkAssetFd } from "./resnative";
 import { newObj, defineException, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang";
@@ -205,17 +205,47 @@ const resolverMethods: NativeSpec["methods"] = {
       }));
     },
   "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
-    function (this: JObj, u: JUri, proj: string[] | null, selection: string | null, args: string[] | null, sort: string | null) {
+    async function (this: JObj, u: JUri, proj: string[] | null, selection: string | null, args: string[] | null, sort: string | null, cancellation: unknown) {
+      if (cancellation) await vcall(cancellation, "throwIfCanceled", "()V");
       return vcall(this, "query", providerOperations.query, u, proj, selection, args, sort);
     },
   "query(Landroid/net/Uri;[Ljava/lang/String;Landroid/os/Bundle;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
-    async function (this: JObj, u: JUri, proj: string[] | null, queryArgs: { map: Map<string, unknown> } | null, cancellation: unknown) {
+    async function (this: JObj, u: JUri, proj: string[] | null, queryArgs: JBundle | null, cancellation: unknown) {
       if (cancellation) await vcall(cancellation, "throwIfCanceled", "()V");
-      const args = queryArgs?.map;
-      const selection = args?.get("android:query-arg-sql-selection") as string | null ?? null;
-      const selectionArgs = args?.get("android:query-arg-sql-selection-args") as string[] | null ?? null;
-      const sort = args?.get("android:query-arg-sql-sort-order") as string | null ?? null;
-      return vcall(this, "query", providerOperations.query, u, proj, selection, selectionArgs, sort);
+      const values = queryArgs?.map;
+      const selection = values?.get("android:query-arg-sql-selection") as string | null | undefined;
+      const args = values?.get("android:query-arg-sql-selection-args") as string[] | null | undefined;
+      const columns = values?.get("android:query-arg-sort-columns") as string[] | null | undefined;
+      const direction = values?.get("android:query-arg-sort-direction") as number | undefined;
+      const sort = values?.get("android:query-arg-sql-sort-order") as string | null | undefined ??
+        (columns?.length ? columns.map((column) => column + (direction === 1 ? " DESC" : " ASC")).join(", ") : null);
+      const limit = values?.get("android:query-arg-limit") as number | undefined;
+      if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 0))
+        throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid query limit");
+      if (values) for (const key of values.keys()) if (key !== "android:query-arg-sql-selection" &&
+        key !== "android:query-arg-sql-selection-args" && key !== "android:query-arg-sql-sort-order" &&
+        key !== "android:query-arg-sort-columns" && key !== "android:query-arg-sort-direction" && key !== "android:query-arg-limit")
+        throw rt.unimplemented(`ContentResolver.query argument ${key}`);
+      if (!isDocsUri(u) && limit !== undefined && !sort)
+        throw rt.unimplemented("ContentResolver.query provider limit without sort order");
+      const cursor = await vcall(this, "query", providerOperations.query, u, proj, selection ?? null, args ?? null,
+        limit === undefined || isDocsUri(u) ? sort : sort ? `${sort} LIMIT ${limit}` : null);
+      if (cursor && isDocsUri(u)) {
+        const rows = cursor.rows as unknown[][];
+        if (columns?.length) rows.sort((left, right) => {
+          for (const column of columns) {
+            const index = cursor.cols.indexOf(column);
+            if (index < 0) continue;
+            const a = left[index], b = right[index];
+            const cmp = typeof a === "number" && typeof b === "number" ? a - b : String(a ?? "").localeCompare(String(b ?? ""));
+            if (cmp) return direction === 1 ? -cmp : cmp;
+          }
+          return 0;
+        });
+      }
+      if (cursor && isDocsUri(u) && limit !== undefined) cursor.rows.length = Math.min(cursor.rows.length, limit);
+      return cursor;
+
     },
   "call(Landroid/net/Uri;Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;": async (u: JUri, method: string, arg: string | null, extras: unknown) => {
     if (u === null) throw rt.mkThrowable("java/lang/NullPointerException", "uri");

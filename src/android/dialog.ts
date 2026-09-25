@@ -22,6 +22,7 @@ import { inflateLayout, getInflater } from "./inflate";
 import { csText } from "./text";
 import { applyWindowTheme, type JWindow } from "./window";
 import { complexToFraction } from "./util";
+import { JMotionEvent } from "./motionevent";
 
 const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
 const M_setBounds = mangleMethod("setBounds", "(IIII)V");
@@ -153,11 +154,8 @@ rt.register({
         ctx.restore();
       }
     },
-    "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: DialogRoot, ev: any) {
-      if ((ev.action & 0xff) === 1 &&
-        (ev.x < 0 || ev.x >= this.width() || ev.y < 0 || ev.y >= this.height())) {
-        if (this.dialog?.cancelable && this.dialog.canceledOnTouchOutside) await this.dialog.cancel();
-      }
+    "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: DialogRoot, ev: JMotionEvent) {
+      if (this.dialog) await dialogTouch(this.dialog, ev);
       return 1;
     },
   },
@@ -209,6 +207,13 @@ class JDialog extends JObj {
     }
     return this.root;
   }
+}
+async function dialogTouch(dialog: JDialog, event: JMotionEvent): Promise<number> {
+  const root = dialog.root, action = event.action & 0xff;
+  if (!dialog.cancelable || !dialog.showing || !dialog.canceledOnTouchOutside || !root) return 0;
+  if (action !== 4 && (action !== 1 || event.x >= 0 && event.x < root.width() && event.y >= 0 && event.y < root.height())) return 0;
+  await dialog.cancel();
+  return 1;
 }
 /** A title/message/button text arrives as a resource id or any CharSequence (a Spanned from
  *  Html.fromHtml, an app class); everything resolves to one string here. */
@@ -326,13 +331,8 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "getOwnerActivity()Landroid/app/Activity;": function (this: JDialog) { return this.ownerActivity; },
   "setOwnerActivity(Landroid/app/Activity;)V": function (this: JDialog, activity: unknown) { this.ownerActivity = activity; },
   "onBackPressed()V": function (this: JDialog) { if (this.cancelable) return this.cancel(); },
-  "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JDialog, ev: { action: number; x: number; y: number }) {
-    const root = this.root;
-    if (!this.showing || !this.cancelable || !this.canceledOnTouchOutside || !root || (ev.action & 0xff) !== 1) return 0;
-    if (ev.x >= 0 && ev.x < root.width() && ev.y >= 0 && ev.y < root.height()) return 0;
-    await this.cancel();
-    return 1;
-  },
+  "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JDialog, event: JMotionEvent) { return dialogTouch(this, event); },
+
   // Window.Callback, as Dialog's defaults
   "onContentChanged()V": function () {},
   "onSaveInstanceState()Landroid/os/Bundle;": () => rt.make("android/os/Bundle"),

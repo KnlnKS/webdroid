@@ -6,10 +6,10 @@
 // column-major Float32Array(16) stacks; the shader takes the MVP product and the texture matrix.
 
 import { mem } from "./mem";
-import { hostLib, calledMissing, cstr, type HostFn, type HostRet, type ArgReader, bitsf } from "./host";
+import { hostLib, calledMissing, cstr, stp, type HostFn, type HostRet, type ArgReader } from "./host";
 import type { Cpu } from "./cpu";
 import { glCommon, glProbe, readGuestPixels } from "./gles3";
-import { gl } from "../android/gl";
+import { gl, invert } from "../android/gl";
 import { perf } from "../perf";
 import { activateEglCurrent } from "./egl-current";
 
@@ -44,21 +44,21 @@ interface ArrayState { on: boolean; size: number; type: number; stride: number; 
 const newArr = (size: number): ArrayState => ({ on: false, size, type: 0x1406, stride: 0, ptr: 0, vbo: 0 });
 
 interface TexRec { tex: WebGLTexture | null; hasAlpha: boolean; genMip: boolean }
+interface Program { prog: WebGLProgram; u: Record<string, WebGLUniformLocation | null>; aPos: number; aColor: number; aTex: number; aPoint: number }
 
 interface Ctx {
   gl: GL;
-  prog: WebGLProgram;
-  u: Record<string, WebGLUniformLocation | null>;
-  aPos: number; aColor: number; aTex: number;
+  base: Program; clip?: Program;
   vbos: WebGLBuffer[]; ebo: WebGLBuffer;
   textures: (TexRec | null)[];
   buffers: (WebGLBuffer | null)[];
   mode: number;
   mv: M4[]; pr: M4[]; tx: M4[][];
-  vert: ArrayState; col: ArrayState; tex: ArrayState[]; norm: ArrayState;
+  vert: ArrayState; col: ArrayState; tex: ArrayState[]; norm: ArrayState; point: ArrayState;
   clientUnit: number; unit: number;
-  texOn: boolean[]; texEnv: number[]; bound: number[];
+  texOn: boolean[]; texEnv: number[]; bound: number[]; texCoord: Float32Array[];
   color: Float32Array;
+  pointSize: number; clipMask: number; clipPlanes: Float32Array[]; clipValues: Float32Array;
   alphaTest: boolean; alphaFunc: number; alphaRef: number;
   arrayBuf: number; elemBuf: number;
   caps: Set<number>;
@@ -70,13 +70,16 @@ interface Ctx {
 const ctxs = new WeakMap<GL, Ctx>();
 let C: Ctx | null = null;
 
-const VS = `attribute vec4 aPos;attribute vec4 aColor;attribute vec4 aTex;
-uniform mat4 uMVP;uniform mat4 uTexM;uniform bool uColArr;uniform vec4 uColor;uniform float uPointSize;
+const VS = (clip: boolean) => `attribute vec4 aPos;attribute vec4 aColor;attribute vec4 aTex;attribute float aPoint;
+uniform mat4 uMVP;uniform mat4 uTexM;uniform bool uColArr;uniform vec4 uColor;uniform float uPointSize;uniform bool uPointArray;
 varying vec4 vColor;varying vec2 vTex;
-void main(){gl_Position=uMVP*aPos;vColor=uColArr?aColor:uColor;vTex=(uTexM*aTex).xy;gl_PointSize=uPointSize;}`;
-const FS = `precision mediump float;varying vec4 vColor;varying vec2 vTex;
+${clip ? "uniform mat4 uMV;uniform vec4 uClipPlane[6];varying vec4 vClip0;varying vec2 vClip1;" : ""}
+void main(){gl_Position=uMVP*aPos;vColor=uColArr?aColor:uColor;vTex=(uTexM*aTex).xy;gl_PointSize=uPointArray?aPoint:uPointSize;
+${clip ? "vec4 eye=uMV*aPos;vClip0=vec4(dot(uClipPlane[0],eye),dot(uClipPlane[1],eye),dot(uClipPlane[2],eye),dot(uClipPlane[3],eye));vClip1=vec2(dot(uClipPlane[4],eye),dot(uClipPlane[5],eye));" : ""}}`;
+const FS = (clip: boolean) => `precision mediump float;varying vec4 vColor;varying vec2 vTex;
+${clip ? "varying vec4 vClip0;varying vec2 vClip1;" : ""}
 uniform sampler2D uTex;uniform int uTexMode;uniform bool uTexAlpha;uniform int uAlphaFunc;uniform float uAlphaRef;
-void main(){vec4 c=vColor;
+void main(){${clip ? "if(any(lessThan(vClip0,vec4(0.0)))||any(lessThan(vClip1,vec2(0.0))))discard;" : ""}vec4 c=vColor;
 if(uTexMode!=0){vec4 t=texture2D(uTex,vTex);
  if(uTexMode==1)c=c*t;else if(uTexMode==2)c=vec4(t.rgb,uTexAlpha?t.a:c.a);
  else if(uTexMode==3)c=vec4(mix(c.rgb,t.rgb,uTexAlpha?t.a:1.0),c.a);else if(uTexMode==4)c=vec4(c.rgb+t.rgb,c.a*t.a);else c=c*t;}
@@ -86,11 +89,9 @@ if(uAlphaFunc!=0){float a=c.a;bool p=true;
  if(!p)discard;}
 gl_FragColor=c;}`;
 
-function ctxFor(g: GL): Ctx {
-  let c = ctxs.get(g);
-  if (c) return c;
+function makeProgram(g: GL, clip: boolean): Program {
   const prog = g.createProgram()!;
-  for (const [type, src] of [[g.VERTEX_SHADER, VS], [g.FRAGMENT_SHADER, FS]] as const) {
+  for (const [type, src] of [[g.VERTEX_SHADER, VS(clip)], [g.FRAGMENT_SHADER, FS(clip)]] as const) {
     const sh = g.createShader(type)!;
     g.shaderSource(sh, src); g.compileShader(sh);
     if (!g.getShaderParameter(sh, g.COMPILE_STATUS)) console.error("[gles1] shader:", g.getShaderInfoLog(sh));
@@ -99,19 +100,26 @@ function ctxFor(g: GL): Ctx {
   g.linkProgram(prog);
   if (!g.getProgramParameter(prog, g.LINK_STATUS)) console.error("[gles1] link:", g.getProgramInfoLog(prog));
   const u: Record<string, WebGLUniformLocation | null> = {};
-  for (const n of ["uMVP", "uTexM", "uColArr", "uColor", "uPointSize", "uTex", "uTexMode", "uTexAlpha", "uAlphaFunc", "uAlphaRef"]) u[n] = g.getUniformLocation(prog, n);
-  c = {
-    gl: g, prog, u, aPos: g.getAttribLocation(prog, "aPos"), aColor: g.getAttribLocation(prog, "aColor"), aTex: g.getAttribLocation(prog, "aTex"),
-    vbos: [g.createBuffer()!, g.createBuffer()!, g.createBuffer()!, g.createBuffer()!], ebo: g.createBuffer()!,
-    textures: [null], buffers: [null],
-    mode: 0x1700, mv: [ident()], pr: [ident()], tx: [[ident()], [ident()]],
-    vert: newArr(4), col: newArr(4), tex: [newArr(4), newArr(4)], norm: newArr(3),
-    clientUnit: 0, unit: 0, texOn: [false, false], texEnv: [0x2100, 0x2100], bound: [0, 0],
-    color: new Float32Array([1, 1, 1, 1]), alphaTest: false, alphaFunc: 0x207, alphaRef: 0,
-    arrayBuf: 0, elemBuf: 0, caps: new Set(), err: 0, unpackAlign: 4, scratch: new Float32Array(4096), warned: new Set(),
-  };
+  for (const n of ["uMVP", "uTexM", "uColArr", "uColor", "uPointSize", "uPointArray", "uTex", "uTexMode", "uTexAlpha", "uAlphaFunc", "uAlphaRef", ...(clip ? ["uMV", "uClipPlane[0]"] : [])]) u[n] = g.getUniformLocation(prog, n);
   g.useProgram(prog);
   g.uniform1i(u.uTex, 0);
+  return { prog, u, aPos: g.getAttribLocation(prog, "aPos"), aColor: g.getAttribLocation(prog, "aColor"), aTex: g.getAttribLocation(prog, "aTex"), aPoint: g.getAttribLocation(prog, "aPoint") };
+}
+
+function ctxFor(g: GL): Ctx {
+  let c = ctxs.get(g);
+  if (c) return c;
+  const base = makeProgram(g, false);
+  c = {
+    gl: g, base,
+    vbos: [g.createBuffer()!, g.createBuffer()!, g.createBuffer()!, g.createBuffer()!, g.createBuffer()!], ebo: g.createBuffer()!,
+    textures: [null], buffers: [null],
+    mode: 0x1700, mv: [ident()], pr: [ident()], tx: [[ident()], [ident()]],
+    vert: newArr(4), col: newArr(4), tex: [newArr(4), newArr(4)], norm: newArr(3), point: newArr(1),
+    clientUnit: 0, unit: 0, texOn: [false, false], texEnv: [0x2100, 0x2100], bound: [0, 0], texCoord: [new Float32Array([0, 0, 0, 1]), new Float32Array([0, 0, 0, 1])],
+    color: new Float32Array([1, 1, 1, 1]), pointSize: 1, clipMask: 0, clipPlanes: Array.from({ length: 6 }, () => new Float32Array(4)), clipValues: new Float32Array(24), alphaTest: false, alphaFunc: 0x207, alphaRef: 0,
+    arrayBuf: 0, elemBuf: 0, caps: new Set(), err: 0, unpackAlign: 4, scratch: new Float32Array(4096), warned: new Set(),
+  };
   ctxs.set(g, c);
   return c;
 }
@@ -164,33 +172,46 @@ function bindArray(c: Ctx, a: ArrayState, loc: number, slot: number, first: numb
 function prepareDraw(c: Ctx, first: number, count: number): boolean {
   const g = c.gl;
   if (!c.vert.on) return false;
-  g.useProgram(c.prog);
+  const clipped = c.clipMask !== 0;
+  const program = clipped ? c.clip ??= makeProgram(g, true) : c.base;
+  const u = program.u;
+  g.useProgram(program.prog);
   const mv = c.mv[c.mv.length - 1], pr = c.pr[c.pr.length - 1];
   mul(pr, mv, tmpB);
-  g.uniformMatrix4fv(c.u.uMVP, false, tmpB);
-  bindArray(c, c.vert, c.aPos, 0, first, count, false);
-  if (c.col.on) { g.uniform1i(c.u.uColArr, 1); bindArray(c, c.col, c.aColor, 1, first, count, true); }
-  else { g.uniform1i(c.u.uColArr, 0); g.disableVertexAttribArray(c.aColor); g.uniform4fv(c.u.uColor, c.color); }
+  g.uniformMatrix4fv(u.uMVP, false, tmpB);
+  if (clipped) {
+    g.uniformMatrix4fv(u.uMV, false, mv);
+    c.clipValues.fill(0);
+    for (let i = 0; i < 6; i++) if (c.clipMask & (1 << i)) c.clipValues.set(c.clipPlanes[i], i * 4);
+    g.uniform4fv(u["uClipPlane[0]"], c.clipValues);
+  }
+  bindArray(c, c.vert, program.aPos, 0, first, count, false);
+  if (c.col.on) { g.uniform1i(u.uColArr, 1); bindArray(c, c.col, program.aColor, 1, first, count, true); }
+  else { g.uniform1i(u.uColArr, 0); g.disableVertexAttribArray(program.aColor); g.uniform4fv(u.uColor, c.color); }
   // texturing: unit 0 only feeds the shader; a second enabled unit is reported once
   const texOn = c.texOn[0] && c.bound[0] !== 0 && c.textures[c.bound[0]];
   if (texOn) {
     const rec = c.textures[c.bound[0]]!;
     const env = c.texEnv[0];
-    g.uniform1i(c.u.uTexMode, env === 0x2100 ? 1 : env === 0x1e01 ? 2 : env === 0x2101 ? 3 : env === 0x0104 ? 4 : 1);
-    g.uniform1i(c.u.uTexAlpha, rec.hasAlpha ? 1 : 0);
+    g.uniform1i(u.uTexMode, env === 0x2100 ? 1 : env === 0x1e01 ? 2 : env === 0x2101 ? 3 : env === 0x0104 ? 4 : 1);
+    g.uniform1i(u.uTexAlpha, rec.hasAlpha ? 1 : 0);
     g.activeTexture(g.TEXTURE0);
     g.bindTexture(g.TEXTURE_2D, rec.tex);
-    g.uniformMatrix4fv(c.u.uTexM, false, c.tx[0][c.tx[0].length - 1]);
+    g.uniformMatrix4fv(u.uTexM, false, c.tx[0][c.tx[0].length - 1]);
     const ta = c.tex[0];
-    if (ta.on) bindArray(c, ta, c.aTex, 2, first, count, false);
-    else { g.disableVertexAttribArray(c.aTex); g.vertexAttrib4f(c.aTex, 0, 0, 0, 1); }
+    if (ta.on) bindArray(c, ta, program.aTex, 2, first, count, false);
+    else { g.disableVertexAttribArray(program.aTex); g.vertexAttrib4fv(program.aTex, c.texCoord[0]); }
     if (c.texOn[1] && c.bound[1]) once(c, "multitexture unit 1");
   } else {
-    g.uniform1i(c.u.uTexMode, 0);
-    g.disableVertexAttribArray(c.aTex);
+    g.uniform1i(u.uTexMode, 0);
+    g.disableVertexAttribArray(program.aTex);
   }
-  if (c.alphaTest) { g.uniform1i(c.u.uAlphaFunc, c.alphaFunc - 0x200); g.uniform1f(c.u.uAlphaRef, c.alphaRef); }
-  else g.uniform1i(c.u.uAlphaFunc, 0);
+  g.uniform1i(u.uPointArray, c.point.on ? 1 : 0);
+  g.uniform1f(u.uPointSize, c.pointSize);
+  if (c.point.on) bindArray(c, c.point, program.aPoint, 4, first, count, false);
+  else g.disableVertexAttribArray(program.aPoint);
+  if (c.alphaTest) { g.uniform1i(u.uAlphaFunc, c.alphaFunc - 0x200); g.uniform1f(u.uAlphaRef, c.alphaRef); }
+  else g.uniform1i(u.uAlphaFunc, 0);
   if (c.caps.has(0x0b50)) once(c, "GL_LIGHTING");
   if (c.caps.has(0x0b60)) once(c, "GL_FOG");
   return true;
@@ -275,7 +296,7 @@ export function gles1Init(): void {
   };
   const m4Scratch = new Float32Array(16);
   const m4 = (a: { i(): number }, fixed: boolean): M4 => { const p = a.i(), m = m4Scratch; for (let i = 0; i < 16; i++) m[i] = fixed ? mem.i32[(p >>> 2) + i] / 65536 : mem.f32[(p >>> 2) + i]; return m; };
-  const F = (a: { i(): number }) => bitsf(a.i());
+  const F = (a: ArgReader) => a.f();
   const Xa = (a: { i(): number }) => X(a.i());
   const translate = (c: Ctx, x: number, y: number, z: number) => { const m = ident(); m[12] = x; m[13] = y; m[14] = z; mulRight(top(c), m); };
   const scale = (c: Ctx, x: number, y: number, z: number) => { const m = ident(); m[0] = x; m[5] = y; m[10] = z; mulRight(top(c), m); };
@@ -294,8 +315,19 @@ export function gles1Init(): void {
     mulRight(top(c), m);
   };
   const setArr = (get: (c: Ctx) => ArrayState) => W("glPointer", (c, a) => { const s = get(c); s.size = a.i(); s.type = a.i(); s.stride = a.i(); s.ptr = a.i() >>> 0; s.vbo = c.arrayBuf; });
+  const clipInverse = new Float32Array(16);
+  const clipPlane = (c: Ctx, a: ArgReader, fixed: boolean) => {
+    const index = a.i() - 0x3000, p = a.p();
+    if (index < 0 || index >= 6) { c.err = 0x500; return; }
+    const eq = new Float32Array(4);
+    for (let i = 0; i < 4; i++) eq[i] = fixed ? mem.ld32(p + 4 * i) / 65536 : mem.ldf32(p + 4 * i);
+    const plane = c.clipPlanes[index];
+    if (!invert(clipInverse, 0, c.mv[c.mv.length - 1], 0)) { plane.set(eq); return; }
+    for (let j = 0; j < 4; j++) plane[j] = eq[0] * clipInverse[4 * j] + eq[1] * clipInverse[4 * j + 1] + eq[2] * clipInverse[4 * j + 2] + eq[3] * clipInverse[4 * j + 3];
+  };
   const capSet = (c: Ctx, cap: number, on: boolean) => {
     const g = c.gl;
+    if (cap >= 0x3000 && cap < 0x3006) { c.clipMask = on ? c.clipMask | (1 << (cap - 0x3000)) : c.clipMask & ~(1 << (cap - 0x3000)); return; }
     switch (cap) {
       case 0x0de1: c.texOn[c.unit] = on; return;
       case 0x0bc0: c.alphaTest = on; return;
@@ -304,8 +336,8 @@ export function gles1Init(): void {
       default: if (on) c.caps.add(cap); else c.caps.delete(cap);
     }
   };
-  const clientArray = (c: Ctx, cap: number): ArrayState | null => cap === 0x8074 ? c.vert : cap === 0x8076 ? c.col : cap === 0x8078 ? c.tex[c.clientUnit] : cap === 0x8075 ? c.norm : null;
-  const isOn = (c: Ctx, cap: number): number => cap === 0x0de1 ? +c.texOn[c.unit] : cap === 0x0bc0 ? +c.alphaTest : [0x0be2, 0x0b71, 0x0b44, 0x0c11, 0x0b90, 0x0bd0, 0x8037].includes(cap) ? +c.gl.isEnabled(cap) : +(clientArray(c, cap)?.on ?? c.caps.has(cap));
+  const clientArray = (c: Ctx, cap: number): ArrayState | null => cap === 0x8074 ? c.vert : cap === 0x8076 ? c.col : cap === 0x8078 ? c.tex[c.clientUnit] : cap === 0x8075 ? c.norm : cap === 0x8b9c ? c.point : null;
+  const isOn = (c: Ctx, cap: number): number => cap >= 0x3000 && cap < 0x3006 ? +(!!(c.clipMask & (1 << (cap - 0x3000)))) : cap === 0x0de1 ? +c.texOn[c.unit] : cap === 0x0bc0 ? +c.alphaTest : [0x0be2, 0x0b71, 0x0b44, 0x0c11, 0x0b90, 0x0bd0, 0x8037].includes(cap) ? +c.gl.isEnabled(cap) : +(clientArray(c, cap)?.on ?? c.caps.has(cap));
   const getv = (c: Ctx, pname: number): number[] | null => {
     const g = c.gl;
     switch (pname) {
@@ -330,6 +362,7 @@ export function gles1Init(): void {
       case 0x8069: return [c.bound[c.unit]];                       // TEXTURE_BINDING_2D
       case 0x8894: return [c.arrayBuf]; case 0x8895: return [c.elemBuf];
       case 0x0b00: return Array.from(c.color);
+      case 0x898a: return [c.point.type]; case 0x898b: return [c.point.stride]; case 0x8b9f: return [c.point.vbo];
       case 0x0cf5: return [c.unpackAlign];
       case 0x0d05: return [4];
       case 0x8872: return [2];                                     // MAX_TEXTURE_IMAGE_UNITS
@@ -414,8 +447,28 @@ export function gles1Init(): void {
     glDrawArrays: W("glDrawArrays", (c, a) => { const mode = a.i(), first = a.i(), count = a.i(); draw(c, mode, count, null, first); }),
     glDrawElements: W("glDrawElements", (c, a) => { const mode = a.i(), count = a.i(), type = a.i(), ptr = a.p(); draw(c, mode, count, { type, ptr }, 0); }),
     glColor4ub: W("glColor4ub", (c, a) => { c.color[0] = (a.i() & 255) / 255; c.color[1] = (a.i() & 255) / 255; c.color[2] = (a.i() & 255) / 255; c.color[3] = (a.i() & 255) / 255; }),
-    glPointSize: W("glPointSize", (c, a) => { c.gl.useProgram(c.prog); c.gl.uniform1f(c.u.uPointSize, F(a)); }),
-    glPointSizex: W("glPointSizex", (c, a) => { c.gl.useProgram(c.prog); c.gl.uniform1f(c.u.uPointSize, Xa(a)); }),
+    glPointSize: W("glPointSize", (c, a) => { const size = F(a); if (size <= 0) c.err = 0x501; else c.pointSize = size; }),
+    glPointSizex: W("glPointSizex", (c, a) => { const size = Xa(a); if (size <= 0) c.err = 0x501; else c.pointSize = size; }),
+    glPointSizePointerOES: W("glPointSizePointerOES", (c, a) => {
+      const type = a.i(), stride = a.i(), ptr = a.p();
+      if (type !== 0x1406 && type !== 0x140c) { c.err = 0x500; return; }
+      if (stride < 0) { c.err = 0x501; return; }
+      Object.assign(c.point, { size: 1, type, stride, ptr, vbo: c.arrayBuf });
+    }),
+    glMultiTexCoord4f: W("glMultiTexCoord4f", (c, a) => {
+      const unit = a.i() - 0x84c0;
+      if (unit < 0 || unit >= 2) { c.err = 0x500; return; }
+      for (let i = 0; i < 4; i++) c.texCoord[unit][i] = a.f();
+    }),
+    glMultiTexCoord4x: W("glMultiTexCoord4x", (c, a) => {
+      const unit = a.i() - 0x84c0;
+      if (unit < 0 || unit >= 2) { c.err = 0x500; return; }
+      for (let i = 0; i < 4; i++) c.texCoord[unit][i] = Xa(a);
+    }),
+    glClipPlanef: W("glClipPlanef", (c, a) => clipPlane(c, a, false)),
+    glClipPlanex: W("glClipPlanex", (c, a) => clipPlane(c, a, true)),
+    glGetClipPlanef: W("glGetClipPlanef", (c, a) => { const index = a.i() - 0x3000, out = a.p(); if (index < 0 || index >= 6) { c.err = 0x500; return; } for (let i = 0; i < 4; i++) mem.stf32(out + i * 4, c.clipPlanes[index][i]); }),
+    glGetClipPlanex: W("glGetClipPlanex", (c, a) => { const index = a.i() - 0x3000, out = a.p(); if (index < 0 || index >= 6) { c.err = 0x500; return; } for (let i = 0; i < 4; i++) mem.st32(out + i * 4, Math.round(c.clipPlanes[index][i] * 65536)); }),
     glLineWidthx: W("glLineWidthx", (c, a) => c.gl.lineWidth(Xa(a))),
     glGenTextures: W("glGenTextures", (c, a) => { const n = a.i(), out = a.p(); for (let i = 0; i < n; i++) { c.textures.push({ tex: c.gl.createTexture(), hasAlpha: true, genMip: false }); mem.st32(out + i * 4, c.textures.length - 1); } }),
     glDeleteTextures: W("glDeleteTextures", (c, a) => { const n = a.i(), p = a.p(); for (let i = 0; i < n; i++) { const id = mem.ld32(p + i * 4); const r = c.textures[id]; if (r) { c.gl.deleteTexture(r.tex); c.textures[id] = null; } for (let u = 0; u < 2; u++) if (c.bound[u] === id) c.bound[u] = 0; } }),
@@ -457,7 +510,7 @@ export function gles1Init(): void {
       return cstr(value);
     }),
     glGetIntegerv: getInto("i"), glGetFloatv: getInto("f"), glGetFixedv: getInto("x"), glGetBooleanv: getInto("b"),
-    glGetPointerv: W("glGetPointerv", (c, a) => { const pn = a.i(), out = a.p(); const s = pn === 0x808e ? c.vert : pn === 0x8090 ? c.col : pn === 0x8092 ? c.tex[c.clientUnit] : c.norm; mem.st32(out, s.ptr); }),
+    glGetPointerv: W("glGetPointerv", (c, a) => { const pn = a.i(), out = a.p(); const s = pn === 0x808e ? c.vert : pn === 0x808f ? c.norm : pn === 0x8090 ? c.col : pn === 0x8092 ? c.tex[c.clientUnit] : pn === 0x898c ? c.point : null; if (s) stp(out, s.ptr); else c.err = 0x500; }),
     glGetTexEnviv: W("glGetTexEnviv", (c, a) => { a.i(); const pn = a.i(), out = a.p(); mem.st32(out, pn === 0x2200 ? c.texEnv[c.unit] : 0); }),
     glGetTexParameteriv: W("glGetTexParameteriv", (c, a) => { const t = a.i(), pn = a.i(), out = a.p(); mem.st32(out, Number(c.gl.getTexParameter(t, pn)) | 0); }),
     glGetBufferParameteriv: W("glGetBufferParameteriv", (c, a) => { const t = a.i(), pn = a.i(), out = a.p(); mem.st32(out, Number(c.gl.getBufferParameter(t, pn)) | 0); }),
@@ -483,9 +536,9 @@ export function gles1Init(): void {
   for (const [n, fn] of FX) { const x = n.replace(/f?$/, "x"); G[n] = W(n, (c, a) => fn(c, a, F)); G[x] = W(x, (c, a) => fn(c, a, Xa)); }
   for (const [n, f] of Object.entries(glCommon)) G[n] = W(n, (_c, a, cpu) => f(cpu, a) as HostRet);
   for (const n of ["glBlendFuncSeparate", "glBlendEquation", "glBlendEquationSeparate"]) G[n + "OES"] = G[n];
-  // lighting / fog / clip planes: recorded, reported once if a draw depends on them
+  // Lighting and fog are tracked until a draw depends on them.
   for (const n of ["glNormal3f", "glNormal3x", "glHint", "glShadeModel", ...["glLight", "glLightModel", "glMaterial", "glFog", "glPointParameter"].flatMap((p) => [p + "f", p + "x", p + "fv", p + "xv"])]) G[n] = W(n, () => {});
-  for (const n of ["glPointSizePointerOES", "glMultiTexCoord4f", "glMultiTexCoord4x", "glCompressedTexSubImage2D", "glClipPlanef", "glClipPlanex"]) G[n] = W(n, (c) => once(c, n));
+  G.glCompressedTexSubImage2D = W("glCompressedTexSubImage2D", (c) => once(c, "glCompressedTexSubImage2D"));
   gles1Procs = G;
   hostLib("libGLESv1_CM.so", G, { closed: true });
 }

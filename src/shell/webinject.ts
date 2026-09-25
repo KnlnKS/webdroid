@@ -1,6 +1,28 @@
 import { installWebHistory } from "./webhistory";
 import { installWebLocation } from "./weblocation";
 
+export async function webFormRequest(form: HTMLFormElement, submitter: HTMLElement | null, page: string): Promise<
+  { url: string; method: "GET" | "POST"; body?: ArrayBuffer; contentType?: string } | null
+> {
+  const method = (submitter?.getAttribute("formmethod") || form.method).toUpperCase();
+  if (method === "DIALOG") return null;
+  const action = submitter?.getAttribute("formaction") ?? form.getAttribute("action");
+  const url = new URL(action || page || form.ownerDocument.baseURI, form.ownerDocument.baseURI);
+  const fields = new FormData(form, submitter);
+  if (method === "GET") {
+    url.search = "";
+    for (const [key, value] of fields) url.searchParams.append(key, typeof value === "string" ? value : value.name);
+    return { url: url.href, method: "GET" };
+  }
+  const encoding = (submitter?.getAttribute("formenctype") || form.enctype).toLowerCase();
+  const body = encoding === "multipart/form-data" ? fields
+    : encoding === "text/plain" ? [...fields].map(([key, value]) => key + "=" + (typeof value === "string" ? value : value.name)).join("\r\n")
+    : new URLSearchParams([...fields].map(([key, value]) => [key, typeof value === "string" ? value : value.name]));
+  const request = new Request(url, { method: "POST", body });
+  return { url: url.href, method: "POST", contentType: request.headers.get("content-type") ?? undefined,
+    body: await request.arrayBuffer() };
+}
+
 export const WEB_INJECT = `<script>(function(){
 // Wrangler can insert __name into functions embedded through toString().
 const __name = (target, value) => Object.defineProperty(target, "name", {value, configurable: true});
@@ -32,6 +54,7 @@ for (const [name, methods] of Object.entries(interfaces)) {
   Object.defineProperty(window, name, {value: object, configurable: true});
 }
 const send = data => parent.postMessage({bridge: id, ...data}, "*");
+const formRequest = (${webFormRequest.toString()});
 (${installWebLocation.toString()})(config, (url, replace) => send({kind: "navigate", url, replace}));
 addEventListener("hashchange", event => { if (event.isTrusted) send({kind: "fragment", url: config.page}); });
 window.navigation?.addEventListener("navigate", event => {
@@ -48,6 +71,17 @@ document.addEventListener("click", event => {
   if (a.hash && a.href.split("#")[0] === document.baseURI.split("#")[0]) return;
   event.preventDefault(); send({kind: "navigate", url: a.href});
 }, true);
+function submitForm(form, submitter) {
+  void formRequest(form, submitter, config.page).then(request => {
+    if (request) send({kind: request.method === "GET" ? "navigate" : "submit", ...request});
+  });
+}
+addEventListener("submit", event => {
+  if (event.defaultPrevented || !(event.target instanceof HTMLFormElement)) return;
+  event.preventDefault();
+  submitForm(event.target, event.submitter);
+});
+HTMLFormElement.prototype.submit = function() { submitForm(this, null); };
 addEventListener("message", event => {
   if (event.source !== parent || event.data?.bridge !== id) return;
   if (event.data.kind === "eval") {
@@ -77,7 +111,10 @@ addEventListener("message", async event => {
     await service.register("/webview-worker.js");
     await service.ready;
     if (!service.controller) await new Promise(resolve => service.addEventListener("controllerchange", resolve, {once: true}));
-    const response = event.data.doc === undefined ? await fetch(event.data.src, {headers: {"x-wd-user-agent": event.data.userAgent}}) : null;
+    const response = event.data.doc === undefined ? await fetch(event.data.src, {
+      method: event.data.method || "GET", body: event.data.body,
+      headers: {"x-wd-user-agent": event.data.userAgent, ...(event.data.contentType ? {"content-type": event.data.contentType} : {})},
+    }) : null;
     const final = response?.headers.get("x-wd-final-url");
     if (final) {
       const source = new URL(final), local = new URL(location.href);

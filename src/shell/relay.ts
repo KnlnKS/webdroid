@@ -54,6 +54,42 @@ const relayUrl = (host: string, port: number, tls: boolean, alpn: string[]) => {
     `/tcp?host=${encodeURIComponent(dialName(host))}&port=${port}${tls ? "&tls=1" + alpn.map(p => "&alpn=" + encodeURIComponent(p)).join("") : ""}`;
 };
 
+export class DatagramRelay {
+  private readonly transport: WebSocket;
+  readonly ready: Promise<void>;
+  constructor(onPacket: (data: Uint8Array, source: Ipv4, port: number) => void) {
+    const page = typeof location === "undefined" ? { protocol: "http:", host: "localhost" } : location;
+    const protocol = page.protocol === "https:" ? "wss" : "ws";
+    const transport = this.transport = new WebSocket(`${protocol}://${page.host}/udp`);
+    transport.binaryType = "arraybuffer";
+    this.ready = new Promise<void>((resolve, reject) => {
+      let opened = false;
+      transport.onmessage = (event) => {
+        if (typeof event.data === "string") {
+          if (!opened) { opened = true; resolve(); }
+          return;
+        }
+        const frame = new Uint8Array(event.data as ArrayBuffer);
+        if (frame.length < 6) return;
+        onPacket(frame.subarray(6), [frame[0], frame[1], frame[2], frame[3]], frame[4] << 8 | frame[5]);
+      };
+      const failed = () => { if (!opened) { opened = true; reject(new Error("UDP relay unavailable")); } };
+      transport.onclose = failed;
+      transport.onerror = failed;
+    });
+  }
+  async send(host: string, port: number, bytes: Uint8Array): Promise<void> {
+    await this.ready;
+    const name = new TextEncoder().encode(dialName(host));
+    if (name.length > 253 || bytes.length > 65507) throw new Error("UDP datagram is too large");
+    const frame = new Uint8Array(3 + name.length + bytes.length);
+    frame[0] = name.length; frame[1] = port >> 8; frame[2] = port & 255;
+    frame.set(name, 3); frame.set(bytes, 3 + name.length);
+    this.transport.send(frame);
+  }
+  close(): void { this.transport.close(); }
+}
+
 interface RelayEndpoint {
   family: "IPv4" | "IPv6";
   address: string;

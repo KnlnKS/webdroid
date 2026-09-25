@@ -1,7 +1,7 @@
 // android.media: MediaPlayer over HTMLAudioElement, SoundPool over Web Audio.
 
 import { rt, JObj, stubs, noops, fieldGetters } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, stringHash } from "../jvm/natives/jlang";
 import { newArrayList, newStringSet, type JList } from "../jvm/natives/jutil";
 import { type JFileDescriptor, vfs } from "../jvm/natives/jio";
 import { javaFdSource } from "../native/stdio";
@@ -29,6 +29,36 @@ rt.register({ name: "android/media/RingtoneManager", ctor: class extends JObj {}
     },
   },
 });
+
+class JCamcorderProfile extends JObj {
+  duration = 0; quality = 0; fileFormat = 0;
+  videoCodec = 0; videoBitRate = 0; videoFrameRate = 0; videoFrameWidth = 0; videoFrameHeight = 0;
+  audioCodec = 0; audioBitRate = 0; audioSampleRate = 0; audioChannels = 0;
+}
+function checkCamcorderQuality(quality: number): void {
+  if ((quality >= 0 && quality <= 13) || (quality >= 1000 && quality <= 1013) ||
+      (quality >= 2000 && quality <= 2008)) return;
+  throw rt.mkThrowable("java/lang/IllegalArgumentException", `Unsupported quality level: ${quality}`);
+}
+rt.register({
+  name: "android/media/CamcorderProfile", ctor: JCamcorderProfile,
+  fields: ["duration", "quality", "fileFormat", "videoCodec", "videoBitRate", "videoFrameRate",
+    "videoFrameWidth", "videoFrameHeight", "audioCodec", "audioBitRate", "audioSampleRate", "audioChannels"],
+  methods: {
+    "static get(I)Landroid/media/CamcorderProfile;": () => null,
+    "static get(II)Landroid/media/CamcorderProfile;": (_cameraId: number, quality: number) => {
+      checkCamcorderQuality(quality);
+      return null;
+    },
+    "static hasProfile(I)Z": () => 0,
+    "static hasProfile(II)Z": () => 0,
+    "static getAll(Ljava/lang/String;I)Landroid/media/EncoderProfiles;": (_cameraId: string, quality: number) => {
+      checkCamcorderQuality(quality);
+      return null;
+    },
+  },
+});
+rt.register({ name: "android/media/EncoderProfiles", ctor: class extends JObj {} });
 
 rt.register({ name: "android/media/Image", ctor: class extends JObj {}, ifaces: ["java/lang/AutoCloseable"] });
 rt.register({ name: "android/media/MediaDataSource", ctor: class extends JObj {}, ifaces: ["java/io/Closeable"],
@@ -353,7 +383,7 @@ rt.register({
   },
 });
 for (const n of ["android/media/MediaPlayer$OnCompletionListener", "android/media/MediaPlayer$OnPreparedListener",
-  "android/media/MediaPlayer$OnErrorListener", "android/media/MediaPlayer$OnSeekCompleteListener",
+  "android/media/MediaPlayer$OnErrorListener", "android/media/MediaPlayer$OnInfoListener", "android/media/MediaPlayer$OnSeekCompleteListener",
   "android/media/SoundPool$OnLoadCompleteListener"]) {
   rt.register({ name: n, ctor: class extends JObj {} });
 }
@@ -472,7 +502,8 @@ const D_periodic = "(Landroid/media/AudioTrack;)V";
 export class JAudioTrack extends JObj {
   rate = 44100; channels = 2; bytesPerSample = 2; bufBytes = 0;
   sessionId = 0; attributes: unknown = null;
-  logSessionId: unknown = null;
+  logSessionId = noLogSessionId;
+
   state = 1; playState = 1;          // STATE_INITIALIZED; PLAYSTATE_STOPPED
   nextTime = 0; written = 0; played = 0; headOrigin = 0; resetHead = false; underruns = 0;
   queue: { buffer: AudioBuffer; offset: number; start: number; source: AudioBufferSourceNode | null; consumed?: () => void }[] = [];
@@ -594,11 +625,13 @@ rt.register({
     },
     "static getNativeOutputSampleRate(I)I": () => outputSampleRate(),
     "static getMaxVolume()F": () => 1, "static getMinVolume()F": () => 0,
-    "getPlaybackHeadPosition()I": function (this: JAudioTrack) { return this.playState === 1 ? 0 : Math.floor(this.head() - this.headOrigin) | 0; },
-    "setLogSessionId(Landroid/media/metrics/LogSessionId;)V": function (this: JAudioTrack, id: unknown) {
-      if (!id) rt.npe();
+    "getLogSessionId()Landroid/media/metrics/LogSessionId;": function (this: JAudioTrack) { rt.link("android/media/metrics/LogSessionId"); return this.logSessionId; },
+    "setLogSessionId(Landroid/media/metrics/LogSessionId;)V": function (this: JAudioTrack, id: JLogSessionId) {
+      if (!id) return rt.npe();
+      if (this.state !== 1) throw rt.mkThrowable("java/lang/IllegalStateException", "AudioTrack not initialized");
       this.logSessionId = id;
     },
+    "getPlaybackHeadPosition()I": function (this: JAudioTrack) { return this.playState === 1 ? 0 : Math.floor(this.head() - this.headOrigin) | 0; },
     "setStereoVolume(FF)I": function (this: JAudioTrack, l: number, r: number) { this.vol = (l + r) / 2; if (this.gain) this.gain.gain.value = this.vol; return 0; },
     "setVolume(F)I": function (this: JAudioTrack, v: number) { this.vol = v; if (this.gain) this.gain.gain.value = v; return 0; },
     "setPlaybackPositionUpdateListener(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;)V": function (this: JAudioTrack, l: unknown) { this.listener = l; if (!l) this.stopTimer(); else if (this.playState === 3) this.startTimer(); },
@@ -857,6 +890,18 @@ rt.register({
 });
 
 rt.register({ name: "android/media/MediaCodec$Callback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
+export class JLogSessionId extends JObj {
+  constructor(public id = "") { super(); }
+}
+export const noLogSessionId = new JLogSessionId();
+rt.register({ name: "android/media/metrics/LogSessionId", ctor: JLogSessionId, statics: { LOG_SESSION_ID_NONE: noLogSessionId }, methods: {
+  "<init>(Ljava/lang/String;)V": function (this: JLogSessionId, id: string) { if (id == null) throw rt.mkThrowable("java/lang/NullPointerException", "id"); this.id = id; },
+  "getStringId()Ljava/lang/String;": function (this: JLogSessionId) { return this.id; },
+  "toString()Ljava/lang/String;": function (this: JLogSessionId) { return this.id; },
+  "equals(Ljava/lang/Object;)Z": function (this: JLogSessionId, other: unknown) { return +(other instanceof JLogSessionId && other.id === this.id); },
+  "hashCode()I": function (this: JLogSessionId) { return stringHash(this.id); },
+} });
+
 export class JBufferInfo extends JObj { offset = 0; size = 0; presentationTimeUs = 0n; flags = 0; }
 rt.register({
   name: "android/media/MediaCodec$BufferInfo", ctor: JBufferInfo,

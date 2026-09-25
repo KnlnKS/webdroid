@@ -180,7 +180,9 @@ const dateFormatMethods: NativeSpec["methods"] = {
   "getTimeZone()Ljava/util/TimeZone;": () => localTz,
   "setLenient(Z)V": () => {},
   "toPattern()Ljava/lang/String;": function (this: JDateFormat) { return this.pattern; },
+  "toLocalizedPattern()Ljava/lang/String;": function (this: JDateFormat) { return this.pattern; },
   "applyPattern(Ljava/lang/String;)V": function (this: JDateFormat, p: string) { this.pattern = p; },
+  "applyLocalizedPattern(Ljava/lang/String;)V": function (this: JDateFormat, p: string) { this.pattern = p; },
 };
 // the abstract base DateFormat and NumberFormat share, so a cast through Format holds; each
 // concrete formatter carries its own format(Object)

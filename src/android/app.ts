@@ -12,11 +12,11 @@ import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, attachView, detachView, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragment, type JFragmentManager } from "./fragment";
-import { vcall, vcallOn, curThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread } from "../jvm/natives/jlang";
 import type { JMotionEvent } from "./motionevent";
 import { appHost, jclsNameOf } from "./apphost";
 import { resString } from "./res";
-import { onMain } from "./mainloop";
+import { inMainJob, onMain } from "./mainloop";
 import { getPrefs } from "./sharedprefs";
 import { csText, spannedString } from "./text";
 import { showToast } from "./popup";
@@ -27,7 +27,7 @@ import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from
 import { device } from "../shell/config";
 import type { JBitmap } from "./graphics";
 import { JConfigurationInfo } from "./pm";
-import { deviceConfiguration, setDeviceNight } from "./resnative";
+import { deviceConfiguration } from "./resnative";
 import { transactionCaller } from "./binder";
 import { packages } from "./packages";
 import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
@@ -288,7 +288,8 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     return this.actionBarObj;
   },
   "runOnUiThread(Ljava/lang/Runnable;)V": function (this: JActivity, r: unknown) {
-    void onMain(() => vcall(r, "run", "()V").catch(reportUncaught));
+    if (curThread === mainThread && inMainJob()) return vcall(r, "run", "()V");
+    void onMain(() => vcall(r, "run", "()V")).catch(reportUncaught);
   },
   "finish()V": function (this: JActivity) {
     if (!this.finished) {
@@ -795,26 +796,20 @@ for (const [name, methods, statics] of [
       return jarray([...uids].map(uidHealthSnapshot), "Landroid/os/health/HealthStats;");
     },
   }],
-  ["android/view/accessibility/CaptioningManager", {
-    "isEnabled()Z": () => 0,
-    "getFontScale()F": () => 1,
-    "getLocale()Ljava/util/Locale;": () => null,
-    "getUserStyle()Landroid/view/accessibility/CaptioningManager$CaptionStyle;": () => rt.make("android/view/accessibility/CaptioningManager$CaptionStyle"),
-    ...noops("addCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V",
-      "removeCaptioningChangeListener(Landroid/view/accessibility/CaptioningManager$CaptioningChangeListener;)V"),
-  }],
   ["android/content/ClipboardManager", clipboardMethods],
   // UI_MODE_TYPE_NORMAL: a handset, not a car/desk/TV dock (Configuration.uiMode agrees).
   // getNightMode reports the device's own setting, which is not this app's to change.
   ["android/app/UiModeManager", {
     "getNightMode()I": () => device.night ? 2 : 1,
     "setNightMode(I)V": () => {},
-    "getApplicationNightMode()I": () => appNightMode,
+    "getApplicationNightMode()I": () => {
+      const saved = appHost ? getPrefs(appHost.pkg, "__system_uimode").map.get("mode") : null;
+      return typeof saved === "number" ? saved : appNightMode;
+    },
     "setApplicationNightMode(I)V": (mode: number) => {
-      if (mode < 0 || mode > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown night mode " + mode);
+      if (mode < 0 || mode > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", `Unknown mode: ${mode}`);
       appNightMode = mode;
-      if (mode !== 3) setDeviceNight(mode === 2 || mode === 0 && device.night);
-      invalidate();
+      appHost?.setApplicationNightMode(mode);
     },
     "getCurrentModeType()I": () => 1,
   }],
@@ -874,6 +869,18 @@ for (const [name, methods, statics] of [
 ] as [string, NativeSpec["methods"], NativeSpec["statics"]?][]) {
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
 }
+rt.register({ name: "android/bluetooth/le/ScanCallback", ctor: class extends JObj {} });
+rt.register({ name: "android/hardware/usb/UsbManager", ctor: class extends JObj {}, methods: {
+  "getDeviceList()Ljava/util/HashMap;": () => rt.make("java/util/HashMap"),
+} });
+rt.register({
+  name: "android/hardware/fingerprint/FingerprintManager", ctor: class extends JObj {},
+  methods: {
+    "isHardwareDetected()Z": () => 0,
+    "hasEnrolledFingerprints()Z": () => 0,
+  },
+});
+rt.register({ name: "android/hardware/fingerprint/FingerprintManager$AuthenticationCallback", ctor: class extends JObj {} });
 rt.register({ name: "android/telephony/PhoneStateListener", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 rt.register({ name: "android/telephony/TelephonyCallback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 rt.register({ name: "webdroid/TelephonyDelivery", ctor: class extends JObj { run: () => Promise<void> = async () => {}; }, ifaces: ["java/lang/Runnable"],
@@ -931,14 +938,6 @@ rt.register({
 for (const n of ["AccessibilityStateChangeListener", "TouchExplorationStateChangeListener", "AccessibilityServicesStateChangeListener", "AudioDescriptionRequestedChangeListener"]) {
   rt.register({ name: "android/view/accessibility/AccessibilityManager$" + n, ctor: class extends JObj {} });
 }
-rt.register({ name: "android/view/accessibility/CaptioningManager$CaptioningChangeListener", ctor: class extends JObj {} });
-rt.register({
-  name: "android/view/accessibility/CaptioningManager$CaptionStyle", ctor: class extends JObj {},
-  methods: {
-    "getTypeface()Landroid/graphics/Typeface;": () => null,
-    ...stubs(0, "hasBackgroundColor()Z", "hasEdgeColor()Z", "hasEdgeType()Z", "hasForegroundColor()Z", "hasWindowColor()Z"),
-  },
-});
 rt.register({
   name: "android/app/ActivityManager$MemoryInfo",
   ctor: class extends JObj { totalMem = 4n * 1024n ** 3n; availMem = 2n * 1024n ** 3n; lowMemory = 0; threshold = 128n * 1024n * 1024n; },
@@ -1083,9 +1082,10 @@ rt.register({
   name: "android/service/quicksettings/TileService", ctor: class extends JService {}, sup: "android/app/Service",
   methods: {
     ...noops("<init>()V", "onClick()V", "onTileAdded()V", "onTileRemoved()V"),
-    "static requestListeningState(Landroid/content/Context;Landroid/content/ComponentName;)V": (context: unknown, component: unknown) => {
-      if (context == null || component == null) rt.npe();
-    },
+      "static requestListeningState(Landroid/content/Context;Landroid/content/ComponentName;)V": (context: unknown, component: unknown) => {
+        if (context == null || component == null) rt.npe();
+        rt.noteMissing("systemService statusbar");
+      },
     "startActivityAndCollapse(Landroid/content/Intent;)V": function (this: JService, intent: JIntent) {
       return vcall(this, "startActivity", "(Landroid/content/Intent;)V", intent);
     },

@@ -1,8 +1,9 @@
 import { readStreamFully } from "./jio";
 import { jarray, mangleMethod, charsToString, dotName } from "../abi";
 import {
-  vcall, vcallOn, callOn, curThread, type JThread, vcallMaybe, after, stringHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException,
+  vcall, vcallOn, callOn, curThread, type JThread, vcallMaybe, after, stringHash, idHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException,
   mkCmp, fmtDouble, bitCount32, cmpFloat, newObj
+
 } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo } from "../runtime";
 import { defaultLocale, JLocale } from "./jvalues";
@@ -695,7 +696,10 @@ export class JMap extends JObj {
   slowVersion = 0;
   access = false;                    // LinkedHashMap accessOrder
   mutable = true;
+  identity = false;
 }
+class JIdentityHashMap extends JMap { identity = true; }
+const mapKeyFor = (map: JMap, key: unknown): unknown => map.identity ? key ?? null : mapKey(key);
 function ensureMapMutable(map: JMap): void {
   if (!map.mutable) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
 }
@@ -745,7 +749,7 @@ function mapMethods(): Methods {
     "size()I": function (this: JMap) { return this.m.size + this.slow.length; },
     "isEmpty()Z": function (this: JMap) { return this.m.size + this.slow.length === 0 ? 1 : 0; },
     "get(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown) {
-      const mk = mapKey(k);
+      const mk = mapKeyFor(this, k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
         if (e && this.access) { this.m.delete(mk); this.m.set(mk, e); }
@@ -758,7 +762,7 @@ function mapMethods(): Methods {
       return v === null ? d : v;
     },
     "containsKey(Ljava/lang/Object;)Z": function (this: JMap, k: unknown) {
-      const mk = mapKey(k);
+      const mk = mapKeyFor(this, k);
       if (mk !== SLOW) return this.m.has(mk) ? 1 : 0;
       return slowFind(this.slow, k).then((i) => (i >= 0 ? 1 : 0));
     },
@@ -771,14 +775,14 @@ function mapMethods(): Methods {
     },
     "containsValue(Ljava/lang/Object;)Z": async function (this: JMap, v: unknown) {
       for (const e of allEnts(this)) {
-        const r = jeq(e.v, v);
+        const r = this.identity ? +(e.v === v) : jeq(e.v, v);
         if (r instanceof Promise ? await r : r) return 1;
       }
       return 0;
     },
     "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown, v: unknown) {
       ensureMapMutable(this);
-      const mk = mapKey(k);
+      const mk = mapKeyFor(this, k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
         if (e) { const o = e.v; e.v = v; return o; }
@@ -789,7 +793,7 @@ function mapMethods(): Methods {
     },
     "putIfAbsent(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown, v: unknown) {
       ensureMapMutable(this);
-      const mk = mapKey(k);
+      const mk = mapKeyFor(this, k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
         if (e?.v !== null && e?.v !== undefined) return e.v;
@@ -800,7 +804,7 @@ function mapMethods(): Methods {
     },
     "remove(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMap, k: unknown) {
       ensureMapMutable(this);
-      const mk = mapKey(k);
+      const mk = mapKeyFor(this, k);
       if (mk !== SLOW) {
         const e = this.m.get(mk);
         if (!e) return null;
@@ -811,7 +815,7 @@ function mapMethods(): Methods {
     },
     "remove(Ljava/lang/Object;Ljava/lang/Object;)Z": function (this: JMap, k: unknown, value: unknown) {
       ensureMapMutable(this);
-      const key = mapKey(k);
+      const key = mapKeyFor(this, k);
       const remove = (entry: Ent | undefined) => {
         if (!entry) return 0;
         const old = entry.v;
@@ -823,7 +827,7 @@ function mapMethods(): Methods {
           if (index < 0) return 0;
           this.slow.splice(index, 1); this.slowVersion++; return 1;
         };
-        const equal = jeq(value, old);
+        const equal = this.identity ? +(value === old) : jeq(value, old);
         return equal instanceof Promise ? equal.then(finish) : finish(equal);
       };
       if (key !== SLOW) return remove(this.m.get(key));
@@ -838,9 +842,17 @@ function mapMethods(): Methods {
     "toString()Ljava/lang/String;": function (this: JMap) {
       return "{" + [...allEnts(this)].map((e) => `${e.k}=${e.v}`).join(", ") + "}";
     },
-    "hashCode()I": function (this: JMap) { return mapHash([...allEnts(this)]); },
+    "hashCode()I": function (this: JMap) {
+      const entries = [...allEnts(this)];
+      return this.identity ? entries.reduce((sum, entry) => (sum + (idHash(entry.k) ^ idHash(entry.v))) | 0, 0) : mapHash(entries);
+    },
     "equals(Ljava/lang/Object;)Z": function (this: JMap, o: unknown) {
       if (o === this) return 1;
+      if (this.identity) {
+        if (!(o instanceof JMap) || !o.identity || o.m.size !== this.m.size) return 0;
+        for (const [key, entry] of this.m) if (!o.m.has(key) || o.m.get(key)?.v !== entry.v) return 0;
+        return 1;
+      }
       if (!(o instanceof JObj) || !rt.iof(o, "java/util/Map")) return 0;
       const size = o instanceof JMap ? o.m.size + o.slow.length : vcallMaybe(o, "size", "()I");
       return after(size, (n) => n === this.m.size + this.slow.length ? mapEquals([...allEnts(this)], o) : 0);
@@ -973,7 +985,7 @@ rt.register({
     "iterator()Ljava/util/Iterator;": function (this: JSetView) {
       const entries = [...allEnts(this.map)], values = this.snapshot(entries);
       const iterator = mkIter(values, { removeAt: (i) => {
-        const entry = entries[i], key = mapKey(entry.k);
+        const entry = entries[i], key = mapKeyFor(this.map, entry.k);
         if (key !== SLOW) {
           if (this.map.m.get(key) === entry) this.map.m.delete(key);
         } else {
@@ -1096,7 +1108,7 @@ for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/conc
     methods["<init>(Ljava/util/EnumMap;)V"] = methods["<init>(Ljava/util/Map;)V"];
   }
   rt.register({
-    name: n, ctor: class extends JMap {}, typeVars: "K,V",
+    name: n, ctor: n === "java/util/IdentityHashMap" ? JIdentityHashMap : class extends JMap {}, typeVars: "K,V",
     sup: n === "java/util/LinkedHashMap" ? "java/util/HashMap" : n === "android/util/ArrayMap" ? "java/lang/Object" : "java/util/AbstractMap",
     ifaces: ["java/util/Map", ...(n === "java/util/concurrent/ConcurrentHashMap" ? ["java/util/concurrent/ConcurrentMap"] : []),
       ...(["java/util/WeakHashMap", "android/util/ArrayMap"].includes(n) ? [] : ["java/lang/Cloneable", "java/io/Serializable"])],

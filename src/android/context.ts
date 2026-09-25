@@ -104,9 +104,11 @@ const SERVICE_CLASS: Record<string, string> = {
   input_method: "android/view/inputmethod/InputMethodManager",
   connectivity: "android/net/ConnectivityManager",
   activity: "android/app/ActivityManager",
+  device_policy: "android/app/admin/DevicePolicyManager",
   game: "android/app/GameManager",
   account: "android/accounts/AccountManager",
   power: "android/os/PowerManager",
+  performance_hint: "android/os/PerformanceHintManager",
   input: "android/hardware/input/InputManager",
   media_router: "android/media/MediaRouter",
   media_metrics: "android/media/metrics/MediaMetricsManager",
@@ -154,6 +156,7 @@ SERVICE_NAME.set("android/view/WindowManager", "window");
 export function systemService(jctx: JContext | null, name: string): unknown {
   if (name === "layout_inflater") return getInflater(jctx);
   if (name === "storagestats") return null;
+  if (name === "performance_hint") return null;
   let s = services.get(name);
   if (s) return s;
   const cls = SERVICE_CLASS[name];
@@ -417,7 +420,7 @@ export const contextMethods: NativeSpec["methods"] = {
 };
 
 rt.register({ name: "android/content/Context", ctor: JContext, methods: contextMethods,
-  statics: { LAYOUT_INFLATER_SERVICE: "layout_inflater", WINDOW_SERVICE: "window", INPUT_METHOD_SERVICE: "input_method", CONNECTIVITY_SERVICE: "connectivity", ACTIVITY_SERVICE: "activity", GAME_SERVICE: "game", ACCOUNT_SERVICE: "account", NOTIFICATION_SERVICE: "notification", ALARM_SERVICE: "alarm", POWER_SERVICE: "power", VIBRATOR_SERVICE: "vibrator", AUDIO_SERVICE: "audio", CLIPBOARD_SERVICE: "clipboard", USER_SERVICE: "user", LOCATION_SERVICE: "location", SENSOR_SERVICE: "sensor", MEDIA_ROUTER_SERVICE: "media_router", TELEPHONY_SERVICE: "phone", WIFI_SERVICE: "wifi", DISPLAY_SERVICE: "display", CAMERA_SERVICE: "camera", INPUT_SERVICE: "input", STORAGE_SERVICE: "storage", BATTERY_SERVICE: "batterymanager", KEYGUARD_SERVICE: "keyguard", ACCESSIBILITY_SERVICE: "accessibility", JOB_SCHEDULER_SERVICE: "jobscheduler", UI_MODE_SERVICE: "uimode", DOWNLOAD_SERVICE: "download", MODE_PRIVATE: 0, BIND_AUTO_CREATE: 1 } });
+  statics: { LAYOUT_INFLATER_SERVICE: "layout_inflater", WINDOW_SERVICE: "window", INPUT_METHOD_SERVICE: "input_method", CONNECTIVITY_SERVICE: "connectivity", ACTIVITY_SERVICE: "activity", GAME_SERVICE: "game", ACCOUNT_SERVICE: "account", NOTIFICATION_SERVICE: "notification", ALARM_SERVICE: "alarm", POWER_SERVICE: "power", VIBRATOR_SERVICE: "vibrator", AUDIO_SERVICE: "audio", CLIPBOARD_SERVICE: "clipboard", USER_SERVICE: "user", LOCATION_SERVICE: "location", SENSOR_SERVICE: "sensor", MEDIA_ROUTER_SERVICE: "media_router", MEDIA_METRICS_SERVICE: "media_metrics", TELEPHONY_SERVICE: "phone", WIFI_SERVICE: "wifi", DISPLAY_SERVICE: "display", CAMERA_SERVICE: "camera", INPUT_SERVICE: "input", STORAGE_SERVICE: "storage", BATTERY_SERVICE: "batterymanager", KEYGUARD_SERVICE: "keyguard", ACCESSIBILITY_SERVICE: "accessibility", JOB_SCHEDULER_SERVICE: "jobscheduler", UI_MODE_SERVICE: "uimode", DOWNLOAD_SERVICE: "download", MODE_PRIVATE: 0, BIND_AUTO_CREATE: 1 } });
 
 export class JContextWrapper extends JContext { base: JContext | null = null; }
 class JAttributionContext extends JContextWrapper {}

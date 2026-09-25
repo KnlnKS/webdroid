@@ -141,6 +141,12 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
   try {
     environment.webdroid = { origin: web.origin, userAgent: await web.page.evaluate(() => navigator.userAgent) };
     if (android) environment.android = android.environment;
+    const bootProcesses = (await readProcesses(web.page)).filter((process) =>
+      isWebdroidProcessFrame(process.url, web.origin));
+    const bootSignals = [...processSignals(bootProcesses), ...web.errors.map((error) => `page-error:${error}`)];
+    environment.bootSignals = bootSignals;
+    for (const signal of bootSignals) seenSignals.add(signal);
+    for (const method of coverage(bootProcesses)) seenCoverage.add(method);
     const stepCount = plan.kind === "replay" ? plan.actions.length : options.steps;
     for (let index = 0; index < stepCount; index++) {
       const webNodes = await web.tree();
@@ -184,7 +190,8 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
       nextAndroidNodes = postAndroidNodes;
       const relevant = processes.filter((process) => isWebdroidProcessFrame(process.url, web.origin));
       if (!relevant.length || relevant.some((process) => process.diagnostics.status !== "ok"))
-        throw new Error(`missing process telemetry at UI step ${index}`);
+        throw new Error(`missing process telemetry at UI step ${index}: ${relevant.map((process) =>
+          `${process.url}: ${process.diagnostics.status === "failure" ? process.diagnostics.message : process.diagnostics.status}`).join("; ")}`);
       const signals = processSignals(relevant);
       for (const error of web.errors) signals.push(`page-error:${error}`);
       if (!alive) signals.push("wedge:foreground");
@@ -207,10 +214,10 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
       const step: UiStep = { index, action, androidTreeHash, webdroidTreeHash: webTreeHash, androidFrameHash,
         webdroidFrameHash: webFrameHash, structuralDivergence, pixel,
         diagnostics: { status: "ok", alive, errors: web.errors, processes: compactDiagnostics(relevant) },
-        coverageDelta, signals };
+        coverageDelta, signals: newSignals };
       if (state && plan.kind === "explore") {
         step.state = state;
-        step.discoveries = plan.explorer.observeAction(state, action, [...currentCoverage], signals, index >= plan.prefix.actions.length);
+        step.discoveries = plan.explorer.observeAction(state, action, coverageDelta, newSignals, index >= plan.prefix.actions.length);
         if (!structuralDivergence && alive) {
           const nextSource = postAndroidNodes ?? nextWebTree;
           const nextSize = screenSize(nextSource);
@@ -310,7 +317,8 @@ export async function runUi(options: UiOptions): Promise<void> {
   if (!options.apks.length) throw new Error("ui fuzzing requires at least one APK");
   if (!options.steps) throw new Error("--steps must be at least 1");
   mkdirSync(options.out, { recursive: true });
-  const apps = options.apks.map(inspectUiApp), runs = [], summaries = [];
+  const apps: UiApp[] = [], runs = [], summaries = [];
+  for (const apk of options.apks) apps.push(await inspectUiApp(apk));
   for (let index = 0; index < apps.length; index++) {
     const app = apps[index]!;
     const explorer = await UiExplorer.open(options.out, app.pkg, app.apk);

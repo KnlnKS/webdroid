@@ -815,6 +815,7 @@ export function stdioInit(): void {
       return 0;
     },
     fsync: () => 0, fdatasync: () => 0, sync: () => {},
+    syncfs: (cpu, a) => fds.has(a.i()) ? 0 : fail(cpu, E.BADF),
     dup: (cpu, a) => { const fd = a.i(); if (isNativeSocket(fd)) return nativeSocketDup(cpu, fd); const f = fds.get(fd); if (!f) return fail(cpu, E.BADF); f.references++; return put(f); },
     dup2: (cpu, a) => fdDup2(cpu, a.i(), a.i()),
     dup3: (cpu, a) => {

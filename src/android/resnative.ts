@@ -7,7 +7,7 @@ import { parseSax } from "./sax";
 import { Resources, currentResources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, JXmlParser, obtainStyled, resolveStyleValue, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
-import { TV, parseAXML, parseAXMLDoc, type XmlNode, type XmlAttr } from "./axml";
+import { TV, parseAXML, parseAXMLDoc, xmlAttrString, type XmlNode, type XmlAttr } from "./axml";
 import { javaFormat, defineException, vcall } from "../jvm/natives/jlang";
 import { type JLocale, localeTag, localeDirection, usLocale } from "../jvm/natives/jvalues";
 import { jarray } from "../jvm/abi";
@@ -619,13 +619,12 @@ const attrInt = (a: XmlAttr | undefined, d: number) => a && a.type >= TV.INT_DEC
 const attrBool = (a: XmlAttr | undefined, d: number) => a && a.type === TV.BOOLEAN ? (a.data ? 1 : 0) : d;
 const attrFloat = (a: XmlAttr | undefined, d: number) => a?.type === TV.FLOAT ? normRV({ t: a.type, d: a.data }).d : d;
 const attrRef = (a: XmlAttr | undefined, d: number) => a && a.type === TV.REFERENCE ? a.data : d;
-const attrStr = (a: XmlAttr | undefined) => a ? (a.str ?? String(a.data)) : null;
 const attributeSetMethods: NativeSpec["methods"] = {
   "getAttributeCount()I": function (this: HasNode) { return this.node?.attrs.length ?? 0; },
   "getAttributeName(I)Ljava/lang/String;": function (this: HasNode, i: number) { return byIdx(this, i)?.name ?? ""; },
   "getAttributeNameResource(I)I": function (this: HasNode, i: number) { return byIdx(this, i)?.resId ?? 0; },
-  "getAttributeValue(I)Ljava/lang/String;": function (this: HasNode, i: number) { return attrStr(byIdx(this, i)); },
-  "getAttributeValue(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": function (this: HasNode, _ns: string, n: string) { return attrStr(byName(this, n)); },
+  "getAttributeValue(I)Ljava/lang/String;": function (this: HasNode, i: number) { return xmlAttrString(byIdx(this, i)); },
+  "getAttributeValue(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": function (this: HasNode, _ns: string, n: string) { return xmlAttrString(byName(this, n)); },
   "getAttributeResourceValue(II)I": function (this: HasNode, i: number, d: number) { return attrRef(byIdx(this, i), d); },
   "getAttributeResourceValue(Ljava/lang/String;Ljava/lang/String;I)I": function (this: HasNode, _ns: string, n: string, d: number) { return attrRef(byName(this, n), d); },
   "getAttributeIntValue(II)I": function (this: HasNode, i: number, d: number) { return attrInt(byIdx(this, i), d); },
@@ -733,8 +732,8 @@ const xmlParserMethods: NativeSpec["methods"] = {
     const a = this.events[this.pos]?.node?.attrs.find((x) => x.name === name);
     return a && a.type >= TV.INT_DEC ? a.data : d;
   },
-  "getIdAttribute()Ljava/lang/String;": function (this: JXmlParser) { return attrStr(this.node?.attrs.find((x) => x.name === "id")); },
-  "getClassAttribute()Ljava/lang/String;": function (this: JXmlParser) { return attrStr(this.node?.attrs.find((x) => x.name === "class")); },
+  "getIdAttribute()Ljava/lang/String;": function (this: JXmlParser) { return xmlAttrString(this.node?.attrs.find((x) => x.name === "id")); },
+  "getClassAttribute()Ljava/lang/String;": function (this: JXmlParser) { return xmlAttrString(this.node?.attrs.find((x) => x.name === "class")); },
   "getStyleAttribute()I": function (this: JXmlParser) { return this.node?.attrs.find((x) => x.name === "style" && !x.ns)?.data ?? 0; },
   "getIdAttributeResourceValue(I)I": function (this: JXmlParser, d: number) { return this.node?.attrs.find((x) => x.resId === 0x010100d0)?.data ?? d; },
   "getText()Ljava/lang/String;": function (this: JXmlParser) { return this.events[this.pos]?.text ?? null; },

@@ -1,6 +1,6 @@
-// Bionic IPv4 sockets: TCP over the browser WebSocket relay, plus process-local UDP.
+// Bionic IPv4 sockets over browser relays, with local UDP delivery.
 
-import { Relay, syntheticAddress, syntheticHost, nameExists } from "../shell/relay";
+import { DatagramRelay, Relay, syntheticAddress, syntheticHost, nameExists, ipv4Key, ipv4Text, parseIpv4 } from "../shell/relay";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { hostLib, PTR, stp, type HostFn, type HostRet, ptr } from "./host";
@@ -45,6 +45,7 @@ interface Datagram {
 }
 interface NativeDatagramSocket extends SocketState {
   kind: "datagram";
+  relay: DatagramRelay | null;
   queue: Datagram[];
   queuedBytes: number;
 }
@@ -79,9 +80,6 @@ const wake = (socket: NativeSocket): void => {
   for (const waiter of waiters) waiter();
 };
 const socketFdOf = (cpu: Cpu | null, fd: number): NativeSocketFd | null => sockets.get(fd) ?? (fail(cpu, E.BADF), null);
-const ipv4Key = (bytes: ArrayLike<number>): number =>
-  (bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24)) >>> 0;
-const ipv4Text = (bytes: ArrayLike<number>): string => `${bytes[0]}.${bytes[1]}.${bytes[2]}.${bytes[3]}`;
 const sameAddress = (a: ArrayLike<number>, b: ArrayLike<number>): boolean =>
   a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
 const isAnyAddress = (address: ArrayLike<number>): boolean => ipv4Key(address) === 0;
@@ -94,13 +92,6 @@ function readEndpoint(cpu: Cpu, sockaddr: number, length: number): Ipv4Endpoint 
     port: (mem.u8[sockaddr + 2] << 8) | mem.u8[sockaddr + 3],
     address: [mem.u8[sockaddr + 4], mem.u8[sockaddr + 5], mem.u8[sockaddr + 6], mem.u8[sockaddr + 7]],
   };
-}
-
-function parseIpv4(text: string): [number, number, number, number] | null {
-  const match = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
-  if (!match) return null;
-  const bytes: [number, number, number, number] = [+match[1], +match[2], +match[3], +match[4]];
-  return bytes.every((byte) => byte <= 255) ? bytes : null;
 }
 
 const addressFor = syntheticAddress;
@@ -198,7 +189,7 @@ function nativeSocket(cpu: Cpu, domain: number, type: number, protocol: number):
     waiters: new Set(), references: 1, peer: null, local: null,
   };
   const socket: NativeSocket = baseType === SOCK_DGRAM
-    ? { ...common, kind: "datagram", queue: [], queuedBytes: 0 }
+    ? { ...common, kind: "datagram", relay: null, queue: [], queuedBytes: 0 }
     : { ...common, kind: "stream", relay: null, connecting: false };
   sockets.set(fd, {
     cloexec: !!(type & SOCK_CLOEXEC),
@@ -316,6 +307,15 @@ function datagramSource(local: Ipv4Endpoint): Ipv4Endpoint {
     : local;
 }
 
+function queueDatagram(socket: NativeDatagramSocket, bytes: Uint8Array, source: Ipv4Endpoint): void {
+  if (!socket.references || socket.queue.length >= UDP_QUEUE_PACKETS || socket.queuedBytes + bytes.length > UDP_QUEUE_BYTES) return;
+  const peer = socket.peer;
+  if (peer && (peer.port !== source.port || !sameAddress(peer.address, source.address))) return;
+  socket.queue.push({ bytes, source });
+  socket.queuedBytes += bytes.length;
+  wake(socket);
+}
+
 function nativeSendTo(cpu: Cpu, fd: number, source: number, length: number, destination: number, destinationLength: number): number {
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
@@ -333,16 +333,20 @@ function nativeSendTo(cpu: Cpu, fd: number, source: number, length: number, dest
   if (!endpoint.port) return fail(cpu, E.INVAL);
   if (!socket.local && !bindDatagram(cpu, socket, { address: [0, 0, 0, 0], port: 0 })) return -1;
   const recipients = datagramRecipients(socket, endpoint);
-  if (!isLoopback(endpoint.address) && !recipients.length) return fail(cpu, E.NETUNREACH);
   const local = socket.local;
   if (!local) return fail(cpu, E.IO);
   const bytes = mem.u8.slice(source, source + length);
-  const datagram = { bytes, source: datagramSource(local) };
-  for (const recipient of recipients) {
-    if (recipient.queue.length >= UDP_QUEUE_PACKETS || recipient.queuedBytes + bytes.length > UDP_QUEUE_BYTES) continue;
-    recipient.queue.push(datagram);
-    recipient.queuedBytes += bytes.length;
-    wake(recipient);
+  for (const recipient of recipients) queueDatagram(recipient, bytes, datagramSource(local));
+  if (!isLoopback(endpoint.address) && !recipients.length) {
+    const relay = socket.relay ??= new DatagramRelay((packet, address, port) => {
+      queueDatagram(socket, packet, { address, port });
+    });
+    void relay.send(syntheticHost(endpoint.address) ?? ipv4Text(endpoint.address), endpoint.port, bytes).catch(() => {
+      socket.error = E.NETUNREACH;
+      relay.close();
+      if (socket.relay === relay) socket.relay = null;
+      wake(socket);
+    });
   }
   return length;
 }
@@ -422,7 +426,7 @@ export function nativeSocketClose(cpu: Cpu, fd: number): number {
   releaseFd(fd);
   if (--socket.references === 0) {
     if (socket.kind === "stream") socket.relay?.close();
-    else datagramBindings.delete(socket);
+    else { datagramBindings.delete(socket); socket.relay?.close(); }
   }
   wake(socket);
   return 0;

@@ -187,6 +187,11 @@ export function attr(node: XmlNode, name: string): XmlAttr | undefined {
   return node.attrs.find((a) => a.name === name);
 }
 export function attrStr(node: XmlNode, name: string): string | null {
-  const a = attr(node, name);
-  return a ? (a.str ?? String(a.data)) : null;
+  return xmlAttrString(attr(node, name));
+}
+
+export function xmlAttrString(a: XmlAttr | undefined): string | null {
+  if (!a) return null;
+  if (a.str !== null) return a.str;
+  return a.type === TV.BOOLEAN ? (a.data ? "true" : "false") : String(a.data);
 }

@@ -358,8 +358,9 @@ bun run fuzz ui FitNotes.apk --seed 1592594996 --steps 100 \
   --out fuzz-results/ui-webdroid-1592594996
 ```
 
-An APK argument may be an existing path or a file name under `apks/`. The APK must expose a
-launchable activity discoverable with `aapt2 dump badging`. Each APK is explored independently.
+An APK or XAPK argument may be an existing path or a file name under `apks/`. Its merged base
+manifest must expose a launchable activity. Each install is explored independently. Split installs
+can be explored without an oracle; the Android oracle installer currently accepts plain APKs only.
 The same `--out` directory resumes a journal named for its package and APK content hash. `--steps`
 bounds new actions in this invocation; replaying a stored path to an unexplored screen costs extra
 actions, with a total cap of three times `--steps` and at most 64 episodes. The campaign summary
