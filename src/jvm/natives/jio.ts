@@ -148,12 +148,15 @@ const listFiles = (d: JFile) => jarray(vfs.list(d.path).map((n) => mkFile(d.path
 // apps implement these to pick over a directory listing (File.listFiles(filter))
 rt.markers("java/io/FilenameFilter", "java/io/FileFilter");
 // Default dir matches System.getProperty("java.io.tmpdir"). Creation cannot fail in the in-memory vfs.
+function createTempPath(prefix: string, suffix: string | null, dir: string): string {
+  for (;;) {
+    const path = vfs.norm(`${dir}/${prefix}${Math.floor(Math.random() * 1e9)}${suffix ?? ".tmp"}`);
+    if (!vfs.exists(path)) { vfs.write(path, new Uint8Array(0)); return path; }
+  }
+}
 function createTempFile(prefix: string, suffix: string | null, dir: JFile | null): JFile {
   if (prefix.length < 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Prefix string too short");
-  for (;;) {
-    const f = mkFile(`${dir?.path ?? "/data/local/tmp"}/${prefix}${Math.floor(Math.random() * 1e9)}${suffix ?? ".tmp"}`);
-    if (!vfs.exists(f.path)) { vfs.write(f.path, new Uint8Array(0)); return f; }
-  }
+  return mkFile(createTempPath(prefix, suffix, dir?.path ?? "/data/local/tmp"));
 }
 rt.register({
   name: "java/io/File", ctor: JFile,
@@ -1694,6 +1697,19 @@ defineException("java/nio/file/FileAlreadyExistsException", "java/nio/file/FileS
 rt.register({
   name: "java/nio/file/Files", ctor: class extends JObj {},
   methods: {
+    "static createTempFile(Ljava/nio/file/Path;Ljava/lang/String;Ljava/lang/String;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;":
+      (dir: JNioPath, prefix: string | null, suffix: string | null, attrs: unknown[] | null) => {
+        if (!dir || !attrs) return rt.npe();
+        if (!vfs.isDir(dir.p)) throw rt.mkThrowable("java/nio/file/NoSuchFileException", dir.p);
+        if (attrs.length) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "File attributes");
+        return mkPath(createTempPath(prefix ?? "", suffix, dir.p));
+      },
+    "static createTempFile(Ljava/lang/String;Ljava/lang/String;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;":
+      (prefix: string | null, suffix: string | null, attrs: unknown[] | null) => {
+        if (!attrs) return rt.npe();
+        if (attrs.length) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "File attributes");
+        return mkPath(createTempPath(prefix ?? "", suffix, "/data/local/tmp"));
+      },
     "static exists(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z": (p: JNioPath) => (vfs.exists(p.p) ? 1 : 0),
     "static isWritable(Ljava/nio/file/Path;)Z": (p: JNioPath) => (vfs.exists(p.p) ? 1 : 0),
     "static move(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;": (src: JNioPath, dst: JNioPath) => {
