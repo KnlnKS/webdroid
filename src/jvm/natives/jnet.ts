@@ -52,7 +52,13 @@ rt.register({
       function (plain: JSocket, host: string, port: number, autoClose: number) {
         const s = rt.make("javax/net/ssl/SSLSocket") as JSocket;
         s.host = host ?? plain?.host ?? ""; s.port = port || plain?.port || 443; s.tls = true;
-        if (autoClose && plain) { plain.relay?.close(); plain.relay = null; plain.closed = 1; }
+        if (plain) {
+          plain.wrapped = s;
+          if (autoClose) {
+            plain.relay?.close(); plain.relay = null;
+            s.underlying = plain;
+          }
+        }
         return s;
       },
     "createSocket()Ljava/net/Socket;": () => newObj("javax/net/ssl/SSLSocket"),
@@ -387,6 +393,7 @@ rt.register({
 });
 class JSocket extends JObj {
   host = ""; port = 0; tls = false; alpn: string[] = []; relay: Relay | null = null; closed = 0; soTimeout = 0;
+  wrapped: JSocket | null = null; underlying: JSocket | null = null;
   private opening: Promise<void> | null = null;
   /** Opening is deferred so an SSLSocket wrapping a plain one can take the target over and
    *  connect with TLS instead -- which is exactly how OkHttp builds an HTTPS connection. */
@@ -394,6 +401,7 @@ class JSocket extends JObj {
     if (this.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
     if (this.opening) return this.opening;
     if (this.relay) return Promise.resolve();
+    if (this.wrapped) return this.wrapped.open();
     const r = this.relay = new Relay(this.host, this.port, this.tls, this.alpn);
     return this.opening = r.ready.catch(() => {
       r.close();
@@ -401,6 +409,13 @@ class JSocket extends JObj {
       throw rt.mkThrowable("java/net/ConnectException", `Failed to connect to ${this.host}:${this.port}`);
     }).finally(() => { this.opening = null; });
   }
+  close(): void {
+    if (this.closed) return;
+    this.closed = 1;
+    this.relay?.close(); this.relay = null;
+    this.wrapped?.close(); this.underlying?.close();
+  }
+  activeRelay(): Relay | null { return this.relay ?? this.wrapped?.relay ?? null; }
 }
 class JSocketIn extends JObj { s!: JSocket; }
 /** A read under SO_TIMEOUT waits only that long, then throws and leaves the stream usable —
@@ -438,17 +453,17 @@ const socketMethods: NativeSpec["methods"] = {
   "getOutputStream()Ljava/io/OutputStream;": function (this: JSocket) {
     const o = rt.make("webdroid/SocketOutputStream") as JSocketOut; o.s = this; return o;
   },
-  "close()V": function (this: JSocket) { this.closed = 1; this.relay?.close(); this.relay = null; },
+  "close()V": function (this: JSocket) { this.close(); },
   "isClosed()Z": function (this: JSocket) { return this.closed; },
-  "isConnected()Z": function (this: JSocket) { return this.relay?.connected ? 1 : 0; },
-  "isInputShutdown()Z": function (this: JSocket) { return this.relay ? 0 : 1; },
-  "isOutputShutdown()Z": function (this: JSocket) { return this.relay ? 0 : 1; },
+  "isConnected()Z": function (this: JSocket) { return this.activeRelay()?.connected ? 1 : 0; },
+  "isInputShutdown()Z": function (this: JSocket) { return this.activeRelay() ? 0 : 1; },
+  "isOutputShutdown()Z": function (this: JSocket) { return this.activeRelay() ? 0 : 1; },
   "shutdownInput()V": () => {},
   "shutdownOutput()V": () => {},
   "getPort()I": function (this: JSocket) { return this.port; },
-  "getLocalPort()I": function (this: JSocket) { return this.relay?.localEndpoint?.port ?? -1; },
+  "getLocalPort()I": function (this: JSocket) { return this.activeRelay()?.localEndpoint?.port ?? -1; },
   "getLocalSocketAddress()Ljava/net/SocketAddress;": function (this: JSocket) {
-    const local = this.relay?.localEndpoint; return local ? inetSock(local.address, local.port) : null;
+    const local = this.activeRelay()?.localEndpoint; return local ? inetSock(local.address, local.port) : null;
   },
   "getInetAddress()Ljava/net/InetAddress;": function (this: JSocket) { return inetAddr(this.host); },
   "getRemoteSocketAddress()Ljava/net/SocketAddress;": function (this: JSocket) { return inetSock(this.host, this.port); },
