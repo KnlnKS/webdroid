@@ -883,7 +883,7 @@ rt.register({
     "static valueOf(Z)Ljava/lang/String;": (v: number) => (v ? "true" : "false"),
     "static valueOf(C)Ljava/lang/String;": (v: number) => String.fromCharCode(v),
     "static valueOf(Ljava/lang/Object;)Ljava/lang/String;": (v: unknown) =>
-      v === null ? "null" : vcall(v, "toString", "()Ljava/lang/String;"),
+      v === null ? "null" : vcall(boxObject(v), "toString", "()Ljava/lang/String;"),
     "static valueOf([C)Ljava/lang/String;": (v: Uint16Array) => charsToString(v, 0, v.length),
     "static valueOf([CII)Ljava/lang/String;": (v: Uint16Array, o: number, n: number) => charsToString(v, o, n),
     "static format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;": (f: string, a: unknown[]) => javaFormat(f, a),
