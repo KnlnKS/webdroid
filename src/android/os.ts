@@ -538,7 +538,8 @@ const bundleBoxes: Record<string, typeof JInt | typeof JLong | typeof JFloat | t
 };
 export function bundlePrimitive(value: unknown, descriptor: string, fallback: unknown): unknown {
   if (typeof value === (descriptor === "J" ? "bigint" : "number")) return value;
-  return value instanceof bundleBoxes[descriptor] ? value.v : fallback;
+  const Box = bundleBoxes[descriptor];
+  return Box && value instanceof Box ? value.v : fallback;
 }
 export function bundleBox(value: unknown, descriptor: string): unknown {
   if (typeof value !== "number") return value;
@@ -584,6 +585,7 @@ const bundleMethods: NativeSpec["methods"] = {
   "putBundle(Ljava/lang/String;Landroid/os/Bundle;)V": function (this: JBundle, k: string, v: unknown) { this.map.set(k, v); },
 };
 for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"], ["Boolean", "Z"],
+  ["Byte", "B"], ["Short", "S"], ["Char", "C"],
   ["Float", "F"], ["Double", "D"], ["CharSequence", "Ljava/lang/CharSequence;"], ["ByteArray", "[B"],
   ["IntArray", "[I"], ["LongArray", "[J"], ["StringArray", "[Ljava/lang/String;"],
   ["IntegerArrayList", "Ljava/util/ArrayList;"], ["ParcelableArray", "[Landroid/os/Parcelable;"],
@@ -595,7 +597,7 @@ for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "
     if (v !== undefined) return v;
     return d === "I" || d === "Z" ? 0 : d === "J" ? 0n : d === "F" || d === "D" ? 0 : null;
   };
-  if (d === "I" || d === "J" || d === "Z" || d === "F" || d === "D" || d === "Ljava/lang/String;" || d === "Ljava/lang/CharSequence;") {
+  if (["I", "J", "B", "S", "C", "Z", "F", "D", "Ljava/lang/String;", "Ljava/lang/CharSequence;"].includes(d)) {
     bundleMethods[`get${t}(Ljava/lang/String;${d})${d}`] = function (this: JBundle, k: string, dflt: unknown) {
       const v = this.map.get(k);
       if (d.length === 1) return bundlePrimitive(v, d, dflt);
@@ -1074,6 +1076,28 @@ rt.register({
   fields: ["st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid", "st_size", "st_atime", "st_mtime",
     "st_ctime", "st_blksize", "st_blocks"],
 });
+const statVfsFields = ["f_bsize", "f_frsize", "f_blocks", "f_bfree", "f_bavail", "f_files", "f_ffree", "f_favail", "f_fsid", "f_flag", "f_namemax"] as const;
+class JStructStatVfs extends JObj {
+  f_bsize = BLK; f_frsize = BLK; f_blocks = 0n; f_bfree = 0n; f_bavail = 0n;
+  f_files = 0n; f_ffree = 0n; f_favail = 0n; f_fsid = 0n; f_flag = 0n; f_namemax = 255n;
+}
+rt.register({
+  name: "android/system/StructStatVfs", ctor: JStructStatVfs,
+  fields: [...statVfsFields],
+  methods: {
+    "<init>(JJJJJJJJJJJ)V": function (this: JStructStatVfs, ...values: bigint[]) {
+      for (let i = 0; i < statVfsFields.length; i++) this[statVfsFields[i]] = values[i];
+    },
+  },
+});
+async function statVfs(): Promise<JStructStatVfs> {
+  const { total, free } = await storageEstimate();
+  const s = new JStructStatVfs();
+  s.f_blocks = BigInt(Math.floor(total / Number(BLK)));
+  s.f_bfree = s.f_bavail = BigInt(Math.floor(free / Number(BLK)));
+  s.f_files = 0x10000n; s.f_ffree = s.f_favail = 0x8000n;
+  return s;
+}
 class JStructUtsname extends JObj {
   sysname = "Linux";
   nodename = "localhost";
@@ -1157,6 +1181,15 @@ rt.register({
       s.st_mtime = s.st_atime = s.st_ctime = BigInt(Math.floor(Date.now() / 1000));
       s.st_blocks = (s.st_size + 511n) / 512n;
       return s;
+    },
+    "static statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": (path: string) => {
+      if (path === null) rt.npe();
+      if (!vfs.stat(path) && !vfs.isDir(path)) throw errno("statvfs", E.NOENT);
+      return statVfs();
+    },
+    [`static fstatvfs(${FD})Landroid/system/StructStatVfs;`]: (d: JFileDescriptor) => {
+      if (descriptorFd(d) < 0) throw errno("fstatvfs", E.BADF);
+      return statVfs();
     },
     "static readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },
   },
