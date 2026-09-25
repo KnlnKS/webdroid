@@ -190,14 +190,32 @@ const openAfd = async (u: JUri, mode: string) => {
   const pfd = await openPfd(u, mode);
   return mkAssetFd(pfd.bytes, pfd);
 };
+const contentObservers = new Set<{ uri: string; descendants: boolean; observer: unknown }>();
+async function notifyContentObservers(uri: JUri, origin: unknown): Promise<void> {
+  if (!uri) rt.npe();
+  for (const entry of [...contentObservers]) {
+    if (entry.uri !== uri.uri && !(entry.descendants && uri.uri.startsWith(entry.uri.replace(/\/$/, "") + "/"))) continue;
+    const self = entry.observer === origin;
+    if (self && !await vcall(entry.observer, "deliverSelfNotifications", "()Z")) continue;
+    await vcall(entry.observer, "onChange", "(ZLandroid/net/Uri;)V", self ? 1 : 0, uri);
+  }
+}
 const resolverMethods: NativeSpec["methods"] = {
   ...Object.fromEntries(["acquireContentProviderClient", "acquireUnstableContentProviderClient"].flatMap((name) => [
     [name + "(Landroid/net/Uri;)Landroid/content/ContentProviderClient;", acquireClient],
     [name + "(Ljava/lang/String;)Landroid/content/ContentProviderClient;", async (authority: string) => acquireClient(mkUri("content://" + authority))],
   ])),
-  "notifyChange(Landroid/net/Uri;Landroid/database/ContentObserver;)V": () => {},
-  "registerContentObserver(Landroid/net/Uri;ZLandroid/database/ContentObserver;)V": () => {},
-  "unregisterContentObserver(Landroid/database/ContentObserver;)V": () => {},
+  "notifyChange(Landroid/net/Uri;Landroid/database/ContentObserver;)V": notifyContentObservers,
+  "notifyChange(Landroid/net/Uri;Landroid/database/ContentObserver;Z)V": notifyContentObservers,
+  "notifyChange(Landroid/net/Uri;Landroid/database/ContentObserver;I)V": notifyContentObservers,
+  "registerContentObserver(Landroid/net/Uri;ZLandroid/database/ContentObserver;)V": (uri: JUri, descendants: number, observer: unknown) => {
+    if (!uri || !observer) rt.npe();
+    contentObservers.add({ uri: uri.uri, descendants: !!descendants, observer });
+  },
+  "unregisterContentObserver(Landroid/database/ContentObserver;)V": (observer: unknown) => {
+    if (!observer) rt.npe();
+    for (const entry of contentObservers) if (entry.observer === observer) contentObservers.delete(entry);
+  },
   "openInputStream(Landroid/net/Uri;)Ljava/io/InputStream;": async (u: JUri) =>
     isDocsUri(u) ? docInputStream(documentId(u, true))
       : u.uri.startsWith("content:") ? newObj("android/os/ParcelFileDescriptor$AutoCloseInputStream", "(Landroid/os/ParcelFileDescriptor;)V", await openPfd(u, "r"))
