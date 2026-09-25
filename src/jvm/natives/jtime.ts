@@ -312,6 +312,10 @@ class JMatcher extends JObj {
   /** both ends anchored, so the engine backtracks into another alternative instead of settling
    *  for the first branch that matched a prefix */
   anchored(): RegExp { return javaRegex("(?:" + this.re.source + ")$", this.re.flags.replace(/[gy]/g, "") + "y"); }
+  groupCount(): number { return this.re.source.includes("(?<__wdAtomic") ? 0 : (this.m?.length ?? 1) - 1; }
+  checkGroup(i: number): void {
+    if (i < 0 || i > this.groupCount()) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", `No group ${i}`);
+  }
 }
 function appendRepl(m: JMatcher, sb: JSB, r: string): JMatcher {
   if (!m.m) throw rt.mkThrowable("java/lang/IllegalStateException", "No match available");
@@ -326,7 +330,7 @@ function appendRepl(m: JMatcher, sb: JSB, r: string): JMatcher {
         out += m.m.groups?.[r.slice(i + 2, j)] ?? ""; i = j; continue;
       }
       let j = i + 1, num = "";
-      while (j < r.length && /[0-9]/.test(r[j]) && Number(num + r[j]) < m.m.length) num += r[j++];
+      while (j < r.length && /[0-9]/.test(r[j]) && Number(num + r[j]) <= m.groupCount()) num += r[j++];
       if (!num) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Illegal group reference");
       out += m.m[Number(num)] ?? ""; i = j - 1; continue;
     }
@@ -335,6 +339,19 @@ function appendRepl(m: JMatcher, sb: JSB, r: string): JMatcher {
   sb.s += m.input.slice(m.appendPos, m.m.index) + out;
   m.appendPos = m.m.index + m.m[0].length;
   return m;
+}
+function replaceMatches(m: JMatcher, replacement: string, first: boolean): string {
+  const sb = { s: "" } as JSB;
+  m.re.lastIndex = 0;
+  m.appendPos = 0;
+  for (let match = m.re.exec(m.input); match; match = m.re.exec(m.input)) {
+    m.m = match;
+    appendRepl(m, sb, replacement);
+    if (first) break;
+    if (!match[0].length) m.re.lastIndex = match.index + 1;
+  }
+  sb.s += m.input.slice(m.appendPos);
+  return sb.s;
 }
 function toJsRegex(p: string, flags: number, global: boolean): RegExp {
   let f = "ud"; // `d`: group indices, which start(n)/end(n) report
@@ -418,23 +435,25 @@ rt.register({
       return this.m ? 1 : 0;
     },
     "group()Ljava/lang/String;": function (this: JMatcher) { return this.m?.[0] ?? null; },
-    "group(I)Ljava/lang/String;": function (this: JMatcher, i: number) { return this.m?.[i] ?? null; },
-    "groupCount()I": function (this: JMatcher) { return (this.m?.length ?? 1) - 1; },
+    "group(I)Ljava/lang/String;": function (this: JMatcher, i: number) { this.checkGroup(i); return this.m?.[i] ?? null; },
+    "groupCount()I": function (this: JMatcher) { return this.groupCount(); },
     "start()I": function (this: JMatcher) { return this.m?.index ?? -1; },
     "end()I": function (this: JMatcher) { return this.m ? this.m.index + this.m[0].length : -1; },
     "start(I)I": function (this: JMatcher, g: number) {
       if (!this.m) throw rt.mkThrowable("java/lang/IllegalStateException", "No match available");
+      this.checkGroup(g);
       if (g === 0) return this.m.index;
       const ix = (this.m as unknown as { indices?: (number[] | undefined)[] }).indices?.[g];
       return ix ? ix[0] : -1;
     },
     "end(I)I": function (this: JMatcher, g: number) {
       if (!this.m) throw rt.mkThrowable("java/lang/IllegalStateException", "No match available");
+      this.checkGroup(g);
       if (g === 0) return this.m.index + this.m[0].length;
       const ix = (this.m as unknown as { indices?: (number[] | undefined)[] }).indices?.[g];
       return ix ? ix[1] : -1;
     },
-    "group(Ljava/lang/String;)Ljava/lang/String;": function (this: JMatcher, n: string) { return this.m?.groups?.[n] ?? null; },
+    "group(Ljava/lang/String;)Ljava/lang/String;": function (this: JMatcher, n: string) { return n.startsWith("__wdAtomic") ? null : this.m?.groups?.[n] ?? null; },
     "toMatchResult()Ljava/util/regex/MatchResult;": function (this: JMatcher) {
       const c = new JMatcher(); c.re = this.re; c.input = this.input; c.m = this.m; c.lastEnd = this.lastEnd; return c;
     },
@@ -452,10 +471,10 @@ rt.register({
     },
     "pattern()Ljava/util/regex/Pattern;": function (this: JMatcher) { const p = new JPattern(); p.src = this.re.source; return p; },
     "replaceAll(Ljava/lang/String;)Ljava/lang/String;": function (this: JMatcher, r: string) {
-      return this.input.replace(javaRegex(this.re.source, this.re.flags), r);
+      return replaceMatches(this, r, false);
     },
     "replaceFirst(Ljava/lang/String;)Ljava/lang/String;": function (this: JMatcher, r: string) {
-      return this.input.replace(javaRegex(this.re.source, this.re.flags.replace("g", "")), r);
+      return replaceMatches(this, r, true);
     },
     "reset()Ljava/util/regex/Matcher;": function (this: JMatcher) {
       this.lastEnd = 0; this.appendPos = 0;

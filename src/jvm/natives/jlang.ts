@@ -97,7 +97,49 @@ function javaToJs(src: string): [string, string] {
     const cls = POSIX[name];
     return cls ? (neg === "P" ? `[^${cls}]` : `[${cls}]`) : m;
   });
+  if (out.includes("(?>")) out = atomicGroups(out);
   return [out, extra];
+}
+function atomicGroups(src: string): string {
+  // A lookahead fixes the chosen alternative before its backreference consumes it.
+  // Synthetic captures would shift Java group numbers, so leave those patterns unsupported.
+  let escaped = false, inClass = false, depth = 0, atomic = 0, captures = false;
+  const opens: number[] = [];
+  const pairs = new Map<number, number>();
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (escaped) { escaped = false; continue; }
+    if (c === "\\") { escaped = true; continue; }
+    if (c === "[") { inClass = true; continue; }
+    if (c === "]" && inClass) { inClass = false; continue; }
+    if (inClass) continue;
+    if (c === "(") {
+      if (src.startsWith("(?>", i)) atomic++;
+      else if (src[i + 1] !== "?" || (src.startsWith("(?<", i) && !/[=!]/.test(src[i + 3] ?? ""))) captures = true;
+      opens.push(i); depth++;
+    } else if (c === ")") {
+      if (depth) pairs.set(opens.pop()!, i);
+      depth--;
+    }
+  }
+  if (!atomic) return src;
+  if (captures) throw new SyntaxError("Atomic group with capturing groups is unsupported");
+  let n = 0;
+  const rewrite = (start: number, end: number): string => {
+    let result = "";
+    for (let i = start; i < end; i++) {
+      const close = pairs.get(i);
+      if (close === undefined) { result += src[i]; continue; }
+      const body = rewrite(i + (src.startsWith("(?>", i) ? 3 : 1), close);
+      if (src.startsWith("(?>", i)) {
+        const name = `__wdAtomic${n++}`;
+        result += `(?:(?=(?<${name}>${body}))\\k<${name}>)`;
+      } else result += `(${body})`;
+      i = close;
+    }
+    return result;
+  };
+  return rewrite(0, src.length);
 }
 export function javaRegex(source: string, flags: string): RegExp {
   const key = flags + "/" + source;
