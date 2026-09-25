@@ -22,16 +22,16 @@ defineException("javax/crypto/AEADBadTagException", "javax/crypto/BadPaddingExce
 const bytes = (b: Int8Array, off = 0, len = b.length - off): Uint8Array<ArrayBuffer> => u8(b, off, len).slice();
 
 class JSecretKeySpec extends JObj {
-  key = new Uint8Array(0);
+  key = new Int8Array(0);
   algo = "";
   imported = new Map<string, CryptoKey>();
 }
 function mkSecretKey(key: Uint8Array, algo: string): JSecretKeySpec {
-  const k = new JSecretKeySpec(); k.key = new Uint8Array(key); k.algo = algo; return k;
+  const k = new JSecretKeySpec(); k.key = new Int8Array(key); k.algo = algo; return k;
 }
 function setKey(k: JSecretKeySpec, b: Int8Array, off: number, len: number, algo: string) {
   if (!len || algo == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", len ? "Missing argument" : "Empty key");
-  k.key = bytes(b, off, len);
+  k.key = i8(bytes(b, off, len));
   k.algo = algo;
 }
 async function cryptoKey(key: unknown, alg: string, usages: KeyUsage[], hash?: string): Promise<CryptoKey> {
@@ -48,6 +48,10 @@ async function cryptoKey(key: unknown, alg: string, usages: KeyUsage[], hash?: s
 rt.register({
   name: "javax/crypto/spec/SecretKeySpec", ctor: JSecretKeySpec,
   ifaces: ["javax/crypto/SecretKey", "java/security/Key", "java/security/spec/KeySpec", "java/io/Serializable"],
+  serialization: { uid: 6577238317307289933n, fields: [
+    { name: "algorithm", desc: "Ljava/lang/String;", prop: "algo" },
+    { name: "key", desc: "[B", prop: "key" },
+  ] },
   methods: {
     "<init>([BLjava/lang/String;)V": function (this: JSecretKeySpec, b: Int8Array, algo: string) { setKey(this, b, 0, b.length, algo); },
     "<init>([BIILjava/lang/String;)V": function (this: JSecretKeySpec, b: Int8Array, off: number, len: number, algo: string) {
@@ -454,7 +458,7 @@ class JKeyStore extends JObj {
     const encode = (b: Uint8Array) => btoa(binary(b));
     for (const [a, k] of this.entries) {
       if (k instanceof JRsaPrivateKey) o[a] = { kind: "rsa", private: encode(k.encoded), public: encode(k.publicKey.encoded), certificate: encode(k.certificate!.encoded) };
-      else o[a] = [k.algo, encode(k.key)];
+      else o[a] = [k.algo, encode(u8(k.key))];
     }
     for (const [a, c] of this.certs) { const der = (c as StoredCert).der ?? (c as StoredCert).encoded; if (der) o[a] = { kind: "cert", certificate: encode(der) }; }
     for (const [a, der] of this.pendingCerts) o[a] = { kind: "cert", certificate: der };
