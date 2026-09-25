@@ -397,9 +397,15 @@ export async function launchIntent(host: AppHost, intent: JIntent, result?: Acti
   const system = intent.component ? null : systemActivities[intent.action ?? ""];
   if (system) {
     void system(intent).then(
-      (data) => { if (result) deliverActivityResult(result.act, result.code, data ? RESULT_OK : RESULT_CANCELED, data); },
-      (error) => { reportUncaught(error); if (result) deliverActivityResult(result.act, result.code, RESULT_CANCELED, null); },
-    );
+      async (data) => {
+        if (!result) return;
+        if (data?.dataUri && (data.flags & 3)) {
+          const { grantUriPermission } = await import("./contentresolver");
+          grantUriPermission(result.act.$host.pkg, mkUri(data.dataUri), data.flags);
+        }
+        deliverActivityResult(result.act, result.code, data ? RESULT_OK : RESULT_CANCELED, data);
+      },
+    ).catch((error) => { reportUncaught(error); if (result) deliverActivityResult(result.act, result.code, RESULT_CANCELED, null); });
     return;
   }
   const { getPM } = await import("./pm");

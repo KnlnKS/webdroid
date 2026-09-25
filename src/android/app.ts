@@ -1,7 +1,7 @@
 import { JContextWrapper, systemService, wrapperMethods, display, displayListeners, grantPermissions, type JContext } from "./context";
 import { JWindow } from "./window";
 import {
-  JIntent, activityTransport, systemActivities, deliverActivityResult, RESULT_OK, RESULT_CANCELED, launchIntent, mkComponentName,
+  JIntent, activityTransport, launchIntent, mkComponentName,
   type JComponentName
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, JActionBarView, ID_HOME, showMenuPopup, barAnchor } from "./menu";
@@ -29,8 +29,6 @@ import type { JBitmap } from "./graphics";
 import { JConfigurationInfo } from "./pm";
 import { deviceConfiguration } from "./resnative";
 import { packages } from "./packages";
-import { grantUriPermission } from "./contentresolver";
-import { mkUri } from "./net";
 import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
 import { clipboardMethods } from "./clipboard";
 import { JActionMode } from "./actionmode";
@@ -357,21 +355,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "finishAffinity()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
   "finishAfterTransition()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
   "isTaskRoot()Z": function (this: JActivity) { return +(activityTransport.isTaskRoot?.(this) ?? false); },
-  // AOSP's startActivityForResult only *starts* something; the result arrives later through
-  // onActivityResult. Awaiting a system activity here would hold the serialized main-looper
-  // queue for as long as its (native, modal) UI is up, which reads as a wedge.
   "startActivityForResult(Landroid/content/Intent;I)V": async function (this: JActivity, intent: JIntent, code: number) {
-    const sys = intent?.component ? null : systemActivities[intent?.action ?? ""];
-    if (sys) {
-      void sys(intent).then(
-        (data) => {
-          if (data?.dataUri && (data.flags & 3)) grantUriPermission(this.$host.pkg, mkUri(data.dataUri), data.flags);
-          deliverActivityResult(this, code, data ? RESULT_OK : RESULT_CANCELED, data);
-        },
-        (e) => { reportUncaught(e); deliverActivityResult(this, code, RESULT_CANCELED, null); },
-      );
-      return;
-    }
     await launchIntent(this.$host, intent, { act: this, code });
   },
   // ActivityCompat — and so every androidx ActivityResultRegistry launcher — calls the options
