@@ -121,15 +121,21 @@ rt.register({ name: "webdroid/SaxReader", ctor: JXmlReader, ifaces: ["org/xml/sa
   "parse(Lorg/xml/sax/InputSource;)V": parse,
 } });
 class JSaxParser extends JObj { reader = new JXmlReader(); }
+function parseWithHandler(this: JSaxParser, source: JInputSource, handler: unknown) {
+  if (!source) throw rt.mkThrowable("java/lang/IllegalArgumentException", "InputSource is null");
+  this.reader.handler = handler;
+  this.reader.errorHandler = handler;
+  return parse.call(this.reader, source);
+}
 rt.register({ name: "javax/xml/parsers/SAXParser", ctor: JSaxParser, methods: {
   "getXMLReader()Lorg/xml/sax/XMLReader;": function (this: JSaxParser) { return this.reader; },
   "isNamespaceAware()Z": function (this: JSaxParser) { return +this.reader.namespaces; },
   "isValidating()Z": () => 0,
-  "parse(Lorg/xml/sax/InputSource;Lorg/xml/sax/helpers/DefaultHandler;)V": function (this: JSaxParser, source: JInputSource, handler: unknown) {
-    if (!source) throw rt.mkThrowable("java/lang/IllegalArgumentException", "InputSource is null");
-    this.reader.handler = handler;
-    this.reader.errorHandler = handler;
-    return parse.call(this.reader, source);
+  "parse(Lorg/xml/sax/InputSource;Lorg/xml/sax/helpers/DefaultHandler;)V": parseWithHandler,
+  "parse(Ljava/io/InputStream;Lorg/xml/sax/helpers/DefaultHandler;)V": function (this: JSaxParser, stream: unknown, handler: unknown) {
+    if (!stream) throw rt.mkThrowable("java/lang/IllegalArgumentException", "InputStream is null");
+    const source = new JInputSource(); source.bytes = stream;
+    return parseWithHandler.call(this, source, handler);
   },
 } });
 class JSaxFactory extends JObj { namespaces: boolean | null = null; namespacePrefixes = false; }
