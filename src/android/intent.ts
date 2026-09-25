@@ -94,9 +94,14 @@ async function writeIntent(this: JIntent, p: JParcel, flags: number): Promise<vo
   writeInt(p, this.contentUserHint); await vcall(p, "writeBundle", "(Landroid/os/Bundle;)V", this.extras.map.size ? this.extras : null);
   writeInt(p, +!!this.originalIntent); if (this.originalIntent) await vcall(this.originalIntent, "writeToParcel", "(Landroid/os/Parcel;I)V", p, flags);
 }
-async function parseIntentXml(_resources: unknown, parser: unknown, attrs: unknown): Promise<JIntent> {
-  if (!parser || !attrs) rt.npe();
-  const attribute = (name: string) => vcall(attrs, "getAttributeValue", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "http://schemas.android.com/apk/res/android", name) as Promise<string | null>;
+async function parseIntentXml(resources: unknown, parser: unknown, attrs: unknown): Promise<JIntent> {
+  if (!resources || !parser || !attrs) rt.npe();
+  const namespace = "http://schemas.android.com/apk/res/android";
+  const attribute = async (name: string): Promise<string | null> => {
+    const ref = await vcall(attrs, "getAttributeResourceValue", "(Ljava/lang/String;Ljava/lang/String;I)I", namespace, name, 0) as number;
+    return ref ? await vcall(resources, "getString", "(I)Ljava/lang/String;", ref) as string
+      : await vcall(attrs, "getAttributeValue", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", namespace, name) as string | null;
+  };
   const intent = new JIntent();
   intent.action = await attribute("action");
   intent.dataUri = await attribute("data");
