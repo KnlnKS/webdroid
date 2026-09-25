@@ -10,6 +10,7 @@ import { mangleMethod, jmethod, descToName, charsToString, jarray, PRIM_NAME, in
 import { guestNow, type GuestTimer } from "../../guest-clock";
 import { device } from "../../shell/config";
 import { csText } from "./jchars";
+import { mkIntStream } from "./jstream-values";
 
 async function joinCharSequences(separator: unknown, parts: unknown[]): Promise<string> {
   if (separator == null || parts == null) rt.npe();
@@ -114,7 +115,49 @@ function javaToJs(src: string): [string, string] {
     const cls = POSIX[name];
     return cls ? (neg === "P" ? `[^${cls}]` : `[${cls}]`) : m;
   });
+  if (out.includes("(?>")) out = atomicGroups(out);
   return [out, extra];
+}
+function atomicGroups(src: string): string {
+  // A lookahead fixes the chosen alternative before its backreference consumes it.
+  // Synthetic captures would shift Java group numbers, so leave those patterns unsupported.
+  let escaped = false, inClass = false, depth = 0, atomic = 0, captures = false;
+  const opens: number[] = [];
+  const pairs = new Map<number, number>();
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (escaped) { escaped = false; continue; }
+    if (c === "\\") { escaped = true; continue; }
+    if (c === "[") { inClass = true; continue; }
+    if (c === "]" && inClass) { inClass = false; continue; }
+    if (inClass) continue;
+    if (c === "(") {
+      if (src.startsWith("(?>", i)) atomic++;
+      else if (src[i + 1] !== "?" || (src.startsWith("(?<", i) && !/[=!]/.test(src[i + 3] ?? ""))) captures = true;
+      opens.push(i); depth++;
+    } else if (c === ")") {
+      if (depth) pairs.set(opens.pop()!, i);
+      depth--;
+    }
+  }
+  if (!atomic) return src;
+  if (captures) throw new SyntaxError("Atomic group with capturing groups is unsupported");
+  let n = 0;
+  const rewrite = (start: number, end: number): string => {
+    let result = "";
+    for (let i = start; i < end; i++) {
+      const close = pairs.get(i);
+      if (close === undefined) { result += src[i]; continue; }
+      const body = rewrite(i + (src.startsWith("(?>", i) ? 3 : 1), close);
+      if (src.startsWith("(?>", i)) {
+        const name = `__wdAtomic${n++}`;
+        result += `(?:(?=(?<${name}>${body}))\\k<${name}>)`;
+      } else result += `(${body})`;
+      i = close;
+    }
+    return result;
+  };
+  return rewrite(0, src.length);
 }
 export function javaRegex(source: string, flags: string): RegExp {
   const key = flags + "/" + source;
@@ -716,9 +759,13 @@ sm("regionMatches(ZILjava/lang/String;II)Z", function (ignore: number, toff: num
   return (ignore ? a.toLowerCase() === b.toLowerCase() : a === b) ? 1 : 0;
 });
 sm("contentEquals(Ljava/lang/CharSequence;)Z", function (o: unknown) { return (this as string) === jToString(o) ? 1 : 0; });
-sm("codePointCount(II)I", function (a: number, b: number) { return b - a; });
+sm("codePointCount(II)I", function (a: number, b: number) {
+  if (a < 0 || b < a || b > this.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  return Array.from(this.slice(a, b)).length;
+});
 sm("offsetByCodePoints(II)I", function (i: number, n: number) { return offsetCodePoints(String(this), i, n); });
-sm("chars()Ljava/util/stream/IntStream;", function () { throw rt.unimplemented("String.chars"); });
+sm("chars()Ljava/util/stream/IntStream;", function () { return mkIntStream(Array.from({ length: this.length }, (_, i) => this.charCodeAt(i))); });
+sm("codePoints()Ljava/util/stream/IntStream;", function () { return mkIntStream(Array.from(this, char => char.codePointAt(0)!)); });
 sm("getClass()Ljava/lang/Class;", function () { return rt.classFor("java/lang/String"); });
 sm("matches(Ljava/lang/String;)Z", function (p: string) { return javaMatches(p, this as string); });
 sm("replaceAll(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", function (p: string, r: string) {
@@ -853,7 +900,7 @@ rt.register({
     "static valueOf(Z)Ljava/lang/String;": (v: number) => (v ? "true" : "false"),
     "static valueOf(C)Ljava/lang/String;": (v: number) => String.fromCharCode(v),
     "static valueOf(Ljava/lang/Object;)Ljava/lang/String;": (v: unknown) =>
-      v === null ? "null" : vcall(v, "toString", "()Ljava/lang/String;"),
+      v === null ? "null" : vcall(boxObject(v), "toString", "()Ljava/lang/String;"),
     "static valueOf([C)Ljava/lang/String;": (v: Uint16Array) => charsToString(v, 0, v.length),
     "static valueOf([CII)Ljava/lang/String;": (v: Uint16Array, o: number, n: number) => charsToString(v, o, n),
     "static format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;": (f: string, a: unknown[]) => javaFormat(f, a),
@@ -1554,7 +1601,7 @@ const sysProps: Record<string, string> = {
   "java.version": "0", "os.name": "Linux", "line.separator": "\n",
   // The loader indexes every DEX before application initialization, as ART 2.1 does.
   "java.vm.version": "2.1.0",
-  "java.vm.name": "webdroid", "file.separator": "/", "path.separator": ":",
+  "java.vm.name": "Dalvik", "file.separator": "/", "path.separator": ":",
   "java.io.tmpdir": "/data/local/tmp", "user.dir": "/",
 };
 const sysEnv: Record<string, string> = {

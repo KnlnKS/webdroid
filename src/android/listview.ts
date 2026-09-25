@@ -7,7 +7,7 @@ import { mangleMethod, jmethod } from "../jvm/abi";
 import { newObj, vcall, curThread, after } from "../jvm/natives/jlang";
 import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSize, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom } from "./view";
 import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
-import { JAttrSet, obtainStyled, rvDimen, rvInt, rvString, type Resources } from "./res";
+import { JAttrSet, obtainStyled, rvDimen, rvInt, type Resources } from "./res";
 import { attr } from "./axml";
 import { JCanvas } from "./graphics";
 import { JDrawable, loadDrawableRV, drawableSize, drawChild } from "./drawable";
@@ -18,9 +18,9 @@ import { JTextView } from "./textview";
 import { inflateLayout } from "./inflate";
 import { addOverlay, removeOverlay } from "./popup";
 import { device } from "../shell/config";
-import { spannedString } from "./text";
+import { JActionMode } from "./actionmode";
 
-for (const i of ["android/widget/Adapter", "android/widget/ListAdapter", "android/widget/SpinnerAdapter",
+for (const i of ["android/widget/Adapter", "android/widget/ListAdapter", "android/widget/WrapperListAdapter", "android/widget/SpinnerAdapter",
   "android/widget/AdapterView$OnItemClickListener", "android/widget/AdapterView$OnItemLongClickListener",
   "android/widget/AdapterView$OnItemSelectedListener", "android/widget/AbsListView$SelectionBoundsAdjuster",
   "android/widget/AbsListView$RecyclerListener", "android/widget/SectionIndexer"]) {
@@ -160,10 +160,7 @@ rt.register({
   },
 });
 
-// ── ActionMode + the modal multi-select callbacks
-// AbsListView.MultiChoiceModeListener extends ActionMode.Callback; apps implement it and we
-// drive it from setItemChecked. No action bar UI: the mode owns a Menu the app can fill.
-rt.markers("android/view/ActionMode$Callback");
+// AbsListView.MultiChoiceModeListener extends ActionMode.Callback.
 rt.register({
   name: "android/widget/AbsListView$MultiChoiceModeListener", ctor: class extends JObj {},
   ifaces: ["android/view/ActionMode$Callback"],
@@ -172,55 +169,6 @@ rt.register({
   name: "android/widget/AbsListView$OnScrollListener", ctor: class extends JObj {},
   statics: { SCROLL_STATE_IDLE: 0, SCROLL_STATE_TOUCH_SCROLL: 1, SCROLL_STATE_FLING: 2 },
 });
-class JActionMode extends JObj {
-  jctx: any = null;
-  cb: unknown = null;          // ActionMode.Callback
-  menu: any = null;            // webdroid/Menu
-  title = "";
-  subtitle = "";
-  finished = false;
-  onFinish: (() => void | Promise<void>) | null = null;
-}
-const M_amSetTitle = mangleMethod("setTitle", "(Ljava/lang/CharSequence;)V");
-const M_amSetSubtitle = mangleMethod("setSubtitle", "(Ljava/lang/CharSequence;)V");
-function amString(m: JActionMode, id: number): string {
-  const res: Resources | null = m.jctx?.$host?.res ?? null;
-  return res ? rvString(res, res.resolveRefs(res.value(id))) ?? "" : "";
-}
-rt.register({
-  name: "android/view/ActionMode", ctor: JActionMode,
-  methods: {
-    "getMenuInflater()Landroid/view/MenuInflater;": function (this: JActionMode) {
-      const inf = rt.make("android/view/MenuInflater");
-      inf.jctx = this.jctx;
-      return inf;
-    },
-    "setTitle(Ljava/lang/CharSequence;)V": function (this: JActionMode, t: unknown) {
-      this.title = spannedString(t);
-    },
-    "setTitle(I)V": function (this: JActionMode, id: number) { jmethod(this, M_amSetTitle)!.call(this, amString(this, id)); },
-    "setSubtitle(Ljava/lang/CharSequence;)V": function (this: JActionMode, t: unknown) {
-      this.subtitle = spannedString(t);
-    },
-    "setSubtitle(I)V": function (this: JActionMode, id: number) { jmethod(this, M_amSetSubtitle)!.call(this, amString(this, id)); },
-    ...fieldGetters({ "getMenu()Landroid/view/Menu;": "menu", "getTitle()Ljava/lang/CharSequence;": "title",
-      "getSubtitle()Ljava/lang/CharSequence;": "subtitle" }),
-    "invalidate()V": async function (this: JActionMode) {
-      if (this.cb) {
-        await vcall(this.cb, "onPrepareActionMode", "(Landroid/view/ActionMode;Landroid/view/Menu;)Z", this, this.menu);
-      }
-      invalidate();
-    },
-    "finish()V": async function (this: JActionMode) {
-      if (this.finished) return;
-      this.finished = true;
-      await this.onFinish?.();
-      if (this.cb) await vcall(this.cb, "onDestroyActionMode", "(Landroid/view/ActionMode;)V", this);
-      invalidate();
-    },
-  },
-});
-
 const CHOICE_MODE_MULTIPLE_MODAL = 3;
 export class JListView extends JViewGroup {
   adapter: unknown = null;
@@ -232,9 +180,11 @@ export class JListView extends JViewGroup {
   divDraw: JDrawable | null = null;
   headers: JView[] = [];
   footers: JView[] = [];
+  headerAdapter: JHeaderViewListAdapter | null = null;
   itemViews: JView[] = [];
-  dirty = true;
   building = false;
+  rebuildPending = false;
+  rebuildPromise: Promise<void> | null = null;
   dragging = false;
   downY = 0; lastY = 0; velo = 0; lastMoveT = 0;
   flingAnim: (() => boolean) | null = null;
@@ -321,31 +271,94 @@ export class JListView extends JViewGroup {
     this.scrollY = Math.max(0, Math.min(this.maxScroll(), this.scrollY));
     this.notifyScroll();
   }
-  async rebuild() {
-    if (this.building) return;
+  rebuild(): Promise<void> {
+    if (this.rebuildPromise) {
+      this.rebuildPending = true;
+      return this.rebuildPromise;
+    }
+    this.rebuildPromise = this.rebuildRows().finally(() => { this.rebuildPromise = null; });
+    return this.rebuildPromise;
+  }
+  private async rebuildRows() {
     this.building = true;
     try {
-      for (const v of [...this.children]) await detachView(this, v);
-      this.itemViews = []; this.viewsCache = null;
-      if (this.adapter) {
-        const n: number = await vcall(this.adapter, "getCount", "()I");
-        for (let i = 0; i < n; i++) {
-          const v = await vcall(this.adapter, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;", i, null, this) as JView | null;
-          if (!v) continue;
-          this.itemViews.push(v); this.viewsCache = null;
+      do {
+        this.rebuildPending = false;
+        for (const v of [...this.children]) await detachView(this, v);
+        this.itemViews = []; this.viewsCache = null;
+        if (this.adapter) {
+          const n: number = await vcall(this.adapter, "getCount", "()I");
+          for (let i = 0; i < n; i++) {
+            const v = await vcall(this.adapter, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;", i, null, this) as JView | null;
+            if (!v) continue;
+            this.itemViews.push(v); this.viewsCache = null;
+          }
         }
-      }
-      for (const v of this.allViews()) await attachView(this, v);
-      this.updateEmptyStatus();
-      this.dirty = false;
-      requestLayout(this);
+        for (const v of this.allViews()) await attachView(this, v);
+        this.updateEmptyStatus();
+        requestLayout(this);
+      } while (this.rebuildPending);
     } catch (e) {
       reportUncaught(e);
-      this.dirty = false;
+    } finally {
+      this.building = false;
     }
-    this.building = false;
   }
 }
+class JHeaderViewListAdapter extends JObj {
+  constructor(readonly list: JListView) { super(); }
+}
+const headerAdapterMethods: NonNullable<NativeSpec["methods"]> = {
+  "getWrappedAdapter()Landroid/widget/ListAdapter;": function (this: JHeaderViewListAdapter) { return this.list.adapter; },
+  "getCount()I": async function (this: JHeaderViewListAdapter) {
+    return this.list.headers.length + (this.list.adapter ? await vcall(this.list.adapter, "getCount", "()I") as number : 0) + this.list.footers.length;
+  },
+  "getItem(I)Ljava/lang/Object;": function (this: JHeaderViewListAdapter, pos: number) {
+    const row = pos - this.list.headers.length;
+    return row >= 0 && row < this.list.itemViews.length && this.list.adapter
+      ? vcall(this.list.adapter, "getItem", "(I)Ljava/lang/Object;", row) : null;
+  },
+  "getItemId(I)J": function (this: JHeaderViewListAdapter, pos: number) {
+    const row = pos - this.list.headers.length;
+    return row >= 0 && row < this.list.itemViews.length && this.list.adapter
+      ? vcall(this.list.adapter, "getItemId", "(I)J", row) : -1n;
+  },
+  "getView(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;": function (this: JHeaderViewListAdapter, pos: number, convert: unknown, parent: unknown) {
+    if (pos < this.list.headers.length) return this.list.headers[pos];
+    const row = pos - this.list.headers.length;
+    if (row < this.list.itemViews.length && this.list.adapter)
+      return vcall(this.list.adapter, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;", row, convert, parent);
+    return this.list.footers[row - this.list.itemViews.length] ?? null;
+  },
+  "isEnabled(I)Z": function (this: JHeaderViewListAdapter, pos: number) {
+    const row = pos - this.list.headers.length;
+    return row >= 0 && row < this.list.itemViews.length && this.list.adapter
+      ? vcall(this.list.adapter, "isEnabled", "(I)Z", row) : 1;
+  },
+  "areAllItemsEnabled()Z": function (this: JHeaderViewListAdapter) {
+    return this.list.adapter ? vcall(this.list.adapter, "areAllItemsEnabled", "()Z") : 1;
+  },
+  "getItemViewType(I)I": function (this: JHeaderViewListAdapter, pos: number) {
+    const row = pos - this.list.headers.length;
+    return row >= 0 && row < this.list.itemViews.length && this.list.adapter
+      ? vcall(this.list.adapter, "getItemViewType", "(I)I", row) : -2;
+  },
+  "getViewTypeCount()I": function (this: JHeaderViewListAdapter) {
+    return this.list.adapter ? vcall(this.list.adapter, "getViewTypeCount", "()I") : 1;
+  },
+  "hasStableIds()Z": function (this: JHeaderViewListAdapter) {
+    return this.list.adapter ? vcall(this.list.adapter, "hasStableIds", "()Z") : 0;
+  },
+  "isEmpty()Z": function (this: JHeaderViewListAdapter) { return this.list.totalCount() ? 0 : 1; },
+  "registerDataSetObserver(Landroid/database/DataSetObserver;)V": function (this: JHeaderViewListAdapter, observer: unknown) {
+    return this.list.adapter ? vcall(this.list.adapter, "registerDataSetObserver", "(Landroid/database/DataSetObserver;)V", observer) : undefined;
+  },
+  "unregisterDataSetObserver(Landroid/database/DataSetObserver;)V": function (this: JHeaderViewListAdapter, observer: unknown) {
+    return this.list.adapter ? vcall(this.list.adapter, "unregisterDataSetObserver", "(Landroid/database/DataSetObserver;)V", observer) : undefined;
+  },
+};
+rt.register({ name: "android/widget/HeaderViewListAdapter", ctor: JHeaderViewListAdapter,
+  ifaces: ["android/widget/ListAdapter", "android/widget/WrapperListAdapter"], methods: headerAdapterMethods });
 const M_perfItemClick = mangleMethod("performItemClick", "(Landroid/view/View;IJ)Z");
 const M_perfLongPress = mangleMethod("performLongPress", "(Landroid/view/View;IJ)Z");
 const M_setItemChecked = mangleMethod("setItemChecked", "(IZ)V");
@@ -405,8 +418,8 @@ async function themeDivider(list: JListView) {
   const rv = list.theme?.lookup(AID("listDivider"));
   if (rv && list.jres) list.divDraw = await loadDrawableRV(list.jres, rv, list.theme);
 }
-function addHeader(this: JListView, v: JView) { this.headers.push(v); this.viewsCache = null; this.dirty = true; void this.rebuild(); }
-function addFooter(this: JListView, v: JView) { this.footers.push(v); this.viewsCache = null; this.dirty = true; void this.rebuild(); }
+function addHeader(this: JListView, v: JView) { this.headers.push(v); this.viewsCache = null; void this.rebuild(); }
+function addFooter(this: JListView, v: JView) { this.footers.push(v); this.viewsCache = null; void this.rebuild(); }
 async function measureListView(this: JListView, wSpec: number, hSpec: number) {
     const w = defaultSize(specSize(wSpec), wSpec);
     const availW = Math.max(0, w - this.padL - this.padR);
@@ -442,7 +455,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (a) {
       const self = this;
       this.observer = {
-        [mangleMethod("onChanged", "()V")]: async () => { self.dirty = true; await self.rebuild(); },
+        [mangleMethod("onChanged", "()V")]: async () => { await self.rebuild(); },
         [mangleMethod("onInvalidated", "()V")]: () => { invalidate(); },
       };
       try { await vcall(a, "registerDataSetObserver", "(Landroid/database/DataSetObserver;)V", this.observer); } catch { /* */ }
@@ -459,12 +472,12 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "addFooterView(Landroid/view/View;Ljava/lang/Object;Z)V": addFooter,
   "removeHeaderView(Landroid/view/View;)Z": function (this: JListView, v: JView) {
     const i = this.headers.indexOf(v);
-    if (i >= 0) { this.headers.splice(i, 1); this.viewsCache = null; this.dirty = true; void this.rebuild(); return 1; }
+    if (i >= 0) { this.headers.splice(i, 1); this.viewsCache = null; void this.rebuild(); return 1; }
     return 0;
   },
   "removeFooterView(Landroid/view/View;)Z": function (this: JListView, v: JView) {
     const i = this.footers.indexOf(v);
-    if (i >= 0) { this.footers.splice(i, 1); this.viewsCache = null; this.dirty = true; void this.rebuild(); return 1; }
+    if (i >= 0) { this.footers.splice(i, 1); this.viewsCache = null; void this.rebuild(); return 1; }
     return 0;
   },
   "getHeaderViewsCount()I": function (this: JListView) { return this.headers.length; },
@@ -556,8 +569,13 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     return sa;
   },
   "pointToPosition(II)I": function (this: JListView, x: number, y: number) { return this.itemIndexAt(y + this.scrollY); },
-  ...fieldGetters({ "getAdapter()Landroid/widget/ListAdapter;": "adapter",
-    "getAdapter()Landroid/widget/Adapter;": "adapter", "getDividerHeight()I": "divH", "getChoiceMode()I": "choiceMode",
+  "getAdapter()Landroid/widget/ListAdapter;": function (this: JListView) {
+    return this.headers.length || this.footers.length ? this.headerAdapter ??= new JHeaderViewListAdapter(this) : this.adapter;
+  },
+  "getAdapter()Landroid/widget/Adapter;": function (this: JListView) {
+    return this.headers.length || this.footers.length ? this.headerAdapter ??= new JHeaderViewListAdapter(this) : this.adapter;
+  },
+  ...fieldGetters({ "getDividerHeight()I": "divH", "getChoiceMode()I": "choiceMode",
     "getEmptyView()Landroid/view/View;": "emptyView", "getListPaddingLeft()I": "padL",
     "getListPaddingRight()I": "padR", "getListPaddingTop()I": "padT", "getListPaddingBottom()I": "padB",
     "getDivider()Landroid/graphics/drawable/Drawable;": "divDraw" }),
@@ -575,7 +593,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     "setScrollingCacheEnabled(Z)V", "setCacheColorHint(I)V", "setTranscriptMode(I)V", "setStackFromBottom(Z)V"),
   ...stubs(null, "getSelectedItem()Ljava/lang/Object;"),
   ...stubs(-1, "getSelectedItemPosition()I"),
-  "invalidateViews()V": function (this: JListView) { this.dirty = true; void this.rebuild(); },
+  "invalidateViews()V": function (this: JListView) { void this.rebuild(); },
   "onMeasure(II)V": measureListView,
   "onLayout(ZIIII)V": async function (this: JListView) {
     let y = this.padT;
@@ -809,7 +827,6 @@ class JSpinner extends JListView {
         this.selection, null, this) as JView | null;
       if (this.selView) await attachView(this, this.selView);
     }
-    this.dirty = false;
     requestLayout(this);
   }
 }

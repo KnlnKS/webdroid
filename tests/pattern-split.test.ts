@@ -25,3 +25,13 @@ test("Pattern.split excludes captures and skips an initial zero-width match", as
   expect(Array.from(await split(compile("(?=o)"), "boo", -1))).toEqual(["b", "o", "o"]);
   expect(Array.from(await split(compile(":"), ":a", -1))).toEqual(["", "a"]);
 });
+
+test("atomic groups commit alternatives and hide internal captures", async () => {
+  const matcher = (pattern: string, input: string) => vcall(compile(pattern), "matcher", "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;", input);
+  expect(await vcall(await matcher("^(?>a+)a$", "aaa"), "matches", "()Z")).toBe(0);
+  expect(await vcall(await matcher("^(?>a+)b$", "aaab"), "matches", "()Z")).toBe(1);
+  const path = await matcher("^/(?>(?>\\.\\.?/)+)", "/.././chapter");
+  expect(await vcall(path, "find", "()Z")).toBe(1);
+  expect(await vcall(path, "groupCount", "()I")).toBe(0);
+  expect(await vcall(path, "group", "()Ljava/lang/String;")).toBe("/.././");
+});

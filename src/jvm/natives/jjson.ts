@@ -94,10 +94,14 @@ class JJSONTokener extends JObj {
     if (!literal) this.error("Expected literal value");
     if (lower === "null") return null;
     if (lower === "true" || lower === "false") return lower === "true";
-    if (/^0x[\da-f]+$/i.test(literal)) return parseInt(literal.slice(2), 16);
-    if (/^0[0-7]+$/.test(literal)) return parseInt(literal, 8);
+    let integral: bigint | null = null;
+    if (/^0x[\da-f]+$/i.test(literal)) integral = BigInt(literal);
+    else if (/^0[0-7]+$/.test(literal)) integral = BigInt("0o" + literal.slice(1));
+    else if (/^[+-]?\d+$/.test(literal)) integral = BigInt(literal);
+    if (integral !== null && integral >= -(1n << 63n) && integral < (1n << 63n))
+      return integral >= -2147483648n && integral <= 2147483647n ? Number(integral) : integral;
     const n = Number(literal);
-    return Number.isNaN(n) ? literal : n;
+    return Number.isNaN(n) ? literal : box(JDouble, n);
   }
 }
 function parseJSON(source: string): unknown { const t = new JJSONTokener(); t.init(source); return t.value(); }
@@ -137,19 +141,19 @@ const isObj = (v: unknown) => typeof v === "object" && v !== null && !Array.isAr
  *  JSONObject/JSONArray prints its JSON), the literal for a primitive */
 const jsonText = (v: unknown): string | Promise<string> => typeof v === "object" && v !== null ? vcall(jsonWrap(v), "toString", "()Ljava/lang/String;") as string | Promise<string> : String(v);
 function accessors<S>(K: string, read: (self: S, k: never) => unknown): NonNullable<NativeSpec["methods"]> {
-  const num = (self: S, k: never) => Number(read(self, k));
+  const num = (self: S, k: never) => Number(jsonUnwrap(read(self, k)));
   const O = "Lorg/json/JSONObject;", A = "Lorg/json/JSONArray;";
   return {
     [`opt(${K})Ljava/lang/Object;`]: function (this: S, k: never) { return jsonWrap(read(this, k) ?? null); },
     [`optString(${K})Ljava/lang/String;`]: function (this: S, k: never) { const v = read(this, k); return v === undefined ? "" : jsonText(v); },
     [`optString(${K}Ljava/lang/String;)Ljava/lang/String;`]: function (this: S, k: never, d: string) { const v = read(this, k); return v === undefined ? d : jsonText(v); },
     [`getInt(${K})I`]: function (this: S, k: never) { return Math.trunc(num(this, k)) | 0; },
-    [`optInt(${K})I`]: function (this: S, k: never) { return Math.trunc(Number(read(this, k) ?? 0)) | 0; },
+    [`optInt(${K})I`]: function (this: S, k: never) { return Math.trunc(Number(jsonUnwrap(read(this, k) ?? 0))) | 0; },
     [`optInt(${K}I)I`]: function (this: S, k: never, d: number) { const v = num(this, k); return Number.isFinite(v) ? Math.trunc(v) | 0 : d; },
-    [`getLong(${K})J`]: function (this: S, k: never) { const v = read(this, k); return typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v ?? 0))); },
-    [`optLong(${K})J`]: function (this: S, k: never) { const v = read(this, k); return typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v ?? 0))); },
-    [`optLong(${K}J)J`]: function (this: S, k: never, d: bigint) { const v = read(this, k); if (typeof v === "bigint") return v; const n = Number(v); return Number.isFinite(n) ? BigInt(Math.trunc(n)) : d; },
-    [`getDouble(${K})D`]: function (this: S, k: never) { return Number(read(this, k) ?? 0); },
+    [`getLong(${K})J`]: function (this: S, k: never) { const v = jsonUnwrap(read(this, k)); return typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v ?? 0))); },
+    [`optLong(${K})J`]: function (this: S, k: never) { const v = jsonUnwrap(read(this, k)); return typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v ?? 0))); },
+    [`optLong(${K}J)J`]: function (this: S, k: never, d: bigint) { const v = jsonUnwrap(read(this, k)); if (typeof v === "bigint") return v; const n = Number(v); return Number.isFinite(n) ? BigInt(Math.trunc(n)) : d; },
+    [`getDouble(${K})D`]: function (this: S, k: never) { return Number(jsonUnwrap(read(this, k) ?? 0)); },
     [`optDouble(${K})D`]: function (this: S, k: never) { const v = num(this, k); return Number.isFinite(v) ? v : Number.NaN; },
     [`optDouble(${K}D)D`]: function (this: S, k: never, d: number) { const v = num(this, k); return Number.isFinite(v) ? v : d; },
     [`getBoolean(${K})Z`]: function (this: S, k: never) { return read(this, k) ? 1 : 0; },
@@ -212,9 +216,33 @@ async function initFromMap(object: JJSONObject, map: unknown): Promise<void> {
     object.o[String(await vcall(entry, "getKey", "()Ljava/lang/Object;"))] = jsonUnwrap(await publicWrap(await vcall(entry, "getValue", "()Ljava/lang/Object;")));
   }
 }
-/** the JSON text of a stored tree; a long that reached storage unboxed (a Map's boxed values) prints its digits */
-const jsonText64 = (v: unknown, indent?: number): string =>
-  JSON.stringify(v, (_k, x) => typeof x === "bigint" ? `\u0000${x}\u0000` : x, indent).replace(/"\\u0000(-?\d+)\\u0000"/g, "$1");
+async function jsonSerializable(v: unknown): Promise<unknown> {
+  if (v instanceof JJSONObject) return jsonSerializable(v.o);
+  if (v instanceof JJSONArray) return jsonSerializable(v.a);
+  if (v instanceof JObj) {
+    const unwrapped = jsonUnwrap(v);
+    return unwrapped === v ? vcall(v, "toString", "()Ljava/lang/String;") : unwrapped;
+  }
+  if (Array.isArray(v)) return Promise.all(v.map(jsonSerializable));
+  if (v && typeof v === "object") {
+    const out: Record<string, unknown> = Object.create(null);
+    for (const [key, value] of Object.entries(v)) out[key] = await jsonSerializable(value);
+    return out;
+  }
+  return v;
+}
+const javaJsonValue = Symbol("javaJsonValue");
+function jsonText64(v: unknown, indent?: number): string | Promise<string> {
+  const stringify = (value: unknown) => JSON.stringify(value, (_k, x) => {
+    if (x instanceof JObj) throw javaJsonValue;
+    return typeof x === "bigint" ? `\u0000${x}\u0000` : x;
+  }, indent).replace(/"\\u0000(-?\d+)\\u0000"/g, "$1");
+  try { return stringify(v); }
+  catch (error) {
+    if (error !== javaJsonValue) throw error;
+    return jsonSerializable(v).then(stringify);
+  }
+}
 const jsonQuote = (text: string) => JSON.stringify(text).replaceAll("/", "\\/");
 type JSONScope = "emptyArray" | "array" | "emptyObject" | "object" | "key";
 class JJSONStringer extends JObj {

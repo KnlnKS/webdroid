@@ -329,7 +329,7 @@ rt.register({
 
 /** the transport the one modelled network runs on: ConnectivityManager.TYPE_WIFI */
 const NET_TYPE = 1;
-const netUp = async (): Promise<number> =>
+export const netUp = async (): Promise<number> =>
   (await vcall(rt.make("android/net/NetworkInfo"), "isConnected", "()Z")) ? 1 : 0;
 class JNetwork extends JObj { id = 1; }
 let theNetwork: JNetwork | null = null;
@@ -423,9 +423,10 @@ const wifiLockMethods = {
     this.held = true;
   },
   "release()V": function (this: JWifiLock) {
-    if (!this.held || this.refCounted && this.acquisitions === 0) throw rt.mkThrowable("java/lang/RuntimeException", "WifiLock under-locked");
-    if (this.refCounted) this.held = --this.acquisitions > 0;
-    else this.held = false;
+    if (this.refCounted) {
+      if (--this.acquisitions < 0) throw rt.mkThrowable("java/lang/RuntimeException", "WifiLock under-locked");
+      this.held = this.acquisitions > 0;
+    } else this.held = false;
   },
   "isHeld()Z": function (this: JWifiLock) { return +this.held; },
   "setReferenceCounted(Z)V": function (this: JWifiLock, enabled: number) { this.refCounted = !!enabled; },

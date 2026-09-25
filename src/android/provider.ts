@@ -7,7 +7,7 @@
 import { rt, JObj } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { isDocumentsProvider } from "./pm";
-import { registerSystemActivity, mkResultIntent } from "./intent";
+import { registerSystemActivity, systemActivities, mkResultIntent, type JIntent } from "./intent";
 import { mkUri } from "./net";
 import { packages } from "./packages";
 import { docCreate, docDelete, docRename, pickTree, pickDocument, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
@@ -17,7 +17,7 @@ const PROVIDER_INTERFACE = "android.content.action.DOCUMENTS_PROVIDER";
 
 // The activities DocumentsUI provides on a device, over the browser's own pickers.
 registerSystemActivity("android.intent.action.OPEN_DOCUMENT_TREE",
-  async () => { const uri = await pickTree(); return uri ? mkResultIntent(uri) : null; });
+  async () => { const uri = await pickTree(); return uri ? mkResultIntent(uri, 3 | 0x40 | 0x80) : null; });
 for (const action of ["android.intent.action.OPEN_DOCUMENT", "android.intent.action.GET_CONTENT",
   "android.intent.action.CREATE_DOCUMENT"] as const) {
   registerSystemActivity(action, async (intent) => {
@@ -25,9 +25,20 @@ for (const action of ["android.intent.action.OPEN_DOCUMENT", "android.intent.act
       save: action.endsWith("CREATE_DOCUMENT") ? String(intent.extras.map.get("android.intent.extra.TITLE") ?? "file") : undefined,
       mime: intent.typeStr && intent.typeStr !== "*/*" ? intent.typeStr : null,
     });
-    return uri ? mkResultIntent(uri) : null;
+    return uri ? mkResultIntent(uri, action === "android.intent.action.GET_CONTENT" ? 1 : 3 | 0x40) : null;
   });
 }
+for (const action of ["android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE"])
+  registerSystemActivity(action, async (intent) => (await import("../shell/share")).shareIntent(intent));
+registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {
+  const target = intent.extras.map.get("android.intent.extra.INTENT") as JIntent | null;
+  if (!target) throw rt.mkThrowable("java/lang/NullPointerException", "Chooser target");
+  if (target.action === "android.intent.action.SEND" || target.action === "android.intent.action.SEND_MULTIPLE")
+    return (await import("../shell/share")).shareIntent(intent);
+  const handler = systemActivities[target.action ?? ""];
+  if (handler) return handler(target);
+  throw rt.mkThrowable("android/content/ActivityNotFoundException", "No chooser target for " + target.action);
+});
 
 
 const enc = encodeURIComponent;

@@ -279,6 +279,7 @@ function getHolder(v: JView): JSurfaceHolder {
 class JSurfaceView extends JViewGroup {
   surfaceBacked = true;
   surfW = 0; surfH = 0;
+  syncSurface(): void { this.ensureSurface(); }
   ensureSurface(): void {
     const w = this.width(), h = this.height();
     if (w <= 0 || h <= 0 || !this.attached) return;
@@ -395,6 +396,7 @@ class JTextureView extends JView {
   listener: unknown = null;
   texture: JSurfaceTexture | null = null;
   opaque = true;
+  syncSurface(): void { this.ensureSurface(); }
   ensureSurface(): void {
     const w = this.width(), h = this.height();
     if (!this.attached || w <= 0 || h <= 0) return;

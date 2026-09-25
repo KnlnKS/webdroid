@@ -18,6 +18,7 @@ const definitions: Definition[] = [
   { kind: "video", mime: "video/x-vnd.on2.vp8", codec: "vp8", maxDimension: 16383, maxBitrate: 100000000, blockSize: 16, maxBlocks: 0x7fffffff, blocksPerSecond: 0x7fffffff, profiles: [[1, 8]] },
   { kind: "video", mime: "video/x-vnd.on2.vp9", codec: "vp09.00.41.08", maxDimension: 4160, maxBitrate: 30000000, blockSize: 8, maxBlocks: 34816, blocksPerSecond: 2506752, profiles: [[1, 128]] },
   { kind: "audio", mime: "audio/mp4a-latm", codec: "mp4a.40.2", profiles: [[2, 0]] },
+  { kind: "audio", mime: "audio/mpeg", codec: "mp3", profiles: [] },
   { kind: "audio", mime: "audio/opus", codec: "opus", profiles: [] },
 ];
 const numberValue = (format: JMediaFormat, key: string, fallback: number): number => {

@@ -396,6 +396,7 @@ export class JView extends JObj {
   /** A compositor surface; surfaceBacked keeps its late first frame visible through display lists. */
   surfaceLayer: OffscreenCanvas | ImageBitmap | VideoFrame | null = null;
   surfaceBacked = false;
+  syncSurface(): void {}
   surfaceTransform: JMatrix["m"] | null = null;
   alphaV = 1;
   scrollX = 0; scrollY = 0;
@@ -429,6 +430,7 @@ export class JView extends JObj {
   outlineAmbientShadowColor = -16777216;
   outlineSpotShadowColor = -16777216;
   longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  longPressAction: Promise<unknown> | null = null;
   transientState = 0; textAlignment = 0;
   resolvedTextAlignment(): number {
     for (let v: JView | null = this; v; v = v.parent) if (v.textAlignment) return v.textAlignment;
@@ -543,14 +545,14 @@ async function viewDispatchInsets(this: JView, ins: unknown) {
 // defStyleAttr is the widget's own style attribute (buttonStyle, editTextStyle, ...). Without it
 // tiers 3 and 4 of the cascade are dead for every base-View attribute, which is why a Button had
 // to be handed a background in TypeScript instead of resolving Widget.Material.Button's.
-async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0) {
-  if (!v.jres || (!set?.node && !defStyleAttr)) return;
+async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0, defStyleRes = 0) {
+  if (!v.jres || (!set?.node && !defStyleAttr && !defStyleRes)) return;
   const res = v.jres;
   const ta = obtainStyled(res, v.theme, set, [
     AT.id, AT.background, AT.padding, AT.paddingLeft, AT.paddingTop, AT.paddingRight, AT.paddingBottom,
     AT.visibility, AT.clickable, AT.enabled, AT.minWidth, AT.minHeight, AT.alpha, AT.focusable,
     AT.paddingStart, AT.paddingEnd, AT.tag, AT.contentDescription, AT.autoHandwritingEnabled, AT.textAlignment, AT.fitsSystemWindows,
-  ], defStyleAttr, 0);
+  ], defStyleAttr, defStyleRes);
   const g = (i: number) => ta.vals[i];
   // the id the reference names (getResourceId's answer): resolving @id/x lands on the entry's own
   // false-boolean value, and an obfuscated type-name pool keeps resolveRefs from stopping short
@@ -673,6 +675,7 @@ function setBound(v: JView, l: number, t: number, r: number, b: number) {
   if (oldL === l && oldT === t && oldR === r && oldB === b) return;
   const ow = v.width(), oh = v.height();
   v.left = l; v.top = t; v.right = r; v.bottom = b;
+  if (v.surfaceBacked) v.syncSurface();
   invalidate();
   if (r - l !== ow || b - t !== oh) void guardMaybe(v, M_onSizeChanged, r - l, b - t, ow, oh);
   for (const ll of [...v.layoutChangeLs]) {
@@ -700,6 +703,8 @@ export async function layoutView(v: JView, l: number, t: number, r: number, b: n
   // children the measure memo had just skipped, which is what made settle passes cost.
   if (changed || v.layoutRequired) {
     await guardCall(v, M_onLayout, changed ? 1 : 0, l, t, r, b);
+    // Surface lifecycle follows frame changes even when a subclass skips super.onLayout.
+    if (v.surfaceBacked) v.syncSurface();
     v.layoutRequired = false;
     for (const ll of [...v.layoutChangeLs]) {
       await vcall(ll, "onLayoutChange", "(Landroid/view/View;IIIIIIII)V", v, l, t, r, b, oldL, oldT, oldR, oldB);
@@ -1074,6 +1079,9 @@ const viewMethods: NativeSpec["methods"] = {
   "requestFocus()Z": function (this: JView) {
     return vcall(this, "requestFocus", "(ILandroid/graphics/Rect;)Z", 130, null);
   },
+  "requestFocusFromTouch()Z": function (this: JView) {
+    return vcall(this, "requestFocus", "(ILandroid/graphics/Rect;)Z", 130, null);
+  },
   "findFocus()Landroid/view/View;": function (this: JView) { return this.focused ? this : null; },
   "clearFocus()V": function (this: JView) { return clearFocus(this); },
   "setOnClickListener(Landroid/view/View$OnClickListener;)V": function (this: JView, l: unknown) {
@@ -1277,11 +1285,15 @@ const viewMethods: NativeSpec["methods"] = {
     switch (ev.action & 0xff) {
       case 0: // DOWN
         this.pressed = true;
+        this.longPressAction = null;
         void this.refreshDrawableState();
         if (this.longClickable) {
-          this.longPressTimer = setTimeout(async () => {
+          this.longPressTimer = setTimeout(() => {
             this.longPressTimer = null;
-            await guardCall(this, M_performLongClick);
+            this.longPressAction = (async () => {
+              try { return await guardCall(this, M_performLongClick); }
+              catch (error) { reportUncaught(error); return 0; }
+            })();
           }, 450);
         }
         return 1;
@@ -1298,14 +1310,16 @@ const viewMethods: NativeSpec["methods"] = {
         const wasPressed = this.pressed;
         this.pressed = false;
         void this.refreshDrawableState();
-        if (wasPressed && this.clickable) {
+        if (wasPressed && this.clickable && !await this.longPressAction) {
           await guardCall(this, M_performClick);
         }
+        this.longPressAction = null;
         return 1;
       }
       case 3: // CANCEL
         if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null; }
         this.pressed = false;
+        this.longPressAction = null;
         void this.refreshDrawableState();
         return 1;
     }
@@ -1481,6 +1495,15 @@ const viewMethods: NativeSpec["methods"] = {
     const optional = this.optionalFitsSys && this.attached;
     setPadding.call(this, optional ? 0 : rect.left, optional ? 0 : rect.top, optional ? 0 : rect.right, optional ? 0 : rect.bottom);
     return optional ? 0 : 1;
+  },
+  "computeSystemWindowInsets(Landroid/view/WindowInsets;Landroid/graphics/Rect;)Landroid/view/WindowInsets;": function (this: JView, ins: JWindowInsets, out: JRect) {
+    if (this.optionalFitsSys && this.attached) {
+      out.left = out.top = out.right = out.bottom = 0;
+      return ins;
+    }
+    const rect = sysIns(ins);
+    out.left = rect.left; out.top = rect.top; out.right = rect.right; out.bottom = rect.bottom;
+    return vcall(ins, "consumeSystemWindowInsets", "()Landroid/view/WindowInsets;");
   },
   "onApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": async function (this: JView, ins: JWindowInsets) {
     if (!ins || ins.consumedV) return ins;
@@ -1668,7 +1691,7 @@ function findByPred(v: JView, p: (v: JView) => boolean): JView | null {
 export function inheritContext(child: JView, from: JView) {
   child.ctx = from.ctx; child.jres = from.jres; child.theme = from.theme;
 }
-export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | null, defStyleAttr = 0) {
+export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | null, defStyleAttr = 0, defStyleRes = 0) {
   v.ctx = jctx;
   if (jctx) {
     v.resources = await vcall(jctx, "getResources", "()Landroid/content/res/Resources;");
@@ -1678,7 +1701,7 @@ export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | n
       v.theme = await askTheme(jctx) ?? host.theme;
     }
   }
-  await applyViewAttrs(v, set, defStyleAttr);
+  await applyViewAttrs(v, set, defStyleAttr, defStyleRes);
 }
 
 export class JViewGroup extends JView {
@@ -1702,6 +1725,7 @@ export class JViewGroup extends JView {
   touchTarget: JView | null = null;
   hierarchyChangeL: unknown = null;
   transitionGroup: boolean | null = null;
+  layoutMode: number | null = null;
 }
 /** Convert a LayoutParams to one this ViewGroup accepts (e.g. ViewPager needs its own LP type,
  *  and casts in its onLayout otherwise). Dispatches to the ViewGroup's own check/generate overrides. */
@@ -1870,6 +1894,11 @@ async function noteTransientChild(parent: JViewGroup, child: JView, added: boole
  * directly from each overload skipped all of it.
  */
 async function addViewFunnel(vg: JViewGroup, c: JView, i: number, lp: JLayoutParams | null) {
+  if (!c) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Cannot add a null child view to a ViewGroup");
+  if (!lp) {
+    lp = c.lp ?? await guardCall(vg, M_genDefaultLP) as JLayoutParams | null;
+    if (!lp) throw rt.mkThrowable("java/lang/IllegalArgumentException", "generateDefaultLayoutParams() cannot return null");
+  }
   const f = jmethod(vg, M_addView3);
   if (f && f !== addView3) return void await guardApply(f, vg, c, i, lp);
   await addView3.call(vg, c, i, lp);
@@ -2440,7 +2469,18 @@ rt.register({
     "onNestedFling(Landroid/view/View;FFZ)Z": (_t: JView, _vx: number, _vy: number, consumed: number) => (consumed ? 0 : 1),
     ...stubs(0, "shouldDelayChildPressedState()Z", "onNestedPreFling(Landroid/view/View;FF)Z"),
     ...noops("onNestedScroll(Landroid/view/View;IIII)V", "onNestedPreScroll(Landroid/view/View;II[I)V"),
-    "getNestedScrollAxes()I": function (this: JViewGroup) { return this.nestedAxes; },
+  "getNestedScrollAxes()I": function (this: JViewGroup) { return this.nestedAxes; },
+    "getLayoutMode()I": function (this: JViewGroup) {
+      for (let parent: JView | null = this; parent; parent = parent.parent) {
+        if (parent instanceof JViewGroup && parent.layoutMode !== null) return parent.layoutMode;
+      }
+      return 0;
+    },
+    "setLayoutMode(I)V": function (this: JViewGroup, mode: number) {
+      if (this.layoutMode === mode) return;
+      this.layoutMode = mode;
+      requestLayoutVirtual(this);
+    },
     "cleanupLayoutState(Landroid/view/View;)V": (c: JView) => { c.layoutRequested = false; },
     ...viewMethods, ...vgMethods },
 });

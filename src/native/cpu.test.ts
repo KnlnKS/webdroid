@@ -3,6 +3,8 @@ import { curThread, JThread, mainThread, setCurThread } from "../jvm/natives/jla
 import { Cpu, setA64, sigHandlers, slice } from "./cpu";
 import { defineHost } from "./host";
 import { mem } from "./mem";
+import { futex } from "./pthread";
+import { RET_SENTINEL } from "./abi";
 
 for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 thread identity", () => {
   test("static TLS is initialized once per guest thread", () => {
@@ -168,6 +170,38 @@ for (const a64 of [false, true]) describe(a64 ? "A64 thread identity" : "ARM32 t
       cpu.dispose();
     }
   });
+});
+
+test("a signal interrupts an ARM64 futex before its handler observes the saved context", async () => {
+  setA64(true);
+  const cpu = new Cpu(new JThread(), "futex-signal"), addr = mem.reserve(4096, 4096);
+  mem.st32(addr, 7);
+  const order: string[] = [];
+  let savedSp = 0n, contextSp = 0n, contextPc = 0n;
+  const entry = defineHost("test.signal.futex.wait", (c) => { order.push("wait"); return futex(c, addr, 0, 7, 0, 0); });
+  const handler = defineHost("test.signal.futex.handler", (_c, a) => {
+    a.i(); a.p(); const context = a.p();
+    contextSp = mem.ld64(context + 0x1b0);
+    contextPc = mem.ld64(context + 0x1b8);
+    order.push("handler");
+    return 0;
+  });
+  const previous = sigHandlers.get(12);
+  sigHandlers.set(12, { fn: handler, mask: 0n, flags: 4 });
+  try {
+    const result = cpu.call(entry);
+    savedSp = BigInt(cpu.sp >>> 0);
+    expect(cpu.signalInterrupt).not.toBeNull();
+    cpu.kill(12);
+    expect(await result).toBe(-1);
+    expect(mem.ld32(cpu.errnoAddr)).toBe(4);
+    expect(order).toEqual(["wait", "handler"]);
+    expect(contextSp).toBe(savedSp);
+    expect(contextPc).toBe(BigInt(RET_SENTINEL));
+  } finally {
+    if (previous) sigHandlers.set(12, previous); else sigHandlers.delete(12);
+    cpu.dispose(); setA64(false);
+  }
 });
 
 

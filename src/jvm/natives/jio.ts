@@ -18,6 +18,7 @@ rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, iface
 export interface VfsFile { path: string | null; data: Uint8Array; len: number }
 const openFiles = new Map<string, VfsFile>();
 // ── VFS: path → bytes. Directories implicit.
+const volatileFiles = new Set<string>();
 const procBytes = (path: string): Uint8Array | null => {
   const text = procText(path);
   return text === null ? null : new TextEncoder().encode(text);
@@ -25,10 +26,11 @@ const procBytes = (path: string): Uint8Array | null => {
 export const vfs = {
   files: new Map<string, Uint8Array>(),
   lazyFiles: new Map<string, FileSource>(),
-  dirs: new Set<string>(["/data", "/sdcard"]),
+  dirs: new Set<string>(["/data", "/data/local", "/data/local/tmp", "/sdcard"]),
   prepare: (_pkg: string): Promise<void> => Promise.resolve(),
   flush: (): Promise<void> => Promise.resolve(),
   onWrite: (_path: string, _change: "modify" | "write" | "create" | "delete" = "modify") => {},
+  markVolatile(p: string) { volatileFiles.add(this.norm(p)); },
   norm(p: string): string {
     const parts: string[] = [];
     for (const seg of p.split("/")) {
@@ -65,7 +67,7 @@ export const vfs = {
   publish(file: VfsFile) {
     if (file.path === null || openFiles.get(file.path) !== file) return;
     this.files.set(file.path, file.data.subarray(0, file.len));
-    this.onWrite(file.path, "modify");
+    if (!volatileFiles.has(file.path)) this.onWrite(file.path, "modify");
   },
   write(p: string, data: Uint8Array, notify = true) {
     const path = this.norm(p);
@@ -77,7 +79,7 @@ export const vfs = {
       file.data = data;
       file.len = data.length;
     }
-    if (notify) this.onWrite(path, existed ? "write" : "create");
+    if (notify && !volatileFiles.has(path)) this.onWrite(path, existed ? "write" : "create");
   },
   mount(p: string, source: FileSource) {
     const path = this.norm(p);
@@ -104,10 +106,11 @@ export const vfs = {
   },
   delete(p: string, notify = true): boolean {
     const path = this.norm(p);
+    const volatile = volatileFiles.delete(path);
     const file = openFiles.get(path);
     if (file) { file.path = null; openFiles.delete(path); }
     const removed = this.files.delete(path) || this.lazyFiles.delete(path);
-    if (removed && notify) this.onWrite(path, "delete");
+    if (removed && notify && !volatile) this.onWrite(path, "delete");
     return removed;
   },
   rename(from: string, to: string): boolean {
@@ -459,6 +462,7 @@ function bufferedIn(this: JBufferedIn, source: unknown, size = 8192): void {
 }
 rt.register({
   name: "java/io/BufferedInputStream", ctor: JBufferedIn, sup: "java/io/InputStream",
+  fields: { markpos: "marked" },
   methods: {
     "<init>(Ljava/io/InputStream;)V": bufferedIn,
     "<init>(Ljava/io/InputStream;I)V": bufferedIn,
@@ -632,8 +636,22 @@ class JFOS extends JOutputStream {
   append = false;
   deleteOnClose = false;
   offset = 0;
-  get pos() { return (this.append && this.chunks.length ? vfs.read(this.fpath)?.length ?? 0 : this.offset) + this.chunks.length; }
-  set pos(value: number) { flushFOS(this); this.offset = value; }
+  get pos() {
+    const raf = this.shared?.owner;
+    if (raf instanceof JRAF) return raf.pos + this.chunks.length;
+    const fd = this.shared?.fd ?? -1;
+    const base = fd >= 0 ? checkedFdResult(javaSeekFd(fd, 0, 1))
+      : this.append && this.chunks.length ? vfs.read(this.fpath)?.length ?? 0 : this.offset;
+    return base + this.chunks.length;
+  }
+  set pos(value: number) {
+    flushFOS(this);
+    this.offset = value;
+    const raf = this.shared?.owner;
+    if (raf instanceof JRAF) { raf.pos = value; return; }
+    const fd = this.shared?.fd ?? -1;
+    if (fd >= 0) checkedFdResult(javaSeekFd(fd, value, 0));
+  }
 }
 function openWrite(this: JFOS, path: string, append = 0, truncate = true) {
   this.fpath = vfs.norm(path);
@@ -655,7 +673,10 @@ rt.register({
       if (!d) throw rt.mkThrowable("java/lang/NullPointerException", "fdObj == null");
       if (!d.path) throw rt.mkThrowable("java/io/IOException", "descriptor has no file to write");
       this.shared = d; this.fpath = d.path;
-      if (!(d.owner instanceof JRAF)) { this.append = true; this.offset = vfs.read(d.path)?.length ?? 0; }
+      if (!(d.owner instanceof JRAF)) {
+        this.append = !!(d.flags & O_APPEND);
+        this.offset = d.fd >= 0 ? checkedFdResult(javaSeekFd(d.fd, 0, 1)) : this.append ? vfs.read(d.path)?.length ?? 0 : 0;
+      }
     },
     "<init>(Ljava/io/File;)V": function (this: JFOS, f: JFile) { openWrite.call(this, f.path); },
     "<init>(Ljava/io/File;Z)V": function (this: JFOS, f: JFile, app: number) { openWrite.call(this, f.path, app); },
@@ -681,6 +702,25 @@ function flushFOS(s: JFOS) {
   if (!s.chunks.length) return;
   const raf = s.shared?.owner;
   if (raf instanceof JRAF) { const b = new Int8Array(s.chunks); s.chunks.length = 0; rafWrite(raf, b, 0, b.length); return; }
+  const file = s.shared && vfs.open(s.fpath);
+  if (file) {
+    const fd = s.shared!.fd;
+    const start = s.append ? file.len : fd >= 0 ? checkedFdResult(javaSeekFd(fd, 0, 1)) : s.offset;
+    const end = start + s.chunks.length;
+    if (end > file.data.length) {
+      const grown = new Uint8Array(Math.max(end, file.data.length * 2, 4096));
+      grown.set(file.data.subarray(0, file.len));
+      file.data = grown;
+    }
+    if (start > file.len) file.data.fill(0, file.len, start);
+    file.data.set(s.chunks, start);
+    file.len = Math.max(file.len, end);
+    vfs.publish(file);
+    s.offset = end;
+    if (fd >= 0) checkedFdResult(javaSeekFd(fd, end, 0));
+    s.chunks.length = 0;
+    return;
+  }
   const old = vfs.read(s.fpath) ?? new Uint8Array(0);
   const start = s.append ? old.length : s.offset;
   const merged = new Uint8Array(Math.max(old.length, start + s.chunks.length));
@@ -847,7 +887,7 @@ rt.register({
   },
 });
 
-class JFilterOutputStream extends JOutputStream { out: unknown = null; }
+export class JFilterOutputStream extends JOutputStream { out: unknown = null; }
 rt.register({
   name: "java/io/FilterOutputStream", ctor: JFilterOutputStream, sup: "java/io/OutputStream",
   fields: { out: "out" },
@@ -906,7 +946,7 @@ rt.register({ name: "java/io/SequenceInputStream", ctor: JSequenceInputStream, s
 
 // every method forwards to the wrapped stream, as the JDK's does: a Java subclass's super.read()
 // reaches the stream it wrapped, whether that is one of ours or app code over a socket
-class JFilterInputStream extends JInputStream { in_: unknown = null; }
+export class JFilterInputStream extends JInputStream { in_: unknown = null; }
 const fwd = (name: string, desc: string) => function (this: JFilterInputStream, ...a: unknown[]) { return vcallMaybe(this.in_, name, desc, ...a); };
 rt.register({
   name: "java/io/FilterInputStream", ctor: JFilterInputStream, sup: "java/io/InputStream",
@@ -1139,6 +1179,13 @@ rt.register({
   name: "java/io/StringReader", ctor: class extends JReader {}, sup: "java/io/Reader",
   methods: {
     "<init>(Ljava/lang/String;)V": function (this: JReader, s: string) { this.s = s; },
+    "markSupported()Z": () => 1,
+    "mark(I)V": function (this: JReader, limit: number) {
+      if (limit < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "readAheadLimit < 0");
+      this.markPos = this.pos;
+    },
+    "reset()V": function (this: JReader) { this.pos = this.markPos < 0 ? 0 : this.markPos; },
+    "ready()Z": () => 1,
   },
 });
 rt.register({
@@ -1214,6 +1261,70 @@ rt.register({
       if (this.markPos < 0 || this.pos - this.markPos > this.markLimit) throw rt.mkThrowable("java/io/IOException", "Mark invalid");
       this.pos = this.markPos;
     },
+  },
+});
+class JFilterReader extends JReader { in: JReader | null = null; }
+const filterInput = (r: JFilterReader) => {
+  if (!r.in) throw rt.mkThrowable("java/io/IOException", "Reader is closed");
+  return r.in;
+};
+rt.register({
+  name: "java/io/FilterReader", ctor: JFilterReader, sup: "java/io/Reader", fields: ["in"],
+  methods: {
+    "<init>(Ljava/io/Reader;)V": function (this: JFilterReader, input: JReader) { if (!input) return rt.npe(); this.in = input; },
+    "read()I": function (this: JFilterReader) { return vcall(filterInput(this), "read", "()I"); },
+    "read([CII)I": function (this: JFilterReader, out: Uint16Array, off: number, len: number) { return vcall(filterInput(this), "read", "([CII)I", out, off, len); },
+    "ready()Z": function (this: JFilterReader) { return vcall(filterInput(this), "ready", "()Z"); },
+    "skip(J)J": function (this: JFilterReader, n: bigint) { return vcall(filterInput(this), "skip", "(J)J", n); },
+    "markSupported()Z": function (this: JFilterReader) { return vcall(filterInput(this), "markSupported", "()Z"); },
+    "mark(I)V": function (this: JFilterReader, limit: number) { return vcall(filterInput(this), "mark", "(I)V", limit); },
+    "reset()V": function (this: JFilterReader) { return vcall(filterInput(this), "reset", "()V"); },
+    "close()V": function (this: JFilterReader) { const input = this.in; this.in = null; return input ? vcall(input, "close", "()V") : undefined; },
+  },
+});
+class JPushbackReader extends JFilterReader { push: number[] = []; capacity = 1; }
+function unreadChars(r: JPushbackReader, chars: Uint16Array, off: number, len: number): void {
+  filterInput(r);
+  if (!chars) return rt.npe();
+  if (off < 0 || len < 0 || off > chars.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  if (r.push.length + len > r.capacity) throw rt.mkThrowable("java/io/IOException", "Pushback buffer full");
+  for (let i = off + len - 1; i >= off; i--) r.push.push(chars[i]);
+}
+rt.register({
+  name: "java/io/PushbackReader", ctor: JPushbackReader, sup: "java/io/FilterReader",
+  methods: {
+    "<init>(Ljava/io/Reader;)V": function (this: JPushbackReader, input: JReader) { if (!input) return rt.npe(); this.in = input; },
+    "<init>(Ljava/io/Reader;I)V": function (this: JPushbackReader, input: JReader, size: number) {
+      if (!input) return rt.npe();
+      if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "size <= 0");
+      this.in = input; this.capacity = size;
+    },
+    "read()I": function (this: JPushbackReader) { const input = filterInput(this); return this.push.length ? this.push.pop() ?? -1 : vcall(input, "read", "()I"); },
+    "read([CII)I": function (this: JPushbackReader, out: Uint16Array, off: number, len: number) {
+      const input = filterInput(this);
+      if (!out) return rt.npe();
+      if (off < 0 || len < 0 || off > out.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      if (!len) return 0;
+      let copied = 0;
+      while (copied < len && this.push.length) out[off + copied++] = this.push.pop() ?? 0;
+      if (copied === len) return copied;
+      return after(vcall(input, "read", "([CII)I", out, off + copied, len - copied), (n: number) => n < 0 ? copied || -1 : copied + n);
+    },
+    "unread(I)V": function (this: JPushbackReader, c: number) { unreadChars(this, Uint16Array.of(c), 0, 1); },
+    "unread([C)V": function (this: JPushbackReader, chars: Uint16Array) { unreadChars(this, chars, 0, chars?.length ?? 0); },
+    "unread([CII)V": function (this: JPushbackReader, chars: Uint16Array, off: number, len: number) { unreadChars(this, chars, off, len); },
+    "ready()Z": function (this: JPushbackReader) { const input = filterInput(this); return this.push.length ? 1 : vcall(input, "ready", "()Z"); },
+    "skip(J)J": function (this: JPushbackReader, count: bigint) {
+      const input = filterInput(this);
+      if (count < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "skip value is negative");
+      const buffered = Math.min(this.push.length, Number(count));
+      this.push.length -= buffered;
+      return BigInt(buffered) === count ? count : after(vcall(input, "skip", "(J)J", count - BigInt(buffered)), (n: bigint) => BigInt(buffered) + n);
+    },
+    "markSupported()Z": () => 0,
+    "mark(I)V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+    "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+    "close()V": function (this: JPushbackReader) { this.push.length = 0; const input = this.in; this.in = null; return input ? vcall(input, "close", "()V") : undefined; },
   },
 });
 class JWriter extends JObj { s = ""; lock: unknown = this; }
@@ -1580,6 +1691,15 @@ class JNioFileSystemProvider extends JObj {}
 const nioFileSystem = new JNioFileSystem();
 const nioFileSystemProvider = new JNioFileSystemProvider();
 const mkPath = (p: string) => { const q = new JNioPath(); q.p = p; return q; };
+function createNioTempFile(dir: JNioPath | null, prefix: string | null, suffix: string | null, attrs: unknown[] | null): JNioPath {
+  if (attrs?.length) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "File attributes");
+  const parent = dir?.p ?? "/data/local/tmp";
+  if (!vfs.isDir(parent)) throw rt.mkThrowable("java/nio/file/NoSuchFileException", parent);
+  for (;;) {
+    const path = vfs.norm(`${parent}/${prefix ?? ""}${crypto.randomUUID().replaceAll("-", "")}${suffix ?? ".tmp"}`);
+    if (!vfs.exists(path)) { vfs.write(path, new Uint8Array(0)); return mkPath(path); }
+  }
+}
 rt.register({
   name: "java/nio/file/Path", ctor: JNioPath, ifaces: ["java/lang/Comparable", "java/lang/Iterable"],
   methods: {
@@ -1687,6 +1807,8 @@ defineException("java/nio/file/FileAlreadyExistsException", "java/nio/file/FileS
 rt.register({
   name: "java/nio/file/Files", ctor: class extends JObj {},
   methods: {
+    "static createTempFile(Ljava/nio/file/Path;Ljava/lang/String;Ljava/lang/String;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;": createNioTempFile,
+    "static createTempFile(Ljava/lang/String;Ljava/lang/String;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;": (prefix: string | null, suffix: string | null, attrs: unknown[] | null) => createNioTempFile(null, prefix, suffix, attrs),
     "static exists(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z": (p: JNioPath) => (vfs.exists(p.p) ? 1 : 0),
     "static isWritable(Ljava/nio/file/Path;)Z": (p: JNioPath) => (vfs.exists(p.p) ? 1 : 0),
     "static move(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;": (src: JNioPath, dst: JNioPath) => {

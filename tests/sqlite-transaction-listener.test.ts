@@ -45,6 +45,21 @@ test("SQLite helpers publish only initialized databases and keep memory database
 });
 rt.linkNatives();
 
+test("separate SQLite helpers keep their TEMP schemas on separate connections", async () => {
+  useSQLiteStore({ files: new Map(), sql: () => initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` }) });
+  class Helper extends rt.link("android/database/sqlite/SQLiteOpenHelper").ctor {}
+  rt.register({ name: "test/TempTableHelper", ctor: Helper, sup: "android/database/sqlite/SQLiteOpenHelper", methods: {
+    "onOpen(Landroid/database/sqlite/SQLiteDatabase;)V": (db: unknown) =>
+      vcall(db, "execSQL", "(Ljava/lang/String;)V", "CREATE TEMP TABLE temp_marker (id INTEGER)"),
+  } });
+  const make = () => newObj("test/TempTableHelper", "(Landroid/content/Context;Ljava/lang/String;Landroid/database/sqlite/SQLiteDatabase$CursorFactory;I)V", null, "temp-isolation.db", null, 1);
+  const first = await vcall(await make(), "getWritableDatabase", "()Landroid/database/sqlite/SQLiteDatabase;");
+  const second = await vcall(await make(), "getWritableDatabase", "()Landroid/database/sqlite/SQLiteDatabase;");
+  expect(first).not.toBe(second);
+  expect(first.db!.exec("SELECT name FROM sqlite_temp_master WHERE name='temp_marker'")[0]?.values).toEqual([["temp_marker"]]);
+  expect(second.db!.exec("SELECT name FROM sqlite_temp_master WHERE name='temp_marker'")[0]?.values).toEqual([["temp_marker"]]);
+});
+
 test("SQLite transaction listeners receive begin and completion callbacks", async () => {
   useSQLiteStore({ files: new Map(), sql: () => initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` }) });
   const db = await openDatabase(":memory:");

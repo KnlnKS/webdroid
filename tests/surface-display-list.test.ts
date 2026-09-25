@@ -2,8 +2,10 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { recordingContext, type Ctx2D } from "../src/android/recording";
 import { JCanvas } from "../src/android/graphics";
-import { drawView } from "../src/android/view";
-import { newObj } from "../src/jvm/natives/jlang";
+import { drawView, layoutView } from "../src/android/view";
+import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { mangleMethod } from "../src/jvm/abi";
+import { rt } from "../src/jvm/runtime";
 
 test("a recorded SurfaceView picks up its first frame after recording", async () => {
   const view = await newObj("android/view/SurfaceView", "(Landroid/content/Context;)V", null);
@@ -22,4 +24,18 @@ test("a recorded SurfaceView picks up its first frame after recording", async ()
   view.surfaceLayer = firstFrame;
   for (const op of ops) op(target);
   expect(images).toEqual([firstFrame]);
+});
+
+test("a SurfaceView subclass gets a surface when its onLayout skips the base method", async () => {
+  const view = await newObj("android/view/SurfaceView", "(Landroid/content/Context;)V", null);
+  view.attached = true;
+  view[mangleMethod("onLayout", "(ZIIII)V")] = () => {};
+  await layoutView(view, 0, 0, 320, 180);
+
+  rt.link("android/view/SurfaceHolder");
+  const holder = await vcall(view, "getHolder", "()Landroid/view/SurfaceHolder;");
+  const surface = await vcall(holder, "getSurface", "()Landroid/view/Surface;");
+  expect(surface.surf?.view).toBe(view);
+  expect(surface.surf?.width).toBe(320);
+  expect(surface.surf?.height).toBe(180);
 });

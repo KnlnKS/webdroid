@@ -1,12 +1,12 @@
 import { services, type JContext } from "./context";
-import { rt, type NativeSpec, JObj, stubs, noops } from "../jvm/runtime";
+import { rt, type NativeSpec, JObj, noops } from "../jvm/runtime";
 import { appHost, type AppHost } from "./apphost";
 import { type JUri, mkUri, uriParts, uriDecode } from "./net";
 import {
   isDocsUri, documentId, docRead, docWrite, docInputStream, docOutputStream, docRow, isChildrenUri, docChildren,
   DOC_COLUMNS, docCells, docDelete
 } from "./documents";
-import { mkPfd, type JBundle } from "./os";
+import { mkPfd, pfdBackingBytes, type JBundle } from "./os";
 import { mkFile } from "../jvm/natives/jio";
 import { mkAssetFd } from "./resnative";
 import { newObj, defineException, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang";
@@ -55,6 +55,7 @@ export const providerOperations = {
   openFile: "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;",
   query: "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
   insert: "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;",
+  bulkInsert: "(Landroid/net/Uri;[Landroid/content/ContentValues;)I",
   update: "(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I",
   delete: "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I",
   getType: "(Landroid/net/Uri;)Ljava/lang/String;",
@@ -101,34 +102,61 @@ export function contentResolver(): unknown {
   }
   return s;
 }
+type PersistedUriGrant = { uri: string; flags: number; time: number };
+const PREFIX_GRANT = 0x80, PERSISTABLE_GRANT = 0x40;
 /** A persistable grant is app state that survives a reboot, so it lives with the install. */
 const uriGrants = {
   key: () => "wd:install:" + (appHost?.pkg ?? "") + ":uriperms",
-  all(): string[] { try { return JSON.parse(globalThis.localStorage?.getItem(this.key()) ?? "[]"); } catch { return []; } },
-  set(v: string[]) { try { globalThis.localStorage?.setItem(this.key(), JSON.stringify(v)); } catch { /* private mode */ } },
+  all(): PersistedUriGrant[] {
+    try {
+      const saved: unknown = JSON.parse(globalThis.localStorage?.getItem(this.key()) ?? "[]");
+      if (!Array.isArray(saved)) return [];
+      return saved.flatMap((entry) => {
+        if (typeof entry === "string") return [{ uri: entry, flags: 3 | (entry.includes("/tree/") ? PREFIX_GRANT : 0), time: 0 }];
+        if (entry && typeof entry === "object" && "uri" in entry && typeof entry.uri === "string" &&
+          "flags" in entry && typeof entry.flags === "number")
+          return [{ uri: entry.uri, flags: entry.flags, time: "time" in entry && typeof entry.time === "number" ? entry.time : 0 }];
+        return [];
+      });
+    } catch { return []; }
+  },
+  set(v: PersistedUriGrant[]) { try { globalThis.localStorage?.setItem(this.key(), JSON.stringify(v)); } catch { /* private mode */ } },
 };
 const transientUriGrants = new Map<string, Map<string, number>>();
+const grantedUri = (target: string, granted: string, flags: number) =>
+  target === granted || ((flags & PREFIX_GRANT) !== 0 && target.startsWith(granted + "/"));
+function transientFlags(pkg: string, uri: JUri): number {
+  let flags = 0;
+  for (const [granted, mode] of transientUriGrants.get(pkg) ?? []) {
+    if (grantedUri(uri.uri, granted, mode)) flags |= mode;
+  }
+  return flags;
+}
 export function grantUriPermission(pkg: string, uri: JUri, modes: number): void {
   if (!pkg || !uri) rt.npe();
+  if (!(modes & 3)) return;
   let grants = transientUriGrants.get(pkg);
   if (!grants) transientUriGrants.set(pkg, grants = new Map());
-  grants.set(uri.uri, (grants.get(uri.uri) ?? 0) | (modes & 3));
+  grants.set(uri.uri, (grants.get(uri.uri) ?? 0) | (modes & (3 | PREFIX_GRANT | PERSISTABLE_GRANT)));
 }
 export function revokeUriPermission(uri: JUri, modes: number): void {
   if (!uri) rt.npe();
   for (const grants of transientUriGrants.values()) {
     const remaining = (grants.get(uri.uri) ?? 0) & ~(modes & 3);
-    if (remaining) grants.set(uri.uri, remaining);
+    if (remaining & 3) grants.set(uri.uri, remaining);
     else grants.delete(uri.uri);
   }
 }
 export function checkUriPermission(u: JUri, _pid: number, uid: number, modes: number): number {
+  if (!u) rt.npe();
   if (uid === 0) return 0;
   const requested = modes & 3;
   if (!requested) return -1;
-  if (uid === PROCESS_UID && uriGrants.all().includes(u.uri)) return 0;
-  for (const [pkg, grants] of transientUriGrants) {
-    if (packages.get(pkg)?.uid === uid && ((grants.get(u.uri) ?? 0) & requested) === requested) return 0;
+  if (uid === PROCESS_UID && uriGrants.all().some((grant) =>
+    grantedUri(u.uri, grant.uri, grant.flags) && (grant.flags & requested) === requested)) return 0;
+  for (const pkg of transientUriGrants.keys()) {
+    if (packages.get(pkg)?.uid !== uid) continue;
+    if ((transientFlags(pkg, u) & requested) === requested) return 0;
   }
   return -1;
 }
@@ -138,7 +166,7 @@ function fileOf(u: JUri): string {
   return uriDecode(parts.path) ?? "";
 }
 /** A descriptor carries the document's current bytes and writes them back when it is closed. */
-async function openPfd(u: JUri, mode: string) {
+export async function openPfd(u: JUri, mode: string) {
   if (isMediaUri(u)) {
     const path = await mediaPath(u);
     if (!path) throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);
@@ -156,21 +184,39 @@ async function openPfd(u: JUri, mode: string) {
   }
   const id = documentId(u, true);
   const write = (mode ?? "r").includes("w");
-  return mkPfd(write && (mode ?? "").includes("t") ? new Uint8Array(0) : await docRead(id),
-    write ? (b) => docWrite(id, b) : null);
+  const bytes = await pfdBackingBytes(id) ?? (write && (mode ?? "").includes("t") ? new Uint8Array(0) : await docRead(id));
+  return mkPfd(bytes, write ? (b) => docWrite(id, b) : null, id);
 }
 const openAfd = async (u: JUri, mode: string) => {
   const pfd = await openPfd(u, mode);
   return mkAssetFd(pfd.bytes, pfd);
 };
+const contentObservers = new Set<{ uri: string; descendants: boolean; observer: unknown }>();
+async function notifyContentObservers(uri: JUri, origin: unknown): Promise<void> {
+  if (!uri) rt.npe();
+  for (const entry of [...contentObservers]) {
+    if (entry.uri !== uri.uri && !(entry.descendants && uri.uri.startsWith(entry.uri.replace(/\/$/, "") + "/"))) continue;
+    const self = entry.observer === origin;
+    if (self && !await vcall(entry.observer, "deliverSelfNotifications", "()Z")) continue;
+    await vcall(entry.observer, "onChange", "(ZLandroid/net/Uri;)V", self ? 1 : 0, uri);
+  }
+}
 const resolverMethods: NativeSpec["methods"] = {
   ...Object.fromEntries(["acquireContentProviderClient", "acquireUnstableContentProviderClient"].flatMap((name) => [
     [name + "(Landroid/net/Uri;)Landroid/content/ContentProviderClient;", acquireClient],
     [name + "(Ljava/lang/String;)Landroid/content/ContentProviderClient;", async (authority: string) => acquireClient(mkUri("content://" + authority))],
   ])),
-  "notifyChange(Landroid/net/Uri;Landroid/database/ContentObserver;)V": () => {},
-  "registerContentObserver(Landroid/net/Uri;ZLandroid/database/ContentObserver;)V": () => {},
-  "unregisterContentObserver(Landroid/database/ContentObserver;)V": () => {},
+  "notifyChange(Landroid/net/Uri;Landroid/database/ContentObserver;)V": notifyContentObservers,
+  "notifyChange(Landroid/net/Uri;Landroid/database/ContentObserver;Z)V": notifyContentObservers,
+  "notifyChange(Landroid/net/Uri;Landroid/database/ContentObserver;I)V": notifyContentObservers,
+  "registerContentObserver(Landroid/net/Uri;ZLandroid/database/ContentObserver;)V": (uri: JUri, descendants: number, observer: unknown) => {
+    if (!uri || !observer) rt.npe();
+    contentObservers.add({ uri: uri.uri, descendants: !!descendants, observer });
+  },
+  "unregisterContentObserver(Landroid/database/ContentObserver;)V": (observer: unknown) => {
+    if (!observer) rt.npe();
+    for (const entry of contentObservers) if (entry.observer === observer) contentObservers.delete(entry);
+  },
   "openInputStream(Landroid/net/Uri;)Ljava/io/InputStream;": async (u: JUri) =>
     isDocsUri(u) ? docInputStream(documentId(u, true))
       : u.uri.startsWith("content:") ? newObj("android/os/ParcelFileDescriptor$AutoCloseInputStream", "(Landroid/os/ParcelFileDescriptor;)V", await openPfd(u, "r"))
@@ -266,6 +312,11 @@ const resolverMethods: NativeSpec["methods"] = {
     const provider = await contentProvider(u);
     return provider ? vcall(provider, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", u, values) : null;
   },
+  "bulkInsert(Landroid/net/Uri;[Landroid/content/ContentValues;)I": async (u: JUri, values: unknown[] | null) => {
+    if (!u || !values) rt.npe();
+    const provider = await contentProvider(u);
+    return provider ? vcall(provider, "bulkInsert", providerOperations.bulkInsert, u, values) : 0;
+  },
   "update(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I": async (u: JUri, values: unknown, where: string | null, args: string[] | null) => {
     const provider = await contentProvider(u);
     return provider ? vcall(provider, "update", "(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I", u, values, where, args) : 0;
@@ -275,25 +326,40 @@ const resolverMethods: NativeSpec["methods"] = {
     const provider = await contentProvider(u);
     return provider ? vcall(provider, "delete", "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I", u, where, args) : 0;
   },
-  // A grant we cannot refuse: nothing here revokes URI access, so the app keeps what it took.
-  "takePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri) => {
+  "takePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri, modes: number) => {
+    if (!u) rt.npe();
+    const requested = modes & 3;
+    if (!requested) return;
     const all = uriGrants.all();
-    if (!all.includes(u.uri)) uriGrants.set([...all, u.uri]);
+    const old = all.find((grant) => grant.uri === u.uri);
+    const offered = transientFlags(appHost?.pkg ?? "", u);
+    if ((offered & (requested | PERSISTABLE_GRANT)) !== (requested | PERSISTABLE_GRANT) &&
+      (!old || (old.flags & requested) !== requested))
+      throw rt.mkThrowable("java/lang/SecurityException", "No persistable URI permission for " + u.uri);
+    const flags = (old?.flags ?? 0) | requested | (offered & PREFIX_GRANT);
+    uriGrants.set([...all.filter((grant) => grant.uri !== u.uri), { uri: u.uri, flags, time: Date.now() }]);
   },
-  "releasePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri) =>
-    uriGrants.set(uriGrants.all().filter((s) => s !== u.uri)),
+  "releasePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri, modes: number) => {
+    if (!u) rt.npe();
+    uriGrants.set(uriGrants.all().flatMap((grant) => {
+      if (grant.uri !== u.uri) return [grant];
+      const flags = grant.flags & ~(modes & 3);
+      return flags & 3 ? [{ ...grant, flags }] : [];
+    }));
+  },
   "getPersistedUriPermissions()Ljava/util/List;": () =>
-    newArrayList(uriGrants.all().map((s) => { const p = new JUriPermission(); p.uriStr = s; return p; })),
+    newArrayList(uriGrants.all().map((grant) => Object.assign(new JUriPermission(), { uriStr: grant.uri, flags: grant.flags, time: grant.time }))),
 };
 rt.register({ name: "android/content/ContentResolver", ctor: class extends JObj {}, methods: resolverMethods });
-class JUriPermission extends JObj { uriStr = ""; }
+class JUriPermission extends JObj { uriStr = ""; flags = 0; time = 0; }
 rt.register({
   name: "android/content/UriPermission", ctor: JUriPermission,
   methods: {
     "getUri()Landroid/net/Uri;": function (this: JUriPermission) { return mkUri(this.uriStr); },
+    "isReadPermission()Z": function (this: JUriPermission) { return +(!!(this.flags & 1)); },
+    "isWritePermission()Z": function (this: JUriPermission) { return +(!!(this.flags & 2)); },
+    "getPersistedTime()J": function (this: JUriPermission) { return BigInt(this.time); },
     ...noops("<init>()V"),
-    ...stubs(1, "isReadPermission()Z", "isWritePermission()Z"),
-    ...stubs(0n, "getPersistedTime()J"),
   },
 });
 

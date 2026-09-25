@@ -1,15 +1,40 @@
 // java.security — MessageDigest (sync MD5/SHA-1/SHA-256: fingerprint checks at boot, cache keys), SecureRandom, AccessController.
 import { rt, JObj } from "../runtime";
-import { vcall, defineException } from "./jlang";
+import { vcall, defineException, stringHash } from "./jlang";
 import { jarray, concat, u8 } from "../abi";
 import { JRandom, randomSeed } from "./jrandom";
 import { JProps } from "./jutil";
+import { JFilterInputStream, JFilterOutputStream } from "./jio";
 
 class JPermission extends JObj { name = ""; }
 rt.register({ name: "java/security/Permission", ctor: JPermission, fields: { name: "name" }, methods: {
   "<init>(Ljava/lang/String;)V": function (this: JPermission, name: string) { this.name = name; },
   "getName()Ljava/lang/String;": function (this: JPermission) { return this.name; },
   "checkGuard(Ljava/lang/Object;)V": () => {},
+} });
+
+class JBasicPermission extends JPermission {}
+rt.register({ name: "java/security/BasicPermission", ctor: JBasicPermission, sup: "java/security/Permission", methods: {
+  "<init>(Ljava/lang/String;)V": function (this: JBasicPermission, name: string) {
+    if (name == null) throw rt.mkThrowable("java/lang/NullPointerException", "name");
+    if (!name) throw rt.mkThrowable("java/lang/IllegalArgumentException", "name");
+    this.name = name;
+  },
+  "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JBasicPermission, name: string) {
+    if (name == null) throw rt.mkThrowable("java/lang/NullPointerException", "name");
+    if (!name) throw rt.mkThrowable("java/lang/IllegalArgumentException", "name");
+    this.name = name;
+  },
+  "getActions()Ljava/lang/String;": () => "",
+  "implies(Ljava/security/Permission;)Z": function (this: JBasicPermission, other: JBasicPermission | null) {
+    if (!other || this.constructor !== other.constructor) return 0;
+    if (this.name === "*") return 1;
+    return +(this.name === other.name || (this.name.endsWith(".*") && other.name.startsWith(this.name.slice(0, -1))));
+  },
+  "equals(Ljava/lang/Object;)Z": function (this: JBasicPermission, other: JBasicPermission | null) {
+    return +(!!other && this.constructor === other.constructor && this.name === other.name);
+  },
+  "hashCode()I": function (this: JBasicPermission) { return stringHash(this.name); },
 } });
 
 const SHA256_K = new Uint32Array([0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -199,6 +224,60 @@ rt.register({
     "reset()V": function (this: JMessageDigest) { this.parts = []; },
     "getAlgorithm()Ljava/lang/String;": function (this: JMessageDigest) { return this.algo; },
     "getDigestLength()I": function (this: JMessageDigest) { return this.len; },
+  },
+});
+
+class JDigestOutputStream extends JFilterOutputStream {
+  digest: JMessageDigest | null = null;
+  enabled = true;
+}
+rt.register({
+  name: "java/security/DigestOutputStream", ctor: JDigestOutputStream, sup: "java/io/FilterOutputStream",
+  fields: { out: "out", digest: "digest" },
+  methods: {
+    "<init>(Ljava/io/OutputStream;Ljava/security/MessageDigest;)V": function (this: JDigestOutputStream, out: unknown, digest: JMessageDigest) {
+      this.out = out; this.digest = digest;
+    },
+    "getMessageDigest()Ljava/security/MessageDigest;": function (this: JDigestOutputStream) { return this.digest; },
+    "setMessageDigest(Ljava/security/MessageDigest;)V": function (this: JDigestOutputStream, digest: JMessageDigest) { this.digest = digest; },
+    "on(Z)V": function (this: JDigestOutputStream, enabled: number) { this.enabled = !!enabled; },
+    "write(I)V": async function (this: JDigestOutputStream, b: number) {
+      await vcall(this.out, "write", "(I)V", b);
+      if (this.enabled) await vcall(this.digest, "update", "(B)V", b);
+    },
+    "write([BII)V": async function (this: JDigestOutputStream, bytes: Int8Array, off: number, len: number) {
+      if (bytes == null || off + len > bytes.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "wrong parameters for write");
+      if (off < 0 || len < 0) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "wrong index for write");
+      await vcall(this.out, "write", "([BII)V", bytes, off, len);
+      if (this.enabled) await vcall(this.digest, "update", "([BII)V", bytes, off, len);
+    },
+  },
+});
+
+class JDigestInputStream extends JFilterInputStream {
+  digest: JMessageDigest | null = null;
+  enabled = true;
+}
+rt.register({
+  name: "java/security/DigestInputStream", ctor: JDigestInputStream, sup: "java/io/FilterInputStream",
+  fields: { digest: "digest" },
+  methods: {
+    "<init>(Ljava/io/InputStream;Ljava/security/MessageDigest;)V": function (this: JDigestInputStream, input: unknown, digest: JMessageDigest) {
+      this.in_ = input; this.digest = digest;
+    },
+    "getMessageDigest()Ljava/security/MessageDigest;": function (this: JDigestInputStream) { return this.digest; },
+    "setMessageDigest(Ljava/security/MessageDigest;)V": function (this: JDigestInputStream, digest: JMessageDigest) { this.digest = digest; },
+    "on(Z)V": function (this: JDigestInputStream, enabled: number) { this.enabled = !!enabled; },
+    "read()I": async function (this: JDigestInputStream) {
+      const value: number = await vcall(this.in_, "read", "()I");
+      if (value >= 0 && this.enabled) await vcall(this.digest, "update", "(B)V", value);
+      return value;
+    },
+    "read([BII)I": async function (this: JDigestInputStream, bytes: Int8Array, off: number, len: number) {
+      const count: number = await vcall(this.in_, "read", "([BII)I", bytes, off, len);
+      if (count > 0 && this.enabled) await vcall(this.digest, "update", "([BII)V", bytes, off, count);
+      return count;
+    },
   },
 });
 

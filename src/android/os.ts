@@ -12,7 +12,7 @@ import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool, JChar } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
@@ -22,6 +22,7 @@ import { yieldToLoop } from "../native/cpu";
 import { mkFile, JInputStream, JOutputStream, vfs, type JFileDescriptor } from "../jvm/natives/jio";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd } from "../native/stdio";
 import { newArrayList, newStringSet } from "../jvm/natives/jutil";
+import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
 import { unavailableClock } from "../jvm/natives/jtime";
 import { clearGuestInterval, clearGuestTimeout, guestNow, guestSleep, setGuestInterval, setGuestTimeout, type GuestTimer } from "../guest-clock";
 
@@ -174,10 +175,18 @@ export class JHandler extends JObj {
   post(r: unknown, delay: number): number { return this.send(obtain(this, 0, null, 0, 0, r), delay); }
   cancel(key: unknown): void {
     const messages = this.pending.get(key);
-    if (!messages) return;
-    for (const m of messages) { clearGuestTimeout(m.timer); this.looper.queue.messages.delete(m); }
-    messages.clear();
-    this.pending.delete(key);
+    if (messages) this.cancelMatching(() => true, [[key, messages]]);
+  }
+  cancelMatching(matches: (key: unknown, message: JMessage) => boolean, entries: Iterable<[unknown, Set<JMessage>]> = this.pending): void {
+    for (const [key, messages] of entries) {
+      for (const message of messages) {
+        if (!matches(key, message)) continue;
+        clearGuestTimeout(message.timer);
+        this.looper.queue.messages.delete(message);
+        messages.delete(message);
+      }
+      if (!messages.size) this.pending.delete(key);
+    }
     this.looper.queue.checkIdle();
   }
 }
@@ -240,10 +249,17 @@ rt.register({
     "sendEmptyMessage(I)Z": function (this: JHandler, w: number) { return this.send(emptyMessage(w), 0); },
     "sendEmptyMessageAtTime(IJ)Z": function (this: JHandler, w: number, at: bigint) { return this.send(emptyMessage(w), Math.max(0, Number(at) - uptimeMillis())); },
     "sendEmptyMessageDelayed(IJ)Z": function (this: JHandler, w: number, d: bigint) { return this.send(emptyMessage(w), Number(d)); },
-    "removeCallbacks(Ljava/lang/Runnable;Ljava/lang/Object;)V": function (this: JHandler, r: unknown) { this.cancel(r); },
+    "removeCallbacks(Ljava/lang/Runnable;Ljava/lang/Object;)V": function (this: JHandler, r: unknown, token: unknown) {
+      this.cancelMatching((key, message) => key === r && (token == null || message.obj === token));
+    },
     "removeMessages(I)V": function (this: JHandler, w: number) { this.cancel(w); },
-    "removeMessages(ILjava/lang/Object;)V": function (this: JHandler, w: number) { this.cancel(w); },
-    "removeCallbacksAndMessages(Ljava/lang/Object;)V": function (this: JHandler) { for (const k of [...this.pending.keys()]) this.cancel(k); },
+    "removeMessages(ILjava/lang/Object;)V": function (this: JHandler, w: number, obj: unknown) {
+      const messages = this.pending.get(w);
+      if (messages) this.cancelMatching((_key, message) => obj == null || message.obj === obj, [[w, messages]]);
+    },
+    "removeCallbacksAndMessages(Ljava/lang/Object;)V": function (this: JHandler, token: unknown) {
+      this.cancelMatching((_key, message) => token == null || message.obj === token);
+    },
     "hasMessages(I)Z": function (this: JHandler, w: number) { return this.pending.get(w)?.size ? 1 : 0; },
     "hasCallbacks(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.pending.get(r)?.size ? 1 : 0; },
     // the object variant asks about messages carrying that obj; posts here are keyed by `what`
@@ -515,8 +531,8 @@ export class JPersistableBundle extends JBaseBundle {}
 export class JBundle extends JBaseBundle {
   constructor() { super(); rt.link("android/os/Bundle"); }
 }
-const bundleBoxes: Record<string, typeof JInt | typeof JLong | typeof JFloat | typeof JDouble | typeof JBool> = {
-  I: JInt, J: JLong, F: JFloat, D: JDouble, Z: JBool,
+const bundleBoxes: Record<string, typeof JInt | typeof JLong | typeof JFloat | typeof JDouble | typeof JBool | typeof JChar> = {
+  I: JInt, J: JLong, F: JFloat, D: JDouble, Z: JBool, C: JChar,
 };
 export function bundlePrimitive(value: unknown, descriptor: string, fallback: unknown): unknown {
   if (typeof value === (descriptor === "J" ? "bigint" : "number")) return value;
@@ -524,6 +540,7 @@ export function bundlePrimitive(value: unknown, descriptor: string, fallback: un
 }
 export function bundleBox(value: unknown, descriptor: string): unknown {
   if (typeof value !== "number") return value;
+  if (descriptor === "C") return box(JChar, value);
   if (descriptor === "Z") return box(JBool, value);
   if (descriptor === "F") return box(JFloat, value);
   if (descriptor === "D") return box(JDouble, value);
@@ -565,7 +582,7 @@ const bundleMethods: NativeSpec["methods"] = {
   "getBundle(Ljava/lang/String;)Landroid/os/Bundle;": function (this: JBundle, k: string) { return this.map.get(k) ?? null; },
   "putBundle(Ljava/lang/String;Landroid/os/Bundle;)V": function (this: JBundle, k: string, v: unknown) { this.map.set(k, v); },
 };
-for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"], ["Boolean", "Z"],
+for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"], ["Boolean", "Z"], ["Char", "C"],
   ["Float", "F"], ["Double", "D"], ["CharSequence", "Ljava/lang/CharSequence;"], ["ByteArray", "[B"],
   ["IntArray", "[I"], ["LongArray", "[J"], ["StringArray", "[Ljava/lang/String;"],
   ["IntegerArrayList", "Ljava/util/ArrayList;"], ["ParcelableArray", "[Landroid/os/Parcelable;"],
@@ -577,7 +594,7 @@ for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "
     if (v !== undefined) return v;
     return d === "I" || d === "Z" ? 0 : d === "J" ? 0n : d === "F" || d === "D" ? 0 : null;
   };
-  if (d === "I" || d === "J" || d === "Z" || d === "F" || d === "D" || d === "Ljava/lang/String;") {
+  if (d === "I" || d === "J" || d === "Z" || d === "C" || d === "F" || d === "D" || d === "Ljava/lang/String;" || d === "Ljava/lang/CharSequence;") {
     bundleMethods[`get${t}(Ljava/lang/String;${d})${d}`] = function (this: JBundle, k: string, dflt: unknown) {
       const v = this.map.get(k);
       if (d.length === 1) return bundlePrimitive(v, d, dflt);
@@ -626,6 +643,65 @@ rt.register({
 });
 rt.markers("android/os/Parcelable", "android/os/Parcelable$Creator");
 rt.markers("android/os/OutcomeReceiver");
+const sharedMappings = new WeakSet<JBuffer["backing"]>();
+class JSharedMemory extends JObj {
+  bytes = new Uint8Array(0);
+  protection = 7;
+  closed = false;
+  map(prot: number, offset: number, length: number): JBuffer {
+    if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
+    if (offset < 0 || length <= 0 || offset > this.bytes.length - length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid shared memory range");
+    if (prot < 0 || prot & ~7 || (prot & this.protection) !== prot) throw errno("mmap", E.ACCES);
+    rt.link("java/nio/ByteBuffer");
+    const buffer = mkByteBuffer(0, true);
+    buffer.backing = { storage: { kind: "direct", ab: this.bytes.buffer as ArrayBuffer } };
+    buffer.byteOffset = offset;
+    buffer.cap = buffer.lim = length;
+    buffer.readOnly = !(prot & 2);
+    sharedMappings.add(buffer.backing);
+    return buffer;
+  }
+}
+rt.register({
+  name: "android/os/SharedMemory", ctor: JSharedMemory, ifaces: ["android/os/Parcelable", "java/io/Closeable"],
+  statics: { get CREATOR() { return parcelCreator("android/os/SharedMemory", async (p) => {
+    const protection = await vcall(p, "readInt", "()I") as number;
+    const bytes = await vcall(p, "createByteArray", "()[B") as Int8Array;
+    const shared = new JSharedMemory(); shared.protection = protection; shared.bytes = Uint8Array.from(bytes);
+    return shared;
+  }); } },
+  methods: {
+    "static create(Ljava/lang/String;I)Landroid/os/SharedMemory;": (_name: string | null, size: number) => {
+      if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Size must be positive");
+      const shared = new JSharedMemory(); shared.bytes = new Uint8Array(size); return shared;
+    },
+    "getSize()I": function (this: JSharedMemory) {
+      if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
+      return this.bytes.length;
+    },
+    "map(III)Ljava/nio/ByteBuffer;": function (this: JSharedMemory, prot: number, offset: number, length: number) { return this.map(prot, offset, length); },
+    "mapReadOnly()Ljava/nio/ByteBuffer;": function (this: JSharedMemory) { return this.map(1, 0, this.bytes.length); },
+    "mapReadWrite()Ljava/nio/ByteBuffer;": function (this: JSharedMemory) { return this.map(3, 0, this.bytes.length); },
+    "setProtect(I)Z": function (this: JSharedMemory, prot: number) {
+      if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
+      if (prot < 0 || prot & ~7) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid protection");
+      if ((prot & this.protection) !== prot) return 0;
+      this.protection = prot; return 1;
+    },
+    "static unmap(Ljava/nio/ByteBuffer;)V": (buffer: JBuffer | null) => {
+      if (!buffer) return rt.npe();
+      if (!sharedMappings.delete(buffer.backing)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer is not mapped shared memory");
+      buffer.backing.storage = { kind: "direct", ab: new ArrayBuffer(0) };
+    },
+    "close()V": function (this: JSharedMemory) { this.closed = true; },
+    "describeContents()I": () => 1,
+    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JSharedMemory, parcel: JParcel) {
+      if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
+      await vcall(parcel, "writeInt", "(I)V", this.protection);
+      await vcall(parcel, "writeByteArray", "([B)V", new Int8Array(this.bytes.buffer));
+    },
+  },
+});
 class JCancellationSignal extends JObj {
   cancelled = 0;
   listener: unknown = null;
@@ -659,7 +735,9 @@ export class JParcelFileDescriptor extends JObj {
   flags = 0;
   fd = -1;
   closed = false;
+  backing: PfdBacking | null = null;
 }
+type PfdBacking = { path: string; refs: number; key: string; closing: Promise<void> | null; sink: ((b: Uint8Array, closed?: boolean) => unknown) | null };
 /** the native descriptor, opened on first request: only a fd that crosses JNI needs one. A
  *  read-only descriptor over bytes with no file behind them reads those bytes. */
 function pfdFd(p: JParcelFileDescriptor): number {
@@ -674,18 +752,42 @@ export function descriptorFd(d: JFileDescriptor): number {
   if (d.fd < 0 && d.path) d.fd = javaOpenFd(d.path, d.flags & ~0x280);
   return d.fd;
 }
-export function mkPfd(bytes: Uint8Array, sink: ((b: Uint8Array, closed?: boolean) => unknown) | null): JParcelFileDescriptor {
+let pfdBackingSeq = 0;
+const pfdBackings = new Map<string, PfdBacking>();
+export async function pfdBackingBytes(key: string): Promise<Uint8Array | null> {
+  const backing = pfdBackings.get(key);
+  if (backing?.closing) { await backing.closing; return null; }
+  return backing ? vfs.read(backing.path) : null;
+}
+export function mkPfd(bytes: Uint8Array, sink: ((b: Uint8Array, closed?: boolean) => unknown) | null, backingKey?: string): JParcelFileDescriptor {
   const p = new JParcelFileDescriptor();
   p.bytes = bytes;
   p.sink = sink;
+  if (backingKey) {
+    let backing = pfdBackings.get(backingKey);
+    if (!backing) {
+      backing = { path: `/data/webdroid-pfd-${++pfdBackingSeq}`, refs: 0, key: backingKey, closing: null, sink };
+      pfdBackings.set(backingKey, backing);
+      vfs.markVolatile(backing.path);
+      vfs.write(backing.path, bytes, false);
+    }
+    if (sink) backing.sink = sink;
+    backing.refs++;
+    p.path = backing.path;
+    p.flags = sink ? 2 : 0;
+    p.backing = backing;
+  }
   return p;
 }
 export function parcelFileDescriptorData(value: unknown): { bytes: Uint8Array; writable: boolean } | null {
-  return value instanceof JParcelFileDescriptor ? { bytes: value.bytes.slice(), writable: value.sink !== null } : null;
+  return value instanceof JParcelFileDescriptor
+    ? { bytes: (value.backing ? vfs.read(value.backing.path) : value.bytes)?.slice() ?? new Uint8Array(0), writable: value.sink !== null }
+    : null;
 }
 export async function writeParcelFileDescriptor(value: unknown, bytes: Uint8Array, closed = false): Promise<void> {
   if (!(value instanceof JParcelFileDescriptor)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a ParcelFileDescriptor");
   value.bytes = bytes.slice();
+  if (value.backing) vfs.write(value.backing.path, value.bytes, false);
   await value.sink?.(value.bytes, closed);
 }
 rt.register({
@@ -720,6 +822,9 @@ rt.register({
     "getFileDescriptor()Ljava/io/FileDescriptor;": function (this: JParcelFileDescriptor) {
       const d = rt.make("java/io/FileDescriptor") as JFileDescriptor;
       d.fd = pfdFd(this);
+      d.path = this.path;
+      d.flags = this.flags;
+      d.owner = this;
       return d;
     },
     "getFd()I": function (this: JParcelFileDescriptor) { return pfdFd(this); },
@@ -733,9 +838,28 @@ rt.register({
       return Object.assign(new JParcelFileDescriptor(), { fd });
     },
     "detachFd()I": function (this: JParcelFileDescriptor) { const fd = pfdFd(this); this.fd = -1; this.closed = true; return fd; },
-    "dup()Landroid/os/ParcelFileDescriptor;": function (this: JParcelFileDescriptor) { return Object.assign(mkPfd(this.bytes, this.sink), { path: this.path, flags: this.flags, fd: javaDupFd(pfdFd(this)) }); },
-    "getStatSize()J": function (this: JParcelFileDescriptor) { return BigInt(this.bytes.length); },
-    "close()V": function (this: JParcelFileDescriptor) { if (this.fd >= 0) javaCloseFd(this.fd); this.fd = -1; this.closed = true; },
+    "dup()Landroid/os/ParcelFileDescriptor;": function (this: JParcelFileDescriptor) {
+      const p = Object.assign(mkPfd(this.bytes, this.sink), { path: this.path, flags: this.flags, fd: javaDupFd(pfdFd(this)), backing: this.backing });
+      if (p.backing) p.backing.refs++;
+      return p;
+    },
+    "getStatSize()J": function (this: JParcelFileDescriptor) { return BigInt(this.backing ? vfs.stat(this.backing.path)?.size ?? 0 : this.bytes.length); },
+    "close()V": async function (this: JParcelFileDescriptor) {
+      if (this.closed) return;
+      if (this.fd >= 0) javaCloseFd(this.fd);
+      this.fd = -1; this.closed = true;
+      if (this.backing && --this.backing.refs === 0) {
+        const backing = this.backing, bytes = vfs.read(backing.path) ?? new Uint8Array(0);
+        backing.closing = (async () => {
+          try { await backing.sink?.(bytes, true); }
+          finally {
+            pfdBackings.delete(backing.key);
+            vfs.delete(backing.path, false);
+          }
+        })();
+        await backing.closing;
+      }
+    },
     "checkError()V": () => {},
   },
 });
@@ -779,6 +903,16 @@ async function statFs(this: JStatFs, p: string) {
   } catch { /* no estimate available: report an empty filesystem */ }
 }
 const BLK = 4096n;
+const statVfsFields = ["f_bsize", "f_frsize", "f_blocks", "f_bfree", "f_bavail", "f_files", "f_ffree", "f_favail", "f_fsid", "f_flag", "f_namemax"] as const;
+class JStructStatVfs extends JObj {
+  f_bsize = 0n; f_frsize = 0n; f_blocks = 0n; f_bfree = 0n; f_bavail = 0n;
+  f_files = 0n; f_ffree = 0n; f_favail = 0n; f_fsid = 0n; f_flag = 0n; f_namemax = 0n;
+}
+rt.register({ name: "android/system/StructStatVfs", ctor: JStructStatVfs, fields: [...statVfsFields], methods: {
+  "<init>(JJJJJJJJJJJ)V": function (this: JStructStatVfs, ...values: bigint[]) {
+    for (let i = 0; i < statVfsFields.length; i++) Reflect.set(this, statVfsFields[i], values[i]);
+  },
+} });
 // ── android.os.storage.StorageManager: the one volume, identified by the platform's default UUID
 let storageUuid: ReturnType<typeof uuidFromString> | null = null;
 const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
@@ -912,6 +1046,11 @@ class JKeyEvent extends JObj { action = 0; keyCode = 0; }
 rt.register({
   name: "android/view/KeyEvent", ctor: JKeyEvent, ifaces: ["android/os/Parcelable"],
   statics: {
+    get CREATOR() { return parcelCreator("android/view/KeyEvent", async p => {
+      const action: number = await vcall(p, "readInt", "()I");
+      const keyCode: number = await vcall(p, "readInt", "()I");
+      return Object.assign(new JKeyEvent(), { action, keyCode });
+    }); },
     ACTION_DOWN: 0, ACTION_UP: 1, MAX_KEYCODE: 84,
     ...Object.fromEntries([...keyCodes].map(([name, code]) => ["KEYCODE_" + name, code])),
   },
@@ -940,6 +1079,11 @@ rt.register({
     },
     "getAction()I": function (this: JKeyEvent) { return this.action; },
     "getKeyCode()I": function (this: JKeyEvent) { return this.keyCode; },
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JKeyEvent, p: JParcel) {
+      await vcall(p, "writeInt", "(I)V", this.action);
+      await vcall(p, "writeInt", "(I)V", this.keyCode);
+    },
     ...stubs(0, "getRepeatCount()I", "getUnicodeChar()I", "hasModifiers(I)Z", "isTracking()Z", "isCanceled()Z"),
     ...stubs(1, "hasNoModifiers()Z"),
     ...noops("startTracking()V"),
@@ -1093,6 +1237,16 @@ rt.register({
       s.st_blocks = (s.st_size + 511n) / 512n;
       return s;
     },
+    "static statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": async (path: string) => {
+      if (!vfs.stat(path) && !vfs.isDir(path)) throw errno("statvfs", 2);
+      const { total, free } = await storageEstimate();
+      const s = new JStructStatVfs();
+      s.f_bsize = s.f_frsize = BLK;
+      s.f_blocks = BigInt(Math.floor(total / Number(BLK)));
+      s.f_bfree = s.f_bavail = BigInt(Math.floor(free / Number(BLK)));
+      s.f_namemax = 255n;
+      return s;
+    },
     "static readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },
   },
 });
@@ -1104,6 +1258,9 @@ rt.register({
   statics: {
     ...Object.fromEntries(Object.entries(E).map(([name, value]) => ["E" + name, value])),
     PROT_READ: 0x1,
+    PROT_WRITE: 0x2,
+    PROT_EXEC: 0x4,
+    PROT_NONE: 0,
     MAP_PRIVATE: 0x02,
     SEEK_SET: 0, SEEK_CUR: 1, SEEK_END: 2,
     SIGKILL: 9,

@@ -636,6 +636,22 @@ test("ZipInputStream walks entries in local order and serves each entry's bytes"
   expect(sizes).toEqual([5, 0, 4]);
 });
 
+test("ZipOutputStream writes readable entries", async () => {
+  const output = await newObj("java/io/ByteArrayOutputStream");
+  const zip = await newObj("java/util/zip/ZipOutputStream", "(Ljava/io/OutputStream;)V", output);
+  for (const [name, text] of [["track.kml", "<kml/>"]] as const) {
+    const entry = await newObj("java/util/zip/ZipEntry", "(Ljava/lang/String;)V", name);
+    await vcall(zip, "putNextEntry", "(Ljava/util/zip/ZipEntry;)V", entry);
+    const bytes = new TextEncoder().encode(text);
+    await vcall(zip, "write", "([BII)V", new Int8Array(bytes.buffer), 0, bytes.length);
+    await vcall(zip, "closeEntry", "()V");
+  }
+  await vcall(zip, "close", "()V");
+  const bytes = await vcall(output, "toByteArray", "()[B") as Int8Array;
+  const { unzipSync } = await import("fflate");
+  expect(new TextDecoder().decode(unzipSync(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length))["track.kml"])).toBe("<kml/>");
+});
+
 test("List.containsAll, CharBuffer.wrap and EventObject", async () => {
   const list = await newObj("java/util/ArrayList");
   for (const v of ["x", "y"]) await vcall(list, "add", "(Ljava/lang/Object;)Z", v);

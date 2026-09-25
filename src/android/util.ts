@@ -4,7 +4,8 @@
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
 import { intBitsToFloat, mangleStaticField } from "../jvm/abi";
 import { device } from "../shell/config";
-import { vcall, JEnum, linkInit } from "../jvm/natives/jlang";
+import { vcall, vcallMaybe, after, stringHash, JEnum, linkInit } from "../jvm/natives/jlang";
+import { jeq } from "../jvm/natives/jutil";
 import { PATTERNS } from "./pattern-data";
 
 rt.register({
@@ -40,6 +41,14 @@ rt.register({
     "static println(ILjava/lang/String;Ljava/lang/String;)I": (p: number, tag: string, msg: string) => logFn("P")(tag, msg),
   },
 });
+class JLogPrinter extends JObj { priority = 3; tag = ""; }
+rt.register({ name: "android/util/LogPrinter", ctor: JLogPrinter, ifaces: ["android/util/Printer"], methods: {
+  "<init>(ILjava/lang/String;)V": function (this: JLogPrinter, priority: number, tag: string) { this.priority = priority; this.tag = tag; },
+  "<init>(ILjava/lang/String;I)V": function (this: JLogPrinter, priority: number, tag: string) { this.priority = priority; this.tag = tag; },
+  "println(Ljava/lang/String;)V": function (this: JLogPrinter, message: string) {
+    logFn(["", "", "V", "D", "I", "W", "E", "A"][this.priority] ?? "P")(this.tag, message);
+  },
+} });
 
 class JSparseArray extends JObj {
   m = new Map<number | bigint, unknown>();
@@ -115,6 +124,10 @@ rt.register({
 });
 
 class JPair extends JObj { first: unknown = null; second: unknown = null; }
+function pairHash(value: unknown): number | Promise<number> {
+  if (value == null) return 0;
+  return typeof value === "string" ? stringHash(value) : vcallMaybe(value, "hashCode", "()I");
+}
 class JRange extends JObj { lower: unknown = null; upper: unknown = null; }
 async function initRange(this: JRange, lower: unknown, upper: unknown) {
   if (lower === null || upper === null) return rt.npe();
@@ -171,6 +184,18 @@ rt.register({
     "<init>(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JPair, a: unknown, b: unknown) { this.first = a; this.second = b; },
     "static create(Ljava/lang/Object;Ljava/lang/Object;)Landroid/util/Pair;": (a: unknown, b: unknown) => {
       const p = new JPair(); p.first = a; p.second = b; return p;
+    },
+    "equals(Ljava/lang/Object;)Z": function (this: JPair, other: unknown) {
+      if (!(other instanceof JPair)) return 0;
+      return after(jeq(this.first, other.first), (first) => first ? jeq(this.second, other.second) : 0);
+    },
+    "hashCode()I": function (this: JPair) {
+      return after(pairHash(this.first), (first) => after(pairHash(this.second), (second) => (first ^ second) | 0));
+    },
+    "toString()Ljava/lang/String;": async function (this: JPair) {
+      const first = this.first == null ? "null" : await vcall(this.first, "toString", "()Ljava/lang/String;");
+      const second = this.second == null ? "null" : await vcall(this.second, "toString", "()Ljava/lang/String;");
+      return `Pair{${first} ${second}}`;
     },
   },
 });

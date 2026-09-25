@@ -69,21 +69,24 @@ export class JImageView extends JView {
   maxW = Infinity; maxH = Infinity;
 }
 const scaleTypes = mkEnumSet("android/widget/ImageView$ScaleType", ["MATRIX", "FIT_XY", "FIT_START", "FIT_CENTER", "FIT_END", "CENTER", "CENTER_CROP", "CENTER_INSIDE"]);
+async function initImageView(view: JImageView, c: unknown, set: JAttrSet | null, style: number, defaultStyle = 0) {
+  await initViewFromCtx(view, c, set, style, defaultStyle);
+  if (!view.jres || (!set && !style && !defaultStyle)) return;
+  const ta = obtainStyled(view.jres, view.theme, set, [AID("src"), AID("scaleType"), AID("adjustViewBounds"), AID("tint"), AID("cropToPadding")], style, defaultStyle);
+  if (ta.vals[0]) await view.setDrawable(await loadDrawableRV(view.jres, ta.vals[0], view.theme));
+  if (ta.vals[1]) view.scaleType = rvInt(view.jres, ta.vals[1], 3);
+  if (ta.vals[2]) view.adjustBounds = !!rvInt(view.jres, ta.vals[2], 0);
+  if (ta.vals[4]) view.cropToPadding = !!rvInt(view.jres, ta.vals[4], 0);
+  if (ta.vals[3]) {
+    const tint = rvColor(view.jres, ta.vals[3], 0);
+    if (view.drawable && tint) view.drawable.tint = tint;
+  }
+}
 const imageViewMethods: NativeSpec["methods"] = {
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JImageView, c: unknown, set: JAttrSet | null) {
-    await initViewFromCtx(this, c, set);
-    if (set && this.jres) {
-      const ta = obtainStyled(this.jres, this.theme, set, [AID("src"), AID("scaleType"), AID("adjustViewBounds"), AID("tint"), AID("cropToPadding")], 0, 0);
-      if (ta.vals[0]) await this.setDrawable(await loadDrawableRV(this.jres, ta.vals[0], this.theme));
-      if (ta.vals[1]) this.scaleType = rvInt(this.jres, ta.vals[1], 3);
-      if (ta.vals[2]) this.adjustBounds = !!rvInt(this.jres, ta.vals[2], 0);
-      if (ta.vals[4]) this.cropToPadding = !!rvInt(this.jres, ta.vals[4], 0);
-      if (ta.vals[3]) {
-        const tint = rvColor(this.jres, ta.vals[3], 0);
-        if (this.drawable && tint) this.drawable.tint = tint;
-      }
-    }
-  },
+  "<init>(Landroid/content/Context;)V": function (this: JImageView, c: unknown) { return initImageView(this, c, null, 0); },
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JImageView, c: unknown, set: JAttrSet | null) { return initImageView(this, c, set, 0); },
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": function (this: JImageView, c: unknown, set: JAttrSet | null, style: number) { return initImageView(this, c, set, style); },
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": function (this: JImageView, c: unknown, set: JAttrSet | null, style: number, defaultStyle: number) { return initImageView(this, c, set, style, defaultStyle); },
   "setImageDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JImageView, d: JDrawable | null) {
     const pending = this.setDrawable(d);
     this.layoutRequested = true;
@@ -203,6 +206,7 @@ const imageViewMethods: NativeSpec["methods"] = {
     const ctx = cv.ctx;
     const saveCount = saveCanvas(cv);
     try {
+      if (this.imageAlpha !== 255) ctx.globalAlpha *= this.imageAlpha / 255;
       if (this.cropToPadding) {
         ctx.beginPath(); ctx.rect(this.padL, this.padT, aw, ah); ctx.clip();
       }

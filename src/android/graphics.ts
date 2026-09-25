@@ -184,6 +184,7 @@ rt.register({
   statics: { NONE: INSETS_NONE },
   methods: {
     "static of(IIII)Landroid/graphics/Insets;": (l: number, t: number, r: number, b: number) => insetsOf(l, t, r, b),
+    "static of(Landroid/graphics/Rect;)Landroid/graphics/Insets;": (r: JRect) => insetsOf(r.left, r.top, r.right, r.bottom),
     "toString()Ljava/lang/String;": function (this: JInsets) {
       return `Insets{left=${this.left}, top=${this.top}, right=${this.right}, bottom=${this.bottom}}`;
     },
@@ -545,6 +546,9 @@ const paintMethods: NativeSpec["methods"] = {
   "getTextBounds(Ljava/lang/CharSequence;IILandroid/graphics/Rect;)V": function (this: JPaint, cs: unknown, a: number, b: number, r: JRect) {
     const str = typeof cs === "string" ? cs : ((cs as { text?: string })?.text ?? String(cs ?? ""));
     return vcall(this, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", str, a, b, r);
+  },
+  "getTextBounds([CIILandroid/graphics/Rect;)V": function (this: JPaint, chars: Uint16Array, offset: number, count: number, rect: JRect) {
+    return vcall(this, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", charsToString(chars, offset, count), 0, count, rect);
   },
   "getTextBounds(Ljava/lang/String;IILandroid/graphics/Rect;)V": function (this: JPaint, s: string, a: number, b: number, r: JRect) {
     const ctx = measureCtx(this.font(), this.language);
@@ -1239,7 +1243,7 @@ export class JBitmap extends JObj {
   recycled = false;
   /** AOSP's native config numbering, not Bitmap.Config's ordinal. */
   config = 5;
-  hasAlpha = true; premultiplied = true; immutable = false; mipmap = false;
+  hasAlpha = true; premultiplied = true; immutable = false; shared = false; mipmap = false;
   genId = 0;
   get rowBytes() { return this.w * (this.config === 1 ? 1 : 4); }
   private cv: OffscreenCanvas | null = null;
@@ -1333,6 +1337,7 @@ export function extractBitmapAlpha(src: JBitmap, paint: JPaint | null, offsets: 
 }
 function bitmapBuffer(bitmap: JBitmap, buffer: JBuffer, from: boolean): void {
   if (bitmap.recycled || bitmap.config === 7) throw rt.mkThrowable("java/lang/IllegalStateException", "Bitmap pixels unavailable");
+  if (from && bitmap.immutable) throw rt.mkThrowable("java/lang/IllegalStateException", "Bitmap is immutable");
   if (!buffer) rt.npe();
   if (!["ByteBuffer", "ShortBuffer", "IntBuffer"].some((name) => rt.iof(buffer, "java/nio/" + name)))
     throw rt.mkThrowable("java/lang/RuntimeException", "unsupported Buffer subclass");
@@ -1393,6 +1398,7 @@ export const bitmapMethods: NativeSpec["methods"] = {
       return argbAt(this.pixels(), (y * this.w + x) * 4);
     },
     "setPixel(III)V": function (this: JBitmap, x: number, y: number, c: number) {
+      if (this.immutable) throw rt.mkThrowable("java/lang/IllegalStateException", "Bitmap is immutable");
       putArgb(this.pixels(), (y * this.w + x) * 4, c);
       this.commit(x, y, 1, 1);
     },
@@ -1403,6 +1409,7 @@ export const bitmapMethods: NativeSpec["methods"] = {
       }
     },
     "setPixels([IIIIIII)V": function (this: JBitmap, src: Int32Array, off: number, stride: number, x: number, y: number, w: number, h: number) {
+      if (this.immutable) throw rt.mkThrowable("java/lang/IllegalStateException", "Bitmap is immutable");
       const d = this.pixels();
       for (let row = 0; row < h; row++) {
         for (let col = 0; col < w; col++) putArgb(d, ((y + row) * this.w + x + col) * 4, src[off + row * stride + col]);
@@ -1410,6 +1417,7 @@ export const bitmapMethods: NativeSpec["methods"] = {
       this.commit(x, y, w, h);
     },
     "eraseColor(I)V": function (this: JBitmap, c: number) {
+      if (this.immutable) throw rt.mkThrowable("java/lang/IllegalStateException", "Bitmap is immutable");
       const d = this.pixels();
       for (let i = 0; i < d.length; i += 4) putArgb(d, i, c);
       this.commit(0, 0, this.w, this.h);
@@ -1421,6 +1429,16 @@ export const bitmapMethods: NativeSpec["methods"] = {
       b.ctx.drawImage(this.canvas, 0, 0);
       return b;
     },
+    "asShared()Landroid/graphics/Bitmap;": function (this: JBitmap) {
+      if (this.recycled) throw rt.mkThrowable("java/lang/IllegalStateException", "Can't copy a recycled bitmap");
+      if (this.shared && this.immutable) return this;
+      const bitmap = JBitmap.create(this.w, this.h);
+      bitmap.pixels().set(this.pixels());
+      bitmap.config = this.config; bitmap.density = this.density;
+      bitmap.hasAlpha = this.hasAlpha; bitmap.premultiplied = this.premultiplied;
+      bitmap.immutable = bitmap.shared = true;
+      return bitmap;
+    },
     "getConfig()Landroid/graphics/Bitmap$Config;": function (this: JBitmap) { return bitmapConfigs[this.config === 1 ? 0 : 3]; },
     "hasAlpha()Z": function (this: JBitmap) { return this.hasAlpha ? 1 : 0; },
     "setHasAlpha(Z)V": function (this: JBitmap, v: number) { this.hasAlpha = !!v; },
@@ -1429,8 +1447,12 @@ export const bitmapMethods: NativeSpec["methods"] = {
     "getByteCount()I": function (this: JBitmap) { return this.rowBytes * this.h; },
     "getAllocationByteCount()I": function (this: JBitmap) { return this.rowBytes * this.h; },
     "getRowBytes()I": function (this: JBitmap) { return this.rowBytes; },
-    "compress(Landroid/graphics/Bitmap$CompressFormat;ILjava/io/OutputStream;)Z": async function (this: JBitmap, fmt: unknown, q: number, out: unknown) {
-      const blob = await this.canvas.convertToBlob({ type: "image/png" });
+    "compress(Landroid/graphics/Bitmap$CompressFormat;ILjava/io/OutputStream;)Z": async function (this: JBitmap, fmt: { ord: number } | null, q: number, out: unknown) {
+      if (!fmt) throw rt.npe();
+      const type = ["image/jpeg", "image/png", "image/webp"][fmt.ord];
+      if (!type) return 0;
+      const blob = await this.canvas.convertToBlob({ type, quality: Math.max(0, Math.min(1, q / 100)) });
+      if (blob.type !== type) return 0;
       const bytes = new Int8Array(await blob.arrayBuffer());
       await vcall(out, "write", "([BII)V", bytes, 0, bytes.length);
       return 1;

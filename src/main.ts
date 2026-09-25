@@ -14,6 +14,7 @@ import { unreadAttrs } from "./android/res";
 import { bootApk, tick, dispatchPointer, pressBack, currentApp, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
+import { clearPickedDocuments } from "./android/documents";
 import { perf, perfReset } from "./perf";
 import { configureJvm, jvmProfiler, parseJvmTier } from "./jvm/profile";
 import { configureJvmCoverage, jvmCoverage } from "./jvm/coverage";
@@ -267,7 +268,7 @@ const wd = {
   },
   // wipe persisted app state (sqlite + prefs + the picked directories) so a run starts fresh
   reset: async () => {
-    await Promise.all([clearRoots(), processBroker().files.clear()]);
+    await Promise.all([clearRoots(), clearPickedDocuments(), processBroker().files.clear()]);
     const gone: string[] = [];
     for (const k of Object.keys(localStorage)) {
       if (k.startsWith("wd:db:") || k.startsWith("wd:prefs:") || k.startsWith("wd:install:") || k.startsWith("wd:keystore:")) { localStorage.removeItem(k); gone.push(k); }

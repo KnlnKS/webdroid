@@ -57,6 +57,14 @@ const signatures = (certificates: Uint8Array[] = []) => {
   rt.link("android/content/pm/Signature");
   return jarray(certificates.map((bytes) => Object.assign(new JSignature(), { bytes: new Int8Array(bytes) })), "Landroid/content/pm/Signature;");
 };
+async function certificateMatches(certificates: Uint8Array[], expected: Int8Array, type: number): Promise<number> {
+  if (type !== 0 && type !== 1) return 0;
+  for (const certificate of certificates) {
+    const bytes = type === 0 ? certificate : await digestBytes("SHA-256", certificate);
+    if (bytes && bytes.length === expected.length && bytes.every((byte, index) => byte === (expected[index]! & 255))) return 1;
+  }
+  return 0;
+}
 rt.register({
   name: "android/content/pm/PackageManager$NameNotFoundException",
   ctor: (() => { const p = rt.link("java/lang/Exception").ctor; return class extends p {}; })(),
@@ -491,8 +499,32 @@ function providerInfo(cls: string, pkg: string, authority: string, n: XmlNode | 
 }
 const mkProviderInfo = (cls: string, n: XmlNode, flags = 0) =>
   providerInfo(cls, appHost?.pkg ?? "", authoritiesOf(n).join(";"), n, flags);
-const sysProviderInfo = ([auth, cls]: [string, string, string]) =>
-  providerInfo(cls, cls.slice(0, cls.lastIndexOf(".")), auth, null);
+const sysProviderInfo = ([auth, cls]: [string, string, string]) => {
+  const pkg = cls.slice(0, cls.lastIndexOf("."));
+  const info = providerInfo(cls, pkg, auth, null) as JProviderInfo;
+  const app = new JApplicationInfo();
+  app.packageName = app.processName = pkg;
+  app.uid = 1000;
+  app.flags = 1;
+  info.applicationInfo = app;
+  info.processName = pkg;
+  return info;
+};
+
+function queryContentProviders(processName: string | null, uid: number, flags: number, nonNull = false): JList | null {
+  const providers: JProviderInfo[] = [];
+  for (const system of systemProviders) {
+    const info = sysProviderInfo(system);
+    if (processName === null || info.processName === processName && uid === info.applicationInfo?.uid) providers.push(info);
+  }
+  for (const owner of packages.values()) for (const [name, node] of owner.components.provider) {
+    const authorities = authoritiesOf(node);
+    if (!authorities.some(Boolean) || !visibleComponent(name, node, flags, owner)) continue;
+    if (processName !== null && (owner.process(node) !== processName || owner.uid !== uid)) continue;
+    providers.push(providerInfo(name, owner.pkg, authorities.join(";"), node, flags, owner) as JProviderInfo);
+  }
+  return providers.length || nonNull ? newArrayList(providers) : null;
+}
 
 function queryProviders(intent: { action?: string | null } | null, flags = 0): JList {
   const action = intent?.action ?? null;
@@ -672,6 +704,7 @@ export function getPM(): JPackageManager {
 rt.register({
   name: "android/content/pm/PackageManager", ctor: JPackageManager,
   statics: { PERMISSION_GRANTED: 0, PERMISSION_DENIED: -1, GET_ACTIVITIES: 1, GET_RECEIVERS: 2, GET_SERVICES: 4, MATCH_DISABLED_COMPONENTS: 0x200, MATCH_SYSTEM_ONLY: 0x100000, MATCH_DIRECT_BOOT_AWARE: 0x80000, MATCH_DIRECT_BOOT_UNAWARE: 0x40000, GET_META_DATA: 128, GET_SIGNATURES: 64,
+    CERT_INPUT_RAW_X509: 0, CERT_INPUT_SHA256: 1,
     COMPONENT_ENABLED_STATE_DEFAULT: 0, COMPONENT_ENABLED_STATE_ENABLED: 1, COMPONENT_ENABLED_STATE_DISABLED: 2,
     DONT_KILL_APP: 1,
     FEATURE_AUDIO_LOW_LATENCY: "android.hardware.audio.low_latency", FEATURE_AUDIO_PRO: "android.hardware.audio.pro", FEATURE_TOUCHSCREEN: "android.hardware.touchscreen",
@@ -781,6 +814,8 @@ rt.register({
     "queryIntentActivities(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Ljava/util/List;": (i: JIntent, f: JInfoFlags) => queryActivities(i, Number(f.value)),
     "queryIntentContentProviders(Landroid/content/Intent;I)Ljava/util/List;": queryProviders,
     "queryIntentContentProviders(Landroid/content/Intent;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Ljava/util/List;": (i: { action?: string | null } | null, flags: JInfoFlags) => queryProviders(i, Number(flags.value)),
+    "queryContentProviders(Ljava/lang/String;II)Ljava/util/List;": queryContentProviders,
+    "queryContentProviders(Ljava/lang/String;ILandroid/content/pm/PackageManager$ComponentInfoFlags;)Ljava/util/List;": (process: string | null, uid: number, flags: JInfoFlags) => queryContentProviders(process, uid, Number(flags.value), true),
     "resolveContentProvider(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;": resolveProvider,
     "resolveContentProvider(Ljava/lang/String;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Landroid/content/pm/ProviderInfo;": (a: string, flags: JInfoFlags) => resolveProvider(a, Number(flags.value)),
     "queryBroadcastReceivers(Landroid/content/Intent;I)Ljava/util/List;": (i: JIntent, f: number) => queryComponents(i, f, "receiver"),
@@ -856,6 +891,19 @@ rt.register({
       const left = await x.visibleCertificates(), right = await y.visibleCertificates();
       if (!left.length || !right.length) return !left.length && !right.length ? 1 : !left.length ? -1 : -2;
       return left.length === right.length && left.every((cert) => right.some((other) => cert.length === other.length && cert.every((v, i) => v === other[i]))) ? 0 : -3;
+    },
+    "hasSigningCertificate(Ljava/lang/String;[BI)Z": async (pkg: string | null, certificate: Int8Array | null, type: number) => {
+      if (pkg === null || certificate === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const record = packages.get(pkg);
+      const certificates = record ? await record.visibleCertificates() : (await installedPackage(pkg))?.archive.certificates ?? [];
+      return certificateMatches(certificates, certificate, type);
+    },
+    "hasSigningCertificate(I[BI)Z": async (uid: number, certificate: Int8Array | null, type: number) => {
+      if (certificate === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      for (const record of packages.values()) {
+        if (record.uid === uid && await certificateMatches(await record.visibleCertificates(), certificate, type)) return 1;
+      }
+      return 0;
     },
     "getInstalledPackages(I)Ljava/util/List;": installedPackages,
     "getInstalledApplications(I)Ljava/util/List;": async (flags: number) => {
@@ -978,15 +1026,26 @@ rt.register({
   },
 });
 class JShortcutManager extends JObj { packages = new Map<string, Map<string, JShortcutInfo>>(); }
+async function dynamicShortcuts(list: unknown, pkg: string): Promise<Map<string, JShortcutInfo>> {
+  const shortcuts = new Map<string, JShortcutInfo>();
+  for (const info of await toJsArray(list)) {
+    if (!(info instanceof JShortcutInfo) || info.pkg !== pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut belongs to another package");
+    const copy = await copyShortcut(info); copy.dynamic = true; shortcuts.set(copy.id, copy);
+  }
+  return shortcuts;
+}
 rt.register({
   name: "android/content/pm/ShortcutManager", ctor: JShortcutManager,
   methods: {
     "setDynamicShortcuts(Ljava/util/List;)Z": async function (this: JShortcutManager, list: unknown) {
-      const pkg = appHost?.pkg ?? "", shortcuts = new Map<string, JShortcutInfo>();
-      for (const info of await toJsArray(list)) {
-        if (!(info instanceof JShortcutInfo) || info.pkg !== pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut belongs to another package");
-        const copy = await copyShortcut(info); copy.dynamic = true; shortcuts.set(copy.id, copy);
-      }
+      const pkg = appHost?.pkg ?? "";
+      this.packages.set(pkg, await dynamicShortcuts(list, pkg)); return 1;
+    },
+    "addDynamicShortcuts(Ljava/util/List;)Z": async function (this: JShortcutManager, list: unknown) {
+      const pkg = appHost?.pkg ?? "";
+      const additions = await dynamicShortcuts(list, pkg);
+      const shortcuts = this.packages.get(pkg) ?? new Map<string, JShortcutInfo>();
+      for (const [id, info] of additions) shortcuts.set(id, info);
       this.packages.set(pkg, shortcuts); return 1;
     },
     "getDynamicShortcuts()Ljava/util/List;": async function (this: JShortcutManager) {
@@ -1000,6 +1059,8 @@ rt.register({
     },
     "removeAllDynamicShortcuts()V": function (this: JShortcutManager) { this.packages.delete(appHost?.pkg ?? ""); },
     "getMaxShortcutCountPerActivity()I": () => 15,
+    "getIconMaxHeight()I": () => Math.round(device.dp(96)),
+    "getIconMaxWidth()I": () => Math.round(device.dp(96)),
     "isRateLimitingActive()Z": () => 0,
     "reportShortcutUsed(Ljava/lang/String;)V": (id: string) => { if (id == null) throw rt.mkThrowable("java/lang/NullPointerException", "shortcutId"); },
     "isRequestPinShortcutSupported()Z": () => 0,

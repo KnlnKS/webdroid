@@ -989,10 +989,18 @@ const relativeMethods: NativeSpec["methods"] = {
           // AOSP getChildMeasureSpec: rules that fix both edges measure the child EXACTLY to the
           // span between them, whatever its layout_width/height (a later rule overrides an
           // earlier one, as in applyHorizontalSizeRules)
-          const lE = lp.rules[RL.ALIGN_PARENT_LEFT] ? this.padL + m.marginL : aL ? anchorPos(aL).l : rOf ? anchorPos(rOf).l + rOf.measuredW + m.marginL : NaN;
-          const rE = lp.rules[RL.ALIGN_PARENT_RIGHT] ? availW - this.padR - m.marginR : aR ? anchorPos(aR).l + aR.measuredW : lOf ? anchorPos(lOf).l - m.marginR : NaN;
-          const tE = lp.rules[RL.ALIGN_PARENT_TOP] ? this.padT + m.marginT : aT ? anchorPos(aT).t : below ? anchorPos(below).t + below.measuredH + m.marginT : NaN;
-          const bE = lp.rules[RL.ALIGN_PARENT_BOTTOM] ? availH - this.padB - m.marginB : aB ? anchorPos(aB).t + aB.measuredH : above ? anchorPos(above).t - m.marginB : NaN;
+          let lE = lp.rules[RL.ALIGN_PARENT_LEFT] ? this.padL + m.marginL : aL ? anchorPos(aL).l : rOf ? anchorPos(rOf).l + rOf.measuredW + m.marginL : NaN;
+          let rE = lp.rules[RL.ALIGN_PARENT_RIGHT] ? availW - this.padR - m.marginR : aR ? anchorPos(aR).l + aR.measuredW : lOf ? anchorPos(lOf).l - m.marginR : NaN;
+          let tE = lp.rules[RL.ALIGN_PARENT_TOP] ? this.padT + m.marginT : aT ? anchorPos(aT).t : below ? anchorPos(below).t + below.measuredH + m.marginT : NaN;
+          let bE = lp.rules[RL.ALIGN_PARENT_BOTTOM] ? availH - this.padB - m.marginB : aB ? anchorPos(aB).t + aB.measuredH : above ? anchorPos(above).t - m.marginB : NaN;
+          if (!wrapW && lp.width === MATCH_PARENT) {
+            if (Number.isNaN(lE)) lE = this.padL + m.marginL;
+            if (Number.isNaN(rE)) rE = availW - this.padR - m.marginR;
+          }
+          if (!wrapH && lp.height === MATCH_PARENT) {
+            if (Number.isNaN(tE)) tE = this.padT + m.marginT;
+            if (Number.isNaN(bE)) bE = availH - this.padB - m.marginB;
+          }
           const spanW = rE - lE, spanH = bE - tE;
           fixedW = spanW === spanW; fixedH = spanH === spanH;
           if (spanW === spanW || spanH === spanH) {

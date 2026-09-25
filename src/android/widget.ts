@@ -1,5 +1,5 @@
 import { AID } from "./res";
-import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, uiState, JViewGroup } from "./view";
+import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, uiState, JViewGroup, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, type JLayoutParams } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild, drawableSize, JLayerDrawable } from "./drawable";
 import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, flagSetters } from "../jvm/runtime";
 import { type JAttrSet, rvColor, obtainStyled, rvInt, rvDimen } from "./res";
@@ -99,15 +99,16 @@ rt.register({
     },
   },
 });
-/** RatingBar reports progress in steps; its star drawable is not implemented. */
-class JRatingBar extends JProgressBar { stars = 5; step = 0.5; ratingL: unknown = null; }
+class JAbsSeekBar extends JProgressBar { keyProgressIncrement = 5; }
 const seekBarMethods: NativeSpec["methods"] = {
-  "setKeyProgressIncrement(I)V": () => {},
+  "setKeyProgressIncrement(I)V": function (this: JAbsSeekBar, increment: number) { this.keyProgressIncrement = increment < 0 ? (-increment | 0) : increment; },
+  "getKeyProgressIncrement()I": function (this: JAbsSeekBar) { return this.keyProgressIncrement; },
   "setThumb(Landroid/graphics/drawable/Drawable;)V": () => {},
-  "setOnSeekBarChangeListener(Landroid/widget/SeekBar$OnSeekBarChangeListener;)V": function (this: JRatingBar, l: unknown) { this.ratingL = l; },
 };
-rt.register({ name: "android/widget/AbsSeekBar", ctor: class extends JRatingBar {}, sup: "android/widget/ProgressBar", methods: seekBarMethods });
-class JSeekBar extends JProgressBar {
+rt.register({ name: "android/widget/AbsSeekBar", ctor: JAbsSeekBar, sup: "android/widget/ProgressBar", methods: seekBarMethods });
+/** RatingBar reports progress in steps; its star drawable is not implemented. */
+class JRatingBar extends JAbsSeekBar { stars = 5; step = 0.5; ratingL: unknown = null; }
+class JSeekBar extends JAbsSeekBar {
   thumb: JDrawable | null = null;
   thumbW = 0; thumbH = 0; thumbOffset = 0;
   secondary = 0;
@@ -219,7 +220,6 @@ rt.markers("android/widget/SeekBar$OnSeekBarChangeListener", "android/widget/Rat
 rt.register({
   name: "android/widget/RatingBar", ctor: JRatingBar, sup: "android/widget/AbsSeekBar",
   methods: {
-    ...seekBarMethods,
     "setNumStars(I)V": function (this: JRatingBar, n: number) { this.stars = n; this.max = Math.round(n / this.step); },
     "setStepSize(F)V": function (this: JRatingBar, s: number) { this.step = s || 1; this.max = Math.round(this.stars / this.step); },
     "setRating(F)V": function (this: JRatingBar, r: number) { this.progress = Math.round(r / this.step); invalidate(); },
@@ -468,10 +468,15 @@ class JRadioGroup extends JLinearLayout {
     invalidate();
   }
 }
+class JRadioLP extends JLinearLP {}
 rt.register({
   name: "android/widget/RadioGroup", ctor: JRadioGroup, sup: "android/widget/LinearLayout",
   methods: {
     ...linearMethods,
+    "generateDefaultLayoutParams()Landroid/view/ViewGroup$LayoutParams;": () => Object.assign(new JRadioLP(), { width: MATCH_PARENT, height: WRAP_CONTENT }),
+    "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;": function (this: JRadioGroup, attrs: JAttrSet) { return lpFromAttrs(new JRadioLP(), this.jres!, attrs); },
+    "generateLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;": (source: JLayoutParams) => { const lp = new JRadioLP(); marginCopy.call(lp, source); return lp; },
+    "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": (lp: unknown) => +(lp instanceof JRadioLP),
     "setOnCheckedChangeListener(Landroid/widget/RadioGroup$OnCheckedChangeListener;)V": function (this: JRadioGroup, l: unknown) {
       this.checkL = l;
     },
@@ -481,6 +486,15 @@ rt.register({
       if (this.checkedId === -1) this.checkedId = this.radios().find((r) => r.checked && rt.iof(r, "android/widget/RadioButton"))?.idNum ?? -1;
       return this.checkedId;
     },
+  },
+});
+rt.register({
+  name: "android/widget/RadioGroup$LayoutParams", ctor: JRadioLP, sup: "android/widget/LinearLayout$LayoutParams",
+  methods: {
+    "<init>(II)V": function (this: JLinearLP, width: number, height: number) { this.width = width; this.height = height; },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
+    "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JLinearLP, source: JLayoutParams) { marginCopy.call(this, source); },
+    "<init>(Landroid/view/ViewGroup$MarginLayoutParams;)V": function (this: JLinearLP, source: JLayoutParams) { marginCopy.call(this, source); },
   },
 });
 rt.markers("android/widget/RadioGroup$OnCheckedChangeListener");

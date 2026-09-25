@@ -695,6 +695,8 @@ export class JMap extends JObj {
   slow: Ent[] = [];                  // custom-equals keys (linear; rare)
   slowVersion = 0;
   access = false;                    // LinkedHashMap accessOrder
+  loadFactor = 0.75;
+  threshold = 0;
   mutable = true;
   identity = false;
 }
@@ -732,9 +734,9 @@ function mapMethods(): Methods {
   return {
     "<init>()V": function () {},
     "<init>(I)V": function () {},
-    "<init>(IF)V": function () {},
+    "<init>(IF)V": function (this: JMap, _capacity: number, factor: number) { this.loadFactor = factor; },
     "<init>(IFI)V": function () {},
-    "<init>(IFZ)V": function (this: JMap, _c: number, _f: number, ao: number) { this.access = !!ao; },
+    "<init>(IFZ)V": function (this: JMap, _capacity: number, factor: number, ao: number) { this.loadFactor = factor; this.access = !!ao; },
     "clone()Ljava/lang/Object;": function (this: JMap) {
       const c = new (this.constructor as new () => JMap)();
       c.access = this.access;
@@ -1082,6 +1084,33 @@ const arrayMapMethods: NativeSpec["methods"] = {
   "ensureCapacity(I)V": () => {},
 };
 const mapExtras: Record<string, NativeSpec["methods"]> = {
+  "java/util/HashMap": {
+    "writeObject(Ljava/io/ObjectOutputStream;)V": async function (this: JMap, stream: unknown) {
+      const entries = [...allEnts(this)];
+      await vcall(stream, "defaultWriteObject", "()V");
+      await vcall(stream, "writeInt", "(I)V", Math.min(1 << 30, 2 ** Math.ceil(Math.log2(Math.max(16, entries.length / this.loadFactor)))));
+      await vcall(stream, "writeInt", "(I)V", entries.length);
+      for (const entry of entries) {
+        await vcall(stream, "writeObject", "(Ljava/lang/Object;)V", entry.k);
+        await vcall(stream, "writeObject", "(Ljava/lang/Object;)V", entry.v);
+      }
+      if (this.m.size + this.slow.length !== entries.length) throw rt.mkThrowable("java/util/ConcurrentModificationException", null);
+    },
+    "readObject(Ljava/io/ObjectInputStream;)V": async function (this: JMap, stream: unknown) {
+      await vcall(stream, "defaultReadObject", "()V");
+      const capacity = await vcall(stream, "readInt", "()I");
+      const count = await vcall(stream, "readInt", "()I");
+      if (!(this.loadFactor > 0) || !Number.isFinite(this.loadFactor) || capacity < 0 || count < 0) {
+        throw rt.mkThrowable("java/io/InvalidObjectException", "Invalid map capacity, load factor or size");
+      }
+      this.m.clear(); this.slow.length = 0;
+      for (let i = 0; i < count; i++) {
+        const key = await vcall(stream, "readObject", "()Ljava/lang/Object;");
+        const value = await vcall(stream, "readObject", "()Ljava/lang/Object;");
+        await vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
+      }
+    },
+  },
   "java/util/EnumMap": { "<init>(Ljava/lang/Class;)V": function () {} },
   "android/util/ArrayMap": arrayMapMethods,
   "java/util/concurrent/ConcurrentHashMap": {
@@ -1109,6 +1138,12 @@ for (const n of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/conc
   }
   rt.register({
     name: n, ctor: n === "java/util/IdentityHashMap" ? JIdentityHashMap : class extends JMap {}, typeVars: "K,V",
+    serialization: n === "java/util/HashMap" ? { uid: 362498820763181265n, fields: [
+      { name: "loadFactor", desc: "F", prop: "loadFactor" },
+      { name: "threshold", desc: "I", prop: "threshold" },
+    ] } : n === "java/util/LinkedHashMap" ? { uid: 3801124242820219131n, fields: [
+      { name: "accessOrder", desc: "Z", prop: "access" },
+    ] } : undefined,
     sup: n === "java/util/LinkedHashMap" ? "java/util/HashMap" : n === "android/util/ArrayMap" ? "java/lang/Object" : "java/util/AbstractMap",
     ifaces: ["java/util/Map", ...(n === "java/util/concurrent/ConcurrentHashMap" ? ["java/util/concurrent/ConcurrentMap"] : []),
       ...(["java/util/WeakHashMap", "android/util/ArrayMap"].includes(n) ? [] : ["java/lang/Cloneable", "java/io/Serializable"])],
@@ -2358,7 +2393,7 @@ rt.register({ name: "java/util/ListIterator", ctor: class extends JObj {}, iface
 // compiles its own real method (get/apply/accept/test/...), so callers just
 // vcall() the selector by name. Only the marker registration is needed.
 for (const f of ["Supplier", "Function", "BiFunction", "Consumer", "BiConsumer", "Predicate",
-  "BiPredicate", "ToIntFunction", "ToLongFunction", "ToDoubleFunction", "IntFunction",
+  "BiPredicate", "ToIntFunction", "ToLongFunction", "ToDoubleFunction", "IntFunction", "LongFunction",
   "UnaryOperator", "BinaryOperator", "IntPredicate", "IntConsumer", "IntSupplier", "IntUnaryOperator",
   "LongUnaryOperator", "IntBinaryOperator", "LongBinaryOperator"]) {
   rt.register({ name: "java/util/function/" + f, ctor: class extends JObj {} });
@@ -2426,6 +2461,11 @@ rt.register({
     "static stream([Ljava/lang/Object;)Ljava/util/stream/Stream;": (arr: unknown[]) => {
       const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
       stream.a = arr.slice();
+      return stream;
+    },
+    "static stream([J)Ljava/util/stream/LongStream;": (arr: BigInt64Array) => {
+      const stream = rt.make("java/util/stream/LongStream") as JObj & { a: bigint[] };
+      stream.a = Array.from(arr);
       return stream;
     },
     ...Object.fromEntries([..."BCSIJFD"].flatMap((t) => [[`static sort([${t})V`, taSort], [`static sort([${t}II)V`, taSort]])),

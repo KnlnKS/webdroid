@@ -12,6 +12,7 @@
 import { rt } from "../jvm/runtime";
 import { JOutputStream, streamOf, type JInputStream } from "../jvm/natives/jio";
 import { pickDirectory, pickFiles, rootHandles } from "../shell/hostfs";
+import { openDb, txDone } from "../shell/idb";
 
 export const DOCS_AUTHORITY = "com.android.externalstorage.documents";
 
@@ -79,7 +80,37 @@ export const docCells = (r: DocRow) => [r.id, r.name, r.mime, r.size, r.modified
 /** Loose files (an OPEN_DOCUMENT / CREATE_DOCUMENT result) have no tree above them, so they get
  *  a volume of their own rather than a path. */
 const loose = new Map<string, FileSystemFileHandle>();
-let looseSeq = 0;
+
+async function savedFile(vol: string): Promise<FileSystemFileHandle | undefined> {
+  const db = await openDb("webdroid-documents", "files");
+  try {
+    return await new Promise((resolve, reject) => {
+      const request = db.transaction("files", "readonly").objectStore("files").get(vol);
+      request.onsuccess = () => resolve(request.result as FileSystemFileHandle | undefined);
+      request.onerror = () => reject(request.error);
+    });
+  } finally { db.close(); }
+}
+
+async function saveFile(vol: string, h: FileSystemFileHandle): Promise<void> {
+  const db = await openDb("webdroid-documents", "files");
+  try {
+    const transaction = db.transaction("files", "readwrite");
+    transaction.objectStore("files").put(h, vol);
+    await txDone(transaction);
+  } finally { db.close(); }
+}
+
+export async function clearPickedDocuments(): Promise<void> {
+  loose.clear();
+  cache.clear();
+  const db = await openDb("webdroid-documents", "files");
+  try {
+    const transaction = db.transaction("files", "readwrite");
+    transaction.objectStore("files").clear();
+    await txDone(transaction);
+  } finally { db.close(); }
+}
 
 const cache = new Map<string, FileSystemHandle>();
 
@@ -96,6 +127,10 @@ async function resolveDoc(docId: string): Promise<FileSystemHandle | null> {
   if (hit) return hit;
   const [vol, segs] = split(docId);
   let h: FileSystemHandle | undefined = loose.get(vol) ?? rootHandles().get(vol);
+  if (!h && vol.startsWith("single-")) {
+    h = await savedFile(vol).catch(() => undefined);
+    if (h?.kind === "file") loose.set(vol, h as FileSystemFileHandle);
+  }
   for (const seg of segs) {
     if (!h || h.kind !== "directory") return null;
     const dir = h as FileSystemDirectoryHandle;
@@ -200,17 +235,18 @@ export async function pickTree(): Promise<string | null> {
   return `content://${DOCS_AUTHORITY}/tree/${enc(h.name + ":")}`;
 }
 
-function looseDocUri(h: FileSystemFileHandle): string {
-  const vol = "single-" + ++looseSeq;
+async function looseDocUri(h: FileSystemFileHandle): Promise<string> {
+  const vol = "single-" + crypto.randomUUID();
   loose.set(vol, h);
   cache.set(vol + ":", h);
+  await saveFile(vol, h).catch(() => {});
   return `content://${DOCS_AUTHORITY}/document/${enc(vol + ":")}`;
 }
 /** OPEN_DOCUMENT / GET_CONTENT / CREATE_DOCUMENT: one file, named by a document URI of its own,
  *  since a file the user picked outside a tree has no tree to be relative to. */
 export async function pickDocument(opts: { save?: string; mime?: string | null }): Promise<string | null> {
   const picked = await pickFiles(opts);
-  return picked?.length ? looseDocUri(picked[0]!) : null;
+  return picked?.length ? await looseDocUri(picked[0]!) : null;
 }
 
 // ── the streams ContentResolver hands out for a document

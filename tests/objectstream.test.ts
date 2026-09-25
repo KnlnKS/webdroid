@@ -30,6 +30,27 @@ test("ObjectOutputStream writes a complete object before explicit flush", async 
   expect(await vcall(uuid, "getLeastSignificantBits", "()J")).toBe(2n);
 });
 
+test("serialized linked maps retain entries, access order and secret keys", async () => {
+  const map = await newObj("java/util/LinkedHashMap", "(IFZ)V", 16, 0.75, 1);
+  const key = await newObj("javax/crypto/spec/SecretKeySpec", "([BLjava/lang/String;)V", new Int8Array([1, -2, 3]), "AES");
+  await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "key", key);
+  await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "other", "value");
+  const target = await newObj("java/io/ByteArrayOutputStream", "()V");
+  const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", target);
+  await vcall(output, "writeObject", "(Ljava/lang/Object;)V", map);
+  const source = await newObj("java/io/ByteArrayInputStream", "([B)V", await vcall(target, "toByteArray", "()[B"));
+  const input = await newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source);
+  const restored = await vcall(input, "readObject", "()Ljava/lang/Object;");
+  expect(await vcall(restored, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "other")).toBe("value");
+  const restoredKey = await vcall(restored, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "key");
+  expect(await vcall(restoredKey, "getAlgorithm", "()Ljava/lang/String;")).toBe("AES");
+  expect([...await vcall(restoredKey, "getEncoded", "()[B")]).toEqual([1, -2, 3]);
+  const entries = await vcall(restored, "keySet", "()Ljava/util/Set;");
+  const iterator = await vcall(entries, "iterator", "()Ljava/util/Iterator;");
+  expect(await vcall(iterator, "next", "()Ljava/lang/Object;")).toBe("other");
+  expect(await vcall(iterator, "next", "()Ljava/lang/Object;")).toBe("key");
+});
+
 test("unmodifiable random-access lists retain their serialized read-only view", async () => {
   const list = await newObj("java/util/ArrayList", "()V");
   await vcall(list, "add", "(Ljava/lang/Object;)Z", "saved");

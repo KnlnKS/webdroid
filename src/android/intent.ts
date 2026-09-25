@@ -9,7 +9,7 @@ import { newLinkedHashSet } from "../jvm/natives/jutil";
 import type { JContext } from "./context";
 import type { JActivity } from "./app";
 import { onMain } from "./mainloop";
-import { vcall, defineException } from "../jvm/natives/jlang";
+import { vcall, defineException, stringHash } from "../jvm/natives/jlang";
 import { TV, type XmlAttr, type XmlNode } from "./axml";
 import { normRV } from "./res";
 
@@ -51,6 +51,17 @@ function putExtras(this: JIntent, source: JBundle | JIntent) {
   if (extras) for (const [key, value] of extras.map) this.extras.map.set(key, value);
   return this;
 }
+function createChooser(target: JIntent, title: unknown, sender?: unknown): JIntent {
+  if (!target) rt.npe();
+  const chooser = new JIntent();
+  chooser.action = "android.intent.action.CHOOSER";
+  chooser.extras.map.set("android.intent.extra.INTENT", target);
+  if (title !== null) chooser.extras.map.set("android.intent.extra.TITLE", title);
+  if (sender) chooser.extras.map.set("android.intent.extra.CHOSEN_COMPONENT_INTENT_SENDER", sender);
+  chooser.flags = target.flags & 3;
+  chooser.clipData = target.clipData;
+  return chooser;
+}
 async function readIntent(p: JParcel, intent = new JIntent()): Promise<JIntent> {
   rt.link("android/content/Intent");
   intent.action = readString8(p); intent.dataUri = (await readUri(p))?.uri ?? null;
@@ -83,16 +94,21 @@ async function writeIntent(this: JIntent, p: JParcel, flags: number): Promise<vo
   writeInt(p, this.contentUserHint); await vcall(p, "writeBundle", "(Landroid/os/Bundle;)V", this.extras.map.size ? this.extras : null);
   writeInt(p, +!!this.originalIntent); if (this.originalIntent) await vcall(this.originalIntent, "writeToParcel", "(Landroid/os/Parcel;I)V", p, flags);
 }
-async function parseIntentXml(_resources: unknown, parser: unknown, attrs: unknown): Promise<JIntent> {
+async function parseIntentXml(resources: unknown, parser: unknown, attrs: unknown): Promise<JIntent> {
   if (!parser || !attrs) rt.npe();
-  const attribute = (name: string) => vcall(attrs, "getAttributeValue", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "http://schemas.android.com/apk/res/android", name) as Promise<string | null>;
+  const attribute = (name: string): Promise<string | null> => {
+    const value = (attrs as { node?: XmlNode | null }).node?.attrs.find((a: XmlAttr) => a.name === name);
+    return value?.type === TV.REFERENCE
+      ? vcall(resources, "getString", "(I)Ljava/lang/String;", value.data) as Promise<string>
+      : vcall(attrs, "getAttributeValue", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "http://schemas.android.com/apk/res/android", name) as Promise<string | null>;
+  };
   const intent = new JIntent();
   intent.action = await attribute("action");
   intent.dataUri = await attribute("data");
   intent.typeStr = await attribute("mimeType");
   intent.identifier = await attribute("identifier");
-  intent.componentPkg = await attribute("targetPackage");
-  intent.component = await attribute("targetClass");
+  const targetPackage = await attribute("targetPackage"), targetClass = await attribute("targetClass");
+  if (targetPackage && targetClass) { intent.componentPkg = targetPackage; intent.component = targetClass; }
   const outerDepth = await vcall(parser, "getDepth", "()I") as number;
   for (;;) {
     const type = await vcall(parser, "next", "()I") as number;
@@ -211,10 +227,8 @@ const intentMethods: NativeSpec["methods"] = {
     const i = this.dataUri?.indexOf(":") ?? -1;
     return i > 0 ? this.dataUri!.slice(0, i) : null;
   },
-  // A chooser needs a chooser activity; with none installed the target intent is what launches,
-  // which is what AOSP falls back to when nothing can handle ACTION_CHOOSER.
-  "static createChooser(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent;": (t: JIntent) => t,
-  "static createChooser(Landroid/content/Intent;Ljava/lang/CharSequence;Landroid/content/IntentSender;)Landroid/content/Intent;": (t: JIntent) => t,
+  "static createChooser(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent;": createChooser,
+  "static createChooser(Landroid/content/Intent;Ljava/lang/CharSequence;Landroid/content/IntentSender;)Landroid/content/Intent;": createChooser,
   "static makeMainActivity(Landroid/content/ComponentName;)Landroid/content/Intent;": (c: JComponentName) => {
     const i = new JIntent();
     i.action = "android.intent.action.MAIN";
@@ -249,7 +263,7 @@ const intentMethods: NativeSpec["methods"] = {
   },
 };
 for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I", 0], ["Long", "J", 0n],
-  ["Boolean", "Z", 0], ["Float", "F", 0], ["Double", "D", 0], ["CharSequence", "Ljava/lang/CharSequence;", null],
+  ["Boolean", "Z", 0], ["Char", "C", 0], ["Float", "F", 0], ["Double", "D", 0], ["CharSequence", "Ljava/lang/CharSequence;", null],
   ["Parcelable", "Landroid/os/Parcelable;", null], ["Serializable", "Ljava/io/Serializable;", null],
   ["Bundle", "Landroid/os/Bundle;", null],
   ["IntArray", "[I", null], ["ByteArray", "[B", null], ["StringArray", "[Ljava/lang/String;", null],
@@ -262,7 +276,7 @@ for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I",
     if (d.length === 1) return bundlePrimitive(this.extras.map.get(k), d, dflt);
     return this.extras.map.get(k) ?? dflt;
   };
-  if (d === "I" || d === "J" || d === "Z" || d === "F" || d === "D") {
+  if (d === "I" || d === "J" || d === "Z" || d === "C" || d === "F" || d === "D") {
     intentMethods[`get${t}Extra(Ljava/lang/String;${d})${d}`] = function (this: JIntent, k: string, dv: unknown) {
       const v = this.extras.map.get(k);
       return bundlePrimitive(v, d, dv);
@@ -305,6 +319,7 @@ rt.register({
     get CREATOR() { return parcelCreator("android/content/Intent", readIntent); },
     ACTION_MAIN: "android.intent.action.MAIN", ACTION_VIEW: "android.intent.action.VIEW",
     ACTION_SEND: "android.intent.action.SEND", ACTION_EDIT: "android.intent.action.EDIT",
+    ACTION_SEND_MULTIPLE: "android.intent.action.SEND_MULTIPLE", ACTION_CHOOSER: "android.intent.action.CHOOSER",
     ACTION_PICK: "android.intent.action.PICK", ACTION_GET_CONTENT: "android.intent.action.GET_CONTENT",
     ACTION_CREATE_DOCUMENT: "android.intent.action.CREATE_DOCUMENT", ACTION_OPEN_DOCUMENT: "android.intent.action.OPEN_DOCUMENT",
     ACTION_OPEN_DOCUMENT_TREE: "android.intent.action.OPEN_DOCUMENT_TREE",
@@ -341,8 +356,11 @@ export function mkComponentName(pkg: string, cls: string): JComponentName {
   c.pkg = pkg; c.cls = cls;
   return c;
 }
+const shortClassName = (c: JComponentName) => c.cls.startsWith(c.pkg + ".") ? c.cls.slice(c.pkg.length) : c.cls;
+const compareComponents = (a: JComponentName, b: JComponentName) =>
+  a.pkg < b.pkg ? -1 : a.pkg > b.pkg ? 1 : a.cls < b.cls ? -1 : a.cls > b.cls ? 1 : 0;
 rt.register({
-  name: "android/content/ComponentName", ctor: JComponentName, ifaces: ["android/os/Parcelable"],
+  name: "android/content/ComponentName", ctor: JComponentName, ifaces: ["android/os/Parcelable", "java/lang/Comparable"],
   statics: { get CREATOR() { return parcelCreator("android/content/ComponentName", async p => readComponent(p)); } },
   methods: {
     "writeToParcel(Landroid/os/Parcel;I)V": function (this: JComponentName, p: JParcel) { writeComponent(this, p); },
@@ -359,9 +377,19 @@ rt.register({
       this.cls = cls?.ci?.name?.replace(/\//g, ".") ?? "";
     },
     "getClassName()Ljava/lang/String;": function (this: JComponentName) { return this.cls; },
+    "getShortClassName()Ljava/lang/String;": function (this: JComponentName) { return shortClassName(this); },
     "getPackageName()Ljava/lang/String;": function (this: JComponentName) { return this.pkg; },
     "flattenToString()Ljava/lang/String;": function (this: JComponentName) { return this.pkg + "/" + this.cls; },
-    "flattenToShortString()Ljava/lang/String;": function (this: JComponentName) { return this.pkg + "/" + (this.cls.startsWith(this.pkg + ".") ? this.cls.slice(this.pkg.length) : this.cls); },
+    "flattenToShortString()Ljava/lang/String;": function (this: JComponentName) { return this.pkg + "/" + shortClassName(this); },
+    "compareTo(Landroid/content/ComponentName;)I": function (this: JComponentName, other: JComponentName) { return compareComponents(this, other); },
+    "compareTo(Ljava/lang/Object;)I": function (this: JComponentName, other: JComponentName) {
+      if (!(other instanceof JComponentName)) throw rt.mkThrowable("java/lang/ClassCastException", "ComponentName required");
+      return compareComponents(this, other);
+    },
+    "equals(Ljava/lang/Object;)Z": function (this: JComponentName, other: unknown) {
+      return +(other instanceof JComponentName && this.pkg === other.pkg && this.cls === other.cls);
+    },
+    "hashCode()I": function (this: JComponentName) { return (stringHash(this.pkg) + stringHash(this.cls)) | 0; },
   },
 });
 
@@ -377,6 +405,14 @@ export const activityTransport: {
 } = {};
 /** `sender` is the package whose identity the start carries (a PendingIntent's creator) */
 export async function launchIntent(host: AppHost, intent: JIntent, result?: ActivityResultTarget, sender = host.pkg) {
+  const system = intent?.component ? null : systemActivities[intent?.action ?? ""];
+  if (system) {
+    void system(intent).then(
+      (data) => { if (result) deliverActivityResult(result.act, result.code, data ? RESULT_OK : RESULT_CANCELED, data); },
+      (error) => { reportUncaught(error); if (result) deliverActivityResult(result.act, result.code, RESULT_CANCELED, null); },
+    );
+    return;
+  }
   const { getPM } = await import("./pm");
   const resolved = await vcall(getPM(), "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", intent, 0x10000);
   if (!resolved?.activityInfo) throw rt.mkThrowable("android/content/ActivityNotFoundException", "No activity found for " + intent.action);
@@ -404,9 +440,10 @@ export const systemActivities: Record<string, (intent: JIntent) => Promise<JInte
 export function registerSystemActivity(action: string, run: (intent: JIntent) => Promise<JIntent | null>) {
   systemActivities[action] = run;
 }
-export function mkResultIntent(uri: string): JIntent {
+export function mkResultIntent(uri: string, flags = 3 | 0x40): JIntent {
   const i = new JIntent();
   i.dataUri = uri;
+  i.flags = flags;
   return i;
 }
 
@@ -414,6 +451,10 @@ export function mkResultIntent(uri: string): JIntent {
  *  usually mid-click-handler, and androidx dispatches straight into app code from here. */
 export function deliverActivityResult(act: JActivity, code: number, resultCode: number, data: JIntent | null) {
   setTimeout(() => void onMain(async () => {
+    if (resultCode === RESULT_OK && data?.dataUri && (data.flags & 3)) {
+      const { grantUriPermission } = await import("./contentresolver");
+      grantUriPermission(act.$host.pkg, mkUri(data.dataUri), data.flags);
+    }
     const target = act.fragmentResults.get(code);
     if (target) {
       act.fragmentResults.delete(code);

@@ -187,12 +187,28 @@ const rsaSpki = (n: bigint, e: bigint) => Uint8Array.from(tlv(0x30, [...rsaAlg, 
 const rsaPkcs8 = (parts: bigint[]) => Uint8Array.from(tlv(0x30, [...tlv(2, [0]), ...rsaAlg, ...tlv(4, tlv(0x30, parts.flatMap(big)))]));
 const RSA_CRT = ["n", "e", "d", "p", "q", "dp", "dq", "qinv"];
 const BI = "Ljava/math/BigInteger;", KEY_SPEC = ["java/security/spec/KeySpec"];
+class JRSAKeyGenParameterSpec extends JObj { keysize = 0; publicExponent: JBigInteger | null = null; keyParams: unknown = null; }
+rt.register({ name: "java/security/spec/RSAKeyGenParameterSpec", ctor: JRSAKeyGenParameterSpec,
+  ifaces: ["java/security/spec/AlgorithmParameterSpec"], statics: { F0: mkBI(3n), F4: mkBI(65537n) },
+  methods: {
+    "<init>(ILjava/math/BigInteger;)V": function (this: JRSAKeyGenParameterSpec, size: number, exponent: JBigInteger) {
+      this.keysize = size; this.publicExponent = exponent;
+    },
+    "<init>(ILjava/math/BigInteger;Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JRSAKeyGenParameterSpec, size: number, exponent: JBigInteger, params: unknown) {
+      this.keysize = size; this.publicExponent = exponent; this.keyParams = params;
+    },
+    "getKeysize()I": function (this: JRSAKeyGenParameterSpec) { return this.keysize; },
+    "getPublicExponent()Ljava/math/BigInteger;": function (this: JRSAKeyGenParameterSpec) { return this.publicExponent; },
+    "getKeyParams()Ljava/security/spec/AlgorithmParameterSpec;": function (this: JRSAKeyGenParameterSpec) { return this.keyParams; },
+  },
+});
 valueClass("java/security/spec/RSAPublicKeySpec", ["n", "e"], `(${BI}${BI})V`, [[`getModulus()${BI}`, "n"], [`getPublicExponent()${BI}`, "e"]], KEY_SPEC);
 valueClass("java/security/spec/RSAPrivateKeySpec", ["n", "d"], `(${BI}${BI})V`, [[`getModulus()${BI}`, "n"], [`getPrivateExponent()${BI}`, "d"]], KEY_SPEC);
 valueClass("java/security/spec/RSAPrivateCrtKeySpec", RSA_CRT, `(${BI.repeat(8)})V`, [[`getPublicExponent()${BI}`, "e"], [`getPrimeP()${BI}`, "p"],
   [`getPrimeQ()${BI}`, "q"], [`getPrimeExponentP()${BI}`, "dp"], [`getPrimeExponentQ()${BI}`, "dq"], [`getCrtCoefficient()${BI}`, "qinv"]], [], "java/security/spec/RSAPrivateKeySpec");
 
 class JKeyFactory extends JObj { algo = "EC"; }
+rt.register({ name: "java/security/KeyFactorySpi", ctor: class extends JObj {}, methods: { "<init>()V": () => {} } });
 const keyFactory = (algo: string) => {
   const a = String(algo).toUpperCase();
   if (a !== "EC" && a !== "RSA") throw rt.mkThrowable("java/security/NoSuchAlgorithmException", algo + " KeyFactory not available");

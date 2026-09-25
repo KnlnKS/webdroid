@@ -6,7 +6,7 @@ import {
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { jarray } from "../jvm/abi";
-import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "./os";
+import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME, mkPfd } from "./os";
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
@@ -32,6 +32,7 @@ import { transactionCaller } from "./binder";
 import { packages } from "./packages";
 import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
 import { clipboardMethods } from "./clipboard";
+import { JActionMode, startActionMode } from "./actionmode";
 
 export { fireActivityLifecycle } from "./lifecycle";
 
@@ -129,6 +130,7 @@ export class JActivity extends JContextWrapper {
   hasWindowFocus = false;
   actionBarObj: any = null;
   optionsMenu: JMenu | null = null;
+  actionMode: JActionMode | null = null;
   resultCode = 0;
   resultData: JIntent | null = null;
   /** who asked for this activity's result, and under which request code */
@@ -177,6 +179,12 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     m.jctx = this;
     return m;
   },
+  "startActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;": function (this: JActivity, cb: unknown) {
+    return startActionMode(this, cb);
+  },
+  "startActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;": function (this: JActivity, cb: unknown, _type: number) {
+    return startActionMode(this, cb);
+  },
   "setContentView(I)V": async function (this: JActivity, layoutId: number) {
     await ensureDecor(this);
     for (const child of [...this.window.contentParent!.children]) await detachView(this.window.contentParent!, child);
@@ -212,7 +220,10 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "onResume()V": async function (this: JActivity) { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); },
   "onPause()V": function (this: JActivity) { this.resumed = false; return dispatchFragLifecycle(this, "onPause"); },
   "onStop()V": function (this: JActivity) { this.started = false; return dispatchFragLifecycle(this, "onStop"); },
-  "onDestroy()V": function (this: JActivity) { return dispatchFragLifecycle(this, "onDestroy"); },
+  "onDestroy()V": async function (this: JActivity) {
+    if (this.actionMode) await vcall(this.actionMode, "finish", "()V");
+    await dispatchFragLifecycle(this, "onDestroy");
+  },
   /**
    * AOSP Activity.onBackPressed: collapse an expanded action view, then pop the fragment
    * back stack, and only if neither consumed the press, finish. androidx apps land here as
@@ -406,7 +417,8 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     "overridePendingTransition(II)V", "startPostponedEnterTransition()V", "reportFullyDrawn()V",
     "setVolumeControlStream(I)V", "setDefaultKeyMode(I)V", "showDialog(I)V", "dismissDialog(I)V",
     "setFinishOnTouchOutside(Z)V"),
-  ...stubs(1, "onCreateOptionsMenu(Landroid/view/Menu;)Z", "onPrepareOptionsMenu(Landroid/view/Menu;)Z"),
+  ...stubs(1, "onCreateOptionsMenu(Landroid/view/Menu;)Z", "onPrepareOptionsMenu(Landroid/view/Menu;)Z",
+    "onMenuOpened(ILandroid/view/Menu;)Z"),
   ...stubs(0, "onOptionsItemSelected(Landroid/view/MenuItem;)Z", "onSearchRequested()Z",
     "onSearchRequested(Landroid/view/SearchEvent;)Z", "onKeyDown(ILandroid/view/KeyEvent;)Z",
     "onKeyUp(ILandroid/view/KeyEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
@@ -1034,6 +1046,7 @@ function callingPackage(): string | null {
   if (caller) for (const record of packages.values()) if (record.uid === caller.uid) return record.pkg;
   return null;
 }
+let pipeId = 0;
 rt.register({
   name: "android/content/ContentProvider", ctor: class extends JObj { $ctx: unknown = null; },
   methods: {
@@ -1052,8 +1065,22 @@ rt.register({
       this.$ctx = c;
       await vcall(this, "onCreate", "()Z");
     },
+    "bulkInsert(Landroid/net/Uri;[Landroid/content/ContentValues;)I": async function (this: JObj, uri: unknown, values: unknown[]) {
+      if (!uri || !values) rt.npe();
+      for (const value of values) await vcall(this, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", uri, value);
+      return values.length;
+    },
+    "openPipeHelper(Landroid/net/Uri;Ljava/lang/String;Landroid/os/Bundle;Ljava/lang/Object;Landroid/content/ContentProvider$PipeDataWriter;)Landroid/os/ParcelFileDescriptor;":
+      async (uri: unknown, mime: string, opts: unknown, args: unknown, writer: unknown) => {
+        let bytes = new Uint8Array(0);
+        const output = mkPfd(bytes, (value) => { bytes = value.slice(); }, `pipe:${++pipeId}`);
+        try { await vcall(writer, "writeDataToPipe", "(Landroid/os/ParcelFileDescriptor;Landroid/net/Uri;Ljava/lang/String;Landroid/os/Bundle;Ljava/lang/Object;)V", output, uri, mime, opts, args); }
+        finally { await vcall(output, "close", "()V"); }
+        return mkPfd(bytes, null);
+      },
   },
 });
+rt.markers("android/content/ContentProvider$PipeDataWriter");
 
 rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content/ContextWrapper",
   ifaces: ["android/content/ComponentCallbacks2", "android/content/ComponentCallbacks"],
@@ -1072,6 +1099,7 @@ rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content
     "startForeground(ILandroid/app/Notification;)V": function (this: JObj) { svcFg(this, true); },
     "startForeground(ILandroid/app/Notification;I)V": function (this: JObj) { svcFg(this, true); }, // the type is advisory
     "stopForeground(Z)V": function (this: JObj) { svcFg(this, false); },
+    "stopForeground(I)V": function (this: JObj) { svcFg(this, false); },
   } });
 rt.register({
   name: "android/media/MediaRoute2ProviderService", ctor: class extends JService {}, sup: "android/app/Service",

@@ -98,6 +98,25 @@ test("removeCallbacksAndMessages cancels queued messages and runnables", async (
   expect(runnable.runs).toBe(1);
 });
 
+test("removeCallbacksAndMessages keeps work belonging to another token", async () => {
+  const handler = new RecordingHandler();
+  const removedToken = new JObj(), keptToken = new JObj();
+  const removed = new RecordingRunnable(), kept = new RecordingRunnable();
+  await onMain(async () => {
+    const first = message(3, 1), second = message(3, 2);
+    first.obj = removedToken; second.obj = keptToken;
+    await vcall(handler, "sendMessage", "(Landroid/os/Message;)Z", first);
+    await vcall(handler, "sendMessage", "(Landroid/os/Message;)Z", second);
+    await vcall(handler, "postDelayed", "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z", removed, removedToken, 0n);
+    await vcall(handler, "postDelayed", "(Ljava/lang/Runnable;Ljava/lang/Object;J)Z", kept, keptToken, 0n);
+    await vcall(handler, "removeCallbacksAndMessages", "(Ljava/lang/Object;)V", removedToken);
+  });
+  await onMain(() => {});
+  expect(handler.delivered).toEqual([2]);
+  expect(removed.runs).toBe(0);
+  expect(kept.runs).toBe(1);
+});
+
 test("a long-lived Handler releases completed callback keys", async () => {
   const handler = new RecordingHandler();
   await onMain(() => {
