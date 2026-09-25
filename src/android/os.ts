@@ -949,20 +949,21 @@ rt.markers("android/view/KeyEvent$Callback");
 
 // Observable / DataSetObservable. `mObservers` is the protected ArrayList subclasses walk
 // directly (RecyclerView's AdapterDataObservable does), so it is a real java.util.ArrayList.
-class JObservable extends JObj {
+export class JObservable extends JObj {
   list = newArrayList();
   get observers(): unknown[] { return this.list.a; }
+}
+export function registerDatabaseObserver(this: JObservable, o: unknown): void {
+  if (o == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "The observer is null.");
+  if (this.observers.includes(o)) throw rt.mkThrowable("java/lang/IllegalStateException", "Observer " + o + " is already registered.");
+  this.observers.push(o);
 }
 rt.register({
   name: "android/database/Observable", ctor: JObservable,
   fields: { mObservers: "list" },
   methods: {
     "<init>()V": function () {},
-    "registerObserver(Ljava/lang/Object;)V": function (this: JObservable, o: unknown) {
-      if (o == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "The observer is null.");
-      if (this.observers.includes(o)) throw rt.mkThrowable("java/lang/IllegalStateException", "Observer " + o + " is already registered.");
-      this.observers.push(o);
-    },
+    "registerObserver(Ljava/lang/Object;)V": registerDatabaseObserver,
     "unregisterObserver(Ljava/lang/Object;)V": function (this: JObservable, o: unknown) {
       if (o == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "The observer is null.");
       const i = this.observers.indexOf(o);
