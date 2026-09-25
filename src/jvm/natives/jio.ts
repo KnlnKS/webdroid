@@ -1263,6 +1263,70 @@ rt.register({
     },
   },
 });
+class JFilterReader extends JReader { in: JReader | null = null; }
+const filterInput = (r: JFilterReader) => {
+  if (!r.in) throw rt.mkThrowable("java/io/IOException", "Reader is closed");
+  return r.in;
+};
+rt.register({
+  name: "java/io/FilterReader", ctor: JFilterReader, sup: "java/io/Reader", fields: ["in"],
+  methods: {
+    "<init>(Ljava/io/Reader;)V": function (this: JFilterReader, input: JReader) { if (!input) return rt.npe(); this.in = input; },
+    "read()I": function (this: JFilterReader) { return vcall(filterInput(this), "read", "()I"); },
+    "read([CII)I": function (this: JFilterReader, out: Uint16Array, off: number, len: number) { return vcall(filterInput(this), "read", "([CII)I", out, off, len); },
+    "ready()Z": function (this: JFilterReader) { return vcall(filterInput(this), "ready", "()Z"); },
+    "skip(J)J": function (this: JFilterReader, n: bigint) { return vcall(filterInput(this), "skip", "(J)J", n); },
+    "markSupported()Z": function (this: JFilterReader) { return vcall(filterInput(this), "markSupported", "()Z"); },
+    "mark(I)V": function (this: JFilterReader, limit: number) { return vcall(filterInput(this), "mark", "(I)V", limit); },
+    "reset()V": function (this: JFilterReader) { return vcall(filterInput(this), "reset", "()V"); },
+    "close()V": function (this: JFilterReader) { const input = this.in; this.in = null; return input ? vcall(input, "close", "()V") : undefined; },
+  },
+});
+class JPushbackReader extends JFilterReader { push: number[] = []; capacity = 1; }
+function unreadChars(r: JPushbackReader, chars: Uint16Array, off: number, len: number): void {
+  filterInput(r);
+  if (!chars) return rt.npe();
+  if (off < 0 || len < 0 || off > chars.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  if (r.push.length + len > r.capacity) throw rt.mkThrowable("java/io/IOException", "Pushback buffer full");
+  for (let i = off + len - 1; i >= off; i--) r.push.push(chars[i]);
+}
+rt.register({
+  name: "java/io/PushbackReader", ctor: JPushbackReader, sup: "java/io/FilterReader",
+  methods: {
+    "<init>(Ljava/io/Reader;)V": function (this: JPushbackReader, input: JReader) { if (!input) return rt.npe(); this.in = input; },
+    "<init>(Ljava/io/Reader;I)V": function (this: JPushbackReader, input: JReader, size: number) {
+      if (!input) return rt.npe();
+      if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "size <= 0");
+      this.in = input; this.capacity = size;
+    },
+    "read()I": function (this: JPushbackReader) { const input = filterInput(this); return this.push.length ? this.push.pop() ?? -1 : vcall(input, "read", "()I"); },
+    "read([CII)I": function (this: JPushbackReader, out: Uint16Array, off: number, len: number) {
+      const input = filterInput(this);
+      if (!out) return rt.npe();
+      if (off < 0 || len < 0 || off > out.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      if (!len) return 0;
+      let copied = 0;
+      while (copied < len && this.push.length) out[off + copied++] = this.push.pop() ?? 0;
+      if (copied === len) return copied;
+      return after(vcall(input, "read", "([CII)I", out, off + copied, len - copied), (n: number) => n < 0 ? copied || -1 : copied + n);
+    },
+    "unread(I)V": function (this: JPushbackReader, c: number) { unreadChars(this, Uint16Array.of(c), 0, 1); },
+    "unread([C)V": function (this: JPushbackReader, chars: Uint16Array) { unreadChars(this, chars, 0, chars?.length ?? 0); },
+    "unread([CII)V": function (this: JPushbackReader, chars: Uint16Array, off: number, len: number) { unreadChars(this, chars, off, len); },
+    "ready()Z": function (this: JPushbackReader) { const input = filterInput(this); return this.push.length ? 1 : vcall(input, "ready", "()Z"); },
+    "skip(J)J": function (this: JPushbackReader, count: bigint) {
+      const input = filterInput(this);
+      if (count < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "skip value is negative");
+      const buffered = Math.min(this.push.length, Number(count));
+      this.push.length -= buffered;
+      return BigInt(buffered) === count ? count : after(vcall(input, "skip", "(J)J", count - BigInt(buffered)), (n: bigint) => BigInt(buffered) + n);
+    },
+    "markSupported()Z": () => 0,
+    "mark(I)V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+    "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+    "close()V": function (this: JPushbackReader) { this.push.length = 0; const input = this.in; this.in = null; return input ? vcall(input, "close", "()V") : undefined; },
+  },
+});
 class JWriter extends JObj { s = ""; lock: unknown = this; }
 const wr = (w: unknown, s: string) => vcallMaybe(w, "write", "(Ljava/lang/String;)V", s);
 const chars = (c: Uint16Array): string => charsToString(c, 0, c.length);
