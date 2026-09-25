@@ -192,7 +192,7 @@ async function readField(parcel: JParcel, kind: Kind, type?: string): Promise<un
     }
     case "stringSet": {
       const count = readInt(parcel);
-      if (count < 0) return null;
+      if (count <= 0) return null;
       const items = new Set<string>();
       for (let i = 0; i < count; i++) items.add(readString(parcel)!);
       return items;
