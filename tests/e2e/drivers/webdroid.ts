@@ -92,7 +92,8 @@ export class WebdroidDriver {
     const browser = await launchBrowser();
     const ctx = await browser.newContext(CONTEXT_OPTS);
     await ctx.addInitScript({ content: probeScript({ fixedMs: opts.fixedMs === undefined ? PINNED_CLOCK_MS : opts.fixedMs, storage: opts.storage ?? [], shots: !!opts.shots }) });
-    if (opts.privateStorage) await ctx.addInitScript({ content: "Object.defineProperty(window, 'showDirectoryPicker', { value: undefined, configurable: true })" });
+    if (opts.privateStorage) await ctx.addInitScript({ content: `for (const name of ['showDirectoryPicker', 'showOpenFilePicker', 'showSaveFilePicker'])
+      Object.defineProperty(window, name, { value: undefined, configurable: true });` });
     const page = await ctx.newPage();
     if (opts.coverage) await page.coverage.startJSCoverage({ resetOnNavigation: false });
     const drv = new WebdroidDriver(browser, page, screen, !!opts.coverage);

@@ -7,7 +7,10 @@ export const komikku: Flow = {
   apk: "Komikku-arm64-v8a-v1.14.1.apk",
   crop: { top: 0, bottom: 0, left: 0, right: 0 },
   clock: "pinned",
-  privateStorage: { files: [{ path: "storage/local/Compatibility sample/Chapter 1/001.png", fixture: "komikku-page.png" }] },
+  privateStorage: {
+    files: [{ path: "storage/local/Compatibility sample/Chapter 1/001.png", fixture: "komikku-page.png" }],
+    expectedFiles: [{ pathPrefix: "files/", suffix: ".tachibk", minBytes: 100 }],
+  },
   steps: [
     { id: "launch", label: "Launch onboarding", action: { type: "launch" }, wait: wait.quiescent(6000, 30000) },
     { id: "dismiss-update", label: "Dismiss update notes", action: { type: "tapText", text: "OK" }, wait: wait.quiescent(1500) },
@@ -28,5 +31,11 @@ export const komikku: Flow = {
     { id: "back-to-browse", label: "Return to browse", action: { type: "back" }, wait: wait.quiescent(1000) },
     { id: "populated-library", label: "Open populated library", action: { type: "tapText", text: "Library" },
       wait: wait.state({ kind: "text", text: "Compatibility sample" }, 5000, 20000) },
+    { id: "more", label: "Open more options", action: { type: "tapText", text: "More" }, wait: wait.quiescent(1000) },
+    { id: "data-storage", label: "Open data and storage", action: { type: "tapText", text: "Data and storage" }, wait: wait.quiescent(1200) },
+    { id: "backup", label: "Create populated backup", action: { type: "tapText", text: "Create backup" }, wait: wait.quiescent(1800) },
+    { id: "backup-confirm", label: "Save populated backup", action: { type: "tapText", text: "Create" }, wait: wait.quiescent(2500) },
+    { id: "restore", label: "Open saved backup", action: { type: "tapText", text: "Restore backup" }, wait: wait.quiescent(1500) },
+    { id: "restore-confirm", label: "Restore populated backup", action: { type: "tapText", text: "Restore" }, wait: wait.quiescent(2500) },
   ],
 };
