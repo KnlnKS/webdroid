@@ -1705,6 +1705,7 @@ export class JViewGroup extends JView {
   layoutAnimationScheduled = false;
   clipChildren = true;
   clipToPadding = true;
+  layoutMode = -1;
   disallowIntercept = false;
   touchTarget: JView | null = null;
   hierarchyChangeL: unknown = null;
@@ -2022,6 +2023,15 @@ const vgMethods: NativeSpec["methods"] = {
   "getClipChildren()Z": function (this: JViewGroup) { return this.clipChildren ? 1 : 0; },
   "setClipToPadding(Z)V": function (this: JViewGroup, v: number) { this.clipToPadding = !!v; },
   "getClipToPadding()Z": function (this: JViewGroup) { return this.clipToPadding ? 1 : 0; },
+  "setLayoutMode(I)V": function (this: JViewGroup, mode: number) {
+    if (mode !== 0 && mode !== 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "layoutMode");
+    if (this.layoutMode !== mode) { this.layoutMode = mode; requestLayout(this); }
+  },
+  "getLayoutMode()I": function (this: JViewGroup) {
+    for (let group: JViewGroup | null = this; group; group = group.parent instanceof JViewGroup ? group.parent : null)
+      if (group.layoutMode >= 0) return group.layoutMode;
+    return 0;
+  },
   "getDescendantFocusability()I": () => 0x20000,
   "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)Z": addInLayout,
   "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;Z)Z": addInLayout,
