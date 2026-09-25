@@ -660,7 +660,7 @@ const ldFromDate = (dt: Date) => ldOf(dt.getFullYear(), dt.getMonth() + 1, dt.ge
 const ldtFromDate = (dt: Date) => ldtOf(ldFromDate(dt), ltOf(dt.getHours(), dt.getMinutes(), dt.getSeconds(), dt.getMilliseconds() * 1e6));
 
 rt.register({
-  name: "java/time/Instant", ctor: JInstant, ifaces: ["java/lang/Comparable"],
+  name: "java/time/Instant", ctor: JInstant, ifaces: ["java/lang/Comparable", "java/time/temporal/Temporal", "java/time/temporal/TemporalAccessor"],
   clinit: () => {
     const c = rt.link("java/time/Instant").ctor as any;
     c.s$EPOCH = mkInstant(0);
@@ -683,6 +683,10 @@ rt.register({
     "getNano()I": function (this: JInstant) { return Math.round((this.ms - Math.floor(this.ms / 1000) * 1000) * 1e6); },
     "plusMillis(J)Ljava/time/Instant;": function (this: JInstant, d: bigint) { return mkInstant(this.ms + Number(d)); },
     "plusSeconds(J)Ljava/time/Instant;": function (this: JInstant, d: bigint) { return mkInstant(this.ms + Number(d) * 1000); },
+    "plus(Ljava/time/temporal/TemporalAmount;)Ljava/time/Instant;": function (this: JInstant, amount: JObj) {
+      if (!amount) rt.npe();
+      return vcall(amount, "addTo", "(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;", this);
+    },
     "plus(JLjava/time/temporal/TemporalUnit;)Ljava/time/Instant;": function (this: JInstant, amount: bigint, unit: JSimpleEnum) {
       if (!unit) rt.npe();
       if (!rt.iof(unit, "java/time/temporal/ChronoUnit"))
@@ -722,7 +726,7 @@ rt.register({
   },
 });
 rt.register({
-  name: "java/time/Duration", ctor: JDuration, ifaces: ["java/lang/Comparable"],
+  name: "java/time/Duration", ctor: JDuration, ifaces: ["java/lang/Comparable", "java/time/temporal/TemporalAmount"],
   clinit: () => { (rt.link("java/time/Duration").ctor as any).s$ZERO = mkDuration(0); },
   methods: {
     "static ofMillis(J)Ljava/time/Duration;": (ms: bigint) => mkDuration(Number(ms)),
@@ -739,6 +743,14 @@ rt.register({
     "minus(Ljava/time/Duration;)Ljava/time/Duration;": function (this: JDuration, other: JDuration) {
       if (!other) rt.npe();
       return mkDuration(this.ms - other.ms);
+    },
+    "addTo(Ljava/time/temporal/Temporal;)Ljava/time/temporal/Temporal;": function (this: JDuration, temporal: JObj) {
+      if (!temporal) rt.npe();
+      if (temporal instanceof JInstant) return mkInstant(temporal.ms + this.ms);
+      const seconds = BigInt(Math.floor(this.ms / 1000));
+      const nanos = BigInt(Math.round((this.ms - Number(seconds) * 1000) * 1e6));
+      return vcall(temporal, "plus", "(JLjava/time/temporal/TemporalUnit;)Ljava/time/temporal/Temporal;", seconds, chronoUnits[3])
+        .then(result => nanos ? vcall(result, "plus", "(JLjava/time/temporal/TemporalUnit;)Ljava/time/temporal/Temporal;", nanos, chronoUnits[0]) : result);
     },
     "toMillis()J": function (this: JDuration) { return BigInt(Math.trunc(this.ms)); },
     "getSeconds()J": function (this: JDuration) { return BigInt(Math.floor(this.ms / 1000)); },
