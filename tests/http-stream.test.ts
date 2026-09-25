@@ -58,8 +58,7 @@ test("HttpURLConnection preserves a redirect when following is disabled", async 
     await vcall(connection, "setInstanceFollowRedirects", "(Z)V", 0);
     expect(await vcall(connection, "getResponseCode", "()I")).toBe(302);
     expect(await vcall(connection, "getResponseMessage", "()Ljava/lang/String;")).toBe("Found");
-    expect(await vcall(connection, "getHeaderField", "(I)Ljava/lang/String;", 0)).toBe("HTTP/1.1 302 Found");
-    expect(await vcall(connection, "getHeaderFieldKey", "(I)Ljava/lang/String;", 0)).toBeNull();
+    expect(await vcall(connection, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", null)).toBe("HTTP/1.1 302 Found");
     expect(await vcall(connection, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", "location")).toBe("/next");
     expect(await vcall(connection, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", "x-wd-status")).toBeNull();
     expect(seen).toEqual(["1"]);

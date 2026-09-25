@@ -1039,9 +1039,8 @@ rt.register({
     "setIfModifiedSince(J)V": function (this: JURLConnection, t: bigint) { this.ifMod = t; },
     "getIfModifiedSince()J": function (this: JURLConnection) { return this.ifMod; },
     "getHeaderField(Ljava/lang/String;)Ljava/lang/String;": withRes(function (_r, k: string | null) { return this.hdr(k); }),
-    // index 0 is the status line under a null key; past the end both are null, which is how a caller finds the end
-    "getHeaderField(I)Ljava/lang/String;": withRes((r, i: number) => i === 0 ? statusLine(r) : r.hdrs[i - 1]?.[1] ?? null),
-    "getHeaderFieldKey(I)Ljava/lang/String;": withRes((r, i: number) => i === 0 ? null : r.hdrs[i - 1]?.[0] ?? null),
+    "getHeaderField(I)Ljava/lang/String;": withRes((r, i: number) => r.hdrs[i]?.[1] ?? null),
+    "getHeaderFieldKey(I)Ljava/lang/String;": withRes((r, i: number) => r.hdrs[i]?.[0] ?? null),
     "getHeaderFields()Ljava/util/Map;": withRes((r) => headerMap(group([[null, statusLine(r)], ...r.hdrs]))),
     "getHeaderFieldInt(Ljava/lang/String;I)I": withRes(function (_r, k: string, d: number) {
       const n = parseInt(this.hdr(k) ?? "", 10);
