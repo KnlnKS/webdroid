@@ -3,6 +3,7 @@ import { JList, mkIter, newArrayList, toJsArray, sortInPlace } from "./jutil";
 import { vcall } from "./jlang";
 import { csText } from "./jchars";
 import { jarray } from "../abi";
+import { JIntStream, mkIntStream } from "./jstream-values";
 
 // ── java.util.stream, the sequential subset. Every stage runs eagerly over a JS array: a lambda
 // here is an async compiled method on one thread, so laziness would buy nothing and cost the
@@ -10,8 +11,6 @@ import { jarray } from "../abi";
 class JSpliterator extends JObj { a: unknown[] = []; }
 class JStream extends JObj { a: unknown[] = []; }
 const mkStream = (a: unknown[]) => { const s = new JStream(); s.a = a; return s; };
-class JIntStream extends JObj { a: number[] = []; }
-const mkIntStream = (a: number[]) => { const s = new JIntStream(); s.a = a; return s; };
 class JLongStream extends JObj { a: bigint[] = []; }
 const mkLongStream = (a: bigint[]) => { const s = new JLongStream(); s.a = a; return s; };
 class JOptional extends JObj { v: unknown = null; }

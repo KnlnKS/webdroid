@@ -10,6 +10,7 @@ import { mangleMethod, jmethod, descToName, charsToString, jarray, PRIM_NAME, in
 import { guestNow, type GuestTimer } from "../../guest-clock";
 import { device } from "../../shell/config";
 import { csText } from "./jchars";
+import { mkIntStream } from "./jstream-values";
 
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
   const fn = obj[mangleMethod(name, desc)] ?? rt.proxyMethod?.(obj, name, desc);
@@ -741,9 +742,13 @@ sm("regionMatches(ZILjava/lang/String;II)Z", function (ignore: number, toff: num
   return (ignore ? a.toLowerCase() === b.toLowerCase() : a === b) ? 1 : 0;
 });
 sm("contentEquals(Ljava/lang/CharSequence;)Z", function (o: unknown) { return (this as string) === jToString(o) ? 1 : 0; });
-sm("codePointCount(II)I", function (a: number, b: number) { return b - a; });
+sm("codePointCount(II)I", function (a: number, b: number) {
+  if (a < 0 || b < a || b > this.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  return Array.from(this.slice(a, b)).length;
+});
 sm("offsetByCodePoints(II)I", function (i: number, n: number) { return offsetCodePoints(String(this), i, n); });
-sm("chars()Ljava/util/stream/IntStream;", function () { throw rt.unimplemented("String.chars"); });
+sm("chars()Ljava/util/stream/IntStream;", function () { return mkIntStream(Array.from({ length: this.length }, (_, i) => this.charCodeAt(i))); });
+sm("codePoints()Ljava/util/stream/IntStream;", function () { return mkIntStream(Array.from(this, char => char.codePointAt(0)!)); });
 sm("getClass()Ljava/lang/Class;", function () { return rt.classFor("java/lang/String"); });
 sm("matches(Ljava/lang/String;)Z", function (p: string) { return javaMatches(p, this as string); });
 sm("replaceAll(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", function (p: string, r: string) {
