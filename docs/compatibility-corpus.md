@@ -118,7 +118,7 @@ Diagnostics unavailable: the browser page crashed before runtime inspection.
 | Mihon | Reader shell launches | Onboarding, library import and reading unverified; a FirebaseSessions boxed-number cast remains in logs |
 | Harmonic | Welcome dialog's Get started action | Article navigation and WebView behavior unverified; optional OEM window-extension probes remain |
 | Lichess | Home, board editor, and Stockfish level 1 game through e4, Nf3 and Ne5 with engine replies; serialized flow rendered 15/15 steps | Online play, account, persistence, other game modes and Android visual parity unverified |
-| NewPipe | Search suggestions, live results, video detail and visible Big Buck Bunny playback with advancing video frames | Audio, downloads, queue and background play unverified; ExoPlayer logs timeline exceptions |
+| NewPipe | Search suggestions, live results and video detail; advancing video frames without the prior timeline exception; nonzero PCM from video and background audio; one audio download completed to a selected browser directory with a valid MP4 header | Audible output, queue behavior, download persistence/reopen, other formats and visual parity unverified |
 | AntennaPod | Search field; bundled Conscrypt JNI loads | Podcast fetch and audio playback unverified |
 | Organic Maps | Downloaded the world overview and Monaco region; rendered both; searched, opened place details, drew a route and entered navigation UI | Actual spoken directions, moving-location route following, broader location use and Android visual parity unverified |
 | OpenTracks | Main screen | Track recording, location and export unverified |
