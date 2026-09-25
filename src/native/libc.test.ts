@@ -102,6 +102,16 @@ test("ARM64 syncfs flushes an open filesystem and rejects invalid descriptors", 
   } finally { cpu.dispose(); setA64(false); }
 });
 
+test("ARM64 wait4 reports that no guest child exists", async () => {
+  setA64(true); libcInit();
+  const cpu = new Cpu(new JThread(), "wait4-test");
+  try {
+    const syscall = lookupHost("syscall", "libc.so")!;
+    expect(await cpu.call(syscall, [260, -1, 0, 0, 0])).toBe(-1);
+    expect(mem.ld32(cpu.errnoAddr)).toBe(10);
+  } finally { cpu.dispose(); setA64(false); }
+});
+
 test("timegm64 returns seconds beyond the ARM32 time_t range", async () => {
   setA64(false); libcInit();
   const cpu = new Cpu(new JThread(), "timegm64-test"), tm = mem.malloc(36);

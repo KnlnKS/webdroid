@@ -235,6 +235,7 @@ function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promise<HostR
   if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); if (n) { crypto.getRandomValues(mem.bytes(buf, n)); wrote(buf, n); } return n; } // getrandom
   if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin
   if (nr === (PTR === 8 ? 179 : 116)) { fillSysinfo(a.p()); return 0; }    // sysinfo
+  if (PTR === 8 && nr === 260) return fail(cpu, E.CHILD);                   // wait4: no guest child exists
   // ARM's raw faccessat has three arguments; libc's faccessat wrapper has a fourth flags argument.
   if (PTR === 4 && nr === 334) return faccessatPath(cpu, a.i(), a.str(), a.i(), 0);
   // the numbers whose wrapper takes the syscall's own arguments: the argument cursor sits
