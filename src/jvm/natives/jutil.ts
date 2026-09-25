@@ -2346,7 +2346,7 @@ rt.register({ name: "java/util/ListIterator", ctor: class extends JObj {}, iface
 // compiles its own real method (get/apply/accept/test/...), so callers just
 // vcall() the selector by name. Only the marker registration is needed.
 for (const f of ["Supplier", "Function", "BiFunction", "Consumer", "BiConsumer", "Predicate",
-  "BiPredicate", "ToIntFunction", "ToLongFunction", "ToDoubleFunction", "IntFunction",
+  "BiPredicate", "ToIntFunction", "ToLongFunction", "ToDoubleFunction", "IntFunction", "LongFunction",
   "UnaryOperator", "BinaryOperator", "IntPredicate", "IntConsumer", "IntSupplier", "IntUnaryOperator",
   "LongUnaryOperator", "IntBinaryOperator", "LongBinaryOperator"]) {
   rt.register({ name: "java/util/function/" + f, ctor: class extends JObj {} });
@@ -2414,6 +2414,11 @@ rt.register({
     "static stream([Ljava/lang/Object;)Ljava/util/stream/Stream;": (arr: unknown[]) => {
       const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
       stream.a = arr.slice();
+      return stream;
+    },
+    "static stream([J)Ljava/util/stream/LongStream;": (arr: BigInt64Array) => {
+      const stream = rt.make("java/util/stream/LongStream") as JObj & { a: bigint[] };
+      stream.a = Array.from(arr);
       return stream;
     },
     ...Object.fromEntries([..."BCSIJFD"].flatMap((t) => [[`static sort([${t})V`, taSort], [`static sort([${t}II)V`, taSort]])),

@@ -12,6 +12,8 @@ class JStream extends JObj { a: unknown[] = []; }
 const mkStream = (a: unknown[]) => { const s = new JStream(); s.a = a; return s; };
 class JIntStream extends JObj { a: number[] = []; }
 const mkIntStream = (a: number[]) => { const s = new JIntStream(); s.a = a; return s; };
+class JLongStream extends JObj { a: bigint[] = []; }
+const mkLongStream = (a: bigint[]) => { const s = new JLongStream(); s.a = a; return s; };
 class JOptional extends JObj { v: unknown = null; }
 const mkOpt = (v: unknown) => { rt.link("java/util/Optional"); const o = new JOptional(); o.v = v ?? null; return o; };
 class JOptionalInt extends JObj { present = false; v = 0; }
@@ -118,6 +120,11 @@ rt.register({
       for (const x of this.a) out.push((await vcall(f, "applyAsInt", "(Ljava/lang/Object;)I", x) as number) | 0);
       return mkIntStream(out);
     },
+    "mapToLong(Ljava/util/function/ToLongFunction;)Ljava/util/stream/LongStream;": async function (this: JStream, f: unknown) {
+      const out: bigint[] = [];
+      for (const x of this.a) out.push(await vcall(f, "applyAsLong", "(Ljava/lang/Object;)J", x) as bigint);
+      return mkLongStream(out);
+    },
     "forEach(Ljava/util/function/Consumer;)V": async function (this: JStream, c: unknown) {
       for (const x of this.a) await vcall(c, "accept", "(Ljava/lang/Object;)V", x);
     },
@@ -153,6 +160,17 @@ rt.register({
     "collect(Ljava/util/stream/Collector;)Ljava/lang/Object;": function (this: JStream, c: unknown) { return collect(this, c); },
   },
 });
+rt.register({ name: "java/util/stream/LongStream", ctor: JLongStream, ifaces: ["java/util/stream/BaseStream"], methods: {
+  "mapToObj(Ljava/util/function/LongFunction;)Ljava/util/stream/Stream;": async function (this: JLongStream, f: unknown) {
+    const out: unknown[] = [];
+    for (const value of this.a) out.push(await vcall(f, "apply", "(J)Ljava/lang/Object;", value));
+    return mkStream(out);
+  },
+  "sum()J": function (this: JLongStream) { return this.a.reduce((sum, value) => BigInt.asIntN(64, sum + value), 0n); },
+  "count()J": function (this: JLongStream) { return BigInt(this.a.length); },
+  "toArray()[J": function (this: JLongStream) { return BigInt64Array.from(this.a); },
+  "boxed()Ljava/util/stream/Stream;": function (this: JLongStream) { return mkStream(this.a.slice()); },
+} });
 
 rt.register({
   name: "java/util/stream/IntStream", ctor: JIntStream,
