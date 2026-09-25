@@ -607,7 +607,8 @@ function parseIso(s: string): number {
 }
 /** compareTo plus the isAfter/isBefore/isEqual trio every java.time temporal derives from it */
 const ordering = (desc: string, cmp: (a: any, b: any) => number): NativeSpec["methods"] => ({
-  "compareTo(Ljava/lang/Object;)I": cmp,
+  "compareTo(Ljava/lang/Object;)I": function (this: JObj, o: unknown) { return cmp(this, o); },
+  [`compareTo(${desc})I`]: function (this: JObj, o: unknown) { return cmp(this, o); },
   [`isAfter(${desc})Z`]: function (this: JObj, o: unknown) { return cmp(this, o) > 0 ? 1 : 0; },
   [`isBefore(${desc})Z`]: function (this: JObj, o: unknown) { return cmp(this, o) < 0 ? 1 : 0; },
   [`isEqual(${desc})Z`]: function (this: JObj, o: unknown) { return cmp(this, o) === 0 ? 1 : 0; },
@@ -647,7 +648,29 @@ function dateUntil(start: JLocalDate, end: JLocalDate, unit: JSimpleEnum): bigin
   }
 }
 const ldFromDate = (dt: Date) => ldOf(dt.getFullYear(), dt.getMonth() + 1, dt.getDate());
+function localDateAt(ms: number, zone: JZoneId): JLocalDate {
+  if (!zone) rt.npe();
+  if (zone instanceof JZoneOffset) {
+    const date = new Date(ms + zone.totalSeconds * 1000);
+    return ldOf(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
+  }
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: zone.id, year: "numeric", month: "numeric", day: "numeric" }).formatToParts(ms);
+  const field = (name: Intl.DateTimeFormatPartTypes) => Number(parts.find(part => part.type === name)?.value);
+  return ldOf(field("year"), field("month"), field("day"));
+}
 const ldtFromDate = (dt: Date) => ldtOf(ldFromDate(dt), ltOf(dt.getHours(), dt.getMinutes(), dt.getSeconds(), dt.getMilliseconds() * 1e6));
+
+function instantPlusUnit(instant: JInstant, amount: bigint, unit: JSimpleEnum): JInstant | Promise<JInstant> {
+  if (!unit) rt.npe();
+  if (!chronoUnits.includes(unit)) return vcall(unit, "addTo", "(Ljava/time/temporal/Temporal;J)Ljava/time/temporal/Temporal;", instant, amount);
+  const millis: Record<string, number> = {
+    NANOS: 1e-6, MICROS: 1e-3, MILLIS: 1, SECONDS: 1000, MINUTES: 60000,
+    HOURS: 3600000, HALF_DAYS: 43200000, DAYS: 86400000,
+  };
+  const scale = millis[unit.ename];
+  if (scale === undefined) throw rt.mkThrowable("java/time/temporal/UnsupportedTemporalTypeException", `Unsupported unit: ${unit.ename}`);
+  return mkInstant(instant.ms + Number(amount) * scale);
+}
 
 rt.register({
   name: "java/time/Instant", ctor: JInstant, ifaces: ["java/lang/Comparable"],
@@ -673,6 +696,9 @@ rt.register({
     "getNano()I": function (this: JInstant) { return Math.round((this.ms - Math.floor(this.ms / 1000) * 1000) * 1e6); },
     "plusMillis(J)Ljava/time/Instant;": function (this: JInstant, d: bigint) { return mkInstant(this.ms + Number(d)); },
     "plusSeconds(J)Ljava/time/Instant;": function (this: JInstant, d: bigint) { return mkInstant(this.ms + Number(d) * 1000); },
+    "plus(JLjava/time/temporal/TemporalUnit;)Ljava/time/Instant;": function (this: JInstant, amount: bigint, unit: JSimpleEnum) {
+      return instantPlusUnit(this, amount, unit);
+    },
     "plus(Ljava/time/temporal/TemporalAmount;)Ljava/time/Instant;": function (this: JInstant, amount: JDuration | null) {
       if (!amount) rt.npe();
       return amount instanceof JDuration ? mkInstant(this.ms + amount.ms)
@@ -680,6 +706,9 @@ rt.register({
     },
     "minusMillis(J)Ljava/time/Instant;": function (this: JInstant, d: bigint) { return mkInstant(this.ms - Number(d)); },
     "minusSeconds(J)Ljava/time/Instant;": function (this: JInstant, d: bigint) { return mkInstant(this.ms - Number(d) * 1000); },
+    "minus(JLjava/time/temporal/TemporalUnit;)Ljava/time/Instant;": function (this: JInstant, amount: bigint, unit: JSimpleEnum) {
+      return instantPlusUnit(this, -amount, unit);
+    },
     ...ordering("Ljava/time/Instant;", (x: JInstant, o: JInstant) => (x.ms < o.ms ? -1 : x.ms > o.ms ? 1 : 0)),
     "equals(Ljava/lang/Object;)Z": function (this: JInstant, o: unknown) { return o instanceof JInstant && o.ms === this.ms ? 1 : 0; },
     "hashCode()I": function (this: JInstant) { return this.ms | 0; },
@@ -749,13 +778,17 @@ rt.register({
   },
   methods: {
     "static now()Ljava/time/LocalDate;": () => ldFromDate(new Date()),
+    "static now(Ljava/time/ZoneId;)Ljava/time/LocalDate;": (zone: JZoneId) => localDateAt(Date.now(), zone),
     "format(Ljava/time/format/DateTimeFormatter;)Ljava/lang/String;": formatWith,
     "static parse(Ljava/lang/CharSequence;)Ljava/time/LocalDate;": (s: string) => ldFromDate(new Date(parseIso(s))),
     "static parse(Ljava/lang/CharSequence;Ljava/time/format/DateTimeFormatter;)Ljava/time/LocalDate;": (s: string) => ldFromDate(new Date(parseIso(s))),
     "static from(Ljava/time/temporal/TemporalAccessor;)Ljava/time/LocalDate;": (t: unknown) => ldFromDate(new Date(temporalMs(t))),
     "static of(III)Ljava/time/LocalDate;": (y: number, m: number, d: number) => ldOf(y, m, d),
     "static ofEpochDay(J)Ljava/time/LocalDate;": (ed: bigint) => dateFromEpochDay(Number(ed)),
-    "static ofInstant(Ljava/time/Instant;Ljava/time/ZoneId;)Ljava/time/LocalDate;": (i: any) => ldFromDate(new Date(i?.ms ?? Date.now())),
+    "static ofInstant(Ljava/time/Instant;Ljava/time/ZoneId;)Ljava/time/LocalDate;": (instant: JInstant, zone: JZoneId) => {
+      if (!instant) rt.npe();
+      return localDateAt(instant.ms, zone);
+    },
     "getYear()I": function (this: JLocalDate) { return this.y; },
     "getMonthValue()I": function (this: JLocalDate) { return this.mo; },
     "getDayOfMonth()I": function (this: JLocalDate) { return this.d; },
