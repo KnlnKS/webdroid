@@ -65,9 +65,9 @@ class JMediaMetadataRetriever extends JObj {
     const extractor = this.extractor, source = this.source;
     if (!source) throw rt.mkThrowable("java/lang/IllegalStateException", "No media source");
     if (!extractor) return null;
-    if (typeof VideoDecoder === "undefined") throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Video decoding is unavailable");
     const track = extractor.tracks.find(item => String(value(item.format, "mime")).startsWith("video/"));
     if (!track?.samples.length) return null;
+    if (typeof VideoDecoder === "undefined") throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Video decoding is unavailable");
     const codec = value(track.format, "codecs-string");
     const width = Number(value(track.format, "width") ?? 0), height = Number(value(track.format, "height") ?? 0);
     if (typeof codec !== "string" || !width || !height) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Unsupported video track");
