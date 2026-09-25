@@ -1,5 +1,6 @@
 import { installWebHistory } from "./webhistory";
 import { installWebLocation } from "./weblocation";
+import { snapshotDocument } from "./websnapshot";
 
 export const WEB_INJECT = `<script>(function(){
 // Wrangler can insert __name into functions embedded through toString().
@@ -41,7 +42,8 @@ window.navigation?.addEventListener("navigate", event => {
   event.preventDefault(); send({kind: "navigate", url: url.href});
 });
 addEventListener("load", () => send({kind: "loaded", url: config.page ?? document.querySelector('meta[name="wd-proxy-url"]')?.content,
-  error: document.querySelector('meta[name="wd-proxy-error"]')?.content, title: document.title, height: document.documentElement.scrollHeight}));
+  error: document.querySelector('meta[name="wd-proxy-error"]')?.content, title: document.title,
+  width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight}));
 document.addEventListener("click", event => {
   const a = event.target.closest?.("a[href]");
   if (!a || /^javascript:/i.test(a.href)) return;
@@ -55,6 +57,11 @@ addEventListener("message", event => {
     try { value = JSON.stringify((0, eval)(event.data.script)) ?? "null"; } catch {}
     send({kind: "evaluated", seq: event.data.seq, value});
   } else if (event.data.kind === "stop") window.stop();
+  else if (event.data.kind === "print") window.print();
+  else if (event.data.kind === "snapshot") {
+    (${snapshotDocument.toString()})(document).then(result => send({kind: "snapshot", seq: event.data.seq, ...result}),
+      error => send({kind: "snapshot", seq: event.data.seq, error: String(error)}));
+  }
 });
 send({kind: "script-ready"});
 })()</script>`;

@@ -117,6 +117,7 @@ import "./android/mediadrm";
 import "./android/media-format";
 import "./android/media-codec";
 import "./android/media-retriever";
+import "./android/printing";
 import "./android/tts";
 import "./android/webkit";
 import "./android/cookies";

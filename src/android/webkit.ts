@@ -17,6 +17,9 @@ import { WebBridge, type WebInterfaces, type WebRequest, type WebResponse } from
 import { localAsset } from "../shell/localassets";
 import { EXT_MIME, MIME_EXT } from "../mime";
 import { WEB_INJECT } from "../shell/webinject";
+import { snapshotDocument } from "../shell/websnapshot";
+import { webPrintAdapter } from "./printing";
+import type { JCanvas } from "./graphics";
 
 const inst = <T = JObj>(cls: string): T => rt.make(cls);
 
@@ -246,10 +249,13 @@ export class JWebView extends JViewGroup {
   private requestThread = Object.assign(new JThread(), { jname: "Chrome_IOThread" });
   private remote: WebBridge | null = null;
   private remoteOrigin = "";
-  private remoteHeight = 0;
+  remoteWidth = 0;
+  remoteHeight = 0;
   private cookiePort: MessagePort | null = null;
   private nextEval = 0;
   private evaluations = new Map<number, (value: string) => void>();
+  private nextSnapshot = 0;
+  private snapshots = new Map<number, { resolve: (data: string) => void; reject: (error: unknown) => void; timer: ReturnType<typeof setTimeout> }>();
   private pendingScripts = new Map<number, string>();
   private scriptReady = false;
   private message = (event: MessageEvent) => {
@@ -280,19 +286,56 @@ export class JWebView extends JViewGroup {
       this.pendingScripts.clear();
     }
     else if (data.kind === "loaded") {
+      this.remoteWidth = typeof data.width === "number" ? data.width : 0;
       this.remoteHeight = typeof data.height === "number" ? data.height : 0;
       this.finishLoad(typeof data.url === "string" ? data.url : null, typeof data.title === "string" ? data.title : "", typeof data.error === "string" ? data.error : null);
     } else if (data.kind === "fragment" && typeof data.url === "string") this.fragmentNavigated(data.url);
     else if (data.kind === "navigate" && typeof data.url === "string") this.navigate(data.url, data.replace === true);
     else if (data.kind === "evaluated" && typeof data.seq === "number" && typeof data.value === "string") this.evaluations.get(data.seq)?.(data.value);
+    else if (data.kind === "snapshot" && typeof data.seq === "number") {
+      const pending = this.snapshots.get(data.seq);
+      if (pending) {
+        clearTimeout(pending.timer); this.snapshots.delete(data.seq);
+        if (data.error) pending.reject(rt.mkThrowable("java/lang/UnsupportedOperationException", data.error));
+        else pending.resolve(data.data);
+      }
+    }
   };
   private send(data: object, transfer: Transferable[] = []) { this.el?.contentWindow?.postMessage({ ...data, bridge: this.remote?.id }, this.remoteOrigin, transfer); }
+  requestPrint(): boolean {
+    if (!this.loaded || !this.el?.contentWindow) return false;
+    if (this.remoteOrigin) this.send({ kind: "print" });
+    else this.el.contentWindow.print();
+    return true;
+  }
+  async bitmapSnapshot(): Promise<ImageBitmap> {
+    let data: string;
+    if (this.remoteOrigin) {
+      data = await new Promise<string>((resolve, reject) => {
+        const seq = ++this.nextSnapshot;
+        const timer = setTimeout(() => {
+          this.snapshots.delete(seq);
+          reject(rt.mkThrowable("java/lang/UnsupportedOperationException", "WebView snapshot timed out"));
+        }, 10_000);
+        this.snapshots.set(seq, { resolve, reject, timer });
+        this.send({ kind: "snapshot", seq });
+      });
+    } else if (this.el?.contentDocument) {
+      data = (await snapshotDocument(this.el.contentDocument)).data;
+    } else throw rt.mkThrowable("java/lang/UnsupportedOperationException", "WebView content is unavailable for bitmap capture");
+    return createImageBitmap(await (await fetch(data)).blob());
+  }
   private closeBridge() {
     this.scriptReady = false;
     this.remote?.close(); this.remote = null; this.remoteOrigin = "";
     this.cookiePort?.close(); this.cookiePort = null;
     window.removeEventListener("message", this.message);
     for (const done of this.evaluations.values()) done("null");
+    for (const pending of this.snapshots.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(rt.mkThrowable("java/lang/UnsupportedOperationException", "WebView snapshot interrupted"));
+    }
+    this.snapshots.clear();
   }
   destroy() { this.gen++; this.closeBridge(); this.hide(); this.el?.remove(); this.el = null; live.delete(this); }
   el: HTMLIFrameElement | null = null;
@@ -526,12 +569,19 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": wvCtor,
     // AOSP WebView measures like a plain View (getDefaultSize fills AT_MOST); ViewGroup's wraps children
     "onMeasure(II)V": function (this: JWebView, w: number, h: number) {
-      this.measuredW = defaultSize(Math.max(this.minW, this.padL + this.padR), w);
-      this.measuredH = defaultSize(Math.max(this.minH, this.padT + this.padB), h);
+      this.measuredW = defaultSize(Math.max(this.minW, this.padL + this.padR, this.remoteWidth * device.density), w);
+      this.measuredH = defaultSize(Math.max(this.minH, this.padT + this.padB, this.remoteHeight * device.density), h);
     },
-    "onDraw(Landroid/graphics/Canvas;)V": function (this: JWebView) { this.drawnAt = frame; live.add(this); },
+    "onDraw(Landroid/graphics/Canvas;)V": async function (this: JWebView, canvas: JCanvas) {
+      if (!canvas.bmp) { this.drawnAt = frame; live.add(this); return; }
+      const image = await this.bitmapSnapshot();
+      try { canvas.ctx.drawImage(image, 0, 0, this.width(), this.height()); }
+      finally { image.close(); }
+    },
     "onDetachedFromWindow()V": function (this: JWebView) { this.hide(); },
     "destroy()V": function (this: JWebView) { this.destroy(); },
+    "createPrintDocumentAdapter()Landroid/print/PrintDocumentAdapter;": function (this: JWebView) { return webPrintAdapter(this, this.title || "WebView"); },
+    "createPrintDocumentAdapter(Ljava/lang/String;)Landroid/print/PrintDocumentAdapter;": function (this: JWebView, name: string) { return webPrintAdapter(this, name); },
     // AOSP substitutes its default client for null
     "setWebViewClient(Landroid/webkit/WebViewClient;)V": function (this: JWebView, c: JObj | null) { this.client = c ?? inst("android/webkit/WebViewClient"); },
     "setWebChromeClient(Landroid/webkit/WebChromeClient;)V": function (this: JWebView, c: JObj | null) { this.chrome = c ?? inst("android/webkit/WebChromeClient"); },
