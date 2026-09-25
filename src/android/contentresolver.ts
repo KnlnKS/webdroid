@@ -165,7 +165,7 @@ function fileOf(u: JUri): string {
   return uriDecode(parts.path) ?? "";
 }
 /** A descriptor carries the document's current bytes and writes them back when it is closed. */
-async function openPfd(u: JUri, mode: string) {
+export async function openPfd(u: JUri, mode: string) {
   if (isMediaUri(u)) {
     const path = await mediaPath(u);
     if (!path) throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);

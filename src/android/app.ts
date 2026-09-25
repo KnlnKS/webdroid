@@ -6,7 +6,7 @@ import {
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { jarray } from "../jvm/abi";
-import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "./os";
+import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME, mkPfd } from "./os";
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
@@ -1019,6 +1019,7 @@ function callingPackage(): string | null {
   if (caller) for (const record of packages.values()) if (record.uid === caller.uid) return record.pkg;
   return null;
 }
+let pipeId = 0;
 rt.register({
   name: "android/content/ContentProvider", ctor: class extends JObj { $ctx: unknown = null; },
   methods: {
@@ -1037,8 +1038,17 @@ rt.register({
       this.$ctx = c;
       await vcall(this, "onCreate", "()Z");
     },
+    "openPipeHelper(Landroid/net/Uri;Ljava/lang/String;Landroid/os/Bundle;Ljava/lang/Object;Landroid/content/ContentProvider$PipeDataWriter;)Landroid/os/ParcelFileDescriptor;":
+      async (uri: unknown, mime: string, opts: unknown, args: unknown, writer: unknown) => {
+        let bytes = new Uint8Array(0);
+        const output = mkPfd(bytes, (value) => { bytes = value.slice(); }, `pipe:${++pipeId}`);
+        try { await vcall(writer, "writeDataToPipe", "(Landroid/os/ParcelFileDescriptor;Landroid/net/Uri;Ljava/lang/String;Landroid/os/Bundle;Ljava/lang/Object;)V", output, uri, mime, opts, args); }
+        finally { await vcall(output, "close", "()V"); }
+        return mkPfd(bytes, null);
+      },
   },
 });
+rt.markers("android/content/ContentProvider$PipeDataWriter");
 
 rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content/ContextWrapper",
   ifaces: ["android/content/ComponentCallbacks2", "android/content/ComponentCallbacks"],
