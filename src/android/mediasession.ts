@@ -19,11 +19,16 @@ class JMediaSession extends JObj {
   activity: unknown = null;
   playback: unknown = null;
   metadata: unknown = null;
+  queue: unknown = null;
   extras: JBundle | null = null;
   ratingType = 0;
 }
 class JSessionToken extends JObj { constructor(readonly session: JMediaSession) { super(); } }
 class JMediaController extends JObj { session!: JMediaSession; }
+class JQueueItem extends JObj {
+  description: unknown = null;
+  id = -1n;
+}
 class JRemoteUserInfo extends JObj { packageName = ""; pid = -1; uid = -1; }
 rt.register({ name: "android/media/session/MediaSessionManager$RemoteUserInfo", ctor: JRemoteUserInfo,
   fields: { mPackageName: "packageName", mPid: "pid", mUid: "uid" }, methods: {
@@ -104,9 +109,23 @@ rt.register({ name: "android/media/session/MediaSession", ctor: JMediaSession, m
   "setSessionActivity(Landroid/app/PendingIntent;)V": function (this: JMediaSession, activity: unknown) { this.activity = activity; },
   "setPlaybackState(Landroid/media/session/PlaybackState;)V": function (this: JMediaSession, playback: unknown) { this.playback = playback; },
   "setMetadata(Landroid/media/MediaMetadata;)V": function (this: JMediaSession, metadata: unknown) { this.metadata = metadata; },
+  "setQueue(Ljava/util/List;)V": function (this: JMediaSession, queue: unknown) { this.queue = queue; },
   "setExtras(Landroid/os/Bundle;)V": function (this: JMediaSession, extras: JBundle | null) { this.extras = extras; },
   "setRatingType(I)V": function (this: JMediaSession, type: number) { this.ratingType = type; },
   "release()V": function (this: JMediaSession) { this.released = true; this.active = 0; this.callback = null; },
+} });
+rt.register({ name: "android/media/session/MediaSession$QueueItem", ctor: JQueueItem, ifaces: ["android/os/Parcelable"], statics: { UNKNOWN_ID: -1 }, methods: {
+  "<init>(Landroid/media/MediaDescription;J)V": function (this: JQueueItem, description: unknown, id: bigint) {
+    if (!description || id === -1n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid queue item");
+    this.description = description; this.id = id;
+  },
+  "getDescription()Landroid/media/MediaDescription;": function (this: JQueueItem) { return this.description; },
+  "getQueueId()J": function (this: JQueueItem) { return this.id; },
+  "describeContents()I": () => 0,
+  "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JQueueItem, parcel: unknown, flags: number) {
+    await vcall(this.description, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags);
+    await vcall(parcel, "writeLong", "(J)V", this.id);
+  },
 } });
 rt.register({ name: "android/media/session/MediaSession$Token", ctor: JSessionToken, ifaces: ["android/os/Parcelable"], methods: {
   "equals(Ljava/lang/Object;)Z": function (this: JSessionToken, other: unknown) { return other instanceof JSessionToken && other.session === this.session ? 1 : 0; },
@@ -129,6 +148,7 @@ rt.register({ name: "android/media/session/MediaController", ctor: JMediaControl
   "getFlags()J": function (this: JMediaController) { return BigInt(this.session.flags | 3); },
   "getPlaybackState()Landroid/media/session/PlaybackState;": function (this: JMediaController) { return this.session.playback; },
   "getMetadata()Landroid/media/MediaMetadata;": function (this: JMediaController) { return this.session.metadata; },
+  "getQueue()Ljava/util/List;": function (this: JMediaController) { return this.session.queue; },
   "getExtras()Landroid/os/Bundle;": function (this: JMediaController) { return this.session.extras; },
   "getSessionActivity()Landroid/app/PendingIntent;": function (this: JMediaController) { return this.session.activity; },
   "sendCommand(Ljava/lang/String;Landroid/os/Bundle;Landroid/os/ResultReceiver;)V": function (this: JMediaController, command: string, args: unknown, receiver: unknown) {
