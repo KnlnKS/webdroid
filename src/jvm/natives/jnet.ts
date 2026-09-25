@@ -52,7 +52,7 @@ rt.register({
       function (plain: JSocket, host: string, port: number, autoClose: number) {
         const s = rt.make("javax/net/ssl/SSLSocket") as JSocket;
         s.host = host ?? plain?.host ?? ""; s.port = port || plain?.port || 443; s.tls = true;
-        if (autoClose && plain) { plain.relay?.close(); plain.relay = null; plain.closed = 1; }
+        if (autoClose && plain) { plain.relay?.close(); plain.relay = null; s.underlying = plain; plain.wrappedBy = s; }
         return s;
       },
     "createSocket()Ljava/net/Socket;": () => newObj("javax/net/ssl/SSLSocket"),
@@ -280,6 +280,7 @@ rt.register({
 });
 class JSocket extends JObj {
   host = ""; port = 0; tls = false; alpn: string[] = []; relay: Relay | null = null; closed = 0; soTimeout = 0;
+  underlying: JSocket | null = null; wrappedBy: JSocket | null = null;
   private opening: Promise<void> | null = null;
   /** Opening is deferred so an SSLSocket wrapping a plain one can take the target over and
    *  connect with TLS instead -- which is exactly how OkHttp builds an HTTPS connection. */
@@ -331,11 +332,14 @@ const socketMethods: NativeSpec["methods"] = {
   "getOutputStream()Ljava/io/OutputStream;": function (this: JSocket) {
     const o = rt.make("webdroid/SocketOutputStream") as JSocketOut; o.s = this; return o;
   },
-  "close()V": function (this: JSocket) { this.closed = 1; this.relay?.close(); this.relay = null; },
+  "close()V": function (this: JSocket) {
+    this.closed = 1; this.relay?.close(); this.relay = null;
+    if (this.underlying) { this.underlying.closed = 1; this.underlying.wrappedBy = null; this.underlying = null; }
+  },
   "isClosed()Z": function (this: JSocket) { return this.closed; },
-  "isConnected()Z": function (this: JSocket) { return this.relay?.connected ? 1 : 0; },
-  "isInputShutdown()Z": function (this: JSocket) { return this.relay ? 0 : 1; },
-  "isOutputShutdown()Z": function (this: JSocket) { return this.relay ? 0 : 1; },
+  "isConnected()Z": function (this: JSocket) { return this.relay?.connected || this.wrappedBy?.relay?.connected ? 1 : 0; },
+  "isInputShutdown()Z": function (this: JSocket) { return this.relay || this.wrappedBy?.relay ? 0 : 1; },
+  "isOutputShutdown()Z": function (this: JSocket) { return this.relay || this.wrappedBy?.relay ? 0 : 1; },
   "shutdownInput()V": () => {},
   "shutdownOutput()V": () => {},
   "getPort()I": function (this: JSocket) { return this.port; },
