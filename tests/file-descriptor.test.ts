@@ -25,6 +25,25 @@ test("a stream over a RandomAccessFile's descriptor writes at the file's shared 
   expect([...vfs.read("/data/data/test/fd/raf.bin")!]).toEqual([9, 0, 0, 0, 1, 2, 3]);
 });
 
+test("RandomAccessFile handles retain each other's out-of-order writes", async () => {
+  const path = "/data/data/test/fd/ranges.bin";
+  vfs.write(path, new Uint8Array(1024));
+  const first = await newObj("java/io/RandomAccessFile", "(Ljava/lang/String;Ljava/lang/String;)V", path, "rw");
+  const second = await newObj("java/io/RandomAccessFile", "(Ljava/lang/String;Ljava/lang/String;)V", path, "rw");
+  await vcall(first, "write", "([B)V", Int8Array.from([1, 2, 3]));
+  await vcall(second, "seek", "(J)V", 512n);
+  await vcall(second, "write", "([B)V", Int8Array.from([4, 5, 6]));
+  await vcall(first, "seek", "(J)V", 1023n);
+  await vcall(first, "write", "(I)V", 7);
+  await vcall(second, "close", "()V");
+  await vcall(first, "close", "()V");
+  const bytes = vfs.read(path)!;
+  expect(bytes.length).toBe(1024);
+  expect([...bytes.subarray(0, 3)]).toEqual([1, 2, 3]);
+  expect([...bytes.subarray(512, 515)]).toEqual([4, 5, 6]);
+  expect(bytes[1023]).toBe(7);
+});
+
 test("a file stream's and an archive entry's descriptors duplicate onto open native files", async () => {
   vfs.write("/data/data/test/fd/in.bin", new Uint8Array([5, 6, 7]));
   const input = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/data/data/test/fd/in.bin");

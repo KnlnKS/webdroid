@@ -690,14 +690,20 @@ function flushFOS(s: JFOS) {
   s.chunks.length = 0;
 }
 
-// RandomAccessFile: the whole file in memory with a cursor, written back as it grows. The
-// vfs has no partial write, so "rw" is read-modify-write — correct, and the sizes an apk
-// opens this way (a cache index, a downloaded chunk) are the sizes it already unzipped.
+// RandomAccessFile handles keep independent cursors but must read the latest shared file bytes.
 /** `maps` are the live READ_WRITE mappings sharing `buf`: growth moves them to the new storage, as they are the file's pages */
 class JRAF extends JObj { path = ""; buf: Uint8Array = new Uint8Array(0); capacity = 0; source: FileSource | null = null; pos = 0; write = false; maps: JBuffer[] | null = null; }
+const rafRefresh = (f: JRAF) => {
+  if (f.source) return;
+  const current = vfs.read(f.path);
+  if (!current || current === f.buf) return;
+  if (f.maps && current.buffer !== f.buf.buffer) for (const m of f.maps) m.backing.storage = { kind: "direct", ab: current.buffer as ArrayBuffer };
+  f.buf = current;
+  f.capacity = current.buffer.byteLength - current.byteOffset;
+};
 const rafGrow = (f: JRAF, need: number) => {
   if (need <= f.buf.length) return;
-  if (need <= f.capacity) { f.buf = new Uint8Array(f.buf.buffer, f.buf.byteOffset, need); return; }
+  if (need <= f.capacity) { const old = f.buf.length; f.buf = new Uint8Array(f.buf.buffer, f.buf.byteOffset, need); f.buf.fill(0, old); return; }
   const n = new Uint8Array(Math.max(need, f.capacity ? f.capacity * 2 : 64));
   n.set(f.buf);
   f.capacity = n.length;
@@ -714,6 +720,7 @@ const rafOpen = function (this: JRAF, p: string, mode: string) {
   this.source = this.write ? null : source;
   this.buf = data ?? new Uint8Array(0);
   this.capacity = this.buf.length;
+  if (this.write && !data) vfs.write(this.path, this.buf);
 };
 rt.register({
   name: "java/io/RandomAccessFile", ctor: JRAF, ifaces: ["java/io/Closeable", "java/io/DataInput", "java/io/DataOutput"],
@@ -721,10 +728,11 @@ rt.register({
     "<init>(Ljava/lang/String;Ljava/lang/String;)V": rafOpen,
     "<init>(Ljava/io/File;Ljava/lang/String;)V": function (this: JRAF, f: JFile, m: string) { rafOpen.call(this, f.path, m); },
     "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
-    "length()J": function (this: JRAF) { checkFileOpen(this); return BigInt(this.source?.size ?? this.buf.length); },
+    "length()J": function (this: JRAF) { checkFileOpen(this); rafRefresh(this); return BigInt(this.source?.size ?? this.buf.length); },
     "getFilePointer()J": function (this: JRAF) { checkFileOpen(this); return BigInt(this.pos); },
     "seek(J)V": function (this: JRAF, p: bigint) { checkFileOpen(this); this.pos = Number(p); },
     "skipBytes(I)I": function (this: JRAF, n: number) {
+      rafRefresh(this);
       const step = Math.max(0, Math.min(n, (this.source?.size ?? this.buf.length) - this.pos));
       this.pos += step;
       return step;
@@ -732,6 +740,7 @@ rt.register({
     "getFD()Ljava/io/FileDescriptor;": function (this: JRAF) { return descriptorOf(this, this.path, this.write ? O_RDWR | O_CREAT : 0); },
     "read()I": async function (this: JRAF) {
       checkFileOpen(this);
+      rafRefresh(this);
       if (!this.source) return this.pos < this.buf.length ? this.buf[this.pos++] : -1;
       const bytes = await this.source.read(this.pos, 1);
       if (!bytes.length) return -1;
@@ -742,6 +751,7 @@ rt.register({
     "read([BII)I": async function (this: JRAF, b: Int8Array, off: number, len: number) { return await rafRead(this, b, off, len); },
     "readLine()Ljava/lang/String;": async function (this: JRAF) {
       checkFileOpen(this);
+      rafRefresh(this);
       const parts: string[] = [], size = this.source?.size ?? this.buf.length;
       if (this.pos >= size) return null;
       while (this.pos < size) {
@@ -765,6 +775,7 @@ rt.register({
     ...readers((n, get) => async function (this: JRAF) { const b = new Int8Array(n); await rafReadFully(this, b, 0, n); return get(new DataView(b.buffer)); }),
     "write(I)V": function (this: JRAF, v: number) {
       checkFileOpen(this);
+      rafRefresh(this);
       rafGrow(this, this.pos + 1);
       this.buf[this.pos++] = v & 0xff;
       vfs.write(this.path, this.buf);
@@ -774,17 +785,19 @@ rt.register({
     ...writers((n, put) => function (this: JRAF, x: never) { const b = new Int8Array(n); put(new DataView(b.buffer), x); rafWrite(this, b, 0, n); }),
     "setLength(J)V": function (this: JRAF, n: bigint) {
       checkFileOpen(this);
+      rafRefresh(this);
       const len = Number(n);
       if (len <= this.buf.length) { this.buf = this.buf.slice(0, len); this.capacity = len; }
       else rafGrow(this, len);
       if (this.pos > len) this.pos = len;
       vfs.write(this.path, this.buf);
     },
-    "close()V": function (this: JRAF) { if (!closedFiles.has(this)) { if (this.write) vfs.write(this.path, this.buf); closeFile(this); } },
+    "close()V": function (this: JRAF) { if (!closedFiles.has(this)) closeFile(this); },
   },
 });
 function rafRead(f: JRAF, b: Int8Array, off: number, len: number): number | Promise<number> {
   checkFileOpen(f);
+  rafRefresh(f);
   if (len === 0) return 0;
   if (f.source) {
     const value = f.source.read(f.pos, len);
@@ -812,6 +825,7 @@ async function rafReadFully(f: JRAF, b: Int8Array, off: number, len: number): Pr
 }
 function rafWrite(f: JRAF, b: Int8Array, off: number, len: number) {
   checkFileOpen(f);
+  rafRefresh(f);
   rafGrow(f, f.pos + len);
   f.buf.set(u8(b, off, len), f.pos);
   f.pos += len;
@@ -1415,6 +1429,7 @@ class JFileChannel extends JObj {
   open = true;
   opened() {
     if (!this.open || closedFiles.has(this.file)) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
+    if (this.file instanceof JRAF) rafRefresh(this.file);
     return this.file;
   }
   readable(): JInputStream | JRAF {
