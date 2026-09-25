@@ -588,7 +588,7 @@ for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "
     if (v !== undefined) return v;
     return d === "I" || d === "Z" ? 0 : d === "J" ? 0n : d === "F" || d === "D" ? 0 : null;
   };
-  if (d === "I" || d === "J" || d === "Z" || d === "C" || d === "F" || d === "D" || d === "Ljava/lang/String;") {
+  if (d === "I" || d === "J" || d === "Z" || d === "C" || d === "F" || d === "D" || d === "Ljava/lang/String;" || d === "Ljava/lang/CharSequence;") {
     bundleMethods[`get${t}(Ljava/lang/String;${d})${d}`] = function (this: JBundle, k: string, dflt: unknown) {
       const v = this.map.get(k);
       if (d.length === 1) return bundlePrimitive(v, d, dflt);
@@ -981,6 +981,11 @@ class JKeyEvent extends JObj { action = 0; keyCode = 0; }
 rt.register({
   name: "android/view/KeyEvent", ctor: JKeyEvent, ifaces: ["android/os/Parcelable"],
   statics: {
+    get CREATOR() { return parcelCreator("android/view/KeyEvent", async p => {
+      const action: number = await vcall(p, "readInt", "()I");
+      const keyCode: number = await vcall(p, "readInt", "()I");
+      return Object.assign(new JKeyEvent(), { action, keyCode });
+    }); },
     ACTION_DOWN: 0, ACTION_UP: 1, MAX_KEYCODE: 84,
     ...Object.fromEntries([...keyCodes].map(([name, code]) => ["KEYCODE_" + name, code])),
   },
@@ -1009,6 +1014,11 @@ rt.register({
     },
     "getAction()I": function (this: JKeyEvent) { return this.action; },
     "getKeyCode()I": function (this: JKeyEvent) { return this.keyCode; },
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JKeyEvent, p: JParcel) {
+      await vcall(p, "writeInt", "(I)V", this.action);
+      await vcall(p, "writeInt", "(I)V", this.keyCode);
+    },
     ...stubs(0, "getRepeatCount()I", "getUnicodeChar()I", "hasModifiers(I)Z", "isTracking()Z", "isCanceled()Z"),
     ...stubs(1, "hasNoModifiers()Z"),
     ...noops("startTracking()V"),

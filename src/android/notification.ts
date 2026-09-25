@@ -236,6 +236,10 @@ const bMethods: Record<string, Impl> = {
     if (b) this.extras = b;
     return this;
   },
+  ["addExtras(Landroid/os/Bundle;)" + B]: function (this: JNBuilder, b: JBundle | null) {
+    if (b) for (const [key, value] of b.map) this.extras.map.set(key, value);
+    return this;
+  },
   "getStyle()Landroid/app/Notification$Style;": function (this: JNBuilder) { return this.style; },
   ["setStyle(Landroid/app/Notification$Style;)" + B]: function (this: JNBuilder, s: JNStyle) {
     this.style = s; if (s) s.builder = this; return this;

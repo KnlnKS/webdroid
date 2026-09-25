@@ -1239,7 +1239,7 @@ export class JBitmap extends JObj {
   recycled = false;
   /** AOSP's native config numbering, not Bitmap.Config's ordinal. */
   config = 5;
-  hasAlpha = true; premultiplied = true; immutable = false; mipmap = false;
+  hasAlpha = true; premultiplied = true; immutable = false; shared = false; mipmap = false;
   genId = 0;
   get rowBytes() { return this.w * (this.config === 1 ? 1 : 4); }
   private cv: OffscreenCanvas | null = null;
@@ -1333,6 +1333,7 @@ export function extractBitmapAlpha(src: JBitmap, paint: JPaint | null, offsets: 
 }
 function bitmapBuffer(bitmap: JBitmap, buffer: JBuffer, from: boolean): void {
   if (bitmap.recycled || bitmap.config === 7) throw rt.mkThrowable("java/lang/IllegalStateException", "Bitmap pixels unavailable");
+  if (from && bitmap.immutable) throw rt.mkThrowable("java/lang/IllegalStateException", "Bitmap is immutable");
   if (!buffer) rt.npe();
   if (!["ByteBuffer", "ShortBuffer", "IntBuffer"].some((name) => rt.iof(buffer, "java/nio/" + name)))
     throw rt.mkThrowable("java/lang/RuntimeException", "unsupported Buffer subclass");
@@ -1393,6 +1394,7 @@ export const bitmapMethods: NativeSpec["methods"] = {
       return argbAt(this.pixels(), (y * this.w + x) * 4);
     },
     "setPixel(III)V": function (this: JBitmap, x: number, y: number, c: number) {
+      if (this.immutable) throw rt.mkThrowable("java/lang/IllegalStateException", "Bitmap is immutable");
       putArgb(this.pixels(), (y * this.w + x) * 4, c);
       this.commit(x, y, 1, 1);
     },
@@ -1403,6 +1405,7 @@ export const bitmapMethods: NativeSpec["methods"] = {
       }
     },
     "setPixels([IIIIIII)V": function (this: JBitmap, src: Int32Array, off: number, stride: number, x: number, y: number, w: number, h: number) {
+      if (this.immutable) throw rt.mkThrowable("java/lang/IllegalStateException", "Bitmap is immutable");
       const d = this.pixels();
       for (let row = 0; row < h; row++) {
         for (let col = 0; col < w; col++) putArgb(d, ((y + row) * this.w + x + col) * 4, src[off + row * stride + col]);
@@ -1410,6 +1413,7 @@ export const bitmapMethods: NativeSpec["methods"] = {
       this.commit(x, y, w, h);
     },
     "eraseColor(I)V": function (this: JBitmap, c: number) {
+      if (this.immutable) throw rt.mkThrowable("java/lang/IllegalStateException", "Bitmap is immutable");
       const d = this.pixels();
       for (let i = 0; i < d.length; i += 4) putArgb(d, i, c);
       this.commit(0, 0, this.w, this.h);
@@ -1420,6 +1424,16 @@ export const bitmapMethods: NativeSpec["methods"] = {
       const b = JBitmap.create(this.w, this.h);
       b.ctx.drawImage(this.canvas, 0, 0);
       return b;
+    },
+    "asShared()Landroid/graphics/Bitmap;": function (this: JBitmap) {
+      if (this.recycled) throw rt.mkThrowable("java/lang/IllegalStateException", "Can't copy a recycled bitmap");
+      if (this.shared && this.immutable) return this;
+      const bitmap = JBitmap.create(this.w, this.h);
+      bitmap.pixels().set(this.pixels());
+      bitmap.config = this.config; bitmap.density = this.density;
+      bitmap.hasAlpha = this.hasAlpha; bitmap.premultiplied = this.premultiplied;
+      bitmap.immutable = bitmap.shared = true;
+      return bitmap;
     },
     "getConfig()Landroid/graphics/Bitmap$Config;": function (this: JBitmap) { return bitmapConfigs[this.config === 1 ? 0 : 3]; },
     "hasAlpha()Z": function (this: JBitmap) { return this.hasAlpha ? 1 : 0; },
