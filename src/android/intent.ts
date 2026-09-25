@@ -94,16 +94,21 @@ async function writeIntent(this: JIntent, p: JParcel, flags: number): Promise<vo
   writeInt(p, this.contentUserHint); await vcall(p, "writeBundle", "(Landroid/os/Bundle;)V", this.extras.map.size ? this.extras : null);
   writeInt(p, +!!this.originalIntent); if (this.originalIntent) await vcall(this.originalIntent, "writeToParcel", "(Landroid/os/Parcel;I)V", p, flags);
 }
-async function parseIntentXml(_resources: unknown, parser: unknown, attrs: unknown): Promise<JIntent> {
+async function parseIntentXml(resources: unknown, parser: unknown, attrs: unknown): Promise<JIntent> {
   if (!parser || !attrs) rt.npe();
-  const attribute = (name: string) => vcall(attrs, "getAttributeValue", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "http://schemas.android.com/apk/res/android", name) as Promise<string | null>;
+  const attribute = (name: string): Promise<string | null> => {
+    const value = (attrs as { node?: XmlNode | null }).node?.attrs.find((a: XmlAttr) => a.name === name);
+    return value?.type === TV.REFERENCE
+      ? vcall(resources, "getString", "(I)Ljava/lang/String;", value.data) as Promise<string>
+      : vcall(attrs, "getAttributeValue", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "http://schemas.android.com/apk/res/android", name) as Promise<string | null>;
+  };
   const intent = new JIntent();
   intent.action = await attribute("action");
   intent.dataUri = await attribute("data");
   intent.typeStr = await attribute("mimeType");
   intent.identifier = await attribute("identifier");
-  intent.componentPkg = await attribute("targetPackage");
-  intent.component = await attribute("targetClass");
+  const targetPackage = await attribute("targetPackage"), targetClass = await attribute("targetClass");
+  if (targetPackage && targetClass) { intent.componentPkg = targetPackage; intent.component = targetClass; }
   const outerDepth = await vcall(parser, "getDepth", "()I") as number;
   for (;;) {
     const type = await vcall(parser, "next", "()I") as number;
