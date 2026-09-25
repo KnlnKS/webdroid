@@ -115,6 +115,7 @@ import "./android/listview";
 import "./android/preference";
 import "./android/animator";
 import "./android/media";
+import "./android/audiofx";
 import "./android/media-metrics";
 
 import "./android/mediadrm";
