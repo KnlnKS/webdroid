@@ -1,7 +1,9 @@
 // android.media: MediaPlayer over HTMLAudioElement, SoundPool over Web Audio.
 
 import { rt, JObj, stubs, noops, fieldGetters } from "../jvm/runtime";
+import { jarray } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
+import { uuidFromString } from "../jvm/natives/jvalues";
 import { newArrayList, newStringSet, type JList } from "../jvm/natives/jutil";
 import { type JFileDescriptor, vfs } from "../jvm/natives/jio";
 import { javaFdSource } from "../native/stdio";
@@ -17,6 +19,12 @@ import { JBundle, reportUncaught } from "./os";
 import { mkUri } from "./net";
 import { csText } from "./text";
 import { scannedMediaUri } from "./mediastore";
+
+rt.register({ name: "android/media/audiofx/AudioEffect$Descriptor", ctor: class extends JObj { type = null; }, fields: { type: "type" } });
+rt.register({ name: "android/media/audiofx/AudioEffect", ctor: class extends JObj {},
+  statics: { EFFECT_TYPE_LOUDNESS_ENHANCER: uuidFromString("fe3199be-aed0-413f-87bb-11260eb63cf1") },
+  methods: { "static queryEffects()[Landroid/media/audiofx/AudioEffect$Descriptor;": () => jarray([], "Landroid/media/audiofx/AudioEffect$Descriptor;") },
+});
 
 rt.register({ name: "android/media/RingtoneManager", ctor: class extends JObj {},
   statics: { TYPE_RINGTONE: 1, TYPE_NOTIFICATION: 2, TYPE_ALARM: 4, TYPE_ALL: 7 },
