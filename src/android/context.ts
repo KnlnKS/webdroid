@@ -24,6 +24,8 @@ const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
 export class JContext extends JObj {
   declare $host: AppHost;
   packageLoader: JClassLoader | null = null;
+  attributionTag: string | null = null;
+  attributionSource: Promise<JAttributionSource> | null = null;
 }
 class JDisplayContext extends JContext { display: unknown = null; }
 function contextForDisplay(source: JContext, display: unknown, windowType?: number) {
@@ -164,15 +166,23 @@ export function systemService(jctx: JContext | null, name: string): unknown {
 }
 
 // API 31: a context's own AttributionSource is this process; a provider's caller may be another
-let attribution: unknown;
-export class JAttributionSource extends JObj { uid = PROCESS_UID; pid = PROCESS_PID; pkg: string | null = null; }
+let attribution: Promise<JAttributionSource> | null = null;
+export class JAttributionSource extends JObj { uid = PROCESS_UID; pid = PROCESS_PID; pkg: string | null = null; tag: string | null = null; }
+function contextAttributionSource(this: JContext): Promise<JAttributionSource> {
+  if (this.attributionTag === null) return attribution ??= newObj("android/content/AttributionSource", null);
+  return this.attributionSource ??= newObj("android/content/AttributionSource", null).then((source: JAttributionSource) => {
+    source.tag = this.attributionTag;
+    return source;
+  });
+}
 rt.register({
   name: "android/content/AttributionSource", ctor: JAttributionSource, ifaces: ["android/os/Parcelable"],
   methods: {
     "getUid()I": function (this: JAttributionSource) { return this.uid; },
     "getPid()I": function (this: JAttributionSource) { return this.pid; },
     "getPackageName()Ljava/lang/String;": function (this: JAttributionSource) { return this.pkg ?? appHost!.pkg; },
-    ...stubs(null, "getAttributionTag()Ljava/lang/String;", "getNext()Landroid/content/AttributionSource;"),
+    "getAttributionTag()Ljava/lang/String;": function (this: JAttributionSource) { return this.tag; },
+    ...stubs(null, "getNext()Landroid/content/AttributionSource;"),
     ...stubs(1, "isTrusted(Landroid/content/Context;)Z"),
     ...stubs(0, "describeContents()I"),
   },
@@ -200,7 +210,14 @@ export const contextMethods: NativeSpec["methods"] = {
     return applied;
   },
   "getPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
-  "getAttributionSource()Landroid/content/AttributionSource;": function (this: JContext) { return attribution ??= newObj("android/content/AttributionSource", null); },
+  "getAttributionSource()Landroid/content/AttributionSource;": contextAttributionSource,
+  "createAttributionContext(Ljava/lang/String;)Landroid/content/Context;": function (this: JContext, tag: string | null) {
+    const context = new JAttributionContext();
+    attachBase.call(context, this);
+    context.packageLoader = this.packageLoader;
+    context.attributionTag = tag;
+    return context;
+  },
   "createPackageContext(Ljava/lang/String;I)Landroid/content/Context;": function (this: JContext, pkg: string, flags: number) {
     if (pkg === this.$host.pkg || pkg === this.$host.res.tbl(0x01000000)?.pkgName) return this;
     const record = packages.get(pkg);
@@ -395,7 +412,7 @@ export const contextMethods: NativeSpec["methods"] = {
   ...noops("registerComponentCallbacks(Landroid/content/ComponentCallbacks;)V",
     "unregisterComponentCallbacks(Landroid/content/ComponentCallbacks;)V", "<init>()V",
     "enforceCallingOrSelfPermission(Ljava/lang/String;Ljava/lang/String;)V"),
-  ...stubs(null, "getAttributionTag()Ljava/lang/String;"),
+  "getAttributionTag()Ljava/lang/String;": function (this: JContext) { return this.attributionTag; },
   ...stubs(0, "isDeviceProtectedStorage()Z", "isRestricted()Z"),
 };
 
@@ -403,6 +420,7 @@ rt.register({ name: "android/content/Context", ctor: JContext, methods: contextM
   statics: { LAYOUT_INFLATER_SERVICE: "layout_inflater", WINDOW_SERVICE: "window", INPUT_METHOD_SERVICE: "input_method", CONNECTIVITY_SERVICE: "connectivity", ACTIVITY_SERVICE: "activity", GAME_SERVICE: "game", ACCOUNT_SERVICE: "account", NOTIFICATION_SERVICE: "notification", ALARM_SERVICE: "alarm", POWER_SERVICE: "power", VIBRATOR_SERVICE: "vibrator", AUDIO_SERVICE: "audio", CLIPBOARD_SERVICE: "clipboard", USER_SERVICE: "user", LOCATION_SERVICE: "location", SENSOR_SERVICE: "sensor", MEDIA_ROUTER_SERVICE: "media_router", TELEPHONY_SERVICE: "phone", WIFI_SERVICE: "wifi", DISPLAY_SERVICE: "display", CAMERA_SERVICE: "camera", INPUT_SERVICE: "input", STORAGE_SERVICE: "storage", BATTERY_SERVICE: "batterymanager", KEYGUARD_SERVICE: "keyguard", ACCESSIBILITY_SERVICE: "accessibility", JOB_SCHEDULER_SERVICE: "jobscheduler", UI_MODE_SERVICE: "uimode", DOWNLOAD_SERVICE: "download", MODE_PRIVATE: 0, BIND_AUTO_CREATE: 1 } });
 
 export class JContextWrapper extends JContext { base: JContext | null = null; }
+class JAttributionContext extends JContextWrapper {}
 function configurationContext(source: JContext, config: JConfiguration): JContext {
   const jresources = scopedResources(source.$host.res, config), theme = new JTheme();
   theme.res = jresources.host;
@@ -445,6 +463,7 @@ export const wrapperMethods: NativeSpec["methods"] = {
   ...Object.fromEntries(["getResources()Landroid/content/res/Resources;", "getAssets()Landroid/content/res/AssetManager;",
     "getSystemService(Ljava/lang/String;)Ljava/lang/Object;", "getClassLoader()Ljava/lang/ClassLoader;",
     "getApplicationContext()Landroid/content/Context;", "getPackageManager()Landroid/content/pm/PackageManager;",
+    "getAttributionTag()Ljava/lang/String;", "getAttributionSource()Landroid/content/AttributionSource;",
     "getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;"].map((sig) => {
     const i = sig.indexOf("(");
     return [sig, viaBase(sig.slice(0, i), sig.slice(i))];
@@ -454,6 +473,13 @@ rt.register({
   name: "android/content/ContextWrapper", ctor: JContextWrapper, sup: "android/content/Context",
   methods: { ...wrapperMethods, "<init>(Landroid/content/Context;)V": attachBase },
 });
+rt.register({ name: "webdroid/AttributionContext", ctor: JAttributionContext, sup: "android/content/ContextWrapper", methods: {
+  ...wrapperMethods,
+  "getAttributionTag()Ljava/lang/String;": function (this: JAttributionContext) { return this.attributionTag; },
+  "getAttributionSource()Landroid/content/AttributionSource;": contextAttributionSource,
+  "getDisplay()Landroid/view/Display;": function (this: JAttributionContext) { return vcall(this.base, "getDisplay", "()Landroid/view/Display;"); },
+  "isUiContext()Z": function (this: JAttributionContext) { return vcall(this.base, "isUiContext", "()Z"); },
+} });
 rt.register({
   name: "android/content/MutableContextWrapper", ctor: class extends JContextWrapper {}, sup: "android/content/ContextWrapper",
   methods: { ...wrapperMethods, "<init>(Landroid/content/Context;)V": attachBase, "setBaseContext(Landroid/content/Context;)V": attachBase },

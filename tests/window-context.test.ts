@@ -44,6 +44,20 @@ test("display and window contexts retain display identity and own their window s
   expect(rt.iof(error, "java/lang/IllegalArgumentException")).toBeTruthy();
 });
 
+test("attribution contexts retain their base and expose their tag", async () => {
+  const source = new JContext();
+  Reflect.set(source, "$host", { application: source, pkg: "test" });
+  const tagged = await vcall(source, "createAttributionContext", "(Ljava/lang/String;)Landroid/content/Context;", "navigation");
+  expect(tagged).not.toBe(source);
+  expect(await vcall(tagged, "getApplicationContext", "()Landroid/content/Context;")).toBe(source);
+  expect(await vcall(tagged, "isUiContext", "()Z")).toBe(0);
+  expect(await vcall(tagged, "getAttributionTag", "()Ljava/lang/String;")).toBe("navigation");
+  const attribution = await vcall(tagged, "getAttributionSource", "()Landroid/content/AttributionSource;");
+  expect(await vcall(attribution, "getAttributionTag", "()Ljava/lang/String;")).toBe("navigation");
+  const reset = await vcall(tagged, "createAttributionContext", "(Ljava/lang/String;)Landroid/content/Context;", null);
+  expect(await vcall(reset, "getAttributionTag", "()Ljava/lang/String;")).toBeNull();
+});
+
 test("unchanged window attributes do not restart inset dispatch", async () => {
   const window = rt.make("android/view/Window");
   const attrs = await vcall(window, "getAttributes", "()Landroid/view/WindowManager$LayoutParams;");
