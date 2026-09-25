@@ -11,6 +11,7 @@ import { exportBinder, importBinder } from "./binder";
 import { JParcel, parcelCreator } from "./parcel";
 import { encodeIntent, decodeIntent, type IntentData } from "./intentipc";
 import { PendingIntents, type PendingOperation } from "../shell/pendingintents";
+import type { JBundle } from "./os";
 
 export async function executePendingIntent(operation: PendingOperation, fill: IntentData | null, alarmCount: number): Promise<void> {
   const intent = await decodeIntent(operation.intent), context = appHost?.application ?? await newObj("android/content/Context");
@@ -20,13 +21,16 @@ export async function executePendingIntent(operation: PendingOperation, fill: In
     await vcall(intent, "fillIn", "(Landroid/content/Intent;I)I", supplied, operation.flags);
   }
   if (operation.kind === "broadcast") sendBroadcast(context, intent);
-  else if (operation.kind === "activity") await launchIntent(context.$host, intent);
+  else if (operation.kind === "activity") {
+    for (const prior of operation.preceding) await launchIntent(context.$host, await decodeIntent(prior));
+    await launchIntent(context.$host, intent);
+  }
   else svcStart(context, intent, false);
 }
 export const localPendingIntents = new PendingIntents(executePendingIntent);
 export const pendingTransport = {
-  create: (pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: IntentData) =>
-    localPendingIntents.create({ pkg, kind, code, flags, intent, uid: PROCESS_UID, process: PROCESS_NAME || pkg }),
+  create: (pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: IntentData, preceding: IntentData[]) =>
+    localPendingIntents.create({ pkg, kind, code, flags, intent, preceding, uid: PROCESS_UID, process: PROCESS_NAME || pkg }),
   cancel: (id: number) => localPendingIntents.cancel(id),
   send: (id: number, fill: IntentData | null) => localPendingIntents.send(id, fill),
   operation: (id: number): PendingOperation | null => localPendingIntents.take(id),
@@ -59,12 +63,16 @@ export async function startIntentSender(context: JContext, sender: JIntentSender
   if (operation.kind !== "activity") return sendIntent(sender, fill ?? undefined);
   const intent = await decodeIntent(operation.intent);
   if (fill && !(operation.flags & 0x4000000)) await vcall(intent, "fillIn", "(Landroid/content/Intent;I)I", fill, operation.flags);
+  for (const prior of operation.preceding) await launchIntent(context.$host, await decodeIntent(prior), undefined, operation.pkg);
   await launchIntent(context.$host, intent, result, operation.pkg);
 }
-async function pending(kind: PendingOperation["kind"], context: JContext, code: number, intent: JIntent, flags: number): Promise<JPendingIntent | null> {
-  if (!intent) throw rt.mkThrowable("java/lang/NullPointerException", "intent");
+async function pending(kind: PendingOperation["kind"], context: JContext, code: number, input: JIntent | JIntent[], flags: number): Promise<JPendingIntent | null> {
+  if (!input) throw rt.mkThrowable("java/lang/NullPointerException", "intent");
   if ((flags & 0x6000000) === 0x6000000) throw rt.mkThrowable("java/lang/IllegalArgumentException", "PendingIntent cannot be both mutable and immutable");
-  const id = pendingTransport.create(context.$host?.pkg ?? appHost?.pkg ?? "", kind, code, flags, await encodeIntent(intent));
+  const intents = Array.isArray(input) ? input : [input];
+  if (!intents.length || intents.some(intent => !intent)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "intents must be non-empty and non-null");
+  const encoded = await Promise.all(intents.map(encodeIntent));
+  const id = pendingTransport.create(context.$host?.pkg ?? appHost?.pkg ?? "", kind, code, flags, encoded[encoded.length - 1], encoded.slice(0, -1));
   if (id === null) return null;
   const result = new JPendingIntent(); result.sender.target = importBinder({ pid: 0, id }); return result;
 }
@@ -85,6 +93,9 @@ rt.register({ name: "android/app/PendingIntent", ctor: JPendingIntent, ifaces: [
     const result = new JPendingIntent(); result.sender.target = target; return result;
   }); } }, methods: {
     "static getActivity(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number) => pending("activity", context, code, intent, flags),
+    "static getActivity(Landroid/content/Context;ILandroid/content/Intent;ILandroid/os/Bundle;)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number, _options: JBundle) => pending("activity", context, code, intent, flags),
+    "static getActivities(Landroid/content/Context;I[Landroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intents: JIntent[], flags: number) => pending("activity", context, code, intents, flags),
+    "static getActivities(Landroid/content/Context;I[Landroid/content/Intent;ILandroid/os/Bundle;)Landroid/app/PendingIntent;": (context: JContext, code: number, intents: JIntent[], flags: number, _options: JBundle) => pending("activity", context, code, intents, flags),
     "static getBroadcast(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number) => pending("broadcast", context, code, intent, flags),
     "static getService(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number) => pending("service", context, code, intent, flags),
     "getIntentSender()Landroid/content/IntentSender;": function (this: JPendingIntent) { return this.sender; },

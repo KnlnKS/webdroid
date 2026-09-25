@@ -75,10 +75,10 @@ class ProcessBroker {
     await this.service(null, operation.pkg, operation.process, { kind: "pending", operation, fill, alarmCount });
   });
   readonly alarms = new Alarms(this.intents, uptimeMillis, reportUncaught);
-  createPending(pid: number, pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: IntentData): number | null {
+  createPending(pid: number, pkg: string, kind: PendingOperation["kind"], code: number, flags: number, intent: IntentData, preceding: IntentData[]): number | null {
     const caller = this.entry(pid), owner = packages.get(pkg);
     if (!owner || owner.uid !== caller.uid) throw rt.mkThrowable("java/lang/SecurityException", "PendingIntent creator does not match caller");
-    return this.intents.create({ pkg, kind, code, flags, intent, uid: caller.uid, process: caller.process });
+    return this.intents.create({ pkg, kind, code, flags, intent, preceding, uid: caller.uid, process: caller.process });
   }
   /** the operation behind a sender handle a process holds, taken for a start on the creator's behalf */
   takePending(pid: number, id: number): PendingOperation | null {
@@ -480,8 +480,8 @@ export function connectProcess(): ProcessEndpoint {
   binderTransport.transact = (request) => remote(broker.transact(PROCESS_PID, request));
   binderTransport.alive = (pid) => pid === 0 || broker.alive(pid);
   binderTransport.watch = (pid, died) => pid === 0 ? () => {} : broker.watch(pid, died);
-  pendingTransport.create = (pkg, kind, code, flags, intent) => {
-    try { return broker.createPending(PROCESS_PID, pkg, kind, code, flags, intent); } catch (error) { return remoteError(error); }
+  pendingTransport.create = (pkg, kind, code, flags, intent, preceding) => {
+    try { return broker.createPending(PROCESS_PID, pkg, kind, code, flags, intent, preceding); } catch (error) { return remoteError(error); }
   };
   pendingTransport.cancel = id => {
     try { broker.cancelPending(PROCESS_PID, id); } catch (error) { remoteError(error); }
