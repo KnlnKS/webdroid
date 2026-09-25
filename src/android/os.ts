@@ -1049,7 +1049,7 @@ rt.register({
     },
   },
 });
-const errno = (fn: string, e: number) => { const x = rt.mkThrowable("android/system/ErrnoException", fn) as JErrnoException; initErrno.call(x, fn, e); return x; };
+export const errno = (fn: string, e: number) => { const x = rt.mkThrowable("android/system/ErrnoException", fn) as JErrnoException; initErrno.call(x, fn, e); return x; };
 class JStructStat extends JObj { st_dev = 0n; st_ino = 0n; st_mode = 0; st_nlink = 1n; st_uid = 0; st_gid = 0; st_size = 0n; st_atime = 0n; st_mtime = 0n; st_ctime = 0n; st_blksize = 4096n; st_blocks = 0n; }
 rt.register({
   name: "android/system/StructStat", ctor: JStructStat,
@@ -1118,6 +1118,7 @@ rt.register({
   statics: {
     ...Object.fromEntries(Object.entries(E).map(([name, value]) => ["E" + name, value])),
     PROT_READ: 0x1,
+    PROT_WRITE: 0x2, PROT_EXEC: 0x4, PROT_NONE: 0,
     MAP_PRIVATE: 0x02,
     SEEK_SET: 0, SEEK_CUR: 1, SEEK_END: 2,
     SIGKILL: 9,
