@@ -7,6 +7,7 @@ import { vfs } from "../jvm/natives/jio";
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
 import { vcall, vcallOn, callOn, curThread, type JThread, boxInt, box, JLong, JBool } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
+import { csText } from "../jvm/natives/jchars";
 import { JBundle, JFnRunnable, JObservable, registerDatabaseObserver } from "./os";
 
 type SqlJs = Awaited<ReturnType<typeof initSqlJs>>;
@@ -395,6 +396,10 @@ rt.register({
       "<init>(Landroid/content/ContentValues;)V": function (this: JContentValues, o: JContentValues) {
         if (o) this.data.m = new Map([...o.data.m].map(([k, e]) => [k, { ...e }]));
       },
+      "putAll(Landroid/content/ContentValues;)V": function (this: JContentValues, other: JContentValues) {
+        if (!other) rt.npe();
+        for (const [key, entry] of other.data.m) this.data.m.set(key, { ...entry });
+      },
       "putNull(Ljava/lang/String;)V": function (this: JContentValues, k: string) { this.data.m.set(k, { k, v: null }); },
       "size()I": function (this: JContentValues) { return this.data.m.size; },
       "containsKey(Ljava/lang/String;)Z": function (this: JContentValues, k: string) { return this.data.m.has(k) ? 1 : 0; },
@@ -592,9 +597,9 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
   ...stubs(0, "isWriteAheadLoggingEnabled()Z", "isDbLockedByCurrentThread()Z", "enableWriteAheadLogging()Z",
     "yieldIfContendedSafely()Z", "static releaseMemory()I"),
 };
-function buildQuery(table: string, cols: string[] | null, sel: string | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null): string {
+function buildQuery(table: string, cols: string[] | null, sel: string | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null, rawTable = false, distinct = false): string {
   const c = cols?.length ? cols.join(",") : "*";
-  let sql = `SELECT ${c} FROM "${table}"`;
+  let sql = `SELECT ${distinct ? "DISTINCT " : ""}${c} FROM ${rawTable ? table : `"${table}"`}`;
   if (sel) sql += " WHERE " + sel;
   if (groupBy) sql += " GROUP BY " + groupBy;
   if (having) sql += " HAVING " + having;
@@ -602,6 +607,77 @@ function buildQuery(table: string, cols: string[] | null, sel: string | null, gr
   if (limit) sql += " LIMIT " + limit;
   return sql;
 }
+class JSQLiteQueryBuilder extends JObj {
+  tables: string | null = null;
+  projectionMap: JMap | null = null;
+  where = "";
+  distinct = false;
+}
+function projectionColumns(builder: JSQLiteQueryBuilder, requested: string[] | null): string[] | null {
+  const map = builder.projectionMap;
+  if (!map) return requested;
+  if (!requested?.length) return [...map.m.values(), ...map.slow].filter(e => e.k !== "_count").map(e => String(e.v));
+  return requested.map(name => {
+    const mapped = map.m.get(name)?.v ?? map.slow.find(e => e.k === name)?.v;
+    if (mapped != null) return String(mapped);
+    if (/\sAS\s/i.test(name)) return name;
+    throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid column " + name);
+  });
+}
+function builderWhere(builder: JSQLiteQueryBuilder, selection: string | null): string | null {
+  return builder.where ? selection ? `(${builder.where}) AND (${selection})` : `(${builder.where})` : selection;
+}
+function builderEditTable(builder: JSQLiteQueryBuilder): string {
+  const tables = builder.tables;
+  if (tables === null) rt.npe();
+  return tables!.split(/[\s,]/, 1)[0];
+}
+function queryBuilder(builder: JSQLiteQueryBuilder, db: JSQLiteDatabase, cols: string[] | null, selection: string | null,
+  args: unknown[] | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null): JCursor | null {
+  if (builder.tables === null) return null;
+  return runQuery(db, buildQuery(builder.tables, projectionColumns(builder, cols), builderWhere(builder, selection), groupBy, having, orderBy, limit, true, builder.distinct), args);
+}
+rt.register({
+  name: "android/database/sqlite/SQLiteQueryBuilder", ctor: JSQLiteQueryBuilder,
+  methods: {
+    "<init>()V": function () {},
+    "setTables(Ljava/lang/String;)V": function (this: JSQLiteQueryBuilder, tables: string | null) { this.tables = tables; },
+    "getTables()Ljava/lang/String;": function (this: JSQLiteQueryBuilder) { return this.tables; },
+    "setProjectionMap(Ljava/util/Map;)V": function (this: JSQLiteQueryBuilder, map: JMap | null) { this.projectionMap = map; },
+    "getProjectionMap()Ljava/util/Map;": function (this: JSQLiteQueryBuilder) { return this.projectionMap; },
+    "setDistinct(Z)V": function (this: JSQLiteQueryBuilder, distinct: number) { this.distinct = !!distinct; },
+    "isDistinct()Z": function (this: JSQLiteQueryBuilder) { return +this.distinct; },
+    "appendWhere(Ljava/lang/CharSequence;)V": async function (this: JSQLiteQueryBuilder, where: unknown) { this.where += await csText(where); },
+    "appendWhereStandalone(Ljava/lang/CharSequence;)V": async function (this: JSQLiteQueryBuilder, where: unknown) {
+      if (this.where) this.where += " AND ";
+      this.where += `(${await csText(where)})`;
+    },
+    "appendWhereEscapeString(Ljava/lang/String;)V": function (this: JSQLiteQueryBuilder, where: string) {
+      this.where += "'" + where.replaceAll("'", "''") + "'";
+    },
+    "query(Landroid/database/sqlite/SQLiteDatabase;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
+      function (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, cols: string[] | null, selection: string | null, args: unknown[] | null, groupBy: string | null, having: string | null, orderBy: string | null) {
+        return queryBuilder(this, db, cols, selection, args, groupBy, having, orderBy, null);
+      },
+    "query(Landroid/database/sqlite/SQLiteDatabase;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
+      function (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, cols: string[] | null, selection: string | null, args: unknown[] | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null) {
+        return queryBuilder(this, db, cols, selection, args, groupBy, having, orderBy, limit);
+      },
+    "update(Landroid/database/sqlite/SQLiteDatabase;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I":
+      function (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, values: JContentValues, selection: string | null, args: unknown[] | null) {
+        if (!db || !values) rt.npe();
+        if (!values.data.m.size) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Empty values");
+        return callSelf(dbMethods, "update(Ljava/lang/String;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I",
+          db, builderEditTable(this), values, builderWhere(this, selection), args);
+      },
+    "delete(Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/String;)I":
+      function (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, selection: string | null, args: unknown[] | null) {
+        if (!db) rt.npe();
+        return callSelf(dbMethods, "delete(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)I",
+          db, builderEditTable(this), builderWhere(this, selection), args);
+      },
+  },
+});
 function doInsert(jdb: JSQLiteDatabase, table: string, cv: JContentValues, or: string, doThrow = false): bigint {
   const keys = [...cv.data.m.keys()];
   const sql = keys.length
