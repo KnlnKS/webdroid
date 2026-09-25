@@ -22,6 +22,8 @@ import { csText } from "./text";
 import type { JActivity } from "./app";
 import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, type ComponentKind } from "./packages";
 import { digestBytes } from "../jvm/natives/jsec";
+import { parcelCreator, type JParcel } from "./parcel";
+import { readApplicationInfo, writeApplicationInfo } from "./pm-parcel";
 
 class JFeatureInfo extends JObj {
   name: string | null = null;   // null on the glEsVersion entry, as AOSP leaves it
@@ -292,10 +294,21 @@ class JApplicationInfo extends JPackageItemInfo {
 export const FLAG_IS_GAME = 0x02000000;
 rt.register({
   name: "android/content/pm/ApplicationInfo", ctor: JApplicationInfo, sup: "android/content/pm/PackageItemInfo", ifaces: ["android/os/Parcelable"],
+  statics: { get CREATOR() { return parcelCreator("android/content/pm/ApplicationInfo", async (parcel) => {
+    const info = new JApplicationInfo();
+    await readApplicationInfo(parcel, info as unknown as Record<string, unknown>);
+    return info;
+  }); } },
   fields: ["packageName", "sourceDir", "dataDir", "deviceProtectedDataDir", "storageUuid", "nativeLibraryDir", "flags", "targetSdkVersion", "minSdkVersion",
     "theme", "labelRes", "nonLocalizedLabel", "icon", "className", "publicSourceDir", "uid", "processName", "enabled",
     "metaData", "category", "splitNames", "splitSourceDirs", "splitPublicSourceDirs", "sharedLibraryFiles"],
-  methods: { "<init>()V": function () {} },
+  methods: {
+    "<init>()V": function () {},
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": function (this: JApplicationInfo, parcel: JParcel) {
+      return writeApplicationInfo(parcel, this as unknown as Record<string, unknown>);
+    },
+  },
 });
 let cachedAppInfo: JApplicationInfo | null = null;
 export function getAppInfo(host: AppHost): JApplicationInfo {
