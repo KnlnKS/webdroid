@@ -32,6 +32,7 @@ import { transactionCaller } from "./binder";
 import { packages } from "./packages";
 import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
 import { clipboardMethods } from "./clipboard";
+import { JActionMode, startActionMode } from "./actionmode";
 
 export { fireActivityLifecycle } from "./lifecycle";
 
@@ -129,6 +130,7 @@ export class JActivity extends JContextWrapper {
   hasWindowFocus = false;
   actionBarObj: any = null;
   optionsMenu: JMenu | null = null;
+  actionMode: JActionMode | null = null;
   resultCode = 0;
   resultData: JIntent | null = null;
   /** who asked for this activity's result, and under which request code */
@@ -177,6 +179,12 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     m.jctx = this;
     return m;
   },
+  "startActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;": function (this: JActivity, cb: unknown) {
+    return startActionMode(this, cb);
+  },
+  "startActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;": function (this: JActivity, cb: unknown, _type: number) {
+    return startActionMode(this, cb);
+  },
   "setContentView(I)V": async function (this: JActivity, layoutId: number) {
     await ensureDecor(this);
     for (const child of [...this.window.contentParent!.children]) await detachView(this.window.contentParent!, child);
@@ -212,7 +220,10 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "onResume()V": async function (this: JActivity) { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); },
   "onPause()V": function (this: JActivity) { this.resumed = false; return dispatchFragLifecycle(this, "onPause"); },
   "onStop()V": function (this: JActivity) { this.started = false; return dispatchFragLifecycle(this, "onStop"); },
-  "onDestroy()V": function (this: JActivity) { return dispatchFragLifecycle(this, "onDestroy"); },
+  "onDestroy()V": async function (this: JActivity) {
+    if (this.actionMode) await vcall(this.actionMode, "finish", "()V");
+    await dispatchFragLifecycle(this, "onDestroy");
+  },
   /**
    * AOSP Activity.onBackPressed: collapse an expanded action view, then pop the fragment
    * back stack, and only if neither consumed the press, finish. androidx apps land here as

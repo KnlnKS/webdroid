@@ -7,7 +7,7 @@ import { mangleMethod, jmethod } from "../jvm/abi";
 import { newObj, vcall, curThread, after } from "../jvm/natives/jlang";
 import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSize, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom } from "./view";
 import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
-import { JAttrSet, obtainStyled, rvDimen, rvInt, rvString, type Resources } from "./res";
+import { JAttrSet, obtainStyled, rvDimen, rvInt, type Resources } from "./res";
 import { attr } from "./axml";
 import { JCanvas } from "./graphics";
 import { JDrawable, loadDrawableRV, drawableSize, drawChild } from "./drawable";
@@ -18,7 +18,7 @@ import { JTextView } from "./textview";
 import { inflateLayout } from "./inflate";
 import { addOverlay, removeOverlay } from "./popup";
 import { device } from "../shell/config";
-import { spannedString } from "./text";
+import { JActionMode } from "./actionmode";
 
 for (const i of ["android/widget/Adapter", "android/widget/ListAdapter", "android/widget/SpinnerAdapter",
   "android/widget/AdapterView$OnItemClickListener", "android/widget/AdapterView$OnItemLongClickListener",
@@ -159,10 +159,7 @@ rt.register({
   },
 });
 
-// ── ActionMode + the modal multi-select callbacks
-// AbsListView.MultiChoiceModeListener extends ActionMode.Callback; apps implement it and we
-// drive it from setItemChecked. No action bar UI: the mode owns a Menu the app can fill.
-rt.markers("android/view/ActionMode$Callback");
+// AbsListView.MultiChoiceModeListener extends ActionMode.Callback.
 rt.register({
   name: "android/widget/AbsListView$MultiChoiceModeListener", ctor: class extends JObj {},
   ifaces: ["android/view/ActionMode$Callback"],
@@ -171,55 +168,6 @@ rt.register({
   name: "android/widget/AbsListView$OnScrollListener", ctor: class extends JObj {},
   statics: { SCROLL_STATE_IDLE: 0, SCROLL_STATE_TOUCH_SCROLL: 1, SCROLL_STATE_FLING: 2 },
 });
-class JActionMode extends JObj {
-  jctx: any = null;
-  cb: unknown = null;          // ActionMode.Callback
-  menu: any = null;            // webdroid/Menu
-  title = "";
-  subtitle = "";
-  finished = false;
-  onFinish: (() => void | Promise<void>) | null = null;
-}
-const M_amSetTitle = mangleMethod("setTitle", "(Ljava/lang/CharSequence;)V");
-const M_amSetSubtitle = mangleMethod("setSubtitle", "(Ljava/lang/CharSequence;)V");
-function amString(m: JActionMode, id: number): string {
-  const res: Resources | null = m.jctx?.$host?.res ?? null;
-  return res ? rvString(res, res.resolveRefs(res.value(id))) ?? "" : "";
-}
-rt.register({
-  name: "android/view/ActionMode", ctor: JActionMode,
-  methods: {
-    "getMenuInflater()Landroid/view/MenuInflater;": function (this: JActionMode) {
-      const inf = rt.make("android/view/MenuInflater");
-      inf.jctx = this.jctx;
-      return inf;
-    },
-    "setTitle(Ljava/lang/CharSequence;)V": function (this: JActionMode, t: unknown) {
-      this.title = spannedString(t);
-    },
-    "setTitle(I)V": function (this: JActionMode, id: number) { jmethod(this, M_amSetTitle)!.call(this, amString(this, id)); },
-    "setSubtitle(Ljava/lang/CharSequence;)V": function (this: JActionMode, t: unknown) {
-      this.subtitle = spannedString(t);
-    },
-    "setSubtitle(I)V": function (this: JActionMode, id: number) { jmethod(this, M_amSetSubtitle)!.call(this, amString(this, id)); },
-    ...fieldGetters({ "getMenu()Landroid/view/Menu;": "menu", "getTitle()Ljava/lang/CharSequence;": "title",
-      "getSubtitle()Ljava/lang/CharSequence;": "subtitle" }),
-    "invalidate()V": async function (this: JActionMode) {
-      if (this.cb) {
-        await vcall(this.cb, "onPrepareActionMode", "(Landroid/view/ActionMode;Landroid/view/Menu;)Z", this, this.menu);
-      }
-      invalidate();
-    },
-    "finish()V": async function (this: JActionMode) {
-      if (this.finished) return;
-      this.finished = true;
-      await this.onFinish?.();
-      if (this.cb) await vcall(this.cb, "onDestroyActionMode", "(Landroid/view/ActionMode;)V", this);
-      invalidate();
-    },
-  },
-});
-
 const CHOICE_MODE_MULTIPLE_MODAL = 3;
 export class JListView extends JViewGroup {
   adapter: unknown = null;

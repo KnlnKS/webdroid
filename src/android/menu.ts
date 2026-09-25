@@ -11,6 +11,7 @@ import { appString } from "./context";
 import { parseAXML, TV } from "./axml";
 import { rvString } from "./res";
 import type { JActivity } from "./app";
+import type { JActionMode } from "./actionmode";
 import { spannedString } from "./text";
 
 function firstText(v: JView | null): string | null {
@@ -20,6 +21,7 @@ function firstText(v: JView | null): string | null {
   return null;
 }
 export class JActionBarView extends JViewGroup {
+  mode: JActionMode | null = null;
   titleStr = "";
   subtitleStr: string | null = null;
   barH = 112;
@@ -52,8 +54,15 @@ export class JActionBarView extends JViewGroup {
     const thread = curThread;
     const ctx = cv.ctx;
     const h = this.height();
+    if (this.mode) { ctx.fillStyle = "#303030"; ctx.fillRect(0, 0, this.width(), h); }
     let x = 27;
-    if (this.showUp && this.upDrawable) {
+    if (this.mode) {
+      ctx.fillStyle = "#fff";
+      ctx.font = "40px Roboto";
+      ctx.textBaseline = "middle";
+      ctx.fillText("×", x, h / 2);
+      x += 72;
+    } else if (this.showUp && this.upDrawable) {
       const d = this.upDrawable;
       d.bounds.left = 2; d.bounds.top = h / 2 - 24;
       d.bounds.right = 50; d.bounds.bottom = h / 2 + 24;
@@ -81,8 +90,9 @@ export class JActionBarView extends JViewGroup {
       }
       return s.slice(0, lo) + "\u2026";
     };
-    const mainLabel = this.navMode === 1 && this.navLabel ? this.navLabel : this.titleStr;
-    const two = !!this.subtitleStr;
+    const mainLabel = this.mode ? firstText(this.mode.customView) ?? this.mode.title : this.navMode === 1 && this.navLabel ? this.navLabel : this.titleStr;
+    const subtitle = this.mode?.subtitle || this.subtitleStr;
+    const two = !!subtitle;
     ctx.fillText(ell(mainLabel, this.navMode === 1 ? titleMax - 72 : titleMax), x, h / 2 + (two ? -14 : 1));
     if (this.navMode === 1) {
       // list-navigation spinner caret, right of the label
@@ -97,7 +107,7 @@ export class JActionBarView extends JViewGroup {
     } else if (two) {
       ctx.font = "26px Roboto, sans-serif";
       ctx.fillStyle = "rgba(255,255,255,0.8)";
-      ctx.fillText(this.subtitleStr!, x, h / 2 + 20);
+      ctx.fillText(subtitle!, x, h / 2 + 20);
     }
     for (let i = 0; i < shown.length; i++) {
       const item = shown[i];
@@ -137,6 +147,7 @@ rt.register({
     "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JActionBarView, ev: any) {
       if ((ev.action & 0xff) === 1) {
         if (this.showUp && ev.x < 80) {
+          if (this.mode) { await vcall(this.mode, "finish", "()V"); return 1; }
           // AOSP's ActionBarView reports the Up affordance as the options item
           // android.R.id.home, so it reaches the activity's onOptionsItemSelected like any
           // other item. Finishing here directly would rob every app of that override.
@@ -188,8 +199,12 @@ async function performMenuItem(anchor: JView, item: JMenuItem): Promise<boolean>
     if (item.clickL) {
       invoked = !!(await vcall(item.clickL, "onMenuItemClick", "(Landroid/view/MenuItem;)Z", item));
     }
+    const mode = anchor.parent instanceof JActionBarView ? anchor.parent.mode : null;
+    if (!invoked && mode?.cb) {
+      invoked = !!(await vcall(mode.cb, "onActionItemClicked", "(Landroid/view/ActionMode;Landroid/view/MenuItem;)Z", mode, item));
+    }
     const act = appHost?.currentActivity();
-    if (!invoked && act) {
+    if (!invoked && !mode && act) {
       invoked = !!(await vcall(act, "onMenuItemSelected", "(ILandroid/view/MenuItem;)Z", 0, item));
     }
     if (item.sub) await showMenuPopup(anchor, item.sub.items);
