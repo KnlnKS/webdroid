@@ -21,6 +21,7 @@ import "./jvm/natives/jblockingqueue";
 import "./jvm/natives/jsync";
 import "./jvm/natives/jconc";
 import "./jvm/natives/jtime";
+import "./jvm/natives/jregex";
 import "./jvm/natives/jtext";
 import "./jvm/natives/jreflect";
 import "./jvm/natives/jdom";
