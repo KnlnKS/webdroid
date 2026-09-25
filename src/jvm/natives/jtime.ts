@@ -820,7 +820,8 @@ rt.register({
   methods: {
     "static now()Ljava/time/OffsetDateTime;": () => odt(Date.now()),
     "static parse(Ljava/lang/CharSequence;)Ljava/time/OffsetDateTime;": (s: string) => odt(parseIso(s)),
-    "static from(Ljava/time/temporal/TemporalAccessor;)Ljava/time/OffsetDateTime;": (t: unknown) => odt(temporalMs(t)),
+    "static from(Ljava/time/temporal/TemporalAccessor;)Ljava/time/OffsetDateTime;": (t: unknown) =>
+      odt(temporalMs(t), t instanceof JZonedDateTime && t.zone instanceof JZoneOffset ? t.zone : null),
     "static ofInstant(Ljava/time/Instant;Ljava/time/ZoneId;)Ljava/time/OffsetDateTime;": (i: JInstant | null, zone: JZoneId) => odt(i?.ms ?? Date.now(), zone),
     "getOffset()Ljava/time/ZoneOffset;": function (this: JZonedDateTime) { return this.zone; },
     "toLocalTime()Ljava/time/LocalTime;": function (this: JZonedDateTime) { return localTimeAt(this.ms, this.zone); },
@@ -833,7 +834,10 @@ rt.register({
     "static now()Ljava/time/ZonedDateTime;": () => zdt(Date.now()),
     "format(Ljava/time/format/DateTimeFormatter;)Ljava/lang/String;": formatWith,
     "static parse(Ljava/lang/CharSequence;)Ljava/time/ZonedDateTime;": (s: string) => zdt(parseIso(s)),
-    "static from(Ljava/time/temporal/TemporalAccessor;)Ljava/time/ZonedDateTime;": (t: unknown) => zdt(temporalMs(t)),
+    "static from(Ljava/time/temporal/TemporalAccessor;)Ljava/time/ZonedDateTime;": (t: unknown) => {
+      if (!(t instanceof JZonedDateTime)) throw rt.mkThrowable("java/time/DateTimeException", "Unable to obtain ZoneId from temporal");
+      return zdt(t.ms, t.zone);
+    },
     "static now(Ljava/time/ZoneId;)Ljava/time/ZonedDateTime;": (zone: JZoneId) => zdt(Date.now(), zone),
     "static ofInstant(Ljava/time/Instant;Ljava/time/ZoneId;)Ljava/time/ZonedDateTime;": (i: JInstant | null, zone: JZoneId) => zdt(i?.ms ?? Date.now(), zone),
     "static ofLocal(Ljava/time/LocalDateTime;Ljava/time/ZoneId;Ljava/time/ZoneOffset;)Ljava/time/ZonedDateTime;": (l: JLocalDateTime | null, zone: JZoneId) =>
@@ -855,7 +859,7 @@ rt.register({
   },
 });
 rt.markers("java/time/temporal/Temporal", "java/time/temporal/TemporalAccessor", "java/time/temporal/TemporalAmount",
-  "java/time/temporal/TemporalUnit");
+  "java/time/temporal/TemporalUnit", "java/time/temporal/TemporalQuery");
 mkEnumSet("java/time/format/FormatStyle", ["FULL", "LONG", "MEDIUM", "SHORT"]);
 defineException("java/time/DateTimeException", "java/lang/RuntimeException");
 defineException("java/time/format/DateTimeParseException", "java/time/DateTimeException");
@@ -891,7 +895,7 @@ function offsetText(seconds: number, length: number, zeroAsZ: boolean): string {
 rt.register({
   name: "java/time/format/DateTimeFormatter", ctor: JDateTimeFormatter,
   statics: { ISO_LOCAL_DATE: fmtOf("yyyy-MM-dd"), ISO_LOCAL_TIME: fmtOf("HH:mm:ss"), ISO_LOCAL_DATE_TIME: fmtOf("yyyy-MM-dd'T'HH:mm:ss"),
-    ISO_OFFSET_DATE_TIME: fmtOf("ISO_OFFSET_DATE_TIME"), ISO_INSTANT: fmtOf("ISO_INSTANT") },
+    ISO_DATE_TIME: fmtOf("ISO_DATE_TIME"), ISO_OFFSET_DATE_TIME: fmtOf("ISO_OFFSET_DATE_TIME"), ISO_INSTANT: fmtOf("ISO_INSTANT") },
   methods: {
     "static ofPattern(Ljava/lang/String;)Ljava/time/format/DateTimeFormatter;": fmtOf,
     "withZone(Ljava/time/ZoneId;)Ljava/time/format/DateTimeFormatter;": function (this: JDateTimeFormatter, z: JZoneId) { return Object.assign(new JDateTimeFormatter(), this, { zone: z }); },
@@ -899,6 +903,20 @@ rt.register({
     "withDecimalStyle(Ljava/time/format/DecimalStyle;)Ljava/time/format/DateTimeFormatter;": function (this: JDateTimeFormatter) { return this; },
     "getZone()Ljava/time/ZoneId;": function (this: JDateTimeFormatter) { return this.zone; },
     "parse(Ljava/lang/CharSequence;)Ljava/time/temporal/TemporalAccessor;": function (this: JDateTimeFormatter, s: string) { return zdt(parseIso(s), this.zone as JZoneId | null); },
+    "parseBest(Ljava/lang/CharSequence;[Ljava/time/temporal/TemporalQuery;)Ljava/time/temporal/TemporalAccessor;": async function (this: JDateTimeFormatter, s: string, queries: unknown[]) {
+      if (!queries || queries.length < 2) throw rt.mkThrowable("java/lang/IllegalArgumentException", "At least two queries required");
+      const text = String(s), ms = parseIso(text);
+      const suffix = /(Z|([+-])(\d{2}):(\d{2}))$/.exec(text);
+      const zone = suffix ? offsetSeconds(suffix[1] === "Z" ? 0 : (suffix[2] === "-" ? -1 : 1) * (+suffix[3] * 3600 + +suffix[4] * 60)) : null;
+      const temporal = zone ? zdt(ms, zone) : ldtFromDate(new Date(ms));
+      for (const query of queries) {
+        try {
+          const value = await vcall(query, "queryFrom", "(Ljava/time/temporal/TemporalAccessor;)Ljava/lang/Object;", temporal);
+          if (value != null) return value;
+        } catch (error) { if (!rt.iof(error, "java/time/DateTimeException")) throw error; }
+      }
+      throw rt.mkThrowable("java/time/DateTimeException", "Unable to convert parsed text using the supplied queries");
+    },
     // Locale-aware overload: the pattern still drives the output, and MONTHS below is en-only,
     // so the locale changes nothing here — but omitting the overload throws on the caller.
     "static ofPattern(Ljava/lang/String;Ljava/util/Locale;)Ljava/time/format/DateTimeFormatter;": fmtOf,
