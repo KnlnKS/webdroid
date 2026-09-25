@@ -42,6 +42,11 @@ rt.register({
     },
     "<init>()V": function () {},
     "onCreate()Z": () => 1,
+    "bulkInsert(Landroid/net/Uri;[Landroid/content/ContentValues;)I": async function (this: JObj, uri: unknown, values: unknown[]) {
+      if (!values) rt.npe();
+      for (const value of values) await vcall(this, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", uri, value);
+      return values.length;
+    },
     "getContext()Landroid/content/Context;": function (this: { $ctx: unknown }) { return this.$ctx ?? appHost?.application ?? null; },
     "attachInfo(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V": async function (this: { $ctx: unknown }, c: unknown) {
       if (this.$ctx) return;
