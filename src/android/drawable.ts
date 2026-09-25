@@ -189,7 +189,7 @@ rt.markers("android/graphics/drawable/Drawable$Callback");
 defineException("android/view/InflateException", "java/lang/RuntimeException");
 class JConstantState extends JObj {}
 class JDrawableState extends JConstantState {
-  create!: () => JDrawable;
+  create!: () => JDrawable | Promise<JDrawable>;
 }
 rt.register({ name: "android/graphics/drawable/Drawable$ConstantState", ctor: JConstantState, methods: {
   "newDrawable(Landroid/content/res/Resources;)Landroid/graphics/drawable/Drawable;": function () { return vcall(this, "newDrawable", "()Landroid/graphics/drawable/Drawable;"); },
@@ -1120,6 +1120,20 @@ rt.register({ name: "android/graphics/drawable/InsetDrawable", ctor: JInsetDrawa
   "<init>(Landroid/graphics/drawable/Drawable;IIII)V": insetInit(false),
   "<init>(Landroid/graphics/drawable/Drawable;F)V": insetInit(true),
   "<init>(Landroid/graphics/drawable/Drawable;FFFF)V": insetInit(true),
+  "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": async function (this: JInsetDrawable) {
+    const childState = this.dr && await vcall(this.dr, "getConstantState", "()Landroid/graphics/drawable/Drawable$ConstantState;");
+    if (!childState) return null;
+    const { insets, fractions, tint, tintCsl, alpha, autoMirrored } = this;
+    const state = rt.make("android/graphics/drawable/InsetDrawable$InsetState") as JDrawableState;
+    state.create = async () => {
+      const drawable = rt.make("android/graphics/drawable/InsetDrawable") as JInsetDrawable;
+      drawable.insets = [...insets]; drawable.fractions = [...fractions];
+      drawable.tint = tint; drawable.tintCsl = tintCsl; drawable.alpha = alpha; drawable.autoMirrored = autoMirrored;
+      await wrapSet.call(drawable, await vcall(childState, "newDrawable", "()Landroid/graphics/drawable/Drawable;"));
+      return drawable;
+    };
+    return state;
+  },
   "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JInsetDrawable, b: JRect) {
     if (this.dr) return vcallOn(curThread, this.dr, "setBounds", "(IIII)V", b.left + this.inset(0), b.top + this.inset(1), b.right - this.inset(2), b.bottom - this.inset(3));
   },
@@ -1136,6 +1150,11 @@ rt.register({ name: "android/graphics/drawable/InsetDrawable", ctor: JInsetDrawa
     });
   },
 } });
+rt.register({ name: "android/graphics/drawable/InsetDrawable$InsetState", ctor: JDrawableState,
+  sup: "android/graphics/drawable/Drawable$ConstantState", methods: {
+    "newDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableState) { return this.create(); },
+  },
+});
 
 class JRotateDrawable extends JDrawableWrapper {
   fromDegrees = 0; toDegrees = 360; currentDegrees = 0;

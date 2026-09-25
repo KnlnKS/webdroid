@@ -1077,6 +1077,9 @@ const viewMethods: NativeSpec["methods"] = {
   "requestFocus()Z": function (this: JView) {
     return vcall(this, "requestFocus", "(ILandroid/graphics/Rect;)Z", 130, null);
   },
+  "requestFocusFromTouch()Z": function (this: JView) {
+    return vcall(this, "requestFocus", "(ILandroid/graphics/Rect;)Z", 130, null);
+  },
   "findFocus()Landroid/view/View;": function (this: JView) { return this.focused ? this : null; },
   "clearFocus()V": function (this: JView) { return clearFocus(this); },
   "setOnClickListener(Landroid/view/View$OnClickListener;)V": function (this: JView, l: unknown) {
@@ -1873,6 +1876,11 @@ async function noteTransientChild(parent: JViewGroup, child: JView, added: boole
  * directly from each overload skipped all of it.
  */
 async function addViewFunnel(vg: JViewGroup, c: JView, i: number, lp: JLayoutParams | null) {
+  if (!c) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Cannot add a null child view to a ViewGroup");
+  if (!lp) {
+    lp = c.lp ?? await guardCall(vg, M_genDefaultLP) as JLayoutParams | null;
+    if (!lp) throw rt.mkThrowable("java/lang/IllegalArgumentException", "generateDefaultLayoutParams() cannot return null");
+  }
   const f = jmethod(vg, M_addView3);
   if (f && f !== addView3) return void await guardApply(f, vg, c, i, lp);
   await addView3.call(vg, c, i, lp);
