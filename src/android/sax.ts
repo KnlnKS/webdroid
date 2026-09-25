@@ -50,6 +50,13 @@ rt.register({ name: "org/xml/sax/InputSource", ctor: JInputSource, methods: {
   [`setPublicId(${S})V`]: function (this: JInputSource, id: string) { this.publicId = id; },
 } });
 class JAttributes extends JObj { attrs: Attr[] = []; namespaces = true; }
+class JSaxLocator extends JObj { publicId: string | null = null; systemId: string | null = null; }
+rt.register({ name: "webdroid/SaxLocator", ctor: JSaxLocator, ifaces: ["org/xml/sax/Locator"], methods: {
+  "getPublicId()Ljava/lang/String;": function (this: JSaxLocator) { return this.publicId; },
+  "getSystemId()Ljava/lang/String;": function (this: JSaxLocator) { return this.systemId; },
+  "getLineNumber()I": () => -1,
+  "getColumnNumber()I": () => -1,
+} });
 const attrIndex = (a: JAttributes, uri: string, local: string) => a.attrs.findIndex(v => (v.namespaceURI ?? "") === uri && v.localName === local);
 rt.register({ name: "webdroid/SaxAttributes", ctor: JAttributes, ifaces: ["org/xml/sax/Attributes"], methods: {
   "getLength()I": function (this: JAttributes) { return this.attrs.length; },
@@ -80,6 +87,9 @@ async function parse(this: JXmlReader, source: JInputSource | string): Promise<v
       throw exception;
     }
     if (!this.handler) return;
+    const locator = new JSaxLocator(); locator.publicId = typeof source === "string" ? null : source.publicId;
+    locator.systemId = typeof source === "string" ? null : source.systemId;
+    await vcallOn(thread, this.handler, "setDocumentLocator", "(Lorg/xml/sax/Locator;)V", locator);
     await vcallOn(thread, this.handler, "startDocument", "()V");
     for (const event of parser.events) {
       const qname = parser.nsAware && event.prefix ? event.prefix + ":" + event.name : event.name;
@@ -130,6 +140,11 @@ rt.register({ name: "javax/xml/parsers/SAXParser", ctor: JSaxParser, methods: {
     this.reader.handler = handler;
     this.reader.errorHandler = handler;
     return parse.call(this.reader, source);
+  },
+  "parse(Ljava/io/InputStream;Lorg/xml/sax/helpers/DefaultHandler;)V": function (this: JSaxParser, stream: unknown, handler: unknown) {
+    if (!stream) throw rt.mkThrowable("java/lang/IllegalArgumentException", "InputStream is null");
+    const source = new JInputSource(); source.bytes = stream;
+    return vcall(this, "parse", "(Lorg/xml/sax/InputSource;Lorg/xml/sax/helpers/DefaultHandler;)V", source, handler);
   },
 } });
 class JSaxFactory extends JObj { namespaces: boolean | null = null; namespacePrefixes = false; }
