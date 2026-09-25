@@ -63,6 +63,8 @@ export async function proxyRequest(request: Request, options: ProxyOptions): Pro
       if (cookies.length) out.set("x-wd-set-cookie", JSON.stringify(cookies));
       if ([301, 302, 303, 307, 308].includes(upstream.status)) {
         out.set("x-wd-status-text", upstream.statusText);
+        out.delete("content-length");
+        out.delete("x-wd-content-length");
         return new Response(null, { headers: out });
       }
     }
