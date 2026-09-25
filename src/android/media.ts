@@ -66,8 +66,51 @@ class JPlaybackState extends JObj {
 class JPlaybackStateBuilder extends JObj {
   value = new JPlaybackState();
 }
-class JMediaMetadata extends JObj { values = new Map<string, unknown>(); }
+class JMediaMetadata extends JObj { values = new Map<string, unknown>(); description: JMediaDescription | null = null; }
 class JMediaMetadataBuilder extends JObj { value = new JMediaMetadata(); }
+class JMediaDescription extends JObj {
+  mediaId: string | null = null;
+  title: unknown = null;
+  subtitle: unknown = null;
+  description: unknown = null;
+  iconBitmap: unknown = null;
+  iconUri: unknown = null;
+  extras: JBundle | null = null;
+  mediaUri: unknown = null;
+}
+class JMediaDescriptionBuilder extends JObj { value = new JMediaDescription(); }
+rt.register({ name: "android/media/MediaDescription", ctor: JMediaDescription, ifaces: ["android/os/Parcelable"], methods: {
+  ...fieldGetters({
+    "getMediaId()Ljava/lang/String;": "mediaId",
+    "getTitle()Ljava/lang/CharSequence;": "title",
+    "getSubtitle()Ljava/lang/CharSequence;": "subtitle",
+    "getDescription()Ljava/lang/CharSequence;": "description",
+    "getIconBitmap()Landroid/graphics/Bitmap;": "iconBitmap",
+    "getIconUri()Landroid/net/Uri;": "iconUri",
+    "getExtras()Landroid/os/Bundle;": "extras",
+    "getMediaUri()Landroid/net/Uri;": "mediaUri",
+  }),
+  "describeContents()I": () => 0,
+  "toString()Ljava/lang/String;": async function (this: JMediaDescription) {
+    return `${this.title == null ? "null" : await csText(this.title)}, ${this.subtitle == null ? "null" : await csText(this.subtitle)}, ${this.description == null ? "null" : await csText(this.description)}`;
+  },
+} });
+const descriptionFields = {
+  "setMediaId(Ljava/lang/String;)Landroid/media/MediaDescription$Builder;": "mediaId",
+  "setTitle(Ljava/lang/CharSequence;)Landroid/media/MediaDescription$Builder;": "title",
+  "setSubtitle(Ljava/lang/CharSequence;)Landroid/media/MediaDescription$Builder;": "subtitle",
+  "setDescription(Ljava/lang/CharSequence;)Landroid/media/MediaDescription$Builder;": "description",
+  "setIconBitmap(Landroid/graphics/Bitmap;)Landroid/media/MediaDescription$Builder;": "iconBitmap",
+  "setIconUri(Landroid/net/Uri;)Landroid/media/MediaDescription$Builder;": "iconUri",
+  "setExtras(Landroid/os/Bundle;)Landroid/media/MediaDescription$Builder;": "extras",
+  "setMediaUri(Landroid/net/Uri;)Landroid/media/MediaDescription$Builder;": "mediaUri",
+} as const;
+rt.register({ name: "android/media/MediaDescription$Builder", ctor: JMediaDescriptionBuilder, methods: {
+  "<init>()V": () => {},
+  ...Object.fromEntries(Object.entries(descriptionFields).map(([method, field]) => [method,
+    function (this: JMediaDescriptionBuilder, value: unknown) { Reflect.set(this.value, field, value); return this; }])),
+  "build()Landroid/media/MediaDescription;": function (this: JMediaDescriptionBuilder) { return Object.assign(new JMediaDescription(), this.value); },
+} });
 rt.register({ name: "android/media/session/PlaybackState$CustomAction", ctor: JPlaybackCustomAction, ifaces: ["android/os/Parcelable"], methods: {
   "getAction()Ljava/lang/String;": function (this: JPlaybackCustomAction) { return this.action; },
   "getName()Ljava/lang/CharSequence;": function (this: JPlaybackCustomAction) { return this.name; },
@@ -116,6 +159,44 @@ rt.register({ name: "android/media/MediaMetadata", ctor: JMediaMetadata, ifaces:
   "getLong(Ljava/lang/String;)J": function (this: JMediaMetadata, key: string) { const value = this.values.get(key); return typeof value === "bigint" ? value : 0n; },
   "getBitmap(Ljava/lang/String;)Landroid/graphics/Bitmap;": function (this: JMediaMetadata, key: string) { return this.values.get(key) ?? null; },
   "getRating(Ljava/lang/String;)Landroid/media/Rating;": function (this: JMediaMetadata, key: string) { return this.values.get(key) ?? null; },
+  "getDescription()Landroid/media/MediaDescription;": async function (this: JMediaMetadata) {
+    if (this.description) return this.description;
+    const prefix = "android.media.metadata.";
+    const result = new JMediaDescription();
+    const mediaId = this.values.get(prefix + "MEDIA_ID");
+    result.mediaId = typeof mediaId === "string" ? mediaId : null;
+    const display = this.values.get(prefix + "DISPLAY_TITLE");
+    if (display != null && await csText(display)) {
+      result.title = display;
+      result.subtitle = this.values.get(prefix + "DISPLAY_SUBTITLE") ?? null;
+      result.description = this.values.get(prefix + "DISPLAY_DESCRIPTION") ?? null;
+    } else {
+      const text: unknown[] = [];
+      for (const key of ["TITLE", "ARTIST", "ALBUM", "ALBUM_ARTIST", "WRITER", "AUTHOR", "COMPOSER"]) {
+        const value = this.values.get(prefix + key);
+        if (value != null && await csText(value)) text.push(value);
+        if (text.length === 3) break;
+      }
+      result.title = text[0] ?? null;
+      result.subtitle = text[1] ?? null;
+      result.description = text[2] ?? null;
+    }
+    for (const key of ["DISPLAY_ICON", "ART", "ALBUM_ART"]) {
+      const bitmap = this.values.get(prefix + key);
+      if (bitmap != null) { result.iconBitmap = bitmap; break; }
+    }
+    for (const key of ["DISPLAY_ICON_URI", "ART_URI", "ALBUM_ART_URI"]) {
+      const value = this.values.get(prefix + key);
+      const uri = value == null ? "" : await csText(value);
+      if (uri) { result.iconUri = mkUri(uri); break; }
+    }
+    const uri = this.values.get(prefix + "MEDIA_URI");
+    if (uri != null) {
+      const text = await csText(uri);
+      if (text) result.mediaUri = mkUri(text);
+    }
+    return this.description = result;
+  },
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JMediaMetadata, parcel: unknown) {
     const bundle = new JBundle(); bundle.map = new Map(this.values);
