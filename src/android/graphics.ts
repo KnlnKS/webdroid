@@ -1447,8 +1447,12 @@ export const bitmapMethods: NativeSpec["methods"] = {
     "getByteCount()I": function (this: JBitmap) { return this.rowBytes * this.h; },
     "getAllocationByteCount()I": function (this: JBitmap) { return this.rowBytes * this.h; },
     "getRowBytes()I": function (this: JBitmap) { return this.rowBytes; },
-    "compress(Landroid/graphics/Bitmap$CompressFormat;ILjava/io/OutputStream;)Z": async function (this: JBitmap, fmt: unknown, q: number, out: unknown) {
-      const blob = await this.canvas.convertToBlob({ type: "image/png" });
+    "compress(Landroid/graphics/Bitmap$CompressFormat;ILjava/io/OutputStream;)Z": async function (this: JBitmap, fmt: { ord: number } | null, q: number, out: unknown) {
+      if (!fmt) throw rt.npe();
+      const type = ["image/jpeg", "image/png", "image/webp"][fmt.ord];
+      if (!type) return 0;
+      const blob = await this.canvas.convertToBlob({ type, quality: Math.max(0, Math.min(1, q / 100)) });
+      if (blob.type !== type) return 0;
       const bytes = new Int8Array(await blob.arrayBuffer());
       await vcall(out, "write", "([BII)V", bytes, 0, bytes.length);
       return 1;
