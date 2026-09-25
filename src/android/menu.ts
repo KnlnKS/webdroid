@@ -1,5 +1,5 @@
 import { AID } from "./res";
-import { JViewGroup, specSize, JView, invalidate, requestLayout } from "./view";
+import { JViewGroup, specSize, JView, invalidate, requestLayout, measureView, layoutView, makeSpec, MS_AT_MOST, MS_EXACTLY } from "./view";
 import { type JDrawable, loadDrawable, loadDrawableRV, drawChild } from "./drawable";
 import { type JCanvas, tfMedium } from "./graphics";
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters } from "../jvm/runtime";
@@ -12,6 +12,7 @@ import { parseAXML, TV } from "./axml";
 import { rvString } from "./res";
 import type { JActivity } from "./app";
 import { spannedString } from "./text";
+import type { JActionMode } from "./actionmode";
 
 function firstText(v: JView | null): string | null {
   if (!v) return null;
@@ -20,6 +21,7 @@ function firstText(v: JView | null): string | null {
   return null;
 }
 export class JActionBarView extends JViewGroup {
+  actionMode: JActionMode | null = null;
   titleStr = "";
   subtitleStr: string | null = null;
   barH = 112;
@@ -81,9 +83,14 @@ export class JActionBarView extends JViewGroup {
       }
       return s.slice(0, lo) + "\u2026";
     };
-    const mainLabel = this.navMode === 1 && this.navLabel ? this.navLabel : this.titleStr;
+    const mainLabel = this.actionMode ? this.actionMode.customView ? "" : this.actionMode.title :
+      this.navMode === 1 && this.navLabel ? this.navLabel : this.titleStr;
     const two = !!this.subtitleStr;
     ctx.fillText(ell(mainLabel, this.navMode === 1 ? titleMax - 72 : titleMax), x, h / 2 + (two ? -14 : 1));
+    if (this.actionMode) {
+      ctx.font = "36px Roboto, sans-serif";
+      ctx.fillText("×", 12, h / 2 + 1);
+    }
     if (this.navMode === 1) {
       // list-navigation spinner caret, right of the label
       const lw = ctx.measureText(mainLabel).width;
@@ -129,13 +136,26 @@ export class JActionBarView extends JViewGroup {
 rt.register({
   name: "webdroid/ActionBarView", ctor: JActionBarView, sup: "android/view/ViewGroup",
   methods: {
-    "onMeasure(II)V": function (this: JActionBarView, wSpec: number, hSpec: number) {
+    "onMeasure(II)V": async function (this: JActionBarView, wSpec: number, hSpec: number) {
       this.measuredW = specSize(wSpec);
       this.measuredH = this.barH;
+      if (this.actionMode?.customView) {
+        await measureView(this.actionMode.customView,
+          makeSpec(Math.max(0, this.measuredW / 2 - 80), MS_AT_MOST), makeSpec(this.barH, MS_EXACTLY));
+      }
+    },
+    "onLayout(ZIIII)V": async function (this: JActionBarView) {
+      const custom = this.actionMode?.customView;
+      if (custom) await layoutView(custom, 80, (this.barH - custom.measuredH) / 2,
+        80 + custom.measuredW, (this.barH + custom.measuredH) / 2);
     },
     "onDraw(Landroid/graphics/Canvas;)V": function (this: JActionBarView, cv: JCanvas) { return this.onDrawSelf(cv); },
     "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JActionBarView, ev: any) {
       if ((ev.action & 0xff) === 1) {
+        if (this.actionMode && ev.x < 80) {
+          await vcall(this.actionMode, "finish", "()V");
+          return 1;
+        }
         if (this.showUp && ev.x < 80) {
           // AOSP's ActionBarView reports the Up affordance as the options item
           // android.R.id.home, so it reaches the activity's onOptionsItemSelected like any
@@ -188,8 +208,11 @@ async function performMenuItem(anchor: JView, item: JMenuItem): Promise<boolean>
     if (item.clickL) {
       invoked = !!(await vcall(item.clickL, "onMenuItemClick", "(Landroid/view/MenuItem;)Z", item));
     }
+    const mode = anchor.parent instanceof JActionBarView ? anchor.parent.actionMode : null;
     const act = appHost?.currentActivity();
-    if (!invoked && act) {
+    if (!invoked && mode?.cb) {
+      invoked = !!(await vcall(mode.cb, "onActionItemClicked", "(Landroid/view/ActionMode;Landroid/view/MenuItem;)Z", mode, item));
+    } else if (!invoked && act) {
       invoked = !!(await vcall(act, "onMenuItemSelected", "(ILandroid/view/MenuItem;)Z", 0, item));
     }
     if (item.sub) await showMenuPopup(anchor, item.sub.items);

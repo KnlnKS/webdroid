@@ -4,7 +4,7 @@ import {
   JIntent, activityTransport, systemActivities, deliverActivityResult, RESULT_OK, RESULT_CANCELED, launchIntent, mkComponentName,
   type JComponentName
 } from "./intent";
-import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
+import { type JMenu, JMenuInflater, type JMenuItem, JActionBarView, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { jarray } from "../jvm/abi";
 import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME } from "./os";
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
@@ -15,11 +15,11 @@ import { dispatchFragLifecycle, type JFragment, type JFragmentManager } from "./
 import { vcall, vcallOn, curThread, mainThread } from "../jvm/natives/jlang";
 import type { JMotionEvent } from "./motionevent";
 import { appHost, jclsNameOf } from "./apphost";
-import { resString } from "./res";
+import { AID, resString, rvColor, themeOf } from "./res";
 import { inMainJob, onMain } from "./mainloop";
 import { getPrefs } from "./sharedprefs";
 import { csText, spannedString } from "./text";
-import { showToast } from "./popup";
+import { addOverlay, removeOverlay, showToast } from "./popup";
 import { newArrayList } from "../jvm/natives/jutil";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { JService, runningServices, svcStop, svcFg } from "./runningservices";
@@ -33,6 +33,8 @@ import { grantUriPermission } from "./contentresolver";
 import { mkUri } from "./net";
 import { lifecycleCallbackMethods, type ActivityLifecycleCallback } from "./lifecycle";
 import { clipboardMethods } from "./clipboard";
+import { JActionMode } from "./actionmode";
+import { JColorDrawable } from "./drawable";
 
 export { fireActivityLifecycle } from "./lifecycle";
 
@@ -130,6 +132,8 @@ export class JActivity extends JContextWrapper {
   hasWindowFocus = false;
   actionBarObj: any = null;
   optionsMenu: JMenu | null = null;
+  actionMode: JActionMode | null = null;
+  actionModeBar: JActionBarView | null = null;
   resultCode = 0;
   resultData: JIntent | null = null;
   /** who asked for this activity's result, and under which request code */
@@ -213,13 +217,17 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "onResume()V": async function (this: JActivity) { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); },
   "onPause()V": function (this: JActivity) { this.resumed = false; return dispatchFragLifecycle(this, "onPause"); },
   "onStop()V": function (this: JActivity) { this.started = false; return dispatchFragLifecycle(this, "onStop"); },
-  "onDestroy()V": function (this: JActivity) { return dispatchFragLifecycle(this, "onDestroy"); },
+  "onDestroy()V": async function (this: JActivity) {
+    if (this.actionMode) await vcall(this.actionMode, "finish", "()V");
+    await dispatchFragLifecycle(this, "onDestroy");
+  },
   /**
    * AOSP Activity.onBackPressed: collapse an expanded action view, then pop the fragment
    * back stack, and only if neither consumed the press, finish. androidx apps land here as
    * the OnBackPressedDispatcher's fallback, after their own callbacks declined it.
    */
   "onBackPressed()V": async function (this: JActivity) {
+    if (this.actionMode) { await vcall(this.actionMode, "finish", "()V"); return; }
     const bar = this.actionBarObj;
     if (bar && (await vcall(bar, "collapseActionView", "()Z"))) return;
     const fm = await vcall(this, "getFragmentManager", "()Landroid/app/FragmentManager;");
@@ -257,6 +265,49 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "onNavigateUpFromChild(Landroid/app/Activity;)Z": function (this: JActivity) {
     return vcall(this, "onNavigateUp", "()Z");
+  },
+  "startActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;": function (this: JActivity, cb: unknown) {
+    return callSelf(activityMethods, "startActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;", this, cb, 0);
+  },
+  "startActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;": async function (this: JActivity, cb: unknown, type: number) {
+    if (!cb) return rt.npe();
+    if (this.actionMode) await vcall(this.actionMode, "finish", "()V");
+    const supplied = await vcall(this, "onWindowStartingActionMode", "(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;", cb, type);
+    const mode: JActionMode = supplied ?? new JActionMode();
+    if (!supplied) {
+      mode.jctx = this;
+      mode.cb = cb;
+      mode.menu = rt.make("webdroid/Menu");
+      if (!await vcall(cb, "onCreateActionMode", "(Landroid/view/ActionMode;Landroid/view/Menu;)Z", mode, mode.menu)) return null;
+      await vcall(cb, "onPrepareActionMode", "(Landroid/view/ActionMode;Landroid/view/Menu;)Z", mode, mode.menu);
+    }
+    this.actionMode = mode;
+    let bar: JActionBarView | null = null;
+    if (!supplied) {
+      bar = new JActionBarView();
+      bar.ctx = this;
+      bar.jres = this.$host.res;
+      bar.theme = themeOf(this) ?? this.$host.theme;
+      bar.actionMode = mode;
+      mode.bar = bar;
+      bar.menuItems = mode.menu!.items;
+      bar.barH = device.dp(48);
+      const bg = new JColorDrawable();
+      bg.color = rvColor(this.$host.res, bar.theme.lookup(AID("colorPrimary")), -12303292);
+      bar.background = bg;
+      this.actionModeBar = bar;
+      addOverlay(bar, 0, device.statusBar, false, () => vcall(mode, "finish", "()V"));
+      if (mode.customView) await attachView(bar, mode.customView);
+    }
+    mode.onFinish = async () => {
+      if (this.actionMode === mode) this.actionMode = null;
+      if (bar && this.actionModeBar === bar) { removeOverlay(bar); this.actionModeBar = null; }
+      mode.bar = null;
+      await vcall(this, "onActionModeFinished", "(Landroid/view/ActionMode;)V", mode);
+    };
+    await vcall(this, "onActionModeStarted", "(Landroid/view/ActionMode;)V", mode);
+    invalidate();
+    return mode;
   },
   /** AOSP forwards the new Configuration into the window's view hierarchy. */
   "onConfigurationChanged(Landroid/content/res/Configuration;)V": function (this: JActivity, cfg: unknown) {
@@ -416,8 +467,11 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     "onKeyUp(ILandroid/view/KeyEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
     "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z",
     "isInMultiWindowMode()Z", "isInPictureInPictureMode()Z", "isLaunchedFromBubble()Z"),
-  ...stubs(null, "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;",
-    "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;",
+  "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;": () => null,
+  "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;": function (this: JActivity, cb: unknown, type: number) {
+    return type === 0 ? vcall(this, "onWindowStartingActionMode", "(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;", cb) : null;
+  },
+  ...stubs(null,
     "onCreateView(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
     "onCreateView(Landroid/view/View;Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;",
     "getCurrentFocus()Landroid/view/View;", "onRetainNonConfigurationInstance()Ljava/lang/Object;",
