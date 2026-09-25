@@ -396,6 +396,7 @@ export class JView extends JObj {
   /** A compositor surface; surfaceBacked keeps its late first frame visible through display lists. */
   surfaceLayer: OffscreenCanvas | ImageBitmap | VideoFrame | null = null;
   surfaceBacked = false;
+  syncSurface(): void {}
   surfaceTransform: JMatrix["m"] | null = null;
   alphaV = 1;
   scrollX = 0; scrollY = 0;
@@ -673,6 +674,7 @@ function setBound(v: JView, l: number, t: number, r: number, b: number) {
   if (oldL === l && oldT === t && oldR === r && oldB === b) return;
   const ow = v.width(), oh = v.height();
   v.left = l; v.top = t; v.right = r; v.bottom = b;
+  if (v.surfaceBacked) v.syncSurface();
   invalidate();
   if (r - l !== ow || b - t !== oh) void guardMaybe(v, M_onSizeChanged, r - l, b - t, ow, oh);
   for (const ll of [...v.layoutChangeLs]) {
@@ -700,6 +702,8 @@ export async function layoutView(v: JView, l: number, t: number, r: number, b: n
   // children the measure memo had just skipped, which is what made settle passes cost.
   if (changed || v.layoutRequired) {
     await guardCall(v, M_onLayout, changed ? 1 : 0, l, t, r, b);
+    // Surface lifecycle follows frame changes even when a subclass skips super.onLayout.
+    if (v.surfaceBacked) v.syncSurface();
     v.layoutRequired = false;
     for (const ll of [...v.layoutChangeLs]) {
       await vcall(ll, "onLayoutChange", "(Landroid/view/View;IIIIIIII)V", v, l, t, r, b, oldL, oldT, oldR, oldB);
