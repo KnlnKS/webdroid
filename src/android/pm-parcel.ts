@@ -192,6 +192,7 @@ async function readField(parcel: JParcel, kind: Kind, type?: string): Promise<un
     }
     case "stringSet": {
       const count = readInt(parcel);
+      if (count < 0) return null;
       const items = new Set<string>();
       for (let i = 0; i < count; i++) items.add(readString(parcel)!);
       return items;
@@ -217,8 +218,9 @@ export async function readApplicationInfo(parcel: JParcel, info: ParcelInfo): Pr
 
 export async function writePackageInfo(parcel: JParcel, info: ParcelInfo, flags = 0): Promise<void> {
   for (const [kind, name, fallback] of packageFields) {
-    const value = name === "versionCodeMajor" && info[name] === undefined
-      ? BigInt(info.longVersionCode as bigint ?? 0n) >> 32n : info[name] === undefined ? fallback : info[name];
+    let value = info[name] === undefined ? fallback : info[name];
+    if (value === undefined && name === "versionCode") value = Number(BigInt(info.longVersionCode as bigint ?? 0n) & 0xffff_ffffn);
+    if (name === "versionCodeMajor" && info[name] === undefined) value = BigInt(info.longVersionCode as bigint ?? 0n) >> 32n;
     await writeField(parcel, kind, value, flags);
   }
 }
