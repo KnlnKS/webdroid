@@ -49,6 +49,10 @@ export async function proxyRequest(request: Request, options: ProxyOptions): Pro
     upstream.headers.forEach((value, name) => {
       if (!DROP.test(name) && !(frame && DROP_FRAME.test(name))) out.set(name, value);
     });
+    if (headers.get("accept-encoding") === "identity" && !upstream.headers.has("content-encoding")) {
+      const length = upstream.headers.get("content-length");
+      if (length) out.set("x-wd-content-length", length);
+    }
     out.set("access-control-allow-origin", "*");
     out.set("x-wd-final-url", upstream.url || url);
     if (manual) {
@@ -62,11 +66,13 @@ export async function proxyRequest(request: Request, options: ProxyOptions): Pro
     }
     if (encoded && upstream.headers.has("content-encoding")) out.set("x-wd-content-encoding", upstream.headers.get("content-encoding")!);
     if (frame && upstream.body && /^text\/html/i.test(upstream.headers.get("content-type") ?? "")) {
+      out.delete("x-wd-content-length");
       out.set("content-type", "text/html; charset=utf-8");
       if (isolated) { out.delete("etag"); out.delete("last-modified"); }
       return new Response(await webDocument(await upstream.text(), upstream.url || url, isolated), { status: upstream.status, headers: out });
     }
     if (isolated && upstream.body && /^(?:text|application)\/(?:x-)?(?:java|ecma)script(?:;|$)/i.test(upstream.headers.get("content-type") ?? "")) {
+      out.delete("x-wd-content-length");
       out.delete("etag"); out.delete("last-modified");
       out.set("content-type", "text/javascript; charset=utf-8");
       return new Response(webScript(await upstream.text()), { status: upstream.status, headers: out });
