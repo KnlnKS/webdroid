@@ -1002,6 +1002,7 @@ const viewMethods: NativeSpec["methods"] = {
   "setTranslationX(F)V": function (this: JView, x: number) { this.translationX = x; invalidate(); },
   "setTranslationY(F)V": function (this: JView, y: number) { this.translationY = y; invalidate(); },
   "setTranslationZ(F)V": function (this: JView, z: number) { this.translationZ = z; },
+  "setZ(F)V": function (this: JView, z: number) { this.translationZ = z - this.elevationV; invalidate(this); },
   "getTranslationX()F": function (this: JView) { return this.translationX; },
   "getTranslationY()F": function (this: JView) { return this.translationY; },
   "setScaleX(F)V": function (this: JView, s: number) { this.scaleXv = s; invalidate(); },

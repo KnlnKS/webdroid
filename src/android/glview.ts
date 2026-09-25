@@ -6,7 +6,7 @@ import { mangleMethod } from "../jvm/abi";
 import { vcall, vcallOn, JThread, setCurThread, curThread } from "../jvm/natives/jlang";
 import { JView, JViewGroup, guardCall, initViewFromCtx, invalidate, uiState, requestLayout, specSize, defaultSize } from "./view";
 import { onMain } from "./mainloop";
-import { JCanvas, JBitmap, JMatrix, type JRect } from "./graphics";
+import { JCanvas, JBitmap, JMatrix, JRect } from "./graphics";
 import { setGL, gl, tables } from "./gl";
 import { reportUncaught, mainLooper, mainHandler } from "./os";
 import { perf } from "../perf";
@@ -266,6 +266,8 @@ class JSurfaceHolder extends JObj {
   surface: GlSurface | null = null;
   jsurface: JSurface | null = null;
   format = PIXEL_FORMAT_RGBA_8888;
+  frame = new JRect();
+  creating = false;
   constructor(view: JView) { super(); this.view = view; }
 }
 const holders = new WeakMap<JView, JSurfaceHolder>();
@@ -286,11 +288,16 @@ class JSurfaceView extends JViewGroup {
     if (created) holder.surface = { view: this, width: w, height: h, present: null, frames: 0 };
     else { holder.surface!.width = w; holder.surface!.height = h; }
     this.surfW = w; this.surfH = h;
+    holder.frame.right = w;
+    holder.frame.bottom = h;
     void onMain(async () => {
-      for (const cb of holder.callbacks.slice()) {
-        if (created) await guardCall(cb, M_surfaceCreated, holder);
-        await guardCall(cb, M_surfaceChanged, holder, holder.format, w, h);
-      }
+      holder.creating = created;
+      try {
+        for (const cb of holder.callbacks.slice()) {
+          if (created) await guardCall(cb, M_surfaceCreated, holder);
+          await guardCall(cb, M_surfaceChanged, holder, holder.format, w, h);
+        }
+      } finally { holder.creating = false; }
     });
   }
   destroySurface(): void {
@@ -315,8 +322,9 @@ rt.register({
     "setFormat(I)V": function (this: JSurfaceHolder, f: number) { this.format = f; },
     ...noops("setType(I)V", "setKeepScreenOn(Z)V", "setFixedSize(II)V", "setSizeFromLayout()V",
       "unlockCanvasAndPost(Landroid/graphics/Canvas;)V"),
-    ...stubs(0, "isCreating()Z"),
-    ...stubs(null, "getSurfaceFrame()Landroid/graphics/Rect;", "lockCanvas()Landroid/graphics/Canvas;",
+    "isCreating()Z": function (this: JSurfaceHolder) { return this.creating ? 1 : 0; },
+    "getSurfaceFrame()Landroid/graphics/Rect;": function (this: JSurfaceHolder) { return this.frame; },
+    ...stubs(null, "lockCanvas()Landroid/graphics/Canvas;",
       "lockCanvas(Landroid/graphics/Rect;)Landroid/graphics/Canvas;"),
   },
 });
