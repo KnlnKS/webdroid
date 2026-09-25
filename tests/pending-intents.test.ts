@@ -32,9 +32,12 @@ test("PendingIntent reports its stored operation type", async () => {
   const context = new JContext(), intent = new JIntent();
   const activity = await scall("android/app/PendingIntent", "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0x4000000);
   const broadcast = await scall("android/app/PendingIntent", "getBroadcast", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0);
+  const foreground = await scall("android/app/PendingIntent", "getForegroundService", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;", context, 1, intent, 0);
   expect(await vcall(activity, "isActivity", "()Z")).toBe(1);
   expect(await vcall(activity, "isBroadcast", "()Z")).toBe(0);
   expect(await vcall(activity, "isImmutable", "()Z")).toBe(1);
   expect(await vcall(broadcast, "isActivity", "()Z")).toBe(0);
   expect(await vcall(broadcast, "isBroadcast", "()Z")).toBe(1);
+  expect(await vcall(foreground, "isForegroundService", "()Z")).toBe(1);
+  expect(await vcall(foreground, "isService", "()Z")).toBe(0);
 });

@@ -25,7 +25,7 @@ export async function executePendingIntent(operation: PendingOperation, fill: In
     for (const prior of operation.preceding) await launchIntent(context.$host, await decodeIntent(prior));
     await launchIntent(context.$host, intent);
   }
-  else svcStart(context, intent, false);
+  else svcStart(context, intent, operation.kind === "foregroundService");
 }
 export const localPendingIntents = new PendingIntents(executePendingIntent);
 export const pendingTransport = {
@@ -102,6 +102,7 @@ rt.register({ name: "android/app/PendingIntent", ctor: JPendingIntent, ifaces: [
     "static getActivities(Landroid/content/Context;I[Landroid/content/Intent;ILandroid/os/Bundle;)Landroid/app/PendingIntent;": (context: JContext, code: number, intents: JIntent[], flags: number, _options: JBundle) => pending("activity", context, code, intents, flags),
     "static getBroadcast(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number) => pending("broadcast", context, code, intent, flags),
     "static getService(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number) => pending("service", context, code, intent, flags),
+    "static getForegroundService(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number) => pending("foregroundService", context, code, intent, flags),
     "getIntentSender()Landroid/content/IntentSender;": function (this: JPendingIntent) { return this.sender; },
     "describeContents()I": () => 0,
     "writeToParcel(Landroid/os/Parcel;I)V": function (this: JPendingIntent, p: JParcel) { return vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.sender.target); },
@@ -113,6 +114,7 @@ rt.register({ name: "android/app/PendingIntent", ctor: JPendingIntent, ifaces: [
     "isActivity()Z": function (this: JPendingIntent) { return +(pendingTransport.details(pendingId(this))?.kind === "activity"); },
     "isBroadcast()Z": function (this: JPendingIntent) { return +(pendingTransport.details(pendingId(this))?.kind === "broadcast"); },
     "isService()Z": function (this: JPendingIntent) { return +(pendingTransport.details(pendingId(this))?.kind === "service"); },
+    "isForegroundService()Z": function (this: JPendingIntent) { return +(pendingTransport.details(pendingId(this))?.kind === "foregroundService"); },
     "isImmutable()Z": function (this: JPendingIntent) { return +!!((pendingTransport.details(pendingId(this))?.flags ?? 0) & 0x4000000); },
     "send()V": function (this: JPendingIntent) { return sendIntent(this.sender); },
   },
