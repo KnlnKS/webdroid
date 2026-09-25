@@ -632,6 +632,4 @@ the fingerprint, run focused regression checks, and retain the old bundle as bef
 outside ignored worktree storage.
 
 The [implementation history](../../docs/implementation-history.md)
-records measured compatibility limits; the
-[code-quality audit](../../docs/code-quality-audit-2026-09.md) records
-ownership decisions.
+records measured compatibility limits and ownership decisions.

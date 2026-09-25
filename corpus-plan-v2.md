@@ -1,6 +1,6 @@
 # Compatibility corpus handoff
 
-Status: 2026-09-25. This is the working plan for the 15 open-source APKs in [docs/compatibility-corpus.md](docs/compatibility-corpus.md), which records their source links, exact filenames, SHA-256 hashes, initial missing calls and longer investigation notes. The APKs are ignored by Git and live in the main checkout's `apks/` directory. All 15 have drawn an initial frame in the repeat launch scan, but **none has been established as fully usable**. Missing-call telemetry covers only executed paths, and the initial launch results in that document are historical, not the current failure list.
+Status: 2026-09-25. This is the working plan for the 15 open-source APKs in [docs/compatibility-corpus.md](docs/compatibility-corpus.md), which records their source links, exact filenames, SHA-256 hashes and initial missing calls. The APKs are ignored by Git and live in the main checkout's `apks/` directory. All 15 have drawn an initial frame in the repeat launch scan, but **none has been established as fully usable**. Missing-call telemetry covers only executed paths, and the initial launch results in that document are historical, not the current failure list.
 
 ## What was exercised and what remains
 
