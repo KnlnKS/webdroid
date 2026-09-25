@@ -34,7 +34,7 @@ function rwRelease(cpu: Cpu, l: RwLock): number {
   for (const w of l.waiters.splice(0)) w();
   return 0;
 }
-const threads = new Map<number, { done: Promise<void>; retval: bigint; detached: boolean; joined: boolean; exited: boolean }>();
+const threads = new Map<number, { cpu: Cpu; done: Promise<void>; retval: bigint; detached: boolean; joined: boolean; exited: boolean }>();
 /** pthread_t (the thread's pthread_internal_t address) → Cpu tid, for as long as the thread is joinable or alive */
 const handles = new Map<number, number>();
 export const tidOf = (handle: number): number => handles.get(handle >>> 0) ?? cpuBySelf(handle >>> 0)?.tid ?? -1;
@@ -174,7 +174,7 @@ export function startThread(parent: Cpu, start: number, arg: bigint, detached: b
   cpu.w[0] = Number(arg & 0xffffffffn) | 0; cpu.w[1] = Number(arg >> 32n) | 0;
   cpu.w[2 * cpu.lrx] = RET_SENTINEL; cpu.w[2 * cpu.lrx + 1] = 0;
   cpu.setPc(start);
-  const rec = { retval: 0n, done: Promise.resolve(), detached, joined: false, exited: false };
+  const rec = { cpu, retval: 0n, done: Promise.resolve(), detached, joined: false, exited: false };
   rec.done = new Promise<void>((resolve) => {
     setTimeout(() => {
       void (async () => {
@@ -192,7 +192,7 @@ export function startThread(parent: Cpu, start: number, arg: bigint, detached: b
           await cpu.awaitIdleBase();
           cpu.depth--; cpu.finished = true; cpu.signals.length = 0;
           jt.alive = 0; rec.exited = true;
-          cpu.dispose();
+          cpu.dispose(!rec.detached);
           if (rec.detached) { threads.delete(cpu.tid); handles.delete(cpu.pthreadSelf); }
           resolve();
         }
@@ -229,6 +229,7 @@ export function pthreadInit(): void {
         if (cpu.a64) stpVa(mem.txVa(retp), t.retval);
         else mem.st32(mem.txVa(retp), Number(t.retval));
       }
+      t.cpu.releasePthreadHandle();
       threads.delete(tid); handles.delete(handle);
       return 0;
     },
@@ -237,7 +238,7 @@ export function pthreadInit(): void {
       if (!t) return E.SRCH;
       if (t.detached || t.joined) return E.INVAL;
       t.detached = true;
-      if (t.exited) { threads.delete(tid); handles.delete(handle); }
+      if (t.exited) { t.cpu.releasePthreadHandle(); threads.delete(tid); handles.delete(handle); }
       return 0;
     },
     pthread_gettid_np: (_c, a) => { const tid = tidOf(a.p()); return cpuByTid(tid)?.osTid ?? -1; },
