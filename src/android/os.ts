@@ -12,7 +12,7 @@ import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool, JChar } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
@@ -510,8 +510,8 @@ export class JPersistableBundle extends JBaseBundle {}
 export class JBundle extends JBaseBundle {
   constructor() { super(); rt.link("android/os/Bundle"); }
 }
-const bundleBoxes: Record<string, typeof JInt | typeof JLong | typeof JFloat | typeof JDouble | typeof JBool> = {
-  I: JInt, J: JLong, F: JFloat, D: JDouble, Z: JBool,
+const bundleBoxes: Record<string, typeof JInt | typeof JLong | typeof JFloat | typeof JDouble | typeof JBool | typeof JChar> = {
+  I: JInt, J: JLong, F: JFloat, D: JDouble, Z: JBool, C: JChar,
 };
 export function bundlePrimitive(value: unknown, descriptor: string, fallback: unknown): unknown {
   if (typeof value === (descriptor === "J" ? "bigint" : "number")) return value;
@@ -519,6 +519,7 @@ export function bundlePrimitive(value: unknown, descriptor: string, fallback: un
 }
 export function bundleBox(value: unknown, descriptor: string): unknown {
   if (typeof value !== "number") return value;
+  if (descriptor === "C") return box(JChar, value);
   if (descriptor === "Z") return box(JBool, value);
   if (descriptor === "F") return box(JFloat, value);
   if (descriptor === "D") return box(JDouble, value);
@@ -560,7 +561,7 @@ const bundleMethods: NativeSpec["methods"] = {
   "getBundle(Ljava/lang/String;)Landroid/os/Bundle;": function (this: JBundle, k: string) { return this.map.get(k) ?? null; },
   "putBundle(Ljava/lang/String;Landroid/os/Bundle;)V": function (this: JBundle, k: string, v: unknown) { this.map.set(k, v); },
 };
-for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"], ["Boolean", "Z"],
+for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"], ["Boolean", "Z"], ["Char", "C"],
   ["Float", "F"], ["Double", "D"], ["CharSequence", "Ljava/lang/CharSequence;"], ["ByteArray", "[B"],
   ["IntArray", "[I"], ["LongArray", "[J"], ["StringArray", "[Ljava/lang/String;"],
   ["IntegerArrayList", "Ljava/util/ArrayList;"], ["ParcelableArray", "[Landroid/os/Parcelable;"],
@@ -572,7 +573,7 @@ for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "
     if (v !== undefined) return v;
     return d === "I" || d === "Z" ? 0 : d === "J" ? 0n : d === "F" || d === "D" ? 0 : null;
   };
-  if (d === "I" || d === "J" || d === "Z" || d === "F" || d === "D" || d === "Ljava/lang/String;") {
+  if (d === "I" || d === "J" || d === "Z" || d === "C" || d === "F" || d === "D" || d === "Ljava/lang/String;") {
     bundleMethods[`get${t}(Ljava/lang/String;${d})${d}`] = function (this: JBundle, k: string, dflt: unknown) {
       const v = this.map.get(k);
       if (d.length === 1) return bundlePrimitive(v, d, dflt);
@@ -654,7 +655,9 @@ export class JParcelFileDescriptor extends JObj {
   flags = 0;
   fd = -1;
   closed = false;
+  backing: PfdBacking | null = null;
 }
+type PfdBacking = { path: string; refs: number; key: string; closing: Promise<void> | null; sink: ((b: Uint8Array, closed?: boolean) => unknown) | null };
 /** the native descriptor, opened on first request: only a fd that crosses JNI needs one. A
  *  read-only descriptor over bytes with no file behind them reads those bytes. */
 function pfdFd(p: JParcelFileDescriptor): number {
@@ -669,18 +672,42 @@ export function descriptorFd(d: JFileDescriptor): number {
   if (d.fd < 0 && d.path) d.fd = javaOpenFd(d.path, d.flags & ~0x280);
   return d.fd;
 }
-export function mkPfd(bytes: Uint8Array, sink: ((b: Uint8Array, closed?: boolean) => unknown) | null): JParcelFileDescriptor {
+let pfdBackingSeq = 0;
+const pfdBackings = new Map<string, PfdBacking>();
+export async function pfdBackingBytes(key: string): Promise<Uint8Array | null> {
+  const backing = pfdBackings.get(key);
+  if (backing?.closing) { await backing.closing; return null; }
+  return backing ? vfs.read(backing.path) : null;
+}
+export function mkPfd(bytes: Uint8Array, sink: ((b: Uint8Array, closed?: boolean) => unknown) | null, backingKey?: string): JParcelFileDescriptor {
   const p = new JParcelFileDescriptor();
   p.bytes = bytes;
   p.sink = sink;
+  if (backingKey) {
+    let backing = pfdBackings.get(backingKey);
+    if (!backing) {
+      backing = { path: `/data/webdroid-pfd-${++pfdBackingSeq}`, refs: 0, key: backingKey, closing: null, sink };
+      pfdBackings.set(backingKey, backing);
+      vfs.markVolatile(backing.path);
+      vfs.write(backing.path, bytes, false);
+    }
+    if (sink) backing.sink = sink;
+    backing.refs++;
+    p.path = backing.path;
+    p.flags = sink ? 2 : 0;
+    p.backing = backing;
+  }
   return p;
 }
 export function parcelFileDescriptorData(value: unknown): { bytes: Uint8Array; writable: boolean } | null {
-  return value instanceof JParcelFileDescriptor ? { bytes: value.bytes.slice(), writable: value.sink !== null } : null;
+  return value instanceof JParcelFileDescriptor
+    ? { bytes: (value.backing ? vfs.read(value.backing.path) : value.bytes)?.slice() ?? new Uint8Array(0), writable: value.sink !== null }
+    : null;
 }
 export async function writeParcelFileDescriptor(value: unknown, bytes: Uint8Array, closed = false): Promise<void> {
   if (!(value instanceof JParcelFileDescriptor)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a ParcelFileDescriptor");
   value.bytes = bytes.slice();
+  if (value.backing) vfs.write(value.backing.path, value.bytes, false);
   await value.sink?.(value.bytes, closed);
 }
 rt.register({
@@ -715,6 +742,9 @@ rt.register({
     "getFileDescriptor()Ljava/io/FileDescriptor;": function (this: JParcelFileDescriptor) {
       const d = rt.make("java/io/FileDescriptor") as JFileDescriptor;
       d.fd = pfdFd(this);
+      d.path = this.path;
+      d.flags = this.flags;
+      d.owner = this;
       return d;
     },
     "getFd()I": function (this: JParcelFileDescriptor) { return pfdFd(this); },
@@ -728,9 +758,28 @@ rt.register({
       return Object.assign(new JParcelFileDescriptor(), { fd });
     },
     "detachFd()I": function (this: JParcelFileDescriptor) { const fd = pfdFd(this); this.fd = -1; this.closed = true; return fd; },
-    "dup()Landroid/os/ParcelFileDescriptor;": function (this: JParcelFileDescriptor) { return Object.assign(mkPfd(this.bytes, this.sink), { path: this.path, flags: this.flags, fd: javaDupFd(pfdFd(this)) }); },
-    "getStatSize()J": function (this: JParcelFileDescriptor) { return BigInt(this.bytes.length); },
-    "close()V": function (this: JParcelFileDescriptor) { if (this.fd >= 0) javaCloseFd(this.fd); this.fd = -1; this.closed = true; },
+    "dup()Landroid/os/ParcelFileDescriptor;": function (this: JParcelFileDescriptor) {
+      const p = Object.assign(mkPfd(this.bytes, this.sink), { path: this.path, flags: this.flags, fd: javaDupFd(pfdFd(this)), backing: this.backing });
+      if (p.backing) p.backing.refs++;
+      return p;
+    },
+    "getStatSize()J": function (this: JParcelFileDescriptor) { return BigInt(this.backing ? vfs.stat(this.backing.path)?.size ?? 0 : this.bytes.length); },
+    "close()V": async function (this: JParcelFileDescriptor) {
+      if (this.closed) return;
+      if (this.fd >= 0) javaCloseFd(this.fd);
+      this.fd = -1; this.closed = true;
+      if (this.backing && --this.backing.refs === 0) {
+        const backing = this.backing, bytes = vfs.read(backing.path) ?? new Uint8Array(0);
+        backing.closing = (async () => {
+          try { await backing.sink?.(bytes, true); }
+          finally {
+            pfdBackings.delete(backing.key);
+            vfs.delete(backing.path, false);
+          }
+        })();
+        await backing.closing;
+      }
+    },
     "checkError()V": () => {},
   },
 });
@@ -774,6 +823,16 @@ async function statFs(this: JStatFs, p: string) {
   } catch { /* no estimate available: report an empty filesystem */ }
 }
 const BLK = 4096n;
+const statVfsFields = ["f_bsize", "f_frsize", "f_blocks", "f_bfree", "f_bavail", "f_files", "f_ffree", "f_favail", "f_fsid", "f_flag", "f_namemax"] as const;
+class JStructStatVfs extends JObj {
+  f_bsize = 0n; f_frsize = 0n; f_blocks = 0n; f_bfree = 0n; f_bavail = 0n;
+  f_files = 0n; f_ffree = 0n; f_favail = 0n; f_fsid = 0n; f_flag = 0n; f_namemax = 0n;
+}
+rt.register({ name: "android/system/StructStatVfs", ctor: JStructStatVfs, fields: [...statVfsFields], methods: {
+  "<init>(JJJJJJJJJJJ)V": function (this: JStructStatVfs, ...values: bigint[]) {
+    for (let i = 0; i < statVfsFields.length; i++) Reflect.set(this, statVfsFields[i], values[i]);
+  },
+} });
 // ── android.os.storage.StorageManager: the one volume, identified by the platform's default UUID
 let storageUuid: ReturnType<typeof uuidFromString> | null = null;
 const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
@@ -1086,6 +1145,16 @@ rt.register({
       s.st_size = BigInt(st?.size ?? 0);
       s.st_mtime = s.st_atime = s.st_ctime = BigInt(Math.floor(Date.now() / 1000));
       s.st_blocks = (s.st_size + 511n) / 512n;
+      return s;
+    },
+    "static statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": async (path: string) => {
+      if (!vfs.stat(path) && !vfs.isDir(path)) throw errno("statvfs", 2);
+      const { total, free } = await storageEstimate();
+      const s = new JStructStatVfs();
+      s.f_bsize = s.f_frsize = BLK;
+      s.f_blocks = BigInt(Math.floor(total / Number(BLK)));
+      s.f_bfree = s.f_bavail = BigInt(Math.floor(free / Number(BLK)));
+      s.f_namemax = 255n;
       return s;
     },
     "static readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },

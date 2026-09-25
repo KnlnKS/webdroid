@@ -249,7 +249,7 @@ const intentMethods: NativeSpec["methods"] = {
   },
 };
 for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I", 0], ["Long", "J", 0n],
-  ["Boolean", "Z", 0], ["Float", "F", 0], ["Double", "D", 0], ["CharSequence", "Ljava/lang/CharSequence;", null],
+  ["Boolean", "Z", 0], ["Char", "C", 0], ["Float", "F", 0], ["Double", "D", 0], ["CharSequence", "Ljava/lang/CharSequence;", null],
   ["Parcelable", "Landroid/os/Parcelable;", null], ["Serializable", "Ljava/io/Serializable;", null],
   ["Bundle", "Landroid/os/Bundle;", null],
   ["IntArray", "[I", null], ["ByteArray", "[B", null], ["StringArray", "[Ljava/lang/String;", null],
@@ -262,7 +262,7 @@ for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I",
     if (d.length === 1) return bundlePrimitive(this.extras.map.get(k), d, dflt);
     return this.extras.map.get(k) ?? dflt;
   };
-  if (d === "I" || d === "J" || d === "Z" || d === "F" || d === "D") {
+  if (d === "I" || d === "J" || d === "Z" || d === "C" || d === "F" || d === "D") {
     intentMethods[`get${t}Extra(Ljava/lang/String;${d})${d}`] = function (this: JIntent, k: string, dv: unknown) {
       const v = this.extras.map.get(k);
       return bundlePrimitive(v, d, dv);
@@ -404,9 +404,10 @@ export const systemActivities: Record<string, (intent: JIntent) => Promise<JInte
 export function registerSystemActivity(action: string, run: (intent: JIntent) => Promise<JIntent | null>) {
   systemActivities[action] = run;
 }
-export function mkResultIntent(uri: string): JIntent {
+export function mkResultIntent(uri: string, flags = 3 | 0x40): JIntent {
   const i = new JIntent();
   i.dataUri = uri;
+  i.flags = flags;
   return i;
 }
 
@@ -414,6 +415,10 @@ export function mkResultIntent(uri: string): JIntent {
  *  usually mid-click-handler, and androidx dispatches straight into app code from here. */
 export function deliverActivityResult(act: JActivity, code: number, resultCode: number, data: JIntent | null) {
   setTimeout(() => void onMain(async () => {
+    if (resultCode === RESULT_OK && data?.dataUri && (data.flags & 3)) {
+      const { grantUriPermission } = await import("./contentresolver");
+      grantUriPermission(act.$host.pkg, mkUri(data.dataUri), data.flags);
+    }
     const target = act.fragmentResults.get(code);
     if (target) {
       act.fragmentResults.delete(code);

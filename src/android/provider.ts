@@ -17,7 +17,7 @@ const PROVIDER_INTERFACE = "android.content.action.DOCUMENTS_PROVIDER";
 
 // The activities DocumentsUI provides on a device, over the browser's own pickers.
 registerSystemActivity("android.intent.action.OPEN_DOCUMENT_TREE",
-  async () => { const uri = await pickTree(); return uri ? mkResultIntent(uri) : null; });
+  async () => { const uri = await pickTree(); return uri ? mkResultIntent(uri, 3 | 0x40 | 0x80) : null; });
 for (const action of ["android.intent.action.OPEN_DOCUMENT", "android.intent.action.GET_CONTENT",
   "android.intent.action.CREATE_DOCUMENT"] as const) {
   registerSystemActivity(action, async (intent) => {
@@ -25,7 +25,7 @@ for (const action of ["android.intent.action.OPEN_DOCUMENT", "android.intent.act
       save: action.endsWith("CREATE_DOCUMENT") ? String(intent.extras.map.get("android.intent.extra.TITLE") ?? "file") : undefined,
       mime: intent.typeStr && intent.typeStr !== "*/*" ? intent.typeStr : null,
     });
-    return uri ? mkResultIntent(uri) : null;
+    return uri ? mkResultIntent(uri, action === "android.intent.action.GET_CONTENT" ? 1 : 3 | 0x40) : null;
   });
 }
 

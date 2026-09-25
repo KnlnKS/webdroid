@@ -1,12 +1,12 @@
 import { services, type JContext } from "./context";
-import { rt, type NativeSpec, JObj, stubs, noops } from "../jvm/runtime";
+import { rt, type NativeSpec, JObj, noops } from "../jvm/runtime";
 import { appHost, type AppHost } from "./apphost";
 import { type JUri, mkUri, uriParts, uriDecode } from "./net";
 import {
   isDocsUri, documentId, docRead, docWrite, docInputStream, docOutputStream, docRow, isChildrenUri, docChildren,
   DOC_COLUMNS, docCells, docDelete
 } from "./documents";
-import { mkPfd } from "./os";
+import { mkPfd, pfdBackingBytes } from "./os";
 import { mkFile } from "../jvm/natives/jio";
 import { mkAssetFd } from "./resnative";
 import { newObj, defineException, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang";
@@ -101,34 +101,61 @@ export function contentResolver(): unknown {
   }
   return s;
 }
+type PersistedUriGrant = { uri: string; flags: number; time: number };
+const PREFIX_GRANT = 0x80, PERSISTABLE_GRANT = 0x40;
 /** A persistable grant is app state that survives a reboot, so it lives with the install. */
 const uriGrants = {
   key: () => "wd:install:" + (appHost?.pkg ?? "") + ":uriperms",
-  all(): string[] { try { return JSON.parse(globalThis.localStorage?.getItem(this.key()) ?? "[]"); } catch { return []; } },
-  set(v: string[]) { try { globalThis.localStorage?.setItem(this.key(), JSON.stringify(v)); } catch { /* private mode */ } },
+  all(): PersistedUriGrant[] {
+    try {
+      const saved: unknown = JSON.parse(globalThis.localStorage?.getItem(this.key()) ?? "[]");
+      if (!Array.isArray(saved)) return [];
+      return saved.flatMap((entry) => {
+        if (typeof entry === "string") return [{ uri: entry, flags: 3 | (entry.includes("/tree/") ? PREFIX_GRANT : 0), time: 0 }];
+        if (entry && typeof entry === "object" && "uri" in entry && typeof entry.uri === "string" &&
+          "flags" in entry && typeof entry.flags === "number")
+          return [{ uri: entry.uri, flags: entry.flags, time: "time" in entry && typeof entry.time === "number" ? entry.time : 0 }];
+        return [];
+      });
+    } catch { return []; }
+  },
+  set(v: PersistedUriGrant[]) { try { globalThis.localStorage?.setItem(this.key(), JSON.stringify(v)); } catch { /* private mode */ } },
 };
 const transientUriGrants = new Map<string, Map<string, number>>();
+const grantedUri = (target: string, granted: string, flags: number) =>
+  target === granted || ((flags & PREFIX_GRANT) !== 0 && target.startsWith(granted + "/"));
+function transientFlags(pkg: string, uri: JUri): number {
+  let flags = 0;
+  for (const [granted, mode] of transientUriGrants.get(pkg) ?? []) {
+    if (grantedUri(uri.uri, granted, mode)) flags |= mode;
+  }
+  return flags;
+}
 export function grantUriPermission(pkg: string, uri: JUri, modes: number): void {
   if (!pkg || !uri) rt.npe();
+  if (!(modes & 3)) return;
   let grants = transientUriGrants.get(pkg);
   if (!grants) transientUriGrants.set(pkg, grants = new Map());
-  grants.set(uri.uri, (grants.get(uri.uri) ?? 0) | (modes & 3));
+  grants.set(uri.uri, (grants.get(uri.uri) ?? 0) | (modes & (3 | PREFIX_GRANT | PERSISTABLE_GRANT)));
 }
 export function revokeUriPermission(uri: JUri, modes: number): void {
   if (!uri) rt.npe();
   for (const grants of transientUriGrants.values()) {
     const remaining = (grants.get(uri.uri) ?? 0) & ~(modes & 3);
-    if (remaining) grants.set(uri.uri, remaining);
+    if (remaining & 3) grants.set(uri.uri, remaining);
     else grants.delete(uri.uri);
   }
 }
 export function checkUriPermission(u: JUri, _pid: number, uid: number, modes: number): number {
+  if (!u) rt.npe();
   if (uid === 0) return 0;
   const requested = modes & 3;
   if (!requested) return -1;
-  if (uid === PROCESS_UID && uriGrants.all().includes(u.uri)) return 0;
-  for (const [pkg, grants] of transientUriGrants) {
-    if (packages.get(pkg)?.uid === uid && ((grants.get(u.uri) ?? 0) & requested) === requested) return 0;
+  if (uid === PROCESS_UID && uriGrants.all().some((grant) =>
+    grantedUri(u.uri, grant.uri, grant.flags) && (grant.flags & requested) === requested)) return 0;
+  for (const pkg of transientUriGrants.keys()) {
+    if (packages.get(pkg)?.uid !== uid) continue;
+    if ((transientFlags(pkg, u) & requested) === requested) return 0;
   }
   return -1;
 }
@@ -156,8 +183,8 @@ async function openPfd(u: JUri, mode: string) {
   }
   const id = documentId(u, true);
   const write = (mode ?? "r").includes("w");
-  return mkPfd(write && (mode ?? "").includes("t") ? new Uint8Array(0) : await docRead(id),
-    write ? (b) => docWrite(id, b) : null);
+  const bytes = await pfdBackingBytes(id) ?? (write && (mode ?? "").includes("t") ? new Uint8Array(0) : await docRead(id));
+  return mkPfd(bytes, write ? (b) => docWrite(id, b) : null, id);
 }
 const openAfd = async (u: JUri, mode: string) => {
   const pfd = await openPfd(u, mode);
@@ -245,25 +272,40 @@ const resolverMethods: NativeSpec["methods"] = {
     const provider = await contentProvider(u);
     return provider ? vcall(provider, "delete", "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I", u, where, args) : 0;
   },
-  // A grant we cannot refuse: nothing here revokes URI access, so the app keeps what it took.
-  "takePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri) => {
+  "takePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri, modes: number) => {
+    if (!u) rt.npe();
+    const requested = modes & 3;
+    if (!requested) return;
     const all = uriGrants.all();
-    if (!all.includes(u.uri)) uriGrants.set([...all, u.uri]);
+    const old = all.find((grant) => grant.uri === u.uri);
+    const offered = transientFlags(appHost?.pkg ?? "", u);
+    if ((offered & (requested | PERSISTABLE_GRANT)) !== (requested | PERSISTABLE_GRANT) &&
+      (!old || (old.flags & requested) !== requested))
+      throw rt.mkThrowable("java/lang/SecurityException", "No persistable URI permission for " + u.uri);
+    const flags = (old?.flags ?? 0) | requested | (offered & PREFIX_GRANT);
+    uriGrants.set([...all.filter((grant) => grant.uri !== u.uri), { uri: u.uri, flags, time: Date.now() }]);
   },
-  "releasePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri) =>
-    uriGrants.set(uriGrants.all().filter((s) => s !== u.uri)),
+  "releasePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri, modes: number) => {
+    if (!u) rt.npe();
+    uriGrants.set(uriGrants.all().flatMap((grant) => {
+      if (grant.uri !== u.uri) return [grant];
+      const flags = grant.flags & ~(modes & 3);
+      return flags & 3 ? [{ ...grant, flags }] : [];
+    }));
+  },
   "getPersistedUriPermissions()Ljava/util/List;": () =>
-    newArrayList(uriGrants.all().map((s) => { const p = new JUriPermission(); p.uriStr = s; return p; })),
+    newArrayList(uriGrants.all().map((grant) => Object.assign(new JUriPermission(), { uriStr: grant.uri, flags: grant.flags, time: grant.time }))),
 };
 rt.register({ name: "android/content/ContentResolver", ctor: class extends JObj {}, methods: resolverMethods });
-class JUriPermission extends JObj { uriStr = ""; }
+class JUriPermission extends JObj { uriStr = ""; flags = 0; time = 0; }
 rt.register({
   name: "android/content/UriPermission", ctor: JUriPermission,
   methods: {
     "getUri()Landroid/net/Uri;": function (this: JUriPermission) { return mkUri(this.uriStr); },
+    "isReadPermission()Z": function (this: JUriPermission) { return +(!!(this.flags & 1)); },
+    "isWritePermission()Z": function (this: JUriPermission) { return +(!!(this.flags & 2)); },
+    "getPersistedTime()J": function (this: JUriPermission) { return BigInt(this.time); },
     ...noops("<init>()V"),
-    ...stubs(1, "isReadPermission()Z", "isWritePermission()Z"),
-    ...stubs(0n, "getPersistedTime()J"),
   },
 });
 

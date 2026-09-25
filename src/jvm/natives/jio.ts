@@ -18,6 +18,7 @@ rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, iface
 export interface VfsFile { path: string | null; data: Uint8Array; len: number }
 const openFiles = new Map<string, VfsFile>();
 // ── VFS: path → bytes. Directories implicit.
+const volatileFiles = new Set<string>();
 const procBytes = (path: string): Uint8Array | null => {
   const text = procText(path);
   return text === null ? null : new TextEncoder().encode(text);
@@ -29,6 +30,7 @@ export const vfs = {
   prepare: (_pkg: string): Promise<void> => Promise.resolve(),
   flush: (): Promise<void> => Promise.resolve(),
   onWrite: (_path: string, _change: "modify" | "write" | "create" | "delete" = "modify") => {},
+  markVolatile(p: string) { volatileFiles.add(this.norm(p)); },
   norm(p: string): string {
     const parts: string[] = [];
     for (const seg of p.split("/")) {
@@ -65,7 +67,7 @@ export const vfs = {
   publish(file: VfsFile) {
     if (file.path === null || openFiles.get(file.path) !== file) return;
     this.files.set(file.path, file.data.subarray(0, file.len));
-    this.onWrite(file.path, "modify");
+    if (!volatileFiles.has(file.path)) this.onWrite(file.path, "modify");
   },
   write(p: string, data: Uint8Array, notify = true) {
     const path = this.norm(p);
@@ -77,7 +79,7 @@ export const vfs = {
       file.data = data;
       file.len = data.length;
     }
-    if (notify) this.onWrite(path, existed ? "write" : "create");
+    if (notify && !volatileFiles.has(path)) this.onWrite(path, existed ? "write" : "create");
   },
   mount(p: string, source: FileSource) {
     const path = this.norm(p);
@@ -104,10 +106,11 @@ export const vfs = {
   },
   delete(p: string, notify = true): boolean {
     const path = this.norm(p);
+    const volatile = volatileFiles.delete(path);
     const file = openFiles.get(path);
     if (file) { file.path = null; openFiles.delete(path); }
     const removed = this.files.delete(path) || this.lazyFiles.delete(path);
-    if (removed && notify) this.onWrite(path, "delete");
+    if (removed && notify && !volatile) this.onWrite(path, "delete");
     return removed;
   },
   rename(from: string, to: string): boolean {
@@ -632,8 +635,22 @@ class JFOS extends JOutputStream {
   append = false;
   deleteOnClose = false;
   offset = 0;
-  get pos() { return (this.append && this.chunks.length ? vfs.read(this.fpath)?.length ?? 0 : this.offset) + this.chunks.length; }
-  set pos(value: number) { flushFOS(this); this.offset = value; }
+  get pos() {
+    const raf = this.shared?.owner;
+    if (raf instanceof JRAF) return raf.pos + this.chunks.length;
+    const fd = this.shared?.fd ?? -1;
+    const base = fd >= 0 ? checkedFdResult(javaSeekFd(fd, 0, 1))
+      : this.append && this.chunks.length ? vfs.read(this.fpath)?.length ?? 0 : this.offset;
+    return base + this.chunks.length;
+  }
+  set pos(value: number) {
+    flushFOS(this);
+    this.offset = value;
+    const raf = this.shared?.owner;
+    if (raf instanceof JRAF) { raf.pos = value; return; }
+    const fd = this.shared?.fd ?? -1;
+    if (fd >= 0) checkedFdResult(javaSeekFd(fd, value, 0));
+  }
 }
 function openWrite(this: JFOS, path: string, append = 0, truncate = true) {
   this.fpath = vfs.norm(path);
@@ -655,7 +672,10 @@ rt.register({
       if (!d) throw rt.mkThrowable("java/lang/NullPointerException", "fdObj == null");
       if (!d.path) throw rt.mkThrowable("java/io/IOException", "descriptor has no file to write");
       this.shared = d; this.fpath = d.path;
-      if (!(d.owner instanceof JRAF)) { this.append = true; this.offset = vfs.read(d.path)?.length ?? 0; }
+      if (!(d.owner instanceof JRAF)) {
+        this.append = !!(d.flags & O_APPEND);
+        this.offset = d.fd >= 0 ? checkedFdResult(javaSeekFd(d.fd, 0, 1)) : this.append ? vfs.read(d.path)?.length ?? 0 : 0;
+      }
     },
     "<init>(Ljava/io/File;)V": function (this: JFOS, f: JFile) { openWrite.call(this, f.path); },
     "<init>(Ljava/io/File;Z)V": function (this: JFOS, f: JFile, app: number) { openWrite.call(this, f.path, app); },
@@ -681,6 +701,25 @@ function flushFOS(s: JFOS) {
   if (!s.chunks.length) return;
   const raf = s.shared?.owner;
   if (raf instanceof JRAF) { const b = new Int8Array(s.chunks); s.chunks.length = 0; rafWrite(raf, b, 0, b.length); return; }
+  const file = s.shared && vfs.open(s.fpath);
+  if (file) {
+    const fd = s.shared!.fd;
+    const start = s.append ? file.len : fd >= 0 ? checkedFdResult(javaSeekFd(fd, 0, 1)) : s.offset;
+    const end = start + s.chunks.length;
+    if (end > file.data.length) {
+      const grown = new Uint8Array(Math.max(end, file.data.length * 2, 4096));
+      grown.set(file.data.subarray(0, file.len));
+      file.data = grown;
+    }
+    if (start > file.len) file.data.fill(0, file.len, start);
+    file.data.set(s.chunks, start);
+    file.len = Math.max(file.len, end);
+    vfs.publish(file);
+    s.offset = end;
+    if (fd >= 0) checkedFdResult(javaSeekFd(fd, end, 0));
+    s.chunks.length = 0;
+    return;
+  }
   const old = vfs.read(s.fpath) ?? new Uint8Array(0);
   const start = s.append ? old.length : s.offset;
   const merged = new Uint8Array(Math.max(old.length, start + s.chunks.length));
