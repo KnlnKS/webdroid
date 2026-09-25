@@ -47,6 +47,14 @@ const signatures = (certificates: Uint8Array[] = []) => {
   rt.link("android/content/pm/Signature");
   return jarray(certificates.map((bytes) => Object.assign(new JSignature(), { bytes: new Int8Array(bytes) })), "Landroid/content/pm/Signature;");
 };
+async function certificateMatches(certificates: Uint8Array[], expected: Int8Array, type: number): Promise<number> {
+  if (type !== 0 && type !== 1) return 0;
+  for (const certificate of certificates) {
+    const bytes = type === 0 ? certificate : await digestBytes("SHA-256", certificate);
+    if (bytes && bytes.length === expected.length && bytes.every((byte, index) => byte === (expected[index]! & 255))) return 1;
+  }
+  return 0;
+}
 rt.register({
   name: "android/content/pm/PackageManager$NameNotFoundException",
   ctor: (() => { const p = rt.link("java/lang/Exception").ctor; return class extends p {}; })(),
@@ -637,6 +645,7 @@ export function getPM(): JPackageManager {
 rt.register({
   name: "android/content/pm/PackageManager", ctor: JPackageManager,
   statics: { PERMISSION_GRANTED: 0, PERMISSION_DENIED: -1, GET_ACTIVITIES: 1, GET_RECEIVERS: 2, GET_SERVICES: 4, MATCH_DISABLED_COMPONENTS: 0x200, MATCH_SYSTEM_ONLY: 0x100000, MATCH_DIRECT_BOOT_AWARE: 0x80000, MATCH_DIRECT_BOOT_UNAWARE: 0x40000, GET_META_DATA: 128, GET_SIGNATURES: 64,
+    CERT_INPUT_RAW_X509: 0, CERT_INPUT_SHA256: 1,
     COMPONENT_ENABLED_STATE_DEFAULT: 0, COMPONENT_ENABLED_STATE_ENABLED: 1, COMPONENT_ENABLED_STATE_DISABLED: 2,
     DONT_KILL_APP: 1,
     FEATURE_AUDIO_LOW_LATENCY: "android.hardware.audio.low_latency", FEATURE_AUDIO_PRO: "android.hardware.audio.pro", FEATURE_TOUCHSCREEN: "android.hardware.touchscreen",
@@ -821,6 +830,19 @@ rt.register({
       const left = await x.visibleCertificates(), right = await y.visibleCertificates();
       if (!left.length || !right.length) return !left.length && !right.length ? 1 : !left.length ? -1 : -2;
       return left.length === right.length && left.every((cert) => right.some((other) => cert.length === other.length && cert.every((v, i) => v === other[i]))) ? 0 : -3;
+    },
+    "hasSigningCertificate(Ljava/lang/String;[BI)Z": async (pkg: string | null, certificate: Int8Array | null, type: number) => {
+      if (pkg === null || certificate === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      const record = packages.get(pkg);
+      const certificates = record ? await record.visibleCertificates() : (await installedPackage(pkg))?.archive.certificates ?? [];
+      return certificateMatches(certificates, certificate, type);
+    },
+    "hasSigningCertificate(I[BI)Z": async (uid: number, certificate: Int8Array | null, type: number) => {
+      if (certificate === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+      for (const record of packages.values()) {
+        if (record.uid === uid && await certificateMatches(await record.visibleCertificates(), certificate, type)) return 1;
+      }
+      return 0;
     },
     "getInstalledPackages(I)Ljava/util/List;": installedPackages,
     "getInstalledApplications(I)Ljava/util/List;": async (flags: number) => {
