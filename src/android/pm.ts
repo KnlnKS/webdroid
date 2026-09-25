@@ -965,15 +965,26 @@ rt.register({
   },
 });
 class JShortcutManager extends JObj { packages = new Map<string, Map<string, JShortcutInfo>>(); }
+async function dynamicShortcuts(list: unknown, pkg: string): Promise<Map<string, JShortcutInfo>> {
+  const shortcuts = new Map<string, JShortcutInfo>();
+  for (const info of await toJsArray(list)) {
+    if (!(info instanceof JShortcutInfo) || info.pkg !== pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut belongs to another package");
+    const copy = await copyShortcut(info); copy.dynamic = true; shortcuts.set(copy.id, copy);
+  }
+  return shortcuts;
+}
 rt.register({
   name: "android/content/pm/ShortcutManager", ctor: JShortcutManager,
   methods: {
     "setDynamicShortcuts(Ljava/util/List;)Z": async function (this: JShortcutManager, list: unknown) {
-      const pkg = appHost?.pkg ?? "", shortcuts = new Map<string, JShortcutInfo>();
-      for (const info of await toJsArray(list)) {
-        if (!(info instanceof JShortcutInfo) || info.pkg !== pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut belongs to another package");
-        const copy = await copyShortcut(info); copy.dynamic = true; shortcuts.set(copy.id, copy);
-      }
+      const pkg = appHost?.pkg ?? "";
+      this.packages.set(pkg, await dynamicShortcuts(list, pkg)); return 1;
+    },
+    "addDynamicShortcuts(Ljava/util/List;)Z": async function (this: JShortcutManager, list: unknown) {
+      const pkg = appHost?.pkg ?? "";
+      const additions = await dynamicShortcuts(list, pkg);
+      const shortcuts = this.packages.get(pkg) ?? new Map<string, JShortcutInfo>();
+      for (const [id, info] of additions) shortcuts.set(id, info);
       this.packages.set(pkg, shortcuts); return 1;
     },
     "getDynamicShortcuts()Ljava/util/List;": async function (this: JShortcutManager) {
@@ -987,6 +998,8 @@ rt.register({
     },
     "removeAllDynamicShortcuts()V": function (this: JShortcutManager) { this.packages.delete(appHost?.pkg ?? ""); },
     "getMaxShortcutCountPerActivity()I": () => 15,
+    "getIconMaxHeight()I": () => Math.round(device.dp(96)),
+    "getIconMaxWidth()I": () => Math.round(device.dp(96)),
     "isRateLimitingActive()Z": () => 0,
     "reportShortcutUsed(Ljava/lang/String;)V": (id: string) => { if (id == null) throw rt.mkThrowable("java/lang/NullPointerException", "shortcutId"); },
     "isRequestPinShortcutSupported()Z": () => 0,

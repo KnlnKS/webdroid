@@ -547,6 +547,9 @@ const paintMethods: NativeSpec["methods"] = {
     const str = typeof cs === "string" ? cs : ((cs as { text?: string })?.text ?? String(cs ?? ""));
     return vcall(this, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", str, a, b, r);
   },
+  "getTextBounds([CIILandroid/graphics/Rect;)V": function (this: JPaint, chars: Uint16Array, offset: number, count: number, rect: JRect) {
+    return vcall(this, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", charsToString(chars, offset, count), 0, count, rect);
+  },
   "getTextBounds(Ljava/lang/String;IILandroid/graphics/Rect;)V": function (this: JPaint, s: string, a: number, b: number, r: JRect) {
     const ctx = measureCtx(this.font(), this.language);
     const m = ctx.measureText(s.slice(a, b));
