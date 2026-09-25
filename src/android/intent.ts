@@ -51,6 +51,17 @@ function putExtras(this: JIntent, source: JBundle | JIntent) {
   if (extras) for (const [key, value] of extras.map) this.extras.map.set(key, value);
   return this;
 }
+function createChooser(target: JIntent, title: unknown, sender?: unknown): JIntent {
+  if (!target) rt.npe();
+  const chooser = new JIntent();
+  chooser.action = "android.intent.action.CHOOSER";
+  chooser.extras.map.set("android.intent.extra.INTENT", target);
+  if (title !== null) chooser.extras.map.set("android.intent.extra.TITLE", title);
+  if (sender) chooser.extras.map.set("android.intent.extra.CHOSEN_COMPONENT_INTENT_SENDER", sender);
+  chooser.flags = target.flags & 3;
+  chooser.clipData = target.clipData;
+  return chooser;
+}
 async function readIntent(p: JParcel, intent = new JIntent()): Promise<JIntent> {
   rt.link("android/content/Intent");
   intent.action = readString8(p); intent.dataUri = (await readUri(p))?.uri ?? null;
@@ -211,10 +222,8 @@ const intentMethods: NativeSpec["methods"] = {
     const i = this.dataUri?.indexOf(":") ?? -1;
     return i > 0 ? this.dataUri!.slice(0, i) : null;
   },
-  // A chooser needs a chooser activity; with none installed the target intent is what launches,
-  // which is what AOSP falls back to when nothing can handle ACTION_CHOOSER.
-  "static createChooser(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent;": (t: JIntent) => t,
-  "static createChooser(Landroid/content/Intent;Ljava/lang/CharSequence;Landroid/content/IntentSender;)Landroid/content/Intent;": (t: JIntent) => t,
+  "static createChooser(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent;": createChooser,
+  "static createChooser(Landroid/content/Intent;Ljava/lang/CharSequence;Landroid/content/IntentSender;)Landroid/content/Intent;": createChooser,
   "static makeMainActivity(Landroid/content/ComponentName;)Landroid/content/Intent;": (c: JComponentName) => {
     const i = new JIntent();
     i.action = "android.intent.action.MAIN";
@@ -305,6 +314,7 @@ rt.register({
     get CREATOR() { return parcelCreator("android/content/Intent", readIntent); },
     ACTION_MAIN: "android.intent.action.MAIN", ACTION_VIEW: "android.intent.action.VIEW",
     ACTION_SEND: "android.intent.action.SEND", ACTION_EDIT: "android.intent.action.EDIT",
+    ACTION_SEND_MULTIPLE: "android.intent.action.SEND_MULTIPLE", ACTION_CHOOSER: "android.intent.action.CHOOSER",
     ACTION_PICK: "android.intent.action.PICK", ACTION_GET_CONTENT: "android.intent.action.GET_CONTENT",
     ACTION_CREATE_DOCUMENT: "android.intent.action.CREATE_DOCUMENT", ACTION_OPEN_DOCUMENT: "android.intent.action.OPEN_DOCUMENT",
     ACTION_OPEN_DOCUMENT_TREE: "android.intent.action.OPEN_DOCUMENT_TREE",
@@ -390,6 +400,14 @@ export const activityTransport: {
 } = {};
 /** `sender` is the package whose identity the start carries (a PendingIntent's creator) */
 export async function launchIntent(host: AppHost, intent: JIntent, result?: ActivityResultTarget, sender = host.pkg) {
+  const system = intent?.component ? null : systemActivities[intent?.action ?? ""];
+  if (system) {
+    void system(intent).then(
+      (data) => { if (result) deliverActivityResult(result.act, result.code, data ? RESULT_OK : RESULT_CANCELED, data); },
+      (error) => { reportUncaught(error); if (result) deliverActivityResult(result.act, result.code, RESULT_CANCELED, null); },
+    );
+    return;
+  }
   const { getPM } = await import("./pm");
   const resolved = await vcall(getPM(), "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", intent, 0x10000);
   if (!resolved?.activityInfo) throw rt.mkThrowable("android/content/ActivityNotFoundException", "No activity found for " + intent.action);
