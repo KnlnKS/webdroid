@@ -3,6 +3,7 @@
 import { rt, JObj, stubs } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
+import { charsToString } from "../jvm/abi";
 
 interface Ev { bindings?: Attr[]; t: number; name: string; ns: string; prefix: string | null; attrs: Attr[]; text: string; depth: number; empty: boolean }
 const START_DOCUMENT = 0, END_DOCUMENT = 1, START_TAG = 2, END_TAG = 3, TEXT = 4;
@@ -142,3 +143,113 @@ rt.register({
   },
 });
 export const newXmlPullParser = newParser;
+
+rt.markers("org/xmlpull/v1/XmlSerializer");
+const xmlText = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const xmlAttr = (s: string) => xmlText(s).replace(/"/g, "&quot;").replace(/\r/g, "&#13;").replace(/\n/g, "&#10;").replace(/\t/g, "&#9;");
+class JXmlSerializer extends JObj {
+  output: unknown = null;
+  writer = false;
+  chunks: string[] = [];
+  stack: { name: string; ns: string; qualified: string }[] = [];
+  prefixes = new Map<string, string>();
+  declarations = new Map<string, string>();
+  openTag = false;
+  nextPrefix = 0;
+  reset(output: unknown, writer: boolean) {
+    this.output = output; this.writer = writer; this.chunks = []; this.stack = [];
+    this.prefixes.clear(); this.declarations.clear(); this.openTag = false; this.nextPrefix = 0;
+  }
+  append(s: string) { this.chunks.push(s); }
+  finishTag() { if (this.openTag) { this.append(">"); this.openTag = false; } }
+  prefix(ns: string, attribute = false): string {
+    if (!ns) return "";
+    let prefix = this.prefixes.get(ns);
+    if (prefix === undefined || (attribute && !prefix)) {
+      prefix = "n" + this.nextPrefix++;
+      this.prefixes.set(ns, prefix);
+      this.declarations.set(prefix, ns);
+    }
+    return prefix;
+  }
+  declare() {
+    for (const [prefix, ns] of this.declarations) this.append(` xmlns${prefix ? ":" + prefix : ""}="${xmlAttr(ns)}"`);
+    this.declarations.clear();
+  }
+}
+const serializer = () => rt.make("webdroid/XmlSerializer") as JXmlSerializer;
+rt.register({ name: "webdroid/XmlSerializer", ctor: JXmlSerializer, ifaces: ["org/xmlpull/v1/XmlSerializer"], methods: {
+  "setOutput(Ljava/io/OutputStream;Ljava/lang/String;)V": function (this: JXmlSerializer, output: unknown, encoding: string | null) {
+    if (encoding && !/^utf-?8$/i.test(encoding)) throw rt.mkThrowable("java/io/UnsupportedEncodingException", encoding);
+    this.reset(output, false);
+  },
+  "setOutput(Ljava/io/Writer;)V": function (this: JXmlSerializer, output: unknown) {
+    this.reset(output, true);
+  },
+  "startDocument(Ljava/lang/String;Ljava/lang/Boolean;)V": function (this: JXmlSerializer, encoding: string | null, standalone: { v?: number } | null) {
+    this.append(`<?xml version="1.0" encoding="${encoding ?? "UTF-8"}"${standalone == null ? "" : ` standalone="${standalone.v ? "yes" : "no"}"`}?>`);
+  },
+  "endDocument()V": async function (this: JXmlSerializer) {
+    while (this.stack.length) {
+      const top = this.stack.at(-1)!;
+      await vcall(this, "endTag", "(Ljava/lang/String;Ljava/lang/String;)Lorg/xmlpull/v1/XmlSerializer;", top.ns, top.name);
+    }
+    await vcall(this, "flush", "()V");
+  },
+  "setPrefix(Ljava/lang/String;Ljava/lang/String;)V": function (this: JXmlSerializer, prefix: string, ns: string) {
+    this.prefixes.set(ns ?? "", prefix ?? "");
+    this.declarations.set(prefix ?? "", ns ?? "");
+    if (this.openTag) this.declare();
+  },
+  "getPrefix(Ljava/lang/String;Z)Ljava/lang/String;": function (this: JXmlSerializer, ns: string, generate: number) {
+    return this.prefixes.get(ns) ?? (generate ? this.prefix(ns) : null);
+  },
+  "getDepth()I": function (this: JXmlSerializer) { return this.stack.length; },
+  "getName()Ljava/lang/String;": function (this: JXmlSerializer) { return this.stack.at(-1)?.name ?? null; },
+  "getNamespace()Ljava/lang/String;": function (this: JXmlSerializer) { return this.stack.at(-1)?.ns ?? null; },
+  "startTag(Ljava/lang/String;Ljava/lang/String;)Lorg/xmlpull/v1/XmlSerializer;": function (this: JXmlSerializer, ns: string | null, name: string) {
+    this.finishTag();
+    const space = ns ?? "", prefix = this.prefix(space), qualified = prefix ? prefix + ":" + name : name;
+    this.append("<" + qualified); this.declare(); this.openTag = true;
+    this.stack.push({ name, ns: space, qualified });
+    return this;
+  },
+  "attribute(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/xmlpull/v1/XmlSerializer;": function (this: JXmlSerializer, ns: string | null, name: string, value: string) {
+    if (!this.openTag) throw rt.mkThrowable("java/lang/IllegalStateException", "attribute outside start tag");
+    const prefix = this.prefix(ns ?? "", true);
+    this.declare(); this.append(` ${prefix ? prefix + ":" : ""}${name}="${xmlAttr(value)}"`);
+    return this;
+  },
+  "endTag(Ljava/lang/String;Ljava/lang/String;)Lorg/xmlpull/v1/XmlSerializer;": function (this: JXmlSerializer, ns: string | null, name: string) {
+    const top = this.stack.at(-1);
+    if (!top || top.name !== name || top.ns !== (ns ?? "")) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Mismatched XML end tag");
+    this.stack.pop();
+    if (this.openTag) { this.append(" />"); this.openTag = false; }
+    else this.append("</" + top.qualified + ">");
+    return this;
+  },
+  "text(Ljava/lang/String;)Lorg/xmlpull/v1/XmlSerializer;": function (this: JXmlSerializer, value: string) {
+    this.finishTag(); this.append(xmlText(value)); return this;
+  },
+  "text([CII)Lorg/xmlpull/v1/XmlSerializer;": function (this: JXmlSerializer, chars: Uint16Array, off: number, len: number) {
+    this.finishTag(); this.append(xmlText(charsToString(chars, off, len))); return this;
+  },
+  "cdsect(Ljava/lang/String;)V": function (this: JXmlSerializer, value: string) {
+    this.finishTag(); this.append("<![CDATA[" + value.replace(/]]>/g, "]]]]><![CDATA[>") + "]]>");
+  },
+  "entityRef(Ljava/lang/String;)V": function (this: JXmlSerializer, value: string) { this.finishTag(); this.append("&" + value + ";"); },
+  "comment(Ljava/lang/String;)V": function (this: JXmlSerializer, value: string) { this.finishTag(); this.append("<!--" + value + "-->"); },
+  "processingInstruction(Ljava/lang/String;)V": function (this: JXmlSerializer, value: string) { this.finishTag(); this.append("<?" + value + "?>"); },
+  "docdecl(Ljava/lang/String;)V": function (this: JXmlSerializer, value: string) { this.finishTag(); this.append("<!DOCTYPE " + value + ">"); },
+  "ignorableWhitespace(Ljava/lang/String;)V": function (this: JXmlSerializer, value: string) { this.finishTag(); this.append(value); },
+  "flush()V": async function (this: JXmlSerializer) {
+    if (this.output == null) throw rt.mkThrowable("java/lang/IllegalStateException", "XML output not set");
+    const data = this.chunks.join(""); this.chunks = [];
+    if (data) {
+      if (this.writer) await vcall(this.output, "write", "(Ljava/lang/String;)V", data);
+      else await vcall(this.output, "write", "([B)V", new Int8Array(new TextEncoder().encode(data)));
+    }
+    await vcall(this.output, "flush", "()V");
+  },
+} });
+export const newXmlSerializer = serializer;

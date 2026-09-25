@@ -9,7 +9,7 @@ import { newLinkedHashSet } from "../jvm/natives/jutil";
 import type { JContext } from "./context";
 import type { JActivity } from "./app";
 import { onMain } from "./mainloop";
-import { vcall, defineException } from "../jvm/natives/jlang";
+import { vcall, defineException, stringHash } from "../jvm/natives/jlang";
 import { TV, type XmlAttr, type XmlNode } from "./axml";
 import { normRV } from "./res";
 
@@ -341,8 +341,11 @@ export function mkComponentName(pkg: string, cls: string): JComponentName {
   c.pkg = pkg; c.cls = cls;
   return c;
 }
+const shortClassName = (c: JComponentName) => c.cls.startsWith(c.pkg + ".") ? c.cls.slice(c.pkg.length) : c.cls;
+const compareComponents = (a: JComponentName, b: JComponentName) =>
+  a.pkg < b.pkg ? -1 : a.pkg > b.pkg ? 1 : a.cls < b.cls ? -1 : a.cls > b.cls ? 1 : 0;
 rt.register({
-  name: "android/content/ComponentName", ctor: JComponentName, ifaces: ["android/os/Parcelable"],
+  name: "android/content/ComponentName", ctor: JComponentName, ifaces: ["android/os/Parcelable", "java/lang/Comparable"],
   statics: { get CREATOR() { return parcelCreator("android/content/ComponentName", async p => readComponent(p)); } },
   methods: {
     "writeToParcel(Landroid/os/Parcel;I)V": function (this: JComponentName, p: JParcel) { writeComponent(this, p); },
@@ -359,9 +362,19 @@ rt.register({
       this.cls = cls?.ci?.name?.replace(/\//g, ".") ?? "";
     },
     "getClassName()Ljava/lang/String;": function (this: JComponentName) { return this.cls; },
+    "getShortClassName()Ljava/lang/String;": function (this: JComponentName) { return shortClassName(this); },
     "getPackageName()Ljava/lang/String;": function (this: JComponentName) { return this.pkg; },
     "flattenToString()Ljava/lang/String;": function (this: JComponentName) { return this.pkg + "/" + this.cls; },
-    "flattenToShortString()Ljava/lang/String;": function (this: JComponentName) { return this.pkg + "/" + (this.cls.startsWith(this.pkg + ".") ? this.cls.slice(this.pkg.length) : this.cls); },
+    "flattenToShortString()Ljava/lang/String;": function (this: JComponentName) { return this.pkg + "/" + shortClassName(this); },
+    "compareTo(Landroid/content/ComponentName;)I": function (this: JComponentName, other: JComponentName) { return compareComponents(this, other); },
+    "compareTo(Ljava/lang/Object;)I": function (this: JComponentName, other: JComponentName) {
+      if (!(other instanceof JComponentName)) throw rt.mkThrowable("java/lang/ClassCastException", "ComponentName required");
+      return compareComponents(this, other);
+    },
+    "equals(Ljava/lang/Object;)Z": function (this: JComponentName, other: unknown) {
+      return +(other instanceof JComponentName && this.pkg === other.pkg && this.cls === other.cls);
+    },
+    "hashCode()I": function (this: JComponentName) { return (stringHash(this.pkg) + stringHash(this.cls)) | 0; },
   },
 });
 

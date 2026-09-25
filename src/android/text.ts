@@ -1649,6 +1649,36 @@ rt.register({
 // itself and does not yet map a touch to a character offset, so the link-following part of
 // LinkMovementMethod.onTouchEvent honestly reports "not handled".
 rt.markers("android/text/method/TransformationMethod", "android/text/method/MovementMethod");
+class JReplacementTransformation extends JObj {}
+rt.register({ name: "android/text/method/ReplacementTransformationMethod", ctor: JReplacementTransformation,
+  ifaces: ["android/text/method/TransformationMethod"], methods: {
+    "<init>()V": () => {},
+    "getTransformation(Ljava/lang/CharSequence;Landroid/view/View;)Ljava/lang/CharSequence;": async function (this: JReplacementTransformation, source: unknown) {
+      if (source == null) return null;
+      const original = await vcall(this, "getOriginal", "()[C") as Uint16Array;
+      const replacement = await vcall(this, "getReplacement", "()[C") as Uint16Array;
+      const text = await csText(source);
+      let changed = false, result = "";
+      for (let i = 0; i < text.length; i++) {
+        const at = original.indexOf(text.charCodeAt(i));
+        changed ||= at >= 0;
+        result += at < 0 ? text[i] : String.fromCharCode(replacement[at]);
+      }
+      return changed ? result : source;
+    },
+    "onFocusChanged(Landroid/view/View;Ljava/lang/CharSequence;ZILandroid/graphics/Rect;)V": () => {},
+  },
+});
+class JSingleLineTransformation extends JReplacementTransformation {}
+const singleLineTM = new JSingleLineTransformation();
+rt.register({ name: "android/text/method/SingleLineTransformationMethod", ctor: JSingleLineTransformation,
+  sup: "android/text/method/ReplacementTransformationMethod", methods: {
+    "<init>()V": () => {},
+    "static getInstance()Landroid/text/method/SingleLineTransformationMethod;": () => singleLineTM,
+    "getOriginal()[C": () => Uint16Array.of(10, 13),
+    "getReplacement()[C": () => Uint16Array.of(32, 0xfeff),
+  },
+});
 class JBaseMovementMethod extends JObj {}
 const movementMethods: NonNullable<NativeSpec["methods"]> = {
   ...noops("<init>()V", "initialize(Landroid/widget/TextView;Landroid/text/Spannable;)V",
