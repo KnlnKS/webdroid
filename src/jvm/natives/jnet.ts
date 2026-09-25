@@ -618,11 +618,11 @@ rt.register({ name: "java/net/URISyntaxException", ctor: JURISyntaxException, su
 const SCHEMES = /^(https?|ftp|file|jar):$/;       // what Android's URL has a handler for
 const DEFAULT_PORT: Record<string, number> = { "http:": 80, "https:": 443, "ftp:": 21 };
 const userInfo = (u: URL) => u.username ? u.username + (u.password ? ":" + u.password : "") : null;
-const noRef = (u: URL) => u.href.slice(0, u.href.length - u.hash.length);
 
 class JURL extends JObj {
-  spec = ""; u!: URL;
+  spec = ""; u!: URL; emptyAuthority = false; emptyPath = false;
   open(): JURLConnection {
+    if (this.emptyAuthority) throw rt.mkThrowable("java/net/UnknownHostException", "");
     const https = this.u.protocol === "https:";
     if (this.u.protocol === "jar:") { const c = rt.make("java/net/JarURLConnection") as JURLConnection; c.url = this; return c; }
     if (!https && this.u.protocol !== "http:") throw rt.unimplemented("URL.openConnection " + this.u.protocol);
@@ -635,13 +635,19 @@ class JURL extends JObj {
 /** Java keeps the spec string it was given (toString round-trips); only a resolved URL is re-serialised */
 function urlInit(r: JURL, spec: string | null, base?: URL): JURL {
   const s = String(spec);
-  try { r.u = new URL(s, base); } catch {
+  // Android accepts an empty authority; WHATWG URL needs a host for these schemes.
+  const empty = !base && /^(https?|ftp):\/\/(?=\/|[?#]|$)/i.test(s);
+  try { r.u = new URL(empty ? s.replace("://", "://webdroid.invalid") : s, base); } catch {
     throw rt.mkThrowable("java/net/MalformedURLException", /^[a-z][a-z0-9+.-]*:/i.test(s) ? s : "no protocol: " + s);
   }
   if (!SCHEMES.test(r.u.protocol)) throw rt.mkThrowable("java/net/MalformedURLException", "unknown protocol: " + r.u.protocol.slice(0, -1));
+  r.emptyAuthority = empty;
+  r.emptyPath = empty && !s.slice(s.indexOf("://") + 3).startsWith("/");
   r.spec = base ? r.u.href : s;
   return r;
 }
+const urlKey = (r: JURL) => r.emptyAuthority ? r.u.protocol + "//" + (r.emptyPath ? "" : r.u.pathname) + r.u.search + r.u.hash : r.u.href;
+const urlFile = (r: JURL) => (r.emptyPath ? "" : r.u.pathname) + r.u.search;
 const mkURL = (spec: string) => urlInit(new JURL(), spec);
 rt.register({
   name: "java/net/URL", ctor: JURL, ifaces: ["java/io/Serializable"],
@@ -656,22 +662,22 @@ rt.register({
       urlInit(this, p + ":" + (h ? "//" + h : "") + (file ?? ""));
     },
     "getProtocol()Ljava/lang/String;": function (this: JURL) { return this.u.protocol.slice(0, -1); },
-    "getHost()Ljava/lang/String;": function (this: JURL) { return this.u.hostname; },
+    "getHost()Ljava/lang/String;": function (this: JURL) { return this.emptyAuthority ? "" : this.u.hostname; },
     "getPort()I": function (this: JURL) { return this.u.port ? Number(this.u.port) : -1; },
     "getDefaultPort()I": function (this: JURL) { return DEFAULT_PORT[this.u.protocol] ?? -1; },
-    "getPath()Ljava/lang/String;": function (this: JURL) { return this.u.pathname; },
+    "getPath()Ljava/lang/String;": function (this: JURL) { return this.emptyPath ? "" : this.u.pathname; },
     "getQuery()Ljava/lang/String;": function (this: JURL) { return this.u.search ? this.u.search.slice(1) : null; },
-    "getFile()Ljava/lang/String;": function (this: JURL) { return this.u.pathname + this.u.search; },
+    "getFile()Ljava/lang/String;": function (this: JURL) { return urlFile(this); },
     "getRef()Ljava/lang/String;": function (this: JURL) { return this.u.hash ? this.u.hash.slice(1) : null; },
     "getUserInfo()Ljava/lang/String;": function (this: JURL) { return userInfo(this.u); },
-    "getAuthority()Ljava/lang/String;": function (this: JURL) { const ui = userInfo(this.u); return (ui ? ui + "@" : "") + this.u.host; },
+    "getAuthority()Ljava/lang/String;": function (this: JURL) { const ui = userInfo(this.u); return this.emptyAuthority ? "" : (ui ? ui + "@" : "") + this.u.host; },
     "toExternalForm()Ljava/lang/String;": function (this: JURL) { return this.spec; },
     "toString()Ljava/lang/String;": function (this: JURL) { return this.spec; },
     "toURI()Ljava/net/URI;": function (this: JURL) { return newObj("java/net/URI", "(Ljava/lang/String;)V", this.spec); },
-    "equals(Ljava/lang/Object;)Z": function (this: JURL, o: unknown) { return o instanceof JURL && o.u.href === this.u.href ? 1 : 0; },
-    "sameFile(Ljava/net/URL;)Z": function (this: JURL, o: JURL | null) { return o && noRef(o.u) === noRef(this.u) ? 1 : 0; },
+    "equals(Ljava/lang/Object;)Z": function (this: JURL, o: unknown) { return o instanceof JURL && urlKey(o) === urlKey(this) ? 1 : 0; },
+    "sameFile(Ljava/net/URL;)Z": function (this: JURL, o: JURL | null) { return o && urlKey(o).split("#")[0] === urlKey(this).split("#")[0] ? 1 : 0; },
     // over the normalised form, not the spec, so equal URLs hash alike as Object requires
-    "hashCode()I": function (this: JURL) { return stringHash(this.u.href); },
+    "hashCode()I": function (this: JURL) { return stringHash(urlKey(this)); },
     "openConnection()Ljava/net/URLConnection;": function (this: JURL) { return this.open(); },
     "openConnection(Ljava/net/Proxy;)Ljava/net/URLConnection;": function (this: JURL) { return this.open(); },
     "openStream()Ljava/io/InputStream;": async function (this: JURL) {
