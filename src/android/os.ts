@@ -577,11 +577,11 @@ for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "
     if (v !== undefined) return v;
     return d === "I" || d === "Z" ? 0 : d === "J" ? 0n : d === "F" || d === "D" ? 0 : null;
   };
-  if (d === "I" || d === "J" || d === "Z" || d === "F" || d === "D" || d === "Ljava/lang/String;") {
+  if (d === "I" || d === "J" || d === "Z" || d === "F" || d === "D" || d === "Ljava/lang/String;" || d === "Ljava/lang/CharSequence;") {
     bundleMethods[`get${t}(Ljava/lang/String;${d})${d}`] = function (this: JBundle, k: string, dflt: unknown) {
       const v = this.map.get(k);
       if (d.length === 1) return bundlePrimitive(v, d, dflt);
-      return v !== undefined ? v : dflt;
+      return d === "Ljava/lang/CharSequence;" ? v ?? dflt : v !== undefined ? v : dflt;
     };
   }
 }
@@ -915,6 +915,12 @@ rt.register({
   name: "android/view/KeyEvent", ctor: JKeyEvent, ifaces: ["android/os/Parcelable"],
   statics: {
     ACTION_DOWN: 0, ACTION_UP: 1, MAX_KEYCODE: 84,
+    get CREATOR() { return parcelCreator("android/view/KeyEvent", async parcel => {
+      const event = new JKeyEvent();
+      event.action = await vcall(parcel, "readInt", "()I") as number;
+      event.keyCode = await vcall(parcel, "readInt", "()I") as number;
+      return event;
+    }); },
     ...Object.fromEntries([...keyCodes].map(([name, code]) => ["KEYCODE_" + name, code])),
   },
   methods: {
@@ -942,6 +948,11 @@ rt.register({
     },
     "getAction()I": function (this: JKeyEvent) { return this.action; },
     "getKeyCode()I": function (this: JKeyEvent) { return this.keyCode; },
+    "describeContents()I": () => 0,
+    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JKeyEvent, parcel: JParcel) {
+      await vcall(parcel, "writeInt", "(I)V", this.action);
+      await vcall(parcel, "writeInt", "(I)V", this.keyCode);
+    },
     ...stubs(0, "getRepeatCount()I", "getUnicodeChar()I", "hasModifiers(I)Z", "isTracking()Z", "isCanceled()Z"),
     ...stubs(1, "hasNoModifiers()Z"),
     ...noops("startTracking()V"),
