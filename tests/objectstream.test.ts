@@ -30,6 +30,37 @@ test("ObjectOutputStream writes a complete object before explicit flush", async 
   expect(await vcall(uuid, "getLeastSignificantBits", "()J")).toBe(2n);
 });
 
+test("Class objects use TC_CLASS and retain back references", async () => {
+  const target = await newObj("java/io/ByteArrayOutputStream", "()V");
+  const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", target);
+  const cls = rt.classFor("java/lang/Object");
+  await vcall(output, "writeObject", "(Ljava/lang/Object;)V", cls);
+  await vcall(output, "writeObject", "(Ljava/lang/Object;)V", cls);
+  const bytes = await vcall(target, "toByteArray", "()[B") as Int8Array;
+  expect(bytes[4] & 255).toBe(0x76);
+  const source = await newObj("java/io/ByteArrayInputStream", "([B)V", bytes);
+  const input = await newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source);
+  expect(await vcall(input, "readObject", "()Ljava/lang/Object;")).toBe(cls);
+  expect(await vcall(input, "readObject", "()Ljava/lang/Object;")).toBe(cls);
+});
+
+test("Arrays.asList keeps its Java serialized form and fixed-size backing array", async () => {
+  const array = ["before", "second"];
+  const list = await vcall(rt.link("java/util/Arrays").ctor, "asList", "([Ljava/lang/Object;)Ljava/util/List;", array);
+  expect((list as { constructor: { $i: { name: string } } }).constructor.$i.name).toBe("java/util/Arrays$ArrayList");
+  await vcall(list, "set", "(ILjava/lang/Object;)Ljava/lang/Object;", 0, "after");
+  expect(array[0]).toBe("after");
+  await expect(vcall(list, "add", "(Ljava/lang/Object;)Z", "third")).rejects.toThrow();
+  const bytes = await newObj("java/io/ByteArrayOutputStream", "()V");
+  const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", bytes);
+  await vcall(output, "writeObject", "(Ljava/lang/Object;)V", list);
+  const source = await newObj("java/io/ByteArrayInputStream", "([B)V", await vcall(bytes, "toByteArray", "()[B"));
+  const input = await newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source);
+  const restored = await vcall(input, "readObject", "()Ljava/lang/Object;");
+  expect(await vcall(restored, "get", "(I)Ljava/lang/Object;", 0)).toBe("after");
+  await expect(vcall(restored, "clear", "()V")).rejects.toThrow();
+});
+
 test("unmodifiable random-access lists retain their serialized read-only view", async () => {
   const list = await newObj("java/util/ArrayList", "()V");
   await vcall(list, "add", "(Ljava/lang/Object;)Z", "saved");

@@ -149,6 +149,7 @@ class JIter extends JObj {
   i = 0;
   last = -1; // index next()/previous() returned, the target of set()/remove(); -1 once consumed
   readOnly = false;
+  fixedSize = false;
   expectedMod: number | null = null; // fail-fast snapshot, only set when owner exposes modCount
   constructor(public arr: unknown[], public owner: IterOwner | null = null) {
     super();
@@ -180,7 +181,7 @@ rt.register({
       }
     },
     "remove()V": async function (this: JIter) {
-      if (this.readOnly) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      if (this.readOnly || this.fixedSize) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
       if (this.last < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
       checkMod(this);
       if (this.owner?.removeAt) await this.owner.removeAt(this.last);
@@ -205,7 +206,7 @@ rt.register({
       this.arr[this.last] = v;
     },
     "add(Ljava/lang/Object;)V": function (this: JIter, v: unknown) {
-      if (this.readOnly) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      if (this.readOnly || this.fixedSize) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
       checkMod(this);
       this.arr.splice(this.i++, 0, v);
       this.last = -1;
@@ -2410,17 +2411,37 @@ function deepArrayEquals(a: unknown[], b: unknown[], start: number): number | Pr
   }
   return 1;
 }
-class JArraysList extends JList {}
+class JArraysList extends JList {
+  removeAt(): never { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); }
+}
+const fixedSize = (): never => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
+const arraysListMethods: Methods = {
+  ...listMethods(),
+  "add(Ljava/lang/Object;)Z": fixedSize,
+  "add(ILjava/lang/Object;)V": fixedSize,
+  "addAll(Ljava/util/Collection;)Z": fixedSize,
+  "addAll(ILjava/util/Collection;)Z": fixedSize,
+  "remove(I)Ljava/lang/Object;": fixedSize,
+  "remove(Ljava/lang/Object;)Z": fixedSize,
+  "clear()V": fixedSize,
+  "removeIf(Ljava/util/function/Predicate;)Z": fixedSize,
+  "removeAll(Ljava/util/Collection;)Z": fixedSize,
+  "retainAll(Ljava/util/Collection;)Z": fixedSize,
+  "iterator()Ljava/util/Iterator;": function (this: JArraysList) { const it = mkIter(this.a, this); it.fixedSize = true; return it; },
+  "listIterator()Ljava/util/ListIterator;": function (this: JArraysList) { const it = mkIter(this.a, this); it.fixedSize = true; return it; },
+  "listIterator(I)Ljava/util/ListIterator;": function (this: JArraysList, at: number) { const it = mkIter(this.a, this); it.i = at; it.fixedSize = true; return it; },
+};
 rt.register({
-  name: "webdroid/ArraysList", ctor: JArraysList,
+  name: "java/util/Arrays$ArrayList", ctor: JArraysList, sup: "java/util/AbstractList", typeVars: "E",
   ifaces: ["java/util/List", "java/util/Collection", "java/lang/Iterable", "java/util/RandomAccess", "java/io/Serializable"],
-  methods: listMethods(),
+  serialization: { uid: -2764017481108945198n, fields: [{ name: "a", desc: "[Ljava/lang/Object;", prop: "a" }] },
+  methods: arraysListMethods,
 });
 rt.register({
   name: "java/util/Arrays", ctor: JArrays,
   methods: {
     "static asList([Ljava/lang/Object;)Ljava/util/List;": (arr: unknown[]) => {
-      rt.link("webdroid/ArraysList");
+      rt.link("java/util/Arrays$ArrayList");
       const l = new JArraysList(); l.a = arr; return l;
     },
     "static stream([Ljava/lang/Object;)Ljava/util/stream/Stream;": (arr: unknown[]) => {

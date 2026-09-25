@@ -12,6 +12,14 @@ export function streamClass(type: ClassInfo | string, thread = curThread): Promi
   if (!found) { found = descriptor(type, thread); cache.set(type, found); }
   return found;
 }
+export function streamClassAny(type: ClassInfo | string, thread = curThread): Promise<StreamClass> {
+  const name = typeof type === "string" ? type : type.name;
+  if (typeof type === "string" && ["boolean", "byte", "char", "short", "int", "long", "float", "double", "void"].includes(name))
+    return Promise.resolve({ name, uid: 0n, flags: 0, fields: [], parent: null, info: null });
+  if (typeof type !== "string" && !type.types.has("java/io/Serializable"))
+    return Promise.resolve({ name: name.replaceAll("/", "."), uid: 0n, flags: 0, fields: [], parent: null, info: type });
+  return streamClass(type, thread);
+}
 async function descriptor(type: ClassInfo | string, thread: JThread): Promise<StreamClass> {
   if (typeof type === "string") return { name: type.replaceAll("/", "."), uid: await computedUid(type), flags: 2, fields: [], parent: null, info: null };
   const info = type;

@@ -1,8 +1,8 @@
 import { encodeModifiedUtf8, decodeModifiedUtf8 } from "../charset";
-import { streamClass, type StreamClass } from "../serial-descriptor";
+import { streamClass, streamClassAny, type StreamClass } from "../serial-descriptor";
 import { rt, ClassInfo } from "../runtime";
 import { i8, jmethod, mangleMethod, jarray, primElem, PRIM_ARRAYS, type PrimElem } from "../abi";
-import { vcall, vcallOn, callOn, curThread, type JThread, newObj } from "./jlang";
+import { vcall, vcallOn, callOn, curThread, type JThread, newObj, JClass } from "./jlang";
 import { JInputStream, JOutputStream, dataBytes, readers, writers } from "./jio";
 
 const STREAM_MAGIC = 0xaced, STREAM_VERSION = 5, TC_BLOCKDATA = 0x77, TC_BLOCKDATALONG = 0x7a;
@@ -129,7 +129,7 @@ rt.register({
   },
 });
 
-const TC_NULL = 0x70, TC_REFERENCE = 0x71, TC_CLASSDESC = 0x72, TC_OBJECT = 0x73,
+const TC_NULL = 0x70, TC_REFERENCE = 0x71, TC_CLASSDESC = 0x72, TC_OBJECT = 0x73, TC_CLASS = 0x76,
   TC_STRING = 0x74, TC_ARRAY = 0x75, TC_ENUM = 0x7e, TC_ENDBLOCKDATA = 0x78, TC_RESET = 0x79, TC_LONGSTRING = 0x7c;
 const BASE_HANDLE = 0x7e0000;
 function rawInt(o: JObjectOut, value: number) { o.chunks.push(value >>> 24, value >>> 16 & 255, value >>> 8 & 255, value & 255); }
@@ -189,6 +189,14 @@ async function writeObject(thread: JThread, o: JObjectOut, value: unknown): Prom
     else rawLong(o, BigInt(bytes.length));
     for (const b of bytes) o.chunks.push(b);
     o.handles.set(value, BASE_HANDLE + o.handles.size); return;
+  }
+  if (value instanceof JClass) {
+    const type = value.ci ?? value.arrDesc ?? value.primName;
+    if (!type) throw rt.mkThrowable("java/io/NotSerializableException", "Class has no type");
+    o.chunks.push(TC_CLASS);
+    await writeDescriptor(thread, o, await streamClassAny(type, thread));
+    o.handles.set(value, BASE_HANDLE + o.handles.size);
+    return;
   }
   if (Array.isArray(value) || ArrayBuffer.isView(value)) {
     const element = Array.isArray(value) ? ("$t" in value && typeof value.$t === "string" ? value.$t : "Ljava/lang/Object;") : primElem(value);
@@ -310,8 +318,10 @@ async function readObject(thread: JThread, s: JObjectIn, tag?: number): Promise<
     }
     case TC_CLASSDESC: {
       const name = await readUtf(thread, s), uid = (await rawView(thread, s, 8)).getBigInt64(0);
-      const info = name.startsWith("[") ? null : rt.link(name.replaceAll(".", "/"));
-      const local = await streamClass(info ?? name.replaceAll(".", "/"), thread);
+      const type = name.replaceAll(".", "/");
+      const primitive = ["boolean", "byte", "char", "short", "int", "long", "float", "double", "void"].includes(type);
+      const info = name.startsWith("[") || primitive ? null : rt.link(type);
+      const local = await streamClassAny(info ?? type, thread);
       if (info && local.uid !== uid) throw rt.mkThrowable("java/io/InvalidClassException", "serialVersionUID mismatch: " + name);
       const desc: StreamClass = { name, uid, flags: 0, fields: [], parent: null, info };
       s.handles.push(desc); s.descriptors.set(desc, desc);
@@ -332,6 +342,14 @@ async function readObject(thread: JThread, s: JObjectIn, tag?: number): Promise<
         desc.parent = found;
       }
       return desc;
+    }
+    case TC_CLASS: {
+      const desc = s.descriptors.get(await readObject(thread, s));
+      if (!desc) throw rt.mkThrowable("java/io/StreamCorruptedException", "expected class descriptor");
+      const value = rt.classFor(desc.name.replaceAll(".", "/"));
+      const handle = s.handles.length;
+      s.handles.push(value);
+      return resolveRead(thread, s, value, handle);
     }
     case TC_ARRAY:
     case TC_ENUM:
