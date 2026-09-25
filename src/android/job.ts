@@ -1,10 +1,14 @@
-// android.app.job: JobScheduler surface. Jobs are remembered so schedule/cancel/query stay consistent; nothing here ever runs one.
+// android.app.job: scheduled work enters the app's own JobService on its main queue.
 
 import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { reportUncaught, vcall } from "../jvm/natives/jlang";
 import { JList } from "../jvm/natives/jutil";
 import { JContextWrapper } from "./context";
 import { type JParcel, writeInt } from "./parcel";
+import { onMain } from "./mainloop";
+import { acquireJobService, releaseJobService } from "./runningservices";
+import { netUp } from "./net";
+import { device } from "../shell/config";
 
 class JJobInfo extends JObj { p: Record<string, any> = { id: 0, svc: null, triggers: [] as unknown[] }; }
 class JJobInfoBuilder extends JObj { j = new JJobInfo(); }
@@ -118,31 +122,82 @@ rt.register({
     },
   },
 });
-const pendingJobs = new Map<number, JJobInfo>();
+type ScheduledJob = { info: JJobInfo; timer: ReturnType<typeof setTimeout> | null; service: JContextWrapper | null; params: JJobParameters | null; work: JJobWorkItem[] };
+const pendingJobs = new Map<number, ScheduledJob>();
+function armJob(job: ScheduledJob, delay: number): void {
+  if (job.timer) clearTimeout(job.timer);
+  job.timer = setTimeout(() => { job.timer = null; void startJob(job).catch(reportUncaught); }, Math.min(Math.max(0, delay), 0x7fffffff));
+}
+async function finishJob(job: ScheduledJob, reschedule: boolean): Promise<void> {
+  const service = job.service;
+  job.service = null; job.params = null;
+  if (service) await releaseJobService(service);
+  if (pendingJobs.get(job.info.p.id) !== job) return;
+  if (job.info.p.interval !== undefined) armJob(job, Math.max(900000, Number(job.info.p.interval)));
+  else if (reschedule) armJob(job, Math.max(30000, Number(job.info.p.backoff ?? 30000n)));
+  else pendingJobs.delete(job.info.p.id);
+}
+async function startJob(job: ScheduledJob): Promise<void> {
+  if (pendingJobs.get(job.info.p.id) !== job || job.service) return;
+  const p = job.info.p;
+  if (p.charging && device.battery.status !== 2 || p.idle || p.batteryNotLow && device.battery.level < 15 || p.netType && !(await netUp())) {
+    armJob(job, 30000); return;
+  }
+  const service = await acquireJobService(p.svc);
+  if (pendingJobs.get(p.id) !== job) { await releaseJobService(service); return; }
+  const params = new JJobParameters();
+  params.id = p.id; params.extras = p.extras ?? null; params.work = job.work;
+  job.service = service; job.params = params;
+  try {
+    const running = await onMain(() => vcall(service, "onStartJob", "(Landroid/app/job/JobParameters;)Z", params));
+    if (!running && job.params === params) await finishJob(job, false);
+  } catch (error) { await finishJob(job, true); throw error; }
+}
+function cancelJob(id: number): void {
+  const job = pendingJobs.get(id);
+  if (!job) return;
+  pendingJobs.delete(id);
+  if (job.timer) clearTimeout(job.timer);
+  const service = job.service, params = job.params;
+  job.service = null; job.params = null;
+  if (service && params) void onMain(async () => {
+    try { await vcall(service, "onStopJob", "(Landroid/app/job/JobParameters;)Z", params); }
+    finally { await releaseJobService(service); }
+  }).catch(reportUncaught);
+}
+function scheduleJob(info: JJobInfo, item?: JJobWorkItem): number {
+  if (!info?.p.svc) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Job service required");
+  const id = info.p.id, old = pendingJobs.get(id);
+  if (old) cancelJob(id);
+  const job: ScheduledJob = { info, timer: null, service: null, params: null, work: item ? [item] : [] };
+  pendingJobs.set(id, job);
+  armJob(job, info.p.interval === undefined ? Number(info.p.minLatency ?? 0n) : Math.max(900000, Number(info.p.interval)));
+  return 1;
+}
 rt.register({
   name: "android/app/job/JobScheduler", ctor: class extends JObj {},
   statics: { RESULT_FAILURE: 0, RESULT_SUCCESS: 1 },
   methods: {
-    "schedule(Landroid/app/job/JobInfo;)I": (j: JJobInfo) => { if (j) pendingJobs.set(j.p.id, j); return 1; },
-    "enqueue(Landroid/app/job/JobInfo;Landroid/app/job/JobWorkItem;)I": (j: JJobInfo) => { if (j) pendingJobs.set(j.p.id, j); return 1; },
-    "cancel(I)V": (id: number) => { pendingJobs.delete(id); },
-    "cancelAll()V": () => { pendingJobs.clear(); },
-    "getPendingJob(I)Landroid/app/job/JobInfo;": (id: number) => pendingJobs.get(id) ?? null,
-    "getAllPendingJobs()Ljava/util/List;": () => { const l = new JList(); l.a = [...pendingJobs.values()]; return l; },
-    // API 34: a namespaced view of the same scheduler. Nothing here runs a job, and ids are
-    // already unique per caller, so the namespace only has to exist. WorkManager needs it.
+    "schedule(Landroid/app/job/JobInfo;)I": (j: JJobInfo) => scheduleJob(j),
+    "enqueue(Landroid/app/job/JobInfo;Landroid/app/job/JobWorkItem;)I": (j: JJobInfo, item: JJobWorkItem) => scheduleJob(j, item),
+    "cancel(I)V": cancelJob,
+    "cancelAll()V": () => { for (const id of [...pendingJobs.keys()]) cancelJob(id); },
+    "getPendingJob(I)Landroid/app/job/JobInfo;": (id: number) => pendingJobs.get(id)?.info ?? null,
+    "getAllPendingJobs()Ljava/util/List;": () => { const l = new JList(); l.a = [...pendingJobs.values()].map(job => job.info); return l; },
+    // API 34: WorkManager uses a namespaced view; job ids remain process unique here.
     "forNamespace(Ljava/lang/String;)Landroid/app/job/JobScheduler;": function (this: JObj) { return this; },
     "getNamespace()Ljava/lang/String;": () => null,
   },
 });
-class JJobParameters extends JObj { id = 0; extras: unknown = null; }
+class JJobParameters extends JObj { id = 0; extras: unknown = null; work: JJobWorkItem[] = []; }
 rt.register({
   name: "android/app/job/JobParameters", ctor: JJobParameters,
   methods: {
     "getJobId()I": function (this: JJobParameters) { return this.id; },
     "getExtras()Landroid/os/PersistableBundle;": function (this: JJobParameters) { return this.extras; },
     ...stubs(null, "getNetwork()Landroid/net/Network;", "getTriggeredContentAuthorities()[Ljava/lang/String;",
-      "getTriggeredContentUris()[Landroid/net/Uri;", "dequeueWork()Landroid/app/job/JobWorkItem;"),
+      "getTriggeredContentUris()[Landroid/net/Uri;"),
+    "dequeueWork()Landroid/app/job/JobWorkItem;": function (this: JJobParameters) { return this.work.shift() ?? null; },
     ...stubs(0, "isOverrideDeadlineExpired()Z"),
     ...noops("completeWork(Landroid/app/job/JobWorkItem;)V"),
   },
@@ -160,8 +215,11 @@ rt.register({
   name: "android/app/job/JobService", ctor: class extends JContextWrapper {}, sup: "android/app/Service",
   methods: {
     "onCreate()V": () => {}, "onDestroy()V": () => {},
-    ...noops("<init>()V", "stopSelf()V", "startForeground(ILandroid/app/Notification;)V", "stopForeground(Z)V",
-      "jobFinished(Landroid/app/job/JobParameters;Z)V"),
+    ...noops("<init>()V", "stopSelf()V", "startForeground(ILandroid/app/Notification;)V", "stopForeground(Z)V"),
+    "jobFinished(Landroid/app/job/JobParameters;Z)V": function (this: JContextWrapper, params: JJobParameters, reschedule: number) {
+      const job = pendingJobs.get(params?.id);
+      if (job?.service === this && job.params === params) void finishJob(job, !!reschedule).catch(reportUncaught);
+    },
     ...stubs(1, "onStartCommand(Landroid/content/Intent;II)I"),
     ...stubs(null, "onBind(Landroid/content/Intent;)Landroid/os/IBinder;"),
     ...stubs(0, "onStartJob(Landroid/app/job/JobParameters;)Z", "onStopJob(Landroid/app/job/JobParameters;)Z"),

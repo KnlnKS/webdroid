@@ -329,7 +329,7 @@ rt.register({
 
 /** the transport the one modelled network runs on: ConnectivityManager.TYPE_WIFI */
 const NET_TYPE = 1;
-const netUp = async (): Promise<number> =>
+export const netUp = async (): Promise<number> =>
   (await vcall(rt.make("android/net/NetworkInfo"), "isConnected", "()Z")) ? 1 : 0;
 class JNetwork extends JObj { id = 1; }
 let theNetwork: JNetwork | null = null;

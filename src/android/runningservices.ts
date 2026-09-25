@@ -58,6 +58,25 @@ async function createService(service: JRunningServiceInfo, ctx: JContext): Promi
   }
   return service.instance;
 }
+export async function acquireJobService(component: JComponentName): Promise<JContextWrapper> {
+  const owner = packages.get(component.pkg), cls = qualifyComponent(component.cls, component.pkg);
+  const node = owner?.components.service.get(cls), ctx = appHost?.application;
+  if (!owner || !node || !ctx || owner.pkg !== ctx.$host.pkg || owner.process(node) !== (PROCESS_NAME || owner.pkg))
+    throw rt.mkThrowable("java/lang/IllegalArgumentException", "Job service unavailable: " + component.cls);
+  const record = serviceRecord(ctx, cls);
+  record.clientCount++;
+  try { return await (inMainJob() ? createService(record, ctx) : onMain(() => createService(record, ctx))); }
+  catch (error) { record.clientCount--; throw error; }
+}
+export async function releaseJobService(instance: JContextWrapper): Promise<void> {
+  const cls = jclsNameOf(instance), record = runningServices.get(cls);
+  if (!record) return;
+  record.clientCount = Math.max(0, record.clientCount - 1);
+  if (!record.clientCount && !record.started) {
+    runningServices.delete(cls);
+    await (inMainJob() ? vcall(instance, "onDestroy", "()V") : onMain(() => vcall(instance, "onDestroy", "()V")));
+  }
+}
 export function svcStart(ctx: JContext, intent: JIntent | null, _fg: boolean): JComponentName | null {
   const cls = intent?.component;
   if (!cls) return null;
