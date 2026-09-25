@@ -118,7 +118,7 @@ Diagnostics unavailable: the browser page crashed before runtime inspection.
 | Mihon | Reader shell launches | Onboarding, library import and reading unverified; a FirebaseSessions boxed-number cast remains in logs |
 | Harmonic | Welcome dialog's Get started action | Article navigation and WebView behavior unverified; optional OEM window-extension probes remain |
 | Lichess | Home, board editor, and Stockfish level 1 game through e4, Nf3 and Ne5 with engine replies; serialized flow rendered 15/15 steps | Online play, account, persistence, other game modes and Android visual parity unverified |
-| NewPipe | Search suggestions, live results, video detail, player service and controls | Video area remains black after 20 seconds with zero presented surface frames; audio playback unverified |
+| NewPipe | Search suggestions, live results, video detail and visible Big Buck Bunny playback with advancing video frames | Audio, downloads, queue and background play unverified; ExoPlayer logs timeline exceptions |
 | AntennaPod | Search field; bundled Conscrypt JNI loads | Podcast fetch and audio playback unverified |
 | Organic Maps | Downloaded the world overview and Monaco region; rendered both; searched, opened place details, drew a route and entered navigation UI | Actual spoken directions, moving-location route following, broader location use and Android visual parity unverified |
 | OpenTracks | Main screen | Track recording, location and export unverified |
@@ -128,7 +128,7 @@ Diagnostics unavailable: the browser page crashed before runtime inspection.
 | Feeder | Feed URL/Search/Add feed form; Kotlin Moshi adapter constructs and bundled Go runtime starts | A Go thread returns from `runtime.futexsleep` to address `0x1`; feed results, article reading and sync remain blocked |
 | Fossify File Manager | Created a folder and empty file; an MP4 appeared after reload | Copy, rename, delete, previews and broader media formats unverified |
 | Fossify Calendar | Created a local event, changed its date with the date picker, and found the event after reload | System calendar sync, edit/delete, recurrence and actual reminder delivery unverified |
-| Fossify Gallery | Indexed a real MP4 and PNG, opened their grid/viewers, and rendered the PNG | Video frame output, editing, deletion, metadata and broader formats unverified |
+| Fossify Gallery | Indexed an MP4 and PNG, opened their grid/viewers, rendered the PNG and presented four frames from a 0.3-second H.264 fixture | Longer video playback, editing, deletion, metadata and broader formats unverified; thumbnail decode warnings remain |
 | Markor | Created, saved and reopened a Markdown file after reload; preview rendered in WebView and search reported 1/1 matches | Export and other editor flows unverified |
 
 `androidx.window` sidecar/extension provider probes in Harmonic, Lichess and Feeder are optional OEM classes, so their absence is retained rather than reported as implemented support. A launch or an empty missing list covers only the exercised path. The Aegis password and manual-entry flows exposed Java character-array decoding, charset encoding, resource-bundle controls, permissions, layout animation, object serialization and drawable null layers after the initial scan. A sample manual entry displayed a TOTP code before and after page reload with no observed missing APIs or errors on that path.
