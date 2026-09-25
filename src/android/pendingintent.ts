@@ -30,6 +30,8 @@ export const pendingTransport = {
   cancel: (id: number) => localPendingIntents.cancel(id),
   send: (id: number, fill: IntentData | null) => localPendingIntents.send(id, fill),
   operation: (id: number): PendingOperation | null => localPendingIntents.take(id),
+  kind: (id: number): PendingOperation["kind"] | null => localPendingIntents.get(id)?.kind ?? null,
+  flags: (id: number): number => localPendingIntents.get(id)?.flags ?? 0,
   creator: (id: number): { pkg: string; uid: number } | null => {
     const operation = localPendingIntents.get(id);
     return operation ? { pkg: operation.pkg, uid: operation.uid } : null;
@@ -95,6 +97,10 @@ rt.register({ name: "android/app/PendingIntent", ctor: JPendingIntent, ifaces: [
     "cancel()V": function (this: JPendingIntent) { pendingTransport.cancel(pendingId(this)); },
     "getCreatorPackage()Ljava/lang/String;": function (this: JPendingIntent) { return pendingTransport.creator(pendingId(this))?.pkg ?? null; },
     "getCreatorUid()I": function (this: JPendingIntent) { return pendingTransport.creator(pendingId(this))?.uid ?? -1; },
+    "isActivity()Z": function (this: JPendingIntent) { return +(pendingTransport.kind(pendingId(this)) === "activity"); },
+    "isBroadcast()Z": function (this: JPendingIntent) { return +(pendingTransport.kind(pendingId(this)) === "broadcast"); },
+    "isService()Z": function (this: JPendingIntent) { return +(pendingTransport.kind(pendingId(this)) === "service"); },
+    "isImmutable()Z": function (this: JPendingIntent) { return +(!!(pendingTransport.flags(pendingId(this)) & 0x4000000)); },
     "send()V": function (this: JPendingIntent) { return sendIntent(this.sender); },
   },
 });
