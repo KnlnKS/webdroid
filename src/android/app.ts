@@ -1038,6 +1038,11 @@ rt.register({
       this.$ctx = c;
       await vcall(this, "onCreate", "()Z");
     },
+    "bulkInsert(Landroid/net/Uri;[Landroid/content/ContentValues;)I": async function (this: JObj, uri: unknown, values: unknown[]) {
+      if (!uri || !values) rt.npe();
+      for (const value of values) await vcall(this, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", uri, value);
+      return values.length;
+    },
     "openPipeHelper(Landroid/net/Uri;Ljava/lang/String;Landroid/os/Bundle;Ljava/lang/Object;Landroid/content/ContentProvider$PipeDataWriter;)Landroid/os/ParcelFileDescriptor;":
       async (uri: unknown, mime: string, opts: unknown, args: unknown, writer: unknown) => {
         let bytes = new Uint8Array(0);

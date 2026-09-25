@@ -55,6 +55,7 @@ export const providerOperations = {
   openFile: "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;",
   query: "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
   insert: "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;",
+  bulkInsert: "(Landroid/net/Uri;[Landroid/content/ContentValues;)I",
   update: "(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I",
   delete: "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I",
   getType: "(Landroid/net/Uri;)Ljava/lang/String;",
@@ -280,6 +281,11 @@ const resolverMethods: NativeSpec["methods"] = {
   "insert(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;": async (u: JUri, values: unknown) => {
     const provider = await contentProvider(u);
     return provider ? vcall(provider, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", u, values) : null;
+  },
+  "bulkInsert(Landroid/net/Uri;[Landroid/content/ContentValues;)I": async (u: JUri, values: unknown[] | null) => {
+    if (!u || !values) rt.npe();
+    const provider = await contentProvider(u);
+    return provider ? vcall(provider, "bulkInsert", providerOperations.bulkInsert, u, values) : 0;
   },
   "update(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I": async (u: JUri, values: unknown, where: string | null, args: string[] | null) => {
     const provider = await contentProvider(u);
