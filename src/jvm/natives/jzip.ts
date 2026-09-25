@@ -1,6 +1,6 @@
 // java.util.zip on fflate: streaming codecs (Inflater/Deflater raw+zlib, CRC32), ZipFile over a
 // central-directory index, GZIPInputStream over a drained source.
-import { Inflate, Unzlib, Deflate, Zlib, Gzip, inflateSync, gunzipSync, type DeflateOptions } from "fflate";
+import { Inflate, Unzlib, Deflate, Zlib, Gzip, Zip, ZipDeflate, ZipPassThrough, inflateSync, gunzipSync, type DeflateOptions } from "fflate";
 import { rt, JObj } from "../runtime";
 import { utf8, i8, u8 } from "../abi";
 import { vcall, vcallMaybe, newObj, defineException } from "./jlang";
@@ -345,8 +345,90 @@ rt.register({
     "getCompressedSize()J": function (this: JZipEntry) { return BigInt(this.e.csize); },
     "getTime()J": function (this: JZipEntry) { return BigInt(this.e.time); },
     "getMethod()I": function (this: JZipEntry) { return this.e.method; },
+    "setMethod(I)V": function (this: JZipEntry, method: number) {
+      if (method !== 0 && method !== 8) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid compression method");
+      this.e.method = method;
+    },
     "isDirectory()Z": function (this: JZipEntry) { return this.e.name.endsWith("/") ? 1 : 0; },
     "toString()Ljava/lang/String;": function (this: JZipEntry) { return this.e.name; },
+  },
+});
+class JZipOutputStream extends JOutputStream {
+  out: JOutputStream | null = null;
+  archive: Zip | null = null;
+  entry: ZipDeflate | ZipPassThrough | null = null;
+  pendingChunks: Uint8Array[] = [];
+  error: Error | null = null;
+  finished = false;
+  names = new Set<string>();
+  level = 6;
+  async flushChunks() {
+    if (this.error) throw rt.mkThrowable("java/util/zip/ZipException", this.error.message);
+    for (const chunk of this.pendingChunks.splice(0)) await vcall(this.out, "write", "([BII)V", i8(chunk), 0, chunk.length);
+  }
+  async closeEntry() {
+    if (!this.entry) return;
+    this.entry.push(new Uint8Array(0), true);
+    this.entry = null;
+    await this.flushChunks();
+  }
+}
+function zipOutInit(this: JZipOutputStream, out: JOutputStream | null) {
+  if (!out) throw rt.mkThrowable("java/lang/NullPointerException", "out");
+  this.out = out;
+  this.archive = new Zip((error, chunk) => {
+    if (error) this.error = error;
+    else if (chunk?.length) this.pendingChunks.push(chunk);
+  });
+}
+rt.register({
+  name: "java/util/zip/ZipOutputStream", ctor: JZipOutputStream, sup: "java/util/zip/DeflaterOutputStream",
+  methods: {
+    "<init>(Ljava/io/OutputStream;)V": zipOutInit,
+    "<init>(Ljava/io/OutputStream;Ljava/nio/charset/Charset;)V": zipOutInit,
+    "putNextEntry(Ljava/util/zip/ZipEntry;)V": async function (this: JZipOutputStream, entry: JZipEntry | null) {
+      if (!entry) throw rt.mkThrowable("java/lang/NullPointerException", "entry");
+      if (!this.archive || this.finished) throw rt.mkThrowable("java/io/IOException", "Stream closed");
+      await this.closeEntry();
+      if (this.names.has(entry.e.name)) throw rt.mkThrowable("java/util/zip/ZipException", "duplicate entry: " + entry.e.name);
+      this.names.add(entry.e.name);
+      const file = entry.e.method === 0 ? new ZipPassThrough(entry.e.name) : new ZipDeflate(entry.e.name, { level: this.level as DeflateOptions["level"] });
+      if (entry.e.time >= 0) file.mtime = new Date(entry.e.time);
+      this.archive.add(file);
+      this.entry = file;
+      await this.flushChunks();
+    },
+    "write(I)V": async function (this: JZipOutputStream, byte: number) {
+      await vcall(this, "write", "([BII)V", Int8Array.of(byte), 0, 1);
+    },
+    "write([B)V": async function (this: JZipOutputStream, bytes: Int8Array) {
+      await vcall(this, "write", "([BII)V", bytes, 0, bytes.length);
+    },
+    "write([BII)V": async function (this: JZipOutputStream, bytes: Int8Array, off: number, len: number) {
+      if (!this.entry) throw rt.mkThrowable("java/util/zip/ZipException", "no current ZIP entry");
+      if (off < 0 || len < 0 || len > bytes.length - off) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      if (len) this.entry.push(u8(bytes, off, len).slice());
+      await this.flushChunks();
+    },
+    "closeEntry()V": function (this: JZipOutputStream) { return this.closeEntry(); },
+    "setLevel(I)V": function (this: JZipOutputStream, level: number) {
+      if (level < 0 || level > 9) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid compression level");
+      this.level = level;
+    },
+    "finish()V": async function (this: JZipOutputStream) {
+      if (this.finished || !this.archive) return;
+      await this.closeEntry();
+      this.archive.end();
+      this.finished = true;
+      await this.flushChunks();
+    },
+    "flush()V": async function (this: JZipOutputStream) { await this.flushChunks(); await vcall(this.out, "flush", "()V"); },
+    "close()V": async function (this: JZipOutputStream) {
+      if (!this.archive) return;
+      await vcall(this, "finish", "()V");
+      await vcall(this.out, "close", "()V");
+      this.archive = null;
+    },
   },
 });
 class JZipFile extends JObj {
