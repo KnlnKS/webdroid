@@ -22,6 +22,8 @@ export const perf = {
   layoutErrors: 0, drawErrors: 0,
   // wall time inside input dispatch, and lazy class compilation — both land ON the tap.
   inputMs: 0, compileMs: 0, classesCompiled: 0,
+  // main-looper jobs run (Handler messages, frames, input, lifecycle)
+  mainJobs: 0,
   // method bodies emitted without `async` (no call, static access, monitor or allocation)
   // against those that can suspend. A sync call is ~24x cheaper in the shape we emit.
   syncMethods: 0, asyncMethods: 0,

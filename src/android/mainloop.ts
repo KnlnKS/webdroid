@@ -4,6 +4,7 @@
 // Each job runs with curThread pinned to the main thread so Looper/Thread identity
 // checks (androidx enforceMainThread, fragment host asserts) see the main thread.
 import { curThread, setCurThread, mainThread } from "../jvm/natives/jlang";
+import { perf } from "../perf";
 
 let q: Promise<unknown> = Promise.resolve();
 
@@ -21,7 +22,7 @@ export function inMainJob(): boolean { return mainDbg.depth > 0; }
 
 export function onMain<T>(job: () => Promise<T> | T): Promise<T> {
   const site = mainDbg.trace ? new Error().stack ?? "" : "";
-  mainDbg.queued++;
+  mainDbg.queued++; perf.mainJobs++;
   const p = q.then(async () => {
     await mainThread.untilIdle();                                               // main blocked in a native call dispatches nothing until it returns
     const prev = curThread;
