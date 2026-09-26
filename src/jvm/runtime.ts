@@ -934,12 +934,9 @@ const BOX_UNIVERSE = new Set(["java/lang/Object", "java/io/Serializable", "java/
 
 export const rt = new Runtime();
 
-/** A native implemented as a generator (see Runtime.drive), callable like any other method. */
-export function driven(g: (this: any, ...a: any[]) => Gen): (this: any, ...a: any[]) => unknown {
-  switch (g.length) {
-    case 0: return function (this: unknown) { return rt.drive(g.call(this)); };
-    case 1: return function (this: unknown, a: unknown) { return rt.drive(g.call(this, a)); };
-    case 2: return function (this: unknown, a: unknown, b: unknown) { return rt.drive(g.call(this, a, b)); };
-    default: return function (this: unknown, ...a: unknown[]) { return rt.drive(g.apply(this, a)); };
-  }
+/** A native implemented as a generator (see Runtime.drive), callable like any other method.
+ *  It forwards every argument: caller-sensitive natives receive the caller's Runtime past their
+ *  declared (often defaulted) parameters. */
+export function driven<A extends unknown[]>(g: (this: any, ...a: A) => Gen): (this: any, ...a: A) => unknown {
+  return function (this: unknown) { return rt.drive(g.apply(this, arguments as unknown as A)); };
 }
