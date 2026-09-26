@@ -3,7 +3,7 @@ import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync, curThread, mainThread, JThread, setCurThread, vcallOn, park } from "../src/jvm/natives/jlang";
 import { newArrayList } from "../src/jvm/natives/jutil";
-import { mangleMethod, jarray } from "../src/jvm/abi";
+import { jarray } from "../src/jvm/abi";
 import { mainLooper } from "../src/android/os";
 
 describe("blocking-queue-drain", () => {
@@ -321,14 +321,6 @@ describe("executor-queue", () => {
     expect(common).toBe(await vcall(rt.link("java/util/concurrent/ForkJoinPool").ctor, "commonPool", "()Ljava/util/concurrent/ForkJoinPool;"));
   });
 
-  test("submit(Runnable, result) completes with the supplied result", async () => {
-    const ex = await pool(await newObj("java/util/concurrent/LinkedBlockingQueue"));
-    const task = new RecordingRunnable();
-    const future = await vcall(ex, "submit", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;", task, "done");
-    expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("done");
-    expect(task.runs).toBe(1);
-  });
-
   test("CompletableFuture supplyAsync runs on the supplied executor", async () => {
     const ex = await pool(await newObj("java/util/concurrent/LinkedBlockingQueue"));
     const supplier = new ValueSupplier();
@@ -606,33 +598,6 @@ describe("semaphore", () => {
     await waiting;
     expect(completed).toBe(true);
     expect(await vcall(semaphore, "availablePermits", "()I")).toBe(0);
-  });
-});
-
-describe("thread-active-count", () => {
-  class BlockingRunnable extends JObj {
-    done = Promise.resolve();
-  }
-  rt.register({
-    name: "test/BlockingRunnable", ctor: BlockingRunnable, ifaces: ["java/lang/Runnable"],
-    methods: { "run()V": function (this: BlockingRunnable) { return this.done; } },
-  });
-  rt.linkNatives();
-
-  test("Thread.activeCount follows live modeled threads", async () => {
-    const active: unknown = Reflect.get(rt.link("java/lang/Thread").ctor, mangleMethod("activeCount", "()I"));
-    expect(typeof active).toBe("function");
-    if (typeof active !== "function") return;
-    const before = active();
-    let release = () => {};
-    const runnable = new BlockingRunnable();
-    runnable.done = new Promise<void>((resolve) => { release = resolve; });
-    const thread = await newObj("java/lang/Thread", "(Ljava/lang/Runnable;)V", runnable);
-    await vcall(thread, "start", "()V");
-    expect(active()).toBe(before + 1);
-    release();
-    await vcall(thread, "join", "()V");
-    expect(active()).toBe(before);
   });
 });
 

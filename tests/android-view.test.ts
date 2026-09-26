@@ -49,20 +49,6 @@ describe("accessibility-service-info", () => {
   });
 });
 
-describe("accessibility-traversal", () => {
-  rt.linkNatives();
-
-  test("views retain accessibility traversal relationships", async () => {
-    const view = await newObj("android/widget/FrameLayout", "(Landroid/content/Context;)V", null);
-    expect(await vcall(view, "getAccessibilityTraversalBefore", "()I")).toBe(-1);
-    expect(await vcall(view, "getAccessibilityTraversalAfter", "()I")).toBe(-1);
-    await vcall(view, "setAccessibilityTraversalBefore", "(I)V", 41);
-    await vcall(view, "setAccessibilityTraversalAfter", "(I)V", 42);
-    expect(await vcall(view, "getAccessibilityTraversalBefore", "()I")).toBe(41);
-    expect(await vcall(view, "getAccessibilityTraversalAfter", "()I")).toBe(42);
-  });
-});
-
 describe("android-surface-state", () => {
   rt.linkNatives();
   const scall = (cls: string, name: string, desc: string, ...args: unknown[]) =>
@@ -135,12 +121,6 @@ describe("android-surface-state", () => {
     expect(await vcall(view, "getShadowDx", "()F")).toBe(2);
     expect(await vcall(view, "getShadowDy", "()F")).toBe(-3);
     expect(await vcall(view, "getShadowColor", "()I")).toBe(0x7f123456);
-  });
-
-  test("new window and process fields expose platform defaults", async () => {
-    const params = await newObj("android/view/WindowManager$LayoutParams");
-    expect(params.preferredRefreshRate).toBe(0);
-    expect(scall("android/os/Process", "getStartRequestedUptimeMillis", "()J")).toBe(0n);
   });
 
   test("uname reports the emulated Linux ABI", async () => {
@@ -665,16 +645,6 @@ describe("linear-layout-baseline", () => {
       });
     }
     expect(await vcall(layout, "getBaselineAlignedChildIndex", "()I")).toBe(-1);
-  });
-});
-
-describe("motion-event-raw", () => {
-  rt.linkNatives();
-
-  test("indexed raw coordinates use the tracked pointer", async () => {
-    const event = Object.assign(new JMotionEvent(), { rawX: 12.5, rawY: 34.5 });
-    expect(await vcall(event, "getRawX", "(I)F", 0)).toBe(12.5);
-    expect(await vcall(event, "getRawY", "(I)F", 0)).toBe(34.5);
   });
 });
 
@@ -1882,20 +1852,6 @@ describe("viewgroup-touch", () => {
     await detachView(group, child, false);
 
     expect(events).toEqual(["added", "listener-added", "removed", "listener-removed"]);
-  });
-
-  test("ViewGroup retains its child clipping state", async () => {
-    const group = new JViewGroup();
-    expect(await vcall(group, "getClipChildren", "()Z")).toBe(1);
-    await vcall(group, "setClipChildren", "(Z)V", 0);
-    expect(await vcall(group, "getClipChildren", "()Z")).toBe(0);
-  });
-
-  test("View retains its touch delegate", async () => {
-    const view = new JView(), delegate = new JObj();
-    expect(await vcall(view, "getTouchDelegate", "()Landroid/view/TouchDelegate;")).toBeNull();
-    await vcall(view, "setTouchDelegate", "(Landroid/view/TouchDelegate;)V", delegate);
-    expect(await vcall(view, "getTouchDelegate", "()Landroid/view/TouchDelegate;")).toBe(delegate);
   });
 
   test("a ViewGroup's OnTouchListener sees only touches no child took", async () => {

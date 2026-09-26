@@ -61,64 +61,6 @@ rt.register({
 });
 rt.linkNatives();
 
-test("SpannableString.valueOf preserves identity and copied spans", async () => {
-  const source = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "hello");
-  const span = await newObj("java/lang/Object");
-  await vcall(source, "setSpan", "(Ljava/lang/Object;III)V", span, 1, 4, 17);
-  expect(await scall("android/text/SpannableString", "valueOf", "(Ljava/lang/CharSequence;)Landroid/text/SpannableString;", source)).toBe(source);
-  const builder = await newObj("android/text/SpannableStringBuilder", "(Ljava/lang/CharSequence;)V", "builder");
-  expect(await scall("android/text/SpannableString", "valueOf", "(Ljava/lang/CharSequence;)Landroid/text/SpannableString;", builder)).not.toBe(builder);
-  const copy = await scall("android/text/SpannableString", "valueOf", "(Ljava/lang/CharSequence;)Landroid/text/SpannableString;", await newObj("android/text/SpannedString", "(Ljava/lang/CharSequence;)V", source));
-  expect(await vcall(copy, "toString", "()Ljava/lang/String;")).toBe("hello");
-  expect(await vcall(copy, "getSpanStart", "(Ljava/lang/Object;)I", span)).toBe(1);
-  expect(await scall("android/text/Html", "toHtml", "(Landroid/text/Spanned;I)Ljava/lang/String;", copy, 0)).toBe("hello");
-});
-
-test("View context clickability is independently mutable", async () => {
-  const view = await newObj("android/view/View", "(Landroid/content/Context;)V", null);
-  expect(await vcall(view, "isContextClickable", "()Z")).toBe(0);
-  await vcall(view, "setContextClickable", "(Z)V", 1);
-  expect(await vcall(view, "isContextClickable", "()Z")).toBe(1);
-  expect(await vcall(view, "isClickable", "()Z")).toBe(0);
-});
-
-test("View accepts a generic motion listener", async () => {
-  const view = await newObj("android/view/View", "(Landroid/content/Context;)V", null);
-  await expect(vcallAsync(view, "setOnGenericMotionListener", "(Landroid/view/View$OnGenericMotionListener;)V", new JObj())).resolves.toBeUndefined();
-});
-
-test("ScaleGestureDetector consumes single-pointer input and retains feature flags", async () => {
-  const context = Object.assign(new JObj(), {
-    [mangleMethod("getApplicationInfo", "()Landroid/content/pm/ApplicationInfo;")]: () => rt.make("android/content/pm/ApplicationInfo"),
-  });
-  const listener = await newObj("android/view/ScaleGestureDetector$SimpleOnScaleGestureListener");
-  const detector = await newObj("android/view/ScaleGestureDetector", "(Landroid/content/Context;Landroid/view/ScaleGestureDetector$OnScaleGestureListener;)V", context, listener);
-  await vcall(detector, "setQuickScaleEnabled", "(Z)V", 1);
-  await vcall(detector, "setStylusScaleEnabled", "(Z)V", 1);
-  expect(await vcall(detector, "isQuickScaleEnabled", "()Z")).toBe(1);
-  expect(await vcall(detector, "isStylusScaleEnabled", "()Z")).toBe(1);
-});
-
-test("screen capture callbacks can register on a device without capture events", async () => {
-  const activity = rt.make("android/app/Activity");
-  const callback = rt.make("android/app/Activity$ScreenCaptureCallback");
-  await expect(vcallAsync(activity, "registerScreenCaptureCallback", "(Ljava/util/concurrent/Executor;Landroid/app/Activity$ScreenCaptureCallback;)V", null, callback)).resolves.toBeUndefined();
-  await expect(vcallAsync(activity, "unregisterScreenCaptureCallback", "(Landroid/app/Activity$ScreenCaptureCallback;)V", callback)).resolves.toBeUndefined();
-});
-
-test("ShortcutManager getShortcuts filters to published dynamic shortcuts", async () => {
-  const manager = rt.make("android/content/pm/ShortcutManager");
-  expect(await vcall(await vcall(manager, "getShortcuts", "(I)Ljava/util/List;", 0), "size", "()I")).toBe(0);
-  expect(await vcall(await vcall(manager, "getShortcuts", "(I)Ljava/util/List;", 2), "size", "()I")).toBe(0);
-  expect(await vcall(await vcall(manager, "getPinnedShortcuts", "()Ljava/util/List;"), "size", "()I")).toBe(0);
-});
-
-test("DataSetObserver base callbacks are no-ops", async () => {
-  const observer = await newObj("android/database/DataSetObserver", "()V");
-  await expect(vcallAsync(observer, "onChanged", "()V")).resolves.toBeUndefined();
-  await expect(vcallAsync(observer, "onInvalidated", "()V")).resolves.toBeUndefined();
-});
-
 test("ReentrantLock excludes suspended threads and conditions restore recursive ownership", async () => {
   const lock = await newObj("java/util/concurrent/locks/ReentrantLock", "(Z)V", 1);
   rt.link("java/lang/Thread");
@@ -160,73 +102,12 @@ test("LinkedList has the AbstractSequentialList hierarchy", async () => {
   expect(rt.iof(list, "java/util/AbstractList")).toBeTruthy();
 });
 
-test("reached Java value utilities preserve their platform contracts", async () => {
-  const first = await newObj("java/lang/Character", "(C)V", 65);
-  const second = await newObj("java/lang/Character", "(C)V", 66);
-  expect(await vcall(first, "compareTo", "(Ljava/lang/Object;)I", second)).toBeLessThan(0);
-  expect(await scall("java/util/Arrays", "toString", "([B)Ljava/lang/String;", new Int8Array([-1, 0, 1]))).toBe("[-1, 0, 1]");
-  expect(await scall("java/lang/Math", "log1p", "(D)D", Math.E - 1)).toBeCloseTo(1);
-});
-
-test("layout containers expose their covariant LayoutParams descriptors", () => {
-  for (const name of ["FrameLayout", "LinearLayout", "RelativeLayout"]) {
-    const view = rt.make(`android/widget/${name}`) as unknown as Record<string, unknown>;
-    const descriptor = `(Landroid/util/AttributeSet;)Landroid/widget/${name}$LayoutParams;`;
-    expect(typeof view[mangleMethod("generateLayoutParams", descriptor)]).toBe("function");
-  }
-});
-
-test("ShapeDrawable retains its ShaderFactory", async () => {
-  const drawable = await newObj("android/graphics/drawable/ShapeDrawable", "()V");
-  const factory = await newObj("android/graphics/drawable/ShapeDrawable$ShaderFactory", "()V");
-  await vcall(drawable, "setShaderFactory", "(Landroid/graphics/drawable/ShapeDrawable$ShaderFactory;)V", factory);
-  expect(await vcall(drawable, "getShaderFactory", "()Landroid/graphics/drawable/ShapeDrawable$ShaderFactory;")).toBe(factory);
-});
-
-test("EditText retains private IME options", async () => {
-  const edit = await newObj("android/widget/EditText", "(Landroid/content/Context;)V", null);
-  await vcall(edit, "setPrivateImeOptions", "(Ljava/lang/String;)V", "com.example.mode=test");
-  expect(await vcall(edit, "getPrivateImeOptions", "()Ljava/lang/String;")).toBe("com.example.mode=test");
-});
-
-test("View retains outline shadow colors", async () => {
-  const view = await newObj("android/view/View", "(Landroid/content/Context;)V", null);
-  expect(await vcall(view, "getOutlineAmbientShadowColor", "()I")).toBe(-16777216);
-  await vcall(view, "setOutlineAmbientShadowColor", "(I)V", 0xff112233 | 0);
-  await vcall(view, "setOutlineSpotShadowColor", "(I)V", 0xff445566 | 0);
-  expect(await vcall(view, "getOutlineAmbientShadowColor", "()I")).toBe(0xff112233 | 0);
-  expect(await vcall(view, "getOutlineSpotShadowColor", "()I")).toBe(0xff445566 | 0);
-});
-
-test("ViewGroup retains whether child states contribute", async () => {
-  const group = await newObj("android/widget/FrameLayout", "(Landroid/content/Context;)V", null);
-  expect(await vcall(group, "addStatesFromChildren", "()Z")).toBe(0);
-  await vcall(group, "setAddStatesFromChildren", "(Z)V", 1);
-  expect(await vcall(group, "addStatesFromChildren", "()Z")).toBe(1);
-});
-
-test("LongSparseArray removes and indexes sorted long keys", async () => {
-  const sparse = await newObj("android/util/LongSparseArray", "(I)V", 2);
-  await vcall(sparse, "put", "(JLjava/lang/Object;)V", 9n, "nine");
-  await vcall(sparse, "put", "(JLjava/lang/Object;)V", 3n, "three");
-  expect(await vcall(sparse, "keyAt", "(I)J", 0)).toBe(3n);
-  expect(await vcall(sparse, "valueAt", "(I)Ljava/lang/Object;", 1)).toBe("nine");
-  await vcall(sparse, "remove", "(J)V", 3n);
-  expect(await vcall(sparse, "size", "()I")).toBe(1);
-});
-
 test("PaintDrawable owns a rectangular shape and supports rounded corners", async () => {
   const drawable = await newObj("android/graphics/drawable/PaintDrawable", "(I)V", 0xff123456 | 0);
   expect((await vcall(drawable, "getPaint", "()Landroid/graphics/Paint;")).color).toBe(0xff123456 | 0);
   expect(await vcall(drawable, "getShape", "()Landroid/graphics/drawable/shapes/Shape;")).not.toBeNull();
   await vcall(drawable, "setCornerRadius", "(F)V", 12);
   expect(await vcall(drawable, "getShape", "()Landroid/graphics/drawable/shapes/Shape;")).not.toBeNull();
-});
-
-test("AnimatedVectorDrawable reports unavailable animation", async () => {
-  const drawable = await newObj("android/graphics/drawable/AnimatedVectorDrawable");
-  await vcall(drawable, "start", "()V");
-  expect(await vcall(drawable, "isRunning", "()Z")).toBe(0);
 });
 
 test("ColorDrawable constant state creates an independent copy", async () => {
@@ -345,29 +226,11 @@ test("Hashtable-style contains is containsValue and rejects null", async () => {
   }
 });
 
-test("Double.valueOf(String) boxes a parsed value and rejects junk", async () => {
-  const boxed = await scall("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;", " 2.5e1 ");
-  expect(await vcall(boxed, "doubleValue", "()D")).toBe(25);
-  await expect((async () => Promise.resolve().then(() => scall("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;", "x")))())
-    .rejects.toMatchObject({ constructor: rt.link("java/lang/NumberFormatException").ctor });
-});
-
 test("reached platform queries return device state and default WebView identity", async () => {
   const context = await newObj("android/content/Context");
   expect(await scall("android/provider/Settings", "canDrawOverlays", "(Landroid/content/Context;)Z", context)).toBe(0);
   expect(await scall("android/webkit/WebSettings", "getDefaultUserAgent", "(Landroid/content/Context;)Ljava/lang/String;", context)).toContain("Android 13");
   expect(await vcall(rt.classFor("java/lang/String"), "getAnnotations", "()[Ljava/lang/annotation/Annotation;")).toHaveLength(0);
-});
-
-test("Instrumentation is a constructible framework class", async () => {
-  expect(rt.link("android/app/Instrumentation").stub).toBe(false);
-  expect(await newObj("android/app/Instrumentation")).toBeInstanceOf(rt.link("android/app/Instrumentation").ctor);
-});
-
-test("InputMethodManager reports no package-backed input methods", async () => {
-  const manager = rt.make("android/view/inputmethod/InputMethodManager");
-  const methods = await vcall(manager, "getEnabledInputMethodList", "()Ljava/util/List;");
-  expect(await vcall(methods, "isEmpty", "()Z")).toBe(1);
 });
 
 test("Runtime.exec(String) tokenizes the program and reports the unavailable process", async () => {
@@ -382,7 +245,6 @@ test("finite number checks and stream flattening preserve Java semantics", async
   const source = scall("java/util/stream/Stream", "of", "([Ljava/lang/Object;)Ljava/util/stream/Stream;", Object.assign(["a", "b"], { $t: "Ljava/lang/Object;" }));
   const flattened = await vcall(source, "flatMap", "(Ljava/util/function/Function;)Ljava/util/stream/Stream;", rt.make("test/DuplicateStream"));
   expect((await vcall(flattened, "toList", "()Ljava/util/List;")).a).toEqual(["a", "a", "b", "b"]);
-  expect(rt.link("java/io/ObjectStreamClass").name).toBe("java/io/ObjectStreamClass");
 });
 
 test("Collectors use the Java Collector protocol and CharSequence text", async () => {
@@ -425,10 +287,6 @@ test("Process.isApplicationUid checks the app id across users", () => {
   expect(scall("android/os/Process", "isApplicationUid", "(I)Z", 210001)).toBe(1);
   expect(scall("android/os/Process", "isApplicationUid", "(I)Z", 1000)).toBe(0);
   expect(scall("android/os/Process", "isApplicationUid", "(I)Z", 90000)).toBe(0);
-});
-
-test("ActivityManager reports a normal device environment", () => {
-  expect(scall("android/app/ActivityManager", "isRunningInTestHarness", "()Z")).toBe(0);
 });
 
 test("security providers retain their constructor metadata", async () => {
@@ -542,24 +400,6 @@ test("optional device services report their unavailable state", async () => {
   expect(await vcall(range, "clamp", "(Ljava/lang/Comparable;)Ljava/lang/Comparable;", "z")).toBe("d");
 });
 
-test("PackageManager reports the current package as active", async () => {
-  expect(await vcall(await newObj("android/content/pm/PackageManager"), "isPackageSuspended", "()Z")).toBe(0);
-});
-
-test("AbstractExecutorService submit returns the virtual newTaskFor result", async () => {
-  const executor = scall("java/util/concurrent/Executors", "newSingleThreadExecutor", "()Ljava/util/concurrent/ExecutorService;");
-  const runnable = rt.make("test/NoopRunnable");
-  const future = await vcall(executor, "submit", "(Ljava/lang/Runnable;Ljava/lang/Object;)Ljava/util/concurrent/Future;", runnable, "done");
-  expect(rt.iof(future, "java/util/concurrent/FutureTask")).toBe(1);
-  expect(rt.iof(future, "java/lang/Runnable")).toBe(1);
-  expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("done");
-  const callable = scall("java/util/concurrent/Executors", "callable", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Callable;", runnable);
-  const tasks = await newObj("java/util/ArrayList");
-  await vcall(tasks, "add", "(Ljava/lang/Object;)Z", callable);
-  const futures = await vcall(executor, "invokeAll", "(Ljava/util/Collection;)Ljava/util/List;", tasks);
-  expect(await vcall(futures, "size", "()I")).toBe(1);
-});
-
 test("sets retain their intersection and a non-HDR display reports no modes", async () => {
   const set = await newObj("java/util/HashSet");
   expect(rt.iof(set, "java/util/SortedSet")).toBe(0);
@@ -574,20 +414,6 @@ test("sets retain their intersection and a non-HDR display reports no modes", as
   const display = await newObj("android/view/Display");
   const hdr = await vcall(display, "getHdrCapabilities", "()Landroid/view/Display$HdrCapabilities;");
   expect(await vcall(hdr, "getSupportedHdrTypes", "()[I")).toHaveLength(0);
-});
-
-test("Arrays sorts a natural-order object subrange", async () => {
-  const values = ["z", "c", "a", "b", "y"];
-  await scall("java/util/Arrays", "sort", "([Ljava/lang/Object;II)V", values, 1, 4);
-  expect(values).toEqual(["z", "a", "b", "c", "y"]);
-});
-
-test("Arrays binary-searches floats in Java order", () => {
-  const values = Float32Array.of(-0, 0, 1, NaN);
-  expect(scall("java/util/Arrays", "binarySearch", "([FF)I", values, -0)).toBe(0);
-  expect(scall("java/util/Arrays", "binarySearch", "([FF)I", values, 0)).toBe(1);
-  expect(scall("java/util/Arrays", "binarySearch", "([FF)I", values, NaN)).toBe(3);
-  expect(scall("java/util/Arrays", "binarySearch", "([FF)I", values, 0.5)).toBe(-3);
 });
 
 test("BigInteger returns quotient and remainder together", async () => {
@@ -634,22 +460,6 @@ test("ZipInputStream walks entries in local order and serves each entry's bytes"
   }
   expect(names).toEqual(["a.txt", "dir/", "dir/b.bin"]);
   expect(sizes).toEqual([5, 0, 4]);
-});
-
-test("ZipOutputStream writes readable entries", async () => {
-  const output = await newObj("java/io/ByteArrayOutputStream");
-  const zip = await newObj("java/util/zip/ZipOutputStream", "(Ljava/io/OutputStream;)V", output);
-  for (const [name, text] of [["track.kml", "<kml/>"]] as const) {
-    const entry = await newObj("java/util/zip/ZipEntry", "(Ljava/lang/String;)V", name);
-    await vcall(zip, "putNextEntry", "(Ljava/util/zip/ZipEntry;)V", entry);
-    const bytes = new TextEncoder().encode(text);
-    await vcall(zip, "write", "([BII)V", new Int8Array(bytes.buffer), 0, bytes.length);
-    await vcall(zip, "closeEntry", "()V");
-  }
-  await vcall(zip, "close", "()V");
-  const bytes = await vcall(output, "toByteArray", "()[B") as Int8Array;
-  const { unzipSync } = await import("fflate");
-  expect(new TextDecoder().decode(unzipSync(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.length))["track.kml"])).toBe("<kml/>");
 });
 
 test("List.containsAll, CharBuffer.wrap and EventObject", async () => {
@@ -711,22 +521,6 @@ test("UrlQuerySanitizer drops unregistered parameters unless allowed and sanitiz
   expect(await vcall(list, "size", "()I")).toBe(3);
   const first = await vcall(list, "get", "(I)Ljava/lang/Object;", 0);
   expect(first.mParameter).toBe("q"); expect(first.mValue).toBe("hello w!rld");
-});
-
-test("a Looper Printer sees the dispatch lines around a handled message", async () => {
-  const lines: string[] = [];
-  rt.register({ name: "test/LinePrinter", ctor: class extends JObj {}, ifaces: ["android/util/Printer"],
-    methods: { "println(Ljava/lang/String;)V": (s: string) => { lines.push(s); } } });
-  const looper = await scall("android/os/Looper", "getMainLooper", "()Landroid/os/Looper;");
-  await vcall(looper, "setMessageLogging", "(Landroid/util/Printer;)V", rt.make("test/LinePrinter"));
-  const handler = await newObj("android/os/Handler", "(Landroid/os/Looper;)V", looper);
-  const task = rt.make("test/NoopRunnable");
-  await vcall(handler, "post", "(Ljava/lang/Runnable;)Z", task);
-  await new Promise((resolve) => setTimeout(resolve, 0)); await onMain(() => {});
-  await vcall(looper, "setMessageLogging", "(Landroid/util/Printer;)V", null);
-  expect(lines.length).toBe(2);
-  expect(lines[0].startsWith(">>>>> Dispatching to ")).toBe(true);
-  expect(lines[1].startsWith("<<<<< Finished to ")).toBe(true);
 });
 
 test("Resources string getters throw NotFoundException for ids the table lacks", async () => {

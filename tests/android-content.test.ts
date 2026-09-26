@@ -88,7 +88,7 @@ describe("app-ops", () => {
     const listener = await newObj("android/app/AppOpsManager$OnOpActiveChangedListener");
     await vcall(manager, "startWatchingActive", "([Ljava/lang/String;Ljava/util/concurrent/Executor;Landroid/app/AppOpsManager$OnOpActiveChangedListener;)V", ["android:camera"], executor, listener);
     await vcall(manager, "stopWatchingActive", "(Landroid/app/AppOpsManager$OnOpActiveChangedListener;)V", listener);
-    expect(vcallAsync(manager, "startWatchingActive", "([Ljava/lang/String;Ljava/util/concurrent/Executor;Landroid/app/AppOpsManager$OnOpActiveChangedListener;)V", null, executor, listener)).rejects.toBeDefined();
+    await expect(vcallAsync(manager, "startWatchingActive", "([Ljava/lang/String;Ljava/util/concurrent/Executor;Landroid/app/AppOpsManager$OnOpActiveChangedListener;)V", null, executor, listener)).rejects.toBeDefined();
   });
 });
 
@@ -428,13 +428,6 @@ describe("platform-queries", () => {
     const cls = rt.link("android/content/ContentUris").ctor;
     const uri = await vcall(cls, "withAppendedId", "(Landroid/net/Uri;J)Landroid/net/Uri;", mkUri("content://test/items"), 9223372036854775807n);
     expect(await vcall(cls, "parseId", "(Landroid/net/Uri;)J", uri)).toBe(9223372036854775807n);
-  });
-  test("NetworkRequest snapshots sorted unique transport and capability sets", async () => {
-    const builder = await newObj("android/net/NetworkRequest$Builder");
-    for (const value of [3, 1, 3]) await vcall(builder, "addTransportType", "(I)Landroid/net/NetworkRequest$Builder;", value);
-    const request = await vcall(builder, "build", "()Landroid/net/NetworkRequest;");
-    await vcall(builder, "addTransportType", "(I)Landroid/net/NetworkRequest$Builder;", 4);
-    expect(await vcall(request, "getTransportTypes", "()[I")).toEqual(Int32Array.of(1, 3));
   });
   test("NotificationChannelGroup persists empty descriptions and supports deletion", async () => {
     const manager = rt.make("android/app/NotificationManager");

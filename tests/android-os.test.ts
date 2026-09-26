@@ -433,6 +433,6 @@ describe("system-health", () => {
     const snapshot = await vcall(manager, "takeUidSnapshot", "(I)Landroid/os/health/HealthStats;", PROCESS_UID);
     expect(await vcall(snapshot, "getDataType", "()Ljava/lang/String;")).toBe("UidHealthStats");
     expect(await vcall(snapshot, "hasMeasurement", "(I)Z", 10001)).toBe(0);
-    expect(vcallAsync(manager, "takeUidSnapshot", "(I)Landroid/os/health/HealthStats;", PROCESS_UID + 1)).rejects.toBeDefined();
+    await expect(vcallAsync(manager, "takeUidSnapshot", "(I)Landroid/os/health/HealthStats;", PROCESS_UID + 1)).rejects.toBeDefined();
   });
 });

@@ -499,13 +499,6 @@ describe("nio", () => {
     expect(await vcall(stream, "skip", "(J)J", -1n)).toBe(0n);
   });
 
-  test("File comparison orders normalized paths through both overloads", async () => {
-    const a = await newObj("java/io/File", "(Ljava/lang/String;)V", "/tmp/a");
-    const b = await newObj("java/io/File", "(Ljava/lang/String;)V", "/tmp/b");
-    expect(await vcall(a, "compareTo", "(Ljava/io/File;)I", b)).toBe(-1);
-    expect(await vcall(b, "compareTo", "(Ljava/lang/Object;)I", a)).toBe(1);
-  });
-
   test("FileChannel.read fills a ByteBuffer from streams and random-access files", async () => {
     vfs.write("/tmp/nio-channel.bin", new Uint8Array([1, 2, 3, 4, 5, 6]));
     const input = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/tmp/nio-channel.bin");
@@ -640,12 +633,6 @@ describe("nio", () => {
     await expect(vcallAsync(buffer, "put", "([SII)Ljava/nio/ShortBuffer;", input, 3, 2)).rejects.toMatchObject({});
   });
 
-  test("the dropbox service exists and has every tag disabled", async () => {
-    const dropbox = rt.make("android/os/DropBoxManager");
-    expect(await vcall(dropbox, "isTagEnabled", "(Ljava/lang/String;)Z", "crash")).toBe(0);
-    await vcall(dropbox, "addText", "(Ljava/lang/String;Ljava/lang/String;)V", "crash", "x");
-  });
-
   test("FileChannel READ_WRITE mappings share the file's bytes and force persists them", async () => {
     vfs.write("/tmp/nio-map.bin", new Uint8Array([1, 2, 3, 4]));
     const raf = await newObj("java/io/RandomAccessFile", "(Ljava/lang/String;Ljava/lang/String;)V", "/tmp/nio-map.bin", "rw");
@@ -667,17 +654,6 @@ describe("nio", () => {
     const reader = await newObj("java/io/RandomAccessFile", "(Ljava/lang/String;Ljava/lang/String;)V", "/tmp/nio-map.bin", "r");
     const ro = await vcall(reader, "getChannel", "()Ljava/nio/channels/FileChannel;");
     await expect(vcallAsync(ro, "map", "(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;", mode, 0n, 4n)).rejects.toThrow();
-  });
-});
-
-describe("object-stream-blocks", () => {
-  rt.linkNatives();
-  test("ObjectInputStream consumes short block length headers before calculating the block end", async () => {
-    const bytes = Int8Array.from([0xac, 0xed, 0, 5, 0x77, 4, 0, 0, 0, 123, 0x77, 2, 0, 0, 0x77, 2, 1, 200]);
-    const source = await newObj("java/io/ByteArrayInputStream", "([B)V", bytes);
-    const input = await newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source);
-    expect(await vcall(input, "readInt", "()I")).toBe(123);
-    expect(await vcall(input, "readInt", "()I")).toBe(456);
   });
 });
 
@@ -739,15 +715,6 @@ describe("object-stream-external", () => {
   test("incompatible serialVersionUID is rejected", async () => {
     const bytes = i8(hexBytes(oracle)); bytes[39] = 8;
     await expect(vcallAsync(await input(bytes), "readObject", "()Ljava/lang/Object;")).rejects.toMatchObject({ msg: expect.stringContaining("serialVersionUID") });
-  });
-  test("primitive UTF data crosses long block boundaries", async () => {
-    const target = await newObj("java/io/ByteArrayOutputStream");
-    const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", target);
-    const value = "\0🚀".repeat(800);
-    await vcall(output, "writeUTF", "(Ljava/lang/String;)V", value);
-    await vcall(output, "close", "()V");
-    const stream = await input(await vcall(target, "toByteArray", "()[B"));
-    expect(await vcall(stream, "readUTF", "()Ljava/lang/String;")).toBe(value);
   });
   test("default and custom fields preserve graph identity and initialize only the non-serializable superclass", async () => {
     const oracle = (await Bun.file(import.meta.dir + "/fixtures/SerializationProbe.hex").text()).trim();

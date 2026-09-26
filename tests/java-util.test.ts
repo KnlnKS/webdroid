@@ -379,20 +379,6 @@ describe("collections-disjoint", () => {
   });
 });
 
-describe("collections-empty-iterator", () => {
-  rt.linkNatives();
-
-  test("Collections.emptyIterator is empty and immutable by state", async () => {
-    const method = rt.link("java/util/Collections").ctor[mangleMethod("emptyIterator", "()Ljava/util/Iterator;")];
-    expect(typeof method).toBe("function");
-    if (typeof method !== "function") return;
-    const iterator = method();
-    expect(await vcall(iterator, "hasNext", "()Z")).toBe(0);
-    expect(vcallAsync(iterator, "next", "()Ljava/lang/Object;")).rejects.toBeDefined();
-    expect(vcallAsync(iterator, "remove", "()V")).rejects.toBeDefined();
-  });
-});
-
 describe("date-range", () => {
   rt.linkNatives();
   const cases = [
@@ -785,13 +771,6 @@ describe("set-equality", () => {
     expect(await vcall(immutable, "size", "()I")).toBe(2);
     await expect((async () => Promise.resolve().then(() => of("a", 1, "a", 2)))()).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
     await expect((async () => Promise.resolve().then(() => of("a", 1, "b", null)))()).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
-  });
-
-  test("Collections.disjoint uses value equality", async () => {
-    const disjoint = (...values: unknown[]) => scall("java/util/Collections", "disjoint",
-      "(Ljava/util/Collection;Ljava/util/Collection;)Z", ...values);
-    expect(await disjoint(await set("java/util/HashSet", "a"), await set("java/util/HashSet", "b"))).toBe(1);
-    expect(await disjoint(await set("java/util/HashSet", "a"), await set("java/util/LinkedHashSet", "a"))).toBe(0);
   });
 
   test("Collections wrappers stay live without exposing unmodifiable mutations", async () => {

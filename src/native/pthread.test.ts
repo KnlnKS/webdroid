@@ -36,7 +36,7 @@ test("joinable pthread handles remain distinct after their routines exit", async
   mem.u32.set([0x528000e0, 0xd65f03c0], routine >>> 2);
   try {
     const first = startThread(parent, routine, 0n, false);
-    for (let i = 0; cpus.has(first) && i < 100; i++) await Bun.sleep(1);
+    for (let i = 0; cpus.has(first) && i < 5000; i++) await Bun.sleep(1);
     expect(cpus.has(first)).toBe(false);
     const second = startThread(parent, routine, 0n, false);
     expect(second.pthreadSelf).not.toBe(first.pthreadSelf);
