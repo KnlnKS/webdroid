@@ -70,6 +70,11 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   scrolling went from 27 to about 44 presented frames/s, with input handling
   per swipe falling from 158 to about 65 ms. Earlier measured steps: smaller
   CFG preparation, reaching-definition set sharing, and direct cold operands.
+- Generator natives must receive every argument: a wrapper specialized on the
+  generator's `length` stops at a defaulted parameter and silently dropped the
+  caller Runtime that caller-sensitive natives (System.load) are passed.
+  A generator native whose only yield is its tail returns that call directly;
+  a void native's final `yield X` must stay, or it would return X's value.
 - Remaining suspensions in Compose apps are mostly legitimate: coroutine
   worker parks, contended monitors and background SQLite/Firebase work. Probe
   them by counting natives that return Promises before converting more code;
