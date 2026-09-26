@@ -6,11 +6,10 @@ import { loadPng, savePng, hconcat } from "./lib/png";
 import { diffImages } from "./lib/diff";
 import { html, printFlow, type FlowReport, type StepReport } from "./lib/report";
 import { parseArgs } from "./lib/args";
-import { screenOf, screenParam, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step, type UiNode } from "./types";
+import { flowSchemaHash, screenOf, screenParam, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step, type UiNode } from "./types";
 import { diffTrees } from "./lib/tree";
 import type { FlowRun } from "./capture-webdroid";
 import { E2E_DIR, sha1 } from "./lib/util";
-import { flowSchemaHash } from "./coverage";
 
 /**
  * The device half of the structural comparison. A full hierarchy if the recorder captured one;

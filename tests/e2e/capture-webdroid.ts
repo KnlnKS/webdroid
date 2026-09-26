@@ -5,11 +5,10 @@ import { mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { ENV_SCREEN, WebdroidDriver } from "./drivers/webdroid";
 import { E2E_DIR } from "./lib/util";
-import { PINNED_CLOCK_MS, evidenceOf, isMotionWait, screenOf, uiFileFor, type ExecutionFlow, type ExecutionStep, type Flow, type Manifest, type RecordedStep, type WaitPolicy } from "./types";
+import { PINNED_CLOCK_MS, evidenceOf, flowSchemaHash, isMotionWait, screenOf, uiFileFor, type ExecutionFlow, type ExecutionStep, type Flow, type Manifest, type RecordedStep, type WaitPolicy } from "./types";
 import { parseScreen } from "../../src/shell/config";
 import type { Act, Settled, StepResult } from "./lib/probe";
 import { readProcesses, type ProcessSnapshot } from "./lib/processes";
-import { flowSchemaHash } from "./coverage";
 
 export type StepRun = {
   id: string; index: number; file: string;
@@ -88,7 +87,7 @@ export function prefsStorage(pkg: string, xml: string): [string, string] {
 
 /** A browser prepared for one flow: the goldens' geometry (unless the run is pinned elsewhere
  *  to measure cost), the flow's clock, and its seed prefs already in storage. */
-export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = false, controlled = false, coverage = false): Promise<WebdroidDriver> {
+export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = false, controlled = false): Promise<WebdroidDriver> {
   return WebdroidDriver.launch({
     screen: { ...screenOf(manifest, flow.screen), ...parseScreen(ENV_SCREEN) },
     fixedMs: flow.clock === "live" ? null : PINNED_CLOCK_MS,
@@ -96,7 +95,6 @@ export function launchFor(flow: Flow, manifest: Manifest | undefined, shots = fa
     privateStorage: flow.privateStorage,
     shots,
     controlled,
-    coverage,
   });
 }
 

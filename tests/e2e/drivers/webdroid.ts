@@ -5,26 +5,11 @@ import { chromium, type Browser, type Page } from "playwright";
 import { PINNED_CLOCK_MS, deviceScreen, screenParam, type CaptureScreen, type WaitPolicy } from "../types";
 import { BASE_URL } from "../lib/util";
 import { DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_QUIESCENCE, probeScript, type Act, type Quiescence, type StepResult, type StepSpec } from "../lib/probe";
-import { decodeMappings, executedSources, type CoverageFunction } from "../lib/source-coverage";
 
 // WEBDROID_BYTECODE=android/graphics/,android/content/res/ scores a provenance cut: the same
 // bundle, with those prefixes served by AOSP's own bytecode instead of our native specs. That
 // is how a cut becomes a measurement rather than an edit and a rebuild.
 const CUT = process.env.WEBDROID_BYTECODE;
-const coverageMappings = new Map<string, Promise<ReturnType<typeof decodeMappings>>>();
-
-async function loadCoverageMappings(url: string, source: string): Promise<ReturnType<typeof decodeMappings>> {
-  let pending = coverageMappings.get(url);
-  if (!pending) {
-    pending = fetch(url).then(async (response) => {
-      if (!response.ok) throw new Error(`could not load coverage source map ${url}`);
-      return decodeMappings(await response.json() as { mappings: string; sources: string[] }, source);
-    });
-    coverageMappings.set(url, pending);
-  }
-  return pending;
-}
-
 /** `WEBDROID_SCREEN=1080x2424@480` overrides the geometry every flow runs at — which un-scores
  *  the run, because the goldens are pixels at one size. That is the point: it measures cost. */
 export const ENV_SCREEN = process.env.WEBDROID_SCREEN;
@@ -73,7 +58,6 @@ type LaunchOpts = {
   privateStorage?: { files: { path: string; fixture: string }[] };
   shots?: boolean;
   controlled?: boolean;
-  coverage?: boolean;
 };
 
 type StepOptions = {
@@ -85,7 +69,7 @@ type StepOptions = {
 
 export class WebdroidDriver {
   readonly errors: string[] = [];
-  constructor(private browser: Browser, public page: Page, public screen: CaptureScreen, private coverage = false) {}
+  constructor(private browser: Browser, public page: Page, public screen: CaptureScreen) {}
 
   static async launch(opts: LaunchOpts = {}): Promise<WebdroidDriver> {
     const screen = opts.screen ?? deviceScreen();
@@ -95,8 +79,7 @@ export class WebdroidDriver {
     if (opts.privateStorage) await ctx.addInitScript({ content: `for (const name of ['showDirectoryPicker', 'showOpenFilePicker', 'showSaveFilePicker'])
       Object.defineProperty(window, name, { value: undefined, configurable: true });` });
     const page = await ctx.newPage();
-    if (opts.coverage) await page.coverage.startJSCoverage({ resetOnNavigation: false });
-    const drv = new WebdroidDriver(browser, page, screen, !!opts.coverage);
+    const drv = new WebdroidDriver(browser, page, screen);
     page.on("pageerror", (e) => { drv.errors.push(String(e)); console.error("  [page error]", String(e).slice(0, 200)); });
     page.on("console", (message) => { if (message.type() === "error") drv.errors.push(`${message.location().url}: ${message.text()}`); });
     await drv.open(screen, !!opts.controlled);
@@ -142,7 +125,7 @@ export class WebdroidDriver {
       screen: this.screen,
       wait: options.wait,
       quiescence: { ...DEFAULT_QUIESCENCE, ...options.quiescence },
-      aliveMs: this.coverage ? 5000 : timing === "controlled" ? 3500 : 3000,
+      aliveMs: timing === "controlled" ? 3500 : 3000,
       capture: options.capture ?? true,
       timing,
     };
@@ -162,25 +145,6 @@ export class WebdroidDriver {
    */
   alive(timeoutMs = 2000): Promise<boolean> {
     return this.page.evaluate((ms) => (globalThis as any).wd.alive(ms), timeoutMs);
-  }
-
-  async takeSourceCoverage(): Promise<string[]> {
-    const entries = await this.page.coverage.stopJSCoverage();
-    const files = new Set<string>();
-    for (const entry of entries) {
-      if (!entry.url) continue;
-      const path = entry.url.startsWith("http://") || entry.url.startsWith("https://")
-        ? new URL(entry.url).pathname.slice(1)
-        : entry.url.replace(/^\//, "");
-      if (path.startsWith("src/") || path.startsWith("tests/")) { files.add(path); continue; }
-      if (!entry.source || !entry.functions?.length || !entry.url.startsWith("http")) continue;
-      const match = entry.source.match(/\/\/# sourceMappingURL=(\S+)/);
-      if (!match) continue;
-      const points = await loadCoverageMappings(new URL(match[1]!, entry.url).href, entry.source);
-      for (const file of executedSources(points, entry.functions as CoverageFunction[]))
-        files.add(file);
-    }
-    return [...files].sort();
   }
 
   browserVersion(): string {

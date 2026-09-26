@@ -6,21 +6,17 @@ import type { Flow } from "./types";
 import { loadPng } from "./lib/png";
 import { diffImages } from "./lib/diff";
 import { E2E_DIR, runQueue } from "./lib/util";
-import { apkHashes, flowSchemaHash, repositoryRevision, type CoverageIndex } from "./coverage";
-import { captureScreenKey, executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs, type CaptureScreen, type Manifest } from "./types";
+import { executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs, type CaptureScreen, type Manifest } from "./types";
 
 // Live flows depend on upstream content and networks, so they join the lane only when named or
 // with --live; the default lane is reproducible from the repository and local APKs alone.
 const deterministic = FLOWS.filter((flow) => flow.clock !== "live");
-const coverage = process.argv.includes("--coverage");
 const live = process.argv.includes("--live");
-const args = process.argv.slice(2).filter((arg) => arg !== "--coverage" && arg !== "--live");
-const { flows, jobs } = parseArgs(args, "bun run e2e", coverage ? deterministic : FLOWS, defaultJobs(5, 2), live ? FLOWS : deterministic);
-if (coverage && flows.length !== deterministic.length)
-  throw new Error("coverage collection must run the complete deterministic lane");
+const args = process.argv.slice(2).filter((arg) => arg !== "--live");
+const { flows, jobs } = parseArgs(args, "bun run e2e", FLOWS, defaultJobs(5, 2), live ? FLOWS : deterministic);
 
 type VisualCheck = { step: string; contentDiffPct: number; maxContentDiffPct: number; androidSdk: string };
-type Outcome = { flow: Flow; runs: StepRun[]; visual: VisualCheck[]; errors: string[]; gaps: string[]; ms: number; coverage: string[]; browser: string; screen: string };
+type Outcome = { flow: Flow; runs: StepRun[]; visual: VisualCheck[]; errors: string[]; gaps: string[]; ms: number };
 
 function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: string[] } {
   const errors: string[] = [];
@@ -99,16 +95,11 @@ function browserFailures(flow: Flow, errors: string[]): string[] {
 async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
   const selected = executionFlow(flow, "fast");
   const manifest = await loadManifest(flow.app);
-  const collectCoverage = coverage && flow.sourceCoverage !== "unsupported";
-  const driver = await launchFor(flow, manifest, false, flow.clock === "controlled", collectCoverage);
+  const driver = await launchFor(flow, manifest, false, flow.clock === "controlled");
   const started = performance.now();
   let runs: StepRun[] = [];
-  let sourceCoverage: string[] = [];
-  const browser = driver.browserVersion();
-  const screen = captureScreenKey(driver.screen);
   try {
     runs = await captureFlow(selected, driver, { jobs: effectiveJobs, mode: "fast", log: () => {} });
-    sourceCoverage = collectCoverage ? await driver.takeSourceCoverage() : [];
   } finally {
     await driver.close();
   }
@@ -117,8 +108,7 @@ async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
   const browserErrors = browserFailures(flow, driver.errors);
   return { flow, runs, visual: visual.checks,
     errors: [...observed.errors, ...visual.errors, ...(flow.clock === "live" ? [] : browserErrors)],
-    gaps: [...observed.gaps, ...(flow.clock === "live" ? browserErrors : [])], ms: performance.now() - started,
-    coverage: sourceCoverage, browser, screen };
+    gaps: [...observed.gaps, ...(flow.clock === "live" ? browserErrors : [])], ms: performance.now() - started };
 }
 
 console.log(`fast flows: ${flows.map((flow) => flow.app).join(", ")} (${jobs} at a time)`);
@@ -136,7 +126,7 @@ const weight = (flow: Flow) => previous.get(flow.app) ?? executionFlow(flow, "fa
   total + (step.wait.kind === "state" ? step.wait.maxRealMs : waitHorizonMs(step.wait)) + 300, 0);
 const started = performance.now();
 const outcomes = await runQueue(flows, jobs, weight, (flow) => runFlow(flow, jobs),
-  (flow, error): Outcome => ({ flow, runs: [], visual: [], errors: [`flow aborted: ${String(error).split("\n", 1)[0]}`], gaps: [], ms: 0, coverage: [], browser: "unknown", screen: "unknown" }),
+  (flow, error): Outcome => ({ flow, runs: [], visual: [], errors: [`flow aborted: ${String(error).split("\n", 1)[0]}`], gaps: [], ms: 0 }),
   (outcome) => console.log(`  ${outcome.flow.app}: ${outcome.runs.length} steps, ${(outcome.ms / 1000).toFixed(1)}s` +
     (outcome.errors.length ? `, ${outcome.errors.length} failure(s)` : "") +
     (outcome.gaps.length ? `, ${outcome.gaps.length} observed gap(s)` : "")));
@@ -161,27 +151,6 @@ await Bun.write(`${E2E_DIR}actual-fast/summary.json`, JSON.stringify({
       : { app: flow.app, status: "not-selected" };
   }),
 }, null, 2));
-if (coverage && !failed) {
-  const byFile: Record<string, string[]> = {};
-  for (const outcome of outcomes)
-    for (const file of outcome.coverage) (byFile[file] ??= []).push(outcome.flow.app);
-  for (const coveredFlows of Object.values(byFile)) coveredFlows.sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
-  const index: CoverageIndex = {
-    generatedAt: new Date().toISOString(),
-    complete: outcomes.length === deterministic.length,
-    sourceRevision: repositoryRevision(new URL("../..", import.meta.url).pathname),
-    schemaHash: flowSchemaHash(deterministic),
-    browser: outcomes[0]?.browser ?? "unknown",
-    mode: "v8-precise-sourcemap",
-    apkHashes: await apkHashes(deterministic),
-    screens: Object.fromEntries(outcomes.map((outcome) => [outcome.flow.app, outcome.screen])),
-    unsupportedFlows: outcomes.filter((outcome) => outcome.flow.sourceCoverage === "unsupported").map((outcome) => outcome.flow.app),
-    flows: Object.fromEntries(outcomes.map((outcome) => [outcome.flow.app, outcome.coverage])),
-    files: byFile,
-  };
-  await Bun.write(`${E2E_DIR}coverage-index.json`, JSON.stringify(index, null, 2));
-  console.log(`coverage: ${E2E_DIR}coverage-index.json (${Object.keys(byFile).length} source files)`);
-}
 const compared = outcomes.filter((item) => item.visual.length).length;
 const observed = outcomes.filter((item) => item.flow.clock === "live" && !item.visual.length).length;
 const gaps = outcomes.reduce((count, item) => count + item.gaps.length, 0);

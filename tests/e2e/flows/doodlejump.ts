@@ -14,7 +14,6 @@ export const doodlejump: Flow = {
   crop: { top: 0, bottom: 48, left: 0, right: 0 },
   minFps: 30,
   clock: "pinned",
-  sourceCoverage: "unsupported",
   steps: [
     { id: "launch", label: "Launch — loader", action: { type: "launch" }, wait: wait.sample(3000) },
     // the game decodes every texture at startup (~11G guest instructions) before its GL loop starts

@@ -131,14 +131,11 @@ type FlowBase<TStep extends Step> = {
 export type Flow<TStep extends Step = Step> = FlowBase<TStep> & (
   | {
       clock: "live";
-      sourceCoverage?: never;
       expectedBrowserErrors?: never;
     }
   | {
       /** Controlled flows advance Android-visible time in fast mode; pinned flows retain real scheduling. */
       clock: "controlled" | "pinned";
-      /** V8 instrumentation can distort long-running native loops; absent means source coverage is safe. */
-      sourceCoverage?: "unsupported";
       /** Existing browser errors accepted by exact substring; every unmatched error fails the fast lane. */
       expectedBrowserErrors?: readonly string[];
     }
@@ -275,3 +272,19 @@ export const captureScreenKey = (s: CaptureScreen): string => `${screenParam(s)}
  * every golden go stale the next day.
  */
 export const PINNED_CLOCK_MS = Date.UTC(2026, 0, 2, 12, 0, 0);
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** Identifies the steps a capture ran, so rescoring rejects captures from since-edited flows. */
+export function flowSchemaHash(flows: Flow[], mode: "all" | "reference" | "full" | "fast" = "all"): string {
+  const resolved = mode === "all" ? flows : flows.map((flow) => executionFlow(flow, mode));
+  return new Bun.CryptoHasher("sha256").update(new TextEncoder().encode(canonical(resolved))).digest("hex");
+}
