@@ -134,7 +134,7 @@ export function runStep(drv: WebdroidDriver, flow: Flow, step: ExecutionStep, re
 
 export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
   jobs = 1, shots, log = console.log, mode = "full", outRoot = mode === "fast" ? "actual-fast" : "actual",
-}: { jobs?: number; shots?: string; log?: (s: string) => void; mode?: CaptureMode; outRoot?: string } = {}): Promise<StepRun[]> {
+}: { jobs?: number; shots?: string; log?: (s: string) => void; mode?: CaptureMode; outRoot?: string } = {}): Promise<{ runs: StepRun[]; errors: string[] }> {
   const manifest = await loadManifest(flow.app);
   if (!manifest) log(`  no goldens for ${flow.app} — smoke run (rendered/wedged/missing/perf; not scored)`);
   const byId = new Map((manifest?.steps ?? []).map((s) => [s.id, s]));
@@ -225,9 +225,8 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
   }) : undefined;
   const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow]), jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, statusBarDp: drv.screen.statusBarDp, steps: runs, browserErrors: [...drv.errors], hostFiles };
   await Bun.write(`${outDir}/run.json`, JSON.stringify(run, null, 2));
-  for (const expected of flow.privateStorage?.expectedFiles ?? []) {
-    if (!hostFiles?.some(({ path, size }) => path.startsWith(expected.pathPrefix) && path.endsWith(expected.suffix) && size >= expected.minBytes))
-      throw new Error(`${flow.app}: missing host file ${expected.pathPrefix}*${expected.suffix} (${expected.minBytes} bytes)`);
-  }
-  return runs;
+  const missingFiles = (flow.privateStorage?.expectedFiles ?? []).filter((expected) => !hostFiles?.some(({ path, size }) =>
+    path.startsWith(expected.pathPrefix) && path.endsWith(expected.suffix) && size >= expected.minBytes))
+    .map((expected) => `missing host file ${expected.pathPrefix}*${expected.suffix} (${expected.minBytes} bytes)`);
+  return { runs, errors: missingFiles };
 }

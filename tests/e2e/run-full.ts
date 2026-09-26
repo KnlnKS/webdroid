@@ -17,7 +17,7 @@ const pinned = parseScreen(ENV_SCREEN);
 console.log(`flows: ${flows.map((f) => f.app).join(", ")}  (${jobs} at a time)`);
 if (shots) await prepareShots(shots);
 
-type Outcome = { app: string; scored: boolean; lines: string[]; ms: number; aborted?: true };
+type Outcome = { app: string; scored: boolean; lines: string[]; ms: number; failed?: true };
 
 async function runFlow(app: string): Promise<Outcome> {
   const flow = executionFlow(flows.find((f) => f.app === app)!, "full");
@@ -26,9 +26,11 @@ async function runFlow(app: string): Promise<Outcome> {
   const log = (s: string) => lines.push(s);
   const t0 = Date.now();
   const drv = await launchFor(flow, manifest, !!shots);
-  let scored = false;
+  let scored = false, failed = false;
   try {
-    const runs = await captureFlow(flow, drv, { jobs, shots, log });
+    const { runs, errors } = await captureFlow(flow, drv, { jobs, shots, log });
+    for (const error of errors) log(`  ${app}: ${error}`);
+    failed = errors.length > 0;
     // A flow without goldens is a smoke target: rendered/wedged/missing/fps, no pixel score. So
     // is a flow the run pinned to some other geometry: the goldens are pixels at one size, so a
     // run at any other size measures cost, never fidelity — and saying so here means the gate
@@ -44,20 +46,20 @@ async function runFlow(app: string): Promise<Outcome> {
   } finally {
     await drv.close();
   }
-  return { app, scored, lines, ms: Date.now() - t0 };
+  return { app, scored, lines, ms: Date.now() - t0, failed: failed || undefined };
 }
 
 const weight = (app: string) => FLOWS.find((f) => f.app === app)!.steps.reduce((a, s) => a + waitHorizonMs(s.wait) + 1000, 0);
 const t0 = Date.now();
 const outcomes = await runQueue(flows.map((f) => f.app), jobs, weight, runFlow,
-  (app, error): Outcome => ({ app, scored: false, lines: [`\n--- ${app} aborted: ${String(error).split("\n", 1)[0]}`], ms: 0, aborted: true }),
+  (app, error): Outcome => ({ app, scored: false, lines: [`\n--- ${app} aborted: ${String(error).split("\n", 1)[0]}`], ms: 0, failed: true }),
   (o) => console.log(`\n${o.lines.join("\n")}\n  (${(o.ms / 1000).toFixed(1)}s)`));
-const aborted = outcomes.filter((o) => o.aborted).map((o) => o.app);
+const failed = outcomes.filter((o) => o.failed).map((o) => o.app);
 
 const scoredApps = outcomes.filter((o) => o.scored).map((o) => o.app);
 if (!scoredApps.length) {
   console.log(`\nno scored flows; see tests/e2e/actual/<flow>/run.json  (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
-  process.exit(aborted.length ? 1 : 0);
+  process.exit(failed.length ? 1 : 0);
 }
 const { out, reports } = await assembleReport(scoredApps, screenParam(pinned ?? screenOf(await loadManifest(scoredApps[0]))));
 // Smoke flows and launch-only references never appear in the full report.
@@ -81,4 +83,4 @@ for (const r of reports) {
 console.log(`  ${"OVERALL".padEnd(18)} content ${overall.toFixed(2)}%   (the target metric)`);
 console.log(`${"=".repeat(60)}\nreport: ${out}   (${((Date.now() - t0) / 1000).toFixed(1)}s, ${jobs} jobs, ${cpus().length} cpus)`);
 if (shots) console.log(`frames: ${shots}/`);
-if (aborted.length) { console.error(`aborted: ${aborted.join(", ")}`); process.exit(1); }
+if (failed.length) { console.error(`failed: ${failed.join(", ")}`); process.exit(1); }

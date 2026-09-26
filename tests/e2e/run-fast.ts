@@ -97,9 +97,9 @@ async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
   const manifest = await loadManifest(flow.app);
   const driver = await launchFor(flow, manifest, false, flow.clock === "controlled");
   const started = performance.now();
-  let runs: StepRun[] = [];
+  let runs: StepRun[] = [], captureErrors: string[] = [];
   try {
-    runs = await captureFlow(selected, driver, { jobs: effectiveJobs, mode: "fast", log: () => {} });
+    ({ runs, errors: captureErrors } = await captureFlow(selected, driver, { jobs: effectiveJobs, mode: "fast", log: () => {} }));
   } finally {
     await driver.close();
   }
@@ -107,7 +107,7 @@ async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
   const observed = diagnostics(selected, runs);
   const browserErrors = browserFailures(flow, driver.errors);
   return { flow, runs, visual: visual.checks,
-    errors: [...observed.errors, ...visual.errors, ...(flow.clock === "live" ? [] : browserErrors)],
+    errors: [...captureErrors, ...observed.errors, ...visual.errors, ...(flow.clock === "live" ? [] : browserErrors)],
     gaps: [...observed.gaps, ...(flow.clock === "live" ? browserErrors : [])], ms: performance.now() - started };
 }
 
