@@ -5,7 +5,7 @@ import { readdirSync } from "node:fs";
 import { argv } from "./args";
 import { BASE_URL } from "../tests/e2e/lib/util";
 import { launchBrowser, CONTEXT_OPTS } from "../tests/e2e/drivers/webdroid";
-import { isWebdroidProcessFrame, readProcesses, type ProcessSnapshot } from "../tests/e2e/lib/processes";
+import { readProcesses, type ProcessSnapshot } from "../tests/e2e/lib/processes";
 
 const args = process.argv.slice(2);
 const { opt, positional } = argv(args, ["--json", "--wait", "--observe"]);
@@ -55,8 +55,7 @@ async function boot(page: Page, apk: string): Promise<Row> {
     row.note = String(e).split("\n")[0].slice(0, 160);
     row.errors = errors.slice(0, 6);
   }
-  row.processes = await readProcesses(page);
-  const relevant = row.processes.filter((process) => isWebdroidProcessFrame(process.url, BASE_URL));
+  const relevant = row.processes = await readProcesses(page);
   const available = relevant.flatMap((process) => process.diagnostics.status === "ok" ? [process.diagnostics] : []);
   row.diagnostics = relevant.length > 0 && available.length === relevant.length ? "ok" : "unavailable";
   row.missing = [...new Set([...row.missing, ...available.flatMap((diagnostics) => diagnostics.missing)])];

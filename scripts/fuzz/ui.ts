@@ -8,7 +8,6 @@ import type { UiNode } from "../../tests/e2e/types";
 import { Random } from "./random";
 import { matchIdentity, semanticKeys, validateUiAction, type UiAction } from "./ui-model";
 import { UiExplorer, type UiPrefix } from "./ui-explorer";
-import { isWebdroidProcessFrame } from "./webdroid-session";
 import { inspectUiApp, openUiTargets, type UiApp } from "./ui-targets";
 import { sameFailure, validateFailure, type Failure } from "./model";
 import { injectedUiFailure } from "./injected";
@@ -141,8 +140,7 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
   try {
     environment.webdroid = { origin: web.origin, userAgent: await web.page.evaluate(() => navigator.userAgent) };
     if (android) environment.android = android.environment;
-    const bootProcesses = (await readProcesses(web.page)).filter((process) =>
-      isWebdroidProcessFrame(process.url, web.origin));
+    const bootProcesses = await readProcesses(web.page);
     const bootSignals = [...processSignals(bootProcesses), ...web.errors.map((error) => `page-error:${error}`)];
     environment.bootSignals = bootSignals;
     for (const signal of bootSignals) seenSignals.add(signal);
@@ -184,11 +182,10 @@ async function runApk(app: UiApp, options: UiOptions, apkIndex: number, plan: Ui
         break;
       }
       await Bun.sleep(250);
-      const [androidPng, webPng, processes, alive, nextWebTree, postAndroidNodes] = await Promise.all([
+      const [androidPng, webPng, relevant, alive, nextWebTree, postAndroidNodes] = await Promise.all([
         android?.screenshot(), web.screenshot(), readProcesses(web.page), web.alive(), web.tree(), android?.tree(),
       ]);
       nextAndroidNodes = postAndroidNodes;
-      const relevant = processes.filter((process) => isWebdroidProcessFrame(process.url, web.origin));
       if (!relevant.length || relevant.some((process) => process.diagnostics.status !== "ok"))
         throw new Error(`missing process telemetry at UI step ${index}: ${relevant.map((process) =>
           `${process.url}: ${process.diagnostics.status === "failure" ? process.diagnostics.message : process.diagnostics.status}`).join("; ")}`);

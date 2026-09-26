@@ -4,7 +4,7 @@ import { device } from "../../src/shell/config";
 import { readProcesses } from "../../tests/e2e/lib/processes";
 import { serveCases } from "./case-server";
 import type { ProbeCase, ProbeResult } from "./model";
-import { isWebdroidProcessFrame, startWebdroid } from "./webdroid-session";
+import { startWebdroid } from "./webdroid-session";
 
 const PROBE_APK = "fuzz-cache/WebdroidFuzzProbe.apk";
 const PROBE_PACKAGE = "org.webdroid.fuzz";
@@ -65,17 +65,15 @@ export async function runAndroid(cases: readonly ProbeCase[], serial: string): P
 
 async function webdroidRun(session: Awaited<ReturnType<typeof startWebdroid>>, results: ProbeResult[]): Promise<PlatformRun> {
     const { origin, page, errors } = session;
-    let processes = await readProcesses(page);
-    let processFrames = processes.filter((process) => isWebdroidProcessFrame(process.url, origin));
+    let processFrames = await readProcesses(page);
     let missingDiagnostics = processFrames.filter((process) => process.diagnostics.status !== "ok");
     for (let attempt = 0; missingDiagnostics.length && attempt < 10; attempt++) {
       await Bun.sleep(250);
-      processes = await readProcesses(page);
-      processFrames = processes.filter((process) => isWebdroidProcessFrame(process.url, origin));
+      processFrames = await readProcesses(page);
       missingDiagnostics = processFrames.filter((process) => process.diagnostics.status !== "ok");
     }
     if (!processFrames.length || missingDiagnostics.length)
-      throw new Error(`missing process diagnostics: ${JSON.stringify(missingDiagnostics.length ? missingDiagnostics : processes)}`);
+      throw new Error(`missing process diagnostics: ${JSON.stringify(missingDiagnostics)}`);
     const alive = await page.evaluate(() => globalThis.wd!.alive(2_000));
     return {
       platform: "webdroid", results,

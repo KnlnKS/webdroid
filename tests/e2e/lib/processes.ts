@@ -16,14 +16,16 @@ export type ProcessDiagnostics = {
 
 export type ProcessSnapshot = { url: string; diagnostics: ProcessDiagnostics };
 
-export function isWebdroidProcessFrame(url: string, origin: string): boolean {
+function isWebdroidProcessFrame(url: string, origin: string): boolean {
   if (!URL.canParse(url)) return false;
   const frame = new URL(url), root = new URL(origin);
   return frame.origin === root.origin && (frame.pathname === "/" || frame.pathname === "/process");
 }
 
+/** Diagnostics from every webdroid process frame (the shell and its /process children). */
 export async function readProcesses(page: Page): Promise<ProcessSnapshot[]> {
-  return Promise.all(page.frames().map(async (frame) => {
+  const origin = new URL(page.url()).origin;
+  return Promise.all(page.frames().filter((frame) => isWebdroidProcessFrame(frame.url(), origin)).map(async (frame) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const read = () => frame.evaluate(() => {
