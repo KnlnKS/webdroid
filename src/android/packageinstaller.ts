@@ -71,7 +71,7 @@ rt.register({ name: "android/content/pm/PackageInstaller$Session", ctor: JSessio
 });
 class JPackageInstaller extends JObj {}
 const installer = new JPackageInstaller();
-export const getPackageInstaller = () => { rt.link("android/content/pm/PackageInstaller"); return installer; };
+export function getPackageInstaller() { rt.link("android/content/pm/PackageInstaller"); return installer; }
 rt.register({ name: "android/content/pm/PackageInstaller", ctor: JPackageInstaller,
   statics: { STATUS_PENDING_USER_ACTION: -1, STATUS_SUCCESS: 0, STATUS_FAILURE: 1, STATUS_FAILURE_INVALID: 4,
     EXTRA_STATUS: "android.content.pm.extra.STATUS", EXTRA_STATUS_MESSAGE: "android.content.pm.extra.STATUS_MESSAGE", EXTRA_SESSION_ID: "android.content.pm.extra.SESSION_ID", EXTRA_PACKAGE_NAME: "android.content.pm.extra.PACKAGE_NAME" },
