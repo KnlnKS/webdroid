@@ -18,15 +18,16 @@ class JFragmentTransaction extends JObj {
   fm: JFragmentManager | null = null;
   ops: FragOp[] = [];
 }
-async function runFragmentAdd(fm: JFragmentManager, frag: JFragment, containerId: number) {
+function runFragmentAdd(fm: JFragmentManager, frag: JFragment, containerId: number): unknown { return rt.drive(runFragmentAdd$(fm, frag, containerId)); }
+function* runFragmentAdd$(fm: JFragmentManager, frag: JFragment, containerId: number): Gen {
   const act = fm.act;
   frag.containerId = containerId;
   fm.active.push(frag);
-  await vcall(frag, "onAttach", "(Landroid/app/Activity;)V", act);
-  await vcall(frag, "onCreate", "(Landroid/os/Bundle;)V", null);
+  (yield vcall(frag, "onAttach", "(Landroid/app/Activity;)V", act));
+  (yield vcall(frag, "onCreate", "(Landroid/os/Bundle;)V", null));
   const container = containerId && act?.window?.decor ? findById(act.window.decor, containerId) as JViewGroup | null : null;
-  const view = await vcall(frag, "onCreateView", "(Landroid/view/LayoutInflater;Landroid/view/ViewGroup;Landroid/os/Bundle;)Landroid/view/View;",
-    getInflater(act), container, null) as JView | null;
+  const view = (yield vcall(frag, "onCreateView", "(Landroid/view/LayoutInflater;Landroid/view/ViewGroup;Landroid/os/Bundle;)Landroid/view/View;",
+    getInflater(act), container, null)) as JView | null;
   frag.attachedView = view;
   if (view && container) {
     if (!view.lp) {
@@ -34,24 +35,26 @@ async function runFragmentAdd(fm: JFragmentManager, frag: JFragment, containerId
       lp.width = -1; lp.height = -1;
       view.lp = lp;
     }
-    await attachView(container, view);
+    (yield attachView(container, view));
   }
-  await vcall(frag, "onViewCreated", "(Landroid/view/View;Landroid/os/Bundle;)V", view, null);
-  await vcall(frag, "onActivityCreated", "(Landroid/os/Bundle;)V", null);
-  if (act?.started) await vcall(frag, "onStart", "()V");
-  if (act?.resumed) await vcall(frag, "onResume", "()V");
+  (yield vcall(frag, "onViewCreated", "(Landroid/view/View;Landroid/os/Bundle;)V", view, null));
+  (yield vcall(frag, "onActivityCreated", "(Landroid/os/Bundle;)V", null));
+  if (act?.started) (yield vcall(frag, "onStart", "()V"));
+  if (act?.resumed) (yield vcall(frag, "onResume", "()V"));
 }
-async function runFragmentRemove(fm: JFragmentManager, frag: JFragment) {
+function runFragmentRemove(fm: JFragmentManager, frag: JFragment): unknown { return rt.drive(runFragmentRemove$(fm, frag)); }
+function* runFragmentRemove$(fm: JFragmentManager, frag: JFragment): Gen {
   removeFrom(fm.active, frag);
-  await vcall(frag, "onPause", "()V");
-  await vcall(frag, "onStop", "()V");
-  await vcall(frag, "onDestroyView", "()V");
-  if (frag.attachedView?.parent) await detachView(frag.attachedView.parent as JViewGroup, frag.attachedView);
+  (yield vcall(frag, "onPause", "()V"));
+  (yield vcall(frag, "onStop", "()V"));
+  (yield vcall(frag, "onDestroyView", "()V"));
+  if (frag.attachedView?.parent) (yield detachView(frag.attachedView.parent as JViewGroup, frag.attachedView));
   frag.attachedView = null;
-  await vcall(frag, "onDestroy", "()V");
-  await vcall(frag, "onDetach", "()V");
+  (yield vcall(frag, "onDestroy", "()V"));
+  (yield vcall(frag, "onDetach", "()V"));
 }
-async function runFragmentTransaction(tx: JFragmentTransaction): Promise<number> {
+function runFragmentTransaction(tx: JFragmentTransaction): number | Promise<number> { return rt.drive(runFragmentTransaction$(tx)); }
+function* runFragmentTransaction$(tx: JFragmentTransaction): Gen<number> {
   const fm = tx.fm;
   if (!fm) return 0;
   for (const op of tx.ops) {
@@ -59,13 +62,13 @@ async function runFragmentTransaction(tx: JFragmentTransaction): Promise<number>
     if (op.tag !== undefined) op.frag.tag = op.tag;
     if (op.kind === "replace") {
       const container = op.containerId && fm.act?.window?.decor ? findById(fm.act.window.decor, op.containerId) as JViewGroup | null : null;
-      for (const old of [...fm.active]) if (old.containerId === op.containerId) await runFragmentRemove(fm, old);
-      if (container) for (const v of [...container.children]) await detachView(container, v);
-      await runFragmentAdd(fm, op.frag, op.containerId);
+      for (const old of [...fm.active]) if (old.containerId === op.containerId) (yield runFragmentRemove(fm, old));
+      if (container) for (const v of [...container.children]) (yield detachView(container, v));
+      (yield runFragmentAdd(fm, op.frag, op.containerId));
     } else if (op.kind === "add") {
-      await runFragmentAdd(fm, op.frag, op.containerId);
+      (yield runFragmentAdd(fm, op.frag, op.containerId));
     } else {
-      await runFragmentRemove(fm, op.frag);
+      (yield runFragmentRemove(fm, op.frag));
     }
   }
   // the views added and removed above asked for layout themselves, as AOSP's do
@@ -109,11 +112,12 @@ rt.register({
     "popBackStackImmediate()Z": () => 0,
   },
 });
-export async function dispatchFragLifecycle(act: JActivity, method: string): Promise<void> {
+export function dispatchFragLifecycle(act: JActivity, method: string): void | Promise<void> { return rt.drive(dispatchFragLifecycle$(act, method)); }
+function* dispatchFragLifecycle$(act: JActivity, method: string): Gen<void> {
   const active = act.fragMgr?.active;
   if (!active?.length) return;
   for (const f of [...active]) {
-    try { await vcall(f, method, "()V"); } catch (e) { reportUncaught(e); }
+    try { (yield vcall(f, method, "()V")); } catch (e) { reportUncaught(e); }
   }
 }
 

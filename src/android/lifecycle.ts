@@ -1,3 +1,4 @@
+import { rt, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { curThread, mainThread } from "../jvm/natives/jlang";
 import type { NativeSpec } from "../jvm/runtime";
@@ -30,25 +31,28 @@ function markDelivered(callback: ActivityLifecycleCallback, activity: JActivity,
   activities.set(activity, (activities.get(activity) ?? 0) | phaseBit[phase]);
 }
 
-async function invokeVariant(callback: ActivityLifecycleCallback, variant: string, signature: string, args: unknown[]): Promise<void> {
+function invokeVariant(callback: ActivityLifecycleCallback, variant: string, signature: string, args: unknown[]): void | Promise<void> { return rt.drive(invokeVariant$(callback, variant, signature, args)); }
+function* invokeVariant$(callback: ActivityLifecycleCallback, variant: string, signature: string, args: unknown[]): Gen<void> {
   const fn: unknown = Reflect.get(callback, mangleMethod(variant, signature));
   if (typeof fn !== "function") return;
   try {
     const result: unknown = Reflect.apply(fn, callback, args);
-    if (result instanceof Promise) await result;
+    if (result instanceof Promise) (yield result);
   } catch (error) {
     reportUncaught(error);
   }
 }
 
-async function catchUp(callback: ActivityLifecycleCallback, activity: JActivity, phase: "Started" | "Resumed"): Promise<void> {
+function catchUp(callback: ActivityLifecycleCallback, activity: JActivity, phase: "Started" | "Resumed"): void | Promise<void> { return rt.drive(catchUp$(callback, activity, phase)); }
+function* catchUp$(callback: ActivityLifecycleCallback, activity: JActivity, phase: "Started" | "Resumed"): Gen<void> {
   markDelivered(callback, activity, phase);
   for (const variant of [`onActivityPre${phase}`, `onActivity${phase}`, `onActivityPost${phase}`])
-    await invokeVariant(callback, variant, "(Landroid/app/Activity;)V", [activity]);
+    (yield invokeVariant(callback, variant, "(Landroid/app/Activity;)V", [activity]));
 }
 
 /** Dispatch each framework stage to a fresh snapshot, matching Application's three dispatch passes. */
-export async function fireActivityLifecycle(activity: JActivity, phase: LifecyclePhase, bundle: unknown = null): Promise<void> {
+export function fireActivityLifecycle(activity: JActivity, phase: LifecyclePhase, bundle: unknown = null): void | Promise<void> { return rt.drive(fireActivityLifecycle$(activity, phase, bundle)); }
+function* fireActivityLifecycle$(activity: JActivity, phase: LifecyclePhase, bundle: unknown = null): Gen<void> {
   const signature = phase === "Created"
     ? "(Landroid/app/Activity;Landroid/os/Bundle;)V"
     : "(Landroid/app/Activity;)V";
@@ -60,7 +64,7 @@ export async function fireActivityLifecycle(activity: JActivity, phase: Lifecycl
     ];
     for (const callback of callbacks) {
       markDelivered(callback, activity, phase);
-      await invokeVariant(callback, variant, signature, args);
+      (yield invokeVariant(callback, variant, signature, args));
     }
   }
 }

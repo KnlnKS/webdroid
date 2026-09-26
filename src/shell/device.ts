@@ -1,7 +1,7 @@
 // Device shell: APK boot, activity stack, frame loop, touch routing.
 
 import { dexesIn } from "../jvm/dex";
-import { rt, type JObj } from "../jvm/runtime";
+import { rt, type JObj, type Gen } from "../jvm/runtime";
 import { vfs, apkPath } from "../jvm/natives/jio";
 import { openInstall, type Install } from "./install";
 import { vcall, vcallOn, callOn, curThread, mainThread, setCurThread, JThrowable, stackTraceText } from "../jvm/natives/jlang";
@@ -288,7 +288,8 @@ function launchActivity(cls: string, intent: JIntent | null, options?: ActivityL
   };
   return inMainJob() ? run() : onMain(run);
 }
-async function launchActivity0(component: string, intent: JIntent | null, relaunch?: Relaunch, options?: ActivityLaunch) {
+function launchActivity0(component: string, intent: JIntent | null, relaunch?: Relaunch, options?: ActivityLaunch): unknown { return rt.drive(launchActivity0$(component, intent, relaunch, options)); }
+function* launchActivity0$(component: string, intent: JIntent | null, relaunch?: Relaunch, options?: ActivityLaunch): Gen {
   if (!booted) return;
   const host = booted.host;
   const cls = aliasTargets.get(component) ?? component;
@@ -299,7 +300,7 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
   // still leaves a frame on a device, and it is the frame this shows.
   if (!booted.stack.length) {
     try {
-      startWin = await startingWindow(host, cls);
+      startWin = (yield startingWindow(host, cls));
       uiState.needsDraw = true;
     } catch (e) { console.warn("[starting window]", e); }
   }
@@ -310,7 +311,7 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
   try {
     const info = rt.link(cls);
     const p = rt.initClass(info);
-    if (p) await p;
+    if (p) (yield p);
     act = new info.ctor();
   } catch (e) {
     reportUncaught(e);
@@ -330,35 +331,35 @@ async function launchActivity0(component: string, intent: JIntent | null, relaun
   act.lastNonConfig = relaunch?.nonConfig ?? null;
   const saved = relaunch?.state ?? null;
   try {
-    await vcall(act, "<init>", "()V");
+    (yield vcall(act, "<init>", "()V"));
     // Activity.attach(): the base context arrives before the manifest theme, which AOSP applies
     // before onCreate so an app's own setTheme layers on top of it rather than replacing it
     const baseCtx = new JContext();
     baseCtx.$host = host;
-    await vcall(act, "attachBaseContext", "(Landroid/content/Context;)V", baseCtx);
+    (yield vcall(act, "attachBaseContext", "(Landroid/content/Context;)V", baseCtx));
     const actTheme = manifestActivityTheme(cls);
     if (actTheme) vcall(act, "setTheme", "(I)V", actTheme);
     act.window.activity = act;
     getInflater(act).privateFactory = act;
     act.intent = intent;
     const prev = booted.stack.at(-1);
-    if (prev?.resumed) { await pauseActivity(prev); await windowFocus(prev, false); }
+    if (prev?.resumed) { (yield pauseActivity(prev)); (yield windowFocus(prev, false)); }
     booted.stack.push(act);
-    await safeCall(act, "onCreate", "(Landroid/os/Bundle;)V", saved);
+    (yield safeCall(act, "onCreate", "(Landroid/os/Bundle;)V", saved));
     // onCreate may set the window theme before its first getDecorView/setContentView.
-    await ensureDecor(act);
-    await fireActivityLifecycle(act, "Created", saved);
+    (yield ensureDecor(act));
+    (yield fireActivityLifecycle(act, "Created", saved));
     // Android dispatches onAttachedToWindow after onCreate, before onStart, even if a later
     // lifecycle callback throws.
-    if (act.window.decor) await dispatchAttached(act.window.decor);
-    await lifecycleStep(act, "onStart", "Started");
-    await safeCall(act, "onPostCreate", "(Landroid/os/Bundle;)V", saved);
-    await lifecycleStep(act, "onResume", "Resumed");
-    await safeCall(act, "onPostResume");
-    await windowFocus(act, true);
+    if (act.window.decor) (yield dispatchAttached(act.window.decor));
+    (yield lifecycleStep(act, "onStart", "Started"));
+    (yield safeCall(act, "onPostCreate", "(Landroid/os/Bundle;)V", saved));
+    (yield lifecycleStep(act, "onResume", "Resumed"));
+    (yield safeCall(act, "onPostResume"));
+    (yield windowFocus(act, true));
     // AOSP stops the covered activity only once the new one is up
     if (!act.window.translucent) {
-      for (const covered of booted.stack.slice(0, -1)) if (covered.started) await stopActivity(covered);
+      for (const covered of booted.stack.slice(0, -1)) if (covered.started) (yield stopActivity(covered));
     }
     void buildOptionsMenu(act);
     invalidateWindow();
@@ -442,64 +443,71 @@ function recreateActivity(act: JActivity): void {
   }), 0);
 }
 
-async function safeCall(act: JActivity, method: string, desc = "()V", ...args: unknown[]) {
-  try { await vcall(act, method, desc, ...args); } catch (e) { reportUncaught(e); }
+function safeCall(act: JActivity, method: string, desc = "()V", ...args: unknown[]): unknown { return rt.drive(safeCall$(act, method, desc, ...args)); }
+function* safeCall$(act: JActivity, method: string, desc = "()V", ...args: unknown[]): Gen {
+  try { (yield vcall(act, method, desc, ...args)); } catch (e) { reportUncaught(e); }
 }
-async function lifecycleStep(act: JActivity, method: string, phase: Parameters<typeof fireActivityLifecycle>[1]) {
-  await safeCall(act, method);
-  await fireActivityLifecycle(act, phase);
+function lifecycleStep(act: JActivity, method: string, phase: Parameters<typeof fireActivityLifecycle>[1]): unknown { return rt.drive(lifecycleStep$(act, method, phase)); }
+function* lifecycleStep$(act: JActivity, method: string, phase: Parameters<typeof fireActivityLifecycle>[1]): Gen {
+  (yield safeCall(act, method));
+  (yield fireActivityLifecycle(act, phase));
 }
 const pauseActivity = (act: JActivity) => lifecycleStep(act, "onPause", "Paused");
 const stopActivity = (act: JActivity) => lifecycleStep(act, "onStop", "Stopped");
 /** Returning to a covered activity: onRestart → onStart → onResume → onPostResume, with the
  *  ActivityLifecycleCallbacks a fresh launch fires. */
-async function resumeActivity(act: JActivity) {
-  await startActivity(act);
-  if (!act.resumed) await lifecycleStep(act, "onResume", "Resumed");
-  await safeCall(act, "onPostResume");
+function resumeActivity(act: JActivity): unknown { return rt.drive(resumeActivity$(act)); }
+function* resumeActivity$(act: JActivity): Gen {
+  (yield startActivity(act));
+  if (!act.resumed) (yield lifecycleStep(act, "onResume", "Resumed"));
+  (yield safeCall(act, "onPostResume"));
 }
-async function startActivity(act: JActivity) {
+function startActivity(act: JActivity): unknown { return rt.drive(startActivity$(act)); }
+function* startActivity$(act: JActivity): Gen {
   if (!act.started) {
-    await safeCall(act, "onRestart");
-    await lifecycleStep(act, "onStart", "Started");
+    (yield safeCall(act, "onRestart"));
+    (yield lifecycleStep(act, "onStart", "Started"));
   }
 }
-async function resumeTop(top: JActivity) {
+function resumeTop(top: JActivity): unknown { return rt.drive(resumeTop$(top)); }
+function* resumeTop$(top: JActivity): Gen {
   applyOrientationRequest(top.requestedOrientation);
-  for (const act of visibleActivities()) if (act !== top) await startActivity(act);
-  await resumeActivity(top);
-  await windowFocus(top, true);
+  for (const act of visibleActivities()) if (act !== top) (yield startActivity(act));
+  (yield resumeActivity(top));
+  (yield windowFocus(top, true));
   void buildOptionsMenu(top);
 }
 /** ViewRootImpl reports window focus once the resumed activity's window is up and takes it
  *  away when another window covers it; only a change is delivered. */
-async function windowFocus(act: JActivity, has: boolean) {
+function windowFocus(act: JActivity, has: boolean): unknown { return rt.drive(windowFocus$(act, has)); }
+function* windowFocus$(act: JActivity, has: boolean): Gen {
   if (act.hasWindowFocus === has) return;
   act.hasWindowFocus = has;
   const z = has ? 1 : 0;
   try {
-    await vcall(act, "onWindowFocusChanged", "(Z)V", z);
-    if (act.window.decor) await vcall(act.window.decor, "dispatchWindowFocusChanged", "(Z)V", z);
+    (yield vcall(act, "onWindowFocusChanged", "(Z)V", z));
+    if (act.window.decor) (yield vcall(act.window.decor, "dispatchWindowFocusChanged", "(Z)V", z));
   } catch (e) { reportUncaught(e); }
 }
 
-async function finishActivity(act: JActivity, resume = true) {
+function finishActivity(act: JActivity, resume = true): unknown { return rt.drive(finishActivity$(act, resume)); }
+function* finishActivity$(act: JActivity, resume = true): Gen {
   if (!booted) return;
   const i = booted.stack.indexOf(act);
   if (i < 0) return;
   booted.stack.splice(i, 1);
   act.finished = true;
-  if (act.resumed) await pauseActivity(act);
-  await windowFocus(act, false);
+  if (act.resumed) (yield pauseActivity(act));
+  (yield windowFocus(act, false));
   const remote = activityTransport.finish?.(act) ?? false;
   const top = booted.stack.at(-1);
-  if (top && !top.finished && !remote && resume) await resumeTop(top);
+  if (top && !top.finished && !remote && resume) (yield resumeTop(top));
   // AOSP hands the result to the launcher once it is back up, before the finished instance dies.
   if (act.resultTo) deliverActivityResult(act.resultTo.act, act.resultTo.code, act.resultCode, act.resultData);
-  if (act.window.decor) await dispatchDetached(act.window.decor);
-  if (act.started) await stopActivity(act);
-  await lifecycleStep(act, "onDestroy", "Destroyed");
-  await detachContextOverlays(act);
+  if (act.window.decor) (yield dispatchDetached(act.window.decor));
+  if (act.started) (yield stopActivity(act));
+  (yield lifecycleStep(act, "onDestroy", "Destroyed"));
+  (yield detachContextOverlays(act));
   invalidateWindow();
 }
 
@@ -533,14 +541,15 @@ export function activityVisibility(phase: "pause" | "stop" | "resume" | "visible
   });
 }
 
-async function buildOptionsMenu(act: JActivity) {
+function buildOptionsMenu(act: JActivity): unknown { return rt.drive(buildOptionsMenu$(act)); }
+function* buildOptionsMenu$(act: JActivity): Gen {
   if (!act.window.actionBarView) return;
   const menu = new JMenu();
   menu.bar = act.window.actionBarView;
   act.optionsMenu = menu;
   try {
-    await vcall(act, "onCreatePanelMenu", "(ILandroid/view/Menu;)Z", 0, menu);
-    await vcall(act, "onPreparePanel", "(ILandroid/view/View;Landroid/view/Menu;)Z", 0, null, menu);
+    (yield vcall(act, "onCreatePanelMenu", "(ILandroid/view/Menu;)Z", 0, menu));
+    (yield vcall(act, "onPreparePanel", "(ILandroid/view/View;Landroid/view/Menu;)Z", 0, null, menu));
   } catch (e) { reportUncaught(e); }
   pushMenuToBar(menu);
 }
@@ -551,7 +560,8 @@ async function buildOptionsMenu(act: JActivity) {
 export function pressBack(): Promise<void> {
   return onMain(pressBack0);
 }
-async function pressBack0() {
+function pressBack0(): void | Promise<void> { return rt.drive(pressBack0$()); }
+function* pressBack0$(): Gen<void> {
   // the topmost window takes the key: a dialog or popup before the activity under it
   let top;
   for (let i = overlays.length - 1; i >= 0; i--) {
@@ -559,9 +569,9 @@ async function pressBack0() {
   }
   const act = booted?.stack.at(-1);
   try {
-    if (top?.onBack) await top.onBack();
-    else if (top?.dismissOnOutside) await dismissOverlay(top);
-    else if (act) await vcall(act, "onBackPressed", "()V");
+    if (top?.onBack) (yield top.onBack());
+    else if (top?.dismissOnOutside) (yield dismissOverlay(top));
+    else if (act) (yield vcall(act, "onBackPressed", "()V"));
   } catch (e) { reportUncaught(e); }
 }
 
@@ -572,14 +582,15 @@ let drawing = false;
  *  run. It is not the app drawing, so it deliberately does not count in perf.draws — corpus
  *  reads that to mean "this apk got far enough to render", and it must keep meaning it. */
 let startWin: { view: JView; fullscreen: boolean } | null = null;
-async function drawStartWin(w: { view: JView; fullscreen: boolean }) {
+function drawStartWin(w: { view: JView; fullscreen: boolean }): unknown { return rt.drive(drawStartWin$(w)); }
+function* drawStartWin$(w: { view: JView; fullscreen: boolean }): Gen {
   const contentY = w.fullscreen ? 0 : STATUS_H, ctx = frame;
   ctx.save();
   try {
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
     ctx.translate(0, contentY);
-    await drawView(w.view, JCanvas.wrap(ctx, SCREEN_W, SCREEN_H - contentY));
+    (yield drawView(w.view, JCanvas.wrap(ctx, SCREEN_W, SCREEN_H - contentY)));
     ctx.resetTransform();
     const bars = resolveSystemBars(w.view, []);
     drawSystemBarBackgrounds(ctx, bars);
@@ -599,7 +610,8 @@ export async function tick() {
   // and stop every later frame.
   try { await onMain(tick0); } finally { drawing = false; }
 }
-async function tick0() {
+function tick0(): unknown { return rt.drive(tick0$()); }
+function* tick0$(): Gen {
   const ctx = frame;
   try {
     // choreographer + animation callbacks. One timestamp for the whole frame, as AOSP's
@@ -611,9 +623,9 @@ async function tick0() {
     for (const cb of cbs as { frame?: any; run?: any; vsync?: JObj }[]) {
       mainDbg.phase = "frame:" + ((cb.frame ?? cb.run ?? cb.vsync)?.constructor?.$i?.name ?? "?");
       try {
-        if (cb.frame) await guardCall(cb.frame, M_doFrame, uiState.frameTimeNanos);
-        else if (cb.vsync) await dispatchVsync(cb.vsync, presentation);
-        else if (cb.run) await vcall(cb.run, "run", "()V");
+        if (cb.frame) (yield guardCall(cb.frame, M_doFrame, uiState.frameTimeNanos));
+        else if (cb.vsync) (yield dispatchVsync(cb.vsync, presentation));
+        else if (cb.run) (yield vcall(cb.run, "run", "()V"));
       } catch (e) { reportUncaught(e); }
     }
 
@@ -627,7 +639,7 @@ async function tick0() {
     if (!decor) {
       if (startWin && uiState.needsDraw) {
         uiState.needsDraw = false;
-        await drawStartWin(startWin);
+        (yield drawStartWin(startWin));
       }
       return;
     }
@@ -640,7 +652,7 @@ async function tick0() {
       perf.insetsPasses++;
       mainDbg.phase = "insets";
       try {
-        for (const activity of activities) if (activity.window.decor) await dispatchWindowInsets(activity.window.decor);
+        for (const activity of activities) if (activity.window.decor) (yield dispatchWindowInsets(activity.window.decor));
       } catch (e) { console.error("[insets]", e); }
       uiState.needsLayout = true;
     }
@@ -661,9 +673,9 @@ async function tick0() {
           const root = activity.window.decor;
           if (!root) continue;
           mainDbg.phase = "measure";
-          await measureView(root, makeSpec(SCREEN_W, MS_EXACTLY), makeSpec(SCREEN_H, MS_EXACTLY));
+          (yield measureView(root, makeSpec(SCREEN_W, MS_EXACTLY), makeSpec(SCREEN_H, MS_EXACTLY)));
           mainDbg.phase = "layout";
-          await layoutRoot(root, 0, 0, SCREEN_W, SCREEN_H);
+          (yield layoutRoot(root, 0, 0, SCREEN_W, SCREEN_H));
         }
         mainDbg.phase = "overlays";
         for (const o of overlays) {
@@ -671,7 +683,7 @@ async function tick0() {
           const visible = win?.fitInsetsIgnoringVisibility ? ~0 : rootWindowInsets(o.view).vis;
           const top = floating && (win.fitInsetsSides & 2) && (win.fitInsetsTypes & visible & 1) ? STATUS_H : 0;
           const bottom = floating && (win.fitInsetsSides & 8) && (win.fitInsetsTypes & visible & 2) ? device.navBar : 0;
-          await measureView(o.view, makeSpec(SCREEN_W, 0x80000000 | 0), makeSpec(SCREEN_H - top - bottom, 0x80000000 | 0));
+          (yield measureView(o.view, makeSpec(SCREEN_W, 0x80000000 | 0), makeSpec(SCREEN_H - top - bottom, 0x80000000 | 0)));
           if (floating) {
             const gravity = win!.gravity;
             o.x = (gravity & 7) === 3 ? 0 : (gravity & 7) === 5 ? SCREEN_W - o.view.measuredW : (SCREEN_W - o.view.measuredW) >> 1;
@@ -685,18 +697,18 @@ async function tick0() {
           o.y = Math.max(0, Math.min(o.y, SCREEN_H - o.view.measuredH));
           const right = o.x + o.view.measuredW, bottomEdge = o.y + o.view.measuredH;
           const frameChanged = o.view.left !== o.x || o.view.top !== o.y || o.view.right !== right || o.view.bottom !== bottomEdge;
-          await layoutRoot(o.view, o.x, o.y, right, bottomEdge);
+          (yield layoutRoot(o.view, o.x, o.y, right, bottomEdge));
           // Floating windows need their final frame to calculate window-local bar insets.
-          if (insetsChanged || frameChanged) await dispatchWindowInsets(o.view);
+          if (insetsChanged || frameChanged) (yield dispatchWindowInsets(o.view));
         }
         mainDbg.phase = "globalLayout";
-        for (const activity of activities) if (activity.window.decor) await fireGlobalLayout(activity.window.decor);
+        for (const activity of activities) if (activity.window.decor) (yield fireGlobalLayout(activity.window.decor));
       } catch (e) {
         // A subtree that cannot measure costs a frame, not the session: fall through and draw
         // whatever DID lay out. Re-arming needsLayout here would turn a deterministic throw
         // into a 60fps exception storm; the next real requestLayout() recovers.
         perf.layoutErrors++;
-        console.error("[layout]", e instanceof JThrowable ? await stackTraceText(e) : e);
+        console.error("[layout]", e instanceof JThrowable ? (yield stackTraceText(e)) : e);
       }
       mainDbg.phase = "replay";
       replayLayoutRequests();
@@ -721,9 +733,9 @@ async function tick0() {
             const root = activity.window.decor;
             if (!root) continue;
             mainDbg.phase = "preDraw";
-            await fireDrawPass(root);
+            (yield fireDrawPass(root));
             mainDbg.phase = "draw";
-            await drawView(root, cv);
+            (yield drawView(root, cv));
             if (root === bars.root) drawSystemBarBackgrounds(ctx, bars);
           }
           mainDbg.phase = "drawOverlays";
@@ -731,7 +743,7 @@ async function tick0() {
             if (o.view.visibility !== 0) continue;
             const dim = o.dim?.() ?? 0;
             if (dim > 0) { ctx.fillStyle = `rgba(0,0,0,${dim})`; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H); }
-            await drawView(o.view, cv);
+            (yield drawView(o.view, cv));
             if (o.view === bars.root) drawSystemBarBackgrounds(ctx, bars);
           }
           drawToasts(ctx, SCREEN_W, SCREEN_H);
@@ -745,7 +757,7 @@ async function tick0() {
       }
       present();
       for (const activity of activities) {
-        try { await dispatchSplashExit(activity); } catch (error) { reportUncaught(error); }
+        try { (yield dispatchSplashExit(activity)); } catch (error) { reportUncaught(error); }
       }
       perf.drawMs += performance.now() - t0;
       // WebView frames are DOM over the canvas: show the ones this pass drew, hide the rest
@@ -774,7 +786,8 @@ export function dispatchPointer(action: number, x: number, y: number, at = guest
   requestResponsiveSlices();
   return onMain(() => dispatchPointer0(action, x, y, at)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
-async function dispatchPointer0(action: number, x: number, y: number, t: number) {
+function dispatchPointer0(action: number, x: number, y: number, t: number): void | Promise<void> { return rt.drive(dispatchPointer0$(action, x, y, t)); }
+function* dispatchPointer0$(action: number, x: number, y: number, t: number): Gen<void> {
   const window = booted?.stack.at(-1)?.window, decor = window?.decor;
   if (!decor) return;
   const ev = new JMotionEvent();
@@ -797,7 +810,7 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
           break;
         }
         if (o.dismissOnOutside) {
-          await dismissOverlay(o);
+          (yield dismissOverlay(o));
           touchTarget = null;
           return;
         }
@@ -816,12 +829,12 @@ async function dispatchPointer0(action: number, x: number, y: number, t: number)
       if (o?.view.visibility === 0) {
         ev.x = x - o.view.left;
         ev.y = y - o.view.top;
-        await guardCall(o.view, M_dispatch, ev);
+        (yield guardCall(o.view, M_dispatch, ev));
       }
     } else {
       ev.x = x;
       ev.y = y;
-      await guardCall(window.callbackObj ?? window.activity, M_dispatch, ev);
+      (yield guardCall(window.callbackObj ?? window.activity, M_dispatch, ev));
     }
     if (action === 1 || action === 3) touchTarget = null;
   } catch (e) {

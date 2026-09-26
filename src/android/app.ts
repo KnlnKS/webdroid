@@ -112,12 +112,13 @@ rt.register({ name: "android/window/SplashScreen", ctor: JSplashScreen, methods:
   "clearOnExitAnimationListener()V": function (this: JSplashScreen) { this.listener = null; },
 } });
 rt.markers("android/window/SplashScreen$OnExitAnimationListener");
-export async function dispatchSplashExit(activity: JActivity): Promise<void> {
+export function dispatchSplashExit(activity: JActivity): void | Promise<void> { return rt.drive(dispatchSplashExit$(activity)); }
+function* dispatchSplashExit$(activity: JActivity): Gen<void> {
   const splash = activity.splashScreen;
   if (!splash?.listener || splash.exitSent) return;
   splash.exitSent = true;
   rt.link("android/window/SplashScreenView");
-  await vcall(splash.listener, "onSplashScreenExit", "(Landroid/window/SplashScreenView;)V", new JSplashScreenView());
+  (yield vcall(splash.listener, "onSplashScreenExit", "(Landroid/window/SplashScreenView;)V", new JSplashScreenView()));
 }
 export class JActivity extends JContextWrapper {
   window = new JWindow();

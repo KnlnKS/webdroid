@@ -191,22 +191,23 @@ class JBaseInputConnection extends JObj {
     return { editable, text, start: Math.max(0, start), end: Math.max(0, end) };
   }
 }
-async function replaceAt(ic: JBaseInputConnection, ins: string, newCursor: number, compose: boolean) {
-  const { editable, text, start, end } = await ic.content();
+function replaceAt(ic: JBaseInputConnection, ins: string, newCursor: number, compose: boolean): unknown { return rt.drive(replaceAt$(ic, ins, newCursor, compose)); }
+function* replaceAt$(ic: JBaseInputConnection, ins: string, newCursor: number, compose: boolean): Gen {
+  const { editable, text, start, end } = (yield ic.content());
   if (!editable) return 0;
-  let a = await vcall(editable, "getSpanStart", "(Ljava/lang/Object;)I", composing);
-  let b = await vcall(editable, "getSpanEnd", "(Ljava/lang/Object;)I", composing);
+  let a = (yield vcall(editable, "getSpanStart", "(Ljava/lang/Object;)I", composing));
+  let b = (yield vcall(editable, "getSpanEnd", "(Ljava/lang/Object;)I", composing));
   if (a < 0 || b < 0) { a = Math.min(start, end); b = Math.max(start, end); }
-  await vcall(ic, "beginBatchEdit", "()Z");
+  (yield vcall(ic, "beginBatchEdit", "()Z"));
   try {
-    await vcall(editable, "removeSpan", "(Ljava/lang/Object;)V", composing);
-    await vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", a, b, ins, 0, ins.length);
+    (yield vcall(editable, "removeSpan", "(Ljava/lang/Object;)V", composing));
+    (yield vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", a, b, ins, 0, ins.length));
     const cursor = Math.max(0, Math.min(text.length - (b - a) + ins.length, newCursor > 0 ? a + ins.length + newCursor - 1 : a + newCursor));
-    await setTextSelection(editable, cursor, cursor);
-    if (compose) await vcall(editable, "setSpan", "(Ljava/lang/Object;III)V", composing, a, a + ins.length, 0x121);
-    if (ic.full && ic.view instanceof JTextView) await vcall(ic.view, "setText", "(Ljava/lang/CharSequence;)V", await csText(editable));
+    (yield setTextSelection(editable, cursor, cursor));
+    if (compose) (yield vcall(editable, "setSpan", "(Ljava/lang/Object;III)V", composing, a, a + ins.length, 0x121));
+    if (ic.full && ic.view instanceof JTextView) (yield vcall(ic.view, "setText", "(Ljava/lang/CharSequence;)V", (yield csText(editable))));
     invalidate();
-  } finally { await vcall(ic, "endBatchEdit", "()Z"); }
+  } finally { (yield vcall(ic, "endBatchEdit", "()Z")); }
   return 1;
 }
 rt.register({
@@ -456,28 +457,30 @@ function mirrorInput() {
   inputEl.value = served.text;
   inputEl.setSelectionRange(served.start - served.offset, served.end - served.offset);
 }
-async function extractedInput(session: InputSession, extracted: JExtractedText) {
-  const text = await csText(extracted.text);
+function extractedInput(session: InputSession, extracted: JExtractedText): unknown { return rt.drive(extractedInput$(session, extracted)); }
+function* extractedInput$(session: InputSession, extracted: JExtractedText): Gen {
+  const text = (yield csText(extracted.text));
   if (extracted.partialStartOffset < 0) { session.text = text; session.offset = extracted.startOffset; }
   else session.text = session.text.slice(0, extracted.partialStartOffset - session.offset) + text + session.text.slice(extracted.partialEndOffset - session.offset);
   session.start = extracted.selectionStart + extracted.startOffset; session.end = extracted.selectionEnd + extracted.startOffset;
   mirrorInput();
 }
-async function connectInput(view: JView) {
+function connectInput(view: JView): unknown { return rt.drive(connectInput$(view)); }
+function* connectInput$(view: JView): Gen {
   if (served) {
     const previous = served; served = null;
-    await vcall(previous.connection, "closeConnection", "()V");
+    (yield vcall(previous.connection, "closeConnection", "()V"));
   }
   if (view instanceof JEditText) { focusEditText(view); return true; }
   focusEditText(null);
   const info = rt.make("android/view/inputmethod/EditorInfo") as JEditorInfo;
-  const connection = await vcall(view, "onCreateInputConnection", "(Landroid/view/inputmethod/EditorInfo;)Landroid/view/inputmethod/InputConnection;", info);
+  const connection = (yield vcall(view, "onCreateInputConnection", "(Landroid/view/inputmethod/EditorInfo;)Landroid/view/inputmethod/InputConnection;", info));
   if (!connection) return false;
   const session = { view, connection, info, text: info.surrounding, offset: info.surroundingStart, start: Math.max(0, info.initialSelStart), end: Math.max(0, info.initialSelEnd), compStart: -1, compEnd: -1 };
   served = session;
   const request = rt.make("android/view/inputmethod/ExtractedTextRequest");
-  const extracted = await vcall(connection, "getExtractedText", "(Landroid/view/inputmethod/ExtractedTextRequest;I)Landroid/view/inputmethod/ExtractedText;", request, 1);
-  if (extracted) await extractedInput(session, extracted);
+  const extracted = (yield vcall(connection, "getExtractedText", "(Landroid/view/inputmethod/ExtractedTextRequest;I)Landroid/view/inputmethod/ExtractedText;", request, 1));
+  if (extracted) (yield extractedInput(session, extracted));
   mirrorInput(); return true;
 }
 export const imeActive = () => !!focusedEdit || !!served && imeVisible;
