@@ -16,6 +16,14 @@ function installEnvironment(cfg: EnvironmentConfig): void {
     Pinned.prototype = RealDate.prototype;
     Pinned.now = () => fixed;
     g.Date = Pinned;
+    // java.util.Random seeds from Date.now() ^ Math.random(): pin both and games replay the same draws
+    let seed = fixed >>> 0;
+    Math.random = () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
   }
   for (const [k, v] of cfg.storage) if (localStorage.getItem(k) === null) localStorage.setItem(k, v);
 }
