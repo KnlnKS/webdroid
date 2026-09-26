@@ -4,18 +4,12 @@ export const E2E_DIR = new URL("..", import.meta.url).pathname;
 export const BASE_URL = process.env.WEBDROID_URL ?? "http://localhost:4080";
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** Run items `jobs` at a time, heaviest first. A thrown item becomes its `failed` result, so one
- *  broken flow never discards the others' captures. Results arrive in completion order. */
-export async function runQueue<T, R>(items: T[], jobs: number, weight: (item: T) => number,
-  run: (item: T) => Promise<R>, failed: (item: T, error: unknown) => R, done: (result: R) => void = () => {}): Promise<R[]> {
-  const queue = [...items].sort((a, b) => weight(b) - weight(a));
-  const results: R[] = [];
+/** `run` over items, `jobs` at a time and heaviest first; results keep the items' order. */
+export async function runQueue<T, R>(items: T[], jobs: number, weight: (item: T) => number, run: (item: T) => Promise<R>): Promise<R[]> {
+  const queue = items.map((item, index) => ({ item, index })).sort((a, b) => weight(b.item) - weight(a.item));
+  const results: R[] = new Array(items.length);
   await Promise.all(Array.from({ length: Math.min(jobs, queue.length) }, async () => {
-    for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
-      const result = await run(item).catch((error: unknown) => failed(item!, error));
-      results.push(result);
-      done(result);
-    }
+    for (let next = queue.shift(); next; next = queue.shift()) results[next.index] = await run(next.item);
   }));
   return results;
 }

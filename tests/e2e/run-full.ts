@@ -17,14 +17,22 @@ const pinned = parseScreen(ENV_SCREEN);
 console.log(`flows: ${flows.map((f) => f.app).join(", ")}  (${jobs} at a time)`);
 if (shots) await prepareShots(shots);
 
-type Outcome = { app: string; scored: boolean; lines: string[]; ms: number; failed?: true };
+type Outcome = { app: string; scored: boolean; failed: boolean; lines: string[]; ms: number };
 
+/** Capture and score one flow; an exception is that flow's failure, never the run's. */
 async function runFlow(app: string): Promise<Outcome> {
+  const lines: string[] = [];
+  const t0 = Date.now();
+  const result = await captureAndScore(app, (s) => lines.push(s))
+    .catch((error: unknown) => { lines.push(`\n--- ${app} aborted: ${String(error).split("\n", 1)[0]}`); return { scored: false, failed: true }; });
+  const outcome = { app, ...result, lines, ms: Date.now() - t0 };
+  console.log(`\n${lines.join("\n")}\n  (${(outcome.ms / 1000).toFixed(1)}s)`);
+  return outcome;
+}
+
+async function captureAndScore(app: string, log: (line: string) => void): Promise<{ scored: boolean; failed: boolean }> {
   const flow = executionFlow(flows.find((f) => f.app === app)!, "full");
   const manifest = await loadManifest(app);
-  const lines: string[] = [];
-  const log = (s: string) => lines.push(s);
-  const t0 = Date.now();
   const drv = await launchFor(flow, manifest, !!shots);
   let scored = false, failed = false;
   try {
@@ -40,20 +48,18 @@ async function runFlow(app: string): Promise<Outcome> {
       log(`\n--- ${app} (smoke: ran at ${screenParam(pinned)}, goldens are ${screenParam(screenOf(manifest))}) ---`);
       printSmoke(app, runs, log);
     } else {
-      lines.push(await scoreFlow(app));
+      log(await scoreFlow(app));
       scored = true;
     }
   } finally {
     await drv.close();
   }
-  return { app, scored, lines, ms: Date.now() - t0, failed: failed || undefined };
+  return { scored, failed };
 }
 
 const weight = (app: string) => FLOWS.find((f) => f.app === app)!.steps.reduce((a, s) => a + waitHorizonMs(s.wait) + 1000, 0);
 const t0 = Date.now();
-const outcomes = await runQueue(flows.map((f) => f.app), jobs, weight, runFlow,
-  (app, error): Outcome => ({ app, scored: false, lines: [`\n--- ${app} aborted: ${String(error).split("\n", 1)[0]}`], ms: 0, failed: true }),
-  (o) => console.log(`\n${o.lines.join("\n")}\n  (${(o.ms / 1000).toFixed(1)}s)`));
+const outcomes = await runQueue(flows.map((f) => f.app), jobs, weight, runFlow);
 const failed = outcomes.filter((o) => o.failed).map((o) => o.app);
 
 const scoredApps = outcomes.filter((o) => o.scored).map((o) => o.app);

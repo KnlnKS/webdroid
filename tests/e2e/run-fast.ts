@@ -13,10 +13,11 @@ import { executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs, type C
 const deterministic = FLOWS.filter((flow) => flow.clock !== "live");
 const live = process.argv.includes("--live");
 const args = process.argv.slice(2).filter((arg) => arg !== "--live");
-const { flows, jobs } = parseArgs(args, "bun run e2e", FLOWS, defaultJobs(5, 2), live ? FLOWS : deterministic);
+const { flows, jobs } = parseArgs(args, "bun run e2e", { defaultJobs: defaultJobs(5, 2), unnamed: live ? FLOWS : deterministic });
 
 type VisualCheck = { step: string; contentDiffPct: number; maxContentDiffPct: number; androidSdk: string };
-type Outcome = { flow: Flow; runs: StepRun[]; visual: VisualCheck[]; errors: string[]; gaps: string[]; ms: number };
+type Checked = { flow: Flow; runs: StepRun[]; visual: VisualCheck[]; errors: string[]; gaps: string[] };
+type Outcome = Checked & { ms: number };
 
 function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: string[] } {
   const errors: string[] = [];
@@ -92,14 +93,25 @@ function browserFailures(flow: Flow, errors: string[]): string[] {
     .map((error) => `browser: ${error.slice(0, 300)}`);
 }
 
-async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
+/** One flow's outcome; an exception is that flow's failure, never the lane's. */
+async function runFlow(flow: Flow): Promise<Outcome> {
+  const started = performance.now();
+  const checked = await checkFlow(flow).catch((error: unknown): Checked =>
+    ({ flow, runs: [], visual: [], errors: [`flow aborted: ${String(error).split("\n", 1)[0]}`], gaps: [] }));
+  const outcome = { ...checked, ms: performance.now() - started };
+  console.log(`  ${flow.app}: ${outcome.runs.length} steps, ${(outcome.ms / 1000).toFixed(1)}s` +
+    (outcome.errors.length ? `, ${outcome.errors.length} failure(s)` : "") +
+    (outcome.gaps.length ? `, ${outcome.gaps.length} observed gap(s)` : ""));
+  return outcome;
+}
+
+async function checkFlow(flow: Flow): Promise<Checked> {
   const selected = executionFlow(flow, "fast");
   const manifest = await loadManifest(flow.app);
   const driver = await launchFor(flow, manifest, false, flow.clock === "controlled");
-  const started = performance.now();
   let runs: StepRun[] = [], captureErrors: string[] = [];
   try {
-    ({ runs, errors: captureErrors } = await captureFlow(selected, driver, { jobs: effectiveJobs, mode: "fast", log: () => {} }));
+    ({ runs, errors: captureErrors } = await captureFlow(selected, driver, { jobs, mode: "fast", log: () => {} }));
   } finally {
     await driver.close();
   }
@@ -108,7 +120,7 @@ async function runFlow(flow: Flow, effectiveJobs: number): Promise<Outcome> {
   const browserErrors = browserFailures(flow, driver.errors);
   return { flow, runs, visual: visual.checks,
     errors: [...captureErrors, ...observed.errors, ...visual.errors, ...(flow.clock === "live" ? [] : browserErrors)],
-    gaps: [...observed.gaps, ...(flow.clock === "live" ? browserErrors : [])], ms: performance.now() - started };
+    gaps: [...observed.gaps, ...(flow.clock === "live" ? browserErrors : [])] };
 }
 
 console.log(`fast flows: ${flows.map((flow) => flow.app).join(", ")} (${jobs} at a time)`);
@@ -125,14 +137,7 @@ await rm(summaryPath, { force: true });
 const weight = (flow: Flow) => previous.get(flow.app) ?? executionFlow(flow, "fast").steps.reduce((total, step) =>
   total + (step.wait.kind === "state" ? step.wait.maxRealMs : waitHorizonMs(step.wait)) + 300, 0);
 const started = performance.now();
-const outcomes = await runQueue(flows, jobs, weight, (flow) => runFlow(flow, jobs),
-  (flow, error): Outcome => ({ flow, runs: [], visual: [], errors: [`flow aborted: ${String(error).split("\n", 1)[0]}`], gaps: [], ms: 0 }),
-  (outcome) => console.log(`  ${outcome.flow.app}: ${outcome.runs.length} steps, ${(outcome.ms / 1000).toFixed(1)}s` +
-    (outcome.errors.length ? `, ${outcome.errors.length} failure(s)` : "") +
-    (outcome.gaps.length ? `, ${outcome.gaps.length} observed gap(s)` : "")));
-
-const order = new Map(FLOWS.map((flow, index) => [flow.app, index]));
-outcomes.sort((a, b) => (order.get(a.flow.app) ?? 0) - (order.get(b.flow.app) ?? 0));
+const outcomes = await runQueue(flows, jobs, weight, runFlow);
 
 for (const outcome of outcomes.filter((item) => item.errors.length)) {
   console.error(`\n${outcome.flow.app} failed:`);
