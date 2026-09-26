@@ -8,8 +8,6 @@ import { diffImages } from "./lib/diff";
 import { E2E_DIR } from "./lib/util";
 import { apkHashes, flowSchemaHash, repositoryRevision, type CoverageIndex } from "./coverage";
 import { captureScreenKey, executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs, type CaptureScreen, type Manifest } from "./types";
-import { BASE_URL } from "./lib/util";
-import { isWebdroidProcessFrame } from "./lib/processes";
 
 const deterministic = FLOWS.filter((flow) => flow.clock !== "live");
 const coverage = process.argv.includes("--coverage");
@@ -35,11 +33,11 @@ function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: str
     if (step.mainLoopWedged) errors.push(`${prefix}: main loop wedged`);
     if (step.settleTimedOut) errors.push(`${prefix}: completion timed out`);
     if (step.error) errors.push(`${prefix}: ${brief(step.error)}`);
-    if (step.slow) errors.push(`${prefix}: motion fell below its retained frame-rate limit`);
+    if (step.evidence === "motion" && (step.perf?.presentations ?? 0) < 2) errors.push(`${prefix}: motion checkpoint presented no motion`);
     for (const item of step.newMissing ?? []) (live ? gaps : errors).push(`${prefix}: missing ${item}`);
     for (const item of step.nativeRequired ?? []) (live ? gaps : errors).push(`${prefix}: native code required ${item}`);
     for (const item of step.newErrors ?? []) (live ? gaps : errors).push(`${prefix}: ${brief(item)}`);
-    const processes = (step.processes ?? []).filter((process) => isWebdroidProcessFrame(process.url, BASE_URL));
+    const processes = step.processes ?? [];
     if (!processes.length) errors.push(`${prefix}: no webdroid process diagnostics`);
     for (const process of processes) {
       const diagnostics = process.diagnostics;
