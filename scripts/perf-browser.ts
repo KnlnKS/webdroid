@@ -19,6 +19,8 @@ const { values } = parseArgs({ options: {
   ms: { type: "string", default: "15000" }, warmup: { type: "string", default: "3000" },
   "align-presentation": { type: "boolean", default: false },
   "cpu-profile": { type: "boolean", default: false }, "cpu-throttle": { type: "string", default: "1" },
+  // renderer main-thread totals by trace event (V8 compile, GC, script, frames) for the measured window
+  trace: { type: "boolean", default: false },
   "native-profile": { type: "boolean", default: false },
   "jvm-profile": { type: "boolean", default: false }, "jvm-tier": { type: "string", default: "auto" }, "jvm-hotness": { type: "string", default: "4096" },
   interval: { type: "string" }, "exercise-once": { type: "boolean", default: false }, "setup-shots": { type: "boolean", default: false },
@@ -144,6 +146,14 @@ try {
   const actions = exercises.map((exercise) => actOf(flow, exercise, manifest?.steps.find((s) => s.id === exercise.id)));
   // Repeated tap steps define one tap per interval; do not nest their original repeat loop.
   for (const action of actions) if (action.type === "tap") action.repeat = 1;
+  type TraceEvent = { name: string; ph: string; dur?: number; tid: number; pid: number };
+  const traceEvents: TraceEvent[] = [];
+  const browserTrace = values.trace ? await browser.newBrowserCDPSession() : undefined;
+  const traceDone = browserTrace ? new Promise<void>((resolve) => browserTrace.once("Tracing.tracingComplete", () => resolve())) : undefined;
+  if (browserTrace) {
+    (browserTrace as unknown as { on(event: string, listener: (data: { value: TraceEvent[] }) => void): void }).on("Tracing.dataCollected", (data) => { traceEvents.push(...data.value); });
+    await browserTrace.send("Tracing.start", { traceConfig: { includedCategories: ["devtools.timeline", "v8", "disabled-by-default-v8.compile", "disabled-by-default-v8.gc", "toplevel"] }, transferMode: "ReportEvents" });
+  }
   if (values["cpu-profile"]) {
     await session.send("Profiler.enable");
     await session.send("Profiler.start");
@@ -283,6 +293,17 @@ try {
   }, { ms, actions, screen, actionSource: performAction.toString(), interval, once: values["exercise-once"], offsets: inputOffsets, alignPresentation: values["align-presentation"], startState, stateReader });
   const result = await measurement;
   const cpuProfile = values["cpu-profile"] ? (await session.send("Profiler.stop")).profile : undefined;
+  let traceTotals: Record<string, number> | undefined;
+  if (browserTrace) {
+    await browserTrace.send("Tracing.end");
+    await traceDone;
+    const byThread = new Map<string, number>();
+    for (const e of traceEvents) if (e.ph === "X" && e.name === "v8.callFunction") byThread.set(`${e.pid}:${e.tid}`, (byThread.get(`${e.pid}:${e.tid}`) ?? 0) + (e.dur ?? 0));
+    const main = [...byThread].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const totals = new Map<string, number>();
+    for (const e of traceEvents) if (`${e.pid}:${e.tid}` === main && e.ph === "X" && e.dur) totals.set(e.name, (totals.get(e.name) ?? 0) + e.dur / 1000);
+    traceTotals = Object.fromEntries([...totals].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([k, v]) => [k, Math.round(v)]));
+  }
   const nativeProfile = values["native-profile"] ? await foreground.evaluate(() => globalThis.wd.native.profile(50)) : undefined;
   const afterMetrics = await session.send("Performance.getMetrics");
   const stateAfter = await readState();
@@ -299,7 +320,7 @@ try {
   await page.screenshot({ path: artifactPath(".png") });
   const output = { flow: flow.app, after: values.after, exercise: values.exercise, url: url.href, browser: browser.version(),
     gpu, gpuInfo: gpuInfo.gpu, probe: values.probe, screen, warmup, setup, setupSettleCap, result, alive, tree, metrics, heapBefore, heapAfter, processes, errors,
-    ...(jvmProfile ? { jvmProfile } : {}),
+    ...(jvmProfile ? { jvmProfile } : {}), ...(traceTotals ? { traceTotals } : {}),
     ...(cpuProfilePath ? { cpuProfilePath } : {}), ...(nativeProfile ? { nativeProfile } : {}),
     stateBefore: startState === undefined ? stateBefore : result.stateBefore, stateAfter, inputOffsets, startExercise: values["start-exercise"], stateReader: values["state-reader"],
     ...(startState !== undefined ? { startState, stateWaitMs: result.stateWaitMs } : {}),
