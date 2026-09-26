@@ -1,9 +1,9 @@
 // Class registry, linking, initialization, native registration, and the `R` helper
 // surface that compiled code calls. See abi.ts for the value model.
 //
-// Lifecycle: link (sync: ctor shell + fields + types) → init (async: compile methods,
-// run <clinit>). Instances only exist after init, so prototype methods are always
-// present when virtual dispatch happens.
+// Lifecycle: link (ctor shell + fields + types) → init (compile methods, run <clinit>, which
+// may suspend). Instances only exist after init, so prototype methods are always present
+// when virtual dispatch happens.
 
 import { yieldToLoop } from "./yield";
 import { suspendWith } from "./suspend";

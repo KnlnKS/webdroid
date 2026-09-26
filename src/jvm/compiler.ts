@@ -1,8 +1,7 @@
 // DEX bytecode → shared cold handlers and specialized hot methods.
-// Control flow: `for(;;) switch(pc)` over basic blocks; DEX try
-// ranges → JS catch with pc-range dispatch. All methods async except provably-sync
-// leaves (no invokes / static ops / allocations); call sites guard dynamically:
-// `$t instanceof Promise ? await $t : $t`.
+// Control flow: `for(;;) switch(pc)` over basic blocks; DEX try ranges → JS catch with
+// pc-range dispatch. Every method runs synchronously: a call returns its value, or a Promise
+// when the callee suspended, and only then does the caller save its frame (Runtime.dfr).
 
 import type { DexFile, CodeItem, EncodedMethod } from "./dex";
 import { mangleMethod, parseMethodDesc, isWide, descToName, intBitsToFloat, longBitsToDouble, PRIM_ARRAYS, type PrimElem } from "./abi";
@@ -154,7 +153,8 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
     return fn;
   };
   const prepared = prepare();
-  let cold = emitColdMethod(R, dex, info, code, rec.isStatic, rec.desc, rec.name, prepared);
+  // Leaf methods cannot suspend and go straight to their only (sync) form.
+  let cold = prepared.sync ? null : new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, prepared, "cold").compileCold();
   if (!cold) return install(compile(source(prepared, true)));
   if (jvmProfiler.tier === "js") return install(compile(source(prepared, false)));
   let calls = 0, hot: JvmFunction | undefined;
@@ -239,16 +239,19 @@ function emitMethod(
   form: HotForm = "resumable",
 ): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
-  const code = dex.code(m.codeOff);
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   try {
-    const body = new MethodEmitter(R, dex, info, code, isStatic, desc, name, prepared, "hot").compile(count, form);
+    const body = new MethodEmitter(R, dex, info, dex.code(m.codeOff), isStatic, desc, name, prepared, "hot").compile(count, form);
     return `{const $ic=[];const $m=${holder(isStatic)}.${mangled}=${body};}`;
-  } catch (e) {
-    const msg = `compile error ${info.name}.${name}${desc}: ${e}`;
-    console.warn(msg);
-    return `${holder(isStatic)}.${mangled} = function(){ throw R.unimplemented(${JSON.stringify(msg)}); };`;
-  }
+  } catch (error) { return unimplementedMethod(info, m, dex, error); }
+}
+
+/** A method that cannot compile throws when called, so the rest of its class still runs. */
+function unimplementedMethod(info: ClassInfo, m: EncodedMethod, dex: DexFile, error: unknown): string {
+  const { name, desc, mangled } = methodKey(dex, m.methodIdx);
+  const message = `compile error ${info.name}.${name}${desc}: ${error}`;
+  console.warn(message);
+  return `${holder((m.flags & ACC.STATIC) !== 0)}.${mangled} = function(){ throw R.unimplemented(${JSON.stringify(message)}); };`;
 }
 
 function emitResumable(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, prepared: PreparedMethod): string {
@@ -258,30 +261,11 @@ function emitResumable(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMeth
 }
 
 function emitEagerMethod(R: Runtime, dex: DexFile, info: ClassInfo, method: EncodedMethod): string {
-  const { name, desc, mangled } = methodKey(dex, method.methodIdx);
-  const isStatic = (method.flags & ACC.STATIC) !== 0;
-  try {
-    const prepared = prepareDexMethod(dex, dex.code(method.codeOff), desc, isStatic, `${info.name}.${name}${desc}`);
-    return emitMethod(R, dex, info, method, prepared);
-  } catch (error) {
-    const message = `compile error ${info.name}.${name}${desc}: ${error}`;
-    console.warn(message);
-    return `${holder(isStatic)}.${mangled} = function(){ throw R.unimplemented(${JSON.stringify(message)}); };`;
-  }
-}
-
-function emitColdMethod(
-  R: Runtime,
-  dex: DexFile,
-  info: ClassInfo,
-  code: CodeItem,
-  isStatic: boolean,
-  desc: string,
-  name: string,
-  prepared: PreparedMethod,
-): ColdMethod | null {
-  if (prepared.sync) return null;
-  return new MethodEmitter(R, dex, info, code, isStatic, desc, name, prepared, "cold").compileCold();
+  const { name, desc } = methodKey(dex, method.methodIdx);
+  let prepared: PreparedMethod;
+  try { prepared = prepareDexMethod(dex, dex.code(method.codeOff), desc, (method.flags & ACC.STATIC) !== 0, `${info.name}.${name}${desc}`); }
+  catch (error) { return unimplementedMethod(info, method, dex, error); }
+  return emitMethod(R, dex, info, method, prepared);
 }
 
 type EmitBackend = "cold" | "hot";
