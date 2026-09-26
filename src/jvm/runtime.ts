@@ -768,6 +768,18 @@ export class Runtime {
     return 0;
   }
 
+  /** instance-of at a compiled site: caches the receiver's class with its answer (object arrays
+   *  carry their element type per instance, so they are never cached) */
+  iofc(v: unknown, name: string, ic: unknown[], k: number): number {
+    const r = this.iof(v, name);
+    if (v != null && !Array.isArray(v)) { ic[k] = (v as object).constructor; ic[k + 1] = r; }
+    return r;
+  }
+  /** check-cast at a compiled site: caches a receiver class that passed */
+  ccc(v: unknown, name: string, ic: unknown[], k: number): void {
+    this.cc(v, name);
+    if (!Array.isArray(v)) ic[k] = (v as object).constructor;
+  }
   /** check-cast */
   cc<T>(v: T, name: string): T {
     if (v === null || v === undefined || (v as unknown) === 0) return v;

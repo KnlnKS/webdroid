@@ -235,7 +235,7 @@ function emitMethod(
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   try {
     const body = new MethodEmitter(R, dex, info, code, isStatic, desc, name, prepared, "hot").compile(count);
-    return `{const $m=${holder(isStatic)}.${mangled}=${body};}`;
+    return `{const $ic=[];const $m=${holder(isStatic)}.${mangled}=${body};}`;
   } catch (e) {
     const msg = `compile error ${info.name}.${name}${desc}: ${e}`;
     console.warn(msg);
@@ -284,6 +284,9 @@ class MethodEmitter {
   }
 
   private resumes = 0;
+  private ics = 0;
+  /** Two slots in the method's type-check cache: the last receiver class and its result. */
+  private icSlot(): number { const k = this.ics; this.ics += 2; return k; }
   private constants: unknown[] = [];
   private suspends = false;
 
@@ -486,10 +489,20 @@ ${profileEnd}
         out.push(`${this.reg(i.a)}=R.classForIdx(D,${this.literal(i.b)});`); break;
       case "monitor-enter": this.guard(`R.me(${this.reg(i.a)})`, out); break;
       case "monitor-exit": out.push(`R.mx(${this.reg(i.a)});`); break;
-      case "check-cast":
-        out.push(`R.cc(${this.reg(i.a)},${this.literal(descToName(dex.type(i.b)))});`); break;
-      case "instance-of":
-        out.push(`${this.reg(i.a)}=R.iof(${this.reg(i.b)},${this.literal(descToName(dex.type(i.c)))});`); break;
+      case "check-cast": {
+        const v = this.reg(i.a), name = this.literal(descToName(dex.type(i.b)));
+        if (this.cold) { out.push(`R.cc(${v},${name});`); break; }
+        const k = this.icSlot();
+        out.push(`if(${v}!=null&&${v}!==0&&${v}.constructor!==$ic[${k}])R.ccc(${v},${name},$ic,${k});`);
+        break;
+      }
+      case "instance-of": {
+        const v = this.reg(i.b), name = this.literal(descToName(dex.type(i.c)));
+        if (this.cold) { out.push(`${this.reg(i.a)}=R.iof(${v},${name});`); break; }
+        const k = this.icSlot();
+        out.push(`${this.reg(i.a)}=${v}!=null&&${v}.constructor===$ic[${k}]?$ic[${k + 1}]:R.iofc(${v},${name},$ic,${k});`);
+        break;
+      }
       case "array-length": out.push(`${this.reg(i.a)}=${this.reg(i.b)}.length;`); break;
       case "new-instance": {
         const tname = descToName(dex.type(i.b));
