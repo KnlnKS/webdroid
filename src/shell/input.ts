@@ -28,18 +28,18 @@ const pendingPointers: PointerSample[] = [];
 const at = (e: { clientX: number; clientY: number }): [number, number] =>
   [(e.clientX - rect.left) * device.width / rect.width, (e.clientY - rect.top) * device.height / rect.height];
 
+/** Dispatch at once (Chrome already aligns moves to frames), so the frame being prepared sees
+ *  the input; while one is in flight, later samples queue and consecutive moves coalesce. */
 function sendPointer(sample: PointerSample): void {
   if (pointerPending) {
     queuePointer(pendingPointers, sample);
     return;
   }
   pointerPending = true;
-  requestAnimationFrame(() => {
-    void dispatchPointer(sample.action, sample.x, sample.y, sample.at).finally(() => {
-      pointerPending = false;
-      const next = pendingPointers.shift();
-      if (next) sendPointer(next);
-    });
+  void dispatchPointer(sample.action, sample.x, sample.y, sample.at).finally(() => {
+    pointerPending = false;
+    const next = pendingPointers.shift();
+    if (next) sendPointer(next);
   });
 }
 
