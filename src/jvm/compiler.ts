@@ -288,7 +288,6 @@ class MethodEmitter {
   /** Two slots in the method's type-check cache: the last receiver class and its result. */
   private icSlot(): number { const k = this.ics; this.ics += 2; return k; }
   private constants: unknown[] = [];
-  private suspends = false;
 
   private get cold(): boolean { return this.backend === "cold"; }
   private get sync(): boolean { return this.prepared.sync; }
@@ -313,9 +312,9 @@ class MethodEmitter {
     const ops = new Map<number, ReturnType<typeof coldOp>>();
     for (const ins of this.prepared.instructions) {
       const out: string[] = [];
-      this.constants = []; this.suspends = false;
+      this.constants = [];
       this.emitIns(ins, out);
-      const op = coldOp(out.join("\n"), this.constants, ins.pc + ins.len, this.suspends);
+      const op = coldOp(out.join("\n"), this.constants, ins.pc + ins.len);
       if (ins.name.startsWith("invoke") && !ins.name.startsWith("invoke-custom")) op.method = ins.b;
       ops.set(ins.pc, op);
     }
@@ -443,8 +442,9 @@ ${profileEnd}
 
   private suspend(value: string): string {
     if (this.cold) {
-      this.suspends = true;
-      return `if(${value} instanceof Promise){${value}=yield ${value};}`;
+      // A cold handler returns the Promise it waits on. Only a call result resumes past the
+      // handler (F.$w); a class-init or resolution wait reruns it once its cache is filled.
+      return `if(${value} instanceof Promise){F.$w=${value === this.t ? 1 : 0};return ${value};}`;
     }
     const resume = ++this.resumes;
     return `if(${value} instanceof Promise){$p=${value};$r=${resume};break $d;}case -${resume}:if($r){$r=0;if($F.e)throw $F.x;${value}=$F.val;}`;
@@ -592,8 +592,7 @@ ${profileEnd}
 
   private jumpStr(target: number, from: number): string {
     if (this.cold) {
-      const fuel = target <= from ? `if(--R.fuel<0){F.$fu=R.refuel();if(F.$fu)yield F.$fu;}` : "";
-      if (fuel) this.suspends = true;
+      const fuel = target <= from ? `if(--R.fuel<0){F.$fu=R.refuel();if(F.$fu){F.$w=0;return F.$fu;}}` : "";
       return `${fuel}F.next=${this.literal(target)};return;`;
     }
     const fuel = !this.sync && target <= from ? `if(--R.fuel<0){$fu=R.refuel();if($fu){$p=$fu;pc=${target};break $d;}}` : "";

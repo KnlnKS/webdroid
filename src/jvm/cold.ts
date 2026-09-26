@@ -3,18 +3,17 @@ import { perf } from "../perf";
 import { descToName } from "./abi";
 import { jvmProfiler } from "./profile";
 
-type ColdIterator = Generator<Promise<unknown>, void, unknown>;
 /** Field names match a hot frame's (see Runtime.dfr), so a hot body can resume one (OSR). */
 export interface ColdFrame {
   R: Runtime; D: ReturnType<Runtime["dexLink"]>; S: unknown;
   v: unknown[]; next: number; r: 0; done: boolean; value: unknown;
   $t: unknown; $u: unknown; $ex: unknown; $fu: unknown; $th: unknown; $s: number;
-  /** a suspended instruction's generator, and its pc */
-  it: ColdIterator | null; pc: number;
+  /** what the Promise a handler returned resolves: 1 its call result, 0 a wait before rerunning it */
+  $w: number;
 }
-type Handler = { kind: "sync"; run: (frame: ColdFrame, constants: unknown[]) => void } |
-  { kind: "suspend"; run: (frame: ColdFrame, constants: unknown[]) => ColdIterator };
-type ColdOp = Handler & { constants: unknown[]; next: number; method?: number };
+/** Returns the Promise the instruction waits on, if any. */
+type Handler = (frame: ColdFrame, constants: unknown[]) => Promise<unknown> | undefined;
+type ColdOp = { run: Handler; constants: unknown[]; next: number; method?: number };
 export interface ColdMethod {
   /** "pkg/Class.method(desc)": the frame an exception unwinding through here is noted under */
   name: string;
@@ -29,15 +28,13 @@ export interface ColdMethod {
 const handlers = new Map<string, Handler>();
 
 // Pool compiler-owned literals and register operands so cold DEX instructions share V8 code.
-export function coldOp(body: string, constants: unknown[], next: number, suspends: boolean): ColdOp {
-  let handler = handlers.get(body);
-  if (!handler) {
-    // An async helper would suspend even when every native returned synchronously.
-    const run = new Function(`return function${suspends ? "*" : ""}(F,K){const R=F.R,D=F.D,S=F.S;${body}}`)();
-    handler = suspends ? { kind: "suspend", run } : { kind: "sync", run };
-    handlers.set(body, handler); perf.coldHandlers++;
+export function coldOp(body: string, constants: unknown[], next: number): ColdOp {
+  let run = handlers.get(body);
+  if (!run) {
+    run = new Function(`return function(F,K){const R=F.R,D=F.D,S=F.S;${body}}`)() as Handler;
+    handlers.set(body, run); perf.coldHandlers++;
   }
-  return { ...handler, constants, next };
+  return { run, constants, next };
 }
 
 /** Cold bodies share one runner, so the JS stack names none of them: the throwable itself
@@ -53,37 +50,28 @@ export function runCold(method: ColdMethod, receiver: unknown, args: unknown[]):
   perf.coldCalls++;
   const { R, D, S } = method;
   const f: ColdFrame = { R, D, S, v: new Array(method.regs), next: 0, r: 0, done: false, value: undefined,
-    $t: undefined, $u: undefined, $ex: undefined, $fu: undefined, $th: R.th(), $s: 0, it: null, pc: 0 };
+    $t: undefined, $u: undefined, $ex: undefined, $fu: undefined, $th: R.th(), $s: 0, $w: 0 };
   let reg = method.first;
   if (method.instance) f.v[reg++] = receiver;
   for (let i = 0; i < args.length; i++) { f.v[reg] = args[i]; reg += method.widths[i]; }
-  return step(method, f, receiver, false, undefined);
+  return step(method, f, receiver, -1, undefined);
 }
 
-function step(method: ColdMethod, f: ColdFrame, receiver: unknown, threw: boolean, resumed: unknown): unknown {
+/** Run from f.next; `thrownAt` >= 0 first raises `thrown` from the instruction there. */
+function step(method: ColdMethod, f: ColdFrame, receiver: unknown, thrownAt: number, thrown: unknown): unknown {
   const { R, D } = method;
   const profiled = jvmProfiler.enabled;
   const started = profiled ? performance.now() : 0;
   let suspended = false;
   try {
-    while (f.it || !f.done) {
-      const pc = f.it ? f.pc : f.next, op = method.ops.get(pc);
+    while (!f.done) {
+      const pc = thrownAt >= 0 ? thrownAt : f.next, op = method.ops.get(pc);
       if (!op) throw new Error("bad pc " + pc);
       try {
-        if (f.it) {
-          const it = f.it;
-          f.it = null;
-          const next = threw ? it.throw(resumed) : it.next(resumed);
-          resumed = undefined; threw = false;
-          if (!next.done) { suspended = true; return suspend(method, f, receiver, it, pc, next.value); }
-        } else {
-          f.next = op.next;
-          if (op.kind === "sync") op.run(f, op.constants);
-          else {
-            const it = op.run(f, op.constants), next = it.next();
-            if (!next.done) { suspended = true; return suspend(method, f, receiver, it, pc, next.value); }
-          }
-        }
+        if (thrownAt >= 0) { thrownAt = -1; throw thrown; }
+        f.next = op.next;
+        const pending = op.run(f, op.constants);
+        if (pending !== undefined) { suspended = true; return suspend(method, f, receiver, pc, pending); }
       } catch (error) {
         R.st(f.$th);
         if (error instanceof TypeError) {
@@ -125,10 +113,16 @@ function step(method: ColdMethod, f: ColdFrame, receiver: unknown, threw: boolea
   }
 }
 
-function suspend(method: ColdMethod, f: ColdFrame, receiver: unknown, it: ColdIterator, pc: number, pending: Promise<unknown>): Promise<unknown> {
-  f.it = it; f.pc = pc;
+function suspend(method: ColdMethod, f: ColdFrame, receiver: unknown, pc: number, pending: Promise<unknown>): Promise<unknown> {
+  const delivers = f.$w === 1;
   f.R.su(f.$th); f.$s = 1;
   if (jvmProfiler.enabled) jvmProfiler.suspension(method.name);
-  const resume = (threw: boolean) => (value: unknown) => { f.R.st(f.$th); return step(method, f, receiver, threw, value); };
-  return pending.then(resume(false), resume(true));
+  return pending.then((value) => {
+    f.R.st(f.$th);
+    if (delivers) f.$t = value; else f.next = pc;
+    return step(method, f, receiver, -1, undefined);
+  }, (error) => {
+    f.R.st(f.$th);
+    return step(method, f, receiver, pc, error);
+  });
 }
