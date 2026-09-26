@@ -99,8 +99,8 @@ rt.register({
       if (!(spec instanceof JPBEKeySpec) || !spec.salt.length || spec.iterations <= 0 || spec.bits <= 0) {
         throw rt.mkThrowable("java/security/spec/InvalidKeySpecException", "PBEKeySpec required");
       }
-      const material = (yield crypto.subtle.importKey("raw", utf8.enc.encode(charsToString(spec.password, 0, spec.password.length)), "PBKDF2", false, ["deriveBits"]));
-      const derived = (yield crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-1", salt: spec.salt, iterations: spec.iterations }, material, spec.bits));
+      const material = yield crypto.subtle.importKey("raw", utf8.enc.encode(charsToString(spec.password, 0, spec.password.length)), "PBKDF2", false, ["deriveBits"]);
+      const derived = yield crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-1", salt: spec.salt, iterations: spec.iterations }, material, spec.bits);
       return mkSecretKey(new Uint8Array(derived), this.algorithm);
     }),
   },
@@ -153,19 +153,19 @@ rt.register({
       this.out = out; this.cipher = cipher;
     },
     "write(I)V": driven(function* (this: JCipherOutputStream, b: number): Gen {
-      const result: Int8Array = (yield vcall(this.cipher, "update", "([B)[B", Int8Array.of(b)));
+      const result: Int8Array = yield vcall(this.cipher, "update", "([B)[B", Int8Array.of(b));
       if (result?.length) yield vcall(this.out, "write", "([B)V", result);
     }),
     "write([BII)V": driven(function* (this: JCipherOutputStream, bytes: Int8Array, off: number, len: number): Gen {
       if (!len) return;
-      const result: Int8Array = (yield vcall(this.cipher, "update", "([BII)[B", bytes, off, len));
+      const result: Int8Array = yield vcall(this.cipher, "update", "([BII)[B", bytes, off, len);
       if (result?.length) yield vcall(this.out, "write", "([B)V", result);
     }),
     "close()V": driven(function* (this: JCipherOutputStream): Gen {
       if (this.closed) return;
       this.closed = true;
       try {
-        const result: Int8Array = (yield vcall(this.cipher, "doFinal", "()[B"));
+        const result: Int8Array = yield vcall(this.cipher, "doFinal", "()[B");
         if (result?.length) yield vcall(this.out, "write", "([B)V", result);
         yield vcall(this.out, "flush", "()V");
       } finally {
@@ -355,11 +355,11 @@ rt.register({
     "doFinal()[B": function (this: JCipher) { return doFinal(this); },
     "doFinal([B)[B": function (this: JCipher, b: Int8Array) { return doFinal(this, b); },
     "doFinal([BII)[B": function (this: JCipher, b: Int8Array, off: number, len: number) { return doFinal(this, b, off, len); },
-    "doFinal([BI)I": driven(function* (this: JCipher, out: Int8Array, off: number): Gen { return into((yield doFinal(this)), out, off); }),
+    "doFinal([BI)I": driven(function* (this: JCipher, out: Int8Array, off: number): Gen { return into(yield doFinal(this), out, off); }),
     "doFinal([BII[BI)I": driven(function* (this: JCipher, b: Int8Array, off: number, len: number, out: Int8Array, outOff: number): Gen {
-      return into((yield doFinal(this, b, off, len)), out, outOff);
+      return into(yield doFinal(this, b, off, len), out, outOff);
     }),
-    "doFinal([BII[B)I": driven(function* (this: JCipher, b: Int8Array, off: number, len: number, out: Int8Array): Gen { return into((yield doFinal(this, b, off, len)), out, 0); }),
+    "doFinal([BII[B)I": driven(function* (this: JCipher, b: Int8Array, off: number, len: number, out: Int8Array): Gen { return into(yield doFinal(this, b, off, len), out, 0); }),
     "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljavax/crypto/Cipher;": getCipher,
     "wrap(Ljava/security/Key;)[B": function (this: JCipher, key: JSecretKeySpec) {
       if (this.opmode !== 3) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized for wrapping");
@@ -369,7 +369,7 @@ rt.register({
     "unwrap([BLjava/lang/String;I)Ljava/security/Key;": driven(function* (this: JCipher, wrapped: Int8Array, algorithm: string, type: number): Gen {
       if (this.opmode !== 4) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized for unwrapping");
       if (type !== 3) throw rt.mkThrowable("java/security/InvalidKeyException", "Unsupported wrapped key type");
-      return mkSecretKey(new Uint8Array((yield doFinal(this, wrapped))), algorithm);
+      return mkSecretKey(new Uint8Array(yield doFinal(this, wrapped)), algorithm);
     }),
     "getParameters()Ljava/security/AlgorithmParameters;": () => null,
     "getBlockSize()I": function (this: JCipher) { return this.alg === "RSA-OAEP" ? 0 : 16; },

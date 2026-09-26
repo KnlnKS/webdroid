@@ -551,7 +551,7 @@ rt.register({
     "replaceWith([B)Ljava/nio/charset/CharsetEncoder;": function (this: JCharsetCoder) { return this; },
     "maxBytesPerChar()F": function (this: JCharsetCoder) { return maxBytesPerChar(this.cs); },
     "encode(Ljava/nio/CharBuffer;)Ljava/nio/ByteBuffer;": driven(function* (this: JCharsetCoder, src: JCharBuffer): Gen {
-      const text = (yield charText(src)); let from = 0, cleaned = "";
+      const text = yield charText(src); let from = 0, cleaned = "";
       for (let i = 0; i < text.length;) {
         const cp = text.codePointAt(i)!, width = cp > 0xffff ? 2 : 1;
         const malformed = cp >= 0xd800 && cp <= 0xdfff;
@@ -568,7 +568,7 @@ rt.register({
     "canEncode(C)Z": function (this: JCharsetCoder, c: number) { return encodable(this.cs, c) ? 1 : 0; },
     "encode(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;Z)Ljava/nio/charset/CoderResult;":
       driven(function* (this: JCharsetCoder, src: JCharBuffer, dst: JBuffer): Gen {
-        const text = (yield charText(src));
+        const text = yield charText(src);
         const bytes = encodeString(text, this.cs), n = Math.min(bytes.length, dst.lim - dst.pos);
         for (let i = 0; i < n; i++) dst.dv.setInt8(dst.pos + i, bytes[i]);
         dst.pos += n;
@@ -576,7 +576,7 @@ rt.register({
         return n < bytes.length ? CODER_OVERFLOW : CODER_UNDERFLOW;
       }),
     "canEncode(Ljava/lang/CharSequence;)Z": driven(function* (this: JCharsetCoder, cs: unknown): Gen {
-      const s = typeof cs === "string" ? cs : String((yield vcall(cs, "toString", "()Ljava/lang/String;")));
+      const s = typeof cs === "string" ? cs : String(yield vcall(cs, "toString", "()Ljava/lang/String;"));
       for (let i = 0; i < s.length; i++) if (!encodable(this.cs, s.charCodeAt(i))) return 0;
       return 1;
     }),

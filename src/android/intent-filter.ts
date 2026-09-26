@@ -59,7 +59,7 @@ export async function writePattern(pattern: JPatternMatcher, parcel: JParcel): P
 }
 rt.register({ name: "android/os/PatternMatcher", ctor: JPatternMatcher, ifaces: ["android/os/Parcelable"],
 statics: { get CREATOR() { return parcelCreator("android/os/PatternMatcher", readPattern); } }, methods: {
-  "<init>(Landroid/os/Parcel;)V": driven(function* (this: JPatternMatcher, p: JParcel): Gen { Object.assign(this, (yield readPattern(p))); }),
+  "<init>(Landroid/os/Parcel;)V": driven(function* (this: JPatternMatcher, p: JParcel): Gen { Object.assign(this, yield readPattern(p)); }),
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": function (this: JPatternMatcher, p: JParcel) { return writePattern(this, p); },
   "<init>(Ljava/lang/String;I)V": function (this: JPatternMatcher, path: string, type: number) { this.path = path; this.type = type; },
@@ -204,7 +204,7 @@ rt.register({
   statics: { get CREATOR() { return parcelCreator("android/content/IntentFilter", readFilter); }, MATCH_CATEGORY_MASK: 0xfff0000, MATCH_ADJUSTMENT_MASK: 0xffff, MATCH_ADJUSTMENT_NORMAL: 0x8000, MATCH_CATEGORY_EMPTY: 0x100000, MATCH_CATEGORY_SCHEME: 0x200000,
     MATCH_CATEGORY_TYPE: 0x600000, NO_MATCH_TYPE: -1, NO_MATCH_DATA: -2, NO_MATCH_ACTION: -3, NO_MATCH_CATEGORY: -4 },
   methods: {
-    "<init>(Landroid/os/Parcel;)V": driven(function* (this: JIntentFilter, p: JParcel): Gen { Object.assign(this, (yield readFilter(p))); }),
+    "<init>(Landroid/os/Parcel;)V": driven(function* (this: JIntentFilter, p: JParcel): Gen { Object.assign(this, yield readFilter(p)); }),
     "describeContents()I": () => 0,
     "writeToParcel(Landroid/os/Parcel;I)V": function (this: JIntentFilter, p: JParcel) { return writeFilter(this, p); },
     "setPriority(I)V": function (this: JIntentFilter, priority: number) { this.priority = priority; },

@@ -59,8 +59,8 @@ const runFragmentTransaction = driven(function* runFragmentTransaction(tx: JFrag
     if (op.tag !== undefined) op.frag.tag = op.tag;
     if (op.kind === "replace") {
       const container = op.containerId && fm.act?.window?.decor ? findById(fm.act.window.decor, op.containerId) as JViewGroup | null : null;
-      for (const old of [...fm.active]) if (old.containerId === op.containerId) (yield runFragmentRemove(fm, old));
-      if (container) for (const v of [...container.children]) (yield detachView(container, v));
+      for (const old of [...fm.active]) if (old.containerId === op.containerId) yield runFragmentRemove(fm, old);
+      if (container) for (const v of [...container.children]) yield detachView(container, v);
       yield runFragmentAdd(fm, op.frag, op.containerId);
     } else if (op.kind === "add") {
       yield runFragmentAdd(fm, op.frag, op.containerId);
@@ -113,7 +113,7 @@ export const dispatchFragLifecycle = driven(function* dispatchFragLifecycle(act:
   const active = act.fragMgr?.active;
   if (!active?.length) return;
   for (const f of [...active]) {
-    try { (yield vcall(f, method, "()V")); } catch (e) { reportUncaught(e); }
+    try { yield vcall(f, method, "()V"); } catch (e) { reportUncaught(e); }
   }
 });
 

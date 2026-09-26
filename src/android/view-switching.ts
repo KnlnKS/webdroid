@@ -80,15 +80,15 @@ rt.register({ name: "android/widget/ViewAnimator", ctor: JViewAnimator, sup: "an
   "removeViewInLayout(Landroid/view/View;)V": remove,
   "removeViews(II)V": removeRange,
   "removeViewsInLayout(II)V": removeRange,
-  "removeAllViews()V": driven(function* (this: JViewAnimator): Gen { (yield base(this, "removeAllViews", "()V")); this.displayed = 0; this.first = true; }),
+  "removeAllViews()V": driven(function* (this: JViewAnimator): Gen { yield base(this, "removeAllViews", "()V"); this.displayed = 0; this.first = true; }),
   "setAnimateFirstView(Z)V": function (this: JViewAnimator, animate: number) { this.animateFirst = !!animate; },
   "getAnimateFirstView()Z": function (this: JViewAnimator) { return +this.animateFirst; },
   "setInAnimation(Landroid/view/animation/Animation;)V": function (this: JViewAnimator, animation: unknown) { this.inAnimation = animation; },
   "setOutAnimation(Landroid/view/animation/Animation;)V": function (this: JViewAnimator, animation: unknown) { this.outAnimation = animation; },
   "getInAnimation()Landroid/view/animation/Animation;": function (this: JViewAnimator) { return this.inAnimation; },
   "getOutAnimation()Landroid/view/animation/Animation;": function (this: JViewAnimator) { return this.outAnimation; },
-  "setInAnimation(Landroid/content/Context;I)V": driven(function* (this: JViewAnimator, context: unknown, id: number): Gen { this.inAnimation = (yield vcall(rt.link("android/view/animation/AnimationUtils").ctor, "loadAnimation", "(Landroid/content/Context;I)Landroid/view/animation/Animation;", context, id)); }),
-  "setOutAnimation(Landroid/content/Context;I)V": driven(function* (this: JViewAnimator, context: unknown, id: number): Gen { this.outAnimation = (yield vcall(rt.link("android/view/animation/AnimationUtils").ctor, "loadAnimation", "(Landroid/content/Context;I)Landroid/view/animation/Animation;", context, id)); }),
+  "setInAnimation(Landroid/content/Context;I)V": driven(function* (this: JViewAnimator, context: unknown, id: number): Gen { this.inAnimation = yield vcall(rt.link("android/view/animation/AnimationUtils").ctor, "loadAnimation", "(Landroid/content/Context;I)Landroid/view/animation/Animation;", context, id); }),
+  "setOutAnimation(Landroid/content/Context;I)V": driven(function* (this: JViewAnimator, context: unknown, id: number): Gen { this.outAnimation = yield vcall(rt.link("android/view/animation/AnimationUtils").ctor, "loadAnimation", "(Landroid/content/Context;I)Landroid/view/animation/Animation;", context, id); }),
 } });
 
 class JViewFlipper extends JViewAnimator {
@@ -154,10 +154,10 @@ rt.register({ name: "android/widget/ViewSwitcher", ctor: class extends JViewAnim
   "getNextView()Landroid/view/View;": function (this: JViewAnimator) { return this.children[this.displayed === 0 ? 1 : 0] ?? null; },
   "setFactory(Landroid/widget/ViewSwitcher$ViewFactory;)V": driven(function* (this: JViewAnimator, factory: unknown): Gen {
     for (let i = 0; i < 2; i++) {
-      const child = (yield vcall(factory, "makeView", "()Landroid/view/View;"));
+      const child = yield vcall(factory, "makeView", "()Landroid/view/View;");
       const lp = (yield vcall(child, "getLayoutParams", "()Landroid/view/ViewGroup$LayoutParams;")) ?? (yield newObj("android/widget/FrameLayout$LayoutParams", "(II)V", -1, -2));
       yield vcall(this, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", child, lp);
     }
   }),
-  "reset()V": driven(function* (this: JViewAnimator): Gen { this.first = true; for (const child of this.children) (yield vcall(child, "setVisibility", "(I)V", 8)); }),
+  "reset()V": driven(function* (this: JViewAnimator): Gen { this.first = true; for (const child of this.children) yield vcall(child, "setVisibility", "(I)V", 8); }),
 } });

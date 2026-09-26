@@ -258,7 +258,7 @@ export const contextMethods: NativeSpec["methods"] = {
   "createDisplayContext(Landroid/view/Display;)Landroid/content/Context;": function (this: JContext, display: unknown) { return contextForDisplay(this, display); },
   "createWindowContext(Landroid/view/Display;ILandroid/os/Bundle;)Landroid/content/Context;": function (this: JContext, display: unknown, type: number) { return contextForDisplay(this, display, type); },
   "createWindowContext(ILandroid/os/Bundle;)Landroid/content/Context;": driven(function* (this: JContext, type: number): Gen {
-    return contextForDisplay(this, (yield vcall(this, "getDisplay", "()Landroid/view/Display;")), type);
+    return contextForDisplay(this, yield vcall(this, "getDisplay", "()Landroid/view/Display;"), type);
   }),
   "getApplicationInfo()Landroid/content/pm/ApplicationInfo;": function (this: JContext) {
     return this.$host === appHost ? getAppInfo(this.$host) : vcall(getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", this.$host.pkg, 128);

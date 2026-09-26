@@ -38,12 +38,12 @@ rt.register({ name: "android/accounts/AccountAuthenticatorResponse", ctor: JAuth
   statics: { get CREATOR() { return parcelCreator("android/accounts/AccountAuthenticatorResponse", async p => responseFor(await vcall(p, "readStrongBinder", "()Landroid/os/IBinder;"))); } },
   methods: {
     "<init>(Landroid/accounts/IAccountAuthenticatorResponse;)V": driven(function* (this: JAuthenticatorResponse, response: unknown): Gen {
-      this.binder = (yield vcall(response, "asBinder", "()Landroid/os/IBinder;"));
+      this.binder = yield vcall(response, "asBinder", "()Landroid/os/IBinder;");
     }),
-    "onResult(Landroid/os/Bundle;)V": driven(function* (this: JAuthenticatorResponse, result: JBundle | null): Gen { (yield sendResponse(this, 1, result)); }),
-    "onRequestContinued()V": driven(function* (this: JAuthenticatorResponse): Gen { (yield sendResponse(this, 2, null)); }),
-    "onError(ILjava/lang/String;)V": driven(function* (this: JAuthenticatorResponse, code: number, message: string | null): Gen { (yield sendResponse(this, 3, null, code, message)); }),
-    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JAuthenticatorResponse, p: JParcel): Gen { (yield vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.binder)); }),
+    "onResult(Landroid/os/Bundle;)V": driven(function* (this: JAuthenticatorResponse, result: JBundle | null): Gen { yield sendResponse(this, 1, result); }),
+    "onRequestContinued()V": driven(function* (this: JAuthenticatorResponse): Gen { yield sendResponse(this, 2, null); }),
+    "onError(ILjava/lang/String;)V": driven(function* (this: JAuthenticatorResponse, code: number, message: string | null): Gen { yield sendResponse(this, 3, null, code, message); }),
+    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JAuthenticatorResponse, p: JParcel): Gen { yield vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.binder); }),
     "describeContents()I": () => 0,
   },
 });
@@ -58,20 +58,20 @@ rt.register({ name: "webdroid/AccountAuthenticatorBinder", ctor: JAuthenticatorB
     if (caller.uid !== 1000 && ![...packages.values()].some(pkg => pkg.uid === caller.uid && pkg.grants.has("android.permission.ACCOUNT_MANAGER")))
       throw rt.mkThrowable("java/lang/SecurityException", "Caller lacks ACCOUNT_MANAGER");
     yield vcall(p, "enforceInterface", "(Ljava/lang/String;)V", AUTHENTICATOR);
-    const response = responseFor((yield vcall(p, "readStrongBinder", "()Landroid/os/IBinder;")));
+    const response = responseFor(yield vcall(p, "readStrongBinder", "()Landroid/os/IBinder;"));
     const [name, types] = method, args: unknown[] = [];
     for (const type of types) {
       if (type === S) args.push(readString(p));
-      else if (type === "[" + S) args.push((yield vcall(p, "createStringArray", "()[Ljava/lang/String;")));
-      else if (type === B) args.push(readInt(p) ? (yield vcall(p, "readBundle", "()Landroid/os/Bundle;")) : null);
-      else args.push((yield vcall(p, "readTypedObject", "(Landroid/os/Parcelable$Creator;)Ljava/lang/Object;", rt.link("android/accounts/Account").ctor[mangleStaticField("CREATOR")])));
+      else if (type === "[" + S) args.push(yield vcall(p, "createStringArray", "()[Ljava/lang/String;"));
+      else if (type === B) args.push(readInt(p) ? yield vcall(p, "readBundle", "()Landroid/os/Bundle;") : null);
+      else args.push(yield vcall(p, "readTypedObject", "(Landroid/os/Parcelable$Creator;)Ljava/lang/Object;", rt.link("android/accounts/Account").ctor[mangleStaticField("CREATOR")]));
     }
     try {
       let result: JBundle | null;
       if (name === "getAuthTokenLabel") {
-        const label = (yield withCallingIdentity(caller, () => vcall(this.authenticator, name, "(" + S + ")" + S, ...args)));
+        const label = yield withCallingIdentity(caller, () => vcall(this.authenticator, name, "(" + S + ")" + S, ...args));
         rt.link("android/os/Bundle"); result = new JBundle(); result.map.set("authTokenLabelKey", label);
-      } else result = (yield withCallingIdentity(caller, () => vcall(this.authenticator, name, "(Landroid/accounts/AccountAuthenticatorResponse;" + types.join("") + ")" + B, response, ...args)));
+      } else result = yield withCallingIdentity(caller, () => vcall(this.authenticator, name, "(Landroid/accounts/AccountAuthenticatorResponse;" + types.join("") + ")" + B, response, ...args));
       if (result) yield sendResponse(response, 1, result);
     } catch (error) {
       const code = rt.iof(error, "android/accounts/NetworkErrorException") ? 3 : rt.iof(error, "java/lang/UnsupportedOperationException") ? 6 : rt.iof(error, "java/lang/IllegalArgumentException") ? 7 : 1;

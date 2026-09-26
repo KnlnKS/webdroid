@@ -1102,17 +1102,17 @@ delegate("android/content/res/AssetManager", {
   "nativeAssetDestroy(J)V": release,
   "nativeAssetGetLength(J)J": (a: bigint) => BigInt(deref<Cursor>(a).source.size),
   "nativeAssetGetRemainingLength(J)J": (a: bigint) => { const c = deref<Cursor>(a); return BigInt(c.source.size - c.pos); },
-  "nativeAssetReadChar(J)I": driven(function* (a: bigint): Gen  {
+  "nativeAssetReadChar(J)I": driven(function* (a: bigint): Gen {
     const c = deref<Cursor>(a);
-    const bytes = (yield c.source.read(c.pos, 1));
+    const bytes = yield c.source.read(c.pos, 1);
     if (!bytes.length) return -1;
     c.pos++;
     return bytes[0];
   }),
-  "nativeAssetRead(J[BII)I": driven(function* (a: bigint, out: Int8Array, off: number, len: number): Gen  {
+  "nativeAssetRead(J[BII)I": driven(function* (a: bigint, out: Int8Array, off: number, len: number): Gen {
     const c = deref<Cursor>(a);
     if (!len) return 0;
-    const bytes = (yield c.source.read(c.pos, len));
+    const bytes = yield c.source.read(c.pos, len);
     if (!bytes.length) return -1;
     out.set(i8(bytes), off);
     c.pos += bytes.length;

@@ -109,7 +109,7 @@ rt.register({
       "apply()V": function (this: JPrefsEditor) { commitEditor(this); },
       "commit()Z": function (this: JPrefsEditor) { return commitEditor(this) ? 1 : 0; },
       "putStringSet(Ljava/lang/String;Ljava/util/Set;)Landroid/content/SharedPreferences$Editor;": driven(function* (this: JPrefsEditor, k: string, value: unknown): Gen {
-        const values: unknown[] = value == null ? [] : (yield toJsArray(value));
+        const values: unknown[] = value == null ? [] : yield toJsArray(value);
         if (!values.every((v): v is string => typeof v === "string")) throw rt.mkThrowable("java/lang/ClassCastException", "StringSet contains a non-string");
         this.changes.set(k, value == null ? undefined : values);
         return this;

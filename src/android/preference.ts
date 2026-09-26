@@ -149,7 +149,7 @@ const preferenceMethods: NonNullable<NativeSpec["methods"]> = {
   ...stubs(0, "getOrder()I"),
   "callChangeListener(Ljava/lang/Object;)Z": driven(function* (this: JPreference, v: unknown): Gen {
     if (!this.changeL) return 1;
-    return ((yield vcall(this.changeL, "onPreferenceChange", "(Landroid/preference/Preference;Ljava/lang/Object;)Z", this, v))) ? 1 : 0;
+    return (yield vcall(this.changeL, "onPreferenceChange", "(Landroid/preference/Preference;Ljava/lang/Object;)Z", this, v)) ? 1 : 0;
   }),
 };
 /** Preference.performClick(): the subclass's own onClick() first (CheckBoxPreference toggles,
@@ -247,7 +247,7 @@ async function showListPreferenceDialog(pref: JListPreference) {
   await vcall(b, "setTitle", "(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;", pref.dialogTitleStr || pref.titleStr);
   await vcall(b, "setItems", "([Ljava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)Landroid/app/AlertDialog$Builder;",
     pref.entries, {
-      [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: driven(function* (_d: unknown, idx: number): Gen  {
+      [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: driven(function* (_d: unknown, idx: number): Gen {
         yield setListValue(pref, pref.entryValues[idx] ?? String(idx), true);
       }),
     });

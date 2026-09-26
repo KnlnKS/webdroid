@@ -97,7 +97,7 @@ rt.register({
       return (yield this.await(true, Number(d) * u.ms)) ? 1 : 0;
     }),
     "awaitNanos(J)J": driven(function* (this: JCondition, n: bigint): Gen {
-      const start = guestNow(); (yield this.await(true, Number(n) / 1e6));
+      const start = guestNow(); yield this.await(true, Number(n) / 1e6);
       return n - BigInt(Math.round((guestNow() - start) * 1e6));
     }),
     "signal()V": function (this: JCondition) { this.lock.check(curThread); this.q.shift()?.(); },
@@ -163,7 +163,7 @@ rt.register({ name: "java/util/concurrent/CyclicBarrier", ctor: JCyclicBarrier, 
   "isBroken()Z": function (this: JCyclicBarrier) { return +this.generation.broken; },
   "await()I": function (this: JCyclicBarrier) { return this.await(curThread); },
   "await(JLjava/util/concurrent/TimeUnit;)I": function (this: JCyclicBarrier, duration: bigint, unit: JTimeUnit) { return this.await(curThread, Math.max(0, Number(duration) * unit.ms)); },
-  "reset()V": driven(function* (this: JCyclicBarrier): Gen { if (this.tripping && this.tripThread !== curThread) (yield this.tripping.catch(() => {})); this.breakGeneration(); this.advance(); }),
+  "reset()V": driven(function* (this: JCyclicBarrier): Gen { if (this.tripping && this.tripThread !== curThread) yield this.tripping.catch(() => {}); this.breakGeneration(); this.advance(); }),
 } });
 defineException("java/util/concurrent/BrokenBarrierException", "java/lang/Exception");
 

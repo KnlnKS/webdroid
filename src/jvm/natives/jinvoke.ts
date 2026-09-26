@@ -39,7 +39,7 @@ rt.register({
       if (receiver == null) rt.npe();
       rt.cc(receiver, this.method.owner.name);
       const result = fn.apply(receiver, supplied.map(unboxArg));
-      return boxReturn(ret, result instanceof Promise ? (yield result) : result);
+      return boxReturn(ret, result instanceof Promise ? yield result : result);
     }),
   },
 });

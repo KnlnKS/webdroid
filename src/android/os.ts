@@ -92,9 +92,9 @@ const dispatchLogged = driven(function* dispatchLogged(handler: JHandler, msg: J
   const thread = curThread;
   const str = async (o: unknown) => o === null ? "null" : String(await vcallOn(thread, o, "toString", "()Ljava/lang/String;"));
   try {
-    yield vcallOn(thread, printer, "println", "(Ljava/lang/String;)V", `>>>>> Dispatching to ${(yield str(handler))} ${(yield str(msg.callback))}: ${msg.what}`);
+    yield vcallOn(thread, printer, "println", "(Ljava/lang/String;)V", `>>>>> Dispatching to ${yield str(handler)} ${yield str(msg.callback)}: ${msg.what}`);
     yield vcallOn(thread, handler, "dispatchMessage", "(Landroid/os/Message;)V", msg);
-    yield vcallOn(thread, printer, "println", "(Ljava/lang/String;)V", `<<<<< Finished to ${(yield str(handler))} ${(yield str(msg.callback))}`);
+    yield vcallOn(thread, printer, "println", "(Ljava/lang/String;)V", `<<<<< Finished to ${yield str(handler)} ${yield str(msg.callback)}`);
   } catch (e) { reportUncaught(e); }
 });
 rt.markers("android/util/Printer");
@@ -448,8 +448,8 @@ rt.register({
       const stats = this.stats(); return Object.hasOwn(stats, key) ? String(stats[key]) : null;
     },
     "getMemoryStats()Ljava/util/Map;": driven(function* (this: JMemoryInfo): Gen {
-      const map = (yield newObj("java/util/HashMap"));
-      for (const [key, value] of Object.entries(this.stats())) (yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, String(value)));
+      const map = yield newObj("java/util/HashMap");
+      for (const [key, value] of Object.entries(this.stats())) yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, String(value));
       return map;
     }),
   },
@@ -468,9 +468,9 @@ rt.register({
     "static getPss()J": () => BigInt((((performance as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1024) | 0),
     // ART's runtime counters: nothing here collects, blocks or compacts, so every stat is zero
     "static getRuntimeStat(Ljava/lang/String;)Ljava/lang/String;": (name: string) => RUNTIME_STATS.includes(name) ? "0" : null,
-    "static getRuntimeStats()Ljava/util/Map;": driven(function* (): Gen  {
-      const m = (yield newObj("java/util/HashMap"));
-      for (const k of RUNTIME_STATS) (yield vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, "0"));
+    "static getRuntimeStats()Ljava/util/Map;": driven(function* (): Gen {
+      const m = yield newObj("java/util/HashMap");
+      for (const k of RUNTIME_STATS) yield vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, "0");
       return m;
     }),
     // the JS heap is the nearest thing to this process's dalvik footprint; nothing here is shared
@@ -558,7 +558,7 @@ const bundleMethods: NativeSpec["methods"] = {
   },
   ...noops("<init>()V", "<init>(I)V"),
   ...stubs(0, "describeContents()I"),
-  "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JBundle, parcel: JParcel): Gen { (yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", this)); }),
+  "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JBundle, parcel: JParcel): Gen { yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", this); }),
   "size()I": function (this: JBundle) { return this.map.size; },
   // A Bundle holds boxed values: `get` is the only reader that lost the declared width, and a
   // caller that reaches for Object then calls toString()/instanceof Number needs the box.
@@ -758,7 +758,7 @@ let pfdBackingSeq = 0;
 const pfdBackings = new Map<string, PfdBacking>();
 export const pfdBackingBytes = driven(function* pfdBackingBytes(key: string): Gen<Uint8Array | null> {
   const backing = pfdBackings.get(key);
-  if (backing?.closing) { (yield backing.closing); return null; }
+  if (backing?.closing) { yield backing.closing; return null; }
   return backing ? vfs.read(backing.path) : null;
 });
 export function mkPfd(bytes: Uint8Array, sink: ((b: Uint8Array, closed?: boolean) => unknown) | null, backingKey?: string): JParcelFileDescriptor {
@@ -800,12 +800,12 @@ rt.register({
     MODE_CREATE: 0x08000000, MODE_TRUNCATE: 0x04000000, MODE_APPEND: 0x02000000,
   },
   methods: {
-    "static open(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;": driven(function* (f: { path: string }, mode: number): Gen  {
+    "static open(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;": driven(function* (f: { path: string }, mode: number): Gen {
       const path = f?.path ?? "";
       if (!vfs.exists(path) && !(mode & 0x08000000)) throw rt.mkThrowable("java/io/FileNotFoundException", path);
       if (mode & 0x04000000) vfs.write(path, new Uint8Array(0));
       const source = vfs.source(path);
-      const p = mkPfd(source ? (yield readFully(source)) : new Uint8Array(0), mode & 0x20000000 ? (b) => vfs.write(path, b) : null);
+      const p = mkPfd(source ? yield readFully(source) : new Uint8Array(0), mode & 0x20000000 ? (b) => vfs.write(path, b) : null);
       p.path = path;
       // MODE_* bits → O_* flags: the access mode, then create/truncate/append
       p.flags = ((mode >>> 28) & 3) - 1 + (mode & 0x08000000 ? 0x40 : 0) + (mode & 0x04000000 ? 0x200 : 0) + (mode & 0x02000000 ? 0x400 : 0);
@@ -880,7 +880,7 @@ rt.register({
   methods: {
     "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JPfdOut, p: JParcelFileDescriptor) { this.pfd = p; },
     "flush()V": pfdFlush,
-    "close()V": driven(function* (this: JPfdOut): Gen { (yield pfdFlush.call(this, true)); const pfd = this.pfd; this.pfd = null; if (pfd) (yield vcall(pfd, "close", "()V")); }),
+    "close()V": driven(function* (this: JPfdOut): Gen { yield pfdFlush.call(this, true); const pfd = this.pfd; this.pfd = null; if (pfd) yield vcall(pfd, "close", "()V"); }),
   },
 });
 
@@ -901,7 +901,7 @@ function statFs(this: JStatFs, p: string): unknown { return rt.drive(statFs$.cal
 function* statFs$(this: JStatFs, p: string): Gen {
   this.path = p;
   try {
-    const e = (yield navigator.storage?.estimate?.());
+    const e = yield navigator.storage?.estimate?.();
     this.total = e?.quota ?? 0; this.free = Math.max(0, (e?.quota ?? 0) - (e?.usage ?? 0));
   } catch { /* no estimate available: report an empty filesystem */ }
 }
@@ -929,8 +929,8 @@ rt.register({
   statics: { get UUID_DEFAULT() { return uuidDefault(); } },
   methods: {
     "getUuidForPath(Ljava/io/File;)Ljava/util/UUID;": () => uuidDefault(),
-    "getAllocatableBytes(Ljava/util/UUID;)J": driven(function* (): Gen  { return BigInt(Math.floor(((yield storageEstimate())).free)); }),
-    "getCacheQuotaBytes(Ljava/util/UUID;)J": driven(function* (): Gen  { return BigInt(Math.floor(((yield storageEstimate())).total / 20)); }),
+    "getAllocatableBytes(Ljava/util/UUID;)J": driven(function* (): Gen { return BigInt(Math.floor((yield storageEstimate()).free)); }),
+    "getCacheQuotaBytes(Ljava/util/UUID;)J": driven(function* (): Gen { return BigInt(Math.floor((yield storageEstimate()).total / 20)); }),
     "getCacheSizeBytes(Ljava/util/UUID;)J": () => 0n,
     "isAllocationSupported(Ljava/io/FileDescriptor;)Z": () => 0,
     "isEncrypted(Ljava/io/File;)Z": () => 0,
@@ -1001,7 +1001,7 @@ export const dispatchVsync = driven(function* dispatchVsync(callback: JObj, pres
   // The browser exposes one predicted presentation, not Android's alternate timelines.
   timeline.presentation = presentation;
   data.active = timeline.active = true;
-  try { (yield vcall(callback, "onVsync", "(Landroid/view/Choreographer$FrameData;)V", data)); }
+  try { yield vcall(callback, "onVsync", "(Landroid/view/Choreographer$FrameData;)V", data); }
   finally { data.active = timeline.active = false; }
 });
 class JChoreographer extends JObj {
@@ -1125,12 +1125,12 @@ rt.register({
     "<init>()V": function () {},
     "notifyChanged()V": driven(function* (this: JObservable): Gen {
       for (const o of [...this.observers]) {
-        try { (yield vcall(o, "onChanged", "()V")); } catch (e) { console.warn("[dataset]", e); }
+        try { yield vcall(o, "onChanged", "()V"); } catch (e) { console.warn("[dataset]", e); }
       }
     }),
     "notifyInvalidated()V": driven(function* (this: JObservable): Gen {
       for (const o of [...this.observers]) {
-        try { (yield vcall(o, "onInvalidated", "()V")); } catch (e) { console.warn("[dataset]", e); }
+        try { yield vcall(o, "onInvalidated", "()V"); } catch (e) { console.warn("[dataset]", e); }
       }
     }),
   },
@@ -1222,7 +1222,7 @@ rt.register({
       if (n.fd < 0) throw errno("dup", 9);
       return n;
     },
-    [`static mmap(JJII${FD}J)J`]: driven(function* (hint: bigint, count: bigint, prot: number, flags: number, d: JFileDescriptor | null, offset: bigint): Gen  {
+    [`static mmap(JJII${FD}J)J`]: driven(function* (hint: bigint, count: bigint, prot: number, flags: number, d: JFileDescriptor | null, offset: bigint): Gen {
       const size = Number(count);
       if (!Number.isSafeInteger(size) || size <= 0 || offset < 0n || offset > BigInt(Number.MAX_SAFE_INTEGER) || (offset & 4095n) !== 0n ||
           (prot & ~7) !== 0 || ((flags & 3) !== 1 && (flags & 3) !== 2) || (flags & 0x10) !== 0 && (hint & 4095n) !== 0n)
@@ -1237,7 +1237,7 @@ rt.register({
       const address = mem.mapVa(size, prot === 0);
       if (!address) throw errno("mmap", E.NOMEM);
       try {
-        if (source && prot) mem.write(guestAt(address), (yield readFully(source, Number(offset), size)));
+        if (source && prot) mem.write(guestAt(address), yield readFully(source, Number(offset), size));
       } catch {
         mem.unmapVa(BigInt(address), size);
         throw errno("mmap", E.IO);
@@ -1273,9 +1273,9 @@ rt.register({
       s.st_blocks = (s.st_size + 511n) / 512n;
       return s;
     },
-    "static statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": driven(function* (path: string): Gen  {
+    "static statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": driven(function* (path: string): Gen {
       if (!vfs.stat(path) && !vfs.isDir(path)) throw errno("statvfs", 2);
-      const { total, free } = (yield storageEstimate());
+      const { total, free } = yield storageEstimate();
       const s = new JStructStatVfs();
       s.f_bsize = s.f_frsize = BLK;
       s.f_blocks = BigInt(Math.floor(total / Number(BLK)));
@@ -1283,9 +1283,9 @@ rt.register({
       s.f_namemax = 255n;
       return s;
     }),
-    [`static fstatvfs(${FD})Landroid/system/StructStatVfs;`]: driven(function* (d: JFileDescriptor): Gen  {
+    [`static fstatvfs(${FD})Landroid/system/StructStatVfs;`]: driven(function* (d: JFileDescriptor): Gen {
       if (descriptorFd(d) < 0) throw errno("fstatvfs", E.BADF);
-      const { total, free } = (yield storageEstimate());
+      const { total, free } = yield storageEstimate();
       const s = new JStructStatVfs();
       s.f_bsize = s.f_frsize = BLK;
       s.f_blocks = BigInt(Math.floor(total / Number(BLK)));
@@ -1357,7 +1357,7 @@ rt.register({
     "get()Ljava/lang/Object;": driven(function* (this: JAsyncTask): Gen {
       if (!this.cancelled && this.done) yield this.done;
       if (this.cancelled) throw rt.mkThrowable("java/util/concurrent/CancellationException", null);
-      if (this.error) throw (yield newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", this.error));
+      if (this.error) throw yield newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", this.error);
       return this.result;
     }),
     "static execute(Ljava/lang/Runnable;)V": (r: unknown) => vcall(serialTaskExecutor(), "execute", "(Ljava/lang/Runnable;)V", r),
@@ -1370,7 +1370,7 @@ function* runAsyncTask$(this: JAsyncTask, executor: unknown, params: unknown[]):
   let finish!: () => void;
   this.done = new Promise(resolve => { finish = resolve; });
   const pre = () => vcall(this, "onPreExecute", "()V");
-  if (curThread === mainThread && inMainJob()) (yield pre()); else (yield onMain(pre));
+  if (curThread === mainThread && inMainJob()) yield pre(); else yield onMain(pre);
   const runnable = new JObj();
   Object.assign(runnable, { [mangleMethod("run", "()V")]: async () => {
     this.worker = curThread;

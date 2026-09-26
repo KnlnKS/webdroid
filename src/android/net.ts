@@ -133,7 +133,7 @@ rt.register({
   name: "android/net/Uri", ctor: JUri, ifaces: ["android/os/Parcelable", "java/lang/Comparable"],
   statics: { get EMPTY() { return mkUri(""); }, get CREATOR() { return parcelCreator("android/net/Uri", readUri); } },
   methods: {
-    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JUri, p: JParcel): Gen { (yield writeUri(p, this)); }),
+    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JUri, p: JParcel): Gen { yield writeUri(p, this); }),
     "static writeToParcel(Landroid/os/Parcel;Landroid/net/Uri;)V": writeUri,
     "static parse(Ljava/lang/String;)Landroid/net/Uri;": (s: string) => mkUri(s),
     "static fromFile(Ljava/io/File;)Landroid/net/Uri;": (f: JFile) => mkUri("file://" + uriEncode(f.path, "/")),
@@ -253,9 +253,9 @@ rt.register({
       if (builder === null) throw rt.mkThrowable("java/lang/NullPointerException", "builder");
       return vcall(builder, "appendEncodedPath", "(Ljava/lang/String;)Landroid/net/Uri$Builder;", String(id));
     },
-    "static withAppendedId(Landroid/net/Uri;J)Landroid/net/Uri;": driven(function* (u: JUri | null, id: bigint): Gen  {
+    "static withAppendedId(Landroid/net/Uri;J)Landroid/net/Uri;": driven(function* (u: JUri | null, id: bigint): Gen {
       if (u === null) throw rt.mkThrowable("java/lang/NullPointerException", "contentUri");
-      const builder = (yield vcall(u, "buildUpon", "()Landroid/net/Uri$Builder;"));
+      const builder = yield vcall(u, "buildUpon", "()Landroid/net/Uri$Builder;");
       yield vcall(builder, "appendEncodedPath", "(Ljava/lang/String;)Landroid/net/Uri$Builder;", String(id));
       return vcall(builder, "build", "()Landroid/net/Uri;");
     }),
@@ -546,13 +546,13 @@ rt.register({
     "getActiveNetworkInfo()Landroid/net/NetworkInfo;": () => rt.make("android/net/NetworkInfo"),
     // the one Network, present exactly when NetworkInfo says connected (a null here with a
     // connected NetworkInfo reads as "no internet" to every modern connectivity check)
-    "getActiveNetwork()Landroid/net/Network;": driven(function* (): Gen  { return ((yield netUp())) ? network() : null; }),
-    "getAllNetworks()[Landroid/net/Network;": driven(function* (): Gen  { return jarray(((yield netUp())) ? [network()] : [], "Landroid/net/Network;"); }),
+    "getActiveNetwork()Landroid/net/Network;": driven(function* (): Gen { return (yield netUp()) ? network() : null; }),
+    "getAllNetworks()[Landroid/net/Network;": driven(function* (): Gen { return jarray((yield netUp()) ? [network()] : [], "Landroid/net/Network;"); }),
     "getNetworkInfo(Landroid/net/Network;)Landroid/net/NetworkInfo;": (n: unknown) => knownNetwork(n) ? rt.make("android/net/NetworkInfo") : null,
     // by network type (TYPE_WIFI/TYPE_MOBILE...): the one network we model is the active one,
     // so its own type answers and every other type has no info, as on a device without it
     "getNetworkInfo(I)Landroid/net/NetworkInfo;": driven(function* (t: number): Gen 
-      { return ((yield netUp())) && t === NET_TYPE ? rt.make("android/net/NetworkInfo") : null; }),
+      { return (yield netUp()) && t === NET_TYPE ? rt.make("android/net/NetworkInfo") : null; }),
     "getLinkProperties(Landroid/net/Network;)Landroid/net/LinkProperties;": () => null,
     "bindProcessToNetwork(Landroid/net/Network;)Z": (n: unknown) => {
       if (n != null && !knownNetwork(n)) return 0;
@@ -573,7 +573,7 @@ rt.register({
     ...noops("reportNetworkConnectivity(Landroid/net/Network;Z)V"),
     "isActiveNetworkMetered()Z": () => 0,
     // The relay has no radio power-saving transitions while its network is available.
-    "isDefaultNetworkActive()Z": driven(function* (): Gen  { return ((yield netUp())) ? 1 : 0; }),
+    "isDefaultNetworkActive()Z": driven(function* (): Gen { return (yield netUp()) ? 1 : 0; }),
     "addDefaultNetworkActiveListener(Landroid/net/ConnectivityManager$OnNetworkActiveListener;)V": (listener: unknown) => { activeListeners.add(listener); },
     "removeDefaultNetworkActiveListener(Landroid/net/ConnectivityManager$OnNetworkActiveListener;)V": (listener: unknown) => {
       if (!activeListeners.delete(listener)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Listener not registered");

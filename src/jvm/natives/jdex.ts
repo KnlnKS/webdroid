@@ -84,7 +84,7 @@ rt.register({
   name: "dalvik/system/PathClassLoader", ctor: class extends JBaseDexClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
   methods: {
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": init,
-    "<init>(Ljava/lang/String;Ljava/lang/ClassLoader;)V": driven(function* (this: JClassLoader, path: string, parent: JClassLoader | null): Gen { (yield init.call(this, path, null, parent)); }),
+    "<init>(Ljava/lang/String;Ljava/lang/ClassLoader;)V": driven(function* (this: JClassLoader, path: string, parent: JClassLoader | null): Gen { yield init.call(this, path, null, parent); }),
   },
 });
 rt.register({

@@ -551,7 +551,7 @@ rt.register({ name: "com/android/internal/graphics/drawable/AnimationScaleListDr
     "stop()V": function (this: JAnimationScaleListDrawable) { const d = this.current(); if (d) return vcall(d, "stop", "()V"); },
     "isRunning()Z": function (this: JAnimationScaleListDrawable) { const d = this.current(); return d ? vcall(d, "isRunning", "()Z") : 0; },
     "onStateChange([I)Z": driven(function* (this: JAnimationScaleListDrawable, state: Int32Array): Gen {
-      for (const { d } of this.children) (yield vcall(d, "setState", "([I)Z", state));
+      for (const { d } of this.children) yield vcall(d, "setState", "([I)Z", state);
       return 1;
     }),
   } });
@@ -585,7 +585,7 @@ rt.register({
   methods: {
     "onStateChange([I)Z": driven(function* (this: JStateListDrawable, state: Int32Array): Gen {
       const thread = curThread;
-      for (const item of this.items) (yield vcallOn(thread, item.d, "setState", "([I)Z", state));
+      for (const item of this.items) yield vcallOn(thread, item.d, "setState", "([I)Z", state);
       return 1;
     }),
     "<init>()V": function () {},
@@ -820,7 +820,7 @@ class JAdaptiveIconDrawable extends JLayerDrawable {
     const thread = curThread;
     const { left, top, right, bottom } = this.bounds;
     const dx = (right - left) / 4, dy = (bottom - top) / 4;
-    for (const l of this.layers) if (l.d) (yield vcallOn(thread, l.d, "setBounds", "(IIII)V", left - dx, top - dy, right + dx, bottom + dy));
+    for (const l of this.layers) if (l.d) yield vcallOn(thread, l.d, "setBounds", "(IIII)V", left - dx, top - dy, right + dx, bottom + dy);
   }
   clip(cv: JCanvas) {
     const { left, top, right, bottom } = this.bounds;
@@ -1091,7 +1091,7 @@ class JClipDrawable extends JDrawableWrapper {
     const top = (gravity & 112) === 80 ? b.bottom - height : (gravity & 112) === 16 ? b.top + Math.round((h - height) / 2) : b.top;
     cv.ctx.save();
     cv.ctx.beginPath(); cv.ctx.rect(left, top, width, height); cv.ctx.clip();
-    try { (yield drawChild(this.dr, cv)); } finally { cv.ctx.restore(); }
+    try { yield drawChild(this.dr, cv); } finally { cv.ctx.restore(); }
   }
 }
 rt.register({ name: "android/graphics/drawable/ClipDrawable", ctor: JClipDrawable,
@@ -1206,11 +1206,11 @@ class JScaleDrawable extends JDrawableWrapper {
     const b = this.bounds;
     let w = b.right - b.left, h = b.bottom - b.top;
     if (this.scaleWidth > 0) {
-      const min = this.useIntrinsicMinimum ? Number((yield drawableSize(child, false, thread))) : 0;
+      const min = this.useIntrinsicMinimum ? Number(yield drawableSize(child, false, thread)) : 0;
       w -= Math.trunc((w - min) * (10000 - this.level) * this.scaleWidth / 10000);
     }
     if (this.scaleHeight > 0) {
-      const min = this.useIntrinsicMinimum ? Number((yield drawableSize(child, true, thread))) : 0;
+      const min = this.useIntrinsicMinimum ? Number(yield drawableSize(child, true, thread)) : 0;
       h -= Math.trunc((h - min) * (10000 - this.level) * this.scaleHeight / 10000);
     }
     gravityApply(absGravity(this.gravity, this.layoutDir), w, h, b, 0, 0, this.scaled);
@@ -1220,14 +1220,14 @@ class JScaleDrawable extends JDrawableWrapper {
 rt.register({ name: "android/graphics/drawable/ScaleDrawable", ctor: JScaleDrawable, sup: "android/graphics/drawable/DrawableWrapper", methods: {
   "<init>(Landroid/graphics/drawable/Drawable;IFF)V": driven(function* (this: JScaleDrawable, d: JDrawable | null, gravity: number, w: number, h: number): Gen {
     const thread = curThread;
-    this.gravity = gravity; this.scaleWidth = w; this.scaleHeight = h; (yield wrapSet.call(this, d));
+    this.gravity = gravity; this.scaleWidth = w; this.scaleHeight = h; yield wrapSet.call(this, d);
     return this.layout(thread);
   }),
   "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JScaleDrawable) { return this.layout(); },
   "onLevelChange(I)Z": driven(function* (this: JScaleDrawable, level: number): Gen {
     const thread = curThread;
     if (this.dr) yield vcallOn(thread, this.dr, "setLevel", "(I)Z", level);
-    (yield this.layout(thread)); invalidateSelf.call(this); return 1;
+    yield this.layout(thread); invalidateSelf.call(this); return 1;
   }),
 } });
 // ── android.graphics.drawable.shapes + ShapeDrawable: a Shape is resized to the drawable's
@@ -1378,7 +1378,7 @@ rt.register({
       if (!this.shape) return;
       yield vcall(this.shape, "resize", "(FF)V", width, height);
       if (this.shaderFactory) {
-        const shader = (yield vcall(this.shaderFactory, "resize", "(II)Landroid/graphics/Shader;", width, height));
+        const shader = yield vcall(this.shaderFactory, "resize", "(II)Landroid/graphics/Shader;", width, height);
         yield vcall(this.p, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;", shader);
       }
     }),
@@ -1390,7 +1390,7 @@ rt.register({
       yield vcall(sh, "resize", "(FF)V", b.right - b.left, b.bottom - b.top);
       ctx.save();
       ctx.translate(b.left, b.top);
-      try { (yield vcall(this, "onDraw", "(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V", sh, cv, this.effPaint())); }
+      try { yield vcall(this, "onDraw", "(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V", sh, cv, this.effPaint()); }
       finally { ctx.restore(); }
     }),
     "onDraw(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShapeDrawable, sh: JShape, cv: JCanvas, p: JPaint) {
@@ -1491,13 +1491,13 @@ const AT = attrTable(
   "pivotX", "pivotY", "translateX", "translateY", "scaleX", "scaleY", "rotation", "fromDegrees", "toDegrees");
 const loadDrawableXml = driven(function* loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): Gen<JDrawable> {
   const root = parseAXML(bytes);
-  return (yield inflateDrawableNode(res, root, theme));
+  return yield inflateDrawableNode(res, root, theme);
 });
 /** an <item>/<inset>'s drawable: its android:drawable, else its first inline child */
 const itemDrawable = driven(function* itemDrawable(res: Resources, node: XmlNode, theme: JTheme | null): Gen<JDrawable | null> {
   const da = nodeAttr(res, node, AT.drawable);
-  if (da) return (yield loadDrawableRV(res, da, theme));
-  return node.children.length ? (yield inflateDrawableNode(res, node.children[0], theme)) : null;
+  if (da) return yield loadDrawableRV(res, da, theme);
+  return node.children.length ? yield inflateDrawableNode(res, node.children[0], theme) : null;
 });
 export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Resources, node: XmlNode, theme: JTheme | null): Gen<JDrawable> {
   const get = (id: number, from = node) => resolveStyleValue(res, theme, nodeAttr(res, from, id));
@@ -1576,14 +1576,14 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
         d[`pivot${axis}Relative`] = relative;
         d[`pivot${axis}`] = relative ? complexToFraction(value.d, 1, 1) : rvFloat(res, value);
       }
-      yield wrapSet.call(d, (yield itemDrawable(res, node, theme)));
+      yield wrapSet.call(d, yield itemDrawable(res, node, theme));
       return d;
     }
     case "clip": {
       const d = new JClipDrawable();
       d.gravity = xmlInt(res, get(AT.gravity), 3);
       d.orientation = xmlInt(res, get(AT.orientation), 1);
-      yield wrapSet.call(d, (yield itemDrawable(res, node, theme)));
+      yield wrapSet.call(d, yield itemDrawable(res, node, theme));
       return d;
     }
     case "scale": {
@@ -1594,7 +1594,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       d.gravity = xmlInt(res, get(AT.scaleGravity), 3);
       d.useIntrinsicMinimum = !!xmlInt(res, get(AT.useIntrinsicSizeAsMinimum), 0);
       d.level = xmlInt(res, get(AT.level), 0);
-      yield wrapSet.call(d, (yield itemDrawable(res, node, theme)));
+      yield wrapSet.call(d, yield itemDrawable(res, node, theme));
       return d;
     }
     case "animated-selector":
@@ -1608,10 +1608,10 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
           if (ST_IDS.has(a.resId)) {
             (a.data ? states : neg).push(a.resId);
           } else if (a.resId === AT.drawable) {
-            child = (yield loadDrawableRV(res, attrRV(res, a), theme));
+            child = yield loadDrawableRV(res, attrRV(res, a), theme);
           }
         }
-        if (!child && c.children.length) child = (yield inflateDrawableNode(res, c.children[0], theme));
+        if (!child && c.children.length) child = yield inflateDrawableNode(res, c.children[0], theme);
         if (child) d.items.push({ states, negStates: neg, d: child });
       }
       return d;
@@ -1620,7 +1620,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       const d = new JLayerDrawable();
       for (const c of node.children) {
         if (c.name !== "item") continue;
-        const child = (yield itemDrawable(res, c, theme));
+        const child = yield itemDrawable(res, c, theme);
         if (child) {
           // AOSP LayerDrawable: an item may carry its own size and a gravity to place it by,
           // and layout() already implements that. Without them a 24dp arrow inflated into a
@@ -1647,7 +1647,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       const d = new JAdaptiveIconDrawable();
       for (const n of ["background", "foreground"]) {
         const c = node.children.find((k) => k.name === n);
-        const child = c ? (yield itemDrawable(res, c, theme)) : null;
+        const child = c ? yield itemDrawable(res, c, theme) : null;
         if (child) d.pushLayer({ d: child, insets: [0, 0, 0, 0] });
       }
       return d;
@@ -1663,8 +1663,8 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
         // ripple is clipped to, and is NEVER drawn. selectableItemBackground's mask is
         // @android:color/white, so drawing it fills the view with opaque white — which is
         // invisible on a light theme and the entire surface on a dark one.
-        if (idv && idv.d === maskId(res)) { d.mask = (yield itemDrawable(res, c, theme)); continue; }
-        const child = (yield itemDrawable(res, c, theme));
+        if (idv && idv.d === maskId(res)) { d.mask = yield itemDrawable(res, c, theme); continue; }
+        const child = yield itemDrawable(res, c, theme);
         if (child) { d.pushLayer({ d: child, insets: [0, 0, 0, 0] }); d.ids.push(idv ? idv.d : null); }
       }
       return d;
@@ -1676,7 +1676,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
         if (value?.t === TV.FRACTION) d.fractions[i] = complexToFraction(value.d, 1, 1);
         else d.insets[i] = dimen(value, 0);
       }
-      yield wrapSet.call(d, (yield itemDrawable(res, node, theme)));
+      yield wrapSet.call(d, yield itemDrawable(res, node, theme));
       return d;
     }
     // Both wrap a bitmap named by android:src; the .9.png's own npTc chunk is what makes it
@@ -1684,7 +1684,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
     case "bitmap":
     case "nine-patch": {
       const da = nodeAttr(res, node, AT.src);
-      return da ? (yield loadDrawableRV(res, da, theme)) : new JColorDrawable();
+      return da ? yield loadDrawableRV(res, da, theme) : new JColorDrawable();
     }
     case "vector": {
       const d = new JVectorDrawable();
@@ -1726,7 +1726,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
     case "animated-vector": {
       const d = new JAnimatedVectorDrawable();
       const source = get(AT.drawable);
-      const vector = source ? (yield loadDrawableRV(res, source, theme)) : null;
+      const vector = source ? yield loadDrawableRV(res, source, theme) : null;
       if (vector instanceof JVectorDrawable) Object.assign(d, vector);
       return d;
     }
@@ -1741,7 +1741,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       for (const c of node.children) {
         if (c.name !== "item") continue;
         const da = nodeAttr(res, c, AT.drawable);
-        const child = da ? (yield loadDrawableRV(res, da, theme)) : c.children.length ? (yield inflateDrawableNode(res, c.children[0], theme)) : null;
+        const child = da ? yield loadDrawableRV(res, da, theme) : c.children.length ? yield inflateDrawableNode(res, c.children[0], theme) : null;
         if (child) d.frames.push({ d: child, ms: nodeAttr(res, c, AT.duration)?.d ?? 0 });
       }
       return d;
@@ -1750,7 +1750,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       const d = new JAnimationScaleListDrawable();
       for (const item of node.children) {
         if (item.name !== "item") continue;
-        const child = (yield itemDrawable(res, item, theme));
+        const child = yield itemDrawable(res, item, theme);
         if (!child) throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "<item> requires a drawable");
         child.callback = d;
         d.children.push({ d: child });
@@ -1762,8 +1762,8 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       for (const c of node.children) {
         if (c.name === "item") {
           const da = nodeAttr(res, c, AT.drawable);
-          if (da) return (yield loadDrawableRV(res, da, theme));
-          if (c.children.length) return (yield inflateDrawableNode(res, c.children[0], theme));
+          if (da) return yield loadDrawableRV(res, da, theme);
+          if (c.children.length) return yield inflateDrawableNode(res, c.children[0], theme);
         }
       }
       return new JColorDrawable();
@@ -1775,7 +1775,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       }
       let drawable: unknown;
       try {
-        drawable = (yield newObj(node.name.replace(/\./g, "/")));
+        drawable = yield newObj(node.name.replace(/\./g, "/"));
       } catch {
         throw rt.mkThrowable("android/view/InflateException", "Error inflating class " + node.name);
       }
@@ -1783,8 +1783,8 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
         throw rt.mkThrowable("android/view/InflateException", "Class is not a Drawable " + node.name);
       }
       const parser = xmlParserAtNode(res, node);
-      (yield vcall(drawable, "inflate", "(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V",
-        res.jobj, parser, parser, theme));
+      yield vcall(drawable, "inflate", "(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V",
+        res.jobj, parser, parser, theme);
       return drawable;
   }
 });
@@ -1801,8 +1801,8 @@ function densityOfPath(path: string): number { return DPI[DPI_RE.exec(path)?.[1]
 
 export const loadDrawableRV = driven(function* loadDrawableRV$(res: Resources, v: RV | null, theme: JTheme | null): Gen<JDrawable> {
   if (!v || v.t === TV.NULL) return new JColorDrawable();
-  if (v.t === TV.ATTRIBUTE) return (yield loadDrawableRV(res, theme?.lookup(v.d) ?? null, theme));
-  if (v.t === TV.REFERENCE) return (yield loadDrawable(res, v.d, theme));
+  if (v.t === TV.ATTRIBUTE) return yield loadDrawableRV(res, theme?.lookup(v.d) ?? null, theme);
+  if (v.t === TV.REFERENCE) return yield loadDrawable(res, v.d, theme);
   if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) {
     const d = new JColorDrawable();
     d.color = v.d;
@@ -1810,7 +1810,7 @@ export const loadDrawableRV = driven(function* loadDrawableRV$(res: Resources, v
   }
   if (v.s) { // a path straight off an attribute, always the app's own
     const bytes = res.arsc?.files(v.s);
-    if (bytes) return (yield loadDrawableFile(res, v.s, bytes, theme));
+    if (bytes) return yield loadDrawableFile(res, v.s, bytes, theme);
   }
   return new JColorDrawable();
 });
@@ -1823,19 +1823,19 @@ export const loadDrawable = driven(function* loadDrawable$(res: Resources, resId
     if (e.value.type === TV.STRING) {
       const f = res.fileOf(resId);
       if (!f) { rt.noteMissing("drawable file for 0x" + resId.toString(16)); return new JColorDrawable(); }
-      return (yield loadDrawableFile(res, f.path, f.bytes, theme));
+      return yield loadDrawableFile(res, f.path, f.bytes, theme);
     }
-    if (e.value.type === TV.REFERENCE) return (yield loadDrawable(res, e.value.data, theme));
-    return (yield loadDrawableRV(res, { t: e.value.type, d: e.value.data }, theme));
+    if (e.value.type === TV.REFERENCE) return yield loadDrawable(res, e.value.data, theme);
+    return yield loadDrawableRV(res, { t: e.value.type, d: e.value.data }, theme);
   }
   return new JColorDrawable();
 });
 
 const loadDrawableFile = driven(function* loadDrawableFile(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null): Gen<JDrawable> {
-  if (path.endsWith(".xml")) return (yield loadDrawableXml(res, bytes, theme));
+  if (path.endsWith(".xml")) return yield loadDrawableXml(res, bytes, theme);
   if (path.endsWith(".9.png")) {
     const chunk = parseNinePatchChunk(bytes);
-    const bmp = (yield decodeBytes(bytes, null));
+    const bmp = yield decodeBytes(bytes, null);
     const d = new JNinePatchDrawable();
     if (bmp && chunk) {
       d.bmp = bmp;
@@ -1851,7 +1851,7 @@ const loadDrawableFile = driven(function* loadDrawableFile(res: Resources, path:
     }
     return d;
   }
-  const bmp = (yield decodeBytes(bytes, null));
+  const bmp = yield decodeBytes(bytes, null);
   const d = new JBitmapDrawable();
   if (bmp) {
     bmp.density = densityOfPath(path);
@@ -1879,7 +1879,7 @@ export const loadColorStateList = driven(function* loadColorStateList$(res: Reso
     out = f ? parseCslXml(res, f.bytes, theme) : mkCsl(-16777216);
   } else if (e?.value) {
     const v = res.resolveRefs({ t: e.value.type, d: e.value.data });
-    if (v.t === TV.REFERENCE && v.d !== resId) return (yield loadColorStateList(res, v.d, theme));
+    if (v.t === TV.REFERENCE && v.d !== resId) return yield loadColorStateList(res, v.d, theme);
     out = mkCsl(rvColor(res, v, -16777216));
   } else out = mkCsl(-16777216);
   byId.set(resId, out);

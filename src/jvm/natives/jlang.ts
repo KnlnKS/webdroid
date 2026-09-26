@@ -398,7 +398,7 @@ rt.register({
     "<init>(Ljava/lang/ClassLoader;)V": function (this: JClassLoader, parent: JClassLoader | null) { this.parent = parent; },
     "getParent()Ljava/lang/ClassLoader;": function (this: JClassLoader) { return this.parent; },
     "loadClass(Ljava/lang/String;)Ljava/lang/Class;": driven(function* (this: JClassLoader, n: string): Gen {
-      return rememberLoaded(this, n, (yield vcall(this, "loadClass", "(Ljava/lang/String;Z)Ljava/lang/Class;", n, 0)));
+      return rememberLoaded(this, n, yield vcall(this, "loadClass", "(Ljava/lang/String;Z)Ljava/lang/Class;", n, 0));
     }),
     "loadClass(Ljava/lang/String;Z)Ljava/lang/Class;": loadClass,
     "findLoadedClass(Ljava/lang/String;)Ljava/lang/Class;": function (this: JClassLoader, n: string) {
@@ -418,32 +418,32 @@ rt.register({
       return inherited || vcall(this, "findResource", "(Ljava/lang/String;)Ljava/net/URL;", path);
     }),
     "findResources(Ljava/lang/String;)Ljava/util/Enumeration;": driven(function* (this: JClassLoader, path: string): Gen {
-      const { mkIter } = (yield import("./jutil"));
-      const url = (yield vcall(this, "findResource", "(Ljava/lang/String;)Ljava/net/URL;", path));
+      const { mkIter } = yield import("./jutil");
+      const url = yield vcall(this, "findResource", "(Ljava/lang/String;)Ljava/net/URL;", path);
       return mkIter(url ? [url] : []);
     }),
     "getResources(Ljava/lang/String;)Ljava/util/Enumeration;": driven(function* (this: JClassLoader, path: string): Gen {
-      const { mkIter } = (yield import("./jutil"));
+      const { mkIter } = yield import("./jutil");
       const urls: unknown[] = [];
       const inherited = this.parent && (yield vcall(this.parent, "getResources", "(Ljava/lang/String;)Ljava/util/Enumeration;", path));
-      if (inherited) while ((yield vcall(inherited, "hasMoreElements", "()Z"))) urls.push((yield vcall(inherited, "nextElement", "()Ljava/lang/Object;")));
-      const own = (yield vcall(this, "findResources", "(Ljava/lang/String;)Ljava/util/Enumeration;", path));
-      while ((yield vcall(own, "hasMoreElements", "()Z"))) urls.push((yield vcall(own, "nextElement", "()Ljava/lang/Object;")));
+      if (inherited) while (yield vcall(inherited, "hasMoreElements", "()Z")) urls.push(yield vcall(inherited, "nextElement", "()Ljava/lang/Object;"));
+      const own = yield vcall(this, "findResources", "(Ljava/lang/String;)Ljava/util/Enumeration;", path);
+      while (yield vcall(own, "hasMoreElements", "()Z")) urls.push(yield vcall(own, "nextElement", "()Ljava/lang/Object;"));
       return mkIter(urls);
     }),
     "getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;": driven(function* (this: JClassLoader, path: string): Gen {
-      const url = (yield vcall(this, "getResource", "(Ljava/lang/String;)Ljava/net/URL;", path.replace(/^\//, "")));
+      const url = yield vcall(this, "getResource", "(Ljava/lang/String;)Ljava/net/URL;", path.replace(/^\//, ""));
       return url ? vcall(url, "openStream", "()Ljava/io/InputStream;") : null;
     }),
     "findLibrary(Ljava/lang/String;)Ljava/lang/String;": driven(function* (this: JClassLoader, n: string): Gen {
       const abi = pickAbi((a) => this.runtime.hasClasspath(`lib/${a}/lib${n}.so`));
       if (!abi) return null;
-      const { vfs, apkPath } = (yield import("./jio"));
+      const { vfs, apkPath } = yield import("./jio");
       const entry = `lib/${abi}/lib${n}.so`;
       const archive = this.runtime.classpathLocations.get(entry) ?? apkPath();
       const path = `${archive}.lib/${abi}/lib${n}.so`;
       if (!vfs.exists(path)) {
-        const bytes = (yield this.runtime.readClasspath(entry));
+        const bytes = yield this.runtime.readClasspath(entry);
         if (!bytes) return null;
         vfs.write(path, bytes, false);
       }
@@ -540,10 +540,10 @@ rt.register({
     // Missing, they turn a *handled* exception into an unhandled one that kills the
     // enclosing coroutine scope.
     "printStackTrace(Ljava/io/PrintWriter;)V": driven(function* (this: JThrowable, w: unknown): Gen {
-      yield vcall(w, "println", "(Ljava/lang/String;)V", (yield stackTraceText(this)));
+      yield vcall(w, "println", "(Ljava/lang/String;)V", yield stackTraceText(this));
     }),
     "printStackTrace(Ljava/io/PrintStream;)V": driven(function* (this: JThrowable, s: unknown): Gen {
-      yield vcall(s, "println", "(Ljava/lang/String;)V", (yield stackTraceText(this)));
+      yield vcall(s, "println", "(Ljava/lang/String;)V", yield stackTraceText(this));
     }),
     "fillInStackTrace()Ljava/lang/Throwable;": function (this: JThrowable) { this.jsErr = new Error(); this.trace = null; return this; },
     "getStackTrace()[Ljava/lang/StackTraceElement;": function (this: JThrowable) { return this.trace ??= jsStackTrace(this.jsStack); },
@@ -603,7 +603,7 @@ defineException("java/io/UTFDataFormatException", "java/io/IOException");
 class JAssertionError extends JThrowable {}
 rt.register({ name: "java/lang/AssertionError", ctor: JAssertionError, sup: "java/lang/Error", methods: {
   "<init>(Ljava/lang/Object;)V": driven(function* (this: JAssertionError, detail: unknown): Gen {
-    this.msg = detail === null ? "null" : typeof detail === "string" ? detail : (yield vcall(detail, "toString", "()Ljava/lang/String;"));
+    this.msg = detail === null ? "null" : typeof detail === "string" ? detail : yield vcall(detail, "toString", "()Ljava/lang/String;");
     if (detail instanceof JThrowable) this.cause = detail;
   }),
   ...Object.fromEntries(["Z", "C", "I", "J", "F", "D"].map(type => ["<init>(" + type + ")V", async function (this: JAssertionError, detail: unknown) {
@@ -631,13 +631,13 @@ rt.register({
   name: "java/lang/Iterable", ctor: class extends JObj {}, typeVars: "T",
   methods: {
     "forEach(Ljava/util/function/Consumer;)V": driven(function* (this: JObj, c: unknown): Gen {
-      const it = (yield vcall(this, "iterator", "()Ljava/util/Iterator;"));
-      while ((yield vcall(it, "hasNext", "()Z"))) (yield vcall(c, "accept", "(Ljava/lang/Object;)V", (yield vcall(it, "next", "()Ljava/lang/Object;"))));
+      const it = yield vcall(this, "iterator", "()Ljava/util/Iterator;");
+      while (yield vcall(it, "hasNext", "()Z")) yield vcall(c, "accept", "(Ljava/lang/Object;)V", yield vcall(it, "next", "()Ljava/lang/Object;"));
     }),
     "spliterator()Ljava/util/Spliterator;": driven(function* (this: JObj): Gen {
       const values: unknown[] = [];
-      const it = (yield vcall(this, "iterator", "()Ljava/util/Iterator;"));
-      while ((yield vcall(it, "hasNext", "()Z"))) values.push((yield vcall(it, "next", "()Ljava/lang/Object;")));
+      const it = yield vcall(this, "iterator", "()Ljava/util/Iterator;");
+      while (yield vcall(it, "hasNext", "()Z")) values.push(yield vcall(it, "next", "()Ljava/lang/Object;"));
       const spliterator = rt.make("java/util/Spliterator") as JObj & { a: unknown[] };
       spliterator.a = values;
       return spliterator;
@@ -891,7 +891,7 @@ rt.register({
     "<init>(Ljava/lang/Appendable;Ljava/util/Locale;)V": formatterInit,
     "format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;": driven(function* (this: JFormatter, fmt: string, args: unknown[]): Gen {
       const s = javaFormat(fmt, args ?? []);
-      if (this.out) (yield vcall(this.out, "append", "(Ljava/lang/CharSequence;)Ljava/lang/Appendable;", s)); else this.s += s;
+      if (this.out) yield vcall(this.out, "append", "(Ljava/lang/CharSequence;)Ljava/lang/Appendable;", s); else this.s += s;
       return this;
     }),
     "format(Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/Formatter;": function (this: JFormatter, _l: unknown, fmt: string, args: unknown[]) {
@@ -1635,9 +1635,9 @@ rt.register({
     "static identityHashCode(Ljava/lang/Object;)I": idHash,
     "static getProperty(Ljava/lang/String;)Ljava/lang/String;": (k: string) => sysProps[k] ?? null,
     "static getProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (k: string, d: string) => sysProps[k] ?? d,
-    "static getProperties()Ljava/util/Properties;": driven(function* (): Gen  {
-      const p = (yield newObj("java/util/Properties"));
-      for (const [k, v] of Object.entries(sysProps)) (yield vcall(p, "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;", k, v));
+    "static getProperties()Ljava/util/Properties;": driven(function* (): Gen {
+      const p = yield newObj("java/util/Properties");
+      for (const [k, v] of Object.entries(sysProps)) yield vcall(p, "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;", k, v);
       return p;
     }),
     "static setProperty(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;": (k: string, v: string) => { const o = sysProps[k] ?? null; sysProps[k] = v; return o; },
@@ -1645,9 +1645,9 @@ rt.register({
       if (key === null) rt.npe();
       return sysEnv[key!] ?? null;
     },
-    "static getenv()Ljava/util/Map;": driven(function* (): Gen  {
-      const map = (yield newObj("java/util/HashMap"));
-      for (const [key, value] of Object.entries(sysEnv)) (yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value));
+    "static getenv()Ljava/util/Map;": driven(function* (): Gen {
+      const map = yield newObj("java/util/HashMap");
+      for (const [key, value] of Object.entries(sysEnv)) yield vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
       return map;
     }),
     // Android has never installed one; code that asks is deciding whether it may reflect
@@ -1655,13 +1655,13 @@ rt.register({
     "static gc()V": () => {},
     "static exit(I)V": (c: number) => { console.warn("System.exit", c); },
     "static loadLibrary(Ljava/lang/String;)V": loadLibrary,
-    "static load(Ljava/lang/String;)V": driven(function* (path: string, owner: Runtime = rt): Gen  {
+    "static load(Ljava/lang/String;)V": driven(function* (path: string, owner: Runtime = rt): Gen {
       // jio imports this module, so its vfs is reached lazily rather than through a static cycle
-      const { vfs } = (yield import("./jio"));
-      (yield dlopen(owner, path.slice(path.lastIndexOf("/") + 1), () => {
+      const { vfs } = yield import("./jio");
+      yield dlopen(owner, path.slice(path.lastIndexOf("/") + 1), () => {
         const b = vfs.read(path);
         return b ? E_MACHINE[b[18] | (b[19] << 8)] ?? "unknown" : null;
-      }, () => vfs.read(path)));
+      }, () => vfs.read(path));
     }),
     "static mapLibraryName(Ljava/lang/String;)Ljava/lang/String;": (n: string) => `lib${n}.so`,
     "static lineSeparator()Ljava/lang/String;": () => "\n",
@@ -1737,8 +1737,8 @@ rt.register({
   name: "webdroid/DefaultUEH", ctor: JDefaultUEH, ifaces: ["java/lang/Thread$UncaughtExceptionHandler"],
   methods: {
     // AOSP's LoggingHandler prints the whole trace; the "Caused by" chain is what names the real fault
-    "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": driven(function* (_t: unknown, e: unknown): Gen  {
-      console.error("[uncaughtException]", e instanceof JThrowable ? (yield stackTraceText(e)) : e);
+    "uncaughtException(Ljava/lang/Thread;Ljava/lang/Throwable;)V": driven(function* (_t: unknown, e: unknown): Gen {
+      console.error("[uncaughtException]", e instanceof JThrowable ? yield stackTraceText(e) : e);
     }),
   },
 });
@@ -1839,8 +1839,8 @@ rt.register({
     "static currentThread()Ljava/lang/Thread;": () => curThread,
     "static activeCount()I": () => liveThreads.size,
     "static enumerate([Ljava/lang/Thread;)I": enumerateThreads,
-    "static getAllStackTraces()Ljava/util/Map;": driven(function* (): Gen  {
-      const m = (yield newObj("java/util/HashMap"));
+    "static getAllStackTraces()Ljava/util/Map;": driven(function* (): Gen {
+      const m = yield newObj("java/util/HashMap");
       yield vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", curThread, jsStackTrace(new Error().stack));
       return m;
     }),
@@ -1903,7 +1903,7 @@ rt.register({
     "get()Ljava/lang/Object;": driven(function* (this: JThreadLocal): Gen {
       const t = curThread;
       if (!t.locals.has(this)) {
-        const v = (yield vcall(this, "initialValue", "()Ljava/lang/Object;"));
+        const v = yield vcall(this, "initialValue", "()Ljava/lang/Object;");
         if (!t.locals.has(this)) t.locals.set(this, v);
       }
       return t.locals.get(this) ?? null;
@@ -1943,8 +1943,8 @@ rt.register({
     },
     "static valueOf(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;": driven(function* (cls: JClass, n: string): Gen {
       const info = cls.ci!;
-      const p = rt.initClass(info); if (p) (yield p);
-      return enumValueOf((yield vcall(info.ctor, "values", `()[L${info.name};`)), n);
+      const p = rt.initClass(info); if (p) yield p;
+      return enumValueOf(yield vcall(info.ctor, "values", `()[L${info.name};`), n);
     }),
   },
 });

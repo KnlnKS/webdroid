@@ -149,7 +149,7 @@ export const linearMethods: NativeSpec["methods"] = {
       if (ta.vals[2]) this.weightSum = rvFloat(this.jres, ta.vals[2], 0);
       if (ta.vals[3]) this.showDividers = rvInt(this.jres, ta.vals[3], 0);
       if (ta.vals[4]) this.dividerPadding = Math.round(rvDimen(this.jres, ta.vals[4]));
-      if (ta.vals[5]) yield callSelf(linearMethods, "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V", this, (yield loadDrawableRV(this.jres, ta.vals[5], this.theme)));
+      if (ta.vals[5]) yield callSelf(linearMethods, "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V", this, yield loadDrawableRV(this.jres, ta.vals[5], this.theme));
     }
   }),
   "setOrientation(I)V": function (this: JLinearLayout, o: number) { this.orientation = o; requestLayout(this); },
@@ -171,8 +171,8 @@ export const linearMethods: NativeSpec["methods"] = {
   "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V": driven(function* (this: JLinearLayout, divider: JDrawable | null): Gen {
     if (this.divider === divider) return;
     this.divider = divider;
-    this.dividerW = divider ? (yield vcall(divider, "getIntrinsicWidth", "()I")) : 0;
-    this.dividerH = divider ? (yield vcall(divider, "getIntrinsicHeight", "()I")) : 0;
+    this.dividerW = divider ? yield vcall(divider, "getIntrinsicWidth", "()I") : 0;
+    this.dividerH = divider ? yield vcall(divider, "getIntrinsicHeight", "()I") : 0;
     requestLayout(this);
   }),
   "hasDividerBeforeChildAt(I)Z": function (this: JLinearLayout, index: number) {
@@ -254,9 +254,9 @@ export const linearMethods: NativeSpec["methods"] = {
       if (crossDim === MATCH_PARENT && specMode(vertical ? wSpec : hSpec) !== MS_EXACTLY) {
         const mCross = crossMargin(c, vertical);
         const cw = Math.max(0, (vertical ? this.measuredW : this.measuredH) - crossPad - mCross);
-        (yield measureView(c,
+        yield measureView(c,
           vertical ? makeSpec(cw, MS_EXACTLY) : makeSpec(Math.max(0, c.measuredW), MS_EXACTLY),
-          vertical ? makeSpec(Math.max(0, c.measuredH), MS_EXACTLY) : makeSpec(cw, MS_EXACTLY)));
+          vertical ? makeSpec(Math.max(0, c.measuredH), MS_EXACTLY) : makeSpec(cw, MS_EXACTLY));
       }
     }
   }),
@@ -312,8 +312,8 @@ export const linearMethods: NativeSpec["methods"] = {
     }
     if (this.showDividers & 4) {
       const c = kids.at(-1), lp = c?.lp instanceof JMarginLP ? c.lp : null;
-      (yield draw(c ? vertical ? c.bottom + (lp?.marginB ?? 0) : c.right + (lp?.marginR ?? 0)
-        : vertical ? this.height() - this.padB - size : this.width() - this.padR - size));
+      yield draw(c ? vertical ? c.bottom + (lp?.marginB ?? 0) : c.right + (lp?.marginR ?? 0)
+        : vertical ? this.height() - this.padB - size : this.width() - this.padR - size);
     }
   }),
 };
@@ -470,7 +470,7 @@ function gridLpFromAttrs(res: Resources, set: JAttrSet, lp = new JGridLP()): JGr
   return lp;
 }
 const gridMethods: NonNullable<NativeSpec["methods"]> = {
-  "<init>(Landroid/content/Context;)V": driven(function* (this: JGridLayout, c: unknown): Gen { (yield initViewFromCtx(this, c, null)); }),
+  "<init>(Landroid/content/Context;)V": driven(function* (this: JGridLayout, c: unknown): Gen { yield initViewFromCtx(this, c, null); }),
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JGridLayout, c: unknown, set: JAttrSet | null): Gen {
     yield initViewFromCtx(this, c, set);
     if (!set || !this.jres) return;
@@ -541,8 +541,8 @@ const gridMethods: NonNullable<NativeSpec["methods"]> = {
       const height = trackSpan(this.rowHeights, cell.row, cell.rowSpan) - m.marginT - m.marginB;
       const ha = lp?.columnSpec.alignment ?? GRID_LEADING, va = lp?.rowSpec.alignment ?? GRID_LEADING;
       if ((ha.kind === "fill" && c.measuredW !== width) || (va.kind === "fill" && c.measuredH !== height)) {
-        (yield measureView(c, makeSpec(ha.kind === "fill" ? Math.max(0, width) : c.measuredW, MS_EXACTLY),
-          makeSpec(va.kind === "fill" ? Math.max(0, height) : c.measuredH, MS_EXACTLY)));
+        yield measureView(c, makeSpec(ha.kind === "fill" ? Math.max(0, width) : c.measuredW, MS_EXACTLY),
+          makeSpec(va.kind === "fill" ? Math.max(0, height) : c.measuredH, MS_EXACTLY));
       }
       const x = alignInCell(ha.kind, left, width, c.measuredW), y = alignInCell(va.kind, top, height, c.measuredH);
       yield layoutView(c, x, y, x + c.measuredW, y + c.measuredH);
@@ -668,8 +668,8 @@ rt.register({
         const mw = mlp ? mlp.marginL + mlp.marginR : 0, mh = mlp ? mlp.marginT + mlp.marginB : 0;
         const w = Math.max(0, (this.colWidths[i] ?? c.measuredW) - mw);
         const lpH = c.lp?.height ?? WRAP_CONTENT;
-        (yield measureView(c, makeSpec(w, MS_EXACTLY),
-          lpH >= 0 ? makeSpec(lpH, MS_EXACTLY) : makeSpec(0, MS_UNSPEC)));
+        yield measureView(c, makeSpec(w, MS_EXACTLY),
+          lpH >= 0 ? makeSpec(lpH, MS_EXACTLY) : makeSpec(0, MS_UNSPEC));
         x += w + mw; maxH = Math.max(maxH, c.measuredH + mh);
       }
       const state = this.measuredChildState();
@@ -939,7 +939,7 @@ const relativeMethods: NativeSpec["methods"] = {
   "onMeasure(II)V": driven(function* (this: JRelativeLayout, wSpec: number, hSpec: number): Gen {
     const availW = specSize(wSpec), availH = specSize(hSpec);
     const wrapW = specMode(wSpec) !== MS_EXACTLY, wrapH = specMode(hSpec) !== MS_EXACTLY;
-    const direction = (yield vcall(this, "getLayoutDirection", "()I"));
+    const direction = yield vcall(this, "getLayoutDirection", "()I");
     for (const c of this.children) if (c.lp instanceof JRelativeLP) c.lp.resolveRules(direction);
     const kids = this.children.filter((c) => c.visibility !== 8);
     for (const c of kids) {
@@ -1023,9 +1023,9 @@ const relativeMethods: NativeSpec["methods"] = {
             if (spanW === spanW) l = lE;
             if (spanH === spanH) t = tE;
             const w = spanW === spanW ? Math.max(0, spanW) : c.measuredW, h = spanH === spanH ? Math.max(0, spanH) : c.measuredH;
-            if (w !== c.measuredW || h !== c.measuredH) (yield measureView(c,
+            if (w !== c.measuredW || h !== c.measuredH) yield measureView(c,
               spanW === spanW ? makeSpec(w, MS_EXACTLY) : childMeasureSpec(wSpec, this.padL + this.padR + m.marginL + m.marginR, lp.width),
-              spanH === spanH ? makeSpec(h, MS_EXACTLY) : childMeasureSpec(hSpec, this.padT + this.padB + m.marginT + m.marginB, lp.height)));
+              spanH === spanH ? makeSpec(h, MS_EXACTLY) : childMeasureSpec(hSpec, this.padT + this.padB + m.marginT + m.marginB, lp.height));
           }
         }
         const p = pos.get(c);
@@ -1127,7 +1127,7 @@ const viewStubMethods: NativeSpec["methods"] = {
       throw rt.mkThrowable("java/lang/IllegalStateException",
         "ViewStub must have a non-null ViewGroup viewParent and a valid layoutResource");
     }
-    const v = (yield inflateLayout(this.ctx, this.layoutRes, parent, false));
+    const v = yield inflateLayout(this.ctx, this.layoutRes, parent, false);
     if (!v) return null;
     if (this.inflatedId !== -1) v.idNum = this.inflatedId;
     const idx = parent.children.indexOf(this);

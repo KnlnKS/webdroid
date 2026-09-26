@@ -164,7 +164,7 @@ export const layoutPass = { active: false, requesters: [] as JView[] };
 /** ViewRootImpl.performLayout: a window root's layout, with in-layout requests collected */
 export const layoutRoot = driven(function* layoutRoot(v: JView, l: number, t: number, r: number, b: number): Gen {
   layoutPass.active = true;
-  try { (yield layoutView(v, l, t, r, b)); } finally { layoutPass.active = false; }
+  try { yield layoutView(v, l, t, r, b); } finally { layoutPass.active = false; }
 });
 const validRequesters: JView[] = [];
 function shownPath(v: JView): boolean {
@@ -242,7 +242,7 @@ const removeRange = driven(function* removeRange(vg: JViewGroup, start: number, 
 function addInLayout(this: JViewGroup, c: JView, i: number, lp: JLayoutParams, preventRequestLayout?: number): unknown { return rt.drive(addInLayout$.call(this, c, i, lp, preventRequestLayout)); }
 function* addInLayout$(this: JViewGroup, c: JView, i: number, lp: JLayoutParams, preventRequestLayout?: number): Gen {
   const thread = curThread;
-  c.lp = lp ? (yield convertLp(this, lp)) : c.lp;
+  c.lp = lp ? yield convertLp(this, lp) : c.lp;
   if (!preventRequestLayout) requestLayoutVirtual(c);
   yield attachView(this, c, i, false, thread);
   return 1;
@@ -251,7 +251,7 @@ function* addInLayout$(this: JViewGroup, c: JView, i: number, lp: JLayoutParams,
  *  window, so there is no attach dispatch, no hierarchy callback and no request. */
 function attachToParent(this: JViewGroup, c: JView, i: number, lp: JLayoutParams): unknown { return rt.drive(attachToParent$.call(this, c, i, lp)); }
 function* attachToParent$(this: JViewGroup, c: JView, i: number, lp: JLayoutParams): Gen {
-  c.lp = lp ? (yield convertLp(this, lp)) : c.lp;
+  c.lp = lp ? yield convertLp(this, lp) : c.lp;
   yield linkChild(this, c, i);
 }
 export function obtainEvent(dt: bigint, et: bigint, action: number, x: number, y: number, metaState = 0) {
@@ -541,10 +541,10 @@ rt.register({ name: "android/view/WindowId", ctor: JWindowId });
 function viewDispatchInsets(this: JView, ins: unknown): unknown { return rt.drive(viewDispatchInsets$.call(this, ins)); }
 function* viewDispatchInsets$(this: JView, ins: unknown): Gen {
   if (this.insetsL) {
-    return (yield vcall(this.insetsL, "onApplyWindowInsets",
-      "(Landroid/view/View;Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", this, ins));
+    return yield vcall(this.insetsL, "onApplyWindowInsets",
+      "(Landroid/view/View;Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", this, ins);
   }
-  return (yield vcall(this, "onApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", ins));
+  return yield vcall(this, "onApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", ins);
 }
 
 /** apply base View attrs from an AttributeSet (used by native View ctor) */
@@ -566,7 +566,7 @@ const applyViewAttrs = driven(function* applyViewAttrs(v: JView, set: JAttrSet |
   if (idv) v.idNum = idv.t === TV.REFERENCE || idv.t === TV.ATTRIBUTE ? idv.d : idv.r ?? idv.d;
   const bgv = g(1);
   if (bgv) {
-    v.background = (yield loadDrawableRV(res, bgv, v.theme));
+    v.background = yield loadDrawableRV(res, bgv, v.theme);
   }
   const pad = g(2) ? rvDimen(res, g(2), 0) : null;
   if (pad !== null) { v.padL = v.padT = v.padR = v.padB = Math.round(pad); }
@@ -866,9 +866,9 @@ function* drawForeground$(this: JView, cv: JCanvas): Gen {
     const bounds = new JRect();
     bounds.right = w; bounds.bottom = h;
     if (this.foregroundGravity !== G.FILL) {
-      const dw = (yield vcallOn(thread, d, "getIntrinsicWidth", "()I"));
-      const dh = (yield vcallOn(thread, d, "getIntrinsicHeight", "()I"));
-      const ld = (yield vcallOn(thread, this, "getLayoutDirection", "()I"));
+      const dw = yield vcallOn(thread, d, "getIntrinsicWidth", "()I");
+      const dh = yield vcallOn(thread, d, "getIntrinsicHeight", "()I");
+      const ld = yield vcallOn(thread, this, "getLayoutDirection", "()I");
       gravityApply(absGravity(this.foregroundGravity, Number(ld)), Number(dw), Number(dh), bounds, 0, 0, bounds);
     }
     yield vcallOn(thread, d, "setBounds", "(IIII)V", bounds.left, bounds.top, bounds.right, bounds.bottom);
@@ -896,8 +896,8 @@ function overlayOf(this: JView) {
 
 /** AOSP draws the overlay last, over the host's own content and children */
 const drawOverlay = driven(function* drawOverlay(o: JViewOverlay, cv: JCanvas): Gen {
-  for (const d of o.drawables) (yield guardCall(d, M_drawableDraw, cv));
-  for (const v of o.views) (yield drawView(v, cv));
+  for (const d of o.drawables) yield guardCall(d, M_drawableDraw, cv);
+  for (const v of o.views) yield drawView(v, cv);
 });
 
 /** One log line per offending view class: a broken subtree must not log 60x a second. */
@@ -915,13 +915,13 @@ function drawingRect(this: JView, r: JRect) {
 }
 export function requireViewById(this: JObj, id: number): unknown { return rt.drive(requireViewById$.call(this, id)); }
 function* requireViewById$(this: JObj, id: number): Gen {
-  const view = (yield vcall(this, "findViewById", "(I)Landroid/view/View;", id));
+  const view = yield vcall(this, "findViewById", "(I)Landroid/view/View;", id);
   if (!view) throw rt.mkThrowable("java/lang/IllegalArgumentException", "ID does not reference a View: " + id);
   return view;
 }
 
 export const viewConstructors: NativeSpec["methods"] = {
-  "<init>(Landroid/content/Context;)V": driven(function* (this: JView, c: unknown): Gen { (yield initViewFromCtx(this, c, null)); }),
+  "<init>(Landroid/content/Context;)V": driven(function* (this: JView, c: unknown): Gen { yield initViewFromCtx(this, c, null); }),
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JView, c: unknown, a: JAttrSet | null): Gen {
     yield initViewFromCtx(this, c, a);
   }),
@@ -992,14 +992,14 @@ const viewMethods: NativeSpec["methods"] = {
     setBackground.call(this, d);
   },
   "setBackgroundResource(I)V": driven(function* (this: JView, id: number): Gen {
-    setBackground.call(this, id ? (yield loadDrawable(this.jres!, id, this.theme)) : null);
+    setBackground.call(this, id ? yield loadDrawable(this.jres!, id, this.theme) : null);
   }),
   "getBackground()Landroid/graphics/drawable/Drawable;": function (this: JView) { return this.background; },
   "setForeground(Landroid/graphics/drawable/Drawable;)V": driven(function* (this: JView, d: JDrawable | null): Gen {
     if (this.foreground === d) return;
     if (this.foreground) this.foreground.callback = null;
     this.foreground = d; this.foregroundW = -1;
-    if (d) { (yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState()))); d.callback = this; }
+    if (d) { yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState())); d.callback = this; }
     requestLayout(this); invalidate(this);
   }),
   "onDrawForeground(Landroid/graphics/Canvas;)V": drawForeground,
@@ -1123,7 +1123,7 @@ const viewMethods: NativeSpec["methods"] = {
   "performClick()Z": performClick,
   "callOnClick()Z": performClick,
   "performLongClick()Z": driven(function* (this: JView): Gen {
-    if (this.longClickL) return (yield vcall(this.longClickL, "onLongClick", "(Landroid/view/View;)Z", this));
+    if (this.longClickL) return yield vcall(this.longClickL, "onLongClick", "(Landroid/view/View;)Z", this);
     return 0;
   }),
   "measure(II)V": function (this: JView, w: number, h: number) { return measureView(this, w, h); },
@@ -1224,7 +1224,7 @@ const viewMethods: NativeSpec["methods"] = {
   },
   "setLayerType(ILandroid/graphics/Paint;)V": function (this: JView, t: number) { this.layerType = t; },
   "getLayerType()I": function (this: JView) { return this.layerType; },
-  "setContentDescription(Ljava/lang/CharSequence;)V": driven(function* (this: JView, cs: unknown): Gen { this.contentDesc = cs === null ? null : (yield csText(cs)); }),
+  "setContentDescription(Ljava/lang/CharSequence;)V": driven(function* (this: JView, cs: unknown): Gen { this.contentDesc = cs === null ? null : yield csText(cs); }),
   "getContentDescription()Ljava/lang/CharSequence;": function (this: JView) { return this.contentDesc; },
 
   "setAccessibilityDelegate(Landroid/view/View$AccessibilityDelegate;)V": function (this: JView, d: unknown) { this.a11yDelegate = d; },
@@ -1338,10 +1338,10 @@ const viewMethods: NativeSpec["methods"] = {
   }),
   "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JView, ev: JMotionEvent): Gen {
     if (this.touchL) {
-      const r = (yield vcall(this.touchL, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev));
+      const r = yield vcall(this.touchL, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev);
       if (r) return 1;
     }
-    return (yield guardCall(this, M_onTouchEvent, ev));
+    return yield guardCall(this, M_onTouchEvent, ev);
   }),
   "requestUnbufferedDispatch(Landroid/view/MotionEvent;)V": () => {},
   "requestDisallowInterceptTouchEvent(Z)V": function (this: JView, dis: number) {
@@ -1361,7 +1361,7 @@ const viewMethods: NativeSpec["methods"] = {
     if (this.nestedParent) return 1;
     if (!this.nestedEnabled) return 0;
     for (let p: JView | null = this.parent; p; p = p.parent) {
-      if ((yield vcall(p, "onStartNestedScroll", "(Landroid/view/View;Landroid/view/View;I)Z", this, this, axes))) {
+      if (yield vcall(p, "onStartNestedScroll", "(Landroid/view/View;Landroid/view/View;I)Z", this, this, axes)) {
         this.nestedParent = p;
         yield vcall(p, "onNestedScrollAccepted", "(Landroid/view/View;Landroid/view/View;I)V", this, this, axes);
         return 1;
@@ -1393,11 +1393,11 @@ const viewMethods: NativeSpec["methods"] = {
   }),
   "dispatchNestedPreFling(FF)Z": driven(function* (this: JView, vx: number, vy: number): Gen {
     const p = this.nestedParent;
-    return p ? (yield vcall(p, "onNestedPreFling", "(Landroid/view/View;FF)Z", this, vx, vy)) : 0;
+    return p ? yield vcall(p, "onNestedPreFling", "(Landroid/view/View;FF)Z", this, vx, vy) : 0;
   }),
   "dispatchNestedFling(FFZ)Z": driven(function* (this: JView, vx: number, vy: number, consumed: number): Gen {
     const p = this.nestedParent;
-    return p ? (yield vcall(p, "onNestedFling", "(Landroid/view/View;FFZ)Z", this, vx, vy, consumed)) : 0;
+    return p ? yield vcall(p, "onNestedFling", "(Landroid/view/View;FFZ)Z", this, vx, vy, consumed) : 0;
   }),
   "computeScroll()V": noopComputeScroll,
   "setFocusable(I)V": function (this: JView, v: number) { this.focusable = v === 1; },
@@ -1466,13 +1466,13 @@ const viewMethods: NativeSpec["methods"] = {
   // AOSP View.dispatchKeyEvent: the OnKeyListener sees the event first, then KeyEvent.dispatch
   // routes it to onKeyDown/onKeyUp by action.
   "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JView, ev: unknown): Gen {
-    const code = (yield vcall(ev, "getKeyCode", "()I")), action = (yield vcall(ev, "getAction", "()I"));
-    if (this.keyL && this.enabled && ((yield vcall(this.keyL, "onKey", "(Landroid/view/View;ILandroid/view/KeyEvent;)Z", this, code, ev)))) return 1;
-    const handled = action === 0 ? (yield vcall(this, "onKeyDown", "(ILandroid/view/KeyEvent;)Z", code, ev))
-      : action === 1 ? (yield vcall(this, "onKeyUp", "(ILandroid/view/KeyEvent;)Z", code, ev)) : 0;
+    const code = yield vcall(ev, "getKeyCode", "()I"), action = yield vcall(ev, "getAction", "()I");
+    if (this.keyL && this.enabled && (yield vcall(this.keyL, "onKey", "(Landroid/view/View;ILandroid/view/KeyEvent;)Z", this, code, ev))) return 1;
+    const handled = action === 0 ? yield vcall(this, "onKeyDown", "(ILandroid/view/KeyEvent;)Z", code, ev)
+      : action === 1 ? yield vcall(this, "onKeyUp", "(ILandroid/view/KeyEvent;)Z", code, ev) : 0;
     if (handled) return 1;
     for (let i = this.unhandledKeyLs.length - 1; i >= 0; i--)
-      if ((yield vcall(this.unhandledKeyLs[i], "onUnhandledKeyEvent", "(Landroid/view/View;Landroid/view/KeyEvent;)Z", this, ev))) return 1;
+      if (yield vcall(this.unhandledKeyLs[i], "onUnhandledKeyEvent", "(Landroid/view/View;Landroid/view/KeyEvent;)Z", this, ev)) return 1;
     return 0;
   }),
   "onSaveInstanceState()Landroid/os/Parcelable;": () => EMPTY_STATE,
@@ -1666,8 +1666,8 @@ const viewMethods: NativeSpec["methods"] = {
   "static resolveSize(II)I": (size: number, spec: number) => resolveSize(size, spec),
   "static getDefaultSize(II)I": (size: number, spec: number) => defaultSize(size, spec),
   "static generateViewId()I": (() => { let n = 0x00ffff00; return () => ++n; })(),
-  "static inflate(Landroid/content/Context;ILandroid/view/ViewGroup;)Landroid/view/View;": driven(function* (ctx: unknown, id: number, root: unknown): Gen  {
-    const { inflateLayout } = (yield import("./inflate"));
+  "static inflate(Landroid/content/Context;ILandroid/view/ViewGroup;)Landroid/view/View;": driven(function* (ctx: unknown, id: number, root: unknown): Gen {
+    const { inflateLayout } = yield import("./inflate");
     return inflateLayout(ctx, id, root, !!root);
   }),
 };
@@ -1705,7 +1705,7 @@ export function inheritContext(child: JView, from: JView) {
 export const initViewFromCtx = driven(function* initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | null, defStyleAttr: number = 0, defStyleRes: number = 0): Gen {
   v.ctx = jctx;
   if (jctx) {
-    v.resources = (yield vcall(jctx, "getResources", "()Landroid/content/res/Resources;"));
+    v.resources = yield vcall(jctx, "getResources", "()Landroid/content/res/Resources;");
     const host = (jctx as JContext | null)?.$host;
     if (host) {
       v.jres = host.res;
@@ -1743,9 +1743,9 @@ export class JViewGroup extends JView {
 const convertLp = driven(function* convertLp(vg: JViewGroup, lp: JLayoutParams | null): Gen<JLayoutParams | null> {
   if (!lp) return lp;
   if (jmethod(vg, M_checkLp)) {
-    const ok = (yield guardCall(vg, M_checkLp, lp));
+    const ok = yield guardCall(vg, M_checkLp, lp);
     if (!ok) {
-      const converted = (yield guardMaybe(vg, M_generateLp, lp));
+      const converted = yield guardMaybe(vg, M_generateLp, lp);
       if (converted) return converted as JLayoutParams;
     }
   }
@@ -1833,14 +1833,14 @@ const attachTree = driven(function* attachTree$(v: JView, thread: typeof curThre
   if (v.attached) return;
   v.attached = true;
   mergeVTO(v);
-  try { (yield vcallOn(thread, v, "onAttachedToWindow", "()V")); } catch (e) { reportUncaught(e); }
+  try { yield vcallOn(thread, v, "onAttachedToWindow", "()V"); } catch (e) { reportUncaught(e); }
   // a snapshot, as AOSP's copy-on-write list: a one-shot listener removing itself must not skip the next
   for (const l of [...v.attachLs]) {
-    try { (yield vcallOn(thread, l, "onViewAttachedToWindow", "(Landroid/view/View;)V", v)); } catch (e) { reportUncaught(e); }
+    try { yield vcallOn(thread, l, "onViewAttachedToWindow", "(Landroid/view/View;)V", v); } catch (e) { reportUncaught(e); }
   }
   // one child's failure must not prevent its siblings from attaching (e.g. ViewPager populate)
   if (v instanceof JViewGroup) for (const c of [...v.children]) {
-    try { (yield attachTree(c, thread)); } catch (e) { reportUncaught(e); }
+    try { yield attachTree(c, thread); } catch (e) { reportUncaught(e); }
   }
   v.layoutRequested = true;
   clearMeasureCache(v);
@@ -1852,14 +1852,14 @@ const attachTree = driven(function* attachTree$(v: JView, thread: typeof curThre
  * to republish LocalConfiguration (hence isSystemInDarkTheme).
  */
 export const dispatchConfigurationChanged = driven(function* dispatchConfigurationChanged$(v: JView, cfg: unknown): Gen {
-  try { (yield guardMaybe(v, M_onConfigChanged, cfg)); } catch (e) { reportUncaught(e); }
-  if (v instanceof JViewGroup) for (const c of [...v.children]) (yield dispatchConfigurationChanged(c, cfg));
+  try { yield guardMaybe(v, M_onConfigChanged, cfg); } catch (e) { reportUncaught(e); }
+  if (v instanceof JViewGroup) for (const c of [...v.children]) yield dispatchConfigurationChanged(c, cfg);
 });
 export const dispatchDetached = driven(function* dispatchDetached$(v: JView, thread: JThread = curThread): Gen {
   if (!v.attached) return;
-  if (v instanceof JViewGroup) for (const c of [...v.children]) (yield dispatchDetached(c, thread));
+  if (v instanceof JViewGroup) for (const c of [...v.children]) yield dispatchDetached(c, thread);
   yield vcallOn(thread, v, "onDetachedFromWindow", "()V");
-  for (const l of [...v.attachLs]) (yield vcallOn(thread, l, "onViewDetachedFromWindow", "(Landroid/view/View;)V", v));
+  for (const l of [...v.attachLs]) yield vcallOn(thread, l, "onViewDetachedFromWindow", "(Landroid/view/View;)V", v);
   v.attached = false;
   if (!v.parent) yield vtoMap.get(v)?.dispatchWindowAttached(false);
 });
@@ -1881,9 +1881,9 @@ export const measureChildWithMargins = driven(function* measureChildWithMargins(
   const lp = child.lp;
   const ml = lp instanceof JMarginLP ? lp.marginL + lp.marginR : 0;
   const mt = lp instanceof JMarginLP ? lp.marginT + lp.marginB : 0;
-  (yield measureView(child,
+  yield measureView(child,
     childMeasureSpec(wSpec, vg.padL + vg.padR + ml + wUsed, lp?.width ?? WRAP_CONTENT),
-    childMeasureSpec(hSpec, vg.padT + vg.padB + mt + hUsed, lp?.height ?? WRAP_CONTENT)));
+    childMeasureSpec(hSpec, vg.padT + vg.padB + mt + hUsed, lp?.height ?? WRAP_CONTENT));
 });
 
 const M_checkLp = mangleMethod("checkLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)Z");
@@ -1898,8 +1898,8 @@ export function resolveLp(lp: JLayoutParams): unknown { return (jmethod(lp, M_re
 function addView3(this: JViewGroup, c: JView, i: number, lp: JLayoutParams | null): unknown { return rt.drive(addView3$.call(this, c, i, lp)); }
 function* addView3$(this: JViewGroup, c: JView, i: number, lp: JLayoutParams | null): Gen {
   const thread = curThread;
-  c.lp = lp ? (yield convertLp(this, lp))
-    : c.lp ? (yield convertLp(this, c.lp))
+  c.lp = lp ? yield convertLp(this, lp)
+    : c.lp ? yield convertLp(this, c.lp)
     : (yield guardCall(this, M_genDefaultLP)) as JLayoutParams | null;
   yield resolveLp(c.lp!);
   yield attachView(this, c, i, true, thread);
@@ -1931,10 +1931,10 @@ const addViewFunnel = driven(function* addViewFunnel(vg: JViewGroup, c: JView, i
 
 const vgMethods: NativeSpec["methods"] = {
   "dispatchApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": driven(function* (this: JViewGroup, ins: JWindowInsets): Gen {
-    let cur = (yield viewDispatchInsets.call(this, ins));
+    let cur = yield viewDispatchInsets.call(this, ins);
     for (const c of this.children) {
       if (cur?.consumedV) break;
-      const childInsets = (yield vcall(c, "dispatchApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", cur));
+      const childInsets = yield vcall(c, "dispatchApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", cur);
       // Before target R, a consuming child also starved its siblings of insets.
       if (brokenInsetsDispatch) cur = childInsets;
     }
@@ -2009,7 +2009,7 @@ const vgMethods: NativeSpec["methods"] = {
     }
     if (order.some((c) => c.elevationV || c.translationZ))
       order = [...order].sort((a, b) => a.elevationV + a.translationZ - b.elevationV - b.translationZ);
-    for (const c of order) (yield drawView(c, cv, this));
+    for (const c of order) yield drawView(c, cv, this);
   }),
   "setChildrenDrawingOrderEnabled(Z)V": function (this: JViewGroup, e: number) { this.drawingOrderEnabled = !!e; },
   "setLayoutAnimation(Landroid/view/animation/LayoutAnimationController;)V": function (this: JViewGroup, animation: unknown) {
@@ -2044,9 +2044,9 @@ const vgMethods: NativeSpec["methods"] = {
     return measureChildWithMargins(this, c, ws, wu, hs, hu);
   },
   "measureChild(Landroid/view/View;II)V": driven(function* (this: JViewGroup, c: JView, ws: number, hs: number): Gen {
-    (yield measureView(c,
+    yield measureView(c,
       childMeasureSpec(ws, this.padL + this.padR, c.lp?.width ?? WRAP_CONTENT),
-      childMeasureSpec(hs, this.padT + this.padB, c.lp?.height ?? WRAP_CONTENT)));
+      childMeasureSpec(hs, this.padT + this.padB, c.lp?.height ?? WRAP_CONTENT));
   }),
   "measureChildren(II)V": driven(function* (this: JViewGroup, ws: number, hs: number): Gen {
     for (const c of this.children) {
@@ -2090,7 +2090,7 @@ const vgMethods: NativeSpec["methods"] = {
   "onCreateDrawableState(I)[I": driven(function* (this: JViewGroup, extra: number): Gen {
     const states = this.baseState();
     if (this.addStatesFromChildren) for (const child of this.children) {
-      const childStates: Int32Array = (yield vcall(child, "getDrawableState", "()[I"));
+      const childStates: Int32Array = yield vcall(child, "getDrawableState", "()[I");
       for (const state of childStates) if (state !== 0) states.push(state);
     }
     const out = new Int32Array(states.length + Math.max(0, extra | 0));
@@ -2101,9 +2101,9 @@ const vgMethods: NativeSpec["methods"] = {
   "setTransitionGroup(Z)V": function (this: JViewGroup, group: number) { this.transitionGroup = !!group; },
   "isTransitionGroup()Z": driven(function* (this: JViewGroup): Gen {
     if (this.transitionGroup !== null) return +this.transitionGroup;
-    const outline = (yield vcall(this, "getOutlineProvider", "()Landroid/view/ViewOutlineProvider;"));
-    return +(!!((yield vcall(this, "getBackground", "()Landroid/graphics/drawable/Drawable;"))) ||
-      ((yield vcall(this, "getTransitionName", "()Ljava/lang/String;"))) !== null || !!outline && outline !== bgOutline);
+    const outline = yield vcall(this, "getOutlineProvider", "()Landroid/view/ViewOutlineProvider;");
+    return +(!!(yield vcall(this, "getBackground", "()Landroid/graphics/drawable/Drawable;")) ||
+      (yield vcall(this, "getTransitionName", "()Ljava/lang/String;")) !== null || !!outline && outline !== bgOutline);
   }),
   ...noops("onViewAdded(Landroid/view/View;)V", "onViewRemoved(Landroid/view/View;)V",
     "setChildrenDrawingCacheEnabled(Z)V", "setHandwritingBoundsOffsets(FFFF)V", "suppressLayout(Z)V",
@@ -2129,7 +2129,7 @@ const vgMethods: NativeSpec["methods"] = {
     if (action === 0) { this.touchTarget = null; this.disallowIntercept = false; }
     let intercepted = false;
     if (!this.disallowIntercept && (action === 0 || this.touchTarget)) {
-      intercepted = !!((yield guardCall(this, M_onIntercept, ev)));
+      intercepted = !!(yield guardCall(this, M_onIntercept, ev));
     }
     if (action === 0 && !intercepted) {
       // find touch target among children (reverse order)
@@ -2141,7 +2141,7 @@ const vgMethods: NativeSpec["methods"] = {
         if (cx < 0 || cy < 0 || cx >= c.width() || cy >= c.height()) continue;
         const ox = ev.x, oy = ev.y;
         ev.x = cx; ev.y = cy;
-        const handled = (yield guardCall(c, M_dispatchTouch, ev));
+        const handled = yield guardCall(c, M_dispatchTouch, ev);
         ev.x = ox; ev.y = oy;
         if (handled) { this.touchTarget = c; return 1; }
       }
@@ -2150,7 +2150,7 @@ const vgMethods: NativeSpec["methods"] = {
       const ox = ev.x, oy = ev.y;
       ev.x = ev.x + this.scrollX - (c.left + c.translationX);
       ev.y = ev.y + this.scrollY - (c.top + c.translationY);
-      const handled = (yield guardCall(c, M_dispatchTouch, ev));
+      const handled = yield guardCall(c, M_dispatchTouch, ev);
       ev.x = ox; ev.y = oy;
       if (action === 1 || action === 3) this.touchTarget = null;
       return handled ? 1 : 0;
@@ -2167,7 +2167,7 @@ const vgMethods: NativeSpec["methods"] = {
     // runs when there is no touch target); a listener that swallows everything, like the one
     // BottomSheetDialog puts on its sheet, must not starve the sheet's buttons.
     if (this.touchL && (yield vcall(this.touchL, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev))) return 1;
-    const self = (yield guardCall(this, M_onTouchEvent, ev));
+    const self = yield guardCall(this, M_onTouchEvent, ev);
     return self ? 1 : 0;
   }),
 };
@@ -2224,7 +2224,7 @@ class JVTO extends JObj {
 const fanOut = driven(function* fanOut(ls: unknown[], name: string, desc: string, ...args: unknown[]): Gen<void> {
   if (!ls.length) return;
   for (const l of [...ls]) {
-    try { (yield vcall(l, name, desc, ...args)); } catch (e) { console.error("[vto]", e); }
+    try { yield vcall(l, name, desc, ...args); } catch (e) { console.error("[vto]", e); }
   }
 });
 const vtoMap = new WeakMap<JView, JVTO>();
@@ -2261,7 +2261,7 @@ rt.register({
   methods: {
     "<init>(ILjava/lang/CharSequence;)V": driven(function* (this: JA11yAction, id: number, label: unknown): Gen {
       this.actionId = id;
-      this.label = label === null ? null : (yield csText(label));
+      this.label = label === null ? null : yield csText(label);
     }),
     "getId()I": function (this: JA11yAction) { return this.actionId; },
     "getLabel()Ljava/lang/CharSequence;": function (this: JA11yAction) { return this.label; },
@@ -2324,7 +2324,7 @@ rt.register({
     // true when any listener asked for the draw to be cancelled, as ViewTreeObserver reports it
     "dispatchOnPreDraw()Z": driven(function* (this: JVTO): Gen {
       let cancelled = 0;
-      for (const l of [...this.preDrawLs]) if (!((yield vcall(l, "onPreDraw", "()Z")))) cancelled = 1;
+      for (const l of [...this.preDrawLs]) if (!(yield vcall(l, "onPreDraw", "()Z"))) cancelled = 1;
       return cancelled;
     }),
   },
@@ -2385,7 +2385,7 @@ rt.register({
 });
 
 rt.register({ name: "webdroid/ViewAlphaProperty", ctor: class extends JProperty {}, sup: "android/util/Property", methods: {
-  "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (view: unknown): Gen  { return box(JFloat, (yield vcall(view, "getAlpha", "()F"))); }),
+  "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (view: unknown): Gen { return box(JFloat, yield vcall(view, "getAlpha", "()F")); }),
   "set(Ljava/lang/Object;Ljava/lang/Object;)V": (view: unknown, value: JFloat) => vcall(view, "setAlpha", "(F)V", value.v),
 } });
 rt.register({

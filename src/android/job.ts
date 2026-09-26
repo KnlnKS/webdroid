@@ -88,13 +88,13 @@ rt.register({
       const constraints = (p.charging ? 1 : 0) | (p.idle ? 2 : 0) | (p.batteryNotLow ? 4 : 0) | (p.storageNotLow ? 8 : 0);
       writeInt(parcel, constraints);
       yield vcall(parcel, "writeTypedArray", "([Landroid/os/Parcelable;I)V", p.triggers.length ? p.triggers : null, flags);
-      for (const value of [p.contentUpdateDelay ?? -1n, p.contentMaxDelay ?? -1n]) (yield vcall(parcel, "writeLong", "(J)V", value));
+      for (const value of [p.contentUpdateDelay ?? -1n, p.contentMaxDelay ?? -1n]) yield vcall(parcel, "writeLong", "(J)V", value);
       writeInt(parcel, p.netReq ? 1 : 0);
       if (p.netReq) yield vcall(p.netReq, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags);
-      for (const value of [-1n, -1n, -1n, p.minLatency ?? 0n, p.deadline ?? 0n]) (yield vcall(parcel, "writeLong", "(J)V", value));
+      for (const value of [-1n, -1n, -1n, p.minLatency ?? 0n, p.deadline ?? 0n]) yield vcall(parcel, "writeLong", "(J)V", value);
       writeInt(parcel, p.interval !== undefined ? 1 : 0);
       writeInt(parcel, p.persisted ? 1 : 0);
-      for (const value of [p.interval ?? 0n, p.flex ?? 0n, p.backoff ?? 30000n]) (yield vcall(parcel, "writeLong", "(J)V", value));
+      for (const value of [p.interval ?? 0n, p.flex ?? 0n, p.backoff ?? 30000n]) yield vcall(parcel, "writeLong", "(J)V", value);
       writeInt(parcel, p.backoffPolicy ?? 1);
       writeInt(parcel, p.minLatency !== undefined ? 1 : 0);
       writeInt(parcel, p.deadline !== undefined || p.interval !== undefined ? 1 : 0);

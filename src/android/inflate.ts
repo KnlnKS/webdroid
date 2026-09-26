@@ -200,11 +200,11 @@ rt.register({
       return vcall(this, "inflate", "(ILandroid/view/ViewGroup;Z)Landroid/view/View;", id, root, +!!root);
     },
     "inflate(ILandroid/view/ViewGroup;Z)Landroid/view/View;": driven(function* (this: JLayoutInflater, id: number, root: unknown, attach: number): Gen {
-      const context = (yield vcall(this, "getContext", "()Landroid/content/Context;"));
-      const resources = (yield vcall(context, "getResources", "()Landroid/content/res/Resources;"));
-      const parser = (yield vcall(resources, "getLayout", "(I)Landroid/content/res/XmlResourceParser;", id));
-      try { return (yield vcall(this, "inflate", "(Lorg/xmlpull/v1/XmlPullParser;Landroid/view/ViewGroup;Z)Landroid/view/View;", parser, root, attach)); }
-      finally { (yield vcall(parser, "close", "()V")); }
+      const context = yield vcall(this, "getContext", "()Landroid/content/Context;");
+      const resources = yield vcall(context, "getResources", "()Landroid/content/res/Resources;");
+      const parser = yield vcall(resources, "getLayout", "(I)Landroid/content/res/XmlResourceParser;", id);
+      try { return yield vcall(this, "inflate", "(Lorg/xmlpull/v1/XmlPullParser;Landroid/view/ViewGroup;Z)Landroid/view/View;", parser, root, attach); }
+      finally { yield vcall(parser, "close", "()V"); }
     }),
     "inflate(Lorg/xmlpull/v1/XmlPullParser;Landroid/view/ViewGroup;)Landroid/view/View;": function (this: JLayoutInflater, parser: unknown, root: unknown) {
       return vcall(this, "inflate", "(Lorg/xmlpull/v1/XmlPullParser;Landroid/view/ViewGroup;Z)Landroid/view/View;", parser, root, +!!root);

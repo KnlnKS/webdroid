@@ -157,13 +157,13 @@ rt.register({ name: "android/media/MediaCodecInfo$AudioCapabilities", ctor: JAud
 } });
 rt.register({ name: "android/media/MediaCodecList", ctor: class extends JObj {}, statics: { REGULAR_CODECS: 0, ALL_CODECS: 1 }, methods: {
   "<init>(I)V": function () {},
-  "getCodecInfos()[Landroid/media/MediaCodecInfo;": driven(function* (): Gen  { return jarray((yield codecs()), "Landroid/media/MediaCodecInfo;"); }),
-  "static getCodecCount()I": driven(function* (): Gen  { return ((yield codecs())).length; }),
-  "static getCodecInfoAt(I)Landroid/media/MediaCodecInfo;": driven(function* (index: number): Gen  {
-    const info = ((yield codecs()))[index]; if (!info) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(index)); return info;
+  "getCodecInfos()[Landroid/media/MediaCodecInfo;": driven(function* (): Gen { return jarray(yield codecs(), "Landroid/media/MediaCodecInfo;"); }),
+  "static getCodecCount()I": driven(function* (): Gen { return (yield codecs()).length; }),
+  "static getCodecInfoAt(I)Landroid/media/MediaCodecInfo;": driven(function* (index: number): Gen {
+    const info = (yield codecs())[index]; if (!info) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(index)); return info;
   }),
-  "findDecoderForFormat(Landroid/media/MediaFormat;)Ljava/lang/String;": driven(function* (format: JMediaFormat): Gen  {
-    for (const info of (yield codecs())) if (info.definition.mime === stringValue(format, "mime") && (yield supports(info.definition, format))) return info.name;
+  "findDecoderForFormat(Landroid/media/MediaFormat;)Ljava/lang/String;": driven(function* (format: JMediaFormat): Gen {
+    for (const info of yield codecs()) if (info.definition.mime === stringValue(format, "mime") && (yield supports(info.definition, format))) return info.name;
     return null;
   }),
   "findEncoderForFormat(Landroid/media/MediaFormat;)Ljava/lang/String;": () => null,

@@ -134,8 +134,8 @@ async function parseIntentXml(resources: unknown, parser: unknown, attrs: unknow
 const intentMethods: NativeSpec["methods"] = {
   "static parseIntent(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;)Landroid/content/Intent;": parseIntentXml,
   "<init>()V": function () {},
-  "<init>(Landroid/os/Parcel;)V": driven(function* (this: JIntent, p: JParcel): Gen { (yield readIntent(p, this)); }),
-  "readFromParcel(Landroid/os/Parcel;)V": driven(function* (this: JIntent, p: JParcel): Gen { (yield readIntent(p, this)); }),
+  "<init>(Landroid/os/Parcel;)V": driven(function* (this: JIntent, p: JParcel): Gen { yield readIntent(p, this); }),
+  "readFromParcel(Landroid/os/Parcel;)V": driven(function* (this: JIntent, p: JParcel): Gen { yield readIntent(p, this); }),
   "writeToParcel(Landroid/os/Parcel;I)V": writeIntent,
   "describeContents()I": () => 0,
   "<init>(Ljava/lang/String;Landroid/net/Uri;)V": function (this: JIntent, a: string, u: any) {
@@ -221,7 +221,7 @@ const intentMethods: NativeSpec["methods"] = {
   "getParcelableExtra(Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/Object;": function (this: JIntent, k: string) { return this.extras.map.get(k) ?? null; },
   "getSerializableExtra(Ljava/lang/String;Ljava/lang/Class;)Ljava/io/Serializable;": function (this: JIntent, k: string) { return this.extras.map.get(k) ?? null; },
   "getCategories()Ljava/util/Set;": driven(function* (this: JIntent): Gen {
-    return this.categories.size ? (yield newLinkedHashSet([...this.categories])) : null;
+    return this.categories.size ? yield newLinkedHashSet([...this.categories]) : null;
   }),
   "getScheme()Ljava/lang/String;": function (this: JIntent) {
     const i = this.dataUri?.indexOf(":") ?? -1;
@@ -251,11 +251,11 @@ const intentMethods: NativeSpec["methods"] = {
   "setIdentifier(Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, identifier: string | null) { this.identifier = identifier; return this; },
   "resolveActivity(Landroid/content/pm/PackageManager;)Landroid/content/ComponentName;": driven(function* (this: JIntent, pm: unknown): Gen {
     if (this.component) return mkComponentName(this.componentPkg ?? appHost?.pkg ?? "", this.component);
-    const resolved = (yield vcall(pm, "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", this, 0x10000));
+    const resolved = yield vcall(pm, "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", this, 0x10000);
     return resolved?.activityInfo ? mkComponentName(resolved.activityInfo.packageName, resolved.activityInfo.name) : null;
   }),
   "resolveActivityInfo(Landroid/content/pm/PackageManager;I)Landroid/content/pm/ActivityInfo;": driven(function* (this: JIntent, pm: unknown, flags: number): Gen {
-    const resolved = (yield vcall(pm, "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", this, flags | 0x10000));
+    const resolved = yield vcall(pm, "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", this, flags | 0x10000);
     return resolved?.activityInfo ?? null;
   }),
   "toString()Ljava/lang/String;": function (this: JIntent) {
@@ -298,11 +298,11 @@ rt.register({
   fields: ["packageName", "resourceName"],
   methods: {
     "<init>()V": function () {},
-    "static fromContext(Landroid/content/Context;I)Landroid/content/Intent$ShortcutIconResource;": driven(function* (ctx: unknown, id: number): Gen  {
+    "static fromContext(Landroid/content/Context;I)Landroid/content/Intent$ShortcutIconResource;": driven(function* (ctx: unknown, id: number): Gen {
       const r = new JShortcutIconResource();
-      r.packageName = (yield vcall(ctx, "getPackageName", "()Ljava/lang/String;"));
-      const res = (yield vcall(ctx, "getResources", "()Landroid/content/res/Resources;"));
-      r.resourceName = (yield vcall(res, "getResourceName", "(I)Ljava/lang/String;", id));
+      r.packageName = yield vcall(ctx, "getPackageName", "()Ljava/lang/String;");
+      const res = yield vcall(ctx, "getResources", "()Landroid/content/res/Resources;");
+      r.resourceName = yield vcall(res, "getResourceName", "(I)Ljava/lang/String;", id);
       return r;
     }),
     "toString()Ljava/lang/String;": function (this: JShortcutIconResource) { return this.resourceName; },

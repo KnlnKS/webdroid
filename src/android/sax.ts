@@ -23,8 +23,8 @@ rt.register({ name: "org/xml/sax/SAXException", sup: "java/lang/Exception", ctor
   "getLocalizedMessage()Ljava/lang/String;": function () { return vcall(this, "getMessage", "()Ljava/lang/String;"); },
   "toString()Ljava/lang/String;": driven(function* (this: JSaxException): Gen {
     if (this.exception) return vcall(this.exception, "toString", "()Ljava/lang/String;");
-    const name = (yield vcall((yield vcall(this, "getClass", "()Ljava/lang/Class;")), "getName", "()Ljava/lang/String;"));
-    const message = (yield vcall(this, "getLocalizedMessage", "()Ljava/lang/String;"));
+    const name = yield vcall(yield vcall(this, "getClass", "()Ljava/lang/Class;"), "getName", "()Ljava/lang/String;");
+    const message = yield vcall(this, "getLocalizedMessage", "()Ljava/lang/String;");
     return name + (message === null ? "" : ": " + message);
   }),
 } });

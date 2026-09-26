@@ -261,7 +261,7 @@ rt.register({
     // on close. flush() cannot be that commit: a BufferedOutputStream wrapper flushes per block,
     // which would rewrite the whole file for every buffer's worth of a backup.
     "flush()V": () => {},
-    "close()V": driven(function* (this: JDocOutputStream): Gen { (yield docWrite(this.docId, Uint8Array.from(this.chunks))); }),
+    "close()V": driven(function* (this: JDocOutputStream): Gen { yield docWrite(this.docId, Uint8Array.from(this.chunks)); }),
   },
 });
 export function docOutputStream(docId: string, append: boolean): Promise<JDocOutputStream> {

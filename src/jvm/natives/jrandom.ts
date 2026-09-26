@@ -25,7 +25,7 @@ rt.register({
     "setSeed(J)V": function (this: JRandom, s: bigint) { this.setSeed(s); },
     "nextBytes([B)V": driven(function* (this: JRandom, bytes: Int8Array): Gen {
       for (let i = 0; i < bytes.length;) {
-        let value = (yield vcall(this, "nextInt", "()I"));
+        let value = yield vcall(this, "nextInt", "()I");
         for (let n = Math.min(bytes.length - i, 4); n-- > 0; value >>= 8) bytes[i++] = value;
       }
     }),

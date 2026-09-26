@@ -97,7 +97,7 @@ const runTask = driven(function* runTask(ex: JExecutor, worker: JExecutor["worke
     if (entry.queued) yield vcall(ex.queue, "remove", "(Ljava/lang/Object;)Z", task);
     if (f.cancelled) return;
     if (!worker.thread) {
-      worker.thread = ex.factory ? (yield vcall(ex.factory, "newThread", "(Ljava/lang/Runnable;)Ljava/lang/Thread;", task)) : rt.make("java/lang/Thread");
+      worker.thread = ex.factory ? yield vcall(ex.factory, "newThread", "(Ljava/lang/Runnable;)Ljava/lang/Thread;", task) : rt.make("java/lang/Thread");
       if (!worker.thread) throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "ThreadFactory returned null");
     }
     if (f.cancelled) return;
@@ -108,7 +108,7 @@ const runTask = driven(function* runTask(ex: JExecutor, worker: JExecutor["worke
     setCurThread(worker.thread);
     let running: Promise<unknown>;
     try { running = vcall(task, method, desc); } finally { setCurThread(prev); }
-    const value = (yield running);
+    const value = yield running;
     if (!f.cancelled && value !== undefined) f.value = value;
   } catch (e) {
     if (!f.cancelled) f.error = rt.jx(e);
@@ -140,13 +140,13 @@ const futureGet = driven(function* futureGet(f: JFuture): Gen {
   if (!f.cancelled && f.promise) yield f.promise;
   if (f instanceof JCompletable) return completableValue(f, false);
   if (f.cancelled) throw rt.mkThrowable("java/util/concurrent/CancellationException", null);
-  if (f.error) throw (yield newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", f.error));
+  if (f.error) throw yield newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", f.error);
   return f.value;
 });
 const futureGetTimed = driven(function* futureGetTimed(f: JFuture, d: bigint, u: JTimeUnit): Gen {
   if (!f.done && f.promise) {
     const late = {};
-    const first = (yield Promise.race([f.promise, new Promise((r) => parkTimeout(() => r(late), Number(d) * u.ms))]));
+    const first = yield Promise.race([f.promise, new Promise((r) => parkTimeout(() => r(late), Number(d) * u.ms))]);
     if (first === late && !f.done) throw rt.mkThrowable("java/util/concurrent/TimeoutException", null);
   }
   return futureGet(f);
@@ -166,7 +166,7 @@ rt.register({
     "compareTo(Ljava/util/concurrent/Delayed;)I": driven(function* (this: JFuture, other: unknown): Gen {
       if (this === other) return 0;
       if (other instanceof JFuture) return Math.sign(this.deadline - other.deadline);
-      const delay: bigint = (yield vcall(other, "getDelay", "(Ljava/util/concurrent/TimeUnit;)J", TUS.NANOSECONDS));
+      const delay: bigint = yield vcall(other, "getDelay", "(Ljava/util/concurrent/TimeUnit;)J", TUS.NANOSECONDS);
       const delta = BigInt(Math.trunc((this.deadline - guestNow()) * 1e6)) - delay;
       return delta < 0n ? -1 : delta > 0n ? 1 : 0;
     }),
@@ -258,23 +258,23 @@ const executorMethods: NativeSpec["methods"] = {
   "invokeAll(Ljava/util/Collection;)Ljava/util/List;": driven(function* (this: JExecutor, tasks: JList): Gen {
     if (tasks == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
     const futures = newArrayList();
-    for (const task of tasks.a) futures.a.push((yield vcall(this, "submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;", task)));
+    for (const task of tasks.a) futures.a.push(yield vcall(this, "submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;", task));
     for (const future of futures.a) {
-      try { (yield vcall(future, "get", "()Ljava/lang/Object;")); } catch {}
+      try { yield vcall(future, "get", "()Ljava/lang/Object;"); } catch {}
     }
     return futures;
   }),
   "invokeAll(Ljava/util/Collection;JLjava/util/concurrent/TimeUnit;)Ljava/util/List;": driven(function* (this: JExecutor, tasks: JList, timeout: bigint, unit: JTimeUnit): Gen {
     if (tasks == null || unit == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
     const futures = newArrayList();
-    for (const task of tasks.a) futures.a.push((yield vcall(this, "submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;", task)));
+    for (const task of tasks.a) futures.a.push(yield vcall(this, "submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;", task));
     const deadline = guestNow() + Number(timeout) * unit.ms;
     for (let i = 0; i < futures.a.length; i++) {
       const remaining = Math.max(0, deadline - guestNow());
-      try { (yield vcall(futures.a[i], "get", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;", BigInt(Math.ceil(remaining * 1e6)), TUS.NANOSECONDS)); }
+      try { yield vcall(futures.a[i], "get", "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;", BigInt(Math.ceil(remaining * 1e6)), TUS.NANOSECONDS); }
       catch (e) {
         if (!rt.iof(e, "java/util/concurrent/TimeoutException")) continue;
-        for (; i < futures.a.length; i++) (yield vcall(futures.a[i], "cancel", "(Z)Z", 1));
+        for (; i < futures.a.length; i++) yield vcall(futures.a[i], "cancel", "(Z)Z", 1);
         break;
       }
     }
@@ -432,14 +432,14 @@ const forkTask = (task: JForkJoinTask, pool: JExecutor) => {
   return task;
 };
 const runForkJoinTask = driven(function* runForkJoinTask(task: JForkJoinTask): Gen {
-  const value = (yield vcall(task, "compute", forkJoinDesc(task)));
+  const value = yield vcall(task, "compute", forkJoinDesc(task));
   if (value !== undefined) task.result = value;
   return task.result;
 });
 const invokeForkJoinTasks = driven(function* invokeForkJoinTasks(tasks: JForkJoinTask[]): Gen<void> {
-  for (let i = tasks.length - 1; i > 0; i--) (yield vcall(tasks[i], "fork", "()Ljava/util/concurrent/ForkJoinTask;"));
+  for (let i = tasks.length - 1; i > 0; i--) yield vcall(tasks[i], "fork", "()Ljava/util/concurrent/ForkJoinTask;");
   if (tasks.length) yield vcall(tasks[0], "invoke", "()Ljava/lang/Object;");
-  for (let i = 1; i < tasks.length; i++) (yield vcall(tasks[i], "join", "()Ljava/lang/Object;"));
+  for (let i = 1; i < tasks.length; i++) yield vcall(tasks[i], "join", "()Ljava/lang/Object;");
 });
 const forkJoinMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
@@ -449,7 +449,7 @@ const forkJoinMethods: NativeSpec["methods"] = {
   },
   "join()Ljava/lang/Object;": driven(function* (this: JForkJoinTask): Gen {
     if (this.future) {
-      const value = (yield futureGet(this.future));
+      const value = yield futureGet(this.future);
       if (value !== undefined && value !== null) this.result = value;
     }
     return this.result;
@@ -464,14 +464,14 @@ const forkJoinMethods: NativeSpec["methods"] = {
     cancelFuture(this.future, interrupt);
     return 1;
   },
-  "static invokeAll(Ljava/util/concurrent/ForkJoinTask;Ljava/util/concurrent/ForkJoinTask;)V": driven(function* (first: JForkJoinTask, second: JForkJoinTask): Gen  {
+  "static invokeAll(Ljava/util/concurrent/ForkJoinTask;Ljava/util/concurrent/ForkJoinTask;)V": driven(function* (first: JForkJoinTask, second: JForkJoinTask): Gen {
     yield vcall(second, "fork", "()Ljava/util/concurrent/ForkJoinTask;");
     yield runForkJoinTask(first);
     yield vcall(second, "join", "()Ljava/lang/Object;");
   }),
   "static invokeAll([Ljava/util/concurrent/ForkJoinTask;)V": (tasks: JForkJoinTask[]) => invokeForkJoinTasks(tasks),
-  "static invokeAll(Ljava/util/Collection;)Ljava/util/Collection;": driven(function* (tasks: unknown): Gen  {
-    yield invokeForkJoinTasks((yield vcall(tasks, "toArray", "()[Ljava/lang/Object;")));
+  "static invokeAll(Ljava/util/Collection;)Ljava/util/Collection;": driven(function* (tasks: unknown): Gen {
+    yield invokeForkJoinTasks(yield vcall(tasks, "toArray", "()[Ljava/lang/Object;"));
     return tasks;
   }),
 };
@@ -606,13 +606,13 @@ for (const [n, run] of [["AbortPolicy", 0], ["CallerRunsPolicy", 1], ["DiscardPo
     ifaces: ["java/util/concurrent/RejectedExecutionHandler"],
     methods: {
       "<init>()V": function () {},
-      "rejectedExecution(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V": driven(function* (r: unknown, ex: JExecutor): Gen  {
+      "rejectedExecution(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V": driven(function* (r: unknown, ex: JExecutor): Gen {
         if (n === "AbortPolicy") throw rt.mkThrowable("java/util/concurrent/RejectedExecutionException", "rejected");
-        if ((yield vcall(ex, "isShutdown", "()Z"))) return;
+        if (yield vcall(ex, "isShutdown", "()Z")) return;
         if (run) return vcall(r, "run", "()V");
         if (n === "DiscardOldestPolicy") {
-          const queue = (yield vcall(ex, "getQueue", "()Ljava/util/concurrent/BlockingQueue;"));
-          const oldest = (yield vcall(queue, "poll", "()Ljava/lang/Object;"));
+          const queue = yield vcall(ex, "getQueue", "()Ljava/util/concurrent/BlockingQueue;");
+          const oldest = yield vcall(queue, "poll", "()Ljava/lang/Object;");
           if (oldest) yield removeQueued.call(ex, oldest);
           return vcall(ex, "execute", "(Ljava/lang/Runnable;)V", r);
         }
@@ -653,10 +653,10 @@ const completionError = (error: unknown) => rt.iof(error, "java/util/concurrent/
 const completableValue = driven(function* completableValue(future: JCompletable, join: boolean): Gen {
   if (future.cancelled) throw future.error;
   if (!future.error) return future.value;
-  if (join) throw (yield completionError(future.error));
+  if (join) throw yield completionError(future.error);
   const cause = rt.iof(future.error, "java/util/concurrent/CompletionException")
-    ? (yield vcall(future.error, "getCause", "()Ljava/lang/Throwable;")) : null;
-  throw (yield newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", cause ?? future.error));
+    ? yield vcall(future.error, "getCause", "()Ljava/lang/Throwable;") : null;
+  throw yield newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", cause ?? future.error);
 });
 class JAsyncSupply extends JObj {
   constructor(public future: JCompletable, public supplier: unknown) { super(); }
@@ -667,8 +667,8 @@ rt.register({
   methods: {
     "run()V": driven(function* (this: JAsyncSupply): Gen {
       if (this.future.done) return;
-      try { settleWith(this.future, (yield vcall(this.supplier, "get", "()Ljava/lang/Object;")), null); }
-      catch (error) { settleWith(this.future, null, (yield completionError(rt.jx(error)))); }
+      try { settleWith(this.future, yield vcall(this.supplier, "get", "()Ljava/lang/Object;"), null); }
+      catch (error) { settleWith(this.future, null, yield completionError(rt.jx(error))); }
     }),
   },
 });
@@ -695,20 +695,20 @@ const runDependent = driven(function* runDependent(source: JCompletable, target:
   if (target.done) return;
   try {
     const handlesError = kind === "handle" || kind === "whenComplete" || kind === "exceptionally";
-    if (source.error && !handlesError) { settleWith(target, null, (yield completionError(source.error))); return; }
+    if (source.error && !handlesError) { settleWith(target, null, yield completionError(source.error)); return; }
     if (!source.error && kind === "exceptionally") { settleWith(target, source.value, null); return; }
     const [, method, desc] = completionActions[kind];
     const args = kind === "thenRun" ? [] : kind === "handle" || kind === "whenComplete" ? [source.value, source.error] : [kind === "exceptionally" ? source.error : source.value];
-    const value = (yield vcall(action, method, desc, ...args));
+    const value = yield vcall(action, method, desc, ...args);
     if (kind === "thenCompose") {
       if (value == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      const next = value instanceof JCompletable ? value : (yield vcall(value, "toCompletableFuture", "()Ljava/util/concurrent/CompletableFuture;"));
+      const next = value instanceof JCompletable ? value : yield vcall(value, "toCompletableFuture", "()Ljava/util/concurrent/CompletableFuture;");
       if (!(next instanceof JCompletable)) throw rt.mkThrowable("java/lang/NullPointerException", null);
       if (!next.done) yield next.promise;
-      settleWith(target, next.value, next.error ? (yield completionError(next.error)) : null);
-    } else if (kind === "whenComplete") settleWith(target, source.value, source.error ? (yield completionError(source.error)) : null);
+      settleWith(target, next.value, next.error ? yield completionError(next.error) : null);
+    } else if (kind === "whenComplete") settleWith(target, source.value, source.error ? yield completionError(source.error) : null);
     else settleWith(target, kind === "thenAccept" || kind === "thenRun" ? null : value, null);
-  } catch (error) { settleWith(target, null, (yield completionError(kind === "whenComplete" && source.error ? source.error : rt.jx(error)))); }
+  } catch (error) { settleWith(target, null, yield completionError(kind === "whenComplete" && source.error ? source.error : rt.jx(error))); }
 });
 const completionMethods: NonNullable<NativeSpec["methods"]> = {};
 for (const kind of Object.keys(completionActions) as CompletionAction[]) {
@@ -773,7 +773,7 @@ rt.register({
     },
     "complete(Ljava/lang/Object;)Z": function (this: JCompletable, v: unknown) { return settleWith(this, v, null); },
     "completeExceptionally(Ljava/lang/Throwable;)Z": function (this: JCompletable, t: unknown) { if (t == null) throw rt.mkThrowable("java/lang/NullPointerException", null); return settleWith(this, null, t); },
-    "join()Ljava/lang/Object;": driven(function* (this: JCompletable): Gen { if (!this.done) (yield this.promise); return completableValue(this, true); }),
+    "join()Ljava/lang/Object;": driven(function* (this: JCompletable): Gen { if (!this.done) yield this.promise; return completableValue(this, true); }),
     "getNow(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JCompletable, d: unknown) { return !this.done ? d : this.error ? completableValue(this, true) : this.value; },
     "isCompletedExceptionally()Z": function (this: JCompletable) { return this.done && this.error ? 1 : 0; },
     "toCompletableFuture()Ljava/util/concurrent/CompletableFuture;": function (this: JCompletable) { return this; },
@@ -819,7 +819,7 @@ rt.register({
       if (this.done || this.thread) return;
       const thread = this.thread = curThread;
       try {
-        const value = (yield vcall(this.callable, "call", "()Ljava/lang/Object;"));
+        const value = yield vcall(this.callable, "call", "()Ljava/lang/Object;");
         if (!this.cancelled) this.value = value;
       } catch (e) { this.error = rt.jx(e); } // surfaces from get(), as AOSP's setException
       this.done = 1; this.thread = null;

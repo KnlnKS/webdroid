@@ -76,7 +76,7 @@ class DialogRoot extends JFrameLayout {
   content!: JFrameLayout;
   setContent(v: JView | null): unknown { return rt.drive(this.setContent$(v)); }
   *setContent$(v: JView | null): Gen {
-    for (const child of [...this.content.children]) (yield detachView(this.content, child));
+    for (const child of [...this.content.children]) yield detachView(this.content, child);
     if (v) yield attachView(this.content, v);
   }
   /** the dialog window's own background, from its theme — not a hardcoded white card */
@@ -183,16 +183,16 @@ class JDialog extends JObj {
     if (this.root) {
       removeOverlay(this.root);
       yield dispatchDetached(this.root);
-      try { (yield vcall(this, "onStop", "()V")); } catch (e) { reportUncaught(e); }
+      try { yield vcall(this, "onStop", "()V"); } catch (e) { reportUncaught(e); }
     }
     if (this.dismissL) {
-      try { (yield vcall(this.dismissL, "onDismiss", "(Landroid/content/DialogInterface;)V", this)); } catch (e) { reportUncaught(e); }
+      try { yield vcall(this.dismissL, "onDismiss", "(Landroid/content/DialogInterface;)V", this); } catch (e) { reportUncaught(e); }
     }
   }
   cancel(): unknown { return rt.drive(this.cancel$()); }
   *cancel$(): Gen {
     if (this.cancelL) {
-      try { (yield vcall(this.cancelL, "onCancel", "(Landroid/content/DialogInterface;)V", this)); } catch (e) { reportUncaught(e); }
+      try { yield vcall(this.cancelL, "onCancel", "(Landroid/content/DialogInterface;)V", this); } catch (e) { reportUncaught(e); }
     }
     yield this.dismissImpl();
   }
@@ -286,12 +286,12 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
         if (r instanceof Promise) yield r;
       } catch (e) { reportUncaught(e); }
     }
-    try { (yield vcall(this, "onStart", "()V")); } catch (e) { reportUncaught(e); }
+    try { yield vcall(this, "onStart", "()V"); } catch (e) { reportUncaught(e); }
     // WindowManager.addView: the dialog's view tree attaches to its window here, which is what
     // lets a ComposeView in it find its ViewTree owners and actually compose its content.
     yield dispatchAttached(root);
     if (this.showL) {
-      try { (yield vcall(this.showL, "onShow", "(Landroid/content/DialogInterface;)V", this)); } catch (e) { reportUncaught(e); }
+      try { yield vcall(this.showL, "onShow", "(Landroid/content/DialogInterface;)V", this); } catch (e) { reportUncaught(e); }
     }
     requestLayout(root);
   }),
@@ -434,7 +434,7 @@ async function buildAlertContent(d: JAlertDialog) {
       t.lp = lpFill();
       const idx = i;
       (t as any).clickL = {
-        [mangleMethod("onClick", "(Landroid/view/View;)V")]: driven(function* (): Gen  {
+        [mangleMethod("onClick", "(Landroid/view/View;)V")]: driven(function* (): Gen {
           // AOSP: the listener runs first; the DISMISS message is queued behind it
           if (d.itemsL) yield vcall(d.itemsL, "onClick", "(Landroid/content/DialogInterface;I)V", d, idx);
           yield d.dismissImpl();
@@ -463,7 +463,7 @@ async function buildAlertContent(d: JAlertDialog) {
       lp.width = -2; lp.height = -2;
       b.lp = lp;
       (b as any).clickL = {
-        [mangleMethod("onClick", "(Landroid/view/View;)V")]: driven(function* (): Gen  {
+        [mangleMethod("onClick", "(Landroid/view/View;)V")]: driven(function* (): Gen {
           if (l) yield vcall(l, "onClick", "(Landroid/content/DialogInterface;I)V", d, which);
           yield d.dismissImpl();
         }),
@@ -490,10 +490,10 @@ const alertMethods: NativeSpec["methods"] = {
     }
     yield callSelf(dialogMethods, "show()V", this);
   }),
-  "setMessage(Ljava/lang/CharSequence;)V": driven(function* (this: JAlertDialog, m: unknown): Gen { this.message = (yield str(this.jctx?.$host, m)); }),
+  "setMessage(Ljava/lang/CharSequence;)V": driven(function* (this: JAlertDialog, m: unknown): Gen { this.message = yield str(this.jctx?.$host, m); }),
   "setView(Landroid/view/View;)V": function (this: JAlertDialog, v: JView) { this.customView = v; },
   "setButton(ILjava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)V":
-    driven(function* (this: JAlertDialog, which: number, t: unknown, l: unknown): Gen { setButton(this, which, (yield str(this.jctx?.$host, t)), l); }),
+    driven(function* (this: JAlertDialog, which: number, t: unknown, l: unknown): Gen { setButton(this, which, yield str(this.jctx?.$host, t), l); }),
   "getButton(I)Landroid/widget/Button;": function (this: JAlertDialog, which: number) { return this.buttons.get(which) ?? null; },
   "getListView()Landroid/widget/ListView;": () => null,
 };
@@ -544,16 +544,16 @@ for (const [name, which] of [["Positive", -1], ["Negative", -2], ["Neutral", -3]
 }
 builderMethods["setItems([Ljava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)Landroid/app/AlertDialog$Builder;"] =
   driven(function* (this: JAlertBuilder, items: unknown[], l: unknown): Gen {
-    this.d.items = (yield Promise.all((items ?? []).map((i) => csText(i))));
+    this.d.items = yield Promise.all((items ?? []).map((i) => csText(i)));
     this.d.itemsL = l;
     return this;
   });
 builderMethods["setAdapter(Landroid/widget/ListAdapter;Landroid/content/DialogInterface$OnClickListener;)Landroid/app/AlertDialog$Builder;"] =
   driven(function* (this: JAlertBuilder, adapter: unknown, l: unknown): Gen {
-    const n = (yield vcall(adapter, "getCount", "()I"));
+    const n = yield vcall(adapter, "getCount", "()I");
     const items: string[] = [];
     for (let i = 0; i < n; i++) {
-      items.push((yield csText((yield vcall(adapter, "getItem", "(I)Ljava/lang/Object;", i)))));
+      items.push(yield csText(yield vcall(adapter, "getItem", "(I)Ljava/lang/Object;", i)));
     }
     this.d.items = items;
     this.d.itemsL = l;
@@ -570,11 +570,11 @@ rt.register({ name: "android/app/ProgressDialog", ctor: class extends JAlertDial
     "setIndeterminate(Z)V": () => {},
     "setProgressStyle(I)V": () => {},
     "static show(Landroid/content/Context;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/app/ProgressDialog;":
-      driven(function* (c: any, t: unknown, m: unknown): Gen  {
+      driven(function* (c: any, t: unknown, m: unknown): Gen {
         const d = rt.make("android/app/ProgressDialog");
         yield initDialog.call(d, c);
-        d.titleStr = (yield str(c?.$host, t));
-        d.message = (yield str(c?.$host, m));
+        d.titleStr = yield str(c?.$host, t);
+        d.message = yield str(c?.$host, m);
         yield callSelf(alertMethods, "show()V", d);
         return d;
       }),

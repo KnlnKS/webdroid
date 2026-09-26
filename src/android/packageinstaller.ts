@@ -36,7 +36,7 @@ rt.register({ name: "android/content/pm/PackageInstaller$Session", ctor: JSessio
     "openWrite(Ljava/lang/String;JJ)Ljava/io/OutputStream;": driven(function* (this: JSession, name: string, offset: bigint, _length: bigint): Gen {
       if (this.sealed) throw rt.mkThrowable("java/lang/SecurityException", "Session is sealed");
       if (!name || name.includes("/") || offset !== 0n) throw rt.mkThrowable("java/io/IOException", "Invalid session entry or unsupported resume offset");
-      const stream = (yield newObj("java/io/ByteArrayOutputStream")); this.entries.set(name, stream); return stream;
+      const stream = yield newObj("java/io/ByteArrayOutputStream"); this.entries.set(name, stream); return stream;
     }),
     "getNames()[Ljava/lang/String;": function (this: JSession) { return jarray([...this.entries.keys()], "Ljava/lang/String;"); },
     "fsync(Ljava/io/OutputStream;)V": function (this: JSession, stream: JObj) {

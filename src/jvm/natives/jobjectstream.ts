@@ -41,7 +41,7 @@ rt.register({
   methods: {
     "<init>(Ljava/io/InputStream;)V": driven(function* (this: JObjectIn, src: JInputStream): Gen {
       this.wrapped = src;
-      const head = (yield dataBytes(this, 4));
+      const head = yield dataBytes(this, 4);
       const magic = (head[0] << 8) | head[1], version = (head[2] << 8) | head[3];
       if (magic !== STREAM_MAGIC || version !== STREAM_VERSION) {
         throw rt.mkThrowable("java/io/StreamCorruptedException", "invalid stream header");
@@ -50,11 +50,11 @@ rt.register({
     ...readers(blockRead),
     "readUTF()Ljava/lang/String;": driven(function* (this: JObjectIn): Gen {
       const thread = curThread;
-      const head = (yield blockBytes(thread, this, 2));
-      return decodeModifiedUtf8((yield blockBytes(thread, this, (head[0] << 8) | head[1])));
+      const head = yield blockBytes(thread, this, 2);
+      return decodeModifiedUtf8(yield blockBytes(thread, this, (head[0] << 8) | head[1]));
     }),
     "readFully([B)V": driven(function* (this: JObjectIn, out: Int8Array): Gen {
-      const b = (yield blockBytes(curThread, this, out.length));
+      const b = yield blockBytes(curThread, this, out.length);
       out.set(i8(b));
     }),
     "readObject()Ljava/lang/Object;": function (this: JObjectIn) { return readObject(curThread, this); },
@@ -106,7 +106,7 @@ rt.register({
     },
     "writeObject(Ljava/lang/Object;)V": driven(function* (this: JObjectOut, value: unknown): Gen {
       this.writeDepth++;
-      try { (yield writeObject(curThread, this, value)); }
+      try { yield writeObject(curThread, this, value); }
       finally { this.writeDepth--; }
       if (this.writeDepth === 0) yield vcall(this, "flush", "()V");
     }),

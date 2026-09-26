@@ -509,7 +509,7 @@ rt.register({
     "setText(Ljava/text/CharacterIterator;)V": driven(function* (this: JBreakIter, ci: JObj): Gen {
       let s = "";
       if (ci) {
-        for (let c = (yield vcall(ci, "first", "()C")); c !== CHAR_ITER_DONE; c = (yield vcall(ci, "next", "()C"))) {
+        for (let c = yield vcall(ci, "first", "()C"); c !== CHAR_ITER_DONE; c = yield vcall(ci, "next", "()C")) {
           s += String.fromCharCode(c);
         }
       }
@@ -585,7 +585,7 @@ rt.register({
     "static load(Ljava/lang/Class;)Ljava/util/ServiceLoader;": serviceLoader,
     "static load(Ljava/lang/Class;Ljava/lang/ClassLoader;)Ljava/util/ServiceLoader;": serviceLoader,
     "iterator()Ljava/util/Iterator;": driven(function* (this: JServiceLoader): Gen {
-      return mkIter((yield serviceInstances(this.svcName)));
+      return mkIter(yield serviceInstances(this.svcName));
     }),
   },
 });

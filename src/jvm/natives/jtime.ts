@@ -966,7 +966,7 @@ rt.register({
       const temporal = zone ? zdt(ms, zone) : ldtFromDate(new Date(ms));
       for (const query of queries) {
         try {
-          const value = (yield vcall(query, "queryFrom", "(Ljava/time/temporal/TemporalAccessor;)Ljava/lang/Object;", temporal));
+          const value = yield vcall(query, "queryFrom", "(Ljava/time/temporal/TemporalAccessor;)Ljava/lang/Object;", temporal);
           if (value != null) return value;
         } catch (error) { if (!rt.iof(error, "java/time/DateTimeException")) throw error; }
       }

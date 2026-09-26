@@ -142,9 +142,9 @@ rt.register({
     "static getDefault()Landroid/os/LocaleList;": () => localeList,
     "static getAdjustedDefault()Landroid/os/LocaleList;": () => localeList,
     "static getEmptyLocaleList()Landroid/os/LocaleList;": () => emptyLocaleList,
-    "static forLanguageTags(Ljava/lang/String;)Landroid/os/LocaleList;": driven(function* (tags: string | null): Gen  {
+    "static forLanguageTags(Ljava/lang/String;)Landroid/os/LocaleList;": driven(function* (tags: string | null): Gen {
       const list = new JLocaleList();
-      for (const t of (tags ?? "").split(",").filter(Boolean)) list.values.push((yield vcall(rt.link("java/util/Locale").ctor, "forLanguageTag", "(Ljava/lang/String;)Ljava/util/Locale;", t.trim())));
+      for (const t of (tags ?? "").split(",").filter(Boolean)) list.values.push(yield vcall(rt.link("java/util/Locale").ctor, "forLanguageTag", "(Ljava/lang/String;)Ljava/util/Locale;", t.trim()));
       return list;
     }),
     "get(I)Ljava/util/Locale;": function (this: JLocaleList, i: number) { return this.values[i] ?? null; },
@@ -281,7 +281,7 @@ rt.register({
       return xmlFromBytes(this.host, bytes ?? (yield readFully(source!)));
     }),
     "openFd(Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": driven(function* (this: JAssetManager, p: string): Gen {
-      return mkAssetFd((yield readFully(assetSource(this, p))));
+      return mkAssetFd(yield readFully(assetSource(this, p)));
     }),
     "list(Ljava/lang/String;)[Ljava/lang/String;": function (this: JAssetManager, p: string) {
       const prefix = "assets/" + (p ? p + "/" : "");
@@ -439,7 +439,7 @@ const resMethods: NativeSpec["methods"] = {
     this.host.invalidate();
   },
   "getFont(I)Landroid/graphics/Typeface;": driven(function* (this: JResources, id: number): Gen {
-    const t = (yield fontResource(this.host, id));
+    const t = yield fontResource(this.host, id);
     if (!t) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Font resource ID #0x" + (id >>> 0).toString(16));
     return t;
   }),
@@ -591,7 +591,7 @@ rt.register({
       const value = this.vals[i];
       if (!value) return null;
       const id = value.t === TV.REFERENCE ? value.d : value.r ?? 0;
-      const font = id ? (yield fontResource(this.res, id)) : null;
+      const font = id ? yield fontResource(this.res, id) : null;
       if (!font) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Font resource at index " + i);
       return font;
     }),

@@ -221,7 +221,7 @@ rt.register({
     "update([BII)V": function (this: JMessageDigest, b: Int8Array, off: number, len: number) { mdUpdate(this, b, off, len); },
     "update(Ljava/nio/ByteBuffer;)V": driven(function* (this: JMessageDigest, input: unknown): Gen {
       if (input === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      const remaining: number = (yield vcall(input, "remaining", "()I"));
+      const remaining: number = yield vcall(input, "remaining", "()I");
       const bytes = new Int8Array(remaining);
       yield vcall(input, "get", "([B)Ljava/nio/ByteBuffer;", bytes);
       mdUpdate(this, bytes);
@@ -276,12 +276,12 @@ rt.register({
     "setMessageDigest(Ljava/security/MessageDigest;)V": function (this: JDigestInputStream, digest: JMessageDigest) { this.digest = digest; },
     "on(Z)V": function (this: JDigestInputStream, enabled: number) { this.enabled = !!enabled; },
     "read()I": driven(function* (this: JDigestInputStream): Gen {
-      const value: number = (yield vcall(this.in_, "read", "()I"));
+      const value: number = yield vcall(this.in_, "read", "()I");
       if (value >= 0 && this.enabled) yield vcall(this.digest, "update", "(B)V", value);
       return value;
     }),
     "read([BII)I": driven(function* (this: JDigestInputStream, bytes: Int8Array, off: number, len: number): Gen {
-      const count: number = (yield vcall(this.in_, "read", "([BII)I", bytes, off, len));
+      const count: number = yield vcall(this.in_, "read", "([BII)I", bytes, off, len);
       if (count > 0 && this.enabled) yield vcall(this.digest, "update", "([BII)V", bytes, off, count);
       return count;
     }),

@@ -445,7 +445,7 @@ const paintMethods: NativeSpec["methods"] = {
   "setColor(J)V": function (this: JPaint, c: bigint) { this.setColorValue(Number(BigInt.asIntN(32, c >> 32n))); },
   "getColorLong()J": function (this: JPaint) { return BigInt(this.color >>> 0) << 32n; },
   "getTextLocale()Ljava/util/Locale;": function (this: JPaint) { return this.locales?.values[0] ?? usLocale; },
-  "getTextLocales()Landroid/os/LocaleList;": driven(function* (this: JPaint): Gen { return this.locales ??= (yield vcall(((yield linkInit("android/os/LocaleList"))).ctor, "getDefault", "()Landroid/os/LocaleList;")); }),
+  "getTextLocales()Landroid/os/LocaleList;": driven(function* (this: JPaint): Gen { return this.locales ??= yield vcall((yield linkInit("android/os/LocaleList")).ctor, "getDefault", "()Landroid/os/LocaleList;"); }),
   "setTextLocale(Ljava/util/Locale;)V": function (this: JPaint, locale: JLocale) {
     if (!locale) throw rt.mkThrowable("java/lang/IllegalArgumentException", "locale cannot be null");
     this.locales = Object.assign(rt.make("android/os/LocaleList"), { values: [locale] }); this.language = localeTag(locale);
@@ -1451,9 +1451,9 @@ export const bitmapMethods: NativeSpec["methods"] = {
       if (!fmt) throw rt.npe();
       const type = ["image/jpeg", "image/png", "image/webp"][fmt.ord];
       if (!type) return 0;
-      const blob = (yield this.canvas.convertToBlob({ type, quality: Math.max(0, Math.min(1, q / 100)) }));
+      const blob = yield this.canvas.convertToBlob({ type, quality: Math.max(0, Math.min(1, q / 100)) });
       if (blob.type !== type) return 0;
-      const bytes = new Int8Array((yield blob.arrayBuffer()));
+      const bytes = new Int8Array(yield blob.arrayBuffer());
       yield vcall(out, "write", "([BII)V", bytes, 0, bytes.length);
       return 1;
     }),
@@ -2100,7 +2100,7 @@ export const canvasMethods: NativeSpec["methods"] = {
   "drawText(Ljava/lang/CharSequence;IIFFLandroid/graphics/Paint;)V": driven(function* (this: JCanvas, s: unknown, a: number, b: number, x: number, y: number, p: JPaint): Gen {
     const text = typeof s === "string" ? s : typeof (s as { text?: unknown })?.text === "string"
       ? (s as { text: string }).text
-      : String((yield vcall(s, "toString", "()Ljava/lang/String;")));
+      : String(yield vcall(s, "toString", "()Ljava/lang/String;"));
     drawTextImpl(this, text.slice(a, b), x, y, p);
   }),
   "drawText(Ljava/lang/String;IIFFLandroid/graphics/Paint;)V": function (this: JCanvas, s: string, a: number, b: number, x: number, y: number, p: JPaint) {
@@ -2560,7 +2560,7 @@ rt.register({
 });
 /** an empty stream is a loader bug upstream of the decoder, so name the stream class rather than the decode failure */
 const streamBytes = driven(function* streamBytes(s: unknown): Gen<Uint8Array> {
-  const b = (yield readStreamFully(s));
+  const b = yield readStreamFully(s);
   if (!b.length) console.warn("[decode] empty stream from", jclsNameOf(s));
   return b;
 });
@@ -2590,7 +2590,7 @@ export const decodeBytes = driven(function* decodeBytes(bytes: Uint8Array, opts:
       w = Math.round(w * opts.inTargetDensity / opts.inDensity);
       h = Math.round(h * opts.inTargetDensity / opts.inDensity);
     }
-    if (onHeader) [w, h] = (yield onHeader(w, h));
+    if (onHeader) [w, h] = yield onHeader(w, h);
     const bitmap = JBitmap.fromImage(img, w, h);
     if (opts?.inDensity) bitmap.density = scaled ? opts.inTargetDensity : opts.inDensity;
     bitmap.immutable = !opts?.inMutable;
@@ -2602,14 +2602,14 @@ export const decodeBytes = driven(function* decodeBytes(bytes: Uint8Array, opts:
   } finally { img?.close(); }
 });
 const decodeStream = driven(function* decodeStream(stream: unknown, pad: JRect | null = null, opts: JBFOptions | null = null): Gen {
-  const bitmap = stream ? (yield decodeBytes((yield streamBytes(stream)), opts)) : null;
+  const bitmap = stream ? yield decodeBytes(yield streamBytes(stream), opts) : null;
   if (bitmap && pad) pad.left = pad.top = pad.right = pad.bottom = -1;
   return bitmap;
 });
 const decodeFileDescriptor = driven(function* decodeFileDescriptor(fd: JFileDescriptor | null, pad: JRect | null = null, opts: JBFOptions | null = null): Gen {
   if (!fd) throw rt.mkThrowable("java/lang/NullPointerException", "fd");
-  const bytes = (yield javaFdBytes(fd.fd));
-  const bitmap = (yield decodeBytes(bytes ?? new Uint8Array(0), opts));
+  const bytes = yield javaFdBytes(fd.fd);
+  const bitmap = yield decodeBytes(bytes ?? new Uint8Array(0), opts);
   if (!bitmap && opts?.inBitmap) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Problem decoding into existing bitmap");
   if (bitmap && pad) pad.left = pad.top = pad.right = pad.bottom = -1;
   return bitmap;
@@ -2617,8 +2617,8 @@ const decodeFileDescriptor = driven(function* decodeFileDescriptor(fd: JFileDesc
 const decodeFile = driven(function* decodeFile(path: string | null, opts: JBFOptions | null = null): Gen {
   let stream: unknown = null;
   try {
-    stream = (yield newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", path));
-    return (yield decodeStream(stream, null, opts));
+    stream = yield newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", path);
+    return yield decodeStream(stream, null, opts);
   } catch (error) {
     if (!rt.iof(error, "java/lang/Exception")) throw error;
     return null;
@@ -2630,7 +2630,7 @@ const decodeResourceStream = driven(function* decodeResourceStream(res: unknown,
   opts ??= new JBFOptions();
   if (!opts.inDensity && value && value.density !== 0xffff) opts.inDensity = value.density || 160;
   if (!opts.inTargetDensity && res) {
-    const metrics: JDisplayMetrics = (yield vcall(res, "getDisplayMetrics", "()Landroid/util/DisplayMetrics;"));
+    const metrics: JDisplayMetrics = yield vcall(res, "getDisplayMetrics", "()Landroid/util/DisplayMetrics;");
     opts.inTargetDensity = metrics.densityDpi;
   }
   return decodeStream(stream, pad, opts);
@@ -2639,12 +2639,12 @@ const decodeResource = driven(function* decodeResource(res: unknown, id: number,
   let bitmap: JBitmap | null = null, stream: unknown = null;
   try {
     const value = new JTypedValue();
-    stream = (yield vcall(res, "openRawResource", "(ILandroid/util/TypedValue;)Ljava/io/InputStream;", id, value));
-    bitmap = (yield decodeResourceStream(res, value, stream, null, opts));
+    stream = yield vcall(res, "openRawResource", "(ILandroid/util/TypedValue;)Ljava/io/InputStream;", id, value);
+    bitmap = yield decodeResourceStream(res, value, stream, null, opts);
   } catch (error) {
     if (!(error instanceof rt.link("java/lang/Exception").ctor)) throw error;
   } finally {
-    if (stream) try { (yield vcall(stream, "close", "()V")); }
+    if (stream) try { yield vcall(stream, "close", "()V"); }
     catch (error) { if (!(error instanceof rt.link("java/io/IOException").ctor)) throw error; }
   }
   if (!bitmap && opts?.inBitmap) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Problem decoding into existing bitmap");
@@ -2673,7 +2673,7 @@ rt.register({
 class JBitmapRegionDecoder extends JObj { bitmap: JBitmap | null = null; }
 const regionDecoder = driven(function* regionDecoder(bytes: Uint8Array | null): Gen<JBitmapRegionDecoder> {
   if (!bytes?.length) throw rt.mkThrowable("java/io/IOException", "Unable to decode image");
-  const bitmap = (yield decodeBytes(bytes, null));
+  const bitmap = yield decodeBytes(bytes, null);
   if (!bitmap) throw rt.mkThrowable("java/io/IOException", "Unable to decode image");
   const decoder = new JBitmapRegionDecoder();
   decoder.bitmap = bitmap;
@@ -2681,13 +2681,13 @@ const regionDecoder = driven(function* regionDecoder(bytes: Uint8Array | null): 
 });
 rt.register({ name: "android/graphics/BitmapRegionDecoder", ctor: JBitmapRegionDecoder, methods: {
   "static newInstance(Ljava/io/InputStream;Z)Landroid/graphics/BitmapRegionDecoder;":
-    driven(function* (stream: unknown): Gen  { return regionDecoder((yield streamBytes(stream))); }),
+    driven(function* (stream: unknown): Gen { return regionDecoder(yield streamBytes(stream)); }),
   "static newInstance(Ljava/io/InputStream;)Landroid/graphics/BitmapRegionDecoder;":
-    driven(function* (stream: unknown): Gen  { return regionDecoder((yield streamBytes(stream))); }),
+    driven(function* (stream: unknown): Gen { return regionDecoder(yield streamBytes(stream)); }),
   "static newInstance(Ljava/lang/String;Z)Landroid/graphics/BitmapRegionDecoder;":
-    driven(function* (path: string): Gen  { return regionDecoder((yield vfs.readFile(path))); }),
+    driven(function* (path: string): Gen { return regionDecoder(yield vfs.readFile(path)); }),
   "static newInstance(Ljava/io/FileDescriptor;Z)Landroid/graphics/BitmapRegionDecoder;":
-    driven(function* (fd: JFileDescriptor): Gen  { return regionDecoder((yield javaFdBytes(fd.fd))); }),
+    driven(function* (fd: JFileDescriptor): Gen { return regionDecoder(yield javaFdBytes(fd.fd)); }),
   "static newInstance([BIIZ)Landroid/graphics/BitmapRegionDecoder;":
     (bytes: Int8Array, offset: number, length: number) => regionDecoder(u8(bytes, offset, length)),
   "getWidth()I": function (this: JBitmapRegionDecoder) { return this.bitmap?.w ?? 0; },

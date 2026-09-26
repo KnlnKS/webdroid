@@ -21,7 +21,7 @@ const requestMethods: NonNullable<NativeSpec["methods"]> = {
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JLocationRequest, p: JParcel): Gen {
     yield vcall(p, "writeString", "(Ljava/lang/String;)V", this.provider);
-    for (const [field, d, type] of wire) (yield vcall(p, "write" + type, `(${d})V`, this[field]));
+    for (const [field, d, type] of wire) yield vcall(p, "write" + type, `(${d})V`, this[field]);
     yield vcall(p, "writeTypedObject", "(Landroid/os/Parcelable;I)V", this.workSource ?? (yield newObj("android/os/WorkSource")), 0);
   }),
 };
@@ -37,7 +37,7 @@ const builderMethods: NonNullable<NativeSpec["methods"]> = {
     rt.link("android/location/LocationRequest");
     const request = Object.assign(new JLocationRequest(), this.request);
     if (request.minInterval > request.interval) request.minInterval = request.interval;
-    request.workSource = (yield newObj("android/os/WorkSource", "(Landroid/os/WorkSource;)V", request.workSource));
+    request.workSource = yield newObj("android/os/WorkSource", "(Landroid/os/WorkSource;)V", request.workSource);
     return request;
   }),
 };

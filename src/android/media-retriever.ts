@@ -130,13 +130,13 @@ rt.register({ name: "android/media/MediaMetadataRetriever", ctor: JMediaMetadata
       return this.open(source);
     },
     "setDataSource(Landroid/media/MediaDataSource;)V": driven(function* (this: JMediaMetadataRetriever, data: unknown): Gen {
-      const size = Number((yield vcall(data, "getSize", "()J")));
+      const size = Number(yield vcall(data, "getSize", "()J"));
       if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid media source");
-      (yield this.open({ size, read: async (offset, length) => {
+      yield this.open({ size, read: async (offset, length) => {
         const out = new Int8Array(length);
         const count = await vcall(data, "readAt", "(J[BII)I", BigInt(offset), out, 0, length) as number;
         return count <= 0 ? new Uint8Array(0) : new Uint8Array(out.buffer, 0, Math.min(count, length));
-      } }));
+      } });
     }),
     "extractMetadata(I)Ljava/lang/String;": function (this: JMediaMetadataRetriever, key: number) { return this.metadata.get(key) ?? null; },
     "getFrameAtTime(JI)Landroid/graphics/Bitmap;": function (this: JMediaMetadataRetriever, time: bigint, option: number) { return this.frame(time, option); },

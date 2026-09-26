@@ -593,7 +593,7 @@ rt.register({
     },
     "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JWebView, canvas: JCanvas): Gen {
       if (!canvas.bmp) { this.drawnAt = frame; live.add(this); return; }
-      const image = (yield this.bitmapSnapshot());
+      const image = yield this.bitmapSnapshot();
       try { canvas.ctx.drawImage(image, 0, 0, this.width(), this.height()); }
       finally { image.close(); }
     }),

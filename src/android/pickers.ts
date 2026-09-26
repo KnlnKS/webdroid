@@ -232,7 +232,7 @@ async function initTimePickerDialog(d: JTimePickerDialog, c: unknown, listener: 
   d.posText = "OK";
   d.negText = "Cancel";
   d.posL = {
-    [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: driven(function* (): Gen  {
+    [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: driven(function* (): Gen {
       if (d.timeSetL) yield vcall(d.timeSetL, "onTimeSet", "(Landroid/widget/TimePicker;II)V", tp, tp.hourVal, tp.minuteVal);
     }),
   };
@@ -356,9 +356,9 @@ async function initDatePickerDialog(d: JDatePickerDialog, c: unknown, themeId: n
   d.posText = "OK";
   d.negText = "Cancel";
   d.posL = {
-    [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: driven(function* (): Gen  {
-      if (d.dateSetL) (yield vcall(d.dateSetL, "onDateSet", "(Landroid/widget/DatePicker;III)V",
-        p, p.yearVal, p.monthVal, p.dayVal));
+    [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: driven(function* (): Gen {
+      if (d.dateSetL) yield vcall(d.dateSetL, "onDateSet", "(Landroid/widget/DatePicker;III)V",
+        p, p.yearVal, p.monthVal, p.dayVal);
     }),
   };
 }

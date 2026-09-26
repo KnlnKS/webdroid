@@ -115,7 +115,7 @@ rt.register({ name: "android/os/WorkSource", ctor: JWorkSource, ifaces: ["androi
       return changed;
     },
     "createWorkChain()Landroid/os/WorkSource$WorkChain;": driven(function* (this: JWorkSource): Gen {
-      const chain = (yield newObj("android/os/WorkSource$WorkChain")); (this.chains ??= newArrayList()).a.push(chain); return chain;
+      const chain = yield newObj("android/os/WorkSource$WorkChain"); (this.chains ??= newArrayList()).a.push(chain); return chain;
     }),
     "getWorkChains()Ljava/util/List;": function (this: JWorkSource) { return this.chains; },
     "diff(Landroid/os/WorkSource;)Z": function (this: JWorkSource, other: JWorkSource) { return +this.diff(other); },
@@ -138,7 +138,7 @@ rt.register({ name: "android/os/WorkSource", ctor: JWorkSource, ifaces: ["androi
       yield vcall(p, "writeInt", "(I)V", this.chains?.a.length ?? -1);
       if (this.chains) {
         yield vcall(p, "writeInt", "(I)V", this.chains.a.length);
-        for (const chain of this.chains.a) (yield vcall(p, "writeParcelable", "(Landroid/os/Parcelable;I)V", chain, flags));
+        for (const chain of this.chains.a) yield vcall(p, "writeParcelable", "(Landroid/os/Parcelable;I)V", chain, flags);
       }
     }),
   },

@@ -175,7 +175,7 @@ rt.register({ name: "android/util/Range", ctor: JRange, typeVars: "T", methods: 
     return +(other instanceof JRange && (this === other || (yield vcall(this.lower, "equals", "(Ljava/lang/Object;)Z", other.lower)) && (yield vcall(this.upper, "equals", "(Ljava/lang/Object;)Z", other.upper))));
   }),
   "hashCode()I": driven(function* (this: JRange): Gen { return (Math.imul(31, 31 + (yield vcall(this.lower, "hashCode", "()I"))) + (yield vcall(this.upper, "hashCode", "()I"))) | 0; }),
-  "toString()Ljava/lang/String;": driven(function* (this: JRange): Gen { return `[${(yield vcall(this.lower, "toString", "()Ljava/lang/String;"))}, ${(yield vcall(this.upper, "toString", "()Ljava/lang/String;"))}]`; }),
+  "toString()Ljava/lang/String;": driven(function* (this: JRange): Gen { return `[${yield vcall(this.lower, "toString", "()Ljava/lang/String;")}, ${yield vcall(this.upper, "toString", "()Ljava/lang/String;")}]`; }),
 } });
 rt.register({
   name: "android/util/Pair", ctor: JPair,
@@ -193,8 +193,8 @@ rt.register({
       return after(pairHash(this.first), (first) => after(pairHash(this.second), (second) => (first ^ second) | 0));
     },
     "toString()Ljava/lang/String;": driven(function* (this: JPair): Gen {
-      const first = this.first == null ? "null" : (yield vcall(this.first, "toString", "()Ljava/lang/String;"));
-      const second = this.second == null ? "null" : (yield vcall(this.second, "toString", "()Ljava/lang/String;"));
+      const first = this.first == null ? "null" : yield vcall(this.first, "toString", "()Ljava/lang/String;");
+      const second = this.second == null ? "null" : yield vcall(this.second, "toString", "()Ljava/lang/String;");
       return `Pair{${first} ${second}}`;
     }),
   },
@@ -262,7 +262,7 @@ rt.register({
         return v;
       }
       this.misses++;
-      const created = (yield vcall(this, "create", "(Ljava/lang/Object;)Ljava/lang/Object;", k));
+      const created = yield vcall(this, "create", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
       if (created !== null) { this.creates++; this.m.set(k, created); this.trim(this.max); }
       return created;
     }),
@@ -288,7 +288,7 @@ rt.register({
     },
     "snapshot()Ljava/util/Map;": driven(function* (this: JLruCache): Gen {
       const result = rt.make("java/util/LinkedHashMap");
-      for (const [key, value] of this.m) (yield vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value));
+      for (const [key, value] of this.m) yield vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
       return result;
     }),
     "size()I": function (this: JLruCache) { return this.m.size; },
@@ -445,7 +445,7 @@ rt.register({ name: "android/util/Rational", ctor: JRational, sup: "java/lang/Nu
     "compareTo(Landroid/util/Rational;)I": rationalCompare,
     "compareTo(Ljava/lang/Object;)I": rationalCompare,
     "static gcd(II)I": rationalGcd,
-    "static parseRational(Ljava/lang/String;)Landroid/util/Rational;": driven(function* (s: string): Gen  {
+    "static parseRational(Ljava/lang/String;)Landroid/util/Rational;": driven(function* (s: string): Gen {
       if (s == null) rt.npe();
       if (s === "NaN") return rationalNaN;
       if (s === "Infinity") return rationalInf;
@@ -453,7 +453,7 @@ rt.register({ name: "android/util/Rational", ctor: JRational, sup: "java/lang/Nu
       const sep = s.includes(":") ? s.indexOf(":") : s.indexOf("/");
       if (sep < 0) throw rt.mkThrowable("java/lang/NumberFormatException", "Invalid Rational: " + s);
       const cls = rt.link("java/lang/Integer").ctor;
-      return new JRational((yield vcall(cls, "parseInt", "(Ljava/lang/String;)I", s.slice(0, sep))), (yield vcall(cls, "parseInt", "(Ljava/lang/String;)I", s.slice(sep + 1))));
+      return new JRational(yield vcall(cls, "parseInt", "(Ljava/lang/String;)I", s.slice(0, sep)), yield vcall(cls, "parseInt", "(Ljava/lang/String;)I", s.slice(sep + 1)));
     }),
   },
 });
@@ -537,24 +537,24 @@ rt.register({
     "endArray()V": function (this: JJsonReader) { return jsonNext(this, "END_ARRAY").then(() => {}); },
     "beginObject()V": function (this: JJsonReader) { return jsonNext(this, "BEGIN_OBJECT").then(() => {}); },
     "endObject()V": function (this: JJsonReader) { return jsonNext(this, "END_OBJECT").then(() => {}); },
-    "nextName()Ljava/lang/String;": driven(function* (this: JJsonReader): Gen { return ((yield jsonNext(this, "NAME"))).v as string; }),
+    "nextName()Ljava/lang/String;": driven(function* (this: JJsonReader): Gen { return (yield jsonNext(this, "NAME")).v as string; }),
     // AOSP coerces between the scalar types, so a number read as a string is legal and common
-    "nextString()Ljava/lang/String;": driven(function* (this: JJsonReader): Gen { return String(((yield jsonNext(this))).v); }),
+    "nextString()Ljava/lang/String;": driven(function* (this: JJsonReader): Gen { return String((yield jsonNext(this)).v); }),
     "nextInt()I": driven(function* (this: JJsonReader): Gen { return (yield jsonNum(this)) | 0; }),
-    "nextLong()J": driven(function* (this: JJsonReader): Gen { return BigInt(Math.trunc((yield jsonNum(this)))); }),
+    "nextLong()J": driven(function* (this: JJsonReader): Gen { return BigInt(Math.trunc(yield jsonNum(this))); }),
     "nextDouble()D": function (this: JJsonReader) { return jsonNum(this); },
-    "nextBoolean()Z": driven(function* (this: JJsonReader): Gen { return ((yield jsonNext(this))).v ? 1 : 0; }),
+    "nextBoolean()Z": driven(function* (this: JJsonReader): Gen { return (yield jsonNext(this)).v ? 1 : 0; }),
     "nextNull()V": function (this: JJsonReader) { return jsonNext(this, "NULL").then(() => {}); },
     "peek()Landroid/util/JsonToken;": driven(function* (this: JJsonReader): Gen {
-      const ev = (yield jsonEvents(this));
+      const ev = yield jsonEvents(this);
       return jsonToken[(ev[this.i] ?? { t: "END_DOCUMENT" }).t];
     }),
     "hasNext()Z": driven(function* (this: JJsonReader): Gen {
-      const t = ((yield jsonEvents(this)))[this.i]?.t;
+      const t = (yield jsonEvents(this))[this.i]?.t;
       return t && t !== "END_OBJECT" && t !== "END_ARRAY" && t !== "END_DOCUMENT" ? 1 : 0;
     }),
     "skipValue()V": driven(function* (this: JJsonReader): Gen {
-      const ev = (yield jsonEvents(this));
+      const ev = yield jsonEvents(this);
       if (ev[this.i]?.t === "NAME") this.i++;
       let depth = 0;
       do {

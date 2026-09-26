@@ -115,12 +115,12 @@ export class JField extends JAccessibleObject {
  *  reads as undefined, which is the zero the caller then takes for the field's real value. */
 function readField(this: JField, o: unknown): unknown { return rt.drive(readField$.call(this, o)); }
 function* readField$(this: JField, o: unknown): Gen {
-  const p = rt.initClass(this.owner); if (p) (yield p);
+  const p = rt.initClass(this.owner); if (p) yield p;
   return this.isStatic ? this.owner.ctor[this.prop] : (o as Record<string, unknown>)[this.prop];
 }
 function writeField(this: JField, o: unknown, value: unknown, boxed = false): void | Promise<void> { return rt.drive(writeField$.call(this, o, value, boxed)); }
 function* writeField$(this: JField, o: unknown, value: unknown, boxed = false): Gen<void> {
-  const p = rt.initClass(this.owner); if (p) (yield p);
+  const p = rt.initClass(this.owner); if (p) yield p;
   if (boxed && "IJFDZBCS".includes(this.desc[0])) value = unboxArg(value);
   if (this.isStatic) this.owner.ctor[this.prop] = value;
   else (o as Record<string, unknown>)[this.prop] = value;
@@ -183,7 +183,7 @@ rt.register({
     ...accessibleMethods,
     "getDeclaringClass()Ljava/lang/Class;": function (this: JField) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
     "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JField, o: unknown): Gen {
-      return boxReturn(this.desc, (yield readField.call(this, o)));
+      return boxReturn(this.desc, yield readField.call(this, o));
     }),
     "set(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JField, o: unknown, v: unknown) {
       return writeField.call(this, o, v, true);
@@ -451,9 +451,9 @@ rt.register({
   statics: { theUnsafe: unsafe },
   methods: {
     "static getUnsafe()Lsun/misc/Unsafe;": () => unsafe,
-    "allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;": driven(function* (cls: JClass): Gen  {
+    "allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;": driven(function* (cls: JClass): Gen {
       const info = cls.ci!;
-      const p = rt.initClass(info); if (p) (yield p);
+      const p = rt.initClass(info); if (p) yield p;
       return new info.ctor();
     }),
     "objectFieldOffset(Ljava/lang/reflect/Field;)J": fieldOffset,
@@ -649,7 +649,7 @@ rt.register({
       const target = this.isStatic ? this.fn : (recv as Record<string, unknown>)?.[mangleMethod(this.name, this.desc)] ?? rt.proxyMethod?.(recv, this.name, this.desc) ?? this.fn;
       if (typeof target !== "function") throw rt.mkThrowable("java/lang/NoSuchMethodError", `${this.owner.name}.${this.name}${this.desc}`);
       const r = (target as (...x: unknown[]) => unknown).apply(this.isStatic ? this.owner.ctor : recv, a);
-      const val = r instanceof Promise ? (yield r) : r;
+      const val = r instanceof Promise ? yield r : r;
       return boxReturn(parseMethodDesc(this.desc).ret, val);
     }),
     ...annotatedElement(function (this: JMethod) { return methodAnnotations(this.owner, this.name, this.desc); }),
@@ -716,7 +716,7 @@ rt.register({
     ...annotatedElement(function (this: JCtor) { return classAnno(this.owner).methodsByRef.get("<init>" + this.desc) ?? []; }),
     "newInstance([Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JCtor, args: unknown[] | null): Gen {
       const info = this.owner;
-      const p = rt.initClass(info); if (p) (yield p);
+      const p = rt.initClass(info); if (p) yield p;
       const fn = info.ctor?.prototype?.[mangleMethod("<init>", this.desc)];
       if (typeof fn !== "function") throw rt.mkThrowable("java/lang/InstantiationException", dotName(info.name) + ".<init>" + this.desc);
       const ps = parseMethodDesc(this.desc).params;
@@ -1015,8 +1015,8 @@ function installClassReflection() {
   M["getEnumConstants()[Ljava/lang/Object;"] = driven(function* (this: JClass): Gen {
     const info = this.ci;
     if (!info) return null;
-    const p = rt.initClass(info); if (p) (yield p);
-    try { return (yield vcall(info.ctor, "values", `()[L${info.name};`)); } catch { return null; }
+    const p = rt.initClass(info); if (p) yield p;
+    try { return yield vcall(info.ctor, "values", `()[L${info.name};`); } catch { return null; }
   });
   M["getDeclaringClass()Ljava/lang/Class;"] = enclosingClass;
   M["getEnclosingConstructor()Ljava/lang/reflect/Constructor;"] = () => null;
@@ -1217,12 +1217,12 @@ lateMethod.find = (o, n, d) => (rt.proxyMethod!(o, n, d) ?? undefined) as ((...a
 rt.register({
   name: "java/lang/reflect/Proxy", ctor: JProxy,
   methods: {
-    "static newProxyInstance(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;": driven(function* (_l: unknown, ifaces: JClass[], h: unknown): Gen  {
-      const p = new (((yield proxyClass(ifaces.map((c) => c.ci!)))).ctor)() as JProxy;
+    "static newProxyInstance(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;": driven(function* (_l: unknown, ifaces: JClass[], h: unknown): Gen {
+      const p = new ((yield proxyClass(ifaces.map((c) => c.ci!))).ctor)() as JProxy;
       p.h = h;
       return p;
     }),
-    "static getProxyClass(Ljava/lang/ClassLoader;[Ljava/lang/Class;)Ljava/lang/Class;": driven(function* (_l: unknown, ifaces: JClass[]): Gen  { return rt.classFor(((yield proxyClass(ifaces.map((c) => c.ci!)))).name); }),
+    "static getProxyClass(Ljava/lang/ClassLoader;[Ljava/lang/Class;)Ljava/lang/Class;": driven(function* (_l: unknown, ifaces: JClass[]): Gen { return rt.classFor((yield proxyClass(ifaces.map((c) => c.ci!))).name); }),
     "static isProxyClass(Ljava/lang/Class;)Z": (c: JClass) => (c.ci?.ctor.prototype instanceof JProxy ? 1 : 0),
     "static getInvocationHandler(Ljava/lang/Object;)Ljava/lang/reflect/InvocationHandler;": (o: unknown) => (o instanceof JProxy ? o.h : null),
   },

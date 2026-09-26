@@ -99,7 +99,7 @@ rt.register({
       // AOSP installs the real decor on first access (appcompat asks for it before
       // setContentView); dialog windows materialize a bare one so insets helpers can operate
       if (!this.decor && this.activity instanceof JActivity) yield ensureDecor(this.activity);
-      return this.decor ??= (yield newObj("android/widget/FrameLayout", "(Landroid/content/Context;)V", this.activity));
+      return this.decor ??= yield newObj("android/widget/FrameLayout", "(Landroid/content/Context;)V", this.activity);
     }),
     "isFloating()Z": function (this: JWindow) {
       const theme = this.decor?.theme ?? themeOf(this.activity);
@@ -110,7 +110,7 @@ rt.register({
       return this.decor ? vcall(this.decor, "dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z", event) : 0;
     },
     "findViewById(I)Landroid/view/View;": driven(function* (this: JWindow, id: number): Gen {
-      return findById((yield vcall(this, "getDecorView", "()Landroid/view/View;")), id);
+      return findById(yield vcall(this, "getDecorView", "()Landroid/view/View;"), id);
     }),
     "setContentView(I)V": function (this: JWindow, id: number) {
       if (this.dialog) return dialogNative("setContentView", "(I)V").call(this.dialog, id);
@@ -152,7 +152,7 @@ rt.register({
     },
     "setBackgroundDrawableResource(I)V": driven(function* (this: JWindow, id: number): Gen {
       if (!appHost) return;
-      this.bg = (yield loadDrawable(appHost.res, id, appHost.theme)); this.bgSet = true;
+      this.bg = yield loadDrawable(appHost.res, id, appHost.theme); this.bgSet = true;
       if (this.activity && this.decor) this.decor.background = this.bg;
       invalidate();
     }),
@@ -289,17 +289,17 @@ rt.register({
     "getCurrentWindowMetrics()Landroid/view/WindowMetrics;": () => new JWindowMetrics(),
     "getMaximumWindowMetrics()Landroid/view/WindowMetrics;": () => new JWindowMetrics(),
     "isCrossWindowBlurEnabled()Z": () => 0,
-    "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (v: JView, lp: JLayoutParams & { x?: number; y?: number }): Gen  {
+    "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (v: JView, lp: JLayoutParams & { x?: number; y?: number }): Gen {
       v.lp = lp;
       v.windowOwner ??= rt.make("android/view/Window");
       addOverlay(v, lp.x ?? 0, lp.y ?? 0);
       yield dispatchAttached(v);
     }),
-    "removeView(Landroid/view/View;)V": driven(function* (v: JView): Gen  {
+    "removeView(Landroid/view/View;)V": driven(function* (v: JView): Gen {
       removeOverlay(v);
       yield dispatchDetached(v);
     }),
-    "removeViewImmediate(Landroid/view/View;)V": driven(function* (v: JView): Gen  {
+    "removeViewImmediate(Landroid/view/View;)V": driven(function* (v: JView): Gen {
       removeOverlay(v);
       yield dispatchDetached(v);
     }),

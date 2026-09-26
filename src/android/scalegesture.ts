@@ -20,7 +20,7 @@ class JScaleGestureDetector extends JObj {
     if (!context || !listener) return rt.npe();
     this.listener = listener;
     this.spanSlop = device.touchSlop * 2; this.minSpan = minimumScalingSpan();
-    const info = (yield vcall(context, "getApplicationInfo", "()Landroid/content/pm/ApplicationInfo;"));
+    const info = yield vcall(context, "getApplicationInfo", "()Landroid/content/pm/ApplicationInfo;");
     this.setQuick(info.targetSdkVersion > 18); this.stylus = info.targetSdkVersion > 22;
   }
   setQuick(enabled: boolean) {
@@ -39,7 +39,7 @@ class JScaleGestureDetector extends JObj {
     this.time = event.eventTime;
     const action = event.action & 255;
     if (this.quick) yield this.detector!.touch(event);
-    const count: number = (yield vcall(event, "getPointerCount", "()I"));
+    const count: number = yield vcall(event, "getPointerCount", "()I");
     const button = ((yield vcall(event, "getButtonState", "()I")) & 32) !== 0;
     const cancelled = this.anchor === 2 && !button, complete = action === 1 || action === 3 || cancelled;
     if (action === 0 || complete) {
@@ -58,7 +58,7 @@ class JScaleGestureDetector extends JObj {
     if (this.anchor) { x = this.anchorX; y = this.anchorY; this.above = event.y < y; }
     else {
       for (let i = 0; i < count; i++) if (i !== skip) {
-        x += (yield vcall(event, "getX", "(I)F", i)); y += (yield vcall(event, "getY", "(I)F", i));
+        x += yield vcall(event, "getX", "(I)F", i); y += yield vcall(event, "getY", "(I)F", i);
       }
       x /= div; y /= div;
     }

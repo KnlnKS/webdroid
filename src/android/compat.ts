@@ -419,7 +419,7 @@ const animMethods: NativeSpec["methods"] = {
   "start()V": function (this: JAnimation) { this.startTime = -1; },
   "startNow()V": function (this: JAnimation) { this.startTime = performance.now(); },
   "cancel()V": driven(function* (this: JAnimation): Gen {
-    if (this.started && !this.ended) { this.ended = true; (yield fire(this, null, "End")); }
+    if (this.started && !this.ended) { this.ended = true; yield fire(this, null, "End"); }
     this.startTime = Number.MIN_SAFE_INTEGER;
   }),
   "reset()V": function (this: JAnimation) { this.started = this.ended = this.flipped = this.initialized = false; this.repeated = 0; },
@@ -525,10 +525,10 @@ rt.register({
     "getAnimations()Ljava/util/List;": function (this: JAnimation) { return newArrayList(this.kids); },
     "initialize(IIII)V": driven(function* (this: JAnimation, w: number, h: number, pw: number, ph: number): Gen {
       this.initialized = true;
-      for (const c of this.kids) (yield vcall(c, "initialize", "(IIII)V", w, h, pw, ph));
+      for (const c of this.kids) yield vcall(c, "initialize", "(IIII)V", w, h, pw, ph);
     }),
     "applyTransformation(FLandroid/view/animation/Transformation;)V": driven(function* (this: JAnimation, t: number, out: JTransformation): Gen {
-      for (const c of this.kids) (yield vcall(c, "applyTransformation", "(FLandroid/view/animation/Transformation;)V", t, out));
+      for (const c of this.kids) yield vcall(c, "applyTransformation", "(FLandroid/view/animation/Transformation;)V", t, out);
     }),
   },
 });
@@ -724,8 +724,8 @@ export class JGestureDetector extends JObj {
       if (this.double) return vcall(this.doubleListener, "onDoubleTapEvent", "(Landroid/view/MotionEvent;)Z", ev);
       if (this.longPressed) return 0;
       if (!this.moved) {
-        const handled = (yield vcall(this.l, "onSingleTapUp", "(Landroid/view/MotionEvent;)Z", ev));
-        if (this.pending) { this.pending.up = copyEvent(ev); if (this.pending.deferred) (yield this.confirm(this.pending, ev)); }
+        const handled = yield vcall(this.l, "onSingleTapUp", "(Landroid/view/MotionEvent;)Z", ev);
+        if (this.pending) { this.pending.up = copyEvent(ev); if (this.pending.deferred) yield this.confirm(this.pending, ev); }
         return handled;
       }
       const idle = now - this.lastT, vx = restVelocity(this.vx, 0.7, idle), vy = restVelocity(this.vy, 0.7, idle);
@@ -778,8 +778,8 @@ for (const n of ["android/gesture/Gesture", "android/gesture/GestureLibrary", "a
 rt.register({
   name: "android/gesture/GestureOverlayView", ctor: class extends JViewGroup {}, sup: "android/widget/FrameLayout",
   methods: {
-    "<init>(Landroid/content/Context;)V": driven(function* (this: any, c: unknown): Gen { (yield initViewFromCtx(this, c, null)); }),
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: any, c: unknown, set: any): Gen { (yield initViewFromCtx(this, c, set)); }),
+    "<init>(Landroid/content/Context;)V": driven(function* (this: any, c: unknown): Gen { yield initViewFromCtx(this, c, null); }),
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: any, c: unknown, set: any): Gen { yield initViewFromCtx(this, c, set); }),
     ...noops("addOnGesturePerformedListener(Landroid/gesture/GestureOverlayView$OnGesturePerformedListener;)V",
       "addOnGestureListener(Landroid/gesture/GestureOverlayView$OnGestureListener;)V", "setGestureVisible(Z)V",
       "setGestureStrokeType(I)V", "setGestureColor(I)V", "setGestureStrokeWidth(F)V",

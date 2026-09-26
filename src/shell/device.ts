@@ -302,7 +302,7 @@ const launchActivity0 = driven(function* launchActivity0(component: string, inte
   // still leaves a frame on a device, and it is the frame this shows.
   if (!booted.stack.length) {
     try {
-      startWin = (yield startingWindow(host, cls));
+      startWin = yield startingWindow(host, cls);
       uiState.needsDraw = true;
     } catch (e) { console.warn("[starting window]", e); }
   }
@@ -345,7 +345,7 @@ const launchActivity0 = driven(function* launchActivity0(component: string, inte
     getInflater(act).privateFactory = act;
     act.intent = intent;
     const prev = booted.stack.at(-1);
-    if (prev?.resumed) { (yield pauseActivity(prev)); (yield windowFocus(prev, false)); }
+    if (prev?.resumed) { yield pauseActivity(prev); yield windowFocus(prev, false); }
     booted.stack.push(act);
     yield safeCall(act, "onCreate", "(Landroid/os/Bundle;)V", saved);
     // onCreate may set the window theme before its first getDecorView/setContentView.
@@ -361,7 +361,7 @@ const launchActivity0 = driven(function* launchActivity0(component: string, inte
     yield windowFocus(act, true);
     // AOSP stops the covered activity only once the new one is up
     if (!act.window.translucent) {
-      for (const covered of booted.stack.slice(0, -1)) if (covered.started) (yield stopActivity(covered));
+      for (const covered of booted.stack.slice(0, -1)) if (covered.started) yield stopActivity(covered);
     }
     void buildOptionsMenu(act);
     invalidateWindow();
@@ -446,7 +446,7 @@ function recreateActivity(act: JActivity): void {
 }
 
 const safeCall = driven(function* safeCall(act: JActivity, method: string, desc: string = "()V", ...args: unknown[]): Gen {
-  try { (yield vcall(act, method, desc, ...args)); } catch (e) { reportUncaught(e); }
+  try { yield vcall(act, method, desc, ...args); } catch (e) { reportUncaught(e); }
 });
 const lifecycleStep = driven(function* lifecycleStep(act: JActivity, method: string, phase: Parameters<typeof fireActivityLifecycle>[1]): Gen {
   yield safeCall(act, method);
@@ -469,7 +469,7 @@ const startActivity = driven(function* startActivity(act: JActivity): Gen {
 });
 const resumeTop = driven(function* resumeTop(top: JActivity): Gen {
   applyOrientationRequest(top.requestedOrientation);
-  for (const act of visibleActivities()) if (act !== top) (yield startActivity(act));
+  for (const act of visibleActivities()) if (act !== top) yield startActivity(act);
   yield resumeActivity(top);
   yield windowFocus(top, true);
   void buildOptionsMenu(top);
@@ -563,8 +563,8 @@ const pressBack0 = driven(function* pressBack0(): Gen<void> {
   const act = booted?.stack.at(-1);
   try {
     if (top?.onBack) yield top.onBack();
-    else if (top?.dismissOnOutside) (yield dismissOverlay(top));
-    else if (act) (yield vcall(act, "onBackPressed", "()V"));
+    else if (top?.dismissOnOutside) yield dismissOverlay(top);
+    else if (act) yield vcall(act, "onBackPressed", "()V");
   } catch (e) { reportUncaught(e); }
 });
 
@@ -615,8 +615,8 @@ const tick0 = driven(function* tick0(): Gen {
       mainDbg.phase = "frame:" + ((cb.frame ?? cb.run ?? cb.vsync)?.constructor?.$i?.name ?? "?");
       try {
         if (cb.frame) yield guardCall(cb.frame, M_doFrame, uiState.frameTimeNanos);
-        else if (cb.vsync) (yield dispatchVsync(cb.vsync, presentation));
-        else if (cb.run) (yield vcall(cb.run, "run", "()V"));
+        else if (cb.vsync) yield dispatchVsync(cb.vsync, presentation);
+        else if (cb.run) yield vcall(cb.run, "run", "()V");
       } catch (e) { reportUncaught(e); }
     }
 
@@ -643,7 +643,7 @@ const tick0 = driven(function* tick0(): Gen {
       perf.insetsPasses++;
       mainDbg.phase = "insets";
       try {
-        for (const activity of activities) if (activity.window.decor) (yield dispatchWindowInsets(activity.window.decor));
+        for (const activity of activities) if (activity.window.decor) yield dispatchWindowInsets(activity.window.decor);
       } catch (e) { console.error("[insets]", e); }
       uiState.needsLayout = true;
     }
@@ -693,13 +693,13 @@ const tick0 = driven(function* tick0(): Gen {
           if (insetsChanged || frameChanged) yield dispatchWindowInsets(o.view);
         }
         mainDbg.phase = "globalLayout";
-        for (const activity of activities) if (activity.window.decor) (yield fireGlobalLayout(activity.window.decor));
+        for (const activity of activities) if (activity.window.decor) yield fireGlobalLayout(activity.window.decor);
       } catch (e) {
         // A subtree that cannot measure costs a frame, not the session: fall through and draw
         // whatever DID lay out. Re-arming needsLayout here would turn a deterministic throw
         // into a 60fps exception storm; the next real requestLayout() recovers.
         perf.layoutErrors++;
-        console.error("[layout]", e instanceof JThrowable ? (yield stackTraceText(e)) : e);
+        console.error("[layout]", e instanceof JThrowable ? yield stackTraceText(e) : e);
       }
       mainDbg.phase = "replay";
       replayLayoutRequests();
@@ -748,7 +748,7 @@ const tick0 = driven(function* tick0(): Gen {
       }
       present();
       for (const activity of activities) {
-        try { (yield dispatchSplashExit(activity)); } catch (error) { reportUncaught(error); }
+        try { yield dispatchSplashExit(activity); } catch (error) { reportUncaught(error); }
       }
       perf.drawMs += performance.now() - t0;
       // WebView frames are DOM over the canvas: show the ones this pass drew, hide the rest

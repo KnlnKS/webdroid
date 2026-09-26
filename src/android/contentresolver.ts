@@ -219,7 +219,7 @@ const resolverMethods: NativeSpec["methods"] = {
   },
   "openInputStream(Landroid/net/Uri;)Ljava/io/InputStream;": driven(function* (u: JUri): Gen 
     { return isDocsUri(u) ? docInputStream(documentId(u, true))
-      : u.uri.startsWith("content:") ? newObj("android/os/ParcelFileDescriptor$AutoCloseInputStream", "(Landroid/os/ParcelFileDescriptor;)V", (yield openPfd(u, "r")))
+      : u.uri.startsWith("content:") ? newObj("android/os/ParcelFileDescriptor$AutoCloseInputStream", "(Landroid/os/ParcelFileDescriptor;)V", yield openPfd(u, "r"))
       : newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", fileOf(u)); }),
   "openOutputStream(Landroid/net/Uri;)Ljava/io/OutputStream;": (u: JUri) =>
     isDocsUri(u) ? docOutputStream(documentId(u, true), false)
@@ -228,22 +228,22 @@ const resolverMethods: NativeSpec["methods"] = {
   "openOutputStream(Landroid/net/Uri;Ljava/lang/String;)Ljava/io/OutputStream;": (u: JUri, mode: string) =>
     isDocsUri(u) ? docOutputStream(documentId(u, true), (mode ?? "w").includes("a"))
       : newObj("java/io/FileOutputStream", "(Ljava/lang/String;Z)V", fileOf(u), (mode ?? "w").includes("a") ? 1 : 0),
-  "getType(Landroid/net/Uri;)Ljava/lang/String;": driven(function* (u: JUri): Gen  {
-    if (isDocsUri(u)) return ((yield docRow(documentId(u, true))))?.mime ?? null;
+  "getType(Landroid/net/Uri;)Ljava/lang/String;": driven(function* (u: JUri): Gen {
+    if (isDocsUri(u)) return (yield docRow(documentId(u, true)))?.mime ?? null;
     if (isMediaUri(u)) return mediaMime(u);
-    const provider = (yield contentProvider(u));
+    const provider = yield contentProvider(u);
     return provider ? vcall(provider, "getType", "(Landroid/net/Uri;)Ljava/lang/String;", u) : null;
   }),
   "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
-    driven(function* (u: JUri, proj: string[] | null, selection: string | null, args: string[] | null, sort: string | null): Gen  {
+    driven(function* (u: JUri, proj: string[] | null, selection: string | null, args: string[] | null, sort: string | null): Gen {
       if (isMediaUri(u)) return mediaQuery(u, proj, selection, args, sort);
       if (!isDocsUri(u)) {
-        const provider = (yield contentProvider(u));
+        const provider = yield contentProvider(u);
         return provider ? vcall(provider, "query", "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;", u, proj, selection, args, sort) : null;
       }
       const id = documentId(u, true);
-      const row = isChildrenUri(u) ? null : (yield docRow(id));
-      const rows = isChildrenUri(u) ? (yield docChildren(id)) : row ? [row] : [];
+      const row = isChildrenUri(u) ? null : yield docRow(id);
+      const rows = isChildrenUri(u) ? yield docChildren(id) : row ? [row] : [];
       const cols = proj?.length ? [...proj] : DOC_COLUMNS;
       return mkCursor(cols, rows.map((r: Parameters<typeof docCells>[0]) => {
         const cells = docCells(r);
@@ -274,8 +274,8 @@ const resolverMethods: NativeSpec["methods"] = {
         throw rt.unimplemented(`ContentResolver.query argument ${key}`);
       if (!isDocsUri(u) && limit !== undefined && !sort)
         throw rt.unimplemented("ContentResolver.query provider limit without sort order");
-      const cursor = (yield vcall(this, "query", providerOperations.query, u, proj, selection ?? null, args ?? null,
-        limit === undefined || isDocsUri(u) ? sort : sort ? `${sort} LIMIT ${limit}` : null));
+      const cursor = yield vcall(this, "query", providerOperations.query, u, proj, selection ?? null, args ?? null,
+        limit === undefined || isDocsUri(u) ? sort : sort ? `${sort} LIMIT ${limit}` : null);
       if (cursor && isDocsUri(u)) {
         const rows = cursor.rows as unknown[][];
         if (columns?.length) rows.sort((left, right) => {
@@ -293,10 +293,10 @@ const resolverMethods: NativeSpec["methods"] = {
       return cursor;
 
     }),
-  "call(Landroid/net/Uri;Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;": driven(function* (u: JUri, method: string, arg: string | null, extras: unknown): Gen  {
+  "call(Landroid/net/Uri;Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;": driven(function* (u: JUri, method: string, arg: string | null, extras: unknown): Gen {
     if (u === null) throw rt.mkThrowable("java/lang/NullPointerException", "uri");
     if (method === null) throw rt.mkThrowable("java/lang/NullPointerException", "method");
-    const provider = (yield contentProvider(u));
+    const provider = yield contentProvider(u);
     if (!provider) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown authority " + u.uri);
     return vcall(provider, "call", providerOperations.call, method, arg, extras);
   }),
@@ -308,22 +308,22 @@ const resolverMethods: NativeSpec["methods"] = {
   "openFileDescriptor(Landroid/net/Uri;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/os/ParcelFileDescriptor;": openPfd,
   "openAssetFileDescriptor(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": openAfd,
   "openTypedAssetFile(Landroid/net/Uri;Ljava/lang/String;Landroid/os/Bundle;Landroid/os/CancellationSignal;)Landroid/content/res/AssetFileDescriptor;": openAfd,
-  "insert(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;": driven(function* (u: JUri, values: unknown): Gen  {
-    const provider = (yield contentProvider(u));
+  "insert(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;": driven(function* (u: JUri, values: unknown): Gen {
+    const provider = yield contentProvider(u);
     return provider ? vcall(provider, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", u, values) : null;
   }),
-  "bulkInsert(Landroid/net/Uri;[Landroid/content/ContentValues;)I": driven(function* (u: JUri, values: unknown[] | null): Gen  {
+  "bulkInsert(Landroid/net/Uri;[Landroid/content/ContentValues;)I": driven(function* (u: JUri, values: unknown[] | null): Gen {
     if (!u || !values) rt.npe();
-    const provider = (yield contentProvider(u));
+    const provider = yield contentProvider(u);
     return provider ? vcall(provider, "bulkInsert", providerOperations.bulkInsert, u, values) : 0;
   }),
-  "update(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I": driven(function* (u: JUri, values: unknown, where: string | null, args: string[] | null): Gen  {
-    const provider = (yield contentProvider(u));
+  "update(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I": driven(function* (u: JUri, values: unknown, where: string | null, args: string[] | null): Gen {
+    const provider = yield contentProvider(u);
     return provider ? vcall(provider, "update", "(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I", u, values, where, args) : 0;
   }),
-  "delete(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I": driven(function* (u: JUri, where: string | null, args: string[] | null): Gen  {
+  "delete(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I": driven(function* (u: JUri, where: string | null, args: string[] | null): Gen {
     if (isDocsUri(u)) return (yield docDelete(documentId(u, true))) ? 1 : 0;
-    const provider = (yield contentProvider(u));
+    const provider = yield contentProvider(u);
     return provider ? vcall(provider, "delete", "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I", u, where, args) : 0;
   }),
   "takePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri, modes: number) => {

@@ -134,7 +134,7 @@ rt.register({
       if (!spec.indicator) throw rt.mkThrowable("java/lang/IllegalArgumentException", "you must specify a way to create the tab indicator.");
       if (!spec.content) throw rt.mkThrowable("java/lang/IllegalArgumentException", "you must specify a way to create the tab content");
       if (!this.tabWidget) throw rt.mkThrowable("java/lang/NullPointerException", "TabHost.setup() was not called");
-      const indicator = (yield spec.indicator());
+      const indicator = yield spec.indicator();
       yield vcall(this.tabWidget, "addView", "(Landroid/view/View;)V", indicator);
       this.specs.push(spec);
       if (this.current === -1) yield vcall(this, "setCurrentTab", "(I)V", 0);
@@ -185,7 +185,7 @@ rt.register({
     // every tab indicator shares the row equally, and taps select its tab
     "addView(Landroid/view/View;)V": driven(function* (this: JTabWidget, child: JView): Gen {
       if (!child.lp) {
-        const lp = (yield newObj("android/widget/LinearLayout$LayoutParams", "(IIF)V", 0, MATCH_PARENT, 1));
+        const lp = yield newObj("android/widget/LinearLayout$LayoutParams", "(IIF)V", 0, MATCH_PARENT, 1);
         yield vcall(child, "setLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)V", lp);
       }
       yield vcall(child, "setFocusable", "(Z)V", 1);
@@ -208,7 +208,7 @@ rt.register({
       "setRightStripDrawable(Landroid/graphics/drawable/Drawable;)V", "setRightStripDrawable(I)V", "setDividerDrawable(I)V"),
     "setEnabled(Z)V": driven(function* (this: JTabWidget, on: number): Gen {
       this.enabled = !!on;
-      for (const c of this.children) (yield vcall(c, "setEnabled", "(Z)V", on));
+      for (const c of this.children) yield vcall(c, "setEnabled", "(Z)V", on);
     }),
   },
 });

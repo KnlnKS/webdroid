@@ -21,9 +21,9 @@ rt.register({ name: "android/app/IntentService", ctor: JIntentService, sup: "and
     yield vcall(this.executor, "execute", "(Ljava/lang/Runnable;)V", task);
   }),
   "onStartCommand(Landroid/content/Intent;II)I": driven(function* (this: JIntentService, intent: JIntent | null, _flags: number, startId: number): Gen {
-    (yield vcall(this, "onStart", "(Landroid/content/Intent;I)V", intent, startId)); return this.redeliver ? 3 : 2;
+    yield vcall(this, "onStart", "(Landroid/content/Intent;I)V", intent, startId); return this.redeliver ? 3 : 2;
   }),
   "setIntentRedelivery(Z)V": function (this: JIntentService, value: number) { this.redeliver = !!value; },
   "onBind(Landroid/content/Intent;)Landroid/os/IBinder;": () => null,
-  "onDestroy()V": driven(function* (this: JIntentService): Gen { (yield vcall(this.executor, "shutdownNow", "()Ljava/util/List;")); }),
+  "onDestroy()V": driven(function* (this: JIntentService): Gen { yield vcall(this.executor, "shutdownNow", "()Ljava/util/List;"); }),
 } });

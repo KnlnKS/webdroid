@@ -73,7 +73,7 @@ const initImageView = driven(function* initImageView(view: JImageView, c: unknow
   yield initViewFromCtx(view, c, set, style, defaultStyle);
   if (!view.jres || (!set && !style && !defaultStyle)) return;
   const ta = obtainStyled(view.jres, view.theme, set, [AID("src"), AID("scaleType"), AID("adjustViewBounds"), AID("tint"), AID("cropToPadding")], style, defaultStyle);
-  if (ta.vals[0]) yield view.setDrawable((yield loadDrawableRV(view.jres, ta.vals[0], view.theme)));
+  if (ta.vals[0]) yield view.setDrawable(yield loadDrawableRV(view.jres, ta.vals[0], view.theme));
   if (ta.vals[1]) view.scaleType = rvInt(view.jres, ta.vals[1], 3);
   if (ta.vals[2]) view.adjustBounds = !!rvInt(view.jres, ta.vals[2], 0);
   if (ta.vals[4]) view.cropToPadding = !!rvInt(view.jres, ta.vals[4], 0);
@@ -94,7 +94,7 @@ const imageViewMethods: NativeSpec["methods"] = {
     return pending;
   },
   "setImageResource(I)V": driven(function* (this: JImageView, id: number): Gen {
-    yield this.setDrawable(id && this.jres ? (yield loadDrawable(this.jres, id, this.theme)) : null);
+    yield this.setDrawable(id && this.jres ? yield loadDrawable(this.jres, id, this.theme) : null);
     this.layoutRequested = true;
     requestLayout(this);
   }),
@@ -103,7 +103,7 @@ const imageViewMethods: NativeSpec["methods"] = {
       const d = new JBitmapDrawable();
       d.bmp = b;
       yield this.setDrawable(d);
-    } else (yield this.setDrawable(null));
+    } else yield this.setDrawable(null);
     this.layoutRequested = true;
     requestLayout(this);
   }),
@@ -135,7 +135,7 @@ const imageViewMethods: NativeSpec["methods"] = {
   },
   "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": driven(function* (this: JImageView, c: number, mode: unknown): Gen {
     const thread = curThread;
-    const f = (yield newObj("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, mode));
+    const f = yield newObj("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, mode);
     return vcallOn(thread, this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", f);
   }),
   "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JImageView, f: unknown) {
@@ -175,9 +175,9 @@ const imageViewMethods: NativeSpec["methods"] = {
   "onMeasure(II)V": driven(function* (this: JImageView, wSpec: number, hSpec: number): Gen {
     if (this.drawable) {
       const thread = curThread, w = drawableSize(this.drawable, false, thread);
-      this.drawableW = w instanceof Promise ? (yield w) : w;
+      this.drawableW = w instanceof Promise ? yield w : w;
       const h = drawableSize(this.drawable, true, thread);
-      this.drawableH = h instanceof Promise ? (yield h) : h;
+      this.drawableH = h instanceof Promise ? yield h : h;
     }
     const dw = Math.max(0, this.drawableW), dh = Math.max(0, this.drawableH);
     let w = dw + this.padL + this.padR;

@@ -139,14 +139,14 @@ rt.register({
     },
     "sign()[B": driven(function* (this: JSignature): Gen {
       ready(this, true);
-      const { key } = (yield importKey(this));
-      const raw = new Uint8Array((yield crypto.subtle.sign(params(this), key, message(this))));
+      const { key } = yield importKey(this);
+      const raw = new Uint8Array(yield crypto.subtle.sign(params(this), key, message(this)));
       return this.scheme === "ECDSA" ? derFromRaw(raw, curveOf(this).bytes) : new Int8Array(raw.buffer);
     }),
     "verify([B)Z": driven(function* (this: JSignature, sig: Int8Array): Gen {
       ready(this, false);
       if (sig == null) throw rt.mkThrowable("java/lang/NullPointerException", "signature == null");
-      const { key } = (yield importKey(this)), data = message(this);
+      const { key } = yield importKey(this), data = message(this);
       let bytes: Uint8Array<ArrayBuffer> | null = new Uint8Array(sig.buffer, sig.byteOffset, sig.length).slice();
       if (this.scheme === "ECDSA") bytes = rawFromDer(bytes, curveOf(this).bytes);
       return bytes && (yield crypto.subtle.verify(params(this), key, bytes, data)) ? 1 : 0;

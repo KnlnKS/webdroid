@@ -268,7 +268,7 @@ rt.register({
       const fam = new JFontFamily();
       fam.fonts = this.fonts.slice();
       fam.css = "wd-font-" + (++fontSeq);
-      for (const f of fam.fonts) (yield registerFace(f, fam.css));
+      for (const f of fam.fonts) yield registerFace(f, fam.css);
       return fam;
     }),
   },

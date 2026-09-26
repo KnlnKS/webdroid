@@ -450,7 +450,7 @@ const vaMethods: NativeSpec["methods"] = {
   "start()V": driven(function* (this: JValueAnimator): Gen {
     if (Number.isNaN(this.from) || Number.isNaN(this.to)) {
       // a single value animates from the property's current value (ValueAnimator: from 0)
-      const cur = this.target ? (yield currentValue(this.target, this.prop, this.propName, this.isInt)) : 0;
+      const cur = this.target ? yield currentValue(this.target, this.prop, this.propName, this.isInt) : 0;
       if (Number.isNaN(this.from)) this.from = cur;
       if (Number.isNaN(this.to)) this.to = cur;
     }
@@ -461,10 +461,10 @@ const vaMethods: NativeSpec["methods"] = {
     this.running = true;
     // AOSP's start() animates fraction 0 at once, so getAnimatedValue() read from a start
     // listener or before the first frame is the first key, not whatever was there before.
-    if (this.objKeys) this.cur = (yield objAt(this, 0));
+    if (this.objKeys) this.cur = yield objAt(this, 0);
     else { const v = this.keys ? this.keys[0] : this.from; this.cur = this.isInt ? Math.round(v) : v; }
     for (const l of [...this.animLs]) {
-      try { (yield vcall(l, "onAnimationStart", "(Landroid/animation/Animator;Z)V", this, this.reversed ? 1 : 0)); } catch (e) { reportUncaught(e); }
+      try { yield vcall(l, "onAnimationStart", "(Landroid/animation/Animator;Z)V", this, this.reversed ? 1 : 0); } catch (e) { reportUncaught(e); }
     }
     const self = this;
     // one serialized main-looper job per tick, never a floating chain (see ViewPropertyAnimator)
@@ -480,7 +480,7 @@ const vaMethods: NativeSpec["methods"] = {
   "cancel()V": driven(function* (this: JValueAnimator): Gen {
     this.running = false;
     for (const l of [...this.animLs]) {
-      try { (yield vcall(l, "onAnimationCancel", "(Landroid/animation/Animator;)V", this)); } catch (e) { reportUncaught(e); }
+      try { yield vcall(l, "onAnimationCancel", "(Landroid/animation/Animator;)V", this); } catch (e) { reportUncaught(e); }
     }
   }),
   "end()V": function (this: JValueAnimator) { this.running = false; },
@@ -555,12 +555,12 @@ rt.register({
       const thread = curThread;
       this.running = true;
       for (const l of [...this.animLs]) {
-        try { (yield vcallOn(thread, l, "onAnimationStart", "(Landroid/animation/Animator;)V", this)); } catch (e) { reportUncaught(e); }
+        try { yield vcallOn(thread, l, "onAnimationStart", "(Landroid/animation/Animator;)V", this); } catch (e) { reportUncaught(e); }
       }
       if (this.sequential) {
         for (let i = 0; i + 1 < this.anims.length; i++) this.anims[i].next = this.anims[i + 1];
         if (this.anims.length) yield vcallOn(thread, this.anims[0], "start", "()V");
-      } else for (const a of this.anims) (yield vcallOn(thread, a, "start", "()V"));
+      } else for (const a of this.anims) yield vcallOn(thread, a, "start", "()V");
       const total = this.sequential ? this.anims.reduce((s, a) => s + a.delayMs + a.durationMs, 0)
         : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
       setGuestTimeout(() => {
@@ -573,7 +573,7 @@ rt.register({
         }).catch(reportUncaught);
       }, total);
     }),
-    "cancel()V": driven(function* (this: JAnimatorSet): Gen { this.running = false; for (const a of this.anims) (yield guardCall(a, M_cancel)); }),
+    "cancel()V": driven(function* (this: JAnimatorSet): Gen { this.running = false; for (const a of this.anims) yield guardCall(a, M_cancel); }),
     "end()V": function (this: JAnimatorSet) { this.running = false; for (const a of this.anims) a.running = false; },
     "play(Landroid/animation/Animator;)Landroid/animation/AnimatorSet$Builder;": function (this: JAnimatorSet, a: JValueAnimator) {
       const b = new JAnimatorSetBuilder(); b.set = this; b.anchor = a;
@@ -584,7 +584,7 @@ rt.register({
       const d = this.sequential ? this.anims.reduce((s, a) => s + a.delayMs + a.durationMs, 0) : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
       return BigInt(this.delayMs + d);
     },
-    "reverse()V": driven(function* (this: JAnimatorSet): Gen { for (const a of [...this.anims].reverse()) (yield vcall(a, "reverse", "()V")); }),
+    "reverse()V": driven(function* (this: JAnimatorSet): Gen { for (const a of [...this.anims].reverse()) yield vcall(a, "reverse", "()V"); }),
     "setCurrentPlayTime(J)V": function (this: JAnimatorSet, t: bigint) { for (const a of this.anims) a.startT = guestNow() - Number(t); },
     "setInterpolator(Landroid/animation/TimeInterpolator;)V": function (this: JAnimatorSet, i: unknown) { this.interp = i; for (const a of this.anims) a.interp = i; },
     "isRunning()Z": function (this: JAnimatorSet) { return this.running || this.anims.some((a) => a.running) ? 1 : 0; },

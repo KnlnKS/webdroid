@@ -62,9 +62,9 @@ rt.register({
   name: "webdroid/XmlPullParser", ctor: JXmlPull, ifaces: ["org/xmlpull/v1/XmlPullParser"],
   methods: {
     [`setInput(Ljava/io/InputStream;${S})V`]: driven(function* (this: JXmlPull, s: unknown, enc: string | null): Gen {
-      this.load(new TextDecoder(enc ?? "utf-8").decode((yield readStreamFully(s))));
+      this.load(new TextDecoder(enc ?? "utf-8").decode(yield readStreamFully(s)));
     }),
-    "setInput(Ljava/io/Reader;)V": driven(function* (this: JXmlPull, r: unknown): Gen { this.load((yield readerText(r))); }),
+    "setInput(Ljava/io/Reader;)V": driven(function* (this: JXmlPull, r: unknown): Gen { this.load(yield readerText(r)); }),
     [`setFeature(${S}Z)V`]: function (this: JXmlPull, f: string, on: number) { if (f.endsWith("process-namespaces")) this.nsAware = !!on; },
     [`getFeature(${S})Z`]: function (this: JXmlPull, f: string) { return f.endsWith("process-namespaces") && this.nsAware ? 1 : 0; },
     [`setProperty(${S}Ljava/lang/Object;)V`]: () => {},

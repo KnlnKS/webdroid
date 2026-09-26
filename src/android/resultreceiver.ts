@@ -8,12 +8,12 @@ class JResultReceiver extends JObj { handler: JHandler | null = null; binder: JO
 class JResultBinder extends JBinder { receiver!: JResultReceiver; }
 rt.register({ name: "webdroid/ResultReceiverBinder", ctor: JResultBinder, sup: "android/os/Binder", methods: {
   "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JResultBinder, code: number, data: JParcel, reply: JParcel | null): Gen {
-    if (code === 0x5f4e5446 && reply) { (yield vcall(reply, "writeString", "(Ljava/lang/String;)V", "android.os.IResultReceiver")); return 1; }
+    if (code === 0x5f4e5446 && reply) { yield vcall(reply, "writeString", "(Ljava/lang/String;)V", "android.os.IResultReceiver"); return 1; }
     if (code !== 1) return 0;
     yield vcall(data, "enforceInterface", "(Ljava/lang/String;)V", "android.os.IResultReceiver");
-    const result = (yield vcall(data, "readInt", "()I"));
-    const bundle = (yield vcall(data, "readInt", "()I")) ? (yield vcall(data, "readBundle", "()Landroid/os/Bundle;")) : null;
-    (yield vcall(this.receiver, "send", "(ILandroid/os/Bundle;)V", result, bundle)); return 1;
+    const result = yield vcall(data, "readInt", "()I");
+    const bundle = (yield vcall(data, "readInt", "()I")) ? yield vcall(data, "readBundle", "()Landroid/os/Bundle;") : null;
+    yield vcall(this.receiver, "send", "(ILandroid/os/Bundle;)V", result, bundle); return 1;
   }),
 } });
 async function readReceiver(parcel: JParcel): Promise<JResultReceiver> {
@@ -28,14 +28,14 @@ rt.register({ name: "android/os/ResultReceiver", ctor: JResultReceiver, ifaces: 
         if (!this.binder) return;
         const parcel = new JParcel();
         yield vcall(parcel, "writeInterfaceToken", "(Ljava/lang/String;)V", "android.os.IResultReceiver");
-        (yield vcall(parcel, "writeInt", "(I)V", code)); (yield vcall(parcel, "writeInt", "(I)V", data ? 1 : 0));
+        yield vcall(parcel, "writeInt", "(I)V", code); yield vcall(parcel, "writeInt", "(I)V", data ? 1 : 0);
         if (data) yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", data);
-        try { (yield vcall(this.binder, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, parcel, null, 1)); }
+        try { yield vcall(this.binder, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, parcel, null, 1); }
         catch (error) { if (!rt.iof(error, "android/os/RemoteException")) throw error; }
         return;
       }
       const deliver = () => vcall(this, "onReceiveResult", "(ILandroid/os/Bundle;)V", code, data);
-      if (!this.handler) { (yield deliver()); return; }
+      if (!this.handler) { yield deliver(); return; }
       const runnable = new JFnRunnable(); runnable.fn = deliver; this.handler.post(runnable, 0);
     }),
     "onReceiveResult(ILandroid/os/Bundle;)V": () => {},

@@ -169,10 +169,10 @@ rt.register({
     "write(I)V": function (this: JDeflaterOut, b: number) { return vcall(this, "write", "([BII)V", Int8Array.of(b), 0, 1); },
     "write([BII)V": driven(function* (this: JDeflaterOut, b: Int8Array, off: number, len: number): Gen {
       if (this.def.done) throw rt.mkThrowable("java/io/IOException", "write beyond end of stream");
-      if (len > 0) { this.def.feed(u8(b, off, len).slice()); (yield pump(this)); }
+      if (len > 0) { this.def.feed(u8(b, off, len).slice()); yield pump(this); }
     }),
     "finish()V": driven(function* (this: JDeflaterOut): Gen {
-      if (!this.def.done) { this.def.feed(new Uint8Array(0), true); (yield pump(this)); }
+      if (!this.def.done) { this.def.feed(new Uint8Array(0), true); yield pump(this); }
     }),
     "flush()V": function (this: JDeflaterOut) { return vcall(this.out, "flush", "()V"); },
     "close()V": driven(function* (this: JDeflaterOut): Gen {
@@ -443,7 +443,7 @@ rt.register({
       this.finished = true;
       yield this.flushChunks();
     }),
-    "flush()V": driven(function* (this: JZipOutputStream): Gen { (yield this.flushChunks()); (yield vcall(this.out, "flush", "()V")); }),
+    "flush()V": driven(function* (this: JZipOutputStream): Gen { yield this.flushChunks(); yield vcall(this.out, "flush", "()V"); }),
     "close()V": driven(function* (this: JZipOutputStream): Gen {
       if (!this.archive) return;
       yield vcall(this, "finish", "()V");
@@ -482,7 +482,7 @@ rt.register({
     "getInputStream(Ljava/util/zip/ZipEntry;)Ljava/io/InputStream;": driven(function* (this: JZipFile, ze: JZipEntry): Gen {
       const e = this.entries.get(ze.e.name);
       if (!e) return null;
-      const b = (yield this.data(e));
+      const b = yield this.data(e);
       return newObj("java/io/ByteArrayInputStream", "([B)V", i8(b));
     }),
     "close()V": function () {},

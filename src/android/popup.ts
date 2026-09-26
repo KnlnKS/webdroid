@@ -166,7 +166,7 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/view/View;)V": driven(function* (this: JPopupMenu, c: unknown, anchor: JView): Gen {
       this.jctx = c;
       this.anchor = anchor;
-      const { JMenu } = (yield import("./menu"));
+      const { JMenu } = yield import("./menu");
       this.menu = new JMenu();
     }),
     "getMenu()Landroid/view/Menu;": function (this: JPopupMenu) { return this.menu; },
@@ -282,7 +282,7 @@ function* pwInit$(this: JPopupWindow, c: any, set: JAttrSet | null, defStyleAttr
   const res: Resources = host.res, theme: JTheme = themeOf(c) ?? host.theme;
   const ids = PW_ATTRS.map(AID);
   const ta = obtainStyled(res, theme, set, ids, defStyleAttr || AID("popupWindowStyle"), defStyleRes);
-  if (ta.vals[0]) this.bg = (yield loadDrawableRV(res, ta.vals[0], theme));
+  if (ta.vals[0]) this.bg = yield loadDrawableRV(res, ta.vals[0], theme);
   if (ta.vals[1]) this.elevation = rvDimen(res, ta.vals[1], 0);
   if (ta.vals[2]) { const v = ta.vals[2]!; this.animStyle = v.t === TV.REFERENCE ? v.d : -1; }
   if (ta.vals[3]) this.overlapAnchor = !!rvInt(res, ta.vals[3], 0);
@@ -382,7 +382,7 @@ function* pwDismiss$(this: JPopupWindow): Gen {
     if (this.content) yield detachView(d, this.content);
   }
   if (this.dismissL) {
-    try { (yield vcall(this.dismissL, "onDismiss", "()V")); } catch (e) { reportUncaught(e); }
+    try { yield vcall(this.dismissL, "onDismiss", "()V"); } catch (e) { reportUncaught(e); }
   }
 }
 function pwUpdate(this: JPopupWindow) {

@@ -57,7 +57,7 @@ const iconMethods: Record<string, Impl> = {
   "loadDrawable(Landroid/content/Context;)Landroid/graphics/drawable/Drawable;":
     driven(function* (this: JIcon, ctx: unknown): Gen {
       if (this.type === TYPE_RESOURCE && ctx) {
-        return (yield vcall(ctx, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", this.resId));
+        return yield vcall(ctx, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", this.resId);
       }
       if (!this.bmp) return null;
       const d = new JBitmapDrawable();
@@ -520,8 +520,8 @@ rt.register({
     "getNotificationChannelGroups()Ljava/util/List;": () => newArrayList(notificationGroups()),
     "getNotificationChannelGroup(Ljava/lang/String;)Landroid/app/NotificationChannelGroup;": (id: string) => notificationGroups().find(group => group.id === id) ?? null,
     "createNotificationChannelGroup(Landroid/app/NotificationChannelGroup;)V": createGroup,
-    "createNotificationChannelGroups(Ljava/util/List;)V": driven(function* (groups: unknown): Gen  {
-      for (const group of (yield toJsArray(groups))) {
+    "createNotificationChannelGroups(Ljava/util/List;)V": driven(function* (groups: unknown): Gen {
+      for (const group of yield toJsArray(groups)) {
         if (!(group instanceof JNotificationGroup)) throw rt.mkThrowable("java/lang/ClassCastException", "Expected NotificationChannelGroup");
         yield createGroup(group);
       }

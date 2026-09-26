@@ -20,9 +20,9 @@ rt.register({ name: "android/content/ClipDescription", ctor: JClipDescription, i
 statics: { get CREATOR() { return parcelCreator("android/content/ClipDescription", readDescription); } }, methods: {
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JClipDescription, parcel: JParcel): Gen {
-    (yield writeText(this.label, parcel)); (yield vcall(parcel, "writeStringArray", "([Ljava/lang/String;)V", this.types));
+    yield writeText(this.label, parcel); yield vcall(parcel, "writeStringArray", "([Ljava/lang/String;)V", this.types);
     yield vcall(parcel, "writePersistableBundle", "(Landroid/os/PersistableBundle;)V", this.extras);
-    (yield vcall(parcel, "writeLong", "(J)V", this.time)); writeInt(parcel, this.styled); writeInt(parcel, this.classification);
+    yield vcall(parcel, "writeLong", "(J)V", this.time); writeInt(parcel, this.styled); writeInt(parcel, this.classification);
     yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", this.confidence);
   }),
   "<init>(Ljava/lang/CharSequence;[Ljava/lang/String;)V": function (this: JClipDescription, label: unknown, types: string[]) {
@@ -82,8 +82,8 @@ statics: { get CREATOR() { return parcelCreator("android/content/ClipData", read
     yield vcall(parcel, "writeTypedObject", "(Landroid/os/Parcelable;I)V", this.icon, flags);
     writeInt(parcel, this.items.length);
     for (const item of this.items) {
-      (yield writeText(item.text, parcel)); writeString8(parcel, item.html);
-      for (const [field] of itemObjects) (yield vcall(parcel, "writeTypedObject", "(Landroid/os/Parcelable;I)V", item[field], flags));
+      yield writeText(item.text, parcel); writeString8(parcel, item.html);
+      for (const [field] of itemObjects) yield vcall(parcel, "writeTypedObject", "(Landroid/os/Parcelable;I)V", item[field], flags);
     }
   }),
   "<init>(Ljava/lang/CharSequence;[Ljava/lang/String;Landroid/content/ClipData$Item;)V": function (this: JClipData, label: unknown, types: string[], item: JClipItem) {

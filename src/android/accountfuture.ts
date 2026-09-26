@@ -50,7 +50,7 @@ rt.register({ name: "webdroid/AccountFuture", ctor: JAccountFuture, ifaces: ["an
   "getResult(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": driven(function* (this: JAccountFuture, timeout: bigint, unit: unknown): Gen {
     if (this.pending && curThread === mainThread) throw rt.mkThrowable("java/lang/IllegalStateException", "AccountManagerFuture cannot block the main thread");
     const thread = curThread;
-    return this.result(Number((yield vcall(unit, "toMillis", "(J)J", timeout))), thread);
+    return this.result(Number(yield vcall(unit, "toMillis", "(J)J", timeout)), thread);
   }),
   "isDone()Z": function (this: JAccountFuture) { return +!this.pending; },
   "isCancelled()Z": function (this: JAccountFuture) { return +(this.outcome.kind === "canceled"); },

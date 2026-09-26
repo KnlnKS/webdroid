@@ -30,8 +30,8 @@ function* initProgressBar$(this: JProgressBar, c: unknown, set: JAttrSet | null 
   }
   const a = obtainStyled(this.jres, this.theme, set,
     ["progressDrawable", "indeterminateDrawable", "indeterminate", "min", "max", "progress"].map(AID), style, def);
-  if (a.vals[0]) this.progressD = (yield loadDrawableRV(this.jres, a.vals[0], this.theme));
-  if (a.vals[1]) this.indetD = (yield loadDrawableRV(this.jres, a.vals[1], this.theme));
+  if (a.vals[0]) this.progressD = yield loadDrawableRV(this.jres, a.vals[0], this.theme);
+  if (a.vals[1]) this.indetD = yield loadDrawableRV(this.jres, a.vals[1], this.theme);
   this.indeterminate = !!rvInt(this.jres, a.vals[2], this.horizontal ? 0 : +this.indeterminate);
   this.min = rvInt(this.jres, a.vals[3], this.min);
   this.max = Math.max(this.min, rvInt(this.jres, a.vals[4], this.max));
@@ -119,17 +119,17 @@ class JSeekBar extends JAbsSeekBar {
   *setTrack$(d: JDrawable | null, thread = curThread): Gen {
     if (this.progressD) this.progressD.callback = null;
     this.progressD = d;
-    if (d) { d.callback = this; (yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState()))); }
+    if (d) { d.callback = this; yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())); }
     requestLayout(this); invalidate(this);
   }
   setThumb(d: JDrawable | null, thread = curThread): unknown { return rt.drive(this.setThumb$(d, thread)); }
   *setThumb$(d: JDrawable | null, thread = curThread): Gen {
     if (this.thumb) this.thumb.callback = null;
     this.thumb = d;
-    this.thumbW = d ? Math.max(0, Number((yield drawableSize(d, false, thread)))) : 0;
-    this.thumbH = d ? Math.max(0, Number((yield drawableSize(d, true, thread)))) : 0;
+    this.thumbW = d ? Math.max(0, Number(yield drawableSize(d, false, thread))) : 0;
+    this.thumbH = d ? Math.max(0, Number(yield drawableSize(d, true, thread))) : 0;
     this.thumbOffset = Math.trunc(this.thumbW / 2);
-    if (d) { d.callback = this; (yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState()))); }
+    if (d) { d.callback = this; yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())); }
     requestLayout(this); invalidate(this);
   }
   updateProgress(value: number, fromUser = false, thread = curThread): unknown { return rt.drive(this.updateProgress$(value, fromUser, thread)); }
@@ -149,8 +149,8 @@ function* initSeekBar$(this: JSeekBar, c: unknown, attrs: JAttrSet | null = null
   this.min = rvInt(this.jres, a.vals[3], 0); this.max = Math.max(this.min, rvInt(this.jres, a.vals[4], 100));
   this.progress = Math.max(this.min, Math.min(this.max, rvInt(this.jres, a.vals[5], 0)));
   this.secondary = rvInt(this.jres, a.vals[6], 0);
-  if (a.vals[0]) yield this.setTrack((yield loadDrawableRV(this.jres, a.vals[0], this.theme)), thread);
-  if (a.vals[1]) yield this.setThumb((yield loadDrawableRV(this.jres, a.vals[1], this.theme)), thread);
+  if (a.vals[0]) yield this.setTrack(yield loadDrawableRV(this.jres, a.vals[0], this.theme), thread);
+  if (a.vals[1]) yield this.setThumb(yield loadDrawableRV(this.jres, a.vals[1], this.theme), thread);
   if (a.vals[2]) this.thumbOffset = Math.trunc(rvDimen(this.jres, a.vals[2], this.thumbOffset));
 }
 rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widget/AbsSeekBar", methods: {
@@ -170,12 +170,12 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
   "getSecondaryProgress()I": function (this: JSeekBar) { return this.secondary; },
   "drawableStateChanged()V": driven(function* (this: JSeekBar): Gen {
     const thread = curThread, state = Int32Array.from(this.drawableState());
-    for (const d of [this.progressD, this.thumb]) if (d) (yield vcallOn(thread, d, "setState", "([I)Z", state));
+    for (const d of [this.progressD, this.thumb]) if (d) yield vcallOn(thread, d, "setState", "([I)Z", state);
   }),
   "onMeasure(II)V": driven(function* (this: JSeekBar, ws: number, hs: number): Gen {
     const thread = curThread, d = this.progressD;
-    const w = d ? Math.max(0, Number((yield drawableSize(d, false, thread)))) : 0;
-    const h = d ? Math.max(0, Number((yield drawableSize(d, true, thread)))) : 0;
+    const w = d ? Math.max(0, Number(yield drawableSize(d, false, thread))) : 0;
+    const h = d ? Math.max(0, Number(yield drawableSize(d, true, thread))) : 0;
     this.measuredW = resolveSize(Math.max(this.minW, w + this.padL + this.padR), ws);
     this.measuredH = resolveSize(Math.max(this.minH, Math.max(h, this.thumbH) + this.padT + this.padB), hs);
   }),
@@ -191,7 +191,7 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
           const target = d instanceof JLayerDrawable ? await vcallOn(thread, d, "findDrawableByLayerId", "(I)Landroid/graphics/drawable/Drawable;", id) : d;
           if (target) await vcallOn(thread, target, "setLevel", "(I)Z", Math.trunc(fraction(value) * 10000));
         };
-        (yield level(0x0102000f, this.secondary)); (yield level(0x0102000d, this.progress));
+        yield level(0x0102000f, this.secondary); yield level(0x0102000d, this.progress);
         yield drawChild(d, canvas);
       }
       if (this.thumb) {
@@ -246,7 +246,7 @@ export function themeAccent(v: JView): number {
 const drawTextInset = driven(function* drawTextInset(tv: JTextView, cv: JCanvas, padL: number): Gen {
   const saved = tv.padL;
   tv.padL = padL;
-  try { (yield callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", tv, cv)); }
+  try { yield callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", tv, cv); }
   finally { tv.padL = saved; }
 });
 
@@ -274,8 +274,8 @@ class JCompoundButton extends JButton {
   *updateButtonState$(): Gen {
     const thread = curThread, drawable = this.buttonD;
     if (!drawable || !(yield vcallOn(thread, drawable, "isStateful", "()Z"))) return;
-    const state = (yield vcallOn(thread, this, "getDrawableState", "()[I"));
-    if ((yield vcallOn(thread, drawable, "setState", "([I)Z", state))) invalidate(this);
+    const state = yield vcallOn(thread, this, "getDrawableState", "()[I");
+    if (yield vcallOn(thread, drawable, "setState", "([I)Z", state)) invalidate(this);
   }
   applyButtonTint(): unknown { return rt.drive(this.applyButtonTint$()); }
   *applyButtonTint$(): Gen {
@@ -368,7 +368,7 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
     return this.applyButtonTint();
   }),
   "setButtonDrawable(I)V": driven(function* (this: JCompoundButton, id: number): Gen {
-    this.buttonD = id ? (yield loadDrawable(this.jres!, id, this.theme)) : null;
+    this.buttonD = id ? yield loadDrawable(this.jres!, id, this.theme) : null;
     this.buttonW = id ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;
     yield this.updateButtonState();
     yield this.applyButtonTint();
@@ -389,9 +389,9 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
     const accent = themeAccent(this);
     const cy = this.height() / 2;
     const indX = kind === "switch" ? this.width() - this.padR - device.dp(44) : this.padL + device.dp(4);
-    const w = this.buttonD ? (yield drawableSize(this.buttonD, false, thread)) : -1;
+    const w = this.buttonD ? yield drawableSize(this.buttonD, false, thread) : -1;
     if (this.buttonD && w > 0) {
-      const h = (yield drawableSize(this.buttonD, true, thread));
+      const h = yield drawableSize(this.buttonD, true, thread);
       const b = this.buttonD.bounds;
       b.left = indX; b.top = cy - h / 2; b.right = indX + w; b.bottom = cy + h / 2;
       this.buttonD.stateSet = this.drawableState();
@@ -520,8 +520,8 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initSpace,
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": initSpace,
     "onMeasure(II)V": driven(function* (this: JView, wSpec: number, hSpec: number): Gen {
-      this.measuredW = resolveSize((yield vcall(this, "getSuggestedMinimumWidth", "()I")), wSpec) & 0xffffff;
-      this.measuredH = resolveSize((yield vcall(this, "getSuggestedMinimumHeight", "()I")), hSpec) & 0xffffff;
+      this.measuredW = resolveSize(yield vcall(this, "getSuggestedMinimumWidth", "()I"), wSpec) & 0xffffff;
+      this.measuredH = resolveSize(yield vcall(this, "getSuggestedMinimumHeight", "()I"), hSpec) & 0xffffff;
     }),
     "draw(Landroid/graphics/Canvas;)V": () => {},
   },

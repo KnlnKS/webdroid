@@ -124,14 +124,14 @@ function parseDocument(text: string): JDomNode {
   return domNode(doc)!;
 }
 rt.register({ name: "javax/xml/parsers/DocumentBuilder", ctor: JDocumentBuilder, methods: {
-  "parse(Ljava/io/InputStream;)Lorg/w3c/dom/Document;": driven(function* (stream: unknown): Gen  {
+  "parse(Ljava/io/InputStream;)Lorg/w3c/dom/Document;": driven(function* (stream: unknown): Gen {
     if (!stream) rt.npe();
-    return parseDocument(new TextDecoder().decode((yield readStreamFully(stream))));
+    return parseDocument(new TextDecoder().decode(yield readStreamFully(stream)));
   }),
-  "parse(Lorg/xml/sax/InputSource;)Lorg/w3c/dom/Document;": driven(function* (source: { chars?: unknown; bytes?: unknown; encoding?: string | null } | null): Gen  {
+  "parse(Lorg/xml/sax/InputSource;)Lorg/w3c/dom/Document;": driven(function* (source: { chars?: unknown; bytes?: unknown; encoding?: string | null } | null): Gen {
     if (!source) rt.npe();
-    if (source!.chars) return parseDocument((yield readerText(source!.chars)));
-    if (source!.bytes) return parseDocument(new TextDecoder(source!.encoding ?? "utf-8").decode((yield readStreamFully(source!.bytes))));
+    if (source!.chars) return parseDocument(yield readerText(source!.chars));
+    if (source!.bytes) return parseDocument(new TextDecoder(source!.encoding ?? "utf-8").decode(yield readStreamFully(source!.bytes)));
     throw rt.mkThrowable("org/xml/sax/SAXException", "InputSource requires a stream or reader");
   }),
   "newDocument()Lorg/w3c/dom/Document;": () => domNode(document.implementation.createDocument(null, "")),

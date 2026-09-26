@@ -130,7 +130,7 @@ rt.register({ name: "android/media/MediaDescription", ctor: JMediaDescription, i
   }),
   "describeContents()I": () => 0,
   "toString()Ljava/lang/String;": driven(function* (this: JMediaDescription): Gen {
-    return `${this.title == null ? "null" : (yield csText(this.title))}, ${this.subtitle == null ? "null" : (yield csText(this.subtitle))}, ${this.description == null ? "null" : (yield csText(this.description))}`;
+    return `${this.title == null ? "null" : yield csText(this.title)}, ${this.subtitle == null ? "null" : yield csText(this.subtitle)}, ${this.description == null ? "null" : yield csText(this.description)}`;
   }),
 } });
 const descriptionFields = {
@@ -225,12 +225,12 @@ rt.register({ name: "android/media/MediaMetadata", ctor: JMediaMetadata, ifaces:
     }
     for (const key of ["DISPLAY_ICON_URI", "ART_URI", "ALBUM_ART_URI"]) {
       const value = this.values.get(prefix + key);
-      const uri = value == null ? "" : (yield csText(value));
+      const uri = value == null ? "" : yield csText(value);
       if (uri) { result.iconUri = mkUri(uri); break; }
     }
     const uri = this.values.get(prefix + "MEDIA_URI");
     if (uri != null) {
-      const text = (yield csText(uri));
+      const text = yield csText(uri);
       if (text) result.mediaUri = mkUri(text);
     }
     return this.description = result;
@@ -452,15 +452,15 @@ rt.register({
     "setDataSource(Ljava/io/FileDescriptor;JJ)V": mpLoadFd,
     "setDataSource(Ljava/io/FileDescriptor;)V": mpLoadFd,
     "setDataSource(Landroid/content/Context;Landroid/net/Uri;)V": driven(function* (this: JMediaPlayer, context: unknown, uri: unknown): Gen {
-      const resolver = (yield vcall(context, "getContentResolver", "()Landroid/content/ContentResolver;"));
-      const asset = (yield vcall(resolver, "openAssetFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;", uri, "r"));
+      const resolver = yield vcall(context, "getContentResolver", "()Landroid/content/ContentResolver;");
+      const asset = yield vcall(resolver, "openAssetFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;", uri, "r");
       if (asset === null) throw rt.mkThrowable("java/io/FileNotFoundException", "Media source not found");
       try {
-        const fd = (yield vcall(asset, "getFileDescriptor", "()Ljava/io/FileDescriptor;"));
-        const offset = (yield vcall(asset, "getStartOffset", "()J"));
-        const length = (yield vcall(asset, "getLength", "()J"));
+        const fd = yield vcall(asset, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
+        const offset = yield vcall(asset, "getStartOffset", "()J");
+        const length = yield vcall(asset, "getLength", "()J");
         yield mpLoadFd.call(this, fd, offset, length);
-      } finally { (yield vcall(asset, "close", "()V")); }
+      } finally { yield vcall(asset, "close", "()V"); }
     }),
     "reset()V": function (this: JMediaPlayer) { mpReset(this); },
     ...noops("<init>()V",

@@ -35,9 +35,9 @@ rt.register({ name: "android/util/AtomicFile", ctor: JAtomicFile, methods: {
   }),
   "openRead()Ljava/io/FileInputStream;": openRead,
   "readFully()[B": driven(function* (this: JAtomicFile): Gen {
-    const stream = (yield openRead.call(this));
-    try { return i8((yield readStreamFully(stream))); }
-    finally { (yield vcall(stream, "close", "()V")); }
+    const stream = yield openRead.call(this);
+    try { return i8(yield readStreamFully(stream)); }
+    finally { yield vcall(stream, "close", "()V"); }
   }),
   "delete()V": function (this: JAtomicFile) {
     vfs.delete(this.base); vfs.delete(this.base + ".new"); vfs.delete(this.base + ".bak");

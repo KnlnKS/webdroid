@@ -29,7 +29,7 @@ rt.register({
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": initAccount,
     "getAccessId()Ljava/lang/String;": function (this: JAccount) { return this.accessId; },
     "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JAccount, p: JParcel): Gen {
-      for (const value of [this.name, this.type, this.accessId]) (yield vcall(p, "writeString", "(Ljava/lang/String;)V", value));
+      for (const value of [this.name, this.type, this.accessId]) yield vcall(p, "writeString", "(Ljava/lang/String;)V", value);
     }),
     "equals(Ljava/lang/Object;)Z": function (this: JAccount, other: unknown) {
       return other instanceof JAccount && this.name === other.name && this.type === other.type ? 1 : 0;
@@ -188,10 +188,10 @@ const methods: NativeSpec["methods"] = {
     for (const s of accounts()) for (const k of Object.keys(s.tokens)) if (s.type === type && s.tokens[k] === token) delete s.tokens[k];
     persist();
   },
-  [`blockingGetAuthToken(${ACC}${S}Z)${S}`]: driven(function* (a: JAccount, type: string): Gen  {
+  [`blockingGetAuthToken(${ACC}${S}Z)${S}`]: driven(function* (a: JAccount, type: string): Gen {
     if (curThread === mainThread) throw rt.mkThrowable("java/lang/IllegalStateException", "AccountManager cannot block the main thread");
-    const thread = curThread, result = (yield authToken(a, type, null, null, null, null).result(undefined, thread));
-    return ((yield vcall(result, "getString", "(Ljava/lang/String;)Ljava/lang/String;", "authtoken"))) ?? null;
+    const thread = curThread, result = yield authToken(a, type, null, null, null, null).result(undefined, thread);
+    return (yield vcall(result, "getString", "(Ljava/lang/String;)Ljava/lang/String;", "authtoken")) ?? null;
   }),
   [`getAuthToken(${ACC}${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: authToken,
   [`getAuthToken(${ACC}${S}Landroid/os/Bundle;Z${CB}${H})${F}`]: (a: JAccount, type: string, o: JBundle | null, _notify: number, cb: unknown, h: JHandler | null) => authToken(a, type, o, null, cb, h),
@@ -228,8 +228,8 @@ const methods: NativeSpec["methods"] = {
     const stored = find(a);
     return stored ? packages.get(stored.owner)?.uid === packages.get(pkg)?.uid ? 1 : stored.visibility[pkg] ?? 4 : 0;
   },
-  [`getAccountsAndVisibilityForPackage(${S}${S})Ljava/util/Map;`]: driven(function* (pkg: string, type: string | null): Gen  {
-    const result = (yield newObj("java/util/HashMap"));
+  [`getAccountsAndVisibilityForPackage(${S}${S})Ljava/util/Map;`]: driven(function* (pkg: string, type: string | null): Gen {
+    const result = yield newObj("java/util/HashMap");
     for (const account of accounts()) if (owns(account) && (type === null || account.type === type)) {
       const visibility = packages.get(account.owner)?.uid === packages.get(pkg)?.uid ? 1 : account.visibility[pkg] ?? 4;
       yield vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", toJ(account), boxInt(visibility));

@@ -88,7 +88,7 @@ rt.register({
     "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;": function (this: JPackageItemInfo) { return applicationLabel(this); },
     "loadIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": driven(function* (this: JPackageItemInfo, pm: JPackageManager): Gen {
       const info = this instanceof JComponentInfo ? this.applicationInfo : this instanceof JApplicationInfo ? this : null;
-      const icon = this.icon ? (yield vcall(pm, "getDrawable", "(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/graphics/drawable/Drawable;", this.packageName, this.icon, info)) : null;
+      const icon = this.icon ? yield vcall(pm, "getDrawable", "(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/graphics/drawable/Drawable;", this.packageName, this.icon, info) : null;
       return icon ?? vcall(this, "loadDefaultIcon", "(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;", pm);
     }),
     "loadDefaultIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": (pm: JPackageManager) => vcall(pm, "getDefaultActivityIcon", "()Landroid/graphics/drawable/Drawable;"),
@@ -714,9 +714,9 @@ rt.register({
     FEATURE_VR_MODE: "android.software.vr.mode", FEATURE_TELEPHONY: "android.hardware.telephony", FEATURE_LEANBACK: "android.software.leanback" },
   methods: {
     "requestChecksums(Ljava/lang/String;ZILjava/util/List;Landroid/content/pm/PackageManager$OnChecksumsReadyListener;)V":
-      driven(function* (pkg: string | null, includeSplits: number, required: number, trustedInstallers: unknown, listener: unknown): Gen  {
+      driven(function* (pkg: string | null, includeSplits: number, required: number, trustedInstallers: unknown, listener: unknown): Gen {
         if (pkg === null || trustedInstallers === null || listener === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-        const checksums = (yield apkChecksums(pkg, includeSplits !== 0, required));
+        const checksums = yield apkChecksums(pkg, includeSplits !== 0, required);
         yield vcall(listener, "onChecksumsReady", "(Ljava/util/List;)V", checksums);
       }),
     "getProviderInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ProviderInfo;": (comp: JComponentName, flags: number) => {
@@ -724,22 +724,22 @@ rt.register({
       return providerInfo(cls, comp.pkg, authoritiesOf(node).join(";"), node, flags, owner);
     },
     "getResourcesForApplication(Ljava/lang/String;)Landroid/content/res/Resources;": driven(function* (pkg: string): Gen {
-      const info = (yield vcall(this, "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0));
+      const info = yield vcall(this, "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0);
       return vcall(this, "getResourcesForApplication", "(Landroid/content/pm/ApplicationInfo;)Landroid/content/res/Resources;", info);
     }),
-    "getResourcesForApplication(Landroid/content/pm/ApplicationInfo;)Landroid/content/res/Resources;": driven(function* (info: JApplicationInfo): Gen  {
-      const res = info.archiveResources ?? (info.packageName === appHost?.pkg ? appHost.res : ((yield installedPackage(info.packageName)))?.archive.res);
+    "getResourcesForApplication(Landroid/content/pm/ApplicationInfo;)Landroid/content/res/Resources;": driven(function* (info: JApplicationInfo): Gen {
+      const res = info.archiveResources ?? (info.packageName === appHost?.pkg ? appHost.res : (yield installedPackage(info.packageName))?.archive.res);
       if (!res) throw nameNotFound(info.packageName);
       return res.jobj ?? mkJResources(res, false);
     }),
-    "getXml(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/content/res/XmlResourceParser;": driven(function* (pkg: string, id: number, info: JApplicationInfo | null): Gen  {
-      const res = info?.archiveResources ?? (pkg === appHost?.pkg ? appHost.res : ((yield installedPackage(pkg)))?.archive.res);
+    "getXml(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/content/res/XmlResourceParser;": driven(function* (pkg: string, id: number, info: JApplicationInfo | null): Gen {
+      const res = info?.archiveResources ?? (pkg === appHost?.pkg ? appHost.res : (yield installedPackage(pkg))?.archive.res);
       if (!res) return null;
       try { return mkXmlParser(res, id); }
       catch (error) { if (error instanceof rt.link("android/content/res/Resources$NotFoundException").ctor) return null; throw error; }
     }),
-    "getDrawable(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/graphics/drawable/Drawable;": driven(function* (pkg: string, id: number, info: JApplicationInfo | null): Gen  {
-      const res = info?.archiveResources ?? (pkg === appHost?.pkg ? appHost.res : ((yield installedPackage(pkg)))?.archive.res);
+    "getDrawable(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/graphics/drawable/Drawable;": driven(function* (pkg: string, id: number, info: JApplicationInfo | null): Gen {
+      const res = info?.archiveResources ?? (pkg === appHost?.pkg ? appHost.res : (yield installedPackage(pkg))?.archive.res);
       return res?.tbl(id)?.entry(id) ? loadDrawable(res, id, null) : null;
     }),
     "getDefaultActivityIcon()Landroid/graphics/drawable/Drawable;": () => {
@@ -760,7 +760,7 @@ rt.register({
     "getPackageInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;": driven(function* (pkg: string, flags: number): Gen {
       const record = packages.get(pkg);
       if (record && (record !== currentPackage || record.system)) return recordInfo(record, flags);
-      const installed = (yield installedPackage(pkg));
+      const installed = yield installedPackage(pkg);
       if (installed) return archiveInfo(installed.archive, installed.path, flags, true);
       if (appHost && pkg !== appHost.pkg) throw nameNotFound(pkg);
       const pi = new JPackageInfo();
@@ -770,12 +770,12 @@ rt.register({
       pi.splitNames = pi.applicationInfo?.splitNames ?? null;
       pi.firstInstallTime = pi.lastUpdateTime = installTime(pkg);
       if (flags & (64 | 0x8000000)) {
-        const bytes = (yield vfs.readFile(apkPath()));
+        const bytes = yield vfs.readFile(apkPath());
         let certificates: Uint8Array[] = [];
         if (bytes) {
           let pending = certificateCache.get(bytes);
           if (!pending) certificateCache.set(bytes, pending = apkCertificates(bytes, appHost?.zip ?? {}));
-          certificates = (yield pending);
+          certificates = yield pending;
         }
         if (flags & 64) pi.signatures = signatures(certificates);
         if (flags & 0x8000000) pi.signingInfo = signingInfo(certificates);
@@ -793,8 +793,8 @@ rt.register({
     "getApplicationInfo(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;": driven(function* (pkg: string, flags: number): Gen {
       const record = packages.get(pkg);
       if (record && (record !== currentPackage || record.system)) return recordAppInfo(record, flags);
-      const installed = (yield installedPackage(pkg));
-      if (installed) return ((yield archiveInfo(installed.archive, installed.path, flags, true))).applicationInfo;
+      const installed = yield installedPackage(pkg);
+      if (installed) return (yield archiveInfo(installed.archive, installed.path, flags, true)).applicationInfo;
       if (appHost && pkg !== appHost.pkg) throw nameNotFound(pkg);
       return appHost ? getAppInfo(appHost) : new JApplicationInfo();
     }),
@@ -803,11 +803,11 @@ rt.register({
       return vcall(info, "loadIcon", "(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;", this);
     },
     "getApplicationIcon(Ljava/lang/String;)Landroid/graphics/drawable/Drawable;": driven(function* (pkg: string): Gen {
-      const info = (yield vcall(this, "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0x400));
+      const info = yield vcall(this, "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, 0x400);
       return vcall(this, "getApplicationIcon", "(Landroid/content/pm/ApplicationInfo;)Landroid/graphics/drawable/Drawable;", info);
     }),
-    "getPackageArchiveInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;": driven(function* (path: string, flags: number): Gen  { const archive = (yield readArchive(path)); return archive ? archiveInfo(archive, path, flags) : null; }),
-    "getPackageArchiveInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$PackageInfoFlags;)Landroid/content/pm/PackageInfo;": driven(function* (path: string, flags: JInfoFlags): Gen  { const archive = (yield readArchive(path)); return archive ? archiveInfo(archive, path, Number(flags.value)) : null; }),
+    "getPackageArchiveInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;": driven(function* (path: string, flags: number): Gen { const archive = yield readArchive(path); return archive ? archiveInfo(archive, path, flags) : null; }),
+    "getPackageArchiveInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$PackageInfoFlags;)Landroid/content/pm/PackageInfo;": driven(function* (path: string, flags: JInfoFlags): Gen { const archive = yield readArchive(path); return archive ? archiveInfo(archive, path, Number(flags.value)) : null; }),
     "resolveActivity(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;": resolveActivity,
     "resolveActivity(Landroid/content/Intent;Landroid/content/pm/PackageManager$ResolveInfoFlags;)Landroid/content/pm/ResolveInfo;": (i: JIntent | null, f: JInfoFlags) => resolveActivity(i, Number(f.value)),
     "queryIntentActivities(Landroid/content/Intent;I)Ljava/util/List;": queryActivities,
@@ -854,15 +854,15 @@ rt.register({
       }
       throw nameNotFound(name);
     },
-    "checkPermission(Ljava/lang/String;Ljava/lang/String;)I": driven(function* (permission: string, pkg: string): Gen  {
+    "checkPermission(Ljava/lang/String;Ljava/lang/String;)I": driven(function* (permission: string, pkg: string): Gen {
       const record = packages.get(pkg);
       if (record?.grants.has(permission)) return 0;
       if (!record?.permissions.has(permission)) return -1;
       if (!signaturePermissions.has(permission)) return 0;
-      const certificates: Uint8Array[] = (yield record.certificates());
+      const certificates: Uint8Array[] = yield record.certificates();
       for (const owner of packages.values()) {
         if (!owner.root.children.some((n) => n.name === "permission" && attrStr(n, "name") === permission)) continue;
-        const signers: Uint8Array[] = (yield owner.certificates());
+        const signers: Uint8Array[] = yield owner.certificates();
         if (certificates.length && certificates.length === signers.length && certificates.every((c, i) => c.length === signers[i].length && c.every((b, j) => b === signers[i][j]))) return 0;
       }
       return -1;
@@ -885,29 +885,29 @@ rt.register({
       if (!record) throw nameNotFound(pkg);
       return record.uid;
     },
-    "checkSignatures(Ljava/lang/String;Ljava/lang/String;)I": driven(function* (a: string, b: string): Gen  {
+    "checkSignatures(Ljava/lang/String;Ljava/lang/String;)I": driven(function* (a: string, b: string): Gen {
       const x = packages.get(a), y = packages.get(b);
       if (!x || !y) return -4;
-      const left: Uint8Array[] = (yield x.visibleCertificates()), right: Uint8Array[] = (yield y.visibleCertificates());
+      const left: Uint8Array[] = yield x.visibleCertificates(), right: Uint8Array[] = yield y.visibleCertificates();
       if (!left.length || !right.length) return !left.length && !right.length ? 1 : !left.length ? -1 : -2;
       return left.length === right.length && left.every((cert) => right.some((other) => cert.length === other.length && cert.every((v, i) => v === other[i]))) ? 0 : -3;
     }),
-    "hasSigningCertificate(Ljava/lang/String;[BI)Z": driven(function* (pkg: string | null, certificate: Int8Array | null, type: number): Gen  {
+    "hasSigningCertificate(Ljava/lang/String;[BI)Z": driven(function* (pkg: string | null, certificate: Int8Array | null, type: number): Gen {
       if (pkg === null || certificate === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
       const record = packages.get(pkg);
-      const certificates = record ? (yield record.visibleCertificates()) : ((yield installedPackage(pkg)))?.archive.certificates ?? [];
+      const certificates = record ? yield record.visibleCertificates() : (yield installedPackage(pkg))?.archive.certificates ?? [];
       return certificateMatches(certificates, certificate, type);
     }),
-    "hasSigningCertificate(I[BI)Z": driven(function* (uid: number, certificate: Int8Array | null, type: number): Gen  {
+    "hasSigningCertificate(I[BI)Z": driven(function* (uid: number, certificate: Int8Array | null, type: number): Gen {
       if (certificate === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
       for (const record of packages.values()) {
-        if (record.uid === uid && (yield certificateMatches((yield record.visibleCertificates()), certificate, type))) return 1;
+        if (record.uid === uid && (yield certificateMatches(yield record.visibleCertificates(), certificate, type))) return 1;
       }
       return 0;
     }),
     "getInstalledPackages(I)Ljava/util/List;": installedPackages,
-    "getInstalledApplications(I)Ljava/util/List;": driven(function* (flags: number): Gen  {
-      const list = (yield installedPackages(flags));
+    "getInstalledApplications(I)Ljava/util/List;": driven(function* (flags: number): Gen {
+      const list = yield installedPackages(flags);
       list.a = list.a.map((info: unknown) => (info as JPackageInfo).applicationInfo);
       return list;
     }),
@@ -980,9 +980,9 @@ rt.register({
   name: "android/content/pm/ShortcutInfo", ctor: JShortcutInfo, ifaces: ["android/os/Parcelable"],
   statics: { SURFACE_LAUNCHER: 1 },
   methods: {
-    "getExtras()Landroid/os/PersistableBundle;": driven(function* (this: JShortcutInfo): Gen { return ((yield copyShortcut(this))).extras; }),
-    "getIntent()Landroid/content/Intent;": driven(function* (this: JShortcutInfo): Gen { return ((yield copyShortcut(this))).intents.at(-1) ?? null; }),
-    "getIntents()[Landroid/content/Intent;": driven(function* (this: JShortcutInfo): Gen { return jarray(((yield copyShortcut(this))).intents, "Landroid/content/Intent;"); }),
+    "getExtras()Landroid/os/PersistableBundle;": driven(function* (this: JShortcutInfo): Gen { return (yield copyShortcut(this)).extras; }),
+    "getIntent()Landroid/content/Intent;": driven(function* (this: JShortcutInfo): Gen { return (yield copyShortcut(this)).intents.at(-1) ?? null; }),
+    "getIntents()[Landroid/content/Intent;": driven(function* (this: JShortcutInfo): Gen { return jarray((yield copyShortcut(this)).intents, "Landroid/content/Intent;"); }),
     ...fieldGetters({ "getId()Ljava/lang/String;": "id", "getPackage()Ljava/lang/String;": "pkg",
       "getShortLabel()Ljava/lang/CharSequence;": "shortLabel", "getLongLabel()Ljava/lang/CharSequence;": "longLabel",
       "getDisabledMessage()Ljava/lang/CharSequence;": "disabledMessage", "getRank()I": "rank" }),
@@ -1000,15 +1000,15 @@ rt.register({
     "<init>(Landroid/content/Context;Ljava/lang/String;)V": driven(function* (this: JShortcutBuilder, context: unknown, id: string): Gen {
       if (context == null || id == null) throw rt.mkThrowable("java/lang/NullPointerException", "Shortcut context and id required");
       if (!id) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut id must not be empty");
-      this.info.id = id; this.info.pkg = (yield vcall(context, "getPackageName", "()Ljava/lang/String;"));
+      this.info.id = id; this.info.pkg = yield vcall(context, "getPackageName", "()Ljava/lang/String;");
     }),
     [`setShortLabel(Ljava/lang/CharSequence;)${shortcutBuilder}`]: driven(function* (this: JShortcutBuilder, label: unknown): Gen {
-      const text = (yield csText(label));
+      const text = yield csText(label);
       if (!text) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut label must not be empty");
       this.info.shortLabel = text; return this;
     }),
-    [`setLongLabel(Ljava/lang/CharSequence;)${shortcutBuilder}`]: driven(function* (this: JShortcutBuilder, label: unknown): Gen { this.info.longLabel = (yield csText(label)); return this; }),
-    [`setDisabledMessage(Ljava/lang/CharSequence;)${shortcutBuilder}`]: driven(function* (this: JShortcutBuilder, label: unknown): Gen { this.info.disabledMessage = (yield csText(label)); return this; }),
+    [`setLongLabel(Ljava/lang/CharSequence;)${shortcutBuilder}`]: driven(function* (this: JShortcutBuilder, label: unknown): Gen { this.info.longLabel = yield csText(label); return this; }),
+    [`setDisabledMessage(Ljava/lang/CharSequence;)${shortcutBuilder}`]: driven(function* (this: JShortcutBuilder, label: unknown): Gen { this.info.disabledMessage = yield csText(label); return this; }),
     [`setIntent(Landroid/content/Intent;)${shortcutBuilder}`]: function (this: JShortcutBuilder, intent: JIntent) { this.info.intents = [intent]; return this; },
     [`setIntents([Landroid/content/Intent;)${shortcutBuilder}`]: function (this: JShortcutBuilder, intents: JIntent[]) { this.info.intents = intents.slice(); return this; },
     [`setIcon(Landroid/graphics/drawable/Icon;)${shortcutBuilder}`]: function (this: JShortcutBuilder, icon: unknown) { this.info.icon = icon; return this; },
@@ -1039,22 +1039,22 @@ rt.register({
   methods: {
     "setDynamicShortcuts(Ljava/util/List;)Z": driven(function* (this: JShortcutManager, list: unknown): Gen {
       const pkg = appHost?.pkg ?? "";
-      this.packages.set(pkg, (yield dynamicShortcuts(list, pkg))); return 1;
+      this.packages.set(pkg, yield dynamicShortcuts(list, pkg)); return 1;
     }),
     "addDynamicShortcuts(Ljava/util/List;)Z": driven(function* (this: JShortcutManager, list: unknown): Gen {
       const pkg = appHost?.pkg ?? "";
-      const additions = (yield dynamicShortcuts(list, pkg));
+      const additions = yield dynamicShortcuts(list, pkg);
       const shortcuts = this.packages.get(pkg) ?? new Map<string, JShortcutInfo>();
       for (const [id, info] of additions) shortcuts.set(id, info);
       this.packages.set(pkg, shortcuts); return 1;
     }),
     "getDynamicShortcuts()Ljava/util/List;": driven(function* (this: JShortcutManager): Gen {
-      const list = newArrayList(); list.a = (yield Promise.all([...(this.packages.get(appHost?.pkg ?? "")?.values() ?? [])].map(copyShortcut))); return list;
+      const list = newArrayList(); list.a = yield Promise.all([...(this.packages.get(appHost?.pkg ?? "")?.values() ?? [])].map(copyShortcut)); return list;
     }),
     "getPinnedShortcuts()Ljava/util/List;": () => newArrayList(),
     "getShortcuts(I)Ljava/util/List;": driven(function* (this: JShortcutManager, flags: number): Gen {
       const list = newArrayList();
-      if (flags & 2) list.a = (yield Promise.all([...(this.packages.get(appHost?.pkg ?? "")?.values() ?? [])].map(copyShortcut)));
+      if (flags & 2) list.a = yield Promise.all([...(this.packages.get(appHost?.pkg ?? "")?.values() ?? [])].map(copyShortcut));
       return list;
     }),
     "removeAllDynamicShortcuts()V": function (this: JShortcutManager) { this.packages.delete(appHost?.pkg ?? ""); },

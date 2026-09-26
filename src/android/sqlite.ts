@@ -654,9 +654,9 @@ rt.register({ name: "android/database/sqlite/SQLiteQueryBuilder", ctor: JSQLiteQ
   "getProjectionMap()Ljava/util/Map;": function (this: JSQLiteQueryBuilder) { return this.projectionMap; },
   "setDistinct(Z)V": function (this: JSQLiteQueryBuilder, distinct: number) { this.distinct = !!distinct; },
   "isDistinct()Z": function (this: JSQLiteQueryBuilder) { return +this.distinct; },
-  "appendWhere(Ljava/lang/CharSequence;)V": driven(function* (this: JSQLiteQueryBuilder, where: unknown): Gen { this.where += (yield csText(where)); }),
+  "appendWhere(Ljava/lang/CharSequence;)V": driven(function* (this: JSQLiteQueryBuilder, where: unknown): Gen { this.where += yield csText(where); }),
   "appendWhereStandalone(Ljava/lang/CharSequence;)V": driven(function* (this: JSQLiteQueryBuilder, where: unknown): Gen {
-    this.where += (this.where ? " AND " : "") + `(${(yield csText(where))})`;
+    this.where += (this.where ? " AND " : "") + `(${yield csText(where)})`;
   }),
   "appendWhereEscapeString(Ljava/lang/String;)V": function (this: JSQLiteQueryBuilder, where: string) {
     this.where += "'" + where.replaceAll("'", "''") + "'";
@@ -667,11 +667,11 @@ rt.register({ name: "android/database/sqlite/SQLiteQueryBuilder", ctor: JSQLiteQ
     },
   "query(Landroid/database/sqlite/SQLiteDatabase;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
     driven(function* (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, cols: string[] | null, sel: string | null, args: string[] | null, groupBy: string | null, having: string | null, orderBy: string | null): Gen {
-      return this.tables === null ? null : runQuery(db, (yield this.sql(cols, sel, groupBy, having, orderBy, null)), args);
+      return this.tables === null ? null : runQuery(db, yield this.sql(cols, sel, groupBy, having, orderBy, null), args);
     }),
   "query(Landroid/database/sqlite/SQLiteDatabase;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
     driven(function* (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, cols: string[] | null, sel: string | null, args: string[] | null, groupBy: string | null, having: string | null, orderBy: string | null, limit: string | null): Gen {
-      return this.tables === null ? null : runQuery(db, (yield this.sql(cols, sel, groupBy, having, orderBy, limit)), args);
+      return this.tables === null ? null : runQuery(db, yield this.sql(cols, sel, groupBy, having, orderBy, limit), args);
     }),
   "update(Landroid/database/sqlite/SQLiteDatabase;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I":
     function (this: JSQLiteQueryBuilder, db: JSQLiteDatabase, values: JContentValues, selection: string | null, args: string[] | null) {

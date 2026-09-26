@@ -33,7 +33,7 @@ function* locked(wrapper: JWrapper, name: string, descriptor: string, args: unkn
   const thread = curThread;
   const entered = rt.monitors.enter(wrapper.mutex, thread);
   if (entered) yield entered;
-  try { return (yield vcallOn(thread, wrapper.delegate, name, descriptor, ...args)); }
+  try { return yield vcallOn(thread, wrapper.delegate, name, descriptor, ...args); }
   finally { rt.monitors.exit(wrapper.mutex, thread); }
 }
 
@@ -178,7 +178,7 @@ rt.register({
       return this.entries ? after(value, readOnlyEntry) : value;
     },
     "forEachRemaining(Ljava/util/function/Consumer;)V": driven(function* (this: JReadOnlyIterator, consumer: unknown): Gen {
-      while ((yield vcall(this, "hasNext", "()Z"))) (yield vcall(consumer, "accept", "(Ljava/lang/Object;)V", (yield vcall(this, "next", "()Ljava/lang/Object;"))));
+      while (yield vcall(this, "hasNext", "()Z")) yield vcall(consumer, "accept", "(Ljava/lang/Object;)V", yield vcall(this, "next", "()Ljava/lang/Object;"));
     }),
     "hasPrevious()Z": function (this: JReadOnlyIterator) { return vcall(this.delegate, "hasPrevious", "()Z"); },
     "previous()Ljava/lang/Object;": function (this: JReadOnlyIterator) {
