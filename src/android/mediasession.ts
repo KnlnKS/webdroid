@@ -3,7 +3,7 @@ import { mangleMethod, jmethod } from "../jvm/abi";
 import { curThread, idHash, stringHash, vcall } from "../jvm/natives/jlang";
 import { JHandler, JFnRunnable, JLooper, type JBundle } from "./os";
 import { type JContext } from "./context";
-import { JService } from "./runningservices";
+import { JService } from "./app";
 import type { JList } from "../jvm/natives/jutil";
 
 class JMediaSession extends JObj {

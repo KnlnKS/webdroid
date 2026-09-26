@@ -7,8 +7,7 @@ import { rt, JObj } from "../src/jvm/runtime";
 import { onMain } from "../src/android/mainloop";
 import { JBitmap } from "../src/android/graphics";
 import { BridgeCalls } from "../src/shell/bridgecalls";
-import { JHandler, PROCESS_UID } from "../src/android/os";
-import { JMessage } from "../src/android/messenger";
+import { JHandler, JMessage, PROCESS_UID } from "../src/android/os";
 import { JBinder, binderTransport, importBinder } from "../src/android/binder";
 
 describe("activity-main-queue", () => {

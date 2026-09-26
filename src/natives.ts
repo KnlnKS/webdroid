@@ -46,6 +46,7 @@ import "./android/authenticator";
 import "./android/parcel";
 import "./android/cursorwindow";
 import "./android/binder";
+import "./android/messenger";
 import "./android/remotecallbacklist";
 import "./android/mediasession";
 import "./android/intentservice";

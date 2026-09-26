@@ -2,7 +2,7 @@ import { readFully } from "../shell/lazyfile";
 import { processEnv } from "../shell/environment";
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
-import { JMessage, obtain } from "./messenger";
+import type { JMessenger } from "./messenger";
 import { procIdentity, processTid } from "../shell/procfs";
 import { parcelCreator, type JParcel } from "./parcel";
 import { keyCodes, deadChar } from "./keycodes";
@@ -145,7 +145,17 @@ defineException("android/os/OperationCanceledException", "java/lang/RuntimeExcep
 export const bootTime = typeof window === "undefined" ? performance.timeOrigin : window.parent.performance.timeOrigin;
 export const uptimeMillis = () => performance.timeOrigin - bootTime + guestNow();
 let handlerSeq = 0;
-function emptyMessage(w: number): JMessage { const m = new JMessage(); m.what = w; return m; }
+export class JMessage extends JObj {
+  asynchronous = false;
+  what = 0; arg1 = 0; arg2 = 0; obj: unknown = null;
+  callback: unknown = null; target: JHandler | null = null;
+  whenMs = 0; sendingUid = -1; workSourceUid = -1;
+  data: JBundle | null = null; replyTo: JMessenger | null = null;
+  timer: ReturnType<typeof setTimeout> | undefined;
+}
+export function obtain(h: JHandler | null, what = 0, obj: unknown = null, arg1 = 0, arg2 = 0, callback: unknown = null): JMessage {
+  const m = new JMessage(); m.target = h; m.what = what; m.obj = obj; m.arg1 = arg1; m.arg2 = arg2; m.callback = callback; return m;
+}
 export class JHandler extends JObj {
   looper: JLooper = mainLooper;
   cb: unknown = null; // Handler.Callback
@@ -248,9 +258,9 @@ rt.register({
     "sendMessage(Landroid/os/Message;)Z": function (this: JHandler, m: JMessage) { return this.send(m, 0); },
     "sendMessageAtFrontOfQueue(Landroid/os/Message;)Z": function (this: JHandler, m: JMessage) { return this.send(m, 0); },
     "sendMessageDelayed(Landroid/os/Message;J)Z": function (this: JHandler, m: JMessage, d: bigint) { return this.send(m, Number(d)); },
-    "sendEmptyMessage(I)Z": function (this: JHandler, w: number) { return this.send(emptyMessage(w), 0); },
-    "sendEmptyMessageAtTime(IJ)Z": function (this: JHandler, w: number, at: bigint) { return this.send(emptyMessage(w), Math.max(0, Number(at) - uptimeMillis())); },
-    "sendEmptyMessageDelayed(IJ)Z": function (this: JHandler, w: number, d: bigint) { return this.send(emptyMessage(w), Number(d)); },
+    "sendEmptyMessage(I)Z": function (this: JHandler, w: number) { return this.send(obtain(null, w), 0); },
+    "sendEmptyMessageAtTime(IJ)Z": function (this: JHandler, w: number, at: bigint) { return this.send(obtain(null, w), Math.max(0, Number(at) - uptimeMillis())); },
+    "sendEmptyMessageDelayed(IJ)Z": function (this: JHandler, w: number, d: bigint) { return this.send(obtain(null, w), Number(d)); },
     "removeCallbacks(Ljava/lang/Runnable;Ljava/lang/Object;)V": function (this: JHandler, r: unknown, token: unknown) {
       this.cancelMatching((key, message) => key === r && (token == null || message.obj === token));
     },
@@ -267,15 +277,11 @@ rt.register({
     // the object variant asks about messages carrying that obj; posts here are keyed by `what`
     "hasMessages(ILjava/lang/Object;)Z": function (this: JHandler, w: number) { return this.pending.get(w)?.size ? 1 : 0; },
     "getLooper()Landroid/os/Looper;": function (this: JHandler) { return this.looper; },
-    "obtainMessage()Landroid/os/Message;": function (this: JHandler) { const m = new JMessage(); m.target = this; return m; },
-    "obtainMessage(I)Landroid/os/Message;": function (this: JHandler, w: number) { const m = emptyMessage(w); m.target = this; return m; },
-    "obtainMessage(ILjava/lang/Object;)Landroid/os/Message;": function (this: JHandler, w: number, o: unknown) { const m = emptyMessage(w); m.target = this; m.obj = o; return m; },
-    "obtainMessage(III)Landroid/os/Message;": function (this: JHandler, w: number, a1: number, a2: number) {
-      return obtain(this, w, null, a1, a2);
-    },
-    "obtainMessage(IIILjava/lang/Object;)Landroid/os/Message;": function (this: JHandler, w: number, a1: number, a2: number, obj: unknown) {
-      return obtain(this, w, obj, a1, a2);
-    },
+    "obtainMessage()Landroid/os/Message;": function (this: JHandler) { return obtain(this); },
+    "obtainMessage(I)Landroid/os/Message;": function (this: JHandler, w: number) { return obtain(this, w); },
+    "obtainMessage(ILjava/lang/Object;)Landroid/os/Message;": function (this: JHandler, w: number, o: unknown) { return obtain(this, w, o); },
+    "obtainMessage(III)Landroid/os/Message;": function (this: JHandler, w: number, a1: number, a2: number) { return obtain(this, w, null, a1, a2); },
+    "obtainMessage(IIILjava/lang/Object;)Landroid/os/Message;": function (this: JHandler, w: number, a1: number, a2: number, obj: unknown) { return obtain(this, w, obj, a1, a2); },
     "static createAsync(Landroid/os/Looper;)Landroid/os/Handler;": (l: JLooper) => {
       const h = new JHandler(); h.looper = l ?? mainLooper; return h;
     },

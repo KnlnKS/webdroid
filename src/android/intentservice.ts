@@ -1,7 +1,7 @@
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { mkExecutor } from "../jvm/natives/jconc";
-import { JService } from "./runningservices";
+import { JService } from "./app";
 import type { JIntent } from "./intent";
 
 class JIntentService extends JService { executor: unknown = null; redeliver = false; }
