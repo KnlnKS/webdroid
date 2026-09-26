@@ -2311,6 +2311,8 @@ rt.register({
     "removeGlobalOnLayoutListener(Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;)V": function (this: JVTO, l: unknown) { removeFrom(this.globalLayoutLs, l); },
     "isAlive()Z": () => 1,
     "dispatchOnGlobalLayout()V": function (this: JVTO) { return this.dispatchGlobalLayout(); },
+    // hidden API that Compose reaches reflectively after scrolling
+    "dispatchOnScrollChanged()V": function (this: JVTO) { return this.dispatchScrollChanged(); },
     // true when any listener asked for the draw to be cancelled, as ViewTreeObserver reports it
     "dispatchOnPreDraw()Z": async function (this: JVTO) {
       let cancelled = 0;
