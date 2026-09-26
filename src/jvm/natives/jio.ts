@@ -787,8 +787,8 @@ rt.register({
       this.pos++;
       return bytes[0];
     }),
-    "read([B)I": driven(function* (this: JRAF, b: Int8Array): Gen { return yield rafRead(this, b, 0, b.length); }),
-    "read([BII)I": driven(function* (this: JRAF, b: Int8Array, off: number, len: number): Gen { return yield rafRead(this, b, off, len); }),
+    "read([B)I": function(this: JRAF, b: Int8Array) { return rafRead(this, b, 0, b.length); },
+    "read([BII)I": function(this: JRAF, b: Int8Array, off: number, len: number) { return rafRead(this, b, off, len); },
     "readLine()Ljava/lang/String;": driven(function* (this: JRAF): Gen {
       checkFileOpen(this);
       rafRefresh(this);

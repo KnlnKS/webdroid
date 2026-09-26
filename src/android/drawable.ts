@@ -1489,10 +1489,10 @@ const AT = attrTable(
   "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
   "scaleGravity", "gravity", "orientation", "oneshot", "duration", "scaleWidth", "scaleHeight", "useIntrinsicSizeAsMinimum", "level",
   "pivotX", "pivotY", "translateX", "translateY", "scaleX", "scaleY", "rotation", "fromDegrees", "toDegrees");
-const loadDrawableXml = driven(function* loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): Gen<JDrawable> {
+function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null) {
   const root = parseAXML(bytes);
-  return yield inflateDrawableNode(res, root, theme);
-});
+  return inflateDrawableNode(res, root, theme);
+}
 /** an <item>/<inset>'s drawable: its android:drawable, else its first inline child */
 const itemDrawable = driven(function* itemDrawable(res: Resources, node: XmlNode, theme: JTheme | null): Gen<JDrawable | null> {
   const da = nodeAttr(res, node, AT.drawable);

@@ -253,10 +253,8 @@ rt.register({
 });
 /** CharSequence → text. May be a JS string, a Spannable, or an app class (Compose
  *  AnnotatedString wrappers), so anything unrecognised answers through toString(). */
-export function csText(cs: unknown): string | Promise<string> { return rt.drive(csText$(cs)); }
-function* csText$(cs: unknown): Gen<string> {
-  if (cs instanceof JSpanned) return cs.text;
-  return yield javaCsText(cs);
+export function csText(cs: unknown): string | Promise<string> {
+  return cs instanceof JSpanned ? cs.text : javaCsText(cs);
 }
 function concatText(parts: unknown[]): unknown {
   if (parts.length === 1) return parts[0];
@@ -1433,11 +1431,11 @@ class JDynamicLayout extends JLayout {
   }
 }
 const dynamicMethods: NonNullable<NativeSpec["methods"]> = {
-  "<init>(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFZ)V": driven(function* (this: JDynamicLayout, source: unknown, paint: JTextPaint, width: number, alignment: JSimpleEnum, mult: number, add: number, pad: number): Gen {
+  "<init>(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFZ)V": function(this: JDynamicLayout, source: unknown, paint: JTextPaint, width: number, alignment: JSimpleEnum, mult: number, add: number, pad: number) {
     this.alignment = alignment;
     this.src = source; this.paint = paint; this.width = width; this.spacingMult = mult; this.spacingAdd = add; this.includePad = !!pad;
-    yield this.refresh();
-  }),
+    return this.refresh();
+  },
 };
 for (const [signature, method] of Object.entries(layoutMethods)) {
   if (signature.startsWith("static ") || typeof method !== "function") continue;
@@ -1540,16 +1538,16 @@ rt.register({
 });
 rt.register({ name: "android/text/StaticLayout", ctor: JStaticLayout, sup: "android/text/Layout", methods: {
   "<init>(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFZ)V":
-    driven(function* (this: JStaticLayout, cs: unknown, p: JTextPaint, w: number, alignment: JSimpleEnum, mult: number, add: number, includePad: number): Gen {
+    function(this: JStaticLayout, cs: unknown, p: JTextPaint, w: number, alignment: JSimpleEnum, mult: number, add: number, includePad: number) {
       this.alignment = alignment;
-      yield setupSpannedLayout(this, cs, p, w, mult, add, Number.MAX_SAFE_INTEGER, !!includePad);
+      return setupSpannedLayout(this, cs, p, w, mult, add, Number.MAX_SAFE_INTEGER, !!includePad);
 
-    }),
+    },
 } });
-export const mkSpannedLayout = driven(function* mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy: number = 0): Gen<JLayout> {
+export function mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy: number = 0) {
   const l = new JStaticLayout();
-  return yield setupSpannedLayout(l, cs, p, w, mult, add, maxLines, includePad, breakStrategy);
-});
+  return setupSpannedLayout(l, cs, p, w, mult, add, maxLines, includePad, breakStrategy);
+}
 const setupSpannedLayout = driven(function* setupSpannedLayout(l: JStaticLayout, cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy: number = 0): Gen<JStaticLayout> {
   l.text = spannedString(cs); l.src = cs; l.paint = p; l.width = Math.max(0, w);
   l.spacingMult = mult; l.spacingAdd = add; l.includePad = includePad; l.breakStrategy = breakStrategy;

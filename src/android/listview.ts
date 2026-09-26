@@ -973,10 +973,10 @@ const absSpinnerMethods: NativeSpec["methods"] = {
   "setSelection(I)V": driven(function* (this: JSelSpinner, pos: number): Gen { yield selectPosition(this, pos); }),
   "getSelectedItemPosition()I": function (this: JSelSpinner) { return this.selection; },
   "getSelectedView()Landroid/view/View;": function (this: JSelSpinner) { return this.selView; },
-  "getSelectedItem()Ljava/lang/Object;": driven(function* (this: JSelSpinner): Gen {
+  "getSelectedItem()Ljava/lang/Object;": function(this: JSelSpinner) {
     if (!this.adapter || this.selection < 0) return null;
-    return yield vcall(this.adapter, "getItem", "(I)Ljava/lang/Object;", this.selection);
-  }),
+    return vcall(this.adapter, "getItem", "(I)Ljava/lang/Object;", this.selection);
+  },
   "getSelectedItemId()J": function (this: JSelSpinner) { return selectedRowId(this); },
 };
 rt.register({
