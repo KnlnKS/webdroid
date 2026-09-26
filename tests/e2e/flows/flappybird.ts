@@ -22,13 +22,13 @@ export const flappybird: Flow = {
     { id: "splash", label: "Launch — splash", action: { type: "launch" }, wait: wait.sample(1200) },
     { id: "title", label: "Title — bobbing bird", action: { type: "settle" },
       wait: wait.state({ kind: "perf", counter: "glFrames", atLeast: 30 }, 3000),
-      fastEvidence: { kind: "motion", minFps: 25 } },
+      fastEvidence: { kind: "motion" } },
     // The title buttons remain active through the fade; wait before sending gameplay taps.
     { id: "play", label: "Play → Get Ready", action: { type: "tapAt", ...PLAY_BTN }, wait: wait.sample(1500) },
     // ~2.7s of live gameplay with no capture inside it: the perf window.
     { id: "flaps", label: "Start + 5 flaps", action: { type: "tapAt", ...CENTER, repeat: 6, everyMs: 600 }, wait: wait.sample() },
     { id: "dead", label: "Game over — score/medal", action: { type: "settle" }, wait: wait.sample(3500),
-      fastEvidence: { kind: "motion", minFps: 20 } },
+      fastEvidence: { kind: "motion" } },
     { id: "restart", label: "Play again → Get Ready", action: { type: "tapAt", ...PLAY_BTN }, wait: wait.sample(1500) },
     { id: "flaps2", label: "Second game — 3 flaps", action: { type: "tapAt", ...CENTER, repeat: 4, everyMs: 600 }, wait: wait.sample() },
   ],

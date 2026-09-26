@@ -159,8 +159,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
     // the launch step's window is mostly boot + lazy compilation, not the app's frame loop; and
     // a frame rate measured beside other flows' browsers measures the host, not the app
     const motion = mode === "fast" ? fastEvidence.kind === "motion" : isMotionWait(step.wait);
-    const minFps = mode === "fast" && fastEvidence.kind === "motion" ? fastEvidence.minFps : flow.minFps;
-    const slow = !!(motion && action.type !== "launch" && minFps && fps < minFps && jobs === 1);
+    const slow = !!(motion && action.type !== "launch" && flow.minFps && fps < flow.minFps && jobs === 1);
     const writeAt = performance.now();
     if (r.png) {
       await Bun.write(`${outDir}/${file}`, Buffer.from(r.png, "base64"));

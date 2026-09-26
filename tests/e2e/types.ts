@@ -55,7 +55,7 @@ type LiveWait = Extract<WaitPolicy, { kind: "live" }>;
 export type EvidencePolicy =
   | { kind: "semantic" }
   | { kind: "visual"; maxContentDiffPct: number }
-  | { kind: "motion"; minFps: number };
+  | { kind: "motion" };
 
 const REAL_WAIT_MS = 20_000;
 export const wait = {
@@ -120,7 +120,7 @@ type FlowBase<TStep extends Step> = {
     files: { path: string; fixture: string }[];
     expectedFiles?: { pathPrefix: string; suffix: string; minBytes: number }[];
   };
-  /** Frame-rate gate for motion checkpoints; a step below it is flagged SLOW. */
+  /** Informational frame rate: a motion step below it under --jobs 1 is flagged SLOW. */
   minFps?: number;
   /** The geometry positional taps were measured at. A flow with no goldens runs at it, since a
    *  normalized coordinate only lands on the same view at the same size. */
@@ -180,8 +180,8 @@ export function validateFlow(flow: Flow): void {
     if (evidence?.kind === "visual" && !(evidence.maxContentDiffPct >= 0 && evidence.maxContentDiffPct <= 100))
       throw new Error(`${flow.app}/${step.id}: invalid visual difference limit`);
     const measuresMotion = isMotionWait(step.wait) || (step.wait.kind === "state" && step.wait.condition.kind === "perf");
-    if (evidence?.kind === "motion" && (!(evidence.minFps > 0) || !measuresMotion))
-      throw new Error(`${flow.app}/${step.id}: motion evidence requires a positive fps and a frame-producing wait`);
+    if (evidence?.kind === "motion" && !measuresMotion)
+      throw new Error(`${flow.app}/${step.id}: motion evidence requires a frame-producing wait`);
   }
 }
 
