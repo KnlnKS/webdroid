@@ -420,8 +420,8 @@ ${profileEnd}
     return this.mname === "<clinit>" && this.info.def ? `,${this.literal(this.info.def.typeIdx)}` : "";
   }
 
-  /** A call or class initialization: its value, awaited when it is a promise. Only async bodies
-   *  reach here: a body holding any of these instructions never compiles sync. */
+  /** A call or class initialization: its value, or a suspension when it is a Promise. A body
+   *  holding any of these instructions never compiles as a leaf. */
   private guard(expr: string, out: string[], assignTo = this.t) {
     out.push(`${assignTo}=${expr};${this.suspend(assignTo)}`);
   }

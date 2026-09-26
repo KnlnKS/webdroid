@@ -24,8 +24,8 @@ export const perf = {
   inputMs: 0, compileMs: 0, classesCompiled: 0,
   // main-looper jobs run (Handler messages, frames, input, lifecycle)
   mainJobs: 0,
-  // method bodies emitted without `async` (no call, static access, monitor or allocation)
-  // against those that can suspend. A sync call is ~24x cheaper in the shape we emit.
+  // leaf method bodies that cannot suspend (no call, static access, monitor or allocation)
+  // against those that can, which carry a save point and a lazily built resumable body.
   syncMethods: 0, asyncMethods: 0,
   coldCalls: 0, coldHandlers: 0, hotMethods: 0, osrMethods: 0,
   // Detailed JVM attribution is populated only under ?jvmProfile=1.
