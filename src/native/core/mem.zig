@@ -574,8 +574,10 @@ export fn mem_init(size: u32) void {
     @memset(&S, 0);
     @memset(&L, PLANE_LO);
     @memset(pages[0..pageOf(heap_top + PAGE_SIZE - 1)], USED);
+    // a later reserve hands these out again and must read as fresh memory
     for (pageOf(heap_top)..MAX_PAGES) |i| if (pages[i] == IMAGE) {
         pages[i] = FREE;
+        fill(@intCast(i * PAGE_SIZE), 0, PAGE_SIZE);
     };
     @import("cpu.zig").reset(size > abi.MEM_SIZE_A32);
     @memset(page_flags[0..pageOf(abi.LOW)], 2);
