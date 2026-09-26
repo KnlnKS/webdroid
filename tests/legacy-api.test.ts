@@ -722,7 +722,7 @@ test("a Looper Printer sees the dispatch lines around a handled message", async 
   const handler = await newObj("android/os/Handler", "(Landroid/os/Looper;)V", looper);
   const task = rt.make("test/NoopRunnable");
   await vcall(handler, "post", "(Ljava/lang/Runnable;)Z", task);
-  await new Promise((r) => setTimeout(r, 20));
+  await new Promise((resolve) => setTimeout(resolve, 0)); await onMain(() => {});
   await vcall(looper, "setMessageLogging", "(Landroid/util/Printer;)V", null);
   expect(lines.length).toBe(2);
   expect(lines[0].startsWith(">>>>> Dispatching to ")).toBe(true);

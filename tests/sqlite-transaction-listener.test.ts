@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, jest, test } from "bun:test";
 import initSqlJs from "sql.js";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
@@ -81,8 +81,11 @@ test("SQLite binary snapshots preserve large files and live connection-local sta
   vfs.write(path, seed.export()); seed.close();
   const db = await openDatabase(path, 0);
   db.db!.exec("CREATE TEMP TABLE changes(n); CREATE TEMP TRIGGER track AFTER INSERT ON payload BEGIN INSERT INTO changes VALUES (1); END");
-  await vcall(db, "execSQL", "(Ljava/lang/String;)V", "INSERT INTO payload VALUES (x'010203')");
-  await Bun.sleep(500);
+  jest.useFakeTimers();
+  try {
+    await vcall(db, "execSQL", "(Ljava/lang/String;)V", "INSERT INTO payload VALUES (x'010203')");
+    jest.runOnlyPendingTimers();
+  } finally { jest.useRealTimers(); }
   const saved = new sql.Database(vfs.read(path)!);
   expect(saved.exec("SELECT length(value) FROM payload")[0].values).toEqual([[6 * 1024 * 1024], [3]]);
   expect(db.db!.exec("SELECT count(*) FROM changes")[0].values).toEqual([[1]]);

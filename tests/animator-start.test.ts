@@ -3,6 +3,7 @@ import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
 import { mangleMethod, jarray } from "../src/jvm/abi";
 import { newObj, vcall, vcallOn, curThread, JThread, JFloat, box } from "../src/jvm/natives/jlang";
+import { onMain } from "../src/android/mainloop";
 import type { JPoint } from "../src/android/graphics";
 
 rt.linkNatives();
@@ -90,7 +91,7 @@ test("AnimatorSet dispatches the directional end callback", async () => {
   const animator = await newObj("android/animation/AnimatorSet");
   await vcall(animator, "addListener", "(Landroid/animation/Animator$AnimatorListener;)V", listener);
   await vcall(animator, "start", "()V");
-  await Bun.sleep(10);
+  await new Promise((resolve) => setTimeout(resolve, 0)); await onMain(() => {});
   expect(listener.reverse).toEqual([0]);
 });
 
@@ -132,7 +133,6 @@ rt.register({ name: "test/TimeListener", ctor: TimeListener, ifaces: ["android/a
 } });
 test("TimeAnimator starts at zero and keeps ticking beyond the inherited duration", async () => {
   const { uiState } = await import("../src/android/view");
-  const { onMain } = await import("../src/android/mainloop");
   const listener = await newObj("test/TimeListener"), animator = await newObj("android/animation/TimeAnimator");
   await vcall(animator, "setTimeListener", "(Landroid/animation/TimeAnimator$TimeListener;)V", listener);
   await vcall(animator, "setDuration", "(J)Landroid/animation/ValueAnimator;", 0n);
@@ -184,7 +184,6 @@ test("AnimatorSet notifies start listeners before starting its children", async 
 });
 
 test("AnimatorSet completion waits for the main job and serializes end listeners", async () => {
-  const { onMain } = await import("../src/android/mainloop");
   const set = await newObj("android/animation/AnimatorSet"), events: string[] = [];
   let release!: () => void, finish!: () => void;
   const blocked = new Promise<void>(resolve => { release = resolve; });

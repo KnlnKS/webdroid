@@ -9,7 +9,7 @@
     "worker:dev": "bun run build:prod && wrangler dev",
     "worker:check": "bun run build:prod && wrangler deploy --env=\"\" --dry-run",
     "typecheck": "bun scripts/build-core.ts && wrangler types && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json",
-    "test": "bun test src tests",
+    "test": "bun test --parallel src tests",
     "test:focused": "bun scripts/test-focused.ts",
     "inspect": "bun scripts/inspect.ts",
     "smoke": "bun scripts/smoke.ts",
