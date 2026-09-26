@@ -232,7 +232,7 @@ const methods: NativeSpec["methods"] = {
     const result = (yield newObj("java/util/HashMap"));
     for (const account of accounts()) if (owns(account) && (type === null || account.type === type)) {
       const visibility = packages.get(account.owner)?.uid === packages.get(pkg)?.uid ? 1 : account.visibility[pkg] ?? 4;
-      (yield vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", toJ(account), boxInt(visibility)));
+      yield vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", toJ(account), boxInt(visibility));
     }
     return result;
   }),

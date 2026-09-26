@@ -998,7 +998,7 @@ rt.register({
     "connect()V": driven(function* (this: JURLConnection): Gen {
       this.connected = 1;
       // Fetch buffers uploads: connecting must leave the output stream writable until a response is requested.
-      if (!this.doOut) (yield this.connect());
+      if (!this.doOut) yield this.connect();
     }),
     "getURL()Ljava/net/URL;": function (this: JURLConnection) { return this.url; },
     "getInputStream()Ljava/io/InputStream;": withRes(function (r) {

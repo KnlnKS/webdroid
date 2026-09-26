@@ -10,7 +10,7 @@ rt.register({ name: "webdroid/ResultReceiverBinder", ctor: JResultBinder, sup: "
   "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JResultBinder, code: number, data: JParcel, reply: JParcel | null): Gen {
     if (code === 0x5f4e5446 && reply) { (yield vcall(reply, "writeString", "(Ljava/lang/String;)V", "android.os.IResultReceiver")); return 1; }
     if (code !== 1) return 0;
-    (yield vcall(data, "enforceInterface", "(Ljava/lang/String;)V", "android.os.IResultReceiver"));
+    yield vcall(data, "enforceInterface", "(Ljava/lang/String;)V", "android.os.IResultReceiver");
     const result = (yield vcall(data, "readInt", "()I"));
     const bundle = (yield vcall(data, "readInt", "()I")) ? (yield vcall(data, "readBundle", "()Landroid/os/Bundle;")) : null;
     (yield vcall(this.receiver, "send", "(ILandroid/os/Bundle;)V", result, bundle)); return 1;
@@ -27,9 +27,9 @@ rt.register({ name: "android/os/ResultReceiver", ctor: JResultReceiver, ifaces: 
       if (this.remote) {
         if (!this.binder) return;
         const parcel = new JParcel();
-        (yield vcall(parcel, "writeInterfaceToken", "(Ljava/lang/String;)V", "android.os.IResultReceiver"));
+        yield vcall(parcel, "writeInterfaceToken", "(Ljava/lang/String;)V", "android.os.IResultReceiver");
         (yield vcall(parcel, "writeInt", "(I)V", code)); (yield vcall(parcel, "writeInt", "(I)V", data ? 1 : 0));
-        if (data) (yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", data));
+        if (data) yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", data);
         try { (yield vcall(this.binder, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, parcel, null, 1)); }
         catch (error) { if (!rt.iof(error, "android/os/RemoteException")) throw error; }
         return;
@@ -45,6 +45,6 @@ rt.register({ name: "android/os/ResultReceiver", ctor: JResultReceiver, ifaces: 
         rt.link("webdroid/ResultReceiverBinder");
         const binder = new JResultBinder(); binder.receiver = this; binder.descriptor = "android.os.IResultReceiver"; this.binder = binder;
       }
-      (yield vcall(parcel, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.binder));
+      yield vcall(parcel, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.binder);
     }),
 } });

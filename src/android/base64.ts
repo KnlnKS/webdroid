@@ -108,9 +108,9 @@ rt.register({
       const body = enc(Int8Array.from(this.chunks), 0, this.chunks.length, this.flags);
       this.chunks.length = 0;
       if (!this.out) return;
-      (yield vcall(this.out, "write", "([BII)V", body, 0, body.length));
-      (yield vcall(this.out, "flush", "()V"));
-      if (!(this.flags & NO_CLOSE)) (yield vcall(this.out, "close", "()V"));
+      yield vcall(this.out, "write", "([BII)V", body, 0, body.length);
+      yield vcall(this.out, "flush", "()V");
+      if (!(this.flags & NO_CLOSE)) yield vcall(this.out, "close", "()V");
     }),
   },
 });

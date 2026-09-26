@@ -38,13 +38,13 @@ class JScaleGestureDetector extends JObj {
   *touch$(event: JMotionEvent): Gen<number> {
     this.time = event.eventTime;
     const action = event.action & 255;
-    if (this.quick) (yield this.detector!.touch(event));
+    if (this.quick) yield this.detector!.touch(event);
     const count: number = (yield vcall(event, "getPointerCount", "()I"));
     const button = ((yield vcall(event, "getButtonState", "()I")) & 32) !== 0;
     const cancelled = this.anchor === 2 && !button, complete = action === 1 || action === 3 || cancelled;
     if (action === 0 || complete) {
       if (this.inProgress) {
-        (yield vcall(this.listener, "onScaleEnd", "(Landroid/view/ScaleGestureDetector;)V", this));
+        yield vcall(this.listener, "onScaleEnd", "(Landroid/view/ScaleGestureDetector;)V", this);
         this.inProgress = false; this.initialSpan = 0; this.anchor = 0;
       } else if (this.anchor && complete) { this.initialSpan = 0; this.anchor = 0; }
       if (complete) return 1;
@@ -70,7 +70,7 @@ class JScaleGestureDetector extends JObj {
     const wasInProgress = this.inProgress;
     this.focusX = x; this.focusY = y;
     if (!this.anchor && this.inProgress && (span < this.minSpan || changed)) {
-      (yield vcall(this.listener, "onScaleEnd", "(Landroid/view/ScaleGestureDetector;)V", this));
+      yield vcall(this.listener, "onScaleEnd", "(Landroid/view/ScaleGestureDetector;)V", this);
       this.inProgress = false; this.initialSpan = span;
     }
     if (changed) {

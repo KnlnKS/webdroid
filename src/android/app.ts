@@ -118,7 +118,7 @@ function* dispatchSplashExit$(activity: JActivity): Gen<void> {
   if (!splash?.listener || splash.exitSent) return;
   splash.exitSent = true;
   rt.link("android/window/SplashScreenView");
-  (yield vcall(splash.listener, "onSplashScreenExit", "(Landroid/window/SplashScreenView;)V", new JSplashScreenView()));
+  yield vcall(splash.listener, "onSplashScreenExit", "(Landroid/window/SplashScreenView;)V", new JSplashScreenView());
 }
 export class JActivity extends JContextWrapper {
   window = new JWindow();
@@ -187,30 +187,30 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     return startActionMode(this, cb);
   },
   "setContentView(I)V": driven(function* (this: JActivity, layoutId: number): Gen {
-    (yield ensureDecor(this));
+    yield ensureDecor(this);
     for (const child of [...this.window.contentParent!.children]) (yield detachView(this.window.contentParent!, child));
-    (yield inflateLayout(this, layoutId, this.window.contentParent, true));
+    yield inflateLayout(this, layoutId, this.window.contentParent, true);
     requestLayout(this.window.contentParent!);
   }),
   "setContentView(Landroid/view/View;)V": driven(function* (this: JActivity, v: JView): Gen {
-    (yield ensureDecor(this));
+    yield ensureDecor(this);
     for (const child of [...this.window.contentParent!.children]) (yield detachView(this.window.contentParent!, child));
     if (!v.lp) {
       const lp = rt.make("android/widget/FrameLayout$LayoutParams");
       lp.width = -1; lp.height = -1;
       v.lp = lp;
     }
-    (yield attachView(this.window.contentParent!, v));
+    yield attachView(this.window.contentParent!, v);
     requestLayout(this.window.contentParent!);
   }),
   "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (this: JActivity, v: JView, lp: any): Gen {
     v.lp = lp;
-    (yield callSelf(activityMethods, "setContentView(Landroid/view/View;)V", this, v));
+    yield callSelf(activityMethods, "setContentView(Landroid/view/View;)V", this, v);
   }),
   "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (this: JActivity, v: JView, lp: any): Gen {
-    (yield ensureDecor(this));
+    yield ensureDecor(this);
     v.lp = lp;
-    (yield attachView(this.window.contentParent!, v));
+    yield attachView(this.window.contentParent!, v);
   }),
   "findViewById(I)Landroid/view/View;": function (this: JActivity, id: number) {
     return vcall(this.window, "findViewById", "(I)Landroid/view/View;", id);
@@ -222,8 +222,8 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "onPause()V": function (this: JActivity) { this.resumed = false; return dispatchFragLifecycle(this, "onPause"); },
   "onStop()V": function (this: JActivity) { this.started = false; return dispatchFragLifecycle(this, "onStop"); },
   "onDestroy()V": driven(function* (this: JActivity): Gen {
-    if (this.actionMode) (yield vcall(this.actionMode, "finish", "()V"));
-    (yield dispatchFragLifecycle(this, "onDestroy"));
+    if (this.actionMode) yield vcall(this.actionMode, "finish", "()V");
+    yield dispatchFragLifecycle(this, "onDestroy");
   }),
   /**
    * AOSP Activity.onBackPressed: collapse an expanded action view, then pop the fragment
@@ -235,7 +235,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     if (bar && ((yield vcall(bar, "collapseActionView", "()Z")))) return;
     const fm = (yield vcall(this, "getFragmentManager", "()Landroid/app/FragmentManager;"));
     if (fm && !((yield vcall(fm, "isStateSaved", "()Z"))) && ((yield vcall(fm, "popBackStackImmediate", "()Z")))) return;
-    (yield vcall(this, "finish", "()V"));
+    yield vcall(this, "finish", "()V");
   }),
   // Android routes the options panel through onCreatePanelMenu/onPreparePanel/onMenuItemSelected;
   // apps (and androidx) override those, so the panel entry points must exist and delegate.
@@ -263,7 +263,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
    * the stack: Up on it is Back. Routed through finish() so an app override still runs.
    */
   "onNavigateUp()Z": driven(function* (this: JActivity): Gen {
-    (yield vcall(this, "finish", "()V"));
+    yield vcall(this, "finish", "()V");
     return 1;
   }),
   "onNavigateUpFromChild(Landroid/app/Activity;)Z": function (this: JActivity) {
@@ -291,7 +291,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     callSelf(activityMethods, "setTitle(Ljava/lang/CharSequence;)V", this, resString(this.$host.res, id));
   },
   "getActionBar()Landroid/app/ActionBar;": driven(function* (this: JActivity): Gen {
-    (yield ensureDecor(this));
+    yield ensureDecor(this);
     if (!this.actionBarObj) {
       const info = rt.link("webdroid/ActionBar");
       this.actionBarObj = new info.ctor();
@@ -329,7 +329,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
       );
       return;
     }
-    (yield launchIntent(this.$host, intent, { act: this, code }));
+    yield launchIntent(this.$host, intent, { act: this, code });
   }),
   // ActivityCompat — and so every androidx ActivityResultRegistry launcher — calls the options
   // overload, which must funnel into the body above rather than carry a second copy of it.
@@ -399,7 +399,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "getVolumeControlStream()I": () => 3,
   "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JActivity, event: JMotionEvent): Gen {
     const thread = curThread;
-    if (event.action === 0) (yield vcallOn(thread, this, "onUserInteraction", "()V"));
+    if (event.action === 0) yield vcallOn(thread, this, "onUserInteraction", "()V");
     if ((yield vcallOn(thread, this.window, "superDispatchTouchEvent", "(Landroid/view/MotionEvent;)Z", event))) return 1;
     return vcallOn(thread, this, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", event);
   }),
@@ -1064,7 +1064,7 @@ rt.register({
     "attachInfo(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V": driven(function* (this: { $ctx: unknown }, c: unknown): Gen {
       if (this.$ctx) return;
       this.$ctx = c;
-      (yield vcall(this, "onCreate", "()Z"));
+      yield vcall(this, "onCreate", "()Z");
     }),
     "bulkInsert(Landroid/net/Uri;[Landroid/content/ContentValues;)I": driven(function* (this: JObj, uri: unknown, values: unknown[]): Gen {
       if (!uri || !values) rt.npe();
@@ -1157,16 +1157,16 @@ rt.register({
       const suffix = action.slice("android.appwidget.action.APPWIDGET_".length);
       const ids = intent.extras.map.get("appWidgetIds") as Int32Array | null ?? null;
       const manager = systemService(context, "appwidget");
-      if (suffix === "UPDATE" && ids?.length) (yield vcall(this, "onUpdate", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;[I)V", context, manager, ids));
+      if (suffix === "UPDATE" && ids?.length) yield vcall(this, "onUpdate", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;[I)V", context, manager, ids);
       else if (suffix === "DELETED" && ids?.length) (yield vcall(this, "onDeleted", "(Landroid/content/Context;[I)V", context, ids));
       else if (suffix === "ENABLED") (yield vcall(this, "onEnabled", "(Landroid/content/Context;)V", context));
       else if (suffix === "DISABLED") (yield vcall(this, "onDisabled", "(Landroid/content/Context;)V", context));
       else if (suffix === "OPTIONS_CHANGED") {
         const id = Number(intent.extras.map.get("appWidgetId") ?? -1);
-        if (id !== -1) (yield vcall(this, "onAppWidgetOptionsChanged", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;ILandroid/os/Bundle;)V", context, manager, id, intent.extras.map.get("appWidgetOptions") ?? null));
+        if (id !== -1) yield vcall(this, "onAppWidgetOptionsChanged", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;ILandroid/os/Bundle;)V", context, manager, id, intent.extras.map.get("appWidgetOptions") ?? null);
       } else if (suffix === "RESTORED") {
         const oldIds = intent.extras.map.get("appWidgetOldIds") as Int32Array | null ?? null;
-        if (oldIds && ids) (yield vcall(this, "onRestored", "(Landroid/content/Context;[I[I)V", context, oldIds, ids));
+        if (oldIds && ids) yield vcall(this, "onRestored", "(Landroid/content/Context;[I[I)V", context, oldIds, ids);
       }
     }),
     ...noops("<init>()V", "onUpdate(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;[I)V",

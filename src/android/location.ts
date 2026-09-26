@@ -138,18 +138,18 @@ const locMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JLocation, p: JParcel): Gen {
-    (yield vcall(p, "writeString8", "(Ljava/lang/String;)V", this.provider));
+    yield vcall(p, "writeString8", "(Ljava/lang/String;)V", this.provider);
     let mask = this.mock ? 16 : 0;
     for (const [name, , , bit] of optional) if (name in this.opt) mask |= bit;
-    (yield vcall(p, "writeInt", "(I)V", mask));
-    (yield vcall(p, "writeLong", "(J)V", this.time));
-    (yield vcall(p, "writeLong", "(J)V", this.elapsed));
-    if (mask & 256) (yield vcall(p, "writeDouble", "(D)V", this.opt.ElapsedRealtimeUncertaintyNanos));
-    (yield vcall(p, "writeDouble", "(D)V", this.lat));
-    (yield vcall(p, "writeDouble", "(D)V", this.lon));
+    yield vcall(p, "writeInt", "(I)V", mask);
+    yield vcall(p, "writeLong", "(J)V", this.time);
+    yield vcall(p, "writeLong", "(J)V", this.elapsed);
+    if (mask & 256) yield vcall(p, "writeDouble", "(D)V", this.opt.ElapsedRealtimeUncertaintyNanos);
+    yield vcall(p, "writeDouble", "(D)V", this.lat);
+    yield vcall(p, "writeDouble", "(D)V", this.lon);
     for (const [name, , d, bit] of optional) if (bit !== 256 && mask & bit)
-      (yield vcall(p, d === "D" ? "writeDouble" : "writeFloat", `(${d})V`, this.opt[name]));
-    (yield vcall(p, "writeBundle", "(Landroid/os/Bundle;)V", this.extras));
+      yield vcall(p, d === "D" ? "writeDouble" : "writeFloat", `(${d})V`, this.opt[name]);
+    yield vcall(p, "writeBundle", "(Landroid/os/Bundle;)V", this.extras);
   }),
 };
 for (const [name, suffix, d] of optional) {

@@ -129,7 +129,7 @@ rt.register({
     }),
     "sorted(Ljava/util/Comparator;)Ljava/util/stream/Stream;": driven(function* (this: JStream, cmp: unknown): Gen {
       const out = this.a.slice();
-      (yield sortInPlace(out, cmp));
+      yield sortInPlace(out, cmp);
       return mkStream(out);
     }),
     "limit(J)Ljava/util/stream/Stream;": function (this: JStream, n: bigint) { return mkStream(this.a.slice(0, Number(n))); },

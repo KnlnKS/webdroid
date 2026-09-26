@@ -14,7 +14,7 @@ rt.register({ name: "android/os/RemoteCallbackList$Callback", ctor: JCallback, i
   "binderDied()V": driven(function* (this: JCallback): Gen {
     this.dead = true;
     this.list.callbacks.delete(this.binder);
-    (yield vcall(this.list, "onCallbackDied", "(Landroid/os/IInterface;Ljava/lang/Object;)V", this.callback, this.cookie));
+    yield vcall(this.list, "onCallbackDied", "(Landroid/os/IInterface;Ljava/lang/Object;)V", this.callback, this.cookie);
   }),
 } });
 
@@ -57,19 +57,19 @@ rt.register({ name: "android/os/RemoteCallbackList", ctor: JRemoteCallbackList, 
     try { (yield vcall(binder, "linkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)V", entry, 0)); }
     catch (error) { if (rt.iof(error, "android/os/RemoteException")) return 0; throw error; }
     if (this.killed || entry.dead) {
-      (yield vcall(binder, "unlinkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)Z", entry, 0));
+      yield vcall(binder, "unlinkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)Z", entry, 0);
       return 0;
     }
     const previous = this.callbacks.get(binder);
     this.callbacks.set(binder, entry);
-    if (previous) (yield vcall(binder, "unlinkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)Z", previous, 0));
+    if (previous) yield vcall(binder, "unlinkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)Z", previous, 0);
     return 1;
   }),
   "unregister(Landroid/os/IInterface;)Z": driven(function* (this: JRemoteCallbackList, callback: unknown): Gen {
     const binder = (yield vcall(callback, "asBinder", "()Landroid/os/IBinder;")), entry = this.callbacks.get(binder);
     if (!entry) return 0;
     this.callbacks.delete(binder);
-    (yield vcall(binder, "unlinkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)Z", entry, 0));
+    yield vcall(binder, "unlinkToDeath", "(Landroid/os/IBinder$DeathRecipient;I)Z", entry, 0);
     return 1;
   }),
   "kill()V": driven(function* (this: JRemoteCallbackList): Gen {

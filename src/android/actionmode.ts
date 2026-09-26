@@ -45,15 +45,15 @@ rt.register({
     ...fieldGetters({ "getMenu()Landroid/view/Menu;": "menu", "getTitle()Ljava/lang/CharSequence;": "title",
       "getSubtitle()Ljava/lang/CharSequence;": "subtitle", "getCustomView()Landroid/view/View;": "customView" }),
     "invalidate()V": driven(function* (this: JActionMode): Gen {
-      if (this.cb) (yield vcall(this.cb, "onPrepareActionMode", "(Landroid/view/ActionMode;Landroid/view/Menu;)Z", this, this.menu));
+      if (this.cb) yield vcall(this.cb, "onPrepareActionMode", "(Landroid/view/ActionMode;Landroid/view/Menu;)Z", this, this.menu);
       invalidate();
     }),
     "finish()V": driven(function* (this: JActionMode): Gen {
       if (this.finished) return;
       this.finished = true;
-      (yield this.onFinish?.());
-      if (this.cb) (yield vcall(this.cb, "onDestroyActionMode", "(Landroid/view/ActionMode;)V", this));
-      (yield this.onFinished?.());
+      yield this.onFinish?.();
+      if (this.cb) yield vcall(this.cb, "onDestroyActionMode", "(Landroid/view/ActionMode;)V", this);
+      yield this.onFinished?.();
       invalidate();
     }),
   },

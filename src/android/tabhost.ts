@@ -36,9 +36,9 @@ export class JTabWidget extends JLinearLayout {
   setCurrent(i: number): void | Promise<void> { return rt.drive(this.setCurrent$(i)); }
   *setCurrent$(i: number): Gen<void> {
     if (i < 0 || i >= this.children.length || i === this.selectedTab) return;
-    if (this.selectedTab !== -1 && this.children[this.selectedTab]) (yield vcall(this.children[this.selectedTab], "setSelected", "(Z)V", 0));
+    if (this.selectedTab !== -1 && this.children[this.selectedTab]) yield vcall(this.children[this.selectedTab], "setSelected", "(Z)V", 0);
     this.selectedTab = i;
-    (yield vcall(this.children[i], "setSelected", "(Z)V", 1));
+    yield vcall(this.children[i], "setSelected", "(Z)V", 1);
   }
 }
 const setVisibility = (v: JView, vis: number) => vcall(v, "setVisibility", "(I)V", vis);
@@ -114,7 +114,7 @@ rt.register({
   name: "android/widget/TabHost", ctor: JTabHost, sup: "android/widget/FrameLayout",
   methods: {
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JTabHost, c: unknown, set: JAttrSet | null): Gen {
-      (yield initViewFromCtx(this, c, set));
+      yield initViewFromCtx(this, c, set);
     }),
     "newTabSpec(Ljava/lang/String;)Landroid/widget/TabHost$TabSpec;": function (this: JTabHost, tag: string | null) {
       if (tag === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "tag must be non-null");
@@ -135,13 +135,13 @@ rt.register({
       if (!spec.content) throw rt.mkThrowable("java/lang/IllegalArgumentException", "you must specify a way to create the tab content");
       if (!this.tabWidget) throw rt.mkThrowable("java/lang/NullPointerException", "TabHost.setup() was not called");
       const indicator = (yield spec.indicator());
-      (yield vcall(this.tabWidget, "addView", "(Landroid/view/View;)V", indicator));
+      yield vcall(this.tabWidget, "addView", "(Landroid/view/View;)V", indicator);
       this.specs.push(spec);
-      if (this.current === -1) (yield vcall(this, "setCurrentTab", "(I)V", 0));
+      if (this.current === -1) yield vcall(this, "setCurrentTab", "(I)V", 0);
     }),
     "clearAllTabs()V": driven(function* (this: JTabHost): Gen {
-      if (this.tabWidget) (yield vcall(this.tabWidget, "removeAllViews", "()V"));
-      if (this.tabContent) (yield vcall(this.tabContent, "removeAllViews", "()V"));
+      if (this.tabWidget) yield vcall(this.tabWidget, "removeAllViews", "()V");
+      if (this.tabContent) yield vcall(this.tabContent, "removeAllViews", "()V");
       this.specs.length = 0; this.current = -1; this.currentView = null;
       if (this.tabWidget) this.tabWidget.selectedTab = -1;
       invalidate(this);
@@ -169,8 +169,8 @@ rt.register({
   methods: {
     "onClick(Landroid/view/View;)V": driven(function* (this: JTabClick): Gen {
       if (!this.host) return;
-      (yield vcall(this.host, "setCurrentTab", "(I)V", this.index));
-      if (this.host.tabContent) (yield vcall(this.host.tabContent, "requestFocus", "()Z"));
+      yield vcall(this.host, "setCurrentTab", "(I)V", this.index);
+      if (this.host.tabContent) yield vcall(this.host.tabContent, "requestFocus", "()Z");
     }),
   },
 });
@@ -179,28 +179,28 @@ rt.register({
   name: "android/widget/TabWidget", ctor: JTabWidget, sup: "android/widget/LinearLayout",
   methods: {
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JTabWidget, c: unknown, set: JAttrSet | null): Gen {
-      (yield callSelf(linearMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set));
+      yield callSelf(linearMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
       this.orientation = 0;
     }),
     // every tab indicator shares the row equally, and taps select its tab
     "addView(Landroid/view/View;)V": driven(function* (this: JTabWidget, child: JView): Gen {
       if (!child.lp) {
         const lp = (yield newObj("android/widget/LinearLayout$LayoutParams", "(IIF)V", 0, MATCH_PARENT, 1));
-        (yield vcall(child, "setLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)V", lp));
+        yield vcall(child, "setLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)V", lp);
       }
-      (yield vcall(child, "setFocusable", "(Z)V", 1));
-      (yield vcall(child, "setClickable", "(Z)V", 1));
-      (yield (JLinearLayout.prototype as unknown as Record<string, (c: JView) => Promise<void>>)[M_ADD_VIEW].call(this, child));
+      yield vcall(child, "setFocusable", "(Z)V", 1);
+      yield vcall(child, "setClickable", "(Z)V", 1);
+      yield (JLinearLayout.prototype as unknown as Record<string, (c: JView) => Promise<void>>)[M_ADD_VIEW].call(this, child);
       const click = new JTabClick(); click.host = this.host; click.index = this.children.length - 1;
-      (yield vcall(child, "setOnClickListener", "(Landroid/view/View$OnClickListener;)V", click));
+      yield vcall(child, "setOnClickListener", "(Landroid/view/View$OnClickListener;)V", click);
     }),
     "getTabCount()I": function (this: JTabWidget) { return this.children.length; },
     "getChildTabViewAt(I)Landroid/view/View;": function (this: JTabWidget, i: number) { return this.children[i] ?? null; },
     "setCurrentTab(I)V": function (this: JTabWidget, i: number) { return this.setCurrent(i); },
     "focusCurrentTab(I)V": driven(function* (this: JTabWidget, i: number): Gen {
-      (yield this.setCurrent(i));
+      yield this.setCurrent(i);
       const v = this.children[i];
-      if (v) (yield vcall(v, "requestFocus", "()Z"));
+      if (v) yield vcall(v, "requestFocus", "()Z");
     }),
     "setStripEnabled(Z)V": function (this: JTabWidget, on: number) { this.stripEnabled = !!on; },
     "isStripEnabled()Z": function (this: JTabWidget) { return this.stripEnabled ? 1 : 0; },

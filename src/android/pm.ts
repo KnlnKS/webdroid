@@ -717,7 +717,7 @@ rt.register({
       driven(function* (pkg: string | null, includeSplits: number, required: number, trustedInstallers: unknown, listener: unknown): Gen  {
         if (pkg === null || trustedInstallers === null || listener === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
         const checksums = (yield apkChecksums(pkg, includeSplits !== 0, required));
-        (yield vcall(listener, "onChecksumsReady", "(Ljava/util/List;)V", checksums));
+        yield vcall(listener, "onChecksumsReady", "(Ljava/util/List;)V", checksums);
       }),
     "getProviderInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ProviderInfo;": (comp: JComponentName, flags: number) => {
       const [cls, node, owner] = lookupComponent(comp, "provider", flags);
@@ -781,7 +781,7 @@ rt.register({
         if (flags & 0x8000000) pi.signingInfo = signingInfo(certificates);
       }
       pi.reqFeatures = reqFeatures();
-      if (flags & 0x1000) (yield fillRequestedPermissions(pi));
+      if (flags & 0x1000) yield fillRequestedPermissions(pi);
       if (flags & 2) pi.receivers = jarray([...manifestReceivers].filter(([name, node]) => visibleComponent(name, node, flags)).map(([name, node]) => receiverInfo(name, node, flags)), "Landroid/content/pm/ActivityInfo;");
       if (flags & 4) pi.services = jarray([...manifestServices].filter(([name, node]) => visibleComponent(name, node, flags)).map(([name, node]) => serviceInfo(name, node, flags)), "Landroid/content/pm/ServiceInfo;");
       if (flags & 1) pi.activities = jarray([...manifestActivities].filter(([name, node]) => visibleComponent(name, node, flags)).map(([name]) => mkActivityInfo(name.replace(/\//g, "."), flags)), "Landroid/content/pm/ActivityInfo;");

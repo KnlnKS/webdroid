@@ -249,7 +249,7 @@ async function showListPreferenceDialog(pref: JListPreference) {
   await vcall(b, "setItems", "([Ljava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)Landroid/app/AlertDialog$Builder;",
     pref.entries, {
       [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: driven(function* (_d: unknown, idx: number): Gen  {
-        (yield setListValue(pref, pref.entryValues[idx] ?? String(idx), true));
+        yield setListValue(pref, pref.entryValues[idx] ?? String(idx), true);
       }),
     });
   await vcall(b, "show", "()Landroid/app/AlertDialog;");
@@ -472,7 +472,7 @@ const preferenceFragmentMethods: NonNullable<NativeSpec["methods"]> = {
       const adapter = new JPreferenceAdapter();
       adapter.frag = this;
       this.adapter = adapter;
-      (yield vcall(list, "setAdapter", "(Landroid/widget/ListAdapter;)V", adapter));
+      yield vcall(list, "setAdapter", "(Landroid/widget/ListAdapter;)V", adapter);
       return list;
     }),
 };

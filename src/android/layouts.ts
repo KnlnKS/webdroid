@@ -50,7 +50,7 @@ const frameMethods: NativeSpec["methods"] = {
     let mw = 0, mh = 0, matchCount = 0, state = 0;
     for (const c of this.children) {
       if (c.visibility === 8 && !this.measureAllChildren) continue;
-      (yield measureChildWithMargins(this, c, wSpec, 0, hSpec, 0));
+      yield measureChildWithMargins(this, c, wSpec, 0, hSpec, 0);
       const lp = c.lp instanceof JMarginLP ? c.lp : null;
       mw = Math.max(mw, c.measuredW + (lp ? lp.marginL + lp.marginR : 0));
       mh = Math.max(mh, c.measuredH + (lp ? lp.marginT + lp.marginB : 0));
@@ -72,7 +72,7 @@ const frameMethods: NativeSpec["methods"] = {
         const ch = lp.height === MATCH_PARENT
           ? makeSpec(Math.max(0, this.measuredH - this.padT - this.padB - mt), MS_EXACTLY)
           : childMeasureSpec(hSpec, this.padT + this.padB + mt, lp.height);
-        (yield measureView(c, cw, ch));
+        yield measureView(c, cw, ch);
       }
     }
   }),
@@ -90,7 +90,7 @@ const frameMethods: NativeSpec["methods"] = {
         : hg === 5 ? pw - c.measuredW - mr : pl + ml;
       let y = vg === 16 ? pt + ((ph - pt - c.measuredH) >> 1) + mt - mb
         : vg === 80 ? ph - c.measuredH - mb : pt + mt;
-      (yield layoutView(c, x, y, x + c.measuredW, y + c.measuredH));
+      yield layoutView(c, x, y, x + c.measuredW, y + c.measuredH);
     }
   }),
   "setForegroundGravity(I)V": () => {},
@@ -141,7 +141,7 @@ function crossMargin(c: JView, vertical: boolean): number {
 }
 export const linearMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JLinearLayout, c: unknown, set: JAttrSet | null): Gen {
-    (yield initViewFromCtx(this, c, set));
+    yield initViewFromCtx(this, c, set);
     if (set && this.jres) {
       const ta = obtainStyled(this.jres, this.theme, set, [AID("orientation"), AID("gravity"), AID("weightSum"), AID("showDividers"), AID("dividerPadding"), AID("divider")], 0, 0);
       if (ta.vals[0]) this.orientation = rvInt(this.jres, ta.vals[0], 0);
@@ -149,7 +149,7 @@ export const linearMethods: NativeSpec["methods"] = {
       if (ta.vals[2]) this.weightSum = rvFloat(this.jres, ta.vals[2], 0);
       if (ta.vals[3]) this.showDividers = rvInt(this.jres, ta.vals[3], 0);
       if (ta.vals[4]) this.dividerPadding = Math.round(rvDimen(this.jres, ta.vals[4]));
-      if (ta.vals[5]) (yield callSelf(linearMethods, "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V", this, (yield loadDrawableRV(this.jres, ta.vals[5], this.theme))));
+      if (ta.vals[5]) yield callSelf(linearMethods, "setDividerDrawable(Landroid/graphics/drawable/Drawable;)V", this, (yield loadDrawableRV(this.jres, ta.vals[5], this.theme)));
     }
   }),
   "setOrientation(I)V": function (this: JLinearLayout, o: number) { this.orientation = o; requestLayout(this); },
@@ -215,7 +215,7 @@ export const linearMethods: NativeSpec["methods"] = {
       // to its button row instead of squeezing it to nothing
       const used = totalWeight > 0 ? 0 : totalMain;
       if (excessOnly) { if (vertical) c.lp!.height = WRAP_CONTENT; else c.lp!.width = WRAP_CONTENT; }
-      (yield measureChildWithMargins(this, c, wSpec, vertical ? 0 : used, hSpec, vertical ? used : 0));
+      yield measureChildWithMargins(this, c, wSpec, vertical ? 0 : used, hSpec, vertical ? used : 0);
       if (excessOnly) { if (vertical) c.lp!.height = 0; else c.lp!.width = 0; consumed += vertical ? c.measuredH : c.measuredW; }
       totalMain += (vertical ? c.measuredH : c.measuredW) + mMain;
       const matchCross = wrapCross && (vertical ? c.lp?.width : c.lp?.height) === MATCH_PARENT;
@@ -237,7 +237,7 @@ export const linearMethods: NativeSpec["methods"] = {
           const dim = vertical ? c.lp!.height : c.lp!.width;
           const target = Math.max(0, (dim === 0 ? 0 : vertical ? c.measuredH : c.measuredW) + share);
           const crossSpec = childMeasureSpec(vertical ? wSpec : hSpec, crossPad + mCross, vertical ? c.lp!.width : c.lp!.height);
-          (yield measureView(c, vertical ? crossSpec : makeSpec(target, MS_EXACTLY), vertical ? makeSpec(target, MS_EXACTLY) : crossSpec));
+          yield measureView(c, vertical ? crossSpec : makeSpec(target, MS_EXACTLY), vertical ? makeSpec(target, MS_EXACTLY) : crossSpec);
         }
         totalMain += (vertical ? c.measuredH : c.measuredW) + mMain;
         const matchCross = wrapCross && (vertical ? c.lp?.width : c.lp?.height) === MATCH_PARENT;
@@ -283,14 +283,14 @@ export const linearMethods: NativeSpec["methods"] = {
         const x = hg === 1 ? this.padL + ((this.width() - this.padL - this.padR - c.measuredW + ml - mr) >> 1)
           : hg === 5 ? this.width() - this.padR - c.measuredW - mr : this.padL + ml;
         pos += mt;
-        (yield layoutView(c, x, pos, x + c.measuredW, pos + c.measuredH));
+        yield layoutView(c, x, pos, x + c.measuredW, pos + c.measuredH);
         pos += c.measuredH + mb;
       } else {
         const vg = gravityV(g);
         const y = vg === 16 ? this.padT + ((this.height() - this.padT - this.padB - c.measuredH + mt - mb) >> 1)
           : vg === 80 ? this.height() - this.padB - c.measuredH - mb : this.padT + mt;
         pos += ml;
-        (yield layoutView(c, pos, y, pos + c.measuredW, y + c.measuredH));
+        yield layoutView(c, pos, y, pos + c.measuredW, y + c.measuredH);
         pos += c.measuredW + mr;
       }
     }
@@ -308,7 +308,7 @@ export const linearMethods: NativeSpec["methods"] = {
     };
     for (let i = 0; i < kids.length; i++) if (this.dividerBefore(i)) {
       const c = kids[i], lp = c.lp instanceof JMarginLP ? c.lp : null;
-      (yield draw(vertical ? c.top - (lp?.marginT ?? 0) - size : c.left - (lp?.marginL ?? 0) - size));
+      yield draw(vertical ? c.top - (lp?.marginT ?? 0) - size : c.left - (lp?.marginL ?? 0) - size);
     }
     if (this.showDividers & 4) {
       const c = kids.at(-1), lp = c?.lp instanceof JMarginLP ? c.lp : null;
@@ -472,7 +472,7 @@ function gridLpFromAttrs(res: Resources, set: JAttrSet, lp = new JGridLP()): JGr
 const gridMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Landroid/content/Context;)V": driven(function* (this: JGridLayout, c: unknown): Gen { (yield initViewFromCtx(this, c, null)); }),
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JGridLayout, c: unknown, set: JAttrSet | null): Gen {
-    (yield initViewFromCtx(this, c, set));
+    yield initViewFromCtx(this, c, set);
     if (!set || !this.jres) return;
     const ta = obtainStyled(this.jres, this.theme, set, [AID("orientation"), AID("rowCount"), AID("columnCount"), AID("useDefaultMargins"), AID("alignmentMode")], 0, 0);
     if (ta.vals[0]) this.orientation = rvInt(this.jres, ta.vals[0], 0);
@@ -482,10 +482,10 @@ const gridMethods: NonNullable<NativeSpec["methods"]> = {
     if (ta.vals[4]) this.alignmentMode = rvInt(this.jres, ta.vals[4], 1);
   }),
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": driven(function* (this: JGridLayout, c: unknown, set: JAttrSet | null): Gen {
-    (yield callSelf(gridMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set));
+    yield callSelf(gridMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
   }),
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": driven(function* (this: JGridLayout, c: unknown, set: JAttrSet | null): Gen {
-    (yield callSelf(gridMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set));
+    yield callSelf(gridMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
   }),
   "setOrientation(I)V": function (this: JGridLayout, v: number) { this.orientation = v; requestLayout(this); },
   "getOrientation()I": function (this: JGridLayout) { return this.orientation; },
@@ -515,7 +515,7 @@ const gridMethods: NonNullable<NativeSpec["methods"]> = {
       const cell = this.cells.get(c);
       if (!cell) continue;
       cols = Math.max(cols, cell.col + cell.colSpan); rows = Math.max(rows, cell.row + cell.rowSpan);
-      (yield measureChildWithMargins(this, c, wSpec, 0, hSpec, 0));
+      yield measureChildWithMargins(this, c, wSpec, 0, hSpec, 0);
     }
     const cw = this.colWidths = Array(cols).fill(0), rh = this.rowHeights = Array(rows).fill(0);
     for (const c of kids) {
@@ -545,7 +545,7 @@ const gridMethods: NonNullable<NativeSpec["methods"]> = {
           makeSpec(va.kind === "fill" ? Math.max(0, height) : c.measuredH, MS_EXACTLY)));
       }
       const x = alignInCell(ha.kind, left, width, c.measuredW), y = alignInCell(va.kind, top, height, c.measuredH);
-      (yield layoutView(c, x, y, x + c.measuredW, y + c.measuredH));
+      yield layoutView(c, x, y, x + c.measuredW, y + c.measuredH);
     }
   }),
 };
@@ -601,7 +601,7 @@ rt.register({
   name: "android/widget/TableLayout", ctor: JTableLayout, sup: "android/widget/LinearLayout",
   methods: {
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JTableLayout, c: unknown, set: JAttrSet | null): Gen {
-      (yield callSelf(linearMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set));
+      yield callSelf(linearMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
       this.orientation = 1;
       for (const [attr, cols, all] of [["stretchColumns", "stretchCols", "stretchAll"], ["shrinkColumns", "shrinkCols", "shrinkAll"]] as const) {
         const value = set?.node?.attrs.find(a => a.resId === AID(attr));
@@ -630,7 +630,7 @@ rt.register({
       for (const row of rows) {
         const cells = row.children.filter((c) => c.visibility !== 8);
         for (let i = 0; i < cells.length; i++) {
-          (yield measureView(cells[i], makeSpec(0, MS_UNSPEC), makeSpec(0, MS_UNSPEC)));
+          yield measureView(cells[i], makeSpec(0, MS_UNSPEC), makeSpec(0, MS_UNSPEC));
           const mlp = cells[i].lp instanceof JMarginLP ? cells[i].lp as JMarginLP : null;
           colW[i] = Math.max(colW[i] ?? 0, cells[i].measuredW + (mlp ? mlp.marginL + mlp.marginR : 0));
         }
@@ -647,7 +647,7 @@ rt.register({
         }
       }
       for (const row of rows) row.colWidths = colW;
-      (yield linearOnMeasure.call(this, wSpec, hSpec));
+      yield linearOnMeasure.call(this, wSpec, hSpec);
     }),
   },
 });
@@ -655,7 +655,7 @@ rt.register({
   name: "android/widget/TableRow", ctor: JTableRow, sup: "android/widget/LinearLayout",
   methods: {
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JTableRow, c: unknown, set: JAttrSet | null): Gen {
-      (yield callSelf(linearMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set));
+      yield callSelf(linearMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
       this.orientation = 0;
     }),
     "onMeasure(II)V": driven(function* (this: JTableRow, wSpec: number, hSpec: number): Gen {
@@ -725,9 +725,9 @@ const scrollMethods: NativeSpec["methods"] = {
       const mlp = c.lp instanceof JMarginLP ? c.lp : null;
       const mainSpec = makeSpec(0, MS_UNSPEC);
       if (this.horizontal) {
-        (yield measureView(c, mainSpec, childMeasureSpec(hSpec, this.padT + this.padB + (mlp ? mlp.marginT + mlp.marginB : 0), c.lp?.height ?? MATCH_PARENT)));
+        yield measureView(c, mainSpec, childMeasureSpec(hSpec, this.padT + this.padB + (mlp ? mlp.marginT + mlp.marginB : 0), c.lp?.height ?? MATCH_PARENT));
       } else {
-        (yield measureView(c, childMeasureSpec(wSpec, this.padL + this.padR + (mlp ? mlp.marginL + mlp.marginR : 0), c.lp?.width ?? MATCH_PARENT), mainSpec));
+        yield measureView(c, childMeasureSpec(wSpec, this.padL + this.padR + (mlp ? mlp.marginL + mlp.marginR : 0), c.lp?.width ?? MATCH_PARENT), mainSpec);
       }
     }
     // FrameLayout.onMeasure: wrap to content on BOTH axes, clamped by the spec
@@ -738,16 +738,16 @@ const scrollMethods: NativeSpec["methods"] = {
       resolveSizeAndState(Math.max(contentH, this.minH), hSpec, state << 16));
     if (c && this.fillViewport) {
       if (!this.horizontal && c.measuredH < this.measuredH - this.padT - this.padB) {
-        (yield measureView(c, makeSpec(c.measuredW, MS_EXACTLY), makeSpec(this.measuredH - this.padT - this.padB, MS_EXACTLY)));
+        yield measureView(c, makeSpec(c.measuredW, MS_EXACTLY), makeSpec(this.measuredH - this.padT - this.padB, MS_EXACTLY));
       } else if (this.horizontal && c.measuredW < this.measuredW - this.padL - this.padR) {
-        (yield measureView(c, makeSpec(this.measuredW - this.padL - this.padR, MS_EXACTLY), makeSpec(c.measuredH, MS_EXACTLY)));
+        yield measureView(c, makeSpec(this.measuredW - this.padL - this.padR, MS_EXACTLY), makeSpec(c.measuredH, MS_EXACTLY));
       }
     }
   }),
   "onLayout(ZIIII)V": driven(function* (this: JScrollView): Gen {
     const c = this.children[0];
     if (c && c.visibility !== 8) {
-      (yield layoutView(c, this.padL, this.padT, this.padL + c.measuredW, this.padT + c.measuredH));
+      yield layoutView(c, this.padL, this.padT, this.padL + c.measuredW, this.padT + c.measuredH);
     }
     this.clampScroll();
   }),
@@ -902,7 +902,7 @@ class JRelativeLayout extends JViewGroup {
 const NO_MARGIN = { marginL: 0, marginT: 0, marginR: 0, marginB: 0 };
 const relativeMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JRelativeLayout, c: unknown, set: JAttrSet | null): Gen {
-    (yield initViewFromCtx(this, c, set));
+    yield initViewFromCtx(this, c, set);
     if (set && this.jres) {
       const ta = obtainStyled(this.jres, this.theme, set, [AID("gravity")], 0, 0);
       if (ta.vals[0]) this.gravityR = rvInt(this.jres, ta.vals[0], this.gravityR);
@@ -945,7 +945,7 @@ const relativeMethods: NativeSpec["methods"] = {
     for (const c of kids) {
       const w = c.lp?.width === MATCH_PARENT && specMode(wSpec) !== MS_UNSPEC ? makeSpec(availW, MS_EXACTLY) : wSpec;
       const h = c.lp?.height === MATCH_PARENT && specMode(hSpec) !== MS_UNSPEC ? makeSpec(availH, MS_EXACTLY) : hSpec;
-      (yield measureChildWithMargins(this, c, w, 0, h, 0));
+      yield measureChildWithMargins(this, c, w, 0, h, 0);
     }
     const pos = this.rlPos;
     pos.clear();
@@ -1049,7 +1049,7 @@ const relativeMethods: NativeSpec["methods"] = {
         const m = c.lp instanceof JMarginLP ? c.lp : NO_MARGIN;
         const w = c.lp.width === MATCH_PARENT && !p?.fixedW ? this.measuredW - this.padL - this.padR - m.marginL - m.marginR : c.measuredW;
         const h = c.lp.height === MATCH_PARENT && !p?.fixedH ? this.measuredH - this.padT - this.padB - m.marginT - m.marginB : c.measuredH;
-        (yield measureView(c, makeSpec(Math.max(0, w), MS_EXACTLY), makeSpec(Math.max(0, h), MS_EXACTLY)));
+        yield measureView(c, makeSpec(Math.max(0, w), MS_EXACTLY), makeSpec(Math.max(0, h), MS_EXACTLY));
       }
       if (lp instanceof JRelativeLP && p) {
         if (wrapW && !p.fixedW && (lp.rules[RL.CENTER_HORIZONTAL] || lp.rules[RL.CENTER_IN_PARENT])) p.l = (this.measuredW - c.measuredW) >> 1;
@@ -1061,7 +1061,7 @@ const relativeMethods: NativeSpec["methods"] = {
     for (const c of this.children) {
       if (c.visibility === 8) continue;
       const p = this.rlPos.get(c) ?? { l: this.padL, t: this.padT };
-      (yield layoutView(c, p.l, p.t, p.l + c.measuredW, p.t + c.measuredH));
+      yield layoutView(c, p.l, p.t, p.l + c.measuredW, p.t + c.measuredH);
     }
   }),
 };
@@ -1106,7 +1106,7 @@ class JViewStub extends JView {
 }
 const viewStubMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JViewStub, c: unknown, set: JAttrSet | null): Gen {
-    (yield initViewFromCtx(this, c, set));
+    yield initViewFromCtx(this, c, set);
     if (set && this.jres) {
       const ta = obtainStyled(this.jres, this.theme, set, [AID("layout"), AID("inflatedId")], 0, 0);
       if (ta.vals[0]) this.layoutRes = ta.vals[0]!.d;
@@ -1132,11 +1132,11 @@ const viewStubMethods: NativeSpec["methods"] = {
     if (this.inflatedId !== -1) v.idNum = this.inflatedId;
     const idx = parent.children.indexOf(this);
     const lp = this.lp;
-    (yield vcall(parent, "removeViewInLayout", "(Landroid/view/View;)V", this));
-    if (lp) (yield vcall(parent, "addView", "(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V", v, idx, lp));
-    else (yield vcall(parent, "addView", "(Landroid/view/View;I)V", v, idx));
+    yield vcall(parent, "removeViewInLayout", "(Landroid/view/View;)V", this);
+    if (lp) yield vcall(parent, "addView", "(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V", v, idx, lp);
+    else yield vcall(parent, "addView", "(Landroid/view/View;I)V", v, idx);
     this.inflatedRef = new WeakRef(v);
-    if (this.inflateL) (yield vcall(this.inflateL, "onInflate", "(Landroid/view/ViewStub;Landroid/view/View;)V", this, v));
+    if (this.inflateL) yield vcall(this.inflateL, "onInflate", "(Landroid/view/ViewStub;Landroid/view/View;)V", this, v);
     return v;
   }),
   "setVisibility(I)V": driven(function* (this: JViewStub, vis: number): Gen {
@@ -1144,7 +1144,7 @@ const viewStubMethods: NativeSpec["methods"] = {
     if (inflated) return vcall(inflated, "setVisibility", "(I)V", vis);
     this.visibility = vis;
     requestLayout(this);
-    if (vis === 0 || vis === 4) (yield vcall(this, "inflate", "()Landroid/view/View;"));
+    if (vis === 0 || vis === 4) yield vcall(this, "inflate", "()Landroid/view/View;");
   }),
 };
 rt.register({ name: "android/view/ViewStub", ctor: JViewStub, sup: "android/view/View", methods: viewStubMethods });

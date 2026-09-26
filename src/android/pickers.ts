@@ -180,11 +180,11 @@ async function rebuildPicker(tp: JTimePicker) {
 
 const timePickerMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;)V": driven(function* (this: JTimePicker, c: unknown): Gen {
-    (yield initViewFromCtx(this, c, null));
+    yield initViewFromCtx(this, c, null);
     return buildPicker(this);
   }),
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JTimePicker, c: unknown, set: JAttrSet | null): Gen {
-    (yield initViewFromCtx(this, c, set));
+    yield initViewFromCtx(this, c, set);
     return buildPicker(this);
   }),
   "getHour()I": function (this: JTimePicker) { return this.hourVal; },
@@ -233,7 +233,7 @@ async function initTimePickerDialog(d: JTimePickerDialog, c: unknown, listener: 
   d.negText = "Cancel";
   d.posL = {
     [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: driven(function* (): Gen  {
-      if (d.timeSetL) (yield vcall(d.timeSetL, "onTimeSet", "(Landroid/widget/TimePicker;II)V", tp, tp.hourVal, tp.minuteVal));
+      if (d.timeSetL) yield vcall(d.timeSetL, "onTimeSet", "(Landroid/widget/TimePicker;II)V", tp, tp.hourVal, tp.minuteVal);
     }),
   };
 }
@@ -314,11 +314,11 @@ async function buildDatePicker(p: JDatePicker) {
 
 rt.register({ name: "android/widget/DatePicker", ctor: JDatePicker, sup: "android/widget/LinearLayout", methods: {
   "<init>(Landroid/content/Context;)V": driven(function* (this: JDatePicker, c: unknown): Gen {
-    (yield initViewFromCtx(this, c, null));
+    yield initViewFromCtx(this, c, null);
     return buildDatePicker(this);
   }),
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JDatePicker, c: unknown, set: JAttrSet | null): Gen {
-    (yield initViewFromCtx(this, c, set));
+    yield initViewFromCtx(this, c, set);
     return buildDatePicker(this);
   }),
   "init(IIILandroid/widget/DatePicker$OnDateChangedListener;)V": function (this: JDatePicker, year: number, month: number, day: number, listener: unknown) {

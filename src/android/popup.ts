@@ -51,7 +51,7 @@ function* detachContextOverlays$(owner: JContext): Gen<void> {
     while (context && !visited.has(context)) {
       if (context === owner) {
         removeOverlay(o.view);
-        (yield dispatchDetached(o.view));
+        yield dispatchDetached(o.view);
         break;
       }
       visited.add(context);
@@ -181,7 +181,7 @@ rt.register({
       const info = rt.link("android/view/MenuInflater");
       const m = new info.ctor();
       m.jctx = this.jctx;
-      (yield vcall(m, "inflate", "(ILandroid/view/Menu;)V", id, this.menu));
+      yield vcall(m, "inflate", "(ILandroid/view/Menu;)V", id, this.menu);
     }),
     "setOnMenuItemClickListener(Landroid/widget/PopupMenu$OnMenuItemClickListener;)V": function (this: JPopupMenu, l: unknown) {
       this.clickL = l;
@@ -220,7 +220,7 @@ rt.register({
     "onMeasure(II)V": driven(function* (this: PopupDecorView, wSpec: number, hSpec: number): Gen {
       const p = this.popup!;
       const sup = rt.link("android/widget/FrameLayout").ctor.prototype[mangleMethod("onMeasure", "(II)V")];
-      (yield sup.call(this, windowSpec(p.w, specSize(wSpec)), windowSpec(p.h, specSize(hSpec))));
+      yield sup.call(this, windowSpec(p.w, specSize(wSpec)), windowSpec(p.h, specSize(hSpec)));
     }),
     "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: PopupDecorView, ev: JMotionEvent): Gen {
       const p = this.popup!;
@@ -244,7 +244,7 @@ rt.register({
         ctx.restore();
       }
       const sup = rt.link("android/widget/FrameLayout").ctor.prototype[M_drawableDraw];
-      (yield sup.call(this, cv));
+      yield sup.call(this, cv);
     }),
   },
 });
@@ -318,11 +318,11 @@ function* pwShow$(this: JPopupWindow, x: number, y: number): Gen {
   lp.width = MATCH;
   lp.height = this.content.lp?.height === WRAP ? WRAP : MATCH;
   this.content.lp = lp;
-  (yield attachView(d, this.content));
+  yield attachView(d, this.content);
   const dismiss = () => vcall(this, "dismiss", "()V");
   // a focusable popup takes Back and outside touches; an outsideTouchable one only the touches
   addOverlay(d, x, y, this.focusable || this.outsideTouchable, this.focusable ? dismiss : undefined, dismiss);
-  (yield dispatchAttached(d));
+  yield dispatchAttached(d);
 }
 /** AOSP findDropDownPosition, reduced to the vertical flip and screen clamp */
 function pwPlace(this: JPopupWindow): unknown { return rt.drive(pwPlace$.call(this)); }
@@ -330,7 +330,7 @@ function* pwPlace$(this: JPopupWindow): Gen {
   const a = this.anchor, d = this.decor;
   if (!a || !d) return;
   const root = rootOf(a), sw = root.width() || device.width, sh = root.height() || device.height - device.statusBar;
-  (yield measureView(d, makeSpec(sw, MS_AT_MOST | 0), makeSpec(sh, MS_AT_MOST | 0)));
+  yield measureView(d, makeSpec(sw, MS_AT_MOST | 0), makeSpec(sh, MS_AT_MOST | 0));
   const [ax, ay] = locationOnScreen(a);
   let x = ax + this.xoff;
   if ((this.gravity & 7) === 5) x += a.width() - d.measuredW;
@@ -353,17 +353,17 @@ function pwShowDropDown(this: JPopupWindow, anchor: JView, xoff = 0, yoff = 0, g
 function* pwShowDropDown$(this: JPopupWindow, anchor: JView, xoff = 0, yoff = 0, gravity = 0): Gen {
   if (this.showing || !this.content) return;
   this.anchor = anchor; this.xoff = xoff; this.yoff = yoff; this.gravity = gravity;
-  (yield pwShow.call(this, 0, 0));
-  (yield pwPlace.call(this));
+  yield pwShow.call(this, 0, 0);
+  yield pwPlace.call(this);
 }
 function pwShowAt(this: JPopupWindow, parent: JView, gravity: number, x: number, y: number): unknown { return rt.drive(pwShowAt$.call(this, parent, gravity, x, y)); }
 function* pwShowAt$(this: JPopupWindow, parent: JView, gravity: number, x: number, y: number): Gen {
   if (this.showing || !this.content) return;
   this.anchor = null;
-  (yield pwShow.call(this, 0, 0));
+  yield pwShow.call(this, 0, 0);
   const d = this.decor!;
   const root = parent ? rootOf(parent) : null, sw = root?.width() || device.width, sh = root?.height() || device.height - device.statusBar;
-  (yield measureView(d, makeSpec(sw, MS_AT_MOST | 0), makeSpec(sh, MS_AT_MOST | 0)));
+  yield measureView(d, makeSpec(sw, MS_AT_MOST | 0), makeSpec(sh, MS_AT_MOST | 0));
   const hg = gravity & 7, vg = gravity & 0x70;
   const px = hg === 1 ? ((sw - d.measuredW) >> 1) + x : hg === 5 ? sw - d.measuredW - x : x;
   const py = vg === 16 ? ((sh - d.measuredH) >> 1) + y : vg === 80 ? sh - d.measuredH - y : y;
@@ -379,8 +379,8 @@ function* pwDismiss$(this: JPopupWindow): Gen {
   this.decor = null;
   if (d) {
     removeOverlay(d);
-    (yield dispatchDetached(d));
-    if (this.content) (yield detachView(d, this.content));
+    yield dispatchDetached(d);
+    if (this.content) yield detachView(d, this.content);
   }
   if (this.dismissL) {
     try { (yield vcall(this.dismissL, "onDismiss", "()V")); } catch (e) { reportUncaught(e); }

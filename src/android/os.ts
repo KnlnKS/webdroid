@@ -93,9 +93,9 @@ function* dispatchLogged$(handler: JHandler, msg: JMessage, printer: unknown): G
   const thread = curThread;
   const str = async (o: unknown) => o === null ? "null" : String(await vcallOn(thread, o, "toString", "()Ljava/lang/String;"));
   try {
-    (yield vcallOn(thread, printer, "println", "(Ljava/lang/String;)V", `>>>>> Dispatching to ${(yield str(handler))} ${(yield str(msg.callback))}: ${msg.what}`));
-    (yield vcallOn(thread, handler, "dispatchMessage", "(Landroid/os/Message;)V", msg));
-    (yield vcallOn(thread, printer, "println", "(Ljava/lang/String;)V", `<<<<< Finished to ${(yield str(handler))} ${(yield str(msg.callback))}`));
+    yield vcallOn(thread, printer, "println", "(Ljava/lang/String;)V", `>>>>> Dispatching to ${(yield str(handler))} ${(yield str(msg.callback))}: ${msg.what}`);
+    yield vcallOn(thread, handler, "dispatchMessage", "(Landroid/os/Message;)V", msg);
+    yield vcallOn(thread, printer, "println", "(Ljava/lang/String;)V", `<<<<< Finished to ${(yield str(handler))} ${(yield str(msg.callback))}`);
   } catch (e) { reportUncaught(e); }
 }
 rt.markers("android/util/Printer");
@@ -232,9 +232,9 @@ rt.register({
     "handleMessage(Landroid/os/Message;)V": function () {},
     "dispatchMessage(Landroid/os/Message;)V": driven(function* (this: JHandler, msg: JMessage): Gen {
       const thread = curThread;
-      if (msg.callback) (yield vcall(msg.callback, "run", "()V"));
+      if (msg.callback) yield vcall(msg.callback, "run", "()V");
       else if (!this.cb || !(yield vcallOn(thread, this.cb, "handleMessage", "(Landroid/os/Message;)Z", msg)))
-        (yield vcallOn(thread, this, "handleMessage", "(Landroid/os/Message;)V", msg));
+        yield vcallOn(thread, this, "handleMessage", "(Landroid/os/Message;)V", msg);
     }),
     "post(Ljava/lang/Runnable;)Z": function (this: JHandler, r: unknown) { return this.post(r, 0); },
     "postDelayed(Ljava/lang/Runnable;J)Z": function (this: JHandler, r: unknown, d: bigint) { return this.post(r, Number(d)); },
@@ -700,8 +700,8 @@ rt.register({
     "describeContents()I": () => 1,
     "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JSharedMemory, parcel: JParcel): Gen {
       if (this.closed) throw rt.mkThrowable("java/lang/IllegalStateException", "SharedMemory is closed");
-      (yield vcall(parcel, "writeInt", "(I)V", this.protection));
-      (yield vcall(parcel, "writeByteArray", "([B)V", new Int8Array(this.bytes.buffer)));
+      yield vcall(parcel, "writeInt", "(I)V", this.protection);
+      yield vcall(parcel, "writeByteArray", "([B)V", new Int8Array(this.bytes.buffer));
     }),
   },
 });
@@ -718,7 +718,7 @@ rt.register({
     "cancel()V": driven(function* (this: JCancellationSignal): Gen {
       if (this.cancelled) return;
       this.cancelled = 1;
-      if (this.listener) (yield vcall(this.listener, "onCancel", "()V"));
+      if (this.listener) yield vcall(this.listener, "onCancel", "()V");
     }),
     "throwIfCanceled()V": function (this: JCancellationSignal) {
       if (this.cancelled) throw rt.mkThrowable("android/os/OperationCanceledException", null);
@@ -726,7 +726,7 @@ rt.register({
     "setOnCancelListener(Landroid/os/CancellationSignal$OnCancelListener;)V": driven(function* (this: JCancellationSignal, listener: unknown): Gen {
       if (this.listener === listener) return;
       this.listener = listener;
-      if (this.cancelled && listener) (yield vcall(listener, "onCancel", "()V"));
+      if (this.cancelled && listener) yield vcall(listener, "onCancel", "()V");
     }),
   },
 });
@@ -793,7 +793,7 @@ function* writeParcelFileDescriptor$(value: unknown, bytes: Uint8Array, closed =
   if (!(value instanceof JParcelFileDescriptor)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a ParcelFileDescriptor");
   value.bytes = bytes.slice();
   if (value.backing) vfs.write(value.backing.path, value.bytes, false);
-  (yield value.sink?.(value.bytes, closed));
+  yield value.sink?.(value.bytes, closed);
 }
 rt.register({
   name: "android/os/ParcelFileDescriptor", ctor: JParcelFileDescriptor,
@@ -862,7 +862,7 @@ rt.register({
             vfs.delete(backing.path, false);
           }
         })();
-        (yield backing.closing);
+        yield backing.closing;
       }
     }),
     "checkError()V": () => {},
@@ -925,7 +925,7 @@ const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d
 function storageEstimate(): { total: number; free: number } | Promise<{ total: number; free: number }> { return rt.drive(storageEstimate$()); }
 function* storageEstimate$(): Gen<{ total: number; free: number }> {
   const s = new JStatFs();
-  (yield statFs.call(s, "/data"));
+  yield statFs.call(s, "/data");
   return s;
 }
 rt.register({
@@ -1089,8 +1089,8 @@ rt.register({
     "getKeyCode()I": function (this: JKeyEvent) { return this.keyCode; },
     "describeContents()I": () => 0,
     "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JKeyEvent, p: JParcel): Gen {
-      (yield vcall(p, "writeInt", "(I)V", this.action));
-      (yield vcall(p, "writeInt", "(I)V", this.keyCode));
+      yield vcall(p, "writeInt", "(I)V", this.action);
+      yield vcall(p, "writeInt", "(I)V", this.keyCode);
     }),
     ...stubs(0, "getRepeatCount()I", "getUnicodeChar()I", "hasModifiers(I)Z", "isTracking()Z", "isCanceled()Z"),
     ...stubs(1, "hasNoModifiers()Z"),
@@ -1360,7 +1360,7 @@ rt.register({
       if (!this.cancelled) void onMain(() => this.cancelled ? undefined : vcall(this, "onProgressUpdate", "([Ljava/lang/Object;)V", values)).catch(reportUncaught);
     },
     "get()Ljava/lang/Object;": driven(function* (this: JAsyncTask): Gen {
-      if (!this.cancelled && this.done) (yield this.done);
+      if (!this.cancelled && this.done) yield this.done;
       if (this.cancelled) throw rt.mkThrowable("java/util/concurrent/CancellationException", null);
       if (this.error) throw (yield newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", this.error));
       return this.result;
@@ -1389,7 +1389,7 @@ function* runAsyncTask$(this: JAsyncTask, executor: unknown, params: unknown[]):
       } finally { this.status = 2; }
     }).catch(reportUncaught);
   } });
-  (yield vcall(executor, "execute", "(Ljava/lang/Runnable;)V", runnable));
+  yield vcall(executor, "execute", "(Ljava/lang/Runnable;)V", runnable);
   return this;
 }
 

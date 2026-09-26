@@ -655,7 +655,7 @@ rt.register({
     "replaceWith(Ljava/lang/String;)Ljava/nio/charset/CharsetDecoder;": driven(function* (this: JCharsetDecoder, replacement: string | null): Gen {
       if (replacement === null || replacement.length === 0 || replacement.length > 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid replacement");
       this.replacement = replacement;
-      (yield vcall(this, "implReplaceWith", "(Ljava/lang/String;)V", replacement));
+      yield vcall(this, "implReplaceWith", "(Ljava/lang/String;)V", replacement);
       return this;
     }),
     "implReplaceWith(Ljava/lang/String;)V": () => {},
@@ -663,7 +663,7 @@ rt.register({
       this.endian = null;
       const out = allocCharBuffer(src.lim - src.pos);
       const result = decodeBuffer(this, src, out, 1);
-      if (result.length) (yield vcall(result, "throwException", "()V"));
+      if (result.length) yield vcall(result, "throwException", "()V");
       out.lim = out.pos; out.pos = 0;
       return out;
     }),

@@ -76,7 +76,7 @@ async function acquireClient(uri: JUri): Promise<JProviderClient | null> {
 rt.register({ name: "android/content/ContentProviderClient", ctor: JProviderClient, ifaces: ["java/lang/AutoCloseable"], methods: {
   "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
     driven(function* (this: JProviderClient, u: JUri, projection: unknown, selection: unknown, args: unknown, sort: unknown, cancellation: unknown): Gen {
-      if (cancellation) (yield vcall(cancellation, "throwIfCanceled", "()V"));
+      if (cancellation) yield vcall(cancellation, "throwIfCanceled", "()V");
       return vcall(this, "query", providerOperations.query, u, projection, selection, args, sort);
     }),
   "release()Z": releaseClient,
@@ -252,12 +252,12 @@ const resolverMethods: NativeSpec["methods"] = {
     }),
   "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
     driven(function* (this: JObj, u: JUri, proj: string[] | null, selection: string | null, args: string[] | null, sort: string | null, cancellation: unknown): Gen {
-      if (cancellation) (yield vcall(cancellation, "throwIfCanceled", "()V"));
+      if (cancellation) yield vcall(cancellation, "throwIfCanceled", "()V");
       return vcall(this, "query", providerOperations.query, u, proj, selection, args, sort);
     }),
   "query(Landroid/net/Uri;[Ljava/lang/String;Landroid/os/Bundle;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
     driven(function* (this: JObj, u: JUri, proj: string[] | null, queryArgs: JBundle | null, cancellation: unknown): Gen {
-      if (cancellation) (yield vcall(cancellation, "throwIfCanceled", "()V"));
+      if (cancellation) yield vcall(cancellation, "throwIfCanceled", "()V");
       const values = queryArgs?.map;
       const selection = values?.get("android:query-arg-sql-selection") as string | null | undefined;
       const args = values?.get("android:query-arg-sql-selection-args") as string[] | null | undefined;

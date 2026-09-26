@@ -491,7 +491,7 @@ rt.register({
       if (bits < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "numBits must be non-negative");
       if (bits === 0) { this.v = 0n; return; }
       const bytes = new Int8Array((bits + 7) >> 3);
-      (yield vcall(random, "nextBytes", "([B)V", bytes));
+      yield vcall(random, "nextBytes", "([B)V", bytes);
       bytes[0] &= (1 << ((bits - 1) & 7) + 1) - 1;
       this.v = bytesToBig(bytes);
     }),

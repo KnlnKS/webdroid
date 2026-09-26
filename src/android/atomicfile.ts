@@ -24,13 +24,13 @@ rt.register({ name: "android/util/AtomicFile", ctor: JAtomicFile, methods: {
   },
   "finishWrite(Ljava/io/FileOutputStream;)V": driven(function* (this: JAtomicFile, stream: unknown): Gen {
     if (stream == null) return;
-    (yield vcall(stream, "close", "()V"));
+    yield vcall(stream, "close", "()V");
     rename(this.base + ".new", this.base);
-    (yield vfs.flush());
+    yield vfs.flush();
   }),
   "failWrite(Ljava/io/FileOutputStream;)V": driven(function* (this: JAtomicFile, stream: unknown): Gen {
     if (stream == null) return;
-    (yield vcall(stream, "close", "()V"));
+    yield vcall(stream, "close", "()V");
     vfs.delete(this.base + ".new");
   }),
   "openRead()Ljava/io/FileInputStream;": openRead,

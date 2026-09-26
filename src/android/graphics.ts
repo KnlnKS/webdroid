@@ -1454,7 +1454,7 @@ export const bitmapMethods: NativeSpec["methods"] = {
       const blob = (yield this.canvas.convertToBlob({ type, quality: Math.max(0, Math.min(1, q / 100)) }));
       if (blob.type !== type) return 0;
       const bytes = new Int8Array((yield blob.arrayBuffer()));
-      (yield vcall(out, "write", "([BII)V", bytes, 0, bytes.length));
+      yield vcall(out, "write", "([BII)V", bytes, 0, bytes.length);
       return 1;
     }),
     "prepareToDraw()V": () => {},
@@ -1464,8 +1464,8 @@ export const bitmapMethods: NativeSpec["methods"] = {
     "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JBitmap, p: JParcel): Gen {
       if (this.recycled) throw rt.mkThrowable("java/lang/IllegalStateException", "Can't parcel a recycled bitmap");
       for (const v of [this.immutable ? 0 : 1, this.config, this.hasAlpha ? 1 : 0, this.premultiplied ? 1 : 0, this.w, this.h, this.density])
-        (yield vcall(p, "writeInt", "(I)V", v));
-      (yield vcall(p, "writeByteArray", "([B)V", new Int8Array(this.pixels().buffer, this.pixels().byteOffset, this.w * this.h * 4)));
+        yield vcall(p, "writeInt", "(I)V", v);
+      yield vcall(p, "writeByteArray", "([B)V", new Int8Array(this.pixels().buffer, this.pixels().byteOffset, this.w * this.h * 4));
     }),
 };
 rt.register({ name: "android/graphics/Bitmap", ctor: JBitmap, ifaces: ["android/os/Parcelable"], methods: bitmapMethods,
@@ -2525,7 +2525,7 @@ rt.register({
     },
     "setPath(Landroid/graphics/Path;Landroid/graphics/Region;)Z": driven(function* (this: JRegion, p: JPath, clip: JRegion): Gen {
       const b = new JRectF();
-      (yield vcall(p, "computeBounds", "(Landroid/graphics/RectF;Z)V", b, 1));
+      yield vcall(p, "computeBounds", "(Landroid/graphics/RectF;Z)V", b, 1);
       return setRegion.call(this, Math.max(Math.floor(b.left), clip.left), Math.max(Math.floor(b.top), clip.top),
         Math.min(Math.ceil(b.right), clip.right), Math.min(Math.ceil(b.bottom), clip.bottom));
     }),
@@ -2628,7 +2628,7 @@ function* decodeFile$(path: string | null, opts: JBFOptions | null = null): Gen 
     if (!rt.iof(error, "java/lang/Exception")) throw error;
     return null;
   } finally {
-    if (stream) (yield vcall(stream, "close", "()V"));
+    if (stream) yield vcall(stream, "close", "()V");
   }
 }
 function decodeResourceStream(res: unknown, value: JTypedValue | null, stream: unknown, pad: JRect | null, opts: JBFOptions | null): unknown { return rt.drive(decodeResourceStream$(res, value, stream, pad, opts)); }

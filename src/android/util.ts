@@ -601,7 +601,7 @@ rt.register({
     [`beginObject()${JW}`]: jsonOpen(false),
     [`endObject()${JW}`]: jsonClose("}"),
     [`name(Ljava/lang/String;)${JW}`]: driven(function* (this: JJsonWriter, n: string): Gen {
-      (yield jsonEmit(this, JSON.stringify(n) + ":"));
+      yield jsonEmit(this, JSON.stringify(n) + ":");
       this.scopes[this.scopes.length - 1].named = true;
       return this;
     }),

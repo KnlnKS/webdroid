@@ -238,7 +238,7 @@ rt.register({ name: "android/media/MediaMetadata", ctor: JMediaMetadata, ifaces:
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JMediaMetadata, parcel: unknown): Gen {
     const bundle = new JBundle(); bundle.map = new Map(this.values);
-    (yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", bundle));
+    yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", bundle);
   }),
 } });
 rt.register({ name: "android/media/MediaMetadata$Builder", ctor: JMediaMetadataBuilder, methods: {
@@ -459,7 +459,7 @@ rt.register({
         const fd = (yield vcall(asset, "getFileDescriptor", "()Ljava/io/FileDescriptor;"));
         const offset = (yield vcall(asset, "getStartOffset", "()J"));
         const length = (yield vcall(asset, "getLength", "()J"));
-        (yield mpLoadFd.call(this, fd, offset, length));
+        yield mpLoadFd.call(this, fd, offset, length);
       } finally { (yield vcall(asset, "close", "()V")); }
     }),
     "reset()V": function (this: JMediaPlayer) { mpReset(this); },

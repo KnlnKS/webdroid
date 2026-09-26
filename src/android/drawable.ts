@@ -671,7 +671,7 @@ rt.register({
       const thread = curThread;
       for (const { d } of this.layers) {
         if (!d) continue;
-        (yield vcallOn(thread, d, "getOutline", "(Landroid/graphics/Outline;)V", outline));
+        yield vcallOn(thread, d, "getOutline", "(Landroid/graphics/Outline;)V", outline);
         if (outline.kind) return;
       }
     }),
@@ -684,7 +684,7 @@ rt.register({
       for (const l of this.layers) {
         if (!l.d) continue;
         p.left = p.top = p.right = p.bottom = 0;
-        (yield vcall(l.d, "getPadding", "(Landroid/graphics/Rect;)Z", p));
+        yield vcall(l.d, "getPadding", "(Landroid/graphics/Rect;)Z", p);
         r.left = Math.max(r.left, l.insets[0] + p.left);
         r.top = Math.max(r.top, l.insets[1] + p.top);
         r.right = Math.max(r.right, l.insets[2] + p.right);
@@ -1036,11 +1036,11 @@ function* wrapSet$(this: JDrawableWrapper, d: JDrawable | null): Gen {
   this.dr = d;
   if (d) {
     d.callback = this;
-    (yield vcallOn(thread, d, "setVisible", "(ZZ)Z", +this.visible, 1));
-    (yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.stateSet)));
-    (yield vcallOn(thread, d, "setLevel", "(I)Z", this.level));
-    (yield vcallOn(thread, d, "setBounds", "(IIII)V", this.bounds.left, this.bounds.top, this.bounds.right, this.bounds.bottom));
-    (yield vcallOn(thread, d, "setLayoutDirection", "(I)Z", this.layoutDir));
+    yield vcallOn(thread, d, "setVisible", "(ZZ)Z", +this.visible, 1);
+    yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.stateSet));
+    yield vcallOn(thread, d, "setLevel", "(I)Z", this.level);
+    yield vcallOn(thread, d, "setBounds", "(IIII)V", this.bounds.left, this.bounds.top, this.bounds.right, this.bounds.bottom);
+    yield vcallOn(thread, d, "setLayoutDirection", "(I)Z", this.layoutDir);
   }
   invalidateSelf.call(this);
 }
@@ -1214,7 +1214,7 @@ class JScaleDrawable extends JDrawableWrapper {
       h -= Math.trunc((h - min) * (10000 - this.level) * this.scaleHeight / 10000);
     }
     gravityApply(absGravity(this.gravity, this.layoutDir), w, h, b, 0, 0, this.scaled);
-    if (w > 0 && h > 0) (yield vcallOn(thread, child, "setBounds", "(IIII)V", this.scaled.left, this.scaled.top, this.scaled.right, this.scaled.bottom));
+    if (w > 0 && h > 0) yield vcallOn(thread, child, "setBounds", "(IIII)V", this.scaled.left, this.scaled.top, this.scaled.right, this.scaled.bottom);
   }
 }
 rt.register({ name: "android/graphics/drawable/ScaleDrawable", ctor: JScaleDrawable, sup: "android/graphics/drawable/DrawableWrapper", methods: {
@@ -1226,7 +1226,7 @@ rt.register({ name: "android/graphics/drawable/ScaleDrawable", ctor: JScaleDrawa
   "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JScaleDrawable) { return this.layout(); },
   "onLevelChange(I)Z": driven(function* (this: JScaleDrawable, level: number): Gen {
     const thread = curThread;
-    if (this.dr) (yield vcallOn(thread, this.dr, "setLevel", "(I)Z", level));
+    if (this.dr) yield vcallOn(thread, this.dr, "setLevel", "(I)Z", level);
     (yield this.layout(thread)); invalidateSelf.call(this); return 1;
   }),
 } });
@@ -1376,10 +1376,10 @@ rt.register({
       onBoundsChangeAll(this);
       const width = bounds.right - bounds.left, height = bounds.bottom - bounds.top;
       if (!this.shape) return;
-      (yield vcall(this.shape, "resize", "(FF)V", width, height));
+      yield vcall(this.shape, "resize", "(FF)V", width, height);
       if (this.shaderFactory) {
         const shader = (yield vcall(this.shaderFactory, "resize", "(II)Landroid/graphics/Shader;", width, height));
-        (yield vcall(this.p, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;", shader));
+        yield vcall(this.p, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;", shader);
       }
     }),
     // the virtual route: an app Shape subclass's onResize/draw, and an app ShapeDrawable's onDraw
@@ -1387,7 +1387,7 @@ rt.register({
       const sh = this.shape;
       if (!sh) return;
       const b = this.bounds, ctx = cv.ctx;
-      (yield vcall(sh, "resize", "(FF)V", b.right - b.left, b.bottom - b.top));
+      yield vcall(sh, "resize", "(FF)V", b.right - b.left, b.bottom - b.top);
       ctx.save();
       ctx.translate(b.left, b.top);
       try { (yield vcall(this, "onDraw", "(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V", sh, cv, this.effPaint())); }
@@ -1579,14 +1579,14 @@ function* inflateDrawableNode$(res: Resources, node: XmlNode, theme: JTheme | nu
         d[`pivot${axis}Relative`] = relative;
         d[`pivot${axis}`] = relative ? complexToFraction(value.d, 1, 1) : rvFloat(res, value);
       }
-      (yield wrapSet.call(d, (yield itemDrawable(res, node, theme))));
+      yield wrapSet.call(d, (yield itemDrawable(res, node, theme)));
       return d;
     }
     case "clip": {
       const d = new JClipDrawable();
       d.gravity = xmlInt(res, get(AT.gravity), 3);
       d.orientation = xmlInt(res, get(AT.orientation), 1);
-      (yield wrapSet.call(d, (yield itemDrawable(res, node, theme))));
+      yield wrapSet.call(d, (yield itemDrawable(res, node, theme)));
       return d;
     }
     case "scale": {
@@ -1597,7 +1597,7 @@ function* inflateDrawableNode$(res: Resources, node: XmlNode, theme: JTheme | nu
       d.gravity = xmlInt(res, get(AT.scaleGravity), 3);
       d.useIntrinsicMinimum = !!xmlInt(res, get(AT.useIntrinsicSizeAsMinimum), 0);
       d.level = xmlInt(res, get(AT.level), 0);
-      (yield wrapSet.call(d, (yield itemDrawable(res, node, theme))));
+      yield wrapSet.call(d, (yield itemDrawable(res, node, theme)));
       return d;
     }
     case "animated-selector":
@@ -1679,7 +1679,7 @@ function* inflateDrawableNode$(res: Resources, node: XmlNode, theme: JTheme | nu
         if (value?.t === TV.FRACTION) d.fractions[i] = complexToFraction(value.d, 1, 1);
         else d.insets[i] = dimen(value, 0);
       }
-      (yield wrapSet.call(d, (yield itemDrawable(res, node, theme))));
+      yield wrapSet.call(d, (yield itemDrawable(res, node, theme)));
       return d;
     }
     // Both wrap a bitmap named by android:src; the .9.png's own npTc chunk is what makes it

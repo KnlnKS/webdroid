@@ -32,7 +32,7 @@ function call(wrapper: JWrapper, name: string, descriptor: string, args: unknown
 function* locked(wrapper: JWrapper, name: string, descriptor: string, args: unknown[]): Gen {
   const thread = curThread;
   const entered = rt.monitors.enter(wrapper.mutex, thread);
-  if (entered) (yield entered);
+  if (entered) yield entered;
   try { return (yield vcallOn(thread, wrapper.delegate, name, descriptor, ...args)); }
   finally { rt.monitors.exit(wrapper.mutex, thread); }
 }

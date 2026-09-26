@@ -59,9 +59,9 @@ rt.register({ name: "android/os/WorkSource$WorkChain", ctor: JWorkChain, ifaces:
     "equals(Ljava/lang/Object;)Z": function (this: JWorkChain, other: unknown) { return +(other instanceof JWorkChain && this.equals(other)); },
     "describeContents()I": () => 0,
     "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JWorkChain, p: JParcel): Gen {
-      (yield vcall(p, "writeInt", "(I)V", this.uids.length));
-      (yield vcall(p, "writeIntArray", "([I)V", Int32Array.from(this.uids)));
-      (yield vcall(p, "writeStringArray", "([Ljava/lang/String;)V", this.tags));
+      yield vcall(p, "writeInt", "(I)V", this.uids.length);
+      yield vcall(p, "writeIntArray", "([I)V", Int32Array.from(this.uids));
+      yield vcall(p, "writeStringArray", "([Ljava/lang/String;)V", this.tags);
     }),
   },
 });
@@ -132,12 +132,12 @@ rt.register({ name: "android/os/WorkSource", ctor: JWorkSource, ifaces: ["androi
     }),
     "describeContents()I": () => 0,
     "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JWorkSource, p: JParcel, flags: number): Gen {
-      (yield vcall(p, "writeInt", "(I)V", this.uids.length));
-      (yield vcall(p, "writeIntArray", "([I)V", this.uids.length ? Int32Array.from(this.uids) : null));
-      (yield vcall(p, "writeStringArray", "([Ljava/lang/String;)V", this.names));
-      (yield vcall(p, "writeInt", "(I)V", this.chains?.a.length ?? -1));
+      yield vcall(p, "writeInt", "(I)V", this.uids.length);
+      yield vcall(p, "writeIntArray", "([I)V", this.uids.length ? Int32Array.from(this.uids) : null);
+      yield vcall(p, "writeStringArray", "([Ljava/lang/String;)V", this.names);
+      yield vcall(p, "writeInt", "(I)V", this.chains?.a.length ?? -1);
       if (this.chains) {
-        (yield vcall(p, "writeInt", "(I)V", this.chains.a.length));
+        yield vcall(p, "writeInt", "(I)V", this.chains.a.length);
         for (const chain of this.chains.a) (yield vcall(p, "writeParcelable", "(Landroid/os/Parcelable;I)V", chain, flags));
       }
     }),

@@ -623,7 +623,7 @@ rt.register({
     "toString(Ljava/lang/String;)Ljava/lang/String;": baosString,
     "toString(Ljava/nio/charset/Charset;)Ljava/lang/String;": baosString,
     "writeTo(Ljava/io/OutputStream;)V": driven(function* (this: JBAOS, out: unknown): Gen {
-      (yield vcall(out, "write", "([BII)V", this.buf, 0, this.count));
+      yield vcall(out, "write", "([BII)V", this.buf, 0, this.count);
     }),
     "close()V": function () {},
   },
@@ -1068,23 +1068,23 @@ rt.register({
     "flush()V": function (this: JPrintStream) { return this.out !== null ? printCall(this, "flush", "()V") : this.line ? pr(this, "", true) : undefined; },
     "close()V": driven(function* (this: JPrintStream): Gen {
       if (this.closed) return;
-      (yield vcall(this, "flush", "()V"));
-      if (this.out !== null) (yield printCall(this, "close", "()V"));
+      yield vcall(this, "flush", "()V");
+      if (this.out !== null) yield printCall(this, "close", "()V");
       this.closed = true;
     }),
     "checkError()Z": driven(function* (this: JPrintStream): Gen {
-      if (!this.closed) (yield vcall(this, "flush", "()V"));
+      if (!this.closed) yield vcall(this, "flush", "()V");
       return this.trouble || this.out instanceof JPrintStream && (yield vcall(this.out, "checkError", "()Z")) ? 1 : 0;
     }),
     "write(I)V": driven(function* (this: JPrintStream, b: number): Gen {
       if (this.out === null) { (yield pr(this, this.decoder.decode(Uint8Array.of(b), { stream: true }), false)); return; }
-      (yield printCall(this, "write", "(I)V", b));
-      if (this.auto && (b & 255) === 10) (yield vcall(this, "flush", "()V"));
+      yield printCall(this, "write", "(I)V", b);
+      if (this.auto && (b & 255) === 10) yield vcall(this, "flush", "()V");
     }),
     "write([BII)V": driven(function* (this: JPrintStream, bytes: Int8Array, off: number, len: number): Gen {
       if (this.out === null) { (yield pr(this, this.decoder.decode(bytes.subarray(off, off + len), { stream: true }), false)); return; }
-      (yield printCall(this, "write", "([BII)V", bytes, off, len));
-      if (this.auto) (yield vcall(this, "flush", "()V"));
+      yield printCall(this, "write", "([BII)V", bytes, off, len);
+      if (this.auto) yield vcall(this, "flush", "()V");
     }),
   },
 });
@@ -1480,14 +1480,14 @@ rt.register({
     "flush()V": driven(function* (this: JOSW): Gen {
       if (this.s && this.sink) {
         const b = utf8.enc.encode(this.s);
-        (yield vcall(this.sink, "write", "([BII)V", new Int8Array(b.buffer, 0, b.length), 0, b.length));
+        yield vcall(this.sink, "write", "([BII)V", new Int8Array(b.buffer, 0, b.length), 0, b.length);
         this.s = "";
       }
-      if (this.sink) (yield vcall(this.sink, "flush", "()V"));
+      if (this.sink) yield vcall(this.sink, "flush", "()V");
     }),
     "close()V": driven(function* (this: JOSW): Gen {
-      (yield vcall(this, "flush", "()V"));
-      if (this.sink) (yield vcall(this.sink, "close", "()V"));
+      yield vcall(this, "flush", "()V");
+      if (this.sink) yield vcall(this.sink, "close", "()V");
     }),
   },
 });
@@ -1778,8 +1778,8 @@ rt.register({
       if (bytes) vfs.write(target.p, bytes.slice()); else vfs.mkdir(target.p);
     }),
     "move(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)V": driven(function* (this: JNioFileSystemProvider, source: JNioPath, target: JNioPath, options: unknown[] | null): Gen {
-      (yield vcall(this, "copy", "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)V", source, target, options));
-      (yield vcall(this, "delete", "(Ljava/nio/file/Path;)V", source));
+      yield vcall(this, "copy", "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)V", source, target, options);
+      yield vcall(this, "delete", "(Ljava/nio/file/Path;)V", source);
     }),
     "checkAccess(Ljava/nio/file/Path;[Ljava/nio/file/AccessMode;)V": (path: JNioPath) => requireNioFile(path),
     "getFileAttributeView(Ljava/nio/file/Path;Ljava/lang/Class;[Ljava/nio/file/LinkOption;)Ljava/nio/file/attribute/FileAttributeView;": () => null,

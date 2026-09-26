@@ -152,7 +152,7 @@ rt.register({
           // AOSP's ActionBarView reports the Up affordance as the options item
           // android.R.id.home, so it reaches the activity's onOptionsItemSelected like any
           // other item. Finishing here directly would rob every app of that override.
-          (yield performMenuItem(barAnchor(this), mkMenuItem(ID_HOME, "")));
+          yield performMenuItem(barAnchor(this), mkMenuItem(ID_HOME, ""));
           return 1;
         }
         // Action slots and the overflow affordance own the right end of the bar; they are
@@ -399,7 +399,7 @@ rt.register({
           target.items.push(item);
         }
       };
-      (yield walk(root, menu));
+      yield walk(root, menu);
       pushMenuToBar(menu);
     }),
   },
@@ -423,10 +423,10 @@ class JActionBar extends JObj {
     let id = 0n;
     if (this.navAdapter) {
       try { id = (yield vcall(this.navAdapter, "getItemId", "(I)J", i)); } catch { /* */ }
-      (yield this.updateNavLabel(i));
+      yield this.updateNavLabel(i);
     }
     try {
-      (yield vcall(this.navListener, "onNavigationItemSelected", "(IJ)Z", i, id));
+      yield vcall(this.navListener, "onNavigationItemSelected", "(IJ)Z", i, id);
     } catch (e) { reportUncaught(e); }
     invalidate();
   }
@@ -468,7 +468,7 @@ rt.register({
         // fire initial selection (real ActionBar does this once callbacks are set)
         if (listener && !this.navFired) {
           this.navFired = true;
-          (yield this.fireNav(this.navSelected));
+          yield this.fireNav(this.navSelected);
         }
       }),
     "setSelectedNavigationItem(I)V": function (this: JActionBar, i: number) {

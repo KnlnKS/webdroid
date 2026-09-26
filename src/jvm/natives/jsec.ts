@@ -223,7 +223,7 @@ rt.register({
       if (input === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
       const remaining: number = (yield vcall(input, "remaining", "()I"));
       const bytes = new Int8Array(remaining);
-      (yield vcall(input, "get", "([B)Ljava/nio/ByteBuffer;", bytes));
+      yield vcall(input, "get", "([B)Ljava/nio/ByteBuffer;", bytes);
       mdUpdate(this, bytes);
     }),
     "digest()[B": function (this: JMessageDigest) { return mdDigest(this); },
@@ -249,14 +249,14 @@ rt.register({
     "setMessageDigest(Ljava/security/MessageDigest;)V": function (this: JDigestOutputStream, digest: JMessageDigest) { this.digest = digest; },
     "on(Z)V": function (this: JDigestOutputStream, enabled: number) { this.enabled = !!enabled; },
     "write(I)V": driven(function* (this: JDigestOutputStream, b: number): Gen {
-      (yield vcall(this.out, "write", "(I)V", b));
-      if (this.enabled) (yield vcall(this.digest, "update", "(B)V", b));
+      yield vcall(this.out, "write", "(I)V", b);
+      if (this.enabled) yield vcall(this.digest, "update", "(B)V", b);
     }),
     "write([BII)V": driven(function* (this: JDigestOutputStream, bytes: Int8Array, off: number, len: number): Gen {
       if (bytes == null || off + len > bytes.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "wrong parameters for write");
       if (off < 0 || len < 0) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "wrong index for write");
-      (yield vcall(this.out, "write", "([BII)V", bytes, off, len));
-      if (this.enabled) (yield vcall(this.digest, "update", "([BII)V", bytes, off, len));
+      yield vcall(this.out, "write", "([BII)V", bytes, off, len);
+      if (this.enabled) yield vcall(this.digest, "update", "([BII)V", bytes, off, len);
     }),
   },
 });
@@ -277,12 +277,12 @@ rt.register({
     "on(Z)V": function (this: JDigestInputStream, enabled: number) { this.enabled = !!enabled; },
     "read()I": driven(function* (this: JDigestInputStream): Gen {
       const value: number = (yield vcall(this.in_, "read", "()I"));
-      if (value >= 0 && this.enabled) (yield vcall(this.digest, "update", "(B)V", value));
+      if (value >= 0 && this.enabled) yield vcall(this.digest, "update", "(B)V", value);
       return value;
     }),
     "read([BII)I": driven(function* (this: JDigestInputStream, bytes: Int8Array, off: number, len: number): Gen {
       const count: number = (yield vcall(this.in_, "read", "([BII)I", bytes, off, len));
-      if (count > 0 && this.enabled) (yield vcall(this.digest, "update", "([BII)V", bytes, off, count));
+      if (count > 0 && this.enabled) yield vcall(this.digest, "update", "([BII)V", bytes, off, count);
       return count;
     }),
   },

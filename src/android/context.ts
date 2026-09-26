@@ -384,10 +384,10 @@ export const contextMethods: NativeSpec["methods"] = {
   "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;III)V": function (this: JContext, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); },
   "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;IIILandroid/os/Bundle;)V": function (this: JContext, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); },
   "startActivity(Landroid/content/Intent;)V": driven(function* (this: JContext, intent: JIntent): Gen {
-    (yield launchIntent(this.$host, intent));
+    yield launchIntent(this.$host, intent);
   }),
   "startActivity(Landroid/content/Intent;Landroid/os/Bundle;)V": driven(function* (this: JContext, intent: JIntent): Gen {
-    (yield launchIntent(this.$host, intent));
+    yield launchIntent(this.$host, intent);
   }),
   // AOSP's Context.obtainStyledAttributes delegates to getTheme(). Reading the application
   // theme instead loses every ThemeOverlay — which is how Material passes a widget its shape

@@ -154,22 +154,22 @@ rt.register({
     },
     "write(I)V": driven(function* (this: JCipherOutputStream, b: number): Gen {
       const result: Int8Array = (yield vcall(this.cipher, "update", "([B)[B", Int8Array.of(b)));
-      if (result?.length) (yield vcall(this.out, "write", "([B)V", result));
+      if (result?.length) yield vcall(this.out, "write", "([B)V", result);
     }),
     "write([BII)V": driven(function* (this: JCipherOutputStream, bytes: Int8Array, off: number, len: number): Gen {
       if (!len) return;
       const result: Int8Array = (yield vcall(this.cipher, "update", "([BII)[B", bytes, off, len));
-      if (result?.length) (yield vcall(this.out, "write", "([B)V", result));
+      if (result?.length) yield vcall(this.out, "write", "([B)V", result);
     }),
     "close()V": driven(function* (this: JCipherOutputStream): Gen {
       if (this.closed) return;
       this.closed = true;
       try {
         const result: Int8Array = (yield vcall(this.cipher, "doFinal", "()[B"));
-        if (result?.length) (yield vcall(this.out, "write", "([B)V", result));
-        (yield vcall(this.out, "flush", "()V"));
+        if (result?.length) yield vcall(this.out, "write", "([B)V", result);
+        yield vcall(this.out, "flush", "()V");
       } finally {
-        (yield vcall(this.out, "close", "()V"));
+        yield vcall(this.out, "close", "()V");
       }
     }),
   },
@@ -196,7 +196,7 @@ rt.register({
     },
     "read()I": driven(function* (this: JCipherInputStream): Gen {
       if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
-      (yield this.load());
+      yield this.load();
       return this.pos < this.plain!.length ? this.plain![this.pos++]! & 0xff : -1;
     }),
     "read([BII)I": driven(function* (this: JCipherInputStream, bytes: Int8Array, off: number, len: number): Gen {
@@ -204,7 +204,7 @@ rt.register({
       if (off < 0 || len < 0 || off > bytes.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
       if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
       if (!len) return 0;
-      (yield this.load());
+      yield this.load();
       const count = Math.min(len, this.plain!.length - this.pos);
       if (!count) return -1;
       bytes.set(this.plain!.subarray(this.pos, this.pos + count), off);
@@ -215,7 +215,7 @@ rt.register({
     "skip(J)J": driven(function* (this: JCipherInputStream, count: bigint): Gen {
       if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
       if (count <= 0n) return 0n;
-      (yield this.load());
+      yield this.load();
       const skipped = Number(count < BigInt(this.plain!.length - this.pos) ? count : BigInt(this.plain!.length - this.pos));
       this.pos += skipped;
       return BigInt(skipped);
@@ -224,7 +224,7 @@ rt.register({
       if (this.closed) return;
       this.closed = true;
       this.plain = null;
-      (yield vcall(this.in_, "close", "()V"));
+      yield vcall(this.in_, "close", "()V");
     }),
     "markSupported()Z": () => 0,
   },

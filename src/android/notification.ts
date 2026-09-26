@@ -523,7 +523,7 @@ rt.register({
     "createNotificationChannelGroups(Ljava/util/List;)V": driven(function* (groups: unknown): Gen  {
       for (const group of (yield toJsArray(groups))) {
         if (!(group instanceof JNotificationGroup)) throw rt.mkThrowable("java/lang/ClassCastException", "Expected NotificationChannelGroup");
-        (yield createGroup(group));
+        yield createGroup(group);
       }
     }),
     "deleteNotificationChannelGroup(Ljava/lang/String;)V": (id: string) => {

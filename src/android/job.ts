@@ -81,16 +81,16 @@ rt.register({
     "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JJobInfo, parcel: JParcel, flags: number): Gen {
       const p = this.p;
       writeInt(parcel, p.id);
-      (yield vcall(parcel, "writePersistableBundle", "(Landroid/os/PersistableBundle;)V", p.extras ?? null));
-      (yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", p.transient ?? null));
+      yield vcall(parcel, "writePersistableBundle", "(Landroid/os/PersistableBundle;)V", p.extras ?? null);
+      yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", p.transient ?? null);
       writeInt(parcel, 0);
-      (yield vcall(parcel, "writeParcelable", "(Landroid/os/Parcelable;I)V", p.svc, flags));
+      yield vcall(parcel, "writeParcelable", "(Landroid/os/Parcelable;I)V", p.svc, flags);
       const constraints = (p.charging ? 1 : 0) | (p.idle ? 2 : 0) | (p.batteryNotLow ? 4 : 0) | (p.storageNotLow ? 8 : 0);
       writeInt(parcel, constraints);
-      (yield vcall(parcel, "writeTypedArray", "([Landroid/os/Parcelable;I)V", p.triggers.length ? p.triggers : null, flags));
+      yield vcall(parcel, "writeTypedArray", "([Landroid/os/Parcelable;I)V", p.triggers.length ? p.triggers : null, flags);
       for (const value of [p.contentUpdateDelay ?? -1n, p.contentMaxDelay ?? -1n]) (yield vcall(parcel, "writeLong", "(J)V", value));
       writeInt(parcel, p.netReq ? 1 : 0);
-      if (p.netReq) (yield vcall(p.netReq, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags));
+      if (p.netReq) yield vcall(p.netReq, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags);
       for (const value of [-1n, -1n, -1n, p.minLatency ?? 0n, p.deadline ?? 0n]) (yield vcall(parcel, "writeLong", "(J)V", value));
       writeInt(parcel, p.interval !== undefined ? 1 : 0);
       writeInt(parcel, p.persisted ? 1 : 0);
@@ -102,7 +102,7 @@ rt.register({
       writeInt(parcel, 300);
       writeInt(parcel, (p.important ? 1 : 0) | (p.expedited ? 16 : 0));
       writeInt(parcel, 0);
-      (yield vcall(parcel, "writeString", "(Ljava/lang/String;)V", null));
+      yield vcall(parcel, "writeString", "(Ljava/lang/String;)V", null);
     }),
   },
 });
@@ -117,7 +117,7 @@ rt.register({
     "getFlags()I": function (this: JTriggerUri) { return this.flags; },
     "describeContents()I": () => 0,
     "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JTriggerUri, parcel: JParcel, flags: number): Gen {
-      (yield vcall(this.uri, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags));
+      yield vcall(this.uri, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags);
       writeInt(parcel, this.flags);
     }),
   },

@@ -71,10 +71,10 @@ export class JImageView extends JView {
 const scaleTypes = mkEnumSet("android/widget/ImageView$ScaleType", ["MATRIX", "FIT_XY", "FIT_START", "FIT_CENTER", "FIT_END", "CENTER", "CENTER_CROP", "CENTER_INSIDE"]);
 function initImageView(view: JImageView, c: unknown, set: JAttrSet | null, style: number, defaultStyle = 0): unknown { return rt.drive(initImageView$(view, c, set, style, defaultStyle)); }
 function* initImageView$(view: JImageView, c: unknown, set: JAttrSet | null, style: number, defaultStyle = 0): Gen {
-  (yield initViewFromCtx(view, c, set, style, defaultStyle));
+  yield initViewFromCtx(view, c, set, style, defaultStyle);
   if (!view.jres || (!set && !style && !defaultStyle)) return;
   const ta = obtainStyled(view.jres, view.theme, set, [AID("src"), AID("scaleType"), AID("adjustViewBounds"), AID("tint"), AID("cropToPadding")], style, defaultStyle);
-  if (ta.vals[0]) (yield view.setDrawable((yield loadDrawableRV(view.jres, ta.vals[0], view.theme))));
+  if (ta.vals[0]) yield view.setDrawable((yield loadDrawableRV(view.jres, ta.vals[0], view.theme)));
   if (ta.vals[1]) view.scaleType = rvInt(view.jres, ta.vals[1], 3);
   if (ta.vals[2]) view.adjustBounds = !!rvInt(view.jres, ta.vals[2], 0);
   if (ta.vals[4]) view.cropToPadding = !!rvInt(view.jres, ta.vals[4], 0);
@@ -95,7 +95,7 @@ const imageViewMethods: NativeSpec["methods"] = {
     return pending;
   },
   "setImageResource(I)V": driven(function* (this: JImageView, id: number): Gen {
-    (yield this.setDrawable(id && this.jres ? (yield loadDrawable(this.jres, id, this.theme)) : null));
+    yield this.setDrawable(id && this.jres ? (yield loadDrawable(this.jres, id, this.theme)) : null);
     this.layoutRequested = true;
     requestLayout(this);
   }),
@@ -103,7 +103,7 @@ const imageViewMethods: NativeSpec["methods"] = {
     if (b) {
       const d = new JBitmapDrawable();
       d.bmp = b;
-      (yield this.setDrawable(d));
+      yield this.setDrawable(d);
     } else (yield this.setDrawable(null));
     this.layoutRequested = true;
     requestLayout(this);
@@ -214,9 +214,9 @@ const imageViewMethods: NativeSpec["methods"] = {
       ctx.translate(this.padL, this.padT);
       if (matrix) ctx.transform(...matrix.m);
       const bounds = vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, dw, dh);
-      if (bounds instanceof Promise) (yield bounds);
+      if (bounds instanceof Promise) yield bounds;
       const draw = vcallOn(thread, d, "draw", "(Landroid/graphics/Canvas;)V", cv);
-      if (draw instanceof Promise) (yield draw);
+      if (draw instanceof Promise) yield draw;
     } finally { restoreCanvasToCount(cv, saveCount); }
   }),
 };

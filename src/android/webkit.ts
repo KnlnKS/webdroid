@@ -714,7 +714,7 @@ rt.register({
   methods: {
     // AOSP calls the deprecated overload for compatibility, then reports "not handled"
     "onConsoleMessage(Landroid/webkit/ConsoleMessage;)Z": driven(function* (this: JObj, m: JConsoleMessage): Gen {
-      (yield vcall(this, "onConsoleMessage", "(Ljava/lang/String;ILjava/lang/String;)V", m.msg, m.line, m.src));
+      yield vcall(this, "onConsoleMessage", "(Ljava/lang/String;ILjava/lang/String;)V", m.msg, m.line, m.src);
       return 0;
     }),
     ...noops("<init>()V", "onProgressChanged(Landroid/webkit/WebView;I)V",

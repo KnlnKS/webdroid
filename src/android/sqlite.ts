@@ -465,7 +465,7 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     }),
   "rawQueryWithFactory(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
     driven(function* (this: JSQLiteDatabase, factory: unknown, sql: string, args: unknown[] | null, editTable: string | null, signal: unknown): Gen {
-      if (signal) (yield vcall(signal, "throwIfCanceled", "()V"));
+      if (signal) yield vcall(signal, "throwIfCanceled", "()V");
       return callSelf(dbMethods,
         "rawQueryWithFactory(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
         this, factory, sql, args, editTable);
@@ -474,7 +474,7 @@ const dbMethods: NonNullable<NativeSpec["methods"]> = {
     return runQuery(this, sql, args);
   },
   "rawQuery(Ljava/lang/String;[Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;": driven(function* (this: JSQLiteDatabase, sql: string, args: unknown[] | null, signal: unknown): Gen {
-    if (signal) (yield vcall(signal, "throwIfCanceled", "()V"));
+    if (signal) yield vcall(signal, "throwIfCanceled", "()V");
     return runQuery(this, sql, args);
   }),
   "query(Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":

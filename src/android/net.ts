@@ -256,7 +256,7 @@ rt.register({
     "static withAppendedId(Landroid/net/Uri;J)Landroid/net/Uri;": driven(function* (u: JUri | null, id: bigint): Gen  {
       if (u === null) throw rt.mkThrowable("java/lang/NullPointerException", "contentUri");
       const builder = (yield vcall(u, "buildUpon", "()Landroid/net/Uri$Builder;"));
-      (yield vcall(builder, "appendEncodedPath", "(Ljava/lang/String;)Landroid/net/Uri$Builder;", String(id)));
+      yield vcall(builder, "appendEncodedPath", "(Ljava/lang/String;)Landroid/net/Uri$Builder;", String(id));
       return vcall(builder, "build", "()Landroid/net/Uri;");
     }),
   },

@@ -56,10 +56,10 @@ rt.register({ name: "android/os/Message", ctor: JMessage, ifaces: ["android/os/P
     "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JMessage, p: JParcel, flags: number): Gen {
       if (this.callback) throw rt.mkThrowable("java/lang/RuntimeException", "Cannot marshal callbacks");
       for (const value of [this.what, this.arg1, this.arg2, this.obj ? 1 : 0]) (yield vcall(p, "writeInt", "(I)V", value));
-      if (this.obj) (yield vcall(p, "writeParcelable", "(Landroid/os/Parcelable;I)V", this.obj, flags));
-      (yield vcall(p, "writeLong", "(J)V", BigInt(this.whenMs)));
-      (yield vcall(p, "writeBundle", "(Landroid/os/Bundle;)V", this.data));
-      (yield vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.replyTo?.binder ?? null));
+      if (this.obj) yield vcall(p, "writeParcelable", "(Landroid/os/Parcelable;I)V", this.obj, flags);
+      yield vcall(p, "writeLong", "(J)V", BigInt(this.whenMs));
+      yield vcall(p, "writeBundle", "(Landroid/os/Bundle;)V", this.data);
+      yield vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.replyTo?.binder ?? null);
       (yield vcall(p, "writeInt", "(I)V", this.sendingUid)); (yield vcall(p, "writeInt", "(I)V", this.workSourceUid));
     }),
 } });
@@ -69,7 +69,7 @@ rt.register({ name: "webdroid/MessengerBinder", ctor: JMessengerBinder, sup: "an
   "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JMessengerBinder, code: number, data: JParcel, reply: JParcel | null): Gen {
     if (code === 0x5f4e5446 && reply) { (yield vcall(reply, "writeString", "(Ljava/lang/String;)V", "android.os.IMessenger")); return 1; }
     if (code !== 1) return 0;
-    (yield vcall(data, "enforceInterface", "(Ljava/lang/String;)V", "android.os.IMessenger"));
+    yield vcall(data, "enforceInterface", "(Ljava/lang/String;)V", "android.os.IMessenger");
     if ((yield vcall(data, "readInt", "()I"))) {
       const message = (yield readMessage(data)); message.sendingUid = callingIdentity().uid; this.handler.send(message, 0);
     }
@@ -94,10 +94,10 @@ rt.register({ name: "android/os/Messenger", ctor: JMessenger, ifaces: ["android/
     "send(Landroid/os/Message;)V": driven(function* (this: JMessenger, m: JMessage): Gen {
       if (this.binder instanceof JMessengerBinder) { m.sendingUid = callingIdentity().uid; this.binder.handler.send(m, 0); return; }
       const parcel = new JParcel();
-      (yield vcall(parcel, "writeInterfaceToken", "(Ljava/lang/String;)V", "android.os.IMessenger"));
-      (yield vcall(parcel, "writeInt", "(I)V", 1));
-      (yield vcall(m, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0));
-      (yield vcall(this.binder, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, parcel, null, 1));
+      yield vcall(parcel, "writeInterfaceToken", "(Ljava/lang/String;)V", "android.os.IMessenger");
+      yield vcall(parcel, "writeInt", "(I)V", 1);
+      yield vcall(m, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
+      yield vcall(this.binder, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, parcel, null, 1);
     }),
     "getBinder()Landroid/os/IBinder;": function (this: JMessenger) { return this.binder; },
     "describeContents()I": () => 0,

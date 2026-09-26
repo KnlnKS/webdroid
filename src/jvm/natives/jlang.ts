@@ -325,13 +325,13 @@ rt.register({
     "newInstance()Ljava/lang/Object;": driven(function* (this: JClass): Gen {
       const info = this.ci!;
       const p = rt.initClass(info);
-      if (p) (yield p);
+      if (p) yield p;
       // <init> mangles without a class component, so an inherited <init>()V would run the
       // SUPERclass ctor and leave every own field null — silently. Only accept our own.
       if (info.def && !Object.hasOwn(info.ctor.prototype, mangleMethod("<init>", "()V")))
         throw rt.mkThrowable("java/lang/InstantiationException", dotName(info.name));
       const o = new info.ctor();
-      (yield vcall(o, "<init>", "()V"));
+      yield vcall(o, "<init>", "()V");
       return o;
     }),
     "getClassLoader()Ljava/lang/ClassLoader;": function (this: JClass) {
@@ -535,10 +535,10 @@ rt.register({
     // Missing, they turn a *handled* exception into an unhandled one that kills the
     // enclosing coroutine scope.
     "printStackTrace(Ljava/io/PrintWriter;)V": driven(function* (this: JThrowable, w: unknown): Gen {
-      (yield vcall(w, "println", "(Ljava/lang/String;)V", (yield stackTraceText(this))));
+      yield vcall(w, "println", "(Ljava/lang/String;)V", (yield stackTraceText(this)));
     }),
     "printStackTrace(Ljava/io/PrintStream;)V": driven(function* (this: JThrowable, s: unknown): Gen {
-      (yield vcall(s, "println", "(Ljava/lang/String;)V", (yield stackTraceText(this))));
+      yield vcall(s, "println", "(Ljava/lang/String;)V", (yield stackTraceText(this)));
     }),
     "fillInStackTrace()Ljava/lang/Throwable;": function (this: JThrowable) { this.jsErr = new Error(); this.trace = null; return this; },
     "getStackTrace()[Ljava/lang/StackTraceElement;": function (this: JThrowable) { return this.trace ??= jsStackTrace(this.jsStack); },
@@ -1822,7 +1822,7 @@ rt.register({
       });
     },
     "run()V": driven(function* (this: JThread): Gen {
-      if (this.target) (yield vcall(this.target, "run", "()V"));
+      if (this.target) yield vcall(this.target, "run", "()V");
     }),
     "join()V": function (this: JThread) { return join(this, 0); },
     "join(J)V": function (this: JThread, ms: bigint) { return join(this, Number(ms)); },
@@ -1836,7 +1836,7 @@ rt.register({
     "static enumerate([Ljava/lang/Thread;)I": enumerateThreads,
     "static getAllStackTraces()Ljava/util/Map;": driven(function* (): Gen  {
       const m = (yield newObj("java/util/HashMap"));
-      (yield vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", curThread, jsStackTrace(new Error().stack)));
+      yield vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", curThread, jsStackTrace(new Error().stack));
       return m;
     }),
     "static getDefaultUncaughtExceptionHandler()Ljava/lang/Thread$UncaughtExceptionHandler;": () => defaultUEH,

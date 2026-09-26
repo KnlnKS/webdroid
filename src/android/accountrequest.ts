@@ -29,7 +29,7 @@ rt.register({ name: "webdroid/AccountResponse", ctor: JAccountResponse, sup: "an
     if (code < 1 || code > 3) return 0;
     const caller = callingIdentity();
     if (caller.uid !== this.uid && caller.uid !== 1000) throw rt.mkThrowable("java/lang/SecurityException", "Reply does not belong to this authenticator");
-    (yield vcall(p, "enforceInterface", "(Ljava/lang/String;)V", AUTH_RESPONSE));
+    yield vcall(p, "enforceInterface", "(Ljava/lang/String;)V", AUTH_RESPONSE);
     (yield this.receive?.(code, p)); return 1;
   }),
 } });

@@ -71,9 +71,9 @@ rt.register({ name: "android/widget/ViewAnimator", ctor: JViewAnimator, sup: "an
   "showOnly(I)V": show,
   "showOnly(IZ)V": function (this: JViewAnimator, index: number, animate: number) { return show.call(this, index, !!animate); },
   "addView(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V": driven(function* (this: JViewAnimator, child: JView, index: number, lp: JLayoutParams): Gen {
-    (yield base(this, "addView", "(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V", child, index, lp));
-    (yield vcall(child, "setVisibility", "(I)V", this.children.length === 1 ? 0 : 8));
-    if (index >= 0 && this.displayed >= index) (yield vcall(this, "setDisplayedChild", "(I)V", this.displayed + 1));
+    yield base(this, "addView", "(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V", child, index, lp);
+    yield vcall(child, "setVisibility", "(I)V", this.children.length === 1 ? 0 : 8);
+    if (index >= 0 && this.displayed >= index) yield vcall(this, "setDisplayedChild", "(I)V", this.displayed + 1);
   }),
   "removeViewAt(I)V": removeAt,
   "removeView(Landroid/view/View;)V": remove,
@@ -113,7 +113,7 @@ class JViewFlipper extends JViewAnimator {
         if (this.running) mainHandler().post(this.flip, this.interval);
       };
     }
-    (yield vcall(this, "showOnly", "(IZ)V", this.displayed, +animate));
+    yield vcall(this, "showOnly", "(IZ)V", this.displayed, +animate);
     if (this.running) mainHandler().post(this.flip, this.interval);
   }
 }
@@ -136,8 +136,8 @@ rt.register({ name: "android/widget/ViewFlipper", ctor: JViewFlipper, sup: "andr
   "stopFlipping()V": function (this: JViewFlipper) { this.started = false; return this.update(); },
   "onAttachedToWindow()V": driven(function* (this: JViewFlipper): Gen {
     this.windowVisible = (yield vcall(this, "getWindowVisibility", "()I")) === 0;
-    if (this.autoStart) (yield vcall(this, "startFlipping", "()V"));
-    else (yield this.update(false));
+    if (this.autoStart) yield vcall(this, "startFlipping", "()V");
+    else yield this.update(false);
   }),
   "onDetachedFromWindow()V": function (this: JViewFlipper) { this.windowVisible = false; return this.update(); },
   "onWindowVisibilityChanged(I)V": function (this: JViewFlipper, visibility: number) { this.windowVisible = visibility === 0; return this.update(false); },
@@ -156,7 +156,7 @@ rt.register({ name: "android/widget/ViewSwitcher", ctor: class extends JViewAnim
     for (let i = 0; i < 2; i++) {
       const child = (yield vcall(factory, "makeView", "()Landroid/view/View;"));
       const lp = (yield vcall(child, "getLayoutParams", "()Landroid/view/ViewGroup$LayoutParams;")) ?? (yield newObj("android/widget/FrameLayout$LayoutParams", "(II)V", -1, -2));
-      (yield vcall(this, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", child, lp));
+      yield vcall(this, "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V", child, lp);
     }
   }),
   "reset()V": driven(function* (this: JViewAnimator): Gen { this.first = true; for (const child of this.children) (yield vcall(child, "setVisibility", "(I)V", 8)); }),

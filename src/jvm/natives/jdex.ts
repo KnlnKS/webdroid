@@ -115,7 +115,7 @@ rt.register({
   name: "webdroid/PackageClassLoader", ctor: class extends JClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
   methods: {
     "<init>(Ljava/lang/String;)V": driven(function* (this: JClassLoader, path: string): Gen {
-      (yield init.call(this, path, null, null));
+      yield init.call(this, path, null, null);
       this.runtime.platformParent = true;
     }),
     "loadClass(Ljava/lang/String;Z)Ljava/lang/Class;": function (this: JClassLoader, name: string) {

@@ -67,12 +67,12 @@ rt.register({
       if (!query?.length) return;
       if (line2 != null && !this.twoLine) throw rt.mkThrowable("java/lang/IllegalArgumentException", "twoLineDisplay must be enabled");
       const values = (yield newObj("android/content/ContentValues"));
-      (yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "display1", query));
-      (yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "query", query));
-      (yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/Long;)V", "date", BigInt(Date.now())));
-      if (this.twoLine) (yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "display2", line2));
+      yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "display1", query);
+      yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "query", query);
+      yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/Long;)V", "date", BigInt(Date.now()));
+      if (this.twoLine) yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "display2", line2);
       const resolver = (yield vcall(this.ctx, "getContentResolver", "()Landroid/content/ContentResolver;"));
-      (yield vcall(resolver, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", mkUri(`content://${this.authority}/suggestions`), values));
+      yield vcall(resolver, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", mkUri(`content://${this.authority}/suggestions`), values);
     }),
   },
 });

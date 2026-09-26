@@ -178,8 +178,8 @@ rt.register({
     "close()V": driven(function* (this: JDeflaterOut): Gen {
       if (this.closed) return;
       this.closed = true;
-      (yield vcall(this, "finish", "()V"));
-      (yield vcall(this.out, "close", "()V"));
+      yield vcall(this, "finish", "()V");
+      yield vcall(this.out, "close", "()V");
     }),
   },
 });
@@ -410,26 +410,26 @@ rt.register({
     "putNextEntry(Ljava/util/zip/ZipEntry;)V": driven(function* (this: JZipOutputStream, entry: JZipEntry | null): Gen {
       if (!entry) throw rt.mkThrowable("java/lang/NullPointerException", "entry");
       if (!this.archive || this.finished) throw rt.mkThrowable("java/io/IOException", "Stream closed");
-      (yield this.closeEntry());
+      yield this.closeEntry();
       if (this.names.has(entry.e.name)) throw rt.mkThrowable("java/util/zip/ZipException", "duplicate entry: " + entry.e.name);
       this.names.add(entry.e.name);
       const file = entry.e.method === 0 ? new ZipPassThrough(entry.e.name) : new ZipDeflate(entry.e.name, { level: this.level as DeflateOptions["level"] });
       if (entry.e.time >= 0) file.mtime = new Date(entry.e.time);
       this.archive.add(file);
       this.entry = file;
-      (yield this.flushChunks());
+      yield this.flushChunks();
     }),
     "write(I)V": driven(function* (this: JZipOutputStream, byte: number): Gen {
-      (yield vcall(this, "write", "([BII)V", Int8Array.of(byte), 0, 1));
+      yield vcall(this, "write", "([BII)V", Int8Array.of(byte), 0, 1);
     }),
     "write([B)V": driven(function* (this: JZipOutputStream, bytes: Int8Array): Gen {
-      (yield vcall(this, "write", "([BII)V", bytes, 0, bytes.length));
+      yield vcall(this, "write", "([BII)V", bytes, 0, bytes.length);
     }),
     "write([BII)V": driven(function* (this: JZipOutputStream, bytes: Int8Array, off: number, len: number): Gen {
       if (!this.entry) throw rt.mkThrowable("java/util/zip/ZipException", "no current ZIP entry");
       if (off < 0 || len < 0 || len > bytes.length - off) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
       if (len) this.entry.push(u8(bytes, off, len).slice());
-      (yield this.flushChunks());
+      yield this.flushChunks();
     }),
     "closeEntry()V": function (this: JZipOutputStream) { return this.closeEntry(); },
     "setLevel(I)V": function (this: JZipOutputStream, level: number) {
@@ -438,16 +438,16 @@ rt.register({
     },
     "finish()V": driven(function* (this: JZipOutputStream): Gen {
       if (this.finished || !this.archive) return;
-      (yield this.closeEntry());
+      yield this.closeEntry();
       this.archive.end();
       this.finished = true;
-      (yield this.flushChunks());
+      yield this.flushChunks();
     }),
     "flush()V": driven(function* (this: JZipOutputStream): Gen { (yield this.flushChunks()); (yield vcall(this.out, "flush", "()V")); }),
     "close()V": driven(function* (this: JZipOutputStream): Gen {
       if (!this.archive) return;
-      (yield vcall(this, "finish", "()V"));
-      (yield vcall(this.out, "close", "()V"));
+      yield vcall(this, "finish", "()V");
+      yield vcall(this.out, "close", "()V");
       this.archive = null;
     }),
   },

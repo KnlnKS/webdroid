@@ -27,7 +27,7 @@ rt.register({ name: "webdroid/OutputStreamChannel", ctor: class extends JStreamC
   "write(Ljava/nio/ByteBuffer;)I": driven(function* (this: JStreamChannel, buffer: JBuffer): Gen {
     if (!this.open) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
     const bytes = remainingBytes(buffer), count = bytes.length;
-    (yield vcall(this.stream, "write", "([BII)V", buffer.backing.storage.kind === "native" ? bytes.slice() : bytes, 0, count));
+    yield vcall(this.stream, "write", "([BII)V", buffer.backing.storage.kind === "native" ? bytes.slice() : bytes, 0, count);
     buffer.pos += count; return count;
   }),
 } });

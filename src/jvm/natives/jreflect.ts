@@ -723,7 +723,7 @@ rt.register({
       const a = (args ?? []).map((v, i) => ("IJFDZBCS".includes(ps[i] ?? "L") ? unboxArg(v) : v));
       const o = new info.ctor();
       const r = fn.apply(o, a);
-      if (r instanceof Promise) (yield r);
+      if (r instanceof Promise) yield r;
       return o;
     }),
     "toString()Ljava/lang/String;": function (this: JCtor) { return this.owner.name + ".<init>" + this.desc; },
@@ -1192,7 +1192,7 @@ function proxyClass(ifaces: ClassInfo[]): Promise<ClassInfo> {
 function buildProxy(ifaces: ClassInfo[]): ClassInfo | Promise<ClassInfo> { return rt.drive(buildProxy$(ifaces)); }
 function* buildProxy$(ifaces: ClassInfo[]): Gen<ClassInfo> {
   const name = "java/lang/reflect/$Proxy" + nextProxyId++;
-  if (ifaces.some((i) => !i.dex)) (yield ensureDecls());
+  if (ifaces.some((i) => !i.dex)) yield ensureDecls();
   rt.register({ name, ctor: class extends JProxy {}, ifaces: ifaces.map((i) => i.name) });
   const info = rt.link(name);
   proxyIfaces.set(info, ifaces);

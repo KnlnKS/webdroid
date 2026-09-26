@@ -37,7 +37,7 @@ function* invokeVariant$(callback: ActivityLifecycleCallback, variant: string, s
   if (typeof fn !== "function") return;
   try {
     const result: unknown = Reflect.apply(fn, callback, args);
-    if (result instanceof Promise) (yield result);
+    if (result instanceof Promise) yield result;
   } catch (error) {
     reportUncaught(error);
   }
@@ -47,7 +47,7 @@ function catchUp(callback: ActivityLifecycleCallback, activity: JActivity, phase
 function* catchUp$(callback: ActivityLifecycleCallback, activity: JActivity, phase: "Started" | "Resumed"): Gen<void> {
   markDelivered(callback, activity, phase);
   for (const variant of [`onActivityPre${phase}`, `onActivity${phase}`, `onActivityPost${phase}`])
-    (yield invokeVariant(callback, variant, "(Landroid/app/Activity;)V", [activity]));
+    yield invokeVariant(callback, variant, "(Landroid/app/Activity;)V", [activity]);
 }
 
 /** Dispatch each framework stage to a fresh snapshot, matching Application's three dispatch passes. */
@@ -64,7 +64,7 @@ function* fireActivityLifecycle$(activity: JActivity, phase: LifecyclePhase, bun
     ];
     for (const callback of callbacks) {
       markDelivered(callback, activity, phase);
-      (yield invokeVariant(callback, variant, signature, args));
+      yield invokeVariant(callback, variant, signature, args);
     }
   }
 }

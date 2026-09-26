@@ -198,14 +198,14 @@ function* replaceAt$(ic: JBaseInputConnection, ins: string, newCursor: number, c
   let a = (yield vcall(editable, "getSpanStart", "(Ljava/lang/Object;)I", composing));
   let b = (yield vcall(editable, "getSpanEnd", "(Ljava/lang/Object;)I", composing));
   if (a < 0 || b < 0) { a = Math.min(start, end); b = Math.max(start, end); }
-  (yield vcall(ic, "beginBatchEdit", "()Z"));
+  yield vcall(ic, "beginBatchEdit", "()Z");
   try {
-    (yield vcall(editable, "removeSpan", "(Ljava/lang/Object;)V", composing));
-    (yield vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", a, b, ins, 0, ins.length));
+    yield vcall(editable, "removeSpan", "(Ljava/lang/Object;)V", composing);
+    yield vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", a, b, ins, 0, ins.length);
     const cursor = Math.max(0, Math.min(text.length - (b - a) + ins.length, newCursor > 0 ? a + ins.length + newCursor - 1 : a + newCursor));
-    (yield setTextSelection(editable, cursor, cursor));
-    if (compose) (yield vcall(editable, "setSpan", "(Ljava/lang/Object;III)V", composing, a, a + ins.length, 0x121));
-    if (ic.full && ic.view instanceof JTextView) (yield vcall(ic.view, "setText", "(Ljava/lang/CharSequence;)V", (yield csText(editable))));
+    yield setTextSelection(editable, cursor, cursor);
+    if (compose) yield vcall(editable, "setSpan", "(Ljava/lang/Object;III)V", composing, a, a + ins.length, 0x121);
+    if (ic.full && ic.view instanceof JTextView) yield vcall(ic.view, "setText", "(Ljava/lang/CharSequence;)V", (yield csText(editable)));
     invalidate();
   } finally { (yield vcall(ic, "endBatchEdit", "()Z")); }
   return 1;
@@ -244,7 +244,7 @@ rt.register({
     }),
     "setComposingRegion(II)Z": driven(function* (this: JBaseInputConnection, a: number, b: number): Gen {
       const { editable, text } = (yield this.content());
-      (yield vcall(editable, "setSpan", "(Ljava/lang/Object;III)V", composing, Math.max(0, Math.min(text.length, a, b)), Math.max(0, Math.min(text.length, Math.max(a, b))), 0x121));
+      yield vcall(editable, "setSpan", "(Ljava/lang/Object;III)V", composing, Math.max(0, Math.min(text.length, a, b)), Math.max(0, Math.min(text.length, Math.max(a, b))), 0x121);
       return 1;
     }),
     "finishComposingText()Z": driven(function* (this: JBaseInputConnection): Gen {
@@ -253,12 +253,12 @@ rt.register({
     "deleteSurroundingText(II)Z": driven(function* (this: JBaseInputConnection, before: number, after: number): Gen {
       const { editable, text, start, end } = (yield this.content()), a = Math.min(start, end), b = Math.max(start, end);
       const left = Math.max(0, a - Math.max(0, before)), right = Math.min(text.length, b + Math.max(0, after));
-      (yield vcall(this, "beginBatchEdit", "()Z"));
+      yield vcall(this, "beginBatchEdit", "()Z");
       try {
-        if (right > b) (yield vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", b, right, "", 0, 0));
-        if (a > left) (yield vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", left, a, "", 0, 0));
-        (yield setTextSelection(editable, start - (a - left), end - (a - left)));
-        if (this.full && this.view instanceof JTextView) (yield vcall(this.view, "setText", "(Ljava/lang/CharSequence;)V", (yield csText(editable))));
+        if (right > b) yield vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", b, right, "", 0, 0);
+        if (a > left) yield vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", left, a, "", 0, 0);
+        yield setTextSelection(editable, start - (a - left), end - (a - left));
+        if (this.full && this.view instanceof JTextView) yield vcall(this.view, "setText", "(Ljava/lang/CharSequence;)V", (yield csText(editable)));
         invalidate();
       } finally { (yield vcall(this, "endBatchEdit", "()Z")); }
       return 1;
@@ -275,7 +275,7 @@ rt.register({
       (yield setTextSelection(editable, a, b)); return 1;
     }),
     "sendKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JBaseInputConnection, ev: unknown): Gen {
-      if (this.view) (yield vcall(this.view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", ev));
+      if (this.view) yield vcall(this.view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", ev);
       return 1;
     }),
     ...stubs(0, "getCursorCapsMode(I)I", "commitCompletion(Landroid/view/inputmethod/CompletionInfo;)Z",
@@ -286,7 +286,7 @@ rt.register({
     // EditableInputConnection: the editor action reaches the TextView it serves
     "performEditorAction(I)Z": driven(function* (this: JBaseInputConnection, code: number): Gen {
       if (!(this.view instanceof JTextView)) return 0;
-      (yield editorAction(this.view, code));
+      yield editorAction(this.view, code);
       return 1;
     }),
     ...stubs(1, "performContextMenuAction(I)Z",
@@ -469,7 +469,7 @@ function connectInput(view: JView): unknown { return rt.drive(connectInput$(view
 function* connectInput$(view: JView): Gen {
   if (served) {
     const previous = served; served = null;
-    (yield vcall(previous.connection, "closeConnection", "()V"));
+    yield vcall(previous.connection, "closeConnection", "()V");
   }
   if (view instanceof JEditText) { focusEditText(view); return true; }
   focusEditText(null);
@@ -480,7 +480,7 @@ function* connectInput$(view: JView): Gen {
   served = session;
   const request = rt.make("android/view/inputmethod/ExtractedTextRequest");
   const extracted = (yield vcall(connection, "getExtractedText", "(Landroid/view/inputmethod/ExtractedTextRequest;I)Landroid/view/inputmethod/ExtractedText;", request, 1));
-  if (extracted) (yield extractedInput(session, extracted));
+  if (extracted) yield extractedInput(session, extracted);
   mirrorInput(); return true;
 }
 export const imeActive = () => !!focusedEdit || !!served && imeVisible;
@@ -553,7 +553,7 @@ rt.register({
       if (served?.view === view) { served.start = start; served.end = end; mirrorInput(); }
     },
     "updateExtractedText(Landroid/view/View;ILandroid/view/inputmethod/ExtractedText;)V": driven(function* (view: JView, _token: number, extracted: JExtractedText): Gen  {
-      if (served?.view === view) (yield extractedInput(served, extracted));
+      if (served?.view === view) yield extractedInput(served, extracted);
     }),
     "updateCursorAnchorInfo(Landroid/view/View;Landroid/view/inputmethod/CursorAnchorInfo;)V": () => {},
     "dispatchKeyEventFromInputMethod(Landroid/view/View;Landroid/view/KeyEvent;)V": driven(function* (view: JView, event: unknown): Gen  { return imeMain(async () => { await vcall(view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", event); }); }),
@@ -592,12 +592,12 @@ rt.register({
     "enoughToFilter()Z": function (this: JAutoComplete) { return this.text.length >= this.threshold ? 1 : 0; },
     "refreshAutoCompleteResults()V": driven(function* (this: JAutoComplete): Gen {
       if ((yield vcall(this, "enoughToFilter", "()Z"))) {
-        (yield vcall(this, "performFiltering", "(Ljava/lang/CharSequence;I)V", this.text, 0));
+        yield vcall(this, "performFiltering", "(Ljava/lang/CharSequence;I)V", this.text, 0);
       } else {
-        (yield vcall(this, "dismissDropDown", "()V"));
+        yield vcall(this, "dismissDropDown", "()V");
         if (this.adapter && rt.iof(this.adapter, "android/widget/Filterable")) {
           const filter = (yield vcall(this.adapter, "getFilter", "()Landroid/widget/Filter;"));
-          if (filter) (yield vcall(filter, "filter", "(Ljava/lang/CharSequence;)V", null));
+          if (filter) yield vcall(filter, "filter", "(Ljava/lang/CharSequence;)V", null);
         }
       }
     }),
@@ -605,7 +605,7 @@ rt.register({
     "dismissDropDown()V": driven(function* (this: JAutoComplete): Gen {
       const wasShowing = this.popupShowing;
       this.popupShowing = 0;
-      if (wasShowing && this.dismissL) (yield vcall(this.dismissL, "onDismiss", "()V"));
+      if (wasShowing && this.dismissL) yield vcall(this.dismissL, "onDismiss", "()V");
     }),
     "setOnDismissListener(Landroid/widget/AutoCompleteTextView$OnDismissListener;)V": function (this: JAutoComplete, listener: unknown) { this.dismissL = listener; },
     ...fieldSetters({ "setAdapter(Landroid/widget/ListAdapter;)V": "adapter",
@@ -618,19 +618,19 @@ rt.register({
     "setDropDownWidth(I)V": () => {}, "setDropDownHeight(I)V": () => {},
     "setDropDownVerticalOffset(I)V": () => {}, "setDropDownHorizontalOffset(I)V": () => {},
     "setText(Ljava/lang/CharSequence;Z)V": driven(function* (this: JAutoComplete, cs: unknown): Gen {
-      (yield vcall(this, "setText", "(Ljava/lang/CharSequence;)V", cs));
+      yield vcall(this, "setText", "(Ljava/lang/CharSequence;)V", cs);
     }),
     "convertSelectionToString(Ljava/lang/Object;)Ljava/lang/CharSequence;": driven(function* (o: unknown): Gen 
       { return (o === null ? "" : (yield vcall(o, "toString", "()Ljava/lang/String;"))); }),
     "performFiltering(Ljava/lang/CharSequence;I)V": driven(function* (this: JAutoComplete, cs: unknown): Gen {
       if (this.adapter && rt.iof(this.adapter, "android/widget/Filterable")) {
         const f = (yield vcall(this.adapter, "getFilter", "()Landroid/widget/Filter;"));
-        if (f) (yield vcall(f, "filter", "(Ljava/lang/CharSequence;Landroid/widget/Filter$FilterListener;)V", cs, this));
+        if (f) yield vcall(f, "filter", "(Ljava/lang/CharSequence;Landroid/widget/Filter$FilterListener;)V", cs, this);
       }
     }),
     "onFilterComplete(I)V": function (this: JAutoComplete, count: number) { this.popupShowing = count > 0 ? 1 : 0; },
     "replaceText(Ljava/lang/CharSequence;)V": driven(function* (this: JAutoComplete, cs: unknown): Gen {
-      (yield vcall(this, "setText", "(Ljava/lang/CharSequence;)V", cs));
+      yield vcall(this, "setText", "(Ljava/lang/CharSequence;)V", cs);
     }),
     ...noops("setCompletionHint(Ljava/lang/CharSequence;)V",
       "clearListSelection()V", "performCompletion()V"),

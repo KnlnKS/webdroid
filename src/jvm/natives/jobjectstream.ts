@@ -108,7 +108,7 @@ rt.register({
       this.writeDepth++;
       try { (yield writeObject(curThread, this, value)); }
       finally { this.writeDepth--; }
-      if (this.writeDepth === 0) (yield vcall(this, "flush", "()V"));
+      if (this.writeDepth === 0) yield vcall(this, "flush", "()V");
     }),
     "enableReplaceObject(Z)Z": function (this: JObjectOut, enabled: number) { const old = this.replace; this.replace = !!enabled; return +old; },
     "replaceObject(Ljava/lang/Object;)Ljava/lang/Object;": (value: unknown) => value,

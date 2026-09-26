@@ -57,7 +57,7 @@ rt.register({ name: "webdroid/AccountAuthenticatorBinder", ctor: JAuthenticatorB
     const caller = callingIdentity();
     if (caller.uid !== 1000 && ![...packages.values()].some(pkg => pkg.uid === caller.uid && pkg.grants.has("android.permission.ACCOUNT_MANAGER")))
       throw rt.mkThrowable("java/lang/SecurityException", "Caller lacks ACCOUNT_MANAGER");
-    (yield vcall(p, "enforceInterface", "(Ljava/lang/String;)V", AUTHENTICATOR));
+    yield vcall(p, "enforceInterface", "(Ljava/lang/String;)V", AUTHENTICATOR);
     const response = responseFor((yield vcall(p, "readStrongBinder", "()Landroid/os/IBinder;")));
     const [name, types] = method, args: unknown[] = [];
     for (const type of types) {
@@ -72,10 +72,10 @@ rt.register({ name: "webdroid/AccountAuthenticatorBinder", ctor: JAuthenticatorB
         const label = (yield withCallingIdentity(caller, () => vcall(this.authenticator, name, "(" + S + ")" + S, ...args)));
         rt.link("android/os/Bundle"); result = new JBundle(); result.map.set("authTokenLabelKey", label);
       } else result = (yield withCallingIdentity(caller, () => vcall(this.authenticator, name, "(Landroid/accounts/AccountAuthenticatorResponse;" + types.join("") + ")" + B, response, ...args)));
-      if (result) (yield sendResponse(response, 1, result));
+      if (result) yield sendResponse(response, 1, result);
     } catch (error) {
       const code = rt.iof(error, "android/accounts/NetworkErrorException") ? 3 : rt.iof(error, "java/lang/UnsupportedOperationException") ? 6 : rt.iof(error, "java/lang/IllegalArgumentException") ? 7 : 1;
-      (yield sendResponse(response, 3, null, code, "Authenticator request failed"));
+      yield sendResponse(response, 3, null, code, "Authenticator request failed");
     }
     return 1;
   }),

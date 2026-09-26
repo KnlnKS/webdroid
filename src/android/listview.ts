@@ -82,7 +82,7 @@ function* appendAdapterItems$(adapter: JArrayAdapter, values: unknown[]): Gen {
   if (adapter.source) {
     for (const value of values) (yield vcall(adapter.source, "add", "(Ljava/lang/Object;)Z", value));
   } else adapter.items.push(...values);
-  (yield vcall(adapter, "notifyDataSetChanged", "()V"));
+  yield vcall(adapter, "notifyDataSetChanged", "()V");
 }
 rt.register({
   name: "android/widget/ArrayAdapter", ctor: JArrayAdapter, sup: "android/widget/BaseAdapter",
@@ -124,15 +124,15 @@ rt.register({
       return appendAdapterItems(this, [o]);
     },
     "addAll(Ljava/util/Collection;)V": driven(function* (this: JArrayAdapter, collection: unknown): Gen {
-      (yield appendAdapterItems(this, (yield toJsArray(collection))));
+      yield appendAdapterItems(this, (yield toJsArray(collection)));
     }),
     "addAll([Ljava/lang/Object;)V": function (this: JArrayAdapter, values: unknown[]) {
       return appendAdapterItems(this, values);
     },
     "clear()V": driven(function* (this: JArrayAdapter): Gen {
-      if (this.source) (yield vcall(this.source, "clear", "()V"));
+      if (this.source) yield vcall(this.source, "clear", "()V");
       else this.items.length = 0;
-      (yield vcall(this, "notifyDataSetChanged", "()V"));
+      yield vcall(this, "notifyDataSetChanged", "()V");
     }),
     "getView(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;":
       driven(function* (this: JArrayAdapter, pos: number, convert: unknown, parent: unknown): Gen {
@@ -413,13 +413,13 @@ function* notifyChoiceMode$(list: JListView, pos: number, checked: boolean): Gen
       list.actionMode = null;
       return;
     }
-    (yield vcall(cb, "onPrepareActionMode", "(Landroid/view/ActionMode;Landroid/view/Menu;)Z", mode, mode.menu));
+    yield vcall(cb, "onPrepareActionMode", "(Landroid/view/ActionMode;Landroid/view/Menu;)Z", mode, mode.menu);
   }
   const mode = list.actionMode;
   if (!mode) return;
   (yield vcall(cb, "onItemCheckedStateChanged", "(Landroid/view/ActionMode;IJZ)V",
     mode, pos, (yield rowId(list, pos)), checked ? 1 : 0));
-  if (!list.checked.size) (yield vcall(mode, "finish", "()V"));
+  if (!list.checked.size) yield vcall(mode, "finish", "()V");
 }
 
 function cancelItemLongPress(list: JListView) {
@@ -460,7 +460,7 @@ function* measureListView$(this: JListView, wSpec: number, hSpec: number): Gen {
 }
 const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JListView, c: unknown, set: JAttrSet | null): Gen {
-    (yield initViewFromCtx(this, c, set));
+    yield initViewFromCtx(this, c, set);
     if (set && this.jres) {
       const ta = obtainStyled(this.jres, this.theme, set, [AID("divider"), AID("dividerHeight"), AID("choiceMode")], 0, 0);
       if (ta.vals[0]) this.divDraw = (yield loadDrawableRV(this.jres, ta.vals[0], this.theme));
@@ -484,7 +484,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
       };
       try { (yield vcall(a, "registerDataSetObserver", "(Landroid/database/DataSetObserver;)V", this.observer)); } catch { /* */ }
     }
-    (yield this.rebuild());
+    yield this.rebuild();
   }),
   // appcompat's dropdown list reads both back: without them a Spinner popup dies on open, and
   // picking a row throws instead of selecting it
@@ -513,7 +513,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setDividerHeight(I)V": function (this: JListView, h: number) { this.divH = h; requestLayout(this); },
   "setChoiceMode(I)V": driven(function* (this: JListView, m: number): Gen {
     this.choiceMode = m;
-    if (m !== CHOICE_MODE_MULTIPLE_MODAL && this.actionMode) (yield vcall(this.actionMode, "finish", "()V"));
+    if (m !== CHOICE_MODE_MULTIPLE_MODAL && this.actionMode) yield vcall(this.actionMode, "finish", "()V");
   }),
   "setItemChecked(IZ)V": driven(function* (this: JListView, pos: number, val: number): Gen {
     if (val) {
@@ -523,7 +523,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     const v = this.allViews()[pos];
     if (v) { v.activated = !!val; void v.refreshDrawableState(); }
     invalidate();
-    (yield notifyChoiceMode(this, pos, !!val));
+    yield notifyChoiceMode(this, pos, !!val);
   }),
   "isItemChecked(I)Z": function (this: JListView, pos: number) { return this.checked.has(pos) ? 1 : 0; },
   "getCheckedItemPosition()I": function (this: JListView) {
@@ -555,11 +555,11 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     // modal choice mode only consumes clicks while its ActionMode is up; before that a tap is a plain click
     const modalActive = this.choiceMode === CHOICE_MODE_MULTIPLE_MODAL && this.actionMode !== null;
     if (this.choiceMode && (this.choiceMode !== CHOICE_MODE_MULTIPLE_MODAL || modalActive)) {
-      (yield guardCall(this, M_setItemChecked, pos, this.checked.has(pos) ? 0 : 1));
+      yield guardCall(this, M_setItemChecked, pos, this.checked.has(pos) ? 0 : 1);
       if (modalActive) return 1;
     }
     if (this.itemClickL) {
-      (yield vcall(this.itemClickL, "onItemClick", "(Landroid/widget/AdapterView;Landroid/view/View;IJ)V", this, v, pos, id));
+      yield vcall(this.itemClickL, "onItemClick", "(Landroid/widget/AdapterView;Landroid/view/View;IJ)V", this, v, pos, id);
       return 1;
     }
     return 0;
@@ -568,7 +568,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   // goes to the OnItemLongClickListener.
   "performLongPress(Landroid/view/View;IJ)Z": driven(function* (this: JListView, v: JView, pos: number, id: bigint): Gen {
     if (this.choiceMode === CHOICE_MODE_MULTIPLE_MODAL && this.multiChoiceL) {
-      (yield guardCall(this, M_setItemChecked, pos, 1));
+      yield guardCall(this, M_setItemChecked, pos, 1);
       return this.actionMode ? 1 : 0;
     }
     if (this.itemLongClickL) {
@@ -622,7 +622,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "onLayout(ZIIII)V": driven(function* (this: JListView): Gen {
     let y = this.padT;
     for (const v of this.allViews()) {
-      (yield layoutView(v, this.padL, y, this.padL + v.measuredW, y + v.measuredH));
+      yield layoutView(v, this.padL, y, this.padL + v.measuredW, y + v.measuredH);
       y += v.measuredH + this.divH;
     }
     this.finishLayout();
@@ -637,7 +637,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
       d.bounds.right = this.width() - this.padR;
       d.bounds.bottom = vs[i].bottom + this.divH;
       const pending = drawChild(d, cv, thread);
-      if (pending instanceof Promise) (yield pending);
+      if (pending instanceof Promise) yield pending;
     }
   }),
   "onInterceptTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JListView, ev: JMotionEvent) {
@@ -692,7 +692,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
       if (!this.dragging && !this.longFired && this.pressTarget >= 0) {
         const v = this.allViews()[this.pressTarget];
         if (v) {
-          (yield guardCall(this, M_perfItemClick, v, this.pressTarget, (yield rowId(this, this.pressTarget))));
+          yield guardCall(this, M_perfItemClick, v, this.pressTarget, (yield rowId(this, this.pressTarget)));
         }
       }
       let vv = restVelocity(this.velo, SCROLL_WEIGHT, ev.eventTime - this.lastMoveT);
@@ -748,12 +748,12 @@ rt.register({ name: "android/widget/ListPopupWindow", ctor: JListPopupWindow, me
   "<init>(Landroid/content/Context;)V": function (this: JListPopupWindow, ctx: unknown) { this.ctx = ctx; },
   "setAdapter(Landroid/widget/ListAdapter;)V": driven(function* (this: JListPopupWindow, adapter: unknown): Gen {
     this.adapter = adapter;
-    if (this.list) (yield vcall(this.list, "setAdapter", "(Landroid/widget/ListAdapter;)V", adapter));
+    if (this.list) yield vcall(this.list, "setAdapter", "(Landroid/widget/ListAdapter;)V", adapter);
   }),
   "setAnchorView(Landroid/view/View;)V": function (this: JListPopupWindow, anchor: JView) { this.anchor = anchor; },
   "setOnItemClickListener(Landroid/widget/AdapterView$OnItemClickListener;)V": driven(function* (this: JListPopupWindow, listener: unknown): Gen {
     this.itemClick = listener;
-    if (this.list) (yield vcall(this.list, "setOnItemClickListener", "(Landroid/widget/AdapterView$OnItemClickListener;)V", listener));
+    if (this.list) yield vcall(this.list, "setOnItemClickListener", "(Landroid/widget/AdapterView$OnItemClickListener;)V", listener);
   }),
   "setModal(Z)V": function (this: JListPopupWindow, value: number) { this.modal = !!value; },
   "setWidth(I)V": function (this: JListPopupWindow, value: number) { this.width = value; },
@@ -767,16 +767,16 @@ rt.register({ name: "android/widget/ListPopupWindow", ctor: JListPopupWindow, me
     if (!this.anchor) return;
     if (!this.popup) {
       this.list = (yield newObj("android/widget/ListView", "(Landroid/content/Context;Landroid/util/AttributeSet;)V", this.ctx, null));
-      (yield vcall(this.list, "setAdapter", "(Landroid/widget/ListAdapter;)V", this.adapter));
-      (yield vcall(this.list, "setOnItemClickListener", "(Landroid/widget/AdapterView$OnItemClickListener;)V", this.itemClick));
+      yield vcall(this.list, "setAdapter", "(Landroid/widget/ListAdapter;)V", this.adapter);
+      yield vcall(this.list, "setOnItemClickListener", "(Landroid/widget/AdapterView$OnItemClickListener;)V", this.itemClick);
       this.popup = (yield newObj("android/widget/PopupWindow", "(Landroid/content/Context;)V", this.ctx));
-      (yield vcall(this.popup, "setContentView", "(Landroid/view/View;)V", this.list));
-      (yield vcall(this.popup, "setFocusable", "(Z)V", +this.modal));
-      (yield vcall(this.popup, "setOutsideTouchable", "(Z)V", 1));
+      yield vcall(this.popup, "setContentView", "(Landroid/view/View;)V", this.list);
+      yield vcall(this.popup, "setFocusable", "(Z)V", +this.modal);
+      yield vcall(this.popup, "setOutsideTouchable", "(Z)V", 1);
     }
-    (yield vcall(this.popup, "setWidth", "(I)V", this.width === WRAP_CONTENT ? this.anchor.width() : this.width));
-    (yield vcall(this.popup, "setHeight", "(I)V", this.height));
-    (yield vcall(this.popup, "showAsDropDown", "(Landroid/view/View;II)V", this.anchor, this.xoff, this.yoff));
+    yield vcall(this.popup, "setWidth", "(I)V", this.width === WRAP_CONTENT ? this.anchor.width() : this.width);
+    yield vcall(this.popup, "setHeight", "(I)V", this.height);
+    yield vcall(this.popup, "showAsDropDown", "(Landroid/view/View;II)V", this.anchor, this.xoff, this.yoff);
   }),
 } });
 rt.register({
@@ -809,7 +809,7 @@ rt.register({
       let rowH = 0, totalH = this.padT + this.padB;
       const vs = this.allViews();
       for (let i = 0; i < vs.length; i++) {
-        (yield measureView(vs[i], makeSpec(colW, MS_EXACTLY), makeSpec(0, MS_UNSPEC)));
+        yield measureView(vs[i], makeSpec(colW, MS_EXACTLY), makeSpec(0, MS_UNSPEC));
         rowH = Math.max(rowH, vs[i].measuredH);
         if (i % this.cols === this.cols - 1 || i === vs.length - 1) {
           totalH += rowH;
@@ -828,7 +828,7 @@ rt.register({
         const col = i % this.cols;
         if (col === 0 && i > 0) { y += rowH; rowH = 0; }
         const x = this.padL + col * colW;
-        (yield layoutView(vs[i], x, y, x + vs[i].measuredW, y + vs[i].measuredH));
+        yield layoutView(vs[i], x, y, x + vs[i].measuredW, y + vs[i].measuredH);
         rowH = Math.max(rowH, vs[i].measuredH);
       }
       this.finishLayout();
@@ -850,7 +850,7 @@ class JSpinner extends JListView {
     if (this.selection >= 0 && this.selection < n) {
       this.selView = (yield vcall(this.adapter, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;",
         this.selection, null, this)) as JView | null;
-      if (this.selView) (yield attachView(this, this.selView));
+      if (this.selView) yield attachView(this, this.selView);
     }
     requestLayout(this);
   }
@@ -877,7 +877,7 @@ function* showSpinnerPopup$(sp: JSpinner): Gen {
   if (!a || !((yield vcall(a, "getCount", "()I")))) return;
   const list = new JSpinnerPopup();
   inheritContext(list, sp);
-  (yield themeDivider(list));
+  yield themeDivider(list);
   list.background = sp.popupBg;
   const fwd = (n: string, d: string) => (...args: unknown[]) => vcall(a, n, d, ...args);
   (yield vcall(list, "setAdapter", "(Landroid/widget/ListAdapter;)V", {
@@ -905,8 +905,8 @@ function* showSpinnerPopup$(sp: JSpinner): Gen {
   const below = root.height() - y - sp.height();
   list.popW = sp.width();
   list.popH = Math.max(y, below);
-  (yield measureView(list, makeSpec(root.width(), MS_AT_MOST), makeSpec(root.height(), MS_AT_MOST)));
-  (yield vcall(list, "setSelection", "(I)V", sp.selection));
+  yield measureView(list, makeSpec(root.width(), MS_AT_MOST), makeSpec(root.height(), MS_AT_MOST));
+  yield vcall(list, "setSelection", "(I)V", sp.selection);
   addOverlay(list, x, list.measuredH <= below ? y + sp.height() : Math.max(0, y - list.measuredH), true);
 }
 // ── AbsSpinner: AdapterView's selection contract
@@ -946,7 +946,7 @@ function* fireItemSelected$(sp: JSelSpinner): Gen {
     (yield vcall(l, "onItemSelected", "(Landroid/widget/AdapterView;Landroid/view/View;IJ)V",
       sp, sp.selView, sp.selection, (yield selectedRowId(sp))));
   } else {
-    (yield vcall(l, "onNothingSelected", "(Landroid/widget/AdapterView;)V", sp));
+    yield vcall(l, "onNothingSelected", "(Landroid/widget/AdapterView;)V", sp);
   }
 }
 
@@ -968,16 +968,16 @@ function selectPosition(sp: JSelSpinner, pos: number): unknown { return rt.drive
 function* selectPosition$(sp: JSelSpinner, pos: number): Gen {
   if (sp.selection !== pos) {
     sp.selection = pos;
-    (yield sp.rebuild());
+    yield sp.rebuild();
   }
   checkSelectionChanged(sp);
 }
 
 const absSpinnerMethods: NativeSpec["methods"] = {
   "setAdapter(Landroid/widget/SpinnerAdapter;)V": driven(function* (this: JSelSpinner, a: unknown): Gen {
-    (yield vcall(this, "setAdapter", "(Landroid/widget/ListAdapter;)V", a));
+    yield vcall(this, "setAdapter", "(Landroid/widget/ListAdapter;)V", a);
     const n = a ? (yield vcall(this, "getCount", "()I")) as number : 0;
-    (yield selectPosition(this, n > 0 ? 0 : INVALID_POSITION));
+    yield selectPosition(this, n > 0 ? 0 : INVALID_POSITION);
   }),
   "setSelection(I)V": driven(function* (this: JSelSpinner, pos: number): Gen { (yield selectPosition(this, pos)); }),
   "getSelectedItemPosition()I": function (this: JSelSpinner) { return this.selection; },
@@ -1001,7 +1001,7 @@ rt.register({
       return (this as any)[mangleMethod("<init>", "(Landroid/content/Context;Landroid/util/AttributeSet;)V")](c, null);
     },
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JSpinner, c: unknown, set: JAttrSet | null, dsa?: number): Gen {
-      (yield initViewFromCtx(this, c, set));
+      yield initViewFromCtx(this, c, set);
       if (!this.jres) return;
       // appcompat's Spinner passes its OWN spinnerStyle: resolving the framework one instead
       // gives a widget the app never styled (a Holo underline under a Material app's title)
@@ -1018,7 +1018,7 @@ rt.register({
     },
     "onMeasure(II)V": driven(function* (this: JSpinner, wSpec: number, hSpec: number): Gen {
       if (this.selView) {
-        (yield measureView(this.selView, childMeasureSpec(wSpec, device.dp(20), this.selView.lp?.width ?? WRAP_CONTENT), makeSpec(0, MS_UNSPEC)));
+        yield measureView(this.selView, childMeasureSpec(wSpec, device.dp(20), this.selView.lp?.width ?? WRAP_CONTENT), makeSpec(0, MS_UNSPEC));
       }
       const w = specMode(wSpec) === MS_EXACTLY ? specSize(wSpec) : Math.max(this.minW, (this.selView?.measuredW ?? device.dp(50)) + device.dp(28));
       const h = specMode(hSpec) === MS_EXACTLY ? specSize(hSpec) : Math.max(this.minH, (this.selView?.measuredH ?? device.dp(30)), device.dp(42));
@@ -1032,11 +1032,11 @@ rt.register({
       }
     }),
     "performClick()Z": driven(function* (this: JSpinner): Gen {
-      (yield showSpinnerPopup(this));
+      yield showSpinnerPopup(this);
       return 1;
     }),
     "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JSpinner, ev: JMotionEvent): Gen {
-      if ((ev.action & 0xff) === 1) (yield vcall(this, "performClick", "()Z"));
+      if ((ev.action & 0xff) === 1) yield vcall(this, "performClick", "()Z");
       return 1;
     }),
     ...absSpinnerMethods,

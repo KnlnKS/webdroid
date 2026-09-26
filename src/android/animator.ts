@@ -405,7 +405,7 @@ const vaMethods: NativeSpec["methods"] = {
   "reverse()V": driven(function* (this: JValueAnimator): Gen {
     if (this.running) { this.reversed = !this.reversed; this.startT = guestNow() - (this.durationMs - (guestNow() - this.startT)); return; }
     this.startReversed = true;
-    (yield guardCall(this, M_start));
+    yield guardCall(this, M_start);
   }),
   "setCurrentPlayTime(J)V": function (this: JValueAnimator, t: bigint) { this.startT = guestNow() - Number(t); },
   "getCurrentPlayTime()J": function (this: JValueAnimator) { return BigInt(Math.max(0, Math.round(guestNow() - this.startT))); },
@@ -559,7 +559,7 @@ rt.register({
       }
       if (this.sequential) {
         for (let i = 0; i + 1 < this.anims.length; i++) this.anims[i].next = this.anims[i + 1];
-        if (this.anims.length) (yield vcallOn(thread, this.anims[0], "start", "()V"));
+        if (this.anims.length) yield vcallOn(thread, this.anims[0], "start", "()V");
       } else for (const a of this.anims) (yield vcallOn(thread, a, "start", "()V"));
       const total = this.sequential ? this.anims.reduce((s, a) => s + a.delayMs + a.durationMs, 0)
         : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
@@ -717,9 +717,9 @@ rt.register({
     "setState([I)V": driven(function* (this: JStateListAnimator, state: Int32Array): Gen {
       const hit = this.tuples.find((t) => stateSetMatches(t.spec, state))?.anim ?? null;
       if (hit === this.cur) return;
-      if (this.cur) (yield guardCall(this.cur, M_cancel));
+      if (this.cur) yield guardCall(this.cur, M_cancel);
       this.cur = hit;
-      if (hit) (yield guardCall(hit, M_start));
+      if (hit) yield guardCall(hit, M_start);
     }),
     "jumpToCurrentState()V": function (this: JStateListAnimator) { if (this.cur) this.cur.running = false; },
     "clone()Ljava/lang/Object;": function (this: JStateListAnimator) {

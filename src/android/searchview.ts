@@ -71,14 +71,14 @@ rt.register({
   methods: {
     ...linearMethods,
     "<init>(Landroid/content/Context;)V": driven(function* (this: JSearchView, c: unknown): Gen {
-      (yield initViewFromCtx(this, c, null));
+      yield initViewFromCtx(this, c, null);
       this.orientation = 0;
-      (yield buildSearchView(this, null));
+      yield buildSearchView(this, null);
     }),
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JSearchView, c: unknown, set: JAttrSet | null): Gen {
-      (yield initViewFromCtx(this, c, set));
+      yield initViewFromCtx(this, c, set);
       this.orientation = 0;
-      (yield buildSearchView(this, set));
+      yield buildSearchView(this, set);
     }),
     "setOnQueryTextListener(Landroid/widget/SearchView$OnQueryTextListener;)V": function (this: JSearchView, l: unknown) { this.queryL = l; },
     "setQueryHint(Ljava/lang/CharSequence;)V": function (this: JSearchView, h: unknown) {
@@ -93,8 +93,8 @@ rt.register({
       if (this.edit) this.edit.text = this.queryText;
       if (this.closeBtn) { this.closeBtn.visibility = this.queryText ? 0 : 8; requestLayout(this.closeBtn); }
       if (this.queryL) {
-        (yield vcall(this.queryL, "onQueryTextChange", "(Ljava/lang/String;)Z", this.queryText));
-        if (submit) (yield vcall(this.queryL, "onQueryTextSubmit", "(Ljava/lang/String;)Z", this.queryText));
+        yield vcall(this.queryL, "onQueryTextChange", "(Ljava/lang/String;)Z", this.queryText);
+        if (submit) yield vcall(this.queryL, "onQueryTextSubmit", "(Ljava/lang/String;)Z", this.queryText);
       }
     }),
     "getQuery()Ljava/lang/CharSequence;": function (this: JSearchView) { return this.queryText; },

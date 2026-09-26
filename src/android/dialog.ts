@@ -67,7 +67,7 @@ class DialogRoot extends JFrameLayout {
     const bg = win?.bgSet ? win.bg : this.cardBg;
     if (!bg) { this.bgPad = [0, 0, 0, 0]; return; }
     const r = new JRect();
-    (yield guardCall(bg, M_getPadding, r));
+    yield guardCall(bg, M_getPadding, r);
     this.bgPad = [r.left, r.top, r.right, r.bottom];
   }
   dialog: JDialog | null = null;
@@ -77,7 +77,7 @@ class DialogRoot extends JFrameLayout {
   setContent(v: JView | null): unknown { return rt.drive(this.setContent$(v)); }
   *setContent$(v: JView | null): Gen {
     for (const child of [...this.content.children]) (yield detachView(this.content, child));
-    if (v) (yield attachView(this.content, v));
+    if (v) yield attachView(this.content, v);
   }
   /** the dialog window's own background, from its theme — not a hardcoded white card */
   cardBg: JDrawable | null = null;
@@ -89,7 +89,7 @@ rt.register({
   name: "webdroid/DialogRoot", ctor: DialogRoot, sup: "android/widget/FrameLayout",
   methods: {
     "onMeasure(II)V": driven(function* (this: DialogRoot, wSpec: number, hSpec: number): Gen {
-      (yield this.readBgPadding());
+      yield this.readBgPadding();
       const maxW = specSize(wSpec), maxH = specSize(hSpec);
       this.measuredW = this.measuredH = 0;
       const c = this.children[0];
@@ -104,7 +104,7 @@ rt.register({
         // ViewRootImpl tries the platform dialog width before allowing a wrapping window to expand.
         const widths = preferred > 0 && preferred < widthLimit ? [preferred, (preferred + widthLimit) >> 1, widthLimit] : [widthLimit];
         for (const width of widths) {
-          (yield measureView(c, makeSpec(Math.max(0, width - padW), lw === -2 ? MS_AT_MOST : MS_EXACTLY), hSpec));
+          yield measureView(c, makeSpec(Math.max(0, width - padW), lw === -2 ? MS_AT_MOST : MS_EXACTLY), hSpec);
           if (!(c.measuredState & 0x01000000)) break;
         }
         let width = c.measuredW + padW;
@@ -112,7 +112,7 @@ rt.register({
           const min = this.theme.lookup(AID(device.orientation === 1 ? "windowMinWidthMinor" : "windowMinWidthMajor"));
           const minW = min?.t === TV.FRACTION ? complexToFraction(min.d, maxW, maxW) : rvDimen(this.jres, min, 0);
           width = Math.min(maxW, Math.max(width, Math.round(minW)));
-          if (width !== c.measuredW + padW) (yield measureView(c, makeSpec(Math.max(0, width - padW), MS_EXACTLY), hSpec));
+          if (width !== c.measuredW + padW) yield measureView(c, makeSpec(Math.max(0, width - padW), MS_EXACTLY), hSpec);
         }
         this.measuredW = lw === -2 ? width : widthLimit;
         this.measuredH = lh === -2 ? c.measuredH + padH : heightLimit;
@@ -122,7 +122,7 @@ rt.register({
       const c = this.children[0];
       if (c && c.visibility !== 8) {
         const [l, t] = this.bgPad;
-        (yield layoutView(c, l, t, l + c.measuredW, t + c.measuredH));
+        yield layoutView(c, l, t, l + c.measuredW, t + c.measuredH);
       }
     }),
     "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: DialogRoot, cv: JCanvas): Gen {
@@ -151,13 +151,13 @@ rt.register({
         ctx.beginPath();
         ctx.roundRect(0, 0, this.width(), this.height(), r);
         ctx.clip();
-        (yield guardCall(bg, M_setBounds, 0, 0, this.width(), this.height()));
-        (yield guardCall(bg, M_drawableDraw, cv));
+        yield guardCall(bg, M_setBounds, 0, 0, this.width(), this.height());
+        yield guardCall(bg, M_drawableDraw, cv);
         ctx.restore();
       }
     }),
     "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: DialogRoot, ev: JMotionEvent): Gen {
-      if (this.dialog) (yield dialogTouch(this.dialog, ev));
+      if (this.dialog) yield dialogTouch(this.dialog, ev);
       return 1;
     }),
   },
@@ -182,7 +182,7 @@ class JDialog extends JObj {
     this.showing = false;
     if (this.root) {
       removeOverlay(this.root);
-      (yield dispatchDetached(this.root));
+      yield dispatchDetached(this.root);
       try { (yield vcall(this, "onStop", "()V")); } catch (e) { reportUncaught(e); }
     }
     if (this.dismissL) {
@@ -194,7 +194,7 @@ class JDialog extends JObj {
     if (this.cancelL) {
       try { (yield vcall(this.cancelL, "onCancel", "(Landroid/content/DialogInterface;)V", this)); } catch (e) { reportUncaught(e); }
     }
-    (yield this.dismissImpl());
+    yield this.dismissImpl();
   }
   ensureRoot(): DialogRoot {
     if (!this.root) {
@@ -239,15 +239,15 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Landroid/content/Context;)V": initDialog,
   "<init>(Landroid/content/Context;I)V": initDialog,
   "<init>(Landroid/content/Context;ZLandroid/content/DialogInterface$OnCancelListener;)V": driven(function* (this: JDialog, c: unknown, canc: number, l: unknown): Gen {
-    (yield initDialog.call(this, c));
+    yield initDialog.call(this, c);
     this.cancelable = !!canc;
     this.cancelL = l;
   }),
   "getContext()Landroid/content/Context;": function (this: JDialog) { return this.jctx; },
   "setContentView(I)V": driven(function* (this: JDialog, layoutId: number): Gen {
     const root = this.ensureRoot();
-    (yield root.setContent(null));
-    (yield inflateLayout(this.jctx, layoutId, root.content, true));
+    yield root.setContent(null);
+    yield inflateLayout(this.jctx, layoutId, root.content, true);
     requestLayout(root.content);
   }),
   "setContentView(Landroid/view/View;)V": driven(function* (this: JDialog, v: JView): Gen {
@@ -257,7 +257,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
       lp.width = -1; lp.height = -1;
       v.lp = lp;
     }
-    (yield root.setContent(v));
+    yield root.setContent(v);
     requestLayout(root.content);
   }),
   "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (this: JDialog, v: JView, lp: any): Gen {
@@ -273,8 +273,8 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     if (this.showing) { if (this.root && this.root.visibility === 4) { this.root.visibility = 0; requestLayout(this.root); } return; }
     this.showing = true;
     const root = this.ensureRoot();
-    (yield loadCardBg(root));
-    (yield vcall(this, "getWindow", "()Landroid/view/Window;"));
+    yield loadCardBg(root);
+    yield vcall(this, "getWindow", "()Landroid/view/Window;");
     const overlay = addOverlay(root, 0, 0, false, () => vcall(this, "onBackPressed", "()V"), () => this.cancel());
     overlay.dim = () => this.win && !Number.isNaN(this.win.dimAmount) ? this.win.dimAmount : root.themeDim;
     overlay.modal = true;
@@ -283,13 +283,13 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
       (this as any).$created = true;
       try {
         const r = f.call(this, null);
-        if (r instanceof Promise) (yield r);
+        if (r instanceof Promise) yield r;
       } catch (e) { reportUncaught(e); }
     }
     try { (yield vcall(this, "onStart", "()V")); } catch (e) { reportUncaught(e); }
     // WindowManager.addView: the dialog's view tree attaches to its window here, which is what
     // lets a ComposeView in it find its ViewTree owners and actually compose its content.
-    (yield dispatchAttached(root));
+    yield dispatchAttached(root);
     if (this.showL) {
       try { (yield vcall(this.showL, "onShow", "(Landroid/content/DialogInterface;)V", this)); } catch (e) { reportUncaught(e); }
     }
@@ -436,8 +436,8 @@ async function buildAlertContent(d: JAlertDialog) {
       (t as any).clickL = {
         [mangleMethod("onClick", "(Landroid/view/View;)V")]: driven(function* (): Gen  {
           // AOSP: the listener runs first; the DISMISS message is queued behind it
-          if (d.itemsL) (yield vcall(d.itemsL, "onClick", "(Landroid/content/DialogInterface;I)V", d, idx));
-          (yield d.dismissImpl());
+          if (d.itemsL) yield vcall(d.itemsL, "onClick", "(Landroid/content/DialogInterface;I)V", d, idx);
+          yield d.dismissImpl();
         }),
       };
       addUnattachedView(col, t);
@@ -464,8 +464,8 @@ async function buildAlertContent(d: JAlertDialog) {
       b.lp = lp;
       (b as any).clickL = {
         [mangleMethod("onClick", "(Landroid/view/View;)V")]: driven(function* (): Gen  {
-          if (l) (yield vcall(l, "onClick", "(Landroid/content/DialogInterface;I)V", d, which));
-          (yield d.dismissImpl());
+          if (l) yield vcall(l, "onClick", "(Landroid/content/DialogInterface;I)V", d, which);
+          yield d.dismissImpl();
         }),
       };
       d.buttons.set(which, b);
@@ -486,9 +486,9 @@ const alertMethods: NativeSpec["methods"] = {
   "show()V": driven(function* (this: JAlertDialog): Gen {
     if (!this.built && !this.root?.content.children.length) {
       this.built = true;
-      (yield buildAlertContent(this));
+      yield buildAlertContent(this);
     }
-    (yield callSelf(dialogMethods, "show()V", this));
+    yield callSelf(dialogMethods, "show()V", this);
   }),
   "setMessage(Ljava/lang/CharSequence;)V": driven(function* (this: JAlertDialog, m: unknown): Gen { this.message = (yield str(this.jctx?.$host, m)); }),
   "setView(Landroid/view/View;)V": function (this: JAlertDialog, v: JView) { this.customView = v; },
@@ -530,7 +530,7 @@ const builderMethods: NativeSpec["methods"] = {
   "setIcon(I)Landroid/app/AlertDialog$Builder;": function (this: JAlertBuilder) { return this; },
   "create()Landroid/app/AlertDialog;": function (this: JAlertBuilder) { return this.d; },
   "show()Landroid/app/AlertDialog;": driven(function* (this: JAlertBuilder): Gen {
-    (yield callSelf(alertMethods, "show()V", this.d));
+    yield callSelf(alertMethods, "show()V", this.d);
     return this.d;
   }),
 };
@@ -572,10 +572,10 @@ rt.register({ name: "android/app/ProgressDialog", ctor: class extends JAlertDial
     "static show(Landroid/content/Context;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/app/ProgressDialog;":
       driven(function* (c: any, t: unknown, m: unknown): Gen  {
         const d = rt.make("android/app/ProgressDialog");
-        (yield initDialog.call(d, c));
+        yield initDialog.call(d, c);
         d.titleStr = (yield str(c?.$host, t));
         d.message = (yield str(c?.$host, m));
-        (yield callSelf(alertMethods, "show()V", d));
+        yield callSelf(alertMethods, "show()V", d);
         return d;
       }),
   } });

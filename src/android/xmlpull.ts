@@ -189,9 +189,9 @@ rt.register({ name: "webdroid/XmlSerializer", ctor: JXmlSerializer, ifaces: ["or
   "endDocument()V": driven(function* (this: JXmlSerializer): Gen {
     while (this.stack.length) {
       const top = this.stack.at(-1)!;
-      (yield vcall(this, "endTag", "(Ljava/lang/String;Ljava/lang/String;)Lorg/xmlpull/v1/XmlSerializer;", top.ns, top.name));
+      yield vcall(this, "endTag", "(Ljava/lang/String;Ljava/lang/String;)Lorg/xmlpull/v1/XmlSerializer;", top.ns, top.name);
     }
-    (yield vcall(this, "flush", "()V"));
+    yield vcall(this, "flush", "()V");
   }),
   "setPrefix(Ljava/lang/String;Ljava/lang/String;)V": function (this: JXmlSerializer, prefix: string, ns: string) {
     this.prefixes.set(ns ?? "", prefix ?? "");
@@ -243,10 +243,10 @@ rt.register({ name: "webdroid/XmlSerializer", ctor: JXmlSerializer, ifaces: ["or
     if (this.output == null) throw rt.mkThrowable("java/lang/IllegalStateException", "XML output not set");
     const data = this.chunks.join(""); this.chunks = [];
     if (data) {
-      if (this.writer) (yield vcall(this.output, "write", "(Ljava/lang/String;)V", data));
-      else (yield vcall(this.output, "write", "([B)V", new Int8Array(new TextEncoder().encode(data))));
+      if (this.writer) yield vcall(this.output, "write", "(Ljava/lang/String;)V", data);
+      else yield vcall(this.output, "write", "([B)V", new Int8Array(new TextEncoder().encode(data)));
     }
-    (yield vcall(this.output, "flush", "()V"));
+    yield vcall(this.output, "flush", "()V");
   }),
 } });
 export const newXmlSerializer = serializer;

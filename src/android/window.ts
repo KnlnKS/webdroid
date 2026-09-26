@@ -98,7 +98,7 @@ rt.register({
     "getDecorView()Landroid/view/View;": driven(function* (this: JWindow): Gen {
       // AOSP installs the real decor on first access (appcompat asks for it before
       // setContentView); dialog windows materialize a bare one so insets helpers can operate
-      if (!this.decor && this.activity instanceof JActivity) (yield ensureDecor(this.activity));
+      if (!this.decor && this.activity instanceof JActivity) yield ensureDecor(this.activity);
       return this.decor ??= (yield newObj("android/widget/FrameLayout", "(Landroid/content/Context;)V", this.activity));
     }),
     "isFloating()Z": function (this: JWindow) {
@@ -293,15 +293,15 @@ rt.register({
       v.lp = lp;
       v.windowOwner ??= rt.make("android/view/Window");
       addOverlay(v, lp.x ?? 0, lp.y ?? 0);
-      (yield dispatchAttached(v));
+      yield dispatchAttached(v);
     }),
     "removeView(Landroid/view/View;)V": driven(function* (v: JView): Gen  {
       removeOverlay(v);
-      (yield dispatchDetached(v));
+      yield dispatchDetached(v);
     }),
     "removeViewImmediate(Landroid/view/View;)V": driven(function* (v: JView): Gen  {
       removeOverlay(v);
-      (yield dispatchDetached(v));
+      yield dispatchDetached(v);
     }),
     "updateViewLayout(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": (v: JView, lp: JLayoutParams & { x?: number; y?: number }) => {
       v.lp = lp;

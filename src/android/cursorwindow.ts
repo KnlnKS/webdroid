@@ -136,12 +136,12 @@ rt.register({
       for (const row of this.rows) for (const value of row) {
         const tag = cellType(value);
         writeInt(parcel, tag);
-        if (tag === 1) (yield vcall(parcel, "writeLong", "(J)V", typeof value === "bigint" ? value : BigInt(value as number)));
+        if (tag === 1) yield vcall(parcel, "writeLong", "(J)V", typeof value === "bigint" ? value : BigInt(value as number));
         else if (tag === 2) (yield vcall(parcel, "writeDouble", "(D)V", value));
         else if (tag === 3) writeString(parcel, value as string);
         else if (tag === 4) (yield vcall(parcel, "writeByteArray", "([B)V", value));
       }
-      if (flags & 1) (yield vcall(this, "releaseReference", "()V"));
+      if (flags & 1) yield vcall(this, "releaseReference", "()V");
     }),
   },
 });

@@ -21,9 +21,9 @@ statics: { get CREATOR() { return parcelCreator("android/content/ClipDescription
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JClipDescription, parcel: JParcel): Gen {
     (yield writeText(this.label, parcel)); (yield vcall(parcel, "writeStringArray", "([Ljava/lang/String;)V", this.types));
-    (yield vcall(parcel, "writePersistableBundle", "(Landroid/os/PersistableBundle;)V", this.extras));
+    yield vcall(parcel, "writePersistableBundle", "(Landroid/os/PersistableBundle;)V", this.extras);
     (yield vcall(parcel, "writeLong", "(J)V", this.time)); writeInt(parcel, this.styled); writeInt(parcel, this.classification);
-    (yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", this.confidence));
+    yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", this.confidence);
   }),
   "<init>(Ljava/lang/CharSequence;[Ljava/lang/String;)V": function (this: JClipDescription, label: unknown, types: string[]) {
     if (!types) throw rt.mkThrowable("java/lang/NullPointerException", "mimeTypes");
@@ -78,8 +78,8 @@ rt.register({ name: "android/content/ClipData", ctor: JClipData, ifaces: ["andro
 statics: { get CREATOR() { return parcelCreator("android/content/ClipData", readClipData); } }, methods: {
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JClipData, parcel: JParcel, flags: number): Gen {
-    (yield vcall(this.description, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags));
-    (yield vcall(parcel, "writeTypedObject", "(Landroid/os/Parcelable;I)V", this.icon, flags));
+    yield vcall(this.description, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags);
+    yield vcall(parcel, "writeTypedObject", "(Landroid/os/Parcelable;I)V", this.icon, flags);
     writeInt(parcel, this.items.length);
     for (const item of this.items) {
       (yield writeText(item.text, parcel)); writeString8(parcel, item.html);

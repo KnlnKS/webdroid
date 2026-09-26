@@ -172,14 +172,14 @@ rt.register({
     "nextElement()Ljava/lang/Object;": iterNext,
     "forEachRemaining(Ljava/util/function/Consumer;)V": driven(function* (this: JIter, c: unknown): Gen {
       while (iterHasNext.call(this)) {
-        (yield vcall(c, "accept", "(Ljava/lang/Object;)V", iterNext.call(this)));
+        yield vcall(c, "accept", "(Ljava/lang/Object;)V", iterNext.call(this));
       }
     }),
     "remove()V": driven(function* (this: JIter): Gen {
       if (this.readOnly) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
       if (this.last < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
       checkMod(this);
-      if (this.owner?.removeAt) (yield this.owner.removeAt(this.last));
+      if (this.owner?.removeAt) yield this.owner.removeAt(this.last);
       else this.arr.splice(this.last, 1);
       if (this.last < this.i) this.i--;
       this.last = -1;
@@ -663,14 +663,14 @@ const listExtras: Record<string, (base: Methods) => Methods> = {
   "java/util/ArrayList": () => ({
     "writeObject(Ljava/io/ObjectOutputStream;)V": driven(function* (this: JList, stream: unknown): Gen {
       const count = this.a.length;
-      (yield vcall(stream, "defaultWriteObject", "()V"));
-      (yield vcall(stream, "writeInt", "(I)V", count));
+      yield vcall(stream, "defaultWriteObject", "()V");
+      yield vcall(stream, "writeInt", "(I)V", count);
       for (let i = 0; i < count; i++) (yield vcall(stream, "writeObject", "(Ljava/lang/Object;)V", this.a[i]));
       if (this.a.length !== count) throw rt.mkThrowable("java/util/ConcurrentModificationException", null);
     }),
     "readObject(Ljava/io/ObjectInputStream;)V": driven(function* (this: JList, stream: unknown): Gen {
-      (yield vcall(stream, "defaultReadObject", "()V"));
-      (yield vcall(stream, "readInt", "()I"));
+      yield vcall(stream, "defaultReadObject", "()V");
+      yield vcall(stream, "readInt", "()I");
       for (let i = 0; i < this.a.length; i++) this.a[i] = (yield vcall(stream, "readObject", "()Ljava/lang/Object;"));
     }),
   }),
@@ -897,7 +897,7 @@ function* copyMapInto$(src: unknown, dst: JMap): Gen {
     for (const e of allEnts(src)) {
       // through put(), not m.set: slow (custom-equals) keys must go through the bucket path
       const result = call(dst, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", e.k, e.v);
-      if (result instanceof Promise) (yield result);
+      if (result instanceof Promise) yield result;
     }
     return;
   }
@@ -1041,7 +1041,7 @@ rt.register({
       let ch = 0;
       for (const k of this.snapshot()) {
         if (((yield indexIn(keep, k))) < 0) {
-          (yield vcall(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", k));
+          yield vcall(this.map, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
           ch = 1;
         }
       }
@@ -1091,17 +1091,17 @@ const mapExtras: Record<string, NativeSpec["methods"]> = {
   "java/util/HashMap": {
     "writeObject(Ljava/io/ObjectOutputStream;)V": driven(function* (this: JMap, stream: unknown): Gen {
       const entries = [...allEnts(this)];
-      (yield vcall(stream, "defaultWriteObject", "()V"));
-      (yield vcall(stream, "writeInt", "(I)V", Math.min(1 << 30, 2 ** Math.ceil(Math.log2(Math.max(16, entries.length / this.loadFactor))))));
-      (yield vcall(stream, "writeInt", "(I)V", entries.length));
+      yield vcall(stream, "defaultWriteObject", "()V");
+      yield vcall(stream, "writeInt", "(I)V", Math.min(1 << 30, 2 ** Math.ceil(Math.log2(Math.max(16, entries.length / this.loadFactor)))));
+      yield vcall(stream, "writeInt", "(I)V", entries.length);
       for (const entry of entries) {
-        (yield vcall(stream, "writeObject", "(Ljava/lang/Object;)V", entry.k));
-        (yield vcall(stream, "writeObject", "(Ljava/lang/Object;)V", entry.v));
+        yield vcall(stream, "writeObject", "(Ljava/lang/Object;)V", entry.k);
+        yield vcall(stream, "writeObject", "(Ljava/lang/Object;)V", entry.v);
       }
       if (this.m.size + this.slow.length !== entries.length) throw rt.mkThrowable("java/util/ConcurrentModificationException", null);
     }),
     "readObject(Ljava/io/ObjectInputStream;)V": driven(function* (this: JMap, stream: unknown): Gen {
-      (yield vcall(stream, "defaultReadObject", "()V"));
+      yield vcall(stream, "defaultReadObject", "()V");
       const capacity = (yield vcall(stream, "readInt", "()I"));
       const count = (yield vcall(stream, "readInt", "()I"));
       if (!(this.loadFactor > 0) || !Number.isFinite(this.loadFactor) || capacity < 0 || count < 0) {
@@ -1111,7 +1111,7 @@ const mapExtras: Record<string, NativeSpec["methods"]> = {
       for (let i = 0; i < count; i++) {
         const key = (yield vcall(stream, "readObject", "()Ljava/lang/Object;"));
         const value = (yield vcall(stream, "readObject", "()Ljava/lang/Object;"));
-        (yield vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value));
+        yield vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
       }
     }),
   },
@@ -1239,7 +1239,7 @@ function setMethods(): Methods {
       let ch = 0;
       for (const v of setItems(this)) {
         if (!((yield vcall(c, "contains", "(Ljava/lang/Object;)Z", v)))) {
-          (yield vcall(this, "remove", "(Ljava/lang/Object;)Z", v));
+          yield vcall(this, "remove", "(Ljava/lang/Object;)Z", v);
           ch = 1;
         }
       }
@@ -1286,14 +1286,14 @@ rt.register({ name: "webdroid/BaseSet", ctor: JSet, typeVars: "E", ifaces: ["jav
 const setSerialization: Methods = {
   "writeObject(Ljava/io/ObjectOutputStream;)V": driven(function* (this: JSet, stream: unknown): Gen {
     const items = setItems(this);
-    (yield vcall(stream, "defaultWriteObject", "()V"));
-    (yield vcall(stream, "writeInt", "(I)V", Math.min(1 << 30, 2 ** Math.ceil(Math.log2(Math.max(16, items.length / 0.75))))));
-    (yield vcall(stream, "writeFloat", "(F)V", 0.75));
-    (yield vcall(stream, "writeInt", "(I)V", items.length));
+    yield vcall(stream, "defaultWriteObject", "()V");
+    yield vcall(stream, "writeInt", "(I)V", Math.min(1 << 30, 2 ** Math.ceil(Math.log2(Math.max(16, items.length / 0.75)))));
+    yield vcall(stream, "writeFloat", "(F)V", 0.75);
+    yield vcall(stream, "writeInt", "(I)V", items.length);
     for (const item of items) (yield vcall(stream, "writeObject", "(Ljava/lang/Object;)V", item));
   }),
   "readObject(Ljava/io/ObjectInputStream;)V": driven(function* (this: JSet, stream: unknown): Gen {
-    (yield vcall(stream, "defaultReadObject", "()V"));
+    yield vcall(stream, "defaultReadObject", "()V");
     const capacity = (yield vcall(stream, "readInt", "()I")), factor = (yield vcall(stream, "readFloat", "()F")), count = (yield vcall(stream, "readInt", "()I"));
     if (capacity < 0 || !(factor > 0) || count < 0) throw rt.mkThrowable("java/io/InvalidObjectException", "Invalid set capacity, load factor or size");
     this.m.clear(); this.slow = [];
@@ -1379,7 +1379,7 @@ function enumSetStatics() {
     "static copyOf(Ljava/util/Collection;)Ljava/util/EnumSet;": driven(function* (c: JObj): Gen  { return fromValues((c as JEnumSet).enumClass, false, (yield toJsArray(c))); }),
     "static complementOf(Ljava/util/EnumSet;)Ljava/util/EnumSet;": driven(function* (source: JEnumSet): Gen  {
       const result = (yield fromValues(source.enumClass!, true, []));
-      (yield vcall(result, "removeAll", "(Ljava/util/Collection;)Z", source));
+      yield vcall(result, "removeAll", "(Ljava/util/Collection;)Z", source);
       return result;
     }),
   };
@@ -1563,13 +1563,13 @@ for (const n of ["java/util/TreeSet", "java/util/concurrent/ConcurrentSkipListSe
     ifaces: ["java/util/NavigableSet", "java/lang/Cloneable", "java/io/Serializable"],
     methods: { ...setMethods(), ...treeSetMethods(), ...(n === "java/util/TreeSet" ? {
       "writeObject(Ljava/io/ObjectOutputStream;)V": driven(function* (this: JTreeSet, stream: unknown): Gen {
-        (yield vcall(stream, "defaultWriteObject", "()V"));
-        (yield vcall(stream, "writeObject", "(Ljava/lang/Object;)V", this.cmp));
-        (yield vcall(stream, "writeInt", "(I)V", this.slow.length));
+        yield vcall(stream, "defaultWriteObject", "()V");
+        yield vcall(stream, "writeObject", "(Ljava/lang/Object;)V", this.cmp);
+        yield vcall(stream, "writeInt", "(I)V", this.slow.length);
         for (const item of this.slow) (yield vcall(stream, "writeObject", "(Ljava/lang/Object;)V", item.k));
       }),
       "readObject(Ljava/io/ObjectInputStream;)V": driven(function* (this: JTreeSet, stream: unknown): Gen {
-        (yield vcall(stream, "defaultReadObject", "()V"));
+        yield vcall(stream, "defaultReadObject", "()V");
         this.cmp = (yield vcall(stream, "readObject", "()Ljava/lang/Object;"));
         const count: number = (yield vcall(stream, "readInt", "()I"));
         if (count < 0) throw rt.mkThrowable("java/io/StreamCorruptedException", "negative set size");
@@ -1876,7 +1876,7 @@ rt.register({
     "remove()V": driven(function* (this: JAbsListIter): Gen {
       if (this.lastRet < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
       this.check();
-      (yield vcall(this.list, "remove", "(I)Ljava/lang/Object;", this.lastRet));
+      yield vcall(this.list, "remove", "(I)Ljava/lang/Object;", this.lastRet);
       if (this.lastRet < this.cursor) this.cursor--;
       this.lastRet = -1;
       this.expectedMod = this.list.modCount;
@@ -1884,12 +1884,12 @@ rt.register({
     "set(Ljava/lang/Object;)V": driven(function* (this: JAbsListIter, v: unknown): Gen {
       if (this.lastRet < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
       this.check();
-      (yield vcall(this.list, "set", "(ILjava/lang/Object;)Ljava/lang/Object;", this.lastRet, v));
+      yield vcall(this.list, "set", "(ILjava/lang/Object;)Ljava/lang/Object;", this.lastRet, v);
       this.expectedMod = this.list.modCount;
     }),
     "add(Ljava/lang/Object;)V": driven(function* (this: JAbsListIter, v: unknown): Gen {
       this.check();
-      (yield vcall(this.list, "add", "(ILjava/lang/Object;)V", this.cursor++, v));
+      yield vcall(this.list, "add", "(ILjava/lang/Object;)V", this.cursor++, v);
       this.lastRet = -1;
       this.expectedMod = this.list.modCount;
     }),
@@ -1911,7 +1911,7 @@ rt.register({
     },
     "add(ILjava/lang/Object;)V": driven(function* (this: JAbsSubList, i: number, v: unknown): Gen {
       if (i < 0 || i > this.n) ioobe(i, this.n);
-      (yield vcall(this.parent, "add", "(ILjava/lang/Object;)V", this.off + i, v));
+      yield vcall(this.parent, "add", "(ILjava/lang/Object;)V", this.off + i, v);
       this.n++;
       this.modCount = this.parent.modCount;
     }),
@@ -1997,7 +1997,7 @@ function* bulkRemove$(self: unknown, c: unknown, when: boolean): Gen<number> {
 }
 const absList: Methods = {
   "add(Ljava/lang/Object;)Z": driven(function* (this: JAbstractList, v: unknown): Gen {
-    (yield vcall(this, "add", "(ILjava/lang/Object;)V", (yield size(this)), v));
+    yield vcall(this, "add", "(ILjava/lang/Object;)V", (yield size(this)), v);
     return 1;
   }),
   "add(ILjava/lang/Object;)V": uoe,
@@ -2101,7 +2101,7 @@ const absMap: Methods = {
   "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": uoe,
   "putAll(Ljava/util/Map;)V": driven(function* (this: JObj, m: unknown): Gen {
     for (const e of (yield mapEntries(m))) {
-      (yield vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", (yield entryKey(e)), (yield entryVal(e))));
+      yield vcall(this, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", (yield entryKey(e)), (yield entryVal(e)));
     }
   }),
   "remove(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JObj, k: unknown): Gen {
@@ -2251,7 +2251,7 @@ const mapDefaults: Methods = {
   "putIfAbsent(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JObj, k: unknown, v: unknown): Gen {
     const cur = (yield vcall(this, "get", GET, k));
     if (cur !== null && cur !== undefined) return cur;
-    (yield vcall(this, "put", PUT, k, v));
+    yield vcall(this, "put", PUT, k, v);
     return null;
   }),
   "computeIfAbsent(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;": driven(function* (this: JObj, k: unknown, fn: unknown): Gen {
@@ -2261,7 +2261,7 @@ const mapDefaults: Methods = {
     rt.st(thread);
     const v = (yield vcall(fn, "apply", `(${O})${O}`, k));
     rt.st(thread);
-    if (v !== null && v !== undefined) (yield vcall(this, "put", PUT, k, v));
+    if (v !== null && v !== undefined) yield vcall(this, "put", PUT, k, v);
     return v ?? null;
   }),
   "computeIfPresent(Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;": driven(function* (this: JObj, k: unknown, fn: unknown): Gen {
@@ -2279,7 +2279,7 @@ const mapDefaults: Methods = {
     const v = (yield vcall(fn, "apply", `(${O}${O})${O}`, k, cur ?? null));
     rt.st(thread);
     if (v === null || v === undefined) { if (cur !== null && cur !== undefined) (yield vcall(this, "remove", `(${O})${O}`, k)); }
-    else (yield vcall(this, "put", PUT, k, v));
+    else yield vcall(this, "put", PUT, k, v);
     return v ?? null;
   }),
   "merge(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/function/BiFunction;)Ljava/lang/Object;": driven(function* (this: JObj, k: unknown, v: unknown, fn: unknown): Gen {
@@ -2293,7 +2293,7 @@ const mapDefaults: Methods = {
   }),
   "remove(Ljava/lang/Object;Ljava/lang/Object;)Z": driven(function* (this: JObj, k: unknown, v: unknown): Gen {
     if (!((yield vcall(this, "containsKey", HAS, k))) || !((yield aeq((yield vcall(this, "get", GET, k)), v)))) return 0;
-    (yield vcall(this, "remove", `(${O})${O}`, k));
+    yield vcall(this, "remove", `(${O})${O}`, k);
     return 1;
   }),
   "replace(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JObj, k: unknown, v: unknown): Gen {
@@ -2322,7 +2322,7 @@ const collDefaults: Methods = {
 const listDefaults: Methods = {
   "sort(Ljava/util/Comparator;)V": driven(function* (this: JObj, cmp: unknown): Gen {
     const a = (yield vcall(this, "toArray", "()[Ljava/lang/Object;")) as unknown[];
-    (yield sortInPlace(a, cmp));
+    yield sortInPlace(a, cmp);
     for (let i = 0; i < a.length; i++) (yield vcall(this, "set", `(I${O})${O}`, i, a[i]));
   }),
   "replaceAll(Ljava/util/function/UnaryOperator;)V": driven(function* (this: JObj, fn: unknown): Gen {
@@ -2631,7 +2631,7 @@ function* shuffle$(list: unknown, random?: unknown): Gen<void> {
     const j = random === undefined ? Math.floor(Math.random() * i) : (yield vcall(random, "nextInt", "(I)I", i));
     [values[i - 1], values[j]] = [values[j], values[i - 1]];
   }
-  (yield replaceListValues(list, values));
+  yield replaceListValues(list, values);
 }
 function rotate(list: unknown, distance: number): void | Promise<void> { return rt.drive(rotate$(list, distance)); }
 function* rotate$(list: unknown, distance: number): Gen<void> {
@@ -2639,7 +2639,7 @@ function* rotate$(list: unknown, distance: number): Gen<void> {
   const values = [...(yield toJsArray(list))], n = values.length;
   if (n < 2) return;
   const shift = ((distance % n) + n) % n;
-  if (shift) (yield replaceListValues(list, values.slice(n - shift).concat(values.slice(0, n - shift))));
+  if (shift) yield replaceListValues(list, values.slice(n - shift).concat(values.slice(0, n - shift)));
 }
 class JCollections extends JObj {}
 const extreme = (sign: number) => async (c: unknown, cmp: unknown = null) => {
@@ -2668,7 +2668,7 @@ rt.register({
     "static singleton(Ljava/lang/Object;)Ljava/util/Set;": driven(function* (v: unknown): Gen  { const s = new JSet(); (yield addToSet(s, v)); return s; }),
     "static singletonMap(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map;": driven(function* (k: unknown, v: unknown): Gen  {
       const m = new JMap();
-      (yield vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, v));
+      yield vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, v);
       return m;
     }),
     "static unmodifiableList(Ljava/util/List;)Ljava/util/List;": unmodifiableList,
@@ -2834,8 +2834,8 @@ function* storeProperties$(props: JProps, stream: unknown, comments: string | nu
   }
   const text = lines.join("\n") + "\n", bytes = new Int8Array(text.length);
   for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
-  (yield vcallOn(thread, stream, "write", "([BII)V", bytes, 0, bytes.length));
-  (yield vcallOn(thread, stream, "flush", "()V"));
+  yield vcallOn(thread, stream, "write", "([BII)V", bytes, 0, bytes.length);
+  yield vcallOn(thread, stream, "flush", "()V");
 }
 const setProperties = (props: JProps, entries: Map<string, string>) => { for (const [k, v] of entries) props.m.set(k, { k, v }); };
 rt.register({
@@ -2862,7 +2862,7 @@ function* bundleValues$(bundle: JResourceBundle): Gen<Map<string, unknown>> {
       const rows: unknown[][] = await vcall(bundle, "getContents", "()[[Ljava/lang/Object;");
       for (const row of rows) if (typeof row[0] === "string") bundle.values.set(row[0], row[1]);
     })();
-    (yield bundle.loading);
+    yield bundle.loading;
   }
   return bundle.values;
 }
