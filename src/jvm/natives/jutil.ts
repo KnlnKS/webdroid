@@ -1913,8 +1913,7 @@ rt.register({
   },
 });
 
-function collectionAddAll(this: JObj, collection: unknown): number | Promise<number> { return rt.drive(collectionAddAll$.call(this, collection)); }
-function* collectionAddAll$(this: JObj, collection: unknown): Gen<number> {
+const collectionAddAll = driven(function* collectionAddAll(this: JObj, collection: unknown): Gen<number> {
   const thread = curThread;
   const iterator = yield vcallOn(thread, collection, "iterator", "()Ljava/util/Iterator;");
   let changed = 0;
@@ -1923,7 +1922,7 @@ function* collectionAddAll$(this: JObj, collection: unknown): Gen<number> {
     if (yield vcallOn(thread, this, "add", "(Ljava/lang/Object;)Z", value)) changed = 1;
   }
   return changed;
-}
+});
 
 // abstract bases apps extend: the JDK's default bodies, each a virtual call on `this`
 const absCollection: Methods = {

@@ -251,11 +251,10 @@ const textCursorDrawable = driven(function* textCursorDrawable(tv: JTextView): G
   }
   return tv.cursorDrawable;
 });
-function setTextShadow(this: JTextView, radius: number, dx: number, dy: number, color: number): unknown { return rt.drive(setTextShadow$.call(this, radius, dx, dy, color)); }
-function* setTextShadow$(this: JTextView, radius: number, dx: number, dy: number, color: number): Gen {
+const setTextShadow = driven(function* setTextShadow(this: JTextView, radius: number, dx: number, dy: number, color: number): Gen {
   this.shadowRadius = radius; this.shadowDx = dx; this.shadowDy = dy; this.shadowColor = color;
   yield vcall(this.paintT, "setShadowLayer", "(FFFI)V", radius, dx, dy, color); invalidate(this);
-}
+});
 function setTextAppearance(this: JTextView, id: number) {
   return this.jres ? applyTextAppearance(this, this.jres, id) : undefined;
 }
@@ -263,15 +262,14 @@ function setCompoundDrawables(this: JTextView, l: JDrawable | null, t: JDrawable
   this.drawableL = l; this.drawableT = t; this.drawableR = r; this.drawableB = b;
   invalidate(this); requestLayout(this);
 }
-function setIntrinsicDrawables(this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null): unknown { return rt.drive(setIntrinsicDrawables$.call(this, l, t, r, b)); }
-function* setIntrinsicDrawables$(this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null): Gen {
+const setIntrinsicDrawables = driven(function* setIntrinsicDrawables(this: JTextView, l: JDrawable | null, t: JDrawable | null, r: JDrawable | null, b: JDrawable | null): Gen {
   const thread = curThread;
   for (const d of [l, t, r, b]) if (d) {
     const width = yield drawableSize(d, false, thread), height = yield drawableSize(d, true, thread);
     yield vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, width, height);
   }
   setCompoundDrawables.call(this, l, t, r, b);
-}
+});
 const compoundWidth = (d: JDrawable | null) => d ? Math.max(0, d.bounds.right - d.bounds.left) : 0;
 const compoundHeight = (d: JDrawable | null) => d ? Math.max(0, d.bounds.bottom - d.bounds.top) : 0;
 /** the (Context) / (Context, AttributeSet) / (Context, AttributeSet, defStyleAttr) constructor trio of a

@@ -1029,8 +1029,7 @@ class JDrawableWrapper extends JDrawable {
   size(vertical: boolean) { return this.dr ? drawableSize(this.dr, vertical) : -1; }
   onStateChange(): boolean { return this.dr ? this.dr.onStateChange() : false; }
 }
-function wrapSet(this: JDrawableWrapper, d: JDrawable | null): unknown { return rt.drive(wrapSet$.call(this, d)); }
-function* wrapSet$(this: JDrawableWrapper, d: JDrawable | null): Gen {
+const wrapSet = driven(function* wrapSet(this: JDrawableWrapper, d: JDrawable | null): Gen {
   const thread = curThread;
   if (this.dr) this.dr.callback = null;
   this.dr = d;
@@ -1043,7 +1042,7 @@ function* wrapSet$(this: JDrawableWrapper, d: JDrawable | null): Gen {
     yield vcallOn(thread, d, "setLayoutDirection", "(I)Z", this.layoutDir);
   }
   invalidateSelf.call(this);
-}
+});
 rt.register({
   name: "android/graphics/drawable/DrawableWrapper", ctor: JDrawableWrapper, sup: "android/graphics/drawable/Drawable",
   ifaces: ["android/graphics/drawable/Drawable$Callback"],

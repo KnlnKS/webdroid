@@ -20,8 +20,7 @@ class JProgressBar extends JView {
   progressD: JDrawable | null = null; indetD: JDrawable | null = null;
   tintCsl: JColorStateList | null = null;
 }
-function initProgressBar(this: JProgressBar, c: unknown, set: JAttrSet | null = null, style = AID("progressBarStyle"), def = 0): unknown { return rt.drive(initProgressBar$.call(this, c, set, style, def)); }
-function* initProgressBar$(this: JProgressBar, c: unknown, set: JAttrSet | null = null, style = AID("progressBarStyle"), def = 0): Gen {
+const initProgressBar = driven(function* initProgressBar(this: JProgressBar, c: unknown, set: JAttrSet | null = null, style: number = AID("progressBarStyle"), def: number = 0): Gen {
   yield initViewFromCtx(this, c, set, style);
   if (!this.jres) return;
   if (set?.node) for (const attr of set.node.attrs) {
@@ -36,7 +35,7 @@ function* initProgressBar$(this: JProgressBar, c: unknown, set: JAttrSet | null 
   this.min = rvInt(this.jres, a.vals[3], this.min);
   this.max = Math.max(this.min, rvInt(this.jres, a.vals[4], this.max));
   this.progress = Math.max(this.min, Math.min(this.max, rvInt(this.jres, a.vals[5], this.progress)));
-}
+});
 rt.register({
   name: "android/widget/ProgressBar", ctor: JProgressBar, sup: "android/view/View",
   methods: {
@@ -140,8 +139,7 @@ class JSeekBar extends JAbsSeekBar {
     if (this.changeListener) yield vcallOn(thread, this.changeListener, "onProgressChanged", "(Landroid/widget/SeekBar;IZ)V", this, progress, +fromUser);
   }
 }
-function initSeekBar(this: JSeekBar, c: unknown, attrs: JAttrSet | null = null, style = AID("seekBarStyle"), def = 0): unknown { return rt.drive(initSeekBar$.call(this, c, attrs, style, def)); }
-function* initSeekBar$(this: JSeekBar, c: unknown, attrs: JAttrSet | null = null, style = AID("seekBarStyle"), def = 0): Gen {
+const initSeekBar = driven(function* initSeekBar(this: JSeekBar, c: unknown, attrs: JAttrSet | null = null, style: number = AID("seekBarStyle"), def: number = 0): Gen {
   const thread = curThread;
   yield initViewFromCtx(this, c, attrs, style);
   if (!this.jres) return;
@@ -152,7 +150,7 @@ function* initSeekBar$(this: JSeekBar, c: unknown, attrs: JAttrSet | null = null
   if (a.vals[0]) yield this.setTrack(yield loadDrawableRV(this.jres, a.vals[0], this.theme), thread);
   if (a.vals[1]) yield this.setThumb(yield loadDrawableRV(this.jres, a.vals[1], this.theme), thread);
   if (a.vals[2]) this.thumbOffset = Math.trunc(rvDimen(this.jres, a.vals[2], this.thumbOffset));
-}
+});
 rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widget/AbsSeekBar", methods: {
   "<init>(Landroid/content/Context;)V": initSeekBar,
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initSeekBar,
@@ -508,11 +506,10 @@ rt.register({
 });
 rt.markers("android/widget/RadioGroup$OnCheckedChangeListener");
 
-function initSpace(this: JView, context: unknown, attrs: JAttrSet | null = null, defStyle = 0): unknown { return rt.drive(initSpace$.call(this, context, attrs, defStyle)); }
-function* initSpace$(this: JView, context: unknown, attrs: JAttrSet | null = null, defStyle = 0): Gen {
+const initSpace = driven(function* initSpace(this: JView, context: unknown, attrs: JAttrSet | null = null, defStyle: number = 0): Gen {
   yield initViewFromCtx(this, context, attrs, defStyle);
   if (this.visibility === 0) this.visibility = 4;
-}
+});
 rt.register({
   name: "android/widget/Space", ctor: class extends JView {}, sup: "android/view/View",
   methods: {

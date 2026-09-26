@@ -897,14 +897,13 @@ for (const n of ["android/util/CloseGuard", "dalvik/system/CloseGuard"]) {
 // ── android.os.StatFs: the browser's storage estimate for whichever path is asked about (one
 // filesystem backs everything here), in 4K blocks.
 class JStatFs extends JObj { path = ""; total = 0; free = 0; }
-function statFs(this: JStatFs, p: string): unknown { return rt.drive(statFs$.call(this, p)); }
-function* statFs$(this: JStatFs, p: string): Gen {
+const statFs = driven(function* statFs(this: JStatFs, p: string): Gen {
   this.path = p;
   try {
     const e = yield navigator.storage?.estimate?.();
     this.total = e?.quota ?? 0; this.free = Math.max(0, (e?.quota ?? 0) - (e?.usage ?? 0));
   } catch { /* no estimate available: report an empty filesystem */ }
-}
+});
 const BLK = 4096n;
 const statVfsFields = ["f_bsize", "f_frsize", "f_blocks", "f_bfree", "f_bavail", "f_files", "f_ffree", "f_favail", "f_fsid", "f_flag", "f_namemax"] as const;
 class JStructStatVfs extends JObj {
@@ -1325,6 +1324,29 @@ class JAsyncTask extends JObj {
 }
 const taskStatuses = mkEnumSet("android/os/AsyncTask$Status", ["PENDING", "RUNNING", "FINISHED"]);
 const serialTaskExecutor = () => (rt.link("android/os/AsyncTask").ctor as Record<string, unknown>).s$SERIAL_EXECUTOR;
+const runAsyncTask = driven(function* runAsyncTask(this: JAsyncTask, executor: unknown, params: unknown[]): Gen<JAsyncTask> {
+  if (this.status !== 0) throw rt.mkThrowable("java/lang/IllegalStateException", "Task has already been executed");
+  this.status = 1;
+  let finish!: () => void;
+  this.done = new Promise(resolve => { finish = resolve; });
+  const pre = () => vcall(this, "onPreExecute", "()V");
+  if (curThread === mainThread && inMainJob()) yield pre(); else yield onMain(pre);
+  const runnable = new JObj();
+  Object.assign(runnable, { [mangleMethod("run", "()V")]: async () => {
+    this.worker = curThread;
+    try {
+      if (!this.cancelled) this.result = await vcall(this, "doInBackground", "([Ljava/lang/Object;)Ljava/lang/Object;", params ?? []);
+    } catch (error) { if (!this.cancelled) { this.error = rt.jx(error); reportUncaught(this.error); } }
+    finally { this.worker = null; this.completed = true; finish(); }
+    void onMain(async () => {
+      try {
+        if (!this.error) await vcall(this, this.cancelled ? "onCancelled" : "onPostExecute", "(Ljava/lang/Object;)V", this.result);
+      } finally { this.status = 2; }
+    }).catch(reportUncaught);
+  } });
+  yield vcall(executor, "execute", "(Ljava/lang/Runnable;)V", runnable);
+  return this;
+});
 rt.register({
   name: "android/os/AsyncTask", ctor: JAsyncTask,
   statics: { THREAD_POOL_EXECUTOR: null, SERIAL_EXECUTOR: null },
@@ -1363,30 +1385,6 @@ rt.register({
     "static execute(Ljava/lang/Runnable;)V": (r: unknown) => vcall(serialTaskExecutor(), "execute", "(Ljava/lang/Runnable;)V", r),
   },
 });
-function runAsyncTask(this: JAsyncTask, executor: unknown, params: unknown[]): JAsyncTask | Promise<JAsyncTask> { return rt.drive(runAsyncTask$.call(this, executor, params)); }
-function* runAsyncTask$(this: JAsyncTask, executor: unknown, params: unknown[]): Gen<JAsyncTask> {
-  if (this.status !== 0) throw rt.mkThrowable("java/lang/IllegalStateException", "Task has already been executed");
-  this.status = 1;
-  let finish!: () => void;
-  this.done = new Promise(resolve => { finish = resolve; });
-  const pre = () => vcall(this, "onPreExecute", "()V");
-  if (curThread === mainThread && inMainJob()) yield pre(); else yield onMain(pre);
-  const runnable = new JObj();
-  Object.assign(runnable, { [mangleMethod("run", "()V")]: async () => {
-    this.worker = curThread;
-    try {
-      if (!this.cancelled) this.result = await vcall(this, "doInBackground", "([Ljava/lang/Object;)Ljava/lang/Object;", params ?? []);
-    } catch (error) { if (!this.cancelled) { this.error = rt.jx(error); reportUncaught(this.error); } }
-    finally { this.worker = null; this.completed = true; finish(); }
-    void onMain(async () => {
-      try {
-        if (!this.error) await vcall(this, this.cancelled ? "onCancelled" : "onPostExecute", "(Ljava/lang/Object;)V", this.result);
-      } finally { this.status = 2; }
-    }).catch(reportUncaught);
-  } });
-  yield vcall(executor, "execute", "(Ljava/lang/Runnable;)V", runnable);
-  return this;
-}
 
 class JCountDownTimer extends JObj {
   totalMs = 0n;

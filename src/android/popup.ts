@@ -274,8 +274,7 @@ class JPopupWindow extends JObj {
 function rootOf(v: JView): JView { let r = v; while (r.parent) r = r.parent; return r; }
 
 const PW_ATTRS = ["popupBackground", "popupElevation", "popupAnimationStyle", "overlapAnchor"] as const;
-function pwInit(this: JPopupWindow, c: any, set: JAttrSet | null, defStyleAttr: number, defStyleRes: number): unknown { return rt.drive(pwInit$.call(this, c, set, defStyleAttr, defStyleRes)); }
-function* pwInit$(this: JPopupWindow, c: any, set: JAttrSet | null, defStyleAttr: number, defStyleRes: number): Gen {
+const pwInit = driven(function* pwInit(this: JPopupWindow, c: any, set: JAttrSet | null, defStyleAttr: number, defStyleRes: number): Gen {
   this.jctx = c;
   const host = c?.$host;
   if (!host) return;
@@ -286,7 +285,7 @@ function* pwInit$(this: JPopupWindow, c: any, set: JAttrSet | null, defStyleAttr
   if (ta.vals[1]) this.elevation = rvDimen(res, ta.vals[1], 0);
   if (ta.vals[2]) { const v = ta.vals[2]!; this.animStyle = v.t === TV.REFERENCE ? v.d : -1; }
   if (ta.vals[3]) this.overlapAnchor = !!rvInt(res, ta.vals[3], 0);
-}
+});
 function pwSetContent(this: JPopupWindow, v: JView | null) {
   if (this.showing) return;
   this.content = v;
@@ -302,8 +301,7 @@ function pwMaxAvail(this: JPopupWindow, anchor: JView, yOffset = 0) {
   const [, pt, , pb] = this.bgPad();
   return Math.max(toBottom, toTop) - (pt + pb);
 }
-function pwShow(this: JPopupWindow, x: number, y: number): unknown { return rt.drive(pwShow$.call(this, x, y)); }
-function* pwShow$(this: JPopupWindow, x: number, y: number): Gen {
+const pwShow = driven(function* pwShow(this: JPopupWindow, x: number, y: number): Gen {
   if (this.showing || !this.content) return;
   this.showing = true;
   const d = this.decor = new PopupDecorView();
@@ -322,10 +320,9 @@ function* pwShow$(this: JPopupWindow, x: number, y: number): Gen {
   // a focusable popup takes Back and outside touches; an outsideTouchable one only the touches
   addOverlay(d, x, y, this.focusable || this.outsideTouchable, this.focusable ? dismiss : undefined, dismiss);
   yield dispatchAttached(d);
-}
+});
 /** AOSP findDropDownPosition, reduced to the vertical flip and screen clamp */
-function pwPlace(this: JPopupWindow): unknown { return rt.drive(pwPlace$.call(this)); }
-function* pwPlace$(this: JPopupWindow): Gen {
+const pwPlace = driven(function* pwPlace(this: JPopupWindow): Gen {
   const a = this.anchor, d = this.decor;
   if (!a || !d) return;
   const root = rootOf(a), sw = root.width() || device.width, sh = root.height() || device.height - device.statusBar;
@@ -347,16 +344,14 @@ function* pwPlace$(this: JPopupWindow): Gen {
   const o = overlays.find((o) => o.view === d);
   if (o) { o.x = x; o.y = y; }
   requestLayout(d);
-}
-function pwShowDropDown(this: JPopupWindow, anchor: JView, xoff = 0, yoff = 0, gravity = 0): unknown { return rt.drive(pwShowDropDown$.call(this, anchor, xoff, yoff, gravity)); }
-function* pwShowDropDown$(this: JPopupWindow, anchor: JView, xoff = 0, yoff = 0, gravity = 0): Gen {
+});
+const pwShowDropDown = driven(function* pwShowDropDown(this: JPopupWindow, anchor: JView, xoff: number = 0, yoff: number = 0, gravity: number = 0): Gen {
   if (this.showing || !this.content) return;
   this.anchor = anchor; this.xoff = xoff; this.yoff = yoff; this.gravity = gravity;
   yield pwShow.call(this, 0, 0);
   yield pwPlace.call(this);
-}
-function pwShowAt(this: JPopupWindow, parent: JView, gravity: number, x: number, y: number): unknown { return rt.drive(pwShowAt$.call(this, parent, gravity, x, y)); }
-function* pwShowAt$(this: JPopupWindow, parent: JView, gravity: number, x: number, y: number): Gen {
+});
+const pwShowAt = driven(function* pwShowAt(this: JPopupWindow, parent: JView, gravity: number, x: number, y: number): Gen {
   if (this.showing || !this.content) return;
   this.anchor = null;
   yield pwShow.call(this, 0, 0);
@@ -369,9 +364,8 @@ function* pwShowAt$(this: JPopupWindow, parent: JView, gravity: number, x: numbe
   const o = overlays.find((o) => o.view === d);
   if (o) { o.x = px; o.y = py; }
   requestLayout(d);
-}
-function pwDismiss(this: JPopupWindow): unknown { return rt.drive(pwDismiss$.call(this)); }
-function* pwDismiss$(this: JPopupWindow): Gen {
+});
+const pwDismiss = driven(function* pwDismiss(this: JPopupWindow): Gen {
   if (!this.showing) return;
   this.showing = false;
   const d = this.decor;
@@ -384,7 +378,7 @@ function* pwDismiss$(this: JPopupWindow): Gen {
   if (this.dismissL) {
     try { yield vcall(this.dismissL, "onDismiss", "()V"); } catch (e) { reportUncaught(e); }
   }
-}
+});
 function pwUpdate(this: JPopupWindow) {
   if (!this.showing || !this.decor) return;
   requestLayout(this.decor);

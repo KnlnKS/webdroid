@@ -23,12 +23,11 @@ import { breakLines, type TLine } from "./linebreak";
 export type { TLine } from "./linebreak";
 
 class JAnnotation extends JObj { key: string | null = null; value: string | null = null; }
-function writeAnnotation(this: JAnnotation, parcel: JObj): unknown { return rt.drive(writeAnnotation$.call(this, parcel)); }
-function* writeAnnotation$(this: JAnnotation, parcel: JObj): Gen {
+const writeAnnotation = driven(function* writeAnnotation(this: JAnnotation, parcel: JObj): Gen {
   const thread = rt.th();
   yield vcall(parcel, "writeString", "(Ljava/lang/String;)V", this.key); rt.st(thread);
   yield vcall(parcel, "writeString", "(Ljava/lang/String;)V", this.value);
-}
+});
 rt.register({
   name: "android/text/Annotation", ctor: JAnnotation, ifaces: ["android/text/ParcelableSpan"],
   methods: {
@@ -49,11 +48,10 @@ rt.register({
 });
 
 class JTtsSpan extends JObj { type: string | null = null; args: JPersistableBundle | null = null; }
-function writeTtsSpan(this: JTtsSpan, parcel: JParcel): unknown { return rt.drive(writeTtsSpan$.call(this, parcel)); }
-function* writeTtsSpan$(this: JTtsSpan, parcel: JParcel): Gen {
+const writeTtsSpan = driven(function* writeTtsSpan(this: JTtsSpan, parcel: JParcel): Gen {
   yield vcall(parcel, "writeString", "(Ljava/lang/String;)V", this.type);
   yield vcall(parcel, "writePersistableBundle", "(Landroid/os/PersistableBundle;)V", this.args);
-}
+});
 rt.register({ name: "android/text/style/TtsSpan", ctor: JTtsSpan, ifaces: ["android/text/ParcelableSpan"], methods: {
   "<init>(Ljava/lang/String;Landroid/os/PersistableBundle;)V": function (this: JTtsSpan, type: string, args: JPersistableBundle) { this.type = type; this.args = args; },
   "<init>(Landroid/os/Parcel;)V": driven(function* (this: JTtsSpan, parcel: JParcel): Gen {
@@ -348,11 +346,10 @@ function editMutators(ret: string): NonNullable<NativeSpec["methods"]> {
     },
   };
 }
-function appendSpanned(this: JSpannable, cs: unknown): unknown { return rt.drive(appendSpanned$.call(this, cs)); }
-function* appendSpanned$(this: JSpannable, cs: unknown): Gen {
+const appendSpanned = driven(function* appendSpanned(this: JSpannable, cs: unknown): Gen {
   const length = this.text.length;
   return vcall(this, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", length, length, cs, 0, (yield csText(cs)).length);
-}
+});
 rt.register({
   name: "android/text/SpannableStringBuilder", ctor: class extends JSpannable {},
   ifaces: ["java/lang/CharSequence", "android/text/Spannable", "android/text/Spanned", "android/text/Editable", "java/lang/Appendable"],
@@ -450,8 +447,7 @@ class JTextAppearanceSpan extends JMetricAffectingSpan {
 }
 const appearanceAttrs = ["textColor", "textColorLink", "textSize", "textStyle", "fontFamily", "typeface", "textFontWeight", "textLocale",
   "shadowRadius", "shadowDx", "shadowDy", "shadowColor", "elegantTextHeight", "letterSpacing", "fontFeatureSettings", "fontVariationSettings"];
-function appearanceInit(this: JTextAppearanceSpan, context: JObj, style: number): unknown { return rt.drive(appearanceInit$.call(this, context, style)); }
-function* appearanceInit$(this: JTextAppearanceSpan, context: JObj, style: number): Gen {
+const appearanceInit = driven(function* appearanceInit(this: JTextAppearanceSpan, context: JObj, style: number): Gen {
   const thread = curThread, a = yield vcallOn(thread, context, "obtainStyledAttributes", "(I[I)Landroid/content/res/TypedArray;", style, new Int32Array(appearanceAttrs.map(AID)));
   if (!(a instanceof JTypedArray)) throw new Error("Invalid appearance attributes");
   const get = (method: string, desc: string, ...args: unknown[]) => vcallOn(thread, a, method, desc, ...args);
@@ -480,9 +476,8 @@ function* appearanceInit$(this: JTextAppearanceSpan, context: JObj, style: numbe
     this.features = yield string(14);
     this.variations = yield string(15);
   } finally { yield get("recycle", "()V"); }
-}
-function appearanceMeasure(this: JTextAppearanceSpan, paint: JTextPaint): unknown { return rt.drive(appearanceMeasure$.call(this, paint)); }
-function* appearanceMeasure$(this: JTextAppearanceSpan, paint: JTextPaint): Gen {
+});
+const appearanceMeasure = driven(function* appearanceMeasure(this: JTextAppearanceSpan, paint: JTextPaint): Gen {
   const thread = curThread, call = (method: string, desc: string, ...args: unknown[]) => vcallOn(thread, paint, method, desc, ...args);
   const fonts = rt.link("android/graphics/Typeface").ctor;
   const create = async (desc: string, ...args: unknown[]) => {
@@ -510,7 +505,7 @@ function* appearanceMeasure$(this: JTextAppearanceSpan, paint: JTextPaint): Gen 
   if (this.spacing !== null) yield call("setLetterSpacing", "(F)V", this.spacing);
   if (this.features !== null) yield call("setFontFeatureSettings", "(Ljava/lang/String;)V", this.features);
   if (this.variations !== null) yield call("setFontVariationSettings", "(Ljava/lang/String;)Z", this.variations);
-}
+});
 rt.register({ name: "android/text/style/TextAppearanceSpan", ctor: JTextAppearanceSpan, sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"], methods: {
   "<init>(Landroid/content/Context;I)V": appearanceInit,
   "<init>(Ljava/lang/String;IILandroid/content/res/ColorStateList;Landroid/content/res/ColorStateList;)V": function (this: JTextAppearanceSpan, family: string | null, style: number, size: number, color: JColorStateList | null, link: JColorStateList | null) {
@@ -605,18 +600,16 @@ type SpanImage = { kind: "drawable"; value: JDrawable } | { kind: "resource"; co
 class JImageSpan extends JDynamicDrawableSpan { image: SpanImage | null = null; source: string | null = null; }
 function imageDrawable(this: JImageSpan, drawable: JDrawable, alignment = 0) { this.image = { kind: "drawable", value: drawable }; this.alignment = alignment; }
 function imageResource(this: JImageSpan, context: unknown, id: number, alignment = 0) { this.image = { kind: "resource", context, id }; this.alignment = alignment; }
-function imageUri(this: JImageSpan, context: unknown, uri: unknown, alignment = 0): unknown { return rt.drive(imageUri$.call(this, context, uri, alignment)); }
-function* imageUri$(this: JImageSpan, context: unknown, uri: unknown, alignment = 0): Gen {
+const imageUri = driven(function* imageUri(this: JImageSpan, context: unknown, uri: unknown, alignment: number = 0): Gen {
   this.image = { kind: "uri", context, uri }; this.alignment = alignment;
   this.source = yield vcall(uri, "toString", "()Ljava/lang/String;");
-}
-function imageBitmap(this: JImageSpan, context: unknown, bitmap: JBitmap, alignment = 0): unknown { return rt.drive(imageBitmap$.call(this, context, bitmap, alignment)); }
-function* imageBitmap$(this: JImageSpan, context: unknown, bitmap: JBitmap, alignment = 0): Gen {
+});
+const imageBitmap = driven(function* imageBitmap(this: JImageSpan, context: unknown, bitmap: JBitmap, alignment: number = 0): Gen {
   const resources = context ? yield vcall(context, "getResources", "()Landroid/content/res/Resources;") : null;
   const drawable: JDrawable = yield newObj("android/graphics/drawable/BitmapDrawable", "(Landroid/content/res/Resources;Landroid/graphics/Bitmap;)V", resources, bitmap);
   yield vcall(drawable, "setBounds", "(IIII)V", 0, 0, Math.max(0, yield vcall(drawable, "getIntrinsicWidth", "()I")), Math.max(0, yield vcall(drawable, "getIntrinsicHeight", "()I")));
   imageDrawable.call(this, drawable, alignment);
-}
+});
 rt.register({ name: "android/text/style/ImageSpan", ctor: JImageSpan, sup: "android/text/style/DynamicDrawableSpan", methods: {
   "<init>(Landroid/graphics/drawable/Drawable;)V": imageDrawable,
   "<init>(Landroid/graphics/drawable/Drawable;I)V": imageDrawable,
@@ -742,8 +735,7 @@ rt.register({ name: "android/text/style/ForegroundColorSpan", ctor: JForegroundC
 });
 
 class JStyleSpan extends JObj { style = 0; adjustment = 0x7fffffff; }
-function applyStyle(this: JStyleSpan, paint: JTextPaint): unknown { return rt.drive(applyStyle$.call(this, paint)); }
-function* applyStyle$(this: JStyleSpan, paint: JTextPaint): Gen {
+const applyStyle = driven(function* applyStyle(this: JStyleSpan, paint: JTextPaint): Gen {
   const old = yield vcall(paint, "getTypeface", "()Landroid/graphics/Typeface;");
   const want = (old ? yield vcall(old, "getStyle", "()I") : 0) | this.style;
   const typeface = rt.link("android/graphics/Typeface").ctor;
@@ -757,7 +749,7 @@ function* applyStyle$(this: JStyleSpan, paint: JTextPaint): Gen {
   if (fake & 1) yield vcall(paint, "setFakeBoldText", "(Z)V", 1);
   if (fake & 2) yield vcall(paint, "setTextSkewX", "(F)V", -0.25);
   yield vcall(paint, "setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;", face);
-}
+});
 rt.register({ name: "android/text/style/StyleSpan", ctor: JStyleSpan, ...spanHierarchy["android/text/style/StyleSpan"], methods: {
   "<init>(I)V": function (this: JStyleSpan, style: number) { this.style = style; },
   "<init>(II)V": function (this: JStyleSpan, style: number, adjustment: number) { this.style = style; this.adjustment = adjustment; },
@@ -767,10 +759,9 @@ rt.register({ name: "android/text/style/StyleSpan", ctor: JStyleSpan, ...spanHie
   "updateMeasureState(Landroid/text/TextPaint;)V": applyStyle,
 } });
 class JRelativeSizeSpan extends JObj { size = 1; }
-function applyRelativeSize(this: JRelativeSizeSpan, paint: JTextPaint): unknown { return rt.drive(applyRelativeSize$.call(this, paint)); }
-function* applyRelativeSize$(this: JRelativeSizeSpan, paint: JTextPaint): Gen {
+const applyRelativeSize = driven(function* applyRelativeSize(this: JRelativeSizeSpan, paint: JTextPaint): Gen {
   return vcall(paint, "setTextSize", "(F)V", (yield vcall(paint, "getTextSize", "()F")) * this.size);
-}
+});
 rt.register({ name: "android/text/style/RelativeSizeSpan", ctor: JRelativeSizeSpan, ...spanHierarchy["android/text/style/RelativeSizeSpan"], methods: {
   "<init>(F)V": function (this: JRelativeSizeSpan, size: number) { this.size = size; },
   "getSizeChange()F": function (this: JRelativeSizeSpan) { return this.size; },
@@ -805,10 +796,9 @@ export function drawStyledText(src: unknown, text: string, start: number, canvas
   })();
 }
 
-function superscriptState(this: unknown, paint: JTextPaint): unknown { return rt.drive(superscriptState$.call(this, paint)); }
-function* superscriptState$(this: unknown, paint: JTextPaint): Gen {
+const superscriptState = driven(function* superscriptState(this: unknown, paint: JTextPaint): Gen {
   paint.baselineShift += Math.trunc(Number(yield vcall(paint, "ascent", "()F")) / 2);
-}
+});
 rt.register({ name: "android/text/style/SuperscriptSpan", ctor: class extends JMetricAffectingSpan {},
   sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"], methods: {
     "<init>()V": () => {}, "<init>(Landroid/os/Parcel;)V": () => {},
@@ -1312,8 +1302,7 @@ function primaryHorizontal(this: JLayout, off: number) {
     }
     return 0;
 }
-export function drawLayout(this: JLayout, c: JCanvas, gravity?: number): unknown { return rt.drive(drawLayout$.call(this, c, gravity)); }
-function* drawLayout$(this: JLayout, c: JCanvas, gravity?: number): Gen {
+export const drawLayout = driven(function* drawLayout(this: JLayout, c: JCanvas, gravity?: number): Gen {
     const thread = curThread;
     for (let i = 0; i < this.lines.length; i++) {
       const line = this.lines[i], end = line.start + (line.ellipsis?.start ?? line.text.length), baseline = this.baseline(i);
@@ -1335,7 +1324,7 @@ function* drawLayout$(this: JLayout, c: JCanvas, gravity?: number): Gen {
           ?? vcallOn(thread, c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text, x, baseline, this.paint));
       }
     }
-}
+});
 const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "static getDesiredWidth(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F": (cs: unknown, p: JTextPaint) => desiredWidth(cs, p),
   "static getDesiredWidth(Ljava/lang/CharSequence;IILandroid/text/TextPaint;)F": (cs: unknown, s: number, e: number, p: JTextPaint) => desiredWidth(sliceSpanned(cs, s, e), p),

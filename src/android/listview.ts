@@ -438,8 +438,7 @@ const themeDivider = driven(function* themeDivider(list: JListView): Gen {
 });
 function addHeader(this: JListView, v: JView) { this.headers.push(v); this.viewsCache = null; void this.rebuild(); }
 function addFooter(this: JListView, v: JView) { this.footers.push(v); this.viewsCache = null; void this.rebuild(); }
-function measureListView(this: JListView, wSpec: number, hSpec: number): unknown { return rt.drive(measureListView$.call(this, wSpec, hSpec)); }
-function* measureListView$(this: JListView, wSpec: number, hSpec: number): Gen {
+const measureListView = driven(function* measureListView(this: JListView, wSpec: number, hSpec: number): Gen {
     const w = defaultSize(specSize(wSpec), wSpec);
     const availW = Math.max(0, w - this.padL - this.padR);
     let totalH = this.padT + this.padB;
@@ -452,7 +451,7 @@ function* measureListView$(this: JListView, wSpec: number, hSpec: number): Gen {
     }
     this.measuredW = w;
     this.measuredH = specMode(hSpec) === MS_EXACTLY ? specSize(hSpec) : resolveSize(totalH, hSpec);
-}
+});
 const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JListView, c: unknown, set: JAttrSet | null): Gen {
     yield initViewFromCtx(this, c, set);

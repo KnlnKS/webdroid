@@ -198,12 +198,11 @@ export function removeFrom(ls: unknown[], l: unknown) {
   const i = ls.indexOf(l);
   if (i >= 0) ls.splice(i, 1);
 }
-function performClick(this: JView): unknown { return rt.drive(performClick$.call(this)); }
-function* performClick$(this: JView): Gen {
+const performClick = driven(function* performClick(this: JView): Gen {
   if (!this.clickL) return 0;
   yield vcall(this.clickL, "onClick", "(Landroid/view/View;)V", this);
   return 1;
-}
+});
 function setBackground(this: JView, d: JDrawable | null) {
   if (this.background) this.background.callback = null;
   this.background = d;
@@ -239,21 +238,19 @@ const removeRange = driven(function* removeRange(vg: JViewGroup, start: number, 
 });
 /** AOSP addViewInLayout: addViewInner without the parent's request. Unless the caller prevents
  *  it, the child's own setLayoutParams asks, before the child has a parent to pass it to. */
-function addInLayout(this: JViewGroup, c: JView, i: number, lp: JLayoutParams, preventRequestLayout?: number): unknown { return rt.drive(addInLayout$.call(this, c, i, lp, preventRequestLayout)); }
-function* addInLayout$(this: JViewGroup, c: JView, i: number, lp: JLayoutParams, preventRequestLayout?: number): Gen {
+const addInLayout = driven(function* addInLayout(this: JViewGroup, c: JView, i: number, lp: JLayoutParams, preventRequestLayout?: number): Gen {
   const thread = curThread;
   c.lp = lp ? yield convertLp(this, lp) : c.lp;
   if (!preventRequestLayout) requestLayoutVirtual(c);
   yield attachView(this, c, i, false, thread);
   return 1;
-}
+});
 /** AOSP attachViewToParent: re-links a child detachViewFromParent took out. It never left the
  *  window, so there is no attach dispatch, no hierarchy callback and no request. */
-function attachToParent(this: JViewGroup, c: JView, i: number, lp: JLayoutParams): unknown { return rt.drive(attachToParent$.call(this, c, i, lp)); }
-function* attachToParent$(this: JViewGroup, c: JView, i: number, lp: JLayoutParams): Gen {
+const attachToParent = driven(function* attachToParent(this: JViewGroup, c: JView, i: number, lp: JLayoutParams): Gen {
   c.lp = lp ? yield convertLp(this, lp) : c.lp;
   yield linkChild(this, c, i);
-}
+});
 export function obtainEvent(dt: bigint, et: bigint, action: number, x: number, y: number, metaState = 0) {
   const e = new JMotionEvent();
   e.downTime = Number(dt); e.eventTime = Number(et); e.action = action; e.x = e.rawX = x; e.y = e.rawY = y;
@@ -538,14 +535,13 @@ rt.register({ name: "android/view/WindowId", ctor: JWindowId });
 
 /** AOSP View.dispatchApplyWindowInsets: a listener wins outright, otherwise the virtual
  *  onApplyWindowInsets. ViewGroup's override calls this as its super. */
-function viewDispatchInsets(this: JView, ins: unknown): unknown { return rt.drive(viewDispatchInsets$.call(this, ins)); }
-function* viewDispatchInsets$(this: JView, ins: unknown): Gen {
+const viewDispatchInsets = driven(function* viewDispatchInsets(this: JView, ins: unknown): Gen {
   if (this.insetsL) {
     return yield vcall(this.insetsL, "onApplyWindowInsets",
       "(Landroid/view/View;Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", this, ins);
   }
   return yield vcall(this, "onApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", ins);
-}
+});
 
 /** apply base View attrs from an AttributeSet (used by native View ctor) */
 // defStyleAttr is the widget's own style attribute (buttonStyle, editTextStyle, ...). Without it
@@ -856,8 +852,7 @@ const drawContent = driven(function* drawContent(v: JView, cv: JCanvas): Gen {
   if (v.foreground || jmethod(v, M_onDrawForeground) !== drawForeground) yield guardMaybe(v, M_onDrawForeground, cv);
 });
 
-function drawForeground(this: JView, cv: JCanvas): unknown { return rt.drive(drawForeground$.call(this, cv)); }
-function* drawForeground$(this: JView, cv: JCanvas): Gen {
+const drawForeground = driven(function* drawForeground(this: JView, cv: JCanvas): Gen {
   const d = this.foreground;
   if (!d) return;
   const thread = curThread, w = this.width(), h = this.height();
@@ -874,7 +869,7 @@ function* drawForeground$(this: JView, cv: JCanvas): Gen {
     yield vcallOn(thread, d, "setBounds", "(IIII)V", bounds.left, bounds.top, bounds.right, bounds.bottom);
   }
   yield vcallOn(thread, d, "draw", "(Landroid/graphics/Canvas;)V", cv);
-}
+});
 
 function drawSurface(v: JView, ctx: JCanvas["ctx"]) {
   if (!v.surfaceLayer) return;
@@ -913,12 +908,11 @@ function drawingRect(this: JView, r: JRect) {
   r.left = this.scrollX; r.top = this.scrollY;
   r.right = this.scrollX + this.width(); r.bottom = this.scrollY + this.height();
 }
-export function requireViewById(this: JObj, id: number): unknown { return rt.drive(requireViewById$.call(this, id)); }
-function* requireViewById$(this: JObj, id: number): Gen {
+export const requireViewById = driven(function* requireViewById(this: JObj, id: number): Gen {
   const view = yield vcall(this, "findViewById", "(I)Landroid/view/View;", id);
   if (!view) throw rt.mkThrowable("java/lang/IllegalArgumentException", "ID does not reference a View: " + id);
   return view;
-}
+});
 
 export const viewConstructors: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;)V": driven(function* (this: JView, c: unknown): Gen { yield initViewFromCtx(this, c, null); }),
@@ -1895,15 +1889,14 @@ const M_resolveLD = mangleMethod("resolveLayoutDirection", "(I)V");
 export function resolveLp(lp: JLayoutParams): unknown { return (jmethod(lp, M_resolveLD) as JMethod).call(lp, 0); }
 
 /** the native terminal: every other overload reaches the tree through here */
-function addView3(this: JViewGroup, c: JView, i: number, lp: JLayoutParams | null): unknown { return rt.drive(addView3$.call(this, c, i, lp)); }
-function* addView3$(this: JViewGroup, c: JView, i: number, lp: JLayoutParams | null): Gen {
+const addView3 = driven(function* addView3(this: JViewGroup, c: JView, i: number, lp: JLayoutParams | null): Gen {
   const thread = curThread;
   c.lp = lp ? yield convertLp(this, lp)
     : c.lp ? yield convertLp(this, c.lp)
     : (yield guardCall(this, M_genDefaultLP)) as JLayoutParams | null;
   yield resolveLp(c.lp!);
   yield attachView(this, c, i, true, thread);
-}
+});
 const M_hasTransientState = mangleMethod("hasTransientState", "()Z");
 const M_childTransientChanged = mangleMethod("childHasTransientStateChanged", "(Landroid/view/View;Z)V");
 const noteTransientChild = driven(function* noteTransientChild(parent: JViewGroup, child: JView, added: boolean, thread: JThread = curThread): Gen {

@@ -113,18 +113,16 @@ export class JField extends JAccessibleObject {
 }
 /** A static read is also the class's first use: a constant that has not been initialized yet
  *  reads as undefined, which is the zero the caller then takes for the field's real value. */
-function readField(this: JField, o: unknown): unknown { return rt.drive(readField$.call(this, o)); }
-function* readField$(this: JField, o: unknown): Gen {
+const readField = driven(function* readField(this: JField, o: unknown): Gen {
   const p = rt.initClass(this.owner); if (p) yield p;
   return this.isStatic ? this.owner.ctor[this.prop] : (o as Record<string, unknown>)[this.prop];
-}
-function writeField(this: JField, o: unknown, value: unknown, boxed = false): void | Promise<void> { return rt.drive(writeField$.call(this, o, value, boxed)); }
-function* writeField$(this: JField, o: unknown, value: unknown, boxed = false): Gen<void> {
+});
+const writeField = driven(function* writeField(this: JField, o: unknown, value: unknown, boxed = false): Gen<void> {
   const p = rt.initClass(this.owner); if (p) yield p;
   if (boxed && "IJFDZBCS".includes(this.desc[0])) value = unboxArg(value);
   if (this.isStatic) this.owner.ctor[this.prop] = value;
   else (o as Record<string, unknown>)[this.prop] = value;
-}
+});
 function fieldFloat(value: number | bigint): number {
   if (typeof value === "number") return Math.fround(value);
   const magnitude = value < 0n ? -value : value;
