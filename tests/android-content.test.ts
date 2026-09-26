@@ -36,6 +36,7 @@ import { device } from "../src/shell/config";
 import { JView, dispatchAttached, uiState } from "../src/android/view";
 import { addOverlay, overlays, detachContextOverlays, removeOverlay } from "../src/android/popup";
 import { JActivity } from "../src/android/app";
+import { scall } from "./java";
 
 describe("adservices", () => {
   rt.linkNatives();
@@ -128,8 +129,6 @@ describe("clip-data", () => {
 
 describe("content-uris", () => {
   rt.linkNatives();
-  const scall = (cls: string, name: string, desc: string, ...args: unknown[]) =>
-    (rt.link(cls).ctor as any)[mangleMethod(name, desc)](...args);
 
   test("ContentUris appends and parses signed long IDs", async () => {
     const base = scall("android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;", "content://media/items?sort=new");
@@ -386,7 +385,6 @@ describe("packagearchive", () => {
 });
 
 describe("pending-intents", () => {
-  const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => vcall(rt.link(cls).ctor, name, desc, ...args);
 
   rt.linkNatives();
 
@@ -681,7 +679,6 @@ describe("service-bind", () => {
 
 describe("settings-location", () => {
   rt.linkNatives();
-  const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => (rt.link(cls).ctor as any)[mangleMethod(name, desc)](...args);
   const CR = "Landroid/content/ContentResolver;";
 
   test("Settings.Secure reports the device's location switch", () => {

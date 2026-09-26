@@ -6,6 +6,7 @@ import { vcall, newObj, vcallAsync } from "../src/jvm/natives/jlang";
 import { mkAnnotation, JField } from "../src/jvm/natives/jreflect";
 import { JObj, rt } from "../src/jvm/runtime";
 import { JSpanned, csText } from "../src/android/text";
+import { scall } from "./java";
 
 describe("annotation-enum-init", () => {
   test("explicit enum annotation elements wait for class initialization", async () => {
@@ -189,7 +190,6 @@ describe("math-log1p", () => {
 
 describe("number-parse", () => {
   rt.linkNatives();
-  const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => (rt.link(cls).ctor as any)[mangleMethod(name, desc)](...args);
 
   test("Double.valueOf(String) and Float.valueOf(String) box the parsed value", async () => {
     const d = scall("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;", " -73.98563 ");

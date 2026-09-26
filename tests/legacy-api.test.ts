@@ -10,8 +10,8 @@ import { fireActivityLifecycle, JActivity, JApplication } from "../src/android/a
 import { appHost, setAppHost } from "../src/android/apphost";
 import { onMain } from "../src/android/mainloop";
 import { vfs } from "../src/jvm/natives/jio";
+import { scall } from "./java";
 
-const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => vcall(rt.link(cls).ctor, name, desc, ...args);
 
 rt.register({ name: "test/NoopRunnable", ctor: class extends JObj {}, ifaces: ["java/lang/Runnable"], methods: { "run()V": function () {} } });
 rt.register({

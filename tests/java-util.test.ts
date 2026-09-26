@@ -5,6 +5,7 @@ import { vcall, curThread, JThread, mainThread, setCurThread, vcallOn, vcallAsyn
 import { newArrayList } from "../src/jvm/natives/jutil";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { synchronizedMap } from "../src/jvm/natives/jwrappers";
+import { scall } from "./java";
 
 describe("abstract-sequential-list", () => {
   class Sequential extends rt.link("java/util/AbstractSequentialList").ctor {
@@ -701,8 +702,6 @@ describe("rational", () => {
 describe("set-equality", () => {
   rt.linkNatives();
 
-  const scall = (cls: string, name: string, desc: string, ...args: unknown[]) =>
-    vcall(rt.link(cls).ctor, name, desc, ...args);
   const set = (cls: string, ...items: unknown[]) => newObj(cls).then(async (s) => {
     for (const v of items) await vcall(s, "add", "(Ljava/lang/Object;)Z", v);
     return s;

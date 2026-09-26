@@ -10,6 +10,7 @@ import { TV } from "../src/android/axml";
 import { mkCsl } from "../src/android/drawable";
 import { JTextView } from "../src/android/textview";
 import { perf } from "../src/perf";
+import { scall } from "./java";
 
 describe("linkify", () => {
   rt.linkNatives();
@@ -315,8 +316,6 @@ describe("text-appearance-span", () => {
 
 describe("text-platform", () => {
   rt.linkNatives();
-  const scall = (cls: string, name: string, desc: string, ...args: unknown[]) =>
-    (rt.link(cls).ctor as unknown as Record<string, (...values: unknown[]) => unknown>)[mangleMethod(name, desc)](...args);
 
   test("TypefaceSpan retains and applies a supplied typeface", async () => {
     const typeface = typefaceFor("monospace", 1);

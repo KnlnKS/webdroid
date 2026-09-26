@@ -5,6 +5,7 @@ import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
 import { dialName, syntheticAddress } from "../src/shell/relay";
 import { systemService } from "../src/android/context";
+import { scall } from "./java";
 
 describe("datagram-socket", () => {
   test("DatagramSocket delivers loopback packets and preserves source metadata", async () => {
@@ -129,7 +130,6 @@ describe("http-upload", () => {
 
 describe("inet", () => {
   rt.linkNatives();
-  const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => (rt.link(cls).ctor as any)[mangleMethod(name, desc)](...args);
 
   test("InetAddress hands out the resolver's synthetic address, which dials the name again", async () => {
     const a = await scall("java/net/InetAddress", "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", "v16m.example.com");
@@ -314,8 +314,6 @@ describe("nsd-service", () => {
 
 describe("uri-raw-authority", () => {
   rt.linkNatives();
-  const scall = (cls: string, name: string, desc: string, ...args: unknown[]) =>
-    (rt.link(cls).ctor as any)[mangleMethod(name, desc)](...args);
 
   test("URI.getRawAuthority preserves escaped authority text", async () => {
     const uri = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "https://user%20name@example.com:8443/a?q=1");
