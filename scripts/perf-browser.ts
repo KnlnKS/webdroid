@@ -18,7 +18,7 @@ const { values } = parseArgs({ options: {
   out: { type: "string" }, gpu: { type: "string", default: "software" }, probe: { type: "boolean", default: false },
   ms: { type: "string", default: "15000" }, warmup: { type: "string", default: "3000" },
   "align-presentation": { type: "boolean", default: false },
-  "cpu-profile": { type: "boolean", default: false },
+  "cpu-profile": { type: "boolean", default: false }, "cpu-throttle": { type: "string", default: "1" },
   "native-profile": { type: "boolean", default: false },
   "jvm-profile": { type: "boolean", default: false }, "jvm-tier": { type: "string", default: "auto" }, "jvm-hotness": { type: "string", default: "4096" },
   interval: { type: "string" }, "exercise-once": { type: "boolean", default: false }, "setup-shots": { type: "boolean", default: false },
@@ -117,6 +117,7 @@ try {
   if (!await foreground.evaluate(() => !!globalThis.wd.perf && !!globalThis.wd.mainDbg)) throw new Error("Foreground realm lacks performance diagnostics");
   const session = await context.newCDPSession(foreground);
   await session.send("Performance.enable");
+  await session.send("Emulation.setCPUThrottlingRate", { rate: Number(values["cpu-throttle"]) });
   await session.send("HeapProfiler.collectGarbage");
   if (startStep) {
     const a = actOf(flow, startStep, manifest?.steps.find((step) => step.id === startStep.id));
