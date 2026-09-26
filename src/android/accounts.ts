@@ -188,11 +188,11 @@ const methods: NativeSpec["methods"] = {
     for (const s of accounts()) for (const k of Object.keys(s.tokens)) if (s.type === type && s.tokens[k] === token) delete s.tokens[k];
     persist();
   },
-  [`blockingGetAuthToken(${ACC}${S}Z)${S}`]: async (a: JAccount, type: string) => {
+  [`blockingGetAuthToken(${ACC}${S}Z)${S}`]: driven(function* (a: JAccount, type: string): Gen  {
     if (curThread === mainThread) throw rt.mkThrowable("java/lang/IllegalStateException", "AccountManager cannot block the main thread");
-    const thread = curThread, result = await authToken(a, type, null, null, null, null).result(undefined, thread);
-    return (await vcall(result, "getString", "(Ljava/lang/String;)Ljava/lang/String;", "authtoken")) ?? null;
-  },
+    const thread = curThread, result = (yield authToken(a, type, null, null, null, null).result(undefined, thread));
+    return ((yield vcall(result, "getString", "(Ljava/lang/String;)Ljava/lang/String;", "authtoken"))) ?? null;
+  }),
   [`getAuthToken(${ACC}${S}Landroid/os/Bundle;Landroid/app/Activity;${CB}${H})${F}`]: authToken,
   [`getAuthToken(${ACC}${S}Landroid/os/Bundle;Z${CB}${H})${F}`]: (a: JAccount, type: string, o: JBundle | null, _notify: number, cb: unknown, h: JHandler | null) => authToken(a, type, o, null, cb, h),
   [`getAuthToken(${ACC}${S}Z${CB}${H})${F}`]: (a: JAccount, type: string, _notify: number, cb: unknown, h: JHandler | null) => authToken(a, type, null, null, cb, h),
@@ -228,14 +228,14 @@ const methods: NativeSpec["methods"] = {
     const stored = find(a);
     return stored ? packages.get(stored.owner)?.uid === packages.get(pkg)?.uid ? 1 : stored.visibility[pkg] ?? 4 : 0;
   },
-  [`getAccountsAndVisibilityForPackage(${S}${S})Ljava/util/Map;`]: async (pkg: string, type: string | null) => {
-    const result = await newObj("java/util/HashMap");
+  [`getAccountsAndVisibilityForPackage(${S}${S})Ljava/util/Map;`]: driven(function* (pkg: string, type: string | null): Gen  {
+    const result = (yield newObj("java/util/HashMap"));
     for (const account of accounts()) if (owns(account) && (type === null || account.type === type)) {
       const visibility = packages.get(account.owner)?.uid === packages.get(pkg)?.uid ? 1 : account.visibility[pkg] ?? 4;
-      await vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", toJ(account), boxInt(visibility));
+      (yield vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", toJ(account), boxInt(visibility)));
     }
     return result;
-  },
+  }),
   [`notifyAccountAuthenticated(${ACC})Z`]: (a: JAccount) => +!!find(a),
 };
 rt.register({ name: "android/accounts/AccountManager", ctor: JAccountManager, statics, methods });

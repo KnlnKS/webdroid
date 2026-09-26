@@ -600,11 +600,11 @@ rt.register({
     [`endArray()${JW}`]: jsonClose("]"),
     [`beginObject()${JW}`]: jsonOpen(false),
     [`endObject()${JW}`]: jsonClose("}"),
-    [`name(Ljava/lang/String;)${JW}`]: async function (this: JJsonWriter, n: string) {
-      await jsonEmit(this, JSON.stringify(n) + ":");
+    [`name(Ljava/lang/String;)${JW}`]: driven(function* (this: JJsonWriter, n: string): Gen {
+      (yield jsonEmit(this, JSON.stringify(n) + ":"));
       this.scopes[this.scopes.length - 1].named = true;
       return this;
-    },
+    }),
     [`nullValue()${JW}`]: function (this: JJsonWriter) { return jsonEmit(this, "null"); },
     [`value(Ljava/lang/String;)${JW}`]: jsonValue((v) => v === null ? "null" : JSON.stringify(v)),
     [`value(Z)${JW}`]: jsonValue((v) => v ? "true" : "false"),

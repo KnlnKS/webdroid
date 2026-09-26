@@ -470,18 +470,19 @@ export class JView extends JObj {
   /** AOSP's cached mDrawableState — what onCreateDrawableState last produced, app states included */
   stateCache: number[] | null = null;
   drawableState(): number[] { return this.stateCache ?? this.baseState(); }
-  async refreshDrawableState() {
+  refreshDrawableState(): unknown { return rt.drive(this.refreshDrawableState$()); }
+  *refreshDrawableState$(): Gen {
     // through the virtual onCreateDrawableState: state_checked/checkable/error live only in
     // the app's override (every Material toggle is one), and nothing else ever sees them
     this.stateCache = null;
-    const raw = await guardMaybe(this, M_onCreateDrawableState, 0) as Int32Array | null;
+    const raw = (yield guardMaybe(this, M_onCreateDrawableState, 0)) as Int32Array | null;
     const st = raw ? [...raw].filter((x) => x !== 0) : this.baseState();
     this.stateCache = st;
-    if (this.background) await vcall(this.background, "setState", "([I)Z", Int32Array.from(st));
-    if (this.foreground) await vcall(this.foreground, "setState", "([I)Z", Int32Array.from(st));
-    await guardMaybe(this, M_drawableStateChanged);
-    if (this.stateListAnimator) await vcall(this.stateListAnimator, "setState", "([I)V", Int32Array.from(st));
-    if (this.parent instanceof JViewGroup && this.parent.addStatesFromChildren) await vcall(this.parent, "childDrawableStateChanged", "(Landroid/view/View;)V", this);
+    if (this.background) (yield vcall(this.background, "setState", "([I)Z", Int32Array.from(st)));
+    if (this.foreground) (yield vcall(this.foreground, "setState", "([I)Z", Int32Array.from(st)));
+    (yield guardMaybe(this, M_drawableStateChanged));
+    if (this.stateListAnimator) (yield vcall(this.stateListAnimator, "setState", "([I)V", Int32Array.from(st)));
+    if (this.parent instanceof JViewGroup && this.parent.addStatesFromChildren) (yield vcall(this.parent, "childDrawableStateChanged", "(Landroid/view/View;)V", this));
     invalidate();
   }
 }

@@ -386,27 +386,27 @@ rt.register({
     "readStringList(Ljava/util/List;)V": driven(function* (this: JParcel, out: unknown): Gen { (yield vcall(out, "clear", "()V")); for (const s of readStrings(this) ?? []) (yield vcall(out, "add", "(Ljava/lang/Object;)Z", s)); }),
     [`readValue(${L})Ljava/lang/Object;`]: function (this: JParcel, loader: unknown) { return readValue(this, loader); },
     [`readArrayList(${L})Ljava/util/ArrayList;`]: function (this: JParcel, loader: unknown) { return readList(this, loader); },
-    [`readList(Ljava/util/List;${L})V`]: async function (this: JParcel, out: unknown, loader: unknown) { for (const v of (await readList(this, loader))?.a ?? []) await vcall(out, "add", "(Ljava/lang/Object;)Z", v); },
+    [`readList(Ljava/util/List;${L})V`]: driven(function* (this: JParcel, out: unknown, loader: unknown): Gen { for (const v of ((yield readList(this, loader)))?.a ?? []) (yield vcall(out, "add", "(Ljava/lang/Object;)Z", v)); }),
     [`readHashMap(${L})Ljava/util/HashMap;`]: function (this: JParcel, loader: unknown) { return readMap(this, loader); },
-    [`readMap(Ljava/util/Map;${L})V`]: async function (this: JParcel, out: unknown, loader: unknown) { const m = await readMap(this, loader); if (m) await vcall(out, "putAll", "(Ljava/util/Map;)V", m); },
+    [`readMap(Ljava/util/Map;${L})V`]: driven(function* (this: JParcel, out: unknown, loader: unknown): Gen { const m = (yield readMap(this, loader)); if (m) (yield vcall(out, "putAll", "(Ljava/util/Map;)V", m)); }),
     "readPersistableBundle()Landroid/os/PersistableBundle;": function (this: JParcel) { return readBundle(this, null, true); },
     "readPersistableBundle(Ljava/lang/ClassLoader;)Landroid/os/PersistableBundle;": function (this: JParcel, loader: unknown) { return readBundle(this, loader, true); },
     "readBundle()Landroid/os/Bundle;": function (this: JParcel) { return readBundle(this, null); },
     [`readBundle(${L})Landroid/os/Bundle;`]: function (this: JParcel, loader: unknown) { return readBundle(this, loader); },
     [`readParcelable(${L})Landroid/os/Parcelable;`]: function (this: JParcel, loader: unknown) { return readParcelable(this, loader); },
     [`readParcelable(${L}Ljava/lang/Class;)Ljava/lang/Object;`]: function (this: JParcel, loader: unknown) { return readParcelable(this, loader); },
-    [`createTypedArrayList(${CR})Ljava/util/ArrayList;`]: async function (this: JParcel, c: unknown) { const a = await readTyped(this, c); return a && newArrayList(a); },
-    [`createTypedArray(${CR})[Ljava/lang/Object;`]: async function (this: JParcel, c: unknown) {
-      const a = await readTyped(this, c);
+    [`createTypedArrayList(${CR})Ljava/util/ArrayList;`]: driven(function* (this: JParcel, c: unknown): Gen { const a = (yield readTyped(this, c)); return a && newArrayList(a); }),
+    [`createTypedArray(${CR})[Ljava/lang/Object;`]: driven(function* (this: JParcel, c: unknown): Gen {
+      const a = (yield readTyped(this, c));
       if (!a) return null;
-      const out = await vcall(c, "newArray", "(I)[Ljava/lang/Object;", a.length) as unknown[];
+      const out = (yield vcall(c, "newArray", "(I)[Ljava/lang/Object;", a.length)) as unknown[];
       for (let i = 0; i < a.length; i++) out[i] = a[i];
       return out;
-    },
+    }),
     [`readTypedObject(${CR})Ljava/lang/Object;`]: function (this: JParcel, c: unknown) { return readInt(this) ? createFrom(this, c, null) : null; },
-    [`readTypedList(Ljava/util/List;${CR})V`]: async function (this: JParcel, out: unknown, c: unknown) { await vcall(out, "clear", "()V"); for (const v of (await readTyped(this, c)) ?? []) await vcall(out, "add", "(Ljava/lang/Object;)Z", v); },
+    [`readTypedList(Ljava/util/List;${CR})V`]: driven(function* (this: JParcel, out: unknown, c: unknown): Gen { (yield vcall(out, "clear", "()V")); for (const v of ((yield readTyped(this, c))) ?? []) (yield vcall(out, "add", "(Ljava/lang/Object;)Z", v)); }),
     "readSerializable()Ljava/io/Serializable;": driven(function* (this: JParcel): Gen { return readSerializable(this); }),
-    [`readSerializable(${L}Ljava/lang/Class;)Ljava/io/Serializable;`]: async function (this: JParcel) { return readSerializable(this); },
+    [`readSerializable(${L}Ljava/lang/Class;)Ljava/io/Serializable;`]: driven(function* (this: JParcel): Gen { return readSerializable(this); }),
     "readStrongBinder()Landroid/os/IBinder;": function (this: JParcel) { return readObject(this); },
     "readException()V": function (this: JParcel) {
       const code = readInt(this);

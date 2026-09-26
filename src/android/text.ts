@@ -321,17 +321,17 @@ rt.register({ name: "android/text/Selection", ctor: class extends JObj {},
  *  or an interface-typed call misses. */
 function editMutators(ret: string): NonNullable<NativeSpec["methods"]> {
   return {
-    [`replace(IILjava/lang/CharSequence;)L${ret};`]: async function (this: JSpannable, a: number, b: number, cs: unknown) {
-      const text = await csText(cs);
+    [`replace(IILjava/lang/CharSequence;)L${ret};`]: driven(function* (this: JSpannable, a: number, b: number, cs: unknown): Gen {
+      const text = (yield csText(cs));
       return vcall(this, "replace", "(IILjava/lang/CharSequence;II)L" + ret + ";", a, b, cs, 0, text.length);
-    },
-    [`replace(IILjava/lang/CharSequence;II)L${ret};`]: async function (this: JSpannable, a: number, b: number, cs: unknown, start: number, end: number) {
+    }),
+    [`replace(IILjava/lang/CharSequence;II)L${ret};`]: driven(function* (this: JSpannable, a: number, b: number, cs: unknown, start: number, end: number): Gen {
       if (!(cs instanceof JSpanned) && rt.iof(cs, "android/text/Spanned"))
-        cs = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", cs);
+        cs = (yield newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", cs));
       const incoming = cs instanceof JSpanned ? cs.spans.filter((r) => r.start < end && r.end > start).map((r) => ({
         ...r, start: a + Math.max(start, r.start) - start, end: a + Math.min(end, r.end) - start,
       })) : [];
-      const text = (await csText(cs)).slice(start, end), delta = text.length - (b - a);
+      const text = ((yield csText(cs))).slice(start, end), delta = text.length - (b - a);
       this.text = this.text.slice(0, a) + text + this.text.slice(b);
       const moved = (position: number, mode: number) => position < a ? position : position > b ? position + delta :
         position === b && b > a || mode === 2 ? a + text.length : a;
@@ -341,11 +341,11 @@ function editMutators(ret: string): NonNullable<NativeSpec["methods"]> {
       }
       for (const span of incoming) if (!this.spans.some((r) => r.span === span.span)) this.spans.push(span);
       return this;
-    },
-    [`insert(ILjava/lang/CharSequence;)L${ret};`]: async function (this: JSpannable, i: number, cs: unknown) {
-      this.text = this.text.slice(0, i) + (await csText(cs)) + this.text.slice(i);
+    }),
+    [`insert(ILjava/lang/CharSequence;)L${ret};`]: driven(function* (this: JSpannable, i: number, cs: unknown): Gen {
+      this.text = this.text.slice(0, i) + ((yield csText(cs))) + this.text.slice(i);
       return this;
-    },
+    }),
     [`delete(II)L${ret};`]: function (this: JSpannable, a: number, b: number) {
       this.text = this.text.slice(0, a) + this.text.slice(b);
       return this;
@@ -1258,7 +1258,8 @@ export class JLayout extends JObj {
    * lays the line out with what they wrote back. That is how a Compose Paragraph (and any
    * app-set line height) gets its spacing, so a layout without it is a font-metrics line short.
    */
-  async applyLineHeightSpans() {
+  applyLineHeightSpans(): unknown { return rt.drive(this.applyLineHeightSpans$()); }
+  *applyLineHeightSpans$(): Gen {
     this.tops = this.bases = null;
     const src = this.src;
     if (!(src instanceof JSpanned)) return;
@@ -1277,11 +1278,11 @@ export class JLayout extends JObj {
       for (const s of spans) {
         if (s.start > l.end || s.end < l.start) continue;
         if (rt.iof(s.span, "android/text/style/LineHeightSpan$WithDensity")) {
-          await vcall(s.span, "chooseHeight", "(Ljava/lang/CharSequence;IIIILandroid/graphics/Paint$FontMetricsInt;Landroid/text/TextPaint;)V",
-            src, l.start, l.end, s.start, v, fm, this.paint);
+          (yield vcall(s.span, "chooseHeight", "(Ljava/lang/CharSequence;IIIILandroid/graphics/Paint$FontMetricsInt;Landroid/text/TextPaint;)V",
+            src, l.start, l.end, s.start, v, fm, this.paint));
         } else {
-          await vcall(s.span, "chooseHeight", "(Ljava/lang/CharSequence;IIIILandroid/graphics/Paint$FontMetricsInt;)V",
-            src, l.start, l.end, s.start, v, fm);
+          (yield vcall(s.span, "chooseHeight", "(Ljava/lang/CharSequence;IIIILandroid/graphics/Paint$FontMetricsInt;)V",
+            src, l.start, l.end, s.start, v, fm));
         }
       }
       if (this.includePad) {
@@ -1449,8 +1450,7 @@ const dynamicMethods: NonNullable<NativeSpec["methods"]> = {
 for (const [signature, method] of Object.entries(layoutMethods)) {
   if (signature.startsWith("static ") || typeof method !== "function") continue;
   dynamicMethods[signature] = function (this: JDynamicLayout, ...args: never[]) {
-    const pending = this.refresh();
-    return pending ? pending.then(() => method.apply(this, args)) : method.apply(this, args);
+    return after(this.refresh(), () => method.apply(this, args));
   };
 }
 dynamicMethods["getText()Ljava/lang/CharSequence;"] = function (this: JDynamicLayout) { return this.src; };
@@ -1473,13 +1473,14 @@ function boringMetrics(text: string, paint: JTextPaint): JBoringMetrics | null {
   return m;
 }
 class JBoringLayout extends JLayout {
-  async setup(cs: unknown, p: JTextPaint, w: number, smult: number, sadd: number, incl: boolean): Promise<this> {
+  setup(cs: unknown, p: JTextPaint, w: number, smult: number, sadd: number, incl: boolean): this | Promise<this> { return rt.drive(this.setup$(cs, p, w, smult, sadd, incl)); }
+  *setup$(cs: unknown, p: JTextPaint, w: number, smult: number, sadd: number, incl: boolean): Gen<this> {
     this.text = spannedString(cs); this.src = cs; this.paint = p; this.width = w;
     this.spacingMult = smult; this.spacingAdd = sadd; this.includePad = incl;
     const spans = replacementSpans(cs);
-    this.replacements = spans.length ? await measureReplacements(cs, p, spans) : [];
+    this.replacements = spans.length ? (yield measureReplacements(cs, p, spans)) : [];
     this.layoutLines(1);
-    await this.applyLineHeightSpans();
+    (yield this.applyLineHeightSpans());
     return this;
   }
 }

@@ -50,7 +50,8 @@ export class JActionBarView extends JViewGroup {
     const overflow = vis.filter((m) => !chosen.has(m));
     return { action, overflow, slots: action.length + (overflow.length ? 1 : 0) };
   }
-  async onDrawSelf(cv: JCanvas) {
+  onDrawSelf(cv: JCanvas): unknown { return rt.drive(this.onDrawSelf$(cv)); }
+  *onDrawSelf$(cv: JCanvas): Gen {
     const thread = curThread;
     const ctx = cv.ctx;
     const h = this.height();
@@ -66,12 +67,12 @@ export class JActionBarView extends JViewGroup {
       const d = this.upDrawable;
       d.bounds.left = 2; d.bounds.top = h / 2 - 24;
       d.bounds.right = 50; d.bounds.bottom = h / 2 + 24;
-      const pending = drawChild(d, cv, thread); if (pending instanceof Promise) await pending;
+      const pending = drawChild(d, cv, thread); if (pending instanceof Promise) (yield pending);
     }
     if (this.icon) {
       this.icon.bounds.left = x; this.icon.bounds.top = h / 2 - 30;
       this.icon.bounds.right = x + 60; this.icon.bounds.bottom = h / 2 + 30;
-      const pending = drawChild(this.icon, cv, thread); if (pending instanceof Promise) await pending;
+      const pending = drawChild(this.icon, cv, thread); if (pending instanceof Promise) (yield pending);
       x += 72;
     }
     const { action: shown, overflow, slots } = this.layoutMenu();
@@ -116,7 +117,7 @@ export class JActionBarView extends JViewGroup {
         item.icon.tint = -1;
         item.icon.bounds.left = cx - 24; item.icon.bounds.top = h / 2 - 24;
         item.icon.bounds.right = cx + 24; item.icon.bounds.bottom = h / 2 + 24;
-        const pending = drawChild(item.icon, cv, thread); if (pending instanceof Promise) await pending;
+        const pending = drawChild(item.icon, cv, thread); if (pending instanceof Promise) (yield pending);
       } else {
         ctx.font = "26px Roboto";
         ctx.textAlign = "center";
@@ -416,23 +417,25 @@ class JActionBar extends JObj {
   navListener: unknown = null;
   navSelected = 0;
   navFired = false;
-  async fireNav(i: number) {
+  fireNav(i: number): unknown { return rt.drive(this.fireNav$(i)); }
+  *fireNav$(i: number): Gen {
     if (!this.navListener) return;
     let id = 0n;
     if (this.navAdapter) {
-      try { id = await vcall(this.navAdapter, "getItemId", "(I)J", i); } catch { /* */ }
-      await this.updateNavLabel(i);
+      try { id = (yield vcall(this.navAdapter, "getItemId", "(I)J", i)); } catch { /* */ }
+      (yield this.updateNavLabel(i));
     }
     try {
-      await vcall(this.navListener, "onNavigationItemSelected", "(IJ)Z", i, id);
+      (yield vcall(this.navListener, "onNavigationItemSelected", "(IJ)Z", i, id));
     } catch (e) { reportUncaught(e); }
     invalidate();
   }
-  async updateNavLabel(i: number) {
+  updateNavLabel(i: number): unknown { return rt.drive(this.updateNavLabel$(i)); }
+  *updateNavLabel$(i: number): Gen {
     const bar = this.act?.window.actionBarView;
     if (!bar || !this.navAdapter) return;
     try {
-      const view = await vcall(this.navAdapter, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;", i, null, bar);
+      const view = (yield vcall(this.navAdapter, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;", i, null, bar));
       bar.navLabel = firstText(view) ?? "";
     } catch (e) { bar.navLabel = ""; }
   }

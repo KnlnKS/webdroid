@@ -1002,13 +1002,13 @@ rt.register({
       if (!id) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut id must not be empty");
       this.info.id = id; this.info.pkg = (yield vcall(context, "getPackageName", "()Ljava/lang/String;"));
     }),
-    [`setShortLabel(Ljava/lang/CharSequence;)${shortcutBuilder}`]: async function (this: JShortcutBuilder, label: unknown) {
-      const text = await csText(label);
+    [`setShortLabel(Ljava/lang/CharSequence;)${shortcutBuilder}`]: driven(function* (this: JShortcutBuilder, label: unknown): Gen {
+      const text = (yield csText(label));
       if (!text) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut label must not be empty");
       this.info.shortLabel = text; return this;
-    },
-    [`setLongLabel(Ljava/lang/CharSequence;)${shortcutBuilder}`]: async function (this: JShortcutBuilder, label: unknown) { this.info.longLabel = await csText(label); return this; },
-    [`setDisabledMessage(Ljava/lang/CharSequence;)${shortcutBuilder}`]: async function (this: JShortcutBuilder, label: unknown) { this.info.disabledMessage = await csText(label); return this; },
+    }),
+    [`setLongLabel(Ljava/lang/CharSequence;)${shortcutBuilder}`]: driven(function* (this: JShortcutBuilder, label: unknown): Gen { this.info.longLabel = (yield csText(label)); return this; }),
+    [`setDisabledMessage(Ljava/lang/CharSequence;)${shortcutBuilder}`]: driven(function* (this: JShortcutBuilder, label: unknown): Gen { this.info.disabledMessage = (yield csText(label)); return this; }),
     [`setIntent(Landroid/content/Intent;)${shortcutBuilder}`]: function (this: JShortcutBuilder, intent: JIntent) { this.info.intents = [intent]; return this; },
     [`setIntents([Landroid/content/Intent;)${shortcutBuilder}`]: function (this: JShortcutBuilder, intents: JIntent[]) { this.info.intents = intents.slice(); return this; },
     [`setIcon(Landroid/graphics/drawable/Icon;)${shortcutBuilder}`]: function (this: JShortcutBuilder, icon: unknown) { this.info.icon = icon; return this; },

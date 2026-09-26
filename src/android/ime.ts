@@ -411,10 +411,10 @@ rt.register({
       this.info.selStart = a; this.info.selEnd = b;
       return this;
     },
-    [`setComposingText(ILjava/lang/CharSequence;)${CAB}`]: async function (this: JCursorAnchorInfoBuilder, i: number, t: unknown) {
-      this.info.compStart = t === null ? -1 : i; this.info.compText = t === null ? null : await csText(t);
+    [`setComposingText(ILjava/lang/CharSequence;)${CAB}`]: driven(function* (this: JCursorAnchorInfoBuilder, i: number, t: unknown): Gen {
+      this.info.compStart = t === null ? -1 : i; this.info.compText = t === null ? null : (yield csText(t));
       return this;
-    },
+    }),
     [`setInsertionMarkerLocation(FFFFI)${CAB}`]: function (this: JCursorAnchorInfoBuilder, x: number, t: number, bl: number, b: number, f: number) {
       this.info.marker = [x, t, bl, b]; this.info.markerFlags = f;
       return this;

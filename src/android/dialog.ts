@@ -61,21 +61,23 @@ class DialogRoot extends JFrameLayout {
    * decor's padding from its background for exactly this reason.
    */
   bgPad: [number, number, number, number] = [0, 0, 0, 0];
-  async readBgPadding() {
+  readBgPadding(): unknown { return rt.drive(this.readBgPadding$()); }
+  *readBgPadding$(): Gen {
     const win = this.dialog?.win;
     const bg = win?.bgSet ? win.bg : this.cardBg;
     if (!bg) { this.bgPad = [0, 0, 0, 0]; return; }
     const r = new JRect();
-    await guardCall(bg, M_getPadding, r);
+    (yield guardCall(bg, M_getPadding, r));
     this.bgPad = [r.left, r.top, r.right, r.bottom];
   }
   dialog: JDialog | null = null;
   /** the window's android.R.id.content FrameLayout — appcompat finds it by id, reparents its
    *  children into a sub-decor and swaps the ids, exactly as it does to an activity window */
   content!: JFrameLayout;
-  async setContent(v: JView | null) {
-    for (const child of [...this.content.children]) await detachView(this.content, child);
-    if (v) await attachView(this.content, v);
+  setContent(v: JView | null): unknown { return rt.drive(this.setContent$(v)); }
+  *setContent$(v: JView | null): Gen {
+    for (const child of [...this.content.children]) (yield detachView(this.content, child));
+    if (v) (yield attachView(this.content, v));
   }
   /** the dialog window's own background, from its theme — not a hardcoded white card */
   cardBg: JDrawable | null = null;
@@ -174,23 +176,25 @@ class JDialog extends JObj {
   cancelL: unknown = null;
   dismissL: unknown = null;
   showL: unknown = null;
-  async dismissImpl() {
+  dismissImpl(): unknown { return rt.drive(this.dismissImpl$()); }
+  *dismissImpl$(): Gen {
     if (!this.showing) return;
     this.showing = false;
     if (this.root) {
       removeOverlay(this.root);
-      await dispatchDetached(this.root);
-      try { await vcall(this, "onStop", "()V"); } catch (e) { reportUncaught(e); }
+      (yield dispatchDetached(this.root));
+      try { (yield vcall(this, "onStop", "()V")); } catch (e) { reportUncaught(e); }
     }
     if (this.dismissL) {
-      try { await vcall(this.dismissL, "onDismiss", "(Landroid/content/DialogInterface;)V", this); } catch (e) { reportUncaught(e); }
+      try { (yield vcall(this.dismissL, "onDismiss", "(Landroid/content/DialogInterface;)V", this)); } catch (e) { reportUncaught(e); }
     }
   }
-  async cancel() {
+  cancel(): unknown { return rt.drive(this.cancel$()); }
+  *cancel$(): Gen {
     if (this.cancelL) {
-      try { await vcall(this.cancelL, "onCancel", "(Landroid/content/DialogInterface;)V", this); } catch (e) { reportUncaught(e); }
+      try { (yield vcall(this.cancelL, "onCancel", "(Landroid/content/DialogInterface;)V", this)); } catch (e) { reportUncaught(e); }
     }
-    await this.dismissImpl();
+    (yield this.dismissImpl());
   }
   ensureRoot(): DialogRoot {
     if (!this.root) {
@@ -430,11 +434,11 @@ async function buildAlertContent(d: JAlertDialog) {
       t.lp = lpFill();
       const idx = i;
       (t as any).clickL = {
-        [mangleMethod("onClick", "(Landroid/view/View;)V")]: async () => {
+        [mangleMethod("onClick", "(Landroid/view/View;)V")]: driven(function* (): Gen  {
           // AOSP: the listener runs first; the DISMISS message is queued behind it
-          if (d.itemsL) await vcall(d.itemsL, "onClick", "(Landroid/content/DialogInterface;I)V", d, idx);
-          await d.dismissImpl();
-        },
+          if (d.itemsL) (yield vcall(d.itemsL, "onClick", "(Landroid/content/DialogInterface;I)V", d, idx));
+          (yield d.dismissImpl());
+        }),
       };
       addUnattachedView(col, t);
     }
@@ -459,10 +463,10 @@ async function buildAlertContent(d: JAlertDialog) {
       lp.width = -2; lp.height = -2;
       b.lp = lp;
       (b as any).clickL = {
-        [mangleMethod("onClick", "(Landroid/view/View;)V")]: async () => {
-          if (l) await vcall(l, "onClick", "(Landroid/content/DialogInterface;I)V", d, which);
-          await d.dismissImpl();
-        },
+        [mangleMethod("onClick", "(Landroid/view/View;)V")]: driven(function* (): Gen  {
+          if (l) (yield vcall(l, "onClick", "(Landroid/content/DialogInterface;I)V", d, which));
+          (yield d.dismissImpl());
+        }),
       };
       d.buttons.set(which, b);
       addUnattachedView(row, b);

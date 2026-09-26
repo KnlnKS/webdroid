@@ -113,12 +113,13 @@ export class JTextView extends JView {
   bottomPad(): number { return this.includePad ? Math.ceil(fontBottom(this.paintT)) - Math.round(fontDescent(this.paintT)) : 0; }
   textHeight(lines: number): number { return lines * this.lineHeight() + this.topPad() + this.bottomPad(); }
   ascent(): number { return Math.round(-fontAscent(this.paintT)) + this.topPad(); }
-  async notifyWatchers() {
+  notifyWatchers(): unknown { return rt.drive(this.notifyWatchers$()); }
+  *notifyWatchers$(): Gen {
     for (const w of this.watchers) {
       try {
-        await vcall(w, "beforeTextChanged", "(Ljava/lang/CharSequence;III)V", this.text, 0, 0, this.text.length);
-        await vcall(w, "onTextChanged", "(Ljava/lang/CharSequence;III)V", this.text, 0, 0, this.text.length);
-        await vcall(w, "afterTextChanged", "(Landroid/text/Editable;)V", this.getEditable());
+        (yield vcall(w, "beforeTextChanged", "(Ljava/lang/CharSequence;III)V", this.text, 0, 0, this.text.length));
+        (yield vcall(w, "onTextChanged", "(Ljava/lang/CharSequence;III)V", this.text, 0, 0, this.text.length));
+        (yield vcall(w, "afterTextChanged", "(Landroid/text/Editable;)V", this.getEditable()));
       } catch (e) { console.error("[watcher]", e); }
     }
   }

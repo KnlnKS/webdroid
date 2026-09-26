@@ -286,30 +286,34 @@ export class JListView extends JViewGroup {
     this.scrollY = Math.max(0, Math.min(this.maxScroll(), this.scrollY));
     this.notifyScroll();
   }
-  rebuild(): Promise<void> {
+  /** A rebuild requested while one is suspended reruns it once it finishes. */
+  rebuild(): void | Promise<void> {
     if (this.rebuildPromise) {
       this.rebuildPending = true;
       return this.rebuildPromise;
     }
-    this.rebuildPromise = this.rebuildRows().finally(() => { this.rebuildPromise = null; });
+    const pending = this.rebuildRows();
+    if (!(pending instanceof Promise)) return;
+    this.rebuildPromise = pending.finally(() => { this.rebuildPromise = null; });
     return this.rebuildPromise;
   }
-  private async rebuildRows() {
+  private rebuildRows(): void | Promise<void> { return rt.drive(this.rebuildRows$()); }
+  private *rebuildRows$(): Gen<void> {
     this.building = true;
     try {
       do {
         this.rebuildPending = false;
-        for (const v of [...this.children]) await detachView(this, v);
+        for (const v of [...this.children]) (yield detachView(this, v));
         this.itemViews = []; this.viewsCache = null;
         if (this.adapter) {
-          const n: number = await vcall(this.adapter, "getCount", "()I");
+          const n: number = (yield vcall(this.adapter, "getCount", "()I"));
           for (let i = 0; i < n; i++) {
-            const v = await vcall(this.adapter, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;", i, null, this) as JView | null;
+            const v = (yield vcall(this.adapter, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;", i, null, this)) as JView | null;
             if (!v) continue;
             this.itemViews.push(v); this.viewsCache = null;
           }
         }
-        for (const v of this.allViews()) await attachView(this, v);
+        for (const v of this.allViews()) (yield attachView(this, v));
         this.updateEmptyStatus();
         requestLayout(this);
       } while (this.rebuildPending);
@@ -475,7 +479,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (a) {
       const self = this;
       this.observer = {
-        [mangleMethod("onChanged", "()V")]: async () => { await self.rebuild(); },
+        [mangleMethod("onChanged", "()V")]: () => self.rebuild(),
         [mangleMethod("onInvalidated", "()V")]: () => { invalidate(); },
       };
       try { (yield vcall(a, "registerDataSetObserver", "(Landroid/database/DataSetObserver;)V", this.observer)); } catch { /* */ }
@@ -838,14 +842,15 @@ class JSpinner extends JListView {
   selView: JView | null = null;
   popupBg: JDrawable | null = null;
   /** the AdapterView rebuild: a Spinner materializes only the selected item */
-  async rebuild() {
-    for (const v of [...this.children]) await detachView(this, v);
+  rebuild(): void | Promise<void> { return rt.drive(this.rebuild$()); }
+  *rebuild$(): Gen<void> {
+    for (const v of [...this.children]) (yield detachView(this, v));
     this.selView = null;
-    const n: number = this.adapter ? await vcall(this.adapter, "getCount", "()I") : 0;
+    const n: number = this.adapter ? (yield vcall(this.adapter, "getCount", "()I")) : 0;
     if (this.selection >= 0 && this.selection < n) {
-      this.selView = await vcall(this.adapter, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;",
-        this.selection, null, this) as JView | null;
-      if (this.selView) await attachView(this, this.selView);
+      this.selView = (yield vcall(this.adapter, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;",
+        this.selection, null, this)) as JView | null;
+      if (this.selView) (yield attachView(this, this.selView));
     }
     requestLayout(this);
   }

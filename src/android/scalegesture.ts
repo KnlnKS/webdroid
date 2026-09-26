@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { JGestureDetector, JSimpleGestureListener, minimumScalingSpan } from "./compat";
 import { type JMotionEvent } from "./motionevent";
@@ -15,11 +15,12 @@ class JScaleGestureDetector extends JObj {
   time = 0; prevTime = 0;
   focusX = 0; focusY = 0;
   anchor = 0; anchorX = 0; anchorY = 0; above = false;
-  async init(context: unknown, listener: unknown) {
+  init(context: unknown, listener: unknown): unknown { return rt.drive(this.init$(context, listener)); }
+  *init$(context: unknown, listener: unknown): Gen {
     if (!context || !listener) return rt.npe();
     this.listener = listener;
     this.spanSlop = device.touchSlop * 2; this.minSpan = minimumScalingSpan();
-    const info = await vcall(context, "getApplicationInfo", "()Landroid/content/pm/ApplicationInfo;");
+    const info = (yield vcall(context, "getApplicationInfo", "()Landroid/content/pm/ApplicationInfo;"));
     this.setQuick(info.targetSdkVersion > 18); this.stylus = info.targetSdkVersion > 22;
   }
   setQuick(enabled: boolean) {
@@ -33,16 +34,17 @@ class JScaleGestureDetector extends JObj {
   previous() {
     this.prevSpan = this.span; this.prevSpanX = this.spanX; this.prevSpanY = this.spanY; this.prevTime = this.time;
   }
-  async touch(event: JMotionEvent): Promise<number> {
+  touch(event: JMotionEvent): number | Promise<number> { return rt.drive(this.touch$(event)); }
+  *touch$(event: JMotionEvent): Gen<number> {
     this.time = event.eventTime;
     const action = event.action & 255;
-    if (this.quick) await this.detector!.touch(event);
-    const count: number = await vcall(event, "getPointerCount", "()I");
-    const button = (await vcall(event, "getButtonState", "()I") & 32) !== 0;
+    if (this.quick) (yield this.detector!.touch(event));
+    const count: number = (yield vcall(event, "getPointerCount", "()I"));
+    const button = ((yield vcall(event, "getButtonState", "()I")) & 32) !== 0;
     const cancelled = this.anchor === 2 && !button, complete = action === 1 || action === 3 || cancelled;
     if (action === 0 || complete) {
       if (this.inProgress) {
-        await vcall(this.listener, "onScaleEnd", "(Landroid/view/ScaleGestureDetector;)V", this);
+        (yield vcall(this.listener, "onScaleEnd", "(Landroid/view/ScaleGestureDetector;)V", this));
         this.inProgress = false; this.initialSpan = 0; this.anchor = 0;
       } else if (this.anchor && complete) { this.initialSpan = 0; this.anchor = 0; }
       if (complete) return 1;
@@ -56,19 +58,19 @@ class JScaleGestureDetector extends JObj {
     if (this.anchor) { x = this.anchorX; y = this.anchorY; this.above = event.y < y; }
     else {
       for (let i = 0; i < count; i++) if (i !== skip) {
-        x += await vcall(event, "getX", "(I)F", i); y += await vcall(event, "getY", "(I)F", i);
+        x += (yield vcall(event, "getX", "(I)F", i)); y += (yield vcall(event, "getY", "(I)F", i));
       }
       x /= div; y /= div;
     }
     for (let i = 0; i < count; i++) if (i !== skip) {
-      dx += Math.abs(await vcall(event, "getX", "(I)F", i) - x);
-      dy += Math.abs(await vcall(event, "getY", "(I)F", i) - y);
+      dx += Math.abs((yield vcall(event, "getX", "(I)F", i)) - x);
+      dy += Math.abs((yield vcall(event, "getY", "(I)F", i)) - y);
     }
     const spanX = dx * 2 / div, spanY = dy * 2 / div, span = this.anchor ? spanY : Math.hypot(spanX, spanY);
     const wasInProgress = this.inProgress;
     this.focusX = x; this.focusY = y;
     if (!this.anchor && this.inProgress && (span < this.minSpan || changed)) {
-      await vcall(this.listener, "onScaleEnd", "(Landroid/view/ScaleGestureDetector;)V", this);
+      (yield vcall(this.listener, "onScaleEnd", "(Landroid/view/ScaleGestureDetector;)V", this));
       this.inProgress = false; this.initialSpan = span;
     }
     if (changed) {
@@ -78,11 +80,11 @@ class JScaleGestureDetector extends JObj {
     if (!this.inProgress && span >= (this.anchor ? this.spanSlop : this.minSpan)
       && (wasInProgress || Math.abs(span - this.initialSpan) > this.spanSlop)) {
       this.spanX = spanX; this.spanY = spanY; this.span = span; this.previous();
-      this.inProgress = !!await vcall(this.listener, "onScaleBegin", "(Landroid/view/ScaleGestureDetector;)Z", this);
+      this.inProgress = !!(yield vcall(this.listener, "onScaleBegin", "(Landroid/view/ScaleGestureDetector;)Z", this));
     }
     if (action === 2) {
       this.spanX = spanX; this.spanY = spanY; this.span = span;
-      if (!this.inProgress || await vcall(this.listener, "onScale", "(Landroid/view/ScaleGestureDetector;)Z", this)) this.previous();
+      if (!this.inProgress || (yield vcall(this.listener, "onScale", "(Landroid/view/ScaleGestureDetector;)Z", this))) this.previous();
     }
     return 1;
   }

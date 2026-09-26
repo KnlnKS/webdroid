@@ -232,9 +232,9 @@ async function initTimePickerDialog(d: JTimePickerDialog, c: unknown, listener: 
   d.posText = "OK";
   d.negText = "Cancel";
   d.posL = {
-    [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: async () => {
-      if (d.timeSetL) await vcall(d.timeSetL, "onTimeSet", "(Landroid/widget/TimePicker;II)V", tp, tp.hourVal, tp.minuteVal);
-    },
+    [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: driven(function* (): Gen  {
+      if (d.timeSetL) (yield vcall(d.timeSetL, "onTimeSet", "(Landroid/widget/TimePicker;II)V", tp, tp.hourVal, tp.minuteVal));
+    }),
   };
 }
 const timePickerDialogMethods: NativeSpec["methods"] = {
@@ -356,10 +356,10 @@ async function initDatePickerDialog(d: JDatePickerDialog, c: unknown, themeId: n
   d.posText = "OK";
   d.negText = "Cancel";
   d.posL = {
-    [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: async () => {
-      if (d.dateSetL) await vcall(d.dateSetL, "onDateSet", "(Landroid/widget/DatePicker;III)V",
-        p, p.yearVal, p.monthVal, p.dayVal);
-    },
+    [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: driven(function* (): Gen  {
+      if (d.dateSetL) (yield vcall(d.dateSetL, "onDateSet", "(Landroid/widget/DatePicker;III)V",
+        p, p.yearVal, p.monthVal, p.dayVal));
+    }),
   };
 }
 rt.register({ name: "android/app/DatePickerDialog", ctor: JDatePickerDialog, sup: "android/app/AlertDialog", methods: {

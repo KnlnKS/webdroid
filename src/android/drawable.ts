@@ -815,11 +815,12 @@ rt.register({ name: "android/graphics/drawable/TransitionDrawable", ctor: JTrans
 /** Two 108dp layers behind a 72dp viewport, clipped to the device mask. */
 class JAdaptiveIconDrawable extends JLayerDrawable {
   /** AOSP getFullBounds: each layer is the viewport grown by 25% on every side */
-  async layout() {
+  layout(): unknown { return rt.drive(this.layout$()); }
+  *layout$(): Gen {
     const thread = curThread;
     const { left, top, right, bottom } = this.bounds;
     const dx = (right - left) / 4, dy = (bottom - top) / 4;
-    for (const l of this.layers) if (l.d) await vcallOn(thread, l.d, "setBounds", "(IIII)V", left - dx, top - dy, right + dx, bottom + dy);
+    for (const l of this.layers) if (l.d) (yield vcallOn(thread, l.d, "setBounds", "(IIII)V", left - dx, top - dy, right + dx, bottom + dy));
   }
   clip(cv: JCanvas) {
     const { left, top, right, bottom } = this.bounds;
@@ -1078,7 +1079,8 @@ rt.register({
 class JClipDrawable extends JDrawableWrapper {
   gravity = 3;
   orientation = 1;
-  async paint(cv: JCanvas) {
+  paint(cv: JCanvas): unknown { return rt.drive(this.paint$(cv)); }
+  *paint$(cv: JCanvas): Gen {
     if (!this.dr || this.level <= 0) return;
     const b = this.bounds, f = Math.min(1, this.level / 10000);
     const w = b.right - b.left, h = b.bottom - b.top;
@@ -1089,7 +1091,7 @@ class JClipDrawable extends JDrawableWrapper {
     const top = (gravity & 112) === 80 ? b.bottom - height : (gravity & 112) === 16 ? b.top + Math.round((h - height) / 2) : b.top;
     cv.ctx.save();
     cv.ctx.beginPath(); cv.ctx.rect(left, top, width, height); cv.ctx.clip();
-    try { await drawChild(this.dr, cv); } finally { cv.ctx.restore(); }
+    try { (yield drawChild(this.dr, cv)); } finally { cv.ctx.restore(); }
   }
 }
 rt.register({ name: "android/graphics/drawable/ClipDrawable", ctor: JClipDrawable,
@@ -1197,21 +1199,22 @@ class JScaleDrawable extends JDrawableWrapper {
   scaleWidth = -1; scaleHeight = -1; gravity = 3; useIntrinsicMinimum = false;
   scaled = new JRect();
   paint(canvas: JCanvas) { if (this.dr && this.dr.level !== 0) return drawChild(this.dr, canvas); }
-  async layout(thread = curThread) {
+  layout(thread = curThread): unknown { return rt.drive(this.layout$(thread)); }
+  *layout$(thread = curThread): Gen {
     const child = this.dr;
     if (!child) return;
     const b = this.bounds;
     let w = b.right - b.left, h = b.bottom - b.top;
     if (this.scaleWidth > 0) {
-      const min = this.useIntrinsicMinimum ? Number(await drawableSize(child, false, thread)) : 0;
+      const min = this.useIntrinsicMinimum ? Number((yield drawableSize(child, false, thread))) : 0;
       w -= Math.trunc((w - min) * (10000 - this.level) * this.scaleWidth / 10000);
     }
     if (this.scaleHeight > 0) {
-      const min = this.useIntrinsicMinimum ? Number(await drawableSize(child, true, thread)) : 0;
+      const min = this.useIntrinsicMinimum ? Number((yield drawableSize(child, true, thread))) : 0;
       h -= Math.trunc((h - min) * (10000 - this.level) * this.scaleHeight / 10000);
     }
     gravityApply(absGravity(this.gravity, this.layoutDir), w, h, b, 0, 0, this.scaled);
-    if (w > 0 && h > 0) await vcallOn(thread, child, "setBounds", "(IIII)V", this.scaled.left, this.scaled.top, this.scaled.right, this.scaled.bottom);
+    if (w > 0 && h > 0) (yield vcallOn(thread, child, "setBounds", "(IIII)V", this.scaled.left, this.scaled.top, this.scaled.right, this.scaled.bottom));
   }
 }
 rt.register({ name: "android/graphics/drawable/ScaleDrawable", ctor: JScaleDrawable, sup: "android/graphics/drawable/DrawableWrapper", methods: {

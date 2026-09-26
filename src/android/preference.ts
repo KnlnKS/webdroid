@@ -248,9 +248,9 @@ async function showListPreferenceDialog(pref: JListPreference) {
   await vcall(b, "setTitle", "(Ljava/lang/CharSequence;)Landroid/app/AlertDialog$Builder;", pref.dialogTitleStr || pref.titleStr);
   await vcall(b, "setItems", "([Ljava/lang/CharSequence;Landroid/content/DialogInterface$OnClickListener;)Landroid/app/AlertDialog$Builder;",
     pref.entries, {
-      [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: async (_d: unknown, idx: number) => {
-        await setListValue(pref, pref.entryValues[idx] ?? String(idx), true);
-      },
+      [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: driven(function* (_d: unknown, idx: number): Gen  {
+        (yield setListValue(pref, pref.entryValues[idx] ?? String(idx), true));
+      }),
     });
   await vcall(b, "show", "()Landroid/app/AlertDialog;");
 }

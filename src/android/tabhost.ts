@@ -33,11 +33,12 @@ export class JTabWidget extends JLinearLayout {
   host: JTabHost | null = null;
   selectedTab = -1;
   stripEnabled = true;
-  async setCurrent(i: number): Promise<void> {
+  setCurrent(i: number): void | Promise<void> { return rt.drive(this.setCurrent$(i)); }
+  *setCurrent$(i: number): Gen<void> {
     if (i < 0 || i >= this.children.length || i === this.selectedTab) return;
-    if (this.selectedTab !== -1 && this.children[this.selectedTab]) await vcall(this.children[this.selectedTab], "setSelected", "(Z)V", 0);
+    if (this.selectedTab !== -1 && this.children[this.selectedTab]) (yield vcall(this.children[this.selectedTab], "setSelected", "(Z)V", 0));
     this.selectedTab = i;
-    await vcall(this.children[i], "setSelected", "(Z)V", 1);
+    (yield vcall(this.children[i], "setSelected", "(Z)V", 1));
   }
 }
 const setVisibility = (v: JView, vis: number) => vcall(v, "setVisibility", "(I)V", vis);

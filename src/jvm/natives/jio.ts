@@ -1352,15 +1352,15 @@ const memoryWriterMethods = {
 function writerAppend(ret: string): NonNullable<NativeSpec["methods"]> {
   return {
     [`append(C)L${ret};`]: function (this: JWriter, c: number) { return after(vcall(this, "write", "(I)V", c), () => this); },
-    [`append(Ljava/lang/CharSequence;)L${ret};`]: async function (this: JWriter, cs: unknown) {
-      const thread = curThread, text = cs == null ? "null" : await csText(cs);
-      await vcallOn(thread, this, "write", "(Ljava/lang/String;)V", text); return this;
-    },
-    [`append(Ljava/lang/CharSequence;II)L${ret};`]: async function (this: JWriter, cs: unknown, start: number, end: number) {
-      const thread = curThread, text = cs == null ? "null" : await csText(cs);
+    [`append(Ljava/lang/CharSequence;)L${ret};`]: driven(function* (this: JWriter, cs: unknown): Gen {
+      const thread = curThread, text = cs == null ? "null" : (yield csText(cs));
+      (yield vcallOn(thread, this, "write", "(Ljava/lang/String;)V", text)); return this;
+    }),
+    [`append(Ljava/lang/CharSequence;II)L${ret};`]: driven(function* (this: JWriter, cs: unknown, start: number, end: number): Gen {
+      const thread = curThread, text = cs == null ? "null" : (yield csText(cs));
       if (start < 0 || end < start || end > text.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
-      await vcallOn(thread, this, "write", "(Ljava/lang/String;)V", text.slice(start, end)); return this;
-    },
+      (yield vcallOn(thread, this, "write", "(Ljava/lang/String;)V", text.slice(start, end))); return this;
+    }),
   };
 }
 rt.register({

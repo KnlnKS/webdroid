@@ -98,7 +98,8 @@ class JViewFlipper extends JViewAnimator {
   windowVisible = false;
   running = false;
   flip: JFnRunnable | null = null;
-  async update(animate = true) {
+  update(animate = true): unknown { return rt.drive(this.update$(animate)); }
+  *update$(animate = true): Gen {
     const running = this.windowVisible && this.started;
     if (running === this.running) return;
     this.running = running;
@@ -112,7 +113,7 @@ class JViewFlipper extends JViewAnimator {
         if (this.running) mainHandler().post(this.flip, this.interval);
       };
     }
-    await vcall(this, "showOnly", "(IZ)V", this.displayed, +animate);
+    (yield vcall(this, "showOnly", "(IZ)V", this.displayed, +animate));
     if (this.running) mainHandler().post(this.flip, this.interval);
   }
 }

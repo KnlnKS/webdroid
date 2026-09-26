@@ -115,26 +115,29 @@ class JSeekBar extends JAbsSeekBar {
   secondary = 0;
   changeListener: unknown = null;
   constructor() { super(); this.horizontal = true; this.indeterminate = false; }
-  async setTrack(d: JDrawable | null, thread = curThread) {
+  setTrack(d: JDrawable | null, thread = curThread): unknown { return rt.drive(this.setTrack$(d, thread)); }
+  *setTrack$(d: JDrawable | null, thread = curThread): Gen {
     if (this.progressD) this.progressD.callback = null;
     this.progressD = d;
-    if (d) { d.callback = this; await vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())); }
+    if (d) { d.callback = this; (yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState()))); }
     requestLayout(this); invalidate(this);
   }
-  async setThumb(d: JDrawable | null, thread = curThread) {
+  setThumb(d: JDrawable | null, thread = curThread): unknown { return rt.drive(this.setThumb$(d, thread)); }
+  *setThumb$(d: JDrawable | null, thread = curThread): Gen {
     if (this.thumb) this.thumb.callback = null;
     this.thumb = d;
-    this.thumbW = d ? Math.max(0, Number(await drawableSize(d, false, thread))) : 0;
-    this.thumbH = d ? Math.max(0, Number(await drawableSize(d, true, thread))) : 0;
+    this.thumbW = d ? Math.max(0, Number((yield drawableSize(d, false, thread)))) : 0;
+    this.thumbH = d ? Math.max(0, Number((yield drawableSize(d, true, thread)))) : 0;
     this.thumbOffset = Math.trunc(this.thumbW / 2);
-    if (d) { d.callback = this; await vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())); }
+    if (d) { d.callback = this; (yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState()))); }
     requestLayout(this); invalidate(this);
   }
-  async updateProgress(value: number, fromUser = false, thread = curThread) {
+  updateProgress(value: number, fromUser = false, thread = curThread): unknown { return rt.drive(this.updateProgress$(value, fromUser, thread)); }
+  *updateProgress$(value: number, fromUser = false, thread = curThread): Gen {
     const progress = Math.max(this.min, Math.min(this.max, Math.round(value)));
     if (this.progress === progress) return;
     this.progress = progress; invalidate(this);
-    if (this.changeListener) await vcallOn(thread, this.changeListener, "onProgressChanged", "(Landroid/widget/SeekBar;IZ)V", this, progress, +fromUser);
+    if (this.changeListener) (yield vcallOn(thread, this.changeListener, "onProgressChanged", "(Landroid/widget/SeekBar;IZ)V", this, progress, +fromUser));
   }
 }
 function initSeekBar(this: JSeekBar, c: unknown, attrs: JAttrSet | null = null, style = AID("seekBarStyle"), def = 0): unknown { return rt.drive(initSeekBar$.call(this, c, attrs, style, def)); }
@@ -268,34 +271,37 @@ class JCompoundButton extends JButton {
   buttonTint: JColorStateList | null = null;
   buttonTintMode: JSimpleEnum | null = null;
   hasButtonTint = false;
-  async updateButtonState() {
+  updateButtonState(): unknown { return rt.drive(this.updateButtonState$()); }
+  *updateButtonState$(): Gen {
     const thread = curThread, drawable = this.buttonD;
-    if (!drawable || !await vcallOn(thread, drawable, "isStateful", "()Z")) return;
-    const state = await vcallOn(thread, this, "getDrawableState", "()[I");
-    if (await vcallOn(thread, drawable, "setState", "([I)Z", state)) invalidate(this);
+    if (!drawable || !(yield vcallOn(thread, drawable, "isStateful", "()Z"))) return;
+    const state = (yield vcallOn(thread, this, "getDrawableState", "()[I"));
+    if ((yield vcallOn(thread, drawable, "setState", "([I)Z", state))) invalidate(this);
   }
-  async applyButtonTint() {
-    if (this.buttonD && this.hasButtonTint) await vcall(this.buttonD, "setTintList", "(Landroid/content/res/ColorStateList;)V", this.buttonTint);
-    if (this.buttonD && this.buttonTintMode) await vcall(this.buttonD, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", this.buttonTintMode);
+  applyButtonTint(): unknown { return rt.drive(this.applyButtonTint$()); }
+  *applyButtonTint$(): Gen {
+    if (this.buttonD && this.hasButtonTint) (yield vcall(this.buttonD, "setTintList", "(Landroid/content/res/ColorStateList;)V", this.buttonTint));
+    if (this.buttonD && this.buttonTintMode) (yield vcall(this.buttonD, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", this.buttonTintMode));
     invalidate(this);
   }
-  async setCheckedInternal(c: boolean) {
+  setCheckedInternal(c: boolean): unknown { return rt.drive(this.setCheckedInternal$(c)); }
+  *setCheckedInternal$(c: boolean): Gen {
     if (rt.iof(this, "android/widget/RadioButton") && this.idNum > 0) {
       let parent: JView | null = this.parent;
       while (parent && !(parent instanceof JRadioGroup)) parent = parent.parent;
       if (parent instanceof JRadioGroup && (c ? parent.checkedId !== this.idNum : parent.checkedId === this.idNum)) {
-        await parent.checkId(c ? this.idNum : -1);
+        (yield parent.checkId(c ? this.idNum : -1));
         return;
       }
     }
     if (this.checked === c) return;
     this.checked = c;
-    await this.refreshDrawableState();
-    await this.applyButtonTint();
+    (yield this.refreshDrawableState());
+    (yield this.applyButtonTint());
     if (this.broadcasting) return;
     this.broadcasting = true;
     if (this.checkL) {
-      await vcall(this.checkL, "onCheckedChanged", "(Landroid/widget/CompoundButton;Z)V", this, c ? 1 : 0);
+      (yield vcall(this.checkL, "onCheckedChanged", "(Landroid/widget/CompoundButton;Z)V", this, c ? 1 : 0));
     }
     this.broadcasting = false;
     invalidate();
@@ -460,13 +466,14 @@ class JRadioGroup extends JLinearLayout {
     if (v instanceof JViewGroup && !(v instanceof JCompoundButton)) for (const c of v.children) this.radios(out, c);
     return out;
   }
-  async checkId(id: number, fire = true) {
+  checkId(id: number, fire = true): unknown { return rt.drive(this.checkId$(id, fire)); }
+  *checkId$(id: number, fire = true): Gen {
     this.checkedId = id;
     for (const r of this.radios()) {
-      await r.setCheckedInternal(r.idNum === id);
+      (yield r.setCheckedInternal(r.idNum === id));
     }
     if (fire && this.checkL) {
-      await vcall(this.checkL, "onCheckedChanged", "(Landroid/widget/RadioGroup;I)V", this, id);
+      (yield vcall(this.checkL, "onCheckedChanged", "(Landroid/widget/RadioGroup;I)V", this, id));
     }
     invalidate();
   }

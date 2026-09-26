@@ -1227,7 +1227,7 @@ rt.register({
       if (n.fd < 0) throw errno("dup", 9);
       return n;
     },
-    [`static mmap(JJII${FD}J)J`]: async (hint: bigint, count: bigint, prot: number, flags: number, d: JFileDescriptor | null, offset: bigint) => {
+    [`static mmap(JJII${FD}J)J`]: driven(function* (hint: bigint, count: bigint, prot: number, flags: number, d: JFileDescriptor | null, offset: bigint): Gen  {
       const size = Number(count);
       if (!Number.isSafeInteger(size) || size <= 0 || offset < 0n || offset > BigInt(Number.MAX_SAFE_INTEGER) || (offset & 4095n) !== 0n ||
           (prot & ~7) !== 0 || ((flags & 3) !== 1 && (flags & 3) !== 2) || (flags & 0x10) !== 0 && (hint & 4095n) !== 0n)
@@ -1242,14 +1242,14 @@ rt.register({
       const address = mem.mapVa(size, prot === 0);
       if (!address) throw errno("mmap", E.NOMEM);
       try {
-        if (source && prot) mem.write(guestAt(address), await readFully(source, Number(offset), size));
+        if (source && prot) mem.write(guestAt(address), (yield readFully(source, Number(offset), size)));
       } catch {
         mem.unmapVa(BigInt(address), size);
         throw errno("mmap", E.IO);
       }
       if (writeBack) trackSharedMap(BigInt(address), size, Number(offset), writeBack);
       return BigInt(address);
-    },
+    }),
     "static munmap(JJ)V": (address: bigint, count: bigint) => {
       const size = Number(count);
       if (!Number.isSafeInteger(size) || size <= 0 || address & 4095n) throw errno("munmap", E.INVAL);
@@ -1288,16 +1288,16 @@ rt.register({
       s.f_namemax = 255n;
       return s;
     }),
-    [`static fstatvfs(${FD})Landroid/system/StructStatVfs;`]: async (d: JFileDescriptor) => {
+    [`static fstatvfs(${FD})Landroid/system/StructStatVfs;`]: driven(function* (d: JFileDescriptor): Gen  {
       if (descriptorFd(d) < 0) throw errno("fstatvfs", E.BADF);
-      const { total, free } = await storageEstimate();
+      const { total, free } = (yield storageEstimate());
       const s = new JStructStatVfs();
       s.f_bsize = s.f_frsize = BLK;
       s.f_blocks = BigInt(Math.floor(total / Number(BLK)));
       s.f_bfree = s.f_bavail = BigInt(Math.floor(free / Number(BLK)));
       s.f_namemax = 255n;
       return s;
-    },
+    }),
     "static readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },
   },
 });
