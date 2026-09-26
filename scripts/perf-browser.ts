@@ -109,7 +109,6 @@ try {
     setup.push({ step: step.id, ms: setupMs, actionMs, hit, ...(perf ? { perf } : {}) });
     if (values["setup-shots"]) await page.screenshot({ path: artifactPath(`-setup-${step.id}.png`) });
   }
-  await page.waitForTimeout(warmup);
   let foreground: ReturnType<typeof page.mainFrame> | undefined;
   for (const frame of page.frames()) {
     if (await frame.evaluate((pkg) => {
@@ -124,8 +123,11 @@ try {
   if (!await foreground.evaluate(() => !!globalThis.wd.perf && !!globalThis.wd.mainDbg)) throw new Error("Foreground realm lacks performance diagnostics");
   const session = await context.newCDPSession(foreground);
   await session.send("Performance.enable");
-  await session.send("Emulation.setCPUThrottlingRate", { rate: Number(values["cpu-throttle"]) });
+  // A forced full GC clears weak objects that optimized code embeds, deoptimizing hundreds of
+  // functions: collect before the warmup so the measured window starts from re-optimized code.
   await session.send("HeapProfiler.collectGarbage");
+  await page.waitForTimeout(warmup);
+  await session.send("Emulation.setCPUThrottlingRate", { rate: Number(values["cpu-throttle"]) });
   if (startStep) {
     const a = actOf(flow, startStep, manifest?.steps.find((step) => step.id === startStep.id));
     if (a.type === "tap") a.repeat = 1;
