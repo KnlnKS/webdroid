@@ -101,7 +101,10 @@ export const PRIM_DESC: Record<string, string> = Object.fromEntries(Object.entri
 /** the one mapping of Java's element types onto TypedArrays (byte=Int8, boolean=Uint8, char=Uint16, long=BigInt64) */
 export const PRIM_ARRAYS = { Z: Uint8Array, B: Int8Array, C: Uint16Array, S: Int16Array, I: Int32Array, J: BigInt64Array, F: Float32Array, D: Float64Array };
 export type PrimElem = keyof typeof PRIM_ARRAYS;
+const PRIM_BY_CTOR = new Map<unknown, PrimElem>(Object.entries(PRIM_ARRAYS).map(([d, c]) => [c, d as PrimElem]));
 export function primElem(v: unknown): PrimElem | undefined {
+  const e = PRIM_BY_CTOR.get((v as object | null)?.constructor);
+  if (e !== undefined || !ArrayBuffer.isView(v)) return e;
   for (const d in PRIM_ARRAYS) if (v instanceof PRIM_ARRAYS[d as PrimElem]) return d as PrimElem;
 }
 

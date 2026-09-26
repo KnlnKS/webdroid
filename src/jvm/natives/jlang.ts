@@ -6,7 +6,7 @@ import { parkTimeout, unparkTimeout } from "../yield";
 import { directionality } from "../bidi";
 import { encodeString } from "../charset";
 import { javaClassSets } from "../regex-sets";
-import { mangleMethod, jmethod, descToName, charsToString, jarray, PRIM_NAME, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
+import { mangleMethod, jmethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { guestNow, type GuestTimer } from "../../guest-clock";
 import { device } from "../../shell/config";
 import { csText } from "./jchars";
@@ -207,7 +207,7 @@ rt.register({
     "toString()Ljava/lang/String;": function () {
       return dotName(jclsName(this)) + "@" + idHash(this).toString(16);
     },
-    "getClass()Ljava/lang/Class;": function () { const info: ClassInfo | undefined = (this.constructor as typeof JObj).$i; return (info?.owner ?? rt).classFor(jclsName(this)); },
+    "getClass()Ljava/lang/Class;": function () { const info: ClassInfo | undefined = (this.constructor as typeof JObj).$i; return info?.jclass ?? (info?.owner ?? rt).classFor(jclsName(this)); },
     "clone()Ljava/lang/Object;": function (this: any) {
       if (Array.isArray(this) || ArrayBuffer.isView(this)) return rt.arrCall(this, "clone");
       const c = Object.create(Object.getPrototypeOf(this));
@@ -272,7 +272,7 @@ rt.classFor = function (this: Runtime, name: string): JClass {
     if (!cls) { cls = new JClass(); cls.arrDesc = name; cls.componentOwner = owner; cache.set(name, cls); }
     return cls;
   }
-  const primitive = ["int", "long", "float", "double", "boolean", "byte", "char", "short", "void"].includes(name);
+  const primitive = Object.hasOwn(PRIM_DESC, name);
   const ci = primitive ? null : this.link(name);
   let c: JClass | undefined = ci ? ci.jclass : classCache.get(name);
   if (c) return c;
@@ -458,8 +458,9 @@ export class JThrowable extends JObj {
   msg: string | null = null;
   cause: JThrowable | null = null;
   suppressed: JThrowable[] = [];
-  jsErr = new Error();
-  get jsStack(): string | undefined { return this.jsErr.stack; }
+  /** captured by fillInStackTrace(), which Throwable's constructors call virtually */
+  jsErr: Error | null = null;
+  get jsStack(): string | undefined { return this.jsErr?.stack; }
   /** memoised getStackTrace(), or what setStackTrace() was handed */
   trace: unknown[] | null = null;
 }
@@ -496,14 +497,22 @@ export async function stackTraceText(t: JThrowable): Promise<string> {
   }
   return out;
 }
+const M_fillInStackTrace = mangleMethod("fillInStackTrace", "()Ljava/lang/Throwable;");
+/** Throwable's constructors fill the trace through the virtual method: subclasses that override
+ *  it to skip the capture (coroutine and Compose cancellations) never pay for a JS stack. */
+function fillInStackTrace(t: JThrowable): void { (t as unknown as Record<string, () => unknown>)[M_fillInStackTrace](); }
 const throwableConstructors: NonNullable<NativeSpec["methods"]> = {
-  "<init>()V": function () {},
-  "<init>(Ljava/lang/String;)V": function (this: JThrowable, m: string) { this.msg = m; },
-  "<init>(Ljava/lang/String;Ljava/lang/Throwable;)V": function (this: JThrowable, m: string, c: JThrowable) { this.msg = m; this.cause = c; },
+  "<init>()V": function (this: JThrowable) { fillInStackTrace(this); },
+  "<init>(Ljava/lang/String;)V": function (this: JThrowable, m: string) { this.msg = m; fillInStackTrace(this); },
+  "<init>(Ljava/lang/String;Ljava/lang/Throwable;)V": function (this: JThrowable, m: string, c: JThrowable) { this.msg = m; this.cause = c; fillInStackTrace(this); },
   "<init>(Ljava/lang/Throwable;)V": function (this: JThrowable, c: JThrowable) {
     this.cause = c; this.msg = c ? dotName(jclsName(c)) + ": " + c.msg : null;
+    fillInStackTrace(this);
   },
-  "<init>(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V": function (this: JThrowable, m: string, c: JThrowable) { this.msg = m; this.cause = c; },
+  "<init>(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V": function (this: JThrowable, m: string, c: JThrowable, _suppression: number, writable: number) {
+    this.msg = m; this.cause = c;
+    if (writable) fillInStackTrace(this);
+  },
 };
 rt.register({
   name: "java/lang/Throwable",
@@ -605,6 +614,7 @@ rt.mkThrowable = (cls: string, msg: string | null) => {
   } catch { /* fall through */ }
   const e = new (ctor ?? excCtors.get("java/lang/RuntimeException")!)();
   e.msg = msg;
+  e.jsErr = new Error();
   return e;
 };
 
