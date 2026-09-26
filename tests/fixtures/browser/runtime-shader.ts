@@ -1,7 +1,7 @@
-import "../../src/natives";
-import { rt } from "../../src/jvm/runtime";
-import { newObj, vcall } from "../../src/jvm/natives/jlang";
-import { JCanvas, JPaint, locateDrawnText } from "../../src/android/graphics";
+import "../../../src/natives";
+import { rt } from "../../../src/jvm/runtime";
+import { newObj, vcall } from "../../../src/jvm/natives/jlang";
+import { JCanvas, JPaint, locateDrawnText } from "../../../src/android/graphics";
 
 async function probe() {
   rt.linkNatives();
@@ -49,4 +49,4 @@ async function probe() {
   const text = locateDrawnText(owner, "label", 64, 64);
   return { recorded, outside, direct, invalid, recordedRasters, rasterizations, text: text && [Math.round(text.x), Math.round(text.y)] };
 }
-Object.defineProperty(window, "shaderProbe", { value: await probe() });
+export default probe;

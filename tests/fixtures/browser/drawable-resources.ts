@@ -1,11 +1,11 @@
-import "../../src/natives";
-import { rt } from "../../src/jvm/runtime";
-import { vcall, newObj } from "../../src/jvm/natives/jlang";
-import { zipTree } from "../../src/jvm/natives/jzip";
-import { Arsc } from "../../src/android/arsc";
-import { Resources, JTheme, setFramework } from "../../src/android/res";
-import { loadDrawable, JLayerDrawable, ST } from "../../src/android/drawable";
-import { JCanvas } from "../../src/android/graphics";
+import "../../../src/natives";
+import { rt } from "../../../src/jvm/runtime";
+import { vcall, newObj } from "../../../src/jvm/natives/jlang";
+import { zipTree } from "../../../src/jvm/natives/jzip";
+import { Arsc } from "../../../src/android/arsc";
+import { Resources, JTheme, setFramework } from "../../../src/android/res";
+import { loadDrawable, JLayerDrawable, ST } from "../../../src/android/drawable";
+import { JCanvas } from "../../../src/android/graphics";
 
 async function probe() {
   const zip = zipTree(new Uint8Array(await (await fetch("/framework.apk")).arrayBuffer()));
@@ -51,4 +51,4 @@ async function probe() {
   await vcall(dialog, "onDraw", "(Landroid/graphics/Canvas;)V", JCanvas.wrap(ctx, 300, 54));
   return { heights, before, after, above, center, outside, rotated, absolute, restored, dialogCenter: pixel(150, 27) };
 }
-Object.defineProperty(window, "drawableResourcesProbe", { value: probe() });
+export default probe;

@@ -1,21 +1,21 @@
-import "../../src/natives";
-import { frame, present, setScreenCanvas } from "../../src/shell/device";
-import { JBitmap, JRect } from "../../src/android/graphics";
-import { dispatchAttached, dispatchDetached, uiState } from "../../src/android/view";
-import { rt } from "../../src/jvm/runtime";
-import { mangleStaticField, mangleMethod } from "../../src/jvm/abi";
-import { JThread, setCurThread, mainThread, curThread, vcall, vcallOn } from "../../src/jvm/natives/jlang";
-import { gl, tables } from "../../src/android/gl";
-import { glSurfaces } from "../../src/native/egl-current";
-import { EglContext, type GlSurface } from "../../src/android/glview";
-import { mem } from "../../src/native/mem";
-import { Cpu, setA64 } from "../../src/native/cpu";
-import { jitStats, JIT_HEAT } from "../../src/native/core";
-import { RET_SENTINEL } from "../../src/native/abi";
-import { gles1Init } from "../../src/native/gles1";
-import { gles3Init } from "../../src/native/gles3";
-import { nativeWindowFor, ndkInit } from "../../src/native/libandroid";
-import { hostFn, type ArgReader } from "../../src/native/host";
+import "../../../src/natives";
+import { frame, present, setScreenCanvas } from "../../../src/shell/device";
+import { JBitmap, JRect } from "../../../src/android/graphics";
+import { dispatchAttached, dispatchDetached, uiState } from "../../../src/android/view";
+import { rt } from "../../../src/jvm/runtime";
+import { mangleStaticField, mangleMethod } from "../../../src/jvm/abi";
+import { JThread, setCurThread, mainThread, curThread, vcall, vcallOn } from "../../../src/jvm/natives/jlang";
+import { gl, tables } from "../../../src/android/gl";
+import { glSurfaces } from "../../../src/native/egl-current";
+import { EglContext, type GlSurface } from "../../../src/android/glview";
+import { mem } from "../../../src/native/mem";
+import { Cpu, setA64 } from "../../../src/native/cpu";
+import { jitStats, JIT_HEAT } from "../../../src/native/core";
+import { RET_SENTINEL } from "../../../src/native/abi";
+import { gles1Init } from "../../../src/native/gles1";
+import { gles3Init } from "../../../src/native/gles3";
+import { nativeWindowFor, ndkInit } from "../../../src/native/libandroid";
+import { hostFn, type ArgReader } from "../../../src/native/host";
 
 function callGl(cpu: Cpu, lib: string, name: string, values: number[]) {
   let i = 0;
@@ -248,4 +248,4 @@ async function lifecycle() {
   await dispatchDetached(view);
   return unregistered && registered && released && paused && reattached && !uiState.animHooks.has(hook);
 }
-Object.defineProperty(window, "eglThreadProbe", { value: probe() });
+export default probe;

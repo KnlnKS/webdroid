@@ -1,10 +1,10 @@
-import "../../src/natives";
-import { rt } from "../../src/jvm/runtime";
-import { mangleMethod } from "../../src/jvm/abi";
-import { newObj, vcall, vcallOn, curThread, JThread } from "../../src/jvm/natives/jlang";
-import { JCanvas } from "../../src/android/graphics";
-import { JView } from "../../src/android/view";
-import { JMotionEvent } from "../../src/android/motionevent";
+import "../../../src/natives";
+import { rt } from "../../../src/jvm/runtime";
+import { mangleMethod } from "../../../src/jvm/abi";
+import { newObj, vcall, vcallOn, curThread, JThread } from "../../../src/jvm/natives/jlang";
+import { JCanvas } from "../../../src/android/graphics";
+import { JView } from "../../../src/android/view";
+import { JMotionEvent } from "../../../src/android/motionevent";
 
 async function probe() {
   rt.linkNatives();
@@ -43,4 +43,4 @@ async function probe() {
   return { before: pixel(20, 20), thumb: pixel(50, 20), after: pixel(80, 20), above: pixel(20, 5),
     restored: ctx.getTransform().isIdentity, events, progress: await vcall(view, "getProgress", "()I"), pressed: view.pressed };
 }
-Object.defineProperty(window, "seekBarProbe", { value: probe() });
+export default probe;

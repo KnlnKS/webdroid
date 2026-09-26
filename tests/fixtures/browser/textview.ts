@@ -1,11 +1,11 @@
-import "../../src/natives";
-import { rt } from "../../src/jvm/runtime";
-import { mangleMethod } from "../../src/jvm/abi";
-import { newObj, vcall } from "../../src/jvm/natives/jlang";
-import { JLayout, JTextPaint, measureReplacements, drawLayout } from "../../src/android/text";
-import { JTextView } from "../../src/android/textview";
-import { JCanvas, measureText, typefaceFor, type JPaint } from "../../src/android/graphics";
-import { makeSpec, MS_EXACTLY, MS_AT_MOST, JViewGroup } from "../../src/android/view";
+import "../../../src/natives";
+import { rt } from "../../../src/jvm/runtime";
+import { mangleMethod } from "../../../src/jvm/abi";
+import { newObj, vcall } from "../../../src/jvm/natives/jlang";
+import { JLayout, JTextPaint, measureReplacements, drawLayout } from "../../../src/android/text";
+import { JTextView } from "../../../src/android/textview";
+import { JCanvas, measureText, typefaceFor, type JPaint } from "../../../src/android/graphics";
+import { makeSpec, MS_EXACTLY, MS_AT_MOST, JViewGroup } from "../../../src/android/view";
 
 async function probe() {
   rt.linkNatives();
@@ -185,4 +185,4 @@ async function probe() {
     fitting: (await view.measuredLines(measureText(view.paintT, view.text))).lines.map(l => l.text), cleared: (await view.measuredLines(width)).replacements.length === 0,
     compound: { drawsAt, retained, restored: surface.getTransform().isIdentity } };
 }
-Object.defineProperty(window, "textViewProbe", { value: probe() });
+export default probe;

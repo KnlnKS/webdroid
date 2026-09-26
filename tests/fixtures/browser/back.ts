@@ -1,8 +1,8 @@
-import "../../src/natives";
-import { onMain } from "../../src/android/mainloop";
-import { overlays } from "../../src/android/popup";
-import { JView } from "../../src/android/view";
-import { pressBack } from "../../src/shell/device";
+import "../../../src/natives";
+import { onMain } from "../../../src/android/mainloop";
+import { overlays } from "../../../src/android/popup";
+import { JView } from "../../../src/android/view";
+import { pressBack } from "../../../src/shell/device";
 
 async function probe() {
   const events: string[] = [];
@@ -26,4 +26,4 @@ async function probe() {
     return { pending, events };
   } finally { overlays.pop(); }
 }
-Object.defineProperty(window, "backProbe", { value: probe() });
+export default probe;

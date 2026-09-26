@@ -1,9 +1,9 @@
-import "../../src/natives";
-import { rt } from "../../src/jvm/runtime";
-import { mangleMethod } from "../../src/jvm/abi";
-import { vcall } from "../../src/jvm/natives/jlang";
-import { JImageView } from "../../src/android/imageview";
-import { JCanvas, JMatrix } from "../../src/android/graphics";
+import "../../../src/natives";
+import { rt } from "../../../src/jvm/runtime";
+import { mangleMethod } from "../../../src/jvm/abi";
+import { vcall } from "../../../src/jvm/natives/jlang";
+import { JImageView } from "../../../src/android/imageview";
+import { JCanvas, JMatrix } from "../../../src/android/graphics";
 
 async function probe() {
   rt.linkNatives();
@@ -45,4 +45,4 @@ async function probe() {
   const reset = await vcall(view, "getImageMatrix", "()Landroid/graphics/Matrix;");
   return { results, reset: reset.m };
 }
-Object.defineProperty(window, "imageViewProbe", { value: probe() });
+export default probe;

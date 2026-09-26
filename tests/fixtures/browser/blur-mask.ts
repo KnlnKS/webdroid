@@ -1,7 +1,7 @@
-import "../../src/natives";
-import { rt } from "../../src/jvm/runtime";
-import { newObj, vcall, linkInit } from "../../src/jvm/natives/jlang";
-import { JBitmap, JCanvas, JPaint, tintedBmp } from "../../src/android/graphics";
+import "../../../src/natives";
+import { rt } from "../../../src/jvm/runtime";
+import { newObj, vcall, linkInit } from "../../../src/jvm/natives/jlang";
+import { JBitmap, JCanvas, JPaint, tintedBmp } from "../../../src/android/graphics";
 
 async function probe() {
   rt.linkNatives();
@@ -76,4 +76,4 @@ async function probe() {
   const changed = pixel("SRC_IN", 0x80ff0000);
   return { results, extracted, shaded, position, copiedAlpha, originalAlpha, plane, tints, changed };
 }
-Object.defineProperty(window, "blurMaskProbe", { value: probe() });
+export default probe;

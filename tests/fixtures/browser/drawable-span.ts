@@ -1,9 +1,9 @@
-import "../../src/natives";
-import { rt } from "../../src/jvm/runtime";
-import { mangleMethod } from "../../src/jvm/abi";
-import { newObj, vcall } from "../../src/jvm/natives/jlang";
-import { JCanvas, JPaint, copyPaint } from "../../src/android/graphics";
-import { JTextView } from "../../src/android/textview";
+import "../../../src/natives";
+import { rt } from "../../../src/jvm/runtime";
+import { mangleMethod } from "../../../src/jvm/abi";
+import { newObj, vcall } from "../../../src/jvm/natives/jlang";
+import { JCanvas, JPaint, copyPaint } from "../../../src/android/graphics";
+import { JTextView } from "../../../src/android/textview";
 
 async function probe() {
   rt.linkNatives();
@@ -41,4 +41,4 @@ async function probe() {
   const red = pixels.some((v, i) => i % 4 === 0 && v > 100 && pixels[i + 1] === 0 && pixels[i + 3] > 20);
   return { results, getters, red, shadowRestored: ctx.shadowColor === "rgba(0, 0, 0, 0)" };
 }
-Object.defineProperty(window, "drawableSpanProbe", { value: probe() });
+export default probe;
