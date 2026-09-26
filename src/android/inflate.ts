@@ -228,13 +228,13 @@ rt.register({
     },
     "getContext()Landroid/content/Context;": function (this: JLayoutInflater) { return this.jctx; },
     "createView(Ljava/lang/String;Ljava/lang/String;Landroid/util/AttributeSet;)Landroid/view/View;":
-      driven(function* (this: JLayoutInflater, name: string, prefix: string | null, set: JAttrSet): Gen {
+      function (this: JLayoutInflater, name: string, prefix: string | null, set: JAttrSet) {
         return createViewByName(prefix ? prefix + name : name, this.jctx, set);
-      }),
+      },
     "onCreateView(Ljava/lang/String;Landroid/util/AttributeSet;)Landroid/view/View;":
-      driven(function* (this: JLayoutInflater, name: string, set: JAttrSet): Gen {
+      function (this: JLayoutInflater, name: string, set: JAttrSet) {
         return createViewByName(name, this.jctx, set);
-      }),
+      },
   },
 });
 rt.markers("android/view/LayoutInflater$Factory", "android/view/LayoutInflater$Factory2");

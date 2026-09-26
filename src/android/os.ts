@@ -88,8 +88,7 @@ export class JLooper extends JObj {
   }
 }
 /** Looper.loop with a Printer installed: the two lines around each dispatch that block-detectors time */
-function dispatchLogged(handler: JHandler, msg: JMessage, printer: unknown): void | Promise<void> { return rt.drive(dispatchLogged$(handler, msg, printer)); }
-function* dispatchLogged$(handler: JHandler, msg: JMessage, printer: unknown): Gen<void> {
+const dispatchLogged = driven(function* dispatchLogged(handler: JHandler, msg: JMessage, printer: unknown): Gen<void> {
   const thread = curThread;
   const str = async (o: unknown) => o === null ? "null" : String(await vcallOn(thread, o, "toString", "()Ljava/lang/String;"));
   try {
@@ -97,7 +96,7 @@ function* dispatchLogged$(handler: JHandler, msg: JMessage, printer: unknown): G
     yield vcallOn(thread, handler, "dispatchMessage", "(Landroid/os/Message;)V", msg);
     yield vcallOn(thread, printer, "println", "(Ljava/lang/String;)V", `<<<<< Finished to ${(yield str(handler))} ${(yield str(msg.callback))}`);
   } catch (e) { reportUncaught(e); }
-}
+});
 rt.markers("android/util/Printer");
 export const mainLooper = new JLooper(mainThread);
 mainThread.looper = mainLooper;
@@ -757,12 +756,11 @@ export function descriptorFd(d: JFileDescriptor): number {
 }
 let pfdBackingSeq = 0;
 const pfdBackings = new Map<string, PfdBacking>();
-export function pfdBackingBytes(key: string): Uint8Array | null | Promise<Uint8Array | null> { return rt.drive(pfdBackingBytes$(key)); }
-function* pfdBackingBytes$(key: string): Gen<Uint8Array | null> {
+export const pfdBackingBytes = driven(function* pfdBackingBytes(key: string): Gen<Uint8Array | null> {
   const backing = pfdBackings.get(key);
   if (backing?.closing) { (yield backing.closing); return null; }
   return backing ? vfs.read(backing.path) : null;
-}
+});
 export function mkPfd(bytes: Uint8Array, sink: ((b: Uint8Array, closed?: boolean) => unknown) | null, backingKey?: string): JParcelFileDescriptor {
   const p = new JParcelFileDescriptor();
   p.bytes = bytes;
@@ -788,13 +786,12 @@ export function parcelFileDescriptorData(value: unknown): { bytes: Uint8Array; w
     ? { bytes: (value.backing ? vfs.read(value.backing.path) : value.bytes)?.slice() ?? new Uint8Array(0), writable: value.sink !== null }
     : null;
 }
-export function writeParcelFileDescriptor(value: unknown, bytes: Uint8Array, closed = false): void | Promise<void> { return rt.drive(writeParcelFileDescriptor$(value, bytes, closed)); }
-function* writeParcelFileDescriptor$(value: unknown, bytes: Uint8Array, closed = false): Gen<void> {
+export const writeParcelFileDescriptor = driven(function* writeParcelFileDescriptor(value: unknown, bytes: Uint8Array, closed: boolean = false): Gen<void> {
   if (!(value instanceof JParcelFileDescriptor)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Not a ParcelFileDescriptor");
   value.bytes = bytes.slice();
   if (value.backing) vfs.write(value.backing.path, value.bytes, false);
   yield value.sink?.(value.bytes, closed);
-}
+});
 rt.register({
   name: "android/os/ParcelFileDescriptor", ctor: JParcelFileDescriptor,
   ifaces: ["android/os/Parcelable", "java/io/Closeable"],
@@ -922,12 +919,11 @@ rt.register({ name: "android/system/StructStatVfs", ctor: JStructStatVfs, fields
 // ── android.os.storage.StorageManager: the one volume, identified by the platform's default UUID
 let storageUuid: ReturnType<typeof uuidFromString> | null = null;
 const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
-function storageEstimate(): { total: number; free: number } | Promise<{ total: number; free: number }> { return rt.drive(storageEstimate$()); }
-function* storageEstimate$(): Gen<{ total: number; free: number }> {
+const storageEstimate = driven(function* storageEstimate(): Gen<{ total: number; free: number }> {
   const s = new JStatFs();
   yield statFs.call(s, "/data");
   return s;
-}
+});
 rt.register({
   name: "android/os/storage/StorageManager", ctor: class extends JObj {},
   statics: { get UUID_DEFAULT() { return uuidDefault(); } },
@@ -997,8 +993,7 @@ export function recordVsync(time: number): boolean {
   nextVsync = !nextVsync || time > nextVsync + VSYNC_INTERVAL_MS ? time + VSYNC_INTERVAL_MS : nextVsync + VSYNC_INTERVAL_MS;
   return true;
 }
-export function dispatchVsync(callback: JObj, presentation: bigint): unknown { return rt.drive(dispatchVsync$(callback, presentation)); }
-function* dispatchVsync$(callback: JObj, presentation: bigint): Gen {
+export const dispatchVsync = driven(function* dispatchVsync(callback: JObj, presentation: bigint): Gen {
   rt.link("android/view/Choreographer$FrameData");
   rt.link("android/view/Choreographer$FrameTimeline");
   const data = new JFrameData(), timeline = data.timelines[0];
@@ -1008,7 +1003,7 @@ function* dispatchVsync$(callback: JObj, presentation: bigint): Gen {
   data.active = timeline.active = true;
   try { (yield vcall(callback, "onVsync", "(Landroid/view/Choreographer$FrameData;)V", data)); }
   finally { data.active = timeline.active = false; }
-}
+});
 class JChoreographer extends JObj {
   // AOSP's own field, read reflectively by anything measuring frame pacing (Sentry, Matrix,
   // Flutter's FPS probe). It is the same nanos getFrameTimeNanos() answers.

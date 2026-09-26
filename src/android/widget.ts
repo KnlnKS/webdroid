@@ -243,13 +243,12 @@ export function themeAccent(v: JView): number {
 }
 
 /** TextView.onDraw with the text column starting at `padL` (compound widgets draw their indicator in the gap). */
-function drawTextInset(tv: JTextView, cv: JCanvas, padL: number): unknown { return rt.drive(drawTextInset$(tv, cv, padL)); }
-function* drawTextInset$(tv: JTextView, cv: JCanvas, padL: number): Gen {
+const drawTextInset = driven(function* drawTextInset(tv: JTextView, cv: JCanvas, padL: number): Gen {
   const saved = tv.padL;
   tv.padL = padL;
   try { (yield callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", tv, cv)); }
   finally { tv.padL = saved; }
-}
+});
 
 // ── CompoundButton / CheckBox / RadioButton / Switch
 class JCompoundButton extends JButton {

@@ -2398,9 +2398,9 @@ rt.register({
       c.ctx = recordingContext(this.octx!, this.ops); c.w = cw; c.h = ch;
       return c;
     },
-    "beginRecording()Landroid/graphics/RecordingCanvas;": driven(function* (this: JRenderNode): Gen {
+    "beginRecording()Landroid/graphics/RecordingCanvas;": function (this: JRenderNode) {
       return vcall(this, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", this.w, this.h);
-    }),
+    },
     "endRecording()V": function (this: JRenderNode) { this.hasDL = true; perf.rnRecord += displayListLength(this.ops); invalidateHook?.(); },
     "hasDisplayList()Z": function (this: JRenderNode) { return this.hasDL ? 1 : 0; },
     "discardDisplayList()V": function (this: JRenderNode) { this.hasDL = false; this.ops = []; },
@@ -2559,14 +2559,12 @@ rt.register({
   methods: { "<init>()V": function () {} },
 });
 /** an empty stream is a loader bug upstream of the decoder, so name the stream class rather than the decode failure */
-function streamBytes(s: unknown): Uint8Array | Promise<Uint8Array> { return rt.drive(streamBytes$(s)); }
-function* streamBytes$(s: unknown): Gen<Uint8Array> {
+const streamBytes = driven(function* streamBytes(s: unknown): Gen<Uint8Array> {
   const b = (yield readStreamFully(s));
   if (!b.length) console.warn("[decode] empty stream from", jclsNameOf(s));
   return b;
-}
-export function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null, onHeader?: (width: number, height: number) => Promise<readonly [number, number]>): JBitmap | null | Promise<JBitmap | null> { return rt.drive(decodeBytes$(bytes, opts, onHeader)); }
-function* decodeBytes$(bytes: Uint8Array, opts: JBFOptions | null, onHeader?: (width: number, height: number) => Promise<readonly [number, number]>): Gen<JBitmap | null> {
+});
+export const decodeBytes = driven(function* decodeBytes(bytes: Uint8Array, opts: JBFOptions | null, onHeader?: (width: number, height: number) => Promise<readonly [number, number]>): Gen<JBitmap | null> {
   if (opts) { opts.outWidth = opts.outHeight = -1; opts.outMimeType = null; opts.outConfig = opts.outColorSpace = null; }
   let img: ImageBitmap | undefined;
   try {
@@ -2602,24 +2600,21 @@ function* decodeBytes$(bytes: Uint8Array, opts: JBFOptions | null, onHeader?: (w
     console.warn("[decode]", e);
     return null;
   } finally { img?.close(); }
-}
-function decodeStream(stream: unknown, pad: JRect | null = null, opts: JBFOptions | null = null): unknown { return rt.drive(decodeStream$(stream, pad, opts)); }
-function* decodeStream$(stream: unknown, pad: JRect | null = null, opts: JBFOptions | null = null): Gen {
+});
+const decodeStream = driven(function* decodeStream(stream: unknown, pad: JRect | null = null, opts: JBFOptions | null = null): Gen {
   const bitmap = stream ? (yield decodeBytes((yield streamBytes(stream)), opts)) : null;
   if (bitmap && pad) pad.left = pad.top = pad.right = pad.bottom = -1;
   return bitmap;
-}
-function decodeFileDescriptor(fd: JFileDescriptor | null, pad: JRect | null = null, opts: JBFOptions | null = null): unknown { return rt.drive(decodeFileDescriptor$(fd, pad, opts)); }
-function* decodeFileDescriptor$(fd: JFileDescriptor | null, pad: JRect | null = null, opts: JBFOptions | null = null): Gen {
+});
+const decodeFileDescriptor = driven(function* decodeFileDescriptor(fd: JFileDescriptor | null, pad: JRect | null = null, opts: JBFOptions | null = null): Gen {
   if (!fd) throw rt.mkThrowable("java/lang/NullPointerException", "fd");
   const bytes = (yield javaFdBytes(fd.fd));
   const bitmap = (yield decodeBytes(bytes ?? new Uint8Array(0), opts));
   if (!bitmap && opts?.inBitmap) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Problem decoding into existing bitmap");
   if (bitmap && pad) pad.left = pad.top = pad.right = pad.bottom = -1;
   return bitmap;
-}
-function decodeFile(path: string | null, opts: JBFOptions | null = null): unknown { return rt.drive(decodeFile$(path, opts)); }
-function* decodeFile$(path: string | null, opts: JBFOptions | null = null): Gen {
+});
+const decodeFile = driven(function* decodeFile(path: string | null, opts: JBFOptions | null = null): Gen {
   let stream: unknown = null;
   try {
     stream = (yield newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", path));
@@ -2630,9 +2625,8 @@ function* decodeFile$(path: string | null, opts: JBFOptions | null = null): Gen 
   } finally {
     if (stream) yield vcall(stream, "close", "()V");
   }
-}
-function decodeResourceStream(res: unknown, value: JTypedValue | null, stream: unknown, pad: JRect | null, opts: JBFOptions | null): unknown { return rt.drive(decodeResourceStream$(res, value, stream, pad, opts)); }
-function* decodeResourceStream$(res: unknown, value: JTypedValue | null, stream: unknown, pad: JRect | null, opts: JBFOptions | null): Gen {
+});
+const decodeResourceStream = driven(function* decodeResourceStream(res: unknown, value: JTypedValue | null, stream: unknown, pad: JRect | null, opts: JBFOptions | null): Gen {
   opts ??= new JBFOptions();
   if (!opts.inDensity && value && value.density !== 0xffff) opts.inDensity = value.density || 160;
   if (!opts.inTargetDensity && res) {
@@ -2640,9 +2634,8 @@ function* decodeResourceStream$(res: unknown, value: JTypedValue | null, stream:
     opts.inTargetDensity = metrics.densityDpi;
   }
   return decodeStream(stream, pad, opts);
-}
-function decodeResource(res: unknown, id: number, opts: JBFOptions | null = null): unknown { return rt.drive(decodeResource$(res, id, opts)); }
-function* decodeResource$(res: unknown, id: number, opts: JBFOptions | null = null): Gen {
+});
+const decodeResource = driven(function* decodeResource(res: unknown, id: number, opts: JBFOptions | null = null): Gen {
   let bitmap: JBitmap | null = null, stream: unknown = null;
   try {
     const value = new JTypedValue();
@@ -2656,7 +2649,7 @@ function* decodeResource$(res: unknown, id: number, opts: JBFOptions | null = nu
   }
   if (!bitmap && opts?.inBitmap) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Problem decoding into existing bitmap");
   return bitmap;
-}
+});
 rt.register({
   name: "android/graphics/BitmapFactory", ctor: class extends JObj {},
   methods: {
@@ -2678,15 +2671,14 @@ rt.register({
 });
 
 class JBitmapRegionDecoder extends JObj { bitmap: JBitmap | null = null; }
-function regionDecoder(bytes: Uint8Array | null): JBitmapRegionDecoder | Promise<JBitmapRegionDecoder> { return rt.drive(regionDecoder$(bytes)); }
-function* regionDecoder$(bytes: Uint8Array | null): Gen<JBitmapRegionDecoder> {
+const regionDecoder = driven(function* regionDecoder(bytes: Uint8Array | null): Gen<JBitmapRegionDecoder> {
   if (!bytes?.length) throw rt.mkThrowable("java/io/IOException", "Unable to decode image");
   const bitmap = (yield decodeBytes(bytes, null));
   if (!bitmap) throw rt.mkThrowable("java/io/IOException", "Unable to decode image");
   const decoder = new JBitmapRegionDecoder();
   decoder.bitmap = bitmap;
   return decoder;
-}
+});
 rt.register({ name: "android/graphics/BitmapRegionDecoder", ctor: JBitmapRegionDecoder, methods: {
   "static newInstance(Ljava/io/InputStream;Z)Landroid/graphics/BitmapRegionDecoder;":
     driven(function* (stream: unknown): Gen  { return regionDecoder((yield streamBytes(stream))); }),

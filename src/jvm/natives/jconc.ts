@@ -91,8 +91,7 @@ function scheduleDrain(ex: JExecutor) {
   if (++ex.consecutiveDrains < 64) queueMicrotask(() => queueMicrotask(run));
   else { ex.consecutiveDrains = 0; setTimeout(run, 0); }
 }
-function runTask(ex: JExecutor, worker: JExecutor["workers"][number], entry: JExecutor["tasks"][number]): unknown { return rt.drive(runTask$(ex, worker, entry)); }
-function* runTask$(ex: JExecutor, worker: JExecutor["workers"][number], entry: JExecutor["tasks"][number]): Gen {
+const runTask = driven(function* runTask(ex: JExecutor, worker: JExecutor["workers"][number], entry: JExecutor["tasks"][number]): Gen {
   const { task, f, method, desc } = entry;
   try {
     if (entry.queued) yield vcall(ex.queue, "remove", "(Ljava/lang/Object;)Z", task);
@@ -124,7 +123,7 @@ function* runTask$(ex: JExecutor, worker: JExecutor["workers"][number], entry: J
       if (ex.shut) for (const w of ex.workers) if (!w.busy && w.thread) w.thread.alive = 0;
     }
   }
-}
+});
 class JFuture extends JObj {
   delayed = false;
   deadline = guestNow();
@@ -137,28 +136,26 @@ class JFuture extends JObj {
   cancel: ((interrupt: number) => void) | null = null;
 }
 /** get(): the value, or the task's throwable as ExecutionException (cause = it, message = its toString) */
-function futureGet(f: JFuture): unknown { return rt.drive(futureGet$(f)); }
-function* futureGet$(f: JFuture): Gen {
+const futureGet = driven(function* futureGet(f: JFuture): Gen {
   if (!f.cancelled && f.promise) yield f.promise;
   if (f instanceof JCompletable) return completableValue(f, false);
   if (f.cancelled) throw rt.mkThrowable("java/util/concurrent/CancellationException", null);
   if (f.error) throw (yield newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", f.error));
   return f.value;
-}
-function futureGetTimed(f: JFuture, d: bigint, u: JTimeUnit): unknown { return rt.drive(futureGetTimed$(f, d, u)); }
-function* futureGetTimed$(f: JFuture, d: bigint, u: JTimeUnit): Gen {
+});
+const futureGetTimed = driven(function* futureGetTimed(f: JFuture, d: bigint, u: JTimeUnit): Gen {
   if (!f.done && f.promise) {
     const late = {};
     const first = (yield Promise.race([f.promise, new Promise((r) => parkTimeout(() => r(late), Number(d) * u.ms))]));
     if (first === late && !f.done) throw rt.mkThrowable("java/util/concurrent/TimeoutException", null);
   }
   return futureGet(f);
-}
+});
 rt.register({
   name: "webdroid/Future", ctor: JFuture,
   ifaces: ["java/util/concurrent/Future", "java/util/concurrent/ScheduledFuture"],
   methods: {
-    "get()Ljava/lang/Object;": driven(function* (this: JFuture): Gen { return futureGet(this); }),
+    "get()Ljava/lang/Object;": function (this: JFuture) { return futureGet(this); },
     "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFuture, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
     "isDone()Z": function (this: JFuture) { return this.done; },
     "isCancelled()Z": function (this: JFuture) { return this.cancelled; },
@@ -434,18 +431,16 @@ const forkTask = (task: JForkJoinTask, pool: JExecutor) => {
   task.future = submit(pool, task, "compute", forkJoinDesc(task));
   return task;
 };
-function runForkJoinTask(task: JForkJoinTask): unknown { return rt.drive(runForkJoinTask$(task)); }
-function* runForkJoinTask$(task: JForkJoinTask): Gen {
+const runForkJoinTask = driven(function* runForkJoinTask(task: JForkJoinTask): Gen {
   const value = (yield vcall(task, "compute", forkJoinDesc(task)));
   if (value !== undefined) task.result = value;
   return task.result;
-}
-function invokeForkJoinTasks(tasks: JForkJoinTask[]): void | Promise<void> { return rt.drive(invokeForkJoinTasks$(tasks)); }
-function* invokeForkJoinTasks$(tasks: JForkJoinTask[]): Gen<void> {
+});
+const invokeForkJoinTasks = driven(function* invokeForkJoinTasks(tasks: JForkJoinTask[]): Gen<void> {
   for (let i = tasks.length - 1; i > 0; i--) (yield vcall(tasks[i], "fork", "()Ljava/util/concurrent/ForkJoinTask;"));
   if (tasks.length) yield vcall(tasks[0], "invoke", "()Ljava/lang/Object;");
   for (let i = 1; i < tasks.length; i++) (yield vcall(tasks[i], "join", "()Ljava/lang/Object;"));
-}
+});
 const forkJoinMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "fork()Ljava/util/concurrent/ForkJoinTask;": function (this: JForkJoinTask) {
@@ -459,7 +454,7 @@ const forkJoinMethods: NativeSpec["methods"] = {
     }
     return this.result;
   }),
-  "get()Ljava/lang/Object;": driven(function* (this: JForkJoinTask): Gen { return vcall(this, "join", "()Ljava/lang/Object;"); }),
+  "get()Ljava/lang/Object;": function (this: JForkJoinTask) { return vcall(this, "join", "()Ljava/lang/Object;"); },
   "invoke()Ljava/lang/Object;": function (this: JForkJoinTask) { return runForkJoinTask(this); },
   "getRawResult()Ljava/lang/Object;": function (this: JForkJoinTask) { return this.result; },
   "isDone()Z": function (this: JForkJoinTask) { return !this.future || this.future.done ? 1 : 0; },
@@ -655,15 +650,14 @@ const settleWith = (f: JCompletable, value: unknown, error: unknown) => {
 };
 const completionError = (error: unknown) => rt.iof(error, "java/util/concurrent/CompletionException")
   ? error : newObj("java/util/concurrent/CompletionException", "(Ljava/lang/Throwable;)V", error);
-function completableValue(future: JCompletable, join: boolean): unknown { return rt.drive(completableValue$(future, join)); }
-function* completableValue$(future: JCompletable, join: boolean): Gen {
+const completableValue = driven(function* completableValue(future: JCompletable, join: boolean): Gen {
   if (future.cancelled) throw future.error;
   if (!future.error) return future.value;
   if (join) throw (yield completionError(future.error));
   const cause = rt.iof(future.error, "java/util/concurrent/CompletionException")
     ? (yield vcall(future.error, "getCause", "()Ljava/lang/Throwable;")) : null;
   throw (yield newObj("java/util/concurrent/ExecutionException", "(Ljava/lang/Throwable;)V", cause ?? future.error));
-}
+});
 class JAsyncSupply extends JObj {
   constructor(public future: JCompletable, public supplier: unknown) { super(); }
 }
@@ -697,8 +691,7 @@ const completionActions = {
   whenComplete: ["java/util/function/BiConsumer", "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V"],
 } as const;
 type CompletionAction = keyof typeof completionActions;
-function runDependent(source: JCompletable, target: JCompletable, action: unknown, kind: CompletionAction): unknown { return rt.drive(runDependent$(source, target, action, kind)); }
-function* runDependent$(source: JCompletable, target: JCompletable, action: unknown, kind: CompletionAction): Gen {
+const runDependent = driven(function* runDependent(source: JCompletable, target: JCompletable, action: unknown, kind: CompletionAction): Gen {
   if (target.done) return;
   try {
     const handlesError = kind === "handle" || kind === "whenComplete" || kind === "exceptionally";
@@ -716,7 +709,7 @@ function* runDependent$(source: JCompletable, target: JCompletable, action: unkn
     } else if (kind === "whenComplete") settleWith(target, source.value, source.error ? (yield completionError(source.error)) : null);
     else settleWith(target, kind === "thenAccept" || kind === "thenRun" ? null : value, null);
   } catch (error) { settleWith(target, null, (yield completionError(kind === "whenComplete" && source.error ? source.error : rt.jx(error)))); }
-}
+});
 const completionMethods: NonNullable<NativeSpec["methods"]> = {};
 for (const kind of Object.keys(completionActions) as CompletionAction[]) {
   const method = function (this: JCompletable, action: unknown) {

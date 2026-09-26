@@ -18,8 +18,7 @@ class JFragmentTransaction extends JObj {
   fm: JFragmentManager | null = null;
   ops: FragOp[] = [];
 }
-function runFragmentAdd(fm: JFragmentManager, frag: JFragment, containerId: number): unknown { return rt.drive(runFragmentAdd$(fm, frag, containerId)); }
-function* runFragmentAdd$(fm: JFragmentManager, frag: JFragment, containerId: number): Gen {
+const runFragmentAdd = driven(function* runFragmentAdd(fm: JFragmentManager, frag: JFragment, containerId: number): Gen {
   const act = fm.act;
   frag.containerId = containerId;
   fm.active.push(frag);
@@ -41,9 +40,8 @@ function* runFragmentAdd$(fm: JFragmentManager, frag: JFragment, containerId: nu
   yield vcall(frag, "onActivityCreated", "(Landroid/os/Bundle;)V", null);
   if (act?.started) yield vcall(frag, "onStart", "()V");
   if (act?.resumed) yield vcall(frag, "onResume", "()V");
-}
-function runFragmentRemove(fm: JFragmentManager, frag: JFragment): unknown { return rt.drive(runFragmentRemove$(fm, frag)); }
-function* runFragmentRemove$(fm: JFragmentManager, frag: JFragment): Gen {
+});
+const runFragmentRemove = driven(function* runFragmentRemove(fm: JFragmentManager, frag: JFragment): Gen {
   removeFrom(fm.active, frag);
   yield vcall(frag, "onPause", "()V");
   yield vcall(frag, "onStop", "()V");
@@ -52,9 +50,8 @@ function* runFragmentRemove$(fm: JFragmentManager, frag: JFragment): Gen {
   frag.attachedView = null;
   yield vcall(frag, "onDestroy", "()V");
   yield vcall(frag, "onDetach", "()V");
-}
-function runFragmentTransaction(tx: JFragmentTransaction): number | Promise<number> { return rt.drive(runFragmentTransaction$(tx)); }
-function* runFragmentTransaction$(tx: JFragmentTransaction): Gen<number> {
+});
+const runFragmentTransaction = driven(function* runFragmentTransaction(tx: JFragmentTransaction): Gen<number> {
   const fm = tx.fm;
   if (!fm) return 0;
   for (const op of tx.ops) {
@@ -74,7 +71,7 @@ function* runFragmentTransaction$(tx: JFragmentTransaction): Gen<number> {
   // the views added and removed above asked for layout themselves, as AOSP's do
   tx.ops.length = 0;
   return 0;
-}
+});
 rt.register({
   name: "android/app/FragmentTransaction", ctor: JFragmentTransaction,
   methods: {
@@ -87,7 +84,7 @@ rt.register({
     "replace(ILandroid/app/Fragment;)Landroid/app/FragmentTransaction;":
       function (this: JFragmentTransaction, id: number, f: JFragment) { this.ops.push({ kind: "replace", containerId: id, frag: f }); return this; },
     "addToBackStack(Ljava/lang/String;)Landroid/app/FragmentTransaction;": function (this: JFragmentTransaction) { return this; },
-    "commit()I": driven(function* (this: JFragmentTransaction): Gen { return runFragmentTransaction(this); }),
+    "commit()I": function (this: JFragmentTransaction) { return runFragmentTransaction(this); },
     "commitAllowingStateLoss()I": function (this: JFragmentTransaction) { return runFragmentTransaction(this); },
   },
 });
@@ -112,14 +109,13 @@ rt.register({
     "popBackStackImmediate()Z": () => 0,
   },
 });
-export function dispatchFragLifecycle(act: JActivity, method: string): void | Promise<void> { return rt.drive(dispatchFragLifecycle$(act, method)); }
-function* dispatchFragLifecycle$(act: JActivity, method: string): Gen<void> {
+export const dispatchFragLifecycle = driven(function* dispatchFragLifecycle(act: JActivity, method: string): Gen<void> {
   const active = act.fragMgr?.active;
   if (!active?.length) return;
   for (const f of [...active]) {
     try { (yield vcall(f, method, "()V")); } catch (e) { reportUncaught(e); }
   }
-}
+});
 
 // ── framework (non-androidx) Fragment: real lifecycle surface, AOSP no-op bodies.
 export class JFragment extends JObj {

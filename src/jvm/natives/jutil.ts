@@ -242,12 +242,11 @@ export function newStringSet(items: Iterable<string>): JSet {
 }
 
 /** A java.util.LinkedHashSet over `items` (insertion order, Java equality). */
-export function newLinkedHashSet(items: unknown[] = []): JSet | Promise<JSet> { return rt.drive(newLinkedHashSet$(items)); }
-function* newLinkedHashSet$(items: unknown[] = []): Gen<JSet> {
+export const newLinkedHashSet = driven(function* newLinkedHashSet(items: unknown[] = []): Gen<JSet> {
   const s = new (rt.link("java/util/LinkedHashSet").ctor as new () => JSet)();
   for (const v of items) { const r = addToSet(s, v); if (r instanceof Promise) (yield r); }
   return s;
-}
+});
 
 function ioobe(i: number, n: number): never {
   throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", `Index: ${i}, Size: ${n}`);
@@ -528,8 +527,7 @@ export function sortInPlace(a: unknown[], cmp: unknown, from = 0, to = a.length)
   }
   return after(sortAsync(a.slice(from, to), cmp, rt.th()), (s) => { for (let i = 0; i < s.length; i++) a[from + i] = s[i]; });
 }
-function sortAsync(a: unknown[], cmp: unknown, thread: unknown): unknown[] | Promise<unknown[]> { return rt.drive(sortAsync$(a, cmp, thread)); }
-function* sortAsync$(a: unknown[], cmp: unknown, thread: unknown): Gen<unknown[]> {
+const sortAsync = driven(function* sortAsync$(a: unknown[], cmp: unknown, thread: unknown): Gen<unknown[]> {
   if (a.length < 2) return a;
   const mid = a.length >> 1;
   const l = (yield sortAsync(a.slice(0, mid), cmp, thread));
@@ -543,7 +541,7 @@ function* sortAsync$(a: unknown[], cmp: unknown, thread: unknown): Gen<unknown[]
   while (i < l.length) out.push(l[i++]);
   while (j < r.length) out.push(r[j++]);
   return out;
-}
+});
 /** any java Collection/Iterable → JS array (fast path for our native lists/sets) */
 export function toJsArray(c: unknown): unknown[] | Promise<unknown[]> {
   if (c === null || c === undefined) return [];
@@ -552,13 +550,12 @@ export function toJsArray(c: unknown): unknown[] | Promise<unknown[]> {
   if (c instanceof JMap) return []; // maps aren't collections
   return iterateAll(c);
 }
-function iterateAll(c: unknown): unknown[] | Promise<unknown[]> { return rt.drive(iterateAll$(c)); }
-function* iterateAll$(c: unknown): Gen<unknown[]> {
+const iterateAll = driven(function* iterateAll(c: unknown): Gen<unknown[]> {
   const out: unknown[] = [];
   const it = (yield vcall(c, "iterator", "()Ljava/util/Iterator;"));
   while ((yield vcall(it, "hasNext", "()Z"))) out.push((yield vcall(it, "next", "()Ljava/lang/Object;")));
   return out;
-}
+});
 
 rt.register({
   name: "webdroid/BaseList", ctor: JList,
@@ -704,8 +701,7 @@ const mapKeyFor = (map: JMap, key: unknown): unknown => map.identity ? key ?? nu
 function ensureMapMutable(map: JMap): void {
   if (!map.mutable) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
 }
-function slowFind(list: Ent[], k: unknown, hash?: number): number | Promise<number> { return rt.drive(slowFind$(list, k, hash)); }
-function* slowFind$(list: Ent[], k: unknown, hash?: number): Gen<number> {
+const slowFind = driven(function* slowFind(list: Ent[], k: unknown, hash?: number): Gen<number> {
   const thread = curThread;
   if (hash === undefined) {
     const value = jhash(k);
@@ -717,9 +713,8 @@ function* slowFind$(list: Ent[], k: unknown, hash?: number): Gen<number> {
     if (r instanceof Promise ? (yield r) : r) return i;
   }
   return -1;
-}
-function putSlow(map: JMap, k: unknown, v: unknown, onlyAbsent: boolean): unknown { return rt.drive(putSlow$(map, k, v, onlyAbsent)); }
-function* putSlow$(map: JMap, k: unknown, v: unknown, onlyAbsent: boolean): Gen {
+});
+const putSlow = driven(function* putSlow(map: JMap, k: unknown, v: unknown, onlyAbsent: boolean): Gen {
   const thread = curThread, value = jhash(k);
   const hash = value instanceof Promise ? (yield value) : value;
   const index = (yield callOn(thread, () => slowFind(map.slow, k, hash)));
@@ -730,7 +725,7 @@ function* putSlow$(map: JMap, k: unknown, v: unknown, onlyAbsent: boolean): Gen 
   }
   map.slow.push({ k, v, hash });
   return null;
-}
+});
 function mapMethods(): Methods {
   return {
     "<init>()V": function () {},
@@ -889,8 +884,7 @@ function mapHash(entries: Ent[], from = 0, hash = 0): number | Promise<number> {
   }
   return hash;
 }
-function copyMapInto(src: unknown, dst: JMap): unknown { return rt.drive(copyMapInto$(src, dst)); }
-function* copyMapInto$(src: unknown, dst: JMap): Gen {
+const copyMapInto = driven(function* copyMapInto(src: unknown, dst: JMap): Gen {
   const thread = curThread;
   const call = (target: unknown, name: string, desc: string, ...args: unknown[]) => vcallOn(thread, target, name, desc, ...args);
   if (src instanceof JMap) {
@@ -908,11 +902,10 @@ function* copyMapInto$(src: unknown, dst: JMap): Gen {
     (yield call(dst, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
       (yield call(e, "getKey", "()Ljava/lang/Object;")), (yield call(e, "getValue", "()Ljava/lang/Object;"))));
   }
-}
+});
 
 class JImmutableMap extends JMap { mutable = false; }
-function addImmutableMapping(map: JImmutableMap, key: unknown, value: unknown): void | Promise<void> { return rt.drive(addImmutableMapping$(map, key, value)); }
-function* addImmutableMapping$(map: JImmutableMap, key: unknown, value: unknown): Gen<void> {
+const addImmutableMapping = driven(function* addImmutableMapping(map: JImmutableMap, key: unknown, value: unknown): Gen<void> {
   if (key === null || value === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   const bucket = mapKey(key);
   if (bucket !== SLOW) {
@@ -924,13 +917,12 @@ function* addImmutableMapping$(map: JImmutableMap, key: unknown, value: unknown)
     if ((yield callOn(thread, () => slowFind(map.slow, key, hash))) >= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate key: " + String(key));
     map.slow.push({ k: key, v: value, hash });
   }
-}
-function immutableMap(entries: readonly (readonly [unknown, unknown])[]): JImmutableMap | Promise<JImmutableMap> { return rt.drive(immutableMap$(entries)); }
-function* immutableMap$(entries: readonly (readonly [unknown, unknown])[]): Gen<JImmutableMap> {
+});
+const immutableMap = driven(function* immutableMap(entries: readonly (readonly [unknown, unknown])[]): Gen<JImmutableMap> {
   const map = new JImmutableMap(), thread = curThread;
   for (const [key, value] of entries) (yield callOn(thread, () => addImmutableMapping(map, key, value)));
   return map;
-}
+});
 rt.register({
   name: "webdroid/ImmutableMap", ctor: JImmutableMap, sup: "java/util/AbstractMap", typeVars: "K,V",
   ifaces: ["java/util/Map", "java/io/Serializable"], methods: mapMethods(),
@@ -1069,10 +1061,10 @@ const mapKeysInOrder = (m: JMap): unknown[] => {
 };
 const arrayMapMethods: NativeSpec["methods"] = {
   "keyAt(I)Ljava/lang/Object;": function (this: JMap, i: number) { return mapKeysInOrder(this)[i] ?? null; },
-  "valueAt(I)Ljava/lang/Object;": driven(function* (this: JMap, i: number): Gen {
+  "valueAt(I)Ljava/lang/Object;": function (this: JMap, i: number) {
     const k = mapKeysInOrder(this)[i];
     return k === undefined ? null : vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
-  }),
+  },
   "indexOfKey(Ljava/lang/Object;)I": driven(function* (this: JMap, k: unknown): Gen {
     const keys = mapKeysInOrder(this);
     for (let i = 0; i < keys.length; i++) {
@@ -1081,10 +1073,10 @@ const arrayMapMethods: NativeSpec["methods"] = {
     }
     return -1;
   }),
-  "removeAt(I)Ljava/lang/Object;": driven(function* (this: JMap, i: number): Gen {
+  "removeAt(I)Ljava/lang/Object;": function (this: JMap, i: number) {
     const k = mapKeysInOrder(this)[i];
     return k === undefined ? null : vcall(this, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
-  }),
+  },
   "ensureCapacity(I)V": () => {},
 };
 const mapExtras: Record<string, NativeSpec["methods"]> = {
@@ -1302,15 +1294,14 @@ const setSerialization: Methods = {
 };
 
 class JImmutableSet extends JSet {}
-function immutableSet(items: unknown[]): JImmutableSet | Promise<JImmutableSet> { return rt.drive(immutableSet$(items)); }
-function* immutableSet$(items: unknown[]): Gen<JImmutableSet> {
+const immutableSet = driven(function* immutableSet(items: unknown[]): Gen<JImmutableSet> {
   const result = new JImmutableSet();
   for (const item of items) {
     if (item === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
     if (!((yield addToSet(result, item)))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "duplicate element: " + String(item));
   }
   return result;
-}
+});
 const immutableSetMethods = setMethods();
 for (const method of ["add(Ljava/lang/Object;)Z", "remove(Ljava/lang/Object;)Z", "clear()V", "addAll(Ljava/util/Collection;)Z", "removeAll(Ljava/util/Collection;)Z", "removeIf(Ljava/util/function/Predicate;)Z"])
   immutableSetMethods[method] = () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
@@ -1368,7 +1359,7 @@ function enumSetStatics() {
       copy.slow = this.slow.map((entry) => ({ ...entry }));
       return copy;
     },
-    "static allOf(Ljava/lang/Class;)Ljava/util/EnumSet;": driven(function* (c: JObj): Gen  { return fromValues(c, true, []); }),
+    "static allOf(Ljava/lang/Class;)Ljava/util/EnumSet;": function (c: JObj) { return fromValues(c, true, []); },
     "static noneOf(Ljava/lang/Class;)Ljava/util/EnumSet;": (c: JObj) => fromValues(c, false, []),
     "static of(Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown) => fromValues(null, false, [a]),
     "static of(Ljava/lang/Enum;[Ljava/lang/Enum;)Ljava/util/EnumSet;": (a: unknown, rest: unknown[]) => fromValues(null, false, [a, ...rest]),
@@ -1413,18 +1404,16 @@ function bsearch<T>(t: Sorted, k: unknown, done: (index: number) => T, lo = 0, h
   return done(~lo);
 }
 /** nearest index to k: mode -2 lower, -1 floor, 1 ceiling, 2 higher; -1 = none */
-function near(t: Sorted, k: unknown, mode: number): number | Promise<number> { return rt.drive(near$(t, k, mode)); }
-function* near$(t: Sorted, k: unknown, mode: number): Gen<number> {
+const near = driven(function* near(t: Sorted, k: unknown, mode: number): Gen<number> {
   const i = (yield bsearch(t, k, (i) => i));
   const j = i >= 0 ? i + (mode === 2 ? 1 : mode === -2 ? -1 : 0) : mode < 0 ? ~i - 1 : ~i;
   return j >= 0 && j < t.slow.length ? j : -1;
-}
+});
 /** slice index for a range bound; `upper` = exclusive end of the range */
-function bound(t: Sorted, k: unknown, inc: boolean, upper: boolean): number | Promise<number> { return rt.drive(bound$(t, k, inc, upper)); }
-function* bound$(t: Sorted, k: unknown, inc: boolean, upper: boolean): Gen<number> {
+const bound = driven(function* bound(t: Sorted, k: unknown, inc: boolean, upper: boolean): Gen<number> {
   const i = (yield bsearch(t, k, (i) => i));
   return i < 0 ? ~i : inc === upper ? i + 1 : i;
-}
+});
 function sub<T extends Sorted>(t: T, ents: Ent[], rev = t.rev): T {
   const o = new (t.constructor as new () => T)();
   o.cmp = t.cmp; o.rev = rev; o.slow = ents;
@@ -1582,8 +1571,7 @@ for (const n of ["java/util/TreeSet", "java/util/concurrent/ConcurrentSkipListSe
 
 export class JPriorityQueue extends JList { cmp: unknown = null; }
 /** keep the backing array sorted ascending so poll() takes the head (stable after equal keys) */
-export function pqInsert(q: JPriorityQueue, v: unknown): unknown { return rt.drive(pqInsert$(q, v)); }
-function* pqInsert$(q: JPriorityQueue, v: unknown): Gen {
+export const pqInsert = driven(function* pqInsert(q: JPriorityQueue, v: unknown): Gen {
   if (v == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   // the comparator may suspend, and another thread's take()/offer() can move the array under
   // it (Java holds a lock here): search a snapshot and only splice if the live array still is it
@@ -1599,7 +1587,7 @@ function* pqInsert$(q: JPriorityQueue, v: unknown): Gen {
       return;
     }
   }
-}
+});
 export const priorityQueueMethods = (): NonNullable<NativeSpec["methods"]> => ({
   ...listMethods(),
   "<init>()V": function () {},
@@ -1966,8 +1954,8 @@ const absCollection: Methods = {
     }
     return 0;
   }),
-  "removeAll(Ljava/util/Collection;)Z": driven(function* (this: JObj, c: unknown): Gen { return bulkRemove(this, c, true); }),
-  "retainAll(Ljava/util/Collection;)Z": driven(function* (this: JObj, c: unknown): Gen { return bulkRemove(this, c, false); }),
+  "removeAll(Ljava/util/Collection;)Z": function (this: JObj, c: unknown) { return bulkRemove(this, c, true); },
+  "retainAll(Ljava/util/Collection;)Z": function (this: JObj, c: unknown) { return bulkRemove(this, c, false); },
   "clear()V": driven(function* (this: JObj): Gen {
     const it = (yield iterOf(this));
     while ((yield vcall(it, "hasNext", "()Z"))) { (yield vcall(it, "next", "()Ljava/lang/Object;")); (yield vcall(it, "remove", "()V")); }
@@ -1984,8 +1972,7 @@ const absCollection: Methods = {
     return "[" + parts.join(", ") + "]";
   }),
 };
-function bulkRemove(self: unknown, c: unknown, when: boolean): number | Promise<number> { return rt.drive(bulkRemove$(self, c, when)); }
-function* bulkRemove$(self: unknown, c: unknown, when: boolean): Gen<number> {
+const bulkRemove = driven(function* bulkRemove(self: unknown, c: unknown, when: boolean): Gen<number> {
   if (c == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
   let ch = 0;
   const it = (yield iterOf(self));
@@ -1994,7 +1981,7 @@ function* bulkRemove$(self: unknown, c: unknown, when: boolean): Gen<number> {
     if (((yield vcall(c, "contains", "(Ljava/lang/Object;)Z", x))) !== 0 === when) { (yield vcall(it, "remove", "()V")); ch = 1; }
   }
   return ch;
-}
+});
 const absList: Methods = {
   "add(Ljava/lang/Object;)Z": driven(function* (this: JAbstractList, v: unknown): Gen {
     yield vcall(this, "add", "(ILjava/lang/Object;)V", (yield size(this)), v);
@@ -2072,15 +2059,13 @@ const absSet: Methods = {
     return bulkRemove(this, c, true);
   }),
 };
-function mapEntries(m: unknown): unknown[] | Promise<unknown[]> { return rt.drive(mapEntries$(m)); }
-function* mapEntries$(m: unknown): Gen<unknown[]> { return (yield toJsArray((yield vcall(m, "entrySet", "()Ljava/util/Set;")))); }
+const mapEntries = driven(function* mapEntries(m: unknown): Gen<unknown[]> { return (yield toJsArray((yield vcall(m, "entrySet", "()Ljava/util/Set;")))); });
 const entryKey = (e: unknown) => vcall(e, "getKey", "()Ljava/lang/Object;");
 const entryVal = (e: unknown) => vcall(e, "getValue", "()Ljava/lang/Object;");
-function findEntry(m: unknown, k: unknown): unknown { return rt.drive(findEntry$(m, k)); }
-function* findEntry$(m: unknown, k: unknown): Gen {
+const findEntry = driven(function* findEntry(m: unknown, k: unknown): Gen {
   for (const e of (yield mapEntries(m))) if ((yield aeq((yield entryKey(e)), k))) return e;
   return null;
-}
+});
 const absMap: Methods = {
   "<init>()V": function () {},
   "size()I": driven(function* (this: JObj): Gen { return size((yield vcall(this, "entrySet", "()Ljava/util/Set;"))); }),
@@ -2184,15 +2169,14 @@ rt.register({
   name: "java/util/AbstractList", ctor: JAbstractList, sup: "java/util/AbstractCollection", typeVars: "E",
   ifaces: ["java/util/List"], fields: { modCount: "modCount" }, methods: absList,
 });
-function sequentialAt(list: JAbstractList, index: number, operation: (iterator: unknown, thread: JThread) => unknown): unknown { return rt.drive(sequentialAt$(list, index, operation)); }
-function* sequentialAt$(list: JAbstractList, index: number, operation: (iterator: unknown, thread: JThread) => unknown): Gen {
+const sequentialAt = driven(function* sequentialAt(list: JAbstractList, index: number, operation: (iterator: unknown, thread: JThread) => unknown): Gen {
   const thread = curThread;
   try { return (yield operation((yield vcall(list, "listIterator", "(I)Ljava/util/ListIterator;", index)), thread)); }
   catch (error) {
     if (rt.iof(error, "java/util/NoSuchElementException")) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "Index: " + index);
     throw error;
   }
-}
+});
 rt.register({
   name: "java/util/AbstractSequentialList", ctor: JAbstractSequentialList, sup: "java/util/AbstractList", typeVars: "E",
   methods: {
@@ -2416,8 +2400,7 @@ type Fillable = { fill(v: unknown, s?: number, e?: number): unknown };
 const fill = (a: Fillable, v: unknown) => a.fill(v);
 const fillRange = (a: Fillable, f: number, t: number, v: unknown) => a.fill(v, f, t);
 class JArrays extends JObj {}
-function deepToString(a: unknown[] | null, ancestors = new Set<unknown[]>): string | Promise<string> { return rt.drive(deepToString$(a, ancestors)); }
-function* deepToString$(a: unknown[] | null, ancestors = new Set<unknown[]>): Gen<string> {
+const deepToString = driven(function* deepToString$(a: unknown[] | null, ancestors: Set<unknown[]> = new Set<unknown[]>): Gen<string> {
   if (a === null) return "null";
   if (ancestors.has(a)) return "[...]";
   ancestors.add(a);
@@ -2432,7 +2415,7 @@ function* deepToString$(a: unknown[] | null, ancestors = new Set<unknown[]>): Ge
   }
   ancestors.delete(a);
   return "[" + parts.join(", ") + "]";
-}
+});
 function deepEquals(a: unknown, b: unknown): number | Promise<number> {
   if (a === b) return 1;
   if (Array.isArray(a) && Array.isArray(b)) {
@@ -2619,28 +2602,25 @@ function objCopyOf(a: unknown[], n: number, elem?: string): unknown[] {
   return jarray(c, elem);
 }
 
-function replaceListValues(list: unknown, values: unknown[]): void | Promise<void> { return rt.drive(replaceListValues$(list, values)); }
-function* replaceListValues$(list: unknown, values: unknown[]): Gen<void> {
+const replaceListValues = driven(function* replaceListValues(list: unknown, values: unknown[]): Gen<void> {
   const iterator = (yield vcall(list, "listIterator", "()Ljava/util/ListIterator;"));
   for (const value of values) { (yield vcall(iterator, "next", "()Ljava/lang/Object;")); (yield vcall(iterator, "set", "(Ljava/lang/Object;)V", value)); }
-}
-function shuffle(list: unknown, random?: unknown): void | Promise<void> { return rt.drive(shuffle$(list, random)); }
-function* shuffle$(list: unknown, random?: unknown): Gen<void> {
+});
+const shuffle = driven(function* shuffle(list: unknown, random?: unknown): Gen<void> {
   const values = [...(yield toJsArray(list))];
   for (let i = values.length; i > 1; i--) {
     const j = random === undefined ? Math.floor(Math.random() * i) : (yield vcall(random, "nextInt", "(I)I", i));
     [values[i - 1], values[j]] = [values[j], values[i - 1]];
   }
   yield replaceListValues(list, values);
-}
-function rotate(list: unknown, distance: number): void | Promise<void> { return rt.drive(rotate$(list, distance)); }
-function* rotate$(list: unknown, distance: number): Gen<void> {
+});
+const rotate = driven(function* rotate(list: unknown, distance: number): Gen<void> {
   if (list === null) rt.npe();
   const values = [...(yield toJsArray(list))], n = values.length;
   if (n < 2) return;
   const shift = ((distance % n) + n) % n;
   if (shift) yield replaceListValues(list, values.slice(n - shift).concat(values.slice(0, n - shift)));
-}
+});
 class JCollections extends JObj {}
 const extreme = (sign: number) => async (c: unknown, cmp: unknown = null) => {
   const a = await toJsArray(c);
@@ -2798,8 +2778,7 @@ function propertyText(text: string): Map<string, string> {
   if (pending) for (const [key, value] of propertyText(pending)) result.set(key, value);
   return result;
 }
-function readerProperties(reader: unknown): Map<string, string> | Promise<Map<string, string>> { return rt.drive(readerProperties$(reader)); }
-function* readerProperties$(reader: unknown): Gen<Map<string, string>> {
+const readerProperties = driven(function* readerProperties(reader: unknown): Gen<Map<string, string>> {
   const buffer = new Uint16Array(8192), parts: string[] = [];
   for (;;) {
     const count: number = (yield vcall(reader, "read", "([CII)I", buffer, 0, buffer.length));
@@ -2807,12 +2786,11 @@ function* readerProperties$(reader: unknown): Gen<Map<string, string>> {
     parts.push(charsToString(buffer, 0, count));
   }
   return propertyText(parts.join(""));
-}
-function streamProperties(stream: unknown): Map<string, string> | Promise<Map<string, string>> { return rt.drive(streamProperties$(stream)); }
-function* streamProperties$(stream: unknown): Gen<Map<string, string>> {
+});
+const streamProperties = driven(function* streamProperties(stream: unknown): Gen<Map<string, string>> {
   const bytes = (yield readStreamFully(stream));
   return propertyText(charsToString(bytes, 0, bytes.length));
-}
+});
 export class JProps extends JMap {}
 function escapeProperty(text: string, key: boolean): string {
   return text.replace(/[\u0000-\u0020\\=:#!\u007f-\uffff]/g, (c, offset: number) => {
@@ -2822,8 +2800,7 @@ function escapeProperty(text: string, key: boolean): string {
     return "\\" + ({ "\t": "t", "\n": "n", "\r": "r", "\f": "f" }[c] ?? c);
   });
 }
-function storeProperties(props: JProps, stream: unknown, comments: string | null): void | Promise<void> { return rt.drive(storeProperties$(props, stream, comments)); }
-function* storeProperties$(props: JProps, stream: unknown, comments: string | null): Gen<void> {
+const storeProperties = driven(function* storeProperties(props: JProps, stream: unknown, comments: string | null): Gen<void> {
   const thread = curThread, lines: string[] = [];
   if (comments != null) lines.push("#" + comments.replace(/[\u0100-\uffff]/g, c => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"))
     .replace(/\r\n|\r|\n/g, "\n#"));
@@ -2836,7 +2813,7 @@ function* storeProperties$(props: JProps, stream: unknown, comments: string | nu
   for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
   yield vcallOn(thread, stream, "write", "([BII)V", bytes, 0, bytes.length);
   yield vcallOn(thread, stream, "flush", "()V");
-}
+});
 const setProperties = (props: JProps, entries: Map<string, string>) => { for (const [k, v] of entries) props.m.set(k, { k, v }); };
 rt.register({
   name: "java/util/Properties", ctor: JProps, sup: "java/util/HashMap",
@@ -2855,8 +2832,7 @@ rt.register({
 defineException("java/util/MissingResourceException", "java/lang/RuntimeException");
 class JResourceBundle extends JObj { values = new Map<string, unknown>(); parent: JResourceBundle | null = null; }
 class JListResourceBundle extends JResourceBundle { loading: Promise<void> | null = null; }
-function bundleValues(bundle: JResourceBundle): Map<string, unknown> | Promise<Map<string, unknown>> { return rt.drive(bundleValues$(bundle)); }
-function* bundleValues$(bundle: JResourceBundle): Gen<Map<string, unknown>> {
+const bundleValues = driven(function* bundleValues(bundle: JResourceBundle): Gen<Map<string, unknown>> {
   if (bundle instanceof JListResourceBundle) {
     bundle.loading ??= (async () => {
       const rows: unknown[][] = await vcall(bundle, "getContents", "()[[Ljava/lang/Object;");
@@ -2865,15 +2841,14 @@ function* bundleValues$(bundle: JResourceBundle): Gen<Map<string, unknown>> {
     yield bundle.loading;
   }
   return bundle.values;
-}
+});
 function bundleNames(baseName: string, locale: JLocale): string[] {
   const parts = [locale.lang, locale.script, locale.country, locale.variant].filter(Boolean);
   const names: string[] = [];
   for (let n = parts.length; n > 0; n--) names.push(baseName + "_" + parts.slice(0, n).join("_"));
   return names;
 }
-function getBundle(baseName: string, locale: JLocale, control?: JBundleControl): JResourceBundle | Promise<JResourceBundle> { return rt.drive(getBundle$(baseName, locale, control)); }
-function* getBundle$(baseName: string, locale: JLocale, control?: JBundleControl): Gen<JResourceBundle> {
+const getBundle = driven(function* getBundle(baseName: string, locale: JLocale, control?: JBundleControl): Gen<JResourceBundle> {
   if (baseName == null || locale == null) rt.npe();
   const load = async (name: string): Promise<JResourceBundle | null> => {
     const cls = name.replaceAll(".", "/");
@@ -2905,7 +2880,7 @@ function* getBundle$(baseName: string, locale: JLocale, control?: JBundleControl
   if (!found.length) throw rt.mkThrowable("java/util/MissingResourceException", baseName);
   for (let i = 1; i < found.length; i++) found[i - 1].parent = found[i];
   return found[0];
-}
+});
 class JBundleControl extends JObj {
   noFallback = false;
   formats: JList = newArrayList(["java.class", "java.properties"]);

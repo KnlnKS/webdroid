@@ -1,7 +1,7 @@
 // Device shell: APK boot, activity stack, frame loop, touch routing.
 
 import { dexesIn } from "../jvm/dex";
-import { rt, type JObj, type Gen } from "../jvm/runtime";
+import { rt, type JObj, type Gen, driven } from "../jvm/runtime";
 import { vfs, apkPath } from "../jvm/natives/jio";
 import { inflateTree } from "../jvm/natives/jzip";
 import { openInstall, type Install } from "./install";
@@ -291,8 +291,7 @@ function launchActivity(cls: string, intent: JIntent | null, options?: ActivityL
   };
   return inMainJob() ? run() : onMain(run);
 }
-function launchActivity0(component: string, intent: JIntent | null, relaunch?: Relaunch, options?: ActivityLaunch): unknown { return rt.drive(launchActivity0$(component, intent, relaunch, options)); }
-function* launchActivity0$(component: string, intent: JIntent | null, relaunch?: Relaunch, options?: ActivityLaunch): Gen {
+const launchActivity0 = driven(function* launchActivity0(component: string, intent: JIntent | null, relaunch?: Relaunch, options?: ActivityLaunch): Gen {
   if (!booted) return;
   const host = booted.host;
   const cls = aliasTargets.get(component) ?? component;
@@ -369,7 +368,7 @@ function* launchActivity0$(component: string, intent: JIntent | null, relaunch?:
   } catch (e) {
     reportUncaught(e);
   }
-}
+});
 
 const CONFIG_ORIENTATION_SIZE = 0x0080 | 0x0400;
 function changeActivityOrientation(act: JActivity, request: number): void {
@@ -446,44 +445,38 @@ function recreateActivity(act: JActivity): void {
   }), 0);
 }
 
-function safeCall(act: JActivity, method: string, desc = "()V", ...args: unknown[]): unknown { return rt.drive(safeCall$(act, method, desc, ...args)); }
-function* safeCall$(act: JActivity, method: string, desc = "()V", ...args: unknown[]): Gen {
+const safeCall = driven(function* safeCall(act: JActivity, method: string, desc: string = "()V", ...args: unknown[]): Gen {
   try { (yield vcall(act, method, desc, ...args)); } catch (e) { reportUncaught(e); }
-}
-function lifecycleStep(act: JActivity, method: string, phase: Parameters<typeof fireActivityLifecycle>[1]): unknown { return rt.drive(lifecycleStep$(act, method, phase)); }
-function* lifecycleStep$(act: JActivity, method: string, phase: Parameters<typeof fireActivityLifecycle>[1]): Gen {
+});
+const lifecycleStep = driven(function* lifecycleStep(act: JActivity, method: string, phase: Parameters<typeof fireActivityLifecycle>[1]): Gen {
   yield safeCall(act, method);
   yield fireActivityLifecycle(act, phase);
-}
+});
 const pauseActivity = (act: JActivity) => lifecycleStep(act, "onPause", "Paused");
 const stopActivity = (act: JActivity) => lifecycleStep(act, "onStop", "Stopped");
 /** Returning to a covered activity: onRestart → onStart → onResume → onPostResume, with the
  *  ActivityLifecycleCallbacks a fresh launch fires. */
-function resumeActivity(act: JActivity): unknown { return rt.drive(resumeActivity$(act)); }
-function* resumeActivity$(act: JActivity): Gen {
+const resumeActivity = driven(function* resumeActivity(act: JActivity): Gen {
   yield startActivity(act);
   if (!act.resumed) yield lifecycleStep(act, "onResume", "Resumed");
   yield safeCall(act, "onPostResume");
-}
-function startActivity(act: JActivity): unknown { return rt.drive(startActivity$(act)); }
-function* startActivity$(act: JActivity): Gen {
+});
+const startActivity = driven(function* startActivity(act: JActivity): Gen {
   if (!act.started) {
     yield safeCall(act, "onRestart");
     yield lifecycleStep(act, "onStart", "Started");
   }
-}
-function resumeTop(top: JActivity): unknown { return rt.drive(resumeTop$(top)); }
-function* resumeTop$(top: JActivity): Gen {
+});
+const resumeTop = driven(function* resumeTop(top: JActivity): Gen {
   applyOrientationRequest(top.requestedOrientation);
   for (const act of visibleActivities()) if (act !== top) (yield startActivity(act));
   yield resumeActivity(top);
   yield windowFocus(top, true);
   void buildOptionsMenu(top);
-}
+});
 /** ViewRootImpl reports window focus once the resumed activity's window is up and takes it
  *  away when another window covers it; only a change is delivered. */
-function windowFocus(act: JActivity, has: boolean): unknown { return rt.drive(windowFocus$(act, has)); }
-function* windowFocus$(act: JActivity, has: boolean): Gen {
+const windowFocus = driven(function* windowFocus(act: JActivity, has: boolean): Gen {
   if (act.hasWindowFocus === has) return;
   act.hasWindowFocus = has;
   const z = has ? 1 : 0;
@@ -491,10 +484,9 @@ function* windowFocus$(act: JActivity, has: boolean): Gen {
     yield vcall(act, "onWindowFocusChanged", "(Z)V", z);
     if (act.window.decor) yield vcall(act.window.decor, "dispatchWindowFocusChanged", "(Z)V", z);
   } catch (e) { reportUncaught(e); }
-}
+});
 
-function finishActivity(act: JActivity, resume = true): unknown { return rt.drive(finishActivity$(act, resume)); }
-function* finishActivity$(act: JActivity, resume = true): Gen {
+const finishActivity = driven(function* finishActivity(act: JActivity, resume: boolean = true): Gen {
   if (!booted) return;
   const i = booted.stack.indexOf(act);
   if (i < 0) return;
@@ -512,7 +504,7 @@ function* finishActivity$(act: JActivity, resume = true): Gen {
   yield lifecycleStep(act, "onDestroy", "Destroyed");
   yield detachContextOverlays(act);
   invalidateWindow();
-}
+});
 
 export function finishTask(taskId: number, resume: boolean): Promise<void> {
   return onMain(async () => {
@@ -544,8 +536,7 @@ export function activityVisibility(phase: "pause" | "stop" | "resume" | "visible
   });
 }
 
-function buildOptionsMenu(act: JActivity): unknown { return rt.drive(buildOptionsMenu$(act)); }
-function* buildOptionsMenu$(act: JActivity): Gen {
+const buildOptionsMenu = driven(function* buildOptionsMenu(act: JActivity): Gen {
   if (!act.window.actionBarView) return;
   const menu = new JMenu();
   menu.bar = act.window.actionBarView;
@@ -555,7 +546,7 @@ function* buildOptionsMenu$(act: JActivity): Gen {
     yield vcall(act, "onPreparePanel", "(ILandroid/view/View;Landroid/view/Menu;)Z", 0, null, menu);
   } catch (e) { reportUncaught(e); }
   pushMenuToBar(menu);
-}
+});
 
 // A key is input like a touch: it runs as a main-looper job, so androidx's main-thread asserts
 // (handleLifecycleEvent inside the finish path) see the main thread, not whichever worker
@@ -563,8 +554,7 @@ function* buildOptionsMenu$(act: JActivity): Gen {
 export function pressBack(): Promise<void> {
   return onMain(pressBack0);
 }
-function pressBack0(): void | Promise<void> { return rt.drive(pressBack0$()); }
-function* pressBack0$(): Gen<void> {
+const pressBack0 = driven(function* pressBack0(): Gen<void> {
   // the topmost window takes the key: a dialog or popup before the activity under it
   let top;
   for (let i = overlays.length - 1; i >= 0; i--) {
@@ -576,7 +566,7 @@ function* pressBack0$(): Gen<void> {
     else if (top?.dismissOnOutside) (yield dismissOverlay(top));
     else if (act) (yield vcall(act, "onBackPressed", "()V"));
   } catch (e) { reportUncaught(e); }
-}
+});
 
 const M_doFrame = mangleMethod("doFrame", "(J)V");
 const M_dispatch = mangleMethod("dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
@@ -585,8 +575,7 @@ let drawing = false;
  *  run. It is not the app drawing, so it deliberately does not count in perf.draws — corpus
  *  reads that to mean "this apk got far enough to render", and it must keep meaning it. */
 let startWin: { view: JView; fullscreen: boolean } | null = null;
-function drawStartWin(w: { view: JView; fullscreen: boolean }): unknown { return rt.drive(drawStartWin$(w)); }
-function* drawStartWin$(w: { view: JView; fullscreen: boolean }): Gen {
+const drawStartWin = driven(function* drawStartWin(w: { view: JView; fullscreen: boolean }): Gen {
   const contentY = w.fullscreen ? 0 : STATUS_H, ctx = frame;
   ctx.save();
   try {
@@ -604,7 +593,7 @@ function* drawStartWin$(w: { view: JView; fullscreen: boolean }): Gen {
     ctx.restore();
   }
   present();
-}
+});
 
 export async function tick() {
   if (drawing) return;
@@ -613,8 +602,7 @@ export async function tick() {
   // and stop every later frame.
   try { await onMain(tick0); } finally { drawing = false; }
 }
-function tick0(): unknown { return rt.drive(tick0$()); }
-function* tick0$(): Gen {
+const tick0 = driven(function* tick0(): Gen {
   const ctx = frame;
   try {
     // choreographer + animation callbacks. One timestamp for the whole frame, as AOSP's
@@ -770,7 +758,7 @@ function* tick0$(): Gen {
     console.error("[tick]", e);
   }
   mainDbg.phase = "";
-}
+});
 function forceLayoutFlags(v: JView) {
   v.layoutRequested = true;
   v.layoutRequired = true;
@@ -789,8 +777,7 @@ export function dispatchPointer(action: number, x: number, y: number, at = guest
   requestResponsiveSlices();
   return onMain(() => dispatchPointer0(action, x, y, at)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
-function dispatchPointer0(action: number, x: number, y: number, t: number): void | Promise<void> { return rt.drive(dispatchPointer0$(action, x, y, t)); }
-function* dispatchPointer0$(action: number, x: number, y: number, t: number): Gen<void> {
+const dispatchPointer0 = driven(function* dispatchPointer0(action: number, x: number, y: number, t: number): Gen<void> {
   const window = booted?.stack.at(-1)?.window, decor = window?.decor;
   if (!decor) return;
   const ev = new JMotionEvent();
@@ -843,4 +830,4 @@ function* dispatchPointer0$(action: number, x: number, y: number, t: number): Ge
   } catch (e) {
     reportUncaught(e);
   }
-}
+});

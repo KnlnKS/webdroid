@@ -77,13 +77,12 @@ function adapterList(adapter: JArrayAdapter, list: unknown) {
   adapter.source = list;
   adapter.items = list instanceof JList ? list.a : [];
 }
-function appendAdapterItems(adapter: JArrayAdapter, values: unknown[]): unknown { return rt.drive(appendAdapterItems$(adapter, values)); }
-function* appendAdapterItems$(adapter: JArrayAdapter, values: unknown[]): Gen {
+const appendAdapterItems = driven(function* appendAdapterItems(adapter: JArrayAdapter, values: unknown[]): Gen {
   if (adapter.source) {
     for (const value of values) (yield vcall(adapter.source, "add", "(Ljava/lang/Object;)Z", value));
   } else adapter.items.push(...values);
   yield vcall(adapter, "notifyDataSetChanged", "()V");
-}
+});
 rt.register({
   name: "android/widget/ArrayAdapter", ctor: JArrayAdapter, sup: "android/widget/BaseAdapter",
   methods: {
@@ -164,14 +163,14 @@ rt.register({
       }),
     "setDropDownViewResource(I)V": () => {},
     "static createFromResource(Landroid/content/Context;II)Landroid/widget/ArrayAdapter;":
-      driven(function* (c: any, arrRes: number, layout: number): Gen  {
+      function (c: any, arrRes: number, layout: number) {
         const a = new JArrayAdapter();
         a.jctx = c;
         a.layoutRes = layout;
         const res: Resources = c.$host.res;
         a.items = bagStrings(res, arrRes);
         return a;
-      }),
+      },
   },
 });
 
@@ -384,18 +383,16 @@ const M_setItemChecked = mangleMethod("setItemChecked", "(IZ)V");
 const M_setSelFromTop = mangleMethod("setSelectionFromTop", "(II)V");
 
 /** adapter row id for a list position (header offset applied); -1 when the position is not a row */
-function rowId(list: JListView, pos: number): bigint | Promise<bigint> { return rt.drive(rowId$(list, pos)); }
-function* rowId$(list: JListView, pos: number): Gen<bigint> {
+const rowId = driven(function* rowId(list: JListView, pos: number): Gen<bigint> {
   const adjusted = pos - list.headers.length;
   if (!list.adapter || adjusted < 0 || adjusted >= list.itemViews.length) return -1n;
   try { return (yield vcall(list.adapter, "getItemId", "(I)J", adjusted)) as bigint; } catch { return -1n; }
-}
+});
 
 /** The only place a modal-choice list talks to its MultiChoiceModeListener. Called from
  *  setItemChecked, so every route that changes checked state (click, long press, app call)
  *  reaches the callback. Starts the ActionMode on the first check, ends it on the last uncheck. */
-function notifyChoiceMode(list: JListView, pos: number, checked: boolean): unknown { return rt.drive(notifyChoiceMode$(list, pos, checked)); }
-function* notifyChoiceMode$(list: JListView, pos: number, checked: boolean): Gen {
+const notifyChoiceMode = driven(function* notifyChoiceMode(list: JListView, pos: number, checked: boolean): Gen {
   const cb = list.multiChoiceL;
   if (list.choiceMode !== CHOICE_MODE_MULTIPLE_MODAL || !cb) return;
   if (!list.actionMode) {
@@ -420,27 +417,25 @@ function* notifyChoiceMode$(list: JListView, pos: number, checked: boolean): Gen
   (yield vcall(cb, "onItemCheckedStateChanged", "(Landroid/view/ActionMode;IJZ)V",
     mode, pos, (yield rowId(list, pos)), checked ? 1 : 0));
   if (!list.checked.size) yield vcall(mode, "finish", "()V");
-}
+});
 
 function cancelItemLongPress(list: JListView) {
   if (list.longPressTimer) { clearTimeout(list.longPressTimer); list.longPressTimer = null; }
 }
 
 /** long-press dispatch: resolve the row id, then go through performLongPress (the funnel) */
-function dispatchLongPress(list: JListView, pos: number): unknown { return rt.drive(dispatchLongPress$(list, pos)); }
-function* dispatchLongPress$(list: JListView, pos: number): Gen {
+const dispatchLongPress = driven(function* dispatchLongPress(list: JListView, pos: number): Gen {
   const v = list.allViews()[pos];
   if (!v) return;
   const id = (yield rowId(list, pos));
   list.longFired = !!(yield guardCall(list, M_perfLongPress, v, pos, id));
-}
+});
 
 /** ListView's default divider is the theme's listDivider (ListView style: divider="?attr/listDivider") */
-function themeDivider(list: JListView): unknown { return rt.drive(themeDivider$(list)); }
-function* themeDivider$(list: JListView): Gen {
+const themeDivider = driven(function* themeDivider(list: JListView): Gen {
   const rv = list.theme?.lookup(AID("listDivider"));
   if (rv && list.jres) list.divDraw = (yield loadDrawableRV(list.jres, rv, list.theme));
-}
+});
 function addHeader(this: JListView, v: JView) { this.headers.push(v); this.viewsCache = null; void this.rebuild(); }
 function addFooter(this: JListView, v: JView) { this.footers.push(v); this.viewsCache = null; void this.rebuild(); }
 function measureListView(this: JListView, wSpec: number, hSpec: number): unknown { return rt.drive(measureListView$.call(this, wSpec, hSpec)); }
@@ -586,12 +581,12 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "clearChoices()V": function (this: JListView) { this.checked.clear(); invalidate(); },
   "getCheckedItemCount()I": function (this: JListView) { return this.checked.size; },
   "getCheckedItemIds()[J": function (this: JListView) { return BigInt64Array.from([...this.checked].map((c) => BigInt(c))); },
-  "getCheckedItemPositions()Landroid/util/SparseBooleanArray;": driven(function* (this: JListView): Gen {
+  "getCheckedItemPositions()Landroid/util/SparseBooleanArray;": function (this: JListView) {
     const info = rt.link("android/util/SparseBooleanArray");
     const sa = new info.ctor();
     for (const c of this.checked) sa.m.set(c, 1);
     return sa;
-  }),
+  },
   "pointToPosition(II)I": function (this: JListView, x: number, y: number) { return this.itemIndexAt(y + this.scrollY); },
   "getAdapter()Landroid/widget/ListAdapter;": function (this: JListView) {
     return this.headers.length || this.footers.length ? this.headerAdapter ??= new JHeaderViewListAdapter(this) : this.adapter;
@@ -871,8 +866,7 @@ rt.register({
     },
   },
 });
-function showSpinnerPopup(sp: JSpinner): unknown { return rt.drive(showSpinnerPopup$(sp)); }
-function* showSpinnerPopup$(sp: JSpinner): Gen {
+const showSpinnerPopup = driven(function* showSpinnerPopup(sp: JSpinner): Gen {
   const a = sp.adapter;
   if (!a || !((yield vcall(a, "getCount", "()I")))) return;
   const list = new JSpinnerPopup();
@@ -908,7 +902,7 @@ function* showSpinnerPopup$(sp: JSpinner): Gen {
   yield measureView(list, makeSpec(root.width(), MS_AT_MOST), makeSpec(root.height(), MS_AT_MOST));
   yield vcall(list, "setSelection", "(I)V", sp.selection);
   addOverlay(list, x, list.measuredH <= below ? y + sp.height() : Math.max(0, y - list.measuredH), true);
-}
+});
 // ── AbsSpinner: AdapterView's selection contract
 //
 // AOSP is Spinner extends AbsSpinner extends AdapterView, and the two superclasses own the
@@ -931,15 +925,13 @@ const INVALID_ROW_ID = -9223372036854775808n; // AdapterView.INVALID_ROW_ID = Lo
 /** `selNotified` is AdapterView's mOldSelectedPosition: the position the listener last heard. */
 type JSelSpinner = JSpinner & { selNotified?: number; selNotifyPosted?: boolean };
 
-function selectedRowId(sp: JSelSpinner): bigint | Promise<bigint> { return rt.drive(selectedRowId$(sp)); }
-function* selectedRowId$(sp: JSelSpinner): Gen<bigint> {
+const selectedRowId = driven(function* selectedRowId(sp: JSelSpinner): Gen<bigint> {
   if (!sp.adapter || sp.selection < 0) return INVALID_ROW_ID;
   return (yield vcall(sp.adapter, "getItemId", "(I)J", sp.selection)) as bigint;
-}
+});
 
 /** AdapterView.SelectionNotifier: the deferred half of selectionChanged(). */
-function fireItemSelected(sp: JSelSpinner): unknown { return rt.drive(fireItemSelected$(sp)); }
-function* fireItemSelected$(sp: JSelSpinner): Gen {
+const fireItemSelected = driven(function* fireItemSelected(sp: JSelSpinner): Gen {
   const l = sp.itemSelectedL;
   if (!l) return;
   if (sp.adapter && sp.selection >= 0) {
@@ -948,7 +940,7 @@ function* fireItemSelected$(sp: JSelSpinner): Gen {
   } else {
     yield vcall(l, "onNothingSelected", "(Landroid/widget/AdapterView;)V", sp);
   }
-}
+});
 
 /** AdapterView.checkSelectionChanged(): notify only when the selected row actually moved. */
 function checkSelectionChanged(sp: JSelSpinner) {
@@ -964,14 +956,13 @@ function checkSelectionChanged(sp: JSelSpinner) {
 
 /** The one place the selection moves: AdapterView.setSelectedPositionInt + the layout that
  *  materializes the new selected view + the change check that reports it. */
-function selectPosition(sp: JSelSpinner, pos: number): unknown { return rt.drive(selectPosition$(sp, pos)); }
-function* selectPosition$(sp: JSelSpinner, pos: number): Gen {
+const selectPosition = driven(function* selectPosition(sp: JSelSpinner, pos: number): Gen {
   if (sp.selection !== pos) {
     sp.selection = pos;
     yield sp.rebuild();
   }
   checkSelectionChanged(sp);
-}
+});
 
 const absSpinnerMethods: NativeSpec["methods"] = {
   "setAdapter(Landroid/widget/SpinnerAdapter;)V": driven(function* (this: JSelSpinner, a: unknown): Gen {

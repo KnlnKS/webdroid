@@ -260,14 +260,14 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     yield root.setContent(v);
     requestLayout(root.content);
   }),
-  "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (this: JDialog, v: JView, lp: any): Gen {
+  "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
     return callSelf(dialogMethods, "setContentView(Landroid/view/View;)V", this, v);
-  }),
-  "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (this: JDialog, v: JView, lp: any): Gen {
+  },
+  "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": function (this: JDialog, v: JView, lp: any) {
     v.lp = lp;
     return attachView(this.ensureRoot().content, v);
-  }),
+  },
   "show()V": driven(function* (this: JDialog): Gen {
     // AOSP: showing again after hide() only makes the decor visible again
     if (this.showing) { if (this.root && this.root.visibility === 4) { this.root.visibility = 0; requestLayout(this.root); } return; }
@@ -307,9 +307,9 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "setOnCancelListener(Landroid/content/DialogInterface$OnCancelListener;)V": function (this: JDialog, l: unknown) { this.cancelL = l; },
   "setOnDismissListener(Landroid/content/DialogInterface$OnDismissListener;)V": function (this: JDialog, l: unknown) { this.dismissL = l; },
   "setOnShowListener(Landroid/content/DialogInterface$OnShowListener;)V": function (this: JDialog, l: unknown) { this.showL = l; },
-  "findViewById(I)Landroid/view/View;": driven(function* (this: JDialog, id: number): Gen {
+  "findViewById(I)Landroid/view/View;": function (this: JDialog, id: number) {
     return this.root ? findById(this.root, id) : null;
-  }),
+  },
   // one Window per dialog, its callback the dialog itself (AOSP's ctor does w.setCallback(this)):
   // appcompat wraps that callback and rejects a null one
   "getWindow()Landroid/view/Window;": function (this: JDialog) {
@@ -329,9 +329,9 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     this.win.decor.windowOwner = this.win;
     return this.win;
   },
-  "getLayoutInflater()Landroid/view/LayoutInflater;": driven(function* (this: JDialog): Gen {
+  "getLayoutInflater()Landroid/view/LayoutInflater;": function (this: JDialog) {
     return getInflater(this.jctx);
-  }),
+  },
   "getOwnerActivity()Landroid/app/Activity;": function (this: JDialog) { return this.ownerActivity; },
   "setOwnerActivity(Landroid/app/Activity;)V": function (this: JDialog, activity: unknown) { this.ownerActivity = activity; },
   "onBackPressed()V": function (this: JDialog) { if (this.cancelable) return this.cancel(); },

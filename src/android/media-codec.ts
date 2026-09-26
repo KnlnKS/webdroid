@@ -368,8 +368,8 @@ export async function createCodec(name: string, mime: boolean): Promise<JMediaCo
   rt.link("android/media/MediaCodec"); return new JMediaCodec(info);
 }
 rt.register({ name: "android/media/MediaCodec", ctor: JMediaCodec, methods: {
-  "static createByCodecName(Ljava/lang/String;)Landroid/media/MediaCodec;": driven(function* (name: string): Gen  { return createCodec(name, false); }),
-  "static createDecoderByType(Ljava/lang/String;)Landroid/media/MediaCodec;": driven(function* (mime: string): Gen  { return createCodec(mime, true); }),
+  "static createByCodecName(Ljava/lang/String;)Landroid/media/MediaCodec;": function (name: string) { return createCodec(name, false); },
+  "static createDecoderByType(Ljava/lang/String;)Landroid/media/MediaCodec;": function (mime: string) { return createCodec(mime, true); },
   "getName()Ljava/lang/String;": function (this: JMediaCodec) { return this.info.name; },
   "getCodecInfo()Landroid/media/MediaCodecInfo;": function (this: JMediaCodec) { return this.info; },
   "setCallback(Landroid/media/MediaCodec$Callback;Landroid/os/Handler;)V": function (this: JMediaCodec, callback: unknown, handler: ReturnType<typeof mainHandler> | null) { this.callback = callback; this.handler = handler; },

@@ -248,9 +248,9 @@ rt.register({
       return this.v;
     },
     "orElse(I)I": function (this: JOptionalInt, fallback: number) { return this.present ? this.v : fallback; },
-    "orElseGet(Ljava/util/function/IntSupplier;)I": driven(function* (this: JOptionalInt, supplier: unknown): Gen {
+    "orElseGet(Ljava/util/function/IntSupplier;)I": function (this: JOptionalInt, supplier: unknown) {
       return this.present ? this.v : vcall(supplier, "getAsInt", "()I");
-    }),
+    },
     "ifPresent(Ljava/util/function/IntConsumer;)V": function (this: JOptionalInt, consumer: unknown) {
       return this.present ? vcall(consumer, "accept", "(I)V", this.v) : undefined;
     },
@@ -331,9 +331,9 @@ rt.register({
     "filter(Ljava/util/function/Predicate;)Ljava/util/Optional;": driven(function* (this: JOptional, p: unknown): Gen {
       return this.v === null || (yield vcall(p, "test", "(Ljava/lang/Object;)Z", this.v)) ? this : mkOpt(null);
     }),
-    "flatMap(Ljava/util/function/Function;)Ljava/util/Optional;": driven(function* (this: JOptional, f: unknown): Gen {
+    "flatMap(Ljava/util/function/Function;)Ljava/util/Optional;": function (this: JOptional, f: unknown) {
       return this.v === null ? this : apply1(f, this.v);
-    }),
+    },
     "ifPresentOrElse(Ljava/util/function/Consumer;Ljava/lang/Runnable;)V": function (this: JOptional, c: unknown, r: unknown) {
       return this.v === null ? vcall(r, "run", "()V") : vcall(c, "accept", "(Ljava/lang/Object;)V", this.v);
     },

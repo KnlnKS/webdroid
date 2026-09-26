@@ -112,14 +112,13 @@ rt.register({ name: "android/window/SplashScreen", ctor: JSplashScreen, methods:
   "clearOnExitAnimationListener()V": function (this: JSplashScreen) { this.listener = null; },
 } });
 rt.markers("android/window/SplashScreen$OnExitAnimationListener");
-export function dispatchSplashExit(activity: JActivity): void | Promise<void> { return rt.drive(dispatchSplashExit$(activity)); }
-function* dispatchSplashExit$(activity: JActivity): Gen<void> {
+export const dispatchSplashExit = driven(function* dispatchSplashExit(activity: JActivity): Gen<void> {
   const splash = activity.splashScreen;
   if (!splash?.listener || splash.exitSent) return;
   splash.exitSent = true;
   rt.link("android/window/SplashScreenView");
   yield vcall(splash.listener, "onSplashScreenExit", "(Landroid/window/SplashScreenView;)V", new JSplashScreenView());
-}
+});
 export class JActivity extends JContextWrapper {
   window = new JWindow();
   intent: JIntent | null = null;
@@ -217,8 +216,8 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setShowWhenLocked(Z)V": function (this: JActivity, show: number) { return vcall(this.window, "setFlags", "(II)V", show ? 0x80000 : 0, 0x80000); },
   "requireViewById(I)Landroid/view/View;": requireViewById,
-  "onStart()V": driven(function* (this: JActivity): Gen { this.started = true; return dispatchFragLifecycle(this, "onStart"); }),
-  "onResume()V": driven(function* (this: JActivity): Gen { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); }),
+  "onStart()V": function (this: JActivity) { this.started = true; return dispatchFragLifecycle(this, "onStart"); },
+  "onResume()V": function (this: JActivity) { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); },
   "onPause()V": function (this: JActivity) { this.resumed = false; return dispatchFragLifecycle(this, "onPause"); },
   "onStop()V": function (this: JActivity) { this.started = false; return dispatchFragLifecycle(this, "onStop"); },
   "onDestroy()V": driven(function* (this: JActivity): Gen {

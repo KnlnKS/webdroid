@@ -335,13 +335,13 @@ rt.register({
   methods: {
     "static getInstance(Ljava/lang/String;)Ljavax/crypto/Cipher;": getCipher,
     "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/Cipher;": getCipher,
-    "init(ILjava/security/Key;)V": driven(function* (this: JCipher, m: number, k: unknown): Gen { return initCipher(this, m, k, null); }),
-    "init(ILjava/security/Key;Ljava/security/SecureRandom;)V": driven(function* (this: JCipher, m: number, k: unknown): Gen { return initCipher(this, m, k, null); }),
-    "init(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V": driven(function* (this: JCipher, m: number, k: unknown, p: unknown): Gen {
+    "init(ILjava/security/Key;)V": function (this: JCipher, m: number, k: unknown) { return initCipher(this, m, k, null); },
+    "init(ILjava/security/Key;Ljava/security/SecureRandom;)V": function (this: JCipher, m: number, k: unknown) { return initCipher(this, m, k, null); },
+    "init(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JCipher, m: number, k: unknown, p: unknown) {
       return initCipher(this, m, k, p);
-    }),
+    },
     "init(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;Ljava/security/SecureRandom;)V":
-      driven(function* (this: JCipher, m: number, k: unknown, p: unknown): Gen { return initCipher(this, m, k, p); }),
+      function (this: JCipher, m: number, k: unknown, p: unknown) { return initCipher(this, m, k, p); },
     "update([B)[B": function (this: JCipher, b: Int8Array) { this.parts.push(bytes(b)); return new Int8Array(0); },
     "update([BII)[B": function (this: JCipher, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); return new Int8Array(0); },
     "update([BII[BI)I": function (this: JCipher, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); return 0; },
@@ -352,20 +352,20 @@ rt.register({
       const u = new Uint8Array(v.ab, v.byteFromPos, bb.lim - bb.pos);
       this.aad.push(new Uint8Array(u)); bb.pos = bb.lim;
     },
-    "doFinal()[B": driven(function* (this: JCipher): Gen { return doFinal(this); }),
-    "doFinal([B)[B": driven(function* (this: JCipher, b: Int8Array): Gen { return doFinal(this, b); }),
-    "doFinal([BII)[B": driven(function* (this: JCipher, b: Int8Array, off: number, len: number): Gen { return doFinal(this, b, off, len); }),
+    "doFinal()[B": function (this: JCipher) { return doFinal(this); },
+    "doFinal([B)[B": function (this: JCipher, b: Int8Array) { return doFinal(this, b); },
+    "doFinal([BII)[B": function (this: JCipher, b: Int8Array, off: number, len: number) { return doFinal(this, b, off, len); },
     "doFinal([BI)I": driven(function* (this: JCipher, out: Int8Array, off: number): Gen { return into((yield doFinal(this)), out, off); }),
     "doFinal([BII[BI)I": driven(function* (this: JCipher, b: Int8Array, off: number, len: number, out: Int8Array, outOff: number): Gen {
       return into((yield doFinal(this, b, off, len)), out, outOff);
     }),
     "doFinal([BII[B)I": driven(function* (this: JCipher, b: Int8Array, off: number, len: number, out: Int8Array): Gen { return into((yield doFinal(this, b, off, len)), out, 0); }),
     "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljavax/crypto/Cipher;": getCipher,
-    "wrap(Ljava/security/Key;)[B": driven(function* (this: JCipher, key: JSecretKeySpec): Gen {
+    "wrap(Ljava/security/Key;)[B": function (this: JCipher, key: JSecretKeySpec) {
       if (this.opmode !== 3) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized for wrapping");
       if (!(key instanceof JSecretKeySpec)) throw rt.mkThrowable("java/security/InvalidKeyException", "Unsupported wrapped key");
       return doFinal(this, new Int8Array(key.key));
-    }),
+    },
     "unwrap([BLjava/lang/String;I)Ljava/security/Key;": driven(function* (this: JCipher, wrapped: Int8Array, algorithm: string, type: number): Gen {
       if (this.opmode !== 4) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized for unwrapping");
       if (type !== 3) throw rt.mkThrowable("java/security/InvalidKeyException", "Unsupported wrapped key type");
@@ -420,8 +420,8 @@ rt.register({
     "update(B)V": function (this: JMac, b: number) { this.parts.push(new Uint8Array([b & 0xff])); },
     "update([B)V": function (this: JMac, b: Int8Array) { this.parts.push(bytes(b)); },
     "update([BII)V": function (this: JMac, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); },
-    "doFinal()[B": driven(function* (this: JMac): Gen { return macFinal(this); }),
-    "doFinal([B)[B": driven(function* (this: JMac, b: Int8Array): Gen { return macFinal(this, b); }),
+    "doFinal()[B": function (this: JMac) { return macFinal(this); },
+    "doFinal([B)[B": function (this: JMac, b: Int8Array) { return macFinal(this, b); },
     "reset()V": function (this: JMac) { this.parts = []; },
     "getMacLength()I": function (this: JMac) { return this.len; },
     "getAlgorithm()Ljava/lang/String;": function (this: JMac) { return this.algo; },

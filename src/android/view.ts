@@ -3,7 +3,7 @@ import { perf } from "../perf";
 import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, type JPoint } from "./graphics";
 import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
-import { vcall, vcallOn, after, idHash, box, JFloat, curThread, vcallUncaught } from "../jvm/natives/jlang";
+import { vcall, vcallOn, after, idHash, box, JFloat, curThread, vcallUncaught, type JThread } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
@@ -92,14 +92,12 @@ export const setViewAnimHook = (h: typeof startViewAnim) => { startViewAnim = h;
 let startGroupAnim: (v: JViewGroup, a: unknown) => void = () => {};
 export const setGroupAnimHook = (h: typeof startGroupAnim) => { startGroupAnim = h; };
 const M_onFocusChange = mangleMethod("onFocusChange", "(Landroid/view/View;Z)V");
-function focusChange(v: JView, focused: boolean): unknown { return rt.drive(focusChange$(v, focused)); }
-function* focusChange$(v: JView, focused: boolean): Gen {
+const focusChange = driven(function* focusChange(v: JView, focused: boolean): Gen {
   v.focused = focused;
   focusHook(v, focused);
   if (v.focusL) yield guardMaybe(v.focusL, M_onFocusChange, v, focused ? 1 : 0);
-}
-function takeFocus(v: JView): unknown { return rt.drive(takeFocus$(v)); }
-function* takeFocus$(v: JView): Gen {
+});
+const takeFocus = driven(function* takeFocus(v: JView): Gen {
   if (!v.enabled || !v.focusable) return 0;
   if (v.focused) return 1;
   let root = v;
@@ -109,13 +107,12 @@ function* takeFocus$(v: JView): Gen {
   yield focusChange(v, true);
   focusMoved(v, v);
   return 1;
-}
-function clearFocus(v: JView): unknown { return rt.drive(clearFocus$(v)); }
-function* clearFocus$(v: JView): Gen {
+});
+const clearFocus = driven(function* clearFocus(v: JView): Gen {
   if (!v.focused) return;
   yield focusChange(v, false);
   focusMoved(v, null);
-}
+});
 /** AOSP reports every focus transition to the root's observer; the tree-walk only runs when someone listens */
 function focusMoved(v: JView, now: JView | null) {
   let root: JView = v;
@@ -165,11 +162,10 @@ export function requestLayoutAll() {
  */
 export const layoutPass = { active: false, requesters: [] as JView[] };
 /** ViewRootImpl.performLayout: a window root's layout, with in-layout requests collected */
-export function layoutRoot(v: JView, l: number, t: number, r: number, b: number): unknown { return rt.drive(layoutRoot$(v, l, t, r, b)); }
-function* layoutRoot$(v: JView, l: number, t: number, r: number, b: number): Gen {
+export const layoutRoot = driven(function* layoutRoot(v: JView, l: number, t: number, r: number, b: number): Gen {
   layoutPass.active = true;
   try { (yield layoutView(v, l, t, r, b)); } finally { layoutPass.active = false; }
-}
+});
 const validRequesters: JView[] = [];
 function shownPath(v: JView): boolean {
   for (let p: JView | null = v; p; p = p.parent) if (p.visibility === 8) return false;
@@ -227,8 +223,7 @@ function removeChild(this: JViewGroup, c: JView) { return detachView(this, c); }
 function removeChildInLayout(this: JViewGroup, c: JView) { return detachView(this, c, false); }
 /** AOSP removeViews/removeAllViews: the children leave without requests and the parent asks
  *  once; the *InLayout forms do not ask at all */
-function removeRange(vg: JViewGroup, start: number, n: number, request: boolean, all = false): unknown { return rt.drive(removeRange$(vg, start, n, request, all)); }
-function* removeRange$(vg: JViewGroup, start: number, n: number, request: boolean, all = false): Gen {
+const removeRange = driven(function* removeRange(vg: JViewGroup, start: number, n: number, request: boolean, all: boolean = false): Gen {
   if (start < 0 || n < 0 || start + n > vg.children.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", `start=${start}, count=${n}, size=${vg.children.length}`);
   const thread = curThread;
   const gone = vg.children.slice(start, start + n);
@@ -241,7 +236,7 @@ function* removeRange$(vg: JViewGroup, start: number, n: number, request: boolea
   }
   if (!all) { vg.children.splice(start, n); for (const c of gone) c.parent = null; }
   if (request && gone.length) { requestLayoutVirtual(vg); invalidate(vg); }
-}
+});
 /** AOSP addViewInLayout: addViewInner without the parent's request. Unless the caller prevents
  *  it, the child's own setLayoutParams asks, before the child has a parent to pass it to. */
 function addInLayout(this: JViewGroup, c: JView, i: number, lp: JLayoutParams, preventRequestLayout?: number): unknown { return rt.drive(addInLayout$.call(this, c, i, lp, preventRequestLayout)); }
@@ -556,8 +551,7 @@ function* viewDispatchInsets$(this: JView, ins: unknown): Gen {
 // defStyleAttr is the widget's own style attribute (buttonStyle, editTextStyle, ...). Without it
 // tiers 3 and 4 of the cascade are dead for every base-View attribute, which is why a Button had
 // to be handed a background in TypeScript instead of resolving Widget.Material.Button's.
-function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0, defStyleRes = 0): unknown { return rt.drive(applyViewAttrs$(v, set, defStyleAttr, defStyleRes)); }
-function* applyViewAttrs$(v: JView, set: JAttrSet | null, defStyleAttr = 0, defStyleRes = 0): Gen {
+const applyViewAttrs = driven(function* applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr: number = 0, defStyleRes: number = 0): Gen {
   if (!v.jres || (!set?.node && !defStyleAttr && !defStyleRes)) return;
   const res = v.jres;
   const ta = obtainStyled(res, v.theme, set, [
@@ -593,7 +587,7 @@ function* applyViewAttrs$(v: JView, set: JAttrSet | null, defStyleAttr = 0, defS
   if (g(18)) v.autoHandwritingEnabled = !!rvInt(res, g(18), 1);
   if (g(19)) v.textAlignment = rvInt(res, g(19), 0);
   if (g(20)) v.fitsSys = !!rvInt(res, g(20), 0);
-}
+});
 
 export function defaultSize(size: number, spec: number): number {
   const mode = specMode(spec), sz = specSize(spec);
@@ -638,8 +632,7 @@ export function setViewTargetSdk(target: number) {
   ignoreMeasureCache = target < 19;
   brokenInsetsDispatch = target < 30;
 }
-export function measureView(v: JView, wSpec: number, hSpec: number): unknown { return rt.drive(measureView$(v, wSpec, hSpec)); }
-function* measureView$(v: JView, wSpec: number, hSpec: number): Gen {
+export const measureView = driven(function* measureView(v: JView, wSpec: number, hSpec: number): Gen {
   // AOSP View.measure: with no forced layout and identical specs the previous measurement
   // still holds. Without this every pass re-measured the whole tree from the root.
   if (!v.layoutRequested) {
@@ -679,7 +672,7 @@ function* measureView$(v: JView, wSpec: number, hSpec: number): Gen {
     clearMeasureCache(v);
     throw e;
   }
-}
+});
 
 /** setLeft/setTop/setRight/setBottom: assign bounds directly and fire the same
  *  size-changed/layout-changed notifications layoutView fires, without a measure/layout pass. */
@@ -696,8 +689,7 @@ function setBound(v: JView, l: number, t: number, r: number, b: number) {
   }
 }
 
-export function layoutView(v: JView, l: number, t: number, r: number, b: number): unknown { return rt.drive(layoutView$(v, l, t, r, b)); }
-function* layoutView$(v: JView, l: number, t: number, r: number, b: number): Gen {
+export const layoutView = driven(function* layoutView(v: JView, l: number, t: number, r: number, b: number): Gen {
   // AOSP View.layout: a measure the cache answered left the children as the last onMeasure did
   if (v.measureBeforeLayout) {
     v.measureBeforeLayout = false;
@@ -725,7 +717,7 @@ function* layoutView$(v: JView, l: number, t: number, r: number, b: number): Gen
     }
   }
   v.layoutRequested = false;
-}
+});
 
 /** full draw of the subtree onto ctx (already positioned at parent's content origin) */
 const M_computeScroll = mangleMethod("computeScroll", "()V");
@@ -737,8 +729,7 @@ const noopComputeScroll = () => {};
 const clipRejects = (p: JViewGroup, v: JView): boolean =>
   p.clipChildren && !v.jAnim && !v.animTf && !v.translationX && !v.translationY && !v.rotationV && v.scaleXv === 1 && v.scaleYv === 1 &&
   (v.right - p.scrollX <= 0 || v.bottom - p.scrollY <= 0 || v.left - p.scrollX >= p.width() || v.top - p.scrollY >= p.height());
-export function drawView(v: JView, cv: JCanvas, parent?: JViewGroup): unknown { return rt.drive(drawView$(v, cv, parent)); }
-function* drawView$(v: JView, cv: JCanvas, parent?: JViewGroup): Gen {
+export const drawView = driven(function* drawView(v: JView, cv: JCanvas, parent?: JViewGroup): Gen {
   if (v.visibility !== 0) return;
   // Android calls computeScroll() before drawing each child — drives Scroller
   // animations (ViewPager page snaps, OverScroller flings)
@@ -798,10 +789,9 @@ function* drawView$(v: JView, cv: JCanvas, parent?: JViewGroup): Gen {
   } finally {
     while (cv.saveCount > sc) { ctx.restore(); cv.saveCount--; }
   }
-}
+});
 
-function drawLayered(v: JView, cv: JCanvas, w: number, h: number): unknown { return rt.drive(drawLayered$(v, cv, w, h)); }
-function* drawLayered$(v: JView, cv: JCanvas, w: number, h: number): Gen {
+const drawLayered = driven(function* drawLayered(v: JView, cv: JCanvas, w: number, h: number): Gen {
   let layer = v.layerCanvas;
   if (!layer || layer.width !== w || layer.height !== h) layer = v.layerCanvas = new OffscreenCanvas(w, h);
   const lctx = layer.getContext("2d") as OffscreenCanvasRenderingContext2D;
@@ -813,10 +803,9 @@ function* drawLayered$(v: JView, cv: JCanvas, w: number, h: number): Gen {
   lcv.semanticBase = cv.semanticTransform();
   yield drawSemantic(v, lcv);
   cv.ctx.drawImage(layer, 0, 0);
-}
+});
 
-function drawSemantic(v: JView, cv: JCanvas): unknown { return rt.drive(drawSemantic$(v, cv)); }
-function* drawSemantic$(v: JView, cv: JCanvas): Gen {
+const drawSemantic = driven(function* drawSemantic(v: JView, cv: JCanvas): Gen {
   const parentOwner = cv.semanticOwner;
   if (v.drawnText) v.drawnText.length = 0;
   v.drawnTextCount = 0;
@@ -826,7 +815,7 @@ function* drawSemantic$(v: JView, cv: JCanvas): Gen {
   } finally {
     cv.semanticOwner = parentOwner;
   }
-}
+});
 
 /**
  * AOSP's View.draw(Canvas) is a public method widgets override — TextInputLayout paints its
@@ -839,8 +828,7 @@ function drawSelf(v: JView, cv: JCanvas): unknown {
   return fn && fn !== baseDraw ? guardApply(fn, v, cv) : drawContent(v, cv);
 }
 /** the view's own painting, in its own coordinate space: background, content, children, overlay */
-function drawContent(v: JView, cv: JCanvas): unknown { return rt.drive(drawContent$(v, cv)); }
-function* drawContent$(v: JView, cv: JCanvas): Gen {
+const drawContent = driven(function* drawContent(v: JView, cv: JCanvas): Gen {
   const ctx = cv.ctx;
   if (v.surfaceBacked && isRecording(ctx)) {
     if (!v.surfaceLayer && v.background) {
@@ -866,7 +854,7 @@ function* drawContent$(v: JView, cv: JCanvas): Gen {
   if (v.overlay) yield drawOverlay(v.overlay, cv);
   ctx.translate(v.scrollX, v.scrollY);
   if (v.foreground || jmethod(v, M_onDrawForeground) !== drawForeground) yield guardMaybe(v, M_onDrawForeground, cv);
-}
+});
 
 function drawForeground(this: JView, cv: JCanvas): unknown { return rt.drive(drawForeground$.call(this, cv)); }
 function* drawForeground$(this: JView, cv: JCanvas): Gen {
@@ -907,11 +895,10 @@ function overlayOf(this: JView) {
 }
 
 /** AOSP draws the overlay last, over the host's own content and children */
-function drawOverlay(o: JViewOverlay, cv: JCanvas): unknown { return rt.drive(drawOverlay$(o, cv)); }
-function* drawOverlay$(o: JViewOverlay, cv: JCanvas): Gen {
+const drawOverlay = driven(function* drawOverlay(o: JViewOverlay, cv: JCanvas): Gen {
   for (const d of o.drawables) (yield guardCall(d, M_drawableDraw, cv));
   for (const v of o.views) (yield drawView(v, cv));
-}
+});
 
 /** One log line per offending view class: a broken subtree must not log 60x a second. */
 const drawErrSeen = new Set<string>();
@@ -1551,10 +1538,10 @@ const viewMethods: NativeSpec["methods"] = {
     if (p) yield p;
     return new info.ctor();
   }),
-  "getDisplay()Landroid/view/Display;": driven(function* (): Gen {
+  "getDisplay()Landroid/view/Display;": function () {
     const info = rt.link("android/view/Display");
     return new info.ctor();
-  }),
+  },
   "hasTransientState()Z": function (this: JView) { return this.transientState > 0 || (this as JViewGroup).transientChildren > 0 ? 1 : 0; },
   "setHasTransientState(Z)V": function (this: JView, v: number) { this.transientState = Math.max(0, this.transientState + (v ? 1 : -1)); },
   "static combineMeasuredStates(II)I": (a: number, b: number) => a | b,
@@ -1715,8 +1702,7 @@ function findByPred(v: JView, p: (v: JView) => boolean): JView | null {
 export function inheritContext(child: JView, from: JView) {
   child.ctx = from.ctx; child.jres = from.jres; child.theme = from.theme;
 }
-export function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | null, defStyleAttr = 0, defStyleRes = 0): unknown { return rt.drive(initViewFromCtx$(v, jctx, set, defStyleAttr, defStyleRes)); }
-function* initViewFromCtx$(v: JView, jctx: unknown, set: JAttrSet | null, defStyleAttr = 0, defStyleRes = 0): Gen {
+export const initViewFromCtx = driven(function* initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | null, defStyleAttr: number = 0, defStyleRes: number = 0): Gen {
   v.ctx = jctx;
   if (jctx) {
     v.resources = (yield vcall(jctx, "getResources", "()Landroid/content/res/Resources;"));
@@ -1727,7 +1713,7 @@ function* initViewFromCtx$(v: JView, jctx: unknown, set: JAttrSet | null, defSty
     }
   }
   yield applyViewAttrs(v, set, defStyleAttr, defStyleRes);
-}
+});
 
 export class JViewGroup extends JView {
   measuredChildState(): number {
@@ -1754,8 +1740,7 @@ export class JViewGroup extends JView {
 }
 /** Convert a LayoutParams to one this ViewGroup accepts (e.g. ViewPager needs its own LP type,
  *  and casts in its onLayout otherwise). Dispatches to the ViewGroup's own check/generate overrides. */
-function convertLp(vg: JViewGroup, lp: JLayoutParams | null): JLayoutParams | null | Promise<JLayoutParams | null> { return rt.drive(convertLp$(vg, lp)); }
-function* convertLp$(vg: JViewGroup, lp: JLayoutParams | null): Gen<JLayoutParams | null> {
+const convertLp = driven(function* convertLp(vg: JViewGroup, lp: JLayoutParams | null): Gen<JLayoutParams | null> {
   if (!lp) return lp;
   if (jmethod(vg, M_checkLp)) {
     const ok = (yield guardCall(vg, M_checkLp, lp));
@@ -1765,7 +1750,7 @@ function* convertLp$(vg: JViewGroup, lp: JLayoutParams | null): Gen<JLayoutParam
     }
   }
   return lp;
-}
+});
 
 /** The array and parent link alone, which is all AOSP's attachViewToParent does. False when the
  *  link would make a cycle. */
@@ -1791,15 +1776,13 @@ function unlinkChild(parent: JViewGroup, child: JView): boolean {
   child.parent = null;
   return true;
 }
-function notifyChildRemoved(parent: JViewGroup, child: JView, thread: typeof curThread): unknown { return rt.drive(notifyChildRemoved$(parent, child, thread)); }
-function* notifyChildRemoved$(parent: JViewGroup, child: JView, thread: typeof curThread): Gen {
+const notifyChildRemoved = driven(function* notifyChildRemoved(parent: JViewGroup, child: JView, thread: typeof curThread): Gen {
   yield vcallOn(thread, parent, "onViewRemoved", "(Landroid/view/View;)V", child);
   if (parent.hierarchyChangeL) {
     yield vcallOn(thread, parent.hierarchyChangeL, "onChildViewRemoved", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
   }
-}
-export function detachView(parent: JViewGroup, child: JView, request = true, thread = curThread): unknown { return rt.drive(detachView$(parent, child, request, thread)); }
-function* detachView$(parent: JViewGroup, child: JView, request = true, thread = curThread): Gen {
+});
+export const detachView = driven(function* detachView(parent: JViewGroup, child: JView, request: boolean = true, thread: JThread = curThread): Gen {
   if (!parent.children.includes(child)) return;
   yield noteTransientChild(parent, child, false, thread);
   if (child.attached) yield dispatchDetached(child, thread);
@@ -1807,13 +1790,12 @@ function* detachView$(parent: JViewGroup, child: JView, request = true, thread =
   if (!request) clearMeasureCache(parent);
   yield notifyChildRemoved(parent, child, thread);
   if (request) { requestLayoutVirtual(parent); invalidate(parent); }
-}
+});
 export function addUnattachedView(parent: JViewGroup, child: JView, index = -1) {
   if (parent.attached || child.attached || child.parent) throw new Error("Use attachView for an existing view hierarchy");
   if (linkChild(parent, child, index)) { requestLayoutVirtual(parent); invalidate(parent); }
 }
-export function attachView(parent: JViewGroup, child: JView, index = -1, request = true, thread = curThread): unknown { return rt.drive(attachView$(parent, child, index, request, thread)); }
-function* attachView$(parent: JViewGroup, child: JView, index = -1, request = true, thread = curThread): Gen {
+export const attachView = driven(function* attachView(parent: JViewGroup, child: JView, index: number = -1, request: boolean = true, thread: JThread = curThread): Gen {
   if (child.parent) yield detachView(child.parent as JViewGroup, child, request, thread);
   if (!linkChild(parent, child, index)) return;
   if (!request) clearMeasureCache(parent);
@@ -1824,9 +1806,8 @@ function* attachView$(parent: JViewGroup, child: JView, index = -1, request = tr
   if (parent.hierarchyChangeL) {
     yield vcallOn(thread, parent.hierarchyChangeL, "onChildViewAdded", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
   }
-}
-export function dispatchAttached(v: JView, thread = curThread): unknown { return rt.drive(dispatchAttached$(v, thread)); }
-function* dispatchAttached$(v: JView, thread = curThread): Gen {
+});
+export const dispatchAttached = driven(function* dispatchAttached(v: JView, thread: JThread = curThread): Gen {
   if (v.attached) return;
   yield attachTree(v, thread);
   flushViewPosts(v);
@@ -1835,7 +1816,7 @@ function* dispatchAttached$(v: JView, thread = curThread): Gen {
   // Queued attachment may follow an unattached measure and an empty hosted display list.
   requestLayout(v);
   invalidate(v);
-}
+});
 function postView(view: JView, run: unknown, delay: number): number {
   if (view.attached) return mainHandler().post(run, delay);
   (view.pendingPosts ??= []).push({ run, delay });
@@ -1848,8 +1829,7 @@ function flushViewPosts(view: JView): void {
   }
   if (view instanceof JViewGroup) for (const child of view.children) flushViewPosts(child);
 }
-function attachTree(v: JView, thread: typeof curThread): unknown { return rt.drive(attachTree$(v, thread)); }
-function* attachTree$(v: JView, thread: typeof curThread): Gen {
+const attachTree = driven(function* attachTree$(v: JView, thread: typeof curThread): Gen {
   if (v.attached) return;
   v.attached = true;
   mergeVTO(v);
@@ -1864,27 +1844,25 @@ function* attachTree$(v: JView, thread: typeof curThread): Gen {
   }
   v.layoutRequested = true;
   clearMeasureCache(v);
-}
+});
 /**
  * A Configuration change reaches a view hierarchy the way AOSP's ViewRootImpl delivers it —
  * down the tree, each view's own onConfigurationChanged. It is the only signal an activity that
  * declared the change in its manifest ever gets, and Compose's AndroidComposeView listens on it
  * to republish LocalConfiguration (hence isSystemInDarkTheme).
  */
-export function dispatchConfigurationChanged(v: JView, cfg: unknown): unknown { return rt.drive(dispatchConfigurationChanged$(v, cfg)); }
-function* dispatchConfigurationChanged$(v: JView, cfg: unknown): Gen {
+export const dispatchConfigurationChanged = driven(function* dispatchConfigurationChanged$(v: JView, cfg: unknown): Gen {
   try { (yield guardMaybe(v, M_onConfigChanged, cfg)); } catch (e) { reportUncaught(e); }
   if (v instanceof JViewGroup) for (const c of [...v.children]) (yield dispatchConfigurationChanged(c, cfg));
-}
-export function dispatchDetached(v: JView, thread = curThread): unknown { return rt.drive(dispatchDetached$(v, thread)); }
-function* dispatchDetached$(v: JView, thread = curThread): Gen {
+});
+export const dispatchDetached = driven(function* dispatchDetached$(v: JView, thread: JThread = curThread): Gen {
   if (!v.attached) return;
   if (v instanceof JViewGroup) for (const c of [...v.children]) (yield dispatchDetached(c, thread));
   yield vcallOn(thread, v, "onDetachedFromWindow", "()V");
   for (const l of [...v.attachLs]) (yield vcallOn(thread, l, "onViewDetachedFromWindow", "(Landroid/view/View;)V", v));
   v.attached = false;
   if (!v.parent) yield vtoMap.get(v)?.dispatchWindowAttached(false);
-}
+});
 
 /** AOSP getChildMeasureSpec */
 export function childMeasureSpec(spec: number, padding: number, childDim: number): number {
@@ -1899,15 +1877,14 @@ export function childMeasureSpec(spec: number, padding: number, childDim: number
   if (childDim !== WRAP_CONTENT) return makeSpec(0, MS_UNSPEC);
   return mode === MS_UNSPEC ? makeSpec(size, MS_UNSPEC) : makeSpec(size, MS_AT_MOST);
 }
-export function measureChildWithMargins(vg: JViewGroup, child: JView, wSpec: number, wUsed: number, hSpec: number, hUsed: number): unknown { return rt.drive(measureChildWithMargins$(vg, child, wSpec, wUsed, hSpec, hUsed)); }
-function* measureChildWithMargins$(vg: JViewGroup, child: JView, wSpec: number, wUsed: number, hSpec: number, hUsed: number): Gen {
+export const measureChildWithMargins = driven(function* measureChildWithMargins(vg: JViewGroup, child: JView, wSpec: number, wUsed: number, hSpec: number, hUsed: number): Gen {
   const lp = child.lp;
   const ml = lp instanceof JMarginLP ? lp.marginL + lp.marginR : 0;
   const mt = lp instanceof JMarginLP ? lp.marginT + lp.marginB : 0;
   (yield measureView(child,
     childMeasureSpec(wSpec, vg.padL + vg.padR + ml + wUsed, lp?.width ?? WRAP_CONTENT),
     childMeasureSpec(hSpec, vg.padT + vg.padB + mt + hUsed, lp?.height ?? WRAP_CONTENT)));
-}
+});
 
 const M_checkLp = mangleMethod("checkLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)Z");
 const M_generateLp = mangleMethod("generateLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;");
@@ -1929,21 +1906,19 @@ function* addView3$(this: JViewGroup, c: JView, i: number, lp: JLayoutParams | n
 }
 const M_hasTransientState = mangleMethod("hasTransientState", "()Z");
 const M_childTransientChanged = mangleMethod("childHasTransientStateChanged", "(Landroid/view/View;Z)V");
-function noteTransientChild(parent: JViewGroup, child: JView, added: boolean, thread = curThread): unknown { return rt.drive(noteTransientChild$(parent, child, added, thread)); }
-function* noteTransientChild$(parent: JViewGroup, child: JView, added: boolean, thread = curThread): Gen {
+const noteTransientChild = driven(function* noteTransientChild(parent: JViewGroup, child: JView, added: boolean, thread: JThread = curThread): Gen {
   const method = jmethod(child, M_hasTransientState);
   if (method && (yield vcallOn(thread, child, "hasTransientState", "()Z"))) {
     yield vcallOn(thread, parent, "childHasTransientStateChanged", "(Landroid/view/View;Z)V", child, added ? 1 : 0);
   }
-}
+});
 /**
  * AOSP funnels every addView overload through the overridable 3-arg one, and subclasses do real
  * work there -- ViewPager sets lp.isDecor and, mid-layout, lp.needsMeasure + addViewInLayout, which
  * is the only way a page committed during its own measure pass ever gets sized. Calling attachView
  * directly from each overload skipped all of it.
  */
-function addViewFunnel(vg: JViewGroup, c: JView, i: number, lp: JLayoutParams | null): unknown { return rt.drive(addViewFunnel$(vg, c, i, lp)); }
-function* addViewFunnel$(vg: JViewGroup, c: JView, i: number, lp: JLayoutParams | null): Gen {
+const addViewFunnel = driven(function* addViewFunnel(vg: JViewGroup, c: JView, i: number, lp: JLayoutParams | null): Gen {
   if (!c) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Cannot add a null child view to a ViewGroup");
   if (!lp) {
     lp = c.lp ?? (yield guardCall(vg, M_genDefaultLP)) as JLayoutParams | null;
@@ -1952,7 +1927,7 @@ function* addViewFunnel$(vg: JViewGroup, c: JView, i: number, lp: JLayoutParams 
   const f = jmethod(vg, M_addView3);
   if (f && f !== addView3) return void (yield guardApply(f, vg, c, i, lp));
   yield addView3.call(vg, c, i, lp);
-}
+});
 
 const vgMethods: NativeSpec["methods"] = {
   "dispatchApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": driven(function* (this: JViewGroup, ins: JWindowInsets): Gen {
@@ -1965,9 +1940,9 @@ const vgMethods: NativeSpec["methods"] = {
     }
     return cur;
   }),
-  "addView(Landroid/view/View;)V": driven(function* (this: JViewGroup, c: JView): Gen {
+  "addView(Landroid/view/View;)V": function (this: JViewGroup, c: JView) {
     return addViewFunnel(this, c, -1, null);
-  }),
+  },
   "addView(Landroid/view/View;I)V": function (this: JViewGroup, c: JView, i: number) {
     return addViewFunnel(this, c, i, null);
   },
@@ -1982,10 +1957,10 @@ const vgMethods: NativeSpec["methods"] = {
   },
   "removeView(Landroid/view/View;)V": removeChild,
   "removeViewInLayout(Landroid/view/View;)V": removeChildInLayout,
-  "removeViewAt(I)V": driven(function* (this: JViewGroup, i: number): Gen {
+  "removeViewAt(I)V": function (this: JViewGroup, i: number) {
     const c = this.children[i];
     if (c) return detachView(this, c);
-  }),
+  },
   "removeAllViews()V": function (this: JViewGroup) { return removeRange(this, 0, this.children.length, true, true); },
   "removeAllViewsInLayout()V": function (this: JViewGroup) { return removeRange(this, 0, this.children.length, false, true); },
   "getChildCount()I": function (this: JViewGroup) { return this.children.length; },
@@ -2246,13 +2221,12 @@ class JVTO extends JObj {
   dispatchOnDraw() { return fanOut(this.drawLs, "onDraw", "()V"); }
   dispatchScrollChanged() { return fanOut(this.scrollLs, "onScrollChanged", "()V"); }
 }
-function fanOut(ls: unknown[], name: string, desc: string, ...args: unknown[]): void | Promise<void> { return rt.drive(fanOut$(ls, name, desc, ...args)); }
-function* fanOut$(ls: unknown[], name: string, desc: string, ...args: unknown[]): Gen<void> {
+const fanOut = driven(function* fanOut(ls: unknown[], name: string, desc: string, ...args: unknown[]): Gen<void> {
   if (!ls.length) return;
   for (const l of [...ls]) {
     try { (yield vcall(l, name, desc, ...args)); } catch (e) { console.error("[vto]", e); }
   }
-}
+});
 const vtoMap = new WeakMap<JView, JVTO>();
 const VTO_LISTS = ["globalLayoutLs", "preDrawLs", "drawLs", "scrollLs", "focusLs", "windowAttachLs"] as const;
 /**
@@ -2356,21 +2330,19 @@ rt.register({
   },
 });
 /** layout pass: OnGlobalLayoutListener fires when the tree's layout actually ran */
-export function fireGlobalLayout(root: JView): unknown { return rt.drive(fireGlobalLayout$(root)); }
-function* fireGlobalLayout$(root: JView): Gen {
+export const fireGlobalLayout = driven(function* fireGlobalLayout(root: JView): Gen {
   const o = vtoMap.get(root);
   if (!o) return;
   yield o.dispatchGlobalLayout();
-}
+});
 /** draw pass: AOSP's performTraversals fires OnPreDrawListener then OnDrawListener right
  *  before the tree is actually drawn, on every draw -- not only ones that also laid out. */
-export function fireDrawPass(root: JView): unknown { return rt.drive(fireDrawPass$(root)); }
-function* fireDrawPass$(root: JView): Gen {
+export const fireDrawPass = driven(function* fireDrawPass(root: JView): Gen {
   const o = vtoMap.get(root);
   if (!o) return;
   yield o.dispatchPreDraw();
   yield o.dispatchOnDraw();
-}
+});
 
 export const lpAttrs = function (this: JLayoutParams, _c: unknown, set: JAttrSet) { lpFromAttrs(this, set.res, set); };
 export const marginCopy = function (this: JMarginLP, o: JLayoutParams | null) {

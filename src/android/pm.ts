@@ -155,15 +155,15 @@ rt.register({
     "specificIndex", "isDefault", "labelRes", "nonLocalizedLabel", "icon", "resolvePackageName"],
   methods: {
     "<init>()V": function () {},
-    "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;": driven(function* (this: any, pm: unknown): Gen {
+    "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;": function (this: any, pm: unknown) {
       if (this.nonLocalizedLabel !== null) return this.nonLocalizedLabel;
       const ci = this.activityInfo ?? this.serviceInfo ?? this.providerInfo;
       return ci ? vcall(ci, "loadLabel", "(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;", pm) : "";
-    }),
-    "loadIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": driven(function* (this: any, pm: unknown): Gen {
+    },
+    "loadIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": function (this: any, pm: unknown) {
       const ci = this.activityInfo ?? this.serviceInfo ?? this.providerInfo;
       return ci ? vcall(ci, "loadIcon", "(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;", pm) : null;
-    }),
+    },
   },
 });
 class JProviderInfo extends JComponentInfo { authority = ""; grantUriPermissions = 0; multiprocess = 0; readPermission: string | null = null; writePermission: string | null = null; }
@@ -754,9 +754,9 @@ rt.register({
     "getServiceInfo(Landroid/content/ComponentName;I)Landroid/content/pm/ServiceInfo;": getServiceInfo,
     "getServiceInfo(Landroid/content/ComponentName;Landroid/content/pm/PackageManager$ComponentInfoFlags;)Landroid/content/pm/ServiceInfo;": (c: JComponentName, f: JInfoFlags) => getServiceInfo(c, Number(f.value)),
     // API 33's boxed-long overloads carry the same flags to the same body, never a second one
-    "getPackageInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$PackageInfoFlags;)Landroid/content/pm/PackageInfo;": driven(function* (pkg: string, f: JInfoFlags | null): Gen {
+    "getPackageInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$PackageInfoFlags;)Landroid/content/pm/PackageInfo;": function (pkg: string, f: JInfoFlags | null) {
       return vcall(this, "getPackageInfo", "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;", pkg, Number(f?.value ?? 0n));
-    }),
+    },
     "getPackageInfo(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;": driven(function* (pkg: string, flags: number): Gen {
       const record = packages.get(pkg);
       if (record && (record !== currentPackage || record.system)) return recordInfo(record, flags);
@@ -787,9 +787,9 @@ rt.register({
       if (flags & 1) pi.activities = jarray([...manifestActivities].filter(([name, node]) => visibleComponent(name, node, flags)).map(([name]) => mkActivityInfo(name.replace(/\//g, "."), flags)), "Landroid/content/pm/ActivityInfo;");
       return pi;
     }),
-    "getApplicationInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$ApplicationInfoFlags;)Landroid/content/pm/ApplicationInfo;": driven(function* (pkg: string, f: JInfoFlags | null): Gen {
+    "getApplicationInfo(Ljava/lang/String;Landroid/content/pm/PackageManager$ApplicationInfoFlags;)Landroid/content/pm/ApplicationInfo;": function (pkg: string, f: JInfoFlags | null) {
       return vcall(this, "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", pkg, Number(f?.value ?? 0n));
-    }),
+    },
     "getApplicationInfo(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;": driven(function* (pkg: string, flags: number): Gen {
       const record = packages.get(pkg);
       if (record && (record !== currentPackage || record.system)) return recordAppInfo(record, flags);
@@ -1019,10 +1019,10 @@ rt.register({
     },
     [`setLongLived(Z)${shortcutBuilder}`]: function (this: JShortcutBuilder, value: number) { this.info.longLived = !!value; return this; },
     [`setExcludedFromSurfaces(I)${shortcutBuilder}`]: function (this: JShortcutBuilder, value: number) { this.info.excluded = value; return this; },
-    "build()Landroid/content/pm/ShortcutInfo;": driven(function* (this: JShortcutBuilder): Gen {
+    "build()Landroid/content/pm/ShortcutInfo;": function (this: JShortcutBuilder) {
       if (!this.info.shortLabel || !this.info.intents.length || this.info.intents.some((intent) => !intent?.action)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut label and intents with actions are required");
       return copyShortcut(this.info);
-    }),
+    },
   },
 });
 class JShortcutManager extends JObj { packages = new Map<string, Map<string, JShortcutInfo>>(); }

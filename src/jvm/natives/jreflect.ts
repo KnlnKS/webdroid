@@ -1189,8 +1189,7 @@ function proxyClass(ifaces: ClassInfo[]): Promise<ClassInfo> {
   proxyClasses.set(key, pending);
   return pending;
 }
-function buildProxy(ifaces: ClassInfo[]): ClassInfo | Promise<ClassInfo> { return rt.drive(buildProxy$(ifaces)); }
-function* buildProxy$(ifaces: ClassInfo[]): Gen<ClassInfo> {
+const buildProxy = driven(function* buildProxy(ifaces: ClassInfo[]): Gen<ClassInfo> {
   const name = "java/lang/reflect/$Proxy" + nextProxyId++;
   if (ifaces.some((i) => !i.dex)) yield ensureDecls();
   rt.register({ name, ctor: class extends JProxy {}, ifaces: ifaces.map((i) => i.name) });
@@ -1202,7 +1201,7 @@ function* buildProxy$(ifaces: ClassInfo[]): Gen<ClassInfo> {
   for (const i of ifaces) interfaceMethods(i, methods);
   for (const [owner, n, desc, mods] of methods.values()) proxyMethod(info, owner, n, desc, mods);
   return info;
-}
+});
 // a method no declaration named: the first call names it, and the proxy materialises it then,
 // owned by the interface that declares it if any of them does, else the first
 rt.proxyMethod = (obj, n, desc) => {

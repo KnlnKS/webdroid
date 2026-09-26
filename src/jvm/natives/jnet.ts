@@ -34,7 +34,7 @@ rt.register({
   name: "javax/net/SocketFactory", ctor: JSocketFactory,
   methods: {
     "static getDefault()Ljavax/net/SocketFactory;": () => socketFactory,
-    "createSocket()Ljava/net/Socket;": driven(function* (): Gen  { return newObj("java/net/Socket", null); }),
+    "createSocket()Ljava/net/Socket;": function () { return newObj("java/net/Socket", null); },
     "createSocket(Ljava/lang/String;I)Ljava/net/Socket;": (h: string, p: number) => dial("java/net/Socket", h, p),
     "createSocket(Ljava/net/InetAddress;I)Ljava/net/Socket;": (address: JInetAddress, port: number) => dial("java/net/Socket", address?.host ?? "localhost", port),
   },

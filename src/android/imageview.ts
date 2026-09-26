@@ -69,8 +69,7 @@ export class JImageView extends JView {
   maxW = Infinity; maxH = Infinity;
 }
 const scaleTypes = mkEnumSet("android/widget/ImageView$ScaleType", ["MATRIX", "FIT_XY", "FIT_START", "FIT_CENTER", "FIT_END", "CENTER", "CENTER_CROP", "CENTER_INSIDE"]);
-function initImageView(view: JImageView, c: unknown, set: JAttrSet | null, style: number, defaultStyle = 0): unknown { return rt.drive(initImageView$(view, c, set, style, defaultStyle)); }
-function* initImageView$(view: JImageView, c: unknown, set: JAttrSet | null, style: number, defaultStyle = 0): Gen {
+const initImageView = driven(function* initImageView(view: JImageView, c: unknown, set: JAttrSet | null, style: number, defaultStyle: number = 0): Gen {
   yield initViewFromCtx(view, c, set, style, defaultStyle);
   if (!view.jres || (!set && !style && !defaultStyle)) return;
   const ta = obtainStyled(view.jres, view.theme, set, [AID("src"), AID("scaleType"), AID("adjustViewBounds"), AID("tint"), AID("cropToPadding")], style, defaultStyle);
@@ -82,7 +81,7 @@ function* initImageView$(view: JImageView, c: unknown, set: JAttrSet | null, sty
     const tint = rvColor(view.jres, ta.vals[3], 0);
     if (view.drawable && tint) view.drawable.tint = tint;
   }
-}
+});
 const imageViewMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;)V": function (this: JImageView, c: unknown) { return initImageView(this, c, null, 0); },
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JImageView, c: unknown, set: JAttrSet | null) { return initImageView(this, c, set, 0); },

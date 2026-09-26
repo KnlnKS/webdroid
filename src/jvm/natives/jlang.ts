@@ -221,12 +221,12 @@ rt.register({
     },
     "notify()V": function () { rt.monitors.notify(this, curThread, false); },
     "notifyAll()V": function () { rt.monitors.notify(this, curThread, true); },
-    "wait()V": driven(function* (): Gen { return monWait(this, 0); }),
-    "wait(J)V": driven(function* (ms: bigint): Gen { return monWait(this, Number(ms)); }),
-    "wait(JI)V": driven(function* (ms: bigint, ns: number): Gen {
+    "wait()V": function () { return monWait(this, 0); },
+    "wait(J)V": function (ms: bigint) { return monWait(this, Number(ms)); },
+    "wait(JI)V": function (ms: bigint, ns: number) {
       if (ms < 0n || ns < 0 || ns > 999999) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout");
       return monWait(this, Number(ms) + (ns > 0 ? 1 : 0));
-    }),
+    },
   },
 });
 Object.defineProperty(Object.prototype, mangleMethod("getClass", "()Ljava/lang/Class;"), {
@@ -1694,7 +1694,7 @@ rt.register({
       return cannotExec(command.split(/\s+/)[0]);
     },
     "exec([Ljava/lang/String;)Ljava/lang/Process;": (cmd: unknown[]) => cannotExec(String(cmd?.[0] ?? "")),
-    "loadLibrary0(Ljava/lang/Class;Ljava/lang/String;)V": driven(function* (c: JClass | null, n: string): Gen  { return loadLibrary(n, c?.ci?.owner ?? rt); }),
+    "loadLibrary0(Ljava/lang/Class;Ljava/lang/String;)V": function (c: JClass | null, n: string) { return loadLibrary(n, c?.ci?.owner ?? rt); },
   },
 });
 

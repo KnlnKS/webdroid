@@ -105,5 +105,5 @@ rt.register({ name: "android/os/Messenger", ctor: JMessenger, ifaces: ["android/
     "static readMessengerOrNullFromParcel(Landroid/os/Parcel;)Landroid/os/Messenger;": readMessenger,
     "static writeMessengerOrNullToParcel(Landroid/os/Messenger;Landroid/os/Parcel;)V": driven(function* (m: JMessenger | null, p: JParcel): Gen  { (yield vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", m?.binder ?? null)); }),
     "equals(Ljava/lang/Object;)Z": function (this: JMessenger, other: unknown) { return other instanceof JMessenger && this.binder === other.binder ? 1 : 0; },
-    "hashCode()I": driven(function* (this: JMessenger): Gen { return vcall(this.binder, "hashCode", "()I"); }),
+    "hashCode()I": function (this: JMessenger) { return vcall(this.binder, "hashCode", "()I"); },
 } });

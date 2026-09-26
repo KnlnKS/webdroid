@@ -43,8 +43,7 @@ export function removeOverlay(v: JView) {
 }
 
 /** ActivityThread closes leaked windows after destruction, without dismissing their dialogs. */
-export function detachContextOverlays(owner: JContext): void | Promise<void> { return rt.drive(detachContextOverlays$(owner)); }
-function* detachContextOverlays$(owner: JContext): Gen<void> {
+export const detachContextOverlays = driven(function* detachContextOverlays(owner: JContext): Gen<void> {
   for (const o of [...overlays]) {
     let context: unknown = o.view.ctx;
     const visited = new Set<unknown>();
@@ -58,7 +57,7 @@ function* detachContextOverlays$(owner: JContext): Gen<void> {
       context = context instanceof JContextWrapper ? context.base : null;
     }
   }
-}
+});
 
 // toast: plain shell-drawn banner (not a View)
 const toasts: { text: string; until: number }[] = [];
@@ -171,12 +170,12 @@ rt.register({
       this.menu = new JMenu();
     }),
     "getMenu()Landroid/view/Menu;": function (this: JPopupMenu) { return this.menu; },
-    "getMenuInflater()Landroid/view/MenuInflater;": driven(function* (this: JPopupMenu): Gen {
+    "getMenuInflater()Landroid/view/MenuInflater;": function (this: JPopupMenu) {
       const info = rt.link("android/view/MenuInflater");
       const m = new info.ctor();
       m.jctx = this.jctx;
       return m;
-    }),
+    },
     "inflate(I)V": driven(function* (this: JPopupMenu, id: number): Gen {
       const info = rt.link("android/view/MenuInflater");
       const m = new info.ctor();
@@ -186,7 +185,7 @@ rt.register({
     "setOnMenuItemClickListener(Landroid/widget/PopupMenu$OnMenuItemClickListener;)V": function (this: JPopupMenu, l: unknown) {
       this.clickL = l;
     },
-    "show()V": driven(function* (this: JPopupMenu): Gen {
+    "show()V": function (this: JPopupMenu) {
       const items = (this.menu?.items ?? []).filter((i: any) => i.visible).map((i: any) => ({ id: i.id, title: i.title }));
       showPopupMenu(this.anchor!, items, (id) => {
         const item = (this.menu?.items ?? []).find((i: any) => i.id === id);
@@ -194,7 +193,7 @@ rt.register({
           void vcallUncaught(this.clickL, "onMenuItemClick", "(Landroid/view/MenuItem;)Z", item);
         }
       });
-    }),
+    },
     "dismiss()V": () => {},
   },
 });

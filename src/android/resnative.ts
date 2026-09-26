@@ -582,11 +582,11 @@ rt.register({
       const v = this.vals[i];
       return v && (v.t === TV.REFERENCE || v.t === TV.ATTRIBUTE) ? v.d : v?.r ?? d;
     },
-    "getDrawable(I)Landroid/graphics/drawable/Drawable;": driven(function* (this: JTypedArray, i: number): Gen {
+    "getDrawable(I)Landroid/graphics/drawable/Drawable;": function (this: JTypedArray, i: number) {
       const v = this.vals[i];
       if (!v) return null;
       return loadDrawableRV(this.res, v, this.theme);
-    }),
+    },
     "getFont(I)Landroid/graphics/Typeface;": driven(function* (this: JTypedArray, i: number): Gen {
       const value = this.vals[i];
       if (!value) return null;

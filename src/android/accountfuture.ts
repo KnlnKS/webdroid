@@ -46,7 +46,7 @@ export function accountFuture(callback: unknown, handler: JHandler | null, value
   return future;
 }
 rt.register({ name: "webdroid/AccountFuture", ctor: JAccountFuture, ifaces: ["android/accounts/AccountManagerFuture"], methods: {
-  "getResult()Ljava/lang/Object;": driven(function* (this: JAccountFuture): Gen { return this.result(); }),
+  "getResult()Ljava/lang/Object;": function (this: JAccountFuture) { return this.result(); },
   "getResult(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": driven(function* (this: JAccountFuture, timeout: bigint, unit: unknown): Gen {
     if (this.pending && curThread === mainThread) throw rt.mkThrowable("java/lang/IllegalStateException", "AccountManagerFuture cannot block the main thread");
     const thread = curThread;

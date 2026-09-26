@@ -140,8 +140,7 @@ const tvAttr = attrTable(
   "drawableEnd", "fontFamily", "textAllCaps", "textColorHint", "inputType", "letterSpacing", "maxLength",
   "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth", "shadowColor", "shadowDx", "shadowDy", "shadowRadius", "textColorLink", "textCursorDrawable");
 
-function applyTextAppearance(tv: JTextView, res: Resources, styleId: number): unknown { return rt.drive(applyTextAppearance$(tv, res, styleId)); }
-function* applyTextAppearance$(tv: JTextView, res: Resources, styleId: number): Gen {
+const applyTextAppearance = driven(function* applyTextAppearance(tv: JTextView, res: Resources, styleId: number): Gen {
   if (!styleId) return;
   const look = (name: string) => resolveStyleValue(res, tv.theme, res.styleLookup(styleId, AID(name)));
   const ts = look("textSize");
@@ -161,11 +160,10 @@ function* applyTextAppearance$(tv: JTextView, res: Resources, styleId: number): 
   yield applyFontFamily(tv, res, look("fontFamily"));
   const caps = look("textAllCaps");
   if (caps) { tv.allCaps = !!rvInt(res, caps, 0); tv.capsSet = true; }
-}
+});
 /** `android:fontFamily` is either a system family name or a reference to a @font/ resource —
  *  a bare .ttf or a <font-family> XML. Apps ship their own fonts and name them this way. */
-function applyFontFamily(tv: JTextView, res: Resources, v: RV | null): unknown { return rt.drive(applyFontFamily$(tv, res, v)); }
-function* applyFontFamily$(tv: JTextView, res: Resources, v: RV | null): Gen {
+const applyFontFamily = driven(function* applyFontFamily(tv: JTextView, res: Resources, v: RV | null): Gen {
   if (!v) return;
   if (v.t === TV.REFERENCE && v.d) {
     const tf = (yield fontResource(res, v.d));
@@ -174,9 +172,8 @@ function* applyFontFamily$(tv: JTextView, res: Resources, v: RV | null): Gen {
   }
   const fam = rvString(res, v);
   if (fam) tv.paintT.tf = typefaceFor(fam);
-}
-export function applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: number): unknown { return rt.drive(applyTvStyle$(tv, set, defStyleAttr)); }
-function* applyTvStyle$(tv: JTextView, set: JAttrSet | null, defStyleAttr: number): Gen {
+});
+export const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: number): Gen {
   const res = tv.jres;
   if (!res) return;
   const ids = [
@@ -246,15 +243,14 @@ function* applyTvStyle$(tv: JTextView, set: JAttrSet | null, defStyleAttr: numbe
   if (cursor?.t === TV.REFERENCE) tv.cursorDrawableRes = cursor.d;
   if (tv.styleBits & 1) tv.paintT.fakeBold = true;
   if (tv.styleBits & 2) tv.paintT.tf = (() => { const t = new JTypeface(); t.family = tv.paintT.tf.family; t.italic = true; t.weight = tv.paintT.tf.weight; return t; })();
-}
-function textCursorDrawable(tv: JTextView): JDrawable | null | Promise<JDrawable | null> { return rt.drive(textCursorDrawable$(tv)); }
-function* textCursorDrawable$(tv: JTextView): Gen<JDrawable | null> {
+});
+const textCursorDrawable = driven(function* textCursorDrawable(tv: JTextView): Gen<JDrawable | null> {
   if (tv.cursorDrawableRes && tv.jres) {
     tv.cursorDrawable = (yield loadDrawable(tv.jres, tv.cursorDrawableRes, tv.theme));
     tv.cursorDrawableRes = 0;
   }
   return tv.cursorDrawable;
-}
+});
 function setTextShadow(this: JTextView, radius: number, dx: number, dy: number, color: number): unknown { return rt.drive(setTextShadow$.call(this, radius, dx, dy, color)); }
 function* setTextShadow$(this: JTextView, radius: number, dx: number, dy: number, color: number): Gen {
   this.shadowRadius = radius; this.shadowDx = dx; this.shadowDy = dy; this.shadowColor = color;
@@ -727,8 +723,7 @@ rt.register({
     ...textViewCtors<JButton>("buttonStyle", applyButtonDefaults),
   },
 });
-function applyButtonDefaults(b: JButton): unknown { return rt.drive(applyButtonDefaults$(b)); }
-function* applyButtonDefaults$(b: JButton): Gen {
+function applyButtonDefaults(b: JButton): void {
   b.clickable = true;
   // AOSP's Widget.Material.Button supplies these; they are DEFAULTS, not overrides. A style
   // that spoke for itself — every Material3 button is sentence-case with its own face — has
@@ -778,15 +773,14 @@ setFocusHook((v, on) => {
  * (SEARCH, GO, SEND, or none) is delivered as an ENTER key press to the view, which is what a
  * field that listens with an OnKeyListener rather than an editor-action listener receives.
  */
-export function editorAction(tv: JTextView, action: number): boolean | Promise<boolean> { return rt.drive(editorAction$(tv, action)); }
-function* editorAction$(tv: JTextView, action: number): Gen<boolean> {
+export const editorAction = driven(function* editorAction(tv: JTextView, action: number): Gen<boolean> {
   if (tv.editorActionL && (yield vcall(tv.editorActionL, "onEditorAction",
     "(Landroid/widget/TextView;ILandroid/view/KeyEvent;)Z", tv, action, null))) return true;
   if (action === 5 || action === 6 || action === 7) { if (tv === focusedEdit) focusEditText(null); return false; }
   rt.link("android/view/KeyEvent");
   for (const act of [0, 1]) (yield vcall(tv, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", (yield newObj("android/view/KeyEvent", "(II)V", act, 66))));
   return true;
-}
+});
 /** the IME action key on the focused field */
 export function fireEditorAction(): boolean | Promise<boolean> {
   const et = focusedEdit;
@@ -805,8 +799,7 @@ export function focusEditText(et: JEditText | null) {
   }
   invalidate();
 }
-export function editInput(text: string): unknown { return rt.drive(editInput$(text)); }
-function* editInput$(text: string): Gen {
+export const editInput = driven(function* editInput(text: string): Gen {
   if (!focusedEdit) return;
   focusedEdit.text = text;
   focusedEdit.rawText = text;
@@ -814,7 +807,7 @@ function* editInput$(text: string): Gen {
   focusedEdit.blinkStart = performance.now();
   requestLayout(focusedEdit);
   yield focusedEdit.notifyWatchers();
-}
+});
 
 // ── InputFilter + common implementations (maxLength, allCaps). Needed for EditText inflation.
 class JLengthFilter extends JObj { max = 0; }

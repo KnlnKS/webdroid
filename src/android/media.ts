@@ -193,7 +193,7 @@ rt.register({ name: "android/media/MediaMetadata", ctor: JMediaMetadata, ifaces:
   "containsKey(Ljava/lang/String;)Z": function (this: JMediaMetadata, key: string) { return +this.values.has(key); },
   "keySet()Ljava/util/Set;": function (this: JMediaMetadata) { return newStringSet(this.values.keys()); },
   "getText(Ljava/lang/String;)Ljava/lang/CharSequence;": function (this: JMediaMetadata, key: string) { return this.values.get(key) ?? null; },
-  "getString(Ljava/lang/String;)Ljava/lang/String;": driven(function* (this: JMediaMetadata, key: string): Gen { const value = this.values.get(key); return value == null ? null : csText(value); }),
+  "getString(Ljava/lang/String;)Ljava/lang/String;": function (this: JMediaMetadata, key: string) { const value = this.values.get(key); return value == null ? null : csText(value); },
   "getLong(Ljava/lang/String;)J": function (this: JMediaMetadata, key: string) { const value = this.values.get(key); return typeof value === "bigint" ? value : 0n; },
   "getBitmap(Ljava/lang/String;)Landroid/graphics/Bitmap;": function (this: JMediaMetadata, key: string) { return this.values.get(key) ?? null; },
   "getRating(Ljava/lang/String;)Landroid/media/Rating;": function (this: JMediaMetadata, key: string) { return this.values.get(key) ?? null; },

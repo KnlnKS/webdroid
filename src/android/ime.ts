@@ -191,8 +191,7 @@ class JBaseInputConnection extends JObj {
     return { editable, text, start: Math.max(0, start), end: Math.max(0, end) };
   }
 }
-function replaceAt(ic: JBaseInputConnection, ins: string, newCursor: number, compose: boolean): unknown { return rt.drive(replaceAt$(ic, ins, newCursor, compose)); }
-function* replaceAt$(ic: JBaseInputConnection, ins: string, newCursor: number, compose: boolean): Gen {
+const replaceAt = driven(function* replaceAt(ic: JBaseInputConnection, ins: string, newCursor: number, compose: boolean): Gen {
   const { editable, text, start, end } = (yield ic.content());
   if (!editable) return 0;
   let a = (yield vcall(editable, "getSpanStart", "(Ljava/lang/Object;)I", composing));
@@ -209,7 +208,7 @@ function* replaceAt$(ic: JBaseInputConnection, ins: string, newCursor: number, c
     invalidate();
   } finally { (yield vcall(ic, "endBatchEdit", "()Z")); }
   return 1;
-}
+});
 rt.register({
   name: "android/view/inputmethod/BaseInputConnection", ctor: JBaseInputConnection,
   ifaces: ["android/view/inputmethod/InputConnection"],
@@ -297,19 +296,19 @@ rt.register({
       "takeSnapshot()Landroid/view/inputmethod/TextSnapshot;"),
     ...noops("performHandwritingGesture(Landroid/view/inputmethod/HandwritingGesture;Ljava/util/concurrent/Executor;Ljava/util/function/IntConsumer;)V"),
     // TextAttribute only carries IME styling hints; the text edit is identical.
-    "commitText(Ljava/lang/CharSequence;ILandroid/view/inputmethod/TextAttribute;)Z": driven(function* (this: JBaseInputConnection, cs: unknown, p: number): Gen {
+    "commitText(Ljava/lang/CharSequence;ILandroid/view/inputmethod/TextAttribute;)Z": function (this: JBaseInputConnection, cs: unknown, p: number) {
       return vcall(this, "commitText", "(Ljava/lang/CharSequence;I)Z", cs, p);
-    }),
-    "setComposingText(Ljava/lang/CharSequence;ILandroid/view/inputmethod/TextAttribute;)Z": driven(function* (this: JBaseInputConnection, cs: unknown, p: number): Gen {
+    },
+    "setComposingText(Ljava/lang/CharSequence;ILandroid/view/inputmethod/TextAttribute;)Z": function (this: JBaseInputConnection, cs: unknown, p: number) {
       return vcall(this, "setComposingText", "(Ljava/lang/CharSequence;I)Z", cs, p);
-    }),
-    "setComposingRegion(IILandroid/view/inputmethod/TextAttribute;)Z": driven(function* (this: JBaseInputConnection, a: number, b: number): Gen {
+    },
+    "setComposingRegion(IILandroid/view/inputmethod/TextAttribute;)Z": function (this: JBaseInputConnection, a: number, b: number) {
       return vcall(this, "setComposingRegion", "(II)Z", a, b);
-    }),
+    },
     "closeConnection()V": driven(function* (this: JBaseInputConnection): Gen { (yield vcall(this, "finishComposingText", "()Z")); }),
     "static removeComposingSpans(Landroid/text/Spannable;)V": driven(function* (text: unknown): Gen  { (yield vcall(text, "removeSpan", "(Ljava/lang/Object;)V", composing)); }),
-    "static getComposingSpanStart(Landroid/text/Spannable;)I": driven(function* (text: unknown): Gen  { return vcall(text, "getSpanStart", "(Ljava/lang/Object;)I", composing); }),
-    "static getComposingSpanEnd(Landroid/text/Spannable;)I": driven(function* (text: unknown): Gen  { return vcall(text, "getSpanEnd", "(Ljava/lang/Object;)I", composing); }),
+    "static getComposingSpanStart(Landroid/text/Spannable;)I": function (text: unknown) { return vcall(text, "getSpanStart", "(Ljava/lang/Object;)I", composing); },
+    "static getComposingSpanEnd(Landroid/text/Spannable;)I": function (text: unknown) { return vcall(text, "getSpanEnd", "(Ljava/lang/Object;)I", composing); },
   },
 });
 
@@ -457,16 +456,14 @@ function mirrorInput() {
   inputEl.value = served.text;
   inputEl.setSelectionRange(served.start - served.offset, served.end - served.offset);
 }
-function extractedInput(session: InputSession, extracted: JExtractedText): unknown { return rt.drive(extractedInput$(session, extracted)); }
-function* extractedInput$(session: InputSession, extracted: JExtractedText): Gen {
+const extractedInput = driven(function* extractedInput(session: InputSession, extracted: JExtractedText): Gen {
   const text = (yield csText(extracted.text));
   if (extracted.partialStartOffset < 0) { session.text = text; session.offset = extracted.startOffset; }
   else session.text = session.text.slice(0, extracted.partialStartOffset - session.offset) + text + session.text.slice(extracted.partialEndOffset - session.offset);
   session.start = extracted.selectionStart + extracted.startOffset; session.end = extracted.selectionEnd + extracted.startOffset;
   mirrorInput();
-}
-function connectInput(view: JView): unknown { return rt.drive(connectInput$(view)); }
-function* connectInput$(view: JView): Gen {
+});
+const connectInput = driven(function* connectInput(view: JView): Gen {
   if (served) {
     const previous = served; served = null;
     yield vcall(previous.connection, "closeConnection", "()V");
@@ -482,7 +479,7 @@ function* connectInput$(view: JView): Gen {
   const extracted = (yield vcall(connection, "getExtractedText", "(Landroid/view/inputmethod/ExtractedTextRequest;I)Landroid/view/inputmethod/ExtractedText;", request, 1));
   if (extracted) yield extractedInput(session, extracted);
   mirrorInput(); return true;
-}
+});
 export const imeActive = () => !!focusedEdit || !!served && imeVisible;
 export const imeHasAction = () => !!focusedEdit || !!served && !(served.info.imeOptions & 0x40000000) && (served.info.imeOptions & 0xff) !== 1;
 export function imeInput(text: string, start = text.length, end = start, composing = false) {
@@ -534,21 +531,21 @@ export const imeAction = () => onMain(async () => {
 rt.register({
   name: "android/view/inputmethod/InputMethodManager", ctor: class extends JObj {},
   methods: {
-    "hideSoftInputFromWindow(Landroid/os/IBinder;I)Z": driven(function* (): Gen  { return imeMain(async () => {
+    "hideSoftInputFromWindow(Landroid/os/IBinder;I)Z": function () { return imeMain(async () => {
       if (served) await vcall(served.connection, "finishComposingText", "()Z");
       imeVisible = false; focusEditText(null); inputEl?.blur(); return 1;
-    }); }),
-    "showSoftInput(Landroid/view/View;I)Z": driven(function* (view: JView): Gen  { return imeMain(async () => {
+    }); },
+    "showSoftInput(Landroid/view/View;I)Z": function (view: JView) { return imeMain(async () => {
       if (!view || served?.view !== view && !await connectInput(view)) return 0;
       imeVisible = true; mirrorInput(); inputEl?.focus(); return 1;
-    }); }),
+    }); },
     "toggleSoftInput(II)V": () => { imeVisible = !imeVisible; if (imeVisible) inputEl?.focus(); else inputEl?.blur(); },
     "isActive()Z": () => served || focusedEdit ? 1 : 0,
     "isActive(Landroid/view/View;)Z": (view: unknown) => view != null && (view === served?.view || view === focusedEdit) ? 1 : 0,
     "getEnabledInputMethodList()Ljava/util/List;": () => newArrayList(),
     "getInputMethodList()Ljava/util/List;": () => newArrayList(),
     "getCurrentInputMethodSubtype()Landroid/view/inputmethod/InputMethodSubtype;": () => null,
-    "restartInput(Landroid/view/View;)V": driven(function* (view: JView): Gen  { return imeMain(async () => { if (view) await connectInput(view); }); }),
+    "restartInput(Landroid/view/View;)V": function (view: JView) { return imeMain(async () => { if (view) await connectInput(view); }); },
     "updateSelection(Landroid/view/View;IIII)V": (view: JView, start: number, end: number) => {
       if (served?.view === view) { served.start = start; served.end = end; mirrorInput(); }
     },
@@ -556,7 +553,7 @@ rt.register({
       if (served?.view === view) yield extractedInput(served, extracted);
     }),
     "updateCursorAnchorInfo(Landroid/view/View;Landroid/view/inputmethod/CursorAnchorInfo;)V": () => {},
-    "dispatchKeyEventFromInputMethod(Landroid/view/View;Landroid/view/KeyEvent;)V": driven(function* (view: JView, event: unknown): Gen  { return imeMain(async () => { await vcall(view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", event); }); }),
+    "dispatchKeyEventFromInputMethod(Landroid/view/View;Landroid/view/KeyEvent;)V": function (view: JView, event: unknown) { return imeMain(async () => { await vcall(view, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", event); }); },
     "startStylusHandwriting(Landroid/view/View;)V": () => {},
   },
 });

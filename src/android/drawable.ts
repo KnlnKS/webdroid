@@ -1489,20 +1489,17 @@ const AT = attrTable(
   "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
   "scaleGravity", "gravity", "orientation", "oneshot", "duration", "scaleWidth", "scaleHeight", "useIntrinsicSizeAsMinimum", "level",
   "pivotX", "pivotY", "translateX", "translateY", "scaleX", "scaleY", "rotation", "fromDegrees", "toDegrees");
-function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): JDrawable | Promise<JDrawable> { return rt.drive(loadDrawableXml$(res, bytes, theme)); }
-function* loadDrawableXml$(res: Resources, bytes: Uint8Array, theme: JTheme | null): Gen<JDrawable> {
+const loadDrawableXml = driven(function* loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): Gen<JDrawable> {
   const root = parseAXML(bytes);
   return (yield inflateDrawableNode(res, root, theme));
-}
+});
 /** an <item>/<inset>'s drawable: its android:drawable, else its first inline child */
-function itemDrawable(res: Resources, node: XmlNode, theme: JTheme | null): JDrawable | null | Promise<JDrawable | null> { return rt.drive(itemDrawable$(res, node, theme)); }
-function* itemDrawable$(res: Resources, node: XmlNode, theme: JTheme | null): Gen<JDrawable | null> {
+const itemDrawable = driven(function* itemDrawable(res: Resources, node: XmlNode, theme: JTheme | null): Gen<JDrawable | null> {
   const da = nodeAttr(res, node, AT.drawable);
   if (da) return (yield loadDrawableRV(res, da, theme));
   return node.children.length ? (yield inflateDrawableNode(res, node.children[0], theme)) : null;
-}
-export function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme | null): JDrawable | Promise<JDrawable> { return rt.drive(inflateDrawableNode$(res, node, theme)); }
-function* inflateDrawableNode$(res: Resources, node: XmlNode, theme: JTheme | null): Gen<JDrawable> {
+});
+export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Resources, node: XmlNode, theme: JTheme | null): Gen<JDrawable> {
   const get = (id: number, from = node) => resolveStyleValue(res, theme, nodeAttr(res, from, id));
   const dimen = (v: RV | null, fallback = 0) => rvDimen(res, resolveStyleValue(res, theme, v), fallback);
   const colorOf = (v: RV | null, d = 0) => {
@@ -1790,7 +1787,7 @@ function* inflateDrawableNode$(res: Resources, node: XmlNode, theme: JTheme | nu
         res.jobj, parser, parser, theme));
       return drawable;
   }
-}
+});
 /** rvInt for drawable XML attrs, which arrive unresolved: follows @references (via rvColor). */
 function xmlInt(res: Resources, v: RV | null, d: number): number {
   if (!v) return d;
@@ -1802,8 +1799,7 @@ const DPI: Record<string, number> = { l: 120, m: 160, h: 240, xh: 320, xxh: 480,
 /** dpi a res/ path's qualifier declares; an unqualified asset is taken at the device's own density */
 function densityOfPath(path: string): number { return DPI[DPI_RE.exec(path)?.[1] ?? ""] ?? device.densityDpi; }
 
-export function loadDrawableRV(res: Resources, v: RV | null, theme: JTheme | null): JDrawable | Promise<JDrawable> { return rt.drive(loadDrawableRV$(res, v, theme)); }
-function* loadDrawableRV$(res: Resources, v: RV | null, theme: JTheme | null): Gen<JDrawable> {
+export const loadDrawableRV = driven(function* loadDrawableRV$(res: Resources, v: RV | null, theme: JTheme | null): Gen<JDrawable> {
   if (!v || v.t === TV.NULL) return new JColorDrawable();
   if (v.t === TV.ATTRIBUTE) return (yield loadDrawableRV(res, theme?.lookup(v.d) ?? null, theme));
   if (v.t === TV.REFERENCE) return (yield loadDrawable(res, v.d, theme));
@@ -1817,10 +1813,9 @@ function* loadDrawableRV$(res: Resources, v: RV | null, theme: JTheme | null): G
     if (bytes) return (yield loadDrawableFile(res, v.s, bytes, theme));
   }
   return new JColorDrawable();
-}
+});
 
-export function loadDrawable(res: Resources, resId: number, theme: JTheme | null): JDrawable | Promise<JDrawable> { return rt.drive(loadDrawable$(res, resId, theme)); }
-function* loadDrawable$(res: Resources, resId: number, theme: JTheme | null): Gen<JDrawable> {
+export const loadDrawable = driven(function* loadDrawable$(res: Resources, resId: number, theme: JTheme | null): Gen<JDrawable> {
   if (!resId) return new JColorDrawable();
   const e = res.tbl(resId)?.entry(resId);
   if (!e) { rt.noteMissing("drawable 0x" + resId.toString(16)); return new JColorDrawable(); }
@@ -1834,10 +1829,9 @@ function* loadDrawable$(res: Resources, resId: number, theme: JTheme | null): Ge
     return (yield loadDrawableRV(res, { t: e.value.type, d: e.value.data }, theme));
   }
   return new JColorDrawable();
-}
+});
 
-function loadDrawableFile(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null): JDrawable | Promise<JDrawable> { return rt.drive(loadDrawableFile$(res, path, bytes, theme)); }
-function* loadDrawableFile$(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null): Gen<JDrawable> {
+const loadDrawableFile = driven(function* loadDrawableFile(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null): Gen<JDrawable> {
   if (path.endsWith(".xml")) return (yield loadDrawableXml(res, bytes, theme));
   if (path.endsWith(".9.png")) {
     const chunk = parseNinePatchChunk(bytes);
@@ -1864,15 +1858,14 @@ function* loadDrawableFile$(res: Resources, path: string, bytes: Uint8Array, the
     d.bmp = bmp;
   }
   return d;
-}
+});
 
 // ── ColorStateList loading (color/*.xml selectors)
 // Keyed by theme as well as id: a Material colour selector is a list of `?attr/` items, so
 // the same resource is a different list under every ThemeOverlay that reads it.
 const NO_THEME = {};
 const cslCache = new WeakMap<object, Map<number, JColorStateList>>();
-export function loadColorStateList(res: Resources, resId: number, theme: JTheme | null): JColorStateList | Promise<JColorStateList> { return rt.drive(loadColorStateList$(res, resId, theme)); }
-function* loadColorStateList$(res: Resources, resId: number, theme: JTheme | null): Gen<JColorStateList> {
+export const loadColorStateList = driven(function* loadColorStateList$(res: Resources, resId: number, theme: JTheme | null): Gen<JColorStateList> {
   if (!resId) return mkCsl(0);
   const key = theme ?? NO_THEME;
   let byId = cslCache.get(key);
@@ -1891,7 +1884,7 @@ function* loadColorStateList$(res: Resources, resId: number, theme: JTheme | nul
   } else out = mkCsl(-16777216);
   byId.set(resId, out);
   return out;
-}
+});
 function parseCslXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): JColorStateList {
   const root = parseAXML(bytes);
   const csl = new JColorStateList();

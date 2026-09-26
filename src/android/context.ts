@@ -251,10 +251,10 @@ export const contextMethods: NativeSpec["methods"] = {
   // API 31. Everything here draws into the one window, but the application context is not a
   // display context on a device and callers branch on that.
   "isUiContext()Z": function (this: JContext) { return this === this.$host.application ? 0 : 1; },
-  "getDisplay()Landroid/view/Display;": driven(function* (this: JContext): Gen {
+  "getDisplay()Landroid/view/Display;": function (this: JContext) {
     if (this === this.$host.application) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Context is not associated with a display");
     return display();
-  }),
+  },
   "createDisplayContext(Landroid/view/Display;)Landroid/content/Context;": function (this: JContext, display: unknown) { return contextForDisplay(this, display); },
   "createWindowContext(Landroid/view/Display;ILandroid/os/Bundle;)Landroid/content/Context;": function (this: JContext, display: unknown, type: number) { return contextForDisplay(this, display, type); },
   "createWindowContext(ILandroid/os/Bundle;)Landroid/content/Context;": driven(function* (this: JContext, type: number): Gen {
@@ -375,11 +375,11 @@ export const contextMethods: NativeSpec["methods"] = {
     return svcStart(this, intent, true);
   },
   "stopService(Landroid/content/Intent;)Z": (intent: JIntent) => svcStop(intent?.component),
-  "bindService(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z": driven(function* (this: JContext, intent: JIntent, connection: unknown, flags: number): Gen { return svcBind(this, intent, connection, flags); }),
-  "bindService(Landroid/content/Intent;ILjava/util/concurrent/Executor;Landroid/content/ServiceConnection;)Z": driven(function* (this: JContext, intent: JIntent, flags: number, executor: unknown, connection: unknown): Gen {
+  "bindService(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z": function (this: JContext, intent: JIntent, connection: unknown, flags: number) { return svcBind(this, intent, connection, flags); },
+  "bindService(Landroid/content/Intent;ILjava/util/concurrent/Executor;Landroid/content/ServiceConnection;)Z": function (this: JContext, intent: JIntent, flags: number, executor: unknown, connection: unknown) {
     if (!executor) throw rt.mkThrowable("java/lang/NullPointerException", "executor");
     return svcBind(this, intent, connection, flags, executor);
-  }),
+  },
   "unbindService(Landroid/content/ServiceConnection;)V": svcUnbind,
   "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;III)V": function (this: JContext, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); },
   "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;IIILandroid/os/Bundle;)V": function (this: JContext, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); },

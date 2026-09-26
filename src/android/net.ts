@@ -249,10 +249,10 @@ rt.register({
   name: "android/content/ContentUris", ctor: class extends JObj {},
   methods: {
     "static parseId(Landroid/net/Uri;)J": contentId,
-    "static appendId(Landroid/net/Uri$Builder;J)Landroid/net/Uri$Builder;": driven(function* (builder: unknown, id: bigint): Gen  {
+    "static appendId(Landroid/net/Uri$Builder;J)Landroid/net/Uri$Builder;": function (builder: unknown, id: bigint) {
       if (builder === null) throw rt.mkThrowable("java/lang/NullPointerException", "builder");
       return vcall(builder, "appendEncodedPath", "(Ljava/lang/String;)Landroid/net/Uri$Builder;", String(id));
-    }),
+    },
     "static withAppendedId(Landroid/net/Uri;J)Landroid/net/Uri;": driven(function* (u: JUri | null, id: bigint): Gen  {
       if (u === null) throw rt.mkThrowable("java/lang/NullPointerException", "contentUri");
       const builder = (yield vcall(u, "buildUpon", "()Landroid/net/Uri$Builder;"));
@@ -366,7 +366,7 @@ rt.register({
     NET_CAPABILITY_NOT_ROAMING: 18, NET_CAPABILITY_NOT_CONGESTED: 20, NET_CAPABILITY_NOT_SUSPENDED: 21,
     NET_CAPABILITY_TEMPORARILY_NOT_METERED: 25,
   },
-  methods: { "hasCapability(I)Z": driven(function* (c: number): Gen  { return networkCapabilities.has(c) ? netUp() : 0; }), "hasTransport(I)Z": (t: number) => (t === NET_TYPE ? 1 : 0),
+  methods: { "hasCapability(I)Z": function (c: number) { return networkCapabilities.has(c) ? netUp() : 0; }, "hasTransport(I)Z": (t: number) => (t === NET_TYPE ? 1 : 0),
     // no bandwidth estimate: the platform's "unspecified"
     "getLinkDownstreamBandwidthKbps()I": () => 0, "getLinkUpstreamBandwidthKbps()I": () => 0, "getSignalStrength()I": () => -2147483648,
     // the relay's network carries no transport-specific info (no WifiInfo for it to be)
@@ -563,7 +563,7 @@ rt.register({
     "getBackgroundDataSetting()Z": () => 1,
     "getDefaultProxy()Landroid/net/ProxyInfo;": () => null,
     "registerNetworkCallback(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;)V": (_r: unknown, cb: unknown) => registerCallback(cb),
-    "registerNetworkCallback(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;Landroid/os/Handler;)V": driven(function* (_r: unknown, cb: unknown, handler: unknown): Gen  { return registerOnHandler(cb, handler); }),
+    "registerNetworkCallback(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;Landroid/os/Handler;)V": function (_r: unknown, cb: unknown, handler: unknown) { return registerOnHandler(cb, handler); },
     "registerDefaultNetworkCallback(Landroid/net/ConnectivityManager$NetworkCallback;)V": registerCallback,
     "registerDefaultNetworkCallback(Landroid/net/ConnectivityManager$NetworkCallback;Landroid/os/Handler;)V": registerOnHandler,
     "requestNetwork(Landroid/net/NetworkRequest;Landroid/net/ConnectivityManager$NetworkCallback;)V": (_r: unknown, cb: unknown) => registerCallback(cb),

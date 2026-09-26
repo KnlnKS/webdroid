@@ -291,23 +291,21 @@ function concatText(parts: unknown[]): unknown {
   })();
 }
 const selectionStart = new JObj(), selectionEnd = new JObj();
-export function textSelection(text: unknown): [number, number] | Promise<[number, number]> { return rt.drive(textSelection$(text)); }
-function* textSelection$(text: unknown): Gen<[number, number]> {
+export const textSelection = driven(function* textSelection(text: unknown): Gen<[number, number]> {
   if (!text || typeof text === "string") return [-1, -1];
   return [(yield vcall(text, "getSpanStart", "(Ljava/lang/Object;)I", selectionStart)), (yield vcall(text, "getSpanStart", "(Ljava/lang/Object;)I", selectionEnd))];
-}
-export function setTextSelection(text: unknown, start: number, end: number): unknown { return rt.drive(setTextSelection$(text, start, end)); }
-function* setTextSelection$(text: unknown, start: number, end: number): Gen {
+});
+export const setTextSelection = driven(function* setTextSelection(text: unknown, start: number, end: number): Gen {
   yield vcall(text, "setSpan", "(Ljava/lang/Object;III)V", selectionStart, start, start, 0x222);
   yield vcall(text, "setSpan", "(Ljava/lang/Object;III)V", selectionEnd, end, end, 0x22);
-}
+});
 rt.register({ name: "android/text/Selection", ctor: class extends JObj {},
   statics: { SELECTION_START: selectionStart, SELECTION_END: selectionEnd },
   methods: {
     "static getSelectionStart(Ljava/lang/CharSequence;)I": driven(function* (text: unknown): Gen  { return ((yield textSelection(text)))[0]; }),
     "static getSelectionEnd(Ljava/lang/CharSequence;)I": driven(function* (text: unknown): Gen  { return ((yield textSelection(text)))[1]; }),
     "static setSelection(Landroid/text/Spannable;II)V": setTextSelection,
-    "static setSelection(Landroid/text/Spannable;I)V": driven(function* (text: unknown, index: number): Gen  { return setTextSelection(text, index, index); }),
+    "static setSelection(Landroid/text/Spannable;I)V": function (text: unknown, index: number) { return setTextSelection(text, index, index); },
     "static selectAll(Landroid/text/Spannable;)V": driven(function* (text: unknown): Gen  { return setTextSelection(text, 0, ((yield csText(text))).length); }),
     "static removeSelection(Landroid/text/Spannable;)V": driven(function* (text: unknown): Gen  {
       yield vcall(text, "removeSpan", "(Ljava/lang/Object;)V", selectionStart);
@@ -576,8 +574,7 @@ class JDynamicDrawableSpan extends JReplacementSpan {
   alignment = 0;
   cachedDrawable: WeakRef<JDrawable> | null = null;
 }
-function spanDrawable(span: JDynamicDrawableSpan): JDrawable | Promise<JDrawable> { return rt.drive(spanDrawable$(span)); }
-function* spanDrawable$(span: JDynamicDrawableSpan): Gen<JDrawable> {
+const spanDrawable = driven(function* spanDrawable(span: JDynamicDrawableSpan): Gen<JDrawable> {
   let drawable = span.cachedDrawable?.deref();
   if (!drawable) {
     drawable = (yield vcall(span, "getDrawable", "()Landroid/graphics/drawable/Drawable;"));
@@ -585,7 +582,7 @@ function* spanDrawable$(span: JDynamicDrawableSpan): Gen<JDrawable> {
     span.cachedDrawable = new WeakRef(drawable);
   }
   return drawable;
-}
+});
 rt.register({ name: "android/text/style/DynamicDrawableSpan", ctor: JDynamicDrawableSpan, sup: "android/text/style/ReplacementSpan",
   statics: { ALIGN_BOTTOM: 0, ALIGN_BASELINE: 1, ALIGN_CENTER: 2 }, fields: { mVerticalAlignment: "alignment" }, methods: {
     "<init>()V": function (this: JDynamicDrawableSpan) { this.alignment = 0; },
@@ -915,8 +912,7 @@ rt.register({
   },
 });
 
-function adjacentTextOffset(cs: unknown, offset: number, after: boolean): number | Promise<number> { return rt.drive(adjacentTextOffset$(cs, offset, after)); }
-function* adjacentTextOffset$(cs: unknown, offset: number, after: boolean): Gen<number> {
+const adjacentTextOffset = driven(function* adjacentTextOffset(cs: unknown, offset: number, after: boolean): Gen<number> {
   if (!after && (offset === 0 || offset === 1)) return 0;
   if (cs == null) return rt.npe();
   const thread = rt.th(), text = (yield csText(cs)); rt.st(thread);
@@ -936,24 +932,21 @@ function* adjacentTextOffset$(cs: unknown, offset: number, after: boolean): Gen<
     }
   }
   return offset;
-}
+});
 
-function textIndexOf(cs: unknown, needle: unknown, start = 0, end?: number): number | Promise<number> { return rt.drive(textIndexOf$(cs, needle, start, end)); }
-function* textIndexOf$(cs: unknown, needle: unknown, start = 0, end?: number): Gen<number> {
+const textIndexOf = driven(function* textIndexOf(cs: unknown, needle: unknown, start: number = 0, end?: number): Gen<number> {
   const thread = rt.th(), text = (yield csText(cs)); rt.st(thread);
   const part = (yield csText(needle)); rt.st(thread);
   if (!part.length) return start;
   const found = text.indexOf(part, start);
   return found > (end ?? text.length) - part.length ? -1 : found;
-}
+});
 
-export function writeText(text: unknown, parcel: JParcel): void | Promise<void> { return rt.drive(writeText$(text, parcel)); }
-function* writeText$(text: unknown, parcel: JParcel): Gen<void> {
+export const writeText = driven(function* writeText(text: unknown, parcel: JParcel): Gen<void> {
   if (text !== null && rt.iof(text, "android/text/Spanned")) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Spanned text parcel");
   writeInt(parcel, 1); writeString8(parcel, text === null ? null : (yield csText(text)));
-}
-export function readText(parcel: JParcel): string | null | Promise<string | null> { return rt.drive(readText$(parcel)); }
-function* readText$(parcel: JParcel): Gen<string | null> {
+});
+export function readText(parcel: JParcel) {
   const kind = readInt(parcel), text = readString8(parcel);
   if (text !== null && kind !== 1 && readInt(parcel) !== 0) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Spanned text parcel");
   return text;
@@ -983,8 +976,8 @@ rt.register({
   statics: { get CHAR_SEQUENCE_CREATOR() { return parcelCreator("java/lang/CharSequence", readText); } },
   methods: {
     "static writeToParcel(Ljava/lang/CharSequence;Landroid/os/Parcel;I)V": writeText,
-    "static getOffsetBefore(Ljava/lang/CharSequence;I)I": driven(function* (cs: unknown, offset: number): Gen  { return adjacentTextOffset(cs, offset, false); }),
-    "static getOffsetAfter(Ljava/lang/CharSequence;I)I": driven(function* (cs: unknown, offset: number): Gen  { return adjacentTextOffset(cs, offset, true); }),
+    "static getOffsetBefore(Ljava/lang/CharSequence;I)I": function (cs: unknown, offset: number) { return adjacentTextOffset(cs, offset, false); },
+    "static getOffsetAfter(Ljava/lang/CharSequence;I)I": function (cs: unknown, offset: number) { return adjacentTextOffset(cs, offset, true); },
     "static getLayoutDirectionFromLocale(Ljava/util/Locale;)I": localeDirection,
     "static getCapsMode(Ljava/lang/CharSequence;II)I": driven(function* (cs: unknown, off: number, requested: number): Gen  {
       if (off < 0) return 0;
@@ -1192,8 +1185,7 @@ type Replacement = SpanRec & { width: number; metrics: SpanMetrics; paint: JText
 function replacementSpans(cs: unknown): SpanRec[] {
   return cs instanceof JSpanned ? cs.spans.filter((s) => s.end > s.start && rt.iof(s.span, "android/text/style/ReplacementSpan")).sort((a, b) => a.start - b.start) : [];
 }
-export function measureReplacements(cs: unknown, paint: JTextPaint, spans = replacementSpans(cs)): Replacement[] | Promise<Replacement[]> { return rt.drive(measureReplacements$(cs, paint, spans)); }
-function* measureReplacements$(cs: unknown, paint: JTextPaint, spans = replacementSpans(cs)): Gen<Replacement[]> {
+export const measureReplacements = driven(function* measureReplacements(cs: unknown, paint: JTextPaint, spans: SpanRec[] = replacementSpans(cs)): Gen<Replacement[]> {
   const result: Replacement[] = [], thread = curThread;
   for (const span of spans) {
     const p = new JTextPaint(); copyPaint(paint, p); p.density = paint.density;
@@ -1206,7 +1198,7 @@ function* measureReplacements$(cs: unknown, paint: JTextPaint, spans = replaceme
     result.push({ ...span, width: Number(width), metrics, paint: p });
   }
   return result;
-}
+});
 function replacementWidth(text: string, paint: JTextPaint, replacements: Replacement[], start: number, end: number): number {
   let x = 0, position = start;
   for (const span of replacements) {
@@ -1554,13 +1546,11 @@ rt.register({ name: "android/text/StaticLayout", ctor: JStaticLayout, sup: "andr
 
     }),
 } });
-export function mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy = 0): JLayout | Promise<JLayout> { return rt.drive(mkSpannedLayout$(cs, p, w, mult, add, maxLines, includePad, breakStrategy)); }
-function* mkSpannedLayout$(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy = 0): Gen<JLayout> {
+export const mkSpannedLayout = driven(function* mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy: number = 0): Gen<JLayout> {
   const l = new JStaticLayout();
   return (yield setupSpannedLayout(l, cs, p, w, mult, add, maxLines, includePad, breakStrategy));
-}
-function setupSpannedLayout(l: JStaticLayout, cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy = 0): JStaticLayout | Promise<JStaticLayout> { return rt.drive(setupSpannedLayout$(l, cs, p, w, mult, add, maxLines, includePad, breakStrategy)); }
-function* setupSpannedLayout$(l: JStaticLayout, cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy = 0): Gen<JStaticLayout> {
+});
+const setupSpannedLayout = driven(function* setupSpannedLayout(l: JStaticLayout, cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy: number = 0): Gen<JStaticLayout> {
   l.text = spannedString(cs); l.src = cs; l.paint = p; l.width = Math.max(0, w);
   l.spacingMult = mult; l.spacingAdd = add; l.includePad = includePad; l.breakStrategy = breakStrategy;
   const spans = replacementSpans(cs);
@@ -1568,7 +1558,7 @@ function* setupSpannedLayout$(l: JStaticLayout, cs: unknown, p: JTextPaint, w: n
   l.layoutLines(maxLines);
   yield l.applyLineHeightSpans();
   return l;
-}
+});
 
 // Layout$Alignment enum + TextDirectionHeuristics
 mkEnumSet("android/text/Layout$Alignment", ["ALIGN_NORMAL", "ALIGN_OPPOSITE", "ALIGN_CENTER"]);
