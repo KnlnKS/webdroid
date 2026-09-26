@@ -57,16 +57,38 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   during reentrant callbacks. `String.valueOf(Object)` must box the primitive
   representation before virtual `toString`; otherwise Feeder OPML wrote an
   incorrect value.
-- Cold DEX methods use pooled handlers and direct operands; hot methods
-  promote to specialized JavaScript, with OSR only at cooperative loop
-  backedges. Generated specialized async source has a shared 32 MiB admission
-  limit. Seven matched Chrome pairs measured FitNotes startup 4.1% faster and
-  Mihon 14.4% faster, with interaction CPU effectively flat. This is workload
-  evidence, not a general speed claim. [DEX performance architecture](dex-performance-architecture.md)
-  records tier rules and rejected designs. Smaller CFG preparation steps cut
-  paired FitNotes cold compilation median from 390 to 342 ms. A separate
-  reaching-definition set-sharing change reduced source generation 3.8% for
-  FitNotes and 7.1% for Resy with byte-identical generated JS.
+- Compiled methods, cold handlers and framework natives run synchronously and
+  return a Promise only when a callee actually waits. Previously every
+  non-leaf method was an `async` function and most natives awaited `vcall`, so
+  each call allocated a Promise and every `HashMap.get` with a custom key, sort,
+  wrapper iterator, text layout and View draw suspended the whole Java stack.
+  Suspended frames join one continuation list per pending operation, so an
+  N-deep stack wakes in one microtask. The installed hot body omits resumption
+  (built on first suspension), which keeps it within V8's inlining budget.
+  [DEX performance architecture](dex-performance-architecture.md) records the
+  model, diagnostics and rejected designs. At 4x CPU throttle Mihon reader
+  scrolling went from 27 to about 44 presented frames/s, with input handling
+  per swipe falling from 158 to about 65 ms. Earlier measured steps: smaller
+  CFG preparation, reaching-definition set sharing, and direct cold operands.
+- Remaining suspensions in Compose apps are mostly legitimate: coroutine
+  worker parks, contended monitors and background SQLite/Firebase work. Probe
+  them by counting natives that return Promises before converting more code;
+  the counts, not async syntax, identify what suspends callers.
+- Measurement pitfalls: a V8 CPU profile's first sample carries the gap since
+  `Profiler.start` and inflated `(program)` to 15%; the true async overhead was
+  about 4% of busy time after the conversion (11% before). A forced full GC
+  immediately before a measured window deoptimized about 360 functions. On this
+  M4 Pro, native GL games reached 60 frames/s with a hardware GPU even at 4x
+  throttle; their lower SwiftShader rates measured software raster.
+- Launch: pure-JS SHA-256 of a whole APK for `PackageManager.requestChecksums`
+  cost about 800 ms of YouTube's launch (now native for inputs over 1 MiB);
+  inflating DEX entries with `DecompressionStream` and typing constants only
+  where a float reads them cut Mihon's navigation-to-first-draw from 1.77 to
+  1.57 s. Dispatching pointer events on arrival rather than at the next
+  animation frame cut Calculator tap-to-present p50 from about 70 to 55 ms.
+- YouTube full-lane frame rates depend on live content: a baseline run whose
+  tap landed on a sponsored result never opened the video and reported idle
+  60 fps ticks. Check that playback produced GL frames before comparing.
 - `DexLink.s` reuses immutable DEX strings; paged method/field caches avoid
   untouched ranges. Replacing them wholesale with Maps regressed TikTok
   startup. APK/XAPK loading preserves split precedence, distinct DEX entries,
