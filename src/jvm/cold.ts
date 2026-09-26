@@ -2,6 +2,7 @@ import type { Runtime } from "./runtime";
 import { perf } from "../perf";
 import { descToName } from "./abi";
 import { jvmProfiler } from "./profile";
+import { suspendWith } from "./suspend";
 
 /** Field names match a hot frame's (see Runtime.dfr), so a hot body can resume one (OSR). */
 export interface ColdFrame {
@@ -117,12 +118,10 @@ function suspend(method: ColdMethod, f: ColdFrame, receiver: unknown, pc: number
   const delivers = f.$w === 1;
   f.R.su(f.$th); f.$s = 1;
   if (jvmProfiler.enabled) jvmProfiler.suspension(method.name);
-  return pending.then((value) => {
+  return suspendWith(pending, (value, threw) => {
     f.R.st(f.$th);
+    if (threw) return step(method, f, receiver, pc, value);
     if (delivers) f.$t = value; else f.next = pc;
     return step(method, f, receiver, -1, undefined);
-  }, (error) => {
-    f.R.st(f.$th);
-    return step(method, f, receiver, pc, error);
   });
 }

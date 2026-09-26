@@ -6,6 +6,7 @@
 // present when virtual dispatch happens.
 
 import { yieldToLoop } from "./yield";
+import { suspendWith } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle, primElem, splitSig } from "./abi";
@@ -185,9 +186,7 @@ export class Runtime {
       catch (e) { if (resumed) this.su(thread); throw e; }
       if (step.done) { if (resumed) this.su(thread); return step.value; }
       const value = step.value;
-      if (value instanceof Promise) return value.then(
-        (v) => { this.st(thread); return this.driveStep(g, v, false, thread, true); },
-        (e) => { this.st(thread); return this.driveStep(g, e, true, thread, true); });
+      if (value instanceof Promise) return suspendWith(value, (v, threw) => { this.st(thread); return this.driveStep(g, v, threw, thread, true); }) as Promise<T>;
       input = value; threw = false;
     }
   }
@@ -201,13 +200,13 @@ export class Runtime {
     v: unknown[], th: unknown, t: unknown, u: unknown, ex: unknown): Promise<unknown> {
     this.su(th);
     const F = { v, next, r, $th: th, $s: 1, $t: t, $u: u, $ex: ex, val: undefined as unknown, e: false, x: undefined as unknown };
-    const resume = () => {
+    return suspendWith(pending, (value, threw) => {
+      if (threw) { F.e = true; F.x = value; } else F.val = value;
       const args = new Array<unknown>(fn.length);
       args[fn.length - 1] = F;
       this.rf = F;
       return fn.apply(self, args);
-    };
-    return pending.then((val) => { F.val = val; return resume(); }, (x) => { F.e = true; F.x = x; return resume(); });
+    });
   }
   onUncaught: ((e: unknown) => void) | null = null;
   fuel = 4096;
