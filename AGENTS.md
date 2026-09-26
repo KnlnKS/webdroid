@@ -37,6 +37,8 @@ bun run smoke apks/FitNotes.apk
 bun run fwtest
 PORT=4090 bun run server.ts
 WEBDROID_URL=http://localhost:4090 bun run textcmp FitNotes.apk
+WEBDROID_URL=http://localhost:4090 bun run e2e
+WEBDROID_URL=http://localhost:4090 bun run e2e --live
 WEBDROID_URL=http://localhost:4090 bun run e2e --full --jobs 1
 WEBDROID_URL=http://localhost:4090 bun run corpus
 bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
@@ -45,6 +47,7 @@ bun scripts/perfsum.ts tests/e2e/actual <baseline.json>
 - Use an unused port for this checkout; 4090 is an example. Serialize captures that share
   output directories and keep the code under capture stable. See the
   [harness guide](tests/e2e/README.md) for flow selection, output paths and recording.
+  `bun run e2e` is the reproducible gate; `--live` adds flows that depend on network content.
 - Typecheck includes `noUnusedLocals` and builds the Wasm core with Zig 0.16. Generated core
   blobs and the sql.js build are not committed; Bun preloads their builders and tests use
   ReleaseSafe. The server builds `vendor/framework-res.apk` when it is missing.

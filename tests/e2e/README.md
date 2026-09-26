@@ -19,42 +19,37 @@ already be serving the default port. Run captures sequentially: they share outpu
 `adb` may be absent from `PATH` entirely. It reads `golden/`, drives webdroid over Playwright,
 and writes `actual/` + `report/index.html`. Every flow runs in its own headless browser and
 `--jobs N` (default: at most four for the full lane) bounds how many run at once; each flow is scored in a
-subprocess as soon as it has captured. The serialized 13-flow matrix has taken 13–16 minutes;
+subprocess as soon as it has captured. The serialized full matrix has taken 13–16 minutes;
 live network and video flows dominate that cost.
 
 Recording new goldens is a separate, manual step (below).
 
-`bun run e2e` is the default quick test for all 13 flows and now runs every step in every
-flow. Six fixed-input flows advance Android timers logically where that preserves behavior;
-native GL games remain on real monotonic time. Seven live flows use per-step readiness checks
-and short observation samples instead of the full recorder's long dwell windows. The fast
-pass keeps process diagnostics and a UI hierarchy at every step, and a frame hash instead of
-PNG readback except at named Android visual checkpoints. Missing required text targets,
-unreached states, wedged main loops, missing process diagnostics and timeouts fail the quick
-test. Live missing APIs, native requirements, runtime errors and browser errors are reported
-as observed gaps. Inspect `actual-fast/<flow>/run.json` and each step's `.ui.json` after a
-failure; the quick pass does not rerun a failed flow.
+`bun run e2e` is the quick gate. By default it runs the flows reproducible from the repository
+and local APKs alone (`clock: "controlled"` or `"pinned"`); `--live`, or naming a flow, adds the
+flows that depend on live network content. Controlled flows advance Android time logically and
+the harness pins `Date` and seeds `Math.random`, so their UI trees and checkpoint images repeat
+run to run; native GL games stay on real monotonic time. Live flows use per-step readiness
+checks and short observation samples instead of the full recorder's long dwell windows.
 
-After correcting Lichess launch readiness, two five-job all-step passes took 61.2 and 61.9
-seconds, with all 13 flows passing. The quick lane defaults to at most five jobs and starts
-longer flows first using prior run durations when available.
-Motion frame rates are informational in parallel runs; use `--jobs 1` for their frame-rate gates. Eight fast flows have Android
-visual checkpoints. Those compare the launch or core result where references exist; later
-live steps are semantic checks and do not claim Android visual parity.
+The quick pass keeps process diagnostics and a UI hierarchy at every step, and a frame hash
+instead of PNG readback except at named Android visual checkpoints. Missing required text
+targets, unreached states, wedged main loops, missing process diagnostics, timeouts, motion
+checkpoints that presented no frames and aborted flows fail it; an exception in one flow is
+recorded as that flow's failure and never discards the others. For live flows, missing APIs,
+native requirements, runtime errors and browser errors are reported as observed gaps. Inspect
+`actual-fast/<flow>/run.json` and each step's `.ui.json` after a failure; the quick pass does
+not rerun a failed flow. It defaults to at most five jobs and starts longer flows first using
+prior run durations when available. `actual-fast/summary.json` distinguishes `compared`,
+`smoke`, `observed`, `failed` and `not-selected`.
+
+Frame rates are recorded (`fps`, `glFps`, `presentFps`) and flagged `SLOW` below a flow's
+`minFps` under `--jobs 1`, but never fail the quick gate: a rate measured beside other browsers
+or background load measures the host. Use `scripts/perf-browser.ts` (below) for performance.
 Flappy Bird and Doodle Jump remain smoke-only because the available API 33 ARM64 emulator
-cannot install their ARM32 native libraries. Three live flows lack stable Android
-references. `actual-fast/summary.json` distinguishes `compared`, `smoke`, `observed`, `failed`,
-and `not-selected` and records visual limits, Android API versions, errors, and observed gaps.
-Resy's Android launch reference includes an optional upstream alert, so its quick flow uses
-semantic onboarding, search and venue checks. Live runtime gaps remain reported diagnostics,
-not parity evidence. Six or more jobs caused live flow failures on this machine. The serialized
-full lane remains available for step-by-step Android pixel analysis.
-
-`bun run test:focused -- <paths>` selects dependent Bun tests through the TypeScript import graph,
-then selects fast flows from `tests/e2e/coverage-index.json`. `--base <revision>` includes committed,
-staged, unstaged, and untracked changes. Missing, partial, stale-schema, changed-APK, uncovered, and
-runtime-root inputs expand to all deterministic flows. Refresh the compact index only with a clean,
-successful `bun run e2e --coverage`; the command refuses partial flow selection.
+cannot install their ARM32 native libraries. Visual checkpoints compare the launch or core
+result where references exist; later live steps are semantic checks and do not claim Android
+visual parity. Resy's Android launch reference includes an optional upstream alert, so its
+quick flow uses semantic onboarding, search and venue checks.
 
 ### Running one flow
 
@@ -63,14 +58,15 @@ bun run e2e --test fitnotes           # just that flow
 bun run e2e --test mihon              # prefix match: both mihon flows
 bun run e2e --test fitnotes,mihon-app # comma-separated
 bun run e2e fitnotes                  # bare name works too
-bun run e2e --jobs 1                  # one browser at a time: apply motion frame-rate gates
+bun run e2e --live                    # also the live-network flows
+bun run e2e --jobs 1                  # one browser at a time
 bun run e2e --list                    # what flows exist
 bun run e2e --full --shots            # also save every distinct frame per step
 ```
 
 `--full` walks every configured flow. `--record` captures Android references and `--diff`
 rescores an existing full capture without launching a browser. `--test` selects a flow in
-each mode. `--coverage` collects the six deterministic flows only.
+each mode.
 
 `WEBDROID_JS_FLAGS='--no-sparkplug --no-maglev'` opts either webdroid driver into a controlled
 V8-tier experiment. Leave it unset when measuring stock-browser behavior.
@@ -80,8 +76,7 @@ A flow with no `golden/<flow>/manifest.json` runs in **smoke mode**: every step 
 the console prints a smoke summary, and nothing is scored or written to the report. A step
 with a `sample` or sampled `live` wait (a game loop never settles) is captured at its declared
 logical or real instant; `tapAt` takes `repeat`/`everyMs` for a burst of taps as one step, and
-`Flow.minFps` flags a motion sample as `SLOW` — only under
-`--jobs 1`, because a frame rate measured beside six other browsers measures the host.
+`Flow.minFps` flags a motion sample as `SLOW` under `--jobs 1` (informational).
 `run.json` records the `jobs` a run used. A partial run replaces `report/index.html` with only
 the flows it ran, and says so.
 
@@ -228,7 +223,6 @@ through `?statusBarDp=`, including child processes, and records it in `run.json`
 rejects mismatched insets rather than shifting, stretching or masking the app image. Normal
 browser sessions still default to zero status-bar height. Both visual thresholds and goldens
 remain independent of this capture profile.
-Coverage screen identities include the inset, so a geometry change also invalidates focused-test coverage.
 
 - **content** is the target metric: tolerant mismatch over the union of
   non-background pixels. A blank rendering cannot earn a low score by

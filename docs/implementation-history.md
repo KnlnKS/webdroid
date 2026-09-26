@@ -13,12 +13,32 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   `newErrors`, `nativeRequired`, draw/layout/GL errors, advancing `wd.ticks` and
   completed presentation. Child diagnostics may arrive after the first frame;
   label unavailable snapshots instead of treating them as clean.
-- The fast E2E lane executes every action in 13 flows with selected visual
-  checkpoints. Two five-job runs passed in 61.2 and 61.9 seconds. Use the
-  serialized full lane for pixels and diagnostics, and one visible, uncontended
-  browser for frame-rate gates. Guest instructions, EGL swaps, decoded frames
-  and browser presentations measure different work. Live content and tracing
-  can change timing. `settleDelayMs` bounds work rather than forcing sleep.
+- The quick E2E gate (`bun run e2e`) runs the seven flows reproducible from
+  local inputs; `--live` adds the seven network-dependent flows, which mixed
+  upstream variance into every earlier pass/fail (Lichess readiness and Resy
+  search timed out in the baseline all-flow run). Frame-rate thresholds are
+  reported, not gated: under unrelated load Flappy Bird's `--jobs 1` title fell
+  below 25/s with correct behavior. Use the serialized full lane for pixels and
+  diagnostics and `perf-browser` for rates. Guest instructions, EGL swaps,
+  decoded frames and browser presentations measure different work. Live content
+  and tracing can change timing. `settleDelayMs` bounds work rather than forcing sleep.
+- Test determinism findings: `mem_init` freed image pages without clearing them,
+  so a reserve after an A32/A64 switch returned stale bytes (exposed only by
+  randomized unit order). `readProcesses` waited two seconds per step for `wd` in
+  frames that can never define it. Android-visible animation, drawing and
+  scroller time read `performance.now` while `ValueAnimator` and `SystemClock`
+  read guest time; unifying them on `uptimeMillis` made three identical FitNotes
+  quick runs produce identical UI trees and images. The controlled clock still
+  advances to due timers while `drive` waits on real work, so virtual time moved
+  per step depends on host speed: CalculatorM's `=` ripple fade differs by up to
+  17/255 between runs. Making it host-independent needs the main queue to
+  distinguish runnable jobs from jobs parked on guest timers.
+- Komikku's flow, added at `c0b3684c`, reached every step and wrote its backup
+  there; at `9ccf288c` onboarding stays on its first page and launch reports
+  missing `OffsetDateTime.now(ZoneId)` and DOM methods. Bisection marks merge
+  `20f5ba1a` (both parents pass), so the break comes from combining the corpus
+  and main branches. The flow is itself timing-sensitive around the storage
+  step: single runs of passing commits occasionally failed.
 - Full capture fingerprints include browser action overrides and reference
   geometry; Android reference fingerprints exclude browser-only overrides.
   Reject stale or mismatched captures. Android recording stages a complete
