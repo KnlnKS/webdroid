@@ -22,16 +22,18 @@ beforeAll(async () => {
 });
 afterAll(async () => { await browser?.close(); server?.stop(true); });
 
+type Probes = typeof import("./fixtures/browser/index");
+
 /** A fixture's probe result, from a fresh page: the runtime's globals are per realm. */
-async function probe(name: string): Promise<any> {
+async function probe<K extends keyof Probes>(name: K): Promise<Awaited<ReturnType<Probes[K]>>> {
   const page = await browser.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   try {
     await page.goto(server.url.href);
-    const result = await page.evaluate(([url, name]) => import(url).then((module) => module[name]()), ["/index.js", name]);
+    const result: unknown = await page.evaluate(([url, name]) => import(url).then((module) => module[name]()), ["/index.js", name]);
     expect(errors).toEqual([]);
-    return result;
+    return result as Awaited<ReturnType<Probes[K]>>;
   } finally { await page.close(); }
 }
 

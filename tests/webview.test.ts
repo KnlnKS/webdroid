@@ -8,6 +8,23 @@ let browser: Browser;
 beforeAll(async () => { browser = await chromium.launch({ headless: true }); });
 afterAll(async () => { await browser?.close(); });
 
+const renderer = "http://renderer.example:8443";
+
+/** A renderer page serving `html` as webdroid rewrites it for `upstream`, with the bridge context the
+ *  shell injects. The bridge hides `__wdWebView`, so tests read the same object as `probeContext`. */
+async function rendererPage(path: string, html: string, upstream: string, context: { id: string | null; page: string }, isolated = false): Promise<Page> {
+  const page = await browser.newPage();
+  await page.route(`${renderer}/**`, async route => new URL(route.request().url()).pathname === "/webview-call"
+    ? route.fulfill({ json: { value: {} } })
+    : route.fulfill({ contentType: "text/html", body: await webDocument(html, upstream, isolated) }));
+  await page.addInitScript((context) => {
+    Object.defineProperty(window, "__wdWebView", { value: context, configurable: true });
+    Object.defineProperty(window, "probeContext", { value: context });
+  }, context);
+  await page.goto(renderer + path);
+  return page;
+}
+
 describe("WebView generated documents", () => {
   const source = "https://upstream.example/dir/page?q=1&b=2";
   const cases = [
@@ -83,21 +100,8 @@ describe("WebView generated documents", () => {
 
 describe("WebView history", () => {
   const source = "https://upstream.example/dir/page?initial=1";
-  const renderer = "http://renderer.example:8443";
-
-  async function fixture(enabled = true, base = '<base href="/app/">') {
-    const page = await browser.newPage();
-    await page.route(`${renderer}/**`, async route => new URL(route.request().url()).pathname === "/webview-call"
-      ? route.fulfill({ json: { value: {} } })
-      : route.fulfill({ contentType: "text/html", body: await webDocument(`<!doctype html>${base}<title>History probe</title>`, source) }));
-    await page.addInitScript(({ enabled, source }) => {
-      const context = { id: enabled ? "history-probe" : null, page: source };
-      Object.defineProperty(window, "__wdWebView", { value: context, configurable: true });
-      Object.defineProperty(window, "historyContext", { value: context });
-    }, { enabled, source });
-    await page.goto(`${renderer}/dir/page?initial=1`);
-    return page;
-  }
+  const fixture = (enabled = true, base = '<base href="/app/">') => rendererPage("/dir/page?initial=1",
+    `<!doctype html>${base}<title>History probe</title>`, source, { id: enabled ? "history-probe" : null, page: source });
 
   for (const url of ["https://upstream.example/app/next?q=2#part", "next?q=2#part", "//upstream.example/app/next?q=2#part"]) {
     test.concurrent(`isolated WebView history accepts ${url}`, async () => {
@@ -106,7 +110,7 @@ describe("WebView history", () => {
         expect(await page.evaluate(url => {
           const length = history.length;
           history.pushState({ step: 2 }, "", url);
-          const context = Object.getOwnPropertyDescriptor(window, "historyContext")?.value;
+          const context = Object.getOwnPropertyDescriptor(window, "probeContext")?.value;
           return { url: location.href, page: context.page, state: history.state, added: history.length - length };
         }, url)).toEqual({ url: `${renderer}/app/next?q=2#part`, page: "https://upstream.example/app/next?q=2#part", state: { step: 2 }, added: 1 });
       } finally { await page.close(); }
@@ -144,7 +148,7 @@ describe("WebView history", () => {
         const replaced = [location.pathname, history.state.step, history.length - length];
         const popped = new Promise<void>(resolve => addEventListener("popstate", () => resolve(), { once: true }));
         history.back(); await popped;
-        const context = Object.getOwnPropertyDescriptor(window, "historyContext")?.value;
+        const context = Object.getOwnPropertyDescriptor(window, "probeContext")?.value;
         return { replaced, url: location.href, page: context.page };
       })).toEqual({ replaced: ["/app/two", 2, 1], url: `${renderer}/dir/page?initial=1`, page: source });
     } finally { await page.close(); }
@@ -162,7 +166,7 @@ describe("WebView history", () => {
           () => Reflect.apply(history.pushState, history, [{}, "", Symbol()]),
         ];
         const errors = calls.map(call => { try { call(); return "accepted"; } catch (error) { return error instanceof Error ? error.name : "other"; } });
-        return { errors, url: location.href, page: Object.getOwnPropertyDescriptor(window, "historyContext")?.value.page };
+        return { errors, url: location.href, page: Object.getOwnPropertyDescriptor(window, "probeContext")?.value.page };
       })).toEqual({ errors: ["SecurityError", "SecurityError", "DataCloneError", "TypeError", "TypeError"], url: `${renderer}/dir/page?initial=1`, page: source });
     } finally { await page.close(); }
   });
@@ -194,17 +198,7 @@ describe("WebView history", () => {
 
 describe("WebView location", () => {
   const upstream = "https://upstream.example:9443/dir/page?q=1#part";
-  const renderer = "http://renderer.example:8443";
-
-  async function fixture(html = "") {
-    const page = await browser.newPage();
-    await page.route(`${renderer}/**`, async route => new URL(route.request().url()).pathname === "/webview-call"
-      ? route.fulfill({ json: { value: {} } })
-      : route.fulfill({ contentType: "text/html", body: await webDocument(`<!doctype html>${html}`, upstream, true) }));
-    await page.addInitScript(page => Object.defineProperty(window, "__wdWebView", { configurable: true, value: { id: "location-probe", page } }), upstream);
-    await page.goto(`${renderer}/dir/page?q=1#part`);
-    return page;
-  }
+  const fixture = (html = "") => rendererPage("/dir/page?q=1#part", `<!doctype html>${html}`, upstream, { id: "location-probe", page: upstream }, true);
 
   const evaluate = (page: Page, source: string) => page.evaluate(source => (0, eval)(source), webScript(source));
 
