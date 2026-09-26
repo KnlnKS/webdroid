@@ -9,7 +9,7 @@ import { yieldToLoop } from "./yield";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle, primElem, splitSig } from "./abi";
-import { compileClass, compileLazyMethod, methodKey, type CompiledCtor } from "./compiler";
+import { compileClass, compileLazyMethod, methodKey, type Cells, type CompiledCtor } from "./compiler";
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
 import { jvmCoverage } from "./coverage";
@@ -87,7 +87,7 @@ export class ClassInfo {
   jclass: any = null;                 // java.lang.Class instance (lazy, made by jlang)
   compiled = false;
   /** method bodies not yet generated (see compiler emitLazy); undefined when eager */
-  lazy?: { m: EncodedMethod; mangled: string; isStatic: boolean; name: string; desc: string }[];
+  lazy?: { m: EncodedMethod; mangled: string; isStatic: boolean; name: string; desc: string; stub: Cells & ((...a: unknown[]) => unknown) }[];
   defaultsCopied = false;         // interface default methods already copied down
   constructor(public name: string, public owner?: Runtime) {}
   get isInterface(): boolean { return (this.flags & ACC.INTERFACE) !== 0; }
@@ -169,6 +169,24 @@ export class Runtime {
   proxyMethod: ((obj: unknown, name: string, desc: string) => ((...a: unknown[]) => unknown) | null) | null = null;
   st: (t: unknown) => void = () => {};
   su: (t: unknown) => void = () => {};
+  /** The frame a resumption is re-entering a compiled method with (see dfr). */
+  rf: unknown = null;
+  /**
+   * A compiled frame whose callee suspended: release the thread, and once `pending` settles
+   * re-enter `fn` with the saved frame, continuing at resume point `r` (or at `next` when 0).
+   */
+  dfr(fn: (...a: unknown[]) => unknown, self: unknown, pending: Promise<unknown>, r: number, next: number,
+    v: unknown[], th: unknown, t: unknown, u: unknown, ex: unknown): Promise<unknown> {
+    this.su(th);
+    const F = { v, next, r, $th: th, $s: 1, $t: t, $u: u, $ex: ex, val: undefined as unknown, e: false, x: undefined as unknown };
+    const resume = () => {
+      const args = new Array<unknown>(fn.length);
+      args[fn.length - 1] = F;
+      this.rf = F;
+      return fn.apply(self, args);
+    };
+    return pending.then((val) => { F.val = val; return resume(); }, (x) => { F.e = true; F.x = x; return resume(); });
+  }
   onUncaught: ((e: unknown) => void) | null = null;
   fuel = 4096;
 
@@ -257,8 +275,9 @@ export class Runtime {
         const info = this.linfo(m.cls);
         if (info.stub) throw R.ncdfe(info.name);
         R.ensureCompiled(info);
-        const fn = info.ctor.prototype[mangleMethod(m.name, dex.methodDesc(i))];
+        const fn: Cells | undefined = info.ctor.prototype[mangleMethod(m.name, dex.methodDesc(i))];
         if (!fn) throw R.unimplemented(`${info.name}.${m.name}${dex.methodDesc(i)} (direct)`);
+        fn.$c?.push(this.dp, i);
         return (this.dp[i] = fn);
       },
       rsf(i, from) {

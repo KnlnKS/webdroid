@@ -100,20 +100,29 @@ function installLazy(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   const i = info.lazy!.length;
-  info.lazy!.push({ m, mangled, isStatic, name, desc });
   const C: CompiledCtor = info.ctor;
   let entry: JvmFunction | undefined;
-  (isStatic ? C : C.prototype)[mangled] = function (this: unknown, ...args: unknown[]) {
+  const stub: JvmFunction & Cells = function (this: unknown, ...args: unknown[]) {
     entry ??= R.lz(C, i);
     return entry.apply(this, args);
   };
+  stub.$c = [];
+  info.lazy!.push({ m, mangled, isStatic, name, desc, stub });
+  (isStatic ? C : C.prototype)[mangled] = stub;
 }
 
 export type CompiledCtor = { $i: ClassInfo; prototype: Record<string, unknown> } & Record<string, unknown>;
 type JvmFunction = (this: unknown, ...args: unknown[]) => unknown;
-interface CompiledMethod {
-  invoke: JvmFunction;
-  resume?: (frame: ColdFrame, receiver: unknown) => Promise<unknown>;
+/** Direct-call caches (`D.dp`) holding an interim entry, as flat [cache, index] pairs. */
+export type Cells = { $c?: unknown[] };
+
+/** Point the direct-call caches holding `from` at `to`, so they stop paying for the indirection. */
+function retarget(from: JvmFunction & Cells, to: JvmFunction & Cells): void {
+  const cells = from.$c;
+  if (!cells) return;
+  for (let k = 0; k < cells.length; k += 2) (cells[k] as unknown[])[cells[k + 1] as number] = to;
+  from.$c = undefined;
+  if (to.$c) to.$c.push(...cells);
 }
 
 export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFunction {
@@ -122,36 +131,32 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
   const target = rec.isStatic ? C : C.prototype;
   const code = dex.code(rec.m.codeOff);
   const prepare = () => prepareDexMethod(dex, code, rec.desc, rec.isStatic, profileName);
-  const source = (prepared: PreparedMethod, resumable: boolean, count: boolean) =>
-    emitMethod(R, dex, info, rec.m, prepared, count, resumable) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
-  const compile = (src: string, resumable: boolean, paramCount = 0): CompiledMethod => {
+  const source = (prepared: PreparedMethod, count: boolean) =>
+    emitMethod(R, dex, info, rec.m, prepared, count) + `\n//# sourceURL=wd/${info.name}/${rec.name}.js`;
+  const compile = (src: string): JvmFunction => {
     const started = jvmProfiler.enabled ? performance.now() : 0;
     new Function("C", "D", "R", "S", "P", src)(C, R.dexLink(dex), R, info.superInfo?.ctor ?? undefined, jvmProfiler);
     if (jvmProfiler.enabled) jvmProfiler.add(profileName, "jsCompile", performance.now() - started);
     const installed = target[rec.mangled];
     if (typeof installed !== "function") throw new Error("invalid compiled method");
-    const invoke = installed as JvmFunction;
-    if (!resumable) return { invoke };
-    return { invoke, resume: (frame, receiver) => {
-      const args = new Array<unknown>(paramCount + 1);
-      args[paramCount] = frame;
-      return Promise.resolve(invoke.apply(receiver, args));
-    } };
+    return installed as JvmFunction;
+  };
+  const install = (fn: JvmFunction): JvmFunction => {
+    retarget(rec.stub, fn);
+    return fn;
   };
   const prepared = prepare();
-  const paramCount = prepared.params.length;
   let cold = emitColdMethod(R, dex, info, code, rec.isStatic, rec.desc, rec.name, prepared);
-  if (!cold) return compile(source(prepared, false, true), false).invoke;
-  if (jvmProfiler.tier === "js") return compile(source(prepared, false, false), false).invoke;
-  // Captured direct/interface entries keep this cell; new virtual calls find the hot body.
-  let calls = 0, hot: CompiledMethod | undefined;
+  if (!cold) return install(compile(source(prepared, true)));
+  if (jvmProfiler.tier === "js") return install(compile(source(prepared, false)));
+  let calls = 0, hot: JvmFunction | undefined;
   let owner = R;
   while (owner.parent) owner = owner.parent;
-  const promote = (resumable: boolean): CompiledMethod | undefined => {
-    if (hot) return !resumable || hot.resume ? hot : undefined;
+  const promote = (): JvmFunction | undefined => {
+    if (hot) return hot;
     // Rebuild preparation only for methods that actually promote. Retaining decoded CFGs for
-    // every cold async method costs substantially more heap than the saved promotion work.
-    const start = performance.now(), src = source(prepare(), resumable, false);
+    // every cold method costs substantially more heap than the saved promotion work.
+    const start = performance.now(), src = source(prepare(), false);
     if (jvmProfiler.enabled) jvmProfiler.bytes(profileName, src.length);
     if (owner.hotSourceBytes + src.length > 32 * 1024 * 1024) {
       calls = -Infinity;
@@ -159,38 +164,44 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
       perf.compileMs += performance.now() - start;
       return undefined;
     }
-    const compiled = compile(src, resumable, paramCount);
+    hot = compile(src);
     owner.hotSourceBytes += src.length;
     perf.compileMs += performance.now() - start;
-    hot = compiled; perf.hotMethods++;
+    perf.hotMethods++;
     if (jvmProfiler.enabled) jvmProfiler.promoted(profileName);
     cold = null;
-    return compiled;
+    retarget(invoke, hot);
+    return hot;
   };
   if (jvmProfiler.tier !== "cold") {
+    // On-stack replacement: the hot body resumes the cold frame at its backedge.
     cold.promote = (frame: ColdFrame, receiver: unknown) => {
-      const compiled = promote(true);
-      if (!compiled?.resume) return null;
+      const compiled = promote();
+      if (!compiled) return undefined;
       perf.osrMethods++;
-      return compiled.resume(frame, receiver);
+      const args = new Array<unknown>(compiled.length);
+      args[compiled.length - 1] = frame;
+      R.rf = frame;
+      return { value: compiled.apply(receiver, args) };
     };
   }
-  const invoke = function(this: unknown, ...args: unknown[]) {
-    if (hot) return hot.invoke.apply(this, args);
+  const invoke: JvmFunction & Cells = function(this: unknown, ...args: unknown[]) {
+    if (hot) return hot.apply(this, args);
     if (++calls < 32 || jvmProfiler.tier === "cold") {
       if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
       return runCold(cold!, this, args);
     }
-    const compiled = promote(false);
-    if (compiled) return compiled.invoke.apply(this, args);
+    const compiled = promote();
+    if (compiled) return compiled.apply(this, args);
     if (jvmProfiler.enabled) jvmProfiler.entry(profileName);
     return runCold(cold!, this, args);
   };
-  if (!jvmCoverage.enabled) return target[rec.mangled] = invoke;
-  return target[rec.mangled] = function(this: unknown, ...args: unknown[]) {
+  invoke.$c = [];
+  if (!jvmCoverage.enabled) return install(target[rec.mangled] = invoke);
+  return install(target[rec.mangled] = function(this: unknown, ...args: unknown[]) {
     jvmCoverage.hit(profileName);
     return invoke.apply(this, args);
-  };
+  });
 }
 
 export function methodKey(dex: DexFile, methodIdx: number): { name: string; desc: string; mangled: string } {
@@ -218,14 +229,13 @@ function emitMethod(
   m: EncodedMethod,
   prepared: PreparedMethod,
   count = true,
-  resumable = false,
 ): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const code = dex.code(m.codeOff);
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   try {
-    const body = new MethodEmitter(R, dex, info, code, isStatic, desc, name, prepared, "hot").compile(count, resumable);
-    return `${holder(isStatic)}.${mangled} = ${body};`;
+    const body = new MethodEmitter(R, dex, info, code, isStatic, desc, name, prepared, "hot").compile(count);
+    return `{const $m=${holder(isStatic)}.${mangled}=${body};}`;
   } catch (e) {
     const msg = `compile error ${info.name}.${name}${desc}: ${e}`;
     console.warn(msg);
@@ -315,7 +325,13 @@ class MethodEmitter {
         handlers: t.handlers.map(([type, pc]) => [descToName(this.dex.type(type)), pc]) })) };
   }
 
-  compile(count = true, resumable = false): string {
+  /**
+   * A hot method is a plain function: calls return values directly, and a callee that suspends
+   * returns a Promise. Only then does this frame capture its registers and return a Promise of
+   * its own (R.dfr), which re-enters the same function with that frame (`$F`) to continue at the
+   * suspended call. Frames therefore pay for asynchrony only when something actually waits.
+   */
+  compile(count = true): string {
     const started = jvmProfiler.enabled ? performance.now() : 0;
     if (count) { if (this.sync) perf.syncMethods++; else perf.asyncMethods++; }
     const blocks: string[] = [];
@@ -335,51 +351,47 @@ class MethodEmitter {
     let reg = regs - ins;
     const jsParams: string[] = [];
     const paramInit: string[] = [];
-    const paramAssign: string[] = [];
     const paramRegs = new Set<number>();
-    if (!this.isStatic) { paramInit.push(`let v${reg}=this;`); paramAssign.push(`v${reg}=this;`); paramRegs.add(reg); reg++; }
+    if (!this.isStatic) { paramInit.push(`v${reg}=this`); paramRegs.add(reg); reg++; }
     for (let i = 0; i < params.length; i++) {
       jsParams.push(`p${i}`);
-      paramInit.push(`let v${reg}=p${i};`);
-      paramAssign.push(`v${reg}=p${i};`);
+      paramInit.push(`v${reg}=p${i}`);
       paramRegs.add(reg);
       reg += this.prepared.widths[i];
     }
-    const decls: string[] = [];
-    for (let i = 0; i < regs; i++) if (!paramRegs.has(i)) decls.push(`v${i}`);
-    const declStr = decls.length ? `let ${decls.join(",")};` : "";
-    const resumeDecls = [...Array.from({ length: regs }, (_, i) => `v${i}`), "$t", "$u", "$ex", "$fu", "pc", "$th", "$s=0", "$resume=0", "$p"].join(",");
-    const resumeRegs = Array.from({ length: regs }, (_, i) => `v${i}=$F.v[${i}];`).join("");
-    const init = resumable ? `let ${resumeDecls};` +
-      `if($F!==undefined){${resumeRegs}` +
-      `$t=$F.$t;$u=$F.$u;$ex=$F.$ex;$fu=$F.$fu;pc=$F.next;$th=$F.$th;$s=$F.$s;}` +
-      `else{${paramAssign.join("")}pc=0;$th=R.th();}` :
-      `${paramInit.join("")}${declStr}let $t,$u,$ex,$fu,pc=0;${this.sync ? "" : "const $th=R.th();let $s=0,$resume=0,$p;"}`;
+    const allRegs = Array.from({ length: regs }, (_, i) => `v${i}`);
+    let init: string;
+    if (this.sync) {
+      const decls = [...paramInit, ...allRegs.filter((_, i) => !paramRegs.has(i))];
+      init = `let ${[...decls, "$t", "$u", "$ex", "pc=0"].join(",")};`;
+    } else {
+      jsParams.push("$F");
+      const restore = allRegs.map((r, i) => `${r}=$F.v[${i}];`).join("");
+      init = `let ${[...allRegs, "$t", "$u", "$ex", "$fu", "$p", "pc", "$th", "$s=0", "$r=0"].join(",")};` +
+        `if($F!==undefined&&$F===R.rf){R.rf=null;${restore}$t=$F.$t;$u=$F.$u;$ex=$F.$ex;pc=$F.next;$th=$F.$th;$s=$F.$s;$r=$F.r;R.st($th);}` +
+        `else{$F=undefined;${paramInit.join(";")};pc=0;$th=R.th();}`;
+    }
 
     const catchBody = this.hasTries ? this.emitCatch() : this.leave() + "throw $e;";
     const profileName = `${this.info.name}.${this.mname}${this.desc}`;
     const coverageEntry = coverageProbeSource(profileName);
     const profiled = jvmProfiler.enabled;
     const profileStart = profiled
-      ? `const $pn=${JSON.stringify(profileName)},$pt=performance.now();${resumable ? "if($F===undefined)" : ""}P.entry($pn);try{`
+      ? `const $pn=${JSON.stringify(profileName)},$pt=performance.now();${this.sync ? "" : "if($F===undefined)"}P.entry($pn);try{`
       : "";
     const profileEnd = profiled ? `}finally{P.add($pn,"hotRun",performance.now()-$pt);}` : "";
-    const awaitPending = this.sync ? "" : profiled
-      ? `R.su($th);$s=1;P.suspension($pn);const $ps=performance.now();try{$p=await $p;}finally{P.add($pn,"suspend",performance.now()-$ps);}R.st($th);if($resume<0){pc=-$resume-1;$resume=0;}`
-      : `R.su($th);$s=1;$p=await $p;R.st($th);if($resume<0){pc=-$resume-1;$resume=0;}`;
-    const formalParams = resumable ? [...jsParams, "$F"] : jsParams;
-    const source = `${this.sync ? "function" : "async function"}(${formalParams.join(",")}){
+    const source = `function(${jsParams.join(",")}){
 ${coverageEntry}
 ${profileStart}
 ${init}
 for(;;){
-try{${this.sync ? "switch(pc)" : "$dispatch:switch($resume>0?-$resume:pc)"}{
+try{${this.sync ? "switch(pc)" : "$d:switch($r?-$r:pc)"}{
 ${blocks.join("\n")}
 default: throw new Error("bad pc "+pc);
 }
-${awaitPending}
+${this.sync ? "" : this.saveFrame()}
 }catch($e){
-${this.sync ? "" : "R.st($th);$resume=0;"}$e=R.jx($e);
+${this.sync ? "" : "R.st($th);$r=0;"}$e=R.jx($e);
 ${catchBody}
 }
 }
@@ -389,10 +401,14 @@ ${profileEnd}
     return source;
   }
 
-  /** A method that suspended can only return or throw into an asynchronous resumption of its
-   *  caller: a compiled caller re-pins its own thread, and shell code on the main looper expects
-   *  the main thread. Leaving curThread on this method's thread would hand the caller's next
-   *  synchronous work (a Thread.currentThread check, a fresh vcall) the wrong identity. */
+  /** One save point per method: suspension sites set `$p`, `$r` and `pc`, then break to it. */
+  private saveFrame(): string {
+    const profiled = jvmProfiler.enabled ? `P.suspension($pn);` : "";
+    return `${profiled}return R.dfr($m,this,$p,$r,pc,[${Array.from({ length: this.code.regs }, (_, i) => `v${i}`).join(",")}],$th,$t,$u,$ex);`;
+  }
+
+  /** A resumed frame finishing hands the main looper back its thread: its caller re-pins its own
+   *  thread when it resumes, and shell code expects the main thread. */
   private leave(): string { return this.sync || this.cold ? "" : "if($s)R.su($th);"; }
 
   private emitCatch(): string {
@@ -422,14 +438,13 @@ ${profileEnd}
     out.push(`${assignTo}=${expr};${this.suspend(assignTo)}`);
   }
 
-  // One await per hot method avoids repeating V8's register spills at every call site.
   private suspend(value: string): string {
     if (this.cold) {
       this.suspends = true;
       return `if(${value} instanceof Promise){${value}=yield ${value};}`;
     }
     const resume = ++this.resumes;
-    return `if(${value} instanceof Promise){$p=${value};$resume=${resume};break $dispatch;}case -${resume}:if($resume){${value}=$p;$resume=0;}`;
+    return `if(${value} instanceof Promise){$p=${value};$r=${resume};break $d;}case -${resume}:if($r){$r=0;if($F.e)throw $F.x;${value}=$F.val;}`;
   }
 
   private fieldProp(fieldIdx: number): string {
@@ -568,7 +583,7 @@ ${profileEnd}
       if (fuel) this.suspends = true;
       return `${fuel}F.next=${this.literal(target)};return;`;
     }
-    const fuel = !this.sync && target <= from ? `if(--R.fuel<0){$fu=R.refuel();if($fu){$p=$fu;$resume=${-target-1};break $dispatch;}}` : "";
+    const fuel = !this.sync && target <= from ? `if(--R.fuel<0){$fu=R.refuel();if($fu){$p=$fu;pc=${target};break $d;}}` : "";
     return `${fuel}pc=${target};continue;`;
   }
 

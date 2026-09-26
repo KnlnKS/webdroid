@@ -127,13 +127,11 @@ test("DEX tiers preserve native callbacks that re-enter the active Java method",
       expect(f.thread()).toBe(f.worker);
       return call(0, value);
     });
-    const result = call(1, 7);
-    expect(f.seen.map(([value]) => value)).toEqual([-1, 7, -1, 7, 2, 4]);
-    expect(f.thread()).toBe(f.main);
-    expect(await result).toBe(9);
+    // Nothing suspends, so the re-entrant activation completes synchronously on its thread.
+    expect(call(1, 7)).toBe(9);
     expect(f.seen.map(([value]) => value)).toEqual([-1, 7, -1, 7, 2, 4, 2, 4]);
     expect(f.seen.every(([, thread]) => thread === f.worker)).toBe(true);
-    expect(f.thread()).toBe(f.main);
+    expect(f.thread()).toBe(f.worker);
   }
 });
 

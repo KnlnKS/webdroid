@@ -3,13 +3,17 @@ import { perf } from "../perf";
 import { descToName } from "./abi";
 import { jvmProfiler } from "./profile";
 
+type ColdIterator = Generator<Promise<unknown>, void, unknown>;
+/** Field names match a hot frame's (see Runtime.dfr), so a hot body can resume one (OSR). */
 export interface ColdFrame {
   R: Runtime; D: ReturnType<Runtime["dexLink"]>; S: unknown;
-  v: unknown[]; next: number; done: boolean; value: unknown;
+  v: unknown[]; next: number; r: 0; done: boolean; value: unknown;
   $t: unknown; $u: unknown; $ex: unknown; $fu: unknown; $th: unknown; $s: number;
+  /** a suspended instruction's generator, and its pc */
+  it: ColdIterator | null; pc: number;
 }
 type Handler = { kind: "sync"; run: (frame: ColdFrame, constants: unknown[]) => void } |
-  { kind: "suspend"; run: (frame: ColdFrame, constants: unknown[]) => Generator<Promise<unknown>, void, unknown> };
+  { kind: "suspend"; run: (frame: ColdFrame, constants: unknown[]) => ColdIterator };
 type ColdOp = Handler & { constants: unknown[]; next: number; method?: number };
 export interface ColdMethod {
   /** "pkg/Class.method(desc)": the frame an exception unwinding through here is noted under */
@@ -20,7 +24,7 @@ export interface ColdMethod {
   catches: { start: number; end: number; handlers: [string, number][]; all: number }[];
   hotness: number;
   profiledInstructions: number;
-  promote?: (frame: ColdFrame, receiver: unknown) => Promise<unknown> | null;
+  promote?: (frame: ColdFrame, receiver: unknown) => { value: unknown } | undefined;
 }
 const handlers = new Map<string, Handler>();
 
@@ -44,37 +48,40 @@ function noteFrame(e: unknown, name: string): void {
   const frames = t.jframes ??= [];
   if (frames.length < 48) frames.push(name);
 }
-export async function runCold(method: ColdMethod, receiver: unknown, args: unknown[]): Promise<unknown> {
+/** Runs synchronously until an instruction suspends; only then does the call return a Promise. */
+export function runCold(method: ColdMethod, receiver: unknown, args: unknown[]): unknown {
   perf.coldCalls++;
-  const profiled = jvmProfiler.enabled;
-  const started = profiled ? performance.now() : 0;
   const { R, D, S } = method;
-  const f: ColdFrame = { R, D, S, v: new Array(method.regs), next: 0, done: false, value: undefined,
-    $t: undefined, $u: undefined, $ex: undefined, $fu: undefined, $th: R.th(), $s: 0 };
+  const f: ColdFrame = { R, D, S, v: new Array(method.regs), next: 0, r: 0, done: false, value: undefined,
+    $t: undefined, $u: undefined, $ex: undefined, $fu: undefined, $th: R.th(), $s: 0, it: null, pc: 0 };
   let reg = method.first;
   if (method.instance) f.v[reg++] = receiver;
   for (let i = 0; i < args.length; i++) { f.v[reg] = args[i]; reg += method.widths[i]; }
+  return step(method, f, receiver, false, undefined);
+}
+
+function step(method: ColdMethod, f: ColdFrame, receiver: unknown, threw: boolean, resumed: unknown): unknown {
+  const { R, D } = method;
+  const profiled = jvmProfiler.enabled;
+  const started = profiled ? performance.now() : 0;
+  let suspended = false;
   try {
-    while (!f.done) {
-      const pc = f.next, op = method.ops.get(pc);
+    while (f.it || !f.done) {
+      const pc = f.it ? f.pc : f.next, op = method.ops.get(pc);
       if (!op) throw new Error("bad pc " + pc);
-      f.next = op.next;
-      let yielded = false;
       try {
-        if (op.kind === "sync") op.run(f, op.constants);
-        else {
-          const iterator = op.run(f, op.constants);
-          let step = iterator.next();
-          while (!step.done) {
-            yielded = true;
-            R.su(f.$th); f.$s = 1;
-            let value: unknown;
-            const suspended = profiled ? performance.now() : 0;
-            if (profiled) jvmProfiler.suspension(method.name);
-            try { value = await step.value; }
-            catch (e) { R.st(f.$th); step = iterator.throw(e); continue; }
-            finally { if (profiled) jvmProfiler.add(method.name, "suspend", performance.now() - suspended); }
-            R.st(f.$th); step = iterator.next(value);
+        if (f.it) {
+          const it = f.it;
+          f.it = null;
+          const next = threw ? it.throw(resumed) : it.next(resumed);
+          resumed = undefined; threw = false;
+          if (!next.done) { suspended = true; return suspend(method, f, receiver, it, pc, next.value); }
+        } else {
+          f.next = op.next;
+          if (op.kind === "sync") op.run(f, op.constants);
+          else {
+            const it = op.run(f, op.constants), next = it.next();
+            if (!next.done) { suspended = true; return suspend(method, f, receiver, it, pc, next.value); }
           }
         }
       } catch (error) {
@@ -103,15 +110,25 @@ export async function runCold(method: ColdMethod, receiver: unknown, args: unkno
           jvmProfiler.backedge(method.name, method.hotness - method.profiledInstructions);
           method.profiledInstructions = method.hotness;
         }
-        if (yielded && method.hotness >= jvmProfiler.hotThreshold && method.promote) {
+        if (method.hotness >= jvmProfiler.hotThreshold && method.promote) {
           const handoff = method.promote(f, receiver);
-          if (handoff) { f.$s = 0; return await handoff; }
+          if (handoff) { suspended = true; return handoff.value; }
         }
       }
     }
     return f.value;
   } finally {
-    if (f.$s) R.su(f.$th);
+    // A frame that has suspended hands the thread back on completion; one still suspended
+    // released it already, and a hot handoff inherits the obligation.
+    if (f.$s && !suspended) R.su(f.$th);
     if (profiled) jvmProfiler.add(method.name, "coldRun", performance.now() - started);
   }
+}
+
+function suspend(method: ColdMethod, f: ColdFrame, receiver: unknown, it: ColdIterator, pc: number, pending: Promise<unknown>): Promise<unknown> {
+  f.it = it; f.pc = pc;
+  f.R.su(f.$th); f.$s = 1;
+  if (jvmProfiler.enabled) jvmProfiler.suspension(method.name);
+  const resume = (threw: boolean) => (value: unknown) => { f.R.st(f.$th); return step(method, f, receiver, threw, value); };
+  return pending.then(resume(false), resume(true));
 }
