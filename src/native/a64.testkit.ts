@@ -76,7 +76,9 @@ export function runJit(words: number[], setup: (c: Cpu) => void = () => {}): Cpu
 /** Check one register-only program against many inputs in both tiers without recompiling it per input. */
 export function runCases(words: number[], setups: ((c: Cpu) => void)[], check: (tier: string, c: Cpu, index: number) => void): void {
   const at = place(words);
-  for (let i = 0; i < setups.length; i++) check("interp", execute(at, setups[i]), i);
+  // past JIT_HEAT inputs the region would otherwise compile inside the interpreter pass
+  jitStats.on = false;
+  try { for (let i = 0; i < setups.length; i++) check("interp", execute(at, setups[i]), i); } finally { jitStats.on = true; }
   const before = jitStats.regions;
   for (let i = 0; i < JIT_HEAT; i++) execute(at, setups[0]);
   if (jitStats.regions === before) throw new Error("the program did not compile");

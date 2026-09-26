@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { setA64, type Cpu } from "./cpu";
-import { run, RET } from "./a64.testkit";
+import { run, runCases, RET } from "./a64.testkit";
 
 beforeAll(() => setA64(true));
 afterAll(() => setA64(false));
@@ -29,20 +29,23 @@ function oracle(width: number, a0: bigint, b0: bigint, carryIn: number, subtract
     subtract ? +(a >= b + borrow) : +(wide > top), +(signed < min || signed > max)] };
 }
 
-// the kit runs each program on the interpreter and again compiled, and demands they agree
+// each program runs every input on the interpreter and again compiled
 describe("A64 add/subtract with carry", () => {
   for (const width of [32, 64]) test(`${width}-bit ADCS and SBCS match limb arithmetic`, () => {
     const instructions = width === 64 ? { ADCS: 0xba010002, SBCS: 0xfa010002 } : { ADCS: 0x3a010002, SBCS: 0x7a010002 };
-    const pairs: [bigint, bigint][] = [];
-    for (const a of edges) for (const b of edges) pairs.push([a, b]);
-    for (let i = 0; i < random.length - 1; i++) pairs.push([random[i], random[i + 1]]);
-    for (const [name, instruction] of Object.entries(instructions)) for (const [a, b] of pairs) for (const carry of [0, 1]) {
-      const want = oracle(width, a, b, carry, name === "SBCS");
-      const cpu = run([instruction, RET], (c) => { setX(c, 0, a); setX(c, 1, b); c.w[5] = -1; c.c = carry; });
-      const gotFlags = [cpu.n, cpu.z, cpu.c, cpu.v];
-      if (result(cpu, width) !== want.value || gotFlags.some((flag, i) => flag !== want.flags[i]) || (width === 32 && cpu.w[5] !== 0)) {
-        throw new Error(`${name}/${width} a=${a.toString(16)} b=${b.toString(16)} carry=${carry}: value=${result(cpu, width).toString(16)} flags=${gotFlags}; expected=${want.value.toString(16)} flags=${want.flags}`);
-      }
+    const cases: [bigint, bigint, number][] = [];
+    for (const a of edges) for (const b of edges) cases.push([a, b, 0], [a, b, 1]);
+    for (let i = 0; i < random.length - 1; i++) cases.push([random[i], random[i + 1], 0], [random[i], random[i + 1], 1]);
+    for (const [name, instruction] of Object.entries(instructions)) {
+      const setups = cases.map(([a, b, carry]) => (c: Cpu) => { setX(c, 0, a); setX(c, 1, b); c.w[5] = -1; c.c = carry; });
+      runCases([instruction, RET], setups, (tier, cpu, index) => {
+        const [a, b, carry] = cases[index];
+        const want = oracle(width, a, b, carry, name === "SBCS");
+        const gotFlags = [cpu.n, cpu.z, cpu.c, cpu.v];
+        if (result(cpu, width) !== want.value || gotFlags.some((flag, i) => flag !== want.flags[i]) || (width === 32 && cpu.w[5] !== 0)) {
+          throw new Error(`${tier} ${name}/${width} a=${a.toString(16)} b=${b.toString(16)} carry=${carry}: value=${result(cpu, width).toString(16)} flags=${gotFlags}; expected=${want.value.toString(16)} flags=${want.flags}`);
+        }
+      });
     }
   });
 });
