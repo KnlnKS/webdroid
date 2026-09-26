@@ -17,8 +17,8 @@ export const doodlejump: Flow = {
   sourceCoverage: "unsupported",
   steps: [
     { id: "launch", label: "Launch — loader", action: { type: "launch" }, wait: wait.sample(3000) },
-    // the game decodes every texture at startup (~11G guest instructions): the title takes ~18s to appear
-    { id: "title", label: "Title screen", action: { type: "settle" }, wait: wait.sample(18000),
+    // the game decodes every texture at startup (~11G guest instructions) before its GL loop starts
+    { id: "title", label: "Title screen", action: { type: "settle" }, wait: wait.state({ kind: "perf", counter: "glFrames", atLeast: 60 }, 0, 60_000),
       fastEvidence: { kind: "motion", minFps: 55 } },
     { id: "play", label: "Title → play", action: { type: "tapAt", ...PLAY }, wait: wait.sample(1500) },
     // ~3s of gameplay taps with no capture inside it: the perf window
