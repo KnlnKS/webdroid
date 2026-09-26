@@ -1,20 +1,9 @@
 import { JObj, rt, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
-import { JHandler, JBundle } from "./os";
+import { type JHandler, JBundle, JMessage, obtain } from "./os";
 import { JBinder, callingIdentity } from "./binder";
 import { JParcel, parcelCreator } from "./parcel";
 
-export class JMessage extends JObj {
-  asynchronous = false;
-  what = 0; arg1 = 0; arg2 = 0; obj: unknown = null;
-  callback: unknown = null; target: JHandler | null = null;
-  whenMs = 0; sendingUid = -1; workSourceUid = -1;
-  data: JBundle | null = null; replyTo: JMessenger | null = null;
-  timer: ReturnType<typeof setTimeout> | undefined;
-}
-export function obtain(h: JHandler | null, what = 0, obj: unknown = null, arg1 = 0, arg2 = 0, callback: unknown = null): JMessage {
-  const m = new JMessage(); m.target = h; m.what = what; m.obj = obj; m.arg1 = arg1; m.arg2 = arg2; m.callback = callback; return m;
-}
 async function readMessage(p: JParcel): Promise<JMessage> {
   const m = new JMessage();
   for (const key of ["what", "arg1", "arg2"] as const) m[key] = await vcall(p, "readInt", "()I");
@@ -76,7 +65,7 @@ rt.register({ name: "webdroid/MessengerBinder", ctor: JMessengerBinder, sup: "an
     return 1;
   }),
 } });
-class JMessenger extends JObj { binder: JObj | null = null; }
+export class JMessenger extends JObj { binder: JObj | null = null; }
 const handlers = new WeakMap<JHandler, JMessengerBinder>();
 async function readMessenger(p: JParcel): Promise<JMessenger | null> {
   const binder: JObj | null = await vcall(p, "readStrongBinder", "()Landroid/os/IBinder;");

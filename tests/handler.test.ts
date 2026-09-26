@@ -2,8 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
 import { vcall } from "../src/jvm/natives/jlang";
-import { JHandler } from "../src/android/os";
-import { JMessage } from "../src/android/messenger";
+import { JHandler, JMessage } from "../src/android/os";
 import { onMain } from "../src/android/mainloop";
 
 class RecordingHandler extends JHandler {

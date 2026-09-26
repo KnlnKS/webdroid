@@ -291,7 +291,7 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   unsplit dev server. A top-level `class JService extends JContextWrapper` in
   `runningservices.ts` (imported by `context.ts`) hit the TDZ only in
   production and left Open APK unwired. Top-level uses of cyclic imports must
-  be removed rather than ordered; `messenger.ts` extending `JBinder`
-  (binder → os → messenger) is the remaining latent case and evaluates cleanly
-  from both entries today. Verify shell changes against `build:prod` served by
-  `wrangler dev`, not only `server.ts`.
+  be removed rather than ordered: `JMessage` now lives beside `JHandler` in
+  `os.ts`, so `messenger.ts` (which extends `JBinder` at top level) left the
+  os → messenger → binder → parcel → os cycle. Verify shell changes against
+  `build:prod` served by `wrangler dev`, not only `server.ts`.
