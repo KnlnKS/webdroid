@@ -32,7 +32,9 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   advances to due timers while `drive` waits on real work, so virtual time moved
   per step depends on host speed: CalculatorM's `=` ripple fade differs by up to
   17/255 between runs. Making it host-independent needs the main queue to
-  distinguish runnable jobs from jobs parked on guest timers.
+  distinguish runnable jobs from jobs parked on guest timers. Moving Mihon's
+  Compose flows to the controlled clock after that unification still left the
+  app-flow launch waiting for presentations that never arrived; they stay pinned.
 - Komikku's flow, added at `c0b3684c`, reached every step and wrote its backup
   there; at `9ccf288c` onboarding stays on its first page and launch reports
   missing `OffsetDateTime.now(ZoneId)` and DOM methods. Bisection marks merge
