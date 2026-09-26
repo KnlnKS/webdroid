@@ -204,6 +204,28 @@ test("a signal interrupts an ARM64 futex before its handler observes the saved c
   }
 });
 
+test("an ARM64 signal context is restored before the interrupted frame runs on", async () => {
+  setA64(true);
+  const cpu = new Cpu(new JThread(), "signal-context"), first = Promise.withResolvers<number>(), second = Promise.withResolvers<number>();
+  let seconds = 0;
+  const entry = defineHost("test.signal.context.wait", () => first.promise);
+  const next = defineHost("test.signal.context.next", () => { seconds++; return second.promise; });
+  const handler = defineHost("test.signal.context.handler", () => { first.resolve(0); return 0; });
+  const previous = sigHandlers.get(30), address = mem.reserve(4096, 4096);
+  sigHandlers.set(30, { fn: handler, mask: 0n, flags: 4 });
+  mem.u32.set([0xa9bf7bfd, 0x580000f0, 0xd63f0200, 0x580000f0, 0xd63f0200, 0xa8c17bfd, 0xd65f03c0, 0xd503201f, entry, 0, next, 0], address >>> 2);
+  try {
+    const result = cpu.call(address);
+    cpu.kill(30);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    second.resolve(5);
+    expect(await result).toBe(5);
+    expect(seconds).toBe(1);
+  } finally {
+    if (previous) sigHandlers.set(30, previous); else sigHandlers.delete(30);
+    cpu.dispose(); setA64(false);
+  }
+});
 
 test("A64 floating arguments spill independently of available integer registers", async () => {
   setA64(true);

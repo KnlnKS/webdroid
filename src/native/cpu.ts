@@ -325,20 +325,24 @@ export class Cpu {
         this.alternateActive = !autodisarm;
         if (autodisarm) this.alternateStack = { sp: 0n, size: 0n, flags: SS_DISABLE };
       }
-      try {
-        await this.call(h.fn, [sig, frame, context], SIGNAL_FRAME + sig, restore, alt);
-        if (context) {
-          for (let i = 0; i < 31; i++) {
-            const value = mem.ld64(context + 0xb8 + i * 8);
-            this.w[2 * i] = Number(value & 0xffffffffn);
-            this.w[2 * i + 1] = Number(value >> 32n);
-          }
-          const sp = mem.ld64(context + 0x1b0);
-          this.w[62] = Number(sp & 0xffffffffn);
-          this.w[63] = Number(sp >> 32n);
-          this.setPc(Number(mem.ld64(context + 0x1b8) & 0xffffffffn));
-          this.cpsr = Number(mem.ld64(context + 0x1c0) & 0xffffffffn);
+      // sigreturn: the handler may have rewritten the context. It is loaded before the interrupted
+      // frame or another signal can run on this register file.
+      const resume = (returned: boolean) => {
+        restore();
+        if (!returned || !context) return;
+        for (let i = 0; i < 31; i++) {
+          const value = mem.ld64(context + 0xb8 + i * 8);
+          this.w[2 * i] = Number(value & 0xffffffffn);
+          this.w[2 * i + 1] = Number(value >> 32n);
         }
+        const sp = mem.ld64(context + 0x1b0);
+        this.w[62] = Number(sp & 0xffffffffn);
+        this.w[63] = Number(sp >> 32n);
+        this.setPc(Number(mem.ld64(context + 0x1b8) & 0xffffffffn));
+        this.cpsr = Number(mem.ld64(context + 0x1c0) & 0xffffffffn);
+      };
+      try {
+        await this.call(h.fn, [sig, frame, context], SIGNAL_FRAME + sig, resume, alt);
       } finally {
         if (alt !== undefined) { this.alternateStack = previousAlt; this.alternateActive = previousActive; }
         if (frame) mem.free(frame);
@@ -404,7 +408,7 @@ export class Cpu {
   /** run guest function `fn` to completion on this Cpu (reentrant: saves and restores the register file) */
   frames: string[] = [];                            // what each nested call() is for (wd.native.regs)
   private savePool: Uint8Array[] = [];
-  async call(fn: number, args: CallArg[] = [], label = "call", beforeResume?: () => void, stackTop?: bigint): Promise<number> {
+  async call(fn: number, args: CallArg[] = [], label = "call", resume?: (returned: boolean) => void, stackTop?: bigint): Promise<number> {
     // host code calling back into the guest (a comparator, a JNI entry) while a signal handler owns the
     // register file above the frame it belongs to waits for that handler, as the kernel would hold the
     // thread; a handler's own delivery never waits
@@ -463,21 +467,23 @@ export class Cpu {
     this.setPc(fn);
     this.pending = null;
     this.depth++;
+    let returned = false;
     try {
       await this.run();
+      returned = true;
       this.ret1 = this.a64 ? w[1] : w[2];
       this.retFp0 = this.a64 ? this.si[0] : w[0];
       this.retFp1 = this.a64 ? this.si[1] : w[2];
       return w[0];
     } finally {
-      // Signal state belongs to this frame until the interrupted thread can resume.
-      beforeResume?.();
       this.depth--;
       this.frames.pop();
-      for (const w2 of this.idle.splice(0)) w2();
       this.bytes.set(saved);
       this.savePool.push(saved);
       this.pending = spending; this.state = sstate;
+      // A signal frame's state belongs to it until the interrupted frame can resume.
+      resume?.(returned);
+      for (const w2 of this.idle.splice(0)) w2();
       this.pump();                                                          // a signal that arrived while this frame owned the register file reaches the frame below now
     }
   }
