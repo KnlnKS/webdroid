@@ -5,7 +5,7 @@
 
 import { mem } from "./mem";
 import { hostLib, lookupHost, defineHost, probed, cstr, stp, type HostFn } from "./host";
-import { EglContext, eglConfigAttrib, eglFailure, setEglSwapInterval, takeEglError, type GlSurface } from "../android/glview";
+import { EglContext, bufferHeight, bufferWidth, eglConfigAttrib, eglFailure, setEglSwapInterval, takeEglError, type GlSurface } from "../android/glview";
 import { windowOf } from "./libandroid";
 import { gles1Procs } from "./gles1";
 import { gles3Procs } from "./gles3";
@@ -78,7 +78,7 @@ export function eglInit(): void {
     eglQuerySurface: (cpu, a) => {
       a.i(); const s = surfaces[a.i()], attr = a.i(), out = a.p();
       if (!s) { return eglFailure(EGL_BAD_SURFACE, 0, cpu.jthread); }
-      mem.st32(out, attr === 0x3057 ? s.width : attr === 0x3056 ? s.height : attr === 0x3093 ? 0x3095 : attr === 0x3028 ? 1 : 0); // SWAP_BEHAVIOR: BUFFER_DESTROYED
+      mem.st32(out, attr === 0x3057 ? bufferWidth(s) : attr === 0x3056 ? bufferHeight(s) : attr === 0x3093 ? 0x3095 : attr === 0x3028 ? 1 : 0); // SWAP_BEHAVIOR: BUFFER_DESTROYED
       return 1;
     },
     eglQueryContext: (cpu, a) => {

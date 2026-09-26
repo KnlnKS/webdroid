@@ -5,7 +5,7 @@
 import { mem, guestAt } from "./mem";
 import { hostLib, hostData, cstr, stp, retF, type HostFn, type ArgReader } from "./host";
 import { deref } from "./jni";
-import { JSurface, presentSurface, type GlSurface } from "../android/glview";
+import { JSurface, bufferHeight, bufferWidth, presentSurface, type GlSurface } from "../android/glview";
 import type { Cpu } from "./cpu";
 import { onMain } from "../android/mainloop";
 import { mainThread, reportUncaught } from "../jvm/natives/jlang";
@@ -15,7 +15,7 @@ import { BytesFile, readFully, type FileSource } from "../shell/lazyfile";
 // ── ANativeWindow: a handle per surface (non-zero, as the pointer it stands for)
 class NativeWindow {
   refs = 1;
-  width = 0; height = 0; format = 1;
+  format = 1;
   bits = 0; size = 0;
   locked = false; lockedWidth = 0; lockedHeight = 0;
   constructor(readonly surface: GlSurface, readonly handle: number) {}
@@ -36,7 +36,7 @@ function lockWindow(_cpu: Cpu, args: ArgReader): number {
   const buffer = W(args), out = args.p(), dirty = args.p();
   if (!buffer || !out) return -22;
   if (buffer.locked) return -16;
-  const width = buffer.width || buffer.surface.width, height = buffer.height || buffer.surface.height;
+  const width = bufferWidth(buffer.surface), height = bufferHeight(buffer.surface);
   const stride = buffer.format === YV12 ? Math.ceil(width / 16) * 16 : width;
   const size = buffer.format === YV12 ? (stride + Math.ceil(stride / 32) * 16) * height : width * height * (buffer.format === 4 ? 2 : 4);
   if (!size || !Number.isSafeInteger(size) || size > 0x7fffffff) return -22;
@@ -188,8 +188,9 @@ export function ndkInit(): void {
       if (window.bits) mem.free(window.bits);
       windowBySurface.delete(window.surface); windows[h] = null;
     },
-    ANativeWindow_getWidth: (_c, a) => { const s = W(a); return s ? s.width || s.surface.width : -22; },
-    ANativeWindow_getHeight: (_c, a) => { const s = W(a); return s ? s.height || s.surface.height : -22; },
+    // the consumer's default size (NATIVE_WINDOW_WIDTH); setBuffersGeometry sizes only the buffers
+    ANativeWindow_getWidth: (_c, a) => { const s = W(a); return s ? s.surface.width : -22; },
+    ANativeWindow_getHeight: (_c, a) => { const s = W(a); return s ? s.surface.height : -22; },
     ANativeWindow_getFormat: (_c, a) => { const s = W(a); return s ? s.format : -22; },
     ANativeWindow_lock: lockWindow, ANativeWindow_unlockAndPost: postWindow,
     ANativeWindow_setBuffersGeometry: (_c, a) => {
@@ -197,7 +198,7 @@ export function ndkInit(): void {
       if (!buffer || width < 0 || height < 0 || (!width !== !height) || ![0, 1, 2, 4, YV12].includes(format)
         || format === YV12 && ((width | height) & 1)) return -22;
       if (buffer.locked) return -16;
-      buffer.width = width; buffer.height = height; buffer.format = format || 1;
+      buffer.surface.userWidth = width; buffer.surface.userHeight = height; buffer.format = format || 1;
       return 0;
     },
     ANativeWindow_setFrameRate: () => 0, ANativeWindow_setFrameRateWithChangeStrategy: () => 0,

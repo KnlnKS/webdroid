@@ -152,12 +152,17 @@ export interface GlSurface {
   view: JView | null;
   width: number;
   height: number;
+  /** ANativeWindow_setBuffersGeometry's buffer size, which the view scales to its own; 0 follows width/height */
+  userWidth?: number;
+  userHeight?: number;
   present: ImageBitmap | VideoFrame | null;
   frames: number;
   swapInterval?: number;
   presentationTimeNanos?: bigint;
   onFrame?: () => void;
 }
+export const bufferWidth = (s: GlSurface): number => s.userWidth || s.width;
+export const bufferHeight = (s: GlSurface): number => s.userHeight || s.height;
 export function presentSurface(surface: GlSurface, frame: ImageBitmap | VideoFrame): void {
   surface.present?.close();
   surface.present = frame;
@@ -179,10 +184,15 @@ export class EglContext {
   makeCurrent(s: GlSurface | null, thread = curThread): boolean {
     this.gl ??= this.canvas.getContext("webgl2", { alpha: false, antialias: false, depth: true, stencil: true, preserveDrawingBuffer: false, powerPreference: "high-performance" });
     if (!this.gl || this.gl.isContextLost()) return false;
-    if (s && (this.canvas.width !== s.width || this.canvas.height !== s.height)) { this.canvas.width = s.width; this.canvas.height = s.height; }
+    if (s) this.fit(s);
     this.target = s;
     bindEglCurrent(thread, this);
     return true;
+  }
+  /** the drawing buffer takes the surface's buffer size; a new geometry applies from the next frame */
+  private fit(s: GlSurface): void {
+    const width = bufferWidth(s), height = bufferHeight(s);
+    if (this.canvas.width !== width || this.canvas.height !== height) { this.canvas.width = width; this.canvas.height = height; }
   }
   /** present: the frame goes to the surface, the view recomposes, and the caller waits for the
    *  next display frame (eglSwapBuffers blocks for vsync) */
@@ -193,6 +203,7 @@ export class EglContext {
     try { bmp = this.canvas.transferToImageBitmap(); }
     catch (e) { if (this.gl?.isContextLost()) return Promise.resolve(false); throw e; }
     presentSurface(s, bmp);
+    this.fit(s);
     if (s.swapInterval === 0) return Promise.resolve(!this.gl?.isContextLost());
     return new Promise((r) => { const done = () => r(!this.gl?.isContextLost()); if (typeof requestAnimationFrame === "function" && !document.hidden) requestAnimationFrame(done); else setTimeout(done, 16); });
   }
