@@ -264,8 +264,6 @@ export const sameDimensions = (a: Screen, b: Screen): boolean =>
 export const sameScreen = (a: CaptureScreen, b: CaptureScreen): boolean =>
   sameDimensions(a, b) && a.statusBarDp === b.statusBarDp;
 
-export const captureScreenKey = (s: CaptureScreen): string => `${screenParam(s)};statusBarDp=${s.statusBarDp}`;
-
 /**
  * Fixed instant both sides pin to: 2026-01-02T12:00:00Z.
  * FitNotes renders the current date on its workout log, so an unpinned clock would make

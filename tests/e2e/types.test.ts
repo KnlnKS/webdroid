@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { captureScreenKey, executionFlow, flowSchemaHash, sameDimensions, sameScreen, screenOf, wait, type Flow, type Manifest } from "./types";
+import { executionFlow, flowSchemaHash, sameDimensions, sameScreen, screenOf, wait, type Flow, type Manifest } from "./types";
 
 const flow = (text: string, timeoutMs: number): Flow => ({
   app: "fixture",
@@ -52,7 +52,6 @@ test("reference geometry distinguishes status insets from the normal browser pro
   expect(screenOf(manifest).statusBarDp).toBe(24);
   expect(sameScreen(normal, screenOf(manifest))).toBe(false);
   expect(sameDimensions(normal, screenOf(manifest))).toBe(true);
-  expect(captureScreenKey(normal)).not.toBe(captureScreenKey(screenOf(manifest)));
   expect(sameScreen({ ...browser, statusBarDp: 24 }, screenOf(manifest))).toBe(true);
   manifest.device.statusBarDp = 0;
   expect(sameScreen(normal, screenOf(manifest))).toBe(true);
