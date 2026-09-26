@@ -42,6 +42,11 @@ export function vcall(obj: any, name: string, desc: string, ...args: unknown[]):
 export function vcallAsync(obj: unknown, name: string, desc: string, ...args: unknown[]): Promise<any> {
   try { return Promise.resolve(vcall(obj, name, desc, ...args)); } catch (e) { return Promise.reject(e); }
 }
+/** A call no Java frame waits on (a listener, a posted task): its exception, thrown now or when
+ *  it resumes, goes to the uncaught handler rather than to the native that dispatched it. */
+export function vcallUncaught(obj: unknown, name: string, desc: string, ...args: unknown[]): Promise<void> {
+  return vcallAsync(obj, name, desc, ...args).then(() => {}, reportUncaught);
+}
 export function vcallOn(thread: JThread, obj: unknown, name: string, desc: string, ...args: unknown[]): unknown {
   return callOn(thread, () => vcall(obj, name, desc, ...args));
 }
@@ -1429,7 +1434,7 @@ rt.register({
     "static offsetByCodePoints(Ljava/lang/CharSequence;II)I": (cs: unknown, index: number, offset: number) => {
       if (cs == null) return rt.npe();
       if (typeof cs === "string") return offsetCodePoints(cs, index, offset);
-      return vcallAsync(cs, "toString", "()Ljava/lang/String;").then(text => offsetCodePoints(text, index, offset));
+      return after(vcall(cs, "toString", "()Ljava/lang/String;"), (text: string) => offsetCodePoints(text, index, offset));
     },
     "static charCount(I)I": (cp: number) => (cp >= 0x10000 ? 2 : 1),
     "static getDirectionality(C)B": directionality,

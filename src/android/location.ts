@@ -1,7 +1,7 @@
 import { rt, JObj, type NativeSpec, fieldGetters, fieldSetters, flagSetters, driven, type Gen } from "../jvm/runtime";
-import { JBundle, reportUncaught, uptimeMillis } from "./os";
+import { JBundle, uptimeMillis } from "./os";
 import { parcelCreator, type JParcel } from "./parcel";
-import { newObj, vcall, vcallAsync } from "../jvm/natives/jlang";
+import { newObj, vcall, vcallUncaught } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 
 rt.markers("android/location/LocationListener");
@@ -19,7 +19,7 @@ const geocodeName = (name: string | null, count: number) => {
 };
 const geocodeCallback = (listener: unknown) => {
   if (listener === null) rt.npe();
-  setTimeout(() => void vcallAsync(listener, "onGeocode", "(Ljava/util/List;)V", newArrayList()).catch(reportUncaught), 0);
+  setTimeout(() => void vcallUncaught(listener, "onGeocode", "(Ljava/util/List;)V", newArrayList()), 0);
 };
 rt.markers("android/location/Geocoder$GeocodeListener");
 rt.register({

@@ -2,7 +2,7 @@
 
 import { rt, type NativeSpec, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
-import { vcall, boxInt, vcallAsync } from "../jvm/natives/jlang";
+import { vcall, boxInt, vcallUncaught } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
 import { JAlertDialog, initDialog } from "./dialog";
 import { JView, JLinearLP, attachView, addUnattachedView, detachView, requestLayout, invalidate, initViewFromCtx, inheritContext } from "./view";
@@ -56,7 +56,7 @@ function refreshPicker(tp: JTimePicker) {
 function onChanged(tp: JTimePicker) {
   refreshPicker(tp);
   if (tp.changeL) {
-    void vcallAsync(tp.changeL, "onTimeChanged", "(Landroid/widget/TimePicker;II)V", tp, tp.hourVal, tp.minuteVal).catch(reportUncaught);
+    void vcallUncaught(tp.changeL, "onTimeChanged", "(Landroid/widget/TimePicker;II)V", tp, tp.hourVal, tp.minuteVal);
   }
 }
 

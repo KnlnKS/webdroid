@@ -14,7 +14,7 @@ import { markProcessExited } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
-import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool, JChar, vcallAsync } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, JThread, JThrowable, setCurThread, reportUncaught, mkEnumSet, newObj, defineException, boxObject, box, JInt, JLong, JFloat, JDouble, JBool, JChar, vcallUncaught } from "../jvm/natives/jlang";
 import { E, ERRSTR } from "../native/abi";
 export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
@@ -169,7 +169,7 @@ export class JHandler extends JObj {
       const printer = this.looper.printer;
       try {
         if (printer) await dispatchLogged(this, msg, printer);
-        else await vcallAsync(this, "dispatchMessage", "(Landroid/os/Message;)V", msg).catch(reportUncaught);
+        else await vcallUncaught(this, "dispatchMessage", "(Landroid/os/Message;)V", msg);
       } finally { queue.checkIdle(); }
     });
     if (delay > 0) msg.timer = setGuestTimeout(() => void go(), delay) as ReturnType<typeof setTimeout>; else void go();
@@ -1414,9 +1414,9 @@ rt.register({
         if (left <= 0) {
           clearGuestInterval(this.timer!);
           this.timer = null;
-          void vcallAsync(this, "onFinish", "()V").catch(reportUncaught);
+          void vcallUncaught(this, "onFinish", "()V");
         } else {
-          void vcallAsync(this, "onTick", "(J)V", BigInt(Math.round(left))).catch(reportUncaught);
+          void vcallUncaught(this, "onTick", "(J)V", BigInt(Math.round(left)));
         }
       }, Math.max(50, Number(this.intervalMs)));
       return this;

@@ -6,7 +6,7 @@
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
-import { vcall, newObj, vcallAsync } from "../jvm/natives/jlang";
+import { vcall, newObj, vcallUncaught } from "../jvm/natives/jlang";
 import { attr, TV, parseAXML, type XmlNode } from "./axml";
 import { JAttrSet, normRV, resString, rvString, type Resources, type RV, JTheme, bagStrings } from "./res";
 import { JView, JLinearLP, addUnattachedView } from "./view";
@@ -16,7 +16,6 @@ import { JTextView } from "./textview";
 import { themeAccent } from "./widget";
 import { G } from "./gravity";
 import { JBaseAdapter, JListView, baseAdapterMethods } from "./listview";
-import { reportUncaught } from "./os";
 import { getPrefs } from "./sharedprefs";
 import { JFragment, fragMethods } from "./fragment";
 import { type JContext } from "./context";
@@ -101,7 +100,7 @@ class JPreference extends JObj {
 }
 function notifyChanged(pref: JPreference) {
   const adapter = pref.owner?.adapter;
-  if (adapter) void vcallAsync(adapter, "notifyDataSetChanged", "()V").catch(reportUncaught);
+  if (adapter) void vcallUncaught(adapter, "notifyDataSetChanged", "()V");
 }
 function ensurePM(frag: JPreferenceFragment): JPreferenceManager {
   if (!frag.pm) {
@@ -449,7 +448,7 @@ const preferenceFragmentMethods: NonNullable<NativeSpec["methods"]> = {
   "setPreferenceScreen(Landroid/preference/PreferenceScreen;)V": function (this: JPreferenceFragment, s: JPreferenceScreen | null) {
     this.root = s;
     if (s) bindTree(s, this);
-    if (this.adapter) void vcallAsync(this.adapter, "notifyDataSetChanged", "()V").catch(reportUncaught);
+    if (this.adapter) void vcallUncaught(this.adapter, "notifyDataSetChanged", "()V");
   },
   "addPreferencesFromResource(I)V": driven(function* (this: JPreferenceFragment, resId: number): Gen {
     const jctx: any = this.act;

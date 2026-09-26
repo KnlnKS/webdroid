@@ -12,7 +12,7 @@ import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, attachView, detachView, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragment, type JFragmentManager } from "./fragment";
-import { vcall, vcallOn, curThread, mainThread, vcallAsync } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, vcallUncaught } from "../jvm/natives/jlang";
 import type { JMotionEvent } from "./motionevent";
 import { appHost, jclsNameOf } from "./apphost";
 import { resString } from "./res";
@@ -734,7 +734,7 @@ for (const [name, methods, statics] of [
         if (!rt.iof(cb, iface)) continue;
         const task = rt.make("webdroid/TelephonyDelivery") as JObj & { run: () => Promise<void> };
         task.run = () => vcall(cb, name, desc, ...args);
-        void vcallAsync(executor, "execute", "(Ljava/lang/Runnable;)V", task).catch(reportUncaught);
+        void vcallUncaught(executor, "execute", "(Ljava/lang/Runnable;)V", task);
       }
     },
     "getActiveModemCount()I": () => 0,

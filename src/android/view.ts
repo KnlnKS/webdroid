@@ -3,7 +3,7 @@ import { perf } from "../perf";
 import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, type JPoint } from "./graphics";
 import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
-import { vcall, vcallOn, after, idHash, box, JFloat, curThread, vcallAsync } from "../jvm/natives/jlang";
+import { vcall, vcallOn, after, idHash, box, JFloat, curThread, vcallUncaught } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
@@ -2276,7 +2276,7 @@ function getVTO(v: JView): JVTO {
 }
 /** fire-and-forget: scroll setters are synchronous void natives, same shape as refreshDrawableState */
 function fireScrollChanged(v: JView, oldX: number, oldY: number) {
-  if (v.scrollChangeL) void vcallAsync(v.scrollChangeL, "onScrollChange", "(Landroid/view/View;IIII)V", v, v.scrollX, v.scrollY, oldX, oldY).catch(reportUncaught);
+  if (v.scrollChangeL) void vcallUncaught(v.scrollChangeL, "onScrollChange", "(Landroid/view/View;IIII)V", v, v.scrollX, v.scrollY, oldX, oldY);
   void getVTO(v).dispatchScrollChanged();
 }
 class JA11yAction extends JObj { actionId = 0; label: string | null = null; }

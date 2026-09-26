@@ -1,7 +1,7 @@
 // java.util.Calendar/Date/TimeZone + java.text formatters + java.util.regex.
 
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
-import { javaMatches, javaRegex, jToString, mkEnumSet, defineException, vcall, type JSimpleEnum, type JSB, vcallAsync } from "./jlang";
+import { javaMatches, javaRegex, jToString, mkEnumSet, defineException, vcall, type JSimpleEnum, type JSB, after } from "./jlang";
 import { defaultLocale, localeTag, type JLocale } from "./jvalues";
 import { jarray } from "../abi";
 
@@ -798,8 +798,8 @@ rt.register({
       if (!chronoUnits.includes(unit)) return vcall(unit, "between", "(Ljava/time/temporal/Temporal;Ljava/time/temporal/Temporal;)J", this, end);
       if (end instanceof JLocalDate) return dateUntil(this, end, unit);
       if (end instanceof JLocalDateTime) return dateUntil(this, end.date, unit);
-      return vcallAsync(end, "getLong", "(Ljava/time/temporal/TemporalField;)J", chronoFields.find(f => f.ename === "EPOCH_DAY"))
-        .then(day => dateUntil(this, dateFromEpochDay(Number(day)), unit));
+      return after(vcall(end, "getLong", "(Ljava/time/temporal/TemporalField;)J", chronoFields.find(f => f.ename === "EPOCH_DAY")),
+        (day: bigint) => dateUntil(this, dateFromEpochDay(Number(day)), unit));
     },
     "plusDays(J)Ljava/time/LocalDate;": function (this: JLocalDate, n: bigint) { return ldFromDate(new Date(this.y, this.mo - 1, this.d + Number(n))); },
     "minusDays(J)Ljava/time/LocalDate;": function (this: JLocalDate, n: bigint) { return ldFromDate(new Date(this.y, this.mo - 1, this.d - Number(n))); },

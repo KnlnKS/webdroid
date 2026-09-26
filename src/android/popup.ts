@@ -2,7 +2,7 @@
 
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops, fieldGetters, flagGetters, fieldSetters, flagSetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
-import { vcall, vcallAsync } from "../jvm/natives/jlang";
+import { vcall, vcallUncaught } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
 import { JView, JFrameLP, uiState, invalidate, requestLayout, locationOnScreen, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST } from "./view";
 import { JMotionEvent } from "./motionevent";
@@ -191,7 +191,7 @@ rt.register({
       showPopupMenu(this.anchor!, items, (id) => {
         const item = (this.menu?.items ?? []).find((i: any) => i.id === id);
         if (this.clickL && item) {
-          void vcallAsync(this.clickL, "onMenuItemClick", "(Landroid/view/MenuItem;)Z", item).catch(reportUncaught);
+          void vcallUncaught(this.clickL, "onMenuItemClick", "(Landroid/view/MenuItem;)Z", item);
         }
       });
     }),

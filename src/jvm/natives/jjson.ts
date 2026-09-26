@@ -1,7 +1,7 @@
 // org.json over plain JS objects/arrays.
 
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
-import { defineException, boxInt, box, JLong, JDouble, JBool, TRUE, FALSE, vcall, vcallAsync } from "./jlang";
+import { defineException, boxInt, box, JLong, JDouble, JBool, TRUE, FALSE, vcall, after } from "./jlang";
 import { mkIter, newLinkedHashSet, toJsArray } from "./jutil";
 
 class JJSONObject extends JObj { o: Record<string, unknown> = Object.create(null); }
@@ -295,7 +295,7 @@ class JJSONStringer extends JObj {
     if (unwrapped == null || typeof unwrapped === "boolean" || typeof unwrapped === "number" || typeof unwrapped === "bigint")
       this.out += Object.is(unwrapped, -0) ? "-0" : String(unwrapped ?? null);
     else if (typeof unwrapped === "string") this.out += jsonQuote(unwrapped);
-    else return vcallAsync(value, "toString", "()Ljava/lang/String;").then(text => { this.out += jsonQuote(text); return this; });
+    else return after(vcall(value, "toString", "()Ljava/lang/String;"), (text: string) => { this.out += jsonQuote(text); return this; });
     return this;
   }
 }

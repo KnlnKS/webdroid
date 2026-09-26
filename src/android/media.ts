@@ -2,7 +2,7 @@
 
 import { rt, JObj, stubs, noops, fieldGetters, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { vcall, stringHash, vcallAsync } from "../jvm/natives/jlang";
+import { vcall, stringHash, vcallUncaught } from "../jvm/natives/jlang";
 import { uuidFromString } from "../jvm/natives/jvalues";
 import { newArrayList, newStringSet, type JList } from "../jvm/natives/jutil";
 import { type JFileDescriptor, vfs } from "../jvm/natives/jio";
@@ -391,7 +391,7 @@ function mpLoad(mp: JMediaPlayer, bytes: Uint8Array) {
   mp.audio.loop = mp.looping;
   mp.srcBytes = bytes;
   mp.audio.onended = () => {
-    if (mp.completionL) void vcallAsync(mp.completionL, "onCompletion", "(Landroid/media/MediaPlayer;)V", mp).catch(reportUncaught);
+    if (mp.completionL) void vcallUncaught(mp.completionL, "onCompletion", "(Landroid/media/MediaPlayer;)V", mp);
   };
 }
 async function mpLoadFd(this: JMediaPlayer, fd: JFileDescriptor, offset = 0n, length = 0x7fffffffffffffffn) {
@@ -407,7 +407,7 @@ function mpPrepare(mp: JMediaPlayer) {
   mp.prepared = true;
   const listener = mp.preparedL;
   if (listener) setTimeout(() => {
-    if (mp.prepared && mp.preparedL === listener) void vcallAsync(listener, "onPrepared", "(Landroid/media/MediaPlayer;)V", mp).catch(reportUncaught);
+    if (mp.prepared && mp.preparedL === listener) void vcallUncaught(listener, "onPrepared", "(Landroid/media/MediaPlayer;)V", mp);
   }, 0);
 }
 rt.register({

@@ -4,7 +4,7 @@ import { AID, bagStrings } from "./res";
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
-import { newObj, vcall, curThread, after, vcallAsync } from "../jvm/natives/jlang";
+import { newObj, vcall, curThread, after, vcallUncaught } from "../jvm/natives/jlang";
 import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSize, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom } from "./view";
 import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
 import { JAttrSet, obtainStyled, rvDimen, rvInt, type Resources } from "./res";
@@ -265,7 +265,7 @@ export class JListView extends JViewGroup {
   setScrollState(s: number) {
     if (s === this.scrollState) return;
     this.scrollState = s;
-    if (this.scrollL) void onMain(() => vcallAsync(this.scrollL, "onScrollStateChanged", "(Landroid/widget/AbsListView;I)V", this, s).catch(reportUncaught));
+    if (this.scrollL) void onMain(() => vcallUncaught(this.scrollL, "onScrollStateChanged", "(Landroid/widget/AbsListView;I)V", this, s));
   }
   /** AdapterView.updateEmptyStatus: an empty adapter shows the empty view in the list's place */
   updateEmptyStatus() {

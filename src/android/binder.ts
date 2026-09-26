@@ -1,5 +1,5 @@
 import { JObj, rt, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { curThread, JThread, setCurThread, vcall, vcallAsync } from "../jvm/natives/jlang";
+import { curThread, JThread, setCurThread, vcall, vcallUncaught } from "../jvm/natives/jlang";
 import { PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { JParcel } from "./parcel";
 
@@ -139,7 +139,7 @@ rt.register({ name: "android/os/BinderProxy", ctor: JBinderProxy, ifaces: ["andr
   "linkToDeath(Landroid/os/IBinder$DeathRecipient;I)V": function (this: JBinderProxy, recipient: unknown) {
     if (!binderTransport.alive(this.handle.pid)) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead");
     if (!this.deaths.has(recipient)) this.deaths.set(recipient, binderTransport.watch(this.handle.pid, () => {
-      this.deaths.delete(recipient); void vcallAsync(recipient, "binderDied", "()V").catch(reportUncaught);
+      this.deaths.delete(recipient); void vcallUncaught(recipient, "binderDied", "()V");
     }));
   },
   "unlinkToDeath(Landroid/os/IBinder$DeathRecipient;I)Z": function (this: JBinderProxy, recipient: unknown) {
