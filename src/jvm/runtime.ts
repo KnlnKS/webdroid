@@ -10,7 +10,7 @@ import { suspendWith } from "./suspend";
 import { decodeString } from "./charset";
 import { DexFile, NO_INDEX, type ClassDef, type EncVal, type EncodedMethod } from "./dex";
 import { mangleField, mangleMethod, mangleStaticField, descToName, defaultVal, defaultValue, charsToString, utf8, dotName, demangle, primElem, splitSig } from "./abi";
-import { compileClass, compileLazyMethod, methodKey, type Cells, type CompiledCtor } from "./compiler";
+import { compileClass, compileLazyMethod, methodKey, type Cells, type CompiledCtor, type ResumeBody } from "./compiler";
 import { isBytecode } from "./provenance";
 import { perf } from "../perf";
 import { jvmCoverage } from "./coverage";
@@ -190,22 +190,18 @@ export class Runtime {
       input = value; threw = false;
     }
   }
-  /** The frame a resumption is re-entering a compiled method with (see dfr). */
-  rf: unknown = null;
   /**
    * A compiled frame whose callee suspended: release the thread, and once `pending` settles
-   * re-enter `fn` with the saved frame, continuing at resume point `r` (or at `next` when 0).
+   * continue the saved frame in the method's resumable body, at resume point `r` (or at `next`
+   * when 0).
    */
-  dfr(fn: (...a: unknown[]) => unknown, self: unknown, pending: Promise<unknown>, r: number, next: number,
+  dfr(resume: ResumeBody, self: unknown, pending: Promise<unknown>, r: number, next: number,
     v: unknown[], th: unknown, t: unknown, u: unknown, ex: unknown): Promise<unknown> {
     this.su(th);
     const F = { v, next, r, $th: th, $s: 1, $t: t, $u: u, $ex: ex, val: undefined as unknown, e: false, x: undefined as unknown };
     return suspendWith(pending, (value, threw) => {
       if (threw) { F.e = true; F.x = value; } else F.val = value;
-      const args = new Array<unknown>(fn.length);
-      args[fn.length - 1] = F;
-      this.rf = F;
-      return fn.apply(self, args);
+      return resume.call(self, F);
     });
   }
   onUncaught: ((e: unknown) => void) | null = null;

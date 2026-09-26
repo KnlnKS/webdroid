@@ -25,9 +25,10 @@ arrays are typed arrays and object arrays carry `$t`.
   body. It has no resume prologue or resume cases, which keeps it small enough
   for V8 to inline through deep Kotlin/Compose call chains. Leaf methods (no
   calls, statics or allocation) compile to one sync form.
-- **Resumable body.** The same blocks plus a frame-restoring prologue and a
-  `case -K` resume point after each call. It is compiled on the first
-  suspension of the method (or for on-stack replacement), not at promotion.
+- **Resumable body.** `function($F)`: the same blocks plus a prologue that
+  restores the saved frame and a `case -K` resume point after each call. It
+  is only ever a continuation, never an entry, and is compiled on the
+  method's first suspension (or for on-stack replacement), not at promotion.
 - **Cold tier.** Pooled handlers keyed by their emitted body run the first 31
   calls. A handler returns the Promise it waits on: a call result is delivered
   past the handler (`F.$w = 1`), while class-initialization and resolution
@@ -53,8 +54,8 @@ arrays are typed arrays and object arrays carry `$t`.
 
 ## Diagnostics
 
-`?jvmProfile=1` keeps a single resumable body per method so suspension is
-attributed; it retains at most 8,192 records. `wd.perf` exposes aggregate
+`?jvmProfile=1` counts entries, suspensions and run time in both hot forms;
+it retains at most 8,192 records. `wd.perf` exposes aggregate
 phases and counters (`mainJobs`, `hotMethods`, `osrMethods`, `rnReplay`...).
 `?jvmTier=auto|cold|js` and `?jvmHotness=1024|4096|16384` support diagnosis;
 `jvmTier=js` compiles every executed method to the fast form at once.
