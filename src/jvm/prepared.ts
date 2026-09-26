@@ -178,6 +178,32 @@ function branchTargets(code: CodeItem, instruction: PreparedInstruction): readon
 
 const NO_TARGETS: readonly number[] = [];
 
+const isInstanceInvoke = (op: number) =>
+  (op >= 0x6e && op <= 0x70) || op === 0x72 || (op >= 0x74 && op <= 0x76) || op === 0x78 || op === 0xfa || op === 0xfb;
+
+/** Could this instruction consume a constant as a float or double? */
+function readsFloating(dex: DexFile, instruction: MutableInstruction, returnType: string): boolean {
+  const op = instruction.op;
+  if (floatingOperands(op) || op === 0x4b || op === 0x4c) return true;   // aput/aput-wide: the array may hold floats
+  if (op === 0x59 || op === 0x5a || op === 0x67 || op === 0x68) {
+    const type = dex.type(dex.field(op < 0x67 ? instruction.c : instruction.b).type);
+    return type === "F" || type === "D";
+  }
+  if ((op >= 0x6e && op <= 0x72) || (op >= 0x74 && op <= 0x78))
+    return dex.protoParamTypes(dex.method(instruction.b).proto).some((type) => type === "F" || type === "D");
+  return (op === 0x0f && returnType === "F") || (op === 0x10 && returnType === "D");
+}
+
+/** Without floating reads, constant typing only decides which receivers may be a null constant:
+ *  any register a constant is written to (flow-insensitive, so it can only over-mark). */
+function markConstantReceivers(instructions: MutableInstruction[]): void {
+  const constants = new Set<number>();
+  for (const instruction of instructions) if (instruction.op >= 0x12 && instruction.op <= 0x19) constants.add(instruction.a);
+  for (const instruction of instructions) {
+    if (isInstanceInvoke(instruction.op) && constants.has(instruction.regs[0])) instruction.nullRecv = true;
+  }
+}
+
 function typeConstants(
   dex: DexFile,
   code: CodeItem,
@@ -380,10 +406,14 @@ export function prepareMethod(
   if (observe) observe("cfg", performance.now() - started);
 
   started = observe ? performance.now() : 0;
-  // Only numeric const writes can seed the reaching-definition analysis.
+  // Only numeric const writes can seed the reaching-definition analysis, and it only has to run
+  // when something could read one of them as a float or double.
   const signature = parseMethodDesc(desc);
-  if (instructions.some((instruction) => instruction.op >= 0x12 && instruction.op <= 0x19))
-    typeConstants(dex, code, signature, isStatic, instructions, leaders);
+  if (instructions.some((instruction) => instruction.op >= 0x12 && instruction.op <= 0x19)) {
+    if (instructions.some((instruction) => readsFloating(dex, instruction, signature.ret)))
+      typeConstants(dex, code, signature, isStatic, instructions, leaders);
+    else markConstantReceivers(instructions);
+  }
   if (observe) observe("type", performance.now() - started);
 
   const sync = instructions.every((instruction) => !maySuspend(instruction.op));
