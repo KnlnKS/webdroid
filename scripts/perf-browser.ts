@@ -22,7 +22,7 @@ const { values } = parseArgs({ options: {
   "native-profile": { type: "boolean", default: false },
   "jvm-profile": { type: "boolean", default: false }, "jvm-tier": { type: "string", default: "auto" }, "jvm-hotness": { type: "string", default: "4096" },
   interval: { type: "string" }, "exercise-once": { type: "boolean", default: false }, "setup-shots": { type: "boolean", default: false },
-  "setup-settle-cap": { type: "string" },
+  "setup-settle-cap": { type: "string" }, "setup-min-wait": { type: "string", default: "0" },
 } });
 const source = FLOWS.find((f) => f.app === values.flow);
 if (!source || !values.after || !values.out) throw new Error("Required: --flow <flow> --after <step> --out <file.json>");
@@ -30,7 +30,12 @@ const flow = executionFlow(source, "full");
 const outParts = parse(values.out);
 const artifactPath = (suffix: string) => join(outParts.dir, outParts.name + suffix);
 const after = flow.steps.findIndex((s) => s.id === values.after);
+// "swipe:x1:y1:x2:y2" is an ad-hoc 400 ms swipe in normalized screen coordinates
 const exercises = (values.exercise?.split(",") ?? []).map((id) => {
+  if (id.startsWith("swipe:")) {
+    const [x1, y1, x2, y2] = id.slice(6).split(":").map(Number);
+    return { ...flow.steps[0], id, action: { type: "swipe" as const, from: [x1, y1] as [number, number], to: [x2, y2] as [number, number], ms: 400 } };
+  }
   const step = flow.steps.find((s) => s.id === id);
   if (!step) throw new Error("Unknown exercise step: " + id);
   return step;
@@ -96,7 +101,7 @@ try {
     const hit = await page.evaluate(performAction, { a: actOf(flow, step, rec), screen, deadlineMs: 60000 });
     const actionMs = performance.now() - started;
     const horizonMs = waitHorizonMs(step.wait);
-    await page.waitForTimeout(setupSettleCap === undefined ? horizonMs : Math.min(horizonMs, setupSettleCap));
+    await page.waitForTimeout(Math.max(Number(values["setup-min-wait"]), setupSettleCap === undefined ? horizonMs : Math.min(horizonMs, setupSettleCap)));
     const setupMs = performance.now() - started;
     const perf = values["setup-shots"] ? await page.evaluate(() => ({ ...globalThis.wd.perf })) : undefined;
     setup.push({ step: step.id, ms: setupMs, actionMs, hit, ...(perf ? { perf } : {}) });
