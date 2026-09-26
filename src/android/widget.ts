@@ -1,4 +1,5 @@
 import { AID } from "./res";
+import { guestNow } from "../guest-clock";
 import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, uiState, JViewGroup, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, type JLayoutParams } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild, drawableSize, JLayerDrawable } from "./drawable";
 import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, flagSetters, driven, type Gen } from "../jvm/runtime";
@@ -76,7 +77,7 @@ rt.register({
         ctx.fillRect(this.padL, y - 4, this.width() - this.padL - this.padR, 8);
         ctx.fillStyle = cssColor(accent);
         if (this.indeterminate) {
-          const t = (performance.now() % 1200) / 1200;
+          const t = (guestNow() % 1200) / 1200;
           const w = (this.width() - this.padL - this.padR);
           ctx.fillRect(this.padL + t * w * 1.5 - w / 2, y - 4, w / 2, 8);
           uiState.needsDraw = true;
@@ -86,7 +87,7 @@ rt.register({
       } else {
         const cx = this.width() / 2, cy = this.height() / 2;
         const r = Math.min(this.width() - this.padL - this.padR, this.height() - this.padT - this.padB) / 2 - 6;
-        const t = performance.now() / 900;
+        const t = guestNow() / 900;
         ctx.strokeStyle = cssColor(accent);
         ctx.lineWidth = 8;
         ctx.lineCap = "round";

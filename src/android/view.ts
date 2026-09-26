@@ -8,7 +8,7 @@ import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawabl
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
-import { mainHandler, reportUncaught } from "./os";
+import { mainHandler, reportUncaught, uptimeMillis } from "./os";
 import { JProperty, type JDisplayMetrics } from "./util";
 import { csText } from "./text";
 import { device } from "../shell/config";
@@ -1161,7 +1161,7 @@ const viewMethods: NativeSpec["methods"] = {
   // layout or a Handler dispatch at every await -- the check-then-act race class that gave us
   // the double composition. It also means removeCallbacks can actually cancel.
   "scheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;J)V": function (r0: unknown, r: unknown, when: bigint) {
-    mainHandler().post(r, Math.max(0, Number(when) - performance.now()));
+    mainHandler().post(r, Math.max(0, Number(when) - uptimeMillis()));
   },
   "unscheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;)V": function (_d: unknown, r: unknown) { mainHandler().cancel(r); },
   // AOSP's 1-arg form cancels everything scheduled by that drawable. Compose's
@@ -1470,7 +1470,7 @@ const viewMethods: NativeSpec["methods"] = {
     return 0;
   }),
   "onSaveInstanceState()Landroid/os/Parcelable;": () => EMPTY_STATE,
-  "getDrawingTime()J": () => BigInt(Math.floor(performance.now())),
+  "getDrawingTime()J": () => BigInt(Math.floor(uptimeMillis())),
   "verifyDrawable(Landroid/graphics/drawable/Drawable;)Z": function (this: JView, d: unknown) { return d === this.background ? 1 : 0; },
   "onCreateDrawableState(I)[I": function (this: JView, extra: number) {
     const base = this.baseState();

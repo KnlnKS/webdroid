@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops, fieldGetters, flagGetters, fieldSetters, flagSetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, vcallUncaught } from "../jvm/natives/jlang";
-import { reportUncaught } from "./os";
+import { reportUncaught, uptimeMillis } from "./os";
 import { JView, JFrameLP, uiState, invalidate, requestLayout, locationOnScreen, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST } from "./view";
 import { JMotionEvent } from "./motionevent";
 import { JFrameLayout } from "./layouts";
@@ -62,11 +62,11 @@ export const detachContextOverlays = driven(function* detachContextOverlays(owne
 // toast: plain shell-drawn banner (not a View)
 const toasts: { text: string; until: number }[] = [];
 export function showToast(text: string) {
-  toasts.push({ text, until: performance.now() + 2500 });
+  toasts.push({ text, until: uptimeMillis() + 2500 });
   invalidate();
 }
 export function drawToasts(ctx: OffscreenCanvasRenderingContext2D, w: number, h: number) {
-  const now = performance.now();
+  const now = uptimeMillis();
   for (let i = toasts.length - 1; i >= 0; i--) {
     if (toasts[i].until < now) toasts.splice(i, 1);
   }

@@ -1,4 +1,5 @@
 import { AID, resString } from "./res";
+import { guestNow } from "../guest-clock";
 import { JView, requestLayout, initViewFromCtx, guardCall, invalidate, specMode, specSize, MS_UNSPEC, MS_EXACTLY, MS_AT_MOST, resolveSize, setFocusHook, removeFrom } from "./view";
 import {
   type JColorStateList, mkCsl, type JDrawable, loadColorStateList, loadDrawableRV, cslColor, loadDrawable,
@@ -679,7 +680,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       const drawn = callOn(thread, () => drawTextViewLayout(layout, cv, hg));
       if (drawn instanceof Promise) yield drawn;
     } finally { ctx.restore(); }
-    if (this.editable && this.focused && this.cursorVisible && Math.floor((performance.now() - this.blinkStart) / 500) % 2 === 0) {
+    if (this.editable && this.focused && this.cursorVisible && Math.floor((guestNow() - this.blinkStart) / 500) % 2 === 0) {
       const caretLayout = this.layout;
       if (!caretLayout) return;
       const caretGravity = this.horizontalGravity(display, alignment, layoutDirection);
@@ -788,7 +789,7 @@ export function focusEditText(et: JEditText | null) {
   if (focusedEdit === et) return;
   if (focusedEdit) focusedEdit.focused = false;
   focusedEdit = et;
-  if (et) { et.focused = true; et.blinkStart = performance.now(); }
+  if (et) { et.focused = true; et.blinkStart = guestNow(); }
   if (inputEl) {
     if (et) {
       inputEl.value = et.text;
@@ -802,7 +803,7 @@ export const editInput = driven(function* editInput(text: string): Gen {
   focusedEdit.text = text;
   focusedEdit.rawText = text;
   focusedEdit.layoutWidthFor = -1;
-  focusedEdit.blinkStart = performance.now();
+  focusedEdit.blinkStart = guestNow();
   requestLayout(focusedEdit);
   yield focusedEdit.notifyWatchers();
 });

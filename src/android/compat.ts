@@ -9,7 +9,7 @@ import { mangleMethod } from "../jvm/abi";
 import { onMain, inMainJob } from "./mainloop";
 import { newArrayList } from "../jvm/natives/jutil";
 import { device } from "../shell/config";
-import { reportUncaught } from "./os";
+import { reportUncaught, uptimeMillis } from "./os";
 import { currentResources, rvDimen, rvFloat, rvInt, normRV, type Resources } from "./res";
 import { parseAXML, attr, TV, type XmlNode } from "./axml";
 import { complexToFraction } from "./util";
@@ -24,7 +24,7 @@ class JScroller extends JObj {
   finished = true;
   compute(): boolean {
     if (this.finished) return false;
-    const t = Math.min(1, (performance.now() - this.startT) / this.duration);
+    const t = Math.min(1, (uptimeMillis() - this.startT) / this.duration);
     if (this.overfling) {
       const out = Math.min(1, t / 0.7);
       const back = Math.max(0, (t - 0.7) / 0.3);
@@ -50,7 +50,7 @@ class JScroller extends JObj {
     this.peakX = Math.max(minX - Math.max(0, overX), Math.min(maxX + Math.max(0, overX), projectedX));
     this.peakY = Math.max(minY - Math.max(0, overY), Math.min(maxY + Math.max(0, overY), projectedY));
     this.overfling = this.peakX !== this.finalX || this.peakY !== this.finalY;
-    this.startT = performance.now();
+    this.startT = uptimeMillis();
     this.duration = Math.min(1200, 300 + Math.hypot(vx, vy) / device.dp(4));
     this.finished = false;
     invalidate();
@@ -59,7 +59,7 @@ class JScroller extends JObj {
 const scrollerMethods: NativeSpec["methods"] = {
   "startScroll(IIII)V": function (this: JScroller, sx: number, sy: number, dx: number, dy: number) {
     this.startX = sx; this.startY = sy; this.finalX = sx + dx; this.finalY = sy + dy;
-    this.startT = performance.now(); this.duration = 250;
+    this.startT = uptimeMillis(); this.duration = 250;
     this.curX = sx; this.curY = sy;
     this.overfling = false;
     this.finished = false;
@@ -67,7 +67,7 @@ const scrollerMethods: NativeSpec["methods"] = {
   },
   "startScroll(IIIII)V": function (this: JScroller, sx: number, sy: number, dx: number, dy: number, dur: number) {
     this.startX = sx; this.startY = sy; this.finalX = sx + dx; this.finalY = sy + dy;
-    this.startT = performance.now(); this.duration = Math.max(1, dur);
+    this.startT = uptimeMillis(); this.duration = Math.max(1, dur);
     this.curX = sx; this.curY = sy;
     this.overfling = false;
     this.finished = false;
@@ -97,12 +97,12 @@ const scrollerMethods: NativeSpec["methods"] = {
     if (fx === sx && fy === sy) { this.finished = true; return 0; }
     this.startX = sx; this.startY = sy; this.finalX = fx; this.finalY = fy;
     this.curX = sx; this.curY = sy; this.overfling = false;
-    this.startT = performance.now(); this.duration = 200; this.finished = false;
+    this.startT = uptimeMillis(); this.duration = 200; this.finished = false;
     return 1;
   },
   "setFinalX(I)V": function (this: JScroller, x: number) { this.finalX = x; },
   "setFinalY(I)V": function (this: JScroller, y: number) { this.finalY = y; },
-  "timePassed()I": function (this: JScroller) { return Math.round(performance.now() - this.startT); },
+  "timePassed()I": function (this: JScroller) { return Math.round(uptimeMillis() - this.startT); },
   ...noops("<init>(Landroid/content/Context;)V",
     "<init>(Landroid/content/Context;Landroid/view/animation/Interpolator;)V",
     "<init>(Landroid/content/Context;Landroid/view/animation/Interpolator;Z)V", "setFriction(F)V",
@@ -144,7 +144,7 @@ rt.register({
   methods: {
     "static obtain()Landroid/view/VelocityTracker;": () => new JVelocityTracker(),
     "addMovement(Landroid/view/MotionEvent;)V": function (this: JVelocityTracker, ev: any) {
-      this.samples.push({ x: ev.x, y: ev.y, t: performance.now() });
+      this.samples.push({ x: ev.x, y: ev.y, t: ev.eventTime });
       if (this.samples.length > 12) this.samples.shift();
     },
     "computeCurrentVelocity(I)V": function (this: JVelocityTracker, units: number) { this.compute(units); },
@@ -373,7 +373,7 @@ async function stepViewAnim(v: JView): Promise<boolean> {
   let more: boolean;
   try {
     more = !!await vcall(a, "getTransformation", "(JLandroid/view/animation/Transformation;F)Z",
-      BigInt(Math.floor(performance.now())), tf, 1);
+      BigInt(Math.floor(uptimeMillis())), tf, 1);
   } finally {
     if (a.target === v) a.target = null;
   }
@@ -417,7 +417,7 @@ const animMethods: NativeSpec["methods"] = {
   "setRepeatMode(I)V": function (this: JAnimation, m: number) { this.repeatMode = m; },
   "setAnimationListener(Landroid/view/animation/Animation$AnimationListener;)V": function (this: JAnimation, l: unknown) { this.listener = l; },
   "start()V": function (this: JAnimation) { this.startTime = -1; },
-  "startNow()V": function (this: JAnimation) { this.startTime = performance.now(); },
+  "startNow()V": function (this: JAnimation) { this.startTime = uptimeMillis(); },
   "cancel()V": driven(function* (this: JAnimation): Gen {
     if (this.started && !this.ended) { this.ended = true; yield fire(this, null, "End"); }
     this.startTime = Number.MIN_SAFE_INTEGER;
@@ -636,7 +636,7 @@ rt.register({
     },
     "static loadInterpolator(Landroid/content/Context;I)Landroid/view/animation/Interpolator;": () =>
       rt.make("android/view/animation/LinearInterpolator"),
-    "static currentAnimationTimeMillis()J": () => BigInt(Math.floor(performance.now())),
+    "static currentAnimationTimeMillis()J": () => BigInt(Math.floor(uptimeMillis())),
   },
 });
 rt.markers("android/view/animation/Animation$AnimationListener");
