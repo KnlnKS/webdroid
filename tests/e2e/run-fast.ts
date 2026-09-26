@@ -5,14 +5,17 @@ import { FLOWS } from "./flows";
 import type { Flow } from "./types";
 import { loadPng } from "./lib/png";
 import { diffImages } from "./lib/diff";
-import { E2E_DIR } from "./lib/util";
+import { E2E_DIR, runQueue } from "./lib/util";
 import { apkHashes, flowSchemaHash, repositoryRevision, type CoverageIndex } from "./coverage";
 import { captureScreenKey, executionFlow, sameScreen, screenOf, screenParam, waitHorizonMs, type CaptureScreen, type Manifest } from "./types";
 
+// Live flows depend on upstream content and networks, so they join the lane only when named or
+// with --live; the default lane is reproducible from the repository and local APKs alone.
 const deterministic = FLOWS.filter((flow) => flow.clock !== "live");
 const coverage = process.argv.includes("--coverage");
-const args = process.argv.slice(2).filter((arg) => arg !== "--coverage");
-const { flows, jobs } = parseArgs(args, "bun run e2e", coverage ? deterministic : FLOWS, defaultJobs(5, 2));
+const live = process.argv.includes("--live");
+const args = process.argv.slice(2).filter((arg) => arg !== "--coverage" && arg !== "--live");
+const { flows, jobs } = parseArgs(args, "bun run e2e", coverage ? deterministic : FLOWS, defaultJobs(5, 2), live ? FLOWS : deterministic);
 if (coverage && flows.length !== deterministic.length)
   throw new Error("coverage collection must run the complete deterministic lane");
 
@@ -129,20 +132,14 @@ try {
         previous.set(row.app, row.durationMs);
 } catch {}
 await rm(summaryPath, { force: true });
-const weight = (flow: Flow) => executionFlow(flow, "fast").steps.reduce((total, step) =>
+const weight = (flow: Flow) => previous.get(flow.app) ?? executionFlow(flow, "fast").steps.reduce((total, step) =>
   total + (step.wait.kind === "state" ? step.wait.maxRealMs : waitHorizonMs(step.wait)) + 300, 0);
-const queue = [...flows].sort((a, b) => (previous.get(b.app) ?? weight(b)) - (previous.get(a.app) ?? weight(a)));
-const outcomes: Outcome[] = [];
 const started = performance.now();
-await Promise.all(Array.from({ length: Math.min(jobs, queue.length) }, async () => {
-  for (let flow = queue.shift(); flow; flow = queue.shift()) {
-    const outcome = await runFlow(flow, jobs);
-    outcomes.push(outcome);
-    console.log(`  ${flow.app}: ${outcome.runs.length} steps, ${(outcome.ms / 1000).toFixed(1)}s` +
-      (outcome.errors.length ? `, ${outcome.errors.length} failure(s)` : "") +
-      (outcome.gaps.length ? `, ${outcome.gaps.length} observed gap(s)` : ""));
-  }
-}));
+const outcomes = await runQueue(flows, jobs, weight, (flow) => runFlow(flow, jobs),
+  (flow, error): Outcome => ({ flow, runs: [], visual: [], errors: [`flow aborted: ${String(error).split("\n", 1)[0]}`], gaps: [], ms: 0, coverage: [], browser: "unknown", screen: "unknown" }),
+  (outcome) => console.log(`  ${outcome.flow.app}: ${outcome.runs.length} steps, ${(outcome.ms / 1000).toFixed(1)}s` +
+    (outcome.errors.length ? `, ${outcome.errors.length} failure(s)` : "") +
+    (outcome.gaps.length ? `, ${outcome.gaps.length} observed gap(s)` : "")));
 
 const order = new Map(FLOWS.map((flow, index) => [flow.app, index]));
 outcomes.sort((a, b) => (order.get(a.flow.app) ?? 0) - (order.get(b.flow.app) ?? 0));

@@ -10,13 +10,14 @@ import { assembleReport, scoreFlow } from "./score";
 import { printSmoke } from "./lib/report";
 import { parseArgs } from "./lib/args";
 import { FLOWS } from "./flows";
+import { runQueue } from "./lib/util";
 
 const { flows, shots, jobs } = parseArgs(process.argv.slice(2), "bun run e2e --full");
 const pinned = parseScreen(ENV_SCREEN);
 console.log(`flows: ${flows.map((f) => f.app).join(", ")}  (${jobs} at a time)`);
 if (shots) await prepareShots(shots);
 
-type Outcome = { app: string; scored: boolean; lines: string[]; ms: number };
+type Outcome = { app: string; scored: boolean; lines: string[]; ms: number; aborted?: true };
 
 async function runFlow(app: string): Promise<Outcome> {
   const flow = executionFlow(flows.find((f) => f.app === app)!, "full");
@@ -46,23 +47,17 @@ async function runFlow(app: string): Promise<Outcome> {
   return { app, scored, lines, ms: Date.now() - t0 };
 }
 
-// longest flows first, so the tail of the run is not one slow flow starting last
 const weight = (app: string) => FLOWS.find((f) => f.app === app)!.steps.reduce((a, s) => a + waitHorizonMs(s.wait) + 1000, 0);
-const queue = flows.map((f) => f.app).sort((a, b) => weight(b) - weight(a));
-const outcomes: Outcome[] = [];
 const t0 = Date.now();
-await Promise.all(Array.from({ length: Math.min(jobs, queue.length) }, async () => {
-  for (let app = queue.shift(); app; app = queue.shift()) {
-    const o = await runFlow(app);
-    outcomes.push(o);
-    console.log(`\n${o.lines.join("\n")}\n  (${(o.ms / 1000).toFixed(1)}s)`);
-  }
-}));
+const outcomes = await runQueue(flows.map((f) => f.app), jobs, weight, runFlow,
+  (app, error): Outcome => ({ app, scored: false, lines: [`\n--- ${app} aborted: ${String(error).split("\n", 1)[0]}`], ms: 0, aborted: true }),
+  (o) => console.log(`\n${o.lines.join("\n")}\n  (${(o.ms / 1000).toFixed(1)}s)`));
+const aborted = outcomes.filter((o) => o.aborted).map((o) => o.app);
 
 const scoredApps = outcomes.filter((o) => o.scored).map((o) => o.app);
 if (!scoredApps.length) {
   console.log(`\nno scored flows; see tests/e2e/actual/<flow>/run.json  (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
-  process.exit(0);
+  process.exit(aborted.length ? 1 : 0);
 }
 const { out, reports } = await assembleReport(scoredApps, screenParam(pinned ?? screenOf(await loadManifest(scoredApps[0]))));
 // Smoke flows and launch-only references never appear in the full report.
@@ -86,3 +81,4 @@ for (const r of reports) {
 console.log(`  ${"OVERALL".padEnd(18)} content ${overall.toFixed(2)}%   (the target metric)`);
 console.log(`${"=".repeat(60)}\nreport: ${out}   (${((Date.now() - t0) / 1000).toFixed(1)}s, ${jobs} jobs, ${cpus().length} cpus)`);
 if (shots) console.log(`frames: ${shots}/`);
+if (aborted.length) { console.error(`aborted: ${aborted.join(", ")}`); process.exit(1); }

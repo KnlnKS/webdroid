@@ -38,6 +38,7 @@ function printHelp(cmd: string, known: Flow[], jobs: number): void {
   --shots [dir]       save every distinct webdroid frame during each step to
                       ./${DEFAULT_SHOTS_DIR} (or [dir]). Wiped at the start of every run,
                       and gitignored.
+  --live              quick lane only: also run the flows that depend on live network content
   --list              list the known flows and exit
   --help, -h          show this
 known flows: ${known.map((f) => f.app).join(", ")}`);
@@ -49,7 +50,7 @@ known flows: ${known.map((f) => f.app).join(", ")}`);
  * each step, not just the settled one that gets diffed). Any flag this parser doesn't know
  * is an error rather than a silently ignored typo.
  */
-export function parseArgs(argv: string[], cmd: string, known: Flow[] = FLOWS, defaultJobs = DEFAULT_JOBS): { flows: Flow[]; shots?: string; jobs: number } {
+export function parseArgs(argv: string[], cmd: string, known: Flow[] = FLOWS, defaultJobs = DEFAULT_JOBS, unnamed = known): { flows: Flow[]; shots?: string; jobs: number } {
   const picked: Flow[] = [];
   const unknownFlags: string[] = [];
   let shots: string | undefined;
@@ -93,5 +94,5 @@ export function parseArgs(argv: string[], cmd: string, known: Flow[] = FLOWS, de
 
   // De-dupe so `--test mihon --test mihon-app` doesn't run mihon-app twice.
   const seen = new Set<string>();
-  return { flows: (picked.length ? picked : known).filter((f) => !seen.has(f.app) && seen.add(f.app)), shots, jobs };
+  return { flows: (picked.length ? picked : unnamed).filter((f) => !seen.has(f.app) && seen.add(f.app)), shots, jobs };
 }
