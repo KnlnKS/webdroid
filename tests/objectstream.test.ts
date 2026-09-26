@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 
@@ -65,5 +65,5 @@ test("unmodifiable random-access lists retain their serialized read-only view", 
   expect(rt.iof(restored, "java/util/RandomAccess")).toBe(1);
   expect(await vcall(restored, "get", "(I)Ljava/lang/Object;", 0)).toBe("saved");
   expect(await vcall(await vcall(restored, "get", "(I)Ljava/lang/Object;", 1), "get", "()I")).toBe(7);
-  await expect(vcall(restored, "add", "(Ljava/lang/Object;)Z", "new")).rejects.toThrow();
+  await expect(vcallAsync(restored, "add", "(Ljava/lang/Object;)Z", "new")).rejects.toThrow();
 });

@@ -7,7 +7,7 @@
 // peer's. It carries the requested host as its only SAN, which is exactly what a hostname
 // verifier needs and nothing more, so an app that PINS a certificate will correctly fail rather
 // than be told a comforting lie.
-import { rt, JObj, type NativeSpec } from "../runtime";
+import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { mimeFromFilename } from "../../mime";
 import { newArrayList, toJsArray, mkIter } from "./jutil";
 import { JThrowable, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
@@ -34,7 +34,7 @@ rt.register({
   name: "javax/net/SocketFactory", ctor: JSocketFactory,
   methods: {
     "static getDefault()Ljavax/net/SocketFactory;": () => socketFactory,
-    "createSocket()Ljava/net/Socket;": async () => newObj("java/net/Socket", null),
+    "createSocket()Ljava/net/Socket;": driven(function* (): Gen  { return newObj("java/net/Socket", null); }),
     "createSocket(Ljava/lang/String;I)Ljava/net/Socket;": (h: string, p: number) => dial("java/net/Socket", h, p),
     "createSocket(Ljava/net/InetAddress;I)Ljava/net/Socket;": (address: JInetAddress, port: number) => dial("java/net/Socket", address?.host ?? "localhost", port),
   },
@@ -178,7 +178,7 @@ rt.register({
   name: "java/net/InetAddress", ctor: JInetAddress,
   methods: {
     "static getByName(Ljava/lang/String;)Ljava/net/InetAddress;": inetAddr,
-    "static getAllByName(Ljava/lang/String;)[Ljava/net/InetAddress;": async (h: string) => jarray([await inetAddr(h)], "Ljava/net/InetAddress;"),
+    "static getAllByName(Ljava/lang/String;)[Ljava/net/InetAddress;": driven(function* (h: string): Gen  { return jarray([(yield inetAddr(h))], "Ljava/net/InetAddress;"); }),
     "static getByAddress([B)Ljava/net/InetAddress;": (b: Int8Array) => inetBytes(b, null),
     "static getByAddress(Ljava/lang/String;[B)Ljava/net/InetAddress;": (h: string | null, b: Int8Array) => inetBytes(b, h),
     "static getLoopbackAddress()Ljava/net/InetAddress;": () => inetAddr("localhost"),
@@ -246,10 +246,10 @@ rt.register({
     "getHostString()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host; },
     "getHostName()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host; },
     "getPort()I": function (this: JInetSocketAddress) { return this.port; },
-    "getAddress()Ljava/net/InetAddress;": async function (this: JInetSocketAddress) {
+    "getAddress()Ljava/net/InetAddress;": driven(function* (this: JInetSocketAddress): Gen {
       if (this.unresolved) return null;
-      return this.addr ??= await inetAddr(this.host);
-    },
+      return this.addr ??= (yield inetAddr(this.host));
+    }),
     "isUnresolved()Z": function (this: JInetSocketAddress) { return +this.unresolved; },
     "toString()Ljava/lang/String;": function (this: JInetSocketAddress) { return this.host + ":" + this.port; },
   },
@@ -345,7 +345,7 @@ rt.register({
       this.remote = Object.assign(new JInetSocketAddress(), { addr: address, host: address.host, port });
     },
     "disconnect()V": function (this: JDatagramSocket) { this.remote = null; },
-    "send(Ljava/net/DatagramPacket;)V": async function (this: JDatagramSocket, packet: JDatagramPacket) {
+    "send(Ljava/net/DatagramPacket;)V": driven(function* (this: JDatagramSocket, packet: JDatagramPacket): Gen {
       if (this.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
       const address = packet.address ?? this.remote?.addr;
       const port = packet.port >= 0 ? packet.port : this.remote?.port ?? -1;
@@ -355,7 +355,7 @@ rt.register({
         this.relay ??= new DatagramRelay((data, source, sourcePort) => {
           if (!this.closed) this.deliver({ bytes: i8(data), address: inetBytes(Int8Array.from(source), null), port: sourcePort });
         });
-        try { await this.relay.send(address.host, port, u8(bytes)); }
+        try { (yield this.relay.send(address.host, port, u8(bytes))); }
         catch {
           rt.noteMissing("UDP remote transport");
           throw rt.mkThrowable("java/net/SocketException", "Remote UDP transport is unavailable");
@@ -363,23 +363,23 @@ rt.register({
         return;
       }
       datagramPorts.get(port)?.deliver({ bytes, address: inetAddr("localhost") as JInetAddress, port: this.port });
-    },
-    "receive(Ljava/net/DatagramPacket;)V": async function (this: JDatagramSocket, packet: JDatagramPacket) {
+    }),
+    "receive(Ljava/net/DatagramPacket;)V": driven(function* (this: JDatagramSocket, packet: JDatagramPacket): Gen {
       if (this.closed) throw rt.mkThrowable("java/net/SocketException", "Socket is closed");
-      const incoming = this.queue.shift() ?? await new Promise<Datagram>((resolve, reject) => {
+      const incoming = this.queue.shift() ?? (yield new Promise<Datagram>((resolve, reject) => {
         const waiter: DatagramWaiter = { resolve, reject, timer: null };
         if (this.timeout) waiter.timer = setTimeout(() => {
           this.waiters.splice(this.waiters.indexOf(waiter), 1);
           reject(rt.mkThrowable("java/net/SocketTimeoutException", "Receive timed out"));
         }, this.timeout);
         this.waiters.push(waiter);
-      });
+      }));
       const length = Math.min(packet.length, incoming.bytes.length);
       packet.data.set(incoming.bytes.subarray(0, length), packet.offset);
       packet.length = length;
       packet.address = incoming.address;
       packet.port = incoming.port;
-    },
+    }),
     "setSoTimeout(I)V": function (this: JDatagramSocket, ms: number) {
       if (ms < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout < 0");
       this.timeout = ms;
@@ -442,9 +442,9 @@ async function socketConnect(this: JSocket, a: JInetSocketAddress) {
 }
 const socketMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
-  "<init>(Ljava/lang/String;I)V": async function (this: JSocket, h: string, p: number) {
-    this.host = h ?? ""; this.port = p; await this.open();
-  },
+  "<init>(Ljava/lang/String;I)V": driven(function* (this: JSocket, h: string, p: number): Gen {
+    this.host = h ?? ""; this.port = p; (yield this.open());
+  }),
   "connect(Ljava/net/SocketAddress;)V": socketConnect,
   "connect(Ljava/net/SocketAddress;I)V": socketConnect,
   "getInputStream()Ljava/io/InputStream;": function (this: JSocket) {
@@ -479,11 +479,11 @@ rt.register({
   name: "webdroid/SocketInputStream", ctor: JSocketIn, sup: "java/io/InputStream",
   methods: {
     "<init>()V": function () {},
-    "read()I": async function (this: JSocketIn) {
+    "read()I": driven(function* (this: JSocketIn): Gen {
       const b = new Uint8Array(1);
-      const n = await socketRead(this.s, b, 0, 1);
+      const n = (yield socketRead(this.s, b, 0, 1));
       return n < 0 ? -1 : b[0];
-    },
+    }),
     "read([B)I": function (this: JSocketIn, out: Int8Array) {
       return socketRead(this.s, u8(out), 0, out.length);
     },
@@ -522,7 +522,7 @@ rt.register({
   methods: {
     ...socketMethods,
     "<init>()V": function (this: JSSLSocket) { this.tls = true; },
-    "startHandshake()V": async function (this: JSSLSocket) { await this.open(); },
+    "startHandshake()V": driven(function* (this: JSSLSocket): Gen { (yield this.open()); }),
     "getSession()Ljavax/net/ssl/SSLSession;": function (this: JSSLSocket) {
       const s = rt.make("webdroid/SSLSessionImpl") as JSSLSession;
       s.host = this.host; s.port = this.port;
@@ -799,24 +799,24 @@ rt.register({
     "hashCode()I": function (this: JURL) { return stringHash(urlKey(this)); },
     "openConnection()Ljava/net/URLConnection;": function (this: JURL) { return this.open(); },
     "openConnection(Ljava/net/Proxy;)Ljava/net/URLConnection;": function (this: JURL) { return this.open(); },
-    "openStream()Ljava/io/InputStream;": async function (this: JURL) {
+    "openStream()Ljava/io/InputStream;": driven(function* (this: JURL): Gen {
       if (this.u.protocol === "jar:") {
         const split = this.spec.indexOf("!/");
         if (split < 0) throw rt.mkThrowable("java/io/IOException", this.spec);
         const archive = new URL(this.spec.slice(4, split));
         if (archive.protocol !== "file:") throw rt.mkThrowable("java/io/IOException", this.spec);
-        const zip = await newObj("java/util/zip/ZipFile", "(Ljava/lang/String;)V", decodeURIComponent(archive.pathname));
-        const entry = await vcall(zip, "getEntry", "(Ljava/lang/String;)Ljava/util/zip/ZipEntry;", decodeURIComponent(this.spec.slice(split + 2)));
+        const zip = (yield newObj("java/util/zip/ZipFile", "(Ljava/lang/String;)V", decodeURIComponent(archive.pathname)));
+        const entry = (yield vcall(zip, "getEntry", "(Ljava/lang/String;)Ljava/util/zip/ZipEntry;", decodeURIComponent(this.spec.slice(split + 2))));
         if (!entry) throw rt.mkThrowable("java/io/FileNotFoundException", this.spec);
         return vcall(zip, "getInputStream", "(Ljava/util/zip/ZipEntry;)Ljava/io/InputStream;", entry);
       }
       if (this.u.protocol === "file:") {
-        const bytes = await vfs.readFile(decodeURIComponent(this.u.pathname));
+        const bytes = (yield vfs.readFile(decodeURIComponent(this.u.pathname)));
         if (!bytes) throw rt.mkThrowable("java/io/FileNotFoundException", this.spec);
         return newObj("java/io/ByteArrayInputStream", "([B)V", i8(bytes));
       }
       return vcall(this.open(), "getInputStream", "()Ljava/io/InputStream;");
-    },
+    }),
   },
 });
 const idnAscii = (s: string) => {
@@ -875,18 +875,18 @@ class JHttpInputStream extends JObj {
   }
 }
 rt.register({ name: "webdroid/HttpInputStream", ctor: JHttpInputStream, sup: "java/io/InputStream", methods: {
-  "read()I": async function (this: JHttpInputStream) { return await this.fill() ? this.bytes[this.offset++] : -1; },
+  "read()I": driven(function* (this: JHttpInputStream): Gen { return (yield this.fill()) ? this.bytes[this.offset++] : -1; }),
   "read([B)I": function (this: JHttpInputStream, out: Int8Array | null) { return this.read(out, 0, out?.length ?? 0); },
   "read([BII)I": function (this: JHttpInputStream, out: Int8Array | null, off: number, len: number) { return this.read(out, off, len); },
   "available()I": function (this: JHttpInputStream) { return this.bytes.length - this.offset; },
-  "skip(J)J": async function (this: JHttpInputStream, count: bigint) {
+  "skip(J)J": driven(function* (this: JHttpInputStream, count: bigint): Gen {
     let left = count;
-    while (left > 0n && await this.fill()) {
+    while (left > 0n && (yield this.fill())) {
       const n = Number(left < BigInt(this.bytes.length - this.offset) ? left : BigInt(this.bytes.length - this.offset));
       this.offset += n; left -= BigInt(n);
     }
     return count > 0n ? count - left : 0n;
-  },
+  }),
   "close()V": function (this: JHttpInputStream) { this.close(); },
   "markSupported()Z": () => 0,
   "mark(I)V": () => {},
@@ -995,11 +995,11 @@ rt.register({
   methods: {
     "static guessContentTypeFromName(Ljava/lang/String;)Ljava/lang/String;": (name: string | null) => mimeFromFilename(name ?? rt.npe()),
     "<init>(Ljava/net/URL;)V": function (this: JURLConnection, u: JURL) { this.url = u; },
-    "connect()V": async function (this: JURLConnection) {
+    "connect()V": driven(function* (this: JURLConnection): Gen {
       this.connected = 1;
       // Fetch buffers uploads: connecting must leave the output stream writable until a response is requested.
-      if (!this.doOut) await this.connect();
-    },
+      if (!this.doOut) (yield this.connect());
+    }),
     "getURL()Ljava/net/URL;": function (this: JURLConnection) { return this.url; },
     "getInputStream()Ljava/io/InputStream;": withRes(function (r) {
       if (!this.doIn) throw rt.mkThrowable("java/net/ProtocolException", "Cannot read from URLConnection if doInput=false (call setDoInput(true))");
@@ -1102,10 +1102,10 @@ rt.register({
     "setFixedLengthStreamingMode(J)V": function (this: JHttpURLConnection, n: bigint) { this.fixedContentLengthLong = n; this.fixedContentLength = Number(BigInt.asIntN(32, n)); },
     "getResponseCode()I": withRes(function (this: JHttpURLConnection, r) { this.responseMessage = r.msg || null; return this.responseCode = r.status; }),
     "getResponseMessage()Ljava/lang/String;": withRes(function (this: JHttpURLConnection, r) { this.responseCode = r.status; return this.responseMessage = r.msg || null; }),
-    "getErrorStream()Ljava/io/InputStream;": async function (this: JHttpURLConnection) {
+    "getErrorStream()Ljava/io/InputStream;": driven(function* (this: JHttpURLConnection): Gen {
       // AOSP connects here too, and answers null for any failure rather than throwing
-      try { return (await this.connect()).status >= 400 ? this.stream() : null; } catch { return null; }
-    },
+      try { return ((yield this.connect())).status >= 400 ? this.stream() : null; } catch { return null; }
+    }),
     "disconnect()V": function (this: JHttpURLConnection) { this.res?.stream.close(); this.ac?.abort(); this.ac = null; },
     "usingProxy()Z": () => 0,
   },
@@ -1205,13 +1205,13 @@ rt.register({
       // OpenJDK always answers the Cookie key, with an empty list when nothing matches
       return headerMap([["Cookie", c ? [...c].map(([k, v]) => k + "=" + v) : []]]);
     },
-    "put(Ljava/net/URI;Ljava/util/Map;)V": async function (this: JCookieManager, uri: JURI | null, hdrs: unknown) {
+    "put(Ljava/net/URI;Ljava/util/Map;)V": driven(function* (this: JCookieManager, uri: JURI | null, hdrs: unknown): Gen {
       if (this.policy === acceptNone || !hdrs) return;
       const host = hostOf(uri);
-      for (const e of await toJsArray(await vcall(hdrs, "entrySet", "()Ljava/util/Set;"))) {
-        const k = await vcall(e, "getKey", "()Ljava/lang/Object;") as string | null;
+      for (const e of (yield toJsArray((yield vcall(hdrs, "entrySet", "()Ljava/util/Set;"))))) {
+        const k = (yield vcall(e, "getKey", "()Ljava/lang/Object;")) as string | null;
         if (!k || !/^set-cookie2?$/i.test(k)) continue;
-        for (const v of await toJsArray(await vcall(e, "getValue", "()Ljava/lang/Object;")) as string[]) {
+        for (const v of (yield toJsArray((yield vcall(e, "getValue", "()Ljava/lang/Object;")))) as string[]) {
           const m = /^\s*([^=;\s]+)=([^;]*)/.exec(v);
           if (!m) continue;
           let c = this.store.jar.get(host);
@@ -1219,6 +1219,6 @@ rt.register({
           c.set(m[1], m[2].trim());
         }
       }
-    },
+    }),
   },
 });

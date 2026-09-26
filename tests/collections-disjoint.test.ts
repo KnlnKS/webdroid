@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { newArrayList } from "../src/jvm/natives/jutil";
 rt.linkNatives();
 
-const disjoint = (a: unknown, b: unknown) => vcall(rt.link("java/util/Collections").ctor, "disjoint", "(Ljava/util/Collection;Ljava/util/Collection;)Z", a, b);
+const disjoint = (a: unknown, b: unknown) => vcallAsync(rt.link("java/util/Collections").ctor, "disjoint", "(Ljava/util/Collection;Ljava/util/Collection;)Z", a, b);
 
 test("disjoint handles empty collections, shared members and null", async () => {
   const empty = newArrayList(), list = newArrayList(["x", null]);

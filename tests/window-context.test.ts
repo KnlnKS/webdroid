@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { JContext, JContextWrapper, display } from "../src/android/context";
 import { JTheme, Resources, T_STR, themeOf } from "../src/android/res";
 import { getInflater } from "../src/android/inflate";
@@ -40,7 +40,7 @@ test("display and window contexts retain display identity and own their window s
   expect(await vcall(window, "getSystemService", "(Ljava/lang/Class;)Ljava/lang/Object;", rt.classFor("android/view/WindowManager"))).toBe(manager);
   const second = await vcall(source, "createWindowContext", "(Landroid/view/Display;ILandroid/os/Bundle;)Landroid/content/Context;", screen, 2038, null);
   expect(await vcall(second, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;", "window")).not.toBe(manager);
-  const error = await vcall(source, "createDisplayContext", "(Landroid/view/Display;)Landroid/content/Context;", null).then(() => null, e => e);
+  const error = await vcallAsync(source, "createDisplayContext", "(Landroid/view/Display;)Landroid/content/Context;", null).then(() => null, e => e);
   expect(rt.iof(error, "java/lang/IllegalArgumentException")).toBeTruthy();
 });
 

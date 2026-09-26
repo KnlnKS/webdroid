@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
 import { JField } from "../src/jvm/natives/jreflect";
-import { vcall, newObj } from "../src/jvm/natives/jlang";
+import { vcall, newObj, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
 
 class Fields extends JObj { value: number | bigint = 0; static value: number | bigint = 0; }
@@ -36,7 +36,7 @@ test("typed field writes preserve primitive representation and Java widening rul
   const allowed = ["Z", "BSIJFD", "CIJFD", "SIJFD", "IJFD", "JFD", "FD", "D"];
   for (let i = 0; i < methods.length; i++) for (const destination of descriptors) {
     const object = new Fields(), f = field(destination), value = descriptors[i] === "J" ? 1n : 1;
-    const write = vcall(f, "set" + methods[i], `(Ljava/lang/Object;${descriptors[i]})V`, object, value);
+    const write = vcallAsync(f, "set" + methods[i], `(Ljava/lang/Object;${descriptors[i]})V`, object, value);
     if (allowed[i].includes(destination)) {
       await write;
       expect(object.value).toBe(destination === "J" ? 1n : 1);
@@ -63,10 +63,10 @@ test("long field writes keep all bits and round directly when widening to float"
 test("typed setters ignore static receivers and reject invalid instance receivers and reference fields", async () => {
   await vcall(field("J", true), "setLong", "(Ljava/lang/Object;J)V", null, 7n);
   expect(Fields.value).toBe(7n);
-  const error = await vcall(field("J"), "setLong", "(Ljava/lang/Object;J)V", null, 7n).catch(error => error);
+  const error = await vcallAsync(field("J"), "setLong", "(Ljava/lang/Object;J)V", null, 7n).catch(error => error);
   expect(rt.iof(error, "java/lang/NullPointerException")).toBe(1);
-  await expect(vcall(field("J"), "setLong", "(Ljava/lang/Object;J)V", new JObj(), 7n)).rejects.toMatchObject({ msg: "Wrong field receiver" });
-  await expect(vcall(field("Ljava/lang/Long;"), "setLong", "(Ljava/lang/Object;J)V", new Fields(), 7n)).rejects.toMatchObject({ msg: "Invalid primitive field conversion" });
+  await expect(vcallAsync(field("J"), "setLong", "(Ljava/lang/Object;J)V", new JObj(), 7n)).rejects.toMatchObject({ msg: "Wrong field receiver" });
+  await expect(vcallAsync(field("Ljava/lang/Long;"), "setLong", "(Ljava/lang/Object;J)V", new Fields(), 7n)).rejects.toMatchObject({ msg: "Invalid primitive field conversion" });
 });
 
 test("a static primitive write waits for its declaring class to initialize", async () => {

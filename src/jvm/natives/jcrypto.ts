@@ -1,6 +1,6 @@
 // javax.crypto — SecretKeySpec, IvParameterSpec, Cipher (AES) and Mac (HMAC) over WebCrypto, which is
 // one-shot and async: update() buffers, doFinal() awaits the whole operation.
-import { rt, JObj } from "../runtime";
+import { rt, JObj, driven, type Gen } from "../runtime";
 import { vcall } from "./jlang";
 import { defineException } from "./jlang";
 import { mkIter } from "./jutil";
@@ -95,14 +95,14 @@ rt.register({
   methods: {
     "static getInstance(Ljava/lang/String;)Ljavax/crypto/SecretKeyFactory;": secretKeyFactory,
     "getAlgorithm()Ljava/lang/String;": function (this: JSecretKeyFactory) { return this.algorithm; },
-    "generateSecret(Ljava/security/spec/KeySpec;)Ljavax/crypto/SecretKey;": async function (this: JSecretKeyFactory, spec: JPBEKeySpec) {
+    "generateSecret(Ljava/security/spec/KeySpec;)Ljavax/crypto/SecretKey;": driven(function* (this: JSecretKeyFactory, spec: JPBEKeySpec): Gen {
       if (!(spec instanceof JPBEKeySpec) || !spec.salt.length || spec.iterations <= 0 || spec.bits <= 0) {
         throw rt.mkThrowable("java/security/spec/InvalidKeySpecException", "PBEKeySpec required");
       }
-      const material = await crypto.subtle.importKey("raw", utf8.enc.encode(charsToString(spec.password, 0, spec.password.length)), "PBKDF2", false, ["deriveBits"]);
-      const derived = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-1", salt: spec.salt, iterations: spec.iterations }, material, spec.bits);
+      const material = (yield crypto.subtle.importKey("raw", utf8.enc.encode(charsToString(spec.password, 0, spec.password.length)), "PBKDF2", false, ["deriveBits"]));
+      const derived = (yield crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-1", salt: spec.salt, iterations: spec.iterations }, material, spec.bits));
       return mkSecretKey(new Uint8Array(derived), this.algorithm);
-    },
+    }),
   },
 });
 
@@ -152,26 +152,26 @@ rt.register({
     "<init>(Ljava/io/OutputStream;Ljavax/crypto/Cipher;)V": function (this: JCipherOutputStream, out: unknown, cipher: JCipher) {
       this.out = out; this.cipher = cipher;
     },
-    "write(I)V": async function (this: JCipherOutputStream, b: number) {
-      const result: Int8Array = await vcall(this.cipher, "update", "([B)[B", Int8Array.of(b));
-      if (result?.length) await vcall(this.out, "write", "([B)V", result);
-    },
-    "write([BII)V": async function (this: JCipherOutputStream, bytes: Int8Array, off: number, len: number) {
+    "write(I)V": driven(function* (this: JCipherOutputStream, b: number): Gen {
+      const result: Int8Array = (yield vcall(this.cipher, "update", "([B)[B", Int8Array.of(b)));
+      if (result?.length) (yield vcall(this.out, "write", "([B)V", result));
+    }),
+    "write([BII)V": driven(function* (this: JCipherOutputStream, bytes: Int8Array, off: number, len: number): Gen {
       if (!len) return;
-      const result: Int8Array = await vcall(this.cipher, "update", "([BII)[B", bytes, off, len);
-      if (result?.length) await vcall(this.out, "write", "([B)V", result);
-    },
-    "close()V": async function (this: JCipherOutputStream) {
+      const result: Int8Array = (yield vcall(this.cipher, "update", "([BII)[B", bytes, off, len));
+      if (result?.length) (yield vcall(this.out, "write", "([B)V", result));
+    }),
+    "close()V": driven(function* (this: JCipherOutputStream): Gen {
       if (this.closed) return;
       this.closed = true;
       try {
-        const result: Int8Array = await vcall(this.cipher, "doFinal", "()[B");
-        if (result?.length) await vcall(this.out, "write", "([B)V", result);
-        await vcall(this.out, "flush", "()V");
+        const result: Int8Array = (yield vcall(this.cipher, "doFinal", "()[B"));
+        if (result?.length) (yield vcall(this.out, "write", "([B)V", result));
+        (yield vcall(this.out, "flush", "()V"));
       } finally {
-        await vcall(this.out, "close", "()V");
+        (yield vcall(this.out, "close", "()V"));
       }
-    },
+    }),
   },
 });
 class JCipherInputStream extends JFilterInputStream {
@@ -194,38 +194,38 @@ rt.register({
     "<init>(Ljava/io/InputStream;Ljavax/crypto/Cipher;)V": function (this: JCipherInputStream, input: unknown, cipher: JCipher) {
       this.in_ = input; this.cipher = cipher;
     },
-    "read()I": async function (this: JCipherInputStream) {
+    "read()I": driven(function* (this: JCipherInputStream): Gen {
       if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
-      await this.load();
+      (yield this.load());
       return this.pos < this.plain!.length ? this.plain![this.pos++]! & 0xff : -1;
-    },
-    "read([BII)I": async function (this: JCipherInputStream, bytes: Int8Array, off: number, len: number) {
+    }),
+    "read([BII)I": driven(function* (this: JCipherInputStream, bytes: Int8Array, off: number, len: number): Gen {
       if (!bytes) throw rt.mkThrowable("java/lang/NullPointerException", null);
       if (off < 0 || len < 0 || off > bytes.length - len) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
       if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
       if (!len) return 0;
-      await this.load();
+      (yield this.load());
       const count = Math.min(len, this.plain!.length - this.pos);
       if (!count) return -1;
       bytes.set(this.plain!.subarray(this.pos, this.pos + count), off);
       this.pos += count;
       return count;
-    },
+    }),
     "available()I": function (this: JCipherInputStream) { return this.plain ? this.plain.length - this.pos : 0; },
-    "skip(J)J": async function (this: JCipherInputStream, count: bigint) {
+    "skip(J)J": driven(function* (this: JCipherInputStream, count: bigint): Gen {
       if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
       if (count <= 0n) return 0n;
-      await this.load();
+      (yield this.load());
       const skipped = Number(count < BigInt(this.plain!.length - this.pos) ? count : BigInt(this.plain!.length - this.pos));
       this.pos += skipped;
       return BigInt(skipped);
-    },
-    "close()V": async function (this: JCipherInputStream) {
+    }),
+    "close()V": driven(function* (this: JCipherInputStream): Gen {
       if (this.closed) return;
       this.closed = true;
       this.plain = null;
-      await vcall(this.in_, "close", "()V");
-    },
+      (yield vcall(this.in_, "close", "()V"));
+    }),
     "markSupported()Z": () => 0,
   },
 });
@@ -335,13 +335,13 @@ rt.register({
   methods: {
     "static getInstance(Ljava/lang/String;)Ljavax/crypto/Cipher;": getCipher,
     "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/Cipher;": getCipher,
-    "init(ILjava/security/Key;)V": async function (this: JCipher, m: number, k: unknown) { return initCipher(this, m, k, null); },
-    "init(ILjava/security/Key;Ljava/security/SecureRandom;)V": async function (this: JCipher, m: number, k: unknown) { return initCipher(this, m, k, null); },
-    "init(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V": async function (this: JCipher, m: number, k: unknown, p: unknown) {
+    "init(ILjava/security/Key;)V": driven(function* (this: JCipher, m: number, k: unknown): Gen { return initCipher(this, m, k, null); }),
+    "init(ILjava/security/Key;Ljava/security/SecureRandom;)V": driven(function* (this: JCipher, m: number, k: unknown): Gen { return initCipher(this, m, k, null); }),
+    "init(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V": driven(function* (this: JCipher, m: number, k: unknown, p: unknown): Gen {
       return initCipher(this, m, k, p);
-    },
+    }),
     "init(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;Ljava/security/SecureRandom;)V":
-      async function (this: JCipher, m: number, k: unknown, p: unknown) { return initCipher(this, m, k, p); },
+      driven(function* (this: JCipher, m: number, k: unknown, p: unknown): Gen { return initCipher(this, m, k, p); }),
     "update([B)[B": function (this: JCipher, b: Int8Array) { this.parts.push(bytes(b)); return new Int8Array(0); },
     "update([BII)[B": function (this: JCipher, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); return new Int8Array(0); },
     "update([BII[BI)I": function (this: JCipher, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); return 0; },
@@ -352,25 +352,25 @@ rt.register({
       const u = new Uint8Array(v.ab, v.byteFromPos, bb.lim - bb.pos);
       this.aad.push(new Uint8Array(u)); bb.pos = bb.lim;
     },
-    "doFinal()[B": async function (this: JCipher) { return doFinal(this); },
-    "doFinal([B)[B": async function (this: JCipher, b: Int8Array) { return doFinal(this, b); },
-    "doFinal([BII)[B": async function (this: JCipher, b: Int8Array, off: number, len: number) { return doFinal(this, b, off, len); },
-    "doFinal([BI)I": async function (this: JCipher, out: Int8Array, off: number) { return into(await doFinal(this), out, off); },
-    "doFinal([BII[BI)I": async function (this: JCipher, b: Int8Array, off: number, len: number, out: Int8Array, outOff: number) {
-      return into(await doFinal(this, b, off, len), out, outOff);
-    },
-    "doFinal([BII[B)I": async function (this: JCipher, b: Int8Array, off: number, len: number, out: Int8Array) { return into(await doFinal(this, b, off, len), out, 0); },
+    "doFinal()[B": driven(function* (this: JCipher): Gen { return doFinal(this); }),
+    "doFinal([B)[B": driven(function* (this: JCipher, b: Int8Array): Gen { return doFinal(this, b); }),
+    "doFinal([BII)[B": driven(function* (this: JCipher, b: Int8Array, off: number, len: number): Gen { return doFinal(this, b, off, len); }),
+    "doFinal([BI)I": driven(function* (this: JCipher, out: Int8Array, off: number): Gen { return into((yield doFinal(this)), out, off); }),
+    "doFinal([BII[BI)I": driven(function* (this: JCipher, b: Int8Array, off: number, len: number, out: Int8Array, outOff: number): Gen {
+      return into((yield doFinal(this, b, off, len)), out, outOff);
+    }),
+    "doFinal([BII[B)I": driven(function* (this: JCipher, b: Int8Array, off: number, len: number, out: Int8Array): Gen { return into((yield doFinal(this, b, off, len)), out, 0); }),
     "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljavax/crypto/Cipher;": getCipher,
-    "wrap(Ljava/security/Key;)[B": async function (this: JCipher, key: JSecretKeySpec) {
+    "wrap(Ljava/security/Key;)[B": driven(function* (this: JCipher, key: JSecretKeySpec): Gen {
       if (this.opmode !== 3) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized for wrapping");
       if (!(key instanceof JSecretKeySpec)) throw rt.mkThrowable("java/security/InvalidKeyException", "Unsupported wrapped key");
       return doFinal(this, new Int8Array(key.key));
-    },
-    "unwrap([BLjava/lang/String;I)Ljava/security/Key;": async function (this: JCipher, wrapped: Int8Array, algorithm: string, type: number) {
+    }),
+    "unwrap([BLjava/lang/String;I)Ljava/security/Key;": driven(function* (this: JCipher, wrapped: Int8Array, algorithm: string, type: number): Gen {
       if (this.opmode !== 4) throw rt.mkThrowable("java/lang/IllegalStateException", "Cipher not initialized for unwrapping");
       if (type !== 3) throw rt.mkThrowable("java/security/InvalidKeyException", "Unsupported wrapped key type");
-      return mkSecretKey(new Uint8Array(await doFinal(this, wrapped)), algorithm);
-    },
+      return mkSecretKey(new Uint8Array((yield doFinal(this, wrapped))), algorithm);
+    }),
     "getParameters()Ljava/security/AlgorithmParameters;": () => null,
     "getBlockSize()I": function (this: JCipher) { return this.alg === "RSA-OAEP" ? 0 : 16; },
     "getOutputSize(I)I": function (this: JCipher, n: number) {
@@ -420,8 +420,8 @@ rt.register({
     "update(B)V": function (this: JMac, b: number) { this.parts.push(new Uint8Array([b & 0xff])); },
     "update([B)V": function (this: JMac, b: Int8Array) { this.parts.push(bytes(b)); },
     "update([BII)V": function (this: JMac, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); },
-    "doFinal()[B": async function (this: JMac) { return macFinal(this); },
-    "doFinal([B)[B": async function (this: JMac, b: Int8Array) { return macFinal(this, b); },
+    "doFinal()[B": driven(function* (this: JMac): Gen { return macFinal(this); }),
+    "doFinal([B)[B": driven(function* (this: JMac, b: Int8Array): Gen { return macFinal(this, b); }),
     "reset()V": function (this: JMac) { this.parts = []; },
     "getMacLength()I": function (this: JMac) { return this.len; },
     "getAlgorithm()Ljava/lang/String;": function (this: JMac) { return this.algo; },

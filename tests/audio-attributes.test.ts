@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 
@@ -15,7 +15,7 @@ test("AudioAttributes maps legacy music streams", async () => {
 
 test("AudioAttributes rejects the accessibility legacy stream", async () => {
   const builder = await newObj("android/media/AudioAttributes$Builder");
-  await expect(vcall(builder, "setLegacyStreamType", "(I)Landroid/media/AudioAttributes$Builder;", 10)).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
+  await expect(vcallAsync(builder, "setLegacyStreamType", "(I)Landroid/media/AudioAttributes$Builder;", 10)).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
 });
 
 test("AudioFocusRequest retains builder state and AudioManager grants focus", async () => {
@@ -33,7 +33,7 @@ test("AudioFocusRequest retains builder state and AudioManager grants focus", as
 });
 
 test("AudioFocusRequest rejects invalid gains and null listeners", async () => {
-  await expect(newObj("android/media/AudioFocusRequest$Builder", "(I)V", 0)).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
+  await expect((async () => newObj("android/media/AudioFocusRequest$Builder", "(I)V", 0))()).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
   const builder = await newObj("android/media/AudioFocusRequest$Builder", "(I)V", 1);
-  await expect(vcall(builder, "setOnAudioFocusChangeListener", "(Landroid/media/AudioManager$OnAudioFocusChangeListener;)Landroid/media/AudioFocusRequest$Builder;", null)).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
+  await expect(vcallAsync(builder, "setOnAudioFocusChangeListener", "(Landroid/media/AudioManager$OnAudioFocusChangeListener;)Landroid/media/AudioFocusRequest$Builder;", null)).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
 });

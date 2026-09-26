@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { newObj, stringHash, vcall } from "../jvm/natives/jlang";
 import { newArrayList, type JList } from "../jvm/natives/jutil";
@@ -58,11 +58,11 @@ rt.register({ name: "android/os/WorkSource$WorkChain", ctor: JWorkChain, ifaces:
     "getTags()[Ljava/lang/String;": function (this: JWorkChain) { return jarray(this.tags.slice(), "Ljava/lang/String;"); },
     "equals(Ljava/lang/Object;)Z": function (this: JWorkChain, other: unknown) { return +(other instanceof JWorkChain && this.equals(other)); },
     "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JWorkChain, p: JParcel) {
-      await vcall(p, "writeInt", "(I)V", this.uids.length);
-      await vcall(p, "writeIntArray", "([I)V", Int32Array.from(this.uids));
-      await vcall(p, "writeStringArray", "([Ljava/lang/String;)V", this.tags);
-    },
+    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JWorkChain, p: JParcel): Gen {
+      (yield vcall(p, "writeInt", "(I)V", this.uids.length));
+      (yield vcall(p, "writeIntArray", "([I)V", Int32Array.from(this.uids)));
+      (yield vcall(p, "writeStringArray", "([Ljava/lang/String;)V", this.tags));
+    }),
   },
 });
 rt.register({ name: "android/os/WorkSource", ctor: JWorkSource, ifaces: ["android/os/Parcelable"],
@@ -114,32 +114,32 @@ rt.register({ name: "android/os/WorkSource", ctor: JWorkSource, ifaces: ["androi
         if (other.chains?.a.some(chain => workChain(chain).equals(workChain(this.chains!.a[i])))) { this.chains.a.splice(i, 1); changed = 1; }
       return changed;
     },
-    "createWorkChain()Landroid/os/WorkSource$WorkChain;": async function (this: JWorkSource) {
-      const chain = await newObj("android/os/WorkSource$WorkChain"); (this.chains ??= newArrayList()).a.push(chain); return chain;
-    },
+    "createWorkChain()Landroid/os/WorkSource$WorkChain;": driven(function* (this: JWorkSource): Gen {
+      const chain = (yield newObj("android/os/WorkSource$WorkChain")); (this.chains ??= newArrayList()).a.push(chain); return chain;
+    }),
     "getWorkChains()Ljava/util/List;": function (this: JWorkSource) { return this.chains; },
     "diff(Landroid/os/WorkSource;)Z": function (this: JWorkSource, other: JWorkSource) { return +this.diff(other); },
     "equals(Ljava/lang/Object;)Z": function (this: JWorkSource, other: unknown) {
       return +(other instanceof JWorkSource && !this.diff(other) && (this.chains?.a.length ?? 0) === (other.chains?.a.length ?? 0)
         && (this.chains?.a.every((chain, i) => workChain(chain).equals(workChain(other.chains!.a[i]))) ?? true));
     },
-    "hashCode()I": async function (this: JWorkSource) {
+    "hashCode()I": driven(function* (this: JWorkSource): Gen {
       let hash = 0;
       for (const uid of this.uids) hash = (hash << 4 | hash >>> 28) ^ uid;
       for (const name of this.names ?? []) hash = (hash << 4 | hash >>> 28) ^ stringHash(name);
-      if (this.chains) hash = (hash << 4 | hash >>> 28) ^ await vcall(this.chains, "hashCode", "()I");
+      if (this.chains) hash = (hash << 4 | hash >>> 28) ^ (yield vcall(this.chains, "hashCode", "()I"));
       return hash;
-    },
+    }),
     "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JWorkSource, p: JParcel, flags: number) {
-      await vcall(p, "writeInt", "(I)V", this.uids.length);
-      await vcall(p, "writeIntArray", "([I)V", this.uids.length ? Int32Array.from(this.uids) : null);
-      await vcall(p, "writeStringArray", "([Ljava/lang/String;)V", this.names);
-      await vcall(p, "writeInt", "(I)V", this.chains?.a.length ?? -1);
+    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JWorkSource, p: JParcel, flags: number): Gen {
+      (yield vcall(p, "writeInt", "(I)V", this.uids.length));
+      (yield vcall(p, "writeIntArray", "([I)V", this.uids.length ? Int32Array.from(this.uids) : null));
+      (yield vcall(p, "writeStringArray", "([Ljava/lang/String;)V", this.names));
+      (yield vcall(p, "writeInt", "(I)V", this.chains?.a.length ?? -1));
       if (this.chains) {
-        await vcall(p, "writeInt", "(I)V", this.chains.a.length);
-        for (const chain of this.chains.a) await vcall(p, "writeParcelable", "(Landroid/os/Parcelable;I)V", chain, flags);
+        (yield vcall(p, "writeInt", "(I)V", this.chains.a.length));
+        for (const chain of this.chains.a) (yield vcall(p, "writeParcelable", "(Landroid/os/Parcelable;I)V", chain, flags));
       }
-    },
+    }),
   },
 });

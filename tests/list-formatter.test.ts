@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
-import { newObj, vcall, vcallOn, JThread, curThread } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallOn, JThread, curThread, vcallAsync } from "../src/jvm/natives/jlang";
 import { newArrayList } from "../src/jvm/natives/jutil";
 
 rt.linkNatives();
@@ -23,5 +23,5 @@ test("ICU list formatting invokes object strings on the caller thread and reject
   }));
   expect(await vcallOn(thread, formatter, "format", "([Ljava/lang/Object;)Ljava/lang/String;", objects)).toBe("first and second");
   expect(observed).toEqual([thread, thread]);
-  for (const items of [null, [null]]) await expect(vcall(formatter, "format", "([Ljava/lang/Object;)Ljava/lang/String;", items)).rejects.toBeInstanceOf(rt.link("java/lang/NullPointerException").ctor);
+  for (const items of [null, [null]]) await expect(vcallAsync(formatter, "format", "([Ljava/lang/Object;)Ljava/lang/String;", items)).rejects.toBeInstanceOf(rt.link("java/lang/NullPointerException").ctor);
 });

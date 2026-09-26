@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { JThread, mainThread, newObj, park, vcall } from "../src/jvm/natives/jlang";
+import { JThread, mainThread, newObj, park, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 const state = async (thread: unknown) => vcall(await vcall(thread, "getState", "()Ljava/lang/Thread$State;"), "name", "()Ljava/lang/String;");
@@ -13,7 +13,7 @@ test("Thread states distinguish new, runnable and terminated threads", async () 
   await vcall(thread, "start", "()V");
   await vcall(thread, "join", "()V");
   expect(await state(thread)).toBe("TERMINATED");
-  await expect(vcall(thread, "start", "()V")).rejects.toBeDefined();
+  await expect(vcallAsync(thread, "start", "()V")).rejects.toBeDefined();
 });
 
 test("Thread states expose monitor contention, timed parking, wakeup and interruption", async () => {

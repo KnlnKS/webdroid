@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { vcall } from "../src/jvm/natives/jlang";
+import { vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
 import { dialName, syntheticAddress } from "../src/shell/relay";
 
@@ -54,7 +54,7 @@ test("the platform trust manager accepts relay-verified peers", async () => {
   const factory = await scall("javax/net/ssl/TrustManagerFactory", "getInstance",
     "(Ljava/lang/String;)Ljavax/net/ssl/TrustManagerFactory;", "PKIX");
   const managers = await vcall(factory, "getTrustManagers", "()[Ljavax/net/ssl/TrustManager;");
-  await expect(vcall(managers[0], "checkServerTrusted", "([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V", chain, "RSA")).resolves.toBeUndefined();
+  await expect(vcallAsync(managers[0], "checkServerTrusted", "([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V", chain, "RSA")).resolves.toBeUndefined();
   const verifier = await scall("javax/net/ssl/HttpsURLConnection", "getDefaultHostnameVerifier", "()Ljavax/net/ssl/HostnameVerifier;");
   expect(await vcall(verifier, "verify", "(Ljava/lang/String;Ljavax/net/ssl/SSLSession;)Z", "EXAMPLE.COM.", session)).toBe(1);
   expect(await vcall(verifier, "verify", "(Ljava/lang/String;Ljavax/net/ssl/SSLSession;)Z", "other.example", session)).toBe(0);

@@ -4,7 +4,7 @@
 // querying the package manager themselves. The manifest walk (providerNodes, matchesAction,
 // authoritiesOf) lives with PackageManager in app.ts; DocumentsContract reads it from there.
 
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { isDocumentsProvider } from "./pm";
 import { registerSystemActivity, systemActivities, mkResultIntent, type JIntent } from "./intent";
@@ -63,17 +63,17 @@ rt.register({
       this.authority = authority;
       this.twoLine = !!(mode & 2);
     },
-    "saveRecentQuery(Ljava/lang/String;Ljava/lang/String;)V": async function (this: JSearchRecentSuggestions, query: string | null, line2: string | null) {
+    "saveRecentQuery(Ljava/lang/String;Ljava/lang/String;)V": driven(function* (this: JSearchRecentSuggestions, query: string | null, line2: string | null): Gen {
       if (!query?.length) return;
       if (line2 != null && !this.twoLine) throw rt.mkThrowable("java/lang/IllegalArgumentException", "twoLineDisplay must be enabled");
-      const values = await newObj("android/content/ContentValues");
-      await vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "display1", query);
-      await vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "query", query);
-      await vcall(values, "put", "(Ljava/lang/String;Ljava/lang/Long;)V", "date", BigInt(Date.now()));
-      if (this.twoLine) await vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "display2", line2);
-      const resolver = await vcall(this.ctx, "getContentResolver", "()Landroid/content/ContentResolver;");
-      await vcall(resolver, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", mkUri(`content://${this.authority}/suggestions`), values);
-    },
+      const values = (yield newObj("android/content/ContentValues"));
+      (yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "display1", query));
+      (yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "query", query));
+      (yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/Long;)V", "date", BigInt(Date.now())));
+      if (this.twoLine) (yield vcall(values, "put", "(Ljava/lang/String;Ljava/lang/String;)V", "display2", line2));
+      const resolver = (yield vcall(this.ctx, "getContentResolver", "()Landroid/content/ContentResolver;"));
+      (yield vcall(resolver, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", mkUri(`content://${this.authority}/suggestions`), values));
+    }),
   },
 });
 
@@ -105,17 +105,17 @@ rt.register({
     // Mutations are a ContentResolver.call into the owning DocumentsProvider; ours answers for
     // DOCS_AUTHORITY and anything else takes AOSP's own failure return rather than throwing.
     "static createDocument(Landroid/content/ContentResolver;Landroid/net/Uri;Ljava/lang/String;Ljava/lang/String;)Landroid/net/Uri;":
-      async (_r: unknown, u: JUriLike, mime: string, name: string) => {
-        const id = isDocsUri(u) ? await docCreate(documentId(u, true), mime, name) : null;
+      driven(function* (_r: unknown, u: JUriLike, mime: string, name: string): Gen  {
+        const id = isDocsUri(u) ? (yield docCreate(documentId(u, true), mime, name)) : null;
         return id ? mkUri(docUriLike(u, id)) : null;
-      },
+      }),
     "static renameDocument(Landroid/content/ContentResolver;Landroid/net/Uri;Ljava/lang/String;)Landroid/net/Uri;":
-      async (_r: unknown, u: JUriLike, name: string) => {
-        const id = isDocsUri(u) ? await docRename(documentId(u, true), name) : null;
+      driven(function* (_r: unknown, u: JUriLike, name: string): Gen  {
+        const id = isDocsUri(u) ? (yield docRename(documentId(u, true), name)) : null;
         return id ? mkUri(docUriLike(u, id)) : null;
-      },
+      }),
     "static deleteDocument(Landroid/content/ContentResolver;Landroid/net/Uri;)Z":
-      async (_r: unknown, u: JUriLike) => isDocsUri(u) && await docDelete(documentId(u, true)) ? 1 : 0,
+      driven(function* (_r: unknown, u: JUriLike): Gen  { return isDocsUri(u) && (yield docDelete(documentId(u, true))) ? 1 : 0; }),
   },
 });
 rt.register({

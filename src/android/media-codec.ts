@@ -1,4 +1,4 @@
-import { JObj, rt, noops } from "../jvm/runtime";
+import { JObj, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { jarray, u8 } from "../jvm/abi";
 import { box, boxInt, JDouble, JThrowable, newObj, vcall } from "../jvm/natives/jlang";
 import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
@@ -112,7 +112,7 @@ rt.register({ name: "android/media/MediaCodecInfo", ctor: JCodecInfo, methods: {
 rt.register({ name: "android/media/MediaCodecInfo$CodecCapabilities", ctor: JCapabilities, fields: { profileLevels: "profileLevels" }, statics: { COLOR_FormatYUV420Planar: 19 }, methods: {
   "isFeatureSupported(Ljava/lang/String;)Z": () => 0, "isFeatureRequired(Ljava/lang/String;)Z": () => 0,
   "getMaxSupportedInstances()I": () => 1,
-  "isFormatSupported(Landroid/media/MediaFormat;)Z": async function (this: JCapabilities, format: JMediaFormat) { return +await supports(this.info.definition, format); },
+  "isFormatSupported(Landroid/media/MediaFormat;)Z": driven(function* (this: JCapabilities, format: JMediaFormat): Gen { return +(yield supports(this.info.definition, format)); }),
   "getVideoCapabilities()Landroid/media/MediaCodecInfo$VideoCapabilities;": function (this: JCapabilities) { rt.link("android/media/MediaCodecInfo$VideoCapabilities"); return this.info.definition.kind === "video" ? new JVideoCapabilities(this.info) : null; },
   "getAudioCapabilities()Landroid/media/MediaCodecInfo$AudioCapabilities;": function (this: JCapabilities) { rt.link("android/media/MediaCodecInfo$AudioCapabilities"); return this.info.definition.kind === "audio" ? new JAudioCapabilities(this.info) : null; },
 } });
@@ -123,11 +123,11 @@ const supportsSize = async function (this: JVideoCapabilities, width: number, he
 rt.register({ name: "android/media/MediaCodecInfo$VideoCapabilities", ctor: JVideoCapabilities, methods: {
   "getWidthAlignment()I": () => 1, "getHeightAlignment()I": () => 1,
   "getSupportedFrameRates()Landroid/util/Range;": () => newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(0), boxInt(960)),
-  "getSupportedFrameRatesFor(II)Landroid/util/Range;": async function (this: JVideoCapabilities, width: number, height: number) {
+  "getSupportedFrameRatesFor(II)Landroid/util/Range;": driven(function* (this: JVideoCapabilities, width: number, height: number): Gen {
     const def = this.info.definition, range = def.kind === "video" ? frameRates(def, width, height) : null;
-    if (!range || !await supportsSize.call(this, width, height)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "unsupported size");
+    if (!range || !(yield supportsSize.call(this, width, height))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "unsupported size");
     return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", box(JDouble, range[0]), box(JDouble, range[1]));
-  },
+  }),
   "getBitrateRange()Landroid/util/Range;": function (this: JVideoCapabilities) {
     const definition = this.info.definition;
     if (definition.kind !== "video") throw rt.mkThrowable("java/lang/IllegalStateException", "Not a video codec");
@@ -144,28 +144,28 @@ rt.register({ name: "android/media/MediaCodecInfo$VideoCapabilities", ctor: JVid
     return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(1), boxInt(definition.maxDimension));
   },
   "isSizeSupported(II)Z": supportsSize,
-  "areSizeAndRateSupported(IID)Z": async function (this: JVideoCapabilities, width: number, height: number, rate: number) {
+  "areSizeAndRateSupported(IID)Z": driven(function* (this: JVideoCapabilities, width: number, height: number, rate: number): Gen {
     const def = this.info.definition, range = def.kind === "video" ? frameRates(def, width, height) : null;
-    return +(!!range && rate >= range[0] && rate <= range[1] && !!await supportsSize.call(this, width, height));
-  },
+    return +(!!range && rate >= range[0] && rate <= range[1] && !!(yield supportsSize.call(this, width, height)));
+  }),
   "getSupportedPerformancePoints()Ljava/util/List;": () => null,
   "getAchievableFrameRatesFor(II)Landroid/util/Range;": () => null,
 } });
 rt.register({ name: "android/media/MediaCodecInfo$AudioCapabilities", ctor: JAudioCapabilities, methods: {
   "getMaxInputChannelCount()I": () => 2,
-  "isSampleRateSupported(I)Z": async function (this: JAudioCapabilities, rate: number) { const format = new JMediaFormat(); format.values.set("sample-rate", { type: 1, value: rate }); return +await supports(this.info.definition, format); },
+  "isSampleRateSupported(I)Z": driven(function* (this: JAudioCapabilities, rate: number): Gen { const format = new JMediaFormat(); format.values.set("sample-rate", { type: 1, value: rate }); return +(yield supports(this.info.definition, format)); }),
 } });
 rt.register({ name: "android/media/MediaCodecList", ctor: class extends JObj {}, statics: { REGULAR_CODECS: 0, ALL_CODECS: 1 }, methods: {
   "<init>(I)V": function () {},
-  "getCodecInfos()[Landroid/media/MediaCodecInfo;": async () => jarray(await codecs(), "Landroid/media/MediaCodecInfo;"),
-  "static getCodecCount()I": async () => (await codecs()).length,
-  "static getCodecInfoAt(I)Landroid/media/MediaCodecInfo;": async (index: number) => {
-    const info = (await codecs())[index]; if (!info) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(index)); return info;
-  },
-  "findDecoderForFormat(Landroid/media/MediaFormat;)Ljava/lang/String;": async (format: JMediaFormat) => {
-    for (const info of await codecs()) if (info.definition.mime === stringValue(format, "mime") && await supports(info.definition, format)) return info.name;
+  "getCodecInfos()[Landroid/media/MediaCodecInfo;": driven(function* (): Gen  { return jarray((yield codecs()), "Landroid/media/MediaCodecInfo;"); }),
+  "static getCodecCount()I": driven(function* (): Gen  { return ((yield codecs())).length; }),
+  "static getCodecInfoAt(I)Landroid/media/MediaCodecInfo;": driven(function* (index: number): Gen  {
+    const info = ((yield codecs()))[index]; if (!info) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", String(index)); return info;
+  }),
+  "findDecoderForFormat(Landroid/media/MediaFormat;)Ljava/lang/String;": driven(function* (format: JMediaFormat): Gen  {
+    for (const info of (yield codecs())) if (info.definition.mime === stringValue(format, "mime") && (yield supports(info.definition, format))) return info.name;
     return null;
-  },
+  }),
   "findEncoderForFormat(Landroid/media/MediaFormat;)Ljava/lang/String;": () => null,
 } });
 
@@ -368,8 +368,8 @@ export async function createCodec(name: string, mime: boolean): Promise<JMediaCo
   rt.link("android/media/MediaCodec"); return new JMediaCodec(info);
 }
 rt.register({ name: "android/media/MediaCodec", ctor: JMediaCodec, methods: {
-  "static createByCodecName(Ljava/lang/String;)Landroid/media/MediaCodec;": async (name: string) => createCodec(name, false),
-  "static createDecoderByType(Ljava/lang/String;)Landroid/media/MediaCodec;": async (mime: string) => createCodec(mime, true),
+  "static createByCodecName(Ljava/lang/String;)Landroid/media/MediaCodec;": driven(function* (name: string): Gen  { return createCodec(name, false); }),
+  "static createDecoderByType(Ljava/lang/String;)Landroid/media/MediaCodec;": driven(function* (mime: string): Gen  { return createCodec(mime, true); }),
   "getName()Ljava/lang/String;": function (this: JMediaCodec) { return this.info.name; },
   "getCodecInfo()Landroid/media/MediaCodecInfo;": function (this: JMediaCodec) { return this.info; },
   "setCallback(Landroid/media/MediaCodec$Callback;Landroid/os/Handler;)V": function (this: JMediaCodec, callback: unknown, handler: ReturnType<typeof mainHandler> | null) { this.callback = callback; this.handler = handler; },

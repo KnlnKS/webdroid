@@ -9,7 +9,7 @@
  * URI algebra needs no special case; the volume is the picked directory's own name.
  */
 
-import { rt } from "../jvm/runtime";
+import { rt, driven, type Gen } from "../jvm/runtime";
 import { JOutputStream, streamOf, type JInputStream } from "../jvm/natives/jio";
 import { pickDirectory, pickFiles, rootHandles } from "../shell/hostfs";
 import { openDb, txDone } from "../shell/idb";
@@ -261,7 +261,7 @@ rt.register({
     // on close. flush() cannot be that commit: a BufferedOutputStream wrapper flushes per block,
     // which would rewrite the whole file for every buffer's worth of a backup.
     "flush()V": () => {},
-    "close()V": async function (this: JDocOutputStream) { await docWrite(this.docId, Uint8Array.from(this.chunks)); },
+    "close()V": driven(function* (this: JDocOutputStream): Gen { (yield docWrite(this.docId, Uint8Array.from(this.chunks))); }),
   },
 });
 export function docOutputStream(docId: string, append: boolean): Promise<JDocOutputStream> {

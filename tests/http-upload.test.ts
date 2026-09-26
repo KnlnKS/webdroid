@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 rt.linkNatives();
 test("HTTP connect leaves the upload writable and response accessors share one request", async () => {
   const original = globalThis.fetch;
@@ -34,6 +34,6 @@ test("HTTP connect leaves the upload writable and response accessors share one r
     expect(headers.get("content-type")).toBe("application/binary");
     expect(headers.get("x-example")).toBe("value");
     expect(await vcall(connection, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;", null)).toBe("HTTP/1.1 200 OK");
-    await expect(vcall(connection, "getOutputStream", "()Ljava/io/OutputStream;")).rejects.toMatchObject({ msg: "Cannot write output after reading input" });
+    await expect(vcallAsync(connection, "getOutputStream", "()Ljava/io/OutputStream;")).rejects.toMatchObject({ msg: "Cannot write output after reading input" });
   } finally { globalThis.fetch = original; }
 });

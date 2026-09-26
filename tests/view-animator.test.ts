@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { JView, measureView, makeSpec, MS_AT_MOST } from "../src/android/view";
 
 rt.linkNatives();
@@ -25,7 +25,7 @@ test("ViewSwitcher builds two views, resets them and rejects a third", async () 
   expect(views.map(v => v.visibility)).toEqual([8, 8]);
   await vcall(switcher, "showNext", "()V");
   expect(views.map(v => v.visibility)).toEqual([8, 0]);
-  await expect(vcall(switcher, "addView", "(Landroid/view/View;)V", rt.make("android/view/View"))).rejects.toMatchObject({ msg: "Can't add more than 2 views to a ViewSwitcher" });
+  await expect(vcallAsync(switcher, "addView", "(Landroid/view/View;)V", rt.make("android/view/View"))).rejects.toMatchObject({ msg: "Can't add more than 2 views to a ViewSwitcher" });
 });
 test("ViewAnimator switches, wraps and preserves the displayed child when inserting", async () => {
   const animator = rt.make("android/widget/ViewAnimator");

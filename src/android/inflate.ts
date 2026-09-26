@@ -1,6 +1,6 @@
 // LayoutInflater: binary layout XML → View tree, with Factory2 support (fragments/appcompat).
 
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { parseAXML, TV, type XmlNode } from "./axml";
@@ -199,13 +199,13 @@ rt.register({
     "inflate(ILandroid/view/ViewGroup;)Landroid/view/View;": function (this: JLayoutInflater, id: number, root: unknown) {
       return vcall(this, "inflate", "(ILandroid/view/ViewGroup;Z)Landroid/view/View;", id, root, +!!root);
     },
-    "inflate(ILandroid/view/ViewGroup;Z)Landroid/view/View;": async function (this: JLayoutInflater, id: number, root: unknown, attach: number) {
-      const context = await vcall(this, "getContext", "()Landroid/content/Context;");
-      const resources = await vcall(context, "getResources", "()Landroid/content/res/Resources;");
-      const parser = await vcall(resources, "getLayout", "(I)Landroid/content/res/XmlResourceParser;", id);
-      try { return await vcall(this, "inflate", "(Lorg/xmlpull/v1/XmlPullParser;Landroid/view/ViewGroup;Z)Landroid/view/View;", parser, root, attach); }
-      finally { await vcall(parser, "close", "()V"); }
-    },
+    "inflate(ILandroid/view/ViewGroup;Z)Landroid/view/View;": driven(function* (this: JLayoutInflater, id: number, root: unknown, attach: number): Gen {
+      const context = (yield vcall(this, "getContext", "()Landroid/content/Context;"));
+      const resources = (yield vcall(context, "getResources", "()Landroid/content/res/Resources;"));
+      const parser = (yield vcall(resources, "getLayout", "(I)Landroid/content/res/XmlResourceParser;", id));
+      try { return (yield vcall(this, "inflate", "(Lorg/xmlpull/v1/XmlPullParser;Landroid/view/ViewGroup;Z)Landroid/view/View;", parser, root, attach)); }
+      finally { (yield vcall(parser, "close", "()V")); }
+    }),
     "inflate(Lorg/xmlpull/v1/XmlPullParser;Landroid/view/ViewGroup;)Landroid/view/View;": function (this: JLayoutInflater, parser: unknown, root: unknown) {
       return vcall(this, "inflate", "(Lorg/xmlpull/v1/XmlPullParser;Landroid/view/ViewGroup;Z)Landroid/view/View;", parser, root, +!!root);
     },
@@ -228,13 +228,13 @@ rt.register({
     },
     "getContext()Landroid/content/Context;": function (this: JLayoutInflater) { return this.jctx; },
     "createView(Ljava/lang/String;Ljava/lang/String;Landroid/util/AttributeSet;)Landroid/view/View;":
-      async function (this: JLayoutInflater, name: string, prefix: string | null, set: JAttrSet) {
+      driven(function* (this: JLayoutInflater, name: string, prefix: string | null, set: JAttrSet): Gen {
         return createViewByName(prefix ? prefix + name : name, this.jctx, set);
-      },
+      }),
     "onCreateView(Ljava/lang/String;Landroid/util/AttributeSet;)Landroid/view/View;":
-      async function (this: JLayoutInflater, name: string, set: JAttrSet) {
+      driven(function* (this: JLayoutInflater, name: string, set: JAttrSet): Gen {
         return createViewByName(name, this.jctx, set);
-      },
+      }),
   },
 });
 rt.markers("android/view/LayoutInflater$Factory", "android/view/LayoutInflater$Factory2");

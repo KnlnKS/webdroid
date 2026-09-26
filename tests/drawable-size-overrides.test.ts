@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { mangleMethod } from "../src/jvm/abi";
-import { newObj, vcall, vcallOn, vcallMaybe, curThread, JThread } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallOn, curThread, JThread } from "../src/jvm/natives/jlang";
 import { JView, JViewGroup, measureView, makeSpec, MS_AT_MOST } from "../src/android/view";
 
 rt.linkNatives();
@@ -139,10 +139,10 @@ test("nested drawable containers share virtual size and draw dispatch", async ()
   }
   let draws = 0;
   Object.assign(d, { [mangleMethod("draw", "(Landroid/graphics/Canvas;)V")]: () => { draws++; } });
-  expect(vcallMaybe(layer, "draw", "(Landroid/graphics/Canvas;)V", null)).toBeUndefined();
+  expect(vcall(layer, "draw", "(Landroid/graphics/Canvas;)V", null)).toBeUndefined();
   expect(draws).toBe(1);
   await vcall(layer, "setLayerSize", "(III)V", 0, 100, 60);
-  expect(vcallMaybe(layer, "getIntrinsicWidth", "()I")).toBe(100);
+  expect(vcall(layer, "getIntrinsicWidth", "()I")).toBe(100);
 });
 
 

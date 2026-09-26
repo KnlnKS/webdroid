@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
 rt.linkNatives();
 
@@ -73,5 +73,5 @@ test("unknown algorithms, null providers and uninitialized use are rejected", as
   const s = await vcallStatic("java/security/Signature", "getInstance", "(Ljava/lang/String;Ljava/security/Provider;)Ljava/security/Signature;", "SHA256withRSA", await newObj("java/security/Provider"));
   expect(await thrown(() => vcall(s, "update", "([B)V", bytes("x")))).toBe("java/security/SignatureException");
   const pair: any = await keyPair("EC", 256);
-  expect(await thrown(() => vcall(s, "initSign", "(Ljava/security/PrivateKey;)V", pair.privateKey).then(() => vcall(s, "sign", "()[B")))).toBe("java/security/InvalidKeyException");
+  expect(await thrown(() => vcallAsync(s, "initSign", "(Ljava/security/PrivateKey;)V", pair.privateKey).then(() => vcall(s, "sign", "()[B")))).toBe("java/security/InvalidKeyException");
 });

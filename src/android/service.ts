@@ -2,7 +2,7 @@
 // and the callback/marker interfaces apps implement (ServiceConnection, IInterface,
 // Parcelable$ClassLoaderCreator).
 
-import { rt, JObj, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jutil";
 import { vcall } from "../jvm/natives/jlang";
 import { JBundle, JUserHandle, PARCELABLE, PROCESS_UID, reportUncaught, userHandleForUid } from "./os";
@@ -28,7 +28,7 @@ rt.register({
   name: "android/os/UserManager", ctor: class extends JObj {},
   methods: {
     "getUserName()Ljava/lang/String;": () => "Owner",
-    "getUserProfiles()Ljava/util/List;": async () => newArrayList([userHandleForUid(PROCESS_UID)]),
+    "getUserProfiles()Ljava/util/List;": driven(function* (): Gen  { return newArrayList([userHandleForUid(PROCESS_UID)]); }),
     ...stubs(1, "isUserUnlocked()Z", "isUserUnlocked(Landroid/os/UserHandle;)Z",
       "isUserRunning(Landroid/os/UserHandle;)Z", "isSystemUser()Z", "getUserCount()I"),
     ...stubs(0, "isUserAGoat()Z", "isDemoUser()Z", "isManagedProfile()Z", "isProfile()Z",

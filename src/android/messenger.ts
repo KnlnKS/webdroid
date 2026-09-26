@@ -1,4 +1,4 @@
-import { JObj, rt, stubs, noops } from "../jvm/runtime";
+import { JObj, rt, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { JHandler, JBundle } from "./os";
 import { JBinder, callingIdentity } from "./binder";
@@ -53,28 +53,28 @@ rt.register({ name: "android/os/Message", ctor: JMessage, ifaces: ["android/os/P
     "setData(Landroid/os/Bundle;)V": function (this: JMessage, data: JBundle | null) { this.data = data; },
     ...noops("<init>()V", "recycle()V"),
     ...stubs(0, "describeContents()I"),
-    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JMessage, p: JParcel, flags: number) {
+    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JMessage, p: JParcel, flags: number): Gen {
       if (this.callback) throw rt.mkThrowable("java/lang/RuntimeException", "Cannot marshal callbacks");
-      for (const value of [this.what, this.arg1, this.arg2, this.obj ? 1 : 0]) await vcall(p, "writeInt", "(I)V", value);
-      if (this.obj) await vcall(p, "writeParcelable", "(Landroid/os/Parcelable;I)V", this.obj, flags);
-      await vcall(p, "writeLong", "(J)V", BigInt(this.whenMs));
-      await vcall(p, "writeBundle", "(Landroid/os/Bundle;)V", this.data);
-      await vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.replyTo?.binder ?? null);
-      await vcall(p, "writeInt", "(I)V", this.sendingUid); await vcall(p, "writeInt", "(I)V", this.workSourceUid);
-    },
+      for (const value of [this.what, this.arg1, this.arg2, this.obj ? 1 : 0]) (yield vcall(p, "writeInt", "(I)V", value));
+      if (this.obj) (yield vcall(p, "writeParcelable", "(Landroid/os/Parcelable;I)V", this.obj, flags));
+      (yield vcall(p, "writeLong", "(J)V", BigInt(this.whenMs)));
+      (yield vcall(p, "writeBundle", "(Landroid/os/Bundle;)V", this.data));
+      (yield vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.replyTo?.binder ?? null));
+      (yield vcall(p, "writeInt", "(I)V", this.sendingUid)); (yield vcall(p, "writeInt", "(I)V", this.workSourceUid));
+    }),
 } });
 
 class JMessengerBinder extends JBinder { handler!: JHandler; }
 rt.register({ name: "webdroid/MessengerBinder", ctor: JMessengerBinder, sup: "android/os/Binder", methods: {
-  "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": async function (this: JMessengerBinder, code: number, data: JParcel, reply: JParcel | null) {
-    if (code === 0x5f4e5446 && reply) { await vcall(reply, "writeString", "(Ljava/lang/String;)V", "android.os.IMessenger"); return 1; }
+  "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JMessengerBinder, code: number, data: JParcel, reply: JParcel | null): Gen {
+    if (code === 0x5f4e5446 && reply) { (yield vcall(reply, "writeString", "(Ljava/lang/String;)V", "android.os.IMessenger")); return 1; }
     if (code !== 1) return 0;
-    await vcall(data, "enforceInterface", "(Ljava/lang/String;)V", "android.os.IMessenger");
-    if (await vcall(data, "readInt", "()I")) {
-      const message = await readMessage(data); message.sendingUid = callingIdentity().uid; this.handler.send(message, 0);
+    (yield vcall(data, "enforceInterface", "(Ljava/lang/String;)V", "android.os.IMessenger"));
+    if ((yield vcall(data, "readInt", "()I"))) {
+      const message = (yield readMessage(data)); message.sendingUid = callingIdentity().uid; this.handler.send(message, 0);
     }
     return 1;
-  },
+  }),
 } });
 class JMessenger extends JObj { binder: JObj | null = null; }
 const handlers = new WeakMap<JHandler, JMessengerBinder>();
@@ -91,19 +91,19 @@ rt.register({ name: "android/os/Messenger", ctor: JMessenger, ifaces: ["android/
       this.binder = binder;
     },
     "<init>(Landroid/os/IBinder;)V": function (this: JMessenger, binder: JObj) { this.binder = binder; },
-    "send(Landroid/os/Message;)V": async function (this: JMessenger, m: JMessage) {
+    "send(Landroid/os/Message;)V": driven(function* (this: JMessenger, m: JMessage): Gen {
       if (this.binder instanceof JMessengerBinder) { m.sendingUid = callingIdentity().uid; this.binder.handler.send(m, 0); return; }
       const parcel = new JParcel();
-      await vcall(parcel, "writeInterfaceToken", "(Ljava/lang/String;)V", "android.os.IMessenger");
-      await vcall(parcel, "writeInt", "(I)V", 1);
-      await vcall(m, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0);
-      await vcall(this.binder, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, parcel, null, 1);
-    },
+      (yield vcall(parcel, "writeInterfaceToken", "(Ljava/lang/String;)V", "android.os.IMessenger"));
+      (yield vcall(parcel, "writeInt", "(I)V", 1));
+      (yield vcall(m, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, 0));
+      (yield vcall(this.binder, "transact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", 1, parcel, null, 1));
+    }),
     "getBinder()Landroid/os/IBinder;": function (this: JMessenger) { return this.binder; },
     "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JMessenger, p: JParcel) { await vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.binder); },
+    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JMessenger, p: JParcel): Gen { (yield vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", this.binder)); }),
     "static readMessengerOrNullFromParcel(Landroid/os/Parcel;)Landroid/os/Messenger;": readMessenger,
-    "static writeMessengerOrNullToParcel(Landroid/os/Messenger;Landroid/os/Parcel;)V": async (m: JMessenger | null, p: JParcel) => { await vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", m?.binder ?? null); },
+    "static writeMessengerOrNullToParcel(Landroid/os/Messenger;Landroid/os/Parcel;)V": driven(function* (m: JMessenger | null, p: JParcel): Gen  { (yield vcall(p, "writeStrongBinder", "(Landroid/os/IBinder;)V", m?.binder ?? null)); }),
     "equals(Ljava/lang/Object;)Z": function (this: JMessenger, other: unknown) { return other instanceof JMessenger && this.binder === other.binder ? 1 : 0; },
-    "hashCode()I": async function (this: JMessenger) { return vcall(this.binder, "hashCode", "()I"); },
+    "hashCode()I": driven(function* (this: JMessenger): Gen { return vcall(this.binder, "hashCode", "()I"); }),
 } });

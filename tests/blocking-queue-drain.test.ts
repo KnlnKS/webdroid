@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { newArrayList } from "../src/jvm/natives/jutil";
 rt.linkNatives();
 
@@ -10,7 +10,7 @@ test("bounded queues reject overflow and wake blocked producers after removal", 
   expect(await vcall(queue, "offer", "(Ljava/lang/Object;)Z", "first")).toBe(1);
   expect(await vcall(queue, "offer", "(Ljava/lang/Object;)Z", "overflow")).toBe(0);
   let completed = false;
-  const producer = vcall(queue, "put", "(Ljava/lang/Object;)V", "second").then(() => { completed = true; });
+  const producer = vcallAsync(queue, "put", "(Ljava/lang/Object;)V", "second").then(() => { completed = true; });
   await Promise.resolve();
   expect(completed).toBe(false);
   expect(await vcall(queue, "remainingCapacity", "()I")).toBe(0);
@@ -39,8 +39,8 @@ for (const name of ["ArrayBlockingQueue", "LinkedBlockingQueue", "LinkedBlocking
     expect(target.a).toEqual(["existing", "a", "b", "c"]);
     expect(await vcall(queue, "size", "()I")).toBe(0);
     expect(await drain(10)).toBe(0);
-    expect(await vcall(queue, "drainTo", "(Ljava/util/Collection;I)I", null, 0).catch(e => rt.iof(e, "java/lang/NullPointerException"))).toBe(1);
-    expect(await vcall(queue, "drainTo", "(Ljava/util/Collection;)I", queue).catch(e => rt.iof(e, "java/lang/IllegalArgumentException"))).toBe(1);
+    expect(await vcallAsync(queue, "drainTo", "(Ljava/util/Collection;I)I", null, 0).catch(e => rt.iof(e, "java/lang/NullPointerException"))).toBe(1);
+    expect(await vcallAsync(queue, "drainTo", "(Ljava/util/Collection;)I", queue).catch(e => rt.iof(e, "java/lang/IllegalArgumentException"))).toBe(1);
   });
 }
 
@@ -62,5 +62,5 @@ test("draining calls suspending collection overrides and propagates failures", a
   expect(target.values).toEqual(["first"]);
   target.fail = true;
   await vcall(queue, "offer", "(Ljava/lang/Object;)Z", "second");
-  expect(await vcall(queue, "drainTo", "(Ljava/util/Collection;)I", target).catch(e => rt.iof(e, "java/lang/UnsupportedOperationException"))).toBe(1);
+  expect(await vcallAsync(queue, "drainTo", "(Ljava/util/Collection;)I", target).catch(e => rt.iof(e, "java/lang/UnsupportedOperationException"))).toBe(1);
 });

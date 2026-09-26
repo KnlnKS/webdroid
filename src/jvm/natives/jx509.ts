@@ -2,7 +2,7 @@
 // only knows RSA keys, and CDN leaves are EC), signatures checked with WebCrypto, and chains
 // built against the system CA store the shell mounts. Cronet asks Java for exactly this.
 import type { asn1 } from "node-forge";
-import { JObj, rt } from "../runtime";
+import { JObj, rt, driven, type Gen } from "../runtime";
 import { jarray, i8 } from "../abi";
 import { boxInt, defineException, newObj, stringHash, vcall } from "./jlang";
 import { newArrayList, mkIter } from "./jutil";
@@ -214,11 +214,11 @@ rt.register({
     },
     "getCriticalExtensionOIDs()Ljava/util/Set;": function (this: JX509) { return vcall(rt.link("java/util/HashSet").ctor, "<init>", "()V"); },
     "hasUnsupportedCriticalExtension()Z": () => 0,
-    "verify(Ljava/security/PublicKey;)V": async function (this: JX509, key: JRsaPublicKey | JX509Key) {
+    "verify(Ljava/security/PublicKey;)V": driven(function* (this: JX509, key: JRsaPublicKey | JX509Key): Gen {
       const issuer = new JX509(); issuer.spki = key.encoded; issuer.keyOid = key instanceof JRsaPublicKey ? RSA_OID : EC_OID;
-      if (issuer.keyOid === EC_OID) { const f = await forge(); const alg = (f.asn1.fromDer(binary(key.encoded)).value as Node[])[0].value as Node[]; issuer.curve = f.asn1.derToOid(alg[1].value as string); }
-      if (!(await signed(this, issuer))) throw rt.mkThrowable("java/security/SignatureException", "signature does not verify");
-    },
+      if (issuer.keyOid === EC_OID) { const f = (yield forge()); const alg = (f.asn1.fromDer(binary(key.encoded)).value as Node[])[0].value as Node[]; issuer.curve = f.asn1.derToOid(alg[1].value as string); }
+      if (!((yield signed(this, issuer)))) throw rt.mkThrowable("java/security/SignatureException", "signature does not verify");
+    }),
     "equals(Ljava/lang/Object;)Z": function (this: JX509, o: unknown) { return o instanceof JX509 && (this.der.length ? binary(o.der) === binary(this.der) : o === this) ? 1 : 0; },
     "hashCode()I": function (this: JX509) { return stringHash(binary(this.der)); },
     "getType()Ljava/lang/String;": () => "X.509",
@@ -244,8 +244,8 @@ rt.register({
     "static getInstance(Ljava/lang/String;)Ljava/security/cert/CertificateFactory;": certFactory,
     "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/cert/CertificateFactory;": certFactory,
     "getType()Ljava/lang/String;": () => "X.509",
-    "generateCertificate(Ljava/io/InputStream;)Ljava/security/cert/Certificate;": async (s: unknown) => (await certsFrom(s))[0],
-    "generateCertificates(Ljava/io/InputStream;)Ljava/util/Collection;": async (s: unknown) => newArrayList(await certsFrom(s)),
+    "generateCertificate(Ljava/io/InputStream;)Ljava/security/cert/Certificate;": driven(function* (s: unknown): Gen  { return ((yield certsFrom(s)))[0]; }),
+    "generateCertificates(Ljava/io/InputStream;)Ljava/util/Collection;": driven(function* (s: unknown): Gen  { return newArrayList((yield certsFrom(s))); }),
   },
 });
 
@@ -265,8 +265,8 @@ rt.register({
   name: "webdroid/X509TM", ctor: class extends JObj {}, ifaces: ["javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager"],
   methods: {
     "checkClientTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V": () => {},
-    "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V": async (chain: unknown[]) => { await verifyChain(chainOf(chain)); },
-    "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;Ljava/lang/String;)Ljava/util/List;": async (chain: unknown[]) => newArrayList(await verifyChain(chainOf(chain))),
+    "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V": driven(function* (chain: unknown[]): Gen  { (yield verifyChain(chainOf(chain))); }),
+    "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;Ljava/lang/String;)Ljava/util/List;": driven(function* (chain: unknown[]): Gen  { return newArrayList((yield verifyChain(chainOf(chain)))); }),
     "getAcceptedIssuers()[Ljava/security/cert/X509Certificate;": acceptedIssuers,
   },
 });
@@ -275,22 +275,22 @@ rt.register({
   methods: {
     "<init>(Ljavax/net/ssl/X509TrustManager;)V": function (this: { tm: unknown }, tm: unknown) { this.tm = tm; },
     // the platform verifier walks the chain; hostname and pins are the caller's (Cronet checks both natively)
-    "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;Ljava/lang/String;)Ljava/util/List;": async (chain: unknown[]) => newArrayList(await verifyChain(chainOf(chain))),
-    "checkServerTrusted([Ljava/security/cert/X509Certificate;[B[BLjava/lang/String;Ljava/lang/String;)Ljava/util/List;": async (chain: unknown[]) => newArrayList(await verifyChain(chainOf(chain))),
+    "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;Ljava/lang/String;)Ljava/util/List;": driven(function* (chain: unknown[]): Gen  { return newArrayList((yield verifyChain(chainOf(chain)))); }),
+    "checkServerTrusted([Ljava/security/cert/X509Certificate;[B[BLjava/lang/String;Ljava/lang/String;)Ljava/util/List;": driven(function* (chain: unknown[]): Gen  { return newArrayList((yield verifyChain(chainOf(chain)))); }),
     "isUserAddedCertificate(Ljava/security/cert/X509Certificate;)Z": () => 0,
     "isSameTrustConfiguration(Ljava/lang/String;Ljava/lang/String;)Z": () => 1,
   },
 });
 /** the AndroidCAStore KeyStore's view: every anchor under its system: alias */
 export const caStoreMethods = {
-  "aliases()Ljava/util/Enumeration;": async () => mkIter([...(await systemCaEntries()).keys()]),
-  "size()I": async () => (await systemCaEntries()).size,
-  "containsAlias(Ljava/lang/String;)Z": async (a: string) => (await systemCaEntries()).has(a) ? 1 : 0,
-  "isCertificateEntry(Ljava/lang/String;)Z": async (a: string) => (await systemCaEntries()).has(a) ? 1 : 0,
+  "aliases()Ljava/util/Enumeration;": driven(function* (): Gen  { return mkIter([...((yield systemCaEntries())).keys()]); }),
+  "size()I": driven(function* (): Gen  { return ((yield systemCaEntries())).size; }),
+  "containsAlias(Ljava/lang/String;)Z": driven(function* (a: string): Gen  { return ((yield systemCaEntries())).has(a) ? 1 : 0; }),
+  "isCertificateEntry(Ljava/lang/String;)Z": driven(function* (a: string): Gen  { return ((yield systemCaEntries())).has(a) ? 1 : 0; }),
   "isKeyEntry(Ljava/lang/String;)Z": () => 0,
-  "getCertificate(Ljava/lang/String;)Ljava/security/cert/Certificate;": async (a: string) => (await systemCaEntries()).get(a) ?? null,
-  "getCertificateAlias(Ljava/security/cert/Certificate;)Ljava/lang/String;": async (c: JX509) => {
-    for (const [alias, cert] of await systemCaEntries()) if (binary(cert.der) === binary(c.der)) return alias;
+  "getCertificate(Ljava/lang/String;)Ljava/security/cert/Certificate;": driven(function* (a: string): Gen  { return ((yield systemCaEntries())).get(a) ?? null; }),
+  "getCertificateAlias(Ljava/security/cert/Certificate;)Ljava/lang/String;": driven(function* (c: JX509): Gen  {
+    for (const [alias, cert] of (yield systemCaEntries())) if (binary(cert.der) === binary(c.der)) return alias;
     return null;
-  },
+  }),
 };

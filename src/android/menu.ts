@@ -2,7 +2,7 @@ import { AID } from "./res";
 import { JViewGroup, specSize, JView, invalidate, requestLayout } from "./view";
 import { type JDrawable, loadDrawable, loadDrawableRV, drawChild } from "./drawable";
 import { type JCanvas, tfMedium } from "./graphics";
-import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, driven, type Gen } from "../jvm/runtime";
 import { vcall, curThread } from "../jvm/natives/jlang";
 import { showPopupMenu } from "./popup";
 import { appHost, type AppHost } from "./apphost";
@@ -144,14 +144,14 @@ rt.register({
       this.measuredH = this.barH;
     },
     "onDraw(Landroid/graphics/Canvas;)V": function (this: JActionBarView, cv: JCanvas) { return this.onDrawSelf(cv); },
-    "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JActionBarView, ev: any) {
+    "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JActionBarView, ev: any): Gen {
       if ((ev.action & 0xff) === 1) {
         if (this.showUp && ev.x < 80) {
-          if (this.mode) { await vcall(this.mode, "finish", "()V"); return 1; }
+          if (this.mode) { (yield vcall(this.mode, "finish", "()V")); return 1; }
           // AOSP's ActionBarView reports the Up affordance as the options item
           // android.R.id.home, so it reaches the activity's onOptionsItemSelected like any
           // other item. Finishing here directly would rob every app of that override.
-          await performMenuItem(barAnchor(this), mkMenuItem(ID_HOME, ""));
+          (yield performMenuItem(barAnchor(this), mkMenuItem(ID_HOME, "")));
           return 1;
         }
         // Action slots and the overflow affordance own the right end of the bar; they are
@@ -159,18 +159,18 @@ rt.register({
         const { action, overflow, slots } = this.layoutMenu();
         for (let i = 0; i < action.length; i++) {
           const cx = this.slotX(i, slots);
-          if (ev.x >= cx - 56 && ev.x <= cx + 56) { await performMenuItem(barAnchor(this), action[i]); return 1; }
+          if (ev.x >= cx - 56 && ev.x <= cx + 56) { (yield performMenuItem(barAnchor(this), action[i])); return 1; }
         }
         if (overflow.length) {
           const cx = this.slotX(action.length, slots);
-          if (ev.x >= cx - 56 && ev.x <= cx + 56) { await showMenuPopup(barAnchor(this), overflow); return 1; }
+          if (ev.x >= cx - 56 && ev.x <= cx + 56) { (yield showMenuPopup(barAnchor(this), overflow)); return 1; }
         }
         // list-nav spinner tap (title area)
         if (this.navMode === 1 && this.navAdapter && ev.x < this.width() - 200 && ev.x > (this.showUp ? 76 : 24)) {
-          const n: number = await vcall(this.navAdapter, "getCount", "()I");
+          const n: number = (yield vcall(this.navAdapter, "getCount", "()I"));
           const items: { id: number; title: string }[] = [];
           for (let i = 0; i < n; i++) {
-            const view = await vcall(this.navAdapter, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;", i, null, this);
+            const view = (yield vcall(this.navAdapter, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;", i, null, this));
             items.push({ id: i, title: firstText(view) ?? "" });
           }
           const bar = this;
@@ -183,7 +183,7 @@ rt.register({
         }
       }
       return 1;
-    },
+    }),
   },
 });
 /**
@@ -268,10 +268,10 @@ const menuItemMethods: NativeSpec["methods"] = {
     this.title = appString(id);
     return this;
   },
-  "setIcon(I)Landroid/view/MenuItem;": async function (this: JMenuItem, id: number) {
-    if (appHost && id) this.icon = await loadDrawable(appHost.res, id, appHost.theme);
+  "setIcon(I)Landroid/view/MenuItem;": driven(function* (this: JMenuItem, id: number): Gen {
+    if (appHost && id) this.icon = (yield loadDrawable(appHost.res, id, appHost.theme));
     return this;
-  },
+  }),
   "setIcon(Landroid/graphics/drawable/Drawable;)Landroid/view/MenuItem;": function (this: JMenuItem, d: JDrawable | null) {
     this.icon = d;
     return this;
@@ -373,7 +373,7 @@ rt.register({
   name: "android/view/MenuInflater", ctor: JMenuInflater,
   methods: {
     "<init>(Landroid/content/Context;)V": function (this: JMenuInflater, c: unknown) { this.jctx = c; },
-    "inflate(ILandroid/view/Menu;)V": async function (this: JMenuInflater, id: number, menu: JMenu) {
+    "inflate(ILandroid/view/Menu;)V": driven(function* (this: JMenuInflater, id: number, menu: JMenu): Gen {
       const host: AppHost = this.jctx.$host;
       const f = host.res.fileOf(id);
       if (!f) { rt.noteMissing("menu 0x" + id.toString(16)); return; }
@@ -398,9 +398,9 @@ rt.register({
           target.items.push(item);
         }
       };
-      await walk(root, menu);
+      (yield walk(root, menu));
       pushMenuToBar(menu);
-    },
+    }),
   },
 });
 
@@ -456,7 +456,7 @@ rt.register({
       this.bar((b) => { b.navMode = m; });
     },
     "setListNavigationCallbacks(Landroid/widget/SpinnerAdapter;Landroid/app/ActionBar$OnNavigationListener;)V":
-      async function (this: JActionBar, adapter: unknown, listener: unknown) {
+      driven(function* (this: JActionBar, adapter: unknown, listener: unknown): Gen {
         this.navAdapter = adapter;
         this.navListener = listener;
         if (this.act?.window.actionBarView) {
@@ -465,17 +465,17 @@ rt.register({
         // fire initial selection (real ActionBar does this once callbacks are set)
         if (listener && !this.navFired) {
           this.navFired = true;
-          await this.fireNav(this.navSelected);
+          (yield this.fireNav(this.navSelected));
         }
-      },
+      }),
     "setSelectedNavigationItem(I)V": function (this: JActionBar, i: number) {
       this.navSelected = i;
       if (this.act?.window.actionBarView) this.act.window.actionBarView.navSelected = i;
       return this.fireNav(i);
     },
-    "getNavigationItemCount()I": async function (this: JActionBar) {
-      return this.navAdapter ? await vcall(this.navAdapter, "getCount", "()I") : 0;
-    },
+    "getNavigationItemCount()I": driven(function* (this: JActionBar): Gen {
+      return this.navAdapter ? (yield vcall(this.navAdapter, "getCount", "()I")) : 0;
+    }),
     "getHeight()I": () => 112,
     ...fieldGetters({ "getNavigationMode()I": "navMode", "getSelectedNavigationIndex()I": "navSelected",
       "getThemedContext()Landroid/content/Context;": "act" }),

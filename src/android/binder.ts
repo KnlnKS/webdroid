@@ -1,5 +1,5 @@
-import { JObj, rt, stubs, noops } from "../jvm/runtime";
-import { curThread, JThread, setCurThread, vcall } from "../jvm/natives/jlang";
+import { JObj, rt, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { curThread, JThread, setCurThread, vcall, vcallAsync } from "../jvm/natives/jlang";
 import { PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { JParcel } from "./parcel";
 
@@ -113,33 +113,33 @@ rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBi
   "getInterfaceDescriptor()Ljava/lang/String;": function (this: JBinder) { return this.descriptor; },
   ...noops("<init>()V", "static flushPendingCommands()V", "linkToDeath(Landroid/os/IBinder$DeathRecipient;I)V"),
   ...stubs(1, "pingBinder()Z", "isBinderAlive()Z", "unlinkToDeath(Landroid/os/IBinder$DeathRecipient;I)Z"),
-  "transact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": async function (this: JBinder, code: number, data: JParcel, reply: JParcel | null, flags: number) {
+  "transact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JBinder, code: number, data: JParcel, reply: JParcel | null, flags: number): Gen {
     const pos = data.pos; data.pos = 0;
-    try { return await vcall(this, "onTransact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", code, data, reply, flags); }
+    try { return (yield vcall(this, "onTransact", "(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z", code, data, reply, flags)); }
     finally { data.pos = pos; if (reply) reply.pos = 0; }
-  },
-  "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": async function (this: JBinder, code: number, _data: JParcel, reply: JParcel | null) {
+  }),
+  "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JBinder, code: number, _data: JParcel, reply: JParcel | null): Gen {
     if (code !== 0x5f4e5446 || !reply) return 0;
-    await vcall(reply, "writeString", "(Ljava/lang/String;)V", this.descriptor); return 1;
-  },
+    (yield vcall(reply, "writeString", "(Ljava/lang/String;)V", this.descriptor)); return 1;
+  }),
 } });
 rt.register({ name: "android/os/BinderProxy", ctor: JBinderProxy, ifaces: ["android/os/IBinder"], methods: {
   "queryLocalInterface(Ljava/lang/String;)Landroid/os/IInterface;": () => null,
   "pingBinder()Z": function (this: JBinderProxy) { return binderTransport.alive(this.handle.pid) ? 1 : 0; },
   "isBinderAlive()Z": function (this: JBinderProxy) { return binderTransport.alive(this.handle.pid) ? 1 : 0; },
-  "transact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": async function (this: JBinderProxy, code: number, data: JParcel, reply: JParcel | null, flags: number) {
-    const result = await binderTransport.transact({ handle: this.handle, code, data: exportParcel(data), flags });
+  "transact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JBinderProxy, code: number, data: JParcel, reply: JParcel | null, flags: number): Gen {
+    const result = (yield binderTransport.transact({ handle: this.handle, code, data: exportParcel(data), flags }));
     if (reply) importParcel(result.data, reply);
     return result.handled;
-  },
-  "getInterfaceDescriptor()Ljava/lang/String;": async function (this: JBinderProxy) {
-    const result = await binderTransport.transact({ handle: this.handle, code: 0x5f4e5446, flags: 0, data: { bytes: new Uint8Array(), objects: [] } });
+  }),
+  "getInterfaceDescriptor()Ljava/lang/String;": driven(function* (this: JBinderProxy): Gen {
+    const result = (yield binderTransport.transact({ handle: this.handle, code: 0x5f4e5446, flags: 0, data: { bytes: new Uint8Array(), objects: [] } }));
     return vcall(importParcel(result.data), "readString", "()Ljava/lang/String;");
-  },
+  }),
   "linkToDeath(Landroid/os/IBinder$DeathRecipient;I)V": function (this: JBinderProxy, recipient: unknown) {
     if (!binderTransport.alive(this.handle.pid)) throw rt.mkThrowable("android/os/DeadObjectException", "Process is dead");
     if (!this.deaths.has(recipient)) this.deaths.set(recipient, binderTransport.watch(this.handle.pid, () => {
-      this.deaths.delete(recipient); void vcall(recipient, "binderDied", "()V").catch(reportUncaught);
+      this.deaths.delete(recipient); void vcallAsync(recipient, "binderDied", "()V").catch(reportUncaught);
     }));
   },
   "unlinkToDeath(Landroid/os/IBinder$DeathRecipient;I)Z": function (this: JBinderProxy, recipient: unknown) {

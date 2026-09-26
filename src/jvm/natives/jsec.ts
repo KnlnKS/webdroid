@@ -1,5 +1,5 @@
 // java.security — MessageDigest (sync MD5/SHA-1/SHA-256: fingerprint checks at boot, cache keys), SecureRandom, AccessController.
-import { rt, JObj } from "../runtime";
+import { rt, JObj, driven, type Gen } from "../runtime";
 import { vcall, defineException, stringHash } from "./jlang";
 import { jarray, concat, u8 } from "../abi";
 import { JRandom, randomSeed } from "./jrandom";
@@ -212,13 +212,13 @@ rt.register({
     "update(B)V": function (this: JMessageDigest, b: number) { this.parts.push(new Uint8Array([b & 0xff])); },
     "update([B)V": function (this: JMessageDigest, b: Int8Array) { mdUpdate(this, b); },
     "update([BII)V": function (this: JMessageDigest, b: Int8Array, off: number, len: number) { mdUpdate(this, b, off, len); },
-    "update(Ljava/nio/ByteBuffer;)V": async function (this: JMessageDigest, input: unknown) {
+    "update(Ljava/nio/ByteBuffer;)V": driven(function* (this: JMessageDigest, input: unknown): Gen {
       if (input === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      const remaining: number = await vcall(input, "remaining", "()I");
+      const remaining: number = (yield vcall(input, "remaining", "()I"));
       const bytes = new Int8Array(remaining);
-      await vcall(input, "get", "([B)Ljava/nio/ByteBuffer;", bytes);
+      (yield vcall(input, "get", "([B)Ljava/nio/ByteBuffer;", bytes));
       mdUpdate(this, bytes);
-    },
+    }),
     "digest()[B": function (this: JMessageDigest) { return mdDigest(this); },
     "digest([B)[B": function (this: JMessageDigest, b: Int8Array) { mdUpdate(this, b); return mdDigest(this); },
     "reset()V": function (this: JMessageDigest) { this.parts = []; },
@@ -241,16 +241,16 @@ rt.register({
     "getMessageDigest()Ljava/security/MessageDigest;": function (this: JDigestOutputStream) { return this.digest; },
     "setMessageDigest(Ljava/security/MessageDigest;)V": function (this: JDigestOutputStream, digest: JMessageDigest) { this.digest = digest; },
     "on(Z)V": function (this: JDigestOutputStream, enabled: number) { this.enabled = !!enabled; },
-    "write(I)V": async function (this: JDigestOutputStream, b: number) {
-      await vcall(this.out, "write", "(I)V", b);
-      if (this.enabled) await vcall(this.digest, "update", "(B)V", b);
-    },
-    "write([BII)V": async function (this: JDigestOutputStream, bytes: Int8Array, off: number, len: number) {
+    "write(I)V": driven(function* (this: JDigestOutputStream, b: number): Gen {
+      (yield vcall(this.out, "write", "(I)V", b));
+      if (this.enabled) (yield vcall(this.digest, "update", "(B)V", b));
+    }),
+    "write([BII)V": driven(function* (this: JDigestOutputStream, bytes: Int8Array, off: number, len: number): Gen {
       if (bytes == null || off + len > bytes.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "wrong parameters for write");
       if (off < 0 || len < 0) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", "wrong index for write");
-      await vcall(this.out, "write", "([BII)V", bytes, off, len);
-      if (this.enabled) await vcall(this.digest, "update", "([BII)V", bytes, off, len);
-    },
+      (yield vcall(this.out, "write", "([BII)V", bytes, off, len));
+      if (this.enabled) (yield vcall(this.digest, "update", "([BII)V", bytes, off, len));
+    }),
   },
 });
 
@@ -268,16 +268,16 @@ rt.register({
     "getMessageDigest()Ljava/security/MessageDigest;": function (this: JDigestInputStream) { return this.digest; },
     "setMessageDigest(Ljava/security/MessageDigest;)V": function (this: JDigestInputStream, digest: JMessageDigest) { this.digest = digest; },
     "on(Z)V": function (this: JDigestInputStream, enabled: number) { this.enabled = !!enabled; },
-    "read()I": async function (this: JDigestInputStream) {
-      const value: number = await vcall(this.in_, "read", "()I");
-      if (value >= 0 && this.enabled) await vcall(this.digest, "update", "(B)V", value);
+    "read()I": driven(function* (this: JDigestInputStream): Gen {
+      const value: number = (yield vcall(this.in_, "read", "()I"));
+      if (value >= 0 && this.enabled) (yield vcall(this.digest, "update", "(B)V", value));
       return value;
-    },
-    "read([BII)I": async function (this: JDigestInputStream, bytes: Int8Array, off: number, len: number) {
-      const count: number = await vcall(this.in_, "read", "([BII)I", bytes, off, len);
-      if (count > 0 && this.enabled) await vcall(this.digest, "update", "([BII)V", bytes, off, count);
+    }),
+    "read([BII)I": driven(function* (this: JDigestInputStream, bytes: Int8Array, off: number, len: number): Gen {
+      const count: number = (yield vcall(this.in_, "read", "([BII)I", bytes, off, len));
+      if (count > 0 && this.enabled) (yield vcall(this.digest, "update", "([BII)V", bytes, off, count));
       return count;
-    },
+    }),
   },
 });
 

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 test("LocaleSpan retains locale order through paint copies and parcel round trips", async () => {
@@ -22,5 +22,5 @@ test("LocaleSpan retains locale order through paint copies and parcel round trip
   expect(await vcall(restored, "getSpanTypeId", "()I")).toBe(23);
   const empty = await newObj("android/text/style/LocaleSpan", "(Ljava/util/Locale;)V", null);
   expect(await vcall(empty, "getLocale", "()Ljava/util/Locale;")).toBeNull();
-  await expect(vcall(empty, "updateDrawState", "(Landroid/text/TextPaint;)V", paint)).rejects.toMatchObject({ msg: "locales cannot be null or empty" });
+  await expect(vcallAsync(empty, "updateDrawState", "(Landroid/text/TextPaint;)V", paint)).rejects.toMatchObject({ msg: "locales cannot be null or empty" });
 });

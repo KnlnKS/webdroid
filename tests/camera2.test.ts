@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { systemService } from "../src/android/context";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 
@@ -11,7 +11,7 @@ test("camera2 reports a device with no connected cameras", async () => {
   expect(await vcall(manager, "getCameraIdList", "()[Ljava/lang/String;")).toHaveLength(0);
   const combinations = await vcall(manager, "getConcurrentCameraIds", "()Ljava/util/Set;");
   expect(await vcall(combinations, "isEmpty", "()Z")).toBe(1);
-  await expect(vcall(manager, "getCameraCharacteristics", "(Ljava/lang/String;)Landroid/hardware/camera2/CameraCharacteristics;", "0"))
+  await expect(vcallAsync(manager, "getCameraCharacteristics", "(Ljava/lang/String;)Landroid/hardware/camera2/CameraCharacteristics;", "0"))
     .rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
 });
 

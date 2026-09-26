@@ -1,5 +1,5 @@
 import { JObj, rt } from "../runtime";
-import { vcall } from "./jlang";
+import { vcallAsync } from "./jlang";
 import { clearGuestInterval, clearGuestTimeout, setGuestInterval, setGuestTimeout, type GuestTimer } from "../../guest-clock";
 
 // java.util.Timer: one background timer thread per Timer in the JDK; here the tasks are host
@@ -14,7 +14,7 @@ function timerCancel(t: JTimerTask) {
 function schedule(timer: JTimer, task: JTimerTask, delay: number, period = 0) {
   timer.tasks.add(task);
   task.repeating = period > 0;
-  const run = () => { void vcall(task, "run", "()V").catch(() => {}); };
+  const run = () => { void vcallAsync(task, "run", "()V").catch(() => {}); };
   task.handle = period > 0
     ? setGuestTimeout(() => { run(); task.handle = setGuestInterval(run, period); }, Math.max(0, delay))
     : setGuestTimeout(() => { task.handle = null; timer.tasks.delete(task); run(); }, Math.max(0, delay));

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
-import { curThread, JThread, newObj, setCurThread, vcall } from "../src/jvm/natives/jlang";
+import { curThread, JThread, newObj, setCurThread, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { JBinder, binderTransport, importBinder } from "../src/android/binder";
 
 class Callback extends JObj { binder: unknown = null; }
@@ -26,9 +26,9 @@ test("RemoteCallbackList keys registrations by Binder and broadcasts a stable sn
   expect(await register(list, callback())).toBe(1);
   expect(await vcall(list, "getBroadcastItem", "(I)Landroid/os/IInterface;", 0)).toBe(replacement);
   expect(await vcall(list, "getBroadcastCookie", "(I)Ljava/lang/Object;", 0)).toBe("new");
-  await expect(vcall(list, "beginBroadcast", "()I")).rejects.toBeDefined();
+  await expect(vcallAsync(list, "beginBroadcast", "()I")).rejects.toBeDefined();
   await vcall(list, "finishBroadcast", "()V");
-  await expect(vcall(list, "finishBroadcast", "()V")).rejects.toBeDefined();
+  await expect(vcallAsync(list, "finishBroadcast", "()V")).rejects.toBeDefined();
   await vcall(list, "kill", "()V");
   expect(await count(list)).toBe(0);
   expect(await register(list, first)).toBe(0);

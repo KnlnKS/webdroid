@@ -7,12 +7,12 @@ import {
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { jarray } from "../jvm/abi";
 import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME, mkPfd } from "./os";
-import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
+import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
 import { requestLayout, type JView, attachView, detachView, findById, requireViewById, dispatchConfigurationChanged, invalidate } from "./view";
 import { dispatchFragLifecycle, type JFragment, type JFragmentManager } from "./fragment";
-import { vcall, vcallOn, curThread, mainThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, mainThread, vcallAsync } from "../jvm/natives/jlang";
 import type { JMotionEvent } from "./motionevent";
 import { appHost, jclsNameOf } from "./apphost";
 import { resString } from "./res";
@@ -185,57 +185,57 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "startActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;": function (this: JActivity, cb: unknown, _type: number) {
     return startActionMode(this, cb);
   },
-  "setContentView(I)V": async function (this: JActivity, layoutId: number) {
-    await ensureDecor(this);
-    for (const child of [...this.window.contentParent!.children]) await detachView(this.window.contentParent!, child);
-    await inflateLayout(this, layoutId, this.window.contentParent, true);
+  "setContentView(I)V": driven(function* (this: JActivity, layoutId: number): Gen {
+    (yield ensureDecor(this));
+    for (const child of [...this.window.contentParent!.children]) (yield detachView(this.window.contentParent!, child));
+    (yield inflateLayout(this, layoutId, this.window.contentParent, true));
     requestLayout(this.window.contentParent!);
-  },
-  "setContentView(Landroid/view/View;)V": async function (this: JActivity, v: JView) {
-    await ensureDecor(this);
-    for (const child of [...this.window.contentParent!.children]) await detachView(this.window.contentParent!, child);
+  }),
+  "setContentView(Landroid/view/View;)V": driven(function* (this: JActivity, v: JView): Gen {
+    (yield ensureDecor(this));
+    for (const child of [...this.window.contentParent!.children]) (yield detachView(this.window.contentParent!, child));
     if (!v.lp) {
       const lp = rt.make("android/widget/FrameLayout$LayoutParams");
       lp.width = -1; lp.height = -1;
       v.lp = lp;
     }
-    await attachView(this.window.contentParent!, v);
+    (yield attachView(this.window.contentParent!, v));
     requestLayout(this.window.contentParent!);
-  },
-  "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async function (this: JActivity, v: JView, lp: any) {
+  }),
+  "setContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (this: JActivity, v: JView, lp: any): Gen {
     v.lp = lp;
-    await callSelf(activityMethods, "setContentView(Landroid/view/View;)V", this, v);
-  },
-  "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async function (this: JActivity, v: JView, lp: any) {
-    await ensureDecor(this);
+    (yield callSelf(activityMethods, "setContentView(Landroid/view/View;)V", this, v));
+  }),
+  "addContentView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (this: JActivity, v: JView, lp: any): Gen {
+    (yield ensureDecor(this));
     v.lp = lp;
-    await attachView(this.window.contentParent!, v);
-  },
+    (yield attachView(this.window.contentParent!, v));
+  }),
   "findViewById(I)Landroid/view/View;": function (this: JActivity, id: number) {
     return vcall(this.window, "findViewById", "(I)Landroid/view/View;", id);
   },
   "setShowWhenLocked(Z)V": function (this: JActivity, show: number) { return vcall(this.window, "setFlags", "(II)V", show ? 0x80000 : 0, 0x80000); },
   "requireViewById(I)Landroid/view/View;": requireViewById,
-  "onStart()V": async function (this: JActivity) { this.started = true; return dispatchFragLifecycle(this, "onStart"); },
-  "onResume()V": async function (this: JActivity) { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); },
+  "onStart()V": driven(function* (this: JActivity): Gen { this.started = true; return dispatchFragLifecycle(this, "onStart"); }),
+  "onResume()V": driven(function* (this: JActivity): Gen { this.resumed = true; return dispatchFragLifecycle(this, "onResume"); }),
   "onPause()V": function (this: JActivity) { this.resumed = false; return dispatchFragLifecycle(this, "onPause"); },
   "onStop()V": function (this: JActivity) { this.started = false; return dispatchFragLifecycle(this, "onStop"); },
-  "onDestroy()V": async function (this: JActivity) {
-    if (this.actionMode) await vcall(this.actionMode, "finish", "()V");
-    await dispatchFragLifecycle(this, "onDestroy");
-  },
+  "onDestroy()V": driven(function* (this: JActivity): Gen {
+    if (this.actionMode) (yield vcall(this.actionMode, "finish", "()V"));
+    (yield dispatchFragLifecycle(this, "onDestroy"));
+  }),
   /**
    * AOSP Activity.onBackPressed: collapse an expanded action view, then pop the fragment
    * back stack, and only if neither consumed the press, finish. androidx apps land here as
    * the OnBackPressedDispatcher's fallback, after their own callbacks declined it.
    */
-  "onBackPressed()V": async function (this: JActivity) {
+  "onBackPressed()V": driven(function* (this: JActivity): Gen {
     const bar = this.actionBarObj;
-    if (bar && (await vcall(bar, "collapseActionView", "()Z"))) return;
-    const fm = await vcall(this, "getFragmentManager", "()Landroid/app/FragmentManager;");
-    if (fm && !(await vcall(fm, "isStateSaved", "()Z")) && (await vcall(fm, "popBackStackImmediate", "()Z"))) return;
-    await vcall(this, "finish", "()V");
-  },
+    if (bar && ((yield vcall(bar, "collapseActionView", "()Z")))) return;
+    const fm = (yield vcall(this, "getFragmentManager", "()Landroid/app/FragmentManager;"));
+    if (fm && !((yield vcall(fm, "isStateSaved", "()Z"))) && ((yield vcall(fm, "popBackStackImmediate", "()Z")))) return;
+    (yield vcall(this, "finish", "()V"));
+  }),
   // Android routes the options panel through onCreatePanelMenu/onPreparePanel/onMenuItemSelected;
   // apps (and androidx) override those, so the panel entry points must exist and delegate.
   "onCreatePanelMenu(ILandroid/view/Menu;)Z": function (this: JActivity, f: number, menu: JMenu) {
@@ -244,27 +244,27 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "onPreparePanel(ILandroid/view/View;Landroid/view/Menu;)Z": function (this: JActivity, f: number, _v: unknown, menu: JMenu) {
     return f === 0 ? vcall(this, "onPrepareOptionsMenu", "(Landroid/view/Menu;)Z", menu) : 1;
   },
-  "onMenuItemSelected(ILandroid/view/MenuItem;)Z": async function (this: JActivity, f: number, item: JMenuItem) {
+  "onMenuItemSelected(ILandroid/view/MenuItem;)Z": driven(function* (this: JActivity, f: number, item: JMenuItem): Gen {
     if (f !== 0) return 0;
-    if (await vcall(this, "onOptionsItemSelected", "(Landroid/view/MenuItem;)Z", item)) return 1;
+    if ((yield vcall(this, "onOptionsItemSelected", "(Landroid/view/MenuItem;)Z", item))) return 1;
     // AOSP: an android.R.id.home nobody claimed, with DISPLAY_HOME_AS_UP set, becomes Up
     // navigation. Apps that handle Up themselves (popping a fragment, collapsing a search)
     // never get here because their onOptionsItemSelected already returned true.
-    const id: number = await vcall(item, "getItemId", "()I");
+    const id: number = (yield vcall(item, "getItemId", "()I"));
     if (id === ID_HOME && this.window.actionBarView?.showUp) {
-      return (await vcall(this, "onNavigateUp", "()Z")) ? 1 : 0;
+      return ((yield vcall(this, "onNavigateUp", "()Z"))) ? 1 : 0;
     }
     return 0;
-  },
+  }),
   /**
    * AOSP walks getParentActivityIntent() and either recreates the task or navigateUpTo()s.
    * We have one task and no affinities, so the parent is simply whatever sits below us on
    * the stack: Up on it is Back. Routed through finish() so an app override still runs.
    */
-  "onNavigateUp()Z": async function (this: JActivity) {
-    await vcall(this, "finish", "()V");
+  "onNavigateUp()Z": driven(function* (this: JActivity): Gen {
+    (yield vcall(this, "finish", "()V"));
     return 1;
-  },
+  }),
   "onNavigateUpFromChild(Landroid/app/Activity;)Z": function (this: JActivity) {
     return vcall(this, "onNavigateUp", "()Z");
   },
@@ -289,15 +289,15 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "setTitle(I)V": function (this: JActivity, id: number) {
     callSelf(activityMethods, "setTitle(Ljava/lang/CharSequence;)V", this, resString(this.$host.res, id));
   },
-  "getActionBar()Landroid/app/ActionBar;": async function (this: JActivity) {
-    await ensureDecor(this);
+  "getActionBar()Landroid/app/ActionBar;": driven(function* (this: JActivity): Gen {
+    (yield ensureDecor(this));
     if (!this.actionBarObj) {
       const info = rt.link("webdroid/ActionBar");
       this.actionBarObj = new info.ctor();
       this.actionBarObj.act = this;
     }
     return this.actionBarObj;
-  },
+  }),
   "runOnUiThread(Ljava/lang/Runnable;)V": function (this: JActivity, r: unknown) {
     if (curThread === mainThread && inMainJob()) return vcall(r, "run", "()V");
     void onMain(() => vcall(r, "run", "()V")).catch(reportUncaught);
@@ -319,7 +319,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   // AOSP's startActivityForResult only *starts* something; the result arrives later through
   // onActivityResult. Awaiting a system activity here would hold the serialized main-looper
   // queue for as long as its (native, modal) UI is up, which reads as a wedge.
-  "startActivityForResult(Landroid/content/Intent;I)V": async function (this: JActivity, intent: JIntent, code: number) {
+  "startActivityForResult(Landroid/content/Intent;I)V": driven(function* (this: JActivity, intent: JIntent, code: number): Gen {
     const sys = intent?.component ? null : systemActivities[intent?.action ?? ""];
     if (sys) {
       void sys(intent).then(
@@ -328,8 +328,8 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
       );
       return;
     }
-    await launchIntent(this.$host, intent, { act: this, code });
-  },
+    (yield launchIntent(this.$host, intent, { act: this, code }));
+  }),
   // ActivityCompat — and so every androidx ActivityResultRegistry launcher — calls the options
   // overload, which must funnel into the body above rather than carry a second copy of it.
   "startActivityForResult(Landroid/content/Intent;ILandroid/os/Bundle;)V": function (this: JActivity, intent: JIntent, code: number) {
@@ -396,12 +396,12 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     }, 0);
   },
   "getVolumeControlStream()I": () => 3,
-  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JActivity, event: JMotionEvent) {
+  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JActivity, event: JMotionEvent): Gen {
     const thread = curThread;
-    if (event.action === 0) await vcallOn(thread, this, "onUserInteraction", "()V");
-    if (await vcallOn(thread, this.window, "superDispatchTouchEvent", "(Landroid/view/MotionEvent;)Z", event)) return 1;
+    if (event.action === 0) (yield vcallOn(thread, this, "onUserInteraction", "()V"));
+    if ((yield vcallOn(thread, this.window, "superDispatchTouchEvent", "(Landroid/view/MotionEvent;)Z", event))) return 1;
     return vcallOn(thread, this, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", event);
-  },
+  }),
   ...noops("registerScreenCaptureCallback(Ljava/util/concurrent/Executor;Landroid/app/Activity$ScreenCaptureCallback;)V",
     "unregisterScreenCaptureCallback(Landroid/app/Activity$ScreenCaptureCallback;)V"),
   ...noops("onCreate(Landroid/os/Bundle;)V", "onPostCreate(Landroid/os/Bundle;)V", "onRestart()V", "onPostResume()V",
@@ -514,18 +514,18 @@ rt.register({
   name: "android/widget/Toast", ctor: JToast,
   statics: { LENGTH_SHORT: 0, LENGTH_LONG: 1 },
   methods: {
-    "static makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;": async (c: unknown, t: unknown) => {
+    "static makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;": driven(function* (c: unknown, t: unknown): Gen  {
       const toast = new JToast();
-      toast.text = await csText(t);
+      toast.text = (yield csText(t));
       return toast;
-    },
+    }),
     "static makeText(Landroid/content/Context;II)Landroid/widget/Toast;": (c: any, id: number) => {
       const toast = new JToast();
       toast.text = c?.$host ? resString(c.$host.res, id) : "";
       return toast;
     },
     "show()V": function (this: JToast) { showToast(this.text); },
-    "setText(Ljava/lang/CharSequence;)V": async function (this: JToast, t: unknown) { this.text = await csText(t); },
+    "setText(Ljava/lang/CharSequence;)V": driven(function* (this: JToast, t: unknown): Gen { this.text = (yield csText(t)); }),
     ...noops("setGravity(III)V", "setDuration(I)V", "cancel()V"),
   },
 });
@@ -733,7 +733,7 @@ for (const [name, methods, statics] of [
         if (!rt.iof(cb, iface)) continue;
         const task = rt.make("webdroid/TelephonyDelivery") as JObj & { run: () => Promise<void> };
         task.run = () => vcall(cb, name, desc, ...args);
-        void vcall(executor, "execute", "(Ljava/lang/Runnable;)V", task).catch(reportUncaught);
+        void vcallAsync(executor, "execute", "(Ljava/lang/Runnable;)V", task).catch(reportUncaught);
       }
     },
     "getActiveModemCount()I": () => 0,
@@ -870,8 +870,8 @@ for (const [name, methods, statics] of [
     // one fixed built-in display: unknown ids are null as in AOSP, and registered listeners
     // never fire because no display is ever added, removed or reconfigured here
     "getDisplay(I)Landroid/view/Display;": (id: number) => (id === 0 ? display() : null),
-    "getDisplays()[Landroid/view/Display;": async () => jarray([await display()], "Landroid/view/Display;"),
-    "getDisplays(Ljava/lang/String;)[Landroid/view/Display;": async (cat: string | null) => jarray(cat === null ? [await display()] : [], "Landroid/view/Display;"),
+    "getDisplays()[Landroid/view/Display;": driven(function* (): Gen  { return jarray([(yield display())], "Landroid/view/Display;"); }),
+    "getDisplays(Ljava/lang/String;)[Landroid/view/Display;": driven(function* (cat: string | null): Gen  { return jarray(cat === null ? [(yield display())] : [], "Landroid/view/Display;"); }),
     "registerDisplayListener(Landroid/hardware/display/DisplayManager$DisplayListener;Landroid/os/Handler;)V": (l: unknown) => {
       if (l === null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "listener must not be null");
       displayListeners.add(l);
@@ -1060,24 +1060,24 @@ rt.register({
     "<init>()V": function () {},
     "onCreate()Z": () => 1,
     "getContext()Landroid/content/Context;": function (this: any) { return this.$ctx ?? appHost?.application ?? null; },
-    "attachInfo(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V": async function (this: { $ctx: unknown }, c: unknown) {
+    "attachInfo(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V": driven(function* (this: { $ctx: unknown }, c: unknown): Gen {
       if (this.$ctx) return;
       this.$ctx = c;
-      await vcall(this, "onCreate", "()Z");
-    },
-    "bulkInsert(Landroid/net/Uri;[Landroid/content/ContentValues;)I": async function (this: JObj, uri: unknown, values: unknown[]) {
+      (yield vcall(this, "onCreate", "()Z"));
+    }),
+    "bulkInsert(Landroid/net/Uri;[Landroid/content/ContentValues;)I": driven(function* (this: JObj, uri: unknown, values: unknown[]): Gen {
       if (!uri || !values) rt.npe();
-      for (const value of values) await vcall(this, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", uri, value);
+      for (const value of values) (yield vcall(this, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", uri, value));
       return values.length;
-    },
+    }),
     "openPipeHelper(Landroid/net/Uri;Ljava/lang/String;Landroid/os/Bundle;Ljava/lang/Object;Landroid/content/ContentProvider$PipeDataWriter;)Landroid/os/ParcelFileDescriptor;":
-      async (uri: unknown, mime: string, opts: unknown, args: unknown, writer: unknown) => {
+      driven(function* (uri: unknown, mime: string, opts: unknown, args: unknown, writer: unknown): Gen  {
         let bytes = new Uint8Array(0);
         const output = mkPfd(bytes, (value) => { bytes = value.slice(); }, `pipe:${++pipeId}`);
-        try { await vcall(writer, "writeDataToPipe", "(Landroid/os/ParcelFileDescriptor;Landroid/net/Uri;Ljava/lang/String;Landroid/os/Bundle;Ljava/lang/Object;)V", output, uri, mime, opts, args); }
-        finally { await vcall(output, "close", "()V"); }
+        try { (yield vcall(writer, "writeDataToPipe", "(Landroid/os/ParcelFileDescriptor;Landroid/net/Uri;Ljava/lang/String;Landroid/os/Bundle;Ljava/lang/Object;)V", output, uri, mime, opts, args)); }
+        finally { (yield vcall(output, "close", "()V")); }
         return mkPfd(bytes, null);
-      },
+      }),
   },
 });
 rt.markers("android/content/ContentProvider$PipeDataWriter");
@@ -1090,9 +1090,9 @@ rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content
     ...noops("<init>()V", "onCreate()V", "onDestroy()V", "onRebind(Landroid/content/Intent;)V",
       "onStart(Landroid/content/Intent;I)V"),
     ...stubs(0, "onUnbind(Landroid/content/Intent;)Z"),
-    "onStartCommand(Landroid/content/Intent;II)I": async function (this: JObj, intent: JIntent, _flags: number, startId: number) {
-      await vcall(this, "onStart", "(Landroid/content/Intent;I)V", intent, startId); return 1;
-    },
+    "onStartCommand(Landroid/content/Intent;II)I": driven(function* (this: JObj, intent: JIntent, _flags: number, startId: number): Gen {
+      (yield vcall(this, "onStart", "(Landroid/content/Intent;I)V", intent, startId)); return 1;
+    }),
     "stopSelf()V": function (this: JObj) { svcStop(jclsNameOf(this)); },
     "stopSelf(I)V": function (this: JObj, startId: number) { svcStop(jclsNameOf(this), startId); },
     "stopSelfResult(I)Z": function (this: JObj, startId: number) { return svcStop(jclsNameOf(this), startId); },
@@ -1150,24 +1150,24 @@ rt.register({
 rt.register({
   name: "android/appwidget/AppWidgetProvider", ctor: class extends JObj {}, sup: "android/content/BroadcastReceiver",
   methods: {
-    "onReceive(Landroid/content/Context;Landroid/content/Intent;)V": async function (this: JObj, context: JContext, intent: JIntent) {
+    "onReceive(Landroid/content/Context;Landroid/content/Intent;)V": driven(function* (this: JObj, context: JContext, intent: JIntent): Gen {
       const action = intent.action;
       if (!action?.startsWith("android.appwidget.action.APPWIDGET_")) return;
       const suffix = action.slice("android.appwidget.action.APPWIDGET_".length);
       const ids = intent.extras.map.get("appWidgetIds") as Int32Array | null ?? null;
       const manager = systemService(context, "appwidget");
-      if (suffix === "UPDATE" && ids?.length) await vcall(this, "onUpdate", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;[I)V", context, manager, ids);
-      else if (suffix === "DELETED" && ids?.length) await vcall(this, "onDeleted", "(Landroid/content/Context;[I)V", context, ids);
-      else if (suffix === "ENABLED") await vcall(this, "onEnabled", "(Landroid/content/Context;)V", context);
-      else if (suffix === "DISABLED") await vcall(this, "onDisabled", "(Landroid/content/Context;)V", context);
+      if (suffix === "UPDATE" && ids?.length) (yield vcall(this, "onUpdate", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;[I)V", context, manager, ids));
+      else if (suffix === "DELETED" && ids?.length) (yield vcall(this, "onDeleted", "(Landroid/content/Context;[I)V", context, ids));
+      else if (suffix === "ENABLED") (yield vcall(this, "onEnabled", "(Landroid/content/Context;)V", context));
+      else if (suffix === "DISABLED") (yield vcall(this, "onDisabled", "(Landroid/content/Context;)V", context));
       else if (suffix === "OPTIONS_CHANGED") {
         const id = Number(intent.extras.map.get("appWidgetId") ?? -1);
-        if (id !== -1) await vcall(this, "onAppWidgetOptionsChanged", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;ILandroid/os/Bundle;)V", context, manager, id, intent.extras.map.get("appWidgetOptions") ?? null);
+        if (id !== -1) (yield vcall(this, "onAppWidgetOptionsChanged", "(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;ILandroid/os/Bundle;)V", context, manager, id, intent.extras.map.get("appWidgetOptions") ?? null));
       } else if (suffix === "RESTORED") {
         const oldIds = intent.extras.map.get("appWidgetOldIds") as Int32Array | null ?? null;
-        if (oldIds && ids) await vcall(this, "onRestored", "(Landroid/content/Context;[I[I)V", context, oldIds, ids);
+        if (oldIds && ids) (yield vcall(this, "onRestored", "(Landroid/content/Context;[I[I)V", context, oldIds, ids));
       }
-    },
+    }),
     ...noops("<init>()V", "onUpdate(Landroid/content/Context;Landroid/appwidget/AppWidgetManager;[I)V",
       "onDeleted(Landroid/content/Context;[I)V", "onEnabled(Landroid/content/Context;)V",
       "onDisabled(Landroid/content/Context;)V", "onRestored(Landroid/content/Context;[I[I)V",

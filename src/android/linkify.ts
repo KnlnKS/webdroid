@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { csText } from "./text";
 import type { JTextView } from "./textview";
@@ -88,10 +88,10 @@ class UrlMatchFilter extends JObj {}
 class PhoneMatchFilter extends JObj {}
 class PhoneTransformFilter extends JObj {}
 rt.register({ name: "webdroid/UrlMatchFilter", ctor: UrlMatchFilter, ifaces: ["android/text/util/Linkify$MatchFilter"], methods: {
-  "acceptMatch(Ljava/lang/CharSequence;II)Z": async (text: unknown, start: number) => (await csText(text))[start - 1] === "@" ? 0 : 1,
+  "acceptMatch(Ljava/lang/CharSequence;II)Z": driven(function* (text: unknown, start: number): Gen  { return ((yield csText(text)))[start - 1] === "@" ? 0 : 1; }),
 } });
 rt.register({ name: "webdroid/PhoneMatchFilter", ctor: PhoneMatchFilter, ifaces: ["android/text/util/Linkify$MatchFilter"], methods: {
-  "acceptMatch(Ljava/lang/CharSequence;II)Z": async (text: unknown, start: number, end: number) => (await csText(text)).slice(start, end).replace(/\D/g, "").length >= 5 ? 1 : 0,
+  "acceptMatch(Ljava/lang/CharSequence;II)Z": driven(function* (text: unknown, start: number, end: number): Gen  { return ((yield csText(text))).slice(start, end).replace(/\D/g, "").length >= 5 ? 1 : 0; }),
 } });
 rt.register({ name: "webdroid/PhoneTransformFilter", ctor: PhoneTransformFilter, ifaces: ["android/text/util/Linkify$TransformFilter"], methods: {
   "transformUrl(Ljava/util/regex/Matcher;Ljava/lang/String;)Ljava/lang/String;": (_matcher: unknown, url: string) => url.replace(/[^\d+]/g, ""),

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { vfs } from "../src/jvm/natives/jio";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 
@@ -15,7 +15,7 @@ test("MediaMetadataRetriever reads video metadata and rejects nonmedia input", a
   expect(await vcall(retriever, "extractMetadata", "(I)Ljava/lang/String;", 19)).toBe("32");
   await vcall(retriever, "release", "()V");
   vfs.write("/sdcard/media-probe.txt", new Uint8Array(0));
-  await expect(vcall(retriever, "setDataSource", "(Ljava/lang/String;)V", "/sdcard/media-probe.txt")).rejects.toMatchObject({ msg: "Invalid media source" });
+  await expect(vcallAsync(retriever, "setDataSource", "(Ljava/lang/String;)V", "/sdcard/media-probe.txt")).rejects.toMatchObject({ msg: "Invalid media source" });
 });
 
 test("MediaMetadataRetriever reads MP3 metadata", async () => {

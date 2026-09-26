@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { JThread, curThread, mainThread, setCurThread, vcall } from "../src/jvm/natives/jlang";
+import { JThread, curThread, mainThread, setCurThread, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { newStringSet, toJsArray } from "../src/jvm/natives/jutil";
 import { getPrefs, movePrefs } from "../src/android/sharedprefs";
 
@@ -14,7 +14,7 @@ test("string preference getters throw on a stored value of the wrong type", asyn
   await vcall(editor, "putStringSet", "(Ljava/lang/String;Ljava/util/Set;)Landroid/content/SharedPreferences$Editor;", "set", newStringSet(["one", "two"]));
   await vcall(editor, "commit", "()Z");
   for (const [method, type, key] of [["getString", "Ljava/lang/String;", "set"], ["getStringSet", "Ljava/util/Set;", "string"]]) {
-    const error = await vcall(prefs, method, `(Ljava/lang/String;${type})${type}`, key, null).catch(error => error);
+    const error = await vcallAsync(prefs, method, `(Ljava/lang/String;${type})${type}`, key, null).catch(error => error);
     expect(rt.iof(error, "java/lang/ClassCastException")).toBe(1);
   }
   expect(await vcall(prefs, "getString", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "string", null)).toBe("one");

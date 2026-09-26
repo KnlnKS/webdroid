@@ -1,6 +1,6 @@
 import { JObj, noops, rt } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jutil";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, vcallAsync } from "../jvm/natives/jlang";
 import { JFnRunnable, mainLooper, reportUncaught, bootTime, uptimeMillis } from "./os";
 import { JLocation, distanceM } from "./location";
 import { JLocationRequest, LOCATION_FOREVER } from "./locationrequest";
@@ -122,7 +122,7 @@ rt.register({ name: "android/location/LocationManager", ctor: class extends JObj
         if (!executor) throw rt.mkThrowable("java/lang/NullPointerException", "executor");
         subscribe(provider, request, listener, job => {
           rt.link("webdroid/FnRunnable"); const runnable = new JFnRunnable(); runnable.fn = job;
-          void vcall(executor, "execute", "(Ljava/lang/Runnable;)V", runnable).catch(reportUncaught);
+          void vcallAsync(executor, "execute", "(Ljava/lang/Runnable;)V", runnable).catch(reportUncaught);
         });
       },
     "requestLocationUpdates(Ljava/lang/String;Landroid/location/LocationRequest;Landroid/os/Looper;Landroid/location/LocationListener;)V":

@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { jarray, u8 } from "../jvm/abi";
 import { installPackageArchive } from "./pm";
@@ -33,11 +33,11 @@ rt.register({ name: "android/content/pm/PackageInstaller$SessionParams", ctor: J
 });
 rt.register({ name: "android/content/pm/PackageInstaller$Session", ctor: JSession, ifaces: ["java/io/Closeable"],
   methods: {
-    "openWrite(Ljava/lang/String;JJ)Ljava/io/OutputStream;": async function (this: JSession, name: string, offset: bigint, _length: bigint) {
+    "openWrite(Ljava/lang/String;JJ)Ljava/io/OutputStream;": driven(function* (this: JSession, name: string, offset: bigint, _length: bigint): Gen {
       if (this.sealed) throw rt.mkThrowable("java/lang/SecurityException", "Session is sealed");
       if (!name || name.includes("/") || offset !== 0n) throw rt.mkThrowable("java/io/IOException", "Invalid session entry or unsupported resume offset");
-      const stream = await newObj("java/io/ByteArrayOutputStream"); this.entries.set(name, stream); return stream;
-    },
+      const stream = (yield newObj("java/io/ByteArrayOutputStream")); this.entries.set(name, stream); return stream;
+    }),
     "getNames()[Ljava/lang/String;": function (this: JSession) { return jarray([...this.entries.keys()], "Ljava/lang/String;"); },
     "fsync(Ljava/io/OutputStream;)V": function (this: JSession, stream: JObj) {
       if (![...this.entries.values()].includes(stream)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Stream does not belong to session");

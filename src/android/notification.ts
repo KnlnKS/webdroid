@@ -6,7 +6,7 @@
 // `n.extras` and friends directly rather than through getters.
 
 import { newArrayList, toJsArray } from "../jvm/natives/jutil";
-import { rt, JObj, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
+import { rt, JObj, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { mkUri } from "./net";
 import { PARCELABLE } from "./os";
@@ -55,15 +55,15 @@ const iconMethods: Record<string, Impl> = {
     "getBitmap()Landroid/graphics/Bitmap;": "bmp" }),
   ...PARCELABLE,
   "loadDrawable(Landroid/content/Context;)Landroid/graphics/drawable/Drawable;":
-    async function (this: JIcon, ctx: unknown) {
+    driven(function* (this: JIcon, ctx: unknown): Gen {
       if (this.type === TYPE_RESOURCE && ctx) {
-        return await vcall(ctx, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", this.resId);
+        return (yield vcall(ctx, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", this.resId));
       }
       if (!this.bmp) return null;
       const d = new JBitmapDrawable();
       d.bmp = this.bmp;
       return d;
-    },
+    }),
 };
 self(iconMethods, ["setTint(I)", "setTintList(Landroid/content/res/ColorStateList;)",
   "setTintBlendMode(Landroid/graphics/BlendMode;)", "setTintMode(Landroid/graphics/PorterDuff$Mode;)"],
@@ -520,12 +520,12 @@ rt.register({
     "getNotificationChannelGroups()Ljava/util/List;": () => newArrayList(notificationGroups()),
     "getNotificationChannelGroup(Ljava/lang/String;)Landroid/app/NotificationChannelGroup;": (id: string) => notificationGroups().find(group => group.id === id) ?? null,
     "createNotificationChannelGroup(Landroid/app/NotificationChannelGroup;)V": createGroup,
-    "createNotificationChannelGroups(Ljava/util/List;)V": async (groups: unknown) => {
-      for (const group of await toJsArray(groups)) {
+    "createNotificationChannelGroups(Ljava/util/List;)V": driven(function* (groups: unknown): Gen  {
+      for (const group of (yield toJsArray(groups))) {
         if (!(group instanceof JNotificationGroup)) throw rt.mkThrowable("java/lang/ClassCastException", "Expected NotificationChannelGroup");
-        await createGroup(group);
+        (yield createGroup(group));
       }
-    },
+    }),
     "deleteNotificationChannelGroup(Ljava/lang/String;)V": (id: string) => {
       const key = groupStoreName(), groups = preferenceStore.open(key); groups.delete(id); preferenceStore.persist(key, groups);
     },

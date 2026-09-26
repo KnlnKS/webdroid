@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 
@@ -20,7 +20,7 @@ test("Semaphore.drainPermits returns positive, zero and negative counts and empt
 test("draining permits does not complete a waiting acquisition", async () => {
   const semaphore = await newObj("java/util/concurrent/Semaphore", "(I)V", 1);
   let completed = false;
-  const waiting = vcall(semaphore, "acquire", "(I)V", 2).then(() => { completed = true; });
+  const waiting = vcallAsync(semaphore, "acquire", "(I)V", 2).then(() => { completed = true; });
   expect(await vcall(semaphore, "drainPermits", "()I")).toBe(1);
   await vcall(semaphore, "release", "()V");
   expect(completed).toBe(false);

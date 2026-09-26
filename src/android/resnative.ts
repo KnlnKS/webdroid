@@ -1,14 +1,14 @@
 // Java-facing android.content.res.* on top of res.ts + drawable.ts
 
-import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { device } from "../shell/config";
 import { newXmlPullParser, newXmlSerializer } from "./xmlpull";
 import { parseSax } from "./sax";
 import { Resources, currentResources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, JXmlParser, obtainStyled, resolveStyleValue, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
-import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV } from "./drawable";
+import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV, type JColorStateList } from "./drawable";
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
 import { TV, parseAXML, parseAXMLDoc, xmlAttrString, type XmlNode, type XmlAttr } from "./axml";
-import { javaFormat, defineException, vcall } from "../jvm/natives/jlang";
+import { javaFormat, defineException, vcall, after } from "../jvm/natives/jlang";
 import { type JLocale, localeTag, localeDirection, usLocale } from "../jvm/natives/jvalues";
 import { jarray } from "../jvm/abi";
 import { streamOf, streamOfSource } from "../jvm/natives/jio";
@@ -142,11 +142,11 @@ rt.register({
     "static getDefault()Landroid/os/LocaleList;": () => localeList,
     "static getAdjustedDefault()Landroid/os/LocaleList;": () => localeList,
     "static getEmptyLocaleList()Landroid/os/LocaleList;": () => emptyLocaleList,
-    "static forLanguageTags(Ljava/lang/String;)Landroid/os/LocaleList;": async (tags: string | null) => {
+    "static forLanguageTags(Ljava/lang/String;)Landroid/os/LocaleList;": driven(function* (tags: string | null): Gen  {
       const list = new JLocaleList();
-      for (const t of (tags ?? "").split(",").filter(Boolean)) list.values.push(await vcall(rt.link("java/util/Locale").ctor, "forLanguageTag", "(Ljava/lang/String;)Ljava/util/Locale;", t.trim()));
+      for (const t of (tags ?? "").split(",").filter(Boolean)) list.values.push((yield vcall(rt.link("java/util/Locale").ctor, "forLanguageTag", "(Ljava/lang/String;)Ljava/util/Locale;", t.trim())));
       return list;
-    },
+    }),
     "get(I)Ljava/util/Locale;": function (this: JLocaleList, i: number) { return this.values[i] ?? null; },
     "size()I": function (this: JLocaleList) { return this.values.length; },
     "isEmpty()Z": function (this: JLocaleList) { return this.values.length === 0 ? 1 : 0; },
@@ -275,14 +275,14 @@ rt.register({
     "getNonSystemLocales()[Ljava/lang/String;": function (this: JAssetManager) { return jarray([...this.host.arsc?.locales ?? []], "Ljava/lang/String;"); },
     "open(Ljava/lang/String;)Ljava/io/InputStream;": assetOpen,
     "open(Ljava/lang/String;I)Ljava/io/InputStream;": assetOpen,
-    "openXmlResourceParser(Ljava/lang/String;)Landroid/content/res/XmlResourceParser;": async function (this: JAssetManager, path: string) {
+    "openXmlResourceParser(Ljava/lang/String;)Landroid/content/res/XmlResourceParser;": driven(function* (this: JAssetManager, path: string): Gen {
       const bytes = this.host.zip[path], source = this.host.lazyEntries.get(path);
       if (!bytes && !source) throw rt.mkThrowable("java/io/FileNotFoundException", path);
-      return xmlFromBytes(this.host, bytes ?? await readFully(source!));
-    },
-    "openFd(Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": async function (this: JAssetManager, p: string) {
-      return mkAssetFd(await readFully(assetSource(this, p)));
-    },
+      return xmlFromBytes(this.host, bytes ?? (yield readFully(source!)));
+    }),
+    "openFd(Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": driven(function* (this: JAssetManager, p: string): Gen {
+      return mkAssetFd((yield readFully(assetSource(this, p))));
+    }),
     "list(Ljava/lang/String;)[Ljava/lang/String;": function (this: JAssetManager, p: string) {
       const prefix = "assets/" + (p ? p + "/" : "");
       const names = new Set<string>();
@@ -438,11 +438,11 @@ const resMethods: NativeSpec["methods"] = {
     configurationMetrics(this);
     this.host.invalidate();
   },
-  "getFont(I)Landroid/graphics/Typeface;": async function (this: JResources, id: number) {
-    const t = await fontResource(this.host, id);
+  "getFont(I)Landroid/graphics/Typeface;": driven(function* (this: JResources, id: number): Gen {
+    const t = (yield fontResource(this.host, id));
     if (!t) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Font resource ID #0x" + (id >>> 0).toString(16));
     return t;
-  },
+  }),
   "static getSystem()Landroid/content/res/Resources;": () => systemRes,
   "<init>(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V": initResources,
 };
@@ -550,7 +550,7 @@ rt.register({
     "getFloat(IF)F": function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvFloat(this.res, this.vals[i], d) : d; },
     "getColor(II)I": function (this: JTypedArray, i: number, d: number) {
       const v = this.vals[i];
-      if (v?.t === TV.REFERENCE) return loadColorStateList(this.res, v.d, this.theme).then(c => c.defColor);
+      if (v?.t === TV.REFERENCE) return after(loadColorStateList(this.res, v.d, this.theme), (c: JColorStateList) => c.defColor);
       return rvColor(this.res, v, d);
     },
     "getColorStateList(I)Landroid/content/res/ColorStateList;": function (this: JTypedArray, i: number) {
@@ -582,19 +582,19 @@ rt.register({
       const v = this.vals[i];
       return v && (v.t === TV.REFERENCE || v.t === TV.ATTRIBUTE) ? v.d : v?.r ?? d;
     },
-    "getDrawable(I)Landroid/graphics/drawable/Drawable;": async function (this: JTypedArray, i: number) {
+    "getDrawable(I)Landroid/graphics/drawable/Drawable;": driven(function* (this: JTypedArray, i: number): Gen {
       const v = this.vals[i];
       if (!v) return null;
       return loadDrawableRV(this.res, v, this.theme);
-    },
-    "getFont(I)Landroid/graphics/Typeface;": async function (this: JTypedArray, i: number) {
+    }),
+    "getFont(I)Landroid/graphics/Typeface;": driven(function* (this: JTypedArray, i: number): Gen {
       const value = this.vals[i];
       if (!value) return null;
       const id = value.t === TV.REFERENCE ? value.d : value.r ?? 0;
-      const font = id ? await fontResource(this.res, id) : null;
+      const font = id ? (yield fontResource(this.res, id)) : null;
       if (!font) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Font resource at index " + i);
       return font;
-    },
+    }),
     "getType(I)I": function (this: JTypedArray, i: number) {
       const v = this.vals[i];
       if (!v) return 0;

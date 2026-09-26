@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { mkFile, vfs } from "../src/jvm/natives/jio";
 
 rt.linkNatives();
@@ -25,7 +25,7 @@ test("AtomicFile commits new data and rolls failed replacements back", async () 
   await vcall(file, "finishWrite", "(Ljava/io/FileOutputStream;)V", stream);
   expect(new TextDecoder().decode(await vcall(file, "readFully", "()[B"))).toBe("third");
   await vcall(file, "delete", "()V");
-  await expect(vcall(file, "openRead", "()Ljava/io/FileInputStream;")).rejects.toBeDefined();
+  await expect(vcallAsync(file, "openRead", "()Ljava/io/FileInputStream;")).rejects.toBeDefined();
 });
 test("AtomicFile restores legacy backups and discards interrupted replacements on read", async () => {
   const path = "/data/test-atomic/recover", file = await make(path);

@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { vcall } from "../src/jvm/natives/jlang";
+import { vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 
 test("URLConnection guesses names using Android fragment and directory rules", async () => {
-  const guess = (name: string | null) => vcall(rt.link("java/net/URLConnection").ctor, "guessContentTypeFromName", "(Ljava/lang/String;)Ljava/lang/String;", name);
+  const guess = (name: string | null) => vcallAsync(rt.link("java/net/URLConnection").ctor, "guessContentTypeFromName", "(Ljava/lang/String;)Ljava/lang/String;", name);
   expect(await guess("/assets/INDEX.HTML#part")).toBe("text/html");
   expect(await guess("/assets/")).toBe("text/html");
   expect(await guess("html")).toBe("text/html");

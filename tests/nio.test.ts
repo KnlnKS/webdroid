@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { JInputStream, vfs } from "../src/jvm/natives/jio";
 import { jarray, mangleMethod } from "../src/jvm/abi";
 
@@ -88,7 +88,7 @@ test("FileChannel.write drains a ByteBuffer at the shared file position", async 
   expect(await vcall(readOnly, "transferTo", "(JJLjava/nio/channels/WritableByteChannel;)J", 1n, 100n, target)).toBe(2n);
   expect(Array.from(await vcall(copy, "toByteArray", "()[B"))).toEqual([2, 3]);
   expect(await vcall(readOnly, "position", "()J")).toBe(0n);
-  await expect(vcall(readOnly, "write", "(Ljava/nio/ByteBuffer;)I", buffer)).rejects.toMatchObject({
+  await expect(vcallAsync(readOnly, "write", "(Ljava/nio/ByteBuffer;)I", buffer)).rejects.toMatchObject({
     constructor: rt.link("java/nio/channels/NonWritableChannelException").ctor,
   });
 });
@@ -105,7 +105,7 @@ test("FileChannel truncation shrinks storage and the shared position without ext
     expect(await vcall(channel, "size", "()J")).toBe(2n);
     await vcall(file, "close", "()V");
     expect([...vfs.read(path)!]).toEqual([1, 2]);
-    await expect(vcall(channel, "truncate", "(J)Ljava/nio/channels/FileChannel;", 0n)).rejects.toMatchObject({ constructor: rt.link("java/nio/channels/ClosedChannelException").ctor });
+    await expect(vcallAsync(channel, "truncate", "(J)Ljava/nio/channels/FileChannel;", 0n)).rejects.toMatchObject({ constructor: rt.link("java/nio/channels/ClosedChannelException").ctor });
   }
 });
 
@@ -154,7 +154,7 @@ test("FloatBuffer bulk get honours offsets, lengths and underflow", async () => 
   await vcall(buffer, "get", "([FII)Ljava/nio/FloatBuffer;", out, 2, 3);
   expect([...out]).toEqual([0, 0, 1, 2, 3, 0, 0, 0]);
   expect(await vcall(buffer, "position", "()I")).toBe(3);
-  await expect(vcall(buffer, "get", "([FII)Ljava/nio/FloatBuffer;", out, 0, 4)).rejects.toMatchObject({});
+  await expect(vcallAsync(buffer, "get", "([FII)Ljava/nio/FloatBuffer;", out, 0, 4)).rejects.toMatchObject({});
 });
 
 test("ShortBuffer bulk get honours byte order, bounds and position", async () => {
@@ -168,8 +168,8 @@ test("ShortBuffer bulk get honours byte order, bounds and position", async () =>
   expect(await vcall(buffer, "get", "([SII)Ljava/nio/ShortBuffer;", out, 1, 2)).toBe(buffer);
   expect([...out]).toEqual([0, 0x1234, -2, 0, 0]);
   expect(await vcall(buffer, "position", "()I")).toBe(2);
-  await expect(vcall(buffer, "get", "([SII)Ljava/nio/ShortBuffer;", out, 4, 2)).rejects.toMatchObject({});
-  await expect(vcall(buffer, "get", "([SII)Ljava/nio/ShortBuffer;", out, 0, 2)).rejects.toMatchObject({});
+  await expect(vcallAsync(buffer, "get", "([SII)Ljava/nio/ShortBuffer;", out, 4, 2)).rejects.toMatchObject({});
+  await expect(vcallAsync(buffer, "get", "([SII)Ljava/nio/ShortBuffer;", out, 0, 2)).rejects.toMatchObject({});
 });
 
 test("ShortBuffer bulk put honours offsets, bounds and position", async () => {
@@ -181,7 +181,7 @@ test("ShortBuffer bulk put honours offsets, bounds and position", async () => {
   const out = new Int16Array(2);
   await vcall(buffer, "get", "([S)Ljava/nio/ShortBuffer;", out);
   expect([...out]).toEqual([0x1234, -2]);
-  await expect(vcall(buffer, "put", "([SII)Ljava/nio/ShortBuffer;", input, 3, 2)).rejects.toMatchObject({});
+  await expect(vcallAsync(buffer, "put", "([SII)Ljava/nio/ShortBuffer;", input, 3, 2)).rejects.toMatchObject({});
 });
 
 test("the dropbox service exists and has every tag disabled", async () => {
@@ -210,5 +210,5 @@ test("FileChannel READ_WRITE mappings share the file's bytes and force persists 
   expect([...vfs.read("/tmp/nio-map.bin")!]).toEqual([1, 2, 3, 9, 0, 0, 0, 5, 7]);
   const reader = await newObj("java/io/RandomAccessFile", "(Ljava/lang/String;Ljava/lang/String;)V", "/tmp/nio-map.bin", "r");
   const ro = await vcall(reader, "getChannel", "()Ljava/nio/channels/FileChannel;");
-  await expect(vcall(ro, "map", "(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;", mode, 0n, 4n)).rejects.toThrow();
+  await expect(vcallAsync(ro, "map", "(Ljava/nio/channels/FileChannel$MapMode;JJ)Ljava/nio/MappedByteBuffer;", mode, 0n, 4n)).rejects.toThrow();
 });

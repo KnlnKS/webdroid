@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 
@@ -25,7 +25,7 @@ test("PriorityBlockingQueue keeps a compared item queued until insertion complet
   const insertion = vcall(queue, "offer", "(Ljava/lang/Object;)Z", second);
   await started;
   let released = false;
-  const removal = vcall(queue, "remove", "(Ljava/lang/Object;)Z", first).then(() => {
+  const removal = vcallAsync(queue, "remove", "(Ljava/lang/Object;)Z", first).then(() => {
     first.key = null;
     released = true;
   });

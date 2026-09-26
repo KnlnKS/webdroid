@@ -1,6 +1,6 @@
 // android.graphics.drawable.* — Drawable hierarchy, XML inflation, 9-patch, vectors.
 
-import { rt, JObj, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, curThread, callOn, after, newObj, defineException, mkEnumSet, type JSimpleEnum } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { JCanvas, JRect, JRectF, JBitmap, JPaint, matMul, rotM, type JMatrix, type JOutline, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
@@ -102,7 +102,7 @@ const drawableMethods: NativeSpec["methods"] = {
     const name = mode?.ename ?? null;
     if (this.tintMode !== name) { this.tintMode = name; invalidateSelf.call(this); }
   },
-  "setState([I)Z": async function (this: JDrawable, st: Int32Array) {
+  "setState([I)Z": driven(function* (this: JDrawable, st: Int32Array): Gen {
     const cur = this.stateSet;
     if (cur.length === st.length && cur.every((v, i) => v === st[i])) return 0;
     this.stateSet = [...st];
@@ -111,10 +111,10 @@ const drawableMethods: NativeSpec["methods"] = {
     // host learns to re-record its layer, so a silent state change leaves a pressed ripple stuck.
     const tint = this.tintCsl ? cslColor(this.tintCsl, this.stateSet) : this.tint;
     const tintChanged = tint !== this.tint; this.tint = tint;
-    if (!await jmethod(this, M_onStateChange)!.call(this, st) && !tintChanged) return 0;
+    if (!(yield jmethod(this, M_onStateChange)!.call(this, st)) && !tintChanged) return 0;
     invalidateSelf.call(this);
     return 1;
-  },
+  }),
   "onStateChange([I)Z": function (this: JDrawable) { return this.onStateChange() ? 1 : 0; },
   "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JDrawable) { return onBoundsChangeAll(this); },
   "onLevelChange(I)Z": () => 0,
@@ -550,10 +550,10 @@ rt.register({ name: "com/android/internal/graphics/drawable/AnimationScaleListDr
     "start()V": function (this: JAnimationScaleListDrawable) { const d = this.current(); if (d) return vcall(d, "start", "()V"); },
     "stop()V": function (this: JAnimationScaleListDrawable) { const d = this.current(); if (d) return vcall(d, "stop", "()V"); },
     "isRunning()Z": function (this: JAnimationScaleListDrawable) { const d = this.current(); return d ? vcall(d, "isRunning", "()Z") : 0; },
-    "onStateChange([I)Z": async function (this: JAnimationScaleListDrawable, state: Int32Array) {
-      for (const { d } of this.children) await vcall(d, "setState", "([I)Z", state);
+    "onStateChange([I)Z": driven(function* (this: JAnimationScaleListDrawable, state: Int32Array): Gen {
+      for (const { d } of this.children) (yield vcall(d, "setState", "([I)Z", state));
       return 1;
-    },
+    }),
   } });
 rt.register({
   name: "android/graphics/drawable/DrawableContainer", ctor: JDrawableContainer, sup: "android/graphics/drawable/Drawable",
@@ -583,11 +583,11 @@ rt.register({
 rt.register({
   name: "android/graphics/drawable/StateListDrawable", ctor: JStateListDrawable, sup: "android/graphics/drawable/DrawableContainer",
   methods: {
-    "onStateChange([I)Z": async function (this: JStateListDrawable, state: Int32Array) {
+    "onStateChange([I)Z": driven(function* (this: JStateListDrawable, state: Int32Array): Gen {
       const thread = curThread;
-      for (const item of this.items) await vcallOn(thread, item.d, "setState", "([I)Z", state);
+      for (const item of this.items) (yield vcallOn(thread, item.d, "setState", "([I)Z", state));
       return 1;
-    },
+    }),
     "<init>()V": function () {},
     "addState([ILandroid/graphics/drawable/Drawable;)V": function (this: JStateListDrawable, st: Int32Array, d: JDrawable) {
       const states: number[] = [], neg: number[] = [];
@@ -667,42 +667,42 @@ export class JLayerDrawable extends JDrawable {
 rt.register({
   name: "android/graphics/drawable/LayerDrawable", ctor: JLayerDrawable, sup: "android/graphics/drawable/Drawable",
   methods: {
-    "getOutline(Landroid/graphics/Outline;)V": async function (this: JLayerDrawable, outline: JOutline) {
+    "getOutline(Landroid/graphics/Outline;)V": driven(function* (this: JLayerDrawable, outline: JOutline): Gen {
       const thread = curThread;
       for (const { d } of this.layers) {
         if (!d) continue;
-        await vcallOn(thread, d, "getOutline", "(Landroid/graphics/Outline;)V", outline);
+        (yield vcallOn(thread, d, "getOutline", "(Landroid/graphics/Outline;)V", outline));
         if (outline.kind) return;
       }
-    },
+    }),
     // AOSP: each layer's inset plus that layer's own padding, the widest of each edge. This is
     // what an InsetDrawable used as a window background reports, and what tells the window how
     // far inside itself the content has to sit.
-    "getPadding(Landroid/graphics/Rect;)Z": async function (this: JLayerDrawable, r: JRect) {
+    "getPadding(Landroid/graphics/Rect;)Z": driven(function* (this: JLayerDrawable, r: JRect): Gen {
       r.left = r.top = r.right = r.bottom = 0;
       const p = new JRect();
       for (const l of this.layers) {
         if (!l.d) continue;
         p.left = p.top = p.right = p.bottom = 0;
-        await vcall(l.d, "getPadding", "(Landroid/graphics/Rect;)Z", p);
+        (yield vcall(l.d, "getPadding", "(Landroid/graphics/Rect;)Z", p));
         r.left = Math.max(r.left, l.insets[0] + p.left);
         r.top = Math.max(r.top, l.insets[1] + p.top);
         r.right = Math.max(r.right, l.insets[2] + p.right);
         r.bottom = Math.max(r.bottom, l.insets[3] + p.bottom);
       }
       return r.left || r.top || r.right || r.bottom ? 1 : 0;
-    },
+    }),
     "<init>([Landroid/graphics/drawable/Drawable;)V": function (this: JLayerDrawable, ds: (JDrawable | null)[] | null) {
       if (!ds) throw rt.mkThrowable("java/lang/IllegalArgumentException", "layers must be non-null");
       for (const d of ds) this.pushLayer({ d, insets: [0, 0, 0, 0] });
     },
     // AOSP hands the state to every layer: a Material button's fill is a MaterialShapeDrawable
     // inside an InsetDrawable inside the ripple, and it is the one that reads state_checked
-    "onStateChange([I)Z": async function (this: JLayerDrawable, st: Int32Array) {
+    "onStateChange([I)Z": driven(function* (this: JLayerDrawable, st: Int32Array): Gen {
       let changed = this.onStateChange();
-      for (const l of this.layers) if (l.d && await vcall(l.d, "setState", "([I)Z", st)) changed = true;
+      for (const l of this.layers) if (l.d && (yield vcall(l.d, "setState", "([I)Z", st))) changed = true;
       return changed ? 1 : 0;
-    },
+    }),
     "isStateful()Z": () => 1,
     "getNumberOfLayers()I": function (this: JLayerDrawable) { return this.layers.length; },
     "getDrawable(I)Landroid/graphics/drawable/Drawable;": function (this: JLayerDrawable, i: number) { return this.layers[i]?.d ?? null; },
@@ -1028,17 +1028,18 @@ class JDrawableWrapper extends JDrawable {
   size(vertical: boolean) { return this.dr ? drawableSize(this.dr, vertical) : -1; }
   onStateChange(): boolean { return this.dr ? this.dr.onStateChange() : false; }
 }
-async function wrapSet(this: JDrawableWrapper, d: JDrawable | null) {
+function wrapSet(this: JDrawableWrapper, d: JDrawable | null): unknown { return rt.drive(wrapSet$.call(this, d)); }
+function* wrapSet$(this: JDrawableWrapper, d: JDrawable | null): Gen {
   const thread = curThread;
   if (this.dr) this.dr.callback = null;
   this.dr = d;
   if (d) {
     d.callback = this;
-    await vcallOn(thread, d, "setVisible", "(ZZ)Z", +this.visible, 1);
-    await vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.stateSet));
-    await vcallOn(thread, d, "setLevel", "(I)Z", this.level);
-    await vcallOn(thread, d, "setBounds", "(IIII)V", this.bounds.left, this.bounds.top, this.bounds.right, this.bounds.bottom);
-    await vcallOn(thread, d, "setLayoutDirection", "(I)Z", this.layoutDir);
+    (yield vcallOn(thread, d, "setVisible", "(ZZ)Z", +this.visible, 1));
+    (yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.stateSet)));
+    (yield vcallOn(thread, d, "setLevel", "(I)Z", this.level));
+    (yield vcallOn(thread, d, "setBounds", "(IIII)V", this.bounds.left, this.bounds.top, this.bounds.right, this.bounds.bottom));
+    (yield vcallOn(thread, d, "setLayoutDirection", "(I)Z", this.layoutDir));
   }
   invalidateSelf.call(this);
 }
@@ -1120,8 +1121,8 @@ rt.register({ name: "android/graphics/drawable/InsetDrawable", ctor: JInsetDrawa
   "<init>(Landroid/graphics/drawable/Drawable;IIII)V": insetInit(false),
   "<init>(Landroid/graphics/drawable/Drawable;F)V": insetInit(true),
   "<init>(Landroid/graphics/drawable/Drawable;FFFF)V": insetInit(true),
-  "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": async function (this: JInsetDrawable) {
-    const childState = this.dr && await vcall(this.dr, "getConstantState", "()Landroid/graphics/drawable/Drawable$ConstantState;");
+  "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": driven(function* (this: JInsetDrawable): Gen {
+    const childState = this.dr && (yield vcall(this.dr, "getConstantState", "()Landroid/graphics/drawable/Drawable$ConstantState;"));
     if (!childState) return null;
     const { insets, fractions, tint, tintCsl, alpha, autoMirrored } = this;
     const state = rt.make("android/graphics/drawable/InsetDrawable$InsetState") as JDrawableState;
@@ -1133,7 +1134,7 @@ rt.register({ name: "android/graphics/drawable/InsetDrawable", ctor: JInsetDrawa
       return drawable;
     };
     return state;
-  },
+  }),
   "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JInsetDrawable, b: JRect) {
     if (this.dr) return vcallOn(curThread, this.dr, "setBounds", "(IIII)V", b.left + this.inset(0), b.top + this.inset(1), b.right - this.inset(2), b.bottom - this.inset(3));
   },
@@ -1214,17 +1215,17 @@ class JScaleDrawable extends JDrawableWrapper {
   }
 }
 rt.register({ name: "android/graphics/drawable/ScaleDrawable", ctor: JScaleDrawable, sup: "android/graphics/drawable/DrawableWrapper", methods: {
-  "<init>(Landroid/graphics/drawable/Drawable;IFF)V": async function (this: JScaleDrawable, d: JDrawable | null, gravity: number, w: number, h: number) {
+  "<init>(Landroid/graphics/drawable/Drawable;IFF)V": driven(function* (this: JScaleDrawable, d: JDrawable | null, gravity: number, w: number, h: number): Gen {
     const thread = curThread;
-    this.gravity = gravity; this.scaleWidth = w; this.scaleHeight = h; await wrapSet.call(this, d);
+    this.gravity = gravity; this.scaleWidth = w; this.scaleHeight = h; (yield wrapSet.call(this, d));
     return this.layout(thread);
-  },
+  }),
   "onBoundsChange(Landroid/graphics/Rect;)V": function (this: JScaleDrawable) { return this.layout(); },
-  "onLevelChange(I)Z": async function (this: JScaleDrawable, level: number) {
+  "onLevelChange(I)Z": driven(function* (this: JScaleDrawable, level: number): Gen {
     const thread = curThread;
-    if (this.dr) await vcallOn(thread, this.dr, "setLevel", "(I)Z", level);
-    await this.layout(thread); invalidateSelf.call(this); return 1;
-  },
+    if (this.dr) (yield vcallOn(thread, this.dr, "setLevel", "(I)Z", level));
+    (yield this.layout(thread)); invalidateSelf.call(this); return 1;
+  }),
 } });
 // ── android.graphics.drawable.shapes + ShapeDrawable: a Shape is resized to the drawable's
 // bounds and painted with the drawable's own Paint (translated to the bounds origin, as AOSP).
@@ -1368,27 +1369,27 @@ rt.register({
     "getOutline(Landroid/graphics/Outline;)V": () => {},
     "setShaderFactory(Landroid/graphics/drawable/ShapeDrawable$ShaderFactory;)V": function (this: JShapeDrawable, factory: unknown) { this.shaderFactory = factory; },
     "getShaderFactory()Landroid/graphics/drawable/ShapeDrawable$ShaderFactory;": function (this: JShapeDrawable) { return this.shaderFactory; },
-    "onBoundsChange(Landroid/graphics/Rect;)V": async function (this: JShapeDrawable, bounds: JRect) {
+    "onBoundsChange(Landroid/graphics/Rect;)V": driven(function* (this: JShapeDrawable, bounds: JRect): Gen {
       onBoundsChangeAll(this);
       const width = bounds.right - bounds.left, height = bounds.bottom - bounds.top;
       if (!this.shape) return;
-      await vcall(this.shape, "resize", "(FF)V", width, height);
+      (yield vcall(this.shape, "resize", "(FF)V", width, height));
       if (this.shaderFactory) {
-        const shader = await vcall(this.shaderFactory, "resize", "(II)Landroid/graphics/Shader;", width, height);
-        await vcall(this.p, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;", shader);
+        const shader = (yield vcall(this.shaderFactory, "resize", "(II)Landroid/graphics/Shader;", width, height));
+        (yield vcall(this.p, "setShader", "(Landroid/graphics/Shader;)Landroid/graphics/Shader;", shader));
       }
-    },
+    }),
     // the virtual route: an app Shape subclass's onResize/draw, and an app ShapeDrawable's onDraw
-    "draw(Landroid/graphics/Canvas;)V": async function (this: JShapeDrawable, cv: JCanvas) {
+    "draw(Landroid/graphics/Canvas;)V": driven(function* (this: JShapeDrawable, cv: JCanvas): Gen {
       const sh = this.shape;
       if (!sh) return;
       const b = this.bounds, ctx = cv.ctx;
-      await vcall(sh, "resize", "(FF)V", b.right - b.left, b.bottom - b.top);
+      (yield vcall(sh, "resize", "(FF)V", b.right - b.left, b.bottom - b.top));
       ctx.save();
       ctx.translate(b.left, b.top);
-      try { await vcall(this, "onDraw", "(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V", sh, cv, this.effPaint()); }
+      try { (yield vcall(this, "onDraw", "(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V", sh, cv, this.effPaint())); }
       finally { ctx.restore(); }
-    },
+    }),
     "onDraw(Landroid/graphics/drawable/shapes/Shape;Landroid/graphics/Canvas;Landroid/graphics/Paint;)V": function (this: JShapeDrawable, sh: JShape, cv: JCanvas, p: JPaint) {
       return jmethod(sh, M_shapeDraw)!.call(sh, cv, p);
     },
@@ -1485,17 +1486,20 @@ const AT = attrTable(
   "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
   "scaleGravity", "gravity", "orientation", "oneshot", "duration", "scaleWidth", "scaleHeight", "useIntrinsicSizeAsMinimum", "level",
   "pivotX", "pivotY", "translateX", "translateY", "scaleX", "scaleY", "rotation", "fromDegrees", "toDegrees");
-async function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): Promise<JDrawable> {
+function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): JDrawable | Promise<JDrawable> { return rt.drive(loadDrawableXml$(res, bytes, theme)); }
+function* loadDrawableXml$(res: Resources, bytes: Uint8Array, theme: JTheme | null): Gen<JDrawable> {
   const root = parseAXML(bytes);
-  return inflateDrawableNode(res, root, theme);
+  return (yield inflateDrawableNode(res, root, theme));
 }
 /** an <item>/<inset>'s drawable: its android:drawable, else its first inline child */
-async function itemDrawable(res: Resources, node: XmlNode, theme: JTheme | null): Promise<JDrawable | null> {
+function itemDrawable(res: Resources, node: XmlNode, theme: JTheme | null): JDrawable | null | Promise<JDrawable | null> { return rt.drive(itemDrawable$(res, node, theme)); }
+function* itemDrawable$(res: Resources, node: XmlNode, theme: JTheme | null): Gen<JDrawable | null> {
   const da = nodeAttr(res, node, AT.drawable);
-  if (da) return loadDrawableRV(res, da, theme);
-  return node.children.length ? inflateDrawableNode(res, node.children[0], theme) : null;
+  if (da) return (yield loadDrawableRV(res, da, theme));
+  return node.children.length ? (yield inflateDrawableNode(res, node.children[0], theme)) : null;
 }
-export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme | null): Promise<JDrawable> {
+export function inflateDrawableNode(res: Resources, node: XmlNode, theme: JTheme | null): JDrawable | Promise<JDrawable> { return rt.drive(inflateDrawableNode$(res, node, theme)); }
+function* inflateDrawableNode$(res: Resources, node: XmlNode, theme: JTheme | null): Gen<JDrawable> {
   const get = (id: number, from = node) => resolveStyleValue(res, theme, nodeAttr(res, from, id));
   const dimen = (v: RV | null, fallback = 0) => rvDimen(res, resolveStyleValue(res, theme, v), fallback);
   const colorOf = (v: RV | null, d = 0) => {
@@ -1513,7 +1517,7 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
       d.shape = rvColor(res, get(AT.shape), 0) & 3;
       const tint = resolveStyleValue(res, theme, get(AT.tint));
       if (tint?.t === TV.REFERENCE) {
-        d.tintCsl = await loadColorStateList(res, tint.d, theme);
+        d.tintCsl = (yield loadColorStateList(res, tint.d, theme)) as JColorStateList;
         d.tint = cslColor(d.tintCsl, d.stateSet);
       } else if (tint) d.tint = rvColor(res, tint);
       for (const c of node.children) {
@@ -1521,7 +1525,7 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
         if (c.name === "solid") {
           const value = resolveStyleValue(res, theme, cg(AT.color));
           if (value?.t === TV.REFERENCE) {
-            d.solidCsl = await loadColorStateList(res, value.d, theme);
+            d.solidCsl = (yield loadColorStateList(res, value.d, theme)) as JColorStateList;
             d.solid = cslColor(d.solidCsl, d.stateSet);
           } else d.solid = rvColor(res, value, 0);
         }
@@ -1572,14 +1576,14 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
         d[`pivot${axis}Relative`] = relative;
         d[`pivot${axis}`] = relative ? complexToFraction(value.d, 1, 1) : rvFloat(res, value);
       }
-      await wrapSet.call(d, await itemDrawable(res, node, theme));
+      (yield wrapSet.call(d, (yield itemDrawable(res, node, theme))));
       return d;
     }
     case "clip": {
       const d = new JClipDrawable();
       d.gravity = xmlInt(res, get(AT.gravity), 3);
       d.orientation = xmlInt(res, get(AT.orientation), 1);
-      await wrapSet.call(d, await itemDrawable(res, node, theme));
+      (yield wrapSet.call(d, (yield itemDrawable(res, node, theme))));
       return d;
     }
     case "scale": {
@@ -1590,7 +1594,7 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
       d.gravity = xmlInt(res, get(AT.scaleGravity), 3);
       d.useIntrinsicMinimum = !!xmlInt(res, get(AT.useIntrinsicSizeAsMinimum), 0);
       d.level = xmlInt(res, get(AT.level), 0);
-      await wrapSet.call(d, await itemDrawable(res, node, theme));
+      (yield wrapSet.call(d, (yield itemDrawable(res, node, theme))));
       return d;
     }
     case "animated-selector":
@@ -1604,10 +1608,10 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
           if (ST_IDS.has(a.resId)) {
             (a.data ? states : neg).push(a.resId);
           } else if (a.resId === AT.drawable) {
-            child = await loadDrawableRV(res, attrRV(res, a), theme);
+            child = (yield loadDrawableRV(res, attrRV(res, a), theme));
           }
         }
-        if (!child && c.children.length) child = await inflateDrawableNode(res, c.children[0], theme);
+        if (!child && c.children.length) child = (yield inflateDrawableNode(res, c.children[0], theme));
         if (child) d.items.push({ states, negStates: neg, d: child });
       }
       return d;
@@ -1616,7 +1620,7 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
       const d = new JLayerDrawable();
       for (const c of node.children) {
         if (c.name !== "item") continue;
-        const child = await itemDrawable(res, c, theme);
+        const child = (yield itemDrawable(res, c, theme));
         if (child) {
           // AOSP LayerDrawable: an item may carry its own size and a gravity to place it by,
           // and layout() already implements that. Without them a 24dp arrow inflated into a
@@ -1643,7 +1647,7 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
       const d = new JAdaptiveIconDrawable();
       for (const n of ["background", "foreground"]) {
         const c = node.children.find((k) => k.name === n);
-        const child = c ? await itemDrawable(res, c, theme) : null;
+        const child = c ? (yield itemDrawable(res, c, theme)) : null;
         if (child) d.pushLayer({ d: child, insets: [0, 0, 0, 0] });
       }
       return d;
@@ -1659,8 +1663,8 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
         // ripple is clipped to, and is NEVER drawn. selectableItemBackground's mask is
         // @android:color/white, so drawing it fills the view with opaque white — which is
         // invisible on a light theme and the entire surface on a dark one.
-        if (idv && idv.d === maskId(res)) { d.mask = await itemDrawable(res, c, theme); continue; }
-        const child = await itemDrawable(res, c, theme);
+        if (idv && idv.d === maskId(res)) { d.mask = (yield itemDrawable(res, c, theme)); continue; }
+        const child = (yield itemDrawable(res, c, theme));
         if (child) { d.pushLayer({ d: child, insets: [0, 0, 0, 0] }); d.ids.push(idv ? idv.d : null); }
       }
       return d;
@@ -1672,7 +1676,7 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
         if (value?.t === TV.FRACTION) d.fractions[i] = complexToFraction(value.d, 1, 1);
         else d.insets[i] = dimen(value, 0);
       }
-      await wrapSet.call(d, await itemDrawable(res, node, theme));
+      (yield wrapSet.call(d, (yield itemDrawable(res, node, theme))));
       return d;
     }
     // Both wrap a bitmap named by android:src; the .9.png's own npTc chunk is what makes it
@@ -1680,7 +1684,7 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
     case "bitmap":
     case "nine-patch": {
       const da = nodeAttr(res, node, AT.src);
-      return da ? loadDrawableRV(res, da, theme) : new JColorDrawable();
+      return da ? (yield loadDrawableRV(res, da, theme)) : new JColorDrawable();
     }
     case "vector": {
       const d = new JVectorDrawable();
@@ -1722,7 +1726,7 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
     case "animated-vector": {
       const d = new JAnimatedVectorDrawable();
       const source = get(AT.drawable);
-      const vector = source ? await loadDrawableRV(res, source, theme) : null;
+      const vector = source ? (yield loadDrawableRV(res, source, theme)) : null;
       if (vector instanceof JVectorDrawable) Object.assign(d, vector);
       return d;
     }
@@ -1737,7 +1741,7 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
       for (const c of node.children) {
         if (c.name !== "item") continue;
         const da = nodeAttr(res, c, AT.drawable);
-        const child = da ? await loadDrawableRV(res, da, theme) : c.children.length ? await inflateDrawableNode(res, c.children[0], theme) : null;
+        const child = da ? (yield loadDrawableRV(res, da, theme)) : c.children.length ? (yield inflateDrawableNode(res, c.children[0], theme)) : null;
         if (child) d.frames.push({ d: child, ms: nodeAttr(res, c, AT.duration)?.d ?? 0 });
       }
       return d;
@@ -1746,7 +1750,7 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
       const d = new JAnimationScaleListDrawable();
       for (const item of node.children) {
         if (item.name !== "item") continue;
-        const child = await itemDrawable(res, item, theme);
+        const child = (yield itemDrawable(res, item, theme));
         if (!child) throw rt.mkThrowable("org/xmlpull/v1/XmlPullParserException", "<item> requires a drawable");
         child.callback = d;
         d.children.push({ d: child });
@@ -1758,8 +1762,8 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
       for (const c of node.children) {
         if (c.name === "item") {
           const da = nodeAttr(res, c, AT.drawable);
-          if (da) return loadDrawableRV(res, da, theme);
-          if (c.children.length) return inflateDrawableNode(res, c.children[0], theme);
+          if (da) return (yield loadDrawableRV(res, da, theme));
+          if (c.children.length) return (yield inflateDrawableNode(res, c.children[0], theme));
         }
       }
       return new JColorDrawable();
@@ -1771,7 +1775,7 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
       }
       let drawable: unknown;
       try {
-        drawable = await newObj(node.name.replace(/\./g, "/"));
+        drawable = (yield newObj(node.name.replace(/\./g, "/")));
       } catch {
         throw rt.mkThrowable("android/view/InflateException", "Error inflating class " + node.name);
       }
@@ -1779,8 +1783,8 @@ export async function inflateDrawableNode(res: Resources, node: XmlNode, theme: 
         throw rt.mkThrowable("android/view/InflateException", "Class is not a Drawable " + node.name);
       }
       const parser = xmlParserAtNode(res, node);
-      await vcall(drawable, "inflate", "(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V",
-        res.jobj, parser, parser, theme);
+      (yield vcall(drawable, "inflate", "(Landroid/content/res/Resources;Lorg/xmlpull/v1/XmlPullParser;Landroid/util/AttributeSet;Landroid/content/res/Resources$Theme;)V",
+        res.jobj, parser, parser, theme));
       return drawable;
   }
 }
@@ -1795,10 +1799,11 @@ const DPI: Record<string, number> = { l: 120, m: 160, h: 240, xh: 320, xxh: 480,
 /** dpi a res/ path's qualifier declares; an unqualified asset is taken at the device's own density */
 function densityOfPath(path: string): number { return DPI[DPI_RE.exec(path)?.[1] ?? ""] ?? device.densityDpi; }
 
-export async function loadDrawableRV(res: Resources, v: RV | null, theme: JTheme | null): Promise<JDrawable> {
+export function loadDrawableRV(res: Resources, v: RV | null, theme: JTheme | null): JDrawable | Promise<JDrawable> { return rt.drive(loadDrawableRV$(res, v, theme)); }
+function* loadDrawableRV$(res: Resources, v: RV | null, theme: JTheme | null): Gen<JDrawable> {
   if (!v || v.t === TV.NULL) return new JColorDrawable();
-  if (v.t === TV.ATTRIBUTE) return loadDrawableRV(res, theme?.lookup(v.d) ?? null, theme);
-  if (v.t === TV.REFERENCE) return loadDrawable(res, v.d, theme);
+  if (v.t === TV.ATTRIBUTE) return (yield loadDrawableRV(res, theme?.lookup(v.d) ?? null, theme));
+  if (v.t === TV.REFERENCE) return (yield loadDrawable(res, v.d, theme));
   if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4) {
     const d = new JColorDrawable();
     d.color = v.d;
@@ -1806,12 +1811,13 @@ export async function loadDrawableRV(res: Resources, v: RV | null, theme: JTheme
   }
   if (v.s) { // a path straight off an attribute, always the app's own
     const bytes = res.arsc?.files(v.s);
-    if (bytes) return loadDrawableFile(res, v.s, bytes, theme);
+    if (bytes) return (yield loadDrawableFile(res, v.s, bytes, theme));
   }
   return new JColorDrawable();
 }
 
-export async function loadDrawable(res: Resources, resId: number, theme: JTheme | null): Promise<JDrawable> {
+export function loadDrawable(res: Resources, resId: number, theme: JTheme | null): JDrawable | Promise<JDrawable> { return rt.drive(loadDrawable$(res, resId, theme)); }
+function* loadDrawable$(res: Resources, resId: number, theme: JTheme | null): Gen<JDrawable> {
   if (!resId) return new JColorDrawable();
   const e = res.tbl(resId)?.entry(resId);
   if (!e) { rt.noteMissing("drawable 0x" + resId.toString(16)); return new JColorDrawable(); }
@@ -1819,19 +1825,20 @@ export async function loadDrawable(res: Resources, resId: number, theme: JTheme 
     if (e.value.type === TV.STRING) {
       const f = res.fileOf(resId);
       if (!f) { rt.noteMissing("drawable file for 0x" + resId.toString(16)); return new JColorDrawable(); }
-      return loadDrawableFile(res, f.path, f.bytes, theme);
+      return (yield loadDrawableFile(res, f.path, f.bytes, theme));
     }
-    if (e.value.type === TV.REFERENCE) return loadDrawable(res, e.value.data, theme);
-    return loadDrawableRV(res, { t: e.value.type, d: e.value.data }, theme);
+    if (e.value.type === TV.REFERENCE) return (yield loadDrawable(res, e.value.data, theme));
+    return (yield loadDrawableRV(res, { t: e.value.type, d: e.value.data }, theme));
   }
   return new JColorDrawable();
 }
 
-async function loadDrawableFile(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null): Promise<JDrawable> {
-  if (path.endsWith(".xml")) return loadDrawableXml(res, bytes, theme);
+function loadDrawableFile(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null): JDrawable | Promise<JDrawable> { return rt.drive(loadDrawableFile$(res, path, bytes, theme)); }
+function* loadDrawableFile$(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null): Gen<JDrawable> {
+  if (path.endsWith(".xml")) return (yield loadDrawableXml(res, bytes, theme));
   if (path.endsWith(".9.png")) {
     const chunk = parseNinePatchChunk(bytes);
-    const bmp = await decodeBytes(bytes, null);
+    const bmp = (yield decodeBytes(bytes, null));
     const d = new JNinePatchDrawable();
     if (bmp && chunk) {
       d.bmp = bmp;
@@ -1847,7 +1854,7 @@ async function loadDrawableFile(res: Resources, path: string, bytes: Uint8Array,
     }
     return d;
   }
-  const bmp = await decodeBytes(bytes, null);
+  const bmp = (yield decodeBytes(bytes, null));
   const d = new JBitmapDrawable();
   if (bmp) {
     bmp.density = densityOfPath(path);
@@ -1861,7 +1868,8 @@ async function loadDrawableFile(res: Resources, path: string, bytes: Uint8Array,
 // the same resource is a different list under every ThemeOverlay that reads it.
 const NO_THEME = {};
 const cslCache = new WeakMap<object, Map<number, JColorStateList>>();
-export async function loadColorStateList(res: Resources, resId: number, theme: JTheme | null): Promise<JColorStateList> {
+export function loadColorStateList(res: Resources, resId: number, theme: JTheme | null): JColorStateList | Promise<JColorStateList> { return rt.drive(loadColorStateList$(res, resId, theme)); }
+function* loadColorStateList$(res: Resources, resId: number, theme: JTheme | null): Gen<JColorStateList> {
   if (!resId) return mkCsl(0);
   const key = theme ?? NO_THEME;
   let byId = cslCache.get(key);
@@ -1875,7 +1883,7 @@ export async function loadColorStateList(res: Resources, resId: number, theme: J
     out = f ? parseCslXml(res, f.bytes, theme) : mkCsl(-16777216);
   } else if (e?.value) {
     const v = res.resolveRefs({ t: e.value.type, d: e.value.data });
-    if (v.t === TV.REFERENCE && v.d !== resId) return loadColorStateList(res, v.d, theme);
+    if (v.t === TV.REFERENCE && v.d !== resId) return (yield loadColorStateList(res, v.d, theme));
     out = mkCsl(rvColor(res, v, -16777216));
   } else out = mkCsl(-16777216);
   byId.set(resId, out);

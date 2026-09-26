@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { vcall } from "../src/jvm/natives/jlang";
+import { vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 const unit = rt.link("java/util/concurrent/TimeUnit").ctor;
@@ -15,7 +15,7 @@ test("TimeUnit enum lookup preserves constant identity and returns independent a
   values[6] = null;
   expect((await vcall(unit, "values", "()[Ljava/util/concurrent/TimeUnit;"))[6]).toBe(days);
   for (const [name, exception] of [[null, "NullPointerException"], ["day", "IllegalArgumentException"]]) {
-    const error = await vcall(unit, "valueOf", "(Ljava/lang/String;)Ljava/util/concurrent/TimeUnit;", name).then(() => null, e => e);
+    const error = await vcallAsync(unit, "valueOf", "(Ljava/lang/String;)Ljava/util/concurrent/TimeUnit;", name).then(() => null, e => e);
     expect(rt.iof(error, `java/lang/${exception}`)).toBeTruthy();
   }
 });

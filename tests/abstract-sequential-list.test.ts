@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { vcall, curThread, JThread, mainThread, setCurThread, vcallOn } from "../src/jvm/natives/jlang";
+import { vcall, curThread, JThread, mainThread, setCurThread, vcallOn, vcallAsync } from "../src/jvm/natives/jlang";
 import { newArrayList } from "../src/jvm/natives/jutil";
 
 class Sequential extends rt.link("java/util/AbstractSequentialList").ctor {
@@ -48,13 +48,13 @@ test("sequential list converts iterator exhaustion without suppressing other fai
     ["set", "(ILjava/lang/Object;)Ljava/lang/Object;", [3, "x"]],
     ["remove", "(I)Ljava/lang/Object;", [3]],
   ] satisfies [string, string, unknown[]][]) {
-    await expect(vcall(list, name, desc, ...args)).rejects.toMatchObject({ msg: "Index: 3" });
+    await expect(vcallAsync(list, name, desc, ...args)).rejects.toMatchObject({ msg: "Index: 3" });
   }
   const failure = rt.mkThrowable("java/lang/UnsupportedOperationException", "iterator is immutable");
   list.failure = failure;
-  await expect(vcall(list, "add", "(ILjava/lang/Object;)V", 0, "x")).rejects.toBe(failure);
+  await expect(vcallAsync(list, "add", "(ILjava/lang/Object;)V", 0, "x")).rejects.toBe(failure);
   list.failure = rt.mkThrowable("java/util/NoSuchElementException", "exhausted");
-  await expect(vcall(list, "addAll", "(ILjava/util/Collection;)Z", 8, newArrayList())).rejects.toMatchObject({ msg: "Index: 8" });
+  await expect(vcallAsync(list, "addAll", "(ILjava/util/Collection;)Z", 8, newArrayList())).rejects.toMatchObject({ msg: "Index: 8" });
 });
 
 

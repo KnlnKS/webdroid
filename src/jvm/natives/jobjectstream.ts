@@ -1,6 +1,6 @@
 import { encodeModifiedUtf8, decodeModifiedUtf8 } from "../charset";
 import { streamClass, streamClassAny, type StreamClass } from "../serial-descriptor";
-import { rt, ClassInfo } from "../runtime";
+import { rt, ClassInfo, driven, type Gen } from "../runtime";
 import { i8, jmethod, mangleMethod, jarray, primElem, PRIM_ARRAYS, type PrimElem } from "../abi";
 import { vcall, vcallOn, callOn, curThread, type JThread, newObj, JClass } from "./jlang";
 import { JInputStream, JOutputStream, dataBytes, readers, writers } from "./jio";
@@ -39,24 +39,24 @@ rt.register({
   name: "java/io/ObjectInputStream", ctor: JObjectIn, sup: "java/io/InputStream",
   ifaces: ["java/io/ObjectInput", "java/io/DataInput"],
   methods: {
-    "<init>(Ljava/io/InputStream;)V": async function (this: JObjectIn, src: JInputStream) {
+    "<init>(Ljava/io/InputStream;)V": driven(function* (this: JObjectIn, src: JInputStream): Gen {
       this.wrapped = src;
-      const head = await dataBytes(this, 4);
+      const head = (yield dataBytes(this, 4));
       const magic = (head[0] << 8) | head[1], version = (head[2] << 8) | head[3];
       if (magic !== STREAM_MAGIC || version !== STREAM_VERSION) {
         throw rt.mkThrowable("java/io/StreamCorruptedException", "invalid stream header");
       }
-    },
+    }),
     ...readers(blockRead),
-    "readUTF()Ljava/lang/String;": async function (this: JObjectIn) {
+    "readUTF()Ljava/lang/String;": driven(function* (this: JObjectIn): Gen {
       const thread = curThread;
-      const head = await blockBytes(thread, this, 2);
-      return decodeModifiedUtf8(await blockBytes(thread, this, (head[0] << 8) | head[1]));
-    },
-    "readFully([B)V": async function (this: JObjectIn, out: Int8Array) {
-      const b = await blockBytes(curThread, this, out.length);
+      const head = (yield blockBytes(thread, this, 2));
+      return decodeModifiedUtf8((yield blockBytes(thread, this, (head[0] << 8) | head[1])));
+    }),
+    "readFully([B)V": driven(function* (this: JObjectIn, out: Int8Array): Gen {
+      const b = (yield blockBytes(curThread, this, out.length));
       out.set(i8(b));
-    },
+    }),
     "readObject()Ljava/lang/Object;": function (this: JObjectIn) { return readObject(curThread, this); },
     "enableResolveObject(Z)Z": function (this: JObjectIn, enabled: number) { const old = this.resolve; this.resolve = !!enabled; return +old; },
     "resolveObject(Ljava/lang/Object;)Ljava/lang/Object;": (value: unknown) => value,
@@ -104,12 +104,12 @@ rt.register({
       b.set(body, 2);
       blockWrite(this, b);
     },
-    "writeObject(Ljava/lang/Object;)V": async function (this: JObjectOut, value: unknown) {
+    "writeObject(Ljava/lang/Object;)V": driven(function* (this: JObjectOut, value: unknown): Gen {
       this.writeDepth++;
-      try { await writeObject(curThread, this, value); }
+      try { (yield writeObject(curThread, this, value)); }
       finally { this.writeDepth--; }
-      if (this.writeDepth === 0) await vcall(this, "flush", "()V");
-    },
+      if (this.writeDepth === 0) (yield vcall(this, "flush", "()V"));
+    }),
     "enableReplaceObject(Z)Z": function (this: JObjectOut, enabled: number) { const old = this.replace; this.replace = !!enabled; return +old; },
     "replaceObject(Ljava/lang/Object;)Ljava/lang/Object;": (value: unknown) => value,
     "defaultWriteObject()V": function (this: JObjectOut) { return this.context ? writeFields(curThread, this, this.context) : inactive(); },

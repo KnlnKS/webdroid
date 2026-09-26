@@ -1,4 +1,4 @@
-import { rt, JObj, fieldGetters } from "../jvm/runtime";
+import { rt, JObj, fieldGetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod, jmethod } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { JActionBarView, JMenu } from "./menu";
@@ -44,18 +44,18 @@ rt.register({
     "setCustomView(Landroid/view/View;)V": function (this: JActionMode, view: JView | null) { this.customView = view; invalidate(); },
     ...fieldGetters({ "getMenu()Landroid/view/Menu;": "menu", "getTitle()Ljava/lang/CharSequence;": "title",
       "getSubtitle()Ljava/lang/CharSequence;": "subtitle", "getCustomView()Landroid/view/View;": "customView" }),
-    "invalidate()V": async function (this: JActionMode) {
-      if (this.cb) await vcall(this.cb, "onPrepareActionMode", "(Landroid/view/ActionMode;Landroid/view/Menu;)Z", this, this.menu);
+    "invalidate()V": driven(function* (this: JActionMode): Gen {
+      if (this.cb) (yield vcall(this.cb, "onPrepareActionMode", "(Landroid/view/ActionMode;Landroid/view/Menu;)Z", this, this.menu));
       invalidate();
-    },
-    "finish()V": async function (this: JActionMode) {
+    }),
+    "finish()V": driven(function* (this: JActionMode): Gen {
       if (this.finished) return;
       this.finished = true;
-      await this.onFinish?.();
-      if (this.cb) await vcall(this.cb, "onDestroyActionMode", "(Landroid/view/ActionMode;)V", this);
-      await this.onFinished?.();
+      (yield this.onFinish?.());
+      if (this.cb) (yield vcall(this.cb, "onDestroyActionMode", "(Landroid/view/ActionMode;)V", this));
+      (yield this.onFinished?.());
       invalidate();
-    },
+    }),
   },
 });
 

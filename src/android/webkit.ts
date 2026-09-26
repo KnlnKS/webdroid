@@ -1,7 +1,7 @@
 // WebViews occupy DOM frames above the canvas. JavaScript interfaces use a separate renderer
 // so synchronous page calls can wait while the Java runtime continues executing.
 
-import { rt, JObj, type NativeSpec, type ClassInfo, stubs, noops, fieldGetters, fieldSetters } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, type ClassInfo, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod, parseMethodDesc, jmethod } from "../jvm/abi";
 import { vcall, mkEnumSet, JThread, curThread, setCurThread, type JSimpleEnum } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
@@ -591,12 +591,12 @@ rt.register({
       this.measuredW = defaultSize(Math.max(this.minW, this.padL + this.padR, this.remoteWidth * device.density), w);
       this.measuredH = defaultSize(Math.max(this.minH, this.padT + this.padB, this.remoteHeight * device.density), h);
     },
-    "onDraw(Landroid/graphics/Canvas;)V": async function (this: JWebView, canvas: JCanvas) {
+    "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JWebView, canvas: JCanvas): Gen {
       if (!canvas.bmp) { this.drawnAt = frame; live.add(this); return; }
-      const image = await this.bitmapSnapshot();
+      const image = (yield this.bitmapSnapshot());
       try { canvas.ctx.drawImage(image, 0, 0, this.width(), this.height()); }
       finally { image.close(); }
-    },
+    }),
     "onDetachedFromWindow()V": function (this: JWebView) { this.hide(); },
     "destroy()V": function (this: JWebView) { this.destroy(); },
     "createPrintDocumentAdapter()Landroid/print/PrintDocumentAdapter;": function (this: JWebView) { return webPrintAdapter(this, this.title || "WebView"); },
@@ -713,10 +713,10 @@ rt.register({
   name: "android/webkit/WebChromeClient", ctor: class extends JObj {},
   methods: {
     // AOSP calls the deprecated overload for compatibility, then reports "not handled"
-    "onConsoleMessage(Landroid/webkit/ConsoleMessage;)Z": async function (this: JObj, m: JConsoleMessage) {
-      await vcall(this, "onConsoleMessage", "(Ljava/lang/String;ILjava/lang/String;)V", m.msg, m.line, m.src);
+    "onConsoleMessage(Landroid/webkit/ConsoleMessage;)Z": driven(function* (this: JObj, m: JConsoleMessage): Gen {
+      (yield vcall(this, "onConsoleMessage", "(Ljava/lang/String;ILjava/lang/String;)V", m.msg, m.line, m.src));
       return 0;
-    },
+    }),
     ...noops("<init>()V", "onProgressChanged(Landroid/webkit/WebView;I)V",
       "onReceivedTitle(Landroid/webkit/WebView;Ljava/lang/String;)V",
       "onReceivedIcon(Landroid/webkit/WebView;Landroid/graphics/Bitmap;)V",

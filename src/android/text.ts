@@ -2,8 +2,8 @@ import { JDrawable, JColorStateList } from "./drawable";
 import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreator } from "./parcel";
 // android.text.* — TextPaint, TextUtils, Spannable/Editable (spans stored, minimally styled).
 
-import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
-import { vcall, vcallMaybe, vcallOn, callOn, curThread, mkEnumSet, newObj, type JSimpleEnum } from "../jvm/natives/jlang";
+import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { vcall, vcallOn, callOn, curThread, mkEnumSet, newObj, after, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type JDate, type JCalendar } from "../jvm/natives/jtime";
 import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances, type JRect, type JBitmap, JTypeface, typefaceFor } from "./graphics";
 import { AID, JTypedArray } from "./res";
@@ -23,20 +23,21 @@ import { breakLines, type TLine } from "./linebreak";
 export type { TLine } from "./linebreak";
 
 class JAnnotation extends JObj { key: string | null = null; value: string | null = null; }
-async function writeAnnotation(this: JAnnotation, parcel: JObj) {
+function writeAnnotation(this: JAnnotation, parcel: JObj): unknown { return rt.drive(writeAnnotation$.call(this, parcel)); }
+function* writeAnnotation$(this: JAnnotation, parcel: JObj): Gen {
   const thread = rt.th();
-  await vcall(parcel, "writeString", "(Ljava/lang/String;)V", this.key); rt.st(thread);
-  await vcall(parcel, "writeString", "(Ljava/lang/String;)V", this.value);
+  (yield vcall(parcel, "writeString", "(Ljava/lang/String;)V", this.key)); rt.st(thread);
+  (yield vcall(parcel, "writeString", "(Ljava/lang/String;)V", this.value));
 }
 rt.register({
   name: "android/text/Annotation", ctor: JAnnotation, ifaces: ["android/text/ParcelableSpan"],
   methods: {
     "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JAnnotation, key: string | null, value: string | null) { this.key = key; this.value = value; },
-    "<init>(Landroid/os/Parcel;)V": async function (this: JAnnotation, parcel: JObj) {
+    "<init>(Landroid/os/Parcel;)V": driven(function* (this: JAnnotation, parcel: JObj): Gen {
       const thread = rt.th();
-      this.key = await vcall(parcel, "readString", "()Ljava/lang/String;"); rt.st(thread);
-      this.value = await vcall(parcel, "readString", "()Ljava/lang/String;");
-    },
+      this.key = (yield vcall(parcel, "readString", "()Ljava/lang/String;")); rt.st(thread);
+      this.value = (yield vcall(parcel, "readString", "()Ljava/lang/String;"));
+    }),
     "getKey()Ljava/lang/String;": function (this: JAnnotation) { return this.key; },
     "getValue()Ljava/lang/String;": function (this: JAnnotation) { return this.value; },
     "getSpanTypeId()I": () => 18,
@@ -48,16 +49,17 @@ rt.register({
 });
 
 class JTtsSpan extends JObj { type: string | null = null; args: JPersistableBundle | null = null; }
-async function writeTtsSpan(this: JTtsSpan, parcel: JParcel) {
-  await vcall(parcel, "writeString", "(Ljava/lang/String;)V", this.type);
-  await vcall(parcel, "writePersistableBundle", "(Landroid/os/PersistableBundle;)V", this.args);
+function writeTtsSpan(this: JTtsSpan, parcel: JParcel): unknown { return rt.drive(writeTtsSpan$.call(this, parcel)); }
+function* writeTtsSpan$(this: JTtsSpan, parcel: JParcel): Gen {
+  (yield vcall(parcel, "writeString", "(Ljava/lang/String;)V", this.type));
+  (yield vcall(parcel, "writePersistableBundle", "(Landroid/os/PersistableBundle;)V", this.args));
 }
 rt.register({ name: "android/text/style/TtsSpan", ctor: JTtsSpan, ifaces: ["android/text/ParcelableSpan"], methods: {
   "<init>(Ljava/lang/String;Landroid/os/PersistableBundle;)V": function (this: JTtsSpan, type: string, args: JPersistableBundle) { this.type = type; this.args = args; },
-  "<init>(Landroid/os/Parcel;)V": async function (this: JTtsSpan, parcel: JParcel) {
-    this.type = await vcall(parcel, "readString", "()Ljava/lang/String;");
-    this.args = await vcall(parcel, "readPersistableBundle", "()Landroid/os/PersistableBundle;");
-  },
+  "<init>(Landroid/os/Parcel;)V": driven(function* (this: JTtsSpan, parcel: JParcel): Gen {
+    this.type = (yield vcall(parcel, "readString", "()Ljava/lang/String;"));
+    this.args = (yield vcall(parcel, "readPersistableBundle", "()Landroid/os/PersistableBundle;"));
+  }),
   "getType()Ljava/lang/String;": function (this: JTtsSpan) { return this.type; },
   "getArgs()Landroid/os/PersistableBundle;": function (this: JTtsSpan) { return this.args; },
   "getSpanTypeId()I": () => 24, "getSpanTypeIdInternal()I": () => 24, "describeContents()I": () => 0,
@@ -251,9 +253,10 @@ rt.register({
 });
 /** CharSequence → text. May be a JS string, a Spannable, or an app class (Compose
  *  AnnotatedString wrappers), so anything unrecognised answers through toString(). */
-export async function csText(cs: unknown): Promise<string> {
+export function csText(cs: unknown): string | Promise<string> { return rt.drive(csText$(cs)); }
+function* csText$(cs: unknown): Gen<string> {
   if (cs instanceof JSpanned) return cs.text;
-  return javaCsText(cs);
+  return (yield javaCsText(cs));
 }
 function concatText(parts: unknown[]): unknown {
   if (parts.length === 1) return parts[0];
@@ -288,26 +291,28 @@ function concatText(parts: unknown[]): unknown {
   })();
 }
 const selectionStart = new JObj(), selectionEnd = new JObj();
-export async function textSelection(text: unknown): Promise<[number, number]> {
+export function textSelection(text: unknown): [number, number] | Promise<[number, number]> { return rt.drive(textSelection$(text)); }
+function* textSelection$(text: unknown): Gen<[number, number]> {
   if (!text || typeof text === "string") return [-1, -1];
-  return [await vcall(text, "getSpanStart", "(Ljava/lang/Object;)I", selectionStart), await vcall(text, "getSpanStart", "(Ljava/lang/Object;)I", selectionEnd)];
+  return [(yield vcall(text, "getSpanStart", "(Ljava/lang/Object;)I", selectionStart)), (yield vcall(text, "getSpanStart", "(Ljava/lang/Object;)I", selectionEnd))];
 }
-export async function setTextSelection(text: unknown, start: number, end: number) {
-  await vcall(text, "setSpan", "(Ljava/lang/Object;III)V", selectionStart, start, start, 0x222);
-  await vcall(text, "setSpan", "(Ljava/lang/Object;III)V", selectionEnd, end, end, 0x22);
+export function setTextSelection(text: unknown, start: number, end: number): unknown { return rt.drive(setTextSelection$(text, start, end)); }
+function* setTextSelection$(text: unknown, start: number, end: number): Gen {
+  (yield vcall(text, "setSpan", "(Ljava/lang/Object;III)V", selectionStart, start, start, 0x222));
+  (yield vcall(text, "setSpan", "(Ljava/lang/Object;III)V", selectionEnd, end, end, 0x22));
 }
 rt.register({ name: "android/text/Selection", ctor: class extends JObj {},
   statics: { SELECTION_START: selectionStart, SELECTION_END: selectionEnd },
   methods: {
-    "static getSelectionStart(Ljava/lang/CharSequence;)I": async (text: unknown) => (await textSelection(text))[0],
-    "static getSelectionEnd(Ljava/lang/CharSequence;)I": async (text: unknown) => (await textSelection(text))[1],
+    "static getSelectionStart(Ljava/lang/CharSequence;)I": driven(function* (text: unknown): Gen  { return ((yield textSelection(text)))[0]; }),
+    "static getSelectionEnd(Ljava/lang/CharSequence;)I": driven(function* (text: unknown): Gen  { return ((yield textSelection(text)))[1]; }),
     "static setSelection(Landroid/text/Spannable;II)V": setTextSelection,
-    "static setSelection(Landroid/text/Spannable;I)V": async (text: unknown, index: number) => setTextSelection(text, index, index),
-    "static selectAll(Landroid/text/Spannable;)V": async (text: unknown) => setTextSelection(text, 0, (await csText(text)).length),
-    "static removeSelection(Landroid/text/Spannable;)V": async (text: unknown) => {
-      await vcall(text, "removeSpan", "(Ljava/lang/Object;)V", selectionStart);
-      await vcall(text, "removeSpan", "(Ljava/lang/Object;)V", selectionEnd);
-    },
+    "static setSelection(Landroid/text/Spannable;I)V": driven(function* (text: unknown, index: number): Gen  { return setTextSelection(text, index, index); }),
+    "static selectAll(Landroid/text/Spannable;)V": driven(function* (text: unknown): Gen  { return setTextSelection(text, 0, ((yield csText(text))).length); }),
+    "static removeSelection(Landroid/text/Spannable;)V": driven(function* (text: unknown): Gen  {
+      (yield vcall(text, "removeSpan", "(Ljava/lang/Object;)V", selectionStart));
+      (yield vcall(text, "removeSpan", "(Ljava/lang/Object;)V", selectionEnd));
+    }),
   },
 });
 
@@ -347,9 +352,10 @@ function editMutators(ret: string): NonNullable<NativeSpec["methods"]> {
     },
   };
 }
-async function appendSpanned(this: JSpannable, cs: unknown) {
+function appendSpanned(this: JSpannable, cs: unknown): unknown { return rt.drive(appendSpanned$.call(this, cs)); }
+function* appendSpanned$(this: JSpannable, cs: unknown): Gen {
   const length = this.text.length;
-  return vcall(this, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", length, length, cs, 0, (await csText(cs)).length);
+  return vcall(this, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", length, length, cs, 0, ((yield csText(cs))).length);
 }
 rt.register({
   name: "android/text/SpannableStringBuilder", ctor: class extends JSpannable {},
@@ -448,37 +454,39 @@ class JTextAppearanceSpan extends JMetricAffectingSpan {
 }
 const appearanceAttrs = ["textColor", "textColorLink", "textSize", "textStyle", "fontFamily", "typeface", "textFontWeight", "textLocale",
   "shadowRadius", "shadowDx", "shadowDy", "shadowColor", "elegantTextHeight", "letterSpacing", "fontFeatureSettings", "fontVariationSettings"];
-async function appearanceInit(this: JTextAppearanceSpan, context: JObj, style: number) {
-  const thread = curThread, a = await vcallOn(thread, context, "obtainStyledAttributes", "(I[I)Landroid/content/res/TypedArray;", style, new Int32Array(appearanceAttrs.map(AID)));
+function appearanceInit(this: JTextAppearanceSpan, context: JObj, style: number): unknown { return rt.drive(appearanceInit$.call(this, context, style)); }
+function* appearanceInit$(this: JTextAppearanceSpan, context: JObj, style: number): Gen {
+  const thread = curThread, a = (yield vcallOn(thread, context, "obtainStyledAttributes", "(I[I)Landroid/content/res/TypedArray;", style, new Int32Array(appearanceAttrs.map(AID))));
   if (!(a instanceof JTypedArray)) throw new Error("Invalid appearance attributes");
   const get = (method: string, desc: string, ...args: unknown[]) => vcallOn(thread, a, method, desc, ...args);
   const string = async (index: number) => { const value = await get("getString", "(I)Ljava/lang/String;", index); return typeof value === "string" ? value : null; };
   const color = async (index: number) => { const value = await get("getColorStateList", "(I)Landroid/content/res/ColorStateList;", index); return value instanceof JColorStateList ? value : null; };
   try {
-    this.color = await color(0);
-    this.linkColor = await color(1);
-    this.size = Number(await get("getDimensionPixelSize", "(II)I", 2, -1));
-    this.style = Number(await get("getInt", "(II)I", 3, 0));
+    this.color = (yield color(0));
+    this.linkColor = (yield color(1));
+    this.size = Number((yield get("getDimensionPixelSize", "(II)I", 2, -1)));
+    this.style = Number((yield get("getInt", "(II)I", 3, 0)));
     const font = a.vals[4];
-    if (font?.t === TV.REFERENCE && !await vcallOn(thread, context, "isRestricted", "()Z")) this.typeface = await fontResource(a.res, font.d);
-    if (!this.typeface) this.family = await string(4) ?? [null, "sans", "serif", "monospace"][Number(await get("getInt", "(II)I", 5, 0))] ?? null;
-    this.weight = Number(await get("getInt", "(II)I", 6, -1));
-    const locale = await string(7);
+    if (font?.t === TV.REFERENCE && !(yield vcallOn(thread, context, "isRestricted", "()Z"))) this.typeface = (yield fontResource(a.res, font.d));
+    if (!this.typeface) this.family = (yield string(4)) ?? [null, "sans", "serif", "monospace"][Number((yield get("getInt", "(II)I", 5, 0)))] ?? null;
+    this.weight = Number((yield get("getInt", "(II)I", 6, -1)));
+    const locale = (yield string(7));
     if (locale) {
-      const locales = await vcallOn(thread, rt.link("android/os/LocaleList").ctor, "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", locale);
+      const locales = (yield vcallOn(thread, rt.link("android/os/LocaleList").ctor, "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", locale));
       if (locales instanceof JLocaleList && locales.values.length) this.locales = locales;
     }
-    this.shadowRadius = Number(await get("getFloat", "(IF)F", 8, 0));
-    this.shadowDx = Number(await get("getFloat", "(IF)F", 9, 0));
-    this.shadowDy = Number(await get("getFloat", "(IF)F", 10, 0));
-    this.shadowColor = Number(await get("getColor", "(II)I", 11, 0));
-    if (await get("hasValue", "(I)Z", 12)) this.elegant = Number(await get("getBoolean", "(IZ)Z", 12, 0));
-    if (await get("hasValue", "(I)Z", 13)) this.spacing = Number(await get("getFloat", "(IF)F", 13, 0));
-    this.features = await string(14);
-    this.variations = await string(15);
-  } finally { await get("recycle", "()V"); }
+    this.shadowRadius = Number((yield get("getFloat", "(IF)F", 8, 0)));
+    this.shadowDx = Number((yield get("getFloat", "(IF)F", 9, 0)));
+    this.shadowDy = Number((yield get("getFloat", "(IF)F", 10, 0)));
+    this.shadowColor = Number((yield get("getColor", "(II)I", 11, 0)));
+    if ((yield get("hasValue", "(I)Z", 12))) this.elegant = Number((yield get("getBoolean", "(IZ)Z", 12, 0)));
+    if ((yield get("hasValue", "(I)Z", 13))) this.spacing = Number((yield get("getFloat", "(IF)F", 13, 0)));
+    this.features = (yield string(14));
+    this.variations = (yield string(15));
+  } finally { (yield get("recycle", "()V")); }
 }
-async function appearanceMeasure(this: JTextAppearanceSpan, paint: JTextPaint) {
+function appearanceMeasure(this: JTextAppearanceSpan, paint: JTextPaint): unknown { return rt.drive(appearanceMeasure$.call(this, paint)); }
+function* appearanceMeasure$(this: JTextAppearanceSpan, paint: JTextPaint): Gen {
   const thread = curThread, call = (method: string, desc: string, ...args: unknown[]) => vcallOn(thread, paint, method, desc, ...args);
   const fonts = rt.link("android/graphics/Typeface").ctor;
   const create = async (desc: string, ...args: unknown[]) => {
@@ -490,22 +498,22 @@ async function appearanceMeasure(this: JTextAppearanceSpan, paint: JTextPaint) {
   if (tf || this.family !== null || style) {
     if (!tf) style |= paint.tf.style();
     tf = this.family !== null && !tf
-      ? await create("(Ljava/lang/String;I)Landroid/graphics/Typeface;", this.family, style)
-      : await create("(Landroid/graphics/Typeface;I)Landroid/graphics/Typeface;", tf ?? paint.tf, style);
-    if (this.weight >= 0) tf = await create("(Landroid/graphics/Typeface;IZ)Landroid/graphics/Typeface;", tf, Math.min(1000, this.weight), (style & 2) !== 0 ? 1 : 0);
+      ? (yield create("(Ljava/lang/String;I)Landroid/graphics/Typeface;", this.family, style))
+      : (yield create("(Landroid/graphics/Typeface;I)Landroid/graphics/Typeface;", tf ?? paint.tf, style));
+    if (this.weight >= 0) tf = (yield create("(Landroid/graphics/Typeface;IZ)Landroid/graphics/Typeface;", tf, Math.min(1000, this.weight), (style & 2) !== 0 ? 1 : 0));
     if (tf) {
       const fake = style & ~tf.style();
-      if (fake & 1) await call("setFakeBoldText", "(Z)V", 1);
-      if (fake & 2) await call("setTextSkewX", "(F)V", -0.25);
-      await call("setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;", tf);
+      if (fake & 1) (yield call("setFakeBoldText", "(Z)V", 1));
+      if (fake & 2) (yield call("setTextSkewX", "(F)V", -0.25));
+      (yield call("setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;", tf));
     }
   }
-  if (this.size > 0) await call("setTextSize", "(F)V", this.size);
-  if (this.locales) await call("setTextLocales", "(Landroid/os/LocaleList;)V", this.locales);
-  if (this.elegant !== null) await call("setElegantTextHeight", "(Z)V", this.elegant);
-  if (this.spacing !== null) await call("setLetterSpacing", "(F)V", this.spacing);
-  if (this.features !== null) await call("setFontFeatureSettings", "(Ljava/lang/String;)V", this.features);
-  if (this.variations !== null) await call("setFontVariationSettings", "(Ljava/lang/String;)Z", this.variations);
+  if (this.size > 0) (yield call("setTextSize", "(F)V", this.size));
+  if (this.locales) (yield call("setTextLocales", "(Landroid/os/LocaleList;)V", this.locales));
+  if (this.elegant !== null) (yield call("setElegantTextHeight", "(Z)V", this.elegant));
+  if (this.spacing !== null) (yield call("setLetterSpacing", "(F)V", this.spacing));
+  if (this.features !== null) (yield call("setFontFeatureSettings", "(Ljava/lang/String;)V", this.features));
+  if (this.variations !== null) (yield call("setFontVariationSettings", "(Ljava/lang/String;)Z", this.variations));
 }
 rt.register({ name: "android/text/style/TextAppearanceSpan", ctor: JTextAppearanceSpan, sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"], methods: {
   "<init>(Landroid/content/Context;I)V": appearanceInit,
@@ -530,21 +538,21 @@ rt.register({ name: "android/text/style/TextAppearanceSpan", ctor: JTextAppearan
   "getFontVariationSettings()Ljava/lang/String;": function (this: JTextAppearanceSpan) { return this.variations; },
   "getSpanTypeId()I": () => 17, "getSpanTypeIdInternal()I": () => 17, "describeContents()I": () => 0,
   "updateMeasureState(Landroid/text/TextPaint;)V": appearanceMeasure,
-  "updateDrawState(Landroid/text/TextPaint;)V": async function (this: JTextAppearanceSpan, paint: JTextPaint) {
+  "updateDrawState(Landroid/text/TextPaint;)V": driven(function* (this: JTextAppearanceSpan, paint: JTextPaint): Gen {
     const thread = curThread;
-    await vcallOn(thread, this, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint);
-    if (this.color) await vcallOn(thread, paint, "setColor", "(I)V", await vcallOn(thread, this.color, "getColorForState", "([II)I", paint.drawableState, 0));
-    if (this.linkColor) paint.linkColor = Number(await vcallOn(thread, this.linkColor, "getColorForState", "([II)I", paint.drawableState, 0));
-    if (this.shadowColor) await vcallOn(thread, paint, "setShadowLayer", "(FFFI)V", this.shadowRadius, this.shadowDx, this.shadowDy, this.shadowColor);
-  },
+    (yield vcallOn(thread, this, "updateMeasureState", "(Landroid/text/TextPaint;)V", paint));
+    if (this.color) (yield vcallOn(thread, paint, "setColor", "(I)V", (yield vcallOn(thread, this.color, "getColorForState", "([II)I", paint.drawableState, 0))));
+    if (this.linkColor) paint.linkColor = Number((yield vcallOn(thread, this.linkColor, "getColorForState", "([II)I", paint.drawableState, 0)));
+    if (this.shadowColor) (yield vcallOn(thread, paint, "setShadowLayer", "(FFFI)V", this.shadowRadius, this.shadowDx, this.shadowDy, this.shadowColor));
+  }),
 } });
 class JLocaleSpan extends JMetricAffectingSpan { locales!: JLocaleList; }
 function localeState(this: JLocaleSpan, paint: JTextPaint) { return vcall(paint, "setTextLocales", "(Landroid/os/LocaleList;)V", this.locales); }
 function writeLocaleSpan(this: JLocaleSpan, parcel: JParcel, flags: number) { return vcall(this.locales, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags); }
 rt.register({ name: "android/text/style/LocaleSpan", ctor: JLocaleSpan, sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"], methods: {
-  "<init>(Ljava/util/Locale;)V": async function (this: JLocaleSpan, locale: JLocale | null) { this.locales = await newObj("android/os/LocaleList", "([Ljava/util/Locale;)V", locale ? [locale] : []); },
+  "<init>(Ljava/util/Locale;)V": driven(function* (this: JLocaleSpan, locale: JLocale | null): Gen { this.locales = (yield newObj("android/os/LocaleList", "([Ljava/util/Locale;)V", locale ? [locale] : [])); }),
   "<init>(Landroid/os/LocaleList;)V": function (this: JLocaleSpan, locales: JLocaleList) { if (!locales) return rt.npe(); this.locales = locales; },
-  "<init>(Landroid/os/Parcel;)V": async function (this: JLocaleSpan, parcel: JParcel) { this.locales = await readLocaleList(parcel); },
+  "<init>(Landroid/os/Parcel;)V": driven(function* (this: JLocaleSpan, parcel: JParcel): Gen { this.locales = (yield readLocaleList(parcel)); }),
   "getLocale()Ljava/util/Locale;": function (this: JLocaleSpan) { return this.locales.values[0] ?? null; },
   "getLocales()Landroid/os/LocaleList;": function (this: JLocaleSpan) { return this.locales; },
   "getSpanTypeId()I": () => 23, "getSpanTypeIdInternal()I": () => 23, "describeContents()I": () => 0,
@@ -568,10 +576,11 @@ class JDynamicDrawableSpan extends JReplacementSpan {
   alignment = 0;
   cachedDrawable: WeakRef<JDrawable> | null = null;
 }
-async function spanDrawable(span: JDynamicDrawableSpan): Promise<JDrawable> {
+function spanDrawable(span: JDynamicDrawableSpan): JDrawable | Promise<JDrawable> { return rt.drive(spanDrawable$(span)); }
+function* spanDrawable$(span: JDynamicDrawableSpan): Gen<JDrawable> {
   let drawable = span.cachedDrawable?.deref();
   if (!drawable) {
-    drawable = await vcall(span, "getDrawable", "()Landroid/graphics/drawable/Drawable;");
+    drawable = (yield vcall(span, "getDrawable", "()Landroid/graphics/drawable/Drawable;"));
     if (!drawable) return rt.npe();
     span.cachedDrawable = new WeakRef(drawable);
   }
@@ -582,33 +591,35 @@ rt.register({ name: "android/text/style/DynamicDrawableSpan", ctor: JDynamicDraw
     "<init>()V": function (this: JDynamicDrawableSpan) { this.alignment = 0; },
     "<init>(I)V": function (this: JDynamicDrawableSpan, alignment: number) { this.alignment = alignment; },
     "getVerticalAlignment()I": function (this: JDynamicDrawableSpan) { return this.alignment; },
-    "getSize(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I": async function (this: JDynamicDrawableSpan, _paint: JPaint, _text: unknown, _start: number, _end: number, fm: { ascent: number; descent: number; top: number; bottom: number } | null) {
-      const bounds: JRect = await vcall(await spanDrawable(this), "getBounds", "()Landroid/graphics/Rect;");
+    "getSize(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I": driven(function* (this: JDynamicDrawableSpan, _paint: JPaint, _text: unknown, _start: number, _end: number, fm: { ascent: number; descent: number; top: number; bottom: number } | null): Gen {
+      const bounds: JRect = (yield vcall((yield spanDrawable(this)), "getBounds", "()Landroid/graphics/Rect;"));
       if (fm) { fm.ascent = fm.top = -bounds.bottom; fm.descent = fm.bottom = 0; }
       return bounds.right;
-    },
-    "draw(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V": async function (this: JDynamicDrawableSpan, canvas: JCanvas, _text: unknown, _start: number, _end: number, x: number, top: number, _y: number, bottom: number, paint: JPaint) {
-      const drawable = await spanDrawable(this), bounds: JRect = await vcall(drawable, "getBounds", "()Landroid/graphics/Rect;");
+    }),
+    "draw(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V": driven(function* (this: JDynamicDrawableSpan, canvas: JCanvas, _text: unknown, _start: number, _end: number, x: number, top: number, _y: number, bottom: number, paint: JPaint): Gen {
+      const drawable = (yield spanDrawable(this)), bounds: JRect = (yield vcall(drawable, "getBounds", "()Landroid/graphics/Rect;"));
       let y = bottom - bounds.bottom;
-      if (this.alignment === 1) y -= (await vcall(paint, "getFontMetricsInt", "()Landroid/graphics/Paint$FontMetricsInt;")).descent;
+      if (this.alignment === 1) y -= ((yield vcall(paint, "getFontMetricsInt", "()Landroid/graphics/Paint$FontMetricsInt;"))).descent;
       else if (this.alignment === 2) y = top + Math.trunc((bottom - top) / 2) - Math.trunc((bounds.bottom - bounds.top) / 2);
       canvas.ctx.save(); canvas.ctx.translate(x, y);
-      try { await vcall(drawable, "draw", "(Landroid/graphics/Canvas;)V", canvas); } finally { canvas.ctx.restore(); }
-    },
+      try { (yield vcall(drawable, "draw", "(Landroid/graphics/Canvas;)V", canvas)); } finally { canvas.ctx.restore(); }
+    }),
   },
 });
 type SpanImage = { kind: "drawable"; value: JDrawable } | { kind: "resource"; context: unknown; id: number } | { kind: "uri"; context: unknown; uri: unknown };
 class JImageSpan extends JDynamicDrawableSpan { image: SpanImage | null = null; source: string | null = null; }
 function imageDrawable(this: JImageSpan, drawable: JDrawable, alignment = 0) { this.image = { kind: "drawable", value: drawable }; this.alignment = alignment; }
 function imageResource(this: JImageSpan, context: unknown, id: number, alignment = 0) { this.image = { kind: "resource", context, id }; this.alignment = alignment; }
-async function imageUri(this: JImageSpan, context: unknown, uri: unknown, alignment = 0) {
+function imageUri(this: JImageSpan, context: unknown, uri: unknown, alignment = 0): unknown { return rt.drive(imageUri$.call(this, context, uri, alignment)); }
+function* imageUri$(this: JImageSpan, context: unknown, uri: unknown, alignment = 0): Gen {
   this.image = { kind: "uri", context, uri }; this.alignment = alignment;
-  this.source = await vcall(uri, "toString", "()Ljava/lang/String;");
+  this.source = (yield vcall(uri, "toString", "()Ljava/lang/String;"));
 }
-async function imageBitmap(this: JImageSpan, context: unknown, bitmap: JBitmap, alignment = 0) {
-  const resources = context ? await vcall(context, "getResources", "()Landroid/content/res/Resources;") : null;
-  const drawable: JDrawable = await newObj("android/graphics/drawable/BitmapDrawable", "(Landroid/content/res/Resources;Landroid/graphics/Bitmap;)V", resources, bitmap);
-  await vcall(drawable, "setBounds", "(IIII)V", 0, 0, Math.max(0, await vcall(drawable, "getIntrinsicWidth", "()I")), Math.max(0, await vcall(drawable, "getIntrinsicHeight", "()I")));
+function imageBitmap(this: JImageSpan, context: unknown, bitmap: JBitmap, alignment = 0): unknown { return rt.drive(imageBitmap$.call(this, context, bitmap, alignment)); }
+function* imageBitmap$(this: JImageSpan, context: unknown, bitmap: JBitmap, alignment = 0): Gen {
+  const resources = context ? (yield vcall(context, "getResources", "()Landroid/content/res/Resources;")) : null;
+  const drawable: JDrawable = (yield newObj("android/graphics/drawable/BitmapDrawable", "(Landroid/content/res/Resources;Landroid/graphics/Bitmap;)V", resources, bitmap));
+  (yield vcall(drawable, "setBounds", "(IIII)V", 0, 0, Math.max(0, (yield vcall(drawable, "getIntrinsicWidth", "()I"))), Math.max(0, (yield vcall(drawable, "getIntrinsicHeight", "()I")))));
   imageDrawable.call(this, drawable, alignment);
 }
 rt.register({ name: "android/text/style/ImageSpan", ctor: JImageSpan, sup: "android/text/style/DynamicDrawableSpan", methods: {
@@ -625,24 +636,24 @@ rt.register({ name: "android/text/style/ImageSpan", ctor: JImageSpan, sup: "andr
   "<init>(Landroid/graphics/Bitmap;)V": function (this: JImageSpan, bitmap: JBitmap) { return imageBitmap.call(this, null, bitmap); },
   "<init>(Landroid/graphics/Bitmap;I)V": function (this: JImageSpan, bitmap: JBitmap, alignment: number) { return imageBitmap.call(this, null, bitmap, alignment); },
   "getSource()Ljava/lang/String;": function (this: JImageSpan) { return this.source; },
-  "getDrawable()Landroid/graphics/drawable/Drawable;": async function (this: JImageSpan) {
+  "getDrawable()Landroid/graphics/drawable/Drawable;": driven(function* (this: JImageSpan): Gen {
     const image = this.image;
     if (!image) return null;
     if (image.kind === "drawable") return image.value;
-    const resources = await vcall(image.context, "getResources", "()Landroid/content/res/Resources;");
+    const resources = (yield vcall(image.context, "getResources", "()Landroid/content/res/Resources;"));
     let drawable: JDrawable;
-    if (image.kind === "resource") drawable = await vcall(image.context, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", image.id);
+    if (image.kind === "resource") drawable = (yield vcall(image.context, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", image.id));
     else {
-      const resolver = await vcall(image.context, "getContentResolver", "()Landroid/content/ContentResolver;");
-      const stream = await vcall(resolver, "openInputStream", "(Landroid/net/Uri;)Ljava/io/InputStream;", image.uri);
+      const resolver = (yield vcall(image.context, "getContentResolver", "()Landroid/content/ContentResolver;"));
+      const stream = (yield vcall(resolver, "openInputStream", "(Landroid/net/Uri;)Ljava/io/InputStream;", image.uri));
       let bitmap: JBitmap;
-      try { bitmap = await vcall(rt.link("android/graphics/BitmapFactory").ctor, "decodeStream", "(Ljava/io/InputStream;)Landroid/graphics/Bitmap;", stream); }
-      finally { await vcall(stream, "close", "()V"); }
-      drawable = await newObj("android/graphics/drawable/BitmapDrawable", "(Landroid/content/res/Resources;Landroid/graphics/Bitmap;)V", resources, bitmap);
+      try { bitmap = (yield vcall(rt.link("android/graphics/BitmapFactory").ctor, "decodeStream", "(Ljava/io/InputStream;)Landroid/graphics/Bitmap;", stream)); }
+      finally { (yield vcall(stream, "close", "()V")); }
+      drawable = (yield newObj("android/graphics/drawable/BitmapDrawable", "(Landroid/content/res/Resources;Landroid/graphics/Bitmap;)V", resources, bitmap));
     }
-    await vcall(drawable, "setBounds", "(IIII)V", 0, 0, await vcall(drawable, "getIntrinsicWidth", "()I"), await vcall(drawable, "getIntrinsicHeight", "()I"));
+    (yield vcall(drawable, "setBounds", "(IIII)V", 0, 0, (yield vcall(drawable, "getIntrinsicWidth", "()I")), (yield vcall(drawable, "getIntrinsicHeight", "()I"))));
     return drawable;
-  },
+  }),
 } });
 
 // span types (carriers) — wired into the CharacterStyle/MetricAffectingSpan hierarchy
@@ -690,10 +701,10 @@ rt.register({
   ...spanHierarchy["android/text/style/ClickableSpan"],
   methods: {
     "<init>()V": function () {},
-    "updateDrawState(Landroid/text/TextPaint;)V": async (paint: JTextPaint) => {
-      await vcall(paint, "setColor", "(I)V", paint.linkColor);
-      await vcall(paint, "setUnderlineText", "(Z)V", 1);
-    },
+    "updateDrawState(Landroid/text/TextPaint;)V": driven(function* (paint: JTextPaint): Gen  {
+      (yield vcall(paint, "setColor", "(I)V", paint.linkColor));
+      (yield vcall(paint, "setUnderlineText", "(Z)V", 1));
+    }),
   },
 });
 class JURLSpan extends JClickableSpan { url = ""; }
@@ -736,20 +747,21 @@ rt.register({ name: "android/text/style/ForegroundColorSpan", ctor: JForegroundC
 });
 
 class JStyleSpan extends JObj { style = 0; adjustment = 0x7fffffff; }
-async function applyStyle(this: JStyleSpan, paint: JTextPaint) {
-  const old = await vcall(paint, "getTypeface", "()Landroid/graphics/Typeface;");
-  const want = (old ? await vcall(old, "getStyle", "()I") : 0) | this.style;
+function applyStyle(this: JStyleSpan, paint: JTextPaint): unknown { return rt.drive(applyStyle$.call(this, paint)); }
+function* applyStyle$(this: JStyleSpan, paint: JTextPaint): Gen {
+  const old = (yield vcall(paint, "getTypeface", "()Landroid/graphics/Typeface;"));
+  const want = (old ? (yield vcall(old, "getStyle", "()I")) : 0) | this.style;
   const typeface = rt.link("android/graphics/Typeface").ctor;
-  let face = old ? await vcall(typeface, "create", "(Landroid/graphics/Typeface;I)Landroid/graphics/Typeface;", old, want)
-    : await vcall(typeface, "defaultFromStyle", "(I)Landroid/graphics/Typeface;", want);
+  let face = old ? (yield vcall(typeface, "create", "(Landroid/graphics/Typeface;I)Landroid/graphics/Typeface;", old, want))
+    : (yield vcall(typeface, "defaultFromStyle", "(I)Landroid/graphics/Typeface;", want));
   if ((this.style & 1) && this.adjustment && this.adjustment !== 0x7fffffff) {
-    const weight = Math.max(1, Math.min(1000, await vcall(face, "getWeight", "()I") + this.adjustment));
-    face = await vcall(typeface, "create", "(Landroid/graphics/Typeface;IZ)Landroid/graphics/Typeface;", face, weight, (want & 2) ? 1 : 0);
+    const weight = Math.max(1, Math.min(1000, (yield vcall(face, "getWeight", "()I")) + this.adjustment));
+    face = (yield vcall(typeface, "create", "(Landroid/graphics/Typeface;IZ)Landroid/graphics/Typeface;", face, weight, (want & 2) ? 1 : 0));
   }
-  const fake = want & ~await vcall(face, "getStyle", "()I");
-  if (fake & 1) await vcall(paint, "setFakeBoldText", "(Z)V", 1);
-  if (fake & 2) await vcall(paint, "setTextSkewX", "(F)V", -0.25);
-  await vcall(paint, "setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;", face);
+  const fake = want & ~(yield vcall(face, "getStyle", "()I"));
+  if (fake & 1) (yield vcall(paint, "setFakeBoldText", "(Z)V", 1));
+  if (fake & 2) (yield vcall(paint, "setTextSkewX", "(F)V", -0.25));
+  (yield vcall(paint, "setTypeface", "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;", face));
 }
 rt.register({ name: "android/text/style/StyleSpan", ctor: JStyleSpan, ...spanHierarchy["android/text/style/StyleSpan"], methods: {
   "<init>(I)V": function (this: JStyleSpan, style: number) { this.style = style; },
@@ -760,8 +772,9 @@ rt.register({ name: "android/text/style/StyleSpan", ctor: JStyleSpan, ...spanHie
   "updateMeasureState(Landroid/text/TextPaint;)V": applyStyle,
 } });
 class JRelativeSizeSpan extends JObj { size = 1; }
-async function applyRelativeSize(this: JRelativeSizeSpan, paint: JTextPaint) {
-  return vcall(paint, "setTextSize", "(F)V", await vcall(paint, "getTextSize", "()F") * this.size);
+function applyRelativeSize(this: JRelativeSizeSpan, paint: JTextPaint): unknown { return rt.drive(applyRelativeSize$.call(this, paint)); }
+function* applyRelativeSize$(this: JRelativeSizeSpan, paint: JTextPaint): Gen {
+  return vcall(paint, "setTextSize", "(F)V", (yield vcall(paint, "getTextSize", "()F")) * this.size);
 }
 rt.register({ name: "android/text/style/RelativeSizeSpan", ctor: JRelativeSizeSpan, ...spanHierarchy["android/text/style/RelativeSizeSpan"], methods: {
   "<init>(F)V": function (this: JRelativeSizeSpan, size: number) { this.size = size; },
@@ -785,11 +798,11 @@ export function drawStyledText(src: unknown, text: string, start: number, canvas
       for (let i = 0; i < edges.length - 1; i++) {
         copyTextPaint(paint, p); p.setColorValue(color); p.textAlignN = 0;
         for (const r of spans) if (r.start <= edges[i] && r.end > edges[i]) {
-          const pending = vcallMaybe(r.span, "updateDrawState", "(Landroid/text/TextPaint;)V", p);
+          const pending = vcall(r.span, "updateDrawState", "(Landroid/text/TextPaint;)V", p);
           if (pending instanceof Promise) await pending;
         }
         const run = text.slice(edges[i] - start, edges[i + 1] - start);
-        const pending = vcallMaybe(canvas, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", run, x, y, p);
+        const pending = vcall(canvas, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", run, x, y, p);
         if (pending instanceof Promise) await pending;
         x += measureText(p, run);
       }
@@ -797,8 +810,9 @@ export function drawStyledText(src: unknown, text: string, start: number, canvas
   })();
 }
 
-async function superscriptState(this: unknown, paint: JTextPaint) {
-  paint.baselineShift += Math.trunc(Number(await vcall(paint, "ascent", "()F")) / 2);
+function superscriptState(this: unknown, paint: JTextPaint): unknown { return rt.drive(superscriptState$.call(this, paint)); }
+function* superscriptState$(this: unknown, paint: JTextPaint): Gen {
+  paint.baselineShift += Math.trunc(Number((yield vcall(paint, "ascent", "()F"))) / 2);
 }
 rt.register({ name: "android/text/style/SuperscriptSpan", ctor: class extends JMetricAffectingSpan {},
   sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"], methods: {
@@ -901,10 +915,11 @@ rt.register({
   },
 });
 
-async function adjacentTextOffset(cs: unknown, offset: number, after: boolean): Promise<number> {
+function adjacentTextOffset(cs: unknown, offset: number, after: boolean): number | Promise<number> { return rt.drive(adjacentTextOffset$(cs, offset, after)); }
+function* adjacentTextOffset$(cs: unknown, offset: number, after: boolean): Gen<number> {
   if (!after && (offset === 0 || offset === 1)) return 0;
   if (cs == null) return rt.npe();
-  const thread = rt.th(), text = await csText(cs); rt.st(thread);
+  const thread = rt.th(), text = (yield csText(cs)); rt.st(thread);
   if (offset < 0 || offset > text.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(offset));
   if (after && offset >= text.length - 1) return text.length;
   const a = text.charCodeAt(after ? offset : offset - 2), b = text.charCodeAt(after ? offset + 1 : offset - 1);
@@ -913,29 +928,32 @@ async function adjacentTextOffset(cs: unknown, offset: number, after: boolean): 
     const spans = cs.spans.filter(s => s.start < offset && s.end > offset && rt.iof(s.span, "android/text/style/ReplacementSpan"));
     for (const span of spans) if (span.start < offset && span.end > offset) offset = after ? span.end : span.start;
   } else if (rt.iof(cs, "android/text/Spanned")) {
-    const spans = await vcall(cs, "getSpans", "(IILjava/lang/Class;)[Ljava/lang/Object;", offset, offset, rt.classFor("android/text/style/ReplacementSpan")); rt.st(thread);
+    const spans = (yield vcall(cs, "getSpans", "(IILjava/lang/Class;)[Ljava/lang/Object;", offset, offset, rt.classFor("android/text/style/ReplacementSpan"))); rt.st(thread);
     for (const span of spans) {
-      const start = await vcall(cs, "getSpanStart", "(Ljava/lang/Object;)I", span); rt.st(thread);
-      const end = await vcall(cs, "getSpanEnd", "(Ljava/lang/Object;)I", span); rt.st(thread);
+      const start = (yield vcall(cs, "getSpanStart", "(Ljava/lang/Object;)I", span)); rt.st(thread);
+      const end = (yield vcall(cs, "getSpanEnd", "(Ljava/lang/Object;)I", span)); rt.st(thread);
       if (start < offset && end > offset) offset = after ? end : start;
     }
   }
   return offset;
 }
 
-async function textIndexOf(cs: unknown, needle: unknown, start = 0, end?: number): Promise<number> {
-  const thread = rt.th(), text = await csText(cs); rt.st(thread);
-  const part = await csText(needle); rt.st(thread);
+function textIndexOf(cs: unknown, needle: unknown, start = 0, end?: number): number | Promise<number> { return rt.drive(textIndexOf$(cs, needle, start, end)); }
+function* textIndexOf$(cs: unknown, needle: unknown, start = 0, end?: number): Gen<number> {
+  const thread = rt.th(), text = (yield csText(cs)); rt.st(thread);
+  const part = (yield csText(needle)); rt.st(thread);
   if (!part.length) return start;
   const found = text.indexOf(part, start);
   return found > (end ?? text.length) - part.length ? -1 : found;
 }
 
-export async function writeText(text: unknown, parcel: JParcel): Promise<void> {
+export function writeText(text: unknown, parcel: JParcel): void | Promise<void> { return rt.drive(writeText$(text, parcel)); }
+function* writeText$(text: unknown, parcel: JParcel): Gen<void> {
   if (text !== null && rt.iof(text, "android/text/Spanned")) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Spanned text parcel");
-  writeInt(parcel, 1); writeString8(parcel, text === null ? null : await csText(text));
+  writeInt(parcel, 1); writeString8(parcel, text === null ? null : (yield csText(text)));
 }
-export async function readText(parcel: JParcel): Promise<string | null> {
+export function readText(parcel: JParcel): string | null | Promise<string | null> { return rt.drive(readText$(parcel)); }
+function* readText$(parcel: JParcel): Gen<string | null> {
   const kind = readInt(parcel), text = readString8(parcel);
   if (text !== null && kind !== 1 && readInt(parcel) !== 0) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Spanned text parcel");
   return text;
@@ -965,14 +983,14 @@ rt.register({
   statics: { get CHAR_SEQUENCE_CREATOR() { return parcelCreator("java/lang/CharSequence", readText); } },
   methods: {
     "static writeToParcel(Ljava/lang/CharSequence;Landroid/os/Parcel;I)V": writeText,
-    "static getOffsetBefore(Ljava/lang/CharSequence;I)I": async (cs: unknown, offset: number) => adjacentTextOffset(cs, offset, false),
-    "static getOffsetAfter(Ljava/lang/CharSequence;I)I": async (cs: unknown, offset: number) => adjacentTextOffset(cs, offset, true),
+    "static getOffsetBefore(Ljava/lang/CharSequence;I)I": driven(function* (cs: unknown, offset: number): Gen  { return adjacentTextOffset(cs, offset, false); }),
+    "static getOffsetAfter(Ljava/lang/CharSequence;I)I": driven(function* (cs: unknown, offset: number): Gen  { return adjacentTextOffset(cs, offset, true); }),
     "static getLayoutDirectionFromLocale(Ljava/util/Locale;)I": localeDirection,
-    "static getCapsMode(Ljava/lang/CharSequence;II)I": async (cs: unknown, off: number, requested: number) => {
+    "static getCapsMode(Ljava/lang/CharSequence;II)I": driven(function* (cs: unknown, off: number, requested: number): Gen  {
       if (off < 0) return 0;
       const mode = requested & 0x1000;
       if (!(requested & 0x6000)) return mode;
-      const text = await csText(cs);
+      const text = (yield csText(cs));
       if (off > text.length) throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", String(off));
       let i = off;
       while (i > 0 && /["'\p{Ps}]/u.test(text[i - 1])) i--;
@@ -991,7 +1009,7 @@ rt.register({
         }
       }
       return mode | 0x4000;
-    },
+    }),
     "static isEmpty(Ljava/lang/CharSequence;)Z": (s: unknown) => (s === null || spannedString(s).length === 0 ? 1 : 0),
     // True when a run is left-to-right throughout, which lets StaticLayout skip the bidi
     // reordering entirely. It is a real scan, not an assumption: the RTL blocks are Hebrew,
@@ -1025,8 +1043,8 @@ rt.register({
       const i = spannedString(s).slice(0, to).indexOf(String.fromCharCode(ch), from);
       return i;
     },
-    "static lastIndexOf(Ljava/lang/CharSequence;CI)I": async (s: unknown, ch: number, last: number) =>
-      last < 0 ? -1 : (await csText(s)).lastIndexOf(String.fromCharCode(ch), last),
+    "static lastIndexOf(Ljava/lang/CharSequence;CI)I": driven(function* (s: unknown, ch: number, last: number): Gen 
+      { return last < 0 ? -1 : ((yield csText(s))).lastIndexOf(String.fromCharCode(ch), last); }),
     "static indexOf(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)I": textIndexOf,
     "static indexOf(Ljava/lang/CharSequence;Ljava/lang/CharSequence;I)I": textIndexOf,
     "static indexOf(Ljava/lang/CharSequence;Ljava/lang/CharSequence;II)I": textIndexOf,
@@ -1034,12 +1052,12 @@ rt.register({
       (spannedString(a) === spannedString(b) && (a === null) === (b === null) ? 1 : 0),
     "static isDigitsOnly(Ljava/lang/CharSequence;)Z": (s: unknown) => (/^\d*$/.test(spannedString(s)) ? 1 : 0),
     "static getTrimmedLength(Ljava/lang/CharSequence;)I": (s: unknown) => spannedString(s).trim().length,
-    "static join(Ljava/lang/CharSequence;Ljava/lang/Iterable;)Ljava/lang/String;": async (sep: unknown, it: unknown) => {
-      const arr = await toJsArray(it);
+    "static join(Ljava/lang/CharSequence;Ljava/lang/Iterable;)Ljava/lang/String;": driven(function* (sep: unknown, it: unknown): Gen  {
+      const arr = (yield toJsArray(it));
       const parts: string[] = [];
       for (const a of arr) parts.push(a === null ? "null" : spannedString(a));
       return parts.join(spannedString(sep));
-    },
+    }),
     "static join(Ljava/lang/CharSequence;[Ljava/lang/Object;)Ljava/lang/String;": (sep: unknown, arr: unknown[]) =>
       arr.map((a) => (a === null ? "null" : spannedString(a))).join(spannedString(sep)),
     "static split(Ljava/lang/String;Ljava/lang/String;)[Ljava/lang/String;": (s: string, p: string) => {
@@ -1115,15 +1133,15 @@ rt.register({
   methods: {
     ...saxAttributeMethods,
     "<init>()V": function () {},
-    "<init>(Lorg/xml/sax/Attributes;)V": async function (this: JSaxAttributes, source: unknown) {
-      const length = await vcall(source, "getLength", "()I") as number;
+    "<init>(Lorg/xml/sax/Attributes;)V": driven(function* (this: JSaxAttributes, source: unknown): Gen {
+      const length = (yield vcall(source, "getLength", "()I")) as number;
       for (let i = 0; i < length; i++) this.values.push({
-        uri: await vcall(source, "getURI", "(I)Ljava/lang/String;", i) as string,
-        local: await vcall(source, "getLocalName", "(I)Ljava/lang/String;", i) as string,
-        qname: await vcall(source, "getQName", "(I)Ljava/lang/String;", i) as string,
-        value: await vcall(source, "getValue", "(I)Ljava/lang/String;", i) as string,
+        uri: (yield vcall(source, "getURI", "(I)Ljava/lang/String;", i)) as string,
+        local: (yield vcall(source, "getLocalName", "(I)Ljava/lang/String;", i)) as string,
+        qname: (yield vcall(source, "getQName", "(I)Ljava/lang/String;", i)) as string,
+        value: (yield vcall(source, "getValue", "(I)Ljava/lang/String;", i)) as string,
       });
-    },
+    }),
   },
 });
 /** AOSP parses the markup and emits spans; the browser already has the parser, so use it —
@@ -1174,16 +1192,17 @@ type Replacement = SpanRec & { width: number; metrics: SpanMetrics; paint: JText
 function replacementSpans(cs: unknown): SpanRec[] {
   return cs instanceof JSpanned ? cs.spans.filter((s) => s.end > s.start && rt.iof(s.span, "android/text/style/ReplacementSpan")).sort((a, b) => a.start - b.start) : [];
 }
-export async function measureReplacements(cs: unknown, paint: JTextPaint, spans = replacementSpans(cs)): Promise<Replacement[]> {
+export function measureReplacements(cs: unknown, paint: JTextPaint, spans = replacementSpans(cs)): Replacement[] | Promise<Replacement[]> { return rt.drive(measureReplacements$(cs, paint, spans)); }
+function* measureReplacements$(cs: unknown, paint: JTextPaint, spans = replacementSpans(cs)): Gen<Replacement[]> {
   const result: Replacement[] = [], thread = curThread;
   for (const span of spans) {
     const p = new JTextPaint(); copyPaint(paint, p); p.density = paint.density;
     if (cs instanceof JSpanned) for (const style of cs.spans) {
       if (style.end <= span.start || style.start >= span.end || rt.iof(style.span, "android/text/style/ReplacementSpan")) continue;
-      if (rt.iof(style.span, "android/text/style/MetricAffectingSpan")) await vcallOn(thread, style.span, "updateMeasureState", "(Landroid/text/TextPaint;)V", p);
+      if (rt.iof(style.span, "android/text/style/MetricAffectingSpan")) (yield vcallOn(thread, style.span, "updateMeasureState", "(Landroid/text/TextPaint;)V", p));
     }
-    const metrics: SpanMetrics = await newObj("android/graphics/Paint$FontMetricsInt"); fillFontMetrics(p, metrics, true);
-    const width = await vcallOn(thread, span.span, "getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I", p, cs, span.start, span.end, metrics);
+    const metrics: SpanMetrics = (yield newObj("android/graphics/Paint$FontMetricsInt")); fillFontMetrics(p, metrics, true);
+    const width = (yield vcallOn(thread, span.span, "getSize", "(Landroid/graphics/Paint;Ljava/lang/CharSequence;IILandroid/graphics/Paint$FontMetricsInt;)I", p, cs, span.start, span.end, metrics));
     result.push({ ...span, width: Number(width), metrics, paint: p });
   }
   return result;
@@ -1294,7 +1313,7 @@ function desiredWidth(cs: unknown, p: JTextPaint): number | Promise<number> {
     }
     return max;
   };
-  return spans.length ? measureReplacements(cs, p, spans).then(width) : width([]);
+  return spans.length ? after(measureReplacements(cs, p, spans), width) : width([]);
 }
 function primaryHorizontal(this: JLayout, off: number) {
     for (const l of this.lines) {
@@ -1302,7 +1321,8 @@ function primaryHorizontal(this: JLayout, off: number) {
     }
     return 0;
 }
-export async function drawLayout(this: JLayout, c: JCanvas, gravity?: number) {
+export function drawLayout(this: JLayout, c: JCanvas, gravity?: number): unknown { return rt.drive(drawLayout$.call(this, c, gravity)); }
+function* drawLayout$(this: JLayout, c: JCanvas, gravity?: number): Gen {
     const thread = curThread;
     for (let i = 0; i < this.lines.length; i++) {
       const line = this.lines[i], end = line.start + (line.ellipsis?.start ?? line.text.length), baseline = this.baseline(i);
@@ -1311,17 +1331,17 @@ export async function drawLayout(this: JLayout, c: JCanvas, gravity?: number) {
         if (span.end <= position || span.start >= end) continue;
         if (span.start > position) {
           const text = line.text.slice(position - line.start, span.start - line.start);
-          await (callOn(thread, () => drawStyledText(this.src, text, position, c, this.paint, x, baseline))
-            ?? vcallOn(thread, c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text, x, baseline, this.paint));
+          (yield (callOn(thread, () => drawStyledText(this.src, text, position, c, this.paint, x, baseline))
+            ?? vcallOn(thread, c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text, x, baseline, this.paint)));
           x += measureText(this.paint, text);
         }
-        await vcallOn(thread, span.span, "draw", "(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V", c, this.src, span.start, span.end, x, this.lineTop(i), baseline, this.lineTop(i + 1), span.paint);
+        (yield vcallOn(thread, span.span, "draw", "(Landroid/graphics/Canvas;Ljava/lang/CharSequence;IIFIIILandroid/graphics/Paint;)V", c, this.src, span.start, span.end, x, this.lineTop(i), baseline, this.lineTop(i + 1), span.paint));
         x += span.width; position = span.end;
       }
       if (position < end || line.ellipsis) {
         const text = line.text.slice(position - line.start);
-        await (callOn(thread, () => drawStyledText(this.src, text, position, c, this.paint, x, baseline))
-          ?? vcallOn(thread, c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text, x, baseline, this.paint));
+        (yield (callOn(thread, () => drawStyledText(this.src, text, position, c, this.paint, x, baseline))
+          ?? vcallOn(thread, c, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text, x, baseline, this.paint)));
       }
     }
 }
@@ -1371,23 +1391,23 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getPrimaryHorizontal(I)F": primaryHorizontal,
   "getSecondaryHorizontal(I)F": primaryHorizontal,
-  "getSelectionPath(IILandroid/graphics/Path;)V": async function (this: JLayout, start: number, end: number, path: JPath) {
+  "getSelectionPath(IILandroid/graphics/Path;)V": driven(function* (this: JLayout, start: number, end: number, path: JPath): Gen {
     const thread = curThread;
-    await vcallOn(thread, path, "reset", "()V");
+    (yield vcallOn(thread, path, "reset", "()V"));
     if (start === end) return;
     if (start > end) [start, end] = [end, start];
-    const first = Number(await vcallOn(thread, this, "getLineForOffset", "(I)I", start));
-    const last = Number(await vcallOn(thread, this, "getLineForOffset", "(I)I", end));
-    const width = Number(await vcallOn(thread, this, "getWidth", "()I"));
+    const first = Number((yield vcallOn(thread, this, "getLineForOffset", "(I)I", start)));
+    const last = Number((yield vcallOn(thread, this, "getLineForOffset", "(I)I", end)));
+    const width = Number((yield vcallOn(thread, this, "getWidth", "()I")));
     for (let line = first; line <= last; line++) {
-      const rtl = await vcallOn(thread, this, "getParagraphDirection", "(I)I", line) === -1;
-      const left = line === first ? Number(await vcallOn(thread, this, "getPrimaryHorizontal", "(I)F", start)) : rtl ? width : 0;
-      const right = line === last ? Number(await vcallOn(thread, this, "getPrimaryHorizontal", "(I)F", end)) : rtl ? 0 : width;
-      const top = Number(await vcallOn(thread, this, "getLineTop", "(I)I", line));
-      const bottom = Number(await vcallOn(thread, this, "getLineBottom", "(I)I", line));
+      const rtl = (yield vcallOn(thread, this, "getParagraphDirection", "(I)I", line)) === -1;
+      const left = line === first ? Number((yield vcallOn(thread, this, "getPrimaryHorizontal", "(I)F", start))) : rtl ? width : 0;
+      const right = line === last ? Number((yield vcallOn(thread, this, "getPrimaryHorizontal", "(I)F", end))) : rtl ? 0 : width;
+      const top = Number((yield vcallOn(thread, this, "getLineTop", "(I)I", line)));
+      const bottom = Number((yield vcallOn(thread, this, "getLineBottom", "(I)I", line)));
       if (left !== right) path.add(["rect", Math.min(left, right), top, Math.max(left, right), bottom, 0]);
     }
-  },
+  }),
   "getOffsetForHorizontal(IF)I": function (this: JLayout, line: number, x: number) {
     const l = this.lines[Math.min(line, this.lines.length - 1)];
     if (!l) return 0;
@@ -1416,15 +1436,15 @@ class JDynamicLayout extends JLayout {
     if (this.lines.length && text === this.text) return;
     this.text = text; this.replacements = [];
     const finish = () => { this.layoutLines(); return this.applyLineHeightSpans(); };
-    return replacementSpans(this.src).length ? measureReplacements(this.src, this.paint).then((spans) => { this.replacements = spans; return finish(); }) : finish();
+    return replacementSpans(this.src).length ? after(measureReplacements(this.src, this.paint), (spans) => { this.replacements = spans; return finish(); }) : finish();
   }
 }
 const dynamicMethods: NonNullable<NativeSpec["methods"]> = {
-  "<init>(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFZ)V": async function (this: JDynamicLayout, source: unknown, paint: JTextPaint, width: number, alignment: JSimpleEnum, mult: number, add: number, pad: number) {
+  "<init>(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFZ)V": driven(function* (this: JDynamicLayout, source: unknown, paint: JTextPaint, width: number, alignment: JSimpleEnum, mult: number, add: number, pad: number): Gen {
     this.alignment = alignment;
     this.src = source; this.paint = paint; this.width = width; this.spacingMult = mult; this.spacingAdd = add; this.includePad = !!pad;
-    await this.refresh();
-  },
+    (yield this.refresh());
+  }),
 };
 for (const [signature, method] of Object.entries(layoutMethods)) {
   if (signature.startsWith("static ") || typeof method !== "function") continue;
@@ -1519,31 +1539,33 @@ rt.register({
     "setUseBoundsForWidth(Z)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setUseLineSpacingFromFallbacks(Z)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setLineBreakConfig(Landroid/graphics/text/LineBreakConfig;)Landroid/text/StaticLayout$Builder;": slSetter(),
-    "build()Landroid/text/StaticLayout;": async function (this: JSLBuilder) {
-      const layout = await mkSpannedLayout(this.cs, this.p, this.w, this.smult, this.sadd, this.maxLines, this.incl, this.breakStrategy);
+    "build()Landroid/text/StaticLayout;": driven(function* (this: JSLBuilder): Gen {
+      const layout = (yield mkSpannedLayout(this.cs, this.p, this.w, this.smult, this.sadd, this.maxLines, this.incl, this.breakStrategy));
       layout.alignment = this.alignment; return layout;
-    },
+    }),
   },
 });
 rt.register({ name: "android/text/StaticLayout", ctor: JStaticLayout, sup: "android/text/Layout", methods: {
   "<init>(Ljava/lang/CharSequence;Landroid/text/TextPaint;ILandroid/text/Layout$Alignment;FFZ)V":
-    async function (this: JStaticLayout, cs: unknown, p: JTextPaint, w: number, alignment: JSimpleEnum, mult: number, add: number, includePad: number) {
+    driven(function* (this: JStaticLayout, cs: unknown, p: JTextPaint, w: number, alignment: JSimpleEnum, mult: number, add: number, includePad: number): Gen {
       this.alignment = alignment;
-      await setupSpannedLayout(this, cs, p, w, mult, add, Number.MAX_SAFE_INTEGER, !!includePad);
+      (yield setupSpannedLayout(this, cs, p, w, mult, add, Number.MAX_SAFE_INTEGER, !!includePad));
 
-    },
+    }),
 } });
-export async function mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy = 0): Promise<JLayout> {
+export function mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy = 0): JLayout | Promise<JLayout> { return rt.drive(mkSpannedLayout$(cs, p, w, mult, add, maxLines, includePad, breakStrategy)); }
+function* mkSpannedLayout$(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy = 0): Gen<JLayout> {
   const l = new JStaticLayout();
-  return setupSpannedLayout(l, cs, p, w, mult, add, maxLines, includePad, breakStrategy);
+  return (yield setupSpannedLayout(l, cs, p, w, mult, add, maxLines, includePad, breakStrategy));
 }
-async function setupSpannedLayout(l: JStaticLayout, cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy = 0): Promise<JStaticLayout> {
+function setupSpannedLayout(l: JStaticLayout, cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy = 0): JStaticLayout | Promise<JStaticLayout> { return rt.drive(setupSpannedLayout$(l, cs, p, w, mult, add, maxLines, includePad, breakStrategy)); }
+function* setupSpannedLayout$(l: JStaticLayout, cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy = 0): Gen<JStaticLayout> {
   l.text = spannedString(cs); l.src = cs; l.paint = p; l.width = Math.max(0, w);
   l.spacingMult = mult; l.spacingAdd = add; l.includePad = includePad; l.breakStrategy = breakStrategy;
   const spans = replacementSpans(cs);
-  if (spans.length) l.replacements = await measureReplacements(cs, p, spans);
+  if (spans.length) l.replacements = (yield measureReplacements(cs, p, spans));
   l.layoutLines(maxLines);
-  await l.applyLineHeightSpans();
+  (yield l.applyLineHeightSpans());
   return l;
 }
 
@@ -1657,11 +1679,11 @@ class JReplacementTransformation extends JObj {}
 rt.register({ name: "android/text/method/ReplacementTransformationMethod", ctor: JReplacementTransformation,
   ifaces: ["android/text/method/TransformationMethod"], methods: {
     "<init>()V": () => {},
-    "getTransformation(Ljava/lang/CharSequence;Landroid/view/View;)Ljava/lang/CharSequence;": async function (this: JReplacementTransformation, source: unknown) {
+    "getTransformation(Ljava/lang/CharSequence;Landroid/view/View;)Ljava/lang/CharSequence;": driven(function* (this: JReplacementTransformation, source: unknown): Gen {
       if (source == null) return null;
-      const original = await vcall(this, "getOriginal", "()[C") as Uint16Array;
-      const replacement = await vcall(this, "getReplacement", "()[C") as Uint16Array;
-      const text = await csText(source);
+      const original = (yield vcall(this, "getOriginal", "()[C")) as Uint16Array;
+      const replacement = (yield vcall(this, "getReplacement", "()[C")) as Uint16Array;
+      const text = (yield csText(source));
       let changed = false, result = "";
       for (let i = 0; i < text.length; i++) {
         const at = original.indexOf(text.charCodeAt(i));
@@ -1669,7 +1691,7 @@ rt.register({ name: "android/text/method/ReplacementTransformationMethod", ctor:
         result += at < 0 ? text[i] : String.fromCharCode(replacement[at]);
       }
       return changed ? result : source;
-    },
+    }),
     "onFocusChanged(Landroid/view/View;Ljava/lang/CharSequence;ZILandroid/graphics/Rect;)V": () => {},
   },
 });
@@ -1715,7 +1737,7 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "static getInstance()Landroid/text/method/PasswordTransformationMethod;": () => passwordTM,
-    "getTransformation(Ljava/lang/CharSequence;Landroid/view/View;)Ljava/lang/CharSequence;": async (s: unknown) => "\u2022".repeat((await csText(s)).length),
+    "getTransformation(Ljava/lang/CharSequence;Landroid/view/View;)Ljava/lang/CharSequence;": driven(function* (s: unknown): Gen  { return "\u2022".repeat(((yield csText(s))).length); }),
     "onFocusChanged(Landroid/view/View;Ljava/lang/CharSequence;ZILandroid/graphics/Rect;)V": () => {},
   },
 });

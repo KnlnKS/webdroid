@@ -1,7 +1,7 @@
 import { AID } from "./res";
 import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, uiState, JViewGroup, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, type JLayoutParams } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild, drawableSize, JLayerDrawable } from "./drawable";
-import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, flagSetters } from "../jvm/runtime";
+import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, flagSetters, driven, type Gen } from "../jvm/runtime";
 import { type JAttrSet, rvColor, obtainStyled, rvInt, rvDimen } from "./res";
 import { TV } from "./axml";
 import { type JCanvas, cssColor } from "./graphics";
@@ -20,8 +20,9 @@ class JProgressBar extends JView {
   progressD: JDrawable | null = null; indetD: JDrawable | null = null;
   tintCsl: JColorStateList | null = null;
 }
-async function initProgressBar(this: JProgressBar, c: unknown, set: JAttrSet | null = null, style = AID("progressBarStyle"), def = 0) {
-  await initViewFromCtx(this, c, set, style);
+function initProgressBar(this: JProgressBar, c: unknown, set: JAttrSet | null = null, style = AID("progressBarStyle"), def = 0): unknown { return rt.drive(initProgressBar$.call(this, c, set, style, def)); }
+function* initProgressBar$(this: JProgressBar, c: unknown, set: JAttrSet | null = null, style = AID("progressBarStyle"), def = 0): Gen {
+  (yield initViewFromCtx(this, c, set, style));
   if (!this.jres) return;
   if (set?.node) for (const attr of set.node.attrs) {
     if (attr.name === "style" && attr.str?.includes("Horizontal")) this.horizontal = true;
@@ -29,8 +30,8 @@ async function initProgressBar(this: JProgressBar, c: unknown, set: JAttrSet | n
   }
   const a = obtainStyled(this.jres, this.theme, set,
     ["progressDrawable", "indeterminateDrawable", "indeterminate", "min", "max", "progress"].map(AID), style, def);
-  if (a.vals[0]) this.progressD = await loadDrawableRV(this.jres, a.vals[0], this.theme);
-  if (a.vals[1]) this.indetD = await loadDrawableRV(this.jres, a.vals[1], this.theme);
+  if (a.vals[0]) this.progressD = (yield loadDrawableRV(this.jres, a.vals[0], this.theme));
+  if (a.vals[1]) this.indetD = (yield loadDrawableRV(this.jres, a.vals[1], this.theme));
   this.indeterminate = !!rvInt(this.jres, a.vals[2], this.horizontal ? 0 : +this.indeterminate);
   this.min = rvInt(this.jres, a.vals[3], this.min);
   this.max = Math.max(this.min, rvInt(this.jres, a.vals[4], this.max));
@@ -136,16 +137,17 @@ class JSeekBar extends JAbsSeekBar {
     if (this.changeListener) await vcallOn(thread, this.changeListener, "onProgressChanged", "(Landroid/widget/SeekBar;IZ)V", this, progress, +fromUser);
   }
 }
-async function initSeekBar(this: JSeekBar, c: unknown, attrs: JAttrSet | null = null, style = AID("seekBarStyle"), def = 0) {
+function initSeekBar(this: JSeekBar, c: unknown, attrs: JAttrSet | null = null, style = AID("seekBarStyle"), def = 0): unknown { return rt.drive(initSeekBar$.call(this, c, attrs, style, def)); }
+function* initSeekBar$(this: JSeekBar, c: unknown, attrs: JAttrSet | null = null, style = AID("seekBarStyle"), def = 0): Gen {
   const thread = curThread;
-  await initViewFromCtx(this, c, attrs, style);
+  (yield initViewFromCtx(this, c, attrs, style));
   if (!this.jres) return;
   const a = obtainStyled(this.jres, this.theme, attrs, ["progressDrawable", "thumb", "thumbOffset", "min", "max", "progress", "secondaryProgress"].map(AID), style, def);
   this.min = rvInt(this.jres, a.vals[3], 0); this.max = Math.max(this.min, rvInt(this.jres, a.vals[4], 100));
   this.progress = Math.max(this.min, Math.min(this.max, rvInt(this.jres, a.vals[5], 0)));
   this.secondary = rvInt(this.jres, a.vals[6], 0);
-  if (a.vals[0]) await this.setTrack(await loadDrawableRV(this.jres, a.vals[0], this.theme), thread);
-  if (a.vals[1]) await this.setThumb(await loadDrawableRV(this.jres, a.vals[1], this.theme), thread);
+  if (a.vals[0]) (yield this.setTrack((yield loadDrawableRV(this.jres, a.vals[0], this.theme)), thread));
+  if (a.vals[1]) (yield this.setThumb((yield loadDrawableRV(this.jres, a.vals[1], this.theme)), thread));
   if (a.vals[2]) this.thumbOffset = Math.trunc(rvDimen(this.jres, a.vals[2], this.thumbOffset));
 }
 rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widget/AbsSeekBar", methods: {
@@ -163,58 +165,58 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
   "setProgress(IZ)V": function (this: JSeekBar, value: number) { return this.updateProgress(value); },
   "setSecondaryProgress(I)V": function (this: JSeekBar, value: number) { this.secondary = Math.max(this.min, Math.min(this.max, value)); invalidate(this); },
   "getSecondaryProgress()I": function (this: JSeekBar) { return this.secondary; },
-  "drawableStateChanged()V": async function (this: JSeekBar) {
+  "drawableStateChanged()V": driven(function* (this: JSeekBar): Gen {
     const thread = curThread, state = Int32Array.from(this.drawableState());
-    for (const d of [this.progressD, this.thumb]) if (d) await vcallOn(thread, d, "setState", "([I)Z", state);
-  },
-  "onMeasure(II)V": async function (this: JSeekBar, ws: number, hs: number) {
+    for (const d of [this.progressD, this.thumb]) if (d) (yield vcallOn(thread, d, "setState", "([I)Z", state));
+  }),
+  "onMeasure(II)V": driven(function* (this: JSeekBar, ws: number, hs: number): Gen {
     const thread = curThread, d = this.progressD;
-    const w = d ? Math.max(0, Number(await drawableSize(d, false, thread))) : 0;
-    const h = d ? Math.max(0, Number(await drawableSize(d, true, thread))) : 0;
+    const w = d ? Math.max(0, Number((yield drawableSize(d, false, thread)))) : 0;
+    const h = d ? Math.max(0, Number((yield drawableSize(d, true, thread)))) : 0;
     this.measuredW = resolveSize(Math.max(this.minW, w + this.padL + this.padR), ws);
     this.measuredH = resolveSize(Math.max(this.minH, Math.max(h, this.thumbH) + this.padT + this.padB), hs);
-  },
-  "onDraw(Landroid/graphics/Canvas;)V": async function (this: JSeekBar, canvas: JCanvas) {
+  }),
+  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JSeekBar, canvas: JCanvas): Gen {
     const thread = curThread, ctx = canvas.ctx, d = this.progressD;
     const w = this.width() - this.padL - this.padR, h = this.height() - this.padT - this.padB;
     const fraction = (v: number) => this.max === this.min ? 0 : (v - this.min) / (this.max - this.min);
     ctx.save(); ctx.translate(this.padL, this.padT);
     try {
       if (d) {
-        await vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, w, h);
+        (yield vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, w, h));
         const level = async (id: number, value: number) => {
           const target = d instanceof JLayerDrawable ? await vcallOn(thread, d, "findDrawableByLayerId", "(I)Landroid/graphics/drawable/Drawable;", id) : d;
           if (target) await vcallOn(thread, target, "setLevel", "(I)Z", Math.trunc(fraction(value) * 10000));
         };
-        await level(0x0102000f, this.secondary); await level(0x0102000d, this.progress);
-        await drawChild(d, canvas);
+        (yield level(0x0102000f, this.secondary)); (yield level(0x0102000d, this.progress));
+        (yield drawChild(d, canvas));
       }
       if (this.thumb) {
         const x = Math.round(fraction(this.progress) * (w - this.thumbW + this.thumbOffset * 2)) - this.thumbOffset;
         const y = Math.trunc((h - this.thumbH) / 2);
-        await vcallOn(thread, this.thumb, "setBounds", "(IIII)V", x, y, x + this.thumbW, y + this.thumbH);
-        await drawChild(this.thumb, canvas);
+        (yield vcallOn(thread, this.thumb, "setBounds", "(IIII)V", x, y, x + this.thumbW, y + this.thumbH));
+        (yield drawChild(this.thumb, canvas));
       }
     } finally { ctx.restore(); }
-  },
-  "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JSeekBar, event: JMotionEvent) {
+  }),
+  "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JSeekBar, event: JMotionEvent): Gen {
     if (!this.enabled) return 0;
     const thread = curThread, action = event.action & 255;
     if (action === 0) {
-      await vcallOn(thread, this, "setPressed", "(Z)V", 1);
-      if (this.parent) await vcallOn(thread, this.parent, "requestDisallowInterceptTouchEvent", "(Z)V", 1);
-      if (this.changeListener) await vcallOn(thread, this.changeListener, "onStartTrackingTouch", "(Landroid/widget/SeekBar;)V", this);
+      (yield vcallOn(thread, this, "setPressed", "(Z)V", 1));
+      if (this.parent) (yield vcallOn(thread, this.parent, "requestDisallowInterceptTouchEvent", "(Z)V", 1));
+      if (this.changeListener) (yield vcallOn(thread, this.changeListener, "onStartTrackingTouch", "(Landroid/widget/SeekBar;)V", this));
     }
     if (action === 0 || action === 1 || action === 2) {
       const width = this.width() - this.padL - this.padR;
-      await this.updateProgress(this.min + (this.max - this.min) * Math.max(0, Math.min(1, width > 0 ? (event.x - this.padL) / width : 0)), true, thread);
+      (yield this.updateProgress(this.min + (this.max - this.min) * Math.max(0, Math.min(1, width > 0 ? (event.x - this.padL) / width : 0)), true, thread));
     }
     if (action === 1 || action === 3) {
-      await vcallOn(thread, this, "setPressed", "(Z)V", 0);
-      if (this.changeListener) await vcallOn(thread, this.changeListener, "onStopTrackingTouch", "(Landroid/widget/SeekBar;)V", this);
+      (yield vcallOn(thread, this, "setPressed", "(Z)V", 0));
+      if (this.changeListener) (yield vcallOn(thread, this.changeListener, "onStopTrackingTouch", "(Landroid/widget/SeekBar;)V", this));
     }
     return 1;
-  },
+  }),
 } });
 rt.markers("android/widget/SeekBar$OnSeekBarChangeListener", "android/widget/RatingBar$OnRatingBarChangeListener");
 rt.register({
@@ -238,10 +240,11 @@ export function themeAccent(v: JView): number {
 }
 
 /** TextView.onDraw with the text column starting at `padL` (compound widgets draw their indicator in the gap). */
-async function drawTextInset(tv: JTextView, cv: JCanvas, padL: number) {
+function drawTextInset(tv: JTextView, cv: JCanvas, padL: number): unknown { return rt.drive(drawTextInset$(tv, cv, padL)); }
+function* drawTextInset$(tv: JTextView, cv: JCanvas, padL: number): Gen {
   const saved = tv.padL;
   tv.padL = padL;
-  try { await callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", tv, cv); }
+  try { (yield callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", tv, cv)); }
   finally { tv.padL = saved; }
 }
 
@@ -330,18 +333,18 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": init,
   "setChecked(Z)V": function (this: JCompoundButton, c: number) { return this.setCheckedInternal(!!c); },
   "toggle()V": function (this: JCompoundButton) { return this.setCheckedInternal(!this.checked); },
-  "performClick()Z": async function (this: JCompoundButton) {
+  "performClick()Z": driven(function* (this: JCompoundButton): Gen {
     // inside a RadioGroup: single-select semantics
     let g: JView | null = this.parent;
     while (g && !(g instanceof JRadioGroup)) g = g.parent;
     if (g instanceof JRadioGroup && kind === "radio") {
-      await g.checkId(this.idNum);
+      (yield g.checkId(this.idNum));
     } else {
-      await this.setCheckedInternal(!this.checked);
+      (yield this.setCheckedInternal(!this.checked));
     }
-    if (this.clickL) await vcall(this.clickL, "onClick", "(Landroid/view/View;)V", this);
+    if (this.clickL) (yield vcall(this.clickL, "onClick", "(Landroid/view/View;)V", this));
     return 1;
-  },
+  }),
   ...flagGetters({ "isChecked()Z": "checked" }),
   ...fieldSetters({ "setOnCheckedChangeListener(Landroid/widget/CompoundButton$OnCheckedChangeListener;)V": "checkL" }),
   ...fieldGetters({ "getButtonDrawable()Landroid/graphics/drawable/Drawable;": "buttonD" }),
@@ -353,41 +356,41 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
     this.buttonTintMode = mode; return this.applyButtonTint();
   },
   "getButtonTintMode()Landroid/graphics/PorterDuff$Mode;": function (this: JCompoundButton) { return this.buttonTintMode; },
-  "setButtonDrawable(Landroid/graphics/drawable/Drawable;)V": async function (this: JCompoundButton, d: JDrawable | null) {
+  "setButtonDrawable(Landroid/graphics/drawable/Drawable;)V": driven(function* (this: JCompoundButton, d: JDrawable | null): Gen {
     this.buttonD = d;
     this.buttonW = d ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;
-    await this.updateButtonState();
+    (yield this.updateButtonState());
     return this.applyButtonTint();
-  },
-  "setButtonDrawable(I)V": async function (this: JCompoundButton, id: number) {
-    this.buttonD = id ? await loadDrawable(this.jres!, id, this.theme) : null;
+  }),
+  "setButtonDrawable(I)V": driven(function* (this: JCompoundButton, id: number): Gen {
+    this.buttonD = id ? (yield loadDrawable(this.jres!, id, this.theme)) : null;
     this.buttonW = id ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;
-    await this.updateButtonState();
-    await this.applyButtonTint();
-  },
+    (yield this.updateButtonState());
+    (yield this.applyButtonTint());
+  }),
   "drawableStateChanged()V": function (this: JCompoundButton) {
     this.updateLinkColor();
     return this.updateButtonState();
   },
-  "onMeasure(II)V": async function (this: JCompoundButton, wSpec: number, hSpec: number) {
-    await callSelf(textViewMethods, "onMeasure(II)V", this, wSpec, hSpec);
+  "onMeasure(II)V": driven(function* (this: JCompoundButton, wSpec: number, hSpec: number): Gen {
+    (yield callSelf(textViewMethods, "onMeasure(II)V", this, wSpec, hSpec));
     this.measuredW = resolveSize(this.measuredW + this.buttonW, wSpec);
     this.measuredH = resolveSize(Math.max(this.measuredH, device.dp(48)), hSpec);
-  },
-  "onDraw(Landroid/graphics/Canvas;)V": async function (this: JCompoundButton, cv: JCanvas) {
+  }),
+  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JCompoundButton, cv: JCanvas): Gen {
     const thread = curThread;
     if (!this.buttonW) return (textViewMethods["onDraw(Landroid/graphics/Canvas;)V"] as (cv: JCanvas) => void).call(this, cv);
     const ctx = cv.ctx;
     const accent = themeAccent(this);
     const cy = this.height() / 2;
     const indX = kind === "switch" ? this.width() - this.padR - device.dp(44) : this.padL + device.dp(4);
-    const w = this.buttonD ? await drawableSize(this.buttonD, false, thread) : -1;
+    const w = this.buttonD ? (yield drawableSize(this.buttonD, false, thread)) : -1;
     if (this.buttonD && w > 0) {
-      const h = await drawableSize(this.buttonD, true, thread);
+      const h = (yield drawableSize(this.buttonD, true, thread));
       const b = this.buttonD.bounds;
       b.left = indX; b.top = cy - h / 2; b.right = indX + w; b.bottom = cy + h / 2;
       this.buttonD.stateSet = this.drawableState();
-      await drawChild(this.buttonD, cv, thread);
+      (yield drawChild(this.buttonD, cv, thread));
       return drawTextInset(this, cv, kind !== "switch" ? indX + this.buttonW - device.dp(4) : this.padL);
     }
     if (kind === "check") {
@@ -439,7 +442,7 @@ const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["method
       ctx.stroke();
     }
     return drawTextInset(this, cv, kind !== "switch" ? indX + this.buttonW - device.dp(4) : this.padL);
-  },
+  }),
   };
 };
 rt.register({ name: "android/widget/CompoundButton", ctor: JCompoundButton, sup: "android/widget/Button", ifaces: ["android/widget/Checkable"], methods: compoundMethods("check") });
@@ -499,8 +502,9 @@ rt.register({
 });
 rt.markers("android/widget/RadioGroup$OnCheckedChangeListener");
 
-async function initSpace(this: JView, context: unknown, attrs: JAttrSet | null = null, defStyle = 0) {
-  await initViewFromCtx(this, context, attrs, defStyle);
+function initSpace(this: JView, context: unknown, attrs: JAttrSet | null = null, defStyle = 0): unknown { return rt.drive(initSpace$.call(this, context, attrs, defStyle)); }
+function* initSpace$(this: JView, context: unknown, attrs: JAttrSet | null = null, defStyle = 0): Gen {
+  (yield initViewFromCtx(this, context, attrs, defStyle));
   if (this.visibility === 0) this.visibility = 4;
 }
 rt.register({
@@ -509,10 +513,10 @@ rt.register({
     "<init>(Landroid/content/Context;)V": initSpace,
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initSpace,
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": initSpace,
-    "onMeasure(II)V": async function (this: JView, wSpec: number, hSpec: number) {
-      this.measuredW = resolveSize(await vcall(this, "getSuggestedMinimumWidth", "()I"), wSpec) & 0xffffff;
-      this.measuredH = resolveSize(await vcall(this, "getSuggestedMinimumHeight", "()I"), hSpec) & 0xffffff;
-    },
+    "onMeasure(II)V": driven(function* (this: JView, wSpec: number, hSpec: number): Gen {
+      this.measuredW = resolveSize((yield vcall(this, "getSuggestedMinimumWidth", "()I")), wSpec) & 0xffffff;
+      this.measuredH = resolveSize((yield vcall(this, "getSuggestedMinimumHeight", "()I")), hSpec) & 0xffffff;
+    }),
     "draw(Landroid/graphics/Canvas;)V": () => {},
   },
 });
@@ -532,11 +536,11 @@ rt.register({
   ifaces: ["android/widget/Checkable"],
   methods: {
     ...textViewMethods,
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JCheckedTextView, c: unknown, set: JAttrSet | null) {
-      await initViewFromCtx(this, c, set);
-      await applyTvStyle(this, set, 0);
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JCheckedTextView, c: unknown, set: JAttrSet | null): Gen {
+      (yield initViewFromCtx(this, c, set));
+      (yield applyTvStyle(this, set, 0));
       this.gravityT = 16 | G.START;
-    },
+    }),
     "setChecked(Z)V": function (this: JCheckedTextView, v: number) { this.checked = !!v; invalidate(); },
     "isChecked()Z": function (this: JCheckedTextView) { return this.checked ? 1 : 0; },
     "toggle()V": function (this: JCheckedTextView) { this.checked = !this.checked; invalidate(); },
@@ -544,10 +548,10 @@ rt.register({
     "setCheckMarkDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JCheckedTextView, d: JDrawable | null) {
       this.checkMarkDrawable = d;
     },
-    "onMeasure(II)V": async function (this: JCheckedTextView, wSpec: number, hSpec: number) {
-      await callSelf(textViewMethods, "onMeasure(II)V", this, wSpec, hSpec);
+    "onMeasure(II)V": driven(function* (this: JCheckedTextView, wSpec: number, hSpec: number): Gen {
+      (yield callSelf(textViewMethods, "onMeasure(II)V", this, wSpec, hSpec));
       this.measuredH = Math.max(this.measuredH, device.dp(48));
-    },
+    }),
     "onDraw(Landroid/graphics/Canvas;)V": function (this: JCheckedTextView, cv: JCanvas) {
       const ctx = cv.ctx;
       const cy = this.height() / 2;

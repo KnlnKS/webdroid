@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt, JObj } from "../src/jvm/runtime";
-import { JClassLoader, JThread, curThread, newObj, setCurThread, vcall, vcallOn, vcallMaybe } from "../src/jvm/natives/jlang";
+import { JClassLoader, JThread, curThread, newObj, setCurThread, vcall, vcallOn, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { Resources } from "../src/android/res";
 import { JAssetManager, type JResources } from "../src/android/resnative";
@@ -11,7 +11,7 @@ import { appHost, setAppHost } from "../src/android/apphost";
 import { onMain } from "../src/android/mainloop";
 import { vfs } from "../src/jvm/natives/jio";
 
-const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => vcallMaybe(rt.link(cls).ctor, name, desc, ...args);
+const scall = (cls: string, name: string, desc: string, ...args: unknown[]) => vcall(rt.link(cls).ctor, name, desc, ...args);
 
 rt.register({ name: "test/NoopRunnable", ctor: class extends JObj {}, ifaces: ["java/lang/Runnable"], methods: { "run()V": function () {} } });
 rt.register({
@@ -84,7 +84,7 @@ test("View context clickability is independently mutable", async () => {
 
 test("View accepts a generic motion listener", async () => {
   const view = await newObj("android/view/View", "(Landroid/content/Context;)V", null);
-  await expect(vcall(view, "setOnGenericMotionListener", "(Landroid/view/View$OnGenericMotionListener;)V", new JObj())).resolves.toBeUndefined();
+  await expect(vcallAsync(view, "setOnGenericMotionListener", "(Landroid/view/View$OnGenericMotionListener;)V", new JObj())).resolves.toBeUndefined();
 });
 
 test("ScaleGestureDetector consumes single-pointer input and retains feature flags", async () => {
@@ -102,8 +102,8 @@ test("ScaleGestureDetector consumes single-pointer input and retains feature fla
 test("screen capture callbacks can register on a device without capture events", async () => {
   const activity = rt.make("android/app/Activity");
   const callback = rt.make("android/app/Activity$ScreenCaptureCallback");
-  await expect(vcall(activity, "registerScreenCaptureCallback", "(Ljava/util/concurrent/Executor;Landroid/app/Activity$ScreenCaptureCallback;)V", null, callback)).resolves.toBeUndefined();
-  await expect(vcall(activity, "unregisterScreenCaptureCallback", "(Landroid/app/Activity$ScreenCaptureCallback;)V", callback)).resolves.toBeUndefined();
+  await expect(vcallAsync(activity, "registerScreenCaptureCallback", "(Ljava/util/concurrent/Executor;Landroid/app/Activity$ScreenCaptureCallback;)V", null, callback)).resolves.toBeUndefined();
+  await expect(vcallAsync(activity, "unregisterScreenCaptureCallback", "(Landroid/app/Activity$ScreenCaptureCallback;)V", callback)).resolves.toBeUndefined();
 });
 
 test("ShortcutManager getShortcuts filters to published dynamic shortcuts", async () => {
@@ -115,8 +115,8 @@ test("ShortcutManager getShortcuts filters to published dynamic shortcuts", asyn
 
 test("DataSetObserver base callbacks are no-ops", async () => {
   const observer = await newObj("android/database/DataSetObserver", "()V");
-  await expect(vcall(observer, "onChanged", "()V")).resolves.toBeUndefined();
-  await expect(vcall(observer, "onInvalidated", "()V")).resolves.toBeUndefined();
+  await expect(vcallAsync(observer, "onChanged", "()V")).resolves.toBeUndefined();
+  await expect(vcallAsync(observer, "onInvalidated", "()V")).resolves.toBeUndefined();
 });
 
 test("ReentrantLock excludes suspended threads and conditions restore recursive ownership", async () => {
@@ -341,14 +341,14 @@ test("Hashtable-style contains is containsValue and rejects null", async () => {
     await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "k", "v");
     expect(await vcall(map, "contains", "(Ljava/lang/Object;)Z", "v")).toBe(1);
     expect(await vcall(map, "contains", "(Ljava/lang/Object;)Z", "k")).toBe(0);
-    await expect(vcall(map, "contains", "(Ljava/lang/Object;)Z", null)).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
+    await expect(vcallAsync(map, "contains", "(Ljava/lang/Object;)Z", null)).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
   }
 });
 
 test("Double.valueOf(String) boxes a parsed value and rejects junk", async () => {
   const boxed = await scall("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;", " 2.5e1 ");
   expect(await vcall(boxed, "doubleValue", "()D")).toBe(25);
-  await expect(Promise.resolve().then(() => scall("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;", "x")))
+  await expect((async () => Promise.resolve().then(() => scall("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;", "x")))())
     .rejects.toMatchObject({ constructor: rt.link("java/lang/NumberFormatException").ctor });
 });
 
@@ -372,7 +372,7 @@ test("InputMethodManager reports no package-backed input methods", async () => {
 
 test("Runtime.exec(String) tokenizes the program and reports the unavailable process", async () => {
   const runtime = await scall("java/lang/Runtime", "getRuntime", "()Ljava/lang/Runtime;");
-  await expect(vcall(runtime, "exec", "(Ljava/lang/String;)Ljava/lang/Process;", "getprop ro.product.cpu.abi"))
+  await expect(vcallAsync(runtime, "exec", "(Ljava/lang/String;)Ljava/lang/Process;", "getprop ro.product.cpu.abi"))
     .rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor, msg: expect.stringContaining('"getprop"') });
 });
 
@@ -466,7 +466,7 @@ test("reached JDK utility primitives preserve their Java behavior", async () => 
   const lock = rt.make("java/lang/Object");
   const lockedWriter = await newObj("java/io/Writer", "(Ljava/lang/Object;)V", lock);
   expect(lockedWriter[lockField]).toBe(lock);
-  await expect(newObj("java/io/Writer", "(Ljava/lang/Object;)V", null)).rejects.toThrow();
+  await expect((async () => newObj("java/io/Writer", "(Ljava/lang/Object;)V", null))()).rejects.toThrow();
   await vcall(writer, "write", "(Ljava/lang/String;)V", "hello");
   expect(await vcall(writer, "size", "()I")).toBe(5);
   expect(Array.from(await vcall(writer, "toCharArray", "()[C"))).toEqual([104, 101, 108, 108, 111]);
@@ -514,7 +514,7 @@ test("network support objects retain packet and HTTP parameter state", async () 
   expect(await vcall(integer, "signum", "()I")).toBeGreaterThanOrEqual(0);
 
   const server = await newObj("java/net/ServerSocket");
-  await expect(vcall(server, "bind", "(Ljava/net/SocketAddress;)V", null)).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
+  await expect(vcallAsync(server, "bind", "(Ljava/net/SocketAddress;)V", null)).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
 });
 
 test("optional device services report their unavailable state", async () => {
@@ -613,7 +613,7 @@ test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own conf
   expect(dm.widthPixels).toBe(777);
   expect(dm.density).toBe(2);
   expect(host.dm.widthPixels).not.toBe(777);
-  await expect(newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V", null, null, null))
+  await expect((async () => newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V", null, null, null))())
     .rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
 });
 
@@ -668,7 +668,7 @@ test("List.containsAll, CharBuffer.wrap and EventObject", async () => {
 
   const event = await newObj("java/util/EventObject", "(Ljava/lang/Object;)V", "src");
   expect(await vcall(event, "getSource", "()Ljava/lang/Object;")).toBe("src");
-  await expect(newObj("java/util/EventObject", "(Ljava/lang/Object;)V", null)).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
+  await expect((async () => newObj("java/util/EventObject", "(Ljava/lang/Object;)V", null))()).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
 });
 
 test("DateUtils formats elapsed time and knows today", async () => {
@@ -694,7 +694,7 @@ test("ColorMatrix saturation, scale and concat feed a ColorMatrixColorFilter", a
   const { matrixColor } = await import("../src/android/graphics");
   const grey = new Float32Array(20); grey.set([0.213, 0.715, 0.072, 0, 0, 0.213, 0.715, 0.072, 0, 0, 0.213, 0.715, 0.072, 0, 0, 0, 0, 0, 1, 0]);
   expect(matrixColor(grey, 0xffff0000 | 0) >>> 0).toBe(0xff363636);
-  await expect(newObj("android/graphics/ColorMatrix", "([F)V", new Float32Array(3))).rejects.toMatchObject({ constructor: rt.link("java/lang/ArrayIndexOutOfBoundsException").ctor });
+  await expect((async () => newObj("android/graphics/ColorMatrix", "([F)V", new Float32Array(3)))()).rejects.toMatchObject({ constructor: rt.link("java/lang/ArrayIndexOutOfBoundsException").ctor });
 });
 
 test("UrlQuerySanitizer drops unregistered parameters unless allowed and sanitizes values", async () => {
@@ -735,9 +735,9 @@ test("Resources string getters throw NotFoundException for ids the table lacks",
   assets.host = host;
   const res = await newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V", assets, null, null) as JResources;
   const notFound = { constructor: rt.link("android/content/res/Resources$NotFoundException").ctor };
-  await expect(vcall(res, "getString", "(I)Ljava/lang/String;", 0x7f11240f)).rejects.toMatchObject(notFound);
-  await expect(vcall(res, "getText", "(I)Ljava/lang/CharSequence;", 0x7f11240f)).rejects.toMatchObject(notFound);
-  await expect(vcall(res, "getStringArray", "(I)[Ljava/lang/String;", 0x7f030001)).rejects.toMatchObject(notFound);
+  await expect(vcallAsync(res, "getString", "(I)Ljava/lang/String;", 0x7f11240f)).rejects.toMatchObject(notFound);
+  await expect(vcallAsync(res, "getText", "(I)Ljava/lang/CharSequence;", 0x7f11240f)).rejects.toMatchObject(notFound);
+  await expect(vcallAsync(res, "getStringArray", "(I)[Ljava/lang/String;", 0x7f030001)).rejects.toMatchObject(notFound);
   expect(await vcall(res, "getText", "(ILjava/lang/CharSequence;)Ljava/lang/CharSequence;", 0x7f11240f, "fallback")).toBe("fallback");
 });
 
@@ -835,7 +835,7 @@ test("ICU Currency exposes ISO codes, symbols, names, and fraction digits", asyn
 test("modern Java helpers preserve their public contracts", async () => {
   const hex = await scall("java/lang/Long", "valueOf", "(Ljava/lang/String;I)Ljava/lang/Long;", "7fffffffffffffff", 16);
   expect(await vcall(hex, "longValue", "()J")).toBe(9223372036854775807n);
-  await expect(Promise.resolve().then(() => scall("java/lang/Long", "valueOf", "(Ljava/lang/String;I)Ljava/lang/Long;", "8000000000000000", 16)))
+  await expect((async () => Promise.resolve().then(() => scall("java/lang/Long", "valueOf", "(Ljava/lang/String;I)Ljava/lang/Long;", "8000000000000000", 16)))())
     .rejects.toMatchObject({ constructor: rt.link("java/lang/NumberFormatException").ctor });
 
   expect(await scall("java/util/Objects", "toString", "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/String;", null, "fallback")).toBe("fallback");
@@ -848,7 +848,7 @@ test("modern Java helpers preserve their public contracts", async () => {
   expect(await vcall(stream, "count", "()J")).toBe(2n);
   const empty = await scall("java/util/Collections", "emptyIterator", "()Ljava/util/Iterator;");
   expect(await vcall(empty, "hasNext", "()Z")).toBe(0);
-  await expect(vcall(empty, "next", "()Ljava/lang/Object;")).rejects.toMatchObject({ constructor: rt.link("java/util/NoSuchElementException").ctor });
+  await expect(vcallAsync(empty, "next", "()Ljava/lang/Object;")).rejects.toMatchObject({ constructor: rt.link("java/util/NoSuchElementException").ctor });
 
   const byKey = await scall("java/util/Map$Entry", "comparingByKey", "()Ljava/util/Comparator;");
   const first = await newObj("java/util/AbstractMap$SimpleImmutableEntry", "(Ljava/lang/Object;Ljava/lang/Object;)V", "a", 2);
@@ -879,7 +879,7 @@ test("modern Java helpers preserve their public contracts", async () => {
   expect(await vcall(encoded, "remaining", "()I")).toBe(3);
   expect([...await vcall(encoded, "array", "()[B")]).toEqual([65, -62, -93]);
   const gnssClock = await scall("android/os/SystemClock", "currentGnssTimeClock", "()Ljava/time/Clock;");
-  await expect(vcall(gnssClock, "millis", "()J")).rejects.toMatchObject({ msg: "Gnss based time is not available." });
+  await expect(vcallAsync(gnssClock, "millis", "()J")).rejects.toMatchObject({ msg: "Gnss based time is not available." });
 });
 
 test("concrete maps, EnumSet factories, and primitive streams preserve Java dispatch", async () => {
@@ -964,7 +964,7 @@ test("Wi-Fi locks expose their held state", async () => {
   expect(await vcall(lock, "isHeld", "()Z")).toBe(1);
   await vcall(lock, "release", "()V");
   expect(await vcall(lock, "isHeld", "()Z")).toBe(0);
-  await expect(vcall(lock, "release", "()V"))
+  await expect(vcallAsync(lock, "release", "()V"))
     .rejects.toMatchObject({ constructor: rt.link("java/lang/RuntimeException").ctor });
   await vcall(lock, "setReferenceCounted", "(Z)V", 0);
   await vcall(lock, "release", "()V");

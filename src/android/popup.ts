@@ -1,8 +1,8 @@
 // Overlay layer: toasts, popup menus, dialogs-lite. Drawn above the decor by the shell.
 
-import { rt, JObj, type NativeSpec, callSelf, stubs, noops, fieldGetters, flagGetters, fieldSetters, flagSetters } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, callSelf, stubs, noops, fieldGetters, flagGetters, fieldSetters, flagSetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, vcallAsync } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
 import { JView, JFrameLP, uiState, invalidate, requestLayout, locationOnScreen, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST } from "./view";
 import { JMotionEvent } from "./motionevent";
@@ -163,37 +163,37 @@ class JPopupMenu extends JObj {
 rt.register({
   name: "android/widget/PopupMenu", ctor: JPopupMenu,
   methods: {
-    "<init>(Landroid/content/Context;Landroid/view/View;)V": async function (this: JPopupMenu, c: unknown, anchor: JView) {
+    "<init>(Landroid/content/Context;Landroid/view/View;)V": driven(function* (this: JPopupMenu, c: unknown, anchor: JView): Gen {
       this.jctx = c;
       this.anchor = anchor;
-      const { JMenu } = await import("./menu");
+      const { JMenu } = (yield import("./menu"));
       this.menu = new JMenu();
-    },
+    }),
     "getMenu()Landroid/view/Menu;": function (this: JPopupMenu) { return this.menu; },
-    "getMenuInflater()Landroid/view/MenuInflater;": async function (this: JPopupMenu) {
+    "getMenuInflater()Landroid/view/MenuInflater;": driven(function* (this: JPopupMenu): Gen {
       const info = rt.link("android/view/MenuInflater");
       const m = new info.ctor();
       m.jctx = this.jctx;
       return m;
-    },
-    "inflate(I)V": async function (this: JPopupMenu, id: number) {
+    }),
+    "inflate(I)V": driven(function* (this: JPopupMenu, id: number): Gen {
       const info = rt.link("android/view/MenuInflater");
       const m = new info.ctor();
       m.jctx = this.jctx;
-      await vcall(m, "inflate", "(ILandroid/view/Menu;)V", id, this.menu);
-    },
+      (yield vcall(m, "inflate", "(ILandroid/view/Menu;)V", id, this.menu));
+    }),
     "setOnMenuItemClickListener(Landroid/widget/PopupMenu$OnMenuItemClickListener;)V": function (this: JPopupMenu, l: unknown) {
       this.clickL = l;
     },
-    "show()V": async function (this: JPopupMenu) {
+    "show()V": driven(function* (this: JPopupMenu): Gen {
       const items = (this.menu?.items ?? []).filter((i: any) => i.visible).map((i: any) => ({ id: i.id, title: i.title }));
       showPopupMenu(this.anchor!, items, (id) => {
         const item = (this.menu?.items ?? []).find((i: any) => i.id === id);
         if (this.clickL && item) {
-          void vcall(this.clickL, "onMenuItemClick", "(Landroid/view/MenuItem;)Z", item).catch(reportUncaught);
+          void vcallAsync(this.clickL, "onMenuItemClick", "(Landroid/view/MenuItem;)Z", item).catch(reportUncaught);
         }
       });
-    },
+    }),
     "dismiss()V": () => {},
   },
 });
@@ -216,17 +216,17 @@ function windowSpec(dim: number, avail: number): number {
 rt.register({
   name: "webdroid/PopupDecorView", ctor: PopupDecorView, sup: "android/widget/FrameLayout",
   methods: {
-    "onMeasure(II)V": async function (this: PopupDecorView, wSpec: number, hSpec: number) {
+    "onMeasure(II)V": driven(function* (this: PopupDecorView, wSpec: number, hSpec: number): Gen {
       const p = this.popup!;
       const sup = rt.link("android/widget/FrameLayout").ctor.prototype[mangleMethod("onMeasure", "(II)V")];
-      await sup.call(this, windowSpec(p.w, specSize(wSpec)), windowSpec(p.h, specSize(hSpec)));
-    },
-    "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: PopupDecorView, ev: JMotionEvent) {
+      (yield sup.call(this, windowSpec(p.w, specSize(wSpec)), windowSpec(p.h, specSize(hSpec))));
+    }),
+    "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: PopupDecorView, ev: JMotionEvent): Gen {
       const p = this.popup!;
-      if (p.touchInterceptor && await vcall(p.touchInterceptor, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev)) return 1;
+      if (p.touchInterceptor && (yield vcall(p.touchInterceptor, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev))) return 1;
       return rt.link("android/widget/FrameLayout").ctor.prototype[M_dispatchTouch].call(this, ev);
-    },
-    "draw(Landroid/graphics/Canvas;)V": async function (this: PopupDecorView, cv: JCanvas) {
+    }),
+    "draw(Landroid/graphics/Canvas;)V": driven(function* (this: PopupDecorView, cv: JCanvas): Gen {
       const p = this.popup!;
       // the window's elevation shadow: cast from the background's shape (a filled rect is close
       // enough for the shadow itself; the real background paints over it)
@@ -243,8 +243,8 @@ rt.register({
         ctx.restore();
       }
       const sup = rt.link("android/widget/FrameLayout").ctor.prototype[M_drawableDraw];
-      await sup.call(this, cv);
-    },
+      (yield sup.call(this, cv));
+    }),
   },
 });
 

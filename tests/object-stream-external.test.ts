@@ -4,7 +4,7 @@ import { rt, JObj } from "../src/jvm/runtime";
 import { exportParcel, importParcel } from "../src/android/binder";
 import { DexFile } from "../src/jvm/dex";
 import { hexBytes, i8 } from "../src/jvm/abi";
-import { newObj, vcall, vcallOn, callOn, curThread, JThread } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallOn, callOn, curThread, JThread, vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.loadDex(new DexFile(new Uint8Array(await Bun.file(import.meta.dir + "/fixtures/SerializationProbe.dex").arrayBuffer())));
 rt.linkNatives();
@@ -62,7 +62,7 @@ test("strings use modified UTF and long strings retain back references", async (
 });
 test("incompatible serialVersionUID is rejected", async () => {
   const bytes = i8(hexBytes(oracle)); bytes[39] = 8;
-  await expect(vcall(await input(bytes), "readObject", "()Ljava/lang/Object;")).rejects.toMatchObject({ msg: expect.stringContaining("serialVersionUID") });
+  await expect(vcallAsync(await input(bytes), "readObject", "()Ljava/lang/Object;")).rejects.toMatchObject({ msg: expect.stringContaining("serialVersionUID") });
 });
 test("primitive UTF data crosses long block boundaries", async () => {
   const target = await newObj("java/io/ByteArrayOutputStream");

@@ -1,4 +1,4 @@
-import { JObj, noops, rt } from "../jvm/runtime";
+import { JObj, noops, rt, driven, type Gen } from "../jvm/runtime";
 import { defineException, JThrowable, vcall, vcallOn, curThread } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 import { newXmlPullParser, readerText } from "./xmlpull";
@@ -21,12 +21,12 @@ rt.register({ name: "org/xml/sax/SAXException", sup: "java/lang/Exception", ctor
   "getException()Ljava/lang/Exception;": function (this: JSaxException) { return this.exception; },
   "getMessage()Ljava/lang/String;": saxMessage,
   "getLocalizedMessage()Ljava/lang/String;": function () { return vcall(this, "getMessage", "()Ljava/lang/String;"); },
-  "toString()Ljava/lang/String;": async function (this: JSaxException) {
+  "toString()Ljava/lang/String;": driven(function* (this: JSaxException): Gen {
     if (this.exception) return vcall(this.exception, "toString", "()Ljava/lang/String;");
-    const name = await vcall(await vcall(this, "getClass", "()Ljava/lang/Class;"), "getName", "()Ljava/lang/String;");
-    const message = await vcall(this, "getLocalizedMessage", "()Ljava/lang/String;");
+    const name = (yield vcall((yield vcall(this, "getClass", "()Ljava/lang/Class;")), "getName", "()Ljava/lang/String;"));
+    const message = (yield vcall(this, "getLocalizedMessage", "()Ljava/lang/String;"));
     return name + (message === null ? "" : ": " + message);
-  },
+  }),
 } });
 defineException("org/xml/sax/SAXParseException", "org/xml/sax/SAXException");
 defineException("org/xml/sax/SAXNotRecognizedException", "org/xml/sax/SAXException");

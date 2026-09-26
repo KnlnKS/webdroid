@@ -1,8 +1,8 @@
 // android.animation: ValueAnimator/ObjectAnimator/AnimatorSet, driven from the frame loop via uiState.animHooks.
 
-import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod, jarray, jmethod } from "../jvm/abi";
-import { vcall, vcallMaybe, vcallOn, curThread, boxInt, box, JFloat } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread, boxInt, box, JFloat } from "../jvm/natives/jlang";
 import { toJsArray, newArrayList } from "../jvm/natives/jutil";
 import { uiState, invalidate, JView, guardCall } from "./view";
 import { reportUncaught } from "./os";
@@ -313,7 +313,7 @@ rt.register({
     "<init>(Landroid/graphics/Rect;)V": function (this: JRectEvaluator, r: JRect | null) { this.rect = r; },
     "evaluate(FLandroid/graphics/Rect;Landroid/graphics/Rect;)Landroid/graphics/Rect;": evaluateRect,
     "evaluate(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JRectEvaluator, f: number, a: JRect, b: JRect) {
-      return vcallMaybe(this, "evaluate", "(FLandroid/graphics/Rect;Landroid/graphics/Rect;)Landroid/graphics/Rect;", f, a, b);
+      return vcall(this, "evaluate", "(FLandroid/graphics/Rect;Landroid/graphics/Rect;)Landroid/graphics/Rect;", f, a, b);
     },
   },
 });
@@ -402,11 +402,11 @@ const vaMethods: NativeSpec["methods"] = {
   ...fieldGetters({ "getInterpolator()Landroid/animation/TimeInterpolator;": "interp", "getRepeatCount()I": "repeat",
     "getRepeatMode()I": "repeatMode" }),
   ...flagGetters({ "isPaused()Z": "paused" }),
-  "reverse()V": async function (this: JValueAnimator) {
+  "reverse()V": driven(function* (this: JValueAnimator): Gen {
     if (this.running) { this.reversed = !this.reversed; this.startT = guestNow() - (this.durationMs - (guestNow() - this.startT)); return; }
     this.startReversed = true;
-    await guardCall(this, M_start);
-  },
+    (yield guardCall(this, M_start));
+  }),
   "setCurrentPlayTime(J)V": function (this: JValueAnimator, t: bigint) { this.startT = guestNow() - Number(t); },
   "getCurrentPlayTime()J": function (this: JValueAnimator) { return BigInt(Math.max(0, Math.round(guestNow() - this.startT))); },
   "setCurrentFraction(F)V": function (this: JValueAnimator, f: number) { this.startT = guestNow() - f * this.durationMs; },
@@ -447,10 +447,10 @@ const vaMethods: NativeSpec["methods"] = {
   },
   "removeAllListeners()V": function (this: JValueAnimator) { this.animLs.length = 0; },
   "removeAllUpdateListeners()V": function (this: JValueAnimator) { this.updateLs.length = 0; },
-  "start()V": async function (this: JValueAnimator) {
+  "start()V": driven(function* (this: JValueAnimator): Gen {
     if (Number.isNaN(this.from) || Number.isNaN(this.to)) {
       // a single value animates from the property's current value (ValueAnimator: from 0)
-      const cur = this.target ? await currentValue(this.target, this.prop, this.propName, this.isInt) : 0;
+      const cur = this.target ? (yield currentValue(this.target, this.prop, this.propName, this.isInt)) : 0;
       if (Number.isNaN(this.from)) this.from = cur;
       if (Number.isNaN(this.to)) this.to = cur;
     }
@@ -461,10 +461,10 @@ const vaMethods: NativeSpec["methods"] = {
     this.running = true;
     // AOSP's start() animates fraction 0 at once, so getAnimatedValue() read from a start
     // listener or before the first frame is the first key, not whatever was there before.
-    if (this.objKeys) this.cur = await objAt(this, 0);
+    if (this.objKeys) this.cur = (yield objAt(this, 0));
     else { const v = this.keys ? this.keys[0] : this.from; this.cur = this.isInt ? Math.round(v) : v; }
     for (const l of [...this.animLs]) {
-      try { await vcall(l, "onAnimationStart", "(Landroid/animation/Animator;Z)V", this, this.reversed ? 1 : 0); } catch (e) { reportUncaught(e); }
+      try { (yield vcall(l, "onAnimationStart", "(Landroid/animation/Animator;Z)V", this, this.reversed ? 1 : 0)); } catch (e) { reportUncaught(e); }
     }
     const self = this;
     // one serialized main-looper job per tick, never a floating chain (see ViewPropertyAnimator)
@@ -476,13 +476,13 @@ const vaMethods: NativeSpec["methods"] = {
     };
     uiState.animHooks.add(hook);
     invalidate();
-  },
-  "cancel()V": async function (this: JValueAnimator) {
+  }),
+  "cancel()V": driven(function* (this: JValueAnimator): Gen {
     this.running = false;
     for (const l of [...this.animLs]) {
-      try { await vcall(l, "onAnimationCancel", "(Landroid/animation/Animator;)V", this); } catch (e) { reportUncaught(e); }
+      try { (yield vcall(l, "onAnimationCancel", "(Landroid/animation/Animator;)V", this)); } catch (e) { reportUncaught(e); }
     }
-  },
+  }),
   "end()V": function (this: JValueAnimator) { this.running = false; },
   "getAnimatedValue()Ljava/lang/Object;": function (this: JValueAnimator) { return boxedCur(this); },
   ...fieldSetters({ "setRepeatCount(I)V": "repeat", "setRepeatMode(I)V": "repeatMode" }),
@@ -547,20 +547,20 @@ rt.register({
     "setDuration(J)Landroid/animation/AnimatorSet;": setDur,
     "clone()Landroid/animation/AnimatorSet;": cloneAnimator,
     "playTogether([Landroid/animation/Animator;)V": function (this: JAnimatorSet, arr: JValueAnimator[]) { this.anims = [...(arr ?? [])]; },
-    "playTogether(Ljava/util/Collection;)V": async function (this: JAnimatorSet, c: unknown) { this.anims = [...await toJsArray(c)] as JValueAnimator[]; },
+    "playTogether(Ljava/util/Collection;)V": driven(function* (this: JAnimatorSet, c: unknown): Gen { this.anims = [...(yield toJsArray(c))] as JValueAnimator[]; }),
     "playSequentially([Landroid/animation/Animator;)V": function (this: JAnimatorSet, arr: JValueAnimator[]) { this.anims = [...(arr ?? [])]; this.sequential = true; },
-    "playSequentially(Ljava/util/List;)V": async function (this: JAnimatorSet, c: unknown) { this.anims = [...await toJsArray(c)] as JValueAnimator[]; this.sequential = true; },
+    "playSequentially(Ljava/util/List;)V": driven(function* (this: JAnimatorSet, c: unknown): Gen { this.anims = [...(yield toJsArray(c))] as JValueAnimator[]; this.sequential = true; }),
     "getChildAnimations()Ljava/util/ArrayList;": function (this: JAnimatorSet) { return newArrayList([...this.anims]); },
-    "start()V": async function (this: JAnimatorSet) {
+    "start()V": driven(function* (this: JAnimatorSet): Gen {
       const thread = curThread;
       this.running = true;
       for (const l of [...this.animLs]) {
-        try { await vcallOn(thread, l, "onAnimationStart", "(Landroid/animation/Animator;)V", this); } catch (e) { reportUncaught(e); }
+        try { (yield vcallOn(thread, l, "onAnimationStart", "(Landroid/animation/Animator;)V", this)); } catch (e) { reportUncaught(e); }
       }
       if (this.sequential) {
         for (let i = 0; i + 1 < this.anims.length; i++) this.anims[i].next = this.anims[i + 1];
-        if (this.anims.length) await vcallOn(thread, this.anims[0], "start", "()V");
-      } else for (const a of this.anims) await vcallOn(thread, a, "start", "()V");
+        if (this.anims.length) (yield vcallOn(thread, this.anims[0], "start", "()V"));
+      } else for (const a of this.anims) (yield vcallOn(thread, a, "start", "()V"));
       const total = this.sequential ? this.anims.reduce((s, a) => s + a.delayMs + a.durationMs, 0)
         : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
       setGuestTimeout(() => {
@@ -572,8 +572,8 @@ rt.register({
           if (this.next) await guardCall(this.next, M_start);
         }).catch(reportUncaught);
       }, total);
-    },
-    "cancel()V": async function (this: JAnimatorSet) { this.running = false; for (const a of this.anims) await guardCall(a, M_cancel); },
+    }),
+    "cancel()V": driven(function* (this: JAnimatorSet): Gen { this.running = false; for (const a of this.anims) (yield guardCall(a, M_cancel)); }),
     "end()V": function (this: JAnimatorSet) { this.running = false; for (const a of this.anims) a.running = false; },
     "play(Landroid/animation/Animator;)Landroid/animation/AnimatorSet$Builder;": function (this: JAnimatorSet, a: JValueAnimator) {
       const b = new JAnimatorSetBuilder(); b.set = this; b.anchor = a;
@@ -584,7 +584,7 @@ rt.register({
       const d = this.sequential ? this.anims.reduce((s, a) => s + a.delayMs + a.durationMs, 0) : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
       return BigInt(this.delayMs + d);
     },
-    "reverse()V": async function (this: JAnimatorSet) { for (const a of [...this.anims].reverse()) await vcall(a, "reverse", "()V"); },
+    "reverse()V": driven(function* (this: JAnimatorSet): Gen { for (const a of [...this.anims].reverse()) (yield vcall(a, "reverse", "()V")); }),
     "setCurrentPlayTime(J)V": function (this: JAnimatorSet, t: bigint) { for (const a of this.anims) a.startT = guestNow() - Number(t); },
     "setInterpolator(Landroid/animation/TimeInterpolator;)V": function (this: JAnimatorSet, i: unknown) { this.interp = i; for (const a of this.anims) a.interp = i; },
     "isRunning()Z": function (this: JAnimatorSet) { return this.running || this.anims.some((a) => a.running) ? 1 : 0; },
@@ -714,13 +714,13 @@ rt.register({
     },
     "getTarget()Landroid/view/View;": function (this: JStateListAnimator) { return this.target; },
     // AOSP's package-private hook View.drawableStateChanged() calls with getDrawableState()
-    "setState([I)V": async function (this: JStateListAnimator, state: Int32Array) {
+    "setState([I)V": driven(function* (this: JStateListAnimator, state: Int32Array): Gen {
       const hit = this.tuples.find((t) => stateSetMatches(t.spec, state))?.anim ?? null;
       if (hit === this.cur) return;
-      if (this.cur) await guardCall(this.cur, M_cancel);
+      if (this.cur) (yield guardCall(this.cur, M_cancel));
       this.cur = hit;
-      if (hit) await guardCall(hit, M_start);
-    },
+      if (hit) (yield guardCall(hit, M_start));
+    }),
     "jumpToCurrentState()V": function (this: JStateListAnimator) { if (this.cur) this.cur.running = false; },
     "clone()Ljava/lang/Object;": function (this: JStateListAnimator) {
       const c = new JStateListAnimator();

@@ -1,7 +1,7 @@
 // android.util.Base64. Not java.util.Base64: the flag word, the trailing newline and the
 // 76-char wrapping are AOSP-specific and apps round-trip against them.
 
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { JOutputStream } from "../jvm/natives/jio";
 
@@ -104,14 +104,14 @@ rt.register({
       for (let i = 0; i < l; i++) this.chunks.push(b[o + i] & 0xff);
     },
     "flush()V": function (this: JB64OS) { return this.out ? vcall(this.out, "flush", "()V") : undefined; },
-    "close()V": async function (this: JB64OS) {
+    "close()V": driven(function* (this: JB64OS): Gen {
       const body = enc(Int8Array.from(this.chunks), 0, this.chunks.length, this.flags);
       this.chunks.length = 0;
       if (!this.out) return;
-      await vcall(this.out, "write", "([BII)V", body, 0, body.length);
-      await vcall(this.out, "flush", "()V");
-      if (!(this.flags & NO_CLOSE)) await vcall(this.out, "close", "()V");
-    },
+      (yield vcall(this.out, "write", "([BII)V", body, 0, body.length));
+      (yield vcall(this.out, "flush", "()V"));
+      if (!(this.flags & NO_CLOSE)) (yield vcall(this.out, "close", "()V"));
+    }),
   },
 });
 

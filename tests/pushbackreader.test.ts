@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 
@@ -15,8 +15,8 @@ test("PushbackReader replays characters in order and enforces capacity", async (
   expect(String.fromCharCode(...out)).toBe("yzbc");
   await vcall(reader, "unread", "(I)V", 81);
   await vcall(reader, "unread", "(I)V", 82);
-  await expect(vcall(reader, "unread", "(I)V", 83)).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
+  await expect(vcallAsync(reader, "unread", "(I)V", 83)).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
   expect(await vcall(reader, "read", "()I")).toBe(82);
   await vcall(reader, "close", "()V");
-  await expect(vcall(reader, "read", "()I")).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
+  await expect(vcallAsync(reader, "read", "()I")).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
 });

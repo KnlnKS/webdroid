@@ -1,7 +1,7 @@
-import { rt, JObj, type NativeSpec, fieldGetters, fieldSetters, flagSetters } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, fieldGetters, fieldSetters, flagSetters, driven, type Gen } from "../jvm/runtime";
 import { JBundle, reportUncaught, uptimeMillis } from "./os";
 import { parcelCreator, type JParcel } from "./parcel";
-import { newObj, vcall } from "../jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 
 rt.markers("android/location/LocationListener");
@@ -19,7 +19,7 @@ const geocodeName = (name: string | null, count: number) => {
 };
 const geocodeCallback = (listener: unknown) => {
   if (listener === null) rt.npe();
-  setTimeout(() => void vcall(listener, "onGeocode", "(Ljava/util/List;)V", newArrayList()).catch(reportUncaught), 0);
+  setTimeout(() => void vcallAsync(listener, "onGeocode", "(Ljava/util/List;)V", newArrayList()).catch(reportUncaught), 0);
 };
 rt.markers("android/location/Geocoder$GeocodeListener");
 rt.register({
@@ -118,9 +118,9 @@ const locMethods: NonNullable<NativeSpec["methods"]> = {
   "getElapsedRealtimeAgeMillis(J)J": function (this: JLocation, now: bigint) { return now - this.elapsed / 1000000n; },
   "isMock()Z": function (this: JLocation) { return +this.mock; },
   "isFromMockProvider()Z": function (this: JLocation) { return +this.mock; },
-  "setExtras(Landroid/os/Bundle;)V": async function (this: JLocation, value: JBundle | null) {
-    this.extras = value ? await newObj("android/os/Bundle", "(Landroid/os/Bundle;)V", value) as JBundle : null;
-  },
+  "setExtras(Landroid/os/Bundle;)V": driven(function* (this: JLocation, value: JBundle | null): Gen {
+    this.extras = value ? (yield newObj("android/os/Bundle", "(Landroid/os/Bundle;)V", value)) as JBundle : null;
+  }),
   "isComplete()Z": function (this: JLocation) { return +(this.provider !== null && "Accuracy" in this.opt && this.time !== 0n && this.elapsed !== 0n); },
   ...fieldSetters({ "<init>(Ljava/lang/String;)V": "provider", "setElapsedRealtimeNanos(J)V": "elapsed",
     "setProvider(Ljava/lang/String;)V": "provider", "setLatitude(D)V": "lat", "setLongitude(D)V": "lon",
@@ -137,20 +137,20 @@ const locMethods: NonNullable<NativeSpec["methods"]> = {
     if (results.length > 1) results[1] = value.initial; if (results.length > 2) results[2] = value.final;
   },
   "describeContents()I": () => 0,
-  "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JLocation, p: JParcel) {
-    await vcall(p, "writeString8", "(Ljava/lang/String;)V", this.provider);
+  "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JLocation, p: JParcel): Gen {
+    (yield vcall(p, "writeString8", "(Ljava/lang/String;)V", this.provider));
     let mask = this.mock ? 16 : 0;
     for (const [name, , , bit] of optional) if (name in this.opt) mask |= bit;
-    await vcall(p, "writeInt", "(I)V", mask);
-    await vcall(p, "writeLong", "(J)V", this.time);
-    await vcall(p, "writeLong", "(J)V", this.elapsed);
-    if (mask & 256) await vcall(p, "writeDouble", "(D)V", this.opt.ElapsedRealtimeUncertaintyNanos);
-    await vcall(p, "writeDouble", "(D)V", this.lat);
-    await vcall(p, "writeDouble", "(D)V", this.lon);
+    (yield vcall(p, "writeInt", "(I)V", mask));
+    (yield vcall(p, "writeLong", "(J)V", this.time));
+    (yield vcall(p, "writeLong", "(J)V", this.elapsed));
+    if (mask & 256) (yield vcall(p, "writeDouble", "(D)V", this.opt.ElapsedRealtimeUncertaintyNanos));
+    (yield vcall(p, "writeDouble", "(D)V", this.lat));
+    (yield vcall(p, "writeDouble", "(D)V", this.lon));
     for (const [name, , d, bit] of optional) if (bit !== 256 && mask & bit)
-      await vcall(p, d === "D" ? "writeDouble" : "writeFloat", `(${d})V`, this.opt[name]);
-    await vcall(p, "writeBundle", "(Landroid/os/Bundle;)V", this.extras);
-  },
+      (yield vcall(p, d === "D" ? "writeDouble" : "writeFloat", `(${d})V`, this.opt[name]));
+    (yield vcall(p, "writeBundle", "(Landroid/os/Bundle;)V", this.extras));
+  }),
 };
 for (const [name, suffix, d] of optional) {
   locMethods[`get${name}${suffix}()${d}`] = function (this: JLocation) { return this.opt[name] ?? 0; };

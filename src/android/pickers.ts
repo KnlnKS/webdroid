@@ -1,8 +1,8 @@
 // Android time and date pickers use the shared AlertDialog chrome.
 
-import { rt, type NativeSpec } from "../jvm/runtime";
+import { rt, type NativeSpec, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
-import { vcall, boxInt } from "../jvm/natives/jlang";
+import { vcall, boxInt, vcallAsync } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
 import { JAlertDialog, initDialog } from "./dialog";
 import { JView, JLinearLP, attachView, addUnattachedView, detachView, requestLayout, invalidate, initViewFromCtx, inheritContext } from "./view";
@@ -56,7 +56,7 @@ function refreshPicker(tp: JTimePicker) {
 function onChanged(tp: JTimePicker) {
   refreshPicker(tp);
   if (tp.changeL) {
-    void vcall(tp.changeL, "onTimeChanged", "(Landroid/widget/TimePicker;II)V", tp, tp.hourVal, tp.minuteVal).catch(reportUncaught);
+    void vcallAsync(tp.changeL, "onTimeChanged", "(Landroid/widget/TimePicker;II)V", tp, tp.hourVal, tp.minuteVal).catch(reportUncaught);
   }
 }
 
@@ -179,14 +179,14 @@ async function rebuildPicker(tp: JTimePicker) {
 }
 
 const timePickerMethods: NativeSpec["methods"] = {
-  "<init>(Landroid/content/Context;)V": async function (this: JTimePicker, c: unknown) {
-    await initViewFromCtx(this, c, null);
+  "<init>(Landroid/content/Context;)V": driven(function* (this: JTimePicker, c: unknown): Gen {
+    (yield initViewFromCtx(this, c, null));
     return buildPicker(this);
-  },
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JTimePicker, c: unknown, set: JAttrSet | null) {
-    await initViewFromCtx(this, c, set);
+  }),
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JTimePicker, c: unknown, set: JAttrSet | null): Gen {
+    (yield initViewFromCtx(this, c, set));
     return buildPicker(this);
-  },
+  }),
   "getHour()I": function (this: JTimePicker) { return this.hourVal; },
   "setHour(I)V": function (this: JTimePicker, h: number) { this.hourVal = h | 0; onChanged(this); },
   "getMinute()I": function (this: JTimePicker) { return this.minuteVal; },
@@ -313,14 +313,14 @@ async function buildDatePicker(p: JDatePicker) {
 }
 
 rt.register({ name: "android/widget/DatePicker", ctor: JDatePicker, sup: "android/widget/LinearLayout", methods: {
-  "<init>(Landroid/content/Context;)V": async function (this: JDatePicker, c: unknown) {
-    await initViewFromCtx(this, c, null);
+  "<init>(Landroid/content/Context;)V": driven(function* (this: JDatePicker, c: unknown): Gen {
+    (yield initViewFromCtx(this, c, null));
     return buildDatePicker(this);
-  },
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JDatePicker, c: unknown, set: JAttrSet | null) {
-    await initViewFromCtx(this, c, set);
+  }),
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JDatePicker, c: unknown, set: JAttrSet | null): Gen {
+    (yield initViewFromCtx(this, c, set));
     return buildDatePicker(this);
-  },
+  }),
   "init(IIILandroid/widget/DatePicker$OnDateChangedListener;)V": function (this: JDatePicker, year: number, month: number, day: number, listener: unknown) {
     normalizeDate(this, year, month, day);
     this.changeL = listener;

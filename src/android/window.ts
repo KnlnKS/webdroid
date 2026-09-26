@@ -1,5 +1,5 @@
 import { AID, rvInt, rvColor, themeOf, type JTheme } from "./res";
-import { rt, JObj, callSelf, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import type { JFrameLayout } from "./layouts";
 import type { JActionBarView } from "./menu";
@@ -95,12 +95,12 @@ rt.register({
     "getEnterTransition()Landroid/transition/Transition;": function (this: JWindow) { return this.enterTransition; },
     "setExitTransition(Landroid/transition/Transition;)V": function (this: JWindow, transition: unknown) { this.exitTransition = transition; },
     "getExitTransition()Landroid/transition/Transition;": function (this: JWindow) { return this.exitTransition; },
-    "getDecorView()Landroid/view/View;": async function (this: JWindow) {
+    "getDecorView()Landroid/view/View;": driven(function* (this: JWindow): Gen {
       // AOSP installs the real decor on first access (appcompat asks for it before
       // setContentView); dialog windows materialize a bare one so insets helpers can operate
-      if (!this.decor && this.activity instanceof JActivity) await ensureDecor(this.activity);
-      return this.decor ??= await newObj("android/widget/FrameLayout", "(Landroid/content/Context;)V", this.activity);
-    },
+      if (!this.decor && this.activity instanceof JActivity) (yield ensureDecor(this.activity));
+      return this.decor ??= (yield newObj("android/widget/FrameLayout", "(Landroid/content/Context;)V", this.activity));
+    }),
     "isFloating()Z": function (this: JWindow) {
       const theme = this.decor?.theme ?? themeOf(this.activity);
       return theme ? +!!rvInt(theme.res, theme.lookup(AID("windowIsFloating")), 0) : 0;
@@ -109,9 +109,9 @@ rt.register({
     "superDispatchTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JWindow, event: unknown) {
       return this.decor ? vcall(this.decor, "dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z", event) : 0;
     },
-    "findViewById(I)Landroid/view/View;": async function (this: JWindow, id: number) {
-      return findById(await vcall(this, "getDecorView", "()Landroid/view/View;"), id);
-    },
+    "findViewById(I)Landroid/view/View;": driven(function* (this: JWindow, id: number): Gen {
+      return findById((yield vcall(this, "getDecorView", "()Landroid/view/View;")), id);
+    }),
     "setContentView(I)V": function (this: JWindow, id: number) {
       if (this.dialog) return dialogNative("setContentView", "(I)V").call(this.dialog, id);
       return callSelf(activityMethods, "setContentView(I)V", this.activity, id);
@@ -150,12 +150,12 @@ rt.register({
       if (this.activity && this.decor) this.decor.background = d;
       invalidate();
     },
-    "setBackgroundDrawableResource(I)V": async function (this: JWindow, id: number) {
+    "setBackgroundDrawableResource(I)V": driven(function* (this: JWindow, id: number): Gen {
       if (!appHost) return;
-      this.bg = await loadDrawable(appHost.res, id, appHost.theme); this.bgSet = true;
+      this.bg = (yield loadDrawable(appHost.res, id, appHost.theme)); this.bgSet = true;
       if (this.activity && this.decor) this.decor.background = this.bg;
       invalidate();
-    },
+    }),
     "getAttributes()Landroid/view/WindowManager$LayoutParams;": function (this: JWindow) {
       const lp = rt.make("android/view/WindowManager$LayoutParams");
       lp.flags = this.flags;
@@ -277,7 +277,7 @@ class JWindowMetrics extends JObj {}
 rt.register({
   name: "android/view/WindowMetrics", ctor: JWindowMetrics,
   methods: {
-    "getBounds()Landroid/graphics/Rect;": async () => newObj("android/graphics/Rect", "(IIII)V", 0, 0, device.width, device.height),
+    "getBounds()Landroid/graphics/Rect;": driven(function* (): Gen  { return newObj("android/graphics/Rect", "(IIII)V", 0, 0, device.width, device.height); }),
     "getDensity()F": () => device.density,
     "getWindowInsets()Landroid/view/WindowInsets;": () => rootWindowInsets(),
   },
@@ -289,20 +289,20 @@ rt.register({
     "getCurrentWindowMetrics()Landroid/view/WindowMetrics;": () => new JWindowMetrics(),
     "getMaximumWindowMetrics()Landroid/view/WindowMetrics;": () => new JWindowMetrics(),
     "isCrossWindowBlurEnabled()Z": () => 0,
-    "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": async (v: JView, lp: JLayoutParams & { x?: number; y?: number }) => {
+    "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (v: JView, lp: JLayoutParams & { x?: number; y?: number }): Gen  {
       v.lp = lp;
       v.windowOwner ??= rt.make("android/view/Window");
       addOverlay(v, lp.x ?? 0, lp.y ?? 0);
-      await dispatchAttached(v);
-    },
-    "removeView(Landroid/view/View;)V": async (v: JView) => {
+      (yield dispatchAttached(v));
+    }),
+    "removeView(Landroid/view/View;)V": driven(function* (v: JView): Gen  {
       removeOverlay(v);
-      await dispatchDetached(v);
-    },
-    "removeViewImmediate(Landroid/view/View;)V": async (v: JView) => {
+      (yield dispatchDetached(v));
+    }),
+    "removeViewImmediate(Landroid/view/View;)V": driven(function* (v: JView): Gen  {
       removeOverlay(v);
-      await dispatchDetached(v);
-    },
+      (yield dispatchDetached(v));
+    }),
     "updateViewLayout(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": (v: JView, lp: JLayoutParams & { x?: number; y?: number }) => {
       v.lp = lp;
       const o = overlays.find((o) => o.view === v);

@@ -3,7 +3,7 @@
 // (each member a FontFace with its own weight/style, which is exactly how CSS selects within a
 // family); a Typeface names that family (plus fallbacks) with a weight and slant.
 
-import { rt, JObj, type NativeSpec, fieldGetters } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, fieldGetters, driven, type Gen } from "../jvm/runtime";
 import { jarray, i8 } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { parseAXML, attr } from "./axml";
@@ -264,13 +264,13 @@ rt.register({
       this.fonts.push(f);
       return this;
     },
-    "build()Landroid/graphics/fonts/FontFamily;": async function (this: JFontFamilyBuilder) {
+    "build()Landroid/graphics/fonts/FontFamily;": driven(function* (this: JFontFamilyBuilder): Gen {
       const fam = new JFontFamily();
       fam.fonts = this.fonts.slice();
       fam.css = "wd-font-" + (++fontSeq);
-      for (const f of fam.fonts) await registerFace(f, fam.css);
+      for (const f of fam.fonts) (yield registerFace(f, fam.css));
       return fam;
-    },
+    }),
   },
 });
 rt.register({

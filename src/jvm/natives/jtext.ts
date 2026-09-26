@@ -1,8 +1,8 @@
 // java.text: DateFormat/SimpleDateFormat, NumberFormat/DecimalFormat, Collator, ParsePosition,
 // CharacterIterator, BreakIterator, Normalizer. Formatting is en-only and pattern-driven.
 
-import { rt, JObj, type NativeSpec } from "../runtime";
-import { vcall, vcallMaybe, vcallOn, curThread, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble } from "./jlang";
+import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
+import { vcall, vcallOn, curThread, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble } from "./jlang";
 import { strArray, jarray, utf8, slashName, dotName, charsToString } from "../abi";
 import { mkIter, toJsArray } from "./jutil";
 import { JDate, JCalendar, localTz, MONTHS, DAYS, pad } from "./jtime";
@@ -293,7 +293,7 @@ const nfMethods: NativeSpec["methods"] = {
   "format(Ljava/lang/Object;)Ljava/lang/String;": function (this: JNumberFormat, o: unknown) {
     if (typeof o === "number" || typeof o === "bigint") return this.fmt(o);
     if (!rt.iof(o, "java/lang/Number")) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Cannot format given Object as a Number");
-    const n = vcallMaybe(o, "doubleValue", "()D");
+    const n = vcall(o, "doubleValue", "()D");
     return n instanceof Promise ? n.then((v: number) => this.fmt(v)) : this.fmt(n);
   },
   "parse(Ljava/lang/String;)Ljava/lang/Number;": function (this: JNumberFormat, s: string) {
@@ -506,15 +506,15 @@ rt.register({
     ...Object.fromEntries(([["Line", "line"], ["Word", "word"], ["Character", "char"], ["Sentence", "sentence"]] as const).flatMap(([n, kind]) =>
       ["", "Ljava/util/Locale;"].map((a) => [`static get${n}Instance(${a})Ljava/text/BreakIterator;`, biFactory(kind)]))),
     "setText(Ljava/lang/String;)V": function (this: JBreakIter, t: string) { this.text = t ?? ""; this.pos = 0; },
-    "setText(Ljava/text/CharacterIterator;)V": async function (this: JBreakIter, ci: JObj) {
+    "setText(Ljava/text/CharacterIterator;)V": driven(function* (this: JBreakIter, ci: JObj): Gen {
       let s = "";
       if (ci) {
-        for (let c = await vcall(ci, "first", "()C"); c !== CHAR_ITER_DONE; c = await vcall(ci, "next", "()C")) {
+        for (let c = (yield vcall(ci, "first", "()C")); c !== CHAR_ITER_DONE; c = (yield vcall(ci, "next", "()C"))) {
           s += String.fromCharCode(c);
         }
       }
       this.text = s; this.pos = 0;
-    },
+    }),
     "first()I": function (this: JBreakIter) { this.pos = 0; return 0; },
     "last()I": function (this: JBreakIter) { this.pos = this.text.length; return this.pos; },
     "current()I": function (this: JBreakIter) { return this.pos; },
@@ -584,8 +584,8 @@ rt.register({
   methods: {
     "static load(Ljava/lang/Class;)Ljava/util/ServiceLoader;": serviceLoader,
     "static load(Ljava/lang/Class;Ljava/lang/ClassLoader;)Ljava/util/ServiceLoader;": serviceLoader,
-    "iterator()Ljava/util/Iterator;": async function (this: JServiceLoader) {
-      return mkIter(await serviceInstances(this.svcName));
-    },
+    "iterator()Ljava/util/Iterator;": driven(function* (this: JServiceLoader): Gen {
+      return mkIter((yield serviceInstances(this.svcName)));
+    }),
   },
 });

@@ -17,6 +17,6 @@ test("ContentUris appends and parses signed long IDs", async () => {
 
 test("ContentUris rejects a path without a decimal long ID", async () => {
   const uri = scall("android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;", "content://media/items/not-an-id");
-  await expect(Promise.resolve().then(() => scall("android/content/ContentUris", "parseId", "(Landroid/net/Uri;)J", uri)))
+  await expect((async () => Promise.resolve().then(() => scall("android/content/ContentUris", "parseId", "(Landroid/net/Uri;)J", uri)))())
     .rejects.toMatchObject({ constructor: { $i: { name: "java/lang/NumberFormatException" } } });
 });

@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { type JFile, mkFile, readStreamFully, vfs } from "../jvm/natives/jio";
 import { i8 } from "../jvm/abi";
@@ -22,23 +22,23 @@ rt.register({ name: "android/util/AtomicFile", ctor: JAtomicFile, methods: {
     vfs.mkdir(this.base.slice(0, this.base.lastIndexOf("/")));
     return newObj("java/io/FileOutputStream", "(Ljava/lang/String;)V", this.base + ".new");
   },
-  "finishWrite(Ljava/io/FileOutputStream;)V": async function (this: JAtomicFile, stream: unknown) {
+  "finishWrite(Ljava/io/FileOutputStream;)V": driven(function* (this: JAtomicFile, stream: unknown): Gen {
     if (stream == null) return;
-    await vcall(stream, "close", "()V");
+    (yield vcall(stream, "close", "()V"));
     rename(this.base + ".new", this.base);
-    await vfs.flush();
-  },
-  "failWrite(Ljava/io/FileOutputStream;)V": async function (this: JAtomicFile, stream: unknown) {
+    (yield vfs.flush());
+  }),
+  "failWrite(Ljava/io/FileOutputStream;)V": driven(function* (this: JAtomicFile, stream: unknown): Gen {
     if (stream == null) return;
-    await vcall(stream, "close", "()V");
+    (yield vcall(stream, "close", "()V"));
     vfs.delete(this.base + ".new");
-  },
+  }),
   "openRead()Ljava/io/FileInputStream;": openRead,
-  "readFully()[B": async function (this: JAtomicFile) {
-    const stream = await openRead.call(this);
-    try { return i8(await readStreamFully(stream)); }
-    finally { await vcall(stream, "close", "()V"); }
-  },
+  "readFully()[B": driven(function* (this: JAtomicFile): Gen {
+    const stream = (yield openRead.call(this));
+    try { return i8((yield readStreamFully(stream))); }
+    finally { (yield vcall(stream, "close", "()V")); }
+  }),
   "delete()V": function (this: JAtomicFile) {
     vfs.delete(this.base); vfs.delete(this.base + ".new"); vfs.delete(this.base + ".bak");
   },

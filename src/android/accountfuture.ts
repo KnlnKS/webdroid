@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { curThread, mainThread, park, vcall, type JThread } from "../jvm/natives/jlang";
 import { JFnRunnable, mainHandler, type JHandler } from "./os";
 
@@ -46,12 +46,12 @@ export function accountFuture(callback: unknown, handler: JHandler | null, value
   return future;
 }
 rt.register({ name: "webdroid/AccountFuture", ctor: JAccountFuture, ifaces: ["android/accounts/AccountManagerFuture"], methods: {
-  "getResult()Ljava/lang/Object;": async function (this: JAccountFuture) { return this.result(); },
-  "getResult(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": async function (this: JAccountFuture, timeout: bigint, unit: unknown) {
+  "getResult()Ljava/lang/Object;": driven(function* (this: JAccountFuture): Gen { return this.result(); }),
+  "getResult(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": driven(function* (this: JAccountFuture, timeout: bigint, unit: unknown): Gen {
     if (this.pending && curThread === mainThread) throw rt.mkThrowable("java/lang/IllegalStateException", "AccountManagerFuture cannot block the main thread");
     const thread = curThread;
-    return this.result(Number(await vcall(unit, "toMillis", "(J)J", timeout)), thread);
-  },
+    return this.result(Number((yield vcall(unit, "toMillis", "(J)J", timeout))), thread);
+  }),
   "isDone()Z": function (this: JAccountFuture) { return +!this.pending; },
   "isCancelled()Z": function (this: JAccountFuture) { return +(this.outcome.kind === "canceled"); },
   "cancel(Z)Z": function (this: JAccountFuture) { return this.finish({ kind: "canceled" }); },

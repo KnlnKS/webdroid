@@ -1,5 +1,5 @@
 import type { pki } from "node-forge";
-import { JObj, rt } from "../runtime";
+import { JObj, rt, driven, type Gen } from "../runtime";
 import { jarray } from "../abi";
 import { vcall } from "./jlang";
 import { mkBI } from "./jmath";
@@ -47,8 +47,8 @@ rt.register({
     "getAlgorithm()Ljava/lang/String;": () => "RSA",
     "getFormat()Ljava/lang/String;": () => "X.509",
     "getEncoded()[B": function (this: JRsaPublicKey) { return new Int8Array(this.encoded); },
-    "getModulus()Ljava/math/BigInteger;": async function (this: JRsaPublicKey) { return bigInt((await this.key()).n); },
-    "getPublicExponent()Ljava/math/BigInteger;": async function (this: JRsaPublicKey) { return bigInt((await this.key()).e); },
+    "getModulus()Ljava/math/BigInteger;": driven(function* (this: JRsaPublicKey): Gen { return bigInt(((yield this.key())).n); }),
+    "getPublicExponent()Ljava/math/BigInteger;": driven(function* (this: JRsaPublicKey): Gen { return bigInt(((yield this.key())).e); }),
     "equals(Ljava/lang/Object;)Z": function (this: JRsaPublicKey, o: unknown) { return o instanceof JRsaPublicKey && o.encoded.length === this.encoded.length && o.encoded.every((b, i) => b === this.encoded[i]) ? 1 : 0; },
     "hashCode()I": function (this: JRsaPublicKey) { let h = 0; for (const b of this.encoded) h = (Math.imul(h, 31) + b) | 0; return h; },
   },
@@ -56,8 +56,8 @@ rt.register({
 rt.register({
   name: "webdroid/RsaPrivateKey", ctor: JRsaPrivateKey, ifaces: ["java/security/interfaces/RSAPrivateKey", "java/security/interfaces/RSAKey", "java/security/PrivateKey", "java/security/Key"],
   methods: {
-    "getModulus()Ljava/math/BigInteger;": async function (this: JRsaPrivateKey) { return bigInt((await this.key()).n); },
-    "getPrivateExponent()Ljava/math/BigInteger;": async function (this: JRsaPrivateKey) { return bigInt((await this.key()).d); },
+    "getModulus()Ljava/math/BigInteger;": driven(function* (this: JRsaPrivateKey): Gen { return bigInt(((yield this.key())).n); }),
+    "getPrivateExponent()Ljava/math/BigInteger;": driven(function* (this: JRsaPrivateKey): Gen { return bigInt(((yield this.key())).d); }),
     "getAlgorithm()Ljava/lang/String;": () => "RSA",
     "getFormat()Ljava/lang/String;": function (this: JRsaPrivateKey) { return this.stored ? null : "PKCS#8"; },
     "getEncoded()[B": function (this: JRsaPrivateKey) { return this.stored ? null : new Int8Array(this.encoded); },

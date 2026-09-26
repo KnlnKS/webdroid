@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { i8 } from "../jvm/abi";
 import { parcelCreator, readInt, readString, writeInt, writeString, type JParcel } from "./parcel";
 import { vcall } from "../jvm/natives/jlang";
@@ -129,19 +129,19 @@ rt.register({
     "putBlob([BII)Z": function (this: JCursorWindow, value: Int8Array, row: number, col: number) { return this.put(value.slice(), row, col); },
     "describeContents()I": () => 0,
     "static newFromParcel(Landroid/os/Parcel;)Landroid/database/CursorWindow;": fromParcel,
-    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JCursorWindow, parcel: JParcel, flags: number) {
+    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JCursorWindow, parcel: JParcel, flags: number): Gen {
       writeInt(parcel, this.start);
       writeInt(parcel, this.columns);
       writeInt(parcel, this.rows.length);
       for (const row of this.rows) for (const value of row) {
         const tag = cellType(value);
         writeInt(parcel, tag);
-        if (tag === 1) await vcall(parcel, "writeLong", "(J)V", typeof value === "bigint" ? value : BigInt(value as number));
-        else if (tag === 2) await vcall(parcel, "writeDouble", "(D)V", value);
+        if (tag === 1) (yield vcall(parcel, "writeLong", "(J)V", typeof value === "bigint" ? value : BigInt(value as number)));
+        else if (tag === 2) (yield vcall(parcel, "writeDouble", "(D)V", value));
         else if (tag === 3) writeString(parcel, value as string);
-        else if (tag === 4) await vcall(parcel, "writeByteArray", "([B)V", value);
+        else if (tag === 4) (yield vcall(parcel, "writeByteArray", "([B)V", value));
       }
-      if (flags & 1) await vcall(this, "releaseReference", "()V");
-    },
+      if (flags & 1) (yield vcall(this, "releaseReference", "()V"));
+    }),
   },
 });

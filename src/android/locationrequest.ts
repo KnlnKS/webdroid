@@ -1,4 +1,4 @@
-import { JObj, rt, type NativeSpec } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { mangleStaticField } from "../jvm/abi";
 import { parcelCreator, type JParcel } from "./parcel";
@@ -19,11 +19,11 @@ const parameters = [
 ] as const;
 const requestMethods: NonNullable<NativeSpec["methods"]> = {
   "describeContents()I": () => 0,
-  "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JLocationRequest, p: JParcel) {
-    await vcall(p, "writeString", "(Ljava/lang/String;)V", this.provider);
-    for (const [field, d, type] of wire) await vcall(p, "write" + type, `(${d})V`, this[field]);
-    await vcall(p, "writeTypedObject", "(Landroid/os/Parcelable;I)V", this.workSource ?? await newObj("android/os/WorkSource"), 0);
-  },
+  "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JLocationRequest, p: JParcel): Gen {
+    (yield vcall(p, "writeString", "(Ljava/lang/String;)V", this.provider));
+    for (const [field, d, type] of wire) (yield vcall(p, "write" + type, `(${d})V`, this[field]));
+    (yield vcall(p, "writeTypedObject", "(Landroid/os/Parcelable;I)V", this.workSource ?? (yield newObj("android/os/WorkSource")), 0));
+  }),
 };
 const builderMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(J)V": function (this: JLocationRequestBuilder, interval: bigint) {
@@ -31,15 +31,15 @@ const builderMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "<init>(Landroid/location/LocationRequest;)V": function (this: JLocationRequestBuilder, request: JLocationRequest) { Object.assign(this.request, request); },
   "clearMinUpdateIntervalMillis()Landroid/location/LocationRequest$Builder;": function (this: JLocationRequestBuilder) { this.request.minInterval = -1n; return this; },
-  "build()Landroid/location/LocationRequest;": async function (this: JLocationRequestBuilder) {
+  "build()Landroid/location/LocationRequest;": driven(function* (this: JLocationRequestBuilder): Gen {
     if (this.request.interval === LOCATION_FOREVER && this.request.minInterval < 0n)
       throw rt.mkThrowable("java/lang/IllegalStateException", "passive request requires a minimum interval");
     rt.link("android/location/LocationRequest");
     const request = Object.assign(new JLocationRequest(), this.request);
     if (request.minInterval > request.interval) request.minInterval = request.interval;
-    request.workSource = await newObj("android/os/WorkSource", "(Landroid/os/WorkSource;)V", request.workSource);
+    request.workSource = (yield newObj("android/os/WorkSource", "(Landroid/os/WorkSource;)V", request.workSource));
     return request;
-  },
+  }),
 };
 for (const [name, field, d, min] of parameters) {
   requestMethods[`get${name}()${d}`] = function (this: JLocationRequest) {

@@ -1,4 +1,4 @@
-import { rt, JObj, type NativeSpec } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, driven, type Gen } from "../jvm/runtime";
 import { directionality } from "../jvm/bidi";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { localeDirection, type JLocale, defaultLocale } from "../jvm/natives/jvalues";
@@ -30,10 +30,10 @@ export function isRtl(text: string, start: number, count: number, kind: Heuristi
   return +(kind === "firstRtl");
 }
 rt.register({ name: "android/text/TextDirectionHeuristic", ctor: JHeuristic, methods: {
-  "isRtl(Ljava/lang/CharSequence;II)Z": async function (this: JHeuristic, text: unknown, start: number, count: number) {
+  "isRtl(Ljava/lang/CharSequence;II)Z": driven(function* (this: JHeuristic, text: unknown, start: number, count: number): Gen {
     if (text == null) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Null text");
-    return isRtl(await csText(text), start, count, this.kind);
-  },
+    return isRtl((yield csText(text)), start, count, this.kind);
+  }),
   "isRtl([CII)Z": function (this: JHeuristic, chars: Uint16Array | null, start: number, count: number) {
     if (!chars || start < 0 || count < 0 || start > chars.length - count) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid text range");
     let text = "";

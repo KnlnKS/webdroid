@@ -4,9 +4,9 @@
 // existing SharedPreferences/PreferenceManager plumbing in app.ts. No per-app special-casing:
 // any app's res/xml/*.xml preference screen renders through this same path.
 
-import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
-import { vcall, newObj } from "../jvm/natives/jlang";
+import { vcall, newObj, vcallAsync } from "../jvm/natives/jlang";
 import { attr, TV, parseAXML, type XmlNode } from "./axml";
 import { JAttrSet, normRV, resString, rvString, type Resources, type RV, JTheme, bagStrings } from "./res";
 import { JView, JLinearLP, addUnattachedView } from "./view";
@@ -101,7 +101,7 @@ class JPreference extends JObj {
 }
 function notifyChanged(pref: JPreference) {
   const adapter = pref.owner?.adapter;
-  if (adapter) void vcall(adapter, "notifyDataSetChanged", "()V").catch(reportUncaught);
+  if (adapter) void vcallAsync(adapter, "notifyDataSetChanged", "()V").catch(reportUncaught);
 }
 function ensurePM(frag: JPreferenceFragment): JPreferenceManager {
   if (!frag.pm) {
@@ -148,10 +148,10 @@ const preferenceMethods: NonNullable<NativeSpec["methods"]> = {
   ...stubs(1, "isSelectable()Z", "isPersistent()Z"),
   ...noops("setSelectable(Z)V", "setPersistent(Z)V", "setOrder(I)V", "onClick()V"),
   ...stubs(0, "getOrder()I"),
-  "callChangeListener(Ljava/lang/Object;)Z": async function (this: JPreference, v: unknown) {
+  "callChangeListener(Ljava/lang/Object;)Z": driven(function* (this: JPreference, v: unknown): Gen {
     if (!this.changeL) return 1;
-    return (await vcall(this.changeL, "onPreferenceChange", "(Landroid/preference/Preference;Ljava/lang/Object;)Z", this, v)) ? 1 : 0;
-  },
+    return ((yield vcall(this.changeL, "onPreferenceChange", "(Landroid/preference/Preference;Ljava/lang/Object;)Z", this, v))) ? 1 : 0;
+  }),
 };
 /** Preference.performClick(): the subclass's own onClick() first (CheckBoxPreference toggles,
  *  ListPreference opens its dialog), then the app's OnPreferenceClickListener if it set one. */
@@ -449,32 +449,32 @@ const preferenceFragmentMethods: NonNullable<NativeSpec["methods"]> = {
   "setPreferenceScreen(Landroid/preference/PreferenceScreen;)V": function (this: JPreferenceFragment, s: JPreferenceScreen | null) {
     this.root = s;
     if (s) bindTree(s, this);
-    if (this.adapter) void vcall(this.adapter, "notifyDataSetChanged", "()V").catch(reportUncaught);
+    if (this.adapter) void vcallAsync(this.adapter, "notifyDataSetChanged", "()V").catch(reportUncaught);
   },
-  "addPreferencesFromResource(I)V": async function (this: JPreferenceFragment, resId: number) {
+  "addPreferencesFromResource(I)V": driven(function* (this: JPreferenceFragment, resId: number): Gen {
     const jctx: any = this.act;
     const host = jctx?.$host;
     if (!host) { rt.noteMissing("preference xml (no activity)"); return; }
     const f = host.res.fileOf(resId);
     if (!f) { rt.noteMissing("preference xml 0x" + resId.toString(16)); return; }
-    const screen = await buildPreferenceNode(parseAXML(f.bytes), jctx, this) as JPreferenceScreen;
+    const screen = (yield buildPreferenceNode(parseAXML(f.bytes), jctx, this)) as JPreferenceScreen;
     if (this.root) { for (const c of screen.children) { this.root.children.push(c); bindTree(c, this); } }
     else this.root = screen;
-  },
+  }),
   "findPreference(Ljava/lang/CharSequence;)Landroid/preference/Preference;": function (this: JPreferenceFragment, key: unknown) {
     return this.root ? findPrefByKey(this.root, String(key)) : null;
   },
   "onCreateView(Landroid/view/LayoutInflater;Landroid/view/ViewGroup;Landroid/os/Bundle;)Landroid/view/View;":
-    async function (this: JPreferenceFragment) {
+    driven(function* (this: JPreferenceFragment): Gen {
       const jctx: any = this.act;
       const list = new JListView();
       list.ctx = jctx; list.jres = jctx?.$host?.res ?? null; list.theme = jctx?.$host?.theme ?? null;
       const adapter = new JPreferenceAdapter();
       adapter.frag = this;
       this.adapter = adapter;
-      await vcall(list, "setAdapter", "(Landroid/widget/ListAdapter;)V", adapter);
+      (yield vcall(list, "setAdapter", "(Landroid/widget/ListAdapter;)V", adapter));
       return list;
-    },
+    }),
 };
 rt.register({
   name: "android/preference/PreferenceFragment", ctor: JPreferenceFragment, sup: "android/app/Fragment",

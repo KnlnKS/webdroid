@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 class CancelListener extends JObj { calls = 0; }
 rt.register({
@@ -21,7 +21,7 @@ test("CancellationSignal dispatches exactly once and immediately for late listen
   const late = new CancelListener();
   await vcall(signal, "setOnCancelListener", "(Landroid/os/CancellationSignal$OnCancelListener;)V", late);
   expect(late.calls).toBe(1);
-  await expect(vcall(signal, "throwIfCanceled", "()V")).rejects.toMatchObject({
+  await expect(vcallAsync(signal, "throwIfCanceled", "()V")).rejects.toMatchObject({
     constructor: { $i: { name: "android/os/OperationCanceledException" } },
   });
 });
@@ -30,8 +30,8 @@ test("SQLite cancellation overloads reject canceled work before touching the dat
   const signal = await newObj("android/os/CancellationSignal");
   await vcall(signal, "cancel", "()V");
   const db = rt.make("android/database/sqlite/SQLiteDatabase");
-  await expect(vcall(db, "rawQuery", "(Ljava/lang/String;[Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;", "select 1", null, signal))
+  await expect(vcallAsync(db, "rawQuery", "(Ljava/lang/String;[Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;", "select 1", null, signal))
     .rejects.toMatchObject({ constructor: { $i: { name: "android/os/OperationCanceledException" } } });
-  await expect(vcall(db, "rawQueryWithFactory", "(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;", null, "select 1", null, null, signal))
+  await expect(vcallAsync(db, "rawQueryWithFactory", "(Landroid/database/sqlite/SQLiteDatabase$CursorFactory;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;", null, "select 1", null, null, signal))
     .rejects.toMatchObject({ constructor: { $i: { name: "android/os/OperationCanceledException" } } });
 });

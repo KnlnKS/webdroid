@@ -3,7 +3,7 @@
 import { isRecording, recordOrRun, recordingContext, replayCanvas, replayWithSemantics, type Ctx2D } from "./recording";
 import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect, tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { drawSkiaText } from "./skia-text";
-import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
@@ -445,7 +445,7 @@ const paintMethods: NativeSpec["methods"] = {
   "setColor(J)V": function (this: JPaint, c: bigint) { this.setColorValue(Number(BigInt.asIntN(32, c >> 32n))); },
   "getColorLong()J": function (this: JPaint) { return BigInt(this.color >>> 0) << 32n; },
   "getTextLocale()Ljava/util/Locale;": function (this: JPaint) { return this.locales?.values[0] ?? usLocale; },
-  "getTextLocales()Landroid/os/LocaleList;": async function (this: JPaint) { return this.locales ??= await vcall((await linkInit("android/os/LocaleList")).ctor, "getDefault", "()Landroid/os/LocaleList;"); },
+  "getTextLocales()Landroid/os/LocaleList;": driven(function* (this: JPaint): Gen { return this.locales ??= (yield vcall(((yield linkInit("android/os/LocaleList"))).ctor, "getDefault", "()Landroid/os/LocaleList;")); }),
   "setTextLocale(Ljava/util/Locale;)V": function (this: JPaint, locale: JLocale) {
     if (!locale) throw rt.mkThrowable("java/lang/IllegalArgumentException", "locale cannot be null");
     this.locales = Object.assign(rt.make("android/os/LocaleList"), { values: [locale] }); this.language = localeTag(locale);
@@ -1447,26 +1447,26 @@ export const bitmapMethods: NativeSpec["methods"] = {
     "getByteCount()I": function (this: JBitmap) { return this.rowBytes * this.h; },
     "getAllocationByteCount()I": function (this: JBitmap) { return this.rowBytes * this.h; },
     "getRowBytes()I": function (this: JBitmap) { return this.rowBytes; },
-    "compress(Landroid/graphics/Bitmap$CompressFormat;ILjava/io/OutputStream;)Z": async function (this: JBitmap, fmt: { ord: number } | null, q: number, out: unknown) {
+    "compress(Landroid/graphics/Bitmap$CompressFormat;ILjava/io/OutputStream;)Z": driven(function* (this: JBitmap, fmt: { ord: number } | null, q: number, out: unknown): Gen {
       if (!fmt) throw rt.npe();
       const type = ["image/jpeg", "image/png", "image/webp"][fmt.ord];
       if (!type) return 0;
-      const blob = await this.canvas.convertToBlob({ type, quality: Math.max(0, Math.min(1, q / 100)) });
+      const blob = (yield this.canvas.convertToBlob({ type, quality: Math.max(0, Math.min(1, q / 100)) }));
       if (blob.type !== type) return 0;
-      const bytes = new Int8Array(await blob.arrayBuffer());
-      await vcall(out, "write", "([BII)V", bytes, 0, bytes.length);
+      const bytes = new Int8Array((yield blob.arrayBuffer()));
+      (yield vcall(out, "write", "([BII)V", bytes, 0, bytes.length));
       return 1;
-    },
+    }),
     "prepareToDraw()V": () => {},
     "describeContents()I": () => 0,
     // The wire format is Bitmap's own (AOSP writes it natively and only CREATOR reads it), so
     // it carries what the raster needs to come back whole: the flags, geometry and RGBA bytes.
-    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JBitmap, p: JParcel) {
+    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JBitmap, p: JParcel): Gen {
       if (this.recycled) throw rt.mkThrowable("java/lang/IllegalStateException", "Can't parcel a recycled bitmap");
       for (const v of [this.immutable ? 0 : 1, this.config, this.hasAlpha ? 1 : 0, this.premultiplied ? 1 : 0, this.w, this.h, this.density])
-        await vcall(p, "writeInt", "(I)V", v);
-      await vcall(p, "writeByteArray", "([B)V", new Int8Array(this.pixels().buffer, this.pixels().byteOffset, this.w * this.h * 4));
-    },
+        (yield vcall(p, "writeInt", "(I)V", v));
+      (yield vcall(p, "writeByteArray", "([B)V", new Int8Array(this.pixels().buffer, this.pixels().byteOffset, this.w * this.h * 4)));
+    }),
 };
 rt.register({ name: "android/graphics/Bitmap", ctor: JBitmap, ifaces: ["android/os/Parcelable"], methods: bitmapMethods,
   statics: { get CREATOR() { return parcelCreator("android/graphics/Bitmap", async (p) => {
@@ -2097,12 +2097,12 @@ export const canvasMethods: NativeSpec["methods"] = {
   "drawText(Ljava/lang/String;FFLandroid/graphics/Paint;)V": function (this: JCanvas, s: string, x: number, y: number, p: JPaint) {
     drawTextImpl(this, s, x, y, p);
   },
-  "drawText(Ljava/lang/CharSequence;IIFFLandroid/graphics/Paint;)V": async function (this: JCanvas, s: unknown, a: number, b: number, x: number, y: number, p: JPaint) {
+  "drawText(Ljava/lang/CharSequence;IIFFLandroid/graphics/Paint;)V": driven(function* (this: JCanvas, s: unknown, a: number, b: number, x: number, y: number, p: JPaint): Gen {
     const text = typeof s === "string" ? s : typeof (s as { text?: unknown })?.text === "string"
       ? (s as { text: string }).text
-      : String(await vcall(s, "toString", "()Ljava/lang/String;"));
+      : String((yield vcall(s, "toString", "()Ljava/lang/String;")));
     drawTextImpl(this, text.slice(a, b), x, y, p);
-  },
+  }),
   "drawText(Ljava/lang/String;IIFFLandroid/graphics/Paint;)V": function (this: JCanvas, s: string, a: number, b: number, x: number, y: number, p: JPaint) {
     drawTextImpl(this, s.slice(a, b), x, y, p);
   },
@@ -2398,9 +2398,9 @@ rt.register({
       c.ctx = recordingContext(this.octx!, this.ops); c.w = cw; c.h = ch;
       return c;
     },
-    "beginRecording()Landroid/graphics/RecordingCanvas;": async function (this: JRenderNode) {
+    "beginRecording()Landroid/graphics/RecordingCanvas;": driven(function* (this: JRenderNode): Gen {
       return vcall(this, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", this.w, this.h);
-    },
+    }),
     "endRecording()V": function (this: JRenderNode) { this.hasDL = true; perf.rnRecord += this.ops.length; invalidateHook?.(); },
     "hasDisplayList()Z": function (this: JRenderNode) { return this.hasDL ? 1 : 0; },
     "discardDisplayList()V": function (this: JRenderNode) { this.hasDL = false; this.ops = []; },
@@ -2523,12 +2523,12 @@ rt.register({
       r.left = this.left; r.top = this.top; r.right = this.right; r.bottom = this.bottom;
       return this.left < this.right ? 1 : 0;
     },
-    "setPath(Landroid/graphics/Path;Landroid/graphics/Region;)Z": async function (this: JRegion, p: JPath, clip: JRegion) {
+    "setPath(Landroid/graphics/Path;Landroid/graphics/Region;)Z": driven(function* (this: JRegion, p: JPath, clip: JRegion): Gen {
       const b = new JRectF();
-      await vcall(p, "computeBounds", "(Landroid/graphics/RectF;Z)V", b, 1);
+      (yield vcall(p, "computeBounds", "(Landroid/graphics/RectF;Z)V", b, 1));
       return setRegion.call(this, Math.max(Math.floor(b.left), clip.left), Math.max(Math.floor(b.top), clip.top),
         Math.min(Math.ceil(b.right), clip.right), Math.min(Math.ceil(b.bottom), clip.bottom));
-    },
+    }),
     "op(IIIILandroid/graphics/Region$Op;)Z": regionOp,
     "op(Landroid/graphics/Rect;Landroid/graphics/Region$Op;)Z": function (this: JRegion, r: JRect, op: JSimpleEnum) { return regionOp.call(this, ...regionRect(r), op); },
     "op(Landroid/graphics/Region;Landroid/graphics/Region$Op;)Z": function (this: JRegion, r: JRegion, op: JSimpleEnum) { return regionOp.call(this, ...regionRect(r), op); },
@@ -2559,21 +2559,22 @@ rt.register({
   methods: { "<init>()V": function () {} },
 });
 /** an empty stream is a loader bug upstream of the decoder, so name the stream class rather than the decode failure */
-async function streamBytes(s: unknown): Promise<Uint8Array> {
-  const b = await readStreamFully(s);
+function streamBytes(s: unknown): Uint8Array | Promise<Uint8Array> { return rt.drive(streamBytes$(s)); }
+function* streamBytes$(s: unknown): Gen<Uint8Array> {
+  const b = (yield readStreamFully(s));
   if (!b.length) console.warn("[decode] empty stream from", jclsNameOf(s));
   return b;
 }
-export async function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null,
-  onHeader?: (width: number, height: number) => Promise<readonly [number, number]>): Promise<JBitmap | null> {
+export function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null, onHeader?: (width: number, height: number) => Promise<readonly [number, number]>): JBitmap | null | Promise<JBitmap | null> { return rt.drive(decodeBytes$(bytes, opts, onHeader)); }
+function* decodeBytes$(bytes: Uint8Array, opts: JBFOptions | null, onHeader?: (width: number, height: number) => Promise<readonly [number, number]>): Gen<JBitmap | null> {
   if (opts) { opts.outWidth = opts.outHeight = -1; opts.outMimeType = null; opts.outConfig = opts.outColorSpace = null; }
   let img: ImageBitmap | undefined;
   try {
     const blob = new Blob([bytes as BlobPart]);
-    try { img = await createImageBitmap(blob); }
+    try { img = (yield createImageBitmap(blob)) as ImageBitmap; }
     catch (error) {
       if (!isHeif(bytes)) throw error;
-      img = await decodeHeif(bytes);
+      img = (yield decodeHeif(bytes)) as ImageBitmap;
       if (opts) opts.outMimeType = "image/heif";
     }
     if (opts) {
@@ -2591,7 +2592,7 @@ export async function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null,
       w = Math.round(w * opts.inTargetDensity / opts.inDensity);
       h = Math.round(h * opts.inTargetDensity / opts.inDensity);
     }
-    if (onHeader) [w, h] = await onHeader(w, h);
+    if (onHeader) [w, h] = (yield onHeader(w, h));
     const bitmap = JBitmap.fromImage(img, w, h);
     if (opts?.inDensity) bitmap.density = scaled ? opts.inTargetDensity : opts.inDensity;
     bitmap.immutable = !opts?.inMutable;
@@ -2602,50 +2603,55 @@ export async function decodeBytes(bytes: Uint8Array, opts: JBFOptions | null,
     return null;
   } finally { img?.close(); }
 }
-async function decodeStream(stream: unknown, pad: JRect | null = null, opts: JBFOptions | null = null) {
-  const bitmap = stream ? await decodeBytes(await streamBytes(stream), opts) : null;
+function decodeStream(stream: unknown, pad: JRect | null = null, opts: JBFOptions | null = null): unknown { return rt.drive(decodeStream$(stream, pad, opts)); }
+function* decodeStream$(stream: unknown, pad: JRect | null = null, opts: JBFOptions | null = null): Gen {
+  const bitmap = stream ? (yield decodeBytes((yield streamBytes(stream)), opts)) : null;
   if (bitmap && pad) pad.left = pad.top = pad.right = pad.bottom = -1;
   return bitmap;
 }
-async function decodeFileDescriptor(fd: JFileDescriptor | null, pad: JRect | null = null, opts: JBFOptions | null = null) {
+function decodeFileDescriptor(fd: JFileDescriptor | null, pad: JRect | null = null, opts: JBFOptions | null = null): unknown { return rt.drive(decodeFileDescriptor$(fd, pad, opts)); }
+function* decodeFileDescriptor$(fd: JFileDescriptor | null, pad: JRect | null = null, opts: JBFOptions | null = null): Gen {
   if (!fd) throw rt.mkThrowable("java/lang/NullPointerException", "fd");
-  const bytes = await javaFdBytes(fd.fd);
-  const bitmap = await decodeBytes(bytes ?? new Uint8Array(0), opts);
+  const bytes = (yield javaFdBytes(fd.fd));
+  const bitmap = (yield decodeBytes(bytes ?? new Uint8Array(0), opts));
   if (!bitmap && opts?.inBitmap) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Problem decoding into existing bitmap");
   if (bitmap && pad) pad.left = pad.top = pad.right = pad.bottom = -1;
   return bitmap;
 }
-async function decodeFile(path: string | null, opts: JBFOptions | null = null) {
+function decodeFile(path: string | null, opts: JBFOptions | null = null): unknown { return rt.drive(decodeFile$(path, opts)); }
+function* decodeFile$(path: string | null, opts: JBFOptions | null = null): Gen {
   let stream: unknown = null;
   try {
-    stream = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", path);
-    return await decodeStream(stream, null, opts);
+    stream = (yield newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", path));
+    return (yield decodeStream(stream, null, opts));
   } catch (error) {
     if (!rt.iof(error, "java/lang/Exception")) throw error;
     return null;
   } finally {
-    if (stream) await vcall(stream, "close", "()V");
+    if (stream) (yield vcall(stream, "close", "()V"));
   }
 }
-async function decodeResourceStream(res: unknown, value: JTypedValue | null, stream: unknown, pad: JRect | null, opts: JBFOptions | null) {
+function decodeResourceStream(res: unknown, value: JTypedValue | null, stream: unknown, pad: JRect | null, opts: JBFOptions | null): unknown { return rt.drive(decodeResourceStream$(res, value, stream, pad, opts)); }
+function* decodeResourceStream$(res: unknown, value: JTypedValue | null, stream: unknown, pad: JRect | null, opts: JBFOptions | null): Gen {
   opts ??= new JBFOptions();
   if (!opts.inDensity && value && value.density !== 0xffff) opts.inDensity = value.density || 160;
   if (!opts.inTargetDensity && res) {
-    const metrics: JDisplayMetrics = await vcall(res, "getDisplayMetrics", "()Landroid/util/DisplayMetrics;");
+    const metrics: JDisplayMetrics = (yield vcall(res, "getDisplayMetrics", "()Landroid/util/DisplayMetrics;"));
     opts.inTargetDensity = metrics.densityDpi;
   }
   return decodeStream(stream, pad, opts);
 }
-async function decodeResource(res: unknown, id: number, opts: JBFOptions | null = null) {
+function decodeResource(res: unknown, id: number, opts: JBFOptions | null = null): unknown { return rt.drive(decodeResource$(res, id, opts)); }
+function* decodeResource$(res: unknown, id: number, opts: JBFOptions | null = null): Gen {
   let bitmap: JBitmap | null = null, stream: unknown = null;
   try {
     const value = new JTypedValue();
-    stream = await vcall(res, "openRawResource", "(ILandroid/util/TypedValue;)Ljava/io/InputStream;", id, value);
-    bitmap = await decodeResourceStream(res, value, stream, null, opts);
+    stream = (yield vcall(res, "openRawResource", "(ILandroid/util/TypedValue;)Ljava/io/InputStream;", id, value));
+    bitmap = (yield decodeResourceStream(res, value, stream, null, opts));
   } catch (error) {
     if (!(error instanceof rt.link("java/lang/Exception").ctor)) throw error;
   } finally {
-    if (stream) try { await vcall(stream, "close", "()V"); }
+    if (stream) try { (yield vcall(stream, "close", "()V")); }
     catch (error) { if (!(error instanceof rt.link("java/io/IOException").ctor)) throw error; }
   }
   if (!bitmap && opts?.inBitmap) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Problem decoding into existing bitmap");
@@ -2672,9 +2678,10 @@ rt.register({
 });
 
 class JBitmapRegionDecoder extends JObj { bitmap: JBitmap | null = null; }
-async function regionDecoder(bytes: Uint8Array | null): Promise<JBitmapRegionDecoder> {
+function regionDecoder(bytes: Uint8Array | null): JBitmapRegionDecoder | Promise<JBitmapRegionDecoder> { return rt.drive(regionDecoder$(bytes)); }
+function* regionDecoder$(bytes: Uint8Array | null): Gen<JBitmapRegionDecoder> {
   if (!bytes?.length) throw rt.mkThrowable("java/io/IOException", "Unable to decode image");
-  const bitmap = await decodeBytes(bytes, null);
+  const bitmap = (yield decodeBytes(bytes, null));
   if (!bitmap) throw rt.mkThrowable("java/io/IOException", "Unable to decode image");
   const decoder = new JBitmapRegionDecoder();
   decoder.bitmap = bitmap;
@@ -2682,13 +2689,13 @@ async function regionDecoder(bytes: Uint8Array | null): Promise<JBitmapRegionDec
 }
 rt.register({ name: "android/graphics/BitmapRegionDecoder", ctor: JBitmapRegionDecoder, methods: {
   "static newInstance(Ljava/io/InputStream;Z)Landroid/graphics/BitmapRegionDecoder;":
-    async (stream: unknown) => regionDecoder(await streamBytes(stream)),
+    driven(function* (stream: unknown): Gen  { return regionDecoder((yield streamBytes(stream))); }),
   "static newInstance(Ljava/io/InputStream;)Landroid/graphics/BitmapRegionDecoder;":
-    async (stream: unknown) => regionDecoder(await streamBytes(stream)),
+    driven(function* (stream: unknown): Gen  { return regionDecoder((yield streamBytes(stream))); }),
   "static newInstance(Ljava/lang/String;Z)Landroid/graphics/BitmapRegionDecoder;":
-    async (path: string) => regionDecoder(await vfs.readFile(path)),
+    driven(function* (path: string): Gen  { return regionDecoder((yield vfs.readFile(path))); }),
   "static newInstance(Ljava/io/FileDescriptor;Z)Landroid/graphics/BitmapRegionDecoder;":
-    async (fd: JFileDescriptor) => regionDecoder(await javaFdBytes(fd.fd)),
+    driven(function* (fd: JFileDescriptor): Gen  { return regionDecoder((yield javaFdBytes(fd.fd))); }),
   "static newInstance([BIIZ)Landroid/graphics/BitmapRegionDecoder;":
     (bytes: Int8Array, offset: number, length: number) => regionDecoder(u8(bytes, offset, length)),
   "getWidth()I": function (this: JBitmapRegionDecoder) { return this.bitmap?.w ?? 0; },

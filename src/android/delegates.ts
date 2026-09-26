@@ -13,7 +13,7 @@
 // our specs withheld and reports what it reached and could not find; every delegate below is
 // there because that said so.
 
-import { rt, JObj, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { handle, deref, replace, release } from "./handles";
 import {
   JPaint, JTypeface, tfDefault, mkTypeface, measureText,
@@ -1102,22 +1102,22 @@ delegate("android/content/res/AssetManager", {
   "nativeAssetDestroy(J)V": release,
   "nativeAssetGetLength(J)J": (a: bigint) => BigInt(deref<Cursor>(a).source.size),
   "nativeAssetGetRemainingLength(J)J": (a: bigint) => { const c = deref<Cursor>(a); return BigInt(c.source.size - c.pos); },
-  "nativeAssetReadChar(J)I": async (a: bigint) => {
+  "nativeAssetReadChar(J)I": driven(function* (a: bigint): Gen  {
     const c = deref<Cursor>(a);
-    const bytes = await c.source.read(c.pos, 1);
+    const bytes = (yield c.source.read(c.pos, 1));
     if (!bytes.length) return -1;
     c.pos++;
     return bytes[0];
-  },
-  "nativeAssetRead(J[BII)I": async (a: bigint, out: Int8Array, off: number, len: number) => {
+  }),
+  "nativeAssetRead(J[BII)I": driven(function* (a: bigint, out: Int8Array, off: number, len: number): Gen  {
     const c = deref<Cursor>(a);
     if (!len) return 0;
-    const bytes = await c.source.read(c.pos, len);
+    const bytes = (yield c.source.read(c.pos, len));
     if (!bytes.length) return -1;
     out.set(i8(bytes), off);
     c.pos += bytes.length;
     return bytes.length;
-  },
+  }),
   "nativeAssetSeek(JJI)J": (a: bigint, off: bigint, whence: number) => {
     const c = deref<Cursor>(a);
     const base = whence === 0 ? 0 : whence === 1 ? c.pos : c.source.size;

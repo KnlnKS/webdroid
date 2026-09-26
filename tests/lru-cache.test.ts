@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 const O = "Ljava/lang/Object;";
@@ -18,5 +18,5 @@ test("LruCache resize evicts least-recent entries and snapshot is independent", 
   const snapshot = await vcall(cache, "snapshot", "()Ljava/util/Map;");
   await vcall(cache, "remove", `(${O})${O}`, "a");
   expect(await vcall(snapshot, "get", `(${O})${O}`, "a")).toBe("a");
-  await expect(vcall(cache, "resize", "(I)V", 0)).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
+  await expect(vcallAsync(cache, "resize", "(I)V", 0)).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
 });

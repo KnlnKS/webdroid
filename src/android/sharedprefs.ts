@@ -1,4 +1,4 @@
-import { JObj, rt, type NativeSpec } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, driven, type Gen } from "../jvm/runtime";
 import { mainThread, vcallOn } from "../jvm/natives/jlang";
 import { newStringSet, toJsArray } from "../jvm/natives/jutil";
 import { removeFrom } from "./view";
@@ -108,12 +108,12 @@ rt.register({
       "clear()Landroid/content/SharedPreferences$Editor;": function (this: JPrefsEditor) { this.cleared = true; return this; },
       "apply()V": function (this: JPrefsEditor) { commitEditor(this); },
       "commit()Z": function (this: JPrefsEditor) { return commitEditor(this) ? 1 : 0; },
-      "putStringSet(Ljava/lang/String;Ljava/util/Set;)Landroid/content/SharedPreferences$Editor;": async function (this: JPrefsEditor, k: string, value: unknown) {
-        const values: unknown[] = value == null ? [] : await toJsArray(value);
+      "putStringSet(Ljava/lang/String;Ljava/util/Set;)Landroid/content/SharedPreferences$Editor;": driven(function* (this: JPrefsEditor, k: string, value: unknown): Gen {
+        const values: unknown[] = value == null ? [] : (yield toJsArray(value));
         if (!values.every((v): v is string => typeof v === "string")) throw rt.mkThrowable("java/lang/ClassCastException", "StringSet contains a non-string");
         this.changes.set(k, value == null ? undefined : values);
         return this;
-      },
+      }),
     };
     for (const [t, d] of [["String", "Ljava/lang/String;"], ["Int", "I"], ["Long", "J"], ["Float", "F"], ["Boolean", "Z"]]) {
       m[`put${t}(Ljava/lang/String;${d})Landroid/content/SharedPreferences$Editor;`] = function (this: JPrefsEditor, k: string, v: string | number | bigint | null) {

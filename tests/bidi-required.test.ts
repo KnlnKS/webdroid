@@ -13,7 +13,7 @@ test("bidi analysis detects RTL scripts, numbers, embeddings and supplementary c
   expect(await requires("𞤀", 0, 1)).toBe(0);
 });
 test("bidi analysis validates the requested range", async () => {
-  await expect(requires("abc", -1, 2)).rejects.toMatchObject({ msg: "Invalid text range" });
-  await expect(requires("abc", 2, 1)).rejects.toMatchObject({ msg: "Invalid text range" });
-  await expect(requires("abc", 0, 4)).rejects.toMatchObject({ msg: "Invalid text range" });
+  await expect((async () => requires("abc", -1, 2))()).rejects.toMatchObject({ msg: "Invalid text range" });
+  await expect((async () => requires("abc", 2, 1))()).rejects.toMatchObject({ msg: "Invalid text range" });
+  await expect((async () => requires("abc", 0, 4))()).rejects.toMatchObject({ msg: "Invalid text range" });
 });

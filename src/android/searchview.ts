@@ -6,7 +6,7 @@ import { type JAttrSet, obtainStyled, rvInt, rvString } from "./res";
 import { inflateLayout } from "./inflate";
 import { JImageView } from "./imageview";
 import { loadDrawableRV } from "./drawable";
-import { rt, JObj, noops } from "../jvm/runtime";
+import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 
 // ── SearchView. AOSP inflates layout/search_view.xml and toggles the parts of it that a
@@ -70,16 +70,16 @@ rt.register({
   ifaces: ["android/widget/FilterQueryProvider"],
   methods: {
     ...linearMethods,
-    "<init>(Landroid/content/Context;)V": async function (this: JSearchView, c: unknown) {
-      await initViewFromCtx(this, c, null);
+    "<init>(Landroid/content/Context;)V": driven(function* (this: JSearchView, c: unknown): Gen {
+      (yield initViewFromCtx(this, c, null));
       this.orientation = 0;
-      await buildSearchView(this, null);
-    },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JSearchView, c: unknown, set: JAttrSet | null) {
-      await initViewFromCtx(this, c, set);
+      (yield buildSearchView(this, null));
+    }),
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JSearchView, c: unknown, set: JAttrSet | null): Gen {
+      (yield initViewFromCtx(this, c, set));
       this.orientation = 0;
-      await buildSearchView(this, set);
-    },
+      (yield buildSearchView(this, set));
+    }),
     "setOnQueryTextListener(Landroid/widget/SearchView$OnQueryTextListener;)V": function (this: JSearchView, l: unknown) { this.queryL = l; },
     "setQueryHint(Ljava/lang/CharSequence;)V": function (this: JSearchView, h: unknown) {
       this.hintStr = String(h ?? "");
@@ -88,15 +88,15 @@ rt.register({
     "setIconifiedByDefault(Z)V": function (this: JSearchView, v: number) { this.iconified = !!v; },
     "setIconified(Z)V": function (this: JSearchView, v: number) { this.iconified = !!v; },
     "isIconified()Z": function (this: JSearchView) { return this.iconified ? 1 : 0; },
-    "setQuery(Ljava/lang/CharSequence;Z)V": async function (this: JSearchView, q: unknown, submit: number) {
+    "setQuery(Ljava/lang/CharSequence;Z)V": driven(function* (this: JSearchView, q: unknown, submit: number): Gen {
       this.queryText = String(q ?? "");
       if (this.edit) this.edit.text = this.queryText;
       if (this.closeBtn) { this.closeBtn.visibility = this.queryText ? 0 : 8; requestLayout(this.closeBtn); }
       if (this.queryL) {
-        await vcall(this.queryL, "onQueryTextChange", "(Ljava/lang/String;)Z", this.queryText);
-        if (submit) await vcall(this.queryL, "onQueryTextSubmit", "(Ljava/lang/String;)Z", this.queryText);
+        (yield vcall(this.queryL, "onQueryTextChange", "(Ljava/lang/String;)Z", this.queryText));
+        if (submit) (yield vcall(this.queryL, "onQueryTextSubmit", "(Ljava/lang/String;)Z", this.queryText));
       }
-    },
+    }),
     "getQuery()Ljava/lang/CharSequence;": function (this: JSearchView) { return this.queryText; },
     ...noops("setMaxWidth(I)V", "setSubmitButtonEnabled(Z)V", "clearFocus()V", "onActionViewExpanded()V",
       "onActionViewCollapsed()V", "setOnCloseListener(Landroid/widget/SearchView$OnCloseListener;)V",

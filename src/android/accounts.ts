@@ -1,4 +1,4 @@
-import { JObj, rt, type NativeSpec } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import { defineException, stringHash, vcall, curThread, mainThread, boxInt, newObj } from "../jvm/natives/jlang";
 import { appHost } from "./apphost";
@@ -28,9 +28,9 @@ rt.register({
     "<init>(Ljava/lang/String;Ljava/lang/String;)V": initAccount,
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": initAccount,
     "getAccessId()Ljava/lang/String;": function (this: JAccount) { return this.accessId; },
-    "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JAccount, p: JParcel) {
-      for (const value of [this.name, this.type, this.accessId]) await vcall(p, "writeString", "(Ljava/lang/String;)V", value);
-    },
+    "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JAccount, p: JParcel): Gen {
+      for (const value of [this.name, this.type, this.accessId]) (yield vcall(p, "writeString", "(Ljava/lang/String;)V", value));
+    }),
     "equals(Ljava/lang/Object;)Z": function (this: JAccount, other: unknown) {
       return other instanceof JAccount && this.name === other.name && this.type === other.type ? 1 : 0;
     },

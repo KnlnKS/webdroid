@@ -1,6 +1,6 @@
 import { slashName, dotName } from "../abi";
 import { mkIter } from "./jutil";
-import { JObj, type Runtime } from "../runtime";
+import { JObj, type Runtime, driven, type Gen } from "../runtime";
 import { zipTree } from "./jzip";
 import { rt } from "../runtime";
 import { dexesIn } from "../dex";
@@ -84,7 +84,7 @@ rt.register({
   name: "dalvik/system/PathClassLoader", ctor: class extends JBaseDexClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
   methods: {
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": init,
-    "<init>(Ljava/lang/String;Ljava/lang/ClassLoader;)V": async function (this: JClassLoader, path: string, parent: JClassLoader | null) { await init.call(this, path, null, parent); },
+    "<init>(Ljava/lang/String;Ljava/lang/ClassLoader;)V": driven(function* (this: JClassLoader, path: string, parent: JClassLoader | null): Gen { (yield init.call(this, path, null, parent)); }),
   },
 });
 rt.register({
@@ -114,10 +114,10 @@ rt.register({
 rt.register({
   name: "webdroid/PackageClassLoader", ctor: class extends JClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
   methods: {
-    "<init>(Ljava/lang/String;)V": async function (this: JClassLoader, path: string) {
-      await init.call(this, path, null, null);
+    "<init>(Ljava/lang/String;)V": driven(function* (this: JClassLoader, path: string): Gen {
+      (yield init.call(this, path, null, null));
       this.runtime.platformParent = true;
-    },
+    }),
     "loadClass(Ljava/lang/String;Z)Ljava/lang/Class;": function (this: JClassLoader, name: string) {
       const cls = slashName(name), runtime = this.runtime;
       if (!runtime.dexIndex.has(cls) && !runtime.natives.has(cls) && !runtime.platformClasses.has(cls))

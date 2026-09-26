@@ -1,7 +1,7 @@
 // The method-handle path Android proxy bridges use to call an interface's default method.
 
 import { parseMethodDesc } from "../abi";
-import { JObj, rt } from "../runtime";
+import { JObj, rt, driven, type Gen } from "../runtime";
 import { defineException, type JClass } from "./jlang";
 import { boxReturn, JMethod, unboxArg } from "./jreflect";
 
@@ -28,7 +28,7 @@ rt.register({
       rt.cc(receiver, this.method.owner.name);
       return handle(this.method, receiver, true);
     },
-    "invokeWithArguments([Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JMethodHandle, args: unknown[] | null) {
+    "invokeWithArguments([Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JMethodHandle, args: unknown[] | null): Gen {
       const fn = this.method.fn;
       if (!fn) throw rt.mkThrowable("java/lang/NoSuchMethodError", `${this.method.owner.name}.${this.method.name}${this.method.desc}`);
       const { params, ret } = parseMethodDesc(this.method.desc);
@@ -39,8 +39,8 @@ rt.register({
       if (receiver == null) rt.npe();
       rt.cc(receiver, this.method.owner.name);
       const result = fn.apply(receiver, supplied.map(unboxArg));
-      return boxReturn(ret, result instanceof Promise ? await result : result);
-    },
+      return boxReturn(ret, result instanceof Promise ? (yield result) : result);
+    }),
   },
 });
 

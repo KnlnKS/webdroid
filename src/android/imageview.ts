@@ -4,7 +4,7 @@ import {
   type JDrawable, type JColorStateList, loadDrawableRV, loadDrawable, JBitmapDrawable, drawableSize
 } from "./drawable";
 import { curThread, callOn, vcallOn, mkEnumSet, newObj, after, type JSimpleEnum } from "../jvm/natives/jlang";
-import { type NativeSpec, rt, noops } from "../jvm/runtime";
+import { type NativeSpec, rt, noops, driven, type Gen } from "../jvm/runtime";
 import { type JAttrSet, obtainStyled, rvInt, rvColor } from "./res";
 import { JMatrix, restoreCanvasToCount, saveCanvas, type JBitmap, type JCanvas } from "./graphics";
 
@@ -69,11 +69,12 @@ export class JImageView extends JView {
   maxW = Infinity; maxH = Infinity;
 }
 const scaleTypes = mkEnumSet("android/widget/ImageView$ScaleType", ["MATRIX", "FIT_XY", "FIT_START", "FIT_CENTER", "FIT_END", "CENTER", "CENTER_CROP", "CENTER_INSIDE"]);
-async function initImageView(view: JImageView, c: unknown, set: JAttrSet | null, style: number, defaultStyle = 0) {
-  await initViewFromCtx(view, c, set, style, defaultStyle);
+function initImageView(view: JImageView, c: unknown, set: JAttrSet | null, style: number, defaultStyle = 0): unknown { return rt.drive(initImageView$(view, c, set, style, defaultStyle)); }
+function* initImageView$(view: JImageView, c: unknown, set: JAttrSet | null, style: number, defaultStyle = 0): Gen {
+  (yield initViewFromCtx(view, c, set, style, defaultStyle));
   if (!view.jres || (!set && !style && !defaultStyle)) return;
   const ta = obtainStyled(view.jres, view.theme, set, [AID("src"), AID("scaleType"), AID("adjustViewBounds"), AID("tint"), AID("cropToPadding")], style, defaultStyle);
-  if (ta.vals[0]) await view.setDrawable(await loadDrawableRV(view.jres, ta.vals[0], view.theme));
+  if (ta.vals[0]) (yield view.setDrawable((yield loadDrawableRV(view.jres, ta.vals[0], view.theme))));
   if (ta.vals[1]) view.scaleType = rvInt(view.jres, ta.vals[1], 3);
   if (ta.vals[2]) view.adjustBounds = !!rvInt(view.jres, ta.vals[2], 0);
   if (ta.vals[4]) view.cropToPadding = !!rvInt(view.jres, ta.vals[4], 0);
@@ -93,20 +94,20 @@ const imageViewMethods: NativeSpec["methods"] = {
     requestLayout(this);
     return pending;
   },
-  "setImageResource(I)V": async function (this: JImageView, id: number) {
-    await this.setDrawable(id && this.jres ? await loadDrawable(this.jres, id, this.theme) : null);
+  "setImageResource(I)V": driven(function* (this: JImageView, id: number): Gen {
+    (yield this.setDrawable(id && this.jres ? (yield loadDrawable(this.jres, id, this.theme)) : null));
     this.layoutRequested = true;
     requestLayout(this);
-  },
-  "setImageBitmap(Landroid/graphics/Bitmap;)V": async function (this: JImageView, b: JBitmap | null) {
+  }),
+  "setImageBitmap(Landroid/graphics/Bitmap;)V": driven(function* (this: JImageView, b: JBitmap | null): Gen {
     if (b) {
       const d = new JBitmapDrawable();
       d.bmp = b;
-      await this.setDrawable(d);
-    } else await this.setDrawable(null);
+      (yield this.setDrawable(d));
+    } else (yield this.setDrawable(null));
     this.layoutRequested = true;
     requestLayout(this);
-  },
+  }),
   "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JImageView) { return this.drawable; },
   "getImageAlpha()I": function (this: JImageView) { return this.imageAlpha; },
   "setImageAlpha(I)V": function (this: JImageView, alpha: number) {
@@ -133,11 +134,11 @@ const imageViewMethods: NativeSpec["methods"] = {
   "setColorFilter(I)V": function (this: JImageView, c: number) {
     return vcallOn(curThread, this, "setColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, rt.link("android/graphics/PorterDuff$Mode").ctor.s$SRC_ATOP);
   },
-  "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": async function (this: JImageView, c: number, mode: unknown) {
+  "setColorFilter(ILandroid/graphics/PorterDuff$Mode;)V": driven(function* (this: JImageView, c: number, mode: unknown): Gen {
     const thread = curThread;
-    const f = await newObj("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, mode);
+    const f = (yield newObj("android/graphics/PorterDuffColorFilter", "(ILandroid/graphics/PorterDuff$Mode;)V", c, mode));
     return vcallOn(thread, this, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", f);
-  },
+  }),
   "setColorFilter(Landroid/graphics/ColorFilter;)V": function (this: JImageView, f: unknown) {
     if (this.colorFilter === f) return;
     this.colorFilter = f; this.hasColorFilter = true;
@@ -172,12 +173,12 @@ const imageViewMethods: NativeSpec["methods"] = {
   "setCropToPadding(Z)V": function (this: JImageView, crop: number) { this.cropToPadding = !!crop; invalidate(this); },
   "getCropToPadding()Z": function (this: JImageView) { return +this.cropToPadding; },
   ...noops("setImageURI(Landroid/net/Uri;)V"),
-  "onMeasure(II)V": async function (this: JImageView, wSpec: number, hSpec: number) {
+  "onMeasure(II)V": driven(function* (this: JImageView, wSpec: number, hSpec: number): Gen {
     if (this.drawable) {
       const thread = curThread, w = drawableSize(this.drawable, false, thread);
-      this.drawableW = w instanceof Promise ? await w : w;
+      this.drawableW = w instanceof Promise ? (yield w) : w;
       const h = drawableSize(this.drawable, true, thread);
-      this.drawableH = h instanceof Promise ? await h : h;
+      this.drawableH = h instanceof Promise ? (yield h) : h;
     }
     const dw = Math.max(0, this.drawableW), dh = Math.max(0, this.drawableH);
     let w = dw + this.padL + this.padR;
@@ -192,8 +193,8 @@ const imageViewMethods: NativeSpec["methods"] = {
         this.measuredW = resolveSize(Math.round((this.measuredH - this.padT - this.padB) * dw / dh) + this.padL + this.padR, wSpec);
       }
     }
-  },
-  "onDraw(Landroid/graphics/Canvas;)V": async function (this: JImageView, cv: JCanvas) {
+  }),
+  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JImageView, cv: JCanvas): Gen {
     const d = this.drawable;
     if (!d) return;
     const thread = curThread;
@@ -213,11 +214,11 @@ const imageViewMethods: NativeSpec["methods"] = {
       ctx.translate(this.padL, this.padT);
       if (matrix) ctx.transform(...matrix.m);
       const bounds = vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, dw, dh);
-      if (bounds instanceof Promise) await bounds;
+      if (bounds instanceof Promise) (yield bounds);
       const draw = vcallOn(thread, d, "draw", "(Landroid/graphics/Canvas;)V", cv);
-      if (draw instanceof Promise) await draw;
+      if (draw instanceof Promise) (yield draw);
     } finally { restoreCanvasToCount(cv, saveCount); }
-  },
+  }),
 };
 rt.register({ name: "android/widget/ImageView", ctor: JImageView, sup: "android/view/View", methods: imageViewMethods });
 rt.register({

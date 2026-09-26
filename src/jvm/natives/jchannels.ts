@@ -1,4 +1,4 @@
-import { JObj, rt } from "../runtime";
+import { JObj, rt, driven, type Gen } from "../runtime";
 import { vcall } from "./jlang";
 import { JInputStream, JOutputStream, skipStream } from "./jio";
 import { bufferView, type JBuffer } from "./jnio";
@@ -13,23 +13,23 @@ const channelMethods = {
 };
 rt.register({ name: "webdroid/InputStreamChannel", ctor: class extends JStreamChannel {}, ifaces: ["java/nio/channels/ReadableByteChannel", "java/nio/channels/Channel"], methods: {
   ...channelMethods,
-  "read(Ljava/nio/ByteBuffer;)I": async function (this: JStreamChannel, buffer: JBuffer) {
+  "read(Ljava/nio/ByteBuffer;)I": driven(function* (this: JStreamChannel, buffer: JBuffer): Gen {
     if (!this.open) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
     buffer.clampPut(0); const count = buffer.lim - buffer.pos;
     if (!count) return 0;
     const native = buffer.backing.storage.kind === "native", bytes = native ? new Int8Array(count) : remainingBytes(buffer);
-    const n = await vcall(this.stream, "read", "([BII)I", bytes, 0, count);
+    const n = (yield vcall(this.stream, "read", "([BII)I", bytes, 0, count));
     if (n > 0) { if (native) remainingBytes(buffer).set(bytes.subarray(0, n)); buffer.pos += n; } return n;
-  },
+  }),
 } });
 rt.register({ name: "webdroid/OutputStreamChannel", ctor: class extends JStreamChannel {}, ifaces: ["java/nio/channels/WritableByteChannel", "java/nio/channels/Channel"], methods: {
   ...channelMethods,
-  "write(Ljava/nio/ByteBuffer;)I": async function (this: JStreamChannel, buffer: JBuffer) {
+  "write(Ljava/nio/ByteBuffer;)I": driven(function* (this: JStreamChannel, buffer: JBuffer): Gen {
     if (!this.open) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
     const bytes = remainingBytes(buffer), count = bytes.length;
-    await vcall(this.stream, "write", "([BII)V", buffer.backing.storage.kind === "native" ? bytes.slice() : bytes, 0, count);
+    (yield vcall(this.stream, "write", "([BII)V", buffer.backing.storage.kind === "native" ? bytes.slice() : bytes, 0, count));
     buffer.pos += count; return count;
-  },
+  }),
 } });
 class JChannelInput extends JInputStream { channel: unknown = null; }
 class JChannelOutput extends JOutputStream { channel: unknown = null; }
@@ -39,10 +39,10 @@ async function wrap(bytes: Int8Array, offset: number, count: number): Promise<JB
   return vcall(rt.link("java/nio/ByteBuffer").ctor, "wrap", "([BII)Ljava/nio/ByteBuffer;", bytes, offset, count);
 }
 rt.register({ name: "webdroid/ChannelInputStream", ctor: JChannelInput, sup: "java/io/InputStream", methods: {
-  "read()I": async function (this: JChannelInput) { const bytes = new Int8Array(1); return await vcall(this, "read", "([BII)I", bytes, 0, 1) === 1 ? bytes[0] & 255 : -1; },
-  "read([BII)I": async function (this: JChannelInput, bytes: Int8Array, offset: number, count: number) {
-    const buffer = await wrap(bytes, offset, count); return count ? vcall(this.channel, "read", "(Ljava/nio/ByteBuffer;)I", buffer) : 0;
-  },
+  "read()I": driven(function* (this: JChannelInput): Gen { const bytes = new Int8Array(1); return (yield vcall(this, "read", "([BII)I", bytes, 0, 1)) === 1 ? bytes[0] & 255 : -1; }),
+  "read([BII)I": driven(function* (this: JChannelInput, bytes: Int8Array, offset: number, count: number): Gen {
+    const buffer = (yield wrap(bytes, offset, count)); return count ? vcall(this.channel, "read", "(Ljava/nio/ByteBuffer;)I", buffer) : 0;
+  }),
   "close()V": function (this: JChannelInput) { return vcall(this.channel, "close", "()V"); },
   "available()I": () => 0,
   "skip(J)J": skipStream,
@@ -52,10 +52,10 @@ rt.register({ name: "webdroid/ChannelInputStream", ctor: JChannelInput, sup: "ja
 } });
 rt.register({ name: "webdroid/ChannelOutputStream", ctor: JChannelOutput, sup: "java/io/OutputStream", methods: {
   "write(I)V": function (this: JChannelOutput, value: number) { return vcall(this, "write", "([BII)V", Int8Array.of(value), 0, 1); },
-  "write([BII)V": async function (this: JChannelOutput, bytes: Int8Array, offset: number, count: number) {
-    const buffer = await wrap(bytes, offset, count);
-    while (buffer.pos < buffer.lim) if (await vcall(this.channel, "write", "(Ljava/nio/ByteBuffer;)I", buffer) <= 0) throw rt.mkThrowable("java/io/IOException", "Channel made no progress");
-  },
+  "write([BII)V": driven(function* (this: JChannelOutput, bytes: Int8Array, offset: number, count: number): Gen {
+    const buffer = (yield wrap(bytes, offset, count));
+    while (buffer.pos < buffer.lim) if ((yield vcall(this.channel, "write", "(Ljava/nio/ByteBuffer;)I", buffer)) <= 0) throw rt.mkThrowable("java/io/IOException", "Channel made no progress");
+  }),
   "close()V": function (this: JChannelOutput) { return vcall(this.channel, "close", "()V"); },
 } });
 function adapter(type: string, field: string, value: unknown): JObj {

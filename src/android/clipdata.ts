@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import type { JIntent } from "./intent";
 import { vcall } from "../jvm/natives/jlang";
@@ -19,12 +19,12 @@ async function readDescription(parcel: JParcel): Promise<JClipDescription> {
 rt.register({ name: "android/content/ClipDescription", ctor: JClipDescription, ifaces: ["android/os/Parcelable"],
 statics: { get CREATOR() { return parcelCreator("android/content/ClipDescription", readDescription); } }, methods: {
   "describeContents()I": () => 0,
-  "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JClipDescription, parcel: JParcel) {
-    await writeText(this.label, parcel); await vcall(parcel, "writeStringArray", "([Ljava/lang/String;)V", this.types);
-    await vcall(parcel, "writePersistableBundle", "(Landroid/os/PersistableBundle;)V", this.extras);
-    await vcall(parcel, "writeLong", "(J)V", this.time); writeInt(parcel, this.styled); writeInt(parcel, this.classification);
-    await vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", this.confidence);
-  },
+  "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JClipDescription, parcel: JParcel): Gen {
+    (yield writeText(this.label, parcel)); (yield vcall(parcel, "writeStringArray", "([Ljava/lang/String;)V", this.types));
+    (yield vcall(parcel, "writePersistableBundle", "(Landroid/os/PersistableBundle;)V", this.extras));
+    (yield vcall(parcel, "writeLong", "(J)V", this.time)); writeInt(parcel, this.styled); writeInt(parcel, this.classification);
+    (yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", this.confidence));
+  }),
   "<init>(Ljava/lang/CharSequence;[Ljava/lang/String;)V": function (this: JClipDescription, label: unknown, types: string[]) {
     if (!types) throw rt.mkThrowable("java/lang/NullPointerException", "mimeTypes");
     this.label = label; this.types = [...types];
@@ -77,15 +77,15 @@ export async function readClipData(parcel: JParcel): Promise<JClipData> {
 rt.register({ name: "android/content/ClipData", ctor: JClipData, ifaces: ["android/os/Parcelable"],
 statics: { get CREATOR() { return parcelCreator("android/content/ClipData", readClipData); } }, methods: {
   "describeContents()I": () => 0,
-  "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JClipData, parcel: JParcel, flags: number) {
-    await vcall(this.description, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags);
-    await vcall(parcel, "writeTypedObject", "(Landroid/os/Parcelable;I)V", this.icon, flags);
+  "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JClipData, parcel: JParcel, flags: number): Gen {
+    (yield vcall(this.description, "writeToParcel", "(Landroid/os/Parcel;I)V", parcel, flags));
+    (yield vcall(parcel, "writeTypedObject", "(Landroid/os/Parcelable;I)V", this.icon, flags));
     writeInt(parcel, this.items.length);
     for (const item of this.items) {
-      await writeText(item.text, parcel); writeString8(parcel, item.html);
-      for (const [field] of itemObjects) await vcall(parcel, "writeTypedObject", "(Landroid/os/Parcelable;I)V", item[field], flags);
+      (yield writeText(item.text, parcel)); writeString8(parcel, item.html);
+      for (const [field] of itemObjects) (yield vcall(parcel, "writeTypedObject", "(Landroid/os/Parcelable;I)V", item[field], flags));
     }
-  },
+  }),
   "<init>(Ljava/lang/CharSequence;[Ljava/lang/String;Landroid/content/ClipData$Item;)V": function (this: JClipData, label: unknown, types: string[], item: JClipItem) {
     if (!types || !item) throw rt.mkThrowable("java/lang/NullPointerException", null);
     this.description.label = label; this.description.types = [...types]; this.items = [item];

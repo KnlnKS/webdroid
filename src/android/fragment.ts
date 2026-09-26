@@ -1,4 +1,4 @@
-import { JObj, rt, type NativeSpec, stubs, noops } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { findById, type JViewGroup, type JView, attachView, detachView, removeFrom } from "./view";
 import { getInflater } from "./inflate";
@@ -84,7 +84,7 @@ rt.register({
     "replace(ILandroid/app/Fragment;)Landroid/app/FragmentTransaction;":
       function (this: JFragmentTransaction, id: number, f: JFragment) { this.ops.push({ kind: "replace", containerId: id, frag: f }); return this; },
     "addToBackStack(Ljava/lang/String;)Landroid/app/FragmentTransaction;": function (this: JFragmentTransaction) { return this; },
-    "commit()I": async function (this: JFragmentTransaction) { return runFragmentTransaction(this); },
+    "commit()I": driven(function* (this: JFragmentTransaction): Gen { return runFragmentTransaction(this); }),
     "commitAllowingStateLoss()I": function (this: JFragmentTransaction) { return runFragmentTransaction(this); },
   },
 });

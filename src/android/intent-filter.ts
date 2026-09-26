@@ -2,7 +2,7 @@ import { type JParcel, readInt, writeInt, readString, writeString, parcelCreator
 import { vcall } from "../jvm/natives/jlang";
 import { mkIter, toJsArray } from "../jvm/natives/jutil";
 import type { JPersistableBundle } from "./os";
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { attr, attrStr, TV, type XmlNode } from "./axml";
 import type { JIntent } from "./intent";
 import { type JUri, mkUri, uriDecode, uriParts } from "./net";
@@ -59,7 +59,7 @@ export async function writePattern(pattern: JPatternMatcher, parcel: JParcel): P
 }
 rt.register({ name: "android/os/PatternMatcher", ctor: JPatternMatcher, ifaces: ["android/os/Parcelable"],
 statics: { get CREATOR() { return parcelCreator("android/os/PatternMatcher", readPattern); } }, methods: {
-  "<init>(Landroid/os/Parcel;)V": async function (this: JPatternMatcher, p: JParcel) { Object.assign(this, await readPattern(p)); },
+  "<init>(Landroid/os/Parcel;)V": driven(function* (this: JPatternMatcher, p: JParcel): Gen { Object.assign(this, (yield readPattern(p))); }),
   "describeContents()I": () => 0,
   "writeToParcel(Landroid/os/Parcel;I)V": function (this: JPatternMatcher, p: JParcel) { return writePattern(this, p); },
   "<init>(Ljava/lang/String;I)V": function (this: JPatternMatcher, path: string, type: number) { this.path = path; this.type = type; },
@@ -204,7 +204,7 @@ rt.register({
   statics: { get CREATOR() { return parcelCreator("android/content/IntentFilter", readFilter); }, MATCH_CATEGORY_MASK: 0xfff0000, MATCH_ADJUSTMENT_MASK: 0xffff, MATCH_ADJUSTMENT_NORMAL: 0x8000, MATCH_CATEGORY_EMPTY: 0x100000, MATCH_CATEGORY_SCHEME: 0x200000,
     MATCH_CATEGORY_TYPE: 0x600000, NO_MATCH_TYPE: -1, NO_MATCH_DATA: -2, NO_MATCH_ACTION: -3, NO_MATCH_CATEGORY: -4 },
   methods: {
-    "<init>(Landroid/os/Parcel;)V": async function (this: JIntentFilter, p: JParcel) { Object.assign(this, await readFilter(p)); },
+    "<init>(Landroid/os/Parcel;)V": driven(function* (this: JIntentFilter, p: JParcel): Gen { Object.assign(this, (yield readFilter(p))); }),
     "describeContents()I": () => 0,
     "writeToParcel(Landroid/os/Parcel;I)V": function (this: JIntentFilter, p: JParcel) { return writeFilter(this, p); },
     "setPriority(I)V": function (this: JIntentFilter, priority: number) { this.priority = priority; },
@@ -222,21 +222,21 @@ rt.register({
     "countDataSchemes()I": function (this: JIntentFilter) { return this.schemes.length; },
     "countDataTypes()I": function (this: JIntentFilter) { return this.types.length; },
     "matchAction(Ljava/lang/String;)Z": function (this: JIntentFilter, a: string | null) { return a !== null && this.actions.includes(a) ? 1 : 0; },
-    "matchCategories(Ljava/util/Set;)Ljava/lang/String;": async function (this: JIntentFilter, cats: unknown) {
-      for (const c of cats ? await toJsArray(cats) as string[] : []) if (!this.categories.includes(c)) return c;
+    "matchCategories(Ljava/util/Set;)Ljava/lang/String;": driven(function* (this: JIntentFilter, cats: unknown): Gen {
+      for (const c of cats ? (yield toJsArray(cats)) as string[] : []) if (!this.categories.includes(c)) return c;
       return null;
-    },
+    }),
     "matchData(Ljava/lang/String;Ljava/lang/String;Landroid/net/Uri;)I": function (this: JIntentFilter, type: string | null, scheme: string | null, data: JUri | null) {
       return this.matchData(type, scheme, data);
     },
     "match(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/net/Uri;Ljava/util/Set;Ljava/lang/String;)I":
-    async function (this: JIntentFilter, action: string | null, type: string | null, scheme: string | null, data: JUri | null, cats: unknown) {
+    driven(function* (this: JIntentFilter, action: string | null, type: string | null, scheme: string | null, data: JUri | null, cats: unknown): Gen {
       if (action !== null && !this.actions.includes(action)) return -3;
       const r = this.matchData(type, scheme, data);
       if (r < 0) return r;
-      for (const c of cats ? await toJsArray(cats) as string[] : []) if (!this.categories.includes(c)) return -4;
+      for (const c of cats ? (yield toJsArray(cats)) as string[] : []) if (!this.categories.includes(c)) return -4;
       return r;
-    },
+    }),
     "addDataAuthority(Ljava/lang/String;Ljava/lang/String;)V": function (this: JIntentFilter, host: string, port: string | null) { this.authorities.push({ host, port: port === null ? null : Number(port) }); },
     "addDataPath(Ljava/lang/String;I)V": function (this: JIntentFilter, path: string, type: number) {
       rt.link("android/os/PatternMatcher"); this.paths.push(Object.assign(new JPatternMatcher(), { path, type }));

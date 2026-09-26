@@ -1,4 +1,4 @@
-import { rt, JObj, type NativeSpec } from "../runtime";
+import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { parkTimeout, unparkTimeout } from "../yield";
 import { vcall, JThread, curThread, park, defineException } from "./jlang";
 import type { JTimeUnit } from "./jconc";
@@ -47,9 +47,9 @@ rt.register({
     "lock()V": function (this: JLock) { return this.lock(curThread, false); },
     "unlock()V": function (this: JLock) { this.release(curThread); },
     "tryLock()Z": function (this: JLock) { return this.acquire(curThread, true) ? 1 : 0; },
-    "tryLock(JLjava/util/concurrent/TimeUnit;)Z": async function (this: JLock, duration: bigint, unit: JTimeUnit) {
-      return await this.lock(curThread, true, Number(duration) * unit.ms) ? 1 : 0;
-    },
+    "tryLock(JLjava/util/concurrent/TimeUnit;)Z": driven(function* (this: JLock, duration: bigint, unit: JTimeUnit): Gen {
+      return (yield this.lock(curThread, true, Number(duration) * unit.ms)) ? 1 : 0;
+    }),
     "lockInterruptibly()V": function (this: JLock) { return this.lock(curThread, true); },
     "getHoldCount()I": function (this: JLock) { return this.owner === curThread ? this.held : 0; },
     "isHeldByCurrentThread()Z": function (this: JLock) { return this.owner === curThread ? 1 : 0; },
@@ -93,13 +93,13 @@ rt.register({
   methods: {
     "await()V": function (this: JCondition) { return this.await(true); },
     "awaitUninterruptibly()V": function (this: JCondition) { return this.await(false); },
-    "await(JLjava/util/concurrent/TimeUnit;)Z": async function (this: JCondition, d: bigint, u: JTimeUnit) {
-      return await this.await(true, Number(d) * u.ms) ? 1 : 0;
-    },
-    "awaitNanos(J)J": async function (this: JCondition, n: bigint) {
-      const start = guestNow(); await this.await(true, Number(n) / 1e6);
+    "await(JLjava/util/concurrent/TimeUnit;)Z": driven(function* (this: JCondition, d: bigint, u: JTimeUnit): Gen {
+      return (yield this.await(true, Number(d) * u.ms)) ? 1 : 0;
+    }),
+    "awaitNanos(J)J": driven(function* (this: JCondition, n: bigint): Gen {
+      const start = guestNow(); (yield this.await(true, Number(n) / 1e6));
       return n - BigInt(Math.round((guestNow() - start) * 1e6));
-    },
+    }),
     "signal()V": function (this: JCondition) { this.lock.check(curThread); this.q.shift()?.(); },
     "signalAll()V": function (this: JCondition) { this.lock.check(curThread); for (const wake of this.q.splice(0)) wake(); },
   },
@@ -163,7 +163,7 @@ rt.register({ name: "java/util/concurrent/CyclicBarrier", ctor: JCyclicBarrier, 
   "isBroken()Z": function (this: JCyclicBarrier) { return +this.generation.broken; },
   "await()I": function (this: JCyclicBarrier) { return this.await(curThread); },
   "await(JLjava/util/concurrent/TimeUnit;)I": function (this: JCyclicBarrier, duration: bigint, unit: JTimeUnit) { return this.await(curThread, Math.max(0, Number(duration) * unit.ms)); },
-  "reset()V": async function (this: JCyclicBarrier) { if (this.tripping && this.tripThread !== curThread) await this.tripping.catch(() => {}); this.breakGeneration(); this.advance(); },
+  "reset()V": driven(function* (this: JCyclicBarrier): Gen { if (this.tripping && this.tripThread !== curThread) (yield this.tripping.catch(() => {})); this.breakGeneration(); this.advance(); }),
 } });
 defineException("java/util/concurrent/BrokenBarrierException", "java/lang/Exception");
 
@@ -284,7 +284,7 @@ const rwMethods: NativeSpec["methods"] = {
   "lock()V": function (this: JRWInner) { return this.lock(false); },
   "lockInterruptibly()V": function (this: JRWInner) { return this.lock(true); },
   "tryLock()Z": function (this: JRWInner) { return this.owner.acquire(curThread, this.write, true) ? 1 : 0; },
-  "tryLock(JLjava/util/concurrent/TimeUnit;)Z": async function (this: JRWInner, duration: bigint, unit: JTimeUnit) { return await this.lock(true, Number(duration) * unit.ms) ? 1 : 0; },
+  "tryLock(JLjava/util/concurrent/TimeUnit;)Z": driven(function* (this: JRWInner, duration: bigint, unit: JTimeUnit): Gen { return (yield this.lock(true, Number(duration) * unit.ms)) ? 1 : 0; }),
   "unlock()V": function (this: JRWInner) {
     const lock = this.owner, thread = curThread;
     if (this.write) {
@@ -391,8 +391,8 @@ rt.register({
     "acquireInterruptibly(I)V": function (this: JAQS, a: number) { return aqsAcquire(this, a, false); },
     "acquireShared(I)V": function (this: JAQS, a: number) { return aqsAcquire(this, a, true); },
     "acquireSharedInterruptibly(I)V": function (this: JAQS, a: number) { return aqsAcquire(this, a, true); },
-    "tryAcquireNanos(IJ)Z": async function (this: JAQS, a: number, ns: bigint) { return aqsAcquireTimed(this, a, false, ns); },
-    "tryAcquireSharedNanos(IJ)Z": async function (this: JAQS, a: number, ns: bigint) { return aqsAcquireTimed(this, a, true, ns); },
+    "tryAcquireNanos(IJ)Z": driven(function* (this: JAQS, a: number, ns: bigint): Gen { return aqsAcquireTimed(this, a, false, ns); }),
+    "tryAcquireSharedNanos(IJ)Z": driven(function* (this: JAQS, a: number, ns: bigint): Gen { return aqsAcquireTimed(this, a, true, ns); }),
     "release(I)Z": function (this: JAQS, a: number) { return aqsRelease(this, a, false); },
     "releaseShared(I)Z": function (this: JAQS, a: number) { return aqsRelease(this, a, true); },
     "hasQueuedThreads()Z": function (this: JAQS) { return this.q.length ? 1 : 0; },

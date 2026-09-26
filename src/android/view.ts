@@ -3,10 +3,10 @@ import { perf } from "../perf";
 import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, type JPoint } from "./graphics";
 import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
-import { vcall, vcallOn, vcallMaybe, after, idHash, box, JFloat, curThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, after, idHash, box, JFloat, curThread, vcallAsync } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize } from "./drawable";
 import { JMotionEvent } from "./motionevent";
-import { JObj, rt, type NativeSpec, stubs, noops } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
 import { mainHandler, reportUncaught } from "./os";
 import { JProperty, type JDisplayMetrics } from "./util";
@@ -92,25 +92,28 @@ export const setViewAnimHook = (h: typeof startViewAnim) => { startViewAnim = h;
 let startGroupAnim: (v: JViewGroup, a: unknown) => void = () => {};
 export const setGroupAnimHook = (h: typeof startGroupAnim) => { startGroupAnim = h; };
 const M_onFocusChange = mangleMethod("onFocusChange", "(Landroid/view/View;Z)V");
-async function focusChange(v: JView, focused: boolean) {
+function focusChange(v: JView, focused: boolean): unknown { return rt.drive(focusChange$(v, focused)); }
+function* focusChange$(v: JView, focused: boolean): Gen {
   v.focused = focused;
   focusHook(v, focused);
-  if (v.focusL) await guardMaybe(v.focusL, M_onFocusChange, v, focused ? 1 : 0);
+  if (v.focusL) (yield guardMaybe(v.focusL, M_onFocusChange, v, focused ? 1 : 0));
 }
-async function takeFocus(v: JView) {
+function takeFocus(v: JView): unknown { return rt.drive(takeFocus$(v)); }
+function* takeFocus$(v: JView): Gen {
   if (!v.enabled || !v.focusable) return 0;
   if (v.focused) return 1;
   let root = v;
   while (root.parent) root = root.parent;
   const old = findByPred(root, (candidate) => candidate !== v && candidate.focused);
-  if (old) await focusChange(old, false);
-  await focusChange(v, true);
+  if (old) (yield focusChange(old, false));
+  (yield focusChange(v, true));
   focusMoved(v, v);
   return 1;
 }
-async function clearFocus(v: JView) {
+function clearFocus(v: JView): unknown { return rt.drive(clearFocus$(v)); }
+function* clearFocus$(v: JView): Gen {
   if (!v.focused) return;
-  await focusChange(v, false);
+  (yield focusChange(v, false));
   focusMoved(v, null);
 }
 /** AOSP reports every focus transition to the root's observer; the tree-walk only runs when someone listens */
@@ -162,9 +165,10 @@ export function requestLayoutAll() {
  */
 export const layoutPass = { active: false, requesters: [] as JView[] };
 /** ViewRootImpl.performLayout: a window root's layout, with in-layout requests collected */
-export async function layoutRoot(v: JView, l: number, t: number, r: number, b: number) {
+export function layoutRoot(v: JView, l: number, t: number, r: number, b: number): unknown { return rt.drive(layoutRoot$(v, l, t, r, b)); }
+function* layoutRoot$(v: JView, l: number, t: number, r: number, b: number): Gen {
   layoutPass.active = true;
-  try { await layoutView(v, l, t, r, b); } finally { layoutPass.active = false; }
+  try { (yield layoutView(v, l, t, r, b)); } finally { layoutPass.active = false; }
 }
 const validRequesters: JView[] = [];
 function shownPath(v: JView): boolean {
@@ -198,9 +202,10 @@ export function removeFrom(ls: unknown[], l: unknown) {
   const i = ls.indexOf(l);
   if (i >= 0) ls.splice(i, 1);
 }
-async function performClick(this: JView) {
+function performClick(this: JView): unknown { return rt.drive(performClick$.call(this)); }
+function* performClick$(this: JView): Gen {
   if (!this.clickL) return 0;
-  await vcall(this.clickL, "onClick", "(Landroid/view/View;)V", this);
+  (yield vcall(this.clickL, "onClick", "(Landroid/view/View;)V", this));
   return 1;
 }
 function setBackground(this: JView, d: JDrawable | null) {
@@ -222,15 +227,16 @@ function removeChild(this: JViewGroup, c: JView) { return detachView(this, c); }
 function removeChildInLayout(this: JViewGroup, c: JView) { return detachView(this, c, false); }
 /** AOSP removeViews/removeAllViews: the children leave without requests and the parent asks
  *  once; the *InLayout forms do not ask at all */
-async function removeRange(vg: JViewGroup, start: number, n: number, request: boolean, all = false) {
+function removeRange(vg: JViewGroup, start: number, n: number, request: boolean, all = false): unknown { return rt.drive(removeRange$(vg, start, n, request, all)); }
+function* removeRange$(vg: JViewGroup, start: number, n: number, request: boolean, all = false): Gen {
   if (start < 0 || n < 0 || start + n > vg.children.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", `start=${start}, count=${n}, size=${vg.children.length}`);
   const thread = curThread;
   const gone = vg.children.slice(start, start + n);
   if (all) { vg.children.length = 0; gone.reverse(); }
   for (const c of gone) {
-    await noteTransientChild(vg, c, false, thread);
-    if (c.attached) await dispatchDetached(c, thread);
-    await notifyChildRemoved(vg, c, thread);
+    (yield noteTransientChild(vg, c, false, thread));
+    if (c.attached) (yield dispatchDetached(c, thread));
+    (yield notifyChildRemoved(vg, c, thread));
     if (all) c.parent = null;
   }
   if (!all) { vg.children.splice(start, n); for (const c of gone) c.parent = null; }
@@ -238,18 +244,20 @@ async function removeRange(vg: JViewGroup, start: number, n: number, request: bo
 }
 /** AOSP addViewInLayout: addViewInner without the parent's request. Unless the caller prevents
  *  it, the child's own setLayoutParams asks, before the child has a parent to pass it to. */
-async function addInLayout(this: JViewGroup, c: JView, i: number, lp: JLayoutParams, preventRequestLayout?: number) {
+function addInLayout(this: JViewGroup, c: JView, i: number, lp: JLayoutParams, preventRequestLayout?: number): unknown { return rt.drive(addInLayout$.call(this, c, i, lp, preventRequestLayout)); }
+function* addInLayout$(this: JViewGroup, c: JView, i: number, lp: JLayoutParams, preventRequestLayout?: number): Gen {
   const thread = curThread;
-  c.lp = lp ? await convertLp(this, lp) : c.lp;
+  c.lp = lp ? (yield convertLp(this, lp)) : c.lp;
   if (!preventRequestLayout) requestLayoutVirtual(c);
-  await attachView(this, c, i, false, thread);
+  (yield attachView(this, c, i, false, thread));
   return 1;
 }
 /** AOSP attachViewToParent: re-links a child detachViewFromParent took out. It never left the
  *  window, so there is no attach dispatch, no hierarchy callback and no request. */
-async function attachToParent(this: JViewGroup, c: JView, i: number, lp: JLayoutParams) {
-  c.lp = lp ? await convertLp(this, lp) : c.lp;
-  await linkChild(this, c, i);
+function attachToParent(this: JViewGroup, c: JView, i: number, lp: JLayoutParams): unknown { return rt.drive(attachToParent$.call(this, c, i, lp)); }
+function* attachToParent$(this: JViewGroup, c: JView, i: number, lp: JLayoutParams): Gen {
+  c.lp = lp ? (yield convertLp(this, lp)) : c.lp;
+  (yield linkChild(this, c, i));
 }
 export function obtainEvent(dt: bigint, et: bigint, action: number, x: number, y: number, metaState = 0) {
   const e = new JMotionEvent();
@@ -518,12 +526,12 @@ rt.register({
   name: "android/view/ViewGroupOverlay", ctor: JViewGroupOverlay, sup: "android/view/ViewOverlay",
   methods: {
     // an overlay view is laid out by whoever put it there, so it keeps the bounds it arrives with
-    "add(Landroid/view/View;)V": async function (this: JViewOverlay, v: JView) {
+    "add(Landroid/view/View;)V": driven(function* (this: JViewOverlay, v: JView): Gen {
       if (this.views.includes(v)) return;
       this.views.push(v);
-      if (this.host.attached) await dispatchAttached(v);
+      if (this.host.attached) (yield dispatchAttached(v));
       invalidate();
-    },
+    }),
     "remove(Landroid/view/View;)V": function (this: JViewOverlay, v: JView) { removeFrom(this.views, v); invalidate(); },
   },
 });
@@ -534,19 +542,21 @@ rt.register({ name: "android/view/WindowId", ctor: JWindowId });
 
 /** AOSP View.dispatchApplyWindowInsets: a listener wins outright, otherwise the virtual
  *  onApplyWindowInsets. ViewGroup's override calls this as its super. */
-async function viewDispatchInsets(this: JView, ins: unknown) {
+function viewDispatchInsets(this: JView, ins: unknown): unknown { return rt.drive(viewDispatchInsets$.call(this, ins)); }
+function* viewDispatchInsets$(this: JView, ins: unknown): Gen {
   if (this.insetsL) {
-    return await vcall(this.insetsL, "onApplyWindowInsets",
-      "(Landroid/view/View;Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", this, ins);
+    return (yield vcall(this.insetsL, "onApplyWindowInsets",
+      "(Landroid/view/View;Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", this, ins));
   }
-  return await vcall(this, "onApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", ins);
+  return (yield vcall(this, "onApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", ins));
 }
 
 /** apply base View attrs from an AttributeSet (used by native View ctor) */
 // defStyleAttr is the widget's own style attribute (buttonStyle, editTextStyle, ...). Without it
 // tiers 3 and 4 of the cascade are dead for every base-View attribute, which is why a Button had
 // to be handed a background in TypeScript instead of resolving Widget.Material.Button's.
-async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0, defStyleRes = 0) {
+function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0, defStyleRes = 0): unknown { return rt.drive(applyViewAttrs$(v, set, defStyleAttr, defStyleRes)); }
+function* applyViewAttrs$(v: JView, set: JAttrSet | null, defStyleAttr = 0, defStyleRes = 0): Gen {
   if (!v.jres || (!set?.node && !defStyleAttr && !defStyleRes)) return;
   const res = v.jres;
   const ta = obtainStyled(res, v.theme, set, [
@@ -561,7 +571,7 @@ async function applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr = 0, 
   if (idv) v.idNum = idv.t === TV.REFERENCE || idv.t === TV.ATTRIBUTE ? idv.d : idv.r ?? idv.d;
   const bgv = g(1);
   if (bgv) {
-    v.background = await loadDrawableRV(res, bgv, v.theme);
+    v.background = (yield loadDrawableRV(res, bgv, v.theme));
   }
   const pad = g(2) ? rvDimen(res, g(2), 0) : null;
   if (pad !== null) { v.padL = v.padT = v.padR = v.padB = Math.round(pad); }
@@ -627,7 +637,8 @@ export function setViewTargetSdk(target: number) {
   ignoreMeasureCache = target < 19;
   brokenInsetsDispatch = target < 30;
 }
-export async function measureView(v: JView, wSpec: number, hSpec: number) {
+export function measureView(v: JView, wSpec: number, hSpec: number): unknown { return rt.drive(measureView$(v, wSpec, hSpec)); }
+function* measureView$(v: JView, wSpec: number, hSpec: number): Gen {
   // AOSP View.measure: with no forced layout and identical specs the previous measurement
   // still holds. Without this every pass re-measured the whole tree from the root.
   if (!v.layoutRequested) {
@@ -658,7 +669,7 @@ export async function measureView(v: JView, wSpec: number, hSpec: number) {
   perf.onMeasures++;
   try {
     v.measuredState = 0;
-    await guardCall(v, M_onMeasure, wSpec, hSpec);
+    (yield guardCall(v, M_onMeasure, wSpec, hSpec));
     v.layoutRequired = true;   // AOSP sets PFLAG_LAYOUT_REQUIRED whenever onMeasure runs
     v.measureBeforeLayout = false;
     measureCachePut(v, wSpec, hSpec);
@@ -684,12 +695,13 @@ function setBound(v: JView, l: number, t: number, r: number, b: number) {
   }
 }
 
-export async function layoutView(v: JView, l: number, t: number, r: number, b: number) {
+export function layoutView(v: JView, l: number, t: number, r: number, b: number): unknown { return rt.drive(layoutView$(v, l, t, r, b)); }
+function* layoutView$(v: JView, l: number, t: number, r: number, b: number): Gen {
   // AOSP View.layout: a measure the cache answered left the children as the last onMeasure did
   if (v.measureBeforeLayout) {
     v.measureBeforeLayout = false;
     perf.onMeasures++;
-    await guardCall(v, M_onMeasure, v.oldWSpec, v.oldHSpec);
+    (yield guardCall(v, M_onMeasure, v.oldWSpec, v.oldHSpec));
   }
   const oldL = v.left, oldT = v.top, oldR = v.right, oldB = v.bottom;
   const changed = oldL !== l || oldT !== t || oldR !== r || oldB !== b;
@@ -697,18 +709,18 @@ export async function layoutView(v: JView, l: number, t: number, r: number, b: n
   v.left = l; v.top = t; v.right = r; v.bottom = b;
   if ((r - l !== v.measuredW || b - t !== v.measuredH) && v.measuredW > 0 && v.measuredH > 0) perf.layoutMismatch++;
   if (changed) {
-    await guardMaybe(v, M_onSizeChanged, r - l, b - t, ow, oh);
+    (yield guardMaybe(v, M_onSizeChanged, r - l, b - t, ow, oh));
   }
   // AOSP View.layout: onLayout runs only when the frame moved or a measure re-ran
   // (PFLAG_LAYOUT_REQUIRED). Without the gate every pass walked the whole tree laying out
   // children the measure memo had just skipped, which is what made settle passes cost.
   if (changed || v.layoutRequired) {
-    await guardCall(v, M_onLayout, changed ? 1 : 0, l, t, r, b);
+    (yield guardCall(v, M_onLayout, changed ? 1 : 0, l, t, r, b));
     // Surface lifecycle follows frame changes even when a subclass skips super.onLayout.
     if (v.surfaceBacked) v.syncSurface();
     v.layoutRequired = false;
     for (const ll of [...v.layoutChangeLs]) {
-      await vcall(ll, "onLayoutChange", "(Landroid/view/View;IIIIIIII)V", v, l, t, r, b, oldL, oldT, oldR, oldB);
+      (yield vcall(ll, "onLayoutChange", "(Landroid/view/View;IIIIIIII)V", v, l, t, r, b, oldL, oldT, oldR, oldB));
     }
   }
   v.layoutRequested = false;
@@ -724,12 +736,13 @@ const noopComputeScroll = () => {};
 const clipRejects = (p: JViewGroup, v: JView): boolean =>
   p.clipChildren && !v.jAnim && !v.animTf && !v.translationX && !v.translationY && !v.rotationV && v.scaleXv === 1 && v.scaleYv === 1 &&
   (v.right - p.scrollX <= 0 || v.bottom - p.scrollY <= 0 || v.left - p.scrollX >= p.width() || v.top - p.scrollY >= p.height());
-export async function drawView(v: JView, cv: JCanvas, parent?: JViewGroup) {
+export function drawView(v: JView, cv: JCanvas, parent?: JViewGroup): unknown { return rt.drive(drawView$(v, cv, parent)); }
+function* drawView$(v: JView, cv: JCanvas, parent?: JViewGroup): Gen {
   if (v.visibility !== 0) return;
   // Android calls computeScroll() before drawing each child — drives Scroller
   // animations (ViewPager page snaps, OverScroller flings)
   const cs = jmethod(v, M_computeScroll);
-  if (cs && cs !== noopComputeScroll) await guardApply(cs, v);
+  if (cs && cs !== noopComputeScroll) (yield guardApply(cs, v));
   if (parent && clipRejects(parent, v)) { perf.viewsRejected++; return; }
   perf.viewsDrawn++;
   const ctx = cv.ctx;
@@ -764,11 +777,11 @@ export async function drawView(v: JView, cv: JCanvas, parent?: JViewGroup) {
       if (v.outlineDirty || v.outlineW !== w || v.outlineH !== h) {
         v.outlineDirty = false; v.outlineW = w; v.outlineH = h;
         outline.kind = 0; outline.path = null; outline.alpha = 1;
-        await guardCall(v.outlineProvider ?? bgOutline, M_getOutline, v, outline);
+        (yield guardCall(v.outlineProvider ?? bgOutline, M_getOutline, v, outline));
       }
       if (outline.kind) outline.trace(ctx);
     }
-    if (v.layerType && w > 0 && h > 0) await drawLayered(v, cv, w, h);
+    if (v.layerType && w > 0 && h > 0) (yield drawLayered(v, cv, w, h));
     else {
       if (w <= 0 || h <= 0) clipEmptyCanvas(ctx);
       else {
@@ -776,7 +789,7 @@ export async function drawView(v: JView, cv: JCanvas, parent?: JViewGroup) {
         ctx.rect(0, 0, w, h);
         ctx.clip();
       }
-      await drawSemantic(v, cv);
+      (yield drawSemantic(v, cv));
     }
   } catch (e) {
     perf.drawErrors++;
@@ -786,7 +799,8 @@ export async function drawView(v: JView, cv: JCanvas, parent?: JViewGroup) {
   }
 }
 
-async function drawLayered(v: JView, cv: JCanvas, w: number, h: number) {
+function drawLayered(v: JView, cv: JCanvas, w: number, h: number): unknown { return rt.drive(drawLayered$(v, cv, w, h)); }
+function* drawLayered$(v: JView, cv: JCanvas, w: number, h: number): Gen {
   let layer = v.layerCanvas;
   if (!layer || layer.width !== w || layer.height !== h) layer = v.layerCanvas = new OffscreenCanvas(w, h);
   const lctx = layer.getContext("2d") as OffscreenCanvasRenderingContext2D;
@@ -796,17 +810,18 @@ async function drawLayered(v: JView, cv: JCanvas, w: number, h: number) {
   lctx.clearRect(0, 0, w, h);
   const lcv = JCanvas.wrap(lctx, w, h);
   lcv.semanticBase = cv.semanticTransform();
-  await drawSemantic(v, lcv);
+  (yield drawSemantic(v, lcv));
   cv.ctx.drawImage(layer, 0, 0);
 }
 
-async function drawSemantic(v: JView, cv: JCanvas) {
+function drawSemantic(v: JView, cv: JCanvas): unknown { return rt.drive(drawSemantic$(v, cv)); }
+function* drawSemantic$(v: JView, cv: JCanvas): Gen {
   const parentOwner = cv.semanticOwner;
   if (v.drawnText) v.drawnText.length = 0;
   v.drawnTextCount = 0;
   cv.semanticOwner = v;
   try {
-    await drawSelf(v, cv);
+    (yield drawSelf(v, cv));
   } finally {
     cv.semanticOwner = parentOwner;
   }
@@ -823,12 +838,13 @@ function drawSelf(v: JView, cv: JCanvas): unknown {
   return fn && fn !== baseDraw ? guardApply(fn, v, cv) : drawContent(v, cv);
 }
 /** the view's own painting, in its own coordinate space: background, content, children, overlay */
-async function drawContent(v: JView, cv: JCanvas) {
+function drawContent(v: JView, cv: JCanvas): unknown { return rt.drive(drawContent$(v, cv)); }
+function* drawContent$(v: JView, cv: JCanvas): Gen {
   const ctx = cv.ctx;
   if (v.surfaceBacked && isRecording(ctx)) {
     if (!v.surfaceLayer && v.background) {
-      await guardCall(v.background, M_setBounds, 0, 0, v.width(), v.height());
-      await guardCall(v.background, M_drawableDraw, cv);
+      (yield guardCall(v.background, M_setBounds, 0, 0, v.width(), v.height()));
+      (yield guardCall(v.background, M_drawableDraw, cv));
     }
     // The first frame can arrive after recording; later frames replace and close their predecessor.
     recordOrRun(ctx, target => {
@@ -840,18 +856,19 @@ async function drawContent(v: JView, cv: JCanvas) {
   else if (v.background) {
     // through setBounds, not the fields: AOSP's onBoundsChange is where wrapper/shape drawables
     // (and app subclasses) rebuild their geometry, and it only fires on a real change
-    await guardCall(v.background, M_setBounds, 0, 0, v.width(), v.height());
-    await guardCall(v.background, M_drawableDraw, cv);
+    (yield guardCall(v.background, M_setBounds, 0, 0, v.width(), v.height()));
+    (yield guardCall(v.background, M_drawableDraw, cv));
   }
   ctx.translate(-v.scrollX, -v.scrollY);
-  await guardMaybe(v, M_onDraw, cv);
-  await guardMaybe(v, M_dispatchDraw, cv);
-  if (v.overlay) await drawOverlay(v.overlay, cv);
+  (yield guardMaybe(v, M_onDraw, cv));
+  (yield guardMaybe(v, M_dispatchDraw, cv));
+  if (v.overlay) (yield drawOverlay(v.overlay, cv));
   ctx.translate(v.scrollX, v.scrollY);
-  if (v.foreground || jmethod(v, M_onDrawForeground) !== drawForeground) await guardMaybe(v, M_onDrawForeground, cv);
+  if (v.foreground || jmethod(v, M_onDrawForeground) !== drawForeground) (yield guardMaybe(v, M_onDrawForeground, cv));
 }
 
-async function drawForeground(this: JView, cv: JCanvas) {
+function drawForeground(this: JView, cv: JCanvas): unknown { return rt.drive(drawForeground$.call(this, cv)); }
+function* drawForeground$(this: JView, cv: JCanvas): Gen {
   const d = this.foreground;
   if (!d) return;
   const thread = curThread, w = this.width(), h = this.height();
@@ -860,14 +877,14 @@ async function drawForeground(this: JView, cv: JCanvas) {
     const bounds = new JRect();
     bounds.right = w; bounds.bottom = h;
     if (this.foregroundGravity !== G.FILL) {
-      const dw = await vcallOn(thread, d, "getIntrinsicWidth", "()I");
-      const dh = await vcallOn(thread, d, "getIntrinsicHeight", "()I");
-      const ld = await vcallOn(thread, this, "getLayoutDirection", "()I");
+      const dw = (yield vcallOn(thread, d, "getIntrinsicWidth", "()I"));
+      const dh = (yield vcallOn(thread, d, "getIntrinsicHeight", "()I"));
+      const ld = (yield vcallOn(thread, this, "getLayoutDirection", "()I"));
       gravityApply(absGravity(this.foregroundGravity, Number(ld)), Number(dw), Number(dh), bounds, 0, 0, bounds);
     }
-    await vcallOn(thread, d, "setBounds", "(IIII)V", bounds.left, bounds.top, bounds.right, bounds.bottom);
+    (yield vcallOn(thread, d, "setBounds", "(IIII)V", bounds.left, bounds.top, bounds.right, bounds.bottom));
   }
-  await vcallOn(thread, d, "draw", "(Landroid/graphics/Canvas;)V", cv);
+  (yield vcallOn(thread, d, "draw", "(Landroid/graphics/Canvas;)V", cv));
 }
 
 function drawSurface(v: JView, ctx: JCanvas["ctx"]) {
@@ -889,9 +906,10 @@ function overlayOf(this: JView) {
 }
 
 /** AOSP draws the overlay last, over the host's own content and children */
-async function drawOverlay(o: JViewOverlay, cv: JCanvas) {
-  for (const d of o.drawables) await guardCall(d, M_drawableDraw, cv);
-  for (const v of o.views) await drawView(v, cv);
+function drawOverlay(o: JViewOverlay, cv: JCanvas): unknown { return rt.drive(drawOverlay$(o, cv)); }
+function* drawOverlay$(o: JViewOverlay, cv: JCanvas): Gen {
+  for (const d of o.drawables) (yield guardCall(d, M_drawableDraw, cv));
+  for (const v of o.views) (yield drawView(v, cv));
 }
 
 /** One log line per offending view class: a broken subtree must not log 60x a second. */
@@ -907,23 +925,24 @@ function drawingRect(this: JView, r: JRect) {
   r.left = this.scrollX; r.top = this.scrollY;
   r.right = this.scrollX + this.width(); r.bottom = this.scrollY + this.height();
 }
-export async function requireViewById(this: JObj, id: number): Promise<unknown> {
-  const view = await vcall(this, "findViewById", "(I)Landroid/view/View;", id);
+export function requireViewById(this: JObj, id: number): unknown { return rt.drive(requireViewById$.call(this, id)); }
+function* requireViewById$(this: JObj, id: number): Gen {
+  const view = (yield vcall(this, "findViewById", "(I)Landroid/view/View;", id));
   if (!view) throw rt.mkThrowable("java/lang/IllegalArgumentException", "ID does not reference a View: " + id);
   return view;
 }
 
 export const viewConstructors: NativeSpec["methods"] = {
-  "<init>(Landroid/content/Context;)V": async function (this: JView, c: unknown) { await initViewFromCtx(this, c, null); },
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: JView, c: unknown, a: JAttrSet | null) {
-    await initViewFromCtx(this, c, a);
-  },
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": async function (this: JView, c: unknown, a: JAttrSet | null) {
-    await initViewFromCtx(this, c, a);
-  },
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": async function (this: JView, c: unknown, a: JAttrSet | null) {
-    await initViewFromCtx(this, c, a);
-  },
+  "<init>(Landroid/content/Context;)V": driven(function* (this: JView, c: unknown): Gen { (yield initViewFromCtx(this, c, null)); }),
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JView, c: unknown, a: JAttrSet | null): Gen {
+    (yield initViewFromCtx(this, c, a));
+  }),
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": driven(function* (this: JView, c: unknown, a: JAttrSet | null): Gen {
+    (yield initViewFromCtx(this, c, a));
+  }),
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": driven(function* (this: JView, c: unknown, a: JAttrSet | null): Gen {
+    (yield initViewFromCtx(this, c, a));
+  }),
 };
 const viewMethods: NativeSpec["methods"] = {
   ...viewConstructors,
@@ -984,17 +1003,17 @@ const viewMethods: NativeSpec["methods"] = {
     d.color = c;
     setBackground.call(this, d);
   },
-  "setBackgroundResource(I)V": async function (this: JView, id: number) {
-    setBackground.call(this, id ? await loadDrawable(this.jres!, id, this.theme) : null);
-  },
+  "setBackgroundResource(I)V": driven(function* (this: JView, id: number): Gen {
+    setBackground.call(this, id ? (yield loadDrawable(this.jres!, id, this.theme)) : null);
+  }),
   "getBackground()Landroid/graphics/drawable/Drawable;": function (this: JView) { return this.background; },
-  "setForeground(Landroid/graphics/drawable/Drawable;)V": async function (this: JView, d: JDrawable | null) {
+  "setForeground(Landroid/graphics/drawable/Drawable;)V": driven(function* (this: JView, d: JDrawable | null): Gen {
     if (this.foreground === d) return;
     if (this.foreground) this.foreground.callback = null;
     this.foreground = d; this.foregroundW = -1;
-    if (d) { await vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState())); d.callback = this; }
+    if (d) { (yield vcall(d, "setState", "([I)Z", Int32Array.from(this.drawableState()))); d.callback = this; }
     requestLayout(this); invalidate(this);
-  },
+  }),
   "onDrawForeground(Landroid/graphics/Canvas;)V": drawForeground,
   "getForegroundGravity()I": function (this: JView) { return this.foregroundGravity; },
   "setForegroundGravity(I)V": function (this: JView, gravity: number) {
@@ -1115,10 +1134,10 @@ const viewMethods: NativeSpec["methods"] = {
   },
   "performClick()Z": performClick,
   "callOnClick()Z": performClick,
-  "performLongClick()Z": async function (this: JView) {
-    if (this.longClickL) return await vcall(this.longClickL, "onLongClick", "(Landroid/view/View;)Z", this);
+  "performLongClick()Z": driven(function* (this: JView): Gen {
+    if (this.longClickL) return (yield vcall(this.longClickL, "onLongClick", "(Landroid/view/View;)Z", this));
     return 0;
-  },
+  }),
   "measure(II)V": function (this: JView, w: number, h: number) { return measureView(this, w, h); },
   "onMeasure(II)V": function (this: JView, wSpec: number, hSpec: number) {
     const thread = curThread, bg = this.background;
@@ -1217,7 +1236,7 @@ const viewMethods: NativeSpec["methods"] = {
   },
   "setLayerType(ILandroid/graphics/Paint;)V": function (this: JView, t: number) { this.layerType = t; },
   "getLayerType()I": function (this: JView) { return this.layerType; },
-  "setContentDescription(Ljava/lang/CharSequence;)V": async function (this: JView, cs: unknown) { this.contentDesc = cs === null ? null : await csText(cs); },
+  "setContentDescription(Ljava/lang/CharSequence;)V": driven(function* (this: JView, cs: unknown): Gen { this.contentDesc = cs === null ? null : (yield csText(cs)); }),
   "getContentDescription()Ljava/lang/CharSequence;": function (this: JView) { return this.contentDesc; },
 
   "setAccessibilityDelegate(Landroid/view/View$AccessibilityDelegate;)V": function (this: JView, d: unknown) { this.a11yDelegate = d; },
@@ -1228,10 +1247,10 @@ const viewMethods: NativeSpec["methods"] = {
   "getAccessibilityTraversalAfter()I": function (this: JView) { return this.accessibilityTraversalAfter; },
   "setFadingEdgeLength(I)V": function (this: JView, length: number) { this.fadingEdgeLength = length; },
   "getVerticalFadingEdgeLength()I": function (this: JView) { return this.fadingEdgeLength; },
-  "setStateListAnimator(Landroid/animation/StateListAnimator;)V": async function (this: JView, sla: unknown) {
+  "setStateListAnimator(Landroid/animation/StateListAnimator;)V": driven(function* (this: JView, sla: unknown): Gen {
     this.stateListAnimator = sla;
-    if (sla) await vcall(sla, "setTarget", "(Landroid/view/View;)V", this);
-  },
+    if (sla) (yield vcall(sla, "setTarget", "(Landroid/view/View;)V", this));
+  }),
   "getStateListAnimator()Landroid/animation/StateListAnimator;": function (this: JView) { return this.stateListAnimator; },
   "setKeyboardNavigationCluster(Z)V": function (this: JView, v: number) { this.keyboardCluster = !!v; },
   "setTouchscreenBlocksFocus(Z)V": function (this: JView, v: number) { this.touchBlocksFocus = !!v; },
@@ -1253,8 +1272,8 @@ const viewMethods: NativeSpec["methods"] = {
     }
     switch (action) {
       case 0x01: return this.focusable && !this.focused ? takeFocus(this) : 0;   // ACTION_FOCUS
-      case 0x02: if (!this.focused) return 0; return after(vcallMaybe(this, "clearFocus", "()V"), () => 1);
-      case 0x04: case 0x08: return after(vcallMaybe(this, "setSelected", "(Z)V", action === 0x04 ? 1 : 0), () => 1);
+      case 0x02: if (!this.focused) return 0; return after(vcall(this, "clearFocus", "()V"), () => 1);
+      case 0x04: case 0x08: return after(vcall(this, "setSelected", "(Z)V", action === 0x04 ? 1 : 0), () => 1);
       case 0x10: return this.clickable ? guardCall(this, M_performClick) : 0;
       case 0x20: return this.longClickable ? vcall(this, "performLongClick", "()Z") : 0;
     }
@@ -1282,9 +1301,9 @@ const viewMethods: NativeSpec["methods"] = {
   "getViewTreeObserver()Landroid/view/ViewTreeObserver;": function (this: JView) { return getVTO(this); },
   "setTouchDelegate(Landroid/view/TouchDelegate;)V": function (this: JView, delegate: JObj | null) { this.touchDelegate = delegate; },
   "getTouchDelegate()Landroid/view/TouchDelegate;": function (this: JView) { return this.touchDelegate; },
-  "onTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JView, ev: JMotionEvent) {
+  "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JView, ev: JMotionEvent): Gen {
     if (!this.enabled) return +(this.clickable || this.longClickable);
-    if (this.touchDelegate && await vcall(this.touchDelegate, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", ev)) return 1;
+    if (this.touchDelegate && (yield vcall(this.touchDelegate, "onTouchEvent", "(Landroid/view/MotionEvent;)Z", ev))) return 1;
     if (!this.clickable && !this.longClickable) return 0;
     switch (ev.action & 0xff) {
       case 0: // DOWN
@@ -1314,8 +1333,8 @@ const viewMethods: NativeSpec["methods"] = {
         const wasPressed = this.pressed;
         this.pressed = false;
         void this.refreshDrawableState();
-        if (wasPressed && this.clickable && !await this.longPressAction) {
-          await guardCall(this, M_performClick);
+        if (wasPressed && this.clickable && !(yield this.longPressAction)) {
+          (yield guardCall(this, M_performClick));
         }
         this.longPressAction = null;
         return 1;
@@ -1328,14 +1347,14 @@ const viewMethods: NativeSpec["methods"] = {
         return 1;
     }
     return 0;
-  },
-  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JView, ev: JMotionEvent) {
+  }),
+  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JView, ev: JMotionEvent): Gen {
     if (this.touchL) {
-      const r = await vcall(this.touchL, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev);
+      const r = (yield vcall(this.touchL, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev));
       if (r) return 1;
     }
-    return await guardCall(this, M_onTouchEvent, ev);
-  },
+    return (yield guardCall(this, M_onTouchEvent, ev));
+  }),
   "requestUnbufferedDispatch(Landroid/view/MotionEvent;)V": () => {},
   "requestDisallowInterceptTouchEvent(Z)V": function (this: JView, dis: number) {
     let v: JView | null = this.parent;
@@ -1350,48 +1369,48 @@ const viewMethods: NativeSpec["methods"] = {
   // whenever the parent is not one of its own interfaces.
   "setNestedScrollingEnabled(Z)V": function (this: JView, v: number) { this.nestedEnabled = !!v; },
   "isNestedScrollingEnabled()Z": function (this: JView) { return this.nestedEnabled ? 1 : 0; },
-  "startNestedScroll(I)Z": async function (this: JView, axes: number) {
+  "startNestedScroll(I)Z": driven(function* (this: JView, axes: number): Gen {
     if (this.nestedParent) return 1;
     if (!this.nestedEnabled) return 0;
     for (let p: JView | null = this.parent; p; p = p.parent) {
-      if (await vcall(p, "onStartNestedScroll", "(Landroid/view/View;Landroid/view/View;I)Z", this, this, axes)) {
+      if ((yield vcall(p, "onStartNestedScroll", "(Landroid/view/View;Landroid/view/View;I)Z", this, this, axes))) {
         this.nestedParent = p;
-        await vcall(p, "onNestedScrollAccepted", "(Landroid/view/View;Landroid/view/View;I)V", this, this, axes);
+        (yield vcall(p, "onNestedScrollAccepted", "(Landroid/view/View;Landroid/view/View;I)V", this, this, axes));
         return 1;
       }
     }
     return 0;
-  },
-  "stopNestedScroll()V": async function (this: JView) {
+  }),
+  "stopNestedScroll()V": driven(function* (this: JView): Gen {
     const p = this.nestedParent;
     this.nestedParent = null;
-    if (p) await vcall(p, "onStopNestedScroll", "(Landroid/view/View;)V", this);
-  },
+    if (p) (yield vcall(p, "onStopNestedScroll", "(Landroid/view/View;)V", this));
+  }),
   "hasNestedScrollingParent()Z": function (this: JView) { return this.nestedParent ? 1 : 0; },
-  "dispatchNestedPreScroll(II[I[I)Z": async function (this: JView, dx: number, dy: number, consumed: Int32Array | null, offset: Int32Array | null) {
+  "dispatchNestedPreScroll(II[I[I)Z": driven(function* (this: JView, dx: number, dy: number, consumed: Int32Array | null, offset: Int32Array | null): Gen {
     const p = this.nestedParent;
     if (!p || (!dx && !dy)) { if (offset) { offset[0] = 0; offset[1] = 0; } return 0; }
     const c = consumed ?? new Int32Array(2);
     c[0] = 0; c[1] = 0;
-    await vcall(p, "onNestedPreScroll", "(Landroid/view/View;II[I)V", this, dx, dy, c);
+    (yield vcall(p, "onNestedPreScroll", "(Landroid/view/View;II[I)V", this, dx, dy, c));
     if (offset) { offset[0] = 0; offset[1] = 0; }
     return c[0] !== 0 || c[1] !== 0 ? 1 : 0;
-  },
-  "dispatchNestedScroll(IIII[I)Z": async function (this: JView, dxc: number, dyc: number, dxu: number, dyu: number, offset: Int32Array | null) {
+  }),
+  "dispatchNestedScroll(IIII[I)Z": driven(function* (this: JView, dxc: number, dyc: number, dxu: number, dyu: number, offset: Int32Array | null): Gen {
     const p = this.nestedParent;
     if (offset) { offset[0] = 0; offset[1] = 0; }
     if (!p || (!dxc && !dyc && !dxu && !dyu)) return 0;
-    await vcall(p, "onNestedScroll", "(Landroid/view/View;IIII)V", this, dxc, dyc, dxu, dyu);
+    (yield vcall(p, "onNestedScroll", "(Landroid/view/View;IIII)V", this, dxc, dyc, dxu, dyu));
     return 1;
-  },
-  "dispatchNestedPreFling(FF)Z": async function (this: JView, vx: number, vy: number) {
+  }),
+  "dispatchNestedPreFling(FF)Z": driven(function* (this: JView, vx: number, vy: number): Gen {
     const p = this.nestedParent;
-    return p ? await vcall(p, "onNestedPreFling", "(Landroid/view/View;FF)Z", this, vx, vy) : 0;
-  },
-  "dispatchNestedFling(FFZ)Z": async function (this: JView, vx: number, vy: number, consumed: number) {
+    return p ? (yield vcall(p, "onNestedPreFling", "(Landroid/view/View;FF)Z", this, vx, vy)) : 0;
+  }),
+  "dispatchNestedFling(FFZ)Z": driven(function* (this: JView, vx: number, vy: number, consumed: number): Gen {
     const p = this.nestedParent;
-    return p ? await vcall(p, "onNestedFling", "(Landroid/view/View;FFZ)Z", this, vx, vy, consumed) : 0;
-  },
+    return p ? (yield vcall(p, "onNestedFling", "(Landroid/view/View;FFZ)Z", this, vx, vy, consumed)) : 0;
+  }),
   "computeScroll()V": noopComputeScroll,
   "setFocusable(I)V": function (this: JView, v: number) { this.focusable = v === 1; },
   // No drag gesture is ever dispatched (no drag-and-drop pipeline exists), so this only stores
@@ -1414,15 +1433,15 @@ const viewMethods: NativeSpec["methods"] = {
   "requestRectangleOnScreen(Landroid/graphics/Rect;)Z": function (this: JView, rect: JRect) {
     return vcall(this, "requestRectangleOnScreen", "(Landroid/graphics/Rect;Z)Z", rect, 0);
   },
-  "requestRectangleOnScreen(Landroid/graphics/Rect;Z)Z": async function (this: JView, rect: JRect, immediate: number) {
+  "requestRectangleOnScreen(Landroid/graphics/Rect;Z)Z": driven(function* (this: JView, rect: JRect, immediate: number): Gen {
     let scrolled = 0;
     for (let child: JView = this, parent = child.parent; parent; child = parent, parent = parent.parent) {
-      scrolled |= await vcall(parent, "requestChildRectangleOnScreen", "(Landroid/view/View;Landroid/graphics/Rect;Z)Z", child, rect, immediate);
+      scrolled |= (yield vcall(parent, "requestChildRectangleOnScreen", "(Landroid/view/View;Landroid/graphics/Rect;Z)Z", child, rect, immediate));
       const x = child.left - child.scrollX, y = child.top - child.scrollY;
       rect.left += x; rect.right += x; rect.top += y; rect.bottom += y;
     }
     return scrolled;
-  },
+  }),
   "getMatrix()Landroid/graphics/Matrix;": function (this: JView) {
     const m = new JMatrix();
     const px = this.pivotXv ?? this.width() / 2, py = this.pivotYv ?? this.height() / 2;
@@ -1439,8 +1458,8 @@ const viewMethods: NativeSpec["methods"] = {
   "getX()F": function (this: JView) { return this.left + this.translationX; },
   "setY(F)V": function (this: JView, y: number) { this.translationY = y - this.top; invalidate(); },
   "setX(F)V": function (this: JView, x: number) { this.translationX = x - this.left; invalidate(); },
-  "getSuggestedMinimumWidth()I": function (this: JView) { return this.background ? after(vcallMaybe(this.background, "getMinimumWidth", "()I"), n => Math.max(this.minW, n)) : this.minW; },
-  "getSuggestedMinimumHeight()I": function (this: JView) { return this.background ? after(vcallMaybe(this.background, "getMinimumHeight", "()I"), n => Math.max(this.minH, n)) : this.minH; },
+  "getSuggestedMinimumWidth()I": function (this: JView) { return this.background ? after(vcall(this.background, "getMinimumWidth", "()I"), n => Math.max(this.minW, n)) : this.minW; },
+  "getSuggestedMinimumHeight()I": function (this: JView) { return this.background ? after(vcall(this.background, "getMinimumHeight", "()I"), n => Math.max(this.minH, n)) : this.minH; },
   "isFocusable()Z": function (this: JView) { return this.focusable ? 1 : 0; },
   "isFocusableInTouchMode()Z": function (this: JView) { return this.focusableInTouchMode ? 1 : 0; },
   "requestFocus(I)Z": function (this: JView, direction: number) {
@@ -1458,16 +1477,16 @@ const viewMethods: NativeSpec["methods"] = {
   "setBottom(I)V": function (this: JView, v: number) { setBound(this, this.left, this.top, this.right, v); },
   // AOSP View.dispatchKeyEvent: the OnKeyListener sees the event first, then KeyEvent.dispatch
   // routes it to onKeyDown/onKeyUp by action.
-  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": async function (this: JView, ev: unknown) {
-    const code = await vcall(ev, "getKeyCode", "()I"), action = await vcall(ev, "getAction", "()I");
-    if (this.keyL && this.enabled && (await vcall(this.keyL, "onKey", "(Landroid/view/View;ILandroid/view/KeyEvent;)Z", this, code, ev))) return 1;
-    const handled = action === 0 ? await vcall(this, "onKeyDown", "(ILandroid/view/KeyEvent;)Z", code, ev)
-      : action === 1 ? await vcall(this, "onKeyUp", "(ILandroid/view/KeyEvent;)Z", code, ev) : 0;
+  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JView, ev: unknown): Gen {
+    const code = (yield vcall(ev, "getKeyCode", "()I")), action = (yield vcall(ev, "getAction", "()I"));
+    if (this.keyL && this.enabled && ((yield vcall(this.keyL, "onKey", "(Landroid/view/View;ILandroid/view/KeyEvent;)Z", this, code, ev)))) return 1;
+    const handled = action === 0 ? (yield vcall(this, "onKeyDown", "(ILandroid/view/KeyEvent;)Z", code, ev))
+      : action === 1 ? (yield vcall(this, "onKeyUp", "(ILandroid/view/KeyEvent;)Z", code, ev)) : 0;
     if (handled) return 1;
     for (let i = this.unhandledKeyLs.length - 1; i >= 0; i--)
-      if (await vcall(this.unhandledKeyLs[i], "onUnhandledKeyEvent", "(Landroid/view/View;Landroid/view/KeyEvent;)Z", this, ev)) return 1;
+      if ((yield vcall(this.unhandledKeyLs[i], "onUnhandledKeyEvent", "(Landroid/view/View;Landroid/view/KeyEvent;)Z", this, ev))) return 1;
     return 0;
-  },
+  }),
   "onSaveInstanceState()Landroid/os/Parcelable;": () => EMPTY_STATE,
   "getDrawingTime()J": () => BigInt(Math.floor(performance.now())),
   "verifyDrawable(Landroid/graphics/drawable/Drawable;)Z": function (this: JView, d: unknown) { return d === this.background ? 1 : 0; },
@@ -1509,11 +1528,11 @@ const viewMethods: NativeSpec["methods"] = {
     out.left = rect.left; out.top = rect.top; out.right = rect.right; out.bottom = rect.bottom;
     return vcall(ins, "consumeSystemWindowInsets", "()Landroid/view/WindowInsets;");
   },
-  "onApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": async function (this: JView, ins: JWindowInsets) {
+  "onApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": driven(function* (this: JView, ins: JWindowInsets): Gen {
     if (!ins || ins.consumedV) return ins;
-    if (!await vcall(this, "fitSystemWindows", "(Landroid/graphics/Rect;)Z", Object.assign(new JRect(), sysIns(ins)))) return ins;
+    if (!(yield vcall(this, "fitSystemWindows", "(Landroid/graphics/Rect;)Z", Object.assign(new JRect(), sysIns(ins))))) return ins;
     return vcall(ins, "consumeSystemWindowInsets", "()Landroid/view/WindowInsets;");
-  },
+  }),
   "dispatchApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": viewDispatchInsets,
   "postOnAnimationDelayed(Ljava/lang/Runnable;J)V": function (this: JView, r: unknown, d: bigint) {
     setTimeout(() => uiState.frameCallbacks.push({ run: r }), Number(d));
@@ -1525,16 +1544,16 @@ const viewMethods: NativeSpec["methods"] = {
   "getAnimation()Landroid/view/animation/Animation;": function (this: JView) { return this.jAnim; },
   "animate()Landroid/view/ViewPropertyAnimator;": function (this: JView) { return mkVPA(this); },
   "getForeground()Landroid/graphics/drawable/Drawable;": function (this: JView) { return this.foreground; },
-  "getHandler()Landroid/os/Handler;": async function () {
+  "getHandler()Landroid/os/Handler;": driven(function* (): Gen {
     const info = rt.link("android/os/Handler");
     const p = rt.initClass(info);
-    if (p) await p;
+    if (p) (yield p);
     return new info.ctor();
-  },
-  "getDisplay()Landroid/view/Display;": async function () {
+  }),
+  "getDisplay()Landroid/view/Display;": driven(function* (): Gen {
     const info = rt.link("android/view/Display");
     return new info.ctor();
-  },
+  }),
   "hasTransientState()Z": function (this: JView) { return this.transientState > 0 || (this as JViewGroup).transientChildren > 0 ? 1 : 0; },
   "setHasTransientState(Z)V": function (this: JView, v: number) { this.transientState = Math.max(0, this.transientState + (v ? 1 : -1)); },
   "static combineMeasuredStates(II)I": (a: number, b: number) => a | b,
@@ -1659,10 +1678,10 @@ const viewMethods: NativeSpec["methods"] = {
   "static resolveSize(II)I": (size: number, spec: number) => resolveSize(size, spec),
   "static getDefaultSize(II)I": (size: number, spec: number) => defaultSize(size, spec),
   "static generateViewId()I": (() => { let n = 0x00ffff00; return () => ++n; })(),
-  "static inflate(Landroid/content/Context;ILandroid/view/ViewGroup;)Landroid/view/View;": async (ctx: unknown, id: number, root: unknown) => {
-    const { inflateLayout } = await import("./inflate");
+  "static inflate(Landroid/content/Context;ILandroid/view/ViewGroup;)Landroid/view/View;": driven(function* (ctx: unknown, id: number, root: unknown): Gen  {
+    const { inflateLayout } = (yield import("./inflate"));
     return inflateLayout(ctx, id, root, !!root);
-  },
+  }),
 };
 
 function setPadding(this: JView, l: number, t: number, r: number, b: number) {
@@ -1695,17 +1714,18 @@ function findByPred(v: JView, p: (v: JView) => boolean): JView | null {
 export function inheritContext(child: JView, from: JView) {
   child.ctx = from.ctx; child.jres = from.jres; child.theme = from.theme;
 }
-export async function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | null, defStyleAttr = 0, defStyleRes = 0) {
+export function initViewFromCtx(v: JView, jctx: unknown, set: JAttrSet | null, defStyleAttr = 0, defStyleRes = 0): unknown { return rt.drive(initViewFromCtx$(v, jctx, set, defStyleAttr, defStyleRes)); }
+function* initViewFromCtx$(v: JView, jctx: unknown, set: JAttrSet | null, defStyleAttr = 0, defStyleRes = 0): Gen {
   v.ctx = jctx;
   if (jctx) {
-    v.resources = await vcall(jctx, "getResources", "()Landroid/content/res/Resources;");
+    v.resources = (yield vcall(jctx, "getResources", "()Landroid/content/res/Resources;"));
     const host = (jctx as JContext | null)?.$host;
     if (host) {
       v.jres = host.res;
-      v.theme = await askTheme(jctx) ?? host.theme;
+      v.theme = (yield askTheme(jctx)) ?? host.theme;
     }
   }
-  await applyViewAttrs(v, set, defStyleAttr, defStyleRes);
+  (yield applyViewAttrs(v, set, defStyleAttr, defStyleRes));
 }
 
 export class JViewGroup extends JView {
@@ -1733,12 +1753,13 @@ export class JViewGroup extends JView {
 }
 /** Convert a LayoutParams to one this ViewGroup accepts (e.g. ViewPager needs its own LP type,
  *  and casts in its onLayout otherwise). Dispatches to the ViewGroup's own check/generate overrides. */
-async function convertLp(vg: JViewGroup, lp: JLayoutParams | null): Promise<JLayoutParams | null> {
+function convertLp(vg: JViewGroup, lp: JLayoutParams | null): JLayoutParams | null | Promise<JLayoutParams | null> { return rt.drive(convertLp$(vg, lp)); }
+function* convertLp$(vg: JViewGroup, lp: JLayoutParams | null): Gen<JLayoutParams | null> {
   if (!lp) return lp;
   if (jmethod(vg, M_checkLp)) {
-    const ok = await guardCall(vg, M_checkLp, lp);
+    const ok = (yield guardCall(vg, M_checkLp, lp));
     if (!ok) {
-      const converted = await guardMaybe(vg, M_generateLp, lp);
+      const converted = (yield guardMaybe(vg, M_generateLp, lp));
       if (converted) return converted as JLayoutParams;
     }
   }
@@ -1769,43 +1790,47 @@ function unlinkChild(parent: JViewGroup, child: JView): boolean {
   child.parent = null;
   return true;
 }
-async function notifyChildRemoved(parent: JViewGroup, child: JView, thread: typeof curThread) {
-  await vcallOn(thread, parent, "onViewRemoved", "(Landroid/view/View;)V", child);
+function notifyChildRemoved(parent: JViewGroup, child: JView, thread: typeof curThread): unknown { return rt.drive(notifyChildRemoved$(parent, child, thread)); }
+function* notifyChildRemoved$(parent: JViewGroup, child: JView, thread: typeof curThread): Gen {
+  (yield vcallOn(thread, parent, "onViewRemoved", "(Landroid/view/View;)V", child));
   if (parent.hierarchyChangeL) {
-    await vcallOn(thread, parent.hierarchyChangeL, "onChildViewRemoved", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
+    (yield vcallOn(thread, parent.hierarchyChangeL, "onChildViewRemoved", "(Landroid/view/View;Landroid/view/View;)V", parent, child));
   }
 }
-export async function detachView(parent: JViewGroup, child: JView, request = true, thread = curThread) {
+export function detachView(parent: JViewGroup, child: JView, request = true, thread = curThread): unknown { return rt.drive(detachView$(parent, child, request, thread)); }
+function* detachView$(parent: JViewGroup, child: JView, request = true, thread = curThread): Gen {
   if (!parent.children.includes(child)) return;
-  await noteTransientChild(parent, child, false, thread);
-  if (child.attached) await dispatchDetached(child, thread);
+  (yield noteTransientChild(parent, child, false, thread));
+  if (child.attached) (yield dispatchDetached(child, thread));
   unlinkChild(parent, child);
   if (!request) clearMeasureCache(parent);
-  await notifyChildRemoved(parent, child, thread);
+  (yield notifyChildRemoved(parent, child, thread));
   if (request) { requestLayoutVirtual(parent); invalidate(parent); }
 }
 export function addUnattachedView(parent: JViewGroup, child: JView, index = -1) {
   if (parent.attached || child.attached || child.parent) throw new Error("Use attachView for an existing view hierarchy");
   if (linkChild(parent, child, index)) { requestLayoutVirtual(parent); invalidate(parent); }
 }
-export async function attachView(parent: JViewGroup, child: JView, index = -1, request = true, thread = curThread) {
-  if (child.parent) await detachView(child.parent as JViewGroup, child, request, thread);
+export function attachView(parent: JViewGroup, child: JView, index = -1, request = true, thread = curThread): unknown { return rt.drive(attachView$(parent, child, index, request, thread)); }
+function* attachView$(parent: JViewGroup, child: JView, index = -1, request = true, thread = curThread): Gen {
+  if (child.parent) (yield detachView(child.parent as JViewGroup, child, request, thread));
   if (!linkChild(parent, child, index)) return;
   if (!request) clearMeasureCache(parent);
-  await noteTransientChild(parent, child, true, thread);
+  (yield noteTransientChild(parent, child, true, thread));
   if (request) { requestLayoutVirtual(parent); invalidate(parent); }
-  if (parent.attached) await dispatchAttached(child, thread);
-  await vcallOn(thread, parent, "onViewAdded", "(Landroid/view/View;)V", child);
+  if (parent.attached) (yield dispatchAttached(child, thread));
+  (yield vcallOn(thread, parent, "onViewAdded", "(Landroid/view/View;)V", child));
   if (parent.hierarchyChangeL) {
-    await vcallOn(thread, parent.hierarchyChangeL, "onChildViewAdded", "(Landroid/view/View;Landroid/view/View;)V", parent, child);
+    (yield vcallOn(thread, parent.hierarchyChangeL, "onChildViewAdded", "(Landroid/view/View;Landroid/view/View;)V", parent, child));
   }
 }
-export async function dispatchAttached(v: JView, thread = curThread) {
+export function dispatchAttached(v: JView, thread = curThread): unknown { return rt.drive(dispatchAttached$(v, thread)); }
+function* dispatchAttached$(v: JView, thread = curThread): Gen {
   if (v.attached) return;
-  await attachTree(v, thread);
+  (yield attachTree(v, thread));
   flushViewPosts(v);
   // a root is a window's view: ViewRootImpl reports the window attached once its tree is
-  if (!v.parent) await vtoMap.get(v)?.dispatchWindowAttached(true);
+  if (!v.parent) (yield vtoMap.get(v)?.dispatchWindowAttached(true));
   // Queued attachment may follow an unattached measure and an empty hosted display list.
   requestLayout(v);
   invalidate(v);
@@ -1822,18 +1847,19 @@ function flushViewPosts(view: JView): void {
   }
   if (view instanceof JViewGroup) for (const child of view.children) flushViewPosts(child);
 }
-async function attachTree(v: JView, thread: typeof curThread) {
+function attachTree(v: JView, thread: typeof curThread): unknown { return rt.drive(attachTree$(v, thread)); }
+function* attachTree$(v: JView, thread: typeof curThread): Gen {
   if (v.attached) return;
   v.attached = true;
   mergeVTO(v);
-  try { await vcallOn(thread, v, "onAttachedToWindow", "()V"); } catch (e) { reportUncaught(e); }
+  try { (yield vcallOn(thread, v, "onAttachedToWindow", "()V")); } catch (e) { reportUncaught(e); }
   // a snapshot, as AOSP's copy-on-write list: a one-shot listener removing itself must not skip the next
   for (const l of [...v.attachLs]) {
-    try { await vcallOn(thread, l, "onViewAttachedToWindow", "(Landroid/view/View;)V", v); } catch (e) { reportUncaught(e); }
+    try { (yield vcallOn(thread, l, "onViewAttachedToWindow", "(Landroid/view/View;)V", v)); } catch (e) { reportUncaught(e); }
   }
   // one child's failure must not prevent its siblings from attaching (e.g. ViewPager populate)
   if (v instanceof JViewGroup) for (const c of [...v.children]) {
-    try { await attachTree(c, thread); } catch (e) { reportUncaught(e); }
+    try { (yield attachTree(c, thread)); } catch (e) { reportUncaught(e); }
   }
   v.layoutRequested = true;
   clearMeasureCache(v);
@@ -1844,17 +1870,19 @@ async function attachTree(v: JView, thread: typeof curThread) {
  * declared the change in its manifest ever gets, and Compose's AndroidComposeView listens on it
  * to republish LocalConfiguration (hence isSystemInDarkTheme).
  */
-export async function dispatchConfigurationChanged(v: JView, cfg: unknown) {
-  try { await guardMaybe(v, M_onConfigChanged, cfg); } catch (e) { reportUncaught(e); }
-  if (v instanceof JViewGroup) for (const c of [...v.children]) await dispatchConfigurationChanged(c, cfg);
+export function dispatchConfigurationChanged(v: JView, cfg: unknown): unknown { return rt.drive(dispatchConfigurationChanged$(v, cfg)); }
+function* dispatchConfigurationChanged$(v: JView, cfg: unknown): Gen {
+  try { (yield guardMaybe(v, M_onConfigChanged, cfg)); } catch (e) { reportUncaught(e); }
+  if (v instanceof JViewGroup) for (const c of [...v.children]) (yield dispatchConfigurationChanged(c, cfg));
 }
-export async function dispatchDetached(v: JView, thread = curThread) {
+export function dispatchDetached(v: JView, thread = curThread): unknown { return rt.drive(dispatchDetached$(v, thread)); }
+function* dispatchDetached$(v: JView, thread = curThread): Gen {
   if (!v.attached) return;
-  if (v instanceof JViewGroup) for (const c of [...v.children]) await dispatchDetached(c, thread);
-  await vcallOn(thread, v, "onDetachedFromWindow", "()V");
-  for (const l of [...v.attachLs]) await vcallOn(thread, l, "onViewDetachedFromWindow", "(Landroid/view/View;)V", v);
+  if (v instanceof JViewGroup) for (const c of [...v.children]) (yield dispatchDetached(c, thread));
+  (yield vcallOn(thread, v, "onDetachedFromWindow", "()V"));
+  for (const l of [...v.attachLs]) (yield vcallOn(thread, l, "onViewDetachedFromWindow", "(Landroid/view/View;)V", v));
   v.attached = false;
-  if (!v.parent) await vtoMap.get(v)?.dispatchWindowAttached(false);
+  if (!v.parent) (yield vtoMap.get(v)?.dispatchWindowAttached(false));
 }
 
 /** AOSP getChildMeasureSpec */
@@ -1870,13 +1898,14 @@ export function childMeasureSpec(spec: number, padding: number, childDim: number
   if (childDim !== WRAP_CONTENT) return makeSpec(0, MS_UNSPEC);
   return mode === MS_UNSPEC ? makeSpec(size, MS_UNSPEC) : makeSpec(size, MS_AT_MOST);
 }
-export async function measureChildWithMargins(vg: JViewGroup, child: JView, wSpec: number, wUsed: number, hSpec: number, hUsed: number) {
+export function measureChildWithMargins(vg: JViewGroup, child: JView, wSpec: number, wUsed: number, hSpec: number, hUsed: number): unknown { return rt.drive(measureChildWithMargins$(vg, child, wSpec, wUsed, hSpec, hUsed)); }
+function* measureChildWithMargins$(vg: JViewGroup, child: JView, wSpec: number, wUsed: number, hSpec: number, hUsed: number): Gen {
   const lp = child.lp;
   const ml = lp instanceof JMarginLP ? lp.marginL + lp.marginR : 0;
   const mt = lp instanceof JMarginLP ? lp.marginT + lp.marginB : 0;
-  await measureView(child,
+  (yield measureView(child,
     childMeasureSpec(wSpec, vg.padL + vg.padR + ml + wUsed, lp?.width ?? WRAP_CONTENT),
-    childMeasureSpec(hSpec, vg.padT + vg.padB + mt + hUsed, lp?.height ?? WRAP_CONTENT));
+    childMeasureSpec(hSpec, vg.padT + vg.padB + mt + hUsed, lp?.height ?? WRAP_CONTENT)));
 }
 
 const M_checkLp = mangleMethod("checkLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)Z");
@@ -1888,20 +1917,22 @@ const M_resolveLD = mangleMethod("resolveLayoutDirection", "(I)V");
 export function resolveLp(lp: JLayoutParams): unknown { return (jmethod(lp, M_resolveLD) as JMethod).call(lp, 0); }
 
 /** the native terminal: every other overload reaches the tree through here */
-async function addView3(this: JViewGroup, c: JView, i: number, lp: JLayoutParams | null) {
+function addView3(this: JViewGroup, c: JView, i: number, lp: JLayoutParams | null): unknown { return rt.drive(addView3$.call(this, c, i, lp)); }
+function* addView3$(this: JViewGroup, c: JView, i: number, lp: JLayoutParams | null): Gen {
   const thread = curThread;
-  c.lp = lp ? await convertLp(this, lp)
-    : c.lp ? await convertLp(this, c.lp)
-    : await guardCall(this, M_genDefaultLP) as JLayoutParams | null;
-  await resolveLp(c.lp!);
-  await attachView(this, c, i, true, thread);
+  c.lp = lp ? (yield convertLp(this, lp))
+    : c.lp ? (yield convertLp(this, c.lp))
+    : (yield guardCall(this, M_genDefaultLP)) as JLayoutParams | null;
+  (yield resolveLp(c.lp!));
+  (yield attachView(this, c, i, true, thread));
 }
 const M_hasTransientState = mangleMethod("hasTransientState", "()Z");
 const M_childTransientChanged = mangleMethod("childHasTransientStateChanged", "(Landroid/view/View;Z)V");
-async function noteTransientChild(parent: JViewGroup, child: JView, added: boolean, thread = curThread) {
+function noteTransientChild(parent: JViewGroup, child: JView, added: boolean, thread = curThread): unknown { return rt.drive(noteTransientChild$(parent, child, added, thread)); }
+function* noteTransientChild$(parent: JViewGroup, child: JView, added: boolean, thread = curThread): Gen {
   const method = jmethod(child, M_hasTransientState);
-  if (method && await vcallOn(thread, child, "hasTransientState", "()Z")) {
-    await vcallOn(thread, parent, "childHasTransientStateChanged", "(Landroid/view/View;Z)V", child, added ? 1 : 0);
+  if (method && (yield vcallOn(thread, child, "hasTransientState", "()Z"))) {
+    (yield vcallOn(thread, parent, "childHasTransientStateChanged", "(Landroid/view/View;Z)V", child, added ? 1 : 0));
   }
 }
 /**
@@ -1910,31 +1941,32 @@ async function noteTransientChild(parent: JViewGroup, child: JView, added: boole
  * is the only way a page committed during its own measure pass ever gets sized. Calling attachView
  * directly from each overload skipped all of it.
  */
-async function addViewFunnel(vg: JViewGroup, c: JView, i: number, lp: JLayoutParams | null) {
+function addViewFunnel(vg: JViewGroup, c: JView, i: number, lp: JLayoutParams | null): unknown { return rt.drive(addViewFunnel$(vg, c, i, lp)); }
+function* addViewFunnel$(vg: JViewGroup, c: JView, i: number, lp: JLayoutParams | null): Gen {
   if (!c) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Cannot add a null child view to a ViewGroup");
   if (!lp) {
-    lp = c.lp ?? await guardCall(vg, M_genDefaultLP) as JLayoutParams | null;
+    lp = c.lp ?? (yield guardCall(vg, M_genDefaultLP)) as JLayoutParams | null;
     if (!lp) throw rt.mkThrowable("java/lang/IllegalArgumentException", "generateDefaultLayoutParams() cannot return null");
   }
   const f = jmethod(vg, M_addView3);
-  if (f && f !== addView3) return void await guardApply(f, vg, c, i, lp);
-  await addView3.call(vg, c, i, lp);
+  if (f && f !== addView3) return void (yield guardApply(f, vg, c, i, lp));
+  (yield addView3.call(vg, c, i, lp));
 }
 
 const vgMethods: NativeSpec["methods"] = {
-  "dispatchApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": async function (this: JViewGroup, ins: JWindowInsets) {
-    let cur = await viewDispatchInsets.call(this, ins);
+  "dispatchApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": driven(function* (this: JViewGroup, ins: JWindowInsets): Gen {
+    let cur = (yield viewDispatchInsets.call(this, ins));
     for (const c of this.children) {
       if (cur?.consumedV) break;
-      const childInsets = await vcall(c, "dispatchApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", cur);
+      const childInsets = (yield vcall(c, "dispatchApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", cur));
       // Before target R, a consuming child also starved its siblings of insets.
       if (brokenInsetsDispatch) cur = childInsets;
     }
     return cur;
-  },
-  "addView(Landroid/view/View;)V": async function (this: JViewGroup, c: JView) {
+  }),
+  "addView(Landroid/view/View;)V": driven(function* (this: JViewGroup, c: JView): Gen {
     return addViewFunnel(this, c, -1, null);
-  },
+  }),
   "addView(Landroid/view/View;I)V": function (this: JViewGroup, c: JView, i: number) {
     return addViewFunnel(this, c, i, null);
   },
@@ -1949,10 +1981,10 @@ const vgMethods: NativeSpec["methods"] = {
   },
   "removeView(Landroid/view/View;)V": removeChild,
   "removeViewInLayout(Landroid/view/View;)V": removeChildInLayout,
-  "removeViewAt(I)V": async function (this: JViewGroup, i: number) {
+  "removeViewAt(I)V": driven(function* (this: JViewGroup, i: number): Gen {
     const c = this.children[i];
     if (c) return detachView(this, c);
-  },
+  }),
   "removeAllViews()V": function (this: JViewGroup) { return removeRange(this, 0, this.children.length, true, true); },
   "removeAllViewsInLayout()V": function (this: JViewGroup) { return removeRange(this, 0, this.children.length, false, true); },
   "getChildCount()I": function (this: JViewGroup) { return this.children.length; },
@@ -1985,7 +2017,7 @@ const vgMethods: NativeSpec["methods"] = {
   "generateLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;": function (this: JViewGroup, lp: JLayoutParams) {
     return lp;
   },
-  "dispatchDraw(Landroid/graphics/Canvas;)V": async function (this: JViewGroup, cv: JCanvas) {
+  "dispatchDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JViewGroup, cv: JCanvas): Gen {
     if (this.layoutAnimationScheduled && this.layoutAnimation && this.children.some((c) => c.visibility === 0)) {
       this.layoutAnimationScheduled = false;
       startGroupAnim(this, this.layoutAnimation);
@@ -1995,14 +2027,14 @@ const vgMethods: NativeSpec["methods"] = {
     if (this.drawingOrderEnabled) {
       order = [];
       for (let i = 0; i < n; i++) {
-        const c = this.children[await vcall(this, "getChildDrawingOrder", "(II)I", n, i)];
+        const c = this.children[(yield vcall(this, "getChildDrawingOrder", "(II)I", n, i))];
         if (c) order.push(c);
       }
     }
     if (order.some((c) => c.elevationV || c.translationZ))
       order = [...order].sort((a, b) => a.elevationV + a.translationZ - b.elevationV - b.translationZ);
-    for (const c of order) await drawView(c, cv, this);
-  },
+    for (const c of order) (yield drawView(c, cv, this));
+  }),
   "setChildrenDrawingOrderEnabled(Z)V": function (this: JViewGroup, e: number) { this.drawingOrderEnabled = !!e; },
   "setLayoutAnimation(Landroid/view/animation/LayoutAnimationController;)V": function (this: JViewGroup, animation: unknown) {
     this.layoutAnimation = animation;
@@ -2013,50 +2045,50 @@ const vgMethods: NativeSpec["methods"] = {
   "isChildrenDrawingOrderEnabled()Z": function (this: JViewGroup) { return this.drawingOrderEnabled ? 1 : 0; },
   "getChildDrawingOrder(II)I": (_n: number, i: number) => i,
   "getChildDrawingOrder(I)I": function (this: JViewGroup, i: number) { return vcall(this, "getChildDrawingOrder", "(II)I", this.children.length, i); },
-  "onMeasure(II)V": async function (this: JViewGroup, w: number, h: number) {
+  "onMeasure(II)V": driven(function* (this: JViewGroup, w: number, h: number): Gen {
     // default: act like FrameLayout-lite
     let mw = 0, mh = 0;
     for (const c of this.children) {
       if (c.visibility === 8) continue;
-      await measureChildWithMargins(this, c, w, 0, h, 0);
+      (yield measureChildWithMargins(this, c, w, 0, h, 0));
       mw = Math.max(mw, c.measuredW);
       mh = Math.max(mh, c.measuredH);
     }
     const state = this.measuredChildState();
     this.setMeasuredDimension(resolveSizeAndState(mw + this.padL + this.padR, w, state),
       resolveSizeAndState(mh + this.padT + this.padB, h, state << 16));
-  },
-  "onLayout(ZIIII)V": async function (this: JViewGroup) {
+  }),
+  "onLayout(ZIIII)V": driven(function* (this: JViewGroup): Gen {
     for (const c of this.children) {
       if (c.visibility === 8) continue;
-      await layoutView(c, this.padL, this.padT, this.padL + c.measuredW, this.padT + c.measuredH);
+      (yield layoutView(c, this.padL, this.padT, this.padL + c.measuredW, this.padT + c.measuredH));
     }
-  },
+  }),
   "measureChildWithMargins(Landroid/view/View;IIII)V": function (this: JViewGroup, c: JView, ws: number, wu: number, hs: number, hu: number) {
     return measureChildWithMargins(this, c, ws, wu, hs, hu);
   },
-  "measureChild(Landroid/view/View;II)V": async function (this: JViewGroup, c: JView, ws: number, hs: number) {
-    await measureView(c,
+  "measureChild(Landroid/view/View;II)V": driven(function* (this: JViewGroup, c: JView, ws: number, hs: number): Gen {
+    (yield measureView(c,
       childMeasureSpec(ws, this.padL + this.padR, c.lp?.width ?? WRAP_CONTENT),
-      childMeasureSpec(hs, this.padT + this.padB, c.lp?.height ?? WRAP_CONTENT));
-  },
-  "measureChildren(II)V": async function (this: JViewGroup, ws: number, hs: number) {
+      childMeasureSpec(hs, this.padT + this.padB, c.lp?.height ?? WRAP_CONTENT)));
+  }),
+  "measureChildren(II)V": driven(function* (this: JViewGroup, ws: number, hs: number): Gen {
     for (const c of this.children) {
       if (c.visibility === 8) continue;
-      await measureChildWithMargins(this, c, ws, 0, hs, 0);
+      (yield measureChildWithMargins(this, c, ws, 0, hs, 0));
     }
-  },
+  }),
   "setOnHierarchyChangeListener(Landroid/view/ViewGroup$OnHierarchyChangeListener;)V": function (this: JViewGroup, l: unknown) {
     this.hierarchyChangeL = l;
   },
-  "childHasTransientStateChanged(Landroid/view/View;Z)V": async function (this: JViewGroup, _child: JView, has: number) {
+  "childHasTransientStateChanged(Landroid/view/View;Z)V": driven(function* (this: JViewGroup, _child: JView, has: number): Gen {
     const before = this.transientChildren > 0;
     this.transientChildren = Math.max(0, this.transientChildren + (has ? 1 : -1));
     const after = this.transientChildren > 0;
     if (before !== after && this.parent) {
-      await guardMaybe(this.parent, M_childTransientChanged, this, after ? 1 : 0);
+      (yield guardMaybe(this.parent, M_childTransientChanged, this, after ? 1 : 0));
     }
-  },
+  }),
   "setClipChildren(Z)V": function (this: JViewGroup, v: number) { this.clipChildren = !!v; },
   "getClipChildren()Z": function (this: JViewGroup) { return this.clipChildren ? 1 : 0; },
   "setClipToPadding(Z)V": function (this: JViewGroup, v: number) { this.clipToPadding = !!v; },
@@ -2066,37 +2098,37 @@ const vgMethods: NativeSpec["methods"] = {
   "addViewInLayout(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;Z)Z": addInLayout,
   "attachViewToParent(Landroid/view/View;ILandroid/view/ViewGroup$LayoutParams;)V": attachToParent,
   // the child was already unlinked by detachViewFromParent; this is the rest of its removal
-  "removeDetachedView(Landroid/view/View;Z)V": async function (this: JViewGroup, c: JView) {
+  "removeDetachedView(Landroid/view/View;Z)V": driven(function* (this: JViewGroup, c: JView): Gen {
     const thread = curThread;
-    if (c.attached) await dispatchDetached(c, thread);
-    await notifyChildRemoved(this, c, thread);
-  },
+    if (c.attached) (yield dispatchDetached(c, thread));
+    (yield notifyChildRemoved(this, c, thread));
+  }),
   "detachViewFromParent(Landroid/view/View;)V": function (this: JViewGroup, c: JView) { unlinkChild(this, c); },
-  "drawChild(Landroid/graphics/Canvas;Landroid/view/View;J)Z": async function (this: JViewGroup, cv: JCanvas, c: JView) {
-    await drawView(c, cv, this);
+  "drawChild(Landroid/graphics/Canvas;Landroid/view/View;J)Z": driven(function* (this: JViewGroup, cv: JCanvas, c: JView): Gen {
+    (yield drawView(c, cv, this));
     return 0;
-  },
+  }),
   "addStatesFromChildren()Z": function (this: JViewGroup) { return +this.addStatesFromChildren; },
   "setAddStatesFromChildren(Z)V": function (this: JViewGroup, enabled: number) { this.addStatesFromChildren = !!enabled; return this.refreshDrawableState(); },
   "childDrawableStateChanged(Landroid/view/View;)V": function (this: JViewGroup) { if (this.addStatesFromChildren) return this.refreshDrawableState(); },
-  "onCreateDrawableState(I)[I": async function (this: JViewGroup, extra: number) {
+  "onCreateDrawableState(I)[I": driven(function* (this: JViewGroup, extra: number): Gen {
     const states = this.baseState();
     if (this.addStatesFromChildren) for (const child of this.children) {
-      const childStates: Int32Array = await vcall(child, "getDrawableState", "()[I");
+      const childStates: Int32Array = (yield vcall(child, "getDrawableState", "()[I"));
       for (const state of childStates) if (state !== 0) states.push(state);
     }
     const out = new Int32Array(states.length + Math.max(0, extra | 0));
     out.set(states);
     return out;
-  },
+  }),
   "static getChildMeasureSpec(III)I": (spec: number, padding: number, dim: number) => childMeasureSpec(spec, padding, dim),
   "setTransitionGroup(Z)V": function (this: JViewGroup, group: number) { this.transitionGroup = !!group; },
-  "isTransitionGroup()Z": async function (this: JViewGroup) {
+  "isTransitionGroup()Z": driven(function* (this: JViewGroup): Gen {
     if (this.transitionGroup !== null) return +this.transitionGroup;
-    const outline = await vcall(this, "getOutlineProvider", "()Landroid/view/ViewOutlineProvider;");
-    return +(!!(await vcall(this, "getBackground", "()Landroid/graphics/drawable/Drawable;")) ||
-      (await vcall(this, "getTransitionName", "()Ljava/lang/String;")) !== null || !!outline && outline !== bgOutline);
-  },
+    const outline = (yield vcall(this, "getOutlineProvider", "()Landroid/view/ViewOutlineProvider;"));
+    return +(!!((yield vcall(this, "getBackground", "()Landroid/graphics/drawable/Drawable;"))) ||
+      ((yield vcall(this, "getTransitionName", "()Ljava/lang/String;"))) !== null || !!outline && outline !== bgOutline);
+  }),
   ...noops("onViewAdded(Landroid/view/View;)V", "onViewRemoved(Landroid/view/View;)V",
     "setChildrenDrawingCacheEnabled(Z)V", "setHandwritingBoundsOffsets(FFFF)V", "suppressLayout(Z)V",
     "setMotionEventSplittingEnabled(Z)V", "setDescendantFocusability(I)V",
@@ -2116,12 +2148,12 @@ const vgMethods: NativeSpec["methods"] = {
       v = v.parent;
     }
   },
-  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": async function (this: JViewGroup, ev: JMotionEvent) {
+  "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JViewGroup, ev: JMotionEvent): Gen {
     const action = ev.action & 0xff;
     if (action === 0) { this.touchTarget = null; this.disallowIntercept = false; }
     let intercepted = false;
     if (!this.disallowIntercept && (action === 0 || this.touchTarget)) {
-      intercepted = !!(await guardCall(this, M_onIntercept, ev));
+      intercepted = !!((yield guardCall(this, M_onIntercept, ev)));
     }
     if (action === 0 && !intercepted) {
       // find touch target among children (reverse order)
@@ -2133,7 +2165,7 @@ const vgMethods: NativeSpec["methods"] = {
         if (cx < 0 || cy < 0 || cx >= c.width() || cy >= c.height()) continue;
         const ox = ev.x, oy = ev.y;
         ev.x = cx; ev.y = cy;
-        const handled = await guardCall(c, M_dispatchTouch, ev);
+        const handled = (yield guardCall(c, M_dispatchTouch, ev));
         ev.x = ox; ev.y = oy;
         if (handled) { this.touchTarget = c; return 1; }
       }
@@ -2142,7 +2174,7 @@ const vgMethods: NativeSpec["methods"] = {
       const ox = ev.x, oy = ev.y;
       ev.x = ev.x + this.scrollX - (c.left + c.translationX);
       ev.y = ev.y + this.scrollY - (c.top + c.translationY);
-      const handled = await guardCall(c, M_dispatchTouch, ev);
+      const handled = (yield guardCall(c, M_dispatchTouch, ev));
       ev.x = ox; ev.y = oy;
       if (action === 1 || action === 3) this.touchTarget = null;
       return handled ? 1 : 0;
@@ -2151,17 +2183,17 @@ const vgMethods: NativeSpec["methods"] = {
       const c = this.touchTarget;
       const oldAction = ev.action;
       ev.action = 3;
-      await guardCall(c, M_dispatchTouch, ev);
+      (yield guardCall(c, M_dispatchTouch, ev));
       ev.action = oldAction;
       this.touchTarget = null;
     }
     // AOSP: the group's own OnTouchListener sees only what no child took (View.dispatchTouchEvent
     // runs when there is no touch target); a listener that swallows everything, like the one
     // BottomSheetDialog puts on its sheet, must not starve the sheet's buttons.
-    if (this.touchL && await vcall(this.touchL, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev)) return 1;
-    const self = await guardCall(this, M_onTouchEvent, ev);
+    if (this.touchL && (yield vcall(this.touchL, "onTouch", "(Landroid/view/View;Landroid/view/MotionEvent;)Z", this, ev))) return 1;
+    const self = (yield guardCall(this, M_onTouchEvent, ev));
     return self ? 1 : 0;
-  },
+  }),
 };
 
 export function lpFromAttrs<T extends JLayoutParams>(lp: T, res: Resources, set: JAttrSet | null): T {
@@ -2213,10 +2245,11 @@ class JVTO extends JObj {
   dispatchOnDraw() { return fanOut(this.drawLs, "onDraw", "()V"); }
   dispatchScrollChanged() { return fanOut(this.scrollLs, "onScrollChanged", "()V"); }
 }
-async function fanOut(ls: unknown[], name: string, desc: string, ...args: unknown[]): Promise<void> {
+function fanOut(ls: unknown[], name: string, desc: string, ...args: unknown[]): void | Promise<void> { return rt.drive(fanOut$(ls, name, desc, ...args)); }
+function* fanOut$(ls: unknown[], name: string, desc: string, ...args: unknown[]): Gen<void> {
   if (!ls.length) return;
   for (const l of [...ls]) {
-    try { await vcall(l, name, desc, ...args); } catch (e) { console.error("[vto]", e); }
+    try { (yield vcall(l, name, desc, ...args)); } catch (e) { console.error("[vto]", e); }
   }
 }
 const vtoMap = new WeakMap<JView, JVTO>();
@@ -2242,7 +2275,7 @@ function getVTO(v: JView): JVTO {
 }
 /** fire-and-forget: scroll setters are synchronous void natives, same shape as refreshDrawableState */
 function fireScrollChanged(v: JView, oldX: number, oldY: number) {
-  if (v.scrollChangeL) void vcall(v.scrollChangeL, "onScrollChange", "(Landroid/view/View;IIII)V", v, v.scrollX, v.scrollY, oldX, oldY).catch(reportUncaught);
+  if (v.scrollChangeL) void vcallAsync(v.scrollChangeL, "onScrollChange", "(Landroid/view/View;IIII)V", v, v.scrollX, v.scrollY, oldX, oldY).catch(reportUncaught);
   void getVTO(v).dispatchScrollChanged();
 }
 class JA11yAction extends JObj { actionId = 0; label: string | null = null; }
@@ -2251,10 +2284,10 @@ rt.markers("android/view/accessibility/AccessibilityRecord");
 rt.register({
   name: "android/view/accessibility/AccessibilityNodeInfo$AccessibilityAction", ctor: JA11yAction,
   methods: {
-    "<init>(ILjava/lang/CharSequence;)V": async function (this: JA11yAction, id: number, label: unknown) {
+    "<init>(ILjava/lang/CharSequence;)V": driven(function* (this: JA11yAction, id: number, label: unknown): Gen {
       this.actionId = id;
-      this.label = label === null ? null : await csText(label);
-    },
+      this.label = label === null ? null : (yield csText(label));
+    }),
     "getId()I": function (this: JA11yAction) { return this.actionId; },
     "getLabel()Ljava/lang/CharSequence;": function (this: JA11yAction) { return this.label; },
   },
@@ -2314,26 +2347,28 @@ rt.register({
     // hidden API that Compose reaches reflectively after scrolling
     "dispatchOnScrollChanged()V": function (this: JVTO) { return this.dispatchScrollChanged(); },
     // true when any listener asked for the draw to be cancelled, as ViewTreeObserver reports it
-    "dispatchOnPreDraw()Z": async function (this: JVTO) {
+    "dispatchOnPreDraw()Z": driven(function* (this: JVTO): Gen {
       let cancelled = 0;
-      for (const l of [...this.preDrawLs]) if (!(await vcall(l, "onPreDraw", "()Z"))) cancelled = 1;
+      for (const l of [...this.preDrawLs]) if (!((yield vcall(l, "onPreDraw", "()Z")))) cancelled = 1;
       return cancelled;
-    },
+    }),
   },
 });
 /** layout pass: OnGlobalLayoutListener fires when the tree's layout actually ran */
-export async function fireGlobalLayout(root: JView) {
+export function fireGlobalLayout(root: JView): unknown { return rt.drive(fireGlobalLayout$(root)); }
+function* fireGlobalLayout$(root: JView): Gen {
   const o = vtoMap.get(root);
   if (!o) return;
-  await o.dispatchGlobalLayout();
+  (yield o.dispatchGlobalLayout());
 }
 /** draw pass: AOSP's performTraversals fires OnPreDrawListener then OnDrawListener right
  *  before the tree is actually drawn, on every draw -- not only ones that also laid out. */
-export async function fireDrawPass(root: JView) {
+export function fireDrawPass(root: JView): unknown { return rt.drive(fireDrawPass$(root)); }
+function* fireDrawPass$(root: JView): Gen {
   const o = vtoMap.get(root);
   if (!o) return;
-  await o.dispatchPreDraw();
-  await o.dispatchOnDraw();
+  (yield o.dispatchPreDraw());
+  (yield o.dispatchOnDraw());
 }
 
 export const lpAttrs = function (this: JLayoutParams, _c: unknown, set: JAttrSet) { lpFromAttrs(this, set.res, set); };
@@ -2377,7 +2412,7 @@ rt.register({
 });
 
 rt.register({ name: "webdroid/ViewAlphaProperty", ctor: class extends JProperty {}, sup: "android/util/Property", methods: {
-  "get(Ljava/lang/Object;)Ljava/lang/Object;": async (view: unknown) => box(JFloat, await vcall(view, "getAlpha", "()F")),
+  "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (view: unknown): Gen  { return box(JFloat, (yield vcall(view, "getAlpha", "()F"))); }),
   "set(Ljava/lang/Object;Ljava/lang/Object;)V": (view: unknown, value: JFloat) => vcall(view, "setAlpha", "(F)V", value.v),
 } });
 rt.register({

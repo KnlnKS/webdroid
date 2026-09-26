@@ -21,7 +21,7 @@ test("Unicode blocks preserve range boundaries, gaps and singleton identity", as
   expect(await of(0x2fe0)).toBe(null);
   expect(await of(0x31350)).toBe(null);
   expect(await vcall(cls, "of", "(C)Ljava/lang/Character$UnicodeBlock;", 0x41)).toBe(await of(0x41));
-  for (const cp of [-1, 0x110000]) await expect(of(cp)).rejects.toMatchObject({ msg: "Not a valid Unicode code point" });
+  for (const cp of [-1, 0x110000]) await expect((async () => of(cp))()).rejects.toMatchObject({ msg: "Not a valid Unicode code point" });
 });
 
 test("Unicode block names accept Java aliases without inventing spellings", async () => {
@@ -29,6 +29,6 @@ test("Unicode block names accept Java aliases without inventing spellings", asyn
   expect(await named("Greek and Coptic")).toBe(await named("GREEK"));
   expect(await named("Latin-1Supplement")).toBe(await named("LATIN_1_SUPPLEMENT"));
   expect(await named("Cyrillic Supplement")).toBe(await named("CYRILLIC_SUPPLEMENTARY"));
-  for (const name of ["BASIC-LATIN", " Basic Latin", "SURROGATES_AREA"]) await expect(named(name)).rejects.toMatchObject({ msg: "Not a valid block name: " + name });
-  await expect(named(null)).rejects.toMatchObject({ msg: "blockName" });
+  for (const name of ["BASIC-LATIN", " Basic Latin", "SURROGATES_AREA"]) await expect((async () => named(name))()).rejects.toMatchObject({ msg: "Not a valid block name: " + name });
+  await expect((async () => named(null))()).rejects.toMatchObject({ msg: "blockName" });
 });

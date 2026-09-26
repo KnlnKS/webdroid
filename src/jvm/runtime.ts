@@ -46,6 +46,9 @@ export interface NativeSpec {
   callerSensitive?: string[];
 }
 
+/** A native written as a generator yields each Java result, value or Promise (Runtime.drive). */
+export type Gen<T = any> = Generator<unknown, T, any>;
+
 const placeholderMethods = new WeakSet<Function>();
 
 export function stubs(value: unknown, ...sigs: string[]): Record<string, () => unknown> {
@@ -169,6 +172,25 @@ export class Runtime {
   proxyMethod: ((obj: unknown, name: string, desc: string) => ((...a: unknown[]) => unknown) | null) | null = null;
   st: (t: unknown) => void = () => {};
   su: (t: unknown) => void = () => {};
+  /**
+   * Run a native written as a generator whose `yield` takes a Java result that may be a Promise:
+   * it stays synchronous until one is, and only then returns a Promise. Like a compiled frame, a
+   * resumed native runs on the thread that entered it and releases that thread when it finishes.
+   */
+  drive<T>(g: Gen<T>): T | Promise<T> { return this.driveStep(g, undefined, false, this.th(), false); }
+  private driveStep<T>(g: Gen<T>, input: unknown, threw: boolean, thread: unknown, resumed: boolean): T | Promise<T> {
+    for (;;) {
+      let step: IteratorResult<unknown, T>;
+      try { step = threw ? g.throw(input) : g.next(input); }
+      catch (e) { if (resumed) this.su(thread); throw e; }
+      if (step.done) { if (resumed) this.su(thread); return step.value; }
+      const value = step.value;
+      if (value instanceof Promise) return value.then(
+        (v) => { this.st(thread); return this.driveStep(g, v, false, thread, true); },
+        (e) => { this.st(thread); return this.driveStep(g, e, true, thread, true); });
+      input = value; threw = false;
+    }
+  }
   /** The frame a resumption is re-entering a compiled method with (see dfr). */
   rf: unknown = null;
   /**
@@ -898,3 +920,13 @@ const STRING_TYPES = new Set(["java/lang/String", "java/lang/Object", "java/lang
 const BOX_UNIVERSE = new Set(["java/lang/Object", "java/io/Serializable", "java/lang/Comparable", "java/lang/Number"]);
 
 export const rt = new Runtime();
+
+/** A native implemented as a generator (see Runtime.drive), callable like any other method. */
+export function driven(g: (this: any, ...a: any[]) => Gen): (this: any, ...a: any[]) => unknown {
+  switch (g.length) {
+    case 0: return function (this: unknown) { return rt.drive(g.call(this)); };
+    case 1: return function (this: unknown, a: unknown) { return rt.drive(g.call(this, a)); };
+    case 2: return function (this: unknown, a: unknown, b: unknown) { return rt.drive(g.call(this, a, b)); };
+    default: return function (this: unknown, ...a: unknown[]) { return rt.drive(g.apply(this, a)); };
+  }
+}

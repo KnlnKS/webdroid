@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { mainThread, newObj, vcall } from "../src/jvm/natives/jlang";
+import { mainThread, newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { JFileDescriptor, vfs } from "../src/jvm/natives/jio";
 import { Cpu, setA64 } from "../src/native/cpu";
 import { lookupHost } from "../src/native/host";
@@ -44,7 +44,7 @@ test("descriptor streams share native offsets and borrow ownership across rename
     await vcall(borrowed, "close", "()V");
     expect(javaSeekFd(fd.fd, 0, 0)).toBe(0);
     expect(await vcall(owner, "read", "()I")).toBe(1);
-    await rejectsJava(vcall(borrowed, "read", "()I"), "java/io/IOException");
+    await rejectsJava(vcallAsync(borrowed, "read", "()I"), "java/io/IOException");
     await vcall(channel, "close", "()V");
     expect(fd.fd).toBe(-1);
     expect(await vcall(channel, "isOpen", "()Z")).toBe(0);
@@ -66,11 +66,11 @@ test("descriptor streams serialize lazy reads and reject invalid input", async (
       ["read", "([BII)I", [a, -1, 1], "java/lang/IndexOutOfBoundsException"], ["read", "([BII)I", [a, 2, 2], "java/lang/IndexOutOfBoundsException"],
       ["read", "([B)I", [null], "java/lang/NullPointerException"], ["reset", "()V", [], "java/io/IOException"],
     ] satisfies [string, string, unknown[], string][]) {
-      await rejectsJava(vcall(input, method, desc, ...args), error);
+      await rejectsJava(vcallAsync(input, method, desc, ...args), error);
     }
     javaCloseFd(fd.fd);
-    await rejectsJava(vcall(input, "read", "()I"), "java/io/IOException");
-    await rejectsJava(vcall(input, "available", "()I"), "java/io/IOException");
+    await rejectsJava(vcallAsync(input, "read", "()I"), "java/io/IOException");
+    await rejectsJava(vcallAsync(input, "available", "()I"), "java/io/IOException");
   } finally { javaCloseFd(fd.fd); await vcall(input, "close", "()V"); vfs.delete(path); }
 });
 
@@ -103,7 +103,7 @@ test("descriptor constructors defer invalid descriptor failures and honor explic
   await rejectsJava(newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", null), "java/lang/NullPointerException");
   const fd = new JFileDescriptor();
   const invalid = await newObj("java/io/FileInputStream", "(Ljava/io/FileDescriptor;)V", fd);
-  await rejectsJava(vcall(invalid, "read", "()I"), "java/io/IOException");
+  await rejectsJava(vcallAsync(invalid, "read", "()I"), "java/io/IOException");
   await vcall(invalid, "close", "()V");
   const path = "/input-descriptor-owner";
   vfs.write(path, Uint8Array.of(1));

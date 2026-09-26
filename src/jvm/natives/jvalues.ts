@@ -1,7 +1,7 @@
 import type { JSimpleEnum } from "./jlang";
 import { JObj, rt } from "../runtime";
 import { jarray } from "../abi";
-import { defineException, mkEnumSet, stringHash, vcallMaybe } from "./jlang";
+import { defineException, mkEnumSet, stringHash, vcall } from "./jlang";
 import { newArrayList } from "./jutil";
 
 class JStringJoiner extends JObj { sep = ","; pre = ""; suf = ""; parts: string[] = []; }
@@ -239,7 +239,7 @@ rt.register({
     },
     "getKeywordValue(Ljava/lang/String;)Ljava/lang/String;": function (this: JULocale, key: string) { return this.keywords.get(key.toLowerCase()) ?? null; },
     "getKeywords()Ljava/util/Iterator;": function (this: JULocale) {
-      return this.keywords.size ? vcallMaybe(newArrayList([...this.keywords.keys()]), "iterator", "()Ljava/util/Iterator;") : null;
+      return this.keywords.size ? vcall(newArrayList([...this.keywords.keys()]), "iterator", "()Ljava/util/Iterator;") : null;
     },
     "isRightToLeft()Z": function (this: JULocale) { return localeDirection(this.locale); },
     "toLanguageTag()Ljava/lang/String;": function (this: JULocale) { return localeTag(this.locale); },

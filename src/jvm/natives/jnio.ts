@@ -1,6 +1,6 @@
 // java.nio.* buffers backed by a shared ArrayBuffer. position/limit/capacity semantics.
 
-import { rt, JObj, type NativeSpec } from "../runtime";
+import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { defineException, vcall } from "./jlang";
 import { mem } from "../../native/mem";
 import { charsToString } from "../abi";
@@ -550,8 +550,8 @@ rt.register({
     ...coderChain("Ljava/nio/charset/CharsetEncoder;"),
     "replaceWith([B)Ljava/nio/charset/CharsetEncoder;": function (this: JCharsetCoder) { return this; },
     "maxBytesPerChar()F": function (this: JCharsetCoder) { return maxBytesPerChar(this.cs); },
-    "encode(Ljava/nio/CharBuffer;)Ljava/nio/ByteBuffer;": async function (this: JCharsetCoder, src: JCharBuffer) {
-      const text = await charText(src); let from = 0, cleaned = "";
+    "encode(Ljava/nio/CharBuffer;)Ljava/nio/ByteBuffer;": driven(function* (this: JCharsetCoder, src: JCharBuffer): Gen {
+      const text = (yield charText(src)); let from = 0, cleaned = "";
       for (let i = 0; i < text.length;) {
         const cp = text.codePointAt(i)!, width = cp > 0xffff ? 2 : 1;
         const malformed = cp >= 0xd800 && cp <= 0xdfff;
@@ -564,22 +564,22 @@ rt.register({
       }
       const data = encodeString(from ? cleaned + text.slice(from) : text, this.cs);
       src.pos = src.lim; return wrapArray(JByteBuffer, data, 0);
-    },
+    }),
     "canEncode(C)Z": function (this: JCharsetCoder, c: number) { return encodable(this.cs, c) ? 1 : 0; },
     "encode(Ljava/nio/CharBuffer;Ljava/nio/ByteBuffer;Z)Ljava/nio/charset/CoderResult;":
-      async function (this: JCharsetCoder, src: JCharBuffer, dst: JBuffer) {
-        const text = await charText(src);
+      driven(function* (this: JCharsetCoder, src: JCharBuffer, dst: JBuffer): Gen {
+        const text = (yield charText(src));
         const bytes = encodeString(text, this.cs), n = Math.min(bytes.length, dst.lim - dst.pos);
         for (let i = 0; i < n; i++) dst.dv.setInt8(dst.pos + i, bytes[i]);
         dst.pos += n;
         src.pos = src.lim;
         return n < bytes.length ? CODER_OVERFLOW : CODER_UNDERFLOW;
-      },
-    "canEncode(Ljava/lang/CharSequence;)Z": async function (this: JCharsetCoder, cs: unknown) {
-      const s = typeof cs === "string" ? cs : String(await vcall(cs, "toString", "()Ljava/lang/String;"));
+      }),
+    "canEncode(Ljava/lang/CharSequence;)Z": driven(function* (this: JCharsetCoder, cs: unknown): Gen {
+      const s = typeof cs === "string" ? cs : String((yield vcall(cs, "toString", "()Ljava/lang/String;")));
       for (let i = 0; i < s.length; i++) if (!encodable(this.cs, s.charCodeAt(i))) return 0;
       return 1;
-    },
+    }),
   },
 });
 class JCharsetDecoder extends JCharsetCoder {
@@ -652,21 +652,21 @@ rt.register({
     "reset()Ljava/nio/charset/CharsetDecoder;": function (this: JCharsetDecoder) { this.endian = null; return this; },
     "maxCharsPerByte()F": () => 1,
     "replacement()Ljava/lang/String;": function (this: JCharsetDecoder) { return this.replacement; },
-    "replaceWith(Ljava/lang/String;)Ljava/nio/charset/CharsetDecoder;": async function (this: JCharsetDecoder, replacement: string | null) {
+    "replaceWith(Ljava/lang/String;)Ljava/nio/charset/CharsetDecoder;": driven(function* (this: JCharsetDecoder, replacement: string | null): Gen {
       if (replacement === null || replacement.length === 0 || replacement.length > 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid replacement");
       this.replacement = replacement;
-      await vcall(this, "implReplaceWith", "(Ljava/lang/String;)V", replacement);
+      (yield vcall(this, "implReplaceWith", "(Ljava/lang/String;)V", replacement));
       return this;
-    },
+    }),
     "implReplaceWith(Ljava/lang/String;)V": () => {},
-    "decode(Ljava/nio/ByteBuffer;)Ljava/nio/CharBuffer;": async function (this: JCharsetDecoder, src: JBuffer) {
+    "decode(Ljava/nio/ByteBuffer;)Ljava/nio/CharBuffer;": driven(function* (this: JCharsetDecoder, src: JBuffer): Gen {
       this.endian = null;
       const out = allocCharBuffer(src.lim - src.pos);
       const result = decodeBuffer(this, src, out, 1);
-      if (result.length) await vcall(result, "throwException", "()V");
+      if (result.length) (yield vcall(result, "throwException", "()V"));
       out.lim = out.pos; out.pos = 0;
       return out;
-    },
+    }),
     "flush(Ljava/nio/CharBuffer;)Ljava/nio/charset/CoderResult;": () => CODER_UNDERFLOW,
     "decode(Ljava/nio/ByteBuffer;Ljava/nio/CharBuffer;Z)Ljava/nio/charset/CoderResult;":
       function (this: JCharsetDecoder, src: JBuffer, dst: JBuffer, end: number) { return decodeBuffer(this, src, dst, end); },

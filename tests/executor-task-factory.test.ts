@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
-import { curThread, JThread, mainThread, newObj, vcall, vcallOn } from "../src/jvm/natives/jlang";
+import { curThread, JThread, mainThread, newObj, vcall, vcallOn, vcallAsync } from "../src/jvm/natives/jlang";
 
 class FactoryExecutor extends rt.link("java/util/concurrent/AbstractExecutorService").ctor { tasks: unknown[] = []; }
 class Task extends JObj { runs = 0; }
@@ -35,7 +35,7 @@ test("submit preserves suspended newTaskFor and execute overrides for all overlo
     await vcall(f, "run", "()V");
   }
   expect(task.runs).toBe(3);
-  await expect(vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", null)).rejects.toBeDefined();
+  await expect(vcallAsync(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", null)).rejects.toBeDefined();
   expect(ex.tasks.length).toBe(3);
 });
 test("cancelling FutureTask before execution wakes get and prevents its runnable", async () => {
@@ -45,7 +45,7 @@ test("cancelling FutureTask before execution wakes get and prevents its runnable
   await vcall(f, "run", "()V");
   expect(task.runs).toBe(0);
   expect(await vcall(f, "isCancelled", "()Z")).toBe(1);
-  await expect(vcall(f, "get", "()Ljava/lang/Object;")).rejects.toMatchObject({ constructor: rt.link("java/util/concurrent/CancellationException").ctor });
+  await expect(vcallAsync(f, "get", "()Ljava/lang/Object;")).rejects.toMatchObject({ constructor: rt.link("java/util/concurrent/CancellationException").ctor });
 });
 
 class CompletionTask extends rt.link("java/util/concurrent/FutureTask").ctor { notifications = 0; completed = false; }
@@ -90,7 +90,7 @@ test("FutureTask completion retains the executing thread after a suspended calla
     await vcallOn(worker, future, "run", "()V");
     expect(future.seen).toEqual([worker]);
     expect(curThread).toBe(mainThread);
-    if (fail) await expect(vcall(future, "get", "()Ljava/lang/Object;")).rejects.toMatchObject({ cause: { msg: "failed" } });
+    if (fail) await expect(vcallAsync(future, "get", "()Ljava/lang/Object;")).rejects.toMatchObject({ cause: { msg: "failed" } });
     else expect(await vcall(future, "get", "()Ljava/lang/Object;")).toBe("completed");
   }
 });

@@ -25,7 +25,7 @@ test("CyclicBarrier releases every generation after the suspendable action", asy
 test("timeout and interruption break peers until reset", async () => {
   const barrier = await newObj("java/util/concurrent/CyclicBarrier", "(I)V", 3);
   const peer = wait(barrier, new JThread()).catch((e: unknown) => e);
-  await expect(wait(barrier, new JThread(), 1n)).rejects.toMatchObject({ constructor: rt.link("java/util/concurrent/TimeoutException").ctor });
+  await expect((async () => wait(barrier, new JThread(), 1n))()).rejects.toMatchObject({ constructor: rt.link("java/util/concurrent/TimeoutException").ctor });
   expect(await peer).toMatchObject({ constructor: rt.link("java/util/concurrent/BrokenBarrierException").ctor });
   await vcall(barrier, "reset", "()V");
   expect(await vcall(barrier, "isBroken", "()Z")).toBe(0);

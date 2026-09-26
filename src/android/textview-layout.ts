@@ -53,7 +53,7 @@ export class TextViewLayouts {
     const prepared: PreparedText = { src: display, text: typeof display === "string" ? display : display.text, replacements: [] };
     this.prepared = prepared;
     if (!(prepared.src instanceof JSpanned)) return build(prepared);
-    return measureReplacements(prepared.src, p).then(replacements => { prepared.replacements = replacements; return build(prepared); });
+    return after(measureReplacements(prepared.src, p), replacements => { prepared.replacements = replacements; return build(prepared); });
   }
 }
 

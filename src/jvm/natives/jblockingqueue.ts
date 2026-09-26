@@ -1,4 +1,4 @@
-import { rt, JObj, type NativeSpec } from "../runtime";
+import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { vcall } from "./jlang";
 import { JList, mkIter, listMethods, JPriorityQueue, pqInsert, priorityQueueMethods, toJsArray } from "./jutil";
 import type { JTimeUnit } from "./jconc";
@@ -117,19 +117,19 @@ const queueMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(I)V": queueCapacity,
   "<init>(IZ)V": queueCapacity,
   "<init>(Z)V": function () {},
-  "<init>(Ljava/util/Collection;)V": async function (this: JBlockingQueue, c: unknown) {
-    for (const v of await toJsArray(c)) this.enqueue(v);
-  },
+  "<init>(Ljava/util/Collection;)V": driven(function* (this: JBlockingQueue, c: unknown): Gen {
+    for (const v of (yield toJsArray(c))) this.enqueue(v);
+  }),
   "put(Ljava/lang/Object;)V": function (this: JBlockingQueue, value: unknown) { return this.put(value); },
   "offer(Ljava/lang/Object;)Z": function (this: JBlockingQueue, value: unknown) { return this.enqueue(value); },
   "offer(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z": function (this: JBlockingQueue, value: unknown, duration: bigint, unit: JTimeUnit) { return this.put(value, false, Number(duration) * unit.ms); },
   "add(Ljava/lang/Object;)Z": queueAdd,
-  "addAll(Ljava/util/Collection;)Z": async function (this: JBlockingQueue, collection: unknown) {
+  "addAll(Ljava/util/Collection;)Z": driven(function* (this: JBlockingQueue, collection: unknown): Gen {
     if (collection === this) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
-    const values = await toJsArray(collection);
+    const values = (yield toJsArray(collection));
     for (const value of values) queueAdd.call(this, value);
     return values.length ? 1 : 0;
-  },
+  }),
   "remainingCapacity()I": function (this: JBlockingQueue) { return this.capacity - this.a.length - this.reserved; },
   "take()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.take(); },
   "poll()Ljava/lang/Object;": function (this: JBlockingQueue) { return this.poll(); },
@@ -201,12 +201,12 @@ rt.register({
     "offer(Ljava/lang/Object;)Z": pbqPut,
     "add(Ljava/lang/Object;)Z": pbqPut,
     "offer(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z": pbqPut,
-    "addAll(Ljava/util/Collection;)Z": async function (this: JPriorityBlockingQueue, c: unknown) {
+    "addAll(Ljava/util/Collection;)Z": driven(function* (this: JPriorityBlockingQueue, c: unknown): Gen {
       if (c === this) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
-      const values = await toJsArray(c);
-      for (const value of values) await pbqPut.call(this, value);
+      const values = (yield toJsArray(c));
+      for (const value of values) (yield pbqPut.call(this, value));
       return values.length ? 1 : 0;
-    },
+    }),
     "remove(Ljava/lang/Object;)Z": function (this: JPriorityBlockingQueue, v: unknown) {
       return this.locked(() => priorityRemove.call(this, v));
     },

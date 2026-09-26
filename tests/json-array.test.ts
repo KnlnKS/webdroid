@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
-import { newObj, vcall, boxInt } from "../src/jvm/natives/jlang";
+import { newObj, vcall, boxInt, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
 
 const wrap = (value: unknown) =>
@@ -13,7 +13,7 @@ test("JSONArray indexed primitive puts pad and replace", async () => {
   await vcall(array, "put", "(II)Lorg/json/JSONArray;", 2, 7);
   await vcall(array, "put", "(IZ)Lorg/json/JSONArray;", 0, 1);
   expect(await vcall(array, "toString", "()Ljava/lang/String;")).toBe("[true,null,7]");
-  await expect(vcall(array, "put", "(II)Lorg/json/JSONArray;", -1, 0)).rejects.toMatchObject({
+  await expect(vcallAsync(array, "put", "(II)Lorg/json/JSONArray;", -1, 0)).rejects.toMatchObject({
     constructor: rt.link("org/json/JSONException").ctor,
   });
 });
@@ -35,7 +35,7 @@ test("JSONObject.wrap preserves JSON values and converts containers", async () =
   const object = await newObj("org/json/JSONObject");
   await vcall(object, "put", "(Ljava/lang/String;Ljava/lang/Object;)Lorg/json/JSONObject;", "raw", map);
   expect(await vcall(object, "optJSONObject", "(Ljava/lang/String;)Lorg/json/JSONObject;", "raw")).toBeNull();
-  await expect(vcall(object, "getJSONObject", "(Ljava/lang/String;)Lorg/json/JSONObject;", "raw")).rejects.toMatchObject({
+  await expect(vcallAsync(object, "getJSONObject", "(Ljava/lang/String;)Lorg/json/JSONObject;", "raw")).rejects.toMatchObject({
     constructor: rt.link("org/json/JSONException").ctor,
   });
   await vcall(list, "add", "(Ljava/lang/Object;)Z", map);
@@ -43,7 +43,7 @@ test("JSONObject.wrap preserves JSON values and converts containers", async () =
   const nested = await vcall(await wrap(map), "getJSONArray", "(Ljava/lang/String;)Lorg/json/JSONArray;", "nested");
   const child = await vcall(nested, "getJSONObject", "(I)Lorg/json/JSONObject;", 2);
   expect(await vcall(child, "getInt", "(Ljava/lang/String;)I", "answer")).toBe(7);
-  await expect(vcall(nested, "getJSONObject", "(I)Lorg/json/JSONObject;", 0)).rejects.toMatchObject({
+  await expect(vcallAsync(nested, "getJSONObject", "(I)Lorg/json/JSONObject;", 0)).rejects.toMatchObject({
     constructor: rt.link("org/json/JSONException").ctor,
   });
   expect(await wrap(new JObj())).toBeNull();

@@ -1,7 +1,9 @@
+import { rt, type Gen } from "../runtime";
 import { vcall } from "./jlang";
 
-export async function csText(value: unknown): Promise<string> {
+export function csText(value: unknown): string | Promise<string> { return rt.drive(csText$(value)); }
+function* csText$(value: unknown): Gen<string> {
   if (value === null || value === undefined) return "";
   if (typeof value === "string") return value;
-  return String(await vcall(value, "toString", "()Ljava/lang/String;"));
+  return String((yield vcall(value, "toString", "()Ljava/lang/String;")));
 }

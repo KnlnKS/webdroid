@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 rt.linkNatives();
 
 test("HTTP headers and incremental reads do not await the entire response, and timed-out reads remain usable", async () => {
@@ -24,7 +24,7 @@ test("HTTP headers and incremental reads do not await the entire response, and t
     expect([...out]).toEqual([0, 1, 2, 0, 0]);
     expect(await vcall(stream, "available", "()I")).toBe(1);
     expect(await vcall(stream, "read", "()I")).toBe(3);
-    await expect(vcall(stream, "read", "()I")).rejects.toMatchObject({ msg: "Read timed out" });
+    await expect(vcallAsync(stream, "read", "()I")).rejects.toMatchObject({ msg: "Read timed out" });
     if (!controller) throw new Error("No response stream");
     controller.enqueue(Uint8Array.of(4, 5, 6, 7));
     expect(await vcall(stream, "skip", "(J)J", 2n)).toBe(2n);
@@ -35,7 +35,7 @@ test("HTTP headers and incremental reads do not await the entire response, and t
     expect(await vcall(stream, "read", "([BII)I", out, 0, 0)).toBe(0);
     expect(await vcall(stream, "markSupported", "()Z")).toBe(0);
     await vcall(connection, "disconnect", "()V");
-    await expect(vcall(stream, "read", "()I")).rejects.toMatchObject({ msg: "Stream closed" });
+    await expect(vcallAsync(stream, "read", "()I")).rejects.toMatchObject({ msg: "Stream closed" });
   } finally { globalThis.fetch = original; server.stop(true); }
 }, 5000);
 

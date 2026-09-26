@@ -1,7 +1,7 @@
 // android.os.Parcel: AOSP's wire layout (4-byte cells, UTF-16 strings, BNDL bundles) so
 // dataSize/dataPosition agree with what an app measured on a device. What has no byte
 // form here — a binder — rides in a side table keyed by its position.
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { dotName, slashName, jarray, mangleStaticField, utf8, u8 } from "../jvm/abi";
 import { newObj, vcall, JInt, JLong, JFloat, JDouble, JBool, JByte, JShort, JChar, box, defineException, callOn, curThread, vcallOn } from "../jvm/natives/jlang";
 import { newArrayList, toJsArray, type JList } from "../jvm/natives/jutil";
@@ -338,7 +338,7 @@ rt.register({
     [`writeString(${S})V`]: function (this: JParcel, s: string | null) { writeString(this, s); },
     [`writeString8(${S})V`]: function (this: JParcel, s: string | null) { writeString8(this, s); },
     [`writeString16(${S})V`]: function (this: JParcel, s: string | null) { writeString(this, s); },
-    "writeCharSequence(Ljava/lang/CharSequence;)V": async function (this: JParcel, s: unknown) { writeString(this, s === null ? null : await csText(s)); },
+    "writeCharSequence(Ljava/lang/CharSequence;)V": driven(function* (this: JParcel, s: unknown): Gen { writeString(this, s === null ? null : (yield csText(s))); }),
     "writeByteArray([B)V": function (this: JParcel, b: Int8Array | null) { writeBytes(this, b); },
     "writeByteArray([BII)V": function (this: JParcel, b: Int8Array | null, off: number, len: number) { writeBytes(this, b && b.subarray(off, off + len)); },
     ...Object.fromEntries(PRIM_PARCEL.filter((e) => e[4]).flatMap(([C, , w, r, name, d]) => [
@@ -346,29 +346,29 @@ rt.register({
       [`create${name}Array()[${d}`, function (this: JParcel) { return readPrimArray(this, (n) => new C(n), () => r(this)); }],
     ])),
     [`writeStringArray([${S})V`]: function (this: JParcel, a: string[] | null) { writeStrings(this, a); },
-    "writeStringList(Ljava/util/List;)V": async function (this: JParcel, l: unknown) { writeStrings(this, l === null ? null : await toJsArray(l) as string[]); },
+    "writeStringList(Ljava/util/List;)V": driven(function* (this: JParcel, l: unknown): Gen { writeStrings(this, l === null ? null : (yield toJsArray(l)) as string[]); }),
     "writeValue(Ljava/lang/Object;)V": function (this: JParcel, v: unknown) { return writeValue(this, v); },
     "writeList(Ljava/util/List;)V": function (this: JParcel, l: unknown) { return writeList(this, l); },
     "writeMap(Ljava/util/Map;)V": function (this: JParcel, m: unknown) { return writeMap(this, m); },
     "writePersistableBundle(Landroid/os/PersistableBundle;)V": function (this: JParcel, b: JPersistableBundle | null) { return writeBundle(this, b); },
     "writeBundle(Landroid/os/Bundle;)V": function (this: JParcel, b: JBundle | null) { return writeBundle(this, b); },
     "writeParcelable(Landroid/os/Parcelable;I)V": function (this: JParcel, o: JObj | null, flags: number) { return writeParcelable(this, o, flags); },
-    "writeTypedList(Ljava/util/List;)V": async function (this: JParcel, l: unknown) { return writeTyped(this, l === null ? null : await toJsArray(l), 0); },
-    "writeTypedList(Ljava/util/List;I)V": async function (this: JParcel, l: unknown, flags: number) { return writeTyped(this, l === null ? null : await toJsArray(l), flags); },
+    "writeTypedList(Ljava/util/List;)V": driven(function* (this: JParcel, l: unknown): Gen { return writeTyped(this, l === null ? null : (yield toJsArray(l)), 0); }),
+    "writeTypedList(Ljava/util/List;I)V": driven(function* (this: JParcel, l: unknown, flags: number): Gen { return writeTyped(this, l === null ? null : (yield toJsArray(l)), flags); }),
     "writeTypedArray([Landroid/os/Parcelable;I)V": function (this: JParcel, a: unknown[] | null, flags: number) { return writeTyped(this, a, flags); },
-    "writeTypedObject(Landroid/os/Parcelable;I)V": async function (this: JParcel, o: unknown, flags: number) { if (o === null) writeInt(this, 0); else { writeInt(this, 1); await vcall(o, "writeToParcel", `(${P}I)V`, this, flags); } },
+    "writeTypedObject(Landroid/os/Parcelable;I)V": driven(function* (this: JParcel, o: unknown, flags: number): Gen { if (o === null) writeInt(this, 0); else { writeInt(this, 1); (yield vcall(o, "writeToParcel", `(${P}I)V`, this, flags)); } }),
     "writeSerializable(Ljava/io/Serializable;)V": function (this: JParcel, o: unknown) { return writeSerializable(this, o); },
     "writeStrongBinder(Landroid/os/IBinder;)V": function (this: JParcel, b: unknown) { writeObject(this, b); },
-    "writeStrongInterface(Landroid/os/IInterface;)V": async function (this: JParcel, value: unknown) { writeObject(this, value ? await vcall(value, "asBinder", "()Landroid/os/IBinder;") : null); },
+    "writeStrongInterface(Landroid/os/IInterface;)V": driven(function* (this: JParcel, value: unknown): Gen { writeObject(this, value ? (yield vcall(value, "asBinder", "()Landroid/os/IBinder;")) : null); }),
     [`writeInterfaceToken(${S})V`]: function (this: JParcel, s: string) { writeString(this, s); },
     "writeNoException()V": function (this: JParcel) { writeInt(this, 0); },
-    "writeException(Ljava/lang/Exception;)V": async function (this: JParcel, error: unknown) {
+    "writeException(Ljava/lang/Exception;)V": driven(function* (this: JParcel, error: unknown): Gen {
       const index = EXCEPTIONS.findIndex((cls) => rt.iof(error, cls));
       if (index < 0) throw error;
       writeInt(this, -index - 1);
-      writeString(this, await vcall(error, "getMessage", "()Ljava/lang/String;"));
+      writeString(this, (yield vcall(error, "getMessage", "()Ljava/lang/String;")));
       writeInt(this, 0);
-    },
+    }),
     "readInt()I": function (this: JParcel) { return readInt(this); },
     "readLong()J": function (this: JParcel) { return readLong(this); },
     "readFloat()F": function (this: JParcel) { return readFloat(this); },
@@ -383,7 +383,7 @@ rt.register({
     [`createStringArray()[${S}`]: function (this: JParcel) { return readStrings(this); },
     "createStringArrayList()Ljava/util/ArrayList;": function (this: JParcel) { return readStringList(this); },
     "readIntArray([I)V": function (this: JParcel, out: Int32Array) { const n = readInt(this); for (let i = 0; i < n; i++) out[i] = readInt(this); },
-    "readStringList(Ljava/util/List;)V": async function (this: JParcel, out: unknown) { await vcall(out, "clear", "()V"); for (const s of readStrings(this) ?? []) await vcall(out, "add", "(Ljava/lang/Object;)Z", s); },
+    "readStringList(Ljava/util/List;)V": driven(function* (this: JParcel, out: unknown): Gen { (yield vcall(out, "clear", "()V")); for (const s of readStrings(this) ?? []) (yield vcall(out, "add", "(Ljava/lang/Object;)Z", s)); }),
     [`readValue(${L})Ljava/lang/Object;`]: function (this: JParcel, loader: unknown) { return readValue(this, loader); },
     [`readArrayList(${L})Ljava/util/ArrayList;`]: function (this: JParcel, loader: unknown) { return readList(this, loader); },
     [`readList(Ljava/util/List;${L})V`]: async function (this: JParcel, out: unknown, loader: unknown) { for (const v of (await readList(this, loader))?.a ?? []) await vcall(out, "add", "(Ljava/lang/Object;)Z", v); },
@@ -405,7 +405,7 @@ rt.register({
     },
     [`readTypedObject(${CR})Ljava/lang/Object;`]: function (this: JParcel, c: unknown) { return readInt(this) ? createFrom(this, c, null) : null; },
     [`readTypedList(Ljava/util/List;${CR})V`]: async function (this: JParcel, out: unknown, c: unknown) { await vcall(out, "clear", "()V"); for (const v of (await readTyped(this, c)) ?? []) await vcall(out, "add", "(Ljava/lang/Object;)Z", v); },
-    "readSerializable()Ljava/io/Serializable;": async function (this: JParcel) { return readSerializable(this); },
+    "readSerializable()Ljava/io/Serializable;": driven(function* (this: JParcel): Gen { return readSerializable(this); }),
     [`readSerializable(${L}Ljava/lang/Class;)Ljava/io/Serializable;`]: async function (this: JParcel) { return readSerializable(this); },
     "readStrongBinder()Landroid/os/IBinder;": function (this: JParcel) { return readObject(this); },
     "readException()V": function (this: JParcel) {

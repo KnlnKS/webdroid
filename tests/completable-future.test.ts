@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
-import { curThread, mainThread, newObj, vcall } from "../src/jvm/natives/jlang";
+import { curThread, mainThread, newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 class Supplier extends JObj { runs = 0; error: unknown = null; thread = mainThread; }
 class Executor extends JObj { tasks: unknown[] = []; }
@@ -36,7 +36,7 @@ test("supplier exceptions retain their cause through get and join", async () => 
   const supplier = new Supplier(); supplier.error = rt.mkThrowable("java/lang/IllegalArgumentException", "supplier failed");
   const future = await supply(supplier);
   for (const [method, type] of [["get", "ExecutionException"], ["join", "CompletionException"]]) {
-    const error = await vcall(future, method, "()Ljava/lang/Object;").then(() => null, e => e);
+    const error = await vcallAsync(future, method, "()Ljava/lang/Object;").then(() => null, e => e);
     expect(rt.iof(error, `java/util/concurrent/${type}`)).toBeTruthy();
     expect(await vcall(error, "getCause", "()Ljava/lang/Throwable;")).toBe(supplier.error);
   }
@@ -50,7 +50,7 @@ test("cancelling before the supplied executor runs skips the supplier", async ()
   await vcall(executor.tasks[0], "run", "()V");
   expect(supplier.runs).toBe(0);
   expect(await vcall(future, "isCompletedExceptionally", "()Z")).toBe(1);
-  const error = await vcall(future, "getNow", "(Ljava/lang/Object;)Ljava/lang/Object;", "fallback").then(() => null, e => e);
+  const error = await vcallAsync(future, "getNow", "(Ljava/lang/Object;)Ljava/lang/Object;", "fallback").then(() => null, e => e);
   expect(rt.iof(error, "java/util/concurrent/CancellationException")).toBeTruthy();
   const incomplete = await newObj("java/util/concurrent/CompletableFuture");
   expect(await vcall(incomplete, "getNow", "(Ljava/lang/Object;)Ljava/lang/Object;", "fallback")).toBe("fallback");
@@ -75,13 +75,13 @@ test("failed sources skip transforms, can recover, and retain their error when o
   const action = new Action(); action.call = () => { throw rt.mkThrowable("java/lang/IllegalStateException", "observer"); };
   const observed = await vcall(source, "whenComplete", "(Ljava/util/function/BiConsumer;)Ljava/util/concurrent/CompletableFuture;", action);
   await vcall(source, "completeExceptionally", "(Ljava/lang/Throwable;)Z", original);
-  const error = await vcall(observed, "join", "()Ljava/lang/Object;").then(() => null, e => e);
+  const error = await vcallAsync(observed, "join", "()Ljava/lang/Object;").then(() => null, e => e);
   expect(await vcall(error, "getCause", "()Ljava/lang/Throwable;")).toBe(original);
   const recovery = new Action(); recovery.call = value => { expect(value).toBe(original); return "recovered"; };
   const recovered = await vcall(source, "exceptionally", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletableFuture;", recovery);
   expect(await vcall(recovered, "join", "()Ljava/lang/Object;")).toBe("recovered");
   const transform = new Action(); let calls = 0; transform.call = () => { calls++; };
   const skipped = await vcall(source, "thenApply", "(Ljava/util/function/Function;)Ljava/util/concurrent/CompletableFuture;", transform);
-  await vcall(skipped, "join", "()Ljava/lang/Object;").catch(() => {});
+  await vcallAsync(skipped, "join", "()Ljava/lang/Object;").catch(() => {});
   expect(calls).toBe(0);
 });

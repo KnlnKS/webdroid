@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 rt.linkNatives();
 
 test("SSL sockets copy application protocols and report no selection before handshake", async () => {
@@ -15,7 +15,7 @@ test("SSL sockets copy application protocols and report no selection before hand
   const stored = await vcall(socket, "getSSLParameters", "()Ljavax/net/ssl/SSLParameters;");
   expect(await vcall(stored, "getApplicationProtocols", "()[Ljava/lang/String;")).toEqual(["h2", "http/1.1"]);
   expect(await vcall(socket, "getApplicationProtocol", "()Ljava/lang/String;")).toBeNull();
-  await expect(vcall(parameters, "setApplicationProtocols", "([Ljava/lang/String;)V", [""])).rejects.toBeDefined();
+  await expect(vcallAsync(parameters, "setApplicationProtocols", "([Ljava/lang/String;)V", [""])).rejects.toBeDefined();
 });
 
 test("SSLContext retains the selected protocol and provider", async () => {

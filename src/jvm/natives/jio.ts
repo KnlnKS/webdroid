@@ -1,8 +1,8 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
-import { rt, JObj, type NativeSpec } from "../runtime";
+import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i8, u8 } from "../abi";
-import { vcall, vcallMaybe, vcallOn, curThread, after, stringHash, stringCompare, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
+import { vcall, vcallOn, curThread, after, stringHash, stringCompare, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
 import { csText } from "./jchars";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
 import { procText } from "../../shell/procfs";
@@ -211,22 +211,22 @@ rt.register({
       return jarray(vfs.list(this.path), "Ljava/lang/String;");
     },
     "listFiles()[Ljava/io/File;": function (this: JFile) { return listFiles(this); },
-    "listFiles(Ljava/io/FilenameFilter;)[Ljava/io/File;": async function (this: JFile, f: unknown) {
+    "listFiles(Ljava/io/FilenameFilter;)[Ljava/io/File;": driven(function* (this: JFile, f: unknown): Gen {
       const out: JFile[] = [];
-      for (const c of listFiles(this)) if (f === null || (await vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, c.path.slice(this.path.length + 1)))) out.push(c);
+      for (const c of listFiles(this)) if (f === null || ((yield vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, c.path.slice(this.path.length + 1))))) out.push(c);
       return jarray(out, "Ljava/io/File;");
-    },
-    "listFiles(Ljava/io/FileFilter;)[Ljava/io/File;": async function (this: JFile, f: unknown) {
+    }),
+    "listFiles(Ljava/io/FileFilter;)[Ljava/io/File;": driven(function* (this: JFile, f: unknown): Gen {
       const out: JFile[] = [];
-      for (const c of listFiles(this)) if (f === null || (await vcall(f, "accept", "(Ljava/io/File;)Z", c))) out.push(c);
+      for (const c of listFiles(this)) if (f === null || ((yield vcall(f, "accept", "(Ljava/io/File;)Z", c)))) out.push(c);
       return jarray(out, "Ljava/io/File;");
-    },
+    }),
     // the filtered forms return null for a non-directory, as the unfiltered ones should too
-    "list(Ljava/io/FilenameFilter;)[Ljava/lang/String;": async function (this: JFile, f: unknown) {
+    "list(Ljava/io/FilenameFilter;)[Ljava/lang/String;": driven(function* (this: JFile, f: unknown): Gen {
       const out: string[] = [];
-      for (const n of vfs.list(this.path)) if (!f || await vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, n)) out.push(n);
+      for (const n of vfs.list(this.path)) if (!f || (yield vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, n))) out.push(n);
       return jarray(out, "Ljava/lang/String;");
-    },
+    }),
     "canRead()Z": () => 1, "canWrite()Z": () => 1, "canExecute()Z": () => 1,
     "setReadOnly()Z": () => 1,
     "setReadable(Z)Z": () => 1, "setWritable(Z)Z": () => 1, "setExecutable(Z)Z": () => 1,
@@ -297,9 +297,9 @@ const inputStreamMethods: NativeSpec["methods"] = {
     this.pos += n;
     return n;
   },
-  "available()I": function (this: JInputStream) { return this.wrapped ? vcallMaybe(this.wrapped, "available", "()I") : (this.source?.size ?? this.buf.length) - this.pos; },
+  "available()I": function (this: JInputStream) { return this.wrapped ? vcall(this.wrapped, "available", "()I") : (this.source?.size ?? this.buf.length) - this.pos; },
   "skip(J)J": function (this: JInputStream, n: bigint) {
-    if (this.wrapped) return vcallMaybe(this.wrapped, "skip", "(J)J", n);
+    if (this.wrapped) return vcall(this.wrapped, "skip", "(J)J", n);
     if (n <= 0n) return 0n;
     const ownRead = (JInputStream.prototype as unknown as Record<string, unknown>)[readBII];
     if ((this as unknown as Record<string, unknown>)[readBII] !== ownRead) return skipThroughRead(this, n);
@@ -307,13 +307,13 @@ const inputStreamMethods: NativeSpec["methods"] = {
     this.pos += k;
     return BigInt(k);
   },
-  "close()V": function (this: JInputStream) { if (this.wrapped) return vcallMaybe(this.wrapped, "close", "()V"); },
-  "mark(I)V": function (this: JInputStream, limit: number) { if (this.wrapped) return vcallMaybe(this.wrapped, "mark", "(I)V", limit); },
+  "close()V": function (this: JInputStream) { if (this.wrapped) return vcall(this.wrapped, "close", "()V"); },
+  "mark(I)V": function (this: JInputStream, limit: number) { if (this.wrapped) return vcall(this.wrapped, "mark", "(I)V", limit); },
   "reset()V": function (this: JInputStream) {
-    if (this.wrapped) return vcallMaybe(this.wrapped, "reset", "()V");
+    if (this.wrapped) return vcall(this.wrapped, "reset", "()V");
     throw rt.mkThrowable("java/io/IOException", "mark/reset not supported");
   },
-  "markSupported()Z": function (this: JInputStream) { return this.wrapped ? vcallMaybe(this.wrapped, "markSupported", "()Z") : 0; },
+  "markSupported()Z": function (this: JInputStream) { return this.wrapped ? vcall(this.wrapped, "markSupported", "()Z") : 0; },
 };
 const readI = mangleMethod("read", "()I"), readBII = mangleMethod("read", "([BII)I");
 const writeBII = mangleMethod("write", "([BII)V");
@@ -466,25 +466,25 @@ rt.register({
   methods: {
     "<init>(Ljava/io/InputStream;)V": bufferedIn,
     "<init>(Ljava/io/InputStream;I)V": bufferedIn,
-    "read()I": async function (this: JBufferedIn) { this.check(); if (this.pos >= this.count) await this.fill(); return this.pos < this.count ? this.buf[this.pos++] : -1; },
-    "read([BII)I": async function (this: JBufferedIn, out: Int8Array, offset: number, count: number) {
+    "read()I": driven(function* (this: JBufferedIn): Gen { this.check(); if (this.pos >= this.count) (yield this.fill()); return this.pos < this.count ? this.buf[this.pos++] : -1; }),
+    "read([BII)I": driven(function* (this: JBufferedIn, out: Int8Array, offset: number, count: number): Gen {
       this.check();
       if (!out) throw rt.mkThrowable("java/lang/NullPointerException", null);
       if (offset < 0 || count < 0 || offset > out.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
       if (!count) return 0;
       if (this.pos >= this.count) {
         if (count >= this.buf.length && this.marked < 0) return vcall(this.wrapped, "read", "([BII)I", out, offset, count);
-        await this.fill(); if (this.pos >= this.count) return -1;
+        (yield this.fill()); if (this.pos >= this.count) return -1;
       }
       const n = Math.min(count, this.count - this.pos);
       out.set(i8(this.buf, this.pos, n), offset); this.pos += n; return n;
-    },
-    "available()I": function (this: JBufferedIn) { this.check(); return after(vcallMaybe(this.wrapped, "available", "()I"), n => Math.min(2147483647, this.count - this.pos + n)); },
-    "skip(J)J": async function (this: JBufferedIn, count: bigint) {
+    }),
+    "available()I": function (this: JBufferedIn) { this.check(); return after(vcall(this.wrapped, "available", "()I"), n => Math.min(2147483647, this.count - this.pos + n)); },
+    "skip(J)J": driven(function* (this: JBufferedIn, count: bigint): Gen {
       this.check(); if (count <= 0n) return 0n;
-      if (this.pos >= this.count) { if (this.marked < 0) return vcall(this.wrapped, "skip", "(J)J", count); await this.fill(); }
+      if (this.pos >= this.count) { if (this.marked < 0) return vcall(this.wrapped, "skip", "(J)J", count); (yield this.fill()); }
       const n = Math.min(Number(count), this.count - this.pos); this.pos += n; return BigInt(n);
-    },
+    }),
     "mark(I)V": function (this: JBufferedIn, limit: number) { this.marked = this.pos; this.markLimit = limit; },
     "reset()V": function (this: JBufferedIn) { this.check(); if (this.marked < 0) throw rt.mkThrowable("java/io/IOException", "Resetting to invalid mark"); this.pos = this.marked; },
     "markSupported()Z": () => 1,
@@ -500,20 +500,20 @@ rt.register({
     "readFully([B)V": function (this: JInputStream, out: Int8Array) {
       return after(dataBytes(this, out.length), (bytes) => { out.set(i8(bytes)); });
     },
-    "skipBytes(I)I": async function (this: JInputStream, n: number) {
+    "skipBytes(I)I": driven(function* (this: JInputStream, n: number): Gen {
       const thread = curThread;
       let total = 0;
       while (total < n) {
-        const skipped = Number(await vcallOn(thread, this.wrapped, "skip", "(J)J", BigInt(n - total)));
+        const skipped = Number((yield vcallOn(thread, this.wrapped, "skip", "(J)J", BigInt(n - total))));
         if (skipped <= 0) break;
         total += skipped;
       }
       return total;
-    },
-    "readUTF()Ljava/lang/String;": async function (this: JInputStream) {
-      const head = await dataBytes(this, 2);
-      return utf8.dec.decode(await dataBytes(this, (head[0] << 8) | head[1]));
-    },
+    }),
+    "readUTF()Ljava/lang/String;": driven(function* (this: JInputStream): Gen {
+      const head = (yield dataBytes(this, 2));
+      return utf8.dec.decode((yield dataBytes(this, (head[0] << 8) | head[1])));
+    }),
   },
 });
 function dataRead(length: number, decode: (b: Uint8Array) => unknown) {
@@ -622,9 +622,9 @@ rt.register({
     "toString()Ljava/lang/String;": baosString,
     "toString(Ljava/lang/String;)Ljava/lang/String;": baosString,
     "toString(Ljava/nio/charset/Charset;)Ljava/lang/String;": baosString,
-    "writeTo(Ljava/io/OutputStream;)V": async function (this: JBAOS, out: unknown) {
-      await vcall(out, "write", "([BII)V", this.buf, 0, this.count);
-    },
+    "writeTo(Ljava/io/OutputStream;)V": driven(function* (this: JBAOS, out: unknown): Gen {
+      (yield vcall(out, "write", "([BII)V", this.buf, 0, this.count));
+    }),
     "close()V": function () {},
   },
 });
@@ -778,38 +778,38 @@ rt.register({
       return step;
     },
     "getFD()Ljava/io/FileDescriptor;": function (this: JRAF) { return descriptorOf(this, this.path, this.write ? O_RDWR | O_CREAT : 0); },
-    "read()I": async function (this: JRAF) {
+    "read()I": driven(function* (this: JRAF): Gen {
       checkFileOpen(this);
       rafRefresh(this);
       if (!this.source) return this.pos < this.buf.length ? this.buf[this.pos++] : -1;
-      const bytes = await this.source.read(this.pos, 1);
+      const bytes = (yield this.source.read(this.pos, 1));
       if (!bytes.length) return -1;
       this.pos++;
       return bytes[0];
-    },
-    "read([B)I": async function (this: JRAF, b: Int8Array) { return await rafRead(this, b, 0, b.length); },
-    "read([BII)I": async function (this: JRAF, b: Int8Array, off: number, len: number) { return await rafRead(this, b, off, len); },
-    "readLine()Ljava/lang/String;": async function (this: JRAF) {
+    }),
+    "read([B)I": driven(function* (this: JRAF, b: Int8Array): Gen { return (yield rafRead(this, b, 0, b.length)); }),
+    "read([BII)I": driven(function* (this: JRAF, b: Int8Array, off: number, len: number): Gen { return (yield rafRead(this, b, off, len)); }),
+    "readLine()Ljava/lang/String;": driven(function* (this: JRAF): Gen {
       checkFileOpen(this);
       rafRefresh(this);
       const parts: string[] = [], size = this.source?.size ?? this.buf.length;
       if (this.pos >= size) return null;
       while (this.pos < size) {
-        const n = Math.min(4096, size - this.pos), bytes = this.source ? await this.source.read(this.pos, n) : this.buf.subarray(this.pos, this.pos + n);
+        const n = Math.min(4096, size - this.pos), bytes = this.source ? (yield this.source.read(this.pos, n)) : this.buf.subarray(this.pos, this.pos + n);
         if (!bytes.length) break;
         let end = 0; while (end < bytes.length && bytes[end] !== 10 && bytes[end] !== 13) end++;
         parts.push(charsToString(bytes, 0, end)); this.pos += end;
         if (end < bytes.length) {
           this.pos++;
           if (bytes[end] === 13 && this.pos < size) {
-            const next = this.source ? (await this.source.read(this.pos, 1))[0] : this.buf[this.pos];
+            const next = this.source ? ((yield this.source.read(this.pos, 1)))[0] : this.buf[this.pos];
             if (next === 10) this.pos++;
           }
           break;
         }
       }
       return parts.join("");
-    },
+    }),
     "readFully([B)V": function (this: JRAF, b: Int8Array) { return rafReadFully(this, b, 0, b.length); },
     "readFully([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { return rafReadFully(this, b, off, len); },
     ...readers((n, get) => async function (this: JRAF) { const b = new Int8Array(n); await rafReadFully(this, b, 0, n); return get(new DataView(b.buffer)); }),
@@ -893,10 +893,10 @@ rt.register({
   fields: { out: "out" },
   methods: {
     "<init>(Ljava/io/OutputStream;)V": function (this: any, o: unknown) { this.out = o; },
-    "write(I)V": function (this: any, b: number) { return vcallMaybe(this.out, "write", "(I)V", b); },
-    "write([BII)V": function (this: any, b: Int8Array, o: number, l: number) { return vcallMaybe(this.out, "write", "([BII)V", b, o, l); },
-    "flush()V": function (this: any) { return this.out ? vcallMaybe(this.out, "flush", "()V") : undefined; },
-    "close()V": function (this: any) { return this.out ? vcallMaybe(this.out, "close", "()V") : undefined; },
+    "write(I)V": function (this: any, b: number) { return vcall(this.out, "write", "(I)V", b); },
+    "write([BII)V": function (this: any, b: Int8Array, o: number, l: number) { return vcall(this.out, "write", "([BII)V", b, o, l); },
+    "flush()V": function (this: any) { return this.out ? vcall(this.out, "flush", "()V") : undefined; },
+    "close()V": function (this: any) { return this.out ? vcall(this.out, "close", "()V") : undefined; },
   },
 });
 export async function skipStream(this: unknown, count: bigint): Promise<bigint> {
@@ -922,22 +922,22 @@ class JSequenceInputStream extends JInputStream {
   }
 }
 rt.register({ name: "java/io/SequenceInputStream", ctor: JSequenceInputStream, sup: "java/io/InputStream", methods: {
-  "<init>(Ljava/io/InputStream;Ljava/io/InputStream;)V": async function (this: JSequenceInputStream, first: unknown, second: unknown) { this.streams = [first, second]; await this.advance(); },
-  "<init>(Ljava/util/Enumeration;)V": async function (this: JSequenceInputStream, enumeration: unknown) {
+  "<init>(Ljava/io/InputStream;Ljava/io/InputStream;)V": driven(function* (this: JSequenceInputStream, first: unknown, second: unknown): Gen { this.streams = [first, second]; (yield this.advance()); }),
+  "<init>(Ljava/util/Enumeration;)V": driven(function* (this: JSequenceInputStream, enumeration: unknown): Gen {
     if (!enumeration) throw rt.mkThrowable("java/lang/NullPointerException", null);
-    this.enumeration = enumeration; await this.advance();
-  },
-  "read()I": async function (this: JSequenceInputStream) {
-    while (this.current) { const value = await vcall(this.current, "read", "()I"); if (value >= 0) return value; await this.advance(); } return -1;
-  },
-  "read([BII)I": async function (this: JSequenceInputStream, out: Int8Array, offset: number, count: number) {
+    this.enumeration = enumeration; (yield this.advance());
+  }),
+  "read()I": driven(function* (this: JSequenceInputStream): Gen {
+    while (this.current) { const value = (yield vcall(this.current, "read", "()I")); if (value >= 0) return value; (yield this.advance()); } return -1;
+  }),
+  "read([BII)I": driven(function* (this: JSequenceInputStream, out: Int8Array, offset: number, count: number): Gen {
     if (!out) throw rt.mkThrowable("java/lang/NullPointerException", null);
     if (offset < 0 || count < 0 || offset > out.length - count) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
     if (!count) return 0;
-    while (this.current) { const n = await vcall(this.current, "read", "([BII)I", out, offset, count); if (n > 0) return n; await this.advance(); } return -1;
-  },
+    while (this.current) { const n = (yield vcall(this.current, "read", "([BII)I", out, offset, count)); if (n > 0) return n; (yield this.advance()); } return -1;
+  }),
   "available()I": function (this: JSequenceInputStream) { return this.current ? vcall(this.current, "available", "()I") : 0; },
-  "close()V": async function (this: JSequenceInputStream) { while (this.current) await this.advance(); },
+  "close()V": driven(function* (this: JSequenceInputStream): Gen { while (this.current) (yield this.advance()); }),
   "markSupported()Z": () => 0,
   "mark(I)V": () => {},
   "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
@@ -947,7 +947,7 @@ rt.register({ name: "java/io/SequenceInputStream", ctor: JSequenceInputStream, s
 // every method forwards to the wrapped stream, as the JDK's does: a Java subclass's super.read()
 // reaches the stream it wrapped, whether that is one of ours or app code over a socket
 export class JFilterInputStream extends JInputStream { in_: unknown = null; }
-const fwd = (name: string, desc: string) => function (this: JFilterInputStream, ...a: unknown[]) { return vcallMaybe(this.in_, name, desc, ...a); };
+const fwd = (name: string, desc: string) => function (this: JFilterInputStream, ...a: unknown[]) { return vcall(this.in_, name, desc, ...a); };
 rt.register({
   name: "java/io/FilterInputStream", ctor: JFilterInputStream, sup: "java/io/InputStream",
   fields: { in: "in_" },
@@ -966,7 +966,7 @@ rt.register({
 class JBufferedOut extends JFilterOutputStream { buf = new Int8Array(8192); count = 0; }
 function drain(s: JBufferedOut) {
   if (!s.count) return;
-  return after(vcallMaybe(s.out, "write", "([BII)V", s.buf, 0, s.count), () => { s.count = 0; });
+  return after(vcall(s.out, "write", "([BII)V", s.buf, 0, s.count), () => { s.count = 0; });
 }
 const wrapOut = function (this: JBufferedOut, o: unknown, size = 8192) {
   if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer size <= 0");
@@ -987,7 +987,7 @@ rt.register({
       if (off < 0 || len < 0 || off + len > b.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
       if (len >= this.buf.length) {
         const t = rt.th();
-        return after(drain(this), () => { rt.st(t); return vcallMaybe(this.out, "write", "([BII)V", b, off, len); });
+        return after(drain(this), () => { rt.st(t); return vcall(this.out, "write", "([BII)V", b, off, len); });
       }
       return after(len > this.buf.length - this.count ? drain(this) : undefined, () => {
         this.buf.set(b.subarray(off, off + len), this.count);
@@ -996,12 +996,12 @@ rt.register({
     },
     "flush()V": function (this: JBufferedOut) {
       const t = rt.th();
-      return after(drain(this), () => { rt.st(t); return vcallMaybe(this.out, "flush", "()V"); });
+      return after(drain(this), () => { rt.st(t); return vcall(this.out, "flush", "()V"); });
     },
-    "close()V": async function (this: JBufferedOut) {
+    "close()V": driven(function* (this: JBufferedOut): Gen {
       const t = rt.th();
-      try { await vcall(this, "flush", "()V"); } finally { rt.st(t); await vcall(this.out, "close", "()V"); }
-    },
+      try { (yield vcall(this, "flush", "()V")); } finally { rt.st(t); (yield vcall(this.out, "close", "()V")); }
+    }),
   },
 });
 
@@ -1066,26 +1066,26 @@ rt.register({
     "<init>(Ljava/io/OutputStream;Z)V": initPrint,
     ...printMethods(pr, "java/io/PrintStream"),
     "flush()V": function (this: JPrintStream) { return this.out !== null ? printCall(this, "flush", "()V") : this.line ? pr(this, "", true) : undefined; },
-    "close()V": async function (this: JPrintStream) {
+    "close()V": driven(function* (this: JPrintStream): Gen {
       if (this.closed) return;
-      await vcall(this, "flush", "()V");
-      if (this.out !== null) await printCall(this, "close", "()V");
+      (yield vcall(this, "flush", "()V"));
+      if (this.out !== null) (yield printCall(this, "close", "()V"));
       this.closed = true;
-    },
-    "checkError()Z": async function (this: JPrintStream) {
-      if (!this.closed) await vcall(this, "flush", "()V");
-      return this.trouble || this.out instanceof JPrintStream && await vcall(this.out, "checkError", "()Z") ? 1 : 0;
-    },
-    "write(I)V": async function (this: JPrintStream, b: number) {
-      if (this.out === null) { await pr(this, this.decoder.decode(Uint8Array.of(b), { stream: true }), false); return; }
-      await printCall(this, "write", "(I)V", b);
-      if (this.auto && (b & 255) === 10) await vcall(this, "flush", "()V");
-    },
-    "write([BII)V": async function (this: JPrintStream, bytes: Int8Array, off: number, len: number) {
-      if (this.out === null) { await pr(this, this.decoder.decode(bytes.subarray(off, off + len), { stream: true }), false); return; }
-      await printCall(this, "write", "([BII)V", bytes, off, len);
-      if (this.auto) await vcall(this, "flush", "()V");
-    },
+    }),
+    "checkError()Z": driven(function* (this: JPrintStream): Gen {
+      if (!this.closed) (yield vcall(this, "flush", "()V"));
+      return this.trouble || this.out instanceof JPrintStream && (yield vcall(this.out, "checkError", "()Z")) ? 1 : 0;
+    }),
+    "write(I)V": driven(function* (this: JPrintStream, b: number): Gen {
+      if (this.out === null) { (yield pr(this, this.decoder.decode(Uint8Array.of(b), { stream: true }), false)); return; }
+      (yield printCall(this, "write", "(I)V", b));
+      if (this.auto && (b & 255) === 10) (yield vcall(this, "flush", "()V"));
+    }),
+    "write([BII)V": driven(function* (this: JPrintStream, bytes: Int8Array, off: number, len: number): Gen {
+      if (this.out === null) { (yield pr(this, this.decoder.decode(bytes.subarray(off, off + len), { stream: true }), false)); return; }
+      (yield printCall(this, "write", "([BII)V", bytes, off, len));
+      if (this.auto) (yield vcall(this, "flush", "()V"));
+    }),
   },
 });
 {
@@ -1328,7 +1328,7 @@ rt.register({
   },
 });
 class JWriter extends JObj { s = ""; lock: unknown = this; }
-const wr = (w: unknown, s: string) => vcallMaybe(w, "write", "(Ljava/lang/String;)V", s);
+const wr = (w: unknown, s: string) => vcall(w, "write", "(Ljava/lang/String;)V", s);
 const chars = (c: Uint16Array): string => charsToString(c, 0, c.length);
 function writerRange(value: string | Uint16Array, off: number, len: number): void {
   if (value == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
@@ -1351,7 +1351,7 @@ const memoryWriterMethods = {
 };
 function writerAppend(ret: string): NonNullable<NativeSpec["methods"]> {
   return {
-    [`append(C)L${ret};`]: function (this: JWriter, c: number) { return after(vcallMaybe(this, "write", "(I)V", c), () => this); },
+    [`append(C)L${ret};`]: function (this: JWriter, c: number) { return after(vcall(this, "write", "(I)V", c), () => this); },
     [`append(Ljava/lang/CharSequence;)L${ret};`]: async function (this: JWriter, cs: unknown) {
       const thread = curThread, text = cs == null ? "null" : await csText(cs);
       await vcallOn(thread, this, "write", "(Ljava/lang/String;)V", text); return this;
@@ -1374,19 +1374,19 @@ rt.register({
     },
     "write(Ljava/lang/String;)V": function (this: JWriter, s: string) {
       if (s == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      return vcallMaybe(this, "write", "(Ljava/lang/String;II)V", s, 0, s.length);
+      return vcall(this, "write", "(Ljava/lang/String;II)V", s, 0, s.length);
     },
     ...writerAppend("java/io/Writer"), ...writerAppend("java/lang/Appendable"),
     "write(Ljava/lang/String;II)V": function (this: JWriter, s: string, off: number, len: number) {
       writerRange(s, off, len);
       const chars = new Uint16Array(len);
       for (let i = 0; i < len; i++) chars[i] = s.charCodeAt(off + i);
-      return vcallMaybe(this, "write", "([CII)V", chars, 0, len);
+      return vcall(this, "write", "([CII)V", chars, 0, len);
     },
-    "write(I)V": function (this: JWriter, c: number) { return vcallMaybe(this, "write", "([CII)V", Uint16Array.of(c), 0, 1); },
+    "write(I)V": function (this: JWriter, c: number) { return vcall(this, "write", "([CII)V", Uint16Array.of(c), 0, 1); },
     "write([C)V": function (this: JWriter, c: Uint16Array) {
       if (c == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
-      return vcallMaybe(this, "write", "([CII)V", c, 0, c.length);
+      return vcall(this, "write", "([CII)V", c, 0, c.length);
     },
     "flush()V": function () {}, "close()V": function () {},
   },
@@ -1431,8 +1431,8 @@ rt.register({
     "<init>(Ljava/io/Writer;I)V": function (this: any, w: JWriter) { this.target = w; },
     "write(Ljava/lang/String;)V": function (this: any, str: string) { return wr(this.target, str); },
     "newLine()V": function (this: any) { return wr(this.target, "\n"); },
-    "flush()V": function (this: any) { return vcallMaybe(this.target, "flush", "()V"); },
-    "close()V": function (this: any) { return vcallMaybe(this.target, "close", "()V"); },
+    "flush()V": function (this: any) { return vcall(this.target, "flush", "()V"); },
+    "close()V": function (this: any) { return vcall(this.target, "close", "()V"); },
   },
 });
 // PrintWriter: every print/println overload funnels through the virtual write(String),
@@ -1454,8 +1454,8 @@ rt.register({
     ...nativeWriterRanges,
     "<init>(Ljava/io/Writer;)V": function (this: JPrintWriter, w: unknown) { this.target = w; },
     "<init>(Ljava/io/Writer;Z)V": function (this: JPrintWriter, w: unknown, a: number) { this.target = w; this.auto = !!a; },
-    "<init>(Ljava/io/OutputStream;)V": async function (this: JPrintWriter, o: unknown) { this.target = await mkOSW(o); },
-    "<init>(Ljava/io/OutputStream;Z)V": async function (this: JPrintWriter, o: unknown, a: number) { this.target = await mkOSW(o); this.auto = !!a; },
+    "<init>(Ljava/io/OutputStream;)V": driven(function* (this: JPrintWriter, o: unknown): Gen { this.target = (yield mkOSW(o)); }),
+    "<init>(Ljava/io/OutputStream;Z)V": driven(function* (this: JPrintWriter, o: unknown, a: number): Gen { this.target = (yield mkOSW(o)); this.auto = !!a; }),
     "write(Ljava/lang/String;)V": function (this: JPrintWriter, s: string) {
       if (this.target === null) { this.s += s; return; }
       return vcall(this.target, "write", "(Ljava/lang/String;)V", s);
@@ -1477,18 +1477,18 @@ rt.register({
     "<init>(Ljava/io/OutputStream;Ljava/nio/charset/Charset;)V": function (this: JOSW, o: unknown) { this.sink = o; },
     "<init>(Ljava/io/OutputStream;Ljava/lang/String;)V": function (this: JOSW, o: unknown) { this.sink = o; },
     "write(Ljava/lang/String;)V": function (this: JOSW, str: string) { this.s += str; },
-    "flush()V": async function (this: JOSW) {
+    "flush()V": driven(function* (this: JOSW): Gen {
       if (this.s && this.sink) {
         const b = utf8.enc.encode(this.s);
-        await vcall(this.sink, "write", "([BII)V", new Int8Array(b.buffer, 0, b.length), 0, b.length);
+        (yield vcall(this.sink, "write", "([BII)V", new Int8Array(b.buffer, 0, b.length), 0, b.length));
         this.s = "";
       }
-      if (this.sink) await vcall(this.sink, "flush", "()V");
-    },
-    "close()V": async function (this: JOSW) {
-      await vcall(this, "flush", "()V");
-      if (this.sink) await vcall(this.sink, "close", "()V");
-    },
+      if (this.sink) (yield vcall(this.sink, "flush", "()V"));
+    }),
+    "close()V": driven(function* (this: JOSW): Gen {
+      (yield vcall(this, "flush", "()V"));
+      if (this.sink) (yield vcall(this.sink, "close", "()V"));
+    }),
   },
 });
 
@@ -1507,14 +1507,14 @@ rt.register({
 
 class JDataOut extends JOutputStream { sink: unknown = null; written = 0; }
 function emit(s: JDataOut, b: Int8Array, off: number, len: number): unknown {
-  return after(vcallMaybe(s.sink, "write", "([BII)V", b, off, len), () => { s.written += len; });
+  return after(vcall(s.sink, "write", "([BII)V", b, off, len), () => { s.written += len; });
 }
 rt.register({
   name: "java/io/DataOutputStream", ctor: JDataOut, sup: "java/io/OutputStream",
   ifaces: ["java/io/DataOutput"],
   methods: {
     "<init>(Ljava/io/OutputStream;)V": function (this: JDataOut, s: unknown) { this.sink = s; },
-    "write(I)V": function (this: JDataOut, b: number) { return after(vcallMaybe(this.sink, "write", "(I)V", b), () => { this.written++; }); },
+    "write(I)V": function (this: JDataOut, b: number) { return after(vcall(this.sink, "write", "(I)V", b), () => { this.written++; }); },
     "write([BII)V": function (this: JDataOut, b: Int8Array, off: number, len: number) { return emit(this, b, off, len); },
     "writeBytes(Ljava/lang/String;)V": function (this: JDataOut, s: string) {
       const bytes = new Int8Array(s.length);
@@ -1527,8 +1527,8 @@ rt.register({
       out[0] = b.length >>> 8; out[1] = b.length; out.set(b, 2);
       return emit(this, out, 0, out.length);
     },
-    "flush()V": function (this: JDataOut) { return vcallMaybe(this.sink, "flush", "()V"); },
-    "close()V": function (this: JDataOut) { return after(vcallMaybe(this.sink, "flush", "()V"), () => vcallMaybe(this.sink, "close", "()V")); },
+    "flush()V": function (this: JDataOut) { return vcall(this.sink, "flush", "()V"); },
+    "close()V": function (this: JDataOut) { return after(vcall(this.sink, "flush", "()V"), () => vcall(this.sink, "close", "()V")); },
     "size()I": function (this: JDataOut) { return this.written; },
   },
 });
@@ -1585,13 +1585,13 @@ function channelWrite(channel: JFileChannel, src: JBuffer): number | Promise<num
   const file = channel.writable(), len = src.lim - src.pos;
   if (len === 0) return 0;
   const view = new Int8Array(src.ab, src.dv.byteOffset + src.pos, len);
-  const written = file instanceof JRAF ? rafWrite(file, view, 0, len) : vcallMaybe(file, "write", "([BII)V", view, 0, len);
+  const written = file instanceof JRAF ? rafWrite(file, view, 0, len) : vcall(file, "write", "([BII)V", view, 0, len);
   return after(written, () => { src.pos += len; return len; });
 }
 rt.register({
   name: "java/nio/channels/FileChannel", ctor: JFileChannel,
   methods: {
-    "close()V": function (this: JFileChannel) { if (this.open) { this.open = false; return vcallMaybe(this.file, "close", "()V"); } },
+    "close()V": function (this: JFileChannel) { if (this.open) { this.open = false; return vcall(this.file, "close", "()V"); } },
     "isOpen()Z": function (this: JFileChannel) { return +this.open; },
     "size()J": function (this: JFileChannel) {
       const file = this.opened();
@@ -1641,11 +1641,11 @@ rt.register({
       return after(channelRead(this, dst), (n) => { file.pos = saved; return n; });
     },
     "write(Ljava/nio/ByteBuffer;)I": function (this: JFileChannel, src: JBuffer) { return channelWrite(this, src); },
-    "transferTo(JJLjava/nio/channels/WritableByteChannel;)J": async function (this: JFileChannel, position: bigint, count: bigint, target: JObj | null) {
+    "transferTo(JJLjava/nio/channels/WritableByteChannel;)J": driven(function* (this: JFileChannel, position: bigint, count: bigint, target: JObj | null): Gen {
       const file = this.readable(), thread = curThread;
       if (!target) return rt.npe();
       if (position < 0n || count < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "position/count");
-      if (!await vcallOn(thread, target, "isOpen", "()Z")) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
+      if (!(yield vcallOn(thread, target, "isOpen", "()Z"))) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
       if (target instanceof JFileChannel) target.writable();
       const available = BigInt(file.source?.size ?? file.buf.length) - position;
       const length = Number(count < available ? count : available);
@@ -1655,14 +1655,14 @@ rt.register({
       while (transferred < length) {
         this.readable();
         const start = Number(position) + transferred, n = Math.min(length - transferred, bytes.length);
-        const data = file.source ? await readFully(file.source, start, n) : file.buf.subarray(start, start + n);
+        const data = file.source ? (yield readFully(file.source, start, n)) : file.buf.subarray(start, start + n);
         bytes.set(data); buffer.pos = 0; buffer.lim = data.length;
-        const written = Number(await vcallOn(thread, target, "write", "(Ljava/nio/ByteBuffer;)I", buffer));
+        const written = Number((yield vcallOn(thread, target, "write", "(Ljava/nio/ByteBuffer;)I", buffer)));
         transferred += written;
         if (written < n) break;
       }
       return BigInt(transferred);
-    },
+    }),
     "force(Z)V": () => {},
     "tryLock()Ljava/nio/channels/FileLock;": fileLock,
     "tryLock(JJZ)Ljava/nio/channels/FileLock;": fileLock,
@@ -1743,11 +1743,11 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "getScheme()Ljava/lang/String;": () => "file",
-    "getFileSystem(Ljava/net/URI;)Ljava/nio/file/FileSystem;": async (uri: unknown) => {
-      const text = await vcall(uri, "toString", "()Ljava/lang/String;");
+    "getFileSystem(Ljava/net/URI;)Ljava/nio/file/FileSystem;": driven(function* (uri: unknown): Gen  {
+      const text = (yield vcall(uri, "toString", "()Ljava/lang/String;"));
       if (!/^file:/i.test(text)) throw rt.mkThrowable("java/nio/file/FileSystemNotFoundException", text);
       return nioFileSystem;
-    },
+    }),
     "newInputStream(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/InputStream;": (path: JNioPath) =>
       newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", path.p),
     "newOutputStream(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;": (path: JNioPath, options: unknown[] | null) =>
@@ -1771,16 +1771,16 @@ rt.register({
       } else vfs.delete(path.p);
       return 1;
     },
-    "copy(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)V": async (source: JNioPath, target: JNioPath, options: unknown[] | null) => {
+    "copy(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)V": driven(function* (source: JNioPath, target: JNioPath, options: unknown[] | null): Gen  {
       requireNioFile(source);
       if (vfs.exists(target.p) && !replaceExisting(options)) throw rt.mkThrowable("java/nio/file/FileAlreadyExistsException", target.p);
-      const bytes = await vfs.readFile(source.p);
+      const bytes = (yield vfs.readFile(source.p));
       if (bytes) vfs.write(target.p, bytes.slice()); else vfs.mkdir(target.p);
-    },
-    "move(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)V": async function (this: JNioFileSystemProvider, source: JNioPath, target: JNioPath, options: unknown[] | null) {
-      await vcall(this, "copy", "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)V", source, target, options);
-      await vcall(this, "delete", "(Ljava/nio/file/Path;)V", source);
-    },
+    }),
+    "move(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)V": driven(function* (this: JNioFileSystemProvider, source: JNioPath, target: JNioPath, options: unknown[] | null): Gen {
+      (yield vcall(this, "copy", "(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)V", source, target, options));
+      (yield vcall(this, "delete", "(Ljava/nio/file/Path;)V", source));
+    }),
     "checkAccess(Ljava/nio/file/Path;[Ljava/nio/file/AccessMode;)V": (path: JNioPath) => requireNioFile(path),
     "getFileAttributeView(Ljava/nio/file/Path;Ljava/lang/Class;[Ljava/nio/file/LinkOption;)Ljava/nio/file/attribute/FileAttributeView;": () => null,
     "readAttributes(Ljava/nio/file/Path;Ljava/lang/Class;[Ljava/nio/file/LinkOption;)Ljava/nio/file/attribute/BasicFileAttributes;": (path: JNioPath) => {
@@ -1834,7 +1834,7 @@ rt.register({
     "static isDirectory(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z": (p: JNioPath) => (vfs.isDir(p.p) ? 1 : 0),
     "static isRegularFile(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z": (p: JNioPath) => (vfs.stat(p.p) ? 1 : 0),
     "static isSymbolicLink(Ljava/nio/file/Path;)Z": () => 0,
-    "static newOutputStream(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;": async (p: JNioPath, options: JSimpleEnum[] | null) => {
+    "static newOutputStream(Ljava/nio/file/Path;[Ljava/nio/file/OpenOption;)Ljava/io/OutputStream;": driven(function* (p: JNioPath, options: JSimpleEnum[] | null): Gen  {
       const names = new Set((options ?? []).map((option) => option.ename));
       const defaults = names.size === 0;
       if (names.has("READ") || names.has("APPEND") && names.has("TRUNCATE_EXISTING")) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
@@ -1844,18 +1844,18 @@ rt.register({
       if (vfs.isDir(p.p)) throw rt.mkThrowable("java/nio/file/FileSystemException", p.p);
       const truncate = defaults || names.has("TRUNCATE_EXISTING");
       if (exists && !truncate && !vfs.read(p.p)) {
-        const bytes = await vfs.readFile(p.p);
+        const bytes = (yield vfs.readFile(p.p));
         if (bytes) vfs.write(p.p, bytes);
       }
       const stream = new JFOS();
       openWrite.call(stream, p.p, names.has("APPEND") ? 1 : 0, truncate);
       stream.deleteOnClose = names.has("DELETE_ON_CLOSE");
       return stream;
-    },
-    "static readAllBytes(Ljava/nio/file/Path;)[B": async (p: JNioPath) => {
-      const bytes = await vfs.readFile(p.p) ?? new Uint8Array(0);
+    }),
+    "static readAllBytes(Ljava/nio/file/Path;)[B": driven(function* (p: JNioPath): Gen  {
+      const bytes = (yield vfs.readFile(p.p)) ?? new Uint8Array(0);
       return new Int8Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length));
-    },
+    }),
   },
 });
 

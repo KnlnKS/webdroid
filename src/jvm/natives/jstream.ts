@@ -1,4 +1,4 @@
-import { JObj, rt } from "../runtime";
+import { JObj, rt, driven, type Gen } from "../runtime";
 import { JList, mkIter, newArrayList, toJsArray, sortInPlace } from "./jutil";
 import { vcall } from "./jlang";
 import { csText } from "./jchars";
@@ -73,14 +73,14 @@ rt.register({ name: "java/util/Spliterator", ctor: JSpliterator });
 rt.register({
   name: "java/util/Spliterators", ctor: class extends JObj {},
   methods: {
-    "static spliteratorUnknownSize(Ljava/util/Iterator;I)Ljava/util/Spliterator;": async (it: unknown) => {
+    "static spliteratorUnknownSize(Ljava/util/Iterator;I)Ljava/util/Spliterator;": driven(function* (it: unknown): Gen  {
       const s = new JSpliterator();
-      while (await vcall(it, "hasNext", "()Z")) s.a.push(await vcall(it, "next", "()Ljava/lang/Object;"));
+      while ((yield vcall(it, "hasNext", "()Z"))) s.a.push((yield vcall(it, "next", "()Ljava/lang/Object;")));
       return s;
-    },
-    "static spliterator(Ljava/util/Collection;I)Ljava/util/Spliterator;": async (c: unknown) => {
-      const s = new JSpliterator(); s.a = await toJsArray(c); return s;
-    },
+    }),
+    "static spliterator(Ljava/util/Collection;I)Ljava/util/Spliterator;": driven(function* (c: unknown): Gen  {
+      const s = new JSpliterator(); s.a = (yield toJsArray(c)); return s;
+    }),
   },
 });
 rt.register({
@@ -95,76 +95,76 @@ rt.register({
     "static of(Ljava/lang/Object;)Ljava/util/stream/Stream;": (value: unknown) => mkStream([value]),
     "static of([Ljava/lang/Object;)Ljava/util/stream/Stream;": (values: unknown[]) => mkStream(values.slice()),
     "static concat(Ljava/util/stream/Stream;Ljava/util/stream/Stream;)Ljava/util/stream/Stream;": (a: JStream, b: JStream) => mkStream([...a.a, ...b.a]),
-    "filter(Ljava/util/function/Predicate;)Ljava/util/stream/Stream;": async function (this: JStream, p: unknown) {
+    "filter(Ljava/util/function/Predicate;)Ljava/util/stream/Stream;": driven(function* (this: JStream, p: unknown): Gen {
       const out: unknown[] = [];
-      for (const x of this.a) if (await vcall(p, "test", "(Ljava/lang/Object;)Z", x)) out.push(x);
+      for (const x of this.a) if ((yield vcall(p, "test", "(Ljava/lang/Object;)Z", x))) out.push(x);
       return mkStream(out);
-    },
-    "map(Ljava/util/function/Function;)Ljava/util/stream/Stream;": async function (this: JStream, f: unknown) {
+    }),
+    "map(Ljava/util/function/Function;)Ljava/util/stream/Stream;": driven(function* (this: JStream, f: unknown): Gen {
       const out: unknown[] = [];
-      for (const x of this.a) out.push(await apply1(f, x));
+      for (const x of this.a) out.push((yield apply1(f, x)));
       return mkStream(out);
-    },
-    "flatMap(Ljava/util/function/Function;)Ljava/util/stream/Stream;": async function (this: JStream, f: unknown) {
+    }),
+    "flatMap(Ljava/util/function/Function;)Ljava/util/stream/Stream;": driven(function* (this: JStream, f: unknown): Gen {
       const out: unknown[] = [];
       for (const x of this.a) {
-        const nested = await apply1(f, x) as JStream | null;
+        const nested = (yield apply1(f, x)) as JStream | null;
         if (nested === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
         out.push(...nested.a);
       }
       return mkStream(out);
-    },
-    "mapToInt(Ljava/util/function/ToIntFunction;)Ljava/util/stream/IntStream;": async function (this: JStream, f: unknown) {
+    }),
+    "mapToInt(Ljava/util/function/ToIntFunction;)Ljava/util/stream/IntStream;": driven(function* (this: JStream, f: unknown): Gen {
       const out: number[] = [];
-      for (const x of this.a) out.push((await vcall(f, "applyAsInt", "(Ljava/lang/Object;)I", x) as number) | 0);
+      for (const x of this.a) out.push(((yield vcall(f, "applyAsInt", "(Ljava/lang/Object;)I", x)) as number) | 0);
       return mkIntStream(out);
-    },
-    "mapToLong(Ljava/util/function/ToLongFunction;)Ljava/util/stream/LongStream;": async function (this: JStream, f: unknown) {
+    }),
+    "mapToLong(Ljava/util/function/ToLongFunction;)Ljava/util/stream/LongStream;": driven(function* (this: JStream, f: unknown): Gen {
       const out: bigint[] = [];
-      for (const x of this.a) out.push(await vcall(f, "applyAsLong", "(Ljava/lang/Object;)J", x) as bigint);
+      for (const x of this.a) out.push((yield vcall(f, "applyAsLong", "(Ljava/lang/Object;)J", x)) as bigint);
       return mkLongStream(out);
-    },
-    "forEach(Ljava/util/function/Consumer;)V": async function (this: JStream, c: unknown) {
-      for (const x of this.a) await vcall(c, "accept", "(Ljava/lang/Object;)V", x);
-    },
-    "sorted(Ljava/util/Comparator;)Ljava/util/stream/Stream;": async function (this: JStream, cmp: unknown) {
+    }),
+    "forEach(Ljava/util/function/Consumer;)V": driven(function* (this: JStream, c: unknown): Gen {
+      for (const x of this.a) (yield vcall(c, "accept", "(Ljava/lang/Object;)V", x));
+    }),
+    "sorted(Ljava/util/Comparator;)Ljava/util/stream/Stream;": driven(function* (this: JStream, cmp: unknown): Gen {
       const out = this.a.slice();
-      await sortInPlace(out, cmp);
+      (yield sortInPlace(out, cmp));
       return mkStream(out);
-    },
+    }),
     "limit(J)Ljava/util/stream/Stream;": function (this: JStream, n: bigint) { return mkStream(this.a.slice(0, Number(n))); },
     "count()J": function (this: JStream) { return BigInt(this.a.length); },
     "findFirst()Ljava/util/Optional;": function (this: JStream) { return mkOpt(this.a[0]); },
-    "anyMatch(Ljava/util/function/Predicate;)Z": async function (this: JStream, p: unknown) {
-      for (const x of this.a) if (await vcall(p, "test", "(Ljava/lang/Object;)Z", x)) return 1;
+    "anyMatch(Ljava/util/function/Predicate;)Z": driven(function* (this: JStream, p: unknown): Gen {
+      for (const x of this.a) if ((yield vcall(p, "test", "(Ljava/lang/Object;)Z", x))) return 1;
       return 0;
-    },
-    "allMatch(Ljava/util/function/Predicate;)Z": async function (this: JStream, p: unknown) {
-      for (const x of this.a) if (!(await vcall(p, "test", "(Ljava/lang/Object;)Z", x))) return 0;
+    }),
+    "allMatch(Ljava/util/function/Predicate;)Z": driven(function* (this: JStream, p: unknown): Gen {
+      for (const x of this.a) if (!((yield vcall(p, "test", "(Ljava/lang/Object;)Z", x)))) return 0;
       return 1;
-    },
-    "noneMatch(Ljava/util/function/Predicate;)Z": async function (this: JStream, p: unknown) {
-      for (const x of this.a) if (await vcall(p, "test", "(Ljava/lang/Object;)Z", x)) return 0;
+    }),
+    "noneMatch(Ljava/util/function/Predicate;)Z": driven(function* (this: JStream, p: unknown): Gen {
+      for (const x of this.a) if ((yield vcall(p, "test", "(Ljava/lang/Object;)Z", x))) return 0;
       return 1;
-    },
+    }),
     "toList()Ljava/util/List;": function (this: JStream) { return newArrayList(this.a.slice()); },
     "toArray()[Ljava/lang/Object;": function (this: JStream) { return jarray(this.a.slice()); },
-    "toArray(Ljava/util/function/IntFunction;)[Ljava/lang/Object;": async function (this: JStream, generator: unknown) {
-      const out = await vcall(generator, "apply", "(I)Ljava/lang/Object;", this.a.length) as unknown[];
+    "toArray(Ljava/util/function/IntFunction;)[Ljava/lang/Object;": driven(function* (this: JStream, generator: unknown): Gen {
+      const out = (yield vcall(generator, "apply", "(I)Ljava/lang/Object;", this.a.length)) as unknown[];
       if (!Array.isArray(out) || out.length < this.a.length) throw rt.mkThrowable("java/lang/IllegalStateException", "Invalid stream array generator");
       for (let i = 0; i < this.a.length; i++) out[i] = this.a[i];
       return out;
-    },
+    }),
     "iterator()Ljava/util/Iterator;": function (this: JStream) { return mkIter(this.a); },
     "collect(Ljava/util/stream/Collector;)Ljava/lang/Object;": function (this: JStream, c: unknown) { return collect(this, c); },
   },
 });
 rt.register({ name: "java/util/stream/LongStream", ctor: JLongStream, ifaces: ["java/util/stream/BaseStream"], methods: {
-  "mapToObj(Ljava/util/function/LongFunction;)Ljava/util/stream/Stream;": async function (this: JLongStream, f: unknown) {
+  "mapToObj(Ljava/util/function/LongFunction;)Ljava/util/stream/Stream;": driven(function* (this: JLongStream, f: unknown): Gen {
     const out: unknown[] = [];
-    for (const value of this.a) out.push(await vcall(f, "apply", "(J)Ljava/lang/Object;", value));
+    for (const value of this.a) out.push((yield vcall(f, "apply", "(J)Ljava/lang/Object;", value)));
     return mkStream(out);
-  },
+  }),
   "sum()J": function (this: JLongStream) { return this.a.reduce((sum, value) => BigInt.asIntN(64, sum + value), 0n); },
   "count()J": function (this: JLongStream) { return BigInt(this.a.length); },
   "toArray()[J": function (this: JLongStream) { return BigInt64Array.from(this.a); },
@@ -188,37 +188,37 @@ rt.register({
       return mkIntStream(out);
     },
     "boxed()Ljava/util/stream/Stream;": function (this: JIntStream) { return mkStream(this.a.slice()); },
-    "map(Ljava/util/function/IntUnaryOperator;)Ljava/util/stream/IntStream;": async function (this: JIntStream, f: unknown) {
+    "map(Ljava/util/function/IntUnaryOperator;)Ljava/util/stream/IntStream;": driven(function* (this: JIntStream, f: unknown): Gen {
       const out: number[] = [];
-      for (const value of this.a) out.push((await vcall(f, "applyAsInt", "(I)I", value) as number) | 0);
+      for (const value of this.a) out.push(((yield vcall(f, "applyAsInt", "(I)I", value)) as number) | 0);
       return mkIntStream(out);
-    },
-    "mapToObj(Ljava/util/function/IntFunction;)Ljava/util/stream/Stream;": async function (this: JIntStream, f: unknown) {
+    }),
+    "mapToObj(Ljava/util/function/IntFunction;)Ljava/util/stream/Stream;": driven(function* (this: JIntStream, f: unknown): Gen {
       const out: unknown[] = [];
-      for (const value of this.a) out.push(await vcall(f, "apply", "(I)Ljava/lang/Object;", value));
+      for (const value of this.a) out.push((yield vcall(f, "apply", "(I)Ljava/lang/Object;", value)));
       return mkStream(out);
-    },
-    "filter(Ljava/util/function/IntPredicate;)Ljava/util/stream/IntStream;": async function (this: JIntStream, p: unknown) {
+    }),
+    "filter(Ljava/util/function/IntPredicate;)Ljava/util/stream/IntStream;": driven(function* (this: JIntStream, p: unknown): Gen {
       const out: number[] = [];
-      for (const value of this.a) if (await vcall(p, "test", "(I)Z", value)) out.push(value);
+      for (const value of this.a) if ((yield vcall(p, "test", "(I)Z", value))) out.push(value);
       return mkIntStream(out);
-    },
-    "forEach(Ljava/util/function/IntConsumer;)V": async function (this: JIntStream, c: unknown) {
-      for (const value of this.a) await vcall(c, "accept", "(I)V", value);
-    },
+    }),
+    "forEach(Ljava/util/function/IntConsumer;)V": driven(function* (this: JIntStream, c: unknown): Gen {
+      for (const value of this.a) (yield vcall(c, "accept", "(I)V", value));
+    }),
     "findFirst()Ljava/util/OptionalInt;": function (this: JIntStream) { return mkOptInt(this.a[0]); },
-    "anyMatch(Ljava/util/function/IntPredicate;)Z": async function (this: JIntStream, p: unknown) {
-      for (const value of this.a) if (await vcall(p, "test", "(I)Z", value)) return 1;
+    "anyMatch(Ljava/util/function/IntPredicate;)Z": driven(function* (this: JIntStream, p: unknown): Gen {
+      for (const value of this.a) if ((yield vcall(p, "test", "(I)Z", value))) return 1;
       return 0;
-    },
-    "allMatch(Ljava/util/function/IntPredicate;)Z": async function (this: JIntStream, p: unknown) {
-      for (const value of this.a) if (!(await vcall(p, "test", "(I)Z", value))) return 0;
+    }),
+    "allMatch(Ljava/util/function/IntPredicate;)Z": driven(function* (this: JIntStream, p: unknown): Gen {
+      for (const value of this.a) if (!((yield vcall(p, "test", "(I)Z", value)))) return 0;
       return 1;
-    },
-    "noneMatch(Ljava/util/function/IntPredicate;)Z": async function (this: JIntStream, p: unknown) {
-      for (const value of this.a) if (await vcall(p, "test", "(I)Z", value)) return 0;
+    }),
+    "noneMatch(Ljava/util/function/IntPredicate;)Z": driven(function* (this: JIntStream, p: unknown): Gen {
+      for (const value of this.a) if ((yield vcall(p, "test", "(I)Z", value))) return 0;
       return 1;
-    },
+    }),
     "limit(J)Ljava/util/stream/IntStream;": function (this: JIntStream, n: bigint) { return mkIntStream(this.a.slice(0, Number(n))); },
     "skip(J)Ljava/util/stream/IntStream;": function (this: JIntStream, n: bigint) { return mkIntStream(this.a.slice(Number(n))); },
     "sorted()Ljava/util/stream/IntStream;": function (this: JIntStream) { return mkIntStream(this.a.slice().sort((a, b) => a - b)); },
@@ -248,9 +248,9 @@ rt.register({
       return this.v;
     },
     "orElse(I)I": function (this: JOptionalInt, fallback: number) { return this.present ? this.v : fallback; },
-    "orElseGet(Ljava/util/function/IntSupplier;)I": async function (this: JOptionalInt, supplier: unknown) {
+    "orElseGet(Ljava/util/function/IntSupplier;)I": driven(function* (this: JOptionalInt, supplier: unknown): Gen {
       return this.present ? this.v : vcall(supplier, "getAsInt", "()I");
-    },
+    }),
     "ifPresent(Ljava/util/function/IntConsumer;)V": function (this: JOptionalInt, consumer: unknown) {
       return this.present ? vcall(consumer, "accept", "(I)V", this.v) : undefined;
     },
@@ -287,23 +287,23 @@ rt.register({
       (box, x) => vcall(box, "add", "(Ljava/lang/Object;)Z", x),
       async (left, right) => { await vcall(left, "addAll", "(Ljava/util/Collection;)Z", right); return left; }),
     "static collectingAndThen(Ljava/util/stream/Collector;Ljava/util/function/Function;)Ljava/util/stream/Collector;":
-      async (downstream: unknown, finish: unknown) => collector(
-        await vcall(downstream, "supplier", "()Ljava/util/function/Supplier;"),
-        await vcall(downstream, "accumulator", "()Ljava/util/function/BiConsumer;"),
-        await vcall(downstream, "combiner", "()Ljava/util/function/BinaryOperator;"),
-        hostFunction(async (box) => apply1(finish, await apply1(await vcall(downstream, "finisher", "()Ljava/util/function/Function;"), box)))),
-    "static joining(Ljava/lang/CharSequence;)Ljava/util/stream/Collector;": async (delimiter: unknown) => {
-      const separator = await csText(delimiter);
+      driven(function* (downstream: unknown, finish: unknown): Gen  { return collector(
+        (yield vcall(downstream, "supplier", "()Ljava/util/function/Supplier;")),
+        (yield vcall(downstream, "accumulator", "()Ljava/util/function/BiConsumer;")),
+        (yield vcall(downstream, "combiner", "()Ljava/util/function/BinaryOperator;")),
+        hostFunction(async (box) => apply1(finish, await apply1(await vcall(downstream, "finisher", "()Ljava/util/function/Function;"), box)))); }),
+    "static joining(Ljava/lang/CharSequence;)Ljava/util/stream/Collector;": driven(function* (delimiter: unknown): Gen  {
+      const separator = (yield csText(delimiter));
       return mkCollector(() => [], async (box, x) => { stringBox(box).push(await csText(x)); },
         (left, right) => { stringBox(left).push(...stringBox(right)); return left; }, (box) => stringBox(box).join(separator));
-    },
+    }),
     "static joining(Ljava/lang/CharSequence;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/util/stream/Collector;":
-      async (delimiter: unknown, prefix: unknown, suffix: unknown) => {
-        const [separator, before, after] = await Promise.all([csText(delimiter), csText(prefix), csText(suffix)]);
+      driven(function* (delimiter: unknown, prefix: unknown, suffix: unknown): Gen  {
+        const [separator, before, after] = (yield Promise.all([csText(delimiter), csText(prefix), csText(suffix)]));
         return mkCollector(() => [], async (box, x) => { stringBox(box).push(await csText(x)); },
           (left, right) => { stringBox(left).push(...stringBox(right)); return left; },
           (box) => before + stringBox(box).join(separator) + after);
-      },
+      }),
   },
 });
 rt.register({
@@ -324,25 +324,25 @@ rt.register({
       if (this.v === null) throw rt.mkThrowable("java/util/NoSuchElementException", "No value present");
       return this.v;
     },
-    "orElseThrow(Ljava/util/function/Supplier;)Ljava/lang/Object;": async function (this: JOptional, s: unknown) {
-      if (this.v === null) throw await vcall(s, "get", "()Ljava/lang/Object;");
+    "orElseThrow(Ljava/util/function/Supplier;)Ljava/lang/Object;": driven(function* (this: JOptional, s: unknown): Gen {
+      if (this.v === null) throw (yield vcall(s, "get", "()Ljava/lang/Object;"));
       return this.v;
-    },
-    "filter(Ljava/util/function/Predicate;)Ljava/util/Optional;": async function (this: JOptional, p: unknown) {
-      return this.v === null || await vcall(p, "test", "(Ljava/lang/Object;)Z", this.v) ? this : mkOpt(null);
-    },
-    "flatMap(Ljava/util/function/Function;)Ljava/util/Optional;": async function (this: JOptional, f: unknown) {
+    }),
+    "filter(Ljava/util/function/Predicate;)Ljava/util/Optional;": driven(function* (this: JOptional, p: unknown): Gen {
+      return this.v === null || (yield vcall(p, "test", "(Ljava/lang/Object;)Z", this.v)) ? this : mkOpt(null);
+    }),
+    "flatMap(Ljava/util/function/Function;)Ljava/util/Optional;": driven(function* (this: JOptional, f: unknown): Gen {
       return this.v === null ? this : apply1(f, this.v);
-    },
+    }),
     "ifPresentOrElse(Ljava/util/function/Consumer;Ljava/lang/Runnable;)V": function (this: JOptional, c: unknown, r: unknown) {
       return this.v === null ? vcall(r, "run", "()V") : vcall(c, "accept", "(Ljava/lang/Object;)V", this.v);
     },
-    "equals(Ljava/lang/Object;)Z": async function (this: JOptional, o: unknown) {
-      return o instanceof JOptional && (o.v === this.v || o.v !== null && this.v !== null && !!await vcall(this.v, "equals", "(Ljava/lang/Object;)Z", o.v)) ? 1 : 0;
-    },
-    "map(Ljava/util/function/Function;)Ljava/util/Optional;": async function (this: JOptional, f: unknown) {
-      return this.v === null ? this : mkOpt(await apply1(f, this.v));
-    },
+    "equals(Ljava/lang/Object;)Z": driven(function* (this: JOptional, o: unknown): Gen {
+      return o instanceof JOptional && (o.v === this.v || o.v !== null && this.v !== null && !!(yield vcall(this.v, "equals", "(Ljava/lang/Object;)Z", o.v))) ? 1 : 0;
+    }),
+    "map(Ljava/util/function/Function;)Ljava/util/Optional;": driven(function* (this: JOptional, f: unknown): Gen {
+      return this.v === null ? this : mkOpt((yield apply1(f, this.v)));
+    }),
     "ifPresent(Ljava/util/function/Consumer;)V": function (this: JOptional, c: unknown) {
       return this.v === null ? undefined : vcall(c, "accept", "(Ljava/lang/Object;)V", this.v);
     },

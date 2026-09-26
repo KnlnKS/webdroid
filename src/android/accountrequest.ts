@@ -1,4 +1,4 @@
-import { rt } from "../jvm/runtime";
+import { rt, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { JBinder, binderTransport, callingIdentity, exportParcel, type ParcelData } from "./binder";
 import { JParcel, readInt, readString, writeInt, writeString } from "./parcel";
@@ -24,14 +24,14 @@ export function accountOptions(options: JBundle | null): JBundle {
 }
 class JAccountResponse extends JBinder { receive: ((code: number, p: JParcel) => Promise<void>) | null = null; uid = -1; }
 rt.register({ name: "webdroid/AccountResponse", ctor: JAccountResponse, sup: "android/os/Binder", methods: {
-  "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": async function (this: JAccountResponse, code: number, p: JParcel, reply: JParcel | null) {
+  "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JAccountResponse, code: number, p: JParcel, reply: JParcel | null): Gen {
     if (code === 0x5f4e5446 && reply) { writeString(reply, AUTH_RESPONSE); return 1; }
     if (code < 1 || code > 3) return 0;
     const caller = callingIdentity();
     if (caller.uid !== this.uid && caller.uid !== 1000) throw rt.mkThrowable("java/lang/SecurityException", "Reply does not belong to this authenticator");
-    await vcall(p, "enforceInterface", "(Ljava/lang/String;)V", AUTH_RESPONSE);
-    await this.receive?.(code, p); return 1;
-  },
+    (yield vcall(p, "enforceInterface", "(Ljava/lang/String;)V", AUTH_RESPONSE));
+    (yield this.receive?.(code, p)); return 1;
+  }),
 } });
 let nextRequest = 1;
 export function requestAccount(request: {

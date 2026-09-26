@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
 import { mangleStaticField } from "../src/jvm/abi";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { JTextPaint } from "../src/android/text";
 
 rt.linkNatives();
@@ -39,5 +39,5 @@ test("text direction heuristics inspect the requested range", async () => {
   expect(await vcall(firstRtl, "isRtl", "(Ljava/lang/CharSequence;II)Z", "123", 0, 3)).toBe(1);
   expect(await vcall(anyRtl, "isRtl", "(Ljava/lang/CharSequence;II)Z", "abc אב", 0, 6)).toBe(1);
   expect(await vcall(anyRtl, "isRtl", "(Ljava/lang/CharSequence;II)Z", "abc אב", 0, 3)).toBe(0);
-  await expect(vcall(firstLtr, "isRtl", "(Ljava/lang/CharSequence;II)Z", "abc", 2, 2)).rejects.toBeDefined();
+  await expect(vcallAsync(firstLtr, "isRtl", "(Ljava/lang/CharSequence;II)Z", "abc", 2, 2)).rejects.toBeDefined();
 });

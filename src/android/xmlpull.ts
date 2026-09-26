@@ -1,6 +1,6 @@
 // org.xmlpull.v1 over text XML: the browser parses, and the parser replays the tree as the pull
 // events the API defines. The binary-resource parser in resnative.ts is a separate object.
-import { rt, JObj, stubs } from "../jvm/runtime";
+import { rt, JObj, stubs, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 import { charsToString } from "../jvm/abi";
@@ -64,7 +64,7 @@ rt.register({
     [`setInput(Ljava/io/InputStream;${S})V`]: async function (this: JXmlPull, s: unknown, enc: string | null) {
       this.load(new TextDecoder(enc ?? "utf-8").decode(await readStreamFully(s)));
     },
-    "setInput(Ljava/io/Reader;)V": async function (this: JXmlPull, r: unknown) { this.load(await readerText(r)); },
+    "setInput(Ljava/io/Reader;)V": driven(function* (this: JXmlPull, r: unknown): Gen { this.load((yield readerText(r))); }),
     [`setFeature(${S}Z)V`]: function (this: JXmlPull, f: string, on: number) { if (f.endsWith("process-namespaces")) this.nsAware = !!on; },
     [`getFeature(${S})Z`]: function (this: JXmlPull, f: string) { return f.endsWith("process-namespaces") && this.nsAware ? 1 : 0; },
     [`setProperty(${S}Ljava/lang/Object;)V`]: () => {},
@@ -186,13 +186,13 @@ rt.register({ name: "webdroid/XmlSerializer", ctor: JXmlSerializer, ifaces: ["or
   "startDocument(Ljava/lang/String;Ljava/lang/Boolean;)V": function (this: JXmlSerializer, encoding: string | null, standalone: { v?: number } | null) {
     this.append(`<?xml version="1.0" encoding="${encoding ?? "UTF-8"}"${standalone == null ? "" : ` standalone="${standalone.v ? "yes" : "no"}"`}?>`);
   },
-  "endDocument()V": async function (this: JXmlSerializer) {
+  "endDocument()V": driven(function* (this: JXmlSerializer): Gen {
     while (this.stack.length) {
       const top = this.stack.at(-1)!;
-      await vcall(this, "endTag", "(Ljava/lang/String;Ljava/lang/String;)Lorg/xmlpull/v1/XmlSerializer;", top.ns, top.name);
+      (yield vcall(this, "endTag", "(Ljava/lang/String;Ljava/lang/String;)Lorg/xmlpull/v1/XmlSerializer;", top.ns, top.name));
     }
-    await vcall(this, "flush", "()V");
-  },
+    (yield vcall(this, "flush", "()V"));
+  }),
   "setPrefix(Ljava/lang/String;Ljava/lang/String;)V": function (this: JXmlSerializer, prefix: string, ns: string) {
     this.prefixes.set(ns ?? "", prefix ?? "");
     this.declarations.set(prefix ?? "", ns ?? "");
@@ -239,14 +239,14 @@ rt.register({ name: "webdroid/XmlSerializer", ctor: JXmlSerializer, ifaces: ["or
   "processingInstruction(Ljava/lang/String;)V": function (this: JXmlSerializer, value: string) { this.finishTag(); this.append("<?" + value + "?>"); },
   "docdecl(Ljava/lang/String;)V": function (this: JXmlSerializer, value: string) { this.finishTag(); this.append("<!DOCTYPE " + value + ">"); },
   "ignorableWhitespace(Ljava/lang/String;)V": function (this: JXmlSerializer, value: string) { this.finishTag(); this.append(value); },
-  "flush()V": async function (this: JXmlSerializer) {
+  "flush()V": driven(function* (this: JXmlSerializer): Gen {
     if (this.output == null) throw rt.mkThrowable("java/lang/IllegalStateException", "XML output not set");
     const data = this.chunks.join(""); this.chunks = [];
     if (data) {
-      if (this.writer) await vcall(this.output, "write", "(Ljava/lang/String;)V", data);
-      else await vcall(this.output, "write", "([B)V", new Int8Array(new TextEncoder().encode(data)));
+      if (this.writer) (yield vcall(this.output, "write", "(Ljava/lang/String;)V", data));
+      else (yield vcall(this.output, "write", "([B)V", new Int8Array(new TextEncoder().encode(data))));
     }
-    await vcall(this.output, "flush", "()V");
-  },
+    (yield vcall(this.output, "flush", "()V"));
+  }),
 } });
 export const newXmlSerializer = serializer;

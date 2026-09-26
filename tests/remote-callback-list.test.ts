@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { JBinder } from "../src/android/binder";
 
 class Callback extends JObj { constructor(readonly binder: JBinder) { super(); } }
@@ -32,7 +32,7 @@ test("RemoteCallbackList snapshots callbacks and cookies during broadcasts", asy
 
 test("RemoteCallbackList rejects null callbacks", async () => {
   const list = await newObj("android/os/RemoteCallbackList");
-  await expect(vcall(list, "register", "(Landroid/os/IInterface;)Z", null)).rejects.toMatchObject({
+  await expect(vcallAsync(list, "register", "(Landroid/os/IInterface;)Z", null)).rejects.toMatchObject({
     constructor: { $i: { name: "java/lang/NullPointerException" } },
   });
 });

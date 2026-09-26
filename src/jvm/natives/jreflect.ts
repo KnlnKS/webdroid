@@ -1,6 +1,6 @@
 // java.lang.reflect.Method + annotation instances backed by DEX annotation parsing.
 
-import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime } from "../runtime";
+import { rt, JObj, type ClassInfo, type NativeSpec, type Runtime, driven, type Gen } from "../runtime";
 import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, PRIM_NAME, PRIM_DESC, lateMethod, dotName, slashName, doubleToLongBits, longBitsToDouble, floatToIntBits, intBitsToFloat, splitSig } from "../abi";
 import { vcall, boxInt, box, boxObject, stringHash, idHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit, enclosingClass } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
@@ -113,12 +113,14 @@ export class JField extends JAccessibleObject {
 }
 /** A static read is also the class's first use: a constant that has not been initialized yet
  *  reads as undefined, which is the zero the caller then takes for the field's real value. */
-async function readField(this: JField, o: unknown): Promise<unknown> {
-  const p = rt.initClass(this.owner); if (p) await p;
+function readField(this: JField, o: unknown): unknown { return rt.drive(readField$.call(this, o)); }
+function* readField$(this: JField, o: unknown): Gen {
+  const p = rt.initClass(this.owner); if (p) (yield p);
   return this.isStatic ? this.owner.ctor[this.prop] : (o as Record<string, unknown>)[this.prop];
 }
-async function writeField(this: JField, o: unknown, value: unknown, boxed = false): Promise<void> {
-  const p = rt.initClass(this.owner); if (p) await p;
+function writeField(this: JField, o: unknown, value: unknown, boxed = false): void | Promise<void> { return rt.drive(writeField$.call(this, o, value, boxed)); }
+function* writeField$(this: JField, o: unknown, value: unknown, boxed = false): Gen<void> {
+  const p = rt.initClass(this.owner); if (p) (yield p);
   if (boxed && "IJFDZBCS".includes(this.desc[0])) value = unboxArg(value);
   if (this.isStatic) this.owner.ctor[this.prop] = value;
   else (o as Record<string, unknown>)[this.prop] = value;
@@ -180,9 +182,9 @@ rt.register({
     "isEnumConstant()Z": function (this: JField) { return (this.flags >> 14) & 1; },
     ...accessibleMethods,
     "getDeclaringClass()Ljava/lang/Class;": function (this: JField) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
-    "get(Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JField, o: unknown) {
-      return boxReturn(this.desc, await readField.call(this, o));
-    },
+    "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JField, o: unknown): Gen {
+      return boxReturn(this.desc, (yield readField.call(this, o)));
+    }),
     "set(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JField, o: unknown, v: unknown) {
       return writeField.call(this, o, v, true);
     },
@@ -449,11 +451,11 @@ rt.register({
   statics: { theUnsafe: unsafe },
   methods: {
     "static getUnsafe()Lsun/misc/Unsafe;": () => unsafe,
-    "allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;": async (cls: JClass) => {
+    "allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;": driven(function* (cls: JClass): Gen  {
       const info = cls.ci!;
-      const p = rt.initClass(info); if (p) await p;
+      const p = rt.initClass(info); if (p) (yield p);
       return new info.ctor();
-    },
+    }),
     "objectFieldOffset(Ljava/lang/reflect/Field;)J": fieldOffset,
     "arrayBaseOffset(Ljava/lang/Class;)I": () => 0,
     "arrayIndexScale(Ljava/lang/Class;)I": (cls: JClass) => arrayIndexScale(cls),
@@ -642,14 +644,14 @@ rt.register({
     ...accessibleMethods,
     "isSynthetic()Z": () => 0,
     "isBridge()Z": () => 0,
-    "invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JMethod, recv: unknown, args: unknown[] | null) {
+    "invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JMethod, recv: unknown, args: unknown[] | null): Gen {
       const a = (args ?? []).map(unboxArg);
       const target = this.isStatic ? this.fn : (recv as Record<string, unknown>)?.[mangleMethod(this.name, this.desc)] ?? rt.proxyMethod?.(recv, this.name, this.desc) ?? this.fn;
       if (typeof target !== "function") throw rt.mkThrowable("java/lang/NoSuchMethodError", `${this.owner.name}.${this.name}${this.desc}`);
       const r = (target as (...x: unknown[]) => unknown).apply(this.isStatic ? this.owner.ctor : recv, a);
-      const val = r instanceof Promise ? await r : r;
+      const val = r instanceof Promise ? (yield r) : r;
       return boxReturn(parseMethodDesc(this.desc).ret, val);
-    },
+    }),
     ...annotatedElement(function (this: JMethod) { return methodAnnotations(this.owner, this.name, this.desc); }),
     "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JMethod) { return paramAnnotations(this.owner, this.name, this.desc); },
     "getGenericReturnType()Ljava/lang/reflect/Type;": function (this: JMethod) { return genericMethodTypes(this.owner, this.name, this.desc).ret; },
@@ -712,18 +714,18 @@ rt.register({
     "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JCtor) { return types(genericMethodTypes(this.owner, "<init>", this.desc).params); },
     "getParameterAnnotations()[[Ljava/lang/annotation/Annotation;": function (this: JCtor) { return paramAnnotations(this.owner, "<init>", this.desc); },
     ...annotatedElement(function (this: JCtor) { return classAnno(this.owner).methodsByRef.get("<init>" + this.desc) ?? []; }),
-    "newInstance([Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JCtor, args: unknown[] | null) {
+    "newInstance([Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JCtor, args: unknown[] | null): Gen {
       const info = this.owner;
-      const p = rt.initClass(info); if (p) await p;
+      const p = rt.initClass(info); if (p) (yield p);
       const fn = info.ctor?.prototype?.[mangleMethod("<init>", this.desc)];
       if (typeof fn !== "function") throw rt.mkThrowable("java/lang/InstantiationException", dotName(info.name) + ".<init>" + this.desc);
       const ps = parseMethodDesc(this.desc).params;
       const a = (args ?? []).map((v, i) => ("IJFDZBCS".includes(ps[i] ?? "L") ? unboxArg(v) : v));
       const o = new info.ctor();
       const r = fn.apply(o, a);
-      if (r instanceof Promise) await r;
+      if (r instanceof Promise) (yield r);
       return o;
-    },
+    }),
     "toString()Ljava/lang/String;": function (this: JCtor) { return this.owner.name + ".<init>" + this.desc; },
     "equals(Ljava/lang/Object;)Z": function (this: JCtor, o: unknown) {
       return o instanceof JCtor && o.owner === this.owner && o.desc === this.desc ? 1 : 0;
@@ -1010,12 +1012,12 @@ function installClassReflection() {
   M["getTypeParameters()[Ljava/lang/reflect/TypeVariable;"] = function (this: JClass) {
     return jarray(this.ci ? typeVarsOf(this.ci).slice() : [], "Ljava/lang/reflect/TypeVariable;");
   };
-  M["getEnumConstants()[Ljava/lang/Object;"] = async function (this: JClass) {
+  M["getEnumConstants()[Ljava/lang/Object;"] = driven(function* (this: JClass): Gen {
     const info = this.ci;
     if (!info) return null;
-    const p = rt.initClass(info); if (p) await p;
-    try { return await vcall(info.ctor, "values", `()[L${info.name};`); } catch { return null; }
-  };
+    const p = rt.initClass(info); if (p) (yield p);
+    try { return (yield vcall(info.ctor, "values", `()[L${info.name};`)); } catch { return null; }
+  });
   M["getDeclaringClass()Ljava/lang/Class;"] = enclosingClass;
   M["getEnclosingConstructor()Ljava/lang/reflect/Constructor;"] = () => null;
   M["getDeclaredField(Ljava/lang/String;)Ljava/lang/reflect/Field;"] = function (this: JClass, name: string) {
@@ -1183,13 +1185,14 @@ function proxyClass(ifaces: ClassInfo[]): Promise<ClassInfo> {
   const key = ifaces.map((i) => i.name).join(";");
   const cached = proxyClasses.get(key);
   if (cached) return cached;
-  const pending = buildProxy(ifaces).catch((error) => { proxyClasses.delete(key); throw error; });
+  const pending = (async () => buildProxy(ifaces))().catch((error: unknown) => { proxyClasses.delete(key); throw error; });
   proxyClasses.set(key, pending);
   return pending;
 }
-async function buildProxy(ifaces: ClassInfo[]): Promise<ClassInfo> {
+function buildProxy(ifaces: ClassInfo[]): ClassInfo | Promise<ClassInfo> { return rt.drive(buildProxy$(ifaces)); }
+function* buildProxy$(ifaces: ClassInfo[]): Gen<ClassInfo> {
   const name = "java/lang/reflect/$Proxy" + nextProxyId++;
-  if (ifaces.some((i) => !i.dex)) await ensureDecls();
+  if (ifaces.some((i) => !i.dex)) (yield ensureDecls());
   rt.register({ name, ctor: class extends JProxy {}, ifaces: ifaces.map((i) => i.name) });
   const info = rt.link(name);
   proxyIfaces.set(info, ifaces);
@@ -1215,12 +1218,12 @@ lateMethod.find = (o, n, d) => (rt.proxyMethod!(o, n, d) ?? undefined) as ((...a
 rt.register({
   name: "java/lang/reflect/Proxy", ctor: JProxy,
   methods: {
-    "static newProxyInstance(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;": async (_l: unknown, ifaces: JClass[], h: unknown) => {
-      const p = new ((await proxyClass(ifaces.map((c) => c.ci!))).ctor)() as JProxy;
+    "static newProxyInstance(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;": driven(function* (_l: unknown, ifaces: JClass[], h: unknown): Gen  {
+      const p = new (((yield proxyClass(ifaces.map((c) => c.ci!)))).ctor)() as JProxy;
       p.h = h;
       return p;
-    },
-    "static getProxyClass(Ljava/lang/ClassLoader;[Ljava/lang/Class;)Ljava/lang/Class;": async (_l: unknown, ifaces: JClass[]) => rt.classFor((await proxyClass(ifaces.map((c) => c.ci!))).name),
+    }),
+    "static getProxyClass(Ljava/lang/ClassLoader;[Ljava/lang/Class;)Ljava/lang/Class;": driven(function* (_l: unknown, ifaces: JClass[]): Gen  { return rt.classFor(((yield proxyClass(ifaces.map((c) => c.ci!)))).name); }),
     "static isProxyClass(Ljava/lang/Class;)Z": (c: JClass) => (c.ci?.ctor.prototype instanceof JProxy ? 1 : 0),
     "static getInvocationHandler(Ljava/lang/Object;)Ljava/lang/reflect/InvocationHandler;": (o: unknown) => (o instanceof JProxy ? o.h : null),
   },

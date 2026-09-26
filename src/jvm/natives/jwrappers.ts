@@ -1,6 +1,6 @@
 import { splitSig } from "../abi";
-import { JObj, rt, type NativeSpec } from "../runtime";
-import { vcall, vcallOn, curThread } from "./jlang";
+import { JObj, rt, type NativeSpec, driven, type Gen } from "../runtime";
+import { vcall, vcallOn, curThread, after } from "./jlang";
 
 type Methods = NonNullable<NativeSpec["methods"]>;
 type Kind = "collection" | "list" | "set" | "sortedSet" | "map" | "sortedMap";
@@ -23,14 +23,17 @@ class JReadOnlyEntry extends JObj { delegate: unknown = null; }
 
 const unsupported = () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
 
-async function call(wrapper: JWrapper, signature: string, args: unknown[]): Promise<unknown> {
-  const [name, descriptor] = splitSig(signature);
-  const forwarded = signature === "equals(Ljava/lang/Object;)Z" && args[0] instanceof JWrapper ? [args[0].delegate] : args;
+/** Forward to the delegate; a synchronized wrapper holds its mutex across the call. */
+function call(wrapper: JWrapper, name: string, descriptor: string, args: unknown[]): unknown {
+  const forwarded = name === "equals" && args[0] instanceof JWrapper ? [args[0].delegate] : args;
   if (wrapper.mode === "unmodifiable") return vcall(wrapper.delegate, name, descriptor, ...forwarded);
+  return rt.drive(locked(wrapper, name, descriptor, forwarded));
+}
+function* locked(wrapper: JWrapper, name: string, descriptor: string, args: unknown[]): Gen {
   const thread = curThread;
   const entered = rt.monitors.enter(wrapper.mutex, thread);
-  if (entered) await entered;
-  try { return await vcallOn(thread, wrapper.delegate, name, descriptor, ...forwarded); }
+  if (entered) (yield entered);
+  try { return (yield vcallOn(thread, wrapper.delegate, name, descriptor, ...args)); }
   finally { rt.monitors.exit(wrapper.mutex, thread); }
 }
 
@@ -74,10 +77,13 @@ function readOnlyEntry(entry: unknown): JReadOnlyEntry {
 
 type Transform = (value: unknown, wrapper: JWrapper) => unknown;
 function forwards(signatures: readonly string[], transforms: Record<string, Transform> = {}): Methods {
-  return Object.fromEntries(signatures.map((signature) => [signature, async function (this: JWrapper, ...args: unknown[]) {
-    const value = await call(this, signature, args);
-    return transforms[signature]?.(value, this) ?? value;
-  }]));
+  return Object.fromEntries(signatures.map((signature) => {
+    const [name, descriptor] = splitSig(signature), transform = transforms[signature];
+    return [signature, function (this: JWrapper, ...args: unknown[]) {
+      const value = call(this, name, descriptor, args);
+      return transform ? after(value, (v) => transform(v, this) ?? v) : value;
+    }];
+  }));
 }
 function writes(signatures: readonly string[], mode: Mode): Methods {
   if (mode === "unmodifiable") return Object.fromEntries(signatures.map((signature) => [signature, unsupported]));
@@ -167,17 +173,17 @@ rt.register({
   name: "webdroid/UnmodifiableIterator", ctor: JReadOnlyIterator, ifaces: ["java/util/Iterator", "java/util/ListIterator"],
   methods: {
     "hasNext()Z": function (this: JReadOnlyIterator) { return vcall(this.delegate, "hasNext", "()Z"); },
-    "next()Ljava/lang/Object;": async function (this: JReadOnlyIterator) {
-      const value = await vcall(this.delegate, "next", "()Ljava/lang/Object;");
-      return this.entries ? readOnlyEntry(value) : value;
+    "next()Ljava/lang/Object;": function (this: JReadOnlyIterator) {
+      const value = vcall(this.delegate, "next", "()Ljava/lang/Object;");
+      return this.entries ? after(value, readOnlyEntry) : value;
     },
-    "forEachRemaining(Ljava/util/function/Consumer;)V": async function (this: JReadOnlyIterator, consumer: unknown) {
-      while (await vcall(this, "hasNext", "()Z")) await vcall(consumer, "accept", "(Ljava/lang/Object;)V", await vcall(this, "next", "()Ljava/lang/Object;"));
-    },
+    "forEachRemaining(Ljava/util/function/Consumer;)V": driven(function* (this: JReadOnlyIterator, consumer: unknown): Gen {
+      while ((yield vcall(this, "hasNext", "()Z"))) (yield vcall(consumer, "accept", "(Ljava/lang/Object;)V", (yield vcall(this, "next", "()Ljava/lang/Object;"))));
+    }),
     "hasPrevious()Z": function (this: JReadOnlyIterator) { return vcall(this.delegate, "hasPrevious", "()Z"); },
-    "previous()Ljava/lang/Object;": async function (this: JReadOnlyIterator) {
-      const value = await vcall(this.delegate, "previous", "()Ljava/lang/Object;");
-      return this.entries ? readOnlyEntry(value) : value;
+    "previous()Ljava/lang/Object;": function (this: JReadOnlyIterator) {
+      const value = vcall(this.delegate, "previous", "()Ljava/lang/Object;");
+      return this.entries ? after(value, readOnlyEntry) : value;
     },
     "nextIndex()I": function (this: JReadOnlyIterator) { return vcall(this.delegate, "nextIndex", "()I"); },
     "previousIndex()I": function (this: JReadOnlyIterator) { return vcall(this.delegate, "previousIndex", "()I"); },

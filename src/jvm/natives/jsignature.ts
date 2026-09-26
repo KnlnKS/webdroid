@@ -1,7 +1,7 @@
 // java.security.Signature over WebCrypto: RSASSA-PKCS1-v1_5, RSA-PSS and ECDSA with the SHA-1/2
 // digests WebCrypto signs with. Keys are the RSA (SPKI/PKCS#8) and EC (curve point/scalar)
 // objects KeyFactory and KeyPairGenerator hand out.
-import { JObj, rt } from "../runtime";
+import { JObj, rt, driven, type Gen } from "../runtime";
 import { vcall } from "./jlang";
 import { JRsaPublicKey, JRsaPrivateKey, JPSSSpec } from "./jrsa";
 import { JEcPublicKey, JEcPrivateKey, type Curve } from "./jec";
@@ -115,9 +115,9 @@ rt.register({
     "getAlgorithm()Ljava/lang/String;": function (this: JSignature) { return this.algo; },
     "toString()Ljava/lang/String;": function (this: JSignature) { return "Signature object: " + this.algo + (this.key ? this.signing ? "<initialized for signing>" : "<initialized for verifying>" : "<not initialized>"); },
     "initVerify(Ljava/security/PublicKey;)V": function (this: JSignature, key: unknown) { init(this, key, false); },
-    "initVerify(Ljava/security/cert/Certificate;)V": async function (this: JSignature, cert: unknown) {
-      init(this, cert && await vcall(cert, "getPublicKey", "()Ljava/security/PublicKey;"), false);
-    },
+    "initVerify(Ljava/security/cert/Certificate;)V": driven(function* (this: JSignature, cert: unknown): Gen {
+      init(this, cert && (yield vcall(cert, "getPublicKey", "()Ljava/security/PublicKey;")), false);
+    }),
     "initSign(Ljava/security/PrivateKey;)V": function (this: JSignature, key: unknown) { init(this, key, true); },
     "initSign(Ljava/security/PrivateKey;Ljava/security/SecureRandom;)V": function (this: JSignature, key: unknown) { init(this, key, true); },
     "setParameter(Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JSignature, spec: unknown) {
@@ -137,19 +137,19 @@ rt.register({
       if (off < 0 || len < 0 || off + len > b.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bad arguments");
       this.parts.push(new Uint8Array(b.buffer, b.byteOffset + off, len).slice());
     },
-    "sign()[B": async function (this: JSignature) {
+    "sign()[B": driven(function* (this: JSignature): Gen {
       ready(this, true);
-      const { key } = await importKey(this);
-      const raw = new Uint8Array(await crypto.subtle.sign(params(this), key, message(this)));
+      const { key } = (yield importKey(this));
+      const raw = new Uint8Array((yield crypto.subtle.sign(params(this), key, message(this))));
       return this.scheme === "ECDSA" ? derFromRaw(raw, curveOf(this).bytes) : new Int8Array(raw.buffer);
-    },
-    "verify([B)Z": async function (this: JSignature, sig: Int8Array) {
+    }),
+    "verify([B)Z": driven(function* (this: JSignature, sig: Int8Array): Gen {
       ready(this, false);
       if (sig == null) throw rt.mkThrowable("java/lang/NullPointerException", "signature == null");
-      const { key } = await importKey(this), data = message(this);
+      const { key } = (yield importKey(this)), data = message(this);
       let bytes: Uint8Array<ArrayBuffer> | null = new Uint8Array(sig.buffer, sig.byteOffset, sig.length).slice();
       if (this.scheme === "ECDSA") bytes = rawFromDer(bytes, curveOf(this).bytes);
-      return bytes && await crypto.subtle.verify(params(this), key, bytes, data) ? 1 : 0;
-    },
+      return bytes && (yield crypto.subtle.verify(params(this), key, bytes, data)) ? 1 : 0;
+    }),
   },
 });

@@ -1,7 +1,7 @@
 // java.util.Calendar/Date/TimeZone + java.text formatters + java.util.regex.
 
-import { rt, JObj, type NativeSpec } from "../runtime";
-import { javaMatches, javaRegex, jToString, mkEnumSet, defineException, vcall, type JSimpleEnum, type JSB } from "./jlang";
+import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
+import { javaMatches, javaRegex, jToString, mkEnumSet, defineException, vcall, type JSimpleEnum, type JSB, vcallAsync } from "./jlang";
 import { defaultLocale, localeTag, type JLocale } from "./jvalues";
 import { jarray } from "../abi";
 
@@ -798,7 +798,7 @@ rt.register({
       if (!chronoUnits.includes(unit)) return vcall(unit, "between", "(Ljava/time/temporal/Temporal;Ljava/time/temporal/Temporal;)J", this, end);
       if (end instanceof JLocalDate) return dateUntil(this, end, unit);
       if (end instanceof JLocalDateTime) return dateUntil(this, end.date, unit);
-      return vcall(end, "getLong", "(Ljava/time/temporal/TemporalField;)J", chronoFields.find(f => f.ename === "EPOCH_DAY"))
+      return vcallAsync(end, "getLong", "(Ljava/time/temporal/TemporalField;)J", chronoFields.find(f => f.ename === "EPOCH_DAY"))
         .then(day => dateUntil(this, dateFromEpochDay(Number(day)), unit));
     },
     "plusDays(J)Ljava/time/LocalDate;": function (this: JLocalDate, n: bigint) { return ldFromDate(new Date(this.y, this.mo - 1, this.d + Number(n))); },
@@ -958,7 +958,7 @@ rt.register({
     "withDecimalStyle(Ljava/time/format/DecimalStyle;)Ljava/time/format/DateTimeFormatter;": function (this: JDateTimeFormatter) { return this; },
     "getZone()Ljava/time/ZoneId;": function (this: JDateTimeFormatter) { return this.zone; },
     "parse(Ljava/lang/CharSequence;)Ljava/time/temporal/TemporalAccessor;": function (this: JDateTimeFormatter, s: string) { return zdt(parseIso(s), this.zone as JZoneId | null); },
-    "parseBest(Ljava/lang/CharSequence;[Ljava/time/temporal/TemporalQuery;)Ljava/time/temporal/TemporalAccessor;": async function (this: JDateTimeFormatter, s: string, queries: unknown[]) {
+    "parseBest(Ljava/lang/CharSequence;[Ljava/time/temporal/TemporalQuery;)Ljava/time/temporal/TemporalAccessor;": driven(function* (this: JDateTimeFormatter, s: string, queries: unknown[]): Gen {
       if (!queries || queries.length < 2) throw rt.mkThrowable("java/lang/IllegalArgumentException", "At least two queries required");
       const text = String(s), ms = parseIso(text);
       const suffix = /(Z|([+-])(\d{2}):(\d{2}))$/.exec(text);
@@ -966,12 +966,12 @@ rt.register({
       const temporal = zone ? zdt(ms, zone) : ldtFromDate(new Date(ms));
       for (const query of queries) {
         try {
-          const value = await vcall(query, "queryFrom", "(Ljava/time/temporal/TemporalAccessor;)Ljava/lang/Object;", temporal);
+          const value = (yield vcall(query, "queryFrom", "(Ljava/time/temporal/TemporalAccessor;)Ljava/lang/Object;", temporal));
           if (value != null) return value;
         } catch (error) { if (!rt.iof(error, "java/time/DateTimeException")) throw error; }
       }
       throw rt.mkThrowable("java/time/DateTimeException", "Unable to convert parsed text using the supplied queries");
-    },
+    }),
     // Locale-aware overload: the pattern still drives the output, and MONTHS below is en-only,
     // so the locale changes nothing here — but omitting the overload throws on the caller.
     "static ofPattern(Ljava/lang/String;Ljava/util/Locale;)Ljava/time/format/DateTimeFormatter;": fmtOf,

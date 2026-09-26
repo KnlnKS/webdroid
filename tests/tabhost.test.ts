@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { Resources } from "../src/android/res";
 import { JTheme } from "../src/android/res";
 
@@ -62,5 +62,5 @@ test("TabHost finds its widget and content by the android ids, swaps content and
   expect(await vcall(host, "getCurrentTab", "()I")).toBe(0);
   expect(changes).toEqual(["a", "b", "a"]);
   const bad = await newObj("android/widget/TabHost", "(Landroid/content/Context;)V", ctx());
-  await expect(vcall(bad, "setup", "()V")).rejects.toMatchObject({ constructor: rt.link("java/lang/RuntimeException").ctor });
+  await expect(vcallAsync(bad, "setup", "()V")).rejects.toMatchObject({ constructor: rt.link("java/lang/RuntimeException").ctor });
 });

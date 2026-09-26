@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall, vcallOn, JThread, curThread, setCurThread, mainThread } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallOn, JThread, curThread, setCurThread, mainThread, vcallAsync } from "../src/jvm/natives/jlang";
 import { mangleMethod } from "../src/jvm/abi";
 import { JInputStream, readStreamFully } from "../src/jvm/natives/jio";
 class ForwardOnlyStream extends JInputStream { cursor = 0; bytes = new TextEncoder().encode("<svg/>"); }
@@ -20,7 +20,7 @@ const data = (source: unknown) => newObj("java/io/DataInputStream", "(Ljava/io/I
 test("forward-only subclasses request buffering before probing and rewinding a stream", async () => {
   const source = new ForwardOnlyStream();
   expect(await vcall(source, "markSupported", "()Z")).toBe(0);
-  await expect(vcall(source, "reset", "()V")).rejects.toMatchObject({ msg: "mark/reset not supported" });
+  await expect(vcallAsync(source, "reset", "()V")).rejects.toMatchObject({ msg: "mark/reset not supported" });
   const buffer = await newObj("java/io/BufferedInputStream", "(Ljava/io/InputStream;)V", source);
   await vcall(buffer, "mark", "(I)V", 3);
   expect(await vcall(buffer, "read", "()I")).toBe(60);
@@ -45,10 +45,10 @@ test("buffered data reads preserve sequence-stream overrides and marks across re
   expect(await vcall(input, "readInt", "()I")).toBe(258);
   expect(await vcall(input, "readUnsignedShort", "()I")).toBe(772);
   expect(await vcall(input, "readUnsignedByte", "()I")).toBe(5);
-  await expect(vcall(input, "reset", "()V")).rejects.toMatchObject({ msg: "Resetting to invalid mark" });
+  await expect(vcallAsync(input, "reset", "()V")).rejects.toMatchObject({ msg: "Resetting to invalid mark" });
   expect(await vcall(input, "read", "()I")).toBe(-1);
   await vcall(input, "close", "()V");
-  await expect(vcall(input, "read", "()I")).rejects.toMatchObject({ msg: "Stream closed" });
+  await expect(vcallAsync(input, "read", "()I")).rejects.toMatchObject({ msg: "Stream closed" });
 });
 
 test("DataInputStream.skipBytes handles short skips and EOF without consuming a following byte", async () => {
@@ -74,5 +74,5 @@ test("DataInputStream.skipBytes retains its thread across short suspended skips 
   const error = rt.mkThrowable("java/io/IOException", "skip failed");
   Object.assign(source, { [mangleMethod("skip", "(J)J")]: () => { throw error; } });
   expect(await vcall(input, "skipBytes", "(I)I", 0)).toBe(0);
-  await expect(vcall(input, "skipBytes", "(I)I", 1)).rejects.toBe(error);
+  await expect(vcallAsync(input, "skipBytes", "(I)I", 1)).rejects.toBe(error);
 });

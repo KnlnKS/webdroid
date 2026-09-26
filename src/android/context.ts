@@ -1,5 +1,5 @@
 import { type JFile, vfs, mkFile } from "../jvm/natives/jio";
-import { JObj, rt, type NativeSpec, callSelf, stubs, noops } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
 import { resString, themeOf, JTheme, obtainStyled, resolveStyleValue, type JAttrSet, JTypedArray } from "./res";
 import { newObj, vcall, systemClassLoader } from "../jvm/natives/jlang";
@@ -251,15 +251,15 @@ export const contextMethods: NativeSpec["methods"] = {
   // API 31. Everything here draws into the one window, but the application context is not a
   // display context on a device and callers branch on that.
   "isUiContext()Z": function (this: JContext) { return this === this.$host.application ? 0 : 1; },
-  "getDisplay()Landroid/view/Display;": async function (this: JContext) {
+  "getDisplay()Landroid/view/Display;": driven(function* (this: JContext): Gen {
     if (this === this.$host.application) throw rt.mkThrowable("java/lang/UnsupportedOperationException", "Context is not associated with a display");
     return display();
-  },
+  }),
   "createDisplayContext(Landroid/view/Display;)Landroid/content/Context;": function (this: JContext, display: unknown) { return contextForDisplay(this, display); },
   "createWindowContext(Landroid/view/Display;ILandroid/os/Bundle;)Landroid/content/Context;": function (this: JContext, display: unknown, type: number) { return contextForDisplay(this, display, type); },
-  "createWindowContext(ILandroid/os/Bundle;)Landroid/content/Context;": async function (this: JContext, type: number) {
-    return contextForDisplay(this, await vcall(this, "getDisplay", "()Landroid/view/Display;"), type);
-  },
+  "createWindowContext(ILandroid/os/Bundle;)Landroid/content/Context;": driven(function* (this: JContext, type: number): Gen {
+    return contextForDisplay(this, (yield vcall(this, "getDisplay", "()Landroid/view/Display;")), type);
+  }),
   "getApplicationInfo()Landroid/content/pm/ApplicationInfo;": function (this: JContext) {
     return this.$host === appHost ? getAppInfo(this.$host) : vcall(getPM(), "getApplicationInfo", "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;", this.$host.pkg, 128);
   },
@@ -375,20 +375,20 @@ export const contextMethods: NativeSpec["methods"] = {
     return svcStart(this, intent, true);
   },
   "stopService(Landroid/content/Intent;)Z": (intent: JIntent) => svcStop(intent?.component),
-  "bindService(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z": async function (this: JContext, intent: JIntent, connection: unknown, flags: number) { return svcBind(this, intent, connection, flags); },
-  "bindService(Landroid/content/Intent;ILjava/util/concurrent/Executor;Landroid/content/ServiceConnection;)Z": async function (this: JContext, intent: JIntent, flags: number, executor: unknown, connection: unknown) {
+  "bindService(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z": driven(function* (this: JContext, intent: JIntent, connection: unknown, flags: number): Gen { return svcBind(this, intent, connection, flags); }),
+  "bindService(Landroid/content/Intent;ILjava/util/concurrent/Executor;Landroid/content/ServiceConnection;)Z": driven(function* (this: JContext, intent: JIntent, flags: number, executor: unknown, connection: unknown): Gen {
     if (!executor) throw rt.mkThrowable("java/lang/NullPointerException", "executor");
     return svcBind(this, intent, connection, flags, executor);
-  },
+  }),
   "unbindService(Landroid/content/ServiceConnection;)V": svcUnbind,
   "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;III)V": function (this: JContext, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); },
   "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;IIILandroid/os/Bundle;)V": function (this: JContext, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); },
-  "startActivity(Landroid/content/Intent;)V": async function (this: JContext, intent: JIntent) {
-    await launchIntent(this.$host, intent);
-  },
-  "startActivity(Landroid/content/Intent;Landroid/os/Bundle;)V": async function (this: JContext, intent: JIntent) {
-    await launchIntent(this.$host, intent);
-  },
+  "startActivity(Landroid/content/Intent;)V": driven(function* (this: JContext, intent: JIntent): Gen {
+    (yield launchIntent(this.$host, intent));
+  }),
+  "startActivity(Landroid/content/Intent;Landroid/os/Bundle;)V": driven(function* (this: JContext, intent: JIntent): Gen {
+    (yield launchIntent(this.$host, intent));
+  }),
   // AOSP's Context.obtainStyledAttributes delegates to getTheme(). Reading the application
   // theme instead loses every ThemeOverlay — which is how Material passes a widget its shape
   // and colours — and resolves `?attr` references against the wrong stack.

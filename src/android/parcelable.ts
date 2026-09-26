@@ -4,9 +4,9 @@ import { JObj, rt } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
 import type { JParcel } from "./parcel";
 
-class JCreator extends JObj { type = ""; read!: (parcel: JParcel) => Promise<unknown>; }
+class JCreator extends JObj { type = ""; read!: (parcel: JParcel) => unknown; }
 rt.register({ name: "webdroid/ParcelableCreator", ctor: JCreator, ifaces: ["android/os/Parcelable$Creator"], methods: {
-  "createFromParcel(Landroid/os/Parcel;)Ljava/lang/Object;": async function (this: JCreator, parcel: JParcel) { return this.read(parcel); },
+  "createFromParcel(Landroid/os/Parcel;)Ljava/lang/Object;": function (this: JCreator, parcel: JParcel) { return this.read(parcel); },
   "newArray(I)[Ljava/lang/Object;": function (this: JCreator, size: number) { return jarray(Array(size).fill(null), "L" + this.type + ";"); },
 } });
 const creators = new Map<string, JCreator>();

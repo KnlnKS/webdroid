@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { mkPfd } from "../src/android/os";
 import { javaSeekFd, javaCloseFd } from "../src/native/stdio";
 import { vfs, mkFile } from "../src/jvm/natives/jio";
@@ -15,7 +15,7 @@ test("byte-backed descriptors have native storage and duplicates outlive the ori
   expect(javaSeekFd(fd, 0, 2)).toBe(3);
   const duplicate = await vcall(pfd, "dup", "()Landroid/os/ParcelFileDescriptor;");
   await vcall(pfd, "close", "()V");
-  await expect(vcall(pfd, "getFd", "()I")).rejects.toBeDefined();
+  await expect(vcallAsync(pfd, "getFd", "()I")).rejects.toBeDefined();
   const copyFd = await vcall(duplicate, "detachFd", "()I");
   expect(javaSeekFd(copyFd, 0, 1)).toBe(3);
   await vcall(duplicate, "close", "()V");
@@ -31,7 +31,7 @@ test("read-only file opens load lazy bytes and AutoCloseInputStream owns the des
     expect(await vcall(input, "read", "()I")).toBe(7);
     expect(await vcall(pfd, "getStatSize", "()J")).toBe(3n);
     await vcall(input, "close", "()V");
-    await expect(vcall(pfd, "getFd", "()I")).rejects.toBeDefined();
+    await expect(vcallAsync(pfd, "getFd", "()I")).rejects.toBeDefined();
   } finally { vfs.delete(path); }
 });
 

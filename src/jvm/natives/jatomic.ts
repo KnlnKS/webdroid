@@ -1,4 +1,4 @@
-import { rt, JObj, type NativeSpec, type ClassInfo } from "../runtime";
+import { rt, JObj, type NativeSpec, type ClassInfo, driven, type Gen } from "../runtime";
 import { vcall } from "./jlang";
 
 // ── atomics (single-threaded: trivial)
@@ -52,9 +52,9 @@ rt.register({
       if (this.v !== e) return 0;
       this.v = v; return 1;
     },
-    "getAndUpdate(Ljava/util/function/LongUnaryOperator;)J": async function (this: JAtomicLong, f: unknown) { const o = this.v; this.v = await vcall(f, "applyAsLong", "(J)J", o); return o; },
-    "updateAndGet(Ljava/util/function/LongUnaryOperator;)J": async function (this: JAtomicLong, f: unknown) { return (this.v = await vcall(f, "applyAsLong", "(J)J", this.v)); },
-    "accumulateAndGet(JLjava/util/function/LongBinaryOperator;)J": async function (this: JAtomicLong, x: bigint, f: unknown) { return (this.v = await vcall(f, "applyAsLong", "(JJ)J", this.v, x)); },
+    "getAndUpdate(Ljava/util/function/LongUnaryOperator;)J": driven(function* (this: JAtomicLong, f: unknown): Gen { const o = this.v; this.v = (yield vcall(f, "applyAsLong", "(J)J", o)); return o; }),
+    "updateAndGet(Ljava/util/function/LongUnaryOperator;)J": driven(function* (this: JAtomicLong, f: unknown): Gen { return (this.v = (yield vcall(f, "applyAsLong", "(J)J", this.v))); }),
+    "accumulateAndGet(JLjava/util/function/LongBinaryOperator;)J": driven(function* (this: JAtomicLong, x: bigint, f: unknown): Gen { return (this.v = (yield vcall(f, "applyAsLong", "(JJ)J", this.v, x))); }),
   },
 });
 class JAtomicMarkable extends JObj { v: unknown = null; mark = 0; }
@@ -94,8 +94,8 @@ rt.register({
       this.v = v;
       return 1;
     },
-    "getAndUpdate(Ljava/util/function/UnaryOperator;)Ljava/lang/Object;": async function (this: JAtomicRef, f: unknown) { const o = this.v; this.v = await vcall(f, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", o); return o; },
-    "updateAndGet(Ljava/util/function/UnaryOperator;)Ljava/lang/Object;": async function (this: JAtomicRef, f: unknown) { return (this.v = await vcall(f, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", this.v)); },
+    "getAndUpdate(Ljava/util/function/UnaryOperator;)Ljava/lang/Object;": driven(function* (this: JAtomicRef, f: unknown): Gen { const o = this.v; this.v = (yield vcall(f, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", o)); return o; }),
+    "updateAndGet(Ljava/util/function/UnaryOperator;)Ljava/lang/Object;": driven(function* (this: JAtomicRef, f: unknown): Gen { return (this.v = (yield vcall(f, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", this.v))); }),
   },
 });
 

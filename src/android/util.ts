@@ -1,10 +1,10 @@
 // android.util.* natives: Log, the sparse arrays, StateSet, Property, DisplayMetrics, LruCache,
 // TypedValue, Size, FloatMath and JsonReader.
 
-import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { intBitsToFloat, mangleStaticField } from "../jvm/abi";
 import { device } from "../shell/config";
-import { vcall, vcallMaybe, after, stringHash, JEnum, linkInit } from "../jvm/natives/jlang";
+import { vcall, after, stringHash, JEnum, linkInit } from "../jvm/natives/jlang";
 import { jeq } from "../jvm/natives/jutil";
 import { PATTERNS } from "./pattern-data";
 
@@ -126,7 +126,7 @@ rt.register({
 class JPair extends JObj { first: unknown = null; second: unknown = null; }
 function pairHash(value: unknown): number | Promise<number> {
   if (value == null) return 0;
-  return typeof value === "string" ? stringHash(value) : vcallMaybe(value, "hashCode", "()I");
+  return typeof value === "string" ? stringHash(value) : vcall(value, "hashCode", "()I");
 }
 class JRange extends JObj { lower: unknown = null; upper: unknown = null; }
 async function initRange(this: JRange, lower: unknown, upper: unknown) {
@@ -150,19 +150,19 @@ rt.register({ name: "android/util/Range", ctor: JRange, typeVars: "T", methods: 
   "static create(Ljava/lang/Comparable;Ljava/lang/Comparable;)Landroid/util/Range;": createRange,
   "getLower()Ljava/lang/Comparable;": function (this: JRange) { return this.lower; },
   "getUpper()Ljava/lang/Comparable;": function (this: JRange) { return this.upper; },
-  "contains(Ljava/lang/Comparable;)Z": async function (this: JRange, value: unknown) {
+  "contains(Ljava/lang/Comparable;)Z": driven(function* (this: JRange, value: unknown): Gen {
     if (value === null) return rt.npe();
-    return +(await vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.lower) >= 0 && await vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.upper) <= 0);
-  },
-  "contains(Landroid/util/Range;)Z": async function (this: JRange, range: JRange | null) {
+    return +((yield vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.lower)) >= 0 && (yield vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.upper)) <= 0);
+  }),
+  "contains(Landroid/util/Range;)Z": driven(function* (this: JRange, range: JRange | null): Gen {
     if (!range) return rt.npe();
-    return +(await vcall(range.lower, "compareTo", "(Ljava/lang/Object;)I", this.lower) >= 0 && await vcall(range.upper, "compareTo", "(Ljava/lang/Object;)I", this.upper) <= 0);
-  },
-  "clamp(Ljava/lang/Comparable;)Ljava/lang/Comparable;": async function (this: JRange, value: unknown) {
+    return +((yield vcall(range.lower, "compareTo", "(Ljava/lang/Object;)I", this.lower)) >= 0 && (yield vcall(range.upper, "compareTo", "(Ljava/lang/Object;)I", this.upper)) <= 0);
+  }),
+  "clamp(Ljava/lang/Comparable;)Ljava/lang/Comparable;": driven(function* (this: JRange, value: unknown): Gen {
     if (value === null) return rt.npe();
-    if (await vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.lower) < 0) return this.lower;
-    return await vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.upper) > 0 ? this.upper : value;
-  },
+    if ((yield vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.lower)) < 0) return this.lower;
+    return (yield vcall(value, "compareTo", "(Ljava/lang/Object;)I", this.upper)) > 0 ? this.upper : value;
+  }),
   ...Object.fromEntries(["intersect", "extend"].flatMap(name => [
     [`${name}(Landroid/util/Range;)Landroid/util/Range;`, function (this: JRange, range: JRange | null) {
       if (!range) return rt.npe();
@@ -171,11 +171,11 @@ rt.register({ name: "android/util/Range", ctor: JRange, typeVars: "T", methods: 
     [`${name}(Ljava/lang/Comparable;Ljava/lang/Comparable;)Landroid/util/Range;`, function (this: JRange, lower: unknown, upper: unknown) { return combineRange.call(this, lower, upper, name === "extend"); }],
   ])),
   "extend(Ljava/lang/Comparable;)Landroid/util/Range;": function (this: JRange, value: unknown) { return combineRange.call(this, value, value, true); },
-  "equals(Ljava/lang/Object;)Z": async function (this: JRange, other: unknown) {
-    return +(other instanceof JRange && (this === other || await vcall(this.lower, "equals", "(Ljava/lang/Object;)Z", other.lower) && await vcall(this.upper, "equals", "(Ljava/lang/Object;)Z", other.upper)));
-  },
-  "hashCode()I": async function (this: JRange) { return (Math.imul(31, 31 + await vcall(this.lower, "hashCode", "()I")) + await vcall(this.upper, "hashCode", "()I")) | 0; },
-  "toString()Ljava/lang/String;": async function (this: JRange) { return `[${await vcall(this.lower, "toString", "()Ljava/lang/String;")}, ${await vcall(this.upper, "toString", "()Ljava/lang/String;")}]`; },
+  "equals(Ljava/lang/Object;)Z": driven(function* (this: JRange, other: unknown): Gen {
+    return +(other instanceof JRange && (this === other || (yield vcall(this.lower, "equals", "(Ljava/lang/Object;)Z", other.lower)) && (yield vcall(this.upper, "equals", "(Ljava/lang/Object;)Z", other.upper))));
+  }),
+  "hashCode()I": driven(function* (this: JRange): Gen { return (Math.imul(31, 31 + (yield vcall(this.lower, "hashCode", "()I"))) + (yield vcall(this.upper, "hashCode", "()I"))) | 0; }),
+  "toString()Ljava/lang/String;": driven(function* (this: JRange): Gen { return `[${(yield vcall(this.lower, "toString", "()Ljava/lang/String;"))}, ${(yield vcall(this.upper, "toString", "()Ljava/lang/String;"))}]`; }),
 } });
 rt.register({
   name: "android/util/Pair", ctor: JPair,
@@ -192,11 +192,11 @@ rt.register({
     "hashCode()I": function (this: JPair) {
       return after(pairHash(this.first), (first) => after(pairHash(this.second), (second) => (first ^ second) | 0));
     },
-    "toString()Ljava/lang/String;": async function (this: JPair) {
-      const first = this.first == null ? "null" : await vcall(this.first, "toString", "()Ljava/lang/String;");
-      const second = this.second == null ? "null" : await vcall(this.second, "toString", "()Ljava/lang/String;");
+    "toString()Ljava/lang/String;": driven(function* (this: JPair): Gen {
+      const first = this.first == null ? "null" : (yield vcall(this.first, "toString", "()Ljava/lang/String;"));
+      const second = this.second == null ? "null" : (yield vcall(this.second, "toString", "()Ljava/lang/String;"));
       return `Pair{${first} ${second}}`;
-    },
+    }),
   },
 });
 
@@ -254,7 +254,7 @@ rt.register({
       if (n <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "maxSize <= 0");
       this.max = n;
     },
-    "get(Ljava/lang/Object;)Ljava/lang/Object;": async function (this: JLruCache, k: unknown) {
+    "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JLruCache, k: unknown): Gen {
       if (this.m.has(k)) {
         this.hits++;
         const v = this.m.get(k);
@@ -262,10 +262,10 @@ rt.register({
         return v;
       }
       this.misses++;
-      const created = await vcall(this, "create", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
+      const created = (yield vcall(this, "create", "(Ljava/lang/Object;)Ljava/lang/Object;", k));
       if (created !== null) { this.creates++; this.m.set(k, created); this.trim(this.max); }
       return created;
-    },
+    }),
     "create(Ljava/lang/Object;)Ljava/lang/Object;": () => null,
     "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": function (this: JLruCache, k: unknown, v: unknown) {
       const old = this.m.get(k) ?? null;
@@ -286,11 +286,11 @@ rt.register({
       this.max = n;
       this.trim(n);
     },
-    "snapshot()Ljava/util/Map;": async function (this: JLruCache) {
+    "snapshot()Ljava/util/Map;": driven(function* (this: JLruCache): Gen {
       const result = rt.make("java/util/LinkedHashMap");
-      for (const [key, value] of this.m) await vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value);
+      for (const [key, value] of this.m) (yield vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", key, value));
       return result;
-    },
+    }),
     "size()I": function (this: JLruCache) { return this.m.size; },
     "maxSize()I": function (this: JLruCache) { return this.max; },
     "hitCount()I": function (this: JLruCache) { return this.hits; },
@@ -445,7 +445,7 @@ rt.register({ name: "android/util/Rational", ctor: JRational, sup: "java/lang/Nu
     "compareTo(Landroid/util/Rational;)I": rationalCompare,
     "compareTo(Ljava/lang/Object;)I": rationalCompare,
     "static gcd(II)I": rationalGcd,
-    "static parseRational(Ljava/lang/String;)Landroid/util/Rational;": async (s: string) => {
+    "static parseRational(Ljava/lang/String;)Landroid/util/Rational;": driven(function* (s: string): Gen  {
       if (s == null) rt.npe();
       if (s === "NaN") return rationalNaN;
       if (s === "Infinity") return rationalInf;
@@ -453,8 +453,8 @@ rt.register({ name: "android/util/Rational", ctor: JRational, sup: "java/lang/Nu
       const sep = s.includes(":") ? s.indexOf(":") : s.indexOf("/");
       if (sep < 0) throw rt.mkThrowable("java/lang/NumberFormatException", "Invalid Rational: " + s);
       const cls = rt.link("java/lang/Integer").ctor;
-      return new JRational(await vcall(cls, "parseInt", "(Ljava/lang/String;)I", s.slice(0, sep)), await vcall(cls, "parseInt", "(Ljava/lang/String;)I", s.slice(sep + 1)));
-    },
+      return new JRational((yield vcall(cls, "parseInt", "(Ljava/lang/String;)I", s.slice(0, sep))), (yield vcall(cls, "parseInt", "(Ljava/lang/String;)I", s.slice(sep + 1))));
+    }),
   },
 });
 
@@ -537,24 +537,24 @@ rt.register({
     "endArray()V": function (this: JJsonReader) { return jsonNext(this, "END_ARRAY").then(() => {}); },
     "beginObject()V": function (this: JJsonReader) { return jsonNext(this, "BEGIN_OBJECT").then(() => {}); },
     "endObject()V": function (this: JJsonReader) { return jsonNext(this, "END_OBJECT").then(() => {}); },
-    "nextName()Ljava/lang/String;": async function (this: JJsonReader) { return (await jsonNext(this, "NAME")).v as string; },
+    "nextName()Ljava/lang/String;": driven(function* (this: JJsonReader): Gen { return ((yield jsonNext(this, "NAME"))).v as string; }),
     // AOSP coerces between the scalar types, so a number read as a string is legal and common
-    "nextString()Ljava/lang/String;": async function (this: JJsonReader) { return String((await jsonNext(this)).v); },
-    "nextInt()I": async function (this: JJsonReader) { return await jsonNum(this) | 0; },
-    "nextLong()J": async function (this: JJsonReader) { return BigInt(Math.trunc(await jsonNum(this))); },
+    "nextString()Ljava/lang/String;": driven(function* (this: JJsonReader): Gen { return String(((yield jsonNext(this))).v); }),
+    "nextInt()I": driven(function* (this: JJsonReader): Gen { return (yield jsonNum(this)) | 0; }),
+    "nextLong()J": driven(function* (this: JJsonReader): Gen { return BigInt(Math.trunc((yield jsonNum(this)))); }),
     "nextDouble()D": function (this: JJsonReader) { return jsonNum(this); },
-    "nextBoolean()Z": async function (this: JJsonReader) { return (await jsonNext(this)).v ? 1 : 0; },
+    "nextBoolean()Z": driven(function* (this: JJsonReader): Gen { return ((yield jsonNext(this))).v ? 1 : 0; }),
     "nextNull()V": function (this: JJsonReader) { return jsonNext(this, "NULL").then(() => {}); },
-    "peek()Landroid/util/JsonToken;": async function (this: JJsonReader) {
-      const ev = await jsonEvents(this);
+    "peek()Landroid/util/JsonToken;": driven(function* (this: JJsonReader): Gen {
+      const ev = (yield jsonEvents(this));
       return jsonToken[(ev[this.i] ?? { t: "END_DOCUMENT" }).t];
-    },
-    "hasNext()Z": async function (this: JJsonReader) {
-      const t = (await jsonEvents(this))[this.i]?.t;
+    }),
+    "hasNext()Z": driven(function* (this: JJsonReader): Gen {
+      const t = ((yield jsonEvents(this)))[this.i]?.t;
       return t && t !== "END_OBJECT" && t !== "END_ARRAY" && t !== "END_DOCUMENT" ? 1 : 0;
-    },
-    "skipValue()V": async function (this: JJsonReader) {
-      const ev = await jsonEvents(this);
+    }),
+    "skipValue()V": driven(function* (this: JJsonReader): Gen {
+      const ev = (yield jsonEvents(this));
       if (ev[this.i]?.t === "NAME") this.i++;
       let depth = 0;
       do {
@@ -563,7 +563,7 @@ rt.register({
         else if (t === "END_ARRAY" || t === "END_OBJECT") depth--;
         else if (t === undefined) break;
       } while (depth > 0);
-    },
+    }),
   },
 });
 

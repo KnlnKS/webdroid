@@ -1,8 +1,8 @@
 // android.media: MediaPlayer over HTMLAudioElement, SoundPool over Web Audio.
 
-import { rt, JObj, stubs, noops, fieldGetters } from "../jvm/runtime";
+import { rt, JObj, stubs, noops, fieldGetters, driven, type Gen } from "../jvm/runtime";
 import { jarray } from "../jvm/abi";
-import { vcall, stringHash } from "../jvm/natives/jlang";
+import { vcall, stringHash, vcallAsync } from "../jvm/natives/jlang";
 import { uuidFromString } from "../jvm/natives/jvalues";
 import { newArrayList, newStringSet, type JList } from "../jvm/natives/jutil";
 import { type JFileDescriptor, vfs } from "../jvm/natives/jio";
@@ -129,9 +129,9 @@ rt.register({ name: "android/media/MediaDescription", ctor: JMediaDescription, i
     "getMediaUri()Landroid/net/Uri;": "mediaUri",
   }),
   "describeContents()I": () => 0,
-  "toString()Ljava/lang/String;": async function (this: JMediaDescription) {
-    return `${this.title == null ? "null" : await csText(this.title)}, ${this.subtitle == null ? "null" : await csText(this.subtitle)}, ${this.description == null ? "null" : await csText(this.description)}`;
-  },
+  "toString()Ljava/lang/String;": driven(function* (this: JMediaDescription): Gen {
+    return `${this.title == null ? "null" : (yield csText(this.title))}, ${this.subtitle == null ? "null" : (yield csText(this.subtitle))}, ${this.description == null ? "null" : (yield csText(this.description))}`;
+  }),
 } });
 const descriptionFields = {
   "setMediaId(Ljava/lang/String;)Landroid/media/MediaDescription$Builder;": "mediaId",
@@ -193,18 +193,18 @@ rt.register({ name: "android/media/MediaMetadata", ctor: JMediaMetadata, ifaces:
   "containsKey(Ljava/lang/String;)Z": function (this: JMediaMetadata, key: string) { return +this.values.has(key); },
   "keySet()Ljava/util/Set;": function (this: JMediaMetadata) { return newStringSet(this.values.keys()); },
   "getText(Ljava/lang/String;)Ljava/lang/CharSequence;": function (this: JMediaMetadata, key: string) { return this.values.get(key) ?? null; },
-  "getString(Ljava/lang/String;)Ljava/lang/String;": async function (this: JMediaMetadata, key: string) { const value = this.values.get(key); return value == null ? null : csText(value); },
+  "getString(Ljava/lang/String;)Ljava/lang/String;": driven(function* (this: JMediaMetadata, key: string): Gen { const value = this.values.get(key); return value == null ? null : csText(value); }),
   "getLong(Ljava/lang/String;)J": function (this: JMediaMetadata, key: string) { const value = this.values.get(key); return typeof value === "bigint" ? value : 0n; },
   "getBitmap(Ljava/lang/String;)Landroid/graphics/Bitmap;": function (this: JMediaMetadata, key: string) { return this.values.get(key) ?? null; },
   "getRating(Ljava/lang/String;)Landroid/media/Rating;": function (this: JMediaMetadata, key: string) { return this.values.get(key) ?? null; },
-  "getDescription()Landroid/media/MediaDescription;": async function (this: JMediaMetadata) {
+  "getDescription()Landroid/media/MediaDescription;": driven(function* (this: JMediaMetadata): Gen {
     if (this.description) return this.description;
     const prefix = "android.media.metadata.";
     const result = new JMediaDescription();
     const mediaId = this.values.get(prefix + "MEDIA_ID");
     result.mediaId = typeof mediaId === "string" ? mediaId : null;
     const display = this.values.get(prefix + "DISPLAY_TITLE");
-    if (display != null && await csText(display)) {
+    if (display != null && (yield csText(display))) {
       result.title = display;
       result.subtitle = this.values.get(prefix + "DISPLAY_SUBTITLE") ?? null;
       result.description = this.values.get(prefix + "DISPLAY_DESCRIPTION") ?? null;
@@ -212,7 +212,7 @@ rt.register({ name: "android/media/MediaMetadata", ctor: JMediaMetadata, ifaces:
       const text: unknown[] = [];
       for (const key of ["TITLE", "ARTIST", "ALBUM", "ALBUM_ARTIST", "WRITER", "AUTHOR", "COMPOSER"]) {
         const value = this.values.get(prefix + key);
-        if (value != null && await csText(value)) text.push(value);
+        if (value != null && (yield csText(value))) text.push(value);
         if (text.length === 3) break;
       }
       result.title = text[0] ?? null;
@@ -225,21 +225,21 @@ rt.register({ name: "android/media/MediaMetadata", ctor: JMediaMetadata, ifaces:
     }
     for (const key of ["DISPLAY_ICON_URI", "ART_URI", "ALBUM_ART_URI"]) {
       const value = this.values.get(prefix + key);
-      const uri = value == null ? "" : await csText(value);
+      const uri = value == null ? "" : (yield csText(value));
       if (uri) { result.iconUri = mkUri(uri); break; }
     }
     const uri = this.values.get(prefix + "MEDIA_URI");
     if (uri != null) {
-      const text = await csText(uri);
+      const text = (yield csText(uri));
       if (text) result.mediaUri = mkUri(text);
     }
     return this.description = result;
-  },
+  }),
   "describeContents()I": () => 0,
-  "writeToParcel(Landroid/os/Parcel;I)V": async function (this: JMediaMetadata, parcel: unknown) {
+  "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JMediaMetadata, parcel: unknown): Gen {
     const bundle = new JBundle(); bundle.map = new Map(this.values);
-    await vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", bundle);
-  },
+    (yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", bundle));
+  }),
 } });
 rt.register({ name: "android/media/MediaMetadata$Builder", ctor: JMediaMetadataBuilder, methods: {
   "<init>()V": () => {},
@@ -391,7 +391,7 @@ function mpLoad(mp: JMediaPlayer, bytes: Uint8Array) {
   mp.audio.loop = mp.looping;
   mp.srcBytes = bytes;
   mp.audio.onended = () => {
-    if (mp.completionL) void vcall(mp.completionL, "onCompletion", "(Landroid/media/MediaPlayer;)V", mp).catch(reportUncaught);
+    if (mp.completionL) void vcallAsync(mp.completionL, "onCompletion", "(Landroid/media/MediaPlayer;)V", mp).catch(reportUncaught);
   };
 }
 async function mpLoadFd(this: JMediaPlayer, fd: JFileDescriptor, offset = 0n, length = 0x7fffffffffffffffn) {
@@ -407,7 +407,7 @@ function mpPrepare(mp: JMediaPlayer) {
   mp.prepared = true;
   const listener = mp.preparedL;
   if (listener) setTimeout(() => {
-    if (mp.prepared && mp.preparedL === listener) void vcall(listener, "onPrepared", "(Landroid/media/MediaPlayer;)V", mp).catch(reportUncaught);
+    if (mp.prepared && mp.preparedL === listener) void vcallAsync(listener, "onPrepared", "(Landroid/media/MediaPlayer;)V", mp).catch(reportUncaught);
   }, 0);
 }
 rt.register({
@@ -451,17 +451,17 @@ rt.register({
     },
     "setDataSource(Ljava/io/FileDescriptor;JJ)V": mpLoadFd,
     "setDataSource(Ljava/io/FileDescriptor;)V": mpLoadFd,
-    "setDataSource(Landroid/content/Context;Landroid/net/Uri;)V": async function (this: JMediaPlayer, context: unknown, uri: unknown) {
-      const resolver = await vcall(context, "getContentResolver", "()Landroid/content/ContentResolver;");
-      const asset = await vcall(resolver, "openAssetFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;", uri, "r");
+    "setDataSource(Landroid/content/Context;Landroid/net/Uri;)V": driven(function* (this: JMediaPlayer, context: unknown, uri: unknown): Gen {
+      const resolver = (yield vcall(context, "getContentResolver", "()Landroid/content/ContentResolver;"));
+      const asset = (yield vcall(resolver, "openAssetFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;", uri, "r"));
       if (asset === null) throw rt.mkThrowable("java/io/FileNotFoundException", "Media source not found");
       try {
-        const fd = await vcall(asset, "getFileDescriptor", "()Ljava/io/FileDescriptor;");
-        const offset = await vcall(asset, "getStartOffset", "()J");
-        const length = await vcall(asset, "getLength", "()J");
-        await mpLoadFd.call(this, fd, offset, length);
-      } finally { await vcall(asset, "close", "()V"); }
-    },
+        const fd = (yield vcall(asset, "getFileDescriptor", "()Ljava/io/FileDescriptor;"));
+        const offset = (yield vcall(asset, "getStartOffset", "()J"));
+        const length = (yield vcall(asset, "getLength", "()J"));
+        (yield mpLoadFd.call(this, fd, offset, length));
+      } finally { (yield vcall(asset, "close", "()V")); }
+    }),
     "reset()V": function (this: JMediaPlayer) { mpReset(this); },
     ...noops("<init>()V",
       "setAudioStreamType(I)V", "setOnErrorListener(Landroid/media/MediaPlayer$OnErrorListener;)V",

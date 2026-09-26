@@ -1,9 +1,9 @@
 // java.util.zip on fflate: streaming codecs (Inflater/Deflater raw+zlib, CRC32), ZipFile over a
 // central-directory index, GZIPInputStream over a drained source.
 import { Inflate, Unzlib, Deflate, Zlib, Gzip, Zip, ZipDeflate, ZipPassThrough, inflateSync, gunzipSync, type DeflateOptions } from "fflate";
-import { rt, JObj } from "../runtime";
+import { rt, JObj, driven, type Gen } from "../runtime";
 import { utf8, i8, u8 } from "../abi";
-import { vcall, vcallMaybe, newObj, defineException } from "./jlang";
+import { vcall, newObj, defineException } from "./jlang";
 import { vfs, JFile, JInputStream, JOutputStream, readStreamFully } from "./jio";
 import { mkIter } from "./jutil";
 import { readFully, type FileSource } from "../../shell/lazyfile";
@@ -166,21 +166,21 @@ rt.register({
     "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;I)V": dosInit,
     "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;Z)V": dosInit,
     "<init>(Ljava/io/OutputStream;Ljava/util/zip/Deflater;IZ)V": dosInit,
-    "write(I)V": function (this: JDeflaterOut, b: number) { return vcallMaybe(this, "write", "([BII)V", Int8Array.of(b), 0, 1); },
-    "write([BII)V": async function (this: JDeflaterOut, b: Int8Array, off: number, len: number) {
+    "write(I)V": function (this: JDeflaterOut, b: number) { return vcall(this, "write", "([BII)V", Int8Array.of(b), 0, 1); },
+    "write([BII)V": driven(function* (this: JDeflaterOut, b: Int8Array, off: number, len: number): Gen {
       if (this.def.done) throw rt.mkThrowable("java/io/IOException", "write beyond end of stream");
-      if (len > 0) { this.def.feed(u8(b, off, len).slice()); await pump(this); }
-    },
-    "finish()V": async function (this: JDeflaterOut) {
-      if (!this.def.done) { this.def.feed(new Uint8Array(0), true); await pump(this); }
-    },
-    "flush()V": function (this: JDeflaterOut) { return vcallMaybe(this.out, "flush", "()V"); },
-    "close()V": async function (this: JDeflaterOut) {
+      if (len > 0) { this.def.feed(u8(b, off, len).slice()); (yield pump(this)); }
+    }),
+    "finish()V": driven(function* (this: JDeflaterOut): Gen {
+      if (!this.def.done) { this.def.feed(new Uint8Array(0), true); (yield pump(this)); }
+    }),
+    "flush()V": function (this: JDeflaterOut) { return vcall(this.out, "flush", "()V"); },
+    "close()V": driven(function* (this: JDeflaterOut): Gen {
       if (this.closed) return;
       this.closed = true;
-      await vcall(this, "finish", "()V");
-      await vcall(this.out, "close", "()V");
-    },
+      (yield vcall(this, "finish", "()V"));
+      (yield vcall(this.out, "close", "()V"));
+    }),
   },
 });
 class JGzipDeflater extends JDeflater { ensure() { return this.st ??= Object.assign(new Gzip(), { ondata: collect(this) }); } }
@@ -386,49 +386,49 @@ rt.register({
   methods: {
     "<init>(Ljava/io/OutputStream;)V": zipOutInit,
     "<init>(Ljava/io/OutputStream;Ljava/nio/charset/Charset;)V": zipOutInit,
-    "putNextEntry(Ljava/util/zip/ZipEntry;)V": async function (this: JZipOutputStream, entry: JZipEntry | null) {
+    "putNextEntry(Ljava/util/zip/ZipEntry;)V": driven(function* (this: JZipOutputStream, entry: JZipEntry | null): Gen {
       if (!entry) throw rt.mkThrowable("java/lang/NullPointerException", "entry");
       if (!this.archive || this.finished) throw rt.mkThrowable("java/io/IOException", "Stream closed");
-      await this.closeEntry();
+      (yield this.closeEntry());
       if (this.names.has(entry.e.name)) throw rt.mkThrowable("java/util/zip/ZipException", "duplicate entry: " + entry.e.name);
       this.names.add(entry.e.name);
       const file = entry.e.method === 0 ? new ZipPassThrough(entry.e.name) : new ZipDeflate(entry.e.name, { level: this.level as DeflateOptions["level"] });
       if (entry.e.time >= 0) file.mtime = new Date(entry.e.time);
       this.archive.add(file);
       this.entry = file;
-      await this.flushChunks();
-    },
-    "write(I)V": async function (this: JZipOutputStream, byte: number) {
-      await vcall(this, "write", "([BII)V", Int8Array.of(byte), 0, 1);
-    },
-    "write([B)V": async function (this: JZipOutputStream, bytes: Int8Array) {
-      await vcall(this, "write", "([BII)V", bytes, 0, bytes.length);
-    },
-    "write([BII)V": async function (this: JZipOutputStream, bytes: Int8Array, off: number, len: number) {
+      (yield this.flushChunks());
+    }),
+    "write(I)V": driven(function* (this: JZipOutputStream, byte: number): Gen {
+      (yield vcall(this, "write", "([BII)V", Int8Array.of(byte), 0, 1));
+    }),
+    "write([B)V": driven(function* (this: JZipOutputStream, bytes: Int8Array): Gen {
+      (yield vcall(this, "write", "([BII)V", bytes, 0, bytes.length));
+    }),
+    "write([BII)V": driven(function* (this: JZipOutputStream, bytes: Int8Array, off: number, len: number): Gen {
       if (!this.entry) throw rt.mkThrowable("java/util/zip/ZipException", "no current ZIP entry");
       if (off < 0 || len < 0 || len > bytes.length - off) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
       if (len) this.entry.push(u8(bytes, off, len).slice());
-      await this.flushChunks();
-    },
+      (yield this.flushChunks());
+    }),
     "closeEntry()V": function (this: JZipOutputStream) { return this.closeEntry(); },
     "setLevel(I)V": function (this: JZipOutputStream, level: number) {
       if (level < 0 || level > 9) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid compression level");
       this.level = level;
     },
-    "finish()V": async function (this: JZipOutputStream) {
+    "finish()V": driven(function* (this: JZipOutputStream): Gen {
       if (this.finished || !this.archive) return;
-      await this.closeEntry();
+      (yield this.closeEntry());
       this.archive.end();
       this.finished = true;
-      await this.flushChunks();
-    },
-    "flush()V": async function (this: JZipOutputStream) { await this.flushChunks(); await vcall(this.out, "flush", "()V"); },
-    "close()V": async function (this: JZipOutputStream) {
+      (yield this.flushChunks());
+    }),
+    "flush()V": driven(function* (this: JZipOutputStream): Gen { (yield this.flushChunks()); (yield vcall(this.out, "flush", "()V")); }),
+    "close()V": driven(function* (this: JZipOutputStream): Gen {
       if (!this.archive) return;
-      await vcall(this, "finish", "()V");
-      await vcall(this.out, "close", "()V");
+      (yield vcall(this, "finish", "()V"));
+      (yield vcall(this.out, "close", "()V"));
       this.archive = null;
-    },
+    }),
   },
 });
 class JZipFile extends JObj {
@@ -458,12 +458,12 @@ rt.register({
       const e = this.entries.get(name) ?? this.entries.get(name + "/");
       return e ? mkZipEntry(e) : null;
     },
-    "getInputStream(Ljava/util/zip/ZipEntry;)Ljava/io/InputStream;": async function (this: JZipFile, ze: JZipEntry) {
+    "getInputStream(Ljava/util/zip/ZipEntry;)Ljava/io/InputStream;": driven(function* (this: JZipFile, ze: JZipEntry): Gen {
       const e = this.entries.get(ze.e.name);
       if (!e) return null;
-      const b = await this.data(e);
+      const b = (yield this.data(e));
       return newObj("java/io/ByteArrayInputStream", "([B)V", i8(b));
-    },
+    }),
     "close()V": function () {},
   },
 });

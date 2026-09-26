@@ -1,7 +1,7 @@
 // android.net.LocalSocket / LocalServerSocket / LocalSocketAddress: AF_UNIX sockets within this
 // process. A server owns a name in the abstract namespace; a client's connect pairs it with a
 // socket the server's accept() hands out, and each side's streams are the other's queue.
-import { rt, JObj, noops } from "../jvm/runtime";
+import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
 import { JInputStream, JOutputStream } from "../jvm/natives/jio";
 import { mkEnumSet } from "../jvm/natives/jlang";
 import { u8 } from "../jvm/abi";
@@ -49,7 +49,7 @@ class JLocalSocketOut extends JOutputStream {
 rt.register({
   name: "webdroid/LocalSocketInputStream", ctor: JLocalSocketIn, sup: "java/io/InputStream",
   methods: {
-    "read()I": async function (this: JLocalSocketIn) { const b = new Int8Array(1); return (await this.q.read(b, 0, 1)) < 0 ? -1 : b[0] & 0xff; },
+    "read()I": driven(function* (this: JLocalSocketIn): Gen { const b = new Int8Array(1); return ((yield this.q.read(b, 0, 1))) < 0 ? -1 : b[0] & 0xff; }),
     "read([BII)I": function (this: JLocalSocketIn, out: Int8Array, off: number, len: number) { return len === 0 ? 0 : this.q.read(out, off, len); },
     "read([B)I": function (this: JLocalSocketIn, out: Int8Array) { return out.length === 0 ? 0 : this.q.read(out, 0, out.length); },
     "available()I": function (this: JLocalSocketIn) { return this.q.available(); },

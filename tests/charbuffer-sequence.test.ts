@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 rt.linkNatives();
 const wrap = (text: unknown) => vcall(rt.link("java/nio/CharBuffer").ctor, "wrap", "(Ljava/lang/CharSequence;)Ljava/nio/CharBuffer;", text);
 
@@ -29,8 +29,8 @@ test("CharBuffer keeps a live read-only CharSequence view", async () => {
   expect(await vcall(slice, "toString", "()Ljava/lang/String;")).toBe("xy");
   expect(await vcall(slice, "position", "()I")).toBe(0);
   expect(await vcall(slice, "capacity", "()I")).toBe(2);
-  await expect(vcall(slice, "put", "(C)Ljava/nio/CharBuffer;", 65)).rejects.toBeDefined();
-  await expect(vcall(b, "put", "(C)Ljava/nio/CharBuffer;", 65)).rejects.toBeDefined();
+  await expect(vcallAsync(slice, "put", "(C)Ljava/nio/CharBuffer;", 65)).rejects.toBeDefined();
+  await expect(vcallAsync(b, "put", "(C)Ljava/nio/CharBuffer;", 65)).rejects.toBeDefined();
 });
 test("one-shot charset encoding consumes UTF-16 input and reports malformed surrogates", async () => {
   const charset = rt.link("java/nio/charset/StandardCharsets").ctor.s$UTF_8;
@@ -40,7 +40,7 @@ test("one-shot charset encoding consumes UTF-16 input and reports malformed surr
   expect(new Uint8Array((await vcall(out, "array", "()[B")).buffer)).toEqual(new TextEncoder().encode("café🗺"));
   expect(await vcall(b, "remaining", "()I")).toBe(0);
   const bad = await wrap("a\ud800b");
-  await expect(vcall(encoder, "encode", "(Ljava/nio/CharBuffer;)Ljava/nio/ByteBuffer;", bad)).rejects.toMatchObject({ msg: "Input length = 1" });
+  await expect(vcallAsync(encoder, "encode", "(Ljava/nio/CharBuffer;)Ljava/nio/ByteBuffer;", bad)).rejects.toMatchObject({ msg: "Input length = 1" });
   expect(await vcall(bad, "position", "()I")).toBe(1);
 });
 

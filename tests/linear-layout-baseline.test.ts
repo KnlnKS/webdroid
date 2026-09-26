@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { vcall } from "../src/jvm/natives/jlang";
+import { vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { JLinearLayout } from "../src/android/layouts";
 import { JView } from "../src/android/view";
 
@@ -19,7 +19,7 @@ test("LinearLayout rejects baseline indexes outside its current children", async
   const layout = new JLinearLayout();
   layout.children.push(new JView());
   for (const index of [-1, 1]) {
-    await expect(vcall(layout, "setBaselineAlignedChildIndex", "(I)V", index)).rejects.toMatchObject({
+    await expect(vcallAsync(layout, "setBaselineAlignedChildIndex", "(I)V", index)).rejects.toMatchObject({
       constructor: rt.link("java/lang/IllegalArgumentException").ctor,
     });
   }

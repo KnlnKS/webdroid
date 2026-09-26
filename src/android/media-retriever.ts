@@ -1,4 +1,4 @@
-import { rt, JObj } from "../jvm/runtime";
+import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { concat } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { JFileDescriptor, vfs } from "../jvm/natives/jio";
@@ -129,15 +129,15 @@ rt.register({ name: "android/media/MediaMetadataRetriever", ctor: JMediaMetadata
       if (!source) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid media path");
       return this.open(source);
     },
-    "setDataSource(Landroid/media/MediaDataSource;)V": async function (this: JMediaMetadataRetriever, data: unknown) {
-      const size = Number(await vcall(data, "getSize", "()J"));
+    "setDataSource(Landroid/media/MediaDataSource;)V": driven(function* (this: JMediaMetadataRetriever, data: unknown): Gen {
+      const size = Number((yield vcall(data, "getSize", "()J")));
       if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid media source");
-      await this.open({ size, read: async (offset, length) => {
+      (yield this.open({ size, read: async (offset, length) => {
         const out = new Int8Array(length);
         const count = await vcall(data, "readAt", "(J[BII)I", BigInt(offset), out, 0, length) as number;
         return count <= 0 ? new Uint8Array(0) : new Uint8Array(out.buffer, 0, Math.min(count, length));
-      } });
-    },
+      } }));
+    }),
     "extractMetadata(I)Ljava/lang/String;": function (this: JMediaMetadataRetriever, key: number) { return this.metadata.get(key) ?? null; },
     "getFrameAtTime(JI)Landroid/graphics/Bitmap;": function (this: JMediaMetadataRetriever, time: bigint, option: number) { return this.frame(time, option); },
     "getFrameAtTime(J)Landroid/graphics/Bitmap;": function (this: JMediaMetadataRetriever, time: bigint) { return this.frame(time, 2); },

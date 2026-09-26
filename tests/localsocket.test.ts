@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 
 test("LocalServerSocket accepts an in-process LocalSocket and streams bytes both ways", async () => {
   const server = await newObj("android/net/LocalServerSocket", "(Ljava/lang/String;)V", "wd.test.sock");
-  await expect(newObj("android/net/LocalServerSocket", "(Ljava/lang/String;)V", "wd.test.sock")).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
+  await expect((async () => newObj("android/net/LocalServerSocket", "(Ljava/lang/String;)V", "wd.test.sock"))()).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
   const accepted = vcall(server, "accept", "()Landroid/net/LocalSocket;");
   const client = await newObj("android/net/LocalSocket");
   await vcall(client, "connect", "(Landroid/net/LocalSocketAddress;)V", await newObj("android/net/LocalSocketAddress", "(Ljava/lang/String;)V", "wd.test.sock"));
@@ -26,7 +26,7 @@ test("LocalServerSocket accepts an in-process LocalSocket and streams bytes both
   expect(await vcall(input, "read", "([BII)I", buf, 0, 8)).toBe(-1);
   await vcall(server, "close", "()V");
   const late = await newObj("android/net/LocalSocket");
-  await expect(vcall(late, "connect", "(Landroid/net/LocalSocketAddress;)V", await newObj("android/net/LocalSocketAddress", "(Ljava/lang/String;)V", "wd.test.sock"))).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
+  await expect(vcallAsync(late, "connect", "(Landroid/net/LocalSocketAddress;)V", await newObj("android/net/LocalSocketAddress", "(Ljava/lang/String;)V", "wd.test.sock"))).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
 });
 
 test("collections are instances of their abstract supers", async () => {

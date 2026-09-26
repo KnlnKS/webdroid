@@ -1,7 +1,7 @@
 // org.json over plain JS objects/arrays.
 
-import { rt, JObj, type NativeSpec } from "../runtime";
-import { defineException, boxInt, box, JLong, JDouble, JBool, TRUE, FALSE, vcall } from "./jlang";
+import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
+import { defineException, boxInt, box, JLong, JDouble, JBool, TRUE, FALSE, vcall, vcallAsync } from "./jlang";
 import { mkIter, newLinkedHashSet, toJsArray } from "./jutil";
 
 class JJSONObject extends JObj { o: Record<string, unknown> = Object.create(null); }
@@ -295,7 +295,7 @@ class JJSONStringer extends JObj {
     if (unwrapped == null || typeof unwrapped === "boolean" || typeof unwrapped === "number" || typeof unwrapped === "bigint")
       this.out += Object.is(unwrapped, -0) ? "-0" : String(unwrapped ?? null);
     else if (typeof unwrapped === "string") this.out += jsonQuote(unwrapped);
-    else return vcall(value, "toString", "()Ljava/lang/String;").then(text => { this.out += jsonQuote(text); return this; });
+    else return vcallAsync(value, "toString", "()Ljava/lang/String;").then(text => { this.out += jsonQuote(text); return this; });
     return this;
   }
 }
@@ -375,7 +375,7 @@ rt.register({
       if (!Array.isArray(value)) throw rt.mkThrowable("org/json/JSONException", "Value is not an array");
       this.a = value;
     },
-    "<init>(Ljava/util/Collection;)V": async function (this: JJSONArray, c: unknown) { this.a = c === null ? [] : (await toJsArray(c)).map(jsonUnwrap); },
+    "<init>(Ljava/util/Collection;)V": driven(function* (this: JJSONArray, c: unknown): Gen { this.a = c === null ? [] : ((yield toJsArray(c))).map(jsonUnwrap); }),
     "put(Ljava/lang/Object;)Lorg/json/JSONArray;": function (this: JJSONArray, v: unknown) { this.a.push(jsonUnwrap(v)); return this; },
     "put(I)Lorg/json/JSONArray;": function (this: JJSONArray, v: number) { this.a.push(v); return this; },
     "put(D)Lorg/json/JSONArray;": function (this: JJSONArray, v: number) { this.a.push(v); return this; },

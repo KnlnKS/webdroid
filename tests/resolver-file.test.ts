@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { vcall } from "../src/jvm/natives/jlang";
+import { vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { vfs } from "../src/jvm/natives/jio";
 import { mkUri } from "../src/android/net";
 import { javaReadFd } from "../src/native/stdio";
@@ -22,7 +22,7 @@ test("resolver file opens decode paths and reject missing files without creating
     await vcall(pfd, "close", "()V");
     vfs.delete(path);
     for (const missing of [uri, mkUri("unsupported://file")]) {
-      const error = await vcall(resolver, "openFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", missing, "r").catch(error => error);
+      const error = await vcallAsync(resolver, "openFileDescriptor", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", missing, "r").catch(error => error);
       expect(rt.iof(error, "java/io/FileNotFoundException")).toBe(1);
     }
     expect(vfs.exists(path)).toBe(false);
@@ -35,7 +35,7 @@ test("parcel file modes distinguish read-write access, truncation and append", a
     expect(await vcall(cls, "parseMode", "(Ljava/lang/String;)I", mode)).toBe(flags);
   }
   for (const mode of ["", "read", "rwa"]) {
-    const error = await vcall(cls, "parseMode", "(Ljava/lang/String;)I", mode).catch(error => error);
+    const error = await vcallAsync(cls, "parseMode", "(Ljava/lang/String;)I", mode).catch(error => error);
     expect(rt.iof(error, "java/lang/IllegalArgumentException")).toBe(1);
   }
 });

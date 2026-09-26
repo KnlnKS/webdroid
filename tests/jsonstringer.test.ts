@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 rt.linkNatives();
 const open = (writer: unknown, method: string) => vcall(writer, method, "()Lorg/json/JSONStringer;");
@@ -23,11 +23,11 @@ test("JSONStringer preserves nesting, escaping, duplicate keys and long precisio
 test("JSONStringer rejects invalid nesting and nonfinite numeric values", async () => {
   const writer = await newObj("org/json/JSONStringer");
   for (const action of [() => key(writer, "x"), () => open(writer, "endArray")]) {
-    const error = await action().then(() => null, e => e);
+    const error = await Promise.resolve().then(action).then(() => null, e => e);
     expect(rt.iof(error, "org/json/JSONException")).toBeTruthy();
   }
   await open(writer, "object"); await key(writer, "x");
-  const error = await vcall(writer, "value", "(D)Lorg/json/JSONStringer;", NaN).then(() => null, e => e);
+  const error = await vcallAsync(writer, "value", "(D)Lorg/json/JSONStringer;", NaN).then(() => null, e => e);
   expect(rt.iof(error, "org/json/JSONException")).toBeTruthy();
 });
 

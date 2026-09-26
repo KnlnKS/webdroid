@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import "../src/natives";
 import { JObj, rt } from "../src/jvm/runtime";
-import { newObj, vcall } from "../src/jvm/natives/jlang";
+import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 
 class RecordingRunnable extends JObj { runs = 0; }
 class BlockingRunnable extends JObj {
@@ -196,7 +196,7 @@ test("a pool grows when a wrapped synchronous queue refuses storage", async () =
   expect(await vcall(ex, "getCorePoolSize", "()I")).toBe(0);
   expect(await vcall(ex, "getMaximumPoolSize", "()I")).toBe(2);
   expect(await vcall(queue.delegate, "size", "()I")).toBe(0);
-  await expect(vcall(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", new RecordingRunnable())).rejects.toBeDefined();
+  await expect(vcallAsync(ex, "submit", "(Ljava/lang/Runnable;)Ljava/util/concurrent/Future;", new RecordingRunnable())).rejects.toBeDefined();
   const handler = await newObj("java/util/concurrent/ThreadPoolExecutor$CallerRunsPolicy");
   await vcall(ex, "setRejectedExecutionHandler", "(Ljava/util/concurrent/RejectedExecutionHandler;)V", handler);
   const overflow = new RecordingRunnable();
@@ -247,5 +247,5 @@ test("resizing a scheduled pool starts queued work and retires idle excess worke
   await vcall(ex, "setCorePoolSize", "(I)V", 0);
   expect(await vcall(ex, "getCorePoolSize", "()I")).toBe(0);
   expect(await vcall(ex, "getMaximumPoolSize", "()I")).toBe(0x7fffffff);
-  await expect(vcall(ex, "setCorePoolSize", "(I)V", -1)).rejects.toBeDefined();
+  await expect(vcallAsync(ex, "setCorePoolSize", "(I)V", -1)).rejects.toBeDefined();
 });

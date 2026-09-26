@@ -1,6 +1,6 @@
 // Scrolling physics, view configuration, legacy animation classes, misc widgets' helpers.
 
-import { rt, JObj, type NativeSpec, stubs, noops } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, setGroupAnimHook, copyEvent } from "./view";
 import { restVelocity, type JMotionEvent } from "./motionevent";
@@ -418,10 +418,10 @@ const animMethods: NativeSpec["methods"] = {
   "setAnimationListener(Landroid/view/animation/Animation$AnimationListener;)V": function (this: JAnimation, l: unknown) { this.listener = l; },
   "start()V": function (this: JAnimation) { this.startTime = -1; },
   "startNow()V": function (this: JAnimation) { this.startTime = performance.now(); },
-  "cancel()V": async function (this: JAnimation) {
-    if (this.started && !this.ended) { this.ended = true; await fire(this, null, "End"); }
+  "cancel()V": driven(function* (this: JAnimation): Gen {
+    if (this.started && !this.ended) { this.ended = true; (yield fire(this, null, "End")); }
     this.startTime = Number.MIN_SAFE_INTEGER;
-  },
+  }),
   "reset()V": function (this: JAnimation) { this.started = this.ended = this.flipped = this.initialized = false; this.repeated = 0; },
   "hasEnded()Z": function (this: JAnimation) { return this.ended ? 1 : 0; },
   "hasStarted()Z": function (this: JAnimation) { return this.started ? 1 : 0; },
@@ -432,9 +432,9 @@ const animMethods: NativeSpec["methods"] = {
     "setDetachWallpaper(Z)V", "setBackgroundColor(I)V",
     "applyTransformation(FLandroid/view/animation/Transformation;)V"),
   ...stubs(1, "willChangeBounds()Z", "willChangeTransformationMatrix()Z"),
-  "getTransformation(JLandroid/view/animation/Transformation;)Z": async function (this: JAnimation, now: bigint, t: JTransformation) {
-    return await getTransformation(this, Number(now), t, this.target) ? 1 : 0;
-  },
+  "getTransformation(JLandroid/view/animation/Transformation;)Z": driven(function* (this: JAnimation, now: bigint, t: JTransformation): Gen {
+    return (yield getTransformation(this, Number(now), t, this.target)) ? 1 : 0;
+  }),
   "getTransformation(JLandroid/view/animation/Transformation;F)Z": async function (
     this: JAnimation, now: bigint, t: JTransformation, scale: number,
   ) {
@@ -523,13 +523,13 @@ rt.register({
       if (c.duration + c.startOffset > this.duration) this.duration = c.duration + c.startOffset;
     },
     "getAnimations()Ljava/util/List;": function (this: JAnimation) { return newArrayList(this.kids); },
-    "initialize(IIII)V": async function (this: JAnimation, w: number, h: number, pw: number, ph: number) {
+    "initialize(IIII)V": driven(function* (this: JAnimation, w: number, h: number, pw: number, ph: number): Gen {
       this.initialized = true;
-      for (const c of this.kids) await vcall(c, "initialize", "(IIII)V", w, h, pw, ph);
-    },
-    "applyTransformation(FLandroid/view/animation/Transformation;)V": async function (this: JAnimation, t: number, out: JTransformation) {
-      for (const c of this.kids) await vcall(c, "applyTransformation", "(FLandroid/view/animation/Transformation;)V", t, out);
-    },
+      for (const c of this.kids) (yield vcall(c, "initialize", "(IIII)V", w, h, pw, ph));
+    }),
+    "applyTransformation(FLandroid/view/animation/Transformation;)V": driven(function* (this: JAnimation, t: number, out: JTransformation): Gen {
+      for (const c of this.kids) (yield vcall(c, "applyTransformation", "(FLandroid/view/animation/Transformation;)V", t, out));
+    }),
   },
 });
 function animationValue(res: Resources, node: XmlNode, name: string) {
@@ -777,8 +777,8 @@ for (const n of ["android/gesture/Gesture", "android/gesture/GestureLibrary", "a
 rt.register({
   name: "android/gesture/GestureOverlayView", ctor: class extends JViewGroup {}, sup: "android/widget/FrameLayout",
   methods: {
-    "<init>(Landroid/content/Context;)V": async function (this: any, c: unknown) { await initViewFromCtx(this, c, null); },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": async function (this: any, c: unknown, set: any) { await initViewFromCtx(this, c, set); },
+    "<init>(Landroid/content/Context;)V": driven(function* (this: any, c: unknown): Gen { (yield initViewFromCtx(this, c, null)); }),
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: any, c: unknown, set: any): Gen { (yield initViewFromCtx(this, c, set)); }),
     ...noops("addOnGesturePerformedListener(Landroid/gesture/GestureOverlayView$OnGesturePerformedListener;)V",
       "addOnGestureListener(Landroid/gesture/GestureOverlayView$OnGestureListener;)V", "setGestureVisible(Z)V",
       "setGestureStrokeType(I)V", "setGestureColor(I)V", "setGestureStrokeWidth(F)V",
