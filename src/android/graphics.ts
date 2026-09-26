@@ -1,6 +1,6 @@
 // android.graphics.* → HTML Canvas 2D. Colors are Java ARGB ints (signed).
 
-import { isRecording, recordOrRun, recordingContext, replayCanvas, replayWithSemantics, type Ctx2D } from "./recording";
+import { displayListLength, isRecording, recordOrRun, recordingContext, replay, replayCanvas, replayWithSemantics, type Ctx2D, type DisplayList } from "./recording";
 import { tryBitmapLine, tryBitmapOval, tryBitmapPath, tryBitmapRect, tryBitmapRoundRect, tryBitmapShape, tryPartialSourceIn } from "./bitmap-raster";
 import { drawSkiaText } from "./skia-text";
 import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
@@ -2283,7 +2283,7 @@ class JRenderNode extends JObj {
   octx: OffscreenCanvasRenderingContext2D | null = null;
   // deferred display list: replayed against the target ctx each draw so child layers
   // re-recorded AFTER this layer keep showing fresh content (real RenderNode semantics)
-  ops: ((c: Ctx2D) => void)[] = [];
+  ops: DisplayList = [];
   hasDL = false;
   effect: JRenderEffect | null = null;
   effectInput: OffscreenCanvas | null = null;
@@ -2304,7 +2304,7 @@ rt.register({
     "getWidth()I": function (this: JPicture) { return this.node.w; },
     "getHeight()I": function (this: JPicture) { return this.node.h; },
     "draw(Landroid/graphics/Canvas;)V": function (this: JPicture, cv: JCanvas) {
-      replayWithSemantics(cv, () => { if (this.node.hasDL) for (const op of this.node.ops) op(cv.ctx); });
+      replayWithSemantics(cv, () => { if (this.node.hasDL) replay(cv.ctx, this.node.ops); });
     },
   },
 });
@@ -2317,7 +2317,7 @@ function drawPicture(canvas: JCanvas, picture: JPicture, dst?: JRect) {
       ctx.translate(dst.left, dst.top);
       if (node.w > 0 && node.h > 0) ctx.scale((dst.right - dst.left) / node.w, (dst.bottom - dst.top) / node.h);
     }
-    replayWithSemantics(canvas, () => { if (node.hasDL) for (const op of node.ops) op(ctx); });
+    replayWithSemantics(canvas, () => { if (node.hasDL) replay(ctx, node.ops); });
   } finally { ctx.restore(); }
 }
 function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
@@ -2335,7 +2335,7 @@ function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
   }
   if (n.clip) { ctx.beginPath(); ctx.rect(0, 0, n.w, n.h); ctx.clip(); }
   if (n.clipOutline && n.outline && n.outline.kind) n.outline.trace(ctx);
-  perf.rnReplay += n.ops.length;
+  perf.rnReplay += displayListLength(n.ops);
   // The display list stays a deferred command list (recorded ops replayed against the real
   // target). A bad op must not abandon this node's save, or its clip leaks into the frame.
   try {
@@ -2347,9 +2347,9 @@ function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
       const recording = replayCanvas(ctx);
       const canvas = JCanvas.wrap(input, n.w, n.h);
       if (recording) { canvas.semanticOwner = recording.semanticOwner; canvas.semanticBase = recording.semanticTransform(); }
-      replayWithSemantics(canvas, () => { for (const op of n.ops) op(input); });
+      replayWithSemantics(canvas, () => replay(input, n.ops));
       n.effect.draw(ctx, surface);
-    } else for (const op of n.ops) op(ctx);
+    } else replay(ctx, n.ops);
   }
   catch (e) { perf.drawErrors++; noteNodeError(e); }
   finally { ctx.restore(); }
@@ -2401,7 +2401,7 @@ rt.register({
     "beginRecording()Landroid/graphics/RecordingCanvas;": driven(function* (this: JRenderNode): Gen {
       return vcall(this, "beginRecording", "(II)Landroid/graphics/RecordingCanvas;", this.w, this.h);
     }),
-    "endRecording()V": function (this: JRenderNode) { this.hasDL = true; perf.rnRecord += this.ops.length; invalidateHook?.(); },
+    "endRecording()V": function (this: JRenderNode) { this.hasDL = true; perf.rnRecord += displayListLength(this.ops); invalidateHook?.(); },
     "hasDisplayList()Z": function (this: JRenderNode) { return this.hasDL ? 1 : 0; },
     "discardDisplayList()V": function (this: JRenderNode) { this.hasDL = false; this.ops = []; },
     "getWidth()I": function (this: JRenderNode) { return this.w; },
