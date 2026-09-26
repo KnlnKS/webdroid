@@ -22,7 +22,7 @@ import { csText, spannedString } from "./text";
 import { showToast } from "./popup";
 import { newArrayList } from "../jvm/natives/jutil";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
-import { JService, runningServices, svcStop, svcFg } from "./runningservices";
+import { runningServices, svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from "./media";
 import { device } from "../shell/config";
 import type { JBitmap } from "./graphics";
@@ -1082,6 +1082,7 @@ rt.register({
 });
 rt.markers("android/content/ContentProvider$PipeDataWriter");
 
+export class JService extends JContextWrapper {}
 rt.register({ name: "android/app/Service", ctor: JService, sup: "android/content/ContextWrapper",
   ifaces: ["android/content/ComponentCallbacks2", "android/content/ComponentCallbacks"],
   methods: {

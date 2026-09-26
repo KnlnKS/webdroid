@@ -8,7 +8,6 @@ import { reportUncaught, PROCESS_PID, PROCESS_UID, PROCESS_NAME, JFnRunnable } f
 import { packages, qualifyComponent, type PackageRecord } from "./packages";
 import { getPM } from "./pm";
 import { binderTransport, exportBinder } from "./binder";
-export class JService extends JContextWrapper {}
 
 class JRunningServiceInfo extends JObj {
   service: JComponentName | null = null;
