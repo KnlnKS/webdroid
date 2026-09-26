@@ -315,11 +315,18 @@ async function entryBytesOfSource(source: FileSource, e: ZEntry): Promise<Uint8A
  *  property. `Object.keys` stays free; `Object.entries` inflates the whole tree, which is why
  *  nothing on the boot path uses it. `rename` returns null to drop an entry. */
 export function zipTree(z: Uint8Array, into: Record<string, Uint8Array> = {}, rename?: (n: string) => string | null): Record<string, Uint8Array> {
+  let pending = lazyEntries.get(into);
+  if (!pending) lazyEntries.set(into, pending = new Map());
   for (const e of centralDir(z).values()) {
     if (e.name.endsWith("/")) continue;
     const name = rename ? rename(e.name) : e.name;
     if (name === null || Object.prototype.hasOwnProperty.call(into, name)) continue;
-    const pin = (value: Uint8Array) => { Object.defineProperty(into, name, { value, writable: true, enumerable: true, configurable: true }); return value; };
+    const pin = (value: Uint8Array) => {
+      pending.delete(name);
+      Object.defineProperty(into, name, { value, writable: true, enumerable: true, configurable: true });
+      return value;
+    };
+    if (e.method === 8) pending.set(name, [z, e]);
     Object.defineProperty(into, name, {
       enumerable: true, configurable: true,
       get: () => pin(entryBytes(z, e)),
@@ -327,6 +334,20 @@ export function zipTree(z: Uint8Array, into: Record<string, Uint8Array> = {}, re
     });
   }
   return into;
+}
+const lazyEntries = new WeakMap<Record<string, Uint8Array>, Map<string, [Uint8Array, ZEntry]>>();
+/** Inflate a tree's still-compressed entries that `wanted` names with the platform's native
+ *  inflater, concurrently, ahead of the synchronous reads that would otherwise inflate in JS. */
+export async function inflateTree(tree: Record<string, Uint8Array>, wanted: (name: string) => boolean): Promise<void> {
+  const pending = lazyEntries.get(tree);
+  if (!pending || typeof DecompressionStream === "undefined") return;
+  await Promise.all([...pending].filter(([name]) => wanted(name)).map(async ([name, [z, e]]) => {
+    const v = new DataView(z.buffer, z.byteOffset, z.byteLength);
+    const start = e.off + 30 + v.getUint16(e.off + 26, true) + v.getUint16(e.off + 28, true);
+    const stream = new Blob([z.subarray(start, start + e.csize) as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+    if (pending.has(name)) tree[name] = bytes;
+  }));
 }
 
 class JZipEntry extends JObj { e: ZEntry = UNKNOWN; }

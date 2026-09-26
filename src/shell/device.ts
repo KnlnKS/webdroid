@@ -3,6 +3,7 @@
 import { dexesIn } from "../jvm/dex";
 import { rt, type JObj, type Gen } from "../jvm/runtime";
 import { vfs, apkPath } from "../jvm/natives/jio";
+import { inflateTree } from "../jvm/natives/jzip";
 import { openInstall, type Install } from "./install";
 import { vcall, vcallOn, callOn, curThread, mainThread, setCurThread, JThrowable, stackTraceText } from "../jvm/natives/jlang";
 import { Arsc } from "../android/arsc";
@@ -137,10 +138,12 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     else vfs.mount(apkPath(sp.name), sp.source);
   }
   onStatus("Loading app code…");
+  const isDex = (name: string) => /^classes\d*\.dex$/.test(name);
+  await inflateTree(zip, isDex);
   // The apk goes in first: loadDex is first-wins by name, so an app shipping its own copy of a
   // framework class keeps it, as on a device where the app's dex is ahead on the class path.
   for (const name of Object.keys(zip)) {
-    if (/^classes\d*\.dex$/.test(name)) for (const d of dexesIn(zip[name], name)) rt.loadDex(d);
+    if (isDex(name)) for (const d of dexesIn(zip[name], name)) rt.loadDex(d);
   }
   await loadFrameworkDex();
   // Natives materialize AFTER every dex is indexed, never before: a native whose super or
