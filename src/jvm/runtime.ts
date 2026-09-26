@@ -810,6 +810,8 @@ export class Runtime {
     (a as any).$t = t;
     return a;
   }
+  /** long shift counts, so a shift does not allocate its BigInt amount */
+  readonly shifts: readonly bigint[] = Array.from({ length: 64 }, (_, i) => BigInt(i));
   /** fuel check target — yields to the browser event loop */
   private lastYield = 0;
   /** ms between back-edge yields. The frame loop stretches it while a draw pass is in flight:
