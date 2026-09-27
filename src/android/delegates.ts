@@ -583,7 +583,9 @@ delegate("android/graphics/Canvas", {
   },
   "nGetClipBounds(JLandroid/graphics/Rect;)Z": on("getClipBounds(Landroid/graphics/Rect;)Z"),
   ...stubs(0, "nIsOpaque(J)Z", "nIsHighContrastText(J)Z", "nQuickReject(JFFFF)Z", "nQuickReject(JJ)Z"),
-  ...noops("nSetCompatibilityVersion(I)V", "nSetDrawFilter(JJ)V", "nClipShader(JJI)V", "nFreeCaches()V", "nFreeTextLayoutCaches()V"),
+  ...noops("nSetCompatibilityVersion(I)V", "nSetDrawFilter(JJ)V", "nClipShader(JJI)V"),
+  // nothing is cached natively, so there is nothing to free
+  "nFreeCaches()V": () => {}, "nFreeTextLayoutCaches()V": () => {},
 });
 
 const drawText = (h: bigint, s: string, x: number, y: number, pt: bigint) =>
