@@ -2168,7 +2168,7 @@ export const canvasMethods: NativeSpec["methods"] = {
     this.ctx.lineTo(x1, y1);
     this.ctx.stroke();
   },
-  "drawLines([FLandroid/graphics/Paint;)V": function (this: JCanvas, pts: Float32Array, p: JPaint) { drawLines(this, pts, 0, pts.length, p); },
+  "drawLines([FLandroid/graphics/Paint;)V": function (this: JCanvas, pts: Float32Array, p: JPaint) { drawLines(this, pts, 0, pts?.length ?? 0, p); },
   "drawLines([FIILandroid/graphics/Paint;)V": function (this: JCanvas, pts: Float32Array, off: number, n: number, p: JPaint) { drawLines(this, pts, off, n, p); },
   "drawPoint(FFLandroid/graphics/Paint;)V": function (this: JCanvas, x: number, y: number, p: JPaint) {
     this.prep(p, false);
@@ -2176,7 +2176,7 @@ export const canvasMethods: NativeSpec["methods"] = {
     pointPath(this.ctx, x, y, p);
     this.ctx.fill();
   },
-  "drawPoints([FLandroid/graphics/Paint;)V": function (this: JCanvas, pts: Float32Array, p: JPaint) { drawPoints(this, pts, 0, pts.length, p); },
+  "drawPoints([FLandroid/graphics/Paint;)V": function (this: JCanvas, pts: Float32Array, p: JPaint) { drawPoints(this, pts, 0, pts?.length ?? 0, p); },
   "drawPoints([FIILandroid/graphics/Paint;)V": function (this: JCanvas, pts: Float32Array, off: number, n: number, p: JPaint) { drawPoints(this, pts, off, n, p); },
   "drawPath(Landroid/graphics/Path;Landroid/graphics/Paint;)V": function (this: JCanvas, path: JPath, p: JPaint) {
     if (tryBitmapPath(this, p, path)) return;
