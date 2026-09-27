@@ -537,6 +537,13 @@ const noEglContext = new JEGLContext(), noEglSurface = new JEGLSurface();
 const egl10Display = new JEGL10Display(), noEglDisplay = new JEGL10Display();
 const EGL_BAD_DISPLAY = 0x3008;
 const egl10DisplayValid = (display: unknown) => display === egl10Display;
+/** the one config, as both eglGetConfigs and a matching eglChooseConfig report it */
+function egl10Configs(display: unknown, configs: unknown[] | null, n: number, num: Int32Array | null): number {
+  if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
+  if (configs && n > 0) configs[0] = theConfig;
+  if (num) num[0] = 1;
+  return 1;
+}
 const eglContexts = new WeakMap<EglContext, JEGLContext>();
 const surfaceOf = (win: unknown): GlSurface | null =>
   win instanceof JSurface ? win.surf : win instanceof JSurfaceTexture ? (win.released ? null : win.surface) : win instanceof JSurfaceHolder ? win.surface : win instanceof JView ? getHolder(win).surface : null;
@@ -554,12 +561,7 @@ rt.register({
   },
   methods: {
     "eglChooseConfig(Ljavax/microedition/khronos/egl/EGLDisplay;[I[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z":
-      (display: unknown, attrs: Int32Array, configs: unknown[] | null, num: number, numConfig: Int32Array) => {
-        if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
-        if (configs && num > 0) configs[0] = theConfig;
-        if (numConfig) numConfig[0] = 1;
-        return 1;
-      },
+      (display: unknown, _attrs: Int32Array, configs: unknown[] | null, n: number, num: Int32Array | null) => egl10Configs(display, configs, n, num),
     "eglGetConfigAttrib(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z":
       (display: unknown, config: unknown, attr: number, out: Int32Array) => {
         if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
@@ -567,13 +569,7 @@ rt.register({
         return 1;
       },
     "eglGetError()I": takeEglError,
-    "eglGetConfigs(Ljavax/microedition/khronos/egl/EGLDisplay;[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z":
-      (display: unknown, configs: unknown[] | null, n: number, num: Int32Array | null) => {
-        if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
-        if (configs && n > 0) configs[0] = theConfig;
-        if (num) num[0] = 1;
-        return 1;
-      },
+    "eglGetConfigs(Ljavax/microedition/khronos/egl/EGLDisplay;[Ljavax/microedition/khronos/egl/EGLConfig;I[I)Z": egl10Configs,
     "eglGetDisplay(Ljava/lang/Object;)Ljavax/microedition/khronos/egl/EGLDisplay;": (nativeDisplay: unknown) =>
       nativeDisplay == null ? egl10Display : eglFailure(EGL_BAD_DISPLAY, noEglDisplay),
     "eglInitialize(Ljavax/microedition/khronos/egl/EGLDisplay;[I)Z": (display: unknown, v: Int32Array | null) => {

@@ -460,7 +460,7 @@ export function libcInit(): void {
     iscntrl: (_c, a) => (ctypeBits(a.i() & 255) & _C) ? 1 : 0,
 
     // ── wide chars (wchar_t is 32-bit)
-    wcslen: (_c, a) => { const p = a.p(); let n = 0; while (mem.ld32(p + n * 4)) n++; return n; },
+    wcslen: (_c, a) => wlen(a.p()),
     wmemchr: (_c, a) => { const p = a.p(), c = a.i(), n = a.u(); for (let i = 0; i < n; i++) if (mem.ld32(p + i * 4) === c) return ptr(p + i * 4); return 0; },
     wmemcmp: (_c, a) => { const x = a.p(), y = a.p(), n = a.u(); for (let i = 0; i < n; i++) { const d = mem.ld32(x + i * 4) - mem.ld32(y + i * 4); if (d) return d < 0 ? -1 : 1; } return 0; },
     wmemcpy: (_c, a) => { const d = a.p(), s = a.p(), n = a.u(); mem.memmove(d, s, n * 4); return ARG0; },

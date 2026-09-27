@@ -431,15 +431,10 @@ export function jniInit(): void {
       if (mode !== 2) copyIn(pin.type, pin.arr, p, 0, pin.arr.length);
       if (mode !== 1) { pinned.delete(p); mem.free(p); }
     });
-    def(198 + k, `Get${P}ArrayRegion`, (cpu, a) => {
+    for (const [slot, kind, copy] of [[198, "Get", copyOut], [206, "Set", copyIn]] as const) def(slot + k, `${kind}${P}ArrayRegion`, (cpu, a) => {
       a.p(); const arr = deref(a.p()) as any; const st = a.i(), n = a.i(), buf = a.p();
       if (!arr || st < 0 || st + n > arr.length) { pend(cpu, throwable("java/lang/ArrayIndexOutOfBoundsException", `${st}+${n}`)); return; }
-      copyOut(D, arr, buf, st, n);
-    });
-    def(206 + k, `Set${P}ArrayRegion`, (cpu, a) => {
-      a.p(); const arr = deref(a.p()) as any; const st = a.i(), n = a.i(), buf = a.p();
-      if (!arr || st < 0 || st + n > arr.length) { pend(cpu, throwable("java/lang/ArrayIndexOutOfBoundsException", `${st}+${n}`)); return; }
-      copyIn(D, arr, buf, st, n);
+      copy(D, arr, buf, st, n);
     });
   }
   def(222, "GetPrimitiveArrayCritical", (_c, a) => { a.p(); const arr = deref(a.p()) as any; const isCopy = a.p(); return arr ? pin(arr, clsName(arr)[1], isCopy) : 0; });
@@ -495,12 +490,13 @@ export function jniInit(): void {
     stp(envTable + i * PTR, defineHost("JNI:" + name, wrapped));
   }
   const vmTable = mem.hostAlloc(8 * PTR);
+  const attach: HostFn = (cpu, a) => { a.p(); stp(a.p(), envFor(cpu)); return 0; };
   const vmFns: [number, string, HostFn][] = [
     [3, "DestroyJavaVM", () => 0],
-    [4, "AttachCurrentThread", (cpu, a) => { a.p(); stp(a.p(), envFor(cpu)); return 0; }],
+    [4, "AttachCurrentThread", attach],
     [5, "DetachCurrentThread", () => 0],
-    [6, "GetEnv", (cpu, a) => { a.p(); stp(a.p(), envFor(cpu)); return 0; }],
-    [7, "AttachCurrentThreadAsDaemon", (cpu, a) => { a.p(); stp(a.p(), envFor(cpu)); return 0; }],
+    [6, "GetEnv", attach],
+    [7, "AttachCurrentThreadAsDaemon", attach],
   ];
   for (const [i, name, fn] of vmFns) stp(vmTable + i * PTR, defineHost("JavaVM:" + name, (cpu, a) => { cur = cpu; return fn(cpu, a); }));
   javaVM.addr = mem.hostAlloc(8);
@@ -518,15 +514,12 @@ function registerNative(info: ClassInfo, name: string, sig: string, fn: number):
   const critical = isStatic && methodAnnotations(info, name, sig).some(a => a.type === "dalvik/annotation/optimization/CriticalNative");
   const rec: Registered = { info, cls: info.name, name, sig, fn, isStatic, critical, params, ret, label: info.name.split("/").pop() + "." + name };
   registered.push(rec);
-  (info.owner ?? rt).registerJni(info.name, name + sig, function (this: unknown, ...args: unknown[]) {
-    return callGuestNative(cpuFor(curThread), rec, this, args);
-  } as (...a: never[]) => unknown);
+  const entry = function (this: unknown, ...args: unknown[]) { return callGuestNative(cpuFor(curThread), rec, this, args); };
+  (info.owner ?? rt).registerJni(info.name, name + sig, entry as (...a: never[]) => unknown);
   // the compiled stub memoised a miss before JNI_OnLoad ran: re-point it (see compiler emitNativeStub)
   const mangled = mangleMethod(name, sig);
   const target = isStatic ? info.ctor : info.ctor.prototype;
-  if (target && Object.prototype.hasOwnProperty.call(target, mangled)) {
-    target[mangled] = function (this: unknown, ...args: unknown[]) { return callGuestNative(cpuFor(curThread), rec, this, args); };
-  }
+  if (target && Object.prototype.hasOwnProperty.call(target, mangled)) target[mangled] = entry;
 }
 
 /** natives with no RegisterNatives entry resolve by the JNI short-name export `Java_pkg_Cls_method` */
