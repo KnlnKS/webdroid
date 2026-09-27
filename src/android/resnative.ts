@@ -8,6 +8,7 @@ import { Resources, currentResources, setResourceLocale, setResourceNight, setRe
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV, type JColorStateList } from "./drawable";
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
 import { TV, parseAXML, parseAXMLDoc, xmlAttrString, type XmlNode, type XmlAttr } from "./axml";
+import { sizeClass } from "./arsc";
 import { javaFormat, defineException, vcall, after } from "../jvm/natives/jlang";
 import { type JLocale, localeTag, localeDirection, usLocale } from "../jvm/natives/jvalues";
 import { jarray } from "../jvm/abi";
@@ -73,7 +74,7 @@ export class JConfiguration extends JObj {
   locale: JLocale | null = null;
   locales = emptyLocaleList;
   mcc = 0; mnc = 0; touchscreen = 3; keyboard = 1; keyboardHidden = 2; navigation = 1;
-  navigationHidden = 2; hardKeyboardHidden = 2; screenLayout = 0x10 | 2;
+  navigationHidden = 2; hardKeyboardHidden = 2; screenLayout = 0x10 | sizeClass(device.smallestWidthDp); // SCREENLAYOUT_LONG_NO
   fontWeightAdjustment = 0;  // accessibility "bold text" is off, so no weight is added
   colorMode = 1 | 4;         // WIDE_COLOR_GAMUT_NO | HDR_NO: a plain sRGB canvas
 }
@@ -116,6 +117,7 @@ rt.register({
     },
     "getLayoutDirection()I": function (this: JConfiguration) { return (this.screenLayout & 0xc0) === 0x80 ? 1 : 0; },
     "isNightModeActive()Z": function (this: JConfiguration) { return (this.uiMode & 0x30) === 0x20 ? 1 : 0; },
+    "isLayoutSizeAtLeast(I)Z": function (this: JConfiguration, size: number) { const cur = this.screenLayout & 15; return cur && cur >= size ? 1 : 0; },
     "isScreenWideColorGamut()Z": function (this: JConfiguration) { return (this.colorMode & 3) === 2 ? 1 : 0; },
     "isScreenHdr()Z": function (this: JConfiguration) { return (this.colorMode & 12) === 8 ? 1 : 0; },
   },
@@ -317,6 +319,12 @@ function resourceText(res: Resources, id: number): unknown {
   return value.t === TV.STRING && pool ? annotatedResource(pool, value.d) : rvString(res, value);
 }
 const getColor = function (this: JResources, id: number) { return rvColor(this.host, this.host.ref(id), 0); };
+/** The file the table picks for `density` (0 is the device's own). The bitmap keeps its bucket's
+ *  density, where AOSP would report a bucket matching the request at the screen's. */
+function drawableForDensity(this: JResources, id: number, density: number, theme: JTheme | null = null) {
+  const file = density ? this.host.pathOf(id, 0, undefined, density) : null;
+  return file && file.arsc === this.host.arsc ? loadDrawableRV(this.host, { t: TV.STRING, d: 0, s: file.path }, theme) : loadDrawable(this.host, id, theme);
+}
 const resMethods: NativeSpec["methods"] = {
   "getString(I)Ljava/lang/String;": getString,
   "getString(I[Ljava/lang/Object;)Ljava/lang/String;": function (this: JResources, id: number, args: unknown[]) {
@@ -365,6 +373,13 @@ const resMethods: NativeSpec["methods"] = {
     function (this: JResources, id: number, t: JTheme | null) {
       return loadDrawable(this.host, id, t);
     },
+  "getDrawableForDensity(II)Landroid/graphics/drawable/Drawable;": drawableForDensity,
+  "getDrawableForDensity(IILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;": drawableForDensity,
+  "getFloat(I)F": function (this: JResources, id: number) {
+    const v = this.host.ref(id);
+    if (v.t !== TV.FLOAT) throw notFound(`Float (type 0x${v.t.toString(16)})`, id);
+    return v.d;
+  },
   "getStringArray(I)[Ljava/lang/String;": function (this: JResources, id: number) { return jarray(stringsOf(this.host, id), "Ljava/lang/String;"); },
   "getTextArray(I)[Ljava/lang/CharSequence;": function (this: JResources, id: number) { return jarray(stringsOf(this.host, id), "Ljava/lang/CharSequence;"); },
   "getIntArray(I)[I": function (this: JResources, id: number) {

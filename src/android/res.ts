@@ -159,11 +159,11 @@ export class Resources {
 
   /** the archive path a file resource names, the package that owns it, and the id the
    *  reference chain ended on — everything but the bytes, which cost an inflate */
-  pathOf(resId: number, depth = 0, selected?: { density: number }): { path: string; id: number; arsc: Arsc } | null {
+  pathOf(resId: number, depth = 0, selected?: { density: number }, density?: number): { path: string; id: number; arsc: Arsc } | null {
     const a = this.tbl(resId);
-    const e = a?.entry(resId, selected);
+    const e = a?.entry(resId, selected, density);
     if (!e?.value) return null;
-    if (e.value.type === TV.REFERENCE && e.value.data && depth < 8) return this.pathOf(e.value.data, depth + 1, selected);
+    if (e.value.type === TV.REFERENCE && e.value.data && depth < 8) return this.pathOf(e.value.data, depth + 1, selected, density);
     if (e.value.type !== TV.STRING) return null;
     return { path: a!.values.get(e.value.data), id: resId, arsc: a! };
   }

@@ -46,7 +46,7 @@ type Remap = ((i: number) => number) | null;
 type Files = (path: string) => Uint8Array | null;
 
 /** AOSP's screen size class for a smallest-width in dp */
-const sizeClass = (swdp: number): number => swdp >= 720 ? 4 : swdp >= 480 ? 3 : swdp >= 320 ? 2 : 1;
+export const sizeClass = (swdp: number): number => swdp >= 720 ? 4 : swdp >= 480 ? 3 : swdp >= 320 ? 2 : 1;
 
 export class Arsc {
   values!: StringPool;
@@ -262,7 +262,7 @@ export class Arsc {
   }
 
   /** best-config entry for resId, or null */
-  entry(resId: number, selected?: { density: number }): ResEntry | null {
+  entry(resId: number, selected?: { density: number }, density = this.device.density): ResEntry | null {
     const pkgId = resId >>> 24;
     const typeId = (resId >> 16) & 0xff;
     const entryIdx = resId & 0xffff;
@@ -272,7 +272,7 @@ export class Arsc {
     for (const ch of chunks) {
       const e = ch.entries.get(entryIdx);
       if (!e) continue;
-      const s = this.configScore(ch.config);
+      const s = this.configScore(ch.config, density);
       if (s > bestScore) { bestScore = s; best = e; if (selected) selected.density = ch.config.density; }
     }
     return best;
@@ -295,7 +295,7 @@ export class Arsc {
       || c.size > d.size || (c.dir !== 0 && c.dir !== d.dir) || (c.uiType !== 0 && c.uiType !== d.uiType);
   }
 
-  private configScore(c: Config): number {
+  private configScore(c: Config, density: number): number {
     const d = this.device;
     if (this.skipCurrent(c)) return -1;
     if (c.night !== 0 && c.night !== (d.night ? 1 : -1)) return -1;
@@ -311,7 +311,7 @@ export class Arsc {
     if (c.uiType) s += 1 << 9;
     if (c.density) {
       // prefer closest density ≥ device, then closest below
-      const diff = c.density === d.density ? 4096 : c.density > d.density ? 2048 - (c.density - d.density) / 8 : 1024 - (d.density - c.density) / 8;
+      const diff = c.density === density ? 4096 : c.density > density ? 2048 - (c.density - density) / 8 : 1024 - (density - c.density) / 8;
       s += (1 << 11) + diff / 4096 * 1023;
     }
     if (c.sdk) s += c.sdk;
