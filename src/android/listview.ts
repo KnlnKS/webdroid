@@ -382,12 +382,13 @@ const M_perfLongPress = mangleMethod("performLongPress", "(Landroid/view/View;IJ
 const M_setItemChecked = mangleMethod("setItemChecked", "(IZ)V");
 const M_setSelFromTop = mangleMethod("setSelectionFromTop", "(II)V");
 
-/** adapter row id for a list position (header offset applied); -1 when the position is not a row */
-const rowId = driven(function* rowId(list: JListView, pos: number): Gen<bigint> {
-  const adjusted = pos - list.headers.length;
-  if (!list.adapter || adjusted < 0 || adjusted >= list.itemViews.length) return -1n;
-  try { return (yield vcall(list.adapter, "getItemId", "(I)J", adjusted)) as bigint; } catch { return -1n; }
-});
+const INVALID_POSITION = -1;
+const INVALID_ROW_ID = -9223372036854775808n; // AdapterView.INVALID_ROW_ID = Long.MIN_VALUE
+/** AdapterView.getItemAtPosition/getItemIdAtPosition: asks the virtual getAdapter(), whose
+ *  header wrapper maps positions, whether or not the row has a view */
+const adapterAt = (list: JListView, pos: number, name: string, desc: string, none: unknown) =>
+  after(vcall(list, "getAdapter", "()Landroid/widget/Adapter;"), (a) => a && pos >= 0 ? vcall(a, name, desc, pos) : none);
+const rowId = (list: JListView, pos: number) => adapterAt(list, pos, "getItemId", "(I)J", INVALID_ROW_ID);
 
 /** The only place a modal-choice list talks to its MultiChoiceModeListener. Called from
  *  setItemChecked, so every route that changes checked state (click, long press, app call)
@@ -524,13 +525,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     return this.choiceMode === 1 && this.checked.size ? [...this.checked][0] : -1;
   },
   "getCount()I": function (this: JListView) { return this.totalCount(); },
-  "getItemAtPosition(I)Ljava/lang/Object;": driven(function* (this: JListView, pos: number): Gen {
-    const adjusted = pos - this.headers.length;
-    if (this.adapter && adjusted >= 0 && adjusted < this.itemViews.length) {
-      return yield vcall(this.adapter, "getItem", "(I)Ljava/lang/Object;", adjusted);
-    }
-    return null;
-  }),
+  "getItemAtPosition(I)Ljava/lang/Object;": function (this: JListView, pos: number) { return adapterAt(this, pos, "getItem", "(I)Ljava/lang/Object;", null); },
   "getItemIdAtPosition(I)J": function (this: JListView, pos: number) { return rowId(this, pos); },
   "getFirstVisiblePosition()I": function (this: JListView) { return this.visibleRange()[0]; },
   "getLastVisiblePosition()I": function (this: JListView) { return this.visibleRange()[1]; },
@@ -919,8 +914,6 @@ const showSpinnerPopup = driven(function* showSpinnerPopup(sp: JSpinner): Gen {
 //
 // Our Spinner is registered below over the ListView row plumbing (it descends from AbsListView
 // rather than from AbsSpinner), so this layer is spread into that spec rather than inherited.
-const INVALID_POSITION = -1;
-const INVALID_ROW_ID = -9223372036854775808n; // AdapterView.INVALID_ROW_ID = Long.MIN_VALUE
 /** `selNotified` is AdapterView's mOldSelectedPosition: the position the listener last heard. */
 type JSelSpinner = JSpinner & { selNotified?: number; selNotifyPosted?: boolean };
 
