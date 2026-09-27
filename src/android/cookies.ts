@@ -11,7 +11,9 @@ export let webCookies = (pkg: string): Promise<WebCookies> => {
   if (!store) { store = import("../shell/webcookies").then(({ WebCookies }) => new WebCookies(pkg)); defaults.set(pkg, store); }
   return store;
 };
-export function useWebCookies(get: typeof webCookies) { webCookies = get; }
+// a child process gets the broker's Promise from the parent realm, which a driven native
+// would not recognise as one to wait for
+export function useWebCookies(get: typeof webCookies) { webCookies = (pkg) => Promise.resolve(get(pkg)); }
 const store = () => webCookies(appHost?.pkg ?? "");
 const complete = (callback: unknown, value: boolean) => {
   if (callback) void onMain(() => vcall(callback, "onReceiveValue", "(Ljava/lang/Object;)V", box(JBool, value ? 1 : 0))).catch(reportUncaught);
