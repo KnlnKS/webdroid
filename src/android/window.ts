@@ -69,8 +69,6 @@ const transitionMethods = Object.fromEntries(([["Enter"], ["Exit"], ["Return", "
       return name in t ? t[name] : fallback ? t[fallback] ?? null : null;
     }],
   ]));
-export const APPEARANCE_LIGHT_STATUS_BARS = 8;
-export const APPEARANCE_LIGHT_NAVIGATION_BARS = 16;
 export function applyWindowTheme(window: JWindow, theme: JTheme, statusDefault = -16777216) {
   window.statusBarColor ??= rvColor(theme.res, theme.lookup(AID("statusBarColor")), statusDefault);
   window.navBarColor ??= rvColor(theme.res, theme.lookup(AID("navigationBarColor")), -16777216);
@@ -229,7 +227,7 @@ rt.register({
 // API-30 window state, shared by decor's inset consumption and the shell's bar rendering.
 rt.register({
   name: "android/view/WindowInsetsController", ctor: class extends JObj {},
-  statics: { APPEARANCE_LOW_PROFILE_BARS: 4, APPEARANCE_LIGHT_STATUS_BARS, APPEARANCE_LIGHT_NAVIGATION_BARS,
+  statics: { APPEARANCE_LOW_PROFILE_BARS: 4, APPEARANCE_LIGHT_STATUS_BARS: 8, APPEARANCE_LIGHT_NAVIGATION_BARS: 16,
     BEHAVIOR_DEFAULT: 1, BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE: 2 },
 });
 rt.markers("android/view/WindowInsetsController$OnControllableInsetsChangedListener");

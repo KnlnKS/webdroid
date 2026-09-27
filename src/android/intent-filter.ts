@@ -36,7 +36,7 @@ function simpleGlob(pattern: string, text: string): boolean {
   return p === pattern.length && t === text.length || pattern.slice(p) === ".*";
 }
 
-export class JPatternMatcher extends JObj {
+class JPatternMatcher extends JObj {
   path = ""; type = 0; parsed: Int32Array | null = null;
   matches(text: string): boolean {
     switch (this.type) {
@@ -48,12 +48,12 @@ export class JPatternMatcher extends JObj {
     }
   }
 }
-export async function readPattern(parcel: JParcel): Promise<JPatternMatcher> {
+async function readPattern(parcel: JParcel): Promise<JPatternMatcher> {
   rt.link("android/os/PatternMatcher");
   const pattern = new JPatternMatcher(); pattern.path = readString(parcel)!; pattern.type = readInt(parcel);
   pattern.parsed = await vcall(parcel, "createIntArray", "()[I"); return pattern;
 }
-export async function writePattern(pattern: JPatternMatcher, parcel: JParcel): Promise<void> {
+async function writePattern(pattern: JPatternMatcher, parcel: JParcel): Promise<void> {
   writeString(parcel, pattern.path); writeInt(parcel, pattern.type);
   await vcall(parcel, "writeIntArray", "([I)V", pattern.parsed);
 }
@@ -67,7 +67,7 @@ statics: { get CREATOR() { return parcelCreator("android/os/PatternMatcher", rea
   "getType()I": function (this: JPatternMatcher) { return this.type; },
   "match(Ljava/lang/String;)Z": function (this: JPatternMatcher, text: string | null) { return text === null ? 0 : +this.matches(text); },
 } });
-export function matchAuthority(authority: string | null, wantedHost: string, wantedPort: number | null): number {
+function matchAuthority(authority: string | null, wantedHost: string, wantedPort: number | null): number {
   if (authority === null) return -2;
   authority = authority.slice(authority.lastIndexOf("@") + 1);
   const colon = authority.indexOf(":", authority.startsWith("[") ? authority.indexOf("]") : 0);
@@ -123,7 +123,7 @@ export function matchesIntentFilter(filter: XmlNode, intent: JIntent, defaultOnl
   });
 }
 
-export class JIntentFilter extends JObj {
+class JIntentFilter extends JObj {
   actions: string[] = []; schemes: string[] = []; types: string[] = []; categories: string[] = [];
   authorities: { host: string; port: number | null }[] = [];
   paths: JPatternMatcher[] = []; ssp: JPatternMatcher[] = [];

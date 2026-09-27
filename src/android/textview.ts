@@ -181,7 +181,7 @@ const applyFontFamily = driven(function* applyFontFamily(tv: JTextView, res: Res
   const fam = rvString(res, v);
   if (fam) tv.paintT.tf = typefaceFor(fam);
 });
-export const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: number, defStyleRes: number = 0): Gen {
+const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet | null, defStyleAttr: number, defStyleRes: number = 0): Gen {
   const res = tv.jres;
   if (!res) return;
   const ids = [

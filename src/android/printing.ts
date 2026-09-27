@@ -1,7 +1,7 @@
 import { JObj, rt } from "../jvm/runtime";
 import type { JWebView } from "./webkit";
 
-export class JPrintDocumentAdapter extends JObj {
+class JPrintDocumentAdapter extends JObj {
   webView: JWebView | null = null;
   name = "";
 }

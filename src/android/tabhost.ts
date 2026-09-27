@@ -21,7 +21,7 @@ class JTabSpec extends JObj {
   indicator: (() => Promise<JView>) | null = null;
   content: { get: () => Promise<JView>; closed: () => Promise<void> } | null = null;
 }
-export class JTabHost extends JFrameLayout {
+class JTabHost extends JFrameLayout {
   specs: JTabSpec[] = [];
   tabWidget: JTabWidget | null = null;
   tabContent: JViewGroup | null = null;
@@ -29,7 +29,7 @@ export class JTabHost extends JFrameLayout {
   currentView: JView | null = null;
   listener: unknown = null;
 }
-export class JTabWidget extends JLinearLayout {
+class JTabWidget extends JLinearLayout {
   host: JTabHost | null = null;
   selectedTab = -1;
   stripEnabled = true;

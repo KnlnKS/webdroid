@@ -80,7 +80,7 @@ function nativeOnDescInv(this: JViewGroup, _child: JView, target: JView) { inval
 function nativeRequestLayout(this: JView) { requestLayout(this); }
 /** AOSP's addView and removeView call the parent's requestLayout() virtually: an override
  *  (RecyclerView defers while it binds or lays out) decides first */
-export function requestLayoutVirtual(v: JView) {
+function requestLayoutVirtual(v: JView) {
   const f = jmethod(v, M_requestLayout);
   if (f && f !== nativeRequestLayout) void guardApply(f as JMethod, v);
   else requestLayout(v);
@@ -171,7 +171,7 @@ export function requestLayoutAll() {
  * could vanish. Requests are collected only during layout (isInLayout): one made during measure
  * is served by the same pass's layout, which clears the requester's flag.
  */
-export const layoutPass = { active: false, requesters: [] as JView[] };
+const layoutPass = { active: false, requesters: [] as JView[] };
 /** ViewRootImpl.performLayout: a window root's layout, with in-layout requests collected */
 export const layoutRoot = driven(function* layoutRoot(v: JView, l: number, t: number, r: number, b: number): Gen {
   layoutPass.active = true;
