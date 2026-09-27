@@ -431,6 +431,14 @@ export function libcInit(): void {
     strndup: (_c, a) => { const s = a.p(), n = a.u(); let l = 0; while (l < n && mem.u8[s + l]) l++; const d = mem.malloc(l + 1); mem.memmove(d, s, l); mem.u8[d + l] = 0; return d; },
     strtok: (cpu, a) => ptr(strtok(cpu, a.p(), a.p())),
     strtok_r: (_c, a) => { const s = a.p(), d = a.p(), save = a.p(); return ptr(strtokR(s, d, save)); },
+    strsep: (_c, a) => {
+      const sp = a.p(), s = ldp(sp), set = byteSet(a.p());
+      if (!s) return 0;
+      let p = s;
+      while (mem.u8[p] && !set[mem.u8[p]]) p++;
+      if (mem.u8[p]) { mem.st8(p, 0); stp(sp, p + 1); } else stp(sp, 0);
+      return ptr(s);
+    },
     strerror: (_c, a) => { mem.putCstr(strerrorBuf, ERRSTR[a.i()] ?? `Unknown error ${a.i()}`, 64); return strerrorBuf; },
     strerror_r: (_c, a) => { const e = a.i(), b = a.p(), n = a.u(); mem.putCstr(b, ERRSTR[e] ?? `Unknown error ${e}`, n); return 0; },
     // long is 64-bit on LP64
