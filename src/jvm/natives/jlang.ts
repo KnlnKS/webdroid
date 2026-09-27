@@ -1584,9 +1584,10 @@ Object.assign(mm, {
   "static multiplyHigh(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, (a * b) >> 64n),
   "static multiplyFull(II)J": (a: number, b: number) => BigInt(a) * BigInt(b),
 });
-const floorDivJ = (a: bigint, b: bigint) => { if (b === 0n) overflow("/ by zero"); const q = a / b; return a % b !== 0n && (a < 0n) !== (b < 0n) ? q - 1n : q; };
+const divideByZero = (): never => { throw rt.mkThrowable("java/lang/ArithmeticException", "/ by zero"); };
+const floorDivJ = (a: bigint, b: bigint) => { if (b === 0n) divideByZero(); const q = a / b; return a % b !== 0n && (a < 0n) !== (b < 0n) ? q - 1n : q; };
 const floorModJ = (a: bigint, b: bigint) => a - floorDivJ(a, b) * b;
-const floorDivI = (a: number, b: number) => { if (!b) throw rt.mkThrowable("java/lang/ArithmeticException", "/ by zero"); return Math.floor(a / b) | 0; };
+const floorDivI = (a: number, b: number) => { if (!b) divideByZero(); return Math.floor(a / b) | 0; };
 const floorModI = (a: number, b: number) => (a - floorDivI(a, b) * b) | 0;
 Object.assign(mm, {
   "static floorDiv(II)I": floorDivI, "static floorMod(II)I": floorModI,
