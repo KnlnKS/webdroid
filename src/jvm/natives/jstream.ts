@@ -358,10 +358,6 @@ function streamMethods(k: StreamKind): Methods {
     }),
     [`findFirst()${opt}`]: function (this: Stage) { return this.a.length ? mkOptional(this.a[0] ?? npe()) : mkOptional(); },
     [`findAny()${opt}`]: function (this: Stage) { return this.a.length ? mkOptional(this.a[0] ?? npe()) : mkOptional(); },
-    [`spliterator()Ljava/util/Spliterator${prim ? "$Of" + P : ""};`]: function (this: Stage) {
-      rt.link(`java/util/Spliterator${prim ? "$Of" + P : ""}`);
-      return Object.assign(new (spliterators.get(P)!)(), { a: this.a.slice() });
-    },
     "isParallel()Z": () => 0,
     "close()V": () => {},
   };
@@ -373,6 +369,11 @@ function streamMethods(k: StreamKind): Methods {
   };
   m[`iterator()${iterator}`] = iterate;
   m["iterator()Ljava/util/Iterator;"] = iterate;
+  // BaseStream's erased signature answers too, as a bridge would
+  m[`spliterator()Ljava/util/Spliterator${prim ? "$Of" + P : ""};`] = m["spliterator()Ljava/util/Spliterator;"] = function (this: Stage) {
+    rt.link(`java/util/Spliterator${prim ? "$Of" + P : ""}`);
+    return Object.assign(new (spliterators.get(P)!)(), { a: this.a.slice() });
+  };
   for (const name of ["parallel", "sequential", "unordered"]) m[`${name}()${self}`] = m[`${name}()L${S}BaseStream;`] = function (this: Stage) { return this; };
   m[`onClose(Ljava/lang/Runnable;)${self}`] = m[`onClose(Ljava/lang/Runnable;)L${S}BaseStream;`] = function (this: Stage) { return this; };
   // conversions into the other element kinds
@@ -505,6 +506,7 @@ rt.register({
   name: S + "StreamSupport", ctor: class extends JObj {},
   methods: {
     [`static stream(Ljava/util/Spliterator;Z)L${S}Stream;`]: (sp: JSpliterator) => mkStream(sp.a.slice()),
+    [`static stream(${fnDesc("Supplier")}IZ)L${S}Stream;`]: (s: unknown) => after(invoke("Supplier", s), (sp: JSpliterator) => mkStream(sp.a.slice())),
     ...Object.fromEntries(PRIMS.map(([P]) => [`static ${P.toLowerCase()}Stream(Ljava/util/Spliterator$Of${P};Z)L${S}${P}Stream;`,
       (sp: JSpliterator) => kindOf(P).mk(sp.a.slice())])),
   },

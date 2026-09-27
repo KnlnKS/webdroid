@@ -1,7 +1,7 @@
 // java.util.regex over JS RegExp (jlang translates the Java syntax).
 
 import { rt, JObj } from "../runtime";
-import { javaMatches, javaRegex, jToString, type JSB } from "./jlang";
+import { javaMatches, javaRegex, jToString, defineException, type JSB, type JThrowable } from "./jlang";
 import { jarray } from "../abi";
 
 class JPattern extends JObj { src = ""; flags = 0; }
@@ -126,12 +126,23 @@ rt.register({
       return m;
     },
     "pattern()Ljava/lang/String;": function (this: JPattern) { return this.src; },
+    "flags()I": function (this: JPattern) { return this.flags; },
     "toString()Ljava/lang/String;": function (this: JPattern) { return this.src; },
     "split(Ljava/lang/CharSequence;)[Ljava/lang/String;": function (this: JPattern, s: unknown) { return splitPattern(this, s, 0); },
     "split(Ljava/lang/CharSequence;I)[Ljava/lang/String;": function (this: JPattern, s: unknown, limit: number) { return splitPattern(this, s, limit); },
   },
 });
 rt.markers("java/util/regex/MatchResult");
+type SyntaxError = JThrowable & { desc: string; regex: string | null; index: number };
+defineException("java/util/regex/PatternSyntaxException", "java/lang/IllegalArgumentException", [], {
+  "<init>(Ljava/lang/String;Ljava/lang/String;I)V": function (this: SyntaxError, desc: string, regex: string | null, index: number) {
+    Object.assign(this, { desc, regex, index });
+    this.msg = desc + (index >= 0 ? " near index " + index : "") + "\n" + regex + (index >= 0 && regex != null && index < regex.length ? "\n" + " ".repeat(index) + "^" : "");
+  },
+  "getDescription()Ljava/lang/String;": function (this: SyntaxError) { return this.desc; },
+  "getPattern()Ljava/lang/String;": function (this: SyntaxError) { return this.regex; },
+  "getIndex()I": function (this: SyntaxError) { return this.index; },
+});
 rt.register({
   name: "java/util/regex/Matcher", ctor: JMatcher, ifaces: ["java/util/regex/MatchResult"],
   methods: {

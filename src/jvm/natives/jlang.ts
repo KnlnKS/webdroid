@@ -574,12 +574,12 @@ export function reportUncaught(e: unknown) {
 
 const excCtors = new Map<string, new () => JThrowable>([["java/lang/Throwable", JThrowable]]);
 /** Register a throwable class under an already-registered parent (native here or elsewhere). */
-export function defineException(name: string, sup: string, constructors: string[] = []) {
+export function defineException(name: string, sup: string, constructors: string[] = [], extra: NativeSpec["methods"] = {}) {
   const parent = excCtors.get(sup) ?? (rt.link(sup).ctor as new () => JThrowable);
   const c = class extends parent {};
   excCtors.set(name, c);
   const methods = Object.fromEntries(constructors.map((desc) => ["<init>" + desc, throwableConstructors["<init>" + desc]]));
-  rt.register({ name, sup, ctor: c, methods });
+  rt.register({ name, sup, ctor: c, methods: { ...methods, ...extra } });
 }
 const lang = (n: string) => (n.includes("/") ? n : "java/lang/" + n);
 for (const [sup, names] of [

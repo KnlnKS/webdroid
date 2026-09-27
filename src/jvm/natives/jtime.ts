@@ -9,23 +9,22 @@ import { jarray } from "../abi";
 
 export class JDate extends JObj { t = Date.now(); }
 function utilDateCmp(this: JDate, o: JDate) { return this.t < o.t ? -1 : this.t > o.t ? 1 : 0; }
-/** the deprecated field constructors and setters read the wall clock in the default zone */
+/** the deprecated field constructors, getters and setters work on the default zone's wall clock */
+const defaultCalendar = (t: number) => { const c = calendarIn(null, null, JCalendar); c.setMs(t); return c; };
 function localDate(y: number, mo: number, d: number, h = 0, mi = 0, s = 0): number {
-  const w = new Date(0);
-  w.setFullYear(y + 1900, mo, d);
-  w.setHours(h, mi, s, 0);
-  return w.getTime();
+  const c = defaultCalendar(0), w = new Date(0);
+  w.setUTCFullYear(y + 1900, mo, d);
+  w.setUTCHours(h, mi, s, 0);
+  c.commit(w);
+  return c.ms;
 }
 function parseLegacy(s: string): number {
   const t = Date.parse(s);
   if (Number.isNaN(t)) throw rt.mkThrowable("java/lang/IllegalArgumentException", s);
   return t;
 }
-const DATE_FIELDS: [string, (d: Date) => number, (d: Date, v: number) => void][] = [
-  ["Year", (d) => d.getFullYear() - 1900, (d, v) => d.setFullYear(v + 1900)], ["Month", (d) => d.getMonth(), (d, v) => d.setMonth(v)],
-  ["Date", (d) => d.getDate(), (d, v) => d.setDate(v)], ["Hours", (d) => d.getHours(), (d, v) => d.setHours(v)],
-  ["Minutes", (d) => d.getMinutes(), (d, v) => d.setMinutes(v)], ["Seconds", (d) => d.getSeconds(), (d, v) => d.setSeconds(v)],
-];
+// [name, Calendar field, offset between the Date value and the Calendar one]
+const DATE_FIELDS: [string, number, number][] = [["Year", 1, -1900], ["Month", 2, 0], ["Date", 5, 0], ["Hours", 11, 0], ["Minutes", 12, 0], ["Seconds", 13, 0]];
 const mkUtilDate = (t: number) => { const d = new JDate(); d.t = t; return d; };
 rt.register({
   name: "java/util/Date", ctor: JDate,
@@ -47,7 +46,7 @@ rt.register({
     "static from(Ljava/time/Instant;)Ljava/util/Date;": (i: JInstant) => mkUtilDate(instantMs(i ?? npe("instant"))),
     "getTime()J": function (this: JDate) { return BigInt(Math.trunc(this.t)); },
     "setTime(J)V": function (this: JDate, t: bigint) { this.t = Number(t); },
-    "getTimezoneOffset()I": function (this: JDate) { return new Date(this.t).getTimezoneOffset(); },
+    "getTimezoneOffset()I": function (this: JDate) { return -zoneOffsetMs(localTz.id, this.t) / 60000; },
     "toInstant()Ljava/time/Instant;": function (this: JDate) { return instantOfMs(Math.trunc(this.t)); },
     "before(Ljava/util/Date;)Z": function (this: JDate, o: JDate) { return this.t < o.t ? 1 : 0; },
     "after(Ljava/util/Date;)Z": function (this: JDate, o: JDate) { return this.t > o.t ? 1 : 0; },
@@ -58,10 +57,10 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JDate) { return formatPattern("EEE MMM dd HH:mm:ss zzz yyyy", this.t, localTz.id, usLocale); },
     "toGMTString()Ljava/lang/String;": function (this: JDate) { return formatPattern("d MMM yyyy HH:mm:ss 'GMT'", this.t, "GMT", usLocale); },
     "toLocaleString()Ljava/lang/String;": function (this: JDate) { return formatPattern(localizedPattern("MEDIUM", "MEDIUM", tagOf(null)), this.t); },
-    "getDay()I": function (this: JDate) { return new Date(this.t).getDay(); },
-    ...Object.fromEntries(DATE_FIELDS.flatMap(([n, get, set]) => [
-      [`get${n}()I`, function (this: JDate) { return get(new Date(this.t)); }],
-      [`set${n}(I)V`, function (this: JDate, v: number) { const d = new Date(this.t); set(d, v); this.t = d.getTime(); }],
+    "getDay()I": function (this: JDate) { return defaultCalendar(this.t).get(7) - 1; },
+    ...Object.fromEntries(DATE_FIELDS.flatMap(([n, field, delta]) => [
+      [`get${n}()I`, function (this: JDate) { return defaultCalendar(this.t).get(field) + delta; }],
+      [`set${n}(I)V`, function (this: JDate, v: number) { const c = defaultCalendar(this.t); c.set(field, v - delta); this.t = c.ms; }],
     ])),
     "clone()Ljava/lang/Object;": function (this: JDate) { return mkUtilDate(this.t); },
   },
@@ -116,6 +115,17 @@ rt.register({
   statics: { SHORT: 0, LONG: 1 },
   methods: {
     "static getDefault()Ljava/util/TimeZone;": () => localTz,
+    // the default is one shared instance, so every getDefault() caller sees the change
+    "static setDefault(Ljava/util/TimeZone;)V": (t: JTimeZone | null) => { localTz.id = t?.id ?? hostZone; },
+    "static getAvailableIDs(I)[Ljava/lang/String;": (raw: number) =>
+      jarray(zoneIds.filter((id) => tzSeasons(timeZoneOf(id))[0] === raw), "Ljava/lang/String;"),
+    "getOffset(IIIIII)I": function (this: JTimeZone, era: number, y: number, mo: number, d: number, _dow: number, ms: number) {
+      const c = calendarIn(this, null, JCalendar), w = new Date(0);
+      w.setUTCFullYear(era ? y : 1 - y, mo, d);
+      w.setUTCMilliseconds(ms);
+      c.commit(w);
+      return tzOffset(this, c.ms);
+    },
     "static getTimeZone(Ljava/lang/String;)Ljava/util/TimeZone;": timeZoneOf,
     "static getTimeZone(Ljava/time/ZoneId;)Ljava/util/TimeZone;": (z: { id: string }) => timeZoneOf(z.id),
     "toZoneId()Ljava/time/ZoneId;": function (this: JTimeZone) { return zoneForId(this.id); },
@@ -715,11 +725,13 @@ function zoneOf(id: string): JZoneId {
   return z;
 }
 const sysZone = () => zoneOf(localTz.id);
+/** the host's own zone: the one the JS Date getters already answer for */
+const hostZone = localTz.id;
 const offsetFormats = new Map<string, Intl.DateTimeFormat>();
 /** the zone's offset in seconds at an epoch second */
 function offsetAt(z: JZoneId, s: number): number {
   if (z.fixed !== null) return z.fixed;
-  if (z.id === localTz.id) return -new Date(s * 1000).getTimezoneOffset() * 60;
+  if (z.id === hostZone) return -new Date(s * 1000).getTimezoneOffset() * 60;
   let f = offsetFormats.get(z.id);
   if (!f) offsetFormats.set(z.id, f = new Intl.DateTimeFormat("en-US", { timeZone: z.id, timeZoneName: "longOffset" }));
   const name = f.formatToParts(s * 1000).find((p) => p.type === "timeZoneName")?.value ?? "";
@@ -2085,7 +2097,8 @@ function formatParts(toks: Tok[], p: Parts, tag: string): string {
   }
 }
 
-interface ParseState { s: string; i: number; f: Map<string, number>; off?: number; zone?: JZoneId; ci: boolean; tag: string; sdf: boolean }
+/** century: SimpleDateFormat's two-digit-year window start (epoch ms); null is 80 years before now */
+interface ParseState { s: string; i: number; f: Map<string, number>; off?: number; zone?: JZoneId; ci: boolean; tag: string; sdf: boolean; century?: number | null }
 const isDigit = (c: number) => c >= 48 && c <= 57;
 function parseToks(toks: Tok[], st: ParseState): boolean {
   for (let k = 0; k < toks.length; k++) {
@@ -2121,7 +2134,7 @@ function parseToks(toks: Tok[], st: ParseState): boolean {
         let v = Number(st.s.slice(i, i + len));
         if (t.base !== undefined && len === 2) {
           if (t.base === SDF_CENTURY) {
-            const start = new Date().getFullYear() - 80;
+            const start = st.century != null ? new Date(st.century).getFullYear() : new Date().getFullYear() - 80;
             v += start - floorMod(start, 100);
             if (v < start) v += 100;
           } else v += t.base;
@@ -2495,8 +2508,9 @@ export function formatPattern(pattern: string, ms: number, zoneId = localTz.id, 
   return formatParts(sdfToks(pattern), { date: z.ldt.date, time: z.ldt.time, off: z.off, zone, inst: i }, tagOf(locale));
 }
 /** SimpleDateFormat.parse(text, pos): epoch millis, or null with the error index in `pos` */
-export function parsePattern(pattern: string, text: string, pos: { index: number; errorIndex: number }, zoneId = localTz.id, locale: JLocale | null = null): number | null {
-  const st: ParseState = { s: text, i: pos.index, f: new Map(), ci: true, tag: tagOf(locale), sdf: true };
+export function parsePattern(pattern: string, text: string, pos: { index: number; errorIndex: number }, zoneId = localTz.id, locale: JLocale | null = null,
+  century: number | null = null): number | null {
+  const st: ParseState = { s: text, i: pos.index, f: new Map(), ci: true, tag: tagOf(locale), sdf: true, century };
   if (!parseToks(sdfToks(pattern), st)) { pos.errorIndex = st.i; return null; }
   let p: Parts;
   try { p = resolveFields(st, [], null, true); } catch { pos.errorIndex = st.i; return null; }

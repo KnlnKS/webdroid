@@ -111,7 +111,7 @@ rt.register({
 
 /** android.text.format.DateFormat's patterns print through the same engine as SimpleDateFormat */
 export const formatDate = (pattern: string, t: number): string => formatPattern(pattern, t);
-class JDateFormat extends JObj { pattern = ""; tz: JTimeZone | null = null; locale: JLocale | null = null; }
+class JDateFormat extends JObj { pattern = ""; tz: JTimeZone | null = null; locale: JLocale | null = null; century: number | null = null; }
 function withPattern(p: string, locale: JLocale | null = null): JDateFormat {
   checkSdfPattern(p);
   const f = new (rt.link("java/text/SimpleDateFormat").ctor as typeof JDateFormat)();
@@ -125,7 +125,7 @@ const styled = (date: number | null, time: number | null, locale: JLocale | null
   withPattern(localizedDatePattern(date === null ? null : STYLE_NAMES[date] ?? "MEDIUM", time === null ? null : STYLE_NAMES[time] ?? "MEDIUM", locale), locale);
 const formatAt = (f: JDateFormat, t: number) => formatPattern(f.pattern, t, (f.tz ?? localTz).id, f.locale);
 function parseAt(f: JDateFormat, s: string, pos: JParsePosition): JDate | null {
-  const t = parsePattern(f.pattern, s, pos, (f.tz ?? localTz).id, f.locale);
+  const t = parsePattern(f.pattern, s, pos, (f.tz ?? localTz).id, f.locale, f.century);
   if (t === null) return null;
   const d = new JDate();
   d.t = t;
@@ -151,7 +151,17 @@ const dateFormatMethods: NativeSpec["methods"] = {
   "parseObject(Ljava/lang/String;Ljava/text/ParsePosition;)Ljava/lang/Object;": function (this: JDateFormat, s: string, pos: JParsePosition) { return parseAt(this, s, pos); },
   "setTimeZone(Ljava/util/TimeZone;)V": function (this: JDateFormat, tz: JTimeZone) { this.tz = tz; },
   "getTimeZone()Ljava/util/TimeZone;": function (this: JDateFormat) { return this.tz ?? localTz; },
-  "setCalendar(Ljava/util/Calendar;)V": () => {},
+  "setCalendar(Ljava/util/Calendar;)V": function (this: JDateFormat, c: JCalendar) { this.tz = (c ?? rt.npe()).tz; },
+  "getCalendar()Ljava/util/Calendar;": function (this: JDateFormat) {
+    return vcall(rt.link("java/util/Calendar").ctor, "getInstance", "(Ljava/util/TimeZone;)Ljava/util/Calendar;", this.tz ?? localTz);
+  },
+  "set2DigitYearStart(Ljava/util/Date;)V": function (this: JDateFormat, d: JDate) { this.century = (d ?? rt.npe()).t; },
+  "get2DigitYearStart()Ljava/util/Date;": function (this: JDateFormat) {
+    const d = new JDate(), start = new Date();
+    start.setFullYear(start.getFullYear() - 80);
+    d.t = this.century ?? start.getTime();
+    return d;
+  },
   "setLenient(Z)V": () => {},
   "isLenient()Z": () => 1,
   "toPattern()Ljava/lang/String;": function (this: JDateFormat) { return this.pattern; },
