@@ -559,7 +559,7 @@ rt.register({
   },
 });
 
-/** log a throwable that escaped every handler and tell the shell (status line) */
+/** log a throwable that escaped every handler and tell the development shell */
 export function reportUncaught(e: unknown) {
   const je = rt.jx(e);
   // the cause chain travels with the throwable and is usually where the real failure is named

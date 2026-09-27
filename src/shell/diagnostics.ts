@@ -9,10 +9,11 @@ export function nativeRequirements(): string[] {
 
 /** Development panel; production relies on the console output of the same reports. */
 export function mountDiagnostics(parent: HTMLElement): void {
-  parent.insertAdjacentHTML("beforeend", `<details id="diagnostics" hidden><summary>Diagnostics<span class="summary-meta"></span></summary><div class="disclosure-content"><p></p><p></p><pre></pre></div></details>`);
-  const panel = parent.lastElementChild as HTMLDetailsElement;
-  const [count, error, native, missing] = panel.querySelectorAll<HTMLElement>(".summary-meta, p, pre");
-  const show = (field: HTMLElement, text: string) => { field.textContent = text; panel.hidden = false; };
+  parent.insertAdjacentHTML("beforeend", `<details id="diagnostics" hidden><summary>Diagnostics<span id="diagnostic-count" class="summary-meta"></span></summary><div class="disclosure-content"><p id="runtime-error"></p><p id="native"></p><pre id="missing"></pre></div></details>`);
+  const field = (id: string) => document.getElementById(id)!;
+  const panel = field("diagnostics");
+  const count = field("diagnostic-count"), error = field("runtime-error"), native = field("native"), missing = field("missing");
+  const show = (target: HTMLElement, text: string) => { target.textContent = text; panel.hidden = false; };
   rt.onUncaught = (e) => show(error, errorText(e));
   rt.onNativeRequired = (lib, abi) => show(native, `Native code required: ${lib} (${abi})`);
   let queued = false;
