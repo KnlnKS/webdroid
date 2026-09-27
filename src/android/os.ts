@@ -5,7 +5,6 @@ import { processEnv } from "../shell/environment";
 import type { JMessenger } from "./messenger";
 import { procIdentity, processTid, sysconf, SYSCONF } from "../shell/procfs";
 import { parcelCreator, readObject, writeObject, type JParcel } from "./parcel";
-export { keyDispatcherState } from "./keyevent";
 import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
 import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";

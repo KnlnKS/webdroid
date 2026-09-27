@@ -9,7 +9,8 @@ import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawabl
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
-import { mainHandler, reportUncaught, uptimeMillis, keyDispatcherState } from "./os";
+import { mainHandler, reportUncaught, uptimeMillis } from "./os";
+import { keyDispatcherState } from "./keyevent";
 import { JProperty, type JDisplayMetrics } from "./util";
 import { csText } from "./text";
 import { newArrayList, toJsArray } from "../jvm/natives/jutil";
