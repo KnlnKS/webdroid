@@ -218,7 +218,6 @@ rt.register({
     "toPattern()Ljava/lang/String;": function (this: JMessageFormat) { return this.pattern; },
   },
 });
-const locale = (l: JLocale | undefined) => l ?? null;
 rt.register({
   name: "java/text/DateFormat", ctor: JDateFormat, sup: "java/text/Format", ifaces: ["java/lang/Cloneable"],
   statics: { FULL: 0, LONG: 1, MEDIUM: 2, SHORT: 3, DEFAULT: 2 },
@@ -228,13 +227,13 @@ rt.register({
     "static getInstance()Ljava/text/DateFormat;": () => styled(3, 3),
     "static getDateInstance()Ljava/text/DateFormat;": () => styled(2, null),
     "static getDateInstance(I)Ljava/text/DateFormat;": (d: number) => styled(d, null),
-    "static getDateInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": (d: number, l: JLocale) => styled(d, null, locale(l)),
+    "static getDateInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": (d: number, l: JLocale) => styled(d, null, l),
     "static getTimeInstance()Ljava/text/DateFormat;": () => styled(null, 2),
     "static getTimeInstance(I)Ljava/text/DateFormat;": (t: number) => styled(null, t),
-    "static getTimeInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": (t: number, l: JLocale) => styled(null, t, locale(l)),
+    "static getTimeInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": (t: number, l: JLocale) => styled(null, t, l),
     "static getDateTimeInstance()Ljava/text/DateFormat;": () => styled(2, 2),
     "static getDateTimeInstance(II)Ljava/text/DateFormat;": (d: number, t: number) => styled(d, t),
-    "static getDateTimeInstance(IILjava/util/Locale;)Ljava/text/DateFormat;": (d: number, t: number, l: JLocale) => styled(d, t, locale(l)),
+    "static getDateTimeInstance(IILjava/util/Locale;)Ljava/text/DateFormat;": (d: number, t: number, l: JLocale) => styled(d, t, l),
   },
 });
 rt.register({

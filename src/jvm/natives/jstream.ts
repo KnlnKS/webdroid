@@ -285,6 +285,9 @@ function streamMethods(k: StreamKind): Methods {
   const self = streamDesc(k), P = k.P, d = k.d, prim = P !== "";
   const pred = P + "Predicate", cons = P + "Consumer", binop = P + "BinaryOperator";
   const opt = `Ljava/util/Optional${P};`, mkOptional = (v?: unknown) => (prim ? mkOptOf(P, v as number | bigint) : mkOpt(v));
+  // sequential and eager: the ordered and unordered forms are one operation
+  const forEach = driven(function* (this: Stage, c: unknown): Gen { for (const x of this.a) yield invoke(cons, c, x); });
+  const first = function (this: Stage) { return this.a.length ? mkOptional(this.a[0] ?? npe()) : mkOptional(); };
   const m: Methods = {
     [`static empty()${self}`]: () => k.mk([]),
     [`static of(${d})${self}`]: (v: unknown) => k.mk([v]),
@@ -325,8 +328,8 @@ function streamMethods(k: StreamKind): Methods {
     },
     [`takeWhile(${fnDesc(pred)})${self}`]: whileStage(k, pred, true),
     [`dropWhile(${fnDesc(pred)})${self}`]: whileStage(k, pred, false),
-    [`forEach(${fnDesc(cons)})V`]: driven(function* (this: Stage, c: unknown): Gen { for (const x of this.a) yield invoke(cons, c, x); }),
-    [`forEachOrdered(${fnDesc(cons)})V`]: driven(function* (this: Stage, c: unknown): Gen { for (const x of this.a) yield invoke(cons, c, x); }),
+    [`forEach(${fnDesc(cons)})V`]: forEach,
+    [`forEachOrdered(${fnDesc(cons)})V`]: forEach,
     [`reduce(${d}${fnDesc(binop)})${d}`]: driven(function* (this: Stage, identity: unknown, op: unknown): Gen {
       let acc = identity;
       for (const x of this.a) acc = yield invoke(binop, op, acc, x);
@@ -356,8 +359,8 @@ function streamMethods(k: StreamKind): Methods {
       for (const x of this.a) if (yield invoke(pred, p, x)) return 0;
       return 1;
     }),
-    [`findFirst()${opt}`]: function (this: Stage) { return this.a.length ? mkOptional(this.a[0] ?? npe()) : mkOptional(); },
-    [`findAny()${opt}`]: function (this: Stage) { return this.a.length ? mkOptional(this.a[0] ?? npe()) : mkOptional(); },
+    [`findFirst()${opt}`]: first,
+    [`findAny()${opt}`]: first,
     "isParallel()Z": () => 0,
     "close()V": () => {},
   };
