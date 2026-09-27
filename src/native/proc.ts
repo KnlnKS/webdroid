@@ -57,7 +57,7 @@ function sigaltstack(cpu: Cpu, a: ArgReader): number {
 
 /** Linux capget for the one unprivileged Android app process represented by this runtime. */
 function capget(cpu: Cpu, header: number, data: number): number {
-  if (!header) return fail(cpu, 14);                                               // EFAULT
+  if (!header) return fail(cpu, E.FAULT);
   const words = capWords(mem.ld32(header));
   if (!words) {
     mem.st32(header, CAP_VERSION_3);

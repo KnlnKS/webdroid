@@ -21,7 +21,7 @@ const EAI_SERVICE = 9, EAI_SOCKTYPE = 10, EAI_SYSTEM = 11, EAI_PROTOCOL = 13, EA
 const NI_NUMERICHOST = 2, NI_NAMEREQD = 4;
 const IFF_UP = 1, IFF_LOOPBACK = 8, IFF_RUNNING = 0x40;
 const MSG_PEEK = 0x2, MSG_TRUNC = 0x20, MSG_DONTWAIT = 0x40;
-const E_DESTADDRREQ = 89, E_MSGSIZE = 90, E_OPNOTSUPP = 95, E_ADDRINUSE = 98;
+const E_DESTADDRREQ = 89, E_MSGSIZE = 90, E_ADDRINUSE = 98;
 const UDP_MAX_PAYLOAD = 65_507;
 const UDP_QUEUE_PACKETS = 256, UDP_QUEUE_BYTES = 1 << 20;
 
@@ -92,7 +92,6 @@ function readEndpoint(cpu: Cpu, sockaddr: number, length: number): Ipv4Endpoint 
   };
 }
 
-const addressFor = syntheticAddress;
 
 function nativeGetifaddrs(cpu: Cpu, result: number): number {
   if (!result) return fail(cpu, E.FAULT);
@@ -144,7 +143,7 @@ function nativeGetaddrinfo(cpu: Cpu, nodePtr: number, servicePtr: number, hints:
   if (exists instanceof Promise) return exists.then((known) => known === false ? EAI_NONAME : answer());
   return answer();
   function answer(): number {
-  const bytes = numeric ?? addressFor(node);
+  const bytes = numeric ?? syntheticAddress(node);
   const layout = addrinfoLayout();
   const sockaddr = layout.size;
   const canonBytes = flags & AI_CANONNAME ? enc.encode(node) : null;
@@ -279,7 +278,7 @@ function nativeBind(cpu: Cpu, fd: number, sockaddr: number, length: number): num
   const descriptor = socketFdOf(cpu, fd);
   if (!descriptor) return -1;
   const socket = descriptor.socket;
-  if (socket.kind !== "datagram") return fail(cpu, E_OPNOTSUPP);
+  if (socket.kind !== "datagram") return fail(cpu, E.NOTSUP);
   const endpoint = readEndpoint(cpu, sockaddr, length);
   if (!endpoint) return -1;
   return bindDatagram(cpu, socket, endpoint) ? 0 : -1;
@@ -622,14 +621,6 @@ function nativeSocketName(cpu: Cpu, fd: number, address: number, length: number,
   return 0;
 }
 
-function nativeGetsockname(cpu: Cpu, fd: number, address: number, length: number): number {
-  return nativeSocketName(cpu, fd, address, length, false);
-}
-
-function nativeGetpeername(cpu: Cpu, fd: number, address: number, length: number): number {
-  return nativeSocketName(cpu, fd, address, length, true);
-}
-
 function copyText(text: string, destination: number, capacity: number): boolean {
   const bytes = enc.encode(text);
   if (!destination) return capacity === 0;
@@ -707,8 +698,8 @@ export function netInit(): void {
     },
     setsockopt: (cpu, args) => { const descriptor = socketFdOf(cpu, args.i()); args.i(); args.i(); args.p(); args.u(); return descriptor ? 0 : -1; },
     getsockopt: (cpu, args) => nativeGetsockopt(cpu, args.i(), args.i(), args.i(), args.p(), args.p()),
-    getsockname: (cpu, args) => nativeGetsockname(cpu, args.i(), args.p(), args.p()),
-    getpeername: (cpu, args) => nativeGetpeername(cpu, args.i(), args.p(), args.p()),
+    getsockname: (cpu, args) => nativeSocketName(cpu, args.i(), args.p(), args.p(), false),
+    getpeername: (cpu, args) => nativeSocketName(cpu, args.i(), args.p(), args.p(), true),
     getaddrinfo: (cpu, args) => nativeGetaddrinfo(cpu, args.p(), args.p(), args.p(), args.p()),
     freeaddrinfo: (_cpu, args) => nativeFreeaddrinfo(args.p()),
     getifaddrs: (cpu, args) => nativeGetifaddrs(cpu, args.p()),

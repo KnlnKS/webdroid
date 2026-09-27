@@ -36,6 +36,8 @@ function fmtFloat(v: number, conv: string, prec: number, alt: boolean): string {
   return conv === conv.toUpperCase() ? s.toUpperCase() : s;
 }
 
+/** a length modifier whose integer is 64-bit: ll/L/q/j, and l/z/t on LP64 */
+const wide = (len: string): boolean => len === "ll" || len === "L" || len === "q" || len === "j" || (PTR === 8 && (len === "l" || len === "z" || len === "t"));
 /** format `fmt` pulling arguments from `args` (long/long long via l(), doubles via d()) */
 export function format(fmt: string, args: ArgReader): string {
   let out = "";
@@ -66,7 +68,7 @@ export function format(fmt: string, args: ArgReader): string {
     let len = "";
     while ("hlLqjzt".includes(fmt[i])) { len += fmt[i]; i++; }
     const conv = fmt[i];
-    const isLL = len === "ll" || len === "L" || len === "q" || len === "j" || (PTR === 8 && (len === "l" || len === "z" || len === "t"));
+    const isLL = wide(len);
     let s: string;
     switch (conv) {
       case "d": case "i": {
@@ -185,7 +187,7 @@ export function scan(input: string, fmt: string, out: ScanSink): number {
       const text = input.slice(pos, j);
       pos = j;
       if (suppress) continue;
-      const isLL = len === "ll" || len === "L" || len === "q" || len === "j" || (PTR === 8 && (len === "l" || len === "z" || len === "t"));
+      const isLL = wide(len);
       const neg = text[0] === "-";
       const body = text.replace(/^[+-]/, "").replace(/^0[xX]/, "");
       let v = 0n;
