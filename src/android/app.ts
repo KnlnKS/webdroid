@@ -6,7 +6,8 @@ import {
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { jarray } from "../jvm/abi";
-import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME, mkPfd, backKeyMethods, dispatchKeyToCallback, type JKeyEvent } from "./os";
+import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME, mkPfd } from "./os";
+import { backKeyMethods, dispatchWindowKey, type JKeyEvent } from "./keyevent";
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
@@ -422,9 +423,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   // Activity.dispatchKeyEvent: the window's view tree first, then KeyEvent.dispatch to the activity
   "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JActivity, ev: JKeyEvent): Gen {
     yield vcall(this, "onUserInteraction", "()V");
-    const decor = this.window.decor;
-    if (decor && (yield vcall(decor, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", ev))) return 1;
-    return dispatchKeyToCallback(this, ev);
+    return dispatchWindowKey(this, this.window.decor, ev);
   }),
   ...stubs(0, "onOptionsItemSelected(Landroid/view/MenuItem;)Z", "onSearchRequested()Z",
     "onSearchRequested(Landroid/view/SearchEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
@@ -537,43 +536,6 @@ rt.register({
 });
 
 let audioCapturePolicy = 1;
-// A vibration is Android's alternating off/on durations (starting with off) and the index it
-// repeats from; navigator.vibrate is an on/off motor that takes on/off durations and never loops.
-class JVibrationEffect extends JObj { timings: number[] = []; repeat = -1; }
-function waveform(timings: ArrayLike<bigint>, repeat: number, amplitudes?: ArrayLike<number>): JVibrationEffect {
-  if (repeat < -1 || repeat >= timings.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", "repeat " + repeat);
-  const effect: JVibrationEffect = rt.make("android/os/VibrationEffect");
-  for (let i = 0; i < timings.length; i++) {
-    // a segment of the other kind than the pattern expects next is preceded by an empty one
-    if ((effect.timings.length % 2 === 1) !== (amplitudes ? amplitudes[i] !== 0 : i % 2 === 1)) effect.timings.push(0);
-    if (i === repeat) effect.repeat = effect.timings.length;
-    effect.timings.push(Number(timings[i]));
-  }
-  return effect;
-}
-let vibration: ReturnType<typeof setTimeout> | undefined;
-function vibrate(effect: JVibrationEffect): void {
-  clearTimeout(vibration);
-  const play = (from: number) => {
-    const part = effect.timings.slice(from), total = part.reduce((a, b) => a + b, 0);
-    globalThis.navigator?.vibrate?.(from % 2 ? part : [0, ...part]);
-    if (effect.repeat >= 0 && total > 0) vibration = setTimeout(() => play(effect.repeat), total);
-  };
-  play(0);
-}
-rt.register({
-  name: "android/os/VibrationEffect", ctor: JVibrationEffect, ifaces: ["android/os/Parcelable"],
-  statics: { DEFAULT_AMPLITUDE: -1 },
-  methods: {
-    "static createPredefined(I)Landroid/os/VibrationEffect;": () => waveform([0n, 30n], -1),
-    "static createOneShot(JI)Landroid/os/VibrationEffect;": (ms: bigint) => waveform([0n, ms], -1),
-    "static createWaveform([JI)Landroid/os/VibrationEffect;": (timings: BigInt64Array, repeat: number) => waveform(timings, repeat),
-    "static createWaveform([J[II)Landroid/os/VibrationEffect;": (timings: BigInt64Array, amplitudes: Int32Array, repeat: number) => {
-      if (timings.length !== amplitudes.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timing and amplitude arrays must be of equal length");
-      return waveform(timings, repeat, amplitudes);
-    },
-  },
-});
 class JAccessibilityServiceInfo extends JObj {
   eventTypes = 0;
   feedbackType = 0;
@@ -685,25 +647,6 @@ for (const [name, methods, statics] of [
   ["android/content/pm/CrossProfileApps", {
     "getTargetUserProfiles()Ljava/util/List;": () => newArrayList(),
     ...stubs(0, "canInteractAcrossProfiles()Z", "canRequestInteractAcrossProfiles()Z"),
-  }],
-  ["android/os/VibratorManager", {
-    "getDefaultVibrator()Landroid/os/Vibrator;": () => systemService(null, "vibrator"),
-  }],
-  ["android/os/Vibrator", {
-    ...Object.fromEntries(["", "Landroid/media/AudioAttributes;"].flatMap((attrs) => [
-      [`vibrate(J${attrs})V`, (ms: bigint) => vibrate(waveform([0n, ms], -1))],
-      [`vibrate([JI${attrs})V`, (pattern: BigInt64Array, repeat: number) => vibrate(waveform(pattern, repeat))],
-      [`vibrate(Landroid/os/VibrationEffect;${attrs})V`, vibrate],
-    ])),
-    "vibrate(Landroid/os/VibrationEffect;Landroid/os/VibrationAttributes;)V": vibrate,
-    "hasVibrator()Z": () => 1,
-    "cancel()V": () => { clearTimeout(vibration); globalThis.navigator?.vibrate?.(0); },
-    // navigator.vibrate is a bare on/off motor: no amplitude, no composed primitives
-    "hasAmplitudeControl()Z": () => 0,
-    "areAllPrimitivesSupported([I)Z": () => 0,
-    "arePrimitivesSupported([I)[Z": (ids: Int32Array) => new Uint8Array(ids.length),
-    "areAllEffectsSupported([I)I": () => 2,
-    "areEffectsSupported([I)[I": (ids: Int32Array) => new Int32Array(ids.length).fill(2),
   }],
   ["android/media/AudioManager", {
     "getAllowedCapturePolicy()I": () => audioCapturePolicy,

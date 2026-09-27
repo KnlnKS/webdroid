@@ -237,8 +237,8 @@ function pickerButtons(d: JAlertDialog) {
   d.posText = "OK"; d.negText = "Cancel";
   d.posL = d.negL = d;
 }
-const pickerClick = (report: (d: never) => unknown) => driven(function* (this: JAlertDialog, _dialog: unknown, which: number): Gen {
-  if (which === -1) yield report(this as never);
+const pickerClick = <D extends JAlertDialog>(report: (d: D) => unknown) => driven(function* (this: D, _dialog: unknown, which: number): Gen {
+  if (which === -1) yield report(this);
   else if (which === -2) yield vcall(this, "cancel", "()V");
 });
 const timePickerDialogMethods: NativeSpec["methods"] = {

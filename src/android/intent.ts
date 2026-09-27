@@ -1,6 +1,6 @@
 import { readClipData } from "./clipdata";
 import { JObj, type NativeSpec, rt, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { JBundle, bundleBox, bundleGet, bundleTyped, BUNDLE_TYPED, INTENT_TYPES, reportUncaught, PROCESS_NAME } from "./os";
+import { JBundle, bundleBox, bundleGet, bundleTyped, INTENT_TYPED, INTENT_TYPES, reportUncaught, PROCESS_NAME } from "./os";
 import { appHost, type AppHost } from "./apphost";
 import { mkUri, readUri, writeUri } from "./net";
 import { JRect } from "./graphics";
@@ -272,10 +272,8 @@ for (const [t, d] of INTENT_TYPES) {
   intentMethods[d.length === 1 ? `get${t}Extra(Ljava/lang/String;${d})${d}` : `get${t}Extra(Ljava/lang/String;)${d}`] =
     function (this: JIntent, k: string, dv: unknown = null) { return bundleGet(this.extras, k, d, dv); };
 }
-for (const [t, d] of BUNDLE_TYPED) {
-  if (t === "SparseParcelableArray") continue;
-  const single = d === "Ljava/lang/Object;" || d === "Ljava/io/Serializable;";
-  intentMethods[`get${t}Extra(Ljava/lang/String;Ljava/lang/Class;)${d}`] = function (this: JIntent, k: string, cls: unknown) { return bundleTyped(this.extras, k, cls, single); };
+for (const [t, d] of INTENT_TYPED) {
+  intentMethods[`get${t}Extra(Ljava/lang/String;Ljava/lang/Class;)${d}`] = function (this: JIntent, k: string, cls: unknown) { return bundleTyped(this.extras, k, cls, d); };
 }
 class JShortcutIconResource extends JObj { packageName = ""; resourceName = ""; }
 rt.register({
