@@ -13,7 +13,8 @@ import { themeAccent } from "./widget";
 import { JCanvas, tfMedium , JRect } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
-import { reportUncaught, pressBackKey, dispatchKeyToCallback, backKeyMethods, type JKeyEvent } from "./os";
+import { reportUncaught } from "./os";
+import { pressBackKey, dispatchWindowKey, backKeyMethods, type JKeyEvent } from "./keyevent";
 import { AID, resString, rvInt, rvDimen, askTheme, themeOf } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
@@ -317,8 +318,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   // Dialog.dispatchKeyEvent: its OnKeyListener, then the window's views, then KeyEvent.dispatch
   "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JDialog, ev: JKeyEvent): Gen {
     if (this.keyL && (yield vcall(this.keyL, "onKey", "(Landroid/content/DialogInterface;ILandroid/view/KeyEvent;)Z", this, ev.keyCode, ev))) return 1;
-    if (this.root && (yield vcall(this.root, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", ev))) return 1;
-    return dispatchKeyToCallback(this, ev);
+    return dispatchWindowKey(this, this.root, ev);
   }),
   ...backKeyMethods,
   // Window.Callback, as Dialog's defaults

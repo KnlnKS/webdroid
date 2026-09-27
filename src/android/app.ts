@@ -6,7 +6,8 @@ import {
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { jarray } from "../jvm/abi";
-import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME, mkPfd, backKeyMethods, dispatchKeyToCallback, type JKeyEvent } from "./os";
+import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME, mkPfd } from "./os";
+import { backKeyMethods, dispatchWindowKey, type JKeyEvent } from "./keyevent";
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
@@ -422,9 +423,7 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   // Activity.dispatchKeyEvent: the window's view tree first, then KeyEvent.dispatch to the activity
   "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JActivity, ev: JKeyEvent): Gen {
     yield vcall(this, "onUserInteraction", "()V");
-    const decor = this.window.decor;
-    if (decor && (yield vcall(decor, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", ev))) return 1;
-    return dispatchKeyToCallback(this, ev);
+    return dispatchWindowKey(this, this.window.decor, ev);
   }),
   ...stubs(0, "onOptionsItemSelected(Landroid/view/MenuItem;)Z", "onSearchRequested()Z",
     "onSearchRequested(Landroid/view/SearchEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",

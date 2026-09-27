@@ -39,6 +39,8 @@ import "./jvm/natives/jzip";
 import "./android/gl";
 import "./android/glview";
 import "./android/os";
+import "./android/keyevent";
+import "./android/observable";
 import "./android/util";
 import "./android/atomicfile";
 import "./android/accounts";
