@@ -1120,14 +1120,19 @@ rt.register({ name: "android/view/Choreographer$FrameCallback", ctor: class exte
   "doFrame(J)V": () => { throw rt.mkThrowable("java/lang/AbstractMethodError", "android.view.Choreographer.FrameCallback.doFrame"); },
 } });
 
-export class JKeyEvent extends JObj { action = 0; keyCode = 0; tracking = false; canceled = false; }
+export class JKeyEvent extends JObj {
+  action = 0; keyCode = 0; tracking = false; canceled = false;
+  downTime = 0n; eventTime = 0n; repeat = 0; meta = 0; deviceId = -1; scanCode = 0; flags = 0; source = 0x101;
+}
 const KEYCODE_BACK = 4, M_dispatchKey = "(Landroid/view/KeyEvent;)Z";
 /** A BACK press as ViewRootImpl delivers it to a window's callback: DOWN, then an UP that carries
  *  FLAG_TRACKING when the DOWN's receiver started tracking it (KeyEvent.DispatcherState). */
 export const pressBackKey = driven(function* pressBackKey(callback: JObj): Gen {
-  const down = Object.assign(new JKeyEvent(), { keyCode: KEYCODE_BACK });
+  const downTime = BigInt(Math.floor(uptimeMillis()));
+  const down = Object.assign(new JKeyEvent(), { keyCode: KEYCODE_BACK, downTime, eventTime: downTime });
   yield vcall(callback, "dispatchKeyEvent", M_dispatchKey, down);
-  yield vcall(callback, "dispatchKeyEvent", M_dispatchKey, Object.assign(new JKeyEvent(), { action: 1, keyCode: KEYCODE_BACK, tracking: down.tracking }));
+  yield vcall(callback, "dispatchKeyEvent", M_dispatchKey, Object.assign(new JKeyEvent(), { action: 1, keyCode: KEYCODE_BACK, tracking: down.tracking,
+    downTime, eventTime: BigInt(Math.floor(uptimeMillis())) }));
 });
 /** KeyEvent.dispatch to an Activity or Dialog: onKeyDown/onKeyUp by action */
 export const dispatchKeyToCallback = (callback: JObj, ev: JKeyEvent) => ev.action === 0 ? vcall(callback, "onKeyDown", "(ILandroid/view/KeyEvent;)Z", ev.keyCode, ev)
@@ -1155,7 +1160,25 @@ rt.register({
   },
   methods: {
     "<init>(II)V": function (this: JKeyEvent, a: number, k: number) { this.action = a; this.keyCode = k; },
-    "<init>(JJIII)V": function (this: JKeyEvent, _down: bigint, _at: bigint, a: number, k: number) { this.action = a; this.keyCode = k; },
+    // AOSP's (downTime, eventTime, action, code, repeat[, metaState[, deviceId, scancode[, flags[, source]]]])
+    ...Object.fromEntries(["", "I", "III", "IIII", "IIIII"].map((tail) => [`<init>(JJIII${tail})V`,
+      function (this: JKeyEvent, down: bigint, at: bigint, action: number, code: number, repeat: number, meta = 0, device = -1, scan = 0, flags = 0, source = 0x101) {
+        Object.assign(this, { downTime: down, eventTime: at, action, keyCode: code, repeat, meta, deviceId: device, scanCode: scan, flags, source });
+      }])),
+    "<init>(Landroid/view/KeyEvent;)V": function (this: JKeyEvent, o: JKeyEvent) { Object.assign(this, o); },
+    "getMetaState()I": function (this: JKeyEvent) { return this.meta; },
+    "getModifiers()I": function (this: JKeyEvent) { return this.meta & 0x770ff; },
+    "getRepeatCount()I": function (this: JKeyEvent) { return this.repeat; },
+    "getDownTime()J": function (this: JKeyEvent) { return this.downTime; },
+    "getEventTime()J": function (this: JKeyEvent) { return this.eventTime; },
+    "getDeviceId()I": function (this: JKeyEvent) { return this.deviceId; },
+    "getScanCode()I": function (this: JKeyEvent) { return this.scanCode; },
+    "getFlags()I": function (this: JKeyEvent) { return this.flags | (this.tracking ? 0x200 : 0) | (this.canceled ? 0x20 : 0); },
+    "getSource()I": function (this: JKeyEvent) { return this.source; },
+    "isLongPress()Z": function (this: JKeyEvent) { return +!!(this.flags & 0x80); },
+    // META_SHIFT_ON 1, META_ALT_ON 2, META_SYM_ON 4, META_CTRL_ON 0x1000, META_META_ON 0x10000, caps/num lock 0x100000/0x200000
+    ...Object.fromEntries(([["Shift", 1], ["Alt", 2], ["Sym", 4], ["Ctrl", 0x1000], ["Meta", 0x10000], ["CapsLockOn", 0x100000], ["NumLockOn", 0x200000]] as const)
+      .map(([name, bit]) => [`is${name}${name.endsWith("On") ? "" : "Pressed"}()Z`, function (this: JKeyEvent) { return +!!(this.meta & bit); }])),
     "startTracking()V": function (this: JKeyEvent) { this.tracking = true; },
     "isTracking()Z": function (this: JKeyEvent) { return +this.tracking; },
     "isCanceled()Z": function (this: JKeyEvent) { return +this.canceled; },
@@ -1187,8 +1210,8 @@ rt.register({
       yield vcall(p, "writeInt", "(I)V", this.action);
       yield vcall(p, "writeInt", "(I)V", this.keyCode);
     }),
-    ...stubs(0, "getRepeatCount()I", "getUnicodeChar()I", "hasModifiers(I)Z"),
-    ...stubs(1, "hasNoModifiers()Z"),
+    "hasNoModifiers()Z": function (this: JKeyEvent) { return +!(this.meta & 0x770ff); },
+    ...stubs(0, "getUnicodeChar()I", "hasModifiers(I)Z"),
   },
 });
 rt.markers("android/view/KeyEvent$Callback");
