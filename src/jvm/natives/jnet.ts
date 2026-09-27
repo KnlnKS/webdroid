@@ -219,11 +219,13 @@ rt.register({
   },
 });
 rt.markers("java/net/SocketAddress");
-class JServerSocket extends JObj { closed = false; }
+class JServerSocket extends JObj { closed = false; reuseAddress = false; }
 rt.register({
   name: "java/net/ServerSocket", ctor: JServerSocket, ifaces: ["java/io/Closeable"],
   methods: {
     "<init>()V": function () {},
+    "setReuseAddress(Z)V": function (this: JServerSocket, on: number) { this.reuseAddress = !!on; },
+    "getReuseAddress()Z": function (this: JServerSocket) { return +this.reuseAddress; },
     "bind(Ljava/net/SocketAddress;)V": () => { throw rt.mkThrowable("java/io/IOException", "inbound sockets are unavailable"); },
     "bind(Ljava/net/SocketAddress;I)V": () => { throw rt.mkThrowable("java/io/IOException", "inbound sockets are unavailable"); },
     "close()V": function (this: JServerSocket) { this.closed = true; },
