@@ -950,7 +950,13 @@ class JURLConnection extends JObj {
     } finally { clearTimeout(timer); }
     const final = r.headers.get("x-wd-final-url");
     // the proxy's own failure answer carries no final URL; a genuine upstream 502 does
-    if (r.status === 502 && !final) throw rt.mkThrowable("java/net/UnknownHostException", await r.text());
+    if (r.status === 502 && !final) {
+      const { hostname, port, protocol } = this.url.u, kind = r.headers.get("x-wd-error");
+      const detail = (await r.text()).replace(/^proxy error: /, "");
+      if (kind === "host") throw rt.mkThrowable("java/net/UnknownHostException", `Unable to resolve host "${hostname}": No address associated with hostname`);
+      if (kind === "refused") throw rt.mkThrowable("java/net/ConnectException", `Failed to connect to ${hostname}/${port || (protocol === "https:" ? 443 : 80)}`);
+      throw rt.mkThrowable(kind === "timeout" ? "java/net/SocketTimeoutException" : kind === "tls" ? "javax/net/ssl/SSLHandshakeException" : "java/io/IOException", detail);
+    }
     if (final && final !== this.url.u.href) this.url = mkURL(final);   // getURL() reports where a redirect landed
     const hdrs: [string, string][] = [];
     r.headers.forEach((v, k) => { if (k !== "x-wd-final-url" && k !== "x-wd-status" && k !== "x-wd-status-text" && k !== "x-wd-content-length") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]); });
