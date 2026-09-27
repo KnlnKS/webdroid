@@ -417,7 +417,7 @@ async function buildAlertContent(d: JAlertDialog) {
       t.padL = t.padR = device.dp(24); t.padT = t.padB = device.dp(14);
       t.clickable = true;
       t.lp = lpFill();
-      (t as any).clickL = dismissingClick(d.itemsL, i);
+      t.clickL = dismissingClick(d.itemsL, i);
       addUnattachedView(col, t);
     }
   }
@@ -438,7 +438,7 @@ async function buildAlertContent(d: JAlertDialog) {
       const lp = new JLinearLP();
       lp.width = -2; lp.height = -2;
       b.lp = lp;
-      (b as any).clickL = dismissingClick(l, which);
+      b.clickL = dismissingClick(l, which);
       d.buttons.set(which, b);
       addUnattachedView(row, b);
     };

@@ -5,6 +5,7 @@
 
 import { rt, JObj, type NativeSpec } from "../runtime";
 import { defineException, vcall, JSimpleEnum, after } from "./jlang";
+import { dotName } from "../abi";
 
 // ── calendar vocabulary (en); libc and procfs print these
 export const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -452,7 +453,7 @@ export function instOf(p: Parts): JInstant | undefined {
   if (p.zone) { const z = zdtLocal(ldt, p.zone); return mkInstant(epochSec(z), p.time.ns); }
   return undefined;
 }
-export const describe = (t: unknown) => (t as any)?.constructor?.$i?.name?.replace(/\//g, ".") ?? String(t);
+export const describe = (t: unknown) => (t instanceof JObj ? dotName((t.constructor as typeof JObj).$i.name) : String(t));
 export const cannot = (what: string, t: unknown): never => dtErr(`Unable to obtain ${what} from TemporalAccessor: ${describe(t)}`);
 export function toLocalDate(t: unknown): JLocalDate { if (t == null) npe("temporal"); return parts(t).date ?? cannot("LocalDate", t); }
 export function toLocalTime(t: unknown): JLocalTime { if (t == null) npe("temporal"); return parts(t).time ?? cannot("LocalTime", t); }
