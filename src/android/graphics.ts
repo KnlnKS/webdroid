@@ -194,6 +194,14 @@ rt.register({
   },
 });
 
+/** Color's sColorNameMap, which Color.parseColor and Html's colour attributes both read */
+export const COLOR_NAMES: Record<string, number> = {
+  black: -16777216, darkgray: -12303292, gray: -7829368, lightgray: -3355444, white: -1,
+  red: -65536, green: -16711936, blue: -16776961, yellow: -256, cyan: -16711681,
+  magenta: -65281, aqua: -16711681, fuchsia: -65281, darkgrey: -12303292,
+  grey: -7829368, lightgrey: -3355444, lime: -16711936, maroon: -8388608,
+  navy: -16777088, olive: -8355840, purple: -8388480, silver: -4144960, teal: -16744320,
+};
 class JColor extends JObj {}
 rt.register({
   name: "android/graphics/Color", ctor: JColor,
@@ -212,14 +220,7 @@ rt.register({
     "static parseColor(Ljava/lang/String;)I": (s: string) => {
       const hex = /^#([\da-f]{6}|[\da-f]{8})$/i.exec(s)?.[1];
       if (hex) return parseInt(hex.length === 6 ? `ff${hex}` : hex, 16) | 0;
-      const named: Record<string, number> = {
-        black: -16777216, darkgray: -12303292, gray: -7829368, lightgray: -3355444, white: -1,
-        red: -65536, green: -16711936, blue: -16776961, yellow: -256, cyan: -16711681,
-        magenta: -65281, aqua: -16711681, fuchsia: -65281, darkgrey: -12303292,
-        grey: -7829368, lightgrey: -3355444, lime: -16711936, maroon: -8388608,
-        navy: -16777088, olive: -8355840, purple: -8388480, silver: -4144960, teal: -16744320,
-      };
-      const v = named[s.toLowerCase()];
+      const v = COLOR_NAMES[s.toLowerCase()];
       if (v === undefined) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown color " + s);
       return v;
     },
