@@ -1,7 +1,7 @@
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { mangleStaticField } from "../jvm/abi";
-import { JBinder, callingIdentity, withCallingIdentity } from "./binder";
+import { JBinder, INTERFACE_TRANSACTION, callingIdentity, withCallingIdentity } from "./binder";
 import { JParcel, parcelCreator, readInt, readString, writeInt, writeString } from "./parcel";
 import { JBundle, bundleBox } from "./os";
 import { packages, qualifyComponent } from "./packages";
@@ -52,7 +52,7 @@ class JAuthenticator extends JObj { binder: JAuthenticatorBinder | null = null; 
 class JAuthenticatorBinder extends JBinder { authenticator!: JAuthenticator; }
 rt.register({ name: "webdroid/AccountAuthenticatorBinder", ctor: JAuthenticatorBinder, sup: "android/os/Binder", methods: {
   "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JAuthenticatorBinder, code: number, p: JParcel, reply: JParcel | null): Gen {
-    if (code === 0x5f4e5446 && reply) { writeString(reply, AUTHENTICATOR); return 1; }
+    if (code === INTERFACE_TRANSACTION && reply) { writeString(reply, AUTHENTICATOR); return 1; }
     const method = authenticatorMethods[code - 1]; if (!method) return 0;
     const caller = callingIdentity();
     if (caller.uid !== 1000 && ![...packages.values()].some(pkg => pkg.uid === caller.uid && pkg.grants.has("android.permission.ACCOUNT_MANAGER")))

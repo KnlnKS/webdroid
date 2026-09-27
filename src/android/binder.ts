@@ -3,6 +3,9 @@ import { curThread, JThread, setCurThread, vcall, vcallUncaught } from "../jvm/n
 import { PROCESS_PID, PROCESS_UID, reportUncaught } from "./os";
 import { JParcel } from "./parcel";
 
+/** IBinder.INTERFACE_TRANSACTION: a binder answers it with its interface descriptor */
+export const INTERFACE_TRANSACTION = 0x5f4e5446;
+const emptyParcel = (): ParcelData => ({ bytes: new Uint8Array(), objects: [] });
 export type BinderHandle = { pid: number; id: number };
 export type ParcelData = { bytes: Uint8Array; objects: [number, BinderHandle | null][] };
 export type Transaction = { handle: BinderHandle; code: number; flags: number; data: ParcelData };
@@ -90,10 +93,10 @@ export async function receiveTransaction(request: Transaction, caller: Caller): 
   const pending = (oneWay.get(request.handle.id) ?? Promise.resolve()).then(run).catch(reportUncaught);
   oneWay.set(request.handle.id, pending);
   void pending.finally(() => { if (oneWay.get(request.handle.id) === pending) oneWay.delete(request.handle.id); });
-  return { handled: 1, data: { bytes: new Uint8Array(), objects: [] } };
+  return { handled: 1, data: emptyParcel() };
 }
 
-rt.register({ name: "android/os/IBinder", ctor: class extends JObj {}, statics: { FIRST_CALL_TRANSACTION: 1, FLAG_ONEWAY: 1, INTERFACE_TRANSACTION: 0x5f4e5446 } });
+rt.register({ name: "android/os/IBinder", ctor: class extends JObj {}, statics: { FIRST_CALL_TRANSACTION: 1, FLAG_ONEWAY: 1, INTERFACE_TRANSACTION } });
 rt.markers("android/os/IBinder$DeathRecipient");
 rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBinder"], methods: {
   "static getCallingUid()I": () => callingIdentity().uid,
@@ -119,7 +122,7 @@ rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBi
     finally { data.pos = pos; if (reply) reply.pos = 0; }
   }),
   "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JBinder, code: number, _data: JParcel, reply: JParcel | null): Gen {
-    if (code !== 0x5f4e5446 || !reply) return 0;
+    if (code !== INTERFACE_TRANSACTION || !reply) return 0;
     yield vcall(reply, "writeString", "(Ljava/lang/String;)V", this.descriptor); return 1;
   }),
 } });
@@ -134,7 +137,7 @@ rt.register({ name: "android/os/BinderProxy", ctor: JBinderProxy, ifaces: ["andr
     return result.handled;
   }),
   "getInterfaceDescriptor()Ljava/lang/String;": driven(function* (this: JBinderProxy): Gen {
-    const result = yield binderTransport.transact({ handle: this.handle, code: 0x5f4e5446, flags: 0, data: { bytes: new Uint8Array(), objects: [] } });
+    const result = yield binderTransport.transact({ handle: this.handle, code: INTERFACE_TRANSACTION, flags: 0, data: emptyParcel() });
     return vcall(importParcel(result.data), "readString", "()Ljava/lang/String;");
   }),
   "linkToDeath(Landroid/os/IBinder$DeathRecipient;I)V": function (this: JBinderProxy, recipient: unknown) {
