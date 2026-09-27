@@ -1125,6 +1125,37 @@ export class JKeyEvent extends JObj {
   downTime = 0n; eventTime = 0n; repeat = 0; meta = 0; deviceId = -1; scanCode = 0; flags = 0; source = 0x101;
 }
 const KEYCODE_BACK = 4, M_dispatchKey = "(Landroid/view/KeyEvent;)Z";
+const keySet = (names: string) => new Set(names.split(" ").map((name) => keyCodes.get(name)!));
+// KeyEvent.isSystemKey, isModifierKey, isGamepadButton and isMediaSessionKey
+const SYSTEM_KEYS = keySet("MENU SOFT_RIGHT HOME BACK CALL ENDCALL VOLUME_UP VOLUME_DOWN VOLUME_MUTE MUTE POWER HEADSETHOOK MEDIA_PLAY " +
+  "MEDIA_PAUSE MEDIA_PLAY_PAUSE MEDIA_STOP MEDIA_NEXT MEDIA_PREVIOUS MEDIA_REWIND MEDIA_RECORD MEDIA_FAST_FORWARD CAMERA FOCUS SEARCH " +
+  "BRIGHTNESS_DOWN BRIGHTNESS_UP MEDIA_AUDIO_TRACK SYSTEM_NAVIGATION_UP SYSTEM_NAVIGATION_DOWN SYSTEM_NAVIGATION_LEFT SYSTEM_NAVIGATION_RIGHT");
+const MODIFIER_KEYS = keySet("SHIFT_LEFT SHIFT_RIGHT ALT_LEFT ALT_RIGHT CTRL_LEFT CTRL_RIGHT META_LEFT META_RIGHT SYM NUM FUNCTION");
+const MEDIA_SESSION_KEYS = keySet("MEDIA_PLAY MEDIA_PAUSE MEDIA_PLAY_PAUSE MUTE HEADSETHOOK MEDIA_STOP MEDIA_NEXT MEDIA_PREVIOUS " +
+  "MEDIA_REWIND MEDIA_RECORD MEDIA_FAST_FORWARD");
+const isGamepadButton = (code: number) => (code >= 96 && code <= 110) || (code >= 188 && code <= 203);
+/** KeyEvent.DispatcherState: which DOWN a target is tracking, so its UP arrives with FLAG_TRACKING */
+export class JKeyDispatcherState extends JObj { downKey = 0; target: unknown = null; }
+rt.register({
+  name: "android/view/KeyEvent$DispatcherState", ctor: JKeyDispatcherState,
+  methods: {
+    "<init>()V": function () {},
+    "reset()V": function (this: JKeyDispatcherState) { this.downKey = 0; this.target = null; },
+    "reset(Ljava/lang/Object;)V": function (this: JKeyDispatcherState, target: unknown) { if (this.target === target) { this.downKey = 0; this.target = null; } },
+    "startTracking(Landroid/view/KeyEvent;Ljava/lang/Object;)V": function (this: JKeyDispatcherState, ev: JKeyEvent, target: unknown) {
+      if (ev.action !== 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Can only start tracking on a down event");
+      this.downKey = ev.keyCode; this.target = target; ev.tracking = true;
+    },
+    "isTracking(Landroid/view/KeyEvent;)Z": function (this: JKeyDispatcherState, ev: JKeyEvent) { return +(this.target !== null && this.downKey === ev.keyCode); },
+    "handleUpEvent(Landroid/view/KeyEvent;)V": function (this: JKeyDispatcherState, ev: JKeyEvent) {
+      if (this.target !== null && this.downKey === ev.keyCode) { ev.tracking = true; this.downKey = 0; this.target = null; }
+    },
+    "performedLongPress(Landroid/view/KeyEvent;)V": function () {},
+    "isLongPressTracking(Landroid/view/KeyEvent;)Z": () => 0,
+  },
+});
+/** a window's dispatcher state, shared by every view in it (View.getKeyDispatcherState) */
+export const keyDispatcherState = new JKeyDispatcherState();
 /** A BACK press as ViewRootImpl delivers it to a window's callback: DOWN, then an UP that carries
  *  FLAG_TRACKING when the DOWN's receiver started tracking it (KeyEvent.DispatcherState). */
 export const pressBackKey = driven(function* pressBackKey(callback: JObj): Gen {
@@ -1167,6 +1198,14 @@ rt.register({
       }])),
     "<init>(Landroid/view/KeyEvent;)V": function (this: JKeyEvent, o: JKeyEvent) { Object.assign(this, o); },
     "getMetaState()I": function (this: JKeyEvent) { return this.meta; },
+    "isSystem()Z": function (this: JKeyEvent) { return +SYSTEM_KEYS.has(this.keyCode); },
+    "static isModifierKey(I)Z": (code: number) => +MODIFIER_KEYS.has(code),
+    "static isGamepadButton(I)Z": (code: number) => +isGamepadButton(code),
+    "static isMediaSessionKey(I)Z": (code: number) => +MEDIA_SESSION_KEYS.has(code),
+    // KeyEvent.dispatch: route to the callback by action, as Activity/View/Dialog dispatch does
+    "dispatch(Landroid/view/KeyEvent$Callback;Landroid/view/KeyEvent$DispatcherState;Ljava/lang/Object;)Z": function (this: JKeyEvent, callback: JObj) {
+      return dispatchKeyToCallback(callback, this);
+    },
     "getModifiers()I": function (this: JKeyEvent) { return this.meta & 0x770ff; },
     "getRepeatCount()I": function (this: JKeyEvent) { return this.repeat; },
     "getDownTime()J": function (this: JKeyEvent) { return this.downTime; },
