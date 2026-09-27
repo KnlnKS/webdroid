@@ -161,7 +161,6 @@ function activityActionMode(this: JActivity, cb: unknown) { return startActionMo
 function senderForResult(this: JActivity, s: JIntentSender, code: number, fill: JIntent | null) {
   return startIntentSender(this, s, fill, code >= 0 ? { act: this, code } : undefined);
 }
-function sender(this: JActivity, s: JIntentSender, fill: JIntent | null) { return startIntentSender(this, s, fill); }
 function invalidateOptionsMenu(this: JActivity) { appHost?.invalidateOptionsMenu(this); }
 function finishActivity(this: JActivity) { callSelf(activityMethods, "finish()V", this); }
 const setActivityContent = driven(function* setActivityContent(act: JActivity, v: JView, lp: JLayoutParams | null): Gen {
@@ -343,8 +342,6 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "startIntentSenderForResult(Landroid/content/IntentSender;ILandroid/content/Intent;III)V": senderForResult,
   "startIntentSenderForResult(Landroid/content/IntentSender;ILandroid/content/Intent;IIILandroid/os/Bundle;)V": senderForResult,
-  "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;III)V": sender,
-  "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;IIILandroid/os/Bundle;)V": sender,
   "setResult(ILandroid/content/Intent;)V": function (this: JActivity, c: number, d: JIntent) {
     this.resultCode = c;
     this.resultData = d;
