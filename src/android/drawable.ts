@@ -441,7 +441,8 @@ class JGradientDrawable extends JDrawable {
   private clampedRadii = [0, 0, 0, 0];
   strokeW = 0; strokeColor = 0; dashW = 0; dashGap = 0;
   gradColors: number[] | null = null;
-  gradAngle = 0;
+  /** degrees, a multiple of 45: a GradientDrawable made in code starts TOP_BOTTOM */
+  gradAngle = 270;
   gradType = 0; // linear/radial/sweep
   gradRadius = 0;
   sizeW = -1; sizeH = -1;
@@ -478,11 +479,8 @@ class JGradientDrawable extends JDrawable {
           this.gradColors.forEach((c, i) => g.addColorStop(i / (this.gradColors!.length - 1), cssColor(c)));
           fill = g;
         } else {
-          const a = ((this.gradAngle % 360) + 360) % 360;
-          const rad = a * Math.PI / 180;
-          const cx = left + w / 2, cy = top + h / 2;
-          const len = (Math.abs(Math.cos(rad)) * w + Math.abs(Math.sin(rad)) * h) / 2;
-          const g = ctx.createLinearGradient(cx - Math.cos(rad) * len, cy + Math.sin(rad) * len, cx + Math.cos(rad) * len, cy - Math.sin(rad) * len);
+          const [x0, y0, x1, y1] = GRADIENT_ENDS[this.gradAngle / 45];
+          const g = ctx.createLinearGradient(left + x0 * w, top + y0 * h, left + x1 * w, top + y1 * h);
           this.gradColors.forEach((c, i) => g.addColorStop(i / (this.gradColors!.length - 1), cssColor(c)));
           fill = g;
         }
@@ -539,6 +537,13 @@ rt.register({
 });
 // GradientDrawable.Orientation ordinals (TOP_BOTTOM first) as the angle each one means
 const ORIENT_ANGLE = [270, 225, 180, 135, 90, 45, 0, 315];
+/** each orientation's start and end corner, by angle / 45, as fractions of the bounds */
+const GRADIENT_ENDS = [[0, 0, 1, 0], [0, 1, 1, 0], [0, 1, 0, 0], [1, 1, 0, 0], [1, 0, 0, 0], [1, 0, 0, 1], [0, 0, 0, 1], [0, 0, 1, 1]];
+/** android:angle is a float; AOSP keeps TOP_BOTTOM for one that is not a multiple of 45 */
+function gradientAngle(deg: number): number {
+  const a = ((Math.trunc(deg) % 360) + 360) % 360;
+  return a % 45 ? 270 : a;
+}
 mkEnumSet("android/graphics/drawable/GradientDrawable$Orientation", ["TOP_BOTTOM", "TR_BL", "RIGHT_LEFT", "BR_TL", "BOTTOM_TOP", "BL_TR", "LEFT_RIGHT", "TL_BR"]);
 
 /** a selector/color-state item matches when every required state is set and no negated one is */
@@ -1635,7 +1640,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
           if (cc) cols.push(colorOf(cc, 0));
           cols.push(colorOf(cg(AT.endColor), 0));
           d.gradColors = cols;
-          d.gradAngle = xmlInt(res, cg(AT.angle), 0);
+          d.gradAngle = gradientAngle(rvFloat(res, cg(AT.angle), 0));
           d.gradType = xmlInt(res, cg(AT.type), 0);
           d.gradRadius = dimen(cg(AT.gradientRadius), 0);
         } else if (c.name === "size") {
