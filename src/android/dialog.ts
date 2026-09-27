@@ -20,7 +20,7 @@ import { TV } from "./axml";
 import { device } from "../shell/config";
 import { inflateLayout, getInflater } from "./inflate";
 import { csText } from "./text";
-import { applyWindowTheme, themeDim, type JWindow } from "./window";
+import { applyWindowTheme, windowDim, type JWindow } from "./window";
 import { complexToFraction } from "./util";
 import { JMotionEvent } from "./motionevent";
 
@@ -43,8 +43,6 @@ async function loadCardBg(root: DialogRoot): Promise<void> {
   const rv = root.theme.lookup(AID("windowBackground"));
   if (rv) root.cardBg = await loadDrawableRV(root.jres, rv, root.theme);
   root.cardRadius = rvDimen(root.jres, root.theme.lookup(AID("dialogCornerRadius")), 0);
-  // an edge-to-edge sheet theme that only unfloats its window loses the platform dim and draws its own scrim
-  root.themeDim = themeDim(root.theme, 1);
 }
 
 /** The dialog's decor; the shell owns its placement and dimming behind the window. */
@@ -71,7 +69,6 @@ class DialogRoot extends JFrameLayout {
   content!: JFrameLayout;
   /** the dialog window's own background, from its theme — not a hardcoded white card */
   cardBg: JDrawable | null = null;
-  themeDim = 0.6;
   /** the theme's dialogCornerRadius: the frame's shape, and so the shadow's */
   cardRadius = 0;
 }
@@ -253,9 +250,9 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     this.showing = true;
     const root = this.ensureRoot();
     yield loadCardBg(root);
-    yield vcall(this, "getWindow", "()Landroid/view/Window;");
+    const win: JWindow = yield vcall(this, "getWindow", "()Landroid/view/Window;");
     const overlay = addOverlay(root, 0, 0, false, () => vcall(this, "onBackPressed", "()V"), () => this.cancel());
-    overlay.dim = () => this.win && !Number.isNaN(this.win.dimAmount) ? this.win.dimAmount : root.themeDim;
+    overlay.dim = () => windowDim(win);
     overlay.modal = true;
     const f = jmethod(this, M_onCreate);
     if (f && !(this as any).$created) {

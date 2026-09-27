@@ -10,7 +10,7 @@ import { JFrameLayout, JLinearLayout } from "./layouts";
 import { rt } from "../jvm/runtime";
 import { JActionBarView } from "./menu";
 import { TV } from "./axml";
-import { darken, applyWindowTheme, isTranslucentOrFloating, themeDim, FLAG_DIM_BEHIND, JWindow } from "./window";
+import { darken, applyWindowTheme, JWindow } from "./window";
 import { sysIns, type JWindowInsets } from "./windowinsets";
 import { vcall } from "../jvm/natives/jlang";
 
@@ -128,13 +128,9 @@ export async function ensureDecor(act: JActivity) {
     act.window.actionBarView = bar;
   }
   applyWindowTheme(act.window, theme, statusDefault);
-  // ActivityRecord decides occlusion from the manifest theme; a theme set in onCreate leaves it
-  act.window.translucent = isTranslucentOrFloating(manifestTheme(host, jclsNameOf(act)));
-  const dim = themeDim(theme);
-  if (dim) {
-    act.window.flags |= FLAG_DIM_BEHIND;
-    if (Number.isNaN(act.window.dimAmount)) act.window.dimAmount = dim;
-  }
+  // ActivityInfo.isTranslucentOrFloating, of the manifest theme: a theme set in onCreate leaves it
+  const declared = manifestTheme(host, jclsNameOf(act)), flag = (name: string) => rvInt(host.res, declared.lookup(AID(name)), 0);
+  act.window.translucent = !!(flag("windowIsTranslucent") || flag("windowIsFloating"));
   const content = new JFrameLayout();
   content.ctx = act;
   content.jres = host.res;

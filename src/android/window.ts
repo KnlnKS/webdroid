@@ -62,19 +62,17 @@ export const APPEARANCE_LIGHT_NAVIGATION_BARS = 16;
 export function applyWindowTheme(window: JWindow, theme: JTheme, statusDefault = -16777216) {
   window.statusBarColor ??= rvColor(theme.res, theme.lookup(AID("statusBarColor")), statusDefault);
   window.navBarColor ??= rvColor(theme.res, theme.lookup(AID("navigationBarColor")), -16777216);
-  window.translucent = isTranslucentOrFloating(theme);
   if (rvInt(theme.res, theme.lookup(AID("windowFullscreen")), 0)) window.flags |= 1024;
+  // PhoneWindow: backgroundDimEnabled defaults to windowIsFloating, and an amount the app set stays
+  const floating = rvInt(theme.res, theme.lookup(AID("windowIsFloating")), 0);
+  if (rvInt(theme.res, theme.lookup(AID("backgroundDimEnabled")), floating)) {
+    window.flags |= FLAG_DIM_BEHIND;
+    if (Number.isNaN(window.dimAmount)) window.dimAmount = rvFloat(theme.res, theme.lookup(AID("backgroundDimAmount")), 0.5);
+  }
 }
-/** ActivityInfo.isTranslucentOrFloating: a floating window leaves the one behind it visible */
-export const isTranslucentOrFloating = (theme: JTheme): boolean =>
-  !!rvInt(theme.res, theme.lookup(AID("windowIsTranslucent")), 0) || !!rvInt(theme.res, theme.lookup(AID("windowIsFloating")), 0);
-/** PhoneWindow: backgroundDimEnabled defaults to windowIsFloating; the amount to dim, or 0 */
-export function themeDim(theme: JTheme, floatingDefault = 0): number {
-  const enabled = theme.lookup(AID("backgroundDimEnabled"));
-  const on = enabled ? rvInt(theme.res, enabled, 0) : rvInt(theme.res, theme.lookup(AID("windowIsFloating")), floatingDefault);
-  return on ? rvFloat(theme.res, theme.lookup(AID("backgroundDimAmount")), 0.5) : 0;
-}
-export const FLAG_DIM_BEHIND = 2;
+const FLAG_DIM_BEHIND = 2;
+/** how much a window darkens what lies behind it */
+export const windowDim = (w: JWindow): number => (w.flags & FLAG_DIM_BEHIND ? w.dimAmount : 0);
 class JInsetsController extends JObj { w: JWindow = null!; }
 /** A change to how a window is sized or placed relays out its tree: an activity's decor or a
  *  dialog's frame. A window not built yet lays out fresh when it is. */
