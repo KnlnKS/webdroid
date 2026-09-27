@@ -191,13 +191,14 @@ const openAfd = async (u: JUri, mode: string) => {
   return mkAssetFd(pfd.bytes, pfd);
 };
 const contentObservers = new Set<{ uri: string; descendants: boolean; observer: unknown }>();
-async function notifyContentObservers(uri: JUri, origin: unknown, flags: number | boolean = 0): Promise<void> {
+/** `flags` is NOTIFY_*; the boolean overload's syncToNetwork is NOTIFY_SYNC_TO_NETWORK (1) */
+async function notifyContentObservers(uri: JUri, origin: unknown, flags = 0): Promise<void> {
   if (!uri) rt.npe();
   for (const entry of [...contentObservers]) {
     if (entry.uri !== uri.uri && !(entry.descendants && uri.uri.startsWith(entry.uri.replace(/\/$/, "") + "/"))) continue;
     const self = entry.observer === origin;
     if (self && !await vcall(entry.observer, "deliverSelfNotifications", "()Z")) continue;
-    await vcall(entry.observer, "dispatchChange", "(ZLandroid/net/Uri;I)V", self ? 1 : 0, uri, +flags);
+    await vcall(entry.observer, "dispatchChange", "(ZLandroid/net/Uri;I)V", self ? 1 : 0, uri, flags);
   }
 }
 const resolverMethods: NativeSpec["methods"] = {

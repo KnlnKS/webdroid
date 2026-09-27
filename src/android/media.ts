@@ -259,27 +259,27 @@ rt.register({
   },
 });
 class JAudioAttributesBuilder extends JObj { attrs = new JAudioAttributes(); }
-function setLegacyStreamType(this: JAudioAttributesBuilder, stream: number) {
+/** the usage and content type AudioAttributes.Builder.setLegacyStreamType maps a stream type to */
+function setLegacyStreamType(attrs: JAudioAttributes, stream: number): void {
   switch (stream) {
-    case 0: case 6: this.attrs.contentType = 1; this.attrs.usage = 2; break;
-    case 1: this.attrs.contentType = 4; this.attrs.usage = 13; break;
-    case 2: this.attrs.contentType = 4; this.attrs.usage = 6; break;
-    case 3: this.attrs.contentType = 2; this.attrs.usage = 1; break;
-    case 4: this.attrs.contentType = 4; this.attrs.usage = 4; break;
-    case 5: this.attrs.contentType = 4; this.attrs.usage = 5; break;
-    case 7: this.attrs.contentType = 4; this.attrs.usage = 13; this.attrs.flags |= 1; break;
-    case 8: this.attrs.contentType = 4; this.attrs.usage = 3; break;
-    case 9: this.attrs.contentType = 1; this.attrs.usage = 11; break;
+    case 0: case 6: attrs.contentType = 1; attrs.usage = 2; break;
+    case 1: attrs.contentType = 4; attrs.usage = 13; break;
+    case 2: attrs.contentType = 4; attrs.usage = 6; break;
+    case 3: attrs.contentType = 2; attrs.usage = 1; break;
+    case 4: attrs.contentType = 4; attrs.usage = 4; break;
+    case 5: attrs.contentType = 4; attrs.usage = 5; break;
+    case 7: attrs.contentType = 4; attrs.usage = 13; attrs.flags |= 1; break;
+    case 8: attrs.contentType = 4; attrs.usage = 3; break;
+    case 9: attrs.contentType = 1; attrs.usage = 11; break;
     default: throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid stream type " + stream);
   }
-  return this;
 }
 rt.register({
   name: "android/media/AudioAttributes$Builder", ctor: JAudioAttributesBuilder,
   methods: {
     "<init>()V": function () {},
     "setFlags(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, flags: number) { this.attrs.flags |= flags & 0x1d1; return this; },
-    "setLegacyStreamType(I)Landroid/media/AudioAttributes$Builder;": setLegacyStreamType,
+    "setLegacyStreamType(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, stream: number) { setLegacyStreamType(this.attrs, stream); return this; },
     "setAllowedCapturePolicy(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, policy: number) {
       if (policy < 1 || policy > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid capture policy " + policy);
       this.attrs.flags = (this.attrs.flags & ~0x1400) | (policy === 3 ? 0x1400 : policy === 2 ? 0x400 : 0); return this;
@@ -557,7 +557,7 @@ rt.register({ name: "android/media/Ringtone", ctor: JRingtone,
     "getVolume()F": function (this: JRingtone) { return this.volume; },
     "setStreamType(I)V": function (this: JRingtone, type: number) {
       const attrs: JAudioAttributes = rt.make("android/media/AudioAttributes");
-      setLegacyStreamType.call({ attrs } as JAudioAttributesBuilder, type);
+      setLegacyStreamType(attrs, type);
       this.streamType = type; this.attributes = attrs;
     },
     "getStreamType()I": function (this: JRingtone) { return this.streamType; },

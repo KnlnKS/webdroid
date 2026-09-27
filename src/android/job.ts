@@ -132,7 +132,7 @@ rt.register({
 // binder they carry. JobService and any app JobServiceEngine (JobIntentService's) answer alike.
 const START = 1, STOP = 2;
 const ACK_START = 1, ACK_STOP = 2, DEQUEUE = 3, COMPLETE = 4, FINISHED = 5;
-type JobRun = { callback: JJobCallback; binder: JObj; unbind: () => Promise<void>; executing: Set<number> };
+type JobRun = { callback: JJobCallback; binder: JObj | null; unbind: () => Promise<void>; executing: Set<number> };
 type ScheduledJob = { info: JJobInfo; timer: ReturnType<typeof setTimeout> | null; run: JobRun | null; work: JJobWorkItem[]; nextWork: number };
 const pendingJobs = new Map<number, ScheduledJob>();
 let nextBinding = 1;
@@ -180,12 +180,13 @@ async function startJob(job: ScheduledJob): Promise<void> {
     armJob(job, 30000); return;
   }
   const callback: JJobCallback = rt.make("webdroid/JobCallback");
-  const run: JobRun = { callback, binder: null!, unbind: async () => {}, executing: new Set() };
+  const run: JobRun = { callback, binder: null, unbind: async () => {}, executing: new Set() };
   callback.job = job; callback.run = run; job.run = run;
   try {
-    Object.assign(run, await bindJobService(p.svc, "job:" + p.id + ":" + nextBinding++));
-    if (pendingJobs.get(p.id) !== job) { job.run = null; return run.unbind(); }
-    await sendJob(run.binder, START, jobParameters(job, callback));
+    const { binder, unbind } = await bindJobService(p.svc, "job:" + p.id + ":" + nextBinding++);
+    run.binder = binder; run.unbind = unbind;
+    if (pendingJobs.get(p.id) !== job) { job.run = null; return unbind(); }
+    await sendJob(binder, START, jobParameters(job, callback));
   } catch (error) { await finishJob(job, run, true); throw error; }
 }
 function cancelJob(id: number): void {
@@ -337,8 +338,7 @@ rt.register({
   },
 });
 function jobBinder(target: JObj & { binder?: JJobServiceBinder }): JJobServiceBinder {
-  if (!target.binder) { const binder: JJobServiceBinder = target.binder = rt.make("webdroid/JobServiceBinder"); binder.target = target; }
-  return target.binder!;
+  return target.binder ??= Object.assign(rt.make("webdroid/JobServiceBinder") as JJobServiceBinder, { target });
 }
 const jobFinished = (params: JJobParameters, reschedule: number) => jobCallback(params, FINISHED, reschedule);
 class JJobService extends JService { binder?: JJobServiceBinder; }
@@ -347,7 +347,7 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "onBind(Landroid/content/Intent;)Landroid/os/IBinder;": function (this: JJobService) { return jobBinder(this); },
-    "jobFinished(Landroid/app/job/JobParameters;Z)V": (params: JJobParameters, reschedule: number) => jobFinished(params, reschedule),
+    "jobFinished(Landroid/app/job/JobParameters;Z)V": jobFinished,
   },
 });
 class JJobServiceEngine extends JObj { binder?: JJobServiceBinder; }
@@ -356,6 +356,6 @@ rt.register({
   methods: {
     "<init>(Landroid/app/Service;)V": function (this: JJobServiceEngine, service: unknown) { if (!service) throw rt.mkThrowable("java/lang/IllegalArgumentException", "service is null"); },
     "getBinder()Landroid/os/IBinder;": function (this: JJobServiceEngine) { return jobBinder(this); },
-    "jobFinished(Landroid/app/job/JobParameters;Z)V": (params: JJobParameters, reschedule: number) => jobFinished(params, reschedule),
+    "jobFinished(Landroid/app/job/JobParameters;Z)V": jobFinished,
   },
 });
