@@ -314,7 +314,8 @@ const LAUNCH_SINGLE_TOP = 1, LAUNCH_SINGLE_TASK = 2;
 const reuseActivity = driven(function* reuseActivity(component: string, intent: JIntent | null, options?: ActivityLaunch): Gen<boolean> {
   if (!booted || options?.remoteId || options?.result) return false;
   const stack = booted.stack, flags = intent?.flags ?? 0;
-  const cls = aliasTargets.get(component) ?? component, mode = manifestLaunchMode(component);
+  // an <activity-alias> launches in its target's launch mode, as the package parser copies it
+  const cls = aliasTargets.get(component) ?? component, mode = manifestLaunchMode(cls);
   const top = stack.at(-1);
   if (flags & FLAG_ACTIVITY_CLEAR_TASK && flags & FLAG_ACTIVITY_NEW_TASK) {
     for (const act of stack.filter((a) => a.taskId === top?.taskId).reverse()) yield finishActivity(act, false);
