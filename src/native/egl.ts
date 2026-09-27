@@ -127,5 +127,7 @@ export function eglInit(): void {
       probed.add("eglGetProcAddress!" + n); return 0;
     },
   };
+  // a call that does not fail leaves EGL_SUCCESS, so an earlier failure is not reported against it
+  for (const [name, fn] of Object.entries(E)) if (name !== "eglGetError") E[name] = (cpu, a) => { takeEglError(cpu.jthread); return fn(cpu, a); };
   hostLib("libEGL.so", E, { closed: true });
 }
