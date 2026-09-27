@@ -396,7 +396,7 @@ const compoundMethods: NativeSpec["methods"] = {
   "onDraw(Landroid/graphics/Canvas;)V": compoundOnDraw,
 };
 rt.register({ name: "android/widget/CompoundButton", ctor: JCompoundButton, sup: "android/widget/Button", ifaces: ["android/widget/Checkable"], methods: compoundMethods });
-rt.markers("android/widget/CompoundButton$OnCheckedChangeListener", "android/widget/Checkable");
+rt.markers("android/widget/CompoundButton$OnCheckedChangeListener");
 rt.register({ name: "android/widget/CheckBox", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: {
   ...compoundMethods, ...compoundCtors("checkboxStyle"),
 } });
