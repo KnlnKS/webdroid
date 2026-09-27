@@ -1,12 +1,12 @@
 import { perf } from "../perf";
 
-export type JvmTier = "auto" | "cold" | "js" | "wasm";
-export type JvmProfilePhase =
+type JvmTier = "auto" | "cold" | "js" | "wasm";
+type JvmProfilePhase =
   "decode" | "cfg" | "type" | "coldBuild" | "hotEmit" | "jsCompile" | "classLink" |
   "coldRun" | "hotRun" | "suspend";
-export type JvmMethodProfilePhase = Exclude<JvmProfilePhase, "classLink">;
+type JvmMethodProfilePhase = Exclude<JvmProfilePhase, "classLink">;
 
-export interface JvmMethodProfile {
+interface JvmMethodProfile {
   name: string;
   entries: number;
   backedges: number;

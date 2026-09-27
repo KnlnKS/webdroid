@@ -8,7 +8,7 @@ import type { Cpu } from "./cpu";
 import { LAYOUT, fail, utf8, logLine, offArg, readTs, clockTime, scanSink } from "./libc";
 import { format, scan } from "./printf";
 import { vfs, type VfsFile } from "../jvm/natives/jio";
-import { procIdentity, procText } from "../shell/procfs";
+import { procIdentity, procMemory, procText } from "../shell/procfs";
 import { readFully, type FileSource } from "../shell/lazyfile";
 import { concat } from "../jvm/abi";
 import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd } from "./net";
@@ -679,7 +679,7 @@ function flattenFts(walk: FtsWalk, node: FtsNode): void {
 }
 
 async function ftsOpen(cpu: Cpu, argv: number, options: number, compar: number): Promise<number | bigint> {
-  if (!argv || options & ~0x7f || !(options & (2 | 16))) { fail(cpu, E.INVAL); return 0; }
+  if (!argv || options & ~0xff) { fail(cpu, E.INVAL); return 0; }
   const handle = mem.malloc(PTR), walk: FtsWalk = { entries: [], nodes: new Map(), allocations: [handle], index: 0, current: 0 };
   const roots: FtsNode[] = [];
   for (let p = argv, pathp; (pathp = ldp(p)); p += PTR) roots.push(ftsTree(walk, vfs.norm(mem.cstr(pathp)), 0, 0));
@@ -704,6 +704,7 @@ export function stdioInit(): void {
     vfs.onWrite = (path, change = "modify") => { priorOnWrite(path, change); inotifyVfsChange(path, change); };
     inotifyHooked = true;
   }
+  procMemory.resident = () => mem.u8.byteLength;
   for (let fd = 0; fd < 3; fd++) reserveFd(fd);
   fds.set(0, fdBase("/dev/stdin"));
   fds.set(1, { ...fdBase("/dev/stdout"), write: true, statusFlags: 1, log: 4 });

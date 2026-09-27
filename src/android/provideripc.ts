@@ -9,12 +9,11 @@ import { attachProvider, providerTransport, providerOperations } from "./content
 import { getPM } from "./pm";
 import { appHost } from "./apphost";
 
-export type ProviderValue = { kind: "uri"; value: string } | { kind: "values" | "value"; data: ParcelData }
+type Value = { kind: "uri"; value: string } | { kind: "values" | "value"; data: ParcelData }
   | { kind: "pfd"; bytes: Uint8Array; token: number | null; closed?: boolean };
 export type ProviderRequest = { authority: string; name: string; desc: string; args: Value[]; access?: "read" | "write" };
 export type ProviderReply = { kind: "cursor"; columns: string[]; rows: Value[][] } | { kind: "value"; value: Value };
 type ProviderCall = (pkg: string, process: string, request: ProviderRequest) => Promise<ProviderReply>;
-type Value = ProviderValue;
 export async function encodeProviderValue(value: unknown): Promise<Value> {
   if (value instanceof JUri) return { kind: "uri", value: value.uri };
   const pfd = parcelFileDescriptorData(value);

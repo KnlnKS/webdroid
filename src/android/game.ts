@@ -1,4 +1,4 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, fieldGetters } from "../jvm/runtime";
 import { appHost } from "./apphost";
 import { FLAG_IS_GAME, getAppInfo } from "./pm";
 import { type JParcel, parcelCreator, readInt, writeInt } from "./parcel";
@@ -24,9 +24,7 @@ rt.register({ name: "android/app/GameState", ctor: JGameState, ifaces: ["android
       this.loading = loading; this.mode = mode; this.label = label; this.quality = quality;
     },
     "isLoading()Z": function (this: JGameState) { return this.loading; },
-    "getMode()I": function (this: JGameState) { return this.mode; },
-    "getLabel()I": function (this: JGameState) { return this.label; },
-    "getQuality()I": function (this: JGameState) { return this.quality; },
+    ...fieldGetters({ "getMode()I": "mode", "getLabel()I": "label", "getQuality()I": "quality" }),
     "describeContents()I": () => 0,
     "writeToParcel(Landroid/os/Parcel;I)V": function (this: JGameState, p: JParcel) {
       writeInt(p, this.loading); writeInt(p, this.mode); writeInt(p, this.label); writeInt(p, this.quality);

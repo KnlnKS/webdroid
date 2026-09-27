@@ -2,7 +2,7 @@ import { readFully } from "./lazyfile";
 import type { Install } from "./install";
 import { EXT_MIME } from "../mime";
 
-export interface LocalAssetSession { key: string; install: Install }
+interface LocalAssetSession { key: string; install: Install }
 let active: LocalAssetSession | null = null;
 
 export function activateLocalAssets(session: LocalAssetSession | null): () => void {

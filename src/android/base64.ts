@@ -68,10 +68,11 @@ function dec(codes: ArrayLike<number>, off: number, len: number): Int8Array {
   return new Int8Array(out);
 }
 
-const strCodes = (s: string): number[] => {
+/** a base64 String decodes from its char codes, as the byte[] forms decode from their bytes */
+const decodeString = (s: string): Int8Array => {
   const a = new Array<number>(s.length);
   for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
-  return a;
+  return dec(a, 0, a.length);
 };
 const ascii = new TextDecoder();
 
@@ -85,7 +86,7 @@ rt.register({
     "static encodeToString([BI)Ljava/lang/String;": (b: Int8Array, f: number) => ascii.decode(enc(b, 0, b.length, f)),
     "static encodeToString([BIII)Ljava/lang/String;":
       (b: Int8Array, o: number, l: number, f: number) => ascii.decode(enc(b, o, l, f)),
-    "static decode(Ljava/lang/String;I)[B": (s: string) => { const c = strCodes(s); return dec(c, 0, c.length); },
+    "static decode(Ljava/lang/String;I)[B": decodeString,
     "static decode([BI)[B": (b: Int8Array) => dec(b, 0, b.length),
     "static decode([BIII)[B": (b: Int8Array, o: number, l: number) => dec(b, o, l),
   },
@@ -140,7 +141,7 @@ rt.register({
 rt.register({
   name: "java/util/Base64$Decoder", ctor: JB64Codec,
   methods: {
-    "decode(Ljava/lang/String;)[B": (s: string) => { const c = strCodes(s); return dec(c, 0, c.length); },
+    "decode(Ljava/lang/String;)[B": decodeString,
     "decode([B)[B": (b: Int8Array) => dec(b, 0, b.length),
   },
 });

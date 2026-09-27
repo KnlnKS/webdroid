@@ -13,8 +13,8 @@ import { newArrayList, toJsArray, mkIter } from "./jutil";
 import { JThrowable, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, dotName, i8, u8 } from "../abi";
-import { vfs, type JOutputStream } from "./jio";
-import { Relay, DatagramRelay, syntheticAddress, syntheticHost, nameExists, ipv4Text, type Ipv4 } from "../../shell/relay";
+import { vfs, type JBAOS } from "./jio";
+import { Relay, DatagramRelay, syntheticAddress, syntheticHost, nameExists, ipv4Text } from "../../shell/relay";
 
 rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager", "javax/net/ssl/KeyManager",
   "javax/net/ssl/SSLSession", "javax/net/ssl/SSLContextSpi", "java/nio/channels/ReadableByteChannel", "java/nio/channels/WritableByteChannel",
@@ -158,22 +158,53 @@ rt.register({
 // java.net addresses, and Socket over the relay above. A name's address is the synthetic one the
 // native resolver hands out for it, so an app that resolves in Java and dials natively (or the
 // other way round) reaches the same relay connection.
-class JInetAddress extends JObj { host = ""; bytes: Ipv4 = [0, 0, 0, 0]; }
+class JInetAddress extends JObj { host = ""; bytes: number[] = [0, 0, 0, 0]; }
 class JInet4Address extends JInetAddress {}
+class JInet6Address extends JInetAddress {}
+/** RFC 5952 text: lower-case hex, the longest run of two or more zero groups as "::" */
+function ipv6Text(b: ArrayLike<number>): string {
+  const g = Array.from({ length: 8 }, (_, i) => (b[2 * i] << 8) | b[2 * i + 1]);
+  let at = -1, len = 0;
+  for (let i = 0; i < 8;) {
+    let j = i;
+    while (j < 8 && !g[j]) j++;
+    if (j - i > len && j - i > 1) { at = i; len = j - i; }
+    i = j === i ? i + 1 : j;
+  }
+  const hex = (xs: number[]) => xs.map((x) => x.toString(16)).join(":");
+  return at < 0 ? hex(g) : `${hex(g.slice(0, at))}::${hex(g.slice(at + len))}`;
+}
+function parseIpv6(text: string): number[] | null {
+  const t = text.startsWith("[") && text.endsWith("]") ? text.slice(1, -1) : text;
+  if (!/^[0-9a-f:]+$/i.test(t) || !t.includes(":")) return null;
+  const halves = t.split("::");
+  if (halves.length > 2) return null;
+  const groups = halves.map((h) => h ? h.split(":") : []);
+  const missing = 8 - groups[0].length - (groups[1]?.length ?? 0);
+  if (halves.length === 1 ? missing !== 0 : missing < 1) return null;
+  const all = [...groups[0], ...Array(halves.length - 1 && missing).fill("0"), ...(groups[1] ?? [])];
+  if (all.some((x) => x.length > 4)) return null;
+  return all.flatMap((x) => { const v = parseInt(x, 16); return [v >> 8, v & 255]; });
+}
+const addressText = (bytes: number[]) => bytes.length === 16 ? ipv6Text(bytes) : ipv4Text(bytes);
 const inetAddr = (host: string | null) => {
   const name = host === null || host === "" ? "localhost" : host;
-  const address = () => Object.assign(new JInet4Address(), { host: name, bytes: name === "localhost" ? [127, 0, 0, 1] as Ipv4 : syntheticAddress(name) });
+  const v6 = parseIpv6(name);
+  if (v6) return Object.assign(new JInet6Address(), { host: ipv6Text(v6), bytes: v6 });
+  const address = () => Object.assign(new JInet4Address(), { host: name, bytes: name === "localhost" ? [127, 0, 0, 1] : syntheticAddress(name) });
   const exists = nameExists(name);
   if (!(exists instanceof Promise)) return address();
   return exists.then((known) => { if (known === false) throw rt.mkThrowable("java/net/UnknownHostException", "Unable to resolve host \"" + name + "\": No address associated with hostname"); return address(); });
 };
 const inetBytes = (bytes: Int8Array, host: string | null) => {
-  if (bytes?.length !== 4) throw rt.mkThrowable("java/net/UnknownHostException", "addr is of illegal length");
-  const ip: Ipv4 = [bytes[0] & 255, bytes[1] & 255, bytes[2] & 255, bytes[3] & 255];
+  if (bytes?.length !== 4 && bytes?.length !== 16) throw rt.mkThrowable("java/net/UnknownHostException", "addr is of illegal length");
+  const ip = Array.from(bytes, (b) => b & 255);
+  if (ip.length === 16) return Object.assign(new JInet6Address(), { host: host ?? ipv6Text(ip), bytes: ip });
   return Object.assign(new JInet4Address(), { host: host ?? syntheticHost(ip) ?? ipv4Text(ip), bytes: ip });
 };
 rt.register({ name: "java/net/Inet4Address", ctor: JInet4Address, sup: "java/net/InetAddress" });
-rt.register({ name: "java/net/Inet6Address", ctor: class extends JInetAddress {}, sup: "java/net/InetAddress" });
+rt.register({ name: "java/net/Inet6Address", ctor: JInet6Address, sup: "java/net/InetAddress" });
+const v6 = (a: JInetAddress) => a.bytes.length === 16;
 rt.register({
   name: "java/net/InetAddress", ctor: JInetAddress,
   methods: {
@@ -185,16 +216,16 @@ rt.register({
     "static getLocalHost()Ljava/net/InetAddress;": () => inetAddr("localhost"),
     "getHostName()Ljava/lang/String;": function (this: JInetAddress) { return this.host; },
     "getCanonicalHostName()Ljava/lang/String;": function (this: JInetAddress) { return this.host; },
-    "getHostAddress()Ljava/lang/String;": function (this: JInetAddress) { return ipv4Text(this.bytes); },
+    "getHostAddress()Ljava/lang/String;": function (this: JInetAddress) { return addressText(this.bytes); },
     "getAddress()[B": function (this: JInetAddress) { return Int8Array.from(this.bytes); },
-    "isLoopbackAddress()Z": function (this: JInetAddress) { return this.bytes[0] === 127 ? 1 : 0; },
+    "isLoopbackAddress()Z": function (this: JInetAddress) { const b = this.bytes; return +(v6(this) ? b.every((x, i) => x === (i === 15 ? 1 : 0)) : b[0] === 127); },
     "isAnyLocalAddress()Z": function (this: JInetAddress) { return this.bytes.every((b) => b === 0) ? 1 : 0; },
-    "isSiteLocalAddress()Z": function (this: JInetAddress) { const [a, b] = this.bytes; return a === 10 || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) ? 1 : 0; },
-    "isLinkLocalAddress()Z": function (this: JInetAddress) { return this.bytes[0] === 169 && this.bytes[1] === 254 ? 1 : 0; },
-    "isMulticastAddress()Z": function (this: JInetAddress) { return this.bytes[0] >= 224 && this.bytes[0] < 240 ? 1 : 0; },
-    "equals(Ljava/lang/Object;)Z": function (this: JInetAddress, o: unknown) { return o instanceof JInetAddress && o.bytes.every((b, i) => b === this.bytes[i]) ? 1 : 0; },
-    "hashCode()I": function (this: JInetAddress) { return ((this.bytes[0] << 24) | (this.bytes[1] << 16) | (this.bytes[2] << 8) | this.bytes[3]) | 0; },
-    "toString()Ljava/lang/String;": function (this: JInetAddress) { return this.host + "/" + ipv4Text(this.bytes); },
+    "isSiteLocalAddress()Z": function (this: JInetAddress) { const [a, b] = this.bytes; return +(v6(this) ? a === 0xfe && (b & 0xc0) === 0xc0 : a === 10 || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168)); },
+    "isLinkLocalAddress()Z": function (this: JInetAddress) { const [a, b] = this.bytes; return +(v6(this) ? a === 0xfe && (b & 0xc0) === 0x80 : a === 169 && b === 254); },
+    "isMulticastAddress()Z": function (this: JInetAddress) { const a = this.bytes[0]; return +(v6(this) ? a === 0xff : a >= 224 && a < 240); },
+    "equals(Ljava/lang/Object;)Z": function (this: JInetAddress, o: unknown) { return o instanceof JInetAddress && o.bytes.length === this.bytes.length && o.bytes.every((b, i) => b === this.bytes[i]) ? 1 : 0; },
+    "hashCode()I": function (this: JInetAddress) { let h = 0; for (let i = 0; i < this.bytes.length; i += 4) h ^= (this.bytes[i] << 24) | (this.bytes[i + 1] << 16) | (this.bytes[i + 2] << 8) | this.bytes[i + 3]; return h | 0; },
+    "toString()Ljava/lang/String;": function (this: JInetAddress) { return this.host + "/" + addressText(this.bytes); },
   },
 });
 // NetworkInterface: the browser exposes no interfaces, and the relay's address is the server's,
@@ -570,6 +601,10 @@ rt.register({
     "setUseCipherSuitesOrder(Z)V": () => {},
   },
 });
+// Conscrypt's platform parameters class. OkHttp 3.13+ picks its Android 10 platform by finding
+// it (SDK >= 29) and then speaks TLS only through SSLSockets and SSLParameters ALPN, below and
+// above; without it Platform.<clinit> finds no platform and every OkHttpClient fails.
+rt.markers("com/android/org/conscrypt/SSLParametersImpl");
 rt.register({
   name: "android/net/ssl/SSLSockets", ctor: class extends JObj {},
   methods: {
@@ -843,6 +878,8 @@ class JHttpInputStream extends JObj {
   timeout: () => number = () => 0;
   bytes: Uint8Array = new Uint8Array(0); offset = 0;
   closed = false; ended = false;
+  /** body bytes Content-Length still promises; a stream that ends short is truncated, not done */
+  remaining = Infinity;
   pending: Promise<void> | null = null;
   async fill(): Promise<boolean> {
     if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
@@ -850,7 +887,9 @@ class JHttpInputStream extends JObj {
     if (this.ended || !this.reader) return false;
     this.pending ??= this.reader.read().then(result => {
       this.ended = !!result.done; this.bytes = result.value ?? new Uint8Array(0); this.offset = 0;
-    }).catch(e => { throw rt.mkThrowable("java/io/IOException", String(e)); }).finally(() => { this.pending = null; });
+      this.remaining -= this.bytes.length;
+      if (this.ended && this.remaining > 0 && this.remaining !== Infinity) throw rt.mkThrowable("java/net/ProtocolException", "unexpected end of stream");
+    }).catch(e => { throw e instanceof JObj ? e : rt.mkThrowable("java/io/IOException", String(e)); }).finally(() => { this.pending = null; });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = this.timeout();
     try {
@@ -917,7 +956,7 @@ class JURLConnection extends JObj {
   connected = 0;
   cto = 0; rto = 0; ifMod = 0n;
   req: [string, string][] = [];
-  out: JOutputStream | null = null;
+  out: JBAOS | null = null;
   ac: AbortController | null = null;
   res: HttpRes | null = null;
   pending: Promise<HttpRes> | null = null;
@@ -941,7 +980,7 @@ class JURLConnection extends JObj {
     arm(this.cto, "connect timed out");
     try {
       r = await fetch("/proxy?url=" + encodeURIComponent(this.url.spec) + (this.follow ? "" : "&manual=1"), {
-        method: this.method, headers, signal: ac.signal, body: hasBody ? new Uint8Array(this.out!.chunks) : undefined,
+        method: this.method, headers, signal: ac.signal, body: hasBody ? this.out!.bytes().slice() : undefined,
       });
     } catch (e) {
       if (timedOut) throw rt.mkThrowable("java/net/SocketTimeoutException", timedOut);
@@ -950,17 +989,23 @@ class JURLConnection extends JObj {
     } finally { clearTimeout(timer); }
     const final = r.headers.get("x-wd-final-url");
     // the proxy's own failure answer carries no final URL; a genuine upstream 502 does
-    if (r.status === 502 && !final) throw rt.mkThrowable("java/net/UnknownHostException", await r.text());
+    if (r.status === 502 && !final) {
+      const { hostname, port, protocol } = this.url.u, kind = r.headers.get("x-wd-error");
+      const detail = (await r.text()).replace(/^proxy error: /, "");
+      if (kind === "host") throw rt.mkThrowable("java/net/UnknownHostException", `Unable to resolve host "${hostname}": No address associated with hostname`);
+      if (kind === "refused") throw rt.mkThrowable("java/net/ConnectException", `Failed to connect to ${hostname}/${port || (protocol === "https:" ? 443 : 80)}`);
+      throw rt.mkThrowable(kind === "timeout" ? "java/net/SocketTimeoutException" : kind === "tls" ? "javax/net/ssl/SSLHandshakeException" : "java/io/IOException", detail);
+    }
     if (final && final !== this.url.u.href) this.url = mkURL(final);   // getURL() reports where a redirect landed
     const hdrs: [string, string][] = [];
     r.headers.forEach((v, k) => { if (k !== "x-wd-final-url" && k !== "x-wd-status" && k !== "x-wd-status-text" && k !== "x-wd-content-length") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]); });
-    if (!r.headers.has("content-length")) {
-      const length = r.headers.get("x-wd-content-length");
-      if (length) hdrs.push(["content-length", length]);
-    }
+    const length = r.headers.get("content-length") ?? r.headers.get("x-wd-content-length");
+    if (length && !r.headers.has("content-length")) hdrs.push(["content-length", length]);
     const stream = new JHttpInputStream();
     stream.reader = r.body?.getReader() ?? null; stream.timeout = () => this.rto;
-    return (this.res = { status: this.follow ? r.status : Number(r.headers.get("x-wd-status")) || r.status,
+    const status = this.follow ? r.status : Number(r.headers.get("x-wd-status")) || r.status;
+    if (length && this.method !== "HEAD" && status >= 200 && status !== 204 && status !== 304) stream.remaining = Number(length);
+    return (this.res = { status,
       msg: this.follow ? r.statusText : r.headers.get("x-wd-status-text") ?? r.statusText, hdrs, stream });
   }
   /** case-insensitive; the last value wins, as URLConnection documents */
@@ -1015,7 +1060,7 @@ rt.register({
       if (this.res || this.pending) throw rt.mkThrowable("java/net/ProtocolException", "Cannot write output after reading input");
       if (this.method === "GET") this.method = "POST";   // a GET that writes a body becomes a POST (OpenJDK and AOSP alike)
       this.connected = 1;
-      return this.out ??= rt.make("java/io/OutputStream") as JOutputStream;
+      return this.out ??= rt.make("java/io/ByteArrayOutputStream") as JBAOS;
     },
     "setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JURLConnection, k: string | null, v: string) {
       if (this.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");

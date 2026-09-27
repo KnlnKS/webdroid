@@ -233,17 +233,24 @@ async function certsFrom(stream: unknown): Promise<JX509[]> {
   return isPem(b) ? fromPem(new TextDecoder().decode(b)) : [await parseX509(b)];
 }
 defineException("java/security/SignatureException", "java/security/GeneralSecurityException");
+class JCertFactory extends JObj { type = "X.509"; }
+/** Android's providers register X.509 with the alias X509; getType() answers the name asked for */
 function certFactory(type: string) {
-  if (type?.toUpperCase() !== "X.509") throw certErr(type + " not available");
-  return rt.make("java/security/cert/CertificateFactory");
+  if (type == null) rt.npe();
+  const upper = type.toUpperCase();
+  if (upper !== "X.509" && upper !== "X509") throw certErr(type + " not available");
+  const f = rt.make("java/security/cert/CertificateFactory") as JCertFactory;
+  f.type = type;
+  return f;
 }
 rt.markers("java/security/cert/CertificateFactorySpi");
 rt.register({
-  name: "java/security/cert/CertificateFactory", ctor: class extends JObj {},
+  name: "java/security/cert/CertificateFactory", ctor: JCertFactory,
   methods: {
     "static getInstance(Ljava/lang/String;)Ljava/security/cert/CertificateFactory;": certFactory,
     "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/cert/CertificateFactory;": certFactory,
-    "getType()Ljava/lang/String;": () => "X.509",
+    "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljava/security/cert/CertificateFactory;": certFactory,
+    "getType()Ljava/lang/String;": function (this: JCertFactory) { return this.type; },
     "generateCertificate(Ljava/io/InputStream;)Ljava/security/cert/Certificate;": driven(function* (s: unknown): Gen { return (yield certsFrom(s))[0]; }),
     "generateCertificates(Ljava/io/InputStream;)Ljava/util/Collection;": driven(function* (s: unknown): Gen { return newArrayList(yield certsFrom(s)); }),
   },

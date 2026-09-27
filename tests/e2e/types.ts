@@ -131,13 +131,15 @@ type FlowBase<TStep extends Step> = {
 export type Flow<TStep extends Step = Step> = FlowBase<TStep> & (
   | {
       clock: "live";
-      expectedBrowserErrors?: never;
+      expectedErrors?: never;
     }
   | {
       /** Controlled flows advance Android-visible time in fast mode; pinned flows retain real scheduling. */
       clock: "controlled" | "pinned";
-      /** Existing browser errors accepted by exact substring; every unmatched error fails the fast lane. */
-      expectedBrowserErrors?: readonly string[];
+      /** Errors accepted by exact substring wherever they surface (browser console, app log, process
+       *  diagnostics): ones a device shows too, such as a bundled library's own error-level log lines.
+       *  Every unmatched error fails the fast lane. */
+      expectedErrors?: readonly string[];
     }
 );
 

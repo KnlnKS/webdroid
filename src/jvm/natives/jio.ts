@@ -202,7 +202,8 @@ rt.register({
     },
     "static createTempFile(Ljava/lang/String;Ljava/lang/String;)Ljava/io/File;": (p: string, s: string | null) => createTempFile(p, s, null),
     "static createTempFile(Ljava/lang/String;Ljava/lang/String;Ljava/io/File;)Ljava/io/File;": createTempFile,
-    "delete()Z": function (this: JFile) { return vfs.delete(this.path) ? 1 : 0; },
+    // a directory goes only when empty, as unlink/rmdir decide
+    "delete()Z": function (this: JFile) { return +(vfs.isDir(this.path) ? !vfs.list(this.path).length && vfs.rmdir(this.path) : vfs.delete(this.path)); },
     "deleteOnExit()V": function () {},
     "renameTo(Ljava/io/File;)Z": function (this: JFile, dst: JFile) {
       return renamePath(null, this.path, dst.path) === 0 ? 1 : 0;
@@ -577,9 +578,12 @@ rt.register({
     "write([B)V": function (this: JOutputStream, b: Int8Array) {
       return (this as any)[writeBII](b, 0, b.length);
     },
-    "write([BII)V": function (this: JOutputStream, b: Int8Array, off: number, len: number) {
-      for (let i = 0; i < len; i++) this.chunks.push(b[off + i] & 0xff);
-    },
+    // OutputStream.write(byte[],int,int) is write(int) per byte, reaching a subclass's override
+    "write([BII)V": driven(function* (this: JOutputStream, b: Int8Array, off: number, len: number): Gen {
+      if (!b) rt.npe();
+      if (off < 0 || len < 0 || len > b.length - off) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      for (let i = 0; i < len; i++) yield vcall(this, "write", "(I)V", b[off + i]);
+    }),
     "flush()V": function () {},
     "close()V": function () {},
   },
@@ -587,7 +591,7 @@ rt.register({
 // ByteArrayOutputStream keeps AOSP's protected `buf`/`count` as real fields: subclasses (pooled
 // buffers, size probes) swap the array and read the count directly, so the bytes live in the
 // Int8Array itself rather than in the base stream's chunk list.
-class JBAOS extends JOutputStream {
+export class JBAOS extends JOutputStream {
   buf = new Int8Array(32);
   count = 0;
   grow(min: number) {
@@ -636,13 +640,27 @@ class JFOS extends JOutputStream {
   append = false;
   deleteOnClose = false;
   offset = 0;
+  /** bytes written since the last publish to the file */
+  pend = new Uint8Array(0);
+  plen = 0;
+  /** the pending buffer, with room for n more bytes */
+  private room(n: number): Uint8Array {
+    if (this.plen + n > this.pend.length) {
+      const grown = new Uint8Array(Math.max(this.plen + n, this.pend.length * 2, 8192));
+      grown.set(this.pend.subarray(0, this.plen));
+      this.pend = grown;
+    }
+    return this.pend;
+  }
+  put(b: Uint8Array) { this.room(b.length).set(b, this.plen); this.plen += b.length; }
+  putByte(b: number) { this.room(1)[this.plen++] = b; }
   get pos() {
     const raf = this.shared?.owner;
-    if (raf instanceof JRAF) return raf.pos + this.chunks.length;
+    if (raf instanceof JRAF) return raf.pos + this.plen;
     const fd = this.shared?.fd ?? -1;
     const base = fd >= 0 ? checkedFdResult(javaSeekFd(fd, 0, 1))
-      : this.append && this.chunks.length ? vfs.read(this.fpath)?.length ?? 0 : this.offset;
-    return base + this.chunks.length;
+      : this.append && this.plen ? vfs.read(this.fpath)?.length ?? 0 : this.offset;
+    return base + this.plen;
   }
   set pos(value: number) {
     flushFOS(this);
@@ -682,11 +700,11 @@ rt.register({
     "<init>(Ljava/io/File;Z)V": function (this: JFOS, f: JFile, app: number) { openWrite.call(this, f.path, app); },
     "<init>(Ljava/lang/String;)V": openWrite,
     "<init>(Ljava/lang/String;Z)V": openWrite,
-    "write(I)V": function (this: JFOS, b: number) { checkFileOpen(this); this.chunks.push(b & 0xff); if (this.shared) flushFOS(this); },
+    "write(I)V": function (this: JFOS, b: number) { checkFileOpen(this); this.putByte(b); if (this.shared) flushFOS(this); },
     "write([BII)V": function (this: JFOS, b: Int8Array, off: number, len: number) {
       checkFileOpen(this);
       if (off < 0 || len < 0 || len > b.length - off) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
-      for (let i = 0; i < len; i++) this.chunks.push(b[off + i] & 0xff);
+      this.put(u8(b, off, len));
       if (this.shared) flushFOS(this);
     },
     "flush()V": function (this: JFOS) { checkFileOpen(this); flushFOS(this); },
@@ -699,35 +717,36 @@ rt.register({
   },
 });
 function flushFOS(s: JFOS) {
-  if (!s.chunks.length) return;
+  if (!s.plen) return;
+  const bytes = s.pend.subarray(0, s.plen);
+  s.plen = 0;
+  if (s.pend.length > 1 << 20) s.pend = new Uint8Array(0);
   const raf = s.shared?.owner;
-  if (raf instanceof JRAF) { const b = new Int8Array(s.chunks); s.chunks.length = 0; rafWrite(raf, b, 0, b.length); return; }
+  if (raf instanceof JRAF) { rafWrite(raf, i8(bytes), 0, bytes.length); return; }
   const file = s.shared && vfs.open(s.fpath);
   if (file) {
     const fd = s.shared!.fd;
     const start = s.append ? file.len : fd >= 0 ? checkedFdResult(javaSeekFd(fd, 0, 1)) : s.offset;
-    const end = start + s.chunks.length;
+    const end = start + bytes.length;
     if (end > file.data.length) {
       const grown = new Uint8Array(Math.max(end, file.data.length * 2, 4096));
       grown.set(file.data.subarray(0, file.len));
       file.data = grown;
     }
     if (start > file.len) file.data.fill(0, file.len, start);
-    file.data.set(s.chunks, start);
+    file.data.set(bytes, start);
     file.len = Math.max(file.len, end);
     vfs.publish(file);
     s.offset = end;
     if (fd >= 0) checkedFdResult(javaSeekFd(fd, end, 0));
-    s.chunks.length = 0;
     return;
   }
   const old = vfs.read(s.fpath) ?? new Uint8Array(0);
   const start = s.append ? old.length : s.offset;
-  const merged = new Uint8Array(Math.max(old.length, start + s.chunks.length));
-  merged.set(old); merged.set(s.chunks, start);
+  const merged = new Uint8Array(Math.max(old.length, start + bytes.length));
+  merged.set(old); merged.set(bytes, start);
   vfs.write(s.fpath, merged);
-  s.offset = start + s.chunks.length;
-  s.chunks.length = 0;
+  s.offset = start + bytes.length;
 }
 
 // RandomAccessFile handles keep independent cursors but must read the latest shared file bytes.
@@ -744,7 +763,9 @@ const rafRefresh = (f: JRAF) => {
 const rafGrow = (f: JRAF, need: number) => {
   if (need <= f.buf.length) return;
   if (need <= f.capacity) { const old = f.buf.length; f.buf = new Uint8Array(f.buf.buffer, f.buf.byteOffset, need); f.buf.fill(0, old); return; }
-  const n = new Uint8Array(Math.max(need, f.capacity ? f.capacity * 2 : 64));
+  // doubling, but never more than 32 MB past what is needed: a large file must not reserve
+  // (and have persisted) hundreds of megabytes it never uses
+  const n = new Uint8Array(Math.max(need, Math.min(f.capacity ? f.capacity * 2 : 64, need + (32 << 20))));
   n.set(f.buf);
   f.capacity = n.length;
   f.buf = n.subarray(0, need);
@@ -961,6 +982,72 @@ rt.register({
     "mark(I)V": fwd("mark", "(I)V"),
     "reset()V": fwd("reset", "()V"),
     "markSupported()Z": fwd("markSupported", "()Z"),
+  },
+});
+/** PushbackInputStream: `pbuf[ppos..]` holds the unread bytes, which reads return first */
+class JPushbackIn extends JFilterInputStream { pbuf: Int8Array | null = null; ppos = 0; }
+function pushbackInit(this: JPushbackIn, s: unknown, size = 1) {
+  if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "size <= 0");
+  this.in_ = s;
+  this.pbuf = new Int8Array(size);
+  this.ppos = size;
+}
+function pushbackOpen(p: JPushbackIn): Int8Array {
+  if (!p.pbuf) throw rt.mkThrowable("java/io/IOException", "Stream closed");
+  return p.pbuf;
+}
+function unread(this: JPushbackIn, b: Int8Array, off: number, len: number) {
+  const buf = pushbackOpen(this);
+  if (len > this.ppos) throw rt.mkThrowable("java/io/IOException", "Push back buffer is full");
+  this.ppos -= len;
+  buf.set(b.subarray(off, off + len), this.ppos);
+}
+rt.register({
+  name: "java/io/PushbackInputStream", ctor: JPushbackIn, sup: "java/io/FilterInputStream",
+  fields: { buf: "pbuf", pos: "ppos" },
+  methods: {
+    "<init>(Ljava/io/InputStream;)V": pushbackInit,
+    "<init>(Ljava/io/InputStream;I)V": pushbackInit,
+    "read()I": function (this: JPushbackIn) {
+      const buf = pushbackOpen(this);
+      return this.ppos < buf.length ? buf[this.ppos++] & 0xff : vcall(this.in_, "read", "()I");
+    },
+    "read([BII)I": driven(function* (this: JPushbackIn, b: Int8Array, off: number, len: number): Gen {
+      const buf = pushbackOpen(this);
+      if (!b) rt.npe();
+      if (off < 0 || len < 0 || len > b.length - off) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      if (!len) return 0;
+      const avail = Math.min(buf.length - this.ppos, len);
+      b.set(buf.subarray(this.ppos, this.ppos + avail), off);
+      this.ppos += avail;
+      if (avail === len) return avail;
+      const n = yield vcall(this.in_, "read", "([BII)I", b, off + avail, len - avail);
+      return n < 0 ? (avail || -1) : avail + n;
+    }),
+    "unread(I)V": function (this: JPushbackIn, v: number) { unread.call(this, Int8Array.of(v), 0, 1); },
+    "unread([B)V": function (this: JPushbackIn, b: Int8Array) { unread.call(this, b, 0, b.length); },
+    "unread([BII)V": unread,
+    "available()I": function (this: JPushbackIn) {
+      const n = pushbackOpen(this).length - this.ppos;
+      return after(vcall(this.in_, "available", "()I"), (a: number) => Math.min(0x7fffffff, n + a));
+    },
+    "skip(J)J": function (this: JPushbackIn, n: bigint) {
+      const buf = pushbackOpen(this);
+      if (n <= 0n) return 0n;
+      const own = Math.min(buf.length - this.ppos, Number(n));
+      this.ppos += own;
+      return BigInt(own) < n ? after(vcall(this.in_, "skip", "(J)J", n - BigInt(own)), (m: bigint) => BigInt(own) + m) : BigInt(own);
+    },
+    "markSupported()Z": () => 0,
+    "mark(I)V": () => {},
+    "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+    "close()V": function (this: JPushbackIn) {
+      if (!this.in_) return;
+      const s = this.in_;
+      this.in_ = null;
+      this.pbuf = null;
+      return vcall(s, "close", "()V");
+    },
   },
 });
 class JBufferedOut extends JFilterOutputStream { buf = new Int8Array(8192); count = 0; }
@@ -1596,7 +1683,7 @@ rt.register({
     "size()J": function (this: JFileChannel) {
       const file = this.opened();
       return BigInt(file instanceof JFOS
-        ? Math.max(vfs.read(file.fpath)?.length ?? 0, file.chunks.length ? file.pos : 0)
+        ? Math.max(vfs.read(file.fpath)?.length ?? 0, file.plen ? file.pos : 0)
         : file.source?.size ?? file.buf.length);
     },
     "truncate(J)Ljava/nio/channels/FileChannel;": function (this: JFileChannel, size: bigint) {

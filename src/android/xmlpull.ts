@@ -3,7 +3,7 @@
 import { rt, JObj, stubs, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
-import { charsToString } from "../jvm/abi";
+import { charsToString, jarray } from "../jvm/abi";
 
 interface Ev { bindings?: Attr[]; t: number; name: string; ns: string; prefix: string | null; attrs: Attr[]; text: string; depth: number; empty: boolean }
 const START_DOCUMENT = 0, END_DOCUMENT = 1, START_TAG = 2, END_TAG = 3, TEXT = 4;
@@ -56,7 +56,9 @@ const S = "Ljava/lang/String;";
 rt.register({
   name: "org/xmlpull/v1/XmlPullParser", ctor: class extends JObj {},
   statics: { START_DOCUMENT, END_DOCUMENT, START_TAG, END_TAG, TEXT, CDSECT: 5, ENTITY_REF: 6, IGNORABLE_WHITESPACE: 7, PROCESSING_INSTRUCTION: 8, COMMENT: 9, DOCDECL: 10,
-    NO_NAMESPACE: "", FEATURE_PROCESS_NAMESPACES: "http://xmlpull.org/v1/doc/features.html#process-namespaces" },
+    NO_NAMESPACE: "", FEATURE_PROCESS_NAMESPACES: "http://xmlpull.org/v1/doc/features.html#process-namespaces",
+    TYPES: jarray(["START_DOCUMENT", "END_DOCUMENT", "START_TAG", "END_TAG", "TEXT", "CDSECT", "ENTITY_REF", "IGNORABLE_WHITESPACE",
+      "PROCESSING_INSTRUCTION", "COMMENT", "DOCDECL"], "Ljava/lang/String;") },
 });
 rt.register({
   name: "webdroid/XmlPullParser", ctor: JXmlPull, ifaces: ["org/xmlpull/v1/XmlPullParser"],

@@ -2,7 +2,7 @@ import { type JFile, vfs, mkFile } from "../jvm/natives/jio";
 import { JObj, rt, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
 import { resString, themeOf, JTheme, obtainStyled, resolveStyleValue, type JAttrSet, JTypedArray } from "./res";
-import { newObj, vcall, systemClassLoader } from "../jvm/natives/jlang";
+import { newObj, vcall, systemClassLoader, type JClassLoader } from "../jvm/natives/jlang";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
 import { getAppInfo, getPM } from "./pm";
@@ -10,15 +10,13 @@ import { contentResolver, checkUriPermission, grantUriPermission, revokeUriPermi
 import type { JUri } from "./net";
 import { mainLooper, mainExecutor, PROCESS_PID, PROCESS_UID } from "./os";
 import { getPrefs, movePrefs, deletePrefs } from "./sharedprefs";
-import { JAssetManager, type JConfiguration, scopedResources } from "./resnative";
+import { JAssetManager, type JConfiguration, scopedResources, mkJResources } from "./resnative";
 import { dbPath, openDatabase } from "./sqlite";
 import { type JIntent, launchIntent } from "./intent";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { svcStart, svcStop, svcBind, svcUnbind } from "./runningservices";
 import { registerReceiver, unregisterReceiver, sendBroadcast } from "./broadcast";
 import { packages } from "./packages";
-import type { JClassLoader } from "../jvm/natives/jlang";
-import { mkJResources } from "./resnative";
 
 const privDir = (p: string): JFile => { vfs.mkdir(p); return mkFile(p); };
 
@@ -152,12 +150,14 @@ const SERVICE_CLASS: Record<string, string> = {
   wifi: "android/net/wifi/WifiManager",
   telephony_subscription_service: "android/telephony/SubscriptionManager",
   servicediscovery: "android/net/nsd/NsdManager",
+  bluetooth: "android/bluetooth/BluetoothManager",
+  nfc: "android/nfc/NfcManager",
+  crossprofileapps: "android/content/pm/CrossProfileApps",
 };
 const SERVICE_NAME = new Map(Object.entries(SERVICE_CLASS).map(([n, c]) => [c, n]));
 SERVICE_NAME.set("android/view/WindowManager", "window");
 export function systemService(jctx: JContext | null, name: string): unknown {
   if (name === "layout_inflater") return getInflater(jctx);
-  if (name === "storagestats") return null;
   if (name === "performance_hint") return null;
   let s = services.get(name);
   if (s) return s;
@@ -194,12 +194,27 @@ rt.register({
 });
 
 // ── Context methods (shared by Context/ContextWrapper/Activity/Application)
+function contextRegisterReceiver(this: JContext, receiver: JObj | null, filter: { actions: string[] }) { return registerReceiver(this, receiver, filter); }
+function contextRegisterReceiverOn(this: JContext, receiver: JObj | null, filter: { actions: string[] }, _permission: string, handler: unknown) {
+  return registerReceiver(this, receiver, filter, handler);
+}
+function contextStartActivity(this: JContext, intent: JIntent) { return launchIntent(this.$host, intent); }
+function contextSender(this: JContext, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); }
+/** AOSP's Context.obtainStyledAttributes delegates to getTheme(). Reading the application theme
+ *  instead loses every ThemeOverlay — which is how Material passes a widget its shape and
+ *  colours — and resolves `?attr` references against the wrong stack. */
+function contextStyled(this: JContext, set: JAttrSet | null, attrs: Int32Array, dsa = 0, dsr = 0) {
+  return obtainStyled(this.$host.res, themeOf(this) ?? this.$host.theme, set, attrs, dsa, dsr);
+}
+const extFilesDir = (c: JContext, type: string | null) => privDir(`/sdcard/Android/data/${c.$host.pkg}/files` + (type ? "/" + type : ""));
+const extCacheDir = (c: JContext) => privDir(`/sdcard/Android/data/${c.$host.pkg}/cache`);
+const obbDir = (c: JContext) => privDir(`/sdcard/Android/obb/${c.$host.pkg}`);
 function contextOpenDatabase(this: JContext, name: string) {
   const path = dbPath(this.$host.pkg, name);
   vfs.mkdir(path.slice(0, path.lastIndexOf("/")));
   return openDatabase(path);
 }
-export const contextMethods: NativeSpec["methods"] = {
+const contextMethods: NativeSpec["methods"] = {
   "getResources()Landroid/content/res/Resources;": function (this: JContext) { return this.$host.jresources; },
   "getTheme()Landroid/content/res/Resources$Theme;": function (this: JContext) {
     return themeOf(this) ?? this.$host.theme;
@@ -308,21 +323,13 @@ export const contextMethods: NativeSpec["methods"] = {
   "getCacheDir()Ljava/io/File;": function (this: JContext) { return privDir(`/data/data/${this.$host.pkg}/cache`); },
   "getCodeCacheDir()Ljava/io/File;": function (this: JContext) { return privDir(`/data/data/${this.$host.pkg}/code_cache`); },
   "getNoBackupFilesDir()Ljava/io/File;": function (this: JContext) { return privDir(`/data/data/${this.$host.pkg}/no_backup`); },
-  "getExternalFilesDir(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, type: string | null) {
-    return privDir(`/sdcard/Android/data/${this.$host.pkg}/files` + (type ? "/" + type : ""));
-  },
+  "getExternalFilesDir(Ljava/lang/String;)Ljava/io/File;": function (this: JContext, type: string | null) { return extFilesDir(this, type); },
+  "getExternalCacheDir()Ljava/io/File;": function (this: JContext) { return extCacheDir(this); },
+  "getObbDir()Ljava/io/File;": function (this: JContext) { return obbDir(this); },
   // the array forms: one emulated volume, so each is the singleton of its scalar form
-  "getExternalFilesDirs(Ljava/lang/String;)[Ljava/io/File;": function (this: JContext, type: string | null) {
-    return jarray([privDir(`/sdcard/Android/data/${this.$host.pkg}/files` + (type ? "/" + type : ""))], "Ljava/io/File;");
-  },
-  "getExternalCacheDir()Ljava/io/File;": function (this: JContext) {
-    return privDir(`/sdcard/Android/data/${this.$host.pkg}/cache`);
-  },
-  "getExternalCacheDirs()[Ljava/io/File;": function (this: JContext) {
-    return jarray([privDir(`/sdcard/Android/data/${this.$host.pkg}/cache`)], "Ljava/io/File;");
-  },
-  "getObbDir()Ljava/io/File;": function (this: JContext) { return privDir(`/sdcard/Android/obb/${this.$host.pkg}`); },
-  "getObbDirs()[Ljava/io/File;": function (this: JContext) { return jarray([privDir(`/sdcard/Android/obb/${this.$host.pkg}`)], "Ljava/io/File;"); },
+  "getExternalFilesDirs(Ljava/lang/String;)[Ljava/io/File;": function (this: JContext, type: string | null) { return jarray([extFilesDir(this, type)], "Ljava/io/File;"); },
+  "getExternalCacheDirs()[Ljava/io/File;": function (this: JContext) { return jarray([extCacheDir(this)], "Ljava/io/File;"); },
+  "getObbDirs()[Ljava/io/File;": function (this: JContext) { return jarray([obbDir(this)], "Ljava/io/File;"); },
   "getDir(Ljava/lang/String;I)Ljava/io/File;": function (this: JContext, name: string) {
     return privDir(`/data/data/${this.$host.pkg}/app_${name}`);
   },
@@ -350,20 +357,20 @@ export const contextMethods: NativeSpec["methods"] = {
   "deleteDatabase(Ljava/lang/String;)Z": function (this: JContext, name: string) {
     return vfs.delete(dbPath(this.$host.pkg, name)) ? 1 : 0;
   },
-  "checkSelfPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),
+  "checkSelfPermission(Ljava/lang/String;)I": permissionState,
   "checkUriPermission(Landroid/net/Uri;III)I": checkUriPermission,
   "checkCallingOrSelfUriPermission(Landroid/net/Uri;I)I": (uri: JUri, modes: number) =>
     checkUriPermission(uri, PROCESS_PID, PROCESS_UID, modes),
   "grantUriPermission(Ljava/lang/String;Landroid/net/Uri;I)V": grantUriPermission,
   "revokeUriPermission(Landroid/net/Uri;I)V": revokeUriPermission,
-  "checkPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),
-  "checkPermission(Ljava/lang/String;II)I": (p: string) => permissionState(p),
-  "checkCallingPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),
-  "checkCallingOrSelfPermission(Ljava/lang/String;)I": (p: string) => permissionState(p),
-  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;)Landroid/content/Intent;": function (this: JContext, receiver: JObj | null, filter: { actions: string[] }) { return registerReceiver(this, receiver, filter); },
-  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;I)Landroid/content/Intent;": function (this: JContext, receiver: JObj | null, filter: { actions: string[] }) { return registerReceiver(this, receiver, filter); },
-  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;Ljava/lang/String;Landroid/os/Handler;)Landroid/content/Intent;": function (this: JContext, receiver: JObj | null, filter: { actions: string[] }, _permission: string, handler: unknown) { return registerReceiver(this, receiver, filter, handler); },
-  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;Ljava/lang/String;Landroid/os/Handler;I)Landroid/content/Intent;": function (this: JContext, receiver: JObj | null, filter: { actions: string[] }, _permission: string, handler: unknown) { return registerReceiver(this, receiver, filter, handler); },
+  "checkPermission(Ljava/lang/String;)I": permissionState,
+  "checkPermission(Ljava/lang/String;II)I": permissionState,
+  "checkCallingPermission(Ljava/lang/String;)I": permissionState,
+  "checkCallingOrSelfPermission(Ljava/lang/String;)I": permissionState,
+  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;)Landroid/content/Intent;": contextRegisterReceiver,
+  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;I)Landroid/content/Intent;": contextRegisterReceiver,
+  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;Ljava/lang/String;Landroid/os/Handler;)Landroid/content/Intent;": contextRegisterReceiverOn,
+  "registerReceiver(Landroid/content/BroadcastReceiver;Landroid/content/IntentFilter;Ljava/lang/String;Landroid/os/Handler;I)Landroid/content/Intent;": contextRegisterReceiverOn,
   "unregisterReceiver(Landroid/content/BroadcastReceiver;)V": unregisterReceiver,
   "sendBroadcast(Landroid/content/Intent;)V": function (this: JContext, intent: JIntent) { sendBroadcast(this, intent); },
   "sendBroadcast(Landroid/content/Intent;Ljava/lang/String;)V": function (this: JContext, intent: JIntent, permission: string | null) { sendBroadcast(this, intent, permission); },
@@ -381,28 +388,13 @@ export const contextMethods: NativeSpec["methods"] = {
     return svcBind(this, intent, connection, flags, executor);
   },
   "unbindService(Landroid/content/ServiceConnection;)V": svcUnbind,
-  "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;III)V": function (this: JContext, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); },
-  "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;IIILandroid/os/Bundle;)V": function (this: JContext, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); },
-  "startActivity(Landroid/content/Intent;)V": driven(function* (this: JContext, intent: JIntent): Gen {
-    yield launchIntent(this.$host, intent);
-  }),
-  "startActivity(Landroid/content/Intent;Landroid/os/Bundle;)V": driven(function* (this: JContext, intent: JIntent): Gen {
-    yield launchIntent(this.$host, intent);
-  }),
-  // AOSP's Context.obtainStyledAttributes delegates to getTheme(). Reading the application
-  // theme instead loses every ThemeOverlay — which is how Material passes a widget its shape
-  // and colours — and resolves `?attr` references against the wrong stack.
-  "obtainStyledAttributes([I)Landroid/content/res/TypedArray;": function (this: JContext, attrs: Int32Array) {
-    return obtainStyled(this.$host.res, themeOf(this) ?? this.$host.theme, null, attrs, 0, 0);
-  },
-  "obtainStyledAttributes(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;":
-    function (this: JContext, set: JAttrSet | null, attrs: Int32Array) {
-      return obtainStyled(this.$host.res, themeOf(this) ?? this.$host.theme, set, attrs, 0, 0);
-    },
-  "obtainStyledAttributes(Landroid/util/AttributeSet;[III)Landroid/content/res/TypedArray;":
-    function (this: JContext, set: JAttrSet | null, attrs: Int32Array, dsa: number, dsr: number) {
-      return obtainStyled(this.$host.res, themeOf(this) ?? this.$host.theme, set, attrs, dsa, dsr);
-    },
+  "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;III)V": contextSender,
+  "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;IIILandroid/os/Bundle;)V": contextSender,
+  "startActivity(Landroid/content/Intent;)V": contextStartActivity,
+  "startActivity(Landroid/content/Intent;Landroid/os/Bundle;)V": contextStartActivity,
+  "obtainStyledAttributes([I)Landroid/content/res/TypedArray;": function (this: JContext, attrs: Int32Array) { return contextStyled.call(this, null, attrs); },
+  "obtainStyledAttributes(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;": contextStyled,
+  "obtainStyledAttributes(Landroid/util/AttributeSet;[III)Landroid/content/res/TypedArray;": contextStyled,
   "obtainStyledAttributes(I[I)Landroid/content/res/TypedArray;": function (this: JContext, styleId: number, attrs: Int32Array) {
     const theme = themeOf(this) ?? this.$host.theme;
     const ta = new JTypedArray();

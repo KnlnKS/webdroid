@@ -25,3 +25,9 @@ export function syncShared(va: bigint, n: number, drop: boolean): void {
     else sharedMaps.splice(i, 1);
   }
 }
+
+/** whether any byte of [va, va+n) is a shared file mapping */
+export function isShared(va: bigint, n: number): boolean {
+  const end = va + BigInt(n);
+  return sharedMaps.some((m) => m.va < end && va < m.va + BigInt(m.n));
+}

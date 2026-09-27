@@ -41,7 +41,7 @@ export function parseScreen(s: string | null | undefined): Screen | null {
 const formatScreen = (s: Screen): string => `${s.width}x${s.height}@${s.densityDpi}`;
 
 /** localStorage throws outright in some privacy modes, so every touch of it is guarded. */
-export function readStoredScreen(): Screen | null {
+function readStoredScreen(): Screen | null {
   try { return parseScreen(globalThis.localStorage?.getItem(SCREEN_KEY)); } catch { return null; }
 }
 

@@ -17,7 +17,7 @@ export const flappybird: Flow = {
   crop: { top: 0, bottom: 48, left: 0, right: 0 },
   minFps: 55,
   clock: "pinned",
-  expectedBrowserErrors: ["Cannot read properties of undefined (reading 'status')"],
+  expectedErrors: ["Cannot read properties of undefined (reading 'status')"],
   steps: [
     { id: "splash", label: "Launch — splash", action: { type: "launch" }, wait: wait.sample(1200) },
     { id: "title", label: "Title — bobbing bird", action: { type: "settle" },

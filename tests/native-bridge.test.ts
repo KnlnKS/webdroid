@@ -14,6 +14,20 @@ import { EglContext } from "../src/android/glview";
 import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../src/native/egl-current";
 import { gles3Init } from "../src/native/gles3";
 
+rt.linkNatives();
+
+/** Host-call arguments: integer-class reads consume `ints`, 64-bit reads `longs`, string reads `strings`. */
+function args(ints: number[] = [], longs: bigint[] = [], strings: string[] = []): ArgReader {
+  let ni = 0, nl = 0, ns = 0;
+  const integer = () => ints[ni++] ?? 0;
+  return {
+    i: integer, u: integer, p: integer, va: () => BigInt(integer()),
+    l: () => longs[nl++] ?? 0n, ul: () => BigInt.asUintN(64, longs[nl++] ?? 0n),
+    f: integer, d: integer,
+    str: () => strings[ns++] ?? "", strAt: () => strings[ns++] ?? "",
+  };
+}
+
 describe("driven", () => {
   test("generator natives receive arguments past their defaulted parameters", () => {
     // caller-sensitive natives (System.load) take the caller's Runtime this way
@@ -38,7 +52,6 @@ describe("native-arm-status", () => {
 });
 
 describe("native-construction-thread", () => {
-  rt.linkNatives();
   test("native construction retains the caller thread through class initialization", async () => {
     const thread = new JThread(), seen: JThread[] = [];
     let finish!: () => void;
@@ -106,18 +119,6 @@ describe("native-descriptor-flags", () => {
 
 describe("native-egl", () => {
   eglInit();
-
-  function args(ints: number[] = [], longs: bigint[] = [], strings: string[] = []): ArgReader {
-    let ni = 0, nl = 0, ns = 0;
-    const integer = () => ints[ni++] ?? 0;
-    return {
-      i: integer, u: integer, p: integer, va: () => BigInt(integer()),
-      l: () => longs[nl++] ?? 0n, ul: () => BigInt.asUintN(64, longs[nl++] ?? 0n),
-      f: integer, d: integer,
-      str: () => strings[ns++] ?? "", strAt: () => strings[ns++] ?? "",
-    };
-  }
-
   const cpu = { jthread: curThread } as Cpu;
 
   test("EGL config arrays use guest pointer width while counts remain EGLint", () => {
@@ -160,13 +161,6 @@ describe("native-egl", () => {
 });
 
 describe("native-egl-thread-current", () => {
-  function args(values: number[]): ArgReader {
-    let index = 0;
-    const next = () => values[index++] ?? 0;
-    return { i: next, u: next, p: next, va: () => BigInt(next()), l: () => BigInt(next()), ul: () => BigInt(next()),
-      f: next, d: next, str: () => "", strAt: () => "" };
-  }
-
   test("unbinding one EGL thread does not clear another thread's GLES context", () => {
     const calls: number[] = [];
     const glA = { activeTexture: () => {}, getParameter: () => 0x84c0 };

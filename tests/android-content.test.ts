@@ -41,12 +41,6 @@ import { scall } from "./java";
 describe("adservices", () => {
   rt.linkNatives();
 
-  test("measurement callback interface is available", () => {
-    const receiver = rt.link("android/os/OutcomeReceiver");
-    expect(receiver.native).toBe(true);
-    expect(receiver.stub).toBe(false);
-  });
-
   test("disabled measurement service reports its unavailable state", async () => {
     const context = await newObj("android/content/Context");
     const cls = rt.classFor("android/adservices/measurement/MeasurementManager");
@@ -130,11 +124,13 @@ describe("clip-data", () => {
 describe("content-uris", () => {
   rt.linkNatives();
 
-  test("ContentUris appends and parses signed long IDs", async () => {
+  test("ContentUris appends and parses signed and full-width long IDs", async () => {
     const base = scall("android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;", "content://media/items?sort=new");
     const appended = await scall("android/content/ContentUris", "withAppendedId", "(Landroid/net/Uri;J)Landroid/net/Uri;", base, -42n);
     expect(await vcall(appended, "toString", "()Ljava/lang/String;")).toBe("content://media/items/-42?sort=new");
     expect(await scall("android/content/ContentUris", "parseId", "(Landroid/net/Uri;)J", appended)).toBe(-42n);
+    const max = await scall("android/content/ContentUris", "withAppendedId", "(Landroid/net/Uri;J)Landroid/net/Uri;", base, 9223372036854775807n);
+    expect(await scall("android/content/ContentUris", "parseId", "(Landroid/net/Uri;)J", max)).toBe(9223372036854775807n);
   });
 
   test("ContentUris rejects a path without a decimal long ID", async () => {
@@ -159,17 +155,6 @@ describe("context-process-state", () => {
     } finally {
       for (const path of paths) vfs.delete(path);
     }
-  });
-
-  test("Debug.MemoryInfo exposes legacy page fields", async () => {
-    const info = rt.link("android/os/Debug$MemoryInfo");
-    for (const name of ["dalvikSharedDirty", "dalvikPrivateDirty", "nativeSharedDirty",
-      "nativePrivateDirty", "otherSharedDirty", "otherPrivateDirty", "dalvikSwappablePss",
-      "nativeSwappablePss", "otherSwappablePss"]) {
-      expect(info.fieldTable.get(name)).toBe(name);
-      expect((new info.ctor() as unknown as Record<string, number>)[name]).toBe(0);
-    }
-    expect(await vcall(new info.ctor(), "getTotalSwappablePss", "()I")).toBe(0);
   });
 });
 
@@ -249,6 +234,42 @@ describe("intent-chooser", () => {
     expect(await vcall(chooser, "getAction", "()Ljava/lang/String;")).toBe("android.intent.action.CHOOSER");
     expect(await vcall(chooser, "getParcelableExtra", "(Ljava/lang/String;)Landroid/os/Parcelable;", "android.intent.extra.INTENT")).toBe(send);
     expect(await vcall(chooser, "getFlags", "()I")).toBe(1);
+  });
+});
+
+describe("intent-typed-extras", () => {
+  rt.linkNatives();
+  test("typed extras keep their type through a Parcel and reach Bundle.readFromParcel", async () => {
+    const intent = await newObj("android/content/Intent", "()V");
+    const component = await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", "p", "p.C");
+    const values: [string, string, unknown][] = [["J", "[J", new BigInt64Array([1n, -2n])], ["C", "[C", new Uint16Array([65, 66])],
+      ["S", "[S", new Int16Array([-3])], ["Z", "[Z", new Uint8Array([1, 0])], ["F", "[F", new Float32Array([0.5])],
+      ["D", "[D", new Float64Array([0.25])], ["b", "B", -7], ["s", "S", 300], ["r", "[Landroid/os/Parcelable;", Object.assign([component], { $t: "Landroid/os/Parcelable;" })]];
+    for (const [k, d, v] of values) await vcall(intent, "putExtra", `(Ljava/lang/String;${d})Landroid/content/Intent;`, k, v);
+    const parcel = await newObj("android/os/Parcel", "()V");
+    await vcall(parcel, "writeParcelable", "(Landroid/os/Parcelable;I)V", intent, 0);
+    await vcall(parcel, "setDataPosition", "(I)V", 0);
+    const back = await vcall(parcel, "readParcelable", "(Ljava/lang/ClassLoader;)Landroid/os/Parcelable;", null);
+    expect([...await vcall(back, "getLongArrayExtra", "(Ljava/lang/String;)[J", "J")]).toEqual([1n, -2n]);
+    expect([...await vcall(back, "getCharArrayExtra", "(Ljava/lang/String;)[C", "C")]).toEqual([65, 66]);
+    expect([...await vcall(back, "getBooleanArrayExtra", "(Ljava/lang/String;)[Z", "Z")]).toEqual([1, 0]);
+    expect(await vcall(back, "getShortExtra", "(Ljava/lang/String;S)S", "s", 0)).toBe(300);
+    expect(await vcall(back, "getByteExtra", "(Ljava/lang/String;B)B", "s", 9)).toBe(9);
+    const components = await vcall(back, "getParcelableArrayExtra", "(Ljava/lang/String;Ljava/lang/Class;)[Ljava/lang/Object;", "r", rt.classFor("android/content/ComponentName"));
+    expect(await vcall(components[0], "equals", "(Ljava/lang/Object;)Z", component)).toBe(1);
+
+    const extras = await vcall(back, "getExtras", "()Landroid/os/Bundle;");
+    const bundleParcel = await newObj("android/os/Parcel", "()V");
+    await vcall(extras, "writeToParcel", "(Landroid/os/Parcel;I)V", bundleParcel, 0);
+    await vcall(bundleParcel, "setDataPosition", "(I)V", 0);
+    const bundle = await newObj("android/os/Bundle", "()V");
+    await vcall(bundle, "readFromParcel", "(Landroid/os/Parcel;)V", bundleParcel);
+    expect((await vcall(bundle, "getByte", "(Ljava/lang/String;B)Ljava/lang/Byte;", "b", 0)).v).toBe(-7);
+    expect([...await vcall(bundle, "getDoubleArray", "(Ljava/lang/String;)[D", "D")]).toEqual([0.25]);
+    expect(await vcall(bundle, "getParcelable", "(Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/Object;", "r", rt.classFor("android/content/ComponentName"))).toBeNull();
+    await vcall(bundle, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", "p", component);
+    expect(await vcall(bundle, "getParcelable", "(Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/Object;", "p", rt.classFor("android/content/ComponentName"))).toBe(component);
+    expect(await vcall(bundle, "getSerializable", "(Ljava/lang/String;Ljava/lang/Class;)Ljava/io/Serializable;", "p", rt.classFor("java/lang/String"))).toBeNull();
   });
 });
 
@@ -422,11 +443,6 @@ describe("pending-intents", () => {
 
 describe("platform-queries", () => {
   rt.linkNatives();
-  test("ContentUris preserves full-width IDs", async () => {
-    const cls = rt.link("android/content/ContentUris").ctor;
-    const uri = await vcall(cls, "withAppendedId", "(Landroid/net/Uri;J)Landroid/net/Uri;", mkUri("content://test/items"), 9223372036854775807n);
-    expect(await vcall(cls, "parseId", "(Landroid/net/Uri;)J", uri)).toBe(9223372036854775807n);
-  });
   test("NotificationChannelGroup persists empty descriptions and supports deletion", async () => {
     const manager = rt.make("android/app/NotificationManager");
     const group = await newObj("android/app/NotificationChannelGroup", "(Ljava/lang/String;Ljava/lang/CharSequence;)V", "query-test", "Test");

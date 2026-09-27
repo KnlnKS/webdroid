@@ -1,5 +1,5 @@
 import { WEB_FRAME, WEB_PROXY_WORKER } from "../src/shell/webinject";
-import { proxyRequest } from "../src/shell/proxy";
+import { forwardDnsMessage, proxyRequest } from "../src/shell/proxy";
 import { WebBridgeSession } from "./bridge";
 import { tcpRelay } from "./tcp";
 
@@ -63,6 +63,7 @@ export default {
     if (path === "/proxy") return proxyRequest(request, { bridgeCall: (call) => bridgeCall(call, env, new URL(call.url).searchParams.get("id") ?? "") });
     if (path === "/tcp") return tcpRelay(request, context);
     if (path === "/dns") return dnsLookup(request);
+    if (path === "/dns-query") return forwardDnsMessage(request);
     if (path === "/webview") return new Response(WEB_FRAME, { headers: { "content-type": "text/html", "cache-control": "no-store" } });
     if (path === "/webview-worker.js") return new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } });
     if (path === "/webview-origin") {

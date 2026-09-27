@@ -6,8 +6,9 @@ import { vfs, JInputStream } from "../src/jvm/natives/jio";
 import { mangleMethod, jarray } from "../src/jvm/abi";
 import { scall } from "./java";
 
+rt.linkNatives();
+
 describe("channel-streams", () => {
-  rt.linkNatives();
   test("Channels stream adapters preserve byte-buffer positions and stream ranges", async () => {
     const cls = rt.link("java/nio/channels/Channels").ctor;
     const input = await newObj("java/io/ByteArrayInputStream", "([B)V", Int8Array.of(1, 2, 3, 4));
@@ -28,7 +29,6 @@ describe("channel-streams", () => {
 });
 
 describe("charbuffer-sequence", () => {
-  rt.linkNatives();
   const wrap = (text: unknown) => vcall(rt.link("java/nio/CharBuffer").ctor, "wrap", "(Ljava/lang/CharSequence;)Ljava/nio/CharBuffer;", text);
 
   test("CharBuffer exposes its writable char-array backing", async () => {
@@ -93,7 +93,6 @@ describe("charbuffer-sequence", () => {
 });
 
 describe("intbuffer-bulk", () => {
-  rt.linkNatives();
   test("IntBuffer bulk range writes honor order, position and limits", async () => {
     for (const little of [false, true]) {
       const bytes = await vcall(rt.link("java/nio/ByteBuffer").ctor, "allocate", "(I)Ljava/nio/ByteBuffer;", 20);
@@ -109,21 +108,24 @@ describe("intbuffer-bulk", () => {
       expect(await vcall(buffer, "position", "()I")).toBe(3);
     }
   });
-  test("ShortBuffer bulk ranges preserve signed values and bounds", async () => {
-    const bytes = await vcall(rt.link("java/nio/ByteBuffer").ctor, "allocate", "(I)Ljava/nio/ByteBuffer;", 8);
-    const buffer = await vcall(bytes, "asShortBuffer", "()Ljava/nio/ShortBuffer;");
-    await vcall(buffer, "put", "([SII)Ljava/nio/ShortBuffer;", Int16Array.of(8, -32768, 32767, 9), 1, 2);
-    expect(await vcall(buffer, "get", "(I)S", 0)).toBe(-32768);
-    expect(await vcall(buffer, "get", "(I)S", 1)).toBe(32767);
-    await expect(vcallAsync(buffer, "put", "([SII)Ljava/nio/ShortBuffer;", Int16Array.of(1), 1, 1)).rejects.toBeDefined();
-    expect(await vcall(buffer, "position", "()I")).toBe(2);
+  test("ShortBuffer bulk puts over heap and byte-view storage preserve signed values, bounds and position", async () => {
+    const heap = () => scall("java/nio/ShortBuffer", "allocate", "(I)Ljava/nio/ShortBuffer;", 3);
+    const view = async () => vcall(await scall("java/nio/ByteBuffer", "allocate", "(I)Ljava/nio/ByteBuffer;", 6), "asShortBuffer", "()Ljava/nio/ShortBuffer;");
+    for (const make of [heap, view]) {
+      const buffer = await make(), input = Int16Array.of(9, -32768, 32767, 8);
+      expect(await vcall(buffer, "put", "([SII)Ljava/nio/ShortBuffer;", input, 1, 2)).toBe(buffer);
+      expect(await vcall(buffer, "position", "()I")).toBe(2);
+      await expect(vcallAsync(buffer, "put", "([SII)Ljava/nio/ShortBuffer;", input, 3, 2)).rejects.toBeDefined();
+      expect(await vcall(buffer, "position", "()I")).toBe(2);
+      await vcall(buffer, "flip", "()Ljava/nio/Buffer;");
+      const out = new Int16Array(2);
+      await vcall(buffer, "get", "([S)Ljava/nio/ShortBuffer;", out);
+      expect([...out]).toEqual([-32768, 32767]);
+    }
   });
 });
 
 describe("nio", () => {
-
-  rt.linkNatives();
-
   test("heap ByteBuffers expose their backing array and slice offset", async () => {
     const buffer = await scall("java/nio/ByteBuffer", "allocate", "(I)Ljava/nio/ByteBuffer;", 4);
     expect(await vcall(buffer, "hasArray", "()Z")).toBe(1);
@@ -278,18 +280,6 @@ describe("nio", () => {
     expect(await vcall(buffer, "position", "()I")).toBe(2);
     await expect(vcallAsync(buffer, "get", "([SII)Ljava/nio/ShortBuffer;", out, 4, 2)).rejects.toMatchObject({});
     await expect(vcallAsync(buffer, "get", "([SII)Ljava/nio/ShortBuffer;", out, 0, 2)).rejects.toMatchObject({});
-  });
-
-  test("ShortBuffer bulk put honours offsets, bounds and position", async () => {
-    const buffer = await scall("java/nio/ShortBuffer", "allocate", "(I)Ljava/nio/ShortBuffer;", 3);
-    const input = Int16Array.from([9, 0x1234, -2, 8]);
-    expect(await vcall(buffer, "put", "([SII)Ljava/nio/ShortBuffer;", input, 1, 2)).toBe(buffer);
-    expect(await vcall(buffer, "position", "()I")).toBe(2);
-    await vcall(buffer, "flip", "()Ljava/nio/Buffer;");
-    const out = new Int16Array(2);
-    await vcall(buffer, "get", "([S)Ljava/nio/ShortBuffer;", out);
-    expect([...out]).toEqual([0x1234, -2]);
-    await expect(vcallAsync(buffer, "put", "([SII)Ljava/nio/ShortBuffer;", input, 3, 2)).rejects.toMatchObject({});
   });
 
   test("FileChannel READ_WRITE mappings share the file's bytes and force persists them", async () => {

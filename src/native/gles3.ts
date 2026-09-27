@@ -746,7 +746,15 @@ export function gles3Init(): void {
     const set = method(`uniformMatrix${m}fv`);
     G[`glUniformMatrix${m}fv`] = (_c, a) => { const u = U(a.i()), cnt = a.i(), t = !!(a.i() & 255), p = a.p(); if (u) set().call(g(), u, t, f32(p, cnt * e)); };
   }
-  for (const [name, fn] of Object.entries(G)) G[name] = (cpu, args) => { activateEglCurrent(cpu.jthread); return fn(cpu, args); };
+  // libEGL turns a call with no current context into a logged no-op; it never faults the thread
+  // (MapLibre deletes its textures on a GLThread whose context is already released)
+  const noContext = new WeakSet<object>();
+  for (const [name, fn] of Object.entries(G)) G[name] = (cpu, args) => {
+    activateEglCurrent(cpu.jthread);
+    if (current) return fn(cpu, args);
+    if (!noContext.has(cpu.jthread)) { noContext.add(cpu.jthread); console.warn(`[gl] ${name}: call to OpenGL ES API with no current context`); }
+    return 0;
+  };
   // the probe: after each entry point, count and name a GL error
   if (glProbe) for (const [k, f] of Object.entries(G)) {
     if (k === "glGetError") continue;

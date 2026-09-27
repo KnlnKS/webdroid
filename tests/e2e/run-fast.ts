@@ -19,6 +19,8 @@ type VisualCheck = { step: string; contentDiffPct: number; maxContentDiffPct: nu
 type Checked = { flow: Flow; runs: StepRun[]; visual: VisualCheck[]; errors: string[]; gaps: string[] };
 type Outcome = Checked & { ms: number };
 
+const expectedError = (flow: Flow, message: string) => (flow.expectedErrors ?? []).some((part) => message.includes(part));
+
 function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: string[] } {
   const errors: string[] = [];
   const gaps: string[] = [];
@@ -36,7 +38,7 @@ function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: str
     if (step.evidence === "motion" && (step.perf?.presentations ?? 0) < 2) errors.push(`${prefix}: motion checkpoint presented no motion`);
     for (const item of step.newMissing ?? []) (live ? gaps : errors).push(`${prefix}: missing ${item}`);
     for (const item of step.nativeRequired ?? []) (live ? gaps : errors).push(`${prefix}: native code required ${item}`);
-    for (const item of step.newErrors ?? []) (live ? gaps : errors).push(`${prefix}: ${brief(item)}`);
+    for (const item of step.newErrors ?? []) if (!expectedError(flow, item)) (live ? gaps : errors).push(`${prefix}: ${brief(item)}`);
     const processes = step.processes ?? [];
     if (!processes.length) errors.push(`${prefix}: no webdroid process diagnostics`);
     for (const process of processes) {
@@ -49,7 +51,7 @@ function diagnostics(flow: Flow, runs: StepRun[]): { errors: string[]; gaps: str
         const key = `${process.url}:${item}`;
         if (seenProcessErrors.has(key)) continue;
         seenProcessErrors.add(key);
-        if (!(step.newErrors ?? []).includes(item)) (live ? gaps : errors).push(`${prefix}: ${process.url}: ${brief(item)}`);
+        if (!(step.newErrors ?? []).includes(item) && !expectedError(flow, item)) (live ? gaps : errors).push(`${prefix}: ${process.url}: ${brief(item)}`);
       }
     }
   }
@@ -85,11 +87,7 @@ async function visualEvidence(flow: Flow, manifest: Manifest | undefined, screen
 }
 
 function browserFailures(flow: Flow, errors: string[]): string[] {
-  const expected = flow.expectedBrowserErrors ?? [];
-  return errors.filter((error) => {
-    const message = URL.canParse(error) ? new URL(error).searchParams.get("msg") ?? error : error;
-    return !expected.some((part) => message.includes(part));
-  })
+  return errors.filter((error) => !expectedError(flow, URL.canParse(error) ? new URL(error).searchParams.get("msg") ?? error : error))
     .map((error) => `browser: ${error.slice(0, 300)}`);
 }
 

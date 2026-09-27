@@ -26,17 +26,6 @@ rt.register({ name: "android/media/audiofx/AudioEffect", ctor: class extends JOb
   methods: { "static queryEffects()[Landroid/media/audiofx/AudioEffect$Descriptor;": () => jarray([], "Landroid/media/audiofx/AudioEffect$Descriptor;") },
 });
 
-rt.register({ name: "android/media/RingtoneManager", ctor: class extends JObj {},
-  statics: { TYPE_RINGTONE: 1, TYPE_NOTIFICATION: 2, TYPE_ALARM: 4, TYPE_ALL: 7 },
-  methods: {
-    "static getDefaultUri(I)Landroid/net/Uri;": (type: number) => {
-      const setting = type & 1 ? "ringtone" : type & 2 ? "notification_sound" : type & 4 ? "alarm_alert" : null;
-      if (!setting) return null;
-      rt.link("android/net/Uri");
-      return mkUri("content://settings/system/" + setting);
-    },
-  },
-});
 
 class JCamcorderProfile extends JObj {
   duration = 0; quality = 0; fileFormat = 0;
@@ -250,7 +239,7 @@ rt.register({ name: "android/media/MediaMetadata$Builder", ctor: JMediaMetadataB
   "putRating(Ljava/lang/String;Landroid/media/Rating;)Landroid/media/MediaMetadata$Builder;": function (this: JMediaMetadataBuilder, key: string, value: unknown) { this.value.values.set(key, value); return this; },
   "build()Landroid/media/MediaMetadata;": function (this: JMediaMetadataBuilder) { const value = new JMediaMetadata(); value.values = new Map(this.value.values); return value; },
 } });
-class JAudioAttributes extends JObj { usage = 0; contentType = 0; flags = 0x800; }
+export class JAudioAttributes extends JObj { usage = 0; contentType = 0; flags = 0x800; }
 rt.register({
   name: "android/media/AudioAttributes", ctor: JAudioAttributes, ifaces: ["android/os/Parcelable"],
   methods: {
@@ -269,27 +258,27 @@ rt.register({
   },
 });
 class JAudioAttributesBuilder extends JObj { attrs = new JAudioAttributes(); }
-function setLegacyStreamType(this: JAudioAttributesBuilder, stream: number) {
+/** the usage and content type AudioAttributes.Builder.setLegacyStreamType maps a stream type to */
+export function setLegacyStreamType(attrs: JAudioAttributes, stream: number): void {
   switch (stream) {
-    case 0: case 6: this.attrs.contentType = 1; this.attrs.usage = 2; break;
-    case 1: this.attrs.contentType = 4; this.attrs.usage = 13; break;
-    case 2: this.attrs.contentType = 4; this.attrs.usage = 6; break;
-    case 3: this.attrs.contentType = 2; this.attrs.usage = 1; break;
-    case 4: this.attrs.contentType = 4; this.attrs.usage = 4; break;
-    case 5: this.attrs.contentType = 4; this.attrs.usage = 5; break;
-    case 7: this.attrs.contentType = 4; this.attrs.usage = 13; this.attrs.flags |= 1; break;
-    case 8: this.attrs.contentType = 4; this.attrs.usage = 3; break;
-    case 9: this.attrs.contentType = 1; this.attrs.usage = 11; break;
+    case 0: case 6: attrs.contentType = 1; attrs.usage = 2; break;
+    case 1: attrs.contentType = 4; attrs.usage = 13; break;
+    case 2: attrs.contentType = 4; attrs.usage = 6; break;
+    case 3: attrs.contentType = 2; attrs.usage = 1; break;
+    case 4: attrs.contentType = 4; attrs.usage = 4; break;
+    case 5: attrs.contentType = 4; attrs.usage = 5; break;
+    case 7: attrs.contentType = 4; attrs.usage = 13; attrs.flags |= 1; break;
+    case 8: attrs.contentType = 4; attrs.usage = 3; break;
+    case 9: attrs.contentType = 1; attrs.usage = 11; break;
     default: throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid stream type " + stream);
   }
-  return this;
 }
 rt.register({
   name: "android/media/AudioAttributes$Builder", ctor: JAudioAttributesBuilder,
   methods: {
     "<init>()V": function () {},
     "setFlags(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, flags: number) { this.attrs.flags |= flags & 0x1d1; return this; },
-    "setLegacyStreamType(I)Landroid/media/AudioAttributes$Builder;": setLegacyStreamType,
+    "setLegacyStreamType(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, stream: number) { setLegacyStreamType(this.attrs, stream); return this; },
     "setAllowedCapturePolicy(I)Landroid/media/AudioAttributes$Builder;": function (this: JAudioAttributesBuilder, policy: number) {
       if (policy < 1 || policy > 3) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid capture policy " + policy);
       this.attrs.flags = (this.attrs.flags & ~0x1400) | (policy === 3 ? 0x1400 : policy === 2 ? 0x400 : 0); return this;
@@ -365,7 +354,7 @@ export function isMusicActive(): number {
   return 0;
 }
 
-class JMediaPlayer extends JObj {
+export class JMediaPlayer extends JObj {
   audio: HTMLAudioElement | null = null;
   attributes: JAudioAttributes | null = null;
   looping = false;
@@ -374,7 +363,7 @@ class JMediaPlayer extends JObj {
   completionL: unknown = null;
   srcBytes: Uint8Array | null = null;
 }
-function mpReset(mp: JMediaPlayer) {
+export function mpReset(mp: JMediaPlayer) {
   players.delete(mp);
   if (mp.audio) {
     mp.audio.pause();
@@ -384,7 +373,7 @@ function mpReset(mp: JMediaPlayer) {
   mp.srcBytes = null;
   mp.prepared = false;
 }
-function mpLoad(mp: JMediaPlayer, bytes: Uint8Array) {
+export function mpLoad(mp: JMediaPlayer, bytes: Uint8Array) {
   mpReset(mp);
   const blob = new Blob([bytes as BlobPart]);
   mp.audio = new Audio(URL.createObjectURL(blob));
@@ -394,6 +383,7 @@ function mpLoad(mp: JMediaPlayer, bytes: Uint8Array) {
     if (mp.completionL) void vcallUncaught(mp.completionL, "onCompletion", "(Landroid/media/MediaPlayer;)V", mp);
   };
 }
+export function mpStart(mp: JMediaPlayer) { players.add(mp); void mp.audio?.play().catch(() => { /* */ }); }
 async function mpLoadFd(this: JMediaPlayer, fd: JFileDescriptor, offset = 0n, length = 0x7fffffffffffffffn) {
   if (fd === null) rt.npe();
   const source = javaFdSource(fd.fd) ?? vfs.source(fd.path);
@@ -424,7 +414,7 @@ rt.register({
     },
     "prepare()V": function (this: JMediaPlayer) { mpPrepare(this); },
     "prepareAsync()V": function (this: JMediaPlayer) { mpPrepare(this); },
-    "start()V": function (this: JMediaPlayer) { players.add(this); void this.audio?.play().catch(() => { /* */ }); },
+    "start()V": function (this: JMediaPlayer) { mpStart(this); },
     "pause()V": function (this: JMediaPlayer) { this.audio?.pause(); },
     "stop()V": function (this: JMediaPlayer) {
       if (this.audio) {
@@ -982,7 +972,7 @@ rt.register({ name: "android/media/MediaCodec$Callback", ctor: class extends JOb
 export class JLogSessionId extends JObj {
   constructor(public id = "") { super(); }
 }
-export const noLogSessionId = new JLogSessionId();
+const noLogSessionId = new JLogSessionId();
 rt.register({ name: "android/media/metrics/LogSessionId", ctor: JLogSessionId, statics: { LOG_SESSION_ID_NONE: noLogSessionId }, methods: {
   "<init>(Ljava/lang/String;)V": function (this: JLogSessionId, id: string) { if (id == null) throw rt.mkThrowable("java/lang/NullPointerException", "id"); this.id = id; },
   "getStringId()Ljava/lang/String;": function (this: JLogSessionId) { return this.id; },

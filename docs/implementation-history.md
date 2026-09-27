@@ -326,11 +326,18 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   and permission-granted fused-location callback are separate positive controls.
 - **YouTube:** Playback-path `AnimatorSet.clone`, `View.setZ` and image alpha
   implementations removed observed method faults. A mapped ELF image had
-  been incorrectly rejected by `mprotect`, causing V8 ENOMEM. Targeted flows
-  passed after repair, but an intermittent JIT-enabled branch into unmapped
-  zero code near `0x10004d20` recurred. Page flags alone do not prove it was
-  once mapped; tracing changed the reproduction. A range bisection or causal
-  memory-lifetime trace is still needed.
+  been incorrectly rejected by `mprotect`, causing V8 ENOMEM. The "undefined
+  0x00000000 @ 0x10004d20" fault was V8 tail-calling code in its code range at
+  `0x2_1000xxxx`: mmap had ignored V8's low hints and placed the range in a
+  plane above 4 GiB, and the core runs a 32-bit pc, so the branch landed on
+  zeroed plane-0 memory (the fault text prints only the low word; the full
+  target is in `wd.native.lastFault.regs` x17). The Java InternalError left
+  the Elements native mutex held; `ComponentLayoutThread` then parked in
+  `pthread_mutex_lock` forever, comments stayed half-rendered and a later
+  synchronous Litho layout wedged the main looper. Executable and low-hinted
+  mappings now stay in plane 0; comments load, scroll and open replies.
+  Converting a native fault into a Java exception still abandons whatever
+  native locks the frame held, so any other fault can wedge the same way.
 - **Original game paths:** Among Us completed a live online Airship match
   through the Bun UDP relay: lobby, impostor role, movement, victory screen,
   XP, beans and EOS stat ingestion. Practice meetings, voting and chat through
@@ -404,3 +411,66 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   `tests/import-cycles.test.ts` rejects load-time reads of cyclic
   class/const/let bindings. Verify shell changes against `build:prod` served
   by `wrangler dev`, not only `server.ts`.
+- Framework services from the 2026-09-26 APK exploration. A driven native
+  only waits on its own realm's `Promise`, so in a child process every
+  `CookieManager` call read the broker's parent-realm Promise itself (microG
+  sign-in's `removeAllCookies`); `useWebCookies` now adopts it. Other broker
+  results reached from driven code need the same care. Jobs run through the
+  service's `onBind` binder and an IJobCallback, so `JobIntentService`'s own
+  `JobServiceEngine` and services in another process receive work; the
+  per-run callback and parcelled `JobParameters` are private formats between
+  our own specs. Host system activities (pickers, share, chooser) resolve to
+  the platform package's `ResolverActivity`. Remaining limits:
+  `MediaStore.createTrashRequest`/`createFavoriteRequest` need writable
+  `is_trashed`/`is_favorite` media rows; `Resources.getDrawableForDensity`
+  keeps the chosen bucket's bitmap density where AOSP reports the screen's.
+- java.time now keeps ISO fields and does proleptic Gregorian arithmetic
+  itself; zone offsets come from `Intl` (`timeZoneName: "longOffset"`), and
+  only the host's own zone uses the JS `Date` getters, so `TimeZone.setDefault`
+  and every non-host zone (Calendar, SimpleDateFormat, `Date`'s deprecated
+  fields) follow the zone's rules instead of the host's. DateTimeFormatter,
+  its builder and SimpleDateFormat share one pattern token engine; localized
+  FormatStyle patterns are read back from `Intl.formatToParts`. A failed
+  `<clinit>` now leaves the class erroneous (ExceptionInInitializerError once,
+  NoClassDefFoundError after), which can surface failures that partial statics
+  used to hide. Unresolved: Feeder's per-launch "DiskLruCache journal corrupt"
+  did not reproduce with our File/FileOutputStream sequence; FitNotes' UTC
+  "today" was not pinned to a call site (its own date code reads local
+  Calendar fields). Large file persistence still copies whole files:
+  `privatefiles` flushes the full `Uint8Array` (structured clone copies the
+  entire backing buffer) on every write tick, which dominates heap during
+  long downloads.
+- Shell, network and native follow-up to the 2026-09-26 exploration. Guest
+  resolvers (minidns, dnsjava) get a DNS server from `LinkProperties`, and
+  their port-53 datagrams are answered through `/dns-query` (DNS-over-HTTPS on
+  the dev server and the Worker); Thunderbird's autodiscovery then reaches
+  "Configuration found". Launch modes, CLEAR_TOP/SINGLE_TOP/CLEAR_TASK,
+  Back as a tracked KEYCODE_BACK press, `moveTaskToBack` and a home surface
+  after the last activity follow AOSP's ActivityStarter and Activity
+  semantics. `wd.configuration` models a physical rotation, so activities
+  with a fixed orientation (Flappy Bird, lichess) ignore it; lichess's
+  stale-surface report was an artefact of forcing its orientation. Static
+  fields a native class does not declare are now reported, which surfaced
+  about thirty silent `undefined` statics across the corpus. Komikku's
+  bundled requery SQLite logs `SQLITE_WARNING` and `AUTOINDEX` lines at
+  error level, as it does on a device; the quick gate counts them as new
+  errors. Open: Amazon's startup service reads its current activity only
+  from the splash activity and re-runs `taskSetCountry` without one; TikTok's
+  Keva block file is `MAP_SHARED` across app processes, which per-process
+  Wasm memories cannot keep coherent; a Harmonic row stall past ~80 items
+  reproduced once and not again.
+- Invisible switches had three independent causes: TextView measured and drew
+  from its padding fields instead of the virtual `getCompoundPadding*` that
+  Switch/SwitchCompat override (0 px wide), Material's switch vectors spell
+  `pathData` as `@string` references, and selectors dropped app-defined states
+  (`state_indeterminate`), so the first item always matched. Compound buttons,
+  Switch, ToggleButton, CheckedTextView and ProgressBar now follow AOSP's
+  drawables and styles; `AID()` memoizes 0 before the framework table loads,
+  so style attributes must be resolved at construction, not module load.
+  A themed context clones its base inflater (dialog rows become AppCompat
+  widgets), windows draw into a `RecordingCanvas`, and framework layouts
+  dispatch `measureChildWithMargins` virtually (NestedScrollView settings now
+  scroll). Remaining limits: indeterminate progress drawables are painted, not
+  animated; Switch has no thumb drag; `Layout` reserves no leading margin, so
+  `getParagraphLeft/Right` report the full width; `Html.fromHtml` ignores
+  `<img>`/`<sub>` and TagHandler; popups draw no elevation shadow.

@@ -4,8 +4,7 @@ import { newObj, vcall } from "../jvm/natives/jlang";
 import type { JContext } from "./context";
 import { JIntent } from "./intent";
 import { onMain } from "./mainloop";
-import { reportUncaught } from "./os";
-import { JBundle } from "./os";
+import { reportUncaught, JBundle } from "./os";
 
 interface Filter { actions: string[]; schemes?: string[]; priority?: number; }
 type BroadcastResult = { code: number; data: string | null; extras: JBundle | null; aborted: boolean };

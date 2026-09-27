@@ -29,6 +29,37 @@ describe("array-adapter", () => {
   });
 });
 
+describe("expandable-list", () => {
+  rt.linkNatives();
+  const m = (n: string, d: string, f: (...a: any[]) => unknown) => ({ [mangleMethod(n, d)]: f });
+  test("ExpandableListView flattens expanded groups and toggles a group on click", async () => {
+    const children = [["a", "b"], []];
+    const adapter = Object.assign(rt.make("android/widget/BaseExpandableListAdapter"),
+      m("getGroupCount", "()I", () => children.length),
+      m("getChildrenCount", "(I)I", (g: number) => children[g].length),
+      m("getGroup", "(I)Ljava/lang/Object;", (g: number) => "group" + g),
+      m("getChild", "(II)Ljava/lang/Object;", (g: number, c: number) => children[g][c]),
+      m("getGroupId", "(I)J", (g: number) => BigInt(g)),
+      m("getChildId", "(II)J", (_g: number, c: number) => BigInt(c)),
+      m("getGroupView", "(IZLandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;", () => new JView()),
+      m("getChildView", "(IIZLandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;", () => new JView()),
+      m("isChildSelectable", "(II)Z", () => 1));
+    const list = rt.make("android/widget/ExpandableListView");
+    const E = "android/widget/ExpandableListView";
+    await vcall(list, "setAdapter", "(Landroid/widget/ExpandableListAdapter;)V", adapter);
+    expect(await vcall(list, "getCount", "()I")).toBe(2);
+    expect(await vcall(list, "expandGroup", "(I)Z", 0)).toBe(1);
+    expect(await vcall(list, "getCount", "()I")).toBe(4);
+    expect(await vcall(list, "getItemAtPosition", "(I)Ljava/lang/Object;", 2)).toBe("b");
+    const packed = await vcall(list, "getExpandableListPosition", "(I)J", 2);
+    expect(packed).toBe(scall(E, "getPackedPositionForChild", "(II)J", 0, 1));
+    expect([scall(E, "getPackedPositionType", "(J)I", packed), scall(E, "getPackedPositionGroup", "(J)I", packed), scall(E, "getPackedPositionChild", "(J)I", packed)]).toEqual([1, 0, 1]);
+    expect(await vcall(list, "getFlatListPosition", "(J)I", packed)).toBe(2);
+    await vcall(list, "performItemClick", "(Landroid/view/View;IJ)Z", null, 0, 0n);
+    expect([await vcall(list, "isGroupExpanded", "(I)Z", 0), await vcall(list, "getCount", "()I")]).toEqual([0, 2]);
+  });
+});
+
 describe("editor-action", () => {
   rt.linkNatives();
   class KeyListener extends JObj { keys: [number, number][] = []; [mangleMethod("onKey", "(Landroid/view/View;ILandroid/view/KeyEvent;)Z")](_v: unknown, code: number, ev: any) { this.keys.push([ev.action, code]); return 1; } }
@@ -138,23 +169,17 @@ describe("linear-dividers", () => {
 describe("linear-layout-baseline", () => {
   rt.linkNatives();
 
-  test("LinearLayout retains a valid baseline child index", async () => {
+  test("LinearLayout retains a valid baseline child index and rejects indexes outside its children", async () => {
     const layout = new JLinearLayout();
     layout.children.push(new JView(), new JView());
-    expect(await vcall(layout, "getBaselineAlignedChildIndex", "()I")).toBe(-1);
-    await vcall(layout, "setBaselineAlignedChildIndex", "(I)V", 1);
-    expect(await vcall(layout, "getBaselineAlignedChildIndex", "()I")).toBe(1);
-  });
-
-  test("LinearLayout rejects baseline indexes outside its current children", async () => {
-    const layout = new JLinearLayout();
-    layout.children.push(new JView());
-    for (const index of [-1, 1]) {
+    for (const index of [-1, 2]) {
       await expect(vcallAsync(layout, "setBaselineAlignedChildIndex", "(I)V", index)).rejects.toMatchObject({
         constructor: rt.link("java/lang/IllegalArgumentException").ctor,
       });
     }
     expect(await vcall(layout, "getBaselineAlignedChildIndex", "()I")).toBe(-1);
+    await vcall(layout, "setBaselineAlignedChildIndex", "(I)V", 1);
+    expect(await vcall(layout, "getBaselineAlignedChildIndex", "()I")).toBe(1);
   });
 });
 

@@ -1,8 +1,8 @@
-import { JObj, rt, stubs, fieldGetters, flagGetters, driven, type Gen } from "../jvm/runtime";
+import { JObj, rt, stubs, driven, type Gen } from "../jvm/runtime";
 import { jarray, hexBytes } from "../jvm/abi";
 import { device } from "../shell/config";
 import type { JBundle } from "./os";
-import { vcall, vcallOn, curThread, newObj } from "../jvm/natives/jlang";
+import { vcall, vcallOn, curThread } from "../jvm/natives/jlang";
 import { type XmlNode, attrStr, attr, TV } from "./axml";
 import { normRV, resString, type Resources } from "./res";
 import { apkCertificates, parsePackageArchive, packageArchive, type PackageArchive } from "./packagearchive";
@@ -15,10 +15,9 @@ import { persistPackage, restorePackages } from "../shell/packages";
 import { appHost, type AppHost, jclsNameOf } from "./apphost";
 import { apkPath, vfs } from "../jvm/natives/jio";
 import { DOCS_AUTHORITY } from "./documents";
-import { type JList, newArrayList, toJsArray } from "../jvm/natives/jutil";
-import { JIntent, type JComponentName, componentState, mkComponentName } from "./intent";
+import { type JList, newArrayList } from "../jvm/natives/jutil";
+import { JIntent, type JComponentName, componentState, mkComponentName, systemActivity, SYSTEM_ACTIVITY } from "./intent";
 import { matchesIntentFilter } from "./intent-filter";
-import { csText } from "./text";
 import type { JActivity } from "./app";
 import { PackageRecord, packages, packageUid, qualifyComponent, signaturePermissions, type ComponentKind } from "./packages";
 import { digestBytes } from "../jvm/natives/jsec";
@@ -306,7 +305,7 @@ class JApplicationInfo extends JPackageItemInfo {
   // is a reference, the literal otherwise. Code that names the app reads whichever is set.
   nonLocalizedLabel: string | null = null;
   className: string | null = null; publicSourceDir = ""; uid = 10001; processName = "";
-  enabled = 1; metaData: JBundle | null = null;
+  enabled = 1; metaData: JBundle | null = null; profileableByShell = false;
   category = -1;
   // a single base.apk install has no splits: null, as AOSP leaves them (library loaders null-check these)
   splitNames: string[] | null = null; splitSourceDirs: string[] | null = null; splitPublicSourceDirs: string[] | null = null;
@@ -329,6 +328,7 @@ rt.register({
     "writeToParcel(Landroid/os/Parcel;I)V": function (this: JApplicationInfo, parcel: JParcel, flags: number) {
       return writeApplicationInfo(parcel, this as unknown as Record<string, unknown>, flags);
     },
+    "isProfileableByShell()Z": function (this: JApplicationInfo) { return +this.profileableByShell; },
   },
 });
 let cachedAppInfo: JApplicationInfo | null = null;
@@ -356,7 +356,7 @@ export function getAppInfo(host: AppHost): JApplicationInfo {
     }
     cachedAppInfo.icon = host.iconRes;
     const node = appNode();
-    fillManifestGameInfo(cachedAppInfo, node);
+    fillManifestAppInfo(cachedAppInfo, node);
     const label = node ? attr(node, "label") : undefined;
     if (label?.type === TV.REFERENCE) cachedAppInfo.labelRes = label.data;
     else cachedAppInfo.nonLocalizedLabel = host.appLabel;
@@ -631,6 +631,14 @@ function queryComponents(intent: JIntent | null, flags: number, kind: Exclude<Co
     }
   }
   result.a.sort((a, b) => (b as { priority: number }).priority - (a as { priority: number }).priority);
+  if (kind === "activity" && systemActivity(intent) && (!intent.pkg || intent.pkg === "android")) {
+    const info = rt.make("android/content/pm/ResolveInfo"), activity: JActivityInfo = rt.make("android/content/pm/ActivityInfo");
+    const platform = packages.get("android");
+    activity.name = SYSTEM_ACTIVITY; activity.packageName = "android"; activity.processName = "system"; activity.exported = activity.enabled = 1;
+    activity.applicationInfo = platform ? recordAppInfo(platform) : null;
+    info.activityInfo = activity;
+    result.a.push(info);
+  }
   return result;
 }
 
@@ -940,6 +948,11 @@ export function manifestActivityOrientation(cls: string): number {
   const node = manifestActivities.get(cls.replace(/\./g, "/"));
   return (node && attr(node, "screenOrientation")?.data) ?? -1;
 }
+/** ActivityInfo.launchMode: LAUNCH_MULTIPLE (0) unless the manifest names another */
+export function manifestLaunchMode(cls: string): number {
+  const node = manifestActivities.get(cls.replace(/\./g, "/"));
+  return (node && attr(node, "launchMode")?.data) ?? 0;
+}
 /** ActivityInfo.CONFIG_UI_MODE: an activity that declares it handles a day/night change is told
  *  about it; one that does not is relaunched, which is the whole of AppCompat's day/night switch. */
 export const CONFIG_UI_MODE = 0x0200;
@@ -956,116 +969,12 @@ function mkActivityInfo(cls: string, flags: number, owner = currentPackage): JAc
   a.theme = (node && attr(node, "theme")?.data) ?? appHost?.themeResId ?? 0;
   a.configChanges = (node && attr(node, "configChanges")?.data) ?? 0;
   a.screenOrientation = (node && attr(node, "screenOrientation")?.data) ?? -1;
-  a.parentActivityName = node ? attrStr(node, "parentActivityName") : null;
-  const target = node && attrStr(node, "targetActivity");
-  a.targetActivity = target ? qualifyComponent(target, owner?.pkg ?? "") : null;
+  // the package parser stores both as fully qualified class names
+  const qualified = (name: string) => { const cls = node && attrStr(node, name); return cls ? qualifyComponent(cls, owner?.pkg ?? "") : null; };
+  a.parentActivityName = qualified("parentActivityName");
+  a.targetActivity = qualified("targetActivity");
   return a;
 }
-
-class JShortcutInfo extends JObj {
-  id = ""; pkg = ""; shortLabel = ""; longLabel: string | null = null; disabledMessage: string | null = null;
-  intents: JIntent[] = []; icon: unknown = null; extras: JBundle | null = null;
-  rank = 0; excluded = 0; longLived = false; dynamic = false;
-}
-async function copyShortcut(info: JShortcutInfo): Promise<JShortcutInfo> {
-  const copy = Object.assign(rt.make("android/content/pm/ShortcutInfo"), info);
-  copy.intents = await Promise.all(info.intents.map((intent) => newObj("android/content/Intent", "(Landroid/content/Intent;)V", intent)));
-  if (info.extras) {
-    copy.extras = Object.assign(rt.make("android/os/PersistableBundle"), info.extras);
-    copy.extras.map = new Map(info.extras.map);
-  }
-  return copy;
-}
-rt.register({
-  name: "android/content/pm/ShortcutInfo", ctor: JShortcutInfo, ifaces: ["android/os/Parcelable"],
-  statics: { SURFACE_LAUNCHER: 1 },
-  methods: {
-    "getExtras()Landroid/os/PersistableBundle;": driven(function* (this: JShortcutInfo): Gen { return (yield copyShortcut(this)).extras; }),
-    "getIntent()Landroid/content/Intent;": driven(function* (this: JShortcutInfo): Gen { return (yield copyShortcut(this)).intents.at(-1) ?? null; }),
-    "getIntents()[Landroid/content/Intent;": driven(function* (this: JShortcutInfo): Gen { return jarray((yield copyShortcut(this)).intents, "Landroid/content/Intent;"); }),
-    ...fieldGetters({ "getId()Ljava/lang/String;": "id", "getPackage()Ljava/lang/String;": "pkg",
-      "getShortLabel()Ljava/lang/CharSequence;": "shortLabel", "getLongLabel()Ljava/lang/CharSequence;": "longLabel",
-      "getDisabledMessage()Ljava/lang/CharSequence;": "disabledMessage", "getRank()I": "rank" }),
-    ...flagGetters({ "isDynamic()Z": "dynamic", "isLongLived()Z": "longLived" }),
-    "isExcludedFromSurfaces(I)Z": function (this: JShortcutInfo, surfaces: number) { return this.excluded & surfaces ? 1 : 0; },
-    ...stubs(0, "isPinned()Z", "isDeclaredInManifest()Z"),
-    ...stubs(1, "isEnabled()Z"),
-  },
-});
-class JShortcutBuilder extends JObj { info = new JShortcutInfo(); }
-const shortcutBuilder = "Landroid/content/pm/ShortcutInfo$Builder;";
-rt.register({
-  name: "android/content/pm/ShortcutInfo$Builder", ctor: JShortcutBuilder,
-  methods: {
-    "<init>(Landroid/content/Context;Ljava/lang/String;)V": driven(function* (this: JShortcutBuilder, context: unknown, id: string): Gen {
-      if (context == null || id == null) throw rt.mkThrowable("java/lang/NullPointerException", "Shortcut context and id required");
-      if (!id) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut id must not be empty");
-      this.info.id = id; this.info.pkg = yield vcall(context, "getPackageName", "()Ljava/lang/String;");
-    }),
-    [`setShortLabel(Ljava/lang/CharSequence;)${shortcutBuilder}`]: driven(function* (this: JShortcutBuilder, label: unknown): Gen {
-      const text = yield csText(label);
-      if (!text) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut label must not be empty");
-      this.info.shortLabel = text; return this;
-    }),
-    [`setLongLabel(Ljava/lang/CharSequence;)${shortcutBuilder}`]: driven(function* (this: JShortcutBuilder, label: unknown): Gen { this.info.longLabel = yield csText(label); return this; }),
-    [`setDisabledMessage(Ljava/lang/CharSequence;)${shortcutBuilder}`]: driven(function* (this: JShortcutBuilder, label: unknown): Gen { this.info.disabledMessage = yield csText(label); return this; }),
-    [`setIntent(Landroid/content/Intent;)${shortcutBuilder}`]: function (this: JShortcutBuilder, intent: JIntent) { this.info.intents = [intent]; return this; },
-    [`setIntents([Landroid/content/Intent;)${shortcutBuilder}`]: function (this: JShortcutBuilder, intents: JIntent[]) { this.info.intents = intents.slice(); return this; },
-    [`setIcon(Landroid/graphics/drawable/Icon;)${shortcutBuilder}`]: function (this: JShortcutBuilder, icon: unknown) { this.info.icon = icon; return this; },
-    [`setExtras(Landroid/os/PersistableBundle;)${shortcutBuilder}`]: function (this: JShortcutBuilder, extras: JBundle) { this.info.extras = extras; return this; },
-    [`setRank(I)${shortcutBuilder}`]: function (this: JShortcutBuilder, rank: number) {
-      if (rank < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Rank must not be negative");
-      this.info.rank = rank; return this;
-    },
-    [`setLongLived(Z)${shortcutBuilder}`]: function (this: JShortcutBuilder, value: number) { this.info.longLived = !!value; return this; },
-    [`setExcludedFromSurfaces(I)${shortcutBuilder}`]: function (this: JShortcutBuilder, value: number) { this.info.excluded = value; return this; },
-    "build()Landroid/content/pm/ShortcutInfo;": function (this: JShortcutBuilder) {
-      if (!this.info.shortLabel || !this.info.intents.length || this.info.intents.some((intent) => !intent?.action)) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut label and intents with actions are required");
-      return copyShortcut(this.info);
-    },
-  },
-});
-class JShortcutManager extends JObj { packages = new Map<string, Map<string, JShortcutInfo>>(); }
-async function dynamicShortcuts(list: unknown, pkg: string): Promise<Map<string, JShortcutInfo>> {
-  const shortcuts = new Map<string, JShortcutInfo>();
-  for (const info of await toJsArray(list)) {
-    if (!(info instanceof JShortcutInfo) || info.pkg !== pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut belongs to another package");
-    const copy = await copyShortcut(info); copy.dynamic = true; shortcuts.set(copy.id, copy);
-  }
-  return shortcuts;
-}
-rt.register({
-  name: "android/content/pm/ShortcutManager", ctor: JShortcutManager,
-  methods: {
-    "setDynamicShortcuts(Ljava/util/List;)Z": driven(function* (this: JShortcutManager, list: unknown): Gen {
-      const pkg = appHost?.pkg ?? "";
-      this.packages.set(pkg, yield dynamicShortcuts(list, pkg)); return 1;
-    }),
-    "addDynamicShortcuts(Ljava/util/List;)Z": driven(function* (this: JShortcutManager, list: unknown): Gen {
-      const pkg = appHost?.pkg ?? "";
-      const additions = yield dynamicShortcuts(list, pkg);
-      const shortcuts = this.packages.get(pkg) ?? new Map<string, JShortcutInfo>();
-      for (const [id, info] of additions) shortcuts.set(id, info);
-      this.packages.set(pkg, shortcuts); return 1;
-    }),
-    "getDynamicShortcuts()Ljava/util/List;": driven(function* (this: JShortcutManager): Gen {
-      const list = newArrayList(); list.a = yield Promise.all([...(this.packages.get(appHost?.pkg ?? "")?.values() ?? [])].map(copyShortcut)); return list;
-    }),
-    "getPinnedShortcuts()Ljava/util/List;": () => newArrayList(),
-    "getShortcuts(I)Ljava/util/List;": driven(function* (this: JShortcutManager, flags: number): Gen {
-      const list = newArrayList();
-      if (flags & 2) list.a = yield Promise.all([...(this.packages.get(appHost?.pkg ?? "")?.values() ?? [])].map(copyShortcut));
-      return list;
-    }),
-    "removeAllDynamicShortcuts()V": function (this: JShortcutManager) { this.packages.delete(appHost?.pkg ?? ""); },
-    "getMaxShortcutCountPerActivity()I": () => 15,
-    "getIconMaxHeight()I": () => Math.round(device.dp(96)),
-    "getIconMaxWidth()I": () => Math.round(device.dp(96)),
-    "isRateLimitingActive()Z": () => 0,
-    "reportShortcutUsed(Ljava/lang/String;)V": (id: string) => { if (id == null) throw rt.mkThrowable("java/lang/NullPointerException", "shortcutId"); },
-    "isRequestPinShortcutSupported()Z": () => 0,
-  },
-});
 
 function applicationLabel(info: JPackageItemInfo): string {
   return info.nonLocalizedLabel ?? (info.labelRes && info.archiveResources ? resString(info.archiveResources, info.labelRes) : null) ?? (info.packageName === appHost?.pkg ? appHost.appLabel : info.packageName);
@@ -1115,7 +1024,7 @@ export function usesSdk(root: XmlNode): { min: number; target: number } {
 function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resources, root: XmlNode, app: XmlNode | null | undefined, flags: number) {
   ai.packageName = pkg; ai.sourceDir = ai.publicSourceDir = path; ai.dataDir = `/data/data/${pkg}`; ai.archiveResources = res;
   ai.deviceProtectedDataDir = `/data/user_de/0/${pkg}`;
-  fillManifestGameInfo(ai, app);
+  fillManifestAppInfo(ai, app);
   const label = app && attr(app, "label");
   ai.labelRes = label?.type === TV.REFERENCE ? label.data : 0;
   ai.nonLocalizedLabel = label?.str ?? null;
@@ -1126,9 +1035,11 @@ function appInfoFrom(ai: JApplicationInfo, pkg: string, path: string, res: Resou
   if (flags & 128) ai.metaData = metaData(app, res);
   return ai;
 }
-function fillManifestGameInfo(ai: JApplicationInfo, app: XmlNode | null | undefined): void {
+function fillManifestAppInfo(ai: JApplicationInfo, app: XmlNode | null | undefined): void {
   ai.category = app ? attr(app, "appCategory")?.data ?? -1 : -1;
   if (app && attr(app, "isGame")?.data) ai.flags |= FLAG_IS_GAME;
+  // the package parser makes a debuggable app profileable by the shell too
+  ai.profileableByShell = !!app && !!(attr(app, "debuggable")?.data || app.children.some((n) => n.name === "profileable" && attr(n, "shell")?.data));
 }
 function fillPackageManifest(info: JPackageInfo, root: XmlNode, res: Resources, flags: number) {
   info.sharedUserId = attrStr(root, "sharedUserId");

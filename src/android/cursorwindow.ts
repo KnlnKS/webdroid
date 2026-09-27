@@ -1,4 +1,4 @@
-import { JObj, rt, driven, type Gen } from "../jvm/runtime";
+import { JObj, rt, driven, fieldGetters, fieldSetters, type Gen } from "../jvm/runtime";
 import { i8 } from "../jvm/abi";
 import { parcelCreator, readInt, readString, writeInt, writeString, type JParcel } from "./parcel";
 import { vcall } from "../jvm/natives/jlang";
@@ -54,6 +54,7 @@ const text = (value: Cell): string | null => {
 const cellType = (value: Cell): number => value === null ? 0
   : typeof value === "bigint" || typeof value === "number" && Number.isInteger(value) ? 1
     : typeof value === "number" ? 2 : typeof value === "string" ? 3 : 4;
+function putCell(this: JCursorWindow, value: string | bigint | number, row: number, col: number) { return this.put(value, row, col); }
 async function fromParcel(parcel: JParcel): Promise<JCursorWindow> {
   rt.link("android/database/CursorWindow");
   const window = new JCursorWindow();
@@ -83,15 +84,12 @@ rt.register({
   ifaces: ["android/os/Parcelable"],
   statics: { get CREATOR() { return parcelCreator("android/database/CursorWindow", fromParcel); } },
   methods: {
-    "<init>(Ljava/lang/String;)V": function (this: JCursorWindow, name: string | null) { this.name = name; },
-    "<init>(Ljava/lang/String;Z)V": function (this: JCursorWindow, name: string | null) { this.name = name; },
-    "<init>(Ljava/lang/String;J)V": function (this: JCursorWindow, name: string | null) { this.name = name; },
+    // the size and legacy-flag arguments are allocation hints; rows grow as they are allocated
+    ...fieldSetters({ "<init>(Ljava/lang/String;)V": "name", "<init>(Ljava/lang/String;Z)V": "name", "<init>(Ljava/lang/String;J)V": "name",
+      "setStartPosition(I)V": "start" }),
     "<init>(Z)V": function () {},
-    "getName()Ljava/lang/String;": function (this: JCursorWindow) { return this.name; },
-    "getStartPosition()I": function (this: JCursorWindow) { return this.start; },
-    "setStartPosition(I)V": function (this: JCursorWindow, pos: number) { this.start = pos; },
+    ...fieldGetters({ "getName()Ljava/lang/String;": "name", "getStartPosition()I": "start", "getNumColumns()I": "columns" }),
     "getNumRows()I": function (this: JCursorWindow) { return this.rows.length; },
-    "getNumColumns()I": function (this: JCursorWindow) { return this.columns; },
     "setNumColumns(I)Z": function (this: JCursorWindow, count: number) {
       if (this.readOnly || count < 0 || (this.rows.length > 0 && this.columns !== count)) return 0;
       this.columns = count;
@@ -123,9 +121,9 @@ rt.register({
     "getDouble(II)D": function (this: JCursorWindow, row: number, col: number) { return numeric(this.cell(row, col)); },
     "getFloat(II)F": function (this: JCursorWindow, row: number, col: number) { return Math.fround(numeric(this.cell(row, col))); },
     "putNull(II)Z": function (this: JCursorWindow, row: number, col: number) { return this.put(null, row, col); },
-    "putString(Ljava/lang/String;II)Z": function (this: JCursorWindow, value: string, row: number, col: number) { return this.put(value, row, col); },
-    "putLong(JII)Z": function (this: JCursorWindow, value: bigint, row: number, col: number) { return this.put(value, row, col); },
-    "putDouble(DII)Z": function (this: JCursorWindow, value: number, row: number, col: number) { return this.put(value, row, col); },
+    "putString(Ljava/lang/String;II)Z": putCell,
+    "putLong(JII)Z": putCell,
+    "putDouble(DII)Z": putCell,
     "putBlob([BII)Z": function (this: JCursorWindow, value: Int8Array, row: number, col: number) { return this.put(value.slice(), row, col); },
     "describeContents()I": () => 0,
     "static newFromParcel(Landroid/os/Parcel;)Landroid/database/CursorWindow;": fromParcel,

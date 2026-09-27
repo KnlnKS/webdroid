@@ -1,6 +1,6 @@
 import { readClipData } from "./clipdata";
 import { JObj, type NativeSpec, rt, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { JBundle, bundlePrimitive, bundleBox, reportUncaught, PROCESS_NAME } from "./os";
+import { JBundle, bundleBox, bundleGet, bundleTyped, INTENT_TYPED, INTENT_TYPES, reportUncaught, PROCESS_NAME } from "./os";
 import { appHost, type AppHost } from "./apphost";
 import { mkUri, readUri, writeUri } from "./net";
 import { JRect } from "./graphics";
@@ -9,7 +9,7 @@ import { newLinkedHashSet } from "../jvm/natives/jutil";
 import type { JContext } from "./context";
 import type { JActivity } from "./app";
 import { onMain } from "./mainloop";
-import { vcall, defineException, stringHash } from "../jvm/natives/jlang";
+import { vcall, defineException, stringHash, JBool, JByte, JChar, JDouble, JFloat, JShort } from "../jvm/natives/jlang";
 import { TV, type XmlAttr, type XmlNode } from "./axml";
 import { normRV } from "./res";
 
@@ -217,9 +217,6 @@ const intentMethods: NativeSpec["methods"] = {
   "removeExtra(Ljava/lang/String;)V": function (this: JIntent, k: string) { this.extras.map.delete(k); },
   // Extras are live objects here, never a parcel, so there is nothing for a class loader to do.
   "setExtrasClassLoader(Ljava/lang/ClassLoader;)V": () => {},
-  // API 33 type-checked getters: the extras are already the objects the caller asked for.
-  "getParcelableExtra(Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/Object;": function (this: JIntent, k: string) { return this.extras.map.get(k) ?? null; },
-  "getSerializableExtra(Ljava/lang/String;Ljava/lang/Class;)Ljava/io/Serializable;": function (this: JIntent, k: string) { return this.extras.map.get(k) ?? null; },
   "getCategories()Ljava/util/Set;": driven(function* (this: JIntent): Gen {
     return this.categories.size ? yield newLinkedHashSet([...this.categories]) : null;
   }),
@@ -237,6 +234,8 @@ const intentMethods: NativeSpec["methods"] = {
     return i;
   },
   "setSourceBounds(Landroid/graphics/Rect;)V": function (this: JIntent, bounds: JRect | null) { this.sourceBounds = bounds ? copyBounds(bounds) : null; },
+  "toUri(I)Ljava/lang/String;": function (this: JIntent, flags: number) { return intentUri(this, flags); },
+  "toURI()Ljava/lang/String;": function (this: JIntent) { return intentUri(this, 0); },
   "setSelector(Landroid/content/Intent;)V": function (this: JIntent, selector: JIntent | null) {
     if (selector === this || selector && this.pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid selector");
     this.selector = selector;
@@ -262,35 +261,19 @@ const intentMethods: NativeSpec["methods"] = {
     return `Intent{act=${this.action} cmp=${this.component}}`;
   },
 };
-for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I", 0], ["Long", "J", 0n],
-  ["Byte", "B", 0], ["Short", "S", 0], ["Boolean", "Z", 0], ["Char", "C", 0], ["Float", "F", 0], ["Double", "D", 0], ["CharSequence", "Ljava/lang/CharSequence;", null],
-  ["Parcelable", "Landroid/os/Parcelable;", null], ["Serializable", "Ljava/io/Serializable;", null],
-  ["Bundle", "Landroid/os/Bundle;", null],
-  ["IntArray", "[I", null], ["ByteArray", "[B", null], ["StringArray", "[Ljava/lang/String;", null],
-  ["ParcelableArray", "[Landroid/os/Parcelable;", null]] as const) {
-  intentMethods[`putExtra(Ljava/lang/String;${d})Landroid/content/Intent;`] = function (this: JIntent, k: string, v: unknown) {
+// Intent's extras are a Bundle: the same table, with Intent's names and its primitive getters
+// only in their defaulted form
+for (const [t, d] of INTENT_TYPES) {
+  const put = d === "Ljava/util/ArrayList;" ? `put${t}Extra` : "putExtra";
+  intentMethods[`${put}(Ljava/lang/String;${d})Landroid/content/Intent;`] = function (this: JIntent, k: string, v: unknown) {
     this.extras.map.set(k, bundleBox(v, d));
     return this;
   };
-  intentMethods[`get${t}Extra(Ljava/lang/String;)${d}`] = function (this: JIntent, k: string) {
-    if (d.length === 1) return bundlePrimitive(this.extras.map.get(k), d, dflt);
-    return this.extras.map.get(k) ?? dflt;
-  };
-  if ("IJBSCZFD".includes(d)) {
-    intentMethods[`get${t}Extra(Ljava/lang/String;${d})${d}`] = function (this: JIntent, k: string, dv: unknown) {
-      const v = this.extras.map.get(k);
-      return bundlePrimitive(v, d, dv);
-    };
-  }
-  if (t === "Bundle") {
-    intentMethods[`getBundleExtra(Ljava/lang/String;)Landroid/os/Bundle;`] = function (this: JIntent, k: string) {
-      return this.extras.map.get(k) ?? null;
-    };
-  }
+  intentMethods[d.length === 1 ? `get${t}Extra(Ljava/lang/String;${d})${d}` : `get${t}Extra(Ljava/lang/String;)${d}`] =
+    function (this: JIntent, k: string, dv: unknown = null) { return bundleGet(this.extras, k, d, dv); };
 }
-for (const type of ["String", "Integer", "CharSequence", "Parcelable"]) {
-  intentMethods[`put${type}ArrayListExtra(Ljava/lang/String;Ljava/util/ArrayList;)Landroid/content/Intent;`] = function (this: JIntent, key: string, value: unknown) { this.extras.map.set(key, value); return this; };
-  intentMethods[`get${type}ArrayListExtra(Ljava/lang/String;)Ljava/util/ArrayList;`] = function (this: JIntent, key: string) { return this.extras.map.get(key) ?? null; };
+for (const [t, d] of INTENT_TYPED) {
+  intentMethods[`get${t}Extra(Ljava/lang/String;Ljava/lang/Class;)${d}`] = function (this: JIntent, k: string, cls: unknown) { return bundleTyped(this.extras, k, cls, d); };
 }
 class JShortcutIconResource extends JObj { packageName = ""; resourceName = ""; }
 rt.register({
@@ -356,6 +339,41 @@ export function mkComponentName(pkg: string, cls: string): JComponentName {
   c.pkg = pkg; c.cls = cls;
   return c;
 }
+/** AOSP Intent.toUri: the data (without its scheme under URI_INTENT_SCHEME), then "#Intent;"
+ *  key=value pairs for everything else and the extras a URI can carry, then "end". */
+const encUri = (s: string, slash = false) => { const e = encodeURIComponent(s); return slash ? e.replace(/%2F/g, "/") : e; };
+/** an extra's URI type tag and text, for the types toUri writes */
+function extraUri(v: unknown): [string, string] | null {
+  if (typeof v === "string") return ["S", v];
+  if (typeof v === "number") return ["i", String(v)];
+  if (typeof v === "bigint") return ["l", String(v)];
+  const n = (v as { v: number }).v;
+  if (v instanceof JBool) return ["B", String(!!n)];
+  if (v instanceof JChar) return ["c", String.fromCharCode(n)];
+  if (v instanceof JDouble || v instanceof JFloat) return [v instanceof JDouble ? "d" : "f", Number.isInteger(n) ? n.toFixed(1) : String(n)];
+  return v instanceof JByte ? ["b", String(n)] : v instanceof JShort ? ["s", String(n)] : null;
+}
+function intentUri(it: JIntent, flags: number): string {
+  const intentScheme = (flags & 1) !== 0, match = it.dataUri ? /^([^:/?#]+):/.exec(it.dataUri) : null;
+  const scheme = intentScheme ? match?.[1] ?? null : null;
+  let s = (intentScheme ? "intent:" + (scheme ? it.dataUri!.slice(scheme.length + 1) : it.dataUri ?? "") : it.dataUri ?? "") + "#Intent;";
+  if (scheme) s += `scheme=${encUri(scheme)};`;
+  if (it.action && !(scheme && it.action === "android.intent.action.VIEW")) s += `action=${encUri(it.action)};`;
+  for (const c of it.categories) s += `category=${encUri(c)};`;
+  if (it.typeStr) s += `type=${encUri(it.typeStr, true)};`;
+  if (it.identifier) s += `identifier=${encUri(it.identifier, true)};`;
+  if (it.flags) s += `launchFlags=0x${(it.flags >>> 0).toString(16)};`;
+  if (it.pkg) s += `package=${encUri(it.pkg)};`;
+  if (it.component && it.componentPkg) {
+    const cls = it.component.startsWith(it.componentPkg + ".") ? it.component.slice(it.componentPkg.length) : it.component;
+    s += `component=${encUri(it.componentPkg + "/" + cls, true)};`;
+  }
+  for (const [key, value] of it.extras.map) {
+    const extra = extraUri(value);
+    if (extra) s += `${extra[0]}.${encUri(key)}=${encUri(extra[1])};`;
+  }
+  return s + "end";
+}
 const shortClassName = (c: JComponentName) => c.cls.startsWith(c.pkg + ".") ? c.cls.slice(c.pkg.length) : c.cls;
 const compareComponents = (a: JComponentName, b: JComponentName) =>
   a.pkg < b.pkg ? -1 : a.pkg > b.pkg ? 1 : a.cls < b.cls ? -1 : a.cls > b.cls ? 1 : 0;
@@ -405,18 +423,23 @@ export const activityTransport: {
 } = {};
 /** `sender` is the package whose identity the start carries (a PendingIntent's creator) */
 export async function launchIntent(host: AppHost, intent: JIntent, result?: ActivityResultTarget, sender = host.pkg) {
-  const system = intent?.component ? null : systemActivities[intent?.action ?? ""];
-  if (system) {
-    void system(intent).then(
-      (data) => { if (result) deliverActivityResult(result.act, result.code, data ? RESULT_OK : RESULT_CANCELED, data); },
-      (error) => { reportUncaught(error); if (result) deliverActivityResult(result.act, result.code, RESULT_CANCELED, null); },
-    );
-    return;
-  }
+  const runSystem = (system: SystemHandler) => {
+    // the system activity covered its caller, which resumes after its result, unless the
+    // system activity went on to start another one in front of it
+    const caller = result?.act ?? host.currentActivity();
+    void system(intent).then((data) => {
+      if (result) deliverActivityResult(result.act, result.code, data ? RESULT_OK : RESULT_CANCELED, data);
+      if (caller) setTimeout(() => void onMain(async () => { if (host.currentActivity() === caller) await host.roundTrip(caller); }).catch(reportUncaught), 0);
+    }, (error) => { reportUncaught(error); if (result) deliverActivityResult(result.act, result.code, RESULT_CANCELED, null); });
+  };
+  const system = systemActivity(intent, false);
+  if (system) return runSystem(system);
   const { getPM } = await import("./pm");
   const resolved = await vcall(getPM(), "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", intent, 0x10000);
   if (!resolved?.activityInfo) throw rt.mkThrowable("android/content/ActivityNotFoundException", "No activity found for " + intent.action);
   const info = resolved.activityInfo;
+  // a data-scoped system activity (the browser) answers only where no installed activity does
+  if (info.packageName === "android" && info.name === SYSTEM_ACTIVITY) return runSystem(systemActivity(intent)!);
   if (info.packageName !== sender && (!info.exported || info.permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", info.permission, sender) !== 0))
     throw rt.mkThrowable("java/lang/SecurityException", "Activity permission denied: " + info.name);
   const component = info.name.replace(/\./g, "/");
@@ -436,9 +459,21 @@ export const RESULT_OK = -1, RESULT_CANCELED = 0;
  * DocumentsUI; here they are the browser's own pickers. Each answers with the result Intent, or
  * null for "the user backed out" — which is RESULT_CANCELED, not an error.
  */
-export const systemActivities: Record<string, (intent: JIntent) => Promise<JIntent | null>> = {};
-export function registerSystemActivity(action: string, run: (intent: JIntent) => Promise<JIntent | null>) {
-  systemActivities[action] = run;
+type SystemHandler = (intent: JIntent) => Promise<JIntent | null>;
+const systemActivities = new Map<string, { run: SystemHandler; schemes?: string[] }[]>();
+/** `schemes` scopes a handler to intents whose data has one of them; such a handler yields to
+ *  any installed activity that matches, as a default browser does to an app's own links. */
+export function registerSystemActivity(action: string, run: SystemHandler, schemes?: string[]) {
+  const handlers = systemActivities.get(action) ?? [];
+  systemActivities.set(action, [...handlers, { run, schemes }]);
+}
+/** The platform package answers for them, as ResolverActivity and DocumentsUI do on a device, so
+ *  an intent resolved to that component and started explicitly reaches the same handler. */
+export const SYSTEM_ACTIVITY = "com.android.internal.app.ResolverActivity";
+export function systemActivity(intent: JIntent | null, scoped = true): SystemHandler | null {
+  if (!intent || intent.component && (intent.componentPkg !== "android" || intent.component !== SYSTEM_ACTIVITY)) return null;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(intent.dataUri ?? "")?.[1].toLowerCase() ?? "";
+  return systemActivities.get(intent.action ?? "")?.find((h) => h.schemes ? scoped && h.schemes.includes(scheme) : true)?.run ?? null;
 }
 export function mkResultIntent(uri: string, flags = 3 | 0x40): JIntent {
   const i = new JIntent();

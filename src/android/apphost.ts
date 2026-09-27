@@ -1,6 +1,6 @@
 import type { Resources, JTheme } from "./res";
 import type { JApplication, JActivity } from "./app";
-import type { JResources } from "./resnative";
+import type { JResources, JLocaleList } from "./resnative";
 import type { JIntent, ActivityResultTarget } from "./intent";
 
 export type ActivityLaunch = { caller: { pkg: string; cls: string } | null; result?: ActivityResultTarget; remoteId?: number; activityId?: number; taskId?: number };
@@ -24,8 +24,12 @@ export interface AppHost {
   roundTrip: (activity: JActivity) => Promise<void>;
   finishActivity: (activity: JActivity) => void;
   recreateActivity: (activity: JActivity) => void;
+  /** Activity.moveTaskToBack: the task leaves the screen until the app is brought back */
+  moveTaskToBack: () => void;
   setRequestedOrientation: (activity: JActivity, orientation: number) => void;
   setApplicationNightMode: (mode: number) => void;
+  /** LocaleManager.setApplicationLocales: persist the list and deliver the configuration change */
+  setApplicationLocales: (locales: JLocaleList) => void;
   currentActivity: () => JActivity | null;
   /** every live activity, bottom of the stack first */
   activities: () => JActivity[];

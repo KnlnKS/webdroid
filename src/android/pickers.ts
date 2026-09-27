@@ -229,15 +229,21 @@ async function initTimePickerDialog(d: JTimePickerDialog, c: unknown, listener: 
   d.picker = tp;
   d.customView = tp;
   d.timeSetL = listener;
-  d.posText = "OK";
-  d.negText = "Cancel";
-  d.posL = {
-    [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: driven(function* (): Gen {
-      if (d.timeSetL) yield vcall(d.timeSetL, "onTimeSet", "(Landroid/widget/TimePicker;II)V", tp, tp.hourVal, tp.minuteVal);
-    }),
-  };
+  pickerButtons(d);
 }
+/** AOSP's picker dialogs are their own button listener, so a subclass overriding onClick sees
+ *  the press; positive reports the value and negative cancels. */
+function pickerButtons(d: JAlertDialog) {
+  d.posText = "OK"; d.negText = "Cancel";
+  d.posL = d.negL = d;
+}
+const pickerClick = <D extends JAlertDialog>(report: (d: D) => unknown) => driven(function* (this: D, _dialog: unknown, which: number): Gen {
+  if (which === -1) yield report(this);
+  else if (which === -2) yield vcall(this, "cancel", "()V");
+});
 const timePickerDialogMethods: NativeSpec["methods"] = {
+  "onClick(Landroid/content/DialogInterface;I)V": pickerClick((d: JTimePickerDialog) => d.timeSetL && d.picker &&
+    vcall(d.timeSetL, "onTimeSet", "(Landroid/widget/TimePicker;II)V", d.picker, d.picker.hourVal, d.picker.minuteVal)),
   "<init>(Landroid/content/Context;Landroid/app/TimePickerDialog$OnTimeSetListener;IIZ)V":
     function (this: JTimePickerDialog, c: unknown, l: unknown, h: number, m: number, is24: number) {
       return initTimePickerDialog(this, c, l, h, m, is24);
@@ -254,7 +260,8 @@ const timePickerDialogMethods: NativeSpec["methods"] = {
     refreshPicker(this.picker);
   },
 };
-rt.register({ name: "android/app/TimePickerDialog", ctor: JTimePickerDialog, sup: "android/app/AlertDialog", methods: timePickerDialogMethods });
+rt.register({ name: "android/app/TimePickerDialog", ctor: JTimePickerDialog, sup: "android/app/AlertDialog",
+  ifaces: ["android/content/DialogInterface$OnClickListener"], methods: timePickerDialogMethods });
 rt.markers("android/app/TimePickerDialog$OnTimeSetListener");
 
 class JDatePicker extends JLinearLayout {
@@ -353,16 +360,13 @@ async function initDatePickerDialog(d: JDatePickerDialog, c: unknown, themeId: n
   d.picker = p;
   d.customView = p;
   d.dateSetL = listener;
-  d.posText = "OK";
-  d.negText = "Cancel";
-  d.posL = {
-    [mangleMethod("onClick", "(Landroid/content/DialogInterface;I)V")]: driven(function* (): Gen {
-      if (d.dateSetL) yield vcall(d.dateSetL, "onDateSet", "(Landroid/widget/DatePicker;III)V",
-        p, p.yearVal, p.monthVal, p.dayVal);
-    }),
-  };
+  pickerButtons(d);
 }
-rt.register({ name: "android/app/DatePickerDialog", ctor: JDatePickerDialog, sup: "android/app/AlertDialog", methods: {
+rt.register({ name: "android/app/DatePickerDialog", ctor: JDatePickerDialog, sup: "android/app/AlertDialog",
+  ifaces: ["android/content/DialogInterface$OnClickListener"], methods: {
+  "onClick(Landroid/content/DialogInterface;I)V": pickerClick((d: JDatePickerDialog) => d.dateSetL && d.picker &&
+    vcall(d.dateSetL, "onDateSet", "(Landroid/widget/DatePicker;III)V", d.picker, d.picker.yearVal, d.picker.monthVal, d.picker.dayVal)),
+  "setOnDateSetListener(Landroid/app/DatePickerDialog$OnDateSetListener;)V": function (this: JDatePickerDialog, listener: unknown) { this.dateSetL = listener; },
   "<init>(Landroid/content/Context;ILandroid/app/DatePickerDialog$OnDateSetListener;III)V":
     function (this: JDatePickerDialog, c: unknown, themeId: number, listener: unknown, year: number, month: number, day: number) {
       return initDatePickerDialog(this, c, themeId, listener, year, month, day);

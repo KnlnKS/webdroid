@@ -9,6 +9,11 @@ import { getPrefs, movePrefs } from "../src/android/sharedprefs";
 import { openDatabase, useSQLiteStore } from "../src/android/sqlite";
 import { vfs } from "../src/jvm/natives/jio";
 import { newXmlSerializer } from "../src/android/xmlpull";
+import { onMain } from "../src/android/mainloop";
+
+rt.linkNatives();
+const loadSql = () => initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });
+const freshSQLiteStore = () => useSQLiteStore({ files: new Map(), sql: loadSql });
 
 describe("cursorwindow", () => {
   test("CursorWindow preserves absolute rows and typed fields through a parcel", async () => {
@@ -35,7 +40,6 @@ describe("cursorwindow", () => {
 describe("json-array", () => {
   const wrap = (value: unknown) =>
     (rt.link("org/json/JSONObject").ctor as unknown as Record<string, (value: unknown) => unknown>)[mangleMethod("wrap", "(Ljava/lang/Object;)Ljava/lang/Object;")](value);
-  rt.linkNatives();
 
   test("JSONArray indexed primitive puts pad and replace", async () => {
     const array = await newObj("org/json/JSONArray");
@@ -97,7 +101,6 @@ describe("json-array", () => {
 });
 
 describe("jsonstringer", () => {
-  rt.linkNatives();
   const open = (writer: unknown, method: string) => vcall(writer, method, "()Lorg/json/JSONStringer;");
   const key = (writer: unknown, name: string) => vcall(writer, "key", "(Ljava/lang/String;)Lorg/json/JSONStringer;", name);
   const text = (writer: unknown) => vcall(writer, "toString", "()Ljava/lang/String;");
@@ -143,8 +146,6 @@ describe("jsonstringer", () => {
 });
 
 describe("sax-features", () => {
-  rt.linkNatives();
-
   test("SAX factory passes namespace-prefixes through to its reader", async () => {
     const factory = rt.make("javax/xml/parsers/SAXParserFactory");
     const feature = "http://xml.org/sax/features/namespace-prefixes";
@@ -157,8 +158,6 @@ describe("sax-features", () => {
 });
 
 describe("sharedprefs", () => {
-  rt.linkNatives();
-
   test("string preference getters throw on a stored value of the wrong type", async () => {
     const prefs = getPrefs("test.preferences", "strings");
     const editor = await vcall(prefs, "edit", "()Landroid/content/SharedPreferences$Editor;");
@@ -189,8 +188,6 @@ describe("sharedprefs", () => {
   });
 
   test("preference notifications retain the main thread after a suspending listener", async () => {
-    const { mangleMethod } = await import("../src/jvm/abi");
-    const { onMain } = await import("../src/android/mainloop");
     const prefs = getPrefs("test.preferences", "listener-thread"), worker = new JThread();
     const observed: boolean[] = [];
     const listener = {
@@ -223,7 +220,7 @@ describe("sqlite-query-builder", () => {
   });
 
   test("SQLiteQueryBuilder applies mapped projections and appended filters to reads and updates", async () => {
-    useSQLiteStore({ files: new Map(), sql: () => initSqlJs({ locateFile: file => `vendor/sql.js/dist/${file}` }) });
+    freshSQLiteStore();
     const db = await openDatabase(":memory:");
     db.db!.exec("CREATE TABLE records (id INTEGER, label TEXT); INSERT INTO records VALUES (1, 'first'), (2, 'second')");
     const builder = await newObj("android/database/sqlite/SQLiteQueryBuilder", "()V");
@@ -257,7 +254,7 @@ describe("sqlite-transaction-listener", () => {
   });
 
   test("SQLite helpers publish only initialized databases and keep memory databases separate", async () => {
-    useSQLiteStore({ files: new Map(), sql: () => initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` }) });
+    freshSQLiteStore();
     const entered = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>();
     const owner = new JThread(), waiter = new JThread();
     class Helper extends rt.link("android/database/sqlite/SQLiteOpenHelper").ctor {}
@@ -286,7 +283,7 @@ describe("sqlite-transaction-listener", () => {
   rt.linkNatives();
 
   test("separate SQLite helpers keep their TEMP schemas on separate connections", async () => {
-    useSQLiteStore({ files: new Map(), sql: () => initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` }) });
+    freshSQLiteStore();
     class Helper extends rt.link("android/database/sqlite/SQLiteOpenHelper").ctor {}
     rt.register({ name: "test/TempTableHelper", ctor: Helper, sup: "android/database/sqlite/SQLiteOpenHelper", methods: {
       "onOpen(Landroid/database/sqlite/SQLiteDatabase;)V": (db: unknown) =>
@@ -301,7 +298,7 @@ describe("sqlite-transaction-listener", () => {
   });
 
   test("SQLite transaction listeners receive begin and completion callbacks", async () => {
-    useSQLiteStore({ files: new Map(), sql: () => initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` }) });
+    freshSQLiteStore();
     const db = await openDatabase(":memory:");
     const committed = new TransactionListener();
     await vcall(db, "beginTransactionWithListener", "(Landroid/database/sqlite/SQLiteTransactionListener;)V", committed);
@@ -315,7 +312,7 @@ describe("sqlite-transaction-listener", () => {
   });
 
   test("SQLite binary snapshots preserve large files and live connection-local state", async () => {
-    const sql = await initSqlJs({ locateFile: (file) => `vendor/sql.js/dist/${file}` });
+    const sql = await loadSql();
     const path = "/data/data/test.sqlite/databases/large.db", seed = new sql.Database();
     seed.exec("CREATE TABLE payload(value BLOB); INSERT INTO payload VALUES (zeroblob(6 * 1024 * 1024))");
     vfs.write(path, seed.export()); seed.close();
@@ -336,8 +333,6 @@ describe("sqlite-transaction-listener", () => {
 });
 
 describe("xml-serializer", () => {
-  rt.linkNatives();
-
   test("XmlSerializer escapes content and writes each flush once", async () => {
     const out = await newObj("java/io/ByteArrayOutputStream", "()V");
     const xml = newXmlSerializer();

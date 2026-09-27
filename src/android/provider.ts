@@ -6,9 +6,14 @@
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { isDocumentsProvider } from "./pm";
-import { registerSystemActivity, systemActivities, mkResultIntent, type JIntent } from "./intent";
-import { mkUri } from "./net";
+import { isDocumentsProvider, getPM, type JResolveInfo } from "./pm";
+import { registerSystemActivity, systemActivity, launchIntent, mkResultIntent, type JIntent } from "./intent";
+import { csText } from "../jvm/natives/jchars";
+import { frameworkString } from "./res";
+import { mkUri, type JUri } from "./net";
+import { isMediaUri, mediaDelete } from "./mediastore";
+import { newArrayList, toJsArray } from "../jvm/natives/jutil";
+import { appHost } from "./apphost";
 import { packages } from "./packages";
 import { docCreate, docDelete, docRename, pickTree, pickDocument, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
 
@@ -34,6 +39,7 @@ for (const action of ["android.intent.action.OPEN_DOCUMENT", "android.intent.act
     return uri ? mkResultIntent(uri, action === "android.intent.action.GET_CONTENT" ? 1 : 3 | 0x40) : null;
   });
 }
+registerSystemActivity("android.intent.action.VIEW", async (intent) => (await import("../shell/share")).openInBrowser(intent.dataUri!), ["http", "https", "market"]);
 for (const action of ["android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE"])
   registerSystemActivity(action, async (intent) => (await import("../shell/share")).shareIntent(intent));
 registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {
@@ -41,9 +47,20 @@ registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {
   if (!target) throw rt.mkThrowable("java/lang/NullPointerException", "Chooser target");
   if (target.action === "android.intent.action.SEND" || target.action === "android.intent.action.SEND_MULTIPLE")
     return (await import("../shell/share")).shareIntent(intent);
-  const handler = systemActivities[target.action ?? ""];
+  const handler = systemActivity(target);
   if (handler) return handler(target);
-  throw rt.mkThrowable("android/content/ActivityNotFoundException", "No chooser target for " + target.action);
+  // AOSP's chooser lists the activities that handle the target; with none it only says so, and
+  // the user dismissing it is RESULT_CANCELED
+  const pm = getPM(), matches = await toJsArray(await vcall(pm, "queryIntentActivities", "(Landroid/content/Intent;I)Ljava/util/List;", target, 0x10000)) as JResolveInfo[];
+  if (!matches.length) return null;
+  const labels = await Promise.all(matches.map(async (m) => csText(await vcall(m, "loadLabel", "(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;", pm))));
+  const title = intent.extras.map.get("android.intent.extra.TITLE");
+  const choice = await (await import("../shell/share")).chooseActivity(title == null ? frameworkString("chooseActivity") ?? "" : await csText(title), labels);
+  if (choice === null) return null;
+  const chosen: JIntent = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", target);
+  chosen.component = matches[choice].activityInfo!.name; chosen.componentPkg = matches[choice].activityInfo!.packageName;
+  await launchIntent(appHost!, chosen);
+  return rt.make("android/content/Intent");
 });
 
 
@@ -189,6 +206,24 @@ for (const [cls, table] of [["Images$Media", "images/media"], ["Video$Media", "v
     },
   });
 }
+// MediaProvider's consent screen for a create*Request PendingIntent. It is answered by the grant
+// policy runtime permissions follow here (context.ts): the user allows, and the operation runs.
+const MEDIA_REQUEST = "webdroid.provider.action.MEDIA_REQUEST";
+let mediaRequests = 0;
+registerSystemActivity(MEDIA_REQUEST, async (intent) => {
+  if (intent.extras.map.get("op") === "delete") for (const uri of await toJsArray(intent.extras.map.get("uris"))) await mediaDelete(uri as JUri, null, null);
+  return rt.make("android/content/Intent");
+});
+const mediaRequest = (del: boolean) => driven(function* (resolver: unknown, uris: unknown): Gen {
+  if (!resolver || !uris) rt.npe();
+  const items = (yield toJsArray(uris)) as JUri[];
+  if (items.some((uri) => !isMediaUri(uri) || !/\/\d+$/.test(uri.uri))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "All requested items must be referenced by specific ID");
+  const intent: JIntent = rt.make("android/content/Intent");
+  intent.action = MEDIA_REQUEST; intent.identifier = String(++mediaRequests);
+  intent.extras.map.set("uris", newArrayList(items)); intent.extras.map.set("op", del ? "delete" : "write");
+  return vcall(rt.link("android/app/PendingIntent").ctor, "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
+    appHost?.application, 0, intent, 0x4000000); // FLAG_IMMUTABLE
+});
 rt.register({
   name: "android/provider/MediaStore", ctor: class extends JObj {},
   statics: {
@@ -197,6 +232,8 @@ rt.register({
   },
   methods: {
     "static getPickImagesMaxLimit()I": () => 150,
+    "static createDeleteRequest(Landroid/content/ContentResolver;Ljava/util/Collection;)Landroid/app/PendingIntent;": mediaRequest(true),
+    "static createWriteRequest(Landroid/content/ContentResolver;Ljava/util/Collection;)Landroid/app/PendingIntent;": mediaRequest(false),
     "static canManageMedia(Landroid/content/Context;)Z": (ctx: { $host: { pkg: string } } | null) => {
       if (!ctx) rt.npe();
       return packages.get(ctx!.$host.pkg)?.grants.has("android.permission.MANAGE_MEDIA") ? 1 : 0;

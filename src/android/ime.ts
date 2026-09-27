@@ -10,12 +10,14 @@
 // auto-stub it — which poisons every class that names it.
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, newObj } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
-import { jarray, splitSig } from "../jvm/abi";
+import { jarray, splitSig, mangleMethod } from "../jvm/abi";
 import { JEditable, JSpannable, JSpanned, csText, textSelection, setTextSelection } from "./text";
-import { JView, invalidate } from "./view";
+import { JView, invalidate, rootOf } from "./view";
 import { JMatrix } from "./graphics";
+import { AID, type JAttrSet, obtainStyled } from "./res";
+import { loadDrawableRV } from "./drawable";
 import { JTextView, JEditText, textViewCtors, focusedEdit, focusEditText, inputEl, editInput, fireEditorAction, editorAction } from "./textview";
 import { inMainJob, onMain } from "./mainloop";
 import { PARCELABLE } from "./os";
@@ -558,7 +560,7 @@ rt.register({
   },
 });
 
-// ── AutoCompleteTextView: an EditText plus an adapter and a dropdown.
+// ── AutoCompleteTextView: an EditText plus an adapter and a ListPopupWindow dropdown.
 class JAutoComplete extends JEditText {
   adapter: unknown = null;
   threshold = 2;
@@ -567,23 +569,54 @@ class JAutoComplete extends JEditText {
   itemClickL: unknown = null;
   itemSelectedL: unknown = null;
   dismissL: unknown = null;
-  popupShowing = 0;
+  popup: JObj | null = null;
+  dropDown = { w: -2, h: -2, x: 0, y: 0 };
+  /** AOSP's mPopup, made on first use: the list shows the adapter and a pick completes the text */
+  listPopup(): unknown { return rt.drive(this.listPopup$()); }
+  *listPopup$(): Gen<JObj> {
+    if (this.popup) return this.popup;
+    const p: JObj = yield newObj("android/widget/ListPopupWindow", "(Landroid/content/Context;)V", this.ctx);
+    this.popup = p;
+    yield vcall(p, "setAdapter", "(Landroid/widget/ListAdapter;)V", this.adapter);
+    yield vcall(p, "setOnItemClickListener", "(Landroid/widget/AdapterView$OnItemClickListener;)V", Object.assign(new JObj(), {
+      [mangleMethod("onItemClick", "(Landroid/widget/AdapterView;Landroid/view/View;IJ)V")]: (_l: unknown, v: unknown, pos: number, id: bigint) => performCompletion(this, v, pos, id),
+    }));
+    if (this.dismissL) yield vcall(p, "setOnDismissListener", "(Landroid/widget/PopupWindow$OnDismissListener;)V", this.dismissL);
+    if (this.dropDownBackground) yield vcall(p, "setBackgroundDrawable", "(Landroid/graphics/drawable/Drawable;)V", this.dropDownBackground);
+    return p;
+  }
 }
+const popupShowing = (v: JAutoComplete) => v.popup ? vcall(v.popup, "isShowing", "()Z") : 0;
+/** AutoCompleteTextView.performCompletion: the picked item's text replaces the field's */
+const performCompletion = driven(function* performCompletion(v: JAutoComplete, row: unknown, pos: number, id: bigint): Gen {
+  if (yield popupShowing(v)) {
+    const item = pos >= 0 && v.adapter ? yield vcall(v.adapter, "getItem", "(I)Ljava/lang/Object;", pos) : null;
+    if (item == null) return;
+    yield vcall(v, "replaceText", "(Ljava/lang/CharSequence;)V", yield vcall(v, "convertSelectionToString", "(Ljava/lang/Object;)Ljava/lang/CharSequence;", item));
+    if (v.itemClickL) yield vcall(v.itemClickL, "onItemClick", "(Landroid/widget/AdapterView;Landroid/view/View;IJ)V",
+      yield vcall(v.popup, "getListView", "()Landroid/widget/ListView;"), row, pos, id);
+  }
+  yield vcall(v, "dismissDropDown", "()V");
+});
 rt.register({
   name: "android/widget/AutoCompleteTextView", ctor: JAutoComplete, sup: "android/widget/EditText",
   ifaces: ["android/widget/Filter$FilterListener"],
   methods: {
-    ...textViewCtors<JAutoComplete>("autoCompleteTextViewStyle"),
+    // AOSP builds the dropdown's ListPopupWindow under the widget's own style: its popupBackground
+    ...textViewCtors<JAutoComplete>("autoCompleteTextViewStyle", driven(function* (v: JAutoComplete, set: JAttrSet | null, dsa: number, dsr: number): Gen {
+      const bg = v.jres && obtainStyled(v.jres, v.theme, set, [AID("popupBackground")], dsa, dsr).vals[0];
+      if (bg) v.dropDownBackground = yield loadDrawableRV(v.jres!, bg, v.theme);
+    })),
     "setThreshold(I)V": function (this: JAutoComplete, t: number) { this.threshold = t <= 0 ? 1 : t; },
     "setDropDownAnchor(I)V": function (this: JAutoComplete, id: number) { this.dropDownAnchor = id; },
     "getDropDownAnchor()I": function (this: JAutoComplete) { return this.dropDownAnchor; },
     "setDropDownBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JAutoComplete, drawable: unknown) {
       this.dropDownBackground = drawable;
+      if (this.popup) return vcall(this.popup, "setBackgroundDrawable", "(Landroid/graphics/drawable/Drawable;)V", drawable);
     },
     "setDropDownBackgroundResource(I)V": driven(function* (this: JAutoComplete, id: number): Gen {
-      if (!id) { this.dropDownBackground = null; return; }
-      const resources = yield vcall(this, "getResources", "()Landroid/content/res/Resources;");
-      this.dropDownBackground = yield vcall(resources, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", id);
+      const d = id ? yield vcall(yield vcall(this, "getResources", "()Landroid/content/res/Resources;"), "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", id) : null;
+      yield vcall(this, "setDropDownBackgroundDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
     }),
     "getDropDownBackground()Landroid/graphics/drawable/Drawable;": function (this: JAutoComplete) { return this.dropDownBackground; },
     "enoughToFilter()Z": function (this: JAutoComplete) { return this.text.length >= this.threshold ? 1 : 0; },
@@ -598,22 +631,38 @@ rt.register({
         }
       }
     }),
-    "showDropDown()V": function (this: JAutoComplete) { this.popupShowing = 1; },
-    "dismissDropDown()V": driven(function* (this: JAutoComplete): Gen {
-      const wasShowing = this.popupShowing;
-      this.popupShowing = 0;
-      if (wasShowing && this.dismissL) yield vcall(this.dismissL, "onDismiss", "()V");
+    "showDropDown()V": driven(function* (this: JAutoComplete): Gen {
+      const p = yield this.listPopup();
+      if (!(yield vcall(p, "getAnchorView", "()Landroid/view/View;"))) {
+        const root = rootOf(this);
+        const anchor = this.dropDownAnchor !== -1 ? yield vcall(root, "findViewById", "(I)Landroid/view/View;", this.dropDownAnchor) : this;
+        yield vcall(p, "setAnchorView", "(Landroid/view/View;)V", anchor);
+      }
+      const { w, h, x, y } = this.dropDown;
+      yield vcall(p, "setWidth", "(I)V", w); yield vcall(p, "setHeight", "(I)V", h);
+      yield vcall(p, "setHorizontalOffset", "(I)V", x); yield vcall(p, "setVerticalOffset", "(I)V", y);
+      yield vcall(p, "show", "()V");
     }),
-    "setOnDismissListener(Landroid/widget/AutoCompleteTextView$OnDismissListener;)V": function (this: JAutoComplete, listener: unknown) { this.dismissL = listener; },
-    ...fieldSetters({ "setAdapter(Landroid/widget/ListAdapter;)V": "adapter",
-      "setOnItemClickListener(Landroid/widget/AdapterView$OnItemClickListener;)V": "itemClickL",
+    "dismissDropDown()V": function (this: JAutoComplete) { if (this.popup) return vcall(this.popup, "dismiss", "()V"); },
+    "isPopupShowing()Z": function (this: JAutoComplete) { return popupShowing(this); },
+    "setOnDismissListener(Landroid/widget/AutoCompleteTextView$OnDismissListener;)V": function (this: JAutoComplete, listener: unknown) {
+      // AOSP wraps it in the popup's own dismiss listener
+      this.dismissL = listener && Object.assign(new JObj(), { [mangleMethod("onDismiss", "()V")]: () => vcall(listener, "onDismiss", "()V") });
+      if (this.popup) return vcall(this.popup, "setOnDismissListener", "(Landroid/widget/PopupWindow$OnDismissListener;)V", this.dismissL);
+    },
+    "setAdapter(Landroid/widget/ListAdapter;)V": function (this: JAutoComplete, a: unknown) {
+      this.adapter = a;
+      if (this.popup) return vcall(this.popup, "setAdapter", "(Landroid/widget/ListAdapter;)V", a);
+    },
+    ...fieldSetters({ "setOnItemClickListener(Landroid/widget/AdapterView$OnItemClickListener;)V": "itemClickL",
       "setOnItemSelectedListener(Landroid/widget/AdapterView$OnItemSelectedListener;)V": "itemSelectedL" }),
     ...fieldGetters({ "getAdapter()Landroid/widget/ListAdapter;": "adapter", "getThreshold()I": "threshold",
       "getOnItemClickListener()Landroid/widget/AdapterView$OnItemClickListener;": "itemClickL",
-      "getOnItemSelectedListener()Landroid/widget/AdapterView$OnItemSelectedListener;": "itemSelectedL",
-      "isPopupShowing()Z": "popupShowing" }),
-    "setDropDownWidth(I)V": () => {}, "setDropDownHeight(I)V": () => {},
-    "setDropDownVerticalOffset(I)V": () => {}, "setDropDownHorizontalOffset(I)V": () => {},
+      "getOnItemSelectedListener()Landroid/widget/AdapterView$OnItemSelectedListener;": "itemSelectedL" }),
+    ...Object.fromEntries(([["Width", "w"], ["Height", "h"], ["HorizontalOffset", "x"], ["VerticalOffset", "y"]] as const).flatMap(([n, k]) => [
+      [`setDropDown${n}(I)V`, function (this: JAutoComplete, v: number) { this.dropDown[k] = v; }],
+      [`getDropDown${n}()I`, function (this: JAutoComplete) { return this.dropDown[k]; }],
+    ])),
     "setText(Ljava/lang/CharSequence;Z)V": driven(function* (this: JAutoComplete, cs: unknown): Gen {
       yield vcall(this, "setText", "(Ljava/lang/CharSequence;)V", cs);
     }),
@@ -625,9 +674,14 @@ rt.register({
         if (f) yield vcall(f, "filter", "(Ljava/lang/CharSequence;Landroid/widget/Filter$FilterListener;)V", cs, this);
       }
     }),
-    "onFilterComplete(I)V": function (this: JAutoComplete, count: number) { this.popupShowing = count > 0 ? 1 : 0; },
+    // AOSP updateDropDownForFilter: results show the dropdown while the field has focus
+    "onFilterComplete(I)V": driven(function* (this: JAutoComplete, count: number): Gen {
+      if (count > 0 && (yield vcall(this, "enoughToFilter", "()Z"))) { if (this.focused) yield vcall(this, "showDropDown", "()V"); }
+      else if (yield popupShowing(this)) yield vcall(this, "dismissDropDown", "()V");
+    }),
     "replaceText(Ljava/lang/CharSequence;)V": driven(function* (this: JAutoComplete, cs: unknown): Gen {
       yield vcall(this, "setText", "(Ljava/lang/CharSequence;)V", cs);
+      yield setTextSelection(this.getEditable(), this.text.length, this.text.length);
     }),
     ...noops("setCompletionHint(Ljava/lang/CharSequence;)V",
       "clearListSelection()V", "performCompletion()V"),

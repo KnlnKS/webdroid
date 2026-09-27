@@ -1,6 +1,6 @@
 // Scrolling physics, view configuration, legacy animation classes, misc widgets' helpers.
 
-import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { invalidate, uiState, JView, JViewGroup, initViewFromCtx, guardCall, setViewAnimHook, setGroupAnimHook, copyEvent } from "./view";
 import { restVelocity, type JMotionEvent } from "./motionevent";
@@ -56,23 +56,17 @@ class JScroller extends JObj {
     invalidate();
   }
 }
+function startScroll(this: JScroller, sx: number, sy: number, dx: number, dy: number, dur = 250) {
+  this.startX = sx; this.startY = sy; this.finalX = sx + dx; this.finalY = sy + dy;
+  this.startT = uptimeMillis(); this.duration = Math.max(1, dur);
+  this.curX = sx; this.curY = sy;
+  this.overfling = false;
+  this.finished = false;
+  invalidate();
+}
 const scrollerMethods: NativeSpec["methods"] = {
-  "startScroll(IIII)V": function (this: JScroller, sx: number, sy: number, dx: number, dy: number) {
-    this.startX = sx; this.startY = sy; this.finalX = sx + dx; this.finalY = sy + dy;
-    this.startT = uptimeMillis(); this.duration = 250;
-    this.curX = sx; this.curY = sy;
-    this.overfling = false;
-    this.finished = false;
-    invalidate();
-  },
-  "startScroll(IIIII)V": function (this: JScroller, sx: number, sy: number, dx: number, dy: number, dur: number) {
-    this.startX = sx; this.startY = sy; this.finalX = sx + dx; this.finalY = sy + dy;
-    this.startT = uptimeMillis(); this.duration = Math.max(1, dur);
-    this.curX = sx; this.curY = sy;
-    this.overfling = false;
-    this.finished = false;
-    invalidate();
-  },
+  "startScroll(IIII)V": startScroll,
+  "startScroll(IIIII)V": startScroll,
   "fling(IIIIIIII)V": function (this: JScroller, sx: number, sy: number, vx: number, vy: number, minX: number, maxX: number, minY: number, maxY: number) {
     this.fling(sx, sy, vx, vy, minX, maxX, minY, maxY);
   },
@@ -213,7 +207,6 @@ rt.register({
   },
 });
 
-// EdgeEffect (visual stub)
 rt.register({
   name: "android/widget/EdgeEffect", ctor: class extends JObj { color = 0x666666; dist = 0; },
   statics: { DEFAULT_BLEND_MODE: null },
@@ -297,8 +290,8 @@ rt.register({
     "getAlpha()F": function (this: JTransformation) { return this.alpha; },
     "setAlpha(F)V": function (this: JTransformation, a: number) { this.alpha = a; },
     "getMatrix()Landroid/graphics/Matrix;": function (this: JTransformation) { return this.matrix; },
-    "getTransformationType()I": () => 3,
-    "setTransformationType(I)V": () => {},
+    ...stubs(3, "getTransformationType()I"),
+    ...noops("setTransformationType(I)V"),
     "set(Landroid/view/animation/Transformation;)V": function (this: JTransformation, o: JTransformation) { this.alpha = o.alpha; this.matrix.m = [...o.matrix.m]; },
   },
 });
@@ -596,12 +589,8 @@ rt.register({ name: "android/view/animation/LayoutAnimationController", ctor: JL
   "<init>(Landroid/view/animation/Animation;F)V": function (this: JLayoutAnimationController, animation: JAnimation, delay: number) {
     this.animation = animation; this.delay = delay;
   },
-  "getAnimation()Landroid/view/animation/Animation;": function (this: JLayoutAnimationController) { return this.animation; },
-  "setAnimation(Landroid/view/animation/Animation;)V": function (this: JLayoutAnimationController, animation: JAnimation) { this.animation = animation; },
-  "getDelay()F": function (this: JLayoutAnimationController) { return this.delay; },
-  "setDelay(F)V": function (this: JLayoutAnimationController, delay: number) { this.delay = delay; },
-  "getOrder()I": function (this: JLayoutAnimationController) { return this.order; },
-  "setOrder(I)V": function (this: JLayoutAnimationController, order: number) { this.order = order; },
+  ...fieldGetters({ "getAnimation()Landroid/view/animation/Animation;": "animation", "getDelay()F": "delay", "getOrder()I": "order" }),
+  ...fieldSetters({ "setAnimation(Landroid/view/animation/Animation;)V": "animation", "setDelay(F)V": "delay", "setOrder(I)V": "order" }),
 } });
 function copyAnimation(a: JAnimation): JAnimation {
   const copy = Object.assign(new (a.constructor as new () => JAnimation)(), a);
@@ -784,7 +773,6 @@ rt.register({
     ...noops("addOnGesturePerformedListener(Landroid/gesture/GestureOverlayView$OnGesturePerformedListener;)V",
       "addOnGestureListener(Landroid/gesture/GestureOverlayView$OnGestureListener;)V", "setGestureVisible(Z)V",
       "setGestureStrokeType(I)V", "setGestureColor(I)V", "setGestureStrokeWidth(F)V",
-      "setEventsInterceptionEnabled(Z)V", "setFadeOffset(J)V"),
-    "cancelGesture()V": () => {}, "clear(Z)V": () => {},
+      "setEventsInterceptionEnabled(Z)V", "setFadeOffset(J)V", "cancelGesture()V", "clear(Z)V"),
   },
 });

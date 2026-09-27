@@ -7,7 +7,7 @@ import { JCanvas, JRect, JRectF, JBitmap, JPaint, matMul, rotM, type JMatrix, ty
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { uptimeMillis } from "./os";
-import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, xmlParserAtNode, normRV, resolveStyleValue } from "./res";
+import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, rvString, xmlParserAtNode, normRV, resolveStyleValue } from "./res";
 import { absGravity, gravityApply } from "./gravity";
 import { complexToFraction, type JTypedValue } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
@@ -16,9 +16,8 @@ import { guestNow, setGuestTimeout } from "../guest-clock";
 export const ST = {
   pressed: 0x010100a7, enabled: 0x0101009e, selected: 0x010100a1, checked: 0x010100a0,
   focused: 0x0101009c, activated: 0x010102fe, window_focused: 0x0101009d, checkable: 0x0101009f,
-  hovered: 0x01010367,
+  hovered: 0x01010367, last: 0x010100a6, expanded: 0x010100a8, empty: 0x010100a9,
 };
-const ST_IDS = new Set(Object.values(ST));
 
 export class JDrawable extends JObj {
   bounds = new JRect();
@@ -190,6 +189,14 @@ function copyBounds(from: JDrawable, to: JDrawable) {
   to.bounds.right = from.bounds.right; to.bounds.bottom = from.bounds.bottom;
   onBoundsChangeAll(to);
 }
+/** the child a container draws, with the container's bounds and paint state pushed onto it */
+function adoptChild(parent: JDrawable, child: JDrawable | null): JDrawable | null {
+  if (!child) return null;
+  copyBounds(parent, child);
+  child.alpha = parent.alpha;
+  child.tint = child.tint ?? parent.tint;
+  return child;
+}
 rt.register({ name: "android/graphics/drawable/Drawable", ctor: JDrawable, methods: drawableMethods });
 rt.markers("android/graphics/drawable/Drawable$Callback");
 defineException("android/view/InflateException", "java/lang/RuntimeException");
@@ -203,12 +210,11 @@ rt.register({ name: "android/graphics/drawable/Drawable$ConstantState", ctor: JC
   "getChangingConfigurations()I": () => 0,
   "canApplyTheme()Z": () => 0,
 } });
-rt.register({ name: "android/graphics/drawable/VectorDrawable$VectorDrawableState", ctor: JDrawableState, sup: "android/graphics/drawable/Drawable$ConstantState", methods: {
-  "newDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableState) { return this.create(); },
-} });
-rt.register({ name: "android/graphics/drawable/ColorDrawable$ColorState", ctor: JDrawableState, sup: "android/graphics/drawable/Drawable$ConstantState", methods: {
-  "newDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableState) { return this.create(); },
-} });
+for (const name of ["VectorDrawable$VectorDrawableState", "ColorDrawable$ColorState", "RippleDrawable$RippleState", "InsetDrawable$InsetState"]) {
+  rt.register({ name: `android/graphics/drawable/${name}`, ctor: JDrawableState, sup: "android/graphics/drawable/Drawable$ConstantState", methods: {
+    "newDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableState) { return this.create(); },
+  } });
+}
 // callers `instanceof` a drawable against Animatable to see whether it animates itself
 rt.markers("android/graphics/drawable/Animatable");
 
@@ -243,6 +249,8 @@ rt.register({
 
 export class JBitmapDrawable extends JDrawable {
   bmp: JBitmap | null = null;
+  /** the density the bitmap is scaled to for its intrinsic size (Bitmap.getScaledWidth) */
+  targetDensity = device.densityDpi;
   /** the Paint getPaint() hands out: flags an app sets on it (filter, dither) have no effect on the 2D path */
   bpaint: JPaint | null = null;
   paint(cv: JCanvas) {
@@ -255,7 +263,11 @@ export class JBitmapDrawable extends JDrawable {
       Math.max(1, this.bounds.right - this.bounds.left), Math.max(1, this.bounds.bottom - this.bounds.top));
     ctx.restore();
   }
-  size(vertical: boolean): number { return this.bmp ? Math.round((vertical ? this.bmp.h : this.bmp.w) * device.densityDpi / this.bmp.density) : -1; }
+  size(vertical: boolean): number { return this.bmp ? Math.round((vertical ? this.bmp.h : this.bmp.w) * this.targetDensity / this.bmp.density) : -1; }
+}
+function setTargetDensity(this: JBitmapDrawable, density: number) {
+  const next = density || 160;   // DisplayMetrics.DENSITY_DEFAULT stands in for "no density"
+  if (next !== this.targetDensity) { this.targetDensity = next; void vcall(this, "invalidateSelf", "()V"); }
 }
 rt.register({
   name: "android/graphics/drawable/BitmapDrawable", ctor: JBitmapDrawable, sup: "android/graphics/drawable/Drawable",
@@ -264,7 +276,10 @@ rt.register({
     "<init>(Landroid/graphics/Bitmap;)V": function (this: JBitmapDrawable, b: JBitmap) { this.bmp = b; },
     "getBitmap()Landroid/graphics/Bitmap;": function (this: JBitmapDrawable) { return this.bmp; },
     "getPaint()Landroid/graphics/Paint;": function (this: JBitmapDrawable) { return this.bpaint ??= new JPaint(); },
-    ...noops("<init>()V", "setAntiAlias(Z)V",
+    "setTargetDensity(I)V": setTargetDensity,
+    "setTargetDensity(Landroid/util/DisplayMetrics;)V": function (this: JBitmapDrawable, m: { densityDpi: number }) { setTargetDensity.call(this, m.densityDpi); },
+    "setTargetDensity(Landroid/graphics/Canvas;)V": function (this: JBitmapDrawable) { setTargetDensity.call(this, device.densityDpi); },
+    ...noops("<init>()V", "setAntiAlias(Z)V", "setMipMap(Z)V", "setTileModeX(Landroid/graphics/Shader$TileMode;)V", "setTileModeY(Landroid/graphics/Shader$TileMode;)V",
       "setTileModeXY(Landroid/graphics/Shader$TileMode;Landroid/graphics/Shader$TileMode;)V", "setGravity(I)V"),
   },
 });
@@ -441,7 +456,8 @@ class JGradientDrawable extends JDrawable {
   private clampedRadii = [0, 0, 0, 0];
   strokeW = 0; strokeColor = 0; dashW = 0; dashGap = 0;
   gradColors: number[] | null = null;
-  gradAngle = 0;
+  /** degrees, a multiple of 45: a GradientDrawable made in code starts TOP_BOTTOM */
+  gradAngle = 270;
   gradType = 0; // linear/radial/sweep
   gradRadius = 0;
   sizeW = -1; sizeH = -1;
@@ -473,19 +489,13 @@ class JGradientDrawable extends JDrawable {
       let fill: string | CanvasGradient | null = null;
       if (this.tint !== null) fill = cssColor(this.solid === null ? this.tint : (this.tint & 0xffffff) | (Math.round((this.tint >>> 24) * (this.solid >>> 24) / 255) << 24));
       else if (this.gradColors && this.gradColors.length > 1) {
-        if (this.gradType === 1) {
-          const g = ctx.createRadialGradient(left + w / 2, top + h / 2, 0, left + w / 2, top + h / 2, this.gradRadius || Math.max(w, h) / 2);
-          this.gradColors.forEach((c, i) => g.addColorStop(i / (this.gradColors!.length - 1), cssColor(c)));
-          fill = g;
-        } else {
-          const a = ((this.gradAngle % 360) + 360) % 360;
-          const rad = a * Math.PI / 180;
-          const cx = left + w / 2, cy = top + h / 2;
-          const len = (Math.abs(Math.cos(rad)) * w + Math.abs(Math.sin(rad)) * h) / 2;
-          const g = ctx.createLinearGradient(cx - Math.cos(rad) * len, cy + Math.sin(rad) * len, cx + Math.cos(rad) * len, cy - Math.sin(rad) * len);
-          this.gradColors.forEach((c, i) => g.addColorStop(i / (this.gradColors!.length - 1), cssColor(c)));
-          fill = g;
-        }
+        const [x0, y0, x1, y1] = GRADIENT_ENDS[this.gradAngle / 45];
+        const g = this.gradType === 1
+          ? ctx.createRadialGradient(left + w / 2, top + h / 2, 0, left + w / 2, top + h / 2, this.gradRadius || Math.max(w, h) / 2)
+          : ctx.createLinearGradient(left + x0 * w, top + y0 * h, left + x1 * w, top + y1 * h);
+        const last = this.gradColors.length - 1;
+        this.gradColors.forEach((c, i) => g.addColorStop(i / last, cssColor(c)));
+        fill = g;
       } else if (this.solid !== null) fill = cssColor(this.solid);
       if (fill) {
         ctx.fillStyle = fill;
@@ -539,8 +549,21 @@ rt.register({
 });
 // GradientDrawable.Orientation ordinals (TOP_BOTTOM first) as the angle each one means
 const ORIENT_ANGLE = [270, 225, 180, 135, 90, 45, 0, 315];
+/** each orientation's start and end corner, by angle / 45, as fractions of the bounds */
+const GRADIENT_ENDS = [[0, 0, 1, 0], [0, 1, 1, 0], [0, 1, 0, 0], [1, 1, 0, 0], [1, 0, 0, 0], [1, 0, 0, 1], [0, 0, 0, 1], [0, 0, 1, 1]];
+/** android:angle is a float; AOSP keeps TOP_BOTTOM for one that is not a multiple of 45 */
+function gradientAngle(deg: number): number {
+  const a = ((Math.trunc(deg) % 360) + 360) % 360;
+  return a % 45 ? 270 : a;
+}
 mkEnumSet("android/graphics/drawable/GradientDrawable$Orientation", ["TOP_BOTTOM", "TR_BL", "RIGHT_LEFT", "BR_TL", "BOTTOM_TOP", "BL_TR", "LEFT_RIGHT", "TL_BR"]);
 
+/** a state spec (negative entries are negated states) as its required and negated states */
+function splitStates(spec: Iterable<number>): { states: number[]; negStates: number[] } {
+  const states: number[] = [], negStates: number[] = [];
+  for (const s of spec) (s >= 0 ? states : negStates).push(Math.abs(s));
+  return { states, negStates };
+}
 /** a selector/color-state item matches when every required state is set and no negated one is */
 function matchesState(it: { states: number[]; negStates: number[] }, states: number[]): boolean {
   return it.states.every((s) => states.includes(s)) && !it.negStates.some((s) => states.includes(s));
@@ -569,27 +592,13 @@ class JStateListDrawable extends JDrawableContainer {
   current(): JDrawable | null {
     return (this.items.find((it) => matchesState(it, this.stateSet)) ?? this.items[this.items.length - 1])?.d ?? null;
   }
-  /** the child to draw, with this drawable's bounds and paint state pushed onto it */
-  target(): JDrawable | null {
-    const c = this.current();
-    if (!c) return null;
-    copyBounds(this, c);
-    c.alpha = this.alpha;
-    c.tint = c.tint ?? this.tint;
-    return c;
-  }
-  paint(cv: JCanvas) { const child = this.target(); return child ? drawChild(child, cv) : undefined; }
+  paint(cv: JCanvas) { const child = adoptChild(this, this.current()); return child ? drawChild(child, cv) : undefined; }
   size(vertical: boolean) { return containerSize(this.items, vertical); }
 }
 class JAnimationDrawable extends JDrawableContainer {
   frames: { d: JDrawable; ms: number }[] = [];
   cur = 0; oneShot = false; running = false; run = 0;
-  target(): JDrawable | null {
-    const c = this.frames[this.cur]?.d ?? null;
-    if (c) { copyBounds(this, c); c.alpha = this.alpha; c.tint = c.tint ?? this.tint; }
-    return c;
-  }
-  paint(cv: JCanvas) { const child = this.target(); return child ? drawChild(child, cv) : undefined; }
+  paint(cv: JCanvas) { const child = adoptChild(this, this.frames[this.cur]?.d ?? null); return child ? drawChild(child, cv) : undefined; }
   size(vertical: boolean) { return containerSize(this.frames, vertical); }
   /** AOSP schedules each frame on the looper for its duration; the run token cancels a stale timer */
   start() {
@@ -614,14 +623,7 @@ class JAnimationScaleListDrawable extends JDrawableContainer {
   children: { d: JDrawable }[] = [];
   animated = -1;
   current(): JDrawable | null { return this.children[this.animated]?.d ?? null; }
-  paint(cv: JCanvas) {
-    const child = this.current();
-    if (!child) return;
-    copyBounds(this, child);
-    child.alpha = this.alpha;
-    child.tint = child.tint ?? this.tint;
-    return drawChild(child, cv);
-  }
+  paint(cv: JCanvas) { const child = adoptChild(this, this.current()); return child ? drawChild(child, cv) : undefined; }
   size(vertical: boolean) { return containerSize(this.children, vertical); }
 }
 rt.register({ name: "com/android/internal/graphics/drawable/AnimationScaleListDrawable", ctor: JAnimationScaleListDrawable,
@@ -671,21 +673,20 @@ rt.register({
     }),
     "<init>()V": function () {},
     "addState([ILandroid/graphics/drawable/Drawable;)V": function (this: JStateListDrawable, st: Int32Array, d: JDrawable) {
-      const states: number[] = [], neg: number[] = [];
-      for (const s of st) (s >= 0 ? states : neg).push(Math.abs(s));
-      this.items.push({ states, negStates: neg, d });
+      this.items.push({ ...splitStates(st), d });
     },
   },
 });
 
+interface Layer { d: JDrawable | null; insets: [number, number, number, number]; w?: number; h?: number; gravity?: number }
 export class JLayerDrawable extends JDrawable {
-  layers: { d: JDrawable | null; insets: [number, number, number, number]; w?: number; h?: number; gravity?: number }[] = [];
+  layers: Layer[] = [];
   ids: (number | null)[] = [];
   private layerContainer = new JRect();
   private layerBounds = new JRect();
   /** AOSP LayerDrawable.addLayer: a layer's invalidations and scheduling reach this drawable,
    *  and through its own callback the view it is drawn into */
-  pushLayer(layer: JLayerDrawable["layers"][number]) { if (layer.d) layer.d.callback = this; this.layers.push(layer); }
+  pushLayer(d: JDrawable | null, place: Omit<Layer, "d"> = { insets: [0, 0, 0, 0] }) { if (d) d.callback = this; this.layers.push({ d, ...place }); }
   /** AOSP updateLayerBounds: insets, then an explicit layer size placed by its gravity */
   layout(): unknown {
     const thread = curThread;
@@ -775,7 +776,7 @@ rt.register({
     }),
     "<init>([Landroid/graphics/drawable/Drawable;)V": function (this: JLayerDrawable, ds: (JDrawable | null)[] | null) {
       if (!ds) throw rt.mkThrowable("java/lang/IllegalArgumentException", "layers must be non-null");
-      for (const d of ds) this.pushLayer({ d, insets: [0, 0, 0, 0] });
+      for (const d of ds) this.pushLayer(d);
     },
     // AOSP hands the state to every layer: a Material button's fill is a MaterialShapeDrawable
     // inside an InsetDrawable inside the ripple, and it is the one that reads state_checked
@@ -808,7 +809,7 @@ rt.register({
     "setId(II)V": function (this: JLayerDrawable, i: number, id: number) { this.ids[i] = id; },
     "getId(I)I": function (this: JLayerDrawable, i: number) { return this.ids[i] ?? -1; },
     "addLayer(Landroid/graphics/drawable/Drawable;)I": function (this: JLayerDrawable, d: JDrawable | null) {
-      this.pushLayer({ d, insets: [0, 0, 0, 0] });
+      this.pushLayer(d);
       return this.layers.length - 1;
     },
     "setDrawableByLayerId(ILandroid/graphics/drawable/Drawable;)Z": function (this: JLayerDrawable, id: number, d: JDrawable | null) {
@@ -870,7 +871,7 @@ class JTransitionDrawable extends JLayerDrawable {
 }
 rt.register({ name: "android/graphics/drawable/TransitionDrawable", ctor: JTransitionDrawable, sup: "android/graphics/drawable/LayerDrawable", methods: {
   "<init>([Landroid/graphics/drawable/Drawable;)V": function (this: JTransitionDrawable, ds: JDrawable[]) {
-    for (const d of ds) this.pushLayer({ d, insets: [0, 0, 0, 0] });
+    for (const d of ds) this.pushLayer(d);
   },
   "startTransition(I)V": function (this: JTransitionDrawable, duration: number) {
     this.from = this.mix = 0; this.to = 255; this.reverse = false;
@@ -928,7 +929,7 @@ rt.register({
   methods: {
     "<init>(Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V":
       function (this: JAdaptiveIconDrawable, bg: JDrawable | null, fg: JDrawable | null) {
-        for (const d of [bg, fg]) if (d) this.pushLayer({ d, insets: [0, 0, 0, 0] });
+        for (const d of [bg, fg]) if (d) this.pushLayer(d);
       },
     "getBackground()Landroid/graphics/drawable/Drawable;": function (this: JAdaptiveIconDrawable) { return this.layers[0]?.d ?? null; },
     "getForeground()Landroid/graphics/drawable/Drawable;": function (this: JAdaptiveIconDrawable) { return this.layers[1]?.d ?? null; },
@@ -1039,7 +1040,7 @@ rt.register({
   methods: {
     "<init>(Landroid/content/res/ColorStateList;Landroid/graphics/drawable/Drawable;Landroid/graphics/drawable/Drawable;)V":
       function (this: JRippleDrawable, csl: JColorStateList | null, content: JDrawable | null) {
-        if (content) this.pushLayer({ d: content, insets: [0, 0, 0, 0] });
+        if (content) this.pushLayer(content);
         this.setColor(csl);
       },
     "setColor(Landroid/content/res/ColorStateList;)V": function (this: JRippleDrawable, csl: JColorStateList) {
@@ -1060,14 +1061,10 @@ rt.register({
     },
   },
 });
-rt.register({ name: "android/graphics/drawable/RippleDrawable$RippleState", ctor: JDrawableState, sup: "android/graphics/drawable/Drawable$ConstantState", methods: {
-  "newDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableState) { return this.create(); },
-} });
 class JVectorDrawable extends JDrawable {
   vw = 24; vh = 24; // dp size
   vpW = 24; vpH = 24;
   paths: { p2d: Path2D; fill: number | null; stroke: number | null; strokeW: number; fillAlpha: number; evenOdd: boolean; transform: JMatrix["m"] | null }[] = [];
-  vtint: number | null = null;
   paint(cv: JCanvas) {
     const { left, top, right, bottom } = this.bounds;
     const w = right - left, h = bottom - top;
@@ -1077,7 +1074,7 @@ class JVectorDrawable extends JDrawable {
     ctx.globalAlpha *= this.alpha / 255;
     ctx.translate(left, top);
     ctx.scale(w / this.vpW, h / this.vpH);
-    const tint = this.tint ?? this.vtint, alpha = ctx.globalAlpha;
+    const tint = this.tint, alpha = ctx.globalAlpha;
     for (const p of this.paths) {
       if (p.transform) { ctx.save(); ctx.transform(...p.transform); }
       if (p.fill !== null && p.fill >>> 24) {
@@ -1233,11 +1230,6 @@ rt.register({ name: "android/graphics/drawable/InsetDrawable", ctor: JInsetDrawa
     });
   },
 } });
-rt.register({ name: "android/graphics/drawable/InsetDrawable$InsetState", ctor: JDrawableState,
-  sup: "android/graphics/drawable/Drawable$ConstantState", methods: {
-    "newDrawable()Landroid/graphics/drawable/Drawable;": function (this: JDrawableState) { return this.create(); },
-  },
-});
 
 class JRotateDrawable extends JDrawableWrapper {
   fromDegrees = 0; toDegrees = 360; currentDegrees = 0;
@@ -1492,9 +1484,9 @@ rt.register({
 });
 rt.register({ name: "android/graphics/drawable/VectorDrawable", ctor: JVectorDrawable, sup: "android/graphics/drawable/Drawable", methods: {
   "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": function (this: JVectorDrawable) {
-    const { vw, vh, vpW, vpH, paths, vtint, tint, alpha, autoMirrored } = this;
+    const { vw, vh, vpW, vpH, paths, tint, tintCsl, tintMode, alpha, autoMirrored } = this;
     const state = rt.make("android/graphics/drawable/VectorDrawable$VectorDrawableState") as JDrawableState;
-    state.create = () => Object.assign(new JVectorDrawable(), { vw, vh, vpW, vpH, paths, vtint, tint, alpha, autoMirrored });
+    state.create = () => Object.assign(new JVectorDrawable(), { vw, vh, vpW, vpH, paths, tint, tintCsl, tintMode, alpha, autoMirrored });
     return state;
   },
 } });
@@ -1526,11 +1518,7 @@ rt.register({
   name: "android/content/res/ColorStateList", ctor: JColorStateList, ifaces: ["android/os/Parcelable"],
   methods: {
     "<init>([[I[I)V": function (this: JColorStateList, states: Int32Array[], colors: Int32Array) {
-      for (let i = 0; i < states.length; i++) {
-        const pos: number[] = [], neg: number[] = [];
-        for (const s of states[i]) (s >= 0 ? pos : neg).push(Math.abs(s));
-        this.items.push({ states: pos, negStates: neg, color: colors[i] });
-      }
+      for (let i = 0; i < states.length; i++) this.items.push({ ...splitStates(states[i]), color: colors[i] });
       this.defColor = colors[colors.length - 1] ?? -16777216;
     },
     "static valueOf(I)Landroid/content/res/ColorStateList;": (c: number) => mkCsl(c),
@@ -1564,15 +1552,13 @@ function nodeAttr(res: Resources, node: XmlNode, resId: number): RV | null {
 const AT = attrTable(
   "color", "drawable", "shape", "radius", "topLeftRadius", "topRightRadius", "bottomLeftRadius",
   "bottomRightRadius", "width", "height", "left", "top", "right", "bottom", "startColor", "centerColor",
-  "endColor", "angle", "type", "gradientRadius", "src", "alpha", "tint", "viewportWidth",
+  "endColor", "angle", "type", "gradientRadius", "src", "alpha", "tint", "tintMode", "viewportWidth",
   "viewportHeight", "pathData", "fillColor", "strokeColor", "strokeWidth", "fillAlpha", "fillType",
   "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
   "scaleGravity", "gravity", "orientation", "oneshot", "duration", "scaleWidth", "scaleHeight", "useIntrinsicSizeAsMinimum", "level",
   "pivotX", "pivotY", "translateX", "translateY", "scaleX", "scaleY", "rotation", "fromDegrees", "toDegrees");
-function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null) {
-  const root = parseAXML(bytes);
-  return inflateDrawableNode(res, root, theme);
-}
+/** Drawable.parseTintMode: android:tintMode's enum values */
+const TINT_MODES: Record<number, string> = { 3: "SRC_OVER", 5: "SRC_IN", 9: "SRC_ATOP", 14: "MULTIPLY", 15: "SCREEN", 16: "ADD" };
 /** an <item>/<inset>'s drawable: its android:drawable, else its first inline child */
 const itemDrawable = driven(function* itemDrawable(res: Resources, node: XmlNode, theme: JTheme | null): Gen<JDrawable | null> {
   const da = nodeAttr(res, node, AT.drawable);
@@ -1591,15 +1577,20 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
     }
     return rvColor(res, v, d);
   };
+  /** android:tint and android:tintMode: a colour or a state list, as setTintList would apply it */
+  const xmlTint = driven(function* xmlTint(d: JDrawable): Gen {
+    const tint = get(AT.tint), mode = get(AT.tintMode);
+    if (tint?.t === TV.REFERENCE) {
+      d.tintCsl = (yield loadColorStateList(res, tint.d, theme)) as JColorStateList;
+      d.tint = cslColor(d.tintCsl, d.stateSet);
+    } else if (tint) d.tint = rvColor(res, tint);
+    if (mode) d.tintMode = TINT_MODES[mode.d] ?? d.tintMode;
+  });
   switch (node.name) {
     case "shape": {
       const d = new JGradientDrawable();
       d.shape = rvColor(res, get(AT.shape), 0) & 3;
-      const tint = resolveStyleValue(res, theme, get(AT.tint));
-      if (tint?.t === TV.REFERENCE) {
-        d.tintCsl = (yield loadColorStateList(res, tint.d, theme)) as JColorStateList;
-        d.tint = cslColor(d.tintCsl, d.stateSet);
-      } else if (tint) d.tint = rvColor(res, tint);
+      yield xmlTint(d);
       for (const c of node.children) {
         const cg = (id: number) => get(id, c);
         if (c.name === "solid") {
@@ -1629,7 +1620,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
           if (cc) cols.push(colorOf(cc, 0));
           cols.push(colorOf(cg(AT.endColor), 0));
           d.gradColors = cols;
-          d.gradAngle = xmlInt(res, cg(AT.angle), 0);
+          d.gradAngle = gradientAngle(rvFloat(res, cg(AT.angle), 0));
           d.gradType = xmlInt(res, cg(AT.type), 0);
           d.gradRadius = dimen(cg(AT.gradientRadius), 0);
         } else if (c.name === "size") {
@@ -1684,12 +1675,11 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
         if (c.name !== "item") continue;
         const states: number[] = [], neg: number[] = [];
         let child: JDrawable | null = null;
+        // StateListDrawable.extractStateSet: every attribute but drawable and id is a state,
+        // an app's own (Material's state_indeterminate) as much as the framework's
         for (const a of c.attrs) {
-          if (ST_IDS.has(a.resId)) {
-            (a.data ? states : neg).push(a.resId);
-          } else if (a.resId === AT.drawable) {
-            child = yield loadDrawableRV(res, attrRV(res, a), theme);
-          }
+          if (a.resId === AT.drawable) child = yield loadDrawableRV(res, attrRV(res, a), theme);
+          else if (a.resId && a.resId !== AT.id) (a.data ? states : neg).push(a.resId);
         }
         if (!child && c.children.length) child = yield inflateDrawableNode(res, c.children[0], theme);
         if (child) d.items.push({ states, negStates: neg, d: child });
@@ -1705,8 +1695,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
           // AOSP LayerDrawable: an item may carry its own size and a gravity to place it by,
           // and layout() already implements that. Without them a 24dp arrow inflated into a
           // spinner's background is stretched across the whole widget.
-          d.pushLayer({
-            d: child,
+          d.pushLayer(child, {
             insets: [
               rvDimen(res, get(AT.left, c), 0),
               rvDimen(res, get(AT.top, c), 0),
@@ -1728,7 +1717,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       for (const n of ["background", "foreground"]) {
         const c = node.children.find((k) => k.name === n);
         const child = c ? yield itemDrawable(res, c, theme) : null;
-        if (child) d.pushLayer({ d: child, insets: [0, 0, 0, 0] });
+        if (child) d.pushLayer(child);
       }
       return d;
     }
@@ -1745,7 +1734,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
         // invisible on a light theme and the entire surface on a dark one.
         if (idv && idv.d === maskId(res)) { d.mask = yield itemDrawable(res, c, theme); continue; }
         const child = yield itemDrawable(res, c, theme);
-        if (child) { d.pushLayer({ d: child, insets: [0, 0, 0, 0] }); d.ids.push(idv ? idv.d : null); }
+        if (child) { d.pushLayer(child); d.ids.push(idv ? idv.d : null); }
       }
       return d;
     }
@@ -1764,7 +1753,10 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
     case "bitmap":
     case "nine-patch": {
       const da = nodeAttr(res, node, AT.src);
-      return da ? yield loadDrawableRV(res, da, theme) : new JColorDrawable();
+      if (!da) return new JColorDrawable();
+      const d: JDrawable = yield loadDrawableRV(res, da, theme);
+      yield xmlTint(d);
+      return d;
     }
     case "vector": {
       const d = new JVectorDrawable();
@@ -1772,18 +1764,19 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       d.vh = dimen(get(AT.height), 48) / res.dm.density;
       d.vpW = rvFloat(res, get(AT.viewportWidth), 24);
       d.vpH = rvFloat(res, get(AT.viewportHeight), 24);
-      const tintV = get(AT.tint);
-      if (tintV) d.vtint = colorOf(tintV, 0) || null;
+      yield xmlTint(d);
+      const optColor = (c: XmlNode, id: number) => { const f = nodeAttr(res, c, id); return f ? colorOf(f, 0) : null; };
       const walk = (n: XmlNode, transform: JMatrix["m"] | null) => {
         for (const c of n.children) {
           if (c.name === "path") {
-            const pd = nodeAttr(res, c, AT.pathData);
-            if (pd?.s) {
+            // Material spells its switch paths as @string references
+            const data = rvString(res, nodeAttr(res, c, AT.pathData));
+            if (data) {
               try {
                 d.paths.push({
-                  p2d: new Path2D(pd.s), transform,
-                  fill: (() => { const f = nodeAttr(res, c, AT.fillColor); return f ? colorOf(f, 0) : null; })(),
-                  stroke: (() => { const f = nodeAttr(res, c, AT.strokeColor); return f ? colorOf(f, 0) : null; })(),
+                  p2d: new Path2D(data), transform,
+                  fill: optColor(c, AT.fillColor),
+                  stroke: optColor(c, AT.strokeColor),
                   strokeW: rvFloat(res, nodeAttr(res, c, AT.strokeWidth), 0),
                   fillAlpha: rvFloat(res, nodeAttr(res, c, AT.fillAlpha), 1),
                   evenOdd: xmlInt(res, nodeAttr(res, c, AT.fillType), 0) === 1,
@@ -1797,7 +1790,6 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
             local[4] += value(AT.translateX) + px; local[5] += value(AT.translateY) + py;
             walk(c, transform ? matMul(transform, local) : local);
           }
-          else if (c.name === "clip-path") { /* ignore */ }
         }
       };
       walk(node, null);
@@ -1820,8 +1812,7 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       d.oneShot = !!nodeAttr(res, node, AT.oneshot)?.d;
       for (const c of node.children) {
         if (c.name !== "item") continue;
-        const da = nodeAttr(res, c, AT.drawable);
-        const child = da ? yield loadDrawableRV(res, da, theme) : c.children.length ? yield inflateDrawableNode(res, c.children[0], theme) : null;
+        const child = yield itemDrawable(res, c, theme);
         if (child) d.frames.push({ d: child, ms: nodeAttr(res, c, AT.duration)?.d ?? 0 });
       }
       return d;
@@ -1840,11 +1831,8 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
     }
     case "transition": case "level-list": {
       for (const c of node.children) {
-        if (c.name === "item") {
-          const da = nodeAttr(res, c, AT.drawable);
-          if (da) return yield loadDrawableRV(res, da, theme);
-          if (c.children.length) return yield inflateDrawableNode(res, c.children[0], theme);
-        }
+        const child = c.name === "item" ? yield itemDrawable(res, c, theme) : null;
+        if (child) return child;
       }
       return new JColorDrawable();
     }
@@ -1912,7 +1900,7 @@ export const loadDrawable = driven(function* loadDrawable$(res: Resources, resId
 });
 
 const loadDrawableFile = driven(function* loadDrawableFile(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null): Gen<JDrawable> {
-  if (path.endsWith(".xml")) return yield loadDrawableXml(res, bytes, theme);
+  if (path.endsWith(".xml")) return yield inflateDrawableNode(res, parseAXML(bytes), theme);
   const bmp: JBitmap | null = yield decodeBytes(bytes, null);
   if (!bmp) return new JBitmapDrawable();
   bmp.density = densityOfPath(path);
@@ -1922,6 +1910,10 @@ const loadDrawableFile = driven(function* loadDrawableFile(res: Resources, path:
 // ── ColorStateList loading (color/*.xml selectors)
 // Keyed by theme as well as id: a Material colour selector is a list of `?attr/` items, so
 // the same resource is a different list under every ThemeOverlay that reads it.
+/** a colour attribute's value as a list: a reference loads its selector, a literal is one colour */
+export function rvCsl(res: Resources, v: RV, theme: JTheme | null, dflt = 0): JColorStateList | Promise<JColorStateList> {
+  return v.t === TV.REFERENCE ? loadColorStateList(res, v.d, theme) : mkCsl(rvColor(res, v, dflt));
+}
 const NO_THEME = {};
 const cslCache = new WeakMap<object, Map<number, JColorStateList>>();
 export const loadColorStateList = driven(function* loadColorStateList$(res: Resources, resId: number, theme: JTheme | null): Gen<JColorStateList> {
@@ -1944,23 +1936,26 @@ export const loadColorStateList = driven(function* loadColorStateList$(res: Reso
   byId.set(resId, out);
   return out;
 });
-function parseCslXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): JColorStateList {
+function parseCslXml(res: Resources, bytes: Uint8Array, theme: JTheme | null, depth = 0): JColorStateList {
   const root = parseAXML(bytes);
   const csl = new JColorStateList();
   for (const c of root.children) {
     if (c.name !== "item") continue;
     const states: number[] = [], neg: number[] = [];
     let color = -16777216, alphaMul = 1;
+    // ColorStateList.inflate: color, alpha and lStar are the item's values, anything else a state
     for (const a of c.attrs) {
-      if (ST_IDS.has(a.resId)) (a.data ? states : neg).push(a.resId);
-      else if (a.resId === AT.color) {
+      if (a.name === "lStar" || !a.resId) continue;
+      if (a.resId === AT.color) {
         let v: RV | null = attrRV(res, a);
         if (v.t === TV.ATTRIBUTE) v = theme?.lookup(v.d) ?? null;
         if (v && v.t === TV.REFERENCE) v = res.resolveRefs(v);
-        color = rvColor(res, v, -16777216);
-      } else if (a.resId === AT.alpha) {
+        // TypedArray.getColor on a nested selector answers with its default colour
+        const nested = v?.t === TV.REFERENCE && v.s?.endsWith(".xml") && depth < 8 ? res.fileOf(v.d) : null;
+        color = nested ? parseCslXml(res, nested.bytes, theme, depth + 1).defColor : rvColor(res, v, -16777216);
+      } else if (a.resId === AT.alpha || a.name === "alpha") {
         alphaMul = Math.max(0, Math.min(1, rvFloat(res, resolveStyleValue(res, theme, attrRV(res, a)), 1)));
-      }
+      } else (a.data ? states : neg).push(a.resId);
     }
     if (alphaMul < 1) color = (Math.round((color >>> 24) * alphaMul) << 24 | (color & 0xffffff)) | 0;
     csl.items.push({ states, negStates: neg, color });

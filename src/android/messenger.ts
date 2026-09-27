@@ -1,7 +1,7 @@
 import { JObj, rt, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { type JHandler, JBundle, JMessage, obtain } from "./os";
-import { JBinder, callingIdentity } from "./binder";
+import { JBinder, INTERFACE_TRANSACTION, callingIdentity } from "./binder";
 import { JParcel, parcelCreator } from "./parcel";
 
 async function readMessage(p: JParcel): Promise<JMessage> {
@@ -57,7 +57,7 @@ rt.register({ name: "android/os/Message", ctor: JMessage, ifaces: ["android/os/P
 class JMessengerBinder extends JBinder { handler!: JHandler; }
 rt.register({ name: "webdroid/MessengerBinder", ctor: JMessengerBinder, sup: "android/os/Binder", methods: {
   "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JMessengerBinder, code: number, data: JParcel, reply: JParcel | null): Gen {
-    if (code === 0x5f4e5446 && reply) { yield vcall(reply, "writeString", "(Ljava/lang/String;)V", "android.os.IMessenger"); return 1; }
+    if (code === INTERFACE_TRANSACTION && reply) { yield vcall(reply, "writeString", "(Ljava/lang/String;)V", "android.os.IMessenger"); return 1; }
     if (code !== 1) return 0;
     yield vcall(data, "enforceInterface", "(Ljava/lang/String;)V", "android.os.IMessenger");
     if (yield vcall(data, "readInt", "()I")) {

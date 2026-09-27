@@ -237,6 +237,18 @@ describe("arm decoder", () => {
       expect([c.w[16], c.w[18], c.w[20], c.w[22], c.q]).toEqual([3, 16, 0, -2147483648, 1]);
     }
   });
+  test("parallel add/subtract sets GE for SEL and saturates or halves per lane", () => {
+    const setup = (cpu: Cpu) => { cpu.w[0] = 0x80ff7f01; cpu.w[2] = 0x0102ff7f; cpu.w[14] = 0x7fffffff; };
+    for (const execute of [
+      // uadd8 r2, r0, r1; sel r3, r0, r1; qsub16 r4, r0, r1; shasx r5, r0, r1; qadd r6, r7, r7
+      () => run([0xe6502f91, 0xe6803fb1, 0xe6204f71, 0xe6305f31, 0xe1076057, BXLR], setup),
+      () => runThumb([0xfa80, 0xf241, 0xfaa0, 0xf381, 0xfad0, 0xf411, 0xfaa0, 0xf521, 0xfa87, 0xf687, 0x4770], setup),
+    ]) {
+      const c = execute();
+      expect([4, 6, 8, 10, 12].map((i) => c.w[i] >>> 0)).toEqual([0x81017e80, 0x01ff7f7f, 0x80007f82, 0xc03f3eff, 0x7fffffff]);
+      expect([(c.cpsr >>> 16) & 15, c.q]).toEqual([6, 1]);
+    }
+  });
   test("clz, mrs/msr", () => {
     const c = run([
       0xe3a00001,   // mov r0, #1

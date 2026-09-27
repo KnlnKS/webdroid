@@ -81,35 +81,33 @@ export const docCells = (r: DocRow) => [r.id, r.name, r.mime, r.size, r.modified
  *  a volume of their own rather than a path. */
 const loose = new Map<string, FileSystemFileHandle>();
 
-async function savedFile(vol: string): Promise<FileSystemFileHandle | undefined> {
+/** the picked-file handles store, open for one operation */
+async function withFiles<T>(use: (db: IDBDatabase) => Promise<T>): Promise<T> {
   const db = await openDb("webdroid-documents", "files");
-  try {
-    return await new Promise((resolve, reject) => {
-      const request = db.transaction("files", "readonly").objectStore("files").get(vol);
-      request.onsuccess = () => resolve(request.result as FileSystemFileHandle | undefined);
-      request.onerror = () => reject(request.error);
-    });
-  } finally { db.close(); }
+  try { return await use(db); } finally { db.close(); }
+}
+async function writeFiles(write: (store: IDBObjectStore) => void): Promise<void> {
+  await withFiles((db) => {
+    const transaction = db.transaction("files", "readwrite");
+    write(transaction.objectStore("files"));
+    return txDone(transaction);
+  });
 }
 
-async function saveFile(vol: string, h: FileSystemFileHandle): Promise<void> {
-  const db = await openDb("webdroid-documents", "files");
-  try {
-    const transaction = db.transaction("files", "readwrite");
-    transaction.objectStore("files").put(h, vol);
-    await txDone(transaction);
-  } finally { db.close(); }
+function savedFile(vol: string): Promise<FileSystemFileHandle | undefined> {
+  return withFiles((db) => new Promise((resolve, reject) => {
+    const request = db.transaction("files", "readonly").objectStore("files").get(vol);
+    request.onsuccess = () => resolve(request.result as FileSystemFileHandle | undefined);
+    request.onerror = () => reject(request.error);
+  }));
 }
+
+const saveFile = (vol: string, h: FileSystemFileHandle) => writeFiles((store) => store.put(h, vol));
 
 export async function clearPickedDocuments(): Promise<void> {
   loose.clear();
   cache.clear();
-  const db = await openDb("webdroid-documents", "files");
-  try {
-    const transaction = db.transaction("files", "readwrite");
-    transaction.objectStore("files").clear();
-    await txDone(transaction);
-  } finally { db.close(); }
+  await writeFiles((store) => store.clear());
 }
 
 const cache = new Map<string, FileSystemHandle>();

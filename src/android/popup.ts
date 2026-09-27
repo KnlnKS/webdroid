@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec, callSelf, stubs, noops, fieldGetters, flagGe
 import { mangleMethod } from "../jvm/abi";
 import { vcall, vcallUncaught } from "../jvm/natives/jlang";
 import { reportUncaught, uptimeMillis } from "./os";
-import { JView, JFrameLP, uiState, invalidate, requestLayout, locationOnScreen, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST } from "./view";
+import { JView, JFrameLP, uiState, invalidate, requestLayout, locationOnScreen, rootOf, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST } from "./view";
 import { JMotionEvent } from "./motionevent";
 import { JFrameLayout } from "./layouts";
 import { JDrawable, loadDrawableRV } from "./drawable";
@@ -271,7 +271,6 @@ class JPopupWindow extends JObj {
     return p ? [p.left, p.top, p.right, p.bottom] : [0, 0, 0, 0];
   }
 }
-function rootOf(v: JView): JView { let r = v; while (r.parent) r = r.parent; return r; }
 
 const PW_ATTRS = ["popupBackground", "popupElevation", "popupAnimationStyle", "overlapAnchor"] as const;
 const pwInit = driven(function* pwInit(this: JPopupWindow, c: any, set: JAttrSet | null, defStyleAttr: number, defStyleRes: number): Gen {

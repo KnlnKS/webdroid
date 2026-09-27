@@ -10,6 +10,17 @@ interface ProxyOptions {
   fetchUpstream?: (url: string, init: RequestInit, encoded: boolean) => Promise<Response>;
 }
 
+/** The class of an upstream fetch failure, so the Java side can throw what a socket would. */
+function failureKind(error: unknown): string {
+  const e = error as { code?: string; name?: string };
+  const tag = `${e?.code ?? ""} ${e?.name ?? ""} ${error}`;
+  if (/ENOTFOUND|EAI_|getaddrinfo|DNS/i.test(tag)) return "host";
+  if (/Refused|ECONNREFUSED/i.test(tag)) return "refused";
+  if (/Timeout|ETIMEDOUT/i.test(tag)) return "timeout";
+  if (/CERT|SSL|TLS|SELF_SIGNED/i.test(tag)) return "tls";
+  return "io";
+}
+
 export async function proxyRequest(request: Request, options: ProxyOptions): Promise<Response> {
   if (request.headers.get("service-worker") === "script") return new Response("invalid worker", { status: 403 });
   const query = new URL(request.url).searchParams;
@@ -41,7 +52,8 @@ export async function proxyRequest(request: Request, options: ProxyOptions): Pro
     }
     const init: RequestInit = {
       method: request.method, headers,
-      body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+      // buffered: a redirect (307/308) must replay the body, which a stream cannot
+      body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer(),
       redirect: manual ? "manual" : "follow",
     };
     const upstream = intercepted ?? await (options.fetchUpstream?.(url, init, encoded) ?? fetch(url, init));
@@ -83,6 +95,19 @@ export async function proxyRequest(request: Request, options: ProxyOptions): Pro
   } catch (error) {
     if (frame) return new Response(`<!doctype html><meta name="wd-proxy-error" content="${htmlAttribute(String(error))}">`,
       { status: 502, headers: { "content-type": "text/html; charset=utf-8" } });
-    return new Response(`proxy error: ${error}`, { status: 502 });
+    return new Response(`proxy error: ${error}`, { status: 502, headers: { "x-wd-error": failureKind(error) } });
   }
+}
+
+/** One wire-format DNS message (RFC 8484) for guests that run their own resolver. */
+export async function forwardDnsMessage(request: Request): Promise<Response> {
+  const body = request.method === "POST" ? await request.arrayBuffer() : null;
+  if (!body || body.byteLength < 12 || body.byteLength > 65535) return new Response("bad DNS message", { status: 400 });
+  try {
+    const answer = await fetch("https://cloudflare-dns.com/dns-query", {
+      method: "POST", body, headers: { "content-type": "application/dns-message", accept: "application/dns-message" },
+    });
+    if (answer.ok) return new Response(answer.body, { headers: { "content-type": "application/dns-message" } });
+  } catch { /* reported below */ }
+  return new Response("DNS unavailable", { status: 502 });
 }

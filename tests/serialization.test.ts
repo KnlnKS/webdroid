@@ -7,23 +7,26 @@ import { hexBytes, i8 } from "../src/jvm/abi";
 import { exportParcel, importParcel } from "../src/android/binder";
 import { DexFile } from "../src/jvm/dex";
 
+rt.linkNatives();
+
+async function input(bytes: Int8Array) {
+  return newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", await newObj("java/io/ByteArrayInputStream", "([B)V", bytes));
+}
+/** Java serialization of `value` written twice, so the second copy is a back reference. */
+async function encode(value: unknown) {
+  const target = await newObj("java/io/ByteArrayOutputStream");
+  const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", target);
+  await vcall(output, "writeObject", "(Ljava/lang/Object;)V", value);
+  await vcall(output, "writeObject", "(Ljava/lang/Object;)V", value);
+  await vcall(output, "close", "()V");
+  return vcall(target, "toByteArray", "()[B");
+}
+
 describe("object-stream-external", () => {
   rt.loadDex(new DexFile(new Uint8Array(readFileSync(import.meta.dir + "/fixtures/SerializationProbe.dex"))));
-  rt.linkNatives();
   const oracle = "aced00057372001a53657269616c697a6174696f6e50726f6265245061796c6f616400000000000000070c000078707716ffffffffffffffef075bcd150008c080eda0bdedba8071007e00017704000003e77871007e0001";
   const field = (value: object, cls: string, name: string) => Reflect.get(value, rt.link(cls).fieldTable.get(name)!);
   const makeValue = () => newObj("SerializationProbe$Value", "(JI)V", -17n, 123456789);
-  async function input(bytes: Int8Array) {
-    return newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", await newObj("java/io/ByteArrayInputStream", "([B)V", bytes));
-  }
-  async function encode(value: unknown) {
-    const target = await newObj("java/io/ByteArrayOutputStream");
-    const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", target);
-    await vcall(output, "writeObject", "(Ljava/lang/Object;)V", value);
-    await vcall(output, "writeObject", "(Ljava/lang/Object;)V", value);
-    await vcall(output, "close", "()V");
-    return vcall(target, "toByteArray", "()[B");
-  }
   function checkValue(value: object) {
     expect(field(value, "SerializationProbe$Value", "seconds")).toBe(-17n);
     expect(field(value, "SerializationProbe$Value", "nanos")).toBe(123456789);
@@ -105,20 +108,6 @@ describe("object-stream-external", () => {
     }
   });
 
-  test("linked maps retain secret keys through Java object streams", async () => {
-    const map = await newObj("java/util/LinkedHashMap");
-    const key = await newObj("javax/crypto/spec/SecretKeySpec", "([BLjava/lang/String;)V", Int8Array.of(0, 1, -1, 3), "HmacSHA1");
-    await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "one", key);
-    const stream = await input(await encode(map));
-    const copy = await vcall(stream, "readObject", "()Ljava/lang/Object;");
-    expect(await vcall(stream, "readObject", "()Ljava/lang/Object;")).toBe(copy);
-    expect(await vcall(copy, "size", "()I")).toBe(1);
-    const restored = await vcall(copy, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "one");
-    expect(await vcall(restored, "getAlgorithm", "()Ljava/lang/String;")).toBe("HmacSHA1");
-    expect(await vcall(restored, "getEncoded", "()[B")).toEqual(Int8Array.of(0, 1, -1, 3));
-  });
-
-
   test("serialization retains the caller through nested objects and suspended short reads", async () => {
     const worker = new JThread(), ambient = curThread, calls: string[] = [];
     const record = (name: string) => { expect(curThread).toBe(worker); calls.push(name); };
@@ -158,16 +147,13 @@ describe("object-stream-external", () => {
 });
 
 describe("objectstream", () => {
-  rt.linkNatives();
-
   test("ObjectInputStream consumes complete short blocks and crosses block boundaries", async () => {
-    const source = await newObj("java/io/ByteArrayInputStream", "([B)V", new Int8Array([
+    const stream = await input(new Int8Array([
       0xac, 0xed, 0, 5, 0x77, 4, 0x12, 0x34, 0x56, 0x78,
       0x77, 1, 0x11, 0x77, 3, 0x22, 0x33, 0x44,
     ]));
-    const input = await newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source);
-    expect(await vcall(input, "readInt", "()I")).toBe(0x12345678);
-    expect(await vcall(input, "readInt", "()I")).toBe(0x11223344);
+    expect(await vcall(stream, "readInt", "()I")).toBe(0x12345678);
+    expect(await vcall(stream, "readInt", "()I")).toBe(0x11223344);
   });
 
   test("ObjectOutputStream writes a complete object before explicit flush", async () => {
@@ -176,26 +162,21 @@ describe("objectstream", () => {
     const bytes = await newObj("java/io/ByteArrayOutputStream", "()V");
     const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", bytes);
     await vcall(output, "writeObject", "(Ljava/lang/Object;)V", set);
-    const source = await newObj("java/io/ByteArrayInputStream", "([B)V", await vcall(bytes, "toByteArray", "()[B"));
-    const input = await newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source);
-    const restored = await vcall(input, "readObject", "()Ljava/lang/Object;");
+    const restored = await vcall(await input(await vcall(bytes, "toByteArray", "()[B")), "readObject", "()Ljava/lang/Object;");
     const iterator = await vcall(restored, "iterator", "()Ljava/util/Iterator;");
     const uuid = await vcall(iterator, "next", "()Ljava/lang/Object;");
     expect(await vcall(uuid, "getMostSignificantBits", "()J")).toBe(1n);
     expect(await vcall(uuid, "getLeastSignificantBits", "()J")).toBe(2n);
   });
 
-  test("serialized linked maps retain entries, access order and secret keys", async () => {
+  test("serialized linked maps retain entries, access order, back references and secret keys", async () => {
     const map = await newObj("java/util/LinkedHashMap", "(IFZ)V", 16, 0.75, 1);
     const key = await newObj("javax/crypto/spec/SecretKeySpec", "([BLjava/lang/String;)V", new Int8Array([1, -2, 3]), "AES");
     await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "key", key);
     await vcall(map, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "other", "value");
-    const target = await newObj("java/io/ByteArrayOutputStream", "()V");
-    const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", target);
-    await vcall(output, "writeObject", "(Ljava/lang/Object;)V", map);
-    const source = await newObj("java/io/ByteArrayInputStream", "([B)V", await vcall(target, "toByteArray", "()[B"));
-    const input = await newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source);
-    const restored = await vcall(input, "readObject", "()Ljava/lang/Object;");
+    const stream = await input(await encode(map));
+    const restored = await vcall(stream, "readObject", "()Ljava/lang/Object;");
+    expect(await vcall(stream, "readObject", "()Ljava/lang/Object;")).toBe(restored);
     expect(await vcall(restored, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "other")).toBe("value");
     const restoredKey = await vcall(restored, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "key");
     expect(await vcall(restoredKey, "getAlgorithm", "()Ljava/lang/String;")).toBe("AES");
@@ -211,12 +192,7 @@ describe("objectstream", () => {
     await vcall(list, "add", "(Ljava/lang/Object;)Z", "saved");
     await vcall(list, "add", "(Ljava/lang/Object;)Z", await newObj("java/util/concurrent/atomic/AtomicInteger", "(I)V", 7));
     const view = await vcall(rt.link("java/util/Collections").ctor, "unmodifiableList", "(Ljava/util/List;)Ljava/util/List;", list);
-    const bytes = await newObj("java/io/ByteArrayOutputStream", "()V");
-    const output = await newObj("java/io/ObjectOutputStream", "(Ljava/io/OutputStream;)V", bytes);
-    await vcall(output, "writeObject", "(Ljava/lang/Object;)V", view);
-    const source = await newObj("java/io/ByteArrayInputStream", "([B)V", await vcall(bytes, "toByteArray", "()[B"));
-    const input = await newObj("java/io/ObjectInputStream", "(Ljava/io/InputStream;)V", source);
-    const restored = await vcall(input, "readObject", "()Ljava/lang/Object;");
+    const restored = await vcall(await input(await encode(view)), "readObject", "()Ljava/lang/Object;");
     expect(rt.iof(restored, "java/util/RandomAccess")).toBe(1);
     expect(await vcall(restored, "get", "(I)Ljava/lang/Object;", 0)).toBe("saved");
     expect(await vcall(await vcall(restored, "get", "(I)Ljava/lang/Object;", 1), "get", "()I")).toBe(7);

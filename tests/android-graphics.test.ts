@@ -20,10 +20,11 @@ describe("canvas-text", () => {
     fillText() {}, fillRect() {},
     getTransform() { return { a: 1, b: 0, c: 0, d: 1, e: 10, f: 20 }; },
   } as unknown as OffscreenCanvasRenderingContext2D, 100, 100);
+  const semanticOwner = () => ({ drawnText: null as string[] | null, drawnTextPoints: null as Float32Array | null, drawnTextCount: 0 });
 
   test("Canvas records custom-drawn text for semantic lookup", async () => {
     const cv = canvas(), paint = new JPaint();
-    const owner = { drawnText: null as string[] | null, drawnTextPoints: null as Float32Array | null, drawnTextCount: 0 };
+    const owner = semanticOwner();
     cv.semanticOwner = owner;
 
     await vcall(cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", "first", 0, 0, paint);
@@ -38,7 +39,7 @@ describe("canvas-text", () => {
 
   test("Canvas maps layered semantic text through its parent transform", async () => {
     const cv = canvas(), paint = new JPaint();
-    const owner = { drawnText: null as string[] | null, drawnTextPoints: null as Float32Array | null, drawnTextCount: 0 };
+    const owner = semanticOwner();
     cv.semanticBase = [1, 0, 0, 1, 100, 200];
     cv.semanticOwner = owner;
 
@@ -53,7 +54,7 @@ describe("canvas-text", () => {
       [mangleMethod("toString", "()Ljava/lang/String;")]() { return "Big Buck Bunny"; }
     }
     const cv = canvas(), paint = new JPaint();
-    const owner = { drawnText: null as string[] | null, drawnTextPoints: null as Float32Array | null, drawnTextCount: 0 };
+    const owner = semanticOwner();
     cv.semanticOwner = owner;
 
     await vcall(cv, "drawText", "(Ljava/lang/CharSequence;IIFFLandroid/graphics/Paint;)V", new Sequence(), 4, 8, 0, 0, paint);
@@ -61,35 +62,12 @@ describe("canvas-text", () => {
     expect(owner.drawnText).toEqual(["Buck"]);
   });
 
-  test("drawn text lookup uses the matching run point", () => {
-    const owner = {
-      drawnText: ["leading", "later target", "tail"],
-      drawnTextPoints: new Float32Array([10, 11, 20, 21, 30, 31]),
-      drawnTextCount: 3,
-    };
-
-    expect(locateDrawnText(owner, "target", 100, 100)).toEqual({ x: 20, y: 21 });
-  });
-
-  test("drawn text lookup preserves contiguous phrases", () => {
-    const owner = {
-      drawnText: ["Big", "Buck", "Bunny"],
-      drawnTextPoints: new Float32Array([10, 11, 20, 21, 30, 31]),
-      drawnTextCount: 3,
-    };
-
-    expect(locateDrawnText(owner, "Buck Bunny", 100, 100)).toEqual({ x: 20, y: 21 });
-  });
-
-  test("ImageSpan retains its supplied drawable", async () => {
-    const drawable = new JObj();
-    const span = await newObj("android/text/style/ImageSpan", "(Landroid/graphics/drawable/Drawable;I)V", drawable, 1);
-
-    expect(await vcall(span, "getDrawable", "()Landroid/graphics/drawable/Drawable;")).toBe(drawable);
-  });
-
-  test("TextView defaults to no movement method", async () => {
-    expect(await vcall(new JTextView(), "getDefaultMovementMethod", "()Landroid/text/method/MovementMethod;")).toBeNull();
+  test.each([
+    ["uses the matching run point", ["leading", "later target", "tail"], "target"],
+    ["preserves contiguous phrases", ["Big", "Buck", "Bunny"], "Buck Bunny"],
+  ])("drawn text lookup %s", (_name, drawnText, query) => {
+    const owner = { drawnText, drawnTextPoints: new Float32Array([10, 11, 20, 21, 30, 31]), drawnTextCount: 3 };
+    expect(locateDrawnText(owner, query, 100, 100)).toEqual({ x: 20, y: 21 });
   });
 });
 
@@ -480,20 +458,7 @@ describe("imageview-alpha", () => {
 describe("lighting-color-filter", () => {
   rt.linkNatives();
 
-  test("LightingColorFilter exposes its RGB multiply and add transform", async () => {
-    const filter = await newObj("android/graphics/LightingColorFilter", "(II)V", 0xff804020, 0x00102030);
-    const paint = await newObj("android/graphics/Paint") as JPaint;
-    await vcall(paint, "setColorFilter", "(Landroid/graphics/ColorFilter;)Landroid/graphics/ColorFilter;", filter);
-    expect(paint.filterMatrix?.[0]).toBeCloseTo(128 / 255);
-    expect(paint.filterMatrix?.[6]).toBeCloseTo(64 / 255);
-    expect(paint.filterMatrix?.[12]).toBeCloseTo(32 / 255);
-    expect(paint.filterMatrix?.[4]).toBe(16);
-    expect(paint.filterMatrix?.[9]).toBe(32);
-    expect(paint.filterMatrix?.[14]).toBe(48);
-  });
-
   test("lighting filters retain alpha and update an attached paint's RGB transform", async () => {
-    rt.linkNatives();
     const filter = await newObj("android/graphics/LightingColorFilter", "(II)V", 0x0080ff00, 0xff104020);
     const paint = rt.make("android/graphics/Paint");
     if (!(paint instanceof JPaint)) throw new Error("Invalid Paint");

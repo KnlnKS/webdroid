@@ -1,4 +1,5 @@
 import { readStreamFully } from "./jio";
+import { mkStream, mkIntStream, mkLongStream, mkDoubleStream } from "./jstream-values";
 import { jarray, mangleMethod, charsToString, dotName } from "../abi";
 import { vcall, vcallOn, callOn, curThread, type JThread, after, stringHash, idHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException, mkCmp, fmtDouble, bitCount32, cmpFloat, newObj } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo, driven, type Gen } from "../runtime";
@@ -18,6 +19,21 @@ function fillToArray(items: unknown[], out: unknown[]): unknown[] {
   }
   return jarray(items.slice(), (out as { $t?: string } | null)?.$t);
 }
+
+/** AbstractCollection/AbstractMap.toString: elements print through their own toString, and the
+ *  container itself as "(this Collection)" / "(this Map)" */
+const elemText = (x: unknown, self: unknown, selfText: string): string | Promise<string> =>
+  x === self ? selfText : x == null ? "null" : typeof x === "object" ? after(vcall(x, "toString", "()Ljava/lang/String;"), String) : String(x);
+const seqText = driven(function* seqText(self: unknown, items: Iterable<unknown>): Gen<string> {
+  const parts: string[] = [];
+  for (const x of items) parts.push(yield elemText(x, self, "(this Collection)"));
+  return "[" + parts.join(", ") + "]";
+});
+const mapText = driven(function* mapText(self: unknown, entries: Iterable<Ent>): Gen<string> {
+  const parts: string[] = [];
+  for (const e of entries) parts.push(`${yield elemText(e.k, self, "(this Map)")}=${yield elemText(e.v, self, "(this Map)")}`);
+  return "{" + parts.join(", ") + "}";
+});
 
 // equality / hashing bridges (sync when possible)
 export function jeq(a: unknown, b: unknown): number | Promise<number> {
@@ -398,12 +414,10 @@ export function listMethods(): Methods {
       for (const v of this.a) yield vcall(c, "accept", "(Ljava/lang/Object;)V", v);
     }),
     "stream()Ljava/util/stream/Stream;": function (this: JList) {
-      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-      stream.a = this.a.slice(); return stream;
+      return mkStream(this.a.slice());
     },
     "parallelStream()Ljava/util/stream/Stream;": function (this: JList) {
-      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-      stream.a = this.a.slice(); return stream;
+      return mkStream(this.a.slice());
     },
     "clear()V": function (this: JList) { this.a.length = 0; },
     "iterator()Ljava/util/Iterator;": function (this: JList) { return mkIter(this.a, this); },
@@ -454,11 +468,7 @@ export function listMethods(): Methods {
       return 1;
     }),
     "hashCode()I": function (this: JList) { return hashSeq(this.a); },
-    "toString()Ljava/lang/String;": driven(function* (this: JList): Gen {
-      const parts: string[] = [];
-      for (const e of this.a) parts.push(e === null ? "null" : String(typeof e === "object" ? yield vcall(e, "toString", "()Ljava/lang/String;") : e));
-      return "[" + parts.join(", ") + "]";
-    }),
+    "toString()Ljava/lang/String;": function (this: JList) { return seqText(this, this.a); },
     // Deque/Queue-ish extras (LinkedList/ArrayDeque share this)
     "addFirst(Ljava/lang/Object;)V": function (this: JList, v: unknown) { this.a.unshift(v); },
     "addLast(Ljava/lang/Object;)V": function (this: JList, v: unknown) { this.a.push(v); },
@@ -837,9 +847,7 @@ function mapMethods(): Methods {
     "keySet()Ljava/util/Set;": function (this: JMap) { return new JSetView(this, "k"); },
     "values()Ljava/util/Collection;": function (this: JMap) { return new JSetView(this, "v"); },
     "entrySet()Ljava/util/Set;": function (this: JMap) { return new JSetView(this, "e"); },
-    "toString()Ljava/lang/String;": function (this: JMap) {
-      return "{" + [...allEnts(this)].map((e) => `${e.k}=${e.v}`).join(", ") + "}";
-    },
+    "toString()Ljava/lang/String;": function (this: JMap) { return mapText(this, allEnts(this)); },
     "hashCode()I": function (this: JMap) {
       const entries = [...allEnts(this)];
       return this.identity ? entries.reduce((sum, entry) => (sum + (idHash(entry.k) ^ idHash(entry.v))) | 0, 0) : mapHash(entries);
@@ -999,12 +1007,10 @@ rt.register({
       for (const v of this.snapshot()) yield vcall(c, "accept", "(Ljava/lang/Object;)V", v);
     }),
     "stream()Ljava/util/stream/Stream;": function (this: JSetView) {
-      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-      stream.a = this.snapshot(); return stream;
+      return mkStream(this.snapshot());
     },
     "parallelStream()Ljava/util/stream/Stream;": function (this: JSetView) {
-      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-      stream.a = this.snapshot(); return stream;
+      return mkStream(this.snapshot());
     },
     "contains(Ljava/lang/Object;)Z": function (this: JSetView, v: unknown) {
       if (this.kind === "k") return vcall(this.map, "containsKey", "(Ljava/lang/Object;)Z", v);
@@ -1045,7 +1051,7 @@ rt.register({
       return 1;
     }),
     "clear()V": function (this: JSetView) { ensureMapMutable(this.map); this.map.m.clear(); this.map.slow.length = 0; this.map.slowVersion++; },
-    "toString()Ljava/lang/String;": function (this: JSetView) { return "[" + this.snapshot().join(", ") + "]"; },
+    "toString()Ljava/lang/String;": function (this: JSetView) { return seqText(this, this.snapshot()); },
   },
 });
 
@@ -1198,12 +1204,10 @@ function setMethods(): Methods {
       for (const v of setItems(this)) yield vcall(c, "accept", "(Ljava/lang/Object;)V", v);
     }),
     "stream()Ljava/util/stream/Stream;": function (this: JSet) {
-      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-      stream.a = setItems(this); return stream;
+      return mkStream(setItems(this));
     },
     "parallelStream()Ljava/util/stream/Stream;": function (this: JSet) {
-      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-      stream.a = setItems(this); return stream;
+      return mkStream(setItems(this));
     },
     "remove(Ljava/lang/Object;)Z": function (this: JSet, v: unknown) {
       const mk = mapKey(v);
@@ -1243,7 +1247,7 @@ function setMethods(): Methods {
     }),
     "toArray()[Ljava/lang/Object;": function (this: JSet) { return jarray(setItems(this)); },
     "toArray([Ljava/lang/Object;)[Ljava/lang/Object;": function (this: JSet, out: unknown[]) { return fillToArray(setItems(this), out); },
-    "toString()Ljava/lang/String;": function (this: JSet) { return "[" + setItems(this).join(", ") + "]"; },
+    "toString()Ljava/lang/String;": function (this: JSet) { return seqText(this, setItems(this)); },
     // Set equality is membership, not identity: an empty HashSet equals any empty Set.
     "equals(Ljava/lang/Object;)Z": driven(function* (this: JSet, o: unknown): Gen {
       if (o === this) return 1;
@@ -1963,13 +1967,7 @@ const absCollection: Methods = {
   "toArray([Ljava/lang/Object;)[Ljava/lang/Object;": driven(function* (this: JObj, out: unknown[]): Gen {
     return fillToArray(yield toJsArray(this), out);
   }),
-  "toString()Ljava/lang/String;": driven(function* (this: JObj): Gen {
-    const parts: string[] = [];
-    for (const x of yield toJsArray(this)) {
-      parts.push(x === this ? "(this Collection)" : x === null ? "null" : String(yield vcall(x, "toString", "()Ljava/lang/String;")));
-    }
-    return "[" + parts.join(", ") + "]";
-  }),
+  "toString()Ljava/lang/String;": function (this: JObj) { return after(toJsArray(this), (items) => seqText(this, items)); },
 };
 const bulkRemove = driven(function* bulkRemove(self: unknown, c: unknown, when: boolean): Gen<number> {
   if (c == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
@@ -2125,10 +2123,9 @@ const absMap: Methods = {
     return h;
   }),
   "toString()Ljava/lang/String;": driven(function* (this: JObj): Gen {
-    const s = async (x: unknown) => (x === this ? "(this Map)" : x === null ? "null" : String(await vcall(x, "toString", "()Ljava/lang/String;")));
-    const parts: string[] = [];
-    for (const e of yield mapEntries(this)) parts.push(`${yield s(yield entryKey(e))}=${yield s(yield entryVal(e))}`);
-    return "{" + parts.join(", ") + "}";
+    const entries: Ent[] = [];
+    for (const e of yield mapEntries(this)) entries.push({ k: yield entryKey(e), v: yield entryVal(e) });
+    return yield mapText(this, entries);
   }),
 };
 rt.register({
@@ -2287,14 +2284,10 @@ const collDefaults: Methods = {
   "removeIf(Ljava/util/function/Predicate;)Z": absCollection["removeIf(Ljava/util/function/Predicate;)Z"],
   "toArray()[Ljava/lang/Object;": absCollection["toArray()[Ljava/lang/Object;"],
   "stream()Ljava/util/stream/Stream;": driven(function* (this: JObj): Gen {
-    const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-    stream.a = yield toJsArray(this);
-    return stream;
+    return mkStream(yield toJsArray(this));
   }),
   "parallelStream()Ljava/util/stream/Stream;": driven(function* (this: JObj): Gen {
-    const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-    stream.a = yield toJsArray(this);
-    return stream;
+    return mkStream(yield toJsArray(this));
   }),
   "spliterator()Ljava/util/Spliterator;": driven(function* (this: JObj): Gen {
     const spliterator = rt.make("java/util/Spliterator") as JObj & { a: unknown[] };
@@ -2384,17 +2377,6 @@ rt.register({
 });
 rt.register({ name: "java/util/ListIterator", ctor: class extends JObj {}, ifaces: ["java/util/Iterator"] });
 
-// java.util.function.* — single-abstract-method interfaces. No dispatch logic
-// lives here (same as java/lang/Runnable): a lambda/class implementing one
-// compiles its own real method (get/apply/accept/test/...), so callers just
-// vcall() the selector by name. Only the marker registration is needed.
-for (const f of ["Supplier", "Function", "BiFunction", "Consumer", "BiConsumer", "Predicate",
-  "BiPredicate", "ToIntFunction", "ToLongFunction", "ToDoubleFunction", "IntFunction", "LongFunction",
-  "UnaryOperator", "BinaryOperator", "IntPredicate", "IntConsumer", "IntSupplier", "IntUnaryOperator",
-  "LongUnaryOperator", "IntBinaryOperator", "LongBinaryOperator"]) {
-  rt.register({ name: "java/util/function/" + f, ctor: class extends JObj {} });
-}
-
 type Fillable = { fill(v: unknown, s?: number, e?: number): unknown };
 const fill = (a: Fillable, v: unknown) => a.fill(v);
 const fillRange = (a: Fillable, f: number, t: number, v: unknown) => a.fill(v, f, t);
@@ -2455,15 +2437,13 @@ rt.register({
       const l = new JArraysList(); l.a = arr; return l;
     },
     "static stream([Ljava/lang/Object;)Ljava/util/stream/Stream;": (arr: unknown[]) => {
-      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-      stream.a = arr.slice();
-      return stream;
+      return mkStream(arr.slice());
     },
-    "static stream([J)Ljava/util/stream/LongStream;": (arr: BigInt64Array) => {
-      const stream = rt.make("java/util/stream/LongStream") as JObj & { a: bigint[] };
-      stream.a = Array.from(arr);
-      return stream;
-    },
+    "static stream([Ljava/lang/Object;II)Ljava/util/stream/Stream;": (arr: unknown[], from: number, to: number) => mkStream(arr.slice(from, to)),
+    "static stream([I)Ljava/util/stream/IntStream;": (arr: Int32Array) => mkIntStream(Array.from(arr)),
+    "static stream([III)Ljava/util/stream/IntStream;": (arr: Int32Array, from: number, to: number) => mkIntStream(Array.from(arr.subarray(from, to))),
+    "static stream([J)Ljava/util/stream/LongStream;": (arr: BigInt64Array) => mkLongStream(Array.from(arr)),
+    "static stream([D)Ljava/util/stream/DoubleStream;": (arr: Float64Array) => mkDoubleStream(Array.from(arr)),
     ...Object.fromEntries([..."BCSIJFD"].flatMap((t) => [[`static sort([${t})V`, taSort], [`static sort([${t}II)V`, taSort]])),
     "static toString([B)Ljava/lang/String;": (values: Int8Array | null) => values ? `[${Array.from(values).join(", ")}]` : "null",
     "static toString([S)Ljava/lang/String;": (values: Int16Array | null) => values ? `[${Array.from(values).join(", ")}]` : "null",

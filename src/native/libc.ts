@@ -20,7 +20,7 @@ import { procIdentity, sysconf } from "../shell/procfs";
 import { guestNow } from "../guest-clock";
 import { processEnv } from "../shell/environment";
 import { timersInit } from "./timers";
-import { syncShared, trackSharedMap } from "./mappings";
+import { isShared, syncShared, trackSharedMap } from "./mappings";
 
 /** bionic struct offsets/sizes, one block per ABI; LAYOUT is the process's, chosen in libcInit. */
 const LAYOUT32 = {
@@ -149,6 +149,8 @@ function strftime(fmt: string, tm: number): string {
     }
   });
 }
+function toTm(seconds: number, tm: number, utc: boolean): number { fillTm(tm, new Date(seconds * 1000), utc); return tm; }
+const mktime64 = (tm: number): bigint => BigInt(Math.floor(mktime(tm) / 1000));
 function mktime(tm: number): number {
   const [sec, min, hour, mday, mon, year] = readTm(tm);
   return new Date(year + 1900, mon, mday, hour, min, sec).getTime();
@@ -228,7 +230,7 @@ function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promise<HostR
   if (nr === (PTR === 8 ? 172 : 20)) return cpu.pid;                        // getpid
   if (nr === (PTR === 8 ? 278 : 384)) { const buf = a.p(), n = a.u(); if (n) fillRandom(buf, n); return n; } // getrandom
   if (nr === (PTR === 8 ? 122 : 241)) return 0;                             // sched_setaffinity: one core, nothing to pin
-  if (PTR === 8 && nr === 123) { const pid = a.i(), n = a.u(), set = a.p(); if (n < 8) return fail(cpu, E.INVAL); if (pid < 0) return fail(cpu, E.INVAL); mem.memset(set, 0, n); mem.st32(set, (1 << device.cpu.cores) - 1); return 8; }
+  if (nr === (PTR === 8 ? 123 : 242)) { const pid = a.i(), n = a.u(), set = a.p(); if (n < PTR || pid < 0) return fail(cpu, E.INVAL); mem.memset(set, 0, n); mem.st32(set, (1 << device.cpu.cores) - 1); return PTR; } // sched_getaffinity
   if (PTR === 8 && nr === 232) {
     const addr = a.va(), len = Number(a.va()), vec = a.p();
     if (addr & BigInt(PAGE_SIZE - 1) || !Number.isSafeInteger(len) || len <= 0) return fail(cpu, E.INVAL);
@@ -358,7 +360,9 @@ export function libcInit(): void {
       const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
       if (!Number.isSafeInteger(n) || n <= 0 || (flags & 0x10 && (hint & 4095n))) return failed(E.INVAL);
       const reserve = (flags & 0x20) !== 0 && prot === 0;
-      const p = flags & 0x10 ? hint : mem.mapVa(n, reserve);
+      // The core executes only below 4 GiB: code (PROT_EXEC now, or a JIT's code range hinted
+      // low and made executable later, as V8's is) must not land in a plane above it.
+      const p = flags & 0x10 ? hint : mem.mapVa(n, reserve, (prot & 4) !== 0 || (hint > 0n && hint < 0x1_0000_0000n));
       if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return failed(E.NOMEM);
       if (flags & 0x10 && !reserve) { syncShared(hint, n, true); invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
       if (fd !== -1 && !(flags & 0x20)) {
@@ -370,7 +374,9 @@ export function libcInit(): void {
     mmap64: (cpu, a) => M.mmap(cpu, a),
     munmap: (cpu, a) => { const va = a.va(), n = Number(a.va()); syncShared(va, n, true); return mem.unmapVa(va, n) ? 0 : fail(cpu, E.INVAL); },
     mremap: (cpu) => { fail(cpu, E.NOSYS); return PTR === 8 ? -1n : -1; },
-    madvise: (_c, a) => { const va = a.va(), n = Number(a.va()); if (a.i() === 4) mem.dropVa(va, n); return 0; },   // MADV_DONTNEED
+    // MADV_DONTNEED zero-fills anonymous memory; a shared file mapping refaults from the page
+    // cache, which already holds its stores, so its contents stay
+    madvise: (_c, a) => { const va = a.va(), n = Number(a.va()); if (a.i() === 4 && !isShared(va, n)) mem.dropVa(va, n); return 0; },
     msync: (cpu, a) => { const va = a.va(), n = Number(a.va()); if (va & 4095n) return fail(cpu, E.INVAL); syncShared(va, n, false); return 0; },
     mlock: () => 0, munlock: () => 0,
     // the raw syscalls a runtime issues past libc: futex is the one that must block
@@ -522,12 +528,19 @@ export function libcInit(): void {
     clock_getres: (_c, a) => { a.i(); const ts = a.p(); if (ts) { stp(ts + LAYOUT.TS_SEC, 0); stp(ts + LAYOUT.TS_NSEC, 1000); } return 0; },
     clock: () => Math.floor(performance.now() * 1000),
     times: () => Math.floor(performance.now() / 10),
-    localtime_r: (_c, a) => { const t = ldLong(a.p()), tm = a.p(); fillTm(tm, new Date(t * 1000), false); return ptr(tm); },
-    gmtime_r: (_c, a) => { const t = ldLong(a.p()), tm = a.p(); fillTm(tm, new Date(t * 1000), true); return ptr(tm); },
-    localtime: (_c, a) => { const t = ldLong(a.p()); fillTm(tmBuf, new Date(t * 1000), false); return tmBuf; },
-    gmtime: (_c, a) => { const t = ldLong(a.p()); fillTm(tmBuf, new Date(t * 1000), true); return tmBuf; },
+    localtime_r: (_c, a) => ptr(toTm(ldLong(a.p()), a.p(), false)),
+    gmtime_r: (_c, a) => ptr(toTm(ldLong(a.p()), a.p(), true)),
+    localtime: (_c, a) => toTm(ldLong(a.p()), tmBuf, false),
+    gmtime: (_c, a) => toTm(ldLong(a.p()), tmBuf, true),
     mktime: (_c, a) => { const t = Math.floor(mktime(a.p()) / 1000); return PTR === 8 ? BigInt(t) : t; },
     timegm: (_c, a) => { const t = timegm(a.p()); return PTR === 8 ? BigInt(t) : t; },
+    // bionic's <time64.h>, which 32-bit code uses past 2038: time64_t is 64-bit on every ABI
+    localtime64_r: (_c, a) => ptr(toTm(Number(mem.ld64(a.p())), a.p(), false)),
+    gmtime64_r: (_c, a) => ptr(toTm(Number(mem.ld64(a.p())), a.p(), true)),
+    localtime64: (_c, a) => toTm(Number(mem.ld64(a.p())), tmBuf, false),
+    gmtime64: (_c, a) => toTm(Number(mem.ld64(a.p())), tmBuf, true),
+    mktime64: (_c, a) => mktime64(a.p()),
+    timelocal64: (_c, a) => mktime64(a.p()),
     timegm64: (_c, a) => BigInt(timegm(a.p())),
     strftime: (_c, a) => { const d = a.p(), n = a.u(), f = a.str(), tm = a.p(); const s = utf8(strftime(f, tm)); if (s.length >= n) return 0; mem.write(d, s); mem.st8(d + s.length, 0); return s.length; },
     tzset: () => {},

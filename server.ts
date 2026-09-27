@@ -2,7 +2,7 @@ import index from "./index.html";
 import processIndex from "./process.html";
 import { WEB_PROXY_WORKER, WEB_FRAME } from "./src/shell/webinject";
 import { webDocument } from "./src/shell/webhtml";
-import { proxyRequest } from "./src/shell/proxy";
+import { forwardDnsMessage, proxyRequest } from "./src/shell/proxy";
 import { openInstall } from "./src/shell/install";
 import { EXT_MIME } from "./src/mime";
 import { prepareSystemPackages } from "./scripts/system-packages";
@@ -83,6 +83,7 @@ const server: Bun.Server<SocketData> = Bun.serve({
       return Response.json(url.origin);
     },
     "/webview-worker.js": () => new Response(WEB_PROXY_WORKER, { headers: { "content-type": "text/javascript", "cache-control": "no-cache" } }),
+    "/dns-query": forwardDnsMessage,
     "/proxy": (req) => proxyRequest(req, { target: proxyTarget, bridgeCall: (call) => webRelay.call(call),
       fetchUpstream: (url, init, encoded) => fetch(url, { ...init, decompress: !encoded }) }),
     // an apk's assets/ entry — what file:///android_asset/ resolves to inside a WebView. Path-shaped

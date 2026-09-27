@@ -12,7 +12,8 @@ import { fontResource } from "./fonts";
 import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
-import { localeDirection } from "../jvm/natives/jvalues";
+import { localeDirection, localeTag } from "../jvm/natives/jvalues";
+import { bestDateTimePattern } from "./icu";
 import { JPersistableBundle, bundleBox } from "./os";
 import { JLocaleList, readLocaleList } from "./resnative";
 import type { JLocale } from "../jvm/natives/jvalues";
@@ -769,7 +770,7 @@ rt.register({ name: "android/text/style/RelativeSizeSpan", ctor: JRelativeSizeSp
   "updateMeasureState(Landroid/text/TextPaint;)V": applyRelativeSize,
 } });
 
-export function drawStyledText(src: unknown, text: string, start: number, canvas: JCanvas, paint: JTextPaint, x: number, y: number, color = paint.color): Promise<void> | undefined {
+function drawStyledText(src: unknown, text: string, start: number, canvas: JCanvas, paint: JTextPaint, x: number, y: number, color = paint.color): Promise<void> | undefined {
   if (!(src instanceof JSpanned)) return;
   const end = start + text.length;
   const spans = src.spans.filter((r) => r.start < end && r.end > start && rt.iof(r.span, "android/text/style/CharacterStyle")
@@ -1069,25 +1070,7 @@ rt.register({
 });
 mkEnumSet("android/text/TextUtils$TruncateAt", ["START", "MIDDLE", "END", "MARQUEE"]);
 
-class JHtml extends JObj {}
-rt.register({
-  name: "android/text/Html", ctor: JHtml,
-  methods: {
-    "static fromHtml(Ljava/lang/String;)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
-    "static fromHtml(Ljava/lang/String;I)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
-    // the image getter and tag handler are the app's hooks for <img> and unknown tags; the
-    // stripping converter below has neither, so they are accepted and ignored
-    "static fromHtml(Ljava/lang/String;Landroid/text/Html$ImageGetter;Landroid/text/Html$TagHandler;)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
-    "static fromHtml(Ljava/lang/String;ILandroid/text/Html$ImageGetter;Landroid/text/Html$TagHandler;)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
-    "static toHtml(Landroid/text/Spanned;)Ljava/lang/String;": (sp: unknown) => spannedString(sp),
-    "static toHtml(Landroid/text/Spanned;I)Ljava/lang/String;": (sp: unknown) => spannedString(sp),
-    // AOSP withinStyle: the five markup characters and every non-ASCII code point as entities
-    "static escapeHtml(Ljava/lang/CharSequence;)Ljava/lang/String;": (cs: unknown) =>
-      String(cs).replace(/[<>&'"]|[^\x00-\x7f]/gu, (c) => c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "&" ? "&amp;" : c === "'" ? "&#39;" : c === "\"" ? "&quot;" : "&#" + c.codePointAt(0) + ";"),
-  },
-});
-for (const n of ["android/text/Html$ImageGetter", "android/text/Html$TagHandler",
-  "org/xml/sax/ContentHandler", "org/xml/sax/DTDHandler", "org/xml/sax/EntityResolver", "org/xml/sax/ErrorHandler"]) {
+for (const n of ["org/xml/sax/ContentHandler", "org/xml/sax/DTDHandler", "org/xml/sax/EntityResolver", "org/xml/sax/ErrorHandler"]) {
   rt.register({ name: n, ctor: class extends JObj {} });
 }
 type SaxAttr = { uri: string; local: string; qname: string; value: string };
@@ -1125,37 +1108,6 @@ rt.register({
     }),
   },
 });
-/** AOSP parses the markup and emits spans; the browser already has the parser, so use it —
- *  a stripper loses the bold/italic/link/quote structure AND every named entity. */
-const HTML_BLOCK = /^(P|DIV|LI|UL|OL|BLOCKQUOTE|H[1-6]|PRE|TABLE|TR)$/;
-function htmlToSpan(s: string): JSpannable {
-  const sp = new JSpannable();
-  if (typeof DOMParser === "undefined") { sp.text = s.replace(/<[^>]+>/g, ""); return sp; }
-  const mk = (n: string) => new (rt.link(n).ctor as new () => Record<string, unknown>)();
-  const walk = (node: Node) => {
-    for (const c of node.childNodes) {
-      if (c.nodeType === 3) { sp.text += c.nodeValue ?? ""; continue; }
-      if (c.nodeType !== 1) continue;
-      const el = c as Element, tag = el.tagName;
-      if (tag === "BR") { sp.text += "\n"; continue; }
-      const block = HTML_BLOCK.test(tag);
-      if (block && sp.text && !sp.text.endsWith("\n\n")) sp.text += "\n\n";
-      const start = sp.text.length;
-      walk(el);
-      const add = (span: unknown) => sp.spans.push({ span, start, end: sp.text.length, flags: 33 });
-      if (tag === "B" || tag === "STRONG") { const o = mk("android/text/style/StyleSpan"); o.style = 1; add(o); }
-      else if (tag === "I" || tag === "EM" || tag === "CITE") { const o = mk("android/text/style/StyleSpan"); o.style = 2; add(o); }
-      else if (tag === "U") add(mk("android/text/style/UnderlineSpan"));
-      else if (tag === "CODE" || tag === "PRE") add(mk("android/text/style/TypefaceSpan"));
-      else if (tag === "BLOCKQUOTE") add(mk("android/text/style/QuoteSpan"));
-      else if (tag === "A") { const o = mk("android/text/style/URLSpan"); o.url = el.getAttribute("href") ?? ""; add(o); }
-      if (block) sp.text += "\n\n";
-    }
-  };
-  walk(new DOMParser().parseFromString(s, "text/html").body);
-  sp.text = sp.text.replace(/\n{3,}/g, "\n\n").replace(/\s+$/, "");
-  return sp;
-}
 
 rt.register({
   name: "android/text/InputType", ctor: class extends JObj {},
@@ -1361,6 +1313,9 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "getEllipsisCount(I)I": function (this: JLayout, i: number) { return this.lines[i]?.ellipsis?.count ?? 0; },
   "getAlignment()Landroid/text/Layout$Alignment;": function (this: JLayout) { return this.alignment ?? rt.link("android/text/Layout$Alignment").ctor.s$ALIGN_NORMAL; },
   ...stubs(1, "getParagraphDirection(I)I"),
+  // every paragraph is left-to-right and these lines reserve no leading margin
+  "getParagraphLeft(I)I": () => 0,
+  "getParagraphRight(I)I": function (this: JLayout) { return this.width; },
   "getLineForVertical(I)I": function (this: JLayout, y: number) {
     if (this.tops) { let i = 0; while (i + 1 < this.lines.length && this.tops[i + 1] <= y) i++; return i; }
     return Math.max(0, Math.min(this.lines.length - 1, Math.floor((y - this.padTop) / this.lineHeight())));
@@ -1533,7 +1488,7 @@ rt.register({ name: "android/text/StaticLayout", ctor: JStaticLayout, sup: "andr
 
     },
 } });
-export function mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy: number = 0) {
+function mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy: number = 0) {
   const l = new JStaticLayout();
   return setupSpannedLayout(l, cs, p, w, mult, add, maxLines, includePad, breakStrategy);
 }
@@ -1564,6 +1519,8 @@ rt.register({
   name: "android/text/format/DateFormat", ctor: class extends JObj {},
   methods: {
     "static is24HourFormat(Landroid/content/Context;)Z": () => 0,
+    "static getBestDateTimePattern(Ljava/util/Locale;Ljava/lang/String;)Ljava/lang/String;": (locale: JLocale, skeleton: string) =>
+      bestDateTimePattern(localeTag(locale), skeleton),
     "static getDateFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "M/d/yy"),
     "static getTimeFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "h:mm a"),
     "static format(Ljava/lang/CharSequence;J)Ljava/lang/CharSequence;": (fmt: unknown, t: bigint) => formatDate(spannedString(fmt), Number(t)),
@@ -1709,12 +1666,12 @@ rt.register({
   methods: { "<init>()V": function () {}, "static getInstance()Landroid/text/method/MovementMethod;": () => linkMM, "canSelectArbitrarily()Z": () => 1 },
 });
 class JPasswordTransformation extends JObj {}
-const passwordTM = new JPasswordTransformation();
+export const passwordTransformation = new JPasswordTransformation();
 rt.register({
   name: "android/text/method/PasswordTransformationMethod", ctor: JPasswordTransformation, ifaces: ["android/text/method/TransformationMethod"],
   methods: {
     "<init>()V": function () {},
-    "static getInstance()Landroid/text/method/PasswordTransformationMethod;": () => passwordTM,
+    "static getInstance()Landroid/text/method/PasswordTransformationMethod;": () => passwordTransformation,
     "getTransformation(Ljava/lang/CharSequence;Landroid/view/View;)Ljava/lang/CharSequence;": driven(function* (s: unknown): Gen { return "\u2022".repeat((yield csText(s)).length); }),
     "onFocusChanged(Landroid/view/View;Ljava/lang/CharSequence;ZILandroid/graphics/Rect;)V": () => {},
   },

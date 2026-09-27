@@ -338,23 +338,6 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
   },
 });
-export class JRadioLP extends JLinearLP {}
-export function copyRadioLp(target: JRadioLP, source: JLayoutParams | null): JRadioLP {
-  marginCopy.call(target, source);
-  if (source instanceof JLinearLP) { target.weight = source.weight; target.gravity = source.gravity; }
-  return target;
-}
-rt.register({
-  name: "android/widget/RadioGroup$LayoutParams", ctor: JRadioLP, sup: "android/widget/LinearLayout$LayoutParams",
-  methods: {
-    "<init>(II)V": function (this: JRadioLP, w: number, h: number) { this.width = w; this.height = h; },
-    "<init>(IIF)V": function (this: JRadioLP, w: number, h: number, weight: number) { this.width = w; this.height = h; this.weight = weight; },
-    "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JRadioLP, source: JLayoutParams) { copyRadioLp(this, source); },
-    "<init>(Landroid/view/ViewGroup$MarginLayoutParams;)V": marginCopy,
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
-  },
-});
-
 // ── GridLayout: row/column specs, cell sizing, alignment, and weighted expansion.
 const GRID_UNDEFINED = -2147483648;
 class JGridAlignment extends JObj {

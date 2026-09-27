@@ -4,7 +4,10 @@ import { getPM } from "../src/android/pm";
 import { packages, type PackageRecord } from "../src/android/packages";
 import { vcall, newObj, vcallAsync } from "../src/jvm/natives/jlang";
 import { rt } from "../src/jvm/runtime";
-import { mangleMethod } from "../src/jvm/abi";
+import { scall } from "./java";
+
+rt.linkNatives();
+const messageDigest = (algorithm: string) => scall("java/security/MessageDigest", "getInstance", "(Ljava/lang/String;)Ljava/security/MessageDigest;", algorithm);
 
 describe("android-signing-certificate", () => {
   test("PackageManager compares installed signing certificates in raw and SHA-256 form", async () => {
@@ -27,14 +30,12 @@ describe("android-signing-certificate", () => {
 });
 
 describe("cipher-output-stream", () => {
-  rt.linkNatives();
-
   test("cipher streams encrypt on close and decrypt through reads", async () => {
     const keyBytes = Int8Array.from({ length: 16 }, (_, i) => i);
     const key = await newObj("javax/crypto/spec/SecretKeySpec", "([BLjava/lang/String;)V", keyBytes, "AES");
     const iv = await newObj("javax/crypto/spec/IvParameterSpec", "([B)V", new Int8Array(16));
-    const cipher = (rt.link("javax/crypto/Cipher").ctor as any)
-      [mangleMethod("getInstance", "(Ljava/lang/String;)Ljavax/crypto/Cipher;")]("AES/CBC/PKCS5Padding");
+    const newCipher = () => scall("javax/crypto/Cipher", "getInstance", "(Ljava/lang/String;)Ljavax/crypto/Cipher;", "AES/CBC/PKCS5Padding");
+    const cipher = await newCipher();
     await vcall(cipher, "init", "(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V", 1, key, iv);
     const out = await newObj("java/io/ByteArrayOutputStream", "()V");
     const stream = await newObj("javax/crypto/CipherOutputStream", "(Ljava/io/OutputStream;Ljavax/crypto/Cipher;)V", out, cipher);
@@ -45,8 +46,7 @@ describe("cipher-output-stream", () => {
     const webKey = await crypto.subtle.importKey("raw", new Uint8Array(keyBytes), "AES-CBC", false, ["decrypt"]);
     expect(new Uint8Array(await crypto.subtle.decrypt({ name: "AES-CBC", iv: new Uint8Array(16) }, webKey, new Uint8Array(ciphertext)))).toEqual(Uint8Array.of(1, 2, 3));
 
-    const decrypt = (rt.link("javax/crypto/Cipher").ctor as any)
-      [mangleMethod("getInstance", "(Ljava/lang/String;)Ljavax/crypto/Cipher;")]("AES/CBC/PKCS5Padding");
+    const decrypt = await newCipher();
     await vcall(decrypt, "init", "(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V", 2, key, iv);
     const input = await newObj("java/io/ByteArrayInputStream", "([B)V", ciphertext);
     const plain = await newObj("javax/crypto/CipherInputStream", "(Ljava/io/InputStream;Ljavax/crypto/Cipher;)V", input, decrypt);
@@ -60,11 +60,8 @@ describe("cipher-output-stream", () => {
 });
 
 describe("digest-output-stream", () => {
-  rt.linkNatives();
-
   test("DigestOutputStream forwards all writes and hashes only while enabled", async () => {
-    const digest = (rt.link("java/security/MessageDigest").ctor as any)
-      [mangleMethod("getInstance", "(Ljava/lang/String;)Ljava/security/MessageDigest;")]("SHA-256");
+    const digest = await messageDigest("SHA-256");
     const out = await newObj("java/io/ByteArrayOutputStream", "()V");
     const stream = await newObj("java/security/DigestOutputStream", "(Ljava/io/OutputStream;Ljava/security/MessageDigest;)V", out, digest);
     await vcall(stream, "write", "([B)V", Int8Array.of(2, 3));
@@ -78,8 +75,7 @@ describe("digest-output-stream", () => {
   });
 
   test("DigestInputStream hashes only bytes read while enabled", async () => {
-    const digest = (rt.link("java/security/MessageDigest").ctor as any)
-      [mangleMethod("getInstance", "(Ljava/lang/String;)Ljava/security/MessageDigest;")]("SHA-256");
+    const digest = await messageDigest("SHA-256");
     const input = await newObj("java/io/ByteArrayInputStream", "([B)V", Int8Array.of(1, 2, 3, 4, 5));
     const stream = await newObj("java/security/DigestInputStream", "(Ljava/io/InputStream;Ljava/security/MessageDigest;)V", input, digest);
     const bytes = new Int8Array(4);
@@ -96,13 +92,12 @@ describe("digest-output-stream", () => {
 });
 
 describe("digest-sha512", () => {
-  rt.linkNatives();
   test("SHA-512 and SHA-384 accept incremental input and reset after digest", async () => {
     for (const [algorithm, expected, empty] of [
       ["SHA-512", "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f", "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"],
       ["SHA384", "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7", "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b"],
     ]) {
-      const digest = await vcall(rt.link("java/security/MessageDigest").ctor, "getInstance", "(Ljava/lang/String;)Ljava/security/MessageDigest;", algorithm);
+      const digest = await messageDigest(algorithm);
       await vcall(digest, "update", "(B)V", 97);
       const value: Int8Array = await vcall(digest, "digest", "([B)[B", new Int8Array([98, 99]));
       expect(Buffer.from(value).toString("hex")).toBe(expected);
@@ -113,11 +108,8 @@ describe("digest-sha512", () => {
 });
 
 describe("key-generator", () => {
-  rt.linkNatives();
-
   test("Blowfish key generator returns fresh 128-bit raw keys by default", async () => {
-    const generator = (rt.link("javax/crypto/KeyGenerator").ctor as any)
-      [mangleMethod("getInstance", "(Ljava/lang/String;)Ljavax/crypto/KeyGenerator;")]("Blowfish");
+    const generator = await scall("javax/crypto/KeyGenerator", "getInstance", "(Ljava/lang/String;)Ljavax/crypto/KeyGenerator;", "Blowfish");
     const first = await vcall(generator, "generateKey", "()Ljavax/crypto/SecretKey;");
     const second = await vcall(generator, "generateKey", "()Ljavax/crypto/SecretKey;");
     const bytes = await vcall(first, "getEncoded", "()[B") as Int8Array;
@@ -128,32 +120,19 @@ describe("key-generator", () => {
 });
 
 describe("message-digest-buffer", () => {
-  rt.linkNatives();
-
-  function staticMethod(cls: string, name: string, descriptor: string): (...args: unknown[]) => unknown {
-    const method: unknown = Reflect.get(rt.link(cls).ctor, mangleMethod(name, descriptor));
-    if (typeof method !== "function") throw new Error(`Missing ${cls}.${name}${descriptor}`);
-    return (...args) => Reflect.apply(method, null, args);
-  }
-
   test("MessageDigest consumes only the remaining ByteBuffer bytes", async () => {
-    const wrap = staticMethod("java/nio/ByteBuffer", "wrap", "([BII)Ljava/nio/ByteBuffer;");
-    const getDigest = staticMethod("java/security/MessageDigest", "getInstance", "(Ljava/lang/String;)Ljava/security/MessageDigest;");
-    const buffer = wrap(new Int8Array([1, 2, 3, 4]), 1, 2);
-    const digest = getDigest("SHA-256");
+    const buffer = await scall("java/nio/ByteBuffer", "wrap", "([BII)Ljava/nio/ByteBuffer;", new Int8Array([1, 2, 3, 4]), 1, 2);
+    const digest = await messageDigest("SHA-256");
     await vcall(digest, "update", "(Ljava/nio/ByteBuffer;)V", buffer);
     expect(await vcall(buffer, "position", "()I")).toBe(3);
     const actual = await vcall(digest, "digest", "()[B");
-    const expected = getDigest("SHA-256");
+    const expected = await messageDigest("SHA-256");
     await vcall(expected, "update", "([B)V", new Int8Array([2, 3]));
     expect([...actual]).toEqual([...(await vcall(expected, "digest", "()[B"))]);
   });
 });
 
 describe("signature", () => {
-  rt.linkNatives();
-
-  const vcallStatic = (cls: string, name: string, desc: string, ...args: unknown[]) => (rt.link(cls).ctor as any)[mangleMethod(name, desc)](...args);
   /** the Java class of what `f` throws, synchronously or as a rejection */
   const thrown = async (f: () => unknown) => { try { await f(); } catch (e) { return javaClass(e); } return "nothing"; };
 
@@ -161,12 +140,12 @@ describe("signature", () => {
   const javaClass = (e: unknown) => (e as any)?.constructor?.$i?.name;
 
   async function keyPair(algo: string, size: number) {
-    const gen = await vcallStatic("java/security/KeyPairGenerator", "getInstance", "(Ljava/lang/String;)Ljava/security/KeyPairGenerator;", algo);
+    const gen = await scall("java/security/KeyPairGenerator", "getInstance", "(Ljava/lang/String;)Ljava/security/KeyPairGenerator;", algo);
     await vcall(gen, "initialize", "(I)V", size);
     return vcall(gen, "generateKeyPair", "()Ljava/security/KeyPair;");
   }
   async function sign(algo: string, priv: unknown, data: Int8Array, spec?: unknown): Promise<Int8Array> {
-    const s = await vcallStatic("java/security/Signature", "getInstance", "(Ljava/lang/String;)Ljava/security/Signature;", algo);
+    const s = await scall("java/security/Signature", "getInstance", "(Ljava/lang/String;)Ljava/security/Signature;", algo);
     await vcall(s, "initSign", "(Ljava/security/PrivateKey;)V", priv);
     if (spec) await vcall(s, "setParameter", "(Ljava/security/spec/AlgorithmParameterSpec;)V", spec);
     await vcall(s, "update", "([BII)V", data, 0, 3);
@@ -174,7 +153,7 @@ describe("signature", () => {
     return vcall(s, "sign", "()[B");
   }
   async function verify(algo: string, pub: unknown, data: Int8Array, sig: Int8Array, spec?: unknown): Promise<number> {
-    const s = await vcallStatic("java/security/Signature", "getInstance", "(Ljava/lang/String;)Ljava/security/Signature;", algo);
+    const s = await scall("java/security/Signature", "getInstance", "(Ljava/lang/String;)Ljava/security/Signature;", algo);
     await vcall(s, "initVerify", "(Ljava/security/PublicKey;)V", pub);
     if (spec) await vcall(s, "setParameter", "(Ljava/security/spec/AlgorithmParameterSpec;)V", spec);
     await vcall(s, "update", "([B)V", data);
@@ -216,9 +195,9 @@ describe("signature", () => {
   });
 
   test("unknown algorithms, null providers and uninitialized use are rejected", async () => {
-    expect(await thrown(() => vcallStatic("java/security/Signature", "getInstance", "(Ljava/lang/String;)Ljava/security/Signature;", "MD2withDSA"))).toBe("java/security/NoSuchAlgorithmException");
-    expect(await thrown(() => vcallStatic("java/security/Signature", "getInstance", "(Ljava/lang/String;Ljava/security/Provider;)Ljava/security/Signature;", "SHA256withRSA", null))).toBe("java/lang/IllegalArgumentException");
-    const s = await vcallStatic("java/security/Signature", "getInstance", "(Ljava/lang/String;Ljava/security/Provider;)Ljava/security/Signature;", "SHA256withRSA", await newObj("java/security/Provider"));
+    expect(await thrown(() => scall("java/security/Signature", "getInstance", "(Ljava/lang/String;)Ljava/security/Signature;", "MD2withDSA"))).toBe("java/security/NoSuchAlgorithmException");
+    expect(await thrown(() => scall("java/security/Signature", "getInstance", "(Ljava/lang/String;Ljava/security/Provider;)Ljava/security/Signature;", "SHA256withRSA", null))).toBe("java/lang/IllegalArgumentException");
+    const s = await scall("java/security/Signature", "getInstance", "(Ljava/lang/String;Ljava/security/Provider;)Ljava/security/Signature;", "SHA256withRSA", await newObj("java/security/Provider"));
     expect(await thrown(() => vcall(s, "update", "([B)V", bytes("x")))).toBe("java/security/SignatureException");
     const pair: any = await keyPair("EC", 256);
     expect(await thrown(() => vcallAsync(s, "initSign", "(Ljava/security/PrivateKey;)V", pair.privateKey).then(() => vcall(s, "sign", "()[B")))).toBe("java/security/InvalidKeyException");
@@ -226,8 +205,6 @@ describe("signature", () => {
 });
 
 describe("ssl-parameters", () => {
-  rt.linkNatives();
-
   test("SSL sockets copy application protocols and report no selection before handshake", async () => {
     const socket = await newObj("javax/net/ssl/SSLSocket");
     const parameters = await vcall(socket, "getSSLParameters", "()Ljavax/net/ssl/SSLParameters;");

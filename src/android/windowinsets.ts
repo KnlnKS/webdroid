@@ -46,10 +46,13 @@ const rootInsets = new WeakMap<JView, { top: number; bottom: number; vis: number
 export function rootWindowInsets(view?: JView): JWindowInsets {
   let root = view;
   while (root?.parent) root = root.parent;
-  const flags = root?.windowOwner?.flags ?? 0, sysUi = root?.systemUiVisibility ?? 0;
-  const hidden = (root?.windowOwner?.hiddenInsets ?? 0) | (flags & 1024 || sysUi & 4 ? 1 : 0) | (sysUi & 2 ? 2 : 0);
+  const win = root?.windowOwner, flags = win?.flags ?? 0, sysUi = root?.systemUiVisibility ?? 0;
+  const hidden = (win?.hiddenInsets ?? 0) | (flags & 1024 || sysUi & 4 ? 1 : 0) | (sysUi & 2 ? 2 : 0);
   const top = Math.max(0, device.statusBar - (root?.top ?? 0));
-  const bottom = Math.max(0, (root?.bottom || device.height) - (device.height - device.navBar));
+  // an activity window's frame is the screen; insets dispatch before layout, so after a rotation
+  // its root would still report the old frame
+  const frameBottom = win?.activity && !win.dialog ? device.height : root?.bottom || device.height;
+  const bottom = Math.max(0, frameBottom - (device.height - device.navBar));
   const vis = ~((1 << IT_IME) | (1 << IT_CUTOUT) | (1 << IT_CAPTION) | (device.statusBar ? 0 : 1 << IT_STATUS) | hidden);
   const cached = root && rootInsets.get(root);
   if (cached && cached.top === top && cached.bottom === bottom && cached.vis === vis) return cached.value;

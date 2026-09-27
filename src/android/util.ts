@@ -235,7 +235,8 @@ export class JDisplayMetrics extends JObj {
 }
 rt.register({
   name: "android/util/DisplayMetrics", ctor: JDisplayMetrics,
-  statics: { DENSITY_DEFAULT: 160 },
+  statics: { DENSITY_DEFAULT: 160, DENSITY_DEVICE_STABLE: device.densityDpi, DENSITY_LOW: 120, DENSITY_MEDIUM: 160, DENSITY_TV: 213,
+    DENSITY_HIGH: 240, DENSITY_XHIGH: 320, DENSITY_XXHIGH: 480, DENSITY_XXXHIGH: 640 },
   fields: ["density", "densityDpi", "scaledDensity", "widthPixels", "heightPixels", "xdpi", "ydpi"],
   methods: { "<init>()V": function () {}, "setTo(Landroid/util/DisplayMetrics;)V": function (this: JDisplayMetrics, o: JDisplayMetrics) { Object.assign(this, o); } },
 });

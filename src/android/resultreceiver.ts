@@ -1,6 +1,6 @@
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
-import { JBinder } from "./binder";
+import { JBinder, INTERFACE_TRANSACTION } from "./binder";
 import { JParcel, parcelCreator } from "./parcel";
 import { JFnRunnable, type JHandler, type JBundle } from "./os";
 
@@ -8,7 +8,7 @@ class JResultReceiver extends JObj { handler: JHandler | null = null; binder: JO
 class JResultBinder extends JBinder { receiver!: JResultReceiver; }
 rt.register({ name: "webdroid/ResultReceiverBinder", ctor: JResultBinder, sup: "android/os/Binder", methods: {
   "onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JResultBinder, code: number, data: JParcel, reply: JParcel | null): Gen {
-    if (code === 0x5f4e5446 && reply) { yield vcall(reply, "writeString", "(Ljava/lang/String;)V", "android.os.IResultReceiver"); return 1; }
+    if (code === INTERFACE_TRANSACTION && reply) { yield vcall(reply, "writeString", "(Ljava/lang/String;)V", "android.os.IResultReceiver"); return 1; }
     if (code !== 1) return 0;
     yield vcall(data, "enforceInterface", "(Ljava/lang/String;)V", "android.os.IResultReceiver");
     const result = yield vcall(data, "readInt", "()I");

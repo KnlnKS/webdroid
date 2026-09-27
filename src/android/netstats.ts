@@ -33,4 +33,3 @@ rt.register({
     },
   },
 });
-rt.markers("android/app/usage/StorageStatsManager");
