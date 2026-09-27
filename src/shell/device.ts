@@ -24,7 +24,7 @@ import { getPrefs } from "../android/sharedprefs";
 import { JMenu, pushMenuToBar } from "../android/menu";
 import { JContext } from "../android/context";
 import { attachProvider } from "../android/contentresolver";
-import { reportUncaught, JBundle, runFrameCallbacks, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
+import { reportUncaught, JBundle, runFrameCallbacks, PROCESS_PID, setProcessIdentity, setProcessName, pressBackKey } from "../android/os";
 import { packageUid, packages } from "../android/packages";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
 import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setViewTargetSdk, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
@@ -99,6 +99,8 @@ interface BootedApp {
   label: string;
   /** manifest <activity> nodes by class name, as launch modes are read from them */
   activities: Map<string, XmlNode>;
+  /** moveTaskToBack put the task behind the home screen */
+  background: boolean;
 }
 let booted: BootedApp | null = null;
 let applicationNightOverride: boolean | null = null;
@@ -219,6 +221,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
       await windowFocus(a, true);
     },
     recreateActivity: (a) => { recreateActivity(a); },
+    moveTaskToBack: () => { void onMain(sendTaskToBack); },
     setRequestedOrientation: (a, orientation) => { changeActivityOrientation(a, orientation); },
     setApplicationNightMode: (mode) => { setApplicationNightMode(pkg, mode); },
     setApplicationLocales: (locales) => { setApplicationLocales(pkg, locales); },
@@ -275,7 +278,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     }
 
     // only the app's own process answers the launcher; a child process runs components
-    booted = { host, mainActivityCls: processName ? "" : mainActivity ?? "", stack: [], label, activities };
+    booted = { host, mainActivityCls: processName ? "" : mainActivity ?? "", stack: [], label, activities, background: false };
     if (booted.mainActivityCls) {
       onStatus("Opening app…");
       await launchMain();
@@ -579,25 +582,36 @@ export function finishTask(taskId: number, resume: boolean): Promise<void> {
   });
 }
 
+/** Home is showing: the last activity finished, or the task was moved to the back. */
+const atHome = () => !!booted?.mainActivityCls && (!booted.stack.length || booted.background);
+async function sendTaskToBack(): Promise<void> {
+  if (!booted || booted.background) return;
+  booted.background = true;
+  await activityVisibility0("pause");
+  await activityVisibility0("stop");
+  uiState.needsDraw = true;
+}
 export function activityVisibility(phase: "pause" | "stop" | "resume" | "visible"): Promise<void> {
-  return onMain(async () => {
-    const act = booted?.host.currentActivity();
-    // returning to an app whose last activity finished starts it again, as its icon would
-    if (!act) { if (phase === "resume") await launchMain(); return; }
-    if (phase === "pause") {
-      if (act.resumed) await pauseActivity(act);
-      await windowFocus(act, false);
-    } else if (phase === "stop") {
-      for (const covered of booted!.stack) if (covered.started) await stopActivity(covered);
-    } else {
-      for (const visible of visibleActivities()) await startActivity(visible);
-      if (phase === "resume") {
-        await resumeActivity(act);
-        await windowFocus(act, true);
-      }
-      uiState.needsLayout = uiState.needsDraw = true;
+  return onMain(() => activityVisibility0(phase));
+}
+async function activityVisibility0(phase: "pause" | "stop" | "resume" | "visible"): Promise<void> {
+  if (phase === "resume" && booted) booted.background = false;
+  const act = booted?.host.currentActivity();
+  // returning to an app whose last activity finished starts it again, as its icon would
+  if (!act) { if (phase === "resume") await launchMain(); return; }
+  if (phase === "pause") {
+    if (act.resumed) await pauseActivity(act);
+    await windowFocus(act, false);
+  } else if (phase === "stop") {
+    for (const covered of booted!.stack) if (covered.started) await stopActivity(covered);
+  } else {
+    for (const visible of visibleActivities()) await startActivity(visible);
+    if (phase === "resume") {
+      await resumeActivity(act);
+      await windowFocus(act, true);
     }
-  });
+    uiState.needsLayout = uiState.needsDraw = true;
+  }
 }
 
 const buildOptionsMenu = driven(function* buildOptionsMenu(act: JActivity): Gen {
@@ -628,7 +642,7 @@ const pressBack0 = driven(function* pressBack0(): Gen<void> {
   try {
     if (top?.onBack) yield top.onBack();
     else if (top?.dismissOnOutside) yield dismissOverlay(top);
-    else if (act) yield vcall(act, "onBackPressed", "()V");
+    else if (act && !booted!.background) yield pressBackKey(act);
   } catch (e) { reportUncaught(e); }
 });
 
@@ -684,11 +698,11 @@ const tick0 = driven(function* tick0(): Gen {
     const activities = visibleActivities();
     const act = activities.at(-1);
     const decor = act?.window.decor;
-    if (!decor) {
-      if (startWin && uiState.needsDraw) {
+    if (!decor || booted?.background) {
+      if (startWin && uiState.needsDraw && !booted?.background) {
         uiState.needsDraw = false;
         yield drawStartWin(startWin);
-      } else if (booted?.mainActivityCls && !booted.stack.length && uiState.needsDraw) {
+      } else if (atHome() && uiState.needsDraw) {
         // the last activity finished: the home screen, not its final frame, is what shows
         uiState.needsDraw = false;
         ctx.fillStyle = "#000";
@@ -843,6 +857,8 @@ export function dispatchPointer(action: number, x: number, y: number, at = guest
   return onMain(() => dispatchPointer0(action, x, y, at)).finally(() => { perf.inputMs += performance.now() - t0; });
 }
 const dispatchPointer0 = driven(function* dispatchPointer0(action: number, x: number, y: number, t: number): Gen<void> {
+  // a tap on the home screen is a tap on the app's icon
+  if (atHome()) { if (action === 1) yield activityVisibility0("resume"); return; }
   const window = booted?.stack.at(-1)?.window, decor = window?.decor;
   if (!decor) return;
   const ev = new JMotionEvent();

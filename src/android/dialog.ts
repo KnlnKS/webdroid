@@ -14,7 +14,7 @@ import { themeAccent } from "./widget";
 import { JCanvas, tfMedium , JRect } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
-import { reportUncaught } from "./os";
+import { reportUncaught, pressBackKey, dispatchKeyToCallback, backKeyMethods, type JKeyEvent } from "./os";
 import { rvInt, rvDimen, askTheme, themeOf } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
@@ -161,6 +161,7 @@ class JDialog extends JObj {
   cancelable = true;
   canceledOnTouchOutside = true;
   cancelL: unknown = null;
+  keyL: unknown = null;
   dismissL: unknown = null;
   showL: unknown = null;
   dismissImpl(): unknown { return rt.drive(this.dismissImpl$()); }
@@ -251,7 +252,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     const root = this.ensureRoot();
     yield loadCardBg(root);
     const win: JWindow = yield vcall(this, "getWindow", "()Landroid/view/Window;");
-    const overlay = addOverlay(root, 0, 0, false, () => vcall(this, "onBackPressed", "()V"), () => this.cancel());
+    const overlay = addOverlay(root, 0, 0, false, () => pressBackKey(this), () => this.cancel());
     overlay.dim = () => windowDim(win);
     overlay.modal = true;
     const f = jmethod(this, M_onCreate);
@@ -313,11 +314,18 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "onBackPressed()V": function (this: JDialog) { if (this.cancelable) return this.cancel(); },
   "onTouchEvent(Landroid/view/MotionEvent;)Z": function (this: JDialog, event: JMotionEvent) { return dialogTouch(this, event); },
 
+  "setOnKeyListener(Landroid/content/DialogInterface$OnKeyListener;)V": function (this: JDialog, l: unknown) { this.keyL = l; },
+  // Dialog.dispatchKeyEvent: its OnKeyListener, then the window's views, then KeyEvent.dispatch
+  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JDialog, ev: JKeyEvent): Gen {
+    if (this.keyL && (yield vcall(this.keyL, "onKey", "(Landroid/content/DialogInterface;ILandroid/view/KeyEvent;)Z", this, ev.keyCode, ev))) return 1;
+    if (this.root && (yield vcall(this.root, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", ev))) return 1;
+    return dispatchKeyToCallback(this, ev);
+  }),
+  ...backKeyMethods,
   // Window.Callback, as Dialog's defaults
   "onContentChanged()V": function () {},
   "onSaveInstanceState()Landroid/os/Bundle;": () => rt.make("android/os/Bundle"),
   ...noops("onCreate(Landroid/os/Bundle;)V", "onStart()V", "onStop()V",
-    "setOnKeyListener(Landroid/content/DialogInterface$OnKeyListener;)V",
     "create()V", "onAttachedToWindow()V", "onDetachedFromWindow()V",
     "onWindowAttributesChanged(Landroid/view/WindowManager$LayoutParams;)V", "onWindowFocusChanged(Z)V",
     "onPanelClosed(ILandroid/view/Menu;)V", "onActionModeStarted(Landroid/view/ActionMode;)V",
@@ -329,11 +337,9 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
     "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;"),
   ...stubs(0, "dispatchTouchEvent(Landroid/view/MotionEvent;)Z", "onSearchRequested()Z",
     "onSearchRequested(Landroid/view/SearchEvent;)Z", "onCreatePanelMenu(ILandroid/view/Menu;)Z",
-    "onMenuItemSelected(ILandroid/view/MenuItem;)Z", "dispatchKeyEvent(Landroid/view/KeyEvent;)Z",
-    "dispatchKeyShortcutEvent(Landroid/view/KeyEvent;)Z", "dispatchTrackballEvent(Landroid/view/MotionEvent;)Z",
+    "onMenuItemSelected(ILandroid/view/MenuItem;)Z", "dispatchKeyShortcutEvent(Landroid/view/KeyEvent;)Z", "dispatchTrackballEvent(Landroid/view/MotionEvent;)Z",
     "dispatchGenericMotionEvent(Landroid/view/MotionEvent;)Z",
-    "dispatchPopulateAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)Z",
-    "onKeyDown(ILandroid/view/KeyEvent;)Z", "onKeyUp(ILandroid/view/KeyEvent;)Z"),
+    "dispatchPopulateAccessibilityEvent(Landroid/view/accessibility/AccessibilityEvent;)Z"),
 };
 rt.register({
   name: "android/app/Dialog", ctor: JDialog,

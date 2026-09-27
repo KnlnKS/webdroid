@@ -24,6 +24,8 @@ export interface AppHost {
   roundTrip: (activity: JActivity) => Promise<void>;
   finishActivity: (activity: JActivity) => void;
   recreateActivity: (activity: JActivity) => void;
+  /** Activity.moveTaskToBack: the task leaves the screen until the app is brought back */
+  moveTaskToBack: () => void;
   setRequestedOrientation: (activity: JActivity, orientation: number) => void;
   setApplicationNightMode: (mode: number) => void;
   /** LocaleManager.setApplicationLocales: persist the list and deliver the configuration change */

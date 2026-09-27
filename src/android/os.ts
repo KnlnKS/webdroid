@@ -1120,7 +1120,28 @@ rt.register({ name: "android/view/Choreographer$FrameCallback", ctor: class exte
   "doFrame(J)V": () => { throw rt.mkThrowable("java/lang/AbstractMethodError", "android.view.Choreographer.FrameCallback.doFrame"); },
 } });
 
-class JKeyEvent extends JObj { action = 0; keyCode = 0; }
+export class JKeyEvent extends JObj { action = 0; keyCode = 0; tracking = false; canceled = false; }
+const KEYCODE_BACK = 4, M_dispatchKey = "(Landroid/view/KeyEvent;)Z";
+/** A BACK press as ViewRootImpl delivers it to a window's callback: DOWN, then an UP that carries
+ *  FLAG_TRACKING when the DOWN's receiver started tracking it (KeyEvent.DispatcherState). */
+export const pressBackKey = driven(function* pressBackKey(callback: JObj): Gen {
+  const down = Object.assign(new JKeyEvent(), { keyCode: KEYCODE_BACK });
+  yield vcall(callback, "dispatchKeyEvent", M_dispatchKey, down);
+  yield vcall(callback, "dispatchKeyEvent", M_dispatchKey, Object.assign(new JKeyEvent(), { action: 1, keyCode: KEYCODE_BACK, tracking: down.tracking }));
+});
+/** KeyEvent.dispatch to an Activity or Dialog: onKeyDown/onKeyUp by action */
+export const dispatchKeyToCallback = (callback: JObj, ev: JKeyEvent) => ev.action === 0 ? vcall(callback, "onKeyDown", "(ILandroid/view/KeyEvent;)Z", ev.keyCode, ev)
+  : ev.action === 1 ? vcall(callback, "onKeyUp", "(ILandroid/view/KeyEvent;)Z", ev.keyCode, ev) : 0;
+/** Activity's and Dialog's own onKeyDown/onKeyUp: a BACK DOWN is tracked, and its tracked,
+ *  uncanceled UP is onBackPressed */
+export const backKeyMethods = {
+  "onKeyDown(ILandroid/view/KeyEvent;)Z": (code: number, ev: JKeyEvent) => { if (code !== KEYCODE_BACK) return 0; ev.tracking = true; return 1; },
+  "onKeyUp(ILandroid/view/KeyEvent;)Z": driven(function* (this: JObj, code: number, ev: JKeyEvent): Gen {
+    if (code !== KEYCODE_BACK || !ev.tracking || ev.canceled) return 0;
+    yield vcall(this, "onBackPressed", "()V");
+    return 1;
+  }),
+};
 rt.register({
   name: "android/view/KeyEvent", ctor: JKeyEvent, ifaces: ["android/os/Parcelable"],
   statics: {
@@ -1134,6 +1155,10 @@ rt.register({
   },
   methods: {
     "<init>(II)V": function (this: JKeyEvent, a: number, k: number) { this.action = a; this.keyCode = k; },
+    "<init>(JJIII)V": function (this: JKeyEvent, _down: bigint, _at: bigint, a: number, k: number) { this.action = a; this.keyCode = k; },
+    "startTracking()V": function (this: JKeyEvent) { this.tracking = true; },
+    "isTracking()Z": function (this: JKeyEvent) { return +this.tracking; },
+    "isCanceled()Z": function (this: JKeyEvent) { return +this.canceled; },
     "static getDeadChar(II)I": deadChar,
     "static getMaxKeyCode()I": () => keyCodes.size - 1,
     "static keyCodeFromString(Ljava/lang/String;)I": (name: string) => {
@@ -1162,9 +1187,8 @@ rt.register({
       yield vcall(p, "writeInt", "(I)V", this.action);
       yield vcall(p, "writeInt", "(I)V", this.keyCode);
     }),
-    ...stubs(0, "getRepeatCount()I", "getUnicodeChar()I", "hasModifiers(I)Z", "isTracking()Z", "isCanceled()Z"),
+    ...stubs(0, "getRepeatCount()I", "getUnicodeChar()I", "hasModifiers(I)Z"),
     ...stubs(1, "hasNoModifiers()Z"),
-    ...noops("startTracking()V"),
   },
 });
 rt.markers("android/view/KeyEvent$Callback");

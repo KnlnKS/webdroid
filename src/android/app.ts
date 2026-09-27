@@ -6,7 +6,7 @@ import {
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
 import { jarray } from "../jvm/abi";
-import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME, mkPfd } from "./os";
+import { reportUncaught, JBundle, PARCELABLE, PROCESS_PID, PROCESS_UID, PROCESS_NAME, mkPfd, backKeyMethods, dispatchKeyToCallback, type JKeyEvent } from "./os";
 import { type NativeSpec, rt, callSelf, JObj, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { getInflater, inflateLayout } from "./inflate";
 import { ensureDecor } from "./decor";
@@ -322,6 +322,12 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "finishAffinity()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
   "finishAfterTransition()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
   "isTaskRoot()Z": function (this: JActivity) { return +(activityTransport.isTaskRoot?.(this) ?? false); },
+  // only the task's root may move it unless nonRoot says any activity may
+  "moveTaskToBack(Z)Z": function (this: JActivity, nonRoot: number) {
+    if (!nonRoot && !(activityTransport.isTaskRoot?.(this) ?? this.$host.activities()[0] === this)) return 0;
+    this.$host.moveTaskToBack();
+    return 1;
+  },
   // AOSP's startActivityForResult only *starts* something; the result arrives later through
   // onActivityResult, which launchIntent arranges without waiting on a system activity's UI.
   "startActivityForResult(Landroid/content/Intent;I)V": function (this: JActivity, intent: JIntent, code: number) {
@@ -416,9 +422,16 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     "setFinishOnTouchOutside(Z)V"),
   ...stubs(1, "onCreateOptionsMenu(Landroid/view/Menu;)Z", "onPrepareOptionsMenu(Landroid/view/Menu;)Z",
     "onMenuOpened(ILandroid/view/Menu;)Z"),
+  ...backKeyMethods,
+  // Activity.dispatchKeyEvent: the window's view tree first, then KeyEvent.dispatch to the activity
+  "dispatchKeyEvent(Landroid/view/KeyEvent;)Z": driven(function* (this: JActivity, ev: JKeyEvent): Gen {
+    yield vcall(this, "onUserInteraction", "()V");
+    const decor = this.window.decor;
+    if (decor && (yield vcall(decor, "dispatchKeyEvent", "(Landroid/view/KeyEvent;)Z", ev))) return 1;
+    return dispatchKeyToCallback(this, ev);
+  }),
   ...stubs(0, "onOptionsItemSelected(Landroid/view/MenuItem;)Z", "onSearchRequested()Z",
-    "onSearchRequested(Landroid/view/SearchEvent;)Z", "onKeyDown(ILandroid/view/KeyEvent;)Z",
-    "onKeyUp(ILandroid/view/KeyEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
+    "onSearchRequested(Landroid/view/SearchEvent;)Z", "onTouchEvent(Landroid/view/MotionEvent;)Z", "getChangingConfigurations()I",
     "shouldShowRequestPermissionRationale(Ljava/lang/String;)Z",
     "isInMultiWindowMode()Z", "isInPictureInPictureMode()Z", "isLaunchedFromBubble()Z"),
   ...stubs(null, "onWindowStartingActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;",
