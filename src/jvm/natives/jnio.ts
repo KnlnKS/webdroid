@@ -3,11 +3,18 @@
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { defineException, vcall } from "./jlang";
 import { mem } from "../../native/mem";
+import { MEM_SIZE, MEM_SIZE_INITIAL } from "../../native/abi";
 import { charsToString } from "../abi";
 import { charsetName, decodeString, encodeString } from "../charset";
 
-type BufferStorage = { kind: "heap"; ab: ArrayBuffer; array: ArrayBufferView } | { kind: "direct"; ab: ArrayBuffer } | { kind: "native"; address: number | bigint };
+/** A native buffer from allocateDirect keeps ART's accessible backing array: a view over its own guest bytes. */
+type BufferStorage = { kind: "heap"; ab: ArrayBuffer; array: ArrayBufferView } | { kind: "direct"; ab: ArrayBuffer } | { kind: "native"; address: number | bigint; array?: Int8Array };
 const directBuffers = new FinalizationRegistry<number>((address) => mem.free(address));
+function accessibleArray(b: JBuffer): ArrayBufferView | null {
+  const s = b.backing.storage, array = s.kind === "direct" ? undefined : s.array;
+  return array && !b.readOnly && (array as Uint8Array).BYTES_PER_ELEMENT === 2 ** b.elemShift &&
+    (!(b instanceof JCharBuffer) || array instanceof Uint16Array) ? array : null;
+}
 
 export class JBuffer extends JObj {
   backing!: { storage: BufferStorage };
@@ -66,16 +73,11 @@ function bufferBaseMethods(): NativeSpec["methods"] {
     "hasRemaining()Z": function (this: JBuffer) { return this.pos < this.lim ? 1 : 0; },
     "isDirect()Z": function (this: JBuffer) { return this.direct ? 1 : 0; },
     "isReadOnly()Z": function (this: JBuffer) { return +this.readOnly; },
-    "hasArray()Z": function (this: JBuffer) {
-      const storage = this.backing.storage;
-      return storage.kind === "heap" && !this.readOnly && (storage.array as Uint8Array).BYTES_PER_ELEMENT === 2 ** this.elemShift &&
-        (!(this instanceof JCharBuffer) || storage.array instanceof Uint16Array) ? 1 : 0;
-    },
+    "hasArray()Z": function (this: JBuffer) { return accessibleArray(this) ? 1 : 0; },
     "arrayOffset()I": function (this: JBuffer) {
-      const storage = this.backing.storage;
-      if (storage.kind !== "heap" || this.readOnly || (storage.array as Uint8Array).BYTES_PER_ELEMENT !== 2 ** this.elemShift ||
-          this instanceof JCharBuffer && !(storage.array instanceof Uint16Array)) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
-      return (this.dv.byteOffset - storage.array.byteOffset) >> this.elemShift;
+      const array = accessibleArray(this);
+      if (!array) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      return (this.dv.byteOffset - array.byteOffset) >> this.elemShift;
     },
   };
 }
@@ -92,7 +94,7 @@ rt.register({
   methods: {
     ...bufferBaseMethods(),
     ...chaining("Ljava/nio/ByteBuffer;"),
-    "static allocateDirect(I)Ljava/nio/ByteBuffer;": (cap: number) => mkByteBuffer(cap, true),
+    "static allocateDirect(I)Ljava/nio/ByteBuffer;": allocateDirect,
     "static allocate(I)Ljava/nio/ByteBuffer;": (cap: number) => mkByteBuffer(cap),
     "static wrap([B)Ljava/nio/ByteBuffer;": (arr: Int8Array) => wrapArray(JByteBuffer, arr, 0),
     "static wrap([BII)Ljava/nio/ByteBuffer;": (arr: Int8Array, off: number, len: number) => wrapArray(JByteBuffer, arr, 0, off, len),
@@ -172,10 +174,10 @@ rt.register({
       return this;
     },
     "array()[B": function (this: JByteBuffer) {
-      const storage = this.backing.storage;
       if (this.readOnly) throw rt.mkThrowable("java/nio/ReadOnlyBufferException", null);
-      if (storage.kind !== "heap") throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
-      return storage.array;
+      const array = accessibleArray(this);
+      if (!array) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      return array;
     },
   },
 });
@@ -214,6 +216,18 @@ export function mkByteBuffer(cap: number, direct = false): JByteBuffer {
   b.backing = { storage: direct ? { kind: "direct", ab } : { kind: "heap", ab, array: new Int8Array(ab) } };
   b.cap = b.lim = cap;
   b.pos = 0;
+  return b;
+}
+/** ByteBuffer.allocateDirect. Once the process memory has its final size its views stay attached, so
+ *  the buffer lives in guest memory and its accessible array is those same bytes, as on ART. */
+function allocateDirect(cap: number): JByteBuffer {
+  if (cap < 0 || MEM_SIZE === MEM_SIZE_INITIAL) return mkByteBuffer(cap, true);
+  const address = mem.calloc(1, Math.max(1, cap));
+  if (!address) throw rt.mkThrowable("java/lang/OutOfMemoryError", "direct buffer");
+  const b = new JByteBuffer();
+  b.backing = { storage: { kind: "native", address, array: new Int8Array(mem.buf, address, cap) } };
+  directBuffers.register(b.backing, address);
+  b.cap = b.lim = cap;
   return b;
 }
 
