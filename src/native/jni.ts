@@ -7,7 +7,7 @@ import { Cpu, cpuFor, type CallArg } from "./cpu";
 import { rt, JObj, type ClassInfo, type Runtime } from "../jvm/runtime";
 import { mangleMethod, mangleStaticField, parseMethodDesc, jarray, PRIM_ARRAYS, type PrimElem, splitSig, u8, primElem } from "../jvm/abi";
 import { curThread, callOn, JClass, stackTraceText } from "../jvm/natives/jlang";
-import { JCtor, JMethod, classCtors, mkMethod, methodAnnotations } from "../jvm/natives/jreflect";
+import { JCtor, JField, JMethod, classCtors, mkMethod, methodAnnotations } from "../jvm/natives/jreflect";
 import { JBuffer, directBufferAddress, nativeByteBuffer } from "../jvm/natives/jnio";
 const enc = new TextEncoder();
 
@@ -281,6 +281,10 @@ export function jniInit(): void {
     if (m instanceof JMethod) return methodId(m.owner, m.name, m.desc, m.isStatic);
     return m instanceof JCtor ? methodId(m.owner, "<init>", m.desc, false) : 0;
   });
+  def(8, "FromReflectedField", (_c, a) => {
+    a.p(); const f = deref(a.p());
+    return f instanceof JField ? fieldId(f.owner, f.prop, f.desc, f.isStatic) : 0;
+  });
   def(9, "ToReflectedMethod", (_c, a) => {
     a.p(); a.p(); const m = methodOf(a.p()); a.i();
     if (!m) return 0;
@@ -341,7 +345,9 @@ export function jniInit(): void {
     const mangled = mangleMethod(name, sig);
     // an interface the framework only marks (its methods live on the implementations) answers for
     // what the app's own bytecode calls on it; the receiver dispatches at call time as always
-    const have = isStatic ? typeof i.ctor[mangled] === "function" : typeof i.ctor.prototype?.[mangled] === "function" || (i.name === "java/lang/String" && typeof (String.prototype as any)[mangled] === "function")
+    // an array class has no ctor: its instances carry Object's methods on the JS array prototypes
+    const proto = i.ctor ? i.ctor.prototype : Array.prototype;
+    const have = isStatic ? typeof i.ctor?.[mangled] === "function" : typeof proto?.[mangled] === "function" || (i.name === "java/lang/String" && typeof (String.prototype as any)[mangled] === "function")
       || hasAbstractMethod(i, name, sig)
       || (!i.dex && !isStatic && (rt.methodRefs(i.name).has(name + sig) || !Object.keys(rt.natives.get(i.name)?.methods ?? {}).length));
     if (!have) { pend(cpu, throwable("java/lang/NoSuchMethodError", `${i.name}.${name}${sig}`)); jniMissing.add(`${isStatic ? "static " : ""}${i.name}.${name}${sig}`); return 0; }
