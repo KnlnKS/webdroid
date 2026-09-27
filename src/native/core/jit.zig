@@ -541,12 +541,13 @@ pub fn Emit(comptime wide: bool) type {
             e.settle(e.edge(target));
             e.countIc(k);
             if (target < 0) return e.exitTo(pc);
-            if (target <= @as(i32, @intCast(e.blk))) {
-                e.b.emit(.{ get(L_IC), get(L_LIMIT), O.i64_ge_s });
-                e.ifv();
-                e.exitTo(pc);
-                e.endif();
-            }
+            const blk: i32 = @intCast(e.blk);
+            // a later block's code follows the end of the block nested (target - blk - 1) out from here
+            if (target > blk) return e.b.br(@as(u32, @intCast(target - blk - 1)) + e.nest);
+            e.b.emit(.{ get(L_IC), get(L_LIMIT), O.i64_ge_s });
+            e.ifv();
+            e.exitTo(pc);
+            e.endif();
             e.b.emit(.{ c32(target), set(L_NEXT) });
             e.b.br(e.top_depth + e.nest);
         }
