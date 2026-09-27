@@ -680,13 +680,32 @@ function sm(sig: string, fn: (this: string, ...a: any[]) => unknown) {
 function sioobe(i: number): never {
   throw rt.mkThrowable("java/lang/StringIndexOutOfBoundsException", "index " + i);
 }
+const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff, isLow = (c: number) => c >= 0xdc00 && c <= 0xdfff;
+/** code point access shared by String, StringBuilder and Character, with Java's bounds */
+function cpAt(s: string, i: number, limit = s.length): number {
+  if (i < 0 || i >= limit) sioobe(i);
+  const c = s.charCodeAt(i);
+  return isHigh(c) && i + 1 < limit && isLow(s.charCodeAt(i + 1)) ? s.codePointAt(i)! : c;
+}
+function cpBefore(s: string, i: number, start = 0): number {
+  if (i <= start || i > s.length) sioobe(i);
+  const c = s.charCodeAt(i - 1);
+  return isLow(c) && i - 1 > start && isHigh(s.charCodeAt(i - 2)) ? s.codePointAt(i - 2)! : c;
+}
+function cpCount(s: string, a: number, b: number): number {
+  if (a < 0 || b < a || b > s.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+  let n = b - a;
+  for (let i = a; i < b - 1; i++) if (isHigh(s.charCodeAt(i)) && isLow(s.charCodeAt(i + 1))) { n--; i++; }
+  return n;
+}
 sm("length()I", function () { return this.length; });
 sm("isEmpty()Z", function () { return this.length === 0 ? 1 : 0; });
 sm("charAt(I)C", function (i: number) {
   if (i >>> 0 >= this.length) sioobe(i);
   return this.charCodeAt(i);
 });
-sm("codePointAt(I)I", function (i: number) { return this.codePointAt(i) ?? 0; });
+sm("codePointAt(I)I", function (i: number) { return cpAt(this, i); });
+sm("codePointBefore(I)I", function (i: number) { return cpBefore(this, i); });
 sm("hashCode()I", function () { return stringHash(this as string); });
 sm("equals(Ljava/lang/Object;)Z", function (o: unknown) { return (this as string) === o ? 1 : 0; });
 sm("equalsIgnoreCase(Ljava/lang/String;)Z", function (o: string | null) {
@@ -780,10 +799,7 @@ sm("regionMatches(ZILjava/lang/String;II)Z", function (ignore: number, toff: num
   return (ignore ? a.toLowerCase() === b.toLowerCase() : a === b) ? 1 : 0;
 });
 sm("contentEquals(Ljava/lang/CharSequence;)Z", function (o: unknown) { return (this as string) === jToString(o) ? 1 : 0; });
-sm("codePointCount(II)I", function (a: number, b: number) {
-  if (a < 0 || b < a || b > this.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
-  return Array.from(this.slice(a, b)).length;
-});
+sm("codePointCount(II)I", function (a: number, b: number) { return cpCount(this, a, b); });
 sm("offsetByCodePoints(II)I", function (i: number, n: number) { return offsetCodePoints(String(this), i, n); });
 sm("chars()Ljava/util/stream/IntStream;", function () { return mkIntStream(Array.from({ length: this.length }, (_, i) => this.charCodeAt(i))); });
 sm("codePoints()Ljava/util/stream/IntStream;", function () { return mkIntStream(Array.from(this, char => char.codePointAt(0)!)); });
@@ -1049,6 +1065,10 @@ function sbSpec(name: string): NativeSpec {
       "ensureCapacity(I)V": function () {},
       "charAt(I)C": function (this: JSB, i: number) { return this.s.charCodeAt(i); },
       [`appendCodePoint(I)L${name};`]: function (this: JSB, cp: number) { this.s += String.fromCodePoint(cp); return this; },
+      "codePointAt(I)I": function (this: JSB, i: number) { return cpAt(this.s, i); },
+      "codePointBefore(I)I": function (this: JSB, i: number) { return cpBefore(this.s, i); },
+      "codePointCount(II)I": function (this: JSB, a: number, b: number) { return cpCount(this.s, a, b); },
+      "offsetByCodePoints(II)I": function (this: JSB, i: number, n: number) { return offsetCodePoints(this.s, i, n); },
       [`replace(IILjava/lang/String;)L${name};`]: function (this: JSB, a: number, b: number, r: string) {
         this.s = this.s.slice(0, a) + r + this.s.slice(Math.min(b, this.s.length));
         return this;
@@ -1448,6 +1468,7 @@ function unicodeCategory(c: number): number {
 }
 const asciiCategories = Uint8Array.from({ length: 128 }, (_, c) => unicodeCategory(c));
 const characterType = (c: number) => c >= 0 && c < 128 ? asciiCategories[c] : unicodeCategory(c);
+const charText = (chars: Uint16Array | null) => charsToString(chars ?? rt.npe(), 0, chars!.length);
 function codePointChars(cp: number): Uint16Array {
   if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid code point: " + cp);
   if (cp < 0x10000) return Uint16Array.of(cp);
@@ -1476,17 +1497,17 @@ rt.register({
       destination!.set(chars, offset);
       return chars.length;
     },
-    "static codePointAt(Ljava/lang/CharSequence;I)I": (cs: unknown, i2: number) => jToString(cs).codePointAt(i2) ?? 0,
-    "static codePointAt([CII)I": (chars: Uint16Array | null, index: number, limit: number) => {
-      if (chars === null) rt.npe();
-      if (index < 0 || index >= limit || limit > chars!.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(index));
-      const high = chars![index];
-      if (high >= 0xd800 && high <= 0xdbff && index + 1 < limit) {
-        const low = chars![index + 1];
-        if (low >= 0xdc00 && low <= 0xdfff) return ((high - 0xd800) << 10) + (low - 0xdc00) + 0x10000;
-      }
-      return high;
+    "static codePointAt(Ljava/lang/CharSequence;I)I": (cs: unknown, i: number) => cpAt(jToString(cs ?? rt.npe()), i),
+    "static codePointAt([CI)I": (chars: Uint16Array, i: number) => cpAt(charText(chars), i),
+    "static codePointAt([CII)I": (chars: Uint16Array, i: number, limit: number) => {
+      if (limit > (chars ?? rt.npe()).length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(limit));
+      return cpAt(charText(chars), i, limit);
     },
+    "static codePointBefore(Ljava/lang/CharSequence;I)I": (cs: unknown, i: number) => cpBefore(jToString(cs ?? rt.npe()), i),
+    "static codePointBefore([CI)I": (chars: Uint16Array, i: number) => cpBefore(charText(chars), i),
+    "static codePointBefore([CII)I": (chars: Uint16Array, i: number, start: number) => cpBefore(charText(chars), i, start),
+    "static codePointCount(Ljava/lang/CharSequence;II)I": (cs: unknown, a: number, b: number) => cpCount(jToString(cs ?? rt.npe()), a, b),
+    "static codePointCount([CII)I": (chars: Uint16Array, offset: number, count: number) => cpCount(charText(chars), offset, offset + count),
     "static isSupplementaryCodePoint(I)Z": (cp: number) => (cp >= 0x10000 ? 1 : 0),
     "static isHighSurrogate(C)Z": (c: number) => (c >= 0xd800 && c <= 0xdbff ? 1 : 0),
     "static isLowSurrogate(C)Z": (c: number) => (c >= 0xdc00 && c <= 0xdfff ? 1 : 0),
