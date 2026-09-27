@@ -1,7 +1,7 @@
 import { JContextWrapper, JAttributionSource, systemService, wrapperMethods, display, displayListeners, grantPermissions, type JContext } from "./context";
 import { JWindow } from "./window";
 import {
-  JIntent, activityTransport, systemActivities, deliverActivityResult, RESULT_OK, RESULT_CANCELED, launchIntent, mkComponentName,
+  JIntent, activityTransport, launchIntent, mkComponentName, registerSystemActivity,
   type JComponentName
 } from "./intent";
 import { type JMenu, JMenuInflater, type JMenuItem, ID_HOME, showMenuPopup, barAnchor } from "./menu";
@@ -323,19 +323,10 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "finishAfterTransition()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
   "isTaskRoot()Z": function (this: JActivity) { return +(activityTransport.isTaskRoot?.(this) ?? false); },
   // AOSP's startActivityForResult only *starts* something; the result arrives later through
-  // onActivityResult. Awaiting a system activity here would hold the serialized main-looper
-  // queue for as long as its (native, modal) UI is up, which reads as a wedge.
-  "startActivityForResult(Landroid/content/Intent;I)V": driven(function* (this: JActivity, intent: JIntent, code: number): Gen {
-    const sys = intent?.component ? null : systemActivities[intent?.action ?? ""];
-    if (sys) {
-      void sys(intent).then(
-        (data) => deliverActivityResult(this, code, data ? RESULT_OK : RESULT_CANCELED, data),
-        (e) => { reportUncaught(e); deliverActivityResult(this, code, RESULT_CANCELED, null); },
-      );
-      return;
-    }
-    yield launchIntent(this.$host, intent, { act: this, code });
-  }),
+  // onActivityResult, which launchIntent arranges without waiting on a system activity's UI.
+  "startActivityForResult(Landroid/content/Intent;I)V": function (this: JActivity, intent: JIntent, code: number) {
+    return launchIntent(this.$host, intent, { act: this, code });
+  },
   // ActivityCompat — and so every androidx ActivityResultRegistry launcher — calls the options
   // overload, which must funnel into the body above rather than carry a second copy of it.
   "startActivityForResult(Landroid/content/Intent;ILandroid/os/Bundle;)V": function (this: JActivity, intent: JIntent, code: number) {
@@ -607,6 +598,17 @@ rt.register({
     "getMeasurements(I)Ljava/util/Map;": () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); },
   },
 });
+// The system's "let this app run in the background?" dialog, answered by the grant policy runtime
+// permissions follow (context.ts). AOSP's activity ignores an app that did not declare the
+// permission to ask, which reads as the user declining.
+const DOZE_EXEMPTION = "__system_power";
+registerSystemActivity("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS", async (intent) => {
+  const pkg = intent.dataUri?.startsWith("package:") ? intent.dataUri.slice(8) : null;
+  if (!pkg || !packages.get(pkg)?.permissions.has("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")) return null;
+  const prefs = getPrefs(pkg, DOZE_EXEMPTION);
+  prefs.map.set("exempt", 1); prefs.persist();
+  return rt.make("android/content/Intent");
+});
 for (const [name, methods, statics] of [
   ["android/app/ActivityManager", {
     "static isUserAMonkey()Z": () => 0,
@@ -644,16 +646,16 @@ for (const [name, methods, statics] of [
       const info = rt.link("android/os/PowerManager$WakeLock");
       return new info.ctor();
     },
-    // the screen is on and this app was never exempted from doze, which is the state an app
-    // offering a "disable battery optimisation" prompt is asking about
+    // the screen is on, so the device is never dozing
     "isDeviceIdleMode()Z": () => 0,
+    "isIgnoringBatteryOptimizations(Ljava/lang/String;)Z": (pkg: string) => +(getPrefs(pkg, DOZE_EXEMPTION).map.get("exempt") === 1),
     "getCurrentThermalStatus()I": () => 0,                                       // THERMAL_STATUS_NONE
     ...noops("addThermalStatusListener(Landroid/os/PowerManager$OnThermalStatusChangedListener;)V",
       "addThermalStatusListener(Ljava/util/concurrent/Executor;Landroid/os/PowerManager$OnThermalStatusChangedListener;)V",
       "removeThermalStatusListener(Landroid/os/PowerManager$OnThermalStatusChangedListener;)V"),
     ...stubs(1, "isInteractive()Z", "isScreenOn()Z"),
     ...stubs(0, "isPowerSaveMode()Z", "isSustainedPerformanceModeSupported()Z", "isDeviceLightIdleMode()Z",
-      "isLowPowerStandbyEnabled()Z", "isIgnoringBatteryOptimizations(Ljava/lang/String;)Z"),
+      "isLowPowerStandbyEnabled()Z"),
   }],
   ["android/os/PowerManager$WakeLock", {
     "acquire()V": () => {}, "acquire(J)V": () => {}, "release()V": () => {},

@@ -388,12 +388,15 @@ export const activityTransport: {
 } = {};
 /** `sender` is the package whose identity the start carries (a PendingIntent's creator) */
 export async function launchIntent(host: AppHost, intent: JIntent, result?: ActivityResultTarget, sender = host.pkg) {
-  const system = intent?.component ? null : systemActivities[intent?.action ?? ""];
+  const system = systemActivity(intent);
   if (system) {
-    void system(intent).then(
-      (data) => { if (result) deliverActivityResult(result.act, result.code, data ? RESULT_OK : RESULT_CANCELED, data); },
-      (error) => { reportUncaught(error); if (result) deliverActivityResult(result.act, result.code, RESULT_CANCELED, null); },
-    );
+    // the system activity covered its caller, which resumes after its result, unless the
+    // system activity went on to start another one in front of it
+    const caller = result?.act ?? host.currentActivity();
+    void system(intent).then((data) => {
+      if (result) deliverActivityResult(result.act, result.code, data ? RESULT_OK : RESULT_CANCELED, data);
+      if (caller) setTimeout(() => void onMain(async () => { if (host.currentActivity() === caller) await host.roundTrip(caller); }).catch(reportUncaught), 0);
+    }, (error) => { reportUncaught(error); if (result) deliverActivityResult(result.act, result.code, RESULT_CANCELED, null); });
     return;
   }
   const { getPM } = await import("./pm");
@@ -422,6 +425,13 @@ export const RESULT_OK = -1, RESULT_CANCELED = 0;
 export const systemActivities: Record<string, (intent: JIntent) => Promise<JIntent | null>> = {};
 export function registerSystemActivity(action: string, run: (intent: JIntent) => Promise<JIntent | null>) {
   systemActivities[action] = run;
+}
+/** The platform package answers for them, as ResolverActivity and DocumentsUI do on a device, so
+ *  an intent resolved to that component and started explicitly reaches the same handler. */
+export const SYSTEM_ACTIVITY = "com.android.internal.app.ResolverActivity";
+export function systemActivity(intent: JIntent | null): ((intent: JIntent) => Promise<JIntent | null>) | null {
+  if (!intent || intent.component && (intent.componentPkg !== "android" || intent.component !== SYSTEM_ACTIVITY)) return null;
+  return systemActivities[intent.action ?? ""] ?? null;
 }
 export function mkResultIntent(uri: string, flags = 3 | 0x40): JIntent {
   const i = new JIntent();

@@ -6,8 +6,10 @@
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { isDocumentsProvider } from "./pm";
-import { registerSystemActivity, systemActivities, mkResultIntent, type JIntent } from "./intent";
+import { isDocumentsProvider, getPM, type JResolveInfo } from "./pm";
+import { registerSystemActivity, systemActivity, launchIntent, mkResultIntent, type JIntent } from "./intent";
+import { csText } from "../jvm/natives/jchars";
+import { frameworkString } from "./res";
 import { mkUri, type JUri } from "./net";
 import { isMediaUri, mediaDelete } from "./mediastore";
 import { newArrayList, toJsArray } from "../jvm/natives/jutil";
@@ -44,9 +46,20 @@ registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {
   if (!target) throw rt.mkThrowable("java/lang/NullPointerException", "Chooser target");
   if (target.action === "android.intent.action.SEND" || target.action === "android.intent.action.SEND_MULTIPLE")
     return (await import("../shell/share")).shareIntent(intent);
-  const handler = systemActivities[target.action ?? ""];
+  const handler = systemActivity(target);
   if (handler) return handler(target);
-  throw rt.mkThrowable("android/content/ActivityNotFoundException", "No chooser target for " + target.action);
+  // AOSP's chooser lists the activities that handle the target; with none it only says so, and
+  // the user dismissing it is RESULT_CANCELED
+  const pm = getPM(), matches = await toJsArray(await vcall(pm, "queryIntentActivities", "(Landroid/content/Intent;I)Ljava/util/List;", target, 0x10000)) as JResolveInfo[];
+  if (!matches.length) return null;
+  const labels = await Promise.all(matches.map(async (m) => csText(await vcall(m, "loadLabel", "(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;", pm))));
+  const title = intent.extras.map.get("android.intent.extra.TITLE");
+  const choice = await (await import("../shell/share")).chooseActivity(title == null ? frameworkString("chooseActivity") ?? "" : await csText(title), labels);
+  if (choice === null) return null;
+  const chosen: JIntent = await newObj("android/content/Intent", "(Landroid/content/Intent;)V", target);
+  chosen.component = matches[choice].activityInfo!.name; chosen.componentPkg = matches[choice].activityInfo!.packageName;
+  await launchIntent(appHost!, chosen);
+  return rt.make("android/content/Intent");
 });
 
 

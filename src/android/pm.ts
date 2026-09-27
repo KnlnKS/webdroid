@@ -16,7 +16,7 @@ import { appHost, type AppHost, jclsNameOf } from "./apphost";
 import { apkPath, vfs } from "../jvm/natives/jio";
 import { DOCS_AUTHORITY } from "./documents";
 import { type JList, newArrayList, toJsArray } from "../jvm/natives/jutil";
-import { JIntent, type JComponentName, componentState, mkComponentName } from "./intent";
+import { JIntent, type JComponentName, componentState, mkComponentName, systemActivity, SYSTEM_ACTIVITY } from "./intent";
 import { matchesIntentFilter } from "./intent-filter";
 import { csText } from "./text";
 import type { JActivity } from "./app";
@@ -631,6 +631,14 @@ function queryComponents(intent: JIntent | null, flags: number, kind: Exclude<Co
     }
   }
   result.a.sort((a, b) => (b as { priority: number }).priority - (a as { priority: number }).priority);
+  if (kind === "activity" && systemActivity(intent) && (!intent.pkg || intent.pkg === "android")) {
+    const info = rt.make("android/content/pm/ResolveInfo"), activity: JActivityInfo = rt.make("android/content/pm/ActivityInfo");
+    const platform = packages.get("android");
+    activity.name = SYSTEM_ACTIVITY; activity.packageName = "android"; activity.processName = "system"; activity.exported = activity.enabled = 1;
+    activity.applicationInfo = platform ? recordAppInfo(platform) : null;
+    info.activityInfo = activity;
+    result.a.push(info);
+  }
   return result;
 }
 
