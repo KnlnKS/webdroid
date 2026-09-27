@@ -577,10 +577,9 @@ class JAutoComplete extends JEditText {
     if (this.popup) return this.popup;
     const p: JObj = yield newObj("android/widget/ListPopupWindow", "(Landroid/content/Context;)V", this.ctx);
     this.popup = p;
-    const self = this;
     yield vcall(p, "setAdapter", "(Landroid/widget/ListAdapter;)V", this.adapter);
     yield vcall(p, "setOnItemClickListener", "(Landroid/widget/AdapterView$OnItemClickListener;)V", Object.assign(new JObj(), {
-      [mangleMethod("onItemClick", "(Landroid/widget/AdapterView;Landroid/view/View;IJ)V")]: (_l: unknown, v: unknown, pos: number, id: bigint) => performCompletion(self, v, pos, id),
+      [mangleMethod("onItemClick", "(Landroid/widget/AdapterView;Landroid/view/View;IJ)V")]: (_l: unknown, v: unknown, pos: number, id: bigint) => performCompletion(this, v, pos, id),
     }));
     if (this.dismissL) yield vcall(p, "setOnDismissListener", "(Landroid/widget/PopupWindow$OnDismissListener;)V", this.dismissL);
     if (this.dropDownBackground) yield vcall(p, "setBackgroundDrawable", "(Landroid/graphics/drawable/Drawable;)V", this.dropDownBackground);
@@ -616,9 +615,8 @@ rt.register({
       if (this.popup) return vcall(this.popup, "setBackgroundDrawable", "(Landroid/graphics/drawable/Drawable;)V", drawable);
     },
     "setDropDownBackgroundResource(I)V": driven(function* (this: JAutoComplete, id: number): Gen {
-      const resources = id ? yield vcall(this, "getResources", "()Landroid/content/res/Resources;") : null;
-      yield vcall(this, "setDropDownBackgroundDrawable", "(Landroid/graphics/drawable/Drawable;)V",
-        id ? yield vcall(resources, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", id) : null);
+      const d = id ? yield vcall(yield vcall(this, "getResources", "()Landroid/content/res/Resources;"), "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", id) : null;
+      yield vcall(this, "setDropDownBackgroundDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
     }),
     "getDropDownBackground()Landroid/graphics/drawable/Drawable;": function (this: JAutoComplete) { return this.dropDownBackground; },
     "enoughToFilter()Z": function (this: JAutoComplete) { return this.text.length >= this.threshold ? 1 : 0; },
