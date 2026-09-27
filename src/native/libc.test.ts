@@ -121,3 +121,23 @@ test("timegm64 returns seconds beyond the ARM32 time_t range", async () => {
     expect(BigInt(cpu.ret1 >>> 0) << 32n | BigInt(lo >>> 0)).toBe(2208988800n);
   } finally { mem.free(tm); cpu.dispose(); }
 });
+
+test("A64 mmap keeps executable and low-hinted mappings where the core runs code", async () => {
+  setA64(true); libcInit();
+  const cpu = new Cpu(new JThread(), "mmap-test"), mmap = lookupHost("mmap", "libc.so")!, size = 0x1000_0000;
+  const anon = async (hint: bigint, prot: number) => {
+    const lo = await cpu.call(mmap, [hint, BigInt(size), prot, 0x4022, -1, 0n]);
+    return BigInt(cpu.ret1 >>> 0) << 32n | BigInt(lo >>> 0);
+  };
+  try {
+    // V8 reserves its code range PROT_NONE with a low hint and makes pages executable later
+    for (const [hint, prot] of [[0xf000_0000n, 0], [0n, 7]] as const) {
+      const va = await anon(hint, prot);
+      expect(va >> 32n).toBe(0n);
+      expect(mem.unmapVa(va, size)).toBe(true);
+    }
+    const data = await anon(0n, 0);
+    expect(data >> 32n).not.toBe(0n);
+    expect(mem.unmapVa(data, size)).toBe(true);
+  } finally { cpu.dispose(); setA64(false); }
+});

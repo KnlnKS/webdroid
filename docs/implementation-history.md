@@ -326,11 +326,18 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   and permission-granted fused-location callback are separate positive controls.
 - **YouTube:** Playback-path `AnimatorSet.clone`, `View.setZ` and image alpha
   implementations removed observed method faults. A mapped ELF image had
-  been incorrectly rejected by `mprotect`, causing V8 ENOMEM. Targeted flows
-  passed after repair, but an intermittent JIT-enabled branch into unmapped
-  zero code near `0x10004d20` recurred. Page flags alone do not prove it was
-  once mapped; tracing changed the reproduction. A range bisection or causal
-  memory-lifetime trace is still needed.
+  been incorrectly rejected by `mprotect`, causing V8 ENOMEM. The "undefined
+  0x00000000 @ 0x10004d20" fault was V8 tail-calling code in its code range at
+  `0x2_1000xxxx`: mmap had ignored V8's low hints and placed the range in a
+  plane above 4 GiB, and the core runs a 32-bit pc, so the branch landed on
+  zeroed plane-0 memory (the fault text prints only the low word; the full
+  target is in `wd.native.lastFault.regs` x17). The Java InternalError left
+  the Elements native mutex held; `ComponentLayoutThread` then parked in
+  `pthread_mutex_lock` forever, comments stayed half-rendered and a later
+  synchronous Litho layout wedged the main looper. Executable and low-hinted
+  mappings now stay in plane 0; comments load, scroll and open replies.
+  Converting a native fault into a Java exception still abandons whatever
+  native locks the frame held, so any other fault can wedge the same way.
 - **Original game paths:** Among Us completed a live online Airship match
   through the Bun UDP relay: lobby, impostor role, movement, victory screen,
   XP, beans and EOS stat ingestion. Practice meetings, voting and chat through
