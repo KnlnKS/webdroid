@@ -16,6 +16,15 @@ export function sysconf(name: number): number {
   return name === 0x27 || name === 0x28 ? 4096 : name === 0x60 || name === 0x61 ? device.cpu.cores : name === 0x62 ? device.cpu.memKb / 4 : -1;
 }
 
+/** what the guest reads as its resident size; the native heap assigns it */
+export const procMemory = { resident: (): number => 0 };
+const comm = () => (procIdentity.name || "app_process").slice(0, 15);
+/** proc(5)'s stat line; CPU time is wall time since page load in USER_HZ (100) ticks */
+function statLine(id: number): string {
+  const ticks = Math.floor(performance.now() / 10), bytes = procMemory.resident();
+  return `${id} (${comm()}) R 1 ${procIdentity.pid} 0 0 -1 4194560 0 0 0 0 ${ticks} 0 0 0 20 0 1 0 0 ${bytes} ${Math.ceil(bytes / 4096)} ` +
+    "18446744073709551615 0 0 0 0 0 0 0 4612 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n";
+}
 const cpuList = () => device.cpu.cores === 1 ? "0\n" : `0-${device.cpu.cores - 1}\n`;
 
 export function procText(path: string): string | null {
@@ -29,11 +38,21 @@ export function procText(path: string): string | null {
   }
   if (path === "/sys/devices/system/cpu/present" || path === "/sys/devices/system/cpu/possible" || path === "/sys/devices/system/cpu/online") return cpuList();
   if (path === "/proc/meminfo") return `MemTotal:        ${device.cpu.memKb} kB\nMemFree:         ${device.cpu.memKb >> 1} kB\nBuffers:               0 kB\nCached:                0 kB\n`;
-  if (path === "/proc/self/maps") return "";
-  if (path === "/proc/self/cmdline" || path === `/proc/${procIdentity.pid}/cmdline`) return procIdentity.name + "\0";
-  if (path === "/proc/self/status" || path === `/proc/${procIdentity.pid}/status`) {
-    const { pid, uid, name } = procIdentity;
-    return `Name:\t${(name || "app_process").slice(0, 15)}\nState:\tR (running)\nTgid:\t${pid}\nPid:\t${pid}\nPPid:\t1\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\nGid:\t${uid}\t${uid}\t${uid}\t${uid}\nCpus_allowed_list:\t${cpuList().trim()}\n`;
+  // /proc/self, /proc/thread-self and /proc/<own pid>, each optionally narrowed to task/<tid>
+  const own = /^\/proc\/(?:self|thread-self|(\d+))(?:\/task\/(\d+))?\/(\w+)$/.exec(path);
+  if (!own || own[1] && +own[1] !== procIdentity.pid) return null;
+  const id = own[2] ? +own[2] : procIdentity.pid;
+  switch (own[3]) {
+    case "maps": case "smaps": return "";
+    case "cmdline": return procIdentity.name + "\0";
+    case "comm": return comm() + "\n";
+    case "stat": return statLine(id);
+    case "statm": { const pages = Math.ceil(procMemory.resident() / 4096); return `${pages} ${pages} 0 0 0 ${pages} 0\n`; }
+    case "status": {
+      const { pid, uid } = procIdentity, kb = procMemory.resident() >> 10;
+      return `Name:\t${comm()}\nState:\tR (running)\nTgid:\t${pid}\nPid:\t${id}\nPPid:\t1\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\nGid:\t${uid}\t${uid}\t${uid}\t${uid}\n` +
+        `VmPeak:\t${kb} kB\nVmSize:\t${kb} kB\nVmHWM:\t${kb} kB\nVmRSS:\t${kb} kB\nThreads:\t1\nCpus_allowed_list:\t${cpuList().trim()}\n`;
+    }
   }
   return null;
 }
