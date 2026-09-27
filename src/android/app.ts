@@ -659,10 +659,24 @@ for (const [name, methods, statics] of [
     "acquire()V": () => {}, "acquire(J)V": () => {}, "release()V": () => {},
     "isHeld()Z": () => 0, "setReferenceCounted(Z)V": () => {},
   }],
-  // no radio here: getDefaultAdapter() is null, which is what a device without Bluetooth reports
+  // No Bluetooth or NFC radio: the managers exist, as AOSP always registers them, and report no
+  // adapter, which is what a device without the feature answers.
   ["android/bluetooth/BluetoothAdapter", {
     "static getDefaultAdapter()Landroid/bluetooth/BluetoothAdapter;": () => null,
     "isEnabled()Z": () => 0,
+  }],
+  ["android/bluetooth/BluetoothManager", {
+    "getAdapter()Landroid/bluetooth/BluetoothAdapter;": () => null,
+    "getConnectedDevices(I)Ljava/util/List;": () => newArrayList(),
+    "getDevicesMatchingConnectionStates(I[I)Ljava/util/List;": () => newArrayList(),
+    "getConnectionState(Landroid/bluetooth/BluetoothDevice;I)I": () => 0, // STATE_DISCONNECTED
+  }],
+  ["android/nfc/NfcManager", { "getDefaultAdapter()Landroid/nfc/NfcAdapter;": () => null }],
+  ["android/nfc/NfcAdapter", { "static getDefaultAdapter(Landroid/content/Context;)Landroid/nfc/NfcAdapter;": () => null }],
+  // a single-user device with no managed profile: nothing to reach across
+  ["android/content/pm/CrossProfileApps", {
+    "getTargetUserProfiles()Ljava/util/List;": () => newArrayList(),
+    ...stubs(0, "canInteractAcrossProfiles()Z", "canRequestInteractAcrossProfiles()Z"),
   }],
   ["android/os/VibratorManager", {
     "getDefaultVibrator()Landroid/os/Vibrator;": () => systemService(null, "vibrator"),

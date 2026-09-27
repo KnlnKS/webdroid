@@ -152,6 +152,9 @@ const SERVICE_CLASS: Record<string, string> = {
   wifi: "android/net/wifi/WifiManager",
   telephony_subscription_service: "android/telephony/SubscriptionManager",
   servicediscovery: "android/net/nsd/NsdManager",
+  bluetooth: "android/bluetooth/BluetoothManager",
+  nfc: "android/nfc/NfcManager",
+  crossprofileapps: "android/content/pm/CrossProfileApps",
 };
 const SERVICE_NAME = new Map(Object.entries(SERVICE_CLASS).map(([n, c]) => [c, n]));
 SERVICE_NAME.set("android/view/WindowManager", "window");
