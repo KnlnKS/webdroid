@@ -963,6 +963,69 @@ rt.register({
     "markSupported()Z": fwd("markSupported", "()Z"),
   },
 });
+/** PushbackInputStream: `pbuf[ppos..]` holds the unread bytes, which reads return first */
+class JPushbackIn extends JFilterInputStream { pbuf: Int8Array | null = null; ppos = 0; }
+function pushbackInit(this: JPushbackIn, s: unknown, size = 1) {
+  if (size <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "size <= 0");
+  this.in_ = s;
+  this.pbuf = new Int8Array(size);
+  this.ppos = size;
+}
+const pushbackOpen = (p: JPushbackIn): Int8Array => p.pbuf ?? (() => { throw rt.mkThrowable("java/io/IOException", "Stream closed"); })();
+function unread(this: JPushbackIn, b: Int8Array, off: number, len: number) {
+  const buf = pushbackOpen(this);
+  if (len > this.ppos) throw rt.mkThrowable("java/io/IOException", "Push back buffer is full");
+  this.ppos -= len;
+  buf.set(b.subarray(off, off + len), this.ppos);
+}
+rt.register({
+  name: "java/io/PushbackInputStream", ctor: JPushbackIn, sup: "java/io/FilterInputStream",
+  fields: { buf: "pbuf", pos: "ppos" },
+  methods: {
+    "<init>(Ljava/io/InputStream;)V": pushbackInit,
+    "<init>(Ljava/io/InputStream;I)V": pushbackInit,
+    "read()I": function (this: JPushbackIn) {
+      const buf = pushbackOpen(this);
+      return this.ppos < buf.length ? buf[this.ppos++] & 0xff : vcall(this.in_, "read", "()I");
+    },
+    "read([BII)I": driven(function* (this: JPushbackIn, b: Int8Array, off: number, len: number): Gen {
+      const buf = pushbackOpen(this);
+      if (!b) rt.npe();
+      if (off < 0 || len < 0 || len > b.length - off) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null);
+      if (!len) return 0;
+      const avail = Math.min(buf.length - this.ppos, len);
+      b.set(buf.subarray(this.ppos, this.ppos + avail), off);
+      this.ppos += avail;
+      if (avail === len) return avail;
+      const n = yield vcall(this.in_, "read", "([BII)I", b, off + avail, len - avail);
+      return n < 0 ? (avail || -1) : avail + n;
+    }),
+    "unread(I)V": function (this: JPushbackIn, v: number) { unread.call(this, Int8Array.of(v), 0, 1); },
+    "unread([B)V": function (this: JPushbackIn, b: Int8Array) { unread.call(this, b, 0, b.length); },
+    "unread([BII)V": unread,
+    "available()I": function (this: JPushbackIn) {
+      const n = pushbackOpen(this).length - this.ppos;
+      return after(vcall(this.in_, "available", "()I"), (a: number) => Math.min(0x7fffffff, n + a));
+    },
+    "skip(J)J": function (this: JPushbackIn, n: bigint) {
+      const buf = pushbackOpen(this);
+      if (n <= 0n) return 0n;
+      const own = Math.min(buf.length - this.ppos, Number(n));
+      this.ppos += own;
+      return BigInt(own) < n ? after(vcall(this.in_, "skip", "(J)J", n - BigInt(own)), (m: bigint) => BigInt(own) + m) : BigInt(own);
+    },
+    "markSupported()Z": () => 0,
+    "mark(I)V": () => {},
+    "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+    "close()V": function (this: JPushbackIn) {
+      if (!this.in_) return;
+      const s = this.in_;
+      this.in_ = null;
+      this.pbuf = null;
+      return vcall(s, "close", "()V");
+    },
+  },
+});
 class JBufferedOut extends JFilterOutputStream { buf = new Int8Array(8192); count = 0; }
 function drain(s: JBufferedOut) {
   if (!s.count) return;
