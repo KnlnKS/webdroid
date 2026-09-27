@@ -271,19 +271,20 @@ const setIntrinsicDrawables = driven(function* setIntrinsicDrawables(this: JText
 });
 const compoundWidth = (d: JDrawable | null) => d ? Math.max(0, d.bounds.right - d.bounds.left) : 0;
 const compoundHeight = (d: JDrawable | null) => d ? Math.max(0, d.bounds.bottom - d.bounds.top) : 0;
-/** the (Context) / (Context, AttributeSet) / (Context, AttributeSet, defStyleAttr) constructor trio of a
- *  TextView subclass: attach to the context, apply the widget's default style (or the caller's), then `then` */
-export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v: T) => unknown): NativeSpec["methods"] {
-  const init = async (v: T, c: unknown, set: JAttrSet | null, dsa = 0) => {
-    const style = dsa || AID(styleAttr);
-    await initViewFromCtx(v, c, set, style);
-    await applyTvStyle(v, set, style);
-    await then?.(v);
+/** a TextView subclass's constructors: attach to the context, apply the widget's default style (or
+ *  the caller's), then `then` reads what the subclass adds under the same style */
+export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v: T, set: JAttrSet | null, dsa: number, dsr: number) => unknown): NativeSpec["methods"] {
+  const init = async (v: T, c: unknown, set: JAttrSet | null, dsa = 0, dsr = 0) => {
+    const style = dsa || (dsr || !styleAttr ? 0 : AID(styleAttr));
+    await initViewFromCtx(v, c, set, style, dsr);
+    await applyTvStyle(v, set, style, dsr);
+    await then?.(v, set, style, dsr);
   };
   return {
     "<init>(Landroid/content/Context;)V": function (this: T, c: unknown) { return init(this, c, null); },
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: T, c: unknown, set: JAttrSet | null) { return init(this, c, set); },
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": function (this: T, c: unknown, set: JAttrSet | null, dsa: number) { return init(this, c, set, dsa); },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": function (this: T, c: unknown, set: JAttrSet | null, dsa: number, dsr: number) { return init(this, c, set, dsa, dsr); },
   };
 }
 /** AOSP setRawTextSize: only a size that differs asks for layout */

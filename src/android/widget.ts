@@ -6,7 +6,7 @@ import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters,
 import { type JAttrSet, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue } from "./res";
 import { TV } from "./axml";
 import { type JCanvas, type JInsets, JRect, JTypeface, cssColor, insetsOf, measureText, fontAscent, fontDescent, tfDefault } from "./graphics";
-import { JTextView, textViewMethods, JButton, applyTvStyle, compoundPadL, compoundPadR, syncCompoundPads } from "./textview";
+import { JTextView, textViewMethods, textViewCtors, JButton, compoundPadL, compoundPadR, syncCompoundPads } from "./textview";
 import { JTextPaint, spannedString } from "./text";
 import { G, absGravity } from "./gravity";
 import { vcall, vcallOn, curThread, after, type JSimpleEnum } from "../jvm/natives/jlang";
@@ -313,9 +313,7 @@ class JCompoundButton extends JButton {
 /** CompoundButton's constructor over TextView's: the widget's own style names the button, its
  *  tint and the initial check. `then` reads what a subclass adds under the same style. */
 function compoundCtors<T extends JCompoundButton>(styleAttr: string, then?: (v: T, set: JAttrSet | null, dsa: number, dsr: number) => unknown): NativeSpec["methods"] {
-  const init = driven(function* initCompound(v: T, c: unknown, set: JAttrSet | null, dsa: number, dsr: number): Gen {
-    yield initViewFromCtx(v, c, set, dsa, dsr);
-    yield applyTvStyle(v, set, dsa, dsr);
+  return textViewCtors<T>(styleAttr, driven(function* initCompound(v: T, set: JAttrSet | null, dsa: number, dsr: number): Gen {
     const res = v.jres;
     if (!res) return;
     const a = obtainStyled(res, v.theme, set, [AID("button"), AID("buttonTint"), AID("checked")], dsa, dsr);
@@ -324,14 +322,7 @@ function compoundCtors<T extends JCompoundButton>(styleAttr: string, then?: (v: 
     if (a.vals[2]) yield vcall(v, "setChecked", "(Z)V", rvInt(res, a.vals[2], 0));
     yield v.applyButtonTint();
     yield then?.(v, set, dsa, dsr);
-  });
-  const style = () => styleAttr ? AID(styleAttr) : 0;
-  return {
-    "<init>(Landroid/content/Context;)V": function (this: T, c: unknown) { return init(this, c, null, style(), 0); },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: T, c: unknown, set: JAttrSet | null) { return init(this, c, set, style(), 0); },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": function (this: T, c: unknown, set: JAttrSet | null, dsa: number) { return init(this, c, set, dsa, 0); },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": function (this: T, c: unknown, set: JAttrSet | null, dsa: number, dsr: number) { return init(this, c, set, dsa, dsr); },
-  };
+  }));
 }
 function compoundPadLeft(this: JCompoundButton) { return compoundPadL.call(this) + this.buttonW; }
 syncCompoundPads.add(compoundPadLeft);
@@ -700,9 +691,7 @@ class JCheckedTextView extends JTextView {
     this.updatePadding();
   }
 }
-const initCheckedText = driven(function* initCheckedText(v: JCheckedTextView, c: unknown, set: JAttrSet | null, dsa: number, dsr: number): Gen {
-  yield initViewFromCtx(v, c, set, dsa, dsr);
-  yield applyTvStyle(v, set, dsa, dsr);
+const initCheckedText = driven(function* initCheckedText(v: JCheckedTextView, set: JAttrSet | null, dsa: number, dsr: number): Gen {
   const res = v.jres;
   if (!res) return;
   const a = obtainStyled(res, v.theme, set, ["checked", "checkMark", "checkMarkTint", "checkMarkGravity"].map(AID), dsa, dsr);
@@ -712,7 +701,6 @@ const initCheckedText = driven(function* initCheckedText(v: JCheckedTextView, c:
   if (a.vals[1]) yield v.setCheckMark(yield loadDrawableRV(res, a.vals[1], v.theme));
   if (a.vals[0]) yield vcall(v, "setChecked", "(Z)V", rvInt(res, a.vals[0], 0));
 });
-const checkedTextStyle = () => AID("checkedTextViewStyle");
 /** View.setPadding on a CheckedTextView: the mark's side keeps the mark's width on top */
 function setCheckedTextPadding(this: JCheckedTextView, l: number, t: number, r: number, b: number) {
   this.padT = t; this.padB = b;
@@ -725,10 +713,7 @@ rt.register({
   ifaces: ["android/widget/Checkable"],
   methods: {
     ...textViewMethods,
-    "<init>(Landroid/content/Context;)V": function (this: JCheckedTextView, c: unknown) { return initCheckedText(this, c, null, checkedTextStyle(), 0); },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JCheckedTextView, c: unknown, set: JAttrSet | null) { return initCheckedText(this, c, set, checkedTextStyle(), 0); },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": function (this: JCheckedTextView, c: unknown, set: JAttrSet | null, dsa: number) { return initCheckedText(this, c, set, dsa, 0); },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": function (this: JCheckedTextView, c: unknown, set: JAttrSet | null, dsa: number, dsr: number) { return initCheckedText(this, c, set, dsa, dsr); },
+    ...textViewCtors<JCheckedTextView>("checkedTextViewStyle", initCheckedText),
     "setChecked(Z)V": function (this: JCheckedTextView, v: number) {
       if (this.checked === !!v) return;
       this.checked = !!v;
