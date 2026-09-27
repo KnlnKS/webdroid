@@ -1,6 +1,6 @@
 import { readClipData } from "./clipdata";
 import { JObj, type NativeSpec, rt, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { JBundle, bundlePrimitive, bundleBox, reportUncaught, PROCESS_NAME } from "./os";
+import { JBundle, bundleBox, bundleGet, bundleTyped, BUNDLE_TYPED, INTENT_TYPES, reportUncaught, PROCESS_NAME } from "./os";
 import { appHost, type AppHost } from "./apphost";
 import { mkUri, readUri, writeUri } from "./net";
 import { JRect } from "./graphics";
@@ -217,9 +217,6 @@ const intentMethods: NativeSpec["methods"] = {
   "removeExtra(Ljava/lang/String;)V": function (this: JIntent, k: string) { this.extras.map.delete(k); },
   // Extras are live objects here, never a parcel, so there is nothing for a class loader to do.
   "setExtrasClassLoader(Ljava/lang/ClassLoader;)V": () => {},
-  // API 33 type-checked getters: the extras are already the objects the caller asked for.
-  "getParcelableExtra(Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/Object;": function (this: JIntent, k: string) { return this.extras.map.get(k) ?? null; },
-  "getSerializableExtra(Ljava/lang/String;Ljava/lang/Class;)Ljava/io/Serializable;": function (this: JIntent, k: string) { return this.extras.map.get(k) ?? null; },
   "getCategories()Ljava/util/Set;": driven(function* (this: JIntent): Gen {
     return this.categories.size ? yield newLinkedHashSet([...this.categories]) : null;
   }),
@@ -262,35 +259,21 @@ const intentMethods: NativeSpec["methods"] = {
     return `Intent{act=${this.action} cmp=${this.component}}`;
   },
 };
-for (const [t, d, dflt] of [["String", "Ljava/lang/String;", null], ["Int", "I", 0], ["Long", "J", 0n],
-  ["Byte", "B", 0], ["Short", "S", 0], ["Boolean", "Z", 0], ["Char", "C", 0], ["Float", "F", 0], ["Double", "D", 0], ["CharSequence", "Ljava/lang/CharSequence;", null],
-  ["Parcelable", "Landroid/os/Parcelable;", null], ["Serializable", "Ljava/io/Serializable;", null],
-  ["Bundle", "Landroid/os/Bundle;", null],
-  ["IntArray", "[I", null], ["ByteArray", "[B", null], ["StringArray", "[Ljava/lang/String;", null],
-  ["ParcelableArray", "[Landroid/os/Parcelable;", null]] as const) {
-  intentMethods[`putExtra(Ljava/lang/String;${d})Landroid/content/Intent;`] = function (this: JIntent, k: string, v: unknown) {
+// Intent's extras are a Bundle: the same table, with Intent's names and its primitive getters
+// only in their defaulted form
+for (const [t, d] of INTENT_TYPES) {
+  const put = d === "Ljava/util/ArrayList;" ? `put${t}Extra` : "putExtra";
+  intentMethods[`${put}(Ljava/lang/String;${d})Landroid/content/Intent;`] = function (this: JIntent, k: string, v: unknown) {
     this.extras.map.set(k, bundleBox(v, d));
     return this;
   };
-  intentMethods[`get${t}Extra(Ljava/lang/String;)${d}`] = function (this: JIntent, k: string) {
-    if (d.length === 1) return bundlePrimitive(this.extras.map.get(k), d, dflt);
-    return this.extras.map.get(k) ?? dflt;
-  };
-  if ("IJBSCZFD".includes(d)) {
-    intentMethods[`get${t}Extra(Ljava/lang/String;${d})${d}`] = function (this: JIntent, k: string, dv: unknown) {
-      const v = this.extras.map.get(k);
-      return bundlePrimitive(v, d, dv);
-    };
-  }
-  if (t === "Bundle") {
-    intentMethods[`getBundleExtra(Ljava/lang/String;)Landroid/os/Bundle;`] = function (this: JIntent, k: string) {
-      return this.extras.map.get(k) ?? null;
-    };
-  }
+  intentMethods[d.length === 1 ? `get${t}Extra(Ljava/lang/String;${d})${d}` : `get${t}Extra(Ljava/lang/String;)${d}`] =
+    function (this: JIntent, k: string, dv: unknown = null) { return bundleGet(this.extras, k, d, dv); };
 }
-for (const type of ["String", "Integer", "CharSequence", "Parcelable"]) {
-  intentMethods[`put${type}ArrayListExtra(Ljava/lang/String;Ljava/util/ArrayList;)Landroid/content/Intent;`] = function (this: JIntent, key: string, value: unknown) { this.extras.map.set(key, value); return this; };
-  intentMethods[`get${type}ArrayListExtra(Ljava/lang/String;)Ljava/util/ArrayList;`] = function (this: JIntent, key: string) { return this.extras.map.get(key) ?? null; };
+for (const [t, d] of BUNDLE_TYPED) {
+  if (t === "SparseParcelableArray") continue;
+  const single = d === "Ljava/lang/Object;" || d === "Ljava/io/Serializable;";
+  intentMethods[`get${t}Extra(Ljava/lang/String;Ljava/lang/Class;)${d}`] = function (this: JIntent, k: string, cls: unknown) { return bundleTyped(this.extras, k, cls, single); };
 }
 class JShortcutIconResource extends JObj { packageName = ""; resourceName = ""; }
 rt.register({

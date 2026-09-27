@@ -252,6 +252,42 @@ describe("intent-chooser", () => {
   });
 });
 
+describe("intent-typed-extras", () => {
+  rt.linkNatives();
+  test("typed extras keep their type through a Parcel and reach Bundle.readFromParcel", async () => {
+    const intent = await newObj("android/content/Intent", "()V");
+    const component = await newObj("android/content/ComponentName", "(Ljava/lang/String;Ljava/lang/String;)V", "p", "p.C");
+    const values: [string, string, unknown][] = [["J", "[J", new BigInt64Array([1n, -2n])], ["C", "[C", new Uint16Array([65, 66])],
+      ["S", "[S", new Int16Array([-3])], ["Z", "[Z", new Uint8Array([1, 0])], ["F", "[F", new Float32Array([0.5])],
+      ["D", "[D", new Float64Array([0.25])], ["b", "B", -7], ["s", "S", 300], ["r", "[Landroid/os/Parcelable;", Object.assign([component], { $t: "Landroid/os/Parcelable;" })]];
+    for (const [k, d, v] of values) await vcall(intent, "putExtra", `(Ljava/lang/String;${d})Landroid/content/Intent;`, k, v);
+    const parcel = await newObj("android/os/Parcel", "()V");
+    await vcall(parcel, "writeParcelable", "(Landroid/os/Parcelable;I)V", intent, 0);
+    await vcall(parcel, "setDataPosition", "(I)V", 0);
+    const back = await vcall(parcel, "readParcelable", "(Ljava/lang/ClassLoader;)Landroid/os/Parcelable;", null);
+    expect([...await vcall(back, "getLongArrayExtra", "(Ljava/lang/String;)[J", "J")]).toEqual([1n, -2n]);
+    expect([...await vcall(back, "getCharArrayExtra", "(Ljava/lang/String;)[C", "C")]).toEqual([65, 66]);
+    expect([...await vcall(back, "getBooleanArrayExtra", "(Ljava/lang/String;)[Z", "Z")]).toEqual([1, 0]);
+    expect(await vcall(back, "getShortExtra", "(Ljava/lang/String;S)S", "s", 0)).toBe(300);
+    expect(await vcall(back, "getByteExtra", "(Ljava/lang/String;B)B", "s", 9)).toBe(9);
+    const components = await vcall(back, "getParcelableArrayExtra", "(Ljava/lang/String;Ljava/lang/Class;)[Ljava/lang/Object;", "r", rt.classFor("android/content/ComponentName"));
+    expect(await vcall(components[0], "equals", "(Ljava/lang/Object;)Z", component)).toBe(1);
+
+    const extras = await vcall(back, "getExtras", "()Landroid/os/Bundle;");
+    const bundleParcel = await newObj("android/os/Parcel", "()V");
+    await vcall(extras, "writeToParcel", "(Landroid/os/Parcel;I)V", bundleParcel, 0);
+    await vcall(bundleParcel, "setDataPosition", "(I)V", 0);
+    const bundle = await newObj("android/os/Bundle", "()V");
+    await vcall(bundle, "readFromParcel", "(Landroid/os/Parcel;)V", bundleParcel);
+    expect((await vcall(bundle, "getByte", "(Ljava/lang/String;B)Ljava/lang/Byte;", "b", 0)).v).toBe(-7);
+    expect([...await vcall(bundle, "getDoubleArray", "(Ljava/lang/String;)[D", "D")]).toEqual([0.25]);
+    expect(await vcall(bundle, "getParcelable", "(Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/Object;", "r", rt.classFor("android/content/ComponentName"))).toBeNull();
+    await vcall(bundle, "putParcelable", "(Ljava/lang/String;Landroid/os/Parcelable;)V", "p", component);
+    expect(await vcall(bundle, "getParcelable", "(Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/Object;", "p", rt.classFor("android/content/ComponentName"))).toBe(component);
+    expect(await vcall(bundle, "getSerializable", "(Ljava/lang/String;Ljava/lang/Class;)Ljava/io/Serializable;", "p", rt.classFor("java/lang/String"))).toBeNull();
+  });
+});
+
 describe("intent-filter-path", () => {
   rt.linkNatives();
 
