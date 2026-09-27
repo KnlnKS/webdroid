@@ -4,7 +4,8 @@ import { Inflate, Unzlib, Deflate, Zlib, Gzip, Zip, ZipDeflate, ZipPassThrough, 
 import { rt, JObj, driven, type Gen } from "../runtime";
 import { utf8, i8, u8 } from "../abi";
 import { vcall, newObj, defineException } from "./jlang";
-import { vfs, JFile, JInputStream, JOutputStream, readStreamFully } from "./jio";
+import { vfs, JFile, JInputStream, JOutputStream, JFilterInputStream, JFilterOutputStream, readStreamFully } from "./jio";
+import { JBuffer } from "./jnio";
 import { mkIter } from "./jutil";
 import { readFully, type FileSource } from "../../shell/lazyfile";
 
@@ -192,38 +193,104 @@ rt.register({
   },
 });
 
-class JCRC32 extends JObj { crc = 0xffffffff; }
-const CRC_T = new Uint32Array(256);
-for (let i = 0; i < 256; i++) { let c = i; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; CRC_T[i] = c >>> 0; }
-rt.register({
-  name: "java/util/zip/CRC32", ctor: JCRC32,
-  methods: {
-    "<init>()V": function () {},
-    "update([BII)V": function (this: JCRC32, b: Int8Array, off: number, len: number) {
-      let c = this.crc;
-      for (let i = 0; i < len; i++) c = CRC_T[(c ^ b[off + i]) & 0xff] ^ (c >>> 8);
-      this.crc = c >>> 0;
+// ── Checksum: CRC32, CRC32C and Adler32 share every update overload
+const crcTable = (poly: number) => Uint32Array.from({ length: 256 }, (_, i) => {
+  let c = i;
+  for (let k = 0; k < 8; k++) c = c & 1 ? poly ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+interface ChecksumAlgo { init: number; step(state: number, b: Uint8Array, off: number, len: number): number; value(state: number): number }
+const crc = (table: Uint32Array): ChecksumAlgo => ({
+  init: 0xffffffff,
+  step(c, b, off, len) { for (let i = off; i < off + len; i++) c = table[(c ^ b[i]) & 0xff] ^ (c >>> 8); return c >>> 0; },
+  value: (c) => (c ^ 0xffffffff) >>> 0,
+});
+const adler32: ChecksumAlgo = {
+  init: 1,
+  step(state, buf, off, len) {
+    let a = state & 0xffff, b = state >>> 16;
+    for (let i = off; i < off + len; i++) { a = (a + buf[i]) % 65521; b = (b + a) % 65521; }
+    return ((b << 16) | a) >>> 0;
+  },
+  value: (state) => state,
+};
+class JChecksum extends JObj { state = 0; declare algo: ChecksumAlgo; }
+const CHECKSUMS: [string, ChecksumAlgo][] = [["CRC32", crc(crcTable(0xedb88320))], ["CRC32C", crc(crcTable(0x82f63b78))], ["Adler32", adler32]];
+const updateBytes = function (this: JChecksum, b: Int8Array, off: number, len: number) {
+  if (!b) rt.npe();
+  if (off < 0 || len < 0 || off > b.length - len) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
+  this.state = this.algo.step(this.state, u8(b), off, len);
+};
+const checksumMethods = {
+  "update([B)V": function (this: JChecksum, b: Int8Array) { updateBytes.call(this, b, 0, b?.length ?? 0); },
+  "update([BII)V": updateBytes,
+  "update(Ljava/nio/ByteBuffer;)V": function (this: JChecksum, bb: JBuffer) {
+    const n = bb.lim - bb.pos;
+    this.state = this.algo.step(this.state, new Uint8Array(bb.ab, bb.dv.byteOffset + bb.pos, n), 0, n);
+    bb.pos = bb.lim;
+  },
+};
+rt.register({ name: "java/util/zip/Checksum", ctor: class extends JObj {}, methods: checksumMethods });
+for (const [name, algo] of CHECKSUMS) {
+  rt.register({
+    name: "java/util/zip/" + name, ctor: class extends JChecksum { algo = algo; state = algo.init; }, ifaces: ["java/util/zip/Checksum"],
+    methods: {
+      ...checksumMethods,
+      "<init>()V": function () {},
+      "update(I)V": function (this: JChecksum, v: number) { this.state = this.algo.step(this.state, Uint8Array.of(v), 0, 1); },
+      "getValue()J": function (this: JChecksum) { return BigInt(this.algo.value(this.state)); },
+      "reset()V": function (this: JChecksum) { this.state = this.algo.init; },
     },
-    "update(I)V": function (this: JCRC32, v: number) { this.crc = (CRC_T[(this.crc ^ v) & 0xff] ^ (this.crc >>> 8)) >>> 0; },
-    "getValue()J": function (this: JCRC32) { return BigInt((this.crc ^ 0xffffffff) >>> 0); },
-    "reset()V": function (this: JCRC32) { this.crc = 0xffffffff; },
+  });
+}
+const checksumOf = (c: unknown) => (c instanceof JChecksum ? c : null);
+/** update a Checksum, ours directly and an app's own through its update([BII)V */
+const feed = (c: unknown, b: Int8Array, off: number, len: number) => {
+  const own = checksumOf(c);
+  return own ? updateBytes.call(own, b, off, len) : vcall(c, "update", "([BII)V", b, off, len);
+};
+class JCheckedIn extends JFilterInputStream { cksum: unknown = null; }
+rt.register({
+  name: "java/util/zip/CheckedInputStream", ctor: JCheckedIn, sup: "java/io/FilterInputStream",
+  methods: {
+    "<init>(Ljava/io/InputStream;Ljava/util/zip/Checksum;)V": function (this: JCheckedIn, s: unknown, c: unknown) { this.in_ = s; this.cksum = c; },
+    "read()I": driven(function* (this: JCheckedIn): Gen {
+      const b = yield vcall(this.in_, "read", "()I");
+      if (b >= 0) yield feed(this.cksum, Int8Array.of(b), 0, 1);
+      return b;
+    }),
+    "read([BII)I": driven(function* (this: JCheckedIn, buf: Int8Array, off: number, len: number): Gen {
+      const n = yield vcall(this.in_, "read", "([BII)I", buf, off, len);
+      if (n > 0) yield feed(this.cksum, buf, off, n);
+      return n;
+    }),
+    "skip(J)J": driven(function* (this: JCheckedIn, n: bigint): Gen {
+      const buf = new Int8Array(512);
+      let total = 0n;
+      while (total < n) {
+        const r = yield vcall(this, "read", "([BII)I", buf, 0, Number(n - total < 512n ? n - total : 512n));
+        if (r < 0) break;
+        total += BigInt(r);
+      }
+      return total;
+    }),
+    "getChecksum()Ljava/util/zip/Checksum;": function (this: JCheckedIn) { return this.cksum; },
   },
 });
-
-class JAdler32 extends JObj { a = 1; b = 0; }
+class JCheckedOut extends JFilterOutputStream { cksum: unknown = null; }
 rt.register({
-  name: "java/util/zip/Adler32", ctor: JAdler32,
+  name: "java/util/zip/CheckedOutputStream", ctor: JCheckedOut, sup: "java/io/FilterOutputStream",
   methods: {
-    "<init>()V": function () {},
-    "update([BII)V": function (this: JAdler32, buf: Int8Array, off: number, len: number) {
-      let { a, b } = this;
-      for (let i = 0; i < len; i++) { a = (a + (buf[off + i] & 0xff)) % 65521; b = (b + a) % 65521; }
-      this.a = a; this.b = b;
-    },
-    "update([B)V": function (this: JAdler32, buf: Int8Array) { return vcall(this, "update", "([BII)V", buf, 0, buf.length); },
-    "update(I)V": function (this: JAdler32, v: number) { this.a = (this.a + (v & 0xff)) % 65521; this.b = (this.b + this.a) % 65521; },
-    "getValue()J": function (this: JAdler32) { return BigInt(((this.b << 16) | this.a) >>> 0); },
-    "reset()V": function (this: JAdler32) { this.a = 1; this.b = 0; },
+    "<init>(Ljava/io/OutputStream;Ljava/util/zip/Checksum;)V": function (this: JCheckedOut, s: unknown, c: unknown) { this.out = s; this.cksum = c; },
+    "write(I)V": driven(function* (this: JCheckedOut, b: number): Gen {
+      yield vcall(this.out, "write", "(I)V", b);
+      yield feed(this.cksum, Int8Array.of(b), 0, 1);
+    }),
+    "write([BII)V": driven(function* (this: JCheckedOut, buf: Int8Array, off: number, len: number): Gen {
+      yield vcall(this.out, "write", "([BII)V", buf, off, len);
+      yield feed(this.cksum, buf, off, len);
+    }),
+    "getChecksum()Ljava/util/zip/Checksum;": function (this: JCheckedOut) { return this.cksum; },
   },
 });
 
