@@ -504,11 +504,11 @@ export function connectProcess(): ProcessEndpoint {
   return {
     clipboardChanged: async () => clipboardChanged(),
     activity: async (request) => {
-      const shell = await import("./device");
-      if (request.kind === "finishTask") return shell.finishTask(request.taskId, request.resume);
+      const [shell, stack] = await Promise.all([import("./device"), import("./activities")]);
+      if (request.kind === "finishTask") return stack.finishTask(request.taskId, request.resume);
       if (request.kind === "back") return shell.pressBack();
       if (request.kind === "visibility") {
-        await shell.activityVisibility(request.phase);
+        await stack.activityVisibility(request.phase);
         if (request.phase !== "pause") setVisible(request.phase !== "stop");
       } else if (request.kind === "launch") {
         const intent = await decodeIntent(request.intent);
