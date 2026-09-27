@@ -21,7 +21,8 @@ import { onMain, inMainJob } from "./mainloop";
 import { uiState } from "./view";
 import { mkExecutor } from "../jvm/natives/jconc";
 import { yieldToLoop } from "../native/cpu";
-import { mkFile, JInputStream, JOutputStream, vfs, type JFileDescriptor } from "../jvm/natives/jio";
+import { mkFile, JInputStream, JOutputStream, vfs, type JFileDescriptor, type JFile } from "../jvm/natives/jio";
+import { frameworkString } from "./res";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, fdWriteBack } from "../native/stdio";
 import { newArrayList, newStringSet, toJsArray } from "../jvm/natives/jutil";
 import { JBuffer, mkByteBuffer } from "../jvm/natives/jnio";
@@ -932,12 +933,17 @@ rt.register({ name: "android/system/StructStatVfs", ctor: JStructStatVfs, fields
 } });
 // ── android.os.storage.StorageManager: the one volume, identified by the platform's default UUID
 let storageUuid: ReturnType<typeof uuidFromString> | null = null;
-const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
-const storageEstimate = driven(function* storageEstimate(): Gen<{ total: number; free: number }> {
+export const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
+export const storageEstimate = driven(function* storageEstimate(): Gen<{ total: number; free: number }> {
   const s = new JStatFs();
   yield statFs.call(s, "/data");
   return s;
 });
+// the emulated primary volume that is shared storage: it has no UUID of its own, and its
+// storage UUID is the internal one it lives on
+const SHARED = "/sdcard";
+let primary: JObj | null = null;
+const primaryVolume = () => primary ??= rt.make("android/os/storage/StorageVolume");
 rt.register({
   name: "android/os/storage/StorageManager", ctor: class extends JObj {},
   statics: { get UUID_DEFAULT() { return uuidDefault(); } },
@@ -948,9 +954,26 @@ rt.register({
     "getCacheSizeBytes(Ljava/util/UUID;)J": () => 0n,
     "isAllocationSupported(Ljava/io/FileDescriptor;)Z": () => 0,
     "isEncrypted(Ljava/io/File;)Z": () => 0,
-    "getStorageVolumes()Ljava/util/List;": () => newArrayList(),
-    "getPrimaryStorageVolume()Landroid/os/storage/StorageVolume;": () => null,
-    "getStorageVolume(Ljava/io/File;)Landroid/os/storage/StorageVolume;": () => null,
+    "getStorageVolumes()Ljava/util/List;": () => newArrayList([primaryVolume()]),
+    "getPrimaryStorageVolume()Landroid/os/storage/StorageVolume;": primaryVolume,
+    "getStorageVolume(Ljava/io/File;)Landroid/os/storage/StorageVolume;": (file: JFile | null) => {
+      if (!file) rt.npe();
+      return file!.path === SHARED || file!.path.startsWith(SHARED + "/") ? primaryVolume() : null;
+    },
+  },
+});
+rt.register({
+  name: "android/os/storage/StorageVolume", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"],
+  methods: {
+    "getDirectory()Ljava/io/File;": () => mkFile(SHARED),
+    "getDescription(Landroid/content/Context;)Ljava/lang/String;": () => frameworkString("storage_internal") ?? "",
+    "getState()Ljava/lang/String;": () => "mounted",
+    "getMediaStoreVolumeName()Ljava/lang/String;": () => "external_primary",
+    "getStorageUuid()Ljava/util/UUID;": () => uuidDefault(),
+    "getUuid()Ljava/lang/String;": () => null,
+    ...stubs(1, "isPrimary()Z", "isEmulated()Z"),
+    ...stubs(0, "isRemovable()Z", "describeContents()I"),
+    "createOpenDocumentTreeIntent()Landroid/content/Intent;": () => newObj("android/content/Intent", "(Ljava/lang/String;)V", "android.intent.action.OPEN_DOCUMENT_TREE"),
   },
 });
 rt.register({

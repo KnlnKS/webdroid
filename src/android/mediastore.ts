@@ -23,7 +23,7 @@ function hash(path: string): number {
   for (let i = 0; i < path.length; i++) h = Math.imul(h ^ path.charCodeAt(i), 0x01000193);
   return (h >>> 1) || 1;
 }
-function mimeOf(path: string): string | null {
+export function mimeOf(path: string): string | null {
   return extensions[path.slice(path.lastIndexOf(".") + 1).toLowerCase()] ?? null;
 }
 function mediaType(mime: string | null): number {

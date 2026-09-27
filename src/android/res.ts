@@ -403,6 +403,11 @@ export function resolveStyleValue(res: Resources, theme: JTheme | null | undefin
 
 /** the string resource `id` names, "" when it is not one */
 export const resString = (res: Resources, id: number): string => rvString(res, res.ref(id)) ?? "";
+/** a com.android.internal string, as the platform's own UI labels things */
+export function frameworkString(name: string): string | null {
+  const res = currentResources(), id = res?.idFor("string", name, "android");
+  return id ? rvString(res!, res!.ref(id)) : null;
+}
 export function bagStrings(res: Resources, id: number): string[] {
   const bag = res.bag(id);
   return bag ? [...bag.map.values()].map((v) => rvString(res, res.resolveRefs(v)) ?? "") : [];

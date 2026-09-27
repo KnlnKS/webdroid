@@ -17,7 +17,7 @@ export const newAudioSessionId = (): number => ++audioSession;
 import { onMain } from "./mainloop";
 import { JBundle, reportUncaught } from "./os";
 import { mkUri, uriParts, type JUri } from "./net";
-import { currentResources, rvString } from "./res";
+import { currentResources, frameworkString } from "./res";
 import { csText } from "./text";
 import { scannedMediaUri } from "./mediastore";
 
@@ -484,10 +484,6 @@ const actualDefaultUri = driven(function* (context: unknown, type: number): Gen<
     "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;", resolver, setting);
   return value ? mkUri(value) : null;
 });
-function frameworkString(name: string): string | null {
-  const res = currentResources(), id = res?.idFor("string", name, "android");
-  return id ? rvString(res!, res!.ref(id)) : null;
-}
 const ringtoneTitle = driven(function* (context: unknown, uri: JUri | null, followDefault: boolean): Gen<string> {
   let title: string | null = null;
   if (!uri) title = frameworkString("ringtone_silent");

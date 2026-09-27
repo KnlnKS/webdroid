@@ -160,7 +160,6 @@ const SERVICE_NAME = new Map(Object.entries(SERVICE_CLASS).map(([n, c]) => [c, n
 SERVICE_NAME.set("android/view/WindowManager", "window");
 export function systemService(jctx: JContext | null, name: string): unknown {
   if (name === "layout_inflater") return getInflater(jctx);
-  if (name === "storagestats") return null;
   if (name === "performance_hint") return null;
   let s = services.get(name);
   if (s) return s;
