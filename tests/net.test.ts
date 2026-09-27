@@ -7,6 +7,8 @@ import { dialName, syntheticAddress } from "../src/shell/relay";
 import { systemService } from "../src/android/context";
 import { scall } from "./java";
 
+rt.linkNatives();
+
 describe("datagram-socket", () => {
   test("DatagramSocket delivers loopback packets and preserves source metadata", async () => {
     const receiver = await newObj("java/net/DatagramSocket", "()V");
@@ -26,8 +28,6 @@ describe("datagram-socket", () => {
 });
 
 describe("http-stream", () => {
-  rt.linkNatives();
-
   test("HTTP headers and incremental reads do not await the entire response, and timed-out reads remain usable", async () => {
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
     const server = Bun.serve({ port: 0, fetch: () => new Response(new ReadableStream<Uint8Array>({
@@ -91,7 +91,6 @@ describe("http-stream", () => {
 });
 
 describe("http-upload", () => {
-  rt.linkNatives();
   test("HTTP connect leaves the upload writable and response accessors share one request", async () => {
     const original = globalThis.fetch;
     const requests: { method: string; body: number[] }[] = [];
@@ -129,8 +128,6 @@ describe("http-upload", () => {
 });
 
 describe("inet", () => {
-  rt.linkNatives();
-
   test("InetAddress hands out the resolver's synthetic address, which dials the name again", async () => {
     const a = await scall("java/net/InetAddress", "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", "v16m.example.com");
     const text = await vcall(a, "getHostAddress", "()Ljava/lang/String;");
@@ -185,8 +182,6 @@ describe("inet", () => {
 });
 
 describe("localsocket", () => {
-  rt.linkNatives();
-
   test("LocalServerSocket accepts an in-process LocalSocket and streams bytes both ways", async () => {
     const server = await newObj("android/net/LocalServerSocket", "(Ljava/lang/String;)V", "wd.test.sock");
     await expect((async () => newObj("android/net/LocalServerSocket", "(Ljava/lang/String;)V", "wd.test.sock"))()).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
@@ -221,55 +216,34 @@ describe("localsocket", () => {
 });
 
 describe("network-request", () => {
-  rt.linkNatives();
+  const builder = () => newObj("android/net/NetworkRequest$Builder", "()V");
+  const build = (target: unknown) => vcall(target, "build", "()Landroid/net/NetworkRequest;");
 
-  test("NetworkRequest builder includes other UID networks fluently", async () => {
-    const builder = await newObj("android/net/NetworkRequest$Builder", "()V");
-    expect(await vcall(builder, "setIncludeOtherUidNetworks", "(Z)Landroid/net/NetworkRequest$Builder;", 1)).toBe(builder);
-    const request = await vcall(builder, "build", "()Landroid/net/NetworkRequest;");
-    expect(request).not.toBeNull();
+  test("NetworkRequest builders chain fluently and expose the network specifier", async () => {
+    const target = await builder(), specifier = rt.make("android/net/NetworkSpecifier");
+    expect(await vcall(target, "setIncludeOtherUidNetworks", "(Z)Landroid/net/NetworkRequest$Builder;", 1)).toBe(target);
+    expect(await vcall(target, "setNetworkSpecifier", "(Landroid/net/NetworkSpecifier;)Landroid/net/NetworkRequest$Builder;", specifier)).toBe(target);
+    expect(await vcall(await build(target), "getNetworkSpecifier", "()Landroid/net/NetworkSpecifier;")).toBe(specifier);
+    expect(await vcall(await build(await builder()), "getNetworkSpecifier", "()Landroid/net/NetworkSpecifier;")).toBeNull();
   });
 
-  test("NetworkRequest exposes the builder's network specifier", async () => {
-    const builder = await newObj("android/net/NetworkRequest$Builder", "()V");
-    const specifier = rt.make("android/net/NetworkSpecifier");
-    expect(await vcall(builder, "setNetworkSpecifier", "(Landroid/net/NetworkSpecifier;)Landroid/net/NetworkRequest$Builder;", specifier)).toBe(builder);
-    const request = await vcall(builder, "build", "()Landroid/net/NetworkRequest;");
-    expect(await vcall(request, "getNetworkSpecifier", "()Landroid/net/NetworkSpecifier;")).toBe(specifier);
-
-    const empty = await newObj("android/net/NetworkRequest$Builder", "()V");
-    const emptyRequest = await vcall(empty, "build", "()Landroid/net/NetworkRequest;");
-    expect(await vcall(emptyRequest, "getNetworkSpecifier", "()Landroid/net/NetworkSpecifier;")).toBeNull();
-  });
-
-  test("NetworkRequest exposes a defensive array of transport types", async () => {
-    const builder = await newObj("android/net/NetworkRequest$Builder", "()V");
-    await vcall(builder, "addTransportType", "(I)Landroid/net/NetworkRequest$Builder;", 3);
-    await vcall(builder, "addTransportType", "(I)Landroid/net/NetworkRequest$Builder;", 1);
-    await vcall(builder, "addTransportType", "(I)Landroid/net/NetworkRequest$Builder;", 3);
-    const request = await vcall(builder, "build", "()Landroid/net/NetworkRequest;");
-    const transports = await vcall(request, "getTransportTypes", "()[I") as Int32Array;
-    expect([...transports]).toEqual([1, 3]);
-    transports[0] = 7;
-    expect([...(await vcall(request, "getTransportTypes", "()[I") as Int32Array)]).toEqual([1, 3]);
-  });
-
-  test("NetworkRequest exposes a defensive array of capabilities", async () => {
-    const builder = await newObj("android/net/NetworkRequest$Builder", "()V");
-    await vcall(builder, "addCapability", "(I)Landroid/net/NetworkRequest$Builder;", 12);
-    await vcall(builder, "addCapability", "(I)Landroid/net/NetworkRequest$Builder;", 5);
-    await vcall(builder, "addCapability", "(I)Landroid/net/NetworkRequest$Builder;", 12);
-    const request = await vcall(builder, "build", "()Landroid/net/NetworkRequest;");
-    const capabilities = await vcall(request, "getCapabilities", "()[I") as Int32Array;
-    expect([...capabilities]).toEqual([5, 12]);
-    capabilities[0] = 7;
-    expect([...(await vcall(request, "getCapabilities", "()[I") as Int32Array)]).toEqual([5, 12]);
+  test("NetworkRequest exposes sorted, deduplicated defensive arrays of transports and capabilities", async () => {
+    for (const [add, get, values, expected] of [
+      ["addTransportType", "getTransportTypes", [3, 1, 3], [1, 3]],
+      ["addCapability", "getCapabilities", [12, 5, 12], [5, 12]],
+    ] as const) {
+      const target = await builder();
+      for (const value of values) await vcall(target, add, "(I)Landroid/net/NetworkRequest$Builder;", value);
+      const request = await build(target);
+      const array = await vcall(request, get, "()[I") as Int32Array;
+      expect([...array]).toEqual(expected);
+      array[0] = 7;
+      expect([...(await vcall(request, get, "()[I") as Int32Array)]).toEqual(expected);
+    }
   });
 });
 
 describe("network-stats", () => {
-  rt.linkNatives();
-
   test("network stats expose an empty supported query", async () => {
     const context = rt.make("android/content/Context");
     const manager = systemService(context, "netstats");
@@ -312,55 +286,34 @@ describe("nsd-service", () => {
   });
 });
 
-describe("uri-raw-authority", () => {
-  rt.linkNatives();
-
-  test("URI.getRawAuthority preserves escaped authority text", async () => {
-    const uri = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "https://user%20name@example.com:8443/a?q=1");
-    expect(await vcall(uri, "getRawAuthority", "()Ljava/lang/String;")).toBe("user%20name@example.com:8443");
-    expect(await vcall(uri, "getAuthority", "()Ljava/lang/String;")).toBe("user name@example.com:8443");
-    const relative = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "//example.test/path");
-    expect(await vcall(relative, "getRawAuthority", "()Ljava/lang/String;")).toBe("example.test");
-    const opaque = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "mailto:user@example.test");
-    expect(await vcall(opaque, "getRawAuthority", "()Ljava/lang/String;")).toBeNull();
-    const empty = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "file:///tmp/video.mp4");
-    expect(await vcall(empty, "getRawAuthority", "()Ljava/lang/String;")).toBeNull();
-    expect(await vcall(empty, "getAuthority", "()Ljava/lang/String;")).toBeNull();
-  });
-
-  test("URI.getRawUserInfo preserves escaped credentials", async () => {
-    const uri = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "https://user%20name:p%40ss@example.com/path");
-    expect(await vcall(uri, "getRawUserInfo", "()Ljava/lang/String;")).toBe("user%20name:p%40ss");
-    expect(await vcall(uri, "getUserInfo", "()Ljava/lang/String;")).toBe("user name:p@ss");
-    const anonymous = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "https://example.com/path");
-    expect(await vcall(anonymous, "getRawUserInfo", "()Ljava/lang/String;")).toBeNull();
-  });
-
-  test("URI.getRawQuery preserves the hierarchical query component", async () => {
-    const escaped = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "https://example.test/a?name=a%20b&path=%2F#fragment");
-    expect(await vcall(escaped, "getRawQuery", "()Ljava/lang/String;")).toBe("name=a%20b&path=%2F");
-    const relative = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "a/b?x=1");
-    expect(await vcall(relative, "getRawQuery", "()Ljava/lang/String;")).toBe("x=1");
-    const empty = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "https://example.test/path?#fragment");
-    expect(await vcall(empty, "getRawQuery", "()Ljava/lang/String;")).toBe("");
-    const opaque = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "mailto:user@example.test?subject=hello");
-    expect(await vcall(opaque, "getRawQuery", "()Ljava/lang/String;")).toBeNull();
-  });
-
-  test("URI.getRawFragment preserves escaped and empty fragments", async () => {
-    const escaped = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "https://example.test/a?q=1#section%202%2F3");
-    expect(await vcall(escaped, "getRawFragment", "()Ljava/lang/String;")).toBe("section%202%2F3");
-    const opaque = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "mailto:user@example.test#contact%20card");
-    expect(await vcall(opaque, "getRawFragment", "()Ljava/lang/String;")).toBe("contact%20card");
-    const empty = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "relative#");
-    expect(await vcall(empty, "getRawFragment", "()Ljava/lang/String;")).toBe("");
-    const absent = scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", "relative");
-    expect(await vcall(absent, "getRawFragment", "()Ljava/lang/String;")).toBeNull();
+describe("uri-raw-components", () => {
+  test("URI raw and decoded accessors preserve escaped, empty and absent components", async () => {
+    for (const [text, method, expected] of [
+      ["https://user%20name@example.com:8443/a?q=1", "getRawAuthority", "user%20name@example.com:8443"],
+      ["https://user%20name@example.com:8443/a?q=1", "getAuthority", "user name@example.com:8443"],
+      ["//example.test/path", "getRawAuthority", "example.test"],
+      ["mailto:user@example.test", "getRawAuthority", null],
+      ["file:///tmp/video.mp4", "getRawAuthority", null],
+      ["file:///tmp/video.mp4", "getAuthority", null],
+      ["https://user%20name:p%40ss@example.com/path", "getRawUserInfo", "user%20name:p%40ss"],
+      ["https://user%20name:p%40ss@example.com/path", "getUserInfo", "user name:p@ss"],
+      ["https://example.com/path", "getRawUserInfo", null],
+      ["https://example.test/a?name=a%20b&path=%2F#fragment", "getRawQuery", "name=a%20b&path=%2F"],
+      ["a/b?x=1", "getRawQuery", "x=1"],
+      ["https://example.test/path?#fragment", "getRawQuery", ""],
+      ["mailto:user@example.test?subject=hello", "getRawQuery", null],
+      ["https://example.test/a?q=1#section%202%2F3", "getRawFragment", "section%202%2F3"],
+      ["mailto:user@example.test#contact%20card", "getRawFragment", "contact%20card"],
+      ["relative#", "getRawFragment", ""],
+      ["relative", "getRawFragment", null],
+    ] as const) {
+      const uri = await scall("java/net/URI", "create", "(Ljava/lang/String;)Ljava/net/URI;", text);
+      expect([text, method, await vcall(uri, method, "()Ljava/lang/String;")]).toEqual([text, method, expected]);
+    }
   });
 });
 
 describe("uri-syntax", () => {
-  rt.linkNatives();
   test("URI syntax exceptions preserve input, reason and optional index", async () => {
     const error = await newObj("java/net/URISyntaxException", "(Ljava/lang/String;Ljava/lang/String;I)V", "a b", "Illegal character", 1);
     expect(await vcall(error, "getMessage", "()Ljava/lang/String;")).toBe("Illegal character at index 1: a b");
@@ -391,8 +344,6 @@ describe("uri-syntax", () => {
 });
 
 describe("url-empty-authority", () => {
-  rt.linkNatives();
-
   test("URL preserves Android's empty HTTP authority", async () => {
     for (const [spec, path, query] of [
       ["http://", "", null],
@@ -410,8 +361,6 @@ describe("url-empty-authority", () => {
 });
 
 describe("urlconnection-mime", () => {
-  rt.linkNatives();
-
   test("URLConnection guesses names using Android fragment and directory rules", async () => {
     const guess = (name: string | null) => vcallAsync(rt.link("java/net/URLConnection").ctor, "guessContentTypeFromName", "(Ljava/lang/String;)Ljava/lang/String;", name);
     expect(await guess("/assets/INDEX.HTML#part")).toBe("text/html");
@@ -426,8 +375,6 @@ describe("urlconnection-mime", () => {
 });
 
 describe("wifi", () => {
-  rt.linkNatives();
-
   const signalLevel = (rssi: number, levels: number) =>
     (rt.link("android/net/wifi/WifiManager").ctor as unknown as Record<string, (rssi: number, levels: number) => number>)[
       mangleMethod("calculateSignalLevel", "(II)I")
