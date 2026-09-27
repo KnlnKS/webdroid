@@ -77,7 +77,8 @@ export class ClassInfo {
   superInfo: ClassInfo | null = null;
   interfaces: ClassInfo[] = [];
   types = new Set<string>();          // all names this is assignable to
-  state = 0;                          // 0 linked, 1 initing, 2 inited
+  state = 0;                          // 0 linked, 1 initing, 2 inited, 3 erroneous (<clinit> failed)
+  initError: unknown = null;          // what the failed <clinit> threw
   initP: Promise<void> | null = null; // in-flight clinit (state 1): cross-chain waiters await it
   assumeReentrant = false;            // a wait on this clinit timed out once: stop waiting (same-chain cycle)
   initThread: unknown = null;         // thread running the in-flight clinit (JLS recursive-request check)
@@ -585,7 +586,11 @@ export class Runtime {
       // indistinguishable from a wait that will never end.
       return this.awaitInit(info, from, info.initThread === this.th());
     }
-    if (info.state !== 0) return null;
+    if (info.state !== 0) {
+      if (info.state === 3) throw Object.assign(this.mkThrowable("java/lang/NoClassDefFoundError",
+        `Rejecting re-init on previously-failed class java.lang.Class<${dotName(info.name)}>`), { cause: info.initError });
+      return null;
+    }
     info.state = 1;
     info.initThread = this.th();
 
@@ -621,9 +626,14 @@ export class Runtime {
     };
 
     const settle = () => { info.state = 2; info.initP = null; info.initThread = null; info.assumeReentrant = false; };
+    /** JLS 12.4.2: the class becomes erroneous; an Exception reaches the caller wrapped in an
+     *  ExceptionInInitializerError, and every later initialization fails with NoClassDefFoundError */
     const failed = (e: unknown) => {
-      settle();   // ExceptionInInitializerError-ish: don't retry forever
-      console.warn("[webdroid clinit-failed]", info.name, e);
+      settle();
+      info.state = 3;
+      const t = this.jx(e);
+      console.warn("[webdroid clinit-failed]", info.name, t);
+      return info.initError = this.iof(t, "java/lang/Error") ? t : Object.assign(this.mkThrowable("java/lang/ExceptionInInitializerError", null), { cause: t });
     };
     /** hand the remaining steps to the microtask queue, from the one that yielded */
     const async = (pending: Promise<unknown>, after: (() => Promise<void> | null) | null): Promise<void> => {
@@ -633,7 +643,7 @@ export class Runtime {
           const more = after?.();
           if (more) await more;
           info.state = 2;
-        } catch (e) { failed(e); throw e; } finally {
+        } catch (e) { throw failed(e); } finally {
           info.initP = null; info.initThread = null; info.assumeReentrant = false;
         }
       })();
@@ -645,7 +655,7 @@ export class Runtime {
       if (sup) return async(sup, rest);
       const pending = rest();
       if (pending) return async(pending, null);
-    } catch (e) { failed(e); throw e; }
+    } catch (e) { throw failed(e); }
     settle();
     return null;
   }

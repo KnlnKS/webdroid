@@ -264,6 +264,20 @@ describe("pattern-split", () => {
   });
 });
 
+describe("class-init", () => {
+  rt.linkNatives();
+  test("a failed <clinit> wraps its exception once, then the class stays erroneous", () => {
+    rt.register({ name: "test/FailingInit", ctor: class extends JObj {}, clinit: () => { throw rt.mkThrowable("java/lang/IllegalStateException", "boom"); } });
+    const info = rt.link("test/FailingInit");
+    const attempt = () => { try { rt.initClass(info); } catch (e) { return e as { cause: unknown }; } };
+    const first = attempt(), second = attempt();
+    expect(rt.iof(first, "java/lang/ExceptionInInitializerError")).toBe(1);
+    expect((first!.cause as { msg: string }).msg).toBe("boom");
+    expect(rt.iof(second, "java/lang/NoClassDefFoundError")).toBe(1);
+    expect(second!.cause).toBe(first);
+  });
+});
+
 describe("reference", () => {
   rt.linkNatives();
 
