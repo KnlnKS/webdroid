@@ -7,7 +7,7 @@ import { JCanvas, JRect, JRectF, JBitmap, JPaint, matMul, rotM, type JMatrix, ty
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { uptimeMillis } from "./os";
-import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, xmlParserAtNode, normRV, resolveStyleValue } from "./res";
+import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, rvString, xmlParserAtNode, normRV, resolveStyleValue } from "./res";
 import { absGravity, gravityApply } from "./gravity";
 import { complexToFraction, type JTypedValue } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
@@ -1067,7 +1067,6 @@ class JVectorDrawable extends JDrawable {
   vw = 24; vh = 24; // dp size
   vpW = 24; vpH = 24;
   paths: { p2d: Path2D; fill: number | null; stroke: number | null; strokeW: number; fillAlpha: number; evenOdd: boolean; transform: JMatrix["m"] | null }[] = [];
-  vtint: number | null = null;
   paint(cv: JCanvas) {
     const { left, top, right, bottom } = this.bounds;
     const w = right - left, h = bottom - top;
@@ -1077,7 +1076,7 @@ class JVectorDrawable extends JDrawable {
     ctx.globalAlpha *= this.alpha / 255;
     ctx.translate(left, top);
     ctx.scale(w / this.vpW, h / this.vpH);
-    const tint = this.tint ?? this.vtint, alpha = ctx.globalAlpha;
+    const tint = this.tint, alpha = ctx.globalAlpha;
     for (const p of this.paths) {
       if (p.transform) { ctx.save(); ctx.transform(...p.transform); }
       if (p.fill !== null && p.fill >>> 24) {
@@ -1492,9 +1491,9 @@ rt.register({
 });
 rt.register({ name: "android/graphics/drawable/VectorDrawable", ctor: JVectorDrawable, sup: "android/graphics/drawable/Drawable", methods: {
   "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": function (this: JVectorDrawable) {
-    const { vw, vh, vpW, vpH, paths, vtint, tint, alpha, autoMirrored } = this;
+    const { vw, vh, vpW, vpH, paths, tint, tintCsl, tintMode, alpha, autoMirrored } = this;
     const state = rt.make("android/graphics/drawable/VectorDrawable$VectorDrawableState") as JDrawableState;
-    state.create = () => Object.assign(new JVectorDrawable(), { vw, vh, vpW, vpH, paths, vtint, tint, alpha, autoMirrored });
+    state.create = () => Object.assign(new JVectorDrawable(), { vw, vh, vpW, vpH, paths, tint, tintCsl, tintMode, alpha, autoMirrored });
     return state;
   },
 } });
@@ -1564,11 +1563,13 @@ function nodeAttr(res: Resources, node: XmlNode, resId: number): RV | null {
 const AT = attrTable(
   "color", "drawable", "shape", "radius", "topLeftRadius", "topRightRadius", "bottomLeftRadius",
   "bottomRightRadius", "width", "height", "left", "top", "right", "bottom", "startColor", "centerColor",
-  "endColor", "angle", "type", "gradientRadius", "src", "alpha", "tint", "viewportWidth",
+  "endColor", "angle", "type", "gradientRadius", "src", "alpha", "tint", "tintMode", "viewportWidth",
   "viewportHeight", "pathData", "fillColor", "strokeColor", "strokeWidth", "fillAlpha", "fillType",
   "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
   "scaleGravity", "gravity", "orientation", "oneshot", "duration", "scaleWidth", "scaleHeight", "useIntrinsicSizeAsMinimum", "level",
   "pivotX", "pivotY", "translateX", "translateY", "scaleX", "scaleY", "rotation", "fromDegrees", "toDegrees");
+/** Drawable.parseTintMode: android:tintMode's enum values */
+const TINT_MODES: Record<number, string> = { 3: "SRC_OVER", 5: "SRC_IN", 9: "SRC_ATOP", 14: "MULTIPLY", 15: "SCREEN", 16: "ADD" };
 function loadDrawableXml(res: Resources, bytes: Uint8Array, theme: JTheme | null) {
   const root = parseAXML(bytes);
   return inflateDrawableNode(res, root, theme);
@@ -1591,15 +1592,20 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
     }
     return rvColor(res, v, d);
   };
+  /** android:tint and android:tintMode: a colour or a state list, as setTintList would apply it */
+  const xmlTint = driven(function* xmlTint(d: JDrawable): Gen {
+    const tint = get(AT.tint), mode = get(AT.tintMode);
+    if (tint?.t === TV.REFERENCE) {
+      d.tintCsl = (yield loadColorStateList(res, tint.d, theme)) as JColorStateList;
+      d.tint = cslColor(d.tintCsl, d.stateSet);
+    } else if (tint) d.tint = rvColor(res, tint);
+    if (mode) d.tintMode = TINT_MODES[mode.d] ?? d.tintMode;
+  });
   switch (node.name) {
     case "shape": {
       const d = new JGradientDrawable();
       d.shape = rvColor(res, get(AT.shape), 0) & 3;
-      const tint = resolveStyleValue(res, theme, get(AT.tint));
-      if (tint?.t === TV.REFERENCE) {
-        d.tintCsl = (yield loadColorStateList(res, tint.d, theme)) as JColorStateList;
-        d.tint = cslColor(d.tintCsl, d.stateSet);
-      } else if (tint) d.tint = rvColor(res, tint);
+      yield xmlTint(d);
       for (const c of node.children) {
         const cg = (id: number) => get(id, c);
         if (c.name === "solid") {
@@ -1764,7 +1770,10 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
     case "bitmap":
     case "nine-patch": {
       const da = nodeAttr(res, node, AT.src);
-      return da ? yield loadDrawableRV(res, da, theme) : new JColorDrawable();
+      if (!da) return new JColorDrawable();
+      const d: JDrawable = yield loadDrawableRV(res, da, theme);
+      yield xmlTint(d);
+      return d;
     }
     case "vector": {
       const d = new JVectorDrawable();
@@ -1772,16 +1781,16 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       d.vh = dimen(get(AT.height), 48) / res.dm.density;
       d.vpW = rvFloat(res, get(AT.viewportWidth), 24);
       d.vpH = rvFloat(res, get(AT.viewportHeight), 24);
-      const tintV = get(AT.tint);
-      if (tintV) d.vtint = colorOf(tintV, 0) || null;
+      yield xmlTint(d);
       const walk = (n: XmlNode, transform: JMatrix["m"] | null) => {
         for (const c of n.children) {
           if (c.name === "path") {
-            const pd = nodeAttr(res, c, AT.pathData);
-            if (pd?.s) {
+            // Material spells its switch paths as @string references
+            const data = rvString(res, nodeAttr(res, c, AT.pathData));
+            if (data) {
               try {
                 d.paths.push({
-                  p2d: new Path2D(pd.s), transform,
+                  p2d: new Path2D(data), transform,
                   fill: (() => { const f = nodeAttr(res, c, AT.fillColor); return f ? colorOf(f, 0) : null; })(),
                   stroke: (() => { const f = nodeAttr(res, c, AT.strokeColor); return f ? colorOf(f, 0) : null; })(),
                   strokeW: rvFloat(res, nodeAttr(res, c, AT.strokeWidth), 0),
@@ -1922,6 +1931,10 @@ const loadDrawableFile = driven(function* loadDrawableFile(res: Resources, path:
 // ── ColorStateList loading (color/*.xml selectors)
 // Keyed by theme as well as id: a Material colour selector is a list of `?attr/` items, so
 // the same resource is a different list under every ThemeOverlay that reads it.
+/** a colour attribute's value as a list: a reference loads its selector, a literal is one colour */
+export function rvCsl(res: Resources, v: RV, theme: JTheme | null, dflt = 0): JColorStateList | Promise<JColorStateList> {
+  return v.t === TV.REFERENCE ? loadColorStateList(res, v.d, theme) : mkCsl(rvColor(res, v, dflt));
+}
 const NO_THEME = {};
 const cslCache = new WeakMap<object, Map<number, JColorStateList>>();
 export const loadColorStateList = driven(function* loadColorStateList$(res: Resources, resId: number, theme: JTheme | null): Gen<JColorStateList> {
@@ -1944,7 +1957,7 @@ export const loadColorStateList = driven(function* loadColorStateList$(res: Reso
   byId.set(resId, out);
   return out;
 });
-function parseCslXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): JColorStateList {
+function parseCslXml(res: Resources, bytes: Uint8Array, theme: JTheme | null, depth = 0): JColorStateList {
   const root = parseAXML(bytes);
   const csl = new JColorStateList();
   for (const c of root.children) {
@@ -1957,7 +1970,9 @@ function parseCslXml(res: Resources, bytes: Uint8Array, theme: JTheme | null): J
         let v: RV | null = attrRV(res, a);
         if (v.t === TV.ATTRIBUTE) v = theme?.lookup(v.d) ?? null;
         if (v && v.t === TV.REFERENCE) v = res.resolveRefs(v);
-        color = rvColor(res, v, -16777216);
+        // TypedArray.getColor on a nested selector answers with its default colour
+        const nested = v?.t === TV.REFERENCE && v.s?.endsWith(".xml") && depth < 8 ? res.fileOf(v.d) : null;
+        color = nested ? parseCslXml(res, nested.bytes, theme, depth + 1).defColor : rvColor(res, v, -16777216);
       } else if (a.resId === AT.alpha) {
         alphaMul = Math.max(0, Math.min(1, rvFloat(res, resolveStyleValue(res, theme, attrRV(res, a)), 1)));
       }
