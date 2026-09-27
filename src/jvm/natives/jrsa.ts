@@ -118,7 +118,7 @@ export function restoreRsa(priv: string, pub: string, cert: string): JRsaPrivate
 }
 export const rsaChain = (key: JRsaPrivateKey) => key.certificate && jarray([key.certificate], "Ljava/security/cert/Certificate;");
 
-export class JMGFSpec extends JObj { digest = "SHA-1"; }
+class JMGFSpec extends JObj { digest = "SHA-1"; }
 class JPSource extends JObj { value = new Uint8Array(0); }
 class JPSpecified extends JPSource {}
 export class JOAEP extends JObj { digest = "SHA-1"; mgf = new JMGFSpec(); source = new JPSpecified(); }

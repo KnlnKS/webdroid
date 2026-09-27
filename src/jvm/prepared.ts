@@ -27,7 +27,7 @@ export interface PreparedMethod {
 }
 
 export type PreparationPhase = "decode" | "cfg" | "type";
-export type PreparationObserver = (phase: PreparationPhase, ms: number) => void;
+type PreparationObserver = (phase: PreparationPhase, ms: number) => void;
 
 type MutableInstruction = { -readonly [K in keyof PreparedInstruction]: PreparedInstruction[K] };
 type Defs = Map<number, ReadonlySet<MutableInstruction>>;

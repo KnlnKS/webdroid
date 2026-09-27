@@ -151,7 +151,7 @@ const INVOKE: Record<number, 0 | 1> = {   // 1 = virtual/interface (dispatched),
   0x6e: 1, 0x6f: 0, 0x70: 0, 0x71: 0, 0x72: 1,
   0x74: 1, 0x75: 0, 0x76: 0, 0x77: 0, 0x78: 1,
 };
-export const splitKey = (k: MemberKey): [string, string] => { const i = k.indexOf("."); return [k.slice(0, i), k.slice(i + 1)]; };
+const splitKey = (k: MemberKey): [string, string] => { const i = k.indexOf("."); return [k.slice(0, i), k.slice(i + 1)]; };
 /** every instruction's opcode and pc; one unwalkable instruction must not cost us the rest of the program */
 function walkInsns(insns: Uint16Array, visit: (op: number, pc: number) => void) {
   for (let pc = 0; pc < insns.length;) {

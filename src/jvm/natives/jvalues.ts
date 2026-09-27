@@ -97,7 +97,7 @@ function displayName(this: JLocale, displayLocale: JLocale): string {
   return this.lang ? displayPart(localeTag(this), "language", tag)
     : [displayPart(this.script, "script", tag), displayPart(this.country, "region", tag), this.variant].filter(Boolean).join(", ");
 }
-export function localeFromLanguageTag(t: string): JLocale {
+function localeFromLanguageTag(t: string): JLocale {
   const l = new JLocale();
   const m = /^([a-z]{2,8})(?:-([a-z]{4}))?(?:-([a-z]{2}|\d{3}))?((?:-(?:[a-z0-9]{5,8}|\d[a-z0-9]{3}))*)/i.exec(t);
   if (m) {
