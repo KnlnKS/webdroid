@@ -743,6 +743,8 @@ class JListPopupWindow extends JObj {
   xoff = 0;
   yoff = 0;
   modal = true;
+  dismissL: unknown = null;
+  background: JDrawable | null = null;
 }
 rt.register({ name: "android/widget/ListPopupWindow", ctor: JListPopupWindow, methods: {
   "<init>(Landroid/content/Context;)V": function (this: JListPopupWindow, ctx: unknown) { this.ctx = ctx; },
@@ -761,6 +763,15 @@ rt.register({ name: "android/widget/ListPopupWindow", ctor: JListPopupWindow, me
   "setHorizontalOffset(I)V": function (this: JListPopupWindow, value: number) { this.xoff = value; },
   "setVerticalOffset(I)V": function (this: JListPopupWindow, value: number) { this.yoff = value; },
   "getListView()Landroid/widget/ListView;": function (this: JListPopupWindow) { return this.list; },
+  "getAnchorView()Landroid/view/View;": function (this: JListPopupWindow) { return this.anchor; },
+  "setOnDismissListener(Landroid/widget/PopupWindow$OnDismissListener;)V": function (this: JListPopupWindow, l: unknown) {
+    this.dismissL = l;
+    if (this.popup) return vcall(this.popup, "setOnDismissListener", "(Landroid/widget/PopupWindow$OnDismissListener;)V", l);
+  },
+  "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JListPopupWindow, d: JDrawable | null) {
+    this.background = d;
+    if (this.popup) return vcall(this.popup, "setBackgroundDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
+  },
   "isShowing()Z": function (this: JListPopupWindow) { return this.popup ? vcall(this.popup, "isShowing", "()Z") : 0; },
   "dismiss()V": function (this: JListPopupWindow) { if (this.popup) return vcall(this.popup, "dismiss", "()V"); },
   "show()V": driven(function* (this: JListPopupWindow): Gen {
@@ -773,7 +784,11 @@ rt.register({ name: "android/widget/ListPopupWindow", ctor: JListPopupWindow, me
       yield vcall(this.popup, "setContentView", "(Landroid/view/View;)V", this.list);
       yield vcall(this.popup, "setFocusable", "(Z)V", +this.modal);
       yield vcall(this.popup, "setOutsideTouchable", "(Z)V", 1);
+      if (this.dismissL) yield vcall(this.popup, "setOnDismissListener", "(Landroid/widget/PopupWindow$OnDismissListener;)V", this.dismissL);
+      if (this.background) yield vcall(this.popup, "setBackgroundDrawable", "(Landroid/graphics/drawable/Drawable;)V", this.background);
     }
+    // already up: its list follows the adapter
+    if (yield vcall(this.popup, "isShowing", "()Z")) return;
     yield vcall(this.popup, "setWidth", "(I)V", this.width === WRAP_CONTENT ? this.anchor.width() : this.width);
     yield vcall(this.popup, "setHeight", "(I)V", this.height);
     yield vcall(this.popup, "showAsDropDown", "(Landroid/view/View;II)V", this.anchor, this.xoff, this.yoff);
