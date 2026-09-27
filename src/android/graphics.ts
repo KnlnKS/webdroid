@@ -1614,8 +1614,9 @@ export class JCanvas extends JObj {
     });
   }
 
-  static wrap(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, w: number, h: number): JCanvas {
-    const c = new JCanvas();
+  /** `recording`: the canvas a hardware-accelerated window hands its views, a RecordingCanvas */
+  static wrap(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, w: number, h: number, recording = false): JCanvas {
+    const c = recording ? new JRecordingCanvas() : new JCanvas();
     c.ctx = ctx; c.w = w; c.h = h;
     return c;
   }
@@ -2239,7 +2240,9 @@ export const canvasMethods: NativeSpec["methods"] = {
   "drawPicture(Landroid/graphics/Picture;Landroid/graphics/Rect;)V": function (this: JCanvas, picture: JPicture, dst: JRect) { drawPicture(this, picture, dst); },
   ...noops("enableZ()V", "disableZ()V",
     "setDrawFilter(Landroid/graphics/DrawFilter;)V"),
-  ...stubs(1, "clipOutPath(Landroid/graphics/Path;)Z", "isHardwareAccelerated()Z"),
+  ...stubs(1, "clipOutPath(Landroid/graphics/Path;)Z"),
+  // a bitmap's canvas is software; the one a window or RenderNode records into is not
+  "isHardwareAccelerated()Z": function (this: JCanvas) { return +(this instanceof JRecordingCanvas); },
   ...stubs(0, "quickReject(FFFFLandroid/graphics/Canvas$EdgeType;)Z"),
   "setBitmap(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
 };
@@ -2387,7 +2390,7 @@ rt.register({
     },
   },
 });
-class JRecordingCanvas extends JCanvas {}
+export class JRecordingCanvas extends JCanvas {}
 rt.register({ name: "android/graphics/RecordingCanvas", ctor: JRecordingCanvas, sup: "android/graphics/Canvas", methods: canvasMethods });
 
 // RenderNode: Compose GraphicsLayer (API 29+) records layers here. We back each node

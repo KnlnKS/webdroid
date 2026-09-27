@@ -2,7 +2,7 @@ import type { FrameCallback } from "./os";
 import { isRecording, recordOrRun } from "./recording";
 import { perf } from "../perf";
 import { TV } from "./axml";
-import { setInvalidateHook, JRect, JCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, recolor, type JPoint, type JPaint } from "./graphics";
+import { setInvalidateHook, JRect, JCanvas, JRecordingCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, recolor, type JPoint, type JPaint } from "./graphics";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallOn, after, idHash, box, JFloat, curThread, vcallUncaught, type JThread } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize } from "./drawable";
@@ -826,7 +826,8 @@ const drawLayered = driven(function* drawLayered(v: JView, cv: JCanvas, w: numbe
   lctx.globalCompositeOperation = "source-over";
   lctx.globalAlpha = 1;
   lctx.clearRect(0, 0, w, h);
-  const lcv = JCanvas.wrap(lctx, w, h);
+  // a hardware layer records like its window; a software one draws into a bitmap
+  const lcv = JCanvas.wrap(lctx, w, h, v.layerType === 2 && cv instanceof JRecordingCanvas);
   lcv.semanticBase = cv.semanticTransform();
   yield drawSemantic(v, lcv);
   const p = v.rare?.layerPaint;
