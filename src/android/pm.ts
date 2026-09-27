@@ -1026,40 +1026,73 @@ rt.register({
     },
   },
 });
+// There is no launcher here to pin a shortcut, so the pinned set is always empty.
 class JShortcutManager extends JObj { packages = new Map<string, Map<string, JShortcutInfo>>(); }
-async function dynamicShortcuts(list: unknown, pkg: string): Promise<Map<string, JShortcutInfo>> {
-  const shortcuts = new Map<string, JShortcutInfo>();
-  for (const info of await toJsArray(list)) {
-    if (!(info instanceof JShortcutInfo) || info.pkg !== pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut belongs to another package");
-    const copy = await copyShortcut(info); copy.dynamic = true; shortcuts.set(copy.id, copy);
-  }
+const MAX_SHORTCUTS = 15;
+function ownShortcuts(manager: JShortcutManager): Map<string, JShortcutInfo> {
+  const pkg = appHost?.pkg ?? "";
+  let shortcuts = manager.packages.get(pkg);
+  if (!shortcuts) manager.packages.set(pkg, shortcuts = new Map());
   return shortcuts;
 }
+function commitShortcuts(manager: JShortcutManager, shortcuts: Iterable<JShortcutInfo>): number {
+  const next = new Map([...shortcuts].map((info) => [info.id, info]));
+  if (next.size > MAX_SHORTCUTS) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Max number of dynamic shortcuts exceeded");
+  manager.packages.set(appHost?.pkg ?? "", next);
+  return 1;
+}
+async function dynamicCopies(list: unknown): Promise<JShortcutInfo[]> {
+  const pkg = appHost?.pkg ?? "";
+  return Promise.all((await toJsArray(list)).map(async (info) => {
+    if (!(info instanceof JShortcutInfo) || info.pkg !== pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shortcut belongs to another package");
+    const copy = await copyShortcut(info); copy.dynamic = true; return copy;
+  }));
+}
+const removeShortcuts = driven(function* (this: JShortcutManager, ids: unknown): Gen {
+  const shortcuts = ownShortcuts(this);
+  for (const id of (yield toJsArray(ids)) as string[]) shortcuts.delete(id);
+});
+const shortcutList = driven(function* (manager: JShortcutManager): Gen {
+  const list = newArrayList(); list.a = yield Promise.all([...ownShortcuts(manager).values()].map(copyShortcut)); return list;
+});
 rt.register({
   name: "android/content/pm/ShortcutManager", ctor: JShortcutManager,
+  statics: { FLAG_MATCH_MANIFEST: 1, FLAG_MATCH_DYNAMIC: 2, FLAG_MATCH_PINNED: 4, FLAG_MATCH_CACHED: 8 },
   methods: {
     "setDynamicShortcuts(Ljava/util/List;)Z": driven(function* (this: JShortcutManager, list: unknown): Gen {
-      const pkg = appHost?.pkg ?? "";
-      this.packages.set(pkg, yield dynamicShortcuts(list, pkg)); return 1;
+      return commitShortcuts(this, yield dynamicCopies(list));
     }),
     "addDynamicShortcuts(Ljava/util/List;)Z": driven(function* (this: JShortcutManager, list: unknown): Gen {
-      const pkg = appHost?.pkg ?? "";
-      const additions = yield dynamicShortcuts(list, pkg);
-      const shortcuts = this.packages.get(pkg) ?? new Map<string, JShortcutInfo>();
-      for (const [id, info] of additions) shortcuts.set(id, info);
-      this.packages.set(pkg, shortcuts); return 1;
+      return commitShortcuts(this, [...ownShortcuts(this).values(), ...(yield dynamicCopies(list)) as JShortcutInfo[]]);
     }),
-    "getDynamicShortcuts()Ljava/util/List;": driven(function* (this: JShortcutManager): Gen {
-      const list = newArrayList(); list.a = yield Promise.all([...(this.packages.get(appHost?.pkg ?? "")?.values() ?? [])].map(copyShortcut)); return list;
+    // API 30: a full set drops its lowest-ranked shortcut to make room
+    "pushDynamicShortcut(Landroid/content/pm/ShortcutInfo;)V": driven(function* (this: JShortcutManager, info: unknown): Gen {
+      const shortcuts = ownShortcuts(this), [copy] = (yield dynamicCopies(newArrayList([info]))) as JShortcutInfo[];
+      if (!shortcuts.has(copy.id) && shortcuts.size >= MAX_SHORTCUTS) {
+        const last = [...shortcuts.values()].reduce((a, b) => b.rank >= a.rank ? b : a);
+        shortcuts.delete(last.id);
+      }
+      shortcuts.set(copy.id, copy);
     }),
+    // updates only shortcuts that exist, leaving the rest of each one as it was
+    "updateShortcuts(Ljava/util/List;)Z": driven(function* (this: JShortcutManager, list: unknown): Gen {
+      const shortcuts = ownShortcuts(this);
+      for (const copy of (yield dynamicCopies(list)) as JShortcutInfo[]) if (shortcuts.has(copy.id)) shortcuts.set(copy.id, copy);
+      return 1;
+    }),
+    "removeDynamicShortcuts(Ljava/util/List;)V": removeShortcuts,
+    "removeLongLivedShortcuts(Ljava/util/List;)V": removeShortcuts,
+    // disabling a shortcut removes its dynamic entry; only pinned ones would stay, disabled
+    "disableShortcuts(Ljava/util/List;)V": removeShortcuts,
+    "disableShortcuts(Ljava/util/List;Ljava/lang/CharSequence;)V": removeShortcuts,
+    "enableShortcuts(Ljava/util/List;)V": () => {},
+    "getDynamicShortcuts()Ljava/util/List;": function (this: JShortcutManager) { return shortcutList(this); },
+    "getShortcuts(I)Ljava/util/List;": function (this: JShortcutManager, flags: number) { return flags & 2 ? shortcutList(this) : newArrayList(); },
     "getPinnedShortcuts()Ljava/util/List;": () => newArrayList(),
-    "getShortcuts(I)Ljava/util/List;": driven(function* (this: JShortcutManager, flags: number): Gen {
-      const list = newArrayList();
-      if (flags & 2) list.a = yield Promise.all([...(this.packages.get(appHost?.pkg ?? "")?.values() ?? [])].map(copyShortcut));
-      return list;
-    }),
-    "removeAllDynamicShortcuts()V": function (this: JShortcutManager) { this.packages.delete(appHost?.pkg ?? ""); },
-    "getMaxShortcutCountPerActivity()I": () => 15,
+    "removeAllDynamicShortcuts()V": function (this: JShortcutManager) { ownShortcuts(this).clear(); },
+    "requestPinShortcut(Landroid/content/pm/ShortcutInfo;Landroid/content/IntentSender;)Z": () => 0,
+    "createShortcutResultIntent(Landroid/content/pm/ShortcutInfo;)Landroid/content/Intent;": () => null,
+    "getMaxShortcutCountPerActivity()I": () => MAX_SHORTCUTS,
     "getIconMaxHeight()I": () => Math.round(device.dp(96)),
     "getIconMaxWidth()I": () => Math.round(device.dp(96)),
     "isRateLimitingActive()Z": () => 0,
