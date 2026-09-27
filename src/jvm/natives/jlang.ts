@@ -319,6 +319,7 @@ rt.register({
     "isArray()Z": function (this: JClass) { return this.arrDesc ? 1 : 0; },
     "isPrimitive()Z": function (this: JClass) { return this.primName ? 1 : 0; },
     "getSuperclass()Ljava/lang/Class;": function (this: JClass) {
+      if (this.arrDesc) return rt.classFor("java/lang/Object");
       const s = this.ci?.superInfo;
       return s ? (s.owner ?? rt).classFor(s.name) : null;
     },

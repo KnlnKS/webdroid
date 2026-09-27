@@ -951,8 +951,12 @@ rt.register({ name: "java/lang/Void", ctor: class extends JObj {}, statics: { ge
 // exactly as it would not be on a device that didn't ship it. So resolve the lookup
 // against what is actually loadable and fail it ourselves, without linking.
 function installForName(classCtor: unknown) {
-  const loadable = (n: string) => {
-    if (n[0] === "[") return true;            // array classes are synthesised by link()
+  const loadable = (n: string): boolean => {
+    // array classes are synthesised by link(), for a well-formed descriptor of a loadable element
+    if (n[0] === "[") {
+      const e = n.replace(/^\[+/, "");
+      return e.length === 1 ? "ZBCSIJFD".includes(e) : e[0] === "L" && e.endsWith(";") && loadable(e.slice(1, -1));
+    }
     const linked = rt.classes.get(n);
     if (linked) return !linked.stub;
     return rt.natives.has(n) || rt.dexIndex.has(n);
