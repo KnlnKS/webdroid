@@ -1245,6 +1245,8 @@ export class JBitmap extends JObj {
   config = 5;
   hasAlpha = true; premultiplied = true; immutable = false; shared = false; mipmap = false;
   genId = 0;
+  /** Res_png_9patch in device order, from a decoded PNG's npTc chunk */
+  ninePatchChunk: Int8Array | null = null;
   get rowBytes() { return this.w * (this.config === 1 ? 1 : 4); }
   private cv: OffscreenCanvas | null = null;
   private cx: OffscreenCanvasRenderingContext2D | null = null;
@@ -1380,6 +1382,7 @@ export const bitmapMethods: NativeSpec["methods"] = {
     "getHeight()I": function (this: JBitmap) { return this.h; },
     "getColorSpace()Landroid/graphics/ColorSpace;": () => srgbSpace,
     "getDensity()I": function (this: JBitmap) { return this.density; },
+    "getNinePatchChunk()[B": function (this: JBitmap) { return this.ninePatchChunk; },
     "setDensity(I)V": function (this: JBitmap, d: number) { this.density = d; },
     "getScaledWidth(I)I": function (this: JBitmap, td: number) { return Math.round(this.w * td / this.density); },
     "getScaledHeight(I)I": function (this: JBitmap, td: number) { return Math.round(this.h * td / this.density); },
@@ -2542,7 +2545,7 @@ rt.register({
   },
 });
 
-class JBFOptions extends JObj {
+export class JBFOptions extends JObj {
   inJustDecodeBounds = 0; inSampleSize = 1; outWidth = 0; outHeight = 0;
   inDensity = 0; inTargetDensity = 0; inScaled = 1; inPreferredConfig: unknown = null;
   inBitmap: unknown = null; inMutable = 0; outMimeType: string | null = null;
@@ -2564,6 +2567,39 @@ const streamBytes = driven(function* streamBytes(s: unknown): Gen<Uint8Array> {
   if (!b.length) console.warn("[decode] empty stream from", jclsNameOf(s));
   return b;
 });
+export interface NinePatchChunk { xDivs: number[]; yDivs: number[]; padding: [left: number, top: number, right: number, bottom: number] }
+/** Res_png_9patch: flags and counts, int32 offsets and padding (left, right, top, bottom), then xDivs and yDivs */
+export function readNinePatchChunk(chunk: Int8Array): NinePatchChunk | null {
+  if (chunk.length < 32) return null;
+  const view = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+  const nx = chunk[1] & 0xff, ny = chunk[2] & 0xff;
+  if (32 + (nx + ny) * 4 > chunk.length) return null;
+  const at = (i: number) => view.getInt32(i, true);
+  const divs = (from: number, n: number) => Array.from({ length: n }, (_, i) => at(from + i * 4));
+  return { xDivs: divs(32, nx), yDivs: divs(32 + nx * 4, ny), padding: [at(12), at(20), at(16), at(24)] };
+}
+/** A compiled 9-patch PNG's npTc chunk, converted from network to device order as the decoder does */
+function pngNinePatchChunk(png: Uint8Array): Int8Array | null {
+  if (png.length < 8 || png[0] !== 0x89 || png[1] !== 0x50) return null;
+  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
+  for (let pos = 8; pos + 8 <= png.length;) {
+    const len = view.getUint32(pos), type = view.getUint32(pos + 4);
+    if (type === 0x6e705463 /* npTc */ && pos + 8 + len <= png.length) {
+      const out = new Int8Array(png.subarray(pos + 8, pos + 8 + len));
+      const dv = new DataView(out.buffer);
+      for (let i = 4; i + 4 <= len; i += 4) dv.setInt32(i, dv.getInt32(i), true);
+      return out;
+    }
+    if (type === 0x49454e44 /* IEND */) break;
+    pos += 12 + len;
+  }
+  return null;
+}
+/** BitmapFactory reports a 9-patch's padding, and -1s for any other image */
+function setDecodePadding(bitmap: JBitmap, pad: JRect) {
+  const p = bitmap.ninePatchChunk && readNinePatchChunk(bitmap.ninePatchChunk)?.padding;
+  [pad.left, pad.top, pad.right, pad.bottom] = p ?? [-1, -1, -1, -1];
+}
 export const decodeBytes = driven(function* decodeBytes(bytes: Uint8Array, opts: JBFOptions | null, onHeader?: (width: number, height: number) => Promise<readonly [number, number]>): Gen<JBitmap | null> {
   if (opts) { opts.outWidth = opts.outHeight = -1; opts.outMimeType = null; opts.outConfig = opts.outColorSpace = null; }
   let img: ImageBitmap | undefined;
@@ -2594,6 +2630,7 @@ export const decodeBytes = driven(function* decodeBytes(bytes: Uint8Array, opts:
     const bitmap = JBitmap.fromImage(img, w, h);
     if (opts?.inDensity) bitmap.density = scaled ? opts.inTargetDensity : opts.inDensity;
     bitmap.immutable = !opts?.inMutable;
+    bitmap.ninePatchChunk = pngNinePatchChunk(bytes);
     return bitmap;
   } catch (e) {
     if (onHeader) throw e;
@@ -2603,7 +2640,7 @@ export const decodeBytes = driven(function* decodeBytes(bytes: Uint8Array, opts:
 });
 const decodeStream = driven(function* decodeStream(stream: unknown, pad: JRect | null = null, opts: JBFOptions | null = null): Gen {
   const bitmap = stream ? yield decodeBytes(yield streamBytes(stream), opts) : null;
-  if (bitmap && pad) pad.left = pad.top = pad.right = pad.bottom = -1;
+  if (bitmap && pad) setDecodePadding(bitmap, pad);
   return bitmap;
 });
 const decodeFileDescriptor = driven(function* decodeFileDescriptor(fd: JFileDescriptor | null, pad: JRect | null = null, opts: JBFOptions | null = null): Gen {
@@ -2611,7 +2648,7 @@ const decodeFileDescriptor = driven(function* decodeFileDescriptor(fd: JFileDesc
   const bytes = yield javaFdBytes(fd.fd);
   const bitmap = yield decodeBytes(bytes ?? new Uint8Array(0), opts);
   if (!bitmap && opts?.inBitmap) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Problem decoding into existing bitmap");
-  if (bitmap && pad) pad.left = pad.top = pad.right = pad.bottom = -1;
+  if (bitmap && pad) setDecodePadding(bitmap, pad);
   return bitmap;
 });
 const decodeFile = driven(function* decodeFile(path: string | null, opts: JBFOptions | null = null): Gen {
@@ -2626,7 +2663,7 @@ const decodeFile = driven(function* decodeFile(path: string | null, opts: JBFOpt
     if (stream) yield vcall(stream, "close", "()V");
   }
 });
-const decodeResourceStream = driven(function* decodeResourceStream(res: unknown, value: JTypedValue | null, stream: unknown, pad: JRect | null, opts: JBFOptions | null): Gen {
+export const decodeResourceStream = driven(function* decodeResourceStream(res: unknown, value: JTypedValue | null, stream: unknown, pad: JRect | null, opts: JBFOptions | null): Gen {
   opts ??= new JBFOptions();
   if (!opts.inDensity && value && value.density !== 0xffff) opts.inDensity = value.density || 160;
   if (!opts.inTargetDensity && res) {

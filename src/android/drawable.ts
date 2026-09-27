@@ -3,13 +3,13 @@
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, curThread, callOn, after, newObj, defineException, mkEnumSet, type JSimpleEnum } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod } from "../jvm/abi";
-import { JCanvas, JRect, JRectF, JBitmap, JPaint, matMul, rotM, type JMatrix, type JOutline, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf } from "./graphics";
+import { JCanvas, JRect, JRectF, JBitmap, JPaint, matMul, rotM, type JMatrix, type JOutline, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf, readNinePatchChunk, decodeResourceStream, JBFOptions, type NinePatchChunk } from "./graphics";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { uptimeMillis } from "./os";
 import { Resources, type RV, type JTheme, attrTable, T_STR, rvColor, rvDimen, rvFloat, xmlParserAtNode, normRV, resolveStyleValue } from "./res";
 import { absGravity, gravityApply } from "./gravity";
-import { complexToFraction } from "./util";
+import { complexToFraction, type JTypedValue } from "./util";
 import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 import { guestNow, setGuestTimeout } from "../guest-clock";
 
@@ -85,6 +85,12 @@ const drawableMethods: NativeSpec["methods"] = {
   "copyBounds(Landroid/graphics/Rect;)V": function (this: JDrawable, r: JRect) {
     r.left = this.bounds.left; r.top = this.bounds.top; r.right = this.bounds.right; r.bottom = this.bounds.bottom;
   },
+  "static createFromStream(Ljava/io/InputStream;Ljava/lang/String;)Landroid/graphics/drawable/Drawable;":
+    (is: unknown, name: string | null) => createFromResourceStream(null, null, is, name, null),
+  "static createFromResourceStream(Landroid/content/res/Resources;Landroid/util/TypedValue;Ljava/io/InputStream;Ljava/lang/String;)Landroid/graphics/drawable/Drawable;":
+    (res: unknown, value: JTypedValue | null, is: unknown, name: string | null) => createFromResourceStream(res, value, is, name, null),
+  "static createFromResourceStream(Landroid/content/res/Resources;Landroid/util/TypedValue;Ljava/io/InputStream;Ljava/lang/String;Landroid/graphics/BitmapFactory$Options;)Landroid/graphics/drawable/Drawable;":
+    (res: unknown, value: JTypedValue | null, is: unknown, name: string | null, opts: JBFOptions | null) => createFromResourceStream(res, value, is, name, opts),
   "getIntrinsicWidth()I": function (this: JDrawable) { return this.size(false); },
   "getIntrinsicHeight()I": function (this: JDrawable) { return this.size(true); },
   "getMinimumWidth()I": function (this: JDrawable) { return after(drawableSize(this, false), n => Math.max(0, n)); },
@@ -263,24 +269,118 @@ rt.register({
   },
 });
 
+class JNinePatch extends JObj {
+  bmp!: JBitmap; chunk!: NinePatchChunk; name: string | null = null; npaint: JPaint | null = null;
+  draw(cv: JCanvas, dst: JRect, paint: JPaint | null) {
+    const ctx = cv.ctx;
+    ctx.save();
+    if (paint) ctx.globalAlpha *= (paint.renderAlpha ?? paint.color >>> 24) / 255;
+    drawNinePatch(ctx, this.bmp.canvas, this.bmp.w, this.bmp.h, this.chunk.xDivs, this.chunk.yDivs, dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top);
+    ctx.restore();
+  }
+}
+/** AOSP accepts any chunk long enough whose first byte (wasDeserialized) is not -1 */
+const isNinePatchChunk = (chunk: Int8Array | null): chunk is Int8Array => !!chunk && chunk.length >= 32 && chunk[0] !== -1;
+function initNinePatch(this: JNinePatch, bmp: JBitmap, chunk: Int8Array | null, name: string | null = null) {
+  const parsed = chunk && readNinePatchChunk(chunk);
+  if (!parsed) throw rt.mkThrowable("java/lang/RuntimeException", "Array too small for chunk.");
+  this.bmp = bmp; this.chunk = parsed; this.name = name;
+}
+rt.register({
+  name: "android/graphics/NinePatch", ctor: JNinePatch,
+  methods: {
+    "<init>(Landroid/graphics/Bitmap;[B)V": initNinePatch,
+    "<init>(Landroid/graphics/Bitmap;[BLjava/lang/String;)V": initNinePatch,
+    "static isNinePatchChunk([B)Z": (chunk: Int8Array | null) => isNinePatchChunk(chunk) ? 1 : 0,
+    "getName()Ljava/lang/String;": function (this: JNinePatch) { return this.name; },
+    "getPaint()Landroid/graphics/Paint;": function (this: JNinePatch) { return this.npaint; },
+    "setPaint(Landroid/graphics/Paint;)V": function (this: JNinePatch, p: JPaint | null) { this.npaint = p; },
+    "getBitmap()Landroid/graphics/Bitmap;": function (this: JNinePatch) { return this.bmp; },
+    "getDensity()I": function (this: JNinePatch) { return this.bmp.density; },
+    "getWidth()I": function (this: JNinePatch) { return this.bmp.w; },
+    "getHeight()I": function (this: JNinePatch) { return this.bmp.h; },
+    "hasAlpha()Z": function (this: JNinePatch) { return this.bmp.hasAlpha ? 1 : 0; },
+    "draw(Landroid/graphics/Canvas;Landroid/graphics/Rect;)V": function (this: JNinePatch, cv: JCanvas, dst: JRect) { this.draw(cv, dst, this.npaint); },
+    "draw(Landroid/graphics/Canvas;Landroid/graphics/RectF;)V": function (this: JNinePatch, cv: JCanvas, dst: JRectF) { this.draw(cv, dst, this.npaint); },
+    "draw(Landroid/graphics/Canvas;Landroid/graphics/Rect;Landroid/graphics/Paint;)V": function (this: JNinePatch, cv: JCanvas, dst: JRect, p: JPaint | null) { this.draw(cv, dst, p); },
+  },
+});
+
+/** Bitmap.scaleFromDensity */
+const scaleFromDensity = (size: number, from: number, to: number) => from === to || !from || !to ? size : Math.floor((size * to + (from >> 1)) / from);
 class JNinePatchDrawable extends JDrawable {
-  bmp: JBitmap | null = null;
-  xDivs: number[] = []; yDivs: number[] = [];
-  padding = new JRect();
-  srcDensityScale = 1;
+  patch: JNinePatch | null = null;
+  padding?: JRect;
+  targetDensity = 160;
+  set(patch: JNinePatch, padding: JRect | null, targetDensity: number) {
+    const from = patch.bmp.density;
+    this.patch = patch; this.targetDensity = targetDensity;
+    if (!padding) return;
+    const p = this.padding = new JRect();
+    p.left = scaleFromDensity(padding.left, from, targetDensity); p.top = scaleFromDensity(padding.top, from, targetDensity);
+    p.right = scaleFromDensity(padding.right, from, targetDensity); p.bottom = scaleFromDensity(padding.bottom, from, targetDensity);
+  }
   paint(cv: JCanvas) {
-    if (!this.bmp) return;
-    const { left, top } = this.bounds;
-    const dw = this.bounds.right - left, dh = this.bounds.bottom - top;
+    const patch = this.patch;
+    if (!patch) return;
+    const { bmp, chunk } = patch, { left, top } = this.bounds;
+    // AOSP draws a patch of another density in its own pixels under a canvas scale
+    const s = bmp.density && bmp.density !== this.targetDensity ? this.targetDensity / bmp.density : 1;
     const ctx = cv.ctx;
     ctx.save();
     ctx.globalAlpha *= this.alpha / 255;
-    drawNinePatch(ctx, tintedBmp(this.bmp, this.tintMode ? this.tint : null, this.tintMatrix, this.tintMode ?? "SRC_IN"), this.bmp.w, this.bmp.h, this.xDivs, this.yDivs, left, top, dw, dh);
+    ctx.translate(left, top);
+    if (s !== 1) ctx.scale(s, s);
+    drawNinePatch(ctx, tintedBmp(bmp, this.tintMode ? this.tint : null, this.tintMatrix, this.tintMode ?? "SRC_IN"), bmp.w, bmp.h, chunk.xDivs, chunk.yDivs,
+      0, 0, Math.round((this.bounds.right - left) / s), Math.round((this.bounds.bottom - top) / s));
     ctx.restore();
   }
-  size(vertical: boolean): number { return this.bmp ? Math.round((vertical ? this.bmp.h : this.bmp.w) * this.srcDensityScale) : -1; }
+  size(vertical: boolean): number {
+    const bmp = this.patch?.bmp;
+    return bmp ? scaleFromDensity(vertical ? bmp.h : bmp.w, bmp.density, this.targetDensity) : -1;
+  }
 }
-rt.register({ name: "android/graphics/drawable/NinePatchDrawable", ctor: JNinePatchDrawable, sup: "android/graphics/drawable/Drawable" });
+/** Drawable.resolveDensity: the Resources' density, else NinePatchState's DENSITY_DEFAULT */
+const resDensity = (res: unknown): number => res ? device.densityDpi : 160;
+function newNinePatch(bmp: JBitmap, chunk: Int8Array | null, name: string | null): JNinePatch {
+  rt.link("android/graphics/NinePatch");
+  const patch = new JNinePatch();
+  initNinePatch.call(patch, bmp, chunk, name);
+  return patch;
+}
+rt.register({
+  name: "android/graphics/drawable/NinePatchDrawable", ctor: JNinePatchDrawable, sup: "android/graphics/drawable/Drawable",
+  methods: {
+    "<init>(Landroid/content/res/Resources;Landroid/graphics/NinePatch;)V": function (this: JNinePatchDrawable, res: unknown, patch: JNinePatch) {
+      this.set(patch, null, resDensity(res));
+    },
+    "<init>(Landroid/content/res/Resources;Landroid/graphics/Bitmap;[BLandroid/graphics/Rect;Ljava/lang/String;)V":
+      function (this: JNinePatchDrawable, res: unknown, bmp: JBitmap, chunk: Int8Array | null, padding: JRect | null, name: string | null) {
+        this.set(newNinePatch(bmp, chunk, name), padding, resDensity(res));
+      },
+    "<init>(Landroid/graphics/Bitmap;[BLandroid/graphics/Rect;Ljava/lang/String;)V":
+      function (this: JNinePatchDrawable, bmp: JBitmap, chunk: Int8Array | null, padding: JRect | null, name: string | null) {
+        this.set(newNinePatch(bmp, chunk, name), padding, 160);
+      },
+  },
+});
+/** AOSP Drawable.createFromResourceStream: a bitmap with a valid 9-patch chunk becomes a NinePatchDrawable */
+const createFromResourceStream = driven(function* createFromResourceStream(res: unknown, value: JTypedValue | null, is: unknown, name: string | null, opts: JBFOptions | null): Gen {
+  if (!is) return null;
+  opts ??= new JBFOptions();
+  opts.inScreenDensity = resDensity(res);
+  const pad = new JRect();
+  const bmp: JBitmap | null = yield decodeResourceStream(res, value, is, pad, opts);
+  if (!bmp) return null;
+  if (isNinePatchChunk(bmp.ninePatchChunk)) {
+    const d = new JNinePatchDrawable();
+    d.set(newNinePatch(bmp, bmp.ninePatchChunk, name), pad, resDensity(res));
+    return d;
+  }
+  const d = new JBitmapDrawable();
+  d.bmp = bmp;
+  return d;
+});
 function drawNinePatch(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, img: CanvasImageSource,
   sw: number, sh: number, xDivs: number[], yDivs: number[],
@@ -328,28 +428,6 @@ function segments(divs: number[], total: number, out: number[]): [number, number
     stretch ^= 1;
   }
   return [fixed, stretched || 1];
-}
-/** parse npTc chunk from a compiled 9-patch png */
-function parseNinePatchChunk(png: Uint8Array): { xDivs: number[]; yDivs: number[]; padding: number[] } | null {
-  let pos = 8;
-  const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
-  while (pos + 8 < png.length) {
-    const len = view.getUint32(pos);
-    const type = String.fromCharCode(png[pos + 4], png[pos + 5], png[pos + 6], png[pos + 7]);
-    if (type === "npTc") {
-      const p = pos + 8;
-      const numX = png[p + 1], numY = png[p + 2];
-      const be = (off: number) => view.getInt32(p + off);
-      const paddingLeft = be(12), paddingRight = be(16), paddingTop = be(20), paddingBottom = be(24);
-      const xDivs: number[] = [], yDivs: number[] = [];
-      let q = p + 32;
-      for (let i = 0; i < numX; i++) { xDivs.push(be(q - p)); q += 4; }
-      for (let i = 0; i < numY; i++) { yDivs.push(be(q - p)); q += 4; }
-      return { xDivs, yDivs, padding: [paddingLeft, paddingTop, paddingRight, paddingBottom] };
-    }
-    pos += 12 + len;
-  }
-  return null;
 }
 
 // ── GradientDrawable (shape)
@@ -1832,30 +1910,17 @@ export const loadDrawable = driven(function* loadDrawable$(res: Resources, resId
 
 const loadDrawableFile = driven(function* loadDrawableFile(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null): Gen<JDrawable> {
   if (path.endsWith(".xml")) return yield loadDrawableXml(res, bytes, theme);
-  if (path.endsWith(".9.png")) {
-    const chunk = parseNinePatchChunk(bytes);
-    const bmp = yield decodeBytes(bytes, null);
-    const d = new JNinePatchDrawable();
-    if (bmp && chunk) {
-      d.bmp = bmp;
-      d.xDivs = chunk.xDivs;
-      d.yDivs = chunk.yDivs;
-      d.padding.left = chunk.padding[0]; d.padding.top = chunk.padding[1];
-      d.padding.right = chunk.padding[2]; d.padding.bottom = chunk.padding[3];
-      d.srcDensityScale = device.densityDpi / densityOfPath(path);
-    } else if (bmp) {
-      const bd = new JBitmapDrawable();
-      bd.bmp = bmp;
-      return bd;
-    }
+  const bmp: JBitmap | null = yield decodeBytes(bytes, null);
+  if (bmp) bmp.density = densityOfPath(path);
+  // Drawable.createFromResourceStream: a decoded 9-patch chunk, not the file name, makes a NinePatchDrawable
+  if (bmp?.ninePatchChunk) {
+    const d = new JNinePatchDrawable(), patch = newNinePatch(bmp, bmp.ninePatchChunk, null), pad = new JRect();
+    [pad.left, pad.top, pad.right, pad.bottom] = patch.chunk.padding;
+    d.set(patch, pad, device.densityDpi);
     return d;
   }
-  const bmp = yield decodeBytes(bytes, null);
   const d = new JBitmapDrawable();
-  if (bmp) {
-    bmp.density = densityOfPath(path);
-    d.bmp = bmp;
-  }
+  d.bmp = bmp;
   return d;
 });
 
