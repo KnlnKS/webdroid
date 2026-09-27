@@ -3,15 +3,15 @@
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { defineException, vcall } from "./jlang";
 import { mem } from "../../native/mem";
-import { MEM_SIZE, MEM_SIZE_INITIAL } from "../../native/abi";
 import { charsToString } from "../abi";
 import { charsetName, decodeString, encodeString } from "../charset";
 
-/** A native buffer from allocateDirect keeps ART's accessible backing array: a view over its own guest bytes. */
-type BufferStorage = { kind: "heap"; ab: ArrayBuffer; array: ArrayBufferView } | { kind: "direct"; ab: ArrayBuffer } | { kind: "native"; address: number | bigint; array?: Int8Array };
+/** A native buffer's array is ART's accessible one for allocateDirect (a view over its own guest
+ *  bytes) and null for one over native memory (NewDirectByteBuffer, a promoted direct buffer). */
+type BufferStorage = { kind: "heap"; ab: ArrayBuffer; array: ArrayBufferView } | { kind: "direct"; ab: ArrayBuffer } | { kind: "native"; address: number | bigint; array: Int8Array | null };
 const directBuffers = new FinalizationRegistry<number>((address) => mem.free(address));
 function accessibleArray(b: JBuffer): ArrayBufferView | null {
-  const s = b.backing.storage, array = s.kind === "direct" ? undefined : s.array;
+  const s = b.backing.storage, array = s.kind === "direct" ? null : s.array;
   return array && !b.readOnly && (array as Uint8Array).BYTES_PER_ELEMENT === 2 ** b.elemShift &&
     (!(b instanceof JCharBuffer) || array instanceof Uint16Array) ? array : null;
 }
@@ -218,10 +218,11 @@ export function mkByteBuffer(cap: number, direct = false): JByteBuffer {
   b.pos = 0;
   return b;
 }
-/** ByteBuffer.allocateDirect. Once the process memory has its final size its views stay attached, so
- *  the buffer lives in guest memory and its accessible array is those same bytes, as on ART. */
+/** ByteBuffer.allocateDirect: in sized guest memory, whose views stay attached, the buffer's
+ *  accessible array and native address are the same bytes, as on ART. Before a native library
+ *  sizes the memory it is promoted on first native use and has no array. */
 function allocateDirect(cap: number): JByteBuffer {
-  if (cap < 0 || MEM_SIZE === MEM_SIZE_INITIAL) return mkByteBuffer(cap, true);
+  if (cap < 0 || !mem.sized()) return mkByteBuffer(cap, true);
   const address = mem.calloc(1, Math.max(1, cap));
   if (!address) throw rt.mkThrowable("java/lang/OutOfMemoryError", "direct buffer");
   const b = new JByteBuffer();
@@ -234,7 +235,7 @@ function allocateDirect(cap: number): JByteBuffer {
 export function nativeByteBuffer(address: number, cap: number): JBuffer {
   rt.link("java/nio/ByteBuffer");
   const b = new JByteBuffer();
-  b.backing = { storage: { kind: "native", address: mem.va(address) } };
+  b.backing = { storage: { kind: "native", address: mem.va(address), array: null } };
   b.cap = b.lim = cap;
   return b;
 }
@@ -247,7 +248,7 @@ export function directBufferAddress(b: JBuffer): number | bigint {
     const address = mem.malloc(s.ab.byteLength);
     if (!address) throw rt.mkThrowable("java/lang/OutOfMemoryError", "direct buffer");
     mem.u8.set(new Uint8Array(s.ab), address);
-    s = b.backing.storage = { kind: "native", address };
+    s = b.backing.storage = { kind: "native", address, array: null };
     directBuffers.register(b.backing, address);
   }
   return typeof s.address === "bigint" ? s.address + BigInt(b.byteOffset) : s.address + b.byteOffset;

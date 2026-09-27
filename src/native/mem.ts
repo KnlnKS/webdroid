@@ -87,6 +87,8 @@ export const mem = {
   ld64(a: number): bigint { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); return dv.getBigInt64(a >>> 0, true); },
   st64(a: number, v: bigint): void { if (((a >>> 0) - LOW) >>> 0 > SPAN - 8) badAddr(a); dv.setBigInt64(a >>> 0, v, true); wrote(a, 8); },
 
+  /** the process memory has its final size, so views over it stay attached */
+  sized: (): boolean => MEM_SIZE !== MEM_SIZE_INITIAL,
   malloc: (n: number): number => core.malloc(n >>> 0) >>> 0,
   free(p: number): void { if (p && !core.free(p >>> 0)) badAddr(p); },
   calloc: (n: number, m: number): number => core.calloc(n >>> 0, m >>> 0) >>> 0,
