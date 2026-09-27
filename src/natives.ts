@@ -121,6 +121,7 @@ import "./android/expandablelist";
 import "./android/preference";
 import "./android/animator";
 import "./android/media";
+import "./android/ringtone";
 import "./android/audiofx";
 import "./android/media-metrics";
 
