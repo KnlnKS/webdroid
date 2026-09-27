@@ -342,7 +342,26 @@ async function fireNetAvailable(cb: unknown) {
   if (!netCallbacks.has(cb) || !(await netUp())) return;
   await vcall(cb, "onAvailable", "(Landroid/net/Network;)V", network());
   await vcall(cb, "onCapabilitiesChanged", "(Landroid/net/Network;Landroid/net/NetworkCapabilities;)V", network(), netCaps());
+  await vcall(cb, "onLinkPropertiesChanged", "(Landroid/net/Network;Landroid/net/LinkProperties;)V", network(), new JLinkProperties());
 }
+// The network's configuration as a resolver reads it. Its DNS server is one any guest resolver
+// can use: port-53 datagrams are answered over DNS-over-HTTPS (shell/relay.ts).
+class JLinkProperties extends JObj {}
+rt.register({
+  name: "android/net/LinkProperties", ctor: JLinkProperties,
+  methods: {
+    "<init>()V": function () {},
+    "getInterfaceName()Ljava/lang/String;": () => "wlan0",
+    "getDnsServers()Ljava/util/List;": driven(function* (): Gen {
+      return newArrayList([yield vcall(rt.link("java/net/InetAddress").ctor, "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", "8.8.8.8")]);
+    }),
+    "getLinkAddresses()Ljava/util/List;": () => newArrayList(),
+    "getRoutes()Ljava/util/List;": () => newArrayList(),
+    "getMtu()I": () => 1500,
+    "isPrivateDnsActive()Z": () => 0,
+    ...stubs(null, "getDomains()Ljava/lang/String;", "getPrivateDnsServerName()Ljava/lang/String;", "getHttpProxy()Landroid/net/ProxyInfo;"),
+  },
+});
 rt.register({
   name: "android/net/Network", ctor: JNetwork, ifaces: ["android/os/Parcelable"],
   methods: {
@@ -553,7 +572,7 @@ rt.register({
     // so its own type answers and every other type has no info, as on a device without it
     "getNetworkInfo(I)Landroid/net/NetworkInfo;": driven(function* (t: number): Gen 
       { return (yield netUp()) && t === NET_TYPE ? rt.make("android/net/NetworkInfo") : null; }),
-    "getLinkProperties(Landroid/net/Network;)Landroid/net/LinkProperties;": () => null,
+    "getLinkProperties(Landroid/net/Network;)Landroid/net/LinkProperties;": (n: unknown) => knownNetwork(n) ? new JLinkProperties() : null,
     "bindProcessToNetwork(Landroid/net/Network;)Z": (n: unknown) => {
       if (n != null && !knownNetwork(n)) return 0;
       boundNetwork = n ?? null; return 1;
