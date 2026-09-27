@@ -1,6 +1,6 @@
 // webdroid shell: phone chrome, launcher, boot + input wiring.
 import "./natives";
-import { recordVsync, dispatchLooperFrames, PROCESS_PID } from "./android/os";
+import { recordVsync, PROCESS_PID } from "./android/os";
 import { RangeFile } from "./shell/lazyfile";
 import { mountSystemCertificates } from "./shell/cacerts";
 
@@ -306,7 +306,7 @@ function doTick() {
   void tick().then(() => { perf.completedFrames++; perf.frameMs += performance.now() - lastTick; }).finally(() => { ticking = false; });
 }
 function loop(time: number) {
-  if (recordVsync(time)) { dispatchLooperFrames(); doTick(); }
+  if (recordVsync(time)) doTick();
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);

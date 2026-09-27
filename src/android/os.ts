@@ -992,10 +992,12 @@ rt.register({
 rt.markers("android/view/Choreographer$VsyncCallback");
 const VSYNC_INTERVAL_MS = 1000 / device.refreshRate;
 let nextVsync = 0;
+/** a display frame: true when it is a virtual vsync, whose choreographers off the main looper run now; the caller ticks the main one */
 export function recordVsync(time: number): boolean {
   // Allow sub-millisecond rAF jitter without skipping a virtual display frame.
   if (nextVsync && time + 0.75 < nextVsync) return false;
   nextVsync = !nextVsync || time > nextVsync + VSYNC_INTERVAL_MS ? time + VSYNC_INTERVAL_MS : nextVsync + VSYNC_INTERVAL_MS;
+  dispatchLooperFrames();
   return true;
 }
 export const dispatchVsync = driven(function* dispatchVsync(callback: JObj, time: bigint, presentation: bigint): Gen {
@@ -1011,28 +1013,27 @@ export const dispatchVsync = driven(function* dispatchVsync(callback: JObj, time
 });
 export type FrameCallback = { frame?: unknown; run?: unknown; vsync?: JObj };
 /** A Choreographer belongs to one looper, as getInstance() is per thread in AOSP. The main one's
- *  callbacks are the shell frame's (uiState.frameCallbacks); another's run on its own thread at
- *  each vsync, so a render thread keeps its cadence while the main thread is busy or blocked. */
+ *  queue is the shell frame's (uiState.frameCallbacks); another's runs on its own thread at each
+ *  vsync, so a render thread keeps its cadence while the main thread is busy or blocked. */
 class JChoreographer extends JObj {
-  queue: FrameCallback[] = [];
+  readonly queue: FrameCallback[];
   frameTimeNanos = 0n;
-  constructor(readonly looper: JLooper) { super(); }
+  constructor(readonly looper: JLooper) { super(); this.queue = looper === mainLooper ? uiState.frameCallbacks : []; }
   // AOSP's own field, read reflectively by anything measuring frame pacing (Sentry, Matrix,
   // Flutter's FPS probe). It is the same nanos getFrameTimeNanos() answers.
   get mLastFrameTimeNanos(): bigint { return this.looper === mainLooper ? uiState.frameTimeNanos : this.frameTimeNanos; }
   post(cb: FrameCallback): void {
-    if (this.looper === mainLooper) uiState.frameCallbacks.push(cb);
-    else { this.queue.push(cb); pendingChoreographers.add(this); }
+    this.queue.push(cb);
+    if (this.looper !== mainLooper) pendingChoreographers.add(this);
   }
   remove(match: (cb: FrameCallback) => boolean): void {
-    if (this.looper === mainLooper) uiState.frameCallbacks = (uiState.frameCallbacks as FrameCallback[]).filter((cb) => !match(cb));
-    else this.queue = this.queue.filter((cb) => !match(cb));
+    for (let i = this.queue.length; i-- > 0;) if (match(this.queue[i])) this.queue.splice(i, 1);
   }
 }
 const choreographers = new WeakMap<JLooper, JChoreographer>();
 const pendingChoreographers = new Set<JChoreographer>();
 /** the vsync of every choreographer off the main looper: its callbacks run as one message on its thread */
-export function dispatchLooperFrames(): void {
+function dispatchLooperFrames(): void {
   if (!pendingChoreographers.size) return;
   const time = BigInt(Math.floor(guestNow() * 1e6)), presentation = time + uiState.frameIntervalNanos;
   for (const choreographer of pendingChoreographers) {
