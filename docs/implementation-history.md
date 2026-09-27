@@ -404,3 +404,19 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   `tests/import-cycles.test.ts` rejects load-time reads of cyclic
   class/const/let bindings. Verify shell changes against `build:prod` served
   by `wrangler dev`, not only `server.ts`.
+- java.time now keeps ISO fields and does proleptic Gregorian arithmetic
+  itself; zone offsets come from `Intl` (`timeZoneName: "longOffset"`), and
+  only the host's own zone uses the JS `Date` getters, so `TimeZone.setDefault`
+  and every non-host zone (Calendar, SimpleDateFormat, `Date`'s deprecated
+  fields) follow the zone's rules instead of the host's. DateTimeFormatter,
+  its builder and SimpleDateFormat share one pattern token engine; localized
+  FormatStyle patterns are read back from `Intl.formatToParts`. A failed
+  `<clinit>` now leaves the class erroneous (ExceptionInInitializerError once,
+  NoClassDefFoundError after), which can surface failures that partial statics
+  used to hide. Unresolved: Feeder's per-launch "DiskLruCache journal corrupt"
+  did not reproduce with our File/FileOutputStream sequence; FitNotes' UTC
+  "today" was not pinned to a call site (its own date code reads local
+  Calendar fields). Large file persistence still copies whole files:
+  `privatefiles` flushes the full `Uint8Array` (structured clone copies the
+  entire backing buffer) on every write tick, which dominates heap during
+  long downloads.
