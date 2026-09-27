@@ -110,6 +110,20 @@ rt.register({
     "hasKeys([I)[Z": (keys: Int32Array) => new Uint8Array(keys.length),
   },
 });
+// Every load falls back to the virtual keyboard (Virtual.kcm, type FULL), as AOSP does for a
+// device without its own map; deviceHasKey agrees with the touchscreen's hasKeys.
+class JKeyCharacterMap extends JObj {}
+let virtualKeyboard: JKeyCharacterMap | null = null;
+rt.register({
+  name: "android/view/KeyCharacterMap", ctor: JKeyCharacterMap,
+  statics: { VIRTUAL_KEYBOARD: -1, BUILT_IN_KEYBOARD: 0, NUMERIC: 1, PREDICTIVE: 2, ALPHA: 3, FULL: 4, SPECIAL_FUNCTION: 5 },
+  methods: {
+    "static load(I)Landroid/view/KeyCharacterMap;": () => virtualKeyboard ??= new JKeyCharacterMap(),
+    "getKeyboardType()I": () => 4,
+    "static deviceHasKey(I)Z": () => 0,
+    "static deviceHasKeys([I)[Z": (keys: Int32Array) => new Uint8Array(keys.length),
+  },
+});
 rt.register({
   name: "android/view/InputDevice$MotionRange", ctor: JMotionRange,
   methods: {
