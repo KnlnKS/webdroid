@@ -236,9 +236,9 @@ describe("network-request", () => {
       for (const value of values) await vcall(target, add, "(I)Landroid/net/NetworkRequest$Builder;", value);
       const request = await build(target);
       const array = await vcall(request, get, "()[I") as Int32Array;
-      expect([...array]).toEqual(expected);
+      expect([...array]).toEqual([...expected]);
       array[0] = 7;
-      expect([...(await vcall(request, get, "()[I") as Int32Array)]).toEqual(expected);
+      expect([...(await vcall(request, get, "()[I") as Int32Array)]).toEqual([...expected]);
     }
   });
 });
