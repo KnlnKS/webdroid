@@ -9,7 +9,7 @@ import { newLinkedHashSet } from "../jvm/natives/jutil";
 import type { JContext } from "./context";
 import type { JActivity } from "./app";
 import { onMain } from "./mainloop";
-import { vcall, defineException, stringHash } from "../jvm/natives/jlang";
+import { vcall, defineException, stringHash, JBool, JByte, JChar, JDouble, JFloat, JShort } from "../jvm/natives/jlang";
 import { TV, type XmlAttr, type XmlNode } from "./axml";
 import { normRV } from "./res";
 
@@ -234,6 +234,8 @@ const intentMethods: NativeSpec["methods"] = {
     return i;
   },
   "setSourceBounds(Landroid/graphics/Rect;)V": function (this: JIntent, bounds: JRect | null) { this.sourceBounds = bounds ? copyBounds(bounds) : null; },
+  "toUri(I)Ljava/lang/String;": function (this: JIntent, flags: number) { return intentUri(this, flags); },
+  "toURI()Ljava/lang/String;": function (this: JIntent) { return intentUri(this, 0); },
   "setSelector(Landroid/content/Intent;)V": function (this: JIntent, selector: JIntent | null) {
     if (selector === this || selector && this.pkg) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid selector");
     this.selector = selector;
@@ -338,6 +340,41 @@ export function mkComponentName(pkg: string, cls: string): JComponentName {
   const c = new JComponentName();
   c.pkg = pkg; c.cls = cls;
   return c;
+}
+/** AOSP Intent.toUri: the data (without its scheme under URI_INTENT_SCHEME), then "#Intent;"
+ *  key=value pairs for everything else and the extras a URI can carry, then "end". */
+const encUri = (s: string, slash = false) => { const e = encodeURIComponent(s); return slash ? e.replace(/%2F/g, "/") : e; };
+/** an extra's URI type tag and text, for the types toUri writes */
+function extraUri(v: unknown): [string, string] | null {
+  if (typeof v === "string") return ["S", v];
+  if (typeof v === "number") return ["i", String(v)];
+  if (typeof v === "bigint") return ["l", String(v)];
+  const n = (v as { v: number }).v;
+  if (v instanceof JBool) return ["B", String(!!n)];
+  if (v instanceof JChar) return ["c", String.fromCharCode(n)];
+  if (v instanceof JDouble || v instanceof JFloat) return [v instanceof JDouble ? "d" : "f", Number.isInteger(n) ? n.toFixed(1) : String(n)];
+  return v instanceof JByte ? ["b", String(n)] : v instanceof JShort ? ["s", String(n)] : null;
+}
+function intentUri(it: JIntent, flags: number): string {
+  const intentScheme = (flags & 1) !== 0, match = it.dataUri ? /^([^:/?#]+):/.exec(it.dataUri) : null;
+  const scheme = intentScheme ? match?.[1] ?? null : null;
+  let s = (intentScheme ? "intent:" + (scheme ? it.dataUri!.slice(scheme.length + 1) : it.dataUri ?? "") : it.dataUri ?? "") + "#Intent;";
+  if (scheme) s += `scheme=${encUri(scheme)};`;
+  if (it.action && !(scheme && it.action === "android.intent.action.VIEW")) s += `action=${encUri(it.action)};`;
+  for (const c of it.categories) s += `category=${encUri(c)};`;
+  if (it.typeStr) s += `type=${encUri(it.typeStr, true)};`;
+  if (it.identifier) s += `identifier=${encUri(it.identifier, true)};`;
+  if (it.flags) s += `launchFlags=0x${(it.flags >>> 0).toString(16)};`;
+  if (it.pkg) s += `package=${encUri(it.pkg)};`;
+  if (it.component && it.componentPkg) {
+    const cls = it.component.startsWith(it.componentPkg + ".") ? it.component.slice(it.componentPkg.length) : it.component;
+    s += `component=${encUri(it.componentPkg + "/" + cls, true)};`;
+  }
+  for (const [key, value] of it.extras.map) {
+    const extra = extraUri(value);
+    if (extra) s += `${extra[0]}.${encUri(key)}=${encUri(extra[1])};`;
+  }
+  return s + "end";
 }
 const shortClassName = (c: JComponentName) => c.cls.startsWith(c.pkg + ".") ? c.cls.slice(c.pkg.length) : c.cls;
 const compareComponents = (a: JComponentName, b: JComponentName) =>
