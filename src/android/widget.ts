@@ -1,15 +1,15 @@
 import { AID } from "./res";
 import { guestNow } from "../guest-clock";
-import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, uiState, JViewGroup, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, type JLayoutParams } from "./view";
-import { type JDrawable, type JColorStateList, ST, loadDrawableRV, loadDrawable, drawChild, drawableSize, JLayerDrawable } from "./drawable";
+import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, uiState, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, findById, generateViewId, type JLayoutParams } from "./view";
+import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, drawableSize, JLayerDrawable, rvCsl, cslColor } from "./drawable";
 import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, flagSetters, driven, type Gen } from "../jvm/runtime";
-import { type JAttrSet, rvColor, obtainStyled, rvInt, rvDimen } from "./res";
+import { type JAttrSet, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue } from "./res";
 import { TV } from "./axml";
-import { type JCanvas, cssColor } from "./graphics";
-import { JTextView, textViewMethods, JButton, applyTvStyle } from "./textview";
-import { G } from "./gravity";
-import { device } from "../shell/config";
-import { vcall, vcallOn, curThread, type JSimpleEnum } from "../jvm/natives/jlang";
+import { type JCanvas, type JInsets, JRect, JTypeface, cssColor, insetsOf, measureText, fontAscent, fontDescent, tfDefault } from "./graphics";
+import { JTextView, textViewMethods, JButton, applyTvStyle, compoundPadL, compoundPadR, syncCompoundPads } from "./textview";
+import { JTextPaint, spannedString } from "./text";
+import { G, absGravity } from "./gravity";
+import { vcall, vcallOn, curThread, after, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type JMotionEvent } from "./motionevent";
 import { JLinearLayout, linearMethods } from "./layouts";
 
@@ -241,68 +241,68 @@ export function themeAccent(v: JView): number {
   return rv && v.jres ? rvColor(v.jres, rv, -10011977) : -10011977;
 }
 
-/** TextView.onDraw with the text column starting at `padL` (compound widgets draw their indicator in the gap). */
-const drawTextInset = driven(function* drawTextInset(tv: JTextView, cv: JCanvas, padL: number): Gen {
-  const saved = tv.padL;
-  tv.padL = padL;
-  try { yield callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", tv, cv); }
-  finally { tv.padL = saved; }
+const relayoutSetters = (t: Record<string, string>): NativeSpec["methods"] => Object.fromEntries(Object.entries(t).map(([sig, f]) =>
+  [sig, function (this: Record<string, unknown> & JView, v: unknown) { if (this[f] !== v) { this[f] = v; requestLayout(this); } }]));
+/** a drawable a view owns: callback wired, handed the view's current state */
+const adopt = driven(function* adopt(v: JView, old: JDrawable | null, d: JDrawable | null): Gen {
+  if (old && old !== d) old.callback = null;
+  if (!d) return;
+  d.callback = v;
+  const thread = curThread;
+  if (yield vcallOn(thread, d, "isStateful", "()Z")) yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(v.drawableState()));
 });
+const drawableRes = (v: JView, id: number) => id ? vcall(v.ctx, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", id) : null;
+/** AOSP applies an explicit tint list to a mutated copy and re-states it */
+const applyTint = driven(function* applyTint(v: JView, d: JDrawable | null, tint: JColorStateList | null, hasTint: boolean, mode: JSimpleEnum | null): Gen {
+  if (!d || (!hasTint && !mode)) return;
+  const thread = curThread;
+  if (hasTint) yield vcallOn(thread, d, "setTintList", "(Landroid/content/res/ColorStateList;)V", tint);
+  if (mode) yield vcallOn(thread, d, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", mode);
+  if (yield vcallOn(thread, d, "isStateful", "()Z")) yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(v.drawableState()));
+  invalidate(v);
+});
+/** CompoundButton and CheckedTextView place their indicator by the text's vertical gravity */
+const indicatorTop = (v: JTextView, h: number) => {
+  const g = v.gravityT & 0x70;
+  return g === G.BOTTOM ? v.height() - h : g === G.CENTER_V ? Math.trunc((v.height() - h) / 2) : 0;
+};
 
-// ── CompoundButton / CheckBox / RadioButton / Switch
+// ── CompoundButton / CheckBox / RadioButton / Switch / ToggleButton
 class JCompoundButton extends JButton {
   checked = false;
   checkL: unknown = null;
   broadcasting = false;
-  constructor() {
-    super();
-    this.allCaps = false;
-    this.gravityT = 16 | G.START;
-    this.background = null;
-    this.minH = device.dp(48);
-    this.minW = 0;
-    this.padL = 0; this.padR = 0;
-  }
-  /** the android:button drawable, and the width the indicator reserves (0 = no indicator) */
   buttonD: JDrawable | null = null;
+  /** the button's intrinsic width: the text starts after it */
   buttonW = 0;
   buttonTint: JColorStateList | null = null;
   buttonTintMode: JSimpleEnum | null = null;
   hasButtonTint = false;
-  updateButtonState(): unknown { return rt.drive(this.updateButtonState$()); }
-  *updateButtonState$(): Gen {
-    const thread = curThread, drawable = this.buttonD;
-    if (!drawable || !(yield vcallOn(thread, drawable, "isStateful", "()Z"))) return;
-    const state = yield vcallOn(thread, this, "getDrawableState", "()[I");
-    if (yield vcallOn(thread, drawable, "setState", "([I)Z", state)) invalidate(this);
+  setButton(d: JDrawable | null): unknown { return rt.drive(this.setButton$(d)); }
+  *setButton$(d: JDrawable | null): Gen {
+    if (d === this.buttonD) return;
+    const thread = curThread;
+    yield adopt(this, this.buttonD, d);
+    this.buttonD = d;
+    this.buttonW = d ? Math.max(0, yield drawableSize(d, false, thread)) : 0;
+    // AOSP sizes the view to its button: setMinHeight(getIntrinsicHeight())
+    if (d) yield vcallOn(thread, this, "setMinHeight", "(I)V", yield drawableSize(d, true, thread));
+    yield this.applyButtonTint();
+    requestLayout(this);
   }
-  applyButtonTint(): unknown { return rt.drive(this.applyButtonTint$()); }
-  *applyButtonTint$(): Gen {
-    if (this.buttonD && this.hasButtonTint) yield vcall(this.buttonD, "setTintList", "(Landroid/content/res/ColorStateList;)V", this.buttonTint);
-    if (this.buttonD && this.buttonTintMode) yield vcall(this.buttonD, "setTintMode", "(Landroid/graphics/PorterDuff$Mode;)V", this.buttonTintMode);
-    invalidate(this);
-  }
-  setCheckedInternal(c: boolean): unknown { return rt.drive(this.setCheckedInternal$(c)); }
-  *setCheckedInternal$(c: boolean): Gen {
-    if (rt.iof(this, "android/widget/RadioButton") && this.idNum > 0) {
-      let parent: JView | null = this.parent;
-      while (parent && !(parent instanceof JRadioGroup)) parent = parent.parent;
-      if (parent instanceof JRadioGroup && (c ? parent.checkedId !== this.idNum : parent.checkedId === this.idNum)) {
-        yield parent.checkId(c ? this.idNum : -1);
-        return;
-      }
-    }
+  applyButtonTint(): unknown { return applyTint(this, this.buttonD, this.buttonTint, this.hasButtonTint, this.buttonTintMode); }
+  setChecked(c: boolean): unknown { return rt.drive(this.setChecked$(c)); }
+  *setChecked$(c: boolean): Gen {
     if (this.checked === c) return;
     this.checked = c;
     yield this.refreshDrawableState();
-    yield this.applyButtonTint();
     if (this.broadcasting) return;
     this.broadcasting = true;
-    if (this.checkL) {
-      yield vcall(this.checkL, "onCheckedChanged", "(Landroid/widget/CompoundButton;Z)V", this, c ? 1 : 0);
-    }
-    this.broadcasting = false;
-    invalidate();
+    try {
+      if (this.checkL) yield vcall(this.checkL, "onCheckedChanged", "(Landroid/widget/CompoundButton;Z)V", this, +c);
+      // RadioGroup's widget listener, which it installs on its RadioButton children
+      if (this.parent instanceof JRadioGroup && rt.iof(this, "android/widget/RadioButton")) yield this.parent.childChecked(this);
+    } finally { this.broadcasting = false; }
   }
   baseState(): number[] {
     const st = super.baseState();
@@ -310,170 +310,299 @@ class JCompoundButton extends JButton {
     return st;
   }
 }
-const CB_STYLE = { check: "checkboxStyle", radio: "radioButtonStyle", switch: "switchStyle" } as const;
-const compoundMethods = (kind: "check" | "radio" | "switch"): NativeSpec["methods"] => {
-  const init = async function (this: JCompoundButton, c: unknown, set: JAttrSet | null, defStyleAttr?: number, defStyleRes?: number) {
-    await initViewFromCtx(this, c, set);
-    await applyTvStyle(this, set, 0);
-    this.background = null;
-    this.clickable = true;
-    if (!this.jres) return;
-    // AOSP's two-arg constructors pass the widget's own default style attribute; the indicator
-    // is the android:button that cascade resolves, and a CompoundButton subclass styled as
-    // something else (a Material Chip) has none and reserves no room for one.
-    const ta = obtainStyled(this.jres, this.theme, set, [AID("checked"), AID("button")],
-      defStyleAttr || AID(CB_STYLE[kind]), defStyleRes ?? 0);
-    if (ta.vals[0]) this.checked = !!rvInt(this.jres, ta.vals[0], 0);
-    if (ta.vals[1]) {
-      this.buttonD = await loadDrawableRV(this.jres, ta.vals[1], this.theme);
-      this.buttonW = kind === "switch" ? device.dp(52) : device.dp(32);
-      await this.updateButtonState();
-    }
-  };
+/** CompoundButton's constructor over TextView's: the widget's own style names the button, its
+ *  tint and the initial check. `then` reads what a subclass adds under the same style. */
+function compoundCtors<T extends JCompoundButton>(styleAttr: string, then?: (v: T, set: JAttrSet | null, dsa: number, dsr: number) => unknown): NativeSpec["methods"] {
+  const init = driven(function* initCompound(v: T, c: unknown, set: JAttrSet | null, dsa: number, dsr: number): Gen {
+    yield initViewFromCtx(v, c, set, dsa, dsr);
+    yield applyTvStyle(v, set, dsa, dsr);
+    const res = v.jres;
+    if (!res) return;
+    const a = obtainStyled(res, v.theme, set, [AID("button"), AID("buttonTint"), AID("checked")], dsa, dsr);
+    if (a.vals[0]) yield v.setButton(yield loadDrawableRV(res, a.vals[0], v.theme));
+    if (a.vals[1]) { v.buttonTint = yield rvCsl(res, a.vals[1], v.theme); v.hasButtonTint = true; }
+    if (a.vals[2]) yield vcall(v, "setChecked", "(Z)V", rvInt(res, a.vals[2], 0));
+    yield v.applyButtonTint();
+    yield then?.(v, set, dsa, dsr);
+  });
+  const style = () => styleAttr ? AID(styleAttr) : 0;
   return {
+    "<init>(Landroid/content/Context;)V": function (this: T, c: unknown) { return init(this, c, null, style(), 0); },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: T, c: unknown, set: JAttrSet | null) { return init(this, c, set, style(), 0); },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": function (this: T, c: unknown, set: JAttrSet | null, dsa: number) { return init(this, c, set, dsa, 0); },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": function (this: T, c: unknown, set: JAttrSet | null, dsa: number, dsr: number) { return init(this, c, set, dsa, dsr); },
+  };
+}
+function compoundPadLeft(this: JCompoundButton) { return compoundPadL.call(this) + this.buttonW; }
+syncCompoundPads.add(compoundPadLeft);
+const compoundOnDraw = driven(function* compoundOnDraw(this: JCompoundButton, cv: JCanvas): Gen {
+  const d = this.buttonD, thread = curThread;
+  if (d) {
+    const h = yield drawableSize(d, true, thread), top = indicatorTop(this, h);
+    yield vcallOn(thread, d, "setBounds", "(IIII)V", 0, top, this.buttonW, top + h);
+  }
+  yield callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", this, cv);
+  if (!d) return;
+  // drawn at the view's origin however far its content scrolled
+  const sx = this.scrollX, sy = this.scrollY;
+  if (sx || sy) cv.ctx.translate(sx, sy);
+  try { yield drawChild(d, cv, thread); } finally { if (sx || sy) cv.ctx.translate(-sx, -sy); }
+});
+const compoundMethods: NativeSpec["methods"] = {
   ...textViewMethods,
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": init,
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": init,
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": init,
-  "setChecked(Z)V": function (this: JCompoundButton, c: number) { return this.setCheckedInternal(!!c); },
-  "toggle()V": function (this: JCompoundButton) { return this.setCheckedInternal(!this.checked); },
+  ...compoundCtors(""),
+  "setChecked(Z)V": function (this: JCompoundButton, c: number) { return this.setChecked(!!c); },
+  "toggle()V": function (this: JCompoundButton) { return vcall(this, "setChecked", "(Z)V", +!this.checked); },
   "performClick()Z": driven(function* (this: JCompoundButton): Gen {
-    // inside a RadioGroup: single-select semantics
-    let g: JView | null = this.parent;
-    while (g && !(g instanceof JRadioGroup)) g = g.parent;
-    if (g instanceof JRadioGroup && kind === "radio") {
-      yield g.checkId(this.idNum);
-    } else {
-      yield this.setCheckedInternal(!this.checked);
-    }
-    if (this.clickL) yield vcall(this.clickL, "onClick", "(Landroid/view/View;)V", this);
+    yield vcall(this, "toggle", "()V");
+    if (!this.clickL) return 0;
+    yield vcall(this.clickL, "onClick", "(Landroid/view/View;)V", this);
     return 1;
   }),
   ...flagGetters({ "isChecked()Z": "checked" }),
   ...fieldSetters({ "setOnCheckedChangeListener(Landroid/widget/CompoundButton$OnCheckedChangeListener;)V": "checkL" }),
-  ...fieldGetters({ "getButtonDrawable()Landroid/graphics/drawable/Drawable;": "buttonD" }),
+  ...fieldGetters({ "getButtonDrawable()Landroid/graphics/drawable/Drawable;": "buttonD",
+    "getButtonTintList()Landroid/content/res/ColorStateList;": "buttonTint",
+    "getButtonTintMode()Landroid/graphics/PorterDuff$Mode;": "buttonTintMode" }),
   "setButtonTintList(Landroid/content/res/ColorStateList;)V": function (this: JCompoundButton, tint: JColorStateList | null) {
     this.buttonTint = tint; this.hasButtonTint = true; return this.applyButtonTint();
   },
-  "getButtonTintList()Landroid/content/res/ColorStateList;": function (this: JCompoundButton) { return this.buttonTint; },
   "setButtonTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JCompoundButton, mode: JSimpleEnum | null) {
     this.buttonTintMode = mode; return this.applyButtonTint();
   },
-  "getButtonTintMode()Landroid/graphics/PorterDuff$Mode;": function (this: JCompoundButton) { return this.buttonTintMode; },
-  "setButtonDrawable(Landroid/graphics/drawable/Drawable;)V": driven(function* (this: JCompoundButton, d: JDrawable | null): Gen {
-    this.buttonD = d;
-    this.buttonW = d ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;
-    yield this.updateButtonState();
-    return this.applyButtonTint();
-  }),
-  "setButtonDrawable(I)V": driven(function* (this: JCompoundButton, id: number): Gen {
-    this.buttonD = id ? yield loadDrawable(this.jres!, id, this.theme) : null;
-    this.buttonW = id ? (kind === "switch" ? device.dp(52) : device.dp(32)) : 0;
-    yield this.updateButtonState();
-    yield this.applyButtonTint();
-  }),
-  "drawableStateChanged()V": function (this: JCompoundButton) {
-    this.updateLinkColor();
-    return this.updateButtonState();
+  "setButtonDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JCompoundButton, d: JDrawable | null) { return this.setButton(d); },
+  "setButtonDrawable(I)V": function (this: JCompoundButton, id: number) {
+    return after(drawableRes(this, id), (d) => vcall(this, "setButtonDrawable", "(Landroid/graphics/drawable/Drawable;)V", d));
   },
-  "onMeasure(II)V": driven(function* (this: JCompoundButton, wSpec: number, hSpec: number): Gen {
-    yield callSelf(textViewMethods, "onMeasure(II)V", this, wSpec, hSpec);
-    this.measuredW = resolveSize(this.measuredW + this.buttonW, wSpec);
-    this.measuredH = resolveSize(Math.max(this.measuredH, device.dp(48)), hSpec);
+  "drawableStateChanged()V": driven(function* (this: JCompoundButton): Gen {
+    yield callSelf(textViewMethods, "drawableStateChanged()V", this);
+    const d = this.buttonD, thread = curThread;
+    if (d && (yield vcallOn(thread, d, "isStateful", "()Z")) && (yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState())))) invalidate(this);
   }),
-  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JCompoundButton, cv: JCanvas): Gen {
-    const thread = curThread;
-    if (!this.buttonW) return (textViewMethods["onDraw(Landroid/graphics/Canvas;)V"] as (cv: JCanvas) => void).call(this, cv);
-    const ctx = cv.ctx;
-    const accent = themeAccent(this);
-    const cy = this.height() / 2;
-    const indX = kind === "switch" ? this.width() - this.padR - device.dp(44) : this.padL + device.dp(4);
-    const w = this.buttonD ? yield drawableSize(this.buttonD, false, thread) : -1;
-    if (this.buttonD && w > 0) {
-      const h = yield drawableSize(this.buttonD, true, thread);
-      const b = this.buttonD.bounds;
-      b.left = indX; b.top = cy - h / 2; b.right = indX + w; b.bottom = cy + h / 2;
-      this.buttonD.stateSet = this.drawableState();
-      yield drawChild(this.buttonD, cv, thread);
-      return drawTextInset(this, cv, kind !== "switch" ? indX + this.buttonW - device.dp(4) : this.padL);
-    }
-    if (kind === "check") {
-      const s = device.dp(18);
-      const x = indX, y = cy - s / 2;
-      ctx.lineWidth = device.dp(2);
-      if (this.checked) {
-        ctx.fillStyle = cssColor(accent);
-        ctx.beginPath();
-        ctx.roundRect(x, y, s, s, device.dp(2));
-        ctx.fill();
-        ctx.strokeStyle = "#fff";
-        ctx.lineWidth = device.dp(2.5);
-        ctx.beginPath();
-        ctx.moveTo(x + device.dp(4), y + device.dp(9.5));
-        ctx.lineTo(x + device.dp(7.5), y + device.dp(13));
-        ctx.lineTo(x + device.dp(14), y + device.dp(5));
-        ctx.stroke();
-      } else {
-        ctx.strokeStyle = "rgba(0,0,0,0.54)";
-        ctx.beginPath();
-        ctx.roundRect(x + device.dp(1), y + device.dp(1), s - device.dp(2), s - device.dp(2), device.dp(2));
-        ctx.stroke();
-      }
-    } else if (kind === "radio") {
-      const r = device.dp(9);
-      ctx.lineWidth = device.dp(2);
-      ctx.strokeStyle = this.checked ? cssColor(accent) : "rgba(0,0,0,0.54)";
-      ctx.beginPath();
-      ctx.arc(indX + r, cy, r - device.dp(1), 0, Math.PI * 2);
-      ctx.stroke();
-      if (this.checked) {
-        ctx.fillStyle = cssColor(accent);
-        ctx.beginPath();
-        ctx.arc(indX + r, cy, r - device.dp(5), 0, Math.PI * 2);
-        ctx.fill();
-      }
-    } else {
-      const tw = device.dp(34), th = device.dp(14);
-      ctx.fillStyle = this.checked ? cssColor((accent & 0xffffff) | 0x66000000) : "rgba(0,0,0,0.26)";
-      ctx.beginPath();
-      ctx.roundRect(indX + device.dp(5), cy - th / 2, tw - device.dp(10), th, th / 2);
-      ctx.fill();
-      ctx.fillStyle = this.checked ? cssColor(accent) : "#fafafa";
-      ctx.strokeStyle = "rgba(0,0,0,0.13)";
-      ctx.beginPath();
-      ctx.arc(this.checked ? indX + tw - device.dp(10) : indX + device.dp(10), cy, device.dp(10), 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    }
-    return drawTextInset(this, cv, kind !== "switch" ? indX + this.buttonW - device.dp(4) : this.padL);
-  }),
-  };
+  "getCompoundPaddingLeft()I": compoundPadLeft,
+  "onDraw(Landroid/graphics/Canvas;)V": compoundOnDraw,
 };
-rt.register({ name: "android/widget/CompoundButton", ctor: JCompoundButton, sup: "android/widget/Button", ifaces: ["android/widget/Checkable"], methods: compoundMethods("check") });
+rt.register({ name: "android/widget/CompoundButton", ctor: JCompoundButton, sup: "android/widget/Button", ifaces: ["android/widget/Checkable"], methods: compoundMethods });
 rt.markers("android/widget/CompoundButton$OnCheckedChangeListener", "android/widget/Checkable");
-rt.register({ name: "android/widget/CheckBox", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: compoundMethods("check") });
-rt.register({ name: "android/widget/RadioButton", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: compoundMethods("radio") });
-rt.register({ name: "android/widget/Switch", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: compoundMethods("switch") });
-rt.register({ name: "android/widget/ToggleButton", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: compoundMethods("switch") });
+rt.register({ name: "android/widget/CheckBox", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: {
+  ...compoundMethods, ...compoundCtors("checkboxStyle"),
+} });
+rt.register({ name: "android/widget/RadioButton", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: {
+  ...compoundMethods, ...compoundCtors("radioButtonStyle"),
+  // a radio button is unchecked only by its group
+  "toggle()V": function (this: JCompoundButton) { if (!this.checked) return callSelf(compoundMethods, "toggle()V", this); },
+} });
+
+class JToggleButton extends JCompoundButton { textOn: unknown = null; textOff: unknown = null; }
+/** ToggleButton.syncTextState: the label follows the checked state when one is given */
+const syncToggleText = (v: JToggleButton) => {
+  const text = v.checked ? v.textOn : v.textOff;
+  return text != null ? vcall(v, "setText", "(Ljava/lang/CharSequence;)V", text) : undefined;
+};
+rt.register({ name: "android/widget/ToggleButton", ctor: JToggleButton, sup: "android/widget/CompoundButton", methods: {
+  ...compoundMethods,
+  ...compoundCtors<JToggleButton>("buttonStyleToggle", (v, set, dsa, dsr) => {
+    const a = obtainStyled(v.jres!, v.theme, set, [AID("textOn"), AID("textOff")], dsa, dsr);
+    if (a.vals[0]) v.textOn = rvString(v.jres!, v.jres!.resolveRefs(a.vals[0]));
+    if (a.vals[1]) v.textOff = rvString(v.jres!, v.jres!.resolveRefs(a.vals[1]));
+    return syncToggleText(v);
+  }),
+  "setChecked(Z)V": function (this: JToggleButton, c: number) { return after(this.setChecked(!!c), () => syncToggleText(this)); },
+  ...fieldGetters({ "getTextOn()Ljava/lang/CharSequence;": "textOn", "getTextOff()Ljava/lang/CharSequence;": "textOff" }),
+  ...fieldSetters({ "setTextOn(Ljava/lang/CharSequence;)V": "textOn", "setTextOff(Ljava/lang/CharSequence;)V": "textOff" }),
+} });
+
+// ── Switch: a thumb sliding along a track at the end of the text
+class JSwitch extends JCompoundButton {
+  thumb: JDrawable | null = null; track: JDrawable | null = null;
+  thumbTint: JColorStateList | null = null; trackTint: JColorStateList | null = null;
+  thumbTintMode: JSimpleEnum | null = null; trackTintMode: JSimpleEnum | null = null;
+  hasThumbTint = false; hasTrackTint = false;
+  textOn: unknown = ""; textOff: unknown = "";
+  showText = true; splitTrack = false;
+  thumbTextPadding = 0; switchMinWidth = 0; switchPadding = 0;
+  switchPaint: JTextPaint | null = null;
+  /** 0 off .. 1 on */
+  thumbPos = 0;
+  switchW = 0; switchH = 0; thumbW = 0;
+  switchL = 0; switchT = 0; switchR = 0; switchB = 0;
+  readonly pad = new JRect();
+  thumbOffset(range: number) { return Math.trunc(this.thumbPos * range + 0.5); }
+  /** the track's padding into `pad`, and the thumb's optical insets */
+  *insets$(thread = curThread): Gen<JInsets> {
+    if (this.track) yield vcallOn(thread, this.track, "getPadding", "(Landroid/graphics/Rect;)Z", this.pad);
+    else this.pad.left = this.pad.top = this.pad.right = this.pad.bottom = 0;
+    return this.thumb ? yield vcallOn(thread, this.thumb, "getOpticalInsets", "()Landroid/graphics/Insets;") : NO_INSETS;
+  }
+  switchText(on: boolean): string { return spannedString(on ? this.textOn : this.textOff); }
+}
+const NO_INSETS = insetsOf(0, 0, 0, 0);
+function switchPadRight(this: JSwitch) { return compoundPadR.call(this) + this.switchW + (this.text ? this.switchPadding : 0); }
+syncCompoundPads.add(switchPadRight);
+const setSwitchDrawable = (which: "thumb" | "track") => driven(function* (this: JSwitch, d: JDrawable | null): Gen {
+  yield adopt(this, this[which], d);
+  this[which] = d;
+  yield applySwitchTints(this);
+  requestLayout(this);
+});
+const applySwitchTints = driven(function* applySwitchTints(v: JSwitch): Gen {
+  yield applyTint(v, v.thumb, v.thumbTint, v.hasThumbTint, v.thumbTintMode);
+  yield applyTint(v, v.track, v.trackTint, v.hasTrackTint, v.trackTintMode);
+});
+const setSwitchTextAppearance = driven(function* setSwitchTextAppearance(v: JSwitch, id: number): Gen {
+  const res = v.jres;
+  if (!res || !id) return;
+  const p = v.switchPaint ??= new JTextPaint();
+  p.textSize = v.paintT.textSize; p.tf = v.paintT.tf;
+  const size = res.styleLookup(id, AID("textSize")), color = res.styleLookup(id, AID("textColor"));
+  if (size) p.textSize = rvDimen(res, size, p.textSize);
+  if (color) p.setColorValue(cslColor(yield rvCsl(res, resolveStyleValue(res, v.theme, color)!, v.theme), v.drawableState()));
+  requestLayout(v);
+});
+rt.register({ name: "android/widget/Switch", ctor: JSwitch, sup: "android/widget/CompoundButton", methods: {
+  ...compoundMethods,
+  ...compoundCtors<JSwitch>("switchStyle", driven(function* (v: JSwitch, set: JAttrSet | null, dsa: number, dsr: number): Gen {
+    const res = v.jres!;
+    const a = obtainStyled(res, v.theme, set, ["thumb", "track", "textOn", "textOff", "thumbTextPadding", "switchMinWidth",
+      "switchPadding", "splitTrack", "showText", "thumbTint", "trackTint", "switchTextAppearance"].map(AID), dsa, dsr);
+    const g = (i: number) => a.vals[i];
+    if (g(0)) v.thumb = yield loadDrawableRV(res, g(0)!, v.theme);
+    if (g(1)) v.track = yield loadDrawableRV(res, g(1)!, v.theme);
+    yield adopt(v, null, v.thumb); yield adopt(v, null, v.track);
+    if (g(2)) v.textOn = rvString(res, res.resolveRefs(g(2)!)) ?? "";
+    if (g(3)) v.textOff = rvString(res, res.resolveRefs(g(3)!)) ?? "";
+    v.thumbTextPadding = Math.trunc(rvDimen(res, g(4), 0));
+    v.switchMinWidth = Math.trunc(rvDimen(res, g(5), 0));
+    v.switchPadding = Math.trunc(rvDimen(res, g(6), 0));
+    v.splitTrack = !!rvInt(res, g(7), 0);
+    v.showText = !!rvInt(res, g(8), 1);
+    if (g(9)) { v.thumbTint = yield rvCsl(res, g(9)!, v.theme); v.hasThumbTint = true; }
+    if (g(10)) { v.trackTint = yield rvCsl(res, g(10)!, v.theme); v.hasTrackTint = true; }
+    yield applySwitchTints(v);
+    if (g(11)?.t === TV.REFERENCE) yield setSwitchTextAppearance(v, g(11)!.d);
+    v.thumbPos = v.checked ? 1 : 0;
+  })),
+  "setChecked(Z)V": function (this: JSwitch, c: number) {
+    return after(this.setChecked(!!c), () => { this.thumbPos = this.checked ? 1 : 0; invalidate(this); });
+  },
+  "getCompoundPaddingRight()I": switchPadRight,
+  ...fieldGetters({ "getTextOn()Ljava/lang/CharSequence;": "textOn", "getTextOff()Ljava/lang/CharSequence;": "textOff",
+    "getThumbDrawable()Landroid/graphics/drawable/Drawable;": "thumb", "getTrackDrawable()Landroid/graphics/drawable/Drawable;": "track",
+    "getThumbTintList()Landroid/content/res/ColorStateList;": "thumbTint", "getTrackTintList()Landroid/content/res/ColorStateList;": "trackTint",
+    "getThumbTintMode()Landroid/graphics/PorterDuff$Mode;": "thumbTintMode", "getTrackTintMode()Landroid/graphics/PorterDuff$Mode;": "trackTintMode",
+    "getThumbTextPadding()I": "thumbTextPadding", "getSwitchMinWidth()I": "switchMinWidth", "getSwitchPadding()I": "switchPadding" }),
+  ...flagGetters({ "getShowText()Z": "showText", "getSplitTrack()Z": "splitTrack" }),
+  ...relayoutSetters({ "setTextOn(Ljava/lang/CharSequence;)V": "textOn", "setTextOff(Ljava/lang/CharSequence;)V": "textOff",
+    "setThumbTextPadding(I)V": "thumbTextPadding", "setSwitchMinWidth(I)V": "switchMinWidth", "setSwitchPadding(I)V": "switchPadding" }),
+  "setShowText(Z)V": function (this: JSwitch, on: number) { if (this.showText !== !!on) { this.showText = !!on; requestLayout(this); } },
+  "setSplitTrack(Z)V": function (this: JSwitch, on: number) { this.splitTrack = !!on; invalidate(this); },
+  "setThumbDrawable(Landroid/graphics/drawable/Drawable;)V": setSwitchDrawable("thumb"),
+  "setTrackDrawable(Landroid/graphics/drawable/Drawable;)V": setSwitchDrawable("track"),
+  "setThumbResource(I)V": function (this: JSwitch, id: number) { return after(drawableRes(this, id), (d) => vcall(this, "setThumbDrawable", "(Landroid/graphics/drawable/Drawable;)V", d)); },
+  "setTrackResource(I)V": function (this: JSwitch, id: number) { return after(drawableRes(this, id), (d) => vcall(this, "setTrackDrawable", "(Landroid/graphics/drawable/Drawable;)V", d)); },
+  "setThumbTintList(Landroid/content/res/ColorStateList;)V": function (this: JSwitch, t: JColorStateList | null) { this.thumbTint = t; this.hasThumbTint = true; return applySwitchTints(this); },
+  "setTrackTintList(Landroid/content/res/ColorStateList;)V": function (this: JSwitch, t: JColorStateList | null) { this.trackTint = t; this.hasTrackTint = true; return applySwitchTints(this); },
+  "setThumbTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JSwitch, m: JSimpleEnum | null) { this.thumbTintMode = m; return applySwitchTints(this); },
+  "setTrackTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JSwitch, m: JSimpleEnum | null) { this.trackTintMode = m; return applySwitchTints(this); },
+  "setSwitchTextAppearance(Landroid/content/Context;I)V": function (this: JSwitch, _c: unknown, id: number) { return setSwitchTextAppearance(this, id); },
+  "setSwitchTypeface(Landroid/graphics/Typeface;)V": function (this: JSwitch, tf: JTypeface | null) {
+    (this.switchPaint ??= Object.assign(new JTextPaint(), { textSize: this.paintT.textSize })).tf = tf ?? tfDefault; requestLayout(this);
+  },
+  "setSwitchTypeface(Landroid/graphics/Typeface;I)V": function (this: JSwitch, tf: JTypeface | null) {
+    return vcall(this, "setSwitchTypeface", "(Landroid/graphics/Typeface;)V", tf);
+  },
+  "drawableStateChanged()V": driven(function* (this: JSwitch): Gen {
+    yield callSelf(compoundMethods, "drawableStateChanged()V", this);
+    const thread = curThread, state = Int32Array.from(this.drawableState());
+    for (const d of [this.thumb, this.track]) if (d) yield vcallOn(thread, d, "setState", "([I)Z", state);
+    invalidate(this);
+  }),
+  "onMeasure(II)V": driven(function* (this: JSwitch, wSpec: number, hSpec: number): Gen {
+    const thread = curThread, pad = this.pad, thumb = this.thumb;
+    let thumbW = 0, thumbH = 0;
+    if (thumb) {
+      yield vcallOn(thread, thumb, "getPadding", "(Landroid/graphics/Rect;)Z", pad);
+      thumbW = (yield drawableSize(thumb, false, thread)) - pad.left - pad.right;
+      thumbH = yield drawableSize(thumb, true, thread);
+    }
+    const paint = this.switchPaint ?? this.paintT;
+    const textW = this.showText ? Math.ceil(Math.max(measureText(paint, this.switchText(true)), measureText(paint, this.switchText(false)))) + this.thumbTextPadding * 2 : 0;
+    this.thumbW = Math.max(textW, thumbW);
+    const insets: JInsets = yield* this.insets$(thread);
+    const trackH = this.track ? yield drawableSize(this.track, true, thread) : 0;
+    this.switchW = Math.max(this.switchMinWidth, 2 * this.thumbW + Math.max(pad.left, insets.left) + Math.max(pad.right, insets.right));
+    this.switchH = Math.max(trackH, thumbH);
+    yield callSelf(textViewMethods, "onMeasure(II)V", this, wSpec, hSpec);
+    if (this.measuredH < this.switchH) this.measuredH = this.switchH;
+  }),
+  "onLayout(ZIIII)V": driven(function* (this: JSwitch): Gen {
+    const insets: JInsets = yield* this.insets$();
+    const inL = Math.max(0, insets.left - this.pad.left), inR = Math.max(0, insets.right - this.pad.right);
+    this.switchR = this.width() - this.padR - inR;
+    this.switchL = this.switchR - this.switchW + inL + inR;
+    const g = this.gravityT & 0x70;
+    this.switchT = g === G.CENTER_V ? Math.trunc((this.padT + this.height() - this.padB) / 2) - Math.trunc(this.switchH / 2)
+      : g === G.BOTTOM ? this.height() - this.padB - this.switchH : this.padT;
+    this.switchB = this.switchT + this.switchH;
+  }),
+  "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JSwitch, cv: JCanvas): Gen {
+    const thread = curThread, pad = this.pad, { thumb, track } = this;
+    // AOSP Switch.draw: the track spans the switch, the thumb sits along the scroll range
+    const insets: JInsets = yield* this.insets$(thread);
+    const range = track ? this.switchW - this.thumbW - pad.left - pad.right - insets.left - insets.right : 0;
+    let thumbLeft = this.switchL + this.thumbOffset(range);
+    if (track) {
+      thumbLeft += pad.left;
+      yield vcallOn(thread, track, "setBounds", "(IIII)V",
+        this.switchL + Math.max(0, insets.left - pad.left), this.switchT + Math.max(0, insets.top - pad.top),
+        this.switchR - Math.max(0, insets.right - pad.right), this.switchB - Math.max(0, insets.bottom - pad.bottom));
+    }
+    if (thumb) {
+      yield vcallOn(thread, thumb, "getPadding", "(Landroid/graphics/Rect;)Z", pad);
+      yield vcallOn(thread, thumb, "setBounds", "(IIII)V", thumbLeft - pad.left, this.switchT, thumbLeft + this.thumbW + pad.right, this.switchB);
+    }
+    yield compoundOnDraw.call(this, cv);
+    if (track) yield drawChild(track, cv, thread);
+    if (thumb) yield drawChild(thumb, cv, thread);
+    const text = this.showText ? this.switchText(this.checked) : "";
+    if (!text) return;
+    const paint = this.switchPaint ?? this.paintT, b = thumb?.bounds;
+    const cx = b ? (b.left + b.right) / 2 : this.width() / 2;
+    const cy = (this.switchT + (track ? pad.top : 0) + this.switchB - (track ? pad.bottom : 0)) / 2;
+    yield vcallOn(thread, cv, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", text,
+      cx - measureText(paint, text) / 2, cy - (fontAscent(paint) + fontDescent(paint)) / 2, paint);
+  }),
+} });
 class JRadioGroup extends JLinearLayout {
   checkL: unknown = null;
   checkedId = -1;
+  /** mProtectFromCheckedChange: the group's own check changes do not re-enter its listener */
+  protect = false;
   constructor() { super(); this.orientation = 1; }
-  radios(out: JCompoundButton[] = [], v: JView = this): JCompoundButton[] {
-    if (v instanceof JCompoundButton) out.push(v);
-    if (v instanceof JViewGroup && !(v instanceof JCompoundButton)) for (const c of v.children) this.radios(out, c);
-    return out;
+  /** setCheckedStateForView: the id is found anywhere below the group */
+  *setViewChecked$(id: number, c: boolean): Gen {
+    const v = findById(this, id);
+    if (!(v instanceof JCompoundButton) || !rt.iof(v, "android/widget/RadioButton")) return;
+    this.protect = true;
+    try { yield vcall(v, "setChecked", "(Z)V", +c); } finally { this.protect = false; }
   }
-  checkId(id: number, fire = true): unknown { return rt.drive(this.checkId$(id, fire)); }
-  *checkId$(id: number, fire = true): Gen {
+  *setCheckedId$(id: number): Gen {
     this.checkedId = id;
-    for (const r of this.radios()) {
-      yield r.setCheckedInternal(r.idNum === id);
-    }
-    if (fire && this.checkL) {
-      yield vcall(this.checkL, "onCheckedChanged", "(Landroid/widget/RadioGroup;I)V", this, id);
-    }
-    invalidate();
+    if (this.checkL) yield vcall(this.checkL, "onCheckedChanged", "(Landroid/widget/RadioGroup;I)V", this, id);
+  }
+  check(id: number): unknown { return rt.drive(this.check$(id)); }
+  *check$(id: number): Gen {
+    if (id !== -1 && id === this.checkedId) return;
+    if (this.checkedId !== -1) yield* this.setViewChecked$(this.checkedId, false);
+    if (id !== -1) yield* this.setViewChecked$(id, true);
+    yield* this.setCheckedId$(id);
+  }
+  /** the CheckedStateTracker every RadioButton child reports to */
+  childChecked(child: JView): unknown { return rt.drive(this.childChecked$(child)); }
+  *childChecked$(child: JView): Gen {
+    if (this.protect) return;
+    if (this.checkedId !== -1) yield* this.setViewChecked$(this.checkedId, false);
+    yield* this.setCheckedId$(child.idNum);
   }
 }
 class JRadioLP extends JLinearLP {}
@@ -485,15 +614,19 @@ rt.register({
     "generateLayoutParams(Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;": function (this: JRadioGroup, attrs: JAttrSet) { return lpFromAttrs(new JRadioLP(), this.jres!, attrs); },
     "generateLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;": (source: JLayoutParams) => { const lp = new JRadioLP(); marginCopy.call(lp, source); return lp; },
     "checkLayoutParams(Landroid/view/ViewGroup$LayoutParams;)Z": (lp: unknown) => +(lp instanceof JRadioLP),
-    "setOnCheckedChangeListener(Landroid/widget/RadioGroup$OnCheckedChangeListener;)V": function (this: JRadioGroup, l: unknown) {
-      this.checkL = l;
-    },
-    "check(I)V": function (this: JRadioGroup, id: number) { return this.checkId(id); },
-    "clearCheck()V": function (this: JRadioGroup) { return this.checkId(-1); },
-    "getCheckedRadioButtonId()I": function (this: JRadioGroup) {
-      if (this.checkedId === -1) this.checkedId = this.radios().find((r) => r.checked && rt.iof(r, "android/widget/RadioButton"))?.idNum ?? -1;
-      return this.checkedId;
-    },
+    // AOSP addView and PassThroughHierarchyChangeListener: a RadioButton child gets an id, and
+    // one arriving checked becomes the group's selection
+    "onViewAdded(Landroid/view/View;)V": driven(function* (this: JRadioGroup, child: JView): Gen {
+      if (!(child instanceof JCompoundButton) || !rt.iof(child, "android/widget/RadioButton")) return;
+      if (child.idNum === -1) child.idNum = generateViewId();
+      if (!child.checked) return;
+      if (this.checkedId !== -1) yield* this.setViewChecked$(this.checkedId, false);
+      yield* this.setCheckedId$(child.idNum);
+    }),
+    ...fieldSetters({ "setOnCheckedChangeListener(Landroid/widget/RadioGroup$OnCheckedChangeListener;)V": "checkL" }),
+    ...fieldGetters({ "getCheckedRadioButtonId()I": "checkedId" }),
+    "check(I)V": function (this: JRadioGroup, id: number) { return this.check(id); },
+    "clearCheck()V": function (this: JRadioGroup) { return this.check(-1); },
   },
 });
 rt.register({
@@ -525,67 +658,109 @@ rt.register({
   },
 });
 
-// ── CheckedTextView (single-choice dialog rows)
+// ── CheckedTextView: a TextView with a check mark on one side, inside that side's padding
 class JCheckedTextView extends JTextView {
   checked = false;
-  checkMarkDrawable: JDrawable | null = null;
+  checkMark: JDrawable | null = null;
+  checkMarkW = 0;
+  /** mBasePadding: the padding on the check mark's side before the mark's width is added */
+  basePad = 0;
+  checkMarkGravity = G.END;
+  checkMarkTint: JColorStateList | null = null;
+  checkMarkTintMode: JSimpleEnum | null = null;
+  hasCheckMarkTint = false;
   baseState(): number[] {
     const st = super.baseState();
     if (this.checked) st.push(ST.checked);
     return st;
   }
+  atStart(): boolean { return (absGravity(this.checkMarkGravity, 0) & 7) === G.LEFT; }
+  updatePadding() {
+    const p = this.basePad + (this.checkMark ? this.checkMarkW : 0);
+    if (this.atStart() ? this.padL === p : this.padR === p) return;
+    if (this.atStart()) this.padL = p; else this.padR = p;
+    requestLayout(this);
+  }
+  applyTint(): unknown { return applyTint(this, this.checkMark, this.checkMarkTint, this.hasCheckMarkTint, this.checkMarkTintMode); }
+  setCheckMark(d: JDrawable | null): unknown { return rt.drive(this.setCheckMark$(d)); }
+  *setCheckMark$(d: JDrawable | null): Gen {
+    const thread = curThread;
+    if (this.checkMark && this.checkMark !== d) this.checkMark.callback = null;
+    this.checkMark = d;
+    this.checkMarkW = 0;
+    if (d) {
+      d.callback = this;
+      // AOSP records the mark's size in its checked state
+      yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.of(ST.checked));
+      yield vcallOn(thread, this, "setMinHeight", "(I)V", yield drawableSize(d, true, thread));
+      this.checkMarkW = Math.max(0, yield drawableSize(d, false, thread));
+      yield vcallOn(thread, d, "setState", "([I)Z", Int32Array.from(this.drawableState()));
+    }
+    yield this.applyTint();
+    this.updatePadding();
+  }
+}
+const initCheckedText = driven(function* initCheckedText(v: JCheckedTextView, c: unknown, set: JAttrSet | null, dsa: number, dsr: number): Gen {
+  yield initViewFromCtx(v, c, set, dsa, dsr);
+  yield applyTvStyle(v, set, dsa, dsr);
+  const res = v.jres;
+  if (!res) return;
+  const a = obtainStyled(res, v.theme, set, ["checked", "checkMark", "checkMarkTint", "checkMarkGravity"].map(AID), dsa, dsr);
+  if (a.vals[3]) v.checkMarkGravity = rvInt(res, a.vals[3], v.checkMarkGravity);
+  v.basePad = v.atStart() ? v.padL : v.padR;
+  if (a.vals[2]) { v.checkMarkTint = yield rvCsl(res, a.vals[2], v.theme); v.hasCheckMarkTint = true; }
+  if (a.vals[1]) yield v.setCheckMark(yield loadDrawableRV(res, a.vals[1], v.theme));
+  if (a.vals[0]) yield vcall(v, "setChecked", "(Z)V", rvInt(res, a.vals[0], 0));
+});
+const checkedTextStyle = () => AID("checkedTextViewStyle");
+/** View.setPadding on a CheckedTextView: the mark's side keeps the mark's width on top */
+function setCheckedTextPadding(this: JCheckedTextView, l: number, t: number, r: number, b: number) {
+  this.padT = t; this.padB = b;
+  if (this.atStart()) { this.basePad = l; this.padR = r; } else { this.basePad = r; this.padL = l; }
+  requestLayout(this);
+  this.updatePadding();
 }
 rt.register({
   name: "android/widget/CheckedTextView", ctor: JCheckedTextView, sup: "android/widget/TextView",
   ifaces: ["android/widget/Checkable"],
   methods: {
     ...textViewMethods,
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JCheckedTextView, c: unknown, set: JAttrSet | null): Gen {
-      yield initViewFromCtx(this, c, set);
-      yield applyTvStyle(this, set, 0);
-      this.gravityT = 16 | G.START;
-    }),
-    "setChecked(Z)V": function (this: JCheckedTextView, v: number) { this.checked = !!v; invalidate(); },
-    "isChecked()Z": function (this: JCheckedTextView) { return this.checked ? 1 : 0; },
-    "toggle()V": function (this: JCheckedTextView) { this.checked = !this.checked; invalidate(); },
-    "setCheckMarkDrawable(I)V": () => {},
-    "setCheckMarkDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JCheckedTextView, d: JDrawable | null) {
-      this.checkMarkDrawable = d;
+    "<init>(Landroid/content/Context;)V": function (this: JCheckedTextView, c: unknown) { return initCheckedText(this, c, null, checkedTextStyle(), 0); },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JCheckedTextView, c: unknown, set: JAttrSet | null) { return initCheckedText(this, c, set, checkedTextStyle(), 0); },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": function (this: JCheckedTextView, c: unknown, set: JAttrSet | null, dsa: number) { return initCheckedText(this, c, set, dsa, 0); },
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": function (this: JCheckedTextView, c: unknown, set: JAttrSet | null, dsa: number, dsr: number) { return initCheckedText(this, c, set, dsa, dsr); },
+    "setChecked(Z)V": function (this: JCheckedTextView, v: number) {
+      if (this.checked === !!v) return;
+      this.checked = !!v;
+      return this.refreshDrawableState();
     },
-    "onMeasure(II)V": driven(function* (this: JCheckedTextView, wSpec: number, hSpec: number): Gen {
-      yield callSelf(textViewMethods, "onMeasure(II)V", this, wSpec, hSpec);
-      this.measuredH = Math.max(this.measuredH, device.dp(48));
-    }),
-    "onDraw(Landroid/graphics/Canvas;)V": function (this: JCheckedTextView, cv: JCanvas) {
-      const ctx = cv.ctx;
-      const cy = this.height() / 2;
-      const r = device.dp(9);
-      const indX = this.padL;
-      // A supplied check mark wins; the drawn indicator is only the fallback for the
-      // synthesized single-choice row, which has no framework asset behind it.
-      if (this.checkMarkDrawable) {
-        const d = this.checkMarkDrawable;
-        d.stateSet = this.drawableState();
-        d.onStateChange();
-        d.bounds.left = indX; d.bounds.top = cy - r;
-        d.bounds.right = indX + 2 * r; d.bounds.bottom = cy + r;
-        drawChild(d, cv);
-        drawTextInset(this, cv, indX + 2 * r + 34);
-        return;
-      }
-      const accent = themeAccent(this);
-      ctx.lineWidth = device.dp(2);
-      ctx.strokeStyle = this.checked ? cssColor(accent) : "rgba(0,0,0,0.54)";
-      ctx.beginPath();
-      ctx.arc(indX + r + 2, cy, r - 2, 0, Math.PI * 2);
-      ctx.stroke();
-      if (this.checked) {
-        ctx.fillStyle = cssColor(accent);
-        ctx.beginPath();
-        ctx.arc(indX + r + 2, cy, r - 10, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      drawTextInset(this, cv, indX + 2 * r + 34);
+    ...flagGetters({ "isChecked()Z": "checked" }),
+    "toggle()V": function (this: JCheckedTextView) { return vcall(this, "setChecked", "(Z)V", +!this.checked); },
+    "setCheckMarkDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JCheckedTextView, d: JDrawable | null) { return this.setCheckMark(d); },
+    "setCheckMarkDrawable(I)V": function (this: JCheckedTextView, id: number) {
+      return after(drawableRes(this, id), (d) => vcall(this, "setCheckMarkDrawable", "(Landroid/graphics/drawable/Drawable;)V", d));
     },
+    ...fieldGetters({ "getCheckMarkDrawable()Landroid/graphics/drawable/Drawable;": "checkMark",
+      "getCheckMarkTintList()Landroid/content/res/ColorStateList;": "checkMarkTint",
+      "getCheckMarkTintMode()Landroid/graphics/PorterDuff$Mode;": "checkMarkTintMode" }),
+    "setCheckMarkTintList(Landroid/content/res/ColorStateList;)V": function (this: JCheckedTextView, t: JColorStateList | null) {
+      this.checkMarkTint = t; this.hasCheckMarkTint = true; return this.applyTint();
+    },
+    "setCheckMarkTintMode(Landroid/graphics/PorterDuff$Mode;)V": function (this: JCheckedTextView, m: JSimpleEnum | null) { this.checkMarkTintMode = m; return this.applyTint(); },
+    "setPadding(IIII)V": setCheckedTextPadding,
+    "setPaddingRelative(IIII)V": setCheckedTextPadding,
+    "drawableStateChanged()V": driven(function* (this: JCheckedTextView): Gen {
+      yield callSelf(textViewMethods, "drawableStateChanged()V", this);
+      if (this.checkMark && (yield vcall(this.checkMark, "setState", "([I)Z", Int32Array.from(this.drawableState())))) invalidate(this);
+    }),
+    "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JCheckedTextView, cv: JCanvas): Gen {
+      yield callSelf(textViewMethods, "onDraw(Landroid/graphics/Canvas;)V", this, cv);
+      const d = this.checkMark, thread = curThread;
+      if (!d) return;
+      const h = yield drawableSize(d, true, thread), top = indicatorTop(this, h);
+      const left = this.atStart() ? this.basePad : this.width() - this.basePad - this.checkMarkW;
+      yield vcallOn(thread, d, "setBounds", "(IIII)V", this.scrollX + left, top, this.scrollX + left + this.checkMarkW, top + h);
+      yield drawChild(d, cv, thread);
+    }),
   },
 });

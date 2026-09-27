@@ -171,7 +171,7 @@ rt.register({
 });
 
 // android.graphics.Insets — immutable 4-sided inset value (WindowInsets.getInsets() etc).
-class JInsets extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
+export class JInsets extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
 const INSETS_NONE = new JInsets();
 /** Mirrors Insets.of(): the all-zero case returns the cached NONE singleton, like AOSP. */
 export function insetsOf(l: number, t: number, r: number, b: number): JInsets {

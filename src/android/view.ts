@@ -955,6 +955,8 @@ export const viewConstructors: NativeSpec["methods"] = {
     yield initViewFromCtx(this, c, a);
   }),
 };
+let lastViewId = 0x00ffff00;
+export const generateViewId = () => ++lastViewId;
 const viewMethods: NativeSpec["methods"] = {
   ...viewConstructors,
   ...rareMethods,
@@ -1688,7 +1690,7 @@ const viewMethods: NativeSpec["methods"] = {
   "static resolveSizeAndState(III)I": resolveSizeAndState,
   "static resolveSize(II)I": (size: number, spec: number) => resolveSize(size, spec),
   "static getDefaultSize(II)I": (size: number, spec: number) => defaultSize(size, spec),
-  "static generateViewId()I": (() => { let n = 0x00ffff00; return () => ++n; })(),
+  "static generateViewId()I": generateViewId,
   "static inflate(Landroid/content/Context;ILandroid/view/ViewGroup;)Landroid/view/View;": driven(function* (ctx: unknown, id: number, root: unknown): Gen {
     const { inflateLayout } = yield import("./inflate");
     return inflateLayout(ctx, id, root, !!root);
