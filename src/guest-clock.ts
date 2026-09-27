@@ -119,7 +119,7 @@ export class ControlledGuestClock {
 
 type ClockHost = typeof globalThis & { __wdGuestClock?: ControlledGuestClock };
 const browser = typeof location !== "undefined" && typeof window !== "undefined";
-export const controlledGuestTime = browser && new URLSearchParams(location.search).get("testClock") === "controlled";
+const controlledGuestTime = browser && new URLSearchParams(location.search).get("testClock") === "controlled";
 const realm = browser ? Number(new URLSearchParams(location.search).get("pid") ?? 0) : 0;
 const clock = controlledGuestTime
   ? (((window.top as unknown as ClockHost).__wdGuestClock ??= new ControlledGuestClock(performance.now())))
