@@ -20,7 +20,7 @@ import { procIdentity, sysconf } from "../shell/procfs";
 import { guestNow } from "../guest-clock";
 import { processEnv } from "../shell/environment";
 import { timersInit } from "./timers";
-import { syncShared, trackSharedMap } from "./mappings";
+import { isShared, syncShared, trackSharedMap } from "./mappings";
 
 /** bionic struct offsets/sizes, one block per ABI; LAYOUT is the process's, chosen in libcInit. */
 const LAYOUT32 = {
@@ -372,7 +372,9 @@ export function libcInit(): void {
     mmap64: (cpu, a) => M.mmap(cpu, a),
     munmap: (cpu, a) => { const va = a.va(), n = Number(a.va()); syncShared(va, n, true); return mem.unmapVa(va, n) ? 0 : fail(cpu, E.INVAL); },
     mremap: (cpu) => { fail(cpu, E.NOSYS); return PTR === 8 ? -1n : -1; },
-    madvise: (_c, a) => { const va = a.va(), n = Number(a.va()); if (a.i() === 4) mem.dropVa(va, n); return 0; },   // MADV_DONTNEED
+    // MADV_DONTNEED zero-fills anonymous memory; a shared file mapping refaults from the page
+    // cache, which already holds its stores, so its contents stay
+    madvise: (_c, a) => { const va = a.va(), n = Number(a.va()); if (a.i() === 4 && !isShared(va, n)) mem.dropVa(va, n); return 0; },
     msync: (cpu, a) => { const va = a.va(), n = Number(a.va()); if (va & 4095n) return fail(cpu, E.INVAL); syncShared(va, n, false); return 0; },
     mlock: () => 0, munlock: () => 0,
     // the raw syscalls a runtime issues past libc: futex is the one that must block
