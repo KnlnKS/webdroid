@@ -433,3 +433,22 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   `privatefiles` flushes the full `Uint8Array` (structured clone copies the
   entire backing buffer) on every write tick, which dominates heap during
   long downloads.
+- Shell, network and native follow-up to the 2026-09-26 exploration. Guest
+  resolvers (minidns, dnsjava) get a DNS server from `LinkProperties`, and
+  their port-53 datagrams are answered through `/dns-query` (DNS-over-HTTPS on
+  the dev server and the Worker); Thunderbird's autodiscovery then reaches
+  "Configuration found". Launch modes, CLEAR_TOP/SINGLE_TOP/CLEAR_TASK,
+  Back as a tracked KEYCODE_BACK press, `moveTaskToBack` and a home surface
+  after the last activity follow AOSP's ActivityStarter and Activity
+  semantics. `wd.configuration` models a physical rotation, so activities
+  with a fixed orientation (Flappy Bird, lichess) ignore it; lichess's
+  stale-surface report was an artefact of forcing its orientation. Static
+  fields a native class does not declare are now reported, which surfaced
+  about thirty silent `undefined` statics across the corpus. Komikku's
+  bundled requery SQLite logs `SQLITE_WARNING` and `AUTOINDEX` lines at
+  error level, as it does on a device; the quick gate counts them as new
+  errors. Open: Amazon's startup service reads its current activity only
+  from the splash activity and re-runs `taskSetCountry` without one; TikTok's
+  Keva block file is `MAP_SHARED` across app processes, which per-process
+  Wasm memories cannot keep coherent; a Harmonic row stall past ~80 items
+  reproduced once and not again.
