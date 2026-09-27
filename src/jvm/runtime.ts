@@ -161,7 +161,7 @@ export class Runtime {
     (e as any).$javaClass = cls;
     return e;
   };
-  /** Report listeners; the reports reach the console whether or not one is set. */
+  /** report listeners: the reports reach the console either way */
   onMissing: (what: string) => void = () => {};
   onNativeRequired: (lib: string, abi: string) => void = () => {};
   onUncaught: (throwable: unknown) => void = () => {};
