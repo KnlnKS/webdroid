@@ -399,6 +399,7 @@ const beginViewAnim = (v: JView, anim: unknown) => {
 };
 setViewAnimHook(beginViewAnim);
 
+const loadInterpolator = () => rt.make("android/view/animation/LinearInterpolator");
 const animMethods: NativeSpec["methods"] = {
   "setDuration(J)V": function (this: JAnimation, d: bigint) { this.duration = Number(d); },
   "getDuration()J": function (this: JAnimation) { return BigInt(this.duration); },
@@ -407,6 +408,7 @@ const animMethods: NativeSpec["methods"] = {
   "setStartTime(J)V": function (this: JAnimation, t: bigint) { this.startTime = Number(t); this.started = this.ended = false; },
   "getStartTime()J": function (this: JAnimation) { return BigInt(this.startTime); },
   "setInterpolator(Landroid/view/animation/Interpolator;)V": function (this: JAnimation, i: unknown) { this.interp = i; },
+  "setInterpolator(Landroid/content/Context;I)V": function (this: JAnimation) { this.interp = loadInterpolator(); },
   "getInterpolator()Landroid/view/animation/Interpolator;": function (this: JAnimation) { return this.interp; },
   "setFillAfter(Z)V": function (this: JAnimation, b: number) { this.fillAfter = !!b; },
   "setFillBefore(Z)V": function (this: JAnimation, b: number) { this.fillBefore = !!b; },
@@ -634,8 +636,7 @@ rt.register({
       controller.order = rvInt(res, animationValue(res, root, "animationOrder"), 0);
       return controller;
     },
-    "static loadInterpolator(Landroid/content/Context;I)Landroid/view/animation/Interpolator;": () =>
-      rt.make("android/view/animation/LinearInterpolator"),
+    "static loadInterpolator(Landroid/content/Context;I)Landroid/view/animation/Interpolator;": loadInterpolator,
     "static currentAnimationTimeMillis()J": () => BigInt(Math.floor(uptimeMillis())),
   },
 });
