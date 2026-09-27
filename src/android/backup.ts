@@ -1,10 +1,10 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, noops, stubs } from "../jvm/runtime";
 import { JContextWrapper } from "./context";
 
 class JBackupAgent extends JContextWrapper {}
 rt.register({
   name: "android/app/backup/BackupAgent", ctor: JBackupAgent, sup: "android/content/ContextWrapper",
-  methods: { "<init>()V": function () {}, "onCreate()V": function () {}, "onDestroy()V": function () {} },
+  methods: noops("<init>()V", "onCreate()V", "onDestroy()V"),
 });
 
 class JBackupAgentHelper extends JBackupAgent { helpers = new Map<string, unknown>(); }
@@ -39,11 +39,9 @@ rt.register({
 rt.register({
   name: "android/app/backup/BackupManager", ctor: class extends JObj {},
   methods: {
-    "<init>(Landroid/content/Context;)V": function () {},
-    "dataChanged()V": function () {},
-    "static dataChanged(Ljava/lang/String;)V": function () {},
-    "requestRestore(Landroid/app/backup/RestoreObserver;)I": () => -1,
-    "isBackupEnabled()Z": () => 0,
+    ...noops("<init>(Landroid/content/Context;)V", "dataChanged()V", "static dataChanged(Ljava/lang/String;)V"),
+    ...stubs(-1, "requestRestore(Landroid/app/backup/RestoreObserver;)I"),
+    ...stubs(0, "isBackupEnabled()Z"),
   },
 });
 rt.markers("android/app/backup/BackupHelper", "android/app/backup/RestoreObserver");
