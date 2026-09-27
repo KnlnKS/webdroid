@@ -123,10 +123,11 @@ rt.register({ name: "android/os/Binder", ctor: JBinder, ifaces: ["android/os/IBi
     yield vcall(reply, "writeString", "(Ljava/lang/String;)V", this.descriptor); return 1;
   }),
 } });
+function proxyAlive(this: JBinderProxy) { return binderTransport.alive(this.handle.pid) ? 1 : 0; }
 rt.register({ name: "android/os/BinderProxy", ctor: JBinderProxy, ifaces: ["android/os/IBinder"], methods: {
   "queryLocalInterface(Ljava/lang/String;)Landroid/os/IInterface;": () => null,
-  "pingBinder()Z": function (this: JBinderProxy) { return binderTransport.alive(this.handle.pid) ? 1 : 0; },
-  "isBinderAlive()Z": function (this: JBinderProxy) { return binderTransport.alive(this.handle.pid) ? 1 : 0; },
+  "pingBinder()Z": proxyAlive,
+  "isBinderAlive()Z": proxyAlive,
   "transact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z": driven(function* (this: JBinderProxy, code: number, data: JParcel, reply: JParcel | null, flags: number): Gen {
     const result = yield binderTransport.transact({ handle: this.handle, code, data: exportParcel(data), flags });
     if (reply) importParcel(result.data, reply);
