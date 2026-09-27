@@ -1,11 +1,10 @@
 // Which implementation of a framework class wins: ours, or AOSP's own bytecode.
 //
-// This is the ONLY place that decision is made. It used to be made by whether a module
-// appeared in src/natives.ts — provenance by import order, which cannot be ranked, reported
-// or A/B'd. HostStubGen drives the same decision for Ravenwood from a policy file, for the
-// same reason.
+// This is the ONLY place that decision is made, so it can be ranked, reported and A/B'd
+// rather than implied by import order in src/natives.ts. HostStubGen drives the same
+// decision for Ravenwood from a policy file, for the same reason.
 //
-// Empty means "everything as today". Adding a prefix moves that subtree onto
+// Empty keeps every native spec. Adding a prefix moves that subtree onto
 // vendor/aosp/framework.jar and withholds our native spec for it, which is what makes a cut
 // one line and a measurement rather than a rewrite.
 //
