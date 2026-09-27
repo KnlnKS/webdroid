@@ -1,4 +1,5 @@
 import { readStreamFully } from "./jio";
+import { mkStream, mkIntStream, mkLongStream, mkDoubleStream } from "./jstream-values";
 import { jarray, mangleMethod, charsToString, dotName } from "../abi";
 import { vcall, vcallOn, callOn, curThread, type JThread, after, stringHash, idHash, JEnum, JInt, JByte, JShort, JLong, JChar, JBool, JFloat, JDouble, defineException, mkCmp, fmtDouble, bitCount32, cmpFloat, newObj } from "./jlang";
 import { JObj, rt, type NativeSpec, type ClassInfo, driven, type Gen } from "../runtime";
@@ -413,12 +414,10 @@ export function listMethods(): Methods {
       for (const v of this.a) yield vcall(c, "accept", "(Ljava/lang/Object;)V", v);
     }),
     "stream()Ljava/util/stream/Stream;": function (this: JList) {
-      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-      stream.a = this.a.slice(); return stream;
+      return mkStream(this.a.slice());
     },
     "parallelStream()Ljava/util/stream/Stream;": function (this: JList) {
-      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-      stream.a = this.a.slice(); return stream;
+      return mkStream(this.a.slice());
     },
     "clear()V": function (this: JList) { this.a.length = 0; },
     "iterator()Ljava/util/Iterator;": function (this: JList) { return mkIter(this.a, this); },
@@ -1008,12 +1007,10 @@ rt.register({
       for (const v of this.snapshot()) yield vcall(c, "accept", "(Ljava/lang/Object;)V", v);
     }),
     "stream()Ljava/util/stream/Stream;": function (this: JSetView) {
-      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-      stream.a = this.snapshot(); return stream;
+      return mkStream(this.snapshot());
     },
     "parallelStream()Ljava/util/stream/Stream;": function (this: JSetView) {
-      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-      stream.a = this.snapshot(); return stream;
+      return mkStream(this.snapshot());
     },
     "contains(Ljava/lang/Object;)Z": function (this: JSetView, v: unknown) {
       if (this.kind === "k") return vcall(this.map, "containsKey", "(Ljava/lang/Object;)Z", v);
@@ -1207,12 +1204,10 @@ function setMethods(): Methods {
       for (const v of setItems(this)) yield vcall(c, "accept", "(Ljava/lang/Object;)V", v);
     }),
     "stream()Ljava/util/stream/Stream;": function (this: JSet) {
-      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-      stream.a = setItems(this); return stream;
+      return mkStream(setItems(this));
     },
     "parallelStream()Ljava/util/stream/Stream;": function (this: JSet) {
-      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-      stream.a = setItems(this); return stream;
+      return mkStream(setItems(this));
     },
     "remove(Ljava/lang/Object;)Z": function (this: JSet, v: unknown) {
       const mk = mapKey(v);
@@ -2289,14 +2284,10 @@ const collDefaults: Methods = {
   "removeIf(Ljava/util/function/Predicate;)Z": absCollection["removeIf(Ljava/util/function/Predicate;)Z"],
   "toArray()[Ljava/lang/Object;": absCollection["toArray()[Ljava/lang/Object;"],
   "stream()Ljava/util/stream/Stream;": driven(function* (this: JObj): Gen {
-    const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-    stream.a = yield toJsArray(this);
-    return stream;
+    return mkStream(yield toJsArray(this));
   }),
   "parallelStream()Ljava/util/stream/Stream;": driven(function* (this: JObj): Gen {
-    const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-    stream.a = yield toJsArray(this);
-    return stream;
+    return mkStream(yield toJsArray(this));
   }),
   "spliterator()Ljava/util/Spliterator;": driven(function* (this: JObj): Gen {
     const spliterator = rt.make("java/util/Spliterator") as JObj & { a: unknown[] };
@@ -2386,17 +2377,6 @@ rt.register({
 });
 rt.register({ name: "java/util/ListIterator", ctor: class extends JObj {}, ifaces: ["java/util/Iterator"] });
 
-// java.util.function.* — single-abstract-method interfaces. No dispatch logic
-// lives here (same as java/lang/Runnable): a lambda/class implementing one
-// compiles its own real method (get/apply/accept/test/...), so callers just
-// vcall() the selector by name. Only the marker registration is needed.
-for (const f of ["Supplier", "Function", "BiFunction", "Consumer", "BiConsumer", "Predicate",
-  "BiPredicate", "ToIntFunction", "ToLongFunction", "ToDoubleFunction", "IntFunction", "LongFunction",
-  "UnaryOperator", "BinaryOperator", "IntPredicate", "IntConsumer", "IntSupplier", "IntUnaryOperator",
-  "LongUnaryOperator", "IntBinaryOperator", "LongBinaryOperator"]) {
-  rt.register({ name: "java/util/function/" + f, ctor: class extends JObj {} });
-}
-
 type Fillable = { fill(v: unknown, s?: number, e?: number): unknown };
 const fill = (a: Fillable, v: unknown) => a.fill(v);
 const fillRange = (a: Fillable, f: number, t: number, v: unknown) => a.fill(v, f, t);
@@ -2457,15 +2437,13 @@ rt.register({
       const l = new JArraysList(); l.a = arr; return l;
     },
     "static stream([Ljava/lang/Object;)Ljava/util/stream/Stream;": (arr: unknown[]) => {
-      const stream = rt.make("java/util/stream/Stream") as JObj & { a: unknown[] };
-      stream.a = arr.slice();
-      return stream;
+      return mkStream(arr.slice());
     },
-    "static stream([J)Ljava/util/stream/LongStream;": (arr: BigInt64Array) => {
-      const stream = rt.make("java/util/stream/LongStream") as JObj & { a: bigint[] };
-      stream.a = Array.from(arr);
-      return stream;
-    },
+    "static stream([Ljava/lang/Object;II)Ljava/util/stream/Stream;": (arr: unknown[], from: number, to: number) => mkStream(arr.slice(from, to)),
+    "static stream([I)Ljava/util/stream/IntStream;": (arr: Int32Array) => mkIntStream(Array.from(arr)),
+    "static stream([III)Ljava/util/stream/IntStream;": (arr: Int32Array, from: number, to: number) => mkIntStream(Array.from(arr.subarray(from, to))),
+    "static stream([J)Ljava/util/stream/LongStream;": (arr: BigInt64Array) => mkLongStream(Array.from(arr)),
+    "static stream([D)Ljava/util/stream/DoubleStream;": (arr: Float64Array) => mkDoubleStream(Array.from(arr)),
     ...Object.fromEntries([..."BCSIJFD"].flatMap((t) => [[`static sort([${t})V`, taSort], [`static sort([${t}II)V`, taSort]])),
     "static toString([B)Ljava/lang/String;": (values: Int8Array | null) => values ? `[${Array.from(values).join(", ")}]` : "null",
     "static toString([S)Ljava/lang/String;": (values: Int16Array | null) => values ? `[${Array.from(values).join(", ")}]` : "null",
