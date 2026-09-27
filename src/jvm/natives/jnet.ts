@@ -874,6 +874,8 @@ class JHttpInputStream extends JObj {
   timeout: () => number = () => 0;
   bytes: Uint8Array = new Uint8Array(0); offset = 0;
   closed = false; ended = false;
+  /** body bytes Content-Length still promises; a stream that ends short is truncated, not done */
+  remaining = Infinity;
   pending: Promise<void> | null = null;
   async fill(): Promise<boolean> {
     if (this.closed) throw rt.mkThrowable("java/io/IOException", "Stream closed");
@@ -881,7 +883,9 @@ class JHttpInputStream extends JObj {
     if (this.ended || !this.reader) return false;
     this.pending ??= this.reader.read().then(result => {
       this.ended = !!result.done; this.bytes = result.value ?? new Uint8Array(0); this.offset = 0;
-    }).catch(e => { throw rt.mkThrowable("java/io/IOException", String(e)); }).finally(() => { this.pending = null; });
+      this.remaining -= this.bytes.length;
+      if (this.ended && this.remaining > 0 && this.remaining !== Infinity) throw rt.mkThrowable("java/net/ProtocolException", "unexpected end of stream");
+    }).catch(e => { throw e instanceof JObj ? e : rt.mkThrowable("java/io/IOException", String(e)); }).finally(() => { this.pending = null; });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = this.timeout();
     try {
@@ -991,13 +995,13 @@ class JURLConnection extends JObj {
     if (final && final !== this.url.u.href) this.url = mkURL(final);   // getURL() reports where a redirect landed
     const hdrs: [string, string][] = [];
     r.headers.forEach((v, k) => { if (k !== "x-wd-final-url" && k !== "x-wd-status" && k !== "x-wd-status-text" && k !== "x-wd-content-length") hdrs.push([k === "x-wd-content-encoding" ? "content-encoding" : k, v]); });
-    if (!r.headers.has("content-length")) {
-      const length = r.headers.get("x-wd-content-length");
-      if (length) hdrs.push(["content-length", length]);
-    }
+    const length = r.headers.get("content-length") ?? r.headers.get("x-wd-content-length");
+    if (length && !r.headers.has("content-length")) hdrs.push(["content-length", length]);
     const stream = new JHttpInputStream();
     stream.reader = r.body?.getReader() ?? null; stream.timeout = () => this.rto;
-    return (this.res = { status: this.follow ? r.status : Number(r.headers.get("x-wd-status")) || r.status,
+    const status = this.follow ? r.status : Number(r.headers.get("x-wd-status")) || r.status;
+    if (length && this.method !== "HEAD" && status >= 200 && status !== 204 && status !== 304) stream.remaining = Number(length);
+    return (this.res = { status,
       msg: this.follow ? r.statusText : r.headers.get("x-wd-status-text") ?? r.statusText, hdrs, stream });
   }
   /** case-insensitive; the last value wins, as URLConnection documents */
