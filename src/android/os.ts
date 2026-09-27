@@ -1220,6 +1220,8 @@ rt.register({
   },
 });
 const errno = (fn: string, e: number) => { const x = rt.mkThrowable("android/system/ErrnoException", fn) as JErrnoException; initErrno.call(x, fn, e); return x; };
+/** a path's file stat, null for a directory; ENOENT for neither */
+const existing = (fn: string, path: string) => { const st = vfs.stat(path); if (!st && !vfs.isDir(path)) throw errno(fn, 2); return st; };
 class JStructStat extends JObj { st_dev = 0n; st_ino = 0n; st_mode = 0; st_nlink = 1n; st_uid = 0; st_gid = 0; st_size = 0n; st_atime = 0n; st_mtime = 0n; st_ctime = 0n; st_blksize = 4096n; st_blocks = 0n; }
 rt.register({
   name: "android/system/StructStat", ctor: JStructStat,
@@ -1301,8 +1303,7 @@ rt.register({
     },
     "static sysconf(I)J": (name: number) => BigInt(sysconf(name)),
     "static stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
-      const st = vfs.stat(path);
-      if (!st && !vfs.isDir(path)) throw errno("stat", 2);
+      const st = existing("stat", path);
       const s = new JStructStat();
       s.st_mode = st ? 0o100644 : 0o40755;
       s.st_size = BigInt(st?.size ?? 0);
@@ -1313,10 +1314,10 @@ rt.register({
     // the VFS keeps no permission bits: an existing file takes any mode
     "static chmod(Ljava/lang/String;I)V": (path: string) => {
       if (path === null) rt.npe();
-      if (!vfs.stat(path) && !vfs.isDir(path)) throw errno("chmod", 2);
+      existing("chmod", path);
     },
     "static statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": driven(function* (path: string): Gen {
-      if (!vfs.stat(path) && !vfs.isDir(path)) throw errno("statvfs", 2);
+      existing("statvfs", path);
       const { total, free } = yield storageEstimate();
       const s = new JStructStatVfs();
       s.f_bsize = s.f_frsize = BLK;
