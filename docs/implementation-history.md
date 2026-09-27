@@ -269,12 +269,16 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   and SDK configuration, runs SDK init/login and renders the Celestia login
   scene at full surface size. Causes found on the way: its allocator's 4 GiB +
   8 MiB read/write `mmap` failed and it built a heap at address 0 over thread
-  stacks (now overcommitted, committed on touch); 32 MiB pool units exhausted
+  stacks (now overcommitted: a plane's writable limit commits on touch, from
+  guest accesses with moves allowed and under host accesses in place, since the
+  host already holds the address; raw typed-array views bypass that guard);
+  32 MiB pool units exhausted
   the pool with 16 KiB/1 MiB mappings; missing `FromReflectedField`, array
   `getSuperclass` and ART's `ClassNotFoundException` for malformed array names
   made Unity's reflection fail asset lookups; `Os.chmod` absence surfaced as a
   Chromium fatal in `libtelemetry` (it treats any pending exception as fatal);
-  `allocateDirect` buffers lacked ART's accessible array. The GC-finalizer
+  `allocateDirect` buffers lacked ART's accessible array (still absent for a
+  buffer allocated before any native library sizes guest memory). The GC-finalizer
   deadlock was the sigreturn race fixed for Among Us. Open: first frames take
   about a minute and the scene runs far below 60 fps (unprofiled); Unity logs
   "custom render path shader needs N passes" every frame (compare the emulator);
