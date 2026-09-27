@@ -261,9 +261,10 @@ pub var P = [_]u32{0} ** PLANES;
 var R = [_]u64{0} ** PLANES;
 pub var S = [_]u32{0} ** PLANES;
 pub var L = [_]u32{PLANE_LO} ** PLANES;
-/// Linux overcommits private anonymous memory: a writable mapping the pool cannot back when it is
-/// made is address space whose pages commit on first touch, from the plane's start upward (tx).
-var lazy = [_]bool{false} ** PLANES;
+/// A plane is R bytes of address space, of which S are committed from its start and the first W
+/// are writable: Linux overcommits private anonymous memory, so a writable page the pool could not
+/// commit up front is committed on first touch, from the plane's start upward.
+var W = [_]u64{0} ** PLANES;
 const DEMAND_STEP: u64 = 1 << 20;
 var moves: u32 = 0;
 
@@ -283,7 +284,9 @@ fn freeRun(units: u32, from: u32) i32 {
     }
     return -1;
 }
-fn widestRun(units: u32) i32 {
+/// room for `units` in the widest free run: a plane that grows on demand takes its bottom so it can
+/// extend in place, any other plane its top
+fn placeRun(units: u32, grows: bool) i32 {
     const top = poolUnits();
     var best: i32 = -1;
     var best_len: u32 = 0;
@@ -298,7 +301,7 @@ fn widestRun(units: u32) i32 {
         }
         i = j;
     }
-    return best;
+    return if (best < 0 or grows) best else best + @as(i32, @intCast(best_len - units));
 }
 fn moveRun(h: usize, dst: u32, need: u32) void {
     const at = (P[h] - pool_base) / UNIT;
@@ -311,15 +314,17 @@ fn moveRun(h: usize, dst: u32, need: u32) void {
     @memset(owner[dst .. dst + need], @intCast(h));
     P[h] = pool_base + dst * UNIT;
 }
-fn grow(h: usize, n: u32) bool {
+/// commit [0, n) of plane h; moving it invalidates every translation into it, so a caller that
+/// already holds one passes may_move = false
+fn grow(h: usize, n: u32, may_move: bool) bool {
     const have = unitsOf(S[h]);
     const need = unitsOf(n);
     if (need > have) {
         const at: i32 = if (have != 0) @intCast((P[h] - pool_base) / UNIT) else -1;
         var dst: i32 = undefined;
-        if (at < 0) dst = widestRun(need) else {
+        if (at < 0) dst = placeRun(need, W[h] > n) else {
             const after: u32 = @intCast(at + @as(i32, @intCast(have)));
-            dst = if (freeRun(need - have, after) == @as(i32, @intCast(after))) at else freeRun(need, 0);
+            dst = if (freeRun(need - have, after) == @as(i32, @intCast(after))) at else if (may_move) freeRun(need, 0) else -1;
         }
         if (dst < 0) return false;
         if (at < 0) {
@@ -338,20 +343,30 @@ fn release(h: usize) void {
     }
     R[h] = 0;
     S[h] = 0;
-    lazy[h] = false;
+    W[h] = 0;
 }
-/// commit [off, off + n) of a lazy plane; a growth that moves the plane invalidates earlier translations
-fn demand(h: usize, off: u32, n: u32) bool {
+/// commit writable [off, off + n)
+fn demand(h: usize, off: u32, n: u32, may_move: bool) bool {
     const end = @as(u64, off) + n;
-    if (!lazy[h] or end > R[h]) return false;
-    return grow(h, @intCast(@min(R[h], (end + DEMAND_STEP - 1) & ~(DEMAND_STEP - 1), 0xffff_f000)));
+    if (end > W[h]) return false;
+    return grow(h, @intCast(@min(W[h], (end + DEMAND_STEP - 1) & ~(DEMAND_STEP - 1), 0xffff_f000)), may_move);
 }
-/// whether [v, v + n) is backed, committing a lazy plane's pages on the way
-pub fn commitRange(v: u64, n: u32) bool {
+/// whether [v, v + n) is backed, committing the writable pages under it
+pub export fn commit_range(v: u64, n: u32) u32 {
     const h = hi(v);
-    if (h == 0 or h >= PLANES) return h == 0;
+    if (h == 0 or h >= PLANES) return @intFromBool(h == 0);
     const off = lo(v) -% L[h];
-    return @as(u64, off) + n <= S[h] or demand(h, off, n);
+    return @intFromBool(@as(u64, off) + n <= S[h] or demand(h, off, n, true));
+}
+/// a host access of n bytes at buffer offset p: the host already holds p, so a plane's writable
+/// pages under it commit in place; 0 when the plane cannot back the access there
+export fn commit_phys(p: u32, n: u32) u32 {
+    if (pool_base == 0 or p < pool_base) return 1;
+    const u = (p - pool_base) / UNIT;
+    if (u >= owner_len or owner[u] < 0) return 1;
+    const h: usize = @intCast(owner[u]);
+    const off = p - P[h];
+    return @intFromBool(@as(u64, off) + n <= S[h] or demand(h, off, n, false));
 }
 inline fn hi(v: u64) u32 {
     return @intCast(v >> 32);
@@ -363,7 +378,7 @@ inline fn lo(v: u64) u32 {
 pub export fn tx(h: u32, l: u32) u32 {
     if (h >= PLANES) return 0;
     const off = l -% L[h];
-    if (off >= S[h] and !demand(h, off, 1)) return 0;
+    if (off >= S[h] and !demand(h, off, 1, true)) return 0;
     return P[h] + off;
 }
 export fn plane_reserved(h: u32) u32 {
@@ -387,7 +402,7 @@ export fn map_va(n: u64, rsv: u32) u64 {
             for (0..count) |i| {
                 L[h + i] = 0;
                 R[h + i] = @min(@as(u64, 0x1_0000_0000), n - @as(u64, i) * 0x1_0000_0000);
-                lazy[h + i] = rsv == 0;
+                if (rsv == 0) W[h + i] = R[h + i];
             }
             return @as(u64, h) << 32;
         }
@@ -405,7 +420,10 @@ export fn map_va(n: u64, rsv: u32) u64 {
     if (h == PLANES) return 0;
     L[h] = PLANE_LO;
     R[h] = n;
-    lazy[h] = rsv == 0 and !grow(h, @intCast(n));
+    if (rsv == 0) {
+        W[h] = n;
+        _ = grow(h, @intCast(n), true);
+    }
     return (@as(u64, h) << 32) | L[h];
 }
 export fn unmap_va(va_in: u64, n_in: u64) u32 {
@@ -457,7 +475,8 @@ export fn commit_va(v: u64, n: u64) u32 {
     if (h >= PLANES or l < L[h]) return 0;
     const end: u64 = @as(u64, l - L[h]) + n;
     if (end > R[h]) return 0;
-    if (end > S[h] and !grow(h, @intCast(end))) lazy[h] = true;
+    W[h] = @max(W[h], end);
+    if (end > S[h]) _ = grow(h, @intCast(end), true);
     return 1;
 }
 export fn drop_va(v: u64, n: u64) u32 {
@@ -485,6 +504,7 @@ export fn decommit_va(v: u64, n: u64) void {
         return;
     }
     const off = l - L[h];
+    if (off + n >= W[h]) W[h] = @min(W[h], off);
     if (off < S[h] and off + n >= S[h]) {
         const at = (P[h] - pool_base) / UNIT;
         @memset(owner[at + unitsOf(off) .. at + unitsOf(S[h])], -1);
@@ -592,7 +612,7 @@ export fn mem_init(size: u32) void {
     @memset(&owner, -1);
     @memset(&R, 0);
     @memset(&S, 0);
-    @memset(&lazy, false);
+    @memset(&W, 0);
     @memset(&L, PLANE_LO);
     @memset(pages[0..pageOf(heap_top + PAGE_SIZE - 1)], USED);
     // a later reserve hands these out again and must read as fresh memory

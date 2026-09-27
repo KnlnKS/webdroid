@@ -97,6 +97,10 @@ test("writable mappings beyond the pool commit on first touch, as Linux overcomm
   mem.st8(p, 7);
   expect(mem.u8[mem.txVa(va + 0x10_0000n)]).toBe(7);
   expect(mem.stats().chunks - before).toBe(1);
+  // a host write past the committed pages commits them where the host already points
+  mem.write(p, new Uint8Array(0x30_0000).fill(9));
+  expect(mem.u8[mem.txVa(va + 0x3f_ffffn)]).toBe(9);
+  expect(mem.txVa(va + 0x10_0000n)).toBe(p);
   expect(mem.unmapVa(va, size)).toBe(true);
 });
 

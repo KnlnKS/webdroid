@@ -82,13 +82,11 @@ inline fn arg(c: *Cpu, i: u32) u64 {
 inline fn ptr(c: *Cpu, i: u32) ?u32 {
     return a64.addr(c, arg(c, i));
 }
-/// a pointer to n bytes, committing a lazy plane's pages under all of them
-fn ptrN(c: *Cpu, i: u32, n: u32) ?u32 {
-    if (!mem.commitRange(arg(c, i), n)) {
-        c.fault_addr = @truncate(arg(c, i));
-        return null;
-    }
-    return ptr(c, i);
+/// whether argument i points at n backed bytes, committing a plane's writable pages under them
+fn committed(c: *Cpu, i: u32, n: u32) bool {
+    if (mem.commit_range(arg(c, i), n) != 0) return true;
+    c.fault_addr = @truncate(arg(c, i));
+    return false;
 }
 inline fn ret(c: *Cpu, v: u64) void {
     c.x[0] = v;
@@ -240,10 +238,9 @@ pub fn call(c: *Cpu, id: u8) Result {
             if (f == .__memcpy_chk and (arg(c, 2) > arg(c, 3) or arg(c, 2) > std.math.maxInt(u32))) return .host;
             const n: u32 = @truncate(arg(c, 2));
             if (n != 0) {
-                _ = ptrN(c, 0, n) orelse return .fault;
-                const s = ptrN(c, 1, n) orelse return .fault;
-                // committing the source may have moved the destination's plane
+                if (!committed(c, 0, n) or !committed(c, 1, n)) return .fault;
                 const d = ptr(c, 0) orelse return .fault;
+                const s = ptr(c, 1) orelse return .fault;
                 mem.move(d, s, n);
                 wrote(d, n);
             }
@@ -251,7 +248,8 @@ pub fn call(c: *Cpu, id: u8) Result {
         .memset => {
             const n: u32 = @truncate(arg(c, 2));
             if (n != 0) {
-                const d = ptrN(c, 0, n) orelse return .fault;
+                if (!committed(c, 0, n)) return .fault;
+                const d = ptr(c, 0) orelse return .fault;
                 @memset(mem.bytes(d)[0..n], @truncate(arg(c, 1)));
                 wrote(d, n);
             }

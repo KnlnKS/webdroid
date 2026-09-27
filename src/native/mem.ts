@@ -10,8 +10,11 @@ let buf: ArrayBuffer, u8: Uint8Array, i8: Int8Array, u16: Uint16Array, u32: Uint
 let SPAN = 0;
 const enc = new TextEncoder(), dec = new TextDecoder();
 
+/** a host access of n bytes: in range, and backed where it lands in a plane (which may commit
+ *  the plane's writable pages under it) */
 function checkAddr(a: number, n: number): void {
   if (((a >>> 0) - LOW) >>> 0 > SPAN - n) badAddr(a);
+  if ((a >>> 0) >= POOL_BASE && !core.commit_phys(a >>> 0, n)) throw new NativeFault(`[native] host access past a plane's writable pages at 0x${(a >>> 0).toString(16)}+0x${n.toString(16)}`);
 }
 /** Notify after a host writes directly into a guest-provided buffer. */
 export function wrote(a: number, n: number): void {

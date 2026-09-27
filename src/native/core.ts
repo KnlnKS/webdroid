@@ -25,6 +25,7 @@ interface Core {
   commit_pages(addr: number, n: number): number;
   decommit_pages(addr: number, n: number): void;
   tx(h: number, lo: number): number;
+  commit_phys(p: number, n: number): number;
   plane_reserved(h: number): number;
   va(phys: number): bigint;
   map_va(n: bigint, reserve: number): bigint;
