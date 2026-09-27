@@ -1679,7 +1679,7 @@ const viewMethods: NativeSpec["methods"] = {
     "setRotationY(F)V", "setTransitionAlpha(F)V", "setBackgroundTintMode(Landroid/graphics/PorterDuff$Mode;)V",
     "setOnHoverListener(Landroid/view/View$OnHoverListener;)V", "setOnGenericMotionListener(Landroid/view/View$OnGenericMotionListener;)V",
     "setVerticalFadingEdgeEnabled(Z)V", "setHorizontalFadingEdgeEnabled(Z)V",
-    "setScrollbarFadingEnabled(Z)V", "setFadingEdgeLength(I)V", "setScrollIndicators(II)V", "setFrameContentVelocity(F)V",
+    "setScrollbarFadingEnabled(Z)V", "setScrollIndicators(II)V", "setFrameContentVelocity(F)V",
     "setAnimationMatrix(Landroid/graphics/Matrix;)V", "onScrollChanged(IIII)V",
     "onVisibilityChanged(Landroid/view/View;I)V", "onVisibilityAggregated(Z)V", "onWindowVisibilityChanged(I)V",
     "onWindowSystemUiVisibilityChanged(I)V", "onAnimationStart()V", "onAnimationEnd()V", "onRtlPropertiesChanged(I)V",
