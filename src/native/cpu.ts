@@ -238,9 +238,9 @@ export class Cpu {
   state = "";                                       // which await the run loop is in (wd.native.regs)
   idle: (() => void)[] = [];                        // a run loop waiting for a handler stacked above it to finish
   sigWait: (() => void) | null = null;              // sigsuspend: released when a handler has run
+  handling = new Set<number>();                     // signals whose handler is running
   /** a signal for this thread: a parked thread runs the handler now, on top of its host call,
    *  as a kernel interrupts a syscall; a running one at its next slice boundary */
-  handling = new Set<number>();                     // signals whose handler is running
   kill(sig: number): void {
     if (this.finished || !sigHandlers.has(sig)) return;
     if (!this.signals.includes(sig)) this.signals.push(sig);           // pending already: signals do not queue up
@@ -405,9 +405,9 @@ export class Cpu {
     }
   }
 
-  /** run guest function `fn` to completion on this Cpu (reentrant: saves and restores the register file) */
   frames: string[] = [];                            // what each nested call() is for (wd.native.regs)
   private savePool: Uint8Array[] = [];
+  /** run guest function `fn` to completion on this Cpu (reentrant: saves and restores the register file) */
   async call(fn: number, args: CallArg[] = [], label = "call", resume?: (returned: boolean) => void, stackTop?: bigint): Promise<number> {
     // host code calling back into the guest (a comparator, a JNI entry) while a signal handler owns the
     // register file above the frame it belongs to waits for that handler, as the kernel would hold the

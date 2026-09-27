@@ -113,7 +113,7 @@ describe("native-egl", () => {
     return {
       i: integer, u: integer, p: integer, va: () => BigInt(integer()),
       l: () => longs[nl++] ?? 0n, ul: () => BigInt.asUintN(64, longs[nl++] ?? 0n),
-      f: integer, d: integer, vd: integer,
+      f: integer, d: integer,
       str: () => strings[ns++] ?? "", strAt: () => strings[ns++] ?? "",
     };
   }
@@ -164,7 +164,7 @@ describe("native-egl-thread-current", () => {
     let index = 0;
     const next = () => values[index++] ?? 0;
     return { i: next, u: next, p: next, va: () => BigInt(next()), l: () => BigInt(next()), ul: () => BigInt(next()),
-      f: next, d: next, vd: next, str: () => "", strAt: () => "" };
+      f: next, d: next, str: () => "", strAt: () => "" };
   }
 
   test("unbinding one EGL thread does not clear another thread's GLES context", () => {

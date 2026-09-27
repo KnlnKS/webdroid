@@ -21,7 +21,7 @@ function callGl(cpu: Cpu, lib: string, name: string, values: number[]) {
   let i = 0;
   const next = () => values[i++] ?? 0;
   const args: ArgReader = { i: next, p: next, u: next, va: () => BigInt(next()), l: () => BigInt(next()), ul: () => BigInt(next()),
-    f: next, d: next, vd: next, str: () => "", strAt: () => "" };
+    f: next, d: next, str: () => "", strAt: () => "" };
   const fn = hostFn(lib, name);
   if (!fn) throw new Error(`Missing native ${name}`);
   return fn(cpu, args);
@@ -173,7 +173,7 @@ async function nativeWindow() {
   const invoke = (name: string, values: number[]) => {
     let i = 0; const next = () => values[i++] ?? 0;
     const args: ArgReader = { i: next, u: next, p: next, va: () => BigInt(next()), l: () => BigInt(next()), ul: () => BigInt(next()),
-      f: next, d: next, vd: next, str: () => "", strAt: () => "" };
+      f: next, d: next, str: () => "", strAt: () => "" };
     return hostFn("libandroid.so", name)!(cpu, args);
   };
   const sameHandle = nativeWindowFor(surface) === handle;

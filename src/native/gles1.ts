@@ -1,5 +1,4 @@
-// OpenGL ES 1.1 fixed-function pipeline over WebGL (one uniform-switched program), plus the native
-// EGL entry points (the real surface/context live Java-side in src/android/glview.ts).
+// OpenGL ES 1.1 fixed-function pipeline over WebGL (one uniform-switched program); EGL is egl.ts.
 //
 // Client arrays are read from GUEST memory at draw time into per-attribute streaming VBOs;
 // GL_FIXED data is converted on upload (WebGL has no fixed-point attributes). Matrices are
@@ -23,8 +22,6 @@ export function gles1String(context: GL, name: number): string | null {
     default: return null;
   }
 }
-
-/** getError probe after every GL entry point (perf.glErrors counts) */
 
 type M4 = Float32Array;
 const ident = (): M4 => { const m = new Float32Array(16); m[0] = m[5] = m[10] = m[15] = 1; return m; };

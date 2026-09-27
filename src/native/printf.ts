@@ -36,7 +36,7 @@ function fmtFloat(v: number, conv: string, prec: number, alt: boolean): string {
   return conv === conv.toUpperCase() ? s.toUpperCase() : s;
 }
 
-/** format `fmt` pulling arguments from `args` (long/long long via l(), softfloat doubles via vd()) */
+/** format `fmt` pulling arguments from `args` (long/long long via l(), doubles via d()) */
 export function format(fmt: string, args: ArgReader): string {
   let out = "";
   for (let i = 0; i < fmt.length; i++) {
@@ -99,7 +99,7 @@ export function format(fmt: string, args: ArgReader): string {
       }
       case "p": { const v = BigInt.asUintN(PTR * 8, args.va()); s = v ? "0x" + v.toString(16) : "(nil)"; break; }
       case "f": case "F": case "e": case "E": case "g": case "G": case "a": case "A": {
-        const v = args.vd();
+        const v = args.d();
         let body = fmtFloat(Math.abs(v), conv, prec < 0 ? 6 : prec, alt);
         const neg = v < 0 || (v === 0 && 1 / v < 0);
         s = (neg ? "-" : plus ? "+" : space ? " " : "") + body;

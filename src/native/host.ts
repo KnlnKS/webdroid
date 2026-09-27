@@ -18,7 +18,7 @@ export type HostRet = number | bigint | void | typeof NORET | typeof VRET | type
 export type HostFn = (cpu: Cpu, a: ArgReader) => HostRet | Promise<HostRet>;
 
 export interface ArgReader {
-  i(): number; u(): number; p(): number; l(): bigint; ul(): bigint; f(): number; d(): number; vd(): number; str(): string;
+  i(): number; u(): number; p(): number; l(): bigint; ul(): bigint; f(): number; d(): number; str(): string;
   /** the pointer as the guest holds it (plane and all), for what is handed back or keyed rather than dereferenced */
   va(): bigint;
   strAt(p: number): string;
@@ -58,7 +58,6 @@ export class Args implements ArgReader {
   ul(): bigint { return BigInt.asUintN(64, this.l()); }
   f(): number { return bitsf(this.i()); }
   d(): number { return bitsd(this.l()); }
-  vd(): number { return this.d(); }
   str(): string { return mem.cstr(this.p()); }
   strAt(p: number): string { return mem.cstr(p); }
 }
@@ -74,7 +73,6 @@ class VaList implements ArgReader {
   ul(): bigint { return BigInt.asUintN(64, this.l()); }
   f(): number { return bitsf(this.i()); }
   d(): number { return bitsd(this.l()); }
-  vd(): number { return this.d(); }
   str(): string { return mem.cstr(this.p()); }
   strAt(p: number): string { return mem.cstr(p); }
   get addr(): number { return this.a; }
@@ -124,7 +122,6 @@ class VaList64 implements ArgReader {
   ul(): bigint { return BigInt.asUintN(64, this.l()); }
   f(): number { return this.d(); }   // a float vararg is promoted to double
   d(): number { return mem.ldf64(this.fp()); }
-  vd(): number { return this.d(); }
   str(): string { return mem.cstr(this.p()); }
   strAt(p: number): string { return mem.cstr(p); }
 }
@@ -252,7 +249,6 @@ export class Args64 implements ArgReader {
   ul(): bigint { return BigInt.asUintN(64, this.l()); }
   f(): number { if (this.nv < 8) return this.cpu.s[this.nv++ * 4]; const v = mem.ld32(this.sp); this.sp += 8; return bitsf(v); }
   d(): number { if (this.nv < 8) return this.cpu.d[this.nv++ * 2]; const v = mem.ld64(this.sp); this.sp += 8; return bitsd(v); }
-  vd(): number { return this.d(); }
   str(): string { return mem.cstr(this.p()); }
   strAt(p: number): string { return mem.cstr(p); }
 }
