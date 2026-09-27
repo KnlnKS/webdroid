@@ -108,6 +108,7 @@ import "./android/backup";
 import "./android/adservices";
 import "./android/camera2";
 import "./android/netstats";
+import "./android/storagestats";
 import "./android/icu";
 import "./android/popup";
 import "./android/security";
