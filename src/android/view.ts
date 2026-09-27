@@ -3,7 +3,7 @@ import { isRecording, recordOrRun } from "./recording";
 import { perf } from "../perf";
 import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, type JPoint } from "./graphics";
-import { mangleMethod, jmethod, type JMethod, jarray } from "../jvm/abi";
+import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallOn, after, idHash, box, JFloat, curThread, vcallUncaught, type JThread } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize } from "./drawable";
 import { JMotionEvent } from "./motionevent";
@@ -2415,21 +2415,37 @@ rt.register({
   },
 });
 
-rt.register({ name: "webdroid/ViewAlphaProperty", ctor: class extends JProperty {}, sup: "android/util/Property", methods: {
-  "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (view: unknown): Gen { return box(JFloat, yield vcall(view, "getAlpha", "()F")); }),
-  "set(Ljava/lang/Object;Ljava/lang/Object;)V": (view: unknown, value: JFloat) => vcall(view, "setAlpha", "(F)V", value.v),
+/** View's FloatProperty constants, each over the view's own accessor pair */
+class JViewProperty extends JProperty { accessor = ""; }
+rt.register({ name: "webdroid/ViewProperty", ctor: JViewProperty, sup: "android/util/FloatProperty", methods: {
+  "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JViewProperty, view: unknown): Gen { return box(JFloat, yield vcall(view, "get" + this.accessor, "()F")); }),
+  "setValue(Ljava/lang/Object;F)V": function (this: JViewProperty, view: unknown, v: number) { return vcall(view, "set" + this.accessor, "(F)V", v); },
+  "set(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JViewProperty, view: unknown, v: JFloat) { return vcall(view, "set" + this.accessor, "(F)V", Math.fround(v?.v ?? 0)); },
 } });
+const VIEW_PROPERTIES = ["ALPHA", "TRANSLATION_X", "TRANSLATION_Y", "TRANSLATION_Z", "X", "Y", "Z", "ROTATION", "ROTATION_X", "ROTATION_Y", "SCALE_X", "SCALE_Y"];
+/** View's protected *_STATE_SET arrays: every combination of these five, named in this order */
+const STATE_BITS = ["PRESSED", "ENABLED", "FOCUSED", "SELECTED", "WINDOW_FOCUSED"];
+const stateSetName = (m: number) => `${STATE_BITS.filter((_, i) => m & (1 << i)).join("_") || "EMPTY"}_STATE_SET`;
+const stateSets = () => {
+  const ids = [ST.pressed, ST.enabled, ST.focused, ST.selected, ST.window_focused];
+  return Array.from({ length: 32 }, (_, m) => Int32Array.from(ids.filter((_, i) => m & (1 << i)).reverse()));
+};
 rt.register({
   name: "android/view/View", ctor: JView,
   fields: { mContext: "ctx" },
   clinit: () => {
-    rt.link("android/view/View").ctor.s$ALPHA = Object.assign(rt.make("webdroid/ViewAlphaProperty"), { name: "alpha", type: rt.classFor("java/lang/Float") });
+    const view = rt.link("android/view/View").ctor, float = rt.classFor("java/lang/Float");
+    for (const constant of VIEW_PROPERTIES) {
+      // TRANSLATION_X names translationX, read through getTranslationX
+      const accessor = constant.split("_").map((w) => w[0] + w.slice(1).toLowerCase()).join("");
+      view[mangleStaticField(constant)] = Object.assign(rt.make("webdroid/ViewProperty"), { name: accessor[0].toLowerCase() + accessor.slice(1), type: float, accessor });
+    }
+    stateSets().forEach((set, m) => { view[mangleStaticField(stateSetName(m))] = set; });
   },
   ifaces: ["android/graphics/drawable/Drawable$Callback"],
   statics: {
-    ALPHA: null,
+    ...Object.fromEntries([...VIEW_PROPERTIES, ...Array.from({ length: 32 }, (_, m) => stateSetName(m))].map((p) => [p, null])),
     VISIBLE: 0, INVISIBLE: 4, GONE: 8, NO_ID: -1,
-    EMPTY_STATE_SET: new Int32Array(0), ENABLED_STATE_SET: Int32Array.of(0x101009e), SELECTED_STATE_SET: Int32Array.of(0x10100a1),
     MEASURED_STATE_MASK: -0x1000000, MEASURED_SIZE_MASK: 0x00ffffff,
     SYSTEM_UI_FLAG_VISIBLE: 0, SYSTEM_UI_FLAG_LOW_PROFILE: 1, SYSTEM_UI_FLAG_HIDE_NAVIGATION: 2, SYSTEM_UI_FLAG_FULLSCREEN: 4, SYSTEM_UI_FLAG_LAYOUT_STABLE: 0x100,
     SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION: 0x200, SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN: 0x400, SYSTEM_UI_FLAG_IMMERSIVE: 0x800, SYSTEM_UI_FLAG_IMMERSIVE_STICKY: 0x1000,
