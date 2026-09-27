@@ -173,15 +173,27 @@ async function inflateParser(this: JLayoutInflater, parser: JXmlParser, root: JV
 }
 
 const inflaterCache = new WeakMap<object, JLayoutInflater>();
+/** LayoutInflater(LayoutInflater, Context): a clone carries the factories but not the "already
+ *  set" flag, so the next setFactory merges rather than throwing — every fragment's path */
+function copyInflater(inf: JLayoutInflater, from: JLayoutInflater | null, jctx: JContext): JLayoutInflater {
+  inf.jctx = jctx;
+  if (from) { inf.factory2 = [...from.factory2]; inf.factory = [...from.factory]; inf.privateFactory = from.privateFactory; }
+  return inf;
+}
+const newInflater = (from: JLayoutInflater | null, jctx: JContext) => { rt.link("android/view/LayoutInflater"); return copyInflater(new JLayoutInflater(), from, jctx); };
+/**
+ * Context.getSystemService(LAYOUT_INFLATER_SERVICE): a plain ContextWrapper answers with its
+ * base's inflater, a ContextThemeWrapper clones its base's once, so a dialog's themed context
+ * keeps the factory appcompat installed on its activity's.
+ */
 export function getInflater(jctx: unknown): JLayoutInflater {
   const ctx = jctx as JContext;
   let inf = inflaterCache.get(ctx);
-  if (!inf) {
-    rt.link("android/view/LayoutInflater");
-    inf = new JLayoutInflater();
-    inf.jctx = ctx;
-    inflaterCache.set(ctx, inf);
-  }
+  if (inf) return inf;
+  const base = (ctx as { base?: JContext | null }).base;
+  if (base && !rt.iof(ctx, "android/view/ContextThemeWrapper")) return getInflater(base);
+  inf = newInflater(base ? getInflater(base) : null, ctx);
+  inflaterCache.set(ctx, inf);
   return inf;
 }
 
@@ -191,10 +203,7 @@ rt.register({
     "static from(Landroid/content/Context;)Landroid/view/LayoutInflater;": (jctx: unknown) => getInflater(jctx),
     "<init>(Landroid/content/Context;)V": function (this: JLayoutInflater, jctx: JContext) { this.jctx = jctx; },
     "<init>(Landroid/view/LayoutInflater;Landroid/content/Context;)V": function (this: JLayoutInflater, original: JLayoutInflater, jctx: JContext) {
-      this.jctx = jctx;
-      this.factory2 = [...original.factory2];
-      this.factory = [...original.factory];
-      this.privateFactory = original.privateFactory;
+      copyInflater(this, original, jctx);
     },
     "inflate(ILandroid/view/ViewGroup;)Landroid/view/View;": function (this: JLayoutInflater, id: number, root: unknown) {
       return vcall(this, "inflate", "(ILandroid/view/ViewGroup;Z)Landroid/view/View;", id, root, +!!root);
@@ -216,16 +225,7 @@ rt.register({
     "getFactory()Landroid/view/LayoutInflater$Factory;": function (this: JLayoutInflater) { return this.factory[0] ?? this.factory2[0] ?? null; },
     "getFactory2()Landroid/view/LayoutInflater$Factory2;": function (this: JLayoutInflater) { return this.factory2[0] ?? null; },
     "setPrivateFactory(Landroid/view/LayoutInflater$Factory2;)V": function (this: JLayoutInflater, f: unknown) { this.privateFactory = f; },
-    // A clone carries the factories but not the "already set" flag, so the next setFactory
-    // merges rather than throwing — the path every fragment's inflater takes.
-    "cloneInContext(Landroid/content/Context;)Landroid/view/LayoutInflater;": function (this: JLayoutInflater, jctx: JContext) {
-      const inf = new JLayoutInflater();
-      inf.jctx = jctx;
-      inf.factory2 = [...this.factory2];
-      inf.factory = [...this.factory];
-      inf.privateFactory = this.privateFactory;
-      return inf;
-    },
+    "cloneInContext(Landroid/content/Context;)Landroid/view/LayoutInflater;": function (this: JLayoutInflater, jctx: JContext) { return newInflater(this, jctx); },
     "getContext()Landroid/content/Context;": function (this: JLayoutInflater) { return this.jctx; },
     "createView(Ljava/lang/String;Ljava/lang/String;Landroid/util/AttributeSet;)Landroid/view/View;":
       function (this: JLayoutInflater, name: string, prefix: string | null, set: JAttrSet) {
