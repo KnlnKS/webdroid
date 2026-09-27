@@ -34,6 +34,7 @@ rt.register({ name: "android/os/Message", ctor: JMessage, ifaces: ["android/os/P
     "setAsynchronous(Z)V": function (this: JMessage, value: number) { this.asynchronous = !!value; },
     "isAsynchronous()Z": function (this: JMessage) { return +this.asynchronous; },
     "getTarget()Landroid/os/Handler;": function (this: JMessage) { return this.target; },
+    "getWhen()J": function (this: JMessage) { return BigInt(Math.floor(this.whenMs)); },
     "setTarget(Landroid/os/Handler;)V": function (this: JMessage, h: JHandler) { this.target = h; },
     "sendToTarget()V": function (this: JMessage) { this.target?.send(this, 0); },
     "getCallback()Ljava/lang/Runnable;": function (this: JMessage) { return this.callback; },

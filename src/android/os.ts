@@ -3,7 +3,7 @@ import { processEnv } from "../shell/environment";
 // android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 
 import type { JMessenger } from "./messenger";
-import { procIdentity, processTid } from "../shell/procfs";
+import { procIdentity, processTid, sysconf } from "../shell/procfs";
 import { parcelCreator, type JParcel } from "./parcel";
 import { keyCodes, deadChar } from "./keycodes";
 import { guestAt, mem } from "../native/mem";
@@ -169,7 +169,8 @@ export class JHandler extends JObj {
     if (!set) this.pending.set(key, (set = new Set()));
     set.add(msg);
     const queue = this.looper.queue;
-    queue.messages.set(msg, uptimeMillis() + Math.max(0, delay));
+    msg.whenMs = uptimeMillis() + Math.max(0, delay);
+    queue.messages.set(msg, msg.whenMs);
     // still pending until it runs, so a removeMessages/hasMessages in between sees it
     const go = () => this.looper.run(async () => {
       queue.messages.delete(msg);
@@ -1298,7 +1299,7 @@ rt.register({
       info.machine = rt.nativeAbis.find((abi) => Object.keys(rt.classpath).some((path) => path.startsWith("lib/" + abi + "/"))) === "armeabi-v7a" ? "armv7l" : "aarch64";
       return info;
     },
-    "static sysconf(I)J": (name: number) => BigInt(name === 0x27 || name === 0x28 ? 4096 : name === 0x60 || name === 0x61 ? device.cpu.cores : name === 0x62 ? device.cpu.memKb / 4 : -1),
+    "static sysconf(I)J": (name: number) => BigInt(sysconf(name)),
     "static stat(Ljava/lang/String;)Landroid/system/StructStat;": (path: string) => {
       const st = vfs.stat(path);
       if (!st && !vfs.isDir(path)) throw errno("stat", 2);
@@ -1308,6 +1309,11 @@ rt.register({
       s.st_mtime = s.st_atime = s.st_ctime = BigInt(Math.floor(Date.now() / 1000));
       s.st_blocks = (s.st_size + 511n) / 512n;
       return s;
+    },
+    // the VFS keeps no permission bits: an existing file takes any mode
+    "static chmod(Ljava/lang/String;I)V": (path: string) => {
+      if (path === null) rt.npe();
+      if (!vfs.stat(path) && !vfs.isDir(path)) throw errno("chmod", 2);
     },
     "static statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": driven(function* (path: string): Gen {
       if (!vfs.stat(path) && !vfs.isDir(path)) throw errno("statvfs", 2);
