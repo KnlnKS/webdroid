@@ -264,6 +264,24 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
 
 ## App investigations and remaining limits
 
+- **Genshin Impact 7.1 (XAPK, ARM64 Unity 2017.4 IL2CPP):** reaches the logo,
+  the Home scene and the login page context: it downloads the global dispatch
+  and SDK configuration, runs SDK init/login and renders the Celestia login
+  scene at full surface size. Causes found on the way: its allocator's 4 GiB +
+  8 MiB read/write `mmap` failed and it built a heap at address 0 over thread
+  stacks (now overcommitted, committed on touch); 32 MiB pool units exhausted
+  the pool with 16 KiB/1 MiB mappings; missing `FromReflectedField`, array
+  `getSuperclass` and ART's `ClassNotFoundException` for malformed array names
+  made Unity's reflection fail asset lookups; `Os.chmod` absence surfaced as a
+  Chromium fatal in `libtelemetry` (it treats any pending exception as fatal);
+  `allocateDirect` buffers lacked ART's accessible array. The GC-finalizer
+  deadlock was the sigreturn race fixed for Among Us. Open: first frames take
+  about a minute and the scene runs far below 60 fps (unprofiled); Unity logs
+  "custom render path shader needs N passes" every frame (compare the emulator);
+  the ~30 GB resource download, account login and gameplay are unexercised; the
+  guest's 4 GiB wasm address space is below the game's device RAM. The API-33
+  emulator runs the same XAPK as an oracle (`webdroid_genshin` AVD, 4 GiB).
+
 - **Play Integrity:** SPIC v1.4.0 renders unchanged Compose UI and reaches
   microG FakeStore, DroidGuard and Google's endpoint with `?attestation=1`.
   DroidGuard supplied zero bytes, microG had no Google auth token, and the
