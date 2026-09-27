@@ -21,9 +21,6 @@ inline fn set(c: *Cpu, n: u32, v: u32) void {
 inline fn reg(c: *Cpu, n: u32, pc: u32) u32 {
     return if (n == 15) pc +% 8 else r(c, n);
 }
-inline fn cf(c: *Cpu) u32 {
-    return (c.cpsr >> 29) & 1;
-}
 inline fn setNZ(c: *Cpu, v: u32) void {
     c.cpsr = (c.cpsr & 0x3fff_ffff) | a64.nz(u32, v);
 }
@@ -47,8 +44,8 @@ fn thumbData(c: *Cpu, op: u32, n: u32, rhs: u32, flags: bool) u32 {
         3 => lhs | ~rhs,
         4 => lhs ^ rhs,
         8 => if (flags) addFlags(c, lhs, rhs, 0) else lhs +% rhs,
-        10 => if (flags) addFlags(c, lhs, rhs, @intCast(cf(c))) else lhs +% rhs +% cf(c),
-        11 => if (flags) subFlags(c, lhs, rhs, @intCast(cf(c))) else lhs -% rhs -% (1 - cf(c)),
+        10 => if (flags) addFlags(c, lhs, rhs, @intCast(c.cf())) else lhs +% rhs +% c.cf(),
+        11 => if (flags) subFlags(c, lhs, rhs, @intCast(c.cf())) else lhs -% rhs -% (1 - c.cf()),
         13 => if (flags) subFlags(c, lhs, rhs, 1) else lhs -% rhs,
         14 => if (flags) subFlags(c, rhs, lhs, 1) else rhs -% lhs,
         else => unreachable,
@@ -91,7 +88,7 @@ inline fn advanceIt(c: *Cpu, state: u32) void {
 
 const Shifted = struct { v: u32, carry: u32 };
 fn shiftReg(c: *Cpu, kind: u32, v: u32, n: u32) Shifted {
-    if (n == 0) return .{ .v = v, .carry = cf(c) };
+    if (n == 0) return .{ .v = v, .carry = c.cf() };
     switch (kind) {
         0 => return if (n < 32) .{ .v = v << @intCast(n), .carry = (v >> @intCast(32 - n)) & 1 } else .{ .v = 0, .carry = if (n == 32) v & 1 else 0 },
         1 => return if (n < 32) .{ .v = v >> @intCast(n), .carry = (v >> @intCast(n - 1)) & 1 } else .{ .v = 0, .carry = if (n == 32) v >> 31 else 0 },
@@ -108,7 +105,7 @@ fn shiftImm(c: *Cpu, kind: u32, v: u32, n: u32) Shifted {
     return switch (kind) {
         1 => .{ .v = 0, .carry = v >> 31 },
         2 => .{ .v = @bitCast(@as(i32, @bitCast(v)) >> 31), .carry = v >> 31 },
-        else => .{ .v = (v >> 1) | (cf(c) << 31), .carry = v & 1 },
+        else => .{ .v = (v >> 1) | (c.cf() << 31), .carry = v & 1 },
     };
 }
 fn thumbExpandImm(c: *Cpu, imm12: u32) Shifted {
@@ -120,7 +117,7 @@ fn thumbExpandImm(c: *Cpu, imm12: u32) Shifted {
             2 => (imm8 << 8) | (imm8 << 24),
             else => imm8 * 0x01010101,
         };
-        return .{ .v = v, .carry = cf(c) };
+        return .{ .v = v, .carry = c.cf() };
     }
     const rot = (imm12 >> 7) & 31;
     const v = std.math.rotr(u32, 0x80 | (imm12 & 0x7f), rot);
@@ -482,7 +479,7 @@ fn op2(c: *Cpu, w: u32, pc: u32) Shifted {
     if (w & (1 << 25) != 0) {
         const rot = bits(w, 8, 4) * 2;
         const imm8 = w & 255;
-        if (rot == 0) return .{ .v = imm8, .carry = cf(c) };
+        if (rot == 0) return .{ .v = imm8, .carry = c.cf() };
         const v = std.math.rotr(u32, imm8, rot);
         return .{ .v = v, .carry = v >> 31 };
     }
@@ -490,13 +487,7 @@ fn op2(c: *Cpu, w: u32, pc: u32) Shifted {
     const kind = bits(w, 5, 2);
     const rm = reg(c, m, pc);
     if (w & (1 << 4) != 0) return shiftReg(c, kind, rm, r(c, bits(w, 8, 4)) & 255);
-    const n = bits(w, 7, 5);
-    switch (kind) {
-        0 => return if (n == 0) .{ .v = rm, .carry = cf(c) } else .{ .v = rm << @intCast(n), .carry = (rm >> @intCast(32 - n)) & 1 },
-        1 => return if (n == 0) .{ .v = 0, .carry = rm >> 31 } else .{ .v = rm >> @intCast(n), .carry = (rm >> @intCast(n - 1)) & 1 },
-        2 => return if (n == 0) .{ .v = @bitCast(@as(i32, @bitCast(rm)) >> 31), .carry = rm >> 31 } else .{ .v = @bitCast(@as(i32, @bitCast(rm)) >> @intCast(n)), .carry = (rm >> @intCast(n - 1)) & 1 },
-        else => return if (n == 0) .{ .v = (rm >> 1) | (cf(c) << 31), .carry = rm & 1 } else .{ .v = std.math.rotr(u32, rm, n), .carry = (rm >> @intCast(n - 1)) & 1 },
-    }
+    return shiftImm(c, kind, rm, bits(w, 7, 5));
 }
 
 pub fn step(c: *Cpu, pc: u32) Status {
@@ -767,9 +758,9 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
         2, 10 => if (setf) subFlags(c, a, t.v, 1) else a -% t.v,
         3 => if (setf) subFlags(c, t.v, a, 1) else t.v -% a,
         4, 11 => if (setf) addFlags(c, a, t.v, 0) else a +% t.v,
-        5 => if (setf) addFlags(c, a, t.v, @intCast(cf(c))) else a +% t.v +% cf(c),
-        6 => if (setf) subFlags(c, a, t.v, @intCast(cf(c))) else a -% t.v -% 1 +% cf(c),
-        else => if (setf) subFlags(c, t.v, a, @intCast(cf(c))) else t.v -% a -% 1 +% cf(c),
+        5 => if (setf) addFlags(c, a, t.v, @intCast(c.cf())) else a +% t.v +% c.cf(),
+        6 => if (setf) subFlags(c, a, t.v, @intCast(c.cf())) else a -% t.v -% 1 +% c.cf(),
+        else => if (setf) subFlags(c, t.v, a, @intCast(c.cf())) else t.v -% a -% 1 +% c.cf(),
     };
     if (setf and logical) setNZC(c, v, t.carry);
     if (o < 8 or o > 11) {
@@ -917,10 +908,6 @@ fn swi(c: *Cpu) Status {
             c.tls = r(c, 0);
             set(c, 0, 0);
         },
-        175 => {
-            c.exit = 175;
-            return .syscall;
-        },
         20 => set(c, 0, c.pid),
         224 => set(c, 0, c.os_tid),
         // every other number is the host's: it serves the same table as libc's syscall(2)
@@ -1066,7 +1053,7 @@ fn vfpArith(comptime F: type, c: *Cpu, w: u32, d: u32, n: u32, m: u32) ?Status {
         0xa => vreg(F, c, d).* = if (o6) fp.fma(F, -vn, vm, vd) else fp.fma(F, vn, vm, vd),
         0xb => {
             if (!o6) {
-                const imm = @import("simd.zig").vfpImm(bits(w, 16, 4) << 4 | (w & 15), dp);
+                const imm = simd.vfpImm(bits(w, 16, 4) << 4 | (w & 15), dp);
                 if (dp) vreg(u32, c, d * 2).* = @truncate(imm) else vreg(u32, c, d).* = @truncate(imm);
                 if (dp) vreg(u32, c, d * 2 + 1).* = @intCast(imm >> 32);
                 return .next;
@@ -1141,14 +1128,13 @@ inline fn execThumb32(c: *Cpu, h: u32, second: u32, pc: u32) ?Status {
             return status;
         }
     }
-    if (execThumb32Data(c, h, pc)) |status| return status;
-    if (execThumb32Transfers(c, h, pc)) |status| return status;
-    return execThumb32Late(c, h, pc);
+    if (execThumb32Data(c, h, second, pc)) |status| return status;
+    if (execThumb32Transfers(c, h, second, pc)) |status| return status;
+    return execThumb32Late(c, h, second, pc);
 }
 
-inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
+inline fn execThumb32Data(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
     if (h == 0xf3ef) {
-        const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0xf0ff == 0x8000) {
             set(c, (h2 >> 8) & 15, c.cpsr & 0xf80f_0000);
             c.pc = pc + 4;
@@ -1156,7 +1142,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         }
     }
     if (h & 0xfff0 == 0xf380) {
-        const h2: u32 = ld(u16, pc + 2);
         if (h2 == 0x8800 or h2 == 0x8400 or h2 == 0x8c00) {
             const mask: u32 = (if (h2 & 0x800 != 0) @as(u32, 0xf800_0000) else 0) |
                 (if (h2 & 0x400 != 0) @as(u32, 0x000f_0000) else 0);
@@ -1166,7 +1151,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         }
     }
     if (h & 0xff50 == 0xf300) {
-        const h2: u32 = ld(u16, pc + 2);
         const amount: u5 = @intCast((bits(h2, 12, 3) << 2) | bits(h2, 6, 2));
         const asr = h & 0x20 != 0;
         if (h2 & 0x8020 != 0 or (asr and amount == 0)) return fault(c, .unimplemented, h << 16 | h2, pc);
@@ -1175,7 +1159,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         return .next;
     }
     if ((h & 0xefb0) == 0xef80) {
-        const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0x10 == 0) return fault(c, .undefined, h << 16 | h2, pc);
         c.pc = pc + 4;
         const imm8 = ((h >> 5) & 0x80) | ((h & 7) << 4) | (h2 & 15);
@@ -1183,7 +1166,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
     }
     const wideMoveImm = h & 0xfbef;
     if (wideMoveImm == 0xf04f or wideMoveImm == 0xf06f) {
-        const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0x8000 == 0) {
             c.pc = pc + 4;
             const imm12 = (((h >> 10) & 1) << 11) | (((h2 >> 12) & 7) << 8) | (h2 & 255);
@@ -1195,7 +1177,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         }
     }
     if ((h & 0xfa00) == 0xf000) {
-        const h2: u32 = ld(u16, pc + 2);
         const op = (h >> 5) & 15;
         if (h2 & 0x8000 == 0 and (op <= 4 or op == 8 or op == 10 or op == 11 or op == 13 or op == 14)) {
             c.pc = pc + 4;
@@ -1212,7 +1193,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         }
     }
     if ((h & 0xff70) == 0xf340) {
-        const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0x8000 != 0) return fault(c, .undefined, h << 16 | h2, pc);
         c.pc = pc + 4;
         const lsb = (((h2 >> 12) & 7) << 2) | ((h2 >> 6) & 3);
@@ -1222,7 +1202,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         return .next;
     }
     if ((h & 0xfff0) == 0xf360) {
-        const h2: u32 = ld(u16, pc + 2);
         const lsb = (bits(h2, 12, 3) << 2) | bits(h2, 6, 2);
         const msb = h2 & 31;
         if (h2 & 0x8020 != 0 or msb < lsb) return fault(c, .undefined, h << 16 | h2, pc);
@@ -1234,7 +1213,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         return .next;
     }
     if ((h & 0xffd0) == 0xfa90) {
-        const h2: u32 = ld(u16, pc + 2);
         const clz = h & 0x20 != 0;
         if (h2 & 0xf0c0 == 0xf080 and (!clz or h2 & 0x30 == 0) and (h & 15) == (h2 & 15)) {
             c.pc = pc + 4;
@@ -1243,7 +1221,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         }
     }
     if ((h & 0xff80) == 0xfa00) {
-        const h2: u32 = ld(u16, pc + 2);
         const extend = (h >> 4) & 7;
         if (h2 & 0xf0c0 == 0xf080 and extend <= 5) {
             const value = std.math.rotr(u32, r(c, h2 & 15), bits(h2, 4, 2) * 8);
@@ -1268,7 +1245,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         }
     }
     if ((h & 0xff80) == 0xfb80) {
-        const h2: u32 = ld(u16, pc + 2);
         const op = (h >> 4) & 7;
         const dual_accumulate = op == 6 and h2 & 0x00f0 == 0x60;
         if (op & 1 == 0 and (h2 & 0x00f0 == 0 or dual_accumulate)) {
@@ -1290,7 +1266,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         }
     }
     if ((h & 0xfe00) == 0xea00) {
-        const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0x8000 != 0) return fault(c, .undefined, h << 16 | h2, pc);
         const op = (h >> 5) & 15;
         if (op == 6 and h & 0x10 == 0 and h2 & 0x10 == 0) {
@@ -1311,7 +1286,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         }
     }
     if ((h & 0xfff0) == 0xfb50 or (h & 0xfff0) == 0xfb60) {
-        const h2: u32 = ld(u16, pc + 2);
         const a = h2 >> 12;
         const subtract = h & 0x20 != 0;
         if (h2 & 0xe0 != 0 or (subtract and a == 15)) return fault(c, .undefined, h << 16 | h2, pc);
@@ -1320,7 +1294,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         return .next;
     }
     if ((h & 0xfff0) == 0xfb10) {
-        const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0xc0 != 0) return fault(c, .undefined, h << 16 | h2, pc);
         const a = h2 >> 12;
         const n = signedHalf(r(c, h & 15), bits(h2, 5, 1));
@@ -1330,7 +1303,6 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
         return .next;
     }
     if ((h & 0xfff0) == 0xfb00) {
-        const h2: u32 = ld(u16, pc + 2);
         const op = (h2 >> 4) & 15;
         const a = h2 >> 12;
         if ((op == 0 or op == 1) and (op == 0 or a != 15)) {
@@ -1343,9 +1315,8 @@ inline fn execThumb32Data(c: *Cpu, h: u32, pc: u32) ?Status {
     return null;
 }
 
-inline fn execThumb32Transfers(c: *Cpu, h: u32, pc: u32) ?Status {
+inline fn execThumb32Transfers(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
     if ((h & 0xfff0) == 0xe8d0) {
-        const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0xffe0 == 0xf000) {
             c.pc = pc + 4;
             const half = h2 & 0x10 != 0;
@@ -1356,8 +1327,7 @@ inline fn execThumb32Transfers(c: *Cpu, h: u32, pc: u32) ?Status {
             return jump(c, pc +% 4 +% off * 2);
         }
     }
-    if ((h & 0xff60) == 0xe840 and (h & 0x80 == 0 or ld(u16, pc + 2) & 0xc0 == 0x40)) {
-        const h2: u32 = ld(u16, pc + 2);
+    if ((h & 0xff60) == 0xe840 and (h & 0x80 == 0 or h2 & 0xc0 == 0x40)) {
         const load = h & 0x10 != 0;
         const extended = h & 0x80 != 0;
         const kind = bits(h2, 4, 4);
@@ -1386,7 +1356,6 @@ inline fn execThumb32Transfers(c: *Cpu, h: u32, pc: u32) ?Status {
         return .next;
     }
     if ((h & 0xfe40) == 0xe840) {
-        const h2: u32 = ld(u16, pc + 2);
         c.pc = pc + 4;
         const P = h & 0x100 != 0;
         const U = h & 0x80 != 0;
@@ -1410,7 +1379,7 @@ inline fn execThumb32Transfers(c: *Cpu, h: u32, pc: u32) ?Status {
         return .next;
     }
     if ((h & 0xfe40) == 0xe800) {
-        const list: u32 = ld(u16, pc + 2);
+        const list = h2;
         c.pc = pc + 4;
         const before = h & 0x100 != 0;
         const W = h & 0x20 != 0;
@@ -1436,7 +1405,6 @@ inline fn execThumb32Transfers(c: *Cpu, h: u32, pc: u32) ?Status {
         return .next;
     }
     if (h == 0xf3bf) {
-        const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0xfff0 == 0x8f20 or h2 & 0xfff0 == 0x8f40 or h2 & 0xfff0 == 0x8f50 or h2 & 0xfff0 == 0x8f60) {
             c.pc = pc + 4;
             if (h2 & 0xfff0 == 0x8f20) c.excl = 0;
@@ -1473,15 +1441,13 @@ inline fn execThumb32Branches(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
     return null;
 }
 
-inline fn execThumb32Late(c: *Cpu, h: u32, pc: u32) ?Status {
+inline fn execThumb32Late(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
     if ((h & 0xff10) == 0xf900) {
-        const h2: u32 = ld(u16, pc + 2);
         c.pc = pc + 4;
         return neonStruct(c, h << 16 | h2, pc);
     }
     const wideMove = h & 0xfbf0;
     if (wideMove == 0xf240 or wideMove == 0xf2c0) {
-        const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0x8000 != 0) return fault(c, .undefined, h << 16 | h2, pc);
         c.pc = pc + 4;
         const d = (h2 >> 8) & 15;
@@ -1491,7 +1457,6 @@ inline fn execThumb32Late(c: *Cpu, h: u32, pc: u32) ?Status {
     }
     const wideAddress = h & 0xfbe0;
     if (wideAddress == 0xf200 or wideAddress == 0xf2a0) {
-        const h2: u32 = ld(u16, pc + 2);
         if (h2 & 0x8000 != 0) return fault(c, .undefined, h << 16 | h2, pc);
         c.pc = pc + 4;
         const imm = (((h >> 10) & 1) << 11) | (((h2 >> 12) & 7) << 8) | (h2 & 255);
@@ -1501,7 +1466,6 @@ inline fn execThumb32Late(c: *Cpu, h: u32, pc: u32) ?Status {
         return .next;
     }
     if (h & 0xfe00 == 0xf800 and bits(h, 5, 2) < 3) {
-        const h2: u32 = ld(u16, pc + 2);
         const load = h & 0x10 != 0;
         const signed = h & 0x100 != 0;
         const size = bits(h, 5, 2);
@@ -1566,7 +1530,7 @@ inline fn execThumb16(c: *Cpu, h: u32, pc: u32, currentIt: u32) Status {
             } else {
                 const nsh = (h >> 6) & 31;
                 const t = r(c, rn);
-                const s = if (o == 0 and nsh == 0) Shifted{ .v = t, .carry = cf(c) } else shiftReg(c, o, t, if (nsh == 0) 32 else nsh);
+                const s = if (o == 0 and nsh == 0) Shifted{ .v = t, .carry = c.cf() } else shiftReg(c, o, t, if (nsh == 0) 32 else nsh);
                 set(c, rd, s.v);
                 if (implicitFlags) setNZC(c, s.v, s.carry);
             }
@@ -1601,8 +1565,8 @@ inline fn execThumb16(c: *Cpu, h: u32, pc: u32, currentIt: u32) Status {
                         set(c, rd, s.v);
                         if (implicitFlags) setNZC(c, s.v, s.carry);
                     },
-                    5 => set(c, rd, if (implicitFlags) addFlags(c, R, Mv, @intCast(cf(c))) else R +% Mv +% cf(c)),
-                    6 => set(c, rd, if (implicitFlags) subFlags(c, R, Mv, @intCast(cf(c))) else R -% Mv -% (1 - cf(c))),
+                    5 => set(c, rd, if (implicitFlags) addFlags(c, R, Mv, @intCast(c.cf())) else R +% Mv +% c.cf()),
+                    6 => set(c, rd, if (implicitFlags) subFlags(c, R, Mv, @intCast(c.cf())) else R -% Mv -% (1 - c.cf())),
                     9 => set(c, rd, if (implicitFlags) subFlags(c, 0, Mv, 1) else 0 -% Mv),
                     10 => _ = subFlags(c, R, Mv, 1),
                     11 => _ = addFlags(c, R, Mv, 0),

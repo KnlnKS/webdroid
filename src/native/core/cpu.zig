@@ -29,17 +29,8 @@ pub const Cpu = extern struct {
     ic_limit: i64,
     tls_tab: u32,
 
-    pub inline fn n(c: *Cpu) u32 {
-        return c.cpsr >> 31;
-    }
-    pub inline fn z(c: *Cpu) u32 {
-        return (c.cpsr >> 30) & 1;
-    }
     pub inline fn cf(c: *Cpu) u32 {
         return (c.cpsr >> 29) & 1;
-    }
-    pub inline fn vf(c: *Cpu) u32 {
-        return (c.cpsr >> 28) & 1;
     }
     pub inline fn setNZCV(c: *Cpu, nzcv: u32) void {
         c.cpsr = (c.cpsr & 0x0fff_ffff) | (nzcv & 0xf000_0000);

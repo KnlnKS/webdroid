@@ -743,12 +743,7 @@ fn exclusive(c: *Cpu, o: *const Op, pc: u32) Status {
     return .next;
 }
 inline fn sizeMask(size: u8) u64 {
-    return switch (size) {
-        0 => 0xff,
-        1 => 0xffff,
-        2 => 0xffff_ffff,
-        else => ~@as(u64, 0),
-    };
+    return bt.ones(@as(u32, 8) << @intCast(size));
 }
 inline fn ldSized(a: u32, size: u8) u64 {
     return switch (size) {
@@ -796,10 +791,6 @@ fn svc(c: *Cpu) Status {
     switch (@as(u32, @truncate(c.x[8]))) {
         172 => c.x[0] = c.pid,
         178 => c.x[0] = c.os_tid,
-        135 => {
-            c.exit = 135;
-            return .syscall;
-        },
         // every other number is the host's: it serves the same table as libc's syscall(2)
         else => {
             c.exit = @truncate(c.x[8]);

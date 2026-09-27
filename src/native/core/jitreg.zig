@@ -14,7 +14,7 @@ const mo = wasm.mo;
 const sv = wasm.simd;
 const vm = wasm.vm;
 const L_CPU = jit.L_CPU;
-const OFF_V = @offsetOf(cpu.Cpu, "v");
+pub const OFF_V = @offsetOf(cpu.Cpu, "v");
 
 pub inline fn voff(n: u8) u32 {
     return OFF_V + 16 * @as(u32, n);

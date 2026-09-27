@@ -1,4 +1,3 @@
-const cpu = @import("cpu.zig");
 const vreg = @import("jitreg.zig");
 const jitvec = @import("jitvec.zig");
 const jit = @import("jit.zig");
@@ -18,7 +17,7 @@ const c64 = wasm.c64;
 const mo = wasm.mo;
 const L_CPU = jit.L_CPU;
 const L_A = jit.L_A;
-const OFF_V = @offsetOf(cpu.Cpu, "v");
+const OFF_V = vreg.OFF_V;
 
 const voff = vreg.voff;
 const zeroTop = vreg.zeroTop;

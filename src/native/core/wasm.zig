@@ -43,21 +43,17 @@ pub const Op = struct {
     pub const f64_const: u8 = 0x44;
     pub const i32_eqz: u8 = 0x45;
     pub const i32_eq: u8 = 0x46;
-    pub const i32_ne: u8 = 0x47;
     pub const i32_lt_s: u8 = 0x48;
     pub const i32_lt_u: u8 = 0x49;
     pub const i32_gt_s: u8 = 0x4a;
     pub const i32_gt_u: u8 = 0x4b;
-    pub const i32_le_s: u8 = 0x4c;
     pub const i32_le_u: u8 = 0x4d;
     pub const i32_ge_s: u8 = 0x4e;
     pub const i32_ge_u: u8 = 0x4f;
     pub const i64_eqz: u8 = 0x50;
     pub const i64_eq: u8 = 0x51;
     pub const i64_ne: u8 = 0x52;
-    pub const i64_lt_u: u8 = 0x54;
     pub const i64_ge_s: u8 = 0x59;
-    pub const i64_ge_u: u8 = 0x5a;
     pub const f64_eq: u8 = 0x61;
     pub const f64_ne: u8 = 0x62;
     pub const f64_lt: u8 = 0x63;
@@ -74,12 +70,9 @@ pub const Op = struct {
     pub const i32_shr_s: u8 = 0x75;
     pub const i32_shr_u: u8 = 0x76;
     pub const i32_rotr: u8 = 0x78;
-    pub const i64_clz: u8 = 0x79;
     pub const i64_add: u8 = 0x7c;
     pub const i64_sub: u8 = 0x7d;
     pub const i64_mul: u8 = 0x7e;
-    pub const i64_div_s: u8 = 0x7f;
-    pub const i64_div_u: u8 = 0x80;
     pub const i64_and: u8 = 0x83;
     pub const i64_or: u8 = 0x84;
     pub const i64_xor: u8 = 0x85;
@@ -155,7 +148,6 @@ pub const Simd = struct {
     pub const swizzle: u8 = 0x0e;
     pub const load8_splat: u8 = 0x07;
     pub const load64_zero: u8 = 0x5d;
-    pub const load8_lane: u8 = 0x54;
     pub const store8_lane: u8 = 0x58;
     pub const store64_lane: u8 = 0x5b;
     pub const splat = [_]u8{ 0x0f, 0x10, 0x11, 0x12 };
@@ -260,9 +252,6 @@ pub fn mo(op: u8, off: u32) Mo {
 }
 pub fn call(f: u32) Call {
     return .{ .f = f };
-}
-pub fn br(depth: u32) Br {
-    return .{ .depth = depth };
 }
 pub fn brIf(depth: u32) BrIf {
     return .{ .depth = depth };

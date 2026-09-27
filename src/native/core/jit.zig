@@ -81,7 +81,6 @@ const F_EXEC = 0;
 const F_STORE = 1;
 const F_EXEC32 = 2;
 pub const F_FMAX32 = 3;
-pub const F_FMAX64 = 7;
 pub const F_FMA64 = 11;
 const F_IT32 = 12;
 const N_IMPORTS = 13;
@@ -341,9 +340,7 @@ pub fn Emit(comptime wide: bool) type {
         written: u32,
         wcur: u32,
         rw: RW,
-        exit_depth: u32,
         chain_depth: u32,
-        top_depth: u32,
         nest: u32,
         pk: Pend = .none,
         term: bool = false,
@@ -527,7 +524,7 @@ pub fn Emit(comptime wide: bool) type {
             return if (t >= 0) e.lin[@intCast(t)] else 15;
         }
         pub fn exit(e: *Self) void {
-            e.b.br(e.exit_depth + e.nest);
+            e.b.br(e.chain_depth + 1 + e.nest);
         }
         pub fn exitRet(e: *Self) void {
             e.settle(15);
@@ -563,7 +560,7 @@ pub fn Emit(comptime wide: bool) type {
             e.exitTo(pc);
             e.endif();
             e.b.emit(.{ c32(target), set(L_NEXT) });
-            e.b.br(e.top_depth + e.nest);
+            e.b.br(e.chain_depth - 1 + e.nest);
         }
         pub fn fallback(e: *Self, pc: u32, k: u32) void {
             const b = e.b;
@@ -1159,7 +1156,7 @@ fn emitRegion(b: *Buf, r: *Region, page: *cpu.Page) void {
 }
 fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
     const wide = isa == .a64;
-    var e = Emit(wide){ .b = b, .r = r, .blk = 0, .used = 0, .written = 0, .wcur = 0, .rw = if (wide) ALL else ALL32, .exit_depth = 0, .chain_depth = 0, .top_depth = 0, .nest = 0 };
+    var e = Emit(wide){ .b = b, .r = r, .blk = 0, .used = 0, .written = 0, .wcur = 0, .rw = if (wide) ALL else ALL32, .chain_depth = 0, .nest = 0 };
     const n = r.nblocks;
     var writes: [MAX_BLOCKS]u32 = undefined;
     var wb: [MAX_BLOCKS]u32 = undefined;
@@ -1247,9 +1244,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
     for (r.blocks[0..n], 0..) |blk, i| {
         b.byte(O.end);
         e.blk = @intCast(i);
-        e.top_depth = n - 1 - @as(u32, @intCast(i));
         e.chain_depth = n - @as(u32, @intCast(i));
-        e.exit_depth = e.chain_depth + 1;
         e.wcur = wb[i];
         e.pk = .none;
         e.pdirty = 0;
