@@ -411,6 +411,14 @@ const launchActivity0 = driven(function* launchActivity0(component: string, inte
   }
 });
 
+/** A physical rotation. An activity that fixed or locked its orientation keeps it, as the window
+ *  manager keeps the display in that orientation for it. */
+export function rotateDevice(landscape: boolean): Promise<void> {
+  return onMain(async () => {
+    const act = booted?.stack.at(-1), request = act?.requestedOrientation ?? -1;
+    if (act && orientationForRequest(request) === null && request !== 5 && request !== 14) changeActivityOrientation(act, landscape ? 0 : 1);
+  });
+}
 const CONFIG_ORIENTATION_SIZE = 0x0080 | 0x0400;
 function changeActivityOrientation(act: JActivity, request: number): void {
   if (!applyOrientationRequest(request)) return;

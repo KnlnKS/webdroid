@@ -11,7 +11,7 @@ import { mangleMethod } from "./jvm/abi";
 import { loadFramework } from "./android/framework";
 import { loadSkiaText } from "./android/skia-text";
 import { unreadAttrs } from "./android/res";
-import { bootApk, tick, dispatchPointer, pressBack, currentApp, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
+import { bootApk, tick, dispatchPointer, pressBack, currentApp, rotateDevice, SCREEN_W, SCREEN_H, setDisplayChangeHandler, setScreenCanvas } from "./shell/device";
 import { attachIme, drainInput } from "./shell/input";
 import { clearRoots } from "./shell/hostfs";
 import { clearPickedDocuments } from "./android/documents";
@@ -150,10 +150,7 @@ const wd = {
   },
   boot, app: () => currentApp(), back,
   background: (ms = 1000) => processBroker().background(ms),
-  configuration: async (orientation: "portrait" | "landscape") => {
-    const activity = currentApp()?.stack.at(-1);
-    if (activity) await vcall(activity, "setRequestedOrientation", "(I)V", orientation === "landscape" ? 0 : 1);
-  },
+  configuration: (orientation: "portrait" | "landscape") => rotateDevice(orientation === "landscape"),
   // the canvas capture cannot see iframe pixels: this is how a harness proves a page loaded
   web: () => webViewInfo(),
   // framework attributes a layout used that nothing here reads: a look that is wrong with a
