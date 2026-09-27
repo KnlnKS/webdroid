@@ -941,7 +941,7 @@ class JURLConnection extends JObj {
     arm(this.cto, "connect timed out");
     try {
       r = await fetch("/proxy?url=" + encodeURIComponent(this.url.spec) + (this.follow ? "" : "&manual=1"), {
-        method: this.method, headers, signal: ac.signal, body: hasBody ? new Uint8Array(this.out!.chunks) : undefined,
+        method: this.method, headers, signal: ac.signal, body: hasBody ? new Uint8Array(u8(vcall(this.out, "toByteArray", "()[B") as Int8Array)) : undefined,
       });
     } catch (e) {
       if (timedOut) throw rt.mkThrowable("java/net/SocketTimeoutException", timedOut);
@@ -1015,7 +1015,7 @@ rt.register({
       if (this.res || this.pending) throw rt.mkThrowable("java/net/ProtocolException", "Cannot write output after reading input");
       if (this.method === "GET") this.method = "POST";   // a GET that writes a body becomes a POST (OpenJDK and AOSP alike)
       this.connected = 1;
-      return this.out ??= rt.make("java/io/OutputStream") as JOutputStream;
+      return this.out ??= rt.make("java/io/ByteArrayOutputStream") as JOutputStream;
     },
     "setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JURLConnection, k: string | null, v: string) {
       if (this.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");
