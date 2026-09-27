@@ -37,17 +37,18 @@ function glForTextureFormat(format: number): GL {
 const shaderRecs = new WeakMap<WebGLShader, { original: string; rewrite: SwizzleRewrite }>();
 interface TexRec { channels: [number, number, number, number]; code: number; deleted: boolean }
 const texRecs = new WeakMap<WebGLTexture, TexRec>();
-interface SamplerBinding { locations: WebGLUniformLocation[]; target: number; units: Int32Array }
+interface SamplerBinding { target: number; units: Int32Array }
 interface ProgramMap { binding: SamplerBinding; location: WebGLUniformLocation; pending: Int32Array; uploaded: Int32Array }
 interface ProgramRec {
   hidden: ReadonlySet<string>;
   uniforms: VisibleUniforms;
-  bindings: SamplerBinding[];
+  samplers: ReadonlyMap<string, SamplerBinding>;
   maps: ProgramMap[];
-  unitsDirty: boolean;
   bindingRevision: number;
 }
 const programRecs = new WeakMap<WebGLProgram, ProgramRec>();
+/** a guest uniform location naming a swizzled sampler: the program's record, its binding and element */
+const samplerSlots = new WeakMap<WebGLUniformLocation, { rec: ProgramRec; binding: SamplerBinding; index: number }>();
 interface ContextState {
   activeUnit: number;
   bindings: Map<number, Map<number, WebGLTexture | null>>;
@@ -109,7 +110,7 @@ function linkProgram(program: WebGLProgram): void {
   const uniforms = visibleUniforms(gl, program, hidden);
   const infoByName = new Map(uniforms.infos.map((info) => [info.name.endsWith("[0]") ? info.name.slice(0, -3) : info.name, info]));
   const bindingsByName = new Map<string, SamplerBinding>();
-  const bindings: SamplerBinding[] = [], maps: ProgramMap[] = [];
+  const maps: ProgramMap[] = [];
   const rawCount = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS) as number;
   const rawInfo = new Map<string, WebGLActiveInfo>();
   for (let i = 0; i < rawCount; i++) {
@@ -123,30 +124,21 @@ function linkProgram(program: WebGLProgram): void {
     if (!info || !hiddenInfo || !target || !mapLocation) continue;
     let binding = bindingsByName.get(map.sampler);
     if (!binding) {
-      const size = Math.min(map.size, info.size);
-      const locations = Array.from({ length: size }, (_, i) => gl.getUniformLocation(program, size > 1 ? `${map.sampler}[${i}]` : map.sampler)).filter((location): location is WebGLUniformLocation => !!location);
-      if (locations.length !== size) continue;
-      binding = { locations, target, units: new Int32Array(size) };
+      // a freshly linked program's samplers all read unit 0
+      binding = { target, units: new Int32Array(Math.min(map.size, info.size)) };
       bindingsByName.set(map.sampler, binding);
-      bindings.push(binding);
     }
     const size = Math.min(binding.units.length, hiddenInfo.size);
     maps.push({ binding, location: mapLocation, pending: new Int32Array(size), uploaded: new Int32Array(size).fill(-1) });
   }
-  programRecs.set(program, { hidden, uniforms, bindings, maps, unitsDirty: false, bindingRevision: -1 });
+  programRecs.set(program, { hidden, uniforms, samplers: bindingsByName, maps, bindingRevision: -1 });
 }
 
 function prepareDraw(): void {
   const gl = g(), state = contextState();
   if (!state.program) state.program = gl.getParameter(CURRENT_PROGRAM) as WebGLProgram | null;
   const rec = state.program && programRecs.get(state.program);
-  if (!rec || (!rec.unitsDirty && rec.bindingRevision === state.revision)) return;
-  if (rec.unitsDirty) {
-    for (const binding of rec.bindings) {
-      for (let i = 0; i < binding.locations.length; i++) binding.units[i] = gl.getUniform(state.program!, binding.locations[i]) as number;
-    }
-    rec.unitsDirty = false;
-  }
+  if (!rec || rec.bindingRevision === state.revision) return;
   for (const map of rec.maps) {
     let changed = false;
     for (let i = 0; i < map.pending.length; i++) {
@@ -160,11 +152,13 @@ function prepareDraw(): void {
   rec.bindingRevision = state.revision;
 }
 
-function markSamplerUnitsDirty(): void {
-  const state = contextState();
-  if (!state.program) state.program = g().getParameter(CURRENT_PROGRAM) as WebGLProgram | null;
-  const rec = state.program && programRecs.get(state.program);
-  if (rec) rec.unitsDirty = true;
+/** glUniform1i[v] on a swizzled sampler: its texture units, kept here rather than read back from GL */
+function setSamplerUnits(u: WebGLUniformLocation, units: ArrayLike<number>): void {
+  const slot = samplerSlots.get(u);
+  if (!slot) return;
+  const { binding, index } = slot;
+  for (let i = 0; i < units.length && index + i < binding.units.length; i++) binding.units[index + i] = units[i];
+  slot.rec.bindingRevision = -1;
 }
 
 // ── guest memory views (a misaligned pointer is copied, which GL data rarely is)
@@ -508,7 +502,11 @@ export function gles3Init(): void {
     glGetUniformLocation: (_c, a) => {
       const p = H(T().programs, a.i()), name = a.str();
       if (p && programRecs.get(p)?.hidden.has(name.replace(/\[\d+\]$/, ""))) return -1;
-      const u = p && g().getUniformLocation(p, name); return u ? put(T().uniforms, u) : -1;
+      const u = p && g().getUniformLocation(p, name);
+      if (!u) return -1;
+      const rec = programRecs.get(p), element = /^(.*?)(?:\[(\d+)\])?$/.exec(name)!, binding = rec?.samplers.get(element[1]);
+      if (binding) samplerSlots.set(u, { rec: rec!, binding, index: Number(element[2] ?? 0) });
+      return put(T().uniforms, u);
     },
     glGetActiveAttrib: active((p, i) => g().getActiveAttrib(p, i)),
     glGetActiveUniform: active((p, i) => { const rec = programRecs.get(p); return rec ? rec.uniforms.infos[i] ?? null : g().getActiveUniform(p, i); }),
@@ -733,13 +731,14 @@ export function gles3Init(): void {
       const u = U(a.i()), x = rd(a), y = n > 1 ? rd(a) : 0, z = n > 2 ? rd(a) : 0, w = n > 3 ? rd(a) : 0;
       if (!u) return;
       set().call(g(), u, x, y, z, w);
-      if (sampler) markSamplerUnitsDirty();
+      if (sampler) setSamplerUnits(u, [x]);
     };
     G[`glUniform${n}${k}v`] = (_c, a) => {
       const u = U(a.i()), cnt = a.i(), p = a.p();
       if (!u) return;
-      setv().call(g(), u, vw(p, cnt * n));
-      if (sampler) markSamplerUnitsDirty();
+      const values = vw(p, cnt * n);
+      setv().call(g(), u, values);
+      if (sampler) setSamplerUnits(u, values);
     };
   }
   for (const [m, e] of [["2", 4], ["3", 9], ["4", 16], ["2x3", 6], ["3x2", 6], ["2x4", 8], ["4x2", 8], ["3x4", 12], ["4x3", 12]] as const) {
