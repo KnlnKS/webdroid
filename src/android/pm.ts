@@ -956,9 +956,10 @@ function mkActivityInfo(cls: string, flags: number, owner = currentPackage): JAc
   a.theme = (node && attr(node, "theme")?.data) ?? appHost?.themeResId ?? 0;
   a.configChanges = (node && attr(node, "configChanges")?.data) ?? 0;
   a.screenOrientation = (node && attr(node, "screenOrientation")?.data) ?? -1;
-  a.parentActivityName = node ? attrStr(node, "parentActivityName") : null;
-  const target = node && attrStr(node, "targetActivity");
-  a.targetActivity = target ? qualifyComponent(target, owner?.pkg ?? "") : null;
+  // the package parser stores both as fully qualified class names
+  const qualified = (name: string) => { const cls = node && attrStr(node, name); return cls ? qualifyComponent(cls, owner?.pkg ?? "") : null; };
+  a.parentActivityName = qualified("parentActivityName");
+  a.targetActivity = qualified("targetActivity");
   return a;
 }
 

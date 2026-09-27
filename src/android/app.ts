@@ -26,7 +26,7 @@ import { runningServices, svcStop, svcFg } from "./runningservices";
 import { isMusicActive, outputSampleRate, newAudioSessionId, JSpatializer } from "./media";
 import { device } from "../shell/config";
 import type { JBitmap } from "./graphics";
-import { JConfigurationInfo } from "./pm";
+import { JConfigurationInfo, getPM } from "./pm";
 import { deviceConfiguration } from "./resnative";
 import { transactionCaller } from "./binder";
 import { packages } from "./packages";
@@ -260,6 +260,20 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "onNavigateUpFromChild(Landroid/app/Activity;)Z": function (this: JActivity) {
     return vcall(this, "onNavigateUp", "()Z");
   },
+  // AOSP: the manifest's parentActivityName, as a main-activity intent when that parent has no parent of its own
+  "getParentActivityIntent()Landroid/content/Intent;": driven(function* (this: JActivity): Gen {
+    const pm = getPM(), info = "(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;";
+    const parent: string | null = (yield vcall(pm, "getActivityInfo", info, mkComponentName(this.$host.pkg, jclsNameOf(this)), 0)).parentActivityName;
+    if (!parent) return null;
+    const target = mkComponentName(this.$host.pkg, parent);
+    let grandparent: string | null;
+    try { grandparent = (yield vcall(pm, "getActivityInfo", info, target, 0)).parentActivityName; }
+    catch (error) { if (rt.iof(error, "android/content/pm/PackageManager$NameNotFoundException")) return null; throw error; }
+    if (!grandparent) return vcall(rt.link("android/content/Intent").ctor, "makeMainActivity", "(Landroid/content/ComponentName;)Landroid/content/Intent;", target);
+    const intent: JIntent = rt.make("android/content/Intent");
+    intent.component = target.cls; intent.componentPkg = target.pkg;
+    return intent;
+  }),
   /** AOSP forwards the new Configuration into the window's view hierarchy. */
   "onConfigurationChanged(Landroid/content/res/Configuration;)V": function (this: JActivity, cfg: unknown) {
     return this.window.decor ? dispatchConfigurationChanged(this.window.decor, cfg) : undefined;
