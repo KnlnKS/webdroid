@@ -7,7 +7,34 @@ rt.register({
   name: "android/hardware/camera2/CameraCaptureSession", ctor: class extends JObj {},
   ifaces: ["java/lang/AutoCloseable"], methods: { "<init>()V": function () {} },
 });
-rt.markers("android/hardware/camera2/CameraCharacteristics", "android/hardware/camera2/CaptureResult");
+rt.markers("android/hardware/camera2/CaptureResult");
+// No camera is exposed, so characteristics are never read; their keys still exist as statics that
+// camera libraries collect at class initialization. A key's name is its metadata tag:
+// LENS_INFO_AVAILABLE_FOCAL_LENGTHS is "android.lens.info.availableFocalLengths".
+class JCameraCharacteristicsKey extends JObj { keyName = ""; }
+const keyName = (field: string) => {
+  const [section, ...rest] = field.toLowerCase().split("_");
+  const prefix = rest[0] === "info" ? `${section}.${rest.shift()}` : section;
+  return `android.${prefix}.${rest.map((w, i) => i ? w[0].toUpperCase() + w.slice(1) : w).join("")}`;
+};
+rt.register({
+  name: "android/hardware/camera2/CameraCharacteristics$Key", ctor: JCameraCharacteristicsKey,
+  methods: {
+    "<init>(Ljava/lang/String;Ljava/lang/Class;)V": function (this: JCameraCharacteristicsKey, name: string) { this.keyName = name; },
+    "getName()Ljava/lang/String;": function (this: JCameraCharacteristicsKey) { return this.keyName; },
+    "toString()Ljava/lang/String;": function (this: JCameraCharacteristicsKey) { return `CameraCharacteristics.Key(${this.keyName})`; },
+  },
+});
+rt.register({
+  name: "android/hardware/camera2/CameraCharacteristics", ctor: class extends JObj {},
+  statics: Object.fromEntries(["LENS_FACING", "SENSOR_ORIENTATION", "SCALER_STREAM_CONFIGURATION_MAP", "INFO_SUPPORTED_HARDWARE_LEVEL",
+    "REQUEST_AVAILABLE_CAPABILITIES", "FLASH_INFO_AVAILABLE", "CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES", "CONTROL_AE_AVAILABLE_MODES",
+    "CONTROL_AE_COMPENSATION_RANGE", "CONTROL_AE_COMPENSATION_STEP", "CONTROL_AF_AVAILABLE_MODES", "CONTROL_AWB_AVAILABLE_MODES",
+    "CONTROL_AVAILABLE_SCENE_MODES", "CONTROL_MAX_REGIONS_AE", "CONTROL_MAX_REGIONS_AF", "CONTROL_MAX_REGIONS_AWB", "CONTROL_ZOOM_RATIO_RANGE",
+    "SCALER_AVAILABLE_MAX_DIGITAL_ZOOM", "SENSOR_INFO_ACTIVE_ARRAY_SIZE", "SENSOR_INFO_PHYSICAL_SIZE", "SENSOR_INFO_PIXEL_ARRAY_SIZE",
+    "LENS_INFO_AVAILABLE_FOCAL_LENGTHS", "LENS_INFO_MINIMUM_FOCUS_DISTANCE"]
+    .map((field) => [field, Object.assign(new JCameraCharacteristicsKey(), { keyName: keyName(field) })])),
+});
 rt.register({ name: "android/hardware/camera2/CameraDevice$StateCallback", ctor: class extends JObj {},
   statics: { ERROR_CAMERA_IN_USE: 1, ERROR_MAX_CAMERAS_IN_USE: 2, ERROR_CAMERA_DISABLED: 3, ERROR_CAMERA_DEVICE: 4, ERROR_CAMERA_SERVICE: 5 },
   methods: noops("<init>()V", "onClosed(Landroid/hardware/camera2/CameraDevice;)V"),
