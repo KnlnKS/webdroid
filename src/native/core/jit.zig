@@ -486,6 +486,20 @@ pub fn Emit(comptime wide: bool) type {
             e.b.byte(O.i64_extend_i32_u);
             e.setX(n);
         }
+        /// UMULH/SMULH: the high 64 bits of the 128-bit product, from 32-bit halves (Hacker's Delight mulhu)
+        fn mulHigh(e: *Self, rd: u8, rn: u8, rm: u8, signed: bool) void {
+            const b = e.b;
+            const lo = c64(0xffff_ffff);
+            e.getX(rn);
+            b.set(L_T0);
+            e.getX(rm);
+            b.set(L_T1);
+            b.emit(.{ get(L_T0), c64(32), O.i64_shr_u, get(L_T1), lo, O.i64_and, O.i64_mul, get(L_T0), lo, O.i64_and, get(L_T1), lo, O.i64_and, O.i64_mul, c64(32), O.i64_shr_u, O.i64_add, set(L_T2) });
+            b.emit(.{ get(L_T0), c64(32), O.i64_shr_u, get(L_T1), c64(32), O.i64_shr_u, O.i64_mul, get(L_T2), c64(32), O.i64_shr_u, O.i64_add });
+            b.emit(.{ get(L_T2), lo, O.i64_and, get(L_T0), lo, O.i64_and, get(L_T1), c64(32), O.i64_shr_u, O.i64_mul, O.i64_add, c64(32), O.i64_shr_u, O.i64_add });
+            if (signed) b.emit(.{ get(L_T1), get(L_T0), c64(63), O.i64_shr_s, O.i64_and, O.i64_sub, get(L_T0), get(L_T1), c64(63), O.i64_shr_s, O.i64_and, O.i64_sub });
+            e.setX(rd);
+        }
         pub fn countIc(e: *Self, k: u32) void {
             e.b.emit(.{ get(L_IC), c64(k), O.i64_add, set(L_IC) });
         }
@@ -959,13 +973,33 @@ pub fn Emit(comptime wide: bool) type {
                     const o2 = o.b & 4 != 0;
                     const load = o.b & 2 != 0;
                     const o1 = o.b & 1 != 0;
-                    if (o1 and !o2) {
+                    if (o1 and !o2 and size < 2) {
                         e.fallback(pc, k);
                         return false;
                     }
                     e.getSP(o.rn);
                     e.address();
-                    if (o1) {
+                    if (o1 and !o2) {
+                        // LDXP/STXP: the pair beside the monitor, as the single-register forms
+                        const step: u32 = if (size == 3) 8 else 4;
+                        if (load) {
+                            b.emit(.{ get(L_CPU), c32(1), mo(O.i32_store, OFF_EXCL), get(L_A), mo(LD[size][0], 0) });
+                            e.setX(o.rd);
+                            b.emit(.{ get(L_A), mo(LD[size][0], step) });
+                            e.setX(o.ra);
+                        } else {
+                            e.storeCheck(0, 2 * step);
+                            b.get(L_A);
+                            e.getX(o.rd);
+                            b.memop(ST[size], 0);
+                            b.get(L_A);
+                            e.getX(o.ra);
+                            b.memop(ST[size], step);
+                            b.emit(.{ get(L_CPU), mo(O.i32_load, OFF_EXCL), c32(1), O.i32_xor });
+                            e.setW(o.rm);
+                            b.emit(.{ get(L_CPU), c32(0), mo(O.i32_store, OFF_EXCL) });
+                        }
+                    } else if (o1) {
                         b.emit(.{ get(L_A), mo(LD[size][0], 0), set(L_T0), get(L_T0) });
                         e.getX(o.rm);
                         if (size < 3) b.emit(.{ c64(@bitCast((@as(u64, 1) << (@as(u6, 8) << size)) - 1)), O.i64_and });
@@ -1044,8 +1078,9 @@ pub fn Emit(comptime wide: bool) type {
                         e.getX(o.rm);
                         b.emit(.{ O.i32_wrap_i64, ext, O.i64_mul, if (o0) O.i64_sub else O.i64_add });
                         e.setX(o.rd);
-                    } else e.fallback(pc, k);
+                    } else e.mulHigh(o.rd, o.rn, o.rm, op31 == 2);
                 },
+                .clrex => b.emit(.{ get(L_CPU), c32(0), mo(O.i32_store, OFF_EXCL) }),
                 .simd => jitfp.emitSimd(e, @truncate(o.imm), pc, k),
                 .vmem => jitmem.emitVmem(e, @truncate(o.imm), pc, k),
                 .vldrlit => jitmem.emitVldrlit(e, o),

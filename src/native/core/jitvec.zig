@@ -436,6 +436,42 @@ inline fn emitTwoRegister(e: *Emit, w: u32) bool {
         vput(e, rd, q);
         return true;
     }
+    if (opcode == 22 and !U and size == 1) {
+        b.get(L_CPU);
+        vget(e, rn);
+        b.emit(.{sv(S.f32x4_demote_f64x2_zero)});
+        if (q) {
+            var lanes: [16]u8 = undefined;
+            for (0..16) |i| lanes[i] = @intCast(if (i < 8) 16 + i else i - 8);
+            vget(e, rd);
+            b.emit(.{sv(S.shuffle)});
+            b.bytes(&lanes);
+        }
+        vput(e, rd, q);
+        return true;
+    }
+    // FCMGT/FCMGE, FCMEQ/FCMLE and FCMLT against zero
+    if (opcode >= 12 and opcode <= 14 and fv and !(opcode == 14 and U) and (q or !dp)) {
+        const zero_first = opcode == 14 or (opcode == 13 and U);
+        b.get(L_CPU);
+        if (zero_first) vectorConst(e, 0, 0);
+        vget(e, rn);
+        if (!zero_first) vectorConst(e, 0, 0);
+        b.emit(.{sv(if (opcode == 13 and !U) S.feq[f] else if (opcode == 14 or !U) S.fgt[f] else S.fge[f])});
+        vput(e, rd, q);
+        return true;
+    }
+    // SCVTF/UCVTF on 64-bit lanes, which wasm only converts a lane at a time
+    if (opcode == 29 and !fv and dp and q) {
+        const cvt: u8 = if (U) O.f64_convert_i64_u else O.f64_convert_i64_s;
+        b.get(L_CPU);
+        vget(e, rn);
+        b.emit(.{ sv(S.extract_s[3]), @as(u8, 0), cvt, sv(S.fsplat[1]) });
+        vget(e, rn);
+        b.emit(.{ sv(S.extract_s[3]), @as(u8, 1), cvt, sv(S.freplace[1]), @as(u8, 1) });
+        vput(e, rd, true);
+        return true;
+    }
     if (opcode >= 22 or (opcode >= 12 and opcode <= 15 and fv)) {
         const op: u8 = switch (opcode) {
             15 => if (fv) (if (U) S.fneg[f] else S.fabs[f]) else return false,
@@ -482,19 +518,6 @@ inline fn emitTwoRegister(e: *Emit, w: u32) bool {
     if (opcode == 18 and !U and size != 3) {
         for (0..16) |i| lanes[i] = @intCast(if (i < 8) (if (q) 16 + i else narrowByte(i, es)) else if (q) narrowByte(i - 8, es) else 0);
         shuffle(e, rn, rd, &lanes);
-        vput(e, rd, q);
-        return true;
-    }
-    if (opcode == 22 and !U and size == 1) {
-        b.get(L_CPU);
-        vget(e, rn);
-        b.emit(.{sv(S.f32x4_demote_f64x2_zero)});
-        if (q) {
-            for (0..16) |i| lanes[i] = @intCast(if (i < 8) 16 + i else i - 8);
-            vget(e, rd);
-            b.emit(.{sv(S.shuffle)});
-            b.bytes(&lanes);
-        }
         vput(e, rd, q);
         return true;
     }

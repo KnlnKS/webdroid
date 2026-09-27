@@ -321,6 +321,35 @@ describe("a64 simd: immediates, copies, permutes and bitwise ops", () => {
 });
 
 describe("a64 simd: vector arithmetic", () => {
+  test("float compares against zero, 64-bit lane conversions and narrowing", () => {
+    const c = run([
+      0x0ea0c820,   // fcmgt v0.2s, v1.2s, #0.0
+      0x6ea0c822,   // fcmge v2.4s, v1.4s, #0.0
+      0x4ee0d883,   // fcmeq v3.2d, v4.2d, #0.0
+      0x6ea0d825,   // fcmle v5.4s, v1.4s, #0.0
+      0x4ee0e886,   // fcmlt v6.2d, v4.2d, #0.0
+      0x4e61d907,   // scvtf v7.2d, v8.2d
+      0x6e61d909,   // ucvtf v9.2d, v8.2d
+      0x0e61688a,   // fcvtn v10.2s, v4.2d
+      0x4e61696a,   // fcvtn2 v10.4s, v11.2d
+      RET], (cpu) => {
+      cpu.si.fill(-1, 0, 128);
+      new Float32Array(cpu.si.buffer, cpu.si.byteOffset, 128).set([1.5, -0, NaN, -2], 4);
+      const d = new Float64Array(cpu.si.buffer, cpu.si.byteOffset, 64);
+      d.set([-0, -3.25], 8);
+      d.set([1e40, 0.1], 22);
+      cpu.si.set([-5, -1, 7, 0x40000000], 32);
+    });
+    const f = new Float32Array(c.si.buffer, c.si.byteOffset, 128), d = new Float64Array(c.si.buffer, c.si.byteOffset, 64);
+    expect(I(c, 0)).toEqual([-1, 0, 0, 0]);
+    expect(I(c, 2)).toEqual([-1, -1, 0, 0]);
+    expect(I(c, 3)).toEqual([-1, -1, 0, 0]);
+    expect(I(c, 5)).toEqual([0, -1, 0, -1]);
+    expect(I(c, 6)).toEqual([0, 0, -1, -1]);
+    expect([d[14], d[15], d[18], d[19]]).toEqual([-5, 2 ** 62 + 7, 2 ** 64 - 5, 2 ** 62 + 7]);
+    expect([...f.subarray(40, 44)]).toEqual([-0, -3.25, Infinity, Math.fround(0.1)]);
+  });
+
   test("a scalar B/H result owns its whole word: nothing of the old lane survives", () => {
     const c = run([
       0x9e670000,   // fmov d0, x0              (x0 = 0x10000)
