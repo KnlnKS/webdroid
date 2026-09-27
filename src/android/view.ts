@@ -102,7 +102,7 @@ const focusChange = driven(function* focusChange(v: JView, focused: boolean): Ge
 const takeFocus = driven(function* takeFocus(v: JView): Gen {
   if (!v.enabled || !v.focusable) return 0;
   if (v.focused) return 1;
-  const old = findByPred(rootOf(v),(candidate) => candidate !== v && candidate.focused);
+  const old = findByPred(rootOf(v), (candidate) => candidate !== v && candidate.focused);
   if (old) yield focusChange(old, false);
   yield focusChange(v, true);
   focusMoved(v, v);
@@ -113,11 +113,11 @@ const clearFocus = driven(function* clearFocus(v: JView): Gen {
   yield focusChange(v, false);
   focusMoved(v, null);
 });
-/** AOSP reports every focus transition to the root's observer; the tree-walk only runs when someone listens */
 export function rootOf(v: JView): JView {
   while (v.parent) v = v.parent;
   return v;
 }
+/** AOSP reports every focus transition to the root's observer; the tree-walk only runs when someone listens */
 function focusMoved(v: JView, now: JView | null) {
   const o = vtoMap.get(rootOf(v));
   if (!o || !o.focusLs.length) return;
@@ -149,8 +149,6 @@ export function requestLayout(v: JView) {
     if (f && f !== nativeRequestLayout) { void guardApply(f as JMethod, par); break; }
   }
 }
-/** A configuration change (orientation, night mode, a relaunch), like boot, leaves every cached
- *  measurement stale, and no single view names that: the next pass re-measures every window. */
 /** A window's token is a Binder (ViewRootImpl's W): apps hand it across IPC, to Play Games for one */
 const windowTokens = new WeakMap<JView, JObj>();
 function windowToken(view: JView): JObj {
@@ -159,6 +157,8 @@ function windowToken(view: JView): JObj {
   if (!token) windowTokens.set(root, token = rt.make("android/os/Binder") as JObj);
   return token;
 }
+/** A configuration change (orientation, night mode, a relaunch), like boot, leaves every cached
+ *  measurement stale, and no single view names that: the next pass re-measures every window. */
 export function requestLayoutAll() {
   uiState.needsLayout = true; uiState.needsDraw = true; uiState.forceAll = true;
   perf.layoutRequestsAll++;
