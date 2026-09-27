@@ -126,22 +126,45 @@ const rectMethods = (F: boolean): NativeSpec["methods"] => ({
     "exactCenterY()F": function (this: JRect) { return (this.top + this.bottom) * 0.5; },
   }),
 });
+/** Rect, RectF, Point and PointF parcel their coordinates as ints or floats, in field order */
+function parcelGeometry(name: string, fields: string[], float: boolean) {
+  const type = float ? "Float" : "Int", desc = float ? "F" : "I";
+  const read = driven(function* readGeometry(o: Record<string, unknown>, p: JParcel): Gen {
+    for (const f of fields) o[f] = yield vcall(p, `read${type}`, `()${desc}`);
+    return o;
+  });
+  return {
+    statics: { get CREATOR() { return parcelCreator(name, (p) => read(rt.make(name) as JObj & Record<string, unknown>, p)); } },
+    methods: {
+      "describeContents()I": () => 0,
+      "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: Record<string, unknown>, p: JParcel): Gen {
+        for (const f of fields) yield vcall(p, `write${type}`, `(${desc})V`, this[f]);
+      }),
+      "readFromParcel(Landroid/os/Parcel;)V": function (this: Record<string, unknown>, p: JParcel) { return read(this, p); },
+    } as NativeSpec["methods"],
+  };
+}
+const RECT_FIELDS = ["left", "top", "right", "bottom"], POINT_FIELDS = ["x", "y"];
+const rectParcel = parcelGeometry("android/graphics/Rect", RECT_FIELDS, false);
 rt.register({
   name: "android/graphics/Rect", ctor: JRect, ifaces: ["android/os/Parcelable"],
-  fields: ["left", "top", "right", "bottom"],
-  methods: rectMethods(false),
+  fields: RECT_FIELDS, statics: rectParcel.statics,
+  methods: { ...rectMethods(false), ...rectParcel.methods },
 });
 export class JRectF extends JRect {}
+const rectFParcel = parcelGeometry("android/graphics/RectF", RECT_FIELDS, true);
 rt.register({
   name: "android/graphics/RectF", ctor: JRectF, ifaces: ["android/os/Parcelable"],
-  fields: ["left", "top", "right", "bottom"],
-  methods: rectMethods(true),
+  fields: RECT_FIELDS, statics: rectFParcel.statics,
+  methods: { ...rectMethods(true), ...rectFParcel.methods },
 });
 export class JPoint extends JObj { x = 0; y = 0; }
+const pointParcel = parcelGeometry("android/graphics/Point", POINT_FIELDS, false);
 rt.register({
-  name: "android/graphics/Point", ctor: JPoint,
-  fields: ["x", "y"],
+  name: "android/graphics/Point", ctor: JPoint, ifaces: ["android/os/Parcelable"],
+  fields: POINT_FIELDS, statics: pointParcel.statics,
   methods: {
+    ...pointParcel.methods,
     "offset(II)V": function (this: JPoint, dx: number, dy: number) { this.x += dx; this.y += dy; },
     "negate()V": function (this: JPoint) { this.x = -this.x; this.y = -this.y; },
     "<init>()V": function () {},
@@ -150,10 +173,12 @@ rt.register({
     "equals(Ljava/lang/Object;)Z": function (this: JPoint, o: unknown) { return o instanceof JPoint && o.x === this.x && o.y === this.y ? 1 : 0; },
   },
 });
+const pointFParcel = parcelGeometry("android/graphics/PointF", POINT_FIELDS, true);
 rt.register({
-  name: "android/graphics/PointF", ctor: class extends JPoint {},
-  fields: ["x", "y"],
+  name: "android/graphics/PointF", ctor: class extends JPoint {}, ifaces: ["android/os/Parcelable"],
+  fields: POINT_FIELDS, statics: pointFParcel.statics,
   methods: {
+    ...pointFParcel.methods,
     "<init>()V": function () {},
     "<init>(FF)V": function (this: JPoint, x: number, y: number) { this.x = x; this.y = y; },
     "<init>(Landroid/graphics/Point;)V": function (this: JPoint, p: JPoint) { this.x = p.x; this.y = p.y; },
