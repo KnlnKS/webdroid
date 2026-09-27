@@ -198,6 +198,29 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   pages invalidate decoded instructions and regions; install regions only
   against the source-page epoch. A region discovery budget once let a branch
   enter with stale carry and broke Lichess P-384 TLS only under JIT.
+- A signal handler's ucontext is loaded back inside `Cpu.call`, before the
+  interrupted frame or another signal can run. Loading it after the call
+  returned let a frame whose host call had completed meanwhile run a slice,
+  then lose its registers, sp and pc to the signal-time snapshot. Boehm GC's
+  suspend/restart signals (30/24) hit this constantly in Unity, crashing Among
+  Us at random native sites; `?jit=0` was too slow (about 4M instr/s) to
+  compare, and a tripwire on nested frames found it.
+- JIT regions branch forward with a direct `br` to the later block's nested
+  label; only backward transfers use the dispatch loop and check the budget.
+  Region code keeps x registers in locals but reloads and spills them at every
+  entry and exit; in Among Us Skeld practice that is about 13.8M entries/s at
+  26 guest instructions each, and a region never spans a guest page, so calls
+  to other pages always exit. A `fallback` spills, runs one instruction in the
+  interpreter and reloads: counting them by word found FMOD's Vorbis loop and
+  Unity at 774k/s (FP compares with zero, 64-bit lane SCVTF, FCVTN/FCVTN2
+  whose emitter an `opcode >= 22` branch shadowed, CLREX, exclusive pairs,
+  UMULH). Compiling those left 71k/s of scalar SIMD forms. About a third of
+  guest instructions access memory, and 37% of those take the plane
+  translation for mappings above 4 GiB (Unity and Boehm heaps).
+- Rejected JIT experiments: treating flags as dead at A64 call/return exits
+  (AAPCS64) changed no saturated frame rate beyond noise and breaks the tests'
+  interpreter-equality contract at `ret`; routing scalar FP through the
+  cached v128 locals measured within the ±5% noise of the game benchmark.
 - Host calls exit `run_slice`; preserve guest frames, signal masks and
   callbacks. Joinable pthread handles remain allocated until join/detach:
   freeing one at thread exit let another thread reuse its address and made
@@ -263,9 +286,25 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   zero code near `0x10004d20` recurred. Page flags alone do not prove it was
   once mapped; tracing changed the reproduction. A range bisection or causal
   memory-lifetime trace is still needed.
-- **Original game paths:** Among Us reached a deployed practice scene with
-  joystick movement and a local/Bun public lobby; account login and a full
-  online match remain open. Subway Surfers reached an active deployed run after
+- **Original game paths:** Among Us completed a live online Airship match
+  through the Bun UDP relay: lobby, impostor role, movement, victory screen,
+  XP, beans and EOS stat ingestion. Practice meetings, voting and chat through
+  Unity's input overlay work. A first Skeld match start instead ended with
+  "Reached timeout while loading game client" and a disconnect: the host
+  waits a bounded time for clients to load the map, and a cold Skeld load
+  takes about 6.4 s here. Unity rendered at 375×188: `eglQuerySurface`
+  ignored `ANativeWindow_setBuffersGeometry`, so Unity fell back to a blit,
+  and `ANativeWindow_getWidth` returned the geometry it had just set where
+  Android answers the consumer's default size, applying the DPI scale twice.
+  It now renders at 900×450, as the API-33 emulator does at 1080×2160@480.
+  The game sets `vSyncCount = 0` and `targetFrameRate = 30` unconditionally
+  (libil2cpp +0x2149dcc) and presents every 33.35 ms on the emulator; webdroid
+  holds 30/s with about 30% idle in Skeld practice and 10% in a 15-player
+  Airship lobby. Raising the target to 60 in memory, as a capacity probe only,
+  gave 49–51/s in practice and 60/s in a small lobby. FMOD's stream thread
+  decodes about 740 Vorbis packets/s in practice (~15 looping ambient streams,
+  volumes set 441 times/s), about as many guest instructions as UnityMain;
+  whether the device virtualizes those voices is unverified. Subway Surfers reached an active deployed run after
   implementing inotify for Firebase's watcher path; background Firebase
   initialization still throws. Doodle Jump's warmed title presented about
   40/s on SwiftShader and 60/s on Apple M4 Pro at matching geometry. The
