@@ -18,7 +18,6 @@ export const ST = {
   focused: 0x0101009c, activated: 0x010102fe, window_focused: 0x0101009d, checkable: 0x0101009f,
   hovered: 0x01010367, last: 0x010100a6, expanded: 0x010100a8, empty: 0x010100a9,
 };
-const ST_IDS = new Set(Object.values(ST));
 
 export class JDrawable extends JObj {
   bounds = new JRect();
@@ -1695,12 +1694,11 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
         if (c.name !== "item") continue;
         const states: number[] = [], neg: number[] = [];
         let child: JDrawable | null = null;
+        // StateListDrawable.extractStateSet: every attribute but drawable and id is a state,
+        // an app's own (Material's state_indeterminate) as much as the framework's
         for (const a of c.attrs) {
-          if (ST_IDS.has(a.resId)) {
-            (a.data ? states : neg).push(a.resId);
-          } else if (a.resId === AT.drawable) {
-            child = yield loadDrawableRV(res, attrRV(res, a), theme);
-          }
+          if (a.resId === AT.drawable) child = yield loadDrawableRV(res, attrRV(res, a), theme);
+          else if (a.resId && a.resId !== AT.id) (a.data ? states : neg).push(a.resId);
         }
         if (!child && c.children.length) child = yield inflateDrawableNode(res, c.children[0], theme);
         if (child) d.items.push({ states, negStates: neg, d: child });
@@ -1969,18 +1967,19 @@ function parseCslXml(res: Resources, bytes: Uint8Array, theme: JTheme | null, de
     if (c.name !== "item") continue;
     const states: number[] = [], neg: number[] = [];
     let color = -16777216, alphaMul = 1;
+    // ColorStateList.inflate: color, alpha and lStar are the item's values, anything else a state
     for (const a of c.attrs) {
-      if (ST_IDS.has(a.resId)) (a.data ? states : neg).push(a.resId);
-      else if (a.resId === AT.color) {
+      if (a.name === "lStar" || !a.resId) continue;
+      if (a.resId === AT.color) {
         let v: RV | null = attrRV(res, a);
         if (v.t === TV.ATTRIBUTE) v = theme?.lookup(v.d) ?? null;
         if (v && v.t === TV.REFERENCE) v = res.resolveRefs(v);
         // TypedArray.getColor on a nested selector answers with its default colour
         const nested = v?.t === TV.REFERENCE && v.s?.endsWith(".xml") && depth < 8 ? res.fileOf(v.d) : null;
         color = nested ? parseCslXml(res, nested.bytes, theme, depth + 1).defColor : rvColor(res, v, -16777216);
-      } else if (a.resId === AT.alpha) {
+      } else if (a.resId === AT.alpha || a.name === "alpha") {
         alphaMul = Math.max(0, Math.min(1, rvFloat(res, resolveStyleValue(res, theme, attrRV(res, a)), 1)));
-      }
+      } else (a.data ? states : neg).push(a.resId);
     }
     if (alphaMul < 1) color = (Math.round((color >>> 24) * alphaMul) << 24 | (color & 0xffffff)) | 0;
     csl.items.push({ states, negStates: neg, color });
