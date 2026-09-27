@@ -12,7 +12,8 @@ import { fontResource } from "./fonts";
 import { device } from "../shell/config";
 import { formatDate } from "../jvm/natives/jtext";
 import { toJsArray } from "../jvm/natives/jutil";
-import { localeDirection } from "../jvm/natives/jvalues";
+import { localeDirection, localeTag } from "../jvm/natives/jvalues";
+import { bestDateTimePattern } from "./icu";
 import { JPersistableBundle, bundleBox } from "./os";
 import { JLocaleList, readLocaleList } from "./resnative";
 import type { JLocale } from "../jvm/natives/jvalues";
@@ -1564,6 +1565,8 @@ rt.register({
   name: "android/text/format/DateFormat", ctor: class extends JObj {},
   methods: {
     "static is24HourFormat(Landroid/content/Context;)Z": () => 0,
+    "static getBestDateTimePattern(Ljava/util/Locale;Ljava/lang/String;)Ljava/lang/String;": (locale: JLocale, skeleton: string) =>
+      bestDateTimePattern(localeTag(locale), skeleton),
     "static getDateFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "M/d/yy"),
     "static getTimeFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "h:mm a"),
     "static format(Ljava/lang/CharSequence;J)Ljava/lang/CharSequence;": (fmt: unknown, t: bigint) => formatDate(spannedString(fmt), Number(t)),
