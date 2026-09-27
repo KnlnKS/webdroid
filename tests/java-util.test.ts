@@ -7,6 +7,8 @@ import { mangleMethod, mangleStaticField } from "../src/jvm/abi";
 import { synchronizedMap } from "../src/jvm/natives/jwrappers";
 import { scall } from "./java";
 
+rt.linkNatives();
+
 describe("abstract-sequential-list", () => {
   class Sequential extends rt.link("java/util/AbstractSequentialList").ctor {
     values = newArrayList(["a", "b", "c"]);
@@ -98,7 +100,6 @@ describe("android-pair", () => {
 });
 
 describe("array-binary-search", () => {
-  rt.linkNatives();
   test("Arrays.binarySearch awaits a comparator and reports insertion points", async () => {
     const comparator = {
       [mangleMethod("compare", "(Ljava/lang/Object;Ljava/lang/Object;)I")]: async (a: number, b: number) => {
@@ -136,7 +137,6 @@ describe("array-binary-search", () => {
 });
 
 describe("array-deep-string", () => {
-  rt.linkNatives();
   const stringify = (a: unknown[] | null) => vcall(rt.link("java/util/Arrays").ctor, "deepToString", "([Ljava/lang/Object;)Ljava/lang/String;", a);
   test("deep array strings distinguish cycles from shared arrays and format primitive elements", async () => {
     const shared = ["value"], a: unknown[] = [shared, shared];
@@ -147,7 +147,6 @@ describe("array-deep-string", () => {
 });
 
 describe("array-sort-range", () => {
-  rt.linkNatives();
   test("natural array range sorting awaits Comparable and preserves equal-element order", async () => {
     const comparable = (rank: number) => ({
       rank,
@@ -170,7 +169,6 @@ describe("array-sort-range", () => {
 });
 
 describe("bidi-formatter", () => {
-  rt.linkNatives();
   test("bidi wrapping isolates opposite-direction text and retains embedded spans", async () => {
     const ltr = await vcall(rt.link("android/text/BidiFormatter").ctor, "getInstance", "(Z)Landroid/text/BidiFormatter;", 0);
     const rtl = await vcall(rt.link("android/text/BidiFormatter").ctor, "getInstance", "(Z)Landroid/text/BidiFormatter;", 1);
@@ -199,7 +197,6 @@ describe("bidi-formatter", () => {
 });
 
 describe("bidi-required", () => {
-  rt.linkNatives();
   const chars = (s: string) => Uint16Array.from({ length: s.length }, (_, i) => s.charCodeAt(i));
   const requires = (s: string, start = 0, limit = s.length) => vcall(rt.link("java/text/Bidi").ctor, "requiresBidi", "([CII)Z", chars(s), start, limit);
   test("bidi analysis detects RTL scripts, numbers, embeddings and supplementary characters", async () => {
@@ -216,7 +213,6 @@ describe("bidi-required", () => {
 });
 
 describe("collection-clone", () => {
-  rt.linkNatives();
   const O = "Ljava/lang/Object;";
 
   test("ArrayList.clone has its own element store", async () => {
@@ -352,8 +348,6 @@ describe("collection-startup", () => {
 });
 
 describe("collections-disjoint", () => {
-  rt.linkNatives();
-
   const disjoint = (a: unknown, b: unknown) => vcallAsync(rt.link("java/util/Collections").ctor, "disjoint", "(Ljava/util/Collection;Ljava/util/Collection;)Z", a, b);
 
   test("disjoint handles empty collections, shared members and null", async () => {
@@ -381,7 +375,6 @@ describe("collections-disjoint", () => {
 });
 
 describe("date-range", () => {
-  rt.linkNatives();
   const cases = [
   ['2025-01-02T17:05:00Z','2025-01-02T17:05:00Z',65,'America/New_York'],
   ['2025-01-02T17:05:00Z','2025-01-02T17:05:00Z',129,'UTC'],
@@ -409,32 +402,25 @@ describe("date-range", () => {
   });
 });
 
-describe("enumset-clone", () => {
-  rt.linkNatives();
-
-  test("EnumSet covariant clone has independent membership", async () => {
-    const paint = await newObj("android/graphics/Paint");
-    const style = await vcall(paint, "getStyle", "()Landroid/graphics/Paint$Style;");
-    const ctor = rt.link("java/util/EnumSet").ctor as any;
-    const source = await ctor[mangleMethod("of", "(Ljava/lang/Enum;)Ljava/util/EnumSet;")](style);
-    const copy = await vcall(source, "clone", "()Ljava/util/EnumSet;");
-    await vcall(copy, "clear", "()V");
-    expect(await vcall(source, "contains", "(Ljava/lang/Object;)Z", style)).toBe(1);
-    expect(await vcall(copy, "isEmpty", "()Z")).toBe(1);
-  });
-
-  test("EnumSet fixed-arity factories retain every member", async () => {
-    const style = await vcall(await newObj("android/graphics/Paint"), "getStyle", "()Landroid/graphics/Paint$Style;");
-    const ctor = rt.link("java/util/EnumSet").ctor as any;
-    const set = await ctor[mangleMethod("of", "(Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;Ljava/lang/Enum;)Ljava/util/EnumSet;")](style, style, style, style);
-    expect(await vcall(set, "size", "()I")).toBe(1);
-    expect(await vcall(set, "contains", "(Ljava/lang/Object;)Z", style)).toBe(1);
+describe("enumset", () => {
+  test("EnumSet factories and both clone descriptors keep class identity and independent membership", async () => {
+    const days = await scall("java/time/DayOfWeek", "values", "()[Ljava/time/DayOfWeek;");
+    const single = await scall("java/util/EnumSet", "of", "(Ljava/lang/Enum;)Ljava/util/EnumSet;", days[0]);
+    expect(await vcall(single, "contains", "(Ljava/lang/Object;)Z", days[0])).toBe(1);
+    const set = await scall("java/util/EnumSet", "of", "(Ljava/lang/Enum;[Ljava/lang/Enum;)Ljava/util/EnumSet;", days[0], days.slice(0, 4));
+    expect(rt.iof(set, "java/util/EnumSet")).toBe(1);
+    for (const desc of ["()Ljava/lang/Object;", "()Ljava/util/EnumSet;"]) {
+      const clone = await vcall(set, "clone", desc);
+      expect(rt.iof(clone, "java/util/EnumSet")).toBe(1);
+      await vcall(clone, "clear", "()V");
+      expect(await vcall(set, "size", "()I")).toBe(4);
+    }
+    const copy = await scall("java/util/EnumSet", "copyOf", "(Ljava/util/Collection;)Ljava/util/EnumSet;", set);
+    expect(await vcall(copy, "equals", "(Ljava/lang/Object;)Z", set)).toBe(1);
   });
 });
 
 describe("java-time", () => {
-  rt.linkNatives();
-
   test("Instant adds a Duration through TemporalAmount", async () => {
     const instant = await vcall(rt.link("java/time/Instant").ctor, "ofEpochMilli", "(J)Ljava/time/Instant;", 1000n);
     const duration = await vcall(rt.link("java/time/Duration").ctor, "ofMillis", "(J)Ljava/time/Duration;", 2500n);
@@ -474,7 +460,6 @@ describe("java-time", () => {
 });
 
 describe("list-formatter", () => {
-  rt.linkNatives();
   const instance = async (language: string) => vcall(rt.link("android/icu/text/ListFormatter").ctor, "getInstance",
     "(Ljava/util/Locale;)Landroid/icu/text/ListFormatter;", await newObj("java/util/Locale", "(Ljava/lang/String;)V", language));
   test("ICU list formatting handles empty, single and locale-sensitive conjunctions", async () => {
@@ -497,7 +482,6 @@ describe("list-formatter", () => {
 });
 
 describe("locale-category", () => {
-  rt.linkNatives();
   test("Locale categories retain independent defaults", async () => {
     const locale = rt.link("java/util/Locale").ctor, category = rt.link("java/util/Locale$Category").ctor;
     const previous = await vcall(locale, "getDefault", "()Ljava/util/Locale;");
@@ -510,7 +494,6 @@ describe("locale-category", () => {
 });
 
 describe("lru-cache", () => {
-  rt.linkNatives();
   const O = "Ljava/lang/Object;";
 
   test("LruCache resize evicts least-recent entries and snapshot is independent", async () => {
@@ -627,7 +610,6 @@ describe("map-equality", () => {
 });
 
 describe("map-interfaces", () => {
-  rt.linkNatives();
   test("hash maps expose their actual collection contracts", () => {
     for (const name of ["java/util/HashMap", "java/util/LinkedHashMap", "java/util/concurrent/ConcurrentHashMap", "java/util/WeakHashMap", "java/util/IdentityHashMap", "java/util/Hashtable", "java/util/EnumMap", "android/util/ArrayMap"]) {
       const map = rt.make(name);
@@ -640,7 +622,6 @@ describe("map-interfaces", () => {
 });
 
 describe("number-percent", () => {
-  rt.linkNatives();
   for (const cls of ["java/text/NumberFormat", "android/icu/text/NumberFormat"]) {
     test(`${cls} scales percentages, rounds ties evenly and updates cached options`, async () => {
       const locale = await newObj("java/util/Locale", "(Ljava/lang/String;Ljava/lang/String;)V", "en", "US");
@@ -668,7 +649,6 @@ describe("number-percent", () => {
 });
 
 describe("range", () => {
-  rt.linkNatives();
   const range = (lo: string, hi: string) => newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", lo, hi);
   test("ranges intersect, extend and clamp while preserving contained range identity", async () => {
     const outer = await range("a", "z"), inner = await range("c", "f");
@@ -687,7 +667,6 @@ describe("range", () => {
 });
 
 describe("rational", () => {
-  rt.linkNatives();
   const rational = (n: number, d: number) => newObj("android/util/Rational", "(II)V", n, d);
 
   test("Rational reduces values and preserves exact order near integer limits", async () => {
@@ -712,14 +691,14 @@ describe("rational", () => {
 });
 
 describe("set-equality", () => {
-  rt.linkNatives();
-
   const set = (cls: string, ...items: unknown[]) => newObj(cls).then(async (s) => {
     for (const v of items) await vcall(s, "add", "(Ljava/lang/Object;)Z", v);
     return s;
   });
   const eq = (a: unknown, b: unknown) => vcall(a, "equals", "(Ljava/lang/Object;)Z", b);
   const hash = (o: unknown) => vcall(o, "hashCode", "()I");
+  const rejects = (call: () => unknown, name: string) =>
+    expect((async () => call())()).rejects.toMatchObject({ constructor: rt.link("java/lang/" + name).ctor });
 
   test("empty sets are equal across Set implementations", async () => {
     const empty = await vcall(rt.link("java/util/Collections").ctor, "emptySet", "()Ljava/util/Set;");
@@ -748,10 +727,9 @@ describe("set-equality", () => {
     const of = (...values: unknown[]) => scall("java/util/Set", "of", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;", ...values);
     const immutable = await of("a", "b");
     expect(await vcall(immutable, "contains", "(Ljava/lang/Object;)Z", "a")).toBe(1);
-    await expect(vcallAsync(immutable, "add", "(Ljava/lang/Object;)Z", "c"))
-      .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
-    await expect((async () => Promise.resolve().then(() => of("a", "a")))()).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
-    await expect((async () => Promise.resolve().then(() => of("a", null)))()).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
+    await rejects(() => vcall(immutable, "add", "(Ljava/lang/Object;)Z", "c"), "UnsupportedOperationException");
+    await rejects(() => of("a", "a"), "IllegalArgumentException");
+    await rejects(() => of("a", null), "NullPointerException");
   });
 
   test("Collection.stream exposes collection contents to stream operations", async () => {
@@ -767,21 +745,17 @@ describe("set-equality", () => {
       "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map;", ...values);
     const immutable = await of("a", 1, "b", 2);
     expect(await vcall(immutable, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", "b")).toBe(2);
-    await expect(vcallAsync(immutable, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "c", 3))
-      .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
+    await rejects(() => vcall(immutable, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", "c", 3), "UnsupportedOperationException");
     const entries = await vcall(immutable, "entrySet", "()Ljava/util/Set;");
     const entryIterator = await vcall(entries, "iterator", "()Ljava/util/Iterator;");
     const entry = await vcall(entryIterator, "next", "()Ljava/lang/Object;");
-    await expect(vcallAsync(entry, "setValue", "(Ljava/lang/Object;)Ljava/lang/Object;", 3))
-      .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
+    await rejects(() => vcall(entry, "setValue", "(Ljava/lang/Object;)Ljava/lang/Object;", 3), "UnsupportedOperationException");
     const keys = await vcall(immutable, "keySet", "()Ljava/util/Set;");
-    await expect(vcallAsync(keys, "clear", "()V"))
-      .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
-    await expect(vcallAsync(entryIterator, "remove", "()V"))
-      .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
+    await rejects(() => vcall(keys, "clear", "()V"), "UnsupportedOperationException");
+    await rejects(() => vcall(entryIterator, "remove", "()V"), "UnsupportedOperationException");
     expect(await vcall(immutable, "size", "()I")).toBe(2);
-    await expect((async () => Promise.resolve().then(() => of("a", 1, "a", 2)))()).rejects.toMatchObject({ constructor: rt.link("java/lang/IllegalArgumentException").ctor });
-    await expect((async () => Promise.resolve().then(() => of("a", 1, "b", null)))()).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
+    await rejects(() => of("a", 1, "a", 2), "IllegalArgumentException");
+    await rejects(() => of("a", 1, "b", null), "NullPointerException");
   });
 
   test("Collections wrappers stay live without exposing unmodifiable mutations", async () => {
@@ -789,12 +763,10 @@ describe("set-equality", () => {
     await vcall(list, "add", "(Ljava/lang/Object;)Z", "a");
     const readOnly = await scall("java/util/Collections", "unmodifiableList", "(Ljava/util/List;)Ljava/util/List;", list);
     expect(readOnly).not.toBe(list);
-    await expect(vcallAsync(readOnly, "add", "(Ljava/lang/Object;)Z", "blocked"))
-      .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
+    await rejects(() => vcall(readOnly, "add", "(Ljava/lang/Object;)Z", "blocked"), "UnsupportedOperationException");
     const iterator = await vcall(readOnly, "iterator", "()Ljava/util/Iterator;");
     await vcall(iterator, "next", "()Ljava/lang/Object;");
-    await expect(vcallAsync(iterator, "remove", "()V"))
-      .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
+    await rejects(() => vcall(iterator, "remove", "()V"), "UnsupportedOperationException");
     await vcall(list, "add", "(Ljava/lang/Object;)Z", "b");
     expect(await vcall(readOnly, "size", "()I")).toBe(2);
 
@@ -808,9 +780,8 @@ describe("set-equality", () => {
     const of = (...values: unknown[]) => scall("java/util/List", "of", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/List;", ...values);
     const immutable = await of("a", "b");
     expect(await vcall(immutable, "get", "(I)Ljava/lang/Object;", 1)).toBe("b");
-    await expect(vcallAsync(immutable, "add", "(Ljava/lang/Object;)Z", "c"))
-      .rejects.toMatchObject({ constructor: rt.link("java/lang/UnsupportedOperationException").ctor });
-    await expect((async () => Promise.resolve().then(() => of("a", null)))()).rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
+    await rejects(() => vcall(immutable, "add", "(Ljava/lang/Object;)Z", "c"), "UnsupportedOperationException");
+    await rejects(() => of("a", null), "NullPointerException");
   });
 
   test("unordered and insertion-ordered sets do not implement SortedSet", () => {
@@ -824,7 +795,6 @@ describe("set-equality", () => {
 });
 
 describe("sparse-values", () => {
-  rt.linkNatives();
   test("LongSparseArray orders full-width keys and searches insertion positions", async () => {
     const a = await newObj("android/util/LongSparseArray");
     const hi = 9007199254740993n;

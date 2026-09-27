@@ -8,6 +8,8 @@ import { JObj, rt } from "../src/jvm/runtime";
 import { JSpanned, csText } from "../src/android/text";
 import { scall } from "./java";
 
+rt.linkNatives();
+
 describe("annotation-enum-init", () => {
   test("explicit enum annotation elements wait for class initialization", async () => {
     const modeName = "test/DeferredAnnotationMode";
@@ -78,7 +80,6 @@ describe("annotation-enum-init", () => {
 });
 
 describe("assertion-error", () => {
-  rt.linkNatives();
   test("AssertionError retains a throwable detail as its cause", async () => {
     const detail = rt.mkThrowable("java/lang/IllegalStateException", "failure");
     const error = rt.make("java/lang/AssertionError");
@@ -89,8 +90,6 @@ describe("assertion-error", () => {
 });
 
 describe("base64", () => {
-  rt.linkNatives();
-
   test("Base64 encoding preserves signed bytes, slices, padding and 76-character line boundaries", () => {
     const ctor = rt.link("android/util/Base64").ctor;
     const encode = Reflect.get(ctor, mangleMethod("encode", "([BIII)[B"));
@@ -111,7 +110,6 @@ describe("base64", () => {
 });
 
 describe("character-offset", () => {
-  rt.linkNatives();
   test("character categories preserve Java category numbers and supplementary characters", async () => {
     const cls = rt.link("java/lang/Character").ctor;
     for (const [cp, category] of [[65, 1], [97, 2], [0x301, 6], [48, 9], [32, 12], [10, 15], [0xd800, 19], [45, 20], [95, 23], [0x1f600, 28], [0x378, 0], [-1, 0], [0x110000, 0]]) {
@@ -137,48 +135,23 @@ describe("character-offset", () => {
   });
 });
 
-describe("java-value-contracts", () => {
-  rt.linkNatives();
+describe("math", () => {
+  const math = rt.link("java/lang/Math").ctor;
   test("Math.getExponent extracts IEEE fields at subnormal, power-of-two and nonfinite boundaries", async () => {
-    const math = rt.link("java/lang/Math").ctor;
     for (const [value, exponent] of [[0, -1023], [Number.MIN_VALUE, -1023], [1, 0], [1 - Number.EPSILON / 2, -1], [2, 1], [-8, 3], [Infinity, 1024], [NaN, 1024]]) {
       expect(await vcall(math, "getExponent", "(D)I", value)).toBe(exponent);
     }
     expect(await vcall(math, "getExponent", "(F)I", 2 ** -149)).toBe(-127);
   });
-  test("EnumSet factories and clones preserve Java class identity", async () => {
-    const es = rt.link("java/util/EnumSet").ctor;
-    const days = rt.link("java/time/DayOfWeek").ctor;
-    const values: unknown[] = await vcall(days, "values", "()[Ljava/time/DayOfWeek;");
-    const set = await vcall(es, "of", "(Ljava/lang/Enum;[Ljava/lang/Enum;)Ljava/util/EnumSet;", values[0], values.slice(0, 4));
-    expect(rt.iof(set, "java/util/EnumSet")).toBe(1);
-    const clone = await vcall(set, "clone", "()Ljava/lang/Object;");
-    expect(rt.iof(clone, "java/util/EnumSet")).toBe(1);
-    await vcall(clone, "clear", "()V");
-    expect(await vcall(set, "size", "()I")).toBe(4);
-    const copy = await vcall(es, "copyOf", "(Ljava/util/Collection;)Ljava/util/EnumSet;", set);
-    expect(await vcall(copy, "equals", "(Ljava/lang/Object;)Z", set)).toBe(1);
+
+  test("Math.copySign copies negative and positive zero signs", async () => {
+    expect(await vcall(math, "copySign", "(DD)D", 3.5, -0)).toBe(-3.5);
+    expect(await vcall(math, "copySign", "(DD)D", -3.5, 0)).toBe(3.5);
+    expect(await vcall(math, "copySign", "(FF)F", 2.25, -1)).toBe(-2.25);
   });
-});
 
-describe("math-copy-sign", () => {
-  rt.linkNatives();
-
-  const math = rt.link("java/lang/Math").ctor as any;
-  const call = (desc: "(DD)D" | "(FF)F", magnitude: number, sign: number): number =>
-    math[mangleMethod("copySign", desc)](magnitude, sign);
-
-  test("Math.copySign copies negative and positive zero signs", () => {
-    expect(call("(DD)D", 3.5, -0)).toBe(-3.5);
-    expect(call("(DD)D", -3.5, 0)).toBe(3.5);
-    expect(call("(FF)F", 2.25, -1)).toBe(-2.25);
-  });
-});
-
-describe("math-log1p", () => {
-  rt.linkNatives();
   test("Math.log1p preserves tiny values, signed zero and domain endpoints", async () => {
-    const log1p = (x: number) => vcall(rt.link("java/lang/Math").ctor, "log1p", "(D)D", x);
+    const log1p = (x: number) => vcall(math, "log1p", "(D)D", x);
     expect(await log1p(1e-20)).toBe(1e-20);
     expect(Object.is(await log1p(-0), -0)).toBe(true);
     expect(await log1p(-1)).toBe(-Infinity);
@@ -189,8 +162,6 @@ describe("math-log1p", () => {
 });
 
 describe("number-parse", () => {
-  rt.linkNatives();
-
   test("Double.valueOf(String) and Float.valueOf(String) box the parsed value", async () => {
     const d = scall("java/lang/Double", "valueOf", "(Ljava/lang/String;)Ljava/lang/Double;", " -73.98563 ");
     expect(await vcall(d, "doubleValue", "()D")).toBe(-73.98563);
@@ -220,7 +191,6 @@ describe("object-bridge", () => {
 });
 
 describe("pattern-split", () => {
-  rt.linkNatives();
   const compile = (source: string) => rt.link("java/util/regex/Pattern").ctor[mangleMethod("compile", "(Ljava/lang/String;)Ljava/util/regex/Pattern;")](source);
   const split = (pattern: unknown, input: string, limit: number) =>
     vcall(pattern, "split", "(Ljava/lang/CharSequence;I)[Ljava/lang/String;", input, limit);
@@ -265,7 +235,6 @@ describe("pattern-split", () => {
 });
 
 describe("class-init", () => {
-  rt.linkNatives();
   test("a failed <clinit> wraps its exception once, then the class stays erroneous", () => {
     rt.register({ name: "test/FailingInit", ctor: class extends JObj {}, clinit: () => { throw rt.mkThrowable("java/lang/IllegalStateException", "boom"); } });
     const info = rt.link("test/FailingInit");
@@ -279,8 +248,6 @@ describe("class-init", () => {
 });
 
 describe("reference", () => {
-  rt.linkNatives();
-
   test("PhantomReference never yields its referent and enqueues nothing", async () => {
     const queue = await newObj("java/lang/ref/ReferenceQueue");
     const referent = await newObj("java/lang/Object");
@@ -303,7 +270,6 @@ describe("reference", () => {
 });
 
 describe("reference-queue", () => {
-  rt.linkNatives();
   test("reference queue state survives explicit enqueue, blocked removal and repeated enqueue", async () => {
     const queue = await newObj("java/lang/ref/ReferenceQueue");
     const value = new JObj();
@@ -436,8 +402,6 @@ describe("reflection-field", () => {
 });
 
 describe("string-codepoints", () => {
-  rt.linkNatives();
-
   test("String streams distinguish UTF-16 units from Unicode code points", async () => {
     const value = "A😀B";
     const call = (name: string) => (String.prototype as any)[mangleMethod(name, "()Ljava/util/stream/IntStream;")].call(value);
@@ -453,7 +417,6 @@ describe("string-codepoints", () => {
 });
 
 describe("text-concat", () => {
-  rt.linkNatives();
   const concat = (...parts: unknown[]) => vcall(rt.link("android/text/TextUtils").ctor, "concat", "([Ljava/lang/CharSequence;)Ljava/lang/CharSequence;", parts);
   test("concat retains image spans and offsets through nested concatenations", async () => {
     const drawable = rt.make("android/graphics/drawable/ColorDrawable");
@@ -495,7 +458,6 @@ describe("text-concat", () => {
 });
 
 describe("unicode-block", () => {
-  rt.linkNatives();
   const cls = rt.link("java/lang/Character$UnicodeBlock").ctor;
   const of = (cp: number) => vcall(cls, "of", "(I)Ljava/lang/Character$UnicodeBlock;", cp);
   const named = (name: string | null) => vcall(cls, "forName", "(Ljava/lang/String;)Ljava/lang/Character$UnicodeBlock;", name);
