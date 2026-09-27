@@ -1133,6 +1133,7 @@ const lo32 = (v: bigint) => Number(BigInt.asUintN(32, v)), hi32 = (v: bigint) =>
 const nlz64 = (v: bigint) => { const hi = hi32(v); return hi ? Math.clz32(hi) : 32 + Math.clz32(lo32(v)); };
 /** compareTo for every box class: `v` holds the number/bigint */
 const cmpV = function (this: { v: number | bigint }, o: { v: number | bigint }) { return this.v < o.v ? -1 : this.v > o.v ? 1 : 0; };
+const INT_MIN = -2147483648n, INT_MAX = 2147483647n, LONG_MIN = -9223372036854775808n, LONG_MAX = 9223372036854775807n;
 function nfe(s: unknown): never {
   throw rt.mkThrowable("java/lang/NumberFormatException", `For input string: "${s}"`);
 }
@@ -1150,17 +1151,19 @@ function parseIntJ(s: string, radix = 10): number {
   if (magnitude > limit) nfe(s);
   return (negative ? -magnitude : magnitude) | 0;
 }
-function decodeIntJ(s: string): number {
-  if (typeof s !== "string" || !s.length) nfe(s);
-  let sign = 1, start = 0;
-  if (s[0] === "-" || s[0] === "+") { sign = s[0] === "-" ? -1 : 1; start = 1; }
-  let radix = 10;
-  if (s.startsWith("0x", start) || s.startsWith("0X", start)) { radix = 16; start += 2; }
-  else if (s[start] === "#") { radix = 16; start++; }
-  else if (s[start] === "0" && start + 1 < s.length) { radix = 8; start++; }
-  const digits = s.slice(start);
-  if (!digits || digits[0] === "+" || digits[0] === "-") nfe(s);
-  return parseIntJ((sign < 0 ? "-" : "") + digits, radix);
+/** Integer/Long/Short/Byte.decode: a sign, then 0x/0X/# for hex, a leading 0 for octal, else decimal */
+function decodeJ(s: string, min: bigint, max: bigint): bigint {
+  if (s == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if (!s.length) throw rt.mkThrowable("java/lang/NumberFormatException", "Zero length string");
+  const neg = s[0] === "-";
+  let i = neg || s[0] === "+" ? 1 : 0, radix = 10;
+  if (s.startsWith("0x", i) || s.startsWith("0X", i)) { radix = 16; i += 2; }
+  else if (s[i] === "#") { radix = 16; i++; }
+  else if (s[i] === "0" && s.length > i + 1) { radix = 8; i++; }
+  if (s[i] === "-" || s[i] === "+") throw rt.mkThrowable("java/lang/NumberFormatException", "Sign character in wrong position");
+  const v = parseLongJ((neg ? "-" : "") + s.slice(i), radix);
+  if (v < min || v > max) nfe(s);
+  return v;
 }
 const numCommon = (kind: "I" | "J" | "F" | "D" | "B" | "S", Ctor: new () => { v: number | bigint }) => ({
   [`<init>(${kind})V`]: function (this: { v: number | bigint }, v: number | bigint) { this.v = v; },
@@ -1190,12 +1193,12 @@ rt.register({
   statics: { MAX_VALUE: 2147483647, MIN_VALUE: -2147483648, SIZE: 32, BYTES: 4, get TYPE() { return rt.classFor("int"); } },
   methods: {
     ...numCommon("I", JInt),
-    "static getInteger(Ljava/lang/String;)Ljava/lang/Integer;": (prop: string) => { const v = sysLong(prop); return v === null ? null : boxInt(Number(v)); },
-    "static getInteger(Ljava/lang/String;I)Ljava/lang/Integer;": (prop: string, def: number) => boxInt(Number(sysLong(prop) ?? BigInt(def))),
-    "static getInteger(Ljava/lang/String;Ljava/lang/Integer;)Ljava/lang/Integer;": (prop: string, def: JInt) => { const v = sysLong(prop); return v === null ? def : boxInt(Number(v)); },
+    "static getInteger(Ljava/lang/String;)Ljava/lang/Integer;": (prop: string) => { const v = sysDecode(prop, INT_MIN, INT_MAX); return v === null ? null : boxInt(Number(v)); },
+    "static getInteger(Ljava/lang/String;I)Ljava/lang/Integer;": (prop: string, def: number) => boxInt(Number(sysDecode(prop, INT_MIN, INT_MAX) ?? def)),
+    "static getInteger(Ljava/lang/String;Ljava/lang/Integer;)Ljava/lang/Integer;": (prop: string, def: JInt) => { const v = sysDecode(prop, INT_MIN, INT_MAX); return v === null ? def : boxInt(Number(v)); },
     "static lowestOneBit(I)I": (v: number) => v & -v,
     "static valueOf(I)Ljava/lang/Integer;": boxInt,
-    "static decode(Ljava/lang/String;)Ljava/lang/Integer;": (s: string) => boxInt(decodeIntJ(s)),
+    "static decode(Ljava/lang/String;)Ljava/lang/Integer;": (s: string) => boxInt(Number(decodeJ(s, INT_MIN, INT_MAX))),
     "static valueOf(Ljava/lang/String;)Ljava/lang/Integer;": (s: string) => boxInt(parseIntJ(s)),
     "static parseInt(Ljava/lang/String;)I": (s: string) => parseIntJ(s),
     "static parseInt(Ljava/lang/String;I)I": (s: string, r: number) => parseIntJ(s, r),
@@ -1260,8 +1263,9 @@ rt.register({
     "static rotateRight(JI)J": (v: bigint, d: number) => { const n = BigInt(d & 63); const x = BigInt.asUintN(64, v); return BigInt.asIntN(64, (x >> n) | (x << (64n - n))); },
     "static highestOneBit(J)J": (v: bigint) => (v === 0n ? 0n : BigInt.asIntN(64, 1n << BigInt(63 - nlz64(v)))),
     "static reverse(J)J": (v: bigint) => BigInt.asIntN(64, (BigInt(rev32(lo32(v)) >>> 0) << 32n) | BigInt(rev32(hi32(v)) >>> 0)),
-    "static getLong(Ljava/lang/String;)Ljava/lang/Long;": (prop: string) => { const v = sysLong(prop); return v === null ? null : box(JLong, v); },
-    "static getLong(Ljava/lang/String;J)Ljava/lang/Long;": (prop: string, def: bigint) => box(JLong, sysLong(prop) ?? def),
+    "static getLong(Ljava/lang/String;)Ljava/lang/Long;": (prop: string) => { const v = sysDecode(prop, LONG_MIN, LONG_MAX); return v === null ? null : box(JLong, v); },
+    "static getLong(Ljava/lang/String;J)Ljava/lang/Long;": (prop: string, def: bigint) => box(JLong, sysDecode(prop, LONG_MIN, LONG_MAX) ?? def),
+    "static decode(Ljava/lang/String;)Ljava/lang/Long;": (s: string) => box(JLong, decodeJ(s, LONG_MIN, LONG_MAX)),
     "static toString(J)Ljava/lang/String;": (v: bigint) => String(v),
     "static toHexString(J)Ljava/lang/String;": (v: bigint) => BigInt.asUintN(64, v).toString(16),
     "static compare(JJ)I": (a: bigint, b: bigint) => (a < b ? -1 : a > b ? 1 : 0),
@@ -1336,15 +1340,35 @@ rt.register({
     "isInfinite()Z": function (this: JDouble) { return isInfZ(this.v); },
   },
 });
+/** Byte and Short statics: parsing checks the range, as Byte.parseByte does, instead of wrapping */
+function smallInt(d: "B" | "S", name: string, Ctor: new () => { v: number }, bits: number) {
+  const max = 2 ** (bits - 1) - 1, self = `Ljava/lang/${name};`;
+  const parse = (s: string, radix = 10) => {
+    const v = parseIntJ(s, radix);
+    if (v < -max - 1 || v > max) throw rt.mkThrowable("java/lang/NumberFormatException", `Value out of range. Value:"${s}" Radix:${radix}`);
+    return v;
+  };
+  return {
+    [`static parse${name}(Ljava/lang/String;)${d}`]: (s: string) => parse(s),
+    [`static parse${name}(Ljava/lang/String;I)${d}`]: parse,
+    [`static valueOf(${d})${self}`]: (v: number) => box(Ctor, v),
+    [`static valueOf(Ljava/lang/String;)${self}`]: (s: string) => box(Ctor, parse(s)),
+    [`static valueOf(Ljava/lang/String;I)${self}`]: (s: string, r: number) => box(Ctor, parse(s, r)),
+    [`static decode(Ljava/lang/String;)${self}`]: (s: string) => box(Ctor, Number(decodeJ(s, BigInt(-max - 1), BigInt(max)))),
+    [`static toString(${d})Ljava/lang/String;`]: (v: number) => String(v),
+    [`static hashCode(${d})I`]: (v: number) => v,
+    [`static compare(${d}${d})I`]: (a: number, b: number) => a - b,
+    [`static toUnsignedInt(${d})I`]: (v: number) => v & (2 ** bits - 1),
+    [`static toUnsignedLong(${d})J`]: (v: number) => BigInt(v & (2 ** bits - 1)),
+  };
+}
 rt.register({
   name: "java/lang/Byte", ctor: JByte, sup: "java/lang/Number",
   serialization: { uid: -7183698231559129828n, fields: [{ name: "value", desc: "B", prop: "v" }] },
   statics: { MAX_VALUE: 127, MIN_VALUE: -128, get TYPE() { return rt.classFor("byte"); } },
   methods: {
     ...numCommon("B", JByte),
-    "static valueOf(B)Ljava/lang/Byte;": (v: number) => box(JByte, v),
-    "static parseByte(Ljava/lang/String;)B": (s: string) => parseIntJ(s) << 24 >> 24,
-    "static parseByte(Ljava/lang/String;I)B": (s: string, r: number) => parseIntJ(s, r) << 24 >> 24,
+    ...smallInt("B", "Byte", JByte, 8),
   },
 });
 rt.register({
@@ -1353,8 +1377,7 @@ rt.register({
   statics: { MAX_VALUE: 32767, MIN_VALUE: -32768, get TYPE() { return rt.classFor("short"); } },
   methods: {
     ...numCommon("S", JShort),
-    "static hashCode(S)I": (v: number) => v,
-    "static valueOf(S)Ljava/lang/Short;": (v: number) => box(JShort, v),
+    ...smallInt("S", "Short", JShort, 16),
   },
 });
 export const TRUE = new JBool(); TRUE.v = 1;
@@ -1607,10 +1630,10 @@ const loadLibrary = async (n: string, owner: Runtime = rt) => dlopen(owner, `lib
   (a) => owner.readClasspath(`lib/${a}/lib${n}.so`));
 /** Integer.getInteger/Long.getLong: a system property decoded the way Integer.decode does,
  *  null when it is unset or not a number — the value a caller falls back from. */
-function sysLong(prop: string): bigint | null {
+function sysDecode(prop: string, min: bigint, max: bigint): bigint | null {
   const raw = sysProps[prop];
   if (raw === undefined) return null;
-  try { return BigInt(raw.trim()); } catch { return null; }
+  try { return decodeJ(raw, min, max); } catch { return null; }
 }
 const sysProps: Record<string, string> = {
   "java.version": "0", "os.name": "Linux", "line.separator": "\n",
