@@ -1,5 +1,5 @@
 import { AID } from "./res";
-import type { AppHost } from "./apphost";
+import { jclsNameOf, type AppHost } from "./apphost";
 import { JTheme, rvInt, themeOf, themeByName, rvDimen, rvColor } from "./res";
 import { type JDrawable, loadDrawableRV, JColorDrawable } from "./drawable";
 import { JView, JMarginLP, addUnattachedView, requestLayout } from "./view";
@@ -10,7 +10,7 @@ import { JFrameLayout, JLinearLayout } from "./layouts";
 import { rt } from "../jvm/runtime";
 import { JActionBarView } from "./menu";
 import { TV } from "./axml";
-import { darken, applyWindowTheme, JWindow } from "./window";
+import { darken, applyWindowTheme, isTranslucentOrFloating, themeDim, FLAG_DIM_BEHIND, JWindow } from "./window";
 import { sysIns, type JWindowInsets } from "./windowinsets";
 import { vcall } from "../jvm/natives/jlang";
 
@@ -45,14 +45,7 @@ async function windowBackground(host: AppHost, theme: JTheme): Promise<JDrawable
  *  the activity class is linked, let alone run — and paints its background. Same body as the
  *  decor's, because it is the same attribute of the same theme. */
 export async function startingWindow(host: AppHost, cls: string): Promise<{ view: JView; fullscreen: boolean }> {
-  let theme = host.theme;
-  const id = manifestActivityTheme(cls);
-  if (id) {
-    theme = new JTheme();
-    theme.res = host.res;
-    theme.styles = host.theme.styles.slice();
-    theme.apply(id);
-  }
+  const theme = manifestTheme(host, cls);
   const v = new JView();
   v.jres = host.res;
   v.theme = theme;
@@ -65,6 +58,16 @@ export async function startingWindow(host: AppHost, cls: string): Promise<{ view
   // a *.Fullscreen launch theme takes the status bar's rows too, exactly as ensureDecor reads it
   return { view: v, fullscreen: !!rvInt(host.res, theme.lookup(AID("windowFullscreen")), 0) };
 }
+/** the theme the system resolves from the manifest: the activity's own over the application's */
+function manifestTheme(host: AppHost, cls: string): JTheme {
+  const id = manifestActivityTheme(cls);
+  if (!id) return host.theme;
+  const theme = new JTheme();
+  theme.res = host.res;
+  theme.styles = host.theme.styles.slice();
+  theme.apply(id);
+  return theme;
+}
 export async function ensureDecor(act: JActivity) {
   if (act.window.decor) return;
   const host = act.$host;
@@ -73,7 +76,8 @@ export async function ensureDecor(act: JActivity) {
   decor.ctx = act;
   decor.jres = host.res;
   decor.theme = theme;
-  decor.background = await windowBackground(host, theme);
+  // PhoneWindow keeps a background set before its decor exists
+  decor.background = act.window.bgSet ? act.window.bg : await windowBackground(host, theme);
   const noTitle = rvInt(host.res, themeByName(host.res, theme, "windowNoTitle"), 0);
   const actionBar = rvInt(host.res, themeByName(host.res, theme, "windowActionBar"), noTitle ? 0 : 1);
   let statusDefault = -16777216;
@@ -124,6 +128,13 @@ export async function ensureDecor(act: JActivity) {
     act.window.actionBarView = bar;
   }
   applyWindowTheme(act.window, theme, statusDefault);
+  // ActivityRecord decides occlusion from the manifest theme; a theme set in onCreate leaves it
+  act.window.translucent = isTranslucentOrFloating(manifestTheme(host, jclsNameOf(act)));
+  const dim = themeDim(theme);
+  if (dim) {
+    act.window.flags |= FLAG_DIM_BEHIND;
+    if (Number.isNaN(act.window.dimAmount)) act.window.dimAmount = dim;
+  }
   const content = new JFrameLayout();
   content.ctx = act;
   content.jres = host.res;

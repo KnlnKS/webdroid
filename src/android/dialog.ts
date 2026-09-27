@@ -15,12 +15,12 @@ import { JCanvas, tfMedium , JRect } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";
-import { rvInt, rvFloat, rvDimen, askTheme, themeOf } from "./res";
+import { rvInt, rvDimen, askTheme, themeOf } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
 import { inflateLayout, getInflater } from "./inflate";
 import { csText } from "./text";
-import { applyWindowTheme, type JWindow } from "./window";
+import { applyWindowTheme, themeDim, type JWindow } from "./window";
 import { complexToFraction } from "./util";
 import { JMotionEvent } from "./motionevent";
 
@@ -43,13 +43,8 @@ async function loadCardBg(root: DialogRoot): Promise<void> {
   const rv = root.theme.lookup(AID("windowBackground"));
   if (rv) root.cardBg = await loadDrawableRV(root.jres, rv, root.theme);
   root.cardRadius = rvDimen(root.jres, root.theme.lookup(AID("dialogCornerRadius")), 0);
-  // PhoneWindow: backgroundDimEnabled defaults to windowIsFloating (attrs.xml), so an
-  // edge-to-edge sheet theme that only unfloats its window loses the platform dim and
-  // draws its own scrim; backgroundDimAmount says how much.
-  const en = root.theme.lookup(AID("backgroundDimEnabled"));
-  const floating = root.theme.lookup(AID("windowIsFloating"));
-  const dimOn = en ? !!rvInt(root.jres, en, 0) : !!rvInt(root.jres, floating, 1);
-  root.themeDim = dimOn ? rvFloat(root.jres, root.theme.lookup(AID("backgroundDimAmount")), 0.6) : 0;
+  // an edge-to-edge sheet theme that only unfloats its window loses the platform dim and draws its own scrim
+  root.themeDim = themeDim(root.theme, 1);
 }
 
 /** The dialog's decor; the shell owns its placement and dimming behind the window. */
