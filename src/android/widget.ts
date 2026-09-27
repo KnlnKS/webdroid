@@ -2,7 +2,7 @@ import { AID } from "./res";
 import { guestNow } from "../guest-clock";
 import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, uiState, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, findById, generateViewId, type JLayoutParams } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, drawableSize, JLayerDrawable, rvCsl, cslColor } from "./drawable";
-import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, flagSetters, driven, type Gen } from "../jvm/runtime";
+import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { type JAttrSet, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue } from "./res";
 import { TV } from "./axml";
 import { type JCanvas, type JInsets, JRect, JTypeface, cssColor, insetsOf, measureText, fontAscent, fontDescent, tfDefault } from "./graphics";
@@ -13,30 +13,64 @@ import { vcall, vcallOn, curThread, after, type JSimpleEnum } from "../jvm/nativ
 import { type JMotionEvent } from "./motionevent";
 import { JLinearLayout, linearMethods } from "./layouts";
 
+const relayoutSetters = (t: Record<string, string>): NativeSpec["methods"] => Object.fromEntries(Object.entries(t).map(([sig, f]) =>
+  [sig, function (this: Record<string, unknown> & JView, v: unknown) { if (this[f] !== v) { this[f] = v; requestLayout(this); } }]));
+const PROGRESS_ID = 0x0102000d, SECONDARY_ID = 0x0102000f;
+/** AOSP ProgressBar: determinate progress is its progressDrawable at the progress level. The
+ *  indeterminate drawables are animations this engine does not run, so those are painted. */
 class JProgressBar extends JView {
-  indeterminate = true;
-  progress = 0;
+  indeterminate = false;
+  /** indeterminateOnly: a spinner style's promise that the bar never shows progress */
+  onlyIndeterminate = false;
+  progress = 0; secondary = 0;
   max = 100; min = 0;
-  horizontal = false;
+  minWidth = 24; maxWidth = 48; minHeight = 24; maxHeight = 48;
   progressD: JDrawable | null = null; indetD: JDrawable | null = null;
-  tintCsl: JColorStateList | null = null;
+  tintCsl: JColorStateList | null = null; indetTint: JColorStateList | null = null;
+  fraction(v: number) { return this.max === this.min ? 0 : (v - this.min) / (this.max - this.min); }
+  clamp(v: number) { return Math.max(this.min, Math.min(this.max, v)); }
+  current() { return this.indeterminate ? this.indetD : this.progressD; }
 }
-const initProgressBar = driven(function* initProgressBar(this: JProgressBar, c: unknown, set: JAttrSet | null = null, style: number = AID("progressBarStyle"), def: number = 0): Gen {
-  yield initViewFromCtx(this, c, set, style);
-  if (!this.jres) return;
-  if (set?.node) for (const attr of set.node.attrs) {
-    if (attr.name === "style" && attr.str?.includes("Horizontal")) this.horizontal = true;
-    if (!attr.ns && attr.name === "style" && attr.type === TV.REFERENCE && this.jres.idName(attr.data)?.includes("Horizontal")) this.horizontal = true;
-  }
-  const a = obtainStyled(this.jres, this.theme, set,
-    ["progressDrawable", "indeterminateDrawable", "indeterminate", "min", "max", "progress"].map(AID), style, def);
-  if (a.vals[0]) this.progressD = yield loadDrawableRV(this.jres, a.vals[0], this.theme);
-  if (a.vals[1]) this.indetD = yield loadDrawableRV(this.jres, a.vals[1], this.theme);
-  this.indeterminate = !!rvInt(this.jres, a.vals[2], this.horizontal ? 0 : +this.indeterminate);
-  this.min = rvInt(this.jres, a.vals[3], this.min);
-  this.max = Math.max(this.min, rvInt(this.jres, a.vals[4], this.max));
-  this.progress = Math.max(this.min, Math.min(this.max, rvInt(this.jres, a.vals[5], this.progress)));
+/** applyPrimaryProgressTint: the progress layer, or the whole drawable when it has none */
+const applyProgressTint = driven(function* applyProgressTint(pb: JProgressBar): Gen {
+  const d = pb.progressD;
+  if (!d || !pb.tintCsl) return;
+  const target = d instanceof JLayerDrawable ? (yield vcall(d, "findDrawableByLayerId", "(I)Landroid/graphics/drawable/Drawable;", PROGRESS_ID)) ?? d : d;
+  yield vcall(target, "setTintList", "(Landroid/content/res/ColorStateList;)V", pb.tintCsl);
 });
+/** ProgressBar.onDraw's drawTrack: the progress and secondary layers at their levels, inside the padding */
+const drawTrack = driven(function* drawTrack(pb: JProgressBar, cv: JCanvas, d: JDrawable): Gen {
+  const thread = curThread;
+  yield vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, pb.width() - pb.padL - pb.padR, pb.height() - pb.padT - pb.padB);
+  for (const [id, v] of [[SECONDARY_ID, pb.secondary], [PROGRESS_ID, pb.progress]]) {
+    const layer = d instanceof JLayerDrawable ? yield vcallOn(thread, d, "findDrawableByLayerId", "(I)Landroid/graphics/drawable/Drawable;", id) : null;
+    yield vcallOn(thread, layer ?? d, "setLevel", "(I)Z", Math.trunc(pb.fraction(v) * 10000));
+  }
+  cv.ctx.save(); cv.ctx.translate(pb.padL, pb.padT);
+  try { yield drawChild(d, cv, thread); } finally { cv.ctx.restore(); }
+});
+const initProgressBar = driven(function* initProgressBar(this: JProgressBar, c: unknown, set: JAttrSet | null = null, style: number = AID("progressBarStyle"), def: number = 0): Gen {
+  yield initViewFromCtx(this, c, set, style, def);
+  const res = this.jres;
+  if (!res) return;
+  const a = obtainStyled(res, this.theme, set, ["progressDrawable", "indeterminateDrawable", "indeterminate", "indeterminateOnly", "min", "max", "progress",
+    "secondaryProgress", "minWidth", "maxWidth", "minHeight", "maxHeight", "progressTint", "indeterminateTint"].map(AID), style, def);
+  const g = (i: number) => a.vals[i], px = (i: number, v: number) => g(i) ? Math.trunc(rvDimen(res, g(i), v)) : v;
+  if (g(0)) this.progressD = yield loadDrawableRV(res, g(0)!, this.theme);
+  if (g(1)) this.indetD = yield loadDrawableRV(res, g(1)!, this.theme);
+  this.minWidth = px(8, this.minWidth); this.maxWidth = px(9, this.maxWidth); this.minHeight = px(10, this.minHeight); this.maxHeight = px(11, this.maxHeight);
+  this.min = rvInt(res, g(4), 0); this.max = Math.max(this.min, rvInt(res, g(5), 100));
+  this.progress = this.clamp(rvInt(res, g(6), 0)); this.secondary = this.clamp(rvInt(res, g(7), 0));
+  this.onlyIndeterminate = !!rvInt(res, g(3), 0);
+  this.indeterminate = this.onlyIndeterminate || !!rvInt(res, g(2), 0);
+  if (g(12)) this.tintCsl = yield rvCsl(res, g(12)!, this.theme);
+  if (g(13)) this.indetTint = yield rvCsl(res, g(13)!, this.theme);
+  yield applyProgressTint(this);
+});
+function setProgressValue(this: JProgressBar, p: number) {
+  if (this.indeterminate || this.clamp(p) === this.progress) return;
+  this.progress = this.clamp(p); invalidate(this);
+}
 rt.register({
   name: "android/widget/ProgressBar", ctor: JProgressBar, sup: "android/view/View",
   methods: {
@@ -44,59 +78,65 @@ rt.register({
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initProgressBar,
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": initProgressBar,
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": initProgressBar,
-    "setProgress(I)V": function (this: JProgressBar, p: number) { this.progress = p; invalidate(); },
-    "setMax(I)V": function (this: JProgressBar, m: number) { this.max = Math.max(1, m); },
-    "setProgressDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) { this.progressD = d; invalidate(); },
-    "setIndeterminateDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) { this.indetD = d; invalidate(); },
-    "setProgressTintList(Landroid/content/res/ColorStateList;)V": function (this: JProgressBar, c: JColorStateList | null) { this.tintCsl = c; invalidate(); },
-    "setIndeterminateTintList(Landroid/content/res/ColorStateList;)V": function (this: JProgressBar, c: JColorStateList | null) { this.tintCsl = c; invalidate(); },
-    "setProgress(IZ)V": function (this: JProgressBar, p: number) { this.progress = p; invalidate(); },
-    ...flagSetters({ "setIndeterminate(Z)V": "indeterminate" }),
+    "setProgress(I)V": setProgressValue,
+    "setProgress(IZ)V": setProgressValue,
+    "getProgress()I": function (this: JProgressBar) { return this.indeterminate ? 0 : this.progress; },
+    "setSecondaryProgress(I)V": function (this: JProgressBar, p: number) { if (!this.indeterminate) { this.secondary = this.clamp(p); invalidate(this); } },
+    "getSecondaryProgress()I": function (this: JProgressBar) { return this.indeterminate ? 0 : this.secondary; },
+    "setMax(I)V": function (this: JProgressBar, m: number) { this.max = Math.max(this.min, m); this.progress = this.clamp(this.progress); invalidate(this); },
+    "setMin(I)V": function (this: JProgressBar, m: number) { this.min = Math.min(this.max, m); this.progress = this.clamp(this.progress); invalidate(this); },
+    "incrementProgressBy(I)V": function (this: JProgressBar, d: number) { setProgressValue.call(this, this.progress + d); },
+    "setIndeterminate(Z)V": function (this: JProgressBar, on: number) {
+      if ((!this.onlyIndeterminate || !this.indeterminate) && !!on !== this.indeterminate) { this.indeterminate = !!on; invalidate(this); }
+    },
+    "setProgressDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) {
+      this.progressD = d; requestLayout(this); invalidate(this);
+      return applyProgressTint(this);
+    },
+    "setIndeterminateDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JProgressBar, d: JDrawable | null) { this.indetD = d; requestLayout(this); invalidate(this); },
+    "setProgressTintList(Landroid/content/res/ColorStateList;)V": function (this: JProgressBar, c: JColorStateList | null) { this.tintCsl = c; invalidate(this); return applyProgressTint(this); },
+    "setIndeterminateTintList(Landroid/content/res/ColorStateList;)V": function (this: JProgressBar, c: JColorStateList | null) { this.indetTint = c; invalidate(this); },
     ...flagGetters({ "isIndeterminate()Z": "indeterminate" }),
-    ...fieldGetters({ "getProgress()I": "progress", "getMax()I": "max",
+    ...fieldGetters({ "getMax()I": "max", "getMin()I": "min",
       "getProgressDrawable()Landroid/graphics/drawable/Drawable;": "progressD",
       "getIndeterminateDrawable()Landroid/graphics/drawable/Drawable;": "indetD",
       "getProgressTintList()Landroid/content/res/ColorStateList;": "tintCsl",
-      "getIndeterminateTintList()Landroid/content/res/ColorStateList;": "tintCsl", "getMin()I": "min" }),
-    ...fieldSetters({ "setMin(I)V": "min" }),
-    ...noops("setSecondaryProgress(I)V", "setInterpolator(Landroid/view/animation/Interpolator;)V",
-      "setInterpolator(Landroid/content/Context;I)V"),
-    ...stubs(0, "getSecondaryProgress()I"),
+      "getIndeterminateTintList()Landroid/content/res/ColorStateList;": "indetTint",
+      "getMinWidth()I": "minWidth", "getMaxWidth()I": "maxWidth", "getMinHeight()I": "minHeight", "getMaxHeight()I": "maxHeight" }),
+    ...relayoutSetters({ "setMinWidth(I)V": "minWidth", "setMaxWidth(I)V": "maxWidth", "setMinHeight(I)V": "minHeight", "setMaxHeight(I)V": "maxHeight" }),
+    ...noops("setInterpolator(Landroid/view/animation/Interpolator;)V", "setInterpolator(Landroid/content/Context;I)V"),
     ...stubs(null, "getInterpolator()Landroid/view/animation/Interpolator;"),
-    "onMeasure(II)V": function (this: JProgressBar, wSpec: number, hSpec: number) {
-      const dw = this.horizontal ? 48 : 96, dh = this.horizontal ? 16 : 96;
-      this.measuredW = resolveSize(Math.max(dw + this.padL + this.padR, this.minW), wSpec);
-      this.measuredH = resolveSize(Math.max(dh + this.padT + this.padB, this.minH), hSpec);
-    },
-    "onDraw(Landroid/graphics/Canvas;)V": function (this: JProgressBar, cv: JCanvas) {
-      const ctx = cv.ctx;
-      const accent = themeAccent(this);
-      if (this.horizontal) {
-        const y = this.height() / 2;
-        ctx.fillStyle = cssColor((accent & 0xffffff) | 0x4d000000);
-        ctx.fillRect(this.padL, y - 4, this.width() - this.padL - this.padR, 8);
-        ctx.fillStyle = cssColor(accent);
-        if (this.indeterminate) {
-          const t = (guestNow() % 1200) / 1200;
-          const w = (this.width() - this.padL - this.padR);
-          ctx.fillRect(this.padL + t * w * 1.5 - w / 2, y - 4, w / 2, 8);
-          uiState.needsDraw = true;
-        } else {
-          ctx.fillRect(this.padL, y - 4, (this.width() - this.padL - this.padR) * this.progress / this.max, 8);
-        }
-      } else {
-        const cx = this.width() / 2, cy = this.height() / 2;
-        const r = Math.min(this.width() - this.padL - this.padR, this.height() - this.padT - this.padB) / 2 - 6;
-        const t = guestNow() / 900;
-        ctx.strokeStyle = cssColor(accent);
-        ctx.lineWidth = 8;
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        const sweep = (Math.sin(t * 2.2) * 0.35 + 0.5) * Math.PI * 1.5 + 0.3;
-        ctx.arc(cx, cy, Math.max(8, r), t * 5, t * 5 + sweep);
-        ctx.stroke();
-        uiState.needsDraw = true; // keep animating
+    "onMeasure(II)V": driven(function* (this: JProgressBar, wSpec: number, hSpec: number): Gen {
+      const d = this.current();
+      let dw = 0, dh = 0;
+      if (d) {
+        dw = Math.max(this.minWidth, Math.min(this.maxWidth, yield drawableSize(d, false)));
+        dh = Math.max(this.minHeight, Math.min(this.maxHeight, yield drawableSize(d, true)));
       }
+      this.measuredW = resolveSize(dw + this.padL + this.padR, wSpec);
+      this.measuredH = resolveSize(dh + this.padT + this.padB, hSpec);
+    }),
+    "onDraw(Landroid/graphics/Canvas;)V": function (this: JProgressBar, cv: JCanvas) {
+      if (!this.indeterminate) return this.progressD ? drawTrack(this, cv, this.progressD) : undefined;
+      const ctx = cv.ctx, accent = this.indetTint ? cslColor(this.indetTint, this.drawableState()) : themeAccent(this);
+      const w = this.width() - this.padL - this.padR, h = this.height() - this.padT - this.padB;
+      uiState.needsDraw = true; // the animation runs while the bar is drawn
+      if (!this.onlyIndeterminate) {
+        const y = this.padT + h / 2, t = (guestNow() % 1200) / 1200;
+        ctx.fillStyle = cssColor((accent & 0xffffff) | 0x4d000000);
+        ctx.fillRect(this.padL, y - h / 2, w, h);
+        ctx.fillStyle = cssColor(accent);
+        ctx.fillRect(this.padL + t * w * 1.5 - w / 2, y - h / 2, w / 2, h);
+        return;
+      }
+      const t = guestNow() / 900, r = Math.min(w, h) / 2;
+      ctx.strokeStyle = cssColor(accent);
+      ctx.lineWidth = Math.max(1, r / 6);
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      const sweep = (Math.sin(t * 2.2) * 0.35 + 0.5) * Math.PI * 1.5 + 0.3;
+      ctx.arc(this.padL + w / 2, this.padT + h / 2, Math.max(1, r - ctx.lineWidth), t * 5, t * 5 + sweep);
+      ctx.stroke();
     },
   },
 });
@@ -112,9 +152,7 @@ class JRatingBar extends JAbsSeekBar { stars = 5; step = 0.5; ratingL: unknown =
 class JSeekBar extends JAbsSeekBar {
   thumb: JDrawable | null = null;
   thumbW = 0; thumbH = 0; thumbOffset = 0;
-  secondary = 0;
   changeListener: unknown = null;
-  constructor() { super(); this.horizontal = true; this.indeterminate = false; }
   setTrack(d: JDrawable | null, thread = curThread): unknown { return rt.drive(this.setTrack$(d, thread)); }
   *setTrack$(d: JDrawable | null, thread = curThread): Gen {
     if (this.progressD) this.progressD.callback = null;
@@ -134,7 +172,7 @@ class JSeekBar extends JAbsSeekBar {
   }
   updateProgress(value: number, fromUser = false, thread = curThread): unknown { return rt.drive(this.updateProgress$(value, fromUser, thread)); }
   *updateProgress$(value: number, fromUser = false, thread = curThread): Gen {
-    const progress = Math.max(this.min, Math.min(this.max, Math.round(value)));
+    const progress = this.clamp(Math.round(value));
     if (this.progress === progress) return;
     this.progress = progress; invalidate(this);
     if (this.changeListener) yield vcallOn(thread, this.changeListener, "onProgressChanged", "(Landroid/widget/SeekBar;IZ)V", this, progress, +fromUser);
@@ -146,7 +184,7 @@ const initSeekBar = driven(function* initSeekBar(this: JSeekBar, c: unknown, att
   if (!this.jres) return;
   const a = obtainStyled(this.jres, this.theme, attrs, ["progressDrawable", "thumb", "thumbOffset", "min", "max", "progress", "secondaryProgress"].map(AID), style, def);
   this.min = rvInt(this.jres, a.vals[3], 0); this.max = Math.max(this.min, rvInt(this.jres, a.vals[4], 100));
-  this.progress = Math.max(this.min, Math.min(this.max, rvInt(this.jres, a.vals[5], 0)));
+  this.progress = this.clamp(rvInt(this.jres, a.vals[5], 0));
   this.secondary = rvInt(this.jres, a.vals[6], 0);
   if (a.vals[0]) yield this.setTrack(yield loadDrawableRV(this.jres, a.vals[0], this.theme), thread);
   if (a.vals[1]) yield this.setThumb(yield loadDrawableRV(this.jres, a.vals[1], this.theme), thread);
@@ -165,8 +203,6 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
   "setOnSeekBarChangeListener(Landroid/widget/SeekBar$OnSeekBarChangeListener;)V": function (this: JSeekBar, listener: unknown) { this.changeListener = listener; },
   "setProgress(I)V": function (this: JSeekBar, value: number) { return this.updateProgress(value); },
   "setProgress(IZ)V": function (this: JSeekBar, value: number) { return this.updateProgress(value); },
-  "setSecondaryProgress(I)V": function (this: JSeekBar, value: number) { this.secondary = Math.max(this.min, Math.min(this.max, value)); invalidate(this); },
-  "getSecondaryProgress()I": function (this: JSeekBar) { return this.secondary; },
   "drawableStateChanged()V": driven(function* (this: JSeekBar): Gen {
     const thread = curThread, state = Int32Array.from(this.drawableState());
     for (const d of [this.progressD, this.thumb]) if (d) yield vcallOn(thread, d, "setState", "([I)Z", state);
@@ -179,27 +215,15 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
     this.measuredH = resolveSize(Math.max(this.minH, Math.max(h, this.thumbH) + this.padT + this.padB), hs);
   }),
   "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JSeekBar, canvas: JCanvas): Gen {
-    const thread = curThread, ctx = canvas.ctx, d = this.progressD;
+    const thread = curThread, ctx = canvas.ctx;
+    if (this.progressD) yield drawTrack(this, canvas, this.progressD);
+    if (!this.thumb) return;
     const w = this.width() - this.padL - this.padR, h = this.height() - this.padT - this.padB;
-    const fraction = (v: number) => this.max === this.min ? 0 : (v - this.min) / (this.max - this.min);
+    const x = Math.round(this.fraction(this.progress) * (w - this.thumbW + this.thumbOffset * 2)) - this.thumbOffset;
+    const y = Math.trunc((h - this.thumbH) / 2);
+    yield vcallOn(thread, this.thumb, "setBounds", "(IIII)V", x, y, x + this.thumbW, y + this.thumbH);
     ctx.save(); ctx.translate(this.padL, this.padT);
-    try {
-      if (d) {
-        yield vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, w, h);
-        const level = async (id: number, value: number) => {
-          const target = d instanceof JLayerDrawable ? await vcallOn(thread, d, "findDrawableByLayerId", "(I)Landroid/graphics/drawable/Drawable;", id) : d;
-          if (target) await vcallOn(thread, target, "setLevel", "(I)Z", Math.trunc(fraction(value) * 10000));
-        };
-        yield level(0x0102000f, this.secondary); yield level(0x0102000d, this.progress);
-        yield drawChild(d, canvas);
-      }
-      if (this.thumb) {
-        const x = Math.round(fraction(this.progress) * (w - this.thumbW + this.thumbOffset * 2)) - this.thumbOffset;
-        const y = Math.trunc((h - this.thumbH) / 2);
-        yield vcallOn(thread, this.thumb, "setBounds", "(IIII)V", x, y, x + this.thumbW, y + this.thumbH);
-        yield drawChild(this.thumb, canvas);
-      }
-    } finally { ctx.restore(); }
+    try { yield drawChild(this.thumb, canvas, thread); } finally { ctx.restore(); }
   }),
   "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JSeekBar, event: JMotionEvent): Gen {
     if (!this.enabled) return 0;
@@ -241,8 +265,6 @@ export function themeAccent(v: JView): number {
   return rv && v.jres ? rvColor(v.jres, rv, -10011977) : -10011977;
 }
 
-const relayoutSetters = (t: Record<string, string>): NativeSpec["methods"] => Object.fromEntries(Object.entries(t).map(([sig, f]) =>
-  [sig, function (this: Record<string, unknown> & JView, v: unknown) { if (this[f] !== v) { this[f] = v; requestLayout(this); } }]));
 /** a drawable a view owns: callback wired, handed the view's current state */
 const adopt = driven(function* adopt(v: JView, old: JDrawable | null, d: JDrawable | null): Gen {
   if (old && old !== d) old.callback = null;
