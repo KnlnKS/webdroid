@@ -5,7 +5,7 @@ import {
   type JColorStateList, mkCsl, type JDrawable, rvCsl, loadDrawableRV, cslColor, loadDrawable,
   drawChild, drawableSize
 } from "./drawable";
-import { JTextPaint, JEditable, JSpanned, JLayout, spannedString, textSelection, setTextSelection } from "./text";
+import { JTextPaint, JEditable, JSpanned, JLayout, spannedString, csText, textSelection, setTextSelection, passwordTransformation } from "./text";
 import { G, gravityV, gravityH } from "./gravity";
 import { isRtl } from "./bidiformatter";
 import { device } from "../shell/config";
@@ -28,8 +28,9 @@ import { TextViewLayouts, drawTextViewLayout, layoutHeight } from "./textview-la
 export class JTextView extends JView {
   fallbackLineSpacing = true;
   lineBreakStyle = 0; lineBreakWordStyle = 0;
-  /** kept for the app to read back; text is drawn untransformed */
   transformation: unknown = null;
+  /** AOSP mTransformed: what the TransformationMethod made of the text, laid out in its place */
+  transformed: string | JSpanned | null = null;
   editableFactory: unknown = null; spannableFactory: unknown = null;
   keyListener: unknown = null; movementMethod: unknown = null; selActionMode: unknown = null; editorActionL: unknown = null;
   insertionActionMode: unknown = null;
@@ -100,9 +101,18 @@ export class JTextView extends JView {
   }
   private upperOf = ""; private upper = "";
   displayText(): string {
-    if (!this.allCaps) return this.text;
-    if (this.upperOf !== this.text) { this.upperOf = this.text; this.upper = this.text.toUpperCase(); }
+    const text = this.transformed === null ? this.text : spannedString(this.transformed);
+    if (!this.allCaps) return text;
+    if (this.upperOf !== text) { this.upperOf = text; this.upper = text.toUpperCase(); }
     return this.upper;
+  }
+  retransform(): unknown { return rt.drive(this.retransform$()); }
+  *retransform$(): Gen {
+    const method = this.transformation;
+    if (!method) { this.transformed = null; return; }
+    const src = this.editable ? this.getEditable() : this.rawText ?? this.text;
+    const out = yield vcall(method, "getTransformation", "(Ljava/lang/CharSequence;Landroid/view/View;)Ljava/lang/CharSequence;", src, this);
+    this.transformed = out === src || out == null ? null : typeof out === "string" || out instanceof JSpanned ? out : yield csText(out);
   }
   lineHeight(): number {
     const height = Math.round(fontDescent(this.paintT)) - Math.round(fontAscent(this.paintT));
@@ -130,7 +140,7 @@ export class JTextView extends JView {
     return this.editObj;
   }
   measuredLines(avail: number): JLayout | Promise<JLayout> {
-    return (this.textLayouts ??= new TextViewLayouts()).get(this, this.rawText instanceof JSpanned ? this.rawText : this.text, avail);
+    return (this.textLayouts ??= new TextViewLayouts()).get(this, this.transformed ?? (this.rawText instanceof JSpanned ? this.rawText : this.text), avail);
   }
 
 }
@@ -139,7 +149,7 @@ const tvAttr = attrTable(
   "minLines", "lines", "singleLine", "ellipsize", "lineSpacingExtra", "lineSpacingMultiplier",
   "drawableLeft", "drawableTop", "drawableRight", "drawableBottom", "drawablePadding", "drawableStart",
   "drawableEnd", "fontFamily", "textAllCaps", "textColorHint", "inputType", "letterSpacing", "maxLength",
-  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth", "shadowColor", "shadowDx", "shadowDy", "shadowRadius", "textColorLink", "textCursorDrawable");
+  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth", "shadowColor", "shadowDx", "shadowDy", "shadowRadius", "textColorLink", "textCursorDrawable", "password");
 
 const applyTextAppearance = driven(function* applyTextAppearance(tv: JTextView, res: Resources, styleId: number): Gen {
   if (!styleId) return;
@@ -182,7 +192,7 @@ export const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JA
     tvAttr.inputType, tvAttr.lineSpacingExtra, tvAttr.lineSpacingMultiplier, tvAttr.lines,
     tvAttr.drawableStart, tvAttr.drawableEnd, tvAttr.minLines,
     tvAttr.ems, tvAttr.minEms, tvAttr.minWidth, tvAttr.includeFontPadding, tvAttr.imeOptions,
-    tvAttr.shadowColor, tvAttr.shadowDx, tvAttr.shadowDy, tvAttr.shadowRadius, tvAttr.textColorLink, tvAttr.textCursorDrawable,
+    tvAttr.shadowColor, tvAttr.shadowDx, tvAttr.shadowDy, tvAttr.shadowRadius, tvAttr.textColorLink, tvAttr.textCursorDrawable, tvAttr.password,
   ];
   const ta = obtainStyled(res, tv.theme, set, ids, defStyleAttr, defStyleRes);
   const g = (i: number) => ta.vals[i];
@@ -219,6 +229,7 @@ export const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JA
   if (g(16)) { tv.allCaps = !!rvInt(res, g(16), 0); tv.capsSet = true; }
   if (g(17)) tv.hintColors = yield rvCsl(res, g(17)!, tv.theme, 1627389952);
   if (g(18)) tv.inputTypeV = rvInt(res, g(18), 1);
+  if (isPasswordType(tv.inputTypeV) || rvInt(res, g(36), 0)) yield setTransformation(tv, passwordTransformation);
   if (g(19)) tv.lineSpacingExtra = rvDimen(res, g(19), 0);
   if (g(20)) tv.lineSpacingMult = g(20)!.t === TV.FLOAT ? g(20)!.d : 1;
   if (g(28)) tv.includePad = !!rvInt(res, g(28), 1);
@@ -287,6 +298,16 @@ export function textViewCtors<T extends JTextView>(styleAttr: string, then?: (v:
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": function (this: T, c: unknown, set: JAttrSet | null, dsa: number, dsr: number) { return init(this, c, set, dsa, dsr); },
   };
 }
+/** TextView.isPasswordInputType: text password, web password or number password */
+const isPasswordType = (t: number) => { const v = t & 0xfff; return v === 0x81 || v === 0xe1 || v === 0x12; };
+/** AOSP setTransformationMethod: a new method re-lays the text out through it */
+const setTransformation = driven(function* setTransformation(tv: JTextView, m: unknown): Gen {
+  if (tv.transformation === m) return;
+  tv.transformation = m;
+  yield tv.retransform();
+  tv.layoutWidthFor = -1;
+  requestLayout(tv); invalidate(tv);
+});
 /** AOSP setRawTextSize: only a size that differs asks for layout */
 function setRawTextSize(tv: JTextView, px: number) {
   if (tv.paintT.textSize === px) return;
@@ -365,6 +386,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (t !== this.text || changedSpans) {
       this.text = t;
       this.layoutWidthFor = -1;
+      if (this.transformation) yield this.retransform();
       requestLayout(this);
       yield this.notifyWatchers();
     }
@@ -462,7 +484,12 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "removeTextChangedListener(Landroid/text/TextWatcher;)V": function (this: JTextView, w: unknown) {
     removeFrom(this.watchers, w);
   },
-  "setInputType(I)V": function (this: JTextView, t: number) { this.inputTypeV = t; },
+  // AOSP: a password type masks through PasswordTransformationMethod, leaving one unmasks
+  "setInputType(I)V": function (this: JTextView, t: number) {
+    this.inputTypeV = t;
+    if (isPasswordType(t)) return setTransformation(this, passwordTransformation);
+    if (this.transformation === passwordTransformation) return setTransformation(this, null);
+  },
   "getInputType()I": function (this: JTextView) { return this.inputTypeV; },
   "setImeOptions(I)V": function (this: JTextView, o: number) { this.imeOptions = o; },
   "setShowSoftInputOnFocus(Z)V": function (this: JTextView, enabled: number) {
@@ -543,7 +570,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setAutoSizeTextTypeUniformWithPresetSizes([II)V": function (this: JTextView) { this.autoSizeType = 1; },
   "getAutoSizeTextType()I": function (this: JTextView) { return this.autoSizeType; },
   "getAutoSizeTextAvailableSizes()[I": () => new Int32Array(0),
-  "setTransformationMethod(Landroid/text/method/TransformationMethod;)V": function (this: JTextView, m: unknown) { this.transformation = m; },
+  "setTransformationMethod(Landroid/text/method/TransformationMethod;)V": function (this: JTextView, m: unknown) { return setTransformation(this, m); },
   "getTransformationMethod()Landroid/text/method/TransformationMethod;": function (this: JTextView) { return this.transformation; },
   "setTextCursorDrawable(I)V": driven(function* (this: JTextView, id: number): Gen {
     const drawable = id ? yield vcall(this.ctx, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", id) : null;
@@ -818,6 +845,7 @@ export const editInput = driven(function* editInput(text: string): Gen {
   focusedEdit.rawText = text;
   focusedEdit.layoutWidthFor = -1;
   focusedEdit.blinkStart = guestNow();
+  if (focusedEdit.transformation) yield focusedEdit.retransform();
   requestLayout(focusedEdit);
   yield focusedEdit.notifyWatchers();
 });

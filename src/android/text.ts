@@ -1768,12 +1768,12 @@ rt.register({
   methods: { "<init>()V": function () {}, "static getInstance()Landroid/text/method/MovementMethod;": () => linkMM, "canSelectArbitrarily()Z": () => 1 },
 });
 class JPasswordTransformation extends JObj {}
-const passwordTM = new JPasswordTransformation();
+export const passwordTransformation = new JPasswordTransformation();
 rt.register({
   name: "android/text/method/PasswordTransformationMethod", ctor: JPasswordTransformation, ifaces: ["android/text/method/TransformationMethod"],
   methods: {
     "<init>()V": function () {},
-    "static getInstance()Landroid/text/method/PasswordTransformationMethod;": () => passwordTM,
+    "static getInstance()Landroid/text/method/PasswordTransformationMethod;": () => passwordTransformation,
     "getTransformation(Ljava/lang/CharSequence;Landroid/view/View;)Ljava/lang/CharSequence;": driven(function* (s: unknown): Gen { return "\u2022".repeat((yield csText(s)).length); }),
     "onFocusChanged(Landroid/view/View;Ljava/lang/CharSequence;ZILandroid/graphics/Rect;)V": () => {},
   },
