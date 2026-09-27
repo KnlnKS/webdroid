@@ -14,7 +14,7 @@ import { vcall, newObj } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { jarray, splitSig, mangleMethod } from "../jvm/abi";
 import { JEditable, JSpannable, JSpanned, csText, textSelection, setTextSelection } from "./text";
-import { JView, invalidate } from "./view";
+import { JView, invalidate, rootOf } from "./view";
 import { JMatrix } from "./graphics";
 import { AID, type JAttrSet, obtainStyled } from "./res";
 import { loadDrawableRV } from "./drawable";
@@ -588,7 +588,6 @@ class JAutoComplete extends JEditText {
   }
 }
 const popupShowing = (v: JAutoComplete) => v.popup ? vcall(v.popup, "isShowing", "()Z") : 0;
-const rootOf = (v: JView) => { while (v.parent) v = v.parent; return v; };
 /** AutoCompleteTextView.performCompletion: the picked item's text replaces the field's */
 const performCompletion = driven(function* performCompletion(v: JAutoComplete, row: unknown, pos: number, id: bigint): Gen {
   if (yield popupShowing(v)) {

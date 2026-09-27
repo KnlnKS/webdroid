@@ -102,9 +102,7 @@ const focusChange = driven(function* focusChange(v: JView, focused: boolean): Ge
 const takeFocus = driven(function* takeFocus(v: JView): Gen {
   if (!v.enabled || !v.focusable) return 0;
   if (v.focused) return 1;
-  let root = v;
-  while (root.parent) root = root.parent;
-  const old = findByPred(root, (candidate) => candidate !== v && candidate.focused);
+  const old = findByPred(rootOf(v),(candidate) => candidate !== v && candidate.focused);
   if (old) yield focusChange(old, false);
   yield focusChange(v, true);
   focusMoved(v, v);
@@ -116,10 +114,12 @@ const clearFocus = driven(function* clearFocus(v: JView): Gen {
   focusMoved(v, null);
 });
 /** AOSP reports every focus transition to the root's observer; the tree-walk only runs when someone listens */
+export function rootOf(v: JView): JView {
+  while (v.parent) v = v.parent;
+  return v;
+}
 function focusMoved(v: JView, now: JView | null) {
-  let root: JView = v;
-  while (root.parent) root = root.parent;
-  const o = vtoMap.get(root);
+  const o = vtoMap.get(rootOf(v));
   if (!o || !o.focusLs.length) return;
   const old = o.focused === now ? null : o.focused;
   o.focused = now;
@@ -154,8 +154,7 @@ export function requestLayout(v: JView) {
 /** A window's token is a Binder (ViewRootImpl's W): apps hand it across IPC, to Play Games for one */
 const windowTokens = new WeakMap<JView, JObj>();
 function windowToken(view: JView): JObj {
-  let root = view;
-  while (root.parent) root = root.parent;
+  const root = rootOf(view);
   let token = windowTokens.get(root);
   if (!token) windowTokens.set(root, token = rt.make("android/os/Binder") as JObj);
   return token;
@@ -300,8 +299,7 @@ export function locationOnScreen(v: JView): [number, number] {
 function viewLocation(v: JView, out: Int32Array | null, screen: boolean) {
   if (!out || out.length < 2) throw rt.mkThrowable("java/lang/IllegalArgumentException", "outLocation must be an array of two integers");
   if (!v.attached) { out[0] = out[1] = 0; return; }
-  let root = v;
-  while (root.parent) root = root.parent;
+  const root = rootOf(v);
   const [x, y] = locationOnScreen(v);
   out[0] = Math.round(x - (screen ? 0 : root.left));
   out[1] = Math.round(y - (screen ? 0 : root.top));
@@ -1243,11 +1241,7 @@ const viewMethods: NativeSpec["methods"] = {
   "getWindowToken()Landroid/os/IBinder;": function (this: JView) { return this.attached ? windowToken(this) : null; },
   "getKeyDispatcherState()Landroid/view/KeyEvent$DispatcherState;": function (this: JView) { return this.attached ? keyDispatcherState : null; },
   "getApplicationWindowToken()Landroid/os/IBinder;": function (this: JView) { return this.attached ? windowToken(this) : null; },
-  "getRootView()Landroid/view/View;": function (this: JView) {
-    let v: JView = this;
-    while (v.parent) v = v.parent;
-    return v;
-  },
+  "getRootView()Landroid/view/View;": function (this: JView) { return rootOf(this); },
   "getLocationOnScreen([I)V": function (this: JView, out: Int32Array) { viewLocation(this, out, true); },
   "getLocationInWindow([I)V": function (this: JView, out: Int32Array) { viewLocation(this, out, false); },
   "getHitRect(Landroid/graphics/Rect;)V": function (this: JView, r: JRect) {
@@ -1548,8 +1542,7 @@ const viewMethods: NativeSpec["methods"] = {
   "getRootWindowInsets()Landroid/view/WindowInsets;": function (this: JView) { return this.attached ? rootWindowInsets(this) : null; },
   "getWindowInsetsController()Landroid/view/WindowInsetsController;": function (this: JView) {
     if (!this.attached) return null;
-    let root: JView = this;
-    while (root.parent) root = root.parent;
+    const root = rootOf(this);
     return root.windowOwner ? vcall(root.windowOwner, "getInsetsController", "()Landroid/view/WindowInsetsController;") : null;
   },
   "fitSystemWindows(Landroid/graphics/Rect;)Z": function (this: JView, rect: JRect) {
@@ -2304,8 +2297,7 @@ function mergeVTO(v: JView): void {
   for (const k of VTO_LISTS) real[k].push(...floating[k]);
 }
 function getVTO(v: JView): JVTO {
-  let root: JView = v;
-  while (root.parent) root = root.parent;
+  const root = rootOf(v);
   let o = vtoMap.get(root);
   if (!o) vtoMap.set(root, (o = new JVTO()));
   return o;
