@@ -11,6 +11,11 @@ export function processTid(thread: object, main: boolean): number {
   return procIdentity.pid + offset;
 }
 
+/** Bionic's sysconf names: _SC_PAGESIZE/_SC_PAGE_SIZE 0x27/0x28, _SC_NPROCESSORS_CONF/ONLN 0x60/0x61, _SC_PHYS_PAGES 0x62 */
+export function sysconf(name: number): number {
+  return name === 0x27 || name === 0x28 ? 4096 : name === 0x60 || name === 0x61 ? device.cpu.cores : name === 0x62 ? device.cpu.memKb / 4 : -1;
+}
+
 const cpuList = () => device.cpu.cores === 1 ? "0\n" : `0-${device.cpu.cores - 1}\n`;
 
 export function procText(path: string): string | null {

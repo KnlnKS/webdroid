@@ -16,7 +16,7 @@ import { procInit, abortMessageOr } from "./proc";
 import { netInit } from "./net";
 import { MONTHS, DAYS } from "../jvm/natives/jtime";
 import { device } from "../shell/config";
-import { procIdentity } from "../shell/procfs";
+import { procIdentity, sysconf } from "../shell/procfs";
 import { guestNow } from "../guest-clock";
 import { processEnv } from "../shell/environment";
 import { timersInit } from "./timers";
@@ -310,8 +310,7 @@ export function libcInit(): void {
     getppid: () => 1,
     bsd_signal: () => 0,
     nice: () => 0, setpriority: () => 0, getpriority: () => 0,
-    // Bionic's numbering: _SC_PAGESIZE/_SC_PAGE_SIZE 0x27/0x28, _SC_NPROCESSORS_CONF/ONLN 0x60/0x61, _SC_PHYS_PAGES 0x62
-    sysconf: (_c, a) => { const n = a.i(); return n === 0x27 || n === 0x28 ? 4096 : n === 0x60 || n === 0x61 ? device.cpu.cores : n === 0x62 ? 65536 : -1; },
+    sysconf: (_c, a) => sysconf(a.i()),
     getpagesize: () => 4096,
     android_get_device_api_level: () => device.sdk,
     // AT_HWCAP and friends: this CPU advertises no optional feature bits, which is true and is
