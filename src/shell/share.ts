@@ -56,6 +56,16 @@ export async function shareIntent(intent: JIntent): Promise<JIntent | null> {
   ]);
 }
 
+/** The browser as the device's default web handler: a new tab, or when the page may not open one
+ *  outside a user gesture, a sheet whose button is that gesture. A store link goes to the web store. */
+export async function openInBrowser(uri: string): Promise<null> {
+  const url = uri.replace(/^market:\/\/details/i, "https://play.google.com/store/apps/details").replace(/^market:\/\//i, "https://play.google.com/store/");
+  if (!/^https?:/i.test(url)) throw new Error("No browser for " + uri);
+  const open = () => { const tab = window.open(url, "_blank"); if (tab) tab.opener = null; return tab; };
+  if (!open()) await choose(new URL(url).host, [{ label: "Open in new tab", run: open }]);
+  return null;
+}
+
 /** The chooser's list of activities for an intent: the index picked, or null when dismissed. */
 export const chooseActivity = (heading: string, labels: string[]): Promise<number | null> =>
   choose(heading, labels.map((label, i) => ({ label, run: () => i })));

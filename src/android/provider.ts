@@ -39,6 +39,7 @@ for (const action of ["android.intent.action.OPEN_DOCUMENT", "android.intent.act
     return uri ? mkResultIntent(uri, action === "android.intent.action.GET_CONTENT" ? 1 : 3 | 0x40) : null;
   });
 }
+registerSystemActivity("android.intent.action.VIEW", async (intent) => (await import("../shell/share")).openInBrowser(intent.dataUri!), ["http", "https", "market"]);
 for (const action of ["android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE"])
   registerSystemActivity(action, async (intent) => (await import("../shell/share")).shareIntent(intent));
 registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {

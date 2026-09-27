@@ -388,8 +388,7 @@ export const activityTransport: {
 } = {};
 /** `sender` is the package whose identity the start carries (a PendingIntent's creator) */
 export async function launchIntent(host: AppHost, intent: JIntent, result?: ActivityResultTarget, sender = host.pkg) {
-  const system = systemActivity(intent);
-  if (system) {
+  const runSystem = (system: SystemHandler) => {
     // the system activity covered its caller, which resumes after its result, unless the
     // system activity went on to start another one in front of it
     const caller = result?.act ?? host.currentActivity();
@@ -397,12 +396,15 @@ export async function launchIntent(host: AppHost, intent: JIntent, result?: Acti
       if (result) deliverActivityResult(result.act, result.code, data ? RESULT_OK : RESULT_CANCELED, data);
       if (caller) setTimeout(() => void onMain(async () => { if (host.currentActivity() === caller) await host.roundTrip(caller); }).catch(reportUncaught), 0);
     }, (error) => { reportUncaught(error); if (result) deliverActivityResult(result.act, result.code, RESULT_CANCELED, null); });
-    return;
-  }
+  };
+  const system = systemActivity(intent, false);
+  if (system) return runSystem(system);
   const { getPM } = await import("./pm");
   const resolved = await vcall(getPM(), "resolveActivity", "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;", intent, 0x10000);
   if (!resolved?.activityInfo) throw rt.mkThrowable("android/content/ActivityNotFoundException", "No activity found for " + intent.action);
   const info = resolved.activityInfo;
+  // a data-scoped system activity (the browser) answers only where no installed activity does
+  if (info.packageName === "android" && info.name === SYSTEM_ACTIVITY) return runSystem(systemActivity(intent)!);
   if (info.packageName !== sender && (!info.exported || info.permission && await vcall(getPM(), "checkPermission", "(Ljava/lang/String;Ljava/lang/String;)I", info.permission, sender) !== 0))
     throw rt.mkThrowable("java/lang/SecurityException", "Activity permission denied: " + info.name);
   const component = info.name.replace(/\./g, "/");
@@ -422,16 +424,21 @@ export const RESULT_OK = -1, RESULT_CANCELED = 0;
  * DocumentsUI; here they are the browser's own pickers. Each answers with the result Intent, or
  * null for "the user backed out" — which is RESULT_CANCELED, not an error.
  */
-export const systemActivities: Record<string, (intent: JIntent) => Promise<JIntent | null>> = {};
-export function registerSystemActivity(action: string, run: (intent: JIntent) => Promise<JIntent | null>) {
-  systemActivities[action] = run;
+type SystemHandler = (intent: JIntent) => Promise<JIntent | null>;
+const systemActivities = new Map<string, { run: SystemHandler; schemes?: string[] }[]>();
+/** `schemes` scopes a handler to intents whose data has one of them; such a handler yields to
+ *  any installed activity that matches, as a default browser does to an app's own links. */
+export function registerSystemActivity(action: string, run: SystemHandler, schemes?: string[]) {
+  const handlers = systemActivities.get(action) ?? [];
+  systemActivities.set(action, [...handlers, { run, schemes }]);
 }
 /** The platform package answers for them, as ResolverActivity and DocumentsUI do on a device, so
  *  an intent resolved to that component and started explicitly reaches the same handler. */
 export const SYSTEM_ACTIVITY = "com.android.internal.app.ResolverActivity";
-export function systemActivity(intent: JIntent | null): ((intent: JIntent) => Promise<JIntent | null>) | null {
+export function systemActivity(intent: JIntent | null, scoped = true): SystemHandler | null {
   if (!intent || intent.component && (intent.componentPkg !== "android" || intent.component !== SYSTEM_ACTIVITY)) return null;
-  return systemActivities[intent.action ?? ""] ?? null;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(intent.dataUri ?? "")?.[1].toLowerCase() ?? "";
+  return systemActivities.get(intent.action ?? "")?.find((h) => h.schemes ? scoped && h.schemes.includes(scheme) : true)?.run ?? null;
 }
 export function mkResultIntent(uri: string, flags = 3 | 0x40): JIntent {
   const i = new JIntent();
