@@ -250,11 +250,12 @@ export fn decommit_pages(addr: u32, n: u32) void {
     };
 }
 
-const UNIT: u32 = 1 << 25;
+/// a plane's pages come from the pool in units this size: a small mapping still takes a whole one
+const UNIT: u32 = 1 << 21;
 const PLANES = 256;
 const PLANE_LO: u32 = 0x1000_0000;
 var pool_base: u32 = 0;
-var owner = [_]i16{-1} ** 64;
+var owner = [_]i16{-1} ** ((abi.MEM_SIZE_A64 - abi.POOL_BASE) / UNIT);
 var owner_len: u32 = 0;
 pub var P = [_]u32{0} ** PLANES;
 var R = [_]u64{0} ** PLANES;
@@ -392,9 +393,10 @@ export fn map_va(n: u64, rsv: u32) u64 {
         }
         return 0;
     }
-    // Large transient mappings strand the monotonic malloc bump when they share plane 0.
-    // Keep sub-stack-sized mappings there so their allocation stays page-table-only.
-    if (pool_base == 0 or (rsv == 0 and n < abi.STACK_SIZE)) {
+    // Large transient mappings strand the monotonic malloc bump when they share plane 0, and a
+    // plane commits in whole pool units: keep sub-stack-sized mappings, reserved or not, in
+    // plane 0 where they cost pages only.
+    if (pool_base == 0 or n < abi.STACK_SIZE) {
         const p = map_pages(@intCast(n), rsv, PAGE_SIZE);
         if (p != 0 or pool_base == 0) return p;
     }
