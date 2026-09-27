@@ -24,6 +24,11 @@ class JExpandableListConnector extends JBaseAdapter {
   adapter: unknown = null;
   expanded = new Set<number>();
   rows: Row[] = [];
+  /** the DataSetObserver it registers on its ExpandableListAdapter */
+  readonly observer = Object.assign(new JObj(), {
+    [mangleMethod("onChanged", "()V")]: () => this.refresh(),
+    [mangleMethod("onInvalidated", "()V")]: () => this.refresh(),
+  });
   /** the rows the adapter's groups and the expanded set make, then the list's own rebuild */
   refresh(): unknown { return rt.drive(this.refresh$()); }
   *refresh$(): Gen {
@@ -109,20 +114,19 @@ class JExpandableListView extends JListView {
 const GROUP_STATES = [[], [ST.expanded], [ST.empty], [ST.expanded, ST.empty]].map((s) => Int32Array.from(s));
 const CHILD_LAST = Int32Array.of(ST.last), NO_STATE = new Int32Array(0);
 
-const initExpandable = driven(function* initExpandable(v: JExpandableListView, c: unknown, set: JAttrSet | null, dsa: number): Gen {
-  yield callSelf(listViewMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", v, c, set);
-  const res = v.jres;
+const initExpandable = driven(function* initExpandable(this: JExpandableListView, c: unknown, set: JAttrSet | null = null, dsa: number = AID("expandableListViewStyle")): Gen {
+  yield callSelf(listViewMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
+  const res = this.jres;
   if (!res) return;
-  const a = obtainStyled(res, v.theme, set, ["groupIndicator", "childIndicator", "indicatorLeft", "indicatorRight",
+  const a = obtainStyled(res, this.theme, set, ["groupIndicator", "childIndicator", "indicatorLeft", "indicatorRight",
     "childIndicatorLeft", "childIndicatorRight", "childDivider"].map(AID), dsa, 0);
   const dimen = (i: number, dflt: number) => a.vals[i] ? Math.trunc(rvDimen(res, a.vals[i], dflt)) : dflt;
-  v.indicatorLeft = dimen(2, 0); v.indicatorRight = dimen(3, 0);
-  v.childIndicatorLeft = dimen(4, -1); v.childIndicatorRight = dimen(5, -1);
-  if (a.vals[1]) v.childIndicator = yield loadDrawableRV(res, a.vals[1], v.theme);
-  if (a.vals[6]) v.childDivider = yield loadDrawableRV(res, a.vals[6], v.theme);
-  if (a.vals[0]) yield* v.setGroupIndicator$(yield loadDrawableRV(res, a.vals[0], v.theme));
+  this.indicatorLeft = dimen(2, 0); this.indicatorRight = dimen(3, 0);
+  this.childIndicatorLeft = dimen(4, -1); this.childIndicatorRight = dimen(5, -1);
+  if (a.vals[1]) this.childIndicator = yield loadDrawableRV(res, a.vals[1], this.theme);
+  if (a.vals[6]) this.childDivider = yield loadDrawableRV(res, a.vals[6], this.theme);
+  if (a.vals[0]) yield* this.setGroupIndicator$(yield loadDrawableRV(res, a.vals[0], this.theme));
 });
-const defStyle = () => AID("expandableListViewStyle");
 function expandGroup(this: JExpandableListView, g: number) { return this.expand(g, true); }
 function setIndicatorBounds(this: JExpandableListView, l: number, r: number) { this.indicatorLeft = l; this.indicatorRight = r; }
 function setChildIndicatorBounds(this: JExpandableListView, l: number, r: number) { this.childIndicatorLeft = l; this.childIndicatorRight = r; }
@@ -141,21 +145,20 @@ rt.register({
   statics: { PACKED_POSITION_TYPE_GROUP: 0, PACKED_POSITION_TYPE_CHILD: 1, PACKED_POSITION_TYPE_NULL: 2, PACKED_POSITION_VALUE_NULL: PACKED_NULL, CHILD_INDICATOR_INHERIT: -1 },
   methods: {
     ...listViewMethods,
-    "<init>(Landroid/content/Context;)V": function (this: JExpandableListView, c: unknown) { return initExpandable(this, c, null, defStyle()); },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": function (this: JExpandableListView, c: unknown, set: JAttrSet | null) { return initExpandable(this, c, set, defStyle()); },
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": function (this: JExpandableListView, c: unknown, set: JAttrSet | null, dsa: number) { return initExpandable(this, c, set, dsa); },
+    "<init>(Landroid/content/Context;)V": initExpandable,
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initExpandable,
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": initExpandable,
     "setAdapter(Landroid/widget/ListAdapter;)V": () => {
       throw rt.mkThrowable("java/lang/RuntimeException", "For ExpandableListView, use setAdapter(ExpandableListAdapter) instead of setAdapter(ListAdapter)");
     },
     "setAdapter(Landroid/widget/ExpandableListAdapter;)V": driven(function* (this: JExpandableListView, a: unknown): Gen {
       const old = this.connector;
-      if (old?.adapter) yield vcall(old.adapter, "unregisterDataSetObserver", "(Landroid/database/DataSetObserver;)V", observerOf(old));
+      if (old?.adapter) yield vcall(old.adapter, "unregisterDataSetObserver", "(Landroid/database/DataSetObserver;)V", old.observer);
       let connector: JExpandableListConnector | null = null;
       if (a) {
-        rt.link("android/widget/ExpandableListConnector");
-        connector = new JExpandableListConnector();
+        connector = rt.make("android/widget/ExpandableListConnector") as JExpandableListConnector;
         connector.adapter = a;
-        yield vcall(a, "registerDataSetObserver", "(Landroid/database/DataSetObserver;)V", observerOf(connector));
+        yield vcall(a, "registerDataSetObserver", "(Landroid/database/DataSetObserver;)V", connector.observer);
         yield connector.refresh();
       }
       this.connector = connector;
@@ -167,7 +170,7 @@ rt.register({
     "collapseGroup(I)Z": function (this: JExpandableListView, g: number) { return this.expand(g, false); },
     "isGroupExpanded(I)Z": function (this: JExpandableListView, g: number) { return +!!this.connector?.expanded.has(g); },
     "performItemClick(Landroid/view/View;IJ)Z": performItemClick,
-    "setGroupIndicator(Landroid/graphics/drawable/Drawable;)V": driven(function* (this: JExpandableListView, d: JDrawable | null): Gen { yield* this.setGroupIndicator$(d); }),
+    "setGroupIndicator(Landroid/graphics/drawable/Drawable;)V": function (this: JExpandableListView, d: JDrawable | null) { return rt.drive(this.setGroupIndicator$(d)); },
     "setIndicatorBounds(II)V": setIndicatorBounds,
     "setIndicatorBoundsRelative(II)V": setIndicatorBounds,
     "setChildIndicatorBounds(II)V": setChildIndicatorBounds,
@@ -216,19 +219,6 @@ rt.register({
 });
 function packedGroup(p: bigint): number { return p === PACKED_NULL ? -1 : Number((p >> 32n) & 0x7fffffffn); }
 function packedChild(p: bigint): number { return p === PACKED_NULL || p >= 0n ? -1 : Number(BigInt.asIntN(32, p)); }
-const observers = new WeakMap<JExpandableListConnector, JObj>();
-/** the connector's DataSetObserver on its ExpandableListAdapter */
-function observerOf(c: JExpandableListConnector): JObj {
-  let o = observers.get(c);
-  if (!o) {
-    o = Object.assign(new JObj(), {
-      [mangleMethod("onChanged", "()V")]: () => c.refresh(),
-      [mangleMethod("onInvalidated", "()V")]: () => c.refresh(),
-    });
-    observers.set(c, o);
-  }
-  return o;
-}
 rt.markers(...["OnGroupClickListener", "OnChildClickListener", "OnGroupExpandListener", "OnGroupCollapseListener"].map((n) => "android/widget/ExpandableListView$" + n));
 rt.register({ name: "android/widget/ExpandableListAdapter", ctor: class extends JObj {} });
 rt.register({ name: "android/widget/HeterogeneousExpandableList", ctor: class extends JObj {} });
@@ -265,21 +255,22 @@ const bindRow = driven(function* bindRow(v: JView, data: unknown, from: string[]
     if (tv) yield vcall(tv, "setText", "(Ljava/lang/CharSequence;)V", yield vcall(data, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", from[i]));
   }
 });
-const simpleInit = (layouts: (a: SE, ints: number[]) => void) => function (this: SE, ctx: unknown, groups: unknown, ...rest: unknown[]) {
-  const ints: number[] = [];
-  while (typeof rest[0] === "number") ints.push(rest.shift() as number);
-  const [groupFrom, groupTo, children] = rest.splice(0, 3) as [string[], Int32Array, unknown];
-  while (typeof rest[0] === "number") ints.push(rest.shift() as number);
-  const [childFrom, childTo] = rest as [string[], Int32Array];
-  Object.assign(this, { jctx: ctx, groups, children, groupFrom: [...groupFrom], groupTo, childFrom: [...childFrom], childTo });
-  layouts(this, ints);
-};
+/** the full constructor, which AOSP's shorter ones call with a layout repeated */
+function simpleInit(this: SE, ctx: unknown, groups: unknown, expanded: number, collapsed: number, groupFrom: string[], groupTo: Int32Array,
+  children: unknown, child: number, lastChild: number, childFrom: string[], childTo: Int32Array) {
+  Object.assign(this, { jctx: ctx, groups, children, expandedLayout: expanded, collapsedLayout: collapsed, childLayout: child, lastChildLayout: lastChild,
+    groupFrom: [...groupFrom], groupTo, childFrom: [...childFrom], childTo });
+}
 const G_ = "Landroid/content/Context;Ljava/util/List;", F_ = "[Ljava/lang/String;[ILjava/util/List;", C_ = "[Ljava/lang/String;[I)V";
 rt.register({ name: "android/widget/SimpleExpandableListAdapter", ctor: JSimpleExpandableListAdapter, sup: "android/widget/BaseExpandableListAdapter", methods: {
   ...baseExpandableMethods,
-  [`<init>(${G_}I${F_}I${C_}`]: simpleInit((a, [g, c]) => { a.expandedLayout = a.collapsedLayout = g; a.childLayout = a.lastChildLayout = c; }),
-  [`<init>(${G_}II${F_}I${C_}`]: simpleInit((a, [e, g, c]) => { a.expandedLayout = e; a.collapsedLayout = g; a.childLayout = a.lastChildLayout = c; }),
-  [`<init>(${G_}II${F_}II${C_}`]: simpleInit((a, [e, g, c, l]) => { a.expandedLayout = e; a.collapsedLayout = g; a.childLayout = c; a.lastChildLayout = l; }),
+  [`<init>(${G_}I${F_}I${C_}`]: function (this: SE, ctx: unknown, groups: unknown, g: number, gFrom: string[], gTo: Int32Array, children: unknown, c: number, cFrom: string[], cTo: Int32Array) {
+    simpleInit.call(this, ctx, groups, g, g, gFrom, gTo, children, c, c, cFrom, cTo);
+  },
+  [`<init>(${G_}II${F_}I${C_}`]: function (this: SE, ctx: unknown, groups: unknown, e: number, g: number, gFrom: string[], gTo: Int32Array, children: unknown, c: number, cFrom: string[], cTo: Int32Array) {
+    simpleInit.call(this, ctx, groups, e, g, gFrom, gTo, children, c, c, cFrom, cTo);
+  },
+  [`<init>(${G_}II${F_}II${C_}`]: simpleInit,
   "getGroupCount()I": function (this: SE) { return vcall(this.groups, "size", "()I"); },
   "getGroup(I)Ljava/lang/Object;": function (this: SE, g: number) { return listGet(this.groups, g); },
   "getGroupId(I)J": (g: number) => BigInt(g),

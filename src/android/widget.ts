@@ -42,7 +42,8 @@ const applyProgressTint = driven(function* applyProgressTint(pb: JProgressBar): 
 const drawTrack = driven(function* drawTrack(pb: JProgressBar, cv: JCanvas, d: JDrawable): Gen {
   const thread = curThread;
   yield vcallOn(thread, d, "setBounds", "(IIII)V", 0, 0, pb.width() - pb.padL - pb.padR, pb.height() - pb.padT - pb.padB);
-  for (const [id, v] of [[SECONDARY_ID, pb.secondary], [PROGRESS_ID, pb.progress]]) {
+  for (let primary = 0; primary < 2; primary++) {
+    const id = primary ? PROGRESS_ID : SECONDARY_ID, v = primary ? pb.progress : pb.secondary;
     const layer = d instanceof JLayerDrawable ? yield vcallOn(thread, d, "findDrawableByLayerId", "(I)Landroid/graphics/drawable/Drawable;", id) : null;
     yield vcallOn(thread, layer ?? d, "setLevel", "(I)Z", Math.trunc(pb.fraction(v) * 10000));
   }
@@ -396,7 +397,7 @@ const compoundMethods: NativeSpec["methods"] = {
   "onDraw(Landroid/graphics/Canvas;)V": compoundOnDraw,
 };
 rt.register({ name: "android/widget/CompoundButton", ctor: JCompoundButton, sup: "android/widget/Button", ifaces: ["android/widget/Checkable"], methods: compoundMethods });
-rt.markers("android/widget/CompoundButton$OnCheckedChangeListener", "android/widget/Checkable");
+rt.markers("android/widget/CompoundButton$OnCheckedChangeListener");
 rt.register({ name: "android/widget/CheckBox", ctor: class extends JCompoundButton {}, sup: "android/widget/CompoundButton", methods: {
   ...compoundMethods, ...compoundCtors("checkboxStyle"),
 } });

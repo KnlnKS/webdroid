@@ -8,7 +8,7 @@ import { vcall, vcallOn, after, idHash, box, JFloat, curThread, vcallUncaught, t
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
-import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme, currentResources } from "./res";
+import { type Resources, type JTheme, attrTable, type JAttrSet, obtainStyled, rvDimen, rvInt, rvString, askTheme } from "./res";
 import { mainHandler, reportUncaught, uptimeMillis, keyDispatcherState } from "./os";
 import { JProperty, type JDisplayMetrics } from "./util";
 import { csText } from "./text";
@@ -102,7 +102,7 @@ const focusChange = driven(function* focusChange(v: JView, focused: boolean): Ge
 const takeFocus = driven(function* takeFocus(v: JView): Gen {
   if (!v.enabled || !v.focusable) return 0;
   if (v.focused) return 1;
-  const old = findByPred(rootOf(v),(candidate) => candidate !== v && candidate.focused);
+  const old = findByPred(rootOf(v), (candidate) => candidate !== v && candidate.focused);
   if (old) yield focusChange(old, false);
   yield focusChange(v, true);
   focusMoved(v, v);
@@ -113,11 +113,11 @@ const clearFocus = driven(function* clearFocus(v: JView): Gen {
   yield focusChange(v, false);
   focusMoved(v, null);
 });
-/** AOSP reports every focus transition to the root's observer; the tree-walk only runs when someone listens */
 export function rootOf(v: JView): JView {
   while (v.parent) v = v.parent;
   return v;
 }
+/** AOSP reports every focus transition to the root's observer; the tree-walk only runs when someone listens */
 function focusMoved(v: JView, now: JView | null) {
   const o = vtoMap.get(rootOf(v));
   if (!o || !o.focusLs.length) return;
@@ -149,8 +149,6 @@ export function requestLayout(v: JView) {
     if (f && f !== nativeRequestLayout) { void guardApply(f as JMethod, par); break; }
   }
 }
-/** A configuration change (orientation, night mode, a relaunch), like boot, leaves every cached
- *  measurement stale, and no single view names that: the next pass re-measures every window. */
 /** A window's token is a Binder (ViewRootImpl's W): apps hand it across IPC, to Play Games for one */
 const windowTokens = new WeakMap<JView, JObj>();
 function windowToken(view: JView): JObj {
@@ -159,6 +157,8 @@ function windowToken(view: JView): JObj {
   if (!token) windowTokens.set(root, token = rt.make("android/os/Binder") as JObj);
   return token;
 }
+/** A configuration change (orientation, night mode, a relaunch), like boot, leaves every cached
+ *  measurement stale, and no single view names that: the next pass re-measures every window. */
 export function requestLayoutAll() {
   uiState.needsLayout = true; uiState.needsDraw = true; uiState.forceAll = true;
   perf.layoutRequestsAll++;
@@ -2307,32 +2307,6 @@ function fireScrollChanged(v: JView, oldX: number, oldY: number) {
   if (v.scrollChangeL) void vcallUncaught(v.scrollChangeL, "onScrollChange", "(Landroid/view/View;IIII)V", v, v.scrollX, v.scrollY, oldX, oldY);
   void getVTO(v).dispatchScrollChanged();
 }
-class JA11yAction extends JObj { actionId = 0; label: string | null = null; }
-rt.register({ name: "android/view/accessibility/AccessibilityNodeInfo", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable"] });
-rt.markers("android/view/accessibility/AccessibilityRecord");
-// The standard actions: the original ones are bits, later ones are android.R.id.accessibilityAction*
-// resources (read on first use, once the framework package is loaded).
-const a11yAction = (actionId: number) => Object.assign(new JA11yAction(), { actionId });
-const a11yActions: Record<string, unknown> = Object.fromEntries(("FOCUS CLEAR_FOCUS SELECT CLEAR_SELECTION CLICK LONG_CLICK ACCESSIBILITY_FOCUS " +
-  "CLEAR_ACCESSIBILITY_FOCUS NEXT_AT_MOVEMENT_GRANULARITY PREVIOUS_AT_MOVEMENT_GRANULARITY NEXT_HTML_ELEMENT PREVIOUS_HTML_ELEMENT SCROLL_FORWARD " +
-  "SCROLL_BACKWARD COPY PASTE CUT SET_SELECTION EXPAND COLLAPSE DISMISS SET_TEXT").split(" ").map((name, bit) => ["ACTION_" + name, a11yAction(1 << bit)]));
-for (const name of ("SHOW_ON_SCREEN SCROLL_TO_POSITION SCROLL_UP SCROLL_LEFT SCROLL_DOWN SCROLL_RIGHT CONTEXT_CLICK SET_PROGRESS MOVE_WINDOW " +
-  "SHOW_TOOLTIP HIDE_TOOLTIP PAGE_UP PAGE_DOWN PAGE_LEFT PAGE_RIGHT PRESS_AND_HOLD IME_ENTER DRAG_START DRAG_DROP DRAG_CANCEL " +
-  "SHOW_TEXT_SUGGESTIONS SCROLL_IN_DIRECTION").split(" ")) {
-  const resName = "accessibilityAction" + name.toLowerCase().replace(/(^|_)(\w)/g, (_, _sep: string, c: string) => c.toUpperCase());
-  Object.defineProperty(a11yActions, "ACTION_" + name, { enumerable: true, get: () => a11yAction(currentResources()?.idFor("id", resName, "android") ?? 0) });
-}
-rt.register({
-  name: "android/view/accessibility/AccessibilityNodeInfo$AccessibilityAction", ctor: JA11yAction, statics: a11yActions,
-  methods: {
-    "<init>(ILjava/lang/CharSequence;)V": driven(function* (this: JA11yAction, id: number, label: unknown): Gen {
-      this.actionId = id;
-      this.label = label === null ? null : yield csText(label);
-    }),
-    "getId()I": function (this: JA11yAction) { return this.actionId; },
-    "getLabel()Ljava/lang/CharSequence;": function (this: JA11yAction) { return this.label; },
-  },
-});
 rt.markers("android/view/autofill/AutofillId");
 class JTouchDelegate extends JObj {
   bounds = new JRect();
@@ -2451,11 +2425,11 @@ rt.register({
 });
 
 /** View's FloatProperty constants, each over the view's own accessor pair */
-class JViewProperty extends JProperty { accessor = ""; }
+class JViewProperty extends JProperty { getter = ""; setter = ""; }
 rt.register({ name: "webdroid/ViewProperty", ctor: JViewProperty, sup: "android/util/FloatProperty", methods: {
-  "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JViewProperty, view: unknown): Gen { return box(JFloat, yield vcall(view, "get" + this.accessor, "()F")); }),
-  "setValue(Ljava/lang/Object;F)V": function (this: JViewProperty, view: unknown, v: number) { return vcall(view, "set" + this.accessor, "(F)V", v); },
-  "set(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JViewProperty, view: unknown, v: JFloat) { return vcall(view, "set" + this.accessor, "(F)V", Math.fround(v?.v ?? 0)); },
+  "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JViewProperty, view: unknown): Gen { return box(JFloat, yield vcall(view, this.getter, "()F")); }),
+  "setValue(Ljava/lang/Object;F)V": function (this: JViewProperty, view: unknown, v: number) { return vcall(view, this.setter, "(F)V", v); },
+  "set(Ljava/lang/Object;Ljava/lang/Object;)V": function (this: JViewProperty, view: unknown, v: JFloat) { return vcall(view, this.setter, "(F)V", Math.fround(v?.v ?? 0)); },
 } });
 const VIEW_PROPERTIES = ["ALPHA", "TRANSLATION_X", "TRANSLATION_Y", "TRANSLATION_Z", "X", "Y", "Z", "ROTATION", "ROTATION_X", "ROTATION_Y", "SCALE_X", "SCALE_Y"];
 /** View's protected *_STATE_SET arrays: every combination of these five, named in this order */
@@ -2473,7 +2447,7 @@ rt.register({
     for (const constant of VIEW_PROPERTIES) {
       // TRANSLATION_X names translationX, read through getTranslationX
       const accessor = constant.split("_").map((w) => w[0] + w.slice(1).toLowerCase()).join("");
-      view[mangleStaticField(constant)] = Object.assign(rt.make("webdroid/ViewProperty"), { name: accessor[0].toLowerCase() + accessor.slice(1), type: float, accessor });
+      view[mangleStaticField(constant)] = Object.assign(rt.make("webdroid/ViewProperty"), { name: accessor[0].toLowerCase() + accessor.slice(1), type: float, getter: "get" + accessor, setter: "set" + accessor });
     }
     stateSets().forEach((set, m) => { view[mangleStaticField(stateSetName(m))] = set; });
   },

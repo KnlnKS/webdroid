@@ -157,11 +157,12 @@ export const fragMethods: NonNullable<NativeSpec["methods"]> = {
   ...fieldSetters({ "setArguments(Landroid/os/Bundle;)V": "args" }),
   ...noops("<init>()V", "onActivityResult(IILandroid/content/Intent;)V",
     "dump(Ljava/lang/String;Ljava/io/FileDescriptor;Ljava/io/PrintWriter;[Ljava/lang/String;)V",
-    "setHasOptionsMenu(Z)V", "setRetainInstance(Z)V",
-    "onCreate(Landroid/os/Bundle;)V", "onActivityCreated(Landroid/os/Bundle;)V",
+    "setHasOptionsMenu(Z)V", "setRetainInstance(Z)V"),
+  // the base class's lifecycle callbacks: empty by design, not missing
+  ...Object.fromEntries(["onCreate(Landroid/os/Bundle;)V", "onActivityCreated(Landroid/os/Bundle;)V",
     "onSaveInstanceState(Landroid/os/Bundle;)V", "onViewStateRestored(Landroid/os/Bundle;)V",
     "onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V", "onStart()V", "onResume()V", "onPause()V",
-    "onStop()V", "onDestroy()V", "onDestroyView()V", "onDetach()V", "onLowMemory()V"),
+    "onStop()V", "onDestroy()V", "onDestroyView()V", "onDetach()V", "onLowMemory()V"].map((s) => [s, () => {}])),
   ...stubs(null, "onCreateView(Landroid/view/LayoutInflater;Landroid/view/ViewGroup;Landroid/os/Bundle;)Landroid/view/View;"),
   ...stubs(0, "isAdded()Z", "isRemoving()Z", "isDetached()Z", "isHidden()Z", "isVisible()Z", "isResumed()Z"),
 };
