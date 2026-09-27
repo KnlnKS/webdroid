@@ -1169,7 +1169,7 @@ function fillTypedValue(res: Resources, tv: TypedValueLike, v: RV | null, srcId:
     const f = res.pathOf(v.d);
     if (f) {
       tv.type = TV.STRING; tv.data = 0; tv.string = f.path;
-      tv.resourceId = f.id; tv.density = device.densityDpi;
+      tv.resourceId = f.id; tv.density = f.density;
       tv.assetCookie = cookieOf(f.id); tv.changingConfigurations = 0;
       return 0;
     }

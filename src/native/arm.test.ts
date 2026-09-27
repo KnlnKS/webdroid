@@ -237,6 +237,18 @@ describe("arm decoder", () => {
       expect([c.w[16], c.w[18], c.w[20], c.w[22], c.q]).toEqual([3, 16, 0, -2147483648, 1]);
     }
   });
+  test("packing, byte-pair extension, word-by-half products and IT bodies without flags", () => {
+    const setup = (cpu: Cpu) => { cpu.w[0] = 0x12345678; cpu.w[2] = 0x9abcdef0; cpu.w[4] = 0x7fff0003; cpu.w[14] = 10; };
+    // pkhbt r3, r0, r1, lsl #8; pkhtb r4, r0, r1, asr #16; uxtab16 r5, r2, r1, ror #8; sxtb16 r6, r1
+    const arm = run([0xe6803411, 0xe6804851, 0xe6c25471, 0xe68f6071, 0xe1272180, 0xe12801e0, BXLR], setup); // smlawb r7; smulwt r8
+    expect([3, 4, 5, 6].map((i) => arm.w[2 * i] >>> 0)).toEqual([0xbcde5678, 0x12349abc, 0x809900e1, 0xffbcfff0]);
+    const thumb = runThumb([0xeac0, 0x2301, 0xeac0, 0x4421, 0xfa32, 0xf591, 0xfa2f, 0xf681,
+      0xea60, 0x1901, 0xfb10, 0x2a01, // orn r9, r0, r1, lsl #4; smlabb r10, r0, r1, r2
+      0x4282, 0xbf8a, 0x3705, 0x4347, 0xf301, 0x080f, // cmp r2, r0; itet hi; addhi r7, #5; mulls r7, r0; ssathi r8, #16, r1
+      0x4770], setup);
+    expect([3, 4, 5, 6, 9, 7, 8].map((i) => thumb.w[2 * i] >>> 0)).toEqual([0xbcde5678, 0x12349abc, 0x809900e1, 0xffbcfff0, 0x563656ff, 15, 0xffff8000]);
+    expect([thumb.cpsr >>> 28, thumb.q]).toEqual([2, 1]);
+  });
   test("parallel add/subtract sets GE for SEL and saturates or halves per lane", () => {
     const setup = (cpu: Cpu) => { cpu.w[0] = 0x80ff7f01; cpu.w[2] = 0x0102ff7f; cpu.w[14] = 0x7fffffff; };
     for (const execute of [
@@ -978,6 +990,12 @@ describe("thumb decoder", () => {
     const arm = run([0xf4620a0d, 0xf4460281, 0xf42307df, 0xf404164f, BXLR], setup);
     for (const c of [thumb, arm]) expect([c.w[4], c.w[12], mem.ld32(data + 64)]).toEqual([data + 16, data + 72, 0x150e0700]);
     expect(() => run([0xf42307df, BXLR], (cpu) => { cpu.w[6] = data + 4; })).toThrow(/bad address/);
+    // vld1.32 {d0[1]}, [r2]; vst1.16 {d1[2]}, [r3]!; vld1.8 {d2[]}, [r4]
+    const lanes = (cpu: Cpu) => { setup(cpu); cpu.w[8] = data + 5; cpu.vu[3] = 0xabcd1234; };
+    for (const execute of [() => run([0xf4a2088f, 0xf483148d, 0xf4a42c0f, BXLR], lanes), () => runThumb([0xf9a2, 0x088f, 0xf983, 0x148d, 0xf9a4, 0x2c0f, 0x4770], lanes)]) {
+      const c = execute();
+      expect([c.vu[1], c.w[6] - data, mem.u16[(data + 8) >>> 1], c.vu[4], c.vu[5]]).toEqual([0x150e0700, 10, 0x1234, 0x23232323, 0x23232323]);
+    }
   });
 
   test("compiled NEON data processing and lane moves match the interpreter in both encodings", () => {
@@ -996,6 +1014,8 @@ describe("thumb decoder", () => {
       // vext, vrev64/32/16, vtrn/vzip/vuzp/vswp, vmull/vmlal/vmlsl, modified immediates
       [0xf2fa034c, 0xf2fa250c, 0xf3f84046, 0xf3f4608a, 0xf3f0710b, 0xf3fa80a9, 0xf3f6a1ec, 0xf3f2e12f, 0xf3b20001, 0xf3b620c4,
         0xf3ac6c0e, 0xf29a880b, 0xf38caa0d, 0xf28ecc0f, 0xf284e45f, 0xf2831b3f, 0xf2872f18, 0xf3823e35, 0xf382403b, 0xf2815710],
+      // vpadd.i16, vpmax.s8, vpmin.u32, vpadd.f32, vpmax.f32 and vpmin.f32 over NaN lanes: checked only against the interpreter
+      [0xf2103b11, 0xf2004a01, 0xf3205a11, 0xf3006d01, 0xf3007f01, 0xf3218f05],
     ];
     const setup = (cpu: Cpu) => {
       for (let i = 0; i < 64; i++) cpu.si[i] = Math.imul(i + 1, 0x9e3779b9) ^ (i << 7);

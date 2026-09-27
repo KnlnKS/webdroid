@@ -10,10 +10,10 @@ import { onMain, inMainJob } from "./mainloop";
 import { newArrayList } from "../jvm/natives/jutil";
 import { device } from "../shell/config";
 import { reportUncaught, uptimeMillis } from "./os";
-import { currentResources, rvDimen, rvFloat, rvInt, normRV, type Resources } from "./res";
+import { currentResources, rvDimen, rvFloat, rvInt, namedAttrRV, type Resources } from "./res";
 import { parseAXML, attr, TV, type XmlNode } from "./axml";
 import { complexToFraction } from "./util";
-import { accelDecel } from "./animator";
+import { accelDecel, loadInterpolator, interpolatorAttr } from "./interpolator";
 import type { JContext } from "./context";
 
 // ── Scroller/OverScroller: time-based interpolated scroll values
@@ -224,52 +224,6 @@ rt.register({
 // An app subclass overrides applyTransformation(t, Transformation) and moves things itself
 // (SwipeRefreshLayout's whole circle choreography is five of them), so the machinery that has
 // to exist is the timeline: normalized time, interpolation, repeat, and the listener edges.
-class JInterpolator extends JObj {
-  a = 0; b = 0;
-  f: (t: number) => number = (t) => t;
-}
-const INTERP: Record<string, (t: number, a: number, b: number) => number> = {
-  LinearInterpolator: (t) => t,
-  AccelerateDecelerateInterpolator: accelDecel,
-  AccelerateInterpolator: (t, a) => a === 1 ? t * t : Math.pow(t, 2 * a),
-  DecelerateInterpolator: (t, a) => a === 1 ? 1 - (1 - t) * (1 - t) : 1 - Math.pow(1 - t, 2 * a),
-  OvershootInterpolator: (t, a) => (t -= 1, t * t * ((a + 1) * t + a) + 1),
-  AnticipateInterpolator: (t, a) => t * t * ((a + 1) * t - a),
-  AnticipateOvershootInterpolator: (t, a) => t < 0.5
-    ? 0.5 * (t * 2) * (t * 2) * ((a * 1.5 + 1) * (t * 2) - a * 1.5)
-    : 0.5 * ((t * 2 - 2) * (t * 2 - 2) * ((a * 1.5 + 1) * (t * 2 - 2) + a * 1.5) + 2),
-  BounceInterpolator: (t) => {
-    const b = (x: number) => x * x * 8;
-    t *= 1.1226;
-    return t < 0.3535 ? b(t) : t < 0.7408 ? b(t - 0.54719) + 0.7 : t < 0.9644 ? b(t - 0.8526) + 0.9 : b(t - 1.0435) + 0.95;
-  },
-  CycleInterpolator: (t, a) => Math.sin(2 * Math.PI * a * t),
-  PathInterpolator: (t) => t,
-  FastOutSlowInInterpolator: accelDecel,
-};
-// default tension/factor per class: 2.0 for the overshoot family, 1.0 for the power ones
-const INTERP_DEF: Record<string, number> = { OvershootInterpolator: 2, AnticipateInterpolator: 2, AnticipateOvershootInterpolator: 2 };
-for (const n of ["android/view/animation/Interpolator", "android/animation/TimeInterpolator"]) {
-  rt.register({ name: n, ctor: class extends JObj {} });
-}
-for (const n of Object.keys(INTERP)) {
-  const fn = INTERP[n], def = INTERP_DEF[n] ?? 1;
-  const init = function (this: JInterpolator, a?: number) { this.a = a ?? def; this.f = (t) => fn(t, this.a, this.b); };
-  rt.register({
-    name: "android/view/animation/" + n, ctor: class extends JInterpolator {},
-    ifaces: ["android/view/animation/Interpolator", "android/animation/TimeInterpolator"],
-    methods: {
-      "<init>()V": init,
-      "<init>(F)V": init,
-      "<init>(FF)V": function (this: JInterpolator, a: number, b: number) { init.call(this, a); this.b = b; },
-      "<init>(FFFF)V": init,
-      "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": init,
-      "<init>(Landroid/graphics/Path;)V": init,
-      "getInterpolation(F)F": function (this: JInterpolator, t: number) { return Math.fround(this.f(t)); },
-    },
-  });
-}
-
 class JTransformation extends JObj {
   alpha = 1;
   matrix = new JMatrix();
@@ -384,7 +338,6 @@ const beginViewAnim = (v: JView, anim: unknown) => {
 };
 setViewAnimHook(beginViewAnim);
 
-const loadInterpolator = () => rt.make("android/view/animation/LinearInterpolator");
 const animMethods: NativeSpec["methods"] = {
   "setDuration(J)V": function (this: JAnimation, d: bigint) { this.duration = Number(d); },
   "getDuration()J": function (this: JAnimation) { return BigInt(this.duration); },
@@ -393,7 +346,7 @@ const animMethods: NativeSpec["methods"] = {
   "setStartTime(J)V": function (this: JAnimation, t: bigint) { this.startTime = Number(t); this.started = this.ended = false; },
   "getStartTime()J": function (this: JAnimation) { return BigInt(this.startTime); },
   "setInterpolator(Landroid/view/animation/Interpolator;)V": function (this: JAnimation, i: unknown) { this.interp = i; },
-  "setInterpolator(Landroid/content/Context;I)V": function (this: JAnimation) { this.interp = loadInterpolator(); },
+  "setInterpolator(Landroid/content/Context;I)V": function (this: JAnimation, context: JContext | null, id: number) { this.interp = loadInterpolator(animationXml(context, id).res, id); },
   "getInterpolator()Landroid/view/animation/Interpolator;": function (this: JAnimation) { return this.interp; },
   "setFillAfter(Z)V": function (this: JAnimation, b: number) { this.fillAfter = !!b; },
   "setFillBefore(Z)V": function (this: JAnimation, b: number) { this.fillBefore = !!b; },
@@ -519,18 +472,12 @@ rt.register({
     }),
   },
 });
-function animationValue(res: Resources, node: XmlNode, name: string) {
-  const a = attr(node, name);
-  if (!a) return null;
-  const value = normRV({ t: a.type, d: a.data, s: a.str ?? undefined });
-  return value.t === TV.REFERENCE ? res.resolveRefs(value) : value;
-}
 function animationNumber(res: Resources, node: XmlNode, name: string, fallback: number) {
-  const value = animationValue(res, node, name);
+  const value = namedAttrRV(res, node, name);
   return value?.t === TV.FRACTION ? complexToFraction(value.d, 1, 1) : rvFloat(res, value, fallback);
 }
 function animationDescription(res: Resources, node: XmlNode, name: string, fallback: number): [number, number] {
-  const value = animationValue(res, node, name);
+  const value = namedAttrRV(res, node, name);
   return value?.t === TV.FRACTION ? [complexToFraction(value.d, 1, 1), 1 + (value.d & 0xf)]
     : [rvFloat(res, value, fallback), ABSOLUTE];
 }
@@ -540,11 +487,12 @@ function animationFromXml(res: Resources, node: XmlNode): JAnimation {
   const kind = kinds[node.name];
   if (!kind) throw rt.mkThrowable("java/lang/RuntimeException", "Unknown animation name: " + node.name);
   const a = new (rt.link("android/view/animation/" + kind).ctor as new () => JAnimation)();
-  a.duration = rvInt(res, animationValue(res, node, "duration"), 0);
-  a.startOffset = rvInt(res, animationValue(res, node, "startOffset"), 0);
-  a.fillAfter = !!rvInt(res, animationValue(res, node, "fillAfter"), 0);
-  a.repeatCount = rvInt(res, animationValue(res, node, "repeatCount"), 0);
-  a.repeatMode = rvInt(res, animationValue(res, node, "repeatMode"), 1);
+  a.duration = rvInt(res, namedAttrRV(res, node, "duration"), 0);
+  a.startOffset = rvInt(res, namedAttrRV(res, node, "startOffset"), 0);
+  a.fillAfter = !!rvInt(res, namedAttrRV(res, node, "fillAfter"), 0);
+  a.repeatCount = rvInt(res, namedAttrRV(res, node, "repeatCount"), 0);
+  a.repeatMode = rvInt(res, namedAttrRV(res, node, "repeatMode"), 1);
+  a.interp = interpolatorAttr(res, node);
   if (kind === "AnimationSet") {
     a.kids = node.children.map((child) => animationFromXml(res, child));
     if (!a.duration) a.duration = Math.max(0, ...a.kids.map((child) => child.duration + child.startOffset));
@@ -614,10 +562,10 @@ rt.register({
       const controller = new JLayoutAnimationController();
       if (animationId) controller.animation = animationFromXml(res, animationXml(context, animationId).root);
       controller.delay = animationNumber(res, root, "delay", 0.5);
-      controller.order = rvInt(res, animationValue(res, root, "animationOrder"), 0);
+      controller.order = rvInt(res, namedAttrRV(res, root, "animationOrder"), 0);
       return controller;
     },
-    "static loadInterpolator(Landroid/content/Context;I)Landroid/view/animation/Interpolator;": loadInterpolator,
+    "static loadInterpolator(Landroid/content/Context;I)Landroid/view/animation/Interpolator;": (context: JContext | null, id: number) => loadInterpolator(animationXml(context, id).res, id),
     "static currentAnimationTimeMillis()J": () => BigInt(Math.floor(uptimeMillis())),
   },
 });

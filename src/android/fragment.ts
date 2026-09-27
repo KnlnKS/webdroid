@@ -1,5 +1,5 @@
-import { JObj, rt, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { JObj, rt, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, flagGetters, driven, type Gen } from "../jvm/runtime";
+import { vcall, newObj } from "../jvm/natives/jlang";
 import { findById, type JViewGroup, type JView, attachView, detachView, removeFrom } from "./view";
 import { getInflater } from "./inflate";
 import type { JActivity } from "./app";
@@ -27,6 +27,8 @@ const runFragmentAdd = driven(function* runFragmentAdd(fm: JFragmentManager, fra
   fm.active.push(frag);
   yield vcall(frag, "onAttach", "(Landroid/app/Activity;)V", act);
   yield vcall(frag, "onCreate", "(Landroid/os/Bundle;)V", null);
+  // DialogFragment.onGetLayoutInflater: the dialog exists before the fragment's view
+  if (frag instanceof JDialogFragment && frag.showsDialog) frag.dialog = yield vcall(frag, "onCreateDialog", "(Landroid/os/Bundle;)Landroid/app/Dialog;", null);
   const container = containerOf(fm, containerId);
   const view = (yield vcall(frag, "onCreateView", "(Landroid/view/LayoutInflater;Landroid/view/ViewGroup;Landroid/os/Bundle;)Landroid/view/View;",
     getInflater(act), container, null)) as JView | null;
@@ -171,3 +173,66 @@ export const fragMethods: NonNullable<NativeSpec["methods"]> = {
   ...stubs(0, "isAdded()Z", "isRemoving()Z", "isDetached()Z", "isHidden()Z", "isVisible()Z", "isResumed()Z"),
 };
 rt.register({ name: "android/app/Fragment", ctor: JFragment, methods: fragMethods });
+
+// ── android.app.DialogFragment: the fragment's view (if any) becomes its dialog's content; the
+// dialog shows while the fragment is started, and dismissing either removes the fragment.
+class JDialogFragment extends JFragment {
+  dialog: unknown = null;
+  showsDialog = true; cancelable = true; dismissed = false;
+  style = 0; theme = 0;
+  *dismiss$(): Gen {
+    if (this.dismissed) return;
+    this.dismissed = true;
+    const dialog = this.dialog;
+    this.dialog = null;
+    if (dialog) yield vcall(dialog, "dismiss", "()V");
+    const fm = this.act ? yield vcall(this.act, "getFragmentManager", "()Landroid/app/FragmentManager;") : null;
+    if (fm && (fm as JFragmentManager).active.includes(this)) yield runFragmentRemove(fm, this);
+  }
+}
+const dismissFragment = function (this: JDialogFragment) { return rt.drive(this.dismiss$()); };
+rt.register({
+  name: "android/app/DialogFragment", ctor: JDialogFragment, sup: "android/app/Fragment",
+  ifaces: ["android/content/DialogInterface$OnCancelListener", "android/content/DialogInterface$OnDismissListener"],
+  statics: { STYLE_NORMAL: 0, STYLE_NO_TITLE: 1, STYLE_NO_FRAME: 2, STYLE_NO_INPUT: 3 },
+  methods: {
+    ...fragMethods,
+    "show(Landroid/app/FragmentManager;Ljava/lang/String;)V": driven(function* (this: JDialogFragment, fm: JFragmentManager, tag: string | null): Gen {
+      this.dismissed = false;
+      const tx = yield vcall(fm, "beginTransaction", "()Landroid/app/FragmentTransaction;");
+      yield vcall(tx, "add", "(Landroid/app/Fragment;Ljava/lang/String;)Landroid/app/FragmentTransaction;", this, tag);
+      yield vcall(tx, "commit", "()I");
+    }),
+    "show(Landroid/app/FragmentTransaction;Ljava/lang/String;)I": driven(function* (this: JDialogFragment, tx: unknown, tag: string | null): Gen {
+      this.dismissed = false;
+      yield vcall(tx, "add", "(Landroid/app/Fragment;Ljava/lang/String;)Landroid/app/FragmentTransaction;", this, tag);
+      return vcall(tx, "commit", "()I");
+    }),
+    "dismiss()V": dismissFragment,
+    "dismissAllowingStateLoss()V": dismissFragment,
+    "onCreateDialog(Landroid/os/Bundle;)Landroid/app/Dialog;": function (this: JDialogFragment) {
+      return newObj("android/app/Dialog", "(Landroid/content/Context;I)V", this.act, this.theme);
+    },
+    "onActivityCreated(Landroid/os/Bundle;)V": driven(function* (this: JDialogFragment): Gen {
+      const dialog = this.dialog;
+      if (!dialog) return;
+      if (this.attachedView) yield vcall(dialog, "setContentView", "(Landroid/view/View;)V", this.attachedView);
+      yield vcall(dialog, "setOwnerActivity", "(Landroid/app/Activity;)V", this.act);
+      yield vcall(dialog, "setCancelable", "(Z)V", +this.cancelable);
+      yield vcall(dialog, "setOnCancelListener", "(Landroid/content/DialogInterface$OnCancelListener;)V", this);
+      yield vcall(dialog, "setOnDismissListener", "(Landroid/content/DialogInterface$OnDismissListener;)V", this);
+    }),
+    "onStart()V": function (this: JDialogFragment) { if (this.dialog) return vcall(this.dialog, "show", "()V"); },
+    "onStop()V": function (this: JDialogFragment) { if (this.dialog) return vcall(this.dialog, "hide", "()V"); },
+    "onDismiss(Landroid/content/DialogInterface;)V": dismissFragment,
+    "onCancel(Landroid/content/DialogInterface;)V": () => {},
+    "setStyle(II)V": function (this: JDialogFragment, style: number, theme: number) { this.style = style; if (theme) this.theme = theme; },
+    "setCancelable(Z)V": function (this: JDialogFragment, c: number) {
+      this.cancelable = !!c;
+      if (this.dialog) return vcall(this.dialog, "setCancelable", "(Z)V", c);
+    },
+    ...fieldGetters({ "getDialog()Landroid/app/Dialog;": "dialog", "getTheme()I": "theme" }),
+    ...flagGetters({ "isCancelable()Z": "cancelable", "getShowsDialog()Z": "showsDialog" }),
+    ...fieldSetters({ "setShowsDialog(Z)V": "showsDialog" }),
+  },
+});

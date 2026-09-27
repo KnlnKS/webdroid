@@ -624,6 +624,18 @@ export function beginPaintShadow(ctx: JCanvas["ctx"], p: JPaint): boolean {
   ctx.shadowOffsetY = m.b * p.shadowDx + m.d * p.shadowDy;
   return true;
 }
+/** The shadow a shape casts, without the shape: it is filled far to the side and its shadow
+ *  offset back, since a canvas shadow takes its opacity from the fill's. `dy` is in user space. */
+export function castShadow(ctx: JCanvas["ctx"], trace: () => void, color: string, blur: number, dy: number) {
+  const m = ctx.getTransform(), far = 1 << 16;
+  ctx.save();
+  ctx.translate(-far, 0);
+  ctx.shadowColor = color; ctx.shadowBlur = blur;
+  ctx.shadowOffsetX = m.a * far; ctx.shadowOffsetY = m.b * far + m.d * dy;
+  ctx.fillStyle = "#000";
+  ctx.beginPath(); trace(); ctx.fill();
+  ctx.restore();
+}
 export function copyPaint(src: JPaint, dst: JPaint) {
   dst.color = src.color; dst.renderAlpha = src.renderAlpha; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
   dst.textSize = src.textSize; dst.tf = src.tf; dst.antiAlias = src.antiAlias;
@@ -1511,9 +1523,10 @@ export const bitmapMethods: NativeSpec["methods"] = {
     "getRowBytes()I": function (this: JBitmap) { return this.rowBytes; },
     "compress(Landroid/graphics/Bitmap$CompressFormat;ILjava/io/OutputStream;)Z": driven(function* (this: JBitmap, fmt: { ord: number } | null, q: number, out: unknown): Gen {
       if (!fmt) throw rt.npe();
-      const type = ["image/jpeg", "image/png", "image/webp"][fmt.ord];
+      const type = ["image/jpeg", "image/png", "image/webp", "image/webp", "image/webp"][fmt.ord];
       if (!type) return 0;
-      const blob = yield this.canvas.convertToBlob({ type, quality: Math.max(0, Math.min(1, q / 100)) });
+      // WEBP_LOSSLESS keeps every pixel whatever quality asks
+      const blob = yield this.canvas.convertToBlob({ type, quality: fmt.ord === 4 ? 1 : Math.max(0, Math.min(1, q / 100)) });
       if (blob.type !== type) return 0;
       const bytes = new Int8Array(yield blob.arrayBuffer());
       yield vcall(out, "write", "([BII)V", bytes, 0, bytes.length);
@@ -1543,7 +1556,7 @@ rt.register({ name: "android/graphics/Bitmap", ctor: JBitmap, ifaces: ["android/
 mkEnumSet("android/graphics/Matrix$ScaleToFit", ["FILL", "START", "CENTER", "END"]);
 const bitmapConfigs = mkEnumSet("android/graphics/Bitmap$Config", ["ALPHA_8", "RGB_565", "ARGB_4444", "ARGB_8888", "RGBA_F16", "HARDWARE", "RGBA_1010102"], {}, undefined, ["nativeInt"]);
 bitmapConfigs.forEach((config, i) => Object.assign(config, { nativeInt: i === 0 ? 1 : i + 2 }));
-mkEnumSet("android/graphics/Bitmap$CompressFormat", ["JPEG", "PNG", "WEBP"]);
+mkEnumSet("android/graphics/Bitmap$CompressFormat", ["JPEG", "PNG", "WEBP", "WEBP_LOSSY", "WEBP_LOSSLESS"]);
 
 /** setLineDash copies its argument, so every undashed stroke can pass the same empty list */
 const NO_DASH: number[] = [];

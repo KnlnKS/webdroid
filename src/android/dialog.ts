@@ -10,7 +10,7 @@ import {
 import { JFrameLayout, JLinearLayout } from "./layouts";
 import { JTextView, JButton } from "./textview";
 import { themeAccent } from "./widget";
-import { JCanvas, tfMedium , JRect } from "./graphics";
+import { JCanvas, tfMedium, JRect, castShadow } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught } from "./os";
@@ -120,18 +120,8 @@ rt.register({
       const bg = win?.bgSet ? win.bg : this.cardBg;
       const r = win?.bgSet ? 0 : this.cardRadius;
       if (!win?.bgSet) {
-        // the frame's elevation shadow, cast from its own shape: an almost-transparent fill
-        // paints the shadow without tinting the card, whose colour is the theme's to pick
-        ctx.save();
-        ctx.shadowColor = "rgba(0,0,0,0.45)";
-        ctx.shadowBlur = device.dp(20);
-        ctx.shadowOffsetY = device.dp(6);
-        ctx.globalAlpha = 0.01;
-        ctx.fillStyle = "#000";
-        ctx.beginPath();
-        ctx.roundRect(0, 0, this.width(), this.height(), r);
-        ctx.fill();
-        ctx.restore();
+        // the frame's elevation shadow, cast from its own shape
+        castShadow(ctx, () => ctx.roundRect(0, 0, this.width(), this.height(), r), "rgba(0,0,0,0.45)", device.dp(20), device.dp(6));
       }
       if (bg) {
         ctx.save();

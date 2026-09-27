@@ -1,11 +1,14 @@
 import { measureText } from "./graphics";
 import type { JTextPaint } from "./text";
 
-export interface TLine { start: number; end: number; text: string; width: number; ellipsis?: { start: number; count: number }; }
+/** `indent` is the paragraph's leading margin on this line */
+export interface TLine { start: number; end: number; text: string; width: number; indent?: number; ellipsis?: { start: number; count: number }; }
 type Constraints = {
   width: number; firstWidth?: number; firstCount?: number; maxLines?: number; balanced?: boolean;
   measure?: (start: number, end: number) => number;
   atomic?: readonly { start: number; end: number }[];
+  /** the leading margin of a paragraph's nth line */
+  margin?: (paragraphStart: number, line: number) => number;
 };
 
 class BreakText {
@@ -36,7 +39,7 @@ class BreakText {
 }
 
 export function breakLines(text: string, paint: JTextPaint, constraints: Constraints): TLine[] {
-  const { width, firstWidth = width, firstCount = 0, maxLines = Number.MAX_SAFE_INTEGER, balanced = false } = constraints;
+  const { width, firstWidth = width, firstCount = 0, maxLines = Number.MAX_SAFE_INTEGER, balanced = false, margin } = constraints;
   const measure = constraints.measure ?? ((start, end) => measureText(paint, text.slice(start, end)));
   const content = new BreakText(text, constraints.atomic ?? []);
   const out: TLine[] = [];
@@ -45,7 +48,7 @@ export function breakLines(text: string, paint: JTextPaint, constraints: Constra
     const end = content.paragraphEnd(start), lines: TLine[] = [];
     let at = start;
     do {
-      const available = out.length + lines.length < firstCount ? firstWidth : width;
+      const available = (out.length + lines.length < firstCount ? firstWidth : width) - (margin?.(start, lines.length) ?? 0);
       let cut = end;
       if (at < end && measure(at, end) > available) {
         let lo = at + 1, hi = end;
@@ -63,7 +66,8 @@ export function breakLines(text: string, paint: JTextPaint, constraints: Constra
       if (at < end && content.space(at)) at++;
     } while (at < end && (balanced || out.length + lines.length < maxLines));
     const result = balanced && lines.length > 1
-      ? balanceParagraph(content, start, end, lines, width, paint.textSize, measure) : lines;
+      ? balanceParagraph(content, start, end, lines, width - (margin?.(start, 1) ?? 0), paint.textSize, measure) : lines;
+    if (margin) result.forEach((line, i) => { line.indent = margin(start, i); });
     for (const line of result) { if (out.length >= maxLines) break; out.push(line); }
     // A paragraph's last line owns its newline, but its visible text excludes it.
     if (end < text.length && out.at(-1)?.end === end) out[out.length - 1].end++;

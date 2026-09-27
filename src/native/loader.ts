@@ -1,5 +1,6 @@
 import { rt, type Runtime } from "../jvm/runtime";
-import { curThread, type JThread } from "../jvm/natives/jlang";
+import { curThread, appNativeAbi, type JThread } from "../jvm/natives/jlang";
+import { setNativeMemorySizer } from "../jvm/natives/jnio";
 import { libcInit } from "./libc";
 import { dlInit, loadModule, resolveGlobalOrNull } from "./dl";
 import type { Module } from "./elf";
@@ -41,6 +42,12 @@ function nativeInit(abi: string): void {
  *  adding a backend is one edit here. */
 const NATIVE_ABIS = ["arm64-v8a", "armeabi-v7a", "armeabi"] as const;
 rt.nativeAbis = NATIVE_ABIS;
+setNativeMemorySizer(() => {
+  const abi = appNativeAbi();
+  if (!abi || !(NATIVE_ABIS as readonly string[]).includes(abi)) return false;
+  nativeInit(abi);
+  return true;
+});
 
 /** Load and relocate an image without executing a single instruction of it. An ABI whose
  *  emitter does not exist yet can still prove its loader: scripts/nrun.ts --load-only. */

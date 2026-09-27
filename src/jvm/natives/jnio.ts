@@ -7,11 +7,12 @@ import { charsToString } from "../abi";
 import { charsetName, decodeString, encodeString } from "../charset";
 
 /** A native buffer's array is ART's accessible one for allocateDirect (a view over its own guest
- *  bytes) and null for one over native memory (NewDirectByteBuffer, a promoted direct buffer). */
-type BufferStorage = { kind: "heap"; ab: ArrayBuffer; array: ArrayBufferView } | { kind: "direct"; ab: ArrayBuffer } | { kind: "native"; address: number | bigint; array: Int8Array | null };
+ *  bytes) and null for one over native memory (NewDirectByteBuffer, a promoted direct buffer).
+ *  A direct buffer outside guest memory has one only when no native code can take its address. */
+type BufferStorage = { kind: "heap"; ab: ArrayBuffer; array: ArrayBufferView } | { kind: "direct"; ab: ArrayBuffer; array?: Int8Array } | { kind: "native"; address: number | bigint; array: Int8Array | null };
 const directBuffers = new FinalizationRegistry<number>((address) => mem.free(address));
 function accessibleArray(b: JBuffer): ArrayBufferView | null {
-  const s = b.backing.storage, array = s.kind === "direct" ? null : s.array;
+  const s = b.backing.storage, array = s.array ?? null;
   return array && !b.readOnly && (array as Uint8Array).BYTES_PER_ELEMENT === 2 ** b.elemShift &&
     (!(b instanceof JCharBuffer) || array instanceof Uint16Array) ? array : null;
 }
@@ -218,11 +219,19 @@ export function mkByteBuffer(cap: number, direct = false): JByteBuffer {
   b.pos = 0;
   return b;
 }
+/** sizes guest memory for the app's native ABI before its first library loads; false when it
+ *  ships none (the native tier sets it) */
+let sizeNativeMemory = (): boolean => false;
+export function setNativeMemorySizer(sizer: () => boolean): void { sizeNativeMemory = sizer; }
 /** ByteBuffer.allocateDirect: in sized guest memory, whose views stay attached, the buffer's
- *  accessible array and native address are the same bytes, as on ART. Before a native library
- *  sizes the memory it is promoted on first native use and has no array. */
+ *  accessible array and native address are the same bytes, as on ART. An app with native
+ *  libraries has its memory sized for them first; without any, its own bytes are the array. */
 function allocateDirect(cap: number): JByteBuffer {
-  if (cap < 0 || !mem.sized()) return mkByteBuffer(cap, true);
+  if (cap < 0 || !mem.sized() && !sizeNativeMemory()) {
+    const b = mkByteBuffer(cap, true), s = b.backing.storage;
+    if (s.kind === "direct") s.array = new Int8Array(s.ab);
+    return b;
+  }
   const address = mem.calloc(1, Math.max(1, cap));
   if (!address) throw rt.mkThrowable("java/lang/OutOfMemoryError", "direct buffer");
   const b = new JByteBuffer();
@@ -244,7 +253,8 @@ export function directBufferAddress(b: JBuffer): number | bigint {
   let s = b.backing.storage;
   if (s.kind === "heap") return 0;
   if (s.kind === "direct") {
-    // Promotion waits for native ABI selection and updates every existing slice/view together.
+    // Promotion waits for native ABI selection and updates every existing slice/view together;
+    // it ends any array's aliasing, which only code outside the app's own libraries can reach.
     const address = mem.malloc(s.ab.byteLength);
     if (!address) throw rt.mkThrowable("java/lang/OutOfMemoryError", "direct buffer");
     mem.u8.set(new Uint8Array(s.ab), address);

@@ -5,7 +5,7 @@ import {
   type JColorStateList, mkCsl, type JDrawable, rvCsl, loadDrawableRV, cslColor, loadDrawable,
   drawChild, drawableSize
 } from "./drawable";
-import { JTextPaint, JEditable, JSpanned, JLayout, spannedString, csText, textSelection, setTextSelection, passwordTransformation } from "./text";
+import { JTextPaint, JEditable, JSpanned, JLayout, spannedString, csText, textSelection, setTextSelection, passwordTransformation, applyInputFilters } from "./text";
 import { G, gravityV, gravityH } from "./gravity";
 import { isRtl } from "./bidiformatter";
 import { device } from "../shell/config";
@@ -122,6 +122,16 @@ export class JTextView extends JView {
   bottomPad(): number { return this.includePad ? Math.ceil(fontBottom(this.paintT)) - Math.round(fontDescent(this.paintT)) : 0; }
   textHeight(lines: number): number { return lines * this.lineHeight() + this.topPad() + this.bottomPad(); }
   ascent(): number { return Math.round(-fontAscent(this.paintT)) + this.topPad(); }
+  /** the text changed: relayout, mirror a focused field into the page's input and tell watchers */
+  *textChanged$(text: string): Gen {
+    this.text = text;
+    this.layoutWidthFor = -1;
+    this.blinkStart = guestNow();
+    if (this === focusedEdit && inputEl && inputEl.value !== text) inputEl.value = text;
+    if (this.transformation) yield this.retransform();
+    requestLayout(this);
+    yield this.notifyWatchers();
+  }
   notifyWatchers(): unknown { return rt.drive(this.notifyWatchers$()); }
   *notifyWatchers$(): Gen {
     for (const w of this.watchers) {
@@ -132,9 +142,14 @@ export class JTextView extends JView {
       } catch (e) { console.error("[watcher]", e); }
     }
   }
+  /** mText for an editable view: its edits (typed, InputConnection or app code) update the view */
   getEditable(): JEditable {
-    if (!this.editObj) this.editObj = rt.make("webdroid/Editable") as JEditable;
+    if (!this.editObj) {
+      const editable = this.editObj = rt.make("webdroid/Editable") as JEditable;
+      editable.edited = () => editable.text === this.text ? undefined : rt.drive(this.textChanged$((this.rawText = editable.text)));
+    }
     this.editObj.text = this.text;
+    this.editObj.filters = this.filters;
     return this.editObj;
   }
   measuredLines(avail: number): JLayout | Promise<JLayout> {
@@ -147,7 +162,7 @@ const tvAttr = attrTable(
   "minLines", "lines", "singleLine", "ellipsize", "lineSpacingExtra", "lineSpacingMultiplier",
   "drawableLeft", "drawableTop", "drawableRight", "drawableBottom", "drawablePadding", "drawableStart",
   "drawableEnd", "fontFamily", "textAllCaps", "textColorHint", "inputType",
-  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth", "shadowColor", "shadowDx", "shadowDy", "shadowRadius", "textColorLink", "textCursorDrawable", "password");
+  "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth", "shadowColor", "shadowDx", "shadowDy", "shadowRadius", "textColorLink", "textCursorDrawable", "password", "maxLength");
 
 const applyTextAppearance = driven(function* applyTextAppearance(tv: JTextView, res: Resources, styleId: number): Gen {
   if (!styleId) return;
@@ -190,7 +205,7 @@ const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet 
     tvAttr.inputType, tvAttr.lineSpacingExtra, tvAttr.lineSpacingMultiplier, tvAttr.lines,
     tvAttr.drawableStart, tvAttr.drawableEnd, tvAttr.minLines,
     tvAttr.ems, tvAttr.minEms, tvAttr.minWidth, tvAttr.includeFontPadding, tvAttr.imeOptions,
-    tvAttr.shadowColor, tvAttr.shadowDx, tvAttr.shadowDy, tvAttr.shadowRadius, tvAttr.textColorLink, tvAttr.textCursorDrawable, tvAttr.password,
+    tvAttr.shadowColor, tvAttr.shadowDx, tvAttr.shadowDy, tvAttr.shadowRadius, tvAttr.textColorLink, tvAttr.textCursorDrawable, tvAttr.password, tvAttr.maxLength,
   ];
   const ta = obtainStyled(res, tv.theme, set, ids, defStyleAttr, defStyleRes);
   const g = (i: number) => ta.vals[i];
@@ -199,10 +214,12 @@ const applyTvStyle = driven(function* applyTvStyle(tv: JTextView, set: JAttrSet 
   if (g(1)) tv.paintT.textSize = rvDimen(res, g(1), tv.paintT.textSize);
   if (g(2)) tv.colors = yield rvCsl(res, g(2)!, tv.theme, -16777216);
   if (g(3)) tv.styleBits = rvInt(res, g(3), tv.styleBits);
+  const maxLength = g(37) ? rvInt(res, g(37), -1) : -1;
+  if (maxLength >= 0) { const filter = rt.make("android/text/InputFilter$LengthFilter") as JLengthFilter; filter.max = maxLength; tv.filters = [filter]; }
   if (g(0)) {
     const v = g(0)!;
-    tv.text = v.t === TV.REFERENCE ? rvString(res, res.resolveRefs(v)) ?? "" : rvString(res, v) ?? "";
-    tv.rawText = tv.text;
+    const text = v.t === TV.REFERENCE ? rvString(res, res.resolveRefs(v)) ?? "" : rvString(res, v) ?? "";
+    tv.text = tv.rawText = maxLength >= 0 ? spannedString((yield filterText(tv, text))) : text;
   }
   if (g(5)) {
     const v = g(5)!;
@@ -376,18 +393,13 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     yield guardCall(this, mangleMethod("setText", "(Ljava/lang/CharSequence;)V"), s);
   }),
   "setText(Ljava/lang/CharSequence;Landroid/widget/TextView$BufferType;)V": driven(function* (this: JTextView, cs: unknown): Gen {
+    if (this.filters.length) cs = yield filterText(this, cs ?? "");
     const changedSpans = cs instanceof JSpanned || this.rawText instanceof JSpanned;
     this.rawText = cs;
     invalidate(this);
     if (changedSpans) this.textLayouts = null;
     const t = spannedString(cs);
-    if (t !== this.text || changedSpans) {
-      this.text = t;
-      this.layoutWidthFor = -1;
-      if (this.transformation) yield this.retransform();
-      requestLayout(this);
-      yield this.notifyWatchers();
-    }
+    if (t !== this.text || changedSpans) yield* this.textChanged$(t);
   }),
   "getText()Ljava/lang/CharSequence;": function (this: JTextView) {
     return this.editable ? this.getEditable() : (this.rawText ?? this.text);
@@ -583,7 +595,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setFilters([Landroid/text/InputFilter;)V": function (this: JTextView, arr: unknown[]) {
     this.filters = arr ?? [];
   },
-  "getFilters()[Landroid/text/InputFilter;": function (this: JTextView) { const a = this.filters ?? []; (a as any).$t = "Landroid/text/InputFilter;"; return a; },
+  "getFilters()[Landroid/text/InputFilter;": function (this: JTextView) { return jarray(this.filters ?? [], "Landroid/text/InputFilter;"); },
   "setMaxWidth(I)V": function (this: JTextView, w: number) { this.maxW = w; requestLayout(this); },
   // AOSP: an unbounded maximum reads back as Integer.MAX_VALUE, and callers Math.min() with it
   "getMaxWidth()I": function (this: JTextView) { return Number.isFinite(this.maxW) ? this.maxW : 0x7fffffff; },
@@ -642,7 +654,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       const measured = this.measuredLines(availText);
       let lay = measured instanceof Promise ? yield measured : measured;
       let tw = 0;
-      for (const line of lay.lines) tw = Math.max(tw, line.width);
+      for (const line of lay.lines) tw = Math.max(tw, (line.indent ?? 0) + line.width);
       if (!display && this.hint) tw = Math.max(tw, measureText(this.paintT, this.hint));
       w = Math.max(Math.ceil(tw), compoundWidth(this.drawableT), compoundWidth(this.drawableB)) + hPad;
       const min = vcallOn(thread, this, "getSuggestedMinimumWidth", "()I");
@@ -834,15 +846,32 @@ export function focusEditText(et: JEditText | null) {
   }
   invalidate();
 }
-export const editInput = driven(function* editInput(text: string): Gen {
-  if (!focusedEdit) return;
-  focusedEdit.text = text;
-  focusedEdit.rawText = text;
-  focusedEdit.layoutWidthFor = -1;
-  focusedEdit.blinkStart = guestNow();
-  if (focusedEdit.transformation) yield focusedEdit.retransform();
-  requestLayout(focusedEdit);
-  yield focusedEdit.notifyWatchers();
+/** the changed range between two texts: previous[a, b) became text[a, c) */
+export function textDiff(previous: string, text: string): [number, number, number] {
+  let a = 0, b = previous.length, c = text.length;
+  while (a < b && a < c && previous[a] === text[a]) a++;
+  while (b > a && c > a && previous[b - 1] === text[c - 1]) { b--; c--; }
+  return [a, b, c];
+}
+/** the page's input changed the focused field: one replace through its Editable, whose filters
+ *  may shorten or reject it, as an IME commit would be */
+export const editInput = driven(function* editInput(text: string, start: number = text.length, end: number = start): Gen {
+  const et = focusedEdit;
+  if (!et) return;
+  const previous = et.text, [a, b, c] = textDiff(previous, text), editable = et.getEditable();
+  if (b > a || c > a) yield vcall(editable, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/Editable;", a, b, text, a, c);
+  if (et.text !== text) {
+    start = end = Math.max(a, et.text.length - (previous.length - b));
+    inputEl?.setSelectionRange(start, end);
+  }
+  yield setTextSelection(editable, start, end);
+});
+
+/** TextView.setText's filter pass: each filter sees the whole text against an empty destination */
+let emptySpanned: JObj | null = null;
+const filterText = driven(function* filterText(tv: JTextView, cs: unknown): Gen {
+  emptySpanned ??= rt.make("android/text/SpannedString");
+  return (yield applyInputFilters(tv.filters, cs, 0, (yield csText(cs)).length, emptySpanned, 0, 0))[0];
 });
 
 // ── InputFilter + common implementations (maxLength, allCaps). Needed for EditText inflation.

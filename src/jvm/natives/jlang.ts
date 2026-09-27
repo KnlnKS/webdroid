@@ -1665,6 +1665,15 @@ const ABIS = ["arm64-v8a", "armeabi-v7a", "armeabi", "x86_64", "x86"];
 function pickAbi(has: (abi: string) => boolean): string | null {
   return rt.nativeAbis.find(has) ?? ABIS.find(has) ?? null;
 }
+const appAbis = new WeakMap<Runtime, string | null>();
+/** the ABI the app's own libraries load from, when it ships any */
+export function appNativeAbi(owner: Runtime = rt): string | null {
+  if (appAbis.has(owner)) return appAbis.get(owner)!;
+  const dirs = new Set(owner.classpathNames().flatMap((name) => /^lib\/([^/]+)\/[^/]+\.so$/.exec(name)?.[1] ?? []));
+  const abi = dirs.size ? pickAbi((a) => dirs.has(a)) : null;
+  appAbis.set(owner, abi);
+  return abi;
+}
 const E_MACHINE: Record<number, string> = { 0xb7: "arm64-v8a", 0x28: "armeabi", 0x3e: "x86_64", 0x03: "x86" };
 async function dlopen(owner: Runtime, lib: string, abi: () => string | null, bytes: (a: string) => Uint8Array | null | Promise<Uint8Array | null>): Promise<void> {
   if (owner.nativeLibs.has(lib.replace(/^lib|\.so$/g, ""))) return;

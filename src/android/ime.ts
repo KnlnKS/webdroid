@@ -18,7 +18,7 @@ import { JView, invalidate, rootOf } from "./view";
 import { JMatrix } from "./graphics";
 import { AID, type JAttrSet, obtainStyled } from "./res";
 import { loadDrawableRV } from "./drawable";
-import { JTextView, JEditText, textViewCtors, focusedEdit, focusEditText, inputEl, editInput, fireEditorAction, editorAction } from "./textview";
+import { JTextView, JEditText, textViewCtors, focusedEdit, focusEditText, inputEl, editInput, textDiff, fireEditorAction, editorAction } from "./textview";
 import { inMainJob, onMain } from "./mainloop";
 import { PARCELABLE } from "./os";
 import { JService } from "./app";
@@ -480,13 +480,11 @@ export const imeActive = () => !!focusedEdit || !!served && imeVisible;
 export const imeHasAction = () => !!focusedEdit || !!served && !(served.info.imeOptions & 0x40000000) && (served.info.imeOptions & 0xff) !== 1;
 export function imeInput(text: string, start = text.length, end = start, composing = false) {
   return onMain(async () => {
-    if (focusedEdit) { await editInput(text); return; }
+    if (focusedEdit) { await editInput(text, start, end); return; }
     const session = served;
     if (!session) return;
     const ic = session.connection, previous = session.text;
-    let a = 0, b = previous.length, c = text.length;
-    while (a < b && a < c && previous[a] === text[a]) a++;
-    while (b > a && c > a && previous[b - 1] === text[c - 1]) { b--; c--; }
+    let [a, b, c] = textDiff(previous, text);
     if (session.compStart >= 0) {
       a = Math.min(a, session.compStart); b = Math.max(b, session.compEnd); c = text.length - (previous.length - b);
     }

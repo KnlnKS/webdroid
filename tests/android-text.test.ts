@@ -8,7 +8,7 @@ import { fillFontMetrics, typefaceFor } from "../src/android/graphics";
 import { JTheme, Resources, T_STR } from "../src/android/res";
 import { TV } from "../src/android/axml";
 import { mkCsl } from "../src/android/drawable";
-import { JTextView } from "../src/android/textview";
+import { JTextView, JEditText } from "../src/android/textview";
 import { perf } from "../src/perf";
 import { scall } from "./java";
 
@@ -77,9 +77,7 @@ describe("metric-spans", () => {
         text.spans.push({ span, start: 0, end: 11, flags: 18 });
         expect(await vcall(rt.link("android/text/BoringLayout").ctor, "isBoring", "(Ljava/lang/CharSequence;Landroid/text/TextPaint;)Landroid/text/BoringLayout$Metrics;", text, paint)).toBeNull();
         const layout = new JLayout(); layout.paint = paint; layout.src = text; layout.includePad = pad;
-        layout.lines = [{ start: 0, end: 11, text: text.text, width: 260 }];
-        layout.updateMetrics();
-        await layout.applyLineHeightSpans();
+        await layout.lineUp(() => [{ start: 0, end: 11, text: text.text, width: 260 }]);
         expect([layout.lineTop(1), layout.baseline(0), -layout.padTop, layout.padBottom]).toEqual(pad ? [65, 51, 1, -6] : [72, 52, -0, 0]);
       }
     }
@@ -419,5 +417,15 @@ describe("length-filter", () => {
     expect(await run("w😀", 3, 3)).toBe("w");
     expect(await run("wxyz", 0, 3)).toBeNull();
     expect(await run("abcdef", 0, 3)).toBe("abcde");
+  });
+  test("an EditText's filters bound setText and edits through its Editable", async () => {
+    const field = new JEditText();
+    await vcall(field, "setFilters", "([Landroid/text/InputFilter;)V", [await newObj("android/text/InputFilter$LengthFilter", "(I)V", 4)]);
+    await vcall(field, "setText", "(Ljava/lang/CharSequence;)V", "abcdef");
+    expect(field.text).toBe("abcd");
+    const editable = await vcall(field, "getText", "()Landroid/text/Editable;");
+    await vcall(editable, "delete", "(II)Landroid/text/Editable;", 0, 2);
+    await vcall(editable, "append", "(Ljava/lang/CharSequence;)Landroid/text/Editable;", "xyz");
+    expect(field.text).toBe("cdxy");
   });
 });

@@ -59,7 +59,8 @@ pub const L_FB32 = 56;
 pub const L_FR32 = 57;
 pub const L_VA = 58;
 pub const L_VB = 59;
-pub const L_VREG = 60;
+pub const L_VC = 60;
+pub const L_VREG = 61;
 pub const FN: u4 = 8;
 pub const FZ: u4 = 4;
 pub const FC: u4 = 2;
@@ -84,7 +85,8 @@ pub const F_FMAX32 = 3;
 pub const F_FMA64 = 11;
 const F_IT32 = 12;
 const F_TX = 13;
-const N_IMPORTS = 14;
+pub const F_ESTIMATE32 = 14;
+const N_IMPORTS = 15;
 const FP_NAMES = [_][]const u8{ "fmax", "fmin", "fmaxnm", "fminnm" };
 fn fpThunk(comptime F: type, comptime k: u2) *const fn (F, F) callconv(.c) F {
     return &struct {
@@ -101,9 +103,16 @@ fn fpThunk(comptime F: type, comptime k: u2) *const fn (F, F) callconv(.c) F {
 fn fma64(a: f64, b: f64, c: f64) callconv(.c) f64 {
     return fp.fma(f64, a, b, c);
 }
+/// One lane of ARM32 VRECPE.F32 (or VRSQRTE.F32 when `sqrt`), standardized on both sides as
+/// arm.neonMisc runs it.
+fn estimate32(x: u32, sqrt: u32) callconv(.c) u32 {
+    const v = fp.standard32(@bitCast(x));
+    return @bitCast(fp.standard32(if (sqrt != 0) fp.rsqrte(f32, v) else fp.recpe(f32, v)));
+}
 comptime {
     for ([_]type{ f32, f64 }, [_][]const u8{ "32", "64" }) |F, sfx| for (0..4) |k| @export(fpThunk(F, @intCast(k)), .{ .name = "jit_" ++ FP_NAMES[k] ++ sfx });
     @export(&fma64, .{ .name = "jit_fma64" });
+    @export(&estimate32, .{ .name = "jit_estimate32" });
 }
 comptime {
     // jit_install packs the block index into the low byte of page.slot, the table slot above it.
@@ -1232,7 +1241,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
         e.written = 0x7fff;
         @memset(wb[0..n], 0x7fff);
     }
-    b.emit(.{ if (wide) @as(u8, 10) else 9, 32, if (wide) wasm.I64 else wasm.I32, 4, wasm.I32, 4, wasm.I64, 6, wasm.I32, 2, wasm.I64, 2, wasm.F64, 3, wasm.I64, 3, wasm.I32, 2, wasm.V128 });
+    b.emit(.{ if (wide) @as(u8, 10) else 9, 32, if (wide) wasm.I64 else wasm.I32, 4, wasm.I32, 4, wasm.I64, 6, wasm.I32, 2, wasm.I64, 2, wasm.F64, 3, wasm.I64, 3, wasm.I32, 3, wasm.V128 });
     if (wide) b.emit(.{ 32, wasm.V128 });
     e.loadRegs(e.used);
     e.loadFlags(live);
@@ -1352,6 +1361,7 @@ fn emitModule(b: *Buf, n: u32) void {
     importFn(b, "fma64", 4);
     importFn(b, "it32", 1);
     importFn(b, "tx", 0);
+    importFn(b, "estimate32", 0);
     b.patch(imp_len, b.len - imp_start);
     b.byte(3);
     b.u(1 + n);

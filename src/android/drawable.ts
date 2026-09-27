@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, curThread, callOn, after, newObj, defineException, mkEnumSet, type JSimpleEnum } from "../jvm/natives/jlang";
 import { mangleMethod, jmethod } from "../jvm/abi";
-import { JCanvas, JRect, JRectF, JBitmap, JPaint, matMul, rotM, type JMatrix, type JOutline, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf, readNinePatchChunk, decodeResourceStream, JBFOptions, type NinePatchChunk } from "./graphics";
+import { JCanvas, JRect, JRectF, JBitmap, JPaint, type JOutline, cssColor, decodeBytes, tintedBmp, matrixColor, insetsOf, readNinePatchChunk, decodeResourceStream, JBFOptions, type NinePatchChunk } from "./graphics";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { uptimeMillis } from "./os";
@@ -12,6 +12,8 @@ import { absGravity, gravityApply } from "./gravity";
 import { complexToFraction, type JTypedValue } from "./util";
 import { TV, parseAXML, type XmlNode } from "./axml";
 import { guestNow, setGuestTimeout } from "../guest-clock";
+import { parsePathData } from "./pathdata";
+import { applyTimeline, cloneTree, drawVectorGroup, loadTimeline, namedTargets, timelineLength, type Timeline, type VGroup, type VPath, type VRoot } from "./vector";
 
 export const ST = {
   pressed: 0x010100a7, enabled: 0x0101009e, selected: 0x010100a1, checked: 0x010100a0,
@@ -1050,6 +1052,7 @@ function cloneDrawable(d: JDrawable): JDrawable {
     for (const layer of layered.layers) if (layer.d) layer.d.callback = layered;
   }
   if (d instanceof JRippleDrawable) (copy as JRippleDrawable).mask = d.mask ? cloneDrawable(d.mask) : null;
+  if (d instanceof JAnimatedVectorDrawable) Object.assign(copy, { root: cloneTree(d.base), startT: -1, callbacks: [] });
   return copy;
 }
 rt.register({
@@ -1081,36 +1084,57 @@ rt.register({
 class JVectorDrawable extends JDrawable {
   vw = 24; vh = 24; // dp size
   vpW = 24; vpH = 24;
-  paths: { p2d: Path2D; fill: number | null; stroke: number | null; strokeW: number; fillAlpha: number; evenOdd: boolean; transform: JMatrix["m"] | null }[] = [];
+  root: VRoot = { name: "", rotation: 0, pivotX: 0, pivotY: 0, scaleX: 1, scaleY: 1, translateX: 0, translateY: 0, children: [], alpha: 1 };
   paint(cv: JCanvas) {
     const { left, top, right, bottom } = this.bounds;
     const w = right - left, h = bottom - top;
     if (w <= 0 || h <= 0) return;
     const ctx = cv.ctx;
     ctx.save();
-    ctx.globalAlpha *= this.alpha / 255;
+    ctx.globalAlpha *= this.alpha / 255 * this.root.alpha;
     ctx.translate(left, top);
     ctx.scale(w / this.vpW, h / this.vpH);
-    const tint = this.tint, alpha = ctx.globalAlpha;
-    for (const p of this.paths) {
-      if (p.transform) { ctx.save(); ctx.transform(...p.transform); }
-      if (p.fill !== null && p.fill >>> 24) {
-        ctx.fillStyle = cssColor(tint ?? p.fill);
-        ctx.globalAlpha = alpha * p.fillAlpha;
-        ctx.fill(p.p2d, p.evenOdd ? "evenodd" : "nonzero");
-      }
-      if (p.stroke !== null && p.strokeW > 0) {
-        ctx.strokeStyle = cssColor(tint ?? p.stroke);
-        ctx.lineWidth = p.strokeW;
-        ctx.stroke(p.p2d);
-      }
-      if (p.transform) ctx.restore();
-    }
+    drawVectorGroup(ctx, this.root, this.tint, ctx.globalAlpha);
     ctx.restore();
   }
   size(vertical: boolean): number { return (vertical ? this.vh : this.vw) * device.density; }
 }
-class JAnimatedVectorDrawable extends JVectorDrawable {}
+/** AnimatedVectorDrawable: its vector's tree, re-evaluated from the inflated one at every draw
+ *  while its targets' timelines run, and left at their end values when they finish. */
+class JAnimatedVectorDrawable extends JVectorDrawable {
+  base: VRoot = this.root;
+  targets: { name: string; timeline: Timeline }[] = [];
+  startT = -1;
+  callbacks: unknown[] = [];
+  length() { return Math.max(0, ...this.targets.map((t) => timelineLength(t.timeline))); }
+  paint(cv: JCanvas) {
+    if (this.startT >= 0) {
+      const ms = guestNow() - this.startT;
+      this.evaluate(ms);
+      if (ms >= this.length()) this.finish(); else invalidateSelf.call(this);
+    }
+    super.paint(cv);
+  }
+  /** the targets at `ms` after start; Infinity is AnimatorSet.end()'s end values */
+  evaluate(ms: number) {
+    this.root = cloneTree(this.base);
+    const now = namedTargets(this.root), from = namedTargets(this.base);
+    for (const { name, timeline } of this.targets) {
+      const target = now.get(name);
+      if (target) applyTimeline(timeline, ms, target, from.get(name)!);
+    }
+  }
+  start() {
+    if (this.startT >= 0) return;
+    this.startT = guestNow();
+    for (const cb of this.callbacks) void vcall(cb, "onAnimationStart", "(Landroid/graphics/drawable/Drawable;)V", this);
+    invalidateSelf.call(this);
+  }
+  finish() {
+    this.startT = -1;
+    for (const cb of this.callbacks) void vcall(cb, "onAnimationEnd", "(Landroid/graphics/drawable/Drawable;)V", this);
+  }
+}
 rt.register({ name: "android/graphics/drawable/Animatable2", ctor: class extends JObj {} });
 rt.register({ name: "android/graphics/drawable/Animatable2$AnimationCallback", ctor: class extends JObj {}, methods: {
   ...noops("<init>()V", "onAnimationStart(Landroid/graphics/drawable/Drawable;)V", "onAnimationEnd(Landroid/graphics/drawable/Drawable;)V"),
@@ -1490,20 +1514,34 @@ rt.register({
 });
 rt.register({ name: "android/graphics/drawable/VectorDrawable", ctor: JVectorDrawable, sup: "android/graphics/drawable/Drawable", methods: {
   "getConstantState()Landroid/graphics/drawable/Drawable$ConstantState;": function (this: JVectorDrawable) {
-    const { vw, vh, vpW, vpH, paths, tint, tintCsl, tintMode, alpha, autoMirrored } = this;
+    const { vw, vh, vpW, vpH, root, tint, tintCsl, tintMode, alpha, autoMirrored } = this;
     const state = rt.make("android/graphics/drawable/VectorDrawable$VectorDrawableState") as JDrawableState;
-    state.create = () => Object.assign(new JVectorDrawable(), { vw, vh, vpW, vpH, paths, tint, tintCsl, tintMode, alpha, autoMirrored });
+    state.create = () => Object.assign(new JVectorDrawable(), { vw, vh, vpW, vpH, root, tint, tintCsl, tintMode, alpha, autoMirrored });
     return state;
   },
 } });
 rt.register({
   name: "android/graphics/drawable/AnimatedVectorDrawable", ctor: JAnimatedVectorDrawable,
-  sup: "android/graphics/drawable/VectorDrawable", methods: {
-    "start()V": function () {},
-    "stop()V": function () {},
-    "isRunning()Z": () => 0,
-    "unregisterAnimationCallback(Landroid/graphics/drawable/Animatable2$AnimationCallback;)Z": () => 0,
-    ...noops("registerAnimationCallback(Landroid/graphics/drawable/Animatable2$AnimationCallback;)V", "clearAnimationCallbacks()V"),
+  sup: "android/graphics/drawable/VectorDrawable", ifaces: ["android/graphics/drawable/Animatable2"], methods: {
+    "start()V": function (this: JAnimatedVectorDrawable) { this.start(); },
+    // AnimatorSet.end(): the targets take their end values
+    "stop()V": function (this: JAnimatedVectorDrawable) {
+      if (this.startT < 0) return;
+      this.evaluate(Infinity);
+      this.finish();
+      invalidateSelf.call(this);
+    },
+    "reset()V": function (this: JAnimatedVectorDrawable) { this.startT = -1; this.root = cloneTree(this.base); invalidateSelf.call(this); },
+    "isRunning()Z": function (this: JAnimatedVectorDrawable) { return +(this.startT >= 0); },
+    "registerAnimationCallback(Landroid/graphics/drawable/Animatable2$AnimationCallback;)V": function (this: JAnimatedVectorDrawable, cb: unknown) {
+      if (cb && !this.callbacks.includes(cb)) this.callbacks.push(cb);
+    },
+    "unregisterAnimationCallback(Landroid/graphics/drawable/Animatable2$AnimationCallback;)Z": function (this: JAnimatedVectorDrawable, cb: unknown) {
+      const i = this.callbacks.indexOf(cb);
+      if (i >= 0) this.callbacks.splice(i, 1);
+      return +(i >= 0);
+    },
+    "clearAnimationCallbacks()V": function (this: JAnimatedVectorDrawable) { this.callbacks = []; },
   },
 });
 
@@ -1553,7 +1591,9 @@ const AT = attrTable(
   "viewportHeight", "pathData", "fillColor", "strokeColor", "strokeWidth", "fillAlpha", "fillType",
   "insetLeft", "insetTop", "insetRight", "insetBottom", "inset", "dashWidth", "dashGap", "id",
   "scaleGravity", "gravity", "orientation", "oneshot", "duration", "scaleWidth", "scaleHeight", "useIntrinsicSizeAsMinimum", "level",
-  "pivotX", "pivotY", "translateX", "translateY", "scaleX", "scaleY", "rotation", "fromDegrees", "toDegrees");
+  "pivotX", "pivotY", "translateX", "translateY", "scaleX", "scaleY", "rotation", "fromDegrees", "toDegrees", "name",
+  "trimPathStart", "trimPathEnd", "trimPathOffset", "strokeAlpha", "strokeLineCap", "strokeLineJoin", "strokeMiterLimit", "animation");
+const LINE_CAPS: CanvasLineCap[] = ["butt", "round", "square"], LINE_JOINS: CanvasLineJoin[] = ["miter", "round", "bevel"];
 /** Drawable.parseTintMode: android:tintMode's enum values */
 const TINT_MODES: Record<number, string> = { 3: "SRC_OVER", 5: "SRC_IN", 9: "SRC_ATOP", 14: "MULTIPLY", 15: "SCREEN", 16: "ADD" };
 /** an <item>/<inset>'s drawable: its android:drawable, else its first inline child */
@@ -1763,40 +1803,42 @@ export const inflateDrawableNode = driven(function* inflateDrawableNode$(res: Re
       d.vpH = rvFloat(res, get(AT.viewportHeight), 24);
       yield xmlTint(d);
       const optColor = (c: XmlNode, id: number) => { const f = nodeAttrRV(c, id); return f ? colorOf(f, 0) : null; };
-      const walk = (n: XmlNode, transform: JMatrix["m"] | null) => {
+      const num = (c: XmlNode, id: number, fallback: number) => rvFloat(res, get(id, c), fallback);
+      const group = (c: XmlNode): VGroup => ({
+        name: nodeAttrRV(c, AT.name)?.s ?? "", rotation: num(c, AT.rotation, 0), pivotX: num(c, AT.pivotX, 0), pivotY: num(c, AT.pivotY, 0),
+        scaleX: num(c, AT.scaleX, 1), scaleY: num(c, AT.scaleY, 1), translateX: num(c, AT.translateX, 0), translateY: num(c, AT.translateY, 0), children: [],
+      });
+      const walk = (n: XmlNode, g: VGroup) => {
         for (const c of n.children) {
-          if (c.name === "path") {
+          if (c.name === "group") walk(c, g.children[g.children.push(group(c)) - 1] as VGroup);
+          else if (c.name === "path" || c.name === "clip-path") {
             // Material spells its switch paths as @string references
             const data = rvString(res, nodeAttrRV(c, AT.pathData));
-            if (data) {
-              try {
-                d.paths.push({
-                  p2d: new Path2D(data), transform,
-                  fill: optColor(c, AT.fillColor),
-                  stroke: optColor(c, AT.strokeColor),
-                  strokeW: rvFloat(res, nodeAttrRV(c, AT.strokeWidth), 0),
-                  fillAlpha: rvFloat(res, nodeAttrRV(c, AT.fillAlpha), 1),
-                  evenOdd: xmlInt(res, nodeAttrRV(c, AT.fillType), 0) === 1,
-                });
-              } catch { /* bad path data */ }
-            }
-          } else if (c.name === "group") {
-            const value = (id: number, fallback = 0) => rvFloat(res, nodeAttrRV(c, id), fallback);
-            const px = value(AT.pivotX), py = value(AT.pivotY), sx = value(AT.scaleX, 1), sy = value(AT.scaleY, 1);
-            const local = matMul(rotM(value(AT.rotation)), [sx, 0, 0, sy, -px * sx, -py * sy]);
-            local[4] += value(AT.translateX) + px; local[5] += value(AT.translateY) + py;
-            walk(c, transform ? matMul(transform, local) : local);
+            if (data) g.children.push({
+              name: nodeAttrRV(c, AT.name)?.s ?? "", clip: c.name === "clip-path", nodes: parsePathData(data), path: null,
+              fillColor: optColor(c, AT.fillColor), strokeColor: optColor(c, AT.strokeColor),
+              strokeWidth: num(c, AT.strokeWidth, 0), strokeAlpha: num(c, AT.strokeAlpha, 1), fillAlpha: num(c, AT.fillAlpha, 1),
+              trimPathStart: num(c, AT.trimPathStart, 0), trimPathEnd: num(c, AT.trimPathEnd, 1), trimPathOffset: num(c, AT.trimPathOffset, 0),
+              cap: LINE_CAPS[xmlInt(res, get(AT.strokeLineCap, c), 0)] ?? "butt", join: LINE_JOINS[xmlInt(res, get(AT.strokeLineJoin, c), 0)] ?? "miter",
+              miter: num(c, AT.strokeMiterLimit, 4), evenOdd: xmlInt(res, nodeAttrRV(c, AT.fillType), 0) === 1,
+            } satisfies VPath);
           }
         }
       };
-      walk(node, null);
+      d.root = { ...group(node), alpha: num(node, AT.alpha, 1) };
+      walk(node, d.root);
       return d;
     }
     case "animated-vector": {
       const d = new JAnimatedVectorDrawable();
       const source = get(AT.drawable);
       const vector = source ? yield loadDrawableRV(res, source, theme) : null;
-      if (vector instanceof JVectorDrawable) Object.assign(d, vector);
+      if (vector instanceof JVectorDrawable) Object.assign(d, vector, { base: vector.root, root: cloneTree(vector.root) });
+      for (const c of node.children) {
+        const name = nodeAttrRV(c, AT.name)?.s, animation = nodeAttrRV(c, AT.animation);
+        const timeline = c.name === "target" && name && animation?.t === TV.REFERENCE ? loadTimeline(res, animation.d) : null;
+        if (timeline) d.targets.push({ name: name!, timeline });
+      }
       return d;
     }
     case "color": {
@@ -1861,8 +1903,12 @@ function xmlInt(res: Resources, v: RV | null, d: number): number {
 }
 const DPI_RE = /-(l|m|h|xh|xxh|xxxh)dpi/;
 const DPI: Record<string, number> = { l: 120, m: 160, h: 240, xh: 320, xxh: 480, xxxh: 640 };
-/** dpi a res/ path's qualifier declares; an unqualified asset is taken at the device's own density */
+/** dpi a res/ path's qualifier declares, for a path with no table entry; an unqualified one is
+ *  taken at the device's own density */
 function densityOfPath(path: string): number { return DPI[DPI_RE.exec(path)?.[1] ?? ""] ?? device.densityDpi; }
+/** a table configuration's density as BitmapFactory.decodeResourceStream reads it: none is
+ *  DENSITY_DEFAULT (mdpi), nodpi is never scaled */
+export const bitmapDensity = (config: number) => config === 0 ? 160 : config === 0xffff ? device.densityDpi : config;
 
 export const loadDrawableRV = driven(function* loadDrawableRV$(res: Resources, v: RV | null, theme: JTheme | null): Gen<JDrawable> {
   if (!v || v.t === TV.NULL) return new JColorDrawable();
@@ -1888,7 +1934,7 @@ export const loadDrawable = driven(function* loadDrawable$(res: Resources, resId
     if (e.value.type === TV.STRING) {
       const f = res.fileOf(resId);
       if (!f) { rt.noteMissing("drawable file for 0x" + resId.toString(16)); return new JColorDrawable(); }
-      return yield loadDrawableFile(res, f.path, f.bytes, theme);
+      return yield loadDrawableFile(res, f.path, f.bytes, theme, bitmapDensity(f.density));
     }
     if (e.value.type === TV.REFERENCE) return yield loadDrawable(res, e.value.data, theme);
     return yield loadDrawableRV(res, { t: e.value.type, d: e.value.data }, theme);
@@ -1896,11 +1942,12 @@ export const loadDrawable = driven(function* loadDrawable$(res: Resources, resId
   return new JColorDrawable();
 });
 
-const loadDrawableFile = driven(function* loadDrawableFile(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null): Gen<JDrawable> {
+/** `density` overrides the bitmap density its path's qualifier gives */
+export const loadDrawableFile = driven(function* loadDrawableFile(res: Resources, path: string, bytes: Uint8Array, theme: JTheme | null, density?: number): Gen<JDrawable> {
   if (path.endsWith(".xml")) return yield inflateDrawableNode(res, parseAXML(bytes), theme);
   const bmp: JBitmap | null = yield decodeBytes(bytes, null);
   if (!bmp) return new JBitmapDrawable();
-  bmp.density = densityOfPath(path);
+  bmp.density = density ?? densityOfPath(path);
   return drawableFromBitmap(bmp, device.densityDpi, null);
 });
 

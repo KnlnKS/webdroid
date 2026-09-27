@@ -12,7 +12,7 @@ pub fn recipStep32(a: f32, b: f32, sqrt: bool) f32 {
     const n = standard32(a);
     const m = standard32(b);
     const product = if ((std.math.isInf(n) and m == 0) or (n == 0 and std.math.isInf(m))) 0 else standard32(n * m);
-    return standard32(@floatCast(if (sqrt) (3.0 - @as(f64, product)) / 2 else 2.0 - @as(f64, product)));
+    return standard32(if (sqrt) (3.0 - product) / 2 else 2.0 - product);
 }
 pub fn rne(comptime F: type, x: F) F {
     const t = @trunc(x);

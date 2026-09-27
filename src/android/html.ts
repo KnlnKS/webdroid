@@ -1,7 +1,7 @@
 // android.text.Html: AOSP's HtmlToSpannedConverter with the browser's parser as the tokenizer.
 
-import { rt, JObj } from "../jvm/runtime";
-import { after } from "../jvm/natives/jlang";
+import { rt, JObj, driven, type Gen } from "../jvm/runtime";
+import { after, newObj, vcall } from "../jvm/natives/jlang";
 import { COLOR_NAMES } from "./graphics";
 import { type JSpannable, csText, spannedString } from "./text";
 
@@ -11,10 +11,11 @@ rt.register({
   methods: {
     "static fromHtml(Ljava/lang/String;)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
     "static fromHtml(Ljava/lang/String;I)Landroid/text/Spanned;": (s: string, flags: number) => htmlToSpan(s, flags),
-    // the image getter and tag handler are the app's hooks for <img> and unknown tags; the
-    // converter below calls neither, so they are accepted and ignored
-    "static fromHtml(Ljava/lang/String;Landroid/text/Html$ImageGetter;Landroid/text/Html$TagHandler;)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
-    "static fromHtml(Ljava/lang/String;ILandroid/text/Html$ImageGetter;Landroid/text/Html$TagHandler;)Landroid/text/Spanned;": (s: string, flags: number) => htmlToSpan(s, flags),
+    // the image getter and tag handler are the app's hooks for <img> and unknown tags
+    "static fromHtml(Ljava/lang/String;Landroid/text/Html$ImageGetter;Landroid/text/Html$TagHandler;)Landroid/text/Spanned;":
+      (s: string, images: unknown, tags: unknown) => htmlToSpan(s, 0, images, tags),
+    "static fromHtml(Ljava/lang/String;ILandroid/text/Html$ImageGetter;Landroid/text/Html$TagHandler;)Landroid/text/Spanned;":
+      (s: string, flags: number, images: unknown, tags: unknown) => htmlToSpan(s, flags, images, tags),
     "static toHtml(Landroid/text/Spanned;)Ljava/lang/String;": spannedString,
     "static toHtml(Landroid/text/Spanned;I)Ljava/lang/String;": spannedString,
     // AOSP withinStyle: the five markup characters and every non-ASCII code point as entities
@@ -34,10 +35,12 @@ const TAG_SPANS: Record<string, readonly SpanSpec[]> = {
   B: [BOLD], STRONG: [BOLD], I: [ITALIC], EM: [ITALIC], CITE: [ITALIC], DFN: [ITALIC],
   U: [["UnderlineSpan"]], DEL: [STRIKE], S: [STRIKE], STRIKE: [STRIKE],
   BIG: [["RelativeSizeSpan", { size: 1.25 }]], SMALL: [["RelativeSizeSpan", { size: 0.8 }]],
-  TT: [["TypefaceSpan", { family: "monospace" }]], SUP: [["SuperscriptSpan"]],
+  TT: [["TypefaceSpan", { family: "monospace" }]], SUP: [["SuperscriptSpan"]], SUB: [["SubscriptSpan"]],
   BLOCKQUOTE: [["QuoteSpan"]], LI: [["BulletSpan"]],
   ...Object.fromEntries([1.5, 1.4, 1.3, 1.2, 1.1, 1].map((size, i) => ["H" + (i + 1), [["RelativeSizeSpan", { size }], BOLD]])),
 };
+/** the tags handleStartTag knows; any other goes to the TagHandler */
+const KNOWN_TAGS = new Set([...Object.keys(TAG_SPANS), ...Object.keys(HTML_BLOCKS), "BR", "SPAN", "FONT", "A", "IMG"]);
 /** Color.getHtmlColor: a colour name, else XmlUtils.convertValueToInt's #hex/0x/decimal; -1 is none */
 function htmlColor(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -53,9 +56,11 @@ const cssValue = (el: Element, re: RegExp) => re.exec(el.getAttribute("style") ?
  * AOSP HtmlToSpannedConverter into a SpannableStringBuilder. Whitespace collapses as
  * characters() does, block elements separate with their mode's newlines
  * (FROM_HTML_SEPARATOR_LINE_BREAK_* makes one of two), and every span covers exactly the text
- * its element produced; nothing is trimmed afterwards.
+ * its element produced; nothing is trimmed afterwards. An <img> is an ImageSpan over U+FFFC
+ * from the ImageGetter (else the system's unknown_image); the TagHandler sees each unknown tag
+ * open and close around its content.
  */
-function htmlToSpan(s: string, flags = 0): JSpannable {
+const htmlToSpan = driven(function* htmlToSpan(s: string, flags: number = 0, images: unknown = null, tags: unknown = null): Gen<JSpannable> {
   const sp = rt.make("android/text/SpannableStringBuilder") as JSpannable;
   if (typeof DOMParser === "undefined") { sp.text = s.replace(/<[^>]+>/g, ""); return sp; }
   const make = (cls: string, fields: Record<string, unknown> = {}) => Object.assign(rt.make("android/text/style/" + cls), fields);
@@ -64,7 +69,21 @@ function htmlToSpan(s: string, flags = 0): JSpannable {
     for (let i = sp.text.length - 1; i >= 0 && sp.text[i] === "\n"; i--) n++;
     if (sp.text) sp.text += "\n".repeat(Math.max(0, min - n));
   };
-  const walk = (node: Node) => {
+  const image = function* (el: Element): Gen {
+    const src = el.getAttribute("src");
+    let d = images ? yield vcall(images, "getDrawable", "(Ljava/lang/String;)Landroid/graphics/drawable/Drawable;", src) : null;
+    if (!d) {
+      const system = yield vcall(rt.link("android/content/res/Resources").ctor, "getSystem", "()Landroid/content/res/Resources;");
+      d = yield vcall(system, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;",
+        yield vcall(system, "getIdentifier", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", "unknown_image", "drawable", "android"));
+      yield vcall(d, "setBounds", "(IIII)V", 0, 0, yield vcall(d, "getIntrinsicWidth", "()I"), yield vcall(d, "getIntrinsicHeight", "()I"));
+    }
+    const start = sp.text.length;
+    sp.text += "\uFFFC";
+    sp.spans.push({ span: yield newObj("android/text/style/ImageSpan", "(Landroid/graphics/drawable/Drawable;Ljava/lang/String;)V", d, src), start, end: start + 1, flags: 33 });
+  };
+  const handleTag = (opening: boolean, el: Element) => vcall(tags, "handleTag", "(ZLjava/lang/String;Landroid/text/Editable;Lorg/xml/sax/XMLReader;)V", +opening, el.tagName.toLowerCase(), sp, null);
+  const walk = function* (node: Node): Gen {
     for (const c of node.childNodes) {
       if (c.nodeType === 3) {
         let out = "";
@@ -79,10 +98,17 @@ function htmlToSpan(s: string, flags = 0): JSpannable {
       if (c.nodeType !== 1) continue;
       const el = c as Element, tag = el.tagName;
       if (tag === "BR") { sp.text += "\n"; continue; }
+      if (tag === "IMG") { yield* image(el); continue; }
+      if (!KNOWN_TAGS.has(tag)) {
+        if (tags) yield handleTag(true, el);
+        yield* walk(el);
+        if (tags) yield handleTag(false, el);
+        continue;
+      }
       const bit = HTML_BLOCKS[tag], margin = bit ? (flags & bit ? 1 : 2) : 0;
       if (margin) newlines(margin);
       const start = sp.text.length;
-      walk(el);
+      yield* walk(el);
       const spans = (TAG_SPANS[tag] ?? []).map(([cls, fields]) => make(cls, fields));
       if (tag === "A" && el.hasAttribute("href")) spans.push(make("URLSpan", { url: el.getAttribute("href") }));
       else if (tag === "FONT") {
@@ -103,7 +129,7 @@ function htmlToSpan(s: string, flags = 0): JSpannable {
       for (const span of spans) sp.spans.push({ span, start, end: tag === "BLOCKQUOTE" || tag === "LI" ? sp.text.length : inner, flags: 33 });
     }
   };
-  walk(new DOMParser().parseFromString(s, "text/html").body);
+  yield* walk(new DOMParser().parseFromString(s, "text/html").body);
   // convert(): a paragraph style's range backs off one blank trailing line and becomes SPAN_PARAGRAPH
   for (const r of sp.spans) {
     if (!rt.iof(r.span, "android/text/style/ParagraphStyle")) continue;
@@ -112,4 +138,4 @@ function htmlToSpan(s: string, flags = 0): JSpannable {
   }
   sp.spans = sp.spans.filter((r) => r.end > r.start);
   return sp;
-}
+});

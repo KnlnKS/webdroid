@@ -4,7 +4,7 @@ import { onMain } from "./mainloop";
 import { vcall } from "../jvm/natives/jlang";
 import { reportUncaught } from "./os";
 import { guestNow } from "../guest-clock";
-import { accelDecel } from "./animator";
+import { accelDecel } from "./interpolator";
 
 // ViewPropertyAnimator: the view's transform/alpha properties animated together from the frame
 // loop. As on AOSP the animation starts on the next frame unless start() is called, runs

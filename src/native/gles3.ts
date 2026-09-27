@@ -89,11 +89,24 @@ function textureRec(texture: WebGLTexture): TexRec {
 
 /** GL_TEXTURE_EXTERNAL_OES names TEXTURE_2D: SurfaceTexture fills its texture as 2D storage */
 export const textureTarget = (target: number): number => (target === 0x8d65 ? 0x0de1 : target);
+/** the samplerExternalOES uniforms each shader declared */
+const externalSamplers = new WeakMap<WebGLShader, Set<string>>();
 /** WebGL has no external samplers, so a shader's samplerExternalOES reads that storage as a
  *  sampler2D; the #extension line is blanked in place to keep compile errors' line numbers. */
-export function externalSamplersAs2D(source: string): string {
-  if (!source.includes("samplerExternalOES")) return source;
+export function externalSamplersAs2D(shader: WebGLShader, source: string): string {
+  if (!source.includes("samplerExternalOES")) { externalSamplers.delete(shader); return source; }
+  externalSamplers.set(shader, new Set(Array.from(source.matchAll(/\bsamplerExternalOES\s+(\w+)/g), (m) => m[1])));
   return source.replace(/^[ \t]*#extension[ \t]+GL_OES_EGL_image_external(?:_essl3)?[ \t]*:.*$/gm, "").replace(/\bsamplerExternalOES\b/g, "sampler2D");
+}
+/** glGetActiveUniform's view: a sampler2D the program's shaders declared samplerExternalOES
+ *  reports SAMPLER_EXTERNAL_OES */
+export function activeUniformInfo(gl: WebGL2RenderingContext | WebGLRenderingContext, program: WebGLProgram, info: WebGLActiveInfo | null): WebGLActiveInfo | null {
+  if (info?.type !== 0x8b5e) return info;
+  const name = info.name.endsWith("[0]") ? info.name.slice(0, -3) : info.name;
+  for (const shader of gl.getAttachedShaders(program) ?? []) {
+    if (externalSamplers.get(shader)?.has(name)) return { name: info.name, size: info.size, type: 0x8d66 };
+  }
+  return info;
 }
 const bindingName = (target: number): number => target === 0x0de1 ? 0x8069 : target === 0x8513 ? 0x8514 : target === 0x806f ? 0x806a : target === 0x8c1a ? 0x8c1d : 0;
 function boundTexture(state: ContextState, unit: number, target: number): WebGLTexture | null {
@@ -606,7 +619,7 @@ export function gles3Init(): void {
         src += len < 0 ? mem.cstr(p) : dec.decode(mem.bytes(p, len));
       }
       if (s) {
-        const rewrite = rewriteTextureSwizzles(externalSamplersAs2D(src), handle);
+        const rewrite = rewriteTextureSwizzles(externalSamplersAs2D(s, src), handle);
         shaderRecs.set(s, { original: src, rewrite });
         if (rewrite.unsupported.length) calledMissing.add("gles3:texture swizzle shader transform");
         g().shaderSource(s, rewrite.source);
@@ -652,7 +665,7 @@ export function gles3Init(): void {
       return put(T().uniforms, u);
     },
     glGetActiveAttrib: active((p, i) => g().getActiveAttrib(p, i)),
-    glGetActiveUniform: active((p, i) => { const rec = programRecs.get(p); return rec ? rec.uniforms.infos[i] ?? null : g().getActiveUniform(p, i); }),
+    glGetActiveUniform: active((p, i) => { const rec = programRecs.get(p); return activeUniformInfo(g(), p, rec ? rec.uniforms.infos[i] ?? null : g().getActiveUniform(p, i)); }),
     glGetTransformFeedbackVarying: active((p, i) => g().getTransformFeedbackVarying(p, i)),
     glGetUniformBlockIndex: (_c, a) => { const p = H(T().programs, a.i()); return p ? g().getUniformBlockIndex(p, a.str()) : 0xffffffff; },
     glUniformBlockBinding: (_c, a) => { const p = H(T().programs, a.i()); const i = a.i(), b = a.i(); if (p) g().uniformBlockBinding(p, i, b); },
@@ -674,7 +687,9 @@ export function gles3Init(): void {
     glGetActiveUniformsiv: (_c, a) => {
       const p = H(T().programs, a.i()); const n = a.i(), ip = a.p(), pn = a.i(), rec = p && programRecs.get(p);
       const indices = Array.from(u32(ip, n), (guest) => rec ? rec.uniforms.guestToWeb[guest] ?? 0xffffffff : guest);
-      out(p && g().getActiveUniforms(p, indices, pn), a.p(), st32, 4);
+      let value = p && g().getActiveUniforms(p, indices, pn);
+      if (p && value && pn === 0x8a37) value = Array.from(value as number[], (type, i) => type === 0x8b5e ? activeUniformInfo(g(), p, g().getActiveUniform(p, indices[i]))!.type : type); // UNIFORM_TYPE
+      out(value, a.p(), st32, 4);
     },
     glTransformFeedbackVaryings: (_c, a) => { const p = H(T().programs, a.i()); const n = a.i(), pp = a.p(), mode = a.i(); if (p) g().transformFeedbackVaryings(p, names(pp, n), mode); },
 

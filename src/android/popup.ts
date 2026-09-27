@@ -12,7 +12,7 @@ import { AID, obtainStyled, rvDimen, rvInt, themeOf, frameworkDimen, resString, 
 import { TV } from "./axml";
 import { device } from "../shell/config";
 import { JContextWrapper, type JContext } from "./context";
-import { JCanvas, JRect, measureCtx } from "./graphics";
+import { JCanvas, JRect, measureCtx, castShadow } from "./graphics";
 import { JWindowLayoutParams, addWindow, removeWindow } from "./window";
 import { csText } from "./text";
 import { onMain } from "./mainloop";
@@ -280,18 +280,7 @@ rt.register({
       const p = this.popup!;
       // the window's elevation shadow: cast from the background's shape (a filled rect is close
       // enough for the shadow itself; the real background paints over it)
-      if (p.elevation > 0 && this.background) {
-        const ctx = cv.ctx;
-        ctx.save();
-        ctx.shadowColor = "rgba(0,0,0,0.3)";
-        ctx.shadowBlur = p.elevation * 1.5;
-        ctx.shadowOffsetY = p.elevation / 2;
-        ctx.globalAlpha = 0.01;
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0, 0, this.width(), this.height());
-        ctx.globalAlpha = 1;
-        ctx.restore();
-      }
+      if (p.elevation > 0 && this.background) castShadow(cv.ctx, () => cv.ctx.rect(0, 0, this.width(), this.height()), "rgba(0,0,0,0.3)", p.elevation * 1.5, p.elevation / 2);
       const sup = rt.link("android/widget/FrameLayout").ctor.prototype[M_drawableDraw];
       yield sup.call(this, cv);
     }),

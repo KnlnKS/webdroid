@@ -203,7 +203,8 @@ async function notifyContentObservers(uri: JUri, origin: unknown, flags = 0): Pr
 }
 /** the ContentResolver.QUERY_ARG_* keys the Bundle form of query understands */
 const QUERY_ARGS = new Set(["android:query-arg-sql-selection", "android:query-arg-sql-selection-args", "android:query-arg-sql-sort-order",
-  "android:query-arg-sort-columns", "android:query-arg-sort-direction", "android:query-arg-limit"]);
+  "android:query-arg-sort-columns", "android:query-arg-sort-direction", "android:query-arg-limit",
+  "android:query-arg-match-trashed", "android:query-arg-match-pending", "android:query-arg-match-favorite"]);
 const resolverMethods: NativeSpec["methods"] = {
   ...Object.fromEntries(["acquireContentProviderClient", "acquireUnstableContentProviderClient"].flatMap((name) => [
     [name + "(Landroid/net/Uri;)Landroid/content/ContentProviderClient;", acquireClient],
@@ -271,8 +272,12 @@ const resolverMethods: NativeSpec["methods"] = {
       if (values) for (const key of values.keys()) if (!QUERY_ARGS.has(key)) throw rt.unimplemented(`ContentResolver.query argument ${key}`);
       if (!isDocsUri(u) && limit !== undefined && !sort)
         throw rt.unimplemented("ContentResolver.query provider limit without sort order");
-      const cursor = yield vcall(this, "query", providerOperations.query, u, proj, selection ?? null, args ?? null,
-        limit === undefined || isDocsUri(u) ? sort : sort ? `${sort} LIMIT ${limit}` : null);
+      const limited = limit === undefined || isDocsUri(u) ? sort : sort ? `${sort} LIMIT ${limit}` : null;
+      if (isMediaUri(u)) {
+        const match = (key: string) => values?.get("android:query-arg-match-" + key) as number | undefined;
+        return mediaQuery(u, proj, selection ?? null, args ?? null, limited ?? null, { trashed: match("trashed"), pending: match("pending"), favorite: match("favorite") });
+      }
+      const cursor = yield vcall(this, "query", providerOperations.query, u, proj, selection ?? null, args ?? null, limited);
       if (cursor && isDocsUri(u)) {
         const rows = cursor.rows as unknown[][];
         if (columns?.length) rows.sort((left, right) => {

@@ -149,8 +149,9 @@ export class Runtime {
   missing = new Set<string>();
   /** the booted apk's entries: what ClassLoader.getResourceAsStream and ServiceLoader read */
   classpath: Record<string, Uint8Array> = {};
-  classpathSource: { has(name: string): boolean; entry(name: string): Promise<Uint8Array | null> } | null = null;
+  classpathSource: { has(name: string): boolean; entry(name: string): Promise<Uint8Array | null>; names(): string[] } | null = null;
   hasClasspath(name: string): boolean { return Object.hasOwn(this.classpath, name) || !!this.classpathSource?.has(name); }
+  classpathNames(): string[] { return [...Object.keys(this.classpath), ...this.classpathSource?.names() ?? []]; }
   readClasspath(name: string): Uint8Array | null | Promise<Uint8Array | null> {
     return Object.hasOwn(this.classpath, name) ? this.classpath[name] : this.classpathSource?.entry(name) ?? null;
   }

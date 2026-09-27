@@ -139,7 +139,7 @@ describe("nio", () => {
     const readOnly = await vcall(buffer, "asReadOnlyBuffer", "()Ljava/nio/ByteBuffer;");
     expect(await vcall(readOnly, "hasArray", "()Z")).toBe(0);
     const direct = await scall("java/nio/ByteBuffer", "allocateDirect", "(I)Ljava/nio/ByteBuffer;", 4);
-    expect(await vcall(direct, "hasArray", "()Z")).toBe(0);
+    expect(await vcall(direct, "hasArray", "()Z")).toBe(1); // ART backs it with a non-movable array
   });
 
   test("InputStream.skip reads through a bytecode-style subclass", async () => {

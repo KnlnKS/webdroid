@@ -413,6 +413,8 @@ fn neonSame(c: *Cpu, w: u32, pc: u32) Status {
         0x0e209400 | (u << 29) | (size << 22) | (b << 11)
     else if (op == 10 and size != 3 and q == 0)
         0x0e20a400 | (u << 29) | (size << 22) | (b << 11)
+    else if (op == 11 and b == 1 and u == 0 and size != 3 and q == 0)
+        0x0e20bc00 | (size << 22)
     else if (op == 1 and b == 1)
         0x0e201c00 | (u << 29) | (size << 22)
     else if (variable_shift)
@@ -684,10 +686,9 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
                 0 => set(c, rn, halfAccumulate(c, signedHalf(m, x), signedHalf(s, y), r(c, rd))),
                 3 => set(c, rn, @bitCast(signedHalf(m, x) *% signedHalf(s, y))),
                 1 => {
-                    const p: i64 = @as(i64, @as(i32, @bitCast(m))) * @as(i64, signedHalf(s, y));
-                    var v: u32 = @truncate(@as(u64, @bitCast(p)) >> 16);
-                    if (x == 0) v +%= r(c, rd);
-                    set(c, rn, v);
+                    // SMLAW sets Q when its accumulation overflows, as SMLA does
+                    const p: i64 = @as(i64, @as(i32, @bitCast(m))) * @as(i64, signedHalf(s, y)) >> 16;
+                    set(c, rn, if (x == 0) halfAccumulate(c, @intCast(p), 1, r(c, rd)) else @truncate(@as(u64, @bitCast(p))));
                 },
                 else => {
                     const p: u64 = @bitCast(@as(i64, signedHalf(m, x)) * @as(i64, signedHalf(s, y)));

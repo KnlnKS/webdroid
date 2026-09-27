@@ -5,7 +5,7 @@ import { curThread, threadSwitch } from "../jvm/natives/jlang";
 import { JBuffer, bufferView } from "../jvm/natives/jnio";
 import { JBitmap } from "./graphics";
 import { gles1String } from "../native/gles1";
-import { externalSamplersAs2D, gles3Extensions, textureTarget } from "../native/gles3";
+import { activeUniformInfo, externalSamplersAs2D, gles3Extensions, textureTarget } from "../native/gles3";
 import { perf } from "../perf";
 
 // GL dispatch follows the cooperative Java/native thread without a lookup on every GL call.
@@ -155,7 +155,7 @@ rt.register({
     "static glPixelStorei(II)V": (name: number, p: number) => gl?.pixelStorei(name, p),
     "static glCreateProgram()I": () => put(T.programs, gl?.createProgram() ?? null),
     "static glCreateShader(I)I": (type: number) => put(T.shaders, gl?.createShader(type) ?? null),
-    "static glShaderSource(ILjava/lang/String;)V": (sh: number, src: string) => gl?.shaderSource(T.shaders[sh]!, externalSamplersAs2D(src)),
+    "static glShaderSource(ILjava/lang/String;)V": (sh: number, src: string) => gl?.shaderSource(T.shaders[sh]!, externalSamplersAs2D(T.shaders[sh]!, src)),
     "static glCompileShader(I)V": (sh: number) => gl?.compileShader(T.shaders[sh]!),
     "static glAttachShader(II)V": (p: number, sh: number) => gl?.attachShader(T.programs[p]!, T.shaders[sh]!),
     "static glLinkProgram(I)V": (p: number) => gl?.linkProgram(T.programs[p]!),
@@ -306,7 +306,7 @@ rt.register({
     "static glClearDepthf(F)V": (d: number) => gl?.clearDepth(d),
     "static glScissor(IIII)V": (x: number, y: number, w: number, h: number) => gl?.scissor(x, y, w, h),
     "static glGetActiveAttrib(III[II[II[II[BI)V": getActive((p, i) => gl!.getActiveAttrib(p, i)),
-    "static glGetActiveUniform(III[II[II[II[BI)V": getActive((p, i) => gl!.getActiveUniform(p, i)),
+    "static glGetActiveUniform(III[II[II[II[BI)V": getActive((p, i) => activeUniformInfo(gl!, p, gl!.getActiveUniform(p, i))),
     "static glLineWidth(F)V": (w: number) => gl?.lineWidth(w),
     "static glCullFace(I)V": (m: number) => gl?.cullFace(m),
     "static glFrontFace(I)V": (m: number) => gl?.frontFace(m),

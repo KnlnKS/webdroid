@@ -5,9 +5,10 @@ import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreat
 import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, callOn, curThread, mkEnumSet, newObj, after, type JSimpleEnum } from "../jvm/natives/jlang";
 import { type JDate, type JCalendar } from "../jvm/natives/jtime";
-import { JPaint, JCanvas, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances, type JRect, type JBitmap, JTypeface, typefaceFor } from "./graphics";
+import { JPaint, JCanvas, cssColor, measureText, copyPaint, fontAscent, fontDescent, fontTop, fontBottom, fillFontMetrics, runAdvances, type JRect, type JBitmap, JTypeface, typefaceFor } from "./graphics";
 import { AID, JTypedArray } from "./res";
 import { TV } from "./axml";
+import { jarray } from "../jvm/abi";
 import { fontResource } from "./fonts";
 import { device } from "../shell/config";
 import { formatPattern } from "../jvm/natives/jtime-pattern";
@@ -21,6 +22,7 @@ import { csText as javaCsText } from "../jvm/natives/jchars";
 import type { JPath } from "./path";
 import type { StringPool } from "./axml";
 import { breakLines, type TLine } from "./linebreak";
+import { G } from "./gravity";
 export type { TLine } from "./linebreak";
 
 class JAnnotation extends JObj { key: string | null = null; value: string | null = null; }
@@ -143,7 +145,21 @@ export class JSpanned extends JObj {
   // JObj has no JS toString, so String(spanned) anywhere in the framework read "[object Object]"
   toString() { return this.text; }
 }
-export class JSpannable extends JSpanned {}
+export class JSpannable extends JSpanned {
+  /** Editable.setFilters: applied by every replace, as SpannableStringBuilder does */
+  declare filters?: unknown[];
+  /** the owning TextView's refresh after an edit through its Editable */
+  declare edited?: () => unknown;
+}
+/** InputFilter.filter over `filters` in order, each seeing the previous one's output, as
+ *  SpannableStringBuilder.replace and TextView.setText run them */
+export const applyInputFilters = driven(function* applyInputFilters(filters: unknown[] | undefined, cs: unknown, start: number, end: number, dest: unknown, dstart: number, dend: number): Gen<[unknown, number, number]> {
+  if (filters) for (const f of filters) {
+    const out = yield vcall(f, "filter", "(Ljava/lang/CharSequence;IILandroid/text/Spanned;II)Ljava/lang/CharSequence;", cs, start, end, dest, dstart, dend);
+    if (out != null) { cs = out; start = 0; end = (yield csText(out)).length; }
+  }
+  return [cs, start, end];
+});
 export function spannedString(s: unknown): string {
   if (s === null || s === undefined) return "";
   if (typeof s === "string") return s;
@@ -313,14 +329,16 @@ rt.register({ name: "android/text/Selection", ctor: class extends JObj {},
 
 /** replace/insert/delete for the editable text classes. A method mangles with its RETURN type,
  *  so SpannableStringBuilder declares these both as returning itself and as returning Editable,
- *  or an interface-typed call misses. */
+ *  or an interface-typed call misses. Every edit is a replace, as in AOSP, so filters and span
+ *  movement apply to all of them. */
 function editMutators(ret: string): NonNullable<NativeSpec["methods"]> {
+  const replace = `replace(IILjava/lang/CharSequence;II)L${ret};`, sig = replace.slice(7);
   return {
     [`replace(IILjava/lang/CharSequence;)L${ret};`]: driven(function* (this: JSpannable, a: number, b: number, cs: unknown): Gen {
-      const text = yield csText(cs);
-      return vcall(this, "replace", "(IILjava/lang/CharSequence;II)L" + ret + ";", a, b, cs, 0, text.length);
+      return vcall(this, "replace", sig, a, b, cs, 0, (yield csText(cs)).length);
     }),
-    [`replace(IILjava/lang/CharSequence;II)L${ret};`]: driven(function* (this: JSpannable, a: number, b: number, cs: unknown, start: number, end: number): Gen {
+    [replace]: driven(function* (this: JSpannable, a: number, b: number, cs: unknown, start: number, end: number): Gen {
+      if (this.filters?.length) [cs, start, end] = yield applyInputFilters(this.filters, cs, start, end, this, a, b);
       if (!(cs instanceof JSpanned) && rt.iof(cs, "android/text/Spanned"))
         cs = yield newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", cs);
       const incoming = cs instanceof JSpanned ? cs.spans.filter((r) => r.start < end && r.end > start).map((r) => ({
@@ -330,20 +348,30 @@ function editMutators(ret: string): NonNullable<NativeSpec["methods"]> {
       this.text = this.text.slice(0, a) + text + this.text.slice(b);
       const moved = (position: number, mode: number) => position < a ? position : position > b ? position + delta :
         position === b && b > a || mode === 2 ? a + text.length : a;
+      // AOSP's removeSpansForChange: an EXCLUSIVE_EXCLUSIVE span inside the replaced range that
+      // the change would leave empty is removed
+      if (b > a) this.spans = this.spans.filter((r) => (r.flags & 0x33) !== 0x21 || r.start < a || r.end > b || text && r.start === a && r.end === b);
       for (const span of this.spans) {
         span.start = moved(span.start, span.flags >> 4 & 0xf);
         span.end = moved(span.end, span.flags & 0xf);
       }
       for (const span of incoming) if (!this.spans.some((r) => r.span === span.span)) this.spans.push(span);
+      if (this.edited) yield this.edited();
       return this;
     }),
     [`insert(ILjava/lang/CharSequence;)L${ret};`]: driven(function* (this: JSpannable, i: number, cs: unknown): Gen {
-      this.text = this.text.slice(0, i) + (yield csText(cs)) + this.text.slice(i);
-      return this;
+      return vcall(this, "replace", sig, i, i, cs, 0, (yield csText(cs)).length);
     }),
     [`delete(II)L${ret};`]: function (this: JSpannable, a: number, b: number) {
-      this.text = this.text.slice(0, a) + this.text.slice(b);
-      return this;
+      return vcall(this, "replace", sig, a, b, "", 0, 0);
+    },
+    "clear()V": function (this: JSpannable) { return vcall(this, "replace", sig, 0, this.text.length, "", 0, 0); },
+    "setFilters([Landroid/text/InputFilter;)V": function (this: JSpannable, filters: unknown[] | null) {
+      if (filters == null) return rt.npe();
+      this.filters = filters;
+    },
+    "getFilters()[Landroid/text/InputFilter;": function (this: JSpannable) {
+      return jarray([...this.filters ?? []], "Landroid/text/InputFilter;");
     },
   };
 }
@@ -358,12 +386,10 @@ rt.register({
     ...spanMethods,
     "append(Ljava/lang/CharSequence;)Landroid/text/SpannableStringBuilder;": appendSpanned,
     "append(C)Landroid/text/SpannableStringBuilder;": function (this: JSpannable, c: number) {
-      this.text += String.fromCharCode(c);
-      return this;
+      return vcall(this, "replace", "(IILjava/lang/CharSequence;II)Landroid/text/SpannableStringBuilder;", this.text.length, this.text.length, String.fromCharCode(c), 0, 1);
     },
     ...editMutators("android/text/SpannableStringBuilder"),
     ...editMutators("android/text/Editable"),
-    "clear()V": function (this: JSpannable) { this.text = ""; this.spans = []; },
     "clearSpans()V": function (this: JSpannable) {
       if (!this.spans.some(s => rt.iof(s.span, "android/text/SpanWatcher"))) { this.spans.length = 0; return; }
       return (async () => {
@@ -785,7 +811,7 @@ function drawStyledText(src: unknown, text: string, start: number, canvas: JCanv
           if (pending instanceof Promise) await pending;
         }
         const run = text.slice(edges[i] - start, edges[i + 1] - start);
-        const pending = vcall(canvas, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", run, x, y, p);
+        const pending = vcall(canvas, "drawText", "(Ljava/lang/String;FFLandroid/graphics/Paint;)V", run, x, y + p.baselineShift, p);
         if (pending instanceof Promise) await pending;
         x += measureText(p, run);
       }
@@ -793,18 +819,21 @@ function drawStyledText(src: unknown, text: string, start: number, canvas: JCanv
   })();
 }
 
-const superscriptState = driven(function* superscriptState(this: unknown, paint: JTextPaint): Gen {
-  paint.baselineShift += Math.trunc(Number(yield vcall(paint, "ascent", "()F")) / 2);
-});
-rt.register({ name: "android/text/style/SuperscriptSpan", ctor: class extends JMetricAffectingSpan {},
-  sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"], methods: {
-    "<init>()V": () => {}, "<init>(Landroid/os/Parcel;)V": () => {},
-    "getSpanTypeId()I": () => 14, "getSpanTypeIdInternal()I": () => 14, "describeContents()I": () => 0,
-    "writeToParcel(Landroid/os/Parcel;I)V": () => {}, "writeToParcelInternal(Landroid/os/Parcel;I)V": () => {},
-    "updateDrawState(Landroid/text/TextPaint;)V": superscriptState,
-    "updateMeasureState(Landroid/text/TextPaint;)V": superscriptState,
-  },
-});
+// SuperscriptSpan and SubscriptSpan shift the baseline by half the ascent, up or down
+for (const [name, typeId, sign] of [["Superscript", 14, 1], ["Subscript", 15, -1]] as const) {
+  const shift = driven(function* (this: unknown, paint: JTextPaint): Gen {
+    paint.baselineShift += sign * Math.trunc(Number(yield vcall(paint, "ascent", "()F")) / 2);
+  });
+  rt.register({ name: `android/text/style/${name}Span`, ctor: class extends JMetricAffectingSpan {},
+    sup: "android/text/style/MetricAffectingSpan", ifaces: ["android/text/ParcelableSpan"], methods: {
+      "<init>()V": () => {}, "<init>(Landroid/os/Parcel;)V": () => {},
+      "getSpanTypeId()I": () => typeId, "getSpanTypeIdInternal()I": () => typeId, "describeContents()I": () => 0,
+      "writeToParcel(Landroid/os/Parcel;I)V": () => {}, "writeToParcelInternal(Landroid/os/Parcel;I)V": () => {},
+      "updateDrawState(Landroid/text/TextPaint;)V": shift,
+      "updateMeasureState(Landroid/text/TextPaint;)V": shift,
+    },
+  });
+}
 
 class JAbsoluteSizeSpan extends JMetricAffectingSpan { size = 0; dip = 0; }
 function absoluteSize(this: JAbsoluteSizeSpan, paint: JTextPaint) {
@@ -837,7 +866,7 @@ rt.register({
     "<init>(II)V": function (this: JLeadingMarginStd, f: number, r: number) { this.first = f; this.rest = r; },
     "<init>(I)V": function (this: JLeadingMarginStd, v: number) { this.first = this.rest = v; },
     "getLeadingMargin(Z)I": function (this: JLeadingMarginStd, first: number) { return first ? this.first : this.rest; },
-    "drawLeadingMargin(Landroid/graphics/Canvas;Landroid/graphics/Paint;IIIIIILjava/lang/CharSequence;IIZLandroid/text/Layout;)V": () => {},
+    "drawLeadingMargin(Landroid/graphics/Canvas;Landroid/graphics/Paint;IIIIILjava/lang/CharSequence;IIZLandroid/text/Layout;)V": () => {},
   },
 });
 rt.markers("android/text/style/LineBackgroundSpan");
@@ -853,23 +882,35 @@ rt.register({
     "getStripeWidth()I": function (this: JQuoteSpan) { return this.stripe; },
     "getGapWidth()I": function (this: JQuoteSpan) { return this.gap; },
     "getLeadingMargin(Z)I": function (this: JQuoteSpan) { return this.stripe + this.gap; },
-    "drawLeadingMargin(Landroid/graphics/Canvas;Landroid/graphics/Paint;IIIIIILjava/lang/CharSequence;IIZLandroid/text/Layout;)V": () => {},
+    "drawLeadingMargin(Landroid/graphics/Canvas;Landroid/graphics/Paint;IIIIILjava/lang/CharSequence;IIZLandroid/text/Layout;)V":
+      function (this: JQuoteSpan, c: JCanvas, _p: JPaint, x: number, dir: number, top: number, _baseline: number, bottom: number) {
+        c.ctx.fillStyle = cssColor(this.color);
+        c.ctx.fillRect(Math.min(x, x + dir * this.stripe), top, this.stripe, bottom - top);
+      },
   },
 });
-class JBulletSpan extends JObj { gap = 8; color = 0; radius = 4; }
+class JBulletSpan extends JObj { gap = 2; color = 0; radius = 4; wantColor = false; }
 rt.register({
   name: "android/text/style/BulletSpan", ctor: JBulletSpan,
   ifaces: ["android/text/style/LeadingMarginSpan", "android/text/ParcelableSpan"],
   methods: {
     "<init>()V": function () {},
     "<init>(I)V": function (this: JBulletSpan, gap: number) { this.gap = gap; },
-    "<init>(II)V": function (this: JBulletSpan, gap: number, c: number) { this.gap = gap; this.color = c; },
-    "<init>(III)V": function (this: JBulletSpan, gap: number, c: number, r: number) { this.gap = gap; this.color = c; this.radius = r; },
+    "<init>(II)V": function (this: JBulletSpan, gap: number, c: number) { this.gap = gap; this.color = c; this.wantColor = true; },
+    "<init>(III)V": function (this: JBulletSpan, gap: number, c: number, r: number) { this.gap = gap; this.color = c; this.radius = r; this.wantColor = true; },
     "getLeadingMargin(Z)I": function (this: JBulletSpan) { return 2 * this.radius + this.gap; },
     "getBulletRadius()I": function (this: JBulletSpan) { return this.radius; },
     "getGapWidth()I": function (this: JBulletSpan) { return this.gap; },
     "getColor()I": function (this: JBulletSpan) { return this.color; },
-    "drawLeadingMargin(Landroid/graphics/Canvas;Landroid/graphics/Paint;IIIIIILjava/lang/CharSequence;IIZLandroid/text/Layout;)V": () => {},
+    // a bullet on the span's first line, centred in it, in the text colour unless one was given
+    "drawLeadingMargin(Landroid/graphics/Canvas;Landroid/graphics/Paint;IIIIILjava/lang/CharSequence;IIZLandroid/text/Layout;)V": driven(function* (this: JBulletSpan,
+      c: JCanvas, p: JPaint, x: number, dir: number, top: number, _baseline: number, bottom: number, text: unknown, start: number): Gen {
+      if (!rt.iof(text, "android/text/Spanned") || (yield vcall(text, "getSpanStart", "(Ljava/lang/Object;)I", this)) !== start) return;
+      c.ctx.fillStyle = cssColor(this.wantColor ? this.color : p.color);
+      c.ctx.beginPath();
+      c.ctx.arc(x + dir * this.radius, (top + bottom) / 2, this.radius, 0, 2 * Math.PI);
+      c.ctx.fill();
+    }),
   },
 });
 class JScaleXSpan extends JMetricAffectingSpan { scaleX = 1; }
@@ -892,7 +933,6 @@ rt.register({
   methods: {
     ...spanMethods,
     "append(Ljava/lang/CharSequence;)Landroid/text/Editable;": appendSpanned,
-    "clear()V": function (this: JEditable) { this.text = ""; this.spans = []; },
     ...editMutators("android/text/Editable"),
   },
 });
@@ -1141,16 +1181,64 @@ function replacementWidth(text: string, paint: JTextPaint, replacements: Replace
   }
   return x + (position < end ? measureText(paint, text.slice(position, end)) : 0);
 }
+/** A paragraph's LeadingMarginSpans, as StaticLayout.generate reads them: the margin of its first
+ *  lines (every span's getLeadingMargin(true), for the most first lines any LeadingMarginSpan2
+ *  claims, at least one) and of the rest. */
+interface ParagraphMargin { spans: unknown[]; first: number; rest: number; firstLines: number }
 export class JLayout extends JObj {
   text = "";
+  /** by paragraph start, when the source has LeadingMarginSpans */
+  margins: Map<number, ParagraphMargin> | null = null;
   /** the CharSequence the layout was built from, kept for its spans (LineHeightSpan) */
   src: unknown = null;
   paint!: JTextPaint;
   width = 0;
   alignment: JSimpleEnum | null = null;
   breakStrategy = 0;
-  lineLeft(line: TLine): number {
-    return this.alignment?.ord === 2 ? (this.width - line.width) / 2 : this.alignment?.ord === 1 ? this.width - line.width : 0;
+  /** the alignment as the horizontal gravity a TextView draws the layout with */
+  gravity(): number { return this.alignment?.ord === 2 ? G.CENTER_H : this.alignment?.ord === 1 ? G.RIGHT : G.LEFT; }
+  lineLeft(line: TLine, gravity = this.gravity()): number {
+    const indent = line.indent ?? 0;
+    return gravity === G.CENTER_H ? indent + (this.width - indent - line.width) / 2 : gravity === G.RIGHT ? this.width - line.width : indent;
+  }
+  indent(paragraph: number, line: number): number {
+    const m = this.margins?.get(paragraph);
+    return m ? (line < m.firstLines ? m.first : m.rest) : 0;
+  }
+  /** Lays out the lines `wrap` breaks: a spanned source's LeadingMarginSpans indent them and its
+   *  LineHeightSpans space them, as StaticLayout.generate consults both. */
+  lineUp(wrap: () => TLine[]): unknown {
+    this.updateMetrics();
+    if (this.src instanceof JSpanned) return rt.drive(this.lineUp$(this.src, wrap));
+    this.margins = this.tops = this.bases = null;
+    this.lines = wrap();
+  }
+  private *lineUp$(src: JSpanned, wrap: () => TLine[]): Gen {
+    yield* this.loadMargins$(src);
+    this.lines = wrap();
+    yield* this.applyLineHeightSpans$(src);
+  }
+  private *loadMargins$(src: JSpanned): Gen {
+    this.margins = null;
+    const text = this.text, spans = src.spans.filter((s) => rt.iof(s.span, "android/text/style/LeadingMarginSpan"));
+    if (!spans.length) return;
+    const margins = new Map<number, ParagraphMargin>();
+    for (let start = 0; start <= text.length;) {
+      const newline = text.indexOf("\n", start), end = newline < 0 ? text.length : newline + 1;
+      const own = spans.filter((s) => s.start < end && s.end > start || s.start === start);
+      if (own.length) {
+        const m: ParagraphMargin = { spans: own.map((s) => s.span), first: 0, rest: 0, firstLines: 1 };
+        for (const span of m.spans) {
+          m.first += yield vcall(span, "getLeadingMargin", "(Z)I", 1);
+          m.rest += yield vcall(span, "getLeadingMargin", "(Z)I", 0);
+          if (rt.iof(span, "android/text/style/LeadingMarginSpan$LeadingMarginSpan2")) m.firstLines = Math.max(m.firstLines, yield vcall(span, "getLeadingMarginLineCount", "()I"));
+        }
+        margins.set(start, m);
+      }
+      if (newline < 0) break;
+      start = end;
+    }
+    this.margins = margins;
   }
   lines: TLine[] = [];
   replacements: Replacement[] = [];
@@ -1170,12 +1258,12 @@ export class JLayout extends JObj {
     this.padTop = this.includePad ? this.asc - Math.floor(fontTop(p)) : 0;
     this.padBottom = this.includePad ? Math.ceil(fontBottom(p)) - this.desc : 0;
   }
-  layoutLines(maxLines = Number.MAX_SAFE_INTEGER) {
-    this.updateMetrics();
-    this.lines = breakLines(this.text, this.paint, {
+  wrap(maxLines = Number.MAX_SAFE_INTEGER): TLine[] {
+    return breakLines(this.text, this.paint, {
       width: this.width, maxLines, balanced: this.breakStrategy === 2,
       measure: (start, end) => this.rangeWidth(start, end),
       atomic: this.replacements,
+      margin: this.margins ? (start, line) => this.indent(start, line) : undefined,
     });
   }
   rangeWidth(start: number, end: number): number {
@@ -1186,11 +1274,8 @@ export class JLayout extends JObj {
    * lays the line out with what they wrote back. That is how a Compose Paragraph (and any
    * app-set line height) gets its spacing, so a layout without it is a font-metrics line short.
    */
-  applyLineHeightSpans(): unknown { return rt.drive(this.applyLineHeightSpans$()); }
-  *applyLineHeightSpans$(): Gen {
+  private *applyLineHeightSpans$(src: JSpanned): Gen {
     this.tops = this.bases = null;
-    const src = this.src;
-    if (!(src instanceof JSpanned)) return;
     const spans = src.spans.filter((s) => rt.iof(s.span, "android/text/style/LineHeightSpan"));
     if (!spans.length && !this.replacements.length) return;
     const fm = new (rt.link("android/graphics/Paint$FontMetricsInt").ctor as new () => { top: number; ascent: number; descent: number; bottom: number; leading: number })();
@@ -1252,9 +1337,21 @@ function primaryHorizontal(this: JLayout, off: number) {
 }
 export const drawLayout = driven(function* drawLayout(this: JLayout, c: JCanvas, gravity?: number): Gen {
     const thread = curThread;
+    let paragraph = 0;
     for (let i = 0; i < this.lines.length; i++) {
       const line = this.lines[i], end = line.start + (line.ellipsis?.start ?? line.text.length), baseline = this.baseline(i);
-      let position = line.start, x = gravity === undefined ? this.lineLeft(line) : gravity === 1 ? (this.width - line.width) / 2 : gravity === 5 ? this.width - line.width : 0;
+      if (line.start === 0 || this.text[line.start - 1] === "\n") paragraph = i;
+      const margin = this.margins?.get(this.lines[paragraph].start);
+      // Layout.drawText: each span draws its margin where the previous ones ended
+      if (margin) {
+        let left = 0;
+        for (const span of margin.spans) {
+          yield vcallOn(thread, span, "drawLeadingMargin", "(Landroid/graphics/Canvas;Landroid/graphics/Paint;IIIIILjava/lang/CharSequence;IIZLandroid/text/Layout;)V",
+            c, this.paint, left, 1, this.lineTop(i), baseline, this.lineTop(i + 1), this.src, line.start, line.end, +(paragraph === i), this);
+          left += yield vcallOn(thread, span, "getLeadingMargin", "(Z)I", +(i - paragraph < margin.firstLines));
+        }
+      }
+      let position = line.start, x = this.lineLeft(line, gravity);
       for (const span of this.replacements) {
         if (span.end <= position || span.start >= end) continue;
         if (span.start > position) {
@@ -1274,7 +1371,8 @@ export const drawLayout = driven(function* drawLayout(this: JLayout, c: JCanvas,
     }
 });
 const lineBottom = function (this: JLayout, i: number) { return this.lineTop(Math.min(i, this.lines.length - 1) + 1); };
-const lineWidth = function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; };
+/** Layout.getLineWidth/getLineMax: the extent plus the leading margin */
+const lineWidth = function (this: JLayout, i: number) { const line = this.lines[i]; return line ? (line.indent ?? 0) + line.width : 0; };
 const layoutWidth = function (this: JLayout) { return this.width; };
 const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "static getDesiredWidth(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F": (cs: unknown, p: JTextPaint) => desiredWidth(cs, p),
@@ -1313,7 +1411,7 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "getAlignment()Landroid/text/Layout$Alignment;": function (this: JLayout) { return this.alignment ?? rt.link("android/text/Layout$Alignment").ctor.s$ALIGN_NORMAL; },
   ...stubs(1, "getParagraphDirection(I)I"),
   // every paragraph is left-to-right and these lines reserve no leading margin
-  "getParagraphLeft(I)I": () => 0,
+  "getParagraphLeft(I)I": function (this: JLayout, i: number) { return this.lines[i]?.indent ?? 0; },
   "getParagraphRight(I)I": function (this: JLayout) { return this.width; },
   "getLineForVertical(I)I": function (this: JLayout, y: number) {
     if (this.tops) { let i = 0; while (i + 1 < this.lines.length && this.tops[i + 1] <= y) i++; return i; }
@@ -1369,7 +1467,7 @@ class JDynamicLayout extends JLayout {
     const text = spannedString(this.src);
     if (this.lines.length && text === this.text) return;
     this.text = text; this.replacements = [];
-    const finish = () => { this.layoutLines(); return this.applyLineHeightSpans(); };
+    const finish = () => this.lineUp(() => this.wrap());
     return replacementSpans(this.src).length ? after(measureReplacements(this.src, this.paint), (spans) => { this.replacements = spans; return finish(); }) : finish();
   }
 }
@@ -1412,8 +1510,7 @@ class JBoringLayout extends JLayout {
     this.spacingMult = smult; this.spacingAdd = sadd; this.includePad = incl;
     const spans = replacementSpans(cs);
     this.replacements = spans.length ? yield measureReplacements(cs, p, spans) : [];
-    this.layoutLines(1);
-    yield this.applyLineHeightSpans();
+    yield this.lineUp(() => this.wrap(1));
     return this;
   }
 }
@@ -1492,8 +1589,7 @@ const setupSpannedLayout = driven(function* setupSpannedLayout(l: JStaticLayout,
   l.spacingMult = mult; l.spacingAdd = add; l.includePad = includePad; l.breakStrategy = breakStrategy;
   const spans = replacementSpans(cs);
   if (spans.length) l.replacements = yield measureReplacements(cs, p, spans);
-  l.layoutLines(maxLines);
-  yield l.applyLineHeightSpans();
+  yield l.lineUp(() => l.wrap(maxLines));
   return l;
 });
 

@@ -38,6 +38,7 @@ import "./jvm/natives/jchannels";
 import "./jvm/natives/jzip";
 import "./android/gl";
 import "./android/glview";
+import "./android/videoview";
 import "./android/os";
 import "./android/keyevent";
 import "./android/observable";

@@ -114,6 +114,12 @@ rt.register({
       finally { this.writeDepth--; }
       if (this.writeDepth === 0) yield vcall(this, "flush", "()V");
     }),
+    // everything written so far is forgotten: later references write out anew
+    "reset()V": function (this: JObjectOut) {
+      if (this.writeDepth) throw rt.mkThrowable("java/io/IOException", "stream active");
+      this.chunks.push(TC_RESET);
+      this.handles.clear(); this.replacements.clear();
+    },
     "enableReplaceObject(Z)Z": function (this: JObjectOut, enabled: number) { const old = this.replace; this.replace = !!enabled; return +old; },
     "replaceObject(Ljava/lang/Object;)Ljava/lang/Object;": (value: unknown) => value,
     "defaultWriteObject()V": function (this: JObjectOut) { return this.context ? writeFields(curThread, this, this.context) : inactive(); },

@@ -1,11 +1,13 @@
 //! ARM32 memory access outside the integer core, as the interpreter runs it: the exclusives and
-//! CLREX, NEON whole-register VLD1/VST1 and barriers. Anything else falls back to the interpreter.
+//! CLREX, NEON VLD1/VST1 of whole registers and single lanes, and barriers. Anything else falls
+//! back to the interpreter.
 const cpu = @import("cpu.zig");
 const jit = @import("jit.zig");
 const wasm = @import("wasm.zig");
 const bits = @import("bits.zig").bits;
 const Emit = jit.Emit(false);
 const O = wasm.Op;
+const S = wasm.Simd;
 const get = wasm.get;
 const set = wasm.set;
 const c32 = wasm.c32;
@@ -16,10 +18,13 @@ const L_A = jit.L_A;
 const OFF_EXCL = @offsetOf(cpu.Cpu, "excl");
 const OFF_V = @offsetOf(cpu.Cpu, "v");
 
-/// The unconditional (cc = 15) ARM space: CLREX and NEON whole-register loads and stores.
+/// The unconditional (cc = 15) ARM space: CLREX and NEON VLD1/VST1.
 pub fn emitArmUnconditional(e: *Emit, w: u32) bool {
     if (w == 0xf57f_f01f) return clearExclusive(e);
-    return w & 0xff10_0000 == 0xf400_0000 and neonWhole(e, w);
+    return w & 0xff10_0000 == 0xf400_0000 and neonOne(e, w);
+}
+fn neonOne(e: *Emit, w: u32) bool {
+    return if (w & (1 << 23) != 0) neonLane(e, w) else neonWhole(e, w);
 }
 
 /// LDREX/STREX (word, doubleword, byte, half) in ARM's extra load/store space.
@@ -62,7 +67,7 @@ pub fn emitThumb(e: *Emit, h: u32, h2: u32) bool {
         exclusive(e, ld, size, rn, rt, rt2, h2 & 15, 0);
         return true;
     }
-    if (h & 0xff10 == 0xf900) return neonWhole(e, 0xf400_0000 | (h & 0xff) << 16 | h2);
+    if (h & 0xff10 == 0xf900) return neonOne(e, 0xf400_0000 | (h & 0xff) << 16 | h2);
     if (h == 0xf3bf and h2 & 0xfff0 == 0x8f20) return clearExclusive(e);
     return h == 0xf3bf and (h2 & 0xfff0 == 0x8f40 or h2 & 0xfff0 == 0x8f50 or h2 & 0xfff0 == 0x8f60);
 }
@@ -129,5 +134,45 @@ fn neonWhole(e: *Emit, w: u32) bool {
         }
     }
     if (m == 13) b.emit(.{ get(L_X + n), c32(@intCast(regs * 8)), O.i32_add, set(L_X + n) }) else if (m != 15) b.emit(.{ get(L_X + n), get(L_X + m), O.i32_add, set(L_X + n) });
+    return true;
+}
+
+/// VLD1/VST1 of one lane, or VLD1 of one element to all lanes of one or two D registers, with
+/// arm.neonLane's alignment fault and writeback.
+fn neonLane(e: *Emit, w: u32) bool {
+    if (bits(w, 8, 2) != 0) return false;
+    const ld = w & (1 << 21) != 0;
+    const replicate = bits(w, 10, 2) == 3;
+    const size = if (replicate) bits(w, 6, 2) else bits(w, 10, 2);
+    const index_align = bits(w, 4, 4);
+    if (replicate) {
+        if (!ld or size == 3 or (size == 0 and index_align & 1 != 0)) return false;
+    } else if (switch (size) {
+        0 => index_align & 1 != 0,
+        1 => index_align & 2 != 0,
+        else => index_align & 7 != 0 and index_align & 7 != 3,
+    }) return false;
+    const bytes = @as(u32, 1) << @intCast(size);
+    const regs: u32 = if (replicate) 1 + bits(w, 5, 1) else 1;
+    const n = bits(w, 16, 4);
+    const m = w & 15;
+    const d = (bits(w, 22, 1) << 4) | bits(w, 12, 4);
+    if (n == 15 or d + regs > 32) return false;
+    const b = e.b;
+    b.emit(.{ get(L_X + n), set(L_A) });
+    e.checkAddress(if (index_align & 1 != 0) bytes - 1 else 0);
+    const load: u8 = switch (size) { 0 => O.i32_load8_u, 1 => O.i32_load16_u, else => O.i32_load };
+    if (replicate) {
+        b.emit(.{ get(L_A), mo(load, 0), wasm.simd(S.splat[size]), set(jit.L_VA) });
+        for (0..regs) |i| b.emit(.{ get(L_CPU), get(jit.L_VA), wasm.vm(S.store64_lane, OFF_V + (d + @as(u32, @intCast(i))) * 8), 0 });
+    } else {
+        const lane = OFF_V + d * 8 + (index_align >> @intCast(size + 1)) * bytes;
+        const store: u8 = switch (size) { 0 => O.i32_store8, 1 => O.i32_store16, else => O.i32_store };
+        if (ld) b.emit(.{ get(L_CPU), get(L_A), mo(load, 0), mo(store, lane) }) else {
+            e.storeCheck(0, bytes);
+            b.emit(.{ get(L_A), get(L_CPU), mo(load, lane), mo(store, 0) });
+        }
+    }
+    if (m == 13) b.emit(.{ get(L_X + n), c32(@intCast(bytes)), O.i32_add, set(L_X + n) }) else if (m != 15) b.emit(.{ get(L_X + n), get(L_X + m), O.i32_add, set(L_X + n) });
     return true;
 }

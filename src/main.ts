@@ -238,7 +238,8 @@ const wd = {
     return `tapped ${s} @ ${hit.x},${hit.y}`;
   },
   swipe: async (x1: number, y1: number, x2: number, y2: number, ms = 400) => {
-    const steps = Math.max(2, Math.round(ms / 16));
+    // one move per display frame, as a finger on a panel of this rate reports them
+    const steps = Math.max(2, Math.round(ms * device.refreshRate / 1000));
     const t0 = guestNow();
     void dispatchPointer(0, x1, y1, t0);
     for (let i = 1; i <= steps; i++) {

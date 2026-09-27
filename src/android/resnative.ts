@@ -5,7 +5,7 @@ import { device } from "../shell/config";
 import { newXmlPullParser, newXmlSerializer } from "./xmlpull";
 import { parseSax } from "./sax";
 import { Resources, currentResources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, JXmlParser, obtainStyled, obtainStyleAttributes, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
-import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV, type JColorStateList } from "./drawable";
+import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV, loadDrawableFile, bitmapDensity, type JColorStateList } from "./drawable";
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
 import { TV, parseAXML, parseAXMLDoc, xmlAttrString, type XmlNode, type XmlAttr } from "./axml";
 import { sizeClass } from "./arsc";
@@ -341,11 +341,15 @@ function resourceText(res: Resources, id: number): unknown {
   return value.t === TV.STRING && pool ? annotatedResource(pool, value.d) : rvString(res, value);
 }
 const getColor = function (this: JResources, id: number) { return rvColor(this.host, this.host.ref(id), 0); };
-/** The file the table picks for `density` (0 is the device's own). The bitmap keeps its bucket's
- *  density, where AOSP would report a bucket matching the request at the screen's. */
+/** The file the table picks for `density` (0 is the device's own), as ResourcesImpl.loadDrawable
+ *  scales it: a bitmap from the requested bucket is reported at the screen's density, any other
+ *  at its bucket's in proportion. */
 function drawableForDensity(this: JResources, id: number, density: number, theme: JTheme | null = null) {
   const file = density ? this.host.pathOf(id, 0, undefined, density) : null;
-  return file && file.arsc === this.host.arsc ? loadDrawableRV(this.host, { t: TV.STRING, d: 0, s: file.path }, theme) : loadDrawable(this.host, id, theme);
+  const bytes = file && file.arsc === this.host.arsc ? file.arsc.files(file.path) : null;
+  if (!bytes) return loadDrawable(this.host, id, theme);
+  const bucket = bitmapDensity(file!.density);
+  return loadDrawableFile(this.host, file!.path, bytes, theme, bucket === density ? device.densityDpi : Math.trunc(bucket * device.densityDpi / density));
 }
 const resMethods: NativeSpec["methods"] = {
   "getString(I)Ljava/lang/String;": getString,

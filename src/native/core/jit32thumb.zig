@@ -1,7 +1,7 @@
-//! Thumb-2 data processing, multiplies, extensions, reversals and LDM/STM as the ARM words
-//! whose compiled forms compute what arm.zig's Thumb paths compute. rwThumb reads their flag use
-//! from the same words. Forms naming PC as an operand do not translate (ARM reads it as pc + 8),
-//! except ADR, whose address is a constant.
+//! Thumb-2 data processing, multiplies, extensions, reversals, LDM/STM and 16-bit IT bodies as
+//! the ARM words whose compiled forms compute what arm.zig's Thumb paths compute. rwThumb reads
+//! their flag use from the same words. Forms naming PC as an operand do not translate (ARM reads
+//! it as pc + 8), except ADR, whose address is a constant.
 const std = @import("std");
 const bits = @import("bits.zig").bits;
 
@@ -9,7 +9,8 @@ const bits = @import("bits.zig").bits;
 pub const Imm = struct { v: u32, carry: ?u32 = null };
 /// The ARM word, and the expanded immediate where the Thumb one has no ARM encoding. The word's
 /// rotation field is then nonzero exactly when the immediate replaces C, as rwArm reads it.
-pub const Arm = struct { w: u32, imm: ?Imm = null };
+/// `invert` complements the second operand: ORN as ORR, which ARM lacks.
+pub const Arm = struct { w: u32, imm: ?Imm = null, invert: bool = false };
 
 /// ThumbExpandImm_C, as arm.thumbExpandImm computes it.
 fn expandImm(h: u32, h2: u32) Imm {
@@ -44,6 +45,12 @@ pub fn asArm(pc: u32, h: u32, h2: u32) ?Arm {
         const base: u32 = if (mls) 0xe060_0090 else if (a == 15) 0xe000_0090 else 0xe020_0090;
         return .{ .w = base | (d << 16) | (if (a == 15) 0 else a << 12) | (m << 8) | n };
     }
+    if (h & 0xfff0 == 0xfb10 and h2 & 0xc0 == 0) {
+        // SMUL<x><y>/SMLA<x><y>: ARM names the first operand Rm (bits 3:0, half x) and the second Rs
+        const a = h2 >> 12;
+        if (n == 15 or m == 15 or d == 15) return null;
+        return .{ .w = 0xe100_0080 | (if (a == 15) @as(u32, 0x0060_0000) else a << 12) | (d << 16) | (m << 8) | (bits(h2, 4, 1) << 6) | (bits(h2, 5, 1) << 5) | n };
+    }
     if (h & 0xff80 == 0xfb80) {
         const op = bits(h, 4, 3);
         const dual = op == 6 and h2 & 0xf0 == 0x60;
@@ -64,6 +71,8 @@ pub fn asArm(pc: u32, h: u32, h2: u32) ?Arm {
         if (h2 & 0xc0 == 0x80) return .{ .w = 0xe600_0070 | (@as(u32, switch (bits(h, 4, 3)) {
             0 => 11,
             1 => 15,
+            2 => 8,
+            3 => 12,
             4 => 10,
             5 => 14,
             else => return null,
@@ -73,6 +82,17 @@ pub fn asArm(pc: u32, h: u32, h2: u32) ?Arm {
         return null;
     }
     if (h2 & 0x8000 != 0) return null;
+    if (h & 0xfff0 == 0xeac0 and h2 & 0x10 == 0) {
+        // PKHBT/PKHTB
+        if (n == 15 or d == 15 or m == 15) return null;
+        return .{ .w = 0xe680_0010 | (n << 16) | (d << 12) | (((bits(h2, 12, 3) << 2) | bits(h2, 6, 2)) << 7) | (bits(h2, 5, 1) << 6) | m };
+    }
+    if (h & 0xff50 == 0xf300 and h2 & 0x20 == 0) {
+        // SSAT/USAT; an arithmetic shift by zero is SSAT16/USAT16 instead
+        const amount = (bits(h2, 12, 3) << 2) | bits(h2, 6, 2);
+        if (n == 15 or d == 15 or (h & 0x20 != 0 and amount == 0)) return null;
+        return .{ .w = (if (h & 0x80 != 0) @as(u32, 0xe6e0_0010) else 0xe6a0_0010) | ((h2 & 31) << 16) | (d << 12) | (amount << 7) | (bits(h, 5, 1) << 6) | n };
+    }
     if (h & 0xfbe0 == 0xf200 or h & 0xfbe0 == 0xf2a0) {
         // ADDW/SUBW, and ADR as a move of its address
         const imm = (bits(h, 10, 1) << 11) | (bits(h2, 12, 3) << 8) | (h2 & 255);
@@ -103,7 +123,7 @@ pub fn asArm(pc: u32, h: u32, h2: u32) ?Arm {
 
 /// The data-processing forms with a modified immediate or a shifted register, in arm.zig's
 /// thumbData order. n = 15 turns ORR/ORN into MOV/MVN; d = 15 with S turns AND, EOR, ADD and SUB
-/// into TST, TEQ, CMN and CMP.
+/// into TST, TEQ, CMN and CMP. ORN is ORR of the inverted operand.
 fn dataProcessing(h: u32, h2: u32) ?Arm {
     const shifted = h & 0xfe00 == 0xea00;
     if (!shifted and h & 0xfa00 != 0xf000) return null;
@@ -116,7 +136,7 @@ fn dataProcessing(h: u32, h2: u32) ?Arm {
     var o: u32 = if (move) (if (op == 2) 13 else 15) else switch (op) {
         0 => 0,
         1 => 14,
-        2 => 12,
+        2, 3 => 12,
         4 => 1,
         8 => 4,
         10 => 5,
@@ -134,11 +154,71 @@ fn dataProcessing(h: u32, h2: u32) ?Arm {
         else => return null,
     } else return null;
     const base = 0xe000_0000 | (o << 21) | (@as(u32, @intFromBool(flags)) << 20) | (n << 16) | (d << 12);
+    const invert = op == 3 and !move;
     if (shifted) {
         if (m == 15) return null;
         const shift = (bits(h2, 12, 3) << 2) | bits(h2, 6, 2);
-        return .{ .w = base | (shift << 7) | (bits(h2, 4, 2) << 5) | m };
+        return .{ .w = base | (shift << 7) | (bits(h2, 4, 2) << 5) | m, .invert = invert };
     }
     const imm = expandImm(h, h2);
-    return .{ .w = base | (1 << 25) | (@as(u32, @intFromBool(imm.carry != null)) << 8), .imm = imm };
+    return .{ .w = base | (1 << 25) | (@as(u32, @intFromBool(imm.carry != null)) << 8), .imm = imm, .invert = invert };
+}
+
+/// An IT body compiles as itself, or as the ARM word without S for a 16-bit form that sets flags
+/// only outside an IT block.
+pub const ItBody = union(enum) { thumb, arm: u32 };
+/// The 16-bit forms jit32.emitThumb compiles in an IT block without a fallback or a branch.
+pub fn itBody16(h: u32) ?ItBody {
+    const d = h & 7;
+    const m = (h >> 3) & 7;
+    switch (h >> 12) {
+        0, 1 => {
+            const o = (h >> 11) & 3;
+            // LSL/LSR/ASR #imm as MOV with a shifted operand; ADD/SUB with a register or imm3
+            if (o < 3) return .{ .arm = 0xe1a0_0000 | (d << 12) | (bits(h, 6, 5) << 7) | (o << 5) | m };
+            return .{ .arm = (if (h & 0x200 != 0) @as(u32, 0xe040_0000) else 0xe080_0000) | ((h & 0x400) << 15) | (m << 16) | (d << 12) | bits(h, 6, 3) };
+        },
+        2, 3 => {
+            const r8 = bits(h, 8, 3);
+            return switch (bits(h, 11, 2)) {
+                0 => .{ .arm = 0xe3a0_0000 | (r8 << 12) | (h & 255) },
+                1 => .thumb,
+                2 => .{ .arm = 0xe280_0000 | (r8 << 16) | (r8 << 12) | (h & 255) },
+                else => .{ .arm = 0xe240_0000 | (r8 << 16) | (r8 << 12) | (h & 255) },
+            };
+        },
+        4 => {
+            if (h & 0xfc00 == 0x4000) {
+                const op = bits(h, 6, 4);
+                // Rd op= Rm; the shifts by register as MOV Rd, Rd, <shift> Rm and NEG as RSB #0
+                return switch (op) {
+                    8, 10, 11 => .thumb,
+                    2, 3, 4, 7 => .{ .arm = 0xe1a0_0010 | (d << 12) | (m << 8) | ((if (op == 7) 3 else op - 2) << 5) | d },
+                    9 => .{ .arm = 0xe260_0000 | (m << 16) | (d << 12) },
+                    13 => .{ .arm = 0xe000_0090 | (d << 16) | (d << 8) | m },
+                    15 => .{ .arm = 0xe1e0_0000 | (d << 12) | m },
+                    else => .{ .arm = @as(u32, switch (op) {
+                        0 => 0xe000_0000,
+                        1 => 0xe020_0000,
+                        5 => 0xe0a0_0000,
+                        6 => 0xe0c0_0000,
+                        12 => 0xe180_0000,
+                        else => 0xe1c0_0000,
+                    }) | (d << 16) | (d << 12) | m },
+                };
+            }
+            // ADD/CMP/MOV with high registers, except those writing PC; LDR literal
+            const o = bits(h, 8, 2);
+            return if (h & 0xfc00 != 0x4400 or o == 1 or (o != 3 and (d | ((h >> 4) & 8)) != 15)) .thumb else null;
+        },
+        5, 6, 7, 8, 9, 10, 12 => return .thumb,
+        11 => {
+            if (h & 0xff00 == 0xb000 or h & 0xfe00 == 0xb400 or h & 0xff00 == 0xbc00) return .thumb;
+            return switch (h & 0xffc0) {
+                0xb200, 0xb240, 0xb280, 0xb2c0, 0xba00, 0xba40, 0xbac0 => .thumb,
+                else => null,
+            };
+        },
+        else => return null,
+    }
 }

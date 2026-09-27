@@ -24,6 +24,7 @@ const vm = wasm.vm;
 const L_CPU = jit.L_CPU;
 const VA = jit.L_VA;
 const VB = jit.L_VB;
+const VC = jit.L_VC;
 const OFF_V = @offsetOf(cpu.Cpu, "v");
 const F32_NE: u8 = 0x42;
 
@@ -140,7 +141,10 @@ fn same(b: *Buf, w: u32) bool {
         }
         return true;
     }
-    if (op == 15 and b4 and !u and size & 1 == 0) return false;
+    if (op == 15 and b4 and !u and size & 1 == 0) {
+        recipStep(b, d, n, m, q, size == 2);
+        return true;
+    }
     if (op == 8 and !b4) {
         binary(b, d, n, m, q, if (u) S.sub[size] else S.add[size]);
     } else if (op == 3 and size != 3) {
@@ -161,7 +165,13 @@ fn same(b: *Buf, w: u32) bool {
         if (size == 0) return false;
         if (b4) binary(b, d, n, m, q, S.mul[size]) else accumulate(b, d, n, q, S.mul[size], if (u) S.sub[size] else S.add[size], Reg{ .d = m });
     } else if (op == 10 and size != 3 and !q) {
-        return false;
+        pairs(b, n, m, size);
+        b.emit(.{sv(if (b4) (if (u) S.min_u[size] else S.min_s[size]) else if (u) S.max_u[size] else S.max_s[size])});
+        store(b, d, false);
+    } else if (op == 11 and b4 and !u and size != 3 and !q) {
+        pairs(b, n, m, size);
+        b.emit(.{sv(S.add[size])});
+        store(b, d, false);
     } else if (op == 1 and b4) {
         logical(b, d, n, m, q, u, size);
     } else if (op == 4 and !b4) {
@@ -173,6 +183,10 @@ fn same(b: *Buf, w: u32) bool {
             load(b, m);
             b.emit(.{ sv(S.fsub[0]), sv(S.fabs[0]) });
             store(b, d, q);
+        } else if (!q) {
+            pairs(b, n, m, 2);
+            b.emit(.{sv(S.fadd[0])});
+            store(b, d, false);
         } else return false;
     } else if (op == 13 and size == 0 and b4 and u) {
         binary(b, d, n, m, q, S.fmul[0]);
@@ -188,21 +202,79 @@ fn same(b: *Buf, w: u32) bool {
         }
     } else if (op == 13 and b4 and !u and size & 1 == 0) {
         accumulate(b, d, n, q, S.fmul[0], if (f_sub) S.fsub[0] else S.fadd[0], Reg{ .d = m });
-    } else if (op == 15 and !b4 and !u and size & 1 == 0) {
-        floatExtremum(b, d, n, m, q, f_sub);
+    } else if (op == 15 and !b4 and size & 1 == 0 and !(u and q)) {
+        if (u) {
+            pairs(b, n, m, 2);
+            b.emit(.{ set(VB), set(VA) });
+        } else {
+            load(b, n);
+            b.set(VA);
+            load(b, m);
+            b.set(VB);
+            b.get(L_CPU);
+        }
+        extremum(b, f_sub);
+        store(b, d, q);
     } else return false;
     return true;
 }
 
-/// VMAX/VMIN.F32: wasm's lanes where neither operand is NaN, else the first NaN operand's bits
-/// unchanged, as fp.fmax/fmin return it (wasm's own NaN result is unspecified).
-fn floatExtremum(b: *Buf, d: u32, n: u32, m: u32, q: bool, min: bool) void {
-    load(b, n);
-    b.set(VA);
-    load(b, m);
-    b.set(VB);
-    b.emit(.{ get(L_CPU), get(VA), get(VB), get(VA), get(VB), sv(if (min) S.fmin[0] else S.fmax[0]), get(VB), get(VB), sv(F32_NE), sv(S.bitselect) });
+/// Pushes L_CPU and the D operands' pairwise halves: the first lane of each adjacent pair of n
+/// then of m, and the second lanes, as simd.pair orders them.
+fn pairs(b: *Buf, n: u32, m: u32, size: u32) void {
+    const es = @as(u32, 1) << @intCast(size);
+    const lanes = 8 / es;
+    var first: [16]u8 = @splat(0);
+    var second: [16]u8 = @splat(0);
+    for (0..lanes) |i| {
+        const lane: u32 = @intCast(if (i < lanes / 2) 2 * i else 16 / es + 2 * (i - lanes / 2));
+        for (0..es) |j| {
+            first[i * es + j] = @intCast(lane * es + j);
+            second[i * es + j] = @intCast((lane + 1) * es + j);
+        }
+    }
+    b.get(L_CPU);
+    for ([_][16]u8{ first, second }) |mask| {
+        load(b, n);
+        load(b, m);
+        shuffle(b, mask);
+    }
+}
+
+/// VMAX/VMIN.F32 of VA and VB: wasm's lanes where neither operand is NaN, else the first NaN
+/// operand's bits unchanged, as fp.fmax/fmin return it (wasm's own NaN result is unspecified).
+fn extremum(b: *Buf, min: bool) void {
+    b.emit(.{ get(VA), get(VB), get(VA), get(VB), sv(if (min) S.fmin[0] else S.fmax[0]), get(VB), get(VB), sv(F32_NE), sv(S.bitselect) });
     b.emit(.{ get(VA), get(VA), sv(F32_NE), sv(S.bitselect) });
+}
+
+/// VRECPS (2 - n * m) and VRSQRTS ((3 - n * m) / 2) as fp.recipStep32: standardized operands and
+/// product, where infinity times zero is zero, and a standardized result.
+fn recipStep(b: *Buf, d: u32, n: u32, m: u32, q: bool, sqrt: bool) void {
+    load(b, n);
+    standardize(b);
+    b.set(VB);
+    load(b, m);
+    standardize(b);
+    b.set(VC);
+    b.emit(.{ get(L_CPU), get(VB), get(VC), sv(S.fmul[0]) });
+    standardize(b);
+    for ([_]u32{ VB, VC }, [_]u32{ VC, VB }, 0..) |inf, zero, i| {
+        b.emit(.{ get(inf), sv(S.fabs[0]) });
+        splat32(b, 0x7f80_0000);
+        b.emit(.{ sv(S.feq[0]), get(zero) });
+        splat32(b, 0);
+        b.emit(.{ sv(S.feq[0]), sv(S.and_) });
+        if (i == 1) b.emit(.{sv(S.or_)});
+    }
+    b.emit(.{ sv(S.andnot), set(VA) });
+    splat32(b, if (sqrt) 0x4040_0000 else 0x4000_0000);
+    b.emit(.{ get(VA), sv(S.fsub[0]) });
+    if (sqrt) {
+        splat32(b, 0x3f00_0000);
+        b.emit(.{sv(S.fmul[0])});
+    }
+    standardize(b);
     store(b, d, q);
 }
 
@@ -286,6 +358,16 @@ fn misc(b: *Buf, w: u32) bool {
         b.get(L_CPU);
         load(b, m);
         b.emit(.{sv(S.not)});
+    } else if (is(w, 0xffbf0f10, 0xf3bb0500)) {
+        // VRECPE/VRSQRTE.F32: each lane through the core's fp.recpe/rsqrte
+        load(b, m);
+        b.emit(.{ set(VA), get(L_CPU), get(VA) });
+        for (0..(if (q) @as(u8, 4) else 2)) |li| {
+            const i: u8 = @intCast(li);
+            b.emit(.{ get(VA), sv(S.extract_s[2]), i, c32(@intCast(bits(w, 7, 1))) });
+            b.call(jit.F_ESTIMATE32);
+            b.emit(.{ sv(S.replace[2]), i });
+        }
     } else if (is(w, 0xffb30810, 0xf3b10000)) {
         const float = w & 0x400 != 0;
         if (size == 3 or op == 5 or (float and size != 2)) return false;

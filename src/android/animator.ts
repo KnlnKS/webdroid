@@ -14,6 +14,7 @@ import type { JContext } from "./context";
 import { JRect, type JPoint } from "./graphics";
 import { pathKeyframeData, type JPath } from "./path";
 import { guestNow, setGuestTimeout } from "../guest-clock";
+import { accelDecel, argbLerp, interpolatorAttr } from "./interpolator";
 
 // ── ValueAnimator/ObjectAnimator (time-driven via animHooks)
 class JValueAnimator extends JObj {
@@ -93,8 +94,6 @@ class JPathEvaluator extends JObj {
     return this.converter ? vcall(this.converter, "convert", "(Ljava/lang/Object;)Ljava/lang/Object;", this.point) : this.point;
   }
 }
-/** AOSP's AccelerateDecelerateInterpolator, the default for animators and view animations */
-export function accelDecel(t: number) { return Math.cos((t + 1) * Math.PI) / 2 + 0.5; }
 async function animTick(a: JValueAnimator): Promise<boolean> {
   if (a.paused) return true;
   const now = guestNow(), el = now - a.startT - a.delayMs;
@@ -333,16 +332,6 @@ rt.register({
     "evaluate(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": evalInt,
   },
 });
-/** AOSP ArgbEvaluator: per-channel interpolation in linear light (gamma 2.2), alpha linear */
-function argbLerp(f: number, s: number, e: number): number {
-  const ch = (c: number, sh: number) => ((c >>> sh) & 0xff) / 255;
-  const lin = (c: number) => Math.pow(c, 2.2), gam = (c: number) => Math.pow(c, 1 / 2.2);
-  const a = lerp(f, ch(s, 24), ch(e, 24));
-  const r = gam(lerp(f, lin(ch(s, 16)), lin(ch(e, 16))));
-  const g = gam(lerp(f, lin(ch(s, 8)), lin(ch(e, 8))));
-  const b = gam(lerp(f, lin(ch(s, 0)), lin(ch(e, 0))));
-  return ((Math.round(a * 255) << 24) | (Math.round(r * 255) << 16) | (Math.round(g * 255) << 8) | Math.round(b * 255)) | 0;
-}
 class JArgbEvaluator extends JObj {}
 const argbEvaluator = new JArgbEvaluator();
 rt.register({
@@ -644,7 +633,7 @@ const M_cancel = mangleMethod("cancel", "()V");
 // ── AnimatorInflater: <objectAnimator>/<set> resources, and <selector> state-list animators
 const A = attrTable(
   "propertyName", "duration", "valueFrom", "valueTo", "valueType", "startOffset", "repeatCount",
-  "ordering");
+  "repeatMode", "ordering");
 
 function xmlAttr(res: Resources, node: XmlNode, id: number): RV | null {
   const v = nodeAttrRV(node, id);
@@ -662,6 +651,8 @@ function inflateAnimator(res: Resources, node: XmlNode): JValueAnimator {
   a.durationMs = rvInt(res, xmlAttr(res, node, A.duration), 300);
   a.delayMs = rvInt(res, xmlAttr(res, node, A.startOffset));
   a.repeat = rvInt(res, xmlAttr(res, node, A.repeatCount));
+  a.repeatMode = rvInt(res, xmlAttr(res, node, A.repeatMode), 1);
+  a.interp = interpolatorAttr(res, node);
   a.isInt = rvInt(res, xmlAttr(res, node, A.valueType)) === 1;
   // an absent end is the property's value at start (NaN until the target is known)
   const from = xmlAttr(res, node, A.valueFrom), to = xmlAttr(res, node, A.valueTo);

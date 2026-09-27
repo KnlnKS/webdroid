@@ -117,6 +117,9 @@ export class PrivateFiles {
     const orphans = [...this.orphans].filter((id) => !live.has(id));
     this.orphans.clear();
     const write = this.writes.then(async () => {
+      // a record names a disk file's size only once its bytes are on disk: a page closed in
+      // between keeps the previous record rather than one over a partly written file
+      await this.disk.flush();
       const transaction = (await this.db()).transaction("files", "readwrite"), store = transaction.objectStore("files");
       // a view into a larger growing buffer would otherwise clone the whole buffer
       for (const [path, value] of pending) {
@@ -124,7 +127,7 @@ export class PrivateFiles {
         else store.put(value.kind === "file" && value.bytes.byteLength !== value.bytes.buffer.byteLength ? { kind: "file", bytes: value.bytes.slice() } : value, path);
       }
       await txDone(transaction);
-      await Promise.all([this.disk.flush(), ...orphans.map((id) => this.disk.remove(id))]);
+      await Promise.all(orphans.map((id) => this.disk.remove(id)));
     });
     this.writes = write.catch(() => {
       for (const path of pending.keys()) if (!this.pending.has(path)) this.pending.set(path, this.values.get(path) ?? null);

@@ -1,6 +1,6 @@
 # Implementation history: durable findings
 
-Updated 2026-09-25. [PLAN.md](../PLAN.md) tracks current status and
+Updated 2026-09-27. [PLAN.md](../PLAN.md) tracks current status and
 [AGENTS.md](../AGENTS.md) owns working rules. Results below describe observed
 revisions and paths, not a guarantee for the current tree. Git history retains
 intermediate runs. The [original APK audit](original-apk-coverage-2026-09-24.md)
@@ -306,8 +306,8 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   `getSuperclass` and ART's `ClassNotFoundException` for malformed array names
   made Unity's reflection fail asset lookups; `Os.chmod` absence surfaced as a
   Chromium fatal in `libtelemetry` (it treats any pending exception as fatal);
-  `allocateDirect` buffers lacked ART's accessible array (still absent for a
-  buffer allocated before any native library sizes guest memory). The GC-finalizer
+  `allocateDirect` buffers lacked ART's accessible array (now present from the
+  first allocation: an app with native libraries has guest memory sized then). The GC-finalizer
   deadlock was the sigreturn race fixed for Among Us. At launch its bundled
   Play Games v2 client opens microG's Google sign-in, as an account-less device
   does; cancelling it continues. The HoYoverse login panel then shows over the
@@ -463,10 +463,9 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   `JobServiceEngine` and services in another process receive work; the
   per-run callback and parcelled `JobParameters` are private formats between
   our own specs. Host system activities (pickers, share, chooser) resolve to
-  the platform package's `ResolverActivity`. Remaining limits:
-  `MediaStore.createTrashRequest`/`createFavoriteRequest` need writable
-  `is_trashed`/`is_favorite` media rows; `Resources.getDrawableForDensity`
-  keeps the chosen bucket's bitmap density where AOSP reports the screen's.
+  the platform package's `ResolverActivity`. Trash and favourite requests now
+  set persisted `is_trashed`/`is_favorite` columns, and queries apply
+  MediaProvider's default match rules (trashed and pending excluded).
 - java.time now keeps ISO fields and does proleptic Gregorian arithmetic
   itself; zone offsets come from `Intl` (`timeZoneName: "longOffset"`), and
   only the host's own zone uses the JS `Date` getters, so `TimeZone.setDefault`
@@ -513,10 +512,9 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   A themed context clones its base inflater (dialog rows become AppCompat
   widgets), windows draw into a `RecordingCanvas`, and framework layouts
   dispatch `measureChildWithMargins` virtually (NestedScrollView settings now
-  scroll). Remaining limits: indeterminate progress drawables are painted, not
-  animated; Switch has no thumb drag; `Layout` reserves no leading margin, so
-  `getParagraphLeft/Right` report the full width; `Html.fromHtml` ignores
-  `<img>`/`<sub>` and TagHandler; popups draw no elevation shadow.
+  scroll). The limits recorded here (painted indeterminate progress, no Switch
+  drag, no leading margins, `Html.fromHtml` without `<img>`/`<sub>`/TagHandler,
+  shadowless popups) were resolved in the follow-up entry below.
 - Performance pass, 2026-09-27 (Apple M4 Pro, 120 Hz display, hardware GPU).
   The virtual display was fixed at 60 Hz while GL swaps waited on raw rAF, so
   on a 120 Hz host Doodle Jump rendered 120 GL frames/s and presented 60. The
@@ -525,7 +523,8 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   presents 120/s. At 4x CPU throttle, Calculator taps presented 105 instead
   of 57 frames/s (input-to-present p90 34 to 25 ms), Harmonic scrolling 77
   instead of 53 (p90 39 to 14 ms) and Mihon 81 instead of 59 (p90 90 to 53
-  ms). The harness's 16 ms swipe steps cap View-list scrolling near 60/s.
+  ms). The harness's swipe then stepped every 16 ms, capping View-list
+  scrolling near 60/s; it now steps at the display's refresh interval.
   Launch: cold handlers are built when an instruction first runs rather than
   for every instruction at a method's first call, and constant typing runs
   only when a float read can see a constant (a separate first-call scan that
@@ -564,10 +563,10 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   hottest fallback sites went from 35.4M to 1.6M exits; guest instructions
   rose from about 334M to 366M a second and GL frames from 34 to 36 a
   second. A loop of these forms runs at 1.0 ns per Thumb instruction (20.7
-  before, 14 with every instruction forced to fall back). Remaining gaps:
-  NEON single-lane VLD1/VST1, reciprocal estimates and steps, pairwise
-  VPMIN/VPMAX/VPADD, SMLABB/SMULBB, USAT, UXTB16/PKHBT/ORN and IT blocks
-  whose bodies are not simple moves.
+  before, 14 with every instruction forced to fall back). The gaps left then
+  (single-lane VLD1/VST1, reciprocal estimates and steps, pairwise ops,
+  halfword multiplies, SSAT/USAT, SXTB16/UXTB16/PKH/ORN, general IT bodies)
+  compile since the follow-up below.
 - Findings from the 2026-09-27 cleanup, confirmed against OpenJDK/AOSP and
   fixed: ValueRange.of and Period.from(null) threw nothing or the wrong
   type; Math.abs did not wrap at MIN_VALUE; getLocalizedMessage, isDigit,
@@ -590,7 +589,40 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   report such errors through WebChromeClient.onConsoleMessage. Unit tests
   that parse every module or load full browser bundles exceeded bun's 5 s
   default only under parallel load and now carry explicit timeouts.
-  Remaining limits: nothing applies InputFilters to typed or set text and
-  maxLength is not read; glGetActiveUniform reports an external sampler as
-  SAMPLER_2D; Cut the Rope's intro video is still black (media, not GL).
-
+  InputFilters and `maxLength` and the external-sampler uniform type were
+  resolved in the follow-up below; Cut the Rope's intro video is still black
+  (media, not GL).
+- Follow-up to the 2026-09-27 findings. ARM32 regions now compile halfword
+  multiplies (Q set in CPSR, which spillFlags keeps), SSAT/USAT, PKH,
+  SXTB16/UXTB16, ORN (ORR of an inverted operand), NEON lanes, pairwise ops
+  and reciprocal steps; VRECPE/VRSQRTE call the core per lane. IT blocks
+  compile any body emitThumb compiles without a branch, running 16-bit flag
+  setters as their ARM words without S. A leftover wasm stack value only
+  fails validation where a block does not end in a branch, which an IT body's
+  `if` exposed: compiling all 48,280 IT blocks and 18,846 compilable wide
+  instructions from Cut the Rope's libraries against the interpreter found a
+  stray push in all-lanes VLD1 and T3 `B.W` bodies that left the block; the
+  rest agreed (bodies that increment memory outside the reset region differ
+  by construction). Single ARM32 loads skipped the low-address check the
+  interpreter and A64 apply, so a null read returned core memory; the check
+  costs about 0.07 ns per load in a load-dense loop. The interpreter lacked
+  VPADD.I, did not set Q for SMLAW and rounded reciprocal steps in double.
+- AnimatedVectorDrawable was a static first frame, so framework spinners were
+  a painted substitute. VectorDrawable keeps its named tree (trim paths per
+  hwui's first contour, clip paths, caps, joins); AVD targets run animator
+  timelines (sets, keyframes, path morphs and path keyframes, colours) at each
+  draw, and interpolator XML loads (`PathInterpolator` had been the identity).
+  Bitmaps took their density from the path qualifier, which resource
+  shrinking removes (NewPipe's `res/RJ.png`), and an unqualified `drawable/`
+  PNG is mdpi on Android; densities now come from the table configuration.
+  `drawLeadingMargin` takes five ints: the registered spans and the new layout
+  call named six, so app spans were missed. Popup and dialog shadows filled at
+  `globalAlpha` 0.01, and a canvas shadow takes its opacity from the fill, so
+  they drew at 1%. Leaving Cut the Rope during its first boot made later boots
+  fail IL2CPP's `Assembly::Load("mscorlib.dll")` until stored files were
+  cleared; `PrivateFiles.flush` had committed a spilled file's record before
+  its bytes were flushed, the likely cause and now reordered. MediaPlayer
+  presents video frames to its display and VideoView exists; frames stop
+  while the page is hidden, as `requestVideoFrameCallback` does. General view
+  elevation shadows remain unimplemented: goldens here are Material 3 and flat,
+  so none calibrates them.

@@ -65,7 +65,7 @@ const setRingtoneUri = driven(function* (this: JRingtone, uri: JUri | null): Gen
 function startRingtone(r: JRingtone, player: JMediaPlayer) {
   r.player = player;
   player.looping = r.looping;
-  if (player.audio) { player.audio.loop = r.looping; player.audio.volume = r.volume; }
+  if (player.media) { player.media.loop = r.looping; player.media.volume = r.volume; }
   mpStart(player);
 }
 rt.register({ name: "android/media/Ringtone", ctor: JRingtone,
@@ -83,15 +83,15 @@ rt.register({ name: "android/media/Ringtone", ctor: JRingtone,
       startRingtone(this, player);
     },
     "stop()V": function (this: JRingtone) { if (this.player) mpReset(this.player); },
-    "isPlaying()Z": function (this: JRingtone) { return this.player?.audio && !this.player.audio.paused ? 1 : 0; },
+    "isPlaying()Z": function (this: JRingtone) { return this.player?.media && !this.player.media.paused ? 1 : 0; },
     "setLooping(Z)V": function (this: JRingtone, looping: number) {
       this.looping = !!looping;
-      if (this.player?.audio) this.player.audio.loop = this.looping;
+      if (this.player?.media) this.player.media.loop = this.looping;
     },
     "isLooping()Z": function (this: JRingtone) { return +this.looping; },
     "setVolume(F)V": function (this: JRingtone, volume: number) {
       this.volume = Math.max(0, Math.min(1, volume));
-      if (this.player?.audio) this.player.audio.volume = this.volume;
+      if (this.player?.media) this.player.media.volume = this.volume;
     },
     "getVolume()F": function (this: JRingtone) { return this.volume; },
     "setStreamType(I)V": function (this: JRingtone, type: number) {

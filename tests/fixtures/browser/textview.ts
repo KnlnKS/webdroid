@@ -176,7 +176,7 @@ async function probe() {
     const layout = new JLayout(); layout.paint = new JTextPaint(); layout.paint.textSize = 16;
     layout.text = "aaa b "; layout.src = spaceText; layout.width = 60; layout.breakStrategy = strategy;
     layout.replacements = await measureReplacements(spaceText, layout.paint);
-    layout.layoutLines();
+    await layout.lineUp(() => layout.wrap());
     const before = draws;
     await drawLayout.call(layout, JCanvas.wrap(new OffscreenCanvas(60, 100).getContext("2d")!, 60, 100));
     spaceReplacements.push({ draws: draws - before, visible: layout.lines.some(line => line.start <= 5 && line.start + line.text.length >= 6) });

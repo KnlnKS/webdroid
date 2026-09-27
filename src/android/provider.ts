@@ -11,7 +11,7 @@ import { registerSystemActivity, systemActivity, launchIntent, mkResultIntent, t
 import { csText } from "../jvm/natives/jchars";
 import { frameworkString } from "./res";
 import { mkUri, type JUri } from "./net";
-import { isMediaUri, mediaDelete } from "./mediastore";
+import { isMediaUri, mediaDelete, mediaFlag } from "./mediastore";
 import { newArrayList, toJsArray } from "../jvm/natives/jutil";
 import { appHost } from "./apphost";
 import { packages } from "./packages";
@@ -209,16 +209,18 @@ for (const [cls, table] of [["Images$Media", "images/media"], ["Video$Media", "v
 const MEDIA_REQUEST = "webdroid.provider.action.MEDIA_REQUEST";
 let mediaRequests = 0;
 registerSystemActivity(MEDIA_REQUEST, async (intent) => {
-  if (intent.extras.map.get("op") === "delete") for (const uri of await toJsArray(intent.extras.map.get("uris"))) await mediaDelete(uri as JUri, null, null);
+  const op = intent.extras.map.get("op"), uris = await toJsArray(intent.extras.map.get("uris")) as JUri[];
+  if (op === "delete") for (const uri of uris) await mediaDelete(uri, null, null);
+  else if (op === "trash" || op === "favorite") await mediaFlag(uris, op === "trash" ? "is_trashed" : "is_favorite", !!intent.extras.map.get("value"));
   return rt.make("android/content/Intent");
 });
-const mediaRequest = (del: boolean) => driven(function* (resolver: unknown, uris: unknown): Gen {
+const mediaRequest = (op: string) => driven(function* (resolver: unknown, uris: unknown, value: number = 0): Gen {
   if (!resolver || !uris) rt.npe();
   const items = (yield toJsArray(uris)) as JUri[];
   if (items.some((uri) => !isMediaUri(uri) || !/\/\d+$/.test(uri.uri))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "All requested items must be referenced by specific ID");
   const intent: JIntent = rt.make("android/content/Intent");
   intent.action = MEDIA_REQUEST; intent.identifier = String(++mediaRequests);
-  intent.extras.map.set("uris", newArrayList(items)); intent.extras.map.set("op", del ? "delete" : "write");
+  intent.extras.map.set("uris", newArrayList(items)); intent.extras.map.set("op", op); intent.extras.map.set("value", value);
   return vcall(rt.link("android/app/PendingIntent").ctor, "getActivity", "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
     appHost?.application, 0, intent, 0x4000000); // FLAG_IMMUTABLE
 });
@@ -230,8 +232,10 @@ rt.register({
   },
   methods: {
     "static getPickImagesMaxLimit()I": () => 150,
-    "static createDeleteRequest(Landroid/content/ContentResolver;Ljava/util/Collection;)Landroid/app/PendingIntent;": mediaRequest(true),
-    "static createWriteRequest(Landroid/content/ContentResolver;Ljava/util/Collection;)Landroid/app/PendingIntent;": mediaRequest(false),
+    "static createDeleteRequest(Landroid/content/ContentResolver;Ljava/util/Collection;)Landroid/app/PendingIntent;": mediaRequest("delete"),
+    "static createWriteRequest(Landroid/content/ContentResolver;Ljava/util/Collection;)Landroid/app/PendingIntent;": mediaRequest("write"),
+    "static createTrashRequest(Landroid/content/ContentResolver;Ljava/util/Collection;Z)Landroid/app/PendingIntent;": mediaRequest("trash"),
+    "static createFavoriteRequest(Landroid/content/ContentResolver;Ljava/util/Collection;Z)Landroid/app/PendingIntent;": mediaRequest("favorite"),
     "static canManageMedia(Landroid/content/Context;)Z": (ctx: { $host: { pkg: string } } | null) => {
       if (!ctx) rt.npe();
       return packages.get(ctx!.$host.pkg)?.grants.has("android.permission.MANAGE_MEDIA") ? 1 : 0;

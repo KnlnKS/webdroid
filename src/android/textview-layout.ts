@@ -43,9 +43,10 @@ export class TextViewLayouts {
       const layout = new JStaticLayout();
       layout.src = prepared.src; layout.text = prepared.text; layout.paint = p; layout.width = width;
       layout.replacements = prepared.replacements; layout.spacingMult = this.mult; layout.spacingAdd = this.extra; layout.includePad = this.pad;
-      layout.updateMetrics(); layout.lines = breakLines(layout, this.single, this.max, this.ell);
-      const finish = () => { this.layouts.unshift(layout); this.layouts.length = Math.min(2, this.layouts.length); return layout; };
-      return layout.src instanceof JSpanned ? after(callOn(thread, () => layout.applyLineHeightSpans()), finish) : finish();
+      return after(callOn(thread, () => layout.lineUp(() => breakLines(layout, this.single, this.max, this.ell))), () => {
+        this.layouts.unshift(layout); this.layouts.length = Math.min(2, this.layouts.length);
+        return layout;
+      });
     };
     if (!changed && this.prepared) return build(this.prepared);
     this.source = source; this.font = font; this.ls = p.letterSpacingEm; this.caps = tv.allCaps;
@@ -60,9 +61,11 @@ export class TextViewLayouts {
 function breakLines(layout: JLayout, single: boolean, max: number, ellipsis: boolean): TLine[] {
   perf.wraps++;
   const text = layout.text, avail = layout.width, out: TLine[] = [];
+  let paragraph = 0, first = 0;
+  const indent = () => layout.indent(paragraph, out.length - first);
   const width = (start: number, end: number) => layout.rangeWidth(start, end);
-  const fits = (start: number, end: number) => Math.round(width(start, end)) <= avail;
-  const push = (start: number, end: number) => out.push({ start, end, text: text.slice(start, end), width: width(start, end) });
+  const fits = (start: number, end: number) => Math.round(width(start, end)) <= avail - indent();
+  const push = (start: number, end: number) => out.push({ start, end, text: text.slice(start, end), width: width(start, end), indent: indent() });
   const boundary = (start: number, end: number) => {
     const span = layout.replacements.find(s => s.start < end && s.end > end);
     if (span) return Math.max(start, span.start);
@@ -84,6 +87,7 @@ function breakLines(layout: JLayout, single: boolean, max: number, ellipsis: boo
   let start = 0;
   for (const hard of text.split("\n")) {
     const end = start + hard.length;
+    paragraph = start; first = out.length;
     if (single || max === 1) { push(start, end); break; }
     if (fits(start, end)) push(start, end);
     else {
@@ -107,10 +111,10 @@ function breakLines(layout: JLayout, single: boolean, max: number, ellipsis: boo
   }
   if (out.length > max) out.length = max;
   const last = out.at(-1);
-  if (last && ellipsis && (last.end < text.length || last.width > avail)) {
+  if (last && ellipsis && (last.end < text.length || last.width > avail - (last.indent ?? 0))) {
     let lo = last.start, hi = last.start + last.text.length;
     const ellWidth = measureText(layout.paint, "…");
-    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (width(last.start, mid) + ellWidth <= avail) lo = mid; else hi = mid - 1; }
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (width(last.start, mid) + ellWidth <= avail - (last.indent ?? 0)) lo = mid; else hi = mid - 1; }
     lo = boundary(last.start, lo);
     last.ellipsis = { start: lo - last.start, count: text.length - lo };
     last.text = text.slice(last.start, lo) + "…"; last.width = width(last.start, lo) + ellWidth;

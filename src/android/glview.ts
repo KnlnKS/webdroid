@@ -13,7 +13,7 @@ import { reportUncaught, mainLooper, mainHandler, vsync } from "./os";
 import { perf } from "../perf";
 import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../native/egl-current";
 
-function viewInit(this: JView, c: unknown, set: JAttrSet | null = null) { return initViewFromCtx(this, c, set); }
+export function viewInit(this: JView, c: unknown, set: JAttrSet | null = null) { return initViewFromCtx(this, c, set); }
 function measureDefault(this: JView, w: number, h: number) {
   this.measuredW = defaultSize(specSize(w), w);
   this.measuredH = defaultSize(specSize(h), h);
@@ -285,12 +285,16 @@ class JSurfaceHolder extends JObj {
   constructor(view: JView) { super(); this.view = view; }
 }
 const holders = new WeakMap<JView, JSurfaceHolder>();
-function getHolder(v: JView): JSurfaceHolder {
+/** the surface a MediaPlayer's setDisplay holder or setSurface Surface draws to, while it exists */
+export function surfaceTarget(x: unknown): GlSurface | null {
+  return x instanceof JSurface ? x.surf : x instanceof JSurfaceHolder ? x.surface : null;
+}
+export function getHolder(v: JView): JSurfaceHolder {
   let h = holders.get(v);
   if (!h) { h = new JSurfaceHolder(v); holders.set(v, h); }
   return h;
 }
-class JSurfaceView extends JViewGroup {
+export class JSurfaceView extends JViewGroup {
   surfaceBacked = true;
   surfW = 0; surfH = 0;
   syncSurface(): void { this.ensureSurface(); }
