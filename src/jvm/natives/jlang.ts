@@ -200,6 +200,17 @@ function jclsName(o: unknown): string {
   return i?.name ?? "java/lang/Object";
 }
 
+/** Object's monitor methods, also on the strings and arrays that stand for Java objects */
+const monitorMethods: Record<string, (this: object | string, ...a: any[]) => unknown> = {
+  "notify()V": function () { rt.monitors.notify(this, curThread, false); },
+  "notifyAll()V": function () { rt.monitors.notify(this, curThread, true); },
+  "wait()V": function () { return monWait(this, 0); },
+  "wait(J)V": function (ms: bigint) { return monWait(this, Number(ms)); },
+  "wait(JI)V": function (ms: bigint, ns: number) {
+    if (ms < 0n || ns < 0 || ns > 999999) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout");
+    return monWait(this, Number(ms) + (ns > 0 ? 1 : 0));
+  },
+};
 rt.register({
   name: "java/lang/Object",
   ctor: JObj,
@@ -219,14 +230,7 @@ rt.register({
       Object.assign(c, this);
       return c;
     },
-    "notify()V": function () { rt.monitors.notify(this, curThread, false); },
-    "notifyAll()V": function () { rt.monitors.notify(this, curThread, true); },
-    "wait()V": function () { return monWait(this, 0); },
-    "wait(J)V": function (ms: bigint) { return monWait(this, Number(ms)); },
-    "wait(JI)V": function (ms: bigint, ns: number) {
-      if (ms < 0n || ns < 0 || ns > 999999) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout");
-      return monWait(this, Number(ms) + (ns > 0 ? 1 : 0));
-    },
+    ...monitorMethods,
   },
 });
 Object.defineProperty(Object.prototype, mangleMethod("getClass", "()Ljava/lang/Class;"), {
@@ -234,7 +238,7 @@ Object.defineProperty(Object.prototype, mangleMethod("getClass", "()Ljava/lang/C
   writable: true, configurable: true, enumerable: false,
 });
 
-function monWait(obj: object, ms: number): Promise<void> {
+function monWait(obj: object | string, ms: number): Promise<void> {
   if (ms < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "timeout");
   const thread = curThread;
   if (thread.interrupted && rt.monitors.holds(obj, thread)) {
@@ -655,7 +659,10 @@ for (const [i, ext] of [["java/lang/Runnable"], ["java/lang/Comparable"], ["java
 
 // ── arrays: Object-typed call sites (Kotlin generics) dispatch mangled Object
 // methods directly on JS arrays — give every array prototype the basics
-for (const proto of [Array.prototype, ...Object.values(PRIM_ARRAYS).map((c) => c.prototype)] as object[]) {
+const arrayPrototypes = [Array.prototype, ...Object.values(PRIM_ARRAYS).map((c) => c.prototype)] as object[];
+for (const proto of [String.prototype, ...arrayPrototypes])
+  for (const [sig, fn] of Object.entries(monitorMethods)) Object.defineProperty(proto, mangleMethod(...splitSig(sig)), { value: fn, writable: true, configurable: true, enumerable: false });
+for (const proto of arrayPrototypes) {
   for (const [sig, name] of [["getClass()Ljava/lang/Class;", "getClass"], ["hashCode()I", "hashCode"],
     ["toString()Ljava/lang/String;", "toString"], ["equals(Ljava/lang/Object;)Z", "equals"],
     ["clone()Ljava/lang/Object;", "clone"]] as [string, string][]) {
