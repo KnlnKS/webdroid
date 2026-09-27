@@ -74,41 +74,30 @@ function capget(cpu: Cpu, header: number, data: number): number {
 let abortMessage = "";
 export function abortMessageOr(what: string): string { return abortMessage ? `${what}: ${abortMessage}` : what; }
 
-function sigaction(a: ArgReader, wide: boolean): number {
+/** one signal's handler exchanged through a struct sigaction laid out at the given offsets */
+function exchangeAction(a: ArgReader, size: number, handlerAt: number, flagsAt: number, maskAt: number, wideMask: boolean): number {
   const sig = a.i(), act = a.p(), old = a.p(), prev = sigHandlers.get(sig);
-  const ilp32wide = wide && PTR !== 8;
-  const size = ilp32wide ? 20 : LAYOUT.SIGACTION_SIZE, flagsAt = ilp32wide ? 12 : LAYOUT.SA_FLAGS, maskAt = PTR === 8 ? 16 : 4;
-  const wideMask = wide || PTR === 8;
   if (old) {
     mem.memset(old, 0, size);
     if (prev) {
-      stp(old + LAYOUT.SA_HANDLER, prev.fn); mem.st32(old + flagsAt, prev.flags);
+      stp(old + handlerAt, prev.fn); mem.st32(old + flagsAt, prev.flags);
       if (wideMask) mem.st64(old + maskAt, prev.mask ?? 0n); else mem.st32(old + maskAt, Number((prev.mask ?? 0n) & 0xffffffffn));
     }
   }
   if (act) {
-    const fn = ldp(act + LAYOUT.SA_HANDLER);
+    const fn = ldp(act + handlerAt);
     if (fn > 1) sigHandlers.set(sig, { fn, flags: mem.ld32(act + flagsAt), mask: wideMask ? mem.ld64(act + maskAt) : BigInt(mem.ld32(act + maskAt) >>> 0) });
     else sigHandlers.delete(sig);
   }
   return 0;
 }
-/** the raw rt_sigaction syscall: struct sigaction as the kernel lays it out (handler, flags, restorer,
- *  mask), which is not bionic's, and a mask the size the caller states */
-function rtSigaction(a: ArgReader): number {
-  const sig = a.i(), act = a.p(), old = a.p(), prev = sigHandlers.get(sig);
-  const flagsAt = PTR, maskAt = 3 * PTR, size = maskAt + 8;
-  if (old) {
-    mem.memset(old, 0, size);
-    if (prev) { stp(old, prev.fn); mem.st32(old + flagsAt, prev.flags); mem.st64(old + maskAt, prev.mask ?? 0n); }
-  }
-  if (act) {
-    const fn = ldp(act);
-    if (fn > 1) sigHandlers.set(sig, { fn, flags: mem.ld32(act + flagsAt), mask: mem.ld64(act + maskAt) });
-    else sigHandlers.delete(sig);
-  }
-  return 0;
+function sigaction(a: ArgReader, wide: boolean): number {
+  const ilp32wide = wide && PTR !== 8;
+  return exchangeAction(a, ilp32wide ? 20 : LAYOUT.SIGACTION_SIZE, LAYOUT.SA_HANDLER, ilp32wide ? 12 : LAYOUT.SA_FLAGS, PTR === 8 ? 16 : 4, wide || PTR === 8);
 }
+/** the raw rt_sigaction syscall: struct sigaction as the kernel lays it out (handler, flags, restorer,
+ *  mask), which is not bionic's */
+const rtSigaction = (a: ArgReader): number => exchangeAction(a, 3 * PTR + 8, 0, PTR, 3 * PTR, true);
 export function procInit(): void {
   resourceLimits.clear();
   const guard = mem.hostAlloc(8);
