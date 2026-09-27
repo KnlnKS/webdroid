@@ -11,7 +11,7 @@ import { loadFramework, loadFrameworkDex } from "../android/framework";
 import { parseAXML, attr, attrStr, type XmlNode } from "../android/axml";
 import { Resources, JTheme } from "../android/res";
 import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration } from "../android/resnative";
-import { setAppHost, type AppHost, type ActivityLaunch } from "../android/apphost";
+import { setAppHost, jclsNameOf, type AppHost, type ActivityLaunch } from "../android/apphost";
 import { setManifest, manifestActivityTheme, manifestActivityOrientation, activityHandlesConfig, CONFIG_UI_MODE, getPM, usesSdk } from "../android/pm";
 import { JIntent, deliverActivityResult, activityTransport, mkComponentName } from "../android/intent";
 import { ensureDecor, startingWindow } from "../android/decor";
@@ -96,6 +96,8 @@ interface BootedApp {
   mainActivityCls: string;
   stack: JActivity[];
   label: string;
+  /** manifest <activity> nodes by class name, as launch modes are read from them */
+  activities: Map<string, XmlNode>;
 }
 let booted: BootedApp | null = null;
 let applicationNightOverride: boolean | null = null;
@@ -268,7 +270,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
       reportUncaught(e);
     }
 
-    booted = { host, mainActivityCls: mainActivity ?? "", stack: [], label };
+    booted = { host, mainActivityCls: mainActivity ?? "", stack: [], label, activities };
     if (!processName && mainActivity) {
       onStatus("Opening app…");
       const intent = new JIntent();
@@ -288,10 +290,43 @@ function launchActivity(cls: string, intent: JIntent | null, options?: ActivityL
   const run = async () => {
     const prev = curThread;
     setCurThread(mainThread);
-    try { await launchActivity0(cls, intent, undefined, options); } finally { setCurThread(prev); }
+    try { if (!await reuseActivity(cls, intent, options)) await launchActivity0(cls, intent, undefined, options); } finally { setCurThread(prev); }
   };
   return inMainJob() ? run() : onMain(run);
 }
+const FLAG_ACTIVITY_CLEAR_TASK = 0x8000, FLAG_ACTIVITY_CLEAR_TOP = 0x4000000, FLAG_ACTIVITY_NEW_TASK = 0x10000000, FLAG_ACTIVITY_SINGLE_TOP = 0x20000000;
+const LAUNCH_SINGLE_TOP = 1, LAUNCH_SINGLE_TASK = 2;
+/** ActivityStarter's reuse rules within this process's stack: launchMode and the CLEAR_TASK,
+ *  CLEAR_TOP and SINGLE_TOP flags either clear activities off the task or route the intent to an
+ *  existing instance through onNewIntent. True when no new instance should be created. */
+const reuseActivity = driven(function* reuseActivity(component: string, intent: JIntent | null, options?: ActivityLaunch): Gen<boolean> {
+  if (!booted || options?.remoteId || options?.result) return false;
+  const stack = booted.stack, flags = intent?.flags ?? 0;
+  const cls = aliasTargets.get(component) ?? component;
+  const node = booted.activities.get(component) ?? booted.activities.get(cls);
+  const mode = (node && attr(node, "launchMode")?.data) ?? 0;
+  const top = stack.at(-1);
+  if (flags & FLAG_ACTIVITY_CLEAR_TASK && flags & FLAG_ACTIVITY_NEW_TASK) {
+    for (const act of stack.filter((a) => a.taskId === top?.taskId).reverse()) yield finishActivity(act, false);
+    return false;
+  }
+  const name = cls.replace(/\//g, ".");
+  let i = stack.length - 1;
+  while (i >= 0 && (stack[i].finished || jclsNameOf(stack[i]) !== name)) i--;
+  if (i < 0) return false;
+  if (mode >= LAUNCH_SINGLE_TASK || flags & FLAG_ACTIVITY_CLEAR_TOP) {
+    for (const above of stack.slice(i + 1).reverse()) yield finishActivity(above, false);
+    // a standard activity under CLEAR_TOP alone is itself finished and created afresh
+    if (!mode && !(flags & FLAG_ACTIVITY_SINGLE_TOP)) { yield finishActivity(stack[i], false); return false; }
+  } else if (!(mode === LAUNCH_SINGLE_TOP || flags & FLAG_ACTIVITY_SINGLE_TOP) || stack[i] !== top) return false;
+  // an activity never receives a new intent while resumed: onPause, onNewIntent, then back up
+  const act = stack[i];
+  if (act.resumed) { yield pauseActivity(act); yield windowFocus(act, false); }
+  yield safeCall(act, "onNewIntent", "(Landroid/content/Intent;)V", intent);
+  yield resumeTop(act);
+  invalidateWindow();
+  return true;
+});
 const launchActivity0 = driven(function* launchActivity0(component: string, intent: JIntent | null, relaunch?: Relaunch, options?: ActivityLaunch): Gen {
   if (!booted) return;
   const host = booted.host;
