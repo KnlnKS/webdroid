@@ -178,7 +178,7 @@ test("a signal interrupts an ARM64 futex before its handler observes the saved c
   mem.st32(addr, 7);
   const order: string[] = [];
   let savedSp = 0n, contextSp = 0n, contextPc = 0n;
-  const entry = defineHost("test.signal.futex.wait", (c) => { order.push("wait"); return futex(c, addr, 0, 7, 0, 0); });
+  const entry = defineHost("test.signal.futex.wait", (c) => { order.push("wait"); return futex(c, addr, 0, 7, 0); });
   const handler = defineHost("test.signal.futex.handler", (_c, a) => {
     a.i(); a.p(); const context = a.p();
     contextSp = mem.ld64(context + 0x1b0);

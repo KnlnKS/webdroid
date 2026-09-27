@@ -116,7 +116,7 @@ const absMs = (ts: number) => readTs(ts);
 const futexes = new AddrMap<((woken: boolean) => void)[]>();
 export const futexStats = new Map<string, Record<string, number>>();
 const fstat = (cpu: Cpu, k: string) => { let r = futexStats.get(cpu.name); if (!r) futexStats.set(cpu.name, (r = {})); r[k] = (r[k] ?? 0) + 1; };
-export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: number, _val3: number): number | Promise<number> {
+export function futex(cpu: Cpu, addr: number, op: number, val: number, ts: number): number | Promise<number> {
   const cmd = op & 0x7f;
   if (cmd === 0 || cmd === 9) {                                                 // FUTEX_WAIT (relative timeout) / FUTEX_WAIT_BITSET (absolute)
     if (mem.ld32(addr) !== val) { fstat(cpu, "eagain"); return fail(cpu, E.AGAIN); }

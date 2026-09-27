@@ -10,7 +10,7 @@ class Builder {
   SampleRate = 0; ChannelCount = 0; Format = 0; Direction = 0; SharingMode = 1;
   BufferCapacityInFrames = 0; FramesPerDataCallback = 0; PerformanceMode = 10;
   DeviceId = 0; SessionId = -1;
-  callback = 0; context = 0; errorCallback = 0; errorContext = 0;
+  callback = 0; context = 0;
 }
 class Stream {
   readonly track = new JAudioTrack();
@@ -95,7 +95,7 @@ export function aaudioInit(): void {
       const p = mem.malloc(4), stream = new Stream(p, { ...b }, cpu); streams.set(p, stream); stp(out, p); return 0;
     },
     AAudioStreamBuilder_setDataCallback: (_cpu, a) => { const b = builders.get(a.p()); if (b) { b.callback = a.p(); b.context = a.p(); } },
-    AAudioStreamBuilder_setErrorCallback: (_cpu, a) => { const b = builders.get(a.p()); if (b) { b.errorCallback = a.p(); b.errorContext = a.p(); } },
+    AAudioStreamBuilder_setErrorCallback: () => {},
     AAudioStream_close: (_cpu, a) => streams.get(a.p())?.close() ?? INVALID_HANDLE,
     AAudioStream_requestStart: (_cpu, a) => streams.get(a.p())?.start() ?? INVALID_HANDLE,
     AAudioStream_requestStop: (_cpu, a) => streams.get(a.p())?.stop() ?? INVALID_HANDLE,

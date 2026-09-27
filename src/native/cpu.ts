@@ -658,9 +658,6 @@ export class Cpu {
     this.pcx = on ? 32 : 15; this.lrx = on ? 30 : 14; this.spx = on ? 31 : 13;
     if (on !== (this.args instanceof Args64)) this.args = on ? new Args64(this) : new Args(this);
   }
-  /** interworking branch target (BX semantics): returns the pc to continue at */
-  bx(addr: number): number { this.t = addr & 1; return addr & ~1; }
-  setFlags(v: number): void { this.cpsr = (this.cpsr & 0x07ffffff) | (v & 0xf8000000); }
   watchHit(): void {
     const x = (i: number) => (this.w[2 * i + 1] ? (this.w[2 * i + 1] >>> 0).toString(16) + "_" : "") + (this.w[2 * i] >>> 0).toString(16).padStart(this.w[2 * i + 1] ? 8 : 1, "0");
     console.log(`[watch-native] ${this.name} ${symbolizeHook(this.pc)} x0..x7=${[0, 1, 2, 3, 4, 5, 6, 7].map(x).join(" ")} lr=${symbolizeHook(this.lr >>> 0)}`);

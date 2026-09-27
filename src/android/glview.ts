@@ -531,7 +531,6 @@ class JEGLConfig extends JObj {}
 rt.register({ name: "javax/microedition/khronos/egl/EGLConfig", ctor: JEGLConfig });
 const theConfig = new JEGLConfig();
 class JEGLSurface extends JObj { surf: GlSurface | null = null; }
-const egl10Current = new WeakMap<object, JEGLContext>();
 const attrVal = (a: Int32Array | null, k: number): number => { if (a) for (let i = 0; i + 1 < a.length && a[i] !== 0x3038; i += 2) if (a[i] === k) return a[i + 1]; return 0; };
 rt.register({ name: "javax/microedition/khronos/egl/EGLSurface", ctor: JEGLSurface });
 const noEglContext = new JEGLContext(), noEglSurface = new JEGLSurface();
@@ -608,9 +607,9 @@ rt.register({
     "eglMakeCurrent(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLSurface;Ljavax/microedition/khronos/egl/EGLContext;)Z":
       (display: unknown, draw: JEGLSurface | null, _r: unknown, ctx: JEGLContext | null) => {
         if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
-        if (!ctx || ctx === noEglContext) { egl10Current.delete(curThread); bindEglCurrent(curThread, null); return 1; }
+        if (!ctx || ctx === noEglContext) { bindEglCurrent(curThread, null); return 1; }
         if (!ctx.egl.makeCurrent(draw?.surf ?? null)) return eglFailure(ctx.egl.gl?.isContextLost() ? 0x300e : 0x3006, 0);
-        egl10Current.set(curThread, ctx); bindEglCurrent(curThread, ctx.egl); return 1;
+        return 1;
       },
     "eglSwapBuffers(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;)Z":
       driven(function* (display: unknown, s: JEGLSurface | null): Gen {
@@ -628,7 +627,6 @@ rt.register({
     "eglDestroyContext(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLContext;)Z": (display: unknown, ctx: JEGLContext | null) => {
       if (!egl10DisplayValid(display)) return eglFailure(EGL_BAD_DISPLAY, 0);
       if (ctx && boundEglCurrent(curThread) === ctx.egl) bindEglCurrent(curThread, null);
-      if (egl10Current.get(curThread) === ctx) egl10Current.delete(curThread);
       return 1;
     },
     "eglDestroySurface(Ljavax/microedition/khronos/egl/EGLDisplay;Ljavax/microedition/khronos/egl/EGLSurface;)Z":

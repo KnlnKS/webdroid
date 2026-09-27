@@ -68,10 +68,8 @@ interface NativePollProvider {
   write(cpu: Cpu, fd: number, source: number, length: number): number | null;
 }
 let localPollProvider: NativePollProvider | null = null;
-export function setNativePollProvider(provider: NativePollProvider): () => void {
-  const previous = localPollProvider;
+export function setNativePollProvider(provider: NativePollProvider): void {
   localPollProvider = provider;
-  return () => { localPollProvider = previous; };
 }
 
 const wake = (socket: NativeSocket): void => {

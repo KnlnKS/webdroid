@@ -93,7 +93,6 @@ export function eglInit(): void {
       const c = contexts[contextHandle];
       if (!c) { return eglFailure(EGL_BAD_CONTEXT, 0, cpu.jthread); }
       if (!c.makeCurrent(draw ?? null, cpu.jthread)) { return eglFailure(EGL_BAD_ALLOC, 0, cpu.jthread); }
-      bindEglCurrent(cpu.jthread, c);
       return 1;
     },
     eglSwapBuffers: (cpu, a) => {

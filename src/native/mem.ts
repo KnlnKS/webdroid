@@ -6,7 +6,7 @@ import { core, memory, NativeFault } from "./core";
 import { MEM_SIZE, MEM_SIZE_INITIAL, setMemSize, LOW, PAGE_SHIFT, PAGE_SIZE, POOL_BASE, MEM_SIZE_A64 } from "./abi";
 export { NativeFault };
 
-let buf: ArrayBuffer, u8: Uint8Array, i8: Int8Array, u16: Uint16Array, i16: Int16Array, u32: Uint32Array, i32: Int32Array, f32: Float32Array, f64: Float64Array, dv: DataView, codePages: Uint8Array;
+let buf: ArrayBuffer, u8: Uint8Array, i8: Int8Array, u16: Uint16Array, u32: Uint32Array, i32: Int32Array, f32: Float32Array, f64: Float64Array, dv: DataView, codePages: Uint8Array;
 let SPAN = 0;
 const enc = new TextEncoder(), dec = new TextDecoder();
 
@@ -24,11 +24,11 @@ function badAddr(a: number): never {
 }
 function views(): void {
   buf = memory.buffer;
-  u8 = new Uint8Array(buf); i8 = new Int8Array(buf); u16 = new Uint16Array(buf); i16 = new Int16Array(buf);
+  u8 = new Uint8Array(buf); i8 = new Int8Array(buf); u16 = new Uint16Array(buf);
   u32 = new Uint32Array(buf); i32 = new Int32Array(buf); f32 = new Float32Array(buf); f64 = new Float64Array(buf);
   dv = new DataView(buf);
   codePages = new Uint8Array(buf, core.flags_ptr(), MEM_SIZE_A64 >>> PAGE_SHIFT);
-  Object.assign(mem, { buf, u8, i8, u16, i16, u32, i32, f32, f64, dv, codePages });
+  Object.assign(mem, { buf, u8, i8, u16, u32, i32, f32, f64, dv, codePages });
 }
 /** host state keyed by a guest object's address: the address the guest knows, which a move keeps */
 export class AddrMap<V> {
@@ -41,7 +41,7 @@ const split = (va: bigint): [number, number] => [Number(va >> 32n) & 0xffffffff,
 const num = (v: bigint): number | bigint => (v <= 0xffffffffn ? Number(v) : v);
 
 export const mem = {
-  buf: null as unknown as ArrayBuffer, u8: null as unknown as Uint8Array, i8: null as unknown as Int8Array, u16: null as unknown as Uint16Array, i16: null as unknown as Int16Array,
+  buf: null as unknown as ArrayBuffer, u8: null as unknown as Uint8Array, i8: null as unknown as Int8Array, u16: null as unknown as Uint16Array,
   u32: null as unknown as Uint32Array, i32: null as unknown as Int32Array, f32: null as unknown as Float32Array, f64: null as unknown as Float64Array,
   dv: null as unknown as DataView, codePages: null as unknown as Uint8Array,
   /** run after the memory is resized: the block cache's page tables are sized from it */
@@ -88,7 +88,6 @@ export const mem = {
   free(p: number): void { if (p && !core.free(p >>> 0)) badAddr(p); },
   calloc: (n: number, m: number): number => core.calloc(n >>> 0, m >>> 0) >>> 0,
   realloc: (p: number, n: number): number => core.realloc(p >>> 0, n >>> 0) >>> 0,
-  usableSize: (p: number): number => core.usable_size(p >>> 0) >>> 0,
   memalign: (align: number, n: number): number => core.memalign(align >>> 0, n >>> 0) >>> 0,
   valloc: (n: number): number => core.memalign(PAGE_SIZE, n >>> 0) >>> 0,
   /** n bytes of pages: a hole, then fresh heap, and for a reservation the uncommitted part of

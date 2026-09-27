@@ -2,7 +2,7 @@
 // honestly. Struct layouts live in LAYOUT, chosen by the process ABI. stdio is in stdio.ts,
 // printf/scanf in printf.ts.
 
-import { mem, NativeFault, guestAt, wrote } from "./mem";
+import { mem, guestAt, wrote } from "./mem";
 import { hostLib, hostData, hostFn, NORET, ARG0, SERVED, ptr, vaList, type HostFn, type HostRet, type ArgReader, retF, retD, PTR, stp, ldp, calledMissing } from "./host";
 import { E, ERRSTR, PAGE_SIZE } from "./abi";
 import { invalidateRange, markProcessExited, setRawSyscall, type Cpu } from "./cpu";
@@ -224,7 +224,7 @@ export function fillSysinfo(p: number): void {
 /** syscall(2): what a raw svc/swi and libc's wrapper both reach. Bodies answer the wrapper's
  *  way (-1 with errno set); Cpu.syscallReturn turns that into the kernel's -errno for a raw one. */
 function rawSyscall(cpu: Cpu, nr: number, a: ArgReader): HostRet | Promise<HostRet> {
-  if (nr === (PTR === 8 ? 98 : 240)) { const addr = a.p(), op = a.i(), val = a.i(), ts = a.p(); a.p(); return futex(cpu, addr, op, val, ts, a.i()); }
+  if (nr === (PTR === 8 ? 98 : 240)) { const addr = a.p(), op = a.i(), val = a.i(), ts = a.p(); a.p(); return futex(cpu, addr, op, val, ts); }
   if (nr === (PTR === 8 ? 135 : 175)) { const how = a.i(), set = a.p(), old = a.p(), size = a.u(); const e = size === 8 ? cpu.sigmask(how, set, old, 8) : E.INVAL; return e ? fail(cpu, e) : 0; }
   if (nr === (PTR === 8 ? 178 : 224)) return cpu.osTid;                    // gettid
   if (nr === (PTR === 8 ? 172 : 20)) return cpu.pid;                        // getpid
@@ -693,4 +693,3 @@ export function scanSink(a: { p(): number }) {
     return 0;
   };
 }
-export { NativeFault };
