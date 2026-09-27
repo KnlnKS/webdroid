@@ -1361,6 +1361,9 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "getEllipsisCount(I)I": function (this: JLayout, i: number) { return this.lines[i]?.ellipsis?.count ?? 0; },
   "getAlignment()Landroid/text/Layout$Alignment;": function (this: JLayout) { return this.alignment ?? rt.link("android/text/Layout$Alignment").ctor.s$ALIGN_NORMAL; },
   ...stubs(1, "getParagraphDirection(I)I"),
+  // every paragraph is left-to-right and these lines reserve no leading margin
+  "getParagraphLeft(I)I": () => 0,
+  "getParagraphRight(I)I": function (this: JLayout) { return this.width; },
   "getLineForVertical(I)I": function (this: JLayout, y: number) {
     if (this.tops) { let i = 0; while (i + 1 < this.lines.length && this.tops[i + 1] <= y) i++; return i; }
     return Math.max(0, Math.min(this.lines.length - 1, Math.floor((y - this.padTop) / this.lineHeight())));
