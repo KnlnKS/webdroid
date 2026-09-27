@@ -157,6 +157,13 @@ rt.register({
   methods: Object.fromEntries(["Created", "Started", "Resumed", "Paused", "Stopped", "SaveInstanceState", "Destroyed"].flatMap((phase) => ["Pre", "Post"].map((when) =>
     [`onActivity${when}${phase}(Landroid/app/Activity;${phase === "Created" || phase === "SaveInstanceState" ? "Landroid/os/Bundle;" : ""})V`, () => {}]))),
 });
+function activityActionMode(this: JActivity, cb: unknown) { return startActionMode(this, cb); }
+function senderForResult(this: JActivity, s: JIntentSender, code: number, fill: JIntent | null) {
+  return startIntentSender(this, s, fill, code >= 0 ? { act: this, code } : undefined);
+}
+function sender(this: JActivity, s: JIntentSender, fill: JIntent | null) { return startIntentSender(this, s, fill); }
+function invalidateOptionsMenu(this: JActivity) { appHost?.invalidateOptionsMenu(this); }
+function finishActivity(this: JActivity) { callSelf(activityMethods, "finish()V", this); }
 const setActivityContent = driven(function* setActivityContent(act: JActivity, v: JView, lp: JLayoutParams | null): Gen {
   yield ensureDecor(act);
   yield setWindowContent(act.window.contentParent!, v, lp);
@@ -183,12 +190,8 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
     m.jctx = this;
     return m;
   },
-  "startActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;": function (this: JActivity, cb: unknown) {
-    return startActionMode(this, cb);
-  },
-  "startActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;": function (this: JActivity, cb: unknown, _type: number) {
-    return startActionMode(this, cb);
-  },
+  "startActionMode(Landroid/view/ActionMode$Callback;)Landroid/view/ActionMode;": activityActionMode,
+  "startActionMode(Landroid/view/ActionMode$Callback;I)Landroid/view/ActionMode;": activityActionMode,
   "setContentView(I)V": driven(function* (this: JActivity, layoutId: number): Gen {
     yield ensureDecor(this);
     yield vcall(this.window.contentParent!, "removeAllViews", "()V");
@@ -280,8 +283,8 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   },
   // the rest of Window.Callback, as Activity's no-op defaults
   "onContentChanged()V": function () {},
-  "invalidateOptionsMenu()V": function (this: JActivity) { appHost?.invalidateOptionsMenu(this); },
-  "supportInvalidateOptionsMenu()V": function (this: JActivity) { appHost?.invalidateOptionsMenu(this); },
+  "invalidateOptionsMenu()V": invalidateOptionsMenu,
+  "supportInvalidateOptionsMenu()V": invalidateOptionsMenu,
   "openOptionsMenu()V": function (this: JActivity) {
     const bar = this.window.actionBarView;
     if (!bar) return;
@@ -317,10 +320,10 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "finishAndRemoveTask()V": function (this: JActivity) {
     if (this.finished) return;
     if (activityTransport.isTaskRoot?.(this) && activityTransport.removeTask) { this.finished = true; activityTransport.removeTask(this); }
-    else callSelf(activityMethods, "finish()V", this);
+    else finishActivity.call(this);
   },
-  "finishAffinity()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
-  "finishAfterTransition()V": function (this: JActivity) { callSelf(activityMethods, "finish()V", this); },
+  "finishAffinity()V": finishActivity,
+  "finishAfterTransition()V": finishActivity,
   "isTaskRoot()Z": function (this: JActivity) { return +(activityTransport.isTaskRoot?.(this) ?? false); },
   // only the task's root may move it unless nonRoot says any activity may
   "moveTaskToBack(Z)Z": function (this: JActivity, nonRoot: number) {
@@ -338,14 +341,10 @@ export const activityMethods: NonNullable<NativeSpec["methods"]> = {
   "startActivityForResult(Landroid/content/Intent;ILandroid/os/Bundle;)V": function (this: JActivity, intent: JIntent, code: number) {
     return callSelf(activityMethods, "startActivityForResult(Landroid/content/Intent;I)V", this, intent, code);
   },
-  "startIntentSenderForResult(Landroid/content/IntentSender;ILandroid/content/Intent;III)V": function (this: JActivity, sender: JIntentSender, code: number, fill: JIntent | null) {
-    return startIntentSender(this, sender, fill, code >= 0 ? { act: this, code } : undefined);
-  },
-  "startIntentSenderForResult(Landroid/content/IntentSender;ILandroid/content/Intent;IIILandroid/os/Bundle;)V": function (this: JActivity, sender: JIntentSender, code: number, fill: JIntent | null) {
-    return startIntentSender(this, sender, fill, code >= 0 ? { act: this, code } : undefined);
-  },
-  "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;III)V": function (this: JActivity, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); },
-  "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;IIILandroid/os/Bundle;)V": function (this: JActivity, sender: JIntentSender, fill: JIntent | null) { return startIntentSender(this, sender, fill); },
+  "startIntentSenderForResult(Landroid/content/IntentSender;ILandroid/content/Intent;III)V": senderForResult,
+  "startIntentSenderForResult(Landroid/content/IntentSender;ILandroid/content/Intent;IIILandroid/os/Bundle;)V": senderForResult,
+  "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;III)V": sender,
+  "startIntentSender(Landroid/content/IntentSender;Landroid/content/Intent;IIILandroid/os/Bundle;)V": sender,
   "setResult(ILandroid/content/Intent;)V": function (this: JActivity, c: number, d: JIntent) {
     this.resultCode = c;
     this.resultData = d;
@@ -604,11 +603,9 @@ rt.register({
   methods: {
     "getDataType()Ljava/lang/String;": () => "UidHealthStats",
     ...stubs(0, "hasTimer(I)Z", "hasMeasurement(I)Z", "hasStats(I)Z", "hasTimers(I)Z", "hasMeasurements(I)Z"),
-    "getTimer(I)Landroid/os/health/TimerStat;": () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); },
-    "getMeasurement(I)J": () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); },
-    "getStats(I)Ljava/util/Map;": () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); },
-    "getTimers(I)Ljava/util/Map;": () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); },
-    "getMeasurements(I)Ljava/util/Map;": () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); },
+    // the snapshot holds no keys, so every keyed read is out of range
+    ...Object.fromEntries(["getTimer(I)Landroid/os/health/TimerStat;", "getMeasurement(I)J", "getStats(I)Ljava/util/Map;",
+      "getTimers(I)Ljava/util/Map;", "getMeasurements(I)Ljava/util/Map;"].map((sig) => [sig, () => { throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", null); }])),
   },
 });
 // The system's "let this app run in the background?" dialog, answered by the grant policy runtime
@@ -671,8 +668,7 @@ for (const [name, methods, statics] of [
       "isLowPowerStandbyEnabled()Z"),
   }],
   ["android/os/PowerManager$WakeLock", {
-    "acquire()V": () => {}, "acquire(J)V": () => {}, "release()V": () => {},
-    "isHeld()Z": () => 0, "setReferenceCounted(Z)V": () => {},
+    ...noops("acquire()V", "acquire(J)V", "release()V", "setReferenceCounted(Z)V"), ...stubs(0, "isHeld()Z"),
   }],
   // No Bluetooth or NFC radio: the managers exist, as AOSP always registers them, and report no
   // adapter, which is what a device without the feature answers.
@@ -742,7 +738,6 @@ for (const [name, methods, statics] of [
       "abandonAudioFocus(Landroid/media/AudioManager$OnAudioFocusChangeListener;)I",
       "abandonAudioFocusRequest(Landroid/media/AudioFocusRequest;)I"),
     ...stubs(0, "getMode()I", "isSpeakerphoneOn()Z", "isBluetoothA2dpOn()Z", "isWiredHeadsetOn()Z",
-      "static getDirectPlaybackSupport(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)I",
       "static getPlaybackOffloadSupport(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)I",
       "static isOffloadedPlaybackSupported(Landroid/media/AudioFormat;Landroid/media/AudioAttributes;)Z"),
     ...stubs("", "getParameters(Ljava/lang/String;)Ljava/lang/String;"),
@@ -815,10 +810,8 @@ for (const [name, methods, statics] of [
     "getActiveSubscriptionInfoCountMax()I": () => 1,
     "getActiveSubscriptionInfo(I)Landroid/telephony/SubscriptionInfo;": () => null,
     "getActiveSubscriptionInfoForSimSlotIndex(I)Landroid/telephony/SubscriptionInfo;": () => null,
-    "static getDefaultSubscriptionId()I": () => -1,
-    "static getDefaultDataSubscriptionId()I": () => -1,
-    "static getDefaultVoiceSubscriptionId()I": () => -1,
-    "static getDefaultSmsSubscriptionId()I": () => -1,
+    ...stubs(-1, "static getDefaultSubscriptionId()I", "static getDefaultDataSubscriptionId()I",
+      "static getDefaultVoiceSubscriptionId()I", "static getDefaultSmsSubscriptionId()I"),
     "static isValidSubscriptionId(I)Z": (id: number) => id >= 0 ? 1 : 0,
     ...noops("addOnSubscriptionsChangedListener(Landroid/telephony/SubscriptionManager$OnSubscriptionsChangedListener;)V",
       "addOnSubscriptionsChangedListener(Ljava/util/concurrent/Executor;Landroid/telephony/SubscriptionManager$OnSubscriptionsChangedListener;)V",
@@ -885,10 +878,13 @@ for (const [name, methods, statics] of [
     "getCurrentModeType()I": () => 1,
   }],
   ["android/app/KeyguardManager", { "isKeyguardLocked()Z": () => 0, "inKeyguardRestrictedInputMode()Z": () => 0, "isDeviceSecure()Z": () => 0 }],
-  ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "getSensorList(I)Ljava/util/List;": () => newArrayList(), "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z": () => 0,
+  ["android/hardware/SensorManager", { "getDefaultSensor(I)Landroid/hardware/Sensor;": () => null, "getSensorList(I)Ljava/util/List;": () => newArrayList(),
+    ...stubs(0, "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z",
+      "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z",
+      "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z"),
+    ...noops("unregisterListener(Landroid/hardware/SensorEventListener;)V",
+      "unregisterListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;)V"),
     "static getAltitude(FF)F": (p0: number, p: number) => Math.fround(44330 * Math.fround(1 - Math.fround(Math.pow(Math.fround(p / p0), Math.fround(1 / Math.fround(5.255)))))),
-    "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z": () => 0,
-    "registerListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z": () => 0,
     "static getOrientation([F[F)[F": (r: Float32Array, values: Float32Array) => {
       const stride = r.length === 9 ? 3 : 4;
       values[0] = Math.atan2(r[1], r[stride + 1]);
@@ -914,9 +910,7 @@ for (const [name, methods, statics] of [
         else inclination.set([1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1]);
       }
       return 1;
-    },
-    "unregisterListener(Landroid/hardware/SensorEventListener;)V": () => {},
-    "unregisterListener(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;)V": () => {} }],
+    } }],
   // a charging battery at 80%; counters the platform cannot read answer Integer/Long.MIN_VALUE
   // as BatteryManager does for an unsupported property
   ["android/os/BatteryManager", {
