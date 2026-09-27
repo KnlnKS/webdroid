@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { decodeAndroidPacked, decodeRelr } from "./elf";
+import { decodeAndroidPacked, decodeRelr, loadElf } from "./elf";
+import { mem } from "./mem";
 
 const sleb = (input: number | bigint): number[] => {
   let value = BigInt(input);
@@ -13,43 +14,6 @@ const sleb = (input: number | bigint): number[] => {
   }
 };
 const aps2 = (...values: (number | bigint)[]) => Uint8Array.from([65, 80, 83, 50, ...values.flatMap(sleb)]);
-
-describe("Android packed relocations", () => {
-  test("streams grouped RELA offsets, info and addends", () => {
-    const info = (3n << 32n) | 1027n, got: unknown[] = [];
-    decodeAndroidPacked("test", aps2(2, 0, 2, 15, 8, info, -4), true, (r) => got.push(r));
-    expect(got).toEqual([
-      { off: 8, info, addend: -4 },
-      { off: 16, info, addend: -4 },
-    ]);
-  });
-
-  test("accumulates ungrouped RELA values", () => {
-    const a = (1n << 32n) | 1025n, b = (2n << 32n) | 1026n, got: unknown[] = [];
-    decodeAndroidPacked("test", aps2(2, 4, 2, 8, 12, a, 5, 20, b, -2), true, (r) => got.push(r));
-    expect(got).toEqual([
-      { off: 16, info: a, addend: 5 },
-      { off: 36, info: b, addend: 3 },
-    ]);
-  });
-
-  test("decodes REL groups without addends", () => {
-    const info = (4n << 8n) | 23n, got: unknown[] = [];
-    decodeAndroidPacked("test", aps2(2, 0, 2, 3, 4, info), false, (r) => got.push(r));
-    expect(got).toEqual([
-      { off: 4, info, addend: 0 },
-      { off: 8, info, addend: 0 },
-    ]);
-  });
-
-  test("rejects malformed streams", () => {
-    expect(() => decodeAndroidPacked("test", new Uint8Array(), true, () => {})).toThrow(/header/);
-    expect(() => decodeAndroidPacked("test", aps2(1, 0, 1), true, () => {})).toThrow(/truncated/);
-    expect(() => decodeAndroidPacked("test", aps2(1, 0, 0, 0), true, () => {})).toThrow(/group size/);
-    expect(() => decodeAndroidPacked("test", aps2(1, 0, 2, 0), true, () => {})).toThrow(/group size/);
-    expect(() => decodeAndroidPacked("test", aps2(1, 0, 1, 8, 4, 23, 1), false, () => {})).toThrow(/addend/);
-  });
-});
 
 describe("RELR relocations", () => {
   test("streams direct addresses and bitmap entries", () => {
@@ -84,18 +48,17 @@ test("APS2 decodes individual info, offsets and negative addend deltas", () => {
     [0x208, 1027, -32], [0x1f8, 8589934849, -24],
   ]);
   expect(decode([2, 0, 2, 2, 4, 23, 258], false)).toEqual([[4, 23, 0], [8, 258, 0]]);
+  expect(decode([2, 0, 2, 3, 4, 1047], false)).toEqual([[4, 1047, 0], [8, 1047, 0]]);
 });
 test("APS2 rejects malformed headers, counts, groups and truncated encodings", () => {
-  expect(() => decodeAndroidPacked("test", new Uint8Array(4), true, () => {})).toThrow("header");
-  for (const values of [[-1, 0], [1, 0, 0, 0], [1, 0, 2, 0], [1, 0, 1, 16], [1, 0, 1, 3, 8]]) {
-    expect(() => decode(values)).toThrow();
-  }
-  expect(() => decode([1, 0, 1, 8], false)).toThrow(/group|addend/);
+  for (const bytes of [new Uint8Array(), new Uint8Array(4)]) expect(() => decodeAndroidPacked("test", bytes, true, () => {})).toThrow(/header/);
+  expect(() => decode([1, 0, 1])).toThrow(/truncated/);
+  for (const values of [[1, 0, 0, 0], [1, 0, 2, 0]]) expect(() => decode(values)).toThrow(/group size/);
+  for (const values of [[-1, 0], [1, 0, 1, 16], [1, 0, 1, 3, 8]]) expect(() => decode(values)).toThrow();
+  expect(() => decode([1, 0, 1, 8, 4, 23, 1], false)).toThrow(/addend/);
 });
 
-test("ELF32 and ELF64 apply RELR address and high bitmap bits before reading constructors", async () => {
-  const { loadElf } = await import("./elf");
-  const { mem } = await import("./mem");
+test("ELF32 and ELF64 apply RELR address and high bitmap bits before reading constructors", () => {
   for (const wide of [false, true]) for (const android of [false, true]) {
     const ptr = wide ? 8 : 4, bytes = new Uint8Array(4096), d = new DataView(bytes.buffer);
     const put = (off: number, value: number) => d.setUint32(off, value, true);
