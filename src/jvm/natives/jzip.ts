@@ -221,13 +221,18 @@ const updateBytes = function (this: JChecksum, b: Int8Array, off: number, len: n
   if (off < 0 || len < 0 || off > b.length - len) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
   this.state = this.algo.step(this.state, u8(b), off, len);
 };
+/** update a Checksum, ours directly and an app's own through its update([BII)V */
+const feed = (c: unknown, b: Int8Array, off: number, len: number) =>
+  c instanceof JChecksum ? updateBytes.call(c, b, off, len) : vcall(c, "update", "([BII)V", b, off, len);
+// Checksum's defaults, which an app's own implementation inherits too
 const checksumMethods = {
-  "update([B)V": function (this: JChecksum, b: Int8Array) { updateBytes.call(this, b, 0, b?.length ?? 0); },
+  "update([B)V": function (this: unknown, b: Int8Array) { if (!b) rt.npe(); return feed(this, b, 0, b.length); },
   "update([BII)V": updateBytes,
-  "update(Ljava/nio/ByteBuffer;)V": function (this: JChecksum, bb: JBuffer) {
-    const n = bb.lim - bb.pos;
-    this.state = this.algo.step(this.state, new Uint8Array(bb.ab, bb.dv.byteOffset + bb.pos, n), 0, n);
+  "update(Ljava/nio/ByteBuffer;)V": function (this: unknown, bb: JBuffer) {
+    const n = bb.lim - bb.pos, bytes = new Uint8Array(bb.ab, bb.dv.byteOffset + bb.pos, n);
     bb.pos = bb.lim;
+    if (this instanceof JChecksum) this.state = this.algo.step(this.state, bytes, 0, n);
+    else return vcall(this, "update", "([BII)V", new Int8Array(bytes), 0, n);
   },
 };
 rt.register({ name: "java/util/zip/Checksum", ctor: class extends JObj {}, methods: checksumMethods });
@@ -243,12 +248,6 @@ for (const [name, algo] of CHECKSUMS) {
     },
   });
 }
-const checksumOf = (c: unknown) => (c instanceof JChecksum ? c : null);
-/** update a Checksum, ours directly and an app's own through its update([BII)V */
-const feed = (c: unknown, b: Int8Array, off: number, len: number) => {
-  const own = checksumOf(c);
-  return own ? updateBytes.call(own, b, off, len) : vcall(c, "update", "([BII)V", b, off, len);
-};
 class JCheckedIn extends JFilterInputStream { cksum: unknown = null; }
 rt.register({
   name: "java/util/zip/CheckedInputStream", ctor: JCheckedIn, sup: "java/io/FilterInputStream",
