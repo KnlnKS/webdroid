@@ -3,7 +3,7 @@ import { callOn, curThread, type JThread } from "./natives/jlang";
 import { mangleMethod, mangleStaticField } from "./abi";
 import { encodeModifiedUtf8 } from "./charset";
 
-export type StreamField = { name: string; desc: string; prop: string };
+type StreamField = { name: string; desc: string; prop: string };
 export type StreamClass = { name: string; uid: bigint; flags: number; fields: StreamField[]; parent: StreamClass | null; info: ClassInfo | null };
 const cache = new Map<ClassInfo | string, Promise<StreamClass>>();
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;

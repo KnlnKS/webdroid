@@ -1,6 +1,6 @@
 const EMPTY_CHUNK = new Uint8Array(0);
 
-export type Ipv4 = [number, number, number, number];
+type Ipv4 = [number, number, number, number];
 export function parseIpv4(text: string): Ipv4 | null {
   const match = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
   if (!match) return null;

@@ -33,6 +33,9 @@ export function cssColor(argb: number): string {
 }
 
 export class JRect extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
+function setRectFrom(this: JRect, o: JRect) {
+  this.left = o.left; this.top = o.top; this.right = o.right; this.bottom = o.bottom;
+}
 const rectMethods = (F: boolean): NativeSpec["methods"] => ({
   "<init>()V": function () {},
   [`<init>(${F ? "FFFF" : "IIII"})V`]: function (this: JRect, l: number, t: number, r: number, b: number) {
@@ -48,14 +51,8 @@ const rectMethods = (F: boolean): NativeSpec["methods"] => ({
   [`set(${F ? "FFFF" : "IIII"})V`]: function (this: JRect, l: number, t: number, r: number, b: number) {
     this.left = l; this.top = t; this.right = r; this.bottom = b;
   },
-  "set(Landroid/graphics/Rect;)V": function (this: JRect, o: JRect) {
-    this.left = o.left; this.top = o.top; this.right = o.right; this.bottom = o.bottom;
-  },
-  ...(F ? {
-    "set(Landroid/graphics/RectF;)V": function (this: JRect, o: JRect) {
-      this.left = o.left; this.top = o.top; this.right = o.right; this.bottom = o.bottom;
-    },
-  } : {}),
+  "set(Landroid/graphics/Rect;)V": setRectFrom,
+  ...(F ? { "set(Landroid/graphics/RectF;)V": setRectFrom } : {}),
   "setEmpty()V": function (this: JRect) { this.left = this.top = this.right = this.bottom = 0; },
   "isEmpty()Z": function (this: JRect) { return this.left >= this.right || this.top >= this.bottom ? 1 : 0; },
   [`offset(${F ? "FF" : "II"})V`]: function (this: JRect, dx: number, dy: number) {
@@ -332,11 +329,8 @@ rt.register({
     "static createFromAsset(Landroid/content/res/AssetManager;Ljava/lang/String;)Landroid/graphics/Typeface;": assetFont,
     "static createFromFile(Ljava/lang/String;)Landroid/graphics/Typeface;": (p: string) => loadTypeface(vfs.read(p)),
     "static createFromFile(Ljava/io/File;)Landroid/graphics/Typeface;": (f: { path: string } | null) => loadTypeface(f ? vfs.read(f.path) : null),
-    "static create(Landroid/graphics/Typeface;IZ)Landroid/graphics/Typeface;": (base: JTypeface | null, weight: number, italic: number) => {
-      const t = mkTypeface(base?.family ?? ROBOTO, weight >= 600, !!italic);
-      t.weight = weight;
-      return t;
-    },
+    "static create(Landroid/graphics/Typeface;IZ)Landroid/graphics/Typeface;": (base: JTypeface | null, weight: number, italic: number) =>
+      mkTypeface(base?.family ?? ROBOTO, weight >= 600, !!italic, weight),
     "static create(Landroid/graphics/Typeface;I)Landroid/graphics/Typeface;": (base: JTypeface | null, style: number) =>
       mkTypeface(base?.family ?? ROBOTO, (style & 1) !== 0, (style & 2) !== 0),
     "static defaultFromStyle(I)Landroid/graphics/Typeface;": (style: number) =>
@@ -660,16 +654,9 @@ export function copyPaint(src: JPaint, dst: JPaint) {
 }
 class JFontMetrics extends JObj { top = 0; ascent = 0; descent = 0; bottom = 0; leading = 0; }
 class JFontMetricsInt extends JObj { top = 0; ascent = 0; descent = 0; bottom = 0; leading = 0; }
-rt.register({
-  name: "android/graphics/Paint$FontMetrics", ctor: JFontMetrics,
-  fields: ["top", "ascent", "descent", "bottom", "leading"],
-  methods: { "<init>()V": function () {} },
-});
-rt.register({
-  name: "android/graphics/Paint$FontMetricsInt", ctor: JFontMetricsInt,
-  fields: ["top", "ascent", "descent", "bottom", "leading"],
-  methods: { "<init>()V": function () {} },
-});
+for (const [name, ctor] of [["FontMetrics", JFontMetrics], ["FontMetricsInt", JFontMetricsInt]] as const) {
+  rt.register({ name: `android/graphics/Paint$${name}`, ctor, fields: ["top", "ascent", "descent", "bottom", "leading"], methods: { "<init>()V": function () {} } });
+}
 let _measureCtx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
 /**
  * The shared measurement context. ALWAYS pass the font you are about to measure with:
@@ -1013,18 +1000,16 @@ class JBitmapShader extends JShader {
       cache = { generation: bitmap.genId, tiles: new Map() };
       bitmapShaderTiles.set(bitmap, cache);
     }
-    const inverse = ctx.getTransform().inverse();
-    const corners = [[0, 0], [ctx.canvas.width, 0], [0, ctx.canvas.height], [ctx.canvas.width, ctx.canvas.height]]
-      .map(([x, y]) => inverse.transformPoint({ x, y }));
-    if (!corners.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) return;
+    const bounds = canvasLocalBounds(ctx);
+    if (!bounds) return;
     const segments = (mode: number, size: number, lo: number, hi: number): [number, number, number, number][] => {
       if (mode === 1 || mode === 2) return [[lo, hi, 0, size]];
       const result: [number, number, number, number][] = [[Math.max(0, lo), Math.min(size, hi), 0, size]];
       if (mode === 0) result.push([lo, Math.min(0, hi), 0, 1], [Math.max(size, lo), hi, size - 1, 1]);
       return result;
     };
-    const xs = segments(this.tileX, bitmap.w, Math.min(...corners.map(p => p.x)), Math.max(...corners.map(p => p.x)));
-    const ys = segments(this.tileY, bitmap.h, Math.min(...corners.map(p => p.y)), Math.max(...corners.map(p => p.y)));
+    const xs = segments(this.tileX, bitmap.w, bounds[0], bounds[2]);
+    const ys = segments(this.tileY, bitmap.h, bounds[1], bounds[3]);
     for (const [x0, x1, sx, sw] of xs) for (const [y0, y1, sy, sh] of ys) {
       if (x1 <= x0 || y1 <= y0) continue;
       const nx = this.tileX === 2 ? 2 : 1, ny = this.tileY === 2 ? 2 : 1;
@@ -1660,10 +1645,9 @@ export class JCanvas extends JObj {
         source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
         copyPaint(p, layer.paint);
         layer.paint.maskFilter = null; layer.paint.blend = null; layer.paint.shadowRadius = 0; layer.paint.style = 0;
-        const inverse = m.inverse();
-        const corners = [[0, 0], [w, 0], [0, h], [w, h]].map(([x, y]) => inverse.transformPoint({ x, y }));
-        const left = Math.min(...corners.map(p => p.x)), top = Math.min(...corners.map(p => p.y));
-        layer.source.drawShape(layer.paint, c => c.fillRect(left, top, Math.max(...corners.map(p => p.x)) - left, Math.max(...corners.map(p => p.y)) - top), () => {});
+        // `scale` is non-zero, so the transform inverts and the bounds exist
+        const [left, top, right, bottom] = canvasLocalBounds(source)!;
+        layer.source.drawShape(layer.paint, c => c.fillRect(left, top, right - left, bottom - top), () => {});
         target.drawImage(source.canvas, 0, 0);
       } else {
         target.fillStyle = p.fillStyle(target);
@@ -1801,7 +1785,7 @@ export function saveCanvas(cv: JCanvas): number {
   cv.clipPolygonStack.push(cv.clipPolygon);
   return cv.saveCount++;
 }
-export function restoreCanvas(cv: JCanvas): void {
+function restoreCanvas(cv: JCanvas): void {
   if (cv.saveCount <= 1) throw rt.mkThrowable("java/lang/IllegalStateException", "Underflow in restore - more restores than saves");
   cv.ctx.restore();
   cv.clipDevice = cv.clipStack.pop() ?? null;
@@ -1810,10 +1794,7 @@ export function restoreCanvas(cv: JCanvas): void {
 }
 export function restoreCanvasToCount(cv: JCanvas, count: number): void {
   if (count < 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Underflow in restoreToCount - more restores than saves");
-  while (cv.saveCount > count) {
-    cv.ctx.restore(); cv.clipDevice = cv.clipStack.pop() ?? null;
-    cv.clipPolygon = cv.clipPolygonStack.pop() ?? null; cv.saveCount--;
-  }
+  while (cv.saveCount > count) restoreCanvas(cv);
 }
 function canvasSave(this: JCanvas): number {
   return saveCanvas(this);
@@ -2412,7 +2393,6 @@ class JRenderNode extends JObj {
   effect: JRenderEffect | null = null;
   effectInput: OffscreenCanvas | null = null;
 }
-/** replay a node's display list into ctx with its transform props applied */
 // android.graphics.Picture is the same recording the render node already does, without the
 // transform properties: what it recorded is replayed into whatever canvas is drawing it.
 class JPicture extends JObj { node = new JRenderNode(); }
@@ -2444,6 +2424,7 @@ function drawPicture(canvas: JCanvas, picture: JPicture, dst?: JRect) {
     replayWithSemantics(canvas, () => { if (node.hasDL) replay(ctx, node.ops); });
   } finally { ctx.restore(); }
 }
+/** replay a node's display list into ctx with its transform props applied */
 function drawNodeInto(ctx: Ctx2D, n: JRenderNode) {
   if (!n.hasDL) return;
   ctx.save();
@@ -2832,6 +2813,7 @@ rt.register({
 });
 
 class JBitmapRegionDecoder extends JObj { bitmap: JBitmap | null = null; }
+const streamRegionDecoder = driven(function* (stream: unknown): Gen { return regionDecoder(yield streamBytes(stream)); });
 const regionDecoder = driven(function* regionDecoder(bytes: Uint8Array | null): Gen<JBitmapRegionDecoder> {
   if (!bytes?.length) throw rt.mkThrowable("java/io/IOException", "Unable to decode image");
   const bitmap = yield decodeBytes(bytes, null);
@@ -2841,10 +2823,8 @@ const regionDecoder = driven(function* regionDecoder(bytes: Uint8Array | null): 
   return decoder;
 });
 rt.register({ name: "android/graphics/BitmapRegionDecoder", ctor: JBitmapRegionDecoder, methods: {
-  "static newInstance(Ljava/io/InputStream;Z)Landroid/graphics/BitmapRegionDecoder;":
-    driven(function* (stream: unknown): Gen { return regionDecoder(yield streamBytes(stream)); }),
-  "static newInstance(Ljava/io/InputStream;)Landroid/graphics/BitmapRegionDecoder;":
-    driven(function* (stream: unknown): Gen { return regionDecoder(yield streamBytes(stream)); }),
+  "static newInstance(Ljava/io/InputStream;Z)Landroid/graphics/BitmapRegionDecoder;": streamRegionDecoder,
+  "static newInstance(Ljava/io/InputStream;)Landroid/graphics/BitmapRegionDecoder;": streamRegionDecoder,
   "static newInstance(Ljava/lang/String;Z)Landroid/graphics/BitmapRegionDecoder;":
     driven(function* (path: string): Gen { return regionDecoder(yield vfs.readFile(path)); }),
   "static newInstance(Ljava/io/FileDescriptor;Z)Landroid/graphics/BitmapRegionDecoder;":

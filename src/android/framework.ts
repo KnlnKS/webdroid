@@ -24,6 +24,12 @@ import { apkCertificates } from "./packagearchive";
 let pending: Promise<Arsc> | null = null;
 let pendingDex: Promise<void> | null = null;
 
+/** framework.jar's classes*.dex, in load order */
+function jarDexes(jar: Uint8Array): DexFile[] {
+  const dir = centralDir(jar);
+  return [...dir.keys()].filter((n) => /^classes\d*\.dex$/.test(n)).sort().flatMap((name) => dexesIn(entryBytes(jar, dir.get(name)!), `framework:${name}`));
+}
+
 /** AOSP's own android.* and com.android.internal.*, for whatever provenance cut over to it.
  *  43MB of dex across five files; indexing all 32,713 classes costs ~30ms and compiling is
  *  lazy per class, so an apk that touches ten of them pays for ten. */
@@ -32,11 +38,7 @@ export function loadFrameworkDex(): Promise<void> {
   return pendingDex ??= (async () => {
     const res = await fetch("/vendor/aosp/framework.jar");
     if (!res.ok) throw new Error(`no framework bytecode (${res.status}) — run: bun run gen-framework`);
-    const jar = new Uint8Array(await res.arrayBuffer());
-    const dir = centralDir(jar);
-    for (const name of [...dir.keys()].filter((n) => /^classes\d*\.dex$/.test(n)).sort()) {
-      for (const d of dexesIn(entryBytes(jar, dir.get(name)!), `framework:${name}`)) rt.loadDex(d, true);
-    }
+    for (const d of jarDexes(new Uint8Array(await res.arrayBuffer()))) rt.loadDex(d, true);
   })();
 }
 
@@ -47,10 +49,7 @@ let decls: Promise<DexFile[]> | null = null;
 export function frameworkDecls(): Promise<DexFile[]> {
   return decls ??= (async () => {
     const res = await fetch("/vendor/aosp/framework.jar");
-    if (!res.ok) return [];
-    const jar = new Uint8Array(await res.arrayBuffer());
-    const dir = centralDir(jar);
-    return [...dir.keys()].filter((n) => /^classes\d*\.dex$/.test(n)).sort().flatMap((name) => dexesIn(entryBytes(jar, dir.get(name)!), `framework:${name}`));
+    return res.ok ? jarDexes(new Uint8Array(await res.arrayBuffer())) : [];
   })();
 }
 

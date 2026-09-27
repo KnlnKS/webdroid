@@ -770,7 +770,7 @@ rt.register({ name: "android/text/style/RelativeSizeSpan", ctor: JRelativeSizeSp
   "updateMeasureState(Landroid/text/TextPaint;)V": applyRelativeSize,
 } });
 
-export function drawStyledText(src: unknown, text: string, start: number, canvas: JCanvas, paint: JTextPaint, x: number, y: number, color = paint.color): Promise<void> | undefined {
+function drawStyledText(src: unknown, text: string, start: number, canvas: JCanvas, paint: JTextPaint, x: number, y: number, color = paint.color): Promise<void> | undefined {
   if (!(src instanceof JSpanned)) return;
   const end = start + text.length;
   const spans = src.spans.filter((r) => r.start < end && r.end > start && rt.iof(r.span, "android/text/style/CharacterStyle")
@@ -1593,7 +1593,7 @@ rt.register({ name: "android/text/StaticLayout", ctor: JStaticLayout, sup: "andr
 
     },
 } });
-export function mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy: number = 0) {
+function mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy: number = 0) {
   const l = new JStaticLayout();
   return setupSpannedLayout(l, cs, p, w, mult, add, maxLines, includePad, breakStrategy);
 }

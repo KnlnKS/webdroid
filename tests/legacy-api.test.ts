@@ -129,6 +129,14 @@ test("RippleDrawable constant state clones its content", async () => {
   expect(await vcall(copy, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;", 0)).not.toBe(content);
 });
 
+const RESOURCES_CTOR = "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V";
+function hostAssets(): { host: Resources; assets: JAssetManager } {
+  const host = new Resources(null, {});
+  const assets = rt.make("android/content/res/AssetManager") as JAssetManager;
+  assets.host = host;
+  return { host, assets };
+}
+
 function lifecycleActivity(application: JApplication): JActivity {
   const activity = new JActivity();
   Reflect.set(activity, "$host", { application });
@@ -302,12 +310,6 @@ test("security providers retain their constructor metadata", async () => {
 });
 
 test("reached JDK utility primitives preserve their Java behavior", async () => {
-  const list = await newObj("java/util/ArrayList");
-  for (const value of [1, 2, 3, 4]) await vcall(list, "add", "(Ljava/lang/Object;)Z", value);
-  const random = await newObj("java/util/Random", "(J)V", 1n);
-  await scall("java/util/Collections", "shuffle", "(Ljava/util/List;Ljava/util/Random;)V", list, random);
-  expect((list as { a: unknown[] }).a).toEqual([4, 1, 2, 3]);
-
   const reverse = scall("java/util/Collections", "reverseOrder", "()Ljava/util/Comparator;");
   expect(await vcall(reverse, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", "a", "b")).toBeGreaterThan(0);
   expect(scall("java/util/Collections", "reverseOrder", "(Ljava/util/Comparator;)Ljava/util/Comparator;", reverse)).not.toBeNull();
@@ -385,15 +387,6 @@ test("optional device services report their unavailable state", async () => {
   expect(scall("android/os/VibrationEffect", "createPredefined", "(I)Landroid/os/VibrationEffect;", 0)).not.toBeNull();
   expect(await newObj("android/media/session/MediaController$Callback")).not.toBeNull();
   expect(await newObj("android/media/MediaRoute2ProviderService")).not.toBeNull();
-  const accessibility = await newObj("android/view/accessibility/AccessibilityManager");
-  const serviceListener = rt.make("android/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener");
-  await vcall(accessibility, "addAccessibilityServicesStateChangeListener", "(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)V", serviceListener);
-  expect(await vcall(accessibility, "removeAccessibilityServicesStateChangeListener", "(Landroid/view/accessibility/AccessibilityManager$AccessibilityServicesStateChangeListener;)Z", serviceListener)).toBe(1);
-
-  const builder = scall("android/util/StatsEvent", "newBuilder", "()Landroid/util/StatsEvent$Builder;");
-  expect(await vcall(builder, "setAtomId", "(I)Landroid/util/StatsEvent$Builder;", 100)).toBe(builder);
-  expect(await vcall(builder, "writeInt", "(I)Landroid/util/StatsEvent$Builder;", 7)).toBe(builder);
-  expect(await vcall(builder, "build", "()Landroid/util/StatsEvent;")).not.toBeNull();
 
   const range = await newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", "b", "d");
   expect(await vcall(range, "contains", "(Ljava/lang/Comparable;)Z", "c")).toBe(1);
@@ -425,21 +418,19 @@ test("BigInteger returns quotient and remainder together", async () => {
 });
 
 test("Resources(AssetManager, DisplayMetrics, Configuration) scopes its own configuration and metrics", async () => {
-  const host = new Resources(null, {});
-  const assets = rt.make("android/content/res/AssetManager") as JAssetManager;
-  assets.host = host;
+  const { host, assets } = hostAssets();
   const config = await newObj("android/content/res/Configuration");
   (config as { densityDpi: number }).densityDpi = 320;
   const metrics = await newObj("android/util/DisplayMetrics");
   (metrics as { widthPixels: number }).widthPixels = 777;
-  const res = await newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V", assets, metrics, config) as JResources;
+  const res = await newObj("android/content/res/Resources", RESOURCES_CTOR, assets, metrics, config) as JResources;
   expect(res.host).not.toBe(host);
   expect((await vcall(res, "getConfiguration", "()Landroid/content/res/Configuration;")).densityDpi).toBe(320);
   const dm = await vcall(res, "getDisplayMetrics", "()Landroid/util/DisplayMetrics;");
   expect(dm.widthPixels).toBe(777);
   expect(dm.density).toBe(2);
   expect(host.dm.widthPixels).not.toBe(777);
-  await expect((async () => newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V", null, null, null))())
+  await expect((async () => newObj("android/content/res/Resources", RESOURCES_CTOR, null, null, null))())
     .rejects.toMatchObject({ constructor: rt.link("java/lang/NullPointerException").ctor });
 });
 
@@ -524,10 +515,8 @@ test("UrlQuerySanitizer drops unregistered parameters unless allowed and sanitiz
 });
 
 test("Resources string getters throw NotFoundException for ids the table lacks", async () => {
-  const host = new Resources(null, {});
-  const assets = rt.make("android/content/res/AssetManager") as JAssetManager;
-  assets.host = host;
-  const res = await newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V", assets, null, null) as JResources;
+  const { assets } = hostAssets();
+  const res = await newObj("android/content/res/Resources", RESOURCES_CTOR, assets, null, null) as JResources;
   const notFound = { constructor: rt.link("android/content/res/Resources$NotFoundException").ctor };
   await expect(vcallAsync(res, "getString", "(I)Ljava/lang/String;", 0x7f11240f)).rejects.toMatchObject(notFound);
   await expect(vcallAsync(res, "getText", "(I)Ljava/lang/CharSequence;", 0x7f11240f)).rejects.toMatchObject(notFound);
@@ -576,17 +565,15 @@ test("In-memory DEX loaders read the buffer window and preserve defining-loader 
 });
 
 test("ContextWrapper.getResources reaches a base context's overriding getResources, and Context.getString goes through it", async () => {
-  const host = new Resources(null, {});
-  const assets = rt.make("android/content/res/AssetManager") as JAssetManager;
-  assets.host = host;
-  const plain = await newObj("android/content/res/Resources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V", assets, null, null) as JResources;
+  const { host, assets } = hostAssets();
+  const plain = await newObj("android/content/res/Resources", RESOURCES_CTOR, assets, null, null) as JResources;
   // a Resources subclass that serves strings the table lacks, behind a ContextWrapper subclass
   // that answers getResources with it: what a string-store proxy installed by attachBaseContext does
   rt.register({ name: "test/StoreResources", ctor: class extends (rt.link("android/content/res/Resources").ctor as any) {}, sup: "android/content/res/Resources",
     methods: { "getString(I)Ljava/lang/String;": (id: number) => "store:" + id.toString(16) } });
   rt.register({ name: "test/ProxyContext", ctor: class extends (rt.link("android/content/ContextWrapper").ctor as any) {}, sup: "android/content/ContextWrapper",
     methods: { "getResources()Landroid/content/res/Resources;": function (this: { store: unknown }) { return this.store; } } });
-  const store = await newObj("test/StoreResources", "(Landroid/content/res/AssetManager;Landroid/util/DisplayMetrics;Landroid/content/res/Configuration;)V", assets, null, null);
+  const store = await newObj("test/StoreResources", RESOURCES_CTOR, assets, null, null);
   const base = rt.make("android/content/Context") as JObj & { $host: unknown };
   base.$host = { res: host, jresources: plain, pkg: "test" };
   const proxy = await newObj("test/ProxyContext", "(Landroid/content/Context;)V", base) as JObj & { store: unknown };

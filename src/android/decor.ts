@@ -1,6 +1,5 @@
-import { AID } from "./res";
 import { jclsNameOf, type AppHost } from "./apphost";
-import { JTheme, rvInt, themeOf, themeByName, rvDimen, rvColor } from "./res";
+import { AID, JTheme, rvInt, themeOf, themeByName, rvDimen, rvColor, type RV } from "./res";
 import { type JDrawable, loadDrawableRV, JColorDrawable } from "./drawable";
 import { JView, JMarginLP, addUnattachedView, requestLayout } from "./view";
 import { manifestActivityTheme } from "./pm";
@@ -81,25 +80,16 @@ export async function ensureDecor(act: JActivity) {
   const noTitle = rvInt(host.res, themeByName(host.res, theme, "windowNoTitle"), 0);
   const actionBar = rvInt(host.res, themeByName(host.res, theme, "windowActionBar"), noTitle ? 0 : 1);
   let statusDefault = -16777216;
-  const root = new JLinearLayout();
+  const inherit = <T extends JView>(v: T): T => { v.ctx = act; v.jres = host.res; v.theme = theme; return v; };
+  const layoutParams = (cls: string, width: number, height: number) => Object.assign(rt.make(cls), { width, height });
+  const root = inherit(new JLinearLayout());
   root.orientation = 1;
-  root.ctx = act;
-  root.jres = host.res;
-  root.theme = theme;
-  {
-    const lp = rt.make("android/widget/LinearLayout$LayoutParams");
-    lp.width = -1; lp.height = -1;
-    root.lp = lp;
-  }
   if (actionBar && !noTitle) {
-    const bar = new JActionBarView();
-    bar.ctx = act;
-    bar.jres = host.res;
-    bar.theme = theme;
+    const bar = inherit(new JActionBarView());
     bar.titleStr = act.titleStr || host.appLabel;
     bar.barH = rvDimen(host.res, theme.lookup(AID("actionBarSize")), 112) || 112;
     const abStyle = theme.lookup(AID("actionBarStyle"));
-    let bg: RVLike | null = null;
+    let bg: RV | null = null;
     if (abStyle && (abStyle.t === TV.REFERENCE)) {
       let bgv = host.res.styleLookup(abStyle.d, AID("background"));
       // Widget.Material.ActionBar.Solid#background is ?attr/colorPrimary — an ATTRIBUTE
@@ -110,7 +100,7 @@ export async function ensureDecor(act: JActivity) {
     const primary = theme.lookup(AID("colorPrimary"));
     // The bar paints whatever the style names -- Holo's is a nine-patch, Material's resolves
     // through ?attr/colorPrimary to a colour. Only a flat colour can tint the status bar.
-    let bgD = bg ? await loadDrawableRV(host.res, bg as any, theme) : null;
+    let bgD = bg ? await loadDrawableRV(host.res, bg, theme) : null;
     if (!bgD || (bgD instanceof JColorDrawable && !bgD.color)) {
       const c = new JColorDrawable();
       c.color = primary ? rvColor(host.res, primary, -12303292) : -12303292;
@@ -119,11 +109,9 @@ export async function ensureDecor(act: JActivity) {
     bar.background = bgD;
     if (host.iconRes) bar.icon = await loadDrawableRV(host.res, { t: TV.REFERENCE, d: host.iconRes }, theme);
     const upv = theme.lookup(AID("homeAsUpIndicator"));
-    if (upv) bar.upDrawable = await loadDrawableRV(host.res, upv as any, theme);
+    if (upv) bar.upDrawable = await loadDrawableRV(host.res, upv, theme);
     if (bgD instanceof JColorDrawable) statusDefault = darken(bgD.color);
-    const lp = rt.make("android/widget/LinearLayout$LayoutParams");
-    lp.width = -1; lp.height = -2;
-    bar.lp = lp;
+    bar.lp = layoutParams("android/widget/LinearLayout$LayoutParams", -1, -2);
     addUnattachedView(root, bar);
     act.window.actionBarView = bar;
   }
@@ -131,26 +119,13 @@ export async function ensureDecor(act: JActivity) {
   // ActivityInfo.isTranslucentOrFloating, of the manifest theme: a theme set in onCreate leaves it
   const declared = manifestTheme(host, jclsNameOf(act)), flag = (name: string) => rvInt(host.res, declared.lookup(AID(name)), 0);
   act.window.translucent = !!(flag("windowIsTranslucent") || flag("windowIsFloating"));
-  const content = new JFrameLayout();
-  content.ctx = act;
-  content.jres = host.res;
-  content.theme = theme;
+  const content = inherit(new JFrameLayout());
   content.idNum = 0x01020002; // android.R.id.content
-  {
-    const lp = rt.make("android/widget/LinearLayout$LayoutParams");
-    lp.width = -1; lp.height = 0;
-    (lp as any).weight = 1;
-    content.lp = lp;
-  }
+  content.lp = Object.assign(layoutParams("android/widget/LinearLayout$LayoutParams", -1, 0), { weight: 1 });
   addUnattachedView(root, content);
-  {
-    const lp2 = rt.make("android/widget/FrameLayout$LayoutParams");
-    lp2.width = -1; lp2.height = -1;
-    root.lp = lp2;
-  }
+  root.lp = layoutParams("android/widget/FrameLayout$LayoutParams", -1, -1);
   addUnattachedView(decor, root);
   act.window.decor = decor;
   decor.windowOwner = act.window;
   act.window.contentParent = content;
 }
-type RVLike = { t: number; d: number };

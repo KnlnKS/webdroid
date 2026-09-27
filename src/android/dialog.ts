@@ -1,4 +1,3 @@
-import { AID, resString } from "./res";
 // android.app.Dialog / AlertDialog rendered as overlays (scrim + centered card).
 
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
@@ -15,7 +14,7 @@ import { JCanvas, tfMedium , JRect } from "./graphics";
 import { JDrawable, loadDrawableRV } from "./drawable";
 import { addOverlay, removeOverlay } from "./popup";
 import { reportUncaught, pressBackKey, dispatchKeyToCallback, backKeyMethods, type JKeyEvent } from "./os";
-import { rvInt, rvDimen, askTheme, themeOf } from "./res";
+import { AID, resString, rvInt, rvDimen, askTheme, themeOf } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
 import { inflateLayout, getInflater } from "./inflate";
@@ -323,9 +322,8 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   }),
   ...backKeyMethods,
   // Window.Callback, as Dialog's defaults
-  "onContentChanged()V": function () {},
   "onSaveInstanceState()Landroid/os/Bundle;": () => rt.make("android/os/Bundle"),
-  ...noops("onCreate(Landroid/os/Bundle;)V", "onStart()V", "onStop()V",
+  ...noops("onContentChanged()V", "onCreate(Landroid/os/Bundle;)V", "onStart()V", "onStop()V",
     "create()V", "onAttachedToWindow()V", "onDetachedFromWindow()V",
     "onWindowAttributesChanged(Landroid/view/WindowManager$LayoutParams;)V", "onWindowFocusChanged(Z)V",
     "onPanelClosed(ILandroid/view/Menu;)V", "onActionModeStarted(Landroid/view/ActionMode;)V",
@@ -378,10 +376,17 @@ async function buildAlertContent(d: JAlertDialog) {
     lp.width = -1; lp.height = -2; lp.weight = weight;
     return lp;
   };
+  const inherit = <T extends JView>(v: T): T => { v.ctx = d.jctx; v.jres = col.jres; v.theme = col.theme; return v; };
+  // AOSP: the listener runs first; the DISMISS message is queued behind it
+  const dismissingClick = (l: unknown, which: number) => ({
+    [mangleMethod("onClick", "(Landroid/view/View;)V")]: driven(function* (): Gen {
+      if (l) yield vcall(l, "onClick", "(Landroid/content/DialogInterface;I)V", d, which);
+      yield d.dismissImpl();
+    }),
+  });
   const accent = themeAccent(col);
   if (d.titleStr) {
-    const t = new JTextView();
-    t.ctx = d.jctx; t.jres = col.jres; t.theme = col.theme;
+    const t = inherit(new JTextView());
     t.text = d.titleStr;
     t.paintT.textSize = device.dp(20);
     t.paintT.tf = tfMedium;
@@ -391,8 +396,7 @@ async function buildAlertContent(d: JAlertDialog) {
     addUnattachedView(col, t);
   }
   if (d.message) {
-    const t = new JTextView();
-    t.ctx = d.jctx; t.jres = col.jres; t.theme = col.theme;
+    const t = inherit(new JTextView());
     t.text = d.message;
     t.paintT.textSize = device.dp(16);
     t.colors.defColor = -10066330;
@@ -406,35 +410,25 @@ async function buildAlertContent(d: JAlertDialog) {
   }
   if (d.items) {
     for (let i = 0; i < d.items.length; i++) {
-      const t = new JTextView();
-      t.ctx = d.jctx; t.jres = col.jres; t.theme = col.theme;
+      const t = inherit(new JTextView());
       t.text = d.items[i];
       t.paintT.textSize = device.dp(16);
       t.colors.defColor = -13421773;
       t.padL = t.padR = device.dp(24); t.padT = t.padB = device.dp(14);
       t.clickable = true;
       t.lp = lpFill();
-      const idx = i;
-      (t as any).clickL = {
-        [mangleMethod("onClick", "(Landroid/view/View;)V")]: driven(function* (): Gen {
-          // AOSP: the listener runs first; the DISMISS message is queued behind it
-          if (d.itemsL) yield vcall(d.itemsL, "onClick", "(Landroid/content/DialogInterface;I)V", d, idx);
-          yield d.dismissImpl();
-        }),
-      };
+      (t as any).clickL = dismissingClick(d.itemsL, i);
       addUnattachedView(col, t);
     }
   }
   if (d.posText || d.negText || d.neutText) {
-    const row = new JLinearLayout();
+    const row = inherit(new JLinearLayout());
     row.orientation = 0;
     row.gravity = 5 | 16;
-    row.ctx = d.jctx; row.jres = col.jres; row.theme = col.theme;
     row.padL = row.padR = device.dp(12); row.padT = row.padB = device.dp(4);
     row.lp = lpFill();
     const mkBtn = (text: string, which: number, l: unknown) => {
-      const b = new JButton();
-      b.ctx = d.jctx; b.jres = col.jres; b.theme = col.theme;
+      const b = inherit(new JButton());
       b.text = text.toUpperCase();
       b.paintT.textSize = device.dp(15);
       b.paintT.tf = tfMedium;
@@ -444,12 +438,7 @@ async function buildAlertContent(d: JAlertDialog) {
       const lp = new JLinearLP();
       lp.width = -2; lp.height = -2;
       b.lp = lp;
-      (b as any).clickL = {
-        [mangleMethod("onClick", "(Landroid/view/View;)V")]: driven(function* (): Gen {
-          if (l) yield vcall(l, "onClick", "(Landroid/content/DialogInterface;I)V", d, which);
-          yield d.dismissImpl();
-        }),
-      };
+      (b as any).clickL = dismissingClick(l, which);
       d.buttons.set(which, b);
       addUnattachedView(row, b);
     };
@@ -543,13 +532,8 @@ builderMethods["setAdapter(Landroid/widget/ListAdapter;Landroid/content/DialogIn
 rt.register({ name: "android/app/AlertDialog$Builder", ctor: JAlertBuilder, methods: builderMethods });
 rt.register({ name: "android/app/ProgressDialog", ctor: class extends JAlertDialog {}, sup: "android/app/AlertDialog",
   methods: {
-    "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": () => {
-      const i = rt.link("android/window/OnBackInvokedDispatcher");
-      return new i.ctor();
-    },
     ...alertMethods,
-    "setIndeterminate(Z)V": () => {},
-    "setProgressStyle(I)V": () => {},
+    ...noops("setIndeterminate(Z)V", "setProgressStyle(I)V"),
     "static show(Landroid/content/Context;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/app/ProgressDialog;":
       driven(function* (c: any, t: unknown, m: unknown): Gen {
         const d = rt.make("android/app/ProgressDialog");

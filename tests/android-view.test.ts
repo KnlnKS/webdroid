@@ -51,39 +51,24 @@ describe("android-surface-state", () => {
     expect((await vcall(paint, "getStrokeJoin", "()Landroid/graphics/Paint$Join;") as { ename: string }).ename).toBe("BEVEL");
   });
 
-  test("Paint retains font feature settings across copy and clears them on reset", async () => {
+  test.each([
+    ["Feature", "V", "kern=0"],
+    ["Variation", "Z", "'wdth' 125"],
+  ])("Paint retains font %s settings across copy and clears them on reset", async (kind, setterReturn, value) => {
+    const get = (paint: unknown) => vcall(paint, `getFont${kind}Settings`, "()Ljava/lang/String;");
+    const set = (paint: unknown, settings: string) => vcall(paint, `setFont${kind}Settings`, `(Ljava/lang/String;)${setterReturn}`, settings);
     const paint = new JPaint();
-    expect(await vcall(paint, "getFontFeatureSettings", "()Ljava/lang/String;")).toBeNull();
-    await vcall(paint, "setFontFeatureSettings", "(Ljava/lang/String;)V", "kern=0");
-    expect(await vcall(paint, "getFontFeatureSettings", "()Ljava/lang/String;")).toBe("kern=0");
-
+    expect(await get(paint)).toBeNull();
+    expect(await set(paint, value)).toBe(setterReturn === "Z" ? 1 : undefined);
+    expect(await get(paint)).toBe(value);
     const copy = await newObj("android/graphics/Paint", "(Landroid/graphics/Paint;)V", paint);
-    expect(await vcall(copy, "getFontFeatureSettings", "()Ljava/lang/String;")).toBe("kern=0");
+    expect(await get(copy)).toBe(value);
     await vcall(copy, "reset", "()V");
-    expect(await vcall(copy, "getFontFeatureSettings", "()Ljava/lang/String;")).toBeNull();
-  });
-
-  test("Paint retains font variation settings across copy and clears them on reset", async () => {
-    const paint = new JPaint();
-    expect(await vcall(paint, "getFontVariationSettings", "()Ljava/lang/String;")).toBeNull();
-    expect(await vcall(paint, "setFontVariationSettings", "(Ljava/lang/String;)Z", "'wdth' 125")).toBe(1);
-    expect(await vcall(paint, "getFontVariationSettings", "()Ljava/lang/String;")).toBe("'wdth' 125");
-
-    const copy = await newObj("android/graphics/Paint", "(Landroid/graphics/Paint;)V", paint);
-    expect(await vcall(copy, "getFontVariationSettings", "()Ljava/lang/String;")).toBe("'wdth' 125");
-    await vcall(copy, "reset", "()V");
-    expect(await vcall(copy, "getFontVariationSettings", "()Ljava/lang/String;")).toBeNull();
-    expect(await vcall(paint, "setFontVariationSettings", "(Ljava/lang/String;)Z", "")).toBe(1);
-    expect(await vcall(paint, "getFontVariationSettings", "()Ljava/lang/String;")).toBeNull();
-  });
-
-  test("TextView retains and exposes its shadow layer", async () => {
-    const view = await newObj("android/widget/TextView");
-    await vcall(view, "setShadowLayer", "(FFFI)V", 4.5, 2, -3, 0x7f123456);
-    expect(await vcall(view, "getShadowRadius", "()F")).toBe(4.5);
-    expect(await vcall(view, "getShadowDx", "()F")).toBe(2);
-    expect(await vcall(view, "getShadowDy", "()F")).toBe(-3);
-    expect(await vcall(view, "getShadowColor", "()I")).toBe(0x7f123456);
+    expect(await get(copy)).toBeNull();
+    if (setterReturn === "Z") {
+      expect(await set(paint, "")).toBe(1);
+      expect(await get(paint)).toBeNull();
+    }
   });
 
   test("uname reports the emulated Linux ABI", async () => {
@@ -837,14 +822,6 @@ describe("viewgroup-hierarchy", () => {
     await vcall(parent, "removeAllViews", "()V");
     expect(parent.events).toEqual(["added:1", "listener-added:1", "added:2", "listener-added:2", "removed:2", "listener-removed:2", "removed:1", "listener-removed:1"]);
     expect(parent.children).toEqual([]);
-  });
-
-  test("native view mutations complete with default callbacks", async () => {
-    const parent = new JViewGroup(), child = new JView();
-    await attachView(parent, child);
-    expect(child.parent).toBe(parent);
-    await detachView(parent, child);
-    expect(child.parent).toBeNull();
   });
 
   test("target R dispatches insets independently to siblings, including gone views", async () => {

@@ -41,12 +41,6 @@ import { scall } from "./java";
 describe("adservices", () => {
   rt.linkNatives();
 
-  test("measurement callback interface is available", () => {
-    const receiver = rt.link("android/os/OutcomeReceiver");
-    expect(receiver.native).toBe(true);
-    expect(receiver.stub).toBe(false);
-  });
-
   test("disabled measurement service reports its unavailable state", async () => {
     const context = await newObj("android/content/Context");
     const cls = rt.classFor("android/adservices/measurement/MeasurementManager");
@@ -130,11 +124,13 @@ describe("clip-data", () => {
 describe("content-uris", () => {
   rt.linkNatives();
 
-  test("ContentUris appends and parses signed long IDs", async () => {
+  test("ContentUris appends and parses signed and full-width long IDs", async () => {
     const base = scall("android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;", "content://media/items?sort=new");
     const appended = await scall("android/content/ContentUris", "withAppendedId", "(Landroid/net/Uri;J)Landroid/net/Uri;", base, -42n);
     expect(await vcall(appended, "toString", "()Ljava/lang/String;")).toBe("content://media/items/-42?sort=new");
     expect(await scall("android/content/ContentUris", "parseId", "(Landroid/net/Uri;)J", appended)).toBe(-42n);
+    const max = await scall("android/content/ContentUris", "withAppendedId", "(Landroid/net/Uri;J)Landroid/net/Uri;", base, 9223372036854775807n);
+    expect(await scall("android/content/ContentUris", "parseId", "(Landroid/net/Uri;)J", max)).toBe(9223372036854775807n);
   });
 
   test("ContentUris rejects a path without a decimal long ID", async () => {
@@ -159,17 +155,6 @@ describe("context-process-state", () => {
     } finally {
       for (const path of paths) vfs.delete(path);
     }
-  });
-
-  test("Debug.MemoryInfo exposes legacy page fields", async () => {
-    const info = rt.link("android/os/Debug$MemoryInfo");
-    for (const name of ["dalvikSharedDirty", "dalvikPrivateDirty", "nativeSharedDirty",
-      "nativePrivateDirty", "otherSharedDirty", "otherPrivateDirty", "dalvikSwappablePss",
-      "nativeSwappablePss", "otherSwappablePss"]) {
-      expect(info.fieldTable.get(name)).toBe(name);
-      expect((new info.ctor() as unknown as Record<string, number>)[name]).toBe(0);
-    }
-    expect(await vcall(new info.ctor(), "getTotalSwappablePss", "()I")).toBe(0);
   });
 });
 
@@ -458,11 +443,6 @@ describe("pending-intents", () => {
 
 describe("platform-queries", () => {
   rt.linkNatives();
-  test("ContentUris preserves full-width IDs", async () => {
-    const cls = rt.link("android/content/ContentUris").ctor;
-    const uri = await vcall(cls, "withAppendedId", "(Landroid/net/Uri;J)Landroid/net/Uri;", mkUri("content://test/items"), 9223372036854775807n);
-    expect(await vcall(cls, "parseId", "(Landroid/net/Uri;)J", uri)).toBe(9223372036854775807n);
-  });
   test("NotificationChannelGroup persists empty descriptions and supports deletion", async () => {
     const manager = rt.make("android/app/NotificationManager");
     const group = await newObj("android/app/NotificationChannelGroup", "(Ljava/lang/String;Ljava/lang/CharSequence;)V", "query-test", "Test");

@@ -17,6 +17,8 @@ import { BytesFile } from "../src/shell/lazyfile";
 import { mkIter } from "../src/jvm/natives/jutil";
 import { scall } from "./java";
 
+rt.linkNatives();
+
 describe("android-pfd", () => {
   test("document descriptors share seekable writes and commit on last close", async () => {
     rt.link("android/os/ParcelFileDescriptor");
@@ -44,7 +46,6 @@ describe("android-pfd", () => {
 });
 
 describe("atomicfile", () => {
-  rt.linkNatives();
   const make = (path: string) => newObj("android/util/AtomicFile", "(Ljava/io/File;)V", mkFile(path));
   const write = async (file: unknown, text: string) => {
     const stream = await vcall(file, "startWrite", "()Ljava/io/FileOutputStream;");
@@ -80,8 +81,6 @@ describe("atomicfile", () => {
 });
 
 describe("file-descriptor", () => {
-  rt.linkNatives();
-
   const FD = "()Ljava/io/FileDescriptor;";
 
   test("a stream over a RandomAccessFile's descriptor writes at the file's shared pointer", async () => {
@@ -141,7 +140,6 @@ describe("file-descriptor", () => {
 });
 
 describe("file-input-descriptor", () => {
-  rt.linkNatives();
   async function rejectsJava(value: Promise<unknown>, name: string) {
     const error = await value.then(() => null, error => error);
     expect(rt.iof(error, name)).toBe(1);
@@ -249,8 +247,6 @@ describe("file-input-descriptor", () => {
 });
 
 describe("file-order", () => {
-  rt.linkNatives();
-
   test("File natural ordering sorts paths case-sensitively and collapses equal paths", async () => {
     const files = await newObj("java/util/TreeSet");
     for (const path of ["/cache/z", "/cache/a", "/cache/Z", "/cache/a"])
@@ -344,8 +340,6 @@ describe("input-stream-wrapping", () => {
 });
 
 describe("parcel-file", () => {
-  rt.linkNatives();
-
   test("byte-backed descriptors have native storage and duplicates outlive the original", async () => {
     const pfd = mkPfd(Uint8Array.of(1, 2, 3), null);
     const fd = await vcall(pfd, "getFd", "()I");
@@ -384,7 +378,6 @@ describe("parcel-file", () => {
 });
 
 describe("path-copy", () => {
-  rt.linkNatives();
   test("path copies retain contours and fill rules without sharing mutable geometry", async () => {
     const source = rt.make("android/graphics/Path") as JPath;
     await vcall(source, "moveTo", "(FF)V", 10, 20);
@@ -453,8 +446,6 @@ describe("path-copy", () => {
 });
 
 describe("procfs", () => {
-  rt.linkNatives();
-
   test("Java and native-facing procfs expose the current process cmdline", async () => {
     setProcessIdentity(2468, 10001);
     setProcessName("com.example.app");
@@ -483,8 +474,6 @@ describe("procfs", () => {
 });
 
 describe("pushbackreader", () => {
-  rt.linkNatives();
-
   test("PushbackReader replays characters in order and enforces capacity", async () => {
     const source = await newObj("java/io/StringReader", "(Ljava/lang/String;)V", "abcd");
     const reader = await newObj("java/io/PushbackReader", "(Ljava/io/Reader;I)V", source, 2);
@@ -560,8 +549,6 @@ describe("sequence-input", () => {
 });
 
 describe("shared-memory", () => {
-  rt.linkNatives();
-
   test("shared memory maps and parcels its protected bytes", async () => {
     const type = rt.link("android/os/SharedMemory").ctor;
     const shared = await vcall(type, "create", "(Ljava/lang/String;I)Landroid/os/SharedMemory;", "sample", 3);
@@ -596,7 +583,6 @@ describe("string-reader", () => {
 });
 
 describe("zip-output", () => {
-  rt.linkNatives();
   test("ZipOutputStream writes separate readable entries", async () => {
     const output = await newObj("java/io/ByteArrayOutputStream");
     const zip = await newObj("java/util/zip/ZipOutputStream", "(Ljava/io/OutputStream;)V", output);

@@ -2497,11 +2497,11 @@ const sdfToks = (pattern: string) => {
   return toks;
 };
 /** java.util.TimeZone ids name java.time zones; an unknown id reads as GMT, as TimeZone.getTimeZone does */
-export function zoneForId(id: string): JZoneId {
+function zoneForId(id: string): JZoneId {
   try { return zoneOf(id); } catch { return offsetOf(0); }
 }
-export const zoneOffsetMs = (id: string, ms: number) => offsetAt(zoneForId(id), floorDiv(ms, 1000)) * 1000;
-export const zoneStandardOffsetMs = (id: string, ms: number) => standardOffset(zoneForId(id), floorDiv(ms, 1000)) * 1000;
+const zoneOffsetMs = (id: string, ms: number) => offsetAt(zoneForId(id), floorDiv(ms, 1000)) * 1000;
+const zoneStandardOffsetMs = (id: string, ms: number) => standardOffset(zoneForId(id), floorDiv(ms, 1000)) * 1000;
 export function checkSdfPattern(pattern: string): void { sdfToks(pattern); }
 export function formatPattern(pattern: string, ms: number, zoneId = localTz.id, locale: JLocale | null = null): string {
   const zone = zoneForId(zoneId), i = instantOfMs(ms), z = zdtOfEpoch(i.s, i.ns, zone);

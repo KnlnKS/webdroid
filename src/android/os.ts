@@ -385,7 +385,7 @@ export function userHandleForUid(uid: number): JUserHandle {
   return handle;
 }
 /** the kernel thread id of a Java thread: the main thread's is the pid, as on a device */
-export function threadTid(t: JThread): number {
+function threadTid(t: JThread): number {
   return processTid(t, t === mainThread);
 }
 export function setProcessName(name: string): void { PROCESS_NAME = name; procIdentity.name = name; }
@@ -564,7 +564,7 @@ export function bundleGet(b: JBaseBundle, k: string, descriptor: string, fallbac
 }
 /** Every typed value a Bundle carries, by accessor stem: Bundle get/put<stem>, and for the ones
  *  Intent carries, get<stem>Extra with putExtra (put<stem>Extra for the ArrayLists). */
-export const BUNDLE_TYPES: readonly (readonly [string, string])[] = [
+const BUNDLE_TYPES: readonly (readonly [string, string])[] = [
   ...["Boolean", "Byte", "Char", "Short", "Int", "Long", "Float", "Double"].flatMap((t, i) => [[t, "ZBCSIJFD"[i]], [t + "Array", "[" + "ZBCSIJFD"[i]]] as const),
   ["String", "Ljava/lang/String;"], ["CharSequence", "Ljava/lang/CharSequence;"], ["Parcelable", "Landroid/os/Parcelable;"],
   ["Serializable", "Ljava/io/Serializable;"], ["Bundle", "Landroid/os/Bundle;"], ["IBinder", "Landroid/os/IBinder;"],
@@ -746,7 +746,7 @@ rt.register({
   },
 });
 
-export class JParcelFileDescriptor extends JObj {
+class JParcelFileDescriptor extends JObj {
   bytes: Uint8Array = new Uint8Array(0);
   sink: ((b: Uint8Array, closed?: boolean) => unknown) | null = null;
   path = "";
@@ -766,7 +766,7 @@ function pfdFd(p: JParcelFileDescriptor): number {
 }
 /** a java.io stream's descriptor opens its file into the native table when first asked (O_TRUNC
  *  and O_EXCL already happened when the stream opened it) */
-export function descriptorFd(d: JFileDescriptor): number {
+function descriptorFd(d: JFileDescriptor): number {
   if (d.fd < 0 && d.path) d.fd = javaOpenFd(d.path, d.flags & ~0x280);
   return d.fd;
 }
@@ -941,7 +941,7 @@ rt.register({ name: "android/system/StructStatVfs", ctor: JStructStatVfs, fields
 } });
 // ── android.os.storage.StorageManager: the one volume, identified by the platform's default UUID
 let storageUuid: ReturnType<typeof uuidFromString> | null = null;
-export const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
+const uuidDefault = () => storageUuid ??= uuidFromString("41217664-9172-527a-b3d5-edabb50a7d69");
 export const storageEstimate = driven(function* storageEstimate(): Gen<{ total: number; free: number }> {
   const s = new JStatFs();
   yield statFs.call(s, "/data");
@@ -1040,7 +1040,7 @@ export function recordVsync(time: number): boolean {
   dispatchLooperFrames();
   return true;
 }
-export const dispatchVsync = driven(function* dispatchVsync(callback: JObj, time: bigint, presentation: bigint): Gen {
+const dispatchVsync = driven(function* dispatchVsync(callback: JObj, time: bigint, presentation: bigint): Gen {
   rt.link("android/view/Choreographer$FrameData");
   rt.link("android/view/Choreographer$FrameTimeline");
   const data = new JFrameData(), timeline = data.timelines[0];
@@ -1135,7 +1135,7 @@ const MEDIA_SESSION_KEYS = keySet("MEDIA_PLAY MEDIA_PAUSE MEDIA_PLAY_PAUSE MUTE 
   "MEDIA_REWIND MEDIA_RECORD MEDIA_FAST_FORWARD");
 const isGamepadButton = (code: number) => (code >= 96 && code <= 110) || (code >= 188 && code <= 203);
 /** KeyEvent.DispatcherState: which DOWN a target is tracking, so its UP arrives with FLAG_TRACKING */
-export class JKeyDispatcherState extends JObj { downKey = 0; target: unknown = null; }
+class JKeyDispatcherState extends JObj { downKey = 0; target: unknown = null; }
 rt.register({
   name: "android/view/KeyEvent$DispatcherState", ctor: JKeyDispatcherState,
   methods: {

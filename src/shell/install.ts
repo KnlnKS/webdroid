@@ -94,7 +94,7 @@ async function openedApk(source: FileSource): Promise<OpenedApk> {
   return { kind: "resident", source: new BytesFile(bytes), bytes, zip: zipTree(bytes), split, hasManifest: !!manifest };
 }
 
-export async function openInstallSource(source: FileSource): Promise<Install> {
+async function openInstallSource(source: FileSource): Promise<Install> {
   const entries = await centralDirOfSource(source);
   if (entries.has("AndroidManifest.xml")) return openInstall(await readFully(source));
   const apks = [...entries.values()].filter((entry) => entry.name.endsWith(".apk"));

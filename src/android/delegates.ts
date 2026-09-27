@@ -21,7 +21,7 @@ import {
   JCanvas, JBitmap, JRect, canvasMethods, bitmapMethods, setCanvasBitmap, extractBitmapAlpha, colorLongOfArgb, affineFromPoints, CAPS, JOINS,
 } from "./graphics";
 import { newObj } from "../jvm/natives/jlang";
-import { charsToString, floatToIntBits, i8, u8 } from "../jvm/abi";
+import { charsToString, floatToIntBits, i8, u8, jarray } from "../jvm/abi";
 import { JPath, pathBounds, pathIsConvex, pathOffset, pathTransform } from "./path";
 import type { JTextPaint, TLine } from "./text";
 import { breakLines } from "./linebreak";
@@ -30,7 +30,6 @@ import {
   currentResources, T_STR, T_PX, type RV,
 } from "./res";
 import { TV, XE, parseAXMLDoc, StringPool, type XmlDoc, type XmlEvent } from "./axml";
-import { jarray } from "../jvm/abi";
 import { device } from "../shell/config";
 import { BytesFile, type FileSource } from "../shell/lazyfile";
 
@@ -223,8 +222,7 @@ delegate("android/graphics/Typeface", {
   "nativeCreateFromTypefaceWithVariation(JLjava/util/List;)J": (h: bigint) => handle(deref<JTypeface>(h) ?? tfDefault),
   "nativeCreateWeightAlias(JI)J": (h: bigint, weight: number) => {
     const src = deref<JTypeface>(h) ?? tfDefault;
-    const t = mkTypeface(src.family, src.bold, src.italic, weight);
-    return handle(t);
+    return handle(mkTypeface(src.family, src.bold, src.italic, weight));
   },
   "nativeGetStyle(J)I": (h: bigint) => (deref<JTypeface>(h) ?? tfDefault).style(),
   "nativeGetWeight(J)I": (h: bigint) => (deref<JTypeface>(h) ?? tfDefault).weight,
@@ -280,7 +278,7 @@ delegate("android/graphics/Paint", {
   "nGetStrokeCap(J)I": (h: bigint) => Math.max(0, CAPS.indexOf(paint(h).strokeCapN as never)),
   "nSetStrokeJoin(JI)V": (h: bigint, v: number) => { paint(h).strokeJoinN = JOINS[v] ?? "miter"; },
   "nGetStrokeJoin(J)I": (h: bigint) => Math.max(0, JOINS.indexOf(paint(h).strokeJoinN as never)),
-  "nSetStrokeMiter(JF)V": () => {}, "nGetStrokeMiter(J)F": () => 4,
+  ...noops("nSetStrokeMiter(JF)V"), ...stubs(4, "nGetStrokeMiter(J)F"),
 
   // flags: nSetFlags sets the lot, and AOSP also spells one entry point per flag
   "nSetFlags(JI)V": (h: bigint, f: number) => {
@@ -297,9 +295,8 @@ delegate("android/graphics/Paint", {
   "nSetStrikeThruText(JZ)V": flag((p, v) => { p.strikeThru = v; }),
   "nSetFakeBoldText(JZ)V": flag((p, v) => { p.fakeBold = v; }),
   // Canvas2D has no dither, no bitmap filter toggle, no hinting and no linear/subpixel text
-  "nSetDither(JZ)V": () => {}, "nSetFilterBitmap(JZ)V": () => {},
-  "nSetLinearText(JZ)V": () => {}, "nSetSubpixelText(JZ)V": () => {},
-  "nSetHinting(JI)V": () => {}, "nGetHinting(J)I": () => 1,
+  ...noops("nSetDither(JZ)V", "nSetFilterBitmap(JZ)V", "nSetLinearText(JZ)V", "nSetSubpixelText(JZ)V", "nSetHinting(JI)V"),
+  ...stubs(1, "nGetHinting(J)I"),
 
   // effects: each returns the native handle it was given, which is what Paint stores back
   "nSetShader(JJ)J": (h: bigint, sh: bigint) => { paint(h).shaderObj = deref(sh) ?? null; return sh; },
@@ -328,11 +325,11 @@ delegate("android/graphics/Paint", {
   "nGetFontMetricsIntForText(JLjava/lang/String;IIIIZLandroid/graphics/Paint$FontMetricsInt;)V": (h: bigint, _s: string, _a: number, _b: number, _d: number, _e: number, _f: number, fm: Metrics) => fillFontMetrics(paint(h), fm, true),
 
   "nGetTextAdvances(J[CIIIII[FI)F": (h: bigint, c: Uint16Array, i: number, n: number, _ci: number, _cc: number, _f: number, adv: Float32Array | null, ai: number) =>
-    advanceRun(paint(h), chars(c, i, n), adv, ai),
+    advanceRun(paint(h), charsToString(c, i, n), adv, ai),
   "nGetTextAdvances(JLjava/lang/String;IIIII[FI)F": (h: bigint, s: string, a: number, b: number, _ci: number, _cc: number, _f: number, adv: Float32Array | null, ai: number) =>
     advanceRun(paint(h), s.slice(a, b), adv, ai),
   "nGetRunAdvance(J[CIIIIZI)F": (h: bigint, c: Uint16Array, start: number, end: number, _cs: number, _ce: number, _rtl: number, offset: number) =>
-    measureText(paint(h), chars(c, start, Math.max(0, Math.min(offset, end) - start))),
+    measureText(paint(h), charsToString(c, start, Math.max(0, Math.min(offset, end) - start))),
   "nGetRunCharacterAdvance(J[CIIIIZI[FILandroid/graphics/RectF;)F": (h: bigint, c: Uint16Array, start: number, end: number, _cs: number, _ce: number, _rtl: number, offset: number, adv: Float32Array | null, ai: number) =>
     runCharacterAdvance(paint(h), c, start, end, offset, adv, ai),
   "nGetRunCharacterAdvance(J[CIIIIZI[FILandroid/graphics/RectF;Landroid/graphics/Paint$RunInfo;)F": (h: bigint, c: Uint16Array, start: number, end: number, _cs: number, _ce: number, _rtl: number, offset: number, adv: Float32Array | null, ai: number) =>
@@ -341,7 +338,7 @@ delegate("android/graphics/Paint", {
     const p = paint(h);
     let w = 0;
     for (let i = start; i < end; i++) {
-      const cw = measureText(p, chars(c, i, 1));
+      const cw = measureText(p, charsToString(c, i, 1));
       if (w + cw / 2 > advance) return i;
       w += cw;
     }
@@ -353,9 +350,9 @@ delegate("android/graphics/Paint", {
   "nBreakText(JLjava/lang/String;ZFI[F)I": (h: bigint, s: string, forwards: number, maxWidth: number, _bidi: number, measured: Float32Array | null) =>
     breakText(paint(h), s, !!forwards, maxWidth, measured),
   "nBreakText(J[CIIFI[F)I": (h: bigint, c: Uint16Array, i: number, n: number, maxWidth: number, _bidi: number, measured: Float32Array | null) =>
-    breakText(paint(h), chars(c, i, Math.abs(n)), n >= 0, maxWidth, measured),
+    breakText(paint(h), charsToString(c, i, Math.abs(n)), n >= 0, maxWidth, measured),
   "nGetCharArrayBounds(J[CIIILandroid/graphics/Rect;)V": (h: bigint, c: Uint16Array, i: number, n: number, _bidi: number, r: Rect) =>
-    textBounds(paint(h), chars(c, i, n), r),
+    textBounds(paint(h), charsToString(c, i, n), r),
   "nGetStringBounds(JLjava/lang/String;IIILandroid/graphics/Rect;)V": (h: bigint, s: string, a: number, b: number, _bidi: number, r: Rect) =>
     textBounds(paint(h), s.slice(a, b), r),
   "nEqualsForTextMeasurement(JJ)Z": (a: bigint, b: bigint) => {
@@ -372,27 +369,23 @@ delegate("android/graphics/Paint", {
   },
 
   // state we accept and do not act on: one font, one locale, no hyphenation
-  "nSetElegantTextHeight(JI)V": () => {}, "nGetElegantTextHeight(J)I": () => 0,
-  "nSetStartHyphenEdit(JI)V": () => {}, "nGetStartHyphenEdit(J)I": () => 0,
-  "nSetEndHyphenEdit(JI)V": () => {}, "nGetEndHyphenEdit(J)I": () => 0,
-  "nSetWordSpacing(JF)V": () => {}, "nGetWordSpacing(J)F": () => 0,
-  "nSetTextScaleX(JF)V": () => {}, "nGetTextScaleX(J)F": () => 1,
-  "nSetTextSkewX(JF)V": () => {}, "nGetTextSkewX(J)F": () => 0,
-  ...noops("nSetXfermode(JI)V", "nSetShadowLayer(JFFFJJ)V", "nGetTextPath(JILjava/lang/String;IIFFJ)V",
+  ...noops("nSetElegantTextHeight(JI)V", "nSetStartHyphenEdit(JI)V", "nSetEndHyphenEdit(JI)V",
+    "nSetWordSpacing(JF)V", "nSetTextScaleX(JF)V", "nSetTextSkewX(JF)V",
+    "nSetXfermode(JI)V", "nSetShadowLayer(JFFFJJ)V", "nGetTextPath(JILjava/lang/String;IIFFJ)V",
     "nSetTextLocalesByMinikinLocaleListId(JI)V", "nSetFontFeatureSettings(JLjava/lang/String;)V"),
-  ...stubs(0, "nHasShadowLayer(J)Z", "nSetTextLocales(JLjava/lang/String;)I"),
-  ...stubs(1, "nHasGlyph(JILjava/lang/String;)Z"),
+  ...stubs(0, "nGetElegantTextHeight(J)I", "nGetStartHyphenEdit(J)I", "nGetEndHyphenEdit(J)I",
+    "nGetWordSpacing(J)F", "nGetTextSkewX(J)F", "nHasShadowLayer(J)Z", "nSetTextLocales(JLjava/lang/String;)I"),
+  ...stubs(1, "nGetTextScaleX(J)F", "nHasGlyph(JILjava/lang/String;)Z"),
 });
 
 interface Metrics { top: number; ascent: number; descent: number; bottom: number; leading: number }
-const chars = (c: Uint16Array, off: number, n: number) => charsToString(c, off, n);
 const cursor = (offset: number, opt: number) =>
   opt === 0 || opt === 2 ? Math.max(0, offset - 1) : opt === 1 || opt === 3 ? offset + 1 : offset;
 
 function runCharacterAdvance(p: JPaint, c: Uint16Array, start: number, end: number, offset: number, adv: Float32Array | null, ai: number): number {
   let total = 0;
   for (let i = start; i < end; i++) {
-    const w = measureText(p, chars(c, i, 1));
+    const w = measureText(p, charsToString(c, i, 1));
     if (adv) adv[ai + i - start] = w;
     if (i < offset) total += w;
   }
@@ -429,6 +422,8 @@ function textBounds(p: JPaint, s: string, r: Rect) {
 
 // ── android.graphics.Path ──────────────────────────────────────────────────────────────
 const path = (h: bigint) => deref<JPath>(h);
+const copyOps = (h: bigint) => path(h).ops.map((op) => [...op] as typeof op);
+const clearPath = (h: bigint) => { const p = path(h); p.ops = []; p.dirty = true; };
 
 /** AOSP's Path$Direction is CW=0/CCW=1; ours carries the same ordinal through the op list */
 delegate("android/graphics/Path", {
@@ -439,8 +434,8 @@ delegate("android/graphics/Path", {
     return handle(p);
   },
   "nGetFinalizer()J": () => FINALIZER,
-  "nReset(J)V": (h: bigint) => { const p = path(h); p.ops = []; p.dirty = true; },
-  "nRewind(J)V": (h: bigint) => { const p = path(h); p.ops = []; p.dirty = true; },
+  "nReset(J)V": clearPath,
+  "nRewind(J)V": clearPath,
   "nSet(JJ)V": (h: bigint, s: bigint) => { const p = path(h); p.ops = path(s).ops.slice(); p.dirty = true; },
   "nIsEmpty(J)Z": (h: bigint) => (path(h).ops.length ? 0 : 1),
   "nGetGenerationID(J)I": (h: bigint) => path(h).ops.length,
@@ -487,7 +482,7 @@ delegate("android/graphics/Path", {
   "nAddPath(JJ)V": (h: bigint, o: bigint) => { const p = path(h); p.ops.push(...path(o).ops); p.dirty = true; },
   "nAddPath(JJFF)V": (h: bigint, o: bigint, dx: number, dy: number) => {
     const add = new JPath();
-    add.ops = path(o).ops.map((op) => [...op] as typeof op);
+    add.ops = copyOps(o);
     pathOffset(add, dx, dy);
     const p = path(h);
     p.ops.push(...add.ops);
@@ -495,7 +490,7 @@ delegate("android/graphics/Path", {
   },
   "nAddPath(JJJ)V": (h: bigint, o: bigint, mat: bigint) => {
     const add = new JPath();
-    add.ops = path(o).ops.map((op) => [...op] as typeof op);
+    add.ops = copyOps(o);
     pathTransform(add, affine(deref<Mat>(mat)));
     const p = path(h);
     p.ops.push(...add.ops);
@@ -506,7 +501,7 @@ delegate("android/graphics/Path", {
   "nTransform(JJ)V": (h: bigint, mat: bigint) => pathTransform(path(h), affine(deref<Mat>(mat))),
   "nTransform(JJJ)V": (h: bigint, mat: bigint, dst: bigint) => {
     const d = path(dst);
-    d.ops = path(h).ops.map((op) => [...op] as typeof op);
+    d.ops = copyOps(h);
     pathTransform(d, affine(deref<Mat>(mat)));
   },
   "nComputeBounds(JLandroid/graphics/RectF;)V": (h: bigint, r: Rect) => pathBounds(path(h), r),
@@ -532,17 +527,18 @@ const affine = (m: Mat): number[] => [m[0], m[3], m[1], m[4], m[2], m[5]];
 // Every one of these routes into canvasMethods, which is the table our own Canvas native
 // already uses: one copy of each draw body, reached under two sets of names.
 const canvas = (h: bigint) => deref<JCanvas>(h);
-type CanvasFn = (this: JCanvas, ...a: never[]) => unknown;
-/** call one of Canvas's own method bodies by its Java descriptor */
-function cm(desc: string): CanvasFn {
-  const fn = canvasMethods?.[desc];
-  if (typeof fn !== "function") throw new Error(`delegates: no canvasMethods[${desc}]`);
-  return fn as CanvasFn;
+/** one of our own native method bodies, by its Java descriptor */
+function specFn<T>(table: Record<string, unknown> | undefined, what: string, desc: string) {
+  const fn = table?.[desc];
+  if (typeof fn !== "function") throw new Error(`delegates: no ${what}[${desc}]`);
+  return fn as (this: T, ...a: never[]) => unknown;
 }
+const cm = (desc: string) => specFn<JCanvas>(canvasMethods, "canvasMethods", desc);
 const on = (desc: string) => {
   const fn = cm(desc);
   return (h: bigint, ...a: unknown[]) => (fn as (...x: unknown[]) => unknown).apply(canvas(h), a);
 };
+const optPaint = (pt: bigint) => (pt ? paint(pt) : null);
 /** the trailing paint handle every nDraw* carries has to become the paint itself */
 const withPaint = (desc: string, arity: number) => {
   const fn = cm(desc);
@@ -556,7 +552,6 @@ delegate("android/graphics/Canvas", {
   "nSetBitmap(JJ)V": (h: bigint, b: bigint) => { replace(h, bitmapCanvas(deref<JBitmap>(b))); },
   "nGetWidth(J)I": (h: bigint) => canvas(h).w,
   "nGetHeight(J)I": (h: bigint) => canvas(h).h,
-  "nFreeCaches()V": () => {}, "nFreeTextLayoutCaches()V": () => {},
 
   "nSave(JI)I": on("save()I"),
   "nRestore(J)Z": (h: bigint) => { const c = canvas(h); if (c.saveCount <= 1) return 0; on("restore()V")(h); return 1; },
@@ -588,7 +583,7 @@ delegate("android/graphics/Canvas", {
   },
   "nGetClipBounds(JLandroid/graphics/Rect;)Z": on("getClipBounds(Landroid/graphics/Rect;)Z"),
   ...stubs(0, "nIsOpaque(J)Z", "nIsHighContrastText(J)Z", "nQuickReject(JFFFF)Z", "nQuickReject(JJ)Z"),
-  ...noops("nSetCompatibilityVersion(I)V", "nSetDrawFilter(JJ)V", "nClipShader(JJI)V"),
+  ...noops("nSetCompatibilityVersion(I)V", "nSetDrawFilter(JJ)V", "nClipShader(JJI)V", "nFreeCaches()V", "nFreeTextLayoutCaches()V"),
 });
 
 const drawText = (h: bigint, s: string, x: number, y: number, pt: bigint) =>
@@ -616,16 +611,16 @@ delegate("android/graphics/BaseCanvas", {
   "nDrawTextRun(J[CIIIIFFZJJ)V": (h: bigint, c: Uint16Array, i: number, n: number, _cs: number, _cc: number, x: number, y: number, _rtl: number, pt: bigint) =>
     drawText(h, charsToString(c, i, n), x, y, pt),
   "nDrawBitmap(JJFFJIII)V": (h: bigint, b: bigint, x: number, y: number, pt: bigint) =>
-    cm("drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V").call(canvas(h), deref<JBitmap>(b) as never, x as never, y as never, (pt ? paint(pt) : null) as never),
+    cm("drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V").call(canvas(h), deref<JBitmap>(b) as never, x as never, y as never, optPaint(pt) as never),
   "nDrawBitmap(JJFFFFFFFFJII)V": (h: bigint, b: bigint, sl: number, st: number, sr: number, sb: number, dl: number, dt: number, dr: number, db: number, pt: bigint) =>
     cm("drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V")
-      .call(canvas(h), deref<JBitmap>(b) as never, rect(sl, st, sr, sb) as never, rect(dl, dt, dr, db) as never, (pt ? paint(pt) : null) as never),
+      .call(canvas(h), deref<JBitmap>(b) as never, rect(sl, st, sr, sb) as never, rect(dl, dt, dr, db) as never, optPaint(pt) as never),
   "nDrawBitmapMatrix(JJJJ)V": (h: bigint, b: bigint, m: bigint, pt: bigint) => {
     const c = canvas(h);
     c.ctx.save();
     applyMatrix(c, deref<Mat>(m), false);
     cm("drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V")
-      .call(c, deref<JBitmap>(b) as never, 0 as never, 0 as never, (pt ? paint(pt) : null) as never);
+      .call(c, deref<JBitmap>(b) as never, 0 as never, 0 as never, optPaint(pt) as never);
     c.ctx.restore();
   },
   // a colour array rather than a Bitmap: put the pixels in one and draw that
@@ -640,7 +635,7 @@ delegate("android/graphics/BaseCanvas", {
       }
     }
     b.ctx.putImageData(img, 0, 0);
-    cm("drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V").call(canvas(h), b as never, x as never, y as never, (pt ? paint(pt) : null) as never);
+    cm("drawBitmap(Landroid/graphics/Bitmap;FFLandroid/graphics/Paint;)V").call(canvas(h), b as never, x as never, y as never, optPaint(pt) as never);
   },
   // the ring between two round rects, which is how a ripple's bounded edge is drawn: the
   // outer filled with the inner taken out of it
@@ -652,16 +647,15 @@ delegate("android/graphics/BaseCanvas", {
   // resolves; from here it is the bitmap scaled into the destination
   "nDrawNinePatch(JJJFFFFJII)V": (h: bigint, b: bigint, _chunk: bigint, l: number, t: number, r: number, bo: number, pt: bigint) =>
     cm("drawBitmap(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V")
-      .call(canvas(h), deref<JBitmap>(b) as never, null as never, rect(l, t, r, bo) as never, (pt ? paint(pt) : null) as never),
+      .call(canvas(h), deref<JBitmap>(b) as never, null as never, rect(l, t, r, bo) as never, optPaint(pt) as never),
   // positioned glyph ids, which only a shaping engine produces: there is none behind
   // Canvas2D, and the text entry points above are what the framework actually uses
   "nDrawGlyphs(J[I[FIIIJJ)V": () => {},
   // text on a path, meshes, vertices and regions have no Canvas2D form; a hole punched in a
   // surface is a compositor operation there is no surface for
-  "nDrawTextOnPath(J[CIIJFFIJ)V": () => {}, "nDrawTextOnPath(JLjava/lang/String;JFFIJ)V": () => {},
-  "nDrawBitmapMesh(JJII[FI[IIJ)V": () => {}, "nDrawMesh(JJIJ)V": () => {},
-  "nDrawVertices(JII[FI[FI[II[SIIJ)V": () => {}, "nDrawRegion(JJJ)V": () => {},
-  "nPunchHole(JFFFFFFF)V": () => {},
+  ...noops("nDrawTextOnPath(J[CIIJFFIJ)V", "nDrawTextOnPath(JLjava/lang/String;JFFIJ)V",
+    "nDrawBitmapMesh(JJII[FI[IIJ)V", "nDrawMesh(JJIJ)V", "nDrawVertices(JII[FI[FI[II[SIIJ)V",
+    "nDrawRegion(JJJ)V", "nPunchHole(JFFFFFFF)V"),
 });
 
 /** a Canvas over a bitmap's backing context, as Canvas(Bitmap) makes one */
@@ -695,8 +689,8 @@ function applyMatrix(c: JCanvas, m: Mat, replace: boolean) {
 // and computeLineBreaks' own bytecode, off the register moves into each range invoke.
 //
 // The breaking itself is linebreak.ts's breakLines, the body JLayout uses, so AOSP's Layout and
-// ours agree by construction rather than by two implementations happening to match. AOSP's
-// balanced and optimal strategies are a later, separate change; this is the greedy one.
+// ours agree by construction rather than by two implementations happening to match. Only the
+// greedy strategy exists; AOSP's balanced and optimal ones are not implemented.
 interface Run { start: number; end: number; paint: JTextPaint }
 interface Meas { text: string; runs: Run[] }
 interface Breaks { lines: TLine[]; asc: number; desc: number }
@@ -776,8 +770,7 @@ delegate("android/os/SystemProperties", {
   "native_get_boolean(Ljava/lang/String;Z)Z": (_k: string, def: number) => def,
   "native_get_int(Ljava/lang/String;I)I": (_k: string, def: number) => def,
   "native_get_long(Ljava/lang/String;J)J": (_k: string, def: bigint) => def,
-  "native_set(Ljava/lang/String;Ljava/lang/String;)V": () => {},
-  "native_report_sysprop_change()V": () => {},
+  ...noops("native_set(Ljava/lang/String;Ljava/lang/String;)V", "native_report_sysprop_change()V"),
 });
 
 // ── android.graphics.Bitmap ────────────────────────────────────────────────────────────
@@ -787,12 +780,7 @@ delegate("android/os/SystemProperties", {
 //
 // JBitmap.config uses AOSP's native config numbering, not Bitmap.Config's ordinal.
 const bmp = (h: bigint) => deref<JBitmap>(h);
-type BitmapFn = (this: JBitmap, ...a: never[]) => unknown;
-function bmf(desc: string): BitmapFn {
-  const fn = bitmapMethods?.[desc];
-  if (typeof fn !== "function") throw new Error(`delegates: no bitmapMethods[${desc}]`);
-  return fn as BitmapFn;
-}
+const bmf = (desc: string) => specFn<JBitmap>(bitmapMethods, "bitmapMethods", desc);
 /** the Java Bitmap around one of ours */
 const wrap = (b: JBitmap) =>
   newObj("android/graphics/Bitmap", "(JIIIZ[BLandroid/graphics/NinePatch$InsetStruct;)V",
@@ -901,8 +889,11 @@ const block = (h: bigint) => deref<Block>(h);
 const state = (h: bigint) => deref<ParseState>(h);
 const mkBlock = (bytes: Uint8Array, res: Resources | null): Block =>
   ({ doc: parseAXMLDoc(bytes, true), res, strings: 0n });
-/** the attribute the element named as its id/class/style, or -1 when it declared none */
-const namedAttr = (st: ParseState, which: "idIdx" | "classIdx" | "styleIdx") => st.ev[which];
+/** the raw string value of the attribute the element named as its id or class, or -1 */
+const namedRaw = (h: bigint, which: "idIdx" | "classIdx") => {
+  const ev = state(h).ev, i = ev[which];
+  return i < 0 ? -1 : ev.raw![i * 3 + 2];
+};
 
 delegate("android/content/res/StringBlock", {
   "nativeCreate([BII)J": (b: Int8Array, off: number, len: number) =>
@@ -952,17 +943,17 @@ delegate("android/content/res/XmlBlock", {
   },
   // id and class are the raw string value of the attribute the element pointed at; style is
   // its resource id, and 0 unless it is one
-  "nativeGetIdAttribute(J)I": (h: bigint) => { const i = namedAttr(state(h), "idIdx"); return i < 0 ? -1 : state(h).ev.raw![i * 3 + 2]; },
-  "nativeGetClassAttribute(J)I": (h: bigint) => { const i = namedAttr(state(h), "classIdx"); return i < 0 ? -1 : state(h).ev.raw![i * 3 + 2]; },
+  "nativeGetIdAttribute(J)I": (h: bigint) => namedRaw(h, "idIdx"),
+  "nativeGetClassAttribute(J)I": (h: bigint) => namedRaw(h, "classIdx"),
   "nativeGetStyleAttribute(J)I": (h: bigint) => {
-    const st = state(h);
-    const a = st.ev.node?.attrs[namedAttr(st, "styleIdx")];
+    const ev = state(h).ev;
+    const a = ev.node?.attrs[ev.styleIdx];
     return a && (a.type === TV.REFERENCE || a.type === TV.ATTRIBUTE) ? a.data : 0;
   },
 });
 
 // ── android.content.res.AssetManager ───────────────────────────────────────────────────
-// B3. The handle is a Resources — the same object our own resource stack reads through, so
+// The handle is a Resources — the same object our own resource stack reads through, so
 // AOSP's Resources/TypedArray/Theme bytecode and ours answer off one arsc.ts.
 //
 // AOSP's TypedArray is a flat int[]: STYLE_NUM_ENTRIES ints per attribute, in the order
@@ -972,14 +963,18 @@ delegate("android/content/res/XmlBlock", {
 const STYLE_NUM_ENTRIES = 7;
 const assets = (h: bigint) => deref<Resources>(h);
 
+/** an RV's (type, data) as AOSP's TypedValue carries them */
+const aospType = (v: RV) => (v.t === T_STR ? TV.STRING : v.t === T_PX ? TV.DIMENSION : v.t);
+// FLOAT is carried decoded here and as bits on the Java side
+const aospData = (v: RV) => (v.t === TV.FLOAT ? floatToIntBits(v.d) : v.d | 0);
+
 /** one attribute's slot in AOSP's TypedArray layout */
 function writeSlot(out: Int32Array, i: number, v: RV | null, srcId: number) {
   const at = i * STYLE_NUM_ENTRIES;
   out.fill(0, at, at + STYLE_NUM_ENTRIES);
   if (!v || v.t === TV.NULL) return;
-  out[at] = v.t === T_STR ? TV.STRING : v.t === T_PX ? TV.DIMENSION : v.t;
-  // FLOAT is carried decoded here and as bits on the Java side
-  out[at + 1] = v.t === TV.FLOAT ? floatToIntBits(v.d) : v.d | 0;
+  out[at] = aospType(v);
+  out[at + 1] = aospData(v);
   out[at + 3] = srcId;
   out[at + 5] = device.densityDpi;
 }
@@ -1125,10 +1120,7 @@ delegate("android/content/res/AssetManager", {
   "nativeList(JLjava/lang/String;)[Ljava/lang/String;": (h: bigint, path: string) => {
     const dir = "assets/" + (path ? path + "/" : "");
     const names = new Set<string>();
-    for (const k of Object.keys(assets(h).zip)) {
-      if (k.startsWith(dir) && k.length > dir.length) names.add(k.slice(dir.length).split("/")[0]);
-    }
-    for (const k of assets(h).lazyEntries.keys()) {
+    for (const k of [...Object.keys(assets(h).zip), ...assets(h).lazyEntries.keys()]) {
       if (k.startsWith(dir) && k.length > dir.length) names.add(k.slice(dir.length).split("/")[0]);
     }
     return jarray([...names].sort(), "Ljava/lang/String;");
@@ -1194,8 +1186,8 @@ function fillTypedValue(res: Resources, tv: TypedValueLike, v: RV | null, srcId:
       return 0;
     }
   }
-  tv.type = v.t === T_STR ? TV.STRING : v.t === T_PX ? TV.DIMENSION : v.t;
-  tv.data = v.t === TV.FLOAT ? floatToIntBits(v.d) : v.d | 0;
+  tv.type = aospType(v);
+  tv.data = aospData(v);
   tv.resourceId = srcId;
   tv.density = device.densityDpi;
   tv.assetCookie = cookieOf(srcId);

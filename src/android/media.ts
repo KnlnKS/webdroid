@@ -1094,7 +1094,7 @@ rt.register({ name: "android/media/MediaCodec$Callback", ctor: class extends JOb
 export class JLogSessionId extends JObj {
   constructor(public id = "") { super(); }
 }
-export const noLogSessionId = new JLogSessionId();
+const noLogSessionId = new JLogSessionId();
 rt.register({ name: "android/media/metrics/LogSessionId", ctor: JLogSessionId, statics: { LOG_SESSION_ID_NONE: noLogSessionId }, methods: {
   "<init>(Ljava/lang/String;)V": function (this: JLogSessionId, id: string) { if (id == null) throw rt.mkThrowable("java/lang/NullPointerException", "id"); this.id = id; },
   "getStringId()Ljava/lang/String;": function (this: JLogSessionId) { return this.id; },

@@ -1,12 +1,10 @@
-import { JObj, rt } from "../jvm/runtime";
+import { JObj, rt, stubs } from "../jvm/runtime";
 
 rt.register({
   name: "android/app/admin/DevicePolicyManager", ctor: class extends JObj {},
   methods: {
-    "getCameraDisabled(Landroid/content/ComponentName;)Z": () => 0,
-    "isAdminActive(Landroid/content/ComponentName;)Z": () => 0,
-    "isDeviceOwnerApp(Ljava/lang/String;)Z": () => 0,
-    "isProfileOwnerApp(Ljava/lang/String;)Z": () => 0,
-    "getActiveAdmins()Ljava/util/List;": () => null,
+    ...stubs(0, "getCameraDisabled(Landroid/content/ComponentName;)Z", "isAdminActive(Landroid/content/ComponentName;)Z",
+      "isDeviceOwnerApp(Ljava/lang/String;)Z", "isProfileOwnerApp(Ljava/lang/String;)Z"),
+    ...stubs(null, "getActiveAdmins()Ljava/util/List;"),
   },
 });

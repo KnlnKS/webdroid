@@ -9,7 +9,7 @@ import { reportUncaught } from "./os";
 
 export type ActivityLifecycleCallback = object;
 type LifecycleOwner = { lifecycleCbs: ActivityLifecycleCallback[] | null };
-export type LifecyclePhase = "Created" | "Started" | "Resumed" | "Paused" | "Stopped" | "Destroyed";
+type LifecyclePhase = "Created" | "Started" | "Resumed" | "Paused" | "Stopped" | "Destroyed";
 
 const phaseBit: Record<LifecyclePhase, number> = {
   Created: 1,

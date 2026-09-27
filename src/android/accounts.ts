@@ -48,9 +48,7 @@ for (const i of ["android/accounts/AccountManagerFuture", "android/accounts/Acco
 let accountStore = new AccountStore(), stopAccountUpdates = () => {};
 export function useAccountStore(store: AccountStore): () => void {
   stopAccountUpdates(); accountStore = store;
-  return stopAccountUpdates = store.watch(() => {
-    for (const l of listeners) void onMain(() => vcall(l, "onAccountsUpdated", "([Landroid/accounts/Account;)V", allAccounts()));
-  });
+  return stopAccountUpdates = store.watch(() => { for (const l of listeners) notifyUpdated(l); });
 }
 useAccountStore(accountStore);
 const accounts = () => accountStore.records;
@@ -70,12 +68,16 @@ const accountArray = (list: StoredAccount[]) => { rt.link("android/accounts/Acco
 const allAccounts = () => accountArray(accounts().filter(s => visible(s)));
 const byType = (type: string | null, pkg = appHost?.pkg ?? "") => accountArray(accounts().filter(s => (type === null || s.type === type) && visible(s, pkg)));
 const listeners = new Set<unknown>();
-function remove(a: JAccount): number {
-  const stored = find(a), i = stored ? accounts().indexOf(stored) : -1;
+const notifyUpdated = (l: unknown) => void onMain(() => vcall(l, "onAccountsUpdated", "([Landroid/accounts/Account;)V", allAccounts()));
+/** drop a stored account; 0 when it is not there */
+function drop(stored: StoredAccount | undefined): number {
+  const i = stored ? accounts().indexOf(stored) : -1;
   if (i < 0) return 0;
   accounts().splice(i, 1); persist();
   return 1;
 }
+/** an account's visibility to `pkg`: its owner's uid always sees it */
+const visibilityFor = (s: StoredAccount, pkg: string) => packages.get(s.owner)?.uid === packages.get(pkg)?.uid ? 1 : s.visibility[pkg] ?? 4;
 
 const unsupported = () => { throw rt.mkThrowable("android/accounts/AuthenticatorException", "Account operation is unavailable"); };
 const boolResult = (b: JBundle) => {
@@ -117,12 +119,19 @@ function authToken(a: JAccount, type: string, options: JBundle | null, activity:
 function removeAccount(a: JAccount, activity: unknown, cb: unknown, handler: JHandler | null, boolean: boolean): JAccountFuture {
   const stored = find(a);
   return requestAccount({ type: a.type, method: "getAccountRemovalAllowed", args: [a], activity, callback: cb, handler, convert: result => {
-    if (!result.map.has("intent") && bundlePrimitive(boolResult(result), "Z", 0)) {
-      const index = stored ? accounts().indexOf(stored) : -1;
-      if (index >= 0) { accounts().splice(index, 1); persist(); }
-    }
+    if (!result.map.has("intent") && bundlePrimitive(boolResult(result), "Z", 0)) drop(stored);
     return boolean ? boolResult(result) : result;
   } });
+}
+
+/** a new password invalidates every token issued under the old one */
+function setPassword(a: JAccount, p: string | null) {
+  const s = find(a);
+  if (s) { s.password = p; s.tokens = Object.create(null); persist(); }
+}
+function addUpdateListener(l: unknown, _h: unknown, now: number) {
+  listeners.add(l);
+  if (now) notifyUpdated(l);
 }
 
 class JAccountManager extends JObj {}
@@ -159,7 +168,7 @@ const methods: NativeSpec["methods"] = {
     persist();
     return 1;
   },
-  [`removeAccountExplicitly(${ACC})Z`]: remove,
+  [`removeAccountExplicitly(${ACC})Z`]: (a: JAccount) => drop(find(a)),
   [`removeAccount(${ACC}${CB}${H})${F}`]: (a: JAccount, cb: unknown, h: JHandler | null) => removeAccount(a, null, cb, h, true),
   [`removeAccount(${ACC}Landroid/app/Activity;${CB}${H})${F}`]: (a: JAccount, act: unknown, cb: unknown, h: JHandler | null) => removeAccount(a, act, cb, h, false),
   [`renameAccount(${ACC}${S}${CB}${H})${F}`]: (a: JAccount, name: string, cb: unknown, h: JHandler | null) => {
@@ -175,8 +184,8 @@ const methods: NativeSpec["methods"] = {
     persist();
   },
   [`getPassword(${ACC})${S}`]: (a: JAccount) => find(a)?.password ?? null,
-  [`setPassword(${ACC}${S})V`]: (a: JAccount, p: string | null) => { const s = find(a); if (s) { s.password = p; s.tokens = Object.create(null); persist(); } },
-  [`clearPassword(${ACC})V`]: (a: JAccount) => { const s = find(a); if (s) { s.password = null; s.tokens = Object.create(null); persist(); } },
+  [`setPassword(${ACC}${S})V`]: setPassword,
+  [`clearPassword(${ACC})V`]: (a: JAccount) => setPassword(a, null),
   [`peekAuthToken(${ACC}${S})${S}`]: (a: JAccount, type: string) => find(a)?.tokens[type] ?? null,
   [`setAuthToken(${ACC}${S}${S})V`]: (a: JAccount, type: string, token: string | null) => {
     const s = find(a);
@@ -208,14 +217,8 @@ const methods: NativeSpec["methods"] = {
   [`editProperties(${S}Landroid/app/Activity;${CB}${H})${F}`]: (type: string, activity: unknown, callback: unknown, handler: JHandler | null) =>
     requestAccount({ type, method: "editProperties", args: [type], activity, callback, handler }),
   "getAuthenticatorTypes()[Landroid/accounts/AuthenticatorDescription;": () => jarray(authenticators(), "Landroid/accounts/AuthenticatorDescription;"),
-  [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z)V`]: (l: unknown, _h: unknown, now: number) => {
-    listeners.add(l);
-    if (now) void onMain(() => vcall(l, "onAccountsUpdated", "([Landroid/accounts/Account;)V", allAccounts()));
-  },
-  [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z[${S})V`]: (l: unknown, _h: unknown, now: number) => {
-    listeners.add(l);
-    if (now) void onMain(() => vcall(l, "onAccountsUpdated", "([Landroid/accounts/Account;)V", allAccounts()));
-  },
+  [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z)V`]: addUpdateListener,
+  [`addOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;${H}Z[${S})V`]: addUpdateListener,
   "removeOnAccountsUpdatedListener(Landroid/accounts/OnAccountsUpdateListener;)V": (l: unknown) => { listeners.delete(l); },
   [`setAccountVisibility(${ACC}${S}I)Z`]: (a: JAccount, pkg: string, visibility: number) => {
     if (visibility < 0 || visibility > 4) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid account visibility");
@@ -226,13 +229,12 @@ const methods: NativeSpec["methods"] = {
   },
   [`getAccountVisibility(${ACC}${S})I`]: (a: JAccount, pkg: string) => {
     const stored = find(a);
-    return stored ? packages.get(stored.owner)?.uid === packages.get(pkg)?.uid ? 1 : stored.visibility[pkg] ?? 4 : 0;
+    return stored ? visibilityFor(stored, pkg) : 0;
   },
   [`getAccountsAndVisibilityForPackage(${S}${S})Ljava/util/Map;`]: driven(function* (pkg: string, type: string | null): Gen {
     const result = yield newObj("java/util/HashMap");
     for (const account of accounts()) if (owns(account) && (type === null || account.type === type)) {
-      const visibility = packages.get(account.owner)?.uid === packages.get(pkg)?.uid ? 1 : account.visibility[pkg] ?? 4;
-      yield vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", toJ(account), boxInt(visibility));
+      yield vcall(result, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", toJ(account), boxInt(visibilityFor(account, pkg)));
     }
     return result;
   }),

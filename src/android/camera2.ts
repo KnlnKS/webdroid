@@ -122,16 +122,12 @@ rt.register({
     "registerAvailabilityCallback(Landroid/hardware/camera2/CameraManager$AvailabilityCallback;Landroid/os/Handler;)V": (_callback: unknown, handler: unknown) => {
       if (handler == null && !curThread.looper) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No handler given, and current thread has no looper");
     },
-    "unregisterAvailabilityCallback(Landroid/hardware/camera2/CameraManager$AvailabilityCallback;)V": () => {},
+    ...noops("unregisterAvailabilityCallback(Landroid/hardware/camera2/CameraManager$AvailabilityCallback;)V"),
     "getConcurrentCameraIds()Ljava/util/Set;": () => newStringSet([]),
-    "getCameraCharacteristics(Ljava/lang/String;)Landroid/hardware/camera2/CameraCharacteristics;": () => {
-      throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown camera ID");
-    },
-    "getCameraExtensionCharacteristics(Ljava/lang/String;)Landroid/hardware/camera2/CameraExtensionCharacteristics;": () => {
-      throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown camera ID");
-    },
-    "openCamera(Ljava/lang/String;Landroid/hardware/camera2/CameraDevice$StateCallback;Landroid/os/Handler;)V": () => {
-      throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown camera ID");
-    },
+    // every id names a camera the empty topology does not have
+    ...Object.fromEntries(["getCameraCharacteristics(Ljava/lang/String;)Landroid/hardware/camera2/CameraCharacteristics;",
+      "getCameraExtensionCharacteristics(Ljava/lang/String;)Landroid/hardware/camera2/CameraExtensionCharacteristics;",
+      "openCamera(Ljava/lang/String;Landroid/hardware/camera2/CameraDevice$StateCallback;Landroid/os/Handler;)V",
+    ].map((sig) => [sig, () => { throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown camera ID"); }])),
   },
 });

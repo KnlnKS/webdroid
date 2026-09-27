@@ -73,7 +73,7 @@ class ShaderProgram {
     return this.cached.pattern;
   }
 }
-export class JRuntimeShader extends JShader {
+class JRuntimeShader extends JShader {
   private compiled: ShaderProgram | null = null;
   private uniforms = new Map<string, Uniform>();
   private captured: { local: string; pattern: (ctx: Ctx2D) => CanvasPattern } | null = null;

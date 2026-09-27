@@ -1,4 +1,4 @@
-import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { JObj, rt, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { findById, type JViewGroup, type JView, attachView, detachView, removeFrom } from "./view";
 import { getInflater } from "./inflate";
@@ -126,10 +126,8 @@ export class JFragment extends JObj {
   tag: string | null = null;
 }
 export const fragMethods: NonNullable<NativeSpec["methods"]> = {
-  "onAttach(Landroid/app/Activity;)V": function (this: JFragment, a: unknown) { this.act = a; },
-  "onAttach(Landroid/content/Context;)V": function (this: JFragment, a: unknown) { this.act = a; },
-  "getActivity()Landroid/app/Activity;": function (this: JFragment) { return this.act; },
-  "getContext()Landroid/content/Context;": function (this: JFragment) { return this.act; },
+  ...fieldSetters({ "onAttach(Landroid/app/Activity;)V": "act", "onAttach(Landroid/content/Context;)V": "act" }),
+  ...fieldGetters({ "getActivity()Landroid/app/Activity;": "act", "getContext()Landroid/content/Context;": "act" }),
   "getResources()Landroid/content/res/Resources;": function (this: JFragment) {
     return this.act ? vcall(this.act, "getResources", "()Landroid/content/res/Resources;") : null;
   },
@@ -154,23 +152,17 @@ export const fragMethods: NonNullable<NativeSpec["methods"]> = {
   "getFragmentManager()Landroid/app/FragmentManager;": function (this: JFragment) {
     return this.act ? vcall(this.act, "getFragmentManager", "()Landroid/app/FragmentManager;") : null;
   },
-  "getArguments()Landroid/os/Bundle;": function (this: JFragment) { return this.args; },
-  "setArguments(Landroid/os/Bundle;)V": function (this: JFragment, b: unknown) { this.args = b; },
-  "getView()Landroid/view/View;": function (this: JFragment) { return this.attachedView; },
-  "getTag()Ljava/lang/String;": function (this: JFragment) { return this.tag; },
-  "getId()I": function (this: JFragment) { return this.containerId; },
+  ...fieldGetters({ "getArguments()Landroid/os/Bundle;": "args", "getView()Landroid/view/View;": "attachedView",
+    "getTag()Ljava/lang/String;": "tag", "getId()I": "containerId" }),
+  ...fieldSetters({ "setArguments(Landroid/os/Bundle;)V": "args" }),
   ...noops("<init>()V", "onActivityResult(IILandroid/content/Intent;)V",
-    "dump(Ljava/lang/String;Ljava/io/FileDescriptor;Ljava/io/PrintWriter;[Ljava/lang/String;)V"),
+    "dump(Ljava/lang/String;Ljava/io/FileDescriptor;Ljava/io/PrintWriter;[Ljava/lang/String;)V",
+    "setHasOptionsMenu(Z)V", "setRetainInstance(Z)V",
+    "onCreate(Landroid/os/Bundle;)V", "onActivityCreated(Landroid/os/Bundle;)V",
+    "onSaveInstanceState(Landroid/os/Bundle;)V", "onViewStateRestored(Landroid/os/Bundle;)V",
+    "onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V", "onStart()V", "onResume()V", "onPause()V",
+    "onStop()V", "onDestroy()V", "onDestroyView()V", "onDetach()V", "onLowMemory()V"),
   ...stubs(null, "onCreateView(Landroid/view/LayoutInflater;Landroid/view/ViewGroup;Landroid/os/Bundle;)Landroid/view/View;"),
-  "setHasOptionsMenu(Z)V": () => {}, "setRetainInstance(Z)V": () => {},
+  ...stubs(0, "isAdded()Z", "isRemoving()Z", "isDetached()Z", "isHidden()Z", "isVisible()Z", "isResumed()Z"),
 };
-for (const k of ["isAdded()Z", "isRemoving()Z", "isDetached()Z", "isHidden()Z", "isVisible()Z", "isResumed()Z"]) {
-  fragMethods[k] = () => 0;
-}
-for (const k of ["onCreate(Landroid/os/Bundle;)V", "onActivityCreated(Landroid/os/Bundle;)V",
-  "onSaveInstanceState(Landroid/os/Bundle;)V", "onViewStateRestored(Landroid/os/Bundle;)V",
-  "onViewCreated(Landroid/view/View;Landroid/os/Bundle;)V", "onStart()V", "onResume()V", "onPause()V",
-  "onStop()V", "onDestroy()V", "onDestroyView()V", "onDetach()V", "onLowMemory()V"]) {
-  fragMethods[k] = () => {};
-}
 rt.register({ name: "android/app/Fragment", ctor: JFragment, methods: fragMethods });

@@ -175,8 +175,7 @@ async function applyHolder(target: unknown, h: JPVH, t: number) {
   if (h.prop) return vcall(h.prop, "set", "(Ljava/lang/Object;Ljava/lang/Object;)V", target, boxedCur(h));
   if (h.name) return applyAnimProp(target, h.name, h.cur as number, h.isInt);
 }
-/** the property's value now: what an XML animator with no valueFrom (or no valueTo) starts from */
-/** where a one-key animator starts: the Property's own get, or the named getter */
+/** where a one-key animator (or an XML one without valueFrom/valueTo) starts: the Property's own get, or the named getter */
 async function currentValue(target: unknown, prop: unknown, name: string, isInt: boolean): Promise<number> {
   if (!prop) return name ? readAnimProp(target, name, isInt) : 0;
   const v: unknown = await vcall(prop, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", target);
@@ -273,12 +272,10 @@ rt.register({
     "static ofInt(Ljava/lang/String;[I)Landroid/animation/PropertyValuesHolder;": (n: string, v: Int32Array) => pvhOf(n, v, true, false),
     "static ofFloat(Landroid/util/Property;[F)Landroid/animation/PropertyValuesHolder;": (p: unknown, v: Float32Array) => pvhOf(p, v, false, true),
     "static ofInt(Landroid/util/Property;[I)Landroid/animation/PropertyValuesHolder;": (p: unknown, v: Int32Array) => pvhOf(p, v, true, true),
-    "static ofObject(Ljava/lang/String;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/PropertyValuesHolder;": (n: string, e: unknown, v: unknown[]) => {
-      const h = pvhOf(n, null, false, false); h.evaluator = e; h.objKeys = [...(v ?? [])]; return h;
-    },
-    "static ofObject(Landroid/util/Property;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/PropertyValuesHolder;": (p: unknown, e: unknown, v: unknown[]) => {
-      const h = pvhOf(p, null, false, true); h.evaluator = e; h.objKeys = [...(v ?? [])]; return h;
-    },
+    "static ofObject(Ljava/lang/String;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/PropertyValuesHolder;": (n: string, e: unknown, v: unknown[]) =>
+      Object.assign(pvhOf(n, null, false, false), { evaluator: e, objKeys: [...(v ?? [])] }),
+    "static ofObject(Landroid/util/Property;Landroid/animation/TypeEvaluator;[Ljava/lang/Object;)Landroid/animation/PropertyValuesHolder;": (p: unknown, e: unknown, v: unknown[]) =>
+      Object.assign(pvhOf(p, null, false, true), { evaluator: e, objKeys: [...(v ?? [])] }),
     "static ofKeyframe(Ljava/lang/String;[Landroid/animation/Keyframe;)Landroid/animation/PropertyValuesHolder;": (n: string, frames: JKeyframe[]) => {
       const h = pvhOf(n, null, frames[0]?.isInt ?? false, false);
       h.fractions = frames.map((f) => f.fraction);
@@ -318,20 +315,22 @@ rt.register({
   },
 });
 const lerp = (f: number, a: number, b: number) => a + (b - a) * f;
+const evalFloat = (f: number, a: { v: number }, b: { v: number }) => box(JFloat, Math.fround(lerp(f, Number(a.v), Number(b.v))));
+const evalInt = (f: number, a: { v: number }, b: { v: number }) => boxInt(Math.trunc(lerp(f, a.v, b.v)));
 rt.register({
   name: "android/animation/FloatEvaluator", ctor: class extends JObj {}, ifaces: ["android/animation/TypeEvaluator"],
   methods: {
     "<init>()V": function () {},
-    "evaluate(FLjava/lang/Number;Ljava/lang/Number;)Ljava/lang/Float;": (f: number, a: { v: number }, b: { v: number }) => box(JFloat, Math.fround(lerp(f, Number(a.v), Number(b.v)))),
-    "evaluate(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": (f: number, a: { v: number }, b: { v: number }) => box(JFloat, Math.fround(lerp(f, Number(a.v), Number(b.v)))),
+    "evaluate(FLjava/lang/Number;Ljava/lang/Number;)Ljava/lang/Float;": evalFloat,
+    "evaluate(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": evalFloat,
   },
 });
 rt.register({
   name: "android/animation/IntEvaluator", ctor: class extends JObj {}, ifaces: ["android/animation/TypeEvaluator"],
   methods: {
     "<init>()V": function () {},
-    "evaluate(FLjava/lang/Integer;Ljava/lang/Integer;)Ljava/lang/Integer;": (f: number, a: { v: number }, b: { v: number }) => boxInt(Math.trunc(lerp(f, a.v, b.v))),
-    "evaluate(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": (f: number, a: { v: number }, b: { v: number }) => boxInt(Math.trunc(lerp(f, a.v, b.v))),
+    "evaluate(FLjava/lang/Integer;Ljava/lang/Integer;)Ljava/lang/Integer;": evalInt,
+    "evaluate(FLjava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": evalInt,
   },
 });
 /** AOSP ArgbEvaluator: per-channel interpolation in linear light (gamma 2.2), alpha linear */
@@ -531,11 +530,16 @@ rt.register({
       objAnim(t, { prop: p, evaluator: new JPathEvaluator(pathKeyframeData(path), converter), objKeys: [null, null] }),
     "static ofPropertyValuesHolder(Ljava/lang/Object;[Landroid/animation/PropertyValuesHolder;)Landroid/animation/ObjectAnimator;": (t: unknown, hs: JPVH[]) =>
       objAnim(t, { holders: [...(hs ?? [])] }),
-    "setFloatValues([F)V": function (this: JValueAnimator, v: Float32Array) { setNumKeys(this, v, false); },
-    "setIntValues([I)V": function (this: JValueAnimator, v: Int32Array) { setNumKeys(this, v, true); },
   },
 });
-class JAnimatorSet extends JValueAnimator { anims: JValueAnimator[] = []; sequential = false; }
+class JAnimatorSet extends JValueAnimator {
+  anims: JValueAnimator[] = []; sequential = false;
+  /** how long the children play: end to end in sequence, else the longest */
+  span(): number {
+    return this.sequential ? this.anims.reduce((s, a) => s + a.delayMs + a.durationMs, 0)
+      : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
+  }
+}
 function setTargetDeep(a: JValueAnimator, t: unknown) {
   a.target = t;
   if (a instanceof JAnimatorSet) for (const c of a.anims) setTargetDeep(c, t);
@@ -561,8 +565,7 @@ rt.register({
         for (let i = 0; i + 1 < this.anims.length; i++) this.anims[i].next = this.anims[i + 1];
         if (this.anims.length) yield vcallOn(thread, this.anims[0], "start", "()V");
       } else for (const a of this.anims) yield vcallOn(thread, a, "start", "()V");
-      const total = this.sequential ? this.anims.reduce((s, a) => s + a.delayMs + a.durationMs, 0)
-        : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
+      const total = this.span();
       setGuestTimeout(() => {
         void onMain(async () => {
           this.running = false;
@@ -580,10 +583,7 @@ rt.register({
       if (!this.anims.includes(a)) this.anims.push(a);
       return b;
     },
-    "getTotalDuration()J": function (this: JAnimatorSet) {
-      const d = this.sequential ? this.anims.reduce((s, a) => s + a.delayMs + a.durationMs, 0) : Math.max(0, ...this.anims.map((a) => a.delayMs + a.durationMs));
-      return BigInt(this.delayMs + d);
-    },
+    "getTotalDuration()J": function (this: JAnimatorSet) { return BigInt(this.delayMs + this.span()); },
     "reverse()V": driven(function* (this: JAnimatorSet): Gen { for (const a of [...this.anims].reverse()) yield vcall(a, "reverse", "()V"); }),
     "setCurrentPlayTime(J)V": function (this: JAnimatorSet, t: bigint) { for (const a of this.anims) a.startT = guestNow() - Number(t); },
     "setInterpolator(Landroid/animation/TimeInterpolator;)V": function (this: JAnimatorSet, i: unknown) { this.interp = i; for (const a of this.anims) a.interp = i; },

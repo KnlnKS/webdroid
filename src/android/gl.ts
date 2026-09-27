@@ -54,6 +54,18 @@ function bytesFrom(buf: JBuffer | null): Uint8Array<ArrayBuffer> | null {
   return new Uint8Array(v.ab, v.byteFromPos, (buf.lim - buf.pos) * 2 ** buf.elemShift);
 }
 
+/** glGenX into an int[] or an IntBuffer; glDeleteX drops each slot (see glDeleteShader) */
+function genInto<O extends object>(tbl: (O | null)[], make: () => O | null | undefined, n: number, out: Int32Array, off = 0) {
+  for (let i = 0; i < n; i++) out[off + i] = put(tbl, make() ?? null);
+}
+function genIntoBuffer<O extends object>(tbl: (O | null)[], make: () => O | null | undefined, n: number, buf: JBuffer) {
+  const b = bytesFrom(buf);
+  if (b) genInto(tbl, make, n, new Int32Array(b.buffer, b.byteOffset));
+}
+function deleteAll<O extends object>(tbl: (O | null)[], del: (o: O) => void, n: number, arr: Int32Array, off: number) {
+  for (let i = 0; i < n; i++) { const h = arr[off + i], o = tbl[h]; if (o) { del(o); tbl[h] = null; } }
+}
+
 function getIntegers(name: number, out: Int32Array, off: number): void {
   const v = gl?.getParameter(name);
   if (v && typeof v === "object") {
@@ -166,13 +178,8 @@ rt.register({
       const f32 = b.byteOffset & 3 ? new Float32Array(b.slice(0, n * 4).buffer) : new Float32Array(b.buffer, b.byteOffset, n);
       gl?.uniformMatrix4fv(T.uniforms[loc]!, !!transpose, f32);
     },
-    "static glGenBuffers(I[II)V": (n: number, out: Int32Array, off: number) => {
-      for (let i = 0; i < n; i++) out[off + i] = put(T.buffers, gl?.createBuffer() ?? null);
-    },
-    "static glGenBuffers(ILjava/nio/IntBuffer;)V": (n: number, buf: JBuffer) => {
-      const b = bytesFrom(buf);
-      if (b) for (let i = 0; i < n; i++) new Int32Array(b.buffer, b.byteOffset)[i] = put(T.buffers, gl?.createBuffer() ?? null);
-    },
+    "static glGenBuffers(I[II)V": (n: number, out: Int32Array, off: number) => genInto(T.buffers, () => gl?.createBuffer(), n, out, off),
+    "static glGenBuffers(ILjava/nio/IntBuffer;)V": (n: number, buf: JBuffer) => genIntoBuffer(T.buffers, () => gl?.createBuffer(), n, buf),
     "static glBindBuffer(II)V": (target: number, b: number) => gl?.bindBuffer(target, b ? T.buffers[b]! : null),
     "static glBufferData(IILjava/nio/Buffer;I)V": (target: number, size: number, data: JBuffer | null, usage: number) => {
       const b = bytesFrom(data);
@@ -183,20 +190,11 @@ rt.register({
       const b = bytesFrom(data);
       if (b) gl?.bufferSubData(target, off, b.subarray(0, size));
     },
-    "static glDeleteBuffers(I[II)V": (n: number, arr: Int32Array, off: number) => {
-      for (let i = 0; i < n; i++) { const h = arr[off + i], o = T.buffers[h]; if (o) { gl?.deleteBuffer(o); T.buffers[h] = null; } }
-    },
-    "static glGenTextures(I[II)V": (n: number, out: Int32Array, off: number) => {
-      for (let i = 0; i < n; i++) out[off + i] = put(T.textures, gl?.createTexture() ?? null);
-    },
-    "static glGenTextures(ILjava/nio/IntBuffer;)V": (n: number, buf: JBuffer) => {
-      const b = bytesFrom(buf);
-      if (b) { const ia = new Int32Array(b.buffer, b.byteOffset); for (let i = 0; i < n; i++) ia[i] = put(T.textures, gl?.createTexture() ?? null); }
-    },
+    "static glDeleteBuffers(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(T.buffers, (o) => gl?.deleteBuffer(o), n, arr, off),
+    "static glGenTextures(I[II)V": (n: number, out: Int32Array, off: number) => genInto(T.textures, () => gl?.createTexture(), n, out, off),
+    "static glGenTextures(ILjava/nio/IntBuffer;)V": (n: number, buf: JBuffer) => genIntoBuffer(T.textures, () => gl?.createTexture(), n, buf),
     "static glBindTexture(II)V": (target: number, t: number) => gl?.bindTexture(target, t ? T.textures[t]! : null),
-    "static glDeleteTextures(I[II)V": (n: number, arr: Int32Array, off: number) => {
-      for (let i = 0; i < n; i++) { const h = arr[off + i], o = T.textures[h]; if (o) { gl?.deleteTexture(o); T.textures[h] = null; } }
-    },
+    "static glDeleteTextures(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(T.textures, (o) => gl?.deleteTexture(o), n, arr, off),
     "static glTexParameterf(IIF)V": (target: number, pname: number, v: number) => gl?.texParameterf(target, pname, v),
     "static glTexParameteri(III)V": (target: number, pname: number, v: number) => gl?.texParameteri(target, pname, v),
     "static glTexImage2D(IIIIIIIILjava/nio/Buffer;)V": (target: number, level: number, internalFormat: number, w: number, h: number, border: number, format: number, type: number, data: JBuffer | null) => {
@@ -208,14 +206,10 @@ rt.register({
       if (b) gl?.texSubImage2D(target, level, xo, yo, w, h, format, type, b);
     },
     "static glCopyTexSubImage2D(IIIIIIII)V": (target: number, level: number, xo: number, yo: number, x: number, y: number, w: number, h: number) => gl?.copyTexSubImage2D(target, level, xo, yo, x, y, w, h),
-    "static glGenFramebuffers(I[II)V": (n: number, out: Int32Array, off: number) => {
-      for (let i = 0; i < n; i++) out[off + i] = put(T.fbos, gl?.createFramebuffer() ?? null);
-    },
+    "static glGenFramebuffers(I[II)V": (n: number, out: Int32Array, off: number) => genInto(T.fbos, () => gl?.createFramebuffer(), n, out, off),
     "static glBindFramebuffer(II)V": (target: number, handle: number) => gl?.bindFramebuffer(target, T.fbos[handle] ?? null),
     "static glFramebufferTexture2D(IIIII)V": (target: number, attachment: number, texTarget: number, texture: number, level: number) => gl?.framebufferTexture2D(target, attachment, texTarget, T.textures[texture] ?? null, level),
-    "static glDeleteFramebuffers(I[II)V": (n: number, arr: Int32Array, off: number) => {
-      for (let i = 0; i < n; i++) { const h = arr[off + i], o = T.fbos[h]; if (o) { gl?.deleteFramebuffer(o); T.fbos[h] = null; } }
-    },
+    "static glDeleteFramebuffers(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(T.fbos, (o) => gl?.deleteFramebuffer(o), n, arr, off),
     "static glReadPixels(IIIIIILjava/nio/Buffer;)V": (x: number, y: number, w: number, h: number, format: number, type: number, data: JBuffer) => {
       const b = bytesFrom(data);
       if (!b) return;
@@ -459,5 +453,3 @@ export function invert(inv: Float32Array, io: number, src: Float32Array, so: num
   inv[io + 15] = (i * bc - j * ac + k * ab) * r;
   return 1;
 }
-
-// ── GLSurfaceView + Renderer + EGL infra (see glview.ts)
