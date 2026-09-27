@@ -313,6 +313,7 @@ export class JListView extends JViewGroup {
           }
         }
         for (const v of this.allViews()) yield attachView(this, v);
+        if (this.choiceMode) yield showCheckStates(this);
         this.updateEmptyStatus();
         requestLayout(this);
       } while (this.rebuildPending);
@@ -420,6 +421,17 @@ const notifyChoiceMode = driven(function* notifyChoiceMode(list: JListView, pos:
   if (!list.checked.size) yield vcall(mode, "finish", "()V");
 });
 
+/** AbsListView.setupChild: every row shows the list's check state, through Checkable when the
+ *  row is one and as the activated state otherwise */
+const showCheckStates = driven(function* showCheckStates(list: JListView): Gen {
+  const vs = list.allViews();
+  for (let i = 0; i < vs.length; i++) {
+    const v = vs[i], on = list.checked.has(i);
+    if (rt.iof(v, "android/widget/Checkable")) yield vcall(v, "setChecked", "(Z)V", +on);
+    else if (v.activated !== on) { v.activated = on; yield v.refreshDrawableState(); }
+  }
+});
+
 function cancelItemLongPress(list: JListView) {
   if (list.longPressTimer) { clearTimeout(list.longPressTimer); list.longPressTimer = null; }
 }
@@ -511,13 +523,12 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (m !== CHOICE_MODE_MULTIPLE_MODAL && this.actionMode) yield vcall(this.actionMode, "finish", "()V");
   }),
   "setItemChecked(IZ)V": driven(function* (this: JListView, pos: number, val: number): Gen {
+    if (!this.choiceMode) return;
     if (val) {
       if (this.choiceMode === 1) this.checked.clear();
       this.checked.add(pos);
     } else this.checked.delete(pos);
-    const v = this.allViews()[pos];
-    if (v) { v.activated = !!val; void v.refreshDrawableState(); }
-    invalidate();
+    yield showCheckStates(this);
     yield notifyChoiceMode(this, pos, !!val);
   }),
   "isItemChecked(I)Z": function (this: JListView, pos: number) { return this.checked.has(pos) ? 1 : 0; },
@@ -572,7 +583,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     this.scrollL = l;
     this.notifyScroll();
   },
-  "clearChoices()V": function (this: JListView) { this.checked.clear(); invalidate(); },
+  "clearChoices()V": function (this: JListView) { this.checked.clear(); return showCheckStates(this); },
   "getCheckedItemCount()I": function (this: JListView) { return this.checked.size; },
   "getCheckedItemIds()[J": function (this: JListView) { return BigInt64Array.from([...this.checked].map((c) => BigInt(c))); },
   "getCheckedItemPositions()Landroid/util/SparseBooleanArray;": function (this: JListView) {
