@@ -82,6 +82,7 @@ import "./android/widget";
 import "./android/searchview";
 import "./android/inflate";
 import "./android/pm";
+import "./android/shortcuts";
 import "./android/broadcast";
 import "./android/pendingintent";
 import "./android/alarm";
