@@ -1,12 +1,12 @@
 import { services, type JContext } from "./context";
-import { rt, type NativeSpec, JObj, noops, driven, type Gen } from "../jvm/runtime";
+import { rt, type NativeSpec, JObj, noops, stubs, driven, type Gen } from "../jvm/runtime";
 import { appHost, type AppHost } from "./apphost";
 import { type JUri, mkUri, uriParts, uriDecode } from "./net";
 import {
   isDocsUri, documentId, docRead, docWrite, docInputStream, docOutputStream, docRow, isChildrenUri, docChildren,
   DOC_COLUMNS, docCells, docDelete
 } from "./documents";
-import { mkPfd, pfdBackingBytes, type JBundle } from "./os";
+import { mkPfd, pfdBackingBytes, PROCESS_NAME, PROCESS_UID, type JBundle } from "./os";
 import { mkFile } from "../jvm/natives/jio";
 import { mkAssetFd } from "./resnative";
 import { newObj, defineException, vcall, vcallOn, callOn, mainThread } from "../jvm/natives/jlang";
@@ -15,7 +15,6 @@ import { newArrayList } from "../jvm/natives/jutil";
 import { getPM } from "./pm";
 import { locationTransport } from "./locationmanager";
 import { inMainJob, onMain } from "./mainloop";
-import { PROCESS_NAME, PROCESS_UID } from "./os";
 import { packages } from "./packages";
 import { isMediaUri, mediaDelete, mediaMime, mediaPath, mediaQuery } from "./mediastore";
 
@@ -60,8 +59,12 @@ export const providerOperations = {
   delete: "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I",
   getType: "(Landroid/net/Uri;)Ljava/lang/String;",
   call: "(Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;",
-
 };
+/** query(..., CancellationSignal): the signal is checked once, then the plain query answers */
+const cancellableQuery = driven(function* (this: JObj, u: JUri, projection: unknown, selection: unknown, args: unknown, sort: unknown, cancellation: unknown): Gen {
+  if (cancellation) yield vcall(cancellation, "throwIfCanceled", "()V");
+  return vcall(this, "query", providerOperations.query, u, projection, selection, args, sort);
+});
 class JProviderClient extends JObj { provider: unknown = null; closed = false; }
 function releaseClient(this: JProviderClient): number {
   if (this.closed) return 0;
@@ -74,11 +77,7 @@ async function acquireClient(uri: JUri): Promise<JProviderClient | null> {
   const client = new JProviderClient(); client.provider = provider; return client;
 }
 rt.register({ name: "android/content/ContentProviderClient", ctor: JProviderClient, ifaces: ["java/lang/AutoCloseable"], methods: {
-  "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
-    driven(function* (this: JProviderClient, u: JUri, projection: unknown, selection: unknown, args: unknown, sort: unknown, cancellation: unknown): Gen {
-      if (cancellation) yield vcall(cancellation, "throwIfCanceled", "()V");
-      return vcall(this, "query", providerOperations.query, u, projection, selection, args, sort);
-    }),
+  "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;": cancellableQuery,
   "release()Z": releaseClient,
   "close()V": function (this: JProviderClient) { releaseClient.call(this); },
   "getLocalContentProvider()Landroid/content/ContentProvider;": function (this: JProviderClient) {
@@ -90,7 +89,6 @@ rt.register({ name: "android/content/ContentProviderClient", ctor: JProviderClie
       return vcall(this.provider, name, desc, ...args);
     },
   ])),
-
 } });
 
 export function contentResolver(): unknown {
@@ -166,21 +164,22 @@ function fileOf(u: JUri): string {
   return uriDecode(parts.path) ?? "";
 }
 /** A descriptor carries the document's current bytes and writes them back when it is closed. */
+async function openFilePfd(path: string, mode: string) {
+  const cls = rt.link("android/os/ParcelFileDescriptor").ctor;
+  return vcall(cls, "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;", mkFile(path),
+    await vcall(cls, "parseMode", "(Ljava/lang/String;)I", mode));
+}
 export async function openPfd(u: JUri, mode: string) {
   if (isMediaUri(u)) {
     const path = await mediaPath(u);
     if (!path) throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);
-    const cls = rt.link("android/os/ParcelFileDescriptor").ctor;
-    return vcall(cls, "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;", mkFile(path),
-      await vcall(cls, "parseMode", "(Ljava/lang/String;)I", mode));
+    return openFilePfd(path, mode);
   }
   if (!isDocsUri(u)) {
     const provider = await contentProvider(u);
-    if (provider) return vcall(provider, "openFile", "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;", u, mode);
+    if (provider) return vcall(provider, "openFile", providerOperations.openFile, u, mode);
     if (u.uri.startsWith("content:")) throw rt.mkThrowable("java/io/FileNotFoundException", u.uri);
-    const cls = rt.link("android/os/ParcelFileDescriptor").ctor;
-    return vcall(cls, "open", "(Ljava/io/File;I)Landroid/os/ParcelFileDescriptor;", mkFile(fileOf(u)),
-      await vcall(cls, "parseMode", "(Ljava/lang/String;)I", mode));
+    return openFilePfd(fileOf(u), mode);
   }
   const id = documentId(u, true);
   const write = (mode ?? "r").includes("w");
@@ -232,14 +231,14 @@ const resolverMethods: NativeSpec["methods"] = {
     if (isDocsUri(u)) return (yield docRow(documentId(u, true)))?.mime ?? null;
     if (isMediaUri(u)) return mediaMime(u);
     const provider = yield contentProvider(u);
-    return provider ? vcall(provider, "getType", "(Landroid/net/Uri;)Ljava/lang/String;", u) : null;
+    return provider ? vcall(provider, "getType", providerOperations.getType, u) : null;
   }),
   "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;":
     driven(function* (u: JUri, proj: string[] | null, selection: string | null, args: string[] | null, sort: string | null): Gen {
       if (isMediaUri(u)) return mediaQuery(u, proj, selection, args, sort);
       if (!isDocsUri(u)) {
         const provider = yield contentProvider(u);
-        return provider ? vcall(provider, "query", "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;", u, proj, selection, args, sort) : null;
+        return provider ? vcall(provider, "query", providerOperations.query, u, proj, selection, args, sort) : null;
       }
       const id = documentId(u, true);
       const row = isChildrenUri(u) ? null : yield docRow(id);
@@ -250,11 +249,7 @@ const resolverMethods: NativeSpec["methods"] = {
         return cols.map((c) => cells[DOC_COLUMNS.indexOf(c)] ?? null);
       }));
     }),
-  "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
-    driven(function* (this: JObj, u: JUri, proj: string[] | null, selection: string | null, args: string[] | null, sort: string | null, cancellation: unknown): Gen {
-      if (cancellation) yield vcall(cancellation, "throwIfCanceled", "()V");
-      return vcall(this, "query", providerOperations.query, u, proj, selection, args, sort);
-    }),
+  "query(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Landroid/os/CancellationSignal;)Landroid/database/Cursor;": cancellableQuery,
   "query(Landroid/net/Uri;[Ljava/lang/String;Landroid/os/Bundle;Landroid/os/CancellationSignal;)Landroid/database/Cursor;":
     driven(function* (this: JObj, u: JUri, proj: string[] | null, queryArgs: JBundle | null, cancellation: unknown): Gen {
       if (cancellation) yield vcall(cancellation, "throwIfCanceled", "()V");
@@ -291,7 +286,6 @@ const resolverMethods: NativeSpec["methods"] = {
       }
       if (cursor && isDocsUri(u) && limit !== undefined) cursor.rows.length = Math.min(cursor.rows.length, limit);
       return cursor;
-
     }),
   "call(Landroid/net/Uri;Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;": driven(function* (u: JUri, method: string, arg: string | null, extras: unknown): Gen {
     if (u === null) throw rt.mkThrowable("java/lang/NullPointerException", "uri");
@@ -310,7 +304,7 @@ const resolverMethods: NativeSpec["methods"] = {
   "openTypedAssetFile(Landroid/net/Uri;Ljava/lang/String;Landroid/os/Bundle;Landroid/os/CancellationSignal;)Landroid/content/res/AssetFileDescriptor;": openAfd,
   "insert(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;": driven(function* (u: JUri, values: unknown): Gen {
     const provider = yield contentProvider(u);
-    return provider ? vcall(provider, "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;", u, values) : null;
+    return provider ? vcall(provider, "insert", providerOperations.insert, u, values) : null;
   }),
   "bulkInsert(Landroid/net/Uri;[Landroid/content/ContentValues;)I": driven(function* (u: JUri, values: unknown[] | null): Gen {
     if (!u || !values) rt.npe();
@@ -319,13 +313,13 @@ const resolverMethods: NativeSpec["methods"] = {
   }),
   "update(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I": driven(function* (u: JUri, values: unknown, where: string | null, args: string[] | null): Gen {
     const provider = yield contentProvider(u);
-    return provider ? vcall(provider, "update", "(Landroid/net/Uri;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I", u, values, where, args) : 0;
+    return provider ? vcall(provider, "update", providerOperations.update, u, values, where, args) : 0;
   }),
   "delete(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I": driven(function* (u: JUri, where: string | null, args: string[] | null): Gen {
     if (isDocsUri(u)) return (yield docDelete(documentId(u, true))) ? 1 : 0;
     if (isMediaUri(u)) return mediaDelete(u, where, args);
     const provider = yield contentProvider(u);
-    return provider ? vcall(provider, "delete", "(Landroid/net/Uri;Ljava/lang/String;[Ljava/lang/String;)I", u, where, args) : 0;
+    return provider ? vcall(provider, "delete", providerOperations.delete, u, where, args) : 0;
   }),
   "takePersistableUriPermission(Landroid/net/Uri;I)V": (u: JUri, modes: number) => {
     if (!u) rt.npe();
@@ -392,6 +386,7 @@ function stringSetting(table: string, name: string): string | null {
   if (table === "secure" && name === "location_providers_allowed") return locationTransport.enabled() ? "gps,network" : "";
   return null;
 }
+const settingNotFound = (_r: unknown, n: string) => { throw rt.mkThrowable("android/provider/Settings$SettingNotFoundException", n); };
 for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System", "system"]] as const) {
   rt.register({
     name: `android/provider/Settings$${cls}`, ctor: class extends JObj {},
@@ -415,25 +410,18 @@ for (const [cls, table] of [["Global", "global"], ["Secure", "secure"], ["System
     },
     methods: {
       "static getFloat(Landroid/content/ContentResolver;Ljava/lang/String;F)F": (_r: unknown, _n: string, d: number) => d,
-      "static getFloat(Landroid/content/ContentResolver;Ljava/lang/String;)F": (_r: unknown, n: string) => {
-        throw rt.mkThrowable("android/provider/Settings$SettingNotFoundException", n);
-      },
-      "static getLong(Landroid/content/ContentResolver;Ljava/lang/String;)J": (_r: unknown, n: string) => {
-        throw rt.mkThrowable("android/provider/Settings$SettingNotFoundException", n);
-      },
+      "static getFloat(Landroid/content/ContentResolver;Ljava/lang/String;)F": settingNotFound,
+      "static getLong(Landroid/content/ContentResolver;Ljava/lang/String;)J": settingNotFound,
       "static getInt(Landroid/content/ContentResolver;Ljava/lang/String;I)I": (_r: unknown, n: string, d: number) => intSetting(table, n) ?? d,
       "static getInt(Landroid/content/ContentResolver;Ljava/lang/String;)I": (_r: unknown, n: string) => {
         const value = intSetting(table, n);
-        if (value === null) throw rt.mkThrowable("android/provider/Settings$SettingNotFoundException", n);
-        return value;
+        return value === null ? settingNotFound(_r, n) : value;
       },
       "static getLong(Landroid/content/ContentResolver;Ljava/lang/String;J)J": (_r: unknown, _n: string, d: bigint) => d,
       "static getString(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;": (_r: unknown, n: string) => stringSetting(table, n),
       "static getUriFor(Ljava/lang/String;)Landroid/net/Uri;": (n: string) => settingsUri(table, n),
-      "static putFloat(Landroid/content/ContentResolver;Ljava/lang/String;F)Z": () => 0,
-      "static putInt(Landroid/content/ContentResolver;Ljava/lang/String;I)Z": () => 0,
-      "static putLong(Landroid/content/ContentResolver;Ljava/lang/String;J)Z": () => 0,
-      "static putString(Landroid/content/ContentResolver;Ljava/lang/String;Ljava/lang/String;)Z": () => 0,
+      ...stubs(0, "static putFloat(Landroid/content/ContentResolver;Ljava/lang/String;F)Z", "static putInt(Landroid/content/ContentResolver;Ljava/lang/String;I)Z",
+        "static putLong(Landroid/content/ContentResolver;Ljava/lang/String;J)Z", "static putString(Landroid/content/ContentResolver;Ljava/lang/String;Ljava/lang/String;)Z"),
     },
   });
 }
