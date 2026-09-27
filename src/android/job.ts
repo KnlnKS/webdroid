@@ -3,6 +3,7 @@
 import { rt, JObj, type NativeSpec, stubs, driven, type Gen } from "../jvm/runtime";
 import { reportUncaught, vcall } from "../jvm/natives/jlang";
 import { JList } from "../jvm/natives/jutil";
+import { jarray } from "../jvm/abi";
 import { JParcel, parcelCreator, readInt, writeInt } from "./parcel";
 import { onMain } from "./mainloop";
 import { bindLocalService, unbindLocalService, serviceTransport } from "./runningservices";
@@ -79,8 +80,7 @@ rt.register({
     "getBackoffPolicy()I": function (this: JJobInfo) { return this.p.backoffPolicy ?? 1; },
     "getTriggerContentUris()[Landroid/app/job/JobInfo$TriggerContentUri;": function (this: JJobInfo) {
       const t: unknown[] = this.p.triggers;
-      if (!t.length) return null;
-      const a = t.slice(); (a as any).$t = "Landroid/app/job/JobInfo$TriggerContentUri;"; return a;
+      return t.length ? jarray(t.slice(), "Landroid/app/job/JobInfo$TriggerContentUri;") : null;
     },
     "describeContents()I": () => 0,
     "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: JJobInfo, parcel: JParcel, flags: number): Gen {

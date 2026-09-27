@@ -1,11 +1,10 @@
-import { AID } from "./res";
 import {
   JMarginLP, type JLayoutParams, JViewGroup, JFrameLP, MATCH_PARENT, lpFromAttrs, lpAttrs, measureChildWithMargins,
   resolveSizeAndState, makeSpec, MS_EXACTLY, childMeasureSpec, measureView, layoutView, initViewFromCtx,
   requestLayout, JLinearLP, WRAP_CONTENT, specMode, JView, MS_UNSPEC, specSize, invalidate, uiState, viewConstructors, marginCopy
 } from "./view";
 import { JObj, type NativeSpec, rt, callSelf, noops, driven, type Gen } from "../jvm/runtime";
-import { type JAttrSet, type Resources, obtainStyled, rvInt, rvFloat, rvDimen, onFramework } from "./res";
+import { AID, type JAttrSet, type Resources, obtainStyled, rvInt, rvFloat, rvDimen, onFramework } from "./res";
 import { type JDrawable, loadDrawableRV, drawChild } from "./drawable";
 import type { JCanvas } from "./graphics";
 import { gravityH, gravityV, G } from "./gravity";
@@ -110,8 +109,7 @@ rt.register({
     "<init>(II)V": function (this: JFrameLP, w: number, h: number) { this.width = w; this.height = h; },
     "<init>(III)V": function (this: JFrameLP, w: number, h: number, g: number) { this.width = w; this.height = h; this.gravity = g; },
     "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JFrameLP, o: JLayoutParams) {
-      if (o) { this.width = o.width; this.height = o.height; }
-      if (o instanceof JMarginLP) { this.marginL = o.marginL; this.marginT = o.marginT; this.marginR = o.marginR; this.marginB = o.marginB; }
+      marginCopy.call(this, o);
       if (o instanceof JFrameLP) this.gravity = o.gravity;
     },
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
@@ -298,21 +296,22 @@ export const linearMethods: NativeSpec["methods"] = {
   "onDraw(Landroid/graphics/Canvas;)V": driven(function* (this: JLinearLayout, canvas: JCanvas): Gen {
     if (!this.divider || !this.showDividers) return;
     const vertical = this.orientation === 1, kids = this.children.filter(c => c.visibility !== 8);
-    const size = vertical ? this.dividerH : this.dividerW, d = this.divider;
-    const draw = async (position: number) => {
-      await vcall(d, "setBounds", "(IIII)V", vertical ? this.padL + this.dividerPadding : position,
-        vertical ? position : this.padT + this.dividerPadding,
-        vertical ? this.width() - this.padR - this.dividerPadding : position + size,
-        vertical ? position + size : this.height() - this.padB - this.dividerPadding);
-      await drawChild(d, canvas);
-    };
+    const size = vertical ? this.dividerH : this.dividerW, d = this.divider, self = this;
+    // a generator, not an async closure: a divider that draws synchronously keeps the frame synchronous
+    function* draw(position: number): Gen {
+      yield vcall(d, "setBounds", "(IIII)V", vertical ? self.padL + self.dividerPadding : position,
+        vertical ? position : self.padT + self.dividerPadding,
+        vertical ? self.width() - self.padR - self.dividerPadding : position + size,
+        vertical ? position + size : self.height() - self.padB - self.dividerPadding);
+      yield drawChild(d, canvas);
+    }
     for (let i = 0; i < kids.length; i++) if (this.dividerBefore(i)) {
       const c = kids[i], lp = c.lp instanceof JMarginLP ? c.lp : null;
-      yield draw(vertical ? c.top - (lp?.marginT ?? 0) - size : c.left - (lp?.marginL ?? 0) - size);
+      yield* draw(vertical ? c.top - (lp?.marginT ?? 0) - size : c.left - (lp?.marginL ?? 0) - size);
     }
     if (this.showDividers & 4) {
       const c = kids.at(-1), lp = c?.lp instanceof JMarginLP ? c.lp : null;
-      yield draw(c ? vertical ? c.bottom + (lp?.marginB ?? 0) : c.right + (lp?.marginR ?? 0)
+      yield* draw(c ? vertical ? c.bottom + (lp?.marginB ?? 0) : c.right + (lp?.marginR ?? 0)
         : vertical ? this.height() - this.padB - size : this.width() - this.padR - size);
     }
   }),
@@ -331,8 +330,7 @@ rt.register({
     "<init>(II)V": function (this: JLinearLP, w: number, h: number) { this.width = w; this.height = h; },
     "<init>(IIF)V": function (this: JLinearLP, w: number, h: number, wt: number) { this.width = w; this.height = h; this.weight = wt; },
     "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JLinearLP, o: JLayoutParams) {
-      if (o) { this.width = o.width; this.height = o.height; }
-      if (o instanceof JMarginLP) { this.marginL = o.marginL; this.marginT = o.marginT; this.marginR = o.marginR; this.marginB = o.marginB; }
+      marginCopy.call(this, o);
       if (o instanceof JLinearLP) { this.weight = o.weight; this.gravity = o.gravity; }
     },
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
@@ -400,27 +398,21 @@ function assignGrid(g: JGridLayout, kids: JView[]): void {
   }
 }
 function growTracks(tracks: number[], start: number, span: number, need: number): void {
-  let have = 0;
-  for (let i = 0; i < span; i++) have += tracks[start + i] ?? 0;
-  let extra = Math.max(0, need - have);
+  let extra = Math.max(0, need - trackSpan(tracks, start, span));
   for (let i = 0; i < span && extra; i++) {
     const add = Math.ceil(extra / (span - i));
     tracks[start + i] = (tracks[start + i] ?? 0) + add;
     extra -= add;
   }
 }
-function trackOffset(tracks: number[], end: number): number {
-  let out = 0;
-  for (let i = 0; i < end; i++) out += tracks[i] ?? 0;
-  return out;
-}
+/** the tracks' total size from start over span tracks */
 function trackSpan(tracks: number[], start: number, span: number): number {
   let out = 0;
   for (let i = 0; i < span; i++) out += tracks[start + i] ?? 0;
   return out;
 }
 function expandWeightedTracks(g: JGridLayout, kids: JView[], tracks: number[], horizontal: boolean, available: number): void {
-  let extra = available - trackOffset(tracks, tracks.length);
+  let extra = available - trackSpan(tracks, 0, tracks.length);
   if (extra <= 0) return;
   const weights = Array(tracks.length).fill(0) as number[];
   for (const child of kids) {
@@ -464,12 +456,6 @@ const gridMethods: NonNullable<NativeSpec["methods"]> = {
     if (ta.vals[3]) this.useDefaultMargins = !!rvInt(this.jres, ta.vals[3], 0);
     if (ta.vals[4]) this.alignmentMode = rvInt(this.jres, ta.vals[4], 1);
   }),
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": driven(function* (this: JGridLayout, c: unknown, set: JAttrSet | null): Gen {
-    yield callSelf(gridMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
-  }),
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": driven(function* (this: JGridLayout, c: unknown, set: JAttrSet | null): Gen {
-    yield callSelf(gridMethods, "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V", this, c, set);
-  }),
   "setOrientation(I)V": function (this: JGridLayout, v: number) { this.orientation = v; requestLayout(this); },
   "getOrientation()I": function (this: JGridLayout) { return this.orientation; },
   "setRowCount(I)V": function (this: JGridLayout, v: number) { if (v < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "rowCount must be non-negative"); this.rowCount = v; requestLayout(this); },
@@ -510,16 +496,16 @@ const gridMethods: NonNullable<NativeSpec["methods"]> = {
     expandWeightedTracks(this, kids, cw, true, specSize(wSpec) - this.padL - this.padR);
     expandWeightedTracks(this, kids, rh, false, specSize(hSpec) - this.padT - this.padB);
     const state = this.measuredChildState();
-    this.setMeasuredDimension(resolveSizeAndState(trackOffset(cw, cw.length) + this.padL + this.padR, wSpec, state),
-      resolveSizeAndState(trackOffset(rh, rh.length) + this.padT + this.padB, hSpec, state << 16));
+    this.setMeasuredDimension(resolveSizeAndState(trackSpan(cw, 0, cw.length) + this.padL + this.padR, wSpec, state),
+      resolveSizeAndState(trackSpan(rh, 0, rh.length) + this.padT + this.padB, hSpec, state << 16));
   }),
   "onLayout(ZIIII)V": driven(function* (this: JGridLayout): Gen {
     for (const c of this.children) {
       if (c.visibility === 8) continue;
       const cell = this.cells.get(c); if (!cell) continue;
       const lp = c.lp instanceof JGridLP ? c.lp : null, m = c.lp instanceof JMarginLP ? c.lp : NO_MARGIN;
-      const left = this.padL + trackOffset(this.colWidths, cell.col) + m.marginL;
-      const top = this.padT + trackOffset(this.rowHeights, cell.row) + m.marginT;
+      const left = this.padL + trackSpan(this.colWidths, 0, cell.col) + m.marginL;
+      const top = this.padT + trackSpan(this.rowHeights, 0, cell.row) + m.marginT;
       const width = trackSpan(this.colWidths, cell.col, cell.colSpan) - m.marginL - m.marginR;
       const height = trackSpan(this.rowHeights, cell.row, cell.rowSpan) - m.marginT - m.marginB;
       const ha = lp?.columnSpec.alignment ?? GRID_LEADING, va = lp?.rowSpec.alignment ?? GRID_LEADING;
@@ -851,6 +837,15 @@ class JRelativeLP extends JMarginLP {
     return r;
   }
 }
+/** the view a rule anchors to, skipping GONE anchors along their own rule for the same verb */
+function ruleAnchor(byId: Map<number, JView>, lp: JRelativeLP, verb: number): JView | null {
+  let view = byId.get(lp.rules[verb]);
+  for (let hops = 0; view && hops < byId.size; hops++) {
+    if (view.visibility !== 8) return view;
+    view = view.lp instanceof JRelativeLP ? byId.get(view.lp.rules[verb]) : undefined;
+  }
+  return null;
+}
 const RL = {
   LEFT_OF: 0, RIGHT_OF: 1, ABOVE: 2, BELOW: 3, ALIGN_BASELINE: 4, ALIGN_LEFT: 5, ALIGN_TOP: 6,
   ALIGN_RIGHT: 7, ALIGN_BOTTOM: 8, ALIGN_PARENT_LEFT: 9, ALIGN_PARENT_TOP: 10,
@@ -955,35 +950,27 @@ const relativeMethods: NativeSpec["methods"] = {
         let t = this.padT + m.marginT;
         let fixedW = false, fixedH = false;
         if (lp) {
-          const anchor = (verb: number): JView | null => {
-            let view = byId.get(lp.rules[verb]);
-            for (let hops = 0; view && hops < byId.size; hops++) {
-              if (view.visibility !== 8) return view;
-              view = view.lp instanceof JRelativeLP ? byId.get(view.lp.rules[verb]) : undefined;
-            }
-            return null;
-          };
           if (lp.rules[RL.ALIGN_PARENT_RIGHT]) l = availW - this.padR - c.measuredW - m.marginR;
           if (!wrapW && (lp.rules[RL.CENTER_HORIZONTAL] || lp.rules[RL.CENTER_IN_PARENT])) l = (availW - c.measuredW) >> 1;
           if (lp.rules[RL.ALIGN_PARENT_BOTTOM]) t = availH - this.padB - c.measuredH - m.marginB;
           if (!wrapH && (lp.rules[RL.CENTER_VERTICAL] || lp.rules[RL.CENTER_IN_PARENT])) t = (availH - c.measuredH) >> 1;
-          const rOf = anchor(RL.RIGHT_OF);
+          const rOf = ruleAnchor(byId, lp, RL.RIGHT_OF);
           if (rOf) l = anchorPos(rOf).l + rOf.measuredW + m.marginL;
-          const lOf = anchor(RL.LEFT_OF);
+          const lOf = ruleAnchor(byId, lp, RL.LEFT_OF);
           if (lOf) l = anchorPos(lOf).l - c.measuredW - m.marginR;
-          const below = anchor(RL.BELOW);
+          const below = ruleAnchor(byId, lp, RL.BELOW);
           if (below) t = anchorPos(below).t + below.measuredH + m.marginT;
-          const above = anchor(RL.ABOVE);
+          const above = ruleAnchor(byId, lp, RL.ABOVE);
           if (above) t = anchorPos(above).t - c.measuredH - m.marginB;
-          const aL = anchor(RL.ALIGN_LEFT);
+          const aL = ruleAnchor(byId, lp, RL.ALIGN_LEFT);
           if (aL) l = anchorPos(aL).l;
-          const aT = anchor(RL.ALIGN_TOP);
+          const aT = ruleAnchor(byId, lp, RL.ALIGN_TOP);
           if (aT) t = anchorPos(aT).t;
-          const aR = anchor(RL.ALIGN_RIGHT);
+          const aR = ruleAnchor(byId, lp, RL.ALIGN_RIGHT);
           if (aR) l = anchorPos(aR).l + aR.measuredW - c.measuredW;
-          const aB = anchor(RL.ALIGN_BOTTOM);
+          const aB = ruleAnchor(byId, lp, RL.ALIGN_BOTTOM);
           if (aB) t = anchorPos(aB).t + aB.measuredH - c.measuredH;
-          const aBase = anchor(RL.ALIGN_BASELINE);
+          const aBase = ruleAnchor(byId, lp, RL.ALIGN_BASELINE);
           if (aBase) t = anchorPos(aBase).t;
           // AOSP getChildMeasureSpec: rules that fix both edges measure the child EXACTLY to the
           // span between them, whatever its layout_width/height (a later rule overrides an

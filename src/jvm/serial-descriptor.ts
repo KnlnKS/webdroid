@@ -1,6 +1,6 @@
 import { rt, type ClassInfo } from "./runtime";
 import { callOn, curThread, type JThread } from "./natives/jlang";
-import { mangleMethod, mangleStaticField } from "./abi";
+import { dotName, mangleMethod, mangleStaticField, PRIM_DESC } from "./abi";
 import { encodeModifiedUtf8 } from "./charset";
 
 type StreamField = { name: string; desc: string; prop: string };
@@ -14,14 +14,14 @@ export function streamClass(type: ClassInfo | string, thread = curThread): Promi
 }
 export function streamClassAny(type: ClassInfo | string, thread = curThread): Promise<StreamClass> {
   const name = typeof type === "string" ? type : type.name;
-  if (typeof type === "string" && ["boolean", "byte", "char", "short", "int", "long", "float", "double", "void"].includes(name))
+  if (typeof type === "string" && Object.hasOwn(PRIM_DESC, name))
     return Promise.resolve({ name, uid: 0n, flags: 0, fields: [], parent: null, info: null });
   if (typeof type !== "string" && !type.types.has("java/io/Serializable"))
-    return Promise.resolve({ name: name.replaceAll("/", "."), uid: 0n, flags: 0, fields: [], parent: null, info: type });
+    return Promise.resolve({ name: dotName(name), uid: 0n, flags: 0, fields: [], parent: null, info: type });
   return streamClass(type, thread);
 }
 async function descriptor(type: ClassInfo | string, thread: JThread): Promise<StreamClass> {
-  if (typeof type === "string") return { name: type.replaceAll("/", "."), uid: await computedUid(type), flags: 2, fields: [], parent: null, info: null };
+  if (typeof type === "string") return { name: dotName(type), uid: await computedUid(type), flags: 2, fields: [], parent: null, info: null };
   const info = type;
   await callOn(thread, () => rt.initClass(info));
   if (!info.types.has("java/io/Serializable")) throw rt.mkThrowable("java/io/NotSerializableException", info.name);
@@ -35,7 +35,7 @@ async function descriptor(type: ClassInfo | string, thread: JThread): Promise<St
   fields.sort((a, b) => +(a.desc.length > 1) - +(b.desc.length > 1) || compare(a.name, b.name));
   const uidProp = info.staticFieldTable.get("serialVersionUID:J") ?? mangleStaticField("serialVersionUID");
   const uid = native?.uid ?? (Object.hasOwn(info.ctor, uidProp) ? info.ctor[uidProp] : undefined);
-  return { name: info.name.replaceAll("/", "."), uid: isEnum ? 0n : typeof uid === "bigint" ? uid : await computedUid(info),
+  return { name: dotName(info.name), uid: isEnum ? 0n : typeof uid === "bigint" ? uid : await computedUid(info),
     flags: isEnum ? 18 : external ? 12 : Object.hasOwn(info.ctor.prototype, mangleMethod("writeObject", "(Ljava/io/ObjectOutputStream;)V")) ? 3 : 2,
     fields, parent: info.superInfo?.types.has("java/io/Serializable") ? await streamClass(info.superInfo, thread) : null, info };
 }
@@ -43,16 +43,16 @@ async function computedUid(type: ClassInfo | string): Promise<bigint> {
   const bytes: number[] = [];
   const int = (n: number) => { bytes.push(n >>> 24, n >>> 16 & 255, n >>> 8 & 255, n & 255); };
   const utf = (s: string) => { const b = encodeModifiedUtf8(s); bytes.push(b.length >> 8, b.length & 255); for (const v of b) bytes.push(v); };
-  if (typeof type === "string") { utf(type.replaceAll("/", ".")); int(0x411); }
+  if (typeof type === "string") { utf(dotName(type)); int(0x411); }
   else {
     const { dex, def } = type;
     if (!dex || !def) throw rt.mkThrowable("java/io/InvalidClassException", "Class metadata is unavailable: " + type.name);
-    utf(type.name.replaceAll("/", "."));
+    utf(dotName(type.name));
     const methods = [...def.directMethods, ...def.virtualMethods].map(m => ({ name: dex.method(m.methodIdx).name, desc: dex.methodDesc(m.methodIdx), flags: m.flags }));
     let flags = def.flags & 0x611;
     if (flags & 0x200) flags = methods.some(m => !m.name.startsWith("<")) ? flags | 0x400 : flags & ~0x400;
     int(flags);
-    for (const name of type.interfaces.map(i => i.name.replaceAll("/", ".")).sort()) utf(name);
+    for (const name of type.interfaces.map(i => dotName(i.name)).sort()) utf(name);
     const fields = [...def.instanceFields, ...def.staticFields].map(f => ({ ...dex.field(f.fieldIdx), flags: f.flags }));
     for (const f of fields.sort((a, b) => compare(a.name, b.name))) {
       if ((f.flags & 2) && (f.flags & 0x88)) continue;
@@ -60,10 +60,10 @@ async function computedUid(type: ClassInfo | string): Promise<bigint> {
     }
     if (methods.some(m => m.name === "<clinit>")) { utf("<clinit>"); int(8); utf("()V"); }
     for (const m of methods.filter(m => m.name === "<init>" && !(m.flags & 2)).sort((a, b) => compare(a.desc, b.desc))) {
-      utf(m.name); int(m.flags & 0xd3f); utf(m.desc.replaceAll("/", "."));
+      utf(m.name); int(m.flags & 0xd3f); utf(dotName(m.desc));
     }
     for (const m of methods.filter(m => !m.name.startsWith("<") && !(m.flags & 2)).sort((a, b) => compare(a.name, b.name) || compare(a.desc, b.desc))) {
-      utf(m.name); int((m.flags | (m.flags & 0x20000 ? 0x20 : 0)) & 0xd3f); utf(m.desc.replaceAll("/", "."));
+      utf(m.name); int((m.flags | (m.flags & 0x20000 ? 0x20 : 0)) & 0xd3f); utf(dotName(m.desc));
     }
   }
   const hash = await crypto.subtle.digest("SHA-1", Uint8Array.from(bytes));

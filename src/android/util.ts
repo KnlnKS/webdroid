@@ -7,6 +7,7 @@ import { device } from "../shell/config";
 import { vcall, after, stringHash, JEnum, linkInit } from "../jvm/natives/jlang";
 import { jeq } from "../jvm/natives/jutil";
 import { PATTERNS } from "./pattern-data";
+import { readerText } from "./xmlpull";
 
 rt.register({
   name: "android/util/Patterns", ctor: class extends JObj {},
@@ -42,9 +43,10 @@ rt.register({
   },
 });
 class JLogPrinter extends JObj { priority = 3; tag = ""; }
+const initLogPrinter = function (this: JLogPrinter, priority: number, tag: string) { this.priority = priority; this.tag = tag; };
 rt.register({ name: "android/util/LogPrinter", ctor: JLogPrinter, ifaces: ["android/util/Printer"], methods: {
-  "<init>(ILjava/lang/String;)V": function (this: JLogPrinter, priority: number, tag: string) { this.priority = priority; this.tag = tag; },
-  "<init>(ILjava/lang/String;I)V": function (this: JLogPrinter, priority: number, tag: string) { this.priority = priority; this.tag = tag; },
+  "<init>(ILjava/lang/String;)V": initLogPrinter,
+  "<init>(ILjava/lang/String;I)V": initLogPrinter,
   "println(Ljava/lang/String;)V": function (this: JLogPrinter, message: string) {
     logFn(["", "", "V", "D", "I", "W", "E", "A"][this.priority] ?? "P")(this.tag, message);
   },
@@ -302,7 +304,7 @@ rt.register({
   },
 });
 
-// android.util.TypedValue — real impl lives with res.ts; register constants here
+// android.util.TypedValue: res.ts fills one from a resolved value; the complex-unit math is here
 export class JTypedValue extends JObj {
   type = 0; data = 0; resourceId = 0; string: string | null = null; density = 0;
   assetCookie = 0;            // set to 1 by fillTypedValue: the app apk is our only asset path
@@ -508,13 +510,7 @@ class JJsonReader extends JObj {
 /** the document is drained through the VIRTUAL read, so an app's own Reader subclass works */
 async function jsonEvents(r: JJsonReader): Promise<JsonEv[]> {
   if (r.ev) return r.ev;
-  const buf = new Uint16Array(8192);
-  let s = "";
-  for (;;) {
-    const n = (await vcall(r.src, "read", "([CII)I", buf, 0, buf.length)) as number;
-    if (n <= 0) break;
-    s += String.fromCharCode(...buf.subarray(0, n));
-  }
+  const s = await readerText(r.src);
   const out: JsonEv[] = [];
   if (s.trim()) flattenJson(JSON.parse(s), out);
   out.push({ t: "END_DOCUMENT" });

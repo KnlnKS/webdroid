@@ -124,9 +124,6 @@ fn committed(c: *Cpu, i: u32, n: u32) bool {
 inline fn ret(c: *Cpu, v: u64) void {
     c.x[0] = v;
 }
-inline fn va(p: u32) u64 {
-    return mem.va(p);
-}
 fn wrote(d: u32, n: u32) void {
     _ = cpu.code_write(d, n);
 }
@@ -306,7 +303,7 @@ pub fn call(c: *Cpu, id: u8) Result {
             var found: u64 = 0;
             if (n != 0) {
                 const p = ptr(c, 0) orelse return .fault;
-                if (std.mem.findScalar(u8, mem.bytes(p)[0..n], ch)) |i| found = va(p + @as(u32, @intCast(i)));
+                if (std.mem.findScalar(u8, mem.bytes(p)[0..n], ch)) |i| found = mem.va(p + @as(u32, @intCast(i)));
             }
             ret(c, found);
         },
@@ -320,7 +317,7 @@ pub fn call(c: *Cpu, id: u8) Result {
             ret(c, std.mem.findScalar(u8, mem.bytes(p)[0..n], 0) orelse n);
         },
         .strcmp, .strncmp => {
-            const n: u32 = if (id == @intFromEnum(Fn.strncmp)) @truncate(arg(c, 2)) else 0x7fff_ffff;
+            const n: u32 = if (f == .strncmp) @truncate(arg(c, 2)) else 0x7fff_ffff;
             var r: i32 = 0;
             if (n != 0) {
                 const x = ptr(c, 0) orelse return .fault;

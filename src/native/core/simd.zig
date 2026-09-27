@@ -1,5 +1,4 @@
 const std = @import("std");
-const abi = @import("abi.zig");
 const mem = @import("mem.zig");
 const cpu = @import("cpu.zig");
 const a64 = @import("a64.zig");

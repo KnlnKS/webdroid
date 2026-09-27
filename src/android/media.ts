@@ -1,31 +1,23 @@
 // android.media: MediaPlayer over HTMLAudioElement, SoundPool over Web Audio.
 
 import { rt, JObj, stubs, noops, fieldGetters, driven, type Gen } from "../jvm/runtime";
-import { jarray } from "../jvm/abi";
 import { vcall, stringHash, vcallUncaught } from "../jvm/natives/jlang";
-import { uuidFromString } from "../jvm/natives/jvalues";
 import { newArrayList, newStringSet, type JList } from "../jvm/natives/jutil";
 import { type JFileDescriptor, vfs } from "../jvm/natives/jio";
 import { javaFdSource } from "../native/stdio";
 import { readFully } from "../shell/lazyfile";
 import type { JBuffer } from "../jvm/natives/jnio";
-rt.markers("android/media/AudioManager$OnAudioFocusChangeListener", "android/media/ImageReader$OnImageAvailableListener");
-/** the rate the Web Audio output actually runs at */
-export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
-let audioSession = 0;
-export const newAudioSessionId = (): number => ++audioSession;
 import { onMain } from "./mainloop";
 import { JBundle, reportUncaught } from "./os";
 import { mkUri } from "./net";
 import { csText } from "./text";
 import { scannedMediaUri } from "./mediastore";
 
-rt.register({ name: "android/media/audiofx/AudioEffect$Descriptor", ctor: class extends JObj { type = null; }, fields: { type: "type" } });
-rt.register({ name: "android/media/audiofx/AudioEffect", ctor: class extends JObj {},
-  statics: { EFFECT_TYPE_LOUDNESS_ENHANCER: uuidFromString("fe3199be-aed0-413f-87bb-11260eb63cf1") },
-  methods: { "static queryEffects()[Landroid/media/audiofx/AudioEffect$Descriptor;": () => jarray([], "Landroid/media/audiofx/AudioEffect$Descriptor;") },
-});
-
+rt.markers("android/media/AudioManager$OnAudioFocusChangeListener", "android/media/ImageReader$OnImageAvailableListener");
+/** the rate the Web Audio output actually runs at */
+export const outputSampleRate = (): number => actx?.sampleRate ?? 44100;
+let audioSession = 0;
+export const newAudioSessionId = (): number => ++audioSession;
 
 class JCamcorderProfile extends JObj {
   duration = 0; quality = 0; fileFormat = 0;
@@ -138,12 +130,10 @@ rt.register({ name: "android/media/MediaDescription$Builder", ctor: JMediaDescri
     function (this: JMediaDescriptionBuilder, value: unknown) { Reflect.set(this.value, field, value); return this; }])),
   "build()Landroid/media/MediaDescription;": function (this: JMediaDescriptionBuilder) { return Object.assign(new JMediaDescription(), this.value); },
 } });
-rt.register({ name: "android/media/session/PlaybackState$CustomAction", ctor: JPlaybackCustomAction, ifaces: ["android/os/Parcelable"], methods: {
-  "getAction()Ljava/lang/String;": function (this: JPlaybackCustomAction) { return this.action; },
-  "getName()Ljava/lang/CharSequence;": function (this: JPlaybackCustomAction) { return this.name; },
-  "getIcon()I": function (this: JPlaybackCustomAction) { return this.icon; },
-  "getExtras()Landroid/os/Bundle;": function (this: JPlaybackCustomAction) { return this.extras; },
-} });
+rt.register({ name: "android/media/session/PlaybackState$CustomAction", ctor: JPlaybackCustomAction, ifaces: ["android/os/Parcelable"], methods: fieldGetters({
+  "getAction()Ljava/lang/String;": "action", "getName()Ljava/lang/CharSequence;": "name",
+  "getIcon()I": "icon", "getExtras()Landroid/os/Bundle;": "extras",
+}) });
 rt.register({ name: "android/media/session/PlaybackState$CustomAction$Builder", ctor: JPlaybackCustomActionBuilder, methods: {
   "<init>(Ljava/lang/String;Ljava/lang/CharSequence;I)V": function (this: JPlaybackCustomActionBuilder, action: string, name: unknown, icon: number) {
     this.value.action = action; this.value.name = name; this.value.icon = icon;
@@ -151,18 +141,12 @@ rt.register({ name: "android/media/session/PlaybackState$CustomAction$Builder", 
   "setExtras(Landroid/os/Bundle;)Landroid/media/session/PlaybackState$CustomAction$Builder;": function (this: JPlaybackCustomActionBuilder, extras: unknown) { this.value.extras = extras; return this; },
   "build()Landroid/media/session/PlaybackState$CustomAction;": function (this: JPlaybackCustomActionBuilder) { return Object.assign(new JPlaybackCustomAction(), this.value); },
 } });
-rt.register({ name: "android/media/session/PlaybackState", ctor: JPlaybackState, ifaces: ["android/os/Parcelable"], methods: {
-  "getState()I": function (this: JPlaybackState) { return this.state; },
-  "getPosition()J": function (this: JPlaybackState) { return this.position; },
-  "getBufferedPosition()J": function (this: JPlaybackState) { return this.bufferedPosition; },
-  "getPlaybackSpeed()F": function (this: JPlaybackState) { return this.speed; },
-  "getActions()J": function (this: JPlaybackState) { return this.actions; },
-  "getErrorMessage()Ljava/lang/CharSequence;": function (this: JPlaybackState) { return this.errorMessage; },
-  "getLastPositionUpdateTime()J": function (this: JPlaybackState) { return this.updateTime; },
-  "getCustomActions()Ljava/util/List;": function (this: JPlaybackState) { return this.customActions; },
-  "getActiveQueueItemId()J": function (this: JPlaybackState) { return this.activeQueueItemId; },
-  "getExtras()Landroid/os/Bundle;": function (this: JPlaybackState) { return this.extras; },
-} });
+rt.register({ name: "android/media/session/PlaybackState", ctor: JPlaybackState, ifaces: ["android/os/Parcelable"], methods: fieldGetters({
+  "getState()I": "state", "getPosition()J": "position", "getBufferedPosition()J": "bufferedPosition",
+  "getPlaybackSpeed()F": "speed", "getActions()J": "actions", "getErrorMessage()Ljava/lang/CharSequence;": "errorMessage",
+  "getLastPositionUpdateTime()J": "updateTime", "getCustomActions()Ljava/util/List;": "customActions",
+  "getActiveQueueItemId()J": "activeQueueItemId", "getExtras()Landroid/os/Bundle;": "extras",
+}) });
 rt.register({ name: "android/media/session/PlaybackState$Builder", ctor: JPlaybackStateBuilder, methods: {
   "<init>()V": () => {},
   "setState(IJFJ)Landroid/media/session/PlaybackState$Builder;": function (this: JPlaybackStateBuilder, state: number, position: bigint, speed: number, time: bigint) {
@@ -230,13 +214,14 @@ rt.register({ name: "android/media/MediaMetadata", ctor: JMediaMetadata, ifaces:
     yield vcall(parcel, "writeBundle", "(Landroid/os/Bundle;)V", bundle);
   }),
 } });
+const putMetadata = function (this: JMediaMetadataBuilder, key: string, value: unknown) { this.value.values.set(key, value); return this; };
 rt.register({ name: "android/media/MediaMetadata$Builder", ctor: JMediaMetadataBuilder, methods: {
   "<init>()V": () => {},
-  "putText(Ljava/lang/String;Ljava/lang/CharSequence;)Landroid/media/MediaMetadata$Builder;": function (this: JMediaMetadataBuilder, key: string, value: unknown) { this.value.values.set(key, value); return this; },
-  "putString(Ljava/lang/String;Ljava/lang/String;)Landroid/media/MediaMetadata$Builder;": function (this: JMediaMetadataBuilder, key: string, value: string) { this.value.values.set(key, value); return this; },
-  "putLong(Ljava/lang/String;J)Landroid/media/MediaMetadata$Builder;": function (this: JMediaMetadataBuilder, key: string, value: bigint) { this.value.values.set(key, value); return this; },
-  "putBitmap(Ljava/lang/String;Landroid/graphics/Bitmap;)Landroid/media/MediaMetadata$Builder;": function (this: JMediaMetadataBuilder, key: string, value: unknown) { this.value.values.set(key, value); return this; },
-  "putRating(Ljava/lang/String;Landroid/media/Rating;)Landroid/media/MediaMetadata$Builder;": function (this: JMediaMetadataBuilder, key: string, value: unknown) { this.value.values.set(key, value); return this; },
+  "putText(Ljava/lang/String;Ljava/lang/CharSequence;)Landroid/media/MediaMetadata$Builder;": putMetadata,
+  "putString(Ljava/lang/String;Ljava/lang/String;)Landroid/media/MediaMetadata$Builder;": putMetadata,
+  "putLong(Ljava/lang/String;J)Landroid/media/MediaMetadata$Builder;": putMetadata,
+  "putBitmap(Ljava/lang/String;Landroid/graphics/Bitmap;)Landroid/media/MediaMetadata$Builder;": putMetadata,
+  "putRating(Ljava/lang/String;Landroid/media/Rating;)Landroid/media/MediaMetadata$Builder;": putMetadata,
   "build()Landroid/media/MediaMetadata;": function (this: JMediaMetadataBuilder) { const value = new JMediaMetadata(); value.values = new Map(this.value.values); return value; },
 } });
 export class JAudioAttributes extends JObj { usage = 0; contentType = 0; flags = 0x800; }
@@ -578,6 +563,9 @@ rt.register({
 // AudioContext; the periodic position listener is what streaming mixers (a native engine's
 // SoundPlayer) refill from, so it fires whenever the queue runs below a few periods.
 const D_periodic = "(Landroid/media/AudioTrack;)V";
+/** the channel count of a legacy CHANNEL_OUT_STEREO (12) / CHANNEL_CONFIGURATION_STEREO (3) or mono config */
+const legacyChannels = (config: number) => config === 12 || config === 3 ? 2 : 1;
+const bitCount = (mask: number) => { let n = 0; for (; mask; mask &= mask - 1) n++; return n; };
 export class JAudioTrack extends JObj {
   rate = 44100; channels = 2; bytesPerSample = 2; bufBytes = 0;
   sessionId = 0; attributes: unknown = null;
@@ -648,6 +636,11 @@ export class JAudioTrack extends JObj {
     this.written += frames;
     if (this.playState === 3) this.schedule();
   }
+  /** a byte[] write: 16-bit samples are copied out, 8-bit ones read in place */
+  pushBytes(data: Int8Array, off: number, n: number): void {
+    if (this.bytesPerSample === 2) this.push(new Int16Array(data.buffer.slice(data.byteOffset + off, data.byteOffset + off + (n & ~1))), Math.floor(n / this.frameBytes()));
+    else this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
+  }
   writeBuffer(buffer: JBuffer, n: number, mode: number): number | Promise<number> {
     if (this.state !== 1) return -3;
     if (!buffer || n < 0 || n > buffer.lim - buffer.pos || (mode !== 0 && mode !== 1)) return -2;
@@ -689,18 +682,22 @@ export class JAudioTrack extends JObj {
   }
   stopTimer(): void { if (this.timer) { clearInterval(this.timer); this.timer = null; } }
 }
+const setPositionListener = function (this: JAudioTrack, l: unknown) { this.listener = l; if (!l) this.stopTimer(); else if (this.playState === 3) this.startTimer(); };
+const bufferFrames = function (this: JAudioTrack) { return Math.floor(this.bufBytes / this.frameBytes()); };
+const writeByteBuffer = function (this: JAudioTrack, buffer: JBuffer, n: number, mode: number) { return this.writeBuffer(buffer, n, mode); };
 rt.register({
   name: "android/media/AudioTrack", ctor: JAudioTrack,
   statics: { MODE_STATIC: 0, MODE_STREAM: 1, PLAYSTATE_STOPPED: 1, PLAYSTATE_PAUSED: 2, PLAYSTATE_PLAYING: 3, STATE_UNINITIALIZED: 0, STATE_INITIALIZED: 1, STATE_NO_STATIC_DATA: 2,
     SUCCESS: 0, ERROR: -1, ERROR_BAD_VALUE: -2, ERROR_INVALID_OPERATION: -3, WRITE_BLOCKING: 0, WRITE_NON_BLOCKING: 1 },
   methods: {
     "<init>(IIIIII)V": function (this: JAudioTrack, _stream: number, rate: number, chanCfg: number, fmt: number, bufBytes: number) {
-      this.rate = rate; this.channels = chanCfg === 12 || chanCfg === 3 ? 2 : 1; this.bytesPerSample = fmt === 3 ? 1 : 2; this.bufBytes = bufBytes;
+      this.rate = rate; this.channels = legacyChannels(chanCfg); this.bytesPerSample = fmt === 3 ? 1 : 2; this.bufBytes = bufBytes;
+      this.sessionId = newAudioSessionId();
     },
     "static getMinBufferSize(III)I": (rate: number, chanCfg: number, fmt: number) => {
       // ~100 ms of frames, as AudioFlinger answers for a typical output
       const frames = Math.max(1024, Math.ceil(rate / 10));
-      return frames * (chanCfg === 12 || chanCfg === 3 ? 2 : 1) * (fmt === 3 ? 1 : 2);
+      return frames * legacyChannels(chanCfg) * (fmt === 3 ? 1 : 2);
     },
     "static getNativeOutputSampleRate(I)I": () => outputSampleRate(),
     "static getMaxVolume()F": () => 1, "static getMinVolume()F": () => 0,
@@ -713,8 +710,8 @@ rt.register({
     "getPlaybackHeadPosition()I": function (this: JAudioTrack) { return this.playState === 1 ? 0 : Math.floor(this.head() - this.headOrigin) | 0; },
     "setStereoVolume(FF)I": function (this: JAudioTrack, l: number, r: number) { this.vol = (l + r) / 2; if (this.gain) this.gain.gain.value = this.vol; return 0; },
     "setVolume(F)I": function (this: JAudioTrack, v: number) { this.vol = v; if (this.gain) this.gain.gain.value = v; return 0; },
-    "setPlaybackPositionUpdateListener(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;)V": function (this: JAudioTrack, l: unknown) { this.listener = l; if (!l) this.stopTimer(); else if (this.playState === 3) this.startTimer(); },
-    "setPlaybackPositionUpdateListener(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;Landroid/os/Handler;)V": function (this: JAudioTrack, l: unknown) { this.listener = l; if (!l) this.stopTimer(); else if (this.playState === 3) this.startTimer(); },
+    "setPlaybackPositionUpdateListener(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;)V": setPositionListener,
+    "setPlaybackPositionUpdateListener(Landroid/media/AudioTrack$OnPlaybackPositionUpdateListener;Landroid/os/Handler;)V": setPositionListener,
     "setPositionNotificationPeriod(I)I": function (this: JAudioTrack, p: number) { this.period = p; return 0; },
     "play()V": function (this: JAudioTrack) { if (this.resetHead) { this.headOrigin = this.head(); this.resetHead = false; } this.playState = 3; void this.ctx().resume(); this.schedule(); this.startTimer(); },
     "pause()V": function (this: JAudioTrack) { this.playState = 2; this.pauseQueue(); this.stopTimer(); },
@@ -728,18 +725,16 @@ rt.register({
     },
     "write([BIII)I": function (this: JAudioTrack, data: Int8Array, off: number, n: number, mode: number) {
       if (this.state !== 1) return -3;
-      if (this.bytesPerSample === 2) this.push(new Int16Array(data.buffer.slice(data.byteOffset + off, data.byteOffset + off + (n & ~1))), Math.floor(n / this.frameBytes()));
-      else this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
+      this.pushBytes(data, off, n);
       return mode === 1 ? n : this.wrote(n);   // WRITE_NON_BLOCKING
     },
     "write([BII)I": function (this: JAudioTrack, data: Int8Array, off: number, n: number) {
       if (this.state !== 1) return -3;
-      if (this.bytesPerSample === 2) this.push(new Int16Array(data.buffer.slice(data.byteOffset + off, data.byteOffset + off + (n & ~1))), Math.floor(n / this.frameBytes()));
-      else this.push(data.subarray(off, off + n), Math.floor(n / this.channels));
+      this.pushBytes(data, off, n);
       return this.wrote(n);
     },
-    "getBufferSizeInFrames()I": function (this: JAudioTrack) { return Math.floor(this.bufBytes / this.frameBytes()); },
-    "getBufferCapacityInFrames()I": function (this: JAudioTrack) { return Math.floor(this.bufBytes / this.frameBytes()); },
+    "getBufferSizeInFrames()I": bufferFrames,
+    "getBufferCapacityInFrames()I": bufferFrames,
     ...fieldGetters({ "getState()I": "state", "getPlayState()I": "playState", "getSampleRate()I": "rate",
       "getChannelCount()I": "channels", "getAudioSessionId()I": "sessionId",
       "getAudioAttributes()Landroid/media/AudioAttributes;": "attributes", "getUnderrunCount()I": "underruns" }),
@@ -749,11 +744,10 @@ rt.register({
     ...stubs(null, "getRoutedDevice()Landroid/media/AudioDeviceInfo;"),
     ...noops("addOnRoutingChangedListener(Landroid/media/AudioRouting$OnRoutingChangedListener;Landroid/os/Handler;)V",
       "removeOnRoutingChangedListener(Landroid/media/AudioRouting$OnRoutingChangedListener;)V"),
-    "write(Ljava/nio/ByteBuffer;II)I": function (this: JAudioTrack, buffer: JBuffer, n: number, mode: number) { return this.writeBuffer(buffer, n, mode); },
-    "write(Ljava/nio/ByteBuffer;IIJ)I": function (this: JAudioTrack, buffer: JBuffer, n: number, mode: number) { return this.writeBuffer(buffer, n, mode); },
+    "write(Ljava/nio/ByteBuffer;II)I": writeByteBuffer,
+    "write(Ljava/nio/ByteBuffer;IIJ)I": writeByteBuffer,
   },
 });
-let nextAudioSession = 1;
 class JAudioTrackBuilder extends JObj {
   format: JAudioFormat | null = null;
   attributes: unknown = null;
@@ -792,14 +786,12 @@ rt.register({
       const track = rt.make("android/media/AudioTrack") as JAudioTrack;
       track.rate = format?.sampleRate || outputSampleRate();
       if (track.rate < 3000 || track.rate > 384000) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid sample rate");
-      let mask = format?.channelIndexMask || format?.channelMask || 12, channels = 0;
-      for (; mask; mask &= mask - 1) channels++;
-      track.channels = channels;
+      track.channels = bitCount(format?.channelIndexMask || format?.channelMask || 12);
       track.bytesPerSample = encoding === 4 ? 4 : encoding === 3 ? 1 : 2;
       track.bufBytes = this.bufferSize || Math.max(1024, Math.ceil(track.rate / 10)) * track.frameBytes();
       if (track.bufBytes % track.frameBytes()) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Buffer size must contain whole frames");
       track.attributes = this.attributes;
-      track.sessionId = this.sessionId || nextAudioSession++;
+      track.sessionId = this.sessionId || newAudioSessionId();
       return track;
     },
   },
@@ -833,11 +825,7 @@ rt.register({
   methods: {
     ...fieldGetters({ "getEncoding()I": "encoding", "getSampleRate()I": "sampleRate",
       "getChannelMask()I": "channelMask", "getChannelIndexMask()I": "channelIndexMask" }),
-    "getChannelCount()I": function (this: JAudioFormat) {
-      let mask = this.channelMask || this.channelIndexMask, n = 0;
-      for (; mask; mask &= mask - 1) n++;
-      return n;
-    },
+    "getChannelCount()I": function (this: JAudioFormat) { return bitCount(this.channelMask || this.channelIndexMask); },
   },
 });
 class JAudioFormatBuilder extends JObj { format = new JAudioFormat(); }
@@ -905,7 +893,6 @@ rt.register({
     "getSelectedRoute(I)Landroid/media/MediaRouter$RouteInfo;": () => theRoute,
     "getDefaultRoute()Landroid/media/MediaRouter$RouteInfo;": () => theRoute,
     "getRouteAt(I)Landroid/media/MediaRouter$RouteInfo;": (i: number) => (i === 0 ? theRoute : null),
-
     ...stubs(1, "getRouteCount()I"),
     ...noops("addCallback(ILandroid/media/MediaRouter$Callback;)V",
       "addCallback(ILandroid/media/MediaRouter$Callback;I)V", "removeCallback(Landroid/media/MediaRouter$Callback;)V"),
@@ -964,7 +951,6 @@ rt.register({
     "getDescription()Ljava/lang/CharSequence;": () => null,
     "getDeviceType()I": () => 0,
     "isEnabled()Z": () => 1,
-
   },
 });
 

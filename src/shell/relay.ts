@@ -27,6 +27,8 @@ export function syntheticAddress(host: string): Ipv4 {
   return bytes;
 }
 export const syntheticHost = (bytes: ArrayLike<number>): string | null => hostBySynthetic.get(ipv4Key(bytes)) ?? null;
+const pageOrigin = () => typeof location === "undefined" ? "http://localhost" : `${location.protocol}//${location.host}`;
+const socketOrigin = () => pageOrigin().replace(/^http/, "ws");
 /** Whether `host` exists in DNS, asked of the dev server once per name: true, false for NXDOMAIN, or
  *  null when nothing could be asked (no server, a transport error), which callers treat as unknown
  *  rather than absent. A numeric literal exists. */
@@ -35,9 +37,8 @@ export function nameExists(host: string): Promise<boolean | null> | boolean {
   if (parseIpv4(host) || host === "localhost") return true;
   let pending = knownNames.get(host);
   if (!pending) {
-    const page = typeof location === "undefined" ? null : location;
-    pending = page ? fetch(`${page.protocol}//${page.host}/dns?host=${encodeURIComponent(host)}`).then(
-      (r) => r.status === 200 ? true : r.status === 404 ? false : null, () => null) : Promise.resolve(null);
+    pending = typeof location === "undefined" ? Promise.resolve(null) : fetch(`${pageOrigin()}/dns?host=${encodeURIComponent(host)}`).then(
+      (r) => r.status === 200 ? true : r.status === 404 ? false : null, () => null);
     knownNames.set(host, pending);
   }
   return pending;
@@ -48,16 +49,15 @@ export function dialName(host: string): string {
   return (numeric && syntheticHost(numeric)) || host;
 }
 
-const pageOrigin = () => typeof location === "undefined" ? "http://localhost" : `${location.protocol}//${location.host}`;
 const relayUrl = (host: string, port: number, tls: boolean, alpn: string[]) =>
-  `${pageOrigin().replace(/^http/, "ws")}/tcp?host=${encodeURIComponent(dialName(host))}&port=${port}${tls ? "&tls=1" + alpn.map(p => "&alpn=" + encodeURIComponent(p)).join("") : ""}`;
+  `${socketOrigin()}/tcp?host=${encodeURIComponent(dialName(host))}&port=${port}${tls ? "&tls=1" + alpn.map(p => "&alpn=" + encodeURIComponent(p)).join("") : ""}`;
 
 export class DatagramRelay {
   private transport: Promise<WebSocket> | null = null;
   private closed = false;
   constructor(private readonly onPacket: (data: Uint8Array, source: Ipv4, port: number) => void) {}
   private open(): Promise<WebSocket> {
-    const transport = new WebSocket(`${pageOrigin().replace(/^http/, "ws")}/udp`);
+    const transport = new WebSocket(`${socketOrigin()}/udp`);
     transport.binaryType = "arraybuffer";
     return new Promise<WebSocket>((resolve, reject) => {
       let opened = false;

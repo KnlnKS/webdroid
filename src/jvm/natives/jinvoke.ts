@@ -18,7 +18,6 @@ function handle(method: JMethod, receiver: unknown = null, bound = false): JMeth
 }
 
 defineException("java/lang/invoke/WrongMethodTypeException", "java/lang/RuntimeException");
-rt.link("java/lang/invoke/WrongMethodTypeException");
 
 rt.register({
   name: "java/lang/invoke/MethodHandle", ctor: JMethodHandle,

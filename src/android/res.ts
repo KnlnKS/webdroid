@@ -2,7 +2,7 @@
 // resource id. Implements the full attribute-resolution cascade (XML → style → defStyle → theme).
 
 import { Arsc } from "./arsc";
-import { TV, parseAXML, type XmlNode } from "./axml";
+import { TV, parseAXML, type XmlNode, type XmlAttr } from "./axml";
 import { JObj } from "../jvm/runtime";
 import { JDisplayMetrics, JTypedValue, complexToPx } from "./util";
 import { mangleMethod, intBitsToFloat, floatToIntBits } from "../jvm/abi";
@@ -69,6 +69,18 @@ export function normRV(v: RV): RV {
   if (v.t === TV.FLOAT) return { t: TV.FLOAT, d: intBitsToFloat(v.d), s: v.s };
   return v;
 }
+/** a raw AXML attribute → RV, its string literal as T_STR */
+export function xmlAttrRV(a: XmlAttr): RV {
+  return a.type === TV.STRING ? { t: T_STR, d: 0, s: a.str ?? "" } : normRV({ t: a.type, d: a.data });
+}
+// An id of 0 is AID missing the name, and an attribute with no resource-map entry (style=, a
+// tools: one) also carries 0 -- so a miss would bind to whichever of those came first.
+/** the node's attribute with this resource id, as an RV */
+export function nodeAttrRV(node: XmlNode, resId: number): RV | null {
+  if (!resId) return null;
+  for (const a of node.attrs) if (a.resId === resId) return xmlAttrRV(a);
+  return null;
+}
 
 /** an app XML colour literal (#rgb … #aarrggbb) — the one raw string form still parsed */
 function parseColor(raw: string): number {
@@ -78,6 +90,8 @@ function parseColor(raw: string): number {
   return parseInt(h, 16) | 0;
 }
 interface Bag { parent: number; map: Map<number, RV>; }
+/** resource types a reference to stays a reference: the caller loads them by id */
+const LOADED_BY_ID = new Set(["drawable", "layout", "style", "anim", "xml", "menu", "mipmap", "raw", "font", "id", "transition", "interpolator", "animator"]);
 
 /**
  * Every resource memo below is only valid for one device Configuration: the same id resolves to
@@ -89,36 +103,19 @@ const allResources: Resources[] = [];
 /** the booted app's Resources — the framework package is an Arsc, not one of these, so the
  *  most recent is the app's. AOSP's AssetManager handle is this (src/android/delegates.ts). */
 export function currentResources(): Resources | null { return allResources[allResources.length - 1] ?? null; }
-export function setResourceNight(night: boolean): void {
+/** Re-resolve entries under changed qualifiers in every live resource table. */
+function setDeviceQualifiers(qualifiers: Partial<Arsc["device"]>): void {
   configGen++;
   for (const r of allResources) {
     r.invalidate();
-    if (r.arsc) r.arsc.device.night = night ? 1 : 0;
+    if (r.arsc) Object.assign(r.arsc.device, qualifiers);
   }
-  if (fwPkg) {
-    fwPkg.device.night = night ? 1 : 0;
-  }
+  if (fwPkg) Object.assign(fwPkg.device, qualifiers);
 }
-
-export function setResourceLocale(lang: string, dir: number): void {
-  configGen++;
-  for (const r of allResources) {
-    r.invalidate();
-    if (r.arsc) Object.assign(r.arsc.device, { lang, dir });
-  }
-  if (fwPkg) Object.assign(fwPkg.device, { lang, dir });
-}
-
-/** Re-resolve orientation and size-qualified entries in every live resource table. */
-export function setResourceOrientation(orientation: number, wdp: number, hdp: number, swdp: number): void {
-  configGen++;
-  const update = (a: Arsc) => Object.assign(a.device, { orientation, wdp, hdp, swdp });
-  for (const r of allResources) {
-    r.invalidate();
-    if (r.arsc) update(r.arsc);
-  }
-  if (fwPkg) update(fwPkg);
-}
+export const setResourceNight = (night: boolean): void => setDeviceQualifiers({ night: night ? 1 : 0 });
+export const setResourceLocale = (lang: string, dir: number): void => setDeviceQualifiers({ lang, dir });
+export const setResourceOrientation = (orientation: number, wdp: number, hdp: number, swdp: number): void =>
+  setDeviceQualifiers({ orientation: orientation as Arsc["device"]["orientation"], wdp, hdp, swdp });
 
 /**
  * A theme attribute by name, in either package. A support library re-declares framework attr
@@ -217,8 +214,7 @@ export class Resources {
   /** resolve REFERENCE chains (not ATTRIBUTE) */
   resolveRefs(v: RV, depth = 0): RV {
     while (v.t === TV.REFERENCE && v.d && depth++ < 20) {
-      const t = this.idType(v.d);
-      if (t === "drawable" || t === "layout" || t === "style" || t === "anim" || t === "xml" || t === "menu" || t === "mipmap" || t === "raw" || t === "font" || t === "id" || t === "transition" || t === "interpolator" || t === "animator") break; // keep as ref; caller loads
+      if (LOADED_BY_ID.has(this.idType(v.d))) break;
       const nv = this.value(v.d);
       if (nv.t === TV.NULL) break;
       if (nv.t === TV.REFERENCE && nv.d === v.d) break;
@@ -376,18 +372,23 @@ export function obtainStyled(
     let v: RV | null = null;
     // 1. direct XML attribute
     if (set?.node) {
-      for (const a of set.node.attrs) {
-        if (a.resId === attrId) {
-          v = a.type === TV.STRING ? { t: T_STR, d: 0, s: a.str ?? "" } : normRV({ t: a.type, d: a.data });
-          break;
-        }
-      }
+      v = nodeAttrRV(set.node, attrId);
     }
     if (!v && xmlStyleId) v = res.styleLookup(xmlStyleId, attrId);
     if (!v && defStyleId) v = res.styleLookup(defStyleId, attrId);
     if (!v && theme) v = theme.lookup(attrId);
     ta.vals[i] = resolveStyleValue(res, theme, v);
   }
+  return ta;
+}
+
+/** Theme/Context.obtainStyledAttributes(styleId, attrs): the style's own values, no XML or defaults */
+export function obtainStyleAttributes(res: Resources, theme: JTheme | null, styleId: number, attrIds: Int32Array): JTypedArray {
+  const ta = new JTypedArray();
+  ta.res = res;
+  ta.theme = theme;
+  ta.attrIds = attrIds;
+  ta.vals = [...attrIds].map((a) => resolveStyleValue(res, theme, res.styleLookup(styleId, a)));
   return ta;
 }
 
@@ -452,8 +453,9 @@ function colorFromSelector(res: Resources, resId: number, dflt: number): number 
   selCache.set(resId, dflt); // guard against re-entry
   const e = res.tbl(resId)?.entry(resId);
   if (e?.value) {
-    if (e.value.type >= TV.COLOR_ARGB8 && e.value.type <= TV.COLOR_RGB4) { selCache.set(resId, e.value.data); return e.value.data; }
-    if (e.value.type >= TV.INT_DEC && e.value.type <= TV.INT_HEX) { selCache.set(resId, e.value.data); return e.value.data; }
+    if (e.value.type >= TV.COLOR_ARGB8 && e.value.type <= TV.COLOR_RGB4 || e.value.type >= TV.INT_DEC && e.value.type <= TV.INT_HEX) {
+      selCache.set(resId, e.value.data); return e.value.data;
+    }
     if (e.value.type === TV.STRING) {
       const f = res.fileOf(resId);
       const bytes = f?.path.endsWith(".xml") ? f.bytes : null;

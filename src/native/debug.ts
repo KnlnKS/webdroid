@@ -44,7 +44,7 @@ export const native = {
   },
   /** step(true) single-steps every Cpu into step.ring (pc + changed registers) */
   step: (on = true) => { setStepMode(on); return stepMode; },
-  stepRing: stepMode.ring, stepHits: stepMode.hits,
+  stepRing: stepMode.ring,
   mem: mem.stats, memObj: mem, cpus: () => [...cpus],
   /** the frame-pointer chain of a thread; a watched pc logs its registers on every entry */
   backtrace: (name: string) => { const c = [...cpus].find((c) => c.name === name); return c ? backtrace(c) : []; }, watchPcs, lastFault, invalidations,

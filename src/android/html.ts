@@ -1,8 +1,9 @@
 // android.text.Html: AOSP's HtmlToSpannedConverter with the browser's parser as the tokenizer.
 
 import { rt, JObj } from "../jvm/runtime";
+import { after } from "../jvm/natives/jlang";
 import { COLOR_NAMES } from "./graphics";
-import { type JSpannable, spannedString } from "./text";
+import { type JSpannable, csText, spannedString } from "./text";
 
 class JHtml extends JObj {}
 rt.register({
@@ -14,11 +15,11 @@ rt.register({
     // converter below calls neither, so they are accepted and ignored
     "static fromHtml(Ljava/lang/String;Landroid/text/Html$ImageGetter;Landroid/text/Html$TagHandler;)Landroid/text/Spanned;": (s: string) => htmlToSpan(s),
     "static fromHtml(Ljava/lang/String;ILandroid/text/Html$ImageGetter;Landroid/text/Html$TagHandler;)Landroid/text/Spanned;": (s: string, flags: number) => htmlToSpan(s, flags),
-    "static toHtml(Landroid/text/Spanned;)Ljava/lang/String;": (sp: unknown) => spannedString(sp),
-    "static toHtml(Landroid/text/Spanned;I)Ljava/lang/String;": (sp: unknown) => spannedString(sp),
+    "static toHtml(Landroid/text/Spanned;)Ljava/lang/String;": spannedString,
+    "static toHtml(Landroid/text/Spanned;I)Ljava/lang/String;": spannedString,
     // AOSP withinStyle: the five markup characters and every non-ASCII code point as entities
-    "static escapeHtml(Ljava/lang/CharSequence;)Ljava/lang/String;": (cs: unknown) =>
-      String(cs).replace(/[<>&'"]|[^\x00-\x7f]/gu, (c) => c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "&" ? "&amp;" : c === "'" ? "&#39;" : c === "\"" ? "&quot;" : "&#" + c.codePointAt(0) + ";"),
+    "static escapeHtml(Ljava/lang/CharSequence;)Ljava/lang/String;": (cs: unknown) => after(csText(cs), (text) =>
+      text.replace(/[<>&'"]|[^\x00-\x7f]/gu, (c) => c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === "&" ? "&amp;" : c === "'" ? "&#39;" : c === "\"" ? "&quot;" : "&#" + c.codePointAt(0) + ";")),
   },
 });
 rt.markers("android/text/Html$ImageGetter", "android/text/Html$TagHandler");

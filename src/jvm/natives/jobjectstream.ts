@@ -1,12 +1,16 @@
-import { encodeModifiedUtf8, decodeModifiedUtf8 } from "../charset";
+import { encodeModifiedUtf8 } from "../charset";
 import { streamClass, streamClassAny, type StreamClass } from "../serial-descriptor";
 import { rt, ClassInfo, driven, type Gen } from "../runtime";
-import { i8, jmethod, mangleMethod, jarray, primElem, PRIM_ARRAYS, type PrimElem } from "../abi";
+import { i8, jmethod, mangleMethod, jarray, primElem, PRIM_ARRAYS, type PrimElem, decodeModifiedUtf8 } from "../abi";
 import { vcall, vcallOn, callOn, curThread, type JThread, newObj, JClass } from "./jlang";
 import { JInputStream, JOutputStream, dataBytes, readers, writers } from "./jio";
 
 const STREAM_MAGIC = 0xaced, STREAM_VERSION = 5, TC_BLOCKDATA = 0x77, TC_BLOCKDATALONG = 0x7a;
 type FieldContext = { value: object; desc: StreamClass };
+const M_WRITE_REPLACE = mangleMethod("writeReplace", "()Ljava/lang/Object;"), M_READ_RESOLVE = mangleMethod("readResolve", "()Ljava/lang/Object;");
+const M_WRITE_OBJECT = mangleMethod("writeObject", "(Ljava/io/ObjectOutputStream;)V"), M_READ_OBJECT = mangleMethod("readObject", "(Ljava/io/ObjectInputStream;)V");
+const M_INIT = mangleMethod("<init>", "()V");
+const PRIMITIVE_NAMES = new Set(["boolean", "byte", "char", "short", "int", "long", "float", "double", "void"]);
 class JObjectIn extends JInputStream {
   blockEnd = 0; handles: unknown[] = []; descriptors = new Map<unknown, StreamClass>(); context: FieldContext | null = null; resolve = false;
 }
@@ -170,7 +174,7 @@ async function writeObject(thread: JThread, o: JObjectOut, value: unknown): Prom
   if (reference(o, value)) return;
   if (!o.replacements.has(original)) {
     while (value !== null && typeof value === "object" && rt.iof(value, "java/io/Serializable")) {
-      const hook = jmethod(value, mangleMethod("writeReplace", "()Ljava/lang/Object;"));
+      const hook = jmethod(value, M_WRITE_REPLACE);
       if (!hook) break;
       const replaced = await callOn(thread, () => hook.call(value));
       const sameClass = replaced != null && typeof replaced === "object" && replaced.constructor === value.constructor;
@@ -227,7 +231,7 @@ async function writeObject(thread: JThread, o: JObjectOut, value: unknown): Prom
       o.context = { value: value as object, desc: c };
       try {
         if (c.flags & 1) {
-          await callOn(thread, () => jmethod(c.info!.ctor.prototype, mangleMethod("writeObject", "(Ljava/io/ObjectOutputStream;)V"))!.call(value, o));
+          await callOn(thread, () => jmethod(c.info!.ctor.prototype, M_WRITE_OBJECT)!.call(value, o));
           o.chunks.push(TC_ENDBLOCKDATA);
         } else await writeFields(thread, o, o.context);
       } finally { o.context = previous; }
@@ -319,7 +323,7 @@ async function readObject(thread: JThread, s: JObjectIn, tag?: number): Promise<
     case TC_CLASSDESC: {
       const name = await readUtf(thread, s), uid = (await rawView(thread, s, 8)).getBigInt64(0);
       const type = name.replaceAll(".", "/");
-      const primitive = ["boolean", "byte", "char", "short", "int", "long", "float", "double", "void"].includes(type);
+      const primitive = PRIMITIVE_NAMES.has(type);
       const info = name.startsWith("[") || primitive ? null : rt.link(type);
       const local = await streamClassAny(info ?? type, thread);
       if (info && local.uid !== uid) throw rt.mkThrowable("java/io/InvalidClassException", "serialVersionUID mismatch: " + name);
@@ -383,18 +387,17 @@ async function readObject(thread: JThread, s: JObjectIn, tag?: number): Promise<
         const hierarchy: StreamClass[] = [];
         for (let c: StreamClass | null = desc; c; c = c.parent) hierarchy.unshift(c);
         const base = hierarchy[0].info?.superInfo;
-        if (base) await callOn(thread, () => jmethod(base.ctor.prototype, mangleMethod("<init>", "()V"))?.call(value));
+        if (base) await callOn(thread, () => jmethod(base.ctor.prototype, M_INIT)?.call(value));
         for (const c of hierarchy) {
           const previous = s.context; s.context = { value, desc: c };
           try {
-            const method = mangleMethod("readObject", "(Ljava/io/ObjectInputStream;)V");
-            const hook = Object.hasOwn(c.info!.ctor.prototype, method) ? jmethod(c.info!.ctor.prototype, method) : undefined;
+            const hook = Object.hasOwn(c.info!.ctor.prototype, M_READ_OBJECT) ? jmethod(c.info!.ctor.prototype, M_READ_OBJECT) : undefined;
             if (hook) await callOn(thread, () => hook.call(value, s)); else await readFields(thread, s, s.context);
             if (c.flags & 1) await skipAnnotation(thread, s);
           } finally { s.context = previous; }
         }
       }
-      const hook = jmethod(value, mangleMethod("readResolve", "()Ljava/lang/Object;"));
+      const hook = jmethod(value, M_READ_RESOLVE);
       return resolveRead(thread, s, hook ? await callOn(thread, () => hook.call(value)) : value, handle);
     }
     default: throw rt.mkThrowable("java/io/StreamCorruptedException", "unsupported serialization tag 0x" + tag.toString(16));

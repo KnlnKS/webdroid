@@ -9,7 +9,7 @@ import { parseArgs } from "./lib/args";
 import { flowSchemaHash, screenOf, screenParam, uiFileFor, type Flow, type Manifest, type RecordedStep, type Step, type UiNode } from "./types";
 import { diffTrees } from "./lib/tree";
 import type { FlowRun } from "./capture-webdroid";
-import { E2E_DIR, sha1 } from "./lib/util";
+import { E2E_DIR, runQueue, sha1 } from "./lib/util";
 
 /**
  * The device half of the structural comparison. A full hierarchy if the recorder captured one;
@@ -150,12 +150,7 @@ if (import.meta.main) {
     await Bun.write(flowJson(flows[0].app), JSON.stringify(r));
     printFlow(r);
   } else {
-    const queue = flows.map((f) => f.app);
-    const summaries = new Map<string, string>();
-    await Promise.all(Array.from({ length: Math.min(jobs, queue.length) }, async () => {
-      for (let app = queue.shift(); app; app = queue.shift()) summaries.set(app, await scoreFlow(app));
-    }));
-    for (const f of flows) console.log(summaries.get(f.app));
+    for (const summary of await runQueue(flows.map((f) => f.app), jobs, () => 0, scoreFlow)) console.log(summary);
     // scored flows all share the goldens' geometry — diffImages would have thrown otherwise
     const first: Manifest = await Bun.file(`${E2E_DIR}golden/${flows[0].app}/manifest.json`).json();
     const { out } = await assembleReport(flows.map((f) => f.app), screenParam(screenOf(first)));

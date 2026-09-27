@@ -131,15 +131,14 @@ async function inflateChildren(inflater: JLayoutInflater, node: XmlNode, parentV
 }
 
 let inflateDepth = 0;
-async function inflateNode(jctx: unknown, root: XmlNode, parent: JViewGroup | null, attach: boolean, inflater?: JLayoutInflater): Promise<JView | null> {
+async function inflateNode(jctx: unknown, root: XmlNode, parent: JViewGroup | null, attach: boolean, inflater: JLayoutInflater): Promise<JView | null> {
   if (++inflateDepth > 60) { inflateDepth--; throw rt.mkThrowable("java/lang/StackOverflowError", "inflate recursion at " + root.name); }
   try { return await inflateNodeInner(jctx, root, parent, attach, inflater); }
   finally { inflateDepth--; }
 }
-async function inflateNodeInner(jctx: unknown, root: XmlNode, parent: JViewGroup | null, attach: boolean, inflater?: JLayoutInflater): Promise<JView | null> {
+async function inflateNodeInner(jctx: unknown, root: XmlNode, parent: JViewGroup | null, attach: boolean, inf: JLayoutInflater): Promise<JView | null> {
   const ctx = jctx as JContext;
   const host = ctx.$host;
-  const inf = inflater ?? getInflater(ctx);
   if (root.name === "merge") {
     if (!parent) throw rt.mkThrowable("java/lang/IllegalStateException", "<merge> needs a parent");
     await inflateChildren(inf, root, parent, ctx);

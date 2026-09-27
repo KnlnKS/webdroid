@@ -1,5 +1,5 @@
-import { u8 } from "../jvm/abi";
 // Android binary XML (AXML) + shared string-pool / Res_value bits (also used by arsc.ts)
+import { u8 } from "../jvm/abi";
 
 export const TV = { // typed value dataType
   NULL: 0x00, REFERENCE: 0x01, ATTRIBUTE: 0x02, STRING: 0x03, FLOAT: 0x04,
@@ -9,49 +9,69 @@ export const TV = { // typed value dataType
 
 const utf8Dec = new TextDecoder();
 
+/** A string pool chunk. Strings decode on first read: a resource table holds tens of thousands,
+ *  and an app reads a small share of them. A split table's pool is appended past the base one. */
 export class StringPool {
-  strings: string[] = [];
-  private view: DataView;
+  private readonly view: DataView;
+  private readonly cache: (string | undefined)[];
+  private readonly offsets: number;
+  private readonly start: number;
+  private readonly utf8: boolean;
+  private readonly count: number;
+  private next: StringPool | null = null;
   private stylesOff = 0;      // 0 when the pool carries no style spans
   private styleOffsets = 0;
   private styleCount = 0;
   constructor(view: DataView, off: number) {
-    const count = view.getUint32(off + 8, true);
-    const flags = view.getUint32(off + 16, true);
-    const stringsStart = off + view.getUint32(off + 20, true);
     this.view = view;
-    const utf8 = (flags & 0x100) !== 0;
-    const offsetsBase = off + view.getUint16(off + 2, true); // after header
+    this.count = view.getUint32(off + 8, true);
+    this.cache = new Array(this.count);
+    this.utf8 = (view.getUint32(off + 16, true) & 0x100) !== 0;
+    this.start = off + view.getUint32(off + 20, true);
+    this.offsets = off + view.getUint16(off + 2, true); // after header
     this.styleCount = view.getUint32(off + 12, true);
     const stylesStart = view.getUint32(off + 24, true);
     if (this.styleCount && stylesStart) {
       this.stylesOff = off + stylesStart;
-      this.styleOffsets = offsetsBase + count * 4;   // the style offsets follow the string ones
-    }
-    for (let i = 0; i < count; i++) {
-      let p = stringsStart + view.getUint32(offsetsBase + i * 4, true);
-      if (utf8) {
-        let u16len = view.getUint8(p++);
-        if (u16len & 0x80) u16len = ((u16len & 0x7f) << 8) | view.getUint8(p++);
-        let bytelen = view.getUint8(p++);
-        if (bytelen & 0x80) bytelen = ((bytelen & 0x7f) << 8) | view.getUint8(p++);
-        const bytes = u8(view, p, bytelen);
-        this.strings.push(utf8Dec.decode(bytes));
-      } else {
-        let len = view.getUint16(p, true); p += 2;
-        if (len & 0x8000) { len = ((len & 0x7fff) << 16) | view.getUint16(p, true); p += 2; }
-        let s = "";
-        for (let j = 0; j < len; j += 1024) {
-          const end = Math.min(len, j + 1024);
-          const arr: number[] = [];
-          for (let k = j; k < end; k++) arr.push(view.getUint16(p + k * 2, true));
-          s += String.fromCharCode(...arr);
-        }
-        this.strings.push(s);
-      }
+      this.styleOffsets = this.offsets + this.count * 4;   // the style offsets follow the string ones
     }
   }
-  get(i: number): string { return i === 0xffffffff ? "" : this.strings[i] ?? ""; }
+  /** strings across this pool and any appended to it */
+  get length(): number { return this.count + (this.next?.length ?? 0); }
+  /** Append a pool; returns the index its first string now has. */
+  append(pool: StringPool): number {
+    const at = this.length;
+    let tail: StringPool = this;
+    while (tail.next) tail = tail.next;
+    tail.next = pool;
+    return at;
+  }
+  at(i: number): string | undefined {
+    if (i < 0) return undefined;
+    if (i >= this.count) return this.next?.at(i - this.count);
+    return this.cache[i] ??= this.decode(i);
+  }
+  get(i: number): string { return i === 0xffffffff ? "" : this.at(i) ?? ""; }
+  private decode(i: number): string {
+    const view = this.view;
+    let p = this.start + view.getUint32(this.offsets + i * 4, true);
+    if (this.utf8) {
+      if (view.getUint8(p++) & 0x80) p++;                    // the UTF-16 length, unused
+      let bytelen = view.getUint8(p++);
+      if (bytelen & 0x80) bytelen = ((bytelen & 0x7f) << 8) | view.getUint8(p++);
+      return utf8Dec.decode(u8(view, p, bytelen));
+    }
+    let len = view.getUint16(p, true); p += 2;
+    if (len & 0x8000) { len = ((len & 0x7fff) << 16) | view.getUint16(p, true); p += 2; }
+    let s = "";
+    for (let j = 0; j < len; j += 1024) {
+      const end = Math.min(len, j + 1024);
+      const arr: number[] = [];
+      for (let k = j; k < end; k++) arr.push(view.getUint16(p + k * 2, true));
+      s += String.fromCharCode(...arr);
+    }
+    return s;
+  }
   /** the style spans of string `i` as (nameIdx, firstChar, lastChar) triples, or null when the
    *  pool has none — which is what a pool without a styles array is, not an empty span list */
   styleOf(i: number): Int32Array | null {

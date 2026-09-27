@@ -14,17 +14,14 @@ rt.register({ name: "java/security/Permission", ctor: JPermission, fields: { nam
 } });
 
 class JBasicPermission extends JPermission {}
+function initBasicPermission(this: JBasicPermission, name: string) {
+  if (name == null) throw rt.mkThrowable("java/lang/NullPointerException", "name");
+  if (!name) throw rt.mkThrowable("java/lang/IllegalArgumentException", "name");
+  this.name = name;
+}
 rt.register({ name: "java/security/BasicPermission", ctor: JBasicPermission, sup: "java/security/Permission", methods: {
-  "<init>(Ljava/lang/String;)V": function (this: JBasicPermission, name: string) {
-    if (name == null) throw rt.mkThrowable("java/lang/NullPointerException", "name");
-    if (!name) throw rt.mkThrowable("java/lang/IllegalArgumentException", "name");
-    this.name = name;
-  },
-  "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JBasicPermission, name: string) {
-    if (name == null) throw rt.mkThrowable("java/lang/NullPointerException", "name");
-    if (!name) throw rt.mkThrowable("java/lang/IllegalArgumentException", "name");
-    this.name = name;
-  },
+  "<init>(Ljava/lang/String;)V": initBasicPermission,
+  "<init>(Ljava/lang/String;Ljava/lang/String;)V": initBasicPermission,
   "getActions()Ljava/lang/String;": () => "",
   "implies(Ljava/security/Permission;)Z": function (this: JBasicPermission, other: JBasicPermission | null) {
     if (!other || this.constructor !== other.constructor) return 0;
@@ -335,18 +332,19 @@ rt.register({
 
 // java.util.Random's generator seeded from the CSPRNG; nextBytes itself stays crypto-backed.
 class JSecureRandom extends JRandom { algo = "SHA1PRNG"; provider: JProvider | null = null; }
+function seedSecureRandom(this: JSecureRandom) { this.setSeed(randomSeed()); }
 const secureRandom = (algo: string) => { rt.link("java/security/SecureRandom"); const r = new JSecureRandom(); r.algo = algo; r.setSeed(randomSeed()); return r; };
 rt.register({
   name: "java/security/SecureRandom", ctor: JSecureRandom, sup: "java/util/Random",
   methods: {
-    "<init>()V": function (this: JSecureRandom) { this.setSeed(randomSeed()); },
-    "<init>([B)V": function (this: JSecureRandom) { this.setSeed(randomSeed()); },
+    "<init>()V": seedSecureRandom,
+    "<init>([B)V": seedSecureRandom,
     // every algorithm name draws from the same CSPRNG; the name is kept for getAlgorithm
     "static getInstance(Ljava/lang/String;)Ljava/security/SecureRandom;": (algo: string) => {
       if (algo === null) throw rt.mkThrowable("java/lang/NullPointerException", "algorithm == null");
       return secureRandom(algo);
     },
-    "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/SecureRandom;": (algo: string) => secureRandom(algo),
+    "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/SecureRandom;": secureRandom,
     "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljava/security/SecureRandom;": (algo: string, provider: JProvider | null) => {
       if (algo === null) throw rt.mkThrowable("java/lang/NullPointerException", "algorithm == null");
       if (!provider) throw rt.mkThrowable("java/lang/IllegalArgumentException", "missing provider");
@@ -360,8 +358,7 @@ rt.register({
   },
 });
 
-for (const n of ["java/security/spec/ECParameterSpec", "java/security/spec/ECGenParameterSpec",
-  "java/security/spec/AlgorithmParameterSpec", "java/security/AlgorithmParameters"]) {
+for (const n of ["java/security/spec/AlgorithmParameterSpec", "java/security/AlgorithmParameters"]) {
   rt.register({ name: n, ctor: class extends JObj {}, methods: { "<init>(Ljava/lang/String;)V": () => {}, "<init>()V": () => {} } });
 }
 

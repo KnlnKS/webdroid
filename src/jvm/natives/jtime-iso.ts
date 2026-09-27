@@ -12,7 +12,7 @@ export const MONTHS = ["January", "February", "March", "April", "May", "June", "
 export const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 export const pad = (n: number, w = 2) => String(n).padStart(w, "0");
 
-export const NANOS_PER_DAY = 86400e9;
+const NANOS_PER_DAY = 86400e9;
 export const floorDiv = (a: number, b: number) => Math.floor(a / b);
 export const floorMod = (a: number, b: number) => a - Math.floor(a / b) * b;
 defineException("java/time/DateTimeException", "java/lang/RuntimeException");
@@ -114,7 +114,7 @@ export function dateFromEpochDay(day: number): JLocalDate {
   return mkDate(year + era * 400 + (month <= 2 ? 1 : 0), month, doy - Math.floor((153 * mp + 2) / 5) + 1);
 }
 export const dayOfWeek = (d: JLocalDate) => floorMod(epochDay(d) + 3, 7) + 1;
-export function dateGet(d: JLocalDate, f: string): number | undefined {
+function dateGet(d: JLocalDate, f: string): number | undefined {
   switch (f) {
     case "DAY_OF_WEEK": return dayOfWeek(d);
     case "ALIGNED_DAY_OF_WEEK_IN_MONTH": return (d.d - 1) % 7 + 1;
@@ -178,7 +178,7 @@ export const secOfDay = (t: JLocalTime) => t.h * 3600 + t.mi * 60 + t.s;
 export const nanoOfDay = (t: JLocalTime) => secOfDay(t) * 1e9 + t.ns;
 export const timeOfSod = (sod: number, ns: number) => mkTime(floorDiv(sod, 3600), floorDiv(sod, 60) % 60, sod % 60, ns);
 export const timeOfNod = (n: number) => { const sod = floorDiv(check("NANO_OF_DAY", n), 1e9); return timeOfSod(sod, n - sod * 1e9); };
-export function timeGet(t: JLocalTime, f: string): number | undefined {
+function timeGet(t: JLocalTime, f: string): number | undefined {
   switch (f) {
     case "NANO_OF_SECOND": return t.ns;
     case "NANO_OF_DAY": return nanoOfDay(t);
@@ -261,11 +261,13 @@ export function ldtPlus(l: JLocalDateTime, n: number, u: number): JLocalDateTime
   return mkLdt(outS ? datePlus(l.date, outS, U.DAYS) : l.date, time);
 }
 export const ldtCmp = (a: JLocalDateTime, b: JLocalDateTime) => dateCmp(a.date, b.date) || nanoOfDay(a.time) - nanoOfDay(b.time);
-export function mkInstant(s: number, ns = 0): JInstant {
-  const i = new JInstant(), c = floorDiv(ns, 1e9);
-  i.s = s + c; i.ns = ns - c * 1e9;
-  return i;
+/** `o` holding s seconds plus ns nanoseconds, the nanoseconds carried into [0, 1e9) */
+function normalized<T extends { s: number; ns: number }>(o: T, s: number, ns: number): T {
+  const c = floorDiv(ns, 1e9);
+  o.s = s + c; o.ns = ns - c * 1e9;
+  return o;
 }
+export function mkInstant(s: number, ns = 0): JInstant { return normalized(new JInstant(), s, ns); }
 export const instantOfMs = (ms: number) => mkInstant(floorDiv(ms, 1000), floorMod(ms, 1000) * 1e6);
 export const instantMs = (i: JInstant) => i.s * 1000 + floorDiv(i.ns, 1e6);
 
@@ -378,8 +380,9 @@ export function monthDayOf(mo: number, d: number): JMonthDay {
 
 // ── clocks
 export class JClock extends JObj { zone = sysZone(); fixed: JInstant | null = null; offsetMs = 0; unavailable: string | null = null; }
-export const clockIn = (zone: JZoneId, fixed: JInstant | null = null, offsetMs = 0) => Object.assign(new JClock(), { zone, fixed, offsetMs });
-export const unavailableClock = (message: string) => Object.assign(clockIn(offsetOf(0)), { unavailable: message });
+export const clockIn = (zone: JZoneId, fixed: JInstant | null = null, offsetMs = 0, unavailable: string | null = null) =>
+  Object.assign(new JClock(), { zone, fixed, offsetMs, unavailable });
+export const unavailableClock = (message: string) => clockIn(offsetOf(0), null, 0, message);
 export function clockInstant(c: JClock): JInstant {
   if (c.unavailable) dtErr(c.unavailable);
   return c.fixed ? (c.offsetMs ? instantOfMs(instantMs(c.fixed) + c.offsetMs) : c.fixed) : instantOfMs(Date.now() + c.offsetMs);
@@ -394,12 +397,13 @@ export function withClock<R>(clock: unknown, f: (i: JInstant, z: JZoneId) => R):
 export const nowIn = (zone: JZoneId | null) => { if (!zone) npe("zone"); const i = instantOfMs(Date.now()); return zdtOfEpoch(i.s, i.ns, zone!); };
 
 // ── amounts
-export function mkDuration(s: number, ns: number): JDuration {
-  const d = new JDuration(), c = floorDiv(ns, 1e9);
-  d.s = s + c; d.ns = ns - c * 1e9;
-  return d;
-}
+export function mkDuration(s: number, ns: number): JDuration { return normalized(new JDuration(), s, ns); }
 export const periodOf = (y: number, m: number, d: number) => { const p = new JPeriod(); p.y = y; p.m = m; p.d = d; return p; };
+/** the [amount, ChronoUnit ordinal] steps plus/addTo apply, zero steps included */
+export const durationSteps = (d: JDuration): [number, number][] => [[d.s, U.SECONDS], [d.ns, U.NANOS]];
+/** Period.addTo: whole months when both years and months are set, then days */
+export const periodSteps = (p: JPeriod): [number, number][] =>
+  [...(p.y && p.m ? [[p.y * 12 + p.m, U.MONTHS]] : [[p.y, U.YEARS], [p.m, U.MONTHS]]) as [number, number][], [p.d, U.DAYS]];
 export function periodBetween(a: JLocalDate, b: JLocalDate): JPeriod {
   let months = (b.y * 12 + b.mo) - (a.y * 12 + a.mo), days = b.d - a.d;
   if (months > 0 && days < 0) { months--; days = epochDay(b) - epochDay(datePlus(a, months, U.MONTHS)); }

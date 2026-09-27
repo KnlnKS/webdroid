@@ -23,7 +23,6 @@ export interface PreparedMethod {
   readonly params: readonly string[];
   readonly widths: readonly number[];
   readonly sync: boolean;
-  readonly wasmEligible: boolean; // diagnostic only; false without an observer
 }
 
 export type PreparationPhase = "decode" | "cfg" | "type";
@@ -138,16 +137,6 @@ function floatingOperands(op: number): { kind: "F" | "D"; unary: boolean } | nul
   return null;
 }
 
-function isWasmNumericOpcode(op: number): boolean {
-  return (op >= 0x2d && op <= 0x31) || (op >= 0x7b && op <= 0xe2);
-}
-
-function isWasmRegionOpcode(op: number): boolean {
-  return op === 0 || (op >= 0x01 && op <= 0x09) || (op >= 0x0e && op <= 0x19) ||
-    (op >= 0x28 && op <= 0x2a) || (op >= 0x2d && op <= 0x3d) ||
-    (op >= 0x7b && op <= 0xe2);
-}
-
 export function ifTarget(instruction: PreparedInstruction): number {
   return instruction.pc + (instruction.fmt === "22t" ? instruction.c : instruction.b);
 }
@@ -180,30 +169,62 @@ const NO_TARGETS: readonly number[] = [];
 
 /** const/4 … const-wide/high16: the writes constant typing follows */
 const isNumericConst = (op: number) => op >= 0x12 && op <= 0x19;
-const invokesMethod = (name: string) => name.startsWith("invoke") && !name.startsWith("invoke-custom");
-const isFloating = (type: string) => type === "F" || type === "D";
-const putField = (dex: DexFile, instruction: MutableInstruction) =>
-  dex.type(dex.field(instruction.name.startsWith("iput") ? instruction.c : instruction.b).type);
+const isMove = (op: number) => op >= 0x01 && op <= 0x09;
+const isFieldPut = (op: number) => (op >= 0x59 && op <= 0x5f) || (op >= 0x67 && op <= 0x6d);
+const isMethodInvoke = (op: number) => (op >= 0x6e && op <= 0x72) || (op >= 0x74 && op <= 0x78) || op === 0xfa || op === 0xfb;
+const isInstanceInvoke = (op: number) => isMethodInvoke(op) && op !== 0x71 && op !== 0x77;
+type FloatKind = "F" | "D";
+const floatKind = (type: string): FloatKind | undefined => type === "F" || type === "D" ? type : undefined;
 
-/** Could this instruction read a register as a float or double? These are the consumers
- *  typeConstants marks, so without one the analysis cannot change a constant. */
-function readsFloating(dex: DexFile, instruction: MutableInstruction, returnType: string): boolean {
-  const name = instruction.name;
-  if (floatingOperands(instruction.op) || name === "aput" || name === "aput-wide") return true;
-  if (name.startsWith("iput") || name.startsWith("sput")) return isFloating(putField(dex, instruction));
-  if (invokesMethod(name)) return dex.protoParamTypes(dex.method(instruction.b).proto).some(isFloating);
-  return (name === "return" && returnType === "F") || (name === "return-wide" && returnType === "D");
+/** Visits each register the instruction reads as a float or double. An aput reads its value as
+ *  its array's element kind, which only the caller's `arrayKind` knows. */
+function floatReads(dex: DexFile, { op, a, b, c, regs }: MutableInstruction, returnType: string,
+  arrayKind: (reg: number) => FloatKind | undefined, visit: (reg: number, kind: FloatKind) => void): void {
+  const operands = floatingOperands(op);
+  if (operands) {
+    if (op >= 0xc6) { visit(a, operands.kind); visit(b, operands.kind); }
+    else { visit(b, operands.kind); if (!operands.unary) visit(c, operands.kind); }
+  } else if (op === 0x4b || op === 0x4c) {
+    const kind = arrayKind(b);
+    if (kind) visit(a, kind);
+  } else if (isFieldPut(op)) {
+    const kind = floatKind(dex.type(dex.field(op <= 0x5f ? c : b).type));
+    if (kind) visit(a, kind);
+  } else if (isMethodInvoke(op)) {
+    let index = isInstanceInvoke(op) ? 1 : 0;
+    for (const type of dex.protoParamTypes(dex.method(b).proto)) {
+      const kind = floatKind(type);
+      if (kind) visit(regs[index], kind);
+      index += isWide(type) ? 2 : 1;
+    }
+  } else if ((op === 0x0f && returnType === "F") || (op === 0x10 && returnType === "D")) visit(a, returnType);
 }
 
-/** Without floating reads, constant typing only decides which receivers may be a null constant:
- *  any register a constant is written to (flow-insensitive, so it can only over-mark). */
-function markConstantReceivers(instructions: MutableInstruction[]): void {
-  const constants = new Set<number>();
-  for (const instruction of instructions) if (isNumericConst(instruction.op)) constants.add(instruction.a);
-  for (const instruction of instructions) {
-    const name = instruction.name;
-    if (invokesMethod(name) && !name.startsWith("invoke-static") && constants.has(instruction.regs[0])) instruction.nullRecv = true;
+/** Registers a numeric constant may reach, following moves flow-insensitively; null without one. */
+function constantCarriers(instructions: readonly MutableInstruction[]): Set<number> | null {
+  let regs: Set<number> | null = null;
+  for (const instruction of instructions) if (isNumericConst(instruction.op)) (regs ??= new Set()).add(instruction.a);
+  if (!regs) return null;
+  for (let grown = true; grown;) {
+    grown = false;
+    for (const { op, a, b } of instructions) if (isMove(op) && regs.has(b) && !regs.has(a)) { regs.add(a); grown = true; }
   }
+  return regs;
+}
+
+/** Marks the constants a float or double reads (constKind) and the invokes whose receiver may
+ *  be a null constant (nullRecv). The reaching-definition analysis runs only when some float read
+ *  can see a constant; otherwise receivers are marked flow-insensitively, which only over-marks. */
+function annotateConstants(dex: DexFile, code: CodeItem, signature: ReturnType<typeof parseMethodDesc>,
+  isStatic: boolean, instructions: MutableInstruction[], leaders: Uint8Array): void {
+  const carriers = constantCarriers(instructions);
+  if (!carriers) return;
+  let floatSeesConstant = false;
+  for (const instruction of instructions) {
+    floatReads(dex, instruction, signature.ret, () => "F", (reg) => { floatSeesConstant ||= carriers.has(reg); });
+    if (floatSeesConstant) return typeConstants(dex, code, signature, isStatic, instructions, leaders);
+  }
+  for (const instruction of instructions) if (isInstanceInvoke(instruction.op) && carriers.has(instruction.regs[0])) instruction.nullRecv = true;
 }
 
 function typeConstants(
@@ -228,7 +249,7 @@ function typeConstants(
 
   const retType = signature.ret;
   let liveDefs: Defs | null = null;
-  const mark = (reg: number, kind: "F" | "D") => {
+  const mark = (reg: number, kind: FloatKind) => {
     const definitions = liveDefs?.get(reg);
     if (definitions) for (const write of definitions) if (!write.constKind) write.constKind = kind;
   };
@@ -238,62 +259,34 @@ function typeConstants(
     let lastReturnType = "";
     liveDefs = markConsumers ? defs : null;
     for (const instruction of block) {
-      const name = instruction.name;
-      const operand = floatingOperands(instruction.op);
-      if (operand) {
-        const kind = operand.kind;
-        if (name.endsWith("/2addr")) { mark(instruction.a, kind); mark(instruction.b, kind); }
-        else if (operand.unary) mark(instruction.b, kind);
-        else { mark(instruction.b, kind); mark(instruction.c, kind); }
-      } else if (name === "aput" || name === "aput-wide") {
-        const kind = arrays.get(instruction.b);
-        if (kind) mark(instruction.a, kind);
-      } else if (name.startsWith("iput") || name.startsWith("sput")) {
-        const fieldType = putField(dex, instruction);
-        if (fieldType === "F") mark(instruction.a, "F");
-        else if (fieldType === "D") mark(instruction.a, "D");
-      } else if (invokesMethod(name)) {
-        const instance = !name.startsWith("invoke-static");
-        if (instance && liveDefs?.get(instruction.regs[0])?.size) instruction.nullRecv = true;
-        let registerIndex = instance ? 1 : 0;
-        for (const paramType of dex.protoParamTypes(dex.method(instruction.b).proto)) {
-          if (paramType === "F") mark(instruction.regs[registerIndex], "F");
-          else if (paramType === "D") mark(instruction.regs[registerIndex], "D");
-          registerIndex += isWide(paramType) ? 2 : 1;
-        }
-      } else if (name === "return" && retType === "F") mark(instruction.a, "F");
-      else if (name === "return-wide" && retType === "D") mark(instruction.a, "D");
+      const { op, a, b, c } = instruction;
+      if (liveDefs) {
+        floatReads(dex, instruction, retType, (reg) => arrays.get(reg), mark);
+        if (isInstanceInvoke(op) && liveDefs.get(instruction.regs[0])?.size) instruction.nullRecv = true;
+      }
 
       const setArrayKind = (reg: number, type: string) => {
         if (type === "[F") arrays.set(reg, "F");
         else if (type === "[D") arrays.set(reg, "D");
         else arrays.delete(reg);
       };
-      if (name === "new-array") setArrayKind(instruction.a, dex.type(instruction.c));
-      else if (name === "check-cast") setArrayKind(instruction.a, dex.type(instruction.b));
-      else if (name === "iget-object") setArrayKind(instruction.a, dex.type(dex.field(instruction.c).type));
-      else if (name === "sget-object") setArrayKind(instruction.a, dex.type(dex.field(instruction.b).type));
-      else if (name === "move-result-object") setArrayKind(instruction.a, lastReturnType);
-      else if (name === "move-object" || name === "move-object/from16" || name === "move-object/16") {
-        const kind = arrays.get(instruction.b);
-        if (kind) arrays.set(instruction.a, kind); else arrays.delete(instruction.a);
-      } else if (writesRegister(instruction.op)) arrays.delete(instruction.a);
-      if (invokesMethod(name)) {
-        lastReturnType = dex.type(dex.proto(dex.method(instruction.b).proto).ret);
-      } else if (name !== "move-result-object") {
-        lastReturnType = "";
-      }
+      if (op === 0x23) setArrayKind(a, dex.type(c));                                    // new-array
+      else if (op === 0x1f) setArrayKind(a, dex.type(b));                               // check-cast
+      else if (op === 0x54) setArrayKind(a, dex.type(dex.field(c).type));               // iget-object
+      else if (op === 0x62) setArrayKind(a, dex.type(dex.field(b).type));               // sget-object
+      else if (op === 0x0c) setArrayKind(a, lastReturnType);                            // move-result-object
+      else if (op >= 0x07 && op <= 0x09) {                                              // move-object
+        const kind = arrays.get(b);
+        if (kind) arrays.set(a, kind); else arrays.delete(a);
+      } else if (writesRegister(op)) arrays.delete(a);
+      if (isMethodInvoke(op)) lastReturnType = dex.type(dex.proto(dex.method(b).proto).ret);
+      else if (op !== 0x0c) lastReturnType = "";
 
-      if (isNumericConst(instruction.op)) {
-        defs.set(instruction.a, new Set([instruction]));
-      } else if (name === "move" || name === "move/from16" || name === "move/16" ||
-          name === "move-wide" || name === "move-wide/from16" || name === "move-wide/16" ||
-          name === "move-object" || name === "move-object/from16" || name === "move-object/16") {
-        const source = defs.get(instruction.b);
-        if (source) defs.set(instruction.a, source); else defs.delete(instruction.a);
-      } else if (writesRegister(instruction.op)) {
-        defs.delete(instruction.a);
-      }
+      if (isNumericConst(op)) defs.set(a, new Set([instruction]));
+      else if (isMove(op)) {
+        const source = defs.get(b);
+        if (source) defs.set(a, source); else defs.delete(a);
+      } else if (writesRegister(op)) defs.delete(a);
     }
     return { defs, arrays };
   };
@@ -408,28 +401,23 @@ export function prepareMethod(
   if (observe) observe("cfg", performance.now() - started);
 
   started = observe ? performance.now() : 0;
-  // Only numeric const writes can seed the reaching-definition analysis, and it only has to run
-  // when something could read one of them as a float or double.
   const signature = parseMethodDesc(desc);
-  if (instructions.some((instruction) => isNumericConst(instruction.op))) {
-    if (instructions.some((instruction) => readsFloating(dex, instruction, signature.ret)))
-      typeConstants(dex, code, signature, isStatic, instructions, leaders);
-    else markConstantReceivers(instructions);
-  }
+  annotateConstants(dex, code, signature, isStatic, instructions, leaders);
   if (observe) observe("type", performance.now() - started);
 
-  const sync = instructions.every((instruction) => !maySuspend(instruction.op));
-  const wasmEligible = observe !== undefined && !code.tries.length &&
-    signature.params.every((type) => type.length === 1) && signature.ret.length === 1 &&
-    instructions.some((instruction) => isWasmNumericOpcode(instruction.op)) &&
-    instructions.every((instruction) => isWasmRegionOpcode(instruction.op)) &&
-    instructions.some((instruction) => branchTargets(code, instruction).some((target) => target <= instruction.pc));
   return {
     instructions,
     leaders,
     params: signature.params,
     widths: signature.params.map((param) => isWide(param) ? 2 : 1),
-    sync,
-    wasmEligible,
+    sync: instructions.every((instruction) => !maySuspend(instruction.op)),
   };
+}
+
+/** The cold tier's view of a preparation: it keeps only the instructions the analysis annotated
+ *  and decodes the rest when they first run, so a cold method does not hold its decoded body. */
+export function coldInstructions(code: CodeItem, prepared: PreparedMethod): (pc: number) => PreparedInstruction {
+  const annotated = new Map<number, PreparedInstruction>();
+  for (const instruction of prepared.instructions) if (instruction.constKind || instruction.nullRecv) annotated.set(instruction.pc, instruction);
+  return (pc) => annotated.get(pc) ?? decode(code.insns, pc);
 }

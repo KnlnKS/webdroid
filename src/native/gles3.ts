@@ -18,7 +18,6 @@ export const glProbe = !!(globalThis as { __wdGlProbe?: boolean }).__wdGlProbe;
 type GL = WebGL2RenderingContext;
 const g = (): GL => { if (!current) throw new Error("GL call without a current context"); return current as GL; };
 let err = 0;                                  // an error we raised ourselves; glGetError reports it before WebGL's
-let unpackPbo = false, packPbo = false;
 const mapped = new WeakMap<object, { ptr: number; off: number; len: number; access: number }>();   // a mapping belongs to the buffer, not the target
 
 const TEXTURE0 = 0x84c0, ACTIVE_TEXTURE = 0x84e0, CURRENT_PROGRAM = 0x8b8d;
@@ -54,7 +53,19 @@ interface ContextState {
   bindings: Map<number, Map<number, WebGLTexture | null>>;
   revision: number;
   program: WebGLProgram | null;
+  /** buffer target → the record bound there; the element binding belongs to the vertex array */
+  buffers: Map<number, BufRec | null>;
+  elements: Map<WebGLVertexArrayObject | null, BufRec | null>;
+  vao: WebGLVertexArrayObject | null;
+  /** the default vertex array's client arrays by attribute, with its enables and divisors */
+  clients: Map<number, ClientArray>;
+  enabled: Uint8Array;
+  divisors: Uint32Array;
+  /** the buffers client vertex arrays and indices are streamed into at each draw */
+  streams: WebGLBuffer[];
+  indexStream: WebGLBuffer | null;
 }
+interface ClientArray { size: number; type: number; normalized: boolean; stride: number; ptr: number; integer: boolean }
 const contextStates = new WeakMap<GL, ContextState>();
 
 function contextState(): ContextState {
@@ -62,7 +73,9 @@ function contextState(): ContextState {
   let state = contextStates.get(gl);
   if (!state) {
     const active = gl.getParameter(ACTIVE_TEXTURE) as number;
-    state = { activeUnit: Math.max(0, active - TEXTURE0), bindings: new Map(), revision: 0, program: null };
+    const attribs = gl.getParameter(0x8869) as number;                         // MAX_VERTEX_ATTRIBS
+    state = { activeUnit: Math.max(0, active - TEXTURE0), bindings: new Map(), revision: 0, program: null, buffers: new Map(), elements: new Map(), vao: null,
+      clients: new Map(), enabled: new Uint8Array(attribs), divisors: new Uint32Array(attribs), streams: [], indexStream: null };
     contextStates.set(gl, state);
   }
   return state;
@@ -74,6 +87,14 @@ function textureRec(texture: WebGLTexture): TexRec {
   return rec;
 }
 
+/** GL_TEXTURE_EXTERNAL_OES names TEXTURE_2D: SurfaceTexture fills its texture as 2D storage */
+export const textureTarget = (target: number): number => (target === 0x8d65 ? 0x0de1 : target);
+/** WebGL has no external samplers, so a shader's samplerExternalOES reads that storage as a
+ *  sampler2D; the #extension line is blanked in place to keep compile errors' line numbers. */
+export function externalSamplersAs2D(source: string): string {
+  if (!source.includes("samplerExternalOES")) return source;
+  return source.replace(/^[ \t]*#extension[ \t]+GL_OES_EGL_image_external(?:_essl3)?[ \t]*:.*$/gm, "").replace(/\bsamplerExternalOES\b/g, "sampler2D");
+}
 const bindingName = (target: number): number => target === 0x0de1 ? 0x8069 : target === 0x8513 ? 0x8514 : target === 0x806f ? 0x806a : target === 0x8c1a ? 0x8c1d : 0;
 function boundTexture(state: ContextState, unit: number, target: number): WebGLTexture | null {
   let unitBindings = state.bindings.get(unit);
@@ -134,11 +155,11 @@ function linkProgram(program: WebGLProgram): void {
   programRecs.set(program, { hidden, uniforms, samplers: bindingsByName, maps, bindingRevision: -1 });
 }
 
-function prepareDraw(): void {
+function prepareDraw(): ContextState {
   const gl = g(), state = contextState();
   if (!state.program) state.program = gl.getParameter(CURRENT_PROGRAM) as WebGLProgram | null;
   const rec = state.program && programRecs.get(state.program);
-  if (!rec || rec.bindingRevision === state.revision) return;
+  if (!rec || rec.bindingRevision === state.revision) return state;
   for (const map of rec.maps) {
     let changed = false;
     for (let i = 0; i < map.pending.length; i++) {
@@ -150,6 +171,7 @@ function prepareDraw(): void {
     if (changed) { gl.uniform1iv(map.location, map.pending); map.uploaded.set(map.pending); }
   }
   rec.bindingRevision = state.revision;
+  return state;
 }
 
 /** glUniform1i[v] on a swizzled sampler: its texture units, kept here rather than read back from GL */
@@ -228,8 +250,10 @@ export function readGuestPixels(gl: WebGLRenderingContext | WebGL2RenderingConte
   if (data.buffer !== mem.buf) mem.u8.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength), p);
   for (let row = 0; row < h; row++) wrote(p + skip + row * stride, w * bytes);
 }
+const PACK = 0x88eb, UNPACK = 0x88ec;
+const pbo = (t: number): boolean => !!contextState().buffers.get(t);
 const texData = (type: number, p: number, format: number, dimensions: PixelDimensions): number | ArrayBufferView | null =>
-  (unpackPbo ? p : p ? uploadPixels(type, p, format, dimensions) : null);
+  (pbo(UNPACK) ? p : p ? uploadPixels(type, p, format, dimensions) : null);
 /** GL's (bufsize, *length, char *buf) out-string */
 function outStr(s: string, bufsize: number, lenp: number, buf: number): void {
   const n = Math.max(0, Math.min(s.length, bufsize - 1));
@@ -257,9 +281,19 @@ function del(tbl: (object | null)[], n: number, p: number, kill: (o: never) => v
 interface BufRec { gl: WebGLBuffer | null; other: WebGLBuffer | null; elem: boolean | null; shadow: Uint8Array | null; usage: number }
 const COPY_READ = 0x8f36, COPY_WRITE = 0x8f37, ELEM = 0x8893, ARRAY = 0x8892;
 const recOf = new WeakMap<object, BufRec>();
-const bound = new Map<number, number>();                         // target → the guest handle last bound there
 const rec = (h: number): BufRec | null => { const o = H(T().buffers, h); return o ? recOf.get(o) ?? null : null; };
-const recAt = (t: number): BufRec | null => t === ELEM ? recOf.get(g().getParameter(0x8895)) ?? null : rec(bound.get(t) ?? 0);
+function recAt(t: number): BufRec | null {
+  const state = contextState();
+  return (t === ELEM ? state.elements.get(state.vao) : state.buffers.get(t)) ?? null;
+}
+function bindRec(t: number, r: BufRec | null): void {
+  const state = contextState();
+  if (t === ELEM) state.elements.set(state.vao, r); else state.buffers.set(t, r);
+}
+/** the WebGL storage a record presents at ARRAY_BUFFER or ELEMENT_ARRAY_BUFFER */
+const storage = (r: BufRec | null, elem: boolean): WebGLBuffer | null => (r ? (r.elem === elem ? r.gl : r.other) : null);
+/** what WebGL has bound at ARRAY_BUFFER or ELEMENT_ARRAY_BUFFER */
+const boundStorage = (t: number): WebGLBuffer | null => storage(recAt(t), t === ELEM);
 /** the record behind a data target while its kind is undecided: writes land in the shadow */
 const shadowed = (t: number): BufRec | null => { if (t !== COPY_READ && t !== COPY_WRITE) return null; const r = recAt(t); return r && r.elem === null ? r : null; };
 /** run an operation on a data target: a copy target stands in for the buffer's own kind, binding restored */
@@ -267,9 +301,8 @@ function withTarget<R>(t: number, fn: (tt: number) => R): R {
   if (t !== COPY_READ && t !== COPY_WRITE) return fn(t);
   const gl = g();
   const r = recAt(t), tt = r?.elem ? ELEM : ARRAY;
-  const prev = gl.getParameter(tt === ELEM ? 0x8895 : 0x8894) as WebGLBuffer | null;
   gl.bindBuffer(tt, r?.gl ?? null);
-  try { return fn(tt); } finally { gl.bindBuffer(tt, prev); }
+  try { return fn(tt); } finally { gl.bindBuffer(tt, boundStorage(tt)); }
 }
 function writeBuffers(t: number, fn: (target: number) => void): void {
   withTarget(t, fn);
@@ -277,14 +310,12 @@ function writeBuffers(t: number, fn: (target: number) => void): void {
   if (!r?.other) return;
   const gl = g();
   const elem = t === COPY_READ || t === COPY_WRITE ? r.elem : t === ELEM;
-  const target = elem ? ARRAY : ELEM, buffer = elem === r.elem ? r.other : r.gl;
-  const prev = gl.getParameter(target === ELEM ? 0x8895 : 0x8894);
-  gl.bindBuffer(target, buffer);
-  try { fn(target); } finally { gl.bindBuffer(target, prev); }
+  const target = elem ? ARRAY : ELEM;
+  gl.bindBuffer(target, storage(r, target === ELEM));
+  try { fn(target); } finally { gl.bindBuffer(target, boundStorage(target)); }
 }
 const writeBack = (t: number, off: number, data: Uint8Array): void => { const r = shadowed(t); if (r) r.shadow!.set(data, off); else writeBuffers(t, (tt) => g().bufferSubData(tt, off, data)); };
-function realize(t: number, h: number): WebGLBuffer | null {
-  const r = rec(h);
+function realize(t: number, r: BufRec | null, h: number): WebGLBuffer | null {
   if (!r) return null;
   const gl = g();
   if (r.elem === null) {
@@ -296,11 +327,11 @@ function realize(t: number, h: number): WebGLBuffer | null {
   if (r.elem === (t === ELEM)) return r.gl;
   if (!r.other) {
     // WebGL forbids sharing index and vertex storage, so copy only on the first mixed bind.
-    const target = r.elem ? ELEM : ARRAY, prev = gl.getParameter(r.elem ? 0x8895 : 0x8894);
+    const target = r.elem ? ELEM : ARRAY;
     gl.bindBuffer(target, r.gl);
     const data = new Uint8Array(gl.getBufferParameter(target, 0x8764));
     gl.getBufferSubData(target, 0, data);
-    gl.bindBuffer(target, prev);
+    gl.bindBuffer(target, boundStorage(target));
     r.other = gl.createBuffer();
     if (r.other) { recOf.set(r.other, r); T().ids.set(r.other, h); }
     gl.bindBuffer(t, r.other); gl.bufferData(t, data, r.usage);
@@ -308,22 +339,132 @@ function realize(t: number, h: number): WebGLBuffer | null {
   return r.other;
 }
 
-function syncVertexBuffer(buffer: WebGLBuffer | null): void {
-  const r = buffer && recOf.get(buffer);
+/** after GL wrote a buffer's vertex storage, refresh its index copy */
+function syncVertexBuffer(r: BufRec | null | undefined): void {
   if (!r?.other) return;
   const gl = g();
-  const vertex = gl.getParameter(0x8894), element = gl.getParameter(0x8895);
-  gl.bindBuffer(ARRAY, buffer);
+  gl.bindBuffer(ARRAY, storage(r, false));
   const data = new Uint8Array(gl.getBufferParameter(ARRAY, 0x8764));
   gl.getBufferSubData(ARRAY, 0, data);
-  gl.bindBuffer(ELEM, r.elem ? r.gl : r.other);
+  gl.bindBuffer(ELEM, storage(r, true));
   gl.bufferSubData(ELEM, 0, data);
-  gl.bindBuffer(ARRAY, vertex); gl.bindBuffer(ELEM, element);
+  gl.bindBuffer(ARRAY, boundStorage(ARRAY)); gl.bindBuffer(ELEM, boundStorage(ELEM));
 }
 
 function syncFeedback(): void {
   const n = g().getParameter(0x8c8b);
-  for (let i = 0; i < n; i++) syncVertexBuffer(g().getIndexedParameter(0x8c8f, i));
+  for (let i = 0; i < n; i++) { const buffer = g().getIndexedParameter(0x8c8f, i); syncVertexBuffer(buffer && recOf.get(buffer)); }
+}
+
+// ── client arrays: the default vertex array reads attributes and indices from guest memory at
+// the draw, which WebGL cannot, so each draw streams what it reaches into reused buffers
+/** bytes per vertex attribute component */
+export const vertexTypeBytes = (type: number): number =>
+  type === 0x1400 || type === 0x1401 ? 1 : type === 0x1402 || type === 0x1403 || type === 0x140b ? 2 : 4;
+const attribBytes = (c: ClientArray): number => (c.type === 0x8d9f || c.type === 0x8368 ? 4 : c.size * vertexTypeBytes(c.type));
+/** a draw's index array in guest memory */
+export function guestIndices(type: number, p: number, count: number): Uint8Array | Uint16Array | Uint32Array {
+  return type === 0x1405 ? u32(p, count) : type === 0x1403 ? view(Uint16Array, p, count) : u8(p, count);
+}
+/** the vertices [lo, hi) an index array reaches; WebGL 2 always restarts at the all-ones index */
+export function indexBounds(indices: Uint8Array | Uint16Array | Uint32Array): [number, number] {
+  const restart = indices.BYTES_PER_ELEMENT === 4 ? 0xffffffff : indices.BYTES_PER_ELEMENT === 2 ? 0xffff : 0xff;
+  let lo = Infinity, hi = -1;
+  for (let i = 0; i < indices.length; i++) { const v = indices[i]; if (v !== restart) { if (v < lo) lo = v; if (v > hi) hi = v; } }
+  return hi < 0 ? [0, 0] : [lo, hi + 1];
+}
+
+function vertexAttribPointer(integer: boolean, i: number, size: number, type: number, normalized: boolean, stride: number, ptr: number): void {
+  const gl = g(), state = contextState();
+  if (recAt(ARRAY) || !ptr) {
+    if (!state.vao) state.clients.delete(i);
+    if (integer) gl.vertexAttribIPointer(i, size, type, stride, ptr); else gl.vertexAttribPointer(i, size, type, normalized, stride, ptr);
+    return;
+  }
+  if (state.vao) { err ||= 0x502; return; }                                    // ES 3.0 keeps client arrays to the default vertex array
+  // WebGL validates the format against no buffer at offset 0; each draw binds the streamed data
+  if (integer) gl.vertexAttribIPointer(i, size, type, stride, 0); else gl.vertexAttribPointer(i, size, type, normalized, stride, 0);
+  if (i < state.enabled.length && size >= 1 && size <= 4 && stride >= 0) state.clients.set(i, { size, type, normalized, stride, ptr, integer });
+}
+const clientArray = (state: ContextState, i: number): ClientArray | undefined => (state.vao ? undefined : state.clients.get(i));
+
+/** 2 when an enabled client array is per-vertex, 1 when all of them are per-instance, 0 without any */
+function clientUse(state: ContextState): number {
+  let use = 0;
+  for (const i of state.clients.keys()) if (state.enabled[i]) { if (!state.divisors[i]) return 2; use = 1; }
+  return use;
+}
+
+interface Span { index: number; array: ClientArray; start: number; end: number }
+const spans: Span[] = [];
+/**
+ * Upload the guest bytes the enabled client arrays reach for vertices [lo, hi) and `instances`
+ * instances. Arrays whose ranges overlap (an interleaved struct) share one upload. Each vertex
+ * keeps its guest offset from the group's lowest pointer, so draws keep `first` and the indices.
+ */
+function streamClientArrays(state: ContextState, lo: number, hi: number, instances: number): void {
+  const gl = g();
+  let n = 0;
+  for (const [index, array] of state.clients) {
+    if (!state.enabled[index]) continue;
+    const divisor = state.divisors[index], from = divisor ? 0 : lo, to = divisor ? Math.ceil(instances / divisor) : hi;
+    const span = spans[n] ??= { index, array, start: 0, end: 0 };
+    span.index = index; span.array = array;
+    span.start = array.ptr + from * (array.stride || attribBytes(array));
+    span.end = array.ptr + Math.max(from, to - 1) * (array.stride || attribBytes(array)) + attribBytes(array);
+    let k = n++;
+    while (k > 0 && spans[k - 1].start > span.start) { spans[k] = spans[k - 1]; k--; }
+    spans[k] = span;
+  }
+  for (let k = 0, group = 0; k < n; group++) {
+    let end = spans[k].end, base = spans[k].array.ptr, j = k + 1;
+    for (; j < n && spans[j].start <= end; j++) { end = Math.max(end, spans[j].end); base = Math.min(base, spans[j].array.ptr); }
+    base -= base % 4;                                                          // offsets keep the guest alignment
+    const start = spans[k].start, data = mem.u8.subarray(start, end);
+    gl.bindBuffer(ARRAY, state.streams[group] ??= gl.createBuffer());
+    if (start === base) gl.bufferData(ARRAY, data, gl.STREAM_DRAW);
+    else { gl.bufferData(ARRAY, end - base, gl.STREAM_DRAW); gl.bufferSubData(ARRAY, start - base, data); }
+    for (; k < j; k++) {
+      const { index, array: c } = spans[k];
+      if (c.integer) gl.vertexAttribIPointer(index, c.size, c.type, c.stride, c.ptr - base);
+      else gl.vertexAttribPointer(index, c.size, c.type, c.normalized, c.stride, c.ptr - base);
+    }
+  }
+  gl.bindBuffer(ARRAY, boundStorage(ARRAY));
+}
+
+function drawClientArrays(state: ContextState, first: number, count: number, instances: number): void {
+  if (count > 0 && instances > 0 && clientUse(state)) streamClientArrays(state, first, first + count, instances);
+}
+
+/**
+ * An indexed draw in the default vertex array. Client indices are streamed into a reused element
+ * buffer. The vertex range comes from client indices, else from glDrawRangeElements' own range,
+ * else from reading the bound element buffer back, since the host does not keep its data.
+ */
+function drawClientElements(state: ContextState, count: number, type: number, p: number, instances: number,
+  range: readonly [number, number] | null, drawAt: (offset: number) => void): void {
+  const gl = g(), elements = state.elements.get(null);
+  if (count < 0 || instances < 0) { err ||= 0x501; return; }
+  if (!count || !instances) return;
+  const indices = elements ? null : guestIndices(type, p, count), use = clientUse(state);
+  if (use) {
+    let bounds: [number, number] = [0, 0];
+    if (use === 2) {
+      if (indices) bounds = indexBounds(indices);
+      else if (range) bounds = [range[0], range[1] + 1];
+      else {
+        const read = new (type === 0x1405 ? Uint32Array : type === 0x1403 ? Uint16Array : Uint8Array)(count);
+        if (p + read.byteLength <= (gl.getBufferParameter(ELEM, 0x8764) as number)) { gl.getBufferSubData(ELEM, p, read); bounds = indexBounds(read); }
+      }
+    }
+    streamClientArrays(state, bounds[0], bounds[1], instances);
+  }
+  if (!indices) { drawAt(p); return; }
+  gl.bindBuffer(ELEM, state.indexStream ??= gl.createBuffer());
+  gl.bufferData(ELEM, new Uint8Array(indices.buffer, indices.byteOffset, indices.byteLength), gl.STREAM_DRAW);
+  drawAt(0);
+  gl.bindBuffer(ELEM, null);
 }
 
 // ── what this context can do: a WebGL extension is advertised under its ES name only when
@@ -360,6 +501,7 @@ function param(pname: number): unknown {
     case 0x821d: return gles3Extensions(g()).length;                               // NUM_EXTENSIONS
     case 0x87fe: case 0x8df9: return 0;                                             // NUM_PROGRAM/SHADER_BINARY_FORMATS
     case 0x86a2: return (g().getParameter(0x86a3) as Uint32Array).length;           // NUM_COMPRESSED_TEXTURE_FORMATS
+    case 0x8d67: return g().getParameter(0x8069);                                   // TEXTURE_BINDING_EXTERNAL_OES
     default: return g().getParameter(pname);
   }
 }
@@ -416,7 +558,7 @@ export const glCommon: Record<string, HostFn> = {
   glCopyTexImage2D: (_c, a) => g().copyTexImage2D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
   glCopyTexSubImage2D: (_c, a) => g().copyTexSubImage2D(a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i(), a.i()),
 };
-const draw = (): GL => { perf.glDraws++; prepareDraw(); return g(); };
+const draw = (): ContextState => { perf.glDraws++; return prepareDraw(); };
 type Setter = (this: GL, ...v: unknown[]) => void;
 const method = (name: string): (() => Setter) => { let m: Setter | undefined; return () => (m ??= (g() as unknown as Record<string, Setter>)[name]); };
 
@@ -464,7 +606,7 @@ export function gles3Init(): void {
         src += len < 0 ? mem.cstr(p) : dec.decode(mem.bytes(p, len));
       }
       if (s) {
-        const rewrite = rewriteTextureSwizzles(src, handle);
+        const rewrite = rewriteTextureSwizzles(externalSamplersAs2D(src), handle);
         shaderRecs.set(s, { original: src, rewrite });
         if (rewrite.unsupported.length) calledMissing.add("gles3:texture swizzle shader transform");
         g().shaderSource(s, rewrite.source);
@@ -538,17 +680,28 @@ export function gles3Init(): void {
 
     // ── buffers
     glGenBuffers: (_c, a) => { const n = a.i(); gen(T().buffers, n, a.p(), () => { const o = {} as WebGLBuffer; recOf.set(o, { gl: null, other: null, elem: null, shadow: null, usage: 0x88e4 }); return o; }); },
-    glDeleteBuffers: (_c, a) => { const n = a.i(); del(T().buffers, n, a.p(), (o) => { const r = recOf.get(o); if (r?.gl) g().deleteBuffer(r.gl); if (r?.other) g().deleteBuffer(r.other); }); },
+    glDeleteBuffers: (_c, a) => {
+      const n = a.i(), state = contextState();
+      del(T().buffers, n, a.p(), (o) => {
+        const r = recOf.get(o);
+        if (!r) return;
+        if (r.gl) g().deleteBuffer(r.gl);
+        if (r.other) g().deleteBuffer(r.other);
+        // as in GL, only this context's bindings and its current vertex array's element binding reset
+        for (const [t, b] of state.buffers) if (b === r) state.buffers.set(t, null);
+        if (state.elements.get(state.vao) === r) state.elements.set(state.vao, null);
+      });
+    },
     glIsBuffer: (_c, a) => (H(T().buffers, a.i()) ? 1 : 0),
     glBindBuffer: (_c, a) => {
       const t = a.i(), h = a.i();
-      if (t === 0x88ec) unpackPbo = !!h; else if (t === 0x88eb) packPbo = !!h;      // PIXEL_UNPACK/PACK_BUFFER
-      bound.set(t, h);
+      const r = rec(h);
+      bindRec(t, r);
       if (t === COPY_READ || t === COPY_WRITE) return;
-      g().bindBuffer(t, realize(t, h));
+      g().bindBuffer(t, realize(t, r, h));
     },
-    glBindBufferBase: (_c, a) => { const t = a.i(), i = a.i(), h = a.i(); bound.set(t, h); g().bindBufferBase(t, i, realize(t, h)); },
-    glBindBufferRange: (_c, a) => { const t = a.i(), i = a.i(), h = a.i(); bound.set(t, h); const gl = realize(t, h); g().bindBufferRange(t, i, gl, a.i(), a.i()); },
+    glBindBufferBase: (_c, a) => { const t = a.i(), i = a.i(), h = a.i(), r = rec(h); bindRec(t, r); g().bindBufferBase(t, i, realize(t, r, h)); },
+    glBindBufferRange: (_c, a) => { const t = a.i(), i = a.i(), h = a.i(), r = rec(h); bindRec(t, r); const gl = realize(t, r, h); g().bindBufferRange(t, i, gl, a.i(), a.i()); },
     glBufferData: (_c, a) => {
       const t = a.i(), n = a.i(), p = a.p(), usage = a.i(), r = shadowed(t);
       if (r) { r.shadow = new Uint8Array(n); if (p) r.shadow.set(u8(p, n)); r.usage = usage; }
@@ -581,25 +734,50 @@ export function gles3Init(): void {
     glGetBufferPointerv: (_c, a) => { const t = a.i(); a.i(); const b = recAt(t); stp(a.p(), (b && mapped.get(b)?.ptr) || 0); },
 
     // ── vertex arrays and attributes
-    glBindVertexArray: (_c, a) => g().bindVertexArray(H(T().vaos, a.i())),
-    glEnableVertexAttribArray: (_c, a) => g().enableVertexAttribArray(a.i()), glDisableVertexAttribArray: (_c, a) => g().disableVertexAttribArray(a.i()),
-    glVertexAttribPointer: (_c, a) => g().vertexAttribPointer(a.i(), a.i(), a.i(), !!(a.i() & 255), a.i(), a.p()),
-    glVertexAttribIPointer: (_c, a) => g().vertexAttribIPointer(a.i(), a.i(), a.i(), a.i(), a.p()),
-    glVertexAttribDivisor: (_c, a) => g().vertexAttribDivisor(a.i(), a.i()),
+    glBindVertexArray: (_c, a) => { const vao = H(T().vaos, a.i()); g().bindVertexArray(vao); contextState().vao = vao; },
+    glEnableVertexAttribArray: (_c, a) => { const i = a.i(), state = contextState(); g().enableVertexAttribArray(i); if (!state.vao && i < state.enabled.length) state.enabled[i] = 1; },
+    glDisableVertexAttribArray: (_c, a) => { const i = a.i(), state = contextState(); g().disableVertexAttribArray(i); if (!state.vao && i < state.enabled.length) state.enabled[i] = 0; },
+    glVertexAttribPointer: (_c, a) => vertexAttribPointer(false, a.i(), a.i(), a.i(), !!(a.i() & 255), a.i(), a.p()),
+    glVertexAttribIPointer: (_c, a) => vertexAttribPointer(true, a.i(), a.i(), a.i(), false, a.i(), a.p()),
+    glVertexAttribDivisor: (_c, a) => { const i = a.i(), d = a.u(), state = contextState(); g().vertexAttribDivisor(i, d); if (!state.vao && i < state.divisors.length) state.divisors[i] = d; },
     glVertexAttrib1f: (_c, a) => g().vertexAttrib1f(a.i(), a.f()), glVertexAttrib2f: (_c, a) => g().vertexAttrib2f(a.i(), a.f(), a.f()),
     glVertexAttrib3f: (_c, a) => g().vertexAttrib3f(a.i(), a.f(), a.f(), a.f()), glVertexAttrib4f: (_c, a) => g().vertexAttrib4f(a.i(), a.f(), a.f(), a.f(), a.f()),
     glVertexAttrib1fv: (_c, a) => g().vertexAttrib1fv(a.i(), f32(a.p(), 1)), glVertexAttrib2fv: (_c, a) => g().vertexAttrib2fv(a.i(), f32(a.p(), 2)),
     glVertexAttrib3fv: (_c, a) => g().vertexAttrib3fv(a.i(), f32(a.p(), 3)), glVertexAttrib4fv: (_c, a) => g().vertexAttrib4fv(a.i(), f32(a.p(), 4)),
     glVertexAttribI4i: (_c, a) => g().vertexAttribI4i(a.i(), a.i(), a.i(), a.i(), a.i()), glVertexAttribI4ui: (_c, a) => g().vertexAttribI4ui(a.i(), a.u(), a.u(), a.u(), a.u()),
     glVertexAttribI4iv: (_c, a) => g().vertexAttribI4iv(a.i(), i32(a.p(), 4)), glVertexAttribI4uiv: (_c, a) => g().vertexAttribI4uiv(a.i(), u32(a.p(), 4)),
-    glGetVertexAttribPointerv: (_c, a) => { const i = a.i(), pn = a.i(); stp(a.p(), g().getVertexAttribOffset(i, pn)); },
+    glGetVertexAttribPointerv: (_c, a) => {
+      const i = a.i(), pn = a.i(), client = pn === 0x8645 && clientArray(contextState(), i);
+      stp(a.p(), client ? client.ptr : g().getVertexAttribOffset(i, pn));
+    },
 
     // ── draws
-    glDrawArrays: (_c, a) => draw().drawArrays(a.i(), a.i(), a.i()),
-    glDrawElements: (_c, a) => draw().drawElements(a.i(), a.i(), a.i(), a.p()),
-    glDrawArraysInstanced: (_c, a) => draw().drawArraysInstanced(a.i(), a.i(), a.i(), a.i()),
-    glDrawElementsInstanced: (_c, a) => draw().drawElementsInstanced(a.i(), a.i(), a.i(), a.p(), a.i()),
-    glDrawRangeElements: (_c, a) => draw().drawRangeElements(a.i(), a.i(), a.i(), a.i(), a.i(), a.p()),
+    // the default vertex array's client arrays are all that needs more than the WebGL call
+    glDrawArrays: (_c, a) => {
+      const mode = a.i(), first = a.i(), count = a.i(), state = draw();
+      if (!state.vao && state.clients.size) drawClientArrays(state, first, count, 1);
+      g().drawArrays(mode, first, count);
+    },
+    glDrawArraysInstanced: (_c, a) => {
+      const mode = a.i(), first = a.i(), count = a.i(), n = a.i(), state = draw();
+      if (!state.vao && state.clients.size) drawClientArrays(state, first, count, n);
+      g().drawArraysInstanced(mode, first, count, n);
+    },
+    glDrawElements: (_c, a) => {
+      const mode = a.i(), count = a.i(), type = a.i(), p = a.p(), state = draw();
+      if (state.vao || (state.elements.get(null) && !state.clients.size)) g().drawElements(mode, count, type, p);
+      else drawClientElements(state, count, type, p, 1, null, (at) => g().drawElements(mode, count, type, at));
+    },
+    glDrawElementsInstanced: (_c, a) => {
+      const mode = a.i(), count = a.i(), type = a.i(), p = a.p(), n = a.i(), state = draw();
+      if (state.vao || (state.elements.get(null) && !state.clients.size)) g().drawElementsInstanced(mode, count, type, p, n);
+      else drawClientElements(state, count, type, p, n, null, (at) => g().drawElementsInstanced(mode, count, type, at, n));
+    },
+    glDrawRangeElements: (_c, a) => {
+      const mode = a.i(), start = a.i(), end = a.i(), count = a.i(), type = a.i(), p = a.p(), state = draw();
+      if (state.vao || (state.elements.get(null) && !state.clients.size)) g().drawRangeElements(mode, start, end, count, type, p);
+      else drawClientElements(state, count, type, p, 1, [start, end], (at) => g().drawRangeElements(mode, start, end, count, type, at));
+    },
 
     // ── textures and samplers
     glActiveTexture: (_c, a) => { const texture = a.i(); g().activeTexture(texture); if (texture >= TEXTURE0) contextState().activeUnit = texture - TEXTURE0; },
@@ -615,7 +793,7 @@ export function gles3Init(): void {
     },
     glIsTexture: (_c, a) => (H(T().textures, a.i()) ? 1 : 0),
     glBindTexture: (_c, a) => {
-      const target = a.i(), texture = H(T().textures, a.i()), state = contextState();
+      const target = textureTarget(a.i()), texture = H(T().textures, a.i()), state = contextState();
       g().bindTexture(target, texture);
       let unit = state.bindings.get(state.activeUnit);
       if (!unit) { unit = new Map(); state.bindings.set(state.activeUnit, unit); }
@@ -628,22 +806,22 @@ export function gles3Init(): void {
     glCompressedTexImage2D: (_c, a) => {
       const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(); a.i(); const n = a.i(), p = a.p();
       const gl = glForTextureFormat(f);
-      if (unpackPbo) gl.compressedTexImage2D(t, l, f, w, h, 0, n, p); else gl.compressedTexImage2D(t, l, f, w, h, 0, u8(p, n));
+      if (pbo(UNPACK)) gl.compressedTexImage2D(t, l, f, w, h, 0, n, p); else gl.compressedTexImage2D(t, l, f, w, h, 0, u8(p, n));
     },
     glCompressedTexSubImage2D: (_c, a) => {
       const t = a.i(), l = a.i(), x = a.i(), y = a.i(), w = a.i(), h = a.i(), f = a.i(), n = a.i(), p = a.p();
       const gl = glForTextureFormat(f);
-      if (unpackPbo) gl.compressedTexSubImage2D(t, l, x, y, w, h, f, n, p); else gl.compressedTexSubImage2D(t, l, x, y, w, h, f, u8(p, n));
+      if (pbo(UNPACK)) gl.compressedTexSubImage2D(t, l, x, y, w, h, f, n, p); else gl.compressedTexSubImage2D(t, l, x, y, w, h, f, u8(p, n));
     },
     glCompressedTexImage3D: (_c, a) => {
       const t = a.i(), l = a.i(), f = a.i(), w = a.i(), h = a.i(), d = a.i(); a.i(); const n = a.i(), p = a.p();
       const gl = glForTextureFormat(f);
-      if (unpackPbo) gl.compressedTexImage3D(t, l, f, w, h, d, 0, n, p); else gl.compressedTexImage3D(t, l, f, w, h, d, 0, u8(p, n));
+      if (pbo(UNPACK)) gl.compressedTexImage3D(t, l, f, w, h, d, 0, n, p); else gl.compressedTexImage3D(t, l, f, w, h, d, 0, u8(p, n));
     },
     glCompressedTexSubImage3D: (_c, a) => {
       const t = a.i(), l = a.i(), x = a.i(), y = a.i(), z = a.i(), w = a.i(), h = a.i(), d = a.i(), f = a.i(), n = a.i(), p = a.p();
       const gl = glForTextureFormat(f);
-      if (unpackPbo) gl.compressedTexSubImage3D(t, l, x, y, z, w, h, d, f, n, p); else gl.compressedTexSubImage3D(t, l, x, y, z, w, h, d, f, u8(p, n));
+      if (pbo(UNPACK)) gl.compressedTexSubImage3D(t, l, x, y, z, w, h, d, f, n, p); else gl.compressedTexSubImage3D(t, l, x, y, z, w, h, d, f, u8(p, n));
     },
     glTexStorage2D: (_c, a) => {
       const target = a.i(), levels = a.i(), format = a.i(), width = a.i(), height = a.i(), gl = glForTextureFormat(format);
@@ -659,7 +837,7 @@ export function gles3Init(): void {
 
     // ── framebuffers and renderbuffers
     glBindFramebuffer: (_c, a) => g().bindFramebuffer(a.i(), H(T().fbos, a.i())),
-    glFramebufferTexture2D: (_c, a) => g().framebufferTexture2D(a.i(), a.i(), a.i(), H(T().textures, a.i()), a.i()),
+    glFramebufferTexture2D: (_c, a) => g().framebufferTexture2D(a.i(), a.i(), textureTarget(a.i()), H(T().textures, a.i()), a.i()),
     glFramebufferTextureLayer: (_c, a) => g().framebufferTextureLayer(a.i(), a.i(), H(T().textures, a.i()), a.i(), a.i()),
     glFramebufferRenderbuffer: (_c, a) => g().framebufferRenderbuffer(a.i(), a.i(), a.i(), H(T().rbos, a.i())),
     glCheckFramebufferStatus: (_c, a) => g().checkFramebufferStatus(a.i()),
@@ -671,7 +849,7 @@ export function gles3Init(): void {
     glReadBuffer: (_c, a) => g().readBuffer(a.i()),
     glReadPixels: (_c, a) => {
       const x = a.i(), y = a.i(), w = a.i(), h = a.i(), f = a.i(), ty = a.i(), p = a.p();
-      if (packPbo) { g().readPixels(x, y, w, h, f, ty, p); syncVertexBuffer(g().getParameter(0x88ed)); } else readGuestPixels(g(), x, y, w, h, f, ty, p);
+      if (pbo(PACK)) { g().readPixels(x, y, w, h, f, ty, p); syncVertexBuffer(recAt(PACK)); } else readGuestPixels(g(), x, y, w, h, f, ty, p);
     },
     glBindRenderbuffer: (_c, a) => g().bindRenderbuffer(a.i(), H(T().rbos, a.i())),
     glRenderbufferStorage: (_c, a) => g().renderbufferStorage(a.i(), a.i(), a.i(), a.i()),
@@ -709,19 +887,28 @@ export function gles3Init(): void {
     G[`glDelete${many}`] = (_c, a) => { const n = a.i(); del(T()[key], n, a.p(), (o) => g()[remove](o)); };
     G[`glIs${one}`] = (_c, a) => (H(T()[key], a.i()) ? 1 : 0);
   }
+  G.glDeleteVertexArrays = (_c, a) => {
+    const n = a.i(), state = contextState();
+    // deleting the bound vertex array rebinds the default one, with its element binding
+    del(T().vaos, n, a.p(), (vao: WebGLVertexArrayObject) => { g().deleteVertexArray(vao); state.elements.delete(vao); if (state.vao === vao) state.vao = null; });
+  };
   for (const [s, st, bpe] of [["Integer", st32, 4], ["Integer64", st64, 8], ["Float", stf, 4], ["Boolean", st8, 1]] as const) G[`glGet${s}v`] = (_c, a) => { const n = a.i(); out(param(n), a.p(), st, bpe); };
   for (const [s, st, bpe] of [["iv", st32, 4], ["i64v", st64, 8]] as const) {
     G[`glGetBufferParameter${s}`] = (_c, a) => { const t = a.i(), pn = a.i(), r = shadowed(t); out(r ? (pn === 0x8765 ? r.usage : r.shadow!.length) : withTarget(t, (tt) => g().getBufferParameter(tt, pn)), a.p(), st, bpe); };
   }
   for (const [s, st] of [["iv", st32], ["fv", stf]] as const) {
-    G[`glGetTexParameter${s}`] = (_c, a) => { const t = a.i(), pn = a.i(); out(texParameter(t, pn), a.p(), st, 4); };
+    G[`glGetTexParameter${s}`] = (_c, a) => { const t = textureTarget(a.i()), pn = a.i(); out(texParameter(t, pn), a.p(), st, 4); };
     G[`glGetSamplerParameter${s}`] = (_c, a) => { const smp = H(T().samplers, a.i()); const pn = a.i(); out(smp && g().getSamplerParameter(smp, pn), a.p(), st, 4); };
   }
   for (const [s, st] of [["f", stf], ["i", st32], ["ui", st32]] as const) G[`glGetUniform${s}v`] = (_c, a) => { const p = H(T().programs, a.i()), u = U(a.i()); out(p && u && g().getUniform(p, u), a.p(), st, 4); };
-  for (const [s, st] of [["fv", stf], ["iv", st32], ["Iiv", st32], ["Iuiv", st32]] as const) G[`glGetVertexAttrib${s}`] = (_c, a) => { const i = a.i(), pn = a.i(); out(g().getVertexAttrib(i, pn), a.p(), st, 4); };
+  for (const [s, st] of [["fv", stf], ["iv", st32], ["Iiv", st32], ["Iuiv", st32]] as const) G[`glGetVertexAttrib${s}`] = (_c, a) => {
+    const i = a.i(), pn = a.i();
+    // a client array's attribute reads a stream buffer in WebGL, and none in GL
+    out(pn === 0x889f && clientArray(contextState(), i) ? 0 : g().getVertexAttrib(i, pn), a.p(), st, 4);
+  };
   const I = (a: ArgReader) => a.i(), LD = (a: ArgReader) => mem.ld32(a.p()), F = (a: ArgReader) => a.f(), LDF = (a: ArgReader) => mem.ldf32(a.p());
   for (const [s, read, int] of [["i", I, true], ["f", F, false], ["iv", LD, true], ["fv", LDF, false]] as const) {
-    G[`glTexParameter${s}`] = (_c, a) => { const t = a.i(), pn = a.i(); (int ? texParam : texParamf)(t, pn, read(a)); };
+    G[`glTexParameter${s}`] = (_c, a) => { const t = textureTarget(a.i()), pn = a.i(); (int ? texParam : texParamf)(t, pn, read(a)); };
     G[`glSamplerParameter${s}`] = (_c, a) => { const smp = H(T().samplers, a.i()); const pn = a.i(), v = read(a); if (smp) { if (int) g().samplerParameteri(smp, pn, v); else g().samplerParameterf(smp, pn, v); } };
   }
   // ── uniforms: glUniform{1..4}{f,i,ui}[v] and the nine matrix shapes

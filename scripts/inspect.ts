@@ -5,7 +5,7 @@ import { need } from "./args";
 const [path] = need("bun run inspect <apk>");
 const zip = await openApk(path);
 
-console.log(dumpXml(parseAXML(zip["AndroidManifest.xml"]), 0, [], 3).join("\n"));
+console.log(dumpXml(parseAXML(zip["AndroidManifest.xml"]), 3).join("\n"));
 
 for (const dex of dexesOf(zip)) {
   const name = dex.name;

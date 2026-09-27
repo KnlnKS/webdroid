@@ -57,8 +57,8 @@ export async function loadNativeLib(name: string, bytes: Uint8Array, abi: string
   // before nativeInit builds them
   nativeInit(abi);
   // the caller's Cpu, chosen before anything awaits: init arrays and JNI_OnLoad run on the thread
-  // that called dlopen. Picking it afterwards once ran an executor's JNI_OnLoad on the main Cpu,
-  // parked mid-static-initialiser, and libc++'s guard reported a recursive initialisation.
+  // that called dlopen. After an await the current thread may be another one (the main Cpu,
+  // parked mid-static-initialiser, where libc++'s guard reports a recursive initialisation).
   const cpu = cpuFor(thread);
   const mod = await loadModule(name, bytes, false, owner, cpu);
   const onload = mod.exports.get("JNI_OnLoad");

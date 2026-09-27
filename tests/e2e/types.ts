@@ -155,9 +155,6 @@ export const waitHorizonMs = (policy: WaitPolicy): number => {
   }
 };
 
-export const waitTimeoutMs = (policy: WaitPolicy): number =>
-  policy.kind === "live" || policy.kind === "live-sample" ? policy.timeoutMs : policy.maxRealMs;
-
 export const isMotionWait = (policy: WaitPolicy): boolean =>
   policy.kind === "sample" || policy.kind === "live-sample";
 
@@ -258,7 +255,7 @@ export const deviceScreen = (): CaptureScreen =>
   ({ width: device.width, height: device.height, densityDpi: device.densityDpi, statusBarDp: device.statusBarDp });
 
 /** the `?screen=` the shell parses, and what setup-avd.sh prints */
-export const screenParam = (s: Screen): string => `${s.width}x${s.height}@${s.densityDpi}`;
+export { formatScreen as screenParam } from "../../src/shell/config";
 
 export const sameDimensions = (a: Screen, b: Screen): boolean =>
   a.width === b.width && a.height === b.height && a.densityDpi === b.densityDpi;

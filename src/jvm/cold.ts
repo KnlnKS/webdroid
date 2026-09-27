@@ -19,8 +19,10 @@ export interface ColdMethod {
   /** "pkg/Class.method(desc)": the frame an exception unwinding through here is noted under */
   name: string;
   R: Runtime; D: ReturnType<Runtime["dexLink"]>; S: unknown;
-  regs: number; first: number; instance: boolean; widths: number[];
-  ops: Map<number, ColdOp>;
+  regs: number; first: number; instance: boolean; widths: readonly number[];
+  /** by pc; `build` fills an entry the first time its instruction runs */
+  ops: (ColdOp | undefined)[];
+  build(pc: number): ColdOp;
   catches: { start: number; end: number; handlers: [string, number][]; all: number }[];
   hotness: number;
   profiledInstructions: number;
@@ -32,7 +34,8 @@ const handlers = new Map<string, Handler>();
 export function coldOp(body: string, constants: unknown[], next: number): ColdOp {
   let run = handlers.get(body);
   if (!run) {
-    run = new Function(`return function(F,K){const R=F.R,D=F.D,S=F.S;${body}}`)() as Handler;
+    // Parenthesized: V8 compiles it eagerly instead of preparsing it and reparsing on first call.
+    run = new Function(`return (function(F,K){const R=F.R,D=F.D,S=F.S;${body}})`)() as Handler;
     handlers.set(body, run); perf.coldHandlers++;
   }
   return { run, constants, next };
@@ -66,8 +69,7 @@ function step(method: ColdMethod, f: ColdFrame, receiver: unknown, thrownAt: num
   let suspended = false;
   try {
     while (!f.done) {
-      const pc = thrownAt >= 0 ? thrownAt : f.next, op = method.ops.get(pc);
-      if (!op) throw new Error("bad pc " + pc);
+      const pc = thrownAt >= 0 ? thrownAt : f.next, op = method.ops[pc] ?? method.build(pc);
       try {
         if (thrownAt >= 0) { thrownAt = -1; throw thrown; }
         f.next = op.next;

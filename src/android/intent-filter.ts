@@ -1,11 +1,11 @@
-import { type JParcel, readInt, writeInt, readString, writeString, parcelCreator } from "./parcel";
+import { type JParcel, readInt, writeInt, readString, writeString, writeStrings, parcelCreator } from "./parcel";
 import { vcall } from "../jvm/natives/jlang";
 import { mkIter, toJsArray } from "../jvm/natives/jutil";
 import type { JPersistableBundle } from "./os";
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { attr, attrStr, TV, type XmlNode } from "./axml";
 import type { JIntent } from "./intent";
-import { type JUri, mkUri, uriDecode, uriParts } from "./net";
+import { type JUri, hostPort, mkUri, uriDecode, uriParts } from "./net";
 import { appHost } from "./apphost";
 import { resString } from "./res";
 
@@ -69,7 +69,7 @@ statics: { get CREATOR() { return parcelCreator("android/os/PatternMatcher", rea
 } });
 function matchAuthority(authority: string | null, wantedHost: string, wantedPort: number | null): number {
   if (authority === null) return -2;
-  authority = authority.slice(authority.lastIndexOf("@") + 1);
+  authority = hostPort(authority);
   const colon = authority.indexOf(":", authority.startsWith("[") ? authority.indexOf("]") : 0);
   const host = uriDecode(colon < 0 ? authority : authority.slice(0, colon))!.toLowerCase();
   const wanted = wantedHost.toLowerCase();
@@ -160,9 +160,6 @@ class JIntentFilter extends JObj {
     return type !== null ? -1 : match + 0x8000;
   }
 }
-function writeStrings(p: JParcel, values: string[]): void {
-  writeInt(p, values.length); for (const value of values) writeString(p, value);
-}
 function readStrings(p: JParcel): string[] {
   const values: string[] = [], count = readInt(p);
   if (count < 0 || count > (p.size - p.pos) / 4) throw rt.mkThrowable("android/os/BadParcelableException", "Invalid string count");
@@ -199,6 +196,7 @@ async function writeFilter(filter: JIntentFilter, p: JParcel): Promise<void> {
   writeInt(p, +!!filter.extras); if (filter.extras) await vcall(p, "writePersistableBundle", "(Landroid/os/PersistableBundle;)V", filter.extras);
   writeInt(p, 0);
 }
+const addAction = function (this: JIntentFilter, a: string) { this.actions.push(a); };
 rt.register({
   name: "android/content/IntentFilter", ctor: JIntentFilter, ifaces: ["android/os/Parcelable"],
   statics: { get CREATOR() { return parcelCreator("android/content/IntentFilter", readFilter); }, MATCH_CATEGORY_MASK: 0xfff0000, MATCH_ADJUSTMENT_MASK: 0xffff, MATCH_ADJUSTMENT_NORMAL: 0x8000, MATCH_CATEGORY_EMPTY: 0x100000, MATCH_CATEGORY_SCHEME: 0x200000,
@@ -210,8 +208,8 @@ rt.register({
     "setPriority(I)V": function (this: JIntentFilter, priority: number) { this.priority = priority; },
     "getPriority()I": function (this: JIntentFilter) { return this.priority; },
     "<init>()V": function () {},
-    "<init>(Ljava/lang/String;)V": function (this: JIntentFilter, a: string) { this.actions.push(a); },
-    "addAction(Ljava/lang/String;)V": function (this: JIntentFilter, a: string) { this.actions.push(a); },
+    "<init>(Ljava/lang/String;)V": addAction,
+    "addAction(Ljava/lang/String;)V": addAction,
     "countActions()I": function (this: JIntentFilter) { return this.actions.length; },
     "getAction(I)Ljava/lang/String;": function (this: JIntentFilter, i: number) { return this.actions[i] ?? null; },
     "hasAction(Ljava/lang/String;)Z": function (this: JIntentFilter, a: string) { return this.actions.includes(a) ? 1 : 0; },

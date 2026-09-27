@@ -5,7 +5,7 @@ import { curThread, threadSwitch } from "../jvm/natives/jlang";
 import { JBuffer, bufferView } from "../jvm/natives/jnio";
 import { JBitmap } from "./graphics";
 import { gles1String } from "../native/gles1";
-import { gles3Extensions } from "../native/gles3";
+import { externalSamplersAs2D, gles3Extensions, textureTarget } from "../native/gles3";
 import { perf } from "../perf";
 
 // GL dispatch follows the cooperative Java/native thread without a lookup on every GL call.
@@ -88,6 +88,28 @@ function getActive(query: (p: WebGLProgram, i: number) => WebGLActiveInfo | null
   };
 }
 
+// GLES reads a client array when a draw runs: the pointer call keeps the Buffer and its position,
+// and each draw streams those bytes into a buffer that attribute reuses. The view is rebuilt per
+// draw because a direct buffer's guest memory may grow in between.
+interface ClientArray { buf: JBuffer; from: number; length: number }
+interface ClientArrays { attribs: Map<number, ClientArray>; buffers: (WebGLBuffer | null)[]; elements: WebGLBuffer | null }
+const clientArrays = new WeakMap<GL, ClientArrays>();
+function clientArraysOf(g: GL): ClientArrays {
+  let client = clientArrays.get(g);
+  if (!client) clientArrays.set(g, client = { attribs: new Map(), buffers: [], elements: null });
+  return client;
+}
+function streamClientArrays(g: GL): void {
+  const client = clientArrays.get(g);
+  if (!client?.attribs.size) return;
+  const prev = g.getParameter(g.ARRAY_BUFFER_BINDING) as WebGLBuffer | null;
+  for (const [idx, { buf, from, length }] of client.attribs) {
+    g.bindBuffer(g.ARRAY_BUFFER, client.buffers[idx]!);
+    g.bufferData(g.ARRAY_BUFFER, new Uint8Array(buf.ab, bufferView(buf).byteOffset + from, length), g.STREAM_DRAW);
+  }
+  g.bindBuffer(g.ARRAY_BUFFER, prev);
+}
+
 rt.register({ name: "android/opengl/GLES10", ctor: class extends JObj {}, methods: {
   "static glGetString(I)Ljava/lang/String;": (name: number) => gl ? gles1String(gl, name) : null,
 } });
@@ -133,7 +155,7 @@ rt.register({
     "static glPixelStorei(II)V": (name: number, p: number) => gl?.pixelStorei(name, p),
     "static glCreateProgram()I": () => put(T.programs, gl?.createProgram() ?? null),
     "static glCreateShader(I)I": (type: number) => put(T.shaders, gl?.createShader(type) ?? null),
-    "static glShaderSource(ILjava/lang/String;)V": (sh: number, src: string) => gl?.shaderSource(T.shaders[sh]!, src),
+    "static glShaderSource(ILjava/lang/String;)V": (sh: number, src: string) => gl?.shaderSource(T.shaders[sh]!, externalSamplersAs2D(src)),
     "static glCompileShader(I)V": (sh: number) => gl?.compileShader(T.shaders[sh]!),
     "static glAttachShader(II)V": (p: number, sh: number) => gl?.attachShader(T.programs[p]!, T.shaders[sh]!),
     "static glLinkProgram(I)V": (p: number) => gl?.linkProgram(T.programs[p]!),
@@ -193,10 +215,10 @@ rt.register({
     "static glDeleteBuffers(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(T.buffers, (o) => gl?.deleteBuffer(o), n, arr, off),
     "static glGenTextures(I[II)V": (n: number, out: Int32Array, off: number) => genInto(T.textures, () => gl?.createTexture(), n, out, off),
     "static glGenTextures(ILjava/nio/IntBuffer;)V": (n: number, buf: JBuffer) => genIntoBuffer(T.textures, () => gl?.createTexture(), n, buf),
-    "static glBindTexture(II)V": (target: number, t: number) => gl?.bindTexture(target, t ? T.textures[t]! : null),
+    "static glBindTexture(II)V": (target: number, t: number) => gl?.bindTexture(textureTarget(target), t ? T.textures[t]! : null),
     "static glDeleteTextures(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(T.textures, (o) => gl?.deleteTexture(o), n, arr, off),
-    "static glTexParameterf(IIF)V": (target: number, pname: number, v: number) => gl?.texParameterf(target, pname, v),
-    "static glTexParameteri(III)V": (target: number, pname: number, v: number) => gl?.texParameteri(target, pname, v),
+    "static glTexParameterf(IIF)V": (target: number, pname: number, v: number) => gl?.texParameterf(textureTarget(target), pname, v),
+    "static glTexParameteri(III)V": (target: number, pname: number, v: number) => gl?.texParameteri(textureTarget(target), pname, v),
     "static glTexImage2D(IIIIIIIILjava/nio/Buffer;)V": (target: number, level: number, internalFormat: number, w: number, h: number, border: number, format: number, type: number, data: JBuffer | null) => {
       const b = bytesFrom(data);
       gl?.texImage2D(target, level, internalFormat, w, h, border, format, type, b);
@@ -208,7 +230,7 @@ rt.register({
     "static glCopyTexSubImage2D(IIIIIIII)V": (target: number, level: number, xo: number, yo: number, x: number, y: number, w: number, h: number) => gl?.copyTexSubImage2D(target, level, xo, yo, x, y, w, h),
     "static glGenFramebuffers(I[II)V": (n: number, out: Int32Array, off: number) => genInto(T.fbos, () => gl?.createFramebuffer(), n, out, off),
     "static glBindFramebuffer(II)V": (target: number, handle: number) => gl?.bindFramebuffer(target, T.fbos[handle] ?? null),
-    "static glFramebufferTexture2D(IIIII)V": (target: number, attachment: number, texTarget: number, texture: number, level: number) => gl?.framebufferTexture2D(target, attachment, texTarget, T.textures[texture] ?? null, level),
+    "static glFramebufferTexture2D(IIIII)V": (target: number, attachment: number, texTarget: number, texture: number, level: number) => gl?.framebufferTexture2D(target, attachment, textureTarget(texTarget), T.textures[texture] ?? null, level),
     "static glDeleteFramebuffers(I[II)V": (n: number, arr: Int32Array, off: number) => deleteAll(T.fbos, (o) => gl?.deleteFramebuffer(o), n, arr, off),
     "static glReadPixels(IIIIIILjava/nio/Buffer;)V": (x: number, y: number, w: number, h: number, format: number, type: number, data: JBuffer) => {
       const b = bytesFrom(data);
@@ -220,18 +242,19 @@ rt.register({
       gl?.readPixels(x, y, w, h, format, type, pixels);
       if (!aligned) b.set(new Uint8Array(pixels.buffer));
     },
-    "static glDrawArrays(III)V": (mode: number, first: number, count: number) => { if (gl) { gl.drawArrays(mode, first, count); perf.glDraws++; } },
-    "static glDrawElements(IIII)V": (mode: number, count: number, type: number, offset: number) => { if (gl) { gl.drawElements(mode, count, type, offset); perf.glDraws++; } },
+    "static glDrawArrays(III)V": (mode: number, first: number, count: number) => { if (gl) { streamClientArrays(gl); gl.drawArrays(mode, first, count); perf.glDraws++; } },
+    "static glDrawElements(IIII)V": (mode: number, count: number, type: number, offset: number) => { if (gl) { streamClientArrays(gl); gl.drawElements(mode, count, type, offset); perf.glDraws++; } },
     "static glDrawElements(IIILjava/nio/Buffer;)V": (mode: number, count: number, type: number, indices: JBuffer | null) => {
       if (!gl) return;
+      streamClientArrays(gl);
       const b = bytesFrom(indices);
       if (b) {
-        // WebGL requires element buffer bound; upload transient buffer
-        const eb = gl.createBuffer();
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, eb);
-        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, b.subarray(0, count * (type === 0x1403 ? 2 : 1)), gl.STREAM_DRAW);
+        // WebGL draws indices only from a bound element buffer
+        const prev = gl.getParameter(gl.ELEMENT_ARRAY_BUFFER_BINDING) as WebGLBuffer | null;
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, clientArraysOf(gl).elements ??= gl.createBuffer());
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, b.subarray(0, count * (type === 0x1405 ? 4 : type === 0x1403 ? 2 : 1)), gl.STREAM_DRAW);
         gl.drawElements(mode, count, type, 0);
-        gl.deleteBuffer(eb);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, prev);
       } else gl.drawElements(mode, count, type, 0);
       perf.glDraws++;
     },
@@ -240,19 +263,19 @@ rt.register({
     "static glVertexAttrib4fv(I[FI)V": (idx: number, values: Float32Array, off: number) => gl?.vertexAttrib4fv(idx, values.subarray(off, off + 4)),
     "static glVertexAttribPointer(IIIZILjava/nio/Buffer;)V":
       (idx: number, size: number, type: number, normalized: number, stride: number, buf: JBuffer | null) => {
-        // client-side arrays: upload to a transient buffer (AndEngine mostly uses VBOs → buf null)
-        const b = bytesFrom(buf);
-        if (b) {
-          const vb = gl!.createBuffer();
-          gl!.bindBuffer(gl!.ARRAY_BUFFER, vb);
-          gl!.bufferData(gl!.ARRAY_BUFFER, b, gl!.STREAM_DRAW);
-          gl!.vertexAttribPointer(idx, size, type, !!normalized, stride, 0);
-        } else {
-          gl?.vertexAttribPointer(idx, size, type, !!normalized, stride, 0);
-        }
+        if (!gl) return;
+        const client = clientArraysOf(gl);
+        if (!buf) { client.attribs.delete(idx); gl.vertexAttribPointer(idx, size, type, !!normalized, stride, 0); return; }
+        const prev = gl.getParameter(gl.ARRAY_BUFFER_BINDING) as WebGLBuffer | null;
+        gl.bindBuffer(gl.ARRAY_BUFFER, client.buffers[idx] ??= gl.createBuffer());
+        gl.vertexAttribPointer(idx, size, type, !!normalized, stride, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, prev);
+        client.attribs.set(idx, { buf, from: buf.pos << buf.elemShift, length: (buf.lim - buf.pos) << buf.elemShift });
       },
     "static glVertexAttribPointer(IIIZII)V": (idx: number, size: number, type: number, normalized: number, stride: number, offset: number) => {
-      gl?.vertexAttribPointer(idx, size, type, !!normalized, stride, offset);
+      if (!gl) return;
+      clientArrays.get(gl)?.attribs.delete(idx);
+      gl.vertexAttribPointer(idx, size, type, !!normalized, stride, offset);
     },
     "static glGetString(I)Ljava/lang/String;": (name: number) => {
       switch (name) {
@@ -333,7 +356,7 @@ rt.register({
     },
     "static multiplyMM([FI[FI[FI)V": multMM,
     "static multiplyMV([FI[FI[FI)V": (r: Float32Array, ro: number, m: Float32Array, mo: number, v: Float32Array, vo: number) => {
-      const t = new Float32Array(4);
+      const t = tmp4;
       for (let row = 0; row < 4; row++) {
         let s = 0;
         for (let k = 0; k < 4; k++) s += m[mo + k * 4 + row] * v[vo + k];
@@ -375,10 +398,8 @@ rt.register({
       for (let i = 0; i < 4; i++) { r[ro + i] = m[mo + i] * x; r[ro + 4 + i] = m[mo + 4 + i] * y; r[ro + 8 + i] = m[mo + 8 + i] * z; r[ro + 12 + i] = m[mo + 12 + i]; }
     },
     "static rotateM([FIFFFF)V": (m: Float32Array, o: number, a: number, x: number, y: number, z: number) => {
-      const t = new Float32Array(16);
-      setRotate(t, a, x, y, z);
-      const src = m.slice(o, o + 16);
-      multMM(m, o, src, 0, t, 0);
+      setRotate(rot16, a, x, y, z);
+      multMM(m, o, m, o, rot16, 0);
     },
     "static setRotateM([FIFFFF)V": (m: Float32Array, o: number, a: number, x: number, y: number, z: number) => setRotate(m, a, x, y, z, o),
     "static invertM([FI[FI)Z": invert,
@@ -403,7 +424,7 @@ rt.register({
   },
 });
 // scratch so r may alias a or b; per-entity per-frame path, so no allocation here
-const tmp16 = new Float32Array(16);
+const tmp16 = new Float32Array(16), tmp4 = new Float32Array(4), rot16 = new Float32Array(16);
 function multMM(r: Float32Array, ro: number, a: Float32Array, ao: number, b: Float32Array, bo: number) {
   const t = tmp16;
   for (let c = 0; c < 4; c++) for (let row = 0; row < 4; row++) {

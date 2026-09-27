@@ -8,8 +8,8 @@ import { uiState, invalidate, JView, guardCall } from "./view";
 import { reportUncaught } from "./os";
 import { stateSetMatches } from "./util";
 import { onMain } from "./mainloop";
-import { parseAXML, TV, type XmlNode, type XmlAttr } from "./axml";
-import { type Resources, type RV, attrTable, T_STR, normRV, rvFloat, rvInt } from "./res";
+import { parseAXML, type XmlNode } from "./axml";
+import { type Resources, type RV, attrTable, T_STR, nodeAttrRV, rvFloat, rvInt } from "./res";
 import type { JContext } from "./context";
 import { JRect, type JPoint } from "./graphics";
 import { pathKeyframeData, type JPath } from "./path";
@@ -93,8 +93,8 @@ class JPathEvaluator extends JObj {
     return this.converter ? vcall(this.converter, "convert", "(Ljava/lang/Object;)Ljava/lang/Object;", this.point) : this.point;
   }
 }
-/** AOSP's default AccelerateDecelerateInterpolator */
-const accelDecel = (t: number) => Math.cos((t + 1) * Math.PI) / 2 + 0.5;
+/** AOSP's AccelerateDecelerateInterpolator, the default for animators and view animations */
+export function accelDecel(t: number) { return Math.cos((t + 1) * Math.PI) / 2 + 0.5; }
 async function animTick(a: JValueAnimator): Promise<boolean> {
   if (a.paused) return true;
   const now = guestNow(), el = now - a.startT - a.delayMs;
@@ -647,9 +647,8 @@ const A = attrTable(
   "ordering");
 
 function xmlAttr(res: Resources, node: XmlNode, id: number): RV | null {
-  const a: XmlAttr | undefined = id ? node.attrs.find((x) => x.resId === id) : undefined;
-  if (!a) return null;
-  return a.type === TV.STRING ? { t: T_STR, d: 0, s: a.str ?? "" } : res.resolveRefs(normRV({ t: a.type, d: a.data }));
+  const v = nodeAttrRV(node, id);
+  return v && v.t !== T_STR ? res.resolveRefs(v) : v;
 }
 function inflateAnimator(res: Resources, node: XmlNode): JValueAnimator {
   if (node.name === "set") {

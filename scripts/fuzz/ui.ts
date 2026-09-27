@@ -416,7 +416,7 @@ function uiObservation(value: unknown, label: string): UiObservation {
   };
 }
 
-export function validateUiFailureBundle(value: unknown): UiFailureBundle {
+function validateUiFailureBundle(value: unknown): UiFailureBundle {
   const input = object(value, "UI failure bundle");
   if (input.schemaVersion !== 1 || input.kind !== "ui" || typeof input.seed !== "number") throw new Error("invalid UI failure bundle");
   if (!Array.isArray(input.reproductions) || input.reproductions.length !== 2) throw new Error("UI failure bundle requires two reproductions");

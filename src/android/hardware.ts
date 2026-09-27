@@ -38,6 +38,7 @@ rt.register({ name: "android/hardware/biometrics/BiometricManager", ctor: class 
 });
 rt.register({ name: "android/hardware/usb/UsbManager", ctor: class extends JObj {}, methods: {
   "getDeviceList()Ljava/util/HashMap;": () => rt.make("java/util/HashMap"),
+  // AOSP answers null, not an empty array, when no accessory is attached
   "getAccessoryList()[Landroid/hardware/usb/UsbAccessory;": () => null,
 } });
 

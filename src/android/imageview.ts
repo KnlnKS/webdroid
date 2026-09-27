@@ -65,7 +65,7 @@ export class JImageView extends JView {
     if (d && this.hasColorFilter) return after(vcallOn(thread, d, "mutate", "()Landroid/graphics/drawable/Drawable;"),
       () => vcallOn(thread, d, "setColorFilter", "(Landroid/graphics/ColorFilter;)V", this.colorFilter));
   }
-  /** AOSP only applies these when adjustViewBounds is on */
+  /** stored for the getters; onMeasure does not apply them (AOSP does, with adjustViewBounds) */
   maxW = Infinity; maxH = Infinity;
 }
 const scaleTypes = mkEnumSet("android/widget/ImageView$ScaleType", ["MATRIX", "FIT_XY", "FIT_START", "FIT_CENTER", "FIT_END", "CENTER", "CENTER_CROP", "CENTER_INSIDE"]);
@@ -89,13 +89,11 @@ const imageViewMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": function (this: JImageView, c: unknown, set: JAttrSet | null, style: number, defaultStyle: number) { return initImageView(this, c, set, style, defaultStyle); },
   "setImageDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JImageView, d: JDrawable | null) {
     const pending = this.setDrawable(d);
-    this.layoutRequested = true;
     requestLayout(this);
     return pending;
   },
   "setImageResource(I)V": driven(function* (this: JImageView, id: number): Gen {
     yield this.setDrawable(id && this.jres ? yield loadDrawable(this.jres, id, this.theme) : null);
-    this.layoutRequested = true;
     requestLayout(this);
   }),
   "setImageBitmap(Landroid/graphics/Bitmap;)V": driven(function* (this: JImageView, b: JBitmap | null): Gen {
@@ -104,7 +102,6 @@ const imageViewMethods: NativeSpec["methods"] = {
       d.bmp = b;
       yield this.setDrawable(d);
     } else yield this.setDrawable(null);
-    this.layoutRequested = true;
     requestLayout(this);
   }),
   "getDrawable()Landroid/graphics/drawable/Drawable;": function (this: JImageView) { return this.drawable; },

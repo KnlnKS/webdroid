@@ -558,7 +558,7 @@ const coderChain = (ret: string): NativeSpec["methods"] => ({
 /** ASCII and Latin-1 have holes; every Unicode transformation format encodes everything */
 const encodable = (cs: JCharset, c: number) =>
   /^(US-ASCII|ASCII)$/i.test(cs.cname) ? c < 0x80 : /8859-1|latin/i.test(cs.cname) ? c < 0x100 : true;
-const maxBytesPerChar = (cs: JCharset) => /UTF-?32/i.test(cs.cname) ? 4 : /UTF-?16/i.test(cs.cname) ? 4 : /UTF-?8/i.test(cs.cname) ? 3 : 1;
+const maxBytesPerChar = (cs: JCharset) => /UTF-?(16|32)/i.test(cs.cname) ? 4 : /UTF-?8/i.test(cs.cname) ? 3 : 1;
 rt.register({
   name: "java/nio/charset/CharsetEncoder", ctor: JCharsetCoder,
   methods: {

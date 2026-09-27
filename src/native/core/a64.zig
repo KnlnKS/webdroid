@@ -800,6 +800,16 @@ fn svc(c: *Cpu) Status {
     return .jump;
 }
 
+/// the decoded op at `pc`, decoding it and marking its word executed on first use
+pub inline fn opAt(page: *cpu.Page, pc: u32) *Op {
+    const o = &page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2];
+    if (o.kind == .raw) {
+        o.* = decode(ld(u32, pc), pc);
+        cpu.cover(page, pc, pc);
+    }
+    return o;
+}
+
 pub fn block(c: *Cpu, start: u32, page: *cpu.Page) Status {
     if (start & 3 != 0) return raise(c, .misaligned_pc, start);
     c.bpc = start;
@@ -807,12 +817,7 @@ pub fn block(c: *Cpu, start: u32, page: *cpu.Page) Status {
     var n: u32 = 0;
     var s: Status = .next;
     while (true) {
-        const i = (pc & (abi.PAGE_SIZE - 1)) >> 2;
-        const o = &page.ops[i];
-        if (o.kind == .raw) {
-            o.* = decode(ld(u32, pc), pc);
-            cpu.cover(page, pc, pc);
-        }
+        const o = opAt(page, pc);
         n += 1;
         s = exec(c, o, pc);
         if (s != .next) {

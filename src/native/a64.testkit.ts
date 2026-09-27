@@ -32,10 +32,11 @@ function place(words: number[]): number {
   return at;
 }
 /** the V file with every arithmetic NaN canonical: which payload an operation leaves, and from
- *  which operand, is the engine's business (it may commute a multiply) and differs between tiers */
+ *  which operand, is the engine's business (it may commute a multiply) and differs between tiers.
+ *  ARM32 names only D0-D31 (v0-v15); its interpreter borrows v16 and up as scratch. */
 function vfile(c: Cpu): number[] {
-  const si = Array.from(c.si), f = new Float32Array(c.si.buffer, c.si.byteOffset, 128), d = new Float64Array(c.si.buffer, c.si.byteOffset, 64);
-  for (let i = 0; i < 64; i++) {
+  const si = Array.from(c.a64 ? c.si : c.si.subarray(0, 64)), f = new Float32Array(c.si.buffer, c.si.byteOffset, 128), d = new Float64Array(c.si.buffer, c.si.byteOffset, 64);
+  for (let i = 0; i < si.length / 2; i++) {
     if (d[i] !== d[i]) { si[2 * i] = 0; si[2 * i + 1] = 0x7ff80000; continue; }
     for (const h of [2 * i, 2 * i + 1]) if (f[h] !== f[h]) si[h] = 0x7fc00000;
   }

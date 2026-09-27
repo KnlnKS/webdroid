@@ -4,9 +4,10 @@
 // bun scripts/launch-profile.ts <apk> [--launches N] [--out file.json] [--cpu-profile] [--cpu-throttle N]
 import { parseArgs } from "node:util";
 import { CONTEXT_OPTS, launchBrowser } from "../tests/e2e/drivers/webdroid";
+import { BASE_URL } from "../tests/e2e/lib/util";
 
 const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-  url: { type: "string", default: process.env.WEBDROID_URL ?? "http://localhost:4080" },
+  url: { type: "string", default: BASE_URL },
   out: { type: "string" }, "cpu-profile": { type: "boolean", default: false }, launches: { type: "string", default: "1" },
   "cpu-throttle": { type: "string", default: "1" }, "idle-ms": { type: "string", default: "1500" }, "max-ms": { type: "string", default: "60000" },
 } });

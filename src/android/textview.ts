@@ -23,7 +23,7 @@ import { fontResource } from "./fonts";
 import { type NativeSpec, callSelf, rt, JObj, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { jarray, mangleMethod, jmethod } from "../jvm/abi";
 import { usLocale } from "../jvm/natives/jvalues";
-import { TextViewLayouts, drawTextViewLayout, layoutHeight } from "./textview-layout";
+import { TextViewLayouts, drawTextViewLayout } from "./textview-layout";
 
 export class JTextView extends JView {
   fallbackLineSpacing = true;
@@ -31,7 +31,6 @@ export class JTextView extends JView {
   transformation: unknown = null;
   /** AOSP mTransformed: what the TransformationMethod made of the text, laid out in its place */
   transformed: string | JSpanned | null = null;
-  editableFactory: unknown = null; spannableFactory: unknown = null;
   keyListener: unknown = null; movementMethod: unknown = null; selActionMode: unknown = null; editorActionL: unknown = null;
   insertionActionMode: unknown = null;
   drawableTint: JColorStateList | null = null;
@@ -54,7 +53,6 @@ export class JTextView extends JView {
   singleLine = false;
   ellipsizeEnd = false;
   filters: unknown[] = [];
-  maxLength = Infinity;
   lineSpacingExtra = 0;
   lineSpacingMult = 1;
   allCaps = false;
@@ -148,7 +146,7 @@ const tvAttr = attrTable(
   "text", "textSize", "textColor", "textStyle", "textAppearance", "hint", "gravity", "maxLines",
   "minLines", "lines", "singleLine", "ellipsize", "lineSpacingExtra", "lineSpacingMultiplier",
   "drawableLeft", "drawableTop", "drawableRight", "drawableBottom", "drawablePadding", "drawableStart",
-  "drawableEnd", "fontFamily", "textAllCaps", "textColorHint", "inputType", "letterSpacing", "maxLength",
+  "drawableEnd", "fontFamily", "textAllCaps", "textColorHint", "inputType",
   "imeOptions", "includeFontPadding", "ems", "minEms", "minWidth", "shadowColor", "shadowDx", "shadowDy", "shadowRadius", "textColorLink", "textCursorDrawable", "password");
 
 const applyTextAppearance = driven(function* applyTextAppearance(tv: JTextView, res: Resources, styleId: number): Gen {
@@ -477,9 +475,9 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getCompoundPaddingStart()I": function (this: JTextView) { return compoundPadRelative(this, true); },
   "getCompoundPaddingEnd()I": function (this: JTextView) { return compoundPadRelative(this, false); },
   // the factories only matter to a TextView that hands its buffer to the app (emoji2 wraps
-  // them to intercept the Editable); kept so getters round-trip
-  "setEditableFactory(Landroid/text/Editable$Factory;)V": function (this: JTextView, f: unknown) { this.editableFactory = f; },
-  "setSpannableFactory(Landroid/text/Spannable$Factory;)V": function (this: JTextView, f: unknown) { this.spannableFactory = f; },
+  // them to intercept the Editable), and TextView has no getters for them
+  "setEditableFactory(Landroid/text/Editable$Factory;)V": function () {},
+  "setSpannableFactory(Landroid/text/Spannable$Factory;)V": function () {},
   "addTextChangedListener(Landroid/text/TextWatcher;)V": function (this: JTextView, w: unknown) { this.watchers.push(w); },
   "removeTextChangedListener(Landroid/text/TextWatcher;)V": function (this: JTextView, w: unknown) {
     removeFrom(this.watchers, w);
@@ -584,9 +582,6 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
   "setOnEditorActionListener(Landroid/widget/TextView$OnEditorActionListener;)V": function (this: JTextView, l: unknown) { this.editorActionL = l; },
   "setFilters([Landroid/text/InputFilter;)V": function (this: JTextView, arr: unknown[]) {
     this.filters = arr ?? [];
-    for (const f of this.filters ?? []) {
-      if (f instanceof JLengthFilter) this.maxLength = f.max;
-    }
   },
   "getFilters()[Landroid/text/InputFilter;": function (this: JTextView) { const a = this.filters ?? []; (a as any).$t = "Landroid/text/InputFilter;"; return a; },
   "setMaxWidth(I)V": function (this: JTextView, w: number) { this.maxW = w; requestLayout(this); },
@@ -665,7 +660,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     }
     const lineCount = Math.max(this.layout?.lines.length ?? 0, display || this.hint ? 1 : 0, this.minLinesV);
     let h = this.textHeight(lineCount) + vPad;
-    if (this.layout) h = Math.max(h, layoutHeight(this.layout) + vPad);
+    if (this.layout) h = Math.max(h, this.layout.height() + vPad);
     h = Math.min(h, this.maxH);
     const sidePad = this.padT + this.padB;
     h = Math.max(h, this.minH, compoundHeight(this.drawableL) + sidePad, compoundHeight(this.drawableR) + sidePad);
@@ -711,7 +706,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
     const pending = showHint ? (this.hintLayouts ??= new TextViewLayouts()).get(this, this.hint, avail) : this.layout;
     const layout = pending instanceof Promise ? yield pending : pending;
     if (!layout) return;
-    const vg = gravityV(this.gravityT), height = Math.max(layoutHeight(layout), this.textHeight(1));
+    const vg = gravityV(this.gravityT), height = Math.max(layout.height(), this.textHeight(1));
     const y = vg === 16 ? (contentB - contentT - height) / 2 + contentT : vg === 80 ? contentB - height : contentT;
     this.paintT.setColorValue(cslColor(showHint ? this.hintColors ?? this.colors : this.colors, this.drawableState()));
     ctx.save();
@@ -727,7 +722,7 @@ export const textViewMethods: NonNullable<NativeSpec["methods"]> = {
       const caretGravity = this.horizontalGravity(display, alignment, layoutDirection);
       const cw = caretLayout.lines.at(-1)?.width ?? 0;
       const cx = caretGravity === 1 ? (avail + cw) / 2 : caretGravity === 5 ? avail : cw;
-      const caretHeight = Math.max(layoutHeight(caretLayout), this.textHeight(1));
+      const caretHeight = Math.max(caretLayout.height(), this.textHeight(1));
       const caretY = vg === 16 ? (contentB - contentT - caretHeight) / 2 + contentT : vg === 80 ? contentB - caretHeight : contentT;
       const cy = caretY + caretLayout.baseline(Math.max(0, caretLayout.lines.length - 1));
       const cursor = yield textCursorDrawable(this);
@@ -858,8 +853,16 @@ rt.register({
   methods: {
     "<init>(I)V": function (this: JLengthFilter, m: number) { this.max = m; },
     "getMax()I": function (this: JLengthFilter) { return this.max; },
-    "filter(Ljava/lang/CharSequence;IILandroid/text/Spanned;II)Ljava/lang/CharSequence;":
-      function (this: JLengthFilter, src: unknown) { return null; }, // null = accept as-is (length enforced at input time)
+    "filter(Ljava/lang/CharSequence;IILandroid/text/Spanned;II)Ljava/lang/CharSequence;": driven(function* (this: JLengthFilter,
+      source: unknown, start: number, end: number, dest: unknown, dstart: number, dend: number): Gen {
+      let keep = this.max - ((yield vcall(dest, "length", "()I")) - (dend - dstart));
+      if (keep <= 0) return "";
+      if (keep >= end - start) return null;
+      keep += start;
+      const c = yield vcall(source, "charAt", "(I)C", keep - 1);
+      if (c >= 0xd800 && c <= 0xdbff && --keep === start) return "";
+      return vcall(source, "subSequence", "(II)Ljava/lang/CharSequence;", start, keep);
+    }),
   },
 });
 rt.register({

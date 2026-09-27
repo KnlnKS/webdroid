@@ -30,10 +30,16 @@ arrays are typed arrays and object arrays carry `$t`.
   is only ever a continuation, never an entry, and is compiled on the
   method's first suspension (or for on-stack replacement), not at promotion.
 - **Cold tier.** Pooled handlers keyed by their emitted body run the first 31
-  calls. A handler returns the Promise it waits on: a call result is delivered
+  calls. A method's first call prepares it once, but keeps only the
+  instructions constant typing annotated (`coldInstructions`); every other
+  instruction is decoded again and its handler built when it first runs.
+  Reaching-definition typing runs only when a float read can see a constant. A handler returns the
+  Promise it waits on: a call result is delivered
   past the handler (`F.$w = 1`), while class-initialization and resolution
   waits rerun the handler once their caches are filled. Cold frames transfer to
-  the resumable body at any backedge past the hotness threshold.
+  the resumable body at any backedge past the hotness threshold. Generated
+  bodies and handlers are parenthesized so V8 compiles them eagerly: each runs
+  as soon as it is created.
 - **Continuations.** `src/jvm/suspend.ts`: every frame waiting on the same
   pending operation (hot, cold or generator native) joins one continuation
   list; when it settles the list resumes innermost to outermost in a single
@@ -85,6 +91,8 @@ excluding it, microtask machinery also appears as `(program)`.
 - Persisting promoted methods per package so a relaunch compiles them hot on
   first call (a baseline profile): relaunch first draw was flat for Mihon
   and FitNotes and about 3% faster for YouTube, not worth the stored state.
+- A promotion threshold other than 32 calls: 8 and 128 both left Mihon's
+  launch flat or slower after the cold tier became lazy.
 - Earlier rejections still hold: fused cold blocks and a sparse cold-op array
   saved little under auto tiering, and retaining every cold preparation cost
   about 5.5% of Mihon heap.

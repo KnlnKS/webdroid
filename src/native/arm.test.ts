@@ -943,6 +943,82 @@ describe("thumb decoder", () => {
     expect(() => execute(at | 1, cpu => { cpu.w[6] = 0; })).toThrow(/bad address 0x0/);
   });
 
+  test("compiled VFP compares, conversions and transfers match the interpreter", () => {
+    const data = mem.reserve(0x1000, 0x1000);
+    const program = [
+      0xee00, 0x0a10, 0xee00, 0x1a90, // vmov s0, r0; vmov s1, r1
+      0xeeb8, 0x1ac0, 0xeef8, 0x1a60, // vcvt.f32.s32 s2, s0; vcvt.f32.u32 s3, s1
+      0xeeb4, 0x1ae1, 0xeef1, 0xfa10, // vcmpe.f32 s2, s3; vmrs APSR_nzcv, fpscr
+      0xbfcc, 0x2201, 0x2202,         // ite gt; movgt r2, #1; movle r2, #2
+      0xeeb5, 0x1a40, 0xeef1, 0x3a10, // vcmp.f32 s2, #0; vmrs r3, fpscr
+      0xeeb7, 0x2ac1, 0xec55, 0x4b12, // vcvt.f64.f32 d2, s2; vmov r4, r5, d2
+      0xec44, 0x5b13, 0xeef7, 0x0bc3, // vmov d3, r5, r4; vcvt.f32.f64 s1, d3
+      0xeebd, 0x0ae1, 0xeebc, 0x2a41, // vcvt.s32.f32 s0, s3; vcvtr.u32.f32 s4, s2
+      0xee10, 0x6a10, 0xee12, 0x7a10, // vmov r6, s0; vmov r7, s4
+      0xed2d, 0x0b08, 0xeeb7, 0x0b00, // vpush {d0-d3}; vmov.f64 d0, #1.0
+      0xecbd, 0x0b08,                 // vpop {d0-d3}
+      0xeca8, 0x0a04, 0xed38, 0x2a04, // vstmia r8!, {s0-s3}; vldmdb r8!, {s4-s7}
+      0xec5a, 0x9a12, 0xeee1, 0x0a10, // vmov r9, r10, s4, s5; vmsr fpscr, r0
+      0xf3bf, 0x8f5b, 0x4770,         // dmb ish; bx lr
+    ];
+    const at = (r0: number, r1: number) => (cpu: Cpu) => { cpu.w[0] = r0; cpu.w[2] = r1; cpu.w[16] = data; };
+    expect(runThumb(program, at(7, 3)).w[4]).toBe(1);
+    expect(runThumb(program, at(-5, 0xffffffff)).w[4]).toBe(2);
+    const compare = [0xee00, 0x0a10, 0xee00, 0x1a90, 0xeeb4, 0x0ae0, 0xeef1, 0xfa10, 0xeeb5, 0x0b40, 0xeef1, 0x3a10, 0x4770];
+    expect(runThumb(compare, at(0x7fc00000, 0x3f800000)).cpsr >>> 28).toBe(3); // unordered: C and V
+    expect(runThumb(compare, at(0x3f800000, 0x40000000)).cpsr >>> 28).toBe(8);
+  });
+
+  test("compiled NEON whole-register loads and stores match the interpreter", () => {
+    const data = mem.reserve(0x1000, 0x1000);
+    for (let i = 0; i < 64; i++) mem.st8(data + i, i * 7);
+    // vld1.8 {d16,d17}, [r2]!; vst1.32 {d16-d19}, [r6], r1; vld1.64 {d0}, [r3:64]; vst1.16 {d1-d3}, [r4]
+    const setup = (cpu: Cpu) => { cpu.w[4] = data; cpu.w[12] = data + 64; cpu.w[2] = 8; cpu.w[6] = data + 8; cpu.w[8] = data + 128; };
+    const thumb = runThumb([0xf962, 0x0a0d, 0xf946, 0x0281, 0xf923, 0x07df, 0xf904, 0x164f, 0x4770], setup);
+    const arm = run([0xf4620a0d, 0xf4460281, 0xf42307df, 0xf404164f, BXLR], setup);
+    for (const c of [thumb, arm]) expect([c.w[4], c.w[12], mem.ld32(data + 64)]).toEqual([data + 16, data + 72, 0x150e0700]);
+    expect(() => run([0xf42307df, BXLR], (cpu) => { cpu.w[6] = data + 4; })).toThrow(/bad address/);
+  });
+
+  test("compiled NEON data processing and lane moves match the interpreter in both encodings", () => {
+    // the ARM words; Thumb's NEON forms carry U in bit 12 of 0xef, and its VFP-space moves are the same word
+    const thumb = (ws: number[]) => [...ws.flatMap((w) => w >>> 28 === 0xf ? [0xef00 | (w >>> 12 & 0x1000) | (w >>> 16 & 0xff), w & 0xffff] : [w >>> 16, w & 0xffff]), 0x4770];
+    const programs = [
+      // vadd/vsub/vmul/vmla/vmls/vabd.f32 (Q, D, by scalar), float compares, vabs/vneg.f32 and compares with zero, vnmla/vnmls
+      [0xf2400d42, 0xf2602d04, 0xf3413d15, 0xf3404d54, 0xf2424d50, 0xf2626d14, 0xf2e17962, 0xf3e08944, 0xf3e28161, 0xf3e4a540, 0xf360cd44, 0xf240ee02,
+        0xf341fe05, 0xf3216e04, 0xf3008e15, 0xf3239e11, 0xf3b9a742, 0xf3b9c7c4, 0xf3b9e400, 0xf3b9f582, 0xf3b90503, 0xf3b91605, 0xee107ac4, 0xee517a21],
+      // vadd.i32/vsub.i64, vand/vorr/veor/vbic/vorn/vbsl/vbit/vbif, integer compares, vmax/vmin, vtst/vceq, vmul/vmla/vmls (by scalar too)
+      [0xf266084c, 0xf37c2846, 0xf24c415e, 0xf26c611e, 0xf34d711f, 0xf25c8116, 0xf27d9117, 0xf35ca15e, 0xf36cc116, 0xf37dd117, 0xf266e30e,
+        0xf357f31f, 0xf226064e, 0xf30a261c, 0xf226381c, 0xf317481d, 0xf226591e, 0xf22c894e, 0xf31ca90e, 0xf2acb86d, 0xf29cf06f, 0xf3a6e446],
+      // vshl by register and immediate, vshr/vsra, vneg/vabs.s, compares with zero, vdup (scalar and core), vmov lane <-> core, vmvn
+      [0xf3680446, 0xf2682446, 0xf248440a, 0xf3795406, 0xf3fd6016, 0xf2e07017, 0xf3d0811c, 0xf2cf951d, 0xf2d8a09c, 0xf3f9b386, 0xf3f1c307, 0xf3f5d00c, 0xf3f9e186,
+        0xf3fafc0d, 0xf3bc0c4c, 0xeec20b10, 0xeea41b30, 0xee232b10, 0xeeda4b70, 0xee3c5b70, 0xee376b10, 0xee7d7b70, 0xee663b30, 0xee270b30, 0xf3b0e58b],
+      // vext, vrev64/32/16, vtrn/vzip/vuzp/vswp, vmull/vmlal/vmlsl, modified immediates
+      [0xf2fa034c, 0xf2fa250c, 0xf3f84046, 0xf3f4608a, 0xf3f0710b, 0xf3fa80a9, 0xf3f6a1ec, 0xf3f2e12f, 0xf3b20001, 0xf3b620c4,
+        0xf3ac6c0e, 0xf29a880b, 0xf38caa0d, 0xf28ecc0f, 0xf284e45f, 0xf2831b3f, 0xf2872f18, 0xf3823e35, 0xf382403b, 0xf2815710],
+    ];
+    const setup = (cpu: Cpu) => {
+      for (let i = 0; i < 64; i++) cpu.si[i] = Math.imul(i + 1, 0x9e3779b9) ^ (i << 7);
+      cpu.s.set([1.5, -2, 0, Infinity, -0, 0, -Infinity, 3.25, 0.5, Infinity, 2, 0]);
+      cpu.si[2] = 0x7fc00001; cpu.si[5] = 1; cpu.si[11] = 0x7f800001; // quiet NaN, denormal, signalling NaN
+      cpu.si.set([0x80000000, 0x7fffffff, -128, -5, 3, -3, 64, 0xe0, 0x03020100, 0x07060504, 0x0b0a0908, 0x0f0e0d0c,
+        0x12345678, 0x9abcdef0, 0x0f0f0f0f, 0xf0f0f0f0, -1, 2, -3, 0x80000000], 12);
+      cpu.w.set([0x89abcdef, 0, 0x1234, 0, 0xdeadbeef, 0, 0x7f]);
+    };
+    for (const encode of [(ws: number[]) => run([...ws, BXLR], setup), (ws: number[]) => runThumb(thumb(ws), setup)]) {
+      // every run returns the one shared Cpu, so each result is copied out before the next
+      const [float, integer, shifts, permutes] = programs.map((ws) => { const c = encode(ws); return { s: c.s.slice(), vu: c.vu.slice(), w: c.w.slice() }; });
+      expect([...float.s.slice(32, 34), float.s[35]]).toEqual([1.5, -2, Infinity]);
+      expect(Array.from(float.vu.slice(20, 24))).toEqual([0, 0, 0x7f800000, 0x40500000]);
+      expect(float.vu[27]).toBe(0x7fc00000);
+      expect(Array.from(integer.vu.slice(32, 36))).toEqual([0x92345678, 0x1abcdeef, 0x0f0f0e8f, 0xf0f0f0eb]);
+      expect(Array.from(shifts.vu.slice(32, 40))).toEqual([0, 0x0fffffff, 0, 0, 0, 0x0fffffff, 0, 0xffffffff]);
+      expect([shifts.w[8], shifts.w[10] >>> 0, shifts.w[12], shifts.w[14], shifts.vu[4]]).toEqual([3, 0xffff9abc, -5, -16, 0xefefefef]);
+      expect(Array.from(permutes.vu.slice(32, 36))).toEqual([0x06050403, 0x0a090807, 0x0e0d0c0b, 0x3456780f]);
+      expect(Array.from(permutes.vu.slice(12, 14))).toEqual([0xedcba988, 0x12345677]);
+    }
+  });
+
   test("wide doubleword transfers preserve register pairs", () => {
     const c = runThumb([
       0xe9cd, 0x3500, // strd r3, r5, [sp]
@@ -970,6 +1046,12 @@ describe("thumb decoder", () => {
     });
     expect(mem.ld32(c.w[0])).toBe(42);
     expect(c.w[4]).toBe(0);
+    // ARM: ldrex r1, [r0]; add r1, #1; strex r2, r1, [r0]; strex r3, r1, [r0] (monitor closed)
+    const arm = run([0xe1901f9f, 0xe2811001, 0xe1802f91, 0xe1803f91, BXLR], (cpu) => {
+      cpu.w[0] = cpu.stackTop - 16;
+      mem.st32(cpu.w[0], 41);
+    });
+    expect([mem.ld32(arm.w[0]), arm.w[4], arm.w[6]]).toEqual([42, 0, 1]);
     const double = runThumb([
       0xe8d4, 0x327f, // ldrexd r3, r2, [r4]
       0x3301, 0x3202,
@@ -1366,6 +1448,73 @@ describe("thumb decoder", () => {
     expect(c.w[6]).toBe(-9);
     expect(c.w[2]).toBe(0);
   });
+  test("compiled modified immediates, multiplies, reversals, exclusives and PC-relative loads match the interpreter", () => {
+    const flags = [
+      0xfab0, 0xf380, 0xf1b1, 0x1f01, // clz r3, r0; cmp.w r1, #0x10001
+      0xbf8c, 0x2401, 0x2402,         // ite hi; movhi r4, #1; movls r4, #2
+      0xf3ef, 0x8500, 0xf011, 0x467f, // mrs r5, apsr; ands r6, r1, #0xff000000
+      0xf146, 0x0600, 0xf05f, 0x1755, // adc r6, r6, #0; movs.w r7, #0x550055
+      0xf147, 0x0700, 0xf06f, 0x1801, // adc r7, r7, #0; mvn r8, #0x10001
+      0xf178, 0x28ff, 0xf3ef, 0x8900, // sbcs r8, r8, #0xff00ff00; mrs r9, apsr
+      0xf111, 0x4a80, 0xf3ef, 0x8b00, // adds.w r10, r1, #0x40000000; mrs r11, apsr
+      0xf012, 0x4f00, 0x4770,         // tst.w r2, #0x80000000; bx lr
+    ];
+    const integer = [
+      0xfb00, 0xf301, 0xfb03, 0x2301, // mul r3, r0, r1; mla r3, r3, r1, r2
+      0xfb03, 0x1410, 0xfa32, 0xf501, // mls r4, r3, r0, r1; lsrs.w r5, r2, r1
+      0xf3ef, 0x8600, 0xfa52, 0xf7a1, // mrs r6, apsr; uxtab r7, r2, r1, ror #16
+      0xfa07, 0xf790, 0xfa1f, 0xf8b2, // sxtah r7, r7, r0, ror #8; uxth.w r8, r2, ror #24
+      0xfa91, 0xf9a1, 0xfa91, 0xfa81, // rbit r9, r1; rev.w r10, r1
+      0xfa91, 0xfc91, 0xfa52, 0xfb00, // rev16.w r12, r1; asrs.w r11, r2, r0
+      0xba10, 0xba49, 0xbad2, 0x4770, // rev r0, r2; rev16 r1, r1; revsh r2, r2; bx lr
+    ];
+    const literal = [
+      0xf20f, 0x0334, 0xf602, 0x24bc, // adr.w r3, lit; addw r4, r2, #0xabc
+      0xf6a2, 0x25bc, 0xf8df, 0x602c, // subw r5, r2, #0xabc; ldr.w r6, lit + 4
+      0xed9f, 0x0a09, 0xed9f, 0x1b08, // vldr s0, lit; vldr d1, lit
+      0xee00, 0x0a90, 0xec42, 0x1b13, // vmov s1, r0; vmov d3, r1, r2
+      0xef00, 0x2f01, 0xef20, 0x4f42, // vmax.f32 d2, d0, d1; vmin.f32 q2, q0, q1
+      0xef03, 0x6f07, 0xec58, 0x7b12, // vmax.f32 d6, d3, d7; vmov r7, r8, d2
+      0xec5a, 0x9b15, 0x4770, 0xbf00, // vmov r9, r10, d5; bx lr; nop
+      0x0000, 0x3fc0, 0x0001, 0x7f80, // lit: 1.5, a signalling NaN
+    ];
+    const memory = [
+      0xf000, 0xb801, 0xbf00, 0xb088, // b.w 1f; nop; 1: sub sp, #32
+      0x46e8, 0xe9e8, 0x0102,         // mov r8, sp; strd r0, r1, [r8, #8]!
+      0xe8d8, 0x457f, 0x3401,         // ldrexd r4, r5, [r8]; adds r4, #1
+      0xe8c8, 0x4573, 0xf3bf, 0x8f2f, // strexd r3, r4, r5, [r8]; clrex
+      0x3401, 0xe8c8, 0x4576,         // adds r4, #1; strexd r6, r4, r5, [r8] (monitor closed)
+      0xe878, 0x4502, 0xe888, 0x0007, // ldrd r4, r5, [r8], #-8; stm.w r8, {r0, r1, r2}
+      0xf108, 0x080c, 0xe938, 0x0e00, // add.w r8, r8, #12; ldmdb r8!, {r9, r10, r11}
+      0xb008, 0x4770,                 // add sp, #32; bx lr
+    ];
+    const arm = [
+      0xe24d8010, 0xe1c800f0, 0xe1b82f9f, // sub r8, sp, #16; strd r0, r1, [r8]; ldrexd r2, r3, [r8]
+      0xe2822001, 0xe1a84f92, 0xf57ff01f, // add r2, r2, #1; strexd r4, r2, r3, [r8]; clrex
+      0xe2822001, 0xe1a85f92, 0xe1c860d0, // add r2, r2, #1; strexd r5, r2, r3, [r8]; ldrd r6, r7, [r8]
+      0xe6e09871, 0xe6ffaf31, 0xe6bfbf30, // uxtab r9, r0, r1, ror #16; rbit r10, r1; rev r11, r0
+      0xed9f1b06, 0xec410b10, 0xf2012f00, // vldr d1, lit; vmov d0, r0, r1; vmax.f32 d2, d1, d0
+      0xf2203f01, 0xec532b12, 0xec58cb13, // vmin.f32 d3, d0, d1; vmov r2, r3, d2; vmov r12, r8, d3
+      BXLR, 0xe320f000, 0x3fc00000, 0x7f800001, // nop; lit: 1.5, a signalling NaN
+    ];
+    // clz of 0, an equal compare, mul overflow, shifts by 0 and by 255, NaN and signed-zero lanes
+    const inputs = (r0: number, r1: number, r2: number) => (cpu: Cpu) => { cpu.w[0] = r0; cpu.w[2] = r1; cpu.w[4] = r2; };
+    const cases = [inputs(0, 0x10001, 0x80000000), inputs(0x7fc00001, 0x7fffffff, 0x12345678), inputs(0x80000000, 0x80000000, 0xff)];
+    for (const setup of cases.slice(1)) for (const program of [flags, integer, literal, memory]) runThumb(program, setup);
+    for (const setup of cases.slice(1)) run(arm, setup);
+    // flags pending from a compare when a back edge's instruction limit exits the region
+    expect(runThumb([0x2901, 0xe7ff, 0x3d01, 0xd1fb, 0x4770], (cpu) => { cpu.w[10] = 3; }).w[10]).toBe(0); // cmp r1, #1; b 1f; 1: subs r5, #1; bne 0b
+    const f = runThumb(flags, cases[0]);
+    expect([f.w[6], f.w[8], f.w[10], f.w[12], f.w[14], f.w[18], f.cpsr >>> 28]).toEqual([32, 2, 0x60000000, 1, 0x550056, 0x20000000, 0xa]);
+    runThumb(integer, cases[0]);
+    const v = runThumb(literal, cases[0]);
+    expect([v.w[12] >>> 0, v.w[14], v.w[16] >>> 0, v.w[18], v.w[20] >>> 0]).toEqual([0x7f800001, 0x3fc00000, 0x7f800001, 0x10001, 0x7f800001]);
+    const m = runThumb(memory, cases[0]);
+    expect([m.w[6], m.w[12], m.w[8], m.w[10], m.w[18], m.w[20]]).toEqual([0, 1, 1, 0x10001, 0, 0x10001]);
+    const a = run(arm, cases[0]);
+    expect([a.w[8], a.w[10], a.w[12], a.w[4], a.w[6] >>> 0, a.w[24], a.w[16] >>> 0]).toEqual([0, 1, 1, 0x3fc00000, 0x7f800001, 0, 0x7f800001]);
+  });
+
   test("a window copy loop: high-register moves and adds, byte loads and stores by register", () => {
     const buf = pattern(), state = pattern();
     const c = runThumb([

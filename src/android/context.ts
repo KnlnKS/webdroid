@@ -1,7 +1,7 @@
 import { type JFile, vfs, mkFile } from "../jvm/natives/jio";
 import { JObj, rt, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
-import { resString, themeOf, JTheme, obtainStyled, resolveStyleValue, type JAttrSet, JTypedArray } from "./res";
+import { resString, themeOf, JTheme, obtainStyled, obtainStyleAttributes, type JAttrSet } from "./res";
 import { newObj, vcall, systemClassLoader, type JClassLoader } from "../jvm/natives/jlang";
 import { mangleMethod, jarray } from "../jvm/abi";
 import { getInflater } from "./inflate";
@@ -225,9 +225,8 @@ const contextMethods: NativeSpec["methods"] = {
     const t = new JTheme();
     t.res = this.$host.res;
     t.styles = (themeOf(this) ?? this.$host.theme).styles.slice();
-    const applied = t.apply(id);
+    t.apply(id);
     (this as any).ownTheme = t;
-    return applied;
   },
   "getPackageName()Ljava/lang/String;": function (this: JContext) { return this.$host.pkg; },
   "getAttributionSource()Landroid/content/AttributionSource;": contextAttributionSource,
@@ -396,13 +395,7 @@ const contextMethods: NativeSpec["methods"] = {
   "obtainStyledAttributes(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray;": contextStyled,
   "obtainStyledAttributes(Landroid/util/AttributeSet;[III)Landroid/content/res/TypedArray;": contextStyled,
   "obtainStyledAttributes(I[I)Landroid/content/res/TypedArray;": function (this: JContext, styleId: number, attrs: Int32Array) {
-    const theme = themeOf(this) ?? this.$host.theme;
-    const ta = new JTypedArray();
-    ta.res = this.$host.res;
-    ta.theme = theme;
-    ta.attrIds = attrs;
-    ta.vals = [...attrs].map(a => resolveStyleValue(ta.res, theme, ta.res.styleLookup(styleId, a)));
-    return ta;
+    return obtainStyleAttributes(this.$host.res, themeOf(this) ?? this.$host.theme, styleId, attrs);
   },
   "createConfigurationContext(Landroid/content/res/Configuration;)Landroid/content/Context;": function (this: JContext, config: JConfiguration) {
     return configurationContext(this, config);

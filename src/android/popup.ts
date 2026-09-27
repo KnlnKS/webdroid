@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec, callSelf, stubs, noops, fieldGetters, flagGe
 import { mangleMethod } from "../jvm/abi";
 import { vcall, vcallUncaught } from "../jvm/natives/jlang";
 import { reportUncaught, uptimeMillis } from "./os";
-import { JView, JFrameLP, uiState, invalidate, requestLayout, locationOnScreen, rootOf, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST } from "./view";
+import { JView, JFrameLP, uiState, invalidate, requestLayout, locationOnScreen, rootOf, attachView, detachView, dispatchAttached, dispatchDetached, measureView, makeSpec, specSize, MS_EXACTLY, MS_AT_MOST, MATCH_PARENT, WRAP_CONTENT } from "./view";
 import { JMotionEvent } from "./motionevent";
 import { JFrameLayout } from "./layouts";
 import { JDrawable, loadDrawableRV } from "./drawable";
@@ -90,7 +90,7 @@ export function drawToasts(ctx: OffscreenCanvasRenderingContext2D, w: number, h:
   if (toasts.length) invalidate();
 }
 
-// simple native popup menu (used by ActionBar overflow, Spinner)
+// simple native popup menu (the ActionBar overflow and list navigation, android.widget.PopupMenu)
 class PopupMenuView extends JView {
   items: { id: number; title: string }[] = [];
   onPick: ((id: number) => void) | null = null;
@@ -160,6 +160,11 @@ class JPopupMenu extends JObj {
   menu: any = null;
   clickL: unknown = null;
 }
+function menuInflater(popup: JPopupMenu) {
+  const m = rt.make("android/view/MenuInflater");
+  m.jctx = popup.jctx;
+  return m;
+}
 rt.register({
   name: "android/widget/PopupMenu", ctor: JPopupMenu,
   methods: {
@@ -170,17 +175,9 @@ rt.register({
       this.menu = new JMenu();
     }),
     "getMenu()Landroid/view/Menu;": function (this: JPopupMenu) { return this.menu; },
-    "getMenuInflater()Landroid/view/MenuInflater;": function (this: JPopupMenu) {
-      const info = rt.link("android/view/MenuInflater");
-      const m = new info.ctor();
-      m.jctx = this.jctx;
-      return m;
-    },
+    "getMenuInflater()Landroid/view/MenuInflater;": function (this: JPopupMenu) { return menuInflater(this); },
     "inflate(I)V": driven(function* (this: JPopupMenu, id: number): Gen {
-      const info = rt.link("android/view/MenuInflater");
-      const m = new info.ctor();
-      m.jctx = this.jctx;
-      yield vcall(m, "inflate", "(ILandroid/view/Menu;)V", id, this.menu);
+      yield vcall(menuInflater(this), "inflate", "(ILandroid/view/Menu;)V", id, this.menu);
     }),
     "setOnMenuItemClickListener(Landroid/widget/PopupMenu$OnMenuItemClickListener;)V": function (this: JPopupMenu, l: unknown) {
       this.clickL = l;
@@ -205,20 +202,20 @@ rt.markers("android/widget/PopupWindow$OnDismissListener");
 
 const M_dispatchTouch = mangleMethod("dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
 const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
-const WRAP = -2, MATCH = -1;
+const M_onMeasure = mangleMethod("onMeasure", "(II)V");
 
 class PopupDecorView extends JFrameLayout {
   popup: JPopupWindow | null = null;
 }
 function windowSpec(dim: number, avail: number): number {
-  return dim >= 0 ? makeSpec(dim, MS_EXACTLY) : dim === MATCH ? makeSpec(avail, MS_EXACTLY) : makeSpec(avail, MS_AT_MOST | 0);
+  return dim >= 0 ? makeSpec(dim, MS_EXACTLY) : dim === MATCH_PARENT ? makeSpec(avail, MS_EXACTLY) : makeSpec(avail, MS_AT_MOST);
 }
 rt.register({
   name: "webdroid/PopupDecorView", ctor: PopupDecorView, sup: "android/widget/FrameLayout",
   methods: {
     "onMeasure(II)V": driven(function* (this: PopupDecorView, wSpec: number, hSpec: number): Gen {
       const p = this.popup!;
-      const sup = rt.link("android/widget/FrameLayout").ctor.prototype[mangleMethod("onMeasure", "(II)V")];
+      const sup = rt.link("android/widget/FrameLayout").ctor.prototype[M_onMeasure];
       yield sup.call(this, windowSpec(p.w, specSize(wSpec)), windowSpec(p.h, specSize(hSpec)));
     }),
     "dispatchTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: PopupDecorView, ev: JMotionEvent): Gen {
@@ -253,7 +250,7 @@ class JPopupWindow extends JObj {
   content: JView | null = null;
   decor: PopupDecorView | null = null;
   bg: JDrawable | null = null;
-  w = WRAP; h = WRAP;
+  w = WRAP_CONTENT; h = WRAP_CONTENT;
   showing = false;
   focusable = false; outsideTouchable = false; touchable = true; clipping = true;
   overlapAnchor = false; aboveAnchor = false;
@@ -300,7 +297,7 @@ function pwMaxAvail(this: JPopupWindow, anchor: JView, yOffset = 0) {
   const [, pt, , pb] = this.bgPad();
   return Math.max(toBottom, toTop) - (pt + pb);
 }
-const pwShow = driven(function* pwShow(this: JPopupWindow, x: number, y: number): Gen {
+const pwShow = driven(function* pwShow(this: JPopupWindow): Gen {
   if (this.showing || !this.content) return;
   this.showing = true;
   const d = this.decor = new PopupDecorView();
@@ -311,13 +308,13 @@ const pwShow = driven(function* pwShow(this: JPopupWindow, x: number, y: number)
   d.background = this.bg;
   [d.padL, d.padT, d.padR, d.padB] = this.bgPad();
   const lp = new JFrameLP();
-  lp.width = MATCH;
-  lp.height = this.content.lp?.height === WRAP ? WRAP : MATCH;
+  lp.width = MATCH_PARENT;
+  lp.height = this.content.lp?.height === WRAP_CONTENT ? WRAP_CONTENT : MATCH_PARENT;
   this.content.lp = lp;
   yield attachView(d, this.content);
   const dismiss = () => vcall(this, "dismiss", "()V");
   // a focusable popup takes Back and outside touches; an outsideTouchable one only the touches
-  addOverlay(d, x, y, this.focusable || this.outsideTouchable, this.focusable ? dismiss : undefined, dismiss);
+  addOverlay(d, 0, 0, this.focusable || this.outsideTouchable, this.focusable ? dismiss : undefined, dismiss);
   yield dispatchAttached(d);
 });
 /** AOSP findDropDownPosition, reduced to the vertical flip and screen clamp */
@@ -325,7 +322,7 @@ const pwPlace = driven(function* pwPlace(this: JPopupWindow): Gen {
   const a = this.anchor, d = this.decor;
   if (!a || !d) return;
   const root = rootOf(a), sw = root.width() || device.width, sh = root.height() || device.height - device.statusBar;
-  yield measureView(d, makeSpec(sw, MS_AT_MOST | 0), makeSpec(sh, MS_AT_MOST | 0));
+  yield measureView(d, makeSpec(sw, MS_AT_MOST), makeSpec(sh, MS_AT_MOST));
   const [ax, ay] = locationOnScreen(a);
   let x = ax + this.xoff;
   if ((this.gravity & 7) === 5) x += a.width() - d.measuredW;
@@ -347,16 +344,16 @@ const pwPlace = driven(function* pwPlace(this: JPopupWindow): Gen {
 const pwShowDropDown = driven(function* pwShowDropDown(this: JPopupWindow, anchor: JView, xoff: number = 0, yoff: number = 0, gravity: number = 0): Gen {
   if (this.showing || !this.content) return;
   this.anchor = anchor; this.xoff = xoff; this.yoff = yoff; this.gravity = gravity;
-  yield pwShow.call(this, 0, 0);
+  yield pwShow.call(this);
   yield pwPlace.call(this);
 });
 const pwShowAt = driven(function* pwShowAt(this: JPopupWindow, parent: JView, gravity: number, x: number, y: number): Gen {
   if (this.showing || !this.content) return;
   this.anchor = null;
-  yield pwShow.call(this, 0, 0);
+  yield pwShow.call(this);
   const d = this.decor!;
   const root = parent ? rootOf(parent) : null, sw = root?.width() || device.width, sh = root?.height() || device.height - device.statusBar;
-  yield measureView(d, makeSpec(sw, MS_AT_MOST | 0), makeSpec(sh, MS_AT_MOST | 0));
+  yield measureView(d, makeSpec(sw, MS_AT_MOST), makeSpec(sh, MS_AT_MOST));
   const hg = gravity & 7, vg = gravity & 0x70;
   const px = hg === 1 ? ((sw - d.measuredW) >> 1) + x : hg === 5 ? sw - d.measuredW - x : x;
   const py = vg === 16 ? ((sh - d.measuredH) >> 1) + y : vg === 80 ? sh - d.measuredH - y : y;

@@ -7,7 +7,6 @@ const is = bt.is;
 const bits = bt.bits;
 const Emit = jit.Emit(true);
 const O = wasm.Op;
-const F = wasm.F;
 const S = wasm.Simd;
 const get = wasm.get;
 const set = wasm.set;

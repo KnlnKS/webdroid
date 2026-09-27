@@ -1,7 +1,7 @@
 // DEX file parser. Format: https://source.android.com/docs/core/runtime/dex-format
 // Everything lazy + cached; hot lookups are index math on a DataView.
 
-import { charsToString, descToName } from "./abi";
+import { decodeModifiedUtf8, descToName } from "./abi";
 
 export const NO_INDEX = 0xffffffff;
 
@@ -86,27 +86,6 @@ class PagedCache<T> {
   }
 }
 
-function decodeMUTF8(bytes: Uint8Array, pos: number, utf16len: number): string {
-  // Fast path: ASCII
-  let ascii = true;
-  for (let i = 0; i < utf16len; i++) {
-    if (bytes[pos + i] > 0x7f) { ascii = false; break; }
-  }
-  if (ascii) return charsToString(bytes, pos, utf16len);
-  const out = new Uint16Array(utf16len);
-  let o = 0, p = pos;
-  while (o < utf16len) {
-    const a = bytes[p++];
-    if (a < 0x80) out[o++] = a;
-    else if ((a & 0xe0) === 0xc0) out[o++] = ((a & 0x1f) << 6) | (bytes[p++] & 0x3f);
-    else {
-      const b = bytes[p++], c = bytes[p++];
-      out[o++] = ((a & 0x0f) << 12) | ((b & 0x3f) << 6) | (c & 0x3f);
-    }
-  }
-  return charsToString(out, 0, utf16len);
-}
-
 export class DexFile {
   view: DataView;
   private stringIdsOff: number; private typeIdsOff: number; private protoIdsOff: number;
@@ -130,7 +109,7 @@ export class DexFile {
    *  everything before v41; a v41 container holds several headers and their section offsets are
    *  relative to the CONTAINER, so every dex in one keeps the whole buffer and only the header
    *  moves. That is also why nothing below this constructor needs to know about containers. */
-  constructor(public bytes: Uint8Array, public name = "classes.dex", public headerOff = 0) {
+  constructor(public bytes: Uint8Array, public name = "classes.dex", headerOff = 0) {
     this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const v = this.view;
     const h = headerOff;
@@ -153,8 +132,8 @@ export class DexFile {
     this.fieldCache = new PagedCache(fieldCount);
     this.methodCache = new PagedCache(methodCount);
 
-    // Nothing here was checked before, so a truncated or byte-swapped file surfaced as a
-    // RangeError from a DataView deep inside a lookup, naming neither the file nor the cause.
+    // Validate up front: otherwise a truncated or byte-swapped file surfaces as a RangeError
+    // from a DataView deep inside a lookup, naming neither the file nor the cause.
     // The checksum and SHA-1 are deliberately NOT verified: they cost an adler32 and a SHA-1
     // over every megabyte of every dex on every boot, and the zip these came out of already
     // CRC'd the same bytes.
@@ -183,7 +162,7 @@ export class DexFile {
       const off = this.view.getUint32(this.stringIdsOff + i * 4, true);
       const r = new Reader(this.bytes, off);
       const len = r.uleb();
-      s = this.stringCache[i] = decodeMUTF8(this.bytes, r.pos, len);
+      s = this.stringCache[i] = decodeModifiedUtf8(this.bytes, r.pos, this.bytes.length, len);
     }
     return s;
   }
@@ -441,7 +420,7 @@ export class DexFile {
     return out;
   }
 
-  encodedValue(r: Reader): EncVal {
+  private encodedValue(r: Reader): EncVal {
     const b = r.u8();
     const type = b & 0x1f, arg = b >> 5;
     const size = arg + 1;

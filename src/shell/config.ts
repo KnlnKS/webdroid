@@ -38,7 +38,8 @@ export function parseScreen(s: string | null | undefined): Screen | null {
   return width > 0 && height > 0 && densityDpi > 0 ? { width, height, densityDpi } : null;
 }
 
-const formatScreen = (s: Screen): string => `${s.width}x${s.height}@${s.densityDpi}`;
+/** the `?screen=` form parseScreen reads back */
+export const formatScreen = (s: Screen): string => `${s.width}x${s.height}@${s.densityDpi}`;
 
 /** localStorage throws outright in some privacy modes, so every touch of it is guarded. */
 function readStoredScreen(): Screen | null {
@@ -60,13 +61,18 @@ function resolveScreen(): Screen {
 }
 
 const screen = resolveScreen();
-const statusBarDp = typeof location === "undefined" ? 0 : Number(new URLSearchParams(location.search).get("statusBarDp"));
+const query = typeof location === "undefined" ? null : new URLSearchParams(location.search);
+const statusBarDp = Number(query?.get("statusBarDp") ?? 0);
+const pinnedHz = Number(query?.get("hz"));
 
 export const device = {
   width: screen.width,
   height: screen.height,
   densityDpi: screen.densityDpi,
-  refreshRate: 60,
+  /** `?hz=` pins it (process frames inherit the page's); otherwise the shell sets the host
+   *  display's rate before boot. Choreographer, Display and eglSwapBuffers pace to it. */
+  refreshRate: pinnedHz > 0 ? pinnedHz : 60,
+  get frameIntervalNanos(): bigint { return BigInt(Math.round(1e9 / this.refreshRate)); },
   /** AOSP: DisplayMetrics.density is densityDpi/160, so the two can never disagree */
   get density(): number { return this.densityDpi / DENSITY_DEFAULT; },
   statusBarDp: Number.isFinite(statusBarDp) && statusBarDp >= 0 ? statusBarDp : 0,

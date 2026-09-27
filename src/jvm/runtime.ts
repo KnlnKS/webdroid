@@ -91,7 +91,7 @@ export class ClassInfo {
   flags = 0;
   jclass: any = null;                 // java.lang.Class instance (lazy, made by jlang)
   compiled = false;
-  /** method bodies not yet generated (see compiler emitLazy); undefined when eager */
+  /** method bodies not yet generated (see compiler installLazy); undefined when eager */
   lazy?: { m: EncodedMethod; mangled: string; isStatic: boolean; name: string; desc: string; stub: Cells & ((...a: unknown[]) => unknown) }[];
   defaultsCopied = false;         // interface default methods already copied down
   constructor(public name: string, public owner?: Runtime) {}
@@ -105,7 +105,6 @@ export class ClassInfo {
 
 interface DexLink {
   dex: DexFile;
-  R: Runtime;
   cl: any[];            // typeIdx → linked ctor
   ic: any[];            // typeIdx → inited ctor
   s: readonly (string | undefined)[]; // string cache
@@ -170,13 +169,11 @@ export class Runtime {
    *  (st) and releases it when it suspends (su), so a parked worker never leaves its identity
    *  behind for the native main-thread drivers that resume next */
   th: () => unknown = () => null;
+  st: (t: unknown) => void = () => {};
+  su: (t: unknown) => void = () => {};
   monitors = new Monitors((name) => this.mkThrowable("java/lang/" + name, null));
   me(obj: object | string | null | 0) { return this.monitors.enter(obj, this.th()); }
   mx(obj: object | string | null | 0) { this.monitors.exit(obj, this.th()); }
-  /** set by jreflect: a reflect.Proxy answers a method it has not materialised yet from the name and descriptor the caller holds */
-  proxyMethod: ((obj: unknown, name: string, desc: string) => ((...a: unknown[]) => unknown) | null) | null = null;
-  st: (t: unknown) => void = () => {};
-  su: (t: unknown) => void = () => {};
   /**
    * Run a native written as a generator whose `yield` takes a Java result that may be a Promise:
    * it stays synchronous until one is, and only then returns a Promise. Like a compiled frame, a
@@ -268,7 +265,7 @@ export class Runtime {
     if (d) return d;
     const R = this;
     d = {
-      dex, R,
+      dex,
       cl: new Array(dex.typeCount), ic: new Array(dex.typeCount),
       s: dex.cachedStrings, dp: [], fs: [], info: new Array(dex.typeCount),
       gs(i) { return dex.string(i); },
@@ -278,9 +275,9 @@ export class Runtime {
         const info = this.linfo(i);
         // ART fails the resolution itself, so the call site re-throws every time: never cache
         if (info.stub) throw R.ncdfe(info.name);
+        if (info.state === 2) return (this.ic[i] = info.ctor);
         // only cache once fully inited — a mid-init hit must keep going through init()
         const done = () => (info.state === 2 ? (this.ic[i] = info.ctor) : info.ctor);
-        if (info.state === 2) return (this.ic[i] = info.ctor);
         const p = R.initClass(info, from === undefined ? undefined : this.linfo(from));
         return p ? p.then(done) : done();
       },
@@ -305,8 +302,8 @@ export class Runtime {
         const start = this.linfo(fr.cls);
         if (start.stub) throw R.ncdfe(start.name);
         const owner = findStaticOwner(start, fr.name, dex.type(fr.type))?.info ?? start;
+        if (owner.state === 2) return (this.fs[i] = owner.ctor);
         const set = () => (owner.state === 2 ? (this.fs[i] = owner.ctor) : owner.ctor);
-        if (owner.state === 2) return set();
         const p = R.initClass(owner, from === undefined ? undefined : this.linfo(from));
         return p ? p.then(set) : set();
       },
@@ -334,15 +331,14 @@ export class Runtime {
   /** compile-time: static field access site info */
   resolveStaticField(dex: DexFile, fieldIdx: number): { prop: string; typeIdx: number } {
     const fr = dex.field(fieldIdx);
-    let prop = mangleStaticField(fr.name);
     try {
       const start = this.link(descToName(dex.type(fr.cls)));
       const field = findStaticOwner(start, fr.name, dex.type(fr.type));
-      if (field) { prop = field.prop; return { prop, typeIdx: field.info === start ? fr.cls : -1 }; }
+      if (field) return { prop: field.prop, typeIdx: field.info === start ? fr.cls : -1 };
       // a native class declares every static it has (a <clinit> hook may still be adding some)
       if (start.native && start.state === 2 && !start.stub) this.noteMissing(`field ${start.name}.${fr.name}`);
     } catch { /* class missing */ }
-    return { prop, typeIdx: fr.cls }; // fails at runtime when reached, correct laziness
+    return { prop: mangleStaticField(fr.name), typeIdx: fr.cls }; // fails at runtime when reached, correct laziness
   }
 
   /** JNI registry: implementations for dex-declared native methods (key "cls|name+desc") */
@@ -356,8 +352,9 @@ export class Runtime {
   claimNativeLib(name: string) { this.nativeLibs.add(name); }
   /** .so files the app tried to load that only exist as machine code: file → abi */
   nativeRequired = new Map<string, string>();
-  /** set by src/native/loader.ts: loads a machine-code library for an ABI it can run (loadLibrary consults it before giving up) */
-  /** `thread` is the Java thread that asked: its Cpu runs the initialisers, whichever thread is current by then */
+  /** set by src/native/loader.ts: loads a machine-code library for an ABI it can run (loadLibrary
+   *  consults it before giving up). `thread` is the Java thread that asked: its Cpu runs the
+   *  initialisers, whichever thread is current by then. */
   loadNativeLib: ((lib: string, bytes: Uint8Array, abi: string, owner?: Runtime, thread?: unknown) => Promise<void>) | null = null;
   /** the ABIs the native tier can actually execute, most-preferred first. Empty until
    *  src/native/loader.ts is imported, which is the only thing that can answer it. */
@@ -550,10 +547,9 @@ export class Runtime {
           // short escape: legit cross-chain waits resolve in microtasks; anything longer
           // is almost certainly a same-chain clinit cycle through methods we can't tag.
           // Remember it so the next several hundred accesses don't each pay the timeout.
-          // The timer MUST be cleared when the race is won -- left armed it fired for every
-          // healthy wait too, marking classes reentrant that never cycled (so later reads
-          // stopped waiting for a clinit that really was in flight) and logging a cycle
-          // warning per class per boot.
+          // The timer must be cleared when the race is won: left armed, it would mark a class
+          // reentrant after a healthy wait, and later reads would stop waiting for a <clinit>
+          // that really is in flight.
           esc = setTimeout(() => { console.warn("[webdroid] clinit wait timeout (cycle?)", info.name, "waited on by", from?.name); info.assumeReentrant = true; res(); },
                            CLINIT_WAIT_MS);
         })])
@@ -575,12 +571,12 @@ export class Runtime {
       // recursive and completes at once with the statics as they are. The `from` tag only
       // sees <clinit>-to-<clinit> edges; <clinit> → constructor → sget of its own class is the
       // common shape (kotlinx's ChannelSegment reads BufferedChannelKt.SEGMENT_SIZE while
-      // BufferedChannelKt's <clinit> builds NULL_SEGMENT) and used to eat the escape timeout.
+      // BufferedChannelKt's <clinit> builds NULL_SEGMENT).
       if (info.initThread === this.th()) return null;
       // clinit cycle (info's chain transitively waits on `from`) → JVM same-thread
-      // semantics: proceed with partial statics instead of deadlocking
-      // walk the wait chain; a loop in it (two threads' clinits waiting on each other, which a
-      // JVM would deadlock on) also proceeds with partial statics rather than hanging the page
+      // semantics: proceed with partial statics instead of deadlocking. A loop in the wait
+      // chain (two threads' clinits waiting on each other, which a JVM would deadlock on) also
+      // proceeds with partial statics rather than hanging the page.
       for (let c = info.waitingOn, n = 0; c; c = c.waitingOn) if (c === from || ++n > 64) return null;
       // JVM: only the initializing thread may proceed on a class mid-<clinit>; every other
       // thread blocks until it completes, however long a heavy static initializer takes. The
@@ -596,11 +592,10 @@ export class Runtime {
     info.state = 1;
     info.initThread = this.th();
 
-    // Initialize synchronously for as long as nothing actually suspends. This used to be one
-    // `(async () => …)()`, which returns a promise whatever the body does — so EVERY first
-    // touch of a class forced its toucher to await, and no method containing an sget, a
-    // new-instance or an invoke-static could ever compile sync. Only the step that really
-    // yields gets a promise now, and the rest of the sequence continues from there.
+    // Initialize synchronously for as long as nothing actually suspends: only the step that
+    // really yields gets a promise, and the rest of the sequence continues from there. An
+    // always-async initializer would make every first touch of a class await, so no method
+    // containing an sget, a new-instance or an invoke-static could run synchronously.
     const rest = (): Promise<void> | null => {
       for (const i of info.interfaces) this.ensureCompiled(i);   // defaults copy down
       this.ensureCompiled(info);
@@ -644,10 +639,8 @@ export class Runtime {
           await pending;
           const more = after?.();
           if (more) await more;
-          info.state = 2;
-        } catch (e) { throw failed(e); } finally {
-          info.initP = null; info.initThread = null; info.assumeReentrant = false;
-        }
+        } catch (e) { throw failed(e); }
+        settle();
       })();
       return from ? this.awaitInit(info, from, false) : info.initP;
     };
@@ -829,15 +822,13 @@ export class Runtime {
   }
   /** long shift counts, so a shift does not allocate its BigInt amount */
   readonly shifts: readonly bigint[] = Array.from({ length: 64 }, (_, i) => BigInt(i));
-  /** fuel check target — yields to the browser event loop */
   private lastYield = 0;
   /** ms between back-edge yields. The frame loop stretches it while a draw pass is in flight:
    *  a yield there only costs a macrotask, since nothing is presented until the pass ends. */
   yieldGap = 8;
-  /** Back-edge yield. fuel is a GLOBAL counter, so it trips far more often than once per
-   *  100k iterations of any one loop, and each trip was a macrotask (4ms once the chain is
-   *  nested) taken while holding the main-looper job. Only actually yield if we have not
-   *  yielded recently; otherwise just refill and keep going. */
+  /** Back-edge fuel check target. fuel is a GLOBAL counter shared by every loop, so it trips
+   *  far more often than any one loop would; only actually yield to the event loop if we have
+   *  not yielded recently, otherwise just refill and keep going. */
   refuel(): Promise<void> | null {
     this.fuel = 4096;   // a loop of native calls costs tens of µs an iteration: check the clock often enough to yield within ~10 ms
     const now = performance.now();

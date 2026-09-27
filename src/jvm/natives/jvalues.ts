@@ -1,18 +1,23 @@
 import type { JSimpleEnum } from "./jlang";
-import { JObj, rt } from "../runtime";
+import { JObj, rt, driven, type Gen } from "../runtime";
 import { jarray } from "../abi";
-import { defineException, mkEnumSet, stringHash, vcall } from "./jlang";
+import { after, defineException, mkEnumSet, stringHash, vcall } from "./jlang";
+import { csText } from "./jchars";
 import { newArrayList } from "./jutil";
 
 class JStringJoiner extends JObj { sep = ","; pre = ""; suf = ""; parts: string[] = []; }
 rt.register({
   name: "java/util/StringJoiner", ctor: JStringJoiner,
   methods: {
-    "<init>(Ljava/lang/CharSequence;)V": function (this: JStringJoiner, s: unknown) { this.sep = String(s); },
-    "<init>(Ljava/lang/CharSequence;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)V":
-      function (this: JStringJoiner, s: unknown, p: unknown, u: unknown) { this.sep = String(s); this.pre = String(p); this.suf = String(u); },
+    "<init>(Ljava/lang/CharSequence;)V": function (this: JStringJoiner, s: unknown) {
+      return after(csText(s ?? rt.npe()), (sep: string) => { this.sep = sep; });
+    },
+    "<init>(Ljava/lang/CharSequence;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)V": driven(function* (this: JStringJoiner, s: unknown, p: unknown, u: unknown): Gen {
+      if (s == null || p == null || u == null) rt.npe();
+      this.pre = yield csText(p); this.sep = yield csText(s); this.suf = yield csText(u);
+    }),
     "add(Ljava/lang/CharSequence;)Ljava/util/StringJoiner;": function (this: JStringJoiner, s: unknown) {
-      this.parts.push(s === null ? "null" : String(s)); return this;
+      return after(s === null ? "null" : csText(s), (text: string) => { this.parts.push(text); return this; });
     },
     "toString()Ljava/lang/String;": function (this: JStringJoiner) { return this.pre + this.parts.join(this.sep) + this.suf; },
   },
@@ -108,9 +113,6 @@ function localeFromLanguageTag(t: string): JLocale {
   }
   return l;
 }
-function localeEquals(a: JLocale, b: unknown): number {
-  return b instanceof JLocale && a.lang === b.lang && a.country === b.country && a.script === b.script && a.variant === b.variant ? 1 : 0;
-}
 rt.register({
   name: "java/util/Locale", ctor: JLocale,
   statics: {
@@ -164,7 +166,9 @@ rt.register({
     },
     "toLanguageTag()Ljava/lang/String;": function (this: JLocale) { return localeTag(this); },
     "static forLanguageTag(Ljava/lang/String;)Ljava/util/Locale;": localeFromLanguageTag,
-    "equals(Ljava/lang/Object;)Z": function (this: JLocale, other: unknown) { return localeEquals(this, other); },
+    "equals(Ljava/lang/Object;)Z": function (this: JLocale, b: unknown) {
+      return b instanceof JLocale && this.lang === b.lang && this.country === b.country && this.script === b.script && this.variant === b.variant ? 1 : 0;
+    },
     "hashCode()I": function (this: JLocale) { return stringHash(localeTag(this)); },
   },
 });
@@ -285,8 +289,17 @@ rt.register({
 // Currency is data the browser already has: Intl knows every ISO 4217 code's symbol and its
 // fraction digits, so nothing here is a table we would have to keep current.
 class JCurrency extends JObj { code = "USD"; }
+const currencyFormats = new Map<string, Intl.NumberFormat>();
 function currencyFmt(code: string, locale = localeTag(usLocale)): Intl.NumberFormat {
-  return new Intl.NumberFormat(locale, { style: "currency", currency: code });
+  const key = locale + "\0" + code;
+  let fmt = currencyFormats.get(key);
+  if (!fmt) {
+    fmt = new Intl.NumberFormat(locale, { style: "currency", currency: code });
+    // Intl accepts any well-formed code, so bound what arbitrary codes can accumulate
+    if (currencyFormats.size >= 256) currencyFormats.clear();
+    currencyFormats.set(key, fmt);
+  }
+  return fmt;
 }
 function currency(code: string): JCurrency {
   if (!code) throw rt.mkThrowable("java/lang/NullPointerException", "currencyCode");
@@ -303,28 +316,32 @@ function currencySymbol(code: string, locale: JLocale): string {
   const parts = currencyFmt(code, localeTag(locale)).formatToParts(0);
   return parts.find((p) => p.type === "currency")?.value ?? code;
 }
+// the bodies java.util.Currency and android.icu.util.Currency share
+function currencyCode(this: JCurrency) { return this.code; }
+function currencyHash(this: JCurrency) { return stringHash(this.code); }
+function currencyFractionDigits(this: JCurrency) { return currencyFmt(this.code).resolvedOptions().maximumFractionDigits ?? 2; }
+function currencyNameIn(this: JCurrency, locale: JLocale) {
+  if (!locale) throw rt.mkThrowable("java/lang/NullPointerException", "locale");
+  return currencyDisplayName(this.code, locale);
+}
+function defaultCurrencySymbol(this: JCurrency) { return currencySymbol(this.code, displayLocale()); }
 rt.register({
   name: "java/util/Currency", ctor: JCurrency,
   methods: {
     "static getInstance(Ljava/lang/String;)Ljava/util/Currency;": currency,
     "static getInstance(Ljava/util/Locale;)Ljava/util/Currency;": () => new JCurrency(),
-    "getCurrencyCode()Ljava/lang/String;": function (this: JCurrency) { return this.code; },
-    "toString()Ljava/lang/String;": function (this: JCurrency) { return this.code; },
+    "getCurrencyCode()Ljava/lang/String;": currencyCode,
+    "toString()Ljava/lang/String;": currencyCode,
     "getDisplayName()Ljava/lang/String;": function (this: JCurrency) { return currencyDisplayName(this.code, displayLocale()); },
-    "getDisplayName(Ljava/util/Locale;)Ljava/lang/String;": function (this: JCurrency, locale: JLocale) {
-      if (!locale) throw rt.mkThrowable("java/lang/NullPointerException", "locale");
-      return currencyDisplayName(this.code, locale);
-    },
-    "getSymbol()Ljava/lang/String;": function (this: JCurrency) { return currencySymbol(this.code, displayLocale()); },
+    "getDisplayName(Ljava/util/Locale;)Ljava/lang/String;": currencyNameIn,
+    "getSymbol()Ljava/lang/String;": defaultCurrencySymbol,
     "getSymbol(Ljava/util/Locale;)Ljava/lang/String;": function (this: JCurrency, locale: JLocale) {
       if (!locale) throw rt.mkThrowable("java/lang/NullPointerException", "locale");
       return currencySymbol(this.code, locale);
     },
-    "getDefaultFractionDigits()I": function (this: JCurrency) {
-      return currencyFmt(this.code).resolvedOptions().maximumFractionDigits ?? 2;
-    },
+    "getDefaultFractionDigits()I": currencyFractionDigits,
     "equals(Ljava/lang/Object;)Z": function (this: JCurrency, other: unknown) { return other instanceof JCurrency && other.code === this.code ? 1 : 0; },
-    "hashCode()I": function (this: JCurrency) { return stringHash(this.code); },
+    "hashCode()I": currencyHash,
   },
 });
 
@@ -333,20 +350,17 @@ rt.register({
   name: "android/icu/util/Currency", ctor: JICUCurrency,
   methods: {
     "static getInstance(Ljava/lang/String;)Landroid/icu/util/Currency;": (code: string) => Object.assign(new JICUCurrency(), currency(code)),
-    "getCurrencyCode()Ljava/lang/String;": function (this: JICUCurrency) { return this.code; },
-    "getDefaultFractionDigits()I": function (this: JICUCurrency) { return currencyFmt(this.code).resolvedOptions().maximumFractionDigits ?? 2; },
-    "getDisplayName(Ljava/util/Locale;)Ljava/lang/String;": function (this: JICUCurrency, locale: JLocale) {
-      if (!locale) throw rt.mkThrowable("java/lang/NullPointerException", "locale");
-      return currencyDisplayName(this.code, locale);
-    },
-    "getSymbol()Ljava/lang/String;": function (this: JICUCurrency) { return currencySymbol(this.code, displayLocale()); },
+    "getCurrencyCode()Ljava/lang/String;": currencyCode,
+    "getDefaultFractionDigits()I": currencyFractionDigits,
+    "getDisplayName(Ljava/util/Locale;)Ljava/lang/String;": currencyNameIn,
+    "getSymbol()Ljava/lang/String;": defaultCurrencySymbol,
     "getName(Landroid/icu/util/ULocale;I[Z)Ljava/lang/String;": function (this: JICUCurrency, locale: JULocale, style: number, isChoiceFormat: Int8Array | null) {
       if (!locale) throw rt.mkThrowable("java/lang/NullPointerException", "locale");
       if (isChoiceFormat?.length) isChoiceFormat[0] = 0;
       return style === 0 ? currencySymbol(this.code, locale.locale) : currencyDisplayName(this.code, locale.locale);
     },
-    "toString()Ljava/lang/String;": function (this: JICUCurrency) { return this.code; },
+    "toString()Ljava/lang/String;": currencyCode,
     "equals(Ljava/lang/Object;)Z": function (this: JICUCurrency, other: unknown) { return other instanceof JICUCurrency && other.code === this.code ? 1 : 0; },
-    "hashCode()I": function (this: JICUCurrency) { return stringHash(this.code); },
+    "hashCode()I": currencyHash,
   },
 });

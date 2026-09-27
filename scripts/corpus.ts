@@ -53,7 +53,6 @@ async function boot(page: Page, apk: string): Promise<Row> {
     row.ok = row.drew;
   } catch (e) {
     row.note = String(e).split("\n")[0].slice(0, 160);
-    row.errors = errors.slice(0, 6);
   }
   const relevant = row.processes = await readProcesses(page);
   const available = relevant.flatMap((process) => process.diagnostics.status === "ok" ? [process.diagnostics] : []);
@@ -96,7 +95,7 @@ for (const [title, items] of [["missing APIs", ranked], ["native requirements", 
   for (const [key, apks] of items.slice(0, 40)) console.log(`  ${String(apks.length).padStart(2)}/${rows.length}  ${key}`);
 }
 
-const out = args.includes("--json") ? opt("--json", "") : "";
+const out = opt("--json");
 if (out) {
   await Bun.write(out, JSON.stringify({ rows, ranked, rankedNative }, null, 1));
   console.log(`\nwrote ${out}`);

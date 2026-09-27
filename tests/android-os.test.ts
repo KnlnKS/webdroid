@@ -11,7 +11,7 @@ import { rt, JObj } from "../src/jvm/runtime";
 import { onMain } from "../src/android/mainloop";
 import { JBitmap } from "../src/android/graphics";
 import { BridgeCalls } from "../src/shell/bridgecalls";
-import { JHandler, JMessage, PROCESS_UID } from "../src/android/os";
+import { JHandler, JMessage, PROCESS_UID, setProcessIdentity, setProcessName } from "../src/android/os";
 import { JBinder, binderTransport, importBinder } from "../src/android/binder";
 
 describe("activity-main-queue", () => {
@@ -357,6 +357,23 @@ describe("keyevent-parcel", () => {
   });
 });
 
+describe("parcel-string16", () => {
+  rt.linkNatives();
+
+  test("String16 keeps lone surrogates in short, long and unaligned strings", async () => {
+    const strings = ["a\ud800", "x\udc00".repeat(20) + "😀", "\ud800y".repeat(9000)];
+    const p = await newObj("android/os/Parcel", "()V");
+    for (const s of strings) await vcall(p, "writeString16", "(Ljava/lang/String;)V", s);
+    await vcall(p, "setDataPosition", "(I)V", 0);
+    for (const s of strings) expect(await vcall(p, "readString16", "()Ljava/lang/String;")).toBe(s);
+    const odd = await newObj("android/os/Parcel", "()V");
+    await vcall(odd, "setDataPosition", "(I)V", 1);
+    await vcall(odd, "writeString16", "(Ljava/lang/String;)V", strings[1]);
+    await vcall(odd, "setDataPosition", "(I)V", 1);
+    expect(await vcall(odd, "readString16", "()Ljava/lang/String;")).toBe(strings[1]);
+  });
+});
+
 describe("process-user-handle", () => {
   rt.linkNatives();
 
@@ -369,6 +386,29 @@ describe("process-user-handle", () => {
     expect(await vcall(current, "getIdentifier", "()I")).toBe(0);
     const secondary = await vcall(userHandle, "getUserHandleForUid", "(I)Landroid/os/UserHandle;", 1_012_345);
     expect(await vcall(secondary, "getIdentifier", "()I")).toBe(10);
+  });
+});
+
+describe("procfs", () => {
+  test("Java and native-facing procfs expose the current process cmdline", async () => {
+    setProcessIdentity(2468, 10001);
+    setProcessName("com.example.app");
+    for (const path of ["/proc/self/cmdline", "/proc/2468/cmdline"]) {
+      const file = await newObj("java/io/File", "(Ljava/lang/String;)V", path);
+      expect(await vcall(file, "exists", "()Z")).toBe(1);
+      const stream = await newObj("java/io/FileInputStream", "(Ljava/io/File;)V", file);
+      const bytes = new Int8Array(64);
+      const length = await vcall(stream, "read", "([B)I", bytes);
+      expect(new TextDecoder().decode(new Uint8Array(bytes.buffer, 0, length))).toBe("com.example.app\0");
+    }
+    expect(await vcall(await newObj("java/io/File", "(Ljava/lang/String;)V", "/proc/9999/cmdline"), "exists", "()Z")).toBe(0);
+    const status = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/proc/2468/status");
+    const bytes = new Int8Array(512);
+    const length = await vcall(status, "read", "([B)I", bytes);
+    const text = new TextDecoder().decode(new Uint8Array(bytes.buffer, 0, length));
+    expect(text).toContain("Pid:\t2468\n");
+    expect(text).toContain("Uid:\t10001\t10001\t10001\t10001\n");
+    expect(text).toContain("Cpus_allowed_list:\t");
   });
 });
 

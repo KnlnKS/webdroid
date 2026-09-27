@@ -120,6 +120,12 @@ const supportsSize = async function (this: JVideoCapabilities, width: number, he
   const format = new JMediaFormat(); format.values.set("width", { type: 1, value: width }); format.values.set("height", { type: 1, value: height });
   return +await supports(this.info.definition, format);
 };
+/** Range<Integer>(1, limit) for one of a video codec's limits */
+function videoLimitRange(caps: JVideoCapabilities, limit: "maxBitrate" | "maxDimension") {
+  const definition = caps.info.definition;
+  if (definition.kind !== "video") throw rt.mkThrowable("java/lang/IllegalStateException", "Not a video codec");
+  return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(1), boxInt(definition[limit]));
+}
 rt.register({ name: "android/media/MediaCodecInfo$VideoCapabilities", ctor: JVideoCapabilities, methods: {
   "getWidthAlignment()I": () => 1, "getHeightAlignment()I": () => 1,
   "getSupportedFrameRates()Landroid/util/Range;": () => newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(0), boxInt(960)),
@@ -128,21 +134,9 @@ rt.register({ name: "android/media/MediaCodecInfo$VideoCapabilities", ctor: JVid
     if (!range || !(yield supportsSize.call(this, width, height))) throw rt.mkThrowable("java/lang/IllegalArgumentException", "unsupported size");
     return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", box(JDouble, range[0]), box(JDouble, range[1]));
   }),
-  "getBitrateRange()Landroid/util/Range;": function (this: JVideoCapabilities) {
-    const definition = this.info.definition;
-    if (definition.kind !== "video") throw rt.mkThrowable("java/lang/IllegalStateException", "Not a video codec");
-    return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(1), boxInt(definition.maxBitrate));
-  },
-  "getSupportedHeights()Landroid/util/Range;": function (this: JVideoCapabilities) {
-    const definition = this.info.definition;
-    if (definition.kind !== "video") throw rt.mkThrowable("java/lang/IllegalStateException", "Not a video codec");
-    return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(1), boxInt(definition.maxDimension));
-  },
-  "getSupportedWidths()Landroid/util/Range;": function (this: JVideoCapabilities) {
-    const definition = this.info.definition;
-    if (definition.kind !== "video") throw rt.mkThrowable("java/lang/IllegalStateException", "Not a video codec");
-    return newObj("android/util/Range", "(Ljava/lang/Comparable;Ljava/lang/Comparable;)V", boxInt(1), boxInt(definition.maxDimension));
-  },
+  "getBitrateRange()Landroid/util/Range;": function (this: JVideoCapabilities) { return videoLimitRange(this, "maxBitrate"); },
+  "getSupportedHeights()Landroid/util/Range;": function (this: JVideoCapabilities) { return videoLimitRange(this, "maxDimension"); },
+  "getSupportedWidths()Landroid/util/Range;": function (this: JVideoCapabilities) { return videoLimitRange(this, "maxDimension"); },
   "isSizeSupported(II)Z": supportsSize,
   "areSizeAndRateSupported(IID)Z": driven(function* (this: JVideoCapabilities, width: number, height: number, rate: number): Gen {
     const def = this.info.definition, range = def.kind === "video" ? frameRates(def, width, height) : null;

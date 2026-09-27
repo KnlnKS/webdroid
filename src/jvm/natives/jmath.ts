@@ -144,6 +144,7 @@ function align(a: JBigDecimal, b: JBigDecimal): [bigint, bigint, number] {
   if (a.sc === b.sc) return [a.u, b.u, a.sc];
   return a.sc > b.sc ? [a.u, b.u * pow10(a.sc - b.sc), a.sc] : [a.u * pow10(b.sc - a.sc), b.u, b.sc];
 }
+function compareDecimals(this: JBigDecimal, o: JBigDecimal) { return cmp(this, o); }
 function cmp(a: JBigDecimal, b: JBigDecimal): number {
   const [x, y] = align(a, b);
   return x < y ? -1 : x > y ? 1 : 0;
@@ -283,7 +284,7 @@ const sub = bd(function (o: JBigDecimal) { const [x, y, s] = align(this, o); ret
 const mul = bd(function (o: JBigDecimal) { return mkBD(this.u * o.u, checkScale(this.sc + o.sc)); });
 /** [divideToIntegralValue, remainder]: the remainder is this - quotient * divisor */
 function quotRem(x: JBigDecimal, o: JBigDecimal, mc: JMathContext | null): JBigDecimal[] {
-  const q = mc ? withMC(divInt).call(x, o, mc) : divInt.call(x, o);
+  const q = roundMC(divInt.call(x, o), mc);
   return jarray([q, sub.call(x, mul.call(q, o))], "Ljava/math/BigDecimal;") as JBigDecimal[];
 }
 const divInt = bd(function (o: JBigDecimal) {
@@ -399,8 +400,8 @@ rt.register({
     "longValueExact()J": function (this: JBigDecimal) { return intExact(this, 64); },
     "shortValueExact()S": function (this: JBigDecimal) { return Number(intExact(this, 16)); },
     "byteValueExact()B": function (this: JBigDecimal) { return Number(intExact(this, 8)); },
-    "compareTo(Ljava/math/BigDecimal;)I": function (this: JBigDecimal, o: JBigDecimal) { return cmp(this, o); },
-    "compareTo(Ljava/lang/Object;)I": function (this: JBigDecimal, o: JBigDecimal) { return cmp(this, o); },
+    "compareTo(Ljava/math/BigDecimal;)I": compareDecimals,
+    "compareTo(Ljava/lang/Object;)I": compareDecimals,
     "equals(Ljava/lang/Object;)Z": function (this: JBigDecimal, o: unknown) {
       return o instanceof JBigDecimal && o.u === this.u && o.sc === this.sc ? 1 : 0;
     },
@@ -418,6 +419,7 @@ function divScaled(a: JBigDecimal, b: JBigDecimal, sc: number, mode: number): JB
 }
 
 export class JBigInteger extends JObj { v = 0n; }
+function compareIntegers(this: JBigInteger, o: JBigInteger) { return this.v < o.v ? -1 : this.v > o.v ? 1 : 0; }
 export function modInverse(a: bigint, m: bigint): bigint {
   let [r0, r1, t0, t1] = [((a % m) + m) % m, m, 1n, 0n];
   while (r0 !== 0n) { const q = r1 / r0; [r0, r1] = [r1 - q * r0, r0]; [t0, t1] = [t1 - q * t0, t0]; }
@@ -577,12 +579,8 @@ rt.register({
     "floatValue()F": function (this: JBigInteger) { return Math.fround(Number(this.v)); },
     "toString()Ljava/lang/String;": function (this: JBigInteger) { return this.v.toString(); },
     "toString(I)Ljava/lang/String;": function (this: JBigInteger, r: number) { return this.v.toString(r >= 2 && r <= 36 ? r : 10); },
-    "compareTo(Ljava/math/BigInteger;)I": function (this: JBigInteger, o: JBigInteger) {
-      return this.v < o.v ? -1 : this.v > o.v ? 1 : 0;
-    },
-    "compareTo(Ljava/lang/Object;)I": function (this: JBigInteger, o: JBigInteger) {
-      return this.v < o.v ? -1 : this.v > o.v ? 1 : 0;
-    },
+    "compareTo(Ljava/math/BigInteger;)I": compareIntegers,
+    "compareTo(Ljava/lang/Object;)I": compareIntegers,
     "equals(Ljava/lang/Object;)Z": function (this: JBigInteger, o: unknown) { return o instanceof JBigInteger && o.v === this.v ? 1 : 0; },
     "hashCode()I": function (this: JBigInteger) { return biHash(this.v); },
   },

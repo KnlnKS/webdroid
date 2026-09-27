@@ -34,20 +34,32 @@ export function retPair(lo: number, hi: number): bigint { return (BigInt(hi | 0)
 export function retF(cpu: Cpu, x: number): HostRet { if (cpu.a64) { cpu.s[0] = x; return VRET; } return fbits(x); }
 export function retD(cpu: Cpu, x: number): HostRet { if (cpu.a64) { cpu.d[0] = x; return VRET; } return dbits(x); }
 
+/** the readers every cursor derives from its own i() and l(): the ILP32 ones as they stand, the
+ *  LP64 ones with their pointer and floating-point reads overridden */
+abstract class Cursor implements ArgReader {
+  abstract i(): number;
+  abstract l(): bigint;
+  u(): number { return this.i() >>> 0; }
+  p(): number { return this.i() >>> 0; }
+  va(): bigint { return BigInt(this.p()); }
+  ul(): bigint { return BigInt.asUintN(64, this.l()); }
+  f(): number { return bitsf(this.i()); }
+  d(): number { return bitsd(this.l()); }
+  str(): string { return mem.cstr(this.p()); }
+  strAt(p: number): string { return mem.cstr(p); }
+}
+
 /** AAPCS argument cursor: r0–r3, then the caller's stack; 64-bit values on even registers / 8-byte stack slots */
-export class Args implements ArgReader {
+export class Args extends Cursor {
   private cpu!: Cpu;
   private n = 0;      // next core register
   private sp = 0;     // next stack slot
-  constructor(cpu: Cpu) { this.reset(cpu); }
+  constructor(cpu: Cpu) { super(); this.reset(cpu); }
   reset(cpu: Cpu): void { this.cpu = cpu; this.n = 0; this.sp = cpu.w[26]; }
   i(): number {
     if (this.n < 4) return this.cpu.w[2 * this.n++];
     const v = mem.ld32(this.sp); this.sp += 4; return v;
   }
-  u(): number { return this.i() >>> 0; }
-  p(): number { return this.i() >>> 0; }
-  va(): bigint { return BigInt(this.p()); }
   l(): bigint {
     if (this.n & 1) this.n++;
     if (this.n < 4) { const lo = this.cpu.w[2 * this.n], hi = this.cpu.w[2 * this.n + 2]; this.n += 2; return retPair(lo, hi); }
@@ -55,37 +67,23 @@ export class Args implements ArgReader {
     this.sp = (this.sp + 7) & ~7;
     const v = mem.ld64(this.sp); this.sp += 8; return v;
   }
-  ul(): bigint { return BigInt.asUintN(64, this.l()); }
-  f(): number { return bitsf(this.i()); }
-  d(): number { return bitsd(this.l()); }
-  str(): string { return mem.cstr(this.p()); }
-  strAt(p: number): string { return mem.cstr(p); }
 }
 
 /** the ILP32 va_list: a flat cursor over the caller's stack */
-class VaList implements ArgReader {
-  constructor(private a: number) {}
+class VaList extends Cursor {
+  constructor(private a: number) { super(); }
   i(): number { const v = mem.ld32(this.a); this.a += 4; return v; }
-  u(): number { return this.i() >>> 0; }
-  p(): number { return this.i() >>> 0; }
-  va(): bigint { return BigInt(this.p()); }
   l(): bigint { this.a = (this.a + 7) & ~7; const v = mem.ld64(this.a); this.a += 8; return v; }
-  ul(): bigint { return BigInt.asUintN(64, this.l()); }
-  f(): number { return bitsf(this.i()); }
-  d(): number { return bitsd(this.l()); }
-  str(): string { return mem.cstr(this.p()); }
-  strAt(p: number): string { return mem.cstr(p); }
-  get addr(): number { return this.a; }
 }
 
 /** AAPCS64's va_list is a struct: {__stack, __gr_top, __vr_top, __gr_offs, __vr_offs}. A general
  *  argument comes from the register save area at gr_top + gr_offs while gr_offs is negative, then
  *  from 8-byte stack slots; an FP one likewise from 16-byte slots at vr_top + vr_offs. The offsets
  *  are kept here, not written back: no caller reuses the list after a v*printf or Call*MethodV. */
-class VaList64 implements ArgReader {
+class VaList64 extends Cursor {
   private stack = -1; private grTop = -1; private vrTop = -1; private grOffs = 0; private vrOffs = 0;
   private loaded = false;
-  constructor(private readonly at: number) {}
+  constructor(private readonly at: number) { super(); }
   // libc reads the list only when a conversion needs an argument: a caller with none may pass
   // junk, and one whose arguments all sit in one area leaves the other area's top pointer
   // uninitialized (clang builds the struct from whatever the slots held) — the guest never
@@ -115,15 +113,11 @@ class VaList64 implements ArgReader {
     return this.vrOffs > 0 ? this.slot() : p;
   }
   i(): number { return mem.ld32(this.gp()); }
-  u(): number { return this.i() >>> 0; }
   p(): number { return ldp(this.gp()); }
   va(): bigint { return mem.ld64(this.gp()); }
   l(): bigint { return mem.ld64(this.gp()); }
-  ul(): bigint { return BigInt.asUintN(64, this.l()); }
   f(): number { return this.d(); }   // a float vararg is promoted to double
   d(): number { return mem.ldf64(this.fp()); }
-  str(): string { return mem.cstr(this.p()); }
-  strAt(p: number): string { return mem.cstr(p); }
 }
 /** the va_list the process ABI defines, over the guest pointer `a` */
 export function vaList(a: number): ArgReader { return PTR === 8 ? new VaList64(a) : new VaList(a); }
@@ -187,8 +181,7 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
       if (hostTrace.ring.length > hostTrace.max) hostTrace.ring.splice(0, hostTrace.ring.length - hostTrace.max);
     }
   }
-  const timed = slowMs > 0 || hostTrace.on;
-  const t0 = timed ? performance.now() : 0;
+  const t0 = slowMs ? performance.now() : 0;
   const served = hostTrace.on && bound[slot] ? core.libc_call(cpu.base, bound[slot]) : 2;
   if (served === 1) cpu.fault("bad address in a core-served call");
   let ret: HostRet | Promise<HostRet>;
@@ -199,8 +192,7 @@ export function hostDispatch(cpu: Cpu, slot: number): void {
     if (e instanceof Error && !("msg" in e) && !(e instanceof NativeFault && e.pc)) cpu.fault(`${e.message.replace(/^\[native\] /, "")} in ${names[slot]}`);
     throw e;
   }
-  const dt = timed ? performance.now() - t0 : 0;
-  perf.nativeHostMs += dt;
+  const dt = slowMs ? performance.now() - t0 : 0;
   if (slowMs && dt > slowMs) console.warn(`[slow-native] ${cpu.name}:${names[slot]}(${(cpu.w[0] >>> 0).toString(16)},${(cpu.w[2] >>> 0).toString(16)},${(cpu.w[4] >>> 0).toString(16)}) ${dt.toFixed(0)}ms`);
   if (ret instanceof Promise) { cpu.pending = ret; return; }
   if (traced) hostTrace.ring[hostTrace.ring.length - 1] += `=${typeof ret === "number" ? (ret >>> 0).toString(16) : String(ret)}`;
@@ -227,18 +219,17 @@ export function hostReturn(cpu: Cpu, ret: HostRet): void {
 /** AAPCS64 argument cursor: x0–x7 then the caller's stack in 8-byte slots. A 64-bit value is one
  *  register, not an even pair, and floating-point arguments arrive in v0–v7 — hard float, unlike
  *  the armeabi-v7a softfp ABI Args reads. */
-export class Args64 implements ArgReader {
+export class Args64 extends Cursor {
   private cpu!: Cpu;
   private n = 0;      // next core register
   private nv = 0;     // next SIMD/FP register
   private sp = 0;     // next stack slot
-  constructor(cpu: Cpu) { this.reset(cpu); }
+  constructor(cpu: Cpu) { super(); this.reset(cpu); }
   reset(cpu: Cpu): void { this.cpu = cpu; this.n = 0; this.nv = 0; this.sp = cpu.w[62] >>> 0; }
   i(): number {
     if (this.n < 8) return this.cpu.w[2 * this.n++];
     const v = mem.ld32(this.sp); this.sp += 8; return v;
   }
-  u(): number { return this.i() >>> 0; }
   p(): number {
     if (this.n < 8) { const lo = this.cpu.w[2 * this.n], hi = this.cpu.w[2 * this.n + 1]; this.n++; return hi ? mem.tx(hi, lo) : lo >>> 0; }
     const lo = mem.ld32(this.sp), hi = mem.ld32(this.sp + 4); this.sp += 8;
@@ -249,11 +240,8 @@ export class Args64 implements ArgReader {
     if (this.n < 8) { const lo = this.cpu.w[2 * this.n], hi = this.cpu.w[2 * this.n + 1]; this.n++; return retPair(lo, hi); }
     const v = mem.ld64(this.sp); this.sp += 8; return v;
   }
-  ul(): bigint { return BigInt.asUintN(64, this.l()); }
   f(): number { if (this.nv < 8) return this.cpu.s[this.nv++ * 4]; const v = mem.ld32(this.sp); this.sp += 8; return bitsf(v); }
   d(): number { if (this.nv < 8) return this.cpu.d[this.nv++ * 2]; const v = mem.ld64(this.sp); this.sp += 8; return bitsd(v); }
-  str(): string { return mem.cstr(this.p()); }
-  strAt(p: number): string { return mem.cstr(p); }
 }
 
 const strAddrs = new Map<string, number>();

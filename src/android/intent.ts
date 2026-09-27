@@ -46,6 +46,13 @@ function copyBounds(rect: JRect): JRect {
   rt.link("android/graphics/Rect");
   return Object.assign(new JRect(), { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
 }
+/** a java.lang.Class's dotted name, as an explicit intent names its component */
+const dottedClassName = (cls: { ci?: { name?: string } } | null) => cls?.ci?.name?.replace(/\//g, ".") ?? null;
+function setClassFrom(this: JIntent, c: JContext, cls: { ci?: { name?: string } } | null) {
+  this.component = dottedClassName(cls);
+  this.componentPkg = c?.$host?.pkg ?? null;
+  return this;
+}
 function putExtras(this: JIntent, source: JBundle | JIntent) {
   const extras = source instanceof JIntent ? source.extras : source;
   if (extras) for (const [key, value] of extras.map) this.extras.map.set(key, value);
@@ -142,10 +149,7 @@ const intentMethods: NativeSpec["methods"] = {
     this.action = a;
     this.dataUri = u?.uri ?? null;
   },
-  "<init>(Landroid/content/Context;Ljava/lang/Class;)V": function (this: JIntent, c: JContext, cls: any) {
-    this.component = cls?.ci?.name?.replace(/\//g, ".") ?? null;
-    this.componentPkg = c?.$host?.pkg ?? null;
-  },
+  "<init>(Landroid/content/Context;Ljava/lang/Class;)V": function (this: JIntent, c: JContext, cls: any) { setClassFrom.call(this, c, cls); },
   "<init>(Ljava/lang/String;Landroid/net/Uri;Landroid/content/Context;Ljava/lang/Class;)V": function (this: JIntent, action: string, uri: { uri: string } | null, context: JContext, cls: { ci: { name: string } }) {
     this.action = action; this.dataUri = uri?.uri ?? null;
     this.component = cls.ci.name.replace(/\//g, ".");
@@ -154,11 +158,7 @@ const intentMethods: NativeSpec["methods"] = {
   "<init>(Landroid/content/Intent;)V": function (this: JIntent, o: JIntent) {
     this.copyFrom(o);
   },
-  "setClass(Landroid/content/Context;Ljava/lang/Class;)Landroid/content/Intent;": function (this: JIntent, c: JContext, cls: any) {
-    this.component = cls?.ci?.name?.replace(/\//g, ".") ?? null;
-    this.componentPkg = c?.$host?.pkg ?? null;
-    return this;
-  },
+  "setClass(Landroid/content/Context;Ljava/lang/Class;)Landroid/content/Intent;": setClassFrom,
   "setClassName(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;": function (this: JIntent, c: JContext, n: string) {
     this.component = n;
     this.componentPkg = c?.$host?.pkg ?? null;
@@ -365,8 +365,7 @@ function intentUri(it: JIntent, flags: number): string {
   if (it.flags) s += `launchFlags=0x${(it.flags >>> 0).toString(16)};`;
   if (it.pkg) s += `package=${encUri(it.pkg)};`;
   if (it.component && it.componentPkg) {
-    const cls = it.component.startsWith(it.componentPkg + ".") ? it.component.slice(it.componentPkg.length) : it.component;
-    s += `component=${encUri(it.componentPkg + "/" + cls, true)};`;
+    s += `component=${encUri(it.componentPkg + "/" + shortClassName(it.componentPkg, it.component), true)};`;
   }
   for (const [key, value] of it.extras.map) {
     const extra = extraUri(value);
@@ -374,7 +373,8 @@ function intentUri(it: JIntent, flags: number): string {
   }
   return s + "end";
 }
-const shortClassName = (c: JComponentName) => c.cls.startsWith(c.pkg + ".") ? c.cls.slice(c.pkg.length) : c.cls;
+/** a class name within its package, as ".Main" */
+const shortClassName = (pkg: string, cls: string) => cls.startsWith(pkg + ".") ? cls.slice(pkg.length) : cls;
 const compareComponents = (a: JComponentName, b: JComponentName) =>
   a.pkg < b.pkg ? -1 : a.pkg > b.pkg ? 1 : a.cls < b.cls ? -1 : a.cls > b.cls ? 1 : 0;
 rt.register({
@@ -392,13 +392,13 @@ rt.register({
     },
     "<init>(Landroid/content/Context;Ljava/lang/Class;)V": function (this: JComponentName, ctx: JContext, cls: any) {
       this.pkg = ctx?.$host?.pkg ?? "";
-      this.cls = cls?.ci?.name?.replace(/\//g, ".") ?? "";
+      this.cls = dottedClassName(cls) ?? "";
     },
     "getClassName()Ljava/lang/String;": function (this: JComponentName) { return this.cls; },
-    "getShortClassName()Ljava/lang/String;": function (this: JComponentName) { return shortClassName(this); },
+    "getShortClassName()Ljava/lang/String;": function (this: JComponentName) { return shortClassName(this.pkg, this.cls); },
     "getPackageName()Ljava/lang/String;": function (this: JComponentName) { return this.pkg; },
     "flattenToString()Ljava/lang/String;": function (this: JComponentName) { return this.pkg + "/" + this.cls; },
-    "flattenToShortString()Ljava/lang/String;": function (this: JComponentName) { return this.pkg + "/" + shortClassName(this); },
+    "flattenToShortString()Ljava/lang/String;": function (this: JComponentName) { return this.pkg + "/" + shortClassName(this.pkg, this.cls); },
     "compareTo(Landroid/content/ComponentName;)I": function (this: JComponentName, other: JComponentName) { return compareComponents(this, other); },
     "compareTo(Ljava/lang/Object;)I": function (this: JComponentName, other: JComponentName) {
       if (!(other instanceof JComponentName)) throw rt.mkThrowable("java/lang/ClassCastException", "ComponentName required");
@@ -452,7 +452,7 @@ export async function launchIntent(host: AppHost, intent: JIntent, result?: Acti
   void onMain(() => host.launch(component, intent, { caller, result })).catch(reportUncaught);
 }
 
-export const RESULT_OK = -1, RESULT_CANCELED = 0;
+const RESULT_OK = -1, RESULT_CANCELED = 0;
 
 /**
  * The activities the *system* provides, keyed by the action an app sends. On a device these are

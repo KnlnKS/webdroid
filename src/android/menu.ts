@@ -1,18 +1,17 @@
-import { AID } from "./res";
 import { JViewGroup, specSize, JView, invalidate, requestLayout } from "./view";
 import { type JDrawable, loadDrawable, loadDrawableRV, drawChild } from "./drawable";
 import { type JCanvas, tfMedium } from "./graphics";
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, driven, type Gen } from "../jvm/runtime";
-import { vcall, curThread } from "../jvm/natives/jlang";
+import { vcall, curThread, after } from "../jvm/natives/jlang";
 import { showPopupMenu } from "./popup";
 import { appHost, type AppHost } from "./apphost";
 import { reportUncaught } from "./os";
 import { appString } from "./context";
 import { parseAXML, TV } from "./axml";
-import { rvString } from "./res";
+import { AID, rvString } from "./res";
 import type { JActivity } from "./app";
 import type { JActionMode } from "./actionmode";
-import { spannedString } from "./text";
+import { csText, spannedString } from "./text";
 
 function firstText(v: JView | null): string | null {
   if (!v) return null;
@@ -32,7 +31,6 @@ export class JActionBarView extends JViewGroup {
   showUp = false;
   navMode = 0;
   navAdapter: unknown = null;
-  navSelected = 0;
   navLabel = "";
   /** Holo action bar: 24dp icon at 13.5dp, title at 49.5dp, action slots 56dp apart. */
   slotX(i: number, n: number): number { return this.width() - 56 - (n - 1 - i) * 112; }
@@ -50,7 +48,6 @@ export class JActionBarView extends JViewGroup {
     const overflow = vis.filter((m) => !chosen.has(m));
     return { action, overflow, slots: action.length + (overflow.length ? 1 : 0) };
   }
-  onDrawSelf(cv: JCanvas): unknown { return rt.drive(this.onDrawSelf$(cv)); }
   *onDrawSelf$(cv: JCanvas): Gen {
     const thread = curThread;
     const ctx = cv.ctx;
@@ -144,7 +141,7 @@ rt.register({
       this.measuredW = specSize(wSpec);
       this.measuredH = this.barH;
     },
-    "onDraw(Landroid/graphics/Canvas;)V": function (this: JActionBarView, cv: JCanvas) { return this.onDrawSelf(cv); },
+    "onDraw(Landroid/graphics/Canvas;)V": function (this: JActionBarView, cv: JCanvas) { return rt.drive(this.onDrawSelf$(cv)); },
     "onTouchEvent(Landroid/view/MotionEvent;)Z": driven(function* (this: JActionBarView, ev: any): Gen {
       if ((ev.action & 0xff) === 1) {
         if (this.showUp && ev.x < 80) {
@@ -174,9 +171,7 @@ rt.register({
             const view = yield vcall(this.navAdapter, "getView", "(ILandroid/view/View;Landroid/view/ViewGroup;)Landroid/view/View;", i, null, this);
             items.push({ id: i, title: firstText(view) ?? "" });
           }
-          const bar = this;
           showPopupMenu(this, items, (idx) => {
-            bar.navSelected = idx;
             const ab = appHost?.currentActivity()?.actionBarObj;
             if (ab) void ab.fireNav(idx);
           });
@@ -323,16 +318,20 @@ rt.register({
 });
 const menuMethods: NativeSpec["methods"] = {
   "add(Ljava/lang/CharSequence;)Landroid/view/MenuItem;": function (this: JMenu, t: unknown) {
-    const m = mkMenuItem(0, String(t ?? ""));
-    this.items.push(m);
-    pushMenuToBar(this);
-    return m;
+    return after(csText(t), (title) => {
+      const m = mkMenuItem(0, title);
+      this.items.push(m);
+      pushMenuToBar(this);
+      return m;
+    });
   },
   "add(IIILjava/lang/CharSequence;)Landroid/view/MenuItem;": function (this: JMenu, g: number, id: number, o: number, t: unknown) {
-    const m = mkMenuItem(id, String(t ?? ""));
-    this.items.push(m);
-    pushMenuToBar(this);
-    return m;
+    return after(csText(t), (title) => {
+      const m = mkMenuItem(id, title);
+      this.items.push(m);
+      pushMenuToBar(this);
+      return m;
+    });
   },
   "add(IIII)Landroid/view/MenuItem;": function (this: JMenu, g: number, id: number, o: number, tid: number) {
     const m = mkMenuItem(id, appString(tid));
@@ -351,10 +350,12 @@ const menuMethods: NativeSpec["methods"] = {
   "size()I": function (this: JMenu) { return this.items.length; },
   "getItem(I)Landroid/view/MenuItem;": function (this: JMenu, i: number) { return this.items[i] ?? null; },
   "addSubMenu(Ljava/lang/CharSequence;)Landroid/view/SubMenu;": function (this: JMenu, t: unknown) {
-    const item = mkMenuItem(0, String(t ?? ""));
-    item.sub = new JMenu();
-    this.items.push(item);
-    return item.sub;
+    return after(csText(t), (title) => {
+      const item = mkMenuItem(0, title);
+      item.sub = new JMenu();
+      this.items.push(item);
+      return item.sub;
+    });
   },
   "setGroupVisible(IZ)V": () => {},
   "hasVisibleItems()Z": function (this: JMenu) { return this.items.some((i) => i.visible) ? 1 : 0; },
@@ -473,7 +474,6 @@ rt.register({
       }),
     "setSelectedNavigationItem(I)V": function (this: JActionBar, i: number) {
       this.navSelected = i;
-      if (this.act?.window.actionBarView) this.act.window.actionBarView.navSelected = i;
       return this.fireNav(i);
     },
     "getNavigationItemCount()I": driven(function* (this: JActionBar): Gen {

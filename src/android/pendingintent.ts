@@ -75,6 +75,11 @@ async function pending(kind: PendingOperation["kind"], context: JContext, code: 
   if (id === null) return null;
   const result = new JPendingIntent(); result.sender.target = importBinder({ pid: 0, id }); return result;
 }
+/** PendingIntent.getActivities: the last intent is the one the operation launches */
+function pendingActivities(context: JContext, code: number, intents: JIntent[] | null, flags: number) {
+  if (!intents?.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "intents must not be empty");
+  return pending("activity", context, code, intents[intents.length - 1], flags, intents);
+}
 rt.register({ name: "android/content/IntentSender", ctor: JIntentSender, ifaces: ["android/os/Parcelable"],
   statics: { get CREATOR() { return parcelCreator("android/content/IntentSender", async p => {
     const target = await vcall(p, "readStrongBinder", "()Landroid/os/IBinder;");
@@ -92,14 +97,8 @@ rt.register({ name: "android/app/PendingIntent", ctor: JPendingIntent, ifaces: [
     const result = new JPendingIntent(); result.sender.target = target; return result;
   }); } }, methods: {
     "static getActivity(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number) => pending("activity", context, code, intent, flags),
-    "static getActivities(Landroid/content/Context;I[Landroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intents: JIntent[] | null, flags: number) => {
-      if (!intents?.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "intents must not be empty");
-      return pending("activity", context, code, intents[intents.length - 1], flags, intents);
-    },
-    "static getActivities(Landroid/content/Context;I[Landroid/content/Intent;ILandroid/os/Bundle;)Landroid/app/PendingIntent;": (context: JContext, code: number, intents: JIntent[] | null, flags: number) => {
-      if (!intents?.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "intents must not be empty");
-      return pending("activity", context, code, intents[intents.length - 1], flags, intents);
-    },
+    "static getActivities(Landroid/content/Context;I[Landroid/content/Intent;I)Landroid/app/PendingIntent;": pendingActivities,
+    "static getActivities(Landroid/content/Context;I[Landroid/content/Intent;ILandroid/os/Bundle;)Landroid/app/PendingIntent;": pendingActivities,
     "static getBroadcast(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number) => pending("broadcast", context, code, intent, flags),
     "static getService(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number) => pending("service", context, code, intent, flags),
     "static getForegroundService(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;": (context: JContext, code: number, intent: JIntent, flags: number) => pending("foreground-service", context, code, intent, flags),

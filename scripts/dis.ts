@@ -12,10 +12,8 @@ for (const dex of await openDexes(apk)) {
     console.log(`=== ${clsName} in ${dname} (super ${dex.type(def.superIdx)})`);
     for (const m of [...def.directMethods, ...def.virtualMethods]) {
       const mr = dex.method(m.methodIdx);
-      const proto = dex.proto(mr.proto);
-      const desc = "(" + proto.params.map((t) => dex.type(t)).join("") + ")" + dex.type(proto.ret);
       if (methodName && mr.name !== methodName) continue;
-      console.log(`\n--- ${mr.name}${desc} codeOff=${m.codeOff}`);
+      console.log(`\n--- ${mr.name}${dex.methodDesc(m.methodIdx)} codeOff=${m.codeOff}`);
       if (!m.codeOff) continue;
       const code = dex.code(m.codeOff);
       console.log(`regs=${code.regs} ins=${code.ins} tries=${JSON.stringify(code.tries)}`);
@@ -37,8 +35,7 @@ for (const dex of await openDexes(apk)) {
         }
         if (/invoke/.test(name)) {
           const mm = dex.method(code.insns[pc + 1]);
-          const pp = dex.proto(mm.proto);
-          extra = dex.type(mm.cls) + "." + mm.name + "(" + pp.params.map((t) => dex.type(t)).join("") + ")" + dex.type(pp.ret);
+          extra = dex.type(mm.cls) + "." + mm.name + dex.methodDesc(code.insns[pc + 1]);
         }
         if (/^(check-cast|new-instance|const-class|instance-of|new-array|filled)/.test(name)) {
           extra = dex.type(code.insns[pc + 1]);

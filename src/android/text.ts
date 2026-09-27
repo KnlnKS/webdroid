@@ -1,6 +1,6 @@
+// android.text.* — TextPaint, TextUtils, Spannable/Editable (spans stored, minimally styled).
 import { JDrawable, JColorStateList } from "./drawable";
 import { type JParcel, writeInt, readInt, writeString8, readString8, parcelCreator } from "./parcel";
-// android.text.* — TextPaint, TextUtils, Spannable/Editable (spans stored, minimally styled).
 
 import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, callOn, curThread, mkEnumSet, newObj, after, type JSimpleEnum } from "../jvm/natives/jlang";
@@ -10,7 +10,7 @@ import { AID, JTypedArray } from "./res";
 import { TV } from "./axml";
 import { fontResource } from "./fonts";
 import { device } from "../shell/config";
-import { formatDate } from "../jvm/natives/jtext";
+import { formatPattern } from "../jvm/natives/jtime-pattern";
 import { toJsArray } from "../jvm/natives/jutil";
 import { localeDirection, localeTag } from "../jvm/natives/jvalues";
 import { bestDateTimePattern } from "./icu";
@@ -659,13 +659,8 @@ const spanHierarchy: Record<string, { sup?: string; ifaces?: string[] }> = {
   "android/text/style/ClickableSpan": { sup: "android/text/style/CharacterStyle", ifaces: ["android/text/style/UpdateAppearance"] },
   "android/text/style/URLSpan": { sup: "android/text/style/ClickableSpan" },
 };
-for (const [name] of [
-  ["android/text/style/BackgroundColorSpan", { color: 0 }],
-  ["android/text/style/UnderlineSpan", {}],
-  ["android/text/style/StrikethroughSpan", {}],
-] as const) {
-  const Base = spanHierarchy[name].sup === "android/text/style/MetricAffectingSpan" ? JMetricAffectingSpan : JCharacterStyle;
-  const c = class extends Base { color = 0; style = 0; size = 1; url = ""; };
+for (const name of ["android/text/style/BackgroundColorSpan", "android/text/style/UnderlineSpan", "android/text/style/StrikethroughSpan"]) {
+  const c = class extends JCharacterStyle { color = 0; style = 0; size = 1; url = ""; };
   rt.register({
     name, ctor: c,
     ...spanHierarchy[name],
@@ -770,8 +765,9 @@ rt.register({ name: "android/text/style/RelativeSizeSpan", ctor: JRelativeSizeSp
   "updateMeasureState(Landroid/text/TextPaint;)V": applyRelativeSize,
 } });
 
-function drawStyledText(src: unknown, text: string, start: number, canvas: JCanvas, paint: JTextPaint, x: number, y: number, color = paint.color): Promise<void> | undefined {
+function drawStyledText(src: unknown, text: string, start: number, canvas: JCanvas, paint: JTextPaint, x: number, y: number): Promise<void> | undefined {
   if (!(src instanceof JSpanned)) return;
+  const color = paint.color;
   const end = start + text.length;
   const spans = src.spans.filter((r) => r.start < end && r.end > start && rt.iof(r.span, "android/text/style/CharacterStyle")
     && !rt.iof(r.span, "android/text/style/ReplacementSpan"));
@@ -1070,9 +1066,6 @@ rt.register({
 });
 mkEnumSet("android/text/TextUtils$TruncateAt", ["START", "MIDDLE", "END", "MARQUEE"]);
 
-for (const n of ["org/xml/sax/ContentHandler", "org/xml/sax/DTDHandler", "org/xml/sax/EntityResolver", "org/xml/sax/ErrorHandler"]) {
-  rt.register({ name: n, ctor: class extends JObj {} });
-}
 type SaxAttr = { uri: string; local: string; qname: string; value: string };
 class JSaxAttributes extends JObj { values: SaxAttr[] = []; }
 const saxAttributeMethods = {
@@ -1166,6 +1159,9 @@ export class JLayout extends JObj {
   asc = 0; desc = 0; padTop = 0; padBottom = 0;
   /** per-line box tops/baselines, set only when a LineHeightSpan makes the lines non-uniform */
   tops: number[] | null = null; bases: number[] | null = null;
+  height(): number {
+    return this.tops ? this.tops[this.tops.length - 1] : this.lines.length * this.lineHeight() + this.padTop + this.padBottom;
+  }
   updateMetrics() {
     const p = this.paint;
     this.asc = Math.round(fontAscent(p)); this.desc = Math.round(fontDescent(p));
@@ -1277,6 +1273,9 @@ export const drawLayout = driven(function* drawLayout(this: JLayout, c: JCanvas,
       }
     }
 });
+const lineBottom = function (this: JLayout, i: number) { return this.lineTop(Math.min(i, this.lines.length - 1) + 1); };
+const lineWidth = function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; };
+const layoutWidth = function (this: JLayout) { return this.width; };
 const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "static getDesiredWidth(Ljava/lang/CharSequence;Landroid/text/TextPaint;)F": (cs: unknown, p: JTextPaint) => desiredWidth(cs, p),
   "static getDesiredWidth(Ljava/lang/CharSequence;IILandroid/text/TextPaint;)F": (cs: unknown, s: number, e: number, p: JTextPaint) => desiredWidth(sliceSpanned(cs, s, e), p),
@@ -1284,8 +1283,8 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   "getSpacingMultiplier()F": function (this: JLayout) { return this.spacingMult; },
   "getSpacingAdd()F": function (this: JLayout) { return this.spacingAdd; },
   "getLineTop(I)I": function (this: JLayout, i: number) { return this.lineTop(Math.min(i, this.lines.length)); },
-  "getLineBottom(I)I": function (this: JLayout, i: number) { return this.lineTop(Math.min(i, this.lines.length - 1) + 1); },
-  "getLineBottom(IZ)I": function (this: JLayout, i: number) { return this.lineTop(Math.min(i, this.lines.length - 1) + 1); },
+  "getLineBottom(I)I": lineBottom,
+  "getLineBottom(IZ)I": lineBottom,
   "getLineBaseline(I)I": function (this: JLayout, i: number) { return this.baseline(i); },
   "getLineAscent(I)I": function (this: JLayout, i: number) { return this.tops ? this.lineTop(i) - this.baseline(i) : Math.round(this.asc); },
   "getLineDescent(I)I": function (this: JLayout, i: number) { return this.tops ? this.lineTop(i + 1) - this.baseline(i) : Math.round(this.desc); },
@@ -1298,13 +1297,13 @@ const layoutMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getLineLeft(I)F": function (this: JLayout, i: number) { return this.lines[i] ? this.lineLeft(this.lines[i]) : 0; },
   "getLineRight(I)F": function (this: JLayout, i: number) { const line = this.lines[i]; return line ? this.lineLeft(line) + line.width : 0; },
-  "getLineWidth(I)F": function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; },
-  "getLineMax(I)F": function (this: JLayout, i: number) { return this.lines[i]?.width ?? 0; },
-  "getHeight()I": function (this: JLayout) { return this.tops ? this.tops[this.tops.length - 1] : this.lines.length * this.lineHeight() + this.padTop + this.padBottom; },
-  "getWidth()I": function (this: JLayout) { return this.width; },
+  "getLineWidth(I)F": lineWidth,
+  "getLineMax(I)F": lineWidth,
+  "getHeight()I": function (this: JLayout) { return this.height(); },
+  "getWidth()I": layoutWidth,
   "getText()Ljava/lang/CharSequence;": function (this: JLayout) { return this.src ?? this.text; },
   "getPaint()Landroid/text/TextPaint;": function (this: JLayout) { return this.paint; },
-  "getEllipsizedWidth()I": function (this: JLayout) { return this.width; },
+  "getEllipsizedWidth()I": layoutWidth,
   "getTopPadding()I": function (this: JLayout) { return -this.padTop; },
   "getBottomPadding()I": function (this: JLayout) { return this.padBottom; },
   ...stubs(0, "isFallbackLineSpacingEnabled()Z", "getUseFallbackLineSpacing()Z",
@@ -1475,7 +1474,7 @@ rt.register({
     "setUseLineSpacingFromFallbacks(Z)Landroid/text/StaticLayout$Builder;": slSetter(),
     "setLineBreakConfig(Landroid/graphics/text/LineBreakConfig;)Landroid/text/StaticLayout$Builder;": slSetter(),
     "build()Landroid/text/StaticLayout;": driven(function* (this: JSLBuilder): Gen {
-      const layout = yield mkSpannedLayout(this.cs, this.p, this.w, this.smult, this.sadd, this.maxLines, this.incl, this.breakStrategy);
+      const layout = yield setupSpannedLayout(new JStaticLayout(), this.cs, this.p, this.w, this.smult, this.sadd, this.maxLines, this.incl, this.breakStrategy);
       layout.alignment = this.alignment; return layout;
     }),
   },
@@ -1488,10 +1487,6 @@ rt.register({ name: "android/text/StaticLayout", ctor: JStaticLayout, sup: "andr
 
     },
 } });
-function mkSpannedLayout(cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy: number = 0) {
-  const l = new JStaticLayout();
-  return setupSpannedLayout(l, cs, p, w, mult, add, maxLines, includePad, breakStrategy);
-}
 const setupSpannedLayout = driven(function* setupSpannedLayout(l: JStaticLayout, cs: unknown, p: JTextPaint, w: number, mult: number, add: number, maxLines: number, includePad: boolean, breakStrategy: number = 0): Gen<JStaticLayout> {
   l.text = spannedString(cs); l.src = cs; l.paint = p; l.width = Math.max(0, w);
   l.spacingMult = mult; l.spacingAdd = add; l.includePad = includePad; l.breakStrategy = breakStrategy;
@@ -1502,7 +1497,7 @@ const setupSpannedLayout = driven(function* setupSpannedLayout(l: JStaticLayout,
   return l;
 });
 
-// Layout$Alignment enum + TextDirectionHeuristics
+// Layout$Alignment enum + LineBreakConfig
 mkEnumSet("android/text/Layout$Alignment", ["ALIGN_NORMAL", "ALIGN_OPPOSITE", "ALIGN_CENTER"]);
 rt.markers("android/graphics/text/LineBreakConfig");
 rt.register({
@@ -1523,9 +1518,9 @@ rt.register({
       bestDateTimePattern(localeTag(locale), skeleton),
     "static getDateFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "M/d/yy"),
     "static getTimeFormat(Landroid/content/Context;)Ljava/text/DateFormat;": () => newObj("java/text/SimpleDateFormat", "(Ljava/lang/String;)V", "h:mm a"),
-    "static format(Ljava/lang/CharSequence;J)Ljava/lang/CharSequence;": (fmt: unknown, t: bigint) => formatDate(spannedString(fmt), Number(t)),
-    "static format(Ljava/lang/CharSequence;Ljava/util/Date;)Ljava/lang/CharSequence;": (fmt: unknown, d: JDate | null) => formatDate(spannedString(fmt), d?.t ?? Date.now()),
-    "static format(Ljava/lang/CharSequence;Ljava/util/Calendar;)Ljava/lang/CharSequence;": (fmt: unknown, c: JCalendar) => formatDate(spannedString(fmt), c.d.getTime()),
+    "static format(Ljava/lang/CharSequence;J)Ljava/lang/CharSequence;": (fmt: unknown, t: bigint) => formatPattern(spannedString(fmt), Number(t)),
+    "static format(Ljava/lang/CharSequence;Ljava/util/Date;)Ljava/lang/CharSequence;": (fmt: unknown, d: JDate | null) => formatPattern(spannedString(fmt), d ? d.t : rt.npe()),
+    "static format(Ljava/lang/CharSequence;Ljava/util/Calendar;)Ljava/lang/CharSequence;": (fmt: unknown, c: JCalendar) => formatPattern(spannedString(fmt), c.ms, c.tz.id),
   },
 });
 

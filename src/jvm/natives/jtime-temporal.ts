@@ -9,13 +9,13 @@ import {
   type Methods, type Parts, T, TT, TEMPORAL, UNIT, FIELD, AMOUNT, ADJUSTER, ACCESSOR, U, UNIT_NANOS, UNIT_SECONDS, FIELD_RANGE, FIELD_NAMES,
   FIELD_ORD, LONG_FIELDS, MONTHS, DAYS, CUM_DAYS, JLocalDate, JLocalTime, JLocalDateTime, JInstant, JZoneId, JZoneOffset, JOffsetBased,
   JOffsetDateTime, JZonedDateTime, JOffsetTime, JYearMonth, JYear, JMonthDay, JDuration, JPeriod, JClock, isTimeField, isDateField, camel,
-  check, noField, noUnit, unsupported, dtErr, npe, isChrono, isField, isUnit, floorDiv, floorMod, pad, isLeap, monthLen, dayOfYear,
+  check, noField, noUnit, unsupported, dtErr, npe, iae, isChrono, isField, isUnit, floorDiv, floorMod, pad, isLeap, monthLen, dayOfYear,
   dayOfWeek, mkDate, dateOf, dateClamped, ofYearDay, epochDay, dateFromEpochDay, datePlus, dateWith, dateCmp, dateUntil, mkTime,
   timeOf, nanoOfDay, secOfDay, timeOfSod, timeOfNod, timePlus, timeWith, truncNod, untilNanos, carried, mkLdt, localEpoch, ldtOfEpoch,
   ldtPlus, ldtCmp, mkInstant, instantOfMs, instantMs, offsetOf, offsetHMS, parseOffsetId, zoneOf, sysZone, offsetAt, standardOffset,
   mkOdt, mkZdt, epochSec, odtOfEpoch, zdtOfEpoch, zdtLocal, mkOffsetTime, ymOf, yearOf, monthDayOf, clockIn, clockInstant, withClock,
   nowIn, mkDuration, periodBetween, parts, fieldOf, cannot, toLocalDate, toLocalTime, toLdt, toInstant, toOffset, toZone, toZdt, toOdt,
-  toOffsetTime, toYearMonth, longHash, rotl, dateText, timeText, ldtText, instantText, dateHash, ldtHash,
+  toOffsetTime, toYearMonth, longHash, rotl, dateText, timeText, ldtText, instantText, dateHash, ldtHash, durationSteps, periodSteps,
 } from "./jtime-iso";
 import { type JDateTimeFormatter, dtfFormat, dtfParse, isoFormatter, displayNames, zoneName, tagOf, TEXT_STYLES } from "./jtime-pattern";
 
@@ -100,19 +100,11 @@ function plusUnit<V>(k: Kind<V>, t: V, n: number, u: unknown): unknown {
   return k.unitOk(u.ord) ? k.plus(t, n, u.ord) : noUnit(u);
 }
 function plusAmount<V>(k: Kind<V>, t: V, a: unknown, sign: number): unknown {
-  if (a instanceof JDuration) {
-    let r = a.s ? plusUnit(k, t, sign * a.s, chronoUnits[U.SECONDS]) as V : t;
-    if (a.ns) r = plusUnit(k, r, sign * a.ns, chronoUnits[U.NANOS]) as V;
-    return r;
-  }
-  if (a instanceof JPeriod) {
+  const steps = a instanceof JDuration ? durationSteps(a) : a instanceof JPeriod ? periodSteps(a) : null;
+  if (steps) {
     let r = t;
-    if (a.y && a.m) r = plusUnit(k, r, sign * (a.y * 12 + a.m), chronoUnits[U.MONTHS]) as V;
-    else {
-      if (a.y) r = plusUnit(k, r, sign * a.y, chronoUnits[U.YEARS]) as V;
-      if (a.m) r = plusUnit(k, r, sign * a.m, chronoUnits[U.MONTHS]) as V;
-    }
-    return a.d ? plusUnit(k, r, sign * a.d, chronoUnits[U.DAYS]) : r;
+    for (const [n, u] of steps) if (n) r = plusUnit(k, r, sign * n, chronoUnits[u]) as V;
+    return r;
   }
   if (a == null) npe("amount");
   return vcall(a, sign > 0 ? "addTo" : "subtractFrom", `(${TEMPORAL})${TEMPORAL}`, t);
@@ -163,13 +155,16 @@ function temporalMethods<V extends JObj>(k: Kind<V>, extraRet: string[], cmp: (a
   return m;
 }
 /** compareTo plus the isAfter/isBefore/isEqual trio; ODT and ZDT order by instant for the trio */
-export function ordering<V>(desc: string, cmp: (a: V, b: V) => number, isCmp = cmp): Methods { return {
-  "compareTo(Ljava/lang/Object;)I": function (this: V, o: V) { if (o == null) npe("other"); return Math.sign(cmp(this, o)); },
-  [`compareTo(${desc})I`]: function (this: V, o: V) { if (o == null) npe("other"); return Math.sign(cmp(this, o)); },
-  [`isAfter(${desc})Z`]: function (this: V, o: V) { return +(isCmp(this, o) > 0); },
-  [`isBefore(${desc})Z`]: function (this: V, o: V) { return +(isCmp(this, o) < 0); },
-  [`isEqual(${desc})Z`]: function (this: V, o: V) { return +(isCmp(this, o) === 0); },
-}; }
+export function ordering<V>(desc: string, cmp: (a: V, b: V) => number, isCmp = cmp): Methods {
+  const compareTo = function (this: V, o: V) { if (o == null) npe("other"); return Math.sign(cmp(this, o)); };
+  return {
+    "compareTo(Ljava/lang/Object;)I": compareTo,
+    [`compareTo(${desc})I`]: compareTo,
+    [`isAfter(${desc})Z`]: function (this: V, o: V) { return +(isCmp(this, o) > 0); },
+    [`isBefore(${desc})Z`]: function (this: V, o: V) { return +(isCmp(this, o) < 0); },
+    [`isEqual(${desc})Z`]: function (this: V, o: V) { return +(isCmp(this, o) === 0); },
+  };
+}
 /** parse(CharSequence[, DateTimeFormatter]) and from(TemporalAccessor) for one kind */
 function parsers<V>(cls: string, iso: string, from: (t: unknown) => V): Methods {
   const self = `L${cls};`, cs = "Ljava/lang/CharSequence;";
@@ -237,7 +232,7 @@ for (const c of [CHRONO_DATE, CHRONO_LDT, CHRONO_ZDT]) {
 /** what the ISO value classes outside the chrono hierarchy implement */
 const VALUE_IFACES = [TEMPORAL.slice(1, -1), ADJUSTER.slice(1, -1), "java/lang/Comparable", "java/io/Serializable"];
 
-export const chronoFields: JSimpleEnum[] = mkEnumSet(TT + "ChronoField", FIELD_NAMES, {
+const chronoFields: JSimpleEnum[] = mkEnumSet(TT + "ChronoField", FIELD_NAMES, {
   "toString()Ljava/lang/String;": function (this: JSimpleEnum) { return camel(this.ename); },
   "getDisplayName(Ljava/util/Locale;)Ljava/lang/String;": function (this: JSimpleEnum) { return camel(this.ename); },
   "isDateBased()Z": function (this: JSimpleEnum) { return +isDateField(this.ename); },
@@ -256,7 +251,7 @@ export const chronoUnits: JSimpleEnum[] = mkEnumSet(TT + "ChronoUnit", Object.ke
   "isDurationEstimated()Z": function (this: JSimpleEnum) { return +(this.ord >= U.DAYS); },
   "isDateBased()Z": function (this: JSimpleEnum) { return +(this.ord >= U.DAYS && this.ord < U.FOREVER); },
   "isTimeBased()Z": function (this: JSimpleEnum) { return +(this.ord < U.DAYS); },
-  "toString()Ljava/lang/String;": function (this: JSimpleEnum) { return this.ename.split("_").map((w) => w[0] + w.slice(1).toLowerCase()).join(""); },
+  "toString()Ljava/lang/String;": function (this: JSimpleEnum) { return camel(this.ename); },
   [`between(${TEMPORAL}${TEMPORAL})J`]: function (this: JSimpleEnum, a: unknown, b: unknown) { return vcall(a, "until", `(${TEMPORAL}${UNIT})J`, b, this); },
   [`addTo(${TEMPORAL}J)${TEMPORAL}`]: function (this: JSimpleEnum, t: unknown, n: bigint) { return vcall(t, "plus", `(J${UNIT})${TEMPORAL}`, n, this); },
   [`isSupportedBy(${TEMPORAL})Z`]: function (this: JSimpleEnum, t: unknown) { return vcall(t, "isSupported", `(${UNIT})Z`, this); },
@@ -271,7 +266,7 @@ const checkedValue = (r: JValueRange, v: bigint, f: JSimpleEnum | null) => {
 rt.register({
   name: TT + "ValueRange", ctor: JValueRange, ifaces: ["java/io/Serializable"],
   methods: {
-    [`static of(JJ)L${TT}ValueRange;`]: (a: bigint, b: bigint) => (a > b ? rt.mkThrowable("java/lang/IllegalArgumentException", "Minimum value must be less than maximum value") : valueRange(Number(a), Number(b))),
+    [`static of(JJ)L${TT}ValueRange;`]: (a: bigint, b: bigint) => (a > b ? iae("Minimum value must be less than maximum value") : valueRange(Number(a), Number(b))),
     "getMinimum()J": function (this: JValueRange) { return BigInt(this.min); },
     "getLargestMinimum()J": function (this: JValueRange) { return BigInt(this.min); },
     "getMaximum()J": function (this: JValueRange) { return BigInt(this.max); },
@@ -730,11 +725,11 @@ rt.register({
     [`static system(L${T}ZoneId;)L${T}Clock;`]: (z: JZoneId) => clockIn(z ?? npe("zone")),
     [`static fixed(L${T}Instant;L${T}ZoneId;)L${T}Clock;`]: (i: JInstant, z: JZoneId) => clockIn(z ?? npe("zone"), i ?? npe("instant")),
     [`static offset(L${T}Clock;L${T}Duration;)L${T}Clock;`]: (c: JClock, d: JDuration) =>
-      Object.assign(clockIn(c.zone, c.fixed, c.offsetMs + d.s * 1000 + floorDiv(d.ns, 1e6)), { unavailable: c.unavailable }),
+      clockIn(c.zone, c.fixed, c.offsetMs + d.s * 1000 + floorDiv(d.ns, 1e6), c.unavailable),
     [`instant()L${T}Instant;`]: function (this: JClock) { return clockInstant(this); },
     "millis()J": function (this: JClock) { return BigInt(instantMs(clockInstant(this))); },
     [`getZone()L${T}ZoneId;`]: function (this: JClock) { return this.zone; },
-    [`withZone(L${T}ZoneId;)L${T}Clock;`]: function (this: JClock, z: JZoneId) { return Object.assign(clockIn(z, this.fixed, this.offsetMs), { unavailable: this.unavailable }); },
+    [`withZone(L${T}ZoneId;)L${T}Clock;`]: function (this: JClock, z: JZoneId) { return clockIn(z, this.fixed, this.offsetMs, this.unavailable); },
   },
 });
 // the ISO calendar is the only chronology this runtime offers

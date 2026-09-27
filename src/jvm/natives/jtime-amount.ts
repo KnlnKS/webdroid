@@ -6,7 +6,7 @@ import { csText } from "./jchars";
 import { newArrayList } from "./jutil";
 import {
   type Methods, T, TEMPORAL, UNIT, AMOUNT, U, UNIT_NANOS, UNIT_SECONDS, JDuration, JPeriod, dtErr, unsupported, npe, noUnit, isUnit, check,
-  floorDiv, carried, mkDuration, periodOf, periodBetween, longHash, rotl,
+  floorDiv, carried, mkDuration, periodOf, periodBetween, longHash, rotl, durationSteps, periodSteps,
 } from "./jtime-iso";
 import { chronoUnits, ordering, lazyStatics } from "./jtime-temporal";
 
@@ -23,6 +23,7 @@ function durationOf(n: number, u: unknown): JDuration {
   return mkDuration(n * UNIT_SECONDS[u.ord], 0);
 }
 const durationPlus = (d: JDuration, n: number, u: unknown) => { const x = durationOf(n, u); return mkDuration(d.s + x.s, d.ns + x.ns); };
+const durationMinus = (d: JDuration, n: number, u: unknown) => { const x = durationOf(n, u); return mkDuration(d.s - x.s, d.ns - x.ns); };
 function durationText(d: JDuration): string {
   if (!d.s && !d.ns) return "PT0S";
   const total = d.s < 0 && d.ns > 0 ? d.s + 1 : d.s;
@@ -51,9 +52,12 @@ const durationUnits: Methods = {};
 for (const [name, u] of [["Days", U.DAYS], ["Hours", U.HOURS], ["Minutes", U.MINUTES], ["Seconds", U.SECONDS], ["Millis", U.MILLIS], ["Nanos", U.NANOS]] as const) {
   durationUnits[`static of${name}(J)L${T}Duration;`] = (n: bigint) => durationOf(Number(n), chronoUnits[u]);
   durationUnits[`plus${name}(J)L${T}Duration;`] = function (this: JDuration, n: bigint) { return durationPlus(this, Number(n), chronoUnits[u]); };
-  durationUnits[`minus${name}(J)L${T}Duration;`] = function (this: JDuration, n: bigint) { const d = durationOf(Number(n), chronoUnits[u]); return mkDuration(this.s - d.s, this.ns - d.ns); };
+  durationUnits[`minus${name}(J)L${T}Duration;`] = function (this: JDuration, n: bigint) { return durationMinus(this, Number(n), chronoUnits[u]); };
 }
 const wholeUnits = (d: JDuration, unit: number) => Math.trunc(d.s / unit);
+function durationSeconds(this: JDuration) { return BigInt(this.s); }
+function durationNano(this: JDuration) { return this.ns; }
+function durationDays(this: JDuration) { return BigInt(wholeUnits(this, 86400)); }
 rt.register({
   name: T + "Duration", ctor: JDuration, ifaces: [AMOUNT.slice(1, -1), "java/lang/Comparable", "java/io/Serializable"],
   statics: lazyStatics({ ZERO: () => mkDuration(0, 0) }),
@@ -65,14 +69,14 @@ rt.register({
     [`static between(${TEMPORAL}${TEMPORAL})L${T}Duration;`]: (a: unknown, b: unknown) =>
       after(vcall(a, "until", `(${TEMPORAL}${UNIT})J`, b, chronoUnits[U.NANOS]), (n: bigint) => durationOfNanos(n)),
     [`static parse(Ljava/lang/CharSequence;)L${T}Duration;`]: (s: unknown) => after(csText(s ?? npe("text")), parseDuration),
-    "getSeconds()J": function (this: JDuration) { return BigInt(this.s); },
-    "getNano()I": function (this: JDuration) { return this.ns; },
+    "getSeconds()J": durationSeconds,
+    "getNano()I": durationNano,
     [`get(${UNIT})J`]: function (this: JDuration, u: JSimpleEnum) { return u?.ord === U.SECONDS ? BigInt(this.s) : u?.ord === U.NANOS ? BigInt(this.ns) : noUnit(u); },
     "getUnits()Ljava/util/List;": () => newArrayList([chronoUnits[U.SECONDS], chronoUnits[U.NANOS]]),
     [`plus(L${T}Duration;)L${T}Duration;`]: function (this: JDuration, d: JDuration) { return mkDuration(this.s + (d ?? npe("duration")).s, this.ns + d.ns); },
     [`minus(L${T}Duration;)L${T}Duration;`]: function (this: JDuration, d: JDuration) { return mkDuration(this.s - (d ?? npe("duration")).s, this.ns - d.ns); },
     [`plus(J${UNIT})L${T}Duration;`]: function (this: JDuration, n: bigint, u: unknown) { return durationPlus(this, Number(n), u); },
-    [`minus(J${UNIT})L${T}Duration;`]: function (this: JDuration, n: bigint, u: unknown) { const d = durationOf(Number(n), u); return mkDuration(this.s - d.s, this.ns - d.ns); },
+    [`minus(J${UNIT})L${T}Duration;`]: function (this: JDuration, n: bigint, u: unknown) { return durationMinus(this, Number(n), u); },
     [`multipliedBy(J)L${T}Duration;`]: function (this: JDuration, n: bigint) { return durationOfNanos(durNanos(this) * n); },
     [`dividedBy(J)L${T}Duration;`]: function (this: JDuration, n: bigint) { if (!n) throw divideByZero(); return durationOfNanos(durNanos(this) / n); },
     [`dividedBy(L${T}Duration;)J`]: function (this: JDuration, d: JDuration) {
@@ -89,23 +93,23 @@ rt.register({
       const unit = BigInt(UNIT_NANOS[u.ord]);
       return durationOfNanos(durNanos(this) / unit * unit);
     },
-    "toDays()J": function (this: JDuration) { return BigInt(wholeUnits(this, 86400)); },
+    "toDays()J": durationDays,
     "toHours()J": function (this: JDuration) { return BigInt(wholeUnits(this, 3600)); },
     "toMinutes()J": function (this: JDuration) { return BigInt(wholeUnits(this, 60)); },
-    "toSeconds()J": function (this: JDuration) { return BigInt(this.s); },
+    "toSeconds()J": durationSeconds,
     "toMillis()J": function (this: JDuration) { return BigInt(this.s) * 1000n + BigInt(floorDiv(this.ns, 1e6)); },
     "toNanos()J": function (this: JDuration) { return durNanos(this); },
-    "toDaysPart()J": function (this: JDuration) { return BigInt(wholeUnits(this, 86400)); },
+    "toDaysPart()J": durationDays,
     "toHoursPart()I": function (this: JDuration) { return wholeUnits(this, 3600) % 24; },
     "toMinutesPart()I": function (this: JDuration) { return wholeUnits(this, 60) % 60; },
     "toSecondsPart()I": function (this: JDuration) { return this.s % 60; },
     "toMillisPart()I": function (this: JDuration) { return floorDiv(this.ns, 1e6); },
-    "toNanosPart()I": function (this: JDuration) { return this.ns; },
+    "toNanosPart()I": durationNano,
     "isNegative()Z": function (this: JDuration) { return +(this.s < 0); },
     "isZero()Z": function (this: JDuration) { return +(this.s === 0 && this.ns === 0); },
     "isPositive()Z": function (this: JDuration) { return +(this.s > 0 || (this.s === 0 && this.ns > 0)); },
-    [`addTo(${TEMPORAL})${TEMPORAL}`]: function (this: JDuration, t: unknown) { return applyParts(t, "plus", [[this.s, U.SECONDS], [this.ns, U.NANOS]]); },
-    [`subtractFrom(${TEMPORAL})${TEMPORAL}`]: function (this: JDuration, t: unknown) { return applyParts(t, "minus", [[this.s, U.SECONDS], [this.ns, U.NANOS]]); },
+    [`addTo(${TEMPORAL})${TEMPORAL}`]: function (this: JDuration, t: unknown) { return applyParts(t, "plus", durationSteps(this)); },
+    [`subtractFrom(${TEMPORAL})${TEMPORAL}`]: function (this: JDuration, t: unknown) { return applyParts(t, "minus", durationSteps(this)); },
     ...ordering(`L${T}Duration;`, (a: JDuration, b: JDuration) => a.s - b.s || a.ns - b.ns),
     "equals(Ljava/lang/Object;)Z": function (this: JDuration, o: unknown) { return +(o instanceof JDuration && o.s === this.s && o.ns === this.ns); },
     "hashCode()I": function (this: JDuration) { return (longHash(this.s) + 51 * this.ns) | 0; },
@@ -122,9 +126,6 @@ function parsePeriod(text: string): JPeriod {
 }
 const periodText = (p: JPeriod) => (p.y || p.m || p.d ? `P${p.y ? p.y + "Y" : ""}${p.m ? p.m + "M" : ""}${p.d ? p.d + "D" : ""}` : "P0D");
 const periodFrom = (a: unknown) => (a instanceof JPeriod ? a : a == null ? npe("amount") : dtErr("Unable to obtain Period from TemporalAmount"));
-/** Period.addTo: whole months when both years and months are set, then days */
-const periodSteps = (p: JPeriod): [number, number][] =>
-  [...(p.y && p.m ? [[p.y * 12 + p.m, U.MONTHS]] : [[p.y, U.YEARS], [p.m, U.MONTHS]]) as [number, number][], [p.d, U.DAYS]];
 const PERIOD_PARTS: [string, "y" | "m" | "d"][] = [["Years", "y"], ["Months", "m"], ["Days", "d"]];
 const withPart = (p: JPeriod, k: "y" | "m" | "d", v: number) => Object.assign(periodOf(p.y, p.m, p.d), { [k]: v });
 rt.register({
@@ -135,7 +136,7 @@ rt.register({
     [`static ofWeeks(I)L${T}Period;`]: (w: number) => periodOf(0, 0, w * 7),
     [`static between(L${T}LocalDate;L${T}LocalDate;)L${T}Period;`]: periodBetween,
     [`static parse(Ljava/lang/CharSequence;)L${T}Period;`]: (s: unknown) => after(csText(s ?? npe("text")), parsePeriod),
-    [`static from(${AMOUNT})L${T}Period;`]: (a: unknown) => (a instanceof JPeriod ? a : dtErr("Unable to obtain Period from TemporalAmount")),
+    [`static from(${AMOUNT})L${T}Period;`]: periodFrom,
     ...Object.fromEntries(PERIOD_PARTS.flatMap(([name, k]) => [
       [`static of${name}(I)L${T}Period;`, (n: number) => withPart(periodOf(0, 0, 0), k, n)],
       [`get${name}()I`, function (this: JPeriod) { return this[k]; }],

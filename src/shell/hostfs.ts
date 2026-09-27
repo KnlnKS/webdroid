@@ -4,8 +4,7 @@
  * Android-facing sees `FileSystemDirectoryHandle` and nothing else.
  *
  * Where the API does not exist (Firefox, Safari), the same interface is served out of the
- * Origin Private File System, so the code
- * above has one path rather than two. A user who *cancels* the real picker still gets null.
+ * Origin Private File System, so the code above has one path rather than two. A user who *cancels* the real picker still gets null.
  */
 
 import { openDb } from "./idb";

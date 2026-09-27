@@ -71,6 +71,14 @@ export async function dispatchWindowInsets(root: JView) {
     "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", rootWindowInsets(root));
 }
 
+// the stable and system-window forms both report the bars' insets
+const sysInsets = function (this: JWindowInsets) { return sysIns(this); };
+const sysInsetLeft = function (this: JWindowInsets) { return sysIns(this).left; };
+const sysInsetTop = function (this: JWindowInsets) { return sysIns(this).top; };
+const sysInsetRight = function (this: JWindowInsets) { return sysIns(this).right; };
+const sysInsetBottom = function (this: JWindowInsets) { return sysIns(this).bottom; };
+const hasSysInsets = function (this: JWindowInsets) { const s = sysIns(this); return s.left || s.top || s.right || s.bottom ? 1 : 0; };
+const self = function (this: JWindowInsets) { return this; };
 const wiMethods: NativeSpec["methods"] = {
   "<init>(Landroid/view/WindowInsets;)V": function (this: JWindowInsets, o: JWindowInsets | null) {
     if (o) { this.ins = o.ins.slice(); this.vis = o.vis; this.consumedV = o.consumedV; }
@@ -78,28 +86,28 @@ const wiMethods: NativeSpec["methods"] = {
   "getInsets(I)Landroid/graphics/Insets;": function (this: JWindowInsets, m: number) { return insUnion(this, m, false); },
   "getInsetsIgnoringVisibility(I)Landroid/graphics/Insets;": function (this: JWindowInsets, m: number) { return insUnion(this, m, true); },
   "isVisible(I)Z": function (this: JWindowInsets, m: number) { return (this.vis & m) === m ? 1 : 0; },
-  "getSystemWindowInsets()Landroid/graphics/Insets;": function (this: JWindowInsets) { return sysIns(this); },
-  "getStableInsets()Landroid/graphics/Insets;": function (this: JWindowInsets) { return sysIns(this); },
+  "getSystemWindowInsets()Landroid/graphics/Insets;": sysInsets,
+  "getStableInsets()Landroid/graphics/Insets;": sysInsets,
   "getSystemGestureInsets()Landroid/graphics/Insets;": function (this: JWindowInsets) { return insUnion(this, 1 << IT_GESTURES, true); },
   "getMandatorySystemGestureInsets()Landroid/graphics/Insets;": function (this: JWindowInsets) { return insUnion(this, 1 << IT_MANDATORY, true); },
   "getTappableElementInsets()Landroid/graphics/Insets;": function (this: JWindowInsets) { return insUnion(this, 1 << IT_TAPPABLE, true); },
-  "getSystemWindowInsetLeft()I": function (this: JWindowInsets) { return sysIns(this).left; },
-  "getSystemWindowInsetTop()I": function (this: JWindowInsets) { return sysIns(this).top; },
-  "getSystemWindowInsetRight()I": function (this: JWindowInsets) { return sysIns(this).right; },
-  "getSystemWindowInsetBottom()I": function (this: JWindowInsets) { return sysIns(this).bottom; },
-  "getStableInsetLeft()I": function (this: JWindowInsets) { return sysIns(this).left; },
-  "getStableInsetTop()I": function (this: JWindowInsets) { return sysIns(this).top; },
-  "getStableInsetRight()I": function (this: JWindowInsets) { return sysIns(this).right; },
-  "getStableInsetBottom()I": function (this: JWindowInsets) { return sysIns(this).bottom; },
-  "hasSystemWindowInsets()Z": function (this: JWindowInsets) { const s = sysIns(this); return s.left || s.top || s.right || s.bottom ? 1 : 0; },
-  "hasStableInsets()Z": function (this: JWindowInsets) { const s = sysIns(this); return s.left || s.top || s.right || s.bottom ? 1 : 0; },
+  "getSystemWindowInsetLeft()I": sysInsetLeft,
+  "getSystemWindowInsetTop()I": sysInsetTop,
+  "getSystemWindowInsetRight()I": sysInsetRight,
+  "getSystemWindowInsetBottom()I": sysInsetBottom,
+  "getStableInsetLeft()I": sysInsetLeft,
+  "getStableInsetTop()I": sysInsetTop,
+  "getStableInsetRight()I": sysInsetRight,
+  "getStableInsetBottom()I": sysInsetBottom,
+  "hasSystemWindowInsets()Z": hasSysInsets,
+  "hasStableInsets()Z": hasSysInsets,
   "hasInsets()Z": function (this: JWindowInsets) { return this.ins.some((i) => i) ? 1 : 0; },
   "isConsumed()Z": function (this: JWindowInsets) { return this.consumedV ? 1 : 0; },
   ...stubs(0, "isRound()Z"),
   ...stubs(null, "getDisplayCutout()Landroid/view/DisplayCutout;", "getRoundedCorner(I)Landroid/view/RoundedCorner;",
     "getPrivacyIndicatorBounds()Landroid/graphics/Rect;"),
-  "consumeDisplayCutout()Landroid/view/WindowInsets;": function (this: JWindowInsets) { return this; },
-  "consumeStableInsets()Landroid/view/WindowInsets;": function (this: JWindowInsets) { return this; },
+  "consumeDisplayCutout()Landroid/view/WindowInsets;": self,
+  "consumeStableInsets()Landroid/view/WindowInsets;": self,
   // Consuming the bars is how a parent tells the rest of the tree "I have handled these": AOSP's
   // ViewGroup stops walking down as soon as the returned insets report themselves consumed.
   "consumeSystemWindowInsets()Landroid/view/WindowInsets;": function (this: JWindowInsets) {

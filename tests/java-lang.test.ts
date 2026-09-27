@@ -144,6 +144,11 @@ describe("math", () => {
     expect(await vcall(math, "getExponent", "(F)I", 2 ** -149)).toBe(-127);
   });
 
+  test("Math.abs wraps at MIN_VALUE", async () => {
+    expect(await vcall(math, "abs", "(I)I", -2147483648)).toBe(-2147483648);
+    expect(await vcall(math, "abs", "(J)J", -9223372036854775808n)).toBe(-9223372036854775808n);
+  });
+
   test("Math.copySign copies negative and positive zero signs", async () => {
     expect(await vcall(math, "copySign", "(DD)D", 3.5, -0)).toBe(-3.5);
     expect(await vcall(math, "copySign", "(DD)D", -3.5, 0)).toBe(3.5);
@@ -413,6 +418,13 @@ describe("string-codepoints", () => {
     const valueOf = (rt.link("java/lang/String").ctor as any)[mangleMethod("valueOf", "(Ljava/lang/Object;)Ljava/lang/String;")];
     expect(await valueOf(1)).toBe("1");
     expect(await valueOf(42n)).toBe("42");
+  });
+});
+
+describe("string-trim", () => {
+  test("String.trim removes a proc cmdline terminator", () => {
+    const trim = String.prototype[mangleMethod("trim", "()Ljava/lang/String;") as keyof String] as unknown as (this: string) => string;
+    expect(trim.call("\0 com.example.app\0")).toBe("com.example.app");
   });
 });
 

@@ -57,6 +57,7 @@ pub const Op = struct {
     pub const f64_eq: u8 = 0x61;
     pub const f64_ne: u8 = 0x62;
     pub const f64_lt: u8 = 0x63;
+    pub const f64_gt: u8 = 0x64;
     pub const i32_clz: u8 = 0x67;
     pub const i32_add: u8 = 0x6a;
     pub const i32_sub: u8 = 0x6b;

@@ -5,12 +5,12 @@ import { parkTimeout } from "../yield";
 import { after, vcall, vcallOn, newObj, JThread, JEnum, enumValueOf, setCurThread, curThread, park, defineException, vcallAsync } from "./jlang";
 import { JList, newArrayList, toJsArray } from "./jutil";
 import { JRandom, randomSeed } from "./jrandom";
-import { mangleMethod, splitSig, jarray } from "../abi";
+import { splitSig, jarray } from "../abi";
 import { clearGuestTimeout, guestNow, setGuestTimeout, type GuestTimer } from "../../guest-clock";
 
 // ── TimeUnit (enum-like native)
 export class JTimeUnit extends JEnum { ms = 1; ns = 1000000n; }
-// enum constant, ordinal, the to* method's name, one unit in nanoseconds
+// enum constant, the to* method's suffix, one unit in nanoseconds
 const TU_DEFS: [string, string, bigint][] = [
   ["NANOSECONDS", "Nanos", 1n], ["MICROSECONDS", "Micros", 1000n], ["MILLISECONDS", "Millis", 1000000n],
   ["SECONDS", "Seconds", 1000000000n], ["MINUTES", "Minutes", 60000000000n],
@@ -173,14 +173,18 @@ const futureGetTimed = driven(function* futureGetTimed(f: JFuture, d: bigint, u:
   }
   return futureGet(f);
 });
+/** the Future accessors webdroid/Future and FutureTask share */
+const futureAccessors: NativeSpec["methods"] = {
+  "get()Ljava/lang/Object;": function (this: JFuture) { return futureGet(this); },
+  "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFuture, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
+  "isDone()Z": function (this: JFuture) { return this.done; },
+  "isCancelled()Z": function (this: JFuture) { return this.cancelled; },
+};
 rt.register({
   name: "webdroid/Future", ctor: JFuture,
   ifaces: ["java/util/concurrent/Future", "java/util/concurrent/ScheduledFuture"],
   methods: {
-    "get()Ljava/lang/Object;": function (this: JFuture) { return futureGet(this); },
-    "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFuture, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
-    "isDone()Z": function (this: JFuture) { return this.done; },
-    "isCancelled()Z": function (this: JFuture) { return this.cancelled; },
+    ...futureAccessors,
     "getDelay(Ljava/util/concurrent/TimeUnit;)J": function (this: JFuture, unit: JTimeUnit) {
       if (!unit) rt.npe();
       return tuConvert(BigInt(Math.trunc((this.deadline - guestNow()) * 1e6)), 1n, unit.ns);
@@ -522,11 +526,19 @@ const invokeForkJoinTasks = driven(function* invokeForkJoinTasks(tasks: JForkJoi
   if (tasks.length) yield vcall(tasks[0], "invoke", "()Ljava/lang/Object;");
   for (let i = 1; i < tasks.length; i++) yield vcall(tasks[i], "join", "()Ljava/lang/Object;");
 });
+const commonParallelism = () => Math.max(1, (navigator.hardwareConcurrency || 4) - 1);
+function commonPool(): JExecutor {
+  if (!commonForkJoinPool) {
+    const pool = rt.make("java/util/concurrent/ForkJoinPool") as JExecutor;
+    initScheduled.call(pool, commonParallelism());
+    commonForkJoinPool = pool;
+  }
+  return commonForkJoinPool;
+}
 const forkJoinMethods: NativeSpec["methods"] = {
   "<init>()V": function () {},
   "fork()Ljava/util/concurrent/ForkJoinTask;": function (this: JForkJoinTask) {
-    const pool = (rt.link("java/util/concurrent/ForkJoinPool").ctor as any)[mangleMethod("commonPool", "()Ljava/util/concurrent/ForkJoinPool;")]() as JExecutor;
-    return forkTask(this, pool);
+    return forkTask(this, commonPool());
   },
   "join()Ljava/lang/Object;": driven(function* (this: JForkJoinTask): Gen {
     if (this.future) {
@@ -570,15 +582,8 @@ rt.register({
       if (parallelism <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
       initScheduled.call(this, parallelism);
     },
-    "static commonPool()Ljava/util/concurrent/ForkJoinPool;": () => {
-      if (!commonForkJoinPool) {
-        const pool = rt.make("java/util/concurrent/ForkJoinPool") as JExecutor;
-        initScheduled.call(pool, Math.max(1, (navigator.hardwareConcurrency || 4) - 1));
-        commonForkJoinPool = pool;
-      }
-      return commonForkJoinPool;
-    },
-    "static getCommonPoolParallelism()I": () => Math.max(1, (navigator.hardwareConcurrency || 4) - 1),
+    "static commonPool()Ljava/util/concurrent/ForkJoinPool;": commonPool,
+    "static getCommonPoolParallelism()I": commonParallelism,
     "invoke(Ljava/util/concurrent/ForkJoinTask;)Ljava/lang/Object;": (task: unknown) => vcall(task, "invoke", "()Ljava/lang/Object;"),
     "execute(Ljava/util/concurrent/ForkJoinTask;)V": function (this: JExecutor, task: JForkJoinTask) { forkTask(task, this); },
     "submit(Ljava/util/concurrent/ForkJoinTask;)Ljava/util/concurrent/ForkJoinTask;": function (this: JExecutor, task: JForkJoinTask) { return forkTask(task, this); },
@@ -640,7 +645,7 @@ rt.register({
   ifaces: ["java/util/concurrent/ThreadFactory"],
   methods: {
     "newThread(Ljava/lang/Runnable;)Ljava/lang/Thread;": (r: unknown) => {
-      const t = new (rt.link("java/lang/Thread").ctor as typeof JThread)();
+      const t = rt.make("java/lang/Thread") as JThread;
       t.target = r;
       return t;
     },
@@ -715,7 +720,15 @@ rt.register({
   name: "java/util/concurrent/ThreadLocalRandom", ctor: JTlr, sup: "java/util/Random",
   methods: {
     "static current()Ljava/util/concurrent/ThreadLocalRandom;": () => threadLocalRandom,
-    "nextInt(II)I": function (this: JTlr, a: number, b: number) { return a + (this.next(31) % (b - a)); },
+    // uniform over [origin, bound); a range wider than an int draws until it lands inside
+    "nextInt(II)I": function (this: JTlr, origin: number, bound: number) {
+      if (origin >= bound) throw rt.mkThrowable("java/lang/IllegalArgumentException", "bound must be greater than origin");
+      const n = (bound - origin) | 0;
+      if (n > 0) return origin + this.bounded(n);
+      let r: number;
+      do r = this.next(32); while (r < origin || r >= bound);
+      return r;
+    },
   },
 });
 
@@ -908,10 +921,7 @@ rt.register({
       if (!this.cancelled) yield vcallOn(thread, this, "done", "()V");
     }),
     "done()V": function () {},
-    "get()Ljava/lang/Object;": function (this: JFutureTask) { return futureGet(this); },
-    "get(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;": function (this: JFutureTask, d: bigint, u: JTimeUnit) { return futureGetTimed(this, d, u); },
-    "isDone()Z": function (this: JFutureTask) { return this.done; },
-    "isCancelled()Z": function (this: JFutureTask) { return this.cancelled; },
+    ...futureAccessors,
     "cancel(Z)Z": driven(function* (this: JFutureTask, interrupt: number): Gen {
       if (this.done) return 0;
       cancelFuture(this, interrupt); this.wake(null);

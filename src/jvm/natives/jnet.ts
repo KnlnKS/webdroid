@@ -22,7 +22,7 @@ rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "
 
 class JSocketFactory extends JObj {}
 const socketFactory = new JSocketFactory();
-/** a connected socket of the given class (SSLSocket's own <init> turns tls on) */
+/** a connected socket of the given class; rt.make skips <init>, so TLS is set here */
 async function dial(cls: string, host: string, port: number): Promise<JSocket> {
   const s = rt.make(cls) as JSocket;
   s.host = host ?? ""; s.port = port;
@@ -205,6 +205,7 @@ const inetBytes = (bytes: Int8Array, host: string | null) => {
 rt.register({ name: "java/net/Inet4Address", ctor: JInet4Address, sup: "java/net/InetAddress" });
 rt.register({ name: "java/net/Inet6Address", ctor: JInet6Address, sup: "java/net/InetAddress" });
 const v6 = (a: JInetAddress) => a.bytes.length === 16;
+const localhostAddress = () => inetAddr("localhost");
 rt.register({
   name: "java/net/InetAddress", ctor: JInetAddress,
   methods: {
@@ -212,8 +213,8 @@ rt.register({
     "static getAllByName(Ljava/lang/String;)[Ljava/net/InetAddress;": driven(function* (h: string): Gen { return jarray([yield inetAddr(h)], "Ljava/net/InetAddress;"); }),
     "static getByAddress([B)Ljava/net/InetAddress;": (b: Int8Array) => inetBytes(b, null),
     "static getByAddress(Ljava/lang/String;[B)Ljava/net/InetAddress;": (h: string | null, b: Int8Array) => inetBytes(b, h),
-    "static getLoopbackAddress()Ljava/net/InetAddress;": () => inetAddr("localhost"),
-    "static getLocalHost()Ljava/net/InetAddress;": () => inetAddr("localhost"),
+    "static getLoopbackAddress()Ljava/net/InetAddress;": localhostAddress,
+    "static getLocalHost()Ljava/net/InetAddress;": localhostAddress,
     "getHostName()Ljava/lang/String;": function (this: JInetAddress) { return this.host; },
     "getCanonicalHostName()Ljava/lang/String;": function (this: JInetAddress) { return this.host; },
     "getHostAddress()Ljava/lang/String;": function (this: JInetAddress) { return addressText(this.bytes); },
@@ -251,14 +252,15 @@ rt.register({
 });
 rt.markers("java/net/SocketAddress");
 class JServerSocket extends JObj { closed = false; reuseAddress = false; }
+const noInbound = (): never => { throw rt.mkThrowable("java/io/IOException", "inbound sockets are unavailable"); };
 rt.register({
   name: "java/net/ServerSocket", ctor: JServerSocket, ifaces: ["java/io/Closeable"],
   methods: {
     "<init>()V": function () {},
     "setReuseAddress(Z)V": function (this: JServerSocket, on: number) { this.reuseAddress = !!on; },
     "getReuseAddress()Z": function (this: JServerSocket) { return +this.reuseAddress; },
-    "bind(Ljava/net/SocketAddress;)V": () => { throw rt.mkThrowable("java/io/IOException", "inbound sockets are unavailable"); },
-    "bind(Ljava/net/SocketAddress;I)V": () => { throw rt.mkThrowable("java/io/IOException", "inbound sockets are unavailable"); },
+    "bind(Ljava/net/SocketAddress;)V": noInbound,
+    "bind(Ljava/net/SocketAddress;I)V": noInbound,
     "close()V": function (this: JServerSocket) { this.closed = true; },
     "isClosed()Z": function (this: JServerSocket) { return this.closed ? 1 : 0; },
     "isBound()Z": () => 0,
@@ -728,7 +730,7 @@ rt.register({
     "getAuthority()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().authority); },
     "getRawAuthority()Ljava/lang/String;": function (this: JURI) { return this.parts().authority; },
     "getPath()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().path); },
-    "toURL()Ljava/net/URL;": function (this: JURI) { const u = new JURL(); urlInit(u, this.u); return u; },
+    "toURL()Ljava/net/URL;": function (this: JURI) { return mkURL(this.u); },
     "getUserInfo()Ljava/lang/String;": function (this: JURI) { return decodeUriPart(this.parts().userInfo); },
     "getRawUserInfo()Ljava/lang/String;": function (this: JURI) { return this.parts().userInfo; },
     "getPort()I": function (this: JURI) { return this.parts().port; },

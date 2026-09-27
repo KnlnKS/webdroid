@@ -463,7 +463,7 @@ export function inversePath(path: JPath, l: number, t: number, r: number, b: num
   return [result.path(), "nonzero"];
 }
 
-function copyPath(this: JPath, source: JPath) {
+export function copyPath(this: JPath, source: JPath) {
   if (this === source) return;
   this.ops = source.ops.map(op => op.slice() as PathOp);
   this.curX = source.curX; this.curY = source.curY;
@@ -472,7 +472,7 @@ function copyPath(this: JPath, source: JPath) {
   this.inverseFill = source.inverseFill;
   this.dirty = true;
 }
-function appendPath(target: JPath, source: JPath, matrix?: ArrayLike<number>) {
+export function appendPath(target: JPath, source: JPath, matrix?: ArrayLike<number>) {
   if (!source.ops.length) return;
   const copy = new JPath();
   copyPath.call(copy, source);
@@ -570,16 +570,10 @@ rt.register({
     },
     "isEmpty()Z": function (this: JPath) { return this.ops.length ? 0 : 1; },
     "isConvex()Z": function (this: JPath) { return pathIsConvex(this); },
-    // These three walk coordinates only: an op's trailing scalars are radii and angles, and
-    // moving or bounding a path must not touch them.
     "computeBounds(Landroid/graphics/RectF;Z)V": function (this: JPath, r: JRectF) { pathBounds(this, r); },
     "offset(FF)V": function (this: JPath, dx: number, dy: number) { pathOffset(this, dx, dy); },
     "transform(Landroid/graphics/Matrix;)V": function (this: JPath, mt: JMatrix) {
       pathTransform(this, mt.m);
-      // A rotation or skew cannot be folded into an arc's axis-aligned rect and its angles, so
-      // expand the compound ops into the curves Skia would already be holding. Material's
-      // ShapeAppearancePathProvider rotates the path around every corner, and without this each
-      // corner arc came out as a straight chord.
     },
   },
 });

@@ -1,8 +1,8 @@
-import { slashName } from "./abi";
 // Where a program starts. Nothing here is a guess about a particular app: these are the
 // entry points the platform itself calls, and the two ways an apk names a class in data
 // rather than in bytecode — a manifest attribute and a services file.
 
+import { slashName } from "./abi";
 import type { Program } from "./reach";
 import { parseAXML, attrStr, type XmlNode } from "../android/axml";
 
@@ -14,6 +14,8 @@ interface Roots {
 
 /** component tags whose android:name the platform loads */
 const COMPONENT_TAGS = new Set(["activity", "activity-alias", "service", "provider", "receiver"]);
+/** "a.b.C" or "a.b.C$D": a string shaped like a binary class name */
+const CLASS_NAME = /^[a-z][\w.]*\.[A-Z][\w$]*$/;
 
 function qualify(pkg: string, name: string): string {
   const n = name.startsWith(".") ? pkg + name : name.includes(".") ? name : pkg + "." + name;
@@ -43,7 +45,7 @@ export function rootsOf(manifestBytes: Uint8Array, p: Program, services: Record<
       // and most SDK initialisers name a class that appears in no bytecode
       if (c.name === "meta-data") {
         const v = attrStr(c, "value");
-        if (v && /^[a-z][\w.]*\.[A-Z][\w$]*$/.test(v)) note(slashName(v), `<meta-data> under ${path}`);
+        if (v && CLASS_NAME.test(v)) note(slashName(v), `<meta-data> under ${path}`);
       }
       walk(c, COMPONENT_TAGS.has(c.name) ? `<${c.name} ${attrStr(c, "name") ?? ""}>` : path);
     }
@@ -86,12 +88,12 @@ export function reflectiveRoots(p: Program, dexes: { stringCount: number; string
   const out = new Set<string>();
   for (const dex of dexes) {
     for (let i = 0; i < dex.stringCount; i++) {
-      // "a.b.C" or "a.b.C$D" — cheap shape test before the decode and the map lookup
+      // cheap shape tests before the decode, the regex and the map lookup
       const len = dex.stringLen(i);
       if (len < 5 || len > 200) continue;
       const s = dex.string(i);
       if (s.charCodeAt(0) > 122 || !s.includes(".")) continue;
-      if (!/^[a-z][\w.]*\.[A-Z][\w$]*$/.test(s)) continue;
+      if (!CLASS_NAME.test(s)) continue;
       const n = slashName(s);
       if (p.has(n)) out.add(n);
     }

@@ -1,7 +1,7 @@
 import { expect, test, describe } from "bun:test";
 import { unzipSync } from "fflate";
 import "../src/natives";
-import { mkPfd, setProcessIdentity, setProcessName } from "../src/android/os";
+import { mkPfd } from "../src/android/os";
 import { newObj, vcall, vcallAsync, mainThread, vcallOn, JThread, curThread, setCurThread } from "../src/jvm/natives/jlang";
 import { rt } from "../src/jvm/runtime";
 import { mkFile, vfs, JFileDescriptor, JInputStream, readStreamFully } from "../src/jvm/natives/jio";
@@ -11,8 +11,6 @@ import { Cpu, setA64 } from "../src/native/cpu";
 import { lookupHost } from "../src/native/host";
 import { mem, guestAt } from "../src/native/mem";
 import { javaCloseFd, javaOpenFd, javaSeekFd, javaReadFd, renamePath, stdioInit } from "../src/native/stdio";
-import { JPath, pathIsConvex, pathTransform } from "../src/android/path";
-import { JMatrix } from "../src/android/graphics";
 import { BytesFile } from "../src/shell/lazyfile";
 import { mkIter } from "../src/jvm/natives/jutil";
 import { scall } from "./java";
@@ -290,6 +288,12 @@ describe("input-stream-wrapping", () => {
     expect(new TextDecoder().decode(await readStreamFully(buffer))).toBe("<svg/>");
   });
 
+  test("DataInputStream.readUTF decodes modified UTF-8", async () => {
+    // NUL as C0 80 and U+1F680 as a surrogate pair of three-byte halves, as Java's writeUTF emits them
+    const input = await data(await bytes([0, 8, 0xc0, 0x80, 0xed, 0xa0, 0xbd, 0xed, 0xba, 0x80]));
+    expect(await vcall(input, "readUTF", "()Ljava/lang/String;")).toBe("\0🚀");
+  });
+
   test("DataInputStream advances the original stream's cursor", async () => {
     const source = await bytes([0, 0, 1, 2, 3]), input = await data(source);
     expect(await vcall(input, "readInt", "()I")).toBe(258);
@@ -374,102 +378,6 @@ describe("parcel-file", () => {
     expect([...mem.bytes(guestAt(address), 3)]).toEqual([9, 8, 7]);
     await vcall(rt.link("android/system/Os").ctor, "munmap", "(JJ)V", address, 3n);
     await vcall(pfd, "close", "()V");
-  });
-});
-
-describe("path-copy", () => {
-  test("path copies retain contours and fill rules without sharing mutable geometry", async () => {
-    const source = rt.make("android/graphics/Path") as JPath;
-    await vcall(source, "moveTo", "(FF)V", 10, 20);
-    await vcall(source, "lineTo", "(FF)V", 30, 40);
-    source.fillRule = "evenodd";
-    source.inverseFill = true;
-    expect((await vcall(source, "getFillType", "()Landroid/graphics/Path$FillType;") as { ename: string }).ename).toBe("INVERSE_EVEN_ODD");
-    const copy = await newObj("android/graphics/Path", "(Landroid/graphics/Path;)V", source) as JPath;
-    const target = rt.make("android/graphics/Path") as JPath;
-    await vcall(target, "set", "(Landroid/graphics/Path;)V", copy);
-    await vcall(target, "set", "(Landroid/graphics/Path;)V", target);
-    await vcall(target, "rLineTo", "(FF)V", 5, 6);
-    expect(target.ops.at(-1)).toEqual(["l", 35, 46]);
-    await vcall(target, "close", "()V");
-    expect([target.curX, target.curY, target.fillRule, target.inverseFill]).toEqual([10, 20, "evenodd", true]);
-    await vcall(copy, "offset", "(FF)V", 100, 200);
-    expect(source.ops).toEqual([["m", 10, 20], ["l", 30, 40]]);
-    expect(target.ops.slice(0, 2)).toEqual(source.ops);
-  });
-
-  test("appending a transformed path preserves independent geometry and its current contour", async () => {
-    const source = rt.make("android/graphics/Path") as JPath;
-    await vcall(source, "moveTo", "(FF)V", 1, 2);
-    await vcall(source, "lineTo", "(FF)V", 3, 4);
-    const target = rt.make("android/graphics/Path") as JPath;
-    const matrix = rt.make("android/graphics/Matrix") as JMatrix;
-    matrix.m = [0, 1, -1, 0, 10, 20];
-    await vcall(target, "addPath", "(Landroid/graphics/Path;Landroid/graphics/Matrix;)V", source, matrix);
-    await vcall(target, "rLineTo", "(FF)V", 5, 6);
-    expect(target.ops).toEqual([["m", 8, 21], ["l", 6, 23], ["l", 11, 29]]);
-    await vcall(target, "close", "()V");
-    expect([target.curX, target.curY]).toEqual([8, 21]);
-    await vcall(target, "addPath", "(Landroid/graphics/Path;)V", target);
-    expect(target.ops.length).toBe(8);
-    await vcall(target, "offset", "(FF)V", 1, 1);
-    expect(target.ops[0]).toEqual(["m", 9, 22]);
-    expect(source.ops).toEqual([["m", 1, 2], ["l", 3, 4]]);
-  });
-
-  test("Path convexity follows control points, closure and contour boundaries", async () => {
-    const path = new JPath();
-    expect(await vcall(path, "isConvex", "()Z")).toBe(1);
-    path.ops = [["m", 0, 0], ["l", 10, 0]];
-    expect(pathIsConvex(path)).toBe(1);
-    path.ops.push(["l", 10, 10], ["l", 0, 10]);
-    expect(pathIsConvex(path)).toBe(1);
-    path.ops.push(["l", 5, 5]);
-    expect(pathIsConvex(path)).toBe(0);
-    path.ops = [["m", 0, 0], ["q", 10, 0, 10, 10], ["l", 0, 10], ["z"]];
-    expect(pathIsConvex(path)).toBe(1);
-    path.ops[1] = ["q", -10, 20, 10, 10];
-    expect(pathIsConvex(path)).toBe(0);
-    path.ops = [["rrect", 0, 0, 300, 200, 28, 28, 28, 28, 0, 0, 0, 0]];
-    expect(pathIsConvex(path)).toBe(1);
-    pathTransform(path, [0, 1, -1, 0, 300, 0]);
-    expect(pathIsConvex(path)).toBe(1);
-    path.ops.push(["m", 900, 900]);
-    expect(pathIsConvex(path)).toBe(1);
-    path.ops.push(["l", 901, 900]);
-    expect(pathIsConvex(path)).toBe(0);
-    path.ops = [["m", 0, 3], ["l", 2, -3], ["l", -3, 1], ["l", 3, 1], ["l", -2, -3], ["z"]];
-    expect(pathIsConvex(path)).toBe(0);
-    path.ops = [["m", Infinity, 0]];
-    expect(pathIsConvex(path)).toBe(0);
-  });
-});
-
-describe("procfs", () => {
-  test("Java and native-facing procfs expose the current process cmdline", async () => {
-    setProcessIdentity(2468, 10001);
-    setProcessName("com.example.app");
-    for (const path of ["/proc/self/cmdline", "/proc/2468/cmdline"]) {
-      const file = await newObj("java/io/File", "(Ljava/lang/String;)V", path);
-      expect(await vcall(file, "exists", "()Z")).toBe(1);
-      const stream = await newObj("java/io/FileInputStream", "(Ljava/io/File;)V", file);
-      const bytes = new Int8Array(64);
-      const length = await vcall(stream, "read", "([B)I", bytes);
-      expect(new TextDecoder().decode(new Uint8Array(bytes.buffer, 0, length))).toBe("com.example.app\0");
-    }
-    expect(await vcall(await newObj("java/io/File", "(Ljava/lang/String;)V", "/proc/9999/cmdline"), "exists", "()Z")).toBe(0);
-    const status = await newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", "/proc/2468/status");
-    const bytes = new Int8Array(512);
-    const length = await vcall(status, "read", "([B)I", bytes);
-    const text = new TextDecoder().decode(new Uint8Array(bytes.buffer, 0, length));
-    expect(text).toContain("Pid:\t2468\n");
-    expect(text).toContain("Uid:\t10001\t10001\t10001\t10001\n");
-    expect(text).toContain("Cpus_allowed_list:\t");
-  });
-
-  test("String.trim removes a proc cmdline terminator", () => {
-    const trim = String.prototype[mangleMethod("trim", "()Ljava/lang/String;") as keyof String] as unknown as (this: string) => string;
-    expect(trim.call("\0 com.example.app\0")).toBe("com.example.app");
   });
 });
 

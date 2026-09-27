@@ -11,6 +11,7 @@ function timerCancel(t: JTimerTask) {
   if (t.repeating) clearGuestInterval(t.handle); else clearGuestTimeout(t.handle);
   t.handle = null;
 }
+function schedulePeriodic(this: JTimer, t: JTimerTask, d: bigint, p: bigint) { schedule(this, t, Number(d), Number(p)); }
 function schedule(timer: JTimer, task: JTimerTask, delay: number, period = 0) {
   timer.tasks.add(task);
   task.repeating = period > 0;
@@ -36,11 +37,11 @@ rt.register({
     "<init>(Ljava/lang/String;)V": function () {},
     "<init>(Ljava/lang/String;Z)V": function () {},
     "schedule(Ljava/util/TimerTask;J)V": function (this: JTimer, t: JTimerTask, d: bigint) { schedule(this, t, Number(d)); },
-    "schedule(Ljava/util/TimerTask;JJ)V": function (this: JTimer, t: JTimerTask, d: bigint, p: bigint) { schedule(this, t, Number(d), Number(p)); },
+    "schedule(Ljava/util/TimerTask;JJ)V": schedulePeriodic,
     "schedule(Ljava/util/TimerTask;Ljava/util/Date;)V": function (this: JTimer, t: JTimerTask, when: { t?: number }) {
       schedule(this, t, (when?.t ?? Date.now()) - Date.now());
     },
-    "scheduleAtFixedRate(Ljava/util/TimerTask;JJ)V": function (this: JTimer, t: JTimerTask, d: bigint, p: bigint) { schedule(this, t, Number(d), Number(p)); },
+    "scheduleAtFixedRate(Ljava/util/TimerTask;JJ)V": schedulePeriodic,
     "cancel()V": function (this: JTimer) { for (const t of this.tasks) timerCancel(t); this.tasks.clear(); },
     "purge()I": function (this: JTimer) { for (const t of [...this.tasks]) if (t.handle === null) this.tasks.delete(t); return 0; },
   },

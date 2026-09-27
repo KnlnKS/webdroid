@@ -4,6 +4,11 @@ import { vcall, JThread, curThread, park, defineException } from "./jlang";
 import type { JTimeUnit } from "./jconc";
 import { guestNow } from "../../guest-clock";
 
+/** an interruptible wait's entry check: a pending interrupt is consumed and thrown */
+function throwIfInterrupted(thread: JThread): void {
+  if (thread.interrupted) { thread.interrupted = 0; throw rt.mkThrowable("java/lang/InterruptedException", null); }
+}
+
 // ── locks
 class JLock extends JObj {
   owner: JThread | null = null;
@@ -26,9 +31,7 @@ class JLock extends JObj {
     if (next) { this.acquire(next.thread, true); next.wake(); }
   }
   lock(thread: JThread, interruptible: boolean, timeout?: number): boolean | Promise<boolean> {
-    if (interruptible && thread.interrupted) {
-      thread.interrupted = 0; throw rt.mkThrowable("java/lang/InterruptedException", null);
-    }
+    if (interruptible) throwIfInterrupted(thread);
     if (this.acquire(thread)) return true;
     if (timeout !== undefined && timeout <= 0) return false;
     const arm = (wake: () => void) => {
@@ -67,9 +70,7 @@ class JCondition extends JObj {
   q: (() => void)[] = [];
   async await(interruptible: boolean, ms?: number): Promise<boolean> {
     const thread = curThread;
-    if (interruptible && thread.interrupted) {
-      thread.interrupted = 0; throw rt.mkThrowable("java/lang/InterruptedException", null);
-    }
+    if (interruptible) throwIfInterrupted(thread);
     this.lock.check(thread);
     const holds = this.lock.held;
     this.lock.held = 1; this.lock.release(thread);
@@ -215,14 +216,16 @@ class JSemaphore extends JObj {
   }
 }
 const TU = "Ljava/util/concurrent/TimeUnit;";
+function initSemaphore(this: JSemaphore, n: number) { this.permits = n; }
+function acquireOne(this: JSemaphore) { return this.acquire(1); }
 rt.register({
   name: "java/util/concurrent/Semaphore", ctor: JSemaphore,
   methods: {
-    "<init>(I)V": function (this: JSemaphore, n: number) { this.permits = n; },
-    "<init>(IZ)V": function (this: JSemaphore, n: number) { this.permits = n; },
-    "acquire()V": function (this: JSemaphore) { return this.acquire(1); },
+    "<init>(I)V": initSemaphore,
+    "<init>(IZ)V": initSemaphore,
+    "acquire()V": acquireOne,
     "acquire(I)V": function (this: JSemaphore, n: number) { return this.acquire(n); },
-    "acquireUninterruptibly()V": function (this: JSemaphore) { return this.acquire(1); },
+    "acquireUninterruptibly()V": acquireOne,
     "release()V": function (this: JSemaphore) { this.release(1); },
     "release(I)V": function (this: JSemaphore, n: number) { this.release(n); },
     "tryAcquire()Z": function (this: JSemaphore) { return this.acquire(1, 0); },
@@ -269,10 +272,7 @@ class JRWInner extends JObj {
   write = false;
   lock(interruptible: boolean, timeout?: number): void | boolean | Promise<boolean> {
     const thread = curThread;
-    if (interruptible && thread.interrupted) {
-      thread.interrupted = 0;
-      throw rt.mkThrowable("java/lang/InterruptedException", null);
-    }
+    if (interruptible) throwIfInterrupted(thread);
     if (this.owner.acquire(thread, this.write)) return true;
     if (timeout !== undefined && timeout <= 0) return false;
     return interruptible ? park(thread, (wake) => this.owner.arm(thread, this.write, wake), timeout)
@@ -332,7 +332,7 @@ rt.register({
 });
 rt.register({ name: "java/util/concurrent/locks/ReentrantReadWriteLock$ReadLock", ctor: class extends JRWInner {}, ifaces: ["java/util/concurrent/locks/Lock", "java/io/Serializable"], methods: rwMethods });
 rt.register({ name: "java/util/concurrent/locks/ReentrantReadWriteLock$WriteLock", ctor: class extends JRWInner { write = true; }, ifaces: ["java/util/concurrent/locks/Lock", "java/io/Serializable"], methods: rwMethods });
-for (const name of ["java/util/concurrent/locks/ReadWriteLock", "java/util/concurrent/locks/Lock", "java/util/concurrent/locks/Condition"]) rt.register({ name, ctor: class extends JObj {} });
+rt.markers("java/util/concurrent/locks/ReadWriteLock", "java/util/concurrent/locks/Lock", "java/util/concurrent/locks/Condition");
 
 // A parked thread wakes on its permit, its deadline, or an interrupt. The wake is a macrotask
 // so the unparker's own chain runs to its next await first, and an untimed park still polls,
@@ -355,6 +355,8 @@ rt.register({
 // modes; a subclass supplies tryAcquire/tryRelease (and the shared pair) as the JDK's does
 class JAQS extends JObj { state = 0; q: (() => void)[] = []; owner: unknown = null; }
 const D_TA = "(I)Z", D_TAS = "(I)I";
+function aqsAcquireExclusive(this: JAQS, arg: number) { return aqsAcquire(this, arg, false); }
+function aqsAcquireShared(this: JAQS, arg: number) { return aqsAcquire(this, arg, true); }
 async function aqsAcquire(self: JAQS, arg: number, shared: boolean): Promise<void> {
   for (;;) {
     const ok = shared ? ((await vcall(self, "tryAcquireShared", D_TAS, arg)) as number) >= 0 : !!(await vcall(self, "tryAcquire", D_TA, arg));
@@ -387,10 +389,10 @@ rt.register({
     "getState()I": function (this: JAQS) { return this.state; },
     "setState(I)V": function (this: JAQS, v: number) { this.state = v; },
     "compareAndSetState(II)Z": function (this: JAQS, e: number, v: number) { if (this.state !== e) return 0; this.state = v; return 1; },
-    "acquire(I)V": function (this: JAQS, a: number) { return aqsAcquire(this, a, false); },
-    "acquireInterruptibly(I)V": function (this: JAQS, a: number) { return aqsAcquire(this, a, false); },
-    "acquireShared(I)V": function (this: JAQS, a: number) { return aqsAcquire(this, a, true); },
-    "acquireSharedInterruptibly(I)V": function (this: JAQS, a: number) { return aqsAcquire(this, a, true); },
+    "acquire(I)V": aqsAcquireExclusive,
+    "acquireInterruptibly(I)V": aqsAcquireExclusive,
+    "acquireShared(I)V": aqsAcquireShared,
+    "acquireSharedInterruptibly(I)V": aqsAcquireShared,
     "tryAcquireNanos(IJ)Z": function (this: JAQS, a: number, ns: bigint) { return aqsAcquireTimed(this, a, false, ns); },
     "tryAcquireSharedNanos(IJ)Z": function (this: JAQS, a: number, ns: bigint) { return aqsAcquireTimed(this, a, true, ns); },
     "release(I)Z": function (this: JAQS, a: number) { return aqsRelease(this, a, false); },

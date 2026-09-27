@@ -31,7 +31,7 @@ export class JWindow extends JObj {
   /** the window's OnBackInvokedDispatcher (AOSP: one per ViewRootImpl) */
   backD: JObj | null = null;
   backDispatcher(): JObj { return this.backD ??= rt.make("android/window/OnBackInvokedDispatcher"); }
-  /** WindowManager.LayoutParams flags; the shell reads FLAG_FULLSCREEN off the top activity. */
+  /** WindowManager.LayoutParams flags; FLAG_FULLSCREEN hides the status bar inset (windowinsets.ts) */
   flags = 0;
   translucent = false;
   decorFitsSystemWindows = true;
@@ -45,10 +45,8 @@ export class JWindow extends JObj {
    *  window; `bg` is an explicit setBackgroundDrawable (a dialog window draws it as its frame). */
   layoutW = -2; layoutH = -2; gravity = 0; dimAmount = Number.NaN;
   bg: JDrawable | null = null; bgSet = false;
-  /** WindowInsetsController appearance bits; `appearanceMask` = the bits the app has ever
-   *  set or cleared, so the shell can tell "cleared" from "never asked" (device.ts). */
+  /** WindowInsetsController appearance bits */
   appearance = 0;
-  appearanceMask = 0;
   barsBehavior = 1;
   statusBarColor: number | null = null;
   navBarColor: number | null = null;
@@ -237,7 +235,6 @@ rt.register({
     "setSystemBarsAppearance(II)V": function (this: JInsetsController, v: number, mask: number) {
       const w = this.w;
       w.appearance = (w.appearance & ~mask) | (v & mask);
-      w.appearanceMask |= mask;
       invalidate();
     },
     "getSystemBarsAppearance()I": function (this: JInsetsController) { return this.w.appearance; },

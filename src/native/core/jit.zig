@@ -202,17 +202,8 @@ pub fn blockFor(r: *Region, pc: u32) i32 {
     r.nblocks += 1;
     return @intCast(r.nblocks - 1);
 }
-fn opAt(page: *cpu.Page, pc: u32) *Op {
-    const i = (pc & (abi.PAGE_SIZE - 1)) >> 2;
-    const o = &page.ops[i];
-    if (o.kind == .raw) {
-        o.* = a64.decode(mem.ld(u32, pc), pc);
-        cpu.cover(page, pc, pc);
-    }
-    return o;
-}
 fn scanA64(r: *Region, i: u32, page: *cpu.Page, pc: u32) jit32.Scan {
-    const o = opAt(page, pc);
+    const o = a64.opAt(page, pc);
     const next = pc + 4;
     const ends = switch (o.kind) {
         // ISB must redispatch after a store invalidates the active region's source page.
@@ -558,7 +549,11 @@ pub fn Emit(comptime wide: bool) type {
             if (target > blk) return e.b.br(@as(u32, @intCast(target - blk - 1)) + e.nest);
             e.b.emit(.{ get(L_IC), get(L_LIMIT), O.i64_ge_s });
             e.ifv();
+            // The exit may settle flags the target does not read; the chained path reads none.
+            const term = e.term;
+            e.term = true;
             e.exitTo(pc);
+            e.term = term;
             e.endif();
             e.b.emit(.{ c32(target), set(L_NEXT) });
             e.b.br(e.chain_depth - 1 + e.nest);
@@ -604,8 +599,13 @@ pub fn Emit(comptime wide: bool) type {
             e.exitStatus(2);
         }
         pub fn checkLowAddress(e: *Self) void {
+            e.checkAddress(0);
+        }
+        /// L_A faults as bad_address below LOW or, with a nonzero mask, when misaligned.
+        pub fn checkAddress(e: *Self, align_mask: u32) void {
             const b = e.b;
             b.emit(.{ get(L_A), c32(abi.LOW), O.i32_lt_u });
+            if (align_mask != 0) b.emit(.{ get(L_A), c32(@intCast(align_mask)), O.i32_and, O.i32_or });
             e.ifv();
             b.emit(.{ get(L_CPU), c32(@intFromEnum(cpu.Fault.bad_address)), mo(O.i32_store, OFF_EXIT),
                 get(L_CPU), c32(@bitCast(mem.ld(u32, e.pc))), mo(O.i32_store, OFF_FAULT_WORD),
@@ -1175,7 +1175,7 @@ fn emitRegionAs(comptime isa: Isa, b: *Buf, r: *Region, page: *cpu.Page) void {
             var rw = switch (isa) {
                 .a64 => rwOf(&page.ops[(pc & (abi.PAGE_SIZE - 1)) >> 2]),
                 .arm => jit32.rwArm(mem.ld(u32, pc)),
-                .thumb => jit32.rwThumb(mem.ld(u16, pc)),
+                .thumb => jit32.rwThumb(pc),
             };
             if (forcedFallback(pc)) rw = if (wide) ALL else ALL32;
             writes[i] |= rw.w;

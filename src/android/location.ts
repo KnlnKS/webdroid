@@ -1,4 +1,4 @@
-import { rt, JObj, type NativeSpec, fieldGetters, fieldSetters, flagSetters, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, fieldGetters, fieldSetters, flagGetters, flagSetters, driven, type Gen } from "../jvm/runtime";
 import { JBundle, uptimeMillis } from "./os";
 import { parcelCreator, type JParcel } from "./parcel";
 import { newObj, vcall, vcallUncaught } from "../jvm/natives/jlang";
@@ -9,6 +9,9 @@ rt.markers("android/location/LocationListener");
 const coordinate = (value: number, limit: number) => {
   if (!Number.isFinite(value) || Math.abs(value) > limit)
     throw rt.mkThrowable("java/lang/IllegalArgumentException", `invalid coordinate: ${value}`);
+};
+const geocodeBounds = (minLat: number, minLon: number, maxLat: number, maxLon: number) => {
+  coordinate(minLat, 90); coordinate(minLon, 180); coordinate(maxLat, 90); coordinate(maxLon, 180);
 };
 const geocodeLimit = (count: number) => {
   if (count < 1) throw rt.mkThrowable("java/lang/IllegalArgumentException", `maxResults must be positive: ${count}`);
@@ -43,15 +46,13 @@ rt.register({
     },
     "getFromLocationName(Ljava/lang/String;IDDDD)Ljava/util/List;":
       (name: string | null, count: number, minLat: number, minLon: number, maxLat: number, maxLon: number) => {
-        geocodeName(name, count); coordinate(minLat, 90); coordinate(minLon, 180);
-        coordinate(maxLat, 90); coordinate(maxLon, 180); return newArrayList();
+        geocodeName(name, count); geocodeBounds(minLat, minLon, maxLat, maxLon); return newArrayList();
       },
     "getFromLocationName(Ljava/lang/String;ILandroid/location/Geocoder$GeocodeListener;)V":
       (name: string | null, count: number, listener: unknown) => { geocodeName(name, count); geocodeCallback(listener); },
     "getFromLocationName(Ljava/lang/String;IDDDDLandroid/location/Geocoder$GeocodeListener;)V":
       (name: string | null, count: number, minLat: number, minLon: number, maxLat: number, maxLon: number, listener: unknown) => {
-        geocodeName(name, count); coordinate(minLat, 90); coordinate(minLon, 180);
-        coordinate(maxLat, 90); coordinate(maxLon, 180); geocodeCallback(listener);
+        geocodeName(name, count); geocodeBounds(minLat, minLon, maxLat, maxLon); geocodeCallback(listener);
       },
   },
 });
@@ -106,9 +107,10 @@ const optional = [
   ["VerticalAccuracy", "Meters", "F", 32], ["SpeedAccuracy", "MetersPerSecond", "F", 64],
   ["BearingAccuracy", "Degrees", "F", 128],
 ] as const;
+const copyLocation = function (this: JLocation, source: JLocation) { return this.set(source); };
 const locMethods: NonNullable<NativeSpec["methods"]> = {
-  "<init>(Landroid/location/Location;)V": function (this: JLocation, source: JLocation) { return this.set(source); },
-  "set(Landroid/location/Location;)V": function (this: JLocation, source: JLocation) { return this.set(source); },
+  "<init>(Landroid/location/Location;)V": copyLocation,
+  "set(Landroid/location/Location;)V": copyLocation,
   "reset()V": function (this: JLocation) {
     this.provider = null; this.lat = this.lon = 0; this.time = this.elapsed = 0n;
     this.mock = false; this.opt = {}; this.extras = null;
@@ -116,8 +118,6 @@ const locMethods: NonNullable<NativeSpec["methods"]> = {
   "getElapsedRealtimeMillis()J": function (this: JLocation) { return this.elapsed / 1000000n; },
   "getElapsedRealtimeAgeMillis()J": function (this: JLocation) { return BigInt(Math.floor(uptimeMillis())) - this.elapsed / 1000000n; },
   "getElapsedRealtimeAgeMillis(J)J": function (this: JLocation, now: bigint) { return now - this.elapsed / 1000000n; },
-  "isMock()Z": function (this: JLocation) { return +this.mock; },
-  "isFromMockProvider()Z": function (this: JLocation) { return +this.mock; },
   "setExtras(Landroid/os/Bundle;)V": driven(function* (this: JLocation, value: JBundle | null): Gen {
     this.extras = value ? (yield newObj("android/os/Bundle", "(Landroid/os/Bundle;)V", value)) as JBundle : null;
   }),
@@ -129,6 +129,7 @@ const locMethods: NonNullable<NativeSpec["methods"]> = {
     "getProvider()Ljava/lang/String;": "provider", "getLatitude()D": "lat", "getLongitude()D": "lon",
     "getTime()J": "time" }),
   ...flagSetters({ "setMock(Z)V": "mock", "setIsFromMockProvider(Z)V": "mock" }),
+  ...flagGetters({ "isMock()Z": "mock", "isFromMockProvider()Z": "mock" }),
   "distanceTo(Landroid/location/Location;)F": function (this: JLocation, o: JLocation) { return distanceM(this.lat, this.lon, o.lat, o.lon); },
   "bearingTo(Landroid/location/Location;)F": function (this: JLocation, o: JLocation) { return geodesic(this.lat, this.lon, o.lat, o.lon).initial; },
   "static distanceBetween(DDDD[F)V": (lat1: number, lon1: number, lat2: number, lon2: number, results: Float32Array | null) => {

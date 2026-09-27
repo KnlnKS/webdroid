@@ -5,7 +5,7 @@
 import { rt, JObj } from "../runtime";
 import { JBigInteger, mkBI, modInverse } from "./jmath";
 import { valueClass } from "./jsec";
-import { JRsaPublicKey, JRsaPrivateKey } from "./jrsa";
+import { JRsaPublicKey, JRsaPrivateKey, array } from "./jrsa";
 
 export type Curve = { names: string[]; web: string; oid: number[]; bytes: number; p: bigint; a: bigint; b: bigint; gx: bigint; gy: bigint; n: bigint };
 const h = (s: string) => BigInt("0x" + s);
@@ -122,7 +122,7 @@ function paramSpec(c: Curve): JObj {
 }
 const ecPoint = (x: bigint, y: bigint) => inst("java/security/spec/ECPoint", { x: mkBI(x), y: mkBI(y) });
 /** the curve an app-built ECParameterSpec describes */
-function curveOfSpec(params: any): Curve {
+export function curveOfParams(params: any): Curve {
   const c = params && curveOf((params.curve?.field?.p as JBigInteger)?.v, (params.n as JBigInteger)?.v);
   if (!c) throw badSpec("unsupported curve");
   return c;
@@ -153,12 +153,13 @@ rt.register({
 });
 
 class JEncodedKeySpec extends JObj { encoded: Uint8Array<ArrayBuffer> = new Uint8Array(0); }
+function initEncodedKeySpec(this: JEncodedKeySpec, b: Int8Array) { this.encoded = new Uint8Array(b); }
 for (const [name, format] of [["java/security/spec/X509EncodedKeySpec", "X.509"], ["java/security/spec/PKCS8EncodedKeySpec", "PKCS#8"]]) {
   rt.register({
     name, ctor: class extends JEncodedKeySpec {}, ifaces: ["java/security/spec/KeySpec"],
     methods: {
-      "<init>([B)V": function (this: JEncodedKeySpec, b: Int8Array) { this.encoded = new Uint8Array(b); },
-      "<init>([BLjava/lang/String;)V": function (this: JEncodedKeySpec, b: Int8Array) { this.encoded = new Uint8Array(b); },
+      "<init>([B)V": initEncodedKeySpec,
+      "<init>([BLjava/lang/String;)V": initEncodedKeySpec,
       "getEncoded()[B": function (this: JEncodedKeySpec) { return new Int8Array(this.encoded); },
       "getFormat()Ljava/lang/String;": () => format,
       "getAlgorithm()Ljava/lang/String;": () => null,
@@ -172,12 +173,11 @@ export async function generateEc(name: string) {
   if (!c) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "unsupported curve " + name);
   const keys = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: c.web }, true, ["deriveBits"]);
   const jwk = await crypto.subtle.exportKey("jwk", keys.privateKey);
-  const num = (s: string) => fromBe(Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (ch) => ch.charCodeAt(0)));
+  const num = (s: string) => fromBe(array(atob(s.replace(/-/g, "+").replace(/_/g, "/"))));
   const priv = ecPrivate(c, num(jwk.d!));
   return inst<{ publicKey: JEcPublicKey; privateKey: JEcPrivateKey }>("java/security/KeyPair", { publicKey: priv.pub, privateKey: priv });
 }
 export const isEcCurve = (name: string) => !!curveNamed(name);
-export const curveOfParams = (spec: any) => curveOfSpec(spec);
 
 // RSA key specs: the numbers, encoded into the SubjectPublicKeyInfo / PKCS#8 the RSA keys carry
 const big = (v: bigint) => { const b = be(v, Math.ceil((v.toString(2).length + 1) / 8) || 1); return tlv(2, b); };
@@ -226,7 +226,7 @@ rt.register({
     },
     "getAlgorithm()Ljava/lang/String;": function (this: JKeyFactory) { return this.algo; },
     "generatePublic(Ljava/security/spec/KeySpec;)Ljava/security/PublicKey;": function (this: JKeyFactory, spec: any) {
-      if (rt.iof(spec, "java/security/spec/ECPublicKeySpec")) return ecPublic(curveOfSpec(spec.params), spec.w.x.v, spec.w.y.v);
+      if (rt.iof(spec, "java/security/spec/ECPublicKeySpec")) return ecPublic(curveOfParams(spec.params), spec.w.x.v, spec.w.y.v);
       if (rt.iof(spec, "java/security/spec/RSAPublicKeySpec")) return rsaKey<JRsaPublicKey>("webdroid/RsaPublicKey", rsaSpki(bigOf(spec.n), bigOf(spec.e)));
       if (!(spec instanceof JEncodedKeySpec)) throw badSpec("unsupported key spec");
       const [alg, bits] = children(read(spec.encoded, 0).body);
@@ -236,7 +236,7 @@ rt.register({
       return pointOf(c, bits.body.subarray(1));
     },
     "generatePrivate(Ljava/security/spec/KeySpec;)Ljava/security/PrivateKey;": function (this: JKeyFactory, spec: any) {
-      if (rt.iof(spec, "java/security/spec/ECPrivateKeySpec")) return ecPrivate(curveOfSpec(spec.params), spec.s.v);
+      if (rt.iof(spec, "java/security/spec/ECPrivateKeySpec")) return ecPrivate(curveOfParams(spec.params), spec.s.v);
       if (rt.iof(spec, "java/security/spec/RSAPrivateCrtKeySpec")) return rsaKey<JRsaPrivateKey>("webdroid/RsaPrivateKey", rsaPkcs8([0n, ...RSA_CRT.map((k) => bigOf(spec[k]))]));
       if (!(spec instanceof JEncodedKeySpec)) throw badSpec("unsupported key spec");
       const [, alg, key] = children(read(spec.encoded, 0).body);

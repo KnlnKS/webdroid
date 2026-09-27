@@ -5,6 +5,9 @@ import { chromium, type Browser } from "playwright";
 
 let browser: Browser;
 let server: ReturnType<typeof Bun.serve>;
+// Each probe loads the whole runtime into a fresh page and the GL probes compile shaders in software;
+// under a loaded host that alone passes bun's 5 s default, which bounds nothing these tests check.
+const PAGE_TIMEOUT = 60_000;
 
 beforeAll(async () => {
   const [build, launched] = await Promise.all([
@@ -19,7 +22,7 @@ beforeAll(async () => {
     if (path === "/framework.apk") return new Response(Bun.file(`${import.meta.dir}/../vendor/framework-res.apk`));
     return path === "/index.js" ? new Response(bundle, { headers: { "content-type": "text/javascript" } }) : new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
   } });
-});
+}, PAGE_TIMEOUT);
 afterAll(async () => { await browser?.close(); server?.stop(true); });
 
 type Probes = typeof import("./fixtures/browser/index");
@@ -39,7 +42,7 @@ async function probe<K extends keyof Probes>(name: K): Promise<Awaited<ReturnTyp
 
 test.concurrent("Back waits for a suspended main job before dispatching to the top window", async () => {
   expect(await probe("back")).toEqual({ pending: ["start"], events: ["start", "end", "back"] });
-});
+}, PAGE_TIMEOUT);
 
 test.concurrent("blur mask styles combine geometry before paint alpha and preserve canvas state", async () => {
   const probeResult = await probe("blurMask");
@@ -66,7 +69,7 @@ test.concurrent("blur mask styles combine geometry before paint alpha and preser
   expect(probeResult.tints).toMatchObject({ identity: true, clear: [0, 0, 0, 0], before: [255, 0, 0, 64] });
   for (const [index, value] of [91, 53, 43, 192].entries()) expect(Math.abs(probeResult.tints.add[index] - value)).toBeLessThanOrEqual(2);
   for (const [index, value] of [64, 64, 0, 64].entries()) expect(Math.abs(probeResult.tints.multiply[index] - value)).toBeLessThanOrEqual(2);
-});
+}, PAGE_TIMEOUT);
 
 test.concurrent("framework seek resources resolve dimensions, tint, enabled states and vector group transforms", async () => {
   const result = await probe("drawableResources");
@@ -76,13 +79,13 @@ test.concurrent("framework seek resources resolve dimensions, tint, enabled stat
   expect(result.after[3]).toBeGreaterThan(0);
   expect(result.after[3]).toBeLessThan(255);
   expect(result.center[3]).toBe(128);
-});
+}, PAGE_TIMEOUT);
 
 test.concurrent("drawable spans align suspended virtual drawing and text shadows preserve state", async () => {
   const result = await probe("drawableSpan");
   for (const span of result.results) expect(span).toEqual({ width: 14, fm: { ascent: -17, top: -17, descent: 0, bottom: 0 }, loads: 1, draws: 1, aligned: true, restored: true, hierarchy: 1 });
   expect(result).toMatchObject({ getters: [1, 10, 2, 0xffff0000], red: true, shadowRestored: true });
-});
+}, PAGE_TIMEOUT);
 
 test.concurrent("EGL10 and EGL14 retain each thread's binding, GL objects and errors across suspension and release", async () => {
   expect(await probe("eglThread")).toEqual({ callbacks: [true, true, true], bound10: 1, interval10: 1, bound14: 1, emptySecond: true, isolated: true, restored: true,
@@ -90,9 +93,13 @@ test.concurrent("EGL10 and EGL14 retain each thread's binding, GL objects and er
     restoredAfterRelease: true, swapped: 1, pixel: [255, 0, 0, 255], mainEmpty: true, callbackRestored: true, mainStillEmpty: true, lifecycle: true,
     readback: { compiled: true, before: [1, 1], after: [2, 2], error: 0, es1: [2, 2], es1Error: 0, unaligned: 0x12345678, integerError: 0 },
     uploads: { lengths: [21, 132], error2D: 0, error3D: 0 },
+    clientArrays: { pixels: [[255, 0, 0, 255], [255, 0, 0, 255]], created: 2, error: 0, unbound: true },
+    bufferBindings: { outsideKept: true, inVaoKept: true, error: 0 },
+    nativeClientArrays: { pixels: [[0, 0, 255, 255], [0, 255, 0, 255], [255, 0, 0, 255]], drawError: 0, kept: true, vaoError: 0x502 },
+    externalTexture: { bound: true, error: 0 },
     nativeWindow: { locked: 0, dimensions: [2, 1, 2, 1], duplicate: -16, posted: 0, pixels: [255, 0, 0, 255, 0, 255, 0, 255], yv12: true, released: -22, sameHandle: true, reset: true, frames: 2 },
     windowCopy: { before: { code: 0, pixel: [0, 255, 0, 255] }, after: { code: 0, pixel: [255, 0, 0, 255] } } });
-});
+}, PAGE_TIMEOUT);
 
 test.concurrent("ImageView reports and draws scale-type matrices and copies custom transforms", async () => {
   const { results, reset } = await probe("imageView");
@@ -108,18 +115,18 @@ test.concurrent("ImageView reports and draws scale-type matrices and copies cust
   }
   expect(results[0].pixel).toEqual([0, 255, 0, 255]);
   expect(reset).toEqual([1, 0, 0, 1, 0, 0]);
-});
+}, PAGE_TIMEOUT);
 
 test.concurrent("runtime shaders preserve recorded uniforms, premultiplied alpha and canvas coordinates", async () => {
   expect(await probe("runtimeShader")).toEqual({
     recorded: [255, 0, 0, 128], outside: [0, 255, 0, 255], direct: [0, 0, 255, 255], invalid: true, recordedRasters: 1, rasterizations: 2, text: [14, 39],
   });
-});
+}, PAGE_TIMEOUT);
 
 test.concurrent("SeekBar draws its level track and thumb, and touch callbacks retain their dispatch thread", async () => {
   expect(await probe("seekBar")).toEqual({ before: [0, 0, 255, 255], thumb: [0, 255, 0, 255], after: [51, 51, 51, 255], above: [0, 0, 0, 0],
     restored: true, events: [["start", true], [75, 1, true], [90, 1, true], ["stop", true]], progress: 90, pressed: false });
-});
+}, PAGE_TIMEOUT);
 
 test.concurrent("TextView measures and paints replacement spans with cached geometry and retains plain-text ellipsis", async () => {
   const result = await probe("textView");
@@ -147,4 +154,4 @@ test.concurrent("TextView measures and paints replacement spans with cached geom
   expect(result.selection[0][1]).toBe(100);
   expect(result.selection[1][0]).toBe(0);
   expect(result.selection[1][1]).toBeGreaterThan(0);
-});
+}, PAGE_TIMEOUT);

@@ -35,15 +35,12 @@ export async function loadDexes(path: string): Promise<DexFile[]> {
 
 export async function loadJarDexes(path: string): Promise<DexFile[]> {
   if (!existsSync(path)) throw new Error(`no ${path} — run \`bun run gen-framework\` with the reference AVD booted`);
-  const zip = zipTree(new Uint8Array(await Bun.file(path).arrayBuffer()));
-  const dexes = dexesOf(zip);
-  for (const dex of dexes) rt.loadDex(dex);
-  return dexes;
+  return loadDexes(path);
 }
 
-export function dumpXml(n: XmlNode, depth: number, out: string[], maxDepth = Infinity): string[] {
+export function dumpXml(n: XmlNode, maxDepth = Infinity, depth = 0, out: string[] = []): string[] {
   const attrs = n.attrs.map((a) => `${a.name}=${a.str != null ? JSON.stringify(a.str) : "0x" + (a.data >>> 0).toString(16)}`).join(" ");
   out.push("  ".repeat(depth) + `<${n.name} ${attrs}>`);
-  if (depth < maxDepth) for (const c of n.children) dumpXml(c, depth + 1, out, maxDepth);
+  if (depth < maxDepth) for (const c of n.children) dumpXml(c, maxDepth, depth + 1, out);
   return out;
 }

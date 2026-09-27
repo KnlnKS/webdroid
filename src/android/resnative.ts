@@ -4,7 +4,7 @@ import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jv
 import { device } from "../shell/config";
 import { newXmlPullParser, newXmlSerializer } from "./xmlpull";
 import { parseSax } from "./sax";
-import { Resources, currentResources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, JXmlParser, obtainStyled, resolveStyleValue, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
+import { Resources, currentResources, setResourceLocale, setResourceNight, setResourceOrientation, JTheme, JAttrSet, JTypedArray, JXmlParser, obtainStyled, obtainStyleAttributes, rvString, rvColor, rvDimen, rvInt, rvFloat, fillTypedValue, T_PX, T_STR, type RV, normRV, bagStrings } from "./res";
 import { loadDrawable, loadColorStateList, mkCsl, loadDrawableRV, type JColorStateList } from "./drawable";
 import { JTypedValue, complexToFraction, type JDisplayMetrics } from "./util";
 import { TV, parseAXML, parseAXMLDoc, xmlAttrString, type XmlNode, type XmlAttr } from "./axml";
@@ -25,19 +25,19 @@ export class JResources extends JObj {
   host!: Resources;
   config: JConfiguration | null = null;
 }
-function openRawResource(this: JResources, id: number, value = new JTypedValue()) {
-  const file = this.host.pathOf(id, 0, value);
+/** a raw resource's file and its bytes, filling `value` as the table resolves it */
+function rawResource(res: Resources, id: number, value?: JTypedValue) {
+  const file = res.pathOf(id, 0, value);
   const bytes = file?.arsc.files(file.path);
   if (!file || !bytes) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Resource 0x" + id.toString(16));
+  return { file, bytes };
+}
+function openRawResource(this: JResources, id: number, value = new JTypedValue()) {
+  const { file, bytes } = rawResource(this.host, id, value);
   fillTypedValue(this.host, { t: TV.REFERENCE, d: file.id }, value);
   return streamOf(bytes);
 }
-function openRawResourceFd(this: JResources, id: number) {
-  const file = this.host.pathOf(id);
-  const bytes = file?.arsc.files(file.path);
-  if (!file || !bytes) throw rt.mkThrowable("android/content/res/Resources$NotFoundException", "Resource 0x" + id.toString(16));
-  return mkAssetFd(bytes);
-}
+function openRawResourceFd(this: JResources, id: number) { return mkAssetFd(rawResource(this.host, id).bytes); }
 /** the app's Resources double as the system ones: framework attrs resolve through the same table */
 let systemRes: JResources | null = null;
 export function mkJResources(host: Resources, system = true): JResources {
@@ -289,6 +289,15 @@ function assetSource(am: JAssetManager, p: string): FileSource {
   if (!source) throw rt.mkThrowable("java/io/FileNotFoundException", "asset " + p);
   return source;
 }
+/** the names directly under assets/`dir`, from the eager and the lazy zip entries */
+function assetNames(res: Resources, dir: string): Set<string> {
+  const prefix = "assets/" + (dir ? dir + "/" : "");
+  const names = new Set<string>();
+  for (const k of [...Object.keys(res.zip), ...res.lazyEntries.keys()]) {
+    if (k.startsWith(prefix)) names.add(k.slice(prefix.length).split("/")[0]);
+  }
+  return names;
+}
 const assetOpen = function (this: JAssetManager, p: string) {
   const bytes = this.host.zip["assets/" + p];
   return bytes ? streamOf(bytes) : streamOfSource(assetSource(this, p));
@@ -308,17 +317,7 @@ rt.register({
     "openFd(Ljava/lang/String;)Landroid/content/res/AssetFileDescriptor;": driven(function* (this: JAssetManager, p: string): Gen {
       return mkAssetFd(yield readFully(assetSource(this, p)));
     }),
-    "list(Ljava/lang/String;)[Ljava/lang/String;": function (this: JAssetManager, p: string) {
-      const prefix = "assets/" + (p ? p + "/" : "");
-      const names = new Set<string>();
-      for (const k of Object.keys(this.host.zip)) {
-        if (k.startsWith(prefix)) names.add(k.slice(prefix.length).split("/")[0]);
-      }
-      for (const k of this.host.lazyEntries.keys()) {
-        if (k.startsWith(prefix)) names.add(k.slice(prefix.length).split("/")[0]);
-      }
-      return jarray([...names], "Ljava/lang/String;");
-    },
+    "list(Ljava/lang/String;)[Ljava/lang/String;": function (this: JAssetManager, p: string) { return jarray([...assetNames(this.host, p)], "Ljava/lang/String;"); },
     "close()V": () => {},
   },
 });
@@ -515,12 +514,7 @@ rt.register({
       return obtainStyled(this.res, this, null, attrs, 0, 0);
     },
     "obtainStyledAttributes(I[I)Landroid/content/res/TypedArray;": function (this: JTheme, styleId: number, attrs: Int32Array) {
-      const ta = new JTypedArray();
-      ta.res = this.res;
-      ta.theme = this;
-      ta.attrIds = attrs;
-      ta.vals = [...attrs].map(a => resolveStyleValue(this.res, this, this.res.styleLookup(styleId, a)));
-      return ta;
+      return obtainStyleAttributes(this.res, this, styleId, attrs);
     },
     "obtainStyledAttributes(Landroid/util/AttributeSet;[III)Landroid/content/res/TypedArray;":
       function (this: JTheme, set: JAttrSet | null, attrs: Int32Array, defStyleAttr: number, defStyleRes: number) {
@@ -537,13 +531,23 @@ rt.register({
 
 defineException("android/content/res/Resources$NotFoundException", "java/lang/RuntimeException");
 
+const hasValue = function (this: JTypedArray, i: number) { return this.vals[i] ? 1 : 0; };
+const typedString = function (this: JTypedArray, i: number) { return rvString(this.res, this.vals[i]); };
+const typedInt = function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvInt(this.res, this.vals[i], d) : d; };
+/** a layout_width/height: MATCH_PARENT/WRAP_CONTENT as their negative ints, else a dimension */
+function layoutDimension(ta: JTypedArray, i: number, d: number): number {
+  const v = ta.vals[i];
+  if (!v) return d;
+  if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4 && v.d < 0) return v.d;
+  return Math.round(rvDimen(ta.res, v, d));
+}
 rt.register({
   name: "android/content/res/TypedArray", ctor: JTypedArray,
   methods: {
     "length()I": function (this: JTypedArray) { return this.attrIds.length; },
     "getResources()Landroid/content/res/Resources;": function (this: JTypedArray) { return this.res.jobj; },
     "getChangingConfigurations()I": () => 0,
-    "hasValueOrEmpty(I)Z": function (this: JTypedArray, i: number) { return this.vals[i] ? 1 : 0; },
+    "hasValueOrEmpty(I)Z": hasValue,
     "getIndexCount()I": function (this: JTypedArray) { return this.vals.filter((v) => v).length; },
     "getIndex(I)I": function (this: JTypedArray, at: number) {
       let n = -1;
@@ -552,7 +556,7 @@ rt.register({
       }
       return 0;
     },
-    "hasValue(I)Z": function (this: JTypedArray, i: number) { return this.vals[i] ? 1 : 0; },
+    "hasValue(I)Z": hasValue,
     "peekValue(I)Landroid/util/TypedValue;": function (this: JTypedArray, i: number) {
       const v = this.vals[i];
       if (!v) return null;
@@ -566,19 +570,19 @@ rt.register({
       fillTypedValue(this.res, v, tv);
       return 1;
     },
-    "getString(I)Ljava/lang/String;": function (this: JTypedArray, i: number) { return rvString(this.res, this.vals[i]); },
-    "getText(I)Ljava/lang/CharSequence;": function (this: JTypedArray, i: number) { return rvString(this.res, this.vals[i]); },
+    "getString(I)Ljava/lang/String;": typedString,
+    "getText(I)Ljava/lang/CharSequence;": typedString,
     "getTextArray(I)[Ljava/lang/CharSequence;": function (this: JTypedArray, i: number) {
       const v = this.vals[i];
       return v && v.t === TV.REFERENCE && v.d ? jarray(bagStrings(this.res, v.d), "Ljava/lang/CharSequence;") : null;
     },
-    "getNonResourceString(I)Ljava/lang/String;": function (this: JTypedArray, i: number) { return rvString(this.res, this.vals[i]); },
+    "getNonResourceString(I)Ljava/lang/String;": typedString,
     "getBoolean(IZ)Z": function (this: JTypedArray, i: number, d: number) {
       const v = this.vals[i];
       return v ? (rvInt(this.res, v, d) ? 1 : 0) : d;
     },
-    "getInt(II)I": function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvInt(this.res, this.vals[i], d) : d; },
-    "getInteger(II)I": function (this: JTypedArray, i: number, d: number) { return this.vals[i] ? rvInt(this.res, this.vals[i], d) : d; },
+    "getInt(II)I": typedInt,
+    "getInteger(II)I": typedInt,
     "getFraction(IIIF)F": function (this: JTypedArray, i: number, base: number, pbase: number, d: number) {
       const value = this.vals[i];
       if (!value || value.t === TV.NULL) return d;
@@ -604,18 +608,8 @@ rt.register({
     "getDimensionPixelOffset(II)I": function (this: JTypedArray, i: number, d: number) {
       return this.vals[i] ? Math.trunc(rvDimen(this.res, this.vals[i], d)) : d;
     },
-    "getLayoutDimension(ILjava/lang/String;)I": function (this: JTypedArray, i: number) {
-      const v = this.vals[i];
-      if (!v) return 0;
-      if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4 && v.d < 0) return v.d;
-      return Math.round(rvDimen(this.res, v, 0));
-    },
-    "getLayoutDimension(II)I": function (this: JTypedArray, i: number, d: number) {
-      const v = this.vals[i];
-      if (!v) return d;
-      if (v.t >= TV.INT_DEC && v.t <= TV.COLOR_RGB4 && v.d < 0) return v.d;
-      return Math.round(rvDimen(this.res, v, d));
-    },
+    "getLayoutDimension(ILjava/lang/String;)I": function (this: JTypedArray, i: number) { return layoutDimension(this, i, 0); },
+    "getLayoutDimension(II)I": function (this: JTypedArray, i: number, d: number) { return layoutDimension(this, i, d); },
     "getResourceId(II)I": function (this: JTypedArray, i: number, d: number) {
       const v = this.vals[i];
       return v && (v.t === TV.REFERENCE || v.t === TV.ATTRIBUTE) ? v.d : v?.r ?? d;
@@ -672,25 +666,16 @@ const attributeSetMethods: NativeSpec["methods"] = {
   "getAttributeBooleanValue(Ljava/lang/String;Ljava/lang/String;Z)Z": function (this: HasNode, _ns: string, n: string, d: number) { return attrBool(byName(this, n), d); },
   "getAttributeFloatValue(IF)F": function (this: HasNode, i: number, d: number) { return attrFloat(byIdx(this, i), d); },
   "getAttributeFloatValue(Ljava/lang/String;Ljava/lang/String;F)F": function (this: HasNode, _ns: string, n: string, d: number) { return attrFloat(byName(this, n), d); },
+  "getStyleAttribute()I": function (this: HasNode) { return this.node?.attrs.find((x) => x.name === "style" && !x.ns)?.data ?? 0; },
+  "getIdAttributeResourceValue(I)I": function (this: HasNode, d: number) { return this.node?.attrs.find((x) => x.resId === 0x010100d0)?.data ?? d; },
 };
 rt.register({
   name: "webdroid/AttrSet", ctor: JAttrSet, ifaces: ["android/util/AttributeSet"],
   methods: {
     ...attributeSetMethods,
     "getIdAttribute()Ljava/lang/String;": () => null,
-    "getClassAttribute()Ljava/lang/String;": function (this: JAttrSet) {
-      const a = this.node?.attrs.find((x) => x.name === "class");
-      return a?.str ?? null;
-    },
-    "getStyleAttribute()I": function (this: JAttrSet) {
-      const a = this.node?.attrs.find((x) => x.name === "style" && !x.ns);
-      return a ? a.data : 0;
-    },
+    "getClassAttribute()Ljava/lang/String;": function (this: JAttrSet) { return this.node?.attrs.find((x) => x.name === "class")?.str ?? null; },
     "getPositionDescription()Ljava/lang/String;": () => "<webdroid xml>",
-    "getIdAttributeResourceValue(I)I": function (this: JAttrSet, d: number) {
-      const a = this.node?.attrs.find((x) => x.resId === 0x010100d0);
-      return a ? a.data : d;
-    },
   },
 });
 
@@ -766,14 +751,8 @@ const xmlParserMethods: NativeSpec["methods"] = {
   "getAttributeNamespace(I)Ljava/lang/String;": function (this: JXmlParser, i: number) { return byIdx(this, i)?.ns ?? ""; },
   "getAttributeType(I)Ljava/lang/String;": () => "CDATA",
   "getAttributePrefix(I)Ljava/lang/String;": () => null,
-  "getAttributeIntValue(Ljava/lang/String;Ljava/lang/String;I)I": function (this: JXmlParser, _ns: string, name: string, d: number) {
-    const a = this.events[this.pos]?.node?.attrs.find((x) => x.name === name);
-    return a && a.type >= TV.INT_DEC ? a.data : d;
-  },
   "getIdAttribute()Ljava/lang/String;": function (this: JXmlParser) { return xmlAttrString(this.node?.attrs.find((x) => x.name === "id")); },
   "getClassAttribute()Ljava/lang/String;": function (this: JXmlParser) { return xmlAttrString(this.node?.attrs.find((x) => x.name === "class")); },
-  "getStyleAttribute()I": function (this: JXmlParser) { return this.node?.attrs.find((x) => x.name === "style" && !x.ns)?.data ?? 0; },
-  "getIdAttributeResourceValue(I)I": function (this: JXmlParser, d: number) { return this.node?.attrs.find((x) => x.resId === 0x010100d0)?.data ?? d; },
   "getText()Ljava/lang/String;": function (this: JXmlParser) { return this.events[this.pos]?.text ?? null; },
   "getPositionDescription()Ljava/lang/String;": function (this: JXmlParser) { return `<webdroid xml line ${this.events[this.pos]?.line ?? -1}>`; },
   "isEmptyElementTag()Z": function (this: JXmlParser) {

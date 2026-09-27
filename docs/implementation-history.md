@@ -198,6 +198,11 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   pages invalidate decoded instructions and regions; install regions only
   against the source-page epoch. A region discovery budget once let a branch
   enter with stale carry and broke Lichess P-384 TLS only under JIT.
+- Pre-boot native debug globals (set with `page.addInitScript`): `__wdNativeTrace`
+  and `__wdNativeStep` arm `wd.native.trace`/`step`; `__wdWatch` (pcs) logs
+  registers at each watched pc while stepping; `__wdSlowMs` logs host calls
+  and slices slower than that many ms; `__wdGlProbe` checks `getError` after
+  every GLES entry point, naming it and counting `perf.glErrors`.
 - A signal handler's ucontext is loaded back inside `Cpu.call`, before the
   interrupted frame or another signal can run. Loading it after the call
   returned let a frame whose host call had completed meanwhile run a slice,
@@ -239,7 +244,19 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   (36.0/s) and a rope swipe advanced the tutorial. Its AVC/AAC intro decodes
   real samples but stays black or fills output queues; a larger queue did not
   solve it. AAudio outputs real 24 kHz mono float PCM. Later gameplay rate,
-  player/backend records and the intro handoff remain unverified.
+  player/backend records and the intro handoff remain unverified. Its
+  "OPENGL NATIVE PLUG-IN ERROR: GL_INVALID_OPERATION" came from Unity's
+  VideoPlayer binding the SurfaceTexture at `GL_TEXTURE_EXTERNAL_OES` and
+  attaching it to a read framebuffer for a blit; native ES 2/3 now maps that
+  target to the TEXTURE_2D storage `updateTexImage` fills. The intro still
+  shows black. `samplerExternalOES` shaders read it as sampler2D, and the Java
+  bindings map the target the same way.
+- Native ES 2/3 client arrays (default vertex array only) stream each draw's
+  reached vertex range into reused buffers at guest offsets, so `first` and
+  indices stay unchanged. A client-vertex draw with a bound element buffer reads
+  the indices back with `getBufferSubData` because the host keeps no copy.
+  WebGL still rejects what GL allows here: `GL_FIXED`, strides over 255 and
+  offsets or strides misaligned to the component size.
 - TikTok runs bundled ByteVC and EGL code. Fixed HEVC packets decoded 71
   frames in 776–785 ms of native JIT work versus 3,913 ms without JIT;
   fixed packets do not prove live playback rate. Bounding WebGL pixel views
@@ -474,3 +491,80 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   animated; Switch has no thumb drag; `Layout` reserves no leading margin, so
   `getParagraphLeft/Right` report the full width; `Html.fromHtml` ignores
   `<img>`/`<sub>` and TagHandler; popups draw no elevation shadow.
+- Performance pass, 2026-09-27 (Apple M4 Pro, 120 Hz display, hardware GPU).
+  The virtual display was fixed at 60 Hz while GL swaps waited on raw rAF, so
+  on a 120 Hz host Doodle Jump rendered 120 GL frames/s and presented 60. The
+  shell now measures the host rate before boot (`?hz=` pins it; process frames
+  inherit it) and eglSwapBuffers waits for the virtual vsync: Doodle Jump
+  presents 120/s. At 4x CPU throttle, Calculator taps presented 105 instead
+  of 57 frames/s (input-to-present p90 34 to 25 ms), Harmonic scrolling 77
+  instead of 53 (p90 39 to 14 ms) and Mihon 81 instead of 59 (p90 90 to 53
+  ms). The harness's 16 ms swipe steps cap View-list scrolling near 60/s.
+  Launch: cold handlers are built when an instruction first runs rather than
+  for every instruction at a method's first call, and constant typing runs
+  only when a float read can see a constant (a separate first-call scan that
+  also skipped the CFG was measured and dropped: it saved no launch time); resource string pools decode on first read and
+  every type chunk parses on first lookup; generated bodies compile eagerly.
+  Matched first draws fell 5-11% (Mihon 1729 to 1545 ms, Calculator 900 to
+  820). A promotion threshold of 8 or 128 calls did not beat 32. ARM32
+  regions exited to the interpreter, spilling every core register, for vcmp,
+  vmrs, vcvt, core/VFP vmov, vldm/vstm, ldrex/strex, barriers and NEON
+  whole-register vld1/vst1; in Cut the Rope these were millions of exits a
+  second. They now compile (a Thumb float loop: 1.7 instead of 9.3 ns per
+  instruction). ARM64 regions fall back for about 0.03% of Subway Surfers'
+  instructions. ARM-mode ldrex/strex only compiled once armMisc stopped
+  claiming them first. NEON data processing (integer, bitwise, shifts, f32
+  arithmetic and compares, permutes, lane moves, VNMLA/VNMLS) now compiles
+  in jitneon.zig: Cut the Rope's integer and matrix loops run at about 0.4
+  ns per instruction against 33-44 with the interpreter, the f32 forms
+  copying its fp.standard32 input and output steps. The ARM32 test sweep
+  compares only v0-v15, since the interpreter uses the upper V registers as
+  scratch. Matched against main on one machine, Subway Surfers' age screen
+  presented 45 instead of 24 GL frames/s and Cut the Rope 29 instead of 19.
+- ARM32 fallbacks in Cut the Rope, 2026-09-27. Thumb-2 modified immediates
+  with a replicated pattern (`cmp.w r1, #0x10001`, `mov.w r2, #0x55555555`)
+  fell back because the Thumb path re-encoded them as ARM immediates, which
+  cannot express them. `jit32thumb.zig` now maps Thumb-2 data processing,
+  multiplies, CLZ/REV/RBIT, extensions with rotation, register-controlled
+  shifts, ADDW/ADR and LDM/STM to ARM words, carrying ThumbExpandImm's value
+  and carry separately; rwThumb reads the same words, so translated forms and
+  branches declare their flags precisely while other wide instructions stay
+  conservative. B.W, TBB/TBH, LDRD/STRD in every indexing mode, literal
+  loads, doubleword exclusives and CLREX, PC-relative VLDR and VMAX/VMIN.F32
+  (the first NaN operand's bits, as fp.fmax returns them) also compile. A
+  back edge's instruction-limit exit settled flags inside its `if`, which
+  the safe build rejected once a compiled compare preceded an unconditional
+  branch into a block that ignores them. Over 50 s of level 1 the 400
+  hottest fallback sites went from 35.4M to 1.6M exits; guest instructions
+  rose from about 334M to 366M a second and GL frames from 34 to 36 a
+  second. A loop of these forms runs at 1.0 ns per Thumb instruction (20.7
+  before, 14 with every instruction forced to fall back). Remaining gaps:
+  NEON single-lane VLD1/VST1, reciprocal estimates and steps, pairwise
+  VPMIN/VPMAX/VPADD, SMLABB/SMULBB, USAT, UXTB16/PKHBT/ORN and IT blocks
+  whose bodies are not simple moves.
+- Findings from the 2026-09-27 cleanup, confirmed against OpenJDK/AOSP and
+  fixed: ValueRange.of and Period.from(null) threw nothing or the wrong
+  type; Math.abs did not wrap at MIN_VALUE; getLocalizedMessage, isDigit,
+  DecimalFormat(String, DecimalFormatSymbols), JSONArray.toString(int),
+  X509 critical extension OIDs and Array.newInstance of array classes were
+  wrong; DataInput/DataOutput UTF used standard rather than modified UTF-8,
+  as JNI's string functions did (ART's form: two-byte NUL, a valid surrogate
+  pair as one four-byte sequence); Random.nextInt(bound) skewed bounds over
+  2^30 because Java's rejection test relies on int overflow, and
+  ThreadLocalRandom.nextInt(origin, bound) took a biased modulo. On the UI
+  side getColorLong, touch major/minor, Editable.Factory, LengthFilter, Path
+  delegate copies, Drawable.setBounds(Rect) and postInvalidate(IIII) now
+  follow AOSP, and CharSequence arguments go through csText. Java GLES20
+  client arrays leaked a buffer per call and sized int indices as bytes;
+  native ES 2/3 gained client vertex arrays and indices, and
+  GL_TEXTURE_EXTERNAL_OES and samplerExternalOES read SurfaceTexture's 2D
+  storage (Cut the Rope's "OPENGL NATIVE PLUG-IN ERROR" was Unity's video
+  player binding that target). Flappy Bird's long-standing page error was an
+  AdMob script's uncaught exception escaping its WebView frame; frames now
+  report such errors through WebChromeClient.onConsoleMessage. Unit tests
+  that parse every module or load full browser bundles exceeded bun's 5 s
+  default only under parallel load and now carry explicit timeouts.
+  Remaining limits: nothing applies InputFilters to typed or set text and
+  maxLength is not read; glGetActiveUniform reports an external sampler as
+  SAMPLER_2D; Cut the Rope's intro video is still black (media, not GL).
+

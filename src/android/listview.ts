@@ -1,4 +1,3 @@
-import { AID, bagStrings } from "./res";
 // AdapterView/ListView/GridView + framework adapters (BaseAdapter/ArrayAdapter).
 // Non-recycling: materializes all item views (fine at app scale), scrolls internally.
 
@@ -7,7 +6,7 @@ import { mangleMethod, jmethod } from "../jvm/abi";
 import { newObj, vcall, curThread, after, vcallUncaught } from "../jvm/natives/jlang";
 import { JView, JViewGroup, JLayoutParams, attachView, detachView, measureView, layoutView, makeSpec, MS_EXACTLY, MS_AT_MOST, MS_UNSPEC, specMode, specSize, MATCH_PARENT, WRAP_CONTENT, childMeasureSpec, defaultSize, resolveSize, invalidate, requestLayout, initViewFromCtx, inheritContext, uiState, guardCall, findById, removeFrom } from "./view";
 import { JMotionEvent, restVelocity, trackVelocity, SCROLL_WEIGHT, FLING } from "./motionevent";
-import { JAttrSet, obtainStyled, rvDimen, rvInt, type Resources } from "./res";
+import { AID, bagStrings, JAttrSet, obtainStyled, rvDimen, rvInt, type Resources } from "./res";
 import { attr } from "./axml";
 import { JCanvas } from "./graphics";
 import { JDrawable, loadDrawableRV, drawableSize, drawChild } from "./drawable";
@@ -454,17 +453,21 @@ function addFooter(this: JListView, v: JView) { this.footers.push(v); this.views
 const measureListView = driven(function* measureListView(this: JListView, wSpec: number, hSpec: number): Gen {
     const w = defaultSize(specSize(wSpec), wSpec);
     const availW = Math.max(0, w - this.padL - this.padR);
+    const rowW = makeSpec(availW, MS_EXACTLY), rowH = makeSpec(specSize(hSpec), MS_UNSPEC);
     let totalH = this.padT + this.padB;
     for (const v of this.allViews()) {
       const lp = v.lp;
-      yield measureView(v,
-        childMeasureSpec(makeSpec(availW, MS_EXACTLY), 0, lp?.width ?? MATCH_PARENT),
-        childMeasureSpec(makeSpec(Math.max(0, specSize(hSpec)), MS_UNSPEC), 0, lp?.height ?? WRAP_CONTENT));
+      yield measureView(v, childMeasureSpec(rowW, 0, lp?.width ?? MATCH_PARENT), childMeasureSpec(rowH, 0, lp?.height ?? WRAP_CONTENT));
       totalH += v.measuredH + this.divH;
     }
     this.measuredW = w;
     this.measuredH = specMode(hSpec) === MS_EXACTLY ? specSize(hSpec) : resolveSize(totalH, hSpec);
 });
+const selectFromTop = function (this: JListView, pos: number) { jmethod(this, M_setSelFromTop)!.call(this, pos, 0); };
+/** AOSP wraps the adapter in a HeaderViewListAdapter once headers or footers exist */
+const listAdapter = function (this: JListView) {
+  return this.headers.length || this.footers.length ? this.headerAdapter ??= new JHeaderViewListAdapter(this) : this.adapter;
+};
 export const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JListView, c: unknown, set: JAttrSet | null): Gen {
     yield initViewFromCtx(this, c, set);
@@ -544,8 +547,8 @@ export const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     this.pendingSel = { pos, off };
     requestLayout(this);
   },
-  "setSelection(I)V": function (this: JListView, pos: number) { jmethod(this, M_setSelFromTop)!.call(this, pos, 0); },
-  "smoothScrollToPosition(I)V": function (this: JListView, pos: number) { jmethod(this, M_setSelFromTop)!.call(this, pos, 0); },
+  "setSelection(I)V": selectFromTop,
+  "smoothScrollToPosition(I)V": selectFromTop,
   "getPositionForView(Landroid/view/View;)I": function (this: JListView, v: JView) {
     let cur: JView | null = v;
     while (cur && cur.parent !== this) cur = cur.parent;
@@ -587,18 +590,13 @@ export const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "getCheckedItemCount()I": function (this: JListView) { return this.checked.size; },
   "getCheckedItemIds()[J": function (this: JListView) { return BigInt64Array.from([...this.checked].map((c) => BigInt(c))); },
   "getCheckedItemPositions()Landroid/util/SparseBooleanArray;": function (this: JListView) {
-    const info = rt.link("android/util/SparseBooleanArray");
-    const sa = new info.ctor();
+    const sa = rt.make("android/util/SparseBooleanArray");
     for (const c of this.checked) sa.m.set(c, 1);
     return sa;
   },
   "pointToPosition(II)I": function (this: JListView, x: number, y: number) { return this.itemIndexAt(y + this.scrollY); },
-  "getAdapter()Landroid/widget/ListAdapter;": function (this: JListView) {
-    return this.headers.length || this.footers.length ? this.headerAdapter ??= new JHeaderViewListAdapter(this) : this.adapter;
-  },
-  "getAdapter()Landroid/widget/Adapter;": function (this: JListView) {
-    return this.headers.length || this.footers.length ? this.headerAdapter ??= new JHeaderViewListAdapter(this) : this.adapter;
-  },
+  "getAdapter()Landroid/widget/ListAdapter;": listAdapter,
+  "getAdapter()Landroid/widget/Adapter;": listAdapter,
   ...fieldGetters({ "getDividerHeight()I": "divH", "getChoiceMode()I": "choiceMode",
     "getEmptyView()Landroid/view/View;": "emptyView", "getListPaddingLeft()I": "padL",
     "getListPaddingRight()I": "padR", "getListPaddingTop()I": "padT", "getListPaddingBottom()I": "padB",
@@ -660,7 +658,7 @@ export const listViewMethods: NonNullable<NativeSpec["methods"]> = {
       this.lastY = ev.y;
       this.lastMoveT = ev.eventTime;
       this.flingAnim = null;
-      // press feedback on the item under finger
+      // the item under the finger: a tap target, and a long press once the timer fires
       const idx = this.itemIndexAt(ev.y + this.scrollY);
       this.pressTarget = idx;
       this.longFired = false;

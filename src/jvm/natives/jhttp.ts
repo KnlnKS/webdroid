@@ -1,6 +1,8 @@
 import { JObj, rt } from "../runtime";
 
 class JHttpParams extends JObj { values = new Map<string, unknown>(); }
+function isParameterSet(this: JHttpParams, name: string) { return this.values.has(name) ? 1 : 0; }
+function copyParams(this: JHttpParams) { const copy = new JHttpParams(); copy.values = new Map(this.values); return copy; }
 const setParam = function (this: JHttpParams, name: string, value: unknown) { this.values.set(name, value); return this; };
 rt.register({
   name: "org/apache/http/params/BasicHttpParams", ctor: JHttpParams, ifaces: ["org/apache/http/params/HttpParams"],
@@ -17,11 +19,11 @@ rt.register({
     "getLongParameter(Ljava/lang/String;J)J": function (this: JHttpParams, name: string, fallback: bigint) { return this.values.has(name) ? BigInt(this.values.get(name) as bigint) : fallback; },
     "getDoubleParameter(Ljava/lang/String;D)D": function (this: JHttpParams, name: string, fallback: number) { return this.values.has(name) ? Number(this.values.get(name)) : fallback; },
     "removeParameter(Ljava/lang/String;)Z": function (this: JHttpParams, name: string) { return this.values.delete(name) ? 1 : 0; },
-    "isParameterSet(Ljava/lang/String;)Z": function (this: JHttpParams, name: string) { return this.values.has(name) ? 1 : 0; },
-    "isParameterSetLocally(Ljava/lang/String;)Z": function (this: JHttpParams, name: string) { return this.values.has(name) ? 1 : 0; },
+    "isParameterSet(Ljava/lang/String;)Z": isParameterSet,
+    "isParameterSetLocally(Ljava/lang/String;)Z": isParameterSet,
     "clear()V": function (this: JHttpParams) { this.values.clear(); },
-    "copy()Lorg/apache/http/params/HttpParams;": function (this: JHttpParams) { const copy = new JHttpParams(); copy.values = new Map(this.values); return copy; },
-    "clone()Ljava/lang/Object;": function (this: JHttpParams) { const copy = new JHttpParams(); copy.values = new Map(this.values); return copy; },
+    "copy()Lorg/apache/http/params/HttpParams;": copyParams,
+    "clone()Ljava/lang/Object;": copyParams,
   },
 });
 

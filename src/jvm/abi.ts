@@ -43,7 +43,8 @@ export function mangleMethod(name: string, desc: string): string {
 }
 const demangled = new Map<string, [string, string]>();
 export const demangle = (mangled: string): [string, string] | undefined => demangled.get(mangled);
-/** a reflect.Proxy materialises a method on first use; set by jreflect, consulted by jmethod */
+/** a reflect.Proxy materialises a method on first use from the name and descriptor the caller
+ *  holds; set by jreflect, consulted by jmethod and every other by-name dispatch */
 export const lateMethod = { find: null as ((o: unknown, name: string, desc: string) => JMethod | undefined) | null };
 
 /** mangle instance field. declCls = "java/lang/Object" form */
@@ -122,6 +123,30 @@ export function charsToString(chars: Uint16Array | Uint8Array, off: number, len:
     s += Reflect.apply(String.fromCharCode, null, chars.subarray(off + i, off + Math.min(len, i + 1024)));
   }
   return s;
+}
+
+/** modified UTF-8 from `pos`: NUL is two bytes and a supplementary character is two three-byte
+ *  halves, or one four-byte sequence as ART's JNI accepts. Stops at `end` or after `units` UTF-16
+ *  units, whichever comes first. */
+export function decodeModifiedUtf8(bytes: Uint8Array, pos = 0, end = bytes.length, units = end - pos): string {
+  let ascii = pos + units <= end;
+  for (let i = 0; ascii && i < units; i++) ascii = bytes[pos + i] < 0x80;
+  if (ascii) return charsToString(bytes, pos, units);
+  const out = new Uint16Array(units);
+  let o = 0, p = pos;
+  while (o < units && p < end) {
+    const a = bytes[p++];
+    if (a < 0x80) out[o++] = a;
+    else if ((a & 0xe0) === 0xc0) out[o++] = ((a & 0x1f) << 6) | (bytes[p++] & 0x3f);
+    else if ((a & 0xf8) === 0xf0) {
+      const v = (((a & 7) << 18) | ((bytes[p] & 0x3f) << 12) | ((bytes[p + 1] & 0x3f) << 6) | (bytes[p + 2] & 0x3f)) - 0x10000;
+      p += 3;
+      out[o++] = 0xd800 | (v >> 10);
+      if (o < units) out[o++] = 0xdc00 | (v & 0x3ff);
+    }
+    else { const b = bytes[p++], c = bytes[p++]; out[o++] = ((a & 0x0f) << 12) | ((b & 0x3f) << 6) | (c & 0x3f); }
+  }
+  return charsToString(out, 0, o);
 }
 
 export const i8 = <B extends ArrayBufferLike>(b: ArrayBufferView<B>, off = 0, len = b.byteLength - off) => new Int8Array(b.buffer, b.byteOffset + off, len);

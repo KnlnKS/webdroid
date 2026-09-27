@@ -1,4 +1,3 @@
-export {};
 // Pull the real android: framework off the reference device and prove the two halves match.
 //
 //   bun run gen-framework            # pull from a connected device/emulator, then verify
@@ -20,20 +19,17 @@ import { loadJarDexes } from "./lib";
 import "../src/natives";
 import { mangleStaticField } from "../src/jvm/abi";
 import { Arsc } from "../src/android/arsc";
+import { androidTool } from "./android-sdk";
 
 const OUT = "vendor/aosp";
 const JAR = `${OUT}/framework.jar`, RES = `${OUT}/framework-res.apk`;
-const sdkRoot = process.env.ANDROID_HOME ?? process.env.ANDROID_SDK_ROOT ?? `${process.env.HOME}/Library/Android/sdk`;
-const adb = `${sdkRoot}/platform-tools/adb`;
-
 const sh = (...args: string[]) => {
-  const r = Bun.spawnSync([adb, ...args], { stderr: "pipe", stdout: "pipe" });
+  const r = Bun.spawnSync([androidTool("adb"), ...args], { stderr: "pipe", stdout: "pipe" });
   if (r.exitCode !== 0) throw new Error(`adb ${args.join(" ")} failed:\n${r.stderr.toString().trim()}`);
   return r.stdout.toString().trim();
 };
 
 if (!process.argv.includes("--verify")) {
-  if (!existsSync(adb)) throw new Error(`no adb at ${adb} — install platform-tools`);
   sh("wait-for-device");
   for (let i = 0; sh("shell", "getprop", "sys.boot_completed") !== "1"; i++) {
     if (i > 90) throw new Error("device never reported sys.boot_completed — boot it with `bun run e2e:boot`");
@@ -56,7 +52,9 @@ const jarDexes = await loadJarDexes(JAR);
 // the R classes are dex, but their <clinit> runs on java.* natives
 console.log(`${JAR}: ${jarDexes.length} dex, ${rt.dexIndex.size} classes`);
 
-const paired = new Arsc(unzipSync(new Uint8Array(await Bun.file(RES).arrayBuffer()), { filter: (f) => f.name === "resources.arsc" })["resources.arsc"]);
+const tableOf = async (apk: string) =>
+  new Arsc(unzipSync(new Uint8Array(await Bun.file(apk).arrayBuffer()), { filter: (f) => f.name === "resources.arsc" })["resources.arsc"]);
+const paired = await tableOf(RES);
 
 /** every (name, id) pair the R$<type> classes in the framework dex declare */
 async function rIds(): Promise<Map<string, number>> {
@@ -105,7 +103,6 @@ console.log(`R ids declared by the framework dex: ${ids.size}`);
 const p = check(paired);
 report(RES, p);
 if (existsSync("vendor/framework-res.apk")) {
-  const relinked = new Arsc(unzipSync(new Uint8Array(await Bun.file("vendor/framework-res.apk").arrayBuffer()), { filter: (f) => f.name === "resources.arsc" })["resources.arsc"]);
-  report("vendor/framework-res.apk (aapt2-relinked from the SDK res tree)", check(relinked));
+  report("vendor/framework-res.apk (aapt2-relinked from the SDK res tree)", check(await tableOf("vendor/framework-res.apk")));
 }
 if (p.wrong) throw new Error(`${p.wrong} ids name a different resource in ${RES} than in ${JAR} — the two halves are not from one build`);

@@ -10,7 +10,7 @@ import { packedArchives } from "../shell/packedarchive";
 import { loadDrawable } from "./drawable";
 import { mkJResources, mkXmlParser } from "./resnative";
 import { getPackageInstaller } from "./packageinstaller";
-import { verifyApkSignature } from "./apksignature";
+import { sameBytes, verifyApkSignature } from "./apksignature";
 import { persistPackage, restorePackages } from "../shell/packages";
 import { appHost, type AppHost, jclsNameOf } from "./apphost";
 import { apkPath, vfs } from "../jvm/natives/jio";
@@ -73,6 +73,8 @@ class JPackageItemInfo extends JObj {
   archiveResources: Resources | null = null;
   name = ""; packageName = ""; labelRes = 0; nonLocalizedLabel: string | null = null; icon = 0; metaData: JBundle | null = null;
 }
+/** the ApplicationInfo PackageManager resolves an item's resources through */
+const ownerAppInfo = (item: JPackageItemInfo) => item instanceof JComponentInfo ? item.applicationInfo : item instanceof JApplicationInfo ? item : null;
 rt.register({
   name: "android/content/pm/PackageItemInfo", ctor: JPackageItemInfo,
   fields: ["name", "packageName", "labelRes", "nonLocalizedLabel", "icon", "metaData"],
@@ -81,13 +83,11 @@ rt.register({
     "loadXmlMetaData(Landroid/content/pm/PackageManager;Ljava/lang/String;)Landroid/content/res/XmlResourceParser;": function (this: JPackageItemInfo, pm: JPackageManager, name: string) {
       const id = this.metaData?.map.get(name);
       if (typeof id !== "number" || !id) return null;
-      const info = this instanceof JComponentInfo ? this.applicationInfo : this instanceof JApplicationInfo ? this : null;
-      return vcall(pm, "getXml", "(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/content/res/XmlResourceParser;", this.packageName, id, info);
+      return vcall(pm, "getXml", "(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/content/res/XmlResourceParser;", this.packageName, id, ownerAppInfo(this));
     },
     "loadLabel(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;": function (this: JPackageItemInfo) { return applicationLabel(this); },
     "loadIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": driven(function* (this: JPackageItemInfo, pm: JPackageManager): Gen {
-      const info = this instanceof JComponentInfo ? this.applicationInfo : this instanceof JApplicationInfo ? this : null;
-      const icon = this.icon ? yield vcall(pm, "getDrawable", "(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/graphics/drawable/Drawable;", this.packageName, this.icon, info) : null;
+      const icon = this.icon ? yield vcall(pm, "getDrawable", "(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/graphics/drawable/Drawable;", this.packageName, this.icon, ownerAppInfo(this)) : null;
       return icon ?? vcall(this, "loadDefaultIcon", "(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;", pm);
     }),
     "loadDefaultIcon(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;": (pm: JPackageManager) => vcall(pm, "getDefaultActivityIcon", "()Landroid/graphics/drawable/Drawable;"),
@@ -200,7 +200,7 @@ rt.register({
     "toByteArray()[B": function (this: JSignature) { return this.bytes.slice(); },
     "toCharsString()Ljava/lang/String;": function (this: JSignature) { return [...this.bytes].map((b) => (b & 255).toString(16).padStart(2, "0")).join(""); },
     "hashCode()I": function (this: JSignature) { return this.bytes.reduce((hash, byte) => Math.imul(hash, 31) + byte | 0, 1); },
-    "equals(Ljava/lang/Object;)Z": function (this: JSignature, o: unknown) { return o instanceof JSignature && o.bytes.length === this.bytes.length && o.bytes.every((b, i) => b === this.bytes[i]) ? 1 : 0; },
+    "equals(Ljava/lang/Object;)Z": function (this: JSignature, o: unknown) { return o instanceof JSignature && sameBytes(o.bytes, this.bytes) ? 1 : 0; },
     "describeContents()I": () => 0,
     "writeToParcel(Landroid/os/Parcel;I)V": function (this: JSignature, parcel: JParcel) { return vcall(parcel, "writeByteArray", "([B)V", this.bytes); },
   },
@@ -253,10 +253,7 @@ export function setManifest(root: XmlNode, activities: Map<string, XmlNode>, pro
     const host = appHost;
     currentPackage = packages.get(pkg) ?? new PackageRecord(root, host.res, apkPath(), packageUid(pkg), async () => {
       const bytes = await vfs.readFile(apkPath());
-      if (!bytes) return [];
-      let pending = certificateCache.get(bytes);
-      if (!pending) certificateCache.set(bytes, pending = apkCertificates(bytes, host.zip));
-      return pending;
+      return bytes ? cachedCertificates(bytes, host.zip) : [];
     });
     packages.set(pkg, currentPackage);
   }
@@ -614,20 +611,20 @@ function queryComponents(intent: JIntent | null, flags: number, kind: Exclude<Co
     const pkg = owner.pkg;
     if (intent.pkg && intent.pkg !== pkg || intent.componentPkg && intent.componentPkg !== pkg) continue;
     for (const [name, node] of owner.components[kind]) {
-    if (!visibleComponent(name, node, flags, owner)) continue;
-    let priority = 0;
-    if (intent.component) { if (qualifyComponent(intent.component, pkg) !== name) continue; }
-    else {
-      const filters = node.children.filter((filter) => filter.name === "intent-filter" && matchesIntentFilter(filter, intent, !!(flags & 0x10000)));
-      if (!filters.length) continue;
-      priority = Math.max(...filters.map((filter) => attr(filter, "priority")?.data ?? 0));
-    }
-    const info = rt.make("android/content/pm/ResolveInfo");
-    if (kind === "activity") info.activityInfo = mkActivityInfo(name, flags, owner);
-    else if (kind === "receiver") info.activityInfo = receiverInfo(name, node, flags, owner);
-    else info.serviceInfo = serviceInfo(name, node, flags, owner);
-    info.priority = priority;
-    result.a.push(info);
+      if (!visibleComponent(name, node, flags, owner)) continue;
+      let priority = 0;
+      if (intent.component) { if (qualifyComponent(intent.component, pkg) !== name) continue; }
+      else {
+        const filters = node.children.filter((filter) => filter.name === "intent-filter" && matchesIntentFilter(filter, intent, !!(flags & 0x10000)));
+        if (!filters.length) continue;
+        priority = Math.max(...filters.map((filter) => attr(filter, "priority")?.data ?? 0));
+      }
+      const info = rt.make("android/content/pm/ResolveInfo");
+      if (kind === "activity") info.activityInfo = mkActivityInfo(name, flags, owner);
+      else if (kind === "receiver") info.activityInfo = receiverInfo(name, node, flags, owner);
+      else info.serviceInfo = serviceInfo(name, node, flags, owner);
+      info.priority = priority;
+      result.a.push(info);
     }
   }
   result.a.sort((a, b) => (b as { priority: number }).priority - (a as { priority: number }).priority);
@@ -703,6 +700,9 @@ async function apkChecksums(pkg: string, includeSplits: boolean, required: numbe
   }
   return result;
 }
+/** the resources a package's items resolve through: the item's own archive, the booted app's, or an installed apk's */
+const packageResources = (pkg: string, info: JApplicationInfo | null) =>
+  info?.archiveResources ?? (pkg === appHost?.pkg ? appHost.res : installedPackage(pkg).then((p) => p?.archive.res));
 class JPackageManager extends JObj {}
 let cachedPM: JPackageManager | null = null;
 export function getPM(): JPackageManager {
@@ -736,18 +736,18 @@ rt.register({
       return vcall(this, "getResourcesForApplication", "(Landroid/content/pm/ApplicationInfo;)Landroid/content/res/Resources;", info);
     }),
     "getResourcesForApplication(Landroid/content/pm/ApplicationInfo;)Landroid/content/res/Resources;": driven(function* (info: JApplicationInfo): Gen {
-      const res = info.archiveResources ?? (info.packageName === appHost?.pkg ? appHost.res : (yield installedPackage(info.packageName))?.archive.res);
+      const res: Resources | undefined = yield packageResources(info.packageName, info);
       if (!res) throw nameNotFound(info.packageName);
       return res.jobj ?? mkJResources(res, false);
     }),
     "getXml(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/content/res/XmlResourceParser;": driven(function* (pkg: string, id: number, info: JApplicationInfo | null): Gen {
-      const res = info?.archiveResources ?? (pkg === appHost?.pkg ? appHost.res : (yield installedPackage(pkg))?.archive.res);
+      const res: Resources | undefined = yield packageResources(pkg, info);
       if (!res) return null;
       try { return mkXmlParser(res, id); }
       catch (error) { if (error instanceof rt.link("android/content/res/Resources$NotFoundException").ctor) return null; throw error; }
     }),
     "getDrawable(Ljava/lang/String;ILandroid/content/pm/ApplicationInfo;)Landroid/graphics/drawable/Drawable;": driven(function* (pkg: string, id: number, info: JApplicationInfo | null): Gen {
-      const res = info?.archiveResources ?? (pkg === appHost?.pkg ? appHost.res : (yield installedPackage(pkg))?.archive.res);
+      const res: Resources | undefined = yield packageResources(pkg, info);
       return res?.tbl(id)?.entry(id) ? loadDrawable(res, id, null) : null;
     }),
     "getDefaultActivityIcon()Landroid/graphics/drawable/Drawable;": () => {
@@ -779,12 +779,7 @@ rt.register({
       pi.firstInstallTime = pi.lastUpdateTime = installTime(pkg);
       if (flags & (64 | 0x8000000)) {
         const bytes = yield vfs.readFile(apkPath());
-        let certificates: Uint8Array[] = [];
-        if (bytes) {
-          let pending = certificateCache.get(bytes);
-          if (!pending) certificateCache.set(bytes, pending = apkCertificates(bytes, appHost?.zip ?? {}));
-          certificates = yield pending;
-        }
+        const certificates: Uint8Array[] = bytes ? yield cachedCertificates(bytes, appHost?.zip ?? {}) : [];
         if (flags & 64) pi.signatures = signatures(certificates);
         if (flags & 0x8000000) pi.signingInfo = signingInfo(certificates);
       }
@@ -871,7 +866,7 @@ rt.register({
       for (const owner of packages.values()) {
         if (!owner.root.children.some((n) => n.name === "permission" && attrStr(n, "name") === permission)) continue;
         const signers: Uint8Array[] = yield owner.certificates();
-        if (certificates.length && certificates.length === signers.length && certificates.every((c, i) => c.length === signers[i].length && c.every((b, j) => b === signers[i][j]))) return 0;
+        if (certificates.length && certificates.length === signers.length && certificates.every((c, i) => sameBytes(c, signers[i]))) return 0;
       }
       return -1;
     }),
@@ -898,7 +893,7 @@ rt.register({
       if (!x || !y) return -4;
       const left: Uint8Array[] = yield x.visibleCertificates(), right: Uint8Array[] = yield y.visibleCertificates();
       if (!left.length || !right.length) return !left.length && !right.length ? 1 : !left.length ? -1 : -2;
-      return left.length === right.length && left.every((cert) => right.some((other) => cert.length === other.length && cert.every((v, i) => v === other[i]))) ? 0 : -3;
+      return left.length === right.length && left.every((cert) => right.some((other) => sameBytes(cert, other))) ? 0 : -3;
     }),
     "hasSigningCertificate(Ljava/lang/String;[BI)Z": driven(function* (pkg: string | null, certificate: Int8Array | null, type: number): Gen {
       if (pkg === null || certificate === null) throw rt.mkThrowable("java/lang/NullPointerException", null);
@@ -939,26 +934,21 @@ rt.register({
     },
   },
 });
+/** an attribute of the booted manifest's <activity> for a dotted class name */
+function activityAttr(cls: string, name: string): number | undefined {
+  const node = manifestActivities.get(cls.replace(/\./g, "/"));
+  return node && attr(node, name)?.data;
+}
 /** The activity's own `android:theme`, or 0 when it just inherits the application's. */
-export function manifestActivityTheme(cls: string): number {
-  const node = manifestActivities.get(cls.replace(/\./g, "/"));
-  return (node && attr(node, "theme")?.data) ?? 0;
-}
-export function manifestActivityOrientation(cls: string): number {
-  const node = manifestActivities.get(cls.replace(/\./g, "/"));
-  return (node && attr(node, "screenOrientation")?.data) ?? -1;
-}
+export const manifestActivityTheme = (cls: string): number => activityAttr(cls, "theme") ?? 0;
+export const manifestActivityOrientation = (cls: string): number => activityAttr(cls, "screenOrientation") ?? -1;
 /** ActivityInfo.launchMode: LAUNCH_MULTIPLE (0) unless the manifest names another */
-export function manifestLaunchMode(cls: string): number {
-  const node = manifestActivities.get(cls.replace(/\./g, "/"));
-  return (node && attr(node, "launchMode")?.data) ?? 0;
-}
+export const manifestLaunchMode = (cls: string): number => activityAttr(cls, "launchMode") ?? 0;
 /** ActivityInfo.CONFIG_UI_MODE: an activity that declares it handles a day/night change is told
  *  about it; one that does not is relaunched, which is the whole of AppCompat's day/night switch. */
 export const CONFIG_UI_MODE = 0x0200;
 export function activityHandlesConfig(act: JActivity, bits: number): boolean {
-  const node = manifestActivities.get(jclsNameOf(act).replace(/\./g, "/"));
-  return (((node && attr(node, "configChanges")?.data) ?? 0) & bits) === bits;
+  return ((activityAttr(jclsNameOf(act), "configChanges") ?? 0) & bits) === bits;
 }
 
 /** ActivityInfo for a dotted class name, read off that activity's own manifest node. */
@@ -981,6 +971,11 @@ function applicationLabel(info: JPackageItemInfo): string {
 }
 const archiveCache = new WeakMap<Uint8Array, Promise<PackageArchive>>();
 const certificateCache = new WeakMap<Uint8Array, Promise<Uint8Array[]>>();
+function cachedCertificates(bytes: Uint8Array, zip: Parameters<typeof apkCertificates>[1]): Promise<Uint8Array[]> {
+  let pending = certificateCache.get(bytes);
+  if (!pending) certificateCache.set(bytes, pending = apkCertificates(bytes, zip));
+  return pending;
+}
 async function readArchive(path: string): Promise<PackageArchive | null> {
   const packed = packedArchives.get(path);
   if (packed) return packageArchive(packed.zip, packed.index.certificates.map(hexBytes));
@@ -1114,9 +1109,8 @@ export async function installPackageArchive(bytes: Uint8Array, expectedPackage: 
   const previous = await installedPackage(archive.pkg);
   if (previous && (await archiveInfo(archive, "", 0)).longVersionCode < (await archiveInfo(previous.archive, previous.path, 0)).longVersionCode)
     throw new Error("APK version is older than installed package");
-  if (previous && (previous.archive.certificates.length !== archive.certificates.length || previous.archive.certificates.some((cert, i) => {
-    const next = archive.certificates[i]; return !next || cert.length !== next.length || cert.some((b, j) => b !== next[j]);
-  }))) throw new Error("APK signing certificate differs from installed package");
+  if (previous && (previous.archive.certificates.length !== archive.certificates.length ||
+      previous.archive.certificates.some((cert, i) => !sameBytes(cert, archive.certificates[i])))) throw new Error("APK signing certificate differs from installed package");
   await persistPackage(installedPath(archive.pkg), bytes);
   vfs.write(installedPath(archive.pkg), bytes);
   registerPackage(archive);

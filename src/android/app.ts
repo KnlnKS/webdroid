@@ -103,7 +103,6 @@ rt.register({
   methods: { "<init>()V": function () {} },
 });
 class JSplashScreenView extends JObj { removed = false; }
-let appNightMode = -1;
 rt.register({ name: "android/window/SplashScreenView", ctor: JSplashScreenView, methods: {
   "remove()V": function (this: JSplashScreenView) { this.removed = true; },
 } });
@@ -535,7 +534,7 @@ rt.register({
   },
 });
 
-let audioCapturePolicy = 1;
+let audioCapturePolicy = 1, appNightMode = -1;
 class JAccessibilityServiceInfo extends JObj {
   eventTypes = 0;
   feedbackType = 0;
@@ -607,7 +606,6 @@ for (const [name, methods, statics] of [
     "static getMyMemoryState(Landroid/app/ActivityManager$RunningAppProcessInfo;)V": (info: JRunningAppProcessInfo) => {
       if (info) fillProc(info);
     },
-
   }],
   ["android/os/PowerManager", {
     "getLocationPowerSaveMode()I": () => 0,
@@ -691,8 +689,6 @@ for (const [name, methods, statics] of [
     STREAM_VOICE_CALL: 0, STREAM_SYSTEM: 1, STREAM_RING: 2, STREAM_MUSIC: 3, STREAM_ALARM: 4, STREAM_NOTIFICATION: 5,
     AUDIOFOCUS_GAIN: 1, AUDIOFOCUS_LOSS: -1, AUDIOFOCUS_REQUEST_GRANTED: 1, AUDIOFOCUS_REQUEST_FAILED: 0,
   }],
-  // A Wi-Fi-only device with no SIM: no operator, no radio, and the identifiers API 29+
-  // withholds from ordinary apps are null.
   // the CellLocation family an app type-checks a (null) cell against; a device with no radio reports none
   ["android/telephony/CellLocation", {
     "static getEmpty()Landroid/telephony/CellLocation;": () => null,
@@ -705,6 +701,8 @@ for (const [name, methods, statics] of [
     "static convertQuartSecToDecDegrees(I)D": (quartSec: number) => quartSec / 14400,   // AOSP: quarter-seconds of arc to degrees
     ...noops("<init>()V"),
   }],
+  // A Wi-Fi-only device with no SIM: no operator, no radio, and the identifiers API 29+
+  // withholds from ordinary apps are null.
   ["android/telephony/TelephonyManager", {
     ...stubs("", "getNetworkOperator()Ljava/lang/String;", "getNetworkOperatorName()Ljava/lang/String;",
       "getSimOperator()Ljava/lang/String;", "getSimOperatorName()Ljava/lang/String;",
@@ -875,16 +873,6 @@ for (const [name, methods, statics] of [
   rt.register({ name, ctor: class extends JObj {}, methods, statics });
 }
 rt.register({ name: "android/bluetooth/le/ScanCallback", ctor: class extends JObj {} });
-rt.register({ name: "android/hardware/usb/UsbManager", ctor: class extends JObj {}, methods: {
-  "getDeviceList()Ljava/util/HashMap;": () => rt.make("java/util/HashMap"),
-} });
-rt.register({
-  name: "android/hardware/fingerprint/FingerprintManager", ctor: class extends JObj {},
-  methods: {
-    "isHardwareDetected()Z": () => 0,
-    "hasEnrolledFingerprints()Z": () => 0,
-  },
-});
 rt.register({ name: "android/hardware/fingerprint/FingerprintManager$AuthenticationCallback", ctor: class extends JObj {} });
 rt.register({ name: "android/telephony/PhoneStateListener", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
 rt.register({ name: "android/telephony/TelephonyCallback", ctor: class extends JObj {}, methods: { "<init>()V": function () {} } });
@@ -1104,10 +1092,10 @@ rt.register({
   name: "android/service/quicksettings/TileService", ctor: class extends JService {}, sup: "android/app/Service",
   methods: {
     ...noops("<init>()V", "onClick()V", "onTileAdded()V", "onTileRemoved()V"),
-      "static requestListeningState(Landroid/content/Context;Landroid/content/ComponentName;)V": (context: unknown, component: unknown) => {
-        if (context == null || component == null) rt.npe();
-        rt.noteMissing("systemService statusbar");
-      },
+    "static requestListeningState(Landroid/content/Context;Landroid/content/ComponentName;)V": (context: unknown, component: unknown) => {
+      if (context == null || component == null) rt.npe();
+      rt.noteMissing("systemService statusbar");
+    },
     "startActivityAndCollapse(Landroid/content/Intent;)V": function (this: JService, intent: JIntent) {
       return vcall(this, "startActivity", "(Landroid/content/Intent;)V", intent);
     },
@@ -1217,10 +1205,16 @@ rt.register({
   name: "android/view/autofill/AutofillValue", ctor: JAutofillValue,
   methods: {
     "static forToggle(Z)Landroid/view/autofill/AutofillValue;": (b: number) => { const a = new JAutofillValue(); a.v = b; return a; },
-    "static forText(Ljava/lang/CharSequence;)Landroid/view/autofill/AutofillValue;": (t: unknown) => { const a = new JAutofillValue(); a.v = t; return a; },
-    "isText()Z": function (this: JAutofillValue) { return typeof this.v === "string" ? 1 : 0; },
+    "static forText(Ljava/lang/CharSequence;)Landroid/view/autofill/AutofillValue;": (t: unknown) => {
+      if (t == null) return null;
+      const a = new JAutofillValue(); a.v = t; return a;
+    },
+    "isText()Z": function (this: JAutofillValue) { return typeof this.v !== "number" ? 1 : 0; },
     "isToggle()Z": function (this: JAutofillValue) { return typeof this.v === "number" ? 1 : 0; },
-    "getTextValue()Ljava/lang/CharSequence;": function (this: JAutofillValue) { return String(this.v ?? ""); },
+    "getTextValue()Ljava/lang/CharSequence;": function (this: JAutofillValue) {
+      if (typeof this.v === "number") throw rt.mkThrowable("java/lang/IllegalStateException", "value must be a text value, not type=2");
+      return this.v;
+    },
     "getToggleValue()Z": function (this: JAutofillValue) { return this.v ? 1 : 0; },
   },
 });

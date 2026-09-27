@@ -7,7 +7,7 @@
 import { mem } from "./mem";
 import { hostLib, calledMissing, cstr, stp, type HostFn, type HostRet, type ArgReader } from "./host";
 import type { Cpu } from "./cpu";
-import { glCommon, glProbe, readGuestPixels } from "./gles3";
+import { glCommon, glProbe, readGuestPixels, vertexTypeBytes, guestIndices, indexBounds } from "./gles3";
 import { gl, invert } from "../android/gl";
 import { perf } from "../perf";
 import { activateEglCurrent } from "./egl-current";
@@ -134,12 +134,11 @@ function once(c: Ctx, what: string): void {
   calledMissing.add("gles1:" + what);
   console.warn("[gles1] unimplemented:", what);
 }
-const typeSize: Record<number, number> = { 0x1400: 1, 0x1401: 1, 0x1402: 2, 0x1403: 2, 0x1404: 4, 0x1405: 4, 0x1406: 4, 0x140c: 4 };
 
 /** bind one client array to a shader attribute for vertices [first, first+count) */
 function bindArray(c: Ctx, a: ArrayState, loc: number, slot: number, first: number, count: number, normalized: boolean): void {
   const g = c.gl;
-  const es = typeSize[a.type] ?? 4;
+  const es = vertexTypeBytes(a.type);
   const stride = a.stride || a.size * es;
   if (a.vbo) {
     g.bindBuffer(g.ARRAY_BUFFER, c.buffers[a.vbo]!);
@@ -405,15 +404,13 @@ export function gles1Init(): void {
     const g = c.gl;
     if (count <= 0) return;
     if (indices) {
+      // ES 1.1 indices are bytes or shorts; GL_OES_element_index_uint is not advertised
+      if (indices.type !== 0x1401 && indices.type !== 0x1403) { c.err = 0x500; return; }
       const es = indices.type === 0x1403 ? 2 : 1;
-      let max = 0;
-      if (c.elemBuf) { once(c, "glDrawElements with a bound ELEMENT_ARRAY_BUFFER (vertex range unknown)"); max = 65535; }
-      else {
-        const p = indices.ptr;
-        if (es === 2) for (let i = 0; i < count; i++) { const v = mem.u16[(p >>> 1) + i]; if (v > max) max = v; }
-        else for (let i = 0; i < count; i++) { const v = mem.u8[p + i]; if (v > max) max = v; }
-      }
-      if (!prepareDraw(c, 0, max + 1)) return;
+      let vertices = 65536;
+      if (c.elemBuf) once(c, "glDrawElements with a bound ELEMENT_ARRAY_BUFFER (vertex range unknown)");
+      else vertices = Math.max(1, indexBounds(guestIndices(indices.type, indices.ptr, count))[1]);
+      if (!prepareDraw(c, 0, vertices)) return;
       if (c.elemBuf) g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, c.buffers[c.elemBuf]!);
       else { g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, c.ebo); g.bufferData(g.ELEMENT_ARRAY_BUFFER, mem.u8.subarray(indices.ptr, indices.ptr + count * es), g.STREAM_DRAW); }
       g.drawElements(mode, count, indices.type, c.elemBuf ? indices.ptr : 0);
@@ -510,7 +507,8 @@ export function gles1Init(): void {
     glGetPointerv: W("glGetPointerv", (c, a) => { const pn = a.i(), out = a.p(); const s = pn === 0x808e ? c.vert : pn === 0x808f ? c.norm : pn === 0x8090 ? c.col : pn === 0x8092 ? c.tex[c.clientUnit] : pn === 0x898c ? c.point : null; if (s) stp(out, s.ptr); else c.err = 0x500; }),
     glGetTexEnviv: W("glGetTexEnviv", (c, a) => { a.i(); const pn = a.i(), out = a.p(); mem.st32(out, pn === 0x2200 ? c.texEnv[c.unit] : 0); }),
     glGetTexParameteriv: W("glGetTexParameteriv", (c, a) => { const t = a.i(), pn = a.i(), out = a.p(); mem.st32(out, Number(c.gl.getTexParameter(t, pn)) | 0); }),
-    glGetBufferParameteriv: W("glGetBufferParameteriv", (c, a) => { const t = a.i(), pn = a.i(), out = a.p(); mem.st32(out, Number(c.gl.getBufferParameter(t, pn)) | 0); }),
+    // a client-array draw leaves the stream buffers bound, so bind the guest's buffer as glBufferData does
+    glGetBufferParameteriv: W("glGetBufferParameteriv", (c, a) => { const t = a.i(), pn = a.i(), out = a.p(); c.gl.bindBuffer(t, c.buffers[t === 0x8892 ? c.arrayBuf : c.elemBuf] ?? null); mem.st32(out, Number(c.gl.getBufferParameter(t, pn)) | 0); }),
     glReadPixels: W("glReadPixels", (c, a) => {
       const x = a.i(), y = a.i(), w = a.i(), h = a.i(), fmt = a.i(), type = a.i(), p = a.p();
       readGuestPixels(c.gl, x, y, w, h, fmt, type, p);

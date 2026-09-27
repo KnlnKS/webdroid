@@ -19,6 +19,6 @@ for (const path of Object.keys(zip)) {
   const match = wantId ? has(root, wantId) : path.includes(target);
   if (!match) continue;
   console.log(`=== ${path}`);
-  console.log(dumpXml(root, 0, []).join("\n"));
+  console.log(dumpXml(root).join("\n"));
   break;
 }

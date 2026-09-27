@@ -15,7 +15,6 @@ export class JActionMode extends JObj {
   jctx: any = null;
   cb: unknown = null;
   menu: JMenu | null = null;
-  bar: JActionBarView | null = null;
   customView: JView | null = null;
   title = "";
   subtitle = "";
@@ -74,7 +73,6 @@ export async function startActionMode(activity: JActivity, cb: unknown): Promise
   bar.clickable = true;
   bar.menuItems = mode.menu.items;
   mode.menu.bar = bar;
-  mode.bar = bar;
   if (!await vcall(cb, "onCreateActionMode", "(Landroid/view/ActionMode;Landroid/view/Menu;)Z", mode, mode.menu)) return null;
   activity.actionMode = mode;
   mode.onFinish = async () => {

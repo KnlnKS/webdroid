@@ -457,6 +457,12 @@ async function collect(stream: JStream, c: unknown): Promise<unknown> {
   for (const value of stream.a) await invoke("BiConsumer", accumulator, box, value);
   return invoke("Function", finisher, box);
 }
+/** min (sign -1) or max (sign 1) by a comparator; the first of equal elements wins */
+const extremeBy = (sign: number) => driven(function* (this: JStream, c: unknown): Gen {
+  let best = this.a[0];
+  for (let i = 1; i < this.a.length; i++) if ((yield compareWith(c, this.a[i], best)) * sign > 0) best = this.a[i];
+  return mkOpt(this.a.length ? best ?? npe() : null);
+});
 rt.register({
   name: S + "Stream", ctor: JStream, ifaces: [S + "BaseStream"],
   methods: {
@@ -466,16 +472,8 @@ rt.register({
       const out = this.a.slice();
       return after(sortInPlace(out, cmp), () => mkStream(out));
     },
-    [`min(Ljava/util/Comparator;)Ljava/util/Optional;`]: driven(function* (this: JStream, c: unknown): Gen {
-      let best = this.a[0];
-      for (let i = 1; i < this.a.length; i++) if ((yield compareWith(c, this.a[i], best)) < 0) best = this.a[i];
-      return mkOpt(this.a.length ? best ?? npe() : null);
-    }),
-    [`max(Ljava/util/Comparator;)Ljava/util/Optional;`]: driven(function* (this: JStream, c: unknown): Gen {
-      let best = this.a[0];
-      for (let i = 1; i < this.a.length; i++) if ((yield compareWith(c, this.a[i], best)) > 0) best = this.a[i];
-      return mkOpt(this.a.length ? best ?? npe() : null);
-    }),
+    [`min(Ljava/util/Comparator;)Ljava/util/Optional;`]: extremeBy(-1),
+    [`max(Ljava/util/Comparator;)Ljava/util/Optional;`]: extremeBy(1),
     [`reduce(${O}${fnDesc("BiFunction")}${fnDesc("BinaryOperator")})${O}`]: driven(function* (this: JStream, identity: unknown, acc: unknown): Gen {
       let r = identity;
       for (const x of this.a) r = yield invoke("BiFunction", acc, r, x);
@@ -542,6 +540,9 @@ function toMap(key: unknown, value: unknown, merge: unknown, make: () => unknown
   return mkCollector(make, put, async (left, right) => { await vcall(left, "putAll", "(Ljava/util/Map;)V", right); return left; });
 }
 const TO_MAP = `(${fnDesc("Function")}${fnDesc("Function")}`;
+/** Collectors.joining: each element's text gathered into an array that `finish` joins */
+const joiner = (finish: (parts: unknown[]) => string) => mkCollector(() => [], async (b, x) => { stringBox(b).push(await csText(x)); },
+  (l, r) => { stringBox(l).push(...stringBox(r)); return l; }, (b) => finish(stringBox(b)));
 rt.register({
   name: S + "Collector", ctor: JCollector,
   methods: {
@@ -575,18 +576,15 @@ rt.register({
         yield vcall(downstream, "combiner", `()${fnDesc("BinaryOperator")}`),
         lambda("Function", (b) => after(invoke("Function", inner, b), (r) => invoke("Function", finish, r))));
     }),
-    [`static joining()L${S}Collector;`]: () => mkCollector(() => [], async (b, x) => { stringBox(b).push(await csText(x)); },
-      (l, r) => { stringBox(l).push(...stringBox(r)); return l; }, (b) => stringBox(b).join("")),
+    [`static joining()L${S}Collector;`]: () => joiner((parts) => parts.join("")),
     [`static joining(Ljava/lang/CharSequence;)L${S}Collector;`]: driven(function* (delimiter: unknown): Gen {
       const separator = yield csText(delimiter);
-      return mkCollector(() => [], async (b, x) => { stringBox(b).push(await csText(x)); },
-        (l, r) => { stringBox(l).push(...stringBox(r)); return l; }, (b) => stringBox(b).join(separator));
+      return joiner((parts) => parts.join(separator));
     }),
     [`static joining(Ljava/lang/CharSequence;Ljava/lang/CharSequence;Ljava/lang/CharSequence;)L${S}Collector;`]:
       driven(function* (delimiter: unknown, prefix: unknown, suffix: unknown): Gen {
         const [separator, before, end] = yield Promise.all([csText(delimiter), csText(prefix), csText(suffix)]);
-        return mkCollector(() => [], async (b, x) => { stringBox(b).push(await csText(x)); },
-          (l, r) => { stringBox(l).push(...stringBox(r)); return l; }, (b) => before + stringBox(b).join(separator) + end);
+        return joiner((parts) => before + parts.join(separator) + end);
       }),
   },
 });

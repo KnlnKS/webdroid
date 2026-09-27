@@ -14,9 +14,8 @@
 // exactly this reason: its super is java/lang/Object, which has no fields.
 
 /** `?bytecode=android/graphics/text/,android/graphics/fonts/` cuts those prefixes over for one
- *  page load. A cut is meant to be one line and a measurement, and a URL
- *  parameter is what lets the same bundle be A/B'd against itself — by the e2e driver, by a
- *  comparison script, or by hand — instead of needing an edit and a rebuild to try one. */
+ *  page load, so the same bundle can be A/B'd against itself — by the e2e driver, by a
+ *  comparison script, or by hand — without an edit and a rebuild. */
 const fromUrl = typeof location !== "undefined" ? new URLSearchParams(location.search).get("bytecode") : null;
 
 /** class-name prefixes served by AOSP bytecode instead of a native spec */

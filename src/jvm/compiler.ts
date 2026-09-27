@@ -11,6 +11,7 @@ import { coldOp, runCold, type ColdFrame, type ColdMethod } from "./cold";
 import { jvmProfiler } from "./profile";
 import { coverageProbeSource, jvmCoverage } from "./coverage";
 import {
+  coldInstructions,
   ifTarget,
   prepareMethod,
   switchCases,
@@ -39,11 +40,7 @@ function prepareDexMethod(
   const observe = jvmProfiler.enabled
     ? (phase: PreparationPhase, ms: number) => jvmProfiler.add(profileName, phase, ms)
     : undefined;
-  const prepared = prepareMethod(dex, code, desc, isStatic, observe);
-  if (jvmProfiler.enabled) {
-    jvmProfiler.eligibility(profileName, prepared.instructions.length, prepared.wasmEligible);
-  }
-  return prepared;
+  return prepareMethod(dex, code, desc, isStatic, observe);
 }
 
 export function compileClassSource(R: Runtime, dex: DexFile, info: ClassInfo): string {
@@ -153,9 +150,10 @@ export function compileLazyMethod(R: Runtime, C: CompiledCtor, i: number): JvmFu
   };
   const prepared = prepare();
   // Leaf methods cannot suspend and go straight to their only (sync) form.
-  let cold = prepared.sync ? null : new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, prepared, "cold").compileCold();
-  if (!cold) return install(compile(source(prepared, true)));
+  if (prepared.sync) return install(compile(source(prepared, true)));
   if (jvmProfiler.tier === "js") return install(compile(source(prepared, false)));
+  let cold: ColdMethod | null = new MethodEmitter(R, dex, info, code, rec.isStatic, rec.desc, rec.name, "cold")
+    .compileCold(prepared.widths, coldInstructions(code, prepared));
   let calls = 0, hot: JvmFunction | undefined;
   let owner = R;
   while (owner.parent) owner = owner.parent;
@@ -225,13 +223,15 @@ function emitNativeStub(dex: DexFile, info: ClassInfo, m: EncodedMethod): string
     `return ${v}.call(this${ps ? "," + ps : ""})};`;
 }
 
-/** A hot entry. A frame that suspends hands itself to `$R()`, the method's resumable body. */
+/** A hot entry. A frame that suspends hands itself to `$R()`, the method's resumable body.
+ *  Bodies are parenthesized because each runs as soon as it compiles: V8 then compiles it eagerly
+ *  rather than preparsing it and parsing it again on the first call. */
 function emitMethod(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, prepared: PreparedMethod, count = true): string {
   const { name, desc, mangled } = methodKey(dex, m.methodIdx);
   const isStatic = (m.flags & ACC.STATIC) !== 0;
   try {
-    const body = new MethodEmitter(R, dex, info, dex.code(m.codeOff), isStatic, desc, name, prepared, "hot").compile(count, "entry");
-    return `{const $ic=[];${holder(isStatic)}.${mangled}=${body};}`;
+    const body = new MethodEmitter(R, dex, info, dex.code(m.codeOff), isStatic, desc, name, "hot").compile(prepared, count, "entry");
+    return `{const $ic=[];${holder(isStatic)}.${mangled}=(${body});}`;
   } catch (error) { return unimplementedMethod(info, m, dex, error); }
 }
 
@@ -246,8 +246,8 @@ function unimplementedMethod(info: ClassInfo, m: EncodedMethod, dex: DexFile, er
 /** An expression evaluating to the method's resumable body. */
 function resumableSource(R: Runtime, dex: DexFile, info: ClassInfo, m: EncodedMethod, prepared: PreparedMethod): string {
   const { name, desc } = methodKey(dex, m.methodIdx);
-  const body = new MethodEmitter(R, dex, info, dex.code(m.codeOff), (m.flags & ACC.STATIC) !== 0, desc, name, prepared, "hot").compile(false, "resumable");
-  return `(()=>{const $ic=[];const $m=${body};return $m;})()`;
+  const body = new MethodEmitter(R, dex, info, dex.code(m.codeOff), (m.flags & ACC.STATIC) !== 0, desc, name, "hot").compile(prepared, false, "resumable");
+  return `(()=>{const $ic=[];const $m=(${body});return $m;})()`;
 }
 
 function emitEagerMethod(R: Runtime, dex: DexFile, info: ClassInfo, method: EncodedMethod): string {
@@ -270,7 +270,7 @@ class MethodEmitter {
   constructor(
     private R: Runtime, private dex: DexFile, private info: ClassInfo,
     private code: CodeItem, private isStatic: boolean, private desc: string,
-    private mname: string, private prepared: PreparedMethod, private backend: EmitBackend,
+    private mname: string, private backend: EmitBackend,
   ) {
     this.hasTries = code.tries.length > 0;
   }
@@ -283,7 +283,8 @@ class MethodEmitter {
   private constants: unknown[] = [];
 
   private get cold(): boolean { return this.backend === "cold"; }
-  private get sync(): boolean { return this.prepared.sync; }
+  /** the hot body being compiled is a leaf: it has no suspension points */
+  private sync = false;
 
   private reg(index: number): string { return this.cold ? `F.v[${this.literal(index)}]` : `v${index}`; }
   private literal(value: string | number | bigint): string {
@@ -298,24 +299,25 @@ class MethodEmitter {
   private get u(): string { return this.temp("u"); }
   private get ex(): string { return this.temp("ex"); }
 
-  compileCold(): ColdMethod {
+  /** Handlers are built per instruction when it first runs. */
+  compileCold(widths: readonly number[], instructionAt: (pc: number) => Ins): ColdMethod {
     perf.asyncMethods++;
-    const profileName = `${this.info.name}.${this.mname}${this.desc}`;
-    const started = jvmProfiler.enabled ? performance.now() : 0;
-    const ops = new Map<number, ReturnType<typeof coldOp>>();
-    for (const ins of this.prepared.instructions) {
-      const out: string[] = [];
+    const name = `${this.info.name}.${this.mname}${this.desc}`;
+    const ops: ColdMethod["ops"] = new Array(this.code.insns.length);
+    const build = (pc: number) => {
+      const started = jvmProfiler.enabled ? performance.now() : 0;
+      const ins = instructionAt(pc), out: string[] = [];
       this.constants = [];
       this.emitIns(ins, out);
-      const op = coldOp(out.join("\n"), this.constants, ins.pc + ins.len);
+      const op = ops[pc] = coldOp(out.join("\n"), this.constants, ins.pc + ins.len);
       if (ins.name.startsWith("invoke") && !ins.name.startsWith("invoke-custom")) op.method = ins.b;
-      ops.set(ins.pc, op);
-    }
-    if (jvmProfiler.enabled) jvmProfiler.add(profileName, "coldBuild", performance.now() - started);
-    return { name: profileName, R: this.R, D: this.R.dexLink(this.dex), S: this.info.superInfo?.ctor,
+      if (jvmProfiler.enabled) jvmProfiler.add(name, "coldBuild", performance.now() - started);
+      return op;
+    };
+    return { name, R: this.R, D: this.R.dexLink(this.dex), S: this.info.superInfo?.ctor,
       regs: this.code.regs, first: this.code.regs - this.code.ins, instance: !this.isStatic,
       hotness: 0, profiledInstructions: 0,
-      widths: [...this.prepared.widths], ops,
+      widths, ops, build,
       catches: this.code.tries.map((t) => ({ start: t.start, end: t.end, all: t.catchAllAddr,
         handlers: t.handlers.map(([type, pc]) => [descToName(this.dex.type(type)), pc]) })) };
   }
@@ -326,14 +328,15 @@ class MethodEmitter {
    * its own (R.dfr), which calls the resumable body with that frame (`$F`) to continue at the
    * suspended call. Frames therefore pay for asynchrony only when something actually waits.
    */
-  compile(count: boolean, form: HotForm): string {
+  compile(prepared: PreparedMethod, count: boolean, form: HotForm): string {
     this.resuming = form === "resumable";
+    this.sync = prepared.sync;
     const started = jvmProfiler.enabled ? performance.now() : 0;
     if (count) { if (this.sync) perf.syncMethods++; else perf.asyncMethods++; }
     const blocks: string[] = [];
     let cur: string[] | null = null;
-    for (const ins of this.prepared.instructions) {
-      if (this.prepared.leaders[ins.pc]) {
+    for (const ins of prepared.instructions) {
+      if (prepared.leaders[ins.pc]) {
         if (cur) blocks.push(cur.join("\n"));
         cur = [`case ${ins.pc}:${this.hasTries ? `pc=${ins.pc};` : ""}`];
       }
@@ -342,7 +345,7 @@ class MethodEmitter {
     }
     if (cur) blocks.push(cur.join("\n"));
 
-    const params = this.prepared.params;
+    const params = prepared.params;
     const regs = this.code.regs, ins = this.code.ins;
     let reg = regs - ins;
     const jsParams: string[] = [];
@@ -353,7 +356,7 @@ class MethodEmitter {
       jsParams.push(`p${i}`);
       paramInit.push(`v${reg}=p${i}`);
       paramRegs.add(reg);
-      reg += this.prepared.widths[i];
+      reg += prepared.widths[i];
     }
     const allRegs = Array.from({ length: regs }, (_, i) => `v${i}`);
     const locals = [...paramInit, ...allRegs.filter((_, i) => !paramRegs.has(i))];

@@ -201,6 +201,9 @@ async function notifyContentObservers(uri: JUri, origin: unknown, flags = 0): Pr
     await vcall(entry.observer, "dispatchChange", "(ZLandroid/net/Uri;I)V", self ? 1 : 0, uri, flags);
   }
 }
+/** the ContentResolver.QUERY_ARG_* keys the Bundle form of query understands */
+const QUERY_ARGS = new Set(["android:query-arg-sql-selection", "android:query-arg-sql-selection-args", "android:query-arg-sql-sort-order",
+  "android:query-arg-sort-columns", "android:query-arg-sort-direction", "android:query-arg-limit"]);
 const resolverMethods: NativeSpec["methods"] = {
   ...Object.fromEntries(["acquireContentProviderClient", "acquireUnstableContentProviderClient"].flatMap((name) => [
     [name + "(Landroid/net/Uri;)Landroid/content/ContentProviderClient;", acquireClient],
@@ -217,10 +220,11 @@ const resolverMethods: NativeSpec["methods"] = {
     if (!observer) rt.npe();
     for (const entry of contentObservers) if (entry.observer === observer) contentObservers.delete(entry);
   },
-  "openInputStream(Landroid/net/Uri;)Ljava/io/InputStream;": driven(function* (u: JUri): Gen 
-    { return isDocsUri(u) ? docInputStream(documentId(u, true))
+  "openInputStream(Landroid/net/Uri;)Ljava/io/InputStream;": driven(function* (u: JUri): Gen {
+    return isDocsUri(u) ? docInputStream(documentId(u, true))
       : u.uri.startsWith("content:") ? newObj("android/os/ParcelFileDescriptor$AutoCloseInputStream", "(Landroid/os/ParcelFileDescriptor;)V", yield openPfd(u, "r"))
-      : newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", fileOf(u)); }),
+      : newObj("java/io/FileInputStream", "(Ljava/lang/String;)V", fileOf(u));
+  }),
   "openOutputStream(Landroid/net/Uri;)Ljava/io/OutputStream;": (u: JUri) =>
     isDocsUri(u) ? docOutputStream(documentId(u, true), false)
       : newObj("java/io/FileOutputStream", "(Ljava/lang/String;)V", fileOf(u)),
@@ -264,10 +268,7 @@ const resolverMethods: NativeSpec["methods"] = {
       const limit = values?.get("android:query-arg-limit") as number | undefined;
       if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 0))
         throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid query limit");
-      if (values) for (const key of values.keys()) if (key !== "android:query-arg-sql-selection" &&
-        key !== "android:query-arg-sql-selection-args" && key !== "android:query-arg-sql-sort-order" &&
-        key !== "android:query-arg-sort-columns" && key !== "android:query-arg-sort-direction" && key !== "android:query-arg-limit")
-        throw rt.unimplemented(`ContentResolver.query argument ${key}`);
+      if (values) for (const key of values.keys()) if (!QUERY_ARGS.has(key)) throw rt.unimplemented(`ContentResolver.query argument ${key}`);
       if (!isDocsUri(u) && limit !== undefined && !sort)
         throw rt.unimplemented("ContentResolver.query provider limit without sort order");
       const cursor = yield vcall(this, "query", providerOperations.query, u, proj, selection ?? null, args ?? null,

@@ -1,9 +1,8 @@
-import { AID } from "./res";
 import { guestNow } from "../guest-clock";
 import { JView, initViewFromCtx, invalidate, requestLayout, resolveSize, uiState, JLinearLP, lpAttrs, lpFromAttrs, marginCopy, MATCH_PARENT, WRAP_CONTENT, findById, generateViewId, type JLayoutParams } from "./view";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, drawChild, drawableSize, JLayerDrawable, rvCsl, cslColor } from "./drawable";
 import { rt, type NativeSpec, stubs, noops, callSelf, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { type JAttrSet, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue } from "./res";
+import { AID, type JAttrSet, rvColor, obtainStyled, rvInt, rvDimen, rvString, resolveStyleValue } from "./res";
 import { TV } from "./axml";
 import { type JCanvas, type JInsets, JRect, JTypeface, cssColor, insetsOf, measureText, fontAscent, fontDescent, tfDefault } from "./graphics";
 import { JTextView, textViewMethods, textViewCtors, JButton, compoundPadL, compoundPadR, syncCompoundPads } from "./textview";
@@ -191,6 +190,7 @@ const initSeekBar = driven(function* initSeekBar(this: JSeekBar, c: unknown, att
   if (a.vals[1]) yield this.setThumb(yield loadDrawableRV(this.jres, a.vals[1], this.theme), thread);
   if (a.vals[2]) this.thumbOffset = Math.trunc(rvDimen(this.jres, a.vals[2], this.thumbOffset));
 });
+const seekProgress = function (this: JSeekBar, value: number) { return this.updateProgress(value); };
 rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widget/AbsSeekBar", methods: {
   "<init>(Landroid/content/Context;)V": initSeekBar,
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initSeekBar,
@@ -202,8 +202,8 @@ rt.register({ name: "android/widget/SeekBar", ctor: JSeekBar, sup: "android/widg
   "getThumbOffset()I": function (this: JSeekBar) { return this.thumbOffset; },
   "setThumbOffset(I)V": function (this: JSeekBar, offset: number) { this.thumbOffset = offset; invalidate(this); },
   "setOnSeekBarChangeListener(Landroid/widget/SeekBar$OnSeekBarChangeListener;)V": function (this: JSeekBar, listener: unknown) { this.changeListener = listener; },
-  "setProgress(I)V": function (this: JSeekBar, value: number) { return this.updateProgress(value); },
-  "setProgress(IZ)V": function (this: JSeekBar, value: number) { return this.updateProgress(value); },
+  "setProgress(I)V": seekProgress,
+  "setProgress(IZ)V": seekProgress,
   "drawableStateChanged()V": driven(function* (this: JSeekBar): Gen {
     const thread = curThread, state = Int32Array.from(this.drawableState());
     for (const d of [this.progressD, this.thumb]) if (d) yield vcallOn(thread, d, "setState", "([I)Z", state);
@@ -648,8 +648,8 @@ rt.register({
   methods: {
     "<init>(II)V": function (this: JLinearLP, width: number, height: number) { this.width = width; this.height = height; },
     "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": lpAttrs,
-    "<init>(Landroid/view/ViewGroup$LayoutParams;)V": function (this: JLinearLP, source: JLayoutParams) { marginCopy.call(this, source); },
-    "<init>(Landroid/view/ViewGroup$MarginLayoutParams;)V": function (this: JLinearLP, source: JLayoutParams) { marginCopy.call(this, source); },
+    "<init>(Landroid/view/ViewGroup$LayoutParams;)V": marginCopy,
+    "<init>(Landroid/view/ViewGroup$MarginLayoutParams;)V": marginCopy,
   },
 });
 rt.markers("android/widget/RadioGroup$OnCheckedChangeListener");

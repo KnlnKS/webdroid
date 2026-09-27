@@ -1,6 +1,8 @@
 import { utf8, charsToString } from "./abi";
 import { rt } from "./runtime";
 
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
 export function charsetName(value: unknown): string {
   const name = typeof value === "string" ? value : value && typeof value === "object" && "cname" in value ? value.cname : null;
   if (typeof name !== "string") throw rt.mkThrowable("java/lang/NullPointerException", "charset");
@@ -17,7 +19,7 @@ export function charsetName(value: unknown): string {
 
 export function encodeString(text: string, charset: unknown): Int8Array {
   const name = charsetName(charset);
-  if (name === "UTF-8") return new Int8Array(utf8.enc.encode(text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "?")).buffer);
+  if (name === "UTF-8") return new Int8Array(utf8.enc.encode(text.replace(LONE_SURROGATE, "?")).buffer);
   const wide = name.startsWith("UTF-16"), bom = name === "UTF-16" ? 2 : 0;
   const out = new Int8Array(text.length * (wide ? 2 : 1) + bom);
   const view = new DataView(out.buffer);
@@ -53,7 +55,7 @@ export function decodeString(bytes: Int8Array | Uint8Array, charset: unknown): s
     chars[i] = name === "US-ASCII" && cp > 127 ? 0xfffd : cp;
   }
   const text = charsToString(chars, 0, chars.length);
-  return wide ? text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\ufffd") : text;
+  return wide ? text.replace(LONE_SURROGATE, "\ufffd") : text;
 }
 
 export function encodeModifiedUtf8(str: string): Uint8Array {
@@ -65,15 +67,4 @@ export function encodeModifiedUtf8(str: string): Uint8Array {
     else bytes.push(0xe0 | c >> 12, 0x80 | c >> 6 & 63, 0x80 | c & 63);
   }
   return Uint8Array.from(bytes);
-}
-/** modified UTF-8: NUL is two bytes and a supplementary character is two three-byte halves */
-export function decodeModifiedUtf8(b: Uint8Array): string {
-  let out = "";
-  for (let i = 0; i < b.length;) {
-    const c = b[i++];
-    if (c < 0x80) out += String.fromCharCode(c);
-    else if ((c & 0xe0) === 0xc0) out += String.fromCharCode(((c & 0x1f) << 6) | (b[i++] & 0x3f));
-    else out += String.fromCharCode(((c & 0x0f) << 12) | ((b[i++] & 0x3f) << 6) | (b[i++] & 0x3f));
-  }
-  return out;
 }

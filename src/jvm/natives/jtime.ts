@@ -174,8 +174,6 @@ export class JCalendar extends JObj {
   lenient = true;
   unset = 0;
   private w: Date | null = null;
-  /** the instant, as java.util.Date holds it */
-  get d(): Date { return new Date(this.ms); }
   wall(): Date { return this.w ??= new Date(this.ms + zoneOffsetMs(this.tz.id, this.ms)); }
   setMs(ms: number): void { this.ms = ms; this.w = null; }
   /** a changed wall clock back to an instant: an overlap reads as standard time, a gap moves forward */

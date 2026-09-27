@@ -15,7 +15,7 @@ import "../src/natives";
 import { FRAMEWORK_RE, nativeClassSupport, nativeFieldSupport, nativeMethodSupport, rankCalls } from "./native-surface";
 
 const args = process.argv.slice(2);
-const { flag, opt, positional } = argv(args, ["--limit", "--json"]);
+const { flag, opt, positional } = argv(args, ["--limit", "--json", "--from"]);
 const apk = positional[0];
 if (!apk) throw new Error("usage: bun run audit <apk> [--framework] [--all] [--limit N] [--json out.json]");
 const limit = parseInt(opt("--limit", "40")!);

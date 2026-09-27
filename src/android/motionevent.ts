@@ -36,6 +36,17 @@ function axisValue(this: JMotionEvent, axis: number): number {
     default: return 0;
   }
 }
+/** single-pointer model: every pointer index and history position reads the one tracked sample */
+const getX = function (this: JMotionEvent) { return this.x; };
+const getY = function (this: JMotionEvent) { return this.y; };
+const getRawX = function (this: JMotionEvent) { return this.rawX; };
+const getRawY = function (this: JMotionEvent) { return this.rawY; };
+const getPressure = function (this: JMotionEvent) { return this.pressure; };
+const getSize = function (this: JMotionEvent) { return this.size; };
+const getTouchMajor = function (this: JMotionEvent) { return this.touchMajor; };
+const getTouchMinor = function (this: JMotionEvent) { return this.touchMinor; };
+const getToolMajor = function (this: JMotionEvent) { return this.toolMajor; };
+const getToolMinor = function (this: JMotionEvent) { return this.toolMinor; };
 function obtainFullEvent(dt: bigint, et: bigint, action: number, x: number, y: number, pressure: number, size: number,
   metaState: number, xPrecision: number, yPrecision: number, deviceId: number, edgeFlags: number, source = 2, flags = 0): JMotionEvent {
   return Object.assign(obtainEvent(dt, et, action, x, y, metaState), { pressure, size, xPrecision, yPrecision, deviceId, edgeFlags, source, flags });
@@ -67,18 +78,18 @@ rt.register({
     "getAxisValue(I)F": axisValue,
     "getAxisValue(II)F": axisValue,
     "getFlags()I": function (this: JMotionEvent) { return this.flags; },
-    "getPressure(I)F": function (this: JMotionEvent) { return this.pressure; },
+    "getPressure(I)F": getPressure,
     "getEventTimeNanos()J": function (this: JMotionEvent) { return BigInt(Math.floor(Number(this.eventTime) * 1e6)); },
     "getAction()I": function (this: JMotionEvent) { return this.action; },
     "getActionMasked()I": function (this: JMotionEvent) { return this.action & 0xff; },
-    "getX()F": function (this: JMotionEvent) { return this.x; },
-    "getY()F": function (this: JMotionEvent) { return this.y; },
-    "getX(I)F": function (this: JMotionEvent) { return this.x; },
-    "getY(I)F": function (this: JMotionEvent) { return this.y; },
-    "getRawX()F": function (this: JMotionEvent) { return this.rawX; },
-    "getRawY()F": function (this: JMotionEvent) { return this.rawY; },
-    "getRawX(I)F": function (this: JMotionEvent) { return this.rawX; },
-    "getRawY(I)F": function (this: JMotionEvent) { return this.rawY; },
+    "getX()F": getX,
+    "getY()F": getY,
+    "getX(I)F": getX,
+    "getY(I)F": getY,
+    "getRawX()F": getRawX,
+    "getRawY()F": getRawY,
+    "getRawX(I)F": getRawX,
+    "getRawY(I)F": getRawY,
     // Single-pointer model (matches getX(I)/getY(I) above): every index reuses this event's
     // one tracked position, so PointerCoords is filled from the same backing fields.
     "getPointerCoords(ILandroid/view/MotionEvent$PointerCoords;)V": function (this: JMotionEvent, idx: number, out: JPointerCoords) {
@@ -95,20 +106,20 @@ rt.register({
     "offsetLocation(FF)V": function (this: JMotionEvent, dx: number, dy: number) { this.x += dx; this.y += dy; },
     "setLocation(FF)V": function (this: JMotionEvent, x: number, y: number) { this.x = x; this.y = y; },
     "getEdgeFlags()I": function (this: JMotionEvent) { return this.edgeFlags; },
-    "getHistoricalX(I)F": function (this: JMotionEvent) { return this.x; },
-    "getHistoricalY(I)F": function (this: JMotionEvent) { return this.y; },
+    "getHistoricalX(I)F": getX,
+    "getHistoricalY(I)F": getY,
     "getHistoricalEventTime(I)J": function (this: JMotionEvent) { return BigInt(Math.round(this.eventTime)); },
-    "getPressure()F": function (this: JMotionEvent) { return this.pressure; },
-    "getSize()F": function (this: JMotionEvent) { return this.size; },
-    "getTouchMajor()F": function (this: JMotionEvent) { return this.toolMajor; },
-    "getTouchMinor()F": function (this: JMotionEvent) { return this.toolMinor; },
-    "getTouchMajor(I)F": function (this: JMotionEvent) { return this.toolMajor; },
-    "getTouchMinor(I)F": function (this: JMotionEvent) { return this.toolMinor; },
-    "getToolMajor()F": function (this: JMotionEvent) { return this.toolMajor; },
-    "getToolMinor()F": function (this: JMotionEvent) { return this.toolMinor; },
-    "getSize(I)F": function (this: JMotionEvent) { return this.size; },
-    "getToolMajor(I)F": function (this: JMotionEvent) { return this.toolMajor; },
-    "getToolMinor(I)F": function (this: JMotionEvent) { return this.toolMinor; },
+    "getPressure()F": getPressure,
+    "getSize()F": getSize,
+    "getTouchMajor()F": getTouchMajor,
+    "getTouchMinor()F": getTouchMinor,
+    "getTouchMajor(I)F": getTouchMajor,
+    "getTouchMinor(I)F": getTouchMinor,
+    "getToolMajor()F": getToolMajor,
+    "getToolMinor()F": getToolMinor,
+    "getSize(I)F": getSize,
+    "getToolMajor(I)F": getToolMajor,
+    "getToolMinor(I)F": getToolMinor,
     "getToolType(I)I": function (this: JMotionEvent) { return this.toolType; },
     ...stubs(0, "getClassification()I", "getActionIndex()I", "getPointerId(I)I", "findPointerIndex(I)I",
       "getHistorySize()I", "getButtonState()I"),

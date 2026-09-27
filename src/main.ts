@@ -34,6 +34,7 @@ import { yieldStats, timedParks } from "./jvm/yield";
 import { provisionPackages, provisionServices } from "./shell/provision";
 import { connectProcess, registerForegroundProcess, processPresentation, processBroker } from "./shell/processes";
 import { guestClockControl, guestNow, guestSleep } from "./guest-clock";
+import { device } from "./shell/config";
 
 const params = new URLSearchParams(location.search);
 const hotThreshold = Number(params.get("jvmHotness") ?? 4096);
@@ -90,7 +91,7 @@ async function boot(file: string, local?: File) {
   shell.setState({ kind: "loading", file, stage: local ? "Opening package…" : "Downloading package…" });
   let rollbackAssets: (() => void) | undefined;
   try {
-    const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady, provisionPackages(), loadSkiaText()]);
+    const [install] = await Promise.all([local ? openInstallLocal(local) : openInstallRemote("/apks/" + encodeURIComponent(file)), fontsReady, provisionPackages(), loadSkiaText(), displayRate]);
     const assets = local ? { key: crypto.randomUUID(), install } : null;
     if (local) {
       shell.setState({ kind: "loading", file, stage: "Preparing local app assets…" });
@@ -305,6 +306,21 @@ setInterval(() => {
 attachIme(canvas, kbd);
 
 mountSystemCertificates();
+
+/** The host display's rate, from rAF spacing: skipped frames only lengthen intervals, so the
+ *  lower quartile is the frame period even while page startup keeps the thread busy. */
+const displayRate = params.has("hz") || document.hidden ? Promise.resolve() : new Promise<void>((resolve) => {
+  const stamps: number[] = [];
+  const sample = (time: number) => {
+    stamps.push(time);
+    if (stamps.length <= 12 && !document.hidden) { requestAnimationFrame(sample); return; }
+    const gaps = stamps.slice(1).map((t, i) => t - stamps[i]).sort((a, b) => a - b);
+    const hz = gaps.length ? 1000 / gaps[gaps.length >> 2] : 60;
+    device.refreshRate = [60, 90, 120].reduce((best, rate) => Math.abs(rate - hz) < Math.abs(best - hz) ? rate : best);
+    resolve();
+  };
+  requestAnimationFrame(sample);
+});
 
 const fontsReady = Promise.all([Promise.all(SYSTEM_FONTS.map(async ([name, file, weight, style]) => {
   const response = await fetch(`/vendor/fonts/${file}`);

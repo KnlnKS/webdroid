@@ -100,9 +100,10 @@ function dispatch(session: JMediaSession, method: string, desc: string, ...args:
   job.fn = () => session.released || session.callback !== callback ? undefined : vcall(callback, method, desc, ...args);
   session.handler.post(job, 0);
 }
+const initSession = function (this: JMediaSession, context: JContext | null, tag: string) { return initialize(this, context, tag); };
 rt.register({ name: "android/media/session/MediaSession", ctor: JMediaSession, methods: {
-  "<init>(Landroid/content/Context;Ljava/lang/String;)V": function (this: JMediaSession, context: JContext | null, tag: string) { return initialize(this, context, tag); },
-  "<init>(Landroid/content/Context;Ljava/lang/String;Landroid/os/Bundle;)V": function (this: JMediaSession, context: JContext | null, tag: string) { return initialize(this, context, tag); },
+  "<init>(Landroid/content/Context;Ljava/lang/String;)V": initSession,
+  "<init>(Landroid/content/Context;Ljava/lang/String;Landroid/os/Bundle;)V": initSession,
   "setCallback(Landroid/media/session/MediaSession$Callback;)V": function (this: JMediaSession, callback: unknown) { return vcall(this, "setCallback", "(Landroid/media/session/MediaSession$Callback;Landroid/os/Handler;)V", callback, null); },
   "setCallback(Landroid/media/session/MediaSession$Callback;Landroid/os/Handler;)V": function (this: JMediaSession, callback: unknown, handler: JHandler | null) {
     for (const key of this.handler.pending.keys()) this.handler.cancel(key);

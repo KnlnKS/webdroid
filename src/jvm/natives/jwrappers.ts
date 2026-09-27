@@ -137,35 +137,39 @@ const sortedMapReads = [
   "tailMap(Ljava/lang/Object;)Ljava/util/SortedMap;",
 ] as const;
 
+/** a returned view wrapped the same way as the collection it came from */
+const view = (kind: Kind): Transform => (value, wrapper) => wrap(value, wrapper.mode, kind, wrapper.mutex);
+const listIteratorView: Transform = (value, wrapper) => wrapper.mode === "unmodifiable" ? readOnlyIterator(value, false) : value;
+const collectionTransforms: Record<string, Transform> = {
+  "iterator()Ljava/util/Iterator;": (value, wrapper) => wrapper.mode === "unmodifiable" ? readOnlyIterator(value, wrapper.entries) : value,
+  "listIterator()Ljava/util/ListIterator;": listIteratorView,
+  "listIterator(I)Ljava/util/ListIterator;": listIteratorView,
+  "subList(II)Ljava/util/List;": view("list"),
+  "subSet(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedSet;": view("sortedSet"),
+  "headSet(Ljava/lang/Object;)Ljava/util/SortedSet;": view("sortedSet"),
+  "tailSet(Ljava/lang/Object;)Ljava/util/SortedSet;": view("sortedSet"),
+};
+const mapTransforms: Record<string, Transform> = {
+  "keySet()Ljava/util/Set;": view("set"),
+  "values()Ljava/util/Collection;": view("collection"),
+  "entrySet()Ljava/util/Set;": (value, wrapper) => wrap(value, wrapper.mode, "set", wrapper.mutex, wrapper.mode === "unmodifiable"),
+  "subMap(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedMap;": view("sortedMap"),
+  "headMap(Ljava/lang/Object;)Ljava/util/SortedMap;": view("sortedMap"),
+  "tailMap(Ljava/lang/Object;)Ljava/util/SortedMap;": view("sortedMap"),
+};
+
 function registerCollection(name: string, mode: Mode, kind: "collection" | "list" | "set" | "sortedSet", ifaces: string[], extra: Partial<NativeSpec> = {}): void {
-  const transforms: Record<string, Transform> = {
-    "iterator()Ljava/util/Iterator;": (value, wrapper) => wrapper.mode === "unmodifiable" ? readOnlyIterator(value, wrapper.entries) : value,
-    "listIterator()Ljava/util/ListIterator;": (value, wrapper) => wrapper.mode === "unmodifiable" ? readOnlyIterator(value, false) : value,
-    "listIterator(I)Ljava/util/ListIterator;": (value, wrapper) => wrapper.mode === "unmodifiable" ? readOnlyIterator(value, false) : value,
-    "subList(II)Ljava/util/List;": (value, wrapper) => wrap(value, wrapper.mode, "list", wrapper.mutex),
-    "subSet(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedSet;": (value, wrapper) => wrap(value, wrapper.mode, "sortedSet", wrapper.mutex),
-    "headSet(Ljava/lang/Object;)Ljava/util/SortedSet;": (value, wrapper) => wrap(value, wrapper.mode, "sortedSet", wrapper.mutex),
-    "tailSet(Ljava/lang/Object;)Ljava/util/SortedSet;": (value, wrapper) => wrap(value, wrapper.mode, "sortedSet", wrapper.mutex),
-  };
   const reads = [...collectionReads, ...(kind === "list" ? listReads : []), ...(kind === "set" || kind === "sortedSet" ? setReads : []), ...(kind === "sortedSet" ? sortedSetReads : [])];
   const mutations = [...collectionWrites, ...(kind === "list" ? listWrites : [])];
   rt.register({ name, ctor: extra.ctor ?? class extends JWrapper {}, sup: extra.sup, ifaces,
     serialization: extra.serialization,
-    methods: { ...forwards(reads, transforms), ...writes(mutations, mode), ...extra.methods } });
+    methods: { ...forwards(reads, collectionTransforms), ...writes(mutations, mode), ...extra.methods } });
 }
 
 function registerMap(name: string, mode: Mode, sorted: boolean): void {
-  const transforms: Record<string, Transform> = {
-    "keySet()Ljava/util/Set;": (value, wrapper) => wrap(value, wrapper.mode, "set", wrapper.mutex),
-    "values()Ljava/util/Collection;": (value, wrapper) => wrap(value, wrapper.mode, "collection", wrapper.mutex),
-    "entrySet()Ljava/util/Set;": (value, wrapper) => wrap(value, wrapper.mode, "set", wrapper.mutex, wrapper.mode === "unmodifiable"),
-    "subMap(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/SortedMap;": (value, wrapper) => wrap(value, wrapper.mode, "sortedMap", wrapper.mutex),
-    "headMap(Ljava/lang/Object;)Ljava/util/SortedMap;": (value, wrapper) => wrap(value, wrapper.mode, "sortedMap", wrapper.mutex),
-    "tailMap(Ljava/lang/Object;)Ljava/util/SortedMap;": (value, wrapper) => wrap(value, wrapper.mode, "sortedMap", wrapper.mutex),
-  };
   rt.register({
     name, ctor: class extends JWrapper {}, ifaces: sorted ? ["java/util/SortedMap", "java/util/Map"] : ["java/util/Map"],
-    methods: { ...forwards([...mapReads, ...(sorted ? sortedMapReads : [])], transforms), ...writes(mapWrites, mode) },
+    methods: { ...forwards([...mapReads, ...(sorted ? sortedMapReads : [])], mapTransforms), ...writes(mapWrites, mode) },
   });
 }
 

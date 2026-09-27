@@ -24,6 +24,8 @@ interface ResourceProfile {
   lang: string; dir: number;
   types: Map<number, TypeChunk[]>;
   names: Map<string, Map<string, number>>;
+  /** resource id → the name of the type chunk defining it */
+  typeNames: Map<number, string>;
 }
 
 interface Config {
@@ -80,7 +82,7 @@ export class Arsc {
       if (type === 0x0001) {
         const pool = new StringPool(view, pos);
         if (!split) this.values = pool;
-        else { const at = this.values.strings.length; this.values.strings.push(...pool.strings); remap = (i) => i === 0xffffffff ? i : at + i; }
+        else { const at = this.values.append(pool); remap = (i) => i === 0xffffffff ? i : at + i; }
       } else if (type === 0x0200) this.parsePackage(view, pos, headerSize, size, remap);
       pos += size;
     }
@@ -146,12 +148,10 @@ export class Arsc {
       const variant = cfgSize >= 48 ? String.fromCharCode(...u8(view, c + 40, 8)).replace(/\0.*$/, "") : "";
       this.locales.add([cfg.lang, script, cfg.region, variant].filter(Boolean).join("-"));
     }
-    // Keep other locales as encoded chunks until a scoped resource lookup selects them.
     if (this.skipAtParse(cfg)) return;
+    // Entries stay encoded until a lookup first selects the chunk's type (chunksFor).
     const chunk: TypeChunk = { id, name: typeNames.get(rawId - 1), config: cfg, entries: new Map() };
-    if (cfg.lang && cfg.lang !== this.device.lang || cfg.dir && cfg.dir !== this.device.dir) {
-      chunk.load = () => this.parseEntries(view, base, keyNames, chunk, remap);
-    } else this.parseEntries(view, base, keyNames, chunk, remap);
+    chunk.load = () => this.parseEntries(view, base, keyNames, chunk, remap);
     let list = types.get(id);
     if (!list) types.set(id, (list = []));
     list.push(chunk);
@@ -220,7 +220,7 @@ export class Arsc {
     if (this.active?.lang !== lang || this.active.dir !== dir) {
       const key = lang + ":" + dir;
       let profile = this.profiles.get(key);
-      if (!profile) this.profiles.set(key, profile = { lang, dir, types: new Map(), names: new Map() });
+      if (!profile) this.profiles.set(key, profile = { lang, dir, types: new Map(), names: new Map(), typeNames: new Map() });
       this.active = profile;
     }
     return this.active;
@@ -250,8 +250,11 @@ export class Arsc {
   }
 
   typeName(typeId: number, entryIdx?: number, pkgId = this.pkgId): string {
-    const chunks = this.chunksFor(typeId, pkgId);
-    return (entryIdx === undefined ? chunks[0] : chunks.find((chunk) => chunk.entries.has(entryIdx)))?.name ?? "?";
+    if (entryIdx === undefined) return this.chunksFor(typeId, pkgId)[0]?.name ?? "?";
+    const names = this.profile().typeNames, id = (pkgId << 24 | typeId << 16 | entryIdx) >>> 0;
+    let name = names.get(id);
+    if (name === undefined) names.set(id, name = this.chunksFor(typeId, pkgId).find((chunk) => chunk.entries.has(entryIdx))?.name ?? "?");
+    return name;
   }
 
   /** every type name the table defines, each once */

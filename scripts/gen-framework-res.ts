@@ -11,11 +11,12 @@ import { existsSync, mkdtempSync, readdirSync, renameSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { device } from "../src/shell/config";
+import { androidSdkRoot, androidTool } from "./android-sdk";
 
 const OUT = new URL("../vendor/framework-res.apk", import.meta.url).pathname;
 
-export async function buildFrameworkRes(): Promise<void> {
-  const sdkRoot = process.env.ANDROID_HOME ?? process.env.ANDROID_SDK_ROOT ?? `${process.env.HOME}/Library/Android/sdk`;
+async function buildFrameworkRes(): Promise<void> {
+  const sdkRoot = androidSdkRoot();
   // The res tree only has to be a superset of what the device can select, since anything it cannot
   // is dropped at link time and again when the table is parsed. So: the device's own API level if
   // that platform is installed, else the lowest one above it -- not the newest, whose values files
@@ -28,9 +29,7 @@ export async function buildFrameworkRes(): Promise<void> {
   if (!apiLevel) throw new Error(`no platform res tree under ${sdkRoot}/platforms — install one with:\n  sdkmanager "platforms;android-${device.sdk}"`);
   const platform = `${sdkRoot}/platforms/android-${apiLevel}`;
   // build-tools are forward compatible, so the newest installed one wins
-  const tools = existsSync(`${sdkRoot}/build-tools`) ? readdirSync(`${sdkRoot}/build-tools`).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })) : [];
-  const aapt2 = tools.map((v) => `${sdkRoot}/build-tools/${v}/aapt2`).filter(existsSync).pop();
-  if (!aapt2) throw new Error(`no aapt2 under ${sdkRoot}/build-tools — install it with:\n  sdkmanager "build-tools;35.0.1"`);
+  const aapt2 = androidTool("aapt2");
 
   const run = async (...args: string[]) => {
     const p = Bun.spawn([aapt2, ...args], { stdout: "ignore", stderr: "pipe" });

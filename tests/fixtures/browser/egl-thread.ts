@@ -16,6 +16,7 @@ import { gles1Init } from "../../../src/native/gles1";
 import { gles3Init } from "../../../src/native/gles3";
 import { nativeWindowFor, ndkInit } from "../../../src/native/libandroid";
 import { hostFn, type ArgReader } from "../../../src/native/host";
+import { mkByteBuffer } from "../../../src/jvm/natives/jnio";
 
 function callGl(cpu: Cpu, lib: string, name: string, values: number[]) {
   let i = 0;
@@ -99,6 +100,118 @@ function uploadExtents() {
   return { lengths, error2D, error3D };
 }
 
+/** Java GLES20 client arrays: read at the draw, one reused buffer per attribute and for indices, bindings kept */
+function clientArrays() {
+  const context = new EglContext();
+  context.makeCurrent({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  const g = context.gl!, program = g.createProgram()!;
+  for (const [type, src] of [[g.VERTEX_SHADER, "attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}"], [g.FRAGMENT_SHADER, "void main(){gl_FragColor=vec4(1,0,0,1);}"]] as const) {
+    const shader = g.createShader(type)!; g.shaderSource(shader, src); g.compileShader(shader); g.attachShader(program, shader);
+  }
+  g.bindAttribLocation(program, 0, "p"); g.linkProgram(program); g.useProgram(program);
+  let created = 0;
+  const create = g.createBuffer.bind(g);
+  g.createBuffer = () => { created++; return create(); };
+  const gles = rt.link("android/opengl/GLES20").ctor;
+  const call = (name: string, desc: string, ...args: unknown[]) => Reflect.apply(Reflect.get(gles, mangleMethod(name, desc)), gles, args);
+  const vertices = mkByteBuffer(24, true), indices = mkByteBuffer(12, true);
+  new Uint32Array(indices.ab).set([0, 1, 2]);
+  call("glEnableVertexAttribArray", "(I)V", 0);
+  const pixels: number[][] = [];
+  for (let i = 0; i < 2; i++) {
+    call("glVertexAttribPointer", "(IIIZILjava/nio/Buffer;)V", 0, 2, g.FLOAT, 0, 0, vertices);
+    new Float32Array(vertices.ab).set([-1, -1, 3, -1, -1, 3]);
+    g.clear(g.COLOR_BUFFER_BIT);
+    call("glDrawElements", "(IIILjava/nio/Buffer;)V", g.TRIANGLES, 3, g.UNSIGNED_INT, indices);
+    const pixel = new Uint8Array(4); g.readPixels(0, 0, 1, 1, g.RGBA, g.UNSIGNED_BYTE, pixel); pixels.push([...pixel]);
+  }
+  const result = { pixels, created, error: g.getError(), unbound: g.getParameter(g.ARRAY_BUFFER_BINDING) === null && g.getParameter(g.ELEMENT_ARRAY_BUFFER_BINDING) === null };
+  context.makeCurrent(null);
+  return result;
+}
+
+/** native GLES 3: a copy-target write restores the element binding of the vertex array bound now */
+function bufferBindings() {
+  gles3Init();
+  const context = new EglContext();
+  context.makeCurrent({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  const g = context.gl!, cpu = new Cpu(mainThread, "buffer-bindings"), p = mem.malloc(16);
+  const gl = (name: string, ...values: number[]) => callGl(cpu, "libGLESv2.so", name, values);
+  gl("glGenVertexArrays", 1, p); gl("glGenBuffers", 2, p + 4);
+  const [vao, inVao, outside] = [mem.ld32(p), mem.ld32(p + 4), mem.ld32(p + 8)];
+  gl("glBindVertexArray", vao); gl("glBindBuffer", g.ELEMENT_ARRAY_BUFFER, inVao); gl("glBufferData", g.ELEMENT_ARRAY_BUFFER, 4, 0, g.STATIC_DRAW);
+  gl("glBindVertexArray", 0); gl("glBindBuffer", g.ELEMENT_ARRAY_BUFFER, outside); gl("glBufferData", g.ELEMENT_ARRAY_BUFFER, 4, 0, g.STATIC_DRAW);
+  gl("glBindBuffer", 0x8f37, inVao); gl("glBufferSubData", 0x8f37, 0, 4, p);
+  const bound = () => tables().ids.get(g.getParameter(g.ELEMENT_ARRAY_BUFFER_BINDING)) ?? 0;
+  const outsideKept = bound() === outside;
+  gl("glBindVertexArray", vao);
+  const result = { outsideKept, inVaoKept: bound() === inVao, error: g.getError() };
+  mem.free(p); context.makeCurrent(null);
+  return result;
+}
+
+/** native GLES 3 client arrays: interleaved vertices drawn from `first`, client and buffer indices, the app's view kept */
+function nativeClientArrays() {
+  gles3Init();
+  const context = new EglContext();
+  context.makeCurrent({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  const g = context.gl!, cpu = new Cpu(mainThread, "client-arrays"), p = mem.malloc(256);
+  const gl = (name: string, ...values: number[]) => callGl(cpu, "libGLESv2.so", name, values);
+  const program = g.createProgram()!;
+  for (const [type, src] of [[g.VERTEX_SHADER, "attribute vec2 p;attribute vec4 c;varying vec4 v;void main(){v=c;gl_Position=vec4(p,0,1);}"], [g.FRAGMENT_SHADER, "precision mediump float;varying vec4 v;void main(){gl_FragColor=v;}"]] as const) {
+    const shader = g.createShader(type)!; g.shaderSource(shader, src); g.compileShader(shader); g.attachShader(program, shader);
+  }
+  g.bindAttribLocation(program, 0, "p"); g.bindAttribLocation(program, 1, "c"); g.linkProgram(program); g.useProgram(program);
+  // three covering triangles of { float x, y; u8 r, g, b, a }: red, green, blue
+  const vertices = p + 4, stride = 12;
+  [[255, 0, 0], [0, 255, 0], [0, 0, 255]].forEach((rgb, t) => [[-1, -1], [3, -1], [-1, 3]].forEach(([x, y], v) => {
+    const at = vertices + (t * 3 + v) * stride;
+    mem.stf32(at, x); mem.stf32(at + 4, y); mem.write(at + 8, Uint8Array.of(...rgb, 255));
+  }));
+  const indices = p + 128, out = p + 160;
+  mem.write(indices, new Uint8Array(Uint16Array.of(3, 4, 5, 0, 1, 2).buffer));
+  gl("glGenBuffers", 2, out);
+  const [vbo, ebo] = [mem.ld32(out), mem.ld32(out + 4)];
+  gl("glEnableVertexAttribArray", 0); gl("glEnableVertexAttribArray", 1);
+  gl("glVertexAttribPointer", 0, 2, g.FLOAT, 0, stride, vertices);
+  gl("glVertexAttribPointer", 1, 4, g.UNSIGNED_BYTE, 1, stride, vertices + 8);
+  gl("glBindBuffer", g.ARRAY_BUFFER, vbo);
+  const pixel = () => { const px = new Uint8Array(4); g.readPixels(0, 0, 1, 1, g.RGBA, g.UNSIGNED_BYTE, px); return [...px]; };
+  const pixels: number[][] = [];
+  gl("glDrawArrays", g.TRIANGLES, 6, 3); pixels.push(pixel());
+  gl("glDrawElements", g.TRIANGLES, 3, g.UNSIGNED_SHORT, indices); pixels.push(pixel());
+  gl("glBindBuffer", g.ELEMENT_ARRAY_BUFFER, ebo); gl("glBufferData", g.ELEMENT_ARRAY_BUFFER, 6, indices + 6, g.STATIC_DRAW);
+  gl("glDrawElements", g.TRIANGLES, 3, g.UNSIGNED_SHORT, 0); pixels.push(pixel());
+  const drawError = gl("glGetError");
+  gl("glGetIntegerv", g.ARRAY_BUFFER_BINDING, out); gl("glGetIntegerv", g.ELEMENT_ARRAY_BUFFER_BINDING, out + 4);
+  gl("glGetVertexAttribiv", 1, g.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, out + 8); gl("glGetVertexAttribPointerv", 1, g.VERTEX_ATTRIB_ARRAY_POINTER, out + 12);
+  const kept = mem.ld32(out) === vbo && mem.ld32(out + 4) === ebo && mem.ld32(out + 8) === 0 && mem.ld32(out + 12) === vertices + 8;
+  gl("glGenVertexArrays", 1, out); gl("glBindVertexArray", mem.ld32(out));
+  gl("glBindBuffer", g.ARRAY_BUFFER, 0); gl("glVertexAttribPointer", 0, 2, g.FLOAT, 0, stride, vertices);
+  const result = { pixels, drawError, kept, vaoError: gl("glGetError") };
+  mem.free(p); context.makeCurrent(null);
+  return result;
+}
+
+/** native GLES 3: a SurfaceTexture's GL_TEXTURE_EXTERNAL_OES target reaches the TEXTURE_2D storage it fills */
+function externalTexture() {
+  gles3Init();
+  const context = new EglContext();
+  context.makeCurrent({ view: null, width: 1, height: 1, present: null, frames: 0 });
+  const g = context.gl!, cpu = new Cpu(mainThread, "external-texture"), p = mem.malloc(16);
+  const gl = (name: string, ...values: number[]) => callGl(cpu, "libGLESv2.so", name, values);
+  const EXTERNAL = 0x8d65;
+  gl("glGenTextures", 1, p); gl("glGenFramebuffers", 1, p + 4);
+  const texture = mem.ld32(p);
+  gl("glBindTexture", EXTERNAL, texture); gl("glTexParameteri", EXTERNAL, g.TEXTURE_MIN_FILTER, g.LINEAR);
+  gl("glBindFramebuffer", g.READ_FRAMEBUFFER, mem.ld32(p + 4));
+  gl("glFramebufferTexture2D", g.READ_FRAMEBUFFER, g.COLOR_ATTACHMENT0, EXTERNAL, texture, 0);
+  gl("glGetIntegerv", 0x8d67, p + 8);
+  const result = { bound: mem.ld32(p + 8) === texture, error: gl("glGetError") };
+  mem.free(p); context.makeCurrent(null);
+  return result;
+}
+
 async function probe() {
   rt.linkNatives();
   const e10 = rt.make("javax/microedition/khronos/egl/EGL10");
@@ -163,7 +276,8 @@ async function probe() {
   await Reflect.apply(Reflect.get(view, "runFrame"), view, []);
   return { callbacks, bound10, interval10, bound14, emptySecond, isolated, restored, sameContext10, sameContext14,
     firstError, secondError, restoredAfterRelease, swapped, pixel, mainEmpty, callbackRestored, mainStillEmpty: gl === null,
-    lifecycle: await lifecycle(), nativeWindow: await nativeWindow(), windowCopy: await windowCopy(), readback: readback(), uploads: uploadExtents() };
+    lifecycle: await lifecycle(), nativeWindow: await nativeWindow(), windowCopy: await windowCopy(), readback: readback(), uploads: uploadExtents(),
+    clientArrays: clientArrays(), bufferBindings: bufferBindings(), nativeClientArrays: nativeClientArrays(), externalTexture: externalTexture() };
 }
 async function nativeWindow() {
   ndkInit();

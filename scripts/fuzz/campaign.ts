@@ -120,7 +120,7 @@ function observation(value: unknown, label: string): ProbeObservation {
   return { input: probe, failure: validateFailure(input.failure, `${label}.failure`), oracle, webdroid };
 }
 
-export function validateFailureBundle(value: unknown): FailureBundle {
+function validateFailureBundle(value: unknown): FailureBundle {
   const input = object(value, "failure bundle");
   if (input.schemaVersion !== 1 || (input.kind !== "api" && input.kind !== "graphics") || typeof input.seed !== "number")
     throw new Error("invalid failure bundle");

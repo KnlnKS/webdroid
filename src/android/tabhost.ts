@@ -4,12 +4,11 @@
 // strategy, and setCurrentTab hiding the previous content view, showing the next and telling the
 // OnTabChangeListener. Fragment-backed hosts (androidx / an app's FragmentTabHost) subclass this
 // and drive fragments from that listener.
-import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, callSelf, noops, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
 import { type JView, type JViewGroup, initViewFromCtx, findById, invalidate } from "./view";
 import { JFrameLayout, JLinearLayout, linearMethods } from "./layouts";
 import type { JAttrSet } from "./res";
-import { callSelf } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 
 const ID_TABS = 0x01020013, ID_TABCONTENT = 0x01020011, GONE = 8, VISIBLE = 0, MATCH_PARENT = -1;

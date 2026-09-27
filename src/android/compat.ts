@@ -13,6 +13,7 @@ import { reportUncaught, uptimeMillis } from "./os";
 import { currentResources, rvDimen, rvFloat, rvInt, normRV, type Resources } from "./res";
 import { parseAXML, attr, TV, type XmlNode } from "./axml";
 import { complexToFraction } from "./util";
+import { accelDecel } from "./animator";
 import type { JContext } from "./context";
 
 // ── Scroller/OverScroller: time-based interpolated scroll values
@@ -71,12 +72,8 @@ const scrollerMethods: NativeSpec["methods"] = {
     this.fling(sx, sy, vx, vy, minX, maxX, minY, maxY);
   },
   "computeScrollOffset()Z": function (this: JScroller) { return this.compute() ? 1 : 0; },
-  "getCurrX()I": function (this: JScroller) { return this.curX; },
-  "getCurrY()I": function (this: JScroller) { return this.curY; },
-  "getFinalX()I": function (this: JScroller) { return this.finalX; },
-  "getFinalY()I": function (this: JScroller) { return this.finalY; },
-  "getStartX()I": function (this: JScroller) { return this.startX; },
-  "getStartY()I": function (this: JScroller) { return this.startY; },
+  ...fieldGetters({ "getCurrX()I": "curX", "getCurrY()I": "curY", "getFinalX()I": "finalX", "getFinalY()I": "finalY",
+    "getStartX()I": "startX", "getStartY()I": "startY", "getDuration()I": "duration" }),
   "isFinished()Z": function (this: JScroller) { return this.finished ? 1 : 0; },
   "abortAnimation()V": function (this: JScroller) {
     this.finished = true;
@@ -84,7 +81,6 @@ const scrollerMethods: NativeSpec["methods"] = {
   },
   "forceFinished(Z)V": function (this: JScroller, f: number) { this.finished = !!f; },
   "getCurrVelocity()F": function (this: JScroller) { return this.finished ? 0 : 800; },
-  "getDuration()I": function (this: JScroller) { return this.duration; },
   "springBack(IIIIII)Z": function (this: JScroller, sx: number, sy: number, minX: number, maxX: number, minY: number, maxY: number) {
     const fx = Math.max(minX, Math.min(maxX, sx));
     const fy = Math.max(minY, Math.min(maxY, sy));
@@ -133,6 +129,7 @@ class JVelocityTracker extends JObj {
     this.vy = Math.max(-max, Math.min(max, (b.y - a.y) / dt * units));
   }
 }
+const clearVelocity = function (this: JVelocityTracker) { this.samples.length = 0; };
 rt.register({
   name: "android/view/VelocityTracker", ctor: JVelocityTracker,
   methods: {
@@ -143,12 +140,9 @@ rt.register({
     },
     "computeCurrentVelocity(I)V": function (this: JVelocityTracker, units: number) { this.compute(units); },
     "computeCurrentVelocity(IF)V": function (this: JVelocityTracker, units: number, max: number) { this.compute(units, max); },
-    "getXVelocity()F": function (this: JVelocityTracker) { return this.vx; },
-    "getYVelocity()F": function (this: JVelocityTracker) { return this.vy; },
-    "getXVelocity(I)F": function (this: JVelocityTracker) { return this.vx; },
-    "getYVelocity(I)F": function (this: JVelocityTracker) { return this.vy; },
-    "clear()V": function (this: JVelocityTracker) { this.samples.length = 0; },
-    "recycle()V": function (this: JVelocityTracker) { this.samples.length = 0; },
+    ...fieldGetters({ "getXVelocity()F": "vx", "getYVelocity()F": "vy", "getXVelocity(I)F": "vx", "getYVelocity(I)F": "vy" }),
+    "clear()V": clearVelocity,
+    "recycle()V": clearVelocity,
   },
 });
 
@@ -236,7 +230,7 @@ class JInterpolator extends JObj {
 }
 const INTERP: Record<string, (t: number, a: number, b: number) => number> = {
   LinearInterpolator: (t) => t,
-  AccelerateDecelerateInterpolator: (t) => Math.cos((t + 1) * Math.PI) / 2 + 0.5,
+  AccelerateDecelerateInterpolator: accelDecel,
   AccelerateInterpolator: (t, a) => a === 1 ? t * t : Math.pow(t, 2 * a),
   DecelerateInterpolator: (t, a) => a === 1 ? 1 - (1 - t) * (1 - t) : 1 - Math.pow(1 - t, 2 * a),
   OvershootInterpolator: (t, a) => (t -= 1, t * t * ((a + 1) * t + a) + 1),
@@ -251,7 +245,7 @@ const INTERP: Record<string, (t: number, a: number, b: number) => number> = {
   },
   CycleInterpolator: (t, a) => Math.sin(2 * Math.PI * a * t),
   PathInterpolator: (t) => t,
-  FastOutSlowInInterpolator: (t) => Math.cos((t + 1) * Math.PI) / 2 + 0.5,
+  FastOutSlowInInterpolator: accelDecel,
 };
 // default tension/factor per class: 2.0 for the overshoot family, 1.0 for the power ones
 const INTERP_DEF: Record<string, number> = { OvershootInterpolator: 2, AnticipateInterpolator: 2, AnticipateOvershootInterpolator: 2 };
@@ -275,8 +269,6 @@ for (const n of Object.keys(INTERP)) {
     },
   });
 }
-/** the interpolation an Animation with no interpolator of its own uses */
-const accelDecel = INTERP.AccelerateDecelerateInterpolator;
 
 class JTransformation extends JObj {
   alpha = 1;
@@ -335,7 +327,7 @@ async function getTransformation(a: JAnimation, now: number, out: JTransformatio
     if (!a.started) { a.started = true; await fire(a, v, "Start"); }
     if (a.fillEnabled) norm = norm < 0 ? 0 : norm > 1 ? 1 : norm;
     if (a.flipped) norm = 1 - norm;
-    const it = a.interp ? Math.fround(await vcall(a.interp, "getInterpolation", "(F)F", Math.fround(norm))) : accelDecel(norm, 0, 0);
+    const it = a.interp ? Math.fround(await vcall(a.interp, "getInterpolation", "(F)F", Math.fround(norm))) : accelDecel(norm);
     await vcall(a, "applyTransformation", "(FLandroid/view/animation/Transformation;)V", it, out);
   }
   if (expired) {
@@ -748,7 +740,7 @@ rt.register({
       "onDoubleTapEvent(Landroid/view/MotionEvent;)Z"),
   },
 });
-rt.markers("android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener", "android/view/ScaleGestureDetector$OnScaleGestureListener");
+rt.markers("android/view/GestureDetector$OnGestureListener", "android/view/GestureDetector$OnDoubleTapListener");
 
 // ── GestureStore/GestureLibrary — stubbed (legacy, sometimes touched by old ad SDKs)
 rt.register({

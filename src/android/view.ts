@@ -4,7 +4,7 @@ import { perf } from "../perf";
 import { TV } from "./axml";
 import { setInvalidateHook, JRect, JCanvas, JRecordingCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, recolor, type JPoint, type JPaint } from "./graphics";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
-import { vcall, vcallOn, after, idHash, box, JFloat, curThread, vcallUncaught, type JThread } from "../jvm/natives/jlang";
+import { vcall, vcallOn, callOn, after, idHash, box, JFloat, curThread, vcallUncaught, type JThread } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize } from "./drawable";
 import { JMotionEvent } from "./motionevent";
 import { JObj, rt, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
@@ -47,7 +47,6 @@ export const uiState = {
    *  hands the same value to every callback; Compose's BroadcastFrameClock fans one timestamp
    *  to all withFrameNanos awaiters, so animations desync if callbacks see different times. */
   frameTimeNanos: 0n,
-  frameIntervalNanos: BigInt(Math.round(1e9 / device.refreshRate)),
   /** debug only (wd.layoutTrace): requestLayout counts by requesting class, and by frame phase
    *  plus the two native frames that asked. Null costs one test per request. */
   layoutTrace: null as { cls: Record<string, number>; site: Record<string, number> } | null,
@@ -74,7 +73,7 @@ const M_requestLayout = mangleMethod("requestLayout", "()V");
 function descendantInvalidated(child: JView, target: JView) {
   for (let p = child.parent; p; child = p, p = p.parent) {
     const f = jmethod(p, M_onDescInv);
-    if (f && f !== nativeOnDescInv) { void guardApply(f as JMethod, p, child, target); return; }
+    if (f && f !== nativeOnDescInv) { void f.call(p, child, target); return; }
   }
 }
 function nativeOnDescInv(this: JViewGroup, _child: JView, target: JView) { invalidate(); descendantInvalidated(this, target); }
@@ -83,7 +82,7 @@ function nativeRequestLayout(this: JView) { requestLayout(this); }
  *  (RecyclerView defers while it binds or lays out) decides first */
 function requestLayoutVirtual(v: JView) {
   const f = jmethod(v, M_requestLayout);
-  if (f && f !== nativeRequestLayout) void guardApply(f as JMethod, v);
+  if (f && f !== nativeRequestLayout) void f.call(v);
   else requestLayout(v);
 }
 setInvalidateHook(invalidate);
@@ -147,7 +146,7 @@ export function requestLayout(v: JView) {
     if (!par) break;
     if (par.layoutRequested) continue;
     const f = jmethod(par, M_requestLayout);
-    if (f && f !== nativeRequestLayout) { void guardApply(f as JMethod, par); break; }
+    if (f && f !== nativeRequestLayout) { void f.call(par); break; }
   }
 }
 /** A window's token is a Binder (ViewRootImpl's W): apps hand it across IPC, to Play Games for one */
@@ -287,6 +286,9 @@ const M_onConfigChanged = mangleMethod("onConfigurationChanged", "(Landroid/cont
 const M_drawableStateChanged = mangleMethod("drawableStateChanged", "()V");
 const M_onCreateDrawableState = mangleMethod("onCreateDrawableState", "(I)[I");
 const M_setBounds = mangleMethod("setBounds", "(IIII)V");
+const M_getIntrinsicWidth = mangleMethod("getIntrinsicWidth", "()I");
+const M_getIntrinsicHeight = mangleMethod("getIntrinsicHeight", "()I");
+const M_getLayoutDirection = mangleMethod("getLayoutDirection", "()I");
 
 /** absolute position of v's top-left: translations applied, each ancestor's scroll removed */
 export function locationOnScreen(v: JView): [number, number] {
@@ -319,13 +321,7 @@ export function guardCall(self: unknown, mangled: string, ...args: unknown[]): u
 }
 
 export function guardMaybe(self: unknown, mangled: string, ...args: unknown[]): unknown {
-  const fn = jmethod(self, mangled);
-  if (!fn) return undefined;
-  return fn.apply(self, args);
-}
-
-function guardApply(fn: JMethod, self: unknown, ...args: unknown[]): unknown {
-  return fn.apply(self, args);
+  return jmethod(self, mangled)?.apply(self, args);
 }
 
 class JPointerIcon extends JObj { type = 0; }
@@ -449,7 +445,6 @@ export class JView extends JObj {
   }
   clipBounds: JRect | null = null; bgTint: JColorStateList | null = null;
   tooltip: unknown = null;
-  win: unknown = null; // ViewRootImpl-ish owner
   /** an offscreen canvas when layerType asks for one (see drawLayered) */
   layerCanvas: OffscreenCanvas | null = null;
   /** the running android.view.animation.Animation and the transformation it last produced */
@@ -502,7 +497,6 @@ class ViewRare {
   layerPaint: JPaint | null = null;
 }
 const rare = (v: JView) => v.rare ??= new ViewRare();
-const densityDpi = () => device.density * 160;
 const rareMethods: NativeSpec["methods"] = {
   ...Object.fromEntries(["Left", "Right", "Up", "Down", "Forward"].flatMap((dir, i) => [
     [`setNextFocus${dir}Id(I)V`, function (this: JView, id: number) { rare(this).nextFocus[i] = id; }],
@@ -510,8 +504,8 @@ const rareMethods: NativeSpec["methods"] = {
   ])),
   "setScrollBarSize(I)V": function (this: JView, size: number) { rare(this).scrollBarSize = size; },
   "getScrollBarSize()I": function (this: JView) { const s = this.rare?.scrollBarSize ?? -1; return s >= 0 ? s : Math.round(device.dp(4)); },
-  "setCameraDistance(F)V": function (this: JView, d: number) { rare(this).cameraDistance = Math.abs(d) / densityDpi(); },
-  "getCameraDistance()F": function (this: JView) { return Math.fround((this.rare?.cameraDistance ?? 8) * densityDpi()); },
+  "setCameraDistance(F)V": function (this: JView, d: number) { rare(this).cameraDistance = Math.abs(d) / device.densityDpi; },
+  "getCameraDistance()F": function (this: JView) { return Math.fround((this.rare?.cameraDistance ?? 8) * device.densityDpi); },
   "setSystemGestureExclusionRects(Ljava/util/List;)V": function (this: JView, rects: unknown) {
     return after(toJsArray(rects), (a) => { if (a.length || this.rare) rare(this).exclusionRects = a.length ? newArrayList([...a]) : null; });
   },
@@ -582,10 +576,9 @@ const viewDispatchInsets = driven(function* viewDispatchInsets(this: JView, ins:
   return yield vcall(this, "onApplyWindowInsets", "(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;", ins);
 });
 
-/** apply base View attrs from an AttributeSet (used by native View ctor) */
-// defStyleAttr is the widget's own style attribute (buttonStyle, editTextStyle, ...). Without it
-// tiers 3 and 4 of the cascade are dead for every base-View attribute, which is why a Button had
-// to be handed a background in TypeScript instead of resolving Widget.Material.Button's.
+/** apply base View attrs from an AttributeSet (used by native View ctor). defStyleAttr is the
+ *  widget's own style attribute (buttonStyle, editTextStyle, ...): tiers 3 and 4 of the cascade
+ *  resolve base-View attributes such as Widget.Material.Button's background through it. */
 const applyViewAttrs = driven(function* applyViewAttrs(v: JView, set: JAttrSet | null, defStyleAttr: number = 0, defStyleRes: number = 0): Gen {
   if (!v.jres || (!set?.node && !defStyleAttr && !defStyleRes)) return;
   const res = v.jres;
@@ -669,7 +662,7 @@ export function setViewTargetSdk(target: number) {
 }
 export const measureView = driven(function* measureView(v: JView, wSpec: number, hSpec: number): Gen {
   // AOSP View.measure: with no forced layout and identical specs the previous measurement
-  // still holds. Without this every pass re-measured the whole tree from the root.
+  // still holds.
   if (!v.layoutRequested) {
     if (wSpec === v.oldWSpec && hSpec === v.oldHSpec) return;
     // AOSP: a changed spec that is EXACTLY the size the view already measures needs no measure
@@ -719,7 +712,7 @@ function setBound(v: JView, l: number, t: number, r: number, b: number) {
   if (v.surfaceBacked) v.syncSurface();
   invalidate();
   if (r - l !== ow || b - t !== oh) void guardMaybe(v, M_onSizeChanged, r - l, b - t, ow, oh);
-  for (const ll of [...v.layoutChangeLs]) {
+  if (v.layoutChangeLs.length) for (const ll of [...v.layoutChangeLs]) {
     void vcall(ll, "onLayoutChange", "(Landroid/view/View;IIIIIIII)V", v, l, t, r, b, oldL, oldT, oldR, oldB);
   }
 }
@@ -740,23 +733,20 @@ export const layoutView = driven(function* layoutView(v: JView, l: number, t: nu
     yield guardMaybe(v, M_onSizeChanged, r - l, b - t, ow, oh);
   }
   // AOSP View.layout: onLayout runs only when the frame moved or a measure re-ran
-  // (PFLAG_LAYOUT_REQUIRED). Without the gate every pass walked the whole tree laying out
-  // children the measure memo had just skipped, which is what made settle passes cost.
+  // (PFLAG_LAYOUT_REQUIRED), so children the measure memo skipped are not laid out again.
   if (changed || v.layoutRequired) {
     yield guardCall(v, M_onLayout, changed ? 1 : 0, l, t, r, b);
     // Surface lifecycle follows frame changes even when a subclass skips super.onLayout.
     if (v.surfaceBacked) v.syncSurface();
     v.layoutRequired = false;
-    for (const ll of [...v.layoutChangeLs]) {
+    if (v.layoutChangeLs.length) for (const ll of [...v.layoutChangeLs]) {
       yield vcall(ll, "onLayoutChange", "(Landroid/view/View;IIIIIIII)V", v, l, t, r, b, oldL, oldT, oldR, oldB);
     }
   }
   v.layoutRequested = false;
 });
 
-/** full draw of the subtree onto ctx (already positioned at parent's content origin) */
 const M_computeScroll = mangleMethod("computeScroll", "()V");
-const M_drawableDraw = mangleMethod("draw", "(Landroid/graphics/Canvas;)V");
 const noopComputeScroll = () => {};
 /** AOSP drawChild: a child the parent's clip rejects is not drawn at all, unless a transform or
  *  an animation could move it into view. An off-screen ViewPager page never runs its onDraw, so
@@ -764,12 +754,13 @@ const noopComputeScroll = () => {};
 const clipRejects = (p: JViewGroup, v: JView): boolean =>
   p.clipChildren && !v.jAnim && !v.animTf && !v.translationX && !v.translationY && !v.rotationV && v.scaleXv === 1 && v.scaleYv === 1 &&
   (v.right - p.scrollX <= 0 || v.bottom - p.scrollY <= 0 || v.left - p.scrollX >= p.width() || v.top - p.scrollY >= p.height());
+/** full draw of the subtree onto ctx (already positioned at parent's content origin) */
 export const drawView = driven(function* drawView(v: JView, cv: JCanvas, parent?: JViewGroup): Gen {
   if (v.visibility !== 0) return;
   // Android calls computeScroll() before drawing each child — drives Scroller
   // animations (ViewPager page snaps, OverScroller flings)
   const cs = jmethod(v, M_computeScroll);
-  if (cs && cs !== noopComputeScroll) yield guardApply(cs, v);
+  if (cs && cs !== noopComputeScroll) yield cs.call(v);
   if (parent && clipRejects(parent, v)) { perf.viewsRejected++; return; }
   perf.viewsDrawn++;
   const ctx = cv.ctx;
@@ -867,7 +858,7 @@ const drawSemantic = driven(function* drawSemantic(v: JView, cv: JCanvas): Gen {
 const baseDraw = function (this: JView, cv: JCanvas) { return drawContent(this, cv); };
 function drawSelf(v: JView, cv: JCanvas): unknown {
   const fn = jmethod(v, M_draw);
-  return fn && fn !== baseDraw ? guardApply(fn, v, cv) : drawContent(v, cv);
+  return fn && fn !== baseDraw ? fn.call(v, cv) : drawContent(v, cv);
 }
 /** the view's own painting, in its own coordinate space: background, content, children, overlay */
 const drawContent = driven(function* drawContent(v: JView, cv: JCanvas): Gen {
@@ -875,7 +866,7 @@ const drawContent = driven(function* drawContent(v: JView, cv: JCanvas): Gen {
   if (v.surfaceBacked && isRecording(ctx)) {
     if (!v.surfaceLayer && v.background) {
       yield guardCall(v.background, M_setBounds, 0, 0, v.width(), v.height());
-      yield guardCall(v.background, M_drawableDraw, cv);
+      yield guardCall(v.background, M_draw, cv);
     }
     // The first frame can arrive after recording; later frames replace and close their predecessor.
     recordOrRun(ctx, target => {
@@ -888,14 +879,15 @@ const drawContent = driven(function* drawContent(v: JView, cv: JCanvas): Gen {
     // through setBounds, not the fields: AOSP's onBoundsChange is where wrapper/shape drawables
     // (and app subclasses) rebuild their geometry, and it only fires on a real change
     yield guardCall(v.background, M_setBounds, 0, 0, v.width(), v.height());
-    yield guardCall(v.background, M_drawableDraw, cv);
+    yield guardCall(v.background, M_draw, cv);
   }
   ctx.translate(-v.scrollX, -v.scrollY);
   yield guardMaybe(v, M_onDraw, cv);
   yield guardMaybe(v, M_dispatchDraw, cv);
   if (v.overlay) yield drawOverlay(v.overlay, cv);
   ctx.translate(v.scrollX, v.scrollY);
-  if (v.foreground || jmethod(v, M_onDrawForeground) !== drawForeground) yield guardMaybe(v, M_onDrawForeground, cv);
+  const fg = jmethod(v, M_onDrawForeground);
+  if (fg && (v.foreground || fg !== drawForeground)) yield fg.call(v, cv);
 });
 
 const drawForeground = driven(function* drawForeground(this: JView, cv: JCanvas): Gen {
@@ -907,14 +899,14 @@ const drawForeground = driven(function* drawForeground(this: JView, cv: JCanvas)
     const bounds = new JRect();
     bounds.right = w; bounds.bottom = h;
     if (this.foregroundGravity !== G.FILL) {
-      const dw = yield vcallOn(thread, d, "getIntrinsicWidth", "()I");
-      const dh = yield vcallOn(thread, d, "getIntrinsicHeight", "()I");
-      const ld = yield vcallOn(thread, this, "getLayoutDirection", "()I");
+      const dw = yield callOn(thread, () => guardCall(d, M_getIntrinsicWidth));
+      const dh = yield callOn(thread, () => guardCall(d, M_getIntrinsicHeight));
+      const ld = yield callOn(thread, () => guardCall(this, M_getLayoutDirection));
       gravityApply(absGravity(this.foregroundGravity, Number(ld)), Number(dw), Number(dh), bounds, 0, 0, bounds);
     }
-    yield vcallOn(thread, d, "setBounds", "(IIII)V", bounds.left, bounds.top, bounds.right, bounds.bottom);
+    yield callOn(thread, () => guardCall(d, M_setBounds, bounds.left, bounds.top, bounds.right, bounds.bottom));
   }
-  yield vcallOn(thread, d, "draw", "(Landroid/graphics/Canvas;)V", cv);
+  yield callOn(thread, () => guardCall(d, M_draw, cv));
 });
 
 function drawSurface(v: JView, ctx: JCanvas["ctx"]) {
@@ -937,7 +929,7 @@ function overlayOf(this: JView) {
 
 /** AOSP draws the overlay last, over the host's own content and children */
 const drawOverlay = driven(function* drawOverlay(o: JViewOverlay, cv: JCanvas): Gen {
-  for (const d of o.drawables) yield guardCall(d, M_drawableDraw, cv);
+  for (const d of o.drawables) yield guardCall(d, M_draw, cv);
   for (const v of o.views) yield drawView(v, cv);
 });
 
@@ -960,20 +952,18 @@ export const requireViewById = driven(function* requireViewById(this: JObj, id: 
   return view;
 });
 
+const initWithAttrs = driven(function* (this: JView, c: unknown, a: JAttrSet | null): Gen { yield initViewFromCtx(this, c, a); });
 export const viewConstructors: NativeSpec["methods"] = {
   "<init>(Landroid/content/Context;)V": driven(function* (this: JView, c: unknown): Gen { yield initViewFromCtx(this, c, null); }),
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JView, c: unknown, a: JAttrSet | null): Gen {
-    yield initViewFromCtx(this, c, a);
-  }),
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": driven(function* (this: JView, c: unknown, a: JAttrSet | null): Gen {
-    yield initViewFromCtx(this, c, a);
-  }),
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": driven(function* (this: JView, c: unknown, a: JAttrSet | null): Gen {
-    yield initViewFromCtx(this, c, a);
-  }),
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initWithAttrs,
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": initWithAttrs,
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;II)V": initWithAttrs,
 };
 let lastViewId = 0x00ffff00;
 export const generateViewId = () => ++lastViewId;
+const requestFocusDown = function (this: JView) { return vcall(this, "requestFocus", "(ILandroid/graphics/Rect;)Z", 130, null); };
+const invalidateThis = function (this: JView) { invalidate(this); };
+const attachedWindowToken = function (this: JView) { return this.attached ? windowToken(this) : null; };
 const viewMethods: NativeSpec["methods"] = {
   ...viewConstructors,
   ...rareMethods,
@@ -1127,12 +1117,8 @@ const viewMethods: NativeSpec["methods"] = {
   "isAutoHandwritingEnabled()Z": function (this: JView) { return this.autoHandwritingEnabled ? 1 : 0; },
   "setWillNotCacheDrawing(Z)V": function (this: JView, disabled: number) { this.willNotCache = !!disabled; },
   "willNotCacheDrawing()Z": function (this: JView) { return +this.willNotCache; },
-  "requestFocus()Z": function (this: JView) {
-    return vcall(this, "requestFocus", "(ILandroid/graphics/Rect;)Z", 130, null);
-  },
-  "requestFocusFromTouch()Z": function (this: JView) {
-    return vcall(this, "requestFocus", "(ILandroid/graphics/Rect;)Z", 130, null);
-  },
+  "requestFocus()Z": requestFocusDown,
+  "requestFocusFromTouch()Z": requestFocusDown,
   "findFocus()Landroid/view/View;": function (this: JView) { return this.focused ? this : null; },
   "clearFocus()V": function (this: JView) { return clearFocus(this); },
   "setOnClickListener(Landroid/view/View$OnClickListener;)V": function (this: JView, l: unknown) {
@@ -1146,9 +1132,7 @@ const viewMethods: NativeSpec["methods"] = {
   "setOnTouchListener(Landroid/view/View$OnTouchListener;)V": function (this: JView, l: unknown) { this.touchL = l; },
   "setOnKeyListener(Landroid/view/View$OnKeyListener;)V": function (this: JView, l: unknown) { this.keyL = l; },
   "addOnUnhandledKeyEventListener(Landroid/view/View$OnUnhandledKeyEventListener;)V": function (this: JView, l: unknown) { this.unhandledKeyLs.push(l); },
-  "removeOnUnhandledKeyEventListener(Landroid/view/View$OnUnhandledKeyEventListener;)V": function (this: JView, l: unknown) {
-    const i = this.unhandledKeyLs.indexOf(l); if (i >= 0) this.unhandledKeyLs.splice(i, 1);
-  },
+  "removeOnUnhandledKeyEventListener(Landroid/view/View$OnUnhandledKeyEventListener;)V": function (this: JView, l: unknown) { removeFrom(this.unhandledKeyLs, l); },
   "setOnFocusChangeListener(Landroid/view/View$OnFocusChangeListener;)V": function (this: JView, l: unknown) { this.focusL = l; },
   "getOnFocusChangeListener()Landroid/view/View$OnFocusChangeListener;": function (this: JView) { return this.focusL; },
   "addOnLayoutChangeListener(Landroid/view/View$OnLayoutChangeListener;)V": function (this: JView, l: unknown) {
@@ -1194,21 +1178,20 @@ const viewMethods: NativeSpec["methods"] = {
   // AOSP's own body: background, content, children, foreground — at the canvas origin, with
   // the transform and clip left to whoever is drawing this view.
   "draw(Landroid/graphics/Canvas;)V": baseDraw,
-  "invalidate()V": function (this: JView) { invalidate(this); },
-  "invalidate(IIII)V": function (this: JView) { invalidate(this); },
-  "invalidate(Landroid/graphics/Rect;)V": function (this: JView) { invalidate(this); },
-  "postInvalidate()V": function (this: JView) { invalidate(this); },
-  "postInvalidateOnAnimation()V": function (this: JView) { invalidate(this); },
+  "invalidate()V": invalidateThis,
+  "invalidate(IIII)V": invalidateThis,
+  "invalidate(Landroid/graphics/Rect;)V": invalidateThis,
+  "postInvalidate()V": invalidateThis,
+  "postInvalidateOnAnimation()V": invalidateThis,
   // The region is only a hint in AOSP and there is no dirty-region tracking here.
-  "postInvalidate(IIII)V": function () { invalidate(); },
-  "postInvalidateOnAnimation(IIII)V": function () { invalidate(); },
-  "postInvalidateDelayed(J)V": function (ms: bigint) { setTimeout(invalidate, Number(ms)); },
-  "postInvalidateDelayed(JIIII)V": function (ms: bigint) { setTimeout(invalidate, Number(ms)); },
+  "postInvalidate(IIII)V": invalidateThis,
+  "postInvalidateOnAnimation(IIII)V": invalidateThis,
+  "postInvalidateDelayed(J)V": function (this: JView, ms: bigint) { setTimeout(() => invalidate(this), Number(ms)); },
+  "postInvalidateDelayed(JIIII)V": function (this: JView, ms: bigint) { setTimeout(() => invalidate(this), Number(ms)); },
   "invalidateDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JView, d: JDrawable) { this.outlineDirty = true; if (d === this.foreground) this.foregroundW = -1; invalidate(this); },
-  // AOSP posts these on the attached window's handler, i.e. the main looper. Going straight
-  // to setTimeout skipped the main-looper queue, so a posted Runnable could interleave with a
-  // layout or a Handler dispatch at every await -- the check-then-act race class that gave us
-  // the double composition. It also means removeCallbacks can actually cancel.
+  // AOSP posts these on the attached window's handler, i.e. the main looper: a setTimeout could
+  // interleave the Runnable with a layout or a Handler dispatch at any await, and removeCallbacks
+  // can cancel a queued post.
   "scheduleDrawable(Landroid/graphics/drawable/Drawable;Ljava/lang/Runnable;J)V": function (r0: unknown, r: unknown, when: bigint) {
     mainHandler().post(r, Math.max(0, Number(when) - uptimeMillis()));
   },
@@ -1216,11 +1199,7 @@ const viewMethods: NativeSpec["methods"] = {
   // AOSP's 1-arg form cancels everything scheduled by that drawable. Compose's
   // AndroidComposeView calls it; without the overload the whole draw pass threw.
   "unscheduleDrawable(Landroid/graphics/drawable/Drawable;)V": () => {},
-  // AOSP marks this view and walks UP to the root, stopping at the first ancestor already
-  // requesting. Calling the helper with no view took the "caller could not name a view"
-  // branch instead, forcing a full-tree re-measure -- on every androidx/Compose relayout,
-  // which is the one path that reaches here. Do NOT pre-set layoutRequested: the helper's
-  // walk breaks at the first marked node, so marking `this` first would skip the ancestors.
+  // AOSP marks this view and walks UP to the root, not a full-tree re-measure
   "requestLayout()V": nativeRequestLayout,
   "forceLayout()V": function (this: JView) { this.layoutRequested = true; clearMeasureCache(this); },
   "isLayoutRequested()Z": function (this: JView) { return this.layoutRequested ? 1 : 0; },
@@ -1239,9 +1218,9 @@ const viewMethods: NativeSpec["methods"] = {
     return dispatchConfigurationChanged(this, cfg);
   },
   "isAttachedToWindow()Z": function (this: JView) { return this.attached ? 1 : 0; },
-  "getWindowToken()Landroid/os/IBinder;": function (this: JView) { return this.attached ? windowToken(this) : null; },
+  "getWindowToken()Landroid/os/IBinder;": attachedWindowToken,
   "getKeyDispatcherState()Landroid/view/KeyEvent$DispatcherState;": function (this: JView) { return this.attached ? keyDispatcherState : null; },
-  "getApplicationWindowToken()Landroid/os/IBinder;": function (this: JView) { return this.attached ? windowToken(this) : null; },
+  "getApplicationWindowToken()Landroid/os/IBinder;": attachedWindowToken,
   "getRootView()Landroid/view/View;": function (this: JView) { return rootOf(this); },
   "getLocationOnScreen([I)V": function (this: JView, out: Int32Array) { viewLocation(this, out, true); },
   "getLocationInWindow([I)V": function (this: JView, out: Int32Array) { viewLocation(this, out, false); },
@@ -1451,7 +1430,7 @@ const viewMethods: NativeSpec["methods"] = {
   // No drag gesture is ever dispatched (no drag-and-drop pipeline exists), so this only stores
   // the listener for parity with the other setOn*Listener setters -- nothing ever calls it.
   "setOnDragListener(Landroid/view/View$OnDragListener;)V": function (this: JView, l: unknown) { this.dragL = l; },
-  // Compose pairs this with the setter above and calls it on detach — which only happens once
+  // Compose pairs this with setViewTranslationCallback and calls it on detach — which only happens once
   // something actually destroys a view hierarchy.
   "clearViewTranslationCallback()V": () => {},
   "getUniqueDrawingId()J": function (this: JView) { return BigInt((this as unknown as { $udid?: number }).$udid ??= ++JView.$nextDrawingId); },
@@ -1967,7 +1946,7 @@ export const setWindowContent = driven(function* setWindowContent(parent: JViewG
 });
 const M_hasTransientState = mangleMethod("hasTransientState", "()Z");
 const M_childTransientChanged = mangleMethod("childHasTransientStateChanged", "(Landroid/view/View;Z)V");
-const noteTransientChild = driven(function* noteTransientChild(parent: JViewGroup, child: JView, added: boolean, thread: JThread = curThread): Gen {
+const noteTransientChild = driven(function* noteTransientChild(parent: JViewGroup, child: JView, added: boolean, thread: JThread): Gen {
   const method = jmethod(child, M_hasTransientState);
   if (method && (yield vcallOn(thread, child, "hasTransientState", "()Z"))) {
     yield vcallOn(thread, parent, "childHasTransientStateChanged", "(Landroid/view/View;Z)V", child, added ? 1 : 0);
@@ -1976,8 +1955,7 @@ const noteTransientChild = driven(function* noteTransientChild(parent: JViewGrou
 /**
  * AOSP funnels every addView overload through the overridable 3-arg one, and subclasses do real
  * work there -- ViewPager sets lp.isDecor and, mid-layout, lp.needsMeasure + addViewInLayout, which
- * is the only way a page committed during its own measure pass ever gets sized. Calling attachView
- * directly from each overload skipped all of it.
+ * is the only way a page committed during its own measure pass ever gets sized.
  */
 const addViewFunnel = driven(function* addViewFunnel(vg: JViewGroup, c: JView, i: number, lp: JLayoutParams | null): Gen {
   if (!c) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Cannot add a null child view to a ViewGroup");
@@ -1986,10 +1964,13 @@ const addViewFunnel = driven(function* addViewFunnel(vg: JViewGroup, c: JView, i
     if (!lp) throw rt.mkThrowable("java/lang/IllegalArgumentException", "generateDefaultLayoutParams() cannot return null");
   }
   const f = jmethod(vg, M_addView3);
-  if (f && f !== addView3) return void (yield guardApply(f, vg, c, i, lp));
+  if (f && f !== addView3) return void (yield f.call(vg, c, i, lp));
   yield addView3.call(vg, c, i, lp);
 });
 
+const M_getChildDrawingOrder = mangleMethod("getChildDrawingOrder", "(II)I");
+const hasZ = (c: JView) => c.elevationV || c.translationZ;
+const byZ = (a: JView, b: JView) => a.elevationV + a.translationZ - b.elevationV - b.translationZ;
 export const vgMethods: NativeSpec["methods"] = {
   "dispatchApplyWindowInsets(Landroid/view/WindowInsets;)Landroid/view/WindowInsets;": driven(function* (this: JViewGroup, ins: JWindowInsets): Gen {
     let cur = yield viewDispatchInsets.call(this, ins);
@@ -2064,12 +2045,11 @@ export const vgMethods: NativeSpec["methods"] = {
     if (this.drawingOrderEnabled) {
       order = [];
       for (let i = 0; i < n; i++) {
-        const c = this.children[(yield vcall(this, "getChildDrawingOrder", "(II)I", n, i))];
+        const c = this.children[(yield guardCall(this, M_getChildDrawingOrder, n, i)) as number];
         if (c) order.push(c);
       }
     }
-    if (order.some((c) => c.elevationV || c.translationZ))
-      order = [...order].sort((a, b) => a.elevationV + a.translationZ - b.elevationV - b.translationZ);
+    if (order.some(hasZ)) order = (order === this.children ? [...order] : order).sort(byZ);
     for (const c of order) yield drawView(c, cv, this);
   }),
   "setChildrenDrawingOrderEnabled(Z)V": function (this: JViewGroup, e: number) { this.drawingOrderEnabled = !!e; },
@@ -2576,7 +2556,7 @@ const M_getOutline = mangleMethod("getOutline", GET_OUTLINE_DESC);
 class JViewOutlineProvider extends JObj {}
 function mkOutlineProvider(fill: (view: JView, outline: unknown) => unknown): JViewOutlineProvider {
   const o = new JViewOutlineProvider();
-  (o as unknown as Record<string, unknown>)[mangleMethod("getOutline", GET_OUTLINE_DESC)] = fill;
+  (o as unknown as Record<string, unknown>)[M_getOutline] = fill;
   return o;
 }
 const bgOutline = mkOutlineProvider(async (view, outline) => {
@@ -2643,7 +2623,7 @@ rt.register({
     "getRealSize(Landroid/graphics/Point;)V": (p: JPoint) => { p.x = device.width; p.y = device.height; },
     "getRefreshRate()F": () => device.refreshRate,
     "getState()I": () => 2,
-    "getPresentationDeadlineNanos()J": () => uiState.frameIntervalNanos,
+    "getPresentationDeadlineNanos()J": () => device.frameIntervalNanos,
     "getMode()Landroid/view/Display$Mode;": () => displayMode(),
     "getSupportedModes()[Landroid/view/Display$Mode;": () => jarray([displayMode()], "Landroid/view/Display$Mode;"),
     "getHdrCapabilities()Landroid/view/Display$HdrCapabilities;": () => hdrCapabilities,

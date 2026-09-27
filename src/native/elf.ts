@@ -141,12 +141,6 @@ function gnuHashSymCount(p: number, ptr: number): number {
   return last + 1;
 }
 
-export function loadElf(name: string, bytes: Uint8Array, resolve: Resolver): Module {
-  const { mod, relocate } = mapElf(name, bytes);
-  relocate(resolve);
-  return mod;
-}
-
 /** Map and parse an image without binding its imports: DT_NEEDED modules must be loaded
  *  before `relocate` sees them, and every unresolved slot stays a stub for good. */
 export function mapElf(name: string, bytes: Uint8Array): { mod: Module; relocate: (resolve: Resolver) => void } {

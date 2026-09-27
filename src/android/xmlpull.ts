@@ -53,6 +53,10 @@ export async function readerText(r: unknown): Promise<string> {
   }
 }
 const S = "Ljava/lang/String;";
+const advance = function (this: JXmlPull) { if (this.i < this.events.length - 1) this.i++; return this.cur.t; };
+/** process-namespaces is the one feature either end honours */
+const setFeature = function (this: { nsAware: boolean }, f: string, on: number) { if (f.endsWith("process-namespaces")) this.nsAware = !!on; };
+const getFeature = function (this: { nsAware: boolean }, f: string) { return f.endsWith("process-namespaces") && this.nsAware ? 1 : 0; };
 rt.register({
   name: "org/xmlpull/v1/XmlPullParser", ctor: class extends JObj {},
   statics: { START_DOCUMENT, END_DOCUMENT, START_TAG, END_TAG, TEXT, CDSECT: 5, ENTITY_REF: 6, IGNORABLE_WHITESPACE: 7, PROCESSING_INSTRUCTION: 8, COMMENT: 9, DOCDECL: 10,
@@ -67,14 +71,14 @@ rt.register({
       this.load(new TextDecoder(enc ?? "utf-8").decode(yield readStreamFully(s)));
     }),
     "setInput(Ljava/io/Reader;)V": driven(function* (this: JXmlPull, r: unknown): Gen { this.load(yield readerText(r)); }),
-    [`setFeature(${S}Z)V`]: function (this: JXmlPull, f: string, on: number) { if (f.endsWith("process-namespaces")) this.nsAware = !!on; },
-    [`getFeature(${S})Z`]: function (this: JXmlPull, f: string) { return f.endsWith("process-namespaces") && this.nsAware ? 1 : 0; },
+    [`setFeature(${S}Z)V`]: setFeature,
+    [`getFeature(${S})Z`]: getFeature,
     [`setProperty(${S}Ljava/lang/Object;)V`]: () => {},
     [`getProperty(${S})Ljava/lang/Object;`]: () => null,
     [`defineEntityReplacementText(${S}${S})V`]: () => {},
     "getEventType()I": function (this: JXmlPull) { return this.cur.t; },
-    "next()I": function (this: JXmlPull) { if (this.i < this.events.length - 1) this.i++; return this.cur.t; },
-    "nextToken()I": function (this: JXmlPull) { if (this.i < this.events.length - 1) this.i++; return this.cur.t; },
+    "next()I": advance,
+    "nextToken()I": advance,
     "nextTag()I": function (this: JXmlPull) {
       if (this.i < this.events.length - 1) this.i++;
       if (this.cur.t === TEXT && /^\s*$/.test(this.cur.text) && this.i < this.events.length - 1) this.i++;
@@ -125,23 +129,22 @@ rt.register({
     [`getInputEncoding()${S}`]: () => "UTF-8",
   },
 });
-const newParser = () => rt.make("webdroid/XmlPullParser") as JXmlPull;
+export const newXmlPullParser = () => rt.make("webdroid/XmlPullParser") as JXmlPull;
 class JXmlPullFactory extends JObj { nsAware = false; }
 rt.register({
   name: "org/xmlpull/v1/XmlPullParserFactory", ctor: JXmlPullFactory,
   methods: {
     "static newInstance()Lorg/xmlpull/v1/XmlPullParserFactory;": () => new JXmlPullFactory(),
     [`static newInstance(${S}Ljava/lang/Class;)Lorg/xmlpull/v1/XmlPullParserFactory;`]: () => new JXmlPullFactory(),
-    "newPullParser()Lorg/xmlpull/v1/XmlPullParser;": function (this: JXmlPullFactory) { const p = newParser(); p.nsAware = this.nsAware; return p; },
+    "newPullParser()Lorg/xmlpull/v1/XmlPullParser;": function (this: JXmlPullFactory) { const p = newXmlPullParser(); p.nsAware = this.nsAware; return p; },
     "setNamespaceAware(Z)V": function (this: JXmlPullFactory, on: number) { this.nsAware = !!on; },
     "isNamespaceAware()Z": function (this: JXmlPullFactory) { return this.nsAware ? 1 : 0; },
     "setValidating(Z)V": () => {},
     "isValidating()Z": () => 0,
-    [`setFeature(${S}Z)V`]: function (this: JXmlPullFactory, f: string, on: number) { if (f.endsWith("process-namespaces")) this.nsAware = !!on; },
-    [`getFeature(${S})Z`]: function (this: JXmlPullFactory, f: string) { return f.endsWith("process-namespaces") && this.nsAware ? 1 : 0; },
+    [`setFeature(${S}Z)V`]: setFeature,
+    [`getFeature(${S})Z`]: getFeature,
   },
 });
-export const newXmlPullParser = newParser;
 
 rt.markers("org/xmlpull/v1/XmlSerializer");
 const xmlText = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -176,7 +179,7 @@ class JXmlSerializer extends JObj {
     this.declarations.clear();
   }
 }
-const serializer = () => rt.make("webdroid/XmlSerializer") as JXmlSerializer;
+export const newXmlSerializer = () => rt.make("webdroid/XmlSerializer") as JXmlSerializer;
 rt.register({ name: "webdroid/XmlSerializer", ctor: JXmlSerializer, ifaces: ["org/xmlpull/v1/XmlSerializer"], methods: {
   "setOutput(Ljava/io/OutputStream;Ljava/lang/String;)V": function (this: JXmlSerializer, output: unknown, encoding: string | null) {
     if (encoding && !/^utf-?8$/i.test(encoding)) throw rt.mkThrowable("java/io/UnsupportedEncodingException", encoding);
@@ -251,4 +254,3 @@ rt.register({ name: "webdroid/XmlSerializer", ctor: JXmlSerializer, ifaces: ["or
     yield vcall(this.output, "flush", "()V");
   }),
 } });
-export const newXmlSerializer = serializer;

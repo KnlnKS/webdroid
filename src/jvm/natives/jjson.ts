@@ -136,12 +136,14 @@ function jsonWrap(v: unknown): unknown {
   return v;
 }
 const isObj = (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v) && !(v instanceof JObj);
-/** the typed get/opt family both containers answer, keyed by name on an object and by index on an array */
 /** the text a string getter answers for a stored value: Java's toString for an object (a nested
  *  JSONObject/JSONArray prints its JSON), the literal for a primitive */
 const jsonText = (v: unknown): string | Promise<string> => typeof v === "object" && v !== null ? vcall(jsonWrap(v), "toString", "()Ljava/lang/String;") as string | Promise<string> : String(v);
+/** the typed get/opt family both containers answer, keyed by name on an object and by index on an array */
 function accessors<S>(K: string, read: (self: S, k: never) => unknown): NonNullable<NativeSpec["methods"]> {
   const num = (self: S, k: never) => Number(jsonUnwrap(read(self, k)));
+  const long = function (this: S, k: never) { const v = jsonUnwrap(read(this, k)); return typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v ?? 0))); };
+  const bool = function (this: S, k: never) { return read(this, k) ? 1 : 0; };
   const O = "Lorg/json/JSONObject;", A = "Lorg/json/JSONArray;";
   return {
     [`opt(${K})Ljava/lang/Object;`]: function (this: S, k: never) { return jsonWrap(read(this, k) ?? null); },
@@ -150,14 +152,14 @@ function accessors<S>(K: string, read: (self: S, k: never) => unknown): NonNulla
     [`getInt(${K})I`]: function (this: S, k: never) { return Math.trunc(num(this, k)) | 0; },
     [`optInt(${K})I`]: function (this: S, k: never) { return Math.trunc(Number(jsonUnwrap(read(this, k) ?? 0))) | 0; },
     [`optInt(${K}I)I`]: function (this: S, k: never, d: number) { const v = num(this, k); return Number.isFinite(v) ? Math.trunc(v) | 0 : d; },
-    [`getLong(${K})J`]: function (this: S, k: never) { const v = jsonUnwrap(read(this, k)); return typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v ?? 0))); },
-    [`optLong(${K})J`]: function (this: S, k: never) { const v = jsonUnwrap(read(this, k)); return typeof v === "bigint" ? v : BigInt(Math.trunc(Number(v ?? 0))); },
+    [`getLong(${K})J`]: long,
+    [`optLong(${K})J`]: long,
     [`optLong(${K}J)J`]: function (this: S, k: never, d: bigint) { const v = jsonUnwrap(read(this, k)); if (typeof v === "bigint") return v; const n = Number(v); return Number.isFinite(n) ? BigInt(Math.trunc(n)) : d; },
     [`getDouble(${K})D`]: function (this: S, k: never) { return Number(jsonUnwrap(read(this, k) ?? 0)); },
     [`optDouble(${K})D`]: function (this: S, k: never) { const v = num(this, k); return Number.isFinite(v) ? v : Number.NaN; },
     [`optDouble(${K}D)D`]: function (this: S, k: never, d: number) { const v = num(this, k); return Number.isFinite(v) ? v : d; },
-    [`getBoolean(${K})Z`]: function (this: S, k: never) { return read(this, k) ? 1 : 0; },
-    [`optBoolean(${K})Z`]: function (this: S, k: never) { return read(this, k) ? 1 : 0; },
+    [`getBoolean(${K})Z`]: bool,
+    [`optBoolean(${K})Z`]: bool,
     [`optBoolean(${K}Z)Z`]: function (this: S, k: never, d: number) { const v = read(this, k); return v === undefined ? d : v ? 1 : 0; },
     [`getJSONObject(${K})${O}`]: function (this: S, k: never) {
       const v = read(this, k);
@@ -236,7 +238,7 @@ function jsonText64(v: unknown, indent?: number): string | Promise<string> {
   const stringify = (value: unknown) => JSON.stringify(value, (_k, x) => {
     if (x instanceof JObj) throw javaJsonValue;
     return typeof x === "bigint" ? `\u0000${x}\u0000` : x;
-  }, indent).replace(/"\\u0000(-?\d+)\\u0000"/g, "$1");
+  }, indent).replace(/"\\u0000(-?\d+)\\u0000"/g, "$1").replaceAll("/", "\\/");
   try { return stringify(v); }
   catch (error) {
     if (error !== javaJsonValue) throw error;
@@ -392,7 +394,7 @@ rt.register({
     "put(IZ)Lorg/json/JSONArray;": function (this: JJSONArray, i: number, v: number) { return putAt(this, i, !!v); },
     "put(J)Lorg/json/JSONArray;": function (this: JJSONArray, v: bigint) { this.a.push(jsonUnwrap(v)); return this; },
     "toString()Ljava/lang/String;": function (this: JJSONArray) { return jsonText64(this.a); },
-    "toString(I)Ljava/lang/String;": function (this: JJSONArray, indent: number) { return JSON.stringify(this.a, null, indent); },
+    "toString(I)Ljava/lang/String;": function (this: JJSONArray, indent: number) { return jsonText64(this.a, indent); },
   },
 });
 defineException("org/json/JSONException", "java/lang/Exception");

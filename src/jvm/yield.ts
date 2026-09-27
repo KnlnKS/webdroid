@@ -28,4 +28,4 @@ export function unparkTimeout(id: GuestTimer | undefined): void {
   timedParks.delete(id);
   clearGuestTimeout(id);
 }
-export const yieldStats = { pushes: 0, fires: 0, pending: () => waiters.length, kick: () => { const w = waiters.splice(0); for (const f of w) f(); return w.length; } };
+export const yieldStats = { pushes: 0, fires: 0, pending: () => waiters.length };

@@ -9,7 +9,7 @@ import { JView, JViewGroup, guardCall, initViewFromCtx, invalidate, uiState, req
 import { onMain } from "./mainloop";
 import { JCanvas, JBitmap, JMatrix, JRect } from "./graphics";
 import { setGL, gl, tables } from "./gl";
-import { reportUncaught, mainLooper, mainHandler } from "./os";
+import { reportUncaught, mainLooper, mainHandler, vsync } from "./os";
 import { perf } from "../perf";
 import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../native/egl-current";
 
@@ -208,7 +208,7 @@ export class EglContext {
     presentSurface(s, bmp);
     this.fit(s);
     if (s.swapInterval === 0) return Promise.resolve(!this.gl?.isContextLost());
-    return new Promise((r) => { const done = () => r(!this.gl?.isContextLost()); if (typeof requestAnimationFrame === "function" && !document.hidden) requestAnimationFrame(done); else setTimeout(done, 16); });
+    return vsync().then(() => !this.gl?.isContextLost());
   }
 }
 export function setEglSwapInterval(interval: number, thread = curThread): number {

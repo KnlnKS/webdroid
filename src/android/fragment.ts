@@ -18,13 +18,16 @@ class JFragmentTransaction extends JObj {
   fm: JFragmentManager | null = null;
   ops: FragOp[] = [];
 }
+/** the view in the activity's window a transaction's container id names */
+const containerOf = (fm: JFragmentManager, id: number) =>
+  id && fm.act?.window?.decor ? findById(fm.act.window.decor, id) as JViewGroup | null : null;
 const runFragmentAdd = driven(function* runFragmentAdd(fm: JFragmentManager, frag: JFragment, containerId: number): Gen {
   const act = fm.act;
   frag.containerId = containerId;
   fm.active.push(frag);
   yield vcall(frag, "onAttach", "(Landroid/app/Activity;)V", act);
   yield vcall(frag, "onCreate", "(Landroid/os/Bundle;)V", null);
-  const container = containerId && act?.window?.decor ? findById(act.window.decor, containerId) as JViewGroup | null : null;
+  const container = containerOf(fm, containerId);
   const view = (yield vcall(frag, "onCreateView", "(Landroid/view/LayoutInflater;Landroid/view/ViewGroup;Landroid/os/Bundle;)Landroid/view/View;",
     getInflater(act), container, null)) as JView | null;
   frag.attachedView = view;
@@ -58,7 +61,7 @@ const runFragmentTransaction = driven(function* runFragmentTransaction(tx: JFrag
     if (!op.frag) continue;
     if (op.tag !== undefined) op.frag.tag = op.tag;
     if (op.kind === "replace") {
-      const container = op.containerId && fm.act?.window?.decor ? findById(fm.act.window.decor, op.containerId) as JViewGroup | null : null;
+      const container = containerOf(fm, op.containerId);
       for (const old of [...fm.active]) if (old.containerId === op.containerId) yield runFragmentRemove(fm, old);
       if (container) for (const v of [...container.children]) yield detachView(container, v);
       yield runFragmentAdd(fm, op.frag, op.containerId);
@@ -72,6 +75,7 @@ const runFragmentTransaction = driven(function* runFragmentTransaction(tx: JFrag
   tx.ops.length = 0;
   return 0;
 });
+const commitTransaction = function (this: JFragmentTransaction) { return runFragmentTransaction(this); };
 rt.register({
   name: "android/app/FragmentTransaction", ctor: JFragmentTransaction,
   methods: {
@@ -84,8 +88,8 @@ rt.register({
     "replace(ILandroid/app/Fragment;)Landroid/app/FragmentTransaction;":
       function (this: JFragmentTransaction, id: number, f: JFragment) { this.ops.push({ kind: "replace", containerId: id, frag: f }); return this; },
     "addToBackStack(Ljava/lang/String;)Landroid/app/FragmentTransaction;": function (this: JFragmentTransaction) { return this; },
-    "commit()I": function (this: JFragmentTransaction) { return runFragmentTransaction(this); },
-    "commitAllowingStateLoss()I": function (this: JFragmentTransaction) { return runFragmentTransaction(this); },
+    "commit()I": commitTransaction,
+    "commitAllowingStateLoss()I": commitTransaction,
   },
 });
 rt.register({

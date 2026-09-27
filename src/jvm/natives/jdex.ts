@@ -1,8 +1,7 @@
 import { slashName, dotName } from "../abi";
 import { mkIter } from "./jutil";
-import { JObj, type Runtime, driven, type Gen } from "../runtime";
+import { JObj, rt, type Runtime, driven, type Gen } from "../runtime";
 import { zipTree } from "./jzip";
-import { rt } from "../runtime";
 import { dexesIn } from "../dex";
 import { JClassLoader } from "./jlang";
 import { vfs } from "./jio";
@@ -67,24 +66,21 @@ rt.register({
   },
 });
 class JBaseDexClassLoader extends JClassLoader {}
+/** a class from this loader's own dex files, not its parent's */
+function findDexClass(this: JClassLoader, name: string) {
+  const cls = slashName(name);
+  if (!this.runtime.dexIndex.has(cls)) throw rt.mkThrowable("java/lang/ClassNotFoundException", name);
+  return this.runtime.classFor(cls);
+}
 rt.register({
   name: "dalvik/system/BaseDexClassLoader", ctor: JBaseDexClassLoader, sup: "java/lang/ClassLoader",
-  methods: {
-    "findClass(Ljava/lang/String;)Ljava/lang/Class;": function (this: JClassLoader, n: string) {
-      const name = slashName(n);
-      if (!this.runtime.dexIndex.has(name)) {
-        rt.link("java/lang/ClassNotFoundException");
-        throw rt.mkThrowable("java/lang/ClassNotFoundException", n);
-      }
-      return this.runtime.classFor(name);
-    },
-  },
+  methods: { "findClass(Ljava/lang/String;)Ljava/lang/Class;": findDexClass },
 });
 rt.register({
   name: "dalvik/system/PathClassLoader", ctor: class extends JBaseDexClassLoader {}, sup: "dalvik/system/BaseDexClassLoader",
   methods: {
     "<init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V": init,
-    "<init>(Ljava/lang/String;Ljava/lang/ClassLoader;)V": driven(function* (this: JClassLoader, path: string, parent: JClassLoader | null): Gen { yield init.call(this, path, null, parent); }),
+    "<init>(Ljava/lang/String;Ljava/lang/ClassLoader;)V": function (this: JClassLoader, path: string, parent: JClassLoader | null) { return init.call(this, path, null, parent); },
   },
 });
 rt.register({
@@ -124,10 +120,6 @@ rt.register({
         throw rt.mkThrowable("java/lang/ClassNotFoundException", name);
       return runtime.classFor(cls);
     },
-    "findClass(Ljava/lang/String;)Ljava/lang/Class;": function (this: JClassLoader, name: string) {
-      const cls = slashName(name);
-      if (!this.runtime.dexIndex.has(cls)) throw rt.mkThrowable("java/lang/ClassNotFoundException", name);
-      return this.runtime.classFor(cls);
-    },
+    "findClass(Ljava/lang/String;)Ljava/lang/Class;": findDexClass,
   },
 });

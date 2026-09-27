@@ -1,14 +1,14 @@
 // android.preference.* — the legacy Preference framework: a res/xml preference resource, parsed
 // through the existing AXML/ARSC machinery (same tag→class resolution idiom as inflate.ts's
 // createViewByName), rendered generically as a ListView (listview.ts), and persisted through the
-// existing SharedPreferences/PreferenceManager plumbing in app.ts. No per-app special-casing:
+// existing SharedPreferences plumbing in sharedprefs.ts. No per-app special-casing:
 // any app's res/xml/*.xml preference screen renders through this same path.
 
 import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, flagGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
-import { mangleMethod } from "../jvm/abi";
-import { vcall, newObj, vcallUncaught } from "../jvm/natives/jlang";
+import { jarray, mangleMethod } from "../jvm/abi";
+import { vcall, newObj, vcallUncaught, after } from "../jvm/natives/jlang";
 import { attr, TV, parseAXML, type XmlNode } from "./axml";
-import { JAttrSet, normRV, resString, rvString, type Resources, type RV, JTheme, bagStrings } from "./res";
+import { JAttrSet, xmlAttrRV, resString, rvString, type Resources, type RV, JTheme, bagStrings } from "./res";
 import { JView, JLinearLP, addUnattachedView } from "./view";
 import { tfMedium } from "./graphics";
 import { JLinearLayout } from "./layouts";
@@ -20,14 +20,13 @@ import { getPrefs } from "./sharedprefs";
 import { JFragment, fragMethods } from "./fragment";
 import { type JContext } from "./context";
 import { device } from "../shell/config";
-import { spannedString } from "./text";
+import { csText, spannedString } from "./text";
 
 // ── attribute resolution: mirrors res.ts's own value-resolution helpers (obtainStyled etc.),
 // just driven off a raw AXML attribute instead of a styleable index. ──
 function attrRV(node: XmlNode, name: string): RV | null {
   const a = attr(node, name);
-  if (!a) return null;
-  return a.type === TV.STRING ? { t: TV.STRING, d: 0, s: a.str ?? "" } : normRV({ t: a.type, d: a.data });
+  return a ? xmlAttrRV(a) : null;
 }
 function attrText(res: Resources, node: XmlNode, name: string): string | null {
   const v = attrRV(node, name);
@@ -58,16 +57,10 @@ function prefsOf(jctx: any) {
   const host = jctx?.$host;
   return getPrefs(host.pkg, host.pkg + "_preferences");
 }
-async function putBoolean(jctx: any, key: string, val: boolean) {
-  const sp = prefsOf(jctx);
-  const editor = await vcall(sp, "edit", "()Landroid/content/SharedPreferences$Editor;");
-  await vcall(editor, "putBoolean", "(Ljava/lang/String;Z)Landroid/content/SharedPreferences$Editor;", key, val ? 1 : 0);
-  await vcall(editor, "apply", "()V");
-}
-async function putString(jctx: any, key: string, val: string) {
-  const sp = prefsOf(jctx);
-  const editor = await vcall(sp, "edit", "()Landroid/content/SharedPreferences$Editor;");
-  await vcall(editor, "putString", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;", key, val);
+/** one put<Type> through the Editor, applied */
+async function putPref(jctx: any, put: "putBoolean" | "putString", desc: "Z" | "Ljava/lang/String;", key: string, val: unknown) {
+  const editor = await vcall(prefsOf(jctx), "edit", "()Landroid/content/SharedPreferences$Editor;");
+  await vcall(editor, put, `(Ljava/lang/String;${desc})Landroid/content/SharedPreferences$Editor;`, key, val);
   await vcall(editor, "apply", "()V");
 }
 
@@ -194,7 +187,7 @@ const preferenceGroupMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "removeAll()V": function (this: JPreferenceGroup) { this.children.length = 0; notifyChanged(this); },
   "findPreference(Ljava/lang/CharSequence;)Landroid/preference/Preference;":
-    function (this: JPreferenceGroup, key: unknown) { return findPrefByKey(this, String(key)); },
+    function (this: JPreferenceGroup, key: unknown) { return after(csText(key), (k) => findPrefByKey(this, k)); },
 };
 class JPreferenceCategory extends JPreferenceGroup {}
 class JPreferenceScreen extends JPreferenceGroup {}
@@ -205,7 +198,7 @@ class JCheckBoxPreference extends JPreference {
 async function setCheckBoxValue(pref: JCheckBoxPreference, val: boolean, userInitiated: boolean) {
   if (userInitiated && !(await vcall(pref, "callChangeListener", "(Ljava/lang/Object;)Z", val))) return;
   pref.checked = val;
-  if (pref.keyStr) await putBoolean(pref.jctx, pref.keyStr, val);
+  if (pref.keyStr) await putPref(pref.jctx, "putBoolean", "Z", pref.keyStr, val ? 1 : 0);
   notifyChanged(pref);
 }
 const checkBoxMethods: NonNullable<NativeSpec["methods"]> = {
@@ -236,7 +229,7 @@ class JListPreference extends JPreference {
 async function setListValue(pref: JListPreference, val: string, userInitiated: boolean) {
   if (userInitiated && !(await vcall(pref, "callChangeListener", "(Ljava/lang/Object;)Z", val))) return;
   pref.value = val;
-  if (pref.keyStr) await putString(pref.jctx, pref.keyStr, val);
+  if (pref.keyStr) await putPref(pref.jctx, "putString", "Ljava/lang/String;", pref.keyStr, val);
   notifyChanged(pref);
 }
 async function showListPreferenceDialog(pref: JListPreference) {
@@ -272,14 +265,10 @@ const listPrefMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "setEntries([Ljava/lang/CharSequence;)V": function (this: JListPreference, arr: unknown[]) { this.entries = (arr ?? []).map(String); },
   "setEntries(I)V": function (this: JListPreference, id: number) { this.entries = ctxStringArray(this.jctx, id); },
-  "getEntries()[Ljava/lang/CharSequence;": function (this: JListPreference) {
-    const a: any = [...this.entries]; a.$t = "Ljava/lang/CharSequence;"; return a;
-  },
+  "getEntries()[Ljava/lang/CharSequence;": function (this: JListPreference) { return jarray([...this.entries], "Ljava/lang/CharSequence;"); },
   "setEntryValues([Ljava/lang/CharSequence;)V": function (this: JListPreference, arr: unknown[]) { this.entryValues = (arr ?? []).map(String); },
   "setEntryValues(I)V": function (this: JListPreference, id: number) { this.entryValues = ctxStringArray(this.jctx, id); },
-  "getEntryValues()[Ljava/lang/CharSequence;": function (this: JListPreference) {
-    const a: any = [...this.entryValues]; a.$t = "Ljava/lang/CharSequence;"; return a;
-  },
+  "getEntryValues()[Ljava/lang/CharSequence;": function (this: JListPreference) { return jarray([...this.entryValues], "Ljava/lang/CharSequence;"); },
   "getValue()Ljava/lang/String;": function (this: JListPreference) { return this.value; },
   "setValue(Ljava/lang/String;)V": function (this: JListPreference, v: string) { return setListValue(this, v, false); },
   "getEntry()Ljava/lang/CharSequence;": function (this: JListPreference) {
@@ -289,7 +278,7 @@ const listPrefMethods: NonNullable<NativeSpec["methods"]> = {
   "findIndexOfValue(Ljava/lang/String;)I": function (this: JListPreference, v: string) { return this.entryValues.indexOf(v); },
   "setValueIndex(I)V": function (this: JListPreference, i: number) { return setListValue(this, this.entryValues[i] ?? "", false); },
   "getDialogTitle()Ljava/lang/CharSequence;": function (this: JListPreference) { return this.dialogTitleStr; },
-  "setDialogTitle(Ljava/lang/CharSequence;)V": function (this: JListPreference, t: unknown) { this.dialogTitleStr = t == null ? "" : String(t); },
+  "setDialogTitle(Ljava/lang/CharSequence;)V": function (this: JListPreference, t: unknown) { return after(csText(t), (title) => { this.dialogTitleStr = title; }); },
   "setDialogTitle(I)V": function (this: JListPreference, id: number) { this.dialogTitleStr = ctxString(this.jctx, id); },
   "onClick()V": function (this: JListPreference) { return showListPreferenceDialog(this); },
 };
@@ -301,8 +290,7 @@ rt.register({ name: "android/preference/PreferenceScreen", ctor: JPreferenceScre
 rt.register({ name: "android/preference/CheckBoxPreference", ctor: JCheckBoxPreference, sup: "android/preference/Preference", methods: checkBoxMethods });
 rt.register({ name: "android/preference/ListPreference", ctor: JListPreference, sup: "android/preference/Preference", methods: listPrefMethods });
 // pure callback interfaces — apps implement these; left unregistered they'd auto-stub in
-// Runtime.link and poison downstream linking (see "VM and framework lessons" in the implementation history),
-// same fix as dialog.ts:256.
+// Runtime.link and poison downstream linking (see "VM and framework lessons" in the implementation history)
 for (const n of ["OnPreferenceClickListener", "OnPreferenceChangeListener"]) {
   rt.register({ name: "android/preference/Preference$" + n, ctor: class extends JObj {} });
 }
@@ -414,9 +402,9 @@ rt.register({
   },
 });
 
-// ── PreferenceFragment: an android/app/Fragment (see app.ts's fragMethods/JFragment — the same
-// lifecycle wiring every other framework Fragment uses; FragmentTransaction really attaches its
-// onCreateView() result now, see app.ts's runFragmentAdd). ──
+// ── PreferenceFragment: an android/app/Fragment (fragment.ts's fragMethods/JFragment — the same
+// lifecycle wiring every other framework Fragment uses; FragmentTransaction attaches its
+// onCreateView() result through runFragmentAdd). ──
 class JPreferenceFragment extends JFragment {
   root: JPreferenceScreen | null = null;
   pm: JPreferenceManager | null = null;
@@ -460,7 +448,8 @@ const preferenceFragmentMethods: NonNullable<NativeSpec["methods"]> = {
     else this.root = screen;
   }),
   "findPreference(Ljava/lang/CharSequence;)Landroid/preference/Preference;": function (this: JPreferenceFragment, key: unknown) {
-    return this.root ? findPrefByKey(this.root, String(key)) : null;
+    const root = this.root;
+    return root ? after(csText(key), (k) => findPrefByKey(root, k)) : null;
   },
   "onCreateView(Landroid/view/LayoutInflater;Landroid/view/ViewGroup;Landroid/os/Bundle;)Landroid/view/View;":
     driven(function* (this: JPreferenceFragment): Gen {

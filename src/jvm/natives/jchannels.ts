@@ -1,6 +1,6 @@
 import { JObj, rt, driven, type Gen } from "../runtime";
 import { vcall } from "./jlang";
-import { JInputStream, JOutputStream, skipStream } from "./jio";
+import { JInputStream, JOutputStream, skipStream, noMark } from "./jio";
 import { bufferView, type JBuffer } from "./jnio";
 
 function remainingBytes(buffer: JBuffer): Int8Array {
@@ -46,9 +46,7 @@ rt.register({ name: "webdroid/ChannelInputStream", ctor: JChannelInput, sup: "ja
   "close()V": function (this: JChannelInput) { return vcall(this.channel, "close", "()V"); },
   "available()I": () => 0,
   "skip(J)J": skipStream,
-  "markSupported()Z": () => 0,
-  "mark(I)V": () => {},
-  "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+  ...noMark,
 } });
 rt.register({ name: "webdroid/ChannelOutputStream", ctor: JChannelOutput, sup: "java/io/OutputStream", methods: {
   "write(I)V": function (this: JChannelOutput, value: number) { return vcall(this, "write", "([BII)V", Int8Array.of(value), 0, 1); },

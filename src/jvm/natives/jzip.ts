@@ -346,10 +346,14 @@ export function centralDir(z: Uint8Array): Map<string, ZEntry> {
   const d = directoryFromTail(z, z.length);
   return centralDirRecords(z.subarray(d.offset, d.offset + d.size), d.entries);
 }
-export function entryBytes(z: Uint8Array, e: ZEntry): Uint8Array {
+/** where an entry's data begins: the local header carries its own name/extra lengths, which
+ *  may differ from the central ones */
+function localStart(z: Uint8Array, e: ZEntry): number {
   const v = new DataView(z.buffer, z.byteOffset, z.byteLength);
-  // the local header carries its own name/extra lengths, which may differ from the central ones
-  const start = e.off + 30 + v.getUint16(e.off + 26, true) + v.getUint16(e.off + 28, true);
+  return e.off + 30 + v.getUint16(e.off + 26, true) + v.getUint16(e.off + 28, true);
+}
+export function entryBytes(z: Uint8Array, e: ZEntry): Uint8Array {
+  const start = localStart(z, e);
   return inflateEntry(z.subarray(start, start + e.csize), e);
 }
 export function inflateEntry(raw: Uint8Array, e: ZEntry): Uint8Array {
@@ -408,8 +412,7 @@ export async function inflateTree(tree: Record<string, Uint8Array>, wanted: (nam
   const pending = lazyEntries.get(tree);
   if (!pending || typeof DecompressionStream === "undefined") return;
   await Promise.all([...pending].filter(([name]) => wanted(name)).map(async ([name, [z, e]]) => {
-    const v = new DataView(z.buffer, z.byteOffset, z.byteLength);
-    const start = e.off + 30 + v.getUint16(e.off + 26, true) + v.getUint16(e.off + 28, true);
+    const start = localStart(z, e);
     const stream = new Blob([z.subarray(start, start + e.csize) as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
     const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
     if (pending.has(name)) tree[name] = bytes;

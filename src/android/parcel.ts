@@ -55,7 +55,14 @@ export function readString(p: JParcel): string | null {
   if (len < 0) return null;
   const at = advance(p, pad4((len + 1) * 2));
   let s = "";
-  for (let i = 0; i < len; i++) s += String.fromCharCode(p.view.getUint16(at + i * 2, true));
+  // Below ~32 units a typed view costs more than it saves (measured in V8 and JSC).
+  if (len < 32) {
+    for (let i = 0; i < len; i++) s += String.fromCharCode(p.view.getUint16(at + i * 2, true));
+    return s;
+  }
+  // fromCharCode keeps lone surrogates, which TextDecoder would replace; the host is little-endian.
+  const units = at & 1 ? new Uint16Array(p.buf.slice(at, at + len * 2).buffer) : new Uint16Array(p.buf.buffer, at, len);
+  for (let i = 0; i < len; i += 8192) s += String.fromCharCode.apply(null, units.subarray(i, i + 8192) as unknown as number[]);
   return s;
 }
 export function writeString8(p: JParcel, s: string | null) {
@@ -223,7 +230,7 @@ const PRIM_PARCEL: [new (n: number) => ArrayLike<number | bigint>, V, (p: JParce
   [Int16Array, V.SHORTARRAY, writeInt, readInt, "", "S"],
 ];
 const readStrings = (p: JParcel) => readPrimArray(p, (n) => jarray(new Array<string | null>(n).fill(null), "Ljava/lang/String;"), () => readString(p) as never);
-const writeStrings = (p: JParcel, a: (string | null)[] | null) => { if (!a) return writeInt(p, -1); writeInt(p, a.length); for (const s of a) writeString(p, s); };
+export const writeStrings = (p: JParcel, a: (string | null)[] | null) => { if (!a) return writeInt(p, -1); writeInt(p, a.length); for (const s of a) writeString(p, s); };
 function readStringList(p: JParcel) { const a = readStrings(p); return a ? newArrayList(a) : null; }
 
 async function writeValue(p: JParcel, v: unknown) {

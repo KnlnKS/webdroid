@@ -35,6 +35,23 @@ if (ua) {
   Object.defineProperty(navigator, "appVersion", {value: ua.startsWith("Mozilla/") ? ua.slice(8) : ua});
 }
 const id = config?.id;
+// Chromium hands a WebView page's uncaught errors to WebChromeClient.onConsoleMessage; cancelling
+// them keeps the embedding page from reporting them as its own exceptions.
+const consoleMessage = id ? data => parent.postMessage({bridge: id, kind: "console", ...data}, "*") : f?.__wdConsole;
+if (consoleMessage) {
+  addEventListener("error", event => {
+    if (!event.isTrusted || !(event instanceof ErrorEvent)) return;
+    event.preventDefault();
+    consoleMessage({message: event.message, source: event.filename, line: event.lineno});
+  });
+  addEventListener("unhandledrejection", event => {
+    if (!event.isTrusted) return;
+    event.preventDefault();
+    const reason = event.reason;
+    consoleMessage({message: "Uncaught (in promise) " + (reason instanceof Error ? reason.name + ": " + reason.message : String(reason)),
+      source: document.URL, line: 0});
+  });
+}
 if (!id) { if (f && f.__wdIfaces) Object.assign(window, f.__wdIfaces); return; }
 (${installWebHistory.toString()})(config);
 function call(body) {

@@ -1,7 +1,6 @@
+// android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
 import { readFully } from "../shell/lazyfile";
 import { processEnv } from "../shell/environment";
-// android.os.* + android.util.* natives: Looper/Handler on the JS event loop.
-
 import type { JMessenger } from "./messenger";
 import { procIdentity, processTid, sysconf, SYSCONF } from "../shell/procfs";
 import { parcelCreator, readObject, writeObject, type JParcel } from "./parcel";
@@ -9,7 +8,7 @@ import { guestAt, mem } from "../native/mem";
 import { syncShared, trackSharedMap } from "../native/mappings";
 import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { jarray, mangleMethod } from "../jvm/abi";
-import { markProcessExited } from "../native/cpu";
+import { markProcessExited, yieldToLoop } from "../native/cpu";
 import { device } from "../shell/config";
 import { androidGroupId } from "./identity";
 import { uuidFromString } from "../jvm/natives/jvalues";
@@ -19,7 +18,6 @@ export { reportUncaught };
 import { onMain, inMainJob } from "./mainloop";
 import { uiState } from "./view";
 import { mkExecutor } from "../jvm/natives/jconc";
-import { yieldToLoop } from "../native/cpu";
 import { mkFile, JInputStream, JOutputStream, vfs, type JFileDescriptor, type JFile } from "../jvm/natives/jio";
 import { frameworkString } from "./res";
 import { javaOpenFd, javaCloseFd, javaSeekFd, javaDupFd, javaBytesFd, javaFdSource, fdWriteBack } from "../native/stdio";
@@ -151,7 +149,7 @@ export class JMessage extends JObj {
   callback: unknown = null; target: JHandler | null = null;
   whenMs = 0; sendingUid = -1; workSourceUid = -1;
   data: JBundle | null = null; replyTo: JMessenger | null = null;
-  timer: ReturnType<typeof setTimeout> | undefined;
+  timer: GuestTimer | undefined;
 }
 export function obtain(h: JHandler | null, what = 0, obj: unknown = null, arg1 = 0, arg2 = 0, callback: unknown = null): JMessage {
   const m = new JMessage(); m.target = h; m.what = what; m.obj = obj; m.arg1 = arg1; m.arg2 = arg2; m.callback = callback; return m;
@@ -182,7 +180,7 @@ export class JHandler extends JObj {
         else await vcallUncaught(this, "dispatchMessage", "(Landroid/os/Message;)V", msg);
       } finally { queue.checkIdle(); }
     });
-    if (delay > 0) msg.timer = setGuestTimeout(() => void go(), delay) as ReturnType<typeof setTimeout>; else void go();
+    if (delay > 0) msg.timer = setGuestTimeout(() => void go(), delay); else void go();
     return 1;
   }
   post(r: unknown, delay: number): number { return this.send(obtain(this, 0, null, 0, 0, r), delay); }
@@ -288,11 +286,12 @@ rt.register({
     },
   },
 });
+const initHandlerThread = function (this: any, n: string) { this.jname = n; this.jlooper.thread = this; this.looper = this.jlooper; };
 rt.register({ name: "android/os/HandlerThread", ctor: class extends JThread { jlooper = new JLooper(); },
   sup: "java/lang/Thread",
   methods: {
-    "<init>(Ljava/lang/String;)V": function (this: any, n: string) { this.jname = n; this.jlooper.thread = this; this.looper = this.jlooper; },
-    "<init>(Ljava/lang/String;I)V": function (this: any, n: string) { this.jname = n; this.jlooper.thread = this; this.looper = this.jlooper; },
+    "<init>(Ljava/lang/String;)V": initHandlerThread,
+    "<init>(Ljava/lang/String;I)V": initHandlerThread,
     "start()V": function (this: any) { this.alive = 1; },
     "getLooper()Landroid/os/Looper;": function (this: any) { return this.jlooper; },
     "getThreadId()I": function (this: JThread) { return this.alive ? threadTid(this) : -1; },
@@ -465,6 +464,8 @@ rt.register({
     }),
   },
 });
+/** the JS heap in KiB, the nearest thing to this process's dalvik footprint */
+const jsHeapKb = () => (((performance as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1024) | 0;
 rt.register({
   name: "android/os/Debug", ctor: class extends JObj {},
   methods: {
@@ -476,7 +477,7 @@ rt.register({
     "static threadCpuTimeNanos()J": () => BigInt(Math.round(performance.now() * 1e6)),
     "static getThreadAllocCount()I": () => 0,
     "static getThreadAllocSize()I": () => 0,
-    "static getPss()J": () => BigInt((((performance as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1024) | 0),
+    "static getPss()J": () => BigInt(jsHeapKb()),
     // ART's runtime counters: nothing here collects, blocks or compacts, so every stat is zero
     "static getRuntimeStat(Ljava/lang/String;)Ljava/lang/String;": (name: string) => RUNTIME_STATS.includes(name) ? "0" : null,
     "static getRuntimeStats()Ljava/util/Map;": driven(function* (): Gen {
@@ -484,10 +485,10 @@ rt.register({
       for (const k of RUNTIME_STATS) yield vcall(m, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", k, "0");
       return m;
     }),
-    // the JS heap is the nearest thing to this process's dalvik footprint; nothing here is shared
+    // nothing here is shared
     "static getMemoryInfo(Landroid/os/Debug$MemoryInfo;)V": (info: { dalvikPss: number; dalvikPrivateDirty: number; nativePss: number; nativePrivateDirty: number } | null) => {
       if (!info) throw rt.mkThrowable("java/lang/NullPointerException", "memoryInfo");
-      const kb = (((performance as { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0) / 1024) | 0;
+      const kb = jsHeapKb();
       info.dalvikPss = kb; info.dalvikPrivateDirty = kb;
       const native = Math.round(mem.stats().used / 1024);
       info.nativePss = native; info.nativePrivateDirty = native;
@@ -657,7 +658,7 @@ rt.register({
     "hashCode()I": function (this: JParcelUuid) { return vcall(this.uuid, "hashCode", "()I"); },
   },
 });
-rt.markers("android/os/Parcelable", "android/os/Parcelable$Creator");
+rt.markers("android/os/Parcelable");
 rt.markers("android/os/OutcomeReceiver");
 const sharedMappings = new WeakSet<JBuffer["backing"]>();
 class JSharedMemory extends JObj {
@@ -1028,14 +1029,30 @@ rt.register({
   },
 });
 rt.markers("android/view/Choreographer$VsyncCallback");
-const VSYNC_INTERVAL_MS = 1000 / device.refreshRate;
-let nextVsync = 0;
+let nextVsync = 0, vsyncWaiters: (() => void)[] = [], vsyncWatchdog: ReturnType<typeof setTimeout> | undefined;
+const vsyncIntervalMs = (): number => 1000 / device.refreshRate;
+function flushVsyncWaiters(): void {
+  clearTimeout(vsyncWatchdog); vsyncWatchdog = undefined;
+  const waiters = vsyncWaiters;
+  vsyncWaiters = [];
+  for (const resolve of waiters) resolve();
+}
+/** The next virtual vsync: what a blocking eglSwapBuffers waits for. A realm whose frame loop is
+ *  not running (hidden page, background process) still advances, at the display's rate. */
+export function vsync(): Promise<void> {
+  return new Promise((resolve) => {
+    vsyncWaiters.push(resolve);
+    vsyncWatchdog ??= setTimeout(flushVsyncWaiters, 2 * vsyncIntervalMs());
+  });
+}
 /** a display frame: true when it is a virtual vsync, whose choreographers off the main looper run now; the caller ticks the main one */
 export function recordVsync(time: number): boolean {
   // Allow sub-millisecond rAF jitter without skipping a virtual display frame.
   if (nextVsync && time + 0.75 < nextVsync) return false;
-  nextVsync = !nextVsync || time > nextVsync + VSYNC_INTERVAL_MS ? time + VSYNC_INTERVAL_MS : nextVsync + VSYNC_INTERVAL_MS;
+  const interval = vsyncIntervalMs();
+  nextVsync = !nextVsync || time > nextVsync + interval ? time + interval : nextVsync + interval;
   dispatchLooperFrames();
+  flushVsyncWaiters();
   return true;
 }
 const dispatchVsync = driven(function* dispatchVsync(callback: JObj, time: bigint, presentation: bigint): Gen {
@@ -1073,7 +1090,7 @@ const pendingChoreographers = new Set<JChoreographer>();
 /** the vsync of every choreographer off the main looper: its callbacks run as one message on its thread */
 function dispatchLooperFrames(): void {
   if (!pendingChoreographers.size) return;
-  const time = BigInt(Math.floor(guestNow() * 1e6)), presentation = time + uiState.frameIntervalNanos;
+  const time = BigInt(Math.floor(guestNow() * 1e6)), presentation = time + device.frameIntervalNanos;
   for (const choreographer of pendingChoreographers) {
     const cbs = choreographer.queue.splice(0);
     choreographer.frameTimeNanos = time;
@@ -1149,6 +1166,9 @@ function errnoMessage(this: JErrnoException): string {
 function initErrno(this: JErrnoException, fn: string, value: number, cause: JThrowable | null = null) {
   this.functionName = fn; this.errno = value; this.cause = cause;
 }
+const rethrowAs = (cls: string) => function (this: JErrnoException) {
+  const error = rt.mkThrowable(cls, errnoMessage.call(this)); error.cause = this; throw error;
+};
 rt.register({
   name: "android/system/ErrnoException", ctor: JErrnoException, sup: "java/lang/Exception",
   fields: ["errno", "functionName"],
@@ -1156,12 +1176,8 @@ rt.register({
     "<init>(Ljava/lang/String;I)V": initErrno,
     "<init>(Ljava/lang/String;ILjava/lang/Throwable;)V": initErrno,
     "getMessage()Ljava/lang/String;": errnoMessage,
-    "rethrowAsIOException()Ljava/io/IOException;": function (this: JErrnoException) {
-      const error = rt.mkThrowable("java/io/IOException", errnoMessage.call(this)); error.cause = this; throw error;
-    },
-    "rethrowAsSocketException()Ljava/net/SocketException;": function (this: JErrnoException) {
-      const error = rt.mkThrowable("java/net/SocketException", errnoMessage.call(this)); error.cause = this; throw error;
-    },
+    "rethrowAsIOException()Ljava/io/IOException;": rethrowAs("java/io/IOException"),
+    "rethrowAsSocketException()Ljava/net/SocketException;": rethrowAs("java/net/SocketException"),
   },
 });
 const errno = (fn: string, e: number) => { const x = rt.mkThrowable("android/system/ErrnoException", fn) as JErrnoException; initErrno.call(x, fn, e); return x; };
@@ -1191,6 +1207,15 @@ rt.register({
   },
 });
 const FD = "Ljava/io/FileDescriptor;";
+const storageStatVfs = driven(function* storageStatVfs(): Gen<JStructStatVfs> {
+  const { total, free } = yield storageEstimate();
+  const s = new JStructStatVfs();
+  s.f_bsize = s.f_frsize = BLK;
+  s.f_blocks = BigInt(Math.floor(total / Number(BLK)));
+  s.f_bfree = s.f_bavail = BigInt(Math.floor(free / Number(BLK)));
+  s.f_namemax = 255n;
+  return s;
+});
 rt.register({
   name: "android/system/Os", ctor: class extends JObj {},
   methods: {
@@ -1243,7 +1268,7 @@ rt.register({
     "static getpid()I": () => PROCESS_PID,
     "static uname()Landroid/system/StructUtsname;": () => {
       const info = new JStructUtsname();
-      info.machine = rt.nativeAbis.find((abi) => Object.keys(rt.classpath).some((path) => path.startsWith("lib/" + abi + "/"))) === "armeabi-v7a" ? "armv7l" : "aarch64";
+      info.machine = is64BitProcess() ? "aarch64" : "armv7l";
       return info;
     },
     "static sysconf(I)J": (name: number) => BigInt(sysconf(name)),
@@ -1261,26 +1286,14 @@ rt.register({
       if (path === null) rt.npe();
       existing("chmod", path);
     },
-    "static statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": driven(function* (path: string): Gen {
+    "static statvfs(Ljava/lang/String;)Landroid/system/StructStatVfs;": (path: string) => {
       existing("statvfs", path);
-      const { total, free } = yield storageEstimate();
-      const s = new JStructStatVfs();
-      s.f_bsize = s.f_frsize = BLK;
-      s.f_blocks = BigInt(Math.floor(total / Number(BLK)));
-      s.f_bfree = s.f_bavail = BigInt(Math.floor(free / Number(BLK)));
-      s.f_namemax = 255n;
-      return s;
-    }),
-    [`static fstatvfs(${FD})Landroid/system/StructStatVfs;`]: driven(function* (d: JFileDescriptor): Gen {
+      return storageStatVfs();
+    },
+    [`static fstatvfs(${FD})Landroid/system/StructStatVfs;`]: (d: JFileDescriptor) => {
       if (descriptorFd(d) < 0) throw errno("fstatvfs", E.BADF);
-      const { total, free } = yield storageEstimate();
-      const s = new JStructStatVfs();
-      s.f_bsize = s.f_frsize = BLK;
-      s.f_blocks = BigInt(Math.floor(total / Number(BLK)));
-      s.f_bfree = s.f_bavail = BigInt(Math.floor(free / Number(BLK)));
-      s.f_namemax = 255n;
-      return s;
-    }),
+      return storageStatVfs();
+    },
     "static readlink(Ljava/lang/String;)Ljava/lang/String;": () => { throw errno("readlink", 22); },
   },
 });

@@ -93,7 +93,9 @@ function launcherOrientation(root: XmlNode): number {
   return (targetNode && attr(targetNode, "screenOrientation")?.data) ?? -1;
 }
 
+/** UiModeManager's persisted application night mode: MODE_NIGHT_NO, MODE_NIGHT_YES, else the device's */
 let applicationNightOverride: boolean | null = null;
+const nightOverride = (mode: unknown): boolean | null => mode === 1 ? false : mode === 2 ? true : null;
 export function currentApp(): BootedApp | null { return booted; }
 export async function bootApk(input: Uint8Array | Install, onStatus: (s: string) => void, assetKey = "", processName: string | null = null, prepared?: () => void): Promise<BootedApp> {
   // The framework package must be in place before anything links, and restored storage roots
@@ -103,8 +105,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   const zip = install.zip;
   const manifest = parseAXML(zip["AndroidManifest.xml"]);
   const pkg = attrStr(manifest, "package") ?? "app";
-  const savedNightMode = getPrefs(pkg, "__system_uimode").map.get("mode");
-  applicationNightOverride = savedNightMode === 1 ? false : savedNightMode === 2 ? true : null;
+  applicationNightOverride = nightOverride(getPrefs(pkg, "__system_uimode").map.get("mode"));
   setDeviceNight(applicationNightOverride ?? device.night);
   // Orientation precedes resource construction: both app and framework tables must select the
   // same -land/-port entries the Activity will see through Configuration.
@@ -174,14 +175,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
   if (fwMaterial) theme.apply(fwMaterial);
   if (themeResId) theme.apply(themeResId);
 
-  let label = pkg;
-  if (labelAttr) {
-    if (labelAttr.str) label = labelAttr.str;
-    else {
-      const s = res.value(labelAttr.data);
-      label = s.s ?? pkg;
-    }
-  }
+  const label = !labelAttr ? pkg : labelAttr.str || (res.value(labelAttr.data).s ?? pkg);
 
   const host: AppHost = {
     res, theme, pkg, assetKey, appLabel: label, themeResId, iconRes: iconAttr?.data ?? 0, zip,
@@ -292,7 +286,7 @@ function setApplicationNightMode(pkg: string, mode: number): void {
   const prefs = getPrefs(pkg, "__system_uimode");
   prefs.map.set("mode", mode);
   prefs.persist();
-  applicationNightOverride = mode === 1 ? false : mode === 2 ? true : null;
+  applicationNightOverride = nightOverride(mode);
   applyNightMode(applicationNightOverride ?? device.night);
 }
 globalThis.matchMedia?.("(prefers-color-scheme: dark)")
@@ -357,7 +351,7 @@ const tick0 = driven(function* tick0(): Gen {
     uiState.frameTimeNanos = BigInt(Math.floor(guestNow() * 1e6));
     if (uiState.frameCallbacks.length) {
       mainDbg.phase = "frame";
-      yield runFrameCallbacks(uiState.frameCallbacks.splice(0), uiState.frameTimeNanos, uiState.frameTimeNanos + uiState.frameIntervalNanos);
+      yield runFrameCallbacks(uiState.frameCallbacks.splice(0), uiState.frameTimeNanos, uiState.frameTimeNanos + device.frameIntervalNanos);
     }
 
     mainDbg.phase = "anim";

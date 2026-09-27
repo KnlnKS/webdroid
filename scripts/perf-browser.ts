@@ -8,13 +8,14 @@ import { actOf, loadManifest, prefsStorage } from "../tests/e2e/capture-webdroid
 import { CONTEXT_OPTS, launchBrowser } from "../tests/e2e/drivers/webdroid";
 import { environmentScript, performAction } from "../tests/e2e/lib/actions";
 import { readProcesses } from "../tests/e2e/lib/processes";
+import { BASE_URL } from "../tests/e2e/lib/util";
 import { probeScript } from "../tests/e2e/lib/probe";
 import { executionFlow, PINNED_CLOCK_MS, screenOf, screenParam, waitHorizonMs } from "../tests/e2e/types";
 
 const { values } = parseArgs({ options: {
   flow: { type: "string" }, after: { type: "string" }, exercise: { type: "string" },
   "input-offsets": { type: "string" }, "start-exercise": { type: "string" }, "state-reader": { type: "string" }, "start-state": { type: "string" },
-  url: { type: "string", default: process.env.WEBDROID_URL ?? "http://localhost:4080" },
+  url: { type: "string", default: BASE_URL },
   out: { type: "string" }, gpu: { type: "string", default: "software" }, probe: { type: "boolean", default: false },
   ms: { type: "string", default: "15000" }, warmup: { type: "string", default: "3000" },
   "align-presentation": { type: "boolean", default: false },
@@ -45,7 +46,7 @@ const exercises = (values.exercise?.split(",") ?? []).map((id) => {
 if (after < 0) throw new Error("Unknown setup step");
 const gpu = values.gpu;
 if (gpu !== "software" && gpu !== "hardware") throw new Error("--gpu must be software or hardware");
-if (!values["jvm-tier"] || !["auto", "cold", "js", "wasm"].includes(values["jvm-tier"])) throw new Error("--jvm-tier must be auto, cold, js or wasm");
+if (!values["jvm-tier"] || !["auto", "cold", "js"].includes(values["jvm-tier"])) throw new Error("--jvm-tier must be auto, cold or js");
 if (!values["jvm-hotness"] || !["1024", "4096", "16384"].includes(values["jvm-hotness"])) throw new Error("--jvm-hotness must be 1024, 4096 or 16384");
 const ms = Number(values.ms), warmup = Number(values.warmup);
 const setupSettleCap = values["setup-settle-cap"] === undefined ? undefined : Number(values["setup-settle-cap"]);

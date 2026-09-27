@@ -163,7 +163,7 @@ pub export fn free(p_in: u32) u32 {
     head.* = p;
     return 1;
 }
-pub export fn usable_size(p: u32) u32 {
+pub fn usable_size(p: u32) u32 {
     if (p == 0) return 0;
     return isBig(p) orelse ld(u32, p - 4);
 }
@@ -274,8 +274,8 @@ inline fn unitsOf(n: u64) u32 {
 fn poolUnits() u32 {
     return @min(owner_len, (module_bot - pool_base) / UNIT);
 }
-fn freeRun(units: u32, from: u32) i32 {
-    const top = poolUnits();
+/// the first run of `units` free units in [from, top)
+fn freeRun(units: u32, from: u32, top: u32) i32 {
     var run: u32 = 0;
     var i = from;
     while (i < top) : (i += 1) {
@@ -324,7 +324,7 @@ fn grow(h: usize, n: u32, may_move: bool) bool {
         var dst: i32 = undefined;
         if (at < 0) dst = placeRun(need, W[h] > n) else {
             const after: u32 = @intCast(at + @as(i32, @intCast(have)));
-            dst = if (freeRun(need - have, after) == @as(i32, @intCast(after))) at else if (may_move) freeRun(need, 0) else -1;
+            dst = if (freeRun(need - have, after, poolUnits()) == @as(i32, @intCast(after))) at else if (may_move) freeRun(need, 0, poolUnits()) else -1;
         }
         if (dst < 0) return false;
         if (at < 0) {
@@ -352,7 +352,7 @@ fn demand(h: usize, off: u32, n: u32, may_move: bool) bool {
     return grow(h, @intCast(@min(W[h], (end + DEMAND_STEP - 1) & ~(DEMAND_STEP - 1), 0xffff_f000)), may_move);
 }
 /// whether [v, v + n) is backed, committing the writable pages under it
-pub export fn commit_range(v: u64, n: u32) u32 {
+pub fn commit_range(v: u64, n: u32) u32 {
     const h = hi(v);
     if (h == 0 or h >= PLANES) return @intFromBool(h == 0);
     const off = lo(v) -% L[h];
@@ -535,15 +535,7 @@ pub export fn reserve(size: u32, alignment: u32) u32 {
             const need = unitsOf(S[h]);
             if (at + need <= keep) continue;
             @memset(owner[at .. at + need], -1);
-            var dst: i32 = -1;
-            var run: u32 = 0;
-            for (0..keep) |i| {
-                run = if (owner[i] < 0) run + 1 else 0;
-                if (run == need) {
-                    dst = @intCast(i + 1 - need);
-                    break;
-                }
-            }
+            const dst = freeRun(need, 0, keep);
             @memset(owner[at .. at + need], @intCast(h));
             if (dst < 0) {
                 last_err = 0x100 | @as(u32, @intCast(h));

@@ -5,7 +5,7 @@ import { mangleMethod, mangleStaticField, mangleField, descToName, parseMethodDe
 import { vcall, boxInt, box, boxObject, stringHash, idHash, JClass, JLong, JFloat, JDouble, JChar, JBool, mkEnumSet, classpathStream, linkInit, enclosingClass } from "./jlang";
 import type { DexFile, EncAnnotation, EncVal } from "../dex";
 
-// ── annotation cache per class: methodIdx (within its dex) → EncAnnotation[]
+// ── annotation cache per class, by member name (+ descriptor for methods)
 interface ClassAnno {
   cls: EncAnnotation[];
   methodsByRef: Map<string, EncAnnotation[]>; // "name+desc" → annotations
@@ -13,6 +13,13 @@ interface ClassAnno {
   paramsByRef: Map<string, EncAnnotation[][]>;
 }
 const annoCache = new WeakMap<ClassInfo, ClassAnno>();
+/** a member's declaring class, for Field, Method and Constructor */
+function declaringClass(this: { owner: ClassInfo }) { return (this.owner.owner ?? rt).classFor(this.owner.name); }
+/** the annotation holding an annotation interface's element defaults (dalvik AnnotationDefault) */
+function annotationDefaults(info: ClassInfo): EncAnnotation | null {
+  const d = classAnno(info).cls.find((a) => a.type === "dalvik/annotation/AnnotationDefault")?.elements.value;
+  return d && typeof d === "object" && !Array.isArray(d) && d.kind === "annotation" ? d.anno : null;
+}
 function classAnno(info: ClassInfo): ClassAnno {
   let a = annoCache.get(info);
   if (a) return a;
@@ -179,7 +186,7 @@ rt.register({
     "isSynthetic()Z": function (this: JField) { return (this.flags >> 12) & 1; },
     "isEnumConstant()Z": function (this: JField) { return (this.flags >> 14) & 1; },
     ...accessibleMethods,
-    "getDeclaringClass()Ljava/lang/Class;": function (this: JField) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
+    "getDeclaringClass()Ljava/lang/Class;": declaringClass,
     "get(Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JField, o: unknown): Gen {
       return boxReturn(this.desc, yield readField.call(this, o));
     }),
@@ -216,10 +223,8 @@ rt.register({
   methods: {
     "getRawType()Ljava/lang/reflect/Type;": function (this: JPType) { return this.raw; },
     "getOwnerType()Ljava/lang/reflect/Type;": () => null,
-    "getActualTypeArguments()[Ljava/lang/reflect/Type;": function (this: JPType) { return jarray(this.args.slice(), "Ljava/lang/reflect/Type;"); },
-    "toString()Ljava/lang/String;": function (this: JPType) { return this.key; },
-    "hashCode()I": function (this: JPType) { return stringHash(this.key); },
-    "equals(Ljava/lang/Object;)Z": function (this: JPType, o: unknown) { return typeEquals(this, o) ? 1 : 0; },
+    "getActualTypeArguments()[Ljava/lang/reflect/Type;": function (this: JPType) { return types(this.args); },
+    ...typeEquality<JPType>(),
   },
 });
 class JTypeVar extends JObj { name = ""; key = ""; decl: unknown = null; bounds: unknown[] = []; }
@@ -239,11 +244,13 @@ function typeEquals(a: unknown, b: unknown): boolean {
     && a.upper.every((x, i) => typeEquals(x, b.upper[i])) && a.lower.every((x, i) => typeEquals(x, b.lower[i]));
   return false;
 }
-const typeEquality = <T extends { key: string }>() => ({
-  "toString()Ljava/lang/String;": function (this: T) { return this.key; },
-  "hashCode()I": function (this: T) { return stringHash(this.key) ^ (this instanceof JTypeVar && this.decl ? idHash(this.decl) : 0); },
-  "equals(Ljava/lang/Object;)Z": function (this: T, o: unknown) { return typeEquals(this, o) ? 1 : 0; },
-});
+function typeEquality<T extends { key: string }>() {
+  return {
+    "toString()Ljava/lang/String;": function (this: T) { return this.key; },
+    "hashCode()I": function (this: T) { return stringHash(this.key) ^ (this instanceof JTypeVar && this.decl ? idHash(this.decl) : 0); },
+    "equals(Ljava/lang/Object;)Z": function (this: T, o: unknown) { return typeEquals(this, o) ? 1 : 0; },
+  };
+}
 for (const n of ["java/lang/reflect/TypeVariable", "java/lang/reflect/WildcardType", "java/lang/reflect/GenericArrayType"]) rt.register({ name: n, ctor: class extends JObj {}, ifaces: ["java/lang/reflect/Type"] });
 rt.register({
   name: "webdroid/TypeVar", ctor: JTypeVar, ifaces: ["java/lang/reflect/TypeVariable", "java/lang/reflect/Type"],
@@ -381,16 +388,16 @@ function declaredTypeVars(sig: string, ref: { pos: number }, scope: TypeScope): 
  *  java.lang.reflect.Array.newInstance and VMRuntime.newUnpaddedArray hand back */
 function newArrayOf(cls: JClass | null, len: number): unknown {
   if (len < 0) throw rt.mkThrowable("java/lang/NegativeArraySizeException", String(len));
-  const prim = cls?.primName;
-  if (prim && PRIM_DESC[prim]) return new PRIM_ARRAYS[PRIM_DESC[prim] as PrimElem](len);
-  const elem = cls?.arrDesc ? "[" + cls.arrDesc : cls?.ci ? "L" + cls.ci.name + ";" : "Ljava/lang/Object;";
-  return rt.oa(len, elem);
+  const elem = elemDescOf(cls);
+  if (elem === "V") throw rt.mkThrowable("java/lang/IllegalArgumentException", "Can't allocate an array of void");
+  return elem in PRIM_ARRAYS ? new PRIM_ARRAYS[elem as PrimElem](len) : rt.oa(len, elem);
 }
 
-/** the element descriptor an array of `cls` carries; the outer levels of a multi-dim array prefix it with '[' */
+/** the element descriptor an array of `cls` carries (an array class's arrDesc is already a full
+ *  descriptor); the outer levels of a multi-dim array prefix it with '[' */
 function elemDescOf(cls: JClass | null): string {
   const prim = cls?.primName;
-  return prim && PRIM_DESC[prim] ? PRIM_DESC[prim] : cls?.arrDesc ? "[" + cls.arrDesc : cls?.ci ? "L" + cls.ci.name + ";" : "Ljava/lang/Object;";
+  return prim && PRIM_DESC[prim] ? PRIM_DESC[prim] : cls?.arrDesc ?? (cls?.ci ? "L" + cls.ci.name + ";" : "Ljava/lang/Object;");
 }
 function newMultiArray(cls: JClass | null, dims: Int32Array, i: number): unknown {
   if (i === dims.length - 1) return newArrayOf(cls, dims[i]);
@@ -405,7 +412,7 @@ rt.register({
       if (!dims.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Dimensions cannot be empty");
       return newMultiArray(cls, dims, 0);
     },
-    "static newInstance(Ljava/lang/Class;I)Ljava/lang/Object;": (cls: JClass | null, len: number) => newArrayOf(cls, len),
+    "static newInstance(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
     "static getLength(Ljava/lang/Object;)I": (a: ArrayLike<unknown> | null) => a?.length ?? 0,
     "static get(Ljava/lang/Object;I)Ljava/lang/Object;": (a: ArrayLike<unknown>, i: number) => a[i],
     "static set(Ljava/lang/Object;ILjava/lang/Object;)V": (a: unknown[], i: number, v: unknown) => { a[i] = v; },
@@ -436,8 +443,8 @@ rt.register({
   name: "dalvik/system/VMRuntime", ctor: JVMRuntime,
   methods: {
     "static getRuntime()Ldalvik/system/VMRuntime;": () => theVmRuntime,
-    "newUnpaddedArray(Ljava/lang/Class;I)Ljava/lang/Object;": (cls: JClass | null, len: number) => newArrayOf(cls, len),
-    "newNonMovableArray(Ljava/lang/Class;I)Ljava/lang/Object;": (cls: JClass | null, len: number) => newArrayOf(cls, len),
+    "newUnpaddedArray(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
+    "newNonMovableArray(Ljava/lang/Class;I)Ljava/lang/Object;": newArrayOf,
   },
 });
 
@@ -456,7 +463,7 @@ rt.register({
     }),
     "objectFieldOffset(Ljava/lang/reflect/Field;)J": fieldOffset,
     "arrayBaseOffset(Ljava/lang/Class;)I": () => 0,
-    "arrayIndexScale(Ljava/lang/Class;)I": (cls: JClass) => arrayIndexScale(cls),
+    "arrayIndexScale(Ljava/lang/Class;)I": arrayIndexScale,
     "getObject(Ljava/lang/Object;J)Ljava/lang/Object;": uGet,
     "getObjectVolatile(Ljava/lang/Object;J)Ljava/lang/Object;": uGet,
     "putObject(Ljava/lang/Object;JLjava/lang/Object;)V": uPut,
@@ -559,7 +566,7 @@ function arrayIndexScale(cls: JClass): number {
 }
 
 const methodsCache = new WeakMap<ClassInfo, [JMethod[] | undefined, JMethod[] | undefined]>();
-/** all public methods of a class (self + inherited), like Class.getMethods */
+/** Class.getMethods (public, own and inherited) or, when declaredOnly, getDeclaredMethods */
 function classMethods(info: ClassInfo, declaredOnly: boolean): JMethod[] {
   let c = methodsCache.get(info);
   if (!c) methodsCache.set(info, (c = [undefined, undefined]));
@@ -626,11 +633,10 @@ rt.register({
     "isDefault()Z": function (this: JMethod) { return this.owner.isInterface && this.mods && !(this.mods & 0x400) ? 1 : 0; },
     "getDefaultValue()Ljava/lang/Object;": function (this: JMethod) {
       if (!this.owner.isInterface) return null;
-      const d = classAnno(this.owner).cls.find((a) => a.type === "dalvik/annotation/AnnotationDefault")?.elements.value;
-      if (!d || typeof d !== "object" || Array.isArray(d) || d.kind !== "annotation") return null;
-      const val = d.anno.elements[this.name];
+      const defaults = annotationDefaults(this.owner);
+      const val = defaults?.elements[this.name];
       const type = this.desc.slice(this.desc.indexOf(")") + 1);
-      return val === undefined ? null : boxReturn(type, resolveEncVal(val, d.anno.dex, this.owner.owner ?? rt, type));
+      return val === undefined ? null : boxReturn(type, resolveEncVal(val, defaults!.dex, this.owner.owner ?? rt, type));
     },
     "getReturnType()Ljava/lang/Class;": function (this: JMethod) {
       return classForDesc(parseMethodDesc(this.desc).ret, this.owner.owner);
@@ -638,13 +644,13 @@ rt.register({
     "getParameterCount()I": function (this: JMethod) { return parseMethodDesc(this.desc).params.length; },
     "getParameterTypes()[Ljava/lang/Class;": function (this: JMethod) { return paramClasses(this.desc, "Ljava/lang/Class;", this.owner.owner); },
     "getGenericParameterTypes()[Ljava/lang/reflect/Type;": function (this: JMethod) { return types(genericMethodTypes(this.owner, this.name, this.desc).params); },
-    "getDeclaringClass()Ljava/lang/Class;": function (this: JMethod) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
+    "getDeclaringClass()Ljava/lang/Class;": declaringClass,
     ...accessibleMethods,
     "isSynthetic()Z": () => 0,
     "isBridge()Z": () => 0,
     "invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;": driven(function* (this: JMethod, recv: unknown, args: unknown[] | null): Gen {
       const a = (args ?? []).map(unboxArg);
-      const target = this.isStatic ? this.fn : (recv as Record<string, unknown>)?.[mangleMethod(this.name, this.desc)] ?? rt.proxyMethod?.(recv, this.name, this.desc) ?? this.fn;
+      const target = this.isStatic ? this.fn : (recv as Record<string, unknown>)?.[mangleMethod(this.name, this.desc)] ?? lateMethod.find?.(recv, this.name, this.desc) ?? this.fn;
       if (typeof target !== "function") throw rt.mkThrowable("java/lang/NoSuchMethodError", `${this.owner.name}.${this.name}${this.desc}`);
       const r = (target as (...x: unknown[]) => unknown).apply(this.isStatic ? this.owner.ctor : recv, a);
       const val = r instanceof Promise ? yield r : r;
@@ -703,7 +709,7 @@ rt.register({
     "getName()Ljava/lang/String;": function (this: JCtor) { return dotName(this.owner.name); },
     "getTypeParameters()[Ljava/lang/reflect/TypeVariable;": noTypeVars,
     "getModifiers()I": function (this: JCtor) { return this.flags; },
-    "getDeclaringClass()Ljava/lang/Class;": function (this: JCtor) { return (this.owner.owner ?? rt).classFor(this.owner.name); },
+    "getDeclaringClass()Ljava/lang/Class;": declaringClass,
     ...accessibleMethods,
     "isSynthetic()Z": () => 0,
     "isVarArgs()Z": function (this: JCtor) { return (this.flags & 0x80) ? 1 : 0; },
@@ -836,8 +842,8 @@ function buildAnnoProto(type: string, info: ClassInfo): object {
   // elements a use site omits answer the type's declared defaults: dalvik/annotation/AnnotationDefault
   // on the annotation interface carries, as `value`, an annotation with one element per default.
   // On the shared proto so instances only override what they name.
-  const d = classAnno(info).cls.find((a) => a.type === "dalvik/annotation/AnnotationDefault")?.elements.value;
-  if (d && typeof d === "object" && !Array.isArray(d) && d.kind === "annotation") installElements(p, info, d.anno, info.owner);
+  const defaults = annotationDefaults(info);
+  if (defaults) installElements(p, info, defaults, info.owner);
   annoProtoCache.set(info, p);
   return p;
 }
@@ -863,7 +869,6 @@ function resolveEncVal(v: EncVal, dex: DexFile, runtime: Runtime, type?: string)
   if (Array.isArray(v)) {
     const values = v.map((x) => resolveEncVal(x, dex, runtime));
     const elem = type?.startsWith("[") ? type.slice(1) : "Ljava/lang/Object;";
-    if (elem === "J") return BigInt64Array.from(values as bigint[]);
     if (elem.length === 1 && elem in PRIM_ARRAYS) return (PRIM_ARRAYS[elem as PrimElem] as typeof Int32Array).from(values as number[]);
     return jarray(values, elem);
   }
@@ -968,13 +973,7 @@ function installForName(classCtor: unknown) {
       return c;
     }
     const name = slashName(jn);
-    if (!loadable(name)) {
-      // link it first: an unlinked exception class has no own ClassInfo, so it inherits
-      // its superclass's $i and `catch (ClassNotFoundException)` in compiled code — which
-      // matches on ClassInfo.types — would not match the throwable we are about to make.
-      rt.link("java/lang/ClassNotFoundException");
-      throw rt.mkThrowable("java/lang/ClassNotFoundException", jn);
-    }
+    if (!loadable(name)) throw rt.mkThrowable("java/lang/ClassNotFoundException", jn);
     if (initialize) await linkInit(name);
     return rt.classFor(name);
   };
@@ -983,7 +982,7 @@ function installForName(classCtor: unknown) {
   c[mangleMethod("forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;")] = forName;
 }
 
-// wire Class.getMethods / getDeclaredMethods to real Method objects
+// Class's reflective members, generic types and annotations, over real Method/Field/Constructor objects
 function installClassReflection() {
   const info = rt.link("java/lang/Class");
   const proto = info.ctor.prototype as Record<string, unknown>;
@@ -1125,7 +1124,7 @@ function classDesc(c: JClass): string {
   if (c?.arrDesc) return c.arrDesc;
   return c?.ci ? "L" + c.ci.name + ";" : "Ljava/lang/Object;";
 }
-// ensure Method + annotation marker interfaces are linked so prototypes carry native methods
+// link Method and Constructor now so their prototypes carry the native methods
 rt.link("java/lang/reflect/Method");
 rt.link("java/lang/reflect/Constructor");
 installClassReflection();
@@ -1206,16 +1205,14 @@ const buildProxy = driven(function* buildProxy(ifaces: ClassInfo[]): Gen<ClassIn
 });
 // a method no declaration named: the first call names it, and the proxy materialises it then,
 // owned by the interface that declares it if any of them does, else the first
-rt.proxyMethod = (obj, n, desc) => {
-  if (!(obj instanceof JProxy)) return null;
-  const info = (obj.constructor as { $i?: ClassInfo }).$i ?? rt.link(clsNameOf(obj));
+lateMethod.find = (obj, n, desc) => {
+  if (!(obj instanceof JProxy)) return undefined;
+  const info = (obj.constructor as { $i?: ClassInfo }).$i ?? rt.link("java/lang/Object");
   const ifaces = proxyIfaces.get(info) ?? [];
-  if (!ifaces.length) return null;
+  if (!ifaces.length) return undefined;
   const owner = ifaces.find((i) => { const m = new Map<string, Decl>(); interfaceMethods(i, m); return m.has(n + desc); }) ?? ifaces[0];
   return proxyMethod(info, owner, n, desc, 0x401);
 };
-const clsNameOf = (o: object): string => (o.constructor as { $i?: ClassInfo }).$i?.name ?? "java/lang/Object";
-lateMethod.find = (o, n, d) => (rt.proxyMethod!(o, n, d) ?? undefined) as ((...a: unknown[]) => unknown) | undefined;
 rt.register({
   name: "java/lang/reflect/Proxy", ctor: JProxy,
   methods: {

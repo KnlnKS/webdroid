@@ -9,6 +9,8 @@ import {
   unmodifiableCollection, unmodifiableList, unmodifiableMap, unmodifiableSet, unmodifiableSortedMap, unmodifiableSortedSet,
 } from "./jwrappers";
 
+const uoe = (): never => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
+
 /** Java toArray(T[]) contract: fill the GIVEN array when it fits (callers may
  * ignore the return value), null-terminating; else return a new one. */
 function fillToArray(items: unknown[], out: unknown[]): unknown[] {
@@ -101,7 +103,7 @@ rt.register({
     "getKey()Ljava/lang/Object;": function (this: JMapEntry) { return this.e.k; },
     "getValue()Ljava/lang/Object;": function (this: JMapEntry) { return this.e.v; },
     "setValue(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JMapEntry, v: unknown) {
-      if (!this.mutable) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      if (!this.mutable) uoe();
       const o = this.e.v; this.e.v = v; return o;
     },
     "hashCode()I": function (this: JMapEntry) {
@@ -111,9 +113,7 @@ rt.register({
   },
 });
 
-// java.util.AbstractMap.SimpleImmutableEntry — a standalone Map.Entry whose
-// setValue() throws (the mutable sibling SimpleEntry isn't implemented; this
-// is the only one apps have needed so far).
+// AbstractMap.SimpleImmutableEntry and its mutable sibling SimpleEntry, which only adds setValue
 const GETKEY_NAME = mangleMethod("getKey", "()Ljava/lang/Object;");
 const GETVALUE_NAME = mangleMethod("getValue", "()Ljava/lang/Object;");
 class JSimpleImmutableEntry extends JObj {
@@ -132,9 +132,7 @@ rt.register({
     }),
     "getKey()Ljava/lang/Object;": function (this: JSimpleImmutableEntry) { return this.e.k; },
     "getValue()Ljava/lang/Object;": function (this: JSimpleImmutableEntry) { return this.e.v; },
-    "setValue(Ljava/lang/Object;)Ljava/lang/Object;": function (): never {
-      throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
-    },
+    "setValue(Ljava/lang/Object;)Ljava/lang/Object;": uoe,
     "equals(Ljava/lang/Object;)Z": driven(function* (this: JSimpleImmutableEntry, o: unknown): Gen {
       if (o === this) return 1;
       const gk = (o as any)?.[GETKEY_NAME], gv = (o as any)?.[GETVALUE_NAME];
@@ -192,7 +190,7 @@ rt.register({
       }
     }),
     "remove()V": driven(function* (this: JIter): Gen {
-      if (this.readOnly) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      if (this.readOnly) uoe();
       if (this.last < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
       checkMod(this);
       if (this.owner?.removeAt) yield this.owner.removeAt(this.last);
@@ -211,13 +209,13 @@ rt.register({
     "nextIndex()I": function (this: JIter) { return this.i; },
     "previousIndex()I": function (this: JIter) { return this.i - 1; },
     "set(Ljava/lang/Object;)V": function (this: JIter, v: unknown) {
-      if (this.readOnly) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      if (this.readOnly) uoe();
       if (this.last < 0) throw rt.mkThrowable("java/lang/IllegalStateException", null);
       checkMod(this);
       this.arr[this.last] = v;
     },
     "add(Ljava/lang/Object;)V": function (this: JIter, v: unknown) {
-      if (this.readOnly) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+      if (this.readOnly) uoe();
       checkMod(this);
       this.arr.splice(this.i++, 0, v);
       this.last = -1;
@@ -348,6 +346,10 @@ function removeHead(this: JList): unknown {
   if (!this.a.length) throw rt.mkThrowable("java/util/NoSuchElementException", null);
   return this.a.shift();
 }
+function listStream(this: JList) { return mkStream(this.a.slice()); }
+function listAppend(this: JList, v: unknown) { this.a.push(v); return 1; }
+function listPeek(this: JList) { return this.a.length ? this.a[0] : null; }
+function listPoll(this: JList) { return this.a.length ? this.a.shift() : null; }
 export function listMethods(): Methods {
   return {
     "<init>()V": function () {},
@@ -371,7 +373,7 @@ export function listMethods(): Methods {
       if (i >>> 0 >= this.a.length) ioobe(i, this.a.length);
       const o = this.a[i]; this.a[i] = v; return o;
     },
-    "add(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { this.a.push(v); return 1; },
+    "add(Ljava/lang/Object;)Z": listAppend,
     "add(ILjava/lang/Object;)V": function (this: JList, i: number, v: unknown) {
       if (i >>> 0 > this.a.length) ioobe(i, this.a.length);
       this.a.splice(i, 0, v);
@@ -413,12 +415,8 @@ export function listMethods(): Methods {
     "forEach(Ljava/util/function/Consumer;)V": driven(function* (this: JList, c: unknown): Gen {
       for (const v of this.a) yield vcall(c, "accept", "(Ljava/lang/Object;)V", v);
     }),
-    "stream()Ljava/util/stream/Stream;": function (this: JList) {
-      return mkStream(this.a.slice());
-    },
-    "parallelStream()Ljava/util/stream/Stream;": function (this: JList) {
-      return mkStream(this.a.slice());
-    },
+    "stream()Ljava/util/stream/Stream;": listStream,
+    "parallelStream()Ljava/util/stream/Stream;": listStream,
     "clear()V": function (this: JList) { this.a.length = 0; },
     "iterator()Ljava/util/Iterator;": function (this: JList) { return mkIter(this.a, this); },
     "listIterator()Ljava/util/ListIterator;": function (this: JList) { return mkIter(this.a, this); },
@@ -480,16 +478,16 @@ export function listMethods(): Methods {
     },
     "getFirst()Ljava/lang/Object;": function (this: JList) { return this.a[0] ?? null; },
     "getLast()Ljava/lang/Object;": function (this: JList) { return this.a[this.a.length - 1] ?? null; },
-    "peek()Ljava/lang/Object;": function (this: JList) { return this.a.length ? this.a[0] : null; },
-    "peekFirst()Ljava/lang/Object;": function (this: JList) { return this.a.length ? this.a[0] : null; },
+    "peek()Ljava/lang/Object;": listPeek,
+    "peekFirst()Ljava/lang/Object;": listPeek,
     "peekLast()Ljava/lang/Object;": function (this: JList) { return this.a.length ? this.a[this.a.length - 1] : null; },
-    "poll()Ljava/lang/Object;": function (this: JList) { return this.a.length ? this.a.shift() : null; },
-    "pollFirst()Ljava/lang/Object;": function (this: JList) { return this.a.length ? this.a.shift() : null; },
+    "poll()Ljava/lang/Object;": listPoll,
+    "pollFirst()Ljava/lang/Object;": listPoll,
     "pollLast()Ljava/lang/Object;": function (this: JList) { return this.a.length ? this.a.pop() : null; },
     "descendingIterator()Ljava/util/Iterator;": function (this: JList) { return mkIter([...this.a].reverse()); },
-    "offer(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { this.a.push(v); return 1; },
+    "offer(Ljava/lang/Object;)Z": listAppend,
     "offerFirst(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { this.a.unshift(v); return 1; },
-    "offerLast(Ljava/lang/Object;)Z": function (this: JList, v: unknown) { this.a.push(v); return 1; },
+    "offerLast(Ljava/lang/Object;)Z": listAppend,
     "push(Ljava/lang/Object;)V": function (this: JList, v: unknown) { this.a.unshift(v); },
     "pop()Ljava/lang/Object;": removeHead,
     "removeFirstOccurrence(Ljava/lang/Object;)Z": function (this: JList, v: unknown) {
@@ -556,7 +554,7 @@ const sortAsync = driven(function* sortAsync$(a: unknown[], cmp: unknown, thread
 export function toJsArray(c: unknown): unknown[] | Promise<unknown[]> {
   if (c === null || c === undefined) return [];
   if (c instanceof JList) return c.a;
-  if (c instanceof JSet) return setItems(c);
+  if (c instanceof JSet) return bucketKeys(c);
   if (c instanceof JMap) return []; // maps aren't collections
   return iterateAll(c);
 }
@@ -585,14 +583,12 @@ for (const method of [
   "remove(I)Ljava/lang/Object;", "remove(Ljava/lang/Object;)Z", "removeIf(Ljava/util/function/Predicate;)Z", "clear()V",
   "addAll(Ljava/util/Collection;)Z", "addAll(ILjava/util/Collection;)Z", "removeAll(Ljava/util/Collection;)Z", "retainAll(Ljava/util/Collection;)Z",
   "sort(Ljava/util/Comparator;)V", "replaceAll(Ljava/util/function/UnaryOperator;)V",
-]) immutableListMethods[method] = () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
-immutableListMethods["iterator()Ljava/util/Iterator;"] = function (this: JImmutableList) {
-  const iterator = mkIter(this.a.slice()); iterator.readOnly = true; return iterator;
-};
+]) immutableListMethods[method] = uoe;
+immutableListMethods["iterator()Ljava/util/Iterator;"] = function (this: JImmutableList) { return snapshotIterator(this); };
 immutableListMethods["listIterator()Ljava/util/ListIterator;"] = immutableListMethods["iterator()Ljava/util/Iterator;"];
 immutableListMethods["listIterator(I)Ljava/util/ListIterator;"] = function (this: JImmutableList, at: number) {
   if (at < 0 || at > this.a.length) ioobe(at, this.a.length);
-  const iterator = mkIter(this.a.slice()); iterator.i = at; iterator.readOnly = true; return iterator;
+  return snapshotIterator(this, at);
 };
 immutableListMethods["subList(II)Ljava/util/List;"] = function (this: JImmutableList, from: number, to: number) {
   if (from < 0 || to > this.a.length || from > to) ioobe(from < 0 ? from : to, this.a.length);
@@ -709,7 +705,7 @@ export class JMap extends JObj {
 class JIdentityHashMap extends JMap { identity = true; }
 const mapKeyFor = (map: JMap, key: unknown): unknown => map.identity ? key ?? null : mapKey(key);
 function ensureMapMutable(map: JMap): void {
-  if (!map.mutable) throw rt.mkThrowable("java/lang/UnsupportedOperationException", null);
+  if (!map.mutable) uoe();
 }
 const slowFind = driven(function* slowFind(list: Ent[], k: unknown, hash?: number): Gen<number> {
   const thread = curThread;
@@ -746,8 +742,7 @@ function mapMethods(): Methods {
     "clone()Ljava/lang/Object;": function (this: JMap) {
       const c = new (this.constructor as new () => JMap)();
       c.access = this.access;
-      for (const [k, e] of this.m) c.m.set(k, { k: e.k, v: e.v });
-      c.slow = this.slow.map((e) => ({ ...e }));
+      copyBuckets(this, c);
       return c;
     },
     "<init>(Ljava/util/Map;)V": driven(function* (this: JMap, src: unknown): Gen {
@@ -982,6 +977,7 @@ class JSetView extends JObj {
     return out;
   }
 }
+function setViewStream(this: JSetView) { return mkStream(this.snapshot()); }
 rt.register({
   name: "webdroid/SetView", ctor: JSetView,
   ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable"],
@@ -1006,12 +1002,8 @@ rt.register({
     "forEach(Ljava/util/function/Consumer;)V": driven(function* (this: JSetView, c: unknown): Gen {
       for (const v of this.snapshot()) yield vcall(c, "accept", "(Ljava/lang/Object;)V", v);
     }),
-    "stream()Ljava/util/stream/Stream;": function (this: JSetView) {
-      return mkStream(this.snapshot());
-    },
-    "parallelStream()Ljava/util/stream/Stream;": function (this: JSetView) {
-      return mkStream(this.snapshot());
-    },
+    "stream()Ljava/util/stream/Stream;": setViewStream,
+    "parallelStream()Ljava/util/stream/Stream;": setViewStream,
     "contains(Ljava/lang/Object;)Z": function (this: JSetView, v: unknown) {
       if (this.kind === "k") return vcall(this.map, "containsKey", "(Ljava/lang/Object;)Z", v);
       return after(indexIn(this.snapshot(), v), (i) => (i >= 0 ? 1 : 0));
@@ -1057,22 +1049,15 @@ rt.register({
 
 rt.register({ name: "webdroid/BaseMap", ctor: JMap, ifaces: ["java/util/Map", "java/io/Serializable"], methods: mapMethods() });
 // ArrayMap is a Map that also answers by index; a JS Map already keeps insertion order, so
-// the index is just its key order. The slow bucket (custom-equals keys) comes after, the way
-// mapMethods already treats it.
-const mapKeysInOrder = (m: JMap): unknown[] => {
-  const out: unknown[] = [];
-  for (const e of m.m.values()) out.push(e.k);
-  for (const e of m.slow) out.push(e.k);
-  return out;
-};
+// the index is just its key order, with the slow bucket (custom-equals keys) after it.
 const arrayMapMethods: NativeSpec["methods"] = {
-  "keyAt(I)Ljava/lang/Object;": function (this: JMap, i: number) { return mapKeysInOrder(this)[i] ?? null; },
+  "keyAt(I)Ljava/lang/Object;": function (this: JMap, i: number) { return bucketKeys(this)[i] ?? null; },
   "valueAt(I)Ljava/lang/Object;": function (this: JMap, i: number) {
-    const k = mapKeysInOrder(this)[i];
+    const k = bucketKeys(this)[i];
     return k === undefined ? null : vcall(this, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
   },
   "indexOfKey(Ljava/lang/Object;)I": driven(function* (this: JMap, k: unknown): Gen {
-    const keys = mapKeysInOrder(this);
+    const keys = bucketKeys(this);
     for (let i = 0; i < keys.length; i++) {
       const r = jeq(keys[i], k);
       if (r instanceof Promise ? yield r : r) return i;
@@ -1080,7 +1065,7 @@ const arrayMapMethods: NativeSpec["methods"] = {
     return -1;
   }),
   "removeAt(I)Ljava/lang/Object;": function (this: JMap, i: number) {
-    const k = mapKeysInOrder(this)[i];
+    const k = bucketKeys(this)[i];
     return k === undefined ? null : vcall(this, "remove", "(Ljava/lang/Object;)Ljava/lang/Object;", k);
   },
   "ensureCapacity(I)V": () => {},
@@ -1116,14 +1101,15 @@ const mapExtras: Record<string, NativeSpec["methods"]> = {
   "java/util/EnumMap": { "<init>(Ljava/lang/Class;)V": function () {} },
   "android/util/ArrayMap": arrayMapMethods,
   "java/util/concurrent/ConcurrentHashMap": {
-    "static newKeySet()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": () => rt.make("java/util/concurrent/ConcurrentHashMap$KeySetView"),
-    "static newKeySet(I)Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": () => rt.make("java/util/concurrent/ConcurrentHashMap$KeySetView"),
+    "static newKeySet()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": newKeySet,
+    "static newKeySet(I)Ljava/util/concurrent/ConcurrentHashMap$KeySetView;": newKeySet,
     "contains(Ljava/lang/Object;)Z": hashtableContains,
     "keys()Ljava/util/Enumeration;": hashtableKeys, "elements()Ljava/util/Enumeration;": hashtableElements,
   },
   "java/util/Hashtable": { "contains(Ljava/lang/Object;)Z": hashtableContains, "keys()Ljava/util/Enumeration;": hashtableKeys, "elements()Ljava/util/Enumeration;": hashtableElements },
 };
-function hashtableKeys(this: JMap) { return mkIter([...allEnts(this)].map((e) => e.k)); }
+function newKeySet() { return rt.make("java/util/concurrent/ConcurrentHashMap$KeySetView"); }
+function hashtableKeys(this: JMap) { return mkIter(bucketKeys(this)); }
 function hashtableElements(this: JMap) { return mkIter([...allEnts(this)].map((e) => e.v)); }
 /** the legacy Hashtable-era alias of containsValue, which rejects null */
 function hashtableContains(this: JMap, v: unknown) {
@@ -1160,13 +1146,18 @@ class JSet extends JObj {
   slowVersion = 0;
 }
 class JEnumSet extends JSet { enumClass: JObj | null = null; }
-/** the members, fast bucket first then the custom-equals ones (both must be walked) */
-function setItems(s: JSet): unknown[] {
+/** the keys, fast bucket first then the custom-equals ones (both must be walked) */
+function bucketKeys(s: { m: Map<unknown, Ent>; slow: Ent[] }): unknown[] {
   const out: unknown[] = [];
   for (const e of s.m.values()) out.push(e.k);
   for (const e of s.slow) out.push(e.k);
   return out;
 }
+function copyBuckets(from: { m: Map<unknown, Ent>; slow: Ent[] }, to: { m: Map<unknown, Ent>; slow: Ent[] }): void {
+  for (const [k, e] of from.m) to.m.set(k, { k: e.k, v: e.v });
+  to.slow = from.slow.map((e) => ({ ...e }));
+}
+function setStream(this: JSet) { return mkStream(bucketKeys(this)); }
 function setMethods(): Methods {
   return {
     "<init>()V": function () {},
@@ -1174,8 +1165,7 @@ function setMethods(): Methods {
     "<init>(I)V": function () {},
     "clone()Ljava/lang/Object;": function (this: JSet) {
       const c = new (this.constructor as new () => JSet)();
-      for (const [k, e] of this.m) c.m.set(k, { k: e.k, v: e.v });
-      c.slow = this.slow.map((e) => ({ ...e }));
+      copyBuckets(this, c);
       return c;
     },
     "<init>(IF)V": function () {},
@@ -1197,18 +1187,14 @@ function setMethods(): Methods {
     "add(Ljava/lang/Object;)Z": function (this: JSet, v: unknown) { return addToSet(this, v); },
     "removeIf(Ljava/util/function/Predicate;)Z": driven(function* (this: JSet, p: unknown): Gen {
       let changed = 0;
-      for (const v of setItems(this)) if (yield vcall(p, "test", "(Ljava/lang/Object;)Z", v)) { yield vcall(this, "remove", "(Ljava/lang/Object;)Z", v); changed = 1; }
+      for (const v of bucketKeys(this)) if (yield vcall(p, "test", "(Ljava/lang/Object;)Z", v)) { yield vcall(this, "remove", "(Ljava/lang/Object;)Z", v); changed = 1; }
       return changed;
     }),
     "forEach(Ljava/util/function/Consumer;)V": driven(function* (this: JSet, c: unknown): Gen {
-      for (const v of setItems(this)) yield vcall(c, "accept", "(Ljava/lang/Object;)V", v);
+      for (const v of bucketKeys(this)) yield vcall(c, "accept", "(Ljava/lang/Object;)V", v);
     }),
-    "stream()Ljava/util/stream/Stream;": function (this: JSet) {
-      return mkStream(setItems(this));
-    },
-    "parallelStream()Ljava/util/stream/Stream;": function (this: JSet) {
-      return mkStream(setItems(this));
-    },
+    "stream()Ljava/util/stream/Stream;": setStream,
+    "parallelStream()Ljava/util/stream/Stream;": setStream,
     "remove(Ljava/lang/Object;)Z": function (this: JSet, v: unknown) {
       const mk = mapKey(v);
       if (mk !== SLOW) return this.m.delete(mk) ? 1 : 0;
@@ -1220,7 +1206,7 @@ function setMethods(): Methods {
       return after(slowFind(this.slow, v), (i) => (i >= 0 ? 1 : 0));
     },
     "clear()V": function (this: JSet) { this.m.clear(); this.slow.length = 0; this.slowVersion++; },
-    "iterator()Ljava/util/Iterator;": function (this: JSet) { return mkIter(setItems(this)); },
+    "iterator()Ljava/util/Iterator;": function (this: JSet) { return mkIter(bucketKeys(this)); },
     "addAll(Ljava/util/Collection;)Z": driven(function* (this: JSet, c: unknown): Gen {
       let ch = 0;
       for (const v of yield toJsArray(c)) ch = (yield addToSet(this, v)) || ch;
@@ -1233,7 +1219,7 @@ function setMethods(): Methods {
     }),
     "retainAll(Ljava/util/Collection;)Z": driven(function* (this: JSet, c: unknown): Gen {
       let ch = 0;
-      for (const v of setItems(this)) {
+      for (const v of bucketKeys(this)) {
         if (!(yield vcall(c, "contains", "(Ljava/lang/Object;)Z", v))) {
           yield vcall(this, "remove", "(Ljava/lang/Object;)Z", v);
           ch = 1;
@@ -1245,9 +1231,9 @@ function setMethods(): Methods {
       for (const v of yield toJsArray(c)) if (!(yield vcall(this, "contains", "(Ljava/lang/Object;)Z", v))) return 0;
       return 1;
     }),
-    "toArray()[Ljava/lang/Object;": function (this: JSet) { return jarray(setItems(this)); },
-    "toArray([Ljava/lang/Object;)[Ljava/lang/Object;": function (this: JSet, out: unknown[]) { return fillToArray(setItems(this), out); },
-    "toString()Ljava/lang/String;": function (this: JSet) { return seqText(this, setItems(this)); },
+    "toArray()[Ljava/lang/Object;": function (this: JSet) { return jarray(bucketKeys(this)); },
+    "toArray([Ljava/lang/Object;)[Ljava/lang/Object;": function (this: JSet, out: unknown[]) { return fillToArray(bucketKeys(this), out); },
+    "toString()Ljava/lang/String;": function (this: JSet) { return seqText(this, bucketKeys(this)); },
     // Set equality is membership, not identity: an empty HashSet equals any empty Set.
     "equals(Ljava/lang/Object;)Z": driven(function* (this: JSet, o: unknown): Gen {
       if (o === this) return 1;
@@ -1255,7 +1241,7 @@ function setMethods(): Methods {
       if ((o instanceof JSet ? o.m.size + o.slow.length : yield size(o)) !== this.m.size + this.slow.length) return 0;
       return vcall(this, "containsAll", "(Ljava/util/Collection;)Z", o);
     }),
-    "hashCode()I": function (this: JSet) { return hashSum(setItems(this)); },
+    "hashCode()I": function (this: JSet) { return hashSum(bucketKeys(this)); },
   };
 }
 /** the Set contract's hash: the members' hashes summed, so order never matters */
@@ -1281,7 +1267,7 @@ function addToSet(s: JSet, v: unknown): number | Promise<number> {
 rt.register({ name: "webdroid/BaseSet", ctor: JSet, typeVars: "E", ifaces: ["java/util/Set", "java/util/Collection", "java/lang/Iterable", "java/io/Serializable"], methods: setMethods() });
 const setSerialization: Methods = {
   "writeObject(Ljava/io/ObjectOutputStream;)V": driven(function* (this: JSet, stream: unknown): Gen {
-    const items = setItems(this);
+    const items = bucketKeys(this);
     yield vcall(stream, "defaultWriteObject", "()V");
     yield vcall(stream, "writeInt", "(I)V", Math.min(1 << 30, 2 ** Math.ceil(Math.log2(Math.max(16, items.length / 0.75)))));
     yield vcall(stream, "writeFloat", "(F)V", 0.75);
@@ -1308,9 +1294,9 @@ const immutableSet = driven(function* immutableSet(items: unknown[]): Gen<JImmut
 });
 const immutableSetMethods = setMethods();
 for (const method of ["add(Ljava/lang/Object;)Z", "remove(Ljava/lang/Object;)Z", "clear()V", "addAll(Ljava/util/Collection;)Z", "removeAll(Ljava/util/Collection;)Z", "removeIf(Ljava/util/function/Predicate;)Z"])
-  immutableSetMethods[method] = () => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
+  immutableSetMethods[method] = uoe;
 immutableSetMethods["iterator()Ljava/util/Iterator;"] = function (this: JImmutableSet) {
-  const iterator = mkIter(setItems(this));
+  const iterator = mkIter(bucketKeys(this));
   iterator.readOnly = true;
   return iterator;
 };
@@ -1359,8 +1345,7 @@ function enumSetStatics() {
     "clone()Ljava/util/EnumSet;": function (this: JEnumSet) {
       const copy = new (this.constructor as new () => JEnumSet)();
       copy.enumClass = this.enumClass;
-      for (const [key, entry] of this.m) copy.m.set(key, { k: entry.k, v: entry.v });
-      copy.slow = this.slow.map((entry) => ({ ...entry }));
+      copyBuckets(this, copy);
       return copy;
     },
     "static allOf(Ljava/lang/Class;)Ljava/util/EnumSet;": function (c: JObj) { return fromValues(c, true, []); },
@@ -1460,10 +1445,11 @@ function treeMapMethods(): NativeSpec["methods"] {
     if (!e) throw rt.mkThrowable("java/util/NoSuchElementException", null);
     return e.k;
   };
+  const init = driven(function* (this: JTreeMap, m: unknown): Gen { if (m) yield copyMapInto(m, this); });
   return {
     "<init>(Ljava/util/Comparator;)V": function (this: JTreeMap, c: unknown) { this.cmp = c; },
-    "<init>(Ljava/util/Map;)V": driven(function* (this: JTreeMap, m: unknown): Gen { if (m) yield copyMapInto(m, this); }),
-    "<init>(Ljava/util/SortedMap;)V": driven(function* (this: JTreeMap, m: unknown): Gen { if (m) yield copyMapInto(m, this); }),
+    "<init>(Ljava/util/Map;)V": init,
+    "<init>(Ljava/util/SortedMap;)V": init,
     "comparator()Ljava/util/Comparator;": function (this: JTreeMap) { return this.cmp; },
     "get(Ljava/lang/Object;)Ljava/lang/Object;": function (this: JTreeMap, k: unknown) {
       return bsearch(this, k, (i) => (i < 0 ? null : this.slow[i].v));
@@ -1840,7 +1826,6 @@ const size = (o: unknown): Promise<number> => vcall(o, "size", "()I");
 const getAt = (o: unknown, i: number): Promise<unknown> => vcall(o, "get", "(I)Ljava/lang/Object;", i);
 const iterOf = (o: unknown): Promise<unknown> => vcall(o, "iterator", "()Ljava/util/Iterator;");
 const aeq = async (a: unknown, b: unknown) => { const r = jeq(a, b); return (r instanceof Promise ? await r : r) !== 0; };
-const uoe = (): never => { throw rt.mkThrowable("java/lang/UnsupportedOperationException", null); };
 rt.register({
   name: "webdroid/AbstractListIter", ctor: JAbsListIter, ifaces: ["java/util/Iterator", "java/util/ListIterator"],
   methods: {
@@ -2217,11 +2202,9 @@ rt.register({
 });
 rt.register({ name: "java/util/AbstractMap", ctor: class extends JObj {}, ifaces: ["java/util/Map"], typeVars: "K,V", methods: absMap });
 
-// collection interfaces as markers — with their real extends-hierarchy so
-// check-cast/instanceof through superinterfaces works (dex classes implementing
-// java/util/Set must satisfy casts to java/util/Collection)
-// The interfaces' Java 8 default methods, phrased over the abstract operations, so a class that
-// implements the interface without extending our Abstract* bases still has them.
+// The collection interfaces with their real extends-hierarchy, so check-cast/instanceof through
+// superinterfaces works, and their Java 8 default methods phrased over the abstract operations,
+// so a class that implements an interface without extending our Abstract* bases still has them.
 const O = "Ljava/lang/Object;", GET = `(${O})${O}`, PUT = `(${O}${O})${O}`, HAS = `(${O})Z`;
 const mapDefaults: Methods = {
   "getOrDefault(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;": absMap["getOrDefault(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"],
@@ -2280,15 +2263,12 @@ const mapDefaults: Methods = {
     return (yield vcall(this, "containsKey", HAS, k)) ? vcall(this, "put", PUT, k, v) : null;
   }),
 };
+const collectionStream = driven(function* (this: JObj): Gen { return mkStream(yield toJsArray(this)); });
 const collDefaults: Methods = {
   "removeIf(Ljava/util/function/Predicate;)Z": absCollection["removeIf(Ljava/util/function/Predicate;)Z"],
   "toArray()[Ljava/lang/Object;": absCollection["toArray()[Ljava/lang/Object;"],
-  "stream()Ljava/util/stream/Stream;": driven(function* (this: JObj): Gen {
-    return mkStream(yield toJsArray(this));
-  }),
-  "parallelStream()Ljava/util/stream/Stream;": driven(function* (this: JObj): Gen {
-    return mkStream(yield toJsArray(this));
-  }),
+  "stream()Ljava/util/stream/Stream;": collectionStream,
+  "parallelStream()Ljava/util/stream/Stream;": collectionStream,
   "spliterator()Ljava/util/Spliterator;": driven(function* (this: JObj): Gen {
     const spliterator = rt.make("java/util/Spliterator") as JObj & { a: unknown[] };
     spliterator.a = yield toJsArray(this);
@@ -2343,6 +2323,9 @@ rt.register({
   },
 });
 // Comparator is an interface whose STATICS and defaults apps really do call.
+const naturalReversed = () => mkCmp((a, b) => vcall(b, "compareTo", "(Ljava/lang/Object;)I", a));
+const reversedOf = (c: unknown) => c === null ? naturalReversed()
+  : mkCmp((a, b) => vcall(c, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", b, a));
 const keyed = (fn: unknown, sel: string, desc: string) =>
   mkCmp(async (a, b) => {
     const ka = await vcall(fn, sel, desc, a), kb = await vcall(fn, sel, desc, b);
@@ -2360,10 +2343,8 @@ rt.register({
     "static comparing(Ljava/util/function/Function;)Ljava/util/Comparator;":
       (f: unknown) => keyed(f, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;"),
     "static naturalOrder()Ljava/util/Comparator;": () => mkCmp((a, b) => vcall(a, "compareTo", "(Ljava/lang/Object;)I", b)),
-    "static reverseOrder()Ljava/util/Comparator;": () => mkCmp((a, b) => vcall(b, "compareTo", "(Ljava/lang/Object;)I", a)),
-    "static reverseOrder(Ljava/util/Comparator;)Ljava/util/Comparator;": (c: unknown) => c === null
-      ? mkCmp((a, b) => vcall(b, "compareTo", "(Ljava/lang/Object;)I", a))
-      : mkCmp((a, b) => vcall(c, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", b, a)),
+    "static reverseOrder()Ljava/util/Comparator;": naturalReversed,
+    "static reverseOrder(Ljava/util/Comparator;)Ljava/util/Comparator;": reversedOf,
     "reversed()Ljava/util/Comparator;": function (this: unknown) {
       return mkCmp((a, b) => vcall(this, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", b, a));
     },
@@ -2381,6 +2362,15 @@ type Fillable = { fill(v: unknown, s?: number, e?: number): unknown };
 const fill = (a: Fillable, v: unknown) => a.fill(v);
 const fillRange = (a: Fillable, f: number, t: number, v: unknown) => a.fill(v, f, t);
 class JArrays extends JObj {}
+type PrimArray = Int8Array | Int16Array | Int32Array | BigInt64Array | Uint8Array | Uint16Array | Float32Array | Float64Array;
+/** Arrays.toString of a primitive array: boolean[] is a Uint8Array, char[] a Uint16Array */
+function primArrayText(a: PrimArray | null): string {
+  if (!a) return "null";
+  const parts = a instanceof Uint8Array ? Array.from(a, (v) => (v ? "true" : "false"))
+    : a instanceof Uint16Array ? Array.from(a, (v) => String.fromCharCode(v))
+    : a instanceof Float32Array || a instanceof Float64Array ? Array.from(a, fmtDouble) : Array.from(a as ArrayLike<number | bigint>);
+  return "[" + parts.join(", ") + "]";
+}
 const deepToString = driven(function* deepToString$(a: unknown[] | null, ancestors: Set<unknown[]> = new Set<unknown[]>): Gen<string> {
   if (a === null) return "null";
   if (ancestors.has(a)) return "[...]";
@@ -2388,10 +2378,7 @@ const deepToString = driven(function* deepToString$(a: unknown[] | null, ancesto
   const parts: string[] = [];
   for (const x of a) {
     if (Array.isArray(x)) parts.push(yield deepToString(x, ancestors));
-    else if (x instanceof Uint8Array) parts.push("[" + Array.from(x, v => v ? "true" : "false").join(", ") + "]");
-    else if (x instanceof Uint16Array) parts.push("[" + Array.from(x, v => String.fromCharCode(v)).join(", ") + "]");
-    else if (x instanceof Float32Array || x instanceof Float64Array) parts.push("[" + Array.from(x, fmtDouble).join(", ") + "]");
-    else if (x instanceof Int8Array || x instanceof Int16Array || x instanceof Int32Array || x instanceof BigInt64Array) parts.push("[" + x.join(", ") + "]");
+    else if (ArrayBuffer.isView(x)) parts.push(primArrayText(x as PrimArray));
     else parts.push(x === null ? "null" : yield vcall(x, "toString", "()Ljava/lang/String;"));
   }
   ancestors.delete(a);
@@ -2445,10 +2432,7 @@ rt.register({
     "static stream([J)Ljava/util/stream/LongStream;": (arr: BigInt64Array) => mkLongStream(Array.from(arr)),
     "static stream([D)Ljava/util/stream/DoubleStream;": (arr: Float64Array) => mkDoubleStream(Array.from(arr)),
     ...Object.fromEntries([..."BCSIJFD"].flatMap((t) => [[`static sort([${t})V`, taSort], [`static sort([${t}II)V`, taSort]])),
-    "static toString([B)Ljava/lang/String;": (values: Int8Array | null) => values ? `[${Array.from(values).join(", ")}]` : "null",
-    "static toString([S)Ljava/lang/String;": (values: Int16Array | null) => values ? `[${Array.from(values).join(", ")}]` : "null",
-    "static toString([C)Ljava/lang/String;": (values: Uint16Array | null) => values ? `[${Array.from(values, (value) => String.fromCharCode(value)).join(", ")}]` : "null",
-    "static toString([D)Ljava/lang/String;": (values: Float64Array | null) => values ? `[${Array.from(values, fmtDouble).join(", ")}]` : "null",
+    ...Object.fromEntries([..."ZBCSIJFD"].map((t) => [`static toString([${t})Ljava/lang/String;`, primArrayText])),
     "static sort([Ljava/lang/Object;)V": (a: unknown[]) => sortInPlace(a, null),
     "static sort([Ljava/lang/Object;II)V": (a: unknown[], from: number, to: number) => sortInPlace(a, null, from, to),
     "static sort([Ljava/lang/Object;Ljava/util/Comparator;)V": (a: unknown[], cmp: unknown) => sortInPlace(a, cmp),
@@ -2473,9 +2457,6 @@ rt.register({
       for (const e of a) { f[0] = e; h = (Math.imul(h, 31) + i[0]) | 0; }
       return h;
     },
-    "static toString([F)Ljava/lang/String;": (a: Float32Array) => (a ? "[" + Array.from(a, fmtDouble).join(", ") + "]" : "null"),
-    "static toString([J)Ljava/lang/String;": (a: BigInt64Array) => (a ? "[" + Array.from(a).join(", ") + "]" : "null"),
-    "static toString([Z)Ljava/lang/String;": (a: Uint8Array) => (a ? "[" + Array.from(a, (v) => (v ? "true" : "false")).join(", ") + "]" : "null"),
     "static deepHashCode([Ljava/lang/Object;)I": (a: unknown[] | null) => (a ? hashSeq(a) : 0),
     "static deepEquals([Ljava/lang/Object;[Ljava/lang/Object;)Z": deepEquals,
     "static deepToString([Ljava/lang/Object;)Ljava/lang/String;": (a: unknown[] | null) => deepToString(a),
@@ -2489,7 +2470,6 @@ rt.register({
       return 1;
     }),
     "static hashCode([Ljava/lang/Object;)I": (a: unknown[] | null) => (a ? hashSeq(a) : 0),
-    "static toString([I)Ljava/lang/String;": (a: Int32Array) => (a ? "[" + a.join(", ") + "]" : "null"),
     // each element through ITS OWN toString: a boxed Character prints its character, and a
     // library that builds a character class out of a key set depends on it
     "static toString([Ljava/lang/Object;)Ljava/lang/String;": driven(function* (a: unknown[]): Gen 
@@ -2652,10 +2632,8 @@ rt.register({
     "static sort(Ljava/util/List;Ljava/util/Comparator;)V": (l: unknown, c: unknown) => vcall(l, "sort", "(Ljava/util/Comparator;)V", c),
     "static binarySearch(Ljava/util/List;Ljava/lang/Object;)I": (l: unknown, k: unknown) => listBinarySearch(l, k, null),
     "static binarySearch(Ljava/util/List;Ljava/lang/Object;Ljava/util/Comparator;)I": listBinarySearch,
-    "static reverseOrder()Ljava/util/Comparator;": () => mkCmp((a, b) => vcall(b, "compareTo", "(Ljava/lang/Object;)I", a)),
-    "static reverseOrder(Ljava/util/Comparator;)Ljava/util/Comparator;": (c: unknown) => c === null
-      ? mkCmp((a, b) => vcall(b, "compareTo", "(Ljava/lang/Object;)I", a))
-      : mkCmp((a, b) => vcall(c, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", b, a)),
+    "static reverseOrder()Ljava/util/Comparator;": naturalReversed,
+    "static reverseOrder(Ljava/util/Comparator;)Ljava/util/Comparator;": reversedOf,
     "static reverse(Ljava/util/List;)V": (l: JList) => l.a.reverse(),
     "static rotate(Ljava/util/List;I)V": rotate,
     "static shuffle(Ljava/util/List;)V": shuffle,

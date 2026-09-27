@@ -33,7 +33,7 @@ function displayHour(tp: JTimePicker): number {
   return h === 0 ? 12 : h;
 }
 
-/** Text.onDraw only re-wraps when layoutWidthFor !== width() (see widget.ts), so a plain
+/** Text.onDraw only re-wraps when layoutWidthFor !== width() (see textview.ts), so a plain
  *  `.text =` assignment would leave the old glyphs cached on screen — reset it here too. */
 function setValueText(t: JTextView, s: string) {
   if (t.text === s) return;
@@ -178,15 +178,15 @@ async function rebuildPicker(tp: JTimePicker) {
   requestLayout(tp);
 }
 
+/** a picker's (Context[, AttributeSet]) constructors: the view's own init, then its child views */
+const pickerInit = <P extends JLinearLayout>(build: (p: P) => Promise<void>) => driven(function* (this: P, c: unknown, set: JAttrSet | null = null): Gen {
+  yield initViewFromCtx(this, c, set);
+  return build(this);
+});
+const initTimePicker = pickerInit(buildPicker);
 const timePickerMethods: NativeSpec["methods"] = {
-  "<init>(Landroid/content/Context;)V": driven(function* (this: JTimePicker, c: unknown): Gen {
-    yield initViewFromCtx(this, c, null);
-    return buildPicker(this);
-  }),
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JTimePicker, c: unknown, set: JAttrSet | null): Gen {
-    yield initViewFromCtx(this, c, set);
-    return buildPicker(this);
-  }),
+  "<init>(Landroid/content/Context;)V": initTimePicker,
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initTimePicker,
   "getHour()I": function (this: JTimePicker) { return this.hourVal; },
   "setHour(I)V": function (this: JTimePicker, h: number) { this.hourVal = h | 0; onChanged(this); },
   "getMinute()I": function (this: JTimePicker) { return this.minuteVal; },
@@ -319,15 +319,10 @@ async function buildDatePicker(p: JDatePicker) {
   refreshDate(p);
 }
 
+const initDatePicker = pickerInit(buildDatePicker);
 rt.register({ name: "android/widget/DatePicker", ctor: JDatePicker, sup: "android/widget/LinearLayout", methods: {
-  "<init>(Landroid/content/Context;)V": driven(function* (this: JDatePicker, c: unknown): Gen {
-    yield initViewFromCtx(this, c, null);
-    return buildDatePicker(this);
-  }),
-  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JDatePicker, c: unknown, set: JAttrSet | null): Gen {
-    yield initViewFromCtx(this, c, set);
-    return buildDatePicker(this);
-  }),
+  "<init>(Landroid/content/Context;)V": initDatePicker,
+  "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": initDatePicker,
   "init(IIILandroid/widget/DatePicker$OnDateChangedListener;)V": function (this: JDatePicker, year: number, month: number, day: number, listener: unknown) {
     normalizeDate(this, year, month, day);
     this.changeL = listener;

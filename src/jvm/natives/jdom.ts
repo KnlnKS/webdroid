@@ -78,7 +78,7 @@ const documentMethods = {
   "createAttribute(Ljava/lang/String;)Lorg/w3c/dom/Attr;": function (this: JDomDocument, name: string) { return domNode(this.node.createAttribute(name)); },
   "createTextNode(Ljava/lang/String;)Lorg/w3c/dom/Text;": function (this: JDomDocument, text: string) { return domNode(this.node.createTextNode(text)); },
   "getDoctype()Lorg/w3c/dom/DocumentType;": function (this: JDomDocument) { return domNode(this.node.doctype); },
-  "getImplementation()Lorg/w3c/dom/DOMImplementation;": () => domImplementation(),
+  "getImplementation()Lorg/w3c/dom/DOMImplementation;": domImplementation,
 };
 const docTypeMethods = {
   "getName()Ljava/lang/String;": function (this: JDomDocType) { return this.node.name; },
@@ -99,7 +99,7 @@ function domImplementation(): JDomImplementation {
   return domImpl ??= new JDomImplementation();
 }
 const implementationMethods = {
-  "hasFeature(Ljava/lang/String;Ljava/lang/String;)Z": (feature: string, version: string | null) => hasFeature(feature, version),
+  "hasFeature(Ljava/lang/String;Ljava/lang/String;)Z": hasFeature,
   "getFeature(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;": function (this: JDomImplementation, feature: string, version: string | null) {
     return hasFeature(feature, version) ? this : null;
   },
@@ -171,7 +171,7 @@ rt.register({ name: "javax/xml/parsers/DocumentBuilder", ctor: JDocumentBuilder,
     throw rt.mkThrowable("org/xml/sax/SAXException", "InputSource requires a stream or reader");
   }),
   "newDocument()Lorg/w3c/dom/Document;": () => domNode(document.implementation.createDocument(null, "")),
-  "getDOMImplementation()Lorg/w3c/dom/DOMImplementation;": () => domImplementation(),
+  "getDOMImplementation()Lorg/w3c/dom/DOMImplementation;": domImplementation,
   "isNamespaceAware()Z": function (this: JDocumentBuilder) { return this.namespaceAware ? 1 : 0; },
   "isValidating()Z": function (this: JDocumentBuilder) { return this.validating ? 1 : 0; },
 } });

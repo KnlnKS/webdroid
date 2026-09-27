@@ -12,7 +12,6 @@ import { insnLen } from "./opcodes";
 import { ACC } from "./runtime";
 import { descToName } from "./abi";
 
-
 /** "cls.name(desc)ret" — the identity a call site and a definition agree on */
 type MemberKey = string;
 
@@ -64,7 +63,6 @@ export class Program {
 
   has(name: string): boolean { return this.byName.has(name); }
   get size(): number { return this.byName.size; }
-  names(): IterableIterator<string> { return this.byName.keys(); }
   dexOf(name: string): DexFile | null { return this.byName.get(name)?.loc.dex ?? null; }
 
   def(name: string): ClassDef | null {
@@ -82,11 +80,6 @@ export class Program {
     for (const em of def.directMethods) m.set(sigOf(dex, em.methodIdx), em);
     for (const em of def.virtualMethods) m.set(sigOf(dex, em.methodIdx), em);
     return m;
-  }
-
-  /** does this exact class declare it, ignoring what it inherits */
-  declares(name: string, sig: string): boolean {
-    return this.own(name)?.has(sig) ?? false;
   }
 
   private superOf(name: string): string | null {

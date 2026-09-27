@@ -56,7 +56,7 @@ const FAULTS = ["unimplemented", "undefined", "bad address", "misaligned pc", "d
 
 export const codeStats = { get pages(): number { return core.cpu_stat(0); }, get invalidated(): number { return core.cpu_stat(1); } };
 /** single-step register trace: every instruction logs pc + the registers it changed (slow; debugging only) */
-export const stepMode = { on: false, ring: [] as string[], max: 40000, hits: [] as string[] };
+export const stepMode = { on: false, ring: [] as string[], max: 40000 };
 export function setStepMode(on: boolean): void {
   stepMode.on = on;
   core.set_max_block(on ? 1 : 256);
@@ -111,7 +111,7 @@ export class Cpu {
   // The SIMD&FP register file V0..V31 (Vn.S[i] = s[4n+i], Vn.D[i] = d[2n+i], bytes at vb[16n+i]).
   // ARM32's VFP keeps its own map over the same bytes (Sn = s[n], Dn = d[n]); a process is one
   // ABI, so the two never meet. Moves go through the integer views so NaN payloads survive.
-  s!: Float32Array; d!: Float64Array; si!: Int32Array; vu!: Uint32Array; vw!: Uint16Array; vsw!: Int16Array; vb!: Uint8Array; vsb!: Int8Array;
+  s!: Float32Array; d!: Float64Array; si!: Int32Array; vu!: Uint32Array; vw!: Uint16Array; vsw!: Int16Array; vb!: Uint8Array;
   private u32!: Uint32Array;
   private bytes!: Uint8Array;
   a64 = false;
@@ -173,7 +173,7 @@ export class Cpu {
     this.s = new Float32Array(b, base + OFF_V, 128); this.d = new Float64Array(b, base + OFF_V, 64);
     this.si = new Int32Array(b, base + OFF_V, 128); this.vu = new Uint32Array(b, base + OFF_V, 128);
     this.vw = new Uint16Array(b, base + OFF_V, 256); this.vsw = new Int16Array(b, base + OFF_V, 256);
-    this.vb = new Uint8Array(b, base + OFF_V, 512); this.vsb = new Int8Array(b, base + OFF_V, 512);
+    this.vb = new Uint8Array(b, base + OFF_V, 512);
     this.u32 = new Uint32Array(b, base, SIZE >> 2);
     this.bytes = new Uint8Array(b, base, SIZE);
   }

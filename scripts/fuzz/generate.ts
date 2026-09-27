@@ -9,7 +9,7 @@ export type ApiRecipeMember = { kind: "class" | "method"; owner: string; signatu
 type RecipeGenerator = (random: Random, id: string) => ApiCase;
 type ApiRecipe = { members: readonly ApiRecipeMember[]; generate: RecipeGenerator };
 
-export const apiRecipeMemberId = (member: ApiRecipeMember): string => `${member.kind}:${member.owner}.${member.signature}`;
+const apiRecipeMemberId = (member: ApiRecipeMember): string => `${member.kind}:${member.owner}.${member.signature}`;
 
 const member = (kind: ApiRecipeMember["kind"], owner: string, signature: string): ApiRecipeMember => ({ kind, owner, signature });
 
@@ -122,7 +122,7 @@ function randomApiRecipe(random: Random, id: string): ApiCase {
   return API_RECIPES[random.int(0, API_RECIPES.length - 1)]!.generate(random, id);
 }
 
-export const API_RECIPES: readonly ApiRecipe[] = [
+const API_RECIPES: readonly ApiRecipe[] = [
   {
     members: [member("class", "android/graphics/Color", "android/graphics/Color"), member("method", "android/graphics/Color", "rgb(III)I")],
     generate: (random, id) =>

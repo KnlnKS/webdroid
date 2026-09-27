@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
-import { device } from "../../src/shell/config";
+import { device, formatScreen } from "../../src/shell/config";
 
 export type WebdroidSession = {
   origin: string;
@@ -11,7 +11,7 @@ export type WebdroidSession = {
   close(): Promise<void>;
 };
 
-export type WebdroidOptions = { port?: number; coverage?: boolean; proxyProbeTo?: string; attestationEnabled?: boolean };
+type WebdroidOptions = { proxyProbeTo?: string };
 
 function freePort(): number {
   const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
@@ -39,7 +39,7 @@ export async function startWebdroid(apkPath: string, options: WebdroidOptions = 
   const stage = mkdtempSync(join(tmpdir(), "webdroid-fuzz-"));
   const servedPath = join(stage, apk);
   copyFileSync(apkPath, servedPath);
-  const port = options.port ?? freePort();
+  const port = freePort();
   const devServer = Bun.spawn(["bun", "run", "server.ts"], {
     env: { ...process.env, PORT: String(port), WEBDROID_APK_DIR: stage,
       ...(options.proxyProbeTo ? { WEBDROID_FUZZ_ORIGIN: options.proxyProbeTo } : {}) },
@@ -56,9 +56,7 @@ export async function startWebdroid(apkPath: string, options: WebdroidOptions = 
     const page = await context.newPage();
     page.on("pageerror", (error) => errors.push(String(error)));
     page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
-    const query = new URLSearchParams({ apk, screen: `${device.width}x${device.height}@${device.densityDpi}` });
-    if (options.coverage !== false) query.set("fuzzCoverage", "1");
-    if (options.attestationEnabled) query.set("attestation", "1");
+    const query = new URLSearchParams({ apk, screen: formatScreen(device), fuzzCoverage: "1" });
     await page.goto(`${origin}/?${query}`, { waitUntil: "domcontentloaded", timeout: 30_000 });
     await page.waitForFunction(() => Boolean(globalThis.wd?.app()), null, { timeout: 60_000 });
     return {

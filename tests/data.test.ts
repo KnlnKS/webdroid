@@ -46,6 +46,8 @@ describe("json-array", () => {
     await vcall(array, "put", "(II)Lorg/json/JSONArray;", 2, 7);
     await vcall(array, "put", "(IZ)Lorg/json/JSONArray;", 0, 1);
     expect(await vcall(array, "toString", "()Ljava/lang/String;")).toBe("[true,null,7]");
+    await vcall(array, "put", "(J)Lorg/json/JSONArray;", 9223372036854775807n);
+    expect(await vcall(array, "toString", "(I)Ljava/lang/String;", 1)).toBe("[\n true,\n null,\n 7,\n 9223372036854775807\n]");
     await expect(vcallAsync(array, "put", "(II)Lorg/json/JSONArray;", -1, 0)).rejects.toMatchObject({
       constructor: rt.link("org/json/JSONException").ctor,
     });

@@ -120,9 +120,6 @@ function breakLines(layout: JLayout, single: boolean, max: number, ellipsis: boo
   return out;
 }
 
-export function layoutHeight(layout: JLayout): number {
-  return layout.tops ? layout.tops[layout.tops.length - 1] : layout.lines.length * layout.lineHeight() + layout.padTop + layout.padBottom;
-}
 export function drawTextViewLayout(layout: JLayout, cv: JCanvas, gravity: number): unknown {
   if (layout.replacements.length || layout.src instanceof JSpanned && layout.src.spans.length) return drawLayout.call(layout, cv, gravity);
   const ctx = cv.ctx, p = layout.paint;

@@ -4,7 +4,7 @@ import { isRecording, type Ctx2D } from "./recording";
 import type { JCanvas, JPaint } from "./graphics";
 
 function eligible(canvas: JCanvas, paint: JPaint): boolean {
-  return !!canvas.bmp && !paint.shader && !paint.shaderObj && !paint.maskFilter &&
+  return !!canvas.bmp && !paint.shaderObj && !paint.maskFilter &&
     !paint.shadowRadius && !paint.transparentSourceIn() && !isRecording(canvas.ctx);
 }
 
@@ -118,19 +118,20 @@ export function tryBitmapShape(canvas: JCanvas, paint: JPaint,
 
 export function tryBitmapRect(canvas: JCanvas, paint: JPaint, left: number, top: number,
   right: number, bottom: number): boolean {
-  if (paint.style === 1 && paint.strokeWidth === 0 && eligible(canvas, paint)) {
+  if (!eligible(canvas, paint)) return false;
+  if (paint.style === 1 && paint.strokeWidth === 0) {
     const m = canvas.ctx.getTransform();
     if (m.a * m.d === m.b * m.c) return true;
   }
-  if (paint.antiAlias && paint.style === 1 && paint.strokeWidth === 0 && !paint.dash && eligible(canvas, paint)) {
+  if (paint.antiAlias && paint.style === 1 && paint.strokeWidth === 0 && !paint.dash) {
     const path = new Path2D();
     path.rect(left, top, right - left, bottom - top);
     deviceHairline(canvas, paint, path);
     return true;
   }
   if (paint.antiAlias || paint.style === 1 && paint.strokeWidth !== 0 ||
-    paint.style === 2 && paint.strokeWidth !== 0 || !eligible(canvas, paint)) return false;
-  if (!paint.antiAlias && (paint.style === 0 || paint.style === 2 && paint.strokeWidth === 0)) {
+    paint.style === 2 && paint.strokeWidth !== 0) return false;
+  if (paint.style === 0 || paint.style === 2 && paint.strokeWidth === 0) {
     const m = canvas.ctx.getTransform();
     const aligned = m.a === 1 && m.b === 0 && m.c === 0 && m.d === 1 &&
       Number.isInteger(left + m.e) && Number.isInteger(top + m.f) &&
@@ -138,7 +139,7 @@ export function tryBitmapRect(canvas: JCanvas, paint: JPaint, left: number, top:
     if (!aligned && sampled(canvas, paint, left, top, right, bottom,
       (x, y) => x > left && x < right && y >= top && y < bottom)) return true;
   }
-  if (paint.style === 1 && paint.strokeWidth === 0 && !paint.antiAlias && !paint.dash) {
+  if (paint.style === 1 && paint.strokeWidth === 0 && !paint.dash) {
     const pixels = hairlineRect(canvas.ctx, left, top, right, bottom, paint.strokeCapN);
     if (pixels) { deviceFill(canvas, paint, pixels); return true; }
   }

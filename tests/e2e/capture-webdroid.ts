@@ -5,14 +5,14 @@ import { mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { ENV_SCREEN, WebdroidDriver } from "./drivers/webdroid";
 import { E2E_DIR } from "./lib/util";
-import { PINNED_CLOCK_MS, evidenceOf, flowSchemaHash, isMotionWait, screenOf, uiFileFor, type ExecutionFlow, type ExecutionStep, type Flow, type Manifest, type RecordedStep, type WaitPolicy } from "./types";
+import { PINNED_CLOCK_MS, evidenceOf, flowSchemaHash, isMotionWait, screenOf, screenParam, uiFileFor, type ExecutionFlow, type ExecutionStep, type Flow, type Manifest, type RecordedStep, type WaitPolicy } from "./types";
 import { parseScreen } from "../../src/shell/config";
 import type { Act, Settled, StepResult } from "./lib/probe";
 import { readProcesses, type ProcessSnapshot } from "./lib/processes";
 
 export type StepRun = {
   id: string; index: number; file: string;
-  /** true when wd.tapText found the target itself; false when it did not. */
+  /** whether wd.locateText found a tapText target itself rather than replaying the recorded point */
   semanticHit?: boolean;
   /** which tier of the settle contract ended the step, and how long it took */
   settled: Settled["how"];
@@ -50,9 +50,9 @@ export type StepRun = {
   phases?: StepResult["phases"] & { hostWriteMs: number };
 };
 
+type CaptureMode = "full" | "fast";
 /** What `actual/<flow>/run.json` holds: the steps plus how the run was driven. */
-export type FlowRun = { mode: "full" | "fast"; flowSchemaHash: string; jobs: number; screen: string; statusBarDp: number; steps: StepRun[]; browserErrors?: string[]; hostFiles?: { path: string; size: number }[] };
-export type CaptureMode = "full" | "fast";
+export type FlowRun = { mode: CaptureMode; flowSchemaHash: string; jobs: number; screen: string; statusBarDp: number; steps: StepRun[]; browserErrors?: string[]; hostFiles?: { path: string; size: number }[] };
 
 /** Wipe the frame-recorder directory. Call once per run, before any flow. */
 export async function prepareShots(dir: string): Promise<void> {
@@ -133,13 +133,13 @@ export function runStep(drv: WebdroidDriver, flow: Flow, step: ExecutionStep, re
 }
 
 export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
-  jobs = 1, shots, log = console.log, mode = "full", outRoot = mode === "fast" ? "actual-fast" : "actual",
-}: { jobs?: number; shots?: string; log?: (s: string) => void; mode?: CaptureMode; outRoot?: string } = {}): Promise<{ runs: StepRun[]; errors: string[] }> {
+  jobs = 1, shots, log = console.log, mode = "full",
+}: { jobs?: number; shots?: string; log?: (s: string) => void; mode?: CaptureMode } = {}): Promise<{ runs: StepRun[]; errors: string[] }> {
   const manifest = await loadManifest(flow.app);
   if (!manifest) log(`  no goldens for ${flow.app} — smoke run (rendered/wedged/missing/perf; not scored)`);
   const byId = new Map((manifest?.steps ?? []).map((s) => [s.id, s]));
 
-  const outDir = `${E2E_DIR}${outRoot}/${flow.app}`;
+  const outDir = `${E2E_DIR}${mode === "fast" ? "actual-fast" : "actual"}/${flow.app}`;
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
@@ -222,7 +222,7 @@ export async function captureFlow(flow: ExecutionFlow, drv: WebdroidDriver, {
     };
     return scan(await navigator.storage.getDirectory(), "");
   }) : undefined;
-  const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow]), jobs, screen: `${drv.screen.width}x${drv.screen.height}@${drv.screen.densityDpi}`, statusBarDp: drv.screen.statusBarDp, steps: runs, browserErrors: [...drv.errors], hostFiles };
+  const run: FlowRun = { mode, flowSchemaHash: flowSchemaHash([flow]), jobs, screen: screenParam(drv.screen), statusBarDp: drv.screen.statusBarDp, steps: runs, browserErrors: [...drv.errors], hostFiles };
   await Bun.write(`${outDir}/run.json`, JSON.stringify(run, null, 2));
   const missingFiles = (flow.privateStorage?.expectedFiles ?? []).filter((expected) => !hostFiles?.some(({ path, size }) =>
     path.startsWith(expected.pathPrefix) && path.endsWith(expected.suffix) && size >= expected.minBytes))

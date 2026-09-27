@@ -5,7 +5,7 @@
 // Provenance withholds our native spec for the named prefixes, the real classes load from
 // vendor/aosp/framework.jar, and what they reach that we do not answer for is reported.
 import { existsSync } from "node:fs";
-import { BYTECODE } from "../src/jvm/provenance";
+import { BYTECODE, isBytecode } from "../src/jvm/provenance";
 import { nativeMethodSupport } from "./native-surface";
 
 const CUTS = process.argv.slice(2).filter((a) => !a.startsWith("--"));
@@ -29,7 +29,7 @@ console.log(`withheld ${BYTECODE.length} prefixes; ${rt.dexIndex.size} framework
 // --- coverage: every native the dex declares under a cut, against what we registered ---
 const declared = new Map<string, string[]>();
 for (const name of rt.dexIndex.keys()) {
-  if (!BYTECODE.some((p) => name.startsWith(p))) continue;
+  if (!isBytecode(name)) continue;
   const info = rt.link(name);
   const { dex, def } = info;
   if (!dex || !def) continue;
@@ -42,11 +42,11 @@ for (const name of rt.dexIndex.keys()) {
 let have = 0, total = 0;
 const gaps: string[] = [];
 for (const [cls, sigs] of [...declared].sort()) {
-  const impl = sigs.filter((signature) => nativeMethodSupport(rt, `${cls}.${signature}`) !== "missing");
-  have += impl.length; total += sigs.length;
-  if (impl.length < sigs.length) for (const signature of sigs)
-    if (nativeMethodSupport(rt, `${cls}.${signature}`) === "missing") gaps.push(`${cls}.${signature}`);
-  console.log(`  ${String(impl.length).padStart(3)}/${String(sigs.length).padEnd(3)} ${cls}`);
+  const missing = sigs.map((signature) => `${cls}.${signature}`).filter((key) => nativeMethodSupport(rt, key) === "missing");
+  const impl = sigs.length - missing.length;
+  have += impl; total += sigs.length;
+  gaps.push(...missing);
+  console.log(`  ${String(impl).padStart(3)}/${String(sigs.length).padEnd(3)} ${cls}`);
 }
 console.log(`\ncoverage ${have}/${total} declared natives (${((have / (total || 1)) * 100).toFixed(0)}%)`);
 

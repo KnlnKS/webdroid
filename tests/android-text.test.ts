@@ -393,3 +393,31 @@ describe("tts-span", () => {
     }
   });
 });
+
+describe("editable-factory", () => {
+  rt.linkNatives();
+  test("newEditable copies span records", async () => {
+    const source = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "hello");
+    const span = new JObj();
+    await vcall(source, "setSpan", "(Ljava/lang/Object;III)V", span, 0, 2, 33);
+    const factory = await vcall(rt.link("android/text/Editable$Factory").ctor, "getInstance", "()Landroid/text/Editable$Factory;");
+    const editable = await vcall(factory, "newEditable", "(Ljava/lang/CharSequence;)Landroid/text/Editable;", source);
+    await vcall(editable, "setSpan", "(Ljava/lang/Object;III)V", span, 1, 4, 33);
+    expect(await vcall(source, "getSpanEnd", "(Ljava/lang/Object;)I", span)).toBe(2);
+  });
+});
+
+describe("length-filter", () => {
+  rt.linkNatives();
+  test("LengthFilter trims the insertion to the remaining room", async () => {
+    const filter = await newObj("android/text/InputFilter$LengthFilter", "(I)V", 5);
+    const dest = await newObj("android/text/SpannableString", "(Ljava/lang/CharSequence;)V", "abc");
+    const run = (source: string, dstart: number, dend: number) => vcall(filter, "filter",
+      "(Ljava/lang/CharSequence;IILandroid/text/Spanned;II)Ljava/lang/CharSequence;", source, 0, source.length, dest, dstart, dend);
+    expect(await run("x", 3, 3)).toBeNull();
+    expect(await run("wxyz", 3, 3)).toBe("wx");
+    expect(await run("w😀", 3, 3)).toBe("w");
+    expect(await run("wxyz", 0, 3)).toBeNull();
+    expect(await run("abcdef", 0, 3)).toBe("abcde");
+  });
+});

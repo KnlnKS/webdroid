@@ -154,7 +154,6 @@ class JDialog extends JObj {
   jctx: any = null;
   root: DialogRoot | null = null;
   win: JWindow | null = null;
-  content: JView | null = null;
   titleStr: string | null = null;
   ownerActivity: unknown = null;
   showing = false;
@@ -220,10 +219,7 @@ function setButton(d: JAlertDialog, which: number, text: string, l: unknown) {
   else { d.neutText = text; d.neutL = l; }
 }
 const dialogMethods: NonNullable<NativeSpec["methods"]> = {
-  "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": () => {
-    const i = rt.link("android/window/OnBackInvokedDispatcher");
-    return new i.ctor();
-  },
+  "getOnBackInvokedDispatcher()Landroid/window/OnBackInvokedDispatcher;": () => rt.make("android/window/OnBackInvokedDispatcher"),
   "<init>(Landroid/content/Context;)V": initDialog,
   "<init>(Landroid/content/Context;I)V": initDialog,
   "<init>(Landroid/content/Context;ZLandroid/content/DialogInterface$OnCancelListener;)V": driven(function* (this: JDialog, c: unknown, canc: number, l: unknown): Gen {
@@ -292,7 +288,7 @@ const dialogMethods: NonNullable<NativeSpec["methods"]> = {
   "getWindow()Landroid/view/Window;": function (this: JDialog) {
     const root = this.ensureRoot();
     if (!this.win) {
-      this.win = new (rt.link("android/view/Window").ctor as new () => JWindow)();
+      this.win = rt.make("android/view/Window") as JWindow;
       this.win.callbackObj = this;
       this.win.dialog = this;
       if (root.theme) applyWindowTheme(this.win, root.theme);

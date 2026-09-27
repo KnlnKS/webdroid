@@ -19,7 +19,7 @@ import { PROCESS_PID, uptimeMillis, reportUncaught } from "../android/os";
 import { bindLocalService, unbindLocalService, svcStart, serviceTransport } from "../android/runningservices";
 import { vcall } from "../jvm/natives/jlang";
 import { vfs } from "../jvm/natives/jio";
-import { device } from "./config";
+import { device, formatScreen } from "./config";
 import { connectProviders, receiveProvider, type ProviderRequest, type ProviderReply } from "../android/provideripc";
 import { broadcastTransport, deliverBroadcast, hasBroadcastReceiver } from "../android/broadcast";
 import { getPM, JResolveInfo } from "../android/pm";
@@ -278,7 +278,7 @@ class ProcessBroker {
       const frame = document.createElement("iframe"); entry.frame = frame;
       frame.hidden = true;
       frame.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:16px;z-index:1";
-      frame.src = "/process?pid=" + entry.pid + `&screen=${device.width}x${device.height}@${device.densityDpi}&statusBarDp=${device.statusBarDp}`;
+      frame.src = "/process?pid=" + entry.pid + `&screen=${formatScreen(device)}&statusBarDp=${device.statusBarDp}&hz=${device.refreshRate}`;
       const params = new URLSearchParams(location.search);
       for (const key of ["bytecode", "jit", "fuzzCoverage", "testClock"]) {
         const value = params.get(key); if (value !== null) frame.src += "&" + key + "=" + encodeURIComponent(value);

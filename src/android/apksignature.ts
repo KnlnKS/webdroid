@@ -41,7 +41,11 @@ export function apkSigningBlock(bytes: Uint8Array) {
   }
   throw new Error("APK has no valid ZIP end record");
 }
-const equal = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
+export function sameBytes(a: ArrayLike<number>, b: ArrayLike<number>): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
 function algorithms(bytes: Uint8Array) {
   return signingSequence(bytes).map((entry) => {
     const fields = new Fields(entry), id = fields.u32(), value = fields.field(); fields.end();
@@ -116,7 +120,7 @@ export async function verifyApkSignature(bytes: Uint8Array): Promise<void> {
       const key = await crypto.subtle.importKey("spki", publicKey.slice(), { name: algorithm.name, hash }, false, ["verify"]);
       if (!await crypto.subtle.verify(algorithm, key, signature.value.slice(), signed.slice())) throw new Error("invalid APK signer signature");
       const data = new Fields(signed), declared = algorithms(data.field()), chain = signingSequence(data.field());
-      if (!chain.length || !equal(certificateKey(chain[0]), publicKey)) throw new Error("APK certificate public key mismatch");
+      if (!chain.length || !sameBytes(certificateKey(chain[0]), publicKey)) throw new Error("APK certificate public key mismatch");
       certificates.push(chain[0]);
       if (id === 0xf05368c0 && (data.u32() !== min || data.u32() !== max || min > max)) throw new Error("APK signer SDK range mismatch");
       for (const attr of signingSequence(data.field())) {
@@ -128,9 +132,9 @@ export async function verifyApkSignature(bytes: Uint8Array): Promise<void> {
       const expected = declared.find((d) => d.id === signature.id)!;
       let digest = digests.get(hash);
       if (!digest) { digest = await contentDigest(bytes, block, hash); digests.set(hash, digest); }
-      if (!equal(digest, expected.value)) throw new Error("APK content digest mismatch");
+      if (!sameBytes(digest, expected.value)) throw new Error("APK content digest mismatch");
     }
-    if (identities && (identities.length !== certificates.length || identities.some((c, i) => !equal(c, certificates[i])))) throw new Error("unsupported APK signer rotation between schemes");
+    if (identities && (identities.length !== certificates.length || identities.some((c, i) => !sameBytes(c, certificates[i])))) throw new Error("unsupported APK signer rotation between schemes");
     identities = certificates;
   }
   if (!identities) throw new Error("unsupported APK signature: v2 or v3 required");

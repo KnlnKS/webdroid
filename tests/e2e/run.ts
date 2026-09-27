@@ -1,4 +1,4 @@
-const modes = ["--full", "--record", "--diff", "--coverage"] as const;
+const modes = ["--full", "--record", "--diff"] as const;
 const args = process.argv.slice(2);
 const selected = modes.filter((mode) => args.includes(mode));
 if (selected.length > 1) throw new Error(`choose one E2E mode: ${modes.join(", ")}`);

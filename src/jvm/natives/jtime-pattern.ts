@@ -49,10 +49,14 @@ export function displayNames(tag: string, kind: "month" | "weekday" | "era" | "d
   nameMemo.set(key, out);
   return out;
 }
+const zoneNameFormats = new Map<string, Intl.DateTimeFormat>();
 /** the zone's display name at an instant; Intl answers "GMT+1" where it has no abbreviation */
 export function zoneName(id: string, full: boolean, ms: number, tag = "en-US"): string {
   try {
-    const parts = new Intl.DateTimeFormat(tag, { timeZone: id, timeZoneName: full ? "long" : "short" }).formatToParts(ms);
+    const key = `${tag}|${id}|${full}`;
+    let format = zoneNameFormats.get(key);
+    if (!format) zoneNameFormats.set(key, (format = new Intl.DateTimeFormat(tag, { timeZone: id, timeZoneName: full ? "long" : "short" })));
+    const parts = format.formatToParts(ms);
     return parts.find((p) => p.type === "timeZoneName")?.value ?? id;
   } catch { return id; }
 }
@@ -102,7 +106,7 @@ export const SIGN = { NORMAL: 0, ALWAYS: 1, NEVER: 2, NOT_NEGATIVE: 3, EXCEEDS_P
 const SDF_CENTURY = -1;
 export const val = (f: string, min: number, max = 19, sign: number = SIGN.NORMAL, pmin = min): Tok => ({ k: "val", f, min, max, sign, pmin });
 const textStyle = (n: number): Style => (n <= 3 ? "short" : n === 4 ? "long" : "narrow");
-// pattern letters shared by both engines: [ChronoField, DTF max count]
+// numeric pattern letters both engines share: letter → ChronoField
 const NUMERIC: Record<string, string> = {
   d: "DAY_OF_MONTH", h: "CLOCK_HOUR_OF_AMPM", H: "HOUR_OF_DAY", k: "CLOCK_HOUR_OF_DAY", K: "HOUR_OF_AMPM", m: "MINUTE_OF_HOUR", s: "SECOND_OF_MINUTE",
 };

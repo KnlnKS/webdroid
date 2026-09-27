@@ -347,6 +347,16 @@ describe("collection-startup", () => {
   });
 });
 
+describe("collection-supers", () => {
+  test("collections are instances of their abstract supers", async () => {
+    expect(rt.iof(await newObj("java/util/HashSet"), "java/util/AbstractCollection")).toBe(1);
+    expect(rt.iof(await newObj("java/util/HashSet"), "java/util/AbstractSet")).toBe(1);
+    expect(rt.iof(await newObj("java/util/ArrayList"), "java/util/AbstractList")).toBe(1);
+    expect(rt.iof(await newObj("java/util/HashMap"), "java/util/AbstractMap")).toBe(1);
+    expect(rt.iof(await newObj("java/util/Stack"), "java/util/Vector")).toBe(1);
+  });
+});
+
 describe("collections-disjoint", () => {
   const disjoint = (a: unknown, b: unknown) => vcallAsync(rt.link("java/util/Collections").ctor, "disjoint", "(Ljava/util/Collection;Ljava/util/Collection;)Z", a, b);
 

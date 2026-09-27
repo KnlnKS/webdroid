@@ -39,6 +39,11 @@ export function uriParts(u: JUri): UriParts {
   }
   return (u.p = { scheme, ssp: rest, hier, authority, path, query, fragment });
 }
+/** the raw (encoded) path segments of a hierarchical uri; an opaque one has none */
+const rawSegments = (p: UriParts) => p.hier ? p.path.split("/").filter(Boolean) : [];
+/** an authority's host[:port], past any userinfo */
+export const hostPort = (authority: string) => authority.slice(authority.lastIndexOf("@") + 1);
+const compareUri = function (this: JUri, o: JUri) { return this.uri < o.uri ? -1 : this.uri > o.uri ? 1 : 0; };
 class UriNode { code = -1; exact = new Map<string, UriNode>(); num: UriNode | null = null; text: UriNode | null = null; }
 class JUriMatcher extends JObj { root = new UriNode(); }
 rt.register({
@@ -167,26 +172,21 @@ rt.register({
     "getHost()Ljava/lang/String;": function (this: JUri) {
       const a = uriParts(this).authority;
       if (a === null) return null;
-      const h = a.slice(a.lastIndexOf("@") + 1);
-      const c = h.indexOf(":");
+      const h = hostPort(a), c = h.indexOf(":");
       return uriDecode(c < 0 ? h : h.slice(0, c));
     },
     "getPort()I": function (this: JUri) {
       const a = uriParts(this).authority;
       if (a === null) return -1;
-      const h = a.slice(a.lastIndexOf("@") + 1), c = h.indexOf(":");
+      const h = hostPort(a), c = h.indexOf(":");
       const n = c < 0 ? NaN : parseInt(uriDecode(h.slice(c + 1))!, 10);
       return Number.isInteger(n) ? n : -1;
     },
     "getPath()Ljava/lang/String;": function (this: JUri) { const p = uriParts(this); return p.hier ? uriDecode(p.path) : null; },
     "getEncodedPath()Ljava/lang/String;": function (this: JUri) { const p = uriParts(this); return p.hier ? p.path : null; },
-    "getPathSegments()Ljava/util/List;": function (this: JUri) {
-      const p = uriParts(this);
-      return newArrayList(p.hier ? p.path.split("/").filter(Boolean).map((x) => uriDecode(x)) : []);
-    },
+    "getPathSegments()Ljava/util/List;": function (this: JUri) { return newArrayList(rawSegments(uriParts(this)).map((x) => uriDecode(x))); },
     "getLastPathSegment()Ljava/lang/String;": function (this: JUri) {
-      const p = uriParts(this);
-      const segs = p.hier ? p.path.split("/").filter(Boolean) : [];
+      const segs = rawSegments(uriParts(this));
       return segs.length ? uriDecode(segs[segs.length - 1]) : null;
     },
     "getQuery()Ljava/lang/String;": function (this: JUri) { return uriDecode(uriParts(this).query); },
@@ -228,8 +228,8 @@ rt.register({
       if (p.scheme === null || p.scheme === p.scheme.toLowerCase()) return this;
       return mkUri(p.scheme.toLowerCase() + this.uri.slice(p.scheme.length));
     },
-    "compareTo(Landroid/net/Uri;)I": function (this: JUri, o: JUri) { return this.uri < o.uri ? -1 : this.uri > o.uri ? 1 : 0; },
-    "compareTo(Ljava/lang/Object;)I": function (this: JUri, o: JUri) { return this.uri < o.uri ? -1 : this.uri > o.uri ? 1 : 0; },
+    "compareTo(Landroid/net/Uri;)I": compareUri,
+    "compareTo(Ljava/lang/Object;)I": compareUri,
     "equals(Ljava/lang/Object;)Z": function (this: JUri, o: unknown) { return o instanceof JUri && o.uri === this.uri ? 1 : 0; },
     "hashCode()I": function (this: JUri) { return stringHash(this.uri); },
     "describeContents()I": () => 0,
@@ -237,7 +237,7 @@ rt.register({
 });
 function contentId(u: JUri | null): bigint {
   if (u === null) throw rt.mkThrowable("java/lang/NullPointerException", "contentUri");
-  const p = uriParts(u), seg = p.hier ? p.path.split("/").filter(Boolean).at(-1) : undefined;
+  const seg = rawSegments(uriParts(u)).at(-1);
   if (!seg || !/^[+-]?\d+$/.test(seg)) throw rt.mkThrowable("java/lang/NumberFormatException", seg ?? "null");
   const id = BigInt(seg);
   if (id < -9223372036854775808n || id > 9223372036854775807n) {
@@ -493,7 +493,6 @@ rt.markers("android/net/NetworkSpecifier");
 rt.register({
   name: "android/net/NetworkRequest", ctor: JNetworkRequest,
   methods: {
-
     "hasCapability(I)Z": function (this: JNetworkRequest, c: number) { return this.caps.includes(c) ? 1 : 0; },
     "hasTransport(I)Z": function (this: JNetworkRequest, t: number) { return this.transports.includes(t) ? 1 : 0; },
     "getCapabilities()[I": function (this: JNetworkRequest) { return Int32Array.from(this.caps).sort(); },
@@ -570,8 +569,9 @@ rt.register({
     "getNetworkInfo(Landroid/net/Network;)Landroid/net/NetworkInfo;": (n: unknown) => knownNetwork(n) ? rt.make("android/net/NetworkInfo") : null,
     // by network type (TYPE_WIFI/TYPE_MOBILE...): the one network we model is the active one,
     // so its own type answers and every other type has no info, as on a device without it
-    "getNetworkInfo(I)Landroid/net/NetworkInfo;": driven(function* (t: number): Gen 
-      { return (yield netUp()) && t === NET_TYPE ? rt.make("android/net/NetworkInfo") : null; }),
+    "getNetworkInfo(I)Landroid/net/NetworkInfo;": driven(function* (t: number): Gen {
+      return (yield netUp()) && t === NET_TYPE ? rt.make("android/net/NetworkInfo") : null;
+    }),
     "getLinkProperties(Landroid/net/Network;)Landroid/net/LinkProperties;": (n: unknown) => knownNetwork(n) ? new JLinkProperties() : null,
     "bindProcessToNetwork(Landroid/net/Network;)Z": (n: unknown) => {
       if (n != null && !knownNetwork(n)) return 0;
@@ -615,9 +615,6 @@ rt.register({
   },
 });
 
-// TrafficStats: per-thread socket tagging for the kernel's accounting. Bytes are counted per
-// tag nowhere here, so the tag is kept per thread and the totals answer UNSUPPORTED (-1).
-const threadTags = new WeakMap<object, number>();
 // ── UrlQuerySanitizer: AOSP's parser with its IllegalCharacterValueSanitizer flag set
 const SAN = { SPACE_OK: 1, OTHER_WHITESPACE_OK: 2, SCRIPT_URL_OK: 4, AMP_OK: 8, AMP_AND_SPACE_OK: 9, DQUOTE_OK: 16, SQUOTE_OK: 32, LT_OK: 64, GT_OK: 128, PCT_OK: 256, NUL_OK: 512, NON_7_BIT_ASCII_OK: 1024,
   ALL_OK: 2047, URL_LEGAL: 4 | 8 | 256 | 1024, ALL_BUT_NUL_LEGAL: 2047 & ~512, ALL_BUT_WHITESPACE_LEGAL: 2047 & ~3, ALL_BUT_NUL_AND_ANGLE_BRACKETS_LEGAL: 2047 & ~(512 | 64 | 128) };
@@ -722,6 +719,9 @@ function parseSanitizerUrl(this: JUrlQuerySanitizer, url: string): Promise<void>
   const q = url.indexOf("?");
   return this.parseQuery(q < 0 ? "" : url.slice(q + 1));
 }
+// TrafficStats: per-thread socket tagging for the kernel's accounting. Bytes are counted per
+// tag nowhere here, so the tag is kept per thread and the totals answer UNSUPPORTED (-1).
+const threadTags = new WeakMap<object, number>();
 rt.register({
   name: "android/net/TrafficStats", ctor: class extends JObj {},
   statics: { UNSUPPORTED: -1 },

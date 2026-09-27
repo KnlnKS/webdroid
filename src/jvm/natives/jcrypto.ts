@@ -1,12 +1,12 @@
-// javax.crypto — SecretKeySpec, IvParameterSpec, Cipher (AES) and Mac (HMAC) over WebCrypto, which is
-// one-shot and async: update() buffers, doFinal() awaits the whole operation.
+// javax.crypto and the JCA factories around it — SecretKeySpec, IvParameterSpec, Cipher (AES, RSA-OAEP),
+// Mac (HMAC), KeyStore, KeyGenerator, KeyPairGenerator — over WebCrypto, which is one-shot and async:
+// update() buffers, doFinal() awaits the whole operation.
 import { rt, JObj, driven, type Gen } from "../runtime";
-import { vcall } from "./jlang";
-import { defineException } from "./jlang";
+import { vcall, defineException } from "./jlang";
 import { mkIter } from "./jutil";
 import { charsToString, concat, i8, u8, utf8 } from "../abi";
 import { JKeyGenSpec } from "../../android/security";
-import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt, binary } from "./jrsa";
+import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt, binary, array } from "./jrsa";
 import { generateEc, isEcCurve, curveOfParams } from "./jec";
 import { caStoreMethods, parseX509 } from "./jx509";
 import { type JBuffer, bufferView } from "./jnio";
@@ -329,24 +329,25 @@ function into(r: Int8Array, out: Int8Array, off: number): number {
   out.set(r, off);
   return r.length;
 }
+// the SecureRandom overloads ignore it: WebCrypto draws its own randomness
+function initCipherPlain(this: JCipher, m: number, k: unknown) { return initCipher(this, m, k, null); }
+function initCipherWith(this: JCipher, m: number, k: unknown, p: unknown) { return initCipher(this, m, k, p); }
+function requireAad(c: JCipher) { if (c.alg !== "AES-GCM") throw rt.mkThrowable("java/lang/IllegalStateException", "No AAD accepted"); }
 rt.register({
   name: "javax/crypto/Cipher", ctor: JCipher,
   statics: { ENCRYPT_MODE: 1, DECRYPT_MODE: 2, WRAP_MODE: 3, UNWRAP_MODE: 4 },
   methods: {
     "static getInstance(Ljava/lang/String;)Ljavax/crypto/Cipher;": getCipher,
     "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/Cipher;": getCipher,
-    "init(ILjava/security/Key;)V": function (this: JCipher, m: number, k: unknown) { return initCipher(this, m, k, null); },
-    "init(ILjava/security/Key;Ljava/security/SecureRandom;)V": function (this: JCipher, m: number, k: unknown) { return initCipher(this, m, k, null); },
-    "init(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JCipher, m: number, k: unknown, p: unknown) {
-      return initCipher(this, m, k, p);
-    },
-    "init(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;Ljava/security/SecureRandom;)V":
-      function (this: JCipher, m: number, k: unknown, p: unknown) { return initCipher(this, m, k, p); },
+    "init(ILjava/security/Key;)V": initCipherPlain,
+    "init(ILjava/security/Key;Ljava/security/SecureRandom;)V": initCipherPlain,
+    "init(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V": initCipherWith,
+    "init(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;Ljava/security/SecureRandom;)V": initCipherWith,
     "update([B)[B": function (this: JCipher, b: Int8Array) { this.parts.push(bytes(b)); return new Int8Array(0); },
     "update([BII)[B": function (this: JCipher, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); return new Int8Array(0); },
     "update([BII[BI)I": function (this: JCipher, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); return 0; },
-    "updateAAD([B)V": function (this: JCipher, b: Int8Array) { if (this.alg !== "AES-GCM") throw rt.mkThrowable("java/lang/IllegalStateException", "No AAD accepted"); this.aad.push(bytes(b)); },
-    "updateAAD([BII)V": function (this: JCipher, b: Int8Array, off: number, len: number) { if (this.alg !== "AES-GCM") throw rt.mkThrowable("java/lang/IllegalStateException", "No AAD accepted"); this.aad.push(bytes(b, off, len)); },
+    "updateAAD([B)V": function (this: JCipher, b: Int8Array) { requireAad(this); this.aad.push(bytes(b)); },
+    "updateAAD([BII)V": function (this: JCipher, b: Int8Array, off: number, len: number) { requireAad(this); this.aad.push(bytes(b, off, len)); },
     "updateAAD(Ljava/nio/ByteBuffer;)V": function (this: JCipher, bb: JBuffer) {
       const v = bufferView(bb);
       const u = new Uint8Array(v.ab, v.byteFromPos, bb.lim - bb.pos);
@@ -404,6 +405,7 @@ async function initMac(m: JMac, key: unknown) {
   m.key = await cryptoKey(key, "HMAC", ["sign"], m.hash);
   m.parts = [];
 }
+function initMacKey(this: JMac, k: unknown) { return initMac(this, k); }
 rt.register({
   name: "javax/crypto/Mac", ctor: JMac,
   methods: {
@@ -415,8 +417,8 @@ rt.register({
       [m.hash, m.len] = h;
       return m;
     },
-    "init(Ljava/security/Key;)V": function (this: JMac, k: unknown) { return initMac(this, k); },
-    "init(Ljava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JMac, k: unknown) { return initMac(this, k); },
+    "init(Ljava/security/Key;)V": initMacKey,
+    "init(Ljava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V": initMacKey,
     "update(B)V": function (this: JMac, b: number) { this.parts.push(new Uint8Array([b & 0xff])); },
     "update([B)V": function (this: JMac, b: Int8Array) { this.parts.push(bytes(b)); },
     "update([BII)V": function (this: JMac, b: Int8Array, off: number, len: number) { this.parts.push(bytes(b, off, len)); },
@@ -446,7 +448,7 @@ class JKeyStore extends JObj {
     if (have) return have;
     const der = this.pendingCerts.get(alias);
     if (der === undefined) return null;
-    const cert = await parseX509(Uint8Array.from(atob(der), (c) => c.charCodeAt(0)));
+    const cert = await parseX509(array(atob(der)));
     this.pendingCerts.delete(alias);
     this.certs.set(alias, cert);
     return cert;
@@ -473,7 +475,7 @@ class JKeyStore extends JObj {
       if (entries == null || typeof entries !== "object") return;
       for (const [a, entry] of Object.entries(entries)) {
         if (Array.isArray(entry) && entry.length === 2 && entry.every((v) => typeof v === "string")) {
-          this.entries.set(a, mkSecretKey(Uint8Array.from(atob(entry[1]), (c) => c.charCodeAt(0)), entry[0]));
+          this.entries.set(a, mkSecretKey(array(atob(entry[1])), entry[0]));
         } else if (entry && entry.kind === "rsa" && typeof entry.private === "string" && typeof entry.public === "string" && typeof entry.certificate === "string") {
           this.entries.set(a, restoreRsa(entry.private, entry.public, entry.certificate));
         } else if (entry && entry.kind === "cert" && typeof entry.certificate === "string") {
@@ -572,14 +574,15 @@ function keyGenInit(this: JKeyGenerator, spec: any) {
   this.alias = spec.alias;
   if (spec.keySize > 0) this.bits = spec.keySize;
 }
+function keyGenBits(this: JKeyGenerator, bits: number) { this.bits = bits; }
 rt.register({
   name: "javax/crypto/KeyGenerator", ctor: JKeyGenerator,
   methods: {
     "static getInstance(Ljava/lang/String;)Ljavax/crypto/KeyGenerator;": (a: string) => keyGen(a, null),
     "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyGenerator;": (a: string, p: string) => keyGen(a, p),
     "getAlgorithm()Ljava/lang/String;": function (this: JKeyGenerator) { return this.algo; },
-    "init(I)V": function (this: JKeyGenerator, bits: number) { this.bits = bits; },
-    "init(ILjava/security/SecureRandom;)V": function (this: JKeyGenerator, bits: number) { this.bits = bits; },
+    "init(I)V": keyGenBits,
+    "init(ILjava/security/SecureRandom;)V": keyGenBits,
     "init(Ljava/security/SecureRandom;)V": () => {},
     "init(Ljava/security/spec/AlgorithmParameterSpec;)V": keyGenInit,
     "init(Ljava/security/spec/AlgorithmParameterSpec;Ljava/security/SecureRandom;)V": keyGenInit,

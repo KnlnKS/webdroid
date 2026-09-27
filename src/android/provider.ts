@@ -2,7 +2,7 @@
 // DocumentsContract.isDocumentUri() is not a URI-shape test alone: it is defined as "does a
 // DocumentsProvider own this authority", which apps (UniFile, DocumentFile) answer by
 // querying the package manager themselves. The manifest walk (providerNodes, matchesAction,
-// authoritiesOf) lives with PackageManager in app.ts; DocumentsContract reads it from there.
+// authoritiesOf) lives with PackageManager in pm.ts; DocumentsContract reads it from there.
 
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
@@ -16,7 +16,6 @@ import { newArrayList, toJsArray } from "../jvm/natives/jutil";
 import { appHost } from "./apphost";
 import { packages } from "./packages";
 import { docCreate, docDelete, docRename, pickTree, pickDocument, isDocsUri, isContentUri, uriParts, treeDocumentId, documentId, docUriLike, type JUriLike } from "./documents";
-
 
 const PROVIDER_INTERFACE = "android.content.action.DOCUMENTS_PROVIDER";
 
@@ -62,7 +61,6 @@ registerSystemActivity("android.intent.action.CHOOSER", async (intent) => {
   await launchIntent(appHost!, chosen);
   return rt.make("android/content/Intent");
 });
-
 
 const enc = encodeURIComponent;
 

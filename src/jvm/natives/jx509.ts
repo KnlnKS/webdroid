@@ -4,8 +4,8 @@
 import type { asn1 } from "node-forge";
 import { JObj, rt, driven, type Gen } from "../runtime";
 import { jarray, i8 } from "../abi";
-import { boxInt, defineException, newObj, stringHash, vcall } from "./jlang";
-import { newArrayList, mkIter } from "./jutil";
+import { boxInt, defineException, newObj, stringHash } from "./jlang";
+import { newArrayList, mkIter, newStringSet } from "./jutil";
 import { JRsaPublicKey, forge, binary, array as bytes } from "./jrsa";
 import { JDate } from "./jtime";
 import { readStreamFully } from "./jio";
@@ -69,9 +69,8 @@ export async function parseX509(input: Uint8Array): Promise<JX509> {
   c.serial = f.util.createBuffer(fields[i] .value as string).toHex();
   c.issuerDer = binary(der(fields[i + 2], f)); c.issuer = dnString(fields[i + 2], f);
   const [nb, na] = fields[i + 3].value as Node[];
-  c.notBefore = f.asn1.utcTimeToDate(nb.value as string)?.getTime() ?? Date.parse((nb.value as string).replace(/(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z/, "$1-$2-$3T$4:$5:$6Z"));
+  c.notBefore = (nb.type === f.asn1.Type.GENERALIZEDTIME ? f.asn1.generalizedTimeToDate : f.asn1.utcTimeToDate)(nb.value as string).getTime();
   c.notAfter = (nb.type === f.asn1.Type.UTCTIME ? f.asn1.utcTimeToDate : f.asn1.generalizedTimeToDate)(na.value as string).getTime();
-  if (nb.type === f.asn1.Type.GENERALIZEDTIME) c.notBefore = f.asn1.generalizedTimeToDate(nb.value as string).getTime();
   c.subjectDer = binary(der(fields[i + 4], f)); c.subject = dnString(fields[i + 4], f);
   const spki = fields[i + 5];
   c.spki = der(spki, f);
@@ -212,7 +211,10 @@ rt.register({
       const oids: Record<string, string> = { serverAuth: "1.3.6.1.5.5.7.3.1", clientAuth: "1.3.6.1.5.5.7.3.2", codeSigning: "1.3.6.1.5.5.7.3.3", emailProtection: "1.3.6.1.5.5.7.3.4", timeStamping: "1.3.6.1.5.5.7.3.8" };
       return newArrayList(Object.keys(oids).filter((k) => e[k]).map((k) => oids[k]));
     },
-    "getCriticalExtensionOIDs()Ljava/util/Set;": function (this: JX509) { return vcall(rt.link("java/util/HashSet").ctor, "<init>", "()V"); },
+    // null only when the certificate carries no extensions at all, as Conscrypt answers
+    "getCriticalExtensionOIDs()Ljava/util/Set;": function (this: JX509) {
+      return this.exts.length ? newStringSet(this.exts.filter((e) => e.critical).map((e) => e.id as string)) : null;
+    },
     "hasUnsupportedCriticalExtension()Z": () => 0,
     "verify(Ljava/security/PublicKey;)V": driven(function* (this: JX509, key: JRsaPublicKey | JX509Key): Gen {
       const issuer = new JX509(); issuer.spki = key.encoded; issuer.keyOid = key instanceof JRsaPublicKey ? RSA_OID : EC_OID;
@@ -268,12 +270,14 @@ rt.register({
     "getTrustManagers()[Ljavax/net/ssl/TrustManager;": () => jarray([rt.make("webdroid/X509TM")], "Ljavax/net/ssl/TrustManager;"),
   },
 });
+/** the verified path of a server chain, as the List the checkServerTrusted overloads return */
+const trustedPath = driven(function* (chain: unknown[]): Gen { return newArrayList(yield verifyChain(chainOf(chain))); });
 rt.register({
   name: "webdroid/X509TM", ctor: class extends JObj {}, ifaces: ["javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager"],
   methods: {
     "checkClientTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V": () => {},
     "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;)V": driven(function* (chain: unknown[]): Gen { yield verifyChain(chainOf(chain)); }),
-    "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;Ljava/lang/String;)Ljava/util/List;": driven(function* (chain: unknown[]): Gen { return newArrayList(yield verifyChain(chainOf(chain))); }),
+    "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;Ljava/lang/String;)Ljava/util/List;": trustedPath,
     "getAcceptedIssuers()[Ljava/security/cert/X509Certificate;": acceptedIssuers,
   },
 });
@@ -282,18 +286,19 @@ rt.register({
   methods: {
     "<init>(Ljavax/net/ssl/X509TrustManager;)V": function (this: { tm: unknown }, tm: unknown) { this.tm = tm; },
     // the platform verifier walks the chain; hostname and pins are the caller's (Cronet checks both natively)
-    "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;Ljava/lang/String;)Ljava/util/List;": driven(function* (chain: unknown[]): Gen { return newArrayList(yield verifyChain(chainOf(chain))); }),
-    "checkServerTrusted([Ljava/security/cert/X509Certificate;[B[BLjava/lang/String;Ljava/lang/String;)Ljava/util/List;": driven(function* (chain: unknown[]): Gen { return newArrayList(yield verifyChain(chainOf(chain))); }),
+    "checkServerTrusted([Ljava/security/cert/X509Certificate;Ljava/lang/String;Ljava/lang/String;)Ljava/util/List;": trustedPath,
+    "checkServerTrusted([Ljava/security/cert/X509Certificate;[B[BLjava/lang/String;Ljava/lang/String;)Ljava/util/List;": trustedPath,
     "isUserAddedCertificate(Ljava/security/cert/X509Certificate;)Z": () => 0,
     "isSameTrustConfiguration(Ljava/lang/String;Ljava/lang/String;)Z": () => 1,
   },
 });
+const hasSystemCa = driven(function* (a: string): Gen { return (yield systemCaEntries()).has(a) ? 1 : 0; });
 /** the AndroidCAStore KeyStore's view: every anchor under its system: alias */
 export const caStoreMethods = {
   "aliases()Ljava/util/Enumeration;": driven(function* (): Gen { return mkIter([...(yield systemCaEntries()).keys()]); }),
   "size()I": driven(function* (): Gen { return (yield systemCaEntries()).size; }),
-  "containsAlias(Ljava/lang/String;)Z": driven(function* (a: string): Gen { return (yield systemCaEntries()).has(a) ? 1 : 0; }),
-  "isCertificateEntry(Ljava/lang/String;)Z": driven(function* (a: string): Gen { return (yield systemCaEntries()).has(a) ? 1 : 0; }),
+  "containsAlias(Ljava/lang/String;)Z": hasSystemCa,
+  "isCertificateEntry(Ljava/lang/String;)Z": hasSystemCa,
   "isKeyEntry(Ljava/lang/String;)Z": () => 0,
   "getCertificate(Ljava/lang/String;)Ljava/security/cert/Certificate;": driven(function* (a: string): Gen { return (yield systemCaEntries()).get(a) ?? null; }),
   "getCertificateAlias(Ljava/security/cert/Certificate;)Ljava/lang/String;": driven(function* (c: JX509): Gen {

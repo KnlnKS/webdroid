@@ -1,6 +1,5 @@
 // System services and binder-ish plumbing: UserManager/UserHandle, FileObserver,
-// and the callback/marker interfaces apps implement (ServiceConnection, IInterface,
-// Parcelable$ClassLoaderCreator).
+// and the callback/marker interfaces apps implement (ServiceConnection, IInterface).
 
 import { rt, JObj, stubs, noops } from "../jvm/runtime";
 import { newArrayList } from "../jvm/natives/jutil";
@@ -108,4 +107,3 @@ rt.register({ name: "android/content/ServiceConnection", ctor: class extends JOb
   "onBindingDied(Landroid/content/ComponentName;)V": () => {},
 } });
 rt.markers("android/os/IInterface");
-rt.register({ name: "android/os/Parcelable$ClassLoaderCreator", ctor: class extends JObj {}, ifaces: ["android/os/Parcelable$Creator"] });

@@ -1,4 +1,3 @@
-// A split install (.xapk, .apks, an App Bundle's output) is a zip of apks rather than an apk.
 // Shared by the shell, the dev server's /asset route and the bun scripts, so an xapk is an apk
 // everywhere or nowhere.
 

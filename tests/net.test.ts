@@ -205,14 +205,6 @@ describe("localsocket", () => {
     const late = await newObj("android/net/LocalSocket");
     await expect(vcallAsync(late, "connect", "(Landroid/net/LocalSocketAddress;)V", await newObj("android/net/LocalSocketAddress", "(Ljava/lang/String;)V", "wd.test.sock"))).rejects.toMatchObject({ constructor: rt.link("java/io/IOException").ctor });
   });
-
-  test("collections are instances of their abstract supers", async () => {
-    expect(rt.iof(await newObj("java/util/HashSet"), "java/util/AbstractCollection")).toBe(1);
-    expect(rt.iof(await newObj("java/util/HashSet"), "java/util/AbstractSet")).toBe(1);
-    expect(rt.iof(await newObj("java/util/ArrayList"), "java/util/AbstractList")).toBe(1);
-    expect(rt.iof(await newObj("java/util/HashMap"), "java/util/AbstractMap")).toBe(1);
-    expect(rt.iof(await newObj("java/util/Stack"), "java/util/Vector")).toBe(1);
-  });
 });
 
 describe("network-request", () => {

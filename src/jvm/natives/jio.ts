@@ -1,7 +1,8 @@
 // java.io.* natives and the VFS shared with native file descriptors.
 
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
-import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i8, u8 } from "../abi";
+import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i8, u8, decodeModifiedUtf8 } from "../abi";
+import { encodeModifiedUtf8 } from "../charset";
 import { vcall, vcallOn, curThread, after, stringHash, stringCompare, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
 import { csText } from "./jchars";
 import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
@@ -21,7 +22,7 @@ const openFiles = new Map<string, VfsFile>();
 const volatileFiles = new Set<string>();
 const procBytes = (path: string): Uint8Array | null => {
   const text = procText(path);
-  return text === null ? null : new TextEncoder().encode(text);
+  return text === null ? null : utf8.enc.encode(text);
 };
 export const vfs = {
   files: new Map<string, Uint8Array>(),
@@ -85,9 +86,6 @@ export const vfs = {
     const path = this.norm(p);
     this.delete(path, false);
     this.lazyFiles.set(path, source);
-  },
-  lazy() {
-    return [...this.lazyFiles].map(([path, source]) => ({ path, size: source.size, ...source.stats?.() }));
   },
   under(p: string): boolean {
     if (this.dirs.has(p)) return true;
@@ -158,6 +156,12 @@ function createTempFile(prefix: string, suffix: string | null, dir: JFile | null
     if (!vfs.exists(f.path)) { vfs.write(f.path, new Uint8Array(0)); return f; }
   }
 }
+function filePath(this: JFile) { return this.path; }
+function sameFile(this: JFile) { return this; }
+function makeDirs(this: JFile) { vfs.mkdir(this.path); return 1; }
+const markUnsupported = (): never => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); };
+/** the mark/reset trio of a stream that cannot rewind */
+export const noMark = { "markSupported()Z": () => 0, "mark(I)V": () => {}, "reset()V": markUnsupported };
 rt.register({
   name: "java/io/File", ctor: JFile,
   ifaces: ["java/io/Serializable", "java/lang/Comparable"],
@@ -166,9 +170,9 @@ rt.register({
     "<init>(Ljava/lang/String;)V": function (this: JFile, p: string) { this.path = vfs.norm(p); },
     "<init>(Ljava/lang/String;Ljava/lang/String;)V": function (this: JFile, d: string, n: string) { this.path = vfs.norm(d + "/" + n); },
     "<init>(Ljava/io/File;Ljava/lang/String;)V": function (this: JFile, d: JFile, n: string) { this.path = vfs.norm((d?.path ?? "") + "/" + n); },
-    "getPath()Ljava/lang/String;": function (this: JFile) { return this.path; },
-    "getAbsolutePath()Ljava/lang/String;": function (this: JFile) { return this.path; },
-    "getCanonicalPath()Ljava/lang/String;": function (this: JFile) { return this.path; },
+    "getPath()Ljava/lang/String;": filePath,
+    "getAbsolutePath()Ljava/lang/String;": filePath,
+    "getCanonicalPath()Ljava/lang/String;": filePath,
     "toURI()Ljava/net/URI;": function (this: JFile) {
       let path = this.path.startsWith("/") ? this.path : "/" + this.path;
       if (vfs.isDir(this.path) && !path.endsWith("/")) path += "/";
@@ -185,16 +189,16 @@ rt.register({
       const i = this.path.lastIndexOf("/");
       return i <= 0 ? null : mkFile(this.path.slice(0, i));
     },
-    "getAbsoluteFile()Ljava/io/File;": function (this: JFile) { return this; },
-    "getCanonicalFile()Ljava/io/File;": function (this: JFile) { return this; },
+    "getAbsoluteFile()Ljava/io/File;": sameFile,
+    "getCanonicalFile()Ljava/io/File;": sameFile,
     "exists()Z": function (this: JFile) { return vfs.exists(this.path) ? 1 : 0; },
     "isDirectory()Z": function (this: JFile) { return vfs.isDir(this.path) ? 1 : 0; },
     "isFile()Z": function (this: JFile) { return vfs.stat(this.path) ? 1 : 0; },
     "length()J": function (this: JFile) { return BigInt(vfs.stat(this.path)?.size ?? 0); },
     "lastModified()J": function () { return BigInt(Date.now()); },
     "setLastModified(J)Z": () => 1,
-    "mkdir()Z": function (this: JFile) { vfs.mkdir(this.path); return 1; },
-    "mkdirs()Z": function (this: JFile) { vfs.mkdir(this.path); return 1; },
+    "mkdir()Z": makeDirs,
+    "mkdirs()Z": makeDirs,
     "createNewFile()Z": function (this: JFile) {
       if (vfs.exists(this.path)) return 0;
       vfs.write(this.path, new Uint8Array(0));
@@ -222,7 +226,6 @@ rt.register({
       for (const c of listFiles(this)) if (f === null || (yield vcall(f, "accept", "(Ljava/io/File;)Z", c))) out.push(c);
       return jarray(out, "Ljava/io/File;");
     }),
-    // the filtered forms return null for a non-directory, as the unfiltered ones should too
     "list(Ljava/io/FilenameFilter;)[Ljava/lang/String;": driven(function* (this: JFile, f: unknown): Gen {
       const out: string[] = [];
       for (const n of vfs.list(this.path)) if (!f || (yield vcall(f, "accept", "(Ljava/io/File;Ljava/lang/String;)Z", this, n))) out.push(n);
@@ -232,7 +235,7 @@ rt.register({
     "setReadOnly()Z": () => 1,
     "setReadable(Z)Z": () => 1, "setWritable(Z)Z": () => 1, "setExecutable(Z)Z": () => 1,
     "setReadable(ZZ)Z": () => 1, "setWritable(ZZ)Z": () => 1, "setExecutable(ZZ)Z": () => 1,
-    "toString()Ljava/lang/String;": function (this: JFile) { return this.path; },
+    "toString()Ljava/lang/String;": filePath,
     "compareTo(Ljava/io/File;)I": compareFile,
     "compareTo(Ljava/lang/Object;)I": compareFile,
     "equals(Ljava/lang/Object;)Z": function (this: JFile, o: unknown) { return o instanceof JFile && o.path === this.path ? 1 : 0; },
@@ -429,9 +432,7 @@ rt.register({
       const before = this.pos, next = checkedFdResult(javaSeekFd(this.fd.fd, Number(n), 1));
       return BigInt(next - before);
     },
-    "markSupported()Z": () => 0,
-    "mark(I)V": () => {},
-    "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+    ...noMark,
     "close()V": function (this: JFileInputStream) {
       if (closedFiles.has(this)) return;
       closeFile(this);
@@ -513,7 +514,7 @@ rt.register({
     }),
     "readUTF()Ljava/lang/String;": driven(function* (this: JInputStream): Gen {
       const head = yield dataBytes(this, 2);
-      return utf8.dec.decode(yield dataBytes(this, (head[0] << 8) | head[1]));
+      return decodeModifiedUtf8(yield dataBytes(this, (head[0] << 8) | head[1]));
     }),
   },
 });
@@ -861,18 +862,16 @@ function rafRead(f: JRAF, b: Int8Array, off: number, len: number): number | Prom
   rafRefresh(f);
   if (len === 0) return 0;
   if (f.source) {
-    const value = f.source.read(f.pos, len);
-    const done = (bytes: Uint8Array) => {
+    return after(f.source.read(f.pos, len), (bytes: Uint8Array) => {
       if (!bytes.length) return -1;
       b.set(i8(bytes), off);
       f.pos += bytes.length;
       return bytes.length;
-    };
-    return value instanceof Promise ? value.then(done) : done(value);
+    });
   }
   const n = Math.min(len, f.buf.length - f.pos);
   if (n <= 0) return -1;
-  b.set(f.buf.subarray(f.pos, f.pos + n) as unknown as Int8Array, off);
+  b.set(i8(f.buf, f.pos, n), off);
   f.pos += n;
   return n;
 }
@@ -893,18 +892,20 @@ function rafWrite(f: JRAF, b: Int8Array, off: number, len: number) {
   vfs.write(f.path, f.buf);
 }
 
-// serialPersistentFields is a static array a serializable class declares; nothing here
-// serializes, but the <clinit> that builds the array has to be able to construct one.
+// serialPersistentFields is a static array a serializable class declares; serialization does not
+// consult it, but the <clinit> that builds the array has to be able to construct one.
 rt.markers("java/io/ObjectStreamClass");
 class JObjectStreamField extends JObj { fname = ""; ftype: unknown = null; }
+function initStreamField(this: JObjectStreamField, n: string, t: unknown) { this.fname = n; this.ftype = t; }
+function streamFieldName(this: JObjectStreamField) { return this.fname; }
 rt.register({
   name: "java/io/ObjectStreamField", ctor: JObjectStreamField, ifaces: ["java/lang/Comparable"],
   methods: {
-    "<init>(Ljava/lang/String;Ljava/lang/Class;)V": function (this: JObjectStreamField, n: string, t: unknown) { this.fname = n; this.ftype = t; },
-    "<init>(Ljava/lang/String;Ljava/lang/Class;Z)V": function (this: JObjectStreamField, n: string, t: unknown) { this.fname = n; this.ftype = t; },
-    "getName()Ljava/lang/String;": function (this: JObjectStreamField) { return this.fname; },
+    "<init>(Ljava/lang/String;Ljava/lang/Class;)V": initStreamField,
+    "<init>(Ljava/lang/String;Ljava/lang/Class;Z)V": initStreamField,
+    "getName()Ljava/lang/String;": streamFieldName,
     "getType()Ljava/lang/Class;": function (this: JObjectStreamField) { return this.ftype; },
-    "toString()Ljava/lang/String;": function (this: JObjectStreamField) { return this.fname; },
+    "toString()Ljava/lang/String;": streamFieldName,
   },
 });
 
@@ -959,9 +960,7 @@ rt.register({ name: "java/io/SequenceInputStream", ctor: JSequenceInputStream, s
   }),
   "available()I": function (this: JSequenceInputStream) { return this.current ? vcall(this.current, "available", "()I") : 0; },
   "close()V": driven(function* (this: JSequenceInputStream): Gen { while (this.current) yield this.advance(); }),
-  "markSupported()Z": () => 0,
-  "mark(I)V": () => {},
-  "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+  ...noMark,
   "skip(J)J": skipStream,
 } });
 
@@ -1038,9 +1037,7 @@ rt.register({
       this.ppos += own;
       return BigInt(own) < n ? after(vcall(this.in_, "skip", "(J)J", n - BigInt(own)), (m: bigint) => BigInt(own) + m) : BigInt(own);
     },
-    "markSupported()Z": () => 0,
-    "mark(I)V": () => {},
-    "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+    ...noMark,
     "close()V": function (this: JPushbackIn) {
       if (!this.in_) return;
       const s = this.in_;
@@ -1306,8 +1303,7 @@ rt.register({
     "<init>(Ljava/io/InputStream;Ljava/nio/charset/Charset;)V": decodeStream,
   },
 });
-// FileReader is an InputStreamReader over a file: the file's bytes, decoded, in one go —
-// the same shape openRead gives FileInputStream.
+// FileReader is an InputStreamReader over a file: the file's bytes, decoded, in one go.
 const openReader = function (this: JReader, p: string) {
   const d = vfs.read(p);
   if (!d) throw rt.mkThrowable("java/io/FileNotFoundException", p);
@@ -1409,8 +1405,8 @@ rt.register({
       return BigInt(buffered) === count ? count : after(vcall(input, "skip", "(J)J", count - BigInt(buffered)), (n: bigint) => BigInt(buffered) + n);
     },
     "markSupported()Z": () => 0,
-    "mark(I)V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
-    "reset()V": () => { throw rt.mkThrowable("java/io/IOException", "mark/reset not supported"); },
+    "mark(I)V": markUnsupported,
+    "reset()V": markUnsupported,
     "close()V": function (this: JPushbackReader) { this.push.length = 0; const input = this.in; this.in = null; return input ? vcall(input, "close", "()V") : undefined; },
   },
 });
@@ -1510,12 +1506,13 @@ rt.register({
     "writeTo(Ljava/io/Writer;)V": function (this: JWriter, out: unknown) { return wr(out, this.s); },
   },
 });
+function initBufferedWriter(this: { target: JWriter | null }, w: JWriter) { this.target = w; }
 rt.register({
   name: "java/io/BufferedWriter", ctor: class extends JWriter { target: JWriter | null = null; }, sup: "java/io/Writer",
   methods: {
     ...nativeWriterRanges,
-    "<init>(Ljava/io/Writer;)V": function (this: any, w: JWriter) { this.target = w; },
-    "<init>(Ljava/io/Writer;I)V": function (this: any, w: JWriter) { this.target = w; },
+    "<init>(Ljava/io/Writer;)V": initBufferedWriter,
+    "<init>(Ljava/io/Writer;I)V": initBufferedWriter,
     "write(Ljava/lang/String;)V": function (this: any, str: string) { return wr(this.target, str); },
     "newLine()V": function (this: any) { return wr(this.target, "\n"); },
     "flush()V": function (this: any) { return vcall(this.target, "flush", "()V"); },
@@ -1610,7 +1607,9 @@ rt.register({
     },
     ...writers((n, put) => function (this: JDataOut, x: never) { const b = new Int8Array(n); put(new DataView(b.buffer), x); return emit(this, b, 0, n); }),
     "writeUTF(Ljava/lang/String;)V": function (this: JDataOut, s: string) {
-      const b = utf8.enc.encode(s), out = new Int8Array(b.length + 2);
+      const b = encodeModifiedUtf8(s);
+      if (b.length > 65535) throw rt.mkThrowable("java/io/UTFDataFormatException", "encoded string too long: " + b.length + " bytes");
+      const out = new Int8Array(b.length + 2);
       out[0] = b.length >>> 8; out[1] = b.length; out.set(b, 2);
       return emit(this, out, 0, out.length);
     },
@@ -1767,11 +1766,9 @@ defineException("java/nio/channels/ClosedChannelException", "java/io/IOException
 defineException("java/nio/channels/NonReadableChannelException", "java/lang/IllegalStateException");
 defineException("java/nio/channels/NonWritableChannelException", "java/lang/IllegalStateException");
 defineException("java/nio/file/FileSystemNotFoundException", "java/lang/RuntimeException");
-defineException("java/nio/file/NoSuchFileException", "java/io/IOException");
-defineException("java/nio/file/FileAlreadyExistsException", "java/io/IOException");
 defineException("java/nio/file/DirectoryNotEmptyException", "java/io/IOException");
 
-// ── java.nio.file minimal (datastore atomic-write path)
+// ── java.nio.file over the vfs
 class JNioPath extends JObj { p = ""; }
 class JNioFileSystem extends JObj {}
 class JNioFileSystemProvider extends JObj {}
@@ -1802,11 +1799,11 @@ rt.register({
   },
 });
 rt.markers("java/nio/file/CopyOption", "java/nio/file/OpenOption", "java/nio/file/attribute/FileAttribute", "java/nio/file/attribute/FileAttributeView");
+const joinPath = (first: string, more: string[] | null) => mkPath(vfs.norm([first, ...(more ?? [])].join("/")));
 rt.register({
   name: "java/nio/file/Paths", ctor: class extends JObj {},
   methods: {
-    "static get(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;": (first: string, more: string[] | null) =>
-      mkPath(vfs.norm([first, ...(more ?? [])].join("/"))),
+    "static get(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;": joinPath,
   },
 });
 rt.register({
@@ -1816,7 +1813,7 @@ rt.register({
     "isOpen()Z": () => 1,
     "isReadOnly()Z": () => 0,
     "getSeparator()Ljava/lang/String;": () => "/",
-    "getPath(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;": (first: string, more: string[] | null) => mkPath(vfs.norm([first, ...(more ?? [])].join("/"))),
+    "getPath(Ljava/lang/String;[Ljava/lang/String;)Ljava/nio/file/Path;": joinPath,
     "close()V": () => {},
   },
 });
@@ -1825,6 +1822,14 @@ const replaceExisting = (options: unknown[] | null) => (options ?? []).some((opt
 function requireNioFile(path: JNioPath): void {
   if (!vfs.exists(path.p)) throw rt.mkThrowable("java/nio/file/NoSuchFileException", path.p);
 }
+/** remove an existing file, or a directory only when empty */
+function removeNioEntry(path: JNioPath): void {
+  if (vfs.isDir(path.p)) {
+    if (vfs.list(path.p).length) throw rt.mkThrowable("java/nio/file/DirectoryNotEmptyException", path.p);
+    vfs.rmdir(path.p);
+  } else vfs.delete(path.p);
+}
+const basicAttrs = (path: string) => Object.assign(new JBasicAttrs(), { sz: vfs.stat(path)?.size ?? 0, dir: vfs.isDir(path) });
 rt.register({
   name: "java/nio/file/spi/FileSystemProvider", ctor: JNioFileSystemProvider,
   methods: {
@@ -1843,19 +1848,10 @@ rt.register({
       if (vfs.exists(path.p)) throw rt.mkThrowable("java/nio/file/FileAlreadyExistsException", path.p);
       vfs.mkdir(path.p);
     },
-    "delete(Ljava/nio/file/Path;)V": (path: JNioPath) => {
-      requireNioFile(path);
-      if (vfs.isDir(path.p)) {
-        if (vfs.list(path.p).length) throw rt.mkThrowable("java/nio/file/DirectoryNotEmptyException", path.p);
-        vfs.rmdir(path.p);
-      } else vfs.delete(path.p);
-    },
+    "delete(Ljava/nio/file/Path;)V": (path: JNioPath) => { requireNioFile(path); removeNioEntry(path); },
     "deleteIfExists(Ljava/nio/file/Path;)Z": (path: JNioPath) => {
       if (!vfs.exists(path.p)) return 0;
-      if (vfs.isDir(path.p)) {
-        if (vfs.list(path.p).length) throw rt.mkThrowable("java/nio/file/DirectoryNotEmptyException", path.p);
-        vfs.rmdir(path.p);
-      } else vfs.delete(path.p);
+      removeNioEntry(path);
       return 1;
     },
     "copy(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)V": driven(function* (source: JNioPath, target: JNioPath, options: unknown[] | null): Gen {
@@ -1872,7 +1868,7 @@ rt.register({
     "getFileAttributeView(Ljava/nio/file/Path;Ljava/lang/Class;[Ljava/nio/file/LinkOption;)Ljava/nio/file/attribute/FileAttributeView;": () => null,
     "readAttributes(Ljava/nio/file/Path;Ljava/lang/Class;[Ljava/nio/file/LinkOption;)Ljava/nio/file/attribute/BasicFileAttributes;": (path: JNioPath) => {
       requireNioFile(path);
-      return Object.assign(new JBasicAttrs(), { sz: vfs.stat(path.p)?.size ?? 0, dir: vfs.isDir(path.p) });
+      return basicAttrs(path.p);
     },
   },
 });
@@ -1881,10 +1877,6 @@ rt.register({
   rt.register({
     name: "java/nio/file/StandardCopyOption", ctor: class extends JObj {}, sup: "java/lang/Enum",
     statics: { REPLACE_EXISTING: opt("REPLACE_EXISTING"), ATOMIC_MOVE: opt("ATOMIC_MOVE"), COPY_ATTRIBUTES: opt("COPY_ATTRIBUTES") },
-  });
-  rt.register({
-    name: "java/nio/file/StandardOpenOption", ctor: class extends JObj {}, sup: "java/lang/Enum", ifaces: ["java/nio/file/OpenOption"],
-    statics: { READ: opt("READ"), WRITE: opt("WRITE"), APPEND: opt("APPEND"), TRUNCATE_EXISTING: opt("TRUNCATE_EXISTING"), CREATE: opt("CREATE"), CREATE_NEW: opt("CREATE_NEW") },
   });
 }
 mkEnumSet("java/nio/file/StandardOpenOption", ["READ", "WRITE", "APPEND", "TRUNCATE_EXISTING", "CREATE", "CREATE_NEW", "DELETE_ON_CLOSE", "SPARSE", "SYNC", "DSYNC"], {}, ["java/nio/file/OpenOption"]);
@@ -1912,12 +1904,7 @@ rt.register({
     "static deleteIfExists(Ljava/nio/file/Path;)Z": (p: JNioPath) => (vfs.delete(p.p) ? 1 : 0),
     "static createDirectories(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;": (p: JNioPath) => { vfs.mkdir(p.p); return p; },
     "static size(Ljava/nio/file/Path;)J": (p: JNioPath) => BigInt(vfs.stat(p.p)?.size ?? 0),
-    "static readAttributes(Ljava/nio/file/Path;Ljava/lang/Class;[Ljava/nio/file/LinkOption;)Ljava/nio/file/attribute/BasicFileAttributes;": (p: JNioPath) => {
-      const a = new JBasicAttrs();
-      a.sz = vfs.stat(p.p)?.size ?? 0;
-      a.dir = vfs.isDir(p.p);
-      return a;
-    },
+    "static readAttributes(Ljava/nio/file/Path;Ljava/lang/Class;[Ljava/nio/file/LinkOption;)Ljava/nio/file/attribute/BasicFileAttributes;": (p: JNioPath) => basicAttrs(p.p),
     "static isDirectory(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z": (p: JNioPath) => (vfs.isDir(p.p) ? 1 : 0),
     "static isRegularFile(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z": (p: JNioPath) => (vfs.stat(p.p) ? 1 : 0),
     "static isSymbolicLink(Ljava/nio/file/Path;)Z": () => 0,
@@ -1974,14 +1961,14 @@ rt.register({ name: "java/nio/file/LinkOption", ctor: class extends JObj {}, sup
   statics: { NOFOLLOW_LINKS: new JObj() } });
 
 // ── java.util.Scanner: tokens and lines over a source read whole up front (a stream, a string, a file)
-class JScanner extends JObj { text = ""; pos = 0; delim = /\s+/y; }
+// delim anchors at the cursor; delimAll is the same pattern searching ahead for the token's end
+class JScanner extends JObj { text = ""; pos = 0; delim = /\s+/y; delimAll = /\s+/g; }
 function skipDelim(s: JScanner): void { s.delim.lastIndex = s.pos; const m = s.delim.exec(s.text); if (m && m.index === s.pos) s.pos += m[0].length; }
 function peekToken(s: JScanner): string | null {
   skipDelim(s);
   if (s.pos >= s.text.length) return null;
-  s.delim.lastIndex = s.pos;
-  const re = new RegExp(s.delim.source, "g"); re.lastIndex = s.pos;
-  const m = re.exec(s.text);
+  s.delimAll.lastIndex = s.pos;
+  const m = s.delimAll.exec(s.text);
   return s.text.slice(s.pos, m ? m.index : s.text.length);
 }
 function nextToken(s: JScanner): string {
@@ -2002,7 +1989,7 @@ rt.register({
       if (!b) throw rt.mkThrowable("java/io/FileNotFoundException", f.path);
       this.text = utf8.dec.decode(b);
     },
-    "useDelimiter(Ljava/lang/String;)Ljava/util/Scanner;": function (this: JScanner, p: string) { this.delim = new RegExp(p, "y"); return this; },
+    "useDelimiter(Ljava/lang/String;)Ljava/util/Scanner;": function (this: JScanner, p: string) { this.delim = new RegExp(p, "y"); this.delimAll = new RegExp(p, "g"); return this; },
     "hasNext()Z": function (this: JScanner) { return peekToken(this) !== null ? 1 : 0; },
     "next()Ljava/lang/String;": function (this: JScanner) { return nextToken(this); },
     "next()Ljava/lang/Object;": function (this: JScanner) { return nextToken(this); },

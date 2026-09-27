@@ -298,6 +298,7 @@ export class JWebView extends JViewGroup {
     else if (data.kind === "submit" && typeof data.url === "string" && typeof data.method === "string" && data.body instanceof ArrayBuffer)
       this.go({ url: data.url, src: srcFor(data.url, this), method: data.method, body: data.body,
         contentType: typeof data.contentType === "string" ? data.contentType : undefined });
+    else if (data.kind === "console") this.consoleMessage(data);
     else if (data.kind === "evaluated" && typeof data.seq === "number" && typeof data.value === "string") this.evaluations.get(data.seq)?.(data.value);
     else if (data.kind === "snapshot" && typeof data.seq === "number") {
       const pending = this.snapshots.get(data.seq);
@@ -359,6 +360,7 @@ export class JWebView extends JViewGroup {
     el.style.cssText = "position:absolute;border:0;pointer-events:auto;transform-origin:top left;transform:scale(var(--wd-web-scale,1))";
     el.hidden = true;
     (el as unknown as { __wdIfaces: unknown }).__wdIfaces = this.ifaces;
+    (el as unknown as { __wdConsole: unknown }).__wdConsole = (data: unknown) => this.consoleMessage(data);
     el.addEventListener("load", () => this.onLoad());
     layer.appendChild(el);
     return el;
@@ -452,6 +454,17 @@ export class JWebView extends JViewGroup {
       : [[this.chrome, "onProgressChanged", "(Landroid/webkit/WebView;I)V", this, 100], [this.chrome, "onReceivedTitle", WV_S, this, this.title],
          [this.client, "onPageCommitVisible", WV_S, this, url], [this.client, "onPageFinished", WV_S, this, url]];
     void onMain(async () => { for (const [o, n, d, ...a] of steps) { if (this.gen !== g) return; await vcall(o, n, d, ...a); } });
+  }
+  /** an uncaught page error, as Chromium reports it; unhandled messages go to logcat's chromium tag */
+  consoleMessage(data: unknown) {
+    const { message, source, line } = (data ?? {}) as { message?: unknown; source?: unknown; line?: unknown };
+    const m = inst<JConsoleMessage>("android/webkit/ConsoleMessage");
+    m.msg = String(message); m.src = typeof source === "string" ? unmap(source, this) : ""; m.line = typeof line === "number" ? line : 0;
+    m.level = msgLevels[3];
+    void onMain(async () => {
+      if (!await vcall(this.chrome, "onConsoleMessage", "(Landroid/webkit/ConsoleMessage;)Z", m))
+        console.log("[I/chromium]", `[INFO:CONSOLE(${m.line})] "${m.msg}", source: ${m.src} (${m.line})`);
+    });
   }
   fragmentNavigated(url: string) {
     const g = this.gen, cur = this.hist[this.idx];
@@ -581,6 +594,7 @@ function srcdoc(data: string, enc: string | null, base: string | null): string {
   return dt ? dt[0] + inject + data.slice(dt[0].length) : inject + data;
 }
 const wvCtor = async function (this: JWebView, c: unknown, set: unknown = null) { await initViewFromCtx(this, c, set as null); };
+const loadUrl = function (this: JWebView, u: string) { this.loadUrl(u); };
 rt.register({
   name: "android/webkit/WebView", ctor: JWebView, sup: "android/view/ViewGroup",
   statics: { RENDERER_PRIORITY_WAIVED: 0, RENDERER_PRIORITY_BOUND: 1, RENDERER_PRIORITY_IMPORTANT: 2, SCHEME_TEL: "tel:", SCHEME_MAILTO: "mailto:", SCHEME_GEO: "geo:0,0?q=" },
@@ -606,8 +620,8 @@ rt.register({
     // AOSP substitutes its default client for null
     "setWebViewClient(Landroid/webkit/WebViewClient;)V": function (this: JWebView, c: JObj | null) { this.client = c ?? inst("android/webkit/WebViewClient"); },
     "setWebChromeClient(Landroid/webkit/WebChromeClient;)V": function (this: JWebView, c: JObj | null) { this.chrome = c ?? inst("android/webkit/WebChromeClient"); },
-    "loadUrl(Ljava/lang/String;)V": function (this: JWebView, u: string) { this.loadUrl(u); },
-    "loadUrl(Ljava/lang/String;Ljava/util/Map;)V": function (this: JWebView, u: string) { this.loadUrl(u); },
+    "loadUrl(Ljava/lang/String;)V": loadUrl,
+    "loadUrl(Ljava/lang/String;Ljava/util/Map;)V": loadUrl,
     // AOSP: loadData navigates to the data: URL itself; loadDataWithBaseURL's entry is historyUrl (about:blank when absent)
     "loadData(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V": function (this: JWebView, data: string, mime: string | null, enc: string | null) {
       this.go({ url: `data:${mime ?? "text/html"}${/^base64$/i.test(enc ?? "") ? ";base64" : ""},${data}`, doc: srcdoc(data, enc, null) });

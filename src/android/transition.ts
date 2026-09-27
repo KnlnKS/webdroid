@@ -14,7 +14,6 @@ class JTransition extends JObj {
   interp: unknown = null;
   listeners: unknown[] = [];
   targets = newArrayList(); targetIds = newArrayList(); targetNames = newArrayList(); targetTypes = newArrayList();
-  name = "";
   epicenterCb: unknown = null; pathMotion: unknown = null; propagation: unknown = null;
 }
 class JTransitionSet extends JTransition { kids: JTransition[] = []; ordering = 0; }
@@ -54,7 +53,7 @@ const transitionMethods: NonNullable<NativeSpec["methods"]> = {
   [`excludeTarget(Ljava/lang/Class;Z)${T}`]: function (this: JTransition) { return this; },
   [`excludeChildren(Landroid/view/View;Z)${T}`]: function (this: JTransition) { return this; },
   [`excludeChildren(IZ)${T}`]: function (this: JTransition) { return this; },
-  "getName()Ljava/lang/String;": function (this: JTransition) { return this.name || (this.constructor as any).$i?.name?.replace(/\//g, ".") || "android.transition.Transition"; },
+  "getName()Ljava/lang/String;": function (this: JTransition) { return (this.constructor as any).$i?.name?.replace(/\//g, ".") || "android.transition.Transition"; },
   "getEpicenter()Landroid/graphics/Rect;": function (this: JTransition) {
     return this.epicenterCb ? vcall(this.epicenterCb, "onGetEpicenter", "(Landroid/transition/Transition;)Landroid/graphics/Rect;", this) : null;
   },
@@ -117,16 +116,14 @@ const setMethods: NonNullable<NativeSpec["methods"]> = {
   },
   "getOrdering()I": function (this: JTransitionSet) { return this.ordering; },
   [`setDuration(J)${S}`]: function (this: JTransitionSet, d: bigint) { this.durationMs = d; for (const k of this.kids) k.durationMs = d; return this; },
-  [`setStartDelay(J)${S}`]: function (this: JTransitionSet, d: bigint) { this.delayMs = d; return this; },
+  [`setStartDelay(J)${S}`]: transitionMethods[`setStartDelay(J)${T}`],
   [`setInterpolator(Landroid/animation/TimeInterpolator;)${S}`]: function (this: JTransitionSet, i: unknown) { this.interp = i; for (const k of this.kids) k.interp = i; return this; },
-  [`addListener(Landroid/transition/Transition$TransitionListener;)${S}`]: function (this: JTransitionSet, l: unknown) { return listen(this, l, true); },
-  [`removeListener(Landroid/transition/Transition$TransitionListener;)${S}`]: function (this: JTransitionSet, l: unknown) { return listen(this, l, false); },
+  // the TransitionSet-typed forms of methods that act on the set like any Transition
+  ...Object.fromEntries([
+    "addListener(Landroid/transition/Transition$TransitionListener;)", "removeListener(Landroid/transition/Transition$TransitionListener;)",
+    "addTarget(I)", "addTarget(Ljava/lang/String;)", "addTarget(Ljava/lang/Class;)", "removeTarget(Landroid/view/View;)", "removeTarget(I)",
+  ].map((m) => [m + S, transitionMethods[m + T]])),
   [`addTarget(Landroid/view/View;)${S}`]: function (this: JTransitionSet, v: unknown) { this.targets.a.push(v); for (const k of this.kids) k.targets.a.push(v); return this; },
-  [`addTarget(I)${S}`]: function (this: JTransitionSet, id: number) { this.targetIds.a.push(id); return this; },
-  [`addTarget(Ljava/lang/String;)${S}`]: function (this: JTransitionSet, n: string) { this.targetNames.a.push(n); return this; },
-  [`addTarget(Ljava/lang/Class;)${S}`]: function (this: JTransitionSet, c: unknown) { this.targetTypes.a.push(c); return this; },
-  [`removeTarget(Landroid/view/View;)${S}`]: function (this: JTransitionSet, v: unknown) { const i = this.targets.a.indexOf(v); if (i >= 0) this.targets.a.splice(i, 1); return this; },
-  [`removeTarget(I)${S}`]: function (this: JTransitionSet, id: number) { const i = this.targetIds.a.indexOf(id); if (i >= 0) this.targetIds.a.splice(i, 1); return this; },
   "clone()Landroid/transition/Transition;": function (this: JTransitionSet) {
     const c = new JTransitionSet();
     Object.assign(c, this, { listeners: [], kids: this.kids.map((k) => vcall(k, "clone", "()Landroid/transition/Transition;")) });

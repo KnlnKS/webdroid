@@ -1,10 +1,12 @@
 // java.util.regex over JS RegExp (jlang translates the Java syntax).
 
 import { rt, JObj } from "../runtime";
-import { javaMatches, javaRegex, jToString, defineException, type JSB, type JThrowable } from "./jlang";
+import { javaMatches, javaRegex, jToString, defineException, after, type JSB, type JThrowable } from "./jlang";
+import { csText } from "./jchars";
 import { jarray } from "../abi";
 
 class JPattern extends JObj { src = ""; flags = 0; }
+const groupCounts = new WeakMap<RegExp, number>();
 class JMatcher extends JObj {
   re!: RegExp;
   input = "";
@@ -19,9 +21,13 @@ class JMatcher extends JObj {
    *  for the first branch that matched a prefix */
   anchored(): RegExp { return javaRegex("(?:" + this.re.source + ")$", this.re.flags.replace(/[gy]/g, "") + "y"); }
   groupCount(): number {
-    if (this.re.source.includes("(?<__wdAtomic")) return 0;
-    // an empty alternative always matches, so the result's length counts the pattern's groups
-    return (this.m ?? new RegExp(`(?:${this.re.source})|`, this.re.flags.replace(/[gyd]/g, "")).exec("")!).length - 1;
+    let n = groupCounts.get(this.re);
+    if (n === undefined) {
+      // an empty alternative always matches, so the result's length counts the pattern's groups
+      n = this.re.source.includes("(?<__wdAtomic") ? 0 : new RegExp(`(?:${this.re.source})|`, this.re.flags.replace(/[gyd]/g, "")).exec("")!.length - 1;
+      groupCounts.set(this.re, n);
+    }
+    return n;
   }
   cur(): RegExpExecArray {
     if (!this.m) throw rt.mkThrowable("java/lang/IllegalStateException", "No match available");
@@ -209,10 +215,13 @@ rt.register({
       return this;
     },
     "reset(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;": function (this: JMatcher, s: unknown) {
-      this.input = String(s ?? "");
-      this.lastEnd = 0; this.appendPos = 0;
-      this.m = null;
-      return this;
+      return after(csText(s ?? rt.npe()), (input: string) => {
+        this.input = input;
+        this.lastEnd = 0; this.appendPos = 0;
+        this.m = null;
+        this.regionS = 0; this.regionE = -1;
+        return this;
+      });
     },
     "hitEnd()Z": () => 0,
     "useAnchoringBounds(Z)Ljava/util/regex/Matcher;": function (this: JMatcher) { return this; },

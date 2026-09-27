@@ -9,9 +9,8 @@ import { newArrayList, toJsArray } from "../jvm/natives/jutil";
 import { rt, JObj, stubs, noops, fieldGetters, fieldSetters, driven, type Gen } from "../jvm/runtime";
 import { vcall } from "../jvm/natives/jlang";
 import { mkUri } from "./net";
-import { PARCELABLE } from "./os";
+import { PARCELABLE, type JBundle } from "./os";
 import { type JParcel, parcelCreator, readInt, readString, writeInt, writeString } from "./parcel";
-import type { JBundle } from "./os";
 import type { JBitmap } from "./graphics";
 import { JBitmapDrawable } from "./drawable";
 import { preferenceStore } from "./sharedprefs";
@@ -81,10 +80,11 @@ class JRemoteViews extends JObj {
   pkg: string | null = null; layoutId = 0;
   ops: unknown[][] = [];
 }
+const initRemoteViews = function (this: JRemoteViews, p: string, l: number) { this.pkg = p; this.layoutId = l; };
 const rvMethods: Record<string, Impl> = {
   "<init>()V": function () {},
-  "<init>(Ljava/lang/String;I)V": function (this: JRemoteViews, p: string, l: number) { this.pkg = p; this.layoutId = l; },
-  "<init>(Ljava/lang/String;II)V": function (this: JRemoteViews, p: string, l: number) { this.pkg = p; this.layoutId = l; },
+  "<init>(Ljava/lang/String;I)V": initRemoteViews,
+  "<init>(Ljava/lang/String;II)V": initRemoteViews,
   "<init>(Landroid/widget/RemoteViews;Landroid/widget/RemoteViews;)V": function (this: JRemoteViews, a: JRemoteViews) { this.pkg = a?.pkg ?? null; this.layoutId = a?.layoutId ?? 0; },
   "<init>(Ljava/util/Map;)V": function () {},
   "<init>(Landroid/widget/RemoteViews;)V": function (this: JRemoteViews, a: JRemoteViews) { copyRemoteViews(this, a); },
@@ -249,6 +249,7 @@ class JNBuilder extends JObj {
   style: JNStyle | null = null;
 }
 const B = "Landroid/app/Notification$Builder;";
+const setFlag = (n: JNotification, bit: number, on: unknown) => { n.flags = on ? (n.flags as number) | bit : (n.flags as number) & ~bit; };
 function buildNotification(this: JNBuilder) {
   rt.link("android/app/Notification");
   for (const [k, v] of this.extras.map) this.n.extras.map.set(k, v);
@@ -277,9 +278,7 @@ const bMethods: Record<string, Impl> = {
   ["setStyle(Landroid/app/Notification$Style;)" + B]: function (this: JNBuilder, s: JNStyle) {
     this.style = s; if (s) s.builder = this; return this;
   },
-  ["setFlag(IZ)" + B]: function (this: JNBuilder, bit: number, on: number) {
-    this.n.flags = on ? (this.n.flags as number) | bit : (this.n.flags as number) & ~bit; return this;
-  },
+  ["setFlag(IZ)" + B]: function (this: JNBuilder, bit: number, on: number) { setFlag(this.n, bit, on); return this; },
   ["setSmallIcon(II)" + B]: function (this: JNBuilder, i: number, lvl: number) { this.n.icon = i; this.n.iconLevel = lvl; return this; },
   ["setLights(III)" + B]: function (this: JNBuilder, argb: number, on: number, off: number) {
     this.n.ledARGB = argb; this.n.ledOnMS = on; this.n.ledOffMS = off; return this;
@@ -295,7 +294,7 @@ const bMethods: Record<string, Impl> = {
   },
   ["setFullScreenIntent(Landroid/app/PendingIntent;Z)" + B]: function (this: JNBuilder, pi: unknown, hi: number) {
     this.n.fullScreenIntent = pi;
-    this.n.flags = hi ? (this.n.flags as number) | FLAG_HIGH_PRIORITY : (this.n.flags as number) & ~FLAG_HIGH_PRIORITY;
+    setFlag(this.n, FLAG_HIGH_PRIORITY, hi);
     return this;
   },
   ["setProgress(IIZ)" + B]: function (this: JNBuilder, max: number, cur: number, ind: number) {
@@ -360,9 +359,7 @@ for (const [sig, bit] of Object.entries({
   "setOngoing(Z)": FLAG_ONGOING_EVENT, "setAutoCancel(Z)": FLAG_AUTO_CANCEL,
   "setOnlyAlertOnce(Z)": FLAG_ONLY_ALERT_ONCE, "setLocalOnly(Z)": FLAG_LOCAL_ONLY,
   "setGroupSummary(Z)": FLAG_GROUP_SUMMARY,
-})) bMethods[sig + B] = function (this: JNBuilder, on: number) {
-  this.n.flags = on ? (this.n.flags as number) | bit : (this.n.flags as number) & ~bit; return this;
-};
+})) bMethods[sig + B] = function (this: JNBuilder, on: number) { setFlag(this.n, bit, on); return this; };
 // setter → the extras key AOSP records it under, which is where androidx reads it back
 for (const [sig, key] of Object.entries({
   "setContentTitle(Ljava/lang/CharSequence;)": "android.title",
@@ -392,11 +389,14 @@ rt.register({ name: "android/app/Notification$Builder", ctor: JNBuilder, methods
 // ── Notification.Style: BigTextStyle et al. exist to be handed to Builder.setStyle, and
 // their setters return the SUBCLASS, so each subclass needs its own descriptors.
 class JNStyle extends JObj { builder: JNBuilder | null = null; }
+/** AOSP's Style.setBuilder, which its Style(Builder) ctor also calls: the style is live on the
+ *  builder before any of the fluent setters run */
+const attachStyle = function (this: JNStyle, b: JNBuilder) { this.builder = b; if (b) b.style = this; };
 rt.register({
   name: "android/app/Notification$Style", ctor: JNStyle,
   methods: {
     "<init>()V": function () {},
-    "setBuilder(Landroid/app/Notification$Builder;)V": function (this: JNStyle, b: JNBuilder) { this.builder = b; if (b) b.style = this; },
+    "setBuilder(Landroid/app/Notification$Builder;)V": attachStyle,
     "build()Landroid/app/Notification;": function (this: JNStyle) { return this.builder?.n ?? null; },
   },
 });
@@ -407,9 +407,7 @@ class JNMediaStyle extends JNStyle {
 const MEDIA_STYLE = "Landroid/app/Notification$MediaStyle;";
 rt.register({ name: "android/app/Notification$MediaStyle", ctor: JNMediaStyle, sup: "android/app/Notification$Style", methods: {
   "<init>()V": function () {},
-  "<init>(Landroid/app/Notification$Builder;)V": function (this: JNMediaStyle, builder: JNBuilder) {
-    this.builder = builder; if (builder) builder.style = this;
-  },
+  "<init>(Landroid/app/Notification$Builder;)V": attachStyle,
   ["setMediaSession(Landroid/media/session/MediaSession$Token;)" + MEDIA_STYLE]: function (this: JNMediaStyle, token: unknown) {
     this.token = token; return this;
   },
@@ -428,9 +426,7 @@ for (const [name, extra] of Object.entries({
   const cls = "android/app/Notification$" + name;
   const ms: Record<string, Impl> = {
     "<init>()V": function () {},
-    // AOSP's Style(Builder) ctor calls setBuilder, so the style is live on the builder
-    // before any of the fluent setters run.
-    "<init>(Landroid/app/Notification$Builder;)V": function (this: JNStyle, b: JNBuilder) { this.builder = b; if (b) b.style = this; },
+    "<init>(Landroid/app/Notification$Builder;)V": attachStyle,
   };
   self(ms, ["setBigContentTitle(Ljava/lang/CharSequence;)", "setSummaryText(Ljava/lang/CharSequence;)", ...extra], "L" + cls + ";");
   rt.register({ name: cls, ctor: class extends JNStyle {}, sup: "android/app/Notification$Style", methods: ms });

@@ -7,7 +7,8 @@ import { rt, JObj, type NativeSpec, stubs, noops, driven, type Gen } from "../jv
 import { mangleMethod, charsToString, intBitsToFloat, u8 } from "../jvm/abi";
 import { device } from "../shell/config";
 import { handle } from "./handles";
-import { vcall, newObj, mkEnumSet, JSimpleEnum, linkInit, stringHash } from "../jvm/natives/jlang";
+import { vcall, newObj, mkEnumSet, JSimpleEnum, linkInit, stringHash, after } from "../jvm/natives/jlang";
+import { csText } from "../jvm/natives/jchars";
 import { type JLocale, localeTag, usLocale } from "../jvm/natives/jvalues";
 import type { JLocaleList } from "./resnative";
 import { readStreamFully, vfs, type JFileDescriptor } from "../jvm/natives/jio";
@@ -364,7 +365,6 @@ export class JPaint extends JObj {
   tf: JTypeface = tfDefault;
   antiAlias = true;
   textAlignN = 0; // 0 left, 1 center, 2 right
-  shader: CanvasGradient | CanvasPattern | null = null;
   shaderObj: JShader | null = null;
   maskFilter: JBlurMaskFilter | null = null;
   strokeCapN: CanvasLineCap = "butt";
@@ -378,14 +378,14 @@ export class JPaint extends JObj {
   xfermode: JObj | null = null;      // kept only so getXfermode() round-trips
   blendMode: JSimpleEnum | null = null;
   compositeOp(): GlobalCompositeOperation | null {
-    if (this.blend === "source-in" && !this.shader && !this.shaderObj &&
+    if (this.blend === "source-in" && !this.shaderObj &&
       this.filterColor === null && !this.filterMatrix && (this.renderAlpha ?? this.color >>> 24) === 255)
       return "source-atop";
     return this.blend;
   }
   transparentSourceIn(): boolean {
     return this.blend === "source-in" && (this.renderAlpha ?? this.color >>> 24) === 0 &&
-      !this.shader && !this.shaderObj && this.filterColor === null && !this.filterMatrix;
+      !this.shaderObj && this.filterColor === null && !this.filterMatrix;
   }
   letterSpacingEm = 0;
   textScaleX = 1;
@@ -420,9 +420,8 @@ export class JPaint extends JObj {
     return (this.fCache = `${it}${w} ${this.textSize}px ${family.replace(/, sans-serif$/, "")}, ${EMOJI_FALLBACK}, sans-serif`);
   }
   fillStyle(ctx?: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): string | CanvasGradient | CanvasPattern {
-    const pattern = ctx && this.shaderObj?.pattern(ctx);
+    const shader = this.shaderObj, pattern = shader && (ctx && shader.pattern(ctx) || shader.grad);
     if (pattern) return pattern;
-    if (this.shader) return this.shader;
     const f = this.filterColor;
     const color = this.renderAlpha === null ? this.color : (this.renderAlpha << 24) | (this.color & 0xffffff);
     if (this.filterMatrix) return cssColor(matrixColor(this.filterMatrix, color));
@@ -450,7 +449,7 @@ const paintMethods: NativeSpec["methods"] = {
       return runAdvances(this, charsToString(chars, 0, chars.length), start, end, offset, advances, advIdx);
     },
   "<init>(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { if (o) copyPaint(o, this); },
-  "reset()V": function (this: JPaint) { resetPaint(this); },
+  "reset()V": function (this: JPaint) { copyPaint(defaultPaint, this); },
   "setShadowLayer(FFFI)V": function (this: JPaint, radius: number, dx: number, dy: number, color: number) {
     this.shadowRadius = radius; this.shadowDx = dx; this.shadowDy = dy; this.shadowColor = color;
   },
@@ -462,8 +461,8 @@ const paintMethods: NativeSpec["methods"] = {
   "getShadowLayerColor()I": function (this: JPaint) { return this.shadowColor; },
   "set(Landroid/graphics/Paint;)V": function (this: JPaint, o: JPaint) { copyPaint(o, this); },
   "setColor(I)V": function (this: JPaint, c: number) { this.setColorValue(c); },
-  "setColor(J)V": function (this: JPaint, c: bigint) { this.setColorValue(Number(BigInt.asIntN(32, c >> 32n))); },
-  "getColorLong()J": function (this: JPaint) { return BigInt(this.color >>> 0) << 32n; },
+  "setColor(J)V": function (this: JPaint, c: bigint) { this.setColorValue(argbOfColorLong(c)); },
+  "getColorLong()J": function (this: JPaint) { return colorLongOfArgb(this.color); },
   "getTextLocale()Ljava/util/Locale;": function (this: JPaint) { return this.locales?.values[0] ?? usLocale; },
   "getTextLocales()Landroid/os/LocaleList;": driven(function* (this: JPaint): Gen { return this.locales ??= yield vcall((yield linkInit("android/os/LocaleList")).ctor, "getDefault", "()Landroid/os/LocaleList;"); }),
   "setTextLocale(Ljava/util/Locale;)V": function (this: JPaint, locale: JLocale) {
@@ -509,7 +508,6 @@ const paintMethods: NativeSpec["methods"] = {
   "getStrokeCap()Landroid/graphics/Paint$Cap;": function (this: JPaint) { return paintCapEnum[CAPS.indexOf(this.strokeCapN)]; },
   "getStrokeJoin()Landroid/graphics/Paint$Join;": function (this: JPaint) { return paintJoinEnum[JOINS.indexOf(this.strokeJoinN)]; },
   "setShader(Landroid/graphics/Shader;)Landroid/graphics/Shader;": function (this: JPaint, s: JShader | null) {
-    this.shader = s?.grad ?? null;
     this.shaderObj = s ?? null;
     return s;
   },
@@ -555,7 +553,7 @@ const paintMethods: NativeSpec["methods"] = {
   ...stubs(null, "getPathEffect()Landroid/graphics/PathEffect;"),
   "measureText(Ljava/lang/String;)F": function (this: JPaint, s: string) { return measureText(this, s ?? ""); },
   "measureText(Ljava/lang/CharSequence;II)F": function (this: JPaint, s: unknown, a: number, b: number) {
-    return measureText(this, String(s).slice(a, b));
+    return after(csText(s), (text) => measureText(this, text.slice(a, b)));
   },
   "measureText(Ljava/lang/String;II)F": function (this: JPaint, s: string, a: number, b: number) {
     return measureText(this, s.slice(a, b));
@@ -564,8 +562,7 @@ const paintMethods: NativeSpec["methods"] = {
     return measureText(this, charsToString(c, off, n));
   },
   "getTextBounds(Ljava/lang/CharSequence;IILandroid/graphics/Rect;)V": function (this: JPaint, cs: unknown, a: number, b: number, r: JRect) {
-    const str = typeof cs === "string" ? cs : ((cs as { text?: string })?.text ?? String(cs ?? ""));
-    return vcall(this, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", str, a, b, r);
+    return after(csText(cs), (str) => vcall(this, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", str, a, b, r));
   },
   "getTextBounds([CIILandroid/graphics/Rect;)V": function (this: JPaint, chars: Uint16Array, offset: number, count: number, rect: JRect) {
     return vcall(this, "getTextBounds", "(Ljava/lang/String;IILandroid/graphics/Rect;)V", charsToString(chars, offset, count), 0, count, rect);
@@ -614,20 +611,8 @@ const paintMethods: NativeSpec["methods"] = {
     return i;
   },
 };
-function resetPaint(paint: JPaint): void {
-  paint.color = -16777216; paint.renderAlpha = null; paint.style = 0; paint.strokeWidth = 0;
-  paint.textSize = 12; paint.tf = tfDefault; paint.antiAlias = true;
-  paint.textAlignN = 0; paint.shader = null; paint.shaderObj = null; paint.maskFilter = null;
-  paint.strokeCapN = "butt"; paint.strokeJoinN = "miter"; paint.dash = null;
-  paint.filterColor = null; paint.filterMatrix = null; paint.filterObj = null;
-  paint.blend = null; paint.xfermode = null; paint.blendMode = null;
-  paint.letterSpacingEm = 0; paint.textScaleX = 1; paint.textSkewX = 0;
-  paint.fontFeatureSettings = null;
-  paint.fontVariationSettings = null;
-  paint.underline = false; paint.strikeThru = false; paint.fakeBold = false;
-  paint.shadowRadius = paint.shadowDx = paint.shadowDy = paint.shadowColor = 0;
-  paint.locales = null; paint.language = localeTag(usLocale);
-}
+/** a Paint as constructed; read-only, the source for reset() and the null bitmap paint */
+const defaultPaint = new JPaint();
 export function beginPaintShadow(ctx: JCanvas["ctx"], p: JPaint): boolean {
   if (!(p.shadowRadius > 0) || !(p.shadowColor >>> 24)) return false;
   const m = ctx.getTransform();
@@ -641,7 +626,7 @@ export function beginPaintShadow(ctx: JCanvas["ctx"], p: JPaint): boolean {
 export function copyPaint(src: JPaint, dst: JPaint) {
   dst.color = src.color; dst.renderAlpha = src.renderAlpha; dst.style = src.style; dst.strokeWidth = src.strokeWidth;
   dst.textSize = src.textSize; dst.tf = src.tf; dst.antiAlias = src.antiAlias;
-  dst.textAlignN = src.textAlignN; dst.shader = src.shader; dst.shaderObj = src.shaderObj; dst.dash = src.dash;
+  dst.textAlignN = src.textAlignN; dst.shaderObj = src.shaderObj; dst.dash = src.dash;
   dst.maskFilter = src.maskFilter; dst.strokeCapN = src.strokeCapN; dst.strokeJoinN = src.strokeJoinN;
   dst.filterColor = src.filterColor; dst.filterMatrix = src.filterMatrix; dst.filterObj = src.filterObj;
   dst.underline = src.underline; dst.strikeThru = src.strikeThru; dst.fakeBold = src.fakeBold;
@@ -754,10 +739,12 @@ export function fontDescent(p: JPaint): number { return vmetrics(p).d; }
 export function fontTop(p: JPaint): number { const m = metricsOf(p) ?? SYSTEM_FONT; return Math.fround(vmetrics(p).a * (m.top / m.ascent)); }
 export function fontBottom(p: JPaint): number { const m = metricsOf(p) ?? SYSTEM_FONT; return Math.fround(vmetrics(p).d * (m.bottom / m.descent)); }
 export function fillFontMetrics(p: JPaint, fm: { top: number; ascent: number; descent: number; bottom: number; leading: number } | null, int: boolean) {
-  const a = fontAscent(p), d = fontDescent(p);
+  const { a, d } = vmetrics(p);
   const ascent = int ? Math.round(a) : a, descent = int ? Math.round(d) : d;
   if (fm) {
-    const top = fontTop(p), bottom = fontBottom(p);
+    // fontTop/fontBottom, without resolving the paint's metrics twice more
+    const m = metricsOf(p) ?? SYSTEM_FONT;
+    const top = Math.fround(a * (m.top / m.ascent)), bottom = Math.fround(d * (m.bottom / m.descent));
     fm.ascent = ascent; fm.descent = descent;
     fm.top = int ? Math.floor(top) : top;
     fm.bottom = int ? Math.ceil(bottom) : bottom;
@@ -1344,14 +1331,15 @@ export class JBitmap extends JObj {
         get: (ctx, key) => {
           const value = Reflect.get(ctx, key, ctx);
           if (typeof value !== "function") return value;
-          if (!methods.has(key)) {
+          let method = methods.get(key);
+          if (method === undefined) {
             const writes = /^(?:draw|fill|stroke|clearRect|putImageData|reset$)/.test(String(key));
-            methods.set(key, (...args: unknown[]) => {
+            methods.set(key, method = (...args: unknown[]) => {
               if (writes) { this.px = null; this.genId++; }
               return Reflect.apply(value, ctx, args);
             });
           }
-          return methods.get(key);
+          return method;
         },
         set: (ctx, key, value) => Reflect.set(ctx, key, value, ctx),
       });
@@ -1556,6 +1544,8 @@ const bitmapConfigs = mkEnumSet("android/graphics/Bitmap$Config", ["ALPHA_8", "R
 bitmapConfigs.forEach((config, i) => Object.assign(config, { nativeInt: i === 0 ? 1 : i + 2 }));
 mkEnumSet("android/graphics/Bitmap$CompressFormat", ["JPEG", "PNG", "WEBP"]);
 
+/** setLineDash copies its argument, so every undashed stroke can pass the same empty list */
+const NO_DASH: number[] = [];
 export class JCanvas extends JObj {
   ctx!: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
   w = 0; h = 0;
@@ -1565,20 +1555,19 @@ export class JCanvas extends JObj {
   clipPolygon: [number, number][] | null = null;
   clipPolygonStack: ([number, number][] | null)[] = [];
   bmp: JBitmap | null = null;
-  semanticOwner: { drawnText: string[] | null; drawnTextPoints: Float32Array | null; drawnTextCount: number } | null = null;
+  semanticOwner: DrawnTextOwner | null = null;
   semanticBase: [number, number, number, number, number, number] | null = null;
   semanticTransform(): [number, number, number, number, number, number] {
     const m = this.ctx.getTransform();
     const current = [m.a, m.b, m.c, m.d, m.e, m.f];
     return this.semanticBase ? matMul(this.semanticBase, current) : current as [number, number, number, number, number, number];
   }
-  recordText(text: string, x?: number, y?: number, size?: number, align = 0) {
+  recordText(text: string, x: number, y: number, size: number, align: number) {
     recordOrRun(this.ctx, ctx => {
       const canvas = replayCanvas(ctx) ?? this;
       const owner = canvas.semanticOwner;
       if (!owner) return;
       (owner.drawnText ??= []).push(text);
-      if (x === undefined || y === undefined || size === undefined) return;
       const i = owner.drawnTextCount++;
       if (!owner.drawnTextPoints || owner.drawnTextPoints.length < (i + 1) * 2) {
         const next = new Float32Array(Math.max(8, (i + 1) * 4));
@@ -1614,7 +1603,7 @@ export class JCanvas extends JObj {
       ctx.lineWidth = Math.max(p.strokeWidth, 1);
       ctx.lineCap = p.strokeCapN;
       ctx.lineJoin = p.strokeJoinN;
-      ctx.setLineDash(p.dash ?? []);
+      ctx.setLineDash(p.dash ?? NO_DASH);
     } else {
       if (!pattern) ctx.fillStyle = p.fillStyle(ctx) as string;
     }
@@ -1634,14 +1623,14 @@ export class JCanvas extends JObj {
     source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
     copyPaint(p, layer.paint);
     layer.paint.maskFilter = null; layer.paint.blend = null; layer.paint.shadowRadius = 0;
-    layer.paint.color = -1; layer.paint.renderAlpha = null; layer.paint.shader = layer.paint.shaderObj = null; layer.paint.filterColor = null; layer.paint.filterMatrix = null;
+    layer.paint.color = -1; layer.paint.renderAlpha = null; layer.paint.shaderObj = null; layer.paint.filterColor = null; layer.paint.filterMatrix = null;
     if (stroke) layer.source.drawShape(layer.paint, fill, stroke);
     else fill(source);
     target.clearRect(0, 0, w, h);
     blurMask(target, source.canvas, p.maskFilter, 0, 0, scale);
     target.globalCompositeOperation = "source-in";
     try {
-      if (p.shader || p.shaderObj) {
+      if (p.shaderObj) {
         source.resetTransform(); source.clearRect(0, 0, w, h); source.setTransform(m);
         copyPaint(p, layer.paint);
         layer.paint.maskFilter = null; layer.paint.blend = null; layer.paint.shadowRadius = 0; layer.paint.style = 0;
@@ -2019,7 +2008,6 @@ function drawPoints(cv: JCanvas, pts: Float32Array, off: number, n: number, p: J
   for (let i = off, end = off + (n & ~1); i < end; i += 2) pointPath(cv.ctx, pts[i], pts[i + 1], p);
   cv.ctx.fill();
 }
-const defaultBitmapPaint = new JPaint();
 function canvasLocalBounds(ctx: JCanvas["ctx"]): [number, number, number, number] | null {
   const inverse = ctx.getTransform().inverse();
   const points = [[0, 0], [ctx.canvas.width, 0], [0, ctx.canvas.height], [ctx.canvas.width, ctx.canvas.height]]
@@ -2038,7 +2026,7 @@ function drawPaint(this: JCanvas, paint: JPaint) {
 function drawBitmap(canvas: JCanvas, b: JBitmap, paint: JPaint | null, draw: (ctx: Ctx2D, image: OffscreenCanvas) => void) {
   if (b.config === 1) {
     const mask = (ctx: Ctx2D) => draw(ctx, b.canvas);
-    canvas.drawMask(paint ?? defaultBitmapPaint, mask);
+    canvas.drawMask(paint ?? defaultPaint, mask);
   } else draw(canvas.ctx, tintedBmp(b, paint?.filterColor ?? null, paint?.filterMatrix ?? null));
 }
 /** the (x, y, w, h) region of `src` as a new bitmap, through `m` when given */
@@ -2051,6 +2039,10 @@ function cropBitmap(src: JBitmap, x: number, y: number, w: number, h: number, m:
 }
 /** Exported so AOSP's own Canvas bytecode reaches the same bodies through its nDraw*
  *  delegates (src/android/delegates.ts) rather than a second copy of each. */
+type RectLike = { left: number; top: number; right: number; bottom: number };
+const clipRectObj = function (this: JCanvas, r: RectLike) { return clipRect.call(this, r.left, r.top, r.right, r.bottom); };
+const clipOutRectObj = function (this: JCanvas, r: RectLike) { return clipOutRect.call(this, r.left, r.top, r.right, r.bottom); };
+const drawRectObj = function (this: JCanvas, r: RectLike, p: JPaint) { drawRect.call(this, r.left, r.top, r.right, r.bottom, p); };
 export const canvasMethods: NativeSpec["methods"] = {
   "drawPaint(Landroid/graphics/Paint;)V": drawPaint,
   "<init>()V": function (this: JCanvas) { setCanvasBitmap(this, null); },
@@ -2114,10 +2106,10 @@ export const canvasMethods: NativeSpec["methods"] = {
   },
   "clipOutRect(FFFF)Z": clipOutRect,
   "clipOutRect(IIII)Z": clipOutRect,
-  "clipOutRect(Landroid/graphics/Rect;)Z": function (this: JCanvas, r: JRect) { return clipOutRect.call(this, r.left, r.top, r.right, r.bottom); },
-  "clipOutRect(Landroid/graphics/RectF;)Z": function (this: JCanvas, r: JRectF) { return clipOutRect.call(this, r.left, r.top, r.right, r.bottom); },
-  "clipRect(Landroid/graphics/Rect;)Z": function (this: JCanvas, r: JRect) { return clipRect.call(this, r.left, r.top, r.right, r.bottom); },
-  "clipRect(Landroid/graphics/RectF;)Z": function (this: JCanvas, r: JRectF) { return clipRect.call(this, r.left, r.top, r.right, r.bottom); },
+  "clipOutRect(Landroid/graphics/Rect;)Z": clipOutRectObj,
+  "clipOutRect(Landroid/graphics/RectF;)Z": clipOutRectObj,
+  "clipRect(Landroid/graphics/Rect;)Z": clipRectObj,
+  "clipRect(Landroid/graphics/RectF;)Z": clipRectObj,
   "clipPath(Landroid/graphics/Path;Landroid/graphics/Region$Op;)Z": function (this: JCanvas, path: JPath, op: { ename?: string } | null) {
     if (op && op.ename && op.ename !== "INTERSECT") return 1;
     return clipPath.call(this, path);
@@ -2142,8 +2134,8 @@ export const canvasMethods: NativeSpec["methods"] = {
     (this as any)[drawColorKey](((a << 24) | (r << 16) | (g << 8) | b) | 0);
   },
   "drawRect(FFFFLandroid/graphics/Paint;)V": drawRect,
-  "drawRect(Landroid/graphics/Rect;Landroid/graphics/Paint;)V": function (this: JCanvas, r: JRect, p: JPaint) { drawRect.call(this, r.left, r.top, r.right, r.bottom, p); },
-  "drawRect(Landroid/graphics/RectF;Landroid/graphics/Paint;)V": function (this: JCanvas, r: JRectF, p: JPaint) { drawRect.call(this, r.left, r.top, r.right, r.bottom, p); },
+  "drawRect(Landroid/graphics/Rect;Landroid/graphics/Paint;)V": drawRectObj,
+  "drawRect(Landroid/graphics/RectF;Landroid/graphics/Paint;)V": drawRectObj,
   "drawRoundRect(FFFFFFLandroid/graphics/Paint;)V": drawRoundRect,
   "drawRoundRect(Landroid/graphics/RectF;FFLandroid/graphics/Paint;)V": function (this: JCanvas, r: JRectF, rx: number, ry: number, p: JPaint) {
     drawRoundRect.call(this, r.left, r.top, r.right, r.bottom, rx, ry, p);
@@ -2240,7 +2232,7 @@ export function tryDrawBitmapText(cv: JCanvas, s: string, x: number, y: number, 
   return !!(cv.bmp && (p.style === 0 || p.style === 2 && p.strokeWidth === 0 ||
     p.style === 1 && p.strokeWidth === 0 && p.strokeCapN === "butt" && p.strokeJoinN === "miter" && !p.dash) &&
     p.antiAlias && p.textAlignN === 0 && !p.letterSpacingEm &&
-    !p.underline && !p.strikeThru && !p.shader && !p.shaderObj && !p.maskFilter && !p.shadowRadius &&
+    !p.underline && !p.strikeThru && !p.shaderObj && !p.maskFilter && !p.shadowRadius &&
     !p.filterColor && !p.filterMatrix && !p.blend && !isRecording(cv.ctx) &&
     p.tf.family === ROBOTO && !p.tf.bold && !p.tf.italic &&
     drawSkiaText(cv.ctx, s, x, y, p.textSize,
@@ -2374,8 +2366,8 @@ rt.register({
 export class JRecordingCanvas extends JCanvas {}
 rt.register({ name: "android/graphics/RecordingCanvas", ctor: JRecordingCanvas, sup: "android/graphics/Canvas", methods: canvasMethods });
 
-// RenderNode: Compose GraphicsLayer (API 29+) records layers here. We back each node
-// with an OffscreenCanvas; drawRenderNode composites it with the node's transform props.
+// RenderNode: Compose GraphicsLayer (API 29+) records layers here. Each node keeps a display
+// list that drawRenderNode replays with the node's transform props.
 let invalidateHook: (() => void) | null = null;
 export function setInvalidateHook(f: () => void) { invalidateHook = f; }
 class JRenderNode extends JObj {
@@ -2384,7 +2376,6 @@ class JRenderNode extends JObj {
   px = Number.NaN; py = Number.NaN;   // pivot (NaN = center)
   clip = true;
   clipOutline = false; outline: JOutline | null = null;
-  off: OffscreenCanvas | null = null;
   octx: OffscreenCanvasRenderingContext2D | null = null;
   // deferred display list: replayed against the target ctx each draw so child layers
   // re-recorded AFTER this layer keep showing fresh content (real RenderNode semantics)
@@ -2421,7 +2412,7 @@ function drawPicture(canvas: JCanvas, picture: JPicture, dst?: JRect) {
       ctx.translate(dst.left, dst.top);
       if (node.w > 0 && node.h > 0) ctx.scale((dst.right - dst.left) / node.w, (dst.bottom - dst.top) / node.h);
     }
-    replayWithSemantics(canvas, () => { if (node.hasDL) replay(ctx, node.ops); });
+    replayWithSemantics(canvas, () => replay(ctx, node.ops));
   } finally { ctx.restore(); }
 }
 /** replay a node's display list into ctx with its transform props applied */
@@ -2488,16 +2479,11 @@ rt.register({
       const cw = Math.max(1, w), ch = Math.max(1, h);
       // The mirror context exists only so reads during recording (measureText,
       // getTransform, canvas state) answer correctly — drawNodeInto replays `ops` against
-      // the real target and never reads this raster. So keep it 1x1: recording a layer no
-      // longer rasterises the whole layer a second time, and a screenful of Compose layers
-      // stops costing a screenful of full-size offscreen bitmaps. It stays per-node because
-      // Compose records a parent layer while its children record into their own.
-      if (!this.off) {
-        this.off = new OffscreenCanvas(1, 1);
-        this.octx = this.off.getContext("2d")!;
-      } else {
-        this.octx!.reset();
-      }
+      // the real target and never reads this raster, so 1x1 keeps a layer from being
+      // rasterised twice. It stays per-node because Compose records a parent layer while its
+      // children record into their own.
+      if (!this.octx) this.octx = new OffscreenCanvas(1, 1).getContext("2d")!;
+      else this.octx.reset();
       this.ops = [];
       const c = new JRecordingCanvas();
       c.ctx = recordingContext(this.octx!, this.ops); c.w = cw; c.h = ch;

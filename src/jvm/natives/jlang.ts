@@ -6,7 +6,7 @@ import { parkTimeout, unparkTimeout } from "../yield";
 import { directionality } from "../bidi";
 import { encodeString } from "../charset";
 import { javaClassSets } from "../regex-sets";
-import { mangleMethod, jmethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
+import { mangleMethod, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { guestNow, type GuestTimer } from "../../guest-clock";
 import { device } from "../../shell/config";
 import { csText } from "./jchars";
@@ -30,7 +30,7 @@ async function joinIterable(separator: unknown, parts: unknown): Promise<string>
 
 
 function findMethod(obj: any, name: string, desc: string): (...a: unknown[]) => unknown {
-  const fn = obj[mangleMethod(name, desc)] ?? rt.proxyMethod?.(obj, name, desc);
+  const fn = obj[mangleMethod(name, desc)] ?? lateMethod.find?.(obj, name, desc);
   if (typeof fn !== "function") throw rt.unimplemented(`vcall ${describe(obj)}.${name}${desc}`);
   return fn;
 }
@@ -69,10 +69,8 @@ export async function linkInit(cls: string): Promise<ClassInfo> {
 }
 /** `new Cls(args)` from native code: init the class, construct, run the Java constructor `desc` (none when null) */
 export async function newObj(cls: string, desc: string | null = "()V", ...args: unknown[]): Promise<any> {
-  const thread = curThread, info = await linkInit(cls), previous = curThread;
-  let o;
-  setCurThread(thread);
-  try { o = new info.ctor(); } finally { setCurThread(previous); }
+  const thread = curThread, info = await linkInit(cls);
+  const o = callOn(thread, () => new info.ctor());
   if (desc !== null) await vcallOn(thread, o, "<init>", desc, ...args);
   return o;
 }
@@ -94,8 +92,6 @@ export function idHash(o: unknown): number {
   return h;
 }
 const regexMemo = new Map<string, RegExp>();
-/** Java regex source + JS flags → RegExp, memoised: String.matches and Matcher rebuild theirs per call.
- *  Callers that use sticky/global flags must set lastIndex before every exec. */
 const POSIX: Record<string, string> = {
   Lower: "a-z", Upper: "A-Z", ASCII: "\\x00-\\x7F", Alpha: "a-zA-Z", Digit: "0-9", Alnum: "a-zA-Z0-9",
   Punct: "!-\\/:-@\\[-`{-~", Graph: "!-~", Print: " -~", Blank: " \\t", Cntrl: "\\x00-\\x1F\\x7F", XDigit: "0-9a-fA-F", Space: " \\t\\n\\x0B\\f\\r",
@@ -164,6 +160,8 @@ function atomicGroups(src: string): string {
   };
   return rewrite(0, src.length);
 }
+/** Java regex source + JS flags → RegExp, memoised: String.matches and Matcher rebuild theirs per call.
+ *  Callers that use sticky/global flags must set lastIndex before every exec. */
 export function javaRegex(source: string, flags: string): RegExp {
   const key = flags + "/" + source;
   let re = regexMemo.get(key);
@@ -475,7 +473,6 @@ export class JThrowable extends JObj {
   /** memoised getStackTrace(), or what setStackTrace() was handed */
   trace: unknown[] | null = null;
 }
-/** JVM-shaped stack trace text: header from the (overridable) toString, frames from the JS stack. */
 /**
  * A throwable's frames, out of the JS stack the throw actually has. An EMPTY trace is not a
  * thing any JVM produces, and library code counts on that: kotlinx.coroutines' stack-trace
@@ -497,6 +494,10 @@ function jsStackTrace(js: string | undefined): unknown[] {
   return jarray(out, "Ljava/lang/StackTraceElement;");
 }
 
+const printStackTraceTo = driven(function* (this: JThrowable, out: unknown): Gen {
+  yield vcall(out, "println", "(Ljava/lang/String;)V", yield stackTraceText(this));
+});
+/** JVM-shaped stack trace text: header from the (overridable) toString, frames from the JS stack. */
 export async function stackTraceText(t: JThrowable): Promise<string> {
   const frames = (js: string | undefined) =>
     (js ?? "").split("\n").slice(1, 41).map((l) => "\n\tat " + l.trim().replace(/^at /, "")).join("");
@@ -517,8 +518,9 @@ const throwableConstructors: NonNullable<NativeSpec["methods"]> = {
   "<init>(Ljava/lang/String;)V": function (this: JThrowable, m: string) { this.msg = m; fillInStackTrace(this); },
   "<init>(Ljava/lang/String;Ljava/lang/Throwable;)V": function (this: JThrowable, m: string, c: JThrowable) { this.msg = m; this.cause = c; fillInStackTrace(this); },
   "<init>(Ljava/lang/Throwable;)V": function (this: JThrowable, c: JThrowable) {
-    this.cause = c; this.msg = c ? dotName(jclsName(c)) + ": " + c.msg : null;
+    this.cause = c;
     fillInStackTrace(this);
+    if (c) return after(vcall(c, "toString", "()Ljava/lang/String;"), (m: string) => { this.msg = m; });
   },
   "<init>(Ljava/lang/String;Ljava/lang/Throwable;ZZ)V": function (this: JThrowable, m: string, c: JThrowable, _suppression: number, writable: number) {
     this.msg = m; this.cause = c;
@@ -532,25 +534,19 @@ rt.register({
   methods: {
     ...throwableConstructors,
     "getMessage()Ljava/lang/String;": function (this: JThrowable) { return this.msg; },
-    "getLocalizedMessage()Ljava/lang/String;": function (this: JThrowable) { return this.msg; },
+    "getLocalizedMessage()Ljava/lang/String;": function (this: JThrowable) { return vcall(this, "getMessage", "()Ljava/lang/String;"); },
     "getCause()Ljava/lang/Throwable;": function (this: JThrowable) { return this.cause; },
     "initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;": function (this: JThrowable, c: JThrowable) { this.cause = c; return this; },
     "toString()Ljava/lang/String;": function (this: JThrowable) {
       const n = dotName(jclsName(this));
-      return this.msg !== null ? n + ": " + this.msg : n;
+      return after(vcall(this, "getLocalizedMessage", "()Ljava/lang/String;"), (m: string | null) => (m !== null ? n + ": " + m : n));
     },
     "printStackTrace()V": function (this: JThrowable) {
       console.warn("[java] " + jclsName(this) + ": " + this.msg, this.jsStack, this.cause ? "caused by " + jclsName(this.cause) + ": " + this.cause.msg : "");
     },
-    // Apps route caught exceptions through these (logcat/Timber's Throwable.asLog()).
-    // Missing, they turn a *handled* exception into an unhandled one that kills the
-    // enclosing coroutine scope.
-    "printStackTrace(Ljava/io/PrintWriter;)V": driven(function* (this: JThrowable, w: unknown): Gen {
-      yield vcall(w, "println", "(Ljava/lang/String;)V", yield stackTraceText(this));
-    }),
-    "printStackTrace(Ljava/io/PrintStream;)V": driven(function* (this: JThrowable, s: unknown): Gen {
-      yield vcall(s, "println", "(Ljava/lang/String;)V", yield stackTraceText(this));
-    }),
+    // apps route caught exceptions through these (logcat/Timber's Throwable.asLog())
+    "printStackTrace(Ljava/io/PrintWriter;)V": printStackTraceTo,
+    "printStackTrace(Ljava/io/PrintStream;)V": printStackTraceTo,
     "fillInStackTrace()Ljava/lang/Throwable;": function (this: JThrowable) { this.jsErr = new Error(); this.trace = null; return this; },
     "getStackTrace()[Ljava/lang/StackTraceElement;": function (this: JThrowable) { return this.trace ??= jsStackTrace(this.jsStack); },
     "setStackTrace([Ljava/lang/StackTraceElement;)V": function (this: JThrowable, t: unknown[]) { this.trace = t ?? null; },
@@ -629,10 +625,6 @@ rt.mkThrowable = (cls: string, msg: string | null) => {
   return e;
 };
 
-// marker interfaces (registered early so link of String/implementors works + iof)
-// Closeable extends AutoCloseable, and that inheritance is load-bearing: R8 merges every
-// close-this-thing helper into one method that tests `instanceof AutoCloseable` first, so a
-// Closeable that is not one falls off the end of the chain into its throw.
 rt.register({
   name: "java/lang/Iterable", ctor: class extends JObj {}, typeVars: "T",
   methods: {
@@ -650,6 +642,10 @@ rt.register({
     }),
   },
 });
+// marker interfaces (registered early so link of String/implementors works + iof)
+// Closeable extends AutoCloseable, and that inheritance is load-bearing: R8 merges every
+// close-this-thing helper into one method that tests `instanceof AutoCloseable` first, so a
+// Closeable that is not one falls off the end of the chain into its throw.
 for (const [i, ext] of [["java/lang/Runnable"], ["java/lang/Comparable"], ["java/lang/CharSequence"],
   ["java/lang/Cloneable"], ["java/lang/Appendable"], ["java/lang/AutoCloseable"],
   ["java/io/Serializable"], ["java/io/Closeable", "java/lang/AutoCloseable"], ["java/io/Flushable"],
@@ -719,9 +715,9 @@ export function stringCompare(a: string, b: string): number {
   }
   return a.length - b.length;
 }
-sm("compareTo(Ljava/lang/String;)I", function (o: string) { return stringCompare(this as string, o); });
-const COMPARE_TO_STRING = mangleMethod("compareTo", "(Ljava/lang/String;)I");
-sm("compareTo(Ljava/lang/Object;)I", function (o: string) { return (this as any)[COMPARE_TO_STRING](o); });
+const compareStrings = function (this: string, o: string) { return stringCompare(this, o); };
+sm("compareTo(Ljava/lang/String;)I", compareStrings);
+sm("compareTo(Ljava/lang/Object;)I", compareStrings);
 sm("compareToIgnoreCase(Ljava/lang/String;)I", function (o: string) {
   const a = this.toLowerCase(), b = o.toLowerCase();
   return a < b ? -1 : a > b ? 1 : 0;
@@ -785,7 +781,7 @@ sm("replace(CC)Ljava/lang/String;", function (a: number, b: number) {
   return this.split(String.fromCharCode(a)).join(String.fromCharCode(b));
 });
 sm("replace(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Ljava/lang/String;", function (a: unknown, b: unknown) {
-  return this.split(String(a)).join(String(b));
+  return after(csText(a ?? rt.npe()), (target: string) => after(csText(b ?? rt.npe()), (replacement: string) => this.replaceAll(target, () => replacement)));
 });
 sm("concat(Ljava/lang/String;)Ljava/lang/String;", function (s: string) { return (this as string) + s; });
 sm("intern()Ljava/lang/String;", function () { return this as string; });
@@ -1146,6 +1142,15 @@ export const bitCount32 = (v: number) => {
   v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
   return Math.imul((v + (v >>> 4)) & 0x0f0f0f0f, 0x01010101) >>> 24;
 };
+export function reverseBytes32(v: number): number {
+  return (v >>> 24) | ((v >>> 8) & 0xff00) | ((v & 0xff00) << 8) | (v << 24);
+}
+export function reverseBytes64(v: bigint): bigint {
+  const u = BigInt.asUintN(64, v);
+  let r = 0n;
+  for (let i = 0; i < 8; i++) r |= ((u >> BigInt(i * 8)) & 0xffn) << BigInt((7 - i) * 8);
+  return BigInt.asIntN(64, r);
+}
 const rev32 = (v: number) => {
   v = ((v & 0x55555555) << 1) | ((v >>> 1) & 0x55555555);
   v = ((v & 0x33333333) << 2) | ((v >>> 2) & 0x33333333);
@@ -1241,7 +1246,7 @@ rt.register({
     "static numberOfTrailingZeros(I)I": ctz32,
     "static highestOneBit(I)I": (v: number) => (v === 0 ? 0 : 1 << (31 - Math.clz32(v))),
     "static reverse(I)I": rev32,
-    "static reverseBytes(I)I": (v: number) => (v >>> 24) | ((v >>> 8) & 0xff00) | ((v & 0xff00) << 8) | (v << 24),
+    "static reverseBytes(I)I": reverseBytes32,
     "static rotateLeft(II)I": (v: number, n: number) => ((v << n) | (v >>> (32 - n))) | 0,
     "static rotateRight(II)I": (v: number, n: number) => (v >>> n) | (v << -n),
     "static hashCode(I)I": (v: number) => v,
@@ -1301,12 +1306,7 @@ rt.register({
     "static bitCount(J)I": (v: bigint) => bitCount32(lo32(v)) + bitCount32(hi32(v)),
     "static rotateLeft(JI)J": (v: bigint, n: number) =>
       BigInt.asIntN(64, (v << BigInt(n & 63)) | (BigInt.asUintN(64, v) >> BigInt(64 - (n & 63)))),
-    "static reverseBytes(J)J": (v: bigint) => {
-      const u = BigInt.asUintN(64, v);
-      let r = 0n;
-      for (let i = 0; i < 8; i++) r |= ((u >> BigInt(i * 8)) & 0xffn) << BigInt((7 - i) * 8);
-      return BigInt.asIntN(64, r);
-    },
+    "static reverseBytes(J)J": reverseBytes64,
   },
 });
 function parseFloatJ(s: string): number {
@@ -1316,6 +1316,7 @@ function parseFloatJ(s: string): number {
   return parseFloat(t);
 }
 const isNaNZ = (v: number) => (v !== v ? 1 : 0);
+const isFiniteZ = (v: number) => (Number.isFinite(v) ? 1 : 0);
 const isInfZ = (v: number) => (v === Infinity || v === -Infinity ? 1 : 0);
 /** Float/Double.compare: NaN sorts above everything, including itself equal */
 export const cmpFloat = (a: number, b: number) => a < b ? -1 : a > b ? 1 : Object.is(a, b) ? 0 : a === b ? Object.is(a, -0) ? -1 : 1 : a !== a ? 1 : -1;
@@ -1335,7 +1336,7 @@ rt.register({
     "static intBitsToFloat(I)F": intBitsToFloat,
     "static isNaN(F)Z": isNaNZ,
     "static isInfinite(F)Z": isInfZ,
-    "static isFinite(F)Z": (v: number) => Number.isFinite(v) ? 1 : 0,
+    "static isFinite(F)Z": isFiniteZ,
     "static compare(FF)I": cmpFloat,
     "static toString(F)Ljava/lang/String;": fmtFloat,
     "isNaN()Z": function (this: JFloat) { return isNaNZ(this.v); },
@@ -1356,7 +1357,7 @@ rt.register({
     "static longBitsToDouble(J)D": longBitsToDouble,
     "static isNaN(D)Z": isNaNZ,
     "static isInfinite(D)Z": isInfZ,
-    "static isFinite(D)Z": (v: number) => Number.isFinite(v) ? 1 : 0,
+    "static isFinite(D)Z": isFiniteZ,
     "static compare(DD)I": cmpFloat,
     "static hashCode(D)I": (v: number) => { const b = doubleToLongBits(v); return Number(BigInt.asIntN(32, b ^ (b >> 32n))); },
     "static toString(D)Ljava/lang/String;": fmtDouble,
@@ -1435,18 +1436,12 @@ function offsetCodePoints(text: string, index: number, offset: number): number {
   if (index < 0 || index > text.length) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(index));
   while (offset > 0 && index < text.length) {
     const c = text.charCodeAt(index++);
-    if (c >= 0xd800 && c <= 0xdbff && index < text.length) {
-      const next = text.charCodeAt(index);
-      if (next >= 0xdc00 && next <= 0xdfff) index++;
-    }
+    if (isHigh(c) && index < text.length && isLow(text.charCodeAt(index))) index++;
     offset--;
   }
   while (offset < 0 && index > 0) {
     const c = text.charCodeAt(--index);
-    if (c >= 0xdc00 && c <= 0xdfff && index > 0) {
-      const previous = text.charCodeAt(index - 1);
-      if (previous >= 0xd800 && previous <= 0xdbff) index--;
-    }
+    if (isLow(c) && index > 0 && isHigh(text.charCodeAt(index - 1))) index--;
     offset++;
   }
   if (offset !== 0) throw rt.mkThrowable("java/lang/IndexOutOfBoundsException", String(offset));
@@ -1472,6 +1467,10 @@ function unicodeCategory(c: number): number {
 }
 const asciiCategories = Uint8Array.from({ length: 128 }, (_, c) => unicodeCategory(c));
 const characterType = (c: number) => c >= 0 && c < 128 ? asciiCategories[c] : unicodeCategory(c);
+const isDefinedChar = (c: number) => +(characterType(c) !== 0);
+const isDigit = (c: number) => (c < 0x80 ? +(c >= 48 && c <= 57) : +(c <= 0x10ffff && /\p{Nd}/u.test(String.fromCodePoint(c))));
+/** Character.digit of a char or code point (fromCodePoint equals fromCharCode below 0x10000) */
+const charDigit = (cp: number, radix: number) => { const d = parseInt(String.fromCodePoint(cp), radix); return Number.isNaN(d) ? -1 : d; };
 const charText = (chars: Uint16Array | null) => charsToString(chars ?? rt.npe(), 0, chars!.length);
 function codePointChars(cp: number): Uint16Array {
   if (!Number.isInteger(cp) || cp < 0 || cp > 0x10ffff) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid code point: " + cp);
@@ -1513,17 +1512,17 @@ rt.register({
     "static codePointCount(Ljava/lang/CharSequence;II)I": (cs: unknown, a: number, b: number) => cpCount(jToString(cs ?? rt.npe()), a, b),
     "static codePointCount([CII)I": (chars: Uint16Array, offset: number, count: number) => cpCount(charText(chars), offset, offset + count),
     "static isSupplementaryCodePoint(I)Z": (cp: number) => (cp >= 0x10000 ? 1 : 0),
-    "static isHighSurrogate(C)Z": (c: number) => (c >= 0xd800 && c <= 0xdbff ? 1 : 0),
-    "static isLowSurrogate(C)Z": (c: number) => (c >= 0xdc00 && c <= 0xdfff ? 1 : 0),
-    "static isSurrogatePair(CC)Z": (high: number, low: number) => +(high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff),
+    "static isHighSurrogate(C)Z": (c: number) => +isHigh(c),
+    "static isLowSurrogate(C)Z": (c: number) => +isLow(c),
+    "static isSurrogatePair(CC)Z": (high: number, low: number) => +(isHigh(high) && isLow(low)),
     "static isSurrogate(C)Z": (c: number) => (c >= 0xd800 && c <= 0xdfff ? 1 : 0),
     "static toCodePoint(CC)I": (h: number, l: number) => ((h - 0xd800) << 10) + (l - 0xdc00) + 0x10000,
     "static isISOControl(I)Z": isISOControl,
     "static isISOControl(C)Z": isISOControl,
     "static getType(C)I": characterType,
     "static getType(I)I": characterType,
-    "static isDefined(C)Z": (c: number) => +(characterType(c) !== 0),
-    "static isDefined(I)Z": (c: number) => +(characterType(c) !== 0),
+    "static isDefined(C)Z": isDefinedChar,
+    "static isDefined(I)Z": isDefinedChar,
     "<init>(C)V": function (this: JChar, v: number) { this.v = v; },
     "charValue()C": function (this: JChar) { return this.v; },
     "compareTo(Ljava/lang/Character;)I": cmpV,
@@ -1533,8 +1532,8 @@ rt.register({
     "toString()Ljava/lang/String;": function (this: JChar) { return String.fromCharCode(this.v); },
     "static valueOf(C)Ljava/lang/Character;": (v: number) => box(JChar, v),
     "static toString(C)Ljava/lang/String;": (v: number) => String.fromCharCode(v),
-    "static isDigit(C)Z": (c: number) => (c >= 48 && c <= 57 ? 1 : 0),
-    "static isDigit(I)Z": (c: number) => (/\p{Nd}/u.test(String.fromCodePoint(c)) ? 1 : 0),
+    "static isDigit(C)Z": isDigit,
+    "static isDigit(I)Z": isDigit,
     ...Object.fromEntries(["C", "I"].map(type => [`static isJavaIdentifierPart(${type})Z`, (c: number) =>
       c >= 0 && c <= 0x10ffff && /[\p{L}\p{Nl}\p{Sc}\p{Pc}\p{Nd}\p{Mc}\p{Mn}\p{Cf}\x00-\x08\x0e-\x1b\x7f-\x9f]/u.test(String.fromCodePoint(c)) ? 1 : 0])),
     ...Object.fromEntries(([["isLetter", /\p{L}/u], ["isLetterOrDigit", /[\p{L}\p{Nd}]/u], ["isWhitespace", /\s/], ["isSpaceChar", /\s/]] as const).flatMap(([n, re]) => {
@@ -1546,9 +1545,8 @@ rt.register({
     "static toTitleCase(C)C": charTitleCase,
     "static toUpperCase(C)C": (c: number) => String.fromCharCode(c).toUpperCase().charCodeAt(0),
     "static toLowerCase(C)C": (c: number) => String.fromCharCode(c).toLowerCase().charCodeAt(0),
-    "static digit(CI)I": (c: number, r: number) => { const d = parseInt(String.fromCharCode(c), r); return Number.isNaN(d) ? -1 : d; },
-    // the code-point overload: same digit, an int rather than a char
-    "static digit(II)I": (cp: number, r: number) => { const d = parseInt(String.fromCodePoint(cp), r); return Number.isNaN(d) ? -1 : d; },
+    "static digit(CI)I": charDigit,
+    "static digit(II)I": charDigit,
     "static getNumericValue(C)I": (c: number) => { const d = parseInt(String.fromCharCode(c), 36); return Number.isNaN(d) ? -1 : d; },
     "static forDigit(II)C": (d: number, r: number) => d.toString(r).charCodeAt(0),
   },
@@ -1557,7 +1555,8 @@ rt.register({
 class JMath extends JObj {}
 const mm: Record<string, (...a: never[]) => unknown> = {};
 for (const t of ["I", "J", "F", "D"]) {
-  mm[`static abs(${t})${t}`] = t === "J" ? (v: bigint) => (v < 0n ? -v : v) : (v: number) => Math.abs(v);
+  // abs(MIN_VALUE) wraps back to MIN_VALUE for int and long
+  mm[`static abs(${t})${t}`] = t === "J" ? (v: bigint) => BigInt.asIntN(64, v < 0n ? -v : v) : t === "I" ? (v: number) => Math.abs(v) | 0 : (v: number) => Math.abs(v);
   mm[`static max(${t}${t})${t}`] = t === "J" ? (a: bigint, b: bigint) => (a > b ? a : b) : (a: number, b: number) => Math.max(a, b);
   mm[`static min(${t}${t})${t}`] = t === "J" ? (a: bigint, b: bigint) => (a < b ? a : b) : (a: number, b: number) => Math.min(a, b);
 }
@@ -1632,8 +1631,7 @@ const mathMethods: NativeSpec["methods"] = {
     "static nextAfter(FD)F": (v: number, d: number) => d > v ? nextF(v, true) : d < v ? nextF(v, false) : Math.fround(d),
     "static random()D": () => Math.random(),
     // Math.round SATURATES at the type's bounds and maps NaN to 0 (JLS 15.1.4); `|0` wraps,
-    // and BigInt(NaN) throws. Compose reaches these through Dp.roundToPx on infinite
-    // constraints, where the difference is a wrapped negative padding instead of a clamp.
+    // and BigInt(NaN) throws.
     "static round(D)J": (v: number) => rt.f2l(Math.round(v)),
     "static round(F)I": (v: number) => rt.f2i(Math.round(v)),
     "static rint(D)D": rint,
@@ -1838,6 +1836,7 @@ export function setCurThread(t: JThread) {
 }
 let threadCounter = 0;
 const nextThreadName = () => "Thread-" + threadCounter++;
+function initGroupedThread(this: JThread, _group: unknown, target: unknown, name: string) { this.target = target; this.jname = name; }
 
 // Parks `t` until `wake` is called (notify/signal), the timeout elapses, or the thread is
 // interrupted: resolves true on a wake, false on a timeout, rejects with InterruptedException on
@@ -1876,8 +1875,8 @@ rt.register({
     "<init>(Ljava/lang/Runnable;)V": function (this: JThread, r: unknown) { this.target = r; this.jname = nextThreadName(); },
     "<init>(Ljava/lang/Runnable;Ljava/lang/String;)V": function (this: JThread, r: unknown, n: string) { this.target = r; this.jname = n; },
     "<init>(Ljava/lang/String;)V": function (this: JThread, n: string) { this.jname = n; },
-    "<init>(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;)V": function (this: JThread, _g: unknown, r: unknown, n: string) { this.target = r; this.jname = n; },
-    "<init>(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V": function (this: JThread, _g: unknown, r: unknown, n: string) { this.target = r; this.jname = n; },
+    "<init>(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;)V": initGroupedThread,
+    "<init>(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V": initGroupedThread,
     "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V": function (this: JThread, _g: unknown, n: string) { this.jname = n; },
     "getName()Ljava/lang/String;": function (this: JThread) { return this.jname; },
     "setName(Ljava/lang/String;)V": function (this: JThread, n: string) { this.jname = n; },
@@ -1896,18 +1895,11 @@ rt.register({
     "start()V": function (this: JThread) {
       if (this.started) throw rt.mkThrowable("java/lang/IllegalThreadStateException", "Thread already started");
       this.alive = 1;
-      liveThreads.add(this);
       // the body begins now, not after the caller's whole main-looper job: a thread that
       // publishes its Handler has it by the time the next lifecycle call posts to it
       this.done = new Promise((resolve) => {
         queueMicrotask(async () => {
-          const prev = curThread;
-          setCurThread(this);
-          try {
-            let running: Promise<unknown>;
-            try { running = vcall(this, "run", "()V"); } finally { setCurThread(prev); }
-            await running;
-          }
+          try { await vcallOn(this, this, "run", "()V"); }
           catch (e) { console.error("[thread " + this.jname + "]", e); }
           finally { this.alive = 0; threadExit.hook?.(this); resolve(); }
         });
@@ -2042,13 +2034,13 @@ export function enumValueOf<T extends JEnum>(values: T[], name: string): T {
   if (!v) throw rt.mkThrowable("java/lang/IllegalArgumentException", "No enum constant " + name);
   return v;
 }
+export class JSimpleEnum extends JEnum {}
 /**
  * A Java enum with nothing behind it but its constants: registers the class (a fresh ctor per
- * enum, so each has its own statics and ClassInfo)), and returns the constants in declaration
+ * enum, so each has its own statics and ClassInfo), and returns the constants in declaration
  * order. `extra` adds methods a specific enum needs beyond Enum's own (name/ordinal/toString/
  * compareTo come from java/lang/Enum via the prototype chain).
  */
-export class JSimpleEnum extends JEnum {}
 export function mkEnumSet(cls: string, names: string[], extra: NativeSpec["methods"] = {}, ifaces?: string[], fields?: NativeSpec["fields"]): JSimpleEnum[] {
   const ctor = class extends JSimpleEnum {};
   const vals = names.map((n, i) => { const e = new ctor(); e.ename = n; e.ord = i; return e; });

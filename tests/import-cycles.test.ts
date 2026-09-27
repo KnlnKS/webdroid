@@ -78,4 +78,4 @@ test("modules do not read cyclic imports during evaluation", async () => {
     ts.forEachChild(module.source, visit);
   }
   expect(violations).toEqual([]);
-});
+}, 30_000); // parses every module: under 1 s alone, several under a loaded parallel run

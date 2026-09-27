@@ -31,7 +31,7 @@ function views(): void {
   u32 = new Uint32Array(buf); i32 = new Int32Array(buf); f32 = new Float32Array(buf); f64 = new Float64Array(buf);
   dv = new DataView(buf);
   codePages = new Uint8Array(buf, core.flags_ptr(), MEM_SIZE_A64 >>> PAGE_SHIFT);
-  Object.assign(mem, { buf, u8, i8, u16, u32, i32, f32, f64, dv, codePages });
+  Object.assign(mem, { buf, u8, u16, u32, i32, f32 });
 }
 /** host state keyed by a guest object's address: the address the guest knows, which a move keeps */
 export class AddrMap<V> {
@@ -44,9 +44,8 @@ const split = (va: bigint): [number, number] => [Number(va >> 32n) & 0xffffffff,
 const num = (v: bigint): number | bigint => (v <= 0xffffffffn ? Number(v) : v);
 
 export const mem = {
-  buf: null as unknown as ArrayBuffer, u8: null as unknown as Uint8Array, i8: null as unknown as Int8Array, u16: null as unknown as Uint16Array,
-  u32: null as unknown as Uint32Array, i32: null as unknown as Int32Array, f32: null as unknown as Float32Array, f64: null as unknown as Float64Array,
-  dv: null as unknown as DataView, codePages: null as unknown as Uint8Array,
+  buf: null as unknown as ArrayBuffer, u8: null as unknown as Uint8Array, u16: null as unknown as Uint16Array,
+  u32: null as unknown as Uint32Array, i32: null as unknown as Int32Array, f32: null as unknown as Float32Array,
   /** run after the memory is resized: the block cache's page tables are sized from it */
   initHooks: [] as (() => void)[],
   /** size the process's memory: grown in place, so everything allocated so far carries over;
@@ -163,10 +162,8 @@ export const mem = {
   cstr(a: number, max = 0x100000): string {
     if (!a) return "";
     checkAddr(a, 1);
-    let e = a >>> 0;
-    const lim = Math.min(e + max, MEM_SIZE);
-    while (e < lim && u8[e] !== 0) e++;
-    return dec.decode(u8.subarray(a >>> 0, e));
+    const bytes = u8.subarray(a >>> 0, Math.min((a >>> 0) + max, MEM_SIZE)), end = bytes.indexOf(0);
+    return dec.decode(end < 0 ? bytes : bytes.subarray(0, end));
   },
   /** writes s + NUL (truncating to max-1 bytes when max is given); returns bytes written excluding NUL */
   putCstr(a: number, s: string, max = 0x7fffffff): number {

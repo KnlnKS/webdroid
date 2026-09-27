@@ -13,7 +13,7 @@ import { rt, JObj, type NativeSpec, stubs, noops, fieldGetters, fieldSetters, dr
 import { vcall, newObj } from "../jvm/natives/jlang";
 import { newArrayList } from "../jvm/natives/jutil";
 import { jarray, splitSig, mangleMethod } from "../jvm/abi";
-import { JEditable, JSpannable, JSpanned, csText, textSelection, setTextSelection } from "./text";
+import { JEditable, csText, textSelection, setTextSelection } from "./text";
 import { JView, invalidate, rootOf } from "./view";
 import { JMatrix } from "./graphics";
 import { AID, type JAttrSet, obtainStyled } from "./res";
@@ -315,11 +315,9 @@ rt.register({
 });
 
 // InputConnectionWrapper: pure delegation, generated from the interface's own signature list.
-class JICWrapper extends JObj { targetIc: unknown = null; mutable = 0; }
+class JICWrapper extends JObj { targetIc: unknown = null; }
 const wrapMethods: Record<string, unknown> = {
-  "<init>(Landroid/view/inputmethod/InputConnection;Z)V": function (this: JICWrapper, t: unknown, mutable: number) {
-    this.targetIc = t; this.mutable = mutable;
-  },
+  "<init>(Landroid/view/inputmethod/InputConnection;Z)V": function (this: JICWrapper, t: unknown) { this.targetIc = t; },
   "setTarget(Landroid/view/inputmethod/InputConnection;)V": function (this: JICWrapper, t: unknown) { this.targetIc = t; },
   "getTarget()Landroid/view/inputmethod/InputConnection;": function (this: JICWrapper) { return this.targetIc; },
 };
@@ -368,12 +366,8 @@ rt.register({
   methods: {
     "<init>()V": function () {},
     "static getInstance()Landroid/text/Editable$Factory;": () => editableFactory ?? (editableFactory = new JEditableFactory()),
-    "newEditable(Ljava/lang/CharSequence;)Landroid/text/Editable;": driven(function* (cs: unknown): Gen {
-      const o = rt.make("android/text/SpannableStringBuilder") as JSpannable;
-      o.text = yield csText(cs);
-      if (cs instanceof JSpanned) o.spans = cs.spans.slice();
-      return o;
-    }),
+    "newEditable(Ljava/lang/CharSequence;)Landroid/text/Editable;": (cs: unknown) =>
+      newObj("android/text/SpannableStringBuilder", "(Ljava/lang/CharSequence;)V", cs),
   },
 });
 

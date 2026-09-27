@@ -3,6 +3,7 @@
 // objects KeyFactory and KeyPairGenerator hand out.
 import { JObj, rt, driven, type Gen } from "../runtime";
 import { vcall } from "./jlang";
+import { concat, u8 } from "../abi";
 import { JRsaPublicKey, JRsaPrivateKey, JPSSSpec } from "./jrsa";
 import { JEcPublicKey, JEcPrivateKey, type Curve } from "./jec";
 
@@ -56,9 +57,7 @@ function params(s: JSignature): AlgorithmIdentifier | RsaPssParams | EcdsaParams
 }
 function curveOf(s: JSignature): Curve { const k = s.key; return k instanceof JEcPrivateKey ? k.pub.c : (k as JEcPublicKey).c; }
 function message(s: JSignature): Uint8Array<ArrayBuffer> {
-  const all = new Uint8Array(s.parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const p of s.parts) { all.set(p, at); at += p.length; }
+  const all = concat(s.parts);
   s.parts = [];
   return all;
 }
@@ -99,15 +98,15 @@ function init(s: JSignature, key: unknown, signing: boolean) {
   if (key == null) throw noKey("key == null");
   s.key = key; s.signing = signing; s.parts = []; s.imported = null;
 }
+function initSign(this: JSignature, key: unknown) { init(this, key, true); }
 function ready(s: JSignature, signing: boolean) {
   if (!s.key || s.signing !== signing) throw rt.mkThrowable("java/security/SignatureException", "object not initialized for " + (signing ? "signing" : "verification"));
 }
-const getInstance = (algo: string) => signature(algo);
 rt.register({
   name: "java/security/Signature", ctor: JSignature,
   methods: {
-    "static getInstance(Ljava/lang/String;)Ljava/security/Signature;": getInstance,
-    "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Signature;": getInstance,
+    "static getInstance(Ljava/lang/String;)Ljava/security/Signature;": signature,
+    "static getInstance(Ljava/lang/String;Ljava/lang/String;)Ljava/security/Signature;": signature,
     "static getInstance(Ljava/lang/String;Ljava/security/Provider;)Ljava/security/Signature;": (algo: string, provider: unknown) => {
       if (!provider) throw rt.mkThrowable("java/lang/IllegalArgumentException", "missing provider");
       return signature(algo);
@@ -118,8 +117,8 @@ rt.register({
     "initVerify(Ljava/security/cert/Certificate;)V": driven(function* (this: JSignature, cert: unknown): Gen {
       init(this, cert && (yield vcall(cert, "getPublicKey", "()Ljava/security/PublicKey;")), false);
     }),
-    "initSign(Ljava/security/PrivateKey;)V": function (this: JSignature, key: unknown) { init(this, key, true); },
-    "initSign(Ljava/security/PrivateKey;Ljava/security/SecureRandom;)V": function (this: JSignature, key: unknown) { init(this, key, true); },
+    "initSign(Ljava/security/PrivateKey;)V": initSign,
+    "initSign(Ljava/security/PrivateKey;Ljava/security/SecureRandom;)V": initSign,
     "setParameter(Ljava/security/spec/AlgorithmParameterSpec;)V": function (this: JSignature, spec: unknown) {
       const bad = (msg: string) => rt.mkThrowable("java/security/InvalidAlgorithmParameterException", msg);
       if (this.scheme !== "RSA-PSS" || !(spec instanceof JPSSSpec)) throw bad("unsupported parameters for " + this.algo);
@@ -131,11 +130,11 @@ rt.register({
     },
     "getParameters()Ljava/security/AlgorithmParameters;": () => null,
     "update(B)V": function (this: JSignature, b: number) { ready(this, this.signing); this.parts.push(new Uint8Array([b & 0xff])); },
-    "update([B)V": function (this: JSignature, b: Int8Array) { ready(this, this.signing); this.parts.push(new Uint8Array(b.buffer, b.byteOffset, b.length).slice()); },
+    "update([B)V": function (this: JSignature, b: Int8Array) { ready(this, this.signing); this.parts.push(u8(b).slice()); },
     "update([BII)V": function (this: JSignature, b: Int8Array, off: number, len: number) {
       ready(this, this.signing);
       if (off < 0 || len < 0 || off + len > b.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Bad arguments");
-      this.parts.push(new Uint8Array(b.buffer, b.byteOffset + off, len).slice());
+      this.parts.push(u8(b, off, len).slice());
     },
     "sign()[B": driven(function* (this: JSignature): Gen {
       ready(this, true);
@@ -147,7 +146,7 @@ rt.register({
       ready(this, false);
       if (sig == null) throw rt.mkThrowable("java/lang/NullPointerException", "signature == null");
       const { key } = yield importKey(this), data = message(this);
-      let bytes: Uint8Array<ArrayBuffer> | null = new Uint8Array(sig.buffer, sig.byteOffset, sig.length).slice();
+      let bytes: Uint8Array<ArrayBuffer> | null = u8(sig).slice();
       if (this.scheme === "ECDSA") bytes = rawFromDer(bytes, curveOf(this).bytes);
       return bytes && (yield crypto.subtle.verify(params(this), key, bytes, data)) ? 1 : 0;
     }),

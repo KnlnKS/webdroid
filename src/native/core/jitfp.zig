@@ -13,7 +13,6 @@ const get = wasm.get;
 const set = wasm.set;
 const tee = wasm.tee;
 const c32 = wasm.c32;
-const c64 = wasm.c64;
 const mo = wasm.mo;
 const L_CPU = jit.L_CPU;
 const L_A = jit.L_A;
@@ -33,72 +32,6 @@ const UNARY = [_][2]u8{ F.abs, F.neg, F.sqrt };
 const BINARY = [_][2]u8{ F.mul, F.div, F.add, F.sub };
 fn roundOp(f: u1, mode: u32) u8 {
     return F.ceil[f] + ROUND[mode & 3];
-}
-
-pub fn emitVfp(e: *jit.Emit(false), w: u32) bool {
-    if (!is(w, 0x0f000e10, 0x0e000a00)) return false;
-    const op = bits(w, 20, 4) & 0xb;
-    const sub = w & 0x40 != 0;
-    const unary = bits(w, 16, 4);
-    const supported = switch (op) {
-        0, 2, 3 => true,
-        8 => !sub,
-        11 => !sub or unary <= 1,
-        else => false,
-    };
-    if (!supported) return false;
-    const f: u1 = @intCast(bits(w, 8, 1));
-    const stride: u32 = if (f == 1) 8 else 4;
-    const d = if (f == 1) (bits(w, 22, 1) << 4) | bits(w, 12, 4) else (bits(w, 12, 4) << 1) | bits(w, 22, 1);
-    const n = if (f == 1) (bits(w, 7, 1) << 4) | bits(w, 16, 4) else (bits(w, 16, 4) << 1) | bits(w, 7, 1);
-    const m = if (f == 1) (bits(w, 5, 1) << 4) | bits(w, 0, 4) else (bits(w, 0, 4) << 1) | bits(w, 5, 1);
-    const b = e.b;
-    b.get(L_CPU);
-    if (op == 11 and !sub) {
-        const imm = simd.vfpImm(unary << 4 | (w & 15), f == 1);
-        if (f == 1) b.i64c(@bitCast(imm)) else b.i32c(@bitCast(@as(u32, @truncate(imm))));
-        b.memop(F.istore[f], OFF_V + d * stride);
-        return true;
-    }
-    if (op == 0) b.emit(.{ get(L_CPU), mo(F.load[f], OFF_V + d * stride) });
-    if (op != 11) b.emit(.{ get(L_CPU), mo(F.load[f], OFF_V + n * stride) });
-    b.emit(.{ get(L_CPU), mo(F.load[f], OFF_V + m * stride) });
-    switch (op) {
-        0 => b.emit(.{ F.mul[f], if (sub) F.sub[f] else F.add[f] }),
-        2 => { b.byte(F.mul[f]); if (sub) b.byte(F.neg[f]); },
-        3 => b.byte(if (sub) F.sub[f] else F.add[f]),
-        8 => b.byte(F.div[f]),
-        else => if (unary == 1) b.byte(if (w & 0x80 != 0) F.sqrt[f] else F.neg[f]) else if (w & 0x80 != 0) b.byte(F.abs[f]),
-    }
-    b.memop(F.store[f], OFF_V + d * stride);
-    return true;
-}
-
-pub fn emitVfpMemory(e: *jit.Emit(false), w: u32) bool {
-    if (w & 0x0f200000 != 0x0d000000) return false;
-    const cp = bits(w, 8, 4);
-    if (cp != 10 and cp != 11) return false;
-    const rn = bits(w, 16, 4);
-    if (rn == 15) return false;
-    const dp = cp == 11;
-    const d = if (dp) (bits(w, 22, 1) << 4) | bits(w, 12, 4) else (bits(w, 12, 4) << 1) | bits(w, 22, 1);
-    const slot = if (dp) d * 2 else d;
-    const offset = (w & 255) * 4;
-    const load_mem = bits(w, 20, 1) != 0;
-    const b = e.b;
-    b.emit(.{ get(jit.L_X + rn), c32(@intCast(offset)), if (bits(w, 23, 1) != 0) O.i32_add else O.i32_sub, set(L_A) });
-    e.checkLowAddress();
-    for (0..(if (dp) @as(usize, 2) else 1)) |i| {
-        const off: u32 = @intCast(i * 4);
-        const reg_off = OFF_V + slot * 4 + off;
-        if (load_mem) {
-            b.emit(.{ get(L_CPU), get(L_A), mo(O.i32_load, off), mo(O.i32_store, reg_off) });
-        } else {
-            e.storeCheck(off, 4);
-            b.emit(.{ get(L_A), get(L_CPU), mo(O.i32_load, reg_off), mo(O.i32_store, off) });
-        }
-    }
-    return true;
 }
 
 pub fn emitSimd(e: *Emit, w: u32, pc: u32, k: u32) void {

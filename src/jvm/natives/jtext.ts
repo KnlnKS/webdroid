@@ -1,11 +1,12 @@
-// java.text: DateFormat/SimpleDateFormat, NumberFormat/DecimalFormat, Collator, ParsePosition,
-// CharacterIterator, BreakIterator, Normalizer. Formatting is en-only and pattern-driven.
+// java.text (DateFormat, NumberFormat, MessageFormat, Collator, BreakIterator, Normalizer, Bidi…)
+// plus android.icu formatters and java.util StringTokenizer/ServiceLoader. Formats localize through Intl.
 
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
-import { vcall, vcallOn, curThread, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble, stringHash, type JSB } from "./jlang";
+import { vcall, vcallOn, curThread, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble, stringHash, type JSB, after } from "./jlang";
+import { csText } from "./jchars";
 import { strArray, jarray, utf8, slashName, dotName, charsToString } from "../abi";
 import { mkIter, toJsArray } from "./jutil";
-import { JDate, JCalendar } from "./jtime";
+import { JDate, type JCalendar } from "./jtime";
 import { localTz, type JTimeZone } from "./jtime-iso";
 import { formatPattern, parsePattern, checkSdfPattern, displayNames, localizedPattern, tagOf } from "./jtime-pattern";
 import { directionality } from "../bidi";
@@ -111,8 +112,6 @@ rt.register({
   },
 });
 
-/** android.text.format.DateFormat's patterns print through the same engine as SimpleDateFormat */
-export const formatDate = (pattern: string, t: number): string => formatPattern(pattern, t);
 class JDateFormat extends JObj { pattern = ""; tz: JTimeZone | null = null; locale: JLocale | null = null; century: number | null = null; }
 function withPattern(p: string, locale: JLocale | null = null): JDateFormat {
   checkSdfPattern(p);
@@ -133,11 +132,15 @@ function parseAt(f: JDateFormat, s: string, pos: JParsePosition): JDate | null {
   d.t = t;
   return d;
 }
+function parseAtPosition(this: JDateFormat, s: string, pos: JParsePosition) { return parseAt(this, s, pos); }
+function sdfPattern(this: JDateFormat) { return this.pattern; }
+function applySdfPattern(this: JDateFormat, p: string) { checkSdfPattern(p); this.pattern = p; }
 const dateFormatMethods: NativeSpec["methods"] = {
   "format(Ljava/util/Date;)Ljava/lang/String;": function (this: JDateFormat, d: JDate) { return formatAt(this, d.t); },
   "format(Ljava/lang/Object;)Ljava/lang/String;": function (this: JDateFormat, o: unknown) {
-    const t = o instanceof JDate ? o.t : o instanceof JCalendar ? o.d.getTime() : typeof o === "bigint" ? Number(o) : Number((o as any)?.v ?? 0);
-    return formatAt(this, t);
+    if (o instanceof JDate) return formatAt(this, o.t);
+    if (!rt.iof(o, "java/lang/Number")) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Cannot format given Object as a Date");
+    return after(vcall(o, "longValue", "()J"), (t: bigint) => formatAt(this, Number(t)));
   },
   "format(Ljava/util/Date;Ljava/lang/StringBuffer;Ljava/text/FieldPosition;)Ljava/lang/StringBuffer;": function (this: JDateFormat, d: JDate, sb: JSB) {
     sb.s += formatAt(this, d.t);
@@ -149,8 +152,8 @@ const dateFormatMethods: NativeSpec["methods"] = {
     return d;
   },
   // the non-throwing form: on failure AOSP returns null and sets errorIndex rather than raising
-  "parse(Ljava/lang/String;Ljava/text/ParsePosition;)Ljava/util/Date;": function (this: JDateFormat, s: string, pos: JParsePosition) { return parseAt(this, s, pos); },
-  "parseObject(Ljava/lang/String;Ljava/text/ParsePosition;)Ljava/lang/Object;": function (this: JDateFormat, s: string, pos: JParsePosition) { return parseAt(this, s, pos); },
+  "parse(Ljava/lang/String;Ljava/text/ParsePosition;)Ljava/util/Date;": parseAtPosition,
+  "parseObject(Ljava/lang/String;Ljava/text/ParsePosition;)Ljava/lang/Object;": parseAtPosition,
   "setTimeZone(Ljava/util/TimeZone;)V": function (this: JDateFormat, tz: JTimeZone) { this.tz = tz; },
   "getTimeZone()Ljava/util/TimeZone;": function (this: JDateFormat) { return this.tz ?? localTz; },
   "setCalendar(Ljava/util/Calendar;)V": function (this: JDateFormat, c: JCalendar) { this.tz = (c ?? rt.npe()).tz; },
@@ -166,10 +169,10 @@ const dateFormatMethods: NativeSpec["methods"] = {
   },
   "setLenient(Z)V": () => {},
   "isLenient()Z": () => 1,
-  "toPattern()Ljava/lang/String;": function (this: JDateFormat) { return this.pattern; },
-  "toLocalizedPattern()Ljava/lang/String;": function (this: JDateFormat) { return this.pattern; },
-  "applyPattern(Ljava/lang/String;)V": function (this: JDateFormat, p: string) { checkSdfPattern(p); this.pattern = p; },
-  "applyLocalizedPattern(Ljava/lang/String;)V": function (this: JDateFormat, p: string) { checkSdfPattern(p); this.pattern = p; },
+  "toPattern()Ljava/lang/String;": sdfPattern,
+  "toLocalizedPattern()Ljava/lang/String;": sdfPattern,
+  "applyPattern(Ljava/lang/String;)V": applySdfPattern,
+  "applyLocalizedPattern(Ljava/lang/String;)V": applySdfPattern,
   "clone()Ljava/lang/Object;": function (this: JDateFormat) { return Object.assign(new (this.constructor as typeof JDateFormat)(), this); },
   "equals(Ljava/lang/Object;)Z": function (this: JDateFormat, o: unknown) { return +(o instanceof JDateFormat && o.pattern === this.pattern); },
   "hashCode()I": function (this: JDateFormat) { return stringHash(this.pattern); },
@@ -206,15 +209,17 @@ async function messageFormat(pattern: string, args: unknown[]): Promise<string> 
   if (quoted) out += "'";
   return out;
 }
+function setMessagePattern(this: JMessageFormat, pattern: string) { this.pattern = pattern; }
+function formatMessage(this: JMessageFormat, args: unknown[]) { return messageFormat(this.pattern, args); }
 rt.register({
   name: "java/text/MessageFormat", ctor: JMessageFormat, sup: "java/text/Format",
   methods: {
-    "<init>(Ljava/lang/String;)V": function (this: JMessageFormat, pattern: string) { this.pattern = pattern; },
-    "<init>(Ljava/lang/String;Ljava/util/Locale;)V": function (this: JMessageFormat, pattern: string) { this.pattern = pattern; },
+    "<init>(Ljava/lang/String;)V": setMessagePattern,
+    "<init>(Ljava/lang/String;Ljava/util/Locale;)V": setMessagePattern,
     "static format(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;": messageFormat,
-    "format([Ljava/lang/Object;)Ljava/lang/String;": function (this: JMessageFormat, args: unknown[]) { return messageFormat(this.pattern, args); },
-    "format(Ljava/lang/Object;)Ljava/lang/String;": function (this: JMessageFormat, args: unknown[]) { return messageFormat(this.pattern, args); },
-    "applyPattern(Ljava/lang/String;)V": function (this: JMessageFormat, pattern: string) { this.pattern = pattern; },
+    "format([Ljava/lang/Object;)Ljava/lang/String;": formatMessage,
+    "format(Ljava/lang/Object;)Ljava/lang/String;": formatMessage,
+    "applyPattern(Ljava/lang/String;)V": setMessagePattern,
     "toPattern()Ljava/lang/String;": function (this: JMessageFormat) { return this.pattern; },
   },
 });
@@ -363,24 +368,22 @@ rt.register({
       (locale: { locale: JLocale }, style: JSimpleEnum) => compactInstance(locale?.locale, style),
   },
 });
+function applyDecimalPattern(this: JNumberFormat, p: string) {
+  if (p == null) rt.npe();
+  this.pattern = p;
+  this.grouping = p.includes(",");
+  const frac = /\.([0#]+)/.exec(p);
+  this.maxFrac = frac ? frac[1].length : 0;
+  this.minFrac = frac ? (frac[1].match(/0/g)?.length ?? 0) : 0;
+}
 rt.register({
   name: "java/text/DecimalFormat", ctor: JDecimalFormat, sup: "java/text/NumberFormat",
   methods: {
     ...nfMethods,
     "<init>()V": function () {},
-    "<init>(Ljava/lang/String;)V": function (this: JNumberFormat, p: string) {
-      this.pattern = p;
-      this.grouping = p.includes(",");
-      const frac = /\.([0#]+)/.exec(p);
-      this.maxFrac = frac ? frac[1].length : 0;
-      this.minFrac = frac ? (frac[1].match(/0/g)?.length ?? 0) : 0;
-    },
-    "<init>(Ljava/lang/String;Ljava/text/DecimalFormatSymbols;)V": function (this: JNumberFormat, p: string) {
-      this.pattern = p;
-      const frac = /\.([0#]+)/.exec(p);
-      this.maxFrac = frac ? frac[1].length : 0;
-    },
-    "applyPattern(Ljava/lang/String;)V": function (this: JNumberFormat, p: string) { this.pattern = p; },
+    "<init>(Ljava/lang/String;)V": applyDecimalPattern,
+    "<init>(Ljava/lang/String;Ljava/text/DecimalFormatSymbols;)V": applyDecimalPattern,
+    "applyPattern(Ljava/lang/String;)V": applyDecimalPattern,
     "setDecimalFormatSymbols(Ljava/text/DecimalFormatSymbols;)V": () => {},
   },
 });
@@ -468,12 +471,15 @@ rt.register({
   },
 });
 
-// ── java.text.BreakIterator (line/word/char boundaries; whitespace-based approximation)
+// ── java.text.BreakIterator (line/word/sentence/char boundaries; whitespace-based approximation)
 class JBreakIter extends JObj {
   text = "";
   pos = 0;
   kind: "line" | "word" | "char" | "sentence" = "line";
-  bounds(): number[] {
+  private sorted: number[] | null = null;
+  setText(text: string) { this.text = text; this.pos = 0; this.sorted = null; }
+  bounds(): number[] { return this.sorted ??= this.compute(); }
+  private compute(): number[] {
     const b = new Set<number>([0, this.text.length]);
     if (this.kind === "char") {
       for (let i = 0; i <= this.text.length; i++) b.add(i);
@@ -490,7 +496,10 @@ class JBreakIter extends JObj {
   /** move to the first boundary past `off` in direction `dir`; DONE (-1) when there is none */
   seek(off: number, dir: 1 | -1): number {
     const bs = this.bounds();
-    const n = dir > 0 ? bs.find((b) => b > off) : bs.reverse().find((b) => b < off);
+    // first index whose boundary lies past `off` (dir 1) or at/past it (dir -1)
+    let lo = 0, hi = bs.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (dir > 0 ? bs[mid] <= off : bs[mid] < off) lo = mid + 1; else hi = mid; }
+    const n = dir > 0 ? bs[lo] : bs[lo - 1];
     if (n === undefined) return -1;
     this.pos = n;
     return n;
@@ -503,7 +512,7 @@ rt.register({
   methods: {
     ...Object.fromEntries(([["Line", "line"], ["Word", "word"], ["Character", "char"], ["Sentence", "sentence"]] as const).flatMap(([n, kind]) =>
       ["", "Ljava/util/Locale;"].map((a) => [`static get${n}Instance(${a})Ljava/text/BreakIterator;`, biFactory(kind)]))),
-    "setText(Ljava/lang/String;)V": function (this: JBreakIter, t: string) { this.text = t ?? ""; this.pos = 0; },
+    "setText(Ljava/lang/String;)V": function (this: JBreakIter, t: string) { this.setText(t ?? ""); },
     "setText(Ljava/text/CharacterIterator;)V": driven(function* (this: JBreakIter, ci: JObj): Gen {
       let s = "";
       if (ci) {
@@ -511,7 +520,7 @@ rt.register({
           s += String.fromCharCode(c);
         }
       }
-      this.text = s; this.pos = 0;
+      this.setText(s);
     }),
     "first()I": function (this: JBreakIter) { this.pos = 0; return 0; },
     "last()I": function (this: JBreakIter) { this.pos = this.text.length; return this.pos; },
@@ -526,17 +535,20 @@ rt.register({
 
 // java.text.Normalizer over String.prototype.normalize
 mkEnumSet("java/text/Normalizer$Form", ["NFC", "NFD", "NFKC", "NFKD"]);
-const normalize = (cs: unknown, form: JSimpleEnum | null) => String(cs ?? "").normalize((form?.ename as "NFC") ?? "NFC");
+const normalizeWith = <T>(cs: unknown, form: JSimpleEnum | null, f: (text: string, normalized: string) => T) =>
+  after(csText(cs ?? rt.npe()), (text: string) => f(text, text.normalize((form ?? rt.npe()).ename as "NFC")));
 rt.register({
   name: "java/text/Normalizer", ctor: class extends JObj {},
   methods: {
-    "static normalize(Ljava/lang/CharSequence;Ljava/text/Normalizer$Form;)Ljava/lang/String;": normalize,
+    "static normalize(Ljava/lang/CharSequence;Ljava/text/Normalizer$Form;)Ljava/lang/String;":
+      (cs: unknown, form: JSimpleEnum | null) => normalizeWith(cs, form, (_, normalized) => normalized),
     "static isNormalized(Ljava/lang/CharSequence;Ljava/text/Normalizer$Form;)Z":
-      (cs: unknown, form: JSimpleEnum | null) => (String(cs ?? "") === normalize(cs, form) ? 1 : 0),
+      (cs: unknown, form: JSimpleEnum | null) => normalizeWith(cs, form, (text, normalized) => +(text === normalized)),
   },
 });
 
 class JStringTokenizer extends JObj { toks: string[] = []; i = 0; }
+function tokensLeft(this: JStringTokenizer) { return this.i < this.toks.length ? 1 : 0; }
 rt.register({
   name: "java/util/StringTokenizer", ctor: JStringTokenizer,
   methods: {
@@ -547,8 +559,8 @@ rt.register({
       const re = new RegExp("[" + delims.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&") + "]+");
       this.toks = s.split(re).filter(Boolean);
     },
-    "hasMoreTokens()Z": function (this: JStringTokenizer) { return this.i < this.toks.length ? 1 : 0; },
-    "hasMoreElements()Z": function (this: JStringTokenizer) { return this.i < this.toks.length ? 1 : 0; },
+    "hasMoreTokens()Z": tokensLeft,
+    "hasMoreElements()Z": tokensLeft,
     "nextToken()Ljava/lang/String;": function (this: JStringTokenizer) {
       if (this.i >= this.toks.length) throw rt.mkThrowable("java/util/NoSuchElementException", null);
       return this.toks[this.i++];

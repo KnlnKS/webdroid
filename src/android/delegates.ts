@@ -22,7 +22,7 @@ import {
 } from "./graphics";
 import { newObj } from "../jvm/natives/jlang";
 import { charsToString, floatToIntBits, i8, u8, jarray } from "../jvm/abi";
-import { JPath, pathBounds, pathIsConvex, pathOffset, pathTransform } from "./path";
+import { JPath, appendPath, copyPath, pathBounds, pathIsConvex, pathOffset, pathTransform } from "./path";
 import type { JTextPaint, TLine } from "./text";
 import { breakLines } from "./linebreak";
 import {
@@ -363,7 +363,7 @@ delegate("android/graphics/Paint", {
   "nGetTextPath(JI[CIIFFJ)V": () => {},
   "nGetFillPath(JJJ)Z": (_h: bigint, src: bigint, dst: bigint) => {
     const d = deref<JPath>(dst);
-    d.ops = deref<JPath>(src).ops.slice();
+    d.ops = copyOps(src);
     d.dirty = true;
     return 1;
   },
@@ -430,13 +430,13 @@ delegate("android/graphics/Path", {
   "nInit()J": () => handle(new JPath()),
   "nInit(J)J": (h: bigint) => {
     const p = new JPath();
-    p.ops = path(h).ops.slice();
+    copyPath.call(p, path(h));
     return handle(p);
   },
   "nGetFinalizer()J": () => FINALIZER,
   "nReset(J)V": clearPath,
   "nRewind(J)V": clearPath,
-  "nSet(JJ)V": (h: bigint, s: bigint) => { const p = path(h); p.ops = path(s).ops.slice(); p.dirty = true; },
+  "nSet(JJ)V": (h: bigint, s: bigint) => copyPath.call(path(h), path(s)),
   "nIsEmpty(J)Z": (h: bigint) => (path(h).ops.length ? 0 : 1),
   "nGetGenerationID(J)I": (h: bigint) => path(h).ops.length,
 
@@ -479,23 +479,9 @@ delegate("android/graphics/Path", {
   "nAddRoundRect(JFFFF[FI)V": (h: bigint, l: number, t: number, r: number, b: number, radii: Float32Array) => {
     path(h).add(["rrect", l, t, r, b, ...Array.from({ length: 8 }, (_, i) => radii[i] ?? 0)]);
   },
-  "nAddPath(JJ)V": (h: bigint, o: bigint) => { const p = path(h); p.ops.push(...path(o).ops); p.dirty = true; },
-  "nAddPath(JJFF)V": (h: bigint, o: bigint, dx: number, dy: number) => {
-    const add = new JPath();
-    add.ops = copyOps(o);
-    pathOffset(add, dx, dy);
-    const p = path(h);
-    p.ops.push(...add.ops);
-    p.dirty = true;
-  },
-  "nAddPath(JJJ)V": (h: bigint, o: bigint, mat: bigint) => {
-    const add = new JPath();
-    add.ops = copyOps(o);
-    pathTransform(add, affine(deref<Mat>(mat)));
-    const p = path(h);
-    p.ops.push(...add.ops);
-    p.dirty = true;
-  },
+  "nAddPath(JJ)V": (h: bigint, o: bigint) => appendPath(path(h), path(o)),
+  "nAddPath(JJFF)V": (h: bigint, o: bigint, dx: number, dy: number) => appendPath(path(h), path(o), [1, 0, 0, 1, dx, dy]),
+  "nAddPath(JJJ)V": (h: bigint, o: bigint, mat: bigint) => appendPath(path(h), path(o), affine(deref<Mat>(mat))),
 
   "nOffset(JFF)V": (h: bigint, dx: number, dy: number) => pathOffset(path(h), dx, dy),
   "nTransform(JJ)V": (h: bigint, mat: bigint) => pathTransform(path(h), affine(deref<Mat>(mat))),
@@ -901,8 +887,8 @@ delegate("android/content/res/StringBlock", {
   "nativeCreate([BII)J": (b: Int8Array, off: number, len: number) =>
     handle(new StringPool(new DataView(b.buffer, b.byteOffset + off, len), 0)),
   "nativeDestroy(J)V": release,
-  "nativeGetSize(J)I": (h: bigint) => deref<StringPool>(h).strings.length,
-  "nativeGetString(JI)Ljava/lang/String;": (h: bigint, i: number) => deref<StringPool>(h).strings[i] ?? null,
+  "nativeGetSize(J)I": (h: bigint) => deref<StringPool>(h).length,
+  "nativeGetString(JI)Ljava/lang/String;": (h: bigint, i: number) => deref<StringPool>(h).at(i) ?? null,
   "nativeGetStyle(JI)[I": (h: bigint, i: number) => deref<StringPool>(h).styleOf(i),
 });
 

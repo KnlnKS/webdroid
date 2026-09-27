@@ -69,7 +69,7 @@ type StepOptions = {
 
 export class WebdroidDriver {
   readonly errors: string[] = [];
-  constructor(private browser: Browser, public page: Page, public screen: CaptureScreen) {}
+  constructor(private browser: Browser, public page: Page, readonly screen: CaptureScreen) {}
 
   static async launch(opts: LaunchOpts = {}): Promise<WebdroidDriver> {
     const screen = opts.screen ?? deviceScreen();
@@ -82,7 +82,7 @@ export class WebdroidDriver {
     const drv = new WebdroidDriver(browser, page, screen);
     page.on("pageerror", (e) => { drv.errors.push(String(e)); console.error("  [page error]", String(e).slice(0, 200)); });
     page.on("console", (message) => { if (message.type() === "error") drv.errors.push(`${message.location().url}: ${message.text()}`); });
-    await drv.open(screen, !!opts.controlled);
+    await drv.open(!!opts.controlled);
     if (opts.privateStorage) {
       const files = await Promise.all(opts.privateStorage.files.map(async ({ path, fixture }) => ({
         path, bytes: Array.from(new Uint8Array(await Bun.file(new URL(`../fixtures/${fixture}`, import.meta.url)).arrayBuffer())),
@@ -103,18 +103,17 @@ export class WebdroidDriver {
     return drv;
   }
 
-  private async open(screen: CaptureScreen, controlled = false): Promise<void> {
-    this.screen = screen;
-    const resp = await this.page.goto(pageUrl(screen, controlled), { waitUntil: "domcontentloaded", timeout: 30_000 });
+  private async open(controlled = false): Promise<void> {
+    const resp = await this.page.goto(pageUrl(this.screen, controlled), { waitUntil: "domcontentloaded", timeout: 30_000 });
     if (!resp?.ok()) throw new Error(`dev server not reachable at ${BASE_URL} — run \`bun run dev\``);
     await this.page.waitForFunction(() => !!(globalThis as any).wd, null, { timeout: 60_000 });
     await this.page.evaluate(() => document.fonts.ready);
   }
 
-  /** A fresh install — wd.reset() is the one definition of what that wipes — at `screen`. */
-  async reset(screen: CaptureScreen = this.screen): Promise<void> {
+  /** A fresh install — wd.reset() is the one definition of what that wipes. */
+  async reset(): Promise<void> {
     await this.page.evaluate(() => (globalThis as any).wd.reset());
-    await this.open(screen);
+    await this.open();
   }
 
   /** One flow step, start to finish, in the page: action, settle, liveness, capture, telemetry. */
@@ -145,10 +144,6 @@ export class WebdroidDriver {
    */
   alive(timeoutMs = 2000): Promise<boolean> {
     return this.page.evaluate((ms) => (globalThis as any).wd.alive(ms), timeoutMs);
-  }
-
-  browserVersion(): string {
-    return this.page.context().browser()?.version() ?? "unknown";
   }
 
   close(): Promise<void> {

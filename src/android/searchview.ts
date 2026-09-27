@@ -1,13 +1,13 @@
-import { AID } from "./res";
 import { JLinearLayout, linearMethods } from "./layouts";
 import { JEditText, textViewMethods, textViewCtors } from "./textview";
 import { type JView, findById, initViewFromCtx, requestLayout } from "./view";
-import { type JAttrSet, obtainStyled, rvInt, rvString } from "./res";
+import { AID, type JAttrSet, obtainStyled, rvInt, rvString } from "./res";
 import { inflateLayout } from "./inflate";
 import { JImageView } from "./imageview";
 import { loadDrawableRV } from "./drawable";
 import { rt, JObj, noops, driven, type Gen } from "../jvm/runtime";
-import { vcall } from "../jvm/natives/jlang";
+import { vcall, after } from "../jvm/natives/jlang";
+import { csText } from "./text";
 
 // ── SearchView. AOSP inflates layout/search_view.xml and toggles the parts of it that a
 // collapsed or expanded search shows, so this does too rather than describing the row again.
@@ -65,6 +65,7 @@ async function buildSearchView(sv: JSearchView, set: JAttrSet | null) {
   const src = byName("search_src_text");
   if (src instanceof JEditText) { sv.edit = src; if (sv.hintStr) src.hint = sv.hintStr; }
 }
+const setIconified = function (this: JSearchView, v: number) { this.iconified = !!v; };
 rt.register({
   name: "android/widget/SearchView", ctor: JSearchView, sup: "android/widget/LinearLayout",
   ifaces: ["android/widget/FilterQueryProvider"],
@@ -82,14 +83,16 @@ rt.register({
     }),
     "setOnQueryTextListener(Landroid/widget/SearchView$OnQueryTextListener;)V": function (this: JSearchView, l: unknown) { this.queryL = l; },
     "setQueryHint(Ljava/lang/CharSequence;)V": function (this: JSearchView, h: unknown) {
-      this.hintStr = String(h ?? "");
-      if (this.edit) this.edit.hint = this.hintStr;
+      return after(csText(h), (hint) => {
+        this.hintStr = hint;
+        if (this.edit) this.edit.hint = hint;
+      });
     },
-    "setIconifiedByDefault(Z)V": function (this: JSearchView, v: number) { this.iconified = !!v; },
-    "setIconified(Z)V": function (this: JSearchView, v: number) { this.iconified = !!v; },
+    "setIconifiedByDefault(Z)V": setIconified,
+    "setIconified(Z)V": setIconified,
     "isIconified()Z": function (this: JSearchView) { return this.iconified ? 1 : 0; },
     "setQuery(Ljava/lang/CharSequence;Z)V": driven(function* (this: JSearchView, q: unknown, submit: number): Gen {
-      this.queryText = String(q ?? "");
+      this.queryText = yield csText(q);
       if (this.edit) this.edit.text = this.queryText;
       if (this.closeBtn) { this.closeBtn.visibility = this.queryText ? 0 : 8; requestLayout(this.closeBtn); }
       if (this.queryL) {

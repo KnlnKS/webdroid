@@ -4,7 +4,7 @@
 // resuming an N-deep stack costs one Promise hop, not N.
 
 /** Continues a suspended activation with its callee's result or exception. */
-export type Continuation = (value: unknown, threw: boolean) => unknown;
+type Continuation = (value: unknown, threw: boolean) => unknown;
 const FRAMES = Symbol("continuations");
 type Suspension = Promise<unknown> & { [FRAMES]?: Continuation[] };
 
