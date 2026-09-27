@@ -500,12 +500,13 @@ export function gles3Init(): void {
     glGetAttribLocation: (_c, a) => { const p = H(T().programs, a.i()); return p ? g().getAttribLocation(p, a.str()) : -1; },
     glGetFragDataLocation: (_c, a) => { const p = H(T().programs, a.i()); return p ? g().getFragDataLocation(p, a.str()) : -1; },
     glGetUniformLocation: (_c, a) => {
-      const p = H(T().programs, a.i()), name = a.str();
-      if (p && programRecs.get(p)?.hidden.has(name.replace(/\[\d+\]$/, ""))) return -1;
+      const p = H(T().programs, a.i()), name = a.str(), [, base, index] = /^(.*?)(?:\[(\d+)\])?$/.exec(name)!;
+      const rec = p && programRecs.get(p);
+      if (rec && rec.hidden.has(base)) return -1;
       const u = p && g().getUniformLocation(p, name);
       if (!u) return -1;
-      const rec = programRecs.get(p), element = /^(.*?)(?:\[(\d+)\])?$/.exec(name)!, binding = rec?.samplers.get(element[1]);
-      if (binding) samplerSlots.set(u, { rec: rec!, binding, index: Number(element[2] ?? 0) });
+      const binding = rec && rec.samplers.get(base);
+      if (rec && binding) samplerSlots.set(u, { rec, binding, index: Number(index ?? 0) });
       return put(T().uniforms, u);
     },
     glGetActiveAttrib: active((p, i) => g().getActiveAttrib(p, i)),
