@@ -3,7 +3,7 @@
 // printf/scanf in printf.ts.
 
 import { mem, guestAt, wrote } from "./mem";
-import { hostLib, hostData, hostFn, NORET, ARG0, SERVED, ptr, vaList, type HostFn, type HostRet, type ArgReader, retF, retD, PTR, stp, ldp, calledMissing } from "./host";
+import { hostLib, hostData, hostFn, NORET, ARG0, SERVED, ptr, vaList, type HostFn, type HostRet, type ArgReader, retF, retD, PTR, stp, ldp, ldLong, stLong, calledMissing } from "./host";
 import { E, ERRSTR, PAGE_SIZE } from "./abi";
 import { invalidateRange, markProcessExited, setRawSyscall, type Cpu } from "./cpu";
 import { format, scan } from "./printf";
@@ -42,13 +42,11 @@ const LAYOUT64: typeof LAYOUT32 = {
 export let LAYOUT = LAYOUT32;
 export const clockTime = (id: number): number => id === 0 ? Date.now() : guestNow() + 1000;
 /** a struct timespec / timeval as milliseconds, and back (the second field is nanoseconds or microseconds) */
-const readLong = (p: number): number => PTR === 8 ? Number(mem.ld64(p)) : mem.ld32(p) | 0;
-function writeLong(p: number, value: number): void { if (PTR === 8) mem.st64(p, BigInt(value)); else mem.st32(p, value); }
-export function readTs(p: number, unit = 1e6): number { return readLong(p + LAYOUT.TS_SEC) * 1000 + readLong(p + LAYOUT.TS_NSEC) / unit; }
+export function readTs(p: number, unit = 1e6): number { return ldLong(p + LAYOUT.TS_SEC) * 1000 + ldLong(p + LAYOUT.TS_NSEC) / unit; }
 export function writeTs(p: number, ms: number, unit = 1e6): void {
   const seconds = Math.floor(ms / 1000);
-  writeLong(p + LAYOUT.TS_SEC, seconds);
-  writeLong(p + LAYOUT.TS_NSEC, Math.floor((ms - seconds * 1000) * unit));
+  stLong(p + LAYOUT.TS_SEC, seconds);
+  stLong(p + LAYOUT.TS_NSEC, Math.floor((ms - seconds * 1000) * unit));
 }
 /** an off_t argument: 64-bit on LP64, 32-bit on ILP32 */
 export const offArg = (a: { i(): number; l(): bigint }) => (PTR === 8 ? Number(a.l()) : a.i());
@@ -124,7 +122,7 @@ function fillTm(tm: number, d: Date, utc: boolean): void {
   const yday = Math.floor(((utc ? Date.UTC(g.y, g.mo, g.md) : new Date(g.y, g.mo, g.md).getTime()) - jan1) / 86400000);
   const f = [g.s, g.mi, g.h, g.md, g.mo, g.y - 1900, g.wd, yday, 0];
   for (let i = 0; i < f.length; i++) mem.st32(tm + i * 4, f[i]);
-  writeLong(tm + LAYOUT.TM_GMTOFF, utc ? 0 : -d.getTimezoneOffset() * 60);
+  stLong(tm + LAYOUT.TM_GMTOFF, utc ? 0 : -d.getTimezoneOffset() * 60);
   stp(tm + LAYOUT.TM_ZONE, tznames[utc ? 0 : 1]);
 }
 export function readTm(tm: number): number[] { const f: number[] = []; for (let i = 0; i < 9; i++) f.push(mem.ld32(tm + i * 4) | 0); return f; }
@@ -215,7 +213,7 @@ export function fillSysinfo(p: number): void {
   const L = PTR, unit = L === 8 ? 1 : 4096;
   const totalRam = device.cpu.memKb * 1024;
   mem.memset(p, 0, L === 8 ? 112 : 64);
-  const put = (off: number, v: number) => { if (L === 8) mem.st64(p + off, BigInt(v)); else mem.st32(p + off, v); };
+  const put = (off: number, v: number) => stLong(p + off, v);
   put(0, Math.floor(guestNow() / 1000));
   put(L * 4, totalRam / unit); put(L * 5, totalRam / (2 * unit));
   mem.st16(p + L * 10, 1);
@@ -507,7 +505,7 @@ export function libcInit(): void {
     sscanf: (_c, a) => { const s = a.str(), f = a.str(); return scan(s, f, scanSink(a)); },
     vsscanf: (_c, a) => { const s = a.str(), f = a.str(); return scan(s, f, scanSink(vaList(a.p()))); },
 
-    time: (_c, a) => { const p = a.p(); const t = Math.floor(Date.now() / 1000); if (p) writeLong(p, t); return PTR === 8 ? BigInt(t) : t; },
+    time: (_c, a) => { const p = a.p(); const t = Math.floor(Date.now() / 1000); if (p) stLong(p, t); return PTR === 8 ? BigInt(t) : t; },
     gettimeofday: (_c, a) => { const tv = a.p(); if (tv) writeTs(tv, Date.now(), 1e3); return 0; },
     clock_gettime: (_c, a) => {
       const id = a.i(), ts = a.p();
@@ -517,10 +515,10 @@ export function libcInit(): void {
     clock_getres: (_c, a) => { a.i(); const ts = a.p(); if (ts) { stp(ts + LAYOUT.TS_SEC, 0); stp(ts + LAYOUT.TS_NSEC, 1000); } return 0; },
     clock: () => Math.floor(performance.now() * 1000),
     times: () => Math.floor(performance.now() / 10),
-    localtime_r: (_c, a) => { const t = readLong(a.p()), tm = a.p(); fillTm(tm, new Date(t * 1000), false); return ptr(tm); },
-    gmtime_r: (_c, a) => { const t = readLong(a.p()), tm = a.p(); fillTm(tm, new Date(t * 1000), true); return ptr(tm); },
-    localtime: (_c, a) => { const t = readLong(a.p()); fillTm(tmBuf, new Date(t * 1000), false); return tmBuf; },
-    gmtime: (_c, a) => { const t = readLong(a.p()); fillTm(tmBuf, new Date(t * 1000), true); return tmBuf; },
+    localtime_r: (_c, a) => { const t = ldLong(a.p()), tm = a.p(); fillTm(tm, new Date(t * 1000), false); return ptr(tm); },
+    gmtime_r: (_c, a) => { const t = ldLong(a.p()), tm = a.p(); fillTm(tm, new Date(t * 1000), true); return ptr(tm); },
+    localtime: (_c, a) => { const t = ldLong(a.p()); fillTm(tmBuf, new Date(t * 1000), false); return tmBuf; },
+    gmtime: (_c, a) => { const t = ldLong(a.p()); fillTm(tmBuf, new Date(t * 1000), true); return tmBuf; },
     mktime: (_c, a) => { const t = Math.floor(mktime(a.p()) / 1000); return PTR === 8 ? BigInt(t) : t; },
     timegm: (_c, a) => { const t = timegm(a.p()); return PTR === 8 ? BigInt(t) : t; },
     timegm64: (_c, a) => BigInt(timegm(a.p())),

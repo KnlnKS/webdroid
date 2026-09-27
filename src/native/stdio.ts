@@ -2,7 +2,7 @@
 // so the getc/putc macros and __srget refills work; /proc/cpuinfo and /proc/meminfo are synthesized.
 
 import { mem, guestAt, wrote } from "./mem";
-import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ARG0, ptr } from "./host";
+import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, stLong, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { LAYOUT, fail, utf8, logLine, offArg, readTs, clockTime, scanSink } from "./libc";
@@ -634,8 +634,7 @@ function ftsEntry(walk: FtsWalk, path: string, level: number, parent: number, in
   walk.allocations.push(entry, pathp, statp);
   mem.memset(entry, 0, layout.name + namelen + 1);
   stp(entry + layout.parent, parent); stp(entry + layout.accpath, pathp); stp(entry + layout.path, pathp);
-  if (PTR === 8) { mem.st64(entry + layout.pathlen, BigInt(pathlen)); mem.st64(entry + layout.namelen, BigInt(namelen)); }
-  else { mem.st32(entry + layout.pathlen, pathlen); mem.st32(entry + layout.namelen, namelen); }
+  stLong(entry + layout.pathlen, pathlen); stLong(entry + layout.namelen, namelen);
   mem.st32(entry + layout.ino, inoOf(path)); mem.st32(entry + layout.dev, 1); mem.st32(entry + layout.nlink, 1);
   mem.st16(entry + layout.level, level); mem.st16(entry + layout.info, info); stp(entry + layout.statp, statp);
   const file = vfs.stat(path); fillStat(statp, info === 1 || info === 6, file?.size ?? 4096, Date.now(), path);

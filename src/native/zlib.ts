@@ -3,7 +3,7 @@
 
 import { Inflate, Deflate, Zlib, Gzip } from "fflate";
 import { mem, AddrMap } from "./mem";
-import { hostLib, type HostFn, PTR, stp, ldp } from "./host";
+import { hostLib, type HostFn, PTR, stp, ldp, stLong } from "./host";
 import { concat } from "../jvm/abi";
 
 // z_stream fields used here. Pointer and ulong fields follow the process pointer width.
@@ -53,10 +53,6 @@ function loadUlong(address: number): number {
   return PTR === 8 ? Number(BigInt.asUintN(64, mem.ld64(address))) : mem.ld32(address) >>> 0;
 }
 
-function storeUlong(address: number, value: number): void {
-  if (PTR === 8) mem.st64(address, BigInt(value));
-  else mem.st32(address, value);
-}
 
 function append(a: Uint8Array, b: Uint8Array): Uint8Array {
   if (!a.length) return b;
@@ -103,8 +99,8 @@ function open(strm: number, windowBits: number): number {
   if (!s) return Z_STREAM_ERROR;
   streams.set(strm, s);
   stp(strm + Z.STATE, stateSeq++);
-  storeUlong(strm + Z.TIN, 0); storeUlong(strm + Z.TOUT, 0);
-  stp(strm + Z.MSG, 0); storeUlong(strm + Z.ADLER, s.check);
+  stLong(strm + Z.TIN, 0); stLong(strm + Z.TOUT, 0);
+  stp(strm + Z.MSG, 0); stLong(strm + Z.ADLER, s.check);
   return Z_OK;
 }
 
@@ -212,7 +208,7 @@ function drain(s: { out: Uint8Array[] }, strm: number): number {
     if (take === chunk.length) s.out.shift(); else s.out[0] = chunk.subarray(take);
   }
   stp(strm + Z.OUT, out); mem.st32(strm + Z.AVOUT, avail);
-  storeUlong(strm + Z.TOUT, loadUlong(strm + Z.TOUT) + wrote);
+  stLong(strm + Z.TOUT, loadUlong(strm + Z.TOUT) + wrote);
   return wrote;
 }
 
@@ -221,7 +217,7 @@ function consumeInput(s: Stream, strm: number): void {
   if (!consumed) return;
   stp(strm + Z.IN, ldp(strm + Z.IN) + consumed);
   mem.st32(strm + Z.AVIN, (mem.ld32(strm + Z.AVIN) >>> 0) - consumed);
-  storeUlong(strm + Z.TIN, loadUlong(strm + Z.TIN) + consumed);
+  stLong(strm + Z.TIN, loadUlong(strm + Z.TIN) + consumed);
   s.heldInput = 0;
 }
 
@@ -247,7 +243,7 @@ function inflate(strm: number, _flush: number): number {
     // Keep input available until its buffered output drains: scanline readers otherwise
     // advance past their final compressed chunk before receiving all image rows.
     s.heldInput = consumed;
-    storeUlong(strm + Z.ADLER, s.check);
+    stLong(strm + Z.ADLER, s.check);
   }
   if (code < Z_OK || code === Z_NEED_DICT) { consumeInput(s, strm); return code; }
   wrote += drain(s, strm);
@@ -273,7 +269,7 @@ function openEncoder(strm: number, level: number, bits: number): number {
   codec.ondata = (chunk) => { if (chunk.length) s.out.push(chunk); };
   encoders.set(strm, s);
   stp(strm + Z.STATE, stateSeq++); stp(strm + Z.MSG, 0);
-  storeUlong(strm + Z.TIN, 0); storeUlong(strm + Z.TOUT, 0); storeUlong(strm + Z.ADLER, s.check);
+  stLong(strm + Z.TIN, 0); stLong(strm + Z.TOUT, 0); stLong(strm + Z.ADLER, s.check);
   return Z_OK;
 }
 function deflate(strm: number, flush: number): number {
@@ -293,7 +289,7 @@ function deflate(strm: number, flush: number): number {
   if (flush === 2 || flush === 5) s.codec.flush(flush === 2);
   s.started = true; s.finished = flush === 4; s.flush = flush;
   stp(strm + Z.IN, source + count); mem.st32(strm + Z.AVIN, 0);
-  storeUlong(strm + Z.TIN, loadUlong(strm + Z.TIN) + count); storeUlong(strm + Z.ADLER, s.check);
+  stLong(strm + Z.TIN, loadUlong(strm + Z.TIN) + count); stLong(strm + Z.ADLER, s.check);
   wrote += drain(s, strm);
   return s.finished && !s.out.length ? Z_STREAM_END : count || wrote ? Z_OK : Z_BUF_ERROR;
 }
@@ -329,7 +325,7 @@ export function zlibInit(): void {
       const out = decodeZlib(mem.u8.slice(src, src + length));
       if (!out) return Z_DATA_ERROR;
       if (out.length > loadUlong(dstLen)) return Z_BUF_ERROR;
-      mem.write(dst, out); storeUlong(dstLen, out.length);
+      mem.write(dst, out); stLong(dstLen, out.length);
       return Z_OK;
     },
   };

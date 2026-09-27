@@ -137,6 +137,9 @@ export function setPtrWidth(n: number): void { PTR = n; }
 export function stp(a: number, v: number): void { const g = mem.va(v); if (typeof g === "bigint") { mem.st64(a, g); return; } mem.st32(a, v); if (PTR === 8) mem.st32(a + 4, 0); }
 /** a pointer read from guest memory, translated; a pointer stored is written as the guest knows it */
 export function ldp(a: number): number { const lo = mem.ld32(a), hi = PTR === 8 ? mem.ld32(a + 4) : 0; return hi ? mem.tx(hi, lo) : lo >>> 0; }
+/** a C long, pointer-sized: signed on load */
+export const ldLong = (a: number): number => PTR === 8 ? Number(mem.ld64(a)) : mem.ld32(a) | 0;
+export function stLong(a: number, v: number): void { if (PTR === 8) mem.st64(a, BigInt(v)); else mem.st32(a, v); }
 export function stpVa(a: number, v: number | bigint): void { if (typeof v === "bigint") mem.st64(a, v); else stp(a, v); }
 /** a pointer a host function derived from one it was given: the guest's address for it */
 export const ptr = (p: number): number | bigint => mem.va(p);
