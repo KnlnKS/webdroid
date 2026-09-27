@@ -391,7 +391,8 @@ pub export fn va(phys: u32) u64 {
     const h: u32 = @intCast(owner[u]);
     return (@as(u64, h) << 32) | (L[h] + (phys - P[h]));
 }
-export fn map_va(n: u64, rsv: u32) u64 {
+/// `low` asks for plane 0, the only space the core executes from, whenever the mapping fits there
+export fn map_va(n: u64, rsv: u32, low: u32) u64 {
     if (n == 0) return 0;
     if (n > @as(u64, 0x1_0000_0000) - PLANE_LO) {
         if (pool_base == 0) return 0;
@@ -411,7 +412,7 @@ export fn map_va(n: u64, rsv: u32) u64 {
     // Large transient mappings strand the monotonic malloc bump when they share plane 0, and a
     // plane commits in whole pool units: keep sub-stack-sized mappings, reserved or not, in
     // plane 0 where they cost pages only.
-    if (pool_base == 0 or n < abi.STACK_SIZE) {
+    if (pool_base == 0 or n < abi.STACK_SIZE or low != 0) {
         const p = map_pages(@intCast(n), rsv, PAGE_SIZE);
         if (p != 0 or pool_base == 0) return p;
     }

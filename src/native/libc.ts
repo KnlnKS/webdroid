@@ -360,7 +360,9 @@ export function libcInit(): void {
       const failed = (e: number) => { fail(cpu, e); return PTR === 8 ? -1n : -1; };
       if (!Number.isSafeInteger(n) || n <= 0 || (flags & 0x10 && (hint & 4095n))) return failed(E.INVAL);
       const reserve = (flags & 0x20) !== 0 && prot === 0;
-      const p = flags & 0x10 ? hint : mem.mapVa(n, reserve);
+      // The core executes only below 4 GiB: code (PROT_EXEC now, or a JIT's code range hinted
+      // low and made executable later, as V8's is) must not land in a plane above it.
+      const p = flags & 0x10 ? hint : mem.mapVa(n, reserve, (prot & 4) !== 0 || (hint > 0n && hint < 0x1_0000_0000n));
       if (!p || (flags & 0x10 && !(reserve ? mem.reserveVa(hint, n) : mem.commitVa(hint, n)))) return failed(E.NOMEM);
       if (flags & 0x10 && !reserve) { syncShared(hint, n, true); invalidateRange(mem.txVa(hint), n); mem.dropVa(hint, n); }
       if (fd !== -1 && !(flags & 0x20)) {

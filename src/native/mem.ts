@@ -114,7 +114,7 @@ export const mem = {
   /** buffer offset → the address the guest knows it by: itself in plane 0, else the plane's */
   va: (phys: number): number | bigint => (phys < POOL_BASE || MEM_SIZE <= POOL_BASE ? phys : num(core.va(phys >>> 0))),
   /** mmap: plane 0 while it has room, else a plane of its own; 0 when neither has room */
-  mapVa: (n: number, reserve: boolean): number | bigint => (!Number.isSafeInteger(n) || n <= 0 ? 0 : num(core.map_va(BigInt(n), reserve ? 1 : 0))),
+  mapVa: (n: number, reserve: boolean, low = false): number | bigint => (!Number.isSafeInteger(n) || n <= 0 ? 0 : num(core.map_va(BigInt(n), reserve ? 1 : 0, low ? 1 : 0))),
   unmapVa: (va: bigint, n: number): boolean => Number.isSafeInteger(n) && n > 0 && core.unmap_va(va, BigInt(n)) !== 0,
   reserveVa(va: bigint, n: number): boolean {
     const ranges: [bigint, number][] = [];
