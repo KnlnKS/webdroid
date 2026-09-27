@@ -71,7 +71,7 @@ export function mediaInit(): void {
       const previous = format.strings.get(key); if (previous) mem.free(previous); format.strings.delete(key);
       format.value.values.set(key, { type: 4, value });
     },
-    AMediaFormat_getBuffer: (cpu, a) => {
+    AMediaFormat_getBuffer: (_cpu, a) => {
       const format = formats.get(a.p()), key = a.str(), out = a.p(), size = a.p(), value = format?.value.values.get(key)?.value;
       if (!(value instanceof JBuffer) || !out) return 0;
       stpVa(out, directBufferAddress(value)); sizeOut(size, value.cap); return 1;
@@ -121,8 +121,8 @@ export function mediaInit(): void {
     AMediaCodec_start: codecStatus(codec => codec.start()),
     AMediaCodec_stop: codecStatus(codec => codec.reset()),
     AMediaCodec_flush: codecStatus(codec => { const restart = codec.started; codec.reset(); if (restart) codec.start(); }),
-    AMediaCodec_getInputBuffer: (cpu, a) => { const codec = codecs.get(a.p()), index = a.u(), size = a.p(), buffer = codec?.inputs[index]; sizeOut(size, buffer?.cap ?? 0); return buffer ? directBufferAddress(buffer) : 0; },
-    AMediaCodec_getOutputBuffer: (cpu, a) => { const output = codecs.get(a.p())?.outputs.get(a.u()), size = a.p(), buffer = output?.kind === "audio" || output?.kind === "video-buffer" ? output.buffer : null; sizeOut(size, buffer?.cap ?? 0); return buffer ? directBufferAddress(buffer) : 0; },
+    AMediaCodec_getInputBuffer: (_cpu, a) => { const codec = codecs.get(a.p()), index = a.u(), size = a.p(), buffer = codec?.inputs[index]; sizeOut(size, buffer?.cap ?? 0); return buffer ? directBufferAddress(buffer) : 0; },
+    AMediaCodec_getOutputBuffer: (_cpu, a) => { const output = codecs.get(a.p())?.outputs.get(a.u()), size = a.p(), buffer = output?.kind === "audio" || output?.kind === "video-buffer" ? output.buffer : null; sizeOut(size, buffer?.cap ?? 0); return buffer ? directBufferAddress(buffer) : 0; },
     AMediaCodec_dequeueInputBuffer: (_cpu, a) => { const codec = codecs.get(a.p()), timeout = a.l(); if (!codec) return BAD_OBJECT; try { const result = codec.dequeueInput(timeout); return result instanceof Promise ? result.catch(() => INVALID) : result; } catch { return INVALID; } },
     AMediaCodec_dequeueOutputBuffer: (_cpu, a) => {
       const codec = codecs.get(a.p()), out = a.p(), timeout = a.l(); if (!codec || !out) return INVALID;

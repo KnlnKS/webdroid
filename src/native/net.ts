@@ -92,7 +92,6 @@ function readEndpoint(cpu: Cpu, sockaddr: number, length: number): Ipv4Endpoint 
   };
 }
 
-
 function nativeGetifaddrs(cpu: Cpu, result: number): number {
   if (!result) return fail(cpu, E.FAULT);
   const size = PTR === 8 ? 56 : 28;

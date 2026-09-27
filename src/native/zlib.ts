@@ -53,7 +53,6 @@ function loadUlong(address: number): number {
   return PTR === 8 ? Number(BigInt.asUintN(64, mem.ld64(address))) : mem.ld32(address) >>> 0;
 }
 
-
 function append(a: Uint8Array, b: Uint8Array): Uint8Array {
   if (!a.length) return b;
   if (!b.length) return a;
