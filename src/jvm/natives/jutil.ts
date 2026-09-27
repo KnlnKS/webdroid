@@ -19,6 +19,21 @@ function fillToArray(items: unknown[], out: unknown[]): unknown[] {
   return jarray(items.slice(), (out as { $t?: string } | null)?.$t);
 }
 
+/** AbstractCollection/AbstractMap.toString: elements print through their own toString, and the
+ *  container itself as "(this Collection)" / "(this Map)" */
+const elemText = (x: unknown, self: unknown, selfText: string): string | Promise<string> =>
+  x === self ? selfText : x == null ? "null" : typeof x === "object" ? after(vcall(x, "toString", "()Ljava/lang/String;"), String) : String(x);
+const seqText = driven(function* seqText(self: unknown, items: Iterable<unknown>): Gen<string> {
+  const parts: string[] = [];
+  for (const x of items) parts.push(yield elemText(x, self, "(this Collection)"));
+  return "[" + parts.join(", ") + "]";
+});
+const mapText = driven(function* mapText(self: unknown, entries: Iterable<Ent>): Gen<string> {
+  const parts: string[] = [];
+  for (const e of entries) parts.push(`${yield elemText(e.k, self, "(this Map)")}=${yield elemText(e.v, self, "(this Map)")}`);
+  return "{" + parts.join(", ") + "}";
+});
+
 // equality / hashing bridges (sync when possible)
 export function jeq(a: unknown, b: unknown): number | Promise<number> {
   if (a === b) return 1;
@@ -454,11 +469,7 @@ export function listMethods(): Methods {
       return 1;
     }),
     "hashCode()I": function (this: JList) { return hashSeq(this.a); },
-    "toString()Ljava/lang/String;": driven(function* (this: JList): Gen {
-      const parts: string[] = [];
-      for (const e of this.a) parts.push(e === null ? "null" : String(typeof e === "object" ? yield vcall(e, "toString", "()Ljava/lang/String;") : e));
-      return "[" + parts.join(", ") + "]";
-    }),
+    "toString()Ljava/lang/String;": function (this: JList) { return seqText(this, this.a); },
     // Deque/Queue-ish extras (LinkedList/ArrayDeque share this)
     "addFirst(Ljava/lang/Object;)V": function (this: JList, v: unknown) { this.a.unshift(v); },
     "addLast(Ljava/lang/Object;)V": function (this: JList, v: unknown) { this.a.push(v); },
@@ -837,9 +848,7 @@ function mapMethods(): Methods {
     "keySet()Ljava/util/Set;": function (this: JMap) { return new JSetView(this, "k"); },
     "values()Ljava/util/Collection;": function (this: JMap) { return new JSetView(this, "v"); },
     "entrySet()Ljava/util/Set;": function (this: JMap) { return new JSetView(this, "e"); },
-    "toString()Ljava/lang/String;": function (this: JMap) {
-      return "{" + [...allEnts(this)].map((e) => `${e.k}=${e.v}`).join(", ") + "}";
-    },
+    "toString()Ljava/lang/String;": function (this: JMap) { return mapText(this, allEnts(this)); },
     "hashCode()I": function (this: JMap) {
       const entries = [...allEnts(this)];
       return this.identity ? entries.reduce((sum, entry) => (sum + (idHash(entry.k) ^ idHash(entry.v))) | 0, 0) : mapHash(entries);
@@ -1045,7 +1054,7 @@ rt.register({
       return 1;
     }),
     "clear()V": function (this: JSetView) { ensureMapMutable(this.map); this.map.m.clear(); this.map.slow.length = 0; this.map.slowVersion++; },
-    "toString()Ljava/lang/String;": function (this: JSetView) { return "[" + this.snapshot().join(", ") + "]"; },
+    "toString()Ljava/lang/String;": function (this: JSetView) { return seqText(this, this.snapshot()); },
   },
 });
 
@@ -1243,7 +1252,7 @@ function setMethods(): Methods {
     }),
     "toArray()[Ljava/lang/Object;": function (this: JSet) { return jarray(setItems(this)); },
     "toArray([Ljava/lang/Object;)[Ljava/lang/Object;": function (this: JSet, out: unknown[]) { return fillToArray(setItems(this), out); },
-    "toString()Ljava/lang/String;": function (this: JSet) { return "[" + setItems(this).join(", ") + "]"; },
+    "toString()Ljava/lang/String;": function (this: JSet) { return seqText(this, setItems(this)); },
     // Set equality is membership, not identity: an empty HashSet equals any empty Set.
     "equals(Ljava/lang/Object;)Z": driven(function* (this: JSet, o: unknown): Gen {
       if (o === this) return 1;
@@ -1963,13 +1972,7 @@ const absCollection: Methods = {
   "toArray([Ljava/lang/Object;)[Ljava/lang/Object;": driven(function* (this: JObj, out: unknown[]): Gen {
     return fillToArray(yield toJsArray(this), out);
   }),
-  "toString()Ljava/lang/String;": driven(function* (this: JObj): Gen {
-    const parts: string[] = [];
-    for (const x of yield toJsArray(this)) {
-      parts.push(x === this ? "(this Collection)" : x === null ? "null" : String(yield vcall(x, "toString", "()Ljava/lang/String;")));
-    }
-    return "[" + parts.join(", ") + "]";
-  }),
+  "toString()Ljava/lang/String;": function (this: JObj) { return after(toJsArray(this), (items) => seqText(this, items)); },
 };
 const bulkRemove = driven(function* bulkRemove(self: unknown, c: unknown, when: boolean): Gen<number> {
   if (c == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
@@ -2125,10 +2128,9 @@ const absMap: Methods = {
     return h;
   }),
   "toString()Ljava/lang/String;": driven(function* (this: JObj): Gen {
-    const s = async (x: unknown) => (x === this ? "(this Map)" : x === null ? "null" : String(await vcall(x, "toString", "()Ljava/lang/String;")));
-    const parts: string[] = [];
-    for (const e of yield mapEntries(this)) parts.push(`${yield s(yield entryKey(e))}=${yield s(yield entryVal(e))}`);
-    return "{" + parts.join(", ") + "}";
+    const entries: Ent[] = [];
+    for (const e of yield mapEntries(this)) entries.push({ k: yield entryKey(e), v: yield entryVal(e) });
+    return yield mapText(this, entries);
   }),
 };
 rt.register({
