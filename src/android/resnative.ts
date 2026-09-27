@@ -19,6 +19,7 @@ import { fontResource } from "./fonts";
 import { type JParcel, readString, writeString } from "./parcel";
 import { parcelCreator } from "./parcelable";
 import { annotatedResource } from "./text";
+import { appHost } from "./apphost";
 
 export class JResources extends JObj {
   host!: Resources;
@@ -122,13 +123,21 @@ rt.register({
     "isScreenHdr()Z": function (this: JConfiguration) { return (this.colorMode & 12) === 8 ? 1 : 0; },
   },
 });
-// API 33: no per-app locale override is ever set here, so the app's locales are the system's
+// API 33 per-app languages: the app's own list, empty to follow the system's. The host persists
+// it and delivers the configuration change; adopting it is applyApplicationLocales below.
+let appLocales = emptyLocaleList;
 rt.register({
   name: "android/app/LocaleManager", ctor: class extends JObj {},
   methods: {
-    "getApplicationLocales()Landroid/os/LocaleList;": () => emptyLocaleList,
-    "getApplicationLocales(Ljava/lang/String;)Landroid/os/LocaleList;": () => emptyLocaleList,
-    "setApplicationLocales(Landroid/os/LocaleList;)V": () => {},
+    "getApplicationLocales()Landroid/os/LocaleList;": () => appLocales,
+    "getApplicationLocales(Ljava/lang/String;)Landroid/os/LocaleList;": (pkg: string) => {
+      if (pkg !== appHost?.pkg) throw rt.mkThrowable("java/lang/SecurityException", "Reading another app's locales requires READ_APP_SPECIFIC_LOCALES");
+      return appLocales;
+    },
+    "setApplicationLocales(Landroid/os/LocaleList;)V": (list: JLocaleList | null) => {
+      if (!list) rt.npe();
+      appHost?.setApplicationLocales(list!);
+    },
     "getSystemLocales()Landroid/os/LocaleList;": () => localeList,
     "getOverrideLocaleConfig()Landroid/app/LocaleConfig;": () => null,
   },
@@ -141,8 +150,8 @@ rt.register({
       if (!locales || locales.some(l => !l)) throw rt.mkThrowable("java/lang/NullPointerException", "locales");
       this.values = locales.filter((l, i) => locales.findIndex(other => sameLocale(l, other)) === i);
     },
-    "static getDefault()Landroid/os/LocaleList;": () => localeList,
-    "static getAdjustedDefault()Landroid/os/LocaleList;": () => localeList,
+    "static getDefault()Landroid/os/LocaleList;": () => configLocales(theConfig),
+    "static getAdjustedDefault()Landroid/os/LocaleList;": () => configLocales(theConfig),
     "static getEmptyLocaleList()Landroid/os/LocaleList;": () => emptyLocaleList,
     "static forLanguageTags(Ljava/lang/String;)Landroid/os/LocaleList;": driven(function* (tags: string | null): Gen {
       const list = new JLocaleList();
@@ -228,6 +237,20 @@ export function syncDeviceOrientation(): void {
   theConfig.smallestScreenWidthDp = device.smallestWidthDp;
   setResourceOrientation(theConfig.orientation, theConfig.screenWidthDp, device.screenHeightDp, theConfig.smallestScreenWidthDp);
 }
+/** Adopt the app's language list (empty: the system's) as the platform's configuration change
+ *  does: Configuration, resource selection and the default Locale follow it. Returns whether
+ *  the effective locales moved. */
+export function applyApplicationLocales(list: JLocaleList): boolean {
+  appLocales = list;
+  const next = list.values.length ? list : localeList, current = configLocales(theConfig).values;
+  if (next.values.length === current.length && next.values.every((l, i) => sameLocale(l, current[i]))) return false;
+  setLocales(theConfig, next);
+  setResourceLocale(theConfig.locale?.lang ?? "", theConfig.screenLayout & 0xc0);
+  void vcall(rt.link("java/util/Locale").ctor, "setDefault", "(Ljava/util/Locale;)V", theConfig.locale);
+  return true;
+}
+export const localesFromTags = (tags: string): Promise<JLocaleList> =>
+  vcall(rt.link("android/os/LocaleList").ctor, "forLanguageTags", "(Ljava/lang/String;)Landroid/os/LocaleList;", tags);
 /** The device's own night setting changed. Returns whether anything moved. */
 export function setDeviceNight(night: boolean): boolean {
   if (night === isNight()) return false;
