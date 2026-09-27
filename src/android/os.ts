@@ -562,25 +562,25 @@ export function bundleGet(b: JBaseBundle, k: string, descriptor: string, fallbac
   const v = b.map.get(k);
   return descriptor.length === 1 ? bundlePrimitive(v, descriptor, fallback) : v ?? fallback;
 }
-/** Every typed value a Bundle carries, by accessor stem: Bundle get/put<stem>, and for the ones
- *  Intent carries, get<stem>Extra with putExtra (put<stem>Extra for the ArrayLists). */
-const BUNDLE_TYPES: readonly (readonly [string, string])[] = [
+/** The typed values an Intent's extras carry, by accessor stem: Bundle get/put<stem>, and Intent's
+ *  get<stem>Extra with putExtra (put<stem>Extra for the ArrayLists). */
+export const INTENT_TYPES: readonly (readonly [string, string])[] = [
   ...["Boolean", "Byte", "Char", "Short", "Int", "Long", "Float", "Double"].flatMap((t, i) => [[t, "ZBCSIJFD"[i]], [t + "Array", "[" + "ZBCSIJFD"[i]]] as const),
   ["String", "Ljava/lang/String;"], ["CharSequence", "Ljava/lang/CharSequence;"], ["Parcelable", "Landroid/os/Parcelable;"],
   ["Serializable", "Ljava/io/Serializable;"], ["Bundle", "Landroid/os/Bundle;"], ["IBinder", "Landroid/os/IBinder;"],
   ["StringArray", "[Ljava/lang/String;"], ["CharSequenceArray", "[Ljava/lang/CharSequence;"], ["ParcelableArray", "[Landroid/os/Parcelable;"],
   ...["Integer", "String", "CharSequence", "Parcelable"].map((t) => [t + "ArrayList", "Ljava/util/ArrayList;"] as const),
-  // Bundle only
-  ["Binder", "Landroid/os/IBinder;"], ["PersistableBundle", "Landroid/os/PersistableBundle;"], ["Size", "Landroid/util/Size;"],
-  ["SizeF", "Landroid/util/SizeF;"], ["SparseParcelableArray", "Landroid/util/SparseArray;"],
 ];
-export const INTENT_TYPES = BUNDLE_TYPES.slice(0, BUNDLE_TYPES.findIndex(([t]) => t === "Binder"));
-/** API 33's class-checked getters, [stem, return]. The class narrows a single value, which a
- *  mismatch reads as null; arrays and lists hold what was put. */
-export const BUNDLE_TYPED = [["Parcelable", "Ljava/lang/Object;"], ["Serializable", "Ljava/io/Serializable;"],
-  ["ParcelableArray", "[Ljava/lang/Object;"], ["ParcelableArrayList", "Ljava/util/ArrayList;"], ["SparseParcelableArray", "Landroid/util/SparseArray;"]] as const;
-export function bundleTyped(b: JBaseBundle, k: string, cls: unknown, single: boolean): unknown {
-  const v = boxObject(b.map.get(k) ?? null);
+const BUNDLE_TYPES = [...INTENT_TYPES, ["Binder", "Landroid/os/IBinder;"], ["PersistableBundle", "Landroid/os/PersistableBundle;"],
+  ["Size", "Landroid/util/Size;"], ["SizeF", "Landroid/util/SizeF;"], ["SparseParcelableArray", "Landroid/util/SparseArray;"]] as const;
+/** API 33's class-checked getters, [stem, return]: Intent's get<stem>Extra, and Bundle's get<stem>. */
+export const INTENT_TYPED = [["Parcelable", "Ljava/lang/Object;"], ["Serializable", "Ljava/io/Serializable;"],
+  ["ParcelableArray", "[Ljava/lang/Object;"], ["ParcelableArrayList", "Ljava/util/ArrayList;"]] as const;
+const BUNDLE_TYPED = [...INTENT_TYPED, ["SparseParcelableArray", "Landroid/util/SparseArray;"]] as const;
+/** A class-checked getter's value. The class narrows a single value, which a mismatch reads as
+ *  null; arrays and lists hold what was put. */
+export function bundleTyped(b: JBaseBundle, k: string, cls: unknown, ret: string): unknown {
+  const v = boxObject(b.map.get(k) ?? null), single = ret === "Ljava/lang/Object;" || ret === "Ljava/io/Serializable;";
   return single && v !== null && !vcall(cls, "isInstance", "(Ljava/lang/Object;)Z", v) ? null : v;
 }
 function copyBundle(this: JBaseBundle, b: JBaseBundle | null) { if (b) { this.map = new Map(b.map); this.loader = b.loader; } }
@@ -626,8 +626,7 @@ for (const [t, d] of BUNDLE_TYPES) {
   }
 }
 for (const [t, d] of BUNDLE_TYPED) {
-  const single = d === "Ljava/lang/Object;" || d === "Ljava/io/Serializable;";
-  bundleMethods[`get${t}(Ljava/lang/String;Ljava/lang/Class;)${d}`] = function (this: JBundle, k: string, cls: unknown) { return bundleTyped(this, k, cls, single); };
+  bundleMethods[`get${t}(Ljava/lang/String;Ljava/lang/Class;)${d}`] = function (this: JBundle, k: string, cls: unknown) { return bundleTyped(this, k, cls, d); };
 }
 rt.register({ name: "android/os/BaseBundle", ctor: JBaseBundle, methods: bundleMethods });
 rt.register({ name: "android/os/Bundle", ctor: JBundle, sup: "android/os/BaseBundle",
