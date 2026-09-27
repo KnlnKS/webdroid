@@ -23,23 +23,23 @@ const sems = new AddrMap<{ count: number; waiters: (() => void)[] }>();
  *  the reader count or RW_WRITER, the writer's tid, and how many threads wait. The core serves
  *  uncontended calls on the same words (libc.zig); a blocked acquirer parks here, and an unlock
  *  that finds waiters wakes them all to retry. */
-const RW_WRITER = 0x80000000;
+const RW_WRITER = 0x80000000, RW_TID = 4, RW_WAITERS = 8;
 const rwWaiters = new AddrMap<(() => void)[]>();
 function rwTry(cpu: Cpu, a: number, write: boolean): boolean {
   const state = mem.ld32(a) >>> 0;
   if (write ? state !== 0 : (state & RW_WRITER) !== 0) return false;
-  if (write) { mem.st32(a, RW_WRITER); mem.st32(a + 4, cpu.tid); } else mem.st32(a, state + 1);
+  if (write) { mem.st32(a, RW_WRITER); mem.st32(a + RW_TID, cpu.tid); } else mem.st32(a, state + 1);
   return true;
 }
 function rwAcquire(cpu: Cpu, a: number, write: boolean): number | Promise<number> {
   if (rwTry(cpu, a, write)) return 0;
   return (async () => {
     do {
-      mem.st32(a + 8, mem.ld32(a + 8) + 1);
+      mem.st32(a + RW_WAITERS, mem.ld32(a + RW_WAITERS) + 1);
       let q = rwWaiters.get(a);
       if (!q) rwWaiters.set(a, (q = []));
       await new Promise<void>((r) => q.push(r));
-      mem.st32(a + 8, mem.ld32(a + 8) - 1);
+      mem.st32(a + RW_WAITERS, mem.ld32(a + RW_WAITERS) - 1);
     } while (!rwTry(cpu, a, write));
     return 0;
   })();
@@ -47,11 +47,11 @@ function rwAcquire(cpu: Cpu, a: number, write: boolean): number | Promise<number
 function rwRelease(cpu: Cpu, a: number): number {
   const state = mem.ld32(a) >>> 0;
   if (state & RW_WRITER) {
-    if (mem.ld32(a + 4) !== cpu.tid) return E.PERM;
-    mem.st32(a, 0); mem.st32(a + 4, 0);
+    if (mem.ld32(a + RW_TID) !== cpu.tid) return E.PERM;
+    mem.st32(a, 0); mem.st32(a + RW_TID, 0);
   } else if (state) mem.st32(a, state - 1);
   else return E.PERM;
-  if (mem.ld32(a + 8)) for (const w of rwWaiters.get(a)?.splice(0) ?? []) w();
+  if (mem.ld32(a + RW_WAITERS)) for (const w of rwWaiters.get(a)?.splice(0) ?? []) w();
   return 0;
 }
 const threads = new Map<number, { done: Promise<void>; retval: bigint; detached: boolean; joined: boolean; exited: boolean; storage: number }>();
@@ -386,7 +386,7 @@ export function pthreadInit(): void {
     pthread_cond_broadcast: (_c, a) => { const l = conds.get(a.p()); if (l) for (const w of l.splice(0)) w(false); return 0; },
     pthread_condattr_init: () => 0, pthread_condattr_destroy: () => 0, pthread_condattr_setclock: () => 0, pthread_condattr_setpshared: () => 0,
     pthread_key_create: (_c, a) => { const out = a.p(), dtor = a.p(); if (keySeq >= TLS_KEYS) return E.AGAIN; if (dtor) keyDtors.set(keySeq, dtor); mem.st32(out, keySeq++); return 0; },
-    pthread_rwlock_init: (_c, a) => { mem.memset(a.p(), 0, 12); return 0; },
+    pthread_rwlock_init: (_c, a) => { mem.memset(a.p(), 0, RW_WAITERS + 4); return 0; },
     pthread_rwlock_destroy: (_c, a) => { rwWaiters.delete(a.p()); return 0; },
     pthread_rwlock_rdlock: (cpu, a) => rwAcquire(cpu, a.p(), false),
     pthread_rwlock_wrlock: (cpu, a) => rwAcquire(cpu, a.p(), true),

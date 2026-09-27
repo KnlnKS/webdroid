@@ -60,7 +60,34 @@ pub const Fn = enum(u8) {
     pthread_rwlock_unlock,
 };
 pub const Result = enum(u32) { done, fault, host };
+/// The rwlock words src/native/pthread.ts keeps: state (reader count or RW_WRITER), writer tid, waiters.
+/// Anything that must wait, or wake a waiter, goes to the host.
 const RW_WRITER: u32 = 0x8000_0000;
+const RW_TID = 4;
+const RW_WAITERS = 8;
+fn rwLock(c: *Cpu, write: bool, try_only: bool) Result {
+    const a = ptr(c, 0) orelse return .fault;
+    const s = mem.ld(u32, a);
+    const busy = if (write) s != 0 else s & RW_WRITER != 0;
+    if (busy and !try_only) return .host;
+    if (busy) {
+        ret(c, 16);
+        return .done;
+    }
+    if (!cpu.st(u32, c, a, if (write) RW_WRITER else s + 1)) return .fault;
+    if (write and !cpu.st(u32, c, a + RW_TID, c.tid)) return .fault;
+    ret(c, 0);
+    return .done;
+}
+fn rwUnlock(c: *Cpu) Result {
+    const a = ptr(c, 0) orelse return .fault;
+    const s = mem.ld(u32, a);
+    const writer = s & RW_WRITER != 0;
+    if (mem.ld(u32, a + RW_WAITERS) != 0 or s == 0 or (writer and mem.ld(u32, a + RW_TID) != c.tid)) return .host;
+    if (!cpu.st(u32, c, a, if (writer) 0 else s - 1)) return .fault;
+    ret(c, 0);
+    return .done;
+}
 export fn libc_call(cp: u32, id: u32) u32 {
     abi.require(id != 0 and id < @typeInfo(Fn).@"enum".fields.len, "libc_call: unknown id");
     return @intFromEnum(call(@ptrFromInt(cp), @intCast(id)));
@@ -240,27 +267,9 @@ pub fn call(c: *Cpu, id: u8) Result {
             if (!cpu.st(u32, c, a, if (kind != 0 and w & 0x3ffc != 0) w - 4 else w & 0xe000)) return .fault;
             ret(c, 0);
         },
-        // the words and waiter rule src/native/pthread.ts keeps; anything that must wait or wake goes to the host
-        .pthread_rwlock_rdlock, .pthread_rwlock_tryrdlock, .pthread_rwlock_wrlock, .pthread_rwlock_trywrlock => {
-            const a = ptr(c, 0) orelse return .fault;
-            const s = mem.ld(u32, a);
-            const write = f == .pthread_rwlock_wrlock or f == .pthread_rwlock_trywrlock;
-            if (if (write) s != 0 else s & RW_WRITER != 0) {
-                if (f == .pthread_rwlock_rdlock or f == .pthread_rwlock_wrlock) return .host;
-                ret(c, 16);
-                return .done;
-            }
-            if (!cpu.st(u32, c, a, if (write) RW_WRITER else s + 1)) return .fault;
-            if (write and !cpu.st(u32, c, a + 4, c.tid)) return .fault;
-            ret(c, 0);
-        },
-        .pthread_rwlock_unlock => {
-            const a = ptr(c, 0) orelse return .fault;
-            const s = mem.ld(u32, a);
-            if (mem.ld(u32, a + 8) != 0 or s == 0 or (s & RW_WRITER != 0 and mem.ld(u32, a + 4) != c.tid)) return .host;
-            if (!cpu.st(u32, c, a, if (s & RW_WRITER != 0) 0 else s - 1)) return .fault;
-            ret(c, 0);
-        },
+        .pthread_rwlock_rdlock, .pthread_rwlock_tryrdlock => return rwLock(c, false, f == .pthread_rwlock_tryrdlock),
+        .pthread_rwlock_wrlock, .pthread_rwlock_trywrlock => return rwLock(c, true, f == .pthread_rwlock_trywrlock),
+        .pthread_rwlock_unlock => return rwUnlock(c),
         .memcpy, .memmove, .__memcpy_chk => {
             if (f == .__memcpy_chk and (arg(c, 2) > arg(c, 3) or arg(c, 2) > std.math.maxInt(u32))) return .host;
             const n: u32 = @truncate(arg(c, 2));
