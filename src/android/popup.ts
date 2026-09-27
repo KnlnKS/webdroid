@@ -8,11 +8,15 @@ import { JView, JFrameLP, uiState, invalidate, requestLayout, locationOnScreen, 
 import { JMotionEvent } from "./motionevent";
 import { JFrameLayout } from "./layouts";
 import { JDrawable, loadDrawableRV } from "./drawable";
-import { AID, obtainStyled, rvDimen, rvInt, themeOf, type Resources, type JTheme, type JAttrSet } from "./res";
+import { AID, obtainStyled, rvDimen, rvInt, themeOf, frameworkDimen, resString, type Resources, type JTheme, type JAttrSet } from "./res";
 import { TV } from "./axml";
 import { device } from "../shell/config";
 import { JContextWrapper, type JContext } from "./context";
 import { JCanvas, JRect, measureCtx } from "./graphics";
+import { JWindowLayoutParams, addWindow, removeWindow } from "./window";
+import { csText } from "./text";
+import { onMain } from "./mainloop";
+import { setGuestTimeout, clearGuestTimeout, type GuestTimer } from "../guest-clock";
 
 export interface Overlay {
   view: JView;
@@ -59,12 +63,61 @@ export const detachContextOverlays = driven(function* detachContextOverlays(owne
   }
 });
 
-// toast: plain shell-drawn banner (not a View)
+// Toast. A text toast is a shell-drawn banner, as SystemUI draws one; a custom view is a
+// TYPE_TOAST window that takes neither touches nor keys. Both last NotificationManagerService's
+// SHORT_DELAY or LONG_DELAY, and a newer custom toast replaces a showing one.
+const TOAST_MS = [2000, 3500];
+const TOAST_WINDOW = { width: -2, height: -2, type: 2005 /* TYPE_TOAST */, format: -3 /* TRANSLUCENT */,
+  flags: 0x98 /* KEEP_SCREEN_ON | NOT_TOUCHABLE | NOT_FOCUSABLE */ };
 const toasts: { text: string; until: number }[] = [];
-export function showToast(text: string) {
-  toasts.push({ text, until: uptimeMillis() + 2500 });
+function showToast(text: string, ms: number) {
+  toasts.push({ text, until: uptimeMillis() + ms });
   invalidate();
 }
+/** position defaults: com.android.internal.R.dimen.toast_y_offset, config_toastDefaultGravity */
+class JToast extends JObj {
+  text = ""; view: JView | null = null; duration = 0; gravity = 81 /* BOTTOM | CENTER_HORIZONTAL */; x = 0; y = frameworkDimen("toast_y_offset");
+  timer: GuestTimer | null = null;
+}
+let shownToast: JToast | null = null;
+const hideToast = driven(function* hideToast(this: JToast): Gen {
+  if (this.timer === null) return;
+  clearGuestTimeout(this.timer);
+  this.timer = null;
+  if (shownToast === this) shownToast = null;
+  if (this.view) yield removeWindow(this.view);
+});
+const makeToast = (text: string, duration: number) => Object.assign(new JToast(), { text, duration });
+rt.register({
+  name: "android/widget/Toast", ctor: JToast,
+  statics: { LENGTH_SHORT: 0, LENGTH_LONG: 1 },
+  methods: {
+    "<init>(Landroid/content/Context;)V": function () {},
+    "static makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;": driven(function* (_c: unknown, t: unknown, d: number): Gen {
+      return makeToast(yield csText(t), d);
+    }),
+    "static makeText(Landroid/content/Context;II)Landroid/widget/Toast;": (c: JContext | null, id: number, d: number) =>
+      makeToast(c?.$host ? resString(c.$host.res, id) : "", d),
+    "show()V": driven(function* (this: JToast): Gen {
+      const ms = TOAST_MS[this.duration ? 1 : 0];
+      if (!this.view) return showToast(this.text, ms);
+      if (shownToast) yield hideToast.call(shownToast);
+      yield addWindow(this.view, Object.assign(new JWindowLayoutParams(), TOAST_WINDOW, { gravity: this.gravity, x: this.x, y: this.y }));
+      shownToast = this;
+      this.timer = setGuestTimeout(() => void onMain(() => hideToast.call(this)).catch(reportUncaught), ms);
+    }),
+    "cancel()V": hideToast,
+    "setText(Ljava/lang/CharSequence;)V": driven(function* (this: JToast, t: unknown): Gen { this.text = yield csText(t); }),
+    "setView(Landroid/view/View;)V": function (this: JToast, v: JView | null) { this.view = v; },
+    "getView()Landroid/view/View;": function (this: JToast) { return this.view; },
+    "setDuration(I)V": function (this: JToast, d: number) { this.duration = d; },
+    "getDuration()I": function (this: JToast) { return this.duration; },
+    "setGravity(III)V": function (this: JToast, g: number, x: number, y: number) { Object.assign(this, { gravity: g, x, y }); },
+    "getGravity()I": function (this: JToast) { return this.gravity; },
+    "getXOffset()I": function (this: JToast) { return this.x; },
+    "getYOffset()I": function (this: JToast) { return this.y; },
+  },
+});
 export function drawToasts(ctx: OffscreenCanvasRenderingContext2D, w: number, h: number) {
   const now = uptimeMillis();
   for (let i = toasts.length - 1; i >= 0; i--) {

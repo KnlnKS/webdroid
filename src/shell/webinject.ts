@@ -146,6 +146,8 @@ addEventListener("message", async event => {
       context.page = final;
       history.replaceState(null, "", local);
     }
+    // an android_asset page's relative URLs and its own location.search belong to the asset, not /webview
+    if (event.data.doc === undefined && event.data.src?.startsWith("/asset/")) history.replaceState(null, "", event.data.src);
     let html = event.data.doc ?? await response.text();
     if (response?.headers.get("x-wd-local-asset") === "1") {
       const inject = ${JSON.stringify(WEB_INJECT).replace(/</g, "\\u003c")};

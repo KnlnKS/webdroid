@@ -4,7 +4,7 @@ import { rt, JObj } from "../src/jvm/runtime";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { systemService, JContext } from "../src/android/context";
 import { mpegAudioDuration } from "../src/android/media-mpeg";
-import { vfs } from "../src/jvm/natives/jio";
+import { vfs } from "../src/shell/vfs";
 import { mangleMethod } from "../src/jvm/abi";
 import { onMain } from "../src/android/mainloop";
 

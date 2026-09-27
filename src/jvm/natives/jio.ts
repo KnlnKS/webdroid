@@ -5,138 +5,13 @@ import { mangleStaticField, mangleMethod, charsToString, jarray, utf8, concat, i
 import { encodeModifiedUtf8 } from "../charset";
 import { vcall, vcallOn, curThread, after, stringHash, stringCompare, mkEnumSet, javaFormat, newObj, defineException, type JSimpleEnum } from "./jlang";
 import { csText } from "./jchars";
-import { BytesFile, readFully, type FileSource } from "../../shell/lazyfile";
-import { procText } from "../../shell/procfs";
+import { readFully, writable, type FileSource } from "../../shell/lazyfile";
+import { vfs, EMPTY, type VfsFile } from "../../shell/vfs";
 import { mappedBuffer, mappedReadOnlyBuffer, mkByteBuffer, type JBuffer } from "./jnio";
 import { renamePath, javaOpenFd, javaCloseFd, javaSeekFd, javaFdSource, javaReadFd, javaAvailableFd } from "../../native/stdio";
 
-/** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
- *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
-export const apkPath = (split?: string) => split ? `/data/app/split_${split}.apk` : "/data/app/base.apk";
-
 rt.register({ name: "java/io/Externalizable", ctor: class extends JObj {}, ifaces: ["java/io/Serializable"] });
 
-export interface VfsFile { path: string | null; data: Uint8Array; len: number }
-const openFiles = new Map<string, VfsFile>();
-// ── VFS: path → bytes. Directories implicit.
-const volatileFiles = new Set<string>();
-const procBytes = (path: string): Uint8Array | null => {
-  const text = procText(path);
-  return text === null ? null : utf8.enc.encode(text);
-};
-export const vfs = {
-  files: new Map<string, Uint8Array>(),
-  lazyFiles: new Map<string, FileSource>(),
-  dirs: new Set<string>(["/data", "/data/local", "/data/local/tmp", "/sdcard"]),
-  prepare: (_pkg: string): Promise<void> => Promise.resolve(),
-  flush: (): Promise<void> => Promise.resolve(),
-  onWrite: (_path: string, _change: "modify" | "write" | "create" | "delete" = "modify") => {},
-  markVolatile(p: string) { volatileFiles.add(this.norm(p)); },
-  norm(p: string): string {
-    const parts: string[] = [];
-    for (const seg of p.split("/")) {
-      if (seg === "" || seg === ".") continue;
-      if (seg === "..") parts.pop();
-      else parts.push(seg);
-    }
-    return "/" + parts.join("/");
-  },
-  read(p: string): Uint8Array | null { const path = this.norm(p); return this.files.get(path) ?? procBytes(path); },
-  readFile(p: string): Uint8Array | Promise<Uint8Array> | null {
-    const path = this.norm(p);
-    const bytes = this.files.get(path);
-    if (bytes) return bytes;
-    const source = this.lazyFiles.get(path);
-    return source ? readFully(source) : procBytes(path);
-  },
-  source(p: string): FileSource | null {
-    const path = this.norm(p);
-    const bytes = this.files.get(path) ?? procBytes(path);
-    return bytes ? new BytesFile(bytes) : this.lazyFiles.get(path) ?? null;
-  },
-  stat(p: string): { size: number; source: FileSource } | null {
-    const source = this.source(p);
-    return source ? { size: source.size, source } : null;
-  },
-  open(p: string): VfsFile | null {
-    const path = this.norm(p), data = this.files.get(path);
-    if (!data) return null;
-    let file = openFiles.get(path);
-    if (!file) { file = { path, data, len: data.length }; openFiles.set(path, file); }
-    return file;
-  },
-  publish(file: VfsFile) {
-    if (file.path === null || openFiles.get(file.path) !== file) return;
-    this.files.set(file.path, file.data.subarray(0, file.len));
-    if (!volatileFiles.has(file.path)) this.onWrite(file.path, "modify");
-  },
-  write(p: string, data: Uint8Array, notify = true) {
-    const path = this.norm(p);
-    const existed = this.files.has(path) || this.lazyFiles.has(path);
-    this.lazyFiles.delete(path);
-    this.files.set(path, data);
-    const file = openFiles.get(path);
-    if (file) {
-      file.data = data;
-      file.len = data.length;
-    }
-    if (notify && !volatileFiles.has(path)) this.onWrite(path, existed ? "write" : "create");
-  },
-  mount(p: string, source: FileSource) {
-    const path = this.norm(p);
-    this.delete(path, false);
-    this.lazyFiles.set(path, source);
-  },
-  under(p: string): boolean {
-    if (this.dirs.has(p)) return true;
-    const dir = p.endsWith("/") ? p : p + "/";
-    for (const d of this.dirs) if (d.startsWith(dir)) return true;
-    for (const m of [this.files, this.lazyFiles]) for (const k of m.keys()) if (k.startsWith(dir)) return true;
-    return false;
-  },
-  exists(p: string): boolean {
-    p = this.norm(p);
-    return this.files.has(p) || this.lazyFiles.has(p) || this.under(p) || procText(p) !== null;
-  },
-  isDir(p: string): boolean {
-    p = this.norm(p);
-    return !this.files.has(p) && !this.lazyFiles.has(p) && this.under(p);
-  },
-  delete(p: string, notify = true): boolean {
-    const path = this.norm(p);
-    const volatile = volatileFiles.delete(path);
-    const file = openFiles.get(path);
-    if (file) { file.path = null; openFiles.delete(path); }
-    const removed = this.files.delete(path) || this.lazyFiles.delete(path);
-    if (removed && notify && !volatile) this.onWrite(path, "delete");
-    return removed;
-  },
-  rename(from: string, to: string): boolean {
-    from = this.norm(from); to = this.norm(to);
-    if (!this.files.has(from) && !this.lazyFiles.has(from)) return false;
-    if (from === to) return true;
-    this.delete(to, false);
-    for (const files of [this.files, this.lazyFiles]) {
-      const value = files.get(from);
-      if (value) { files.delete(from); files.set(to, value as never); }
-    }
-    const file = openFiles.get(from);
-    if (file) { openFiles.delete(from); file.path = to; openFiles.set(to, file); }
-    this.onWrite(from, "delete"); this.onWrite(to, "create");
-    return true;
-  },
-  mkdir(p: string) { const path = this.norm(p); if (!this.dirs.has(path)) { this.dirs.add(path); this.onWrite(path, "create"); } },
-  rmdir(p: string): boolean { const path = this.norm(p), removed = this.dirs.delete(path); if (removed) this.onWrite(path, "delete"); return removed; },
-  list(p: string): string[] {
-    p = this.norm(p);
-    const dir = p === "/" ? "/" : p + "/";
-    const names = new Set<string>();
-    for (const m of [this.files, this.lazyFiles]) for (const k of m.keys()) if (k.startsWith(dir)) names.add(k.slice(dir.length).split("/")[0]);
-    for (const d of this.dirs) if (d.startsWith(dir)) names.add(d.slice(dir.length).split("/")[0]);
-    names.delete("");
-    return [...names];
-  },
-};
 
 export class JFile extends JObj { path = ""; }
 function compareFile(this: JFile, other: unknown): number {
@@ -660,7 +535,7 @@ class JFOS extends JOutputStream {
     if (raf instanceof JRAF) return raf.pos + this.plen;
     const fd = this.shared?.fd ?? -1;
     const base = fd >= 0 ? checkedFdResult(javaSeekFd(fd, 0, 1))
-      : this.append && this.plen ? vfs.read(this.fpath)?.length ?? 0 : this.offset;
+      : this.append && this.plen ? vfs.stat(this.fpath)?.size ?? 0 : this.offset;
     return base + this.plen;
   }
   set pos(value: number) {
@@ -675,12 +550,9 @@ class JFOS extends JOutputStream {
 function openWrite(this: JFOS, path: string, append = 0, truncate = true) {
   this.fpath = vfs.norm(path);
   this.append = !!append;
-  let bytes = vfs.read(this.fpath);
-  if (!bytes || (!this.append && truncate)) {
-    bytes = new Uint8Array(0);
-    vfs.write(this.fpath, bytes);
-  }
-  this.offset = this.append ? bytes.length : 0;
+  const size = vfs.stat(this.fpath)?.size;
+  if (size === undefined || (!this.append && truncate)) vfs.write(this.fpath, new Uint8Array(0));
+  this.offset = this.append ? size ?? 0 : 0;
 }
 rt.register({
   name: "java/io/FileOutputStream", ctor: JFOS, sup: "java/io/OutputStream",
@@ -694,7 +566,7 @@ rt.register({
       this.shared = d; this.fpath = d.path;
       if (!(d.owner instanceof JRAF)) {
         this.append = !!(d.flags & O_APPEND);
-        this.offset = d.fd >= 0 ? checkedFdResult(javaSeekFd(d.fd, 0, 1)) : this.append ? vfs.read(d.path)?.length ?? 0 : 0;
+        this.offset = d.fd >= 0 ? checkedFdResult(javaSeekFd(d.fd, 0, 1)) : this.append ? vfs.stat(d.path)?.size ?? 0 : 0;
       }
     },
     "<init>(Ljava/io/File;)V": function (this: JFOS, f: JFile) { openWrite.call(this, f.path); },
@@ -724,65 +596,29 @@ function flushFOS(s: JFOS) {
   if (s.pend.length > 1 << 20) s.pend = new Uint8Array(0);
   const raf = s.shared?.owner;
   if (raf instanceof JRAF) { rafWrite(raf, i8(bytes), 0, bytes.length); return; }
-  const file = s.shared && vfs.open(s.fpath);
-  if (file) {
-    const fd = s.shared!.fd;
-    const start = s.append ? file.len : fd >= 0 ? checkedFdResult(javaSeekFd(fd, 0, 1)) : s.offset;
-    const end = start + bytes.length;
-    if (end > file.data.length) {
-      const grown = new Uint8Array(Math.max(end, file.data.length * 2, 4096));
-      grown.set(file.data.subarray(0, file.len));
-      file.data = grown;
-    }
-    if (start > file.len) file.data.fill(0, file.len, start);
-    file.data.set(bytes, start);
-    file.len = Math.max(file.len, end);
-    vfs.publish(file);
-    s.offset = end;
-    if (fd >= 0) checkedFdResult(javaSeekFd(fd, end, 0));
-    return;
-  }
-  const old = vfs.read(s.fpath) ?? new Uint8Array(0);
-  const start = s.append ? old.length : s.offset;
-  const merged = new Uint8Array(Math.max(old.length, start + bytes.length));
-  merged.set(old); merged.set(bytes, start);
-  vfs.write(s.fpath, merged);
+  if (!vfs.stat(s.fpath)) vfs.write(s.fpath, new Uint8Array(0));
+  const file = vfs.open(s.fpath)!, fd = s.shared?.fd ?? -1;
+  const start = s.append ? file.len : fd >= 0 ? checkedFdResult(javaSeekFd(fd, 0, 1)) : s.offset;
+  vfs.writeAt(file, start, bytes);
   s.offset = start + bytes.length;
+  if (fd >= 0) checkedFdResult(javaSeekFd(fd, s.offset, 0));
 }
 
-// RandomAccessFile handles keep independent cursors but must read the latest shared file bytes.
-/** `maps` are the live READ_WRITE mappings sharing `buf`: growth moves them to the new storage, as they are the file's pages */
-class JRAF extends JObj { path = ""; buf: Uint8Array = new Uint8Array(0); capacity = 0; source: FileSource | null = null; pos = 0; write = false; maps: JBuffer[] | null = null; }
-const rafRefresh = (f: JRAF) => {
-  if (f.source) return;
-  const current = vfs.read(f.path);
-  if (!current || current === f.buf) return;
-  if (f.maps && current.buffer !== f.buf.buffer) for (const m of f.maps) m.backing.storage = { kind: "direct", ab: current.buffer as ArrayBuffer };
-  f.buf = current;
-  f.capacity = current.buffer.byteLength - current.byteOffset;
-};
-const rafGrow = (f: JRAF, need: number) => {
-  if (need <= f.buf.length) return;
-  if (need <= f.capacity) { const old = f.buf.length; f.buf = new Uint8Array(f.buf.buffer, f.buf.byteOffset, need); f.buf.fill(0, old); return; }
-  // doubling, but never more than 32 MB past what is needed: a large file must not reserve
-  // (and have persisted) hundreds of megabytes it never uses
-  const n = new Uint8Array(Math.max(need, Math.min(f.capacity ? f.capacity * 2 : 64, need + (32 << 20))));
-  n.set(f.buf);
-  f.capacity = n.length;
-  f.buf = n.subarray(0, need);
-  if (f.maps) for (const m of f.maps) m.backing.storage = { kind: "direct", ab: n.buffer };
-};
+// RandomAccessFile handles keep independent cursors over the path's shared open file.
+class JRAF extends JObj {
+  path = ""; file: VfsFile = { path: null, data: EMPTY, len: 0 }; pos = 0; write = false;
+  get source(): FileSource | null { return this.file.source ?? null; }
+  get buf(): Uint8Array { return this.file.data.subarray(0, this.file.len); }
+}
 const rafOpen = function (this: JRAF, p: string, mode: string) {
   this.path = vfs.norm(p);
   this.write = mode.includes("w");
-  const data = vfs.read(this.path);
-  const source = data ? null : vfs.source(this.path);
-  if (!data && !source && !this.write) throw rt.mkThrowable("java/io/FileNotFoundException", p);
-  if (source && this.write) throw rt.mkThrowable("java/io/IOException", "read-only file: " + p);
-  this.source = this.write ? null : source;
-  this.buf = data ?? new Uint8Array(0);
-  this.capacity = this.buf.length;
-  if (this.write && !data) vfs.write(this.path, this.buf);
+  if (!vfs.stat(this.path)) {
+    if (!this.write) throw rt.mkThrowable("java/io/FileNotFoundException", p);
+    vfs.write(this.path, new Uint8Array(0));
+  }
+  this.file = vfs.open(this.path)!;
+  if (this.write && this.file.source && !writable(this.file.source)) throw rt.mkThrowable("java/io/IOException", "read-only file: " + p);
 };
 rt.register({
   name: "java/io/RandomAccessFile", ctor: JRAF, ifaces: ["java/io/Closeable", "java/io/DataInput", "java/io/DataOutput"],
@@ -790,20 +626,18 @@ rt.register({
     "<init>(Ljava/lang/String;Ljava/lang/String;)V": rafOpen,
     "<init>(Ljava/io/File;Ljava/lang/String;)V": function (this: JRAF, f: JFile, m: string) { rafOpen.call(this, f.path, m); },
     "getChannel()Ljava/nio/channels/FileChannel;": fileChannel,
-    "length()J": function (this: JRAF) { checkFileOpen(this); rafRefresh(this); return BigInt(this.source?.size ?? this.buf.length); },
+    "length()J": function (this: JRAF) { checkFileOpen(this); return BigInt(this.file.len); },
     "getFilePointer()J": function (this: JRAF) { checkFileOpen(this); return BigInt(this.pos); },
     "seek(J)V": function (this: JRAF, p: bigint) { checkFileOpen(this); this.pos = Number(p); },
     "skipBytes(I)I": function (this: JRAF, n: number) {
-      rafRefresh(this);
-      const step = Math.max(0, Math.min(n, (this.source?.size ?? this.buf.length) - this.pos));
+      const step = Math.max(0, Math.min(n, this.file.len - this.pos));
       this.pos += step;
       return step;
     },
     "getFD()Ljava/io/FileDescriptor;": function (this: JRAF) { return descriptorOf(this, this.path, this.write ? O_RDWR | O_CREAT : 0); },
     "read()I": driven(function* (this: JRAF): Gen {
       checkFileOpen(this);
-      rafRefresh(this);
-      if (!this.source) return this.pos < this.buf.length ? this.buf[this.pos++] : -1;
+      if (!this.source) return this.pos < this.file.len ? this.file.data[this.pos++] : -1;
       const bytes = yield this.source.read(this.pos, 1);
       if (!bytes.length) return -1;
       this.pos++;
@@ -813,8 +647,7 @@ rt.register({
     "read([BII)I": function(this: JRAF, b: Int8Array, off: number, len: number) { return rafRead(this, b, off, len); },
     "readLine()Ljava/lang/String;": driven(function* (this: JRAF): Gen {
       checkFileOpen(this);
-      rafRefresh(this);
-      const parts: string[] = [], size = this.source?.size ?? this.buf.length;
+      const parts: string[] = [], size = this.file.len;
       if (this.pos >= size) return null;
       while (this.pos < size) {
         const n = Math.min(4096, size - this.pos), bytes = this.source ? yield this.source.read(this.pos, n) : this.buf.subarray(this.pos, this.pos + n);
@@ -835,31 +668,21 @@ rt.register({
     "readFully([B)V": function (this: JRAF, b: Int8Array) { return rafReadFully(this, b, 0, b.length); },
     "readFully([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { return rafReadFully(this, b, off, len); },
     ...readers((n, get) => async function (this: JRAF) { const b = new Int8Array(n); await rafReadFully(this, b, 0, n); return get(new DataView(b.buffer)); }),
-    "write(I)V": function (this: JRAF, v: number) {
-      checkFileOpen(this);
-      rafRefresh(this);
-      rafGrow(this, this.pos + 1);
-      this.buf[this.pos++] = v & 0xff;
-      vfs.write(this.path, this.buf);
-    },
+    "write(I)V": function (this: JRAF, v: number) { rafWrite(this, Int8Array.of(v), 0, 1); },
     "write([B)V": function (this: JRAF, b: Int8Array) { rafWrite(this, b, 0, b.length); },
     "write([BII)V": function (this: JRAF, b: Int8Array, off: number, len: number) { rafWrite(this, b, off, len); },
     ...writers((n, put) => function (this: JRAF, x: never) { const b = new Int8Array(n); put(new DataView(b.buffer), x); rafWrite(this, b, 0, n); }),
     "setLength(J)V": function (this: JRAF, n: bigint) {
       checkFileOpen(this);
-      rafRefresh(this);
       const len = Number(n);
-      if (len <= this.buf.length) { this.buf = this.buf.slice(0, len); this.capacity = len; }
-      else rafGrow(this, len);
+      vfs.resize(this.file, len);
       if (this.pos > len) this.pos = len;
-      vfs.write(this.path, this.buf);
     },
     "close()V": function (this: JRAF) { if (!closedFiles.has(this)) closeFile(this); },
   },
 });
 function rafRead(f: JRAF, b: Int8Array, off: number, len: number): number | Promise<number> {
   checkFileOpen(f);
-  rafRefresh(f);
   if (len === 0) return 0;
   if (f.source) {
     return after(f.source.read(f.pos, len), (bytes: Uint8Array) => {
@@ -869,9 +692,9 @@ function rafRead(f: JRAF, b: Int8Array, off: number, len: number): number | Prom
       return bytes.length;
     });
   }
-  const n = Math.min(len, f.buf.length - f.pos);
+  const n = Math.min(len, f.file.len - f.pos);
   if (n <= 0) return -1;
-  b.set(i8(f.buf, f.pos, n), off);
+  b.set(i8(f.file.data, f.pos, n), off);
   f.pos += n;
   return n;
 }
@@ -885,11 +708,8 @@ async function rafReadFully(f: JRAF, b: Int8Array, off: number, len: number): Pr
 }
 function rafWrite(f: JRAF, b: Int8Array, off: number, len: number) {
   checkFileOpen(f);
-  rafRefresh(f);
-  rafGrow(f, f.pos + len);
-  f.buf.set(u8(b, off, len), f.pos);
+  vfs.writeAt(f.file, f.pos, u8(b, off, len));
   f.pos += len;
-  vfs.write(f.path, f.buf);
 }
 
 // serialPersistentFields is a static array a serializable class declares; serialization does not
@@ -1304,11 +1124,12 @@ rt.register({
   },
 });
 // FileReader is an InputStreamReader over a file: the file's bytes, decoded, in one go.
-const openReader = function (this: JReader, p: string) {
-  const d = vfs.read(p);
+const fileText = driven(function* fileText(p: string): Gen<string> {
+  const d: Uint8Array | null = yield vfs.readFile(p);
   if (!d) throw rt.mkThrowable("java/io/FileNotFoundException", p);
-  this.s = utf8.dec.decode(d);
-};
+  return utf8.dec.decode(d);
+});
+const openReader = driven(function* (this: JReader, p: string): Gen { this.s = yield fileText(p); });
 rt.register({
   name: "java/io/FileReader", ctor: class extends JReader {}, sup: "java/io/InputStreamReader",
   methods: {
@@ -1626,7 +1447,6 @@ class JFileChannel extends JObj {
   open = true;
   opened() {
     if (!this.open || closedFiles.has(this.file)) throw rt.mkThrowable("java/nio/channels/ClosedChannelException", null);
-    if (this.file instanceof JRAF) rafRefresh(this.file);
     return this.file;
   }
   readable(): JInputStream | JRAF {
@@ -1682,18 +1502,18 @@ rt.register({
     "size()J": function (this: JFileChannel) {
       const file = this.opened();
       return BigInt(file instanceof JFOS
-        ? Math.max(vfs.read(file.fpath)?.length ?? 0, file.plen ? file.pos : 0)
-        : file.source?.size ?? file.buf.length);
+        ? Math.max(vfs.stat(file.fpath)?.size ?? 0, file.plen ? file.pos : 0)
+        : file instanceof JRAF ? file.file.len : file.source?.size ?? file.buf.length);
     },
     "truncate(J)Ljava/nio/channels/FileChannel;": function (this: JFileChannel, size: bigint) {
       if (size < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "size");
       const file = this.writable();
       if (file instanceof JRAF) {
-        if (size < BigInt(file.buf.length)) { file.buf = file.buf.slice(0, Number(size)); file.capacity = file.buf.length; vfs.write(file.path, file.buf); }
+        if (size < BigInt(file.file.len)) vfs.resize(file.file, Number(size));
       } else {
         flushFOS(file);
-        const bytes = vfs.read(file.fpath);
-        if (bytes && size < BigInt(bytes.length)) vfs.write(file.fpath, bytes.slice(0, Number(size)));
+        const open = vfs.open(file.fpath);
+        if (open && size < BigInt(open.len)) vfs.resize(open, Number(size));
       }
       if (BigInt(file.pos) > size) file.pos = Number(size);
       return this;
@@ -1714,10 +1534,16 @@ rt.register({
       }
       if (!(file instanceof JRAF) || !file.write) throw rt.mkThrowable("java/nio/channels/NonWritableChannelException", null);
       // a writable mapping past the end extends the file first (FileChannelImpl.map truncates it up to position + size)
-      if (start + length > file.buf.length) { rafGrow(file, start + length); vfs.write(file.path, file.buf); }
-      if (mode.ename === "PRIVATE") return mappedBuffer(file.buf.slice(start, start + length), () => {});
-      const buffer = mappedBuffer(file.buf.subarray(start, start + length), () => vfs.write(file.path, file.buf));
-      (file.maps ??= []).push(buffer);
+      const open = file.file;
+      if (start + length > open.len) vfs.resize(open, start + length);
+      if (open.source) {
+        // a disk-backed file maps a copy of the region, written back when the mapping is forced
+        return readFully(open.source, start, length).then((bytes) =>
+          mappedBuffer(bytes.slice(), mode.ename === "PRIVATE" ? () => {} : () => vfs.writeAt(open, start, bytes)));
+      }
+      if (mode.ename === "PRIVATE") return mappedBuffer(open.data.slice(start, start + length), () => {});
+      const buffer = mappedBuffer(open.data.subarray(start, start + length), () => vfs.publish(open));
+      (open.maps ??= []).push(buffer);
       return buffer;
     },
     "read(Ljava/nio/ByteBuffer;)I": function (this: JFileChannel, dst: JBuffer) { return channelRead(this, dst); },
@@ -1891,15 +1717,14 @@ rt.register({
     "static exists(Ljava/nio/file/Path;[Ljava/nio/file/LinkOption;)Z": (p: JNioPath) => (vfs.exists(p.p) ? 1 : 0),
     "static isWritable(Ljava/nio/file/Path;)Z": (p: JNioPath) => (vfs.exists(p.p) ? 1 : 0),
     "static move(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;": (src: JNioPath, dst: JNioPath) => {
-      const data = vfs.read(src.p);
-      if (data) { vfs.write(dst.p, data); vfs.delete(src.p); }
+      vfs.rename(src.p, dst.p);
       return dst;
     },
-    "static copy(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;": (src: JNioPath, dst: JNioPath) => {
-      const data = vfs.read(src.p);
+    "static copy(Ljava/nio/file/Path;Ljava/nio/file/Path;[Ljava/nio/file/CopyOption;)Ljava/nio/file/Path;": driven(function* (src: JNioPath, dst: JNioPath): Gen {
+      const data: Uint8Array | null = yield vfs.readFile(src.p);
       if (data) vfs.write(dst.p, data.slice());
       return dst;
-    },
+    }),
     "static delete(Ljava/nio/file/Path;)V": (p: JNioPath) => { vfs.delete(p.p); },
     "static deleteIfExists(Ljava/nio/file/Path;)Z": (p: JNioPath) => (vfs.delete(p.p) ? 1 : 0),
     "static createDirectories(Ljava/nio/file/Path;[Ljava/nio/file/attribute/FileAttribute;)Ljava/nio/file/Path;": (p: JNioPath) => { vfs.mkdir(p.p); return p; },
@@ -1917,7 +1742,7 @@ rt.register({
       if (!exists && !defaults && !names.has("CREATE") && !names.has("CREATE_NEW")) throw rt.mkThrowable("java/nio/file/NoSuchFileException", p.p);
       if (vfs.isDir(p.p)) throw rt.mkThrowable("java/nio/file/FileSystemException", p.p);
       const truncate = defaults || names.has("TRUNCATE_EXISTING");
-      if (exists && !truncate && !vfs.read(p.p)) {
+      if (exists && !truncate && !vfs.read(p.p) && !writable(vfs.source(p.p))) {
         const bytes = yield vfs.readFile(p.p);
         if (bytes) vfs.write(p.p, bytes);
       }
@@ -1984,11 +1809,7 @@ rt.register({
     "<init>(Ljava/io/InputStream;)V": scanStream,
     "<init>(Ljava/io/InputStream;Ljava/lang/String;)V": scanStream,
     "<init>(Ljava/lang/String;)V": function (this: JScanner, s: string) { this.text = s; },
-    "<init>(Ljava/io/File;)V": function (this: JScanner, f: JFile) {
-      const b = vfs.read(f.path);
-      if (!b) throw rt.mkThrowable("java/io/FileNotFoundException", f.path);
-      this.text = utf8.dec.decode(b);
-    },
+    "<init>(Ljava/io/File;)V": driven(function* (this: JScanner, f: JFile): Gen { this.text = yield fileText(f.path); }),
     "useDelimiter(Ljava/lang/String;)Ljava/util/Scanner;": function (this: JScanner, p: string) { this.delim = new RegExp(p, "y"); this.delimAll = new RegExp(p, "g"); return this; },
     "hasNext()Z": function (this: JScanner) { return peekToken(this) !== null ? 1 : 0; },
     "next()Ljava/lang/String;": function (this: JScanner) { return nextToken(this); },

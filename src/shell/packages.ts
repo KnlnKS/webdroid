@@ -1,4 +1,4 @@
-import { vfs } from "../jvm/natives/jio";
+import { vfs } from "./vfs";
 import { openDb, txDone } from "./idb";
 
 let database: Promise<IDBDatabase> | null = null;

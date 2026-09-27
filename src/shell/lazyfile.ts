@@ -4,6 +4,14 @@ export interface FileSource {
   stats?(): RangeFileStats;
 }
 
+/** a source that also takes writes; they are ordered with its later reads */
+export interface WritableSource extends FileSource {
+  size: number;
+  write(offset: number, bytes: Uint8Array): void;
+  truncate(size: number): void;
+}
+export const writable = (source: FileSource | null | undefined): source is WritableSource => !!source && "write" in source;
+
 export class BytesFile implements FileSource {
   readonly size: number;
 

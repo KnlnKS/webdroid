@@ -7,7 +7,7 @@ import { mangleMethod } from "../src/jvm/abi";
 import { newStringSet, toJsArray } from "../src/jvm/natives/jutil";
 import { getPrefs, movePrefs } from "../src/android/sharedprefs";
 import { openDatabase, useSQLiteStore } from "../src/android/sqlite";
-import { vfs } from "../src/jvm/natives/jio";
+import { vfs } from "../src/shell/vfs";
 import { newXmlSerializer } from "../src/android/xmlpull";
 import { onMain } from "../src/android/mainloop";
 

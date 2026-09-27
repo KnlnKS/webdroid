@@ -1,5 +1,5 @@
 import type { Database } from "sql.js";
-import { vfs } from "../jvm/natives/jio";
+import { vfs } from "../shell/vfs";
 import { sqliteStore, mkCursor } from "./sqlite";
 import { type JUri, mkUri } from "./net";
 

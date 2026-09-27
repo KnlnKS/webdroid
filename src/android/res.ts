@@ -409,11 +409,14 @@ export function resolveStyleValue(res: Resources, theme: JTheme | null | undefin
 
 /** the string resource `id` names, "" when it is not one */
 export const resString = (res: Resources, id: number): string => rvString(res, res.ref(id)) ?? "";
-/** a com.android.internal string, as the platform's own UI labels things */
-export function frameworkString(name: string): string | null {
-  const res = currentResources(), id = res?.idFor("string", name, "android");
-  return id ? rvString(res!, res!.ref(id)) : null;
+function frameworkValue<T>(type: string, name: string, read: (res: Resources, v: RV) => T, missing: T): T {
+  const res = currentResources(), id = res?.idFor(type, name, "android");
+  return id ? read(res!, res!.ref(id)) : missing;
 }
+/** a com.android.internal string, as the platform's own UI labels things */
+export function frameworkString(name: string): string | null { return frameworkValue("string", name, rvString, null); }
+/** a com.android.internal dimension in pixels, 0 when the framework lacks it */
+export function frameworkDimen(name: string): number { return frameworkValue("dimen", name, (res, v) => Math.round(rvDimen(res, v)), 0); }
 export function bagStrings(res: Resources, id: number): string[] {
   const bag = res.bag(id);
   return bag ? [...bag.map.values()].map((v) => rvString(res, res.resolveRefs(v)) ?? "") : [];

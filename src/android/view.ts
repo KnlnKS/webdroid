@@ -1250,6 +1250,10 @@ const viewMethods: NativeSpec["methods"] = {
     if (this.layerType) { rare(this).layerPaint = p; invalidate(this); }
   },
   "getLayerType()I": function (this: JView) { return this.layerType; },
+  // layers are rendered at draw time, so building one early has nothing to do beyond AOSP's check
+  "buildLayer()V": function (this: JView) {
+    if (this.layerType && !this.attached) throw rt.mkThrowable("java/lang/IllegalStateException", "This view must be attached to a window first");
+  },
   "setContentDescription(Ljava/lang/CharSequence;)V": driven(function* (this: JView, cs: unknown): Gen { this.contentDesc = cs === null ? null : yield csText(cs); }),
   "getContentDescription()Ljava/lang/CharSequence;": function (this: JView) { return this.contentDesc; },
 

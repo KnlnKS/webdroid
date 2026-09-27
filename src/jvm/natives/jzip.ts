@@ -4,7 +4,8 @@ import { Inflate, Unzlib, Deflate, Zlib, Gzip, Zip, ZipDeflate, ZipPassThrough, 
 import { rt, JObj, driven, type Gen } from "../runtime";
 import { utf8, i8, u8 } from "../abi";
 import { vcall, newObj, defineException } from "./jlang";
-import { vfs, JFile, JInputStream, JOutputStream, JFilterInputStream, JFilterOutputStream, readStreamFully } from "./jio";
+import { JFile, JInputStream, JOutputStream, JFilterInputStream, JFilterOutputStream, readStreamFully } from "./jio";
+import { vfs } from "../../shell/vfs";
 import { JBuffer } from "./jnio";
 import { mkIter } from "./jutil";
 import { readFully, type FileSource } from "../../shell/lazyfile";

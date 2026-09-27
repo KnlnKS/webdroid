@@ -19,8 +19,7 @@ import { appHost, jclsNameOf } from "./apphost";
 import { resString } from "./res";
 import { inMainJob, onMain } from "./mainloop";
 import { getPrefs } from "./sharedprefs";
-import { csText, spannedString } from "./text";
-import { showToast } from "./popup";
+import { spannedString } from "./text";
 import { newArrayList } from "../jvm/natives/jutil";
 import { type JIntentSender, startIntentSender } from "./pendingintent";
 import { runningServices, svcStop, svcFg } from "./runningservices";
@@ -511,27 +510,6 @@ rt.markers("android/content/ComponentCallbacks");
 rt.register({
   name: "android/content/ComponentCallbacks2", ctor: class extends JObj {},
   ifaces: ["android/content/ComponentCallbacks"],
-});
-
-class JToast extends JObj { text = ""; }
-rt.register({
-  name: "android/widget/Toast", ctor: JToast,
-  statics: { LENGTH_SHORT: 0, LENGTH_LONG: 1 },
-  methods: {
-    "static makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;": driven(function* (c: unknown, t: unknown): Gen {
-      const toast = new JToast();
-      toast.text = yield csText(t);
-      return toast;
-    }),
-    "static makeText(Landroid/content/Context;II)Landroid/widget/Toast;": (c: any, id: number) => {
-      const toast = new JToast();
-      toast.text = c?.$host ? resString(c.$host.res, id) : "";
-      return toast;
-    },
-    "show()V": function (this: JToast) { showToast(this.text); },
-    "setText(Ljava/lang/CharSequence;)V": driven(function* (this: JToast, t: unknown): Gen { this.text = yield csText(t); }),
-    ...noops("setGravity(III)V", "setDuration(I)V", "cancel()V"),
-  },
 });
 
 let audioCapturePolicy = 1, appNightMode = -1;

@@ -153,7 +153,9 @@ rt.register({
     "getPSource()Ljavax/crypto/spec/PSource;": function (this: JOAEP) { return this.source; },
   },
 });
-export async function rsaCrypt(key: JRsaPublicKey | JRsaPrivateKey, input: Uint8Array, spec: JOAEP): Promise<Int8Array> {
+/** forge's names for the RSA/ECB paddings: OAEPPadding, PKCS1Padding, NoPadding */
+export type RsaScheme = "RSA-OAEP" | "RSAES-PKCS1-V1_5" | "RAW";
+export async function rsaCrypt(key: JRsaPublicKey | JRsaPrivateKey, input: Uint8Array, scheme: RsaScheme, spec: JOAEP): Promise<Int8Array> {
   const f = await forge();
   const digest = (name: string) => {
     const algorithm = name.toLowerCase().replace(/-/g, "");
@@ -163,12 +165,12 @@ export async function rsaCrypt(key: JRsaPublicKey | JRsaPrivateKey, input: Uint8
     if (algorithm === "sha512") return f.md.sha512.create();
     throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Unsupported OAEP digest: " + name);
   };
-  const options = { md: digest(spec.digest), mgf1: { md: digest(spec.mgf.digest) }, label: binary(spec.source.value) };
+  const options = scheme === "RSA-OAEP" ? { md: digest(spec.digest), mgf1: { md: digest(spec.mgf.digest) }, label: binary(spec.source.value) } : undefined;
   try {
-    const result = key instanceof JRsaPublicKey ? (await key.key()).encrypt(binary(input), "RSA-OAEP", options) : (await key.key()).decrypt(binary(input), "RSA-OAEP", options);
+    const result = key instanceof JRsaPublicKey ? (await key.key()).encrypt(binary(input), scheme, options) : (await key.key()).decrypt(binary(input), scheme, options);
     return new Int8Array(array(result));
   } catch {
-    throw rt.mkThrowable(key instanceof JRsaPublicKey ? "javax/crypto/IllegalBlockSizeException" : "javax/crypto/BadPaddingException", "RSA OAEP operation failed");
+    throw rt.mkThrowable(key instanceof JRsaPublicKey ? "javax/crypto/IllegalBlockSizeException" : "javax/crypto/BadPaddingException", "RSA " + scheme + " operation failed");
   }
 }
 

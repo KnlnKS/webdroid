@@ -7,9 +7,9 @@ import { E } from "./abi";
 import type { Cpu } from "./cpu";
 import { LAYOUT, fail, utf8, logLine, offArg, readTs, clockTime, scanSink } from "./libc";
 import { format, scan } from "./printf";
-import { vfs, type VfsFile } from "../jvm/natives/jio";
+import { vfs, type VfsFile } from "../shell/vfs";
 import { procIdentity, procMemory, procText } from "../shell/procfs";
-import { readFully, type FileSource } from "../shell/lazyfile";
+import { readFully, writable, type FileSource } from "../shell/lazyfile";
 import { concat } from "../jvm/abi";
 import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd } from "./net";
 import { allocateFd, releaseFd, reserveFd } from "./fd";
@@ -26,7 +26,7 @@ interface EpollEntry { events: number; data: bigint; pending: number; disabled: 
 interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
 interface Fd {
   path: string; content: VfsFile; pos: number; write: boolean; dir: boolean; append: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
-  timer?: ClockTimer; source?: FileSource; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
+  timer?: ClockTimer; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
 }
 const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000, EAGAIN = E.AGAIN;
 const IN_MODIFY = 0x2, IN_CLOSE_WRITE = 0x8, IN_CREATE = 0x100, IN_DELETE = 0x200, IN_DELETE_SELF = 0x400, IN_IGNORED = 0x8000;
@@ -157,18 +157,16 @@ function fdOpen(cpu: Cpu | null, path: string, flags: number): number {
     return put({ ...fdBase(path), dir: true }, !!(flags & O_CLOEXEC));
   }
   if (flags & O_DIRECTORY) return fail(cpu, E.NOTDIR);
-  const found = vfs.stat(path);
-  let data = vfs.read(path);
-  if (found && !data && acc !== 0) return fail(cpu, E.ACCES);
-  if (!found) {
+  const existing = vfs.open(path);
+  if (acc !== 0 && existing?.source && !writable(existing.source)) return fail(cpu, E.ACCES);
+  if (!existing) {
     if (!(flags & O_CREAT)) return fail(cpu, E.NOENT);
     const parent = path.slice(0, path.lastIndexOf("/")) || "/";
     if (!vfs.isDir(parent)) return fail(cpu, E.NOENT);
-    data = new Uint8Array(0);
-    vfs.write(path, data);
+    vfs.write(path, new Uint8Array(0));
   } else if (flags & O_CREAT && flags & O_EXCL) return fail(cpu, E.EXIST);
-  if (flags & O_TRUNC && acc !== 0) { data = new Uint8Array(0); vfs.write(path, data); }
-  return put({ ...fdBase(path), content: vfs.open(path) ?? { path: null, data: new Uint8Array(0), len: found?.size ?? 0 }, source: data ? undefined : found?.source, write: acc !== 0, append: !!(flags & O_APPEND), nonblock: !!(flags & O_NONBLOCK), statusFlags: flags & (O_ACCMODE | O_APPEND | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
+  if (flags & O_TRUNC && acc !== 0) vfs.write(path, new Uint8Array(0));
+  return put({ ...fdBase(path), content: vfs.open(path)!, write: acc !== 0, append: !!(flags & O_APPEND), nonblock: !!(flags & O_NONBLOCK), statusFlags: flags & (O_ACCMODE | O_APPEND | O_NONBLOCK) }, !!(flags & O_CLOEXEC));
 }
 function put(f: Fd, cloexec = false): number { const fd = allocateFd(); fds.set(fd, f); if (cloexec) closeOnExec.add(fd); return fd; }
 /** a Java-side open into the same descriptor table native code reads, so a fd handed across JNI is live */
@@ -184,7 +182,7 @@ export function javaFdSource(fd: number): FileSource | null {
     get size() { return f.content.len; },
     read(offset, length) {
       if (fds.get(fd) !== f || (f.statusFlags & O_ACCMODE) === 1) throw new Error("Bad file descriptor");
-      return f.source ? f.source.read(offset, length) : f.content.data.subarray(offset, Math.min(f.content.len, offset + length));
+      return f.content.source ? f.content.source.read(offset, length) : f.content.data.subarray(offset, Math.min(f.content.len, offset + length));
     },
   };
 }
@@ -196,7 +194,7 @@ export function javaAvailableFd(fd: number): number {
 export function javaReadFd(fd: number, target: Uint8Array): number | Promise<number> {
   const f = fds.get(fd);
   if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return -1;
-  if (f && !f.source && !f.random && !f.rpipe && !f.event && !f.timer && !f.epoll) {
+  if (f && !f.content.source && !f.random && !f.rpipe && !f.event && !f.timer && !f.epoll) {
     const n = Math.max(0, Math.min(target.length, f.content.len - f.pos));
     target.set(f.content.data.subarray(f.pos, f.pos + n)); f.pos += n;
     return n;
@@ -215,7 +213,7 @@ export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
   const f = fds.get(fd);
   if (f && (f.dir || (f.statusFlags & O_ACCMODE) === 1)) return null;
   if (f && !f.random && !f.rpipe && !f.wpipe && !f.event && !f.timer && !f.epoll) {
-    try { return f.source ? await readFully(f.source, f.pos) : f.content.data.subarray(f.pos, f.content.len); }
+    try { return f.content.source ? await readFully(f.content.source, f.pos) : f.content.data.subarray(f.pos, f.content.len); }
     catch { return null; }
   }
   if (!f && !isNativeSocket(fd)) return null;
@@ -230,12 +228,6 @@ export async function javaFdBytes(fd: number): Promise<Uint8Array | null> {
   } finally { mem.free(guestAt(target)); }
 }
 
-function grow(f: Fd, need: number): void {
-  if (need <= f.content.data.length) return;
-  const n = new Uint8Array(Math.max(need, f.content.data.length * 2, 4096));
-  n.set(f.content.data.subarray(0, f.content.len));
-  f.content.data = n;
-}
 function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   if (isNativeSocket(fd)) return nativeSocketWrite(cpu, fd, p, n);
   const f = fds.get(fd);
@@ -252,12 +244,8 @@ function fdWrite(cpu: Cpu, fd: number, p: number, n: number): number {
   if (f.event) { f.event.count += mem.ld32(p); wakeAll(f.event); return 8; }
   if (!f.write) return fail(cpu, E.BADF);
   if (f.append) f.pos = f.content.len;
-  grow(f, f.pos + n);
-  if (f.pos > f.content.len) f.content.data.fill(0, f.content.len, f.pos);
-  f.content.data.set(mem.u8.subarray(p, p + n), f.pos);
+  vfs.writeAt(f.content, f.pos, mem.u8.subarray(p, p + n));
   f.pos += n;
-  if (f.pos > f.content.len) f.content.len = f.pos;
-  vfs.publish(f.content);
   return n;
 }
 function fdReadAt(cpu: Cpu | null, f: Fd, p: number, n: number, off: number): number | Promise<number> {
@@ -273,10 +261,11 @@ function fdReadAt(cpu: Cpu | null, f: Fd, p: number, n: number, off: number): nu
   }
   const k = Math.max(0, Math.min(n, f.content.len - off));
   if (!k) return 0;
-  if (!f.source) { mem.write(p, f.content.data.subarray(off, off + k)); return k; }
+  const source = f.content.source;
+  if (!source) { mem.write(p, f.content.data.subarray(off, off + k)); return k; }
   let value: Uint8Array | Promise<Uint8Array>;
   const dst = mem.va(p);
-  try { value = f.source.read(off, k); }
+  try { value = source.read(off, k); }
   catch { return fail(cpu, E.IO); }
   const done = (bytes: Uint8Array) => { mem.write(guestAt(dst), bytes); return bytes.length; };
   return value instanceof Promise ? value.then(done, () => fail(cpu, E.IO)) : done(value);
@@ -315,7 +304,7 @@ function fdRead(cpu: Cpu | null, fd: number, p: number, n: number): number | Pro
     while (k < n && q.length) { const c = q[0], take = Math.min(n - k, c.length); mem.write(p + k, c.subarray(0, take)); k += take; if (take === c.length) q.shift(); else q[0] = c.subarray(take); }
     return k;
   }
-  if (f.source) {
+  if (f.content.source) {
     const dst = mem.va(p);
     const read = (f.readQueue ?? Promise.resolve()).then(async () => {
       const result = await fdReadAt(cpu, f, guestAt(dst), n, f.pos);
@@ -340,24 +329,18 @@ async function readLoop(dst: number, n: number, read: (p: number, k: number, don
   return total;
 }
 function fdReadFully(cpu: Cpu, fd: number, p: number, n: number): number | Promise<number> {
-  return fds.get(fd)?.source ? readLoop(p, n, (q, k) => fdRead(cpu, fd, q, k)) : fdRead(cpu, fd, p, n);
+  return fds.get(fd)?.content.source ? readLoop(p, n, (q, k) => fdRead(cpu, fd, q, k)) : fdRead(cpu, fd, p, n);
 }
 /** `n` bytes of `fd` from offset `off` into guest memory at `dst`, without moving the position */
 export function readInto(cpu: Cpu, fd: number, off: number, dst: number, n: number): number | Promise<number> {
   const f = fds.get(fd);
   if (!f) return fail(cpu, E.BADF);
-  return f.source ? readLoop(dst, n, (q, k, done) => fdReadAt(cpu, f, q, k, off + done)) : fdReadAt(cpu, f, dst, n, off);
+  return f.content.source ? readLoop(dst, n, (q, k, done) => fdReadAt(cpu, f, q, k, off + done)) : fdReadAt(cpu, f, dst, n, off);
 }
 export function fdWriteBack(fd: number): ((off: number, bytes: Uint8Array) => void) | null {
   const f = fds.get(fd);
   if (!f || f.synthetic || f.random || f.dir || f.rpipe || f.wpipe || f.event || f.timer || f.epoll) return null;
-  return (off, bytes) => {
-    grow(f, off + bytes.length);
-    if (off > f.content.len) f.content.data.fill(0, f.content.len, off);
-    f.content.data.set(bytes, off);
-    f.content.len = Math.max(f.content.len, off + bytes.length);
-    vfs.publish(f.content);
-  };
+  return (off, bytes) => vfs.writeAt(f.content, off, bytes);
 }
 function fdClose(cpu: Cpu | null, fd: number): number {
   if (isNativeSocket(fd)) return cpu ? nativeSocketClose(cpu, fd) : fail(cpu, E.BADF);
@@ -590,7 +573,7 @@ function pwrite(cpu: Cpu, fd: number, p: number, n: number, off: number): number
 }
 function truncateFd(cpu: Cpu, f: Fd | undefined, n: number): number {
   if (!f) return fail(cpu, E.BADF);
-  grow(f, n); if (n > f.content.len) f.content.data.fill(0, f.content.len, n); f.content.len = n; vfs.publish(f.content); return 0;
+  vfs.resize(f.content, n); return 0;
 }
 const chk = (cpu: Cpu, n: number, size: number, what: string) => { if (n > size) cpu.fault(`fortify: ${what} past the buffer`); };
 function openDir(path: string): number {
@@ -772,7 +755,12 @@ export function stdioInit(): void {
     rmdir: (cpu, a) => { const p = vfs.norm(a.str()); if (!vfs.isDir(p)) return fail(cpu, E.NOTDIR); if (vfs.list(p).length) return fail(cpu, E.NOTEMPTY); vfs.rmdir(p); return 0; },
     ftruncate: (cpu, a) => truncateFd(cpu, fds.get(a.i()), offArg(a)),
     ftruncate64: (cpu, a) => truncateFd(cpu, fds.get(a.i()), Number(a.l())),
-    truncate: (cpu, a) => { const p = vfs.norm(a.str()), n = offArg(a); const d = vfs.read(p); if (!d) return fail(cpu, E.NOENT); const nd = new Uint8Array(n); nd.set(d.subarray(0, Math.min(n, d.length))); vfs.write(p, nd); return 0; },
+    truncate: (cpu, a) => {
+      const file = vfs.open(a.str()), n = offArg(a);
+      if (!file) return fail(cpu, E.NOENT);
+      if (file.source && !writable(file.source)) return fail(cpu, E.ACCES);
+      vfs.resize(file, n); return 0;
+    },
     fcntl: (cpu, a) => {
       const fd = a.i(), cmd = a.i();
       if (isNativeSocket(fd)) return nativeSocketFcntl(cpu, fd, cmd, a.i());

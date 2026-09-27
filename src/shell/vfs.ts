@@ -1,0 +1,171 @@
+// The file tree every realm sees: in-memory bytes, lazy sources (apks, assets, disk-backed app
+// files) and directories. Java streams, native descriptors and the shell all read and write it.
+import { BytesFile, readFully, writable, type FileSource } from "./lazyfile";
+import { procText } from "./procfs";
+import type { JBuffer } from "../jvm/natives/jnio";
+import { utf8 } from "../jvm/abi";
+
+/** Where an installed apk lives, spelled once: the base, or one of its config/feature splits.
+ *  ApplicationInfo.sourceDir/splitSourceDirs answer with these and ZipFile opens them. */
+export const apkPath = (split?: string) => split ? `/data/app/split_${split}.apk` : "/data/app/base.apk";
+
+/** an open file: its bytes in `data`, or behind `source` for a lazy or disk-backed file */
+export interface VfsFile { path: string | null; data: Uint8Array; len: number; source?: FileSource; maps?: JBuffer[] }
+export const EMPTY = new Uint8Array(0);
+/** room for `size` bytes, doubling so appends stay linear */
+function reserve(file: VfsFile, size: number) {
+  if (size <= file.data.length) return;
+  const grown = new Uint8Array(Math.max(size, file.data.length * 2, 4096));
+  grown.set(file.data.subarray(0, file.len));
+  setData(file, grown);
+}
+/** READ_WRITE mappings are the file's pages, so they move with its storage */
+function setData(file: VfsFile, data: Uint8Array) {
+  if (file.maps && data.buffer !== file.data.buffer) for (const m of file.maps) m.backing.storage = { kind: "direct", ab: data.buffer as ArrayBuffer };
+  file.data = data;
+}
+const openFiles = new Map<string, VfsFile>();
+const volatileFiles = new Set<string>();
+const procBytes = (path: string): Uint8Array | null => {
+  const text = procText(path);
+  return text === null ? null : utf8.enc.encode(text);
+};
+export const vfs = {
+  files: new Map<string, Uint8Array>(),
+  lazyFiles: new Map<string, FileSource>(),
+  dirs: new Set<string>(["/data", "/data/local", "/data/local/tmp", "/sdcard"]),
+  prepare: (_pkg: string): Promise<void> => Promise.resolve(),
+  flush: (): Promise<void> => Promise.resolve(),
+  onWrite: (_path: string, _change: "modify" | "write" | "create" | "delete" = "modify") => {},
+  markVolatile(p: string) { volatileFiles.add(this.norm(p)); },
+  norm(p: string): string {
+    const parts: string[] = [];
+    for (const seg of p.split("/")) {
+      if (seg === "" || seg === ".") continue;
+      if (seg === "..") parts.pop();
+      else parts.push(seg);
+    }
+    return "/" + parts.join("/");
+  },
+  read(p: string): Uint8Array | null { const path = this.norm(p); return this.files.get(path) ?? procBytes(path); },
+  readFile(p: string): Uint8Array | Promise<Uint8Array> | null {
+    const path = this.norm(p);
+    const bytes = this.files.get(path);
+    if (bytes) return bytes;
+    const source = this.lazyFiles.get(path);
+    return source ? readFully(source) : procBytes(path);
+  },
+  source(p: string): FileSource | null {
+    const path = this.norm(p);
+    const bytes = this.files.get(path) ?? procBytes(path);
+    return bytes ? new BytesFile(bytes) : this.lazyFiles.get(path) ?? null;
+  },
+  stat(p: string): { size: number; source: FileSource } | null {
+    const source = this.source(p);
+    return source ? { size: source.size, source } : null;
+  },
+  open(p: string): VfsFile | null {
+    const path = this.norm(p), data = this.files.get(path), source = data ? undefined : this.lazyFiles.get(path);
+    if (!data && !source) return null;
+    let file = openFiles.get(path);
+    if (!file) { file = { path, data: data ?? EMPTY, len: data?.length ?? source!.size, source }; openFiles.set(path, file); }
+    return file;
+  },
+  publish(file: VfsFile) {
+    if (file.path === null || openFiles.get(file.path) !== file) return;
+    if (!file.source) this.files.set(file.path, file.data.subarray(0, file.len));
+    if (!volatileFiles.has(file.path)) this.onWrite(file.path, "modify");
+  },
+  /** write into an open file at `off`, zero-filling any gap past its end */
+  writeAt(file: VfsFile, off: number, bytes: Uint8Array) {
+    const end = off + bytes.length;
+    if (writable(file.source)) file.source.write(off, bytes.slice());
+    else {
+      reserve(file, end);
+      if (off > file.len) file.data.fill(0, file.len, off);
+      file.data.set(bytes, off);
+    }
+    file.len = Math.max(file.len, end);
+    this.publish(file);
+  },
+  resize(file: VfsFile, size: number) {
+    if (writable(file.source)) file.source.truncate(size);
+    else if (size > file.len) { reserve(file, size); file.data.fill(0, file.len, size); }
+    file.len = size;
+    this.publish(file);
+  },
+  /** the file's bytes now live in `source`; descriptors already open on it follow them there */
+  adopt(p: string, source: FileSource) {
+    const path = this.norm(p), file = openFiles.get(path);
+    this.files.delete(path);
+    this.lazyFiles.set(path, source);
+    if (file) { file.data = EMPTY; file.len = source.size; file.source = source; }
+  },
+  write(p: string, data: Uint8Array, notify = true) {
+    const path = this.norm(p);
+    const existed = this.files.has(path) || this.lazyFiles.has(path);
+    this.lazyFiles.delete(path);
+    this.files.set(path, data);
+    const file = openFiles.get(path);
+    if (file) {
+      setData(file, data);
+      file.len = data.length;
+      file.source = undefined;
+    }
+    if (notify && !volatileFiles.has(path)) this.onWrite(path, existed ? "write" : "create");
+  },
+  mount(p: string, source: FileSource) {
+    const path = this.norm(p);
+    this.delete(path, false);
+    this.lazyFiles.set(path, source);
+  },
+  under(p: string): boolean {
+    if (this.dirs.has(p)) return true;
+    const dir = p.endsWith("/") ? p : p + "/";
+    for (const d of this.dirs) if (d.startsWith(dir)) return true;
+    for (const m of [this.files, this.lazyFiles]) for (const k of m.keys()) if (k.startsWith(dir)) return true;
+    return false;
+  },
+  exists(p: string): boolean {
+    p = this.norm(p);
+    return this.files.has(p) || this.lazyFiles.has(p) || this.under(p) || procText(p) !== null;
+  },
+  isDir(p: string): boolean {
+    p = this.norm(p);
+    return !this.files.has(p) && !this.lazyFiles.has(p) && this.under(p);
+  },
+  delete(p: string, notify = true): boolean {
+    const path = this.norm(p);
+    const volatile = volatileFiles.delete(path);
+    const file = openFiles.get(path);
+    if (file) { file.path = null; openFiles.delete(path); }
+    const removed = this.files.delete(path) || this.lazyFiles.delete(path);
+    if (removed && notify && !volatile) this.onWrite(path, "delete");
+    return removed;
+  },
+  rename(from: string, to: string): boolean {
+    from = this.norm(from); to = this.norm(to);
+    if (!this.files.has(from) && !this.lazyFiles.has(from)) return false;
+    if (from === to) return true;
+    this.delete(to, false);
+    for (const files of [this.files, this.lazyFiles]) {
+      const value = files.get(from);
+      if (value) { files.delete(from); files.set(to, value as never); }
+    }
+    const file = openFiles.get(from);
+    if (file) { openFiles.delete(from); file.path = to; openFiles.set(to, file); }
+    this.onWrite(from, "delete"); this.onWrite(to, "create");
+    return true;
+  },
+  mkdir(p: string) { const path = this.norm(p); if (!this.dirs.has(path)) { this.dirs.add(path); this.onWrite(path, "create"); } },
+  rmdir(p: string): boolean { const path = this.norm(p), removed = this.dirs.delete(path); if (removed) this.onWrite(path, "delete"); return removed; },
+  list(p: string): string[] {
+    p = this.norm(p);
+    const dir = p === "/" ? "/" : p + "/";
+    const names = new Set<string>();
+    for (const m of [this.files, this.lazyFiles]) for (const k of m.keys()) if (k.startsWith(dir)) names.add(k.slice(dir.length).split("/")[0]);
+    for (const d of this.dirs) if (d.startsWith(dir)) names.add(d.slice(dir.length).split("/")[0]);
+    names.delete("");
+    return [...names];
+  },
+};

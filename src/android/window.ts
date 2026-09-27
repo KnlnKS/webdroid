@@ -250,7 +250,7 @@ rt.register({
       "controlWindowInsetsAnimation(IJLandroid/view/animation/Interpolator;Landroid/os/CancellationSignal;Landroid/view/WindowInsetsAnimationControlListener;)V"),
   },
 });
-class JWindowLayoutParams extends JLayoutParams {
+export class JWindowLayoutParams extends JLayoutParams {
   width = -1; height = -1; gravity = 0; flags = 0; format = 1; type = 2; softInputMode = 0;
   x = 0; y = 0; windowAnimations = 0; dimAmount = 0.6; alpha = 1; layoutInDisplayCutoutMode = 0;
   token: JObj | null = null;
@@ -272,7 +272,10 @@ rt.register({
     LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT: 0, LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES: 1,
     LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER: 2, LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS: 3, LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS_ALLOWED: 4 },
   methods: {
-    ...noops("<init>()V", "<init>(IIIII)V"),
+    ...noops("<init>()V"),
+    "<init>(IIIII)V": function (this: JWindowLayoutParams, w: number, h: number, type: number, flags: number, format: number) {
+      Object.assign(this, { width: w, height: h, type, flags, format });
+    },
     ...stubs(0, "copyFrom(Landroid/view/WindowManager$LayoutParams;)I"),
     "setTitle(Ljava/lang/CharSequence;)V": function (this: { title: unknown }, title: unknown) { this.title = title ?? ""; },
     "setColorMode(I)V": function (this: JWindowLayoutParams, mode: number) { this.colorMode = mode; },
@@ -285,6 +288,21 @@ rt.register({
     "setFitInsetsIgnoringVisibility(Z)V": function (this: JWindowLayoutParams, value: number) { this.fitInsetsIgnoringVisibility = !!value; },
     "isFitInsetsIgnoringVisibility()Z": function (this: JWindowLayoutParams) { return +this.fitInsetsIgnoringVisibility; },
   },
+});
+const FLAG_NOT_FOCUSABLE = 8, FLAG_NOT_TOUCHABLE = 16;
+/** the WindowManager parameters of a window's root view, when it was added with them */
+export const windowParams = (v: JView) => v.lp instanceof JWindowLayoutParams ? v.lp : null;
+export const takesTouch = (v: JView) => !((windowParams(v)?.flags ?? 0) & FLAG_NOT_TOUCHABLE);
+export const takesKeys = (v: JView) => !((windowParams(v)?.flags ?? 0) & FLAG_NOT_FOCUSABLE);
+export const addWindow = driven(function* addWindow(v: JView, lp: JLayoutParams & { x?: number; y?: number }): Gen {
+  v.lp = lp;
+  v.windowOwner ??= rt.make("android/view/Window");
+  addOverlay(v, lp.x ?? 0, lp.y ?? 0);
+  yield dispatchAttached(v);
+});
+export const removeWindow = driven(function* removeWindow(v: JView): Gen {
+  removeOverlay(v);
+  yield dispatchDetached(v);
 });
 rt.markers("android/view/WindowManager");
 class JWindowMetrics extends JObj {}
@@ -303,20 +321,9 @@ rt.register({
     "getCurrentWindowMetrics()Landroid/view/WindowMetrics;": () => new JWindowMetrics(),
     "getMaximumWindowMetrics()Landroid/view/WindowMetrics;": () => new JWindowMetrics(),
     "isCrossWindowBlurEnabled()Z": () => 0,
-    "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": driven(function* (v: JView, lp: JLayoutParams & { x?: number; y?: number }): Gen {
-      v.lp = lp;
-      v.windowOwner ??= rt.make("android/view/Window");
-      addOverlay(v, lp.x ?? 0, lp.y ?? 0);
-      yield dispatchAttached(v);
-    }),
-    "removeView(Landroid/view/View;)V": driven(function* (v: JView): Gen {
-      removeOverlay(v);
-      yield dispatchDetached(v);
-    }),
-    "removeViewImmediate(Landroid/view/View;)V": driven(function* (v: JView): Gen {
-      removeOverlay(v);
-      yield dispatchDetached(v);
-    }),
+    "addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": addWindow,
+    "removeView(Landroid/view/View;)V": removeWindow,
+    "removeViewImmediate(Landroid/view/View;)V": removeWindow,
     "updateViewLayout(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V": (v: JView, lp: JLayoutParams & { x?: number; y?: number }) => {
       v.lp = lp;
       const o = overlays.find((o) => o.view === v);

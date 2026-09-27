@@ -143,6 +143,18 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   genuine int64 values; unsafe numeric rows reread as BigInt. Rounded IDs
   cannot be recovered. Restore private, external and document-handle state
   before startup consumers run; disposable cache files need not persist.
+- App files grown through an open descriptor or stream past 4 MiB move to the
+  origin private file system: one worker holds sync access handles, requests
+  run in arrival order so writes return before they land, and IndexedDB keeps
+  only `{id, size}`. Every open file of a path is one shared `VfsFile`, which
+  native descriptors, FileOutputStream and RandomAccessFile write through one
+  helper; before this, RandomAccessFile rewrote and re-persisted the whole file
+  per write. Whole-file writers (SQLite, preferences) stay in memory because
+  their readers are synchronous; other synchronous readers (fonts, SoundPool,
+  FileReader, System.load) read through `readFile`. Genshin's first boot moves
+  its 80 MB `global-metadata.dat`, a 16 MB native mmap cache and an 11 MB font
+  to disk and warm boots read them back. The app pane's quota is 4.7 GB, below
+  Genshin's full resource download; desktop Chrome offers most of free disk.
 - Shared file writes must refresh open RandomAccessFile views: Organic Maps'
   parallel range downloads initially overwrote each other, and an extended
   VFS file left a native handle's byte view shorter than its logical length.
@@ -304,7 +316,18 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   `NoClassDefFoundError`); `setContentView(View)` filling the content parent and
   converting foreign params; occlusion from the manifest `Theme.Dialog` rather
   than the `setTheme` in `onCreate`; and a window background set before the
-  decor exists. Signing in needs a real account and is unexercised.
+  decor exists. Password login then failed with `-3001 Invalid parameters`:
+  the passport SDK encrypts account and password with `RSA/ECB/PKCS1Padding`,
+  which threw `NoSuchPaddingException`, so both went out empty, and the error
+  toast (`new Toast(Context)` + `setView`) crashed the main thread. With PKCS#1
+  and custom-view toasts the server answers with a Geetest slide captcha. Its
+  WebView sat in a Dialog, and any visible window hid every WebView frame; the
+  bridged frame (JavaScript interfaces) also kept its `/webview` URL, so
+  `./gt4.js` and the page's `?data=` parameters missed the asset. With both
+  fixed the puzzle renders; solving it and signing in need the account owner.
+  Unity pauses behind the SDK login activity (`onPause`), as on a device; with
+  the panel closed the Celestia scene runs at about 29 GL frames/s against the
+  game's 30/s target with the page's main thread mostly idle in the app pane.
 - **Genshin performance (login scene, 1920×1080, headless hardware Chromium on
   Apple M4 Pro):** 19.4 GL frames/s at first. The texture-swizzle emulation read
   sampler units back with `getUniform` after every `glUniform1i`, 20% of the
@@ -324,7 +347,10 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   the callee code duplicated into many regions multiplies compiled wasm and V8
   tier-up work. Uncontended rwlocks no longer park in JS but were not frequent
   in this scene. 60 fps needs roughly 2.3× on this scene alone; gameplay is
-  heavier, and every guest thread shares one browser thread.
+  heavier, and every guest thread shares one browser thread. Serving
+  `clock_gettime` in the core removed about 45K host exits/s (a quarter of
+  them) in the scene; four alternating samples gave 25.6–27.8 GL frames/s with
+  and without it, as the scene is not CPU-bound on this host.
 
 - **Play Integrity:** SPIC v1.4.0 renders unchanged Compose UI and reaches
   microG FakeStore, DroidGuard and Google's endpoint with `?attestation=1`.

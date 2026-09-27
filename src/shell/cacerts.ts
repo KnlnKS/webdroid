@@ -1,5 +1,5 @@
 import { certificates } from "../../vendor/android-cacerts-index";
-import { vfs } from "../jvm/natives/jio";
+import { vfs } from "./vfs";
 import { RangeFile, SliceFile, type FileSource } from "./lazyfile";
 
 export function mountSystemCertificates(source: FileSource = new RangeFile(

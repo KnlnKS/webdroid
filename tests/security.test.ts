@@ -170,6 +170,18 @@ describe("signature", () => {
     expect(await verify("SHA512withRSA", pair.publicKey, data, sig)).toBe(0);
   });
 
+  test("RSA/ECB/PKCS1Padding encrypts with the public key and decrypts with the private key", async () => {
+    const pair: any = await keyPair("RSA", 2048);
+    const cipher = async (mode: number, key: unknown, data: Int8Array): Promise<Int8Array> => {
+      const c = await scall("javax/crypto/Cipher", "getInstance", "(Ljava/lang/String;)Ljavax/crypto/Cipher;", "RSA/ECB/PKCS1Padding");
+      await vcall(c, "init", "(ILjava/security/Key;)V", mode, key);
+      return vcall(c, "doFinal", "([B)[B", data);
+    };
+    const encrypted = await cipher(1, pair.publicKey, bytes("password"));
+    expect(encrypted.length).toBe(256);
+    expect(await cipher(2, pair.privateKey, encrypted)).toEqual(bytes("password"));
+  });
+
   test("RSA-PSS uses the digest-length salt by default and PSSParameterSpec otherwise", async () => {
     const pair: any = await keyPair("RSA", 2048);
     const data = bytes("pss message");

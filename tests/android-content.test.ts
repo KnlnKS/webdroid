@@ -8,7 +8,7 @@ import { mkUri } from "../src/android/net";
 import { packages, PackageRecord, signaturePermissions } from "../src/android/packages";
 import { mangleMethod } from "../src/jvm/abi";
 import { JContext, JContextWrapper, display } from "../src/android/context";
-import { vfs } from "../src/jvm/natives/jio";
+import { vfs } from "../src/shell/vfs";
 import { pickFiles } from "../src/shell/hostfs";
 import { centralDir, zipTree } from "../src/jvm/natives/jzip";
 import { mergeInstall } from "../src/shell/install";

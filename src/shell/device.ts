@@ -3,7 +3,7 @@
 
 import { dexesIn } from "../jvm/dex";
 import { rt, type Gen, driven } from "../jvm/runtime";
-import { vfs, apkPath } from "../jvm/natives/jio";
+import { vfs, apkPath } from "./vfs";
 import { inflateTree } from "../jvm/natives/jzip";
 import { openInstall, type Install } from "./install";
 import { vcall, vcallOn, callOn, mainThread, JThrowable, stackTraceText } from "../jvm/natives/jlang";
@@ -15,7 +15,8 @@ import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguratio
 import { localeTag } from "../jvm/natives/jvalues";
 import { setAppHost, type AppHost } from "../android/apphost";
 import { setManifest, activityHandlesConfig, CONFIG_UI_MODE, getPM, usesSdk } from "../android/pm";
-import { windowDim } from "../android/window";
+import { windowDim, windowParams, takesTouch, takesKeys } from "../android/window";
+import { absGravity, gravityApply } from "../android/gravity";
 import { JActivity, dispatchSplashExit } from "../android/app";
 import { getPrefs } from "../android/sharedprefs";
 import { JContext } from "../android/context";
@@ -303,7 +304,7 @@ const pressBack0 = driven(function* pressBack0(): Gen<void> {
   // the topmost window takes the key: a dialog or popup before the activity under it
   let top;
   for (let i = overlays.length - 1; i >= 0; i--) {
-    if (overlays[i].view.visibility === 0) { top = overlays[i]; break; }
+    if (overlays[i].view.visibility === 0 && takesKeys(overlays[i].view)) { top = overlays[i]; break; }
   }
   const act = booted?.stack.at(-1);
   try {
@@ -410,15 +411,17 @@ const tick0 = driven(function* tick0(): Gen {
         }
         mainDbg.phase = "overlays";
         for (const o of overlays) {
-          const win = o.view.windowOwner, floating = !!win?.dialog;
-          const visible = win?.fitInsetsIgnoringVisibility ? ~0 : rootWindowInsets(o.view).vis;
-          const top = floating && (win.fitInsetsSides & 2) && (win.fitInsetsTypes & visible & 1) ? STATUS_H : 0;
-          const bottom = floating && (win.fitInsetsSides & 8) && (win.fitInsetsTypes & visible & 2) ? device.navBar : 0;
+          // a dialog, or a WindowManager window with a gravity, is placed inside the system bars
+          // it fits; any other window stays where it was put
+          const win = o.view.windowOwner, params = windowParams(o.view), placed = win?.dialog ? win : params?.gravity ? params : null;
+          const visible = placed?.fitInsetsIgnoringVisibility ? ~0 : rootWindowInsets(o.view).vis;
+          const top = placed && (placed.fitInsetsSides & 2) && (placed.fitInsetsTypes & visible & 1) ? STATUS_H : 0;
+          const bottom = placed && (placed.fitInsetsSides & 8) && (placed.fitInsetsTypes & visible & 2) ? device.navBar : 0;
           yield measureView(o.view, makeSpec(SCREEN_W, 0x80000000 | 0), makeSpec(SCREEN_H - top - bottom, 0x80000000 | 0));
-          if (floating) {
-            const gravity = win!.gravity;
-            o.x = (gravity & 7) === 3 ? 0 : (gravity & 7) === 5 ? SCREEN_W - o.view.measuredW : (SCREEN_W - o.view.measuredW) >> 1;
-            o.y = (gravity & 0x70) === 0x30 ? top : (gravity & 0x70) === 0x50 ? SCREEN_H - bottom - o.view.measuredH : top + ((SCREEN_H - top - bottom - o.view.measuredH) >> 1);
+          if (placed) {
+            const frame = { left: 0, top, right: SCREEN_W, bottom: SCREEN_H - bottom };
+            gravityApply(absGravity(placed.gravity), o.view.measuredW, o.view.measuredH, frame, placed === params ? params.x : 0, placed === params ? params.y : 0, frame);
+            o.x = frame.left; o.y = frame.top;
           }
           // AOSP lays a window out inside the screen: a dropdown anchored near the right edge
           // shifts left instead of hanging off it. The popup's own placement pass runs before
@@ -494,7 +497,7 @@ const tick0 = driven(function* tick0(): Gen {
       }
       perf.drawMs += performance.now() - t0;
       // WebView frames are DOM over the canvas: show the ones this pass drew, hide the rest
-      webLayerSweep(overlays.some(o => o.view.visibility === 0));
+      webLayerSweep();
     }
   } catch (e) {
     console.error("[tick]", e);
@@ -538,7 +541,7 @@ const dispatchPointer0 = driven(function* dispatchPointer0(action: number, x: nu
       for (let i = overlays.length - 1; i >= 0; i--) {
         const o = overlays[i];
         const v = o.view;
-        if (v.visibility !== 0) continue;
+        if (v.visibility !== 0 || !takesTouch(v)) continue;
         if (x >= v.left && x < v.right && y >= v.top && y < v.bottom) {
           touchTarget = { overlay: i };
           break;

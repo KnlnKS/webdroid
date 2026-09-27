@@ -13,7 +13,7 @@ import { getPackageInstaller } from "./packageinstaller";
 import { sameBytes, verifyApkSignature } from "./apksignature";
 import { persistPackage, restorePackages } from "../shell/packages";
 import { appHost, type AppHost, jclsNameOf } from "./apphost";
-import { apkPath, vfs } from "../jvm/natives/jio";
+import { vfs, apkPath } from "../shell/vfs";
 import { DOCS_AUTHORITY } from "./documents";
 import { type JList, newArrayList } from "../jvm/natives/jutil";
 import { JIntent, type JComponentName, componentState, mkComponentName, systemActivity, SYSTEM_ACTIVITY } from "./intent";

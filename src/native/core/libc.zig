@@ -58,6 +58,7 @@ pub const Fn = enum(u8) {
     pthread_rwlock_wrlock,
     pthread_rwlock_trywrlock,
     pthread_rwlock_unlock,
+    clock_gettime,
 };
 pub const Result = enum(u32) { done, fault, host };
 /// The rwlock words src/native/pthread.ts keeps: state (reader count or RW_WRITER), writer tid, waiters.
@@ -228,6 +229,21 @@ fn checksum(c: *Cpu, id: Fn) Result {
     return .done;
 }
 
+extern "env" fn guest_ms() f64;
+extern "env" fn wall_ms() f64;
+/// libc.ts clockTime: REALTIME, REALTIME_COARSE and REALTIME_ALARM read the wall clock; every other
+/// clock is the guest's monotonic one, offset so it is never 0
+fn clockGettime(c: *Cpu) Result {
+    const id: u32 = @truncate(arg(c, 0));
+    const ts = ptr(c, 1) orelse return .fault;
+    const ms = if (id == 0 or id == 5 or id == 8) wall_ms() else guest_ms() + 1000;
+    const sec = @floor(ms / 1000);
+    const nsec: u64 = @intFromFloat(@floor((ms - sec * 1000) * 1e6));
+    const half: u32 = if (c.a64 != 0) 8 else 4;
+    if (!stp(c, ts, @intFromFloat(sec)) or !stp(c, ts + half, nsec)) return .fault;
+    ret(c, 0);
+    return .done;
+}
 pub fn call(c: *Cpu, id: u8) Result {
     const f: Fn = @enumFromInt(id);
     switch (f) {
@@ -239,6 +255,7 @@ pub fn call(c: *Cpu, id: u8) Result {
         .sincosf => return sincos(f32, c),
         .sincos => return sincos(f64, c),
         .crc32, .adler32 => return checksum(c, f),
+        .clock_gettime => return clockGettime(c),
         .pthread_mutex_lock, .pthread_mutex_trylock => {
             const a = ptr(c, 0) orelse return .fault;
             const w = mem.ld(u32, a);

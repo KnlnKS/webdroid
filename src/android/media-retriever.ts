@@ -1,7 +1,8 @@
 import { rt, JObj, driven, type Gen } from "../jvm/runtime";
 import { concat } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
-import { JFileDescriptor, vfs } from "../jvm/natives/jio";
+import { JFileDescriptor } from "../jvm/natives/jio";
+import { vfs } from "../shell/vfs";
 import { JBuffer } from "../jvm/natives/jnio";
 import { javaFdSource } from "../native/stdio";
 import { SliceFile, type FileSource } from "../shell/lazyfile";

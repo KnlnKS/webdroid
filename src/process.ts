@@ -12,7 +12,7 @@ import { overlays } from "./android/popup";
 import { jitStats } from "./native/core";
 import type { Install } from "./shell/install";
 import { installedPath, registerPackage } from "./android/pm";
-import { vfs } from "./jvm/natives/jio";
+import { vfs } from "./shell/vfs";
 import { mountSystemCertificates } from "./shell/cacerts";
 import { hexBytes, u8 } from "./jvm/abi";
 import { configureJvmCoverage, jvmCoverage } from "./jvm/coverage";

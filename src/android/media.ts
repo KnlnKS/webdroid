@@ -3,7 +3,8 @@
 import { rt, JObj, stubs, noops, fieldGetters, driven, type Gen } from "../jvm/runtime";
 import { vcall, stringHash, vcallUncaught } from "../jvm/natives/jlang";
 import { newArrayList, newStringSet, type JList } from "../jvm/natives/jutil";
-import { type JFileDescriptor, vfs } from "../jvm/natives/jio";
+import { type JFileDescriptor } from "../jvm/natives/jio";
+import { vfs } from "../shell/vfs";
 import { javaFdSource } from "../native/stdio";
 import { readFully } from "../shell/lazyfile";
 import type { JBuffer } from "../jvm/natives/jnio";
@@ -492,7 +493,7 @@ rt.register({
       const host = c?.$host;
       return this.load(host?.res.fileOf(resId)?.bytes ?? null);
     },
-    "load(Ljava/lang/String;I)I": function (this: JSoundPool, path: string) { return this.load(vfs.read(path)); },
+    "load(Ljava/lang/String;I)I": driven(function* (this: JSoundPool, path: string): Gen { return this.load(yield vfs.readFile(path)); }),
     "play(IFFIIF)I": function (this: JSoundPool, id: number, l: number, r: number, prio: number, loop: number, rate: number) {
       const buf = this.sounds.get(id);
       if (!buf || !actx) return 0;

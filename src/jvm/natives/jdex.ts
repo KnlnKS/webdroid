@@ -4,7 +4,7 @@ import { JObj, rt, type Runtime, driven, type Gen } from "../runtime";
 import { zipTree } from "./jzip";
 import { dexesIn } from "../dex";
 import { JClassLoader } from "./jlang";
-import { vfs } from "./jio";
+import { vfs } from "../../shell/vfs";
 import { packedArchives } from "../../shell/packedarchive";
 import type { JBuffer } from "./jnio";
 

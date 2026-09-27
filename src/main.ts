@@ -29,7 +29,7 @@ import { mountDiagnostics, nativeRequirements } from "./shell/diagnostics";
 import { createShell } from "./shell/ui";
 import { openInstallLocal, openInstallRemote } from "./shell/install";
 import { activateLocalAssets, localAsset } from "./shell/localassets";
-import { vfs } from "./jvm/natives/jio";
+import { vfs } from "./shell/vfs";
 import { yieldStats, timedParks } from "./jvm/yield";
 import { provisionPackages, provisionServices } from "./shell/provision";
 import { connectProcess, registerForegroundProcess, processPresentation, processBroker } from "./shell/processes";
@@ -127,7 +127,10 @@ function* walkTree(v: any, depth = 0, ox = 0, oy = 0, visibleOnly = false): Gene
   yield { v, depth, x, y };
   for (const c of v.children ?? []) yield* walkTree(c, depth + 1, x - (v.scrollX ?? 0), y - (v.scrollY ?? 0), visibleOnly);
 }
-const tap = async (x: number, y: number) => {
+const tap = async (x: number, y: number): Promise<void> => {
+  // the process on screen takes the tap, as it takes the browser's own pointer events
+  const remote = (processBroker().foregroundWindow() as { wd?: { tap(x: number, y: number): Promise<void> } } | null)?.wd;
+  if (remote) return remote.tap(x, y);
   await dispatchPointer(0, x, y);
   await sleep(60);
   await dispatchPointer(1, x, y);

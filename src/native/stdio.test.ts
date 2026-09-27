@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { mainThread } from "../jvm/natives/jlang";
-import { vfs } from "../jvm/natives/jio";
+import { vfs } from "../shell/vfs";
 import { Cpu, setA64 } from "./cpu";
 import { lookupHost, stp } from "./host";
 import { libcInit } from "./libc";

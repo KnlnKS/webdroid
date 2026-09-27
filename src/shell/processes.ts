@@ -18,7 +18,7 @@ import { onMain } from "../android/mainloop";
 import { PROCESS_PID, uptimeMillis, reportUncaught } from "../android/os";
 import { bindLocalService, unbindLocalService, svcStart, serviceTransport } from "../android/runningservices";
 import { vcall } from "../jvm/natives/jlang";
-import { vfs } from "../jvm/natives/jio";
+import { vfs } from "./vfs";
 import { device, formatScreen } from "./config";
 import { connectProviders, receiveProvider, type ProviderRequest, type ProviderReply } from "../android/provideripc";
 import { broadcastTransport, deliverBroadcast, hasBroadcastReceiver } from "../android/broadcast";
@@ -120,6 +120,8 @@ class ProcessBroker {
   }
 
   foreground(pid: number): void { this.foregroundPid = pid; this.shownPids = new Set([pid]); }
+  /** the foreground process's window when it runs in a frame of its own */
+  foregroundWindow(): Window | null { return this.entries.get(this.foregroundPid)?.frame?.contentWindow ?? null; }
   private copyClipboard(data: ParcelData): ParcelData {
     return { bytes: data.bytes.slice(), objects: data.objects.map(([at, handle]) => [at, handle && { ...handle }]) };
   }

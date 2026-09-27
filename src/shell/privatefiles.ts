@@ -1,11 +1,15 @@
-import type { vfs } from "../jvm/natives/jio";
+import type { vfs } from "./vfs";
 import { openDb, txDone } from "./idb";
+import { DiskFile, DiskStore } from "./diskstore";
 
-type FileValue = { kind: "file"; bytes: Uint8Array } | { kind: "directory" };
+type FileValue = { kind: "file"; bytes: Uint8Array } | { kind: "disk"; id: string; size: number } | { kind: "directory" };
 const roots = ["/data/data/", "/data/user/0/", "/data/user_de/0/", "/sdcard/Android/data/"];
 const appPath = new RegExp("^(?:" + roots.join("|") + ")[^/]+(?:/(.*))?$");
 const FLUSH_SETTLE_MS = 100, FLUSH_MAX_MS = 2000;
 const sharedPath = (path: string) => path.startsWith("/sdcard/") && !appPath.test(path);
+/** a persisted file grown through an open descriptor past this moves to disk; whole-file writers
+ *  (SQLite, preferences) keep their bytes in memory and read them back synchronously */
+const SPILL_BYTES = 4 << 20;
 export class PrivateFiles {
   private values = new Map<string, FileValue>();
   private views = new Map<number, typeof vfs>();
@@ -15,6 +19,9 @@ export class PrivateFiles {
   private writes: Promise<void> = Promise.resolve();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pendingSince = 0;
+  private readonly disk = new DiskStore();
+  /** disk files whose path changed, removed at the next flush unless another path took them */
+  private orphans = new Set<string>();
 
   attach(pid: number, view: typeof vfs): void {
     if (this.views.get(pid) === view) return;
@@ -22,18 +29,30 @@ export class PrivateFiles {
     for (const [path, value] of this.values) this.install(view, path, value);
     view.prepare = (pkg) => this.prepare(pkg);
     view.flush = () => this.flush();
-    view.onWrite = (path) => {
+    view.onWrite = (path, change) => {
       const relative = appPath.exec(path);
       if (!relative && !sharedPath(path)) return;
-      const bytes = view.files.get(path);
-      const value: FileValue | null = bytes ? { kind: "file", bytes } : view.dirs.has(path) ? { kind: "directory" } : null;
+      const cache = !!relative && /^(?:cache|code_cache)(?:\/|$)/.test(relative[1] ?? "");
+      const value = this.valueOf(view, path, change === "modify" && !cache);
       this.update(path, value);
-      if (relative && /^(?:cache|code_cache)(?:\/|$)/.test(relative[1] ?? "")) return;
+      if (cache) return;
       this.pending.set(path, value);
       this.schedule();
     };
   }
   detach(pid: number): void { this.views.delete(pid); }
+  /** what `view` holds at `path`; a file grown through a descriptor past SPILL_BYTES moves to disk */
+  private valueOf(view: typeof vfs, path: string, streamed: boolean): FileValue | null {
+    const bytes = view.files.get(path), source = view.lazyFiles.get(path);
+    if (bytes && streamed && bytes.length >= SPILL_BYTES) {
+      const disk = this.disk.create();
+      disk.write(0, bytes.slice());
+      return { kind: "disk", id: disk.id, size: disk.size };
+    }
+    if (bytes) return { kind: "file", bytes };
+    if (source instanceof DiskFile) return { kind: "disk", id: source.id, size: source.size };
+    return view.dirs.has(path) ? { kind: "directory" } : null;
+  }
   /** A burst of writes (a download's chunks) settles into one transaction, and a steady stream
    *  still persists every FLUSH_MAX_MS: each flush stores whole files, so per-write flushing is
    *  quadratic in a growing file's size. */
@@ -47,9 +66,12 @@ export class PrivateFiles {
   private install(view: typeof vfs, path: string, value: FileValue | null): void {
     view.dirs.delete(path);
     if (value?.kind === "file") view.write(path, value.bytes, false);
+    else if (value?.kind === "disk") view.adopt(path, this.disk.file(value.id, value.size));
     else { view.delete(path, false); if (value) view.dirs.add(path); }
   }
   private update(path: string, value: FileValue | null): void {
+    const previous = this.values.get(path);
+    if (previous?.kind === "disk" && (value?.kind !== "disk" || value.id !== previous.id)) this.orphans.add(previous.id);
     if (value) this.values.set(path, value); else this.values.delete(path);
     for (const view of this.views.values()) this.install(view, path, value);
   }
@@ -69,6 +91,7 @@ export class PrivateFiles {
             const path = cursor.key, value: unknown = cursor.value;
             if (typeof path === "string" && include(path) && !this.values.has(path) && !this.pending.has(path) && value && typeof value === "object" && "kind" in value) {
               if (value.kind === "directory") this.update(path, { kind: "directory" });
+              else if (value.kind === "disk" && "id" in value && typeof value.id === "string" && "size" in value && typeof value.size === "number") this.update(path, { kind: "disk", id: value.id, size: value.size });
               else if (value.kind === "file" && "bytes" in value && value.bytes instanceof Uint8Array) this.update(path, { kind: "file", bytes: value.bytes });
             }
             cursor.continue();
@@ -90,6 +113,9 @@ export class PrivateFiles {
     if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
     if (!this.pending.size) return this.writes;
     const pending = this.pending; this.pending = new Map();
+    const live = new Set([...this.values.values()].flatMap((value) => value.kind === "disk" ? [value.id] : []));
+    const orphans = [...this.orphans].filter((id) => !live.has(id));
+    this.orphans.clear();
     const write = this.writes.then(async () => {
       const transaction = (await this.db()).transaction("files", "readwrite"), store = transaction.objectStore("files");
       // a view into a larger growing buffer would otherwise clone the whole buffer
@@ -98,6 +124,7 @@ export class PrivateFiles {
         else store.put(value.kind === "file" && value.bytes.byteLength !== value.bytes.buffer.byteLength ? { kind: "file", bytes: value.bytes.slice() } : value, path);
       }
       await txDone(transaction);
+      await Promise.all([this.disk.flush(), ...orphans.map((id) => this.disk.remove(id))]);
     });
     this.writes = write.catch(() => {
       for (const path of pending.keys()) if (!this.pending.has(path)) this.pending.set(path, this.values.get(path) ?? null);
@@ -113,7 +140,8 @@ export class PrivateFiles {
     const clear = this.writes.then(async () => {
       const transaction = (await this.db()).transaction("files", "readwrite");
       transaction.objectStore("files").clear();
-      await txDone(transaction);
+      await Promise.all([txDone(transaction), this.disk.clear()]);
+      this.orphans.clear();
     });
     this.writes = clear.catch(() => {});
     await clear;

@@ -6,7 +6,8 @@ import { mangleMethod, parseMethodDesc, jmethod } from "../jvm/abi";
 import { vcall, mkEnumSet, JThread, curThread, setCurThread, type JSimpleEnum } from "../jvm/natives/jlang";
 import { readStreamFully } from "../jvm/natives/jio";
 import { toJsArray } from "../jvm/natives/jutil";
-import { JViewGroup, initViewFromCtx, defaultSize, type JView } from "./view";
+import { JViewGroup, initViewFromCtx, defaultSize, rootOf, type JView } from "./view";
+import { overlays } from "./popup";
 import { device } from "../shell/config";
 import { onMain } from "./mainloop";
 import { type JContext } from "./context";
@@ -125,11 +126,17 @@ export function setWebLayer(el: HTMLElement) {
 }
 let frame = 1;
 const live = new Set<JWebView>();
+/** frames sit above the canvas, so a visible window stacked over the WebView's own hides it */
+function covered(v: JView): boolean {
+  const root = rootOf(v);
+  for (let i = overlays.length - 1; i >= 0 && overlays[i].view !== root; i--) if (overlays[i].view.visibility === 0) return true;
+  return false;
+}
 /** after each canvas draw pass: show the WebViews that pass painted, at their on-screen rect */
-export function webLayerSweep(covered: boolean): void {
+export function webLayerSweep(): void {
   for (const v of live) {
     if (!v.el) continue;
-    const show = v.drawnAt === frame && !covered && v.place();
+    const show = v.drawnAt === frame && !covered(v) && v.place();
     if (show !== v.shown) { v.shown = show; v.el.hidden = !show; }
   }
   frame++;

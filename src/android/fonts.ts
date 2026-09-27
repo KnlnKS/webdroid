@@ -3,17 +3,19 @@
 // (each member a FontFace with its own weight/style, which is exactly how CSS selects within a
 // family); a Typeface names that family (plus fallbacks) with a weight and slant.
 
-import { rt, JObj, type NativeSpec, fieldGetters } from "../jvm/runtime";
+import { rt, JObj, type NativeSpec, fieldGetters, driven, type Gen } from "../jvm/runtime";
 import { jarray, i8 } from "../jvm/abi";
 import { vcall } from "../jvm/natives/jlang";
 import { parseAXML, attr } from "./axml";
-import { vfs, type JFile } from "../jvm/natives/jio";
+import { type JFile } from "../jvm/natives/jio";
+import { vfs } from "../shell/vfs";
 import { JBuffer, bufferView } from "../jvm/natives/jnio";
 import { JTypeface, mkTypeface, typefaceFor, setFamilyMetrics, setTypefaceLoader } from "./graphics";
 import type { Resources } from "./res";
 import type { JResources, JAssetManager } from "./resnative";
 
 const UPRIGHT = 0, ITALIC = 1;
+const fileBytes = (path: string | null | undefined) => path ? vfs.readFile(path) : null;
 
 /** Offsets of the sfnt tables we read, by tag, or null if `b` is not a font we understand. */
 function sfntTables(b: Uint8Array, ttcIndex: number): { dv: DataView; at: Map<number, number> } | null {
@@ -182,17 +184,16 @@ rt.register({
     "<init>(Landroid/graphics/fonts/Font;)V": function (this: JFontBuilder, f: JFont) {
       this.bytes = f.bytes; this.weight = f.style.weight; this.slant = f.style.slant; this.ttcIndex = f.ttcIndex; this.axes = f.axes; this.file = f.file; this.srcId = f.srcId;
     },
-    "<init>(Ljava/io/File;)V": function (this: JFontBuilder, f: JFile) {
+    "<init>(Ljava/io/File;)V": driven(function* (this: JFontBuilder, f: JFile): Gen {
       this.file = f;
-      fromBytes.call(this, vfs.read(f.path), "Failed to read " + f.path);
-    },
-    "<init>(Ljava/io/FileDescriptor;)V": function (this: JFontBuilder, fd: any) {
-      fromBytes.call(this, fd?.path ? vfs.read(fd.path) : null, "Failed to read file descriptor");
-    },
-    "<init>(Landroid/os/ParcelFileDescriptor;)V": function (this: JFontBuilder, pfd: any) {
-      const p = pfd?.path ?? pfd?.fd?.path;
-      fromBytes.call(this, p ? vfs.read(p) : null, "Failed to read file descriptor");
-    },
+      fromBytes.call(this, yield fileBytes(f.path), "Failed to read " + f.path);
+    }),
+    "<init>(Ljava/io/FileDescriptor;)V": driven(function* (this: JFontBuilder, fd: any): Gen {
+      fromBytes.call(this, yield fileBytes(fd?.path), "Failed to read file descriptor");
+    }),
+    "<init>(Landroid/os/ParcelFileDescriptor;)V": driven(function* (this: JFontBuilder, pfd: any): Gen {
+      fromBytes.call(this, yield fileBytes(pfd?.path ?? pfd?.fd?.path), "Failed to read file descriptor");
+    }),
     "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;)V": fromAsset,
     "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;ZI)V": fromAsset,
     "<init>(Ljava/nio/ByteBuffer;)V": function (this: JFontBuilder, bb: JBuffer) {
@@ -320,9 +321,9 @@ class JTypefaceBuilder extends JObj {
 }
 function tfbFrom(this: JTypefaceBuilder, b: Uint8Array | null) { this.bytes = b; }
 const tfbMethods: NonNullable<NativeSpec["methods"]> = {
-  "<init>(Ljava/io/File;)V": function (this: JTypefaceBuilder, f: JFile) { tfbFrom.call(this, vfs.read(f.path)); },
-  "<init>(Ljava/lang/String;)V": function (this: JTypefaceBuilder, p: string) { tfbFrom.call(this, vfs.read(p)); },
-  "<init>(Ljava/io/FileDescriptor;)V": function (this: JTypefaceBuilder, fd: any) { tfbFrom.call(this, fd?.path ? vfs.read(fd.path) : null); },
+  "<init>(Ljava/io/File;)V": driven(function* (this: JTypefaceBuilder, f: JFile): Gen { tfbFrom.call(this, yield fileBytes(f.path)); }),
+  "<init>(Ljava/lang/String;)V": driven(function* (this: JTypefaceBuilder, p: string): Gen { tfbFrom.call(this, yield fileBytes(p)); }),
+  "<init>(Ljava/io/FileDescriptor;)V": driven(function* (this: JTypefaceBuilder, fd: any): Gen { tfbFrom.call(this, yield fileBytes(fd?.path)); }),
   "<init>(Landroid/content/res/AssetManager;Ljava/lang/String;)V": function (this: JTypefaceBuilder, am: JAssetManager, p: string) { tfbFrom.call(this, am.host.zip["assets/" + p] ?? null); },
   "setWeight(I)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, w: number) { this.weight = w; return this; },
   "setItalic(Z)Landroid/graphics/Typeface$Builder;": function (this: JTypefaceBuilder, i: number) { this.italic = i ? 1 : 0; return this; },

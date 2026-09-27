@@ -1,5 +1,6 @@
 import { rt, JObj } from "../jvm/runtime";
-import type { JRect } from "./graphics";
+/** the edges Gravity.apply reads and writes, which an android.graphics.Rect has */
+export type Box = { left: number; top: number; right: number; bottom: number };
 
 export const G = {
   LEFT: 3, RIGHT: 5, TOP: 48, BOTTOM: 80, CENTER_H: 1, CENTER_V: 16, CENTER: 17,
@@ -25,11 +26,11 @@ rt.register({
   },
   methods: {
     "static getAbsoluteGravity(II)I": absGravity,
-    "static apply(IIILandroid/graphics/Rect;Landroid/graphics/Rect;)V": (g: number, w: number, h: number, c: JRect, out: JRect) => gravityApply(g, w, h, c, 0, 0, out),
-    "static apply(IIILandroid/graphics/Rect;Landroid/graphics/Rect;I)V": (g: number, w: number, h: number, c: JRect, out: JRect, ld: number) => gravityApply(absGravity(g, ld), w, h, c, 0, 0, out),
-    "static apply(IIILandroid/graphics/Rect;IILandroid/graphics/Rect;)V": (g: number, w: number, h: number, c: JRect, x: number, y: number, out: JRect) => gravityApply(g, w, h, c, x, y, out),
-    "static apply(IIILandroid/graphics/Rect;IILandroid/graphics/Rect;I)V": (g: number, w: number, h: number, c: JRect, x: number, y: number, out: JRect, ld: number) => gravityApply(absGravity(g, ld), w, h, c, x, y, out),
-    "static applyDisplay(ILandroid/graphics/Rect;Landroid/graphics/Rect;)V": (g: number, disp: JRect, inout: JRect) => {
+    "static apply(IIILandroid/graphics/Rect;Landroid/graphics/Rect;)V": (g: number, w: number, h: number, c: Box, out: Box) => gravityApply(g, w, h, c, 0, 0, out),
+    "static apply(IIILandroid/graphics/Rect;Landroid/graphics/Rect;I)V": (g: number, w: number, h: number, c: Box, out: Box, ld: number) => gravityApply(absGravity(g, ld), w, h, c, 0, 0, out),
+    "static apply(IIILandroid/graphics/Rect;IILandroid/graphics/Rect;)V": (g: number, w: number, h: number, c: Box, x: number, y: number, out: Box) => gravityApply(g, w, h, c, x, y, out),
+    "static apply(IIILandroid/graphics/Rect;IILandroid/graphics/Rect;I)V": (g: number, w: number, h: number, c: Box, x: number, y: number, out: Box, ld: number) => gravityApply(absGravity(g, ld), w, h, c, x, y, out),
+    "static applyDisplay(ILandroid/graphics/Rect;Landroid/graphics/Rect;)V": (g: number, disp: Box, inout: Box) => {
       // AOSP: DISPLAY_CLIP_* clip to the display, otherwise push the rect back inside it
       if (inout.left < disp.left) { inout.right += disp.left - inout.left; inout.left = disp.left; }
       if (inout.right > disp.right) { inout.left -= inout.right - disp.right; inout.right = disp.right; }
@@ -52,11 +53,12 @@ export function absGravity(g: number, ld = 0): number {
 }
 /** AOSP Gravity.apply: per axis AXIS_PULL_BEFORE(2)/AXIS_PULL_AFTER(4) select the edge, both
  *  mean FILL, neither means centre; AXIS_CLIP(8) clips the result to the container */
-export function gravityApply(g: number, w: number, h: number, c: JRect, xAdj: number, yAdj: number, out: JRect) {
+export function gravityApply(g: number, w: number, h: number, c: Box, xAdj: number, yAdj: number, out: Box) {
   const axis = (bits: number, dim: number, lo: number, hi: number, adj: number): [number, number] => {
     const pull = bits & 6, clip = bits & 8;
     if (pull === 6) return [lo + adj, hi + adj];
-    let a = pull === 2 ? lo + adj : pull === 4 ? hi + adj - dim : lo + (((hi - lo) - dim) >> 1) + adj;
+    // pulled after, the adjustment moves inward from the far edge
+    let a = pull === 2 ? lo + adj : pull === 4 ? hi - adj - dim : lo + (((hi - lo) - dim) >> 1) + adj;
     let b = a + dim;
     if (clip) { if (a < lo) a = lo; if (b > hi) b = hi; }
     return [a, b];

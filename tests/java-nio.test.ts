@@ -2,7 +2,8 @@ import { expect, test, describe } from "bun:test";
 import "../src/natives";
 import { newObj, vcall, vcallAsync } from "../src/jvm/natives/jlang";
 import { rt } from "../src/jvm/runtime";
-import { vfs, JInputStream } from "../src/jvm/natives/jio";
+import { JInputStream } from "../src/jvm/natives/jio";
+import { vfs } from "../src/shell/vfs";
 import { mangleMethod, jarray } from "../src/jvm/abi";
 import { scall } from "./java";
 

@@ -6,7 +6,7 @@ import { vcall, defineException } from "./jlang";
 import { mkIter } from "./jutil";
 import { charsToString, concat, i8, u8, utf8 } from "../abi";
 import { JKeyGenSpec } from "../../android/security";
-import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt, binary, array } from "./jrsa";
+import { JRsaPublicKey, JRsaPrivateKey, JOAEP, generateRsa, restoreRsa, rsaChain, rsaCrypt, binary, array, type RsaScheme } from "./jrsa";
 import { generateEc, isEcCurve, curveOfParams } from "./jec";
 import { caStoreMethods, parseX509 } from "./jx509";
 import { type JBuffer, bufferView } from "./jnio";
@@ -134,6 +134,8 @@ const ZERO_IV = new Uint8Array(16);
 class JCipher extends JObj {
   transformation = "";
   alg = "AES-CBC";
+  /** set for an RSA transformation, whose padding picks forge's scheme */
+  scheme: RsaScheme | null = null;
   padded = true;
   opmode = 0;
   key: CryptoKey | null = null;
@@ -229,14 +231,16 @@ rt.register({
     "markSupported()Z": () => 0,
   },
 });
+const RSA_PADDINGS: Record<string, RsaScheme> = { OAEPPADDING: "RSA-OAEP", PKCS1PADDING: "RSAES-PKCS1-V1_5", NOPADDING: "RAW" };
 function getCipher(t: string, provider?: unknown): JCipher {
   const [alg, mode = "ECB", padding = "PKCS5Padding"] = t.split("/");
   const c = new JCipher();
   c.transformation = t;
   if (alg.toUpperCase() === "RSA" && /^(ECB|NONE)$/i.test(mode)) {
     if (typeof provider === "string" && !["AndroidKeyStoreBCWorkaround", "AndroidOpenSSL", "BC"].includes(provider)) throw rt.mkThrowable("java/security/NoSuchProviderException", provider);
-    if (!/^OAEPPadding$/i.test(padding)) throw rt.mkThrowable("javax/crypto/NoSuchPaddingException", padding);
-    c.alg = "RSA-OAEP";
+    const scheme = RSA_PADDINGS[padding.toUpperCase()];
+    if (!scheme) throw rt.mkThrowable("javax/crypto/NoSuchPaddingException", padding);
+    c.scheme = scheme;
     return c;
   }
   if (alg.toUpperCase() !== "AES" || !(c.alg = MODES[mode.toUpperCase()])) {
@@ -250,10 +254,10 @@ function getCipher(t: string, provider?: unknown): JCipher {
 }
 async function initCipher(c: JCipher, opmode: number, key: unknown, params: unknown) {
   if (opmode < 1 || opmode > 4) throw rt.mkThrowable("java/security/InvalidParameterException", "Invalid operation mode");
-  if (c.alg === "RSA-OAEP") {
+  if (c.scheme) {
     const encrypt = opmode === 1 || opmode === 3;
     if (encrypt ? !(key instanceof JRsaPublicKey) : !(key instanceof JRsaPrivateKey)) throw rt.mkThrowable("java/security/InvalidKeyException", "RSA key does not match operation");
-    if (params != null && !(params instanceof JOAEP)) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "OAEP parameters required");
+    if (params != null && !(c.scheme === "RSA-OAEP" && params instanceof JOAEP)) throw rt.mkThrowable("java/security/InvalidAlgorithmParameterException", "Unsupported parameter spec");
     c.rsa = key as JRsaPublicKey | JRsaPrivateKey; c.oaep = params ?? new JOAEP(); c.opmode = opmode; c.parts = []; c.iv = null;
     return;
   }
@@ -309,7 +313,7 @@ async function doFinal(c: JCipher, b?: Int8Array, off = 0, len = b?.length): Pro
   if (b) c.parts.push(bytes(b, off, len));
   let data = concat(c.parts);
   c.parts = [];
-  if (c.rsa) return rsaCrypt(c.rsa, data, c.oaep);
+  if (c.scheme && c.rsa) return rsaCrypt(c.rsa, data, c.scheme, c.oaep);
   const key = c.key!, enc = c.opmode === 1 || c.opmode === 3;
   const op = enc ? "encrypt" : "decrypt";
   if (c.alg === "AES-CTR") return new Int8Array(await crypto.subtle[op]({ name: c.alg, counter: c.iv!, length: 128 }, key, data));
@@ -373,7 +377,7 @@ rt.register({
       return mkSecretKey(new Uint8Array(yield doFinal(this, wrapped)), algorithm);
     }),
     "getParameters()Ljava/security/AlgorithmParameters;": () => null,
-    "getBlockSize()I": function (this: JCipher) { return this.alg === "RSA-OAEP" ? 0 : 16; },
+    "getBlockSize()I": function (this: JCipher) { return this.scheme ? 0 : 16; },
     "getOutputSize(I)I": function (this: JCipher, n: number) {
       if (this.rsa) return this.rsa.key().then((key) => Math.ceil(key.n.bitLength() / 8));
       return this.parts.reduce((s, p) => s + p.length, n) + 16;

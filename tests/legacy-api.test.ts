@@ -9,7 +9,7 @@ import { PROCESS_PID } from "../src/android/os";
 import { fireActivityLifecycle, JActivity, JApplication } from "../src/android/app";
 import { appHost, setAppHost } from "../src/android/apphost";
 import { onMain } from "../src/android/mainloop";
-import { vfs } from "../src/jvm/natives/jio";
+import { vfs } from "../src/shell/vfs";
 import { scall } from "./java";
 
 

@@ -40,7 +40,8 @@ const LAYOUT64: typeof LAYOUT32 = {
   SIGACTION_SIZE: 32, SA_HANDLER: 8, SA_FLAGS: 0, STATFS_SIZE: 120,
 };
 export let LAYOUT = LAYOUT32;
-export const clockTime = (id: number): number => id === 0 ? Date.now() : guestNow() + 1000;
+/** REALTIME, REALTIME_COARSE and REALTIME_ALARM are the wall clock (core/libc.zig matches) */
+export const clockTime = (id: number): number => id === 0 || id === 5 || id === 8 ? Date.now() : guestNow() + 1000;
 /** a struct timespec / timeval as milliseconds, and back (the second field is nanoseconds or microseconds) */
 export function readTs(p: number, unit = 1e6): number { return ldLong(p + LAYOUT.TS_SEC) * 1000 + ldLong(p + LAYOUT.TS_NSEC) / unit; }
 export function writeTs(p: number, ms: number, unit = 1e6): void {

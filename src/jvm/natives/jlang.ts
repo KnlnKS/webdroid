@@ -9,6 +9,7 @@ import { javaClassSets } from "../regex-sets";
 import { mangleMethod, jmethod, lateMethod, descToName, charsToString, jarray, PRIM_NAME, PRIM_DESC, intBitsToFloat, floatToIntBits, longBitsToDouble, doubleToLongBits, dotName, slashName, utf8, PRIM_ARRAYS, i8, splitSig } from "../abi";
 import { guestNow, type GuestTimer } from "../../guest-clock";
 import { device } from "../../shell/config";
+import { vfs, apkPath } from "../../shell/vfs";
 import { csText } from "./jchars";
 import { mkIntStream } from "./jstream-values";
 
@@ -442,7 +443,6 @@ rt.register({
     "findLibrary(Ljava/lang/String;)Ljava/lang/String;": driven(function* (this: JClassLoader, n: string): Gen {
       const abi = pickAbi((a) => this.runtime.hasClasspath(`lib/${a}/lib${n}.so`));
       if (!abi) return null;
-      const { vfs, apkPath } = yield import("./jio");
       const entry = `lib/${abi}/lib${n}.so`;
       const archive = this.runtime.classpathLocations.get(entry) ?? apkPath();
       const path = `${archive}.lib/${abi}/lib${n}.so`;
@@ -1741,12 +1741,8 @@ rt.register({
     "static exit(I)V": (c: number) => { console.warn("System.exit", c); },
     "static loadLibrary(Ljava/lang/String;)V": loadLibrary,
     "static load(Ljava/lang/String;)V": driven(function* (path: string, owner: Runtime = rt): Gen {
-      // jio imports this module, so its vfs is reached lazily rather than through a static cycle
-      const { vfs } = yield import("./jio");
-      yield dlopen(owner, path.slice(path.lastIndexOf("/") + 1), () => {
-        const b = vfs.read(path);
-        return b ? E_MACHINE[b[18] | (b[19] << 8)] ?? "unknown" : null;
-      }, () => vfs.read(path));
+      const b: Uint8Array | null = yield vfs.readFile(path);
+      yield dlopen(owner, path.slice(path.lastIndexOf("/") + 1), () => b ? E_MACHINE[b[18] | (b[19] << 8)] ?? "unknown" : null, () => b);
     }),
     "static mapLibraryName(Ljava/lang/String;)Ljava/lang/String;": (n: string) => `lib${n}.so`,
     "static lineSeparator()Ljava/lang/String;": () => "\n",

@@ -4,7 +4,7 @@ import { PackedArchive, packedArchives, sha256, type PackedArchiveIndex } from "
 import { installedPath, registerPackage } from "../android/pm";
 import { attr, attrStr, TV } from "../android/axml";
 import { resString } from "../android/res";
-import { vfs } from "../jvm/natives/jio";
+import { vfs } from "./vfs";
 import { packages, signaturePermissions } from "../android/packages";
 import { JIntent, componentState, mkComponentName } from "../android/intent";
 import { serviceTransport } from "../android/runningservices";

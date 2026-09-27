@@ -1,4 +1,5 @@
-import { type JFile, vfs, mkFile } from "../jvm/natives/jio";
+import { type JFile, mkFile } from "../jvm/natives/jio";
+import { vfs } from "../shell/vfs";
 import { JObj, rt, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { type AppHost, appHost } from "./apphost";
 import { resString, themeOf, JTheme, obtainStyled, obtainStyleAttributes, type JAttrSet } from "./res";

@@ -13,7 +13,8 @@ import { newArrayList, toJsArray, mkIter } from "./jutil";
 import { JThrowable, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, dotName, i8, u8 } from "../abi";
-import { vfs, type JBAOS } from "./jio";
+import { type JBAOS } from "./jio";
+import { vfs } from "../../shell/vfs";
 import { Relay, DatagramRelay, syntheticAddress, syntheticHost, nameExists, ipv4Text } from "../../shell/relay";
 
 rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager", "javax/net/ssl/KeyManager",

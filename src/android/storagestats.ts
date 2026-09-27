@@ -2,7 +2,7 @@
 // installd walks it.
 
 import { JObj, rt, fieldGetters, stubs, driven, type Gen } from "../jvm/runtime";
-import { vfs } from "../jvm/natives/jio";
+import { vfs } from "../shell/vfs";
 import { packages } from "./packages";
 import { mimeOf } from "./mediastore";
 import { storageEstimate } from "./os";

@@ -1,14 +1,11 @@
 import { JObj, rt, driven, type Gen } from "../jvm/runtime";
 import { newObj, vcall } from "../jvm/natives/jlang";
-import { type JFile, mkFile, readStreamFully, vfs } from "../jvm/natives/jio";
+import { type JFile, mkFile, readStreamFully } from "../jvm/natives/jio";
+import { vfs } from "../shell/vfs";
 import { i8 } from "../jvm/abi";
 
 class JAtomicFile extends JObj { base = ""; }
-function rename(from: string, to: string): void {
-  const data = vfs.read(from);
-  if (data) { vfs.write(to, data); vfs.delete(from); }
-}
-function recover(file: JAtomicFile): void { rename(file.base + ".bak", file.base); }
+function recover(file: JAtomicFile): void { vfs.rename(file.base + ".bak", file.base); }
 async function openRead(this: JAtomicFile): Promise<unknown> {
   recover(this);
   if (vfs.exists(this.base)) vfs.delete(this.base + ".new");
@@ -25,7 +22,7 @@ rt.register({ name: "android/util/AtomicFile", ctor: JAtomicFile, methods: {
   "finishWrite(Ljava/io/FileOutputStream;)V": driven(function* (this: JAtomicFile, stream: unknown): Gen {
     if (stream == null) return;
     yield vcall(stream, "close", "()V");
-    rename(this.base + ".new", this.base);
+    vfs.rename(this.base + ".new", this.base);
     yield vfs.flush();
   }),
   "failWrite(Ljava/io/FileOutputStream;)V": driven(function* (this: JAtomicFile, stream: unknown): Gen {

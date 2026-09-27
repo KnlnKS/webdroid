@@ -2,7 +2,7 @@
 
 import initSqlJs, { type Database, type Statement } from "sql.js";
 import { i8, u8 } from "../jvm/abi";
-import { vfs } from "../jvm/natives/jio";
+import { vfs } from "../shell/vfs";
 import { rt, JObj, type NativeSpec, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
 import { vcall, vcallOn, callOn, curThread, type JThread, boxInt, box, JLong, JBool } from "../jvm/natives/jlang";
 import { JMap, newArrayList, toJsArray } from "../jvm/natives/jutil";
@@ -161,7 +161,8 @@ export async function openDatabase(path: string, flags = 0x10000000, separate = 
   if (jdb?.open) return jdb;
   jdb = new JSQLiteDatabase();
   jdb.path = path;
-  let data = vfs.read(path);
+  // a database the app streamed in may be disk-backed
+  let data = vfs.read(path) ?? (vfs.source(path) ? await vfs.readFile(path) : null);
   let legacy = false;
   const shared = path === ":memory:" ? undefined : sqliteStore.files.get(path);
   try {
