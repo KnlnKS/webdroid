@@ -64,15 +64,6 @@ export function run(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {
   return sweep(execute, place(words), setup);
 }
 /** the JIT tier alone: for a fixture that decides its own comparison */
-export function runJit(words: number[], setup: (c: Cpu) => void = () => {}): Cpu {
-  const at = place(words);
-  const before = jitStats.regions;
-  for (let i = 0; i < JIT_HEAT; i++) execute(at, setup);
-  const c = execute(at, setup);
-  if (jitStats.regions === before) throw new Error("the program did not compile");
-  return c;
-}
-
 /** Check one register-only program against many inputs in both tiers without recompiling it per input. */
 export function runCases(words: number[], setups: ((c: Cpu) => void)[], check: (tier: string, c: Cpu, index: number) => void): void {
   const at = place(words);
