@@ -1,7 +1,7 @@
 // Device shell: APK boot, activity stack, frame loop, touch routing.
 
 import { dexesIn } from "../jvm/dex";
-import { rt, type JObj, type Gen, driven } from "../jvm/runtime";
+import { rt, type Gen, driven } from "../jvm/runtime";
 import { vfs, apkPath } from "../jvm/natives/jio";
 import { inflateTree } from "../jvm/natives/jzip";
 import { openInstall, type Install } from "./install";
@@ -22,7 +22,7 @@ import { getPrefs } from "../android/sharedprefs";
 import { JMenu, pushMenuToBar } from "../android/menu";
 import { JContext } from "../android/context";
 import { attachProvider } from "../android/contentresolver";
-import { reportUncaught, JBundle, dispatchVsync, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
+import { reportUncaught, JBundle, runFrameCallbacks, PROCESS_PID, setProcessIdentity, setProcessName } from "../android/os";
 import { packageUid, packages } from "../android/packages";
 import { onMain, inMainJob, mainDbg } from "../android/mainloop";
 import { JView, JViewGroup, uiState, requestLayoutAll, replayLayoutRequests, measureView, layoutRoot, clearMeasureCache, setViewTargetSdk, drawView, makeSpec, MS_EXACTLY, fireGlobalLayout, fireDrawPass, dispatchAttached, dispatchDetached, guardCall } from "../android/view";
@@ -568,7 +568,6 @@ const pressBack0 = driven(function* pressBack0(): Gen<void> {
   } catch (e) { reportUncaught(e); }
 });
 
-const M_doFrame = mangleMethod("doFrame", "(J)V");
 const M_dispatch = mangleMethod("dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z");
 let drawing = false;
 /** AOSP's starting window: the system's, painted from the package's theme before the app has
@@ -609,15 +608,9 @@ const tick0 = driven(function* tick0(): Gen {
     // doFrame does: every callback here awaits, so recomputing it per callback let two
     // callbacks in the SAME frame see times hundreds of ms apart during boot.
     uiState.frameTimeNanos = BigInt(Math.floor(guestNow() * 1e6));
-    const presentation = uiState.frameTimeNanos + uiState.frameIntervalNanos;
-    const cbs = uiState.frameCallbacks.length ? uiState.frameCallbacks.splice(0) : [];
-    for (const cb of cbs as { frame?: any; run?: any; vsync?: JObj }[]) {
-      mainDbg.phase = "frame:" + ((cb.frame ?? cb.run ?? cb.vsync)?.constructor?.$i?.name ?? "?");
-      try {
-        if (cb.frame) yield guardCall(cb.frame, M_doFrame, uiState.frameTimeNanos);
-        else if (cb.vsync) yield dispatchVsync(cb.vsync, presentation);
-        else if (cb.run) yield vcall(cb.run, "run", "()V");
-      } catch (e) { reportUncaught(e); }
+    if (uiState.frameCallbacks.length) {
+      mainDbg.phase = "frame";
+      yield runFrameCallbacks(uiState.frameCallbacks.splice(0), uiState.frameTimeNanos, uiState.frameTimeNanos + uiState.frameIntervalNanos);
     }
 
     mainDbg.phase = "anim";

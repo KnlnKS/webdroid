@@ -1,3 +1,4 @@
+import type { FrameCallback } from "./os";
 import { isRecording, recordOrRun } from "./recording";
 import { perf } from "../perf";
 import { TV } from "./axml";
@@ -38,7 +39,7 @@ export const uiState = {
   needsDraw: true,
   /** the next pass must re-measure everything: a caller dirtied something it could not name */
   forceAll: true,
-  frameCallbacks: [] as unknown[],
+  frameCallbacks: [] as FrameCallback[],
   animHooks: new Set<() => boolean>(), // ts-side animators; return false to remove
   /** the current frame's timestamp. AOSP's Choreographer computes this ONCE in doFrame and
    *  hands the same value to every callback; Compose's BroadcastFrameClock fans one timestamp
