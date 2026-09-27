@@ -949,6 +949,11 @@ export function manifestActivityOrientation(cls: string): number {
   const node = manifestActivities.get(cls.replace(/\./g, "/"));
   return (node && attr(node, "screenOrientation")?.data) ?? -1;
 }
+/** ActivityInfo.launchMode: LAUNCH_MULTIPLE (0) unless the manifest names another */
+export function manifestLaunchMode(cls: string): number {
+  const node = manifestActivities.get(cls.replace(/\./g, "/"));
+  return (node && attr(node, "launchMode")?.data) ?? 0;
+}
 /** ActivityInfo.CONFIG_UI_MODE: an activity that declares it handles a day/night change is told
  *  about it; one that does not is relaunched, which is the whole of AppCompat's day/night switch. */
 export const CONFIG_UI_MODE = 0x0200;

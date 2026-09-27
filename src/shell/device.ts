@@ -13,7 +13,7 @@ import { Resources, JTheme } from "../android/res";
 import { mkJResources, setDeviceNight, syncDeviceOrientation, deviceConfiguration, applyApplicationLocales, localesFromTags, type JLocaleList } from "../android/resnative";
 import { localeTag } from "../jvm/natives/jvalues";
 import { setAppHost, jclsNameOf, type AppHost, type ActivityLaunch } from "../android/apphost";
-import { setManifest, manifestActivityTheme, manifestActivityOrientation, activityHandlesConfig, CONFIG_UI_MODE, getPM, usesSdk } from "../android/pm";
+import { setManifest, manifestActivityTheme, manifestActivityOrientation, manifestLaunchMode, activityHandlesConfig, CONFIG_UI_MODE, getPM, usesSdk } from "../android/pm";
 import { JIntent, deliverActivityResult, activityTransport, mkComponentName } from "../android/intent";
 import { ensureDecor, startingWindow } from "../android/decor";
 import { windowDim } from "../android/window";
@@ -98,8 +98,6 @@ interface BootedApp {
   mainActivityCls: string;
   stack: JActivity[];
   label: string;
-  /** manifest <activity> nodes by class name, as launch modes are read from them */
-  activities: Map<string, XmlNode>;
   /** moveTaskToBack put the task behind the home screen */
   background: boolean;
 }
@@ -279,7 +277,7 @@ export async function bootApk(input: Uint8Array | Install, onStatus: (s: string)
     }
 
     // only the app's own process answers the launcher; a child process runs components
-    booted = { host, mainActivityCls: processName ? "" : mainActivity ?? "", stack: [], label, activities, background: false };
+    booted = { host, mainActivityCls: processName ? "" : mainActivity ?? "", stack: [], label, background: false };
     if (booted.mainActivityCls) {
       onStatus("Opening app…");
       await launchMain();
@@ -316,9 +314,7 @@ const LAUNCH_SINGLE_TOP = 1, LAUNCH_SINGLE_TASK = 2;
 const reuseActivity = driven(function* reuseActivity(component: string, intent: JIntent | null, options?: ActivityLaunch): Gen<boolean> {
   if (!booted || options?.remoteId || options?.result) return false;
   const stack = booted.stack, flags = intent?.flags ?? 0;
-  const cls = aliasTargets.get(component) ?? component;
-  const node = booted.activities.get(component) ?? booted.activities.get(cls);
-  const mode = (node && attr(node, "launchMode")?.data) ?? 0;
+  const cls = aliasTargets.get(component) ?? component, mode = manifestLaunchMode(component);
   const top = stack.at(-1);
   if (flags & FLAG_ACTIVITY_CLEAR_TASK && flags & FLAG_ACTIVITY_NEW_TASK) {
     for (const act of stack.filter((a) => a.taskId === top?.taskId).reverse()) yield finishActivity(act, false);
@@ -432,24 +428,21 @@ const CONFIG_ORIENTATION_SIZE = 0x0080 | 0x0400;
 function changeActivityOrientation(act: JActivity, request: number): void {
   if (!applyOrientationRequest(request)) return;
   invalidateWindow();
+  deliverConfigChange(act, CONFIG_ORIENTATION_SIZE);
+}
+/** A configuration change reaches an activity through onConfigurationChanged if it declared
+ *  every changed bit, through a relaunch otherwise. */
+function deliverConfigChange(act: JActivity, bits: number): void {
   requestLayoutAll();
-  if (activityHandlesConfig(act, CONFIG_ORIENTATION_SIZE)) {
+  if (activityHandlesConfig(act, bits)) {
     void onMain(() => vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", deviceConfiguration())).catch(reportUncaught);
   } else recreateActivity(act);
 }
-
-/** A configuration change reaches the top activity through onConfigurationChanged if it
- *  declared every changed bit, through a relaunch otherwise. */
 function applyConfigChange(bits: number): void {
   if (!booted) return;
-  requestLayoutAll();
   const act = booted.stack.at(-1);
-  if (!act) return;
-  if (activityHandlesConfig(act, bits)) {
-    void onMain(async () => {
-      await vcall(act, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", deviceConfiguration());
-    }).catch(reportUncaught);
-  } else recreateActivity(act);
+  if (act) deliverConfigChange(act, bits);
+  else requestLayoutAll();
 }
 function applyNightMode(night: boolean): void {
   if (setDeviceNight(night)) applyConfigChange(CONFIG_UI_MODE);
