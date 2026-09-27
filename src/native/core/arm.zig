@@ -700,10 +700,7 @@ fn dataProcessing(c: *Cpu, w: u32, pc: u32, top: u32, rn: u32, rd: u32, rs: u32,
         }
         if ((w & 0x0f9000f0) == 0x01000050) {
             const o = bits(w, 21, 2);
-            const n: i64 = @as(i32, @bitCast(reg(c, rn, pc)));
-            const dbl: i64 = if (o & 2 != 0) sat32(c, n * 2) else n;
-            const m: i64 = @as(i32, @bitCast(reg(c, rm, pc)));
-            set(c, rd, @bitCast(@as(i32, @intCast(sat32(c, if (o & 1 != 0) m - dbl else m + dbl)))));
+            set(c, rd, saturatingAdd(c, reg(c, rm, pc), reg(c, rn, pc), o & 1 != 0, o & 2 != 0));
             return .next;
         }
         if ((w & 0x0e000090) == 0x00000090) {
@@ -805,6 +802,56 @@ fn satN(c: *Cpu, v: i64, width: u5, unsigned: bool) i64 {
     if (result != v) c.cpsr |= 1 << 27;
     return result;
 }
+/// QADD/QSUB/QDADD/QDSUB: m ± n, with n first doubled (saturating) for the D forms
+fn saturatingAdd(c: *Cpu, m: u32, n: u32, subtract: bool, double: bool) u32 {
+    const a: i64 = @as(i32, @bitCast(m));
+    const b: i64 = if (double) sat32(c, @as(i64, @as(i32, @bitCast(n))) * 2) else @as(i32, @bitCast(n));
+    return @bitCast(@as(i32, @intCast(sat32(c, if (subtract) a - b else a + b))));
+}
+/// SEL: each byte from n where its CPSR.GE bit is set, else from m
+fn select(c: *Cpu, n: u32, m: u32) u32 {
+    const ge = bits(c.cpsr, 16, 4);
+    var v: u32 = 0;
+    var i: u5 = 0;
+    while (i < 4) : (i += 1) {
+        const mask: u32 = @as(u32, 0xff) << (8 * i);
+        v |= (if ((ge >> i) & 1 != 0) n else m) & mask;
+    }
+    return v;
+}
+/// The parallel add/subtract family in ARM encoding: kind 1/2/3 = S/Q/SH, 5/6/7 = U/UQ/UH;
+/// op 0 ADD16, 1 ASX, 2 SAX, 3 SUB16, 4 ADD8, 7 SUB8. Only the plain forms set CPSR.GE.
+fn parallel(c: *Cpu, n: u32, m: u32, kind: u32, op: u32) ?u32 {
+    if (kind & 3 == 0 or op == 5 or op == 6) return null;
+    const signed = kind < 4;
+    const width: u5 = if (op >= 4) 8 else 16;
+    const lanes: u5 = if (op >= 4) 4 else 2;
+    const mask: u32 = (@as(u32, 1) << width) - 1;
+    var out: u32 = 0;
+    var ge: u32 = 0;
+    var i: u5 = 0;
+    while (i < lanes) : (i += 1) {
+        const crossed = if (op == 1 or op == 2) 1 - i else i;
+        const a = laneValue(n, i * width, width, signed);
+        const b = laneValue(m, crossed * width, width, signed);
+        const subtract = op == 3 or op == 7 or (op == 1 and i == 0) or (op == 2 and i == 1);
+        const v = if (subtract) a - b else a + b;
+        const bound = @as(i64, 1) << (if (signed) width - 1 else width);
+        const result = switch (kind & 3) {
+            1 => v,
+            2 => @min(@max(v, if (signed) -bound else 0), bound - 1),
+            else => v >> 1,
+        };
+        out |= (@as(u32, @truncate(@as(u64, @bitCast(result)))) & mask) << (i * width);
+        if (v >= (if (signed or subtract) 0 else bound)) ge |= (if (width == 8) @as(u32, 1) else 3) << (i * (width / 8));
+    }
+    if (kind & 3 == 1) c.cpsr = (c.cpsr & ~@as(u32, 0xf0000)) | (ge << 16);
+    return out;
+}
+inline fn laneValue(v: u32, shift: u5, width: u5, signed: bool) i64 {
+    const raw = (v >> shift) & ((@as(u32, 1) << width) - 1);
+    return if (signed and raw >> (width - 1) != 0) @as(i64, raw) - (@as(i64, 1) << width) else raw;
+}
 fn saturatingShift(c: *Cpu, value: u32, amount: u5, asr: bool, width: u5, unsigned: bool) u32 {
     const shifted: i32 = if (asr) @as(i32, @bitCast(value)) >> (if (amount == 0) 31 else amount) else @bitCast(value << amount);
     return @bitCast(@as(i32, @intCast(satN(c, shifted, width, unsigned))));
@@ -859,14 +906,11 @@ fn media(c: *Cpu, w: u32, pc: u32, rd: u32, rn: u32, rm: u32, rs: u32) Status {
         return .next;
     }
     if ((w & 0x0ff00ff0) == 0x06800fb0) {
-        const ge = bits(c.cpsr, 16, 4);
-        var v: u32 = 0;
-        var i: u5 = 0;
-        while (i < 4) : (i += 1) {
-            const m: u32 = @as(u32, 0xff) << (8 * i);
-            v |= (if ((ge >> i) & 1 != 0) RN else RM) & m;
-        }
-        set(c, rd, v);
+        set(c, rd, select(c, RN, RM));
+        return .next;
+    }
+    if ((w & 0x0f800f10) == 0x06000f10) {
+        set(c, rd, parallel(c, RN, RM, bits(w, 20, 3), bits(w, 5, 3)) orelse return fault(c, .undefined, w, pc));
         return .next;
     }
     if ((w & 0x0fe00030) == 0x06a00010 or (w & 0x0fe00030) == 0x06e00010) {
@@ -1217,6 +1261,24 @@ inline fn execThumb32Data(c: *Cpu, h: u32, h2: u32, pc: u32) ?Status {
         if (h2 & 0xf0c0 == 0xf080 and (!clz or h2 & 0x30 == 0) and (h & 15) == (h2 & 15)) {
             c.pc = pc + 4;
             set(c, (h2 >> 8) & 15, if (clz) @clz(r(c, h & 15)) else reverse(r(c, h & 15), bits(h2, 4, 2)));
+            return .next;
+        }
+    }
+    if ((h & 0xff80) == 0xfa80 and h2 & 0xf000 == 0xf000) {
+        const n = r(c, h & 15);
+        const m = r(c, h2 & 15);
+        const d = bits(h2, 8, 4);
+        if (h2 & 0x80 == 0) {
+            // Thumb's op1 order (ADD8, ADD16, ASX, -, SUB8, SUB16, SAX, -) mapped to ARM's op
+            const op = ([8]u32{ 4, 0, 1, 5, 7, 3, 2, 5 })[bits(h, 4, 3)];
+            const kind = (if (h2 & 0x40 != 0) @as(u32, 4) else 0) + bits(h2, 4, 2) + 1;
+            set(c, d, parallel(c, n, m, kind, op) orelse return fault(c, .undefined, h << 16 | h2, pc));
+            c.pc = pc + 4;
+            return .next;
+        }
+        if (h2 & 0xc0 == 0x80 and (h & 0x30 == 0 or (h & 0x30 == 0x20 and h2 & 0x30 == 0))) {
+            set(c, d, if (h & 0x30 == 0) saturatingAdd(c, m, n, h2 & 0x20 != 0, h2 & 0x10 != 0) else select(c, n, m));
+            c.pc = pc + 4;
             return .next;
         }
     }
