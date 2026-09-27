@@ -260,6 +260,10 @@ pub var P = [_]u32{0} ** PLANES;
 var R = [_]u64{0} ** PLANES;
 pub var S = [_]u32{0} ** PLANES;
 pub var L = [_]u32{PLANE_LO} ** PLANES;
+/// Linux overcommits private anonymous memory: a writable mapping the pool cannot back when it is
+/// made is address space whose pages commit on first touch, from the plane's start upward (tx).
+var lazy = [_]bool{false} ** PLANES;
+const DEMAND_STEP: u64 = 1 << 20;
 var moves: u32 = 0;
 
 inline fn unitsOf(n: u64) u32 {
@@ -333,6 +337,20 @@ fn release(h: usize) void {
     }
     R[h] = 0;
     S[h] = 0;
+    lazy[h] = false;
+}
+/// commit [off, off + n) of a lazy plane; a growth that moves the plane invalidates earlier translations
+fn demand(h: usize, off: u32, n: u32) bool {
+    const end = @as(u64, off) + n;
+    if (!lazy[h] or end > R[h]) return false;
+    return grow(h, @intCast(@min(R[h], (end + DEMAND_STEP - 1) & ~(DEMAND_STEP - 1), 0xffff_f000)));
+}
+/// whether [v, v + n) is backed, committing a lazy plane's pages on the way
+pub fn commitRange(v: u64, n: u32) bool {
+    const h = hi(v);
+    if (h == 0 or h >= PLANES) return h == 0;
+    const off = lo(v) -% L[h];
+    return @as(u64, off) + n <= S[h] or demand(h, off, n);
 }
 inline fn hi(v: u64) u32 {
     return @intCast(v >> 32);
@@ -342,8 +360,9 @@ inline fn lo(v: u64) u32 {
 }
 
 pub export fn tx(h: u32, l: u32) u32 {
-    const off = l -% L[h & 255];
-    if (h >= PLANES or off >= S[h]) return 0;
+    if (h >= PLANES) return 0;
+    const off = l -% L[h];
+    if (off >= S[h] and !demand(h, off, 1)) return 0;
     return P[h] + off;
 }
 export fn plane_reserved(h: u32) u32 {
@@ -359,7 +378,7 @@ pub export fn va(phys: u32) u64 {
 export fn map_va(n: u64, rsv: u32) u64 {
     if (n == 0) return 0;
     if (n > @as(u64, 0x1_0000_0000) - PLANE_LO) {
-        if (rsv == 0 or pool_base == 0) return 0;
+        if (pool_base == 0) return 0;
         const count: usize = @intCast((n + 0xffff_ffff) / 0x1_0000_0000);
         var h: usize = 1;
         outer: while (h + count <= PLANES) : (h += 1) {
@@ -367,6 +386,7 @@ export fn map_va(n: u64, rsv: u32) u64 {
             for (0..count) |i| {
                 L[h + i] = 0;
                 R[h + i] = @min(@as(u64, 0x1_0000_0000), n - @as(u64, i) * 0x1_0000_0000);
+                lazy[h + i] = rsv == 0;
             }
             return @as(u64, h) << 32;
         }
@@ -380,9 +400,10 @@ export fn map_va(n: u64, rsv: u32) u64 {
     }
     var h: usize = 1;
     while (h < PLANES and R[h] != 0) h += 1;
-    if (h == PLANES or (rsv == 0 and !grow(h, @intCast(n)))) return 0;
+    if (h == PLANES) return 0;
     L[h] = PLANE_LO;
     R[h] = n;
+    lazy[h] = rsv == 0 and !grow(h, @intCast(n));
     return (@as(u64, h) << 32) | L[h];
 }
 export fn unmap_va(va_in: u64, n_in: u64) u32 {
@@ -431,8 +452,11 @@ export fn commit_va(v: u64, n: u64) u32 {
     const h = hi(v);
     const l = lo(v);
     if (h == 0) return commit_pages(l, @intCast(@min(n, 0xffff_ffff)));
-    const end: u64 = @as(u64, l - L[h & 255]) + n;
-    return @intFromBool(h < PLANES and l >= L[h] and end <= R[h] and (end <= S[h] or grow(h, @intCast(end))));
+    if (h >= PLANES or l < L[h]) return 0;
+    const end: u64 = @as(u64, l - L[h]) + n;
+    if (end > R[h]) return 0;
+    if (end > S[h] and !grow(h, @intCast(end))) lazy[h] = true;
+    return 1;
 }
 export fn drop_va(v: u64, n: u64) u32 {
     const h = hi(v);
@@ -566,6 +590,7 @@ export fn mem_init(size: u32) void {
     @memset(&owner, -1);
     @memset(&R, 0);
     @memset(&S, 0);
+    @memset(&lazy, false);
     @memset(&L, PLANE_LO);
     @memset(pages[0..pageOf(heap_top + PAGE_SIZE - 1)], USED);
     // a later reserve hands these out again and must read as fresh memory

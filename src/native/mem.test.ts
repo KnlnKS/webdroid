@@ -87,6 +87,19 @@ test("A64 transient mappings stay out of the malloc arena", () => {
   expect(mem.stats().planes).toBe(before.planes);
 });
 
+test("writable mappings beyond the pool commit on first touch, as Linux overcommits", () => {
+  const size = 0x1_0080_0000;
+  const va = mem.mapVa(size, false);
+  if (typeof va !== "bigint") throw new Error("overcommitted mapping was refused");
+  const before = mem.stats().chunks;
+  const p = mem.txVa(va + 0x10_0000n);
+  expect(mem.u8[p]).toBe(0);
+  mem.st8(p, 7);
+  expect(mem.u8[mem.txVa(va + 0x10_0000n)]).toBe(7);
+  expect(mem.stats().chunks - before).toBe(1);
+  expect(mem.unmapVa(va, size)).toBe(true);
+});
+
 test("mprotect accepts mapped ELF image pages", () => {
   const image = mem.reserve(4096, 4096);
   expect(mem.commitVa(BigInt(image), 4096)).toBe(true);
