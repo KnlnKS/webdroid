@@ -69,6 +69,7 @@ import "./android/sax";
 import "./android/motionevent";
 import "./android/windowinsets";
 import "./android/view";
+import "./android/accessibility";
 import "./android/viewanimator";
 import "./android/view-switching";
 import "./android/gravity";
