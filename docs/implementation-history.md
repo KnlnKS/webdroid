@@ -404,3 +404,18 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   `tests/import-cycles.test.ts` rejects load-time reads of cyclic
   class/const/let bindings. Verify shell changes against `build:prod` served
   by `wrangler dev`, not only `server.ts`.
+- Framework services from the 2026-09-26 APK exploration. A driven native
+  only waits on its own realm's `Promise`, so in a child process every
+  `CookieManager` call read the broker's parent-realm Promise itself (microG
+  sign-in's `removeAllCookies`); `useWebCookies` now adopts it. Other broker
+  results reached from driven code need the same care. Jobs run through the
+  service's `onBind` binder and an IJobCallback, so `JobIntentService`'s own
+  `JobServiceEngine` and services in another process receive work; the
+  per-run callback and parcelled `JobParameters` are private formats between
+  our own specs. Host system activities (pickers, share, chooser) resolve to
+  the platform package's `ResolverActivity`; a system activity keyed only by
+  action also claims intents of that action it may not handle. Remaining
+  limits: `Activity.moveTaskToBack` needs a shell home/background state;
+  `MediaStore.createTrashRequest`/`createFavoriteRequest` need writable
+  `is_trashed`/`is_favorite` media rows; `Resources.getDrawableForDensity`
+  keeps the chosen bucket's bitmap density where AOSP reports the screen's.
