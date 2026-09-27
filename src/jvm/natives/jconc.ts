@@ -3,7 +3,7 @@
 import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { parkTimeout } from "../yield";
 import { after, vcall, vcallOn, newObj, JThread, JEnum, enumValueOf, setCurThread, curThread, park, defineException, vcallAsync } from "./jlang";
-import { JList, newArrayList } from "./jutil";
+import { JList, newArrayList, toJsArray } from "./jutil";
 import { JRandom, randomSeed } from "./jrandom";
 import { mangleMethod, splitSig, jarray } from "../abi";
 import { clearGuestTimeout, guestNow, setGuestTimeout, type GuestTimer } from "../../guest-clock";
@@ -61,6 +61,11 @@ class JExecutor extends JObj {
   tasks: { task: unknown; f: JFuture; method: string; desc: string; queued: boolean; finish: () => void }[] = [];
   drainScheduled = false;
   consecutiveDrains = 0;
+  keepAliveNs = 0n;
+  coreTimeout = false;
+  continuePeriodic = false;
+  largest = 0;
+  completed = 0;
 }
 const mirror = (ex: JExecutor) => (ex.queue instanceof JList ? ex.queue.a : null);
 function retireIdleWorkers(ex: JExecutor) {
@@ -77,6 +82,7 @@ function drainExecutor(ex: JExecutor) {
     if (!worker) {
       if (ex.workers.length >= ex.limit) return;
       worker = { thread: null, busy: false }; ex.workers.push(worker);
+      ex.largest = Math.max(ex.largest, ex.workers.length);
     }
     const task = ex.tasks.shift()!;
     if (!ex.pool) mirror(ex)?.shift();
@@ -91,6 +97,13 @@ function scheduleDrain(ex: JExecutor) {
   if (++ex.consecutiveDrains < 64) queueMicrotask(() => queueMicrotask(run));
   else { ex.consecutiveDrains = 0; setTimeout(run, 0); }
 }
+/** an app's ThreadPoolExecutor subclass sees each task through beforeExecute/afterExecute */
+const hooked = (ex: JExecutor) => !(ex.constructor as { $i?: { native?: boolean } }).$i?.native;
+function onThread<T>(thread: JThread, f: () => T): T {
+  const prev = curThread;
+  setCurThread(thread);
+  try { return f(); } finally { setCurThread(prev); }
+}
 const runTask = driven(function* runTask(ex: JExecutor, worker: JExecutor["workers"][number], entry: JExecutor["tasks"][number]): Gen {
   const { task, f, method, desc } = entry;
   try {
@@ -104,15 +117,18 @@ const runTask = driven(function* runTask(ex: JExecutor, worker: JExecutor["worke
     worker.thread.alive = 1;
     worker.thread.interrupted = 0;
     f.thread = worker.thread;
-    const prev = curThread;
-    setCurThread(worker.thread);
-    let running: Promise<unknown>;
-    try { running = vcall(task, method, desc); } finally { setCurThread(prev); }
-    const value = yield running;
+    if (hooked(ex)) yield onThread(worker.thread, () => vcall(ex, "beforeExecute", "(Ljava/lang/Thread;Ljava/lang/Runnable;)V", worker.thread, task));
+    const value = yield onThread(worker.thread, () => vcall(task, method, desc));
     if (!f.cancelled && value !== undefined) f.value = value;
   } catch (e) {
     if (!f.cancelled) f.error = rt.jx(e);
   } finally {
+    ex.completed++;
+    // a throwing hook ends that worker on a device; here the pool's accounting must still finish
+    if (hooked(ex) && worker.thread?.alive) {
+      try { yield onThread(worker.thread, () => vcall(ex, "afterExecute", "(Ljava/lang/Runnable;Ljava/lang/Throwable;)V", task, f.error ?? null)); }
+      catch (e) { console.error("[executor] afterExecute", rt.jx(e)); }
+    }
     ex.pending--; ex.jobs.delete(f); worker.busy = false;
     retireIdleWorkers(ex);
     f.done = 1; f.thread = null;
@@ -302,7 +318,26 @@ const executorMethods: NativeSpec["methods"] = {
   },
   "isShutdown()Z": function (this: JExecutor) { return this.shut ? 1 : 0; },
   "isTerminated()Z": function (this: JExecutor) { return this.shut && this.pending === 0 ? 1 : 0; },
-  "awaitTermination(JLjava/util/concurrent/TimeUnit;)Z": () => 1,
+  "awaitTermination(JLjava/util/concurrent/TimeUnit;)Z": driven(function* (this: JExecutor, timeout: bigint, unit: JTimeUnit): Gen {
+    const deadline = guestNow() + Number(timeout) * unit.ms;
+    while (!(this.shut && this.pending === 0)) {
+      const left = deadline - guestNow();
+      if (left <= 0) return 0;
+      yield Promise.race([...[...this.jobs.keys()].map((f) => f.promise), new Promise<void>((wake) => setGuestTimeout(() => wake(), Math.min(left, 100)))]);
+    }
+    return 1;
+  }),
+  "invokeAny(Ljava/util/Collection;)Ljava/lang/Object;": driven(function* (this: JExecutor, tasks: unknown): Gen {
+    if (tasks == null) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    const list: unknown[] = yield toJsArray(tasks);
+    if (!list.length) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+    let failure: unknown;
+    for (const task of list) {
+      const future = yield vcall(this, "submit", "(Ljava/util/concurrent/Callable;)Ljava/util/concurrent/Future;", task);
+      try { return yield vcall(future, "get", "()Ljava/lang/Object;"); } catch (e) { failure = e; }
+    }
+    throw failure;
+  }),
   "schedule(Ljava/lang/Runnable;JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/ScheduledFuture;":
     function (this: JExecutor, r: unknown, d: bigint, u: JTimeUnit) {
       return submit(this, r, "run", "()V", Number(d) * u.ms);
@@ -363,7 +398,7 @@ function initScheduled(this: JExecutor, core: number, factory: unknown = null, h
 }
 function initPool(this: JExecutor, core: number, max: number, keep: bigint, unit: JTimeUnit, queue: JObj, factory: unknown = null, handler: unknown = null) {
   if (core < 0 || max <= 0 || max < core || keep < 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "invalid pool size");
-  this.pool = true; this.coreSize = core; this.maxSize = max;
+  this.pool = true; this.coreSize = core; this.maxSize = max; this.keepAliveNs = keep * unit.ns;
   this.limit = Math.max(1, core); this.queue = queue; this.factory = factory; this.rejectionHandler = handler;
 }
 for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurrent/ScheduledThreadPoolExecutor",
@@ -391,8 +426,46 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
           if (this.shut && !value) cancelDelayed(this);
         },
         "getExecuteExistingDelayedTasksAfterShutdownPolicy()Z": function (this: JExecutor) { return +this.executeDelayedAfterShutdown; },
+        "setContinueExistingPeriodicTasksAfterShutdownPolicy(Z)V": function (this: JExecutor, value: number) { this.continuePeriodic = !!value; },
+        "getContinueExistingPeriodicTasksAfterShutdownPolicy()Z": function (this: JExecutor) { return +this.continuePeriodic; },
       } : {}),
-      "allowCoreThreadTimeOut(Z)V": function () {},
+      "allowCoreThreadTimeOut(Z)V": function (this: JExecutor, value: number) {
+        if (value && this.keepAliveNs <= 0n) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Core threads must have nonzero keep alive times");
+        this.coreTimeout = !!value;
+      },
+      "allowsCoreThreadTimeOut()Z": function (this: JExecutor) { return +this.coreTimeout; },
+      "setMaximumPoolSize(I)V": function (this: JExecutor, max: number) {
+        if (max <= 0 || max < this.coreSize) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+        this.maxSize = max;
+        if (this.limit > max) { this.limit = max; retireIdleWorkers(this); }
+      },
+      "getLargestPoolSize()I": function (this: JExecutor) { return this.largest; },
+      "getTaskCount()J": function (this: JExecutor) { return BigInt(this.completed + this.pending); },
+      "getCompletedTaskCount()J": function (this: JExecutor) { return BigInt(this.completed); },
+      "getKeepAliveTime(Ljava/util/concurrent/TimeUnit;)J": function (this: JExecutor, unit: JTimeUnit) { return tuConvert(this.keepAliveNs, 1n, unit.ns); },
+      "getThreadFactory()Ljava/util/concurrent/ThreadFactory;": function (this: JExecutor) {
+        return this.factory ??= vcall(rt.link("java/util/concurrent/Executors").ctor, "defaultThreadFactory", "()Ljava/util/concurrent/ThreadFactory;");
+      },
+      "setThreadFactory(Ljava/util/concurrent/ThreadFactory;)V": function (this: JExecutor, factory: unknown) {
+        if (!factory) throw rt.mkThrowable("java/lang/NullPointerException", null);
+        this.factory = factory;
+      },
+      "prestartCoreThread()Z": function (this: JExecutor) {
+        if (this.workers.length >= this.coreSize) return 0;
+        this.workers.push({ thread: null, busy: false });
+        this.largest = Math.max(this.largest, this.workers.length);
+        return 1;
+      },
+      "prestartAllCoreThreads()I": function (this: JExecutor) {
+        let n = 0;
+        while (vcall(this, "prestartCoreThread", "()Z")) n++;
+        return n;
+      },
+      // the protected hooks a subclass overrides, and calls up to
+      "beforeExecute(Ljava/lang/Thread;Ljava/lang/Runnable;)V": () => {},
+      "afterExecute(Ljava/lang/Runnable;Ljava/lang/Throwable;)V": () => {},
+      "terminated()V": () => {},
+      "finalize()V": () => {},
       "getPoolSize()I": function (this: JExecutor) { return this.workers.length; },
       "getActiveCount()I": function (this: JExecutor) { return this.workers.filter((w) => w.busy).length; },
       "getCorePoolSize()I": function (this: JExecutor) { return this.coreSize; },
@@ -404,7 +477,10 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
         if (this.tasks.length) scheduleDrain(this);
       },
       "remove(Ljava/lang/Runnable;)Z": removeQueued,
-      "setKeepAliveTime(JLjava/util/concurrent/TimeUnit;)V": function () {},
+      "setKeepAliveTime(JLjava/util/concurrent/TimeUnit;)V": function (this: JExecutor, time: bigint, unit: JTimeUnit) {
+        if (time < 0n || (time === 0n && this.coreTimeout)) throw rt.mkThrowable("java/lang/IllegalArgumentException", null);
+        this.keepAliveNs = time * unit.ns;
+      },
       "getQueue()Ljava/util/concurrent/BlockingQueue;": function (this: JExecutor) {
         if (!this.queue) { const queue = rt.make("java/util/concurrent/LinkedBlockingQueue") as JList; queue.a = this.tasks.map((t) => t.task); this.queue = queue; }
         return this.queue;
