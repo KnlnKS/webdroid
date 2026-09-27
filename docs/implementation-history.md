@@ -452,3 +452,18 @@ and [15-app handoff](../corpus-plan-v2.md) record per-app evidence and next work
   Keva block file is `MAP_SHARED` across app processes, which per-process
   Wasm memories cannot keep coherent; a Harmonic row stall past ~80 items
   reproduced once and not again.
+- Invisible switches had three independent causes: TextView measured and drew
+  from its padding fields instead of the virtual `getCompoundPadding*` that
+  Switch/SwitchCompat override (0 px wide), Material's switch vectors spell
+  `pathData` as `@string` references, and selectors dropped app-defined states
+  (`state_indeterminate`), so the first item always matched. Compound buttons,
+  Switch, ToggleButton, CheckedTextView and ProgressBar now follow AOSP's
+  drawables and styles; `AID()` memoizes 0 before the framework table loads,
+  so style attributes must be resolved at construction, not module load.
+  A themed context clones its base inflater (dialog rows become AppCompat
+  widgets), windows draw into a `RecordingCanvas`, and framework layouts
+  dispatch `measureChildWithMargins` virtually (NestedScrollView settings now
+  scroll). Remaining limits: indeterminate progress drawables are painted, not
+  animated; Switch has no thumb drag; `Layout` reserves no leading margin, so
+  `getParagraphLeft/Right` report the full width; `Html.fromHtml` ignores
+  `<img>`/`<sub>` and TagHandler; popups draw no elevation shadow.

@@ -313,6 +313,7 @@ export class JListView extends JViewGroup {
           }
         }
         for (const v of this.allViews()) yield attachView(this, v);
+        if (this.choiceMode) yield showCheckStates(this);
         this.updateEmptyStatus();
         requestLayout(this);
       } while (this.rebuildPending);
@@ -382,12 +383,13 @@ const M_perfLongPress = mangleMethod("performLongPress", "(Landroid/view/View;IJ
 const M_setItemChecked = mangleMethod("setItemChecked", "(IZ)V");
 const M_setSelFromTop = mangleMethod("setSelectionFromTop", "(II)V");
 
-/** adapter row id for a list position (header offset applied); -1 when the position is not a row */
-const rowId = driven(function* rowId(list: JListView, pos: number): Gen<bigint> {
-  const adjusted = pos - list.headers.length;
-  if (!list.adapter || adjusted < 0 || adjusted >= list.itemViews.length) return -1n;
-  try { return (yield vcall(list.adapter, "getItemId", "(I)J", adjusted)) as bigint; } catch { return -1n; }
-});
+const INVALID_POSITION = -1;
+const INVALID_ROW_ID = -9223372036854775808n; // AdapterView.INVALID_ROW_ID = Long.MIN_VALUE
+/** AdapterView.getItemAtPosition/getItemIdAtPosition: asks the virtual getAdapter(), whose
+ *  header wrapper maps positions, whether or not the row has a view */
+const adapterAt = (list: JListView, pos: number, name: string, desc: string, none: unknown) =>
+  after(vcall(list, "getAdapter", "()Landroid/widget/Adapter;"), (a) => a && pos >= 0 ? vcall(a, name, desc, pos) : none);
+const rowId = (list: JListView, pos: number) => adapterAt(list, pos, "getItemId", "(I)J", INVALID_ROW_ID);
 
 /** The only place a modal-choice list talks to its MultiChoiceModeListener. Called from
  *  setItemChecked, so every route that changes checked state (click, long press, app call)
@@ -417,6 +419,17 @@ const notifyChoiceMode = driven(function* notifyChoiceMode(list: JListView, pos:
   yield vcall(cb, "onItemCheckedStateChanged", "(Landroid/view/ActionMode;IJZ)V",
     mode, pos, yield rowId(list, pos), checked ? 1 : 0);
   if (!list.checked.size) yield vcall(mode, "finish", "()V");
+});
+
+/** AbsListView.setupChild: every row shows the list's check state, through Checkable when the
+ *  row is one and as the activated state otherwise */
+const showCheckStates = driven(function* showCheckStates(list: JListView): Gen {
+  const vs = list.allViews();
+  for (let i = 0; i < vs.length; i++) {
+    const v = vs[i], on = list.checked.has(i);
+    if (rt.iof(v, "android/widget/Checkable")) yield vcall(v, "setChecked", "(Z)V", +on);
+    else if (v.activated !== on) { v.activated = on; yield v.refreshDrawableState(); }
+  }
 });
 
 function cancelItemLongPress(list: JListView) {
@@ -452,7 +465,7 @@ const measureListView = driven(function* measureListView(this: JListView, wSpec:
     this.measuredW = w;
     this.measuredH = specMode(hSpec) === MS_EXACTLY ? specSize(hSpec) : resolveSize(totalH, hSpec);
 });
-const listViewMethods: NonNullable<NativeSpec["methods"]> = {
+export const listViewMethods: NonNullable<NativeSpec["methods"]> = {
   "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JListView, c: unknown, set: JAttrSet | null): Gen {
     yield initViewFromCtx(this, c, set);
     if (set && this.jres) {
@@ -510,13 +523,12 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     if (m !== CHOICE_MODE_MULTIPLE_MODAL && this.actionMode) yield vcall(this.actionMode, "finish", "()V");
   }),
   "setItemChecked(IZ)V": driven(function* (this: JListView, pos: number, val: number): Gen {
+    if (!this.choiceMode) return;
     if (val) {
       if (this.choiceMode === 1) this.checked.clear();
       this.checked.add(pos);
     } else this.checked.delete(pos);
-    const v = this.allViews()[pos];
-    if (v) { v.activated = !!val; void v.refreshDrawableState(); }
-    invalidate();
+    yield showCheckStates(this);
     yield notifyChoiceMode(this, pos, !!val);
   }),
   "isItemChecked(I)Z": function (this: JListView, pos: number) { return this.checked.has(pos) ? 1 : 0; },
@@ -524,13 +536,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     return this.choiceMode === 1 && this.checked.size ? [...this.checked][0] : -1;
   },
   "getCount()I": function (this: JListView) { return this.totalCount(); },
-  "getItemAtPosition(I)Ljava/lang/Object;": driven(function* (this: JListView, pos: number): Gen {
-    const adjusted = pos - this.headers.length;
-    if (this.adapter && adjusted >= 0 && adjusted < this.itemViews.length) {
-      return yield vcall(this.adapter, "getItem", "(I)Ljava/lang/Object;", adjusted);
-    }
-    return null;
-  }),
+  "getItemAtPosition(I)Ljava/lang/Object;": function (this: JListView, pos: number) { return adapterAt(this, pos, "getItem", "(I)Ljava/lang/Object;", null); },
   "getItemIdAtPosition(I)J": function (this: JListView, pos: number) { return rowId(this, pos); },
   "getFirstVisiblePosition()I": function (this: JListView) { return this.visibleRange()[0]; },
   "getLastVisiblePosition()I": function (this: JListView) { return this.visibleRange()[1]; },
@@ -577,7 +583,7 @@ const listViewMethods: NonNullable<NativeSpec["methods"]> = {
     this.scrollL = l;
     this.notifyScroll();
   },
-  "clearChoices()V": function (this: JListView) { this.checked.clear(); invalidate(); },
+  "clearChoices()V": function (this: JListView) { this.checked.clear(); return showCheckStates(this); },
   "getCheckedItemCount()I": function (this: JListView) { return this.checked.size; },
   "getCheckedItemIds()[J": function (this: JListView) { return BigInt64Array.from([...this.checked].map((c) => BigInt(c))); },
   "getCheckedItemPositions()Landroid/util/SparseBooleanArray;": function (this: JListView) {
@@ -737,6 +743,8 @@ class JListPopupWindow extends JObj {
   xoff = 0;
   yoff = 0;
   modal = true;
+  dismissL: unknown = null;
+  background: JDrawable | null = null;
 }
 rt.register({ name: "android/widget/ListPopupWindow", ctor: JListPopupWindow, methods: {
   "<init>(Landroid/content/Context;)V": function (this: JListPopupWindow, ctx: unknown) { this.ctx = ctx; },
@@ -755,6 +763,15 @@ rt.register({ name: "android/widget/ListPopupWindow", ctor: JListPopupWindow, me
   "setHorizontalOffset(I)V": function (this: JListPopupWindow, value: number) { this.xoff = value; },
   "setVerticalOffset(I)V": function (this: JListPopupWindow, value: number) { this.yoff = value; },
   "getListView()Landroid/widget/ListView;": function (this: JListPopupWindow) { return this.list; },
+  "getAnchorView()Landroid/view/View;": function (this: JListPopupWindow) { return this.anchor; },
+  "setOnDismissListener(Landroid/widget/PopupWindow$OnDismissListener;)V": function (this: JListPopupWindow, l: unknown) {
+    this.dismissL = l;
+    if (this.popup) return vcall(this.popup, "setOnDismissListener", "(Landroid/widget/PopupWindow$OnDismissListener;)V", l);
+  },
+  "setBackgroundDrawable(Landroid/graphics/drawable/Drawable;)V": function (this: JListPopupWindow, d: JDrawable | null) {
+    this.background = d;
+    if (this.popup) return vcall(this.popup, "setBackgroundDrawable", "(Landroid/graphics/drawable/Drawable;)V", d);
+  },
   "isShowing()Z": function (this: JListPopupWindow) { return this.popup ? vcall(this.popup, "isShowing", "()Z") : 0; },
   "dismiss()V": function (this: JListPopupWindow) { if (this.popup) return vcall(this.popup, "dismiss", "()V"); },
   "show()V": driven(function* (this: JListPopupWindow): Gen {
@@ -767,22 +784,16 @@ rt.register({ name: "android/widget/ListPopupWindow", ctor: JListPopupWindow, me
       yield vcall(this.popup, "setContentView", "(Landroid/view/View;)V", this.list);
       yield vcall(this.popup, "setFocusable", "(Z)V", +this.modal);
       yield vcall(this.popup, "setOutsideTouchable", "(Z)V", 1);
+      if (this.dismissL) yield vcall(this.popup, "setOnDismissListener", "(Landroid/widget/PopupWindow$OnDismissListener;)V", this.dismissL);
+      if (this.background) yield vcall(this.popup, "setBackgroundDrawable", "(Landroid/graphics/drawable/Drawable;)V", this.background);
     }
+    // already up: its list follows the adapter
+    if (yield vcall(this.popup, "isShowing", "()Z")) return;
     yield vcall(this.popup, "setWidth", "(I)V", this.width === WRAP_CONTENT ? this.anchor.width() : this.width);
     yield vcall(this.popup, "setHeight", "(I)V", this.height);
     yield vcall(this.popup, "showAsDropDown", "(Landroid/view/View;II)V", this.anchor, this.xoff, this.yoff);
   }),
 } });
-rt.register({
-  name: "android/widget/ExpandableListView", ctor: class extends JListView {}, sup: "android/widget/ListView",
-  methods: {
-    "static getPackedPositionForChild(II)J": (group: number, child: number) => (1n << 63n) | (BigInt(group >>> 0) << 32n) | BigInt(child >>> 0),
-    "static getPackedPositionForGroup(I)J": (group: number) => BigInt(group >>> 0) << 32n,
-    "static getPackedPositionType(J)I": (p: bigint) => p === -1n ? 2 : p < 0n ? 1 : 0,
-    "static getPackedPositionGroup(J)I": (p: bigint) => p === -1n ? -1 : Number((p >> 32n) & 0x7fffffffn),
-    "static getPackedPositionChild(J)I": (p: bigint) => p < 0n && p !== -1n ? Number(p & 0xffffffffn) : -1,
-  },
-});
 rt.register({
   name: "android/widget/AbsListView$LayoutParams", ctor: class extends JLayoutParams {}, sup: "android/view/ViewGroup$LayoutParams",
   methods: {
@@ -919,8 +930,6 @@ const showSpinnerPopup = driven(function* showSpinnerPopup(sp: JSpinner): Gen {
 //
 // Our Spinner is registered below over the ListView row plumbing (it descends from AbsListView
 // rather than from AbsSpinner), so this layer is spread into that spec rather than inherited.
-const INVALID_POSITION = -1;
-const INVALID_ROW_ID = -9223372036854775808n; // AdapterView.INVALID_ROW_ID = Long.MIN_VALUE
 /** `selNotified` is AdapterView's mOldSelectedPosition: the position the listener last heard. */
 type JSelSpinner = JSpinner & { selNotified?: number; selNotifyPosted?: boolean };
 

@@ -1,5 +1,5 @@
 import { AID, rvInt, rvColor, rvFloat, themeOf, type JTheme } from "./res";
-import { rt, JObj, callSelf, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import { rt, JObj, callSelf, stubs, noops, driven, flagGetters, flagSetters, type Gen } from "../jvm/runtime";
 import { mangleMethod } from "../jvm/abi";
 import type { JFrameLayout } from "./layouts";
 import type { JActionBarView } from "./menu";
@@ -54,9 +54,21 @@ export class JWindow extends JObj {
   navBarColor: number | null = null;
   navBarDividerColor = 0;
   insetsController: JInsetsController | null = null;
-  enterTransition: unknown = null;
-  exitTransition: unknown = null;
+  /** activity transitions by name; an absent entry is PhoneWindow's USE_DEFAULT_TRANSITION */
+  transitions: Record<string, unknown> = {};
+  allowEnterOverlap = true; allowReturnOverlap = true; sharedElementsUseOverlay = true;
 }
+const T = "Landroid/transition/Transition;";
+/** PhoneWindow: a return or reenter transition left at its default is the enter or exit one */
+const transitionMethods = Object.fromEntries(([["Enter"], ["Exit"], ["Return", "Enter"], ["Reenter", "Exit"],
+  ["SharedElementEnter"], ["SharedElementExit"], ["SharedElementReturn", "SharedElementEnter"], ["SharedElementReenter", "SharedElementExit"]] as const)
+  .flatMap(([name, fallback]: readonly [string, string?]) => [
+    [`set${name}Transition(${T})V`, function (this: JWindow, t: unknown) { this.transitions[name] = t; }],
+    [`get${name}Transition()${T}`, function (this: JWindow) {
+      const t = this.transitions;
+      return name in t ? t[name] : fallback ? t[fallback] ?? null : null;
+    }],
+  ]));
 export const APPEARANCE_LIGHT_STATUS_BARS = 8;
 export const APPEARANCE_LIGHT_NAVIGATION_BARS = 16;
 export function applyWindowTheme(window: JWindow, theme: JTheme, statusDefault = -16777216) {
@@ -98,10 +110,11 @@ export function darken(c: number): number {
 rt.register({
   name: "android/view/Window", ctor: JWindow,
   methods: {
-    "setEnterTransition(Landroid/transition/Transition;)V": function (this: JWindow, transition: unknown) { this.enterTransition = transition; },
-    "getEnterTransition()Landroid/transition/Transition;": function (this: JWindow) { return this.enterTransition; },
-    "setExitTransition(Landroid/transition/Transition;)V": function (this: JWindow, transition: unknown) { this.exitTransition = transition; },
-    "getExitTransition()Landroid/transition/Transition;": function (this: JWindow) { return this.exitTransition; },
+    ...transitionMethods,
+    ...flagSetters({ "setAllowEnterTransitionOverlap(Z)V": "allowEnterOverlap", "setAllowReturnTransitionOverlap(Z)V": "allowReturnOverlap",
+      "setSharedElementsUseOverlay(Z)V": "sharedElementsUseOverlay" }),
+    ...flagGetters({ "getAllowEnterTransitionOverlap()Z": "allowEnterOverlap", "getAllowReturnTransitionOverlap()Z": "allowReturnOverlap",
+      "getSharedElementsUseOverlay()Z": "sharedElementsUseOverlay" }),
     "getDecorView()Landroid/view/View;": driven(function* (this: JWindow): Gen {
       // AOSP installs the real decor on first access (appcompat asks for it before
       // setContentView); dialog windows materialize a bare one so insets helpers can operate
@@ -209,9 +222,8 @@ rt.register({
     ...noops("setStatusBarContrastEnforced(Z)V", "setNavigationBarContrastEnforced(Z)V",
       "addOnFrameMetricsAvailableListener(Landroid/view/Window$OnFrameMetricsAvailableListener;Landroid/os/Handler;)V",
       "removeOnFrameMetricsAvailableListener(Landroid/view/Window$OnFrameMetricsAvailableListener;)V",
-      "setSharedElementsUseOverlay(Z)V", "setSoftInputMode(I)V", "setWindowAnimations(I)V", "setFeatureInt(II)V"),
+      "setSoftInputMode(I)V", "setWindowAnimations(I)V", "setFeatureInt(II)V"),
     ...stubs(0, "isStatusBarContrastEnforced()Z", "isNavigationBarContrastEnforced()Z"),
-    ...stubs(null, "getSharedElementEnterTransition()Landroid/transition/Transition;"),
   },
 });
 // API-30 window state, shared by decor's inset consumption and the shell's bar rendering.

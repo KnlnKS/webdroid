@@ -659,7 +659,7 @@ const drawStartWin = driven(function* drawStartWin(w: { view: JView; fullscreen:
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
     ctx.translate(0, contentY);
-    yield drawView(w.view, JCanvas.wrap(ctx, SCREEN_W, SCREEN_H - contentY));
+    yield drawView(w.view, JCanvas.wrap(ctx, SCREEN_W, SCREEN_H - contentY, true));
     ctx.resetTransform();
     const bars = resolveSystemBars(w.view, []);
     drawSystemBarBackgrounds(ctx, bars);
@@ -792,7 +792,7 @@ const tick0 = driven(function* tick0(): Gen {
       try {
         if (activities[0].window.translucent) ctx.clearRect(0, 0, SCREEN_W, SCREEN_H);
         else { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H); }
-        const cv = JCanvas.wrap(ctx, SCREEN_W, SCREEN_H);
+        const cv = JCanvas.wrap(ctx, SCREEN_W, SCREEN_H, true);
         // AOSP's performDraw() dispatches OnPreDrawListener/OnDrawListener right before the
         // tree draw, on every draw pass -- not only ones that also ran a layout.
         try {

@@ -379,9 +379,8 @@ async function buildRowView(row: Row, jctx: any): Promise<JView> {
   addUnattachedView(rowL, col);
 
   if (pref instanceof JCheckBoxPreference) {
-    const cb: any = rt.make("android/widget/CheckBox");
-    cb.ctx = jctx; cb.jres = jres; cb.theme = theme;
-    cb.checked = pref.checked;
+    const cb = await newObj("android/widget/CheckBox", "(Landroid/content/Context;)V", jctx);
+    await vcall(cb, "setChecked", "(Z)V", +pref.checked);
     cb.enabled = pref.enabled;
     cb.clickable = false; // the whole row toggles it; the widget itself is just an indicator
     const lp = new JLinearLP(); lp.width = -2; lp.height = -2;

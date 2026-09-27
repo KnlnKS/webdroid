@@ -121,6 +121,17 @@ describe("layout-measure-passes", () => {
     expect(calls).toBe(1);
     expect([leaf.measuredW, leaf.measuredH]).toEqual([200, 300]);
   });
+  test("a frame measures its children through an overriding measureChildWithMargins", async () => {
+    const scroll = rt.make("android/widget/FrameLayout") as JViewGroup, child = rt.make("android/view/View") as JView;
+    Object.assign(child, { [onMeasure](w: number, h: number) { child.measuredW = resolveSize(50, w); child.measuredH = resolveSize(900, h); } });
+    // NestedScrollView's override: the child's height is unbounded
+    Object.assign(scroll, { [mangleMethod("measureChildWithMargins", "(Landroid/view/View;IIII)V")](c: JView, ws: number) {
+      return measureView(c, ws, makeSpec(0, 0));
+    } });
+    await add(scroll, child, "FrameLayout", -1, -2);
+    await measureView(scroll, makeSpec(200, MS_EXACTLY), makeSpec(300, MS_EXACTLY));
+    expect([child.measuredW, child.measuredH]).toEqual([200, 900]);
+  });
   test("a wrapping frame aligns multiple match-parent children to its final size", async () => {
     const frame = rt.make("android/widget/FrameLayout") as JView;
     const a = rt.make("android/view/View") as JView, b = rt.make("android/view/View") as JView;

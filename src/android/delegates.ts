@@ -606,11 +606,9 @@ delegate("android/graphics/BaseCanvas", {
   "nDrawPoint(JFFJ)V": withPaint("drawPoint(FFLandroid/graphics/Paint;)V", 2),
   "nDrawPath(JJJ)V": (h: bigint, p: bigint, pt: bigint) => cm("drawPath(Landroid/graphics/Path;Landroid/graphics/Paint;)V").call(canvas(h), deref<JPath>(p) as never, paint(pt) as never),
   "nDrawLines(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, count: number, pt: bigint) =>
-    cm("drawLines([FLandroid/graphics/Paint;)V").call(canvas(h), pts.subarray(off, off + count) as never, paint(pt) as never),
-  "nDrawPoints(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, count: number, pt: bigint) => {
-    const c = canvas(h), p = paint(pt), draw = cm("drawPoint(FFLandroid/graphics/Paint;)V");
-    for (let i = 0; i + 1 < count; i += 2) draw.call(c, pts[off + i] as never, pts[off + i + 1] as never, p as never);
-  },
+    cm("drawLines([FIILandroid/graphics/Paint;)V").call(canvas(h), pts as never, off as never, count as never, paint(pt) as never),
+  "nDrawPoints(J[FIIJ)V": (h: bigint, pts: Float32Array, off: number, count: number, pt: bigint) =>
+    cm("drawPoints([FIILandroid/graphics/Paint;)V").call(canvas(h), pts as never, off as never, count as never, paint(pt) as never),
   "nDrawText(JLjava/lang/String;IIFFIJ)V": (h: bigint, s: string, start: number, end: number, x: number, y: number, _f: number, pt: bigint) => drawText(h, s.slice(start, end), x, y, pt),
   "nDrawText(J[CIIFFIJ)V": (h: bigint, c: Uint16Array, i: number, n: number, x: number, y: number, _f: number, pt: bigint) => drawText(h, charsToString(c, i, n), x, y, pt),
   "nDrawTextRun(JLjava/lang/String;IIIIFFZJ)V": (h: bigint, s: string, start: number, end: number, _cs: number, _ce: number, x: number, y: number, _rtl: number, pt: bigint) =>

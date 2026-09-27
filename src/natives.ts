@@ -114,6 +114,7 @@ import "./android/scalegesture";
 import "./android/dialog";
 import "./android/pickers";
 import "./android/listview";
+import "./android/expandablelist";
 import "./android/preference";
 import "./android/animator";
 import "./android/media";

@@ -126,22 +126,45 @@ const rectMethods = (F: boolean): NativeSpec["methods"] => ({
     "exactCenterY()F": function (this: JRect) { return (this.top + this.bottom) * 0.5; },
   }),
 });
+/** Rect, RectF, Point and PointF parcel their coordinates as ints or floats, in field order */
+function parcelGeometry(name: string, fields: string[], float: boolean) {
+  const type = float ? "Float" : "Int", desc = float ? "F" : "I";
+  const read = driven(function* readGeometry(o: Record<string, unknown>, p: JParcel): Gen {
+    for (const f of fields) o[f] = yield vcall(p, `read${type}`, `()${desc}`);
+    return o;
+  });
+  return {
+    statics: { get CREATOR() { return parcelCreator(name, (p) => read(rt.make(name) as JObj & Record<string, unknown>, p)); } },
+    methods: {
+      "describeContents()I": () => 0,
+      "writeToParcel(Landroid/os/Parcel;I)V": driven(function* (this: Record<string, unknown>, p: JParcel): Gen {
+        for (const f of fields) yield vcall(p, `write${type}`, `(${desc})V`, this[f]);
+      }),
+      "readFromParcel(Landroid/os/Parcel;)V": function (this: Record<string, unknown>, p: JParcel) { return read(this, p); },
+    } as NativeSpec["methods"],
+  };
+}
+const RECT_FIELDS = ["left", "top", "right", "bottom"], POINT_FIELDS = ["x", "y"];
+const rectParcel = parcelGeometry("android/graphics/Rect", RECT_FIELDS, false);
 rt.register({
   name: "android/graphics/Rect", ctor: JRect, ifaces: ["android/os/Parcelable"],
-  fields: ["left", "top", "right", "bottom"],
-  methods: rectMethods(false),
+  fields: RECT_FIELDS, statics: rectParcel.statics,
+  methods: { ...rectMethods(false), ...rectParcel.methods },
 });
 export class JRectF extends JRect {}
+const rectFParcel = parcelGeometry("android/graphics/RectF", RECT_FIELDS, true);
 rt.register({
   name: "android/graphics/RectF", ctor: JRectF, ifaces: ["android/os/Parcelable"],
-  fields: ["left", "top", "right", "bottom"],
-  methods: rectMethods(true),
+  fields: RECT_FIELDS, statics: rectFParcel.statics,
+  methods: { ...rectMethods(true), ...rectFParcel.methods },
 });
 export class JPoint extends JObj { x = 0; y = 0; }
+const pointParcel = parcelGeometry("android/graphics/Point", POINT_FIELDS, false);
 rt.register({
-  name: "android/graphics/Point", ctor: JPoint,
-  fields: ["x", "y"],
+  name: "android/graphics/Point", ctor: JPoint, ifaces: ["android/os/Parcelable"],
+  fields: POINT_FIELDS, statics: pointParcel.statics,
   methods: {
+    ...pointParcel.methods,
     "offset(II)V": function (this: JPoint, dx: number, dy: number) { this.x += dx; this.y += dy; },
     "negate()V": function (this: JPoint) { this.x = -this.x; this.y = -this.y; },
     "<init>()V": function () {},
@@ -150,10 +173,12 @@ rt.register({
     "equals(Ljava/lang/Object;)Z": function (this: JPoint, o: unknown) { return o instanceof JPoint && o.x === this.x && o.y === this.y ? 1 : 0; },
   },
 });
+const pointFParcel = parcelGeometry("android/graphics/PointF", POINT_FIELDS, true);
 rt.register({
-  name: "android/graphics/PointF", ctor: class extends JPoint {},
-  fields: ["x", "y"],
+  name: "android/graphics/PointF", ctor: class extends JPoint {}, ifaces: ["android/os/Parcelable"],
+  fields: POINT_FIELDS, statics: pointFParcel.statics,
   methods: {
+    ...pointFParcel.methods,
     "<init>()V": function () {},
     "<init>(FF)V": function (this: JPoint, x: number, y: number) { this.x = x; this.y = y; },
     "<init>(Landroid/graphics/Point;)V": function (this: JPoint, p: JPoint) { this.x = p.x; this.y = p.y; },
@@ -171,7 +196,7 @@ rt.register({
 });
 
 // android.graphics.Insets — immutable 4-sided inset value (WindowInsets.getInsets() etc).
-class JInsets extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
+export class JInsets extends JObj { left = 0; top = 0; right = 0; bottom = 0; }
 const INSETS_NONE = new JInsets();
 /** Mirrors Insets.of(): the all-zero case returns the cached NONE singleton, like AOSP. */
 export function insetsOf(l: number, t: number, r: number, b: number): JInsets {
@@ -194,6 +219,14 @@ rt.register({
   },
 });
 
+/** Color's sColorNameMap, which Color.parseColor and Html's colour attributes both read */
+export const COLOR_NAMES: Record<string, number> = {
+  black: -16777216, darkgray: -12303292, gray: -7829368, lightgray: -3355444, white: -1,
+  red: -65536, green: -16711936, blue: -16776961, yellow: -256, cyan: -16711681,
+  magenta: -65281, aqua: -16711681, fuchsia: -65281, darkgrey: -12303292,
+  grey: -7829368, lightgrey: -3355444, lime: -16711936, maroon: -8388608,
+  navy: -16777088, olive: -8355840, purple: -8388480, silver: -4144960, teal: -16744320,
+};
 class JColor extends JObj {}
 rt.register({
   name: "android/graphics/Color", ctor: JColor,
@@ -212,14 +245,7 @@ rt.register({
     "static parseColor(Ljava/lang/String;)I": (s: string) => {
       const hex = /^#([\da-f]{6}|[\da-f]{8})$/i.exec(s)?.[1];
       if (hex) return parseInt(hex.length === 6 ? `ff${hex}` : hex, 16) | 0;
-      const named: Record<string, number> = {
-        black: -16777216, darkgray: -12303292, gray: -7829368, lightgray: -3355444, white: -1,
-        red: -65536, green: -16711936, blue: -16776961, yellow: -256, cyan: -16711681,
-        magenta: -65281, aqua: -16711681, fuchsia: -65281, darkgrey: -12303292,
-        grey: -7829368, lightgrey: -3355444, lime: -16711936, maroon: -8388608,
-        navy: -16777088, olive: -8355840, purple: -8388480, silver: -4144960, teal: -16744320,
-      };
-      const v = named[s.toLowerCase()];
+      const v = COLOR_NAMES[s.toLowerCase()];
       if (v === undefined) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Unknown color " + s);
       return v;
     },
@@ -1044,6 +1070,49 @@ rt.register({ name: "android/graphics/BitmapShader", ctor: JBitmapShader, sup: "
     this.bitmap = bitmap; this.tileX = x.ord; this.tileY = y.ord;
   },
 } });
+/** fills everything `c` can show with `s`; a pattern shader applies its own local matrix */
+function fillWithShader(c: OffscreenCanvasRenderingContext2D, s: JShader) {
+  const style = s.pattern(c);
+  if (!style) return;
+  if (s.local && style instanceof CanvasGradient) c.transform(...s.local);
+  const bounds = canvasLocalBounds(c);
+  if (!bounds) return;
+  c.fillStyle = style;
+  c.fillRect(bounds[0], bounds[1], bounds[2] - bounds[0], bounds[3] - bounds[1]);
+}
+/** ComposeShader: `src` blended onto `dst` by the mode, rasterized over the target once per transform */
+class JComposeShader extends JShader {
+  dst!: JShader; src!: JShader;
+  /** null for DST, which keeps the destination shader alone */
+  op: GlobalCompositeOperation | null = "source-over";
+  private cached: CanvasPattern | null = null;
+  private cacheKey = "";
+  pattern(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D): CanvasPattern {
+    const matrix = ctx.getTransform(), { width, height } = ctx.canvas;
+    const key = `${width},${height}:${matrix.toString()}:${this.local}`;
+    if (this.cached && key === this.cacheKey) return this.cached;
+    const c = new OffscreenCanvas(width, height).getContext("2d")!;
+    const base = this.local ? matrix.multiply(new DOMMatrix(this.local)) : matrix;
+    c.setTransform(base);
+    fillWithShader(c, this.dst);
+    if (this.op) {
+      c.setTransform(base);
+      c.globalCompositeOperation = this.op;
+      fillWithShader(c, this.src);
+    }
+    const pattern = ctx.createPattern(c.canvas, "no-repeat")!;
+    pattern.setTransform(matrix.inverse());
+    this.cacheKey = key;
+    return this.cached = pattern;
+  }
+}
+/** PorterDuff.Mode, BlendMode and PorterDuffXfermode all name their mode by `ename` */
+const composeInit = function (this: JComposeShader, dst: JShader, src: JShader, mode: { ename: string }) {
+  if (!dst || !src || !mode) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Shader parameters must not be null");
+  this.dst = dst; this.src = src; this.op = mode.ename === "DST" ? null : COMPOSITE[mode.ename] ?? "source-over";
+};
+rt.register({ name: "android/graphics/ComposeShader", ctor: JComposeShader, sup: "android/graphics/Shader", methods: Object.fromEntries(
+  ["PorterDuff$Mode", "BlendMode", "Xfermode"].map((m) => [`<init>(Landroid/graphics/Shader;Landroid/graphics/Shader;Landroid/graphics/${m};)V`, composeInit])) });
 /**
  * A ColorLong is Color.pack()'s encoding: the sRGB case (colour-space id 0, the only one this
  * canvas has) is the ARGB int in the top 32 bits, which is what getColorLong writes.
@@ -1132,6 +1201,28 @@ export function affineFromPoints(src: Float32Array, si: number, dst: Float32Arra
   }
   return matrix;
 }
+/** Matrix.mapPoints/mapVectors in their three forms; a vector ignores the translation */
+function mapFamily(kind: string, points: boolean): NativeSpec["methods"] {
+  const map = function (this: JMatrix, dst: Float32Array, di: number, src: Float32Array, si: number, n: number) {
+    if (!dst || !src) throw rt.mkThrowable("java/lang/NullPointerException", null);
+    if ((di | si | n) < 0 || si + n * 2 > src.length || di + n * 2 > dst.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
+    if (src === dst && si !== di) src = src.slice(si, si + n * 2), si = 0;
+    const [a, b, c, d] = this.m, tx = points ? this.m[4] : 0, ty = points ? this.m[5] : 0;
+    for (let i = 0; i < n * 2; i += 2) {
+      const x = src[si + i], y = src[si + i + 1];
+      dst[di + i] = a * x + c * y + tx;
+      dst[di + i + 1] = b * x + d * y + ty;
+    }
+  };
+  return {
+    [`map${kind}([FI[FII)V`]: map,
+    [`map${kind}([F[F)V`]: function (this: JMatrix, dst: Float32Array, src: Float32Array) {
+      if (dst && src && dst.length !== src.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
+      return map.call(this, dst, 0, src, 0, dst?.length >> 1);
+    },
+    [`map${kind}([F)V`]: function (this: JMatrix, pts: Float32Array) { return map.call(this, pts, 0, pts, 0, pts?.length >> 1); },
+  };
+}
 function mapMatrixRect(this: JMatrix, dst: JRectF | null, src: JRectF | null): number {
   if (!dst || !src) throw rt.mkThrowable("java/lang/NullPointerException", null);
   const m = this.m, l = src.left, t = src.top, r = src.right, b = src.bottom;
@@ -1192,14 +1283,8 @@ rt.register({
     },
     "mapRect(Landroid/graphics/RectF;)Z": function (this: JMatrix, rect: JRectF) { return mapMatrixRect.call(this, rect, rect); },
     "mapRect(Landroid/graphics/RectF;Landroid/graphics/RectF;)Z": mapMatrixRect,
-    "mapPoints([F)V": function (this: JMatrix, pts: Float32Array) {
-      const m = this.m;
-      for (let i = 0; i + 1 < pts.length; i += 2) {
-        const x = pts[i], y = pts[i + 1];
-        pts[i] = m[0] * x + m[2] * y + m[4];
-        pts[i + 1] = m[1] * x + m[3] * y + m[5];
-      }
-    },
+    ...mapFamily("Points", true),
+    ...mapFamily("Vectors", false),
     "invert(Landroid/graphics/Matrix;)Z": function (this: JMatrix, out: JMatrix) {
       const [a, b, c, d, e, f] = this.m;
       const det = a * d - b * c;
@@ -1529,8 +1614,9 @@ export class JCanvas extends JObj {
     });
   }
 
-  static wrap(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, w: number, h: number): JCanvas {
-    const c = new JCanvas();
+  /** `recording`: the canvas a hardware-accelerated window hands its views, a RecordingCanvas */
+  static wrap(ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, w: number, h: number, recording = false): JCanvas {
+    const c = recording ? new JRecordingCanvas() : new JCanvas();
     c.ctx = ctx; c.w = w; c.h = h;
     return c;
   }
@@ -1924,6 +2010,34 @@ function drawBitmapRect(this: JCanvas, b: JBitmap, src: JRect | null, dst: JRect
   drawBitmap(this, b, p, (ctx, image) => ctx.drawImage(image, s.left, s.top, s.right - s.left, s.bottom - s.top,
     dst.left, dst.top, dst.right - dst.left, dst.bottom - dst.top));
 }
+/** android_graphics_Canvas: an offset/count pair outside the array draws nothing and throws */
+function checkPts(pts: Float32Array, off: number, n: number) {
+  if (!pts) throw rt.mkThrowable("java/lang/NullPointerException", null);
+  if ((off | n) < 0 || off + n > pts.length) throw rt.mkThrowable("java/lang/ArrayIndexOutOfBoundsException", null);
+}
+function drawLines(cv: JCanvas, pts: Float32Array, off: number, n: number, p: JPaint) {
+  checkPts(pts, off, n);
+  cv.prep(p, true);
+  cv.ctx.beginPath();
+  for (let i = off, end = off + (n & ~3); i < end; i += 4) {
+    cv.ctx.moveTo(pts[i], pts[i + 1]);
+    cv.ctx.lineTo(pts[i + 2], pts[i + 3]);
+  }
+  cv.ctx.stroke();
+}
+/** Skia draws a point as the stroke's cap: a disc for a round cap, otherwise a square; a
+ *  hairline point is one pixel */
+function pointPath(ctx: Ctx2D, x: number, y: number, p: JPaint) {
+  const w = p.strokeWidth || 1, r = w / 2;
+  if (p.strokeCapN === "round" && p.strokeWidth) { ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, 2 * Math.PI); } else ctx.rect(x - r, y - r, w, w);
+}
+function drawPoints(cv: JCanvas, pts: Float32Array, off: number, n: number, p: JPaint) {
+  checkPts(pts, off, n);
+  cv.prep(p, false);
+  cv.ctx.beginPath();
+  for (let i = off, end = off + (n & ~1); i < end; i += 2) pointPath(cv.ctx, pts[i], pts[i + 1], p);
+  cv.ctx.fill();
+}
 const defaultBitmapPaint = new JPaint();
 function canvasLocalBounds(ctx: JCanvas["ctx"]): [number, number, number, number] | null {
   const inverse = ctx.getTransform().inverse();
@@ -2073,19 +2187,16 @@ export const canvasMethods: NativeSpec["methods"] = {
     this.ctx.lineTo(x1, y1);
     this.ctx.stroke();
   },
-  "drawLines([FLandroid/graphics/Paint;)V": function (this: JCanvas, pts: Float32Array, p: JPaint) {
-    this.prep(p, true);
-    this.ctx.beginPath();
-    for (let i = 0; i + 3 < pts.length; i += 4) {
-      this.ctx.moveTo(pts[i], pts[i + 1]);
-      this.ctx.lineTo(pts[i + 2], pts[i + 3]);
-    }
-    this.ctx.stroke();
-  },
+  "drawLines([FLandroid/graphics/Paint;)V": function (this: JCanvas, pts: Float32Array, p: JPaint) { drawLines(this, pts, 0, pts.length, p); },
+  "drawLines([FIILandroid/graphics/Paint;)V": function (this: JCanvas, pts: Float32Array, off: number, n: number, p: JPaint) { drawLines(this, pts, off, n, p); },
   "drawPoint(FFLandroid/graphics/Paint;)V": function (this: JCanvas, x: number, y: number, p: JPaint) {
     this.prep(p, false);
-    this.ctx.fillRect(x - p.strokeWidth / 2, y - p.strokeWidth / 2, Math.max(1, p.strokeWidth), Math.max(1, p.strokeWidth));
+    this.ctx.beginPath();
+    pointPath(this.ctx, x, y, p);
+    this.ctx.fill();
   },
+  "drawPoints([FLandroid/graphics/Paint;)V": function (this: JCanvas, pts: Float32Array, p: JPaint) { drawPoints(this, pts, 0, pts.length, p); },
+  "drawPoints([FIILandroid/graphics/Paint;)V": function (this: JCanvas, pts: Float32Array, off: number, n: number, p: JPaint) { drawPoints(this, pts, off, n, p); },
   "drawPath(Landroid/graphics/Path;Landroid/graphics/Paint;)V": function (this: JCanvas, path: JPath, p: JPaint) {
     if (tryBitmapPath(this, p, path)) return;
     if (!path.inverseFill) {
@@ -2129,7 +2240,9 @@ export const canvasMethods: NativeSpec["methods"] = {
   "drawPicture(Landroid/graphics/Picture;Landroid/graphics/Rect;)V": function (this: JCanvas, picture: JPicture, dst: JRect) { drawPicture(this, picture, dst); },
   ...noops("enableZ()V", "disableZ()V",
     "setDrawFilter(Landroid/graphics/DrawFilter;)V"),
-  ...stubs(1, "clipOutPath(Landroid/graphics/Path;)Z", "isHardwareAccelerated()Z"),
+  ...stubs(1, "clipOutPath(Landroid/graphics/Path;)Z"),
+  // a bitmap's canvas is software; the one a window or RenderNode records into is not
+  "isHardwareAccelerated()Z": function (this: JCanvas) { return +(this instanceof JRecordingCanvas); },
   ...stubs(0, "quickReject(FFFFLandroid/graphics/Canvas$EdgeType;)Z"),
   "setBitmap(Landroid/graphics/Bitmap;)V": function (this: JCanvas, b: JBitmap | null) { setCanvasBitmap(this, b); },
 };
@@ -2191,32 +2304,40 @@ export function tintedBmp(b: JBitmap, tint: number | null, matrix: Float32Array 
     t = new OffscreenCanvas(b.w, b.h);
     const c = t.getContext("2d")!;
     c.drawImage(b.canvas, 0, 0);
-    if (matrix) {
-      const img = c.getImageData(0, 0, b.w, b.h), d = img.data, k = matrix;
-      for (let i = 0; i < d.length; i += 4) {
-        const r = d[i], g = d[i + 1], bl = d[i + 2], a = d[i + 3];
-        d[i] = k[0] * r + k[1] * g + k[2] * bl + k[3] * a + k[4];
-        d[i + 1] = k[5] * r + k[6] * g + k[7] * bl + k[8] * a + k[9];
-        d[i + 2] = k[10] * r + k[11] * g + k[12] * bl + k[13] * a + k[14];
-        d[i + 3] = k[15] * r + k[16] * g + k[17] * bl + k[18] * a + k[19];
-      }
-      c.putImageData(img, 0, 0);
-    } else if (mode === "CLEAR") c.clearRect(0, 0, b.w, b.h);
-    else if (mode === "MULTIPLY") {
-      const img = c.getImageData(0, 0, b.w, b.h), d = img.data;
-      const r = (tint! >>> 16 & 255) / 255, g = (tint! >>> 8 & 255) / 255, blue = (tint! & 255) / 255, alpha = (tint! >>> 24) / 255;
-      for (let i = 0; i < d.length; i += 4) { d[i] *= r; d[i + 1] *= g; d[i + 2] *= blue; d[i + 3] *= alpha; }
-      c.putImageData(img, 0, 0);
-    } else {
-      const composite = COMPOSITE[mode];
-      if (!composite) throw rt.mkThrowable("java/lang/UnsupportedOperationException", `bitmap tint mode ${mode}`);
-      c.globalCompositeOperation = composite;
-      c.fillStyle = cssColor(tint!);
-      c.fillRect(0, 0, b.w, b.h);
-    }
+    recolor(c, b.w, b.h, tint, matrix, mode);
     m.set(key, t);
   }
   return t;
+}
+/** a colour filter applied in place to the w x h pixels `c` holds */
+export function recolor(c: OffscreenCanvasRenderingContext2D, w: number, h: number, tint: number | null, matrix: Float32Array | null, mode = "SRC_IN") {
+  if (matrix) {
+    const img = c.getImageData(0, 0, w, h), d = img.data, k = matrix;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], g = d[i + 1], bl = d[i + 2], a = d[i + 3];
+      d[i] = k[0] * r + k[1] * g + k[2] * bl + k[3] * a + k[4];
+      d[i + 1] = k[5] * r + k[6] * g + k[7] * bl + k[8] * a + k[9];
+      d[i + 2] = k[10] * r + k[11] * g + k[12] * bl + k[13] * a + k[14];
+      d[i + 3] = k[15] * r + k[16] * g + k[17] * bl + k[18] * a + k[19];
+    }
+    c.putImageData(img, 0, 0);
+  } else if (tint === null) return;
+  else if (mode === "CLEAR") c.clearRect(0, 0, w, h);
+  else if (mode === "MULTIPLY") {
+    const img = c.getImageData(0, 0, w, h), d = img.data;
+    const r = (tint >>> 16 & 255) / 255, g = (tint >>> 8 & 255) / 255, blue = (tint & 255) / 255, alpha = (tint >>> 24) / 255;
+    for (let i = 0; i < d.length; i += 4) { d[i] *= r; d[i + 1] *= g; d[i + 2] *= blue; d[i + 3] *= alpha; }
+    c.putImageData(img, 0, 0);
+  } else {
+    const composite = COMPOSITE[mode];
+    if (!composite) throw rt.mkThrowable("java/lang/UnsupportedOperationException", `bitmap tint mode ${mode}`);
+    c.save();
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.globalCompositeOperation = composite;
+    c.fillStyle = cssColor(tint);
+    c.fillRect(0, 0, w, h);
+    c.restore();
+  }
 }
 /** an ARGB colour through a 4x5 colour matrix (channels 0..255, offsets as stored) */
 export function matrixColor(k: Float32Array, color: number): number {
@@ -2269,7 +2390,7 @@ rt.register({
     },
   },
 });
-class JRecordingCanvas extends JCanvas {}
+export class JRecordingCanvas extends JCanvas {}
 rt.register({ name: "android/graphics/RecordingCanvas", ctor: JRecordingCanvas, sup: "android/graphics/Canvas", methods: canvasMethods });
 
 // RenderNode: Compose GraphicsLayer (API 29+) records layers here. We back each node
@@ -2278,7 +2399,7 @@ let invalidateHook: (() => void) | null = null;
 export function setInvalidateHook(f: () => void) { invalidateHook = f; }
 class JRenderNode extends JObj {
   w = 0; h = 0; left = 0; top = 0;
-  alpha = 1; tx = 0; ty = 0; sx = 1; sy = 1; rot = 0;
+  alpha = 1; tx = 0; ty = 0; sx = 1; sy = 1; rot = 0; camera = 8;
   px = Number.NaN; py = Number.NaN;   // pivot (NaN = center)
   clip = true;
   clipOutline = false; outline: JOutline | null = null;
@@ -2441,7 +2562,10 @@ rt.register({
     "resetPivot()Z": function (this: JRenderNode) { this.px = this.py = Number.NaN; return 1; },
     "setRotationZ(F)Z": function (this: JRenderNode, v: number) { this.rot = asF(v); return 1; },
     "setRotationX(F)Z": rn1, "setRotationY(F)Z": rn1,
-    "setCameraDistance(F)Z": rn1,
+    "setCameraDistance(F)Z": function (this: JRenderNode, d: number) {
+      if (!Number.isFinite(d) || d < 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", `distance must be finite & positive, given=${d}`);
+      this.camera = asF(d); return 1;
+    },
     "setClipToBounds(Z)Z": function (this: JRenderNode, c: number) { this.clip = !!c; return 1; },
     "setClipToOutline(Z)Z": function (this: JRenderNode, c: number) { this.clipOutline = !!c; return 1; },
     "setOutline(Landroid/graphics/Outline;)Z": function (this: JRenderNode, o: JOutline | null) { this.outline = o; return 1; },
@@ -2469,7 +2593,7 @@ rt.register({
     "getScaleY()F": function (this: JRenderNode) { return this.sy; },
     "getRotationZ()F": function (this: JRenderNode) { return this.rot; },
     "getElevation()F": () => 0,
-    "getCameraDistance()F": () => 8000,
+    "getCameraDistance()F": function (this: JRenderNode) { return this.camera; },
     "getClipToBounds()Z": function (this: JRenderNode) { return this.clip ? 1 : 0; },
     "getClipToOutline()Z": function (this: JRenderNode) { return this.clipOutline ? 1 : 0; },
   },

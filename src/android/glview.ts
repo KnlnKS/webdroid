@@ -345,7 +345,7 @@ rt.register({ name: "android/view/SurfaceHolder$Callback2", ctor: class extends 
 rt.markers("android/view/TextureView$SurfaceTextureListener");
 class JSurfaceTexture extends JObj {
   surface: GlSurface = { view: null, width: 1, height: 1, present: null, frames: 0, onFrame: () => this.frameAvailable() };
-  released = false;
+  released = false; detached = false;
   textureName = 0;
   timestamp = 0n;
   listener: unknown = null;
@@ -358,7 +358,7 @@ class JSurfaceTexture extends JObj {
       ? vcall(listener, "onFrameAvailable", "(Landroid/graphics/SurfaceTexture;)V", this) : undefined).catch(reportUncaught);
   }
   update(): void {
-    if (this.released || !gl || !tables().textures[this.textureName]) throw rt.mkThrowable("java/lang/IllegalStateException", "SurfaceTexture has no current texture");
+    if (this.released || this.detached || !gl || !tables().textures[this.textureName]) throw rt.mkThrowable("java/lang/IllegalStateException", "SurfaceTexture has no current texture");
     const frame = this.surface.present;
     if (!frame) return;
     gl.bindTexture(gl.TEXTURE_2D, tables().textures[this.textureName]);
@@ -396,6 +396,17 @@ rt.register({
     "setDefaultBufferSize(II)V": function (this: JSurfaceTexture, w: number, h: number) {
       if (w <= 0 || h <= 0) throw rt.mkThrowable("java/lang/IllegalArgumentException", "Invalid buffer size");
       this.surface.width = w; this.surface.height = h;
+    },
+    // GLConsumer: detaching deletes the texture in the current context; attaching adopts a new name
+    "detachFromGLContext()V": function (this: JSurfaceTexture) {
+      if (this.released || this.detached) throw rt.mkThrowable("java/lang/RuntimeException", "Error during detachFromGLContext (see logcat for details)");
+      const t = tables().textures;
+      if (gl && t[this.textureName]) { gl.deleteTexture(t[this.textureName]!); t[this.textureName] = null; }
+      this.detached = true;
+    },
+    "attachToGLContext(I)V": function (this: JSurfaceTexture, texture: number) {
+      if (this.released || !this.detached) throw rt.mkThrowable("java/lang/RuntimeException", "Error during attachToGLContext (see logcat for details)");
+      this.textureName = texture; this.detached = false;
     },
     "isReleased()Z": function (this: JSurfaceTexture) { return +this.released; },
     "release()V": function (this: JSurfaceTexture) { this.release(); },
