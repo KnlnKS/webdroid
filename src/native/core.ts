@@ -28,7 +28,7 @@ interface Core {
   commit_phys(p: number, n: number): number;
   plane_reserved(h: number): number;
   va(phys: number): bigint;
-  map_va(n: bigint, reserve: number): bigint;
+  map_va(n: bigint, reserve: number, low: number): bigint;
   unmap_va(va: bigint, n: bigint): number;
   check_reserve(h: number, lo: number, size: number): number;
   resident_va(va: bigint): number;
