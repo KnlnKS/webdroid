@@ -1,6 +1,7 @@
 // GLSurfaceView: owns a WebGL canvas, drives the Renderer, blits into the 2D framebuffer.
 
 import { rt, JObj, stubs, noops, driven, type Gen } from "../jvm/runtime";
+import type { JAttrSet } from "./res";
 import { device } from "../shell/config";
 import { mangleMethod } from "../jvm/abi";
 import { vcall, vcallOn, JThread, setCurThread, curThread } from "../jvm/natives/jlang";
@@ -12,6 +13,11 @@ import { reportUncaught, mainLooper, mainHandler } from "./os";
 import { perf } from "../perf";
 import { bindEglCurrent, boundEglCurrent, glSurfaces } from "../native/egl-current";
 
+function viewInit(this: JView, c: unknown, set: JAttrSet | null = null) { return initViewFromCtx(this, c, set); }
+function measureDefault(this: JView, w: number, h: number) {
+  this.measuredW = defaultSize(specSize(w), w);
+  this.measuredH = defaultSize(specSize(h), h);
+}
 const D_chooseConfig = "(Ljavax/microedition/khronos/egl/EGL10;Ljavax/microedition/khronos/egl/EGLDisplay;)Ljavax/microedition/khronos/egl/EGLConfig;";
 
 class JGLSurfaceView extends JViewGroup {
@@ -76,8 +82,8 @@ rt.register({
   ifaces: ["android/view/SurfaceHolder$Callback"],
   statics: { RENDERMODE_WHEN_DIRTY: 0, RENDERMODE_CONTINUOUSLY: 1, DEBUG_CHECK_GL_ERROR: 1 },
   methods: {
-    "<init>(Landroid/content/Context;)V": driven(function* (this: JGLSurfaceView, c: unknown): Gen { yield initViewFromCtx(this, c, null); }),
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JGLSurfaceView, c: unknown, set: any): Gen { yield initViewFromCtx(this, c, set); }),
+    "<init>(Landroid/content/Context;)V": viewInit,
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": viewInit,
     "setEGLConfigChooser(Landroid/opengl/GLSurfaceView$EGLConfigChooser;)V": function (this: JGLSurfaceView, c: unknown) { this.configChooser = c; },
     "setRenderer(Landroid/opengl/GLSurfaceView$Renderer;)V": function (this: JGLSurfaceView, r: unknown) {
       this.renderer = r;
@@ -120,10 +126,7 @@ rt.register({
       "setEGLContextFactory(Landroid/opengl/GLSurfaceView$EGLContextFactory;)V",
       "setEGLWindowSurfaceFactory(Landroid/opengl/GLSurfaceView$EGLWindowSurfaceFactory;)V",
       "setPreserveEGLContextOnPause(Z)V", "setZOrderOnTop(Z)V", "setDebugFlags(I)V"),
-    "onMeasure(II)V": function (this: JGLSurfaceView, w: number, h: number) {
-      this.measuredW = defaultSize(specSize(w), w);
-      this.measuredH = defaultSize(specSize(h), h);
-    },
+    "onMeasure(II)V": measureDefault,
     "onLayout(ZIIII)V": function (this: JGLSurfaceView) {
       this.ensureCanvas(this.width(), this.height());
     },
@@ -449,9 +452,9 @@ class JTextureView extends JView {
 rt.register({
   name: "android/view/TextureView", ctor: JTextureView, sup: "android/view/View",
   methods: {
-    "<init>(Landroid/content/Context;)V": driven(function* (this: JTextureView, c: unknown): Gen { yield initViewFromCtx(this, c, null); }),
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JTextureView, c: unknown, set: any): Gen { yield initViewFromCtx(this, c, set); }),
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": driven(function* (this: JTextureView, c: unknown, set: any): Gen { yield initViewFromCtx(this, c, set); }),
+    "<init>(Landroid/content/Context;)V": viewInit,
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": viewInit,
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": viewInit,
     "setSurfaceTextureListener(Landroid/view/TextureView$SurfaceTextureListener;)V": function (this: JTextureView, l: unknown) { this.listener = l; },
     "getSurfaceTextureListener()Landroid/view/TextureView$SurfaceTextureListener;": function (this: JTextureView) { return this.listener; },
     "getSurfaceTexture()Landroid/graphics/SurfaceTexture;": function (this: JTextureView) { return this.texture; },
@@ -503,15 +506,12 @@ rt.register({
 rt.register({
   name: "android/view/SurfaceView", ctor: JSurfaceView, sup: "android/view/ViewGroup",
   methods: {
-    "<init>(Landroid/content/Context;)V": driven(function* (this: JSurfaceView, c: unknown): Gen { yield initViewFromCtx(this, c, null); }),
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": driven(function* (this: JSurfaceView, c: unknown, set: any): Gen { yield initViewFromCtx(this, c, set); }),
-    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": driven(function* (this: JSurfaceView, c: unknown, set: any): Gen { yield initViewFromCtx(this, c, set); }),
+    "<init>(Landroid/content/Context;)V": viewInit,
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;)V": viewInit,
+    "<init>(Landroid/content/Context;Landroid/util/AttributeSet;I)V": viewInit,
     "getHolder()Landroid/view/SurfaceHolder;": function (this: JSurfaceView) { return getHolder(this); },
     ...noops("setZOrderOnTop(Z)V", "setZOrderMediaOverlay(Z)V", "setSecure(Z)V"),
-    "onMeasure(II)V": function (this: JSurfaceView, w: number, h: number) {
-      this.measuredW = defaultSize(specSize(w), w);
-      this.measuredH = defaultSize(specSize(h), h);
-    },
+    "onMeasure(II)V": measureDefault,
     "onLayout(ZIIII)V": function (this: JSurfaceView) { this.ensureSurface(); },
     "onAttachedToWindow()V": function (this: JSurfaceView) { this.ensureSurface(); },
     "onDetachedFromWindow()V": function (this: JSurfaceView) { this.destroySurface(); },
