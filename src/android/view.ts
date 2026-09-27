@@ -2,7 +2,7 @@ import type { FrameCallback } from "./os";
 import { isRecording, recordOrRun } from "./recording";
 import { perf } from "../perf";
 import { TV } from "./axml";
-import { setInvalidateHook, JRect, JCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, type JPoint } from "./graphics";
+import { setInvalidateHook, JRect, JCanvas, JMatrix, JOutline, clipEmptyCanvas, matMul, rotM, recolor, type JPoint, type JPaint } from "./graphics";
 import { mangleMethod, mangleStaticField, jmethod, type JMethod, jarray } from "../jvm/abi";
 import { vcall, vcallOn, after, idHash, box, JFloat, curThread, vcallUncaught, type JThread } from "../jvm/natives/jlang";
 import { type JDrawable, type JColorStateList, ST, loadDrawableRV, JColorDrawable, loadDrawable, cslColor, drawableSize } from "./drawable";
@@ -490,6 +490,8 @@ class ViewRare {
   /** the RenderNode's camera distance in inches; View scales it by the density */
   cameraDistance = 8;
   exclusionRects: unknown = null;
+  /** composites the view's layer: its alpha, blend mode and colour filter */
+  layerPaint: JPaint | null = null;
 }
 const rare = (v: JView) => v.rare ??= new ViewRare();
 const densityDpi = () => device.density * 160;
@@ -827,7 +829,13 @@ const drawLayered = driven(function* drawLayered(v: JView, cv: JCanvas, w: numbe
   const lcv = JCanvas.wrap(lctx, w, h);
   lcv.semanticBase = cv.semanticTransform();
   yield drawSemantic(v, lcv);
-  cv.ctx.drawImage(layer, 0, 0);
+  const p = v.rare?.layerPaint;
+  if (!p) { cv.ctx.drawImage(layer, 0, 0); return; }
+  recolor(lctx, w, h, p.filterColor, p.filterMatrix);
+  const ctx = cv.ctx, alpha = ctx.globalAlpha, blend = p.compositeOp();
+  ctx.globalAlpha = alpha * (p.renderAlpha ?? p.color >>> 24) / 255;
+  if (blend) ctx.globalCompositeOperation = blend;
+  try { ctx.drawImage(layer, 0, 0); } finally { ctx.globalAlpha = alpha; if (blend) ctx.globalCompositeOperation = "source-over"; }
 });
 
 const drawSemantic = driven(function* drawSemantic(v: JView, cv: JCanvas): Gen {
@@ -1248,7 +1256,14 @@ const viewMethods: NativeSpec["methods"] = {
   "findViewWithTag(Ljava/lang/Object;)Landroid/view/View;": function (this: JView, tag: unknown) {
     return findByPred(this, (v) => v.tag === tag);
   },
-  "setLayerType(ILandroid/graphics/Paint;)V": function (this: JView, t: number) { this.layerType = t; },
+  "setLayerType(ILandroid/graphics/Paint;)V": function (this: JView, t: number, p: JPaint | null) {
+    this.layerType = t;
+    if (t || this.rare) rare(this).layerPaint = t ? p : null;
+    invalidate(this);
+  },
+  "setLayerPaint(Landroid/graphics/Paint;)V": function (this: JView, p: JPaint | null) {
+    if (this.layerType) { rare(this).layerPaint = p; invalidate(this); }
+  },
   "getLayerType()I": function (this: JView) { return this.layerType; },
   "setContentDescription(Ljava/lang/CharSequence;)V": driven(function* (this: JView, cs: unknown): Gen { this.contentDesc = cs === null ? null : yield csText(cs); }),
   "getContentDescription()Ljava/lang/CharSequence;": function (this: JView) { return this.contentDesc; },

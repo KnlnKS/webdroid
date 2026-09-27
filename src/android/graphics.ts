@@ -2301,32 +2301,40 @@ export function tintedBmp(b: JBitmap, tint: number | null, matrix: Float32Array 
     t = new OffscreenCanvas(b.w, b.h);
     const c = t.getContext("2d")!;
     c.drawImage(b.canvas, 0, 0);
-    if (matrix) {
-      const img = c.getImageData(0, 0, b.w, b.h), d = img.data, k = matrix;
-      for (let i = 0; i < d.length; i += 4) {
-        const r = d[i], g = d[i + 1], bl = d[i + 2], a = d[i + 3];
-        d[i] = k[0] * r + k[1] * g + k[2] * bl + k[3] * a + k[4];
-        d[i + 1] = k[5] * r + k[6] * g + k[7] * bl + k[8] * a + k[9];
-        d[i + 2] = k[10] * r + k[11] * g + k[12] * bl + k[13] * a + k[14];
-        d[i + 3] = k[15] * r + k[16] * g + k[17] * bl + k[18] * a + k[19];
-      }
-      c.putImageData(img, 0, 0);
-    } else if (mode === "CLEAR") c.clearRect(0, 0, b.w, b.h);
-    else if (mode === "MULTIPLY") {
-      const img = c.getImageData(0, 0, b.w, b.h), d = img.data;
-      const r = (tint! >>> 16 & 255) / 255, g = (tint! >>> 8 & 255) / 255, blue = (tint! & 255) / 255, alpha = (tint! >>> 24) / 255;
-      for (let i = 0; i < d.length; i += 4) { d[i] *= r; d[i + 1] *= g; d[i + 2] *= blue; d[i + 3] *= alpha; }
-      c.putImageData(img, 0, 0);
-    } else {
-      const composite = COMPOSITE[mode];
-      if (!composite) throw rt.mkThrowable("java/lang/UnsupportedOperationException", `bitmap tint mode ${mode}`);
-      c.globalCompositeOperation = composite;
-      c.fillStyle = cssColor(tint!);
-      c.fillRect(0, 0, b.w, b.h);
-    }
+    recolor(c, b.w, b.h, tint, matrix, mode);
     m.set(key, t);
   }
   return t;
+}
+/** a colour filter applied in place to the w x h pixels `c` holds */
+export function recolor(c: OffscreenCanvasRenderingContext2D, w: number, h: number, tint: number | null, matrix: Float32Array | null, mode = "SRC_IN") {
+  if (matrix) {
+    const img = c.getImageData(0, 0, w, h), d = img.data, k = matrix;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], g = d[i + 1], bl = d[i + 2], a = d[i + 3];
+      d[i] = k[0] * r + k[1] * g + k[2] * bl + k[3] * a + k[4];
+      d[i + 1] = k[5] * r + k[6] * g + k[7] * bl + k[8] * a + k[9];
+      d[i + 2] = k[10] * r + k[11] * g + k[12] * bl + k[13] * a + k[14];
+      d[i + 3] = k[15] * r + k[16] * g + k[17] * bl + k[18] * a + k[19];
+    }
+    c.putImageData(img, 0, 0);
+  } else if (tint === null) return;
+  else if (mode === "CLEAR") c.clearRect(0, 0, w, h);
+  else if (mode === "MULTIPLY") {
+    const img = c.getImageData(0, 0, w, h), d = img.data;
+    const r = (tint >>> 16 & 255) / 255, g = (tint >>> 8 & 255) / 255, blue = (tint & 255) / 255, alpha = (tint >>> 24) / 255;
+    for (let i = 0; i < d.length; i += 4) { d[i] *= r; d[i + 1] *= g; d[i + 2] *= blue; d[i + 3] *= alpha; }
+    c.putImageData(img, 0, 0);
+  } else {
+    const composite = COMPOSITE[mode];
+    if (!composite) throw rt.mkThrowable("java/lang/UnsupportedOperationException", `bitmap tint mode ${mode}`);
+    c.save();
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.globalCompositeOperation = composite;
+    c.fillStyle = cssColor(tint);
+    c.fillRect(0, 0, w, h);
+    c.restore();
+  }
 }
 /** an ARGB colour through a 4x5 colour matrix (channels 0..255, offsets as stored) */
 export function matrixColor(k: Float32Array, color: number): number {
