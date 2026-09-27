@@ -43,12 +43,12 @@ rt.register({ name: "android/os/PerformanceHintManager", ctor: class extends JOb
 
 class JMessageQueue extends JObj {
   owner: JLooper | null = null;
-  messages = new Map<JMessage, number>();
+  messages = new Set<JMessage>();
   handlers = new Set<unknown>();
   scheduled = false;
   isIdle(): boolean {
     const now = uptimeMillis();
-    for (const when of this.messages.values()) if (when <= now) return false;
+    for (const m of this.messages) if (m.whenMs <= now) return false;
     return true;
   }
   checkIdle() {
@@ -170,7 +170,7 @@ export class JHandler extends JObj {
     set.add(msg);
     const queue = this.looper.queue;
     msg.whenMs = uptimeMillis() + Math.max(0, delay);
-    queue.messages.set(msg, msg.whenMs);
+    queue.messages.add(msg);
     // still pending until it runs, so a removeMessages/hasMessages in between sees it
     const go = () => this.looper.run(async () => {
       queue.messages.delete(msg);
