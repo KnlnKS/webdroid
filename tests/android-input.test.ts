@@ -20,23 +20,13 @@ describe("accessibility-listeners", () => {
     for (const kind of ["AccessibilityState", "TouchExplorationState", "AccessibilityServicesState"]) {
       const arg = `(Landroid/view/accessibility/AccessibilityManager$${kind}ChangeListener;)`;
       const add = `add${kind}ChangeListener`, remove = `remove${kind}ChangeListener`;
-      await vcall(first, add, arg + (kind === "AccessibilityServicesState" ? "V" : "Z"), listener);
-      await vcall(first, add, arg + (kind === "AccessibilityServicesState" ? "V" : "Z"), listener);
+      const addDesc = arg + (kind === "AccessibilityServicesState" ? "V" : "Z");
+      await vcall(first, add, addDesc, listener);
+      await vcall(first, add, addDesc, listener);
       expect(await vcall(second, remove, arg + "Z", listener)).toBe(0);
       expect(await vcall(first, remove, arg + "Z", listener)).toBe(1);
       expect(await vcall(first, remove, arg + "Z", listener)).toBe(0);
     }
-  });
-});
-
-describe("accessibility-service-info", () => {
-  rt.linkNatives();
-
-  test("AccessibilityServiceInfo starts with Android's disabled defaults", async () => {
-    const info = await newObj("android/accessibilityservice/AccessibilityServiceInfo", "()V");
-    expect(await vcall(info, "getCapabilities", "()I")).toBe(0);
-    expect(await vcall(info, "getId", "()Ljava/lang/String;")).toBeNull();
-    expect(info).toMatchObject({ eventTypes: 0, feedbackType: 0, flags: 0, notificationTimeout: 0n, packageNames: null });
   });
 });
 

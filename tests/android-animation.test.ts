@@ -134,7 +134,6 @@ describe("animator-start", () => {
     "onTimeUpdate(Landroid/animation/TimeAnimator;JJ)V": function (this: TimeListener, _anim: unknown, total: bigint, delta: bigint) { this.times.push([total, delta]); },
   } });
   test("TimeAnimator starts at zero and keeps ticking beyond the inherited duration", async () => {
-    const { uiState } = await import("../src/android/view");
     const listener = await newObj("test/TimeListener"), animator = await newObj("android/animation/TimeAnimator");
     await vcall(animator, "setTimeListener", "(Landroid/animation/TimeAnimator$TimeListener;)V", listener);
     await vcall(animator, "setDuration", "(J)Landroid/animation/ValueAnimator;", 0n);
