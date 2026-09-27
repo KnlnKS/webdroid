@@ -5,7 +5,7 @@ import { mem, guestAt, wrote } from "./mem";
 import { hostLib, hostData, vaList, type HostFn, PTR, stp, ldp, ARG0, ptr } from "./host";
 import { E } from "./abi";
 import type { Cpu } from "./cpu";
-import { LAYOUT, fail, utf8, logLine, offArg, readTs, writeTs, clockTime, scanSink } from "./libc";
+import { LAYOUT, fail, utf8, logLine, offArg, readTs, clockTime, scanSink } from "./libc";
 import { format, scan } from "./printf";
 import { vfs, type VfsFile } from "../jvm/natives/jio";
 import { procIdentity, procText } from "../shell/procfs";
@@ -13,6 +13,7 @@ import { readFully, type FileSource } from "../shell/lazyfile";
 import { concat } from "../jvm/abi";
 import { isNativeSocket, nativeSocketClose, nativeSocketDup, nativeSocketFcntl, nativeSocketIoctl, nativeSocketRead, nativeSocketWrite, setNativePollProvider, nativePollEvents, watchNativeFd } from "./net";
 import { allocateFd, releaseFd, reserveFd } from "./fd";
+import { armClockTimer, timerState, validTime, type ClockTimer } from "./timers";
 const dec = new TextDecoder();
 
 const O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400, O_NONBLOCK = 0x800, O_DIRECTORY = 0x4000, O_CLOEXEC = 0x80000;
@@ -21,12 +22,11 @@ const S_IFDIR = 0x4000, S_IFREG = 0x8000;
 /** a pipe: byte chunks, and whoever is parked waiting for them (a reader, or an epoll_wait) */
 interface Pipe { q: Uint8Array[]; wake: (() => void)[]; closed: boolean }
 interface Inotify { watches: Map<number, { path: string; mask: number; dir: boolean }>; nextWd: number; pipe: Pipe }
-interface Timer { clock: number; next: number; interval: number; timeout?: ReturnType<typeof setTimeout> }
 interface EpollEntry { events: number; data: bigint; pending: number; disabled: boolean; cancel: () => void }
 interface Epoll { entries: Map<number, EpollEntry>; wake: Set<() => void> }
 interface Fd {
   path: string; content: VfsFile; pos: number; write: boolean; dir: boolean; append: boolean; statusFlags: number; references: number; line?: string; synthetic?: boolean;
-  timer?: Timer; source?: FileSource; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
+  timer?: ClockTimer; source?: FileSource; readQueue?: Promise<void>; byte?: number; random?: boolean; log?: number; nonblock?: boolean; rpipe?: Pipe; wpipe?: Pipe; event?: { count: number; wake: (() => void)[] }; epoll?: Epoll; inotify?: Inotify;
 }
 const EPOLLET = 0x80000000, EPOLLONESHOT = 0x40000000, EAGAIN = E.AGAIN;
 const IN_MODIFY = 0x2, IN_CLOSE_WRITE = 0x8, IN_CREATE = 0x100, IN_DELETE = 0x200, IN_DELETE_SELF = 0x400, IN_IGNORED = 0x8000;
@@ -498,25 +498,6 @@ async function epollWait(cpu: Cpu, epfd: number, events: bigint, max: number, ti
     if (fds.get(epfd)?.epoll !== ep) return fail(cpu, E.BADF);
   }
 }
-function armTimer(f: Fd): void {
-  const timer = f.timer!, event = f.event!;
-  clearTimeout(timer.timeout);
-  if (!timer.next) return;
-  timer.timeout = setTimeout(() => {
-    const now = clockTime(timer.clock);
-    if (now >= timer.next) {
-      const count = timer.interval ? Math.floor((now - timer.next) / timer.interval) + 1 : 1;
-      event.count += count;
-      timer.next = timer.interval ? timer.next + count * timer.interval : 0;
-      wakeAll(event);
-    }
-    armTimer(f);
-  }, Math.min(0x7fffffff, Math.max(0, timer.next - clockTime(timer.clock))));
-}
-function timerState(timer: Timer, out: number): void {
-  writeTs(out, timer.interval);
-  writeTs(out + PTR * 2, timer.next ? Math.max(0, timer.next - clockTime(timer.clock)) : 0);
-}
 function statPath(cpu: Cpu, path: string, buf: number): number {
   path = vfs.norm(path);
   if (path === "/dev/urandom" || path === "/dev/random") { fillStat(buf, false, 0, Date.now(), path); return 0; }
@@ -865,13 +846,14 @@ export function stdioInit(): void {
       const fd = a.i(), flags = a.i(), value = a.p(), old = a.p(), f = fds.get(fd);
       if (!f) return fail(cpu, E.BADF);
       if (!f.timer || flags & ~1) return fail(cpu, E.INVAL);
-      const interval = readTs(value), next = readTs(value + PTR * 2);
-      if (interval < 0 || next < 0 || mem.ld32(value + PTR) < 0 || mem.ld32(value + PTR) >= 1e9 || mem.ld32(value + PTR * 3) < 0 || mem.ld32(value + PTR * 3) >= 1e9) return fail(cpu, E.INVAL);
+      if (!validTime(value) || !validTime(value + LAYOUT.TS_SIZE)) return fail(cpu, E.INVAL);
+      const interval = readTs(value), next = readTs(value + LAYOUT.TS_SIZE);
       if (old) timerState(f.timer, old);
       f.timer.interval = interval;
       f.timer.next = next ? next + (flags & 1 ? 0 : clockTime(f.timer.clock)) : 0;
-      f.event!.count = 0;
-      armTimer(f);
+      const event = f.event!;
+      event.count = 0;
+      armClockTimer(f.timer, (count) => { event.count += count; wakeAll(event); });
       return 0;
     },
     timerfd_gettime: (cpu, a) => {
