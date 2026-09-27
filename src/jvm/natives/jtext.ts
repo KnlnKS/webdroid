@@ -5,7 +5,9 @@ import { rt, JObj, type NativeSpec, driven, type Gen } from "../runtime";
 import { vcall, vcallOn, curThread, defineException, mkEnumSet, type JSimpleEnum, newObj, box, JDouble, stringHash, type JSB } from "./jlang";
 import { strArray, jarray, utf8, slashName, dotName, charsToString } from "../abi";
 import { mkIter, toJsArray } from "./jutil";
-import { JDate, JCalendar, localTz, formatPattern, parsePattern, checkSdfPattern, displayNames, localizedDatePattern, type JTimeZone } from "./jtime";
+import { JDate, JCalendar } from "./jtime";
+import { localTz, type JTimeZone } from "./jtime-iso";
+import { formatPattern, parsePattern, checkSdfPattern, displayNames, localizedPattern, tagOf } from "./jtime-pattern";
 import { directionality } from "../bidi";
 import bidiFactory from "bidi-js";
 import { defaultLocale, localeTag, type JLocale } from "./jvalues";
@@ -122,7 +124,7 @@ function withPattern(p: string, locale: JLocale | null = null): JDateFormat {
 // DateFormat.FULL, LONG, MEDIUM, SHORT → the locale's CLDR patterns
 const STYLE_NAMES = ["FULL", "LONG", "MEDIUM", "SHORT"];
 const styled = (date: number | null, time: number | null, locale: JLocale | null = null) =>
-  withPattern(localizedDatePattern(date === null ? null : STYLE_NAMES[date] ?? "MEDIUM", time === null ? null : STYLE_NAMES[time] ?? "MEDIUM", locale), locale);
+  withPattern(localizedPattern(date === null ? null : STYLE_NAMES[date] ?? "MEDIUM", time === null ? null : STYLE_NAMES[time] ?? "MEDIUM", tagOf(locale)), locale);
 const formatAt = (f: JDateFormat, t: number) => formatPattern(f.pattern, t, (f.tz ?? localTz).id, f.locale);
 function parseAt(f: JDateFormat, s: string, pos: JParsePosition): JDate | null {
   const t = parsePattern(f.pattern, s, pos, (f.tz ?? localTz).id, f.locale, f.century);
@@ -216,7 +218,6 @@ rt.register({
     "toPattern()Ljava/lang/String;": function (this: JMessageFormat) { return this.pattern; },
   },
 });
-const locale = (l: JLocale | undefined) => l ?? null;
 rt.register({
   name: "java/text/DateFormat", ctor: JDateFormat, sup: "java/text/Format", ifaces: ["java/lang/Cloneable"],
   statics: { FULL: 0, LONG: 1, MEDIUM: 2, SHORT: 3, DEFAULT: 2 },
@@ -226,19 +227,19 @@ rt.register({
     "static getInstance()Ljava/text/DateFormat;": () => styled(3, 3),
     "static getDateInstance()Ljava/text/DateFormat;": () => styled(2, null),
     "static getDateInstance(I)Ljava/text/DateFormat;": (d: number) => styled(d, null),
-    "static getDateInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": (d: number, l: JLocale) => styled(d, null, locale(l)),
+    "static getDateInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": (d: number, l: JLocale) => styled(d, null, l),
     "static getTimeInstance()Ljava/text/DateFormat;": () => styled(null, 2),
     "static getTimeInstance(I)Ljava/text/DateFormat;": (t: number) => styled(null, t),
-    "static getTimeInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": (t: number, l: JLocale) => styled(null, t, locale(l)),
+    "static getTimeInstance(ILjava/util/Locale;)Ljava/text/DateFormat;": (t: number, l: JLocale) => styled(null, t, l),
     "static getDateTimeInstance()Ljava/text/DateFormat;": () => styled(2, 2),
     "static getDateTimeInstance(II)Ljava/text/DateFormat;": (d: number, t: number) => styled(d, t),
-    "static getDateTimeInstance(IILjava/util/Locale;)Ljava/text/DateFormat;": (d: number, t: number, l: JLocale) => styled(d, t, locale(l)),
+    "static getDateTimeInstance(IILjava/util/Locale;)Ljava/text/DateFormat;": (d: number, t: number, l: JLocale) => styled(d, t, l),
   },
 });
 rt.register({
   name: "java/text/SimpleDateFormat", ctor: class extends JDateFormat {}, sup: "java/text/DateFormat",
   methods: {
-    "<init>()V": function (this: JDateFormat) { this.pattern = localizedDatePattern("SHORT", "SHORT", null); },
+    "<init>()V": function (this: JDateFormat) { this.pattern = localizedPattern("SHORT", "SHORT", tagOf(null)); },
     "<init>(Ljava/lang/String;)V": function (this: JDateFormat, p: string) { checkSdfPattern(p); this.pattern = p; },
     "<init>(Ljava/lang/String;Ljava/util/Locale;)V": function (this: JDateFormat, p: string, l: JLocale) { checkSdfPattern(p); this.pattern = p; this.locale = l; },
     "<init>(Ljava/lang/String;Ljava/text/DateFormatSymbols;)V": function (this: JDateFormat, p: string) { checkSdfPattern(p); this.pattern = p; },

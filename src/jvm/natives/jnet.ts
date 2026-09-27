@@ -13,7 +13,7 @@ import { newArrayList, toJsArray, mkIter } from "./jutil";
 import { JThrowable, stringHash, mkEnumSet, newObj, vcall, defineException } from "./jlang";
 import { JX509, mkPrincipal } from "./jx509";
 import { jarray, strArray, dotName, i8, u8 } from "../abi";
-import { vfs, type JOutputStream } from "./jio";
+import { vfs, type JBAOS } from "./jio";
 import { Relay, DatagramRelay, syntheticAddress, syntheticHost, nameExists, ipv4Text } from "../../shell/relay";
 
 rt.markers("javax/net/ssl/HostnameVerifier", "javax/net/ssl/X509TrustManager", "javax/net/ssl/TrustManager", "javax/net/ssl/KeyManager",
@@ -956,7 +956,7 @@ class JURLConnection extends JObj {
   connected = 0;
   cto = 0; rto = 0; ifMod = 0n;
   req: [string, string][] = [];
-  out: JOutputStream | null = null;
+  out: JBAOS | null = null;
   ac: AbortController | null = null;
   res: HttpRes | null = null;
   pending: Promise<HttpRes> | null = null;
@@ -980,7 +980,7 @@ class JURLConnection extends JObj {
     arm(this.cto, "connect timed out");
     try {
       r = await fetch("/proxy?url=" + encodeURIComponent(this.url.spec) + (this.follow ? "" : "&manual=1"), {
-        method: this.method, headers, signal: ac.signal, body: hasBody ? new Uint8Array(u8(vcall(this.out, "toByteArray", "()[B") as Int8Array)) : undefined,
+        method: this.method, headers, signal: ac.signal, body: hasBody ? this.out!.bytes().slice() : undefined,
       });
     } catch (e) {
       if (timedOut) throw rt.mkThrowable("java/net/SocketTimeoutException", timedOut);
@@ -1060,7 +1060,7 @@ rt.register({
       if (this.res || this.pending) throw rt.mkThrowable("java/net/ProtocolException", "Cannot write output after reading input");
       if (this.method === "GET") this.method = "POST";   // a GET that writes a body becomes a POST (OpenJDK and AOSP alike)
       this.connected = 1;
-      return this.out ??= rt.make("java/io/ByteArrayOutputStream") as JOutputStream;
+      return this.out ??= rt.make("java/io/ByteArrayOutputStream") as JBAOS;
     },
     "setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V": function (this: JURLConnection, k: string | null, v: string) {
       if (this.connected) throw rt.mkThrowable("java/lang/IllegalStateException", "Already connected");

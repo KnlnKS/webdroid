@@ -143,6 +143,8 @@ defineException("java/util/regex/PatternSyntaxException", "java/lang/IllegalArgu
   "getPattern()Ljava/lang/String;": function (this: SyntaxError) { return this.regex; },
   "getIndex()I": function (this: SyntaxError) { return this.index; },
 });
+const appendReplacement = function (this: JMatcher, sb: JSB, r: string) { return appendRepl(this, sb, r); };
+const appendTail = function (this: JMatcher, sb: JSB) { sb.s += this.input.slice(this.appendPos); return sb; };
 rt.register({
   name: "java/util/regex/Matcher", ctor: JMatcher, ifaces: ["java/util/regex/MatchResult"],
   methods: {
@@ -183,10 +185,10 @@ rt.register({
     },
     // appendReplacement/appendTail: the classic find() loop that rewrites a string piecewise.
     // The replacement's $n / ${name} refer to this match's groups; a backslash escapes.
-    "appendReplacement(Ljava/lang/StringBuffer;Ljava/lang/String;)Ljava/util/regex/Matcher;": function (this: JMatcher, sb: JSB, r: string) { return appendRepl(this, sb, r); },
-    "appendReplacement(Ljava/lang/StringBuilder;Ljava/lang/String;)Ljava/util/regex/Matcher;": function (this: JMatcher, sb: JSB, r: string) { return appendRepl(this, sb, r); },
-    "appendTail(Ljava/lang/StringBuffer;)Ljava/lang/StringBuffer;": function (this: JMatcher, sb: JSB) { sb.s += this.input.slice(this.appendPos); return sb; },
-    "appendTail(Ljava/lang/StringBuilder;)Ljava/lang/StringBuilder;": function (this: JMatcher, sb: JSB) { sb.s += this.input.slice(this.appendPos); return sb; },
+    "appendReplacement(Ljava/lang/StringBuffer;Ljava/lang/String;)Ljava/util/regex/Matcher;": appendReplacement,
+    "appendReplacement(Ljava/lang/StringBuilder;Ljava/lang/String;)Ljava/util/regex/Matcher;": appendReplacement,
+    "appendTail(Ljava/lang/StringBuffer;)Ljava/lang/StringBuffer;": appendTail,
+    "appendTail(Ljava/lang/StringBuilder;)Ljava/lang/StringBuilder;": appendTail,
     "static quoteReplacement(Ljava/lang/String;)Ljava/lang/String;": (s: string) => s.replace(/[\\$]/g, "\\$&"),
     "usePattern(Ljava/util/regex/Pattern;)Ljava/util/regex/Matcher;": function (this: JMatcher, p: JPattern) {
       this.re = patternRe(p);

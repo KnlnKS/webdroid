@@ -1568,11 +1568,9 @@ for (const f of ["sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "exp", "ex
 const overflow = (what: string) => { throw rt.mkThrowable("java/lang/ArithmeticException", `${what} overflow`); };
 const exactI = (v: number) => (v === (v | 0) ? v : overflow("integer"));
 const exactJ = (v: bigint) => (v === BigInt.asIntN(64, v) ? v : overflow("long"));
-for (const [name, op] of [["add", (a: number, b: number) => a + b], ["subtract", (a: number, b: number) => a - b]] as const) {
-  mm[`static ${name}Exact(II)I`] = (a: number, b: number) => exactI(op(a, b));
-  mm[`static ${name}Exact(JJ)J`] = (a: bigint, b: bigint) => exactJ(name === "add" ? a + b : a - b);
-}
 Object.assign(mm, {
+  "static addExact(II)I": (a: number, b: number) => exactI(a + b), "static addExact(JJ)J": (a: bigint, b: bigint) => exactJ(a + b),
+  "static subtractExact(II)I": (a: number, b: number) => exactI(a - b), "static subtractExact(JJ)J": (a: bigint, b: bigint) => exactJ(a - b),
   "static multiplyExact(II)I": (a: number, b: number) => exactI(a * b),
   "static multiplyExact(JJ)J": (a: bigint, b: bigint) => exactJ(a * b),
   "static multiplyExact(JI)J": (a: bigint, b: number) => exactJ(a * BigInt(b)),
@@ -1584,9 +1582,10 @@ Object.assign(mm, {
   "static multiplyHigh(JJ)J": (a: bigint, b: bigint) => BigInt.asIntN(64, (a * b) >> 64n),
   "static multiplyFull(II)J": (a: number, b: number) => BigInt(a) * BigInt(b),
 });
-const floorDivJ = (a: bigint, b: bigint) => { if (b === 0n) overflow("/ by zero"); const q = a / b; return a % b !== 0n && (a < 0n) !== (b < 0n) ? q - 1n : q; };
+const divideByZero = (): never => { throw rt.mkThrowable("java/lang/ArithmeticException", "/ by zero"); };
+const floorDivJ = (a: bigint, b: bigint) => { if (b === 0n) divideByZero(); const q = a / b; return a % b !== 0n && (a < 0n) !== (b < 0n) ? q - 1n : q; };
 const floorModJ = (a: bigint, b: bigint) => a - floorDivJ(a, b) * b;
-const floorDivI = (a: number, b: number) => { if (!b) throw rt.mkThrowable("java/lang/ArithmeticException", "/ by zero"); return Math.floor(a / b) | 0; };
+const floorDivI = (a: number, b: number) => { if (!b) divideByZero(); return Math.floor(a / b) | 0; };
 const floorModI = (a: number, b: number) => (a - floorDivI(a, b) * b) | 0;
 Object.assign(mm, {
   "static floorDiv(II)I": floorDivI, "static floorMod(II)I": floorModI,

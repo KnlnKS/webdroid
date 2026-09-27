@@ -76,13 +76,19 @@ function retireIdleWorkers(ex: JExecutor) {
     ex.workers.splice(i, 1);
   }
 }
+/** a new idle worker, counted toward getLargestPoolSize */
+function addWorker(ex: JExecutor): JExecutor["workers"][number] {
+  const worker = { thread: null, busy: false };
+  ex.workers.push(worker);
+  ex.largest = Math.max(ex.largest, ex.workers.length);
+  return worker;
+}
 function drainExecutor(ex: JExecutor) {
   while (ex.tasks.length) {
     let worker = ex.workers.find((w) => !w.busy);
     if (!worker) {
       if (ex.workers.length >= ex.limit) return;
-      worker = { thread: null, busy: false }; ex.workers.push(worker);
-      ex.largest = Math.max(ex.largest, ex.workers.length);
+      worker = addWorker(ex);
     }
     const task = ex.tasks.shift()!;
     if (!ex.pool) mirror(ex)?.shift();
@@ -452,13 +458,12 @@ for (const n of ["java/util/concurrent/ThreadPoolExecutor", "java/util/concurren
       },
       "prestartCoreThread()Z": function (this: JExecutor) {
         if (this.workers.length >= this.coreSize) return 0;
-        this.workers.push({ thread: null, busy: false });
-        this.largest = Math.max(this.largest, this.workers.length);
+        addWorker(this);
         return 1;
       },
       "prestartAllCoreThreads()I": function (this: JExecutor) {
         let n = 0;
-        while (vcall(this, "prestartCoreThread", "()Z")) n++;
+        for (; this.workers.length < this.coreSize; n++) addWorker(this);
         return n;
       },
       // the protected hooks a subclass overrides, and calls up to
