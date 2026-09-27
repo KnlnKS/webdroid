@@ -1918,14 +1918,24 @@ export function childMeasureSpec(spec: number, padding: number, childDim: number
   if (childDim !== WRAP_CONTENT) return makeSpec(0, MS_UNSPEC);
   return mode === MS_UNSPEC ? makeSpec(size, MS_UNSPEC) : makeSpec(size, MS_AT_MOST);
 }
-export const measureChildWithMargins = driven(function* measureChildWithMargins(vg: JViewGroup, child: JView, wSpec: number, wUsed: number, hSpec: number, hUsed: number): Gen {
+function measureChildMargins(vg: JViewGroup, child: JView, wSpec: number, wUsed: number, hSpec: number, hUsed: number) {
   const lp = child.lp;
   const ml = lp instanceof JMarginLP ? lp.marginL + lp.marginR : 0;
   const mt = lp instanceof JMarginLP ? lp.marginT + lp.marginB : 0;
-  yield measureView(child,
+  return measureView(child,
     childMeasureSpec(wSpec, vg.padL + vg.padR + ml + wUsed, lp?.width ?? WRAP_CONTENT),
     childMeasureSpec(hSpec, vg.padT + vg.padB + mt + hUsed, lp?.height ?? WRAP_CONTENT));
-});
+}
+function nativeMeasureChildWithMargins(this: JViewGroup, c: JView, ws: number, wu: number, hs: number, hu: number) {
+  return measureChildMargins(this, c, ws, wu, hs, hu);
+}
+const M_measureChildWM = mangleMethod("measureChildWithMargins", "(Landroid/view/View;IIII)V");
+/** AOSP layouts call measureChildWithMargins virtually: NestedScrollView's override measures
+ *  its child UNSPECIFIED in height. Only a Java override pays for the dispatch. */
+export function measureChildWithMargins(vg: JViewGroup, child: JView, wSpec: number, wUsed: number, hSpec: number, hUsed: number): unknown {
+  const f = jmethod(vg, M_measureChildWM);
+  return f && f !== nativeMeasureChildWithMargins ? f.call(vg, child, wSpec, wUsed, hSpec, hUsed) : measureChildMargins(vg, child, wSpec, wUsed, hSpec, hUsed);
+}
 
 const M_checkLp = mangleMethod("checkLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)Z");
 const M_generateLp = mangleMethod("generateLayoutParams", "(Landroid/view/ViewGroup$LayoutParams;)Landroid/view/ViewGroup$LayoutParams;");
@@ -2087,19 +2097,14 @@ export const vgMethods: NativeSpec["methods"] = {
       yield layoutView(c, this.padL, this.padT, this.padL + c.measuredW, this.padT + c.measuredH);
     }
   }),
-  "measureChildWithMargins(Landroid/view/View;IIII)V": function (this: JViewGroup, c: JView, ws: number, wu: number, hs: number, hu: number) {
-    return measureChildWithMargins(this, c, ws, wu, hs, hu);
-  },
-  "measureChild(Landroid/view/View;II)V": driven(function* (this: JViewGroup, c: JView, ws: number, hs: number): Gen {
-    yield measureView(c,
+  "measureChildWithMargins(Landroid/view/View;IIII)V": nativeMeasureChildWithMargins,
+  "measureChild(Landroid/view/View;II)V": function (this: JViewGroup, c: JView, ws: number, hs: number) {
+    return measureView(c,
       childMeasureSpec(ws, this.padL + this.padR, c.lp?.width ?? WRAP_CONTENT),
       childMeasureSpec(hs, this.padT + this.padB, c.lp?.height ?? WRAP_CONTENT));
-  }),
+  },
   "measureChildren(II)V": driven(function* (this: JViewGroup, ws: number, hs: number): Gen {
-    for (const c of this.children) {
-      if (c.visibility === 8) continue;
-      yield measureChildWithMargins(this, c, ws, 0, hs, 0);
-    }
+    for (const c of this.children) if (c.visibility !== 8) yield vcall(this, "measureChild", "(Landroid/view/View;II)V", c, ws, hs);
   }),
   "setOnHierarchyChangeListener(Landroid/view/ViewGroup$OnHierarchyChangeListener;)V": function (this: JViewGroup, l: unknown) {
     this.hierarchyChangeL = l;
